@@ -4,4 +4,4 @@
 *.db
 .beads-credential-key
 
-orpheus
+/orpheus
