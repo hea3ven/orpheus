@@ -1,14 +1,16 @@
-package logging
+package logging_test
 
 import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/hea3ven/orpheus/internal/logging"
 )
 
 func TestNewDefaultSuppressesDebug(t *testing.T) {
 	buf := new(bytes.Buffer)
-	logger := New(buf, Config{})
+	logger := logging.New(buf, logging.Config{})
 
 	logger.Debug("debug should not appear", "component", "test")
 
@@ -19,7 +21,7 @@ func TestNewDefaultSuppressesDebug(t *testing.T) {
 
 func TestNewVerboseEmitsDebug(t *testing.T) {
 	buf := new(bytes.Buffer)
-	logger := New(buf, Config{Verbose: true})
+	logger := logging.New(buf, logging.Config{Verbose: true})
 
 	logger.Debug("debug should appear", "component", "test")
 
@@ -33,7 +35,7 @@ func TestNewVerboseEmitsDebug(t *testing.T) {
 }
 
 func TestDiscardLoggerEmitsNothing(t *testing.T) {
-	logger := Discard()
+	logger := logging.Discard()
 
 	logger.Debug("debug should not appear", "component", "test")
 	logger.Info("info should not appear", "component", "test")
@@ -41,7 +43,7 @@ func TestDiscardLoggerEmitsNothing(t *testing.T) {
 }
 
 func TestNewNilWriterIsSafe(t *testing.T) {
-	logger := New(nil, Config{Verbose: true})
+	logger := logging.New(nil, logging.Config{Verbose: true})
 
 	logger.Debug("debug with nil writer", "component", "test")
 }

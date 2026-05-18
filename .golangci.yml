@@ -1,0 +1,20 @@
+version: "2"
+
+run:
+  # testpackage needs test files to be analyzed so package-level tests stay in
+  # external <package>_test packages unless intentionally exempted below.
+  tests: true
+
+linters:
+  enable:
+    - testpackage
+
+  settings:
+    testpackage:
+      # Match the M1 testing convention: package-level behavior should use
+      # external test packages, while focused private-helper tests may opt in to
+      # same-package access by using *_internal_test.go. export_test.go remains
+      # available for the standard Go test-only export pattern.
+      skip-regexp: '(export|internal)_test\.go'
+      allow-packages:
+        - main

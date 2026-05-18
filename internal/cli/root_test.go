@@ -1,13 +1,15 @@
-package cli
+package cli_test
 
 import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/hea3ven/orpheus/internal/cli"
 )
 
 func TestNewRootCommandHelp(t *testing.T) {
-	cmd := NewRootCommand()
+	cmd := cli.NewRootCommand()
 	buf := new(bytes.Buffer)
 	cmd.SetOut(buf)
 	cmd.SetErr(buf)
@@ -30,7 +32,7 @@ func TestNewRootCommandHelp(t *testing.T) {
 }
 
 func TestRootCommandDoesNotEmitDebugByDefault(t *testing.T) {
-	cmd := NewRootCommand()
+	cmd := cli.NewRootCommand()
 	stdout := new(bytes.Buffer)
 	stderr := new(bytes.Buffer)
 	cmd.SetOut(stdout)
@@ -50,7 +52,7 @@ func TestRootCommandDoesNotEmitDebugByDefault(t *testing.T) {
 }
 
 func TestRootCommandVerboseEmitsDebugToStderr(t *testing.T) {
-	cmd := NewRootCommand()
+	cmd := cli.NewRootCommand()
 	stdout := new(bytes.Buffer)
 	stderr := new(bytes.Buffer)
 	cmd.SetOut(stdout)
