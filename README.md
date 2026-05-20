@@ -17,3 +17,7 @@ Inspired by the mythic Orpheus charming wild forces into motion, this project fo
 ## Status
 
 Early MVP design and implementation planning.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
