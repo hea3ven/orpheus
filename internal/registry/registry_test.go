@@ -40,9 +40,11 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 	paths := newTestPaths(t)
 	store := registry.NewStore(paths)
 	want := registry.Registry{Repos: []registry.Repo{{
-		ID:   "orpheus",
-		Name: "orpheus",
-		Path: filepath.Join(paths.DataRoot, "..", "repos", "orpheus"),
+		ID:            "orpheus",
+		Name:          "orpheus",
+		Path:          filepath.Join(paths.DataRoot, "..", "repos", "orpheus"),
+		Remote:        "git@example.com:org/orpheus.git",
+		DefaultBranch: "main",
 	}}}
 	want.Repos[0].Path = filepath.Clean(want.Repos[0].Path)
 
@@ -58,7 +60,10 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read registry file: %v", err)
 	}
-	if !strings.Contains(string(onDisk), "repos:") || !strings.Contains(string(onDisk), "id: orpheus") {
+	if !strings.Contains(string(onDisk), "repos:") ||
+		!strings.Contains(string(onDisk), "id: orpheus") ||
+		!strings.Contains(string(onDisk), "remote: git@example.com:org/orpheus.git") ||
+		!strings.Contains(string(onDisk), "default_branch: main") {
 		t.Fatalf("registry file is not human-editable YAML: %s", onDisk)
 	}
 

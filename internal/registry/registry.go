@@ -13,11 +13,13 @@ import (
 
 const registryFile = "registry.yaml"
 
-// Repo is the initial repository record stored in the Orpheus registry.
+// Repo is a repository record stored in the Orpheus registry.
 type Repo struct {
-	ID   string `yaml:"id"`
-	Name string `yaml:"name"`
-	Path string `yaml:"path"`
+	ID            string `yaml:"id"`
+	Name          string `yaml:"name"`
+	Path          string `yaml:"path"`
+	Remote        string `yaml:"remote,omitempty"`
+	DefaultBranch string `yaml:"default_branch,omitempty"`
 }
 
 // Registry is the human-editable YAML schema for registered repositories.
@@ -171,6 +173,8 @@ func (r Registry) normalized() (Registry, error) {
 func normalizeRepo(repo Repo) (Repo, error) {
 	repo.ID = strings.TrimSpace(repo.ID)
 	repo.Name = strings.TrimSpace(repo.Name)
+	repo.Remote = strings.TrimSpace(repo.Remote)
+	repo.DefaultBranch = strings.TrimSpace(repo.DefaultBranch)
 	if repo.ID == "" {
 		return Repo{}, errors.New("repo id is required")
 	}
