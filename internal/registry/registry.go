@@ -11,7 +11,15 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 )
 
-const registryFile = "registry.yaml"
+const (
+	registryFile = "registry.yaml"
+
+	// BeadsModeLocal means bd commands should run in the registered repo path.
+	BeadsModeLocal = "local"
+
+	// BeadsModeManaged means bd commands should run in Orpheus-managed state.
+	BeadsModeManaged = "managed"
+)
 
 // Repo is a repository record stored in the Orpheus registry.
 type Repo struct {
@@ -20,6 +28,8 @@ type Repo struct {
 	Path          string `yaml:"path"`
 	Remote        string `yaml:"remote,omitempty"`
 	DefaultBranch string `yaml:"default_branch,omitempty"`
+	BeadsMode     string `yaml:"beads_mode,omitempty"`
+	BeadsPrefix   string `yaml:"beads_prefix,omitempty"`
 }
 
 // Registry is the human-editable YAML schema for registered repositories.
@@ -127,6 +137,8 @@ func (r Registry) Validate() error {
 	ids := map[string]struct{}{}
 	names := map[string]struct{}{}
 	paths := map[string]struct{}{}
+	prefixes := map[string]struct{}{}
+	identifiers := map[string]identifierOwner{}
 
 	for index, repo := range r.Repos {
 		normalizedRepo, err := normalizeRepo(repo)
@@ -148,8 +160,50 @@ func (r Registry) Validate() error {
 			return fmt.Errorf("duplicate repo name %q: choose a different repository directory name or edit %s", normalizedRepo.Name, registryFile)
 		}
 		names[normalizedRepo.Name] = struct{}{}
+
+		if normalizedRepo.BeadsPrefix != "" {
+			if _, ok := prefixes[normalizedRepo.BeadsPrefix]; ok {
+				return fmt.Errorf("duplicate beads prefix %q: Beads prefixes must be unique across registered repositories", normalizedRepo.BeadsPrefix)
+			}
+			prefixes[normalizedRepo.BeadsPrefix] = struct{}{}
+		}
+
+		if err := addIdentifier(identifiers, normalizedRepo.ID, "id", index); err != nil {
+			return err
+		}
+		if err := addIdentifier(identifiers, normalizedRepo.Name, "name", index); err != nil {
+			return err
+		}
+		if normalizedRepo.BeadsPrefix != "" {
+			if err := addIdentifier(identifiers, normalizedRepo.BeadsPrefix, "beads_prefix", index); err != nil {
+				return err
+			}
+		}
 	}
 
+	return nil
+}
+
+type identifierOwner struct {
+	index int
+	field string
+}
+
+func addIdentifier(identifiers map[string]identifierOwner, value string, field string, index int) error {
+	owner, ok := identifiers[value]
+	if ok {
+		if owner.index == index {
+			return nil
+		}
+		return fmt.Errorf(
+			"repo %s %q collides with repo[%d] %s: repo ids, names, and Beads prefixes must be unique to avoid ambiguous references",
+			field,
+			value,
+			owner.index,
+			owner.field,
+		)
+	}
+	identifiers[value] = identifierOwner{index: index, field: field}
 	return nil
 }
 
@@ -175,6 +229,8 @@ func normalizeRepo(repo Repo) (Repo, error) {
 	repo.Name = strings.TrimSpace(repo.Name)
 	repo.Remote = strings.TrimSpace(repo.Remote)
 	repo.DefaultBranch = strings.TrimSpace(repo.DefaultBranch)
+	repo.BeadsMode = strings.TrimSpace(repo.BeadsMode)
+	repo.BeadsPrefix = strings.TrimSpace(repo.BeadsPrefix)
 	if repo.ID == "" {
 		return Repo{}, errors.New("repo id is required")
 	}
@@ -186,6 +242,17 @@ func normalizeRepo(repo Repo) (Repo, error) {
 	}
 	if !filepath.IsAbs(repo.Path) {
 		return Repo{}, fmt.Errorf("repo path %q must be absolute", repo.Path)
+	}
+	switch repo.BeadsMode {
+	case "", BeadsModeLocal, BeadsModeManaged:
+	default:
+		return Repo{}, fmt.Errorf("repo beads_mode %q is invalid; expected %q or %q", repo.BeadsMode, BeadsModeLocal, BeadsModeManaged)
+	}
+	if repo.BeadsMode != "" && repo.BeadsPrefix == "" {
+		return Repo{}, fmt.Errorf("repo beads_prefix is required when beads_mode is %q", repo.BeadsMode)
+	}
+	if repo.BeadsMode == "" && repo.BeadsPrefix != "" {
+		return Repo{}, errors.New("repo beads_mode is required when beads_prefix is set")
 	}
 	repo.Path = filepath.Clean(repo.Path)
 	return repo, nil

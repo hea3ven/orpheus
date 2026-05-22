@@ -212,7 +212,7 @@ Recommended layout:
   repos/
     <repo-id>/
       repo.yaml
-      beads/              # only for Orpheus-managed/global Beads mode
+      beads/              # only for Orpheus-managed Beads mode
       worktrees/
       runs/
         <task-id>/
@@ -270,7 +270,7 @@ The MVP requires unique Beads prefixes across registered repos. Repos with dupli
 At repo registration time, Orpheus detects Beads mode.
 
 - If the repo already has a valid Beads setup, use `beads_mode: local`.
-- Otherwise, create/use Orpheus-managed Beads under global data and use `beads_mode: global`.
+- Otherwise, create/use Orpheus-managed Beads under global data and use `beads_mode: managed`.
 
 The MVP stores only the mode, not a custom Beads path.
 
@@ -280,7 +280,7 @@ Resolution is deterministic:
 if beads_mode == local:
   run bd commands in repo.path
 
-if beads_mode == global:
+if beads_mode == managed:
   run bd commands in ~/.local/share/orpheus/repos/<repo-id>/beads
 ```
 
@@ -369,7 +369,7 @@ Default branch detection should prefer `origin/HEAD`, then current branch as fal
 
 After `repo add`, the repo should be fully usable.
 
-If Beads mode is global, Orpheus initializes the managed Beads database during registration.
+If Beads mode is managed, Orpheus initializes the managed Beads database during registration.
 
 ### 7.3 Beads Directory Escape Hatch
 
@@ -383,7 +383,7 @@ orpheus repo beads-dir <repo-name-or-prefix>
 
 For local Beads mode, this prints the repo path.
 
-For global Beads mode, this prints the Orpheus-managed Beads directory.
+For managed Beads mode, this prints the Orpheus-managed Beads directory.
 
 Users can manually create tasks with:
 

@@ -45,6 +45,8 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 		Path:          filepath.Join(paths.DataRoot, "..", "repos", "orpheus"),
 		Remote:        "git@example.com:org/orpheus.git",
 		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
 	}}}
 	want.Repos[0].Path = filepath.Clean(want.Repos[0].Path)
 
@@ -63,7 +65,9 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 	if !strings.Contains(string(onDisk), "repos:") ||
 		!strings.Contains(string(onDisk), "id: orpheus") ||
 		!strings.Contains(string(onDisk), "remote: git@example.com:org/orpheus.git") ||
-		!strings.Contains(string(onDisk), "default_branch: main") {
+		!strings.Contains(string(onDisk), "default_branch: main") ||
+		!strings.Contains(string(onDisk), "beads_mode: local") ||
+		!strings.Contains(string(onDisk), "beads_prefix: op") {
 		t.Fatalf("registry file is not human-editable YAML: %s", onDisk)
 	}
 
@@ -143,6 +147,112 @@ func TestRegistryAddRejectsDuplicateIDNameAndPath(t *testing.T) {
 				t.Fatalf("error = %v, want substring %q", err, tt.want)
 			}
 			assertRepos(t, reg.Repos, existing.Repos)
+		})
+	}
+}
+
+func TestRegistryAddRejectsDuplicateBeadsPrefix(t *testing.T) {
+	existing := registry.Registry{Repos: []registry.Repo{{
+		ID:          "alpha",
+		Name:        "Alpha",
+		Path:        filepath.Join(t.TempDir(), "alpha"),
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "op",
+	}}}
+
+	repo := registry.Repo{
+		ID:          "beta",
+		Name:        "Beta",
+		Path:        filepath.Join(t.TempDir(), "beta"),
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "op",
+	}
+
+	reg := existing
+	err := reg.Add(repo)
+	if err == nil {
+		t.Fatal("add duplicate beads prefix succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "duplicate beads prefix \"op\"") {
+		t.Fatalf("error = %v, want duplicate beads prefix", err)
+	}
+	assertRepos(t, reg.Repos, existing.Repos)
+}
+
+func TestRegistryAddRejectsIDNamePrefixCrossCollision(t *testing.T) {
+	existing := registry.Registry{Repos: []registry.Repo{{
+		ID:          "alpha-id",
+		Name:        "Alpha Name",
+		Path:        filepath.Join(t.TempDir(), "alpha"),
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "alpha-prefix",
+	}}}
+
+	tests := []struct {
+		name string
+		repo registry.Repo
+		want string
+	}{
+		{
+			name: "name collides with existing prefix",
+			repo: registry.Repo{ID: "beta-id", Name: "alpha-prefix", Path: filepath.Join(t.TempDir(), "beta")},
+			want: "repo name \"alpha-prefix\" collides with repo[0] beads_prefix",
+		},
+		{
+			name: "prefix collides with existing id",
+			repo: registry.Repo{ID: "beta-id", Name: "Beta", Path: filepath.Join(t.TempDir(), "beta"), BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "alpha-id"},
+			want: "repo beads_prefix \"alpha-id\" collides with repo[0] id",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := existing
+			err := reg.Add(tt.repo)
+			if err == nil {
+				t.Fatal("add cross-colliding repo succeeded, want error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want substring %q", err, tt.want)
+			}
+			assertRepos(t, reg.Repos, existing.Repos)
+		})
+	}
+}
+
+func TestRegistryAddValidatesBeadsModeAndPrefixTogether(t *testing.T) {
+	tests := []struct {
+		name string
+		repo registry.Repo
+		want string
+	}{
+		{
+			name: "local mode requires prefix",
+			repo: registry.Repo{ID: "alpha", Name: "alpha", Path: filepath.Join(t.TempDir(), "alpha"), BeadsMode: registry.BeadsModeLocal},
+			want: "repo beads_prefix is required",
+		},
+		{
+			name: "prefix requires mode",
+			repo: registry.Repo{ID: "alpha", Name: "alpha", Path: filepath.Join(t.TempDir(), "alpha"), BeadsPrefix: "op"},
+			want: "repo beads_mode is required",
+		},
+		{
+			name: "invalid mode",
+			repo: registry.Repo{ID: "alpha", Name: "alpha", Path: filepath.Join(t.TempDir(), "alpha"), BeadsMode: "nearby", BeadsPrefix: "op"},
+			want: "repo beads_mode \"nearby\" is invalid",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := registry.Registry{}
+			err := reg.Add(tt.repo)
+			if err == nil {
+				t.Fatal("add invalid repo succeeded, want error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want substring %q", err, tt.want)
+			}
 		})
 	}
 }

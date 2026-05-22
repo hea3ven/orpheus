@@ -53,7 +53,7 @@ Implementation scope:
 - Default branch detection with user confirmation.
 - Beads mode detection:
   - local if repo has Beads
-  - global otherwise
+  - managed otherwise
 - Global Beads initialization for repos without local Beads.
 - Beads prefix detection/storage.
 - Duplicate Beads prefix rejection.

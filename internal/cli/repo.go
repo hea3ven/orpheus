@@ -9,11 +9,14 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/hea3ven/orpheus/internal/beads"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/spf13/cobra"
 )
+
+var inspectLocalBeads = beads.InspectLocal
 
 func newRepoCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -54,6 +57,16 @@ func newRepoAddCommand() *cobra.Command {
 			repo.Remote = remote
 			repo.DefaultBranch = defaultBranch
 
+			beadsInspection, err := inspectLocalBeads(gitInspection.Root)
+			if err != nil {
+				if !errors.Is(err, beads.ErrNoLocal) {
+					return err
+				}
+			} else {
+				repo.BeadsMode = registry.BeadsModeLocal
+				repo.BeadsPrefix = beadsInspection.Prefix
+			}
+
 			reg, err := store.Load()
 			if err != nil {
 				return err
@@ -67,12 +80,14 @@ func newRepoAddCommand() *cobra.Command {
 
 			_, err = fmt.Fprintf(
 				command.OutOrStdout(),
-				"Added repo %s\t%s\t%s\t%s\t%s\n",
+				"Added repo %s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				repo.ID,
 				repo.Name,
 				repo.Path,
 				repo.Remote,
 				repo.DefaultBranch,
+				repo.BeadsMode,
+				repo.BeadsPrefix,
 			)
 			return err
 		},
@@ -97,18 +112,20 @@ func newRepoListCommand() *cobra.Command {
 			}
 
 			writer := tabwriter.NewWriter(command.OutOrStdout(), 0, 0, 2, ' ', 0)
-			if _, err := fmt.Fprintln(writer, "ID\tNAME\tPATH\tREMOTE\tDEFAULT_BRANCH"); err != nil {
+			if _, err := fmt.Fprintln(writer, "ID\tNAME\tPATH\tREMOTE\tDEFAULT_BRANCH\tBEADS_MODE\tBEADS_PREFIX"); err != nil {
 				return err
 			}
 			for _, repo := range reg.Repos {
 				if _, err := fmt.Fprintf(
 					writer,
-					"%s\t%s\t%s\t%s\t%s\n",
+					"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 					repo.ID,
 					repo.Name,
 					repo.Path,
 					repo.Remote,
 					repo.DefaultBranch,
+					repo.BeadsMode,
+					repo.BeadsPrefix,
 				); err != nil {
 					return err
 				}
