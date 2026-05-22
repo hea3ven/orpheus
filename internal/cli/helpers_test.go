@@ -100,3 +100,25 @@ func executeCommandWithError(t *testing.T, args []string) (stdout string, stderr
 	err = cmd.Execute()
 	return out.String(), errOut.String(), err
 }
+
+func withFakeBDInit(t *testing.T) string {
+	t.Helper()
+
+	binDir := t.TempDir()
+	logPath := filepath.Join(binDir, "bd.log")
+	script := `#!/bin/sh
+{
+  pwd
+  printf '%s\n' "$@"
+  printf 'BD_NON_INTERACTIVE=%s\n' "${BD_NON_INTERACTIVE-unset}"
+  printf 'BEADS_DIR=%s\n' "${BEADS_DIR-unset}"
+} >> "$FAKE_BD_LOG"
+`
+	bdPath := filepath.Join(binDir, "bd")
+	if err := os.WriteFile(bdPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake bd: %v", err)
+	}
+	t.Setenv("FAKE_BD_LOG", logPath)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return logPath
+}

@@ -47,6 +47,23 @@ func NewStore(paths state.Paths) Store {
 	return Store{paths: paths}
 }
 
+// ManagedBeadsDir returns the deterministic Orpheus-managed Beads workspace for repoID.
+func (s Store) ManagedBeadsDir(repoID string) (string, error) {
+	return ManagedBeadsDir(s.paths, repoID)
+}
+
+// ManagedBeadsDir returns the deterministic Orpheus-managed Beads workspace for repoID.
+func ManagedBeadsDir(paths state.Paths, repoID string) (string, error) {
+	repoID = strings.TrimSpace(repoID)
+	if repoID == "" {
+		return "", errors.New("repo id is required")
+	}
+	if repoID == "." || repoID == ".." || strings.ContainsAny(repoID, `/\\`) || filepath.VolumeName(repoID) != "" {
+		return "", fmt.Errorf("repo id %q cannot be used in managed Beads path", repoID)
+	}
+	return paths.DataPath(filepath.Join("repos", repoID, "beads"))
+}
+
 // NewRepoFromPath derives the minimal M1 repo identity from a path basename.
 func NewRepoFromPath(inputPath string) (Repo, error) {
 	normalizedPath, err := NormalizePath(inputPath)

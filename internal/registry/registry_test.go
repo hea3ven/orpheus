@@ -296,6 +296,32 @@ func TestStoreSaveRejectsInvalidRegistry(t *testing.T) {
 	}
 }
 
+func TestManagedBeadsDirUsesRepoIDUnderDataRoot(t *testing.T) {
+	paths := newTestPaths(t)
+	store := registry.NewStore(paths)
+
+	got, err := store.ManagedBeadsDir(" alpha ")
+	if err != nil {
+		t.Fatalf("managed beads dir: %v", err)
+	}
+	want := filepath.Join(paths.DataRoot, "repos", "alpha", "beads")
+	if got != want {
+		t.Fatalf("managed beads dir = %q, want %q", got, want)
+	}
+}
+
+func TestManagedBeadsDirRejectsUnsafeRepoIDs(t *testing.T) {
+	paths := newTestPaths(t)
+	for _, repoID := range []string{"", ".", "..", "nested/alpha", `nested\\alpha`} {
+		t.Run(repoID, func(t *testing.T) {
+			_, err := registry.ManagedBeadsDir(paths, repoID)
+			if err == nil {
+				t.Fatal("managed beads dir succeeded, want error")
+			}
+		})
+	}
+}
+
 func newTestPaths(t *testing.T) state.Paths {
 	t.Helper()
 

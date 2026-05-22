@@ -16,6 +16,7 @@ type fakeRunner struct {
 }
 
 type fakeCall struct {
+	wantDir  string
 	wantArgs []string
 	result   beads.Result
 	err      error
@@ -31,10 +32,32 @@ func (r *fakeRunner) Run(dir string, args ...string) (beads.Result, error) {
 	if strings.TrimSpace(dir) == "" {
 		return beads.Result{}, errors.New("runner dir is empty")
 	}
+	if call.wantDir != "" && dir != call.wantDir {
+		return beads.Result{}, errors.New("unexpected dir: " + dir)
+	}
 	if strings.Join(args, "\x00") != strings.Join(call.wantArgs, "\x00") {
 		return beads.Result{}, errors.New("unexpected args: " + strings.Join(args, " "))
 	}
 	return call.result, call.err
+}
+
+func TestCommandRunnerSanitizesBeadsEnvironment(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "bd-fake")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf 'BEADS_DIR=%s\\n' \"${BEADS_DIR-unset}\"\nprintf 'BD_NON_INTERACTIVE=%s\\n' \"${BD_NON_INTERACTIVE-unset}\"\n"), 0o755); err != nil {
+		t.Fatalf("write fake bd: %v", err)
+	}
+	t.Setenv("BEADS_DIR", "/tmp/wrong")
+
+	result, err := beads.CommandRunner{Binary: bin}.Run(t.TempDir(), "context")
+	if err != nil {
+		t.Fatalf("run fake bd: %v", err)
+	}
+	if strings.Contains(result.Stdout, "BEADS_DIR=/tmp/wrong") || !strings.Contains(result.Stdout, "BEADS_DIR=unset") {
+		t.Fatalf("stdout = %q, want sanitized BEADS_DIR", result.Stdout)
+	}
+	if !strings.Contains(result.Stdout, "BD_NON_INTERACTIVE=1") {
+		t.Fatalf("stdout = %q, want BD_NON_INTERACTIVE=1", result.Stdout)
+	}
 }
 
 func TestInspectLocalWithRunnerDetectsPrefix(t *testing.T) {
@@ -154,6 +177,74 @@ func TestInspectLocalWithRunnerRequiresPrefix(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "issue_prefix is empty") {
 		t.Fatalf("error = %v, want prefix guidance", err)
+	}
+}
+
+func TestInitializeManagedWithRunnerInitializesEmptyDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "managed", "beads")
+	runner := &fakeRunner{calls: []fakeCall{{
+		wantDir: dir,
+		wantArgs: []string{
+			"init",
+			"--non-interactive",
+			"--prefix",
+			"alpha",
+			"--skip-agents",
+			"--skip-hooks",
+			"--quiet",
+		},
+	}}}
+
+	if err := beads.InitializeManagedWithRunner(dir, " alpha ", runner); err != nil {
+		t.Fatalf("initialize managed: %v", err)
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		t.Fatalf("managed directory was not created: info=%v err=%v", info, err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
+func TestInitializeManagedWithRunnerRejectsExistingStateBeforeRunningBD(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "leftover"), []byte("state"), 0o644); err != nil {
+		t.Fatalf("write leftover: %v", err)
+	}
+	runner := &fakeRunner{}
+
+	err := beads.InitializeManagedWithRunner(dir, "alpha", runner)
+	if err == nil {
+		t.Fatal("initialize managed succeeded, want existing state error")
+	}
+	if !strings.Contains(err.Error(), "directory already exists and is not empty") {
+		t.Fatalf("error = %v, want existing state guidance", err)
+	}
+}
+
+func TestInitializeManagedWithRunnerReportsCommandFailure(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "beads")
+	runner := &fakeRunner{calls: []fakeCall{{
+		wantDir: dir,
+		wantArgs: []string{
+			"init",
+			"--non-interactive",
+			"--prefix",
+			"alpha",
+			"--skip-agents",
+			"--skip-hooks",
+			"--quiet",
+		},
+		result: beads.Result{Stderr: "cannot initialize"},
+		err:    errors.New("exit status 1"),
+	}}}
+
+	err := beads.InitializeManagedWithRunner(dir, "alpha", runner)
+	if err == nil {
+		t.Fatal("initialize managed succeeded, want command failure")
+	}
+	if !strings.Contains(err.Error(), "run bd init") || !strings.Contains(err.Error(), "cannot initialize") {
+		t.Fatalf("error = %v, want actionable command failure", err)
 	}
 }
 

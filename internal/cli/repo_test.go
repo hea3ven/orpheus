@@ -5,12 +5,15 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/registry"
+	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRepoAddAndListFlow(t *testing.T) {
 	is := assert.New(t)
+	withFakeBDInit(t)
 
 	repoPath := newTestRepoPath(t)
 
@@ -30,6 +33,7 @@ func TestRepoAddAndListFlow(t *testing.T) {
 func TestRepoAddStoresGitRootWhenPathIsNested(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
+	withFakeBDInit(t)
 
 	repoPath := newTestRepoPath(t)
 	nestedPath := filepath.Join(repoPath, "nested", "dir")
@@ -48,6 +52,7 @@ func TestRepoAddStoresGitRootWhenPathIsNested(t *testing.T) {
 
 func TestRepoAddWarnsWhenRemoteIsMissing(t *testing.T) {
 	is := assert.New(t)
+	withFakeBDInit(t)
 
 	repoPath := newTestRepoPath(t, withoutRemote())
 
@@ -80,6 +85,7 @@ func TestRepoAddRejectsNonGitPath(t *testing.T) {
 func TestRepoAddRejectsDuplicatePath(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
+	withFakeBDInit(t)
 
 	repoPath := newTestRepoPath(t)
 
@@ -90,4 +96,97 @@ func TestRepoAddRejectsDuplicatePath(t *testing.T) {
 	must.Error(err)
 	is.ErrorContains(err, "duplicate repo path")
 	is.Empty(stdout)
+}
+
+func TestRepoAddInitializesManagedBeadsAfterValidation(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	logPath := withFakeBDInit(t)
+	repoPath := newTestRepoPath(t)
+	paths := currentTestPaths(t)
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"repo", "add", repoPath})
+	must.NoError(err)
+	is.Empty(stderr)
+	for _, want := range []string{"Added repo alpha", repoPath, "managed", "alpha"} {
+		is.Contains(stdout, want)
+	}
+
+	managedDir, err := registry.ManagedBeadsDir(paths, "alpha")
+	must.NoError(err)
+	logData, err := os.ReadFile(logPath)
+	must.NoError(err)
+	log := string(logData)
+	is.Contains(log, managedDir)
+	is.Contains(log, "init\n--non-interactive\n--prefix\nalpha\n--skip-agents\n--skip-hooks\n--quiet")
+	is.Contains(log, "BD_NON_INTERACTIVE=1")
+	is.Contains(log, "BEADS_DIR=unset")
+
+	store := registry.NewStore(paths)
+	reg, err := store.Load()
+	must.NoError(err)
+	if is.Len(reg.Repos, 1) {
+		repo := reg.Repos[0]
+		is.Equal(registry.BeadsModeManaged, repo.BeadsMode)
+		is.Equal("alpha", repo.BeadsPrefix)
+	}
+}
+
+func TestRepoAddValidatesManagedRegistryConflictsBeforeInitialization(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	logPath := withFakeBDInit(t)
+	repoPath := newTestRepoPath(t)
+	paths := currentTestPaths(t)
+
+	store := registry.NewStore(paths)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:          "beta",
+		Name:        "Beta",
+		Path:        filepath.Join(filepath.Dir(repoPath), "beta"),
+		BeadsMode:   registry.BeadsModeManaged,
+		BeadsPrefix: "alpha",
+	}}}))
+
+	stdout, _, err := executeCommandWithError(t, []string{"repo", "add", repoPath})
+	must.Error(err)
+	is.ErrorContains(err, "duplicate beads prefix \"alpha\"")
+	is.Empty(stdout)
+	_, logErr := os.Stat(logPath)
+	is.ErrorIs(logErr, os.ErrNotExist)
+}
+
+func TestRepoAddRejectsExistingManagedStateWithoutSavingRegistry(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	logPath := withFakeBDInit(t)
+	repoPath := newTestRepoPath(t)
+	paths := currentTestPaths(t)
+
+	managedDir, err := registry.ManagedBeadsDir(paths, "alpha")
+	must.NoError(err)
+	must.NoError(os.MkdirAll(managedDir, 0o755))
+	must.NoError(os.WriteFile(filepath.Join(managedDir, "leftover"), []byte("state"), 0o644))
+
+	stdout, _, err := executeCommandWithError(t, []string{"repo", "add", repoPath})
+	must.Error(err)
+	is.ErrorContains(err, "directory already exists and is not empty")
+	is.Empty(stdout)
+	_, logErr := os.Stat(logPath)
+	is.ErrorIs(logErr, os.ErrNotExist)
+
+	store := registry.NewStore(paths)
+	reg, err := store.Load()
+	must.NoError(err)
+	is.Empty(reg.Repos)
+}
+
+func currentTestPaths(t *testing.T) state.Paths {
+	t.Helper()
+
+	paths, err := state.ResolveFromEnvironment()
+	if err != nil {
+		t.Fatalf("resolve state: %v", err)
+	}
+	return paths
 }

@@ -16,7 +16,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var inspectLocalBeads = beads.InspectLocal
+var (
+	inspectLocalBeads      = beads.InspectLocal
+	initializeManagedBeads = beads.InitializeManaged
+)
 
 func newRepoCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -57,11 +60,20 @@ func newRepoAddCommand() *cobra.Command {
 			repo.Remote = remote
 			repo.DefaultBranch = defaultBranch
 
+			managed := false
 			beadsInspection, err := inspectLocalBeads(gitInspection.Root)
 			if err != nil {
 				if !errors.Is(err, beads.ErrNoLocal) {
 					return err
 				}
+
+				prefix, err := confirmManagedBeadsPrefix(command, repo.ID)
+				if err != nil {
+					return err
+				}
+				repo.BeadsMode = registry.BeadsModeManaged
+				repo.BeadsPrefix = prefix
+				managed = true
 			} else {
 				repo.BeadsMode = registry.BeadsModeLocal
 				repo.BeadsPrefix = beadsInspection.Prefix
@@ -74,7 +86,22 @@ func newRepoAddCommand() *cobra.Command {
 			if err := reg.Add(repo); err != nil {
 				return err
 			}
+
+			var managedDir string
+			if managed {
+				managedDir, err = store.ManagedBeadsDir(repo.ID)
+				if err != nil {
+					return err
+				}
+				if err := initializeManagedBeads(managedDir, repo.BeadsPrefix); err != nil {
+					return err
+				}
+			}
+
 			if err := store.Save(reg); err != nil {
+				if managed {
+					return fmt.Errorf("managed Beads was initialized at %q, but saving the repo registry failed; remove that directory before retrying if you do not want to keep it: %w", managedDir, err)
+				}
 				return err
 			}
 
@@ -166,6 +193,31 @@ func confirmGitValues(command *cobra.Command, inspection gitmeta.Inspection) (st
 	}
 
 	return strings.TrimSpace(remote), strings.TrimSpace(defaultBranch), nil
+}
+
+func confirmManagedBeadsPrefix(command *cobra.Command, defaultPrefix string) (string, error) {
+	input := command.InOrStdin()
+	defaultPrefix = strings.TrimSpace(defaultPrefix)
+	if defaultPrefix == "" {
+		return "", errors.New("managed Beads prefix is required")
+	}
+
+	if !readerIsTerminal(input) {
+		return defaultPrefix, nil
+	}
+
+	wizard := repoAddWizard{
+		reader: bufio.NewReader(input),
+		output: command.ErrOrStderr(),
+	}
+	if _, err := fmt.Fprintln(wizard.output, "No repo-local Beads setup detected; Orpheus will initialize managed Beads state."); err != nil {
+		return "", err
+	}
+	prefix, err := wizard.promptValue("Beads prefix", defaultPrefix, true)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(prefix), nil
 }
 
 func confirmedGitValuesFromInspection(inspection gitmeta.Inspection) (string, string, error) {

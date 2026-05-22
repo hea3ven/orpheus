@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/hea3ven/orpheus/internal/registry"
 )
 
 func TestRepoAddDetectsLocalBeadsEndToEnd(t *testing.T) {
@@ -38,6 +40,37 @@ func TestRepoAddDetectsLocalBeadsEndToEnd(t *testing.T) {
 		if !strings.Contains(listOut, want) {
 			t.Fatalf("repo list output = %q, want substring %q", listOut, want)
 		}
+	}
+}
+
+func TestRepoAddInitializesManagedBeadsEndToEnd(t *testing.T) {
+	requireBD(t)
+	withoutBeadsEnv(t)
+
+	repoPath := newTestRepoPath(t)
+	paths := currentTestPaths(t)
+
+	addOut, addErr := executeCommand(t, []string{"repo", "add", repoPath})
+	if addErr != "" {
+		t.Fatalf("repo add stderr = %q, want empty", addErr)
+	}
+	for _, want := range []string{"Added repo alpha", repoPath, "git@example.com:org/alpha.git", "main", "managed", "alpha"} {
+		if !strings.Contains(addOut, want) {
+			t.Fatalf("repo add output = %q, want substring %q", addOut, want)
+		}
+	}
+
+	managedDir, err := registry.ManagedBeadsDir(paths, "alpha")
+	if err != nil {
+		t.Fatalf("managed Beads dir: %v", err)
+	}
+	if info, err := os.Stat(filepath.Join(managedDir, ".beads")); err != nil || !info.IsDir() {
+		t.Fatalf("managed .beads directory was not created: info=%v err=%v", info, err)
+	}
+
+	prefixOut := runBD(t, managedDir, "--json", "--readonly", "config", "get", "issue_prefix")
+	if !strings.Contains(prefixOut, `"value":"alpha"`) && !strings.Contains(prefixOut, `"value": "alpha"`) {
+		t.Fatalf("managed Beads prefix output = %q, want alpha", prefixOut)
 	}
 }
 

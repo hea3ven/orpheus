@@ -1,4 +1,4 @@
-// Package beads provides a narrow adapter for inspecting local Beads state.
+// Package beads provides a narrow adapter for inspecting and initializing Beads state.
 package beads
 
 import (
@@ -43,6 +43,7 @@ func (r CommandRunner) Run(dir string, args ...string) (Result, error) {
 
 	command := exec.Command(binary, args...)
 	command.Dir = dir
+	command.Env = sanitizedEnvironment()
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -63,6 +64,53 @@ type LocalInspection struct {
 // InspectLocal inspects root using the bd binary.
 func InspectLocal(root string) (LocalInspection, error) {
 	return InspectLocalWithRunner(root, CommandRunner{})
+}
+
+// InitializeManaged initializes Beads state in an Orpheus-managed workspace using the bd binary.
+func InitializeManaged(dir string, prefix string) error {
+	return InitializeManagedWithRunner(dir, prefix, CommandRunner{})
+}
+
+// InitializeManagedWithRunner initializes a Beads database rooted at dir with prefix.
+//
+// The directory is created on demand, but existing non-empty directories are rejected
+// so Orpheus does not accidentally reuse or overwrite unrelated state.
+func InitializeManagedWithRunner(dir string, prefix string, runner Runner) error {
+	if runner == nil {
+		return errors.New("initialize managed Beads: runner is required")
+	}
+
+	normalizedDir, err := normalizeManagedDir(dir)
+	if err != nil {
+		return err
+	}
+
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return errors.New("initialize managed Beads: prefix is required")
+	}
+
+	if err := ensureManagedDirIsEmpty(normalizedDir); err != nil {
+		return err
+	}
+
+	result, err := runner.Run(
+		normalizedDir,
+		"init",
+		"--non-interactive",
+		"--prefix",
+		prefix,
+		"--skip-agents",
+		"--skip-hooks",
+		"--quiet",
+	)
+	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return fmt.Errorf("initialize managed Beads at %q: bd executable not found; install Beads or ensure bd is on PATH: %w", normalizedDir, err)
+		}
+		return fmt.Errorf("initialize managed Beads at %q: run bd init: %w%s", normalizedDir, err, formattedOutput(result))
+	}
+	return nil
 }
 
 // InspectLocalWithRunner detects repo-local Beads state and extracts its issue prefix.
@@ -116,6 +164,30 @@ func normalizeRoot(root string) (string, error) {
 		return "", fmt.Errorf("inspect local Beads: %w: repository root is required", ErrNoLocal)
 	}
 	return normalizePath(root)
+}
+
+func normalizeManagedDir(dir string) (string, error) {
+	if strings.TrimSpace(dir) == "" {
+		return "", errors.New("initialize managed Beads: directory is required")
+	}
+	return normalizePath(dir)
+}
+
+func ensureManagedDirIsEmpty(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return fmt.Errorf("initialize managed Beads at %q: create directory: %w", dir, err)
+			}
+			return nil
+		}
+		return fmt.Errorf("initialize managed Beads at %q: inspect directory: %w", dir, err)
+	}
+	if len(entries) != 0 {
+		return fmt.Errorf("initialize managed Beads at %q: directory already exists and is not empty; remove it or choose a different repo id", dir)
+	}
+	return nil
 }
 
 func normalizePath(path string) (string, error) {
@@ -216,6 +288,18 @@ func inspectIssuePrefix(root string, runner Runner) (string, error) {
 		return "", fmt.Errorf("inspect local Beads prefix at %q: issue_prefix is empty; set a Beads issue prefix before registering the repo", root)
 	}
 	return prefix, nil
+}
+
+func sanitizedEnvironment() []string {
+	env := make([]string, 0, len(os.Environ())+1)
+	for _, entry := range os.Environ() {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok && (strings.HasPrefix(key, "BEADS_") || key == "BD_NON_INTERACTIVE") {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return append(env, "BD_NON_INTERACTIVE=1")
 }
 
 func formattedOutput(result Result) string {
