@@ -74,6 +74,58 @@ func TestRepoAddInitializesManagedBeadsEndToEnd(t *testing.T) {
 	}
 }
 
+func TestRepoRegistrationFlowEndToEnd(t *testing.T) {
+	requireBD(t)
+	withoutBeadsEnv(t)
+
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	localPath := newRepoWithCopiedLocalBeads(t, root, "localrepo")
+	managedPath := newTestRepoAt(t, root, filepath.Join("repos", "managedrepo"), testRepoConfig{withRemote: true})
+
+	localAddOut, localAddErr := executeCommand(t, []string{"repo", "add", localPath})
+	if localAddErr != "" {
+		t.Fatalf("local repo add stderr = %q, want empty", localAddErr)
+	}
+	for _, want := range []string{"Added repo localrepo", localPath, "local", "op"} {
+		if !strings.Contains(localAddOut, want) {
+			t.Fatalf("local repo add output = %q, want substring %q", localAddOut, want)
+		}
+	}
+
+	managedAddOut, managedAddErr := executeCommand(t, []string{"repo", "add", managedPath})
+	if managedAddErr != "" {
+		t.Fatalf("managed repo add stderr = %q, want empty", managedAddErr)
+	}
+	for _, want := range []string{"Added repo managedrepo", managedPath, "managed", "managedrepo"} {
+		if !strings.Contains(managedAddOut, want) {
+			t.Fatalf("managed repo add output = %q, want substring %q", managedAddOut, want)
+		}
+	}
+
+	listOut, listErr := executeCommand(t, []string{"repo", "list"})
+	if listErr != "" {
+		t.Fatalf("repo list stderr = %q, want empty", listErr)
+	}
+	for _, want := range []string{"ID", "NAME", "PATH", "REMOTE", "DEFAULT_BRANCH", "BEADS_MODE", "BEADS_PREFIX", "localrepo", "managedrepo", "local", "managed", "op"} {
+		if !strings.Contains(listOut, want) {
+			t.Fatalf("repo list output = %q, want substring %q", listOut, want)
+		}
+	}
+
+	managedDir, err := registry.ManagedBeadsDir(paths, "managedrepo")
+	if err != nil {
+		t.Fatalf("managed Beads dir: %v", err)
+	}
+
+	assertBeadsDir(t, "localrepo", localPath)
+	assertBeadsDir(t, "op", localPath)
+	assertBeadsDir(t, "managedrepo", managedDir)
+
+	runBD(t, localPath, "list")
+	runBD(t, managedDir, "list")
+}
+
 func TestRepoAddRejectsDuplicateLocalBeadsPrefixEndToEnd(t *testing.T) {
 	requireBD(t)
 	withoutBeadsEnv(t)
@@ -96,6 +148,18 @@ func TestRepoAddRejectsDuplicateLocalBeadsPrefixEndToEnd(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "duplicate beads prefix \"op\"") {
 		t.Fatalf("second repo add error = %v, want duplicate beads prefix", err)
+	}
+}
+
+func assertBeadsDir(t *testing.T, token string, want string) {
+	t.Helper()
+
+	stdout, stderr := executeCommand(t, []string{"repo", "beads-dir", token})
+	if stderr != "" {
+		t.Fatalf("repo beads-dir %q stderr = %q, want empty", token, stderr)
+	}
+	if got := strings.TrimSpace(stdout); got != want {
+		t.Fatalf("repo beads-dir %q = %q, want %q", token, got, want)
 	}
 }
 

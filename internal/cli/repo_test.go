@@ -98,6 +98,41 @@ func TestRepoAddRejectsDuplicatePath(t *testing.T) {
 	is.Empty(stdout)
 }
 
+func TestRepoAddRejectsDuplicateDerivedIDAndName(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	withFakeBDInit(t)
+
+	root := newTestState(t)
+	config := testRepoConfig{withRemote: true}
+	firstRepo := newTestRepoAt(t, root, filepath.Join("one", "alpha"), config)
+	secondRepo := newTestRepoAt(t, root, filepath.Join("two", "alpha"), config)
+
+	_, errOutput := executeCommand(t, []string{"repo", "add", firstRepo})
+	is.Empty(errOutput)
+
+	stdout, _, err := executeCommandWithError(t, []string{"repo", "add", secondRepo})
+	must.Error(err)
+	is.ErrorContains(err, "duplicate repo id \"alpha\"")
+	is.Empty(stdout)
+}
+
+func TestRepoAddVerboseEmitsDiagnosticsToStderr(t *testing.T) {
+	is := assert.New(t)
+	withFakeBDInit(t)
+
+	repoPath := newTestRepoPath(t)
+
+	stdout, stderr := executeCommand(t, []string{"--verbose", "repo", "add", repoPath})
+
+	is.Contains(stdout, "Added repo alpha")
+	is.NotContains(stdout, "level=DEBUG")
+	is.Contains(stderr, "level=DEBUG")
+	is.Contains(stderr, "operation=repo_add")
+	is.Contains(stderr, "msg=\"starting repo registration\"")
+	is.Contains(stderr, "msg=\"saved repo registration\"")
+}
+
 func TestRepoAddInitializesManagedBeadsAfterValidation(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -224,7 +259,7 @@ func TestRepoBeadsDirResolvesManagedRepoByName(t *testing.T) {
 	is.Empty(stderr)
 }
 
-func TestRepoBeadsDirResolvesRepoByBeadsPrefix(t *testing.T) {
+func TestRepoBeadsDirResolvesLocalRepoByBeadsPrefix(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -243,6 +278,54 @@ func TestRepoBeadsDirResolvesRepoByBeadsPrefix(t *testing.T) {
 
 	is.Equal(localPath+"\n", stdout)
 	is.Empty(stderr)
+}
+
+func TestRepoBeadsDirResolvesManagedRepoByBeadsPrefix(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:          "managed-id",
+		Name:        "Managed Repo",
+		Path:        filepath.Join(t.TempDir(), "managed"),
+		BeadsMode:   registry.BeadsModeManaged,
+		BeadsPrefix: "managed-prefix",
+	}}}))
+	managedDir, err := registry.ManagedBeadsDir(paths, "managed-id")
+	must.NoError(err)
+
+	stdout, stderr := executeCommand(t, []string{"repo", "beads-dir", "managed-prefix"})
+
+	is.Equal(managedDir+"\n", stdout)
+	is.Empty(stderr)
+}
+
+func TestRepoBeadsDirVerboseEmitsDiagnosticsToStderr(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	localPath := filepath.Join(t.TempDir(), "verbose-alpha")
+	store := registry.NewStore(paths)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:          "alpha-id",
+		Name:        "Alpha Repo",
+		Path:        localPath,
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "alpha-prefix",
+	}}}))
+
+	stdout, stderr := executeCommand(t, []string{"--verbose", "repo", "beads-dir", "alpha-prefix"})
+
+	is.Equal(localPath+"\n", stdout)
+	is.NotContains(stdout, "level=DEBUG")
+	is.Contains(stderr, "level=DEBUG")
+	is.Contains(stderr, "operation=repo_beads_dir")
+	is.Contains(stderr, "token=alpha-prefix")
+	is.Contains(stderr, "repo_id=alpha-id")
+	is.Contains(stderr, "beads_dir="+localPath)
 }
 
 func TestRepoBeadsDirRejectsUnknownRepo(t *testing.T) {

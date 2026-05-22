@@ -25,7 +25,6 @@ func withoutRemote() testRepoOption {
 
 func newTestRepoPath(t *testing.T, opts ...testRepoOption) string {
 	t.Helper()
-	must := require.New(t)
 
 	root := newTestState(t)
 
@@ -34,11 +33,19 @@ func newTestRepoPath(t *testing.T, opts ...testRepoOption) string {
 		opt(&config)
 	}
 
-	repoPath := filepath.Join(root, "repos", "alpha")
+	return newTestRepoAt(t, root, filepath.Join("repos", "alpha"), config)
+}
+
+func newTestRepoAt(t *testing.T, root string, relativePath string, config testRepoConfig) string {
+	t.Helper()
+	must := require.New(t)
+
+	repoPath := filepath.Join(root, relativePath)
 	must.NoError(os.MkdirAll(repoPath, 0o755))
 	initGitRepo(t, repoPath)
 	if config.withRemote {
-		runGit(t, repoPath, "remote", "add", "origin", "git@example.com:org/alpha.git")
+		name := filepath.Base(repoPath)
+		runGit(t, repoPath, "remote", "add", "origin", "git@example.com:org/"+name+".git")
 		runGit(t, repoPath, "update-ref", "refs/remotes/origin/main", "HEAD")
 		runGit(t, repoPath, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 	}

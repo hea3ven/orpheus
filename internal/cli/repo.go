@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -21,37 +22,54 @@ var (
 	initializeManagedBeads = beads.InitializeManaged
 )
 
-func newRepoCommand() *cobra.Command {
+func newRepoCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "repo",
 		Short: "Manage registered repositories",
 		Args:  cobra.NoArgs,
 	}
 
-	cmd.AddCommand(newRepoAddCommand(), newRepoListCommand(), newRepoBeadsDirCommand())
+	cmd.AddCommand(newRepoAddCommand(opts), newRepoListCommand(opts), newRepoBeadsDirCommand(opts))
 	return cmd
 }
 
-func newRepoAddCommand() *cobra.Command {
+func newRepoAddCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add <path>",
 		Short: "Register a repository path",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
+			logger := opts.log().With(
+				slog.String("component", "cli"),
+				slog.String("operation", "repo_add"),
+			)
+			logger.DebugContext(command.Context(), "starting repo registration", slog.String("input_path", args[0]))
+
 			store, err := newRegistryStoreFromEnvironment()
 			if err != nil {
 				return err
 			}
+			logger.DebugContext(command.Context(), "resolved registry store")
 
 			gitInspection, err := gitmeta.Inspect(args[0])
 			if err != nil {
 				return err
 			}
+			logger.DebugContext(
+				command.Context(),
+				"inspected git repository",
+				slog.String("repo_root", gitInspection.Root),
+				slog.Bool("remote_detected", gitInspection.RemoteCandidate != ""),
+				slog.String("remote_candidate_name", gitInspection.RemoteCandidateName),
+				slog.String("default_branch_candidate", gitInspection.DefaultBranchCandidate),
+				slog.String("default_branch_source", string(gitInspection.DefaultBranchSource)),
+			)
 
 			repo, err := registry.NewRepoFromPath(gitInspection.Root)
 			if err != nil {
 				return err
 			}
+			logger.DebugContext(command.Context(), "derived repo identity", slog.String("repo_id", repo.ID), slog.String("repo_name", repo.Name))
 
 			remote, defaultBranch, err := confirmGitValues(command, gitInspection)
 			if err != nil {
@@ -59,6 +77,12 @@ func newRepoAddCommand() *cobra.Command {
 			}
 			repo.Remote = remote
 			repo.DefaultBranch = defaultBranch
+			logger.DebugContext(
+				command.Context(),
+				"confirmed git values",
+				slog.Bool("remote_set", repo.Remote != ""),
+				slog.String("default_branch", repo.DefaultBranch),
+			)
 
 			managed := false
 			beadsInspection, err := inspectLocalBeads(gitInspection.Root)
@@ -74,9 +98,20 @@ func newRepoAddCommand() *cobra.Command {
 				repo.BeadsMode = registry.BeadsModeManaged
 				repo.BeadsPrefix = prefix
 				managed = true
+				logger.DebugContext(
+					command.Context(),
+					"selected managed Beads mode",
+					slog.String("beads_prefix", repo.BeadsPrefix),
+				)
 			} else {
 				repo.BeadsMode = registry.BeadsModeLocal
 				repo.BeadsPrefix = beadsInspection.Prefix
+				logger.DebugContext(
+					command.Context(),
+					"detected repo-local Beads mode",
+					slog.String("beads_dir", beadsInspection.BeadsDir),
+					slog.String("beads_prefix", repo.BeadsPrefix),
+				)
 			}
 
 			reg, err := store.Load()
@@ -86,6 +121,7 @@ func newRepoAddCommand() *cobra.Command {
 			if err := reg.Add(repo); err != nil {
 				return err
 			}
+			logger.DebugContext(command.Context(), "validated registry update", slog.Int("repo_count", len(reg.Repos)))
 
 			var managedDir string
 			if managed {
@@ -93,6 +129,7 @@ func newRepoAddCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				logger.DebugContext(command.Context(), "initializing managed Beads", slog.String("beads_dir", managedDir))
 				if err := initializeManagedBeads(managedDir, repo.BeadsPrefix); err != nil {
 					return err
 				}
@@ -104,6 +141,13 @@ func newRepoAddCommand() *cobra.Command {
 				}
 				return err
 			}
+			logger.DebugContext(
+				command.Context(),
+				"saved repo registration",
+				slog.String("repo_id", repo.ID),
+				slog.String("beads_mode", repo.BeadsMode),
+				slog.String("beads_prefix", repo.BeadsPrefix),
+			)
 
 			_, err = fmt.Fprintf(
 				command.OutOrStdout(),
@@ -122,12 +166,18 @@ func newRepoAddCommand() *cobra.Command {
 	return cmd
 }
 
-func newRepoListCommand() *cobra.Command {
+func newRepoListCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List registered repositories",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
+			logger := opts.log().With(
+				slog.String("component", "cli"),
+				slog.String("operation", "repo_list"),
+			)
+			logger.DebugContext(command.Context(), "loading registered repos")
+
 			store, err := newRegistryStoreFromEnvironment()
 			if err != nil {
 				return err
@@ -137,6 +187,7 @@ func newRepoListCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			logger.DebugContext(command.Context(), "loaded registered repos", slog.Int("repo_count", len(reg.Repos)))
 
 			writer := tabwriter.NewWriter(command.OutOrStdout(), 0, 0, 2, ' ', 0)
 			if _, err := fmt.Fprintln(writer, "ID\tNAME\tPATH\tREMOTE\tDEFAULT_BRANCH\tBEADS_MODE\tBEADS_PREFIX"); err != nil {
@@ -163,12 +214,19 @@ func newRepoListCommand() *cobra.Command {
 	return cmd
 }
 
-func newRepoBeadsDirCommand() *cobra.Command {
+func newRepoBeadsDirCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "beads-dir <repo-id-name-or-prefix>",
 		Short: "Print the Beads directory for a registered repository",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
+			logger := opts.log().With(
+				slog.String("component", "cli"),
+				slog.String("operation", "repo_beads_dir"),
+				slog.String("token", args[0]),
+			)
+			logger.DebugContext(command.Context(), "resolving repo Beads directory")
+
 			store, err := newRegistryStoreFromEnvironment()
 			if err != nil {
 				return err
@@ -188,6 +246,14 @@ func newRepoBeadsDirCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			logger.DebugContext(
+				command.Context(),
+				"resolved repo Beads directory",
+				slog.String("repo_id", repo.ID),
+				slog.String("beads_mode", repo.BeadsMode),
+				slog.String("beads_prefix", repo.BeadsPrefix),
+				slog.String("beads_dir", beadsDir),
+			)
 
 			_, err = fmt.Fprintln(command.OutOrStdout(), beadsDir)
 			return err
