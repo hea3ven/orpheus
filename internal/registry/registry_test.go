@@ -296,6 +296,64 @@ func TestStoreSaveRejectsInvalidRegistry(t *testing.T) {
 	}
 }
 
+func TestRegistryResolveByIDNameAndBeadsPrefix(t *testing.T) {
+	alpha := registry.Repo{
+		ID:          "alpha-id",
+		Name:        "Alpha Repo",
+		Path:        filepath.Join(t.TempDir(), "alpha"),
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "alpha-prefix",
+	}
+	beta := registry.Repo{
+		ID:          "beta-id",
+		Name:        "Beta Repo",
+		Path:        filepath.Join(t.TempDir(), "beta"),
+		BeadsMode:   registry.BeadsModeManaged,
+		BeadsPrefix: "beta-prefix",
+	}
+	reg := registry.Registry{Repos: []registry.Repo{alpha, beta}}
+
+	tests := []struct {
+		name  string
+		token string
+		want  registry.Repo
+	}{
+		{name: "id", token: " alpha-id ", want: alpha},
+		{name: "display name", token: "Beta Repo", want: beta},
+		{name: "beads prefix", token: "alpha-prefix", want: alpha},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := reg.Resolve(tt.token)
+			if err != nil {
+				t.Fatalf("resolve %q: %v", tt.token, err)
+			}
+			if got != tt.want {
+				t.Fatalf("resolve %q = %#v, want %#v", tt.token, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRegistryResolveUnknownIsActionable(t *testing.T) {
+	reg := registry.Registry{Repos: []registry.Repo{{
+		ID:          "alpha-id",
+		Name:        "Alpha Repo",
+		Path:        filepath.Join(t.TempDir(), "alpha"),
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "alpha-prefix",
+	}}}
+
+	_, err := reg.Resolve("missing")
+	if err == nil {
+		t.Fatal("resolve unknown repo succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "repo \"missing\" is not registered") || !strings.Contains(err.Error(), "orpheus repo list") {
+		t.Fatalf("error is not actionable: %v", err)
+	}
+}
+
 func TestManagedBeadsDirUsesRepoIDUnderDataRoot(t *testing.T) {
 	paths := newTestPaths(t)
 	store := registry.NewStore(paths)
@@ -319,6 +377,54 @@ func TestManagedBeadsDirRejectsUnsafeRepoIDs(t *testing.T) {
 				t.Fatal("managed beads dir succeeded, want error")
 			}
 		})
+	}
+}
+
+func TestStoreBeadsDirUsesRepoMode(t *testing.T) {
+	paths := newTestPaths(t)
+	store := registry.NewStore(paths)
+	localPath := filepath.Join(t.TempDir(), "local")
+
+	tests := []struct {
+		name string
+		repo registry.Repo
+		want string
+	}{
+		{
+			name: "local mode uses repo path",
+			repo: registry.Repo{ID: "local", Name: "Local", Path: localPath, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "lp"},
+			want: localPath,
+		},
+		{
+			name: "managed mode uses data root",
+			repo: registry.Repo{ID: "managed", Name: "Managed", Path: filepath.Join(t.TempDir(), "managed"), BeadsMode: registry.BeadsModeManaged, BeadsPrefix: "mp"},
+			want: filepath.Join(paths.DataRoot, "repos", "managed", "beads"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := store.BeadsDir(tt.repo)
+			if err != nil {
+				t.Fatalf("beads dir: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("beads dir = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStoreBeadsDirRejectsRepoWithoutBeadsMode(t *testing.T) {
+	store := registry.NewStore(newTestPaths(t))
+	repo := registry.Repo{ID: "alpha", Name: "alpha", Path: filepath.Join(t.TempDir(), "alpha")}
+
+	_, err := store.BeadsDir(repo)
+	if err == nil {
+		t.Fatal("beads dir without mode succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "has no beads_mode") || !strings.Contains(err.Error(), "registry.yaml") {
+		t.Fatalf("error is not actionable: %v", err)
 	}
 }
 

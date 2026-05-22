@@ -28,7 +28,7 @@ func newRepoCommand() *cobra.Command {
 		Args:  cobra.NoArgs,
 	}
 
-	cmd.AddCommand(newRepoAddCommand(), newRepoListCommand())
+	cmd.AddCommand(newRepoAddCommand(), newRepoListCommand(), newRepoBeadsDirCommand())
 	return cmd
 }
 
@@ -158,6 +158,39 @@ func newRepoListCommand() *cobra.Command {
 				}
 			}
 			return writer.Flush()
+		},
+	}
+	return cmd
+}
+
+func newRepoBeadsDirCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "beads-dir <repo-id-name-or-prefix>",
+		Short: "Print the Beads directory for a registered repository",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			store, err := newRegistryStoreFromEnvironment()
+			if err != nil {
+				return err
+			}
+
+			reg, err := store.Load()
+			if err != nil {
+				return err
+			}
+
+			repo, err := reg.Resolve(args[0])
+			if err != nil {
+				return err
+			}
+
+			beadsDir, err := store.BeadsDir(repo)
+			if err != nil {
+				return err
+			}
+
+			_, err = fmt.Fprintln(command.OutOrStdout(), beadsDir)
+			return err
 		},
 	}
 	return cmd

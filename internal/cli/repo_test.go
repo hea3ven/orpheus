@@ -181,6 +181,93 @@ func TestRepoAddRejectsExistingManagedStateWithoutSavingRegistry(t *testing.T) {
 	is.Empty(reg.Repos)
 }
 
+func TestRepoBeadsDirResolvesLocalRepoByID(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	localPath := filepath.Join(t.TempDir(), "local-alpha")
+	store := registry.NewStore(paths)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:          "alpha-id",
+		Name:        "Alpha Repo",
+		Path:        localPath,
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "alpha-prefix",
+	}}}))
+
+	stdout, stderr := executeCommand(t, []string{"repo", "beads-dir", "alpha-id"})
+
+	is.Equal(localPath+"\n", stdout)
+	is.Empty(stderr)
+}
+
+func TestRepoBeadsDirResolvesManagedRepoByName(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:          "managed-id",
+		Name:        "Managed Repo",
+		Path:        filepath.Join(t.TempDir(), "managed"),
+		BeadsMode:   registry.BeadsModeManaged,
+		BeadsPrefix: "managed-prefix",
+	}}}))
+	managedDir, err := registry.ManagedBeadsDir(paths, "managed-id")
+	must.NoError(err)
+
+	stdout, stderr := executeCommand(t, []string{"repo", "beads-dir", "Managed Repo"})
+
+	is.Equal(managedDir+"\n", stdout)
+	is.Empty(stderr)
+}
+
+func TestRepoBeadsDirResolvesRepoByBeadsPrefix(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	localPath := filepath.Join(t.TempDir(), "prefix-alpha")
+	store := registry.NewStore(paths)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:          "alpha-id",
+		Name:        "Alpha Repo",
+		Path:        localPath,
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "alpha-prefix",
+	}}}))
+
+	stdout, stderr := executeCommand(t, []string{"repo", "beads-dir", "alpha-prefix"})
+
+	is.Equal(localPath+"\n", stdout)
+	is.Empty(stderr)
+}
+
+func TestRepoBeadsDirRejectsUnknownRepo(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:          "alpha-id",
+		Name:        "Alpha Repo",
+		Path:        filepath.Join(t.TempDir(), "alpha"),
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "alpha-prefix",
+	}}}))
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"repo", "beads-dir", "missing"})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "repo \"missing\" is not registered")
+	is.ErrorContains(err, "orpheus repo list")
+}
+
 func currentTestPaths(t *testing.T) state.Paths {
 	t.Helper()
 

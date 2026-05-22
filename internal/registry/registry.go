@@ -52,6 +52,11 @@ func (s Store) ManagedBeadsDir(repoID string) (string, error) {
 	return ManagedBeadsDir(s.paths, repoID)
 }
 
+// BeadsDir returns the directory where Beads commands should run for repo.
+func (s Store) BeadsDir(repo Repo) (string, error) {
+	return BeadsDir(s.paths, repo)
+}
+
 // ManagedBeadsDir returns the deterministic Orpheus-managed Beads workspace for repoID.
 func ManagedBeadsDir(paths state.Paths, repoID string) (string, error) {
 	repoID = strings.TrimSpace(repoID)
@@ -62,6 +67,25 @@ func ManagedBeadsDir(paths state.Paths, repoID string) (string, error) {
 		return "", fmt.Errorf("repo id %q cannot be used in managed Beads path", repoID)
 	}
 	return paths.DataPath(filepath.Join("repos", repoID, "beads"))
+}
+
+// BeadsDir returns the directory where Beads commands should run for repo.
+func BeadsDir(paths state.Paths, repo Repo) (string, error) {
+	normalizedRepo, err := normalizeRepo(repo)
+	if err != nil {
+		return "", err
+	}
+
+	switch normalizedRepo.BeadsMode {
+	case BeadsModeLocal:
+		return normalizedRepo.Path, nil
+	case BeadsModeManaged:
+		return ManagedBeadsDir(paths, normalizedRepo.ID)
+	case "":
+		return "", fmt.Errorf("repo %q has no beads_mode; register it again or edit %s", normalizedRepo.ID, registryFile)
+	default:
+		return "", fmt.Errorf("repo %q has unsupported beads_mode %q", normalizedRepo.ID, normalizedRepo.BeadsMode)
+	}
 }
 
 // NewRepoFromPath derives the minimal M1 repo identity from a path basename.
@@ -126,6 +150,27 @@ func (s Store) Save(registry Registry) error {
 		return fmt.Errorf("save repo registry: %w", err)
 	}
 	return nil
+}
+
+// Resolve returns the repository matching token by id, display name, or Beads prefix.
+func (r Registry) Resolve(token string) (Repo, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return Repo{}, errors.New("repo id, name, or Beads prefix is required")
+	}
+
+	normalizedRegistry, err := r.normalized()
+	if err != nil {
+		return Repo{}, err
+	}
+
+	for _, repo := range normalizedRegistry.Repos {
+		if repo.ID == token || repo.Name == token || repo.BeadsPrefix == token {
+			return repo, nil
+		}
+	}
+
+	return Repo{}, fmt.Errorf("repo %q is not registered by id, name, or Beads prefix; run `orpheus repo list` to see registered repositories", token)
 }
 
 // Add validates and appends a repository record to the registry.
