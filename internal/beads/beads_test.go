@@ -1,14 +1,18 @@
 package beads_test
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/beads"
+	"github.com/hea3ven/orpheus/internal/task"
 )
 
 type fakeRunner struct {
@@ -245,6 +249,227 @@ func TestInitializeManagedWithRunnerReportsCommandFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "run bd init") || !strings.Contains(err.Error(), "cannot initialize") {
 		t.Fatalf("error = %v, want actionable command failure", err)
+	}
+}
+
+func TestTaskBackendListParsesActiveTasksAndMetadata(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{{
+		wantDir:  dir,
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--type", "task", "--limit", "0"},
+		result: beads.Result{Stdout: `[
+			{
+				"id":"op-1",
+				"title":"Implement adapter",
+				"description":"Read tasks",
+				"design":"Use bd JSON",
+				"acceptance_criteria":"Parses metadata",
+				"status":"open",
+				"priority":2,
+				"issue_type":"task",
+				"owner":"owner@example.com",
+				"created_by":"Hea3veN",
+				"created_at":"2026-05-24T06:30:53Z",
+				"updated_at":"2026-05-24T07:30:53Z",
+				"labels":["m2","mvp"],
+				"metadata":{
+					"orpheus.branch":"task/op-1",
+					"estimate":42,
+					"review":true,
+					"nested":{"team":"platform"}
+				},
+				"dependency_count":1,
+				"dependent_count":2,
+				"parent":"op"
+			},
+			{"id":"op-2","title":"Closed task","status":"closed","priority":2,"issue_type":"task"},
+			{"id":"op-3","title":"Bug","status":"open","priority":2,"issue_type":"bug"}
+		]`},
+	}}}
+
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+
+	got, err := backend.List(context.Background())
+	if err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("tasks = %#v, want one active task", got)
+	}
+
+	taskItem := got[0]
+	if taskItem.ID != "op-1" || taskItem.Title != "Implement adapter" || taskItem.Status != task.StatusOpen || taskItem.IssueType != task.IssueTypeTask {
+		t.Fatalf("task = %#v, want parsed active task", taskItem)
+	}
+	if !reflect.DeepEqual(taskItem.Labels, []string{"m2", "mvp"}) {
+		t.Fatalf("labels = %#v, want m2/mvp", taskItem.Labels)
+	}
+	expectedMetadata := task.Metadata{
+		"orpheus.branch": "task/op-1",
+		"estimate":       "42",
+		"review":         "true",
+		"nested":         `{"team":"platform"}`,
+	}
+	if !reflect.DeepEqual(taskItem.Metadata, expectedMetadata) {
+		t.Fatalf("metadata = %#v, want %#v", taskItem.Metadata, expectedMetadata)
+	}
+	if taskItem.Relations.ParentID != "op" || taskItem.Relations.DependencyCount != 1 || taskItem.Relations.DependentCount != 2 {
+		t.Fatalf("relations = %#v, want parent op counts 1/2", taskItem.Relations)
+	}
+	if taskItem.CreatedAt == nil || !taskItem.CreatedAt.Equal(time.Date(2026, 5, 24, 6, 30, 53, 0, time.UTC)) {
+		t.Fatalf("created_at = %v, want parsed UTC time", taskItem.CreatedAt)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
+func TestTaskBackendReadyParsesReadyTasksWithoutMetadata(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{{
+		wantDir:  dir,
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "ready", "--type", "task", "--limit", "0"},
+		result: beads.Result{Stdout: `[
+			{
+				"id":"op-3",
+				"title":"Ready task",
+				"status":"open",
+				"priority":1,
+				"issue_type":"task",
+				"labels":[],
+				"dependencies":[{"issue_id":"op-3","depends_on_id":"op","type":"parent-child"}]
+			}
+		]`},
+	}}}
+
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+
+	got, err := backend.Ready(context.Background())
+	if err != nil {
+		t.Fatalf("ready tasks: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "op-3" || got[0].Title != "Ready task" {
+		t.Fatalf("ready tasks = %#v, want op-3", got)
+	}
+	if got[0].Metadata != nil {
+		t.Fatalf("metadata = %#v, want nil when bd omits metadata", got[0].Metadata)
+	}
+	if got[0].Relations.ParentID != "op" {
+		t.Fatalf("parent = %q, want op", got[0].Relations.ParentID)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
+func TestTaskBackendGetParsesShowJSON(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{{
+		wantDir:  dir,
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-9wh.2"},
+		result: beads.Result{Stdout: `[
+			{
+				"id":"op-9wh.2",
+				"title":"Implement Beads CLI task adapter",
+				"description":"Implement the Beads-backed read adapter.",
+				"design":"Reuse the runner pattern.",
+				"acceptance_criteria":"Adapter implements read interfaces.",
+				"status":"in_progress",
+				"priority":2,
+				"issue_type":"task",
+				"assignee":"Hea3veN",
+				"owner":"owner@example.com",
+				"created_by":"Hea3veN",
+				"created_at":"2026-05-15T21:37:54Z",
+				"updated_at":"2026-05-24T06:27:34Z",
+				"started_at":"2026-05-24T06:27:34Z",
+				"labels":["m2","m2-task"],
+				"metadata":{"orpheus.worktree":"/tmp/worktree"},
+				"dependencies":[
+					{"id":"op-9wh","dependency_type":"parent-child"},
+					{"id":"op-9wh.1","dependency_type":"blocks"}
+				],
+				"dependents":[{"id":"op-9wh.4","dependency_type":"blocks"}]
+			}
+		]`},
+	}}}
+
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+
+	got, err := backend.Get(context.Background(), "op-9wh.2")
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if got.ID != "op-9wh.2" || got.Status != task.StatusInProgress || got.Assignee != "Hea3veN" {
+		t.Fatalf("task = %#v, want parsed op-9wh.2", got)
+	}
+	if got.Design != "Reuse the runner pattern." || got.AcceptanceCriteria != "Adapter implements read interfaces." {
+		t.Fatalf("task detail = %#v, want design and acceptance", got)
+	}
+	if got.Metadata[task.MetadataWorktree] != "/tmp/worktree" {
+		t.Fatalf("metadata = %#v, want worktree", got.Metadata)
+	}
+	if got.Relations.ParentID != "op-9wh" || !reflect.DeepEqual(got.Relations.DependencyIDs, []string{"op-9wh.1"}) {
+		t.Fatalf("dependencies = %#v, want parent and blocking dependency", got.Relations)
+	}
+	if !reflect.DeepEqual(got.Relations.DependentIDs, []string{"op-9wh.4"}) {
+		t.Fatalf("dependents = %#v, want op-9wh.4", got.Relations.DependentIDs)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
+func TestTaskBackendGetTreatsClosedOrNonTaskItemsAsNotFound(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{{
+		wantDir:  dir,
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-closed"},
+		result:   beads.Result{Stdout: `[{"id":"op-closed","title":"done","status":"closed","priority":2,"issue_type":"task"}]`},
+	}}}
+
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+
+	_, err = backend.Get(context.Background(), "op-closed")
+	if !errors.Is(err, task.ErrNotFound) {
+		t.Fatalf("error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestTaskBackendReportsCommandFailureWithOutput(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{{
+		wantDir:  dir,
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--type", "task", "--limit", "0"},
+		result:   beads.Result{Stdout: `{"error":"query_failed"}`, Stderr: "database locked"},
+		err:      errors.New("exit status 1"),
+	}}}
+
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+
+	_, err = backend.List(context.Background())
+	if err == nil {
+		t.Fatal("list succeeded, want command failure")
+	}
+	if !strings.Contains(err.Error(), "run bd --json --readonly --sandbox list --type task --limit 0") ||
+		!strings.Contains(err.Error(), "query_failed") ||
+		!strings.Contains(err.Error(), "database locked") {
+		t.Fatalf("error = %v, want command and output context", err)
 	}
 }
 
