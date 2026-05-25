@@ -8,6 +8,43 @@ import (
 	"github.com/hea3ven/orpheus/internal/task"
 )
 
+func TestAggregatorListQueriesReposAndPreservesContext(t *testing.T) {
+	repos := []task.RepositorySource{
+		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}, BackendDir: "/tmp/alpha"},
+		{Repository: task.Repository{ID: "beta", Name: "Beta", TaskIDPrefix: "b"}, BackendDir: "/tmp/beta"},
+	}
+	backends := map[string]fakeReadBackend{
+		"/tmp/alpha": {tasks: []task.Task{{ID: "a-1", Title: "alpha task", IssueType: task.IssueTypeTask, Status: task.StatusOpen}}},
+		"/tmp/beta":  {tasks: []task.Task{{ID: "b-1", Title: "beta task", IssueType: task.IssueTypeTask, Status: task.StatusInProgress}}},
+	}
+
+	aggregator, err := task.NewAggregator(repos, func(source task.RepositorySource) (task.ReadBackend, error) {
+		backend, ok := backends[source.BackendDir]
+		if !ok {
+			return nil, errors.New("unexpected backend dir")
+		}
+		return backend, nil
+	})
+	if err != nil {
+		t.Fatalf("create aggregator: %v", err)
+	}
+
+	got := aggregator.List(context.Background())
+
+	if got.HasFailures() {
+		t.Fatalf("failures = %#v, want none", got.Failures)
+	}
+	if len(got.Rows) != 2 {
+		t.Fatalf("rows = %#v, want two task rows", got.Rows)
+	}
+	if got.Rows[0].Repository.ID != "alpha" || got.Rows[0].Repository.TaskIDPrefix != "a" || got.Rows[0].Task.ID != "a-1" {
+		t.Fatalf("first row = %#v, want alpha/a/a-1", got.Rows[0])
+	}
+	if got.Rows[1].Repository.ID != "beta" || got.Rows[1].Repository.TaskIDPrefix != "b" || got.Rows[1].Task.ID != "b-1" {
+		t.Fatalf("second row = %#v, want beta/b/b-1", got.Rows[1])
+	}
+}
+
 func TestAggregatorReadyQueriesReposAndPreservesContext(t *testing.T) {
 	repos := []task.RepositorySource{
 		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}, BackendDir: "/tmp/alpha"},
