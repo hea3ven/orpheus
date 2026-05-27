@@ -92,10 +92,17 @@ func (m Metadata) Clone() Metadata {
 }
 
 // OrpheusMetadata projects Orpheus-owned metadata keys from a task.
+//
+// Has* fields distinguish metadata that is absent from metadata that is present
+// with an empty value. Absent metadata is normal for tasks that have not reached
+// later Orpheus workflow stages.
 type OrpheusMetadata struct {
-	Branch   string
-	Worktree string
-	PRURL    string
+	Branch      string
+	HasBranch   bool
+	Worktree    string
+	HasWorktree bool
+	PRURL       string
+	HasPRURL    bool
 }
 
 // RelationSummary keeps lightweight relation information when a backend provides it.
@@ -167,17 +174,25 @@ func (t Task) Clone() Task {
 	return t
 }
 
-// OrpheusMetadata returns Orpheus-owned metadata projected into named fields.
-func (t Task) OrpheusMetadata() OrpheusMetadata {
-	branch, _ := t.Metadata.Value(MetadataBranch)
-	worktree, _ := t.Metadata.Value(MetadataWorktree)
-	prURL, _ := t.Metadata.Value(MetadataPRURL)
+// ProjectOrpheusMetadata projects Orpheus-owned metadata keys into named fields.
+func ProjectOrpheusMetadata(metadata Metadata) OrpheusMetadata {
+	branch, hasBranch := metadata.Value(MetadataBranch)
+	worktree, hasWorktree := metadata.Value(MetadataWorktree)
+	prURL, hasPRURL := metadata.Value(MetadataPRURL)
 
 	return OrpheusMetadata{
-		Branch:   branch,
-		Worktree: worktree,
-		PRURL:    prURL,
+		Branch:      branch,
+		HasBranch:   hasBranch,
+		Worktree:    worktree,
+		HasWorktree: hasWorktree,
+		PRURL:       prURL,
+		HasPRURL:    hasPRURL,
 	}
+}
+
+// OrpheusMetadata returns Orpheus-owned metadata projected into named fields.
+func (t Task) OrpheusMetadata() OrpheusMetadata {
+	return ProjectOrpheusMetadata(t.Metadata)
 }
 
 // Getter fetches one active task by id for task show/get commands.

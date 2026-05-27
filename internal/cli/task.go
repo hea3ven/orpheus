@@ -202,16 +202,16 @@ func renderDetailedTaskRow(writer interface{ Write([]byte) (int, error) }, row t
 		sanitizeTableCell(row.Task.ID),
 		sanitizeTableCell(string(row.Task.Status)),
 		row.Task.Priority,
-		sanitizeTableCell(formatOptionalTableCell(metadata.Branch)),
-		sanitizeTableCell(formatOptionalTableCell(metadata.Worktree)),
-		sanitizeTableCell(formatOptionalTableCell(metadata.PRURL)),
+		sanitizeTableCell(formatMetadataTableCell(metadata.Branch, metadata.HasBranch)),
+		sanitizeTableCell(formatMetadataTableCell(metadata.Worktree, metadata.HasWorktree)),
+		sanitizeTableCell(formatMetadataTableCell(metadata.PRURL, metadata.HasPRURL)),
 		sanitizeTableCell(row.Task.Title),
 	)
 	return err
 }
 
-func formatOptionalTableCell(value string) string {
-	if value == "" {
+func formatMetadataTableCell(value string, present bool) string {
+	if !present || value == "" {
 		return "-"
 	}
 	return value

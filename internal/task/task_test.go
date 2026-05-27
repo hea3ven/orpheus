@@ -138,19 +138,66 @@ func TestTaskOrpheusMetadataProjectsKnownKeys(t *testing.T) {
 	}}
 
 	got := taskItem.OrpheusMetadata()
-	if got.Branch != "task/op-1-model" {
-		t.Fatalf("branch = %q, want task/op-1-model", got.Branch)
+	expected := task.OrpheusMetadata{
+		Branch:      "task/op-1-model",
+		HasBranch:   true,
+		Worktree:    "/tmp/orpheus/op-1",
+		HasWorktree: true,
+		PRURL:       "https://github.com/example/repo/pull/1",
+		HasPRURL:    true,
 	}
-	if got.Worktree != "/tmp/orpheus/op-1" {
-		t.Fatalf("worktree = %q, want /tmp/orpheus/op-1", got.Worktree)
-	}
-	if got.PRURL != "https://github.com/example/repo/pull/1" {
-		t.Fatalf("pr url = %q, want GitHub PR URL", got.PRURL)
+	if !reflect.DeepEqual(got, expected) {
+		t.Fatalf("orpheus metadata = %#v, want %#v", got, expected)
 	}
 
 	value, ok := taskItem.Metadata.Value("backend.custom")
 	if !ok || value != "preserved but not projected" {
 		t.Fatalf("custom metadata lookup = %q, %v", value, ok)
+	}
+}
+
+func TestTaskOrpheusMetadataRepresentsAbsentFields(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata task.Metadata
+		expected task.OrpheusMetadata
+	}{
+		{
+			name:     "nil metadata",
+			metadata: nil,
+			expected: task.OrpheusMetadata{},
+		},
+		{
+			name:     "empty metadata",
+			metadata: task.Metadata{},
+			expected: task.OrpheusMetadata{},
+		},
+		{
+			name: "irrelevant metadata only",
+			metadata: task.Metadata{
+				"backend.custom": "preserved but not projected",
+			},
+			expected: task.OrpheusMetadata{},
+		},
+		{
+			name: "partial metadata",
+			metadata: task.Metadata{
+				task.MetadataWorktree: "/tmp/orpheus/op-1",
+			},
+			expected: task.OrpheusMetadata{
+				Worktree:    "/tmp/orpheus/op-1",
+				HasWorktree: true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := task.Task{Metadata: tt.metadata}.OrpheusMetadata()
+			if !reflect.DeepEqual(got, tt.expected) {
+				t.Fatalf("orpheus metadata = %#v, want %#v", got, tt.expected)
+			}
+		})
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -90,6 +91,10 @@ func TestTaskListListsActiveTasksAcrossRegisteredReposWithDefaultAndDetailedTabl
 	} {
 		is.Contains(detailedStdout, want)
 	}
+	localDetail := regexp.MustCompile(`(?m)^local-alpha\s+Local Alpha\s+la\s+la-1\s+open\s+2\s+task/la-1\s+/tmp/la-1\s+-\s+Local active$`)
+	managedDetail := regexp.MustCompile(`(?m)^managed-beta\s+Managed Beta\s+mb\s+mb-1\s+in_progress\s+3\s+-\s+-\s+https://example\.test/pr/1\s+Managed active$`)
+	is.True(localDetail.MatchString(detailedStdout), "local detail row should show absent PR metadata as -")
+	is.True(managedDetail.MatchString(detailedStdout), "managed detail row should show absent branch/worktree metadata as -")
 	is.NotContains(detailedStdout, "branch=task/la-1")
 	is.NotContains(detailedStdout, "worktree=/tmp/la-1")
 	is.NotContains(detailedStdout, "pr=https://example.test/pr/1")
