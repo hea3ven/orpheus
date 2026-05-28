@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -22,7 +23,7 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 		Args:  cobra.NoArgs,
 	}
 
-	cmd.AddCommand(newTaskListCommand(opts), newTaskReadyCommand(opts))
+	cmd.AddCommand(newTaskListCommand(opts), newTaskReadyCommand(opts), newTaskShowCommand(opts))
 	return cmd
 }
 
@@ -69,6 +70,18 @@ func newTaskReadyCommand(opts *rootOptions) *cobra.Command {
 		},
 	}
 	addTaskDetailFlags(cmd, &detailed)
+	return cmd
+}
+
+func newTaskShowCommand(opts *rootOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "show <task-id>",
+		Short: "Show a task from its registered repository",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			return runTaskShow(command, opts, args[0])
+		},
+	}
 	return cmd
 }
 
@@ -125,6 +138,89 @@ func runTaskQuery(command *cobra.Command, opts *rootOptions, queryOpts taskQuery
 	return nil
 }
 
+func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error {
+	logger := opts.log().With(
+		slog.String("component", "cli"),
+		slog.String("operation", "task_show"),
+	)
+	logger.DebugContext(command.Context(), "loading registered repos for task show")
+
+	store, err := newRegistryStoreFromEnvironment()
+	if err != nil {
+		return err
+	}
+
+	reg, err := store.Load()
+	if err != nil {
+		return err
+	}
+
+	sources, err := taskRepositorySources(store, reg)
+	if err != nil {
+		return err
+	}
+
+	resolved, err := taskmodel.ResolveTaskSource(sources, taskID)
+	if err != nil {
+		return err
+	}
+
+	logger.DebugContext(
+		command.Context(),
+		"querying task from resolved repo",
+		slog.String("repo_id", resolved.Source.Repository.ID),
+		slog.String("task_id", resolved.TaskID),
+	)
+
+	backend, err := newBeadsTaskBackend(resolved.Source.BackendDir)
+	if err != nil {
+		return fmt.Errorf("task show %s: create backend for repo %s (%s; prefix %s): %w",
+			resolved.TaskID,
+			resolved.Source.Repository.ID,
+			resolved.Source.Repository.Name,
+			resolved.Source.Repository.TaskIDPrefix,
+			err,
+		)
+	}
+
+	taskItem, err := backend.Get(command.Context(), resolved.TaskID)
+	if err != nil {
+		if errors.Is(err, taskmodel.ErrNotFound) {
+			return fmt.Errorf(
+				"task show %s: task was not found in repo %s (%s; prefix %s); check the task id or run `orpheus repo beads-dir %s` to inspect the backend: %w",
+				resolved.TaskID,
+				resolved.Source.Repository.ID,
+				resolved.Source.Repository.Name,
+				resolved.Source.Repository.TaskIDPrefix,
+				resolved.Source.Repository.ID,
+				err,
+			)
+		}
+		return fmt.Errorf("task show %s: query repo %s (%s; prefix %s): %w",
+			resolved.TaskID,
+			resolved.Source.Repository.ID,
+			resolved.Source.Repository.Name,
+			resolved.Source.Repository.TaskIDPrefix,
+			err,
+		)
+	}
+
+	if !taskmodel.IsM2TaskViewItem(taskItem) {
+		return fmt.Errorf(
+			"task show %s: item is out of scope for M2 task views; expected an active issue_type=task item, got issue_type=%s status=%s",
+			resolved.TaskID,
+			formatTaskField(string(taskItem.IssueType)),
+			formatTaskField(string(taskItem.Status)),
+		)
+	}
+
+	logger.DebugContext(command.Context(), "queried task from resolved repo")
+	return renderTaskDetails(command.OutOrStdout(), taskmodel.RepoTask{
+		Repository: resolved.Source.Repository,
+		Task:       taskItem,
+	})
+}
+
 type taskQueryOptions struct {
 	operation    string
 	logOperation string
@@ -151,6 +247,120 @@ func taskRepositorySources(store registry.Store, reg registry.Registry) ([]taskm
 		})
 	}
 	return sources, nil
+}
+
+func renderTaskDetails(output interface{ Write([]byte) (int, error) }, row taskmodel.RepoTask) error {
+	metadata := row.Task.OrpheusMetadata()
+
+	if _, err := fmt.Fprintln(output, "Repository:"); err != nil {
+		return err
+	}
+	if err := renderKeyValue(output, "  ID", row.Repository.ID); err != nil {
+		return err
+	}
+	if err := renderKeyValue(output, "  Name", row.Repository.Name); err != nil {
+		return err
+	}
+	if err := renderKeyValue(output, "  Beads prefix", row.Repository.TaskIDPrefix); err != nil {
+		return err
+	}
+
+	if _, err := fmt.Fprintln(output); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(output, "Task:"); err != nil {
+		return err
+	}
+	for _, field := range []struct {
+		label string
+		value string
+	}{
+		{label: "  ID", value: row.Task.ID},
+		{label: "  Title", value: row.Task.Title},
+		{label: "  Status", value: string(row.Task.Status)},
+		{label: "  Priority", value: fmt.Sprintf("%d", row.Task.Priority)},
+		{label: "  Type", value: string(row.Task.IssueType)},
+		{label: "  Labels", value: formatLabels(row.Task.Labels)},
+	} {
+		if err := renderKeyValue(output, field.label, field.value); err != nil {
+			return err
+		}
+	}
+	for _, field := range []struct {
+		label string
+		value string
+	}{
+		{label: "  Description", value: row.Task.Description},
+		{label: "  Design", value: row.Task.Design},
+		{label: "  Acceptance criteria", value: row.Task.AcceptanceCriteria},
+	} {
+		if err := renderBlockValue(output, field.label, field.value); err != nil {
+			return err
+		}
+	}
+
+	if _, err := fmt.Fprintln(output); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(output, "Orpheus metadata:"); err != nil {
+		return err
+	}
+	for _, field := range []struct {
+		label   string
+		value   string
+		present bool
+	}{
+		{label: "  Branch", value: metadata.Branch, present: metadata.HasBranch},
+		{label: "  Worktree", value: metadata.Worktree, present: metadata.HasWorktree},
+		{label: "  PR", value: metadata.PRURL, present: metadata.HasPRURL},
+	} {
+		if err := renderKeyValue(output, field.label, formatMetadataTableCell(field.value, field.present)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func renderKeyValue(output interface{ Write([]byte) (int, error) }, label string, value string) error {
+	_, err := fmt.Fprintf(output, "%s: %s\n", label, formatTaskField(sanitizeTableCell(value)))
+	return err
+}
+
+func renderBlockValue(output interface{ Write([]byte) (int, error) }, label string, value string) error {
+	value = strings.TrimRight(strings.ReplaceAll(value, "\r\n", "\n"), "\r\n")
+	if strings.TrimSpace(value) == "" {
+		_, err := fmt.Fprintf(output, "%s: -\n", label)
+		return err
+	}
+	if !strings.Contains(value, "\n") {
+		_, err := fmt.Fprintf(output, "%s: %s\n", label, value)
+		return err
+	}
+
+	if _, err := fmt.Fprintf(output, "%s:\n", label); err != nil {
+		return err
+	}
+	for _, line := range strings.Split(value, "\n") {
+		if _, err := fmt.Fprintf(output, "    %s\n", line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func formatTaskField(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "-"
+	}
+	return value
+}
+
+func formatLabels(labels []string) string {
+	if len(labels) == 0 {
+		return "-"
+	}
+	return strings.Join(labels, ", ")
 }
 
 func renderTaskRows(output interface{ Write([]byte) (int, error) }, rows []taskmodel.RepoTask, detailed bool) error {

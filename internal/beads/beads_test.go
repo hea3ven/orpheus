@@ -429,22 +429,40 @@ func TestTaskBackendGetParsesShowJSON(t *testing.T) {
 	}
 }
 
-func TestTaskBackendGetTreatsClosedOrNonTaskItemsAsNotFound(t *testing.T) {
+func TestTaskBackendGetReturnsClosedOrNonTaskItemsForShowScope(t *testing.T) {
 	dir := t.TempDir()
-	runner := &fakeRunner{calls: []fakeCall{{
-		wantDir:  dir,
-		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-closed"},
-		result:   beads.Result{Stdout: `[{"id":"op-closed","title":"done","status":"closed","priority":2,"issue_type":"task"}]`},
-	}}}
+	runner := &fakeRunner{calls: []fakeCall{
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-closed"},
+			result:   beads.Result{Stdout: `[{"id":"op-closed","title":"done","status":"closed","priority":2,"issue_type":"task"}]`},
+		},
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-bug"},
+			result:   beads.Result{Stdout: `[{"id":"op-bug","title":"bug","status":"open","priority":2,"issue_type":"bug"}]`},
+		},
+	}}
 
 	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
 	if err != nil {
 		t.Fatalf("create backend: %v", err)
 	}
 
-	_, err = backend.Get(context.Background(), "op-closed")
-	if !errors.Is(err, task.ErrNotFound) {
-		t.Fatalf("error = %v, want ErrNotFound", err)
+	closed, err := backend.Get(context.Background(), "op-closed")
+	if err != nil {
+		t.Fatalf("get closed item: %v", err)
+	}
+	if closed.Status != task.StatusClosed || closed.IssueType != task.IssueTypeTask {
+		t.Fatalf("closed item = %#v, want closed task returned", closed)
+	}
+
+	bug, err := backend.Get(context.Background(), "op-bug")
+	if err != nil {
+		t.Fatalf("get bug item: %v", err)
+	}
+	if bug.Status != task.StatusOpen || bug.IssueType != task.IssueTypeBug {
+		t.Fatalf("bug item = %#v, want open bug returned", bug)
 	}
 }
 

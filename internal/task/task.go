@@ -195,7 +195,10 @@ func (t Task) OrpheusMetadata() OrpheusMetadata {
 	return ProjectOrpheusMetadata(t.Metadata)
 }
 
-// Getter fetches one active task by id for task show/get commands.
+// Getter fetches one task-tracker item by id for task show/get commands.
+//
+// Callers that implement M2 task views should use IsM2TaskViewItem to reject
+// closed or non-task items with a clear out-of-scope message.
 type Getter interface {
 	Get(ctx context.Context, id string) (Task, error)
 }
@@ -264,6 +267,16 @@ func (r QueryResult) Clone() QueryResult {
 		Failures: cloneFailures(r.Failures),
 	}
 	return clone
+}
+
+// IsM2TaskViewItem reports whether taskItem is in scope for M2 task views.
+//
+// Milestone 2 views are intentionally read-only and scoped to active
+// issue_type=task items. Other issue types and closed tasks may be visible to
+// backends, but commands should report them as out of scope rather than acting
+// on them.
+func IsM2TaskViewItem(taskItem Task) bool {
+	return taskItem.IssueType == IssueTypeTask && taskItem.Status != StatusClosed
 }
 
 func cloneRows(rows []RepoTask) []RepoTask {

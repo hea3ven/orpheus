@@ -61,7 +61,7 @@ func (a Aggregator) query(ctx context.Context, query func(ReadBackend) ([]Task, 
 		}
 
 		for _, taskItem := range tasks {
-			if !isM2TaskViewItem(taskItem) {
+			if !IsM2TaskViewItem(taskItem) {
 				continue
 			}
 			result.Rows = append(result.Rows, RepoTask{
@@ -71,8 +71,4 @@ func (a Aggregator) query(ctx context.Context, query func(ReadBackend) ([]Task, 
 		}
 	}
 	return result
-}
-
-func isM2TaskViewItem(taskItem Task) bool {
-	return taskItem.IssueType == IssueTypeTask && taskItem.Status != StatusClosed
 }

@@ -280,6 +280,188 @@ func TestTaskReadyReportsPartialRepoFailures(t *testing.T) {
 	is.Contains(stderr, "bd exploded")
 }
 
+func TestTaskShowResolvesPrefixQueriesOnlyResolvedRepoAndRendersDetails(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	localDir := filepath.Join(t.TempDir(), "local-alpha")
+	managedRepoPath := filepath.Join(t.TempDir(), "managed-beta")
+	managedDir, err := store.ManagedBeadsDir("managed-beta")
+	must.NoError(err)
+	must.NoError(os.MkdirAll(localDir, 0o755))
+	must.NoError(os.MkdirAll(managedRepoPath, 0o755))
+	must.NoError(os.MkdirAll(managedDir, 0o755))
+
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{
+		{
+			ID:          "local-alpha",
+			Name:        "Local Alpha",
+			Path:        localDir,
+			BeadsMode:   registry.BeadsModeLocal,
+			BeadsPrefix: "la",
+		},
+		{
+			ID:          "managed-beta",
+			Name:        "Managed Beta",
+			Path:        managedRepoPath,
+			BeadsMode:   registry.BeadsModeManaged,
+			BeadsPrefix: "mb",
+		},
+	}}))
+
+	logPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		localDir: {stdout: `[
+			{
+				"id":"la-42",
+				"title":"Implement local task show",
+				"description":"Render a backend-neutral detail view.\nKeep it read-only.",
+				"design":"Use prefix resolution and the task backend.",
+				"acceptance_criteria":"Only the resolved repo is queried.",
+				"status":"in_progress",
+				"priority":2,
+				"issue_type":"task",
+				"labels":["m2","task-show"],
+				"metadata":{"orpheus.branch":"task/la-42","orpheus.worktree":"/tmp/la-42","orpheus.pr_url":"https://example.test/pr/42"}
+			}
+		]`},
+		managedDir: {stderr: "managed repo should not be queried", exitCode: 70},
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "show", "la-42"})
+
+	is.Empty(stderr)
+	for _, want := range []string{
+		"Repository:",
+		"ID: local-alpha",
+		"Name: Local Alpha",
+		"Beads prefix: la",
+		"Task:",
+		"ID: la-42",
+		"Title: Implement local task show",
+		"Status: in_progress",
+		"Priority: 2",
+		"Type: task",
+		"Labels: m2, task-show",
+		"Description:",
+		"Render a backend-neutral detail view.",
+		"Keep it read-only.",
+		"Design: Use prefix resolution and the task backend.",
+		"Acceptance criteria: Only the resolved repo is queried.",
+		"Orpheus metadata:",
+		"Branch: task/la-42",
+		"Worktree: /tmp/la-42",
+		"PR: https://example.test/pr/42",
+	} {
+		is.Contains(stdout, want)
+	}
+	is.NotContains(stdout, "orpheus.branch")
+	is.NotContains(stdout, "managed-beta")
+
+	logData, err := os.ReadFile(logPath)
+	must.NoError(err)
+	log := string(logData)
+	is.Contains(log, localDir)
+	is.NotContains(log, managedDir)
+	is.Contains(log, "--json --readonly --sandbox show --id la-42")
+	is.NotContains(log, "--json --readonly --sandbox list")
+	is.NotContains(log, "--json --readonly --sandbox ready")
+}
+
+func TestTaskShowReportsMalformedAndUnknownPrefixes(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoDir := filepath.Join(t.TempDir(), "alpha")
+	must.NoError(os.MkdirAll(repoDir, 0o755))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:          "alpha",
+		Name:        "Alpha",
+		Path:        repoDir,
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "op",
+	}}}))
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "show", "notprefixed"})
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "malformed task id")
+	is.ErrorContains(err, "expected <prefix>-<number>")
+
+	stdout, stderr, err = executeCommandWithError(t, []string{"task", "show", "zz-1"})
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "unknown task id prefix")
+	is.ErrorContains(err, "orpheus repo list")
+	is.ErrorContains(err, "register the repo")
+}
+
+func TestTaskShowReportsClosedOrNonTaskItemsOutOfScope(t *testing.T) {
+	tests := []struct {
+		name       string
+		id         string
+		response   string
+		wantType   string
+		wantStatus string
+	}{
+		{
+			name:       "closed task",
+			id:         "op-closed",
+			response:   `[{"id":"op-closed","title":"done","status":"closed","priority":2,"issue_type":"task"}]`,
+			wantType:   "issue_type=task",
+			wantStatus: "status=closed",
+		},
+		{
+			name:       "bug",
+			id:         "op-bug",
+			response:   `[{"id":"op-bug","title":"bug","status":"open","priority":2,"issue_type":"bug"}]`,
+			wantType:   "issue_type=bug",
+			wantStatus: "status=open",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			is := assert.New(t)
+			must := require.New(t)
+			newTestState(t)
+			paths := currentTestPaths(t)
+			store := registry.NewStore(paths)
+
+			repoDir := filepath.Join(t.TempDir(), "alpha")
+			must.NoError(os.MkdirAll(repoDir, 0o755))
+			must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+				ID:          "alpha",
+				Name:        "Alpha",
+				Path:        repoDir,
+				BeadsMode:   registry.BeadsModeLocal,
+				BeadsPrefix: "op",
+			}}}))
+
+			withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+				repoDir: {stdout: tt.response},
+			})
+
+			stdout, stderr, err := executeCommandWithError(t, []string{"task", "show", tt.id})
+
+			must.Error(err)
+			is.Empty(stdout)
+			is.Empty(stderr)
+			is.ErrorContains(err, "out of scope for M2 task views")
+			is.ErrorContains(err, "expected an active issue_type=task item")
+			is.ErrorContains(err, tt.wantType)
+			is.ErrorContains(err, tt.wantStatus)
+		})
+	}
+}
+
 func withFakeBDTaskResponses(t *testing.T, responses map[string]fakeBDTaskResponse) string {
 	t.Helper()
 
@@ -297,7 +479,7 @@ func withFakeBDTaskResponses(t *testing.T, responses map[string]fakeBDTaskRespon
   printf '%s\n' "$*"
 } >> "$FAKE_BD_LOG"
 case "$*" in
-  "--json --readonly --sandbox ready --type task --limit 0"|"--json --readonly --sandbox list --type task --limit 0")
+  "--json --readonly --sandbox ready --type task --limit 0"|"--json --readonly --sandbox list --type task --limit 0"|"--json --readonly --sandbox show --id "*)
     ;;
   *)
     echo "unexpected args: $*" >&2

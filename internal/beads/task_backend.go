@@ -15,8 +15,10 @@ import (
 
 var _ task.ReadBackend = TaskBackend{}
 
-// TaskBackend reads active task items from one explicit Beads workspace.
+// TaskBackend reads task items from one explicit Beads workspace.
 //
+// List and Ready return active task items. Get returns the backend item so
+// callers can report closed or non-task items as out of scope when needed.
 // Use NewTaskBackend or NewTaskBackendWithRunner to construct a valid value.
 type TaskBackend struct {
 	dir    string
@@ -42,7 +44,7 @@ func NewTaskBackendWithRunner(dir string, runner Runner) (TaskBackend, error) {
 	return TaskBackend{dir: normalizedDir, runner: runner}, nil
 }
 
-// Get fetches one active Beads task by id.
+// Get fetches one Beads item by id.
 func (b TaskBackend) Get(ctx context.Context, id string) (task.Task, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -68,9 +70,6 @@ func (b TaskBackend) Get(ctx context.Context, id string) (task.Task, error) {
 	for _, taskItem := range tasks {
 		if taskItem.ID != id {
 			continue
-		}
-		if !isActiveTask(taskItem) {
-			return task.Task{}, fmt.Errorf("get Beads task %q in %q: item is not an active issue_type=task item: %w", id, b.dir, task.ErrNotFound)
 		}
 		return taskItem, nil
 	}
