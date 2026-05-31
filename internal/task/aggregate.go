@@ -33,30 +33,47 @@ func NewAggregator(sources []RepositorySource, factory BackendFactory) (Aggregat
 
 // List lists active issue_type=task items across all configured repositories.
 func (a Aggregator) List(ctx context.Context) QueryResult {
-	return a.query(ctx, func(backend ReadBackend) ([]Task, error) {
+	return a.query(ctx, "list", func(backend ReadBackend) ([]Task, error) {
 		return backend.List(ctx)
 	})
 }
 
-// Ready lists active issue_type=task items that their backend considers ready.
-func (a Aggregator) Ready(ctx context.Context) QueryResult {
-	return a.query(ctx, func(backend ReadBackend) ([]Task, error) {
-		return backend.Ready(ctx)
-	})
+// Snapshot reads visible task-backend snapshots for local status projection.
+func (a Aggregator) Snapshot(ctx context.Context) SnapshotResult {
+	var result SnapshotResult
+	for _, source := range a.sources {
+		backend, err := a.factory(source)
+		if err != nil {
+			result.Failures = append(result.Failures, repoFailure(source.Repository, "task_backend", "create_backend", err))
+			continue
+		}
+
+		listed, err := backend.List(ctx)
+		if err != nil {
+			result.Failures = append(result.Failures, repoFailure(source.Repository, "task_backend", "snapshot", err))
+			continue
+		}
+
+		result.Repositories = append(result.Repositories, RepositorySnapshot{
+			Repository: source.Repository,
+			Tasks:      cloneTasks(listed),
+		})
+	}
+	return result
 }
 
-func (a Aggregator) query(ctx context.Context, query func(ReadBackend) ([]Task, error)) QueryResult {
+func (a Aggregator) query(ctx context.Context, operation string, query func(ReadBackend) ([]Task, error)) QueryResult {
 	var result QueryResult
 	for _, source := range a.sources {
 		backend, err := a.factory(source)
 		if err != nil {
-			result.Failures = append(result.Failures, RepoFailure{Repository: source.Repository, Err: err})
+			result.Failures = append(result.Failures, repoFailure(source.Repository, "task_backend", "create_backend", err))
 			continue
 		}
 
 		tasks, err := query(backend)
 		if err != nil {
-			result.Failures = append(result.Failures, RepoFailure{Repository: source.Repository, Err: err})
+			result.Failures = append(result.Failures, repoFailure(source.Repository, "task_backend", operation, err))
 			continue
 		}
 
@@ -71,4 +88,8 @@ func (a Aggregator) query(ctx context.Context, query func(ReadBackend) ([]Task, 
 		}
 	}
 	return result
+}
+
+func repoFailure(repository Repository, source string, operation string, err error) RepoFailure {
+	return RepoFailure{Repository: repository, Source: source, Operation: operation, Err: err}
 }

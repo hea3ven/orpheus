@@ -400,21 +400,30 @@ bd create ...
 
 The codebase should include a narrow internal `TaskBackend` abstraction, even though Beads is the only MVP implementation.
 
-The abstraction should be small and Beads-shaped.
+The abstraction should be small and backend-neutral at Orpheus boundaries, even though the MVP implementation uses Beads.
 
 Possible capabilities:
 
 ```text
 get_task(task_id)
-list_tasks()
-list_ready()
+snapshot_tasks()
 claim_task(task_id)
 set_metadata(task_id, key, value)
 get_metadata(task_id, key)
 close_task(task_id)
 ```
 
-The goal is to avoid leaking `bd` commands through all of Orpheus and to keep agent-facing context backend-neutral.
+`snapshot_tasks()` returns the current visible task-backend state for configured repositories. For the MVP, snapshots include all visible issue types and statuses from the backend, including closed items. The task snapshot is not a status projection and does not include a separate backend-specific "ready" collection.
+
+Repository read failures should carry small structured diagnostics so operator-facing projections can explain degraded data without parsing error strings:
+
+```text
+source      # e.g. task_backend, registry, run_store
+operation   # e.g. create_backend, snapshot, load_runs
+error
+```
+
+The goal is to avoid leaking `bd` commands through all of Orpheus and to keep agent-facing context backend-neutral. In particular, Orpheus readiness must not be defined by Beads' `bd ready` semantics.
 
 ### 8.2 MVP Implementation
 
@@ -473,6 +482,8 @@ orpheus status
 ```
 
 `status`, `task list`, and `task ready` operate across all registered repos by default.
+
+`orpheus task ready` is an Orpheus readiness view, not a thin wrapper around a backend-native ready command. It should use the same readiness semantics as the `Ready to run` status group and future `task run-ready` selection.
 
 ---
 
@@ -885,10 +896,13 @@ orpheus task sync --all
 `status` should project from:
 
 - repo registry
-- task backend state
-- Beads metadata
+- task backend snapshots
+- Beads metadata normalized into the task model
 - Orpheus run records
 - cheap local process state if available
+- structured diagnostics from each local data source
+
+Task backend snapshots are backend-state read models. For the MVP they include all visible issue types and statuses, including closed items. The status projection owns Orpheus' interpretation of that state.
 
 Recommended groups:
 
@@ -899,15 +913,43 @@ Failed / needs retry
 Implementation complete / needs PR
 In review
 Blocked
-Done count / recently done
+Done / closed
+Unknown / needs attention
 ```
 
-Examples of projection rules:
+MVP readiness semantics:
 
 ```text
-Beads ready + no active run + no pr_url
+issue_type != epic
+AND status == open
+AND no non-empty orpheus.pr_url
+AND every dependency id resolves within the same repository snapshot
+AND every resolved dependency has status == closed
 => Ready to run
+```
 
+Dependency and classification rules:
+
+```text
+task has non-empty orpheus.pr_url and task not closed
+=> In review
+
+task has dependency ids and at least one same-repo dependency is present but not closed
+=> Blocked
+
+task has dependency ids and at least one dependency is missing from the same repository snapshot
+=> Unknown / needs attention
+
+task status is closed
+=> Done / closed
+
+issue_type == epic
+=> Not eligible for readiness in the MVP
+```
+
+Examples of later run-state projection rules:
+
+```text
 latest run active
 => Running
 
@@ -916,12 +958,6 @@ latest run failed + no pr_url
 
 latest successful run pr_ready=true + no pr_url
 => Implementation complete / needs PR
-
-task has orpheus.pr_url + task not closed
-=> In review
-
-task closed
-=> Done
 ```
 
 ---
@@ -971,13 +1007,14 @@ orpheus task run-ready --limit <n> --yes
 Behavior:
 
 1. Acquire global mutation lock.
-2. Query ready tasks across registered repos.
-3. Filter tasks that already have PRs, active runs, or PR-ready latest runs.
-4. Select up to `N`.
-5. Print exact tasks that will run.
-6. Ask for confirmation by default.
-7. Skip confirmation only with `--yes`.
-8. Claim/setup/launch each selected task.
+2. Read task snapshots across registered repos.
+3. Apply Orpheus readiness semantics.
+4. Filter tasks that already have PRs, active runs, or PR-ready latest runs.
+5. Select up to `N`.
+6. Print exact tasks that will run.
+7. Ask for confirmation by default.
+8. Skip confirmation only with `--yes`.
+9. Claim/setup/launch each selected task.
 
 This command must not continuously auto-run tasks without operator confirmation in the MVP.
 

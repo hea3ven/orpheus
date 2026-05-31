@@ -107,7 +107,7 @@ func TestTaskListListsActiveTasksAcrossRegisteredReposWithDefaultAndDetailedTabl
 	log := string(logData)
 	is.Contains(log, localDir)
 	is.Contains(log, managedDir)
-	is.Equal(4, strings.Count(log, "--json --readonly --sandbox list --type task --limit 0"))
+	is.Equal(4, strings.Count(log, "--json --readonly --sandbox list --all --limit 0"))
 }
 
 func TestTaskReadyListsReadyTasksAcrossRegisteredRepos(t *testing.T) {
@@ -145,11 +145,14 @@ func TestTaskReadyListsReadyTasksAcrossRegisteredRepos(t *testing.T) {
 	logPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
 		localDir: {stdout: `[
 			{"id":"la-1","title":"Local ready","status":"open","priority":2,"issue_type":"task"},
-			{"id":"la-closed","title":"Closed local task","status":"closed","priority":1,"issue_type":"task"},
-			{"id":"la-bug","title":"Local bug","status":"open","priority":1,"issue_type":"bug"}
+			{"id":"la-bug","title":"Local bug ready","status":"open","priority":1,"issue_type":"bug"},
+			{"id":"la-chore","title":"Local chore ready","status":"open","priority":3,"issue_type":"chore"},
+			{"id":"la-epic","title":"Local epic ready","status":"open","priority":1,"issue_type":"epic"},
+			{"id":"la-closed","title":"Closed local task","status":"closed","priority":1,"issue_type":"task"}
 		]`},
 		managedDir: {stdout: `[
-			{"id":"mb-1","title":"Managed ready","status":"in_progress","priority":3,"issue_type":"task"}
+			{"id":"mb-1","title":"Managed ready","status":"open","priority":3,"issue_type":"task"},
+			{"id":"mb-review","title":"Managed in review","status":"open","priority":2,"issue_type":"task","metadata":{"orpheus.pr_url":"https://example.test/pr/7"}}
 		]`},
 	})
 
@@ -159,7 +162,10 @@ func TestTaskReadyListsReadyTasksAcrossRegisteredRepos(t *testing.T) {
 	for _, want := range []string{
 		"REPO", "TASK_ID", "STATUS", "P", "TITLE",
 		"Local Alpha", "la-1", "open", "2", "Local ready",
-		"Managed Beta", "mb-1", "in_progress", "3", "Managed ready",
+		"Local Alpha", "la-bug", "open", "1", "Local bug ready",
+		"Local Alpha", "la-chore", "open", "3", "Local chore ready",
+		"Local Alpha", "la-epic", "open", "1", "Local epic ready",
+		"Managed Beta", "mb-1", "open", "3", "Managed ready",
 	} {
 		is.Contains(stdout, want)
 	}
@@ -167,14 +173,15 @@ func TestTaskReadyListsReadyTasksAcrossRegisteredRepos(t *testing.T) {
 		is.NotContains(stdout, hidden)
 	}
 	is.NotContains(stdout, "la-closed")
-	is.NotContains(stdout, "la-bug")
+	is.NotContains(stdout, "mb-review")
 
 	logData, err := os.ReadFile(logPath)
 	must.NoError(err)
 	log := string(logData)
 	is.Contains(log, localDir)
 	is.Contains(log, managedDir)
-	is.Equal(2, strings.Count(log, "--json --readonly --sandbox ready --type task --limit 0"))
+	is.Equal(2, strings.Count(log, "--json --readonly --sandbox list --all --limit 0"))
+	is.NotContains(log, "--json --readonly --sandbox ready")
 }
 
 func TestTaskListReportsPartialRepoFailures(t *testing.T) {
@@ -479,7 +486,7 @@ func withFakeBDTaskResponses(t *testing.T, responses map[string]fakeBDTaskRespon
   printf '%s\n' "$*"
 } >> "$FAKE_BD_LOG"
 case "$*" in
-  "--json --readonly --sandbox ready --type task --limit 0"|"--json --readonly --sandbox list --type task --limit 0"|"--json --readonly --sandbox show --id "*)
+  "--json --readonly --sandbox list --all --limit 0"|"--json --readonly --sandbox show --id "*)
     ;;
   *)
     echo "unexpected args: $*" >&2

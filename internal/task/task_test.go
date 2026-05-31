@@ -13,7 +13,6 @@ import (
 
 type fakeReadBackend struct {
 	tasks []task.Task
-	ready []task.Task
 }
 
 func (b fakeReadBackend) Get(_ context.Context, id string) (task.Task, error) {
@@ -29,10 +28,6 @@ func (b fakeReadBackend) List(context.Context) ([]task.Task, error) {
 	return cloneTasks(b.tasks), nil
 }
 
-func (b fakeReadBackend) Ready(context.Context) ([]task.Task, error) {
-	return cloneTasks(b.ready), nil
-}
-
 var _ task.ReadBackend = fakeReadBackend{}
 
 func TestReadBackendContractIsReadOnly(t *testing.T) {
@@ -44,20 +39,17 @@ func TestReadBackendContractIsReadOnly(t *testing.T) {
 	}
 	sort.Strings(got)
 
-	expected := []string{"Get", "List", "Ready"}
+	expected := []string{"Get", "List"}
 	if !reflect.DeepEqual(got, expected) {
 		t.Fatalf("ReadBackend methods = %v, want only %v", got, expected)
 	}
 }
 
-func TestReadBackendCanGetListAndReady(t *testing.T) {
+func TestReadBackendCanGetAndList(t *testing.T) {
 	backend := fakeReadBackend{
 		tasks: []task.Task{
 			{ID: "op-1", Title: "first", IssueType: task.IssueTypeTask, Status: task.StatusOpen},
 			{ID: "op-2", Title: "second", IssueType: task.IssueTypeTask, Status: task.StatusInProgress},
-		},
-		ready: []task.Task{
-			{ID: "op-1", Title: "first", IssueType: task.IssueTypeTask, Status: task.StatusOpen},
 		},
 	}
 
@@ -77,13 +69,6 @@ func TestReadBackendCanGetListAndReady(t *testing.T) {
 		t.Fatalf("list returned %d tasks, want 2", len(listed))
 	}
 
-	ready, err := backend.Ready(context.Background())
-	if err != nil {
-		t.Fatalf("ready tasks: %v", err)
-	}
-	if len(ready) != 1 || ready[0].ID != "op-1" {
-		t.Fatalf("ready tasks = %#v, want only op-1", ready)
-	}
 }
 
 func TestTaskCloneCopiesMutableFields(t *testing.T) {

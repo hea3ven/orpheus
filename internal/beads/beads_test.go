@@ -252,11 +252,11 @@ func TestInitializeManagedWithRunnerReportsCommandFailure(t *testing.T) {
 	}
 }
 
-func TestTaskBackendListParsesActiveTasksAndMetadata(t *testing.T) {
+func TestTaskBackendListParsesVisibleTasksAndMetadata(t *testing.T) {
 	dir := t.TempDir()
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir:  dir,
-		wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--type", "task", "--limit", "0"},
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0"},
 		result: beads.Result{Stdout: `[
 			{
 				"id":"op-1",
@@ -296,8 +296,8 @@ func TestTaskBackendListParsesActiveTasksAndMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tasks: %v", err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("tasks = %#v, want one active task", got)
+	if len(got) != 3 {
+		t.Fatalf("tasks = %#v, want active, closed, and non-task items", got)
 	}
 
 	taskItem := got[0]
@@ -321,47 +321,6 @@ func TestTaskBackendListParsesActiveTasksAndMetadata(t *testing.T) {
 	}
 	if taskItem.CreatedAt == nil || !taskItem.CreatedAt.Equal(time.Date(2026, 5, 24, 6, 30, 53, 0, time.UTC)) {
 		t.Fatalf("created_at = %v, want parsed UTC time", taskItem.CreatedAt)
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("runner has %d unused calls", len(runner.calls))
-	}
-}
-
-func TestTaskBackendReadyParsesReadyTasksWithoutMetadata(t *testing.T) {
-	dir := t.TempDir()
-	runner := &fakeRunner{calls: []fakeCall{{
-		wantDir:  dir,
-		wantArgs: []string{"--json", "--readonly", "--sandbox", "ready", "--type", "task", "--limit", "0"},
-		result: beads.Result{Stdout: `[
-			{
-				"id":"op-3",
-				"title":"Ready task",
-				"status":"open",
-				"priority":1,
-				"issue_type":"task",
-				"labels":[],
-				"dependencies":[{"issue_id":"op-3","depends_on_id":"op","type":"parent-child"}]
-			}
-		]`},
-	}}}
-
-	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
-	if err != nil {
-		t.Fatalf("create backend: %v", err)
-	}
-
-	got, err := backend.Ready(context.Background())
-	if err != nil {
-		t.Fatalf("ready tasks: %v", err)
-	}
-	if len(got) != 1 || got[0].ID != "op-3" || got[0].Title != "Ready task" {
-		t.Fatalf("ready tasks = %#v, want op-3", got)
-	}
-	if got[0].Metadata != nil {
-		t.Fatalf("metadata = %#v, want nil when bd omits metadata", got[0].Metadata)
-	}
-	if got[0].Relations.ParentID != "op" {
-		t.Fatalf("parent = %q, want op", got[0].Relations.ParentID)
 	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("runner has %d unused calls", len(runner.calls))
@@ -470,7 +429,7 @@ func TestTaskBackendReportsCommandFailureWithOutput(t *testing.T) {
 	dir := t.TempDir()
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir:  dir,
-		wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--type", "task", "--limit", "0"},
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0"},
 		result:   beads.Result{Stdout: `{"error":"query_failed"}`, Stderr: "database locked"},
 		err:      errors.New("exit status 1"),
 	}}}
@@ -484,7 +443,7 @@ func TestTaskBackendReportsCommandFailureWithOutput(t *testing.T) {
 	if err == nil {
 		t.Fatal("list succeeded, want command failure")
 	}
-	if !strings.Contains(err.Error(), "run bd --json --readonly --sandbox list --type task --limit 0") ||
+	if !strings.Contains(err.Error(), "run bd --json --readonly --sandbox list --all --limit 0") ||
 		!strings.Contains(err.Error(), "query_failed") ||
 		!strings.Contains(err.Error(), "database locked") {
 		t.Fatalf("error = %v, want command and output context", err)

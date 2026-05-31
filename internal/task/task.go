@@ -203,14 +203,9 @@ type Getter interface {
 	Get(ctx context.Context, id string) (Task, error)
 }
 
-// Lister lists active task items visible to M2 task list views.
+// Lister lists visible task-backend items for local read models.
 type Lister interface {
 	List(ctx context.Context) ([]Task, error)
-}
-
-// ReadyLister lists active task items that are ready to run.
-type ReadyLister interface {
-	Ready(ctx context.Context) ([]Task, error)
 }
 
 // ReadBackend is the complete read-only M2 task backend contract.
@@ -221,7 +216,6 @@ type ReadyLister interface {
 type ReadBackend interface {
 	Getter
 	Lister
-	ReadyLister
 }
 
 // Repository identifies the registered repository that produced a task row or failure.
@@ -246,7 +240,41 @@ func (r RepoTask) Clone() RepoTask {
 // RepoFailure is a per-repository query failure for partial global results.
 type RepoFailure struct {
 	Repository Repository
+	Source     string
+	Operation  string
 	Err        error
+}
+
+// RepositorySnapshot is the local read state for one repository used by status projections.
+type RepositorySnapshot struct {
+	Repository Repository
+	Tasks      []Task
+}
+
+// Clone returns a copy of the repository snapshot and mutable task fields.
+func (s RepositorySnapshot) Clone() RepositorySnapshot {
+	s.Tasks = cloneTasks(s.Tasks)
+	return s
+}
+
+// SnapshotResult represents a cross-repository read of active and ready task snapshots.
+type SnapshotResult struct {
+	Repositories []RepositorySnapshot
+	Failures     []RepoFailure
+}
+
+// HasFailures reports whether at least one repository snapshot query failed.
+func (r SnapshotResult) HasFailures() bool {
+	return len(r.Failures) > 0
+}
+
+// Clone returns a copy of the snapshot result and its mutable task fields.
+func (r SnapshotResult) Clone() SnapshotResult {
+	clone := SnapshotResult{
+		Repositories: cloneSnapshots(r.Repositories),
+		Failures:     cloneFailures(r.Failures),
+	}
+	return clone
 }
 
 // QueryResult represents a cross-repository read with successful rows and failures.
@@ -291,6 +319,18 @@ func cloneRows(rows []RepoTask) []RepoTask {
 	return clone
 }
 
+func cloneSnapshots(snapshots []RepositorySnapshot) []RepositorySnapshot {
+	if snapshots == nil {
+		return nil
+	}
+
+	clone := make([]RepositorySnapshot, len(snapshots))
+	for i, snapshot := range snapshots {
+		clone[i] = snapshot.Clone()
+	}
+	return clone
+}
+
 func cloneFailures(failures []RepoFailure) []RepoFailure {
 	if failures == nil {
 		return nil
@@ -299,6 +339,29 @@ func cloneFailures(failures []RepoFailure) []RepoFailure {
 	clone := make([]RepoFailure, len(failures))
 	copy(clone, failures)
 	return clone
+}
+
+func cloneTasks(tasks []Task) []Task {
+	if tasks == nil {
+		return nil
+	}
+
+	clone := make([]Task, len(tasks))
+	for i, taskItem := range tasks {
+		clone[i] = taskItem.Clone()
+	}
+	return clone
+}
+
+func cloneActiveTasks(tasks []Task) []Task {
+	active := make([]Task, 0, len(tasks))
+	for _, taskItem := range tasks {
+		if !IsM2TaskViewItem(taskItem) {
+			continue
+		}
+		active = append(active, taskItem.Clone())
+	}
+	return active
 }
 
 func cloneStrings(values []string) []string {

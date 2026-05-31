@@ -10,6 +10,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/beads"
 	"github.com/hea3ven/orpheus/internal/registry"
+	"github.com/hea3ven/orpheus/internal/status"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/spf13/cobra"
 )
@@ -54,19 +55,10 @@ func newTaskReadyCommand(opts *rootOptions) *cobra.Command {
 	var detailed bool
 	cmd := &cobra.Command{
 		Use:   "ready",
-		Short: "List ready tasks across registered repositories",
+		Short: "List tasks ready under Orpheus' local readiness policy",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
-			return runTaskQuery(command, opts, taskQueryOptions{
-				operation:    "task ready",
-				logOperation: "task_ready",
-				queryingLog:  "querying ready tasks",
-				queriedLog:   "queried ready tasks",
-				detailed:     detailed,
-				query: func(ctx context.Context, aggregator taskmodel.Aggregator) taskmodel.QueryResult {
-					return aggregator.Ready(ctx)
-				},
-			})
+			return runTaskReady(command, opts, detailed)
 		},
 	}
 	addTaskDetailFlags(cmd, &detailed)
@@ -88,6 +80,55 @@ func newTaskShowCommand(opts *rootOptions) *cobra.Command {
 func addTaskDetailFlags(cmd *cobra.Command, detailed *bool) {
 	cmd.Flags().BoolVar(detailed, "details", false, "show detailed table with repo ids, Beads prefixes, and Orpheus metadata")
 	cmd.Flags().BoolVarP(detailed, "long", "l", false, "show detailed table with repo ids, Beads prefixes, and Orpheus metadata")
+}
+
+func runTaskReady(command *cobra.Command, opts *rootOptions, detailed bool) error {
+	logger := opts.log().With(
+		slog.String("component", "cli"),
+		slog.String("operation", "task_ready"),
+	)
+	logger.DebugContext(command.Context(), "loading registered repos for task ready")
+
+	store, err := newRegistryStoreFromEnvironment()
+	if err != nil {
+		return err
+	}
+
+	reg, err := store.Load()
+	if err != nil {
+		return err
+	}
+
+	sources, err := taskRepositorySources(store, reg)
+	if err != nil {
+		return err
+	}
+	logger.DebugContext(command.Context(), "querying task snapshots", slog.Int("repo_count", len(sources)))
+
+	aggregator, err := taskmodel.NewAggregator(sources, func(source taskmodel.RepositorySource) (taskmodel.ReadBackend, error) {
+		return newBeadsTaskBackend(source.BackendDir)
+	})
+	if err != nil {
+		return err
+	}
+
+	snapshot := aggregator.Snapshot(command.Context())
+	rows := status.ReadyRows(snapshot)
+	logger.DebugContext(
+		command.Context(),
+		"projected ready tasks",
+		slog.Int("row_count", len(rows)),
+		slog.Int("failure_count", len(snapshot.Failures)),
+	)
+
+	if err := renderTaskRows(command.OutOrStdout(), rows, detailed); err != nil {
+		return err
+	}
+	if snapshot.HasFailures() {
+		writeRepoFailures(command.ErrOrStderr(), "task ready", snapshot.Failures)
+		return partialRepoFailureError{operation: "task ready", failures: snapshot.Failures}
+	}
+	return nil
 }
 
 func runTaskQuery(command *cobra.Command, opts *rootOptions, queryOpts taskQueryOptions) error {
@@ -431,11 +472,13 @@ func writeRepoFailures(output interface{ Write([]byte) (int, error) }, operation
 	for _, failure := range failures {
 		_, _ = fmt.Fprintf(
 			output,
-			"%s: repo %s (%s; prefix %s): needs attention: %v\n",
+			"%s: repo %s (%s; prefix %s): needs attention: source=%s operation=%s: %v\n",
 			operation,
 			failure.Repository.ID,
 			failure.Repository.Name,
 			failure.Repository.TaskIDPrefix,
+			formatDiagnosticField(failure.Source),
+			formatDiagnosticField(failure.Operation),
 			failure.Err,
 		)
 	}
@@ -456,6 +499,14 @@ func (e partialRepoFailureError) Error() string {
 		summaries = append(summaries, fmt.Sprintf("%s: %v", failure.Repository.ID, failure.Err))
 	}
 	return fmt.Sprintf("%s completed with %d repo failure(s): %s", e.operation, len(e.failures), strings.Join(summaries, "; "))
+}
+
+func formatDiagnosticField(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "unknown"
+	}
+	return value
 }
 
 func sanitizeTableCell(value string) string {

@@ -102,10 +102,11 @@ Implementation scope:
 - Narrow internal `TaskBackend` interface.
 - Beads-backed implementation using the `bd` CLI.
 - Task ID to repo resolution through Beads prefix.
-- Cross-repo task listing.
-- Cross-repo ready task listing.
+- Cross-repo task snapshot/listing.
+- Orpheus readiness projection for `task ready`, derived from task snapshots rather than backend-native ready commands.
 - Local-only `status` projection.
 - Basic Beads metadata read support.
+- Structured local read diagnostics with source and operation.
 
 Initial status groups:
 
@@ -113,15 +114,28 @@ Initial status groups:
 Ready to run
 Blocked
 In review
-Done / closed count
+Done / closed
 Unknown / needs attention
 ```
+
+M2 readiness rules:
+
+```text
+issue_type != epic
+AND status == open
+AND no non-empty orpheus.pr_url
+AND every dependency id resolves within the same repository snapshot
+AND every resolved dependency has status == closed
+=> Ready to run
+```
+
+Known non-closed dependencies place an item in `Blocked`. Missing dependencies place an item in `Unknown / needs attention`.
 
 No agent launching yet.
 
 ### Useful By Itself Because
 
-This already gives the user a global Beads dashboard across registered repos.
+This already gives the user a global Orpheus action queue across registered task backends.
 
 ### Validation
 
@@ -143,7 +157,8 @@ orpheus status
 Success criteria:
 
 - Tasks from multiple registered repos appear together.
-- Ready tasks are resolved correctly.
+- `task ready` and `status` use the same Orpheus readiness semantics.
+- Closed items are available to the status projection for `Done / closed`.
 - `status` does not call GitHub.
 - Task IDs resolve by prefix.
 
@@ -448,9 +463,12 @@ orpheus task run-ready --limit <n> --yes
 
 Implementation scope:
 
-- Ready-task selection across repos.
+- Ready-task selection across repos using Orpheus readiness semantics.
 - Global concurrency limit.
 - Filtering:
+  - issue type is not epic
+  - status is open
+  - dependencies resolve within the same repository and are closed
   - no active run
   - no PR URL
   - no latest PR-ready run

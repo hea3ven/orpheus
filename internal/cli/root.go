@@ -62,7 +62,7 @@ control.`,
 		"enable debug diagnostic logs on stderr",
 	)
 
-	cmd.AddCommand(newRepoCommand(opts), newTaskCommand(opts))
+	cmd.AddCommand(newRepoCommand(opts), newTaskCommand(opts), newStatusCommand(opts))
 
 	return cmd
 }

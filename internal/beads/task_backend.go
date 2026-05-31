@@ -17,9 +17,9 @@ var _ task.ReadBackend = TaskBackend{}
 
 // TaskBackend reads task items from one explicit Beads workspace.
 //
-// List and Ready return active task items. Get returns the backend item so
-// callers can report closed or non-task items as out of scope when needed.
-// Use NewTaskBackend or NewTaskBackendWithRunner to construct a valid value.
+// List returns visible backend items. Get returns the backend item so callers can
+// report closed or non-task items as out of scope when needed. Use NewTaskBackend
+// or NewTaskBackendWithRunner to construct a valid value.
 type TaskBackend struct {
 	dir    string
 	runner Runner
@@ -77,9 +77,9 @@ func (b TaskBackend) Get(ctx context.Context, id string) (task.Task, error) {
 	return task.Task{}, fmt.Errorf("get Beads task %q in %q: %w", id, b.dir, task.ErrNotFound)
 }
 
-// List lists active Beads items with issue_type=task.
+// List lists visible Beads items, including closed items and non-task issue types.
 func (b TaskBackend) List(ctx context.Context) ([]task.Task, error) {
-	result, err := b.run(ctx, "list", "list", "--type", string(task.IssueTypeTask), "--limit", "0")
+	result, err := b.run(ctx, "list", "list", "--all", "--limit", "0")
 	if err != nil {
 		return nil, err
 	}
@@ -88,21 +88,7 @@ func (b TaskBackend) List(ctx context.Context) ([]task.Task, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list Beads tasks in %q: parse bd list JSON: %w%s", b.dir, err, formattedOutput(result))
 	}
-	return activeTasks(tasks), nil
-}
-
-// Ready lists active Beads task items that Beads considers ready.
-func (b TaskBackend) Ready(ctx context.Context) ([]task.Task, error) {
-	result, err := b.run(ctx, "list ready", "ready", "--type", string(task.IssueTypeTask), "--limit", "0")
-	if err != nil {
-		return nil, err
-	}
-
-	tasks, err := parseTaskArray(result.Stdout)
-	if err != nil {
-		return nil, fmt.Errorf("list ready Beads tasks in %q: parse bd ready JSON: %w%s", b.dir, err, formattedOutput(result))
-	}
-	return activeTasks(tasks), nil
+	return tasks, nil
 }
 
 func normalizeTaskBackendDir(dir string) (string, error) {
@@ -385,20 +371,6 @@ func metadataValueToString(raw json.RawMessage) string {
 		return buffer.String()
 	}
 	return string(raw)
-}
-
-func activeTasks(tasks []task.Task) []task.Task {
-	active := make([]task.Task, 0, len(tasks))
-	for _, taskItem := range tasks {
-		if isActiveTask(taskItem) {
-			active = append(active, taskItem)
-		}
-	}
-	return active
-}
-
-func isActiveTask(taskItem task.Task) bool {
-	return taskItem.IssueType == task.IssueTypeTask && taskItem.Status != task.StatusClosed
 }
 
 func isNotFoundResult(result Result) bool {

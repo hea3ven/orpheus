@@ -45,14 +45,40 @@ func TestAggregatorListQueriesReposAndPreservesContext(t *testing.T) {
 	}
 }
 
-func TestAggregatorReadyQueriesReposAndPreservesContext(t *testing.T) {
+func TestAggregatorListFiltersToActiveTaskItems(t *testing.T) {
+	repos := []task.RepositorySource{{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}, BackendDir: "/tmp/alpha"}}
+	backend := fakeReadBackend{tasks: []task.Task{
+		{ID: "a-1", Title: "active task", IssueType: task.IssueTypeTask, Status: task.StatusOpen},
+		{ID: "a-2", Title: "closed task", IssueType: task.IssueTypeTask, Status: task.StatusClosed},
+		{ID: "a-3", Title: "bug", IssueType: task.IssueTypeBug, Status: task.StatusOpen},
+	}}
+
+	aggregator, err := task.NewAggregator(repos, func(task.RepositorySource) (task.ReadBackend, error) {
+		return backend, nil
+	})
+	if err != nil {
+		t.Fatalf("create aggregator: %v", err)
+	}
+
+	got := aggregator.List(context.Background())
+
+	if len(got.Rows) != 1 || got.Rows[0].Task.ID != "a-1" {
+		t.Fatalf("rows = %#v, want only active issue_type=task item a-1", got.Rows)
+	}
+}
+
+func TestAggregatorSnapshotPreservesAllVisibleBackendItems(t *testing.T) {
 	repos := []task.RepositorySource{
 		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}, BackendDir: "/tmp/alpha"},
 		{Repository: task.Repository{ID: "beta", Name: "Beta", TaskIDPrefix: "b"}, BackendDir: "/tmp/beta"},
 	}
 	backends := map[string]fakeReadBackend{
-		"/tmp/alpha": {ready: []task.Task{{ID: "a-1", Title: "alpha ready", IssueType: task.IssueTypeTask, Status: task.StatusOpen}}},
-		"/tmp/beta":  {ready: []task.Task{{ID: "b-1", Title: "beta ready", IssueType: task.IssueTypeTask, Status: task.StatusInProgress}}},
+		"/tmp/alpha": {tasks: []task.Task{
+			{ID: "a-1", Title: "alpha active", IssueType: task.IssueTypeTask, Status: task.StatusOpen},
+			{ID: "a-closed", Title: "alpha closed", IssueType: task.IssueTypeTask, Status: task.StatusClosed},
+			{ID: "a-bug", Title: "alpha bug", IssueType: task.IssueTypeBug, Status: task.StatusOpen},
+		}},
+		"/tmp/beta": {tasks: []task.Task{{ID: "b-epic", Title: "beta epic", IssueType: task.IssueTypeEpic, Status: task.StatusOpen}}},
 	}
 
 	aggregator, err := task.NewAggregator(repos, func(source task.RepositorySource) (task.ReadBackend, error) {
@@ -66,46 +92,24 @@ func TestAggregatorReadyQueriesReposAndPreservesContext(t *testing.T) {
 		t.Fatalf("create aggregator: %v", err)
 	}
 
-	got := aggregator.Ready(context.Background())
+	got := aggregator.Snapshot(context.Background())
 
 	if got.HasFailures() {
 		t.Fatalf("failures = %#v, want none", got.Failures)
 	}
-	if len(got.Rows) != 2 {
-		t.Fatalf("rows = %#v, want two ready rows", got.Rows)
+	if len(got.Repositories) != 2 {
+		t.Fatalf("repositories = %#v, want two snapshots", got.Repositories)
 	}
-	if got.Rows[0].Repository.ID != "alpha" || got.Rows[0].Repository.TaskIDPrefix != "a" || got.Rows[0].Task.ID != "a-1" {
-		t.Fatalf("first row = %#v, want alpha/a/a-1", got.Rows[0])
+	if len(got.Repositories[0].Tasks) != 3 {
+		t.Fatalf("alpha tasks = %#v, want active, closed, and bug items", got.Repositories[0].Tasks)
 	}
-	if got.Rows[1].Repository.ID != "beta" || got.Rows[1].Repository.TaskIDPrefix != "b" || got.Rows[1].Task.ID != "b-1" {
-		t.Fatalf("second row = %#v, want beta/b/b-1", got.Rows[1])
-	}
-}
-
-func TestAggregatorFiltersToActiveTaskItems(t *testing.T) {
-	repos := []task.RepositorySource{{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}, BackendDir: "/tmp/alpha"}}
-	backend := fakeReadBackend{ready: []task.Task{
-		{ID: "a-1", Title: "ready task", IssueType: task.IssueTypeTask, Status: task.StatusOpen},
-		{ID: "a-2", Title: "closed task", IssueType: task.IssueTypeTask, Status: task.StatusClosed},
-		{ID: "a-3", Title: "ready bug", IssueType: task.IssueTypeBug, Status: task.StatusOpen},
-	}}
-
-	aggregator, err := task.NewAggregator(repos, func(task.RepositorySource) (task.ReadBackend, error) {
-		return backend, nil
-	})
-	if err != nil {
-		t.Fatalf("create aggregator: %v", err)
-	}
-
-	got := aggregator.Ready(context.Background())
-
-	if len(got.Rows) != 1 || got.Rows[0].Task.ID != "a-1" {
-		t.Fatalf("rows = %#v, want only active issue_type=task item a-1", got.Rows)
+	if got.Repositories[1].Tasks[0].ID != "b-epic" {
+		t.Fatalf("beta tasks = %#v, want epic preserved", got.Repositories[1].Tasks)
 	}
 }
 
-func TestAggregatorContinuesAfterRepoFailure(t *testing.T) {
-	queryErr := errors.New("bd ready failed")
+func TestAggregatorSnapshotContinuesAfterRepoFailure(t *testing.T) {
+	queryErr := errors.New("bd list failed")
 	repos := []task.RepositorySource{
 		{Repository: task.Repository{ID: "broken", Name: "Broken", TaskIDPrefix: "br"}, BackendDir: "/tmp/broken"},
 		{Repository: task.Repository{ID: "ok", Name: "OK", TaskIDPrefix: "ok"}, BackendDir: "/tmp/ok"},
@@ -115,22 +119,23 @@ func TestAggregatorContinuesAfterRepoFailure(t *testing.T) {
 		if source.Repository.ID == "broken" {
 			return failingReadBackend{err: queryErr}, nil
 		}
-		return fakeReadBackend{ready: []task.Task{{ID: "ok-1", Title: "still listed", IssueType: task.IssueTypeTask, Status: task.StatusOpen}}}, nil
+		return fakeReadBackend{tasks: []task.Task{{ID: "ok-1", Title: "still listed", IssueType: task.IssueTypeTask, Status: task.StatusOpen}}}, nil
 	})
 	if err != nil {
 		t.Fatalf("create aggregator: %v", err)
 	}
 
-	got := aggregator.Ready(context.Background())
+	got := aggregator.Snapshot(context.Background())
 
 	if !got.HasFailures() || len(got.Failures) != 1 {
 		t.Fatalf("failures = %#v, want one failure", got.Failures)
 	}
-	if got.Failures[0].Repository.ID != "broken" || !errors.Is(got.Failures[0].Err, queryErr) {
-		t.Fatalf("failure = %#v, want broken query error", got.Failures[0])
+	failure := got.Failures[0]
+	if failure.Repository.ID != "broken" || failure.Source != "task_backend" || failure.Operation != "snapshot" || !errors.Is(failure.Err, queryErr) {
+		t.Fatalf("failure = %#v, want structured broken snapshot error", failure)
 	}
-	if len(got.Rows) != 1 || got.Rows[0].Task.ID != "ok-1" {
-		t.Fatalf("rows = %#v, want successful ready row", got.Rows)
+	if len(got.Repositories) != 1 || got.Repositories[0].Tasks[0].ID != "ok-1" {
+		t.Fatalf("repositories = %#v, want successful snapshot row", got.Repositories)
 	}
 }
 
@@ -145,13 +150,13 @@ func TestAggregatorReportsBackendCreationFailure(t *testing.T) {
 		t.Fatalf("create aggregator: %v", err)
 	}
 
-	got := aggregator.Ready(context.Background())
+	got := aggregator.Snapshot(context.Background())
 
-	if len(got.Rows) != 0 {
-		t.Fatalf("rows = %#v, want none", got.Rows)
+	if len(got.Repositories) != 0 {
+		t.Fatalf("repositories = %#v, want none", got.Repositories)
 	}
-	if len(got.Failures) != 1 || got.Failures[0].Repository.ID != "broken" || !errors.Is(got.Failures[0].Err, factoryErr) {
-		t.Fatalf("failures = %#v, want backend creation failure", got.Failures)
+	if len(got.Failures) != 1 || got.Failures[0].Repository.ID != "broken" || got.Failures[0].Source != "task_backend" || got.Failures[0].Operation != "create_backend" || !errors.Is(got.Failures[0].Err, factoryErr) {
+		t.Fatalf("failures = %#v, want structured backend creation failure", got.Failures)
 	}
 }
 
@@ -164,9 +169,5 @@ func (b failingReadBackend) Get(context.Context, string) (task.Task, error) {
 }
 
 func (b failingReadBackend) List(context.Context) ([]task.Task, error) {
-	return nil, b.err
-}
-
-func (b failingReadBackend) Ready(context.Context) ([]task.Task, error) {
 	return nil, b.err
 }
