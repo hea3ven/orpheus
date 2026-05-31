@@ -3,6 +3,7 @@ package task_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/task"
@@ -45,12 +46,13 @@ func TestAggregatorListQueriesReposAndPreservesContext(t *testing.T) {
 	}
 }
 
-func TestAggregatorListFiltersToActiveTaskItems(t *testing.T) {
+func TestAggregatorListFiltersToActiveItemsAcrossIssueTypes(t *testing.T) {
 	repos := []task.RepositorySource{{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}, BackendDir: "/tmp/alpha"}}
 	backend := fakeReadBackend{tasks: []task.Task{
 		{ID: "a-1", Title: "active task", IssueType: task.IssueTypeTask, Status: task.StatusOpen},
 		{ID: "a-2", Title: "closed task", IssueType: task.IssueTypeTask, Status: task.StatusClosed},
 		{ID: "a-3", Title: "bug", IssueType: task.IssueTypeBug, Status: task.StatusOpen},
+		{ID: "a-4", Title: "epic", IssueType: task.IssueTypeEpic, Status: task.StatusInProgress},
 	}}
 
 	aggregator, err := task.NewAggregator(repos, func(task.RepositorySource) (task.ReadBackend, error) {
@@ -62,8 +64,13 @@ func TestAggregatorListFiltersToActiveTaskItems(t *testing.T) {
 
 	got := aggregator.List(context.Background())
 
-	if len(got.Rows) != 1 || got.Rows[0].Task.ID != "a-1" {
-		t.Fatalf("rows = %#v, want only active issue_type=task item a-1", got.Rows)
+	gotIDs := []string{}
+	for _, row := range got.Rows {
+		gotIDs = append(gotIDs, row.Task.ID)
+	}
+	expectedIDs := []string{"a-1", "a-3", "a-4"}
+	if !reflect.DeepEqual(gotIDs, expectedIDs) {
+		t.Fatalf("rows = %#v, want active items %v", got.Rows, expectedIDs)
 	}
 }
 

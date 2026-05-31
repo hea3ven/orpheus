@@ -32,7 +32,7 @@ func newTaskListCommand(opts *rootOptions) *cobra.Command {
 	var detailed bool
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List active tasks across registered repositories",
+		Short: "List active items across registered repositories",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
 			return runTaskQuery(command, opts, taskQueryOptions{
@@ -68,7 +68,7 @@ func newTaskReadyCommand(opts *rootOptions) *cobra.Command {
 func newTaskShowCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "show <task-id>",
-		Short: "Show a task from its registered repository",
+		Short: "Show an item from its registered repository",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			return runTaskShow(command, opts, args[0])
@@ -78,8 +78,8 @@ func newTaskShowCommand(opts *rootOptions) *cobra.Command {
 }
 
 func addTaskDetailFlags(cmd *cobra.Command, detailed *bool) {
-	cmd.Flags().BoolVar(detailed, "details", false, "show detailed table with repo ids, Beads prefixes, and Orpheus metadata")
-	cmd.Flags().BoolVarP(detailed, "long", "l", false, "show detailed table with repo ids, Beads prefixes, and Orpheus metadata")
+	cmd.Flags().BoolVar(detailed, "details", false, "show detailed table with repo ids, task prefixes, and Orpheus metadata")
+	cmd.Flags().BoolVarP(detailed, "long", "l", false, "show detailed table with repo ids, task prefixes, and Orpheus metadata")
 }
 
 func runTaskReady(command *cobra.Command, opts *rootOptions, detailed bool) error {
@@ -228,12 +228,11 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 	if err != nil {
 		if errors.Is(err, taskmodel.ErrNotFound) {
 			return fmt.Errorf(
-				"task show %s: task was not found in repo %s (%s; prefix %s); check the task id or run `orpheus repo beads-dir %s` to inspect the backend: %w",
+				"task show %s: task was not found in repo %s (%s; prefix %s); check the task id or inspect the repo backend directory: %w",
 				resolved.TaskID,
 				resolved.Source.Repository.ID,
 				resolved.Source.Repository.Name,
 				resolved.Source.Repository.TaskIDPrefix,
-				resolved.Source.Repository.ID,
 				err,
 			)
 		}
@@ -248,7 +247,7 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 
 	if !taskmodel.IsM2TaskViewItem(taskItem) {
 		return fmt.Errorf(
-			"task show %s: item is out of scope for M2 task views; expected an active issue_type=task item, got issue_type=%s status=%s",
+			"task show %s: item is out of scope for M2 task views; expected an active item, got issue_type=%s status=%s",
 			resolved.TaskID,
 			formatTaskField(string(taskItem.IssueType)),
 			formatTaskField(string(taskItem.Status)),
@@ -302,7 +301,7 @@ func renderTaskDetails(output interface{ Write([]byte) (int, error) }, row taskm
 	if err := renderKeyValue(output, "  Name", row.Repository.Name); err != nil {
 		return err
 	}
-	if err := renderKeyValue(output, "  Beads prefix", row.Repository.TaskIDPrefix); err != nil {
+	if err := renderKeyValue(output, "  Task prefix", row.Repository.TaskIDPrefix); err != nil {
 		return err
 	}
 
@@ -407,7 +406,7 @@ func formatLabels(labels []string) string {
 func renderTaskRows(output interface{ Write([]byte) (int, error) }, rows []taskmodel.RepoTask, detailed bool) error {
 	writer := tabwriter.NewWriter(output, 0, 0, 2, ' ', 0)
 	if detailed {
-		if _, err := fmt.Fprintln(writer, "REPO_ID\tREPO\tBEADS_PREFIX\tTASK_ID\tSTATUS\tP\tBRANCH\tWORKTREE\tPR\tTITLE"); err != nil {
+		if _, err := fmt.Fprintln(writer, "REPO_ID\tREPO\tTASK_PREFIX\tTASK_ID\tSTATUS\tP\tBRANCH\tWORKTREE\tPR\tTITLE"); err != nil {
 			return err
 		}
 	} else {

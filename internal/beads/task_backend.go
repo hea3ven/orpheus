@@ -18,8 +18,8 @@ var _ task.ReadBackend = TaskBackend{}
 // TaskBackend reads task items from one explicit Beads workspace.
 //
 // List returns visible backend items. Get returns the backend item so callers can
-// report closed or non-task items as out of scope when needed. Use NewTaskBackend
-// or NewTaskBackendWithRunner to construct a valid value.
+// report closed items as out of scope when needed. Use NewTaskBackend or
+// NewTaskBackendWithRunner to construct a valid value.
 type TaskBackend struct {
 	dir    string
 	runner Runner

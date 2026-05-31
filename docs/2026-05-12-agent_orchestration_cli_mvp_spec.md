@@ -920,8 +920,7 @@ Unknown / needs attention
 MVP readiness semantics:
 
 ```text
-issue_type != epic
-AND status == open
+status == open
 AND no non-empty orpheus.pr_url
 AND every dependency id resolves within the same repository snapshot
 AND every resolved dependency has status == closed
@@ -943,8 +942,8 @@ task has dependency ids and at least one dependency is missing from the same rep
 task status is closed
 => Done / closed
 
-issue_type == epic
-=> Not eligible for readiness in the MVP
+All issue types are visible to the MVP readiness projection. Later milestones may
+add command-specific filters when dispatch eligibility becomes stricter.
 ```
 
 Examples of later run-state projection rules:

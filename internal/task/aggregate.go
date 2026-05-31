@@ -31,7 +31,7 @@ func NewAggregator(sources []RepositorySource, factory BackendFactory) (Aggregat
 	return Aggregator{sources: copied, factory: factory}, nil
 }
 
-// List lists active issue_type=task items across all configured repositories.
+// List lists active items across all configured repositories.
 func (a Aggregator) List(ctx context.Context) QueryResult {
 	return a.query(ctx, "list", func(backend ReadBackend) ([]Task, error) {
 		return backend.List(ctx)

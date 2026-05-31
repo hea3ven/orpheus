@@ -68,25 +68,26 @@ func TestTaskListListsActiveTasksAcrossRegisteredReposWithDefaultAndDetailedTabl
 	for _, want := range []string{
 		"REPO", "TASK_ID", "STATUS", "P", "TITLE",
 		"Local Alpha", "la-1", "open", "2", "Local active",
+		"Local Alpha", "la-bug", "open", "1", "Local bug",
 		"Managed Beta", "mb-1", "in_progress", "3", "Managed active",
 	} {
 		is.Contains(stdout, want)
 	}
 	for _, hidden := range []string{
-		"REPO_ID", "BEADS_PREFIX", "ORPHEUS", "local-alpha", "managed-beta", "branch=task/la-1", "worktree=/tmp/la-1", "pr=https://example.test/pr/1",
+		"REPO_ID", "TASK_PREFIX", "ORPHEUS", "local-alpha", "managed-beta", "branch=task/la-1", "worktree=/tmp/la-1", "pr=https://example.test/pr/1",
 	} {
 		is.NotContains(stdout, hidden)
 	}
 	is.NotContains(stdout, "la-closed")
-	is.NotContains(stdout, "la-bug")
 	is.NotContains(stdout, "orpheus.branch")
 
 	detailedStdout, detailedStderr := executeCommand(t, []string{"task", "list", "--details"})
 
 	is.Empty(detailedStderr)
 	for _, want := range []string{
-		"REPO_ID", "REPO", "BEADS_PREFIX", "TASK_ID", "STATUS", "P", "BRANCH", "WORKTREE", "PR", "TITLE",
+		"REPO_ID", "REPO", "TASK_PREFIX", "TASK_ID", "STATUS", "P", "BRANCH", "WORKTREE", "PR", "TITLE",
 		"local-alpha", "Local Alpha", "la", "la-1", "open", "2", "task/la-1", "/tmp/la-1", "Local active",
+		"local-alpha", "Local Alpha", "la", "la-bug", "open", "1", "Local bug",
 		"managed-beta", "Managed Beta", "mb", "mb-1", "in_progress", "3", "https://example.test/pr/1", "Managed active",
 	} {
 		is.Contains(detailedStdout, want)
@@ -99,7 +100,6 @@ func TestTaskListListsActiveTasksAcrossRegisteredReposWithDefaultAndDetailedTabl
 	is.NotContains(detailedStdout, "worktree=/tmp/la-1")
 	is.NotContains(detailedStdout, "pr=https://example.test/pr/1")
 	is.NotContains(detailedStdout, "la-closed")
-	is.NotContains(detailedStdout, "la-bug")
 	is.NotContains(detailedStdout, "orpheus.branch")
 
 	logData, err := os.ReadFile(logPath)
@@ -169,7 +169,7 @@ func TestTaskReadyListsReadyTasksAcrossRegisteredRepos(t *testing.T) {
 	} {
 		is.Contains(stdout, want)
 	}
-	for _, hidden := range []string{"REPO_ID", "BEADS_PREFIX", "local-alpha", "managed-beta"} {
+	for _, hidden := range []string{"REPO_ID", "TASK_PREFIX", "local-alpha", "managed-beta"} {
 		is.NotContains(stdout, hidden)
 	}
 	is.NotContains(stdout, "la-closed")
@@ -344,7 +344,7 @@ func TestTaskShowResolvesPrefixQueriesOnlyResolvedRepoAndRendersDetails(t *testi
 		"Repository:",
 		"ID: local-alpha",
 		"Name: Local Alpha",
-		"Beads prefix: la",
+		"Task prefix: la",
 		"Task:",
 		"ID: la-42",
 		"Title: Implement local task show",
@@ -410,62 +410,64 @@ func TestTaskShowReportsMalformedAndUnknownPrefixes(t *testing.T) {
 	is.ErrorContains(err, "register the repo")
 }
 
-func TestTaskShowReportsClosedOrNonTaskItemsOutOfScope(t *testing.T) {
-	tests := []struct {
-		name       string
-		id         string
-		response   string
-		wantType   string
-		wantStatus string
-	}{
-		{
-			name:       "closed task",
-			id:         "op-closed",
-			response:   `[{"id":"op-closed","title":"done","status":"closed","priority":2,"issue_type":"task"}]`,
-			wantType:   "issue_type=task",
-			wantStatus: "status=closed",
-		},
-		{
-			name:       "bug",
-			id:         "op-bug",
-			response:   `[{"id":"op-bug","title":"bug","status":"open","priority":2,"issue_type":"bug"}]`,
-			wantType:   "issue_type=bug",
-			wantStatus: "status=open",
-		},
-	}
+func TestTaskShowReportsClosedItemsOutOfScope(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			is := assert.New(t)
-			must := require.New(t)
-			newTestState(t)
-			paths := currentTestPaths(t)
-			store := registry.NewStore(paths)
+	repoDir := filepath.Join(t.TempDir(), "alpha")
+	must.NoError(os.MkdirAll(repoDir, 0o755))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:          "alpha",
+		Name:        "Alpha",
+		Path:        repoDir,
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "op",
+	}}}))
 
-			repoDir := filepath.Join(t.TempDir(), "alpha")
-			must.NoError(os.MkdirAll(repoDir, 0o755))
-			must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
-				ID:          "alpha",
-				Name:        "Alpha",
-				Path:        repoDir,
-				BeadsMode:   registry.BeadsModeLocal,
-				BeadsPrefix: "op",
-			}}}))
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[{"id":"op-closed","title":"done","status":"closed","priority":2,"issue_type":"task"}]`},
+	})
 
-			withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
-				repoDir: {stdout: tt.response},
-			})
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "show", "op-closed"})
 
-			stdout, stderr, err := executeCommandWithError(t, []string{"task", "show", tt.id})
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "out of scope for M2 task views")
+	is.ErrorContains(err, "expected an active item")
+	is.ErrorContains(err, "issue_type=task")
+	is.ErrorContains(err, "status=closed")
+}
 
-			must.Error(err)
-			is.Empty(stdout)
-			is.Empty(stderr)
-			is.ErrorContains(err, "out of scope for M2 task views")
-			is.ErrorContains(err, "expected an active issue_type=task item")
-			is.ErrorContains(err, tt.wantType)
-			is.ErrorContains(err, tt.wantStatus)
-		})
+func TestTaskShowRendersActiveNonTaskItems(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoDir := filepath.Join(t.TempDir(), "alpha")
+	must.NoError(os.MkdirAll(repoDir, 0o755))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:          "alpha",
+		Name:        "Alpha",
+		Path:        repoDir,
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "op",
+	}}}))
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[{"id":"op-bug","title":"bug","status":"open","priority":2,"issue_type":"bug"}]`},
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "show", "op-bug"})
+
+	is.Empty(stderr)
+	for _, want := range []string{"Repository:", "ID: alpha", "Task:", "ID: op-bug", "Title: bug", "Status: open", "Priority: 2", "Type: bug"} {
+		is.Contains(stdout, want)
 	}
 }
 

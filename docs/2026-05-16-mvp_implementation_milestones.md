@@ -112,6 +112,7 @@ Initial status groups:
 
 ```text
 Ready to run
+Working
 Blocked
 In review
 Done / closed
@@ -121,8 +122,7 @@ Unknown / needs attention
 M2 readiness rules:
 
 ```text
-issue_type != epic
-AND status == open
+status == open
 AND no non-empty orpheus.pr_url
 AND every dependency id resolves within the same repository snapshot
 AND every resolved dependency has status == closed
@@ -161,6 +161,8 @@ Success criteria:
 - Closed items are available to the status projection for `Done / closed`.
 - `status` does not call GitHub.
 - Task IDs resolve by prefix.
+
+Validation notes: [M2 Global Task Visibility Validation](./2026-05-31-m2_global_task_visibility_validation.md).
 
 ---
 
