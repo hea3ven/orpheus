@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -471,6 +472,173 @@ func TestTaskShowRendersActiveNonTaskItems(t *testing.T) {
 	}
 }
 
+func TestTaskRunExecutesDefaultAgentAttachedFromRegisteredRepoRoot(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoAt(t, root, filepath.Join("repos", "alpha"), testRepoConfig{withRemote: true})
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:          "alpha",
+		Name:        "Alpha Repo",
+		Path:        repoPath,
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "op",
+	}}}))
+
+	bdLogPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[
+			{
+				"id":"op-1",
+				"title":"Implement attached run",
+				"description":"Resolve the task and launch the configured agent.",
+				"acceptance_criteria":"The agent gets the rendered prompt and ORPHEUS environment.",
+				"status":"open",
+				"priority":2,
+				"issue_type":"task"
+			}
+		]`},
+	})
+	agentLogPath := withFakeAgent(t, "fake-agent", 0)
+	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"default_agent": "recorder",
+		"agents": map[string]any{
+			"recorder": map[string]any{
+				"command": "fake-agent",
+				"args":    []string{"--prompt", "{{prompt}}", "--literal", "unchanged"},
+			},
+		},
+	}))
+
+	stdout, stderr := executeCommand(t, []string{"task", "run", "op-1"})
+
+	is.Contains(stdout, "fake agent stdout")
+	for _, want := range []string{
+		"Orpheus M3 WIP",
+		"running attached agent \"recorder\"",
+		"task op-1",
+		repoPath,
+		"no isolated worktree",
+		"fake agent stderr",
+	} {
+		is.Contains(stderr, want)
+	}
+
+	bdLog, err := os.ReadFile(bdLogPath)
+	must.NoError(err)
+	is.Contains(string(bdLog), repoPath)
+	is.Contains(string(bdLog), "--json --readonly --sandbox show --id op-1")
+	is.NotContains(string(bdLog), "--json --readonly --sandbox list")
+
+	agentLog, err := os.ReadFile(agentLogPath)
+	must.NoError(err)
+	log := string(agentLog)
+	for _, want := range []string{
+		"PWD=" + repoPath,
+		"ARG_COUNT=4",
+		"ARG_1<<END\n--prompt\nEND",
+		"ARG_3<<END\n--literal\nEND",
+		"ARG_4<<END\nunchanged\nEND",
+		"ORPHEUS_REPO_ID=alpha",
+		"ORPHEUS_TASK_ID=op-1",
+		"ORPHEUS_WORKTREE=" + repoPath,
+		"ORPHEUS_BRANCH=main",
+		"ORPHEUS_AGENT_PROMPT<<END",
+		"- ID: op-1",
+		"- Title: Implement attached run",
+		"Resolve the task and launch the configured agent.",
+		"The agent gets the rendered prompt and ORPHEUS environment.",
+		"- Name: Alpha Repo",
+		"- Current execution directory: " + repoPath,
+		"Do not commit manually",
+		"Summary:",
+		"Details:",
+		"Checks:",
+		"Follow-ups:",
+	} {
+		is.Contains(log, want)
+	}
+	is.Contains(log, "ARG_2<<END\nYou are an attached implementation agent dispatched by Orpheus.")
+}
+
+func TestTaskRunAgentFlagSelectsNamedProfile(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoAt(t, root, filepath.Join("repos", "alpha"), testRepoConfig{withRemote: true})
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:          "alpha",
+		Name:        "Alpha Repo",
+		Path:        repoPath,
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "op",
+	}}}))
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[{"id":"op-2","title":"Use selected agent","status":"open","priority":1,"issue_type":"task"}]`},
+	})
+	agentLogPath := withFakeAgent(t, "selected-agent", 0)
+	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"default_agent": "default",
+		"agents": map[string]any{
+			"default": map[string]any{"command": "missing-agent"},
+			"custom":  map[string]any{"command": "selected-agent", "args": []string{"selected", "{{prompt}}"}},
+		},
+	}))
+
+	stdout, stderr := executeCommand(t, []string{"task", "run", "--agent", "custom", "op-2"})
+
+	is.Contains(stdout, "fake agent stdout")
+	is.Contains(stderr, "running attached agent \"custom\"")
+	agentLog, err := os.ReadFile(agentLogPath)
+	must.NoError(err)
+	log := string(agentLog)
+	is.Contains(log, "ARG_1<<END\nselected\nEND")
+	is.Contains(log, "- ID: op-2")
+	is.Contains(log, "- Title: Use selected agent")
+}
+
+func TestTaskRunReportsUnknownAgentProfileBeforeLaunching(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoAt(t, root, filepath.Join("repos", "alpha"), testRepoConfig{withRemote: true})
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:          "alpha",
+		Name:        "Alpha Repo",
+		Path:        repoPath,
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "op",
+	}}}))
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[{"id":"op-3","title":"Missing agent","status":"open","priority":1,"issue_type":"task"}]`},
+	})
+	agentLogPath := withFakeAgent(t, "known-agent", 0)
+	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"default_agent": "known",
+		"agents":        map[string]any{"known": map[string]any{"command": "known-agent"}},
+	}))
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "--agent", "missing", "op-3"})
+
+	must.Error(err)
+	is.ErrorContains(err, "resolve agent profile")
+	is.ErrorContains(err, "agent profile \"missing\" is not configured")
+	is.Empty(stdout)
+	is.Empty(stderr)
+	_, logErr := os.Stat(agentLogPath)
+	is.ErrorIs(logErr, os.ErrNotExist)
+}
+
 func withFakeBDTaskResponses(t *testing.T, responses map[string]fakeBDTaskResponse) string {
 	t.Helper()
 
@@ -529,6 +697,40 @@ exit 65
 		t.Fatalf("write fake bd: %v", err)
 	}
 	t.Setenv("FAKE_BD_LOG", logPath)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return logPath
+}
+
+func withFakeAgent(t *testing.T, name string, exitCode int) string {
+	t.Helper()
+
+	binDir := t.TempDir()
+	logPath := filepath.Join(binDir, name+".log")
+	script := fmt.Sprintf(`#!/bin/sh
+{
+  printf 'PWD=%%s\n' "$PWD"
+  printf 'ARG_COUNT=%%s\n' "$#"
+  index=0
+  for arg in "$@"; do
+    index=$((index + 1))
+    printf 'ARG_%%s<<END\n%%s\nEND\n' "$index" "$arg"
+  done
+  printf 'ORPHEUS_REPO_ID=%%s\n' "$ORPHEUS_REPO_ID"
+  printf 'ORPHEUS_TASK_ID=%%s\n' "$ORPHEUS_TASK_ID"
+  printf 'ORPHEUS_WORKTREE=%%s\n' "$ORPHEUS_WORKTREE"
+  printf 'ORPHEUS_BRANCH=%%s\n' "$ORPHEUS_BRANCH"
+  printf 'ORPHEUS_AGENT_PROMPT<<END\n%%s\nEND\n' "$ORPHEUS_AGENT_PROMPT"
+} >> "$FAKE_AGENT_LOG"
+printf 'fake agent stdout\n'
+printf 'fake agent stderr\n' >&2
+exit %d
+`, exitCode)
+
+	agentPath := filepath.Join(binDir, name)
+	if err := os.WriteFile(agentPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake agent: %v", err)
+	}
+	t.Setenv("FAKE_AGENT_LOG", logPath)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return logPath
 }

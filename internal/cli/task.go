@@ -8,14 +8,20 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/beads"
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/registry"
+	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/status"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/spf13/cobra"
 )
 
-var newBeadsTaskBackend = beads.NewTaskBackend
+var (
+	newBeadsTaskBackend                  = beads.NewTaskBackend
+	attachedAgentLauncher agent.Launcher = agent.AttachedLauncher{}
+)
 
 func newTaskCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
@@ -24,7 +30,7 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 		Args:  cobra.NoArgs,
 	}
 
-	cmd.AddCommand(newTaskListCommand(opts), newTaskReadyCommand(opts), newTaskShowCommand(opts))
+	cmd.AddCommand(newTaskListCommand(opts), newTaskReadyCommand(opts), newTaskShowCommand(opts), newTaskRunCommand(opts))
 	return cmd
 }
 
@@ -74,6 +80,23 @@ func newTaskShowCommand(opts *rootOptions) *cobra.Command {
 			return runTaskShow(command, opts, args[0])
 		},
 	}
+	return cmd
+}
+
+func newTaskRunCommand(opts *rootOptions) *cobra.Command {
+	var agentName string
+	cmd := &cobra.Command{
+		Use:   "run <task-id>",
+		Short: "Run an attached agent for a task",
+		Long: "Run an attached agent for a task.\n\n" +
+			"M3 WIP limitation: the agent runs from the registered repository root and " +
+			"inherits this terminal's stdin/stdout/stderr; no isolated task worktree is created yet.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			return runTaskRun(command, opts, args[0], agentName)
+		},
+	}
+	cmd.Flags().StringVar(&agentName, "agent", "", "agent profile name to use instead of default_agent")
 	return cmd
 }
 
@@ -186,6 +209,30 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for task show")
 
+	resolved, taskItem, err := resolveTaskItem(command, "task show", taskID)
+	if err != nil {
+		return err
+	}
+
+	logger.DebugContext(
+		command.Context(),
+		"queried task from resolved repo",
+		slog.String("repo_id", resolved.Source.Repository.ID),
+		slog.String("task_id", resolved.TaskID),
+	)
+	return renderTaskDetails(command.OutOrStdout(), taskmodel.RepoTask{
+		Repository: resolved.Source.Repository,
+		Task:       taskItem,
+	})
+}
+
+func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentName string) error {
+	logger := opts.log().With(
+		slog.String("component", "cli"),
+		slog.String("operation", "task_run"),
+	)
+	logger.DebugContext(command.Context(), "loading registered repos for task run")
+
 	store, err := newRegistryStoreFromEnvironment()
 	if err != nil {
 		return err
@@ -206,6 +253,11 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 		return err
 	}
 
+	repo, err := registeredRepoForSource(reg, resolved.Source.Repository.ID)
+	if err != nil {
+		return err
+	}
+
 	logger.DebugContext(
 		command.Context(),
 		"querying task from resolved repo",
@@ -213,9 +265,107 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 		slog.String("task_id", resolved.TaskID),
 	)
 
+	taskItem, err := queryResolvedTask(command, "task run", resolved)
+	if err != nil {
+		return err
+	}
+
+	inspection, err := gitmeta.Inspect(repo.Path)
+	if err != nil {
+		return fmt.Errorf(
+			"task run %s: inspect registered repo root %s (%s) at %q: %w",
+			resolved.TaskID,
+			repo.ID,
+			repo.Name,
+			repo.Path,
+			err,
+		)
+	}
+
+	executionDir := repo.Path
+	prompt := agent.RenderDispatchPrompt(agent.DispatchPromptContext{
+		TaskID:                 taskItem.ID,
+		TaskTitle:              taskItem.Title,
+		TaskDescription:        taskItem.Description,
+		TaskAcceptanceCriteria: taskItem.AcceptanceCriteria,
+		RepositoryID:           repo.ID,
+		RepositoryName:         repo.Name,
+		ExecutionDir:           executionDir,
+	})
+
+	paths, err := state.ResolveFromEnvironment()
+	if err != nil {
+		return err
+	}
+	agentConfig, err := agent.LoadConfig(paths)
+	if err != nil {
+		return err
+	}
+	commandSnapshot, err := agentConfig.ResolveCommand(agentName, prompt)
+	if err != nil {
+		return fmt.Errorf("task run %s: resolve agent profile: %w", resolved.TaskID, err)
+	}
+
+	logger.DebugContext(
+		command.Context(),
+		"launching attached agent",
+		slog.String("repo_id", repo.ID),
+		slog.String("task_id", resolved.TaskID),
+		slog.String("agent", commandSnapshot.AgentName),
+		slog.String("command", commandSnapshot.Command),
+		slog.Int("arg_count", len(commandSnapshot.Args)),
+		slog.String("execution_dir", executionDir),
+	)
+
+	if err := renderTaskRunWarning(command.ErrOrStderr(), commandSnapshot.AgentName, resolved.TaskID, executionDir); err != nil {
+		return err
+	}
+
+	if err := attachedAgentLauncher.Run(command.Context(), commandSnapshot, agent.LaunchOptions{
+		Dir:    executionDir,
+		Env:    taskRunEnvironment(repo.ID, taskItem.ID, executionDir, inspection.CurrentBranch, prompt),
+		Stdin:  command.InOrStdin(),
+		Stdout: command.OutOrStdout(),
+		Stderr: command.ErrOrStderr(),
+	}); err != nil {
+		return fmt.Errorf("task run %s: %w", resolved.TaskID, err)
+	}
+	return nil
+}
+
+func resolveTaskItem(command *cobra.Command, operation string, taskID string) (taskmodel.ResolvedTaskSource, taskmodel.Task, error) {
+	store, err := newRegistryStoreFromEnvironment()
+	if err != nil {
+		return taskmodel.ResolvedTaskSource{}, taskmodel.Task{}, err
+	}
+
+	reg, err := store.Load()
+	if err != nil {
+		return taskmodel.ResolvedTaskSource{}, taskmodel.Task{}, err
+	}
+
+	sources, err := taskRepositorySources(store, reg)
+	if err != nil {
+		return taskmodel.ResolvedTaskSource{}, taskmodel.Task{}, err
+	}
+
+	resolved, err := taskmodel.ResolveTaskSource(sources, taskID)
+	if err != nil {
+		return taskmodel.ResolvedTaskSource{}, taskmodel.Task{}, err
+	}
+
+	taskItem, err := queryResolvedTask(command, operation, resolved)
+	if err != nil {
+		return taskmodel.ResolvedTaskSource{}, taskmodel.Task{}, err
+	}
+	return resolved, taskItem, nil
+}
+
+func queryResolvedTask(command *cobra.Command, operation string, resolved taskmodel.ResolvedTaskSource) (taskmodel.Task, error) {
 	backend, err := newBeadsTaskBackend(resolved.Source.BackendDir)
 	if err != nil {
-		return fmt.Errorf("task show %s: create backend for repo %s (%s; prefix %s): %w",
+		return taskmodel.Task{}, fmt.Errorf("%s %s: create backend for repo %s (%s; prefix %s): %w",
+			operation,
 			resolved.TaskID,
 			resolved.Source.Repository.ID,
 			resolved.Source.Repository.Name,
@@ -227,8 +377,9 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 	taskItem, err := backend.Get(command.Context(), resolved.TaskID)
 	if err != nil {
 		if errors.Is(err, taskmodel.ErrNotFound) {
-			return fmt.Errorf(
-				"task show %s: task was not found in repo %s (%s; prefix %s); check the task id or inspect the repo backend directory: %w",
+			return taskmodel.Task{}, fmt.Errorf(
+				"%s %s: task was not found in repo %s (%s; prefix %s); check the task id or inspect the repo backend directory: %w",
+				operation,
 				resolved.TaskID,
 				resolved.Source.Repository.ID,
 				resolved.Source.Repository.Name,
@@ -236,7 +387,8 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 				err,
 			)
 		}
-		return fmt.Errorf("task show %s: query repo %s (%s; prefix %s): %w",
+		return taskmodel.Task{}, fmt.Errorf("%s %s: query repo %s (%s; prefix %s): %w",
+			operation,
 			resolved.TaskID,
 			resolved.Source.Repository.ID,
 			resolved.Source.Repository.Name,
@@ -246,19 +398,45 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 	}
 
 	if !taskmodel.IsM2TaskViewItem(taskItem) {
-		return fmt.Errorf(
-			"task show %s: item is out of scope for M2 task views; expected an active item, got issue_type=%s status=%s",
+		return taskmodel.Task{}, fmt.Errorf(
+			"%s %s: item is out of scope for M2 task views; expected an active item, got issue_type=%s status=%s",
+			operation,
 			resolved.TaskID,
 			formatTaskField(string(taskItem.IssueType)),
 			formatTaskField(string(taskItem.Status)),
 		)
 	}
+	return taskItem, nil
+}
 
-	logger.DebugContext(command.Context(), "queried task from resolved repo")
-	return renderTaskDetails(command.OutOrStdout(), taskmodel.RepoTask{
-		Repository: resolved.Source.Repository,
-		Task:       taskItem,
-	})
+func registeredRepoForSource(reg registry.Registry, repoID string) (registry.Repo, error) {
+	for _, repo := range reg.Repos {
+		if repo.ID == repoID {
+			return repo, nil
+		}
+	}
+	return registry.Repo{}, fmt.Errorf("registered repo %q was resolved for the task but is missing from the registry", repoID)
+}
+
+func renderTaskRunWarning(output interface{ Write([]byte) (int, error) }, agentName string, taskID string, executionDir string) error {
+	_, err := fmt.Fprintf(
+		output,
+		"Orpheus M3 WIP: running attached agent %q for task %s from registered repo root %s; no isolated worktree is created yet.\n",
+		agentName,
+		taskID,
+		executionDir,
+	)
+	return err
+}
+
+func taskRunEnvironment(repoID string, taskID string, worktree string, branch string, prompt string) []string {
+	return []string{
+		"ORPHEUS_REPO_ID=" + repoID,
+		"ORPHEUS_TASK_ID=" + taskID,
+		"ORPHEUS_WORKTREE=" + worktree,
+		"ORPHEUS_BRANCH=" + branch,
+		"ORPHEUS_AGENT_PROMPT=" + prompt,
+	}
 }
 
 type taskQueryOptions struct {
