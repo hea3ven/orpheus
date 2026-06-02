@@ -5,28 +5,6 @@ import (
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 )
 
-type registryContext struct {
-	Store    registry.Store
-	Registry registry.Registry
-}
-
-func loadRegistryContext() (registryContext, error) {
-	store, err := newRegistryStoreFromEnvironment()
-	if err != nil {
-		return registryContext{}, err
-	}
-
-	reg, err := store.Load()
-	if err != nil {
-		return registryContext{}, err
-	}
-
-	return registryContext{
-		Store:    store,
-		Registry: reg,
-	}, nil
-}
-
 type taskContext struct {
 	Store      registry.Store
 	Registry   registry.Registry

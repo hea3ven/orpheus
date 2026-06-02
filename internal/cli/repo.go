@@ -13,7 +13,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/beads"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/registry"
-	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -114,10 +113,11 @@ func newRepoAddCommand(opts *rootOptions) *cobra.Command {
 				)
 			}
 
-			reg, err := store.Load()
+			registryCtx, err := loadRegistryContextFromStore(store)
 			if err != nil {
 				return err
 			}
+			reg := registryCtx.Registry
 			if err := reg.Add(repo); err != nil {
 				return err
 			}
@@ -125,7 +125,7 @@ func newRepoAddCommand(opts *rootOptions) *cobra.Command {
 
 			var managedDir string
 			if managed {
-				managedDir, err = store.ManagedBeadsDir(repo.ID)
+				managedDir, err = registryCtx.Store.ManagedBeadsDir(repo.ID)
 				if err != nil {
 					return err
 				}
@@ -135,7 +135,7 @@ func newRepoAddCommand(opts *rootOptions) *cobra.Command {
 				}
 			}
 
-			if err := store.Save(reg); err != nil {
+			if err := registryCtx.Store.Save(reg); err != nil {
 				if managed {
 					return fmt.Errorf("managed Beads was initialized at %q, but saving the repo registry failed; remove that directory before retrying if you do not want to keep it: %w", managedDir, err)
 				}
@@ -178,15 +178,11 @@ func newRepoListCommand(opts *rootOptions) *cobra.Command {
 			)
 			logger.DebugContext(command.Context(), "loading registered repos")
 
-			store, err := newRegistryStoreFromEnvironment()
+			registryCtx, err := loadRegistryContext()
 			if err != nil {
 				return err
 			}
-
-			reg, err := store.Load()
-			if err != nil {
-				return err
-			}
+			reg := registryCtx.Registry
 			logger.DebugContext(command.Context(), "loaded registered repos", slog.Int("repo_count", len(reg.Repos)))
 
 			writer := tabwriter.NewWriter(command.OutOrStdout(), 0, 0, 2, ' ', 0)
@@ -227,22 +223,17 @@ func newRepoBeadsDirCommand(opts *rootOptions) *cobra.Command {
 			)
 			logger.DebugContext(command.Context(), "resolving repo Beads directory")
 
-			store, err := newRegistryStoreFromEnvironment()
+			registryCtx, err := loadRegistryContext()
 			if err != nil {
 				return err
 			}
 
-			reg, err := store.Load()
+			repo, err := registryCtx.Registry.Resolve(args[0])
 			if err != nil {
 				return err
 			}
 
-			repo, err := reg.Resolve(args[0])
-			if err != nil {
-				return err
-			}
-
-			beadsDir, err := store.BeadsDir(repo)
+			beadsDir, err := registryCtx.Store.BeadsDir(repo)
 			if err != nil {
 				return err
 			}
@@ -431,12 +422,4 @@ func readerIsTerminal(reader io.Reader) bool {
 		return false
 	}
 	return stat.Mode()&os.ModeCharDevice != 0
-}
-
-func newRegistryStoreFromEnvironment() (registry.Store, error) {
-	paths, err := state.ResolveFromEnvironment()
-	if err != nil {
-		return registry.Store{}, err
-	}
-	return registry.NewStore(paths), nil
 }
