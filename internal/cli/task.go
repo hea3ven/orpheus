@@ -41,14 +41,19 @@ func newTaskListCommand(opts *rootOptions) *cobra.Command {
 		Short: "List active items across registered repositories",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
-			return runTaskQuery(command, opts, taskQueryOptions{
+			return runTaskRows(command, opts, taskRowsOptions{
 				operation:    "task list",
 				logOperation: "task_list",
+				loadingLog:   "loading registered repos for task query",
 				queryingLog:  "querying active tasks",
 				queriedLog:   "queried active tasks",
 				detailed:     detailed,
-				query: func(ctx context.Context, aggregator taskmodel.Aggregator) taskmodel.QueryResult {
-					return aggregator.List(ctx)
+				query: func(ctx context.Context, aggregator taskmodel.Aggregator) taskRowsResult {
+					result := aggregator.List(ctx)
+					return taskRowsResult{
+						Rows:     result.Rows,
+						Failures: result.Failures,
+					}
 				},
 			})
 		},
@@ -106,64 +111,50 @@ func addTaskDetailFlags(cmd *cobra.Command, detailed *bool) {
 }
 
 func runTaskReady(command *cobra.Command, opts *rootOptions, detailed bool) error {
-	logger := opts.log().With(
-		slog.String("component", "cli"),
-		slog.String("operation", "task_ready"),
-	)
-	logger.DebugContext(command.Context(), "loading registered repos for task ready")
-
-	taskCtx, err := loadTaskContext()
-	if err != nil {
-		return err
-	}
-	logger.DebugContext(command.Context(), "querying task snapshots", slog.Int("repo_count", len(taskCtx.Sources)))
-
-	snapshot := taskCtx.Aggregator.Snapshot(command.Context())
-	rows := status.ReadyRows(snapshot)
-	logger.DebugContext(
-		command.Context(),
-		"projected ready tasks",
-		slog.Int("row_count", len(rows)),
-		slog.Int("failure_count", len(snapshot.Failures)),
-	)
-
-	if err := renderTaskRows(command.OutOrStdout(), rows, detailed); err != nil {
-		return err
-	}
-	if snapshot.HasFailures() {
-		writeRepoFailures(command.ErrOrStderr(), "task ready", snapshot.Failures)
-		return partialRepoFailureError{operation: "task ready", failures: snapshot.Failures}
-	}
-	return nil
+	return runTaskRows(command, opts, taskRowsOptions{
+		operation:    "task ready",
+		logOperation: "task_ready",
+		loadingLog:   "loading registered repos for task ready",
+		queryingLog:  "querying task snapshots",
+		queriedLog:   "projected ready tasks",
+		detailed:     detailed,
+		query: func(ctx context.Context, aggregator taskmodel.Aggregator) taskRowsResult {
+			snapshot := aggregator.Snapshot(ctx)
+			return taskRowsResult{
+				Rows:     status.ReadyRows(snapshot),
+				Failures: snapshot.Failures,
+			}
+		},
+	})
 }
 
-func runTaskQuery(command *cobra.Command, opts *rootOptions, queryOpts taskQueryOptions) error {
+func runTaskRows(command *cobra.Command, opts *rootOptions, rowOpts taskRowsOptions) error {
 	logger := opts.log().With(
 		slog.String("component", "cli"),
-		slog.String("operation", queryOpts.logOperation),
+		slog.String("operation", rowOpts.logOperation),
 	)
-	logger.DebugContext(command.Context(), "loading registered repos for task query")
+	logger.DebugContext(command.Context(), rowOpts.loadingLog)
 
 	taskCtx, err := loadTaskContext()
 	if err != nil {
 		return err
 	}
-	logger.DebugContext(command.Context(), queryOpts.queryingLog, slog.Int("repo_count", len(taskCtx.Sources)))
+	logger.DebugContext(command.Context(), rowOpts.queryingLog, slog.Int("repo_count", len(taskCtx.Sources)))
 
-	result := queryOpts.query(command.Context(), taskCtx.Aggregator)
+	result := rowOpts.query(command.Context(), taskCtx.Aggregator)
 	logger.DebugContext(
 		command.Context(),
-		queryOpts.queriedLog,
+		rowOpts.queriedLog,
 		slog.Int("row_count", len(result.Rows)),
 		slog.Int("failure_count", len(result.Failures)),
 	)
 
-	if err := renderTaskRows(command.OutOrStdout(), result.Rows, queryOpts.detailed); err != nil {
+	if err := renderTaskRows(command.OutOrStdout(), result.Rows, rowOpts.detailed); err != nil {
 		return err
 	}
 	if result.HasFailures() {
-		writeRepoFailures(command.ErrOrStderr(), queryOpts.operation, result.Failures)
-		return partialRepoFailureError{operation: queryOpts.operation, failures: result.Failures}
+		writeRepoFailures(command.ErrOrStderr(), rowOpts.operation, result.Failures)
+		return partialRepoFailureError{operation: rowOpts.operation, failures: result.Failures}
 	}
 	return nil
 }
@@ -385,13 +376,23 @@ func taskRunEnvironment(repoID string, taskID string, worktree string, branch st
 	}
 }
 
-type taskQueryOptions struct {
+type taskRowsResult struct {
+	Rows     []taskmodel.RepoTask
+	Failures []taskmodel.RepoFailure
+}
+
+func (r taskRowsResult) HasFailures() bool {
+	return len(r.Failures) > 0
+}
+
+type taskRowsOptions struct {
 	operation    string
 	logOperation string
+	loadingLog   string
 	queryingLog  string
 	queriedLog   string
 	detailed     bool
-	query        func(context.Context, taskmodel.Aggregator) taskmodel.QueryResult
+	query        func(context.Context, taskmodel.Aggregator) taskRowsResult
 }
 
 func taskRepositorySources(store registry.Store, reg registry.Registry) ([]taskmodel.RepositorySource, error) {
