@@ -6,7 +6,6 @@ import (
 	"text/tabwriter"
 
 	"github.com/hea3ven/orpheus/internal/status"
-	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/spf13/cobra"
 )
 
@@ -31,30 +30,13 @@ func runStatus(command *cobra.Command, opts *rootOptions, full bool) error {
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for status projection")
 
-	store, err := newRegistryStoreFromEnvironment()
+	taskCtx, err := loadTaskContext()
 	if err != nil {
 		return err
 	}
+	logger.DebugContext(command.Context(), "querying local task snapshots", slog.Int("repo_count", len(taskCtx.Sources)))
 
-	reg, err := store.Load()
-	if err != nil {
-		return err
-	}
-
-	sources, err := taskRepositorySources(store, reg)
-	if err != nil {
-		return err
-	}
-	logger.DebugContext(command.Context(), "querying local task snapshots", slog.Int("repo_count", len(sources)))
-
-	aggregator, err := taskmodel.NewAggregator(sources, func(source taskmodel.RepositorySource) (taskmodel.ReadBackend, error) {
-		return newBeadsTaskBackend(source.BackendDir)
-	})
-	if err != nil {
-		return err
-	}
-
-	snapshot := aggregator.Snapshot(command.Context())
+	snapshot := taskCtx.Aggregator.Snapshot(command.Context())
 	projection := status.Project(snapshot)
 	logger.DebugContext(
 		command.Context(),

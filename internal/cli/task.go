@@ -112,30 +112,13 @@ func runTaskReady(command *cobra.Command, opts *rootOptions, detailed bool) erro
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for task ready")
 
-	store, err := newRegistryStoreFromEnvironment()
+	taskCtx, err := loadTaskContext()
 	if err != nil {
 		return err
 	}
+	logger.DebugContext(command.Context(), "querying task snapshots", slog.Int("repo_count", len(taskCtx.Sources)))
 
-	reg, err := store.Load()
-	if err != nil {
-		return err
-	}
-
-	sources, err := taskRepositorySources(store, reg)
-	if err != nil {
-		return err
-	}
-	logger.DebugContext(command.Context(), "querying task snapshots", slog.Int("repo_count", len(sources)))
-
-	aggregator, err := taskmodel.NewAggregator(sources, func(source taskmodel.RepositorySource) (taskmodel.ReadBackend, error) {
-		return newBeadsTaskBackend(source.BackendDir)
-	})
-	if err != nil {
-		return err
-	}
-
-	snapshot := aggregator.Snapshot(command.Context())
+	snapshot := taskCtx.Aggregator.Snapshot(command.Context())
 	rows := status.ReadyRows(snapshot)
 	logger.DebugContext(
 		command.Context(),
@@ -161,30 +144,13 @@ func runTaskQuery(command *cobra.Command, opts *rootOptions, queryOpts taskQuery
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for task query")
 
-	store, err := newRegistryStoreFromEnvironment()
+	taskCtx, err := loadTaskContext()
 	if err != nil {
 		return err
 	}
+	logger.DebugContext(command.Context(), queryOpts.queryingLog, slog.Int("repo_count", len(taskCtx.Sources)))
 
-	reg, err := store.Load()
-	if err != nil {
-		return err
-	}
-
-	sources, err := taskRepositorySources(store, reg)
-	if err != nil {
-		return err
-	}
-	logger.DebugContext(command.Context(), queryOpts.queryingLog, slog.Int("repo_count", len(sources)))
-
-	aggregator, err := taskmodel.NewAggregator(sources, func(source taskmodel.RepositorySource) (taskmodel.ReadBackend, error) {
-		return newBeadsTaskBackend(source.BackendDir)
-	})
-	if err != nil {
-		return err
-	}
-
-	result := queryOpts.query(command.Context(), aggregator)
+	result := queryOpts.query(command.Context(), taskCtx.Aggregator)
 	logger.DebugContext(
 		command.Context(),
 		queryOpts.queriedLog,
@@ -233,27 +199,17 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentN
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for task run")
 
-	store, err := newRegistryStoreFromEnvironment()
+	taskCtx, err := loadTaskContext()
 	if err != nil {
 		return err
 	}
 
-	reg, err := store.Load()
+	resolved, err := taskmodel.ResolveTaskSource(taskCtx.Sources, taskID)
 	if err != nil {
 		return err
 	}
 
-	sources, err := taskRepositorySources(store, reg)
-	if err != nil {
-		return err
-	}
-
-	resolved, err := taskmodel.ResolveTaskSource(sources, taskID)
-	if err != nil {
-		return err
-	}
-
-	repo, err := registeredRepoForSource(reg, resolved.Source.Repository.ID)
+	repo, err := registeredRepoForSource(taskCtx.Registry, resolved.Source.Repository.ID)
 	if err != nil {
 		return err
 	}
@@ -334,22 +290,12 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentN
 }
 
 func resolveTaskItem(command *cobra.Command, operation string, taskID string) (taskmodel.ResolvedTaskSource, taskmodel.Task, error) {
-	store, err := newRegistryStoreFromEnvironment()
+	taskCtx, err := loadTaskContext()
 	if err != nil {
 		return taskmodel.ResolvedTaskSource{}, taskmodel.Task{}, err
 	}
 
-	reg, err := store.Load()
-	if err != nil {
-		return taskmodel.ResolvedTaskSource{}, taskmodel.Task{}, err
-	}
-
-	sources, err := taskRepositorySources(store, reg)
-	if err != nil {
-		return taskmodel.ResolvedTaskSource{}, taskmodel.Task{}, err
-	}
-
-	resolved, err := taskmodel.ResolveTaskSource(sources, taskID)
+	resolved, err := taskmodel.ResolveTaskSource(taskCtx.Sources, taskID)
 	if err != nil {
 		return taskmodel.ResolvedTaskSource{}, taskmodel.Task{}, err
 	}
