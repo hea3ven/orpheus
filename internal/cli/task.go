@@ -94,8 +94,8 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 		Use:   "run <task-id>",
 		Short: "Run an attached agent for a task",
 		Long: "Run an attached agent for a task.\n\n" +
-			"M3 WIP limitation: the agent runs from the registered repository root and " +
-			"inherits this terminal's stdin/stdout/stderr; no isolated task worktree is created yet.",
+			"M3 WIP limitation: Orpheus prepares a deterministic task branch and " +
+			"worktree, then runs the attached agent there without writing task metadata or run records.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			return runTaskRun(command, opts, args[0], agentName)
@@ -206,19 +206,24 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentN
 		slog.String("task_id", resolved.TaskID),
 	)
 
-	inspection, err := gitmeta.Inspect(repo.Path)
+	paths, err := state.ResolveFromEnvironment()
 	if err != nil {
-		return fmt.Errorf(
-			"task run %s: inspect registered repo root %s (%s) at %q: %w",
-			resolved.TaskID,
-			repo.ID,
-			repo.Name,
-			repo.Path,
-			err,
-		)
+		return err
 	}
 
-	executionDir := repo.Path
+	setup, err := gitmeta.SetupTaskWorktree(command.Context(), gitmeta.TaskWorktreeOptions{
+		RepoID:        repo.ID,
+		RepoName:      repo.Name,
+		RepoPath:      repo.Path,
+		DefaultBranch: repo.DefaultBranch,
+		TaskID:        resolved.TaskID,
+		Paths:         paths,
+	})
+	if err != nil {
+		return fmt.Errorf("task run %s: %w", resolved.TaskID, err)
+	}
+
+	executionDir := setup.WorktreePath
 	prompt := agent.RenderDispatchPrompt(agent.DispatchPromptContext{
 		TaskID:                 taskItem.ID,
 		TaskTitle:              taskItem.Title,
@@ -227,12 +232,9 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentN
 		RepositoryID:           repo.ID,
 		RepositoryName:         repo.Name,
 		ExecutionDir:           executionDir,
+		WorktreePath:           setup.WorktreePath,
+		Branch:                 setup.Branch,
 	})
-
-	paths, err := state.ResolveFromEnvironment()
-	if err != nil {
-		return err
-	}
 	agentConfig, err := agent.LoadConfig(paths)
 	if err != nil {
 		return err
@@ -251,15 +253,13 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentN
 		slog.String("command", commandSnapshot.Command),
 		slog.Int("arg_count", len(commandSnapshot.Args)),
 		slog.String("execution_dir", executionDir),
+		slog.String("branch", setup.Branch),
+		slog.String("worktree_lifecycle", string(setup.Lifecycle)),
 	)
-
-	if err := renderTaskRunWarning(command.ErrOrStderr(), commandSnapshot.AgentName, resolved.TaskID, executionDir); err != nil {
-		return err
-	}
 
 	if err := attachedAgentLauncher.Run(command.Context(), commandSnapshot, agent.LaunchOptions{
 		Dir:    executionDir,
-		Env:    taskRunEnvironment(repo.ID, taskItem.ID, executionDir, inspection.CurrentBranch, prompt),
+		Env:    taskRunEnvironment(repo.ID, taskItem.ID, setup.WorktreePath, setup.Branch, prompt),
 		Stdin:  command.InOrStdin(),
 		Stdout: command.OutOrStdout(),
 		Stderr: command.ErrOrStderr(),
@@ -357,17 +357,6 @@ func registeredRepoForSource(reg registry.Registry, repoID string) (registry.Rep
 		}
 	}
 	return registry.Repo{}, fmt.Errorf("registered repo %q was resolved for the task but is missing from the registry", repoID)
-}
-
-func renderTaskRunWarning(output interface{ Write([]byte) (int, error) }, agentName string, taskID string, executionDir string) error {
-	_, err := fmt.Fprintf(
-		output,
-		"Orpheus M3 WIP: running attached agent %q for task %s from registered repo root %s; no isolated worktree is created yet.\n",
-		agentName,
-		taskID,
-		executionDir,
-	)
-	return err
 }
 
 func taskRunEnvironment(repoID string, taskID string, worktree string, branch string, prompt string) []string {

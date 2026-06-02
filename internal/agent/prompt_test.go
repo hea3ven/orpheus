@@ -17,7 +17,9 @@ func TestRenderDispatchPromptIncludesTaskRepositoryAndReportFormat(t *testing.T)
 		TaskAcceptanceCriteria: "Agent receives backend-neutral context.",
 		RepositoryID:           "orpheus",
 		RepositoryName:         "Orpheus",
-		ExecutionDir:           "/tmp/orpheus",
+		ExecutionDir:           "/tmp/orpheus-worktree",
+		WorktreePath:           "/tmp/orpheus-worktree",
+		Branch:                 "orpheus/op-9xs.10",
 	})
 
 	for _, want := range []string{
@@ -30,9 +32,11 @@ func TestRenderDispatchPromptIncludesTaskRepositoryAndReportFormat(t *testing.T)
 		"Repository:",
 		"- ID: orpheus",
 		"- Name: Orpheus",
-		"- Current execution directory: /tmp/orpheus",
+		"- Current execution directory: /tmp/orpheus-worktree",
+		"- Deterministic worktree: /tmp/orpheus-worktree",
+		"- Deterministic branch: orpheus/op-9xs.10",
+		"Work in the current repository directory, which is the deterministic task worktree.",
 		"Do not commit manually",
-		"M3 WIP limitation",
 		"Summary:",
 		"One commit-style summary line, 80 characters or fewer",
 		"<type(fix,feat,test,chore,conf,etc)>: <description>",
@@ -46,4 +50,5 @@ func TestRenderDispatchPromptIncludesTaskRepositoryAndReportFormat(t *testing.T)
 		is.Contains(prompt, want)
 	}
 	is.NotContains(prompt, "Beads")
+	is.NotContains(prompt, "no isolated task worktree")
 }

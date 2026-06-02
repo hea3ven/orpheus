@@ -472,20 +472,21 @@ func TestTaskShowRendersActiveNonTaskItems(t *testing.T) {
 	}
 }
 
-func TestTaskRunExecutesDefaultAgentAttachedFromRegisteredRepoRoot(t *testing.T) {
+func TestTaskRunExecutesDefaultAgentAttachedFromDeterministicWorktree(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	repoPath := newTestRepoAt(t, root, filepath.Join("repos", "alpha"), testRepoConfig{withRemote: true})
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
-		ID:          "alpha",
-		Name:        "Alpha Repo",
-		Path:        repoPath,
-		BeadsMode:   registry.BeadsModeLocal,
-		BeadsPrefix: "op",
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
 	}}}))
 
 	bdLogPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
@@ -511,20 +512,15 @@ func TestTaskRunExecutesDefaultAgentAttachedFromRegisteredRepoRoot(t *testing.T)
 			},
 		},
 	}))
+	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-1"))
+	must.NoError(err)
 
 	stdout, stderr := executeCommand(t, []string{"task", "run", "op-1"})
 
 	is.Contains(stdout, "fake agent stdout")
-	for _, want := range []string{
-		"Orpheus M3 WIP",
-		"running attached agent \"recorder\"",
-		"task op-1",
-		repoPath,
-		"no isolated worktree",
-		"fake agent stderr",
-	} {
-		is.Contains(stderr, want)
-	}
+	is.Contains(stderr, "fake agent stderr")
+	is.NotContains(stderr, "Orpheus M3 WIP")
+	is.NotContains(stderr, "running attached agent")
 
 	bdLog, err := os.ReadFile(bdLogPath)
 	must.NoError(err)
@@ -536,22 +532,24 @@ func TestTaskRunExecutesDefaultAgentAttachedFromRegisteredRepoRoot(t *testing.T)
 	must.NoError(err)
 	log := string(agentLog)
 	for _, want := range []string{
-		"PWD=" + repoPath,
+		"PWD=" + worktreePath,
 		"ARG_COUNT=4",
 		"ARG_1<<END\n--prompt\nEND",
 		"ARG_3<<END\n--literal\nEND",
 		"ARG_4<<END\nunchanged\nEND",
 		"ORPHEUS_REPO_ID=alpha",
 		"ORPHEUS_TASK_ID=op-1",
-		"ORPHEUS_WORKTREE=" + repoPath,
-		"ORPHEUS_BRANCH=main",
+		"ORPHEUS_WORKTREE=" + worktreePath,
+		"ORPHEUS_BRANCH=orpheus/op-1",
 		"ORPHEUS_AGENT_PROMPT<<END",
 		"- ID: op-1",
 		"- Title: Implement attached run",
 		"Resolve the task and launch the configured agent.",
 		"The agent gets the rendered prompt and ORPHEUS environment.",
 		"- Name: Alpha Repo",
-		"- Current execution directory: " + repoPath,
+		"- Current execution directory: " + worktreePath,
+		"- Deterministic worktree: " + worktreePath,
+		"- Deterministic branch: orpheus/op-1",
 		"Do not commit manually",
 		"Summary:",
 		"Details:",
@@ -570,13 +568,14 @@ func TestTaskRunAgentFlagSelectsNamedProfile(t *testing.T) {
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	repoPath := newTestRepoAt(t, root, filepath.Join("repos", "alpha"), testRepoConfig{withRemote: true})
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
-		ID:          "alpha",
-		Name:        "Alpha Repo",
-		Path:        repoPath,
-		BeadsMode:   registry.BeadsModeLocal,
-		BeadsPrefix: "op",
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
 	}}}))
 
 	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
@@ -594,7 +593,8 @@ func TestTaskRunAgentFlagSelectsNamedProfile(t *testing.T) {
 	stdout, stderr := executeCommand(t, []string{"task", "run", "--agent", "custom", "op-2"})
 
 	is.Contains(stdout, "fake agent stdout")
-	is.Contains(stderr, "running attached agent \"custom\"")
+	is.Contains(stderr, "fake agent stderr")
+	is.NotContains(stderr, "running attached agent")
 	agentLog, err := os.ReadFile(agentLogPath)
 	must.NoError(err)
 	log := string(agentLog)
@@ -610,13 +610,14 @@ func TestTaskRunReportsUnknownAgentProfileBeforeLaunching(t *testing.T) {
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	repoPath := newTestRepoAt(t, root, filepath.Join("repos", "alpha"), testRepoConfig{withRemote: true})
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
-		ID:          "alpha",
-		Name:        "Alpha Repo",
-		Path:        repoPath,
-		BeadsMode:   registry.BeadsModeLocal,
-		BeadsPrefix: "op",
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
 	}}}))
 
 	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{

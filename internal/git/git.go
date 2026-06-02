@@ -1,8 +1,9 @@
-// Package git inspects local Git repository metadata without contacting remotes.
+// Package git inspects local repositories and prepares deterministic task worktrees.
 package git
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -232,7 +233,11 @@ func currentBranch(root string) (string, error) {
 }
 
 func runGit(dir string, args ...string) (string, error) {
-	command := exec.Command("git", args...)
+	return runGitContext(context.Background(), dir, args...)
+}
+
+func runGitContext(ctx context.Context, dir string, args ...string) (string, error) {
+	command := exec.CommandContext(ctx, "git", args...)
 	command.Dir = dir
 
 	var stdout bytes.Buffer

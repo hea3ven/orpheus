@@ -52,6 +52,24 @@ func newTestRepoAt(t *testing.T, root string, relativePath string, config testRe
 	return repoPath
 }
 
+func newTestRepoWithLocalOriginAt(t *testing.T, root string, relativePath string) string {
+	t.Helper()
+	must := require.New(t)
+
+	originPath := filepath.Join(root, "origins", filepath.Base(relativePath)+".git")
+	must.NoError(os.MkdirAll(originPath, 0o755))
+	runGit(t, originPath, "init", "--bare")
+	runGit(t, originPath, "symbolic-ref", "HEAD", "refs/heads/main")
+
+	repoPath := filepath.Join(root, relativePath)
+	must.NoError(os.MkdirAll(repoPath, 0o755))
+	initGitRepo(t, repoPath)
+	runGit(t, repoPath, "remote", "add", "origin", originPath)
+	runGit(t, repoPath, "push", "--set-upstream", "origin", "main")
+	runGit(t, repoPath, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	return repoPath
+}
+
 func newTestState(t *testing.T) string {
 	t.Helper()
 
