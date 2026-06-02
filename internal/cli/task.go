@@ -166,7 +166,7 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for task show")
 
-	resolved, taskItem, err := resolveTaskItem(command, "task show", taskID)
+	resolvedCtx, err := resolveTaskContext(command, "task show", taskID)
 	if err != nil {
 		return err
 	}
@@ -174,12 +174,12 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 	logger.DebugContext(
 		command.Context(),
 		"queried task from resolved repo",
-		slog.String("repo_id", resolved.Source.Repository.ID),
-		slog.String("task_id", resolved.TaskID),
+		slog.String("repo_id", resolvedCtx.Resolved.Source.Repository.ID),
+		slog.String("task_id", resolvedCtx.Resolved.TaskID),
 	)
 	return renderTaskDetails(command.OutOrStdout(), taskmodel.RepoTask{
-		Repository: resolved.Source.Repository,
-		Task:       taskItem,
+		Repository: resolvedCtx.Resolved.Source.Repository,
+		Task:       resolvedCtx.Task,
 	})
 }
 
@@ -190,32 +190,21 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentN
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for task run")
 
-	taskCtx, err := loadTaskContext()
+	resolvedCtx, err := resolveTaskContext(command, "task run", taskID)
 	if err != nil {
 		return err
 	}
 
-	resolved, err := taskmodel.ResolveTaskSource(taskCtx.Sources, taskID)
-	if err != nil {
-		return err
-	}
-
-	repo, err := registeredRepoForSource(taskCtx.Registry, resolved.Source.Repository.ID)
-	if err != nil {
-		return err
-	}
+	resolved := resolvedCtx.Resolved
+	taskItem := resolvedCtx.Task
+	repo := resolvedCtx.RegisteredRepo
 
 	logger.DebugContext(
 		command.Context(),
-		"querying task from resolved repo",
+		"queried task from resolved repo",
 		slog.String("repo_id", resolved.Source.Repository.ID),
 		slog.String("task_id", resolved.TaskID),
 	)
-
-	taskItem, err := queryResolvedTask(command, "task run", resolved)
-	if err != nil {
-		return err
-	}
 
 	inspection, err := gitmeta.Inspect(repo.Path)
 	if err != nil {
@@ -280,22 +269,37 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentN
 	return nil
 }
 
-func resolveTaskItem(command *cobra.Command, operation string, taskID string) (taskmodel.ResolvedTaskSource, taskmodel.Task, error) {
+type resolvedTaskContext struct {
+	Resolved       taskmodel.ResolvedTaskSource
+	Task           taskmodel.Task
+	RegisteredRepo registry.Repo
+}
+
+func resolveTaskContext(command *cobra.Command, operation string, taskID string) (resolvedTaskContext, error) {
 	taskCtx, err := loadTaskContext()
 	if err != nil {
-		return taskmodel.ResolvedTaskSource{}, taskmodel.Task{}, err
+		return resolvedTaskContext{}, err
 	}
 
 	resolved, err := taskmodel.ResolveTaskSource(taskCtx.Sources, taskID)
 	if err != nil {
-		return taskmodel.ResolvedTaskSource{}, taskmodel.Task{}, err
+		return resolvedTaskContext{}, err
+	}
+
+	repo, err := registeredRepoForSource(taskCtx.Registry, resolved.Source.Repository.ID)
+	if err != nil {
+		return resolvedTaskContext{}, err
 	}
 
 	taskItem, err := queryResolvedTask(command, operation, resolved)
 	if err != nil {
-		return taskmodel.ResolvedTaskSource{}, taskmodel.Task{}, err
+		return resolvedTaskContext{}, err
 	}
-	return resolved, taskItem, nil
+	return resolvedTaskContext{
+		Resolved:       resolved,
+		Task:           taskItem,
+		RegisteredRepo: repo,
+	}, nil
 }
 
 func queryResolvedTask(command *cobra.Command, operation string, resolved taskmodel.ResolvedTaskSource) (taskmodel.Task, error) {
