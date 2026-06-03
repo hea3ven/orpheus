@@ -1,5 +1,9 @@
 # Agent Instructions
 
+## Validation
+
+Always run `make fmt`, `make test` and `make lint` to validate your changes at the end.
+
 ## Task Tracking and Follow-Up
 
 This project does **not** use agent-driven task management for the MVP workflow.
