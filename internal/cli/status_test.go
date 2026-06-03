@@ -38,16 +38,52 @@ func TestStatusGroupsLocalTaskSnapshots(t *testing.T) {
 		BeadsPrefix: "ar",
 	}}}))
 
+	stateStore := taskstate.NewStore(paths)
+	_, err := stateStore.StartRun("alpha", "ar-running", taskstate.StartRunOptions{Agent: "recorder"})
+	must.NoError(err)
+	failedRun, err := stateStore.StartRun("alpha", "ar-failed", taskstate.StartRunOptions{Agent: "recorder"})
+	must.NoError(err)
+	_, err = stateStore.FinishRun("alpha", "ar-failed", failedRun.Attempt, taskstate.RunStatusFailed)
+	must.NoError(err)
+	succeededRun, err := stateStore.StartRun("alpha", "ar-succeeded", taskstate.StartRunOptions{Agent: "recorder"})
+	must.NoError(err)
+	_, err = stateStore.FinishRun("alpha", "ar-succeeded", succeededRun.Attempt, taskstate.RunStatusSucceeded)
+	must.NoError(err)
+
 	logPath := withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
 		dir:  repoDir,
 		args: "--json --readonly --sandbox list --all --limit 0",
 		stdout: `[
 			{"id":"ar-ready","title":"Ready task","status":"open","priority":1,"issue_type":"task"},
 			{"id":"ar-dep","title":"Open dependency","status":"open","priority":1,"issue_type":"task"},
-			{"id":"ar-working","title":"Work in progress","status":"in_progress","priority":4,"issue_type":"task"},
-			{"id":"ar-blocked","title":"Blocked task","status":"open","priority":2,"issue_type":"task","dependencies":[{"id":"ar-dep","dependency_type":"blocks"}]},
-			{"id":"ar-review","title":"Review task","status":"in_progress","priority":3,"issue_type":"task","metadata":{"orpheus.pr_url":"https://example.test/pr/3"}},
-			{"id":"ar-missing","title":"Needs inspection","status":"open","priority":4,"issue_type":"task","dependencies":[{"id":"ar-gone","dependency_type":"blocks"}]},
+			{"id":"ar-idle","title":"Idle without run","status":"in_progress","priority":4,"issue_type":"task"},
+			{"id":"ar-running","title":"Running attached agent","status":"in_progress","priority":2,"issue_type":"task"},
+			{"id":"ar-failed","title":"Failed attached agent","status":"in_progress","priority":2,"issue_type":"task"},
+			{"id":"ar-succeeded","title":"Succeeded attached agent","status":"in_progress","priority":3,"issue_type":"task"},
+			{
+				"id":"ar-blocked",
+				"title":"Blocked task",
+				"status":"open",
+				"priority":2,
+				"issue_type":"task",
+				"dependencies":[{"id":"ar-dep","dependency_type":"blocks"}]
+			},
+			{
+				"id":"ar-review",
+				"title":"Review task",
+				"status":"open",
+				"priority":3,
+				"issue_type":"task",
+				"metadata":{"orpheus.pr_url":"https://example.test/pr/3"}
+			},
+			{
+				"id":"ar-missing",
+				"title":"Needs inspection",
+				"status":"open",
+				"priority":4,
+				"issue_type":"task",
+				"dependencies":[{"id":"ar-gone","dependency_type":"blocks"}]
+			},
 			{"id":"ar-closed","title":"Closed task","status":"closed","priority":1,"issue_type":"task"},
 			{"id":"ar-bug","title":"Bug item","status":"open","priority":1,"issue_type":"bug"}
 		]`,
@@ -58,7 +94,15 @@ func TestStatusGroupsLocalTaskSnapshots(t *testing.T) {
 	is.Empty(stderr)
 	for _, want := range []string{
 		"Ready to run (3)", "Alpha Repo", "ar-ready", "Ready task", "ar-dep", "Open dependency", "ar-bug", "Bug item",
-		"Working (1)", "ar-working", "Work in progress",
+		"Failed / needs retry (1)", "ar-failed", "Failed attached agent", "run attempt 1 failed",
+		"Working (1)", "ar-running", "Running attached agent", "run attempt 1 is running",
+		"Idle (2)",
+		"ar-idle",
+		"Idle without run",
+		"no attached run recorded",
+		"ar-succeeded",
+		"Succeeded attached agent",
+		"does not infer implementation completion",
 		"In review (1)", "ar-review", "Review task", "https://example.test/pr/3",
 		"Unknown / needs attention (1)", "ar-missing", "Needs inspection", "missing dependency ar-gone",
 	} {
@@ -70,16 +114,13 @@ func TestStatusGroupsLocalTaskSnapshots(t *testing.T) {
 
 	assertStatusGroupOrder(t, stdout, []string{
 		"Unknown / needs attention",
-		"In review",
+		"Failed / needs retry",
 		"Working",
+		"Idle",
+		"In review",
 		"Ready to run",
 	})
-	for _, section := range []string{
-		statusSection(t, stdout, "Working", "Ready to run"),
-		statusSection(t, stdout, "Ready to run", ""),
-	} {
-		is.NotContains(section, "DETAIL")
-	}
+	is.NotContains(statusSection(t, stdout, "Ready to run", ""), "DETAIL")
 
 	fullStdout, fullStderr := executeCommand(t, []string{"status", "--full"})
 	is.Empty(fullStderr)
@@ -92,14 +133,15 @@ func TestStatusGroupsLocalTaskSnapshots(t *testing.T) {
 	is.NotContains(fullStdout, "STATUS")
 	assertStatusGroupOrder(t, fullStdout, []string{
 		"Unknown / needs attention",
-		"In review",
+		"Failed / needs retry",
 		"Working",
+		"Idle",
+		"In review",
 		"Ready to run",
 		"Blocked",
 		"Done / closed",
 	})
 	for _, section := range []string{
-		statusSection(t, fullStdout, "Working", "Ready to run"),
 		statusSection(t, fullStdout, "Ready to run", "Blocked"),
 		statusSection(t, fullStdout, "Done / closed", ""),
 	} {
@@ -117,7 +159,7 @@ func TestStatusGroupsLocalTaskSnapshots(t *testing.T) {
 	is.NotContains(log, "gh ")
 }
 
-func TestStatusAndTaskReadyUseLatestRunningAttemptAsNeedsAttention(t *testing.T) {
+func TestStatusAndTaskReadyUseLocalRunHistoryOnOpenTaskAsNeedsAttention(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -150,7 +192,7 @@ func TestStatusAndTaskReadyUseLatestRunningAttemptAsNeedsAttention(t *testing.T)
 	is.Empty(stderr)
 	is.Contains(stdout, "Unknown / needs attention (1)")
 	is.Contains(stdout, "ar-running")
-	is.Contains(stdout, "M3 cannot verify whether the attached process is still alive")
+	is.Contains(stdout, "backend status is open but local run attempt 1 is running")
 	is.Contains(stdout, "Ready to run (1)")
 	is.Contains(stdout, "ar-ready")
 
@@ -185,9 +227,17 @@ func TestStatusReportsRepoFailuresInUnknownGroupAndReturnsError(t *testing.T) {
 			exitCode: 7,
 		},
 		{
-			dir:    okDir,
-			args:   "--json --readonly --sandbox list --all --limit 0",
-			stdout: `[{"id":"ok-1","title":"Ready despite another repo failure","status":"open","priority":1,"issue_type":"task"}]`,
+			dir:  okDir,
+			args: "--json --readonly --sandbox list --all --limit 0",
+			stdout: `[
+				{
+					"id":"ok-1",
+					"title":"Ready despite another repo failure",
+					"status":"open",
+					"priority":1,
+					"issue_type":"task"
+				}
+			]`,
 		},
 	})
 

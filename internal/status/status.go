@@ -10,27 +10,33 @@ import (
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
-// GroupID identifies an M2 local status projection group.
+// GroupID identifies an M3 local status projection group.
 type GroupID string
 
 const (
-	// GroupReadyToRun contains items Orpheus' local readiness policy considers ready.
-	GroupReadyToRun GroupID = "ready_to_run"
+	// GroupUnknown contains items or repo diagnostics Orpheus cannot classify confidently.
+	GroupUnknown GroupID = "unknown_needs_attention"
 
-	// GroupWorking contains non-closed in-progress items without a local PR URL.
+	// GroupFailedNeedsRetry contains in-progress items whose latest attached run failed.
+	GroupFailedNeedsRetry GroupID = "failed_needs_retry"
+
+	// GroupWorking contains in-progress items with a currently running attached run.
 	GroupWorking GroupID = "working"
 
-	// GroupBlocked contains items with locally visible open blocking dependencies.
-	GroupBlocked GroupID = "blocked"
+	// GroupIdle contains in-progress items with no active attached run.
+	GroupIdle GroupID = "idle"
 
 	// GroupInReview contains non-closed items with a local Orpheus PR URL metadata value.
 	GroupInReview GroupID = "in_review"
 
+	// GroupReadyToRun contains items Orpheus' local readiness policy considers ready.
+	GroupReadyToRun GroupID = "ready_to_run"
+
+	// GroupBlocked contains items with locally visible open blocking dependencies.
+	GroupBlocked GroupID = "blocked"
+
 	// GroupDoneClosed contains closed backend items.
 	GroupDoneClosed GroupID = "done_closed"
-
-	// GroupUnknown contains items or repo diagnostics M2 cannot classify confidently.
-	GroupUnknown GroupID = "unknown_needs_attention"
 )
 
 // EntryKind identifies whether a projected status entry is a task or a repository diagnostic.
@@ -62,7 +68,7 @@ type Group struct {
 	Entries []Entry
 }
 
-// Projection is the M2 local-only action-queue view.
+// Projection is the M3 local action-queue view.
 type Projection struct {
 	Groups []Group
 }
@@ -74,7 +80,9 @@ type readinessState string
 
 const (
 	readinessReady   readinessState = "ready"
+	readinessFailed  readinessState = "failed"
 	readinessWorking readinessState = "working"
+	readinessIdle    readinessState = "idle"
 	readinessBlocked readinessState = "blocked"
 	readinessReview  readinessState = "in_review"
 	readinessDone    readinessState = "done"
@@ -86,7 +94,7 @@ type policyResult struct {
 	detail string
 }
 
-// Project builds the local-only M2 status projection from task aggregation snapshots.
+// Project builds the local-only status projection from task aggregation snapshots.
 func Project(snapshot task.SnapshotResult) Projection {
 	return ProjectWithRunStates(snapshot, nil)
 }
@@ -95,8 +103,10 @@ func Project(snapshot task.SnapshotResult) Projection {
 func ProjectWithRunStates(snapshot task.SnapshotResult, runStates RunStateIndex) Projection {
 	projection := Projection{Groups: []Group{
 		{ID: GroupUnknown, Title: "Unknown / needs attention"},
-		{ID: GroupInReview, Title: "In review"},
+		{ID: GroupFailedNeedsRetry, Title: "Failed / needs retry"},
 		{ID: GroupWorking, Title: "Working"},
+		{ID: GroupIdle, Title: "Idle"},
+		{ID: GroupInReview, Title: "In review"},
 		{ID: GroupReadyToRun, Title: "Ready to run"},
 		{ID: GroupBlocked, Title: "Blocked"},
 		{ID: GroupDoneClosed, Title: "Done / closed"},
@@ -116,13 +126,14 @@ func ReadyRows(snapshot task.SnapshotResult) []task.RepoTask {
 	return ReadyRowsWithRunStates(snapshot, nil)
 }
 
-// ReadyRowsWithRunStates returns ready rows while respecting active M3 run attempts.
+// ReadyRowsWithRunStates returns ready rows while respecting local M3 run history.
 func ReadyRowsWithRunStates(snapshot task.SnapshotResult, runStates RunStateIndex) []task.RepoTask {
 	rows := make([]task.RepoTask, 0)
 	for _, repoSnapshot := range snapshot.Repositories {
 		index := newRepositoryIndex(repoSnapshot.Tasks)
 		for _, taskItem := range repoSnapshot.Tasks {
-			if classify(taskItem, index, latestRunFor(runStates, repoSnapshot.Repository.ID, taskItem.ID)).state != readinessReady {
+			latestRun := latestRunFor(runStates, repoSnapshot.Repository.ID, taskItem.ID)
+			if classify(taskItem, index, latestRun).state != readinessReady {
 				continue
 			}
 			rows = append(rows, task.RepoTask{
@@ -152,17 +163,14 @@ func classify(taskItem task.Task, index map[string]task.Task, latestRun *tasksta
 	if taskItem.Status == task.StatusClosed {
 		return policyResult{state: readinessDone, detail: "closed"}
 	}
+	if taskItem.Status == task.StatusInProgress {
+		return classifyInProgress(latestRun)
+	}
+	if taskItem.Status == task.StatusOpen && latestRun != nil {
+		return policyResult{state: readinessUnknown, detail: openTaskRunHistoryDetail(*latestRun)}
+	}
 	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
 		return policyResult{state: readinessReview, detail: metadata.PRURL}
-	}
-	if latestRun != nil && latestRun.Status == taskstate.RunStatusRunning {
-		return policyResult{
-			state:  readinessUnknown,
-			detail: fmt.Sprintf("run attempt %d is running; M3 cannot verify whether the attached process is still alive", latestRun.Attempt),
-		}
-	}
-	if taskItem.Status == task.StatusInProgress {
-		return policyResult{state: readinessWorking, detail: "-"}
 	}
 
 	deps := dependencyIDs(taskItem)
@@ -178,7 +186,51 @@ func classify(taskItem task.Task, index map[string]task.Task, latestRun *tasksta
 	if taskItem.Status == task.StatusOpen {
 		return policyResult{state: readinessReady, detail: "-"}
 	}
-	return policyResult{state: readinessUnknown, detail: fmt.Sprintf("status %s is not locally actionable in M2", formatStatus(taskItem.Status))}
+	return policyResult{
+		state:  readinessUnknown,
+		detail: fmt.Sprintf("status %s is not locally actionable", formatStatus(taskItem.Status)),
+	}
+}
+
+func classifyInProgress(latestRun *taskstate.RunAttempt) policyResult {
+	if latestRun == nil {
+		return policyResult{state: readinessIdle, detail: "no attached run recorded"}
+	}
+
+	switch latestRun.Status {
+	case taskstate.RunStatusRunning:
+		return policyResult{state: readinessWorking, detail: runAttemptDetail(*latestRun)}
+	case taskstate.RunStatusFailed:
+		return policyResult{state: readinessFailed, detail: runAttemptDetail(*latestRun)}
+	case taskstate.RunStatusSucceeded:
+		return policyResult{
+			state:  readinessIdle,
+			detail: fmt.Sprintf("%s; M3 does not infer implementation completion", runAttemptDetail(*latestRun)),
+		}
+	default:
+		return policyResult{state: readinessUnknown, detail: runAttemptDetail(*latestRun)}
+	}
+}
+
+func openTaskRunHistoryDetail(latestRun taskstate.RunAttempt) string {
+	return fmt.Sprintf("backend status is open but local %s", runAttemptDetail(latestRun))
+}
+
+func runAttemptDetail(run taskstate.RunAttempt) string {
+	switch run.Status {
+	case taskstate.RunStatusRunning:
+		return fmt.Sprintf("run attempt %d is running", run.Attempt)
+	case taskstate.RunStatusFailed:
+		return fmt.Sprintf("run attempt %d failed", run.Attempt)
+	case taskstate.RunStatusSucceeded:
+		return fmt.Sprintf("run attempt %d succeeded", run.Attempt)
+	default:
+		statusText := strings.TrimSpace(string(run.Status))
+		if statusText == "" {
+			statusText = "unknown"
+		}
+		return fmt.Sprintf("run attempt %d has status %s", run.Attempt, statusText)
+	}
 }
 
 func latestRunFor(runStates RunStateIndex, repoID string, taskID string) *taskstate.RunAttempt {
@@ -253,8 +305,12 @@ func groupForState(state readinessState) GroupID {
 	switch state {
 	case readinessReady:
 		return GroupReadyToRun
+	case readinessFailed:
+		return GroupFailedNeedsRetry
 	case readinessWorking:
 		return GroupWorking
+	case readinessIdle:
+		return GroupIdle
 	case readinessBlocked:
 		return GroupBlocked
 	case readinessReview:

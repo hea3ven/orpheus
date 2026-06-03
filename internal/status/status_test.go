@@ -2,6 +2,7 @@ package status_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/status"
@@ -9,18 +10,36 @@ import (
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
-func TestProjectGroupsItemsByLocalM2Policy(t *testing.T) {
+func TestProjectGroupsItemsByLocalM3Policy(t *testing.T) {
 	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
 		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"},
 		Tasks: []task.Task{
 			{ID: "a-ready", Title: "ready", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
 			{ID: "a-dep", Title: "dependency", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
-			{ID: "a-blocked", Title: "blocked", Status: task.StatusOpen, IssueType: task.IssueTypeTask, Relations: task.RelationSummary{DependencyIDs: []string{"a-dep"}}},
+			{
+				ID:        "a-blocked",
+				Title:     "blocked",
+				Status:    task.StatusOpen,
+				IssueType: task.IssueTypeTask,
+				Relations: task.RelationSummary{DependencyIDs: []string{"a-dep"}},
+			},
 			{ID: "a-epic-ready", Title: "epic ready", Status: task.StatusOpen, IssueType: task.IssueTypeEpic},
-			{ID: "a-epic-blocked", Title: "epic blocked", Status: task.StatusOpen, IssueType: task.IssueTypeEpic, Relations: task.RelationSummary{DependencyIDs: []string{"a-dep"}}},
-			{ID: "a-review", Title: "review", Status: task.StatusInProgress, IssueType: task.IssueTypeTask, Metadata: task.Metadata{task.MetadataPRURL: "https://example.test/pr/1"}},
-			{ID: "a-working", Title: "working", Status: task.StatusInProgress, IssueType: task.IssueTypeTask},
-			{ID: "a-epic-working", Title: "epic working", Status: task.StatusInProgress, IssueType: task.IssueTypeEpic},
+			{
+				ID:        "a-epic-blocked",
+				Title:     "epic blocked",
+				Status:    task.StatusOpen,
+				IssueType: task.IssueTypeEpic,
+				Relations: task.RelationSummary{DependencyIDs: []string{"a-dep"}},
+			},
+			{
+				ID:        "a-review",
+				Title:     "review",
+				Status:    task.StatusOpen,
+				IssueType: task.IssueTypeTask,
+				Metadata:  task.Metadata{task.MetadataPRURL: "https://example.test/pr/1"},
+			},
+			{ID: "a-idle", Title: "idle", Status: task.StatusInProgress, IssueType: task.IssueTypeTask},
+			{ID: "a-epic-idle", Title: "epic idle", Status: task.StatusInProgress, IssueType: task.IssueTypeEpic},
 			{ID: "a-done", Title: "done", Status: task.StatusClosed, IssueType: task.IssueTypeTask},
 			{ID: "a-epic-done", Title: "epic done", Status: task.StatusClosed, IssueType: task.IssueTypeEpic},
 			{ID: "a-unknown", Title: "unknown", Status: task.StatusUnknown, IssueType: task.IssueTypeTask},
@@ -29,8 +48,20 @@ func TestProjectGroupsItemsByLocalM2Policy(t *testing.T) {
 
 	got := status.Project(snapshot)
 
+	assertProjectionGroupOrder(t, got, []status.GroupID{
+		status.GroupUnknown,
+		status.GroupFailedNeedsRetry,
+		status.GroupWorking,
+		status.GroupIdle,
+		status.GroupInReview,
+		status.GroupReadyToRun,
+		status.GroupBlocked,
+		status.GroupDoneClosed,
+	})
 	assertGroupTaskIDs(t, got, status.GroupReadyToRun, []string{"a-ready", "a-dep", "a-epic-ready"})
-	assertGroupTaskIDs(t, got, status.GroupWorking, []string{"a-working", "a-epic-working"})
+	assertGroupTaskIDs(t, got, status.GroupFailedNeedsRetry, nil)
+	assertGroupTaskIDs(t, got, status.GroupWorking, nil)
+	assertGroupTaskIDs(t, got, status.GroupIdle, []string{"a-idle", "a-epic-idle"})
 	assertGroupTaskIDs(t, got, status.GroupBlocked, []string{"a-blocked", "a-epic-blocked"})
 	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-review"})
 	assertGroupTaskIDs(t, got, status.GroupDoneClosed, []string{"a-done", "a-epic-done"})
@@ -44,25 +75,67 @@ func TestProjectGroupsItemsByLocalM2Policy(t *testing.T) {
 	if blockedEntry.Detail != "blocked by a-dep" {
 		t.Fatalf("blocked detail = %q, want dependency detail", blockedEntry.Detail)
 	}
+	idleEntry := groupEntries(t, got, status.GroupIdle)[0]
+	if idleEntry.Detail != "no attached run recorded" {
+		t.Fatalf("idle detail = %q, want no-run detail", idleEntry.Detail)
+	}
 }
 
-func TestProjectWithRunStatesTreatsLatestRunningAttemptAsNeedsAttention(t *testing.T) {
+func TestProjectWithRunStatesClassifiesLatestAttachedAttempts(t *testing.T) {
 	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
 		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"},
 		Tasks: []task.Task{
-			{ID: "a-running", Title: "running", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
+			{ID: "a-running", Title: "running", Status: task.StatusInProgress, IssueType: task.IssueTypeTask},
+			{ID: "a-failed", Title: "failed", Status: task.StatusInProgress, IssueType: task.IssueTypeTask},
+			{ID: "a-idle-succeeded", Title: "succeeded", Status: task.StatusInProgress, IssueType: task.IssueTypeTask},
+			{ID: "a-idle-no-run", Title: "no run", Status: task.StatusInProgress, IssueType: task.IssueTypeTask},
+			{ID: "a-open-history", Title: "open history", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
 			{ID: "a-ready", Title: "ready", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
 		},
 	}}}
 	runStates := status.RunStateIndex{
-		status.RunStateKey("alpha", "a-running"): {Attempt: 2, Status: taskstate.RunStatusRunning},
+		status.RunStateKey("alpha", "a-running"):        {Attempt: 2, Status: taskstate.RunStatusRunning},
+		status.RunStateKey("alpha", "a-failed"):         {Attempt: 3, Status: taskstate.RunStatusFailed},
+		status.RunStateKey("alpha", "a-idle-succeeded"): {Attempt: 4, Status: taskstate.RunStatusSucceeded},
+		status.RunStateKey("alpha", "a-open-history"):   {Attempt: 1, Status: taskstate.RunStatusFailed},
 	}
 
 	got := status.ProjectWithRunStates(snapshot, runStates)
 
+	working := groupEntries(t, got, status.GroupWorking)
+	if len(working) != 1 || working[0].Task.ID != "a-running" || working[0].Detail != "run attempt 2 is running" {
+		t.Fatalf("working entries = %#v, want running attempt detail", working)
+	}
+	failed := groupEntries(t, got, status.GroupFailedNeedsRetry)
+	if len(failed) != 1 || failed[0].Task.ID != "a-failed" || failed[0].Detail != "run attempt 3 failed" {
+		t.Fatalf("failed entries = %#v, want failed attempt detail", failed)
+	}
+	idle := groupEntries(t, got, status.GroupIdle)
+	if len(idle) != 2 || idle[0].Task.ID != "a-idle-succeeded" || idle[1].Task.ID != "a-idle-no-run" {
+		t.Fatalf("idle entries = %#v, want succeeded and no-run tasks", idle)
+	}
+	hasSucceededAttempt := strings.Contains(idle[0].Detail, "run attempt 4 succeeded")
+	hasNonInferenceDetail := strings.Contains(
+		idle[0].Detail,
+		"does not infer implementation completion",
+	)
+	if !hasSucceededAttempt || !hasNonInferenceDetail {
+		t.Fatalf("succeeded idle detail = %q, want non-inference detail", idle[0].Detail)
+	}
+	if idle[1].Detail != "no attached run recorded" {
+		t.Fatalf("no-run idle detail = %q, want no-run detail", idle[1].Detail)
+	}
 	unknown := groupEntries(t, got, status.GroupUnknown)
-	if len(unknown) != 1 || unknown[0].Task.ID != "a-running" || unknown[0].Detail == "-" {
-		t.Fatalf("unknown entries = %#v, want running attempt detail", unknown)
+	hasOpenStatusDetail := len(unknown) == 1 && strings.Contains(
+		unknown[0].Detail,
+		"backend status is open",
+	)
+	hasFailedRunDetail := len(unknown) == 1 && strings.Contains(
+		unknown[0].Detail,
+		"run attempt 1 failed",
+	)
+	if len(unknown) != 1 || unknown[0].Task.ID != "a-open-history" || !hasOpenStatusDetail || !hasFailedRunDetail {
+		t.Fatalf("unknown entries = %#v, want open task run-history detail", unknown)
 	}
 	assertGroupTaskIDs(t, got, status.GroupReadyToRun, []string{"a-ready"})
 
@@ -77,7 +150,13 @@ func TestProjectTreatsSameRepoClosedDependenciesAsReady(t *testing.T) {
 		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"},
 		Tasks: []task.Task{
 			{ID: "a-dep", Title: "done dependency", Status: task.StatusClosed, IssueType: task.IssueTypeTask},
-			{ID: "a-ready", Title: "ready", Status: task.StatusOpen, IssueType: task.IssueTypeTask, Relations: task.RelationSummary{DependencyIDs: []string{"a-dep"}}},
+			{
+				ID:        "a-ready",
+				Title:     "ready",
+				Status:    task.StatusOpen,
+				IssueType: task.IssueTypeTask,
+				Relations: task.RelationSummary{DependencyIDs: []string{"a-dep"}},
+			},
 		},
 	}}}
 
@@ -90,7 +169,13 @@ func TestProjectTreatsSameRepoClosedDependenciesAsReady(t *testing.T) {
 func TestProjectTreatsMissingDependenciesAsUnknown(t *testing.T) {
 	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
 		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"},
-		Tasks:      []task.Task{{ID: "a-task", Title: "missing dependency", Status: task.StatusOpen, IssueType: task.IssueTypeTask, Relations: task.RelationSummary{DependencyIDs: []string{"a-missing"}}}},
+		Tasks: []task.Task{{
+			ID:        "a-task",
+			Title:     "missing dependency",
+			Status:    task.StatusOpen,
+			IssueType: task.IssueTypeTask,
+			Relations: task.RelationSummary{DependencyIDs: []string{"a-missing"}},
+		}},
 	}}}
 
 	got := status.Project(snapshot)
@@ -111,9 +196,15 @@ func TestReadyRowsUsesCanonicalReadinessPolicyForEligibleIssueTypes(t *testing.T
 			{ID: "a-chore", Title: "chore", Status: task.StatusOpen, IssueType: task.IssueTypeChore},
 			{ID: "a-unknown-type", Title: "unknown type", Status: task.StatusOpen, IssueType: task.IssueTypeUnknown},
 			{ID: "a-epic", Title: "epic", Status: task.StatusOpen, IssueType: task.IssueTypeEpic},
-			{ID: "a-epic-working", Title: "epic working", Status: task.StatusInProgress, IssueType: task.IssueTypeEpic},
+			{ID: "a-epic-idle", Title: "epic idle", Status: task.StatusInProgress, IssueType: task.IssueTypeEpic},
 			{ID: "a-epic-done", Title: "epic done", Status: task.StatusClosed, IssueType: task.IssueTypeEpic},
-			{ID: "a-review", Title: "review", Status: task.StatusOpen, IssueType: task.IssueTypeTask, Metadata: task.Metadata{task.MetadataPRURL: "https://example.test/pr/2"}},
+			{
+				ID:        "a-review",
+				Title:     "review",
+				Status:    task.StatusOpen,
+				IssueType: task.IssueTypeTask,
+				Metadata:  task.Metadata{task.MetadataPRURL: "https://example.test/pr/2"},
+			},
 			{ID: "a-started", Title: "started", Status: task.StatusInProgress, IssueType: task.IssueTypeTask},
 			{ID: "a-closed", Title: "closed", Status: task.StatusClosed, IssueType: task.IssueTypeTask},
 		},
@@ -152,8 +243,25 @@ func TestProjectAddsStructuredRepoFailuresToUnknownNeedsAttention(t *testing.T) 
 		t.Fatalf("unknown entries = %#v, want one repo failure", entries)
 	}
 	entry := entries[0]
-	if entry.Kind != status.EntryRepoFailure || entry.Repository.ID != "broken" || entry.Source != "task_backend" || entry.Operation != "snapshot" || !errors.Is(entry.Failure, failureErr) {
+	if entry.Kind != status.EntryRepoFailure ||
+		entry.Repository.ID != "broken" ||
+		entry.Source != "task_backend" ||
+		entry.Operation != "snapshot" ||
+		!errors.Is(entry.Failure, failureErr) {
 		t.Fatalf("unknown entry = %#v, want structured broken repo failure", entry)
+	}
+}
+
+func assertProjectionGroupOrder(t *testing.T, projection status.Projection, expected []status.GroupID) {
+	t.Helper()
+
+	if len(projection.Groups) != len(expected) {
+		t.Fatalf("group count = %d, want %d", len(projection.Groups), len(expected))
+	}
+	for i, groupID := range expected {
+		if projection.Groups[i].ID != groupID {
+			t.Fatalf("group order = %#v, want %s at position %d", projection.Groups, groupID, i)
+		}
 	}
 }
 

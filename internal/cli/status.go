@@ -67,7 +67,10 @@ func runStatus(command *cobra.Command, opts *rootOptions, full bool) error {
 	return nil
 }
 
-func taskRunStateIndex(paths state.Paths, snapshot taskmodel.SnapshotResult) (status.RunStateIndex, []taskmodel.RepoFailure) {
+func taskRunStateIndex(
+	paths state.Paths,
+	snapshot taskmodel.SnapshotResult,
+) (status.RunStateIndex, []taskmodel.RepoFailure) {
 	store := taskstate.Service(taskstate.NewStore(paths))
 	index := status.RunStateIndex{}
 	failures := make([]taskmodel.RepoFailure, 0)
@@ -169,7 +172,11 @@ func renderStatusTaskEntry(writer interface{ Write([]byte) (int, error) }, entry
 	return err
 }
 
-func renderStatusFailureEntry(writer interface{ Write([]byte) (int, error) }, entry status.Entry, showDetail bool) error {
+func renderStatusFailureEntry(
+	writer interface{ Write([]byte) (int, error) },
+	entry status.Entry,
+	showDetail bool,
+) error {
 	detail := entry.Detail
 	if detail == "" && entry.Failure != nil {
 		detail = entry.Failure.Error()
@@ -216,7 +223,7 @@ func statusGroupHiddenByDefault(groupID status.GroupID) bool {
 
 func statusGroupShowsDetail(groupID status.GroupID) bool {
 	switch groupID {
-	case status.GroupReadyToRun, status.GroupWorking, status.GroupDoneClosed:
+	case status.GroupReadyToRun, status.GroupDoneClosed:
 		return false
 	default:
 		return true
