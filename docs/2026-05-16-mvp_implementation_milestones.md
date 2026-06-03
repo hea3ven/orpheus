@@ -242,6 +242,8 @@ Success criteria:
 - Logs are available.
 - Re-running after a failed dummy run reuses the same worktree.
 
+Validation notes: [M3 Interactive Single Task Dispatch Validation](./2026-06-03-m3_interactive_single_task_dispatch_validation.md).
+
 ---
 
 ## Milestone 4 — Agent Context + Completion + Orpheus Commit
