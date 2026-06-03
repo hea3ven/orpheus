@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
@@ -96,18 +97,22 @@ func newTaskShowCommand(opts *rootOptions) *cobra.Command {
 
 func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 	var agentName string
+	var mainMode bool
 	cmd := &cobra.Command{
 		Use:   "run <task-id>",
 		Short: "Run an attached agent for a task",
 		Long: "Run an attached agent for a task.\n\n" +
-			"Orpheus prepares a deterministic task branch and worktree, records " +
-			"the attached run attempt, then runs the configured agent there.",
+			"By default, Orpheus prepares a deterministic task branch and worktree, " +
+			"records the attached run attempt, then runs the configured agent there. " +
+			"Use --main to run explicitly from the registered repo root on the " +
+			"registered default branch for local/manual review workflows.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
-			return runTaskRun(command, opts, args[0], agentName)
+			return runTaskRun(command, opts, args[0], agentName, mainMode)
 		},
 	}
 	cmd.Flags().StringVar(&agentName, "agent", "", "agent profile name to use instead of default_agent")
+	cmd.Flags().BoolVar(&mainMode, "main", false, "run from the registered repo root on the registered default branch")
 	return cmd
 }
 
@@ -212,7 +217,7 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 	})
 }
 
-func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentName string) error {
+func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentName string, mainMode bool) error {
 	logger := opts.log().With(
 		slog.String("component", "cli"),
 		slog.String("operation", "task_run"),
@@ -256,6 +261,7 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentN
 		repo:      repo,
 		backend:   taskBackend,
 		agentName: agentName,
+		mainMode:  mainMode,
 	})
 	if err != nil {
 		return fmt.Errorf("task run %s: %w", resolved.TaskID, err)
@@ -309,8 +315,14 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentN
 type taskRunStartOptions struct {
 	resolved  taskmodel.ResolvedTaskSource
 	repo      registry.Repo
-	backend   taskmodel.DispatchBackend
+	backend   taskRunBackend
 	agentName string
+	mainMode  bool
+}
+
+type taskRunBackend interface {
+	taskmodel.DispatchBackend
+	List(ctx context.Context) ([]taskmodel.Task, error)
 }
 
 type taskRunStartResult struct {
@@ -345,20 +357,17 @@ func startTaskRunAttempt(
 			return activeTaskRunError(taskStateStore, opts.repo.ID, opts.resolved.TaskID, active)
 		}
 
-		worktreeOpts := gitmeta.TaskWorktreeOptions{
-			RepoID:        opts.repo.ID,
-			RepoName:      opts.repo.Name,
-			RepoPath:      opts.repo.Path,
-			DefaultBranch: opts.repo.DefaultBranch,
-			TaskID:        opts.resolved.TaskID,
-			Paths:         paths,
-		}
-		expected, err := gitmeta.ExpectedTaskWorktree(worktreeOpts)
+		expected, err := expectedTaskRunSetup(paths, opts)
 		if err != nil {
 			return err
 		}
-		if err := ensureTaskRunEligible(taskItem, expected); err != nil {
+		if err := ensureTaskRunEligible(taskItem, expected, opts.repo, opts.mainMode); err != nil {
 			return err
+		}
+		if opts.mainMode {
+			if err := ensureRepoRootRunAvailable(command.Context(), opts.backend, opts.repo, opts.resolved.TaskID, expected); err != nil {
+				return err
+			}
 		}
 
 		executionDir := expected.WorktreePath
@@ -372,6 +381,7 @@ func startTaskRunAttempt(
 			ExecutionDir:           executionDir,
 			WorktreePath:           expected.WorktreePath,
 			Branch:                 expected.Branch,
+			RepoRootMode:           opts.mainMode,
 		})
 		agentConfig, err := agent.LoadConfig(paths)
 		if err != nil {
@@ -382,7 +392,7 @@ func startTaskRunAttempt(
 			return fmt.Errorf("resolve agent profile: %w", err)
 		}
 
-		setup, err := gitmeta.SetupTaskWorktree(command.Context(), worktreeOpts)
+		setup, err := setupTaskRunTarget(command.Context(), paths, opts)
 		if err != nil {
 			return err
 		}
@@ -437,7 +447,41 @@ func startTaskRunAttempt(
 	return result, nil
 }
 
-func ensureTaskRunEligible(taskItem taskmodel.Task, expected gitmeta.TaskWorktreeSetupResult) error {
+func expectedTaskRunSetup(paths state.Paths, opts taskRunStartOptions) (gitmeta.TaskWorktreeSetupResult, error) {
+	if opts.mainMode {
+		return gitmeta.ExpectedRepoRoot(repoRootOptions(opts.repo))
+	}
+	return gitmeta.ExpectedTaskWorktree(taskWorktreeOptions(paths, opts.repo, opts.resolved.TaskID))
+}
+
+func setupTaskRunTarget(ctx context.Context, paths state.Paths, opts taskRunStartOptions) (gitmeta.TaskWorktreeSetupResult, error) {
+	if opts.mainMode {
+		return gitmeta.SetupRepoRoot(ctx, repoRootOptions(opts.repo))
+	}
+	return gitmeta.SetupTaskWorktree(ctx, taskWorktreeOptions(paths, opts.repo, opts.resolved.TaskID))
+}
+
+func taskWorktreeOptions(paths state.Paths, repo registry.Repo, taskID string) gitmeta.TaskWorktreeOptions {
+	return gitmeta.TaskWorktreeOptions{
+		RepoID:        repo.ID,
+		RepoName:      repo.Name,
+		RepoPath:      repo.Path,
+		DefaultBranch: repo.DefaultBranch,
+		TaskID:        taskID,
+		Paths:         paths,
+	}
+}
+
+func repoRootOptions(repo registry.Repo) gitmeta.RepoRootOptions {
+	return gitmeta.RepoRootOptions{
+		RepoID:        repo.ID,
+		RepoName:      repo.Name,
+		RepoPath:      repo.Path,
+		DefaultBranch: repo.DefaultBranch,
+	}
+}
+
+func ensureTaskRunEligible(taskItem taskmodel.Task, expected gitmeta.TaskWorktreeSetupResult, repo registry.Repo, mainMode bool) error {
 	metadata := taskItem.OrpheusMetadata()
 	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
 		return fmt.Errorf("task %s is not eligible for dispatch: %s is already set", taskItem.ID, taskmodel.MetadataPRURL)
@@ -445,14 +489,26 @@ func ensureTaskRunEligible(taskItem taskmodel.Task, expected gitmeta.TaskWorktre
 
 	switch taskItem.Status {
 	case taskmodel.StatusOpen:
+		if !mainMode && taskRunMetadataMatchesRepoRoot(metadata, repo) {
+			return repoRootRetryRequiresMainError(taskItem.ID, metadata)
+		}
 		return nil
 	case taskmodel.StatusInProgress:
 		if taskRunMetadataMatches(metadata, expected) {
 			return nil
 		}
+		if !mainMode && taskRunMetadataMatchesRepoRoot(metadata, repo) {
+			return repoRootRetryRequiresMainError(taskItem.ID, metadata)
+		}
+
+		target := "the deterministic Orpheus branch/worktree"
+		if mainMode {
+			target = "the registered default branch/repo root"
+		}
 		return fmt.Errorf(
-			"task %s is in_progress but is not tied to the deterministic Orpheus branch/worktree: %s",
+			"task %s is in_progress but is not tied to %s: %s",
 			taskItem.ID,
+			target,
 			taskRunMetadataMismatchDetail(metadata, expected),
 		)
 	case taskmodel.StatusClosed:
@@ -466,9 +522,72 @@ func ensureTaskRunEligible(taskItem taskmodel.Task, expected gitmeta.TaskWorktre
 	}
 }
 
+func repoRootRetryRequiresMainError(taskID string, metadata taskmodel.OrpheusMetadata) error {
+	return fmt.Errorf(
+		"task %s is tied to repo-root/default-branch metadata (%s=%q, %s=%q); retry with `orpheus task run --main %s`",
+		taskID,
+		taskmodel.MetadataBranch,
+		metadata.Branch,
+		taskmodel.MetadataWorktree,
+		metadata.Worktree,
+		taskID,
+	)
+}
+
 func taskRunMetadataMatches(metadata taskmodel.OrpheusMetadata, expected gitmeta.TaskWorktreeSetupResult) bool {
 	return metadata.HasBranch && strings.TrimSpace(metadata.Branch) == expected.Branch &&
-		metadata.HasWorktree && strings.TrimSpace(metadata.Worktree) == expected.WorktreePath
+		metadata.HasWorktree && cleanTaskRunPath(metadata.Worktree) == cleanTaskRunPath(expected.WorktreePath)
+}
+
+func taskRunMetadataMatchesRepoRoot(metadata taskmodel.OrpheusMetadata, repo registry.Repo) bool {
+	defaultBranch := strings.TrimSpace(repo.DefaultBranch)
+	repoPath := cleanTaskRunPath(repo.Path)
+	if defaultBranch == "" || repoPath == "" {
+		return false
+	}
+	return metadata.HasBranch && strings.TrimSpace(metadata.Branch) == defaultBranch &&
+		metadata.HasWorktree && cleanTaskRunPath(metadata.Worktree) == repoPath
+}
+
+func ensureRepoRootRunAvailable(
+	ctx context.Context,
+	backend taskRunBackend,
+	repo registry.Repo,
+	currentTaskID string,
+	expected gitmeta.TaskWorktreeSetupResult,
+) error {
+	tasks, err := backend.List(ctx)
+	if err != nil {
+		return fmt.Errorf("inspect repo-root/default-branch ownership: %w", err)
+	}
+
+	for _, taskItem := range tasks {
+		if strings.TrimSpace(taskItem.ID) == currentTaskID || taskItem.Status == taskmodel.StatusClosed {
+			continue
+		}
+		if !taskRunMetadataMatches(taskItem.OrpheusMetadata(), expected) {
+			continue
+		}
+		return fmt.Errorf(
+			"repo %s (%s) already has non-closed task %s owning repo-root/default-branch metadata (%s=%q, %s=%q); finish local review or clear that metadata before running another task with --main",
+			repo.ID,
+			repo.Name,
+			taskItem.ID,
+			taskmodel.MetadataBranch,
+			expected.Branch,
+			taskmodel.MetadataWorktree,
+			expected.WorktreePath,
+		)
+	}
+	return nil
+}
+
+func cleanTaskRunPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	return filepath.Clean(path)
 }
 
 func taskRunMetadataMismatchDetail(metadata taskmodel.OrpheusMetadata, expected gitmeta.TaskWorktreeSetupResult) string {
@@ -715,9 +834,11 @@ func taskRepositorySources(store registry.Store, reg registry.Registry) ([]taskm
 		}
 		sources = append(sources, taskmodel.RepositorySource{
 			Repository: taskmodel.Repository{
-				ID:           repo.ID,
-				Name:         repo.Name,
-				TaskIDPrefix: repo.BeadsPrefix,
+				ID:            repo.ID,
+				Name:          repo.Name,
+				TaskIDPrefix:  repo.BeadsPrefix,
+				Path:          repo.Path,
+				DefaultBranch: repo.DefaultBranch,
 			},
 			BackendDir: beadsDir,
 		})

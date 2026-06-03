@@ -161,6 +161,80 @@ func TestSetupTaskWorktreeRefusesWorktreeFromUnexpectedRepository(t *testing.T) 
 	}
 }
 
+func TestSetupRepoRootSwitchesToDefaultBranchAndFastForwards(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	pushRemoteCommit(t, repoPath, "origin.txt", "from origin")
+	runGit(t, repoPath, "checkout", "-b", "feature/local")
+
+	got, err := orpheusgit.SetupRepoRoot(context.Background(), orpheusgit.RepoRootOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("setup repo root: %v", err)
+	}
+
+	if got.Branch != "main" || got.WorktreePath != repoPath || got.Lifecycle != orpheusgit.TaskWorktreeLifecycleReused {
+		t.Fatalf("setup result = %#v, want main/repo root/reused", got)
+	}
+	assertGitBranch(t, repoPath, "main")
+	if _, err := os.Stat(filepath.Join(repoPath, "origin.txt")); err != nil {
+		t.Fatalf("repo root was not fast-forwarded from origin: %v", err)
+	}
+}
+
+func TestSetupRepoRootRefusesDirtyRepoBeforeSwitching(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	runGit(t, repoPath, "checkout", "-b", "feature/local")
+	if err := os.WriteFile(filepath.Join(repoPath, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+
+	_, err := orpheusgit.SetupRepoRoot(context.Background(), orpheusgit.RepoRootOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+	})
+	if err == nil {
+		t.Fatal("setup repo root succeeded, want dirty checkout error")
+	}
+	if !strings.Contains(err.Error(), "uncommitted changes") {
+		t.Fatalf("error = %v, want uncommitted changes", err)
+	}
+	assertGitBranch(t, repoPath, "feature/local")
+}
+
+func TestSetupRepoRootRefusesDivergentDefaultBranch(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	pushRemoteCommit(t, repoPath, "origin.txt", "from origin")
+	if err := os.WriteFile(filepath.Join(repoPath, "local.txt"), []byte("local"), 0o644); err != nil {
+		t.Fatalf("write local file: %v", err)
+	}
+	runGit(t, repoPath, "add", "local.txt")
+	runGit(t, repoPath,
+		"-c", "user.name=Orpheus Test",
+		"-c", "user.email=orpheus@example.com",
+		"commit", "-m", "local main commit",
+	)
+
+	_, err := orpheusgit.SetupRepoRoot(context.Background(), orpheusgit.RepoRootOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+	})
+	if err == nil {
+		t.Fatal("setup repo root succeeded, want divergent branch error")
+	}
+	if !strings.Contains(err.Error(), "fast-forward default branch") {
+		t.Fatalf("error = %v, want fast-forward failure", err)
+	}
+	assertGitBranch(t, repoPath, "main")
+}
+
 func newStatePaths(t *testing.T) state.Paths {
 	t.Helper()
 
@@ -197,6 +271,25 @@ func newGitRepoWithLocalOrigin(t *testing.T) string {
 	runGit(t, repoPath, "remote", "add", "origin", originPath)
 	runGit(t, repoPath, "push", "--set-upstream", "origin", "main")
 	return repoPath
+}
+
+func pushRemoteCommit(t *testing.T, repoPath string, name string, content string) {
+	t.Helper()
+
+	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
+	cloneParent := t.TempDir()
+	clonePath := filepath.Join(cloneParent, "origin-work")
+	runGit(t, cloneParent, "clone", originPath, clonePath)
+	if err := os.WriteFile(filepath.Join(clonePath, name), []byte(content), 0o644); err != nil {
+		t.Fatalf("write remote commit file: %v", err)
+	}
+	runGit(t, clonePath, "add", name)
+	runGit(t, clonePath,
+		"-c", "user.name=Orpheus Test",
+		"-c", "user.email=orpheus@example.com",
+		"commit", "-m", "remote commit",
+	)
+	runGit(t, clonePath, "push", "origin", "main")
 }
 
 func assertGitBranch(t *testing.T, worktreePath string, expected string) {

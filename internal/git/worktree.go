@@ -32,7 +32,15 @@ type TaskWorktreeOptions struct {
 	Paths         state.Paths
 }
 
-// TaskWorktreeSetupResult is the backend-neutral result of preparing a task worktree.
+// RepoRootOptions describes a repo-root/default-branch task run target.
+type RepoRootOptions struct {
+	RepoID        string
+	RepoName      string
+	RepoPath      string
+	DefaultBranch string
+}
+
+// TaskWorktreeSetupResult is the backend-neutral result of preparing a task execution target.
 type TaskWorktreeSetupResult struct {
 	Branch       string
 	WorktreePath string
@@ -49,6 +57,13 @@ type taskWorktreePlan struct {
 	WorktreePath  string
 }
 
+type repoRootPlan struct {
+	RepoID        string
+	RepoName      string
+	RepoPath      string
+	DefaultBranch string
+}
+
 // ExpectedTaskWorktree returns the deterministic branch and worktree path for a task without mutating Git.
 func ExpectedTaskWorktree(opts TaskWorktreeOptions) (TaskWorktreeSetupResult, error) {
 	plan, err := newTaskWorktreePlan(opts)
@@ -58,6 +73,19 @@ func ExpectedTaskWorktree(opts TaskWorktreeOptions) (TaskWorktreeSetupResult, er
 	return TaskWorktreeSetupResult{
 		Branch:       plan.Branch,
 		WorktreePath: plan.WorktreePath,
+	}, nil
+}
+
+// ExpectedRepoRoot returns the repo-root/default-branch target without mutating Git.
+func ExpectedRepoRoot(opts RepoRootOptions) (TaskWorktreeSetupResult, error) {
+	plan, err := newRepoRootPlan(opts)
+	if err != nil {
+		return TaskWorktreeSetupResult{}, err
+	}
+	return TaskWorktreeSetupResult{
+		Branch:       plan.DefaultBranch,
+		WorktreePath: plan.RepoPath,
+		Lifecycle:    TaskWorktreeLifecycleReused,
 	}, nil
 }
 
@@ -173,6 +201,114 @@ func SetupTaskWorktree(ctx context.Context, opts TaskWorktreeOptions) (TaskWorkt
 	return result, nil
 }
 
+// SetupRepoRoot prepares the registered repo root on the registered default branch.
+//
+// It refuses to mutate the checkout until the repo root is clean, then fetches the
+// default branch from origin, switches to the local default branch, and fast-forwards
+// from origin using --ff-only. No task branch or deterministic task worktree is
+// created for this mode.
+func SetupRepoRoot(ctx context.Context, opts RepoRootOptions) (TaskWorktreeSetupResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	plan, err := newRepoRootPlan(opts)
+	if err != nil {
+		return TaskWorktreeSetupResult{}, err
+	}
+	result := TaskWorktreeSetupResult{
+		Branch:       plan.DefaultBranch,
+		WorktreePath: plan.RepoPath,
+		Lifecycle:    TaskWorktreeLifecycleReused,
+	}
+
+	repoRoot, err := worktreeRoot(ctx, plan.RepoPath)
+	if err != nil {
+		return TaskWorktreeSetupResult{}, fmt.Errorf(
+			"prepare repo-root task run for repo %s (%s): inspect registered repo root %q: %w",
+			plan.RepoID,
+			plan.RepoName,
+			plan.RepoPath,
+			err,
+		)
+	}
+	if repoRoot != plan.RepoPath {
+		return TaskWorktreeSetupResult{}, fmt.Errorf(
+			"prepare repo-root task run for repo %s (%s): registered repo path %q resolves to Git root %q; register the repository root before running tasks",
+			plan.RepoID,
+			plan.RepoName,
+			plan.RepoPath,
+			repoRoot,
+		)
+	}
+
+	if err := validateBranchRef(ctx, repoRoot, "default branch", plan.DefaultBranch); err != nil {
+		return TaskWorktreeSetupResult{}, fmt.Errorf("prepare repo-root task run: %w", err)
+	}
+	if err := requireOriginRemoteFor(ctx, repoRoot, "repo-root task runs"); err != nil {
+		return TaskWorktreeSetupResult{}, fmt.Errorf(
+			"prepare repo-root task run for repo %s (%s): %w",
+			plan.RepoID,
+			plan.RepoName,
+			err,
+		)
+	}
+	if err := requireCleanRepoRoot(ctx, repoRoot); err != nil {
+		return TaskWorktreeSetupResult{}, fmt.Errorf(
+			"prepare repo-root task run for repo %s (%s): %w",
+			plan.RepoID,
+			plan.RepoName,
+			err,
+		)
+	}
+
+	if err := fetchDefaultBranch(ctx, repoRoot, plan.DefaultBranch); err != nil {
+		return TaskWorktreeSetupResult{}, fmt.Errorf("prepare repo-root task run: %w", err)
+	}
+	remoteRef := "refs/remotes/origin/" + plan.DefaultBranch
+	if err := verifyRef(ctx, repoRoot, remoteRef); err != nil {
+		return TaskWorktreeSetupResult{}, fmt.Errorf("prepare repo-root task run: %w", err)
+	}
+
+	current, currentErr := currentBranchAt(ctx, repoRoot)
+	if currentErr != nil || current != plan.DefaultBranch {
+		if err := checkoutDefaultBranch(ctx, repoRoot, plan.DefaultBranch); err != nil {
+			if currentErr != nil {
+				return TaskWorktreeSetupResult{}, fmt.Errorf(
+					"prepare repo-root task run: switch to default branch %q (current branch could not be read: %v): %w",
+					plan.DefaultBranch,
+					currentErr,
+					err,
+				)
+			}
+			return TaskWorktreeSetupResult{}, fmt.Errorf("prepare repo-root task run: switch to default branch %q: %w", plan.DefaultBranch, err)
+		}
+	}
+
+	current, err = currentBranchAt(ctx, repoRoot)
+	if err != nil {
+		return TaskWorktreeSetupResult{}, fmt.Errorf("prepare repo-root task run: verify default branch checkout: %w", err)
+	}
+	if current != plan.DefaultBranch {
+		return TaskWorktreeSetupResult{}, fmt.Errorf(
+			"prepare repo-root task run: repo root is on branch %q after checkout; expected default branch %q",
+			current,
+			plan.DefaultBranch,
+		)
+	}
+	if err := requireCleanRepoRoot(ctx, repoRoot); err != nil {
+		return TaskWorktreeSetupResult{}, fmt.Errorf("prepare repo-root task run: %w", err)
+	}
+	if err := fastForwardFromOrigin(ctx, repoRoot, plan.DefaultBranch); err != nil {
+		return TaskWorktreeSetupResult{}, fmt.Errorf("prepare repo-root task run: %w", err)
+	}
+	if err := requireCleanRepoRoot(ctx, repoRoot); err != nil {
+		return TaskWorktreeSetupResult{}, fmt.Errorf("prepare repo-root task run: %w", err)
+	}
+
+	return result, nil
+}
+
 func newTaskWorktreePlan(opts TaskWorktreeOptions) (taskWorktreePlan, error) {
 	repoID, err := cleanPathComponent("repo id", opts.RepoID)
 	if err != nil {
@@ -183,14 +319,10 @@ func newTaskWorktreePlan(opts TaskWorktreeOptions) (taskWorktreePlan, error) {
 		return taskWorktreePlan{}, err
 	}
 
-	repoPath := strings.TrimSpace(opts.RepoPath)
-	if repoPath == "" {
-		return taskWorktreePlan{}, errors.New("registered repo path is required")
+	repoPath, err := normalizeRegisteredRepoPath(opts.RepoPath)
+	if err != nil {
+		return taskWorktreePlan{}, err
 	}
-	if !filepath.IsAbs(repoPath) {
-		return taskWorktreePlan{}, fmt.Errorf("registered repo path must be absolute, got %q", repoPath)
-	}
-	repoPath = filepath.Clean(repoPath)
 
 	defaultBranch := strings.TrimSpace(opts.DefaultBranch)
 	if defaultBranch == "" {
@@ -211,6 +343,41 @@ func newTaskWorktreePlan(opts TaskWorktreeOptions) (taskWorktreePlan, error) {
 		Branch:        taskWorktreeBranchPrefix + taskID,
 		WorktreePath:  worktreePath,
 	}, nil
+}
+
+func newRepoRootPlan(opts RepoRootOptions) (repoRootPlan, error) {
+	repoID, err := cleanPathComponent("repo id", opts.RepoID)
+	if err != nil {
+		return repoRootPlan{}, err
+	}
+
+	repoPath, err := normalizeRegisteredRepoPath(opts.RepoPath)
+	if err != nil {
+		return repoRootPlan{}, err
+	}
+
+	defaultBranch := strings.TrimSpace(opts.DefaultBranch)
+	if defaultBranch == "" {
+		return repoRootPlan{}, fmt.Errorf("repo %q has no default branch; register it again or edit the repo registry before running tasks", repoID)
+	}
+
+	return repoRootPlan{
+		RepoID:        repoID,
+		RepoName:      strings.TrimSpace(opts.RepoName),
+		RepoPath:      repoPath,
+		DefaultBranch: defaultBranch,
+	}, nil
+}
+
+func normalizeRegisteredRepoPath(repoPath string) (string, error) {
+	repoPath = strings.TrimSpace(repoPath)
+	if repoPath == "" {
+		return "", errors.New("registered repo path is required")
+	}
+	if !filepath.IsAbs(repoPath) {
+		return "", fmt.Errorf("registered repo path must be absolute, got %q", repoPath)
+	}
+	return filepath.Clean(repoPath), nil
 }
 
 func cleanPathComponent(label string, value string) (string, error) {
@@ -242,12 +409,21 @@ func validateBranchRef(ctx context.Context, dir string, label string, branch str
 }
 
 func requireOriginRemote(ctx context.Context, repoRoot string) error {
+	return requireOriginRemoteFor(ctx, repoRoot, "deterministic task worktrees")
+}
+
+func requireOriginRemoteFor(ctx context.Context, repoRoot string, purpose string) error {
+	purpose = strings.TrimSpace(purpose)
+	if purpose == "" {
+		purpose = "task runs"
+	}
+
 	output, err := runGitContext(ctx, repoRoot, "remote", "get-url", "origin")
 	if err != nil {
-		return fmt.Errorf("registered repository requires an origin remote for deterministic task worktrees: %w%s", err, gitOutputSuffix(output))
+		return fmt.Errorf("registered repository requires an origin remote for %s: %w%s", purpose, err, gitOutputSuffix(output))
 	}
 	if strings.TrimSpace(output) == "" {
-		return errors.New("registered repository requires an origin remote for deterministic task worktrees")
+		return fmt.Errorf("registered repository requires an origin remote for %s", purpose)
 	}
 	return nil
 }
@@ -311,6 +487,61 @@ func fetchDefaultBranch(ctx context.Context, repoRoot string, defaultBranch stri
 	output, err := runGitContext(ctx, repoRoot, "fetch", "origin", defaultBranch)
 	if err != nil {
 		return fmt.Errorf("fetch origin/%s: %w%s", defaultBranch, err, gitOutputSuffix(output))
+	}
+	return nil
+}
+
+func requireCleanRepoRoot(ctx context.Context, repoRoot string) error {
+	output, err := runGitContext(ctx, repoRoot, "status", "--porcelain=v1")
+	if err != nil {
+		return fmt.Errorf("inspect repo-root working tree cleanliness: %w%s", err, gitOutputSuffix(output))
+	}
+	if strings.TrimSpace(output) != "" {
+		return fmt.Errorf("repo root %q has uncommitted changes; commit, stash, or discard them before running with --main", repoRoot)
+	}
+	return nil
+}
+
+func checkoutDefaultBranch(ctx context.Context, repoRoot string, defaultBranch string) error {
+	branchExists, err := localBranchExists(ctx, repoRoot, defaultBranch)
+	if err != nil {
+		return err
+	}
+
+	if branchExists {
+		output, err := runGitContext(ctx, repoRoot, "checkout", defaultBranch)
+		if err != nil {
+			return fmt.Errorf("checkout default branch %q: %w%s", defaultBranch, err, gitOutputSuffix(output))
+		}
+		return nil
+	}
+
+	remoteBranch := "origin/" + defaultBranch
+	output, err := runGitContext(ctx, repoRoot, "checkout", "--track", "-b", defaultBranch, remoteBranch)
+	if err != nil {
+		return fmt.Errorf("checkout default branch %q from %s: %w%s", defaultBranch, remoteBranch, err, gitOutputSuffix(output))
+	}
+	return nil
+}
+
+func fastForwardFromOrigin(ctx context.Context, repoRoot string, defaultBranch string) error {
+	remoteRef := "refs/remotes/origin/" + defaultBranch
+	output, err := runGitContext(ctx, repoRoot, "merge-base", "--is-ancestor", "HEAD", remoteRef)
+	if err != nil {
+		if gitExitCode(err) == 1 {
+			return fmt.Errorf(
+				"fast-forward default branch %q from origin/%s: local branch is ahead of or divergent from origin/%s",
+				defaultBranch,
+				defaultBranch,
+				defaultBranch,
+			)
+		}
+		return fmt.Errorf("fast-forward default branch %q from origin/%s: inspect ancestry: %w%s", defaultBranch, defaultBranch, err, gitOutputSuffix(output))
+	}
+
+	output, err = runGitContext(ctx, repoRoot, "merge", "--ff-only", remoteRef)
+	if err != nil {
+		return fmt.Errorf("fast-forward default branch %q from origin/%s: %w%s", defaultBranch, defaultBranch, err, gitOutputSuffix(output))
 	}
 	return nil
 }

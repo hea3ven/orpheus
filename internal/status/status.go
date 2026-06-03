@@ -3,6 +3,7 @@ package status
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -26,7 +27,7 @@ const (
 	// GroupIdle contains in-progress items with no active attached run.
 	GroupIdle GroupID = "idle"
 
-	// GroupInReview contains non-closed items with a local Orpheus PR URL metadata value.
+	// GroupInReview contains non-closed items ready for human review.
 	GroupInReview GroupID = "in_review"
 
 	// GroupReadyToRun contains items Orpheus' local readiness policy considers ready.
@@ -133,7 +134,7 @@ func ReadyRowsWithRunStates(snapshot task.SnapshotResult, runStates RunStateInde
 		index := newRepositoryIndex(repoSnapshot.Tasks)
 		for _, taskItem := range repoSnapshot.Tasks {
 			latestRun := latestRunFor(runStates, repoSnapshot.Repository.ID, taskItem.ID)
-			if classify(taskItem, index, latestRun).state != readinessReady {
+			if classify(repoSnapshot.Repository, taskItem, index, latestRun).state != readinessReady {
 				continue
 			}
 			rows = append(rows, task.RepoTask{
@@ -153,17 +154,20 @@ func RunStateKey(repoID, taskID string) string {
 func projectRepository(projection *Projection, repoSnapshot task.RepositorySnapshot, runStates RunStateIndex) {
 	index := newRepositoryIndex(repoSnapshot.Tasks)
 	for _, taskItem := range repoSnapshot.Tasks {
-		result := classify(taskItem, index, latestRunFor(runStates, repoSnapshot.Repository.ID, taskItem.ID))
+		result := classify(repoSnapshot.Repository, taskItem, index, latestRunFor(runStates, repoSnapshot.Repository.ID, taskItem.ID))
 		projection.add(groupForState(result.state), taskEntry(repoSnapshot.Repository, taskItem, result.detail))
 	}
 }
 
-func classify(taskItem task.Task, index map[string]task.Task, latestRun *taskstate.RunAttempt) policyResult {
+func classify(repository task.Repository, taskItem task.Task, index map[string]task.Task, latestRun *taskstate.RunAttempt) policyResult {
 	metadata := taskItem.OrpheusMetadata()
 	if taskItem.Status == task.StatusClosed {
 		return policyResult{state: readinessDone, detail: "closed"}
 	}
 	if taskItem.Status == task.StatusInProgress {
+		if isSuccessfulRepoRootReview(repository, taskItem, latestRun) {
+			return policyResult{state: readinessReview, detail: "local repo-root review (no PR URL)"}
+		}
 		return classifyInProgress(latestRun)
 	}
 	if taskItem.Status == task.StatusOpen && latestRun != nil {
@@ -172,7 +176,12 @@ func classify(taskItem task.Task, index map[string]task.Task, latestRun *tasksta
 	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
 		return policyResult{state: readinessReview, detail: metadata.PRURL}
 	}
-
+	if latestRun != nil && latestRun.Status == taskstate.RunStatusRunning {
+		return policyResult{
+			state:  readinessUnknown,
+			detail: fmt.Sprintf("run attempt %d is running; M3 cannot verify whether the attached process is still alive", latestRun.Attempt),
+		}
+	}
 	deps := dependencyIDs(taskItem)
 	missingDetail := missingDependencyDetail(taskItem, deps, index)
 	if missingDetail != "" {
@@ -231,6 +240,37 @@ func runAttemptDetail(run taskstate.RunAttempt) string {
 		}
 		return fmt.Sprintf("run attempt %d has status %s", run.Attempt, statusText)
 	}
+}
+
+func isSuccessfulRepoRootReview(repository task.Repository, taskItem task.Task, latestRun *taskstate.RunAttempt) bool {
+	if latestRun == nil || latestRun.Status != taskstate.RunStatusSucceeded || taskItem.Status != task.StatusInProgress {
+		return false
+	}
+
+	metadata := taskItem.OrpheusMetadata()
+	if !repoRootMetadataMatches(repository, metadata) {
+		return false
+	}
+	return strings.TrimSpace(latestRun.Branch) == strings.TrimSpace(repository.DefaultBranch) &&
+		cleanPath(latestRun.Worktree) == cleanPath(repository.Path)
+}
+
+func repoRootMetadataMatches(repository task.Repository, metadata task.OrpheusMetadata) bool {
+	defaultBranch := strings.TrimSpace(repository.DefaultBranch)
+	repoPath := cleanPath(repository.Path)
+	if defaultBranch == "" || repoPath == "" {
+		return false
+	}
+	return metadata.HasBranch && strings.TrimSpace(metadata.Branch) == defaultBranch &&
+		metadata.HasWorktree && cleanPath(metadata.Worktree) == repoPath
+}
+
+func cleanPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	return filepath.Clean(path)
 }
 
 func latestRunFor(runStates RunStateIndex, repoID string, taskID string) *taskstate.RunAttempt {
