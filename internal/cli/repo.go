@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/hea3ven/orpheus/internal/beads"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
@@ -185,14 +184,9 @@ func newRepoListCommand(opts *rootOptions) *cobra.Command {
 			reg := registryCtx.Registry
 			logger.DebugContext(command.Context(), "loaded registered repos", slog.Int("repo_count", len(reg.Repos)))
 
-			writer := tabwriter.NewWriter(command.OutOrStdout(), 0, 0, 2, ' ', 0)
-			if _, err := fmt.Fprintln(writer, "ID\tNAME\tPATH\tREMOTE\tDEFAULT_BRANCH\tBEADS_MODE\tBEADS_PREFIX"); err != nil {
-				return err
-			}
+			rows := make([][]string, 0, len(reg.Repos))
 			for _, repo := range reg.Repos {
-				if _, err := fmt.Fprintf(
-					writer,
-					"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				rows = append(rows, []string{
 					repo.ID,
 					repo.Name,
 					repo.Path,
@@ -200,11 +194,13 @@ func newRepoListCommand(opts *rootOptions) *cobra.Command {
 					repo.DefaultBranch,
 					repo.BeadsMode,
 					repo.BeadsPrefix,
-				); err != nil {
-					return err
-				}
+				})
 			}
-			return writer.Flush()
+			return renderTable(
+				command.OutOrStdout(),
+				[]string{"ID", "NAME", "PATH", "REMOTE", "DEFAULT_BRANCH", "BEADS_MODE", "BEADS_PREFIX"},
+				rows,
+			)
 		},
 	}
 	return cmd

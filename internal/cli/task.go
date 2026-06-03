@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strconv"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/beads"
@@ -961,60 +961,53 @@ func formatLabels(labels []string) string {
 }
 
 func renderTaskRows(output interface{ Write([]byte) (int, error) }, rows []taskmodel.RepoTask, detailed bool) error {
-	writer := tabwriter.NewWriter(output, 0, 0, 2, ' ', 0)
 	if detailed {
-		if _, err := fmt.Fprintln(writer, "REPO_ID\tREPO\tTASK_PREFIX\tTASK_ID\tSTATUS\tP\tBRANCH\tWORKTREE\tPR\tTITLE"); err != nil {
-			return err
-		}
-	} else {
-		if _, err := fmt.Fprintln(writer, "REPO\tTASK_ID\tSTATUS\tP\tTITLE"); err != nil {
-			return err
-		}
+		return renderDetailedTaskRows(output, rows)
 	}
+
+	tableRows := make([][]string, 0, len(rows))
 	for _, row := range rows {
-		if detailed {
-			if err := renderDetailedTaskRow(writer, row); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := renderTaskRow(writer, row); err != nil {
-			return err
-		}
+		tableRows = append(tableRows, taskTableRow(row))
 	}
-	return writer.Flush()
+	return renderTable(output, []string{"REPO", "TASK_ID", "STATUS", "P", "TITLE"}, tableRows)
 }
 
-func renderTaskRow(writer interface{ Write([]byte) (int, error) }, row taskmodel.RepoTask) error {
-	_, err := fmt.Fprintf(
-		writer,
-		"%s\t%s\t%s\t%d\t%s\n",
-		sanitizeTableCell(row.Repository.Name),
-		sanitizeTableCell(row.Task.ID),
-		sanitizeTableCell(string(row.Task.Status)),
-		row.Task.Priority,
-		sanitizeTableCell(row.Task.Title),
+func renderDetailedTaskRows(output interface{ Write([]byte) (int, error) }, rows []taskmodel.RepoTask) error {
+	tableRows := make([][]string, 0, len(rows))
+	for _, row := range rows {
+		tableRows = append(tableRows, detailedTaskTableRow(row))
+	}
+	return renderTable(
+		output,
+		[]string{"REPO_ID", "REPO", "TASK_PREFIX", "TASK_ID", "STATUS", "P", "BRANCH", "WORKTREE", "PR", "TITLE"},
+		tableRows,
 	)
-	return err
 }
 
-func renderDetailedTaskRow(writer interface{ Write([]byte) (int, error) }, row taskmodel.RepoTask) error {
+func taskTableRow(row taskmodel.RepoTask) []string {
+	return []string{
+		row.Repository.Name,
+		row.Task.ID,
+		string(row.Task.Status),
+		strconv.Itoa(row.Task.Priority),
+		row.Task.Title,
+	}
+}
+
+func detailedTaskTableRow(row taskmodel.RepoTask) []string {
 	metadata := row.Task.OrpheusMetadata()
-	_, err := fmt.Fprintf(
-		writer,
-		"%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
-		sanitizeTableCell(row.Repository.ID),
-		sanitizeTableCell(row.Repository.Name),
-		sanitizeTableCell(row.Repository.TaskIDPrefix),
-		sanitizeTableCell(row.Task.ID),
-		sanitizeTableCell(string(row.Task.Status)),
-		row.Task.Priority,
-		sanitizeTableCell(formatMetadataTableCell(metadata.Branch, metadata.HasBranch)),
-		sanitizeTableCell(formatMetadataTableCell(metadata.Worktree, metadata.HasWorktree)),
-		sanitizeTableCell(formatMetadataTableCell(metadata.PRURL, metadata.HasPRURL)),
-		sanitizeTableCell(row.Task.Title),
-	)
-	return err
+	return []string{
+		row.Repository.ID,
+		row.Repository.Name,
+		row.Repository.TaskIDPrefix,
+		row.Task.ID,
+		string(row.Task.Status),
+		strconv.Itoa(row.Task.Priority),
+		formatMetadataTableCell(metadata.Branch, metadata.HasBranch),
+		formatMetadataTableCell(metadata.Worktree, metadata.HasWorktree),
+		formatMetadataTableCell(metadata.PRURL, metadata.HasPRURL),
+		row.Task.Title,
+	}
 }
 
 func formatMetadataTableCell(value string, present bool) string {
@@ -1062,12 +1055,5 @@ func formatDiagnosticField(value string) string {
 	if value == "" {
 		return "unknown"
 	}
-	return value
-}
-
-func sanitizeTableCell(value string) string {
-	value = strings.ReplaceAll(value, "\t", " ")
-	value = strings.ReplaceAll(value, "\r", " ")
-	value = strings.ReplaceAll(value, "\n", " ")
 	return value
 }

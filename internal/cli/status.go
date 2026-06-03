@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 	"log/slog"
-	"text/tabwriter"
+	"strconv"
 
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/status"
@@ -121,85 +121,54 @@ func renderStatus(output interface{ Write([]byte) (int, error) }, projection sta
 }
 
 func renderStatusEntries(output interface{ Write([]byte) (int, error) }, group status.Group) error {
-	writer := tabwriter.NewWriter(output, 0, 0, 2, ' ', 0)
 	showDetail := statusGroupShowsDetail(group.ID)
+	headers := []string{"REPO", "TASK_ID", "P", "TITLE"}
 	if showDetail {
-		if _, err := fmt.Fprintln(writer, "REPO\tTASK_ID\tP\tTITLE\tDETAIL"); err != nil {
-			return err
-		}
-	} else {
-		if _, err := fmt.Fprintln(writer, "REPO\tTASK_ID\tP\tTITLE"); err != nil {
-			return err
-		}
+		headers = append(headers, "DETAIL")
 	}
+
+	rows := make([][]string, 0, len(group.Entries))
 	for _, entry := range group.Entries {
 		switch entry.Kind {
 		case status.EntryTask:
-			if err := renderStatusTaskEntry(writer, entry, showDetail); err != nil {
-				return err
-			}
+			rows = append(rows, statusTaskEntryTableRow(entry, showDetail))
 		case status.EntryRepoFailure:
-			if err := renderStatusFailureEntry(writer, entry, showDetail); err != nil {
-				return err
-			}
+			rows = append(rows, statusFailureEntryTableRow(entry, showDetail))
 		}
 	}
-	return writer.Flush()
+	return renderTable(output, headers, rows)
 }
 
-func renderStatusTaskEntry(writer interface{ Write([]byte) (int, error) }, entry status.Entry, showDetail bool) error {
-	if !showDetail {
-		_, err := fmt.Fprintf(
-			writer,
-			"%s\t%s\t%d\t%s\n",
-			sanitizeTableCell(entry.Repository.Name),
-			sanitizeTableCell(entry.Task.ID),
-			entry.Task.Priority,
-			sanitizeTableCell(entry.Task.Title),
-		)
-		return err
+func statusTaskEntryTableRow(entry status.Entry, showDetail bool) []string {
+	row := []string{
+		entry.Repository.Name,
+		entry.Task.ID,
+		strconv.Itoa(entry.Task.Priority),
+		entry.Task.Title,
 	}
-
-	_, err := fmt.Fprintf(
-		writer,
-		"%s\t%s\t%d\t%s\t%s\n",
-		sanitizeTableCell(entry.Repository.Name),
-		sanitizeTableCell(entry.Task.ID),
-		entry.Task.Priority,
-		sanitizeTableCell(entry.Task.Title),
-		sanitizeTableCell(entry.Detail),
-	)
-	return err
+	if showDetail {
+		row = append(row, entry.Detail)
+	}
+	return row
 }
 
-func renderStatusFailureEntry(
-	writer interface{ Write([]byte) (int, error) },
-	entry status.Entry,
-	showDetail bool,
-) error {
+func statusFailureEntryTableRow(entry status.Entry, showDetail bool) []string {
 	detail := entry.Detail
 	if detail == "" && entry.Failure != nil {
 		detail = entry.Failure.Error()
 	}
 	title := fmt.Sprintf("repo %s (prefix %s)", entry.Repository.ID, entry.Repository.TaskIDPrefix)
-	if !showDetail {
-		_, err := fmt.Fprintf(
-			writer,
-			"%s\t-\t-\t%s\n",
-			sanitizeTableCell(entry.Repository.Name),
-			sanitizeTableCell(title),
-		)
-		return err
-	}
 
-	_, err := fmt.Fprintf(
-		writer,
-		"%s\t-\t-\t%s\t%s\n",
-		sanitizeTableCell(entry.Repository.Name),
-		sanitizeTableCell(title),
-		sanitizeTableCell(detail),
-	)
-	return err
+	row := []string{
+		entry.Repository.Name,
+		"-",
+		"-",
+		title,
+	}
+	if showDetail {
+		row = append(row, detail)
+	}
+	return row
 }
 
 func visibleStatusGroups(groups []status.Group, full bool) []status.Group {
