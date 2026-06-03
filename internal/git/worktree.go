@@ -49,6 +49,18 @@ type taskWorktreePlan struct {
 	WorktreePath  string
 }
 
+// ExpectedTaskWorktree returns the deterministic branch and worktree path for a task without mutating Git.
+func ExpectedTaskWorktree(opts TaskWorktreeOptions) (TaskWorktreeSetupResult, error) {
+	plan, err := newTaskWorktreePlan(opts)
+	if err != nil {
+		return TaskWorktreeSetupResult{}, err
+	}
+	return TaskWorktreeSetupResult{
+		Branch:       plan.Branch,
+		WorktreePath: plan.WorktreePath,
+	}, nil
+}
+
 // SetupTaskWorktree prepares or reuses the deterministic branch and worktree for a task.
 //
 // The setup is intentionally conservative: it creates the expected branch only when it

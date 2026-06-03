@@ -4,12 +4,16 @@ package task
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 )
 
 var (
 	// ErrNotFound indicates a task backend could not find a matching active task.
 	ErrNotFound = errors.New("task not found")
+
+	// ErrMutationConflict indicates a backend mutation found task state that needs operator attention.
+	ErrMutationConflict = errors.New("task mutation conflict")
 )
 
 const (
@@ -216,6 +220,42 @@ type Lister interface {
 type ReadBackend interface {
 	Getter
 	Lister
+}
+
+// DispatchMutator is the narrow backend-neutral mutation used before launching an attached agent.
+//
+// MarkInProgress means: mark taskID as being worked through the native backend and persist
+// Orpheus' deterministic branch/worktree pointers for the task.
+type DispatchMutator interface {
+	MarkInProgress(ctx context.Context, taskID string, branch string, worktree string) error
+}
+
+// DispatchBackend is the backend capability set needed by task dispatch orchestration.
+type DispatchBackend interface {
+	Getter
+	DispatchMutator
+}
+
+// MutationConflictError reports backend task state that prevents a semantic mutation.
+type MutationConflictError struct {
+	TaskID string
+	Reason string
+}
+
+// Error describes the task mutation conflict.
+func (e MutationConflictError) Error() string {
+	if e.TaskID == "" {
+		return ErrMutationConflict.Error()
+	}
+	if e.Reason == "" {
+		return fmt.Sprintf("%s: task %s needs attention", ErrMutationConflict, e.TaskID)
+	}
+	return fmt.Sprintf("%s: task %s needs attention: %s", ErrMutationConflict, e.TaskID, e.Reason)
+}
+
+// Unwrap allows callers to match ErrMutationConflict with errors.Is.
+func (e MutationConflictError) Unwrap() error {
+	return ErrMutationConflict
 }
 
 // Repository identifies the registered repository that produced a task row or failure.

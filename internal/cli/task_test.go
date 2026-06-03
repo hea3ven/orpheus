@@ -527,6 +527,7 @@ func TestTaskRunExecutesDefaultAgentAttachedFromDeterministicWorktree(t *testing
 	must.NoError(err)
 	is.Contains(string(bdLog), repoPath)
 	is.Contains(string(bdLog), "--json --readonly --sandbox show --id op-1")
+	is.Contains(string(bdLog), "--json --sandbox update op-1 --status in_progress --set-metadata orpheus.branch=orpheus/op-1 --set-metadata orpheus.worktree="+worktreePath)
 	is.NotContains(string(bdLog), "--json --readonly --sandbox list")
 
 	agentLog, err := os.ReadFile(agentLogPath)
@@ -596,6 +597,150 @@ func TestTaskRunExecutesDefaultAgentAttachedFromDeterministicWorktree(t *testing
 	is.Equal(taskstate.EventWorktreeReused, retriedState.Events[3].Type)
 	is.Equal(taskstate.EventRunStarted, retriedState.Events[4].Type)
 	is.Equal(taskstate.EventRunFinished, retriedState.Events[5].Type)
+}
+
+func TestTaskRunAllowsOwnedInProgressTaskWithMatchingMetadata(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-owned"))
+	must.NoError(err)
+
+	bdLogPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[
+			{
+				"id":"op-owned",
+				"title":"Retry owned task",
+				"status":"in_progress",
+				"priority":1,
+				"issue_type":"task",
+				"metadata":{"orpheus.branch":"orpheus/op-owned","orpheus.worktree":"` + worktreePath + `"}
+			}
+		]`},
+	})
+	withFakeAgent(t, "owned-agent", 0)
+	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"default_agent": "owned",
+		"agents":        map[string]any{"owned": map[string]any{"command": "owned-agent"}},
+	}))
+
+	stdout, stderr := executeCommand(t, []string{"task", "run", "op-owned"})
+
+	is.Contains(stdout, "fake agent stdout")
+	is.Contains(stderr, "fake agent stderr")
+	bdLog, err := os.ReadFile(bdLogPath)
+	must.NoError(err)
+	is.Contains(string(bdLog), "--json --readonly --sandbox show --id op-owned")
+	is.NotContains(string(bdLog), "--json --sandbox update")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-owned.yaml"), &state))
+	must.Len(state.Runs, 1)
+	is.Equal(taskstate.RunStatusSucceeded, state.Runs[0].Status)
+	is.Equal("orpheus/op-owned", state.Runs[0].Branch)
+	is.Equal(worktreePath, state.Runs[0].Worktree)
+}
+
+func TestTaskRunDoesNotLaunchOrRecordAttemptWhenMarkInProgressFails(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	binDir := t.TempDir()
+	bdLogPath := filepath.Join(binDir, "bd.log")
+	bdCountPath := filepath.Join(binDir, "bd-show-count")
+	bdPath := filepath.Join(binDir, "bd")
+	script := fmt.Sprintf(`#!/bin/sh
+{
+  pwd
+  printf '%%s\n' "$*"
+} >> "$FAKE_BD_LOG"
+if [ "$PWD" != %s ]; then
+  echo "unexpected PWD: $PWD" >&2
+  exit 65
+fi
+case "$*" in
+  "--json --readonly --sandbox show --id op-race")
+    count=0
+    if [ -f %s ]; then
+      count=$(cat %s)
+    fi
+    count=$((count + 1))
+    printf '%%s' "$count" > %s
+    if [ "$count" -eq 1 ]; then
+      cat <<'JSON'
+[{"id":"op-race","title":"Race task","status":"open","priority":1,"issue_type":"task"}]
+JSON
+      exit 0
+    fi
+    cat <<'JSON'
+[{"id":"op-race","title":"Race task","status":"in_progress","priority":1,"issue_type":"task"}]
+JSON
+    exit 0
+    ;;
+  "--json --sandbox update "*)
+    echo "update should not be reached" >&2
+    exit 67
+    ;;
+  *)
+    echo "unexpected args: $*" >&2
+    exit 64
+    ;;
+esac
+`, shellQuote(repoPath), shellQuote(bdCountPath), shellQuote(bdCountPath), shellQuote(bdCountPath))
+	must.NoError(os.WriteFile(bdPath, []byte(script), 0o755))
+	t.Setenv("FAKE_BD_LOG", bdLogPath)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	agentLogPath := withFakeAgent(t, "race-agent", 0)
+	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"default_agent": "race",
+		"agents":        map[string]any{"race": map[string]any{"command": "race-agent"}},
+	}))
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "op-race"})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "mark task in progress")
+	is.ErrorContains(err, "task mutation conflict")
+	is.ErrorContains(err, "orpheus.branch is missing")
+	_, agentLogErr := os.Stat(agentLogPath)
+	is.ErrorIs(agentLogErr, os.ErrNotExist)
+
+	statePath, err := paths.DataPath(filepath.Join("repos", "alpha", "tasks", "op-race.yaml"))
+	must.NoError(err)
+	_, stateErr := os.Stat(statePath)
+	is.ErrorIs(stateErr, os.ErrNotExist)
+	bdLog, err := os.ReadFile(bdLogPath)
+	must.NoError(err)
+	is.Equal(2, strings.Count(string(bdLog), "--json --readonly --sandbox show --id op-race"))
+	is.NotContains(string(bdLog), "--json --sandbox update")
 }
 
 func TestTaskRunFailsFastWhenGlobalMutationLockHeldBeforeSetup(t *testing.T) {
@@ -918,8 +1063,12 @@ func withFakeBDTaskResponses(t *testing.T, responses map[string]fakeBDTaskRespon
   pwd
   printf '%s\n' "$*"
 } >> "$FAKE_BD_LOG"
+is_update=0
 case "$*" in
   "--json --readonly --sandbox list --all --limit 0"|"--json --readonly --sandbox show --id "*)
+    ;;
+  "--json --sandbox update "*)
+    is_update=1
     ;;
   *)
     echo "unexpected args: $*" >&2
@@ -944,6 +1093,10 @@ case "$PWD" in
 			exitCode = 1
 		}
 		fmt.Fprintf(&script, "  %s)\n", shellQuote(dir))
+		fmt.Fprintln(&script, "    if [ \"$is_update\" = 1 ]; then")
+		fmt.Fprintln(&script, "      printf '{}\\n'")
+		fmt.Fprintln(&script, "      exit 0")
+		fmt.Fprintln(&script, "    fi")
 		fmt.Fprintf(&script, "    cat %s\n", shellQuote(stdoutPath))
 		fmt.Fprintf(&script, "    cat %s >&2\n", shellQuote(stderrPath))
 		fmt.Fprintf(&script, "    exit %d\n", exitCode)

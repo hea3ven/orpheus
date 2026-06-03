@@ -425,6 +425,161 @@ func TestTaskBackendGetReturnsClosedOrNonTaskItemsForShowScope(t *testing.T) {
 	}
 }
 
+func TestTaskBackendMarkInProgressUpdatesOpenTaskStatusAndMetadata(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1"},
+			result:   beads.Result{Stdout: `[{"id":"op-1","title":"task","status":"open","priority":2,"issue_type":"task","metadata":{"team":"platform"}}]`},
+		},
+		{
+			wantDir: dir,
+			wantArgs: []string{
+				"--json",
+				"--sandbox",
+				"update",
+				"op-1",
+				"--status",
+				"in_progress",
+				"--set-metadata",
+				"orpheus.branch=orpheus/op-1",
+				"--set-metadata",
+				"orpheus.worktree=/tmp/op-1",
+			},
+		},
+	}}
+
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+
+	if err := backend.MarkInProgress(context.Background(), "op-1", "orpheus/op-1", "/tmp/op-1"); err != nil {
+		t.Fatalf("mark in progress: %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
+func TestTaskBackendMarkInProgressTreatsMatchingInProgressTaskAsSuccess(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{{
+		wantDir:  dir,
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-2"},
+		result: beads.Result{Stdout: `[{"id":"op-2","title":"task","status":"in_progress","priority":2,"issue_type":"task","metadata":{` +
+			`"orpheus.branch":"orpheus/op-2","orpheus.worktree":"/tmp/op-2"}}]`},
+	}}}
+
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+
+	if err := backend.MarkInProgress(context.Background(), "op-2", "orpheus/op-2", "/tmp/op-2"); err != nil {
+		t.Fatalf("mark in progress: %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
+func TestTaskBackendMarkInProgressReportsMutationConflicts(t *testing.T) {
+	tests := []struct {
+		name    string
+		stdout  string
+		wantErr string
+	}{
+		{
+			name:    "in-progress missing metadata",
+			stdout:  `[{"id":"op-3","title":"task","status":"in_progress","priority":2,"issue_type":"task"}]`,
+			wantErr: "orpheus.branch is missing",
+		},
+		{
+			name:    "in-progress different branch",
+			stdout:  `[{"id":"op-3","title":"task","status":"in_progress","priority":2,"issue_type":"task","metadata":{"orpheus.branch":"other","orpheus.worktree":"/tmp/op-3"}}]`,
+			wantErr: `orpheus.branch is "other", expected "orpheus/op-3"`,
+		},
+		{
+			name:    "closed task",
+			stdout:  `[{"id":"op-3","title":"task","status":"closed","priority":2,"issue_type":"task"}]`,
+			wantErr: "task is closed",
+		},
+		{
+			name:    "pr url set",
+			stdout:  `[{"id":"op-3","title":"task","status":"open","priority":2,"issue_type":"task","metadata":{"orpheus.pr_url":"https://example.test/pr/3"}}]`,
+			wantErr: "orpheus.pr_url is already set",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			runner := &fakeRunner{calls: []fakeCall{{
+				wantDir:  dir,
+				wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-3"},
+				result:   beads.Result{Stdout: tt.stdout},
+			}}}
+			backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+			if err != nil {
+				t.Fatalf("create backend: %v", err)
+			}
+
+			err = backend.MarkInProgress(context.Background(), "op-3", "orpheus/op-3", "/tmp/op-3")
+			if !errors.Is(err, task.ErrMutationConflict) {
+				t.Fatalf("error = %v, want ErrMutationConflict", err)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want %q", err, tt.wantErr)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runner has %d unused calls", len(runner.calls))
+			}
+		})
+	}
+}
+
+func TestTaskBackendMarkInProgressReportsUpdateCommandFailure(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-4"},
+			result:   beads.Result{Stdout: `[{"id":"op-4","title":"task","status":"open","priority":2,"issue_type":"task"}]`},
+		},
+		{
+			wantDir: dir,
+			wantArgs: []string{
+				"--json",
+				"--sandbox",
+				"update",
+				"op-4",
+				"--status",
+				"in_progress",
+				"--set-metadata",
+				"orpheus.branch=orpheus/op-4",
+				"--set-metadata",
+				"orpheus.worktree=/tmp/op-4",
+			},
+			result: beads.Result{Stderr: "database locked"},
+			err:    errors.New("exit status 1"),
+		},
+	}}
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+
+	err = backend.MarkInProgress(context.Background(), "op-4", "orpheus/op-4", "/tmp/op-4")
+	if err == nil {
+		t.Fatal("mark in progress succeeded, want update failure")
+	}
+	if !strings.Contains(err.Error(), "run bd --json --sandbox update op-4") || !strings.Contains(err.Error(), "database locked") {
+		t.Fatalf("error = %v, want update command output", err)
+	}
+}
+
 func TestTaskBackendReportsCommandFailureWithOutput(t *testing.T) {
 	dir := t.TempDir()
 	runner := &fakeRunner{calls: []fakeCall{{

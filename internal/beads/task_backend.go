@@ -13,7 +13,10 @@ import (
 	"github.com/hea3ven/orpheus/internal/task"
 )
 
-var _ task.ReadBackend = TaskBackend{}
+var (
+	_ task.ReadBackend     = TaskBackend{}
+	_ task.DispatchMutator = TaskBackend{}
+)
 
 // TaskBackend reads task items from one explicit Beads workspace.
 //
@@ -91,6 +94,115 @@ func (b TaskBackend) List(ctx context.Context) ([]task.Task, error) {
 	return tasks, nil
 }
 
+// MarkInProgress marks a Beads task in progress and stores Orpheus dispatch pointers.
+func (b TaskBackend) MarkInProgress(ctx context.Context, id string, branch string, worktree string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("mark Beads task in progress in %q: task id is required", b.dir)
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return fmt.Errorf("mark Beads task %q in progress in %q: branch is required", id, b.dir)
+	}
+	worktree = strings.TrimSpace(worktree)
+	if worktree == "" {
+		return fmt.Errorf("mark Beads task %q in progress in %q: worktree is required", id, b.dir)
+	}
+
+	current, err := b.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("mark Beads task %q in progress in %q: inspect task: %w", id, b.dir, err)
+	}
+	if err := validateMarkInProgressState(current, branch, worktree); err != nil {
+		return fmt.Errorf("mark Beads task %q in progress in %q: %w", id, b.dir, err)
+	}
+	if current.Status == task.StatusInProgress {
+		return nil
+	}
+
+	result, err := b.runWrite(
+		ctx,
+		"mark in-progress",
+		"update",
+		id,
+		"--status",
+		string(task.StatusInProgress),
+		"--set-metadata",
+		task.MetadataBranch+"="+branch,
+		"--set-metadata",
+		task.MetadataWorktree+"="+worktree,
+	)
+	if err != nil {
+		if isNotFoundResult(result) {
+			return fmt.Errorf("mark Beads task %q in progress in %q: %w%s", id, b.dir, task.ErrNotFound, formattedOutput(result))
+		}
+		return err
+	}
+	return nil
+}
+
+func validateMarkInProgressState(taskItem task.Task, branch string, worktree string) error {
+	metadata := taskItem.OrpheusMetadata()
+	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
+		return task.MutationConflictError{
+			TaskID: taskItem.ID,
+			Reason: fmt.Sprintf("%s is already set", task.MetadataPRURL),
+		}
+	}
+
+	switch taskItem.Status {
+	case task.StatusOpen:
+		return nil
+	case task.StatusInProgress:
+		if markInProgressMetadataMatches(metadata, branch, worktree) {
+			return nil
+		}
+		return task.MutationConflictError{
+			TaskID: taskItem.ID,
+			Reason: inProgressMetadataConflictReason(metadata, branch, worktree),
+		}
+	case task.StatusClosed:
+		return task.MutationConflictError{TaskID: taskItem.ID, Reason: "task is closed"}
+	default:
+		return task.MutationConflictError{
+			TaskID: taskItem.ID,
+			Reason: fmt.Sprintf("status %s is not eligible for dispatch", formatTaskStatus(taskItem.Status)),
+		}
+	}
+}
+
+func markInProgressMetadataMatches(metadata task.OrpheusMetadata, branch string, worktree string) bool {
+	return metadata.HasBranch && strings.TrimSpace(metadata.Branch) == branch &&
+		metadata.HasWorktree && strings.TrimSpace(metadata.Worktree) == worktree
+}
+
+func inProgressMetadataConflictReason(metadata task.OrpheusMetadata, branch string, worktree string) string {
+	problems := make([]string, 0, 2)
+	if !metadata.HasBranch {
+		problems = append(problems, task.MetadataBranch+" is missing")
+	} else if strings.TrimSpace(metadata.Branch) != branch {
+		problems = append(problems, fmt.Sprintf("%s is %q, expected %q", task.MetadataBranch, metadata.Branch, branch))
+	}
+
+	if !metadata.HasWorktree {
+		problems = append(problems, task.MetadataWorktree+" is missing")
+	} else if strings.TrimSpace(metadata.Worktree) != worktree {
+		problems = append(problems, fmt.Sprintf("%s is %q, expected %q", task.MetadataWorktree, metadata.Worktree, worktree))
+	}
+
+	if len(problems) == 0 {
+		return "in-progress task metadata does not match deterministic branch/worktree"
+	}
+	return "in-progress task metadata does not match deterministic branch/worktree: " + strings.Join(problems, "; ")
+}
+
+func formatTaskStatus(status task.Status) string {
+	if strings.TrimSpace(string(status)) == "" {
+		return "unknown"
+	}
+	return string(status)
+}
+
 func normalizeTaskBackendDir(dir string) (string, error) {
 	if strings.TrimSpace(dir) == "" {
 		return "", errors.New("create Beads task backend: directory is required")
@@ -99,6 +211,14 @@ func normalizeTaskBackendDir(dir string) (string, error) {
 }
 
 func (b TaskBackend) run(ctx context.Context, operation string, args ...string) (Result, error) {
+	return b.runBD(ctx, operation, []string{"--json", "--readonly", "--sandbox"}, args...)
+}
+
+func (b TaskBackend) runWrite(ctx context.Context, operation string, args ...string) (Result, error) {
+	return b.runBD(ctx, operation, []string{"--json", "--sandbox"}, args...)
+}
+
+func (b TaskBackend) runBD(ctx context.Context, operation string, globalArgs []string, args ...string) (Result, error) {
 	if b.runner == nil {
 		return Result{}, fmt.Errorf("%s Beads tasks in %q: runner is required", operation, b.dir)
 	}
@@ -109,7 +229,7 @@ func (b TaskBackend) run(ctx context.Context, operation string, args ...string) 
 		return Result{}, fmt.Errorf("%s Beads tasks in %q: %w", operation, b.dir, err)
 	}
 
-	allArgs := append([]string{"--json", "--readonly", "--sandbox"}, args...)
+	allArgs := append(append([]string{}, globalArgs...), args...)
 	result, err := b.runner.Run(b.dir, allArgs...)
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
