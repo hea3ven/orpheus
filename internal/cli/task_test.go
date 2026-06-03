@@ -598,6 +598,104 @@ func TestTaskRunExecutesDefaultAgentAttachedFromDeterministicWorktree(t *testing
 	is.Equal(taskstate.EventRunFinished, retriedState.Events[5].Type)
 }
 
+func TestTaskRunFailsFastWhenGlobalMutationLockHeldBeforeSetup(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[{"id":"op-locked","title":"Locked setup","status":"open","priority":1,"issue_type":"task"}]`},
+	})
+	lockPath, err := paths.GlobalMutationLockPath()
+	must.NoError(err)
+	must.NoError(os.MkdirAll(filepath.Dir(lockPath), 0o755))
+	must.NoError(os.WriteFile(lockPath, []byte("held by test"), 0o644))
+	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-locked"))
+	must.NoError(err)
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "op-locked"})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "failed to acquire lock for task run setup: "+lockPath)
+	_, statErr := os.Stat(worktreePath)
+	is.ErrorIs(statErr, os.ErrNotExist)
+}
+
+func TestTaskRunReleasesGlobalMutationLockWhileAgentRunsAndReacquiresForFinish(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[{"id":"op-finalize","title":"Finalize lock","status":"open","priority":1,"issue_type":"task"}]`},
+	})
+	lockPath, err := paths.GlobalMutationLockPath()
+	must.NoError(err)
+	binDir := t.TempDir()
+	agentLogPath := filepath.Join(binDir, "lock-agent.log")
+	agentPath := filepath.Join(binDir, "lock-agent")
+	script := fmt.Sprintf(`#!/bin/sh
+if [ -e %s ]; then
+  echo "mutation lock held while agent ran" >&2
+  exit 66
+fi
+printf 'lock absent during agent\n' >> %s
+: > %s
+printf 'agent stdout\n'
+`, shellQuote(lockPath), shellQuote(agentLogPath), shellQuote(lockPath))
+	must.NoError(os.WriteFile(agentPath, []byte(script), 0o755))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"default_agent": "lock-check",
+		"agents":        map[string]any{"lock-check": map[string]any{"command": "lock-agent"}},
+	}))
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "op-finalize"})
+
+	must.Error(err)
+	is.Contains(stdout, "agent stdout")
+	is.Empty(stderr)
+	is.ErrorContains(err, "record run finish")
+	is.ErrorContains(err, "failed to acquire lock for task run finalization: "+lockPath)
+	agentLog, err := os.ReadFile(agentLogPath)
+	must.NoError(err)
+	is.Contains(string(agentLog), "lock absent during agent")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-finalize.yaml"), &state))
+	must.Len(state.Runs, 1)
+	is.Equal(taskstate.RunStatusRunning, state.Runs[0].Status)
+	must.Len(state.Events, 2)
+	is.Equal(taskstate.EventWorktreeCreated, state.Events[0].Type)
+	is.Equal(taskstate.EventRunStarted, state.Events[1].Type)
+}
+
 func TestTaskRunAgentFlagSelectsNamedProfile(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)

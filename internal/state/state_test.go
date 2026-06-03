@@ -290,6 +290,100 @@ func TestWriteYAMLParentCreationFailureIsActionable(t *testing.T) {
 	}
 }
 
+func TestWithGlobalMutationLockRunsAndReleases(t *testing.T) {
+	paths := newTestPaths(t)
+	lockPath, err := paths.GlobalMutationLockPath()
+	if err != nil {
+		t.Fatalf("global mutation lock path: %v", err)
+	}
+
+	var lockExisted bool
+	err = state.WithGlobalMutationLock(paths, "test mutation", func() error {
+		_, statErr := os.Stat(lockPath)
+		lockExisted = statErr == nil
+		return statErr
+	})
+	if err != nil {
+		t.Fatalf("with global mutation lock: %v", err)
+	}
+	if !lockExisted {
+		t.Fatal("lock file did not exist while callback ran")
+	}
+	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("lock file still exists after release: %v", err)
+	}
+}
+
+func TestWithGlobalMutationLockReleasesAfterCallbackError(t *testing.T) {
+	paths := newTestPaths(t)
+	lockPath, err := paths.GlobalMutationLockPath()
+	if err != nil {
+		t.Fatalf("global mutation lock path: %v", err)
+	}
+	wantErr := errors.New("mutation failed")
+
+	err = state.WithGlobalMutationLock(paths, "test mutation", func() error {
+		return wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want %v", err, wantErr)
+	}
+	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("lock file still exists after callback error: %v", err)
+	}
+}
+
+func TestWithGlobalMutationLockFailsFastOnContention(t *testing.T) {
+	paths := newTestPaths(t)
+	lockPath, err := paths.GlobalMutationLockPath()
+	if err != nil {
+		t.Fatalf("global mutation lock path: %v", err)
+	}
+
+	err = state.WithGlobalMutationLock(paths, "outer mutation", func() error {
+		err := state.WithGlobalMutationLock(paths, "inner mutation", func() error {
+			t.Fatal("contended mutation callback ran")
+			return nil
+		})
+		if err == nil {
+			t.Fatal("contended lock acquisition succeeded, want error")
+		}
+		var acquisitionErr *state.LockAcquisitionError
+		if !errors.As(err, &acquisitionErr) {
+			t.Fatalf("error type = %T, want *state.LockAcquisitionError", err)
+		}
+		if acquisitionErr.Path != lockPath {
+			t.Fatalf("lock path = %q, want %q", acquisitionErr.Path, lockPath)
+		}
+		if !strings.Contains(err.Error(), "failed to acquire lock for inner mutation: "+lockPath) {
+			t.Fatalf("error is not actionable: %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("outer lock: %v", err)
+	}
+}
+
+func TestWithGlobalMutationLockPathResolutionFailureIncludesLockPath(t *testing.T) {
+	paths := state.Paths{
+		ConfigRoot: "/tmp/orpheus-config",
+		DataRoot:   "relative-data",
+	}
+	lockPath := filepath.Join(paths.DataRoot, "locks", "mutation.lock")
+
+	err := state.WithGlobalMutationLock(paths, "bad paths", func() error {
+		t.Fatal("mutation callback ran")
+		return nil
+	})
+	if err == nil {
+		t.Fatal("lock acquisition succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "failed to acquire lock for bad paths: "+lockPath) {
+		t.Fatalf("error is not actionable: %v", err)
+	}
+}
+
 func newTestPaths(t *testing.T) state.Paths {
 	t.Helper()
 
