@@ -117,6 +117,54 @@ func TestStatusGroupsLocalTaskSnapshots(t *testing.T) {
 	is.NotContains(log, "gh ")
 }
 
+func TestStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoDir := filepath.Join(t.TempDir(), "alpha")
+	must.NoError(os.MkdirAll(repoDir, 0o755))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoDir,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "ar",
+	}}}))
+	runStore := taskstate.NewStore(paths)
+	attempt, err := runStore.StartRun("alpha", "ar-main", taskstate.StartRunOptions{Agent: "recorder", Branch: "main", Worktree: repoDir})
+	must.NoError(err)
+	_, err = runStore.FinishRun("alpha", "ar-main", attempt.Attempt, taskstate.RunStatusSucceeded)
+	must.NoError(err)
+
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
+		dir:  repoDir,
+		args: "--json --readonly --sandbox list --all --limit 0",
+		stdout: `[
+			{
+				"id":"ar-main",
+				"title":"Local main review",
+				"status":"in_progress",
+				"priority":2,
+				"issue_type":"task",
+				"metadata":{"orpheus.branch":"main","orpheus.worktree":"` + repoDir + `"}
+			}
+		]`,
+	}})
+
+	stdout, stderr := executeCommand(t, []string{"status"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "In review (1)")
+	is.Contains(stdout, "ar-main")
+	is.Contains(stdout, "Local main review")
+	is.Contains(stdout, "local repo-root review (no PR URL)")
+	is.Contains(stdout, "Working (0)")
+}
+
 func TestStatusAndTaskReadyUseLatestRunningAttemptAsNeedsAttention(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)

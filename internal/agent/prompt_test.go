@@ -7,6 +7,32 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestRenderDispatchPromptIncludesRepoRootModeContext(t *testing.T) {
+	is := assert.New(t)
+
+	prompt := agent.RenderDispatchPrompt(agent.DispatchPromptContext{
+		TaskID:         "op-main",
+		TaskTitle:      "Manual repo-root review",
+		RepositoryID:   "orpheus",
+		RepositoryName: "Orpheus",
+		ExecutionDir:   "/tmp/orpheus",
+		WorktreePath:   "/tmp/orpheus",
+		Branch:         "main",
+		RepoRootMode:   true,
+	})
+
+	for _, want := range []string{
+		"- Current execution directory: /tmp/orpheus",
+		"- Registered repo root: /tmp/orpheus",
+		"- Registered default branch: main",
+		"Work in the current repository directory, which is the registered repo root on the registered default branch.",
+	} {
+		is.Contains(prompt, want)
+	}
+	is.NotContains(prompt, "- Deterministic worktree")
+	is.NotContains(prompt, "- Deterministic branch")
+}
+
 func TestRenderDispatchPromptIncludesTaskRepositoryAndReportFormat(t *testing.T) {
 	is := assert.New(t)
 

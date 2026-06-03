@@ -46,6 +46,34 @@ func TestProjectGroupsItemsByLocalM2Policy(t *testing.T) {
 	}
 }
 
+func TestProjectWithRunStatesShowsSuccessfulRepoRootRunInReview(t *testing.T) {
+	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
+		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/tmp/alpha", DefaultBranch: "main"},
+		Tasks: []task.Task{{
+			ID:        "a-main",
+			Title:     "local main review",
+			Status:    task.StatusInProgress,
+			IssueType: task.IssueTypeTask,
+			Metadata: task.Metadata{
+				task.MetadataBranch:   "main",
+				task.MetadataWorktree: "/tmp/alpha",
+			},
+		}},
+	}}}
+	runStates := status.RunStateIndex{
+		status.RunStateKey("alpha", "a-main"): {Attempt: 1, Status: taskstate.RunStatusSucceeded, Branch: "main", Worktree: "/tmp/alpha"},
+	}
+
+	got := status.ProjectWithRunStates(snapshot, runStates)
+
+	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-main"})
+	reviewEntry := groupEntries(t, got, status.GroupInReview)[0]
+	if reviewEntry.Detail != "local repo-root review (no PR URL)" {
+		t.Fatalf("review detail = %q, want local repo-root review", reviewEntry.Detail)
+	}
+	assertGroupTaskIDs(t, got, status.GroupWorking, nil)
+}
+
 func TestProjectWithRunStatesTreatsLatestRunningAttemptAsNeedsAttention(t *testing.T) {
 	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
 		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"},

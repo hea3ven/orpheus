@@ -17,6 +17,7 @@ type DispatchPromptContext struct {
 	ExecutionDir   string
 	WorktreePath   string
 	Branch         string
+	RepoRootMode   bool
 }
 
 // RenderDispatchPrompt renders the built-in M3 prompt for an attached agent run.
@@ -36,11 +37,20 @@ func RenderDispatchPrompt(ctx DispatchPromptContext) string {
 	appendPromptLine(&builder, "- ID", ctx.RepositoryID)
 	appendPromptLine(&builder, "- Name", ctx.RepositoryName)
 	appendPromptLine(&builder, "- Current execution directory", ctx.ExecutionDir)
-	appendPromptLine(&builder, "- Deterministic worktree", ctx.WorktreePath)
-	appendPromptLine(&builder, "- Deterministic branch", ctx.Branch)
+	if ctx.RepoRootMode {
+		appendPromptLine(&builder, "- Registered repo root", ctx.WorktreePath)
+		appendPromptLine(&builder, "- Registered default branch", ctx.Branch)
+	} else {
+		appendPromptLine(&builder, "- Deterministic worktree", ctx.WorktreePath)
+		appendPromptLine(&builder, "- Deterministic branch", ctx.Branch)
+	}
 
 	builder.WriteString("\nInstructions:\n")
-	builder.WriteString("- Work in the current repository directory, which is the deterministic task worktree.\n")
+	if ctx.RepoRootMode {
+		builder.WriteString("- Work in the current repository directory, which is the registered repo root on the registered default branch.\n")
+	} else {
+		builder.WriteString("- Work in the current repository directory, which is the deterministic task worktree.\n")
+	}
 	builder.WriteString("- Do not commit manually; leave changes in the working tree for the human operator and later Orpheus workflow steps.\n")
 	builder.WriteString("- When you are finished, report back to the human operator using exactly this format:\n\n")
 	builder.WriteString("Summary:\n")
