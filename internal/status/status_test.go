@@ -6,6 +6,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/status"
 	"github.com/hea3ven/orpheus/internal/task"
+	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
 func TestProjectGroupsItemsByLocalM2Policy(t *testing.T) {
@@ -42,6 +43,32 @@ func TestProjectGroupsItemsByLocalM2Policy(t *testing.T) {
 	blockedEntry := groupEntries(t, got, status.GroupBlocked)[0]
 	if blockedEntry.Detail != "blocked by a-dep" {
 		t.Fatalf("blocked detail = %q, want dependency detail", blockedEntry.Detail)
+	}
+}
+
+func TestProjectWithRunStatesTreatsLatestRunningAttemptAsNeedsAttention(t *testing.T) {
+	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
+		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"},
+		Tasks: []task.Task{
+			{ID: "a-running", Title: "running", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
+			{ID: "a-ready", Title: "ready", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
+		},
+	}}}
+	runStates := status.RunStateIndex{
+		status.RunStateKey("alpha", "a-running"): {Attempt: 2, Status: taskstate.RunStatusRunning},
+	}
+
+	got := status.ProjectWithRunStates(snapshot, runStates)
+
+	unknown := groupEntries(t, got, status.GroupUnknown)
+	if len(unknown) != 1 || unknown[0].Task.ID != "a-running" || unknown[0].Detail == "-" {
+		t.Fatalf("unknown entries = %#v, want running attempt detail", unknown)
+	}
+	assertGroupTaskIDs(t, got, status.GroupReadyToRun, []string{"a-ready"})
+
+	readyRows := status.ReadyRowsWithRunStates(snapshot, runStates)
+	if len(readyRows) != 1 || readyRows[0].Task.ID != "a-ready" {
+		t.Fatalf("ready rows = %#v, want only a-ready", readyRows)
 	}
 }
 

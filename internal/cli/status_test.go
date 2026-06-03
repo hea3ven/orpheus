@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/registry"
+	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -114,6 +115,50 @@ func TestStatusGroupsLocalTaskSnapshots(t *testing.T) {
 	is.NotContains(log, "--json --readonly --sandbox ready")
 	is.NotContains(log, "show --id")
 	is.NotContains(log, "gh ")
+}
+
+func TestStatusAndTaskReadyUseLatestRunningAttemptAsNeedsAttention(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoDir := filepath.Join(t.TempDir(), "alpha")
+	must.NoError(os.MkdirAll(repoDir, 0o755))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:          "alpha",
+		Name:        "Alpha Repo",
+		Path:        repoDir,
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "ar",
+	}}}))
+	_, err := taskstate.NewStore(paths).StartRun("alpha", "ar-running", taskstate.StartRunOptions{Agent: "recorder"})
+	must.NoError(err)
+
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
+		dir:  repoDir,
+		args: "--json --readonly --sandbox list --all --limit 0",
+		stdout: `[
+			{"id":"ar-running","title":"Already running","status":"open","priority":2,"issue_type":"task"},
+			{"id":"ar-ready","title":"Ready task","status":"open","priority":1,"issue_type":"task"}
+		]`,
+	}})
+
+	stdout, stderr := executeCommand(t, []string{"status"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Unknown / needs attention (1)")
+	is.Contains(stdout, "ar-running")
+	is.Contains(stdout, "M3 cannot verify whether the attached process is still alive")
+	is.Contains(stdout, "Ready to run (1)")
+	is.Contains(stdout, "ar-ready")
+
+	readyStdout, readyStderr := executeCommand(t, []string{"task", "ready"})
+
+	is.Empty(readyStderr)
+	is.Contains(readyStdout, "ar-ready")
+	is.NotContains(readyStdout, "ar-running")
 }
 
 func TestStatusReportsRepoFailuresInUnknownGroupAndReturnsError(t *testing.T) {

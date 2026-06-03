@@ -353,17 +353,6 @@ func cloneTasks(tasks []Task) []Task {
 	return clone
 }
 
-func cloneActiveTasks(tasks []Task) []Task {
-	active := make([]Task, 0, len(tasks))
-	for _, taskItem := range tasks {
-		if !IsM2TaskViewItem(taskItem) {
-			continue
-		}
-		active = append(active, taskItem.Clone())
-	}
-	return active
-}
-
 func cloneStrings(values []string) []string {
 	if values == nil {
 		return nil

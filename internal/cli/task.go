@@ -15,6 +15,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/status"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
+	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/spf13/cobra"
 )
 
@@ -94,8 +95,8 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 		Use:   "run <task-id>",
 		Short: "Run an attached agent for a task",
 		Long: "Run an attached agent for a task.\n\n" +
-			"M3 WIP limitation: Orpheus prepares a deterministic task branch and " +
-			"worktree, then runs the attached agent there without writing task metadata or run records.",
+			"Orpheus prepares a deterministic task branch and worktree, records " +
+			"the attached run attempt, then runs the configured agent there.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			return runTaskRun(command, opts, args[0], agentName)
@@ -111,21 +112,44 @@ func addTaskDetailFlags(cmd *cobra.Command, detailed *bool) {
 }
 
 func runTaskReady(command *cobra.Command, opts *rootOptions, detailed bool) error {
-	return runTaskRows(command, opts, taskRowsOptions{
-		operation:    "task ready",
-		logOperation: "task_ready",
-		loadingLog:   "loading registered repos for task ready",
-		queryingLog:  "querying task snapshots",
-		queriedLog:   "projected ready tasks",
-		detailed:     detailed,
-		query: func(ctx context.Context, aggregator taskmodel.Aggregator) taskRowsResult {
-			snapshot := aggregator.Snapshot(ctx)
-			return taskRowsResult{
-				Rows:     status.ReadyRows(snapshot),
-				Failures: snapshot.Failures,
-			}
-		},
-	})
+	logger := opts.log().With(
+		slog.String("component", "cli"),
+		slog.String("operation", "task_ready"),
+	)
+	logger.DebugContext(command.Context(), "loading registered repos for task ready")
+
+	taskCtx, err := loadTaskContext()
+	if err != nil {
+		return err
+	}
+	logger.DebugContext(command.Context(), "querying task snapshots", slog.Int("repo_count", len(taskCtx.Sources)))
+
+	snapshot := taskCtx.Aggregator.Snapshot(command.Context())
+	paths, err := state.ResolveFromEnvironment()
+	if err != nil {
+		return err
+	}
+	runStates, runStateFailures := taskRunStateIndex(paths, snapshot)
+	if len(runStateFailures) > 0 {
+		snapshot.Failures = append(snapshot.Failures, runStateFailures...)
+	}
+	rows := status.ReadyRowsWithRunStates(snapshot, runStates)
+	logger.DebugContext(
+		command.Context(),
+		"projected ready tasks",
+		slog.Int("row_count", len(rows)),
+		slog.Int("failure_count", len(snapshot.Failures)),
+		slog.Int("run_state_count", len(runStates)),
+	)
+
+	if err := renderTaskRows(command.OutOrStdout(), rows, detailed); err != nil {
+		return err
+	}
+	if snapshot.HasFailures() {
+		writeRepoFailures(command.ErrOrStderr(), "task ready", snapshot.Failures)
+		return partialRepoFailureError{operation: "task ready", failures: snapshot.Failures}
+	}
+	return nil
 }
 
 func runTaskRows(command *cobra.Command, opts *rootOptions, rowOpts taskRowsOptions) error {
@@ -211,6 +235,22 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentN
 		return err
 	}
 
+	taskStateStore := taskstate.Service(taskstate.NewStore(paths))
+	if active, ok, err := taskStateStore.ActiveRun(repo.ID, resolved.TaskID); err != nil {
+		return fmt.Errorf("task run %s: inspect task state: %w", resolved.TaskID, err)
+	} else if ok {
+		statePath, pathErr := taskStateStore.Path(repo.ID, resolved.TaskID)
+		if pathErr != nil {
+			statePath = "the per-task Orpheus state file"
+		}
+		return fmt.Errorf(
+			"task run %s: latest run attempt %d is still running; M3 cannot reconcile stale attached runs automatically; wait for the attached agent to finish or repair %s manually",
+			resolved.TaskID,
+			active.Attempt,
+			statePath,
+		)
+	}
+
 	setup, err := gitmeta.SetupTaskWorktree(command.Context(), gitmeta.TaskWorktreeOptions{
 		RepoID:        repo.ID,
 		RepoName:      repo.Name,
@@ -221,6 +261,17 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentN
 	})
 	if err != nil {
 		return fmt.Errorf("task run %s: %w", resolved.TaskID, err)
+	}
+
+	worktreeEvent, err := taskRunWorktreeEvent(setup.Lifecycle)
+	if err != nil {
+		return fmt.Errorf("task run %s: %w", resolved.TaskID, err)
+	}
+	if _, err := taskStateStore.RecordWorktreeEvent(repo.ID, resolved.TaskID, worktreeEvent, taskstate.WorktreeEventOptions{
+		Branch:   setup.Branch,
+		Worktree: setup.WorktreePath,
+	}); err != nil {
+		return fmt.Errorf("task run %s: record worktree event: %w", resolved.TaskID, err)
 	}
 
 	executionDir := setup.WorktreePath
@@ -257,6 +308,20 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentN
 		slog.String("worktree_lifecycle", string(setup.Lifecycle)),
 	)
 
+	attempt, err := taskStateStore.StartRun(repo.ID, resolved.TaskID, taskstate.StartRunOptions{
+		Agent:    commandSnapshot.AgentName,
+		Command:  commandSnapshot.Command,
+		Args:     commandSnapshot.Args,
+		Branch:   setup.Branch,
+		Worktree: setup.WorktreePath,
+	})
+	if err != nil {
+		if errors.Is(err, taskstate.ErrActiveRun) {
+			return fmt.Errorf("task run %s: %w; M3 cannot reconcile stale attached runs automatically", resolved.TaskID, err)
+		}
+		return fmt.Errorf("task run %s: record run start: %w", resolved.TaskID, err)
+	}
+
 	if err := attachedAgentLauncher.Run(command.Context(), commandSnapshot, agent.LaunchOptions{
 		Dir:    executionDir,
 		Env:    taskRunEnvironment(repo.ID, taskItem.ID, setup.WorktreePath, setup.Branch, prompt),
@@ -264,9 +329,38 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentN
 		Stdout: command.OutOrStdout(),
 		Stderr: command.ErrOrStderr(),
 	}); err != nil {
+		if recordErr := recordTaskRunFailure(taskStateStore, repo.ID, resolved.TaskID, attempt.Attempt, err); recordErr != nil {
+			return fmt.Errorf("task run %s: %w; additionally failed to record run failure: %v", resolved.TaskID, err, recordErr)
+		}
 		return fmt.Errorf("task run %s: %w", resolved.TaskID, err)
 	}
+
+	if _, err := taskStateStore.FinishRun(repo.ID, resolved.TaskID, attempt.Attempt, taskstate.RunStatusSucceeded); err != nil {
+		return fmt.Errorf("task run %s: record run finish: %w", resolved.TaskID, err)
+	}
 	return nil
+}
+
+func taskRunWorktreeEvent(lifecycle gitmeta.TaskWorktreeLifecycle) (taskstate.EventType, error) {
+	switch lifecycle {
+	case gitmeta.TaskWorktreeLifecycleCreated:
+		return taskstate.EventWorktreeCreated, nil
+	case gitmeta.TaskWorktreeLifecycleReused:
+		return taskstate.EventWorktreeReused, nil
+	case gitmeta.TaskWorktreeLifecycleRecreated:
+		return taskstate.EventWorktreeRecreated, nil
+	default:
+		return "", fmt.Errorf("unknown worktree lifecycle %q", lifecycle)
+	}
+}
+
+func recordTaskRunFailure(store taskstate.Service, repoID string, taskID string, attempt int, runErr error) error {
+	if agent.IsStartError(runErr) {
+		_, err := store.FailRunStart(repoID, taskID, attempt, runErr)
+		return err
+	}
+	_, err := store.FinishRun(repoID, taskID, attempt, taskstate.RunStatusFailed)
+	return err
 }
 
 type resolvedTaskContext struct {

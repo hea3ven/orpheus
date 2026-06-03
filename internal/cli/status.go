@@ -5,7 +5,10 @@ import (
 	"log/slog"
 	"text/tabwriter"
 
+	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/status"
+	taskmodel "github.com/hea3ven/orpheus/internal/task"
+	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/spf13/cobra"
 )
 
@@ -37,12 +40,21 @@ func runStatus(command *cobra.Command, opts *rootOptions, full bool) error {
 	logger.DebugContext(command.Context(), "querying local task snapshots", slog.Int("repo_count", len(taskCtx.Sources)))
 
 	snapshot := taskCtx.Aggregator.Snapshot(command.Context())
-	projection := status.Project(snapshot)
+	paths, err := state.ResolveFromEnvironment()
+	if err != nil {
+		return err
+	}
+	runStates, runStateFailures := taskRunStateIndex(paths, snapshot)
+	if len(runStateFailures) > 0 {
+		snapshot.Failures = append(snapshot.Failures, runStateFailures...)
+	}
+	projection := status.ProjectWithRunStates(snapshot, runStates)
 	logger.DebugContext(
 		command.Context(),
 		"projected local status",
 		slog.Int("repo_count", len(snapshot.Repositories)),
 		slog.Int("failure_count", len(snapshot.Failures)),
+		slog.Int("run_state_count", len(runStates)),
 	)
 
 	if err := renderStatus(command.OutOrStdout(), projection, full); err != nil {
@@ -53,6 +65,32 @@ func runStatus(command *cobra.Command, opts *rootOptions, full bool) error {
 		return partialRepoFailureError{operation: "status", failures: snapshot.Failures}
 	}
 	return nil
+}
+
+func taskRunStateIndex(paths state.Paths, snapshot taskmodel.SnapshotResult) (status.RunStateIndex, []taskmodel.RepoFailure) {
+	store := taskstate.Service(taskstate.NewStore(paths))
+	index := status.RunStateIndex{}
+	failures := make([]taskmodel.RepoFailure, 0)
+
+	for _, repoSnapshot := range snapshot.Repositories {
+		for _, taskItem := range repoSnapshot.Tasks {
+			latest, ok, err := store.LatestRun(repoSnapshot.Repository.ID, taskItem.ID)
+			if err != nil {
+				failures = append(failures, taskmodel.RepoFailure{
+					Repository: repoSnapshot.Repository,
+					Source:     "task_state",
+					Operation:  "latest_run",
+					Err:        err,
+				})
+				continue
+			}
+			if !ok {
+				continue
+			}
+			index[status.RunStateKey(repoSnapshot.Repository.ID, taskItem.ID)] = latest
+		}
+	}
+	return index, failures
 }
 
 func renderStatus(output interface{ Write([]byte) (int, error) }, projection status.Projection, full bool) error {

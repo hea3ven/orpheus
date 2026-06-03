@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/task"
+	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
 // GroupID identifies an M2 local status projection group.
@@ -66,6 +67,9 @@ type Projection struct {
 	Groups []Group
 }
 
+// RunStateIndex contains the latest Orpheus run attempt by repository/task key.
+type RunStateIndex map[string]taskstate.RunAttempt
+
 type readinessState string
 
 const (
@@ -84,6 +88,11 @@ type policyResult struct {
 
 // Project builds the local-only M2 status projection from task aggregation snapshots.
 func Project(snapshot task.SnapshotResult) Projection {
+	return ProjectWithRunStates(snapshot, nil)
+}
+
+// ProjectWithRunStates builds the status projection using latest run attempts for M3 local execution state.
+func ProjectWithRunStates(snapshot task.SnapshotResult, runStates RunStateIndex) Projection {
 	projection := Projection{Groups: []Group{
 		{ID: GroupUnknown, Title: "Unknown / needs attention"},
 		{ID: GroupInReview, Title: "In review"},
@@ -94,7 +103,7 @@ func Project(snapshot task.SnapshotResult) Projection {
 	}}
 
 	for _, repoSnapshot := range snapshot.Repositories {
-		projectRepository(&projection, repoSnapshot)
+		projectRepository(&projection, repoSnapshot, runStates)
 	}
 	for _, failure := range snapshot.Failures {
 		projection.add(GroupUnknown, failureEntry(failure))
@@ -104,11 +113,16 @@ func Project(snapshot task.SnapshotResult) Projection {
 
 // ReadyRows returns rows selected by the canonical Orpheus MVP readiness policy.
 func ReadyRows(snapshot task.SnapshotResult) []task.RepoTask {
+	return ReadyRowsWithRunStates(snapshot, nil)
+}
+
+// ReadyRowsWithRunStates returns ready rows while respecting active M3 run attempts.
+func ReadyRowsWithRunStates(snapshot task.SnapshotResult, runStates RunStateIndex) []task.RepoTask {
 	rows := make([]task.RepoTask, 0)
 	for _, repoSnapshot := range snapshot.Repositories {
 		index := newRepositoryIndex(repoSnapshot.Tasks)
 		for _, taskItem := range repoSnapshot.Tasks {
-			if classify(taskItem, index).state != readinessReady {
+			if classify(taskItem, index, latestRunFor(runStates, repoSnapshot.Repository.ID, taskItem.ID)).state != readinessReady {
 				continue
 			}
 			rows = append(rows, task.RepoTask{
@@ -120,21 +134,32 @@ func ReadyRows(snapshot task.SnapshotResult) []task.RepoTask {
 	return rows
 }
 
-func projectRepository(projection *Projection, repoSnapshot task.RepositorySnapshot) {
+// RunStateKey returns the stable lookup key for RunStateIndex.
+func RunStateKey(repoID, taskID string) string {
+	return repoID + "\x00" + taskID
+}
+
+func projectRepository(projection *Projection, repoSnapshot task.RepositorySnapshot, runStates RunStateIndex) {
 	index := newRepositoryIndex(repoSnapshot.Tasks)
 	for _, taskItem := range repoSnapshot.Tasks {
-		result := classify(taskItem, index)
+		result := classify(taskItem, index, latestRunFor(runStates, repoSnapshot.Repository.ID, taskItem.ID))
 		projection.add(groupForState(result.state), taskEntry(repoSnapshot.Repository, taskItem, result.detail))
 	}
 }
 
-func classify(taskItem task.Task, index map[string]task.Task) policyResult {
+func classify(taskItem task.Task, index map[string]task.Task, latestRun *taskstate.RunAttempt) policyResult {
 	metadata := taskItem.OrpheusMetadata()
 	if taskItem.Status == task.StatusClosed {
 		return policyResult{state: readinessDone, detail: "closed"}
 	}
 	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
 		return policyResult{state: readinessReview, detail: metadata.PRURL}
+	}
+	if latestRun != nil && latestRun.Status == taskstate.RunStatusRunning {
+		return policyResult{
+			state:  readinessUnknown,
+			detail: fmt.Sprintf("run attempt %d is running; M3 cannot verify whether the attached process is still alive", latestRun.Attempt),
+		}
 	}
 	if taskItem.Status == task.StatusInProgress {
 		return policyResult{state: readinessWorking, detail: "-"}
@@ -154,6 +179,17 @@ func classify(taskItem task.Task, index map[string]task.Task) policyResult {
 		return policyResult{state: readinessReady, detail: "-"}
 	}
 	return policyResult{state: readinessUnknown, detail: fmt.Sprintf("status %s is not locally actionable in M2", formatStatus(taskItem.Status))}
+}
+
+func latestRunFor(runStates RunStateIndex, repoID string, taskID string) *taskstate.RunAttempt {
+	if len(runStates) == 0 {
+		return nil
+	}
+	run, ok := runStates[RunStateKey(repoID, taskID)]
+	if !ok {
+		return nil
+	}
+	return &run
 }
 
 func newRepositoryIndex(tasks []task.Task) map[string]task.Task {

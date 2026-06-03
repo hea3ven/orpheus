@@ -10,6 +10,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/registry"
+	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -559,6 +560,42 @@ func TestTaskRunExecutesDefaultAgentAttachedFromDeterministicWorktree(t *testing
 		is.Contains(log, want)
 	}
 	is.Contains(log, "ARG_2<<END\nYou are an attached implementation agent dispatched by Orpheus.")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-1.yaml"), &state))
+	must.Len(state.Runs, 1)
+	is.Equal(1, state.Runs[0].Attempt)
+	is.Equal(taskstate.RunStatusSucceeded, state.Runs[0].Status)
+	is.Equal("recorder", state.Runs[0].Agent)
+	is.Equal("fake-agent", state.Runs[0].Command)
+	must.Len(state.Runs[0].Args, 4)
+	is.Equal("--prompt", state.Runs[0].Args[0])
+	is.Contains(state.Runs[0].Args[1], "You are an attached implementation agent dispatched by Orpheus.")
+	is.Equal("--literal", state.Runs[0].Args[2])
+	is.Equal("unchanged", state.Runs[0].Args[3])
+	is.Equal("orpheus/op-1", state.Runs[0].Branch)
+	is.Equal(worktreePath, state.Runs[0].Worktree)
+	must.NotNil(state.Runs[0].FinishedAt)
+	must.Len(state.Events, 3)
+	is.Equal(taskstate.EventWorktreeCreated, state.Events[0].Type)
+	is.Equal(taskstate.EventRunStarted, state.Events[1].Type)
+	is.Equal(taskstate.EventRunFinished, state.Events[2].Type)
+
+	secondStdout, secondStderr := executeCommand(t, []string{"task", "run", "op-1"})
+
+	is.Contains(secondStdout, "fake agent stdout")
+	is.Contains(secondStderr, "fake agent stderr")
+	var retriedState taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-1.yaml"), &retriedState))
+	must.Len(retriedState.Runs, 2)
+	is.Equal(1, retriedState.Runs[0].Attempt)
+	is.Equal(2, retriedState.Runs[1].Attempt)
+	is.Equal(taskstate.RunStatusSucceeded, retriedState.Runs[0].Status)
+	is.Equal(taskstate.RunStatusSucceeded, retriedState.Runs[1].Status)
+	must.Len(retriedState.Events, 6)
+	is.Equal(taskstate.EventWorktreeReused, retriedState.Events[3].Type)
+	is.Equal(taskstate.EventRunStarted, retriedState.Events[4].Type)
+	is.Equal(taskstate.EventRunFinished, retriedState.Events[5].Type)
 }
 
 func TestTaskRunAgentFlagSelectsNamedProfile(t *testing.T) {
@@ -601,6 +638,133 @@ func TestTaskRunAgentFlagSelectsNamedProfile(t *testing.T) {
 	is.Contains(log, "ARG_1<<END\nselected\nEND")
 	is.Contains(log, "- ID: op-2")
 	is.Contains(log, "- Title: Use selected agent")
+}
+
+func TestTaskRunRecordsFailedAttemptWhenAgentExitsNonZero(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[{"id":"op-3","title":"Failing agent","status":"open","priority":1,"issue_type":"task"}]`},
+	})
+	withFakeAgent(t, "failing-agent", 7)
+	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"default_agent": "failing",
+		"agents":        map[string]any{"failing": map[string]any{"command": "failing-agent"}},
+	}))
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "op-3"})
+
+	must.Error(err)
+	is.Contains(stdout, "fake agent stdout")
+	is.Contains(stderr, "fake agent stderr")
+	is.ErrorContains(err, "run agent \"failing\"")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-3.yaml"), &state))
+	must.Len(state.Runs, 1)
+	is.Equal(taskstate.RunStatusFailed, state.Runs[0].Status)
+	must.NotNil(state.Runs[0].FinishedAt)
+	must.Len(state.Events, 3)
+	is.Equal(taskstate.EventWorktreeCreated, state.Events[0].Type)
+	is.Equal(taskstate.EventRunStarted, state.Events[1].Type)
+	is.Equal(taskstate.EventRunFinished, state.Events[2].Type)
+	is.Equal(taskstate.RunStatusFailed, state.Events[2].Status)
+}
+
+func TestTaskRunRecordsStartFailureWhenAgentProcessDoesNotStart(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[{"id":"op-4","title":"Missing executable","status":"open","priority":1,"issue_type":"task"}]`},
+	})
+	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"default_agent": "missing",
+		"agents":        map[string]any{"missing": map[string]any{"command": "definitely-missing-orpheus-agent"}},
+	}))
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "op-4"})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "start process")
+	is.ErrorContains(err, "definitely-missing-orpheus-agent")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-4.yaml"), &state))
+	must.Len(state.Runs, 1)
+	is.Equal(taskstate.RunStatusFailed, state.Runs[0].Status)
+	must.NotNil(state.Runs[0].FinishedAt)
+	must.Len(state.Events, 3)
+	is.Equal(taskstate.EventWorktreeCreated, state.Events[0].Type)
+	is.Equal(taskstate.EventRunStarted, state.Events[1].Type)
+	is.Equal(taskstate.EventRunStartFailed, state.Events[2].Type)
+	is.Equal(taskstate.RunStatusFailed, state.Events[2].Status)
+	is.Contains(state.Events[2].Error, "definitely-missing-orpheus-agent")
+}
+
+func TestTaskRunRefusesLatestRunningAttempt(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[{"id":"op-5","title":"Already running","status":"open","priority":1,"issue_type":"task"}]`},
+	})
+	_, err := taskstate.NewStore(paths).StartRun("alpha", "op-5", taskstate.StartRunOptions{Agent: "recorder"})
+	must.NoError(err)
+	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-5"))
+	must.NoError(err)
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "op-5"})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "latest run attempt 1 is still running")
+	is.ErrorContains(err, "M3 cannot reconcile stale attached runs automatically")
+	_, statErr := os.Stat(worktreePath)
+	is.ErrorIs(statErr, os.ErrNotExist)
 }
 
 func TestTaskRunReportsUnknownAgentProfileBeforeLaunching(t *testing.T) {
