@@ -371,18 +371,7 @@ func startTaskRunAttempt(
 		}
 
 		executionDir := expected.WorktreePath
-		prompt := agent.RenderDispatchPrompt(agent.DispatchPromptContext{
-			TaskID:                 taskItem.ID,
-			TaskTitle:              taskItem.Title,
-			TaskDescription:        taskItem.Description,
-			TaskAcceptanceCriteria: taskItem.AcceptanceCriteria,
-			RepositoryID:           opts.repo.ID,
-			RepositoryName:         opts.repo.Name,
-			ExecutionDir:           executionDir,
-			WorktreePath:           expected.WorktreePath,
-			Branch:                 expected.Branch,
-			RepoRootMode:           opts.mainMode,
-		})
+		prompt := agent.RenderBootstrapPrompt()
 		agentConfig, err := agent.LoadConfig(paths)
 		if err != nil {
 			return err

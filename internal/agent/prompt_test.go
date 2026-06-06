@@ -7,74 +7,105 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestRenderDispatchPromptIncludesRepoRootModeContext(t *testing.T) {
+func TestRenderBootstrapPromptTellsAgentToFetchContext(t *testing.T) {
 	is := assert.New(t)
 
-	prompt := agent.RenderDispatchPrompt(agent.DispatchPromptContext{
-		TaskID:         "op-main",
-		TaskTitle:      "Manual repo-root review",
-		RepositoryID:   "orpheus",
-		RepositoryName: "Orpheus",
-		ExecutionDir:   "/tmp/orpheus",
-		WorktreePath:   "/tmp/orpheus",
-		Branch:         "main",
-		RepoRootMode:   true,
-	})
+	prompt := agent.RenderBootstrapPrompt()
 
-	for _, want := range []string{
-		"- Current execution directory: /tmp/orpheus",
-		"- Registered repo root: /tmp/orpheus",
-		"- Registered default branch: main",
-		"Work in the current repository directory, which is the registered repo root on the registered default branch.",
-	} {
-		is.Contains(prompt, want)
-	}
-	is.NotContains(prompt, "- Deterministic worktree")
-	is.NotContains(prompt, "- Deterministic branch")
+	is.Contains(prompt, "You are an attached implementation agent dispatched by Orpheus.")
+	is.Contains(prompt, "Run `orpheus agent context` now")
+	is.Contains(prompt, "task instructions")
+	is.Contains(prompt, "execution contract")
+	is.NotContains(prompt, "Task:")
+	is.NotContains(prompt, "Repository:")
+	is.NotContains(prompt, "Summary:")
+	is.NotContains(prompt, "Beads")
+	is.NotContains(prompt, "bd")
 }
 
-func TestRenderDispatchPromptIncludesTaskRepositoryAndReportFormat(t *testing.T) {
+func TestRenderActiveContextIncludesWorktreeContract(t *testing.T) {
 	is := assert.New(t)
 
-	prompt := agent.RenderDispatchPrompt(agent.DispatchPromptContext{
-		TaskID:                 "op-9xs.10",
-		TaskTitle:              "Minimal attached agent execution",
-		TaskDescription:        "Resolve the task.\nRun the agent.",
-		TaskAcceptanceCriteria: "Agent receives backend-neutral context.",
-		RepositoryID:           "orpheus",
-		RepositoryName:         "Orpheus",
-		ExecutionDir:           "/tmp/orpheus-worktree",
-		WorktreePath:           "/tmp/orpheus-worktree",
-		Branch:                 "orpheus/op-9xs.10",
+	output := agent.RenderActiveContext(agent.ActiveContext{
+		Repository: agent.ContextRepository{
+			ID:            "alpha",
+			Name:          "Alpha Repo",
+			Root:          "/repo/alpha",
+			DefaultBranch: "main",
+		},
+		Task: agent.ContextTask{
+			ID:                 "op-1",
+			Title:              "Implement context",
+			Description:        "Resolve the active run.",
+			AcceptanceCriteria: "Context renders only for running attempts.",
+		},
+		Run: agent.ContextRun{
+			Attempt: 2,
+			Agent:   "recorder",
+		},
+		Target: agent.ContextTarget{
+			Kind:             agent.ExecutionTargetWorktree,
+			Branch:           "orpheus/op-1",
+			Path:             "/worktrees/op-1",
+			CurrentDirectory: "/worktrees/op-1/internal",
+		},
 	})
 
 	for _, want := range []string{
-		"Task:",
-		"- ID: op-9xs.10",
-		"- Title: Minimal attached agent execution",
-		"Resolve the task.",
-		"Run the agent.",
-		"- Acceptance criteria: Agent receives backend-neutral context.",
-		"Repository:",
-		"- ID: orpheus",
-		"- Name: Orpheus",
-		"- Current execution directory: /tmp/orpheus-worktree",
-		"- Deterministic worktree: /tmp/orpheus-worktree",
-		"- Deterministic branch: orpheus/op-9xs.10",
-		"Work in the current repository directory, which is the deterministic task worktree.",
-		"Do not commit manually",
-		"Summary:",
-		"One commit-style summary line, 80 characters or fewer",
-		"<type(fix,feat,test,chore,conf,etc)>: <description>",
-		"do not include the task/bead ID",
-		"do not mention tests even if included",
-		"Details:",
-		"Checks:",
-		"Follow-ups:",
-		"If none, say \"None\".",
+		"# Orpheus Agent Context",
+		"- ID: op-1",
+		"- Title: Implement context",
+		"- Description: Resolve the active run.",
+		"- Acceptance criteria: Context renders only for running attempts.",
+		"- ID: alpha",
+		"- Name: Alpha Repo",
+		"- Registered root: /repo/alpha",
+		"- Registered default branch: main",
+		"- Workflow: worktree/team",
+		"- Branch: orpheus/op-1",
+		"- Path: /worktrees/op-1",
+		"- Current directory: /worktrees/op-1/internal",
+		"- Run attempt: 2",
+		"- Agent: recorder",
+		"deterministic task worktree and task branch",
+		"orpheus agent done",
+		"Orpheus will create the pull request",
 	} {
-		is.Contains(prompt, want)
+		is.Contains(output, want)
 	}
-	is.NotContains(prompt, "Beads")
-	is.NotContains(prompt, "no isolated task worktree")
+	is.NotContains(output, "Beads")
+	is.NotContains(output, "bd")
+}
+
+func TestRenderActiveContextIncludesMainContract(t *testing.T) {
+	is := assert.New(t)
+
+	output := agent.RenderActiveContext(agent.ActiveContext{
+		Repository: agent.ContextRepository{
+			ID:            "alpha",
+			Name:          "Alpha Repo",
+			Root:          "/repo/alpha",
+			DefaultBranch: "main",
+		},
+		Task: agent.ContextTask{ID: "op-main", Title: "Main target"},
+		Run:  agent.ContextRun{Attempt: 1},
+		Target: agent.ContextTarget{
+			Kind:             agent.ExecutionTargetMain,
+			Branch:           "main",
+			Path:             "/repo/alpha",
+			CurrentDirectory: "/repo/alpha",
+		},
+	})
+
+	for _, want := range []string{
+		"- Workflow: main/solo",
+		"registered repository root on the registered default branch",
+		"Orpheus will record local-review-ready completion data",
+		"The human operator will later run `orpheus task done op-main`",
+		"do not run it yourself unless explicitly asked",
+	} {
+		is.Contains(output, want)
+	}
+	is.NotContains(output, "Beads")
+	is.NotContains(output, "bd")
 }

@@ -59,7 +59,7 @@ func LoadConfig(paths state.Paths) (Config, error) {
 }
 
 // ResolveCommand resolves selectedAgent, or default_agent when selectedAgent is blank,
-// and applies M3 prompt interpolation.
+// and applies bootstrap prompt interpolation.
 func (c Config) ResolveCommand(selectedAgent string, prompt string) (CommandSnapshot, error) {
 	normalized, err := c.normalized()
 	if err != nil {
@@ -154,7 +154,7 @@ func validateInterpolationToken(field string, value string) error {
 	withoutPromptTokens := strings.ReplaceAll(value, promptToken, "")
 	if strings.Contains(withoutPromptTokens, "{{") || strings.Contains(withoutPromptTokens, "}}") {
 		return fmt.Errorf(
-			"%s contains an unsupported interpolation token; M3 supports only %s",
+			"%s contains an unsupported interpolation token; supported interpolation token: %s",
 			field,
 			promptToken,
 		)

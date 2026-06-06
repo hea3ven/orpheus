@@ -102,7 +102,7 @@ func TestConfigValidationErrorsAreActionable(t *testing.T) {
 					},
 				},
 			},
-			want: "M3 supports only {{prompt}}",
+			want: "supported interpolation token: {{prompt}}",
 		},
 	}
 

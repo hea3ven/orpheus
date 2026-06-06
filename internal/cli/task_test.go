@@ -544,23 +544,16 @@ func TestTaskRunExecutesDefaultAgentAttachedFromDeterministicWorktree(t *testing
 		"ORPHEUS_WORKTREE=" + worktreePath,
 		"ORPHEUS_BRANCH=orpheus/op-1",
 		"ORPHEUS_AGENT_PROMPT<<END",
-		"- ID: op-1",
-		"- Title: Implement attached run",
-		"Resolve the task and launch the configured agent.",
-		"The agent gets the rendered prompt and ORPHEUS environment.",
-		"- Name: Alpha Repo",
-		"- Current execution directory: " + worktreePath,
-		"- Deterministic worktree: " + worktreePath,
-		"- Deterministic branch: orpheus/op-1",
-		"Do not commit manually",
-		"Summary:",
-		"Details:",
-		"Checks:",
-		"Follow-ups:",
+		"Run `orpheus agent context` now",
+		"task instructions and execution contract",
 	} {
 		is.Contains(log, want)
 	}
 	is.Contains(log, "ARG_2<<END\nYou are an attached implementation agent dispatched by Orpheus.")
+	is.NotContains(log, "Resolve the task and launch the configured agent.")
+	is.NotContains(log, "The agent gets the rendered prompt and ORPHEUS environment.")
+	is.NotContains(log, "- Deterministic worktree: "+worktreePath)
+	is.NotContains(log, "Summary:")
 
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-1.yaml"), &state))
@@ -572,6 +565,8 @@ func TestTaskRunExecutesDefaultAgentAttachedFromDeterministicWorktree(t *testing
 	must.Len(state.Runs[0].Args, 4)
 	is.Equal("--prompt", state.Runs[0].Args[0])
 	is.Contains(state.Runs[0].Args[1], "You are an attached implementation agent dispatched by Orpheus.")
+	is.Contains(state.Runs[0].Args[1], "Run `orpheus agent context` now")
+	is.NotContains(state.Runs[0].Args[1], "Implement attached run")
 	is.Equal("--literal", state.Runs[0].Args[2])
 	is.Equal("unchanged", state.Runs[0].Args[3])
 	is.Equal("orpheus/op-1", state.Runs[0].Branch)
@@ -662,12 +657,13 @@ func TestTaskRunMainExecutesAgentFromRegisteredRepoRoot(t *testing.T) {
 		"ORPHEUS_TASK_ID=op-main",
 		"ORPHEUS_WORKTREE=" + repoPath,
 		"ORPHEUS_BRANCH=main",
-		"- Registered repo root: " + repoPath,
-		"- Registered default branch: main",
-		"registered repo root on the registered default branch",
+		"Run `orpheus agent context` now",
+		"task instructions and execution contract",
 	} {
 		is.Contains(log, want)
 	}
+	is.NotContains(log, "- Registered repo root: "+repoPath)
+	is.NotContains(log, "- Registered default branch: main")
 	is.NotContains(log, "- Deterministic worktree")
 	is.NotContains(log, "- Deterministic branch")
 
@@ -1191,8 +1187,10 @@ func TestTaskRunAgentFlagSelectsNamedProfile(t *testing.T) {
 	must.NoError(err)
 	log := string(agentLog)
 	is.Contains(log, "ARG_1<<END\nselected\nEND")
-	is.Contains(log, "- ID: op-2")
-	is.Contains(log, "- Title: Use selected agent")
+	is.Contains(log, "ARG_2<<END\nYou are an attached implementation agent dispatched by Orpheus.")
+	is.Contains(log, "Run `orpheus agent context` now")
+	is.NotContains(log, "- ID: op-2")
+	is.NotContains(log, "- Title: Use selected agent")
 }
 
 func TestTaskRunRecordsFailedAttemptWhenAgentExitsNonZero(t *testing.T) {

@@ -30,26 +30,6 @@ Design software architectures that balance competing concerns:
 4. **Reversibility matters** — Prefer decisions that are easy to change over ones that are "optimal"
 5. **Document decisions, not just designs** — ADRs capture WHY, not just WHAT
 
-## 📋 Architecture Decision Record Template
-
-Propose ADRs whenever there is a significant architecture change to be made or there are complex consideration or trade-offs to be discussed. Otherwise, present the architecture changes in a simpler way.
-
-```markdown
-# ADR-001: [Decision Title]
-
-## Status
-Proposed | Accepted | Deprecated | Superseded by ADR-XXX
-
-## Context
-What is the issue that we're seeing that is motivating this decision?
-
-## Decision
-What is the change that we're proposing and/or doing?
-
-## Consequences
-What becomes easier or harder because of this change?
-```
-
 ## 💬 Communication Style
 - Lead with the problem and constraints before proposing solutions
 - Use diagrams (C4 model) to communicate at the right level of abstraction
