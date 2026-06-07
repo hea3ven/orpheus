@@ -10,6 +10,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/registry"
+	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1357,6 +1358,210 @@ func TestTaskRunReportsUnknownAgentProfileBeforeLaunching(t *testing.T) {
 	is.ErrorIs(logErr, os.ErrNotExist)
 }
 
+func TestTaskDoneCommitsPushesClosesAndRecordsFinalization(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Implement task done", "Commit reviewed repo-root changes.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	bdLogPath := withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "done", "op-main"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Finalized op-main")
+	commit := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
+	is.Contains(stdout, commit)
+	message := strings.TrimSpace(runGit(t, repoPath, "log", "-1", "--format=%B"))
+	is.Equal("Implement task done\n\nCommit reviewed repo-root changes.", message)
+	is.NotContains(message, "op-main")
+	is.NotContains(message, "Orpheus")
+	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
+	originHead := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/main"))
+	is.Equal(commit, originHead)
+
+	bdLog, err := os.ReadFile(bdLogPath)
+	must.NoError(err)
+	is.Contains(string(bdLog), "--json --readonly --sandbox show --id op-main")
+	is.Contains(string(bdLog), "--json --sandbox close op-main")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	facts := taskstate.FinalizationFacts(state)
+	is.Equal(commit, facts.Commit)
+	must.NotNil(facts.CommittedAt)
+	must.NotNil(facts.PushedAt)
+	must.NotNil(facts.ClosedAt)
+}
+
+func TestTaskDoneInfersSingleMainReadyTaskFromRepoRootAndUsesOverrides(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-infer", repoPath, "Stored summary", "Stored details.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "human-review.txt"), []byte("human\n"), 0o644))
+	t.Chdir(repoPath)
+
+	taskJSON := mainReadyTaskJSON("op-infer", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox list --all --limit 0", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-infer", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-infer", stdout: "{}"},
+	})
+
+	stdout, stderr := executeCommand(t, []string{
+		"task",
+		"done",
+		"--summary",
+		"Human reviewed summary",
+		"--details",
+		"Human adjusted details.",
+	})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Finalized op-infer")
+	message := strings.TrimSpace(runGit(t, repoPath, "log", "-1", "--format=%B"))
+	is.Equal("Human reviewed summary\n\nHuman adjusted details.", message)
+}
+
+func TestTaskDoneWithoutTaskIDRequiresExactRegisteredRepoRoot(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	nested := filepath.Join(repoPath, "nested")
+	must.NoError(os.MkdirAll(nested, 0o755))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	t.Chdir(nested)
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "done"})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "cwd must be exactly a registered repo root")
+	is.ErrorContains(err, "pass <task-id>")
+}
+
+func TestTaskDoneRefusesNoChangesWithoutRecordedFinalizationCommit(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-clean", repoPath, "Clean summary", "Clean details.")
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
+		dir:    repoPath,
+		args:   "--json --readonly --sandbox show --id op-clean",
+		stdout: mainReadyTaskJSON("op-clean", repoPath),
+	}})
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "done", "op-clean"})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "has no changes to commit")
+	is.ErrorContains(err, "has no recorded finalization commit")
+}
+
+func TestTaskDoneRetriesPushAndCloseFromRecordedFinalizationCommit(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-retry", repoPath, "Retry summary", "Retry details.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "already-committed.txt"), []byte("committed\n"), 0o644))
+	runGit(t, repoPath, "add", "already-committed.txt")
+	runGit(t, repoPath, "commit", "-m", "Retry summary", "-m", "Retry details.")
+	commit := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
+	_, err := taskstate.NewStore(paths).RecordFinalizationCommit("alpha", "op-retry", commit)
+	must.NoError(err)
+
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-retry", stdout: mainReadyTaskJSON("op-retry", repoPath)},
+		{dir: repoPath, args: "--json --sandbox close op-retry", stdout: "{}"},
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "done", "op-retry"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Finalized op-retry")
+	is.Equal(commit, strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")))
+	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
+	is.Equal(commit, strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/main")))
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-retry.yaml"), &state))
+	facts := taskstate.FinalizationFacts(state)
+	is.Equal(commit, facts.Commit)
+	must.NotNil(facts.PushedAt)
+	must.NotNil(facts.ClosedAt)
+}
+
 func withFakeBDTaskResponses(t *testing.T, responses map[string]fakeBDTaskResponse) string {
 	t.Helper()
 
@@ -1425,6 +1630,44 @@ exit 65
 	t.Setenv("FAKE_BD_LOG", logPath)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return logPath
+}
+
+func configureTestGitUser(t *testing.T, repoPath string) {
+	t.Helper()
+	runGit(t, repoPath, "config", "user.name", "Orpheus Test")
+	runGit(t, repoPath, "config", "user.email", "orpheus@example.com")
+}
+
+func recordMainCompletion(t *testing.T, paths state.Paths, repoID string, taskID string, repoPath string, summary string, details string) {
+	t.Helper()
+	store := taskstate.NewStore(paths)
+	attempt, err := store.StartRun(repoID, taskID, taskstate.StartRunOptions{
+		Agent:    "recorder",
+		Branch:   "main",
+		Worktree: repoPath,
+	})
+	if err != nil {
+		t.Fatalf("start main run: %v", err)
+	}
+	if _, err := store.CompleteRun(repoID, taskID, attempt.Attempt, taskstate.CompleteRunOptions{
+		Summary: summary,
+		Details: details,
+	}); err != nil {
+		t.Fatalf("complete main run: %v", err)
+	}
+}
+
+func mainReadyTaskJSON(taskID string, repoPath string) string {
+	return `[
+		{
+			"id":"` + taskID + `",
+			"title":"Ready for task done",
+			"status":"in_progress",
+			"priority":1,
+			"issue_type":"task",
+			"metadata":{"orpheus.branch":"main","orpheus.worktree":"` + repoPath + `"}
+		}
+	]`
 }
 
 func withFakeAgent(t *testing.T, name string, exitCode int) string {

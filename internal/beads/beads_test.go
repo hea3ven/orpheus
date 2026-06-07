@@ -580,6 +580,52 @@ func TestTaskBackendMarkInProgressReportsUpdateCommandFailure(t *testing.T) {
 	}
 }
 
+func TestTaskBackendCloseClosesOpenTask(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1"},
+			result:   beads.Result{Stdout: `[{"id":"op-1","title":"task","status":"in_progress","priority":2,"issue_type":"task"}]`},
+		},
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--sandbox", "close", "op-1"},
+		},
+	}}
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+
+	if err := backend.Close(context.Background(), "op-1"); err != nil {
+		t.Fatalf("close task: %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
+func TestTaskBackendCloseTreatsAlreadyClosedTaskAsSuccess(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{{
+		wantDir:  dir,
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-2"},
+		result:   beads.Result{Stdout: `[{"id":"op-2","title":"task","status":"closed","priority":2,"issue_type":"task"}]`},
+	}}}
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+
+	if err := backend.Close(context.Background(), "op-2"); err != nil {
+		t.Fatalf("close already closed task: %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
 func TestTaskBackendReportsCommandFailureWithOutput(t *testing.T) {
 	dir := t.TempDir()
 	runner := &fakeRunner{calls: []fakeCall{{

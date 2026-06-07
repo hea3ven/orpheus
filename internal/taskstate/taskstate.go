@@ -46,6 +46,9 @@ var (
 
 	// ErrCompletionConflict indicates a run already has different completion details.
 	ErrCompletionConflict = errors.New("run completion already recorded with different summary/details")
+
+	// ErrFinalizationConflict indicates finalization facts already contain different data.
+	ErrFinalizationConflict = errors.New("task finalization already recorded with different facts")
 )
 
 // Service is the small task-state API consumed by orchestration and projections.
@@ -59,6 +62,9 @@ type Service interface {
 	CompleteRun(repoID, taskID string, attempt int, opts CompleteRunOptions) (RunAttempt, error)
 	FinishRun(repoID, taskID string, attempt int, status RunStatus) (RunAttempt, error)
 	FailRunStart(repoID, taskID string, attempt int, cause error) (RunAttempt, error)
+	RecordFinalizationCommit(repoID, taskID string, commit string) (Finalization, error)
+	RecordFinalizationPush(repoID, taskID string) (Finalization, error)
+	RecordFinalizationClose(repoID, taskID string) (Finalization, error)
 	Events(repoID, taskID string) ([]Event, error)
 }
 
@@ -78,6 +84,8 @@ type TaskState struct {
 
 	Runs   []RunAttempt `yaml:"runs,omitempty"`
 	Events []Event      `yaml:"events,omitempty"`
+
+	Finalization *Finalization `yaml:"finalization,omitempty"`
 }
 
 // RunAttempt records one attached execution attempt.
@@ -101,6 +109,14 @@ type Completion struct {
 	Summary     string    `yaml:"summary"`
 	Details     string    `yaml:"details"`
 	CompletedAt time.Time `yaml:"completed_at"`
+}
+
+// Finalization records factual data from human-side main/solo finalization.
+type Finalization struct {
+	CommittedAt *time.Time `yaml:"committed_at,omitempty"`
+	Commit      string     `yaml:"commit,omitempty"`
+	PushedAt    *time.Time `yaml:"pushed_at,omitempty"`
+	ClosedAt    *time.Time `yaml:"closed_at,omitempty"`
 }
 
 // Event records a small trace/audit event for a task.
@@ -343,6 +359,89 @@ func (s Store) CompleteRun(repoID, taskID string, attempt int, opts CompleteRunO
 	return state.Runs[index], nil
 }
 
+// RecordFinalizationCommit records the commit created by task finalization.
+func (s Store) RecordFinalizationCommit(repoID, taskID string, commit string) (Finalization, error) {
+	commit = strings.TrimSpace(commit)
+	if commit == "" {
+		return Finalization{}, fmt.Errorf("record finalization commit for task %s/%s: commit is required", repoID, taskID)
+	}
+
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return Finalization{}, err
+	}
+	finalization := ensureFinalization(state.Finalization)
+	if strings.TrimSpace(finalization.Commit) != "" {
+		if finalization.Commit != commit {
+			return Finalization{}, fmt.Errorf(
+				"record finalization commit for task %s/%s: %w",
+				repoID,
+				taskID,
+				ErrFinalizationConflict,
+			)
+		}
+		return finalization, nil
+	}
+
+	now := s.nowUTC()
+	finalization.Commit = commit
+	finalization.CommittedAt = &now
+	state.Finalization = &finalization
+	if err := s.save(state); err != nil {
+		return Finalization{}, err
+	}
+	return finalization, nil
+}
+
+// RecordFinalizationPush records that the finalization commit was pushed.
+func (s Store) RecordFinalizationPush(repoID, taskID string) (Finalization, error) {
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return Finalization{}, err
+	}
+	finalization := ensureFinalization(state.Finalization)
+	if strings.TrimSpace(finalization.Commit) == "" {
+		return Finalization{}, fmt.Errorf("record finalization push for task %s/%s: finalization commit is required", repoID, taskID)
+	}
+	if finalization.PushedAt != nil {
+		return finalization, nil
+	}
+
+	now := s.nowUTC()
+	finalization.PushedAt = &now
+	state.Finalization = &finalization
+	if err := s.save(state); err != nil {
+		return Finalization{}, err
+	}
+	return finalization, nil
+}
+
+// RecordFinalizationClose records that the backend task was closed.
+func (s Store) RecordFinalizationClose(repoID, taskID string) (Finalization, error) {
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return Finalization{}, err
+	}
+	finalization := ensureFinalization(state.Finalization)
+	if strings.TrimSpace(finalization.Commit) == "" {
+		return Finalization{}, fmt.Errorf("record finalization close for task %s/%s: finalization commit is required", repoID, taskID)
+	}
+	if finalization.PushedAt == nil {
+		return Finalization{}, fmt.Errorf("record finalization close for task %s/%s: finalization push is required", repoID, taskID)
+	}
+	if finalization.ClosedAt != nil {
+		return finalization, nil
+	}
+
+	now := s.nowUTC()
+	finalization.ClosedAt = &now
+	state.Finalization = &finalization
+	if err := s.save(state); err != nil {
+		return Finalization{}, err
+	}
+	return finalization, nil
+}
+
 // FailRunStart records that an attempt failed before the agent process started.
 func (s Store) FailRunStart(repoID, taskID string, attempt int, cause error) (RunAttempt, error) {
 	errorText := ""
@@ -383,6 +482,14 @@ func ActiveRun(state TaskState) (RunAttempt, bool) {
 		return RunAttempt{}, false
 	}
 	return latest, true
+}
+
+// FinalizationFacts returns a value copy of any recorded finalization facts.
+func FinalizationFacts(state TaskState) Finalization {
+	if state.Finalization == nil {
+		return Finalization{}
+	}
+	return ensureFinalization(state.Finalization)
 }
 
 func (s Store) appendEvent(repoID, taskID string, event Event) (Event, error) {
@@ -543,6 +650,9 @@ func validateLoadedState(taskState TaskState, repoID, taskID string) error {
 			return err
 		}
 	}
+	if err := validateFinalization(taskState.Finalization); err != nil {
+		return fmt.Errorf("finalization is invalid: %w", err)
+	}
 	return nil
 }
 
@@ -564,6 +674,10 @@ func normalizeState(taskState TaskState, repoID, taskID string) TaskState {
 	taskState.Version = schemaVersion
 	taskState.RepoID = repoID
 	taskState.TaskID = taskID
+	if taskState.Finalization != nil {
+		finalization := ensureFinalization(taskState.Finalization)
+		taskState.Finalization = &finalization
+	}
 	return taskState
 }
 
@@ -593,6 +707,42 @@ func validateCompletion(completion Completion) error {
 		return errors.New("completed_at is required")
 	}
 	return nil
+}
+
+func validateFinalization(finalization *Finalization) error {
+	if finalization == nil {
+		return nil
+	}
+
+	commit := strings.TrimSpace(finalization.Commit)
+	if commit == "" {
+		if finalization.CommittedAt != nil || finalization.PushedAt != nil || finalization.ClosedAt != nil {
+			return errors.New("commit is required when any finalization timestamp is recorded")
+		}
+		return nil
+	}
+	if finalization.CommittedAt == nil || finalization.CommittedAt.IsZero() {
+		return errors.New("committed_at is required when commit is recorded")
+	}
+	if finalization.PushedAt != nil && finalization.PushedAt.IsZero() {
+		return errors.New("pushed_at must be non-zero when recorded")
+	}
+	if finalization.ClosedAt != nil && finalization.ClosedAt.IsZero() {
+		return errors.New("closed_at must be non-zero when recorded")
+	}
+	if finalization.ClosedAt != nil && finalization.PushedAt == nil {
+		return errors.New("pushed_at is required when closed_at is recorded")
+	}
+	return nil
+}
+
+func ensureFinalization(finalization *Finalization) Finalization {
+	if finalization == nil {
+		return Finalization{}
+	}
+	clone := *finalization
+	clone.Commit = strings.TrimSpace(clone.Commit)
+	return clone
 }
 
 func validateEvent(event Event) error {

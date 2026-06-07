@@ -16,6 +16,7 @@ import (
 var (
 	_ task.ReadBackend     = TaskBackend{}
 	_ task.DispatchMutator = TaskBackend{}
+	_ task.CloseMutator    = TaskBackend{}
 )
 
 // TaskBackend reads task items from one explicit Beads workspace.
@@ -135,6 +136,32 @@ func (b TaskBackend) MarkInProgress(ctx context.Context, id string, branch strin
 	if err != nil {
 		if isNotFoundResult(result) {
 			return fmt.Errorf("mark Beads task %q in progress in %q: %w%s", id, b.dir, task.ErrNotFound, formattedOutput(result))
+		}
+		return err
+	}
+	return nil
+}
+
+// Close closes a Beads task. If the task is already closed, Close treats it as
+// success so Orpheus finalization retries do not duplicate backend mutations.
+func (b TaskBackend) Close(ctx context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("close Beads task in %q: task id is required", b.dir)
+	}
+
+	current, err := b.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("close Beads task %q in %q: inspect task: %w", id, b.dir, err)
+	}
+	if current.Status == task.StatusClosed {
+		return nil
+	}
+
+	result, err := b.runWrite(ctx, "close", "close", id)
+	if err != nil {
+		if isNotFoundResult(result) {
+			return fmt.Errorf("close Beads task %q in %q: %w%s", id, b.dir, task.ErrNotFound, formattedOutput(result))
 		}
 		return err
 	}

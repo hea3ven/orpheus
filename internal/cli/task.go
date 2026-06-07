@@ -37,7 +37,7 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 		Args:  cobra.NoArgs,
 	}
 
-	cmd.AddCommand(newTaskListCommand(opts), newTaskReadyCommand(opts), newTaskShowCommand(opts), newTaskRunCommand(opts))
+	cmd.AddCommand(newTaskListCommand(opts), newTaskReadyCommand(opts), newTaskShowCommand(opts), newTaskRunCommand(opts), newTaskDoneCommand(opts))
 	return cmd
 }
 
@@ -113,6 +113,31 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&agentName, "agent", "", "agent profile name to use instead of default_agent")
 	cmd.Flags().BoolVar(&mainMode, "main", false, "run from the registered repo root on the registered default branch")
+	return cmd
+}
+
+func newTaskDoneCommand(opts *rootOptions) *cobra.Command {
+	var summary string
+	var details string
+	cmd := &cobra.Command{
+		Use:   "done [<task-id>]",
+		Short: "Finalize a reviewed main/solo task",
+		Long: "Finalize a reviewed main/solo task.\n\n" +
+			"Commits the reviewed repo-root changes, pushes the registered default branch, " +
+			"then closes the backend task. Without a task id, the command only infers the task " +
+			"when the current directory is exactly a registered repo root with one matching " +
+			"main/solo local-ready task.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			taskID := ""
+			if len(args) == 1 {
+				taskID = args[0]
+			}
+			return runTaskDone(command, opts, taskID, summary, details)
+		},
+	}
+	cmd.Flags().StringVar(&summary, "summary", "", "override the final commit summary")
+	cmd.Flags().StringVar(&details, "details", "", "override the final commit details")
 	return cmd
 }
 
@@ -310,6 +335,57 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentN
 		return fmt.Errorf("task run %s: record run finish: %w", resolved.TaskID, err)
 	}
 	return nil
+}
+
+func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summary string, details string) error {
+	logger := opts.log().With(
+		slog.String("component", "cli"),
+		slog.String("operation", "task_done"),
+	)
+	logger.DebugContext(command.Context(), "loading registered repos for task finalization")
+
+	paths, err := state.ResolveFromEnvironment()
+	if err != nil {
+		return err
+	}
+	taskCtx, err := loadTaskContext()
+	if err != nil {
+		return err
+	}
+
+	store := taskstate.NewStore(paths)
+	service := taskmodel.FinalizationService{
+		Paths:   paths,
+		Sources: taskCtx.Sources,
+		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.FinalizationBackend, error) {
+			return newBeadsTaskBackend(source.BackendDir)
+		},
+		RunStore: store,
+	}
+	finalized, err := service.Finalize(command.Context(), taskmodel.FinalizeOptions{
+		TaskID:  taskID,
+		Summary: summary,
+		Details: details,
+	})
+	if err != nil {
+		return fmt.Errorf("task done: %w", err)
+	}
+
+	logger.DebugContext(
+		command.Context(),
+		"finalized task",
+		slog.String("repo_id", finalized.Repository.ID),
+		slog.String("task_id", finalized.Task.ID),
+		slog.String("commit", finalized.Finalization.Commit),
+	)
+	_, err = fmt.Fprintf(
+		command.OutOrStdout(),
+		"Finalized %s: committed %s, pushed %s, and closed the backend task.\n",
+		finalized.Task.ID,
+		finalized.Finalization.Commit,
+		finalized.Repository.DefaultBranch,
+	)
+	return err
 }
 
 type taskRunStartOptions struct {

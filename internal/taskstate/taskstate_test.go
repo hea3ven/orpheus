@@ -164,6 +164,82 @@ func TestStoreCompleteRunRecordsCompletionFacts(t *testing.T) {
 	}
 }
 
+func TestStoreRecordsFinalizationFactsIdempotently(t *testing.T) {
+	store := newTestStore(t,
+		time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 6, 4, 10, 1, 0, 0, time.UTC),
+		time.Date(2026, 6, 4, 10, 2, 0, 0, time.UTC),
+	)
+
+	commitFacts, err := store.RecordFinalizationCommit("alpha", "op-1", " abc123 ")
+	if err != nil {
+		t.Fatalf("record commit: %v", err)
+	}
+	if commitFacts.Commit != "abc123" || commitFacts.CommittedAt == nil ||
+		!commitFacts.CommittedAt.Equal(time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC)) {
+		t.Fatalf("commit facts = %#v, want commit and committed_at", commitFacts)
+	}
+
+	pushFacts, err := store.RecordFinalizationPush("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("record push: %v", err)
+	}
+	if pushFacts.PushedAt == nil || !pushFacts.PushedAt.Equal(time.Date(2026, 6, 4, 10, 1, 0, 0, time.UTC)) {
+		t.Fatalf("push facts = %#v, want pushed_at", pushFacts)
+	}
+
+	closeFacts, err := store.RecordFinalizationClose("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("record close: %v", err)
+	}
+	if closeFacts.ClosedAt == nil || !closeFacts.ClosedAt.Equal(time.Date(2026, 6, 4, 10, 2, 0, 0, time.UTC)) {
+		t.Fatalf("close facts = %#v, want closed_at", closeFacts)
+	}
+
+	again, err := store.RecordFinalizationCommit("alpha", "op-1", "abc123")
+	if err != nil {
+		t.Fatalf("record same commit again: %v", err)
+	}
+	if !again.CommittedAt.Equal(*commitFacts.CommittedAt) || !again.PushedAt.Equal(*pushFacts.PushedAt) || !again.ClosedAt.Equal(*closeFacts.ClosedAt) {
+		t.Fatalf("idempotent facts = %#v, want original timestamps preserved", again)
+	}
+
+	_, err = store.RecordFinalizationCommit("alpha", "op-1", "def456")
+	if !errors.Is(err, taskstate.ErrFinalizationConflict) {
+		t.Fatalf("conflicting commit error = %v, want ErrFinalizationConflict", err)
+	}
+
+	loaded, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	facts := taskstate.FinalizationFacts(loaded)
+	if facts.Commit != "abc123" || facts.CommittedAt == nil || facts.PushedAt == nil || facts.ClosedAt == nil {
+		t.Fatalf("loaded finalization = %#v, want all facts", facts)
+	}
+
+	statePath, err := store.Path("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("state path: %v", err)
+	}
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read YAML: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"finalization:",
+		"committed_at: 2026-06-04T10:00:00Z",
+		"commit: abc123",
+		"pushed_at: 2026-06-04T10:01:00Z",
+		"closed_at: 2026-06-04T10:02:00Z",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("YAML missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestStartRunRefusesLatestRunningAttempt(t *testing.T) {
 	store := newTestStore(t, time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC))
 	if _, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Agent: "recorder"}); err != nil {

@@ -236,6 +236,12 @@ type DispatchBackend interface {
 	DispatchMutator
 }
 
+// CloseMutator is the narrow backend-neutral mutation used when finalizing a
+// reviewed main/solo task.
+type CloseMutator interface {
+	Close(ctx context.Context, taskID string) error
+}
+
 // MutationConflictError reports backend task state that prevents a semantic mutation.
 type MutationConflictError struct {
 	TaskID string

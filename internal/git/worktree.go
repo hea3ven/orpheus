@@ -567,6 +567,96 @@ func HasWorkingTreeChanges(ctx context.Context, dir string) (bool, error) {
 	return strings.TrimSpace(output) != "", nil
 }
 
+// StageAll stages tracked modifications, tracked deletions, and untracked
+// non-ignored files in dir using Git's normal ignore rules.
+func StageAll(ctx context.Context, dir string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	output, err := runGitContext(ctx, dir, "add", "--all")
+	if err != nil {
+		return fmt.Errorf("stage repo-root changes: %w%s", err, gitOutputSuffix(output))
+	}
+	return nil
+}
+
+// Commit creates a commit from message and returns the resulting HEAD SHA.
+func Commit(ctx context.Context, dir string, message string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(message) == "" {
+		return "", errors.New("commit message is required")
+	}
+
+	output, err := runGitContextWithInput(ctx, dir, message, "commit", "--file", "-")
+	if err != nil {
+		return "", fmt.Errorf("commit repo-root changes: %w%s", err, gitOutputSuffix(output))
+	}
+
+	commit, err := HeadCommit(ctx, dir)
+	if err != nil {
+		return "", fmt.Errorf("read finalization commit after commit: %w", err)
+	}
+	return commit, nil
+}
+
+// HeadCommit returns the current HEAD commit SHA without mutating the repository.
+func HeadCommit(ctx context.Context, dir string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	output, err := runGitContext(ctx, dir, "rev-parse", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("read HEAD commit: %w%s", err, gitOutputSuffix(output))
+	}
+	commit := strings.TrimSpace(output)
+	if commit == "" {
+		return "", errors.New("read HEAD commit: git returned an empty commit")
+	}
+	return commit, nil
+}
+
+// PushDefaultBranch pushes branch to origin.
+func PushDefaultBranch(ctx context.Context, dir string, branch string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return errors.New("default branch is required")
+	}
+
+	output, err := runGitContext(ctx, dir, "push", "origin", branch)
+	if err != nil {
+		return fmt.Errorf("push default branch %q to origin: %w%s", branch, err, gitOutputSuffix(output))
+	}
+	return nil
+}
+
+func runGitContextWithInput(ctx context.Context, dir string, input string, args ...string) (string, error) {
+	command := exec.CommandContext(ctx, "git", args...)
+	command.Dir = dir
+	command.Stdin = strings.NewReader(input)
+
+	var stdout strings.Builder
+	var stderr strings.Builder
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+
+	err := command.Run()
+	output := stdout.String()
+	if stderr.Len() > 0 {
+		if output != "" && !strings.HasSuffix(output, "\n") {
+			output += "\n"
+		}
+		output += stderr.String()
+	}
+	return output, err
+}
+
 func verifyRef(ctx context.Context, repoRoot string, ref string) error {
 	output, err := runGitContext(ctx, repoRoot, "show-ref", "--verify", "--quiet", ref)
 	if err == nil {

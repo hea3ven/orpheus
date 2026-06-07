@@ -1,0 +1,568 @@
+package task
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/taskstate"
+)
+
+const finalizationLockOperation = "task finalization"
+
+// FinalizationBackend is the backend capability set needed to finalize a task.
+type FinalizationBackend interface {
+	Getter
+	Lister
+	CloseMutator
+}
+
+// FinalizationBackendFactory creates a finalization-capable backend for one repository.
+type FinalizationBackendFactory func(RepositorySource) (FinalizationBackend, error)
+
+// FinalizationRunStore persists and reads run/finalization facts.
+type FinalizationRunStore interface {
+	Load(repoID, taskID string) (taskstate.TaskState, error)
+	RecordFinalizationCommit(repoID, taskID string, commit string) (taskstate.Finalization, error)
+	RecordFinalizationPush(repoID, taskID string) (taskstate.Finalization, error)
+	RecordFinalizationClose(repoID, taskID string) (taskstate.Finalization, error)
+}
+
+// FinalizationGit performs the Git operations used by task finalization.
+type FinalizationGit interface {
+	CurrentBranch(ctx context.Context, dir string) (string, error)
+	HasWorkingTreeChanges(ctx context.Context, dir string) (bool, error)
+	HeadCommit(ctx context.Context, dir string) (string, error)
+	StageAll(ctx context.Context, dir string) error
+	Commit(ctx context.Context, dir string, message string) (string, error)
+	PushDefaultBranch(ctx context.Context, dir string, branch string) error
+}
+
+// LocalFinalizationGit delegates finalization Git operations to the local git binary.
+type LocalFinalizationGit struct{}
+
+// CurrentBranch returns the current local Git branch.
+func (LocalFinalizationGit) CurrentBranch(ctx context.Context, dir string) (string, error) {
+	return gitmeta.CurrentBranch(ctx, dir)
+}
+
+// HasWorkingTreeChanges reports whether the checkout has local changes.
+func (LocalFinalizationGit) HasWorkingTreeChanges(ctx context.Context, dir string) (bool, error) {
+	return gitmeta.HasWorkingTreeChanges(ctx, dir)
+}
+
+// HeadCommit returns the current HEAD SHA.
+func (LocalFinalizationGit) HeadCommit(ctx context.Context, dir string) (string, error) {
+	return gitmeta.HeadCommit(ctx, dir)
+}
+
+// StageAll stages all finalization changes.
+func (LocalFinalizationGit) StageAll(ctx context.Context, dir string) error {
+	return gitmeta.StageAll(ctx, dir)
+}
+
+// Commit commits staged finalization changes.
+func (LocalFinalizationGit) Commit(ctx context.Context, dir string, message string) (string, error) {
+	return gitmeta.Commit(ctx, dir, message)
+}
+
+// PushDefaultBranch pushes the registered default branch.
+func (LocalFinalizationGit) PushDefaultBranch(ctx context.Context, dir string, branch string) error {
+	return gitmeta.PushDefaultBranch(ctx, dir, branch)
+}
+
+// FinalizationService finalizes reviewed main/solo task work.
+type FinalizationService struct {
+	Paths          state.Paths
+	Sources        []RepositorySource
+	BackendFactory FinalizationBackendFactory
+	RunStore       FinalizationRunStore
+	Git            FinalizationGit
+}
+
+// FinalizeOptions are the CLI-provided finalization controls.
+type FinalizeOptions struct {
+	TaskID  string
+	CWD     string
+	Summary string
+	Details string
+}
+
+// FinalizationResult reports the finalized task and recorded facts.
+type FinalizationResult struct {
+	Repository   Repository
+	Task         Task
+	Finalization taskstate.Finalization
+}
+
+type finalizationTarget struct {
+	source  RepositorySource
+	backend FinalizationBackend
+	task    Task
+}
+
+type finalizationContext struct {
+	latest       taskstate.RunAttempt
+	finalization taskstate.Finalization
+}
+
+// Finalize commits reviewed repo-root changes, pushes the default branch, and
+// closes the backend task after the push has succeeded.
+func (s FinalizationService) Finalize(ctx context.Context, opts FinalizeOptions) (FinalizationResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s.BackendFactory == nil {
+		return FinalizationResult{}, errors.New("task finalization backend factory is required")
+	}
+	if s.RunStore == nil {
+		return FinalizationResult{}, errors.New("task finalization run store is required")
+	}
+	gitState := s.Git
+	if gitState == nil {
+		gitState = LocalFinalizationGit{}
+	}
+
+	var result FinalizationResult
+	err := state.WithGlobalMutationLock(s.Paths, finalizationLockOperation, func() error {
+		finalized, err := s.finalizeLocked(ctx, opts, gitState)
+		if err != nil {
+			return err
+		}
+		result = finalized
+		return nil
+	})
+	if err != nil {
+		return FinalizationResult{}, err
+	}
+	return result, nil
+}
+
+func (s FinalizationService) finalizeLocked(
+	ctx context.Context,
+	opts FinalizeOptions,
+	gitState FinalizationGit,
+) (FinalizationResult, error) {
+	target, err := s.resolveTarget(ctx, opts)
+	if err != nil {
+		return FinalizationResult{}, err
+	}
+	repo := target.source.Repository
+
+	finalizeCtx, err := s.loadFinalizationContext(repo, target.task)
+	if err != nil {
+		return FinalizationResult{}, err
+	}
+	if err := validateFinalizationReady(repo, target.task, finalizeCtx); err != nil {
+		return FinalizationResult{}, err
+	}
+
+	currentBranch, err := gitState.CurrentBranch(ctx, repo.Path)
+	if err != nil {
+		return FinalizationResult{}, fmt.Errorf("inspect current Git branch: %w", err)
+	}
+	if currentBranch != repo.DefaultBranch {
+		return FinalizationResult{}, fmt.Errorf(
+			"repo root %q is on branch %q, expected registered default branch %q",
+			repo.Path,
+			currentBranch,
+			repo.DefaultBranch,
+		)
+	}
+
+	summary, details, err := finalizationMessageParts(finalizeCtx.latest.Completion, opts)
+	if err != nil {
+		return FinalizationResult{}, err
+	}
+	message := summary + "\n\n" + details
+
+	hasChanges, err := gitState.HasWorkingTreeChanges(ctx, repo.Path)
+	if err != nil {
+		return FinalizationResult{}, fmt.Errorf("inspect repo-root changes: %w", err)
+	}
+
+	finalization := finalizeCtx.finalization
+	if strings.TrimSpace(finalization.Commit) != "" {
+		if hasChanges {
+			return FinalizationResult{}, fmt.Errorf(
+				"task %s already has finalization commit %s recorded, but repo root %q has new uncommitted changes; "+
+					"M4 will not create a second finalization commit, so stash, commit manually outside Orpheus, or remove the extra changes before retrying",
+				target.task.ID,
+				finalization.Commit,
+				repo.Path,
+			)
+		}
+		head, err := gitState.HeadCommit(ctx, repo.Path)
+		if err != nil {
+			return FinalizationResult{}, fmt.Errorf("verify recorded finalization commit: %w", err)
+		}
+		if head != finalization.Commit {
+			return FinalizationResult{}, fmt.Errorf(
+				"recorded finalization commit is %s, but current HEAD is %s; M4 will not infer or repair manually committed states",
+				finalization.Commit,
+				head,
+			)
+		}
+	} else {
+		if !hasChanges {
+			return FinalizationResult{}, fmt.Errorf(
+				"repo root %q has no changes to commit and task %s has no recorded finalization commit; "+
+					"review or adjust the repo-root changes before running task done, or pass the task id after repairing state manually",
+				repo.Path,
+				target.task.ID,
+			)
+		}
+		if err := gitState.StageAll(ctx, repo.Path); err != nil {
+			return FinalizationResult{}, err
+		}
+		commit, err := gitState.Commit(ctx, repo.Path, message)
+		if err != nil {
+			return FinalizationResult{}, err
+		}
+		finalization, err = s.RunStore.RecordFinalizationCommit(repo.ID, target.task.ID, commit)
+		if err != nil {
+			return FinalizationResult{}, fmt.Errorf("record finalization commit: %w", err)
+		}
+	}
+
+	if finalization.PushedAt == nil {
+		if err := gitState.PushDefaultBranch(ctx, repo.Path, repo.DefaultBranch); err != nil {
+			return FinalizationResult{}, err
+		}
+		finalization, err = s.RunStore.RecordFinalizationPush(repo.ID, target.task.ID)
+		if err != nil {
+			return FinalizationResult{}, fmt.Errorf("record finalization push: %w", err)
+		}
+	}
+
+	if finalization.ClosedAt == nil {
+		if target.task.Status != StatusClosed {
+			if err := target.backend.Close(ctx, target.task.ID); err != nil {
+				return FinalizationResult{}, err
+			}
+		}
+		finalization, err = s.RunStore.RecordFinalizationClose(repo.ID, target.task.ID)
+		if err != nil {
+			return FinalizationResult{}, fmt.Errorf("record finalization close: %w", err)
+		}
+	}
+
+	return FinalizationResult{
+		Repository:   repo,
+		Task:         target.task.Clone(),
+		Finalization: finalization,
+	}, nil
+}
+
+func (s FinalizationService) resolveTarget(ctx context.Context, opts FinalizeOptions) (finalizationTarget, error) {
+	taskID := strings.TrimSpace(opts.TaskID)
+	if taskID == "" {
+		return s.inferTarget(ctx, opts.CWD)
+	}
+
+	resolved, err := ResolveTaskSource(s.Sources, taskID)
+	if err != nil {
+		return finalizationTarget{}, err
+	}
+	backend, err := s.BackendFactory(resolved.Source)
+	if err != nil {
+		return finalizationTarget{}, fmt.Errorf(
+			"task done %s: create backend for repo %s (%s; prefix %s): %w",
+			resolved.TaskID,
+			resolved.Source.Repository.ID,
+			resolved.Source.Repository.Name,
+			resolved.Source.Repository.TaskIDPrefix,
+			err,
+		)
+	}
+	taskItem, err := backend.Get(ctx, resolved.TaskID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return finalizationTarget{}, fmt.Errorf(
+				"task done %s: task was not found in repo %s (%s; prefix %s): %w",
+				resolved.TaskID,
+				resolved.Source.Repository.ID,
+				resolved.Source.Repository.Name,
+				resolved.Source.Repository.TaskIDPrefix,
+				err,
+			)
+		}
+		return finalizationTarget{}, fmt.Errorf(
+			"task done %s: query repo %s (%s; prefix %s): %w",
+			resolved.TaskID,
+			resolved.Source.Repository.ID,
+			resolved.Source.Repository.Name,
+			resolved.Source.Repository.TaskIDPrefix,
+			err,
+		)
+	}
+	return finalizationTarget{source: resolved.Source, backend: backend, task: taskItem}, nil
+}
+
+func (s FinalizationService) inferTarget(ctx context.Context, cwd string) (finalizationTarget, error) {
+	normalizedCWD, err := currentDirectory(cwd)
+	if err != nil {
+		return finalizationTarget{}, err
+	}
+
+	matches := make([]RepositorySource, 0, 1)
+	for _, source := range s.Sources {
+		repoPath, err := cleanAbsPath("registered repo root", source.Repository.Path)
+		if err != nil {
+			return finalizationTarget{}, err
+		}
+		if repoPath == normalizedCWD {
+			matches = append(matches, source)
+		}
+	}
+	if len(matches) == 0 {
+		return finalizationTarget{}, fmt.Errorf(
+			"cannot infer task to finalize from current directory %q: cwd must be exactly a registered repo root; pass <task-id>",
+			normalizedCWD,
+		)
+	}
+	if len(matches) > 1 {
+		return finalizationTarget{}, fmt.Errorf(
+			"cannot infer task to finalize from current directory %q: multiple registered repos use this root; pass <task-id>",
+			normalizedCWD,
+		)
+	}
+
+	source := matches[0]
+	backend, err := s.BackendFactory(source)
+	if err != nil {
+		return finalizationTarget{}, fmt.Errorf(
+			"task done: create backend for repo %s (%s; prefix %s): %w",
+			source.Repository.ID,
+			source.Repository.Name,
+			source.Repository.TaskIDPrefix,
+			err,
+		)
+	}
+	tasks, err := backend.List(ctx)
+	if err != nil {
+		return finalizationTarget{}, fmt.Errorf(
+			"task done: query repo %s (%s; prefix %s) while inferring task: %w",
+			source.Repository.ID,
+			source.Repository.Name,
+			source.Repository.TaskIDPrefix,
+			err,
+		)
+	}
+
+	candidates := make([]Task, 0, 1)
+	for _, taskItem := range tasks {
+		ok, err := s.isInferableMainLocalReady(source.Repository, taskItem)
+		if err != nil {
+			return finalizationTarget{}, err
+		}
+		if ok {
+			candidates = append(candidates, taskItem.Clone())
+		}
+	}
+	switch len(candidates) {
+	case 1:
+		return finalizationTarget{source: source, backend: backend, task: candidates[0]}, nil
+	case 0:
+		return finalizationTarget{}, fmt.Errorf(
+			"cannot infer task to finalize from repo root %q: no non-closed main/solo local-ready task owns the registered root/default branch; pass <task-id>",
+			normalizedCWD,
+		)
+	default:
+		return finalizationTarget{}, fmt.Errorf(
+			"cannot infer task to finalize from repo root %q: multiple non-closed main/solo local-ready tasks own the registered root/default branch (%s); pass <task-id>",
+			normalizedCWD,
+			strings.Join(taskIDs(candidates), ", "),
+		)
+	}
+}
+
+func (s FinalizationService) isInferableMainLocalReady(repo Repository, taskItem Task) (bool, error) {
+	if taskItem.Status == StatusClosed {
+		return false, nil
+	}
+	state, err := s.RunStore.Load(repo.ID, taskItem.ID)
+	if err != nil {
+		return false, fmt.Errorf("load task state for %s/%s: %w", repo.ID, taskItem.ID, err)
+	}
+	latest, ok := taskstate.LatestRun(state)
+	if !ok {
+		return false, nil
+	}
+	ctx := finalizationContext{
+		latest:       latest,
+		finalization: taskstate.FinalizationFacts(state),
+	}
+	if err := validateFinalizationReady(repo, taskItem, ctx); err != nil {
+		return false, nil
+	}
+	return true, nil
+}
+
+func (s FinalizationService) loadFinalizationContext(repo Repository, taskItem Task) (finalizationContext, error) {
+	state, err := s.RunStore.Load(repo.ID, taskItem.ID)
+	if err != nil {
+		return finalizationContext{}, fmt.Errorf("load task state for %s/%s: %w", repo.ID, taskItem.ID, err)
+	}
+	latest, ok := taskstate.LatestRun(state)
+	if !ok {
+		return finalizationContext{}, fmt.Errorf("task %s has no Orpheus run attempts; run `orpheus task run --main %s` first", taskItem.ID, taskItem.ID)
+	}
+	return finalizationContext{
+		latest:       latest,
+		finalization: taskstate.FinalizationFacts(state),
+	}, nil
+}
+
+func validateFinalizationReady(repo Repository, taskItem Task, ctx finalizationContext) error {
+	if strings.TrimSpace(repo.ID) == "" {
+		return errors.New("repo id is required")
+	}
+	repoRoot, err := cleanAbsPath("registered repo root", repo.Path)
+	if err != nil {
+		return err
+	}
+	defaultBranch := strings.TrimSpace(repo.DefaultBranch)
+	if defaultBranch == "" {
+		return fmt.Errorf("repo %q has no registered default branch", repo.ID)
+	}
+
+	switch taskItem.Status {
+	case StatusInProgress:
+	case StatusClosed:
+		if strings.TrimSpace(ctx.finalization.Commit) == "" {
+			return fmt.Errorf("task %s is closed and has no recorded finalization commit; refusing to infer manual finalization", taskItem.ID)
+		}
+	default:
+		return fmt.Errorf("task %s is %s, expected in_progress for main/solo finalization", taskItem.ID, formatStatusForFinalization(taskItem.Status))
+	}
+
+	metadata := taskItem.OrpheusMetadata()
+	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
+		return fmt.Errorf("task %s has %s set; task done only finalizes main/solo local-ready tasks without PR URLs", taskItem.ID, MetadataPRURL)
+	}
+	if !metadata.HasBranch || strings.TrimSpace(metadata.Branch) != defaultBranch {
+		return fmt.Errorf(
+			"task %s metadata %s is %q, expected registered default branch %q",
+			taskItem.ID,
+			MetadataBranch,
+			metadata.Branch,
+			defaultBranch,
+		)
+	}
+	metadataWorktree, err := cleanAbsPath(MetadataWorktree, metadata.Worktree)
+	if !metadata.HasWorktree || err != nil || metadataWorktree != repoRoot {
+		if err != nil && metadata.HasWorktree {
+			return fmt.Errorf("task %s metadata %s is invalid: %w", taskItem.ID, MetadataWorktree, err)
+		}
+		return fmt.Errorf(
+			"task %s metadata %s is %q, expected registered repo root %q",
+			taskItem.ID,
+			MetadataWorktree,
+			metadata.Worktree,
+			repoRoot,
+		)
+	}
+
+	latest := ctx.latest
+	if latest.Status != taskstate.RunStatusSucceeded {
+		return fmt.Errorf(
+			"latest run attempt %d for task %s is %q, expected %q with a main-mode completion block",
+			latest.Attempt,
+			taskItem.ID,
+			latest.Status,
+			taskstate.RunStatusSucceeded,
+		)
+	}
+	if latest.Completion == nil {
+		return fmt.Errorf("latest run attempt %d for task %s has no main-mode completion block; run `orpheus agent done` first", latest.Attempt, taskItem.ID)
+	}
+	if strings.TrimSpace(latest.Branch) != defaultBranch {
+		return fmt.Errorf(
+			"latest run attempt %d for task %s branch is %q, expected registered default branch %q",
+			latest.Attempt,
+			taskItem.ID,
+			latest.Branch,
+			defaultBranch,
+		)
+	}
+	runWorktree, err := cleanAbsPath("latest run worktree", latest.Worktree)
+	if err != nil {
+		return err
+	}
+	if runWorktree != repoRoot {
+		return fmt.Errorf(
+			"latest run attempt %d for task %s worktree is %q, expected registered repo root %q",
+			latest.Attempt,
+			taskItem.ID,
+			latest.Worktree,
+			repoRoot,
+		)
+	}
+	return nil
+}
+
+func finalizationMessageParts(completion *taskstate.Completion, opts FinalizeOptions) (string, string, error) {
+	if completion == nil {
+		return "", "", errors.New("completion is required")
+	}
+	summary := strings.TrimSpace(opts.Summary)
+	if summary == "" {
+		summary = strings.TrimSpace(completion.Summary)
+	}
+	details := strings.TrimSpace(opts.Details)
+	if details == "" {
+		details = strings.TrimSpace(completion.Details)
+	}
+	if summary == "" {
+		return "", "", errors.New("finalization summary is required")
+	}
+	if details == "" {
+		return "", "", errors.New("finalization details are required")
+	}
+	return summary, details, nil
+}
+
+func currentDirectory(cwd string) (string, error) {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		var err error
+		cwd, err = os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("resolve current directory: %w", err)
+		}
+	}
+	return cleanAbsPath("current directory", cwd)
+}
+
+func cleanAbsPath(label string, path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("%s is required", label)
+	}
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("%s must be absolute, got %q", label, path)
+	}
+	return filepath.Clean(path), nil
+}
+
+func taskIDs(tasks []Task) []string {
+	ids := make([]string, 0, len(tasks))
+	for _, taskItem := range tasks {
+		ids = append(ids, taskItem.ID)
+	}
+	return ids
+}
+
+func formatStatusForFinalization(status Status) string {
+	statusText := strings.TrimSpace(string(status))
+	if statusText == "" {
+		return "unknown"
+	}
+	return statusText
+}
