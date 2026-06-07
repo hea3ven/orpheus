@@ -165,6 +165,9 @@ func classify(repository task.Repository, taskItem task.Task, index map[string]t
 		return policyResult{state: readinessDone, detail: "closed"}
 	}
 	if taskItem.Status == task.StatusInProgress {
+		if isSuccessfulWorktreeReview(repository, taskItem, latestRun) {
+			return policyResult{state: readinessReview, detail: "worktree review ready (no PR URL)"}
+		}
 		if isSuccessfulRepoRootReview(repository, taskItem, latestRun) {
 			return policyResult{state: readinessReview, detail: "local repo-root review (no PR URL)"}
 		}
@@ -259,6 +262,33 @@ func isSuccessfulRepoRootReview(repository task.Repository, taskItem task.Task, 
 	}
 	return strings.TrimSpace(latestRun.Branch) == strings.TrimSpace(repository.DefaultBranch) &&
 		cleanPath(latestRun.Worktree) == cleanPath(repository.Path)
+}
+
+func isSuccessfulWorktreeReview(repository task.Repository, taskItem task.Task, latestRun *taskstate.RunAttempt) bool {
+	if latestRun == nil || latestRun.Status != taskstate.RunStatusSucceeded || taskItem.Status != task.StatusInProgress {
+		return false
+	}
+	if latestRun.Completion == nil || strings.TrimSpace(latestRun.Completion.Commit) == "" {
+		return false
+	}
+
+	metadata := taskItem.OrpheusMetadata()
+	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
+		return false
+	}
+	if !metadata.HasBranch || !metadata.HasWorktree {
+		return false
+	}
+
+	branch := strings.TrimSpace(latestRun.Branch)
+	worktree := cleanPath(latestRun.Worktree)
+	if branch == "" || worktree == "" {
+		return false
+	}
+	if branch == strings.TrimSpace(repository.DefaultBranch) || worktree == cleanPath(repository.Path) {
+		return false
+	}
+	return strings.TrimSpace(metadata.Branch) == branch && cleanPath(metadata.Worktree) == worktree
 }
 
 func repoRootMetadataMatches(repository task.Repository, metadata task.OrpheusMetadata) bool {

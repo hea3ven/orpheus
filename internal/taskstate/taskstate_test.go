@@ -103,8 +103,8 @@ func TestStoreCompleteRunRecordsCompletionFacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("complete run: %v", err)
 	}
-	if completed.Status != taskstate.RunStatusSucceeded || completed.FinishedAt == nil {
-		t.Fatalf("completed run = %#v, want succeeded with finished_at", completed)
+	if completed.Status != taskstate.RunStatusRunning || completed.FinishedAt != nil {
+		t.Fatalf("completed run = %#v, want still-running completion without finished_at", completed)
 	}
 	if completed.Completion == nil {
 		t.Fatalf("completed run missing completion: %#v", completed)
@@ -115,9 +115,30 @@ func TestStoreCompleteRunRecordsCompletionFacts(t *testing.T) {
 		t.Fatalf("completion = %#v, want recorded summary/details/completed_at", completed.Completion)
 	}
 
+	withCommit, err := store.CompleteRun("alpha", "op-1", attempt.Attempt, taskstate.CompleteRunOptions{
+		Summary: "Implemented completion",
+		Details: "Recorded local review data.",
+		Commit:  "abc123",
+	})
+	if err != nil {
+		t.Fatalf("record completion commit: %v", err)
+	}
+	if withCommit.Completion.Commit != "abc123" {
+		t.Fatalf("completion commit = %q, want abc123", withCommit.Completion.Commit)
+	}
+
+	finished, err := store.FinishRun("alpha", "op-1", attempt.Attempt, taskstate.RunStatusSucceeded)
+	if err != nil {
+		t.Fatalf("finish run: %v", err)
+	}
+	if finished.Status != taskstate.RunStatusSucceeded || finished.FinishedAt == nil {
+		t.Fatalf("finished run = %#v, want succeeded with finished_at", finished)
+	}
+
 	again, err := store.CompleteRun("alpha", "op-1", attempt.Attempt, taskstate.CompleteRunOptions{
 		Summary: "Implemented completion",
 		Details: "Recorded local review data.",
+		Commit:  "abc123",
 	})
 	if err != nil {
 		t.Fatalf("complete same run again: %v", err)
@@ -157,6 +178,7 @@ func TestStoreCompleteRunRecordsCompletionFacts(t *testing.T) {
 		"summary: Implemented completion",
 		"details: Recorded local review data.",
 		"completed_at: 2026-06-03T10:01:00Z",
+		"commit: abc123",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("YAML missing %q:\n%s", want, text)

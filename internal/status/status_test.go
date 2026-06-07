@@ -120,6 +120,79 @@ func TestProjectWithRunStatesShowsSuccessfulRepoRootRunInReview(t *testing.T) {
 	assertGroupTaskIDs(t, got, status.GroupWorking, nil)
 }
 
+func TestProjectWithRunStatesShowsSuccessfulWorktreeRunWithCommitInReview(t *testing.T) {
+	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
+		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/tmp/alpha", DefaultBranch: "main"},
+		Tasks: []task.Task{{
+			ID:        "a-worktree",
+			Title:     "worktree review",
+			Status:    task.StatusInProgress,
+			IssueType: task.IssueTypeTask,
+			Metadata: task.Metadata{
+				task.MetadataBranch:   "orpheus/a-worktree",
+				task.MetadataWorktree: "/tmp/orpheus/worktrees/a-worktree",
+			},
+		}},
+	}}}
+	runStates := status.RunStateIndex{
+		status.RunStateKey("alpha", "a-worktree"): {
+			Attempt:  1,
+			Status:   taskstate.RunStatusSucceeded,
+			Branch:   "orpheus/a-worktree",
+			Worktree: "/tmp/orpheus/worktrees/a-worktree",
+			Completion: &taskstate.Completion{
+				Summary:     "Done",
+				Details:     "Ready for PR.",
+				CompletedAt: time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+				Commit:      "abc123",
+			},
+		},
+	}
+
+	got := status.ProjectWithRunStates(snapshot, runStates)
+
+	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-worktree"})
+	reviewEntry := groupEntries(t, got, status.GroupInReview)[0]
+	if reviewEntry.Detail != "worktree review ready (no PR URL)" {
+		t.Fatalf("review detail = %q, want worktree review detail", reviewEntry.Detail)
+	}
+}
+
+func TestProjectWithRunStatesDoesNotInferWorktreeReviewWithoutCommit(t *testing.T) {
+	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
+		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/tmp/alpha", DefaultBranch: "main"},
+		Tasks: []task.Task{{
+			ID:        "a-worktree",
+			Title:     "worktree review",
+			Status:    task.StatusInProgress,
+			IssueType: task.IssueTypeTask,
+			Metadata: task.Metadata{
+				task.MetadataBranch:   "orpheus/a-worktree",
+				task.MetadataWorktree: "/tmp/orpheus/worktrees/a-worktree",
+			},
+		}},
+	}}}
+	runStates := status.RunStateIndex{
+		status.RunStateKey("alpha", "a-worktree"): {
+			Attempt:  1,
+			Status:   taskstate.RunStatusSucceeded,
+			Branch:   "orpheus/a-worktree",
+			Worktree: "/tmp/orpheus/worktrees/a-worktree",
+			Completion: &taskstate.Completion{
+				Summary:     "Done",
+				Details:     "Commit failed.",
+				CompletedAt: time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+				CommitError: "commit failed",
+			},
+		},
+	}
+
+	got := status.ProjectWithRunStates(snapshot, runStates)
+
+	assertGroupTaskIDs(t, got, status.GroupInReview, nil)
+	assertGroupTaskIDs(t, got, status.GroupIdle, []string{"a-worktree"})
+}
+
 func TestProjectWithRunStatesDoesNotInferRepoRootReviewWithoutCompletion(t *testing.T) {
 	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
 		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/tmp/alpha", DefaultBranch: "main"},

@@ -79,8 +79,9 @@ type ContextTask struct {
 
 // ContextRun describes the active Orpheus run attempt.
 type ContextRun struct {
-	Attempt int
-	Agent   string
+	Attempt    int
+	Agent      string
+	Completion *taskstate.Completion
 }
 
 // ContextTarget describes the validated execution target.
@@ -224,8 +225,9 @@ func (r ActiveContextResolver) Resolve(ctx context.Context) (ActiveContext, erro
 			AcceptanceCriteria: taskItem.AcceptanceCriteria,
 		},
 		Run: ContextRun{
-			Attempt: run.Attempt,
-			Agent:   run.Agent,
+			Attempt:    run.Attempt,
+			Agent:      run.Agent,
+			Completion: cloneCompletion(run.Completion),
 		},
 		Target: ContextTarget{
 			Kind:             candidate.Kind,
@@ -234,6 +236,14 @@ func (r ActiveContextResolver) Resolve(ctx context.Context) (ActiveContext, erro
 			CurrentDirectory: cwd,
 		},
 	}, nil
+}
+
+func cloneCompletion(completion *taskstate.Completion) *taskstate.Completion {
+	if completion == nil {
+		return nil
+	}
+	clone := *completion
+	return &clone
 }
 
 // DisplayName returns the agent-facing target name.

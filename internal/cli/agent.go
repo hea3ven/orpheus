@@ -115,6 +115,26 @@ func runAgentDone(command *cobra.Command, opts *rootOptions, summary string, det
 		slog.String("task_id", completed.Context.Task.ID),
 		slog.Int("attempt", completed.Run.Attempt),
 	)
+	if completed.CommitError != nil {
+		_, err = fmt.Fprintf(
+			command.OutOrStdout(),
+			"Recorded completion for %s, but commit creation failed: %v\n",
+			completed.Context.Task.ID,
+			completed.CommitError,
+		)
+		return err
+	}
+	if completed.Context.Target.Kind == agent.ExecutionTargetWorktree &&
+		completed.Run.Completion != nil &&
+		completed.Run.Completion.Commit != "" {
+		_, err = fmt.Fprintf(
+			command.OutOrStdout(),
+			"Recorded completion for %s and committed %s; ready for pull request review.\n",
+			completed.Context.Task.ID,
+			completed.Run.Completion.Commit,
+		)
+		return err
+	}
 	_, err = fmt.Fprintf(command.OutOrStdout(), "Recorded completion for %s; ready for local review.\n", completed.Context.Task.ID)
 	return err
 }

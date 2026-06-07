@@ -3,6 +3,7 @@ package cli_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/registry"
@@ -202,7 +203,7 @@ func TestAgentDoneRecordsMainCompletionForLocalReview(t *testing.T) {
 	latest, ok, err := runStore.LatestRun("alpha", "op-main")
 	must.NoError(err)
 	must.True(ok)
-	is.Equal(taskstate.RunStatusSucceeded, latest.Status)
+	is.Equal(taskstate.RunStatusRunning, latest.Status)
 	must.NotNil(latest.Completion)
 	is.Equal("Add local review file", latest.Completion.Summary)
 	is.Equal("Created ORPHEUS_TEST.txt for local review.", latest.Completion.Details)
@@ -213,6 +214,79 @@ func TestAgentDoneRecordsMainCompletionForLocalReview(t *testing.T) {
 	must.NoError(err)
 	is.Contains(string(bdLog), "--json --readonly --sandbox show --id op-main")
 	is.NotContains(string(bdLog), "--json --sandbox update")
+}
+
+func TestAgentDoneCommitsWorktreeCompletion(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+	repoPath := newTestRepoAt(t, root, filepath.Join("repos", "alpha"), testRepoConfig{withRemote: true})
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-1"))
+	must.NoError(err)
+	runGit(t, repoPath, "branch", "orpheus/op-1", "main")
+	runGit(t, repoPath, "worktree", "add", worktreePath, "orpheus/op-1")
+	t.Chdir(worktreePath)
+	must.NoError(os.WriteFile(filepath.Join(worktreePath, "ORPHEUS_WORKTREE_TEST.txt"), []byte("pr review\n"), 0o644))
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[
+			{
+				"id":"op-1",
+				"title":"Complete worktree run",
+				"status":"in_progress",
+				"priority":2,
+				"issue_type":"task",
+				"metadata":{"orpheus.branch":"orpheus/op-1","orpheus.worktree":"` + worktreePath + `"}
+			}
+		]`},
+	})
+	runStore := taskstate.NewStore(paths)
+	_, err = runStore.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		Agent:    "recorder",
+		Branch:   "orpheus/op-1",
+		Worktree: worktreePath,
+	})
+	must.NoError(err)
+	t.Setenv("ORPHEUS_REPO_ID", "alpha")
+	t.Setenv("ORPHEUS_TASK_ID", "op-1")
+	t.Setenv("ORPHEUS_WORKTREE", worktreePath)
+	t.Setenv("ORPHEUS_BRANCH", "orpheus/op-1")
+
+	stdout, stderr := executeCommand(t, []string{
+		"agent",
+		"done",
+		"--summary",
+		"Add worktree review file",
+		"--details",
+		"Created ORPHEUS_WORKTREE_TEST.txt for pull request review.",
+	})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Recorded completion for op-1 and committed")
+	is.Empty(strings.TrimSpace(runGit(t, worktreePath, "status", "--porcelain=v1")))
+	message := strings.TrimSpace(runGit(t, worktreePath, "log", "-1", "--format=%B"))
+	is.Equal("Add worktree review file\n\nCreated ORPHEUS_WORKTREE_TEST.txt for pull request review.", message)
+
+	latest, ok, err := runStore.LatestRun("alpha", "op-1")
+	must.NoError(err)
+	must.True(ok)
+	is.Equal(taskstate.RunStatusRunning, latest.Status)
+	must.NotNil(latest.Completion)
+	is.NotEmpty(latest.Completion.Commit)
+	is.Empty(latest.Completion.CommitError)
+	is.Equal(strings.TrimSpace(runGit(t, worktreePath, "rev-parse", "HEAD")), latest.Completion.Commit)
 }
 
 func TestAgentDoneRequiresMainWorkingTreeChangesBeforeWriting(t *testing.T) {

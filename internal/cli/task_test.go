@@ -1655,6 +1655,9 @@ func recordMainCompletion(t *testing.T, paths state.Paths, repoID string, taskID
 	}); err != nil {
 		t.Fatalf("complete main run: %v", err)
 	}
+	if _, err := store.FinishRun(repoID, taskID, attempt.Attempt, taskstate.RunStatusSucceeded); err != nil {
+		t.Fatalf("finish main run: %v", err)
+	}
 }
 
 func mainReadyTaskJSON(taskID string, repoPath string) string {

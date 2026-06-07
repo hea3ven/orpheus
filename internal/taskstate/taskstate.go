@@ -109,6 +109,8 @@ type Completion struct {
 	Summary     string    `yaml:"summary"`
 	Details     string    `yaml:"details"`
 	CompletedAt time.Time `yaml:"completed_at"`
+	Commit      string    `yaml:"commit,omitempty"`
+	CommitError string    `yaml:"commit_error,omitempty"`
 }
 
 // Finalization records factual data from human-side main/solo finalization.
@@ -150,8 +152,10 @@ type StartRunOptions struct {
 
 // CompleteRunOptions describes the agent-authored completion payload.
 type CompleteRunOptions struct {
-	Summary string
-	Details string
+	Summary     string
+	Details     string
+	Commit      string
+	CommitError string
 }
 
 // NewStore creates a per-task state store using paths.
@@ -278,7 +282,7 @@ func (s Store) FinishRun(repoID, taskID string, attempt int, status RunStatus) (
 	return s.completeRun(repoID, taskID, attempt, status, EventRunFinished, "")
 }
 
-// CompleteRun records agent-authored completion facts and marks the run succeeded.
+// CompleteRun records agent-authored completion facts without finishing the attached run.
 func (s Store) CompleteRun(repoID, taskID string, attempt int, opts CompleteRunOptions) (RunAttempt, error) {
 	summary := strings.TrimSpace(opts.Summary)
 	if summary == "" {
@@ -288,6 +292,8 @@ func (s Store) CompleteRun(repoID, taskID string, attempt int, opts CompleteRunO
 	if details == "" {
 		return RunAttempt{}, fmt.Errorf("complete run attempt for task %s/%s: details are required", repoID, taskID)
 	}
+	commit := strings.TrimSpace(opts.Commit)
+	commitError := strings.TrimSpace(opts.CommitError)
 
 	state, err := s.Load(repoID, taskID)
 	if err != nil {
@@ -307,7 +313,8 @@ func (s Store) CompleteRun(repoID, taskID string, attempt int, opts CompleteRunO
 
 	run := state.Runs[index]
 	if run.Completion != nil {
-		if run.Completion.Summary != summary || run.Completion.Details != details {
+		completion := *run.Completion
+		if completion.Summary != summary || completion.Details != details {
 			return RunAttempt{}, fmt.Errorf(
 				"complete run attempt for task %s/%s: %w",
 				repoID,
@@ -315,20 +322,36 @@ func (s Store) CompleteRun(repoID, taskID string, attempt int, opts CompleteRunO
 				ErrCompletionConflict,
 			)
 		}
-		if run.Status == RunStatusSucceeded {
+		if commit != "" {
+			if strings.TrimSpace(completion.Commit) != "" && completion.Commit != commit {
+				return RunAttempt{}, fmt.Errorf(
+					"complete run attempt for task %s/%s: %w",
+					repoID,
+					taskID,
+					ErrCompletionConflict,
+				)
+			}
+			completion.Commit = commit
+		}
+		if commitError != "" {
+			if strings.TrimSpace(completion.CommitError) != "" && completion.CommitError != commitError {
+				return RunAttempt{}, fmt.Errorf(
+					"complete run attempt for task %s/%s: %w",
+					repoID,
+					taskID,
+					ErrCompletionConflict,
+				)
+			}
+			completion.CommitError = commitError
+		}
+		if commit == "" && commitError == "" {
 			return run, nil
 		}
-		if run.Status != RunStatusRunning {
-			return RunAttempt{}, fmt.Errorf(
-				"complete run attempt for task %s/%s: attempt %d is %q, expected %q",
-				repoID,
-				taskID,
-				attempt,
-				run.Status,
-				RunStatusRunning,
-			)
+		state.Runs[index].Completion = &completion
+		if err := s.save(state); err != nil {
+			return RunAttempt{}, err
 		}
-		return s.finishRunWithExistingCompletion(state, index)
+		return state.Runs[index], nil
 	}
 
 	if run.Status != RunStatusRunning {
@@ -344,14 +367,13 @@ func (s Store) CompleteRun(repoID, taskID string, attempt int, opts CompleteRunO
 
 	now := s.nowUTC()
 	completedAt := now
-	state.Runs[index].Status = RunStatusSucceeded
-	state.Runs[index].FinishedAt = &completedAt
 	state.Runs[index].Completion = &Completion{
 		Summary:     summary,
 		Details:     details,
 		CompletedAt: completedAt,
+		Commit:      commit,
+		CommitError: commitError,
 	}
-	state.Events = append(state.Events, runFinishedEvent(state.Runs[index], now, RunStatusSucceeded, ""))
 
 	if err := s.save(state); err != nil {
 		return RunAttempt{}, err
@@ -538,23 +560,6 @@ func (s Store) completeRun(repoID, taskID string, attempt int, status RunStatus,
 	return updated, nil
 }
 
-func (s Store) finishRunWithExistingCompletion(state TaskState, index int) (RunAttempt, error) {
-	now := s.nowUTC()
-	finished := now
-	state.Runs[index].Status = RunStatusSucceeded
-	state.Runs[index].FinishedAt = &finished
-	state.Events = append(state.Events, runFinishedEvent(state.Runs[index], now, RunStatusSucceeded, ""))
-
-	if err := s.save(state); err != nil {
-		return RunAttempt{}, err
-	}
-	return state.Runs[index], nil
-}
-
-func runFinishedEvent(run RunAttempt, at time.Time, status RunStatus, errorText string) Event {
-	return runEvent(run, EventRunFinished, at, status, errorText)
-}
-
 func runEvent(run RunAttempt, eventType EventType, at time.Time, status RunStatus, errorText string) Event {
 	return Event{
 		Type:     eventType,
@@ -705,6 +710,9 @@ func validateCompletion(completion Completion) error {
 	}
 	if completion.CompletedAt.IsZero() {
 		return errors.New("completed_at is required")
+	}
+	if strings.TrimSpace(completion.CommitError) != "" && strings.TrimSpace(completion.Commit) != "" {
+		return errors.New("commit_error cannot be recorded with commit")
 	}
 	return nil
 }

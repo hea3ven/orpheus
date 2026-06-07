@@ -576,7 +576,7 @@ func StageAll(ctx context.Context, dir string) error {
 
 	output, err := runGitContext(ctx, dir, "add", "--all")
 	if err != nil {
-		return fmt.Errorf("stage repo-root changes: %w%s", err, gitOutputSuffix(output))
+		return fmt.Errorf("stage changes: %w%s", err, gitOutputSuffix(output))
 	}
 	return nil
 }
@@ -592,12 +592,12 @@ func Commit(ctx context.Context, dir string, message string) (string, error) {
 
 	output, err := runGitContextWithInput(ctx, dir, message, "commit", "--file", "-")
 	if err != nil {
-		return "", fmt.Errorf("commit repo-root changes: %w%s", err, gitOutputSuffix(output))
+		return "", fmt.Errorf("commit changes: %w%s", err, gitOutputSuffix(output))
 	}
 
 	commit, err := HeadCommit(ctx, dir)
 	if err != nil {
-		return "", fmt.Errorf("read finalization commit after commit: %w", err)
+		return "", fmt.Errorf("read HEAD after commit: %w", err)
 	}
 	return commit, nil
 }
