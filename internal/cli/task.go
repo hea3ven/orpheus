@@ -633,7 +633,15 @@ func taskRunWorktreeEvent(lifecycle gitmeta.TaskWorktreeLifecycle) (taskstate.Ev
 
 func finishTaskRun(paths state.Paths, store taskstate.Service, repoID string, taskID string, attempt int) error {
 	return state.WithGlobalMutationLock(paths, taskRunFinalizationLockOperation, func() error {
-		_, err := store.FinishRun(repoID, taskID, attempt, taskstate.RunStatusSucceeded)
+		latest, ok, err := store.LatestRun(repoID, taskID)
+		if err != nil {
+			return err
+		}
+		if ok && latest.Attempt == attempt && latest.Status == taskstate.RunStatusSucceeded && latest.Completion != nil {
+			return nil
+		}
+
+		_, err = store.FinishRun(repoID, taskID, attempt, taskstate.RunStatusSucceeded)
 		return err
 	})
 }

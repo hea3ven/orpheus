@@ -246,8 +246,14 @@ func isSuccessfulRepoRootReview(repository task.Repository, taskItem task.Task, 
 	if latestRun == nil || latestRun.Status != taskstate.RunStatusSucceeded || taskItem.Status != task.StatusInProgress {
 		return false
 	}
+	if latestRun.Completion == nil {
+		return false
+	}
 
 	metadata := taskItem.OrpheusMetadata()
+	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
+		return false
+	}
 	if !repoRootMetadataMatches(repository, metadata) {
 		return false
 	}

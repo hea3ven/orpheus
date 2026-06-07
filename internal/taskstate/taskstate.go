@@ -43,6 +43,9 @@ const (
 var (
 	// ErrActiveRun indicates the latest run attempt is still running.
 	ErrActiveRun = errors.New("latest run attempt is still running")
+
+	// ErrCompletionConflict indicates a run already has different completion details.
+	ErrCompletionConflict = errors.New("run completion already recorded with different summary/details")
 )
 
 // Service is the small task-state API consumed by orchestration and projections.
@@ -53,6 +56,7 @@ type Service interface {
 	ActiveRun(repoID, taskID string) (RunAttempt, bool, error)
 	RecordWorktreeEvent(repoID, taskID string, eventType EventType, opts WorktreeEventOptions) (Event, error)
 	StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt, error)
+	CompleteRun(repoID, taskID string, attempt int, opts CompleteRunOptions) (RunAttempt, error)
 	FinishRun(repoID, taskID string, attempt int, status RunStatus) (RunAttempt, error)
 	FailRunStart(repoID, taskID string, attempt int, cause error) (RunAttempt, error)
 	Events(repoID, taskID string) ([]Event, error)
@@ -87,8 +91,16 @@ type RunAttempt struct {
 	Branch   string   `yaml:"branch,omitempty"`
 	Worktree string   `yaml:"worktree,omitempty"`
 
-	StartedAt  time.Time  `yaml:"started_at"`
-	FinishedAt *time.Time `yaml:"finished_at,omitempty"`
+	StartedAt  time.Time   `yaml:"started_at"`
+	FinishedAt *time.Time  `yaml:"finished_at,omitempty"`
+	Completion *Completion `yaml:"completion,omitempty"`
+}
+
+// Completion records agent-authored completion facts for a run attempt.
+type Completion struct {
+	Summary     string    `yaml:"summary"`
+	Details     string    `yaml:"details"`
+	CompletedAt time.Time `yaml:"completed_at"`
 }
 
 // Event records a small trace/audit event for a task.
@@ -118,6 +130,12 @@ type StartRunOptions struct {
 	Args     []string
 	Branch   string
 	Worktree string
+}
+
+// CompleteRunOptions describes the agent-authored completion payload.
+type CompleteRunOptions struct {
+	Summary string
+	Details string
 }
 
 // NewStore creates a per-task state store using paths.
@@ -244,6 +262,87 @@ func (s Store) FinishRun(repoID, taskID string, attempt int, status RunStatus) (
 	return s.completeRun(repoID, taskID, attempt, status, EventRunFinished, "")
 }
 
+// CompleteRun records agent-authored completion facts and marks the run succeeded.
+func (s Store) CompleteRun(repoID, taskID string, attempt int, opts CompleteRunOptions) (RunAttempt, error) {
+	summary := strings.TrimSpace(opts.Summary)
+	if summary == "" {
+		return RunAttempt{}, fmt.Errorf("complete run attempt for task %s/%s: summary is required", repoID, taskID)
+	}
+	details := strings.TrimSpace(opts.Details)
+	if details == "" {
+		return RunAttempt{}, fmt.Errorf("complete run attempt for task %s/%s: details are required", repoID, taskID)
+	}
+
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return RunAttempt{}, err
+	}
+
+	index := -1
+	for i, run := range state.Runs {
+		if run.Attempt == attempt {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return RunAttempt{}, fmt.Errorf("complete run attempt for task %s/%s: attempt %d was not found", repoID, taskID, attempt)
+	}
+
+	run := state.Runs[index]
+	if run.Completion != nil {
+		if run.Completion.Summary != summary || run.Completion.Details != details {
+			return RunAttempt{}, fmt.Errorf(
+				"complete run attempt for task %s/%s: %w",
+				repoID,
+				taskID,
+				ErrCompletionConflict,
+			)
+		}
+		if run.Status == RunStatusSucceeded {
+			return run, nil
+		}
+		if run.Status != RunStatusRunning {
+			return RunAttempt{}, fmt.Errorf(
+				"complete run attempt for task %s/%s: attempt %d is %q, expected %q",
+				repoID,
+				taskID,
+				attempt,
+				run.Status,
+				RunStatusRunning,
+			)
+		}
+		return s.finishRunWithExistingCompletion(state, index)
+	}
+
+	if run.Status != RunStatusRunning {
+		return RunAttempt{}, fmt.Errorf(
+			"complete run attempt for task %s/%s: attempt %d is %q, expected %q",
+			repoID,
+			taskID,
+			attempt,
+			run.Status,
+			RunStatusRunning,
+		)
+	}
+
+	now := s.nowUTC()
+	completedAt := now
+	state.Runs[index].Status = RunStatusSucceeded
+	state.Runs[index].FinishedAt = &completedAt
+	state.Runs[index].Completion = &Completion{
+		Summary:     summary,
+		Details:     details,
+		CompletedAt: completedAt,
+	}
+	state.Events = append(state.Events, runFinishedEvent(state.Runs[index], now, RunStatusSucceeded, ""))
+
+	if err := s.save(state); err != nil {
+		return RunAttempt{}, err
+	}
+	return state.Runs[index], nil
+}
+
 // FailRunStart records that an attempt failed before the agent process started.
 func (s Store) FailRunStart(repoID, taskID string, attempt int, cause error) (RunAttempt, error) {
 	errorText := ""
@@ -324,21 +423,42 @@ func (s Store) completeRun(repoID, taskID string, attempt int, status RunStatus,
 	state.Runs[index].Status = status
 	state.Runs[index].FinishedAt = &finished
 	updated := state.Runs[index]
-	state.Events = append(state.Events, Event{
-		Type:     eventType,
-		At:       now,
-		Attempt:  updated.Attempt,
-		Status:   status,
-		Agent:    updated.Agent,
-		Branch:   updated.Branch,
-		Worktree: updated.Worktree,
-		Error:    strings.TrimSpace(errorText),
-	})
+	state.Events = append(state.Events, runEvent(updated, eventType, now, status, errorText))
 
 	if err := s.save(state); err != nil {
 		return RunAttempt{}, err
 	}
 	return updated, nil
+}
+
+func (s Store) finishRunWithExistingCompletion(state TaskState, index int) (RunAttempt, error) {
+	now := s.nowUTC()
+	finished := now
+	state.Runs[index].Status = RunStatusSucceeded
+	state.Runs[index].FinishedAt = &finished
+	state.Events = append(state.Events, runFinishedEvent(state.Runs[index], now, RunStatusSucceeded, ""))
+
+	if err := s.save(state); err != nil {
+		return RunAttempt{}, err
+	}
+	return state.Runs[index], nil
+}
+
+func runFinishedEvent(run RunAttempt, at time.Time, status RunStatus, errorText string) Event {
+	return runEvent(run, EventRunFinished, at, status, errorText)
+}
+
+func runEvent(run RunAttempt, eventType EventType, at time.Time, status RunStatus, errorText string) Event {
+	return Event{
+		Type:     eventType,
+		At:       at,
+		Attempt:  run.Attempt,
+		Status:   status,
+		Agent:    run.Agent,
+		Branch:   run.Branch,
+		Worktree: run.Worktree,
+		Error:    strings.TrimSpace(errorText),
+	}
 }
 
 func (s Store) save(taskState TaskState) error {
@@ -453,6 +573,24 @@ func validateRun(run RunAttempt) error {
 	}
 	if !validRunStatus(run.Status) {
 		return fmt.Errorf("run attempt %d has unsupported status %q", run.Attempt, run.Status)
+	}
+	if run.Completion != nil {
+		if err := validateCompletion(*run.Completion); err != nil {
+			return fmt.Errorf("run attempt %d has invalid completion: %w", run.Attempt, err)
+		}
+	}
+	return nil
+}
+
+func validateCompletion(completion Completion) error {
+	if strings.TrimSpace(completion.Summary) == "" {
+		return errors.New("summary is required")
+	}
+	if strings.TrimSpace(completion.Details) == "" {
+		return errors.New("details are required")
+	}
+	if completion.CompletedAt.IsZero() {
+		return errors.New("completed_at is required")
 	}
 	return nil
 }

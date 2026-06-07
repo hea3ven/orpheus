@@ -82,6 +82,88 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 	}
 }
 
+func TestStoreCompleteRunRecordsCompletionFacts(t *testing.T) {
+	store := newTestStore(t,
+		time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+	)
+	attempt, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		Agent:    "recorder",
+		Branch:   "main",
+		Worktree: "/tmp/alpha",
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	completed, err := store.CompleteRun("alpha", "op-1", attempt.Attempt, taskstate.CompleteRunOptions{
+		Summary: "Implemented completion",
+		Details: "Recorded local review data.",
+	})
+	if err != nil {
+		t.Fatalf("complete run: %v", err)
+	}
+	if completed.Status != taskstate.RunStatusSucceeded || completed.FinishedAt == nil {
+		t.Fatalf("completed run = %#v, want succeeded with finished_at", completed)
+	}
+	if completed.Completion == nil {
+		t.Fatalf("completed run missing completion: %#v", completed)
+	}
+	if completed.Completion.Summary != "Implemented completion" ||
+		completed.Completion.Details != "Recorded local review data." ||
+		!completed.Completion.CompletedAt.Equal(time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC)) {
+		t.Fatalf("completion = %#v, want recorded summary/details/completed_at", completed.Completion)
+	}
+
+	again, err := store.CompleteRun("alpha", "op-1", attempt.Attempt, taskstate.CompleteRunOptions{
+		Summary: "Implemented completion",
+		Details: "Recorded local review data.",
+	})
+	if err != nil {
+		t.Fatalf("complete same run again: %v", err)
+	}
+	if !again.Completion.CompletedAt.Equal(completed.Completion.CompletedAt) {
+		t.Fatalf("idempotent completed_at = %s, want %s", again.Completion.CompletedAt, completed.Completion.CompletedAt)
+	}
+
+	_, err = store.CompleteRun("alpha", "op-1", attempt.Attempt, taskstate.CompleteRunOptions{
+		Summary: "Different",
+		Details: "Recorded local review data.",
+	})
+	if !errors.Is(err, taskstate.ErrCompletionConflict) {
+		t.Fatalf("conflicting completion error = %v, want ErrCompletionConflict", err)
+	}
+
+	loaded, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if len(loaded.Runs) != 1 || loaded.Runs[0].Completion == nil || len(loaded.Events) != 2 {
+		t.Fatalf("loaded state = %#v, want one completed run and two events", loaded)
+	}
+
+	statePath, err := store.Path("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("state path: %v", err)
+	}
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read YAML: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"status: succeeded",
+		"completion:",
+		"summary: Implemented completion",
+		"details: Recorded local review data.",
+		"completed_at: 2026-06-03T10:01:00Z",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("YAML missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestStartRunRefusesLatestRunningAttempt(t *testing.T) {
 	store := newTestStore(t, time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC))
 	if _, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Agent: "recorder"}); err != nil {

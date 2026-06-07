@@ -145,3 +145,133 @@ func TestAgentContextFailsBeforeRenderingWhenRunIsStale(t *testing.T) {
 	is.Contains(err.Error(), "latest Orpheus run attempt 1")
 	is.NotContains(err.Error(), "# Orpheus Agent Context")
 }
+
+func TestAgentDoneRecordsMainCompletionForLocalReview(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+	repoPath := newTestRepoAt(t, root, filepath.Join("repos", "alpha"), testRepoConfig{withRemote: true})
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	t.Chdir(repoPath)
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "ORPHEUS_TEST.txt"), []byte("local review\n"), 0o644))
+	bdLogPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[
+			{
+				"id":"op-main",
+				"title":"Complete main run",
+				"status":"in_progress",
+				"priority":2,
+				"issue_type":"task",
+				"metadata":{"orpheus.branch":"main","orpheus.worktree":"` + repoPath + `"}
+			}
+		]`},
+	})
+	runStore := taskstate.NewStore(paths)
+	_, err := runStore.StartRun("alpha", "op-main", taskstate.StartRunOptions{
+		Agent:    "recorder",
+		Branch:   "main",
+		Worktree: repoPath,
+	})
+	must.NoError(err)
+	t.Setenv("ORPHEUS_REPO_ID", "alpha")
+	t.Setenv("ORPHEUS_TASK_ID", "op-main")
+	t.Setenv("ORPHEUS_WORKTREE", repoPath)
+	t.Setenv("ORPHEUS_BRANCH", "main")
+
+	stdout, stderr := executeCommand(t, []string{
+		"agent",
+		"done",
+		"--summary",
+		"Add local review file",
+		"--details",
+		"Created ORPHEUS_TEST.txt for local review.",
+	})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Recorded completion for op-main")
+
+	latest, ok, err := runStore.LatestRun("alpha", "op-main")
+	must.NoError(err)
+	must.True(ok)
+	is.Equal(taskstate.RunStatusSucceeded, latest.Status)
+	must.NotNil(latest.Completion)
+	is.Equal("Add local review file", latest.Completion.Summary)
+	is.Equal("Created ORPHEUS_TEST.txt for local review.", latest.Completion.Details)
+	is.Contains(runGit(t, repoPath, "status", "--porcelain=v1"), "ORPHEUS_TEST.txt")
+	is.NotContains(runGit(t, repoPath, "log", "--oneline", "--max-count=1"), "Add local review file")
+
+	bdLog, err := os.ReadFile(bdLogPath)
+	must.NoError(err)
+	is.Contains(string(bdLog), "--json --readonly --sandbox show --id op-main")
+	is.NotContains(string(bdLog), "--json --sandbox update")
+}
+
+func TestAgentDoneRequiresMainWorkingTreeChangesBeforeWriting(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+	repoPath := newTestRepoAt(t, root, filepath.Join("repos", "alpha"), testRepoConfig{withRemote: true})
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	t.Chdir(repoPath)
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[
+			{
+				"id":"op-main",
+				"title":"Complete main run",
+				"status":"in_progress",
+				"priority":2,
+				"issue_type":"task",
+				"metadata":{"orpheus.branch":"main","orpheus.worktree":"` + repoPath + `"}
+			}
+		]`},
+	})
+	runStore := taskstate.NewStore(paths)
+	_, err := runStore.StartRun("alpha", "op-main", taskstate.StartRunOptions{
+		Agent:    "recorder",
+		Branch:   "main",
+		Worktree: repoPath,
+	})
+	must.NoError(err)
+	t.Setenv("ORPHEUS_REPO_ID", "alpha")
+	t.Setenv("ORPHEUS_TASK_ID", "op-main")
+	t.Setenv("ORPHEUS_WORKTREE", repoPath)
+	t.Setenv("ORPHEUS_BRANCH", "main")
+
+	stdout, stderr, err := executeCommandWithError(t, []string{
+		"agent",
+		"done",
+		"--summary",
+		"No changes",
+		"--details",
+		"Should fail before writing.",
+	})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.Contains(err.Error(), "working tree has no changes")
+
+	latest, ok, err := runStore.LatestRun("alpha", "op-main")
+	must.NoError(err)
+	must.True(ok)
+	is.Equal(taskstate.RunStatusRunning, latest.Status)
+	is.Nil(latest.Completion)
+}

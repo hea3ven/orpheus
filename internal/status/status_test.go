@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/status"
 	"github.com/hea3ven/orpheus/internal/task"
@@ -96,7 +97,17 @@ func TestProjectWithRunStatesShowsSuccessfulRepoRootRunInReview(t *testing.T) {
 		}},
 	}}}
 	runStates := status.RunStateIndex{
-		status.RunStateKey("alpha", "a-main"): {Attempt: 1, Status: taskstate.RunStatusSucceeded, Branch: "main", Worktree: "/tmp/alpha"},
+		status.RunStateKey("alpha", "a-main"): {
+			Attempt:  1,
+			Status:   taskstate.RunStatusSucceeded,
+			Branch:   "main",
+			Worktree: "/tmp/alpha",
+			Completion: &taskstate.Completion{
+				Summary:     "Done",
+				Details:     "Ready for review.",
+				CompletedAt: time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+			},
+		},
 	}
 
 	got := status.ProjectWithRunStates(snapshot, runStates)
@@ -107,6 +118,39 @@ func TestProjectWithRunStatesShowsSuccessfulRepoRootRunInReview(t *testing.T) {
 		t.Fatalf("review detail = %q, want local repo-root review", reviewEntry.Detail)
 	}
 	assertGroupTaskIDs(t, got, status.GroupWorking, nil)
+}
+
+func TestProjectWithRunStatesDoesNotInferRepoRootReviewWithoutCompletion(t *testing.T) {
+	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
+		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/tmp/alpha", DefaultBranch: "main"},
+		Tasks: []task.Task{{
+			ID:        "a-main",
+			Title:     "local main review",
+			Status:    task.StatusInProgress,
+			IssueType: task.IssueTypeTask,
+			Metadata: task.Metadata{
+				task.MetadataBranch:   "main",
+				task.MetadataWorktree: "/tmp/alpha",
+			},
+		}},
+	}}}
+	runStates := status.RunStateIndex{
+		status.RunStateKey("alpha", "a-main"): {
+			Attempt:  1,
+			Status:   taskstate.RunStatusSucceeded,
+			Branch:   "main",
+			Worktree: "/tmp/alpha",
+		},
+	}
+
+	got := status.ProjectWithRunStates(snapshot, runStates)
+
+	assertGroupTaskIDs(t, got, status.GroupInReview, nil)
+	assertGroupTaskIDs(t, got, status.GroupIdle, []string{"a-main"})
+	idleEntry := groupEntries(t, got, status.GroupIdle)[0]
+	if !strings.Contains(idleEntry.Detail, "does not infer implementation completion") {
+		t.Fatalf("idle detail = %q, want non-inference detail", idleEntry.Detail)
+	}
 }
 
 func TestProjectWithRunStatesClassifiesLatestAttachedAttempts(t *testing.T) {

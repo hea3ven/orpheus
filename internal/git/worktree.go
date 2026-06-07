@@ -546,6 +546,27 @@ func fastForwardFromOrigin(ctx context.Context, repoRoot string, defaultBranch s
 	return nil
 }
 
+// CurrentBranch returns the current branch for dir without mutating the repository.
+func CurrentBranch(ctx context.Context, dir string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return currentBranchAt(ctx, dir)
+}
+
+// HasWorkingTreeChanges reports whether dir has tracked, staged, or untracked changes.
+func HasWorkingTreeChanges(ctx context.Context, dir string) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	output, err := runGitContext(ctx, dir, "status", "--porcelain=v1")
+	if err != nil {
+		return false, fmt.Errorf("inspect working tree changes: %w%s", err, gitOutputSuffix(output))
+	}
+	return strings.TrimSpace(output) != "", nil
+}
+
 func verifyRef(ctx context.Context, repoRoot string, ref string) error {
 	output, err := runGitContext(ctx, repoRoot, "show-ref", "--verify", "--quiet", ref)
 	if err == nil {

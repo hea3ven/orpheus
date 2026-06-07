@@ -179,7 +179,10 @@ func TestStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t *testing.T) {
 	runStore := taskstate.NewStore(paths)
 	attempt, err := runStore.StartRun("alpha", "ar-main", taskstate.StartRunOptions{Agent: "recorder", Branch: "main", Worktree: repoDir})
 	must.NoError(err)
-	_, err = runStore.FinishRun("alpha", "ar-main", attempt.Attempt, taskstate.RunStatusSucceeded)
+	_, err = runStore.CompleteRun("alpha", "ar-main", attempt.Attempt, taskstate.CompleteRunOptions{
+		Summary: "Ready",
+		Details: "Ready for local review.",
+	})
 	must.NoError(err)
 
 	withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
