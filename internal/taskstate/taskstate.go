@@ -32,12 +32,13 @@ const (
 type EventType string
 
 const (
-	EventWorktreeCreated   EventType = "worktree_created"
-	EventWorktreeReused    EventType = "worktree_reused"
-	EventWorktreeRecreated EventType = "worktree_recreated"
-	EventRunStarted        EventType = "run_started"
-	EventRunFinished       EventType = "run_finished"
-	EventRunStartFailed    EventType = "run_start_failed"
+	EventWorktreeCreated    EventType = "worktree_created"
+	EventWorktreeReused     EventType = "worktree_reused"
+	EventWorktreeRecreated  EventType = "worktree_recreated"
+	EventRunStarted         EventType = "run_started"
+	EventRunFinished        EventType = "run_finished"
+	EventRunStartFailed     EventType = "run_start_failed"
+	EventCompletionRepeated EventType = "completion_repeated"
 )
 
 var (
@@ -60,6 +61,7 @@ type Service interface {
 	RecordWorktreeEvent(repoID, taskID string, eventType EventType, opts WorktreeEventOptions) (Event, error)
 	StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt, error)
 	CompleteRun(repoID, taskID string, attempt int, opts CompleteRunOptions) (RunAttempt, error)
+	RecordRepeatedCompletion(repoID, taskID string, attempt int, opts RepeatedCompletionOptions) (Event, error)
 	FinishRun(repoID, taskID string, attempt int, status RunStatus) (RunAttempt, error)
 	FailRunStart(repoID, taskID string, attempt int, cause error) (RunAttempt, error)
 	RecordFinalizationCommit(repoID, taskID string, commit string) (Finalization, error)
@@ -133,6 +135,10 @@ type Event struct {
 	Branch   string `yaml:"branch,omitempty"`
 	Worktree string `yaml:"worktree,omitempty"`
 	Error    string `yaml:"error,omitempty"`
+
+	Message          string `yaml:"message,omitempty"`
+	RequestedSummary string `yaml:"requested_summary,omitempty"`
+	RequestedDetails string `yaml:"requested_details,omitempty"`
 }
 
 // WorktreeEventOptions describes worktree context for a trace event.
@@ -156,6 +162,12 @@ type CompleteRunOptions struct {
 	Details     string
 	Commit      string
 	CommitError string
+}
+
+// RepeatedCompletionOptions describes an ignored repeated agent completion payload.
+type RepeatedCompletionOptions struct {
+	Summary string
+	Details string
 }
 
 // NewStore creates a per-task state store using paths.
@@ -379,6 +391,47 @@ func (s Store) CompleteRun(repoID, taskID string, attempt int, opts CompleteRunO
 		return RunAttempt{}, err
 	}
 	return state.Runs[index], nil
+}
+
+// RecordRepeatedCompletion records a local diagnostic for an ignored repeated agent completion.
+func (s Store) RecordRepeatedCompletion(
+	repoID,
+	taskID string,
+	attempt int,
+	opts RepeatedCompletionOptions,
+) (Event, error) {
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return Event{}, err
+	}
+
+	index := -1
+	for i, run := range state.Runs {
+		if run.Attempt == attempt {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return Event{}, fmt.Errorf("record repeated completion for task %s/%s: attempt %d was not found", repoID, taskID, attempt)
+	}
+
+	run := state.Runs[index]
+	if run.Completion == nil {
+		return Event{}, fmt.Errorf("record repeated completion for task %s/%s: attempt %d has no recorded completion", repoID, taskID, attempt)
+	}
+
+	now := s.nowUTC()
+	event := runEvent(run, EventCompletionRepeated, now, run.Status, "")
+	event.Message = "agent done repeated after completion already recorded; preserved first completion"
+	event.RequestedSummary = strings.TrimSpace(opts.Summary)
+	event.RequestedDetails = strings.TrimSpace(opts.Details)
+	state.Events = append(state.Events, event)
+
+	if err := s.save(state); err != nil {
+		return Event{}, err
+	}
+	return event, nil
 }
 
 // RecordFinalizationCommit records the commit created by task finalization.
@@ -774,7 +827,7 @@ func validRunStatus(status RunStatus) bool {
 
 func validEventType(eventType EventType) bool {
 	switch eventType {
-	case EventWorktreeCreated, EventWorktreeReused, EventWorktreeRecreated, EventRunStarted, EventRunFinished, EventRunStartFailed:
+	case EventWorktreeCreated, EventWorktreeReused, EventWorktreeRecreated, EventRunStarted, EventRunFinished, EventRunStartFailed, EventCompletionRepeated:
 		return true
 	default:
 		return false

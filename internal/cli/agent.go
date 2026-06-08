@@ -115,6 +115,17 @@ func runAgentDone(command *cobra.Command, opts *rootOptions, summary string, det
 		slog.String("task_id", completed.Context.Task.ID),
 		slog.Int("attempt", completed.Run.Attempt),
 	)
+	if completed.Repeated {
+		_, err = fmt.Fprintf(
+			command.OutOrStdout(),
+			"Completion for %s was already recorded for this Orpheus run; no action taken. "+
+				"Do not run `orpheus agent done` again after it succeeds. "+
+				"The first completion remains authoritative, and post-done edits are not captured by this no-op. "+
+				"A local diagnostic was recorded.\n",
+			completed.Context.Task.ID,
+		)
+		return err
+	}
 	if completed.CommitError != nil {
 		_, err = fmt.Fprintf(
 			command.OutOrStdout(),

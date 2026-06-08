@@ -78,6 +78,9 @@ func TestAgentContextRendersValidatedWorktreeContext(t *testing.T) {
 		"- Run attempt: 1",
 		"- Agent: recorder",
 		"orpheus agent done",
+		"one-time completion handoff",
+		"run it at most once",
+		"do not run it again after it succeeds",
 		"Orpheus will create the pull request",
 	} {
 		is.Contains(stdout, want)
@@ -214,6 +217,82 @@ func TestAgentDoneRecordsMainCompletionForLocalReview(t *testing.T) {
 	must.NoError(err)
 	is.Contains(string(bdLog), "--json --readonly --sandbox show --id op-main")
 	is.NotContains(string(bdLog), "--json --sandbox update")
+}
+
+func TestAgentDoneRepeatedMainCompletionIsNoopWithGuidance(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+	repoPath := newTestRepoAt(t, root, filepath.Join("repos", "alpha"), testRepoConfig{withRemote: true})
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	t.Chdir(repoPath)
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[
+			{
+				"id":"op-main",
+				"title":"Complete main run",
+				"status":"in_progress",
+				"priority":2,
+				"issue_type":"task",
+				"metadata":{"orpheus.branch":"main","orpheus.worktree":"` + repoPath + `"}
+			}
+		]`},
+	})
+	runStore := taskstate.NewStore(paths)
+	attempt, err := runStore.StartRun("alpha", "op-main", taskstate.StartRunOptions{
+		Agent:    "recorder",
+		Branch:   "main",
+		Worktree: repoPath,
+	})
+	must.NoError(err)
+	_, err = runStore.CompleteRun("alpha", "op-main", attempt.Attempt, taskstate.CompleteRunOptions{
+		Summary: "First summary",
+		Details: "First details.",
+	})
+	must.NoError(err)
+	t.Setenv("ORPHEUS_REPO_ID", "alpha")
+	t.Setenv("ORPHEUS_TASK_ID", "op-main")
+	t.Setenv("ORPHEUS_WORKTREE", repoPath)
+	t.Setenv("ORPHEUS_BRANCH", "main")
+
+	stdout, stderr := executeCommand(t, []string{
+		"agent",
+		"done",
+		"--summary",
+		"Second summary",
+		"--details",
+		"Second details.",
+	})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "already recorded")
+	is.Contains(stdout, "Do not run `orpheus agent done` again")
+	is.Contains(stdout, "first completion remains authoritative")
+	is.Contains(stdout, "local diagnostic")
+
+	latest, ok, err := runStore.LatestRun("alpha", "op-main")
+	must.NoError(err)
+	must.True(ok)
+	must.NotNil(latest.Completion)
+	is.Equal("First summary", latest.Completion.Summary)
+	is.Equal("First details.", latest.Completion.Details)
+	events, err := runStore.Events("alpha", "op-main")
+	must.NoError(err)
+	must.NotEmpty(events)
+	last := events[len(events)-1]
+	is.Equal(taskstate.EventCompletionRepeated, last.Type)
+	is.Equal(attempt.Attempt, last.Attempt)
+	is.Equal("Second summary", last.RequestedSummary)
+	is.Equal("Second details.", last.RequestedDetails)
 }
 
 func TestAgentDoneCommitsWorktreeCompletion(t *testing.T) {

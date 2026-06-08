@@ -21,14 +21,17 @@ type CompleteOptions struct {
 
 // CompleteResult reports the validated context and persisted run completion.
 type CompleteResult struct {
-	Context     ActiveContext
-	Run         taskstate.RunAttempt
-	CommitError error
+	Context            ActiveContext
+	Run                taskstate.RunAttempt
+	CommitError        error
+	Repeated           bool
+	RepeatedDiagnostic *taskstate.Event
 }
 
 // CompletionRunStore persists completion facts on a run attempt.
 type CompletionRunStore interface {
 	CompleteRun(repoID, taskID string, attempt int, opts taskstate.CompleteRunOptions) (taskstate.RunAttempt, error)
+	RecordRepeatedCompletion(repoID, taskID string, attempt int, opts taskstate.RepeatedCompletionOptions) (taskstate.Event, error)
 }
 
 // GitStateReader provides the Git checks and commit operations needed before completion.
@@ -130,8 +133,8 @@ func (s CompletionService) completeMain(
 	details string,
 	gitState GitStateReader,
 ) (CompleteResult, error) {
-	if existing, ok, err := existingCompletionResult(activeContext, summary, details); ok || err != nil {
-		return CompleteResult{Context: activeContext, Run: existing}, err
+	if existing, ok, err := s.existingCompletionResult(activeContext, summary, details); ok || err != nil {
+		return existing, err
 	}
 
 	currentBranch, err := gitState.CurrentBranch(ctx, activeContext.Repository.Root)
@@ -176,8 +179,8 @@ func (s CompletionService) completeWorktree(
 	details string,
 	gitState GitStateReader,
 ) (CompleteResult, error) {
-	if existing, ok, err := existingCompletionResult(activeContext, summary, details); ok || err != nil {
-		return CompleteResult{Context: activeContext, Run: existing}, err
+	if existing, ok, err := s.existingCompletionResult(activeContext, summary, details); ok || err != nil {
+		return existing, err
 	}
 
 	currentBranch, err := gitState.CurrentBranch(ctx, activeContext.Target.Path)
@@ -263,27 +266,39 @@ func (s CompletionService) recordCommitError(
 	return run
 }
 
-func existingCompletionResult(
+func (s CompletionService) existingCompletionResult(
 	activeContext ActiveContext,
 	summary string,
 	details string,
-) (taskstate.RunAttempt, bool, error) {
+) (CompleteResult, bool, error) {
 	if activeContext.Run.Completion == nil {
-		return taskstate.RunAttempt{}, false, nil
+		return CompleteResult{}, false, nil
 	}
-	completion := activeContext.Run.Completion
-	if completion.Summary != summary || completion.Details != details {
-		return taskstate.RunAttempt{}, false, fmt.Errorf(
-			"run completion already recorded with different summary/details: %w",
-			taskstate.ErrCompletionConflict,
-		)
+
+	diagnostic, err := s.RunStore.RecordRepeatedCompletion(
+		activeContext.Repository.ID,
+		activeContext.Task.ID,
+		activeContext.Run.Attempt,
+		taskstate.RepeatedCompletionOptions{
+			Summary: summary,
+			Details: details,
+		},
+	)
+	if err != nil {
+		return CompleteResult{}, true, fmt.Errorf("record repeated completion diagnostic: %w", err)
 	}
-	return taskstate.RunAttempt{
-		Attempt:    activeContext.Run.Attempt,
-		Status:     taskstate.RunStatusRunning,
-		Agent:      activeContext.Run.Agent,
-		Branch:     activeContext.Target.Branch,
-		Worktree:   activeContext.Target.Path,
-		Completion: completion,
+
+	return CompleteResult{
+		Context: activeContext,
+		Run: taskstate.RunAttempt{
+			Attempt:    activeContext.Run.Attempt,
+			Status:     taskstate.RunStatusRunning,
+			Agent:      activeContext.Run.Agent,
+			Branch:     activeContext.Target.Branch,
+			Worktree:   activeContext.Target.Path,
+			Completion: activeContext.Run.Completion,
+		},
+		Repeated:           true,
+		RepeatedDiagnostic: &diagnostic,
 	}, true, nil
 }

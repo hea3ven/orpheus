@@ -69,6 +69,9 @@ func TestRenderActiveContextIncludesWorktreeContract(t *testing.T) {
 		"- Agent: recorder",
 		"deterministic task worktree and task branch",
 		"orpheus agent done",
+		"one-time completion handoff",
+		"run it at most once",
+		"do not run it again after it succeeds",
 		"Orpheus will create the pull request",
 	} {
 		is.Contains(output, want)
@@ -100,6 +103,9 @@ func TestRenderActiveContextIncludesMainContract(t *testing.T) {
 	for _, want := range []string{
 		"- Workflow: main/solo",
 		"registered repository root on the registered default branch",
+		"one-time completion handoff",
+		"run it at most once",
+		"do not run it again after it succeeds",
 		"Orpheus will record local-review-ready completion data",
 		"The human operator will later run `orpheus task done op-main`",
 		"do not run it yourself unless explicitly asked",

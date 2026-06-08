@@ -196,6 +196,67 @@ func TestCompletionServiceIdempotentWorktreeCompletionDoesNotCommitAgain(t *test
 	is.Empty(completed.Run.Completion.Commit)
 }
 
+func TestCompletionServiceRepeatedWorktreeCompletionWithDifferentPayloadIsNoop(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	fixture := newActiveContextFixture(t, "op-1")
+	worktree := fixture.expectedWorktree(t, "op-1")
+	taskItem := fixture.worktreeTask("op-1", worktree)
+	attempt, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		Agent:    "recorder",
+		Branch:   "orpheus/op-1",
+		Worktree: worktree,
+	})
+	must.NoError(err)
+	first, err := fixture.store.CompleteRun("alpha", "op-1", attempt.Attempt, taskstate.CompleteRunOptions{
+		Summary: "First summary",
+		Details: "First details.",
+		Commit:  "abc123",
+	})
+	must.NoError(err)
+
+	gitState := &fakeGitState{
+		branchErr:  errors.New("unexpected Git branch inspection"),
+		changesErr: errors.New("unexpected Git status inspection"),
+		commit:     "def456",
+	}
+	service := agent.CompletionService{
+		Paths:    fixture.paths,
+		Resolver: fixture.resolver(taskItem, worktreeEnv("op-1", worktree), worktree),
+		RunStore: fixture.store,
+		Git:      gitState,
+	}
+
+	completed, err := service.Complete(context.Background(), agent.CompleteOptions{
+		Summary: "Second summary",
+		Details: "Second details.",
+	})
+
+	must.NoError(err)
+	is.True(completed.Repeated)
+	is.Equal(0, gitState.staged)
+	is.Equal(0, gitState.committed)
+	must.NotNil(completed.Run.Completion)
+	is.Equal(first.Completion.Summary, completed.Run.Completion.Summary)
+	is.Equal(first.Completion.Details, completed.Run.Completion.Details)
+	is.Equal(first.Completion.Commit, completed.Run.Completion.Commit)
+	must.NotNil(completed.RepeatedDiagnostic)
+	is.Equal(taskstate.EventCompletionRepeated, completed.RepeatedDiagnostic.Type)
+	is.Equal("Second summary", completed.RepeatedDiagnostic.RequestedSummary)
+	is.Equal("Second details.", completed.RepeatedDiagnostic.RequestedDetails)
+
+	latest, ok, loadErr := fixture.store.LatestRun("alpha", "op-1")
+	must.NoError(loadErr)
+	must.True(ok)
+	must.NotNil(latest.Completion)
+	is.Equal("First summary", latest.Completion.Summary)
+	is.Equal("First details.", latest.Completion.Details)
+	is.Equal("abc123", latest.Completion.Commit)
+	events, eventsErr := fixture.store.Events("alpha", "op-1")
+	must.NoError(eventsErr)
+	is.Equal(taskstate.EventCompletionRepeated, events[len(events)-1].Type)
+}
+
 func TestCompletionServiceRequiresChangesBeforeWriting(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)

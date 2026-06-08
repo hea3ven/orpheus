@@ -186,6 +186,76 @@ func TestStoreCompleteRunRecordsCompletionFacts(t *testing.T) {
 	}
 }
 
+func TestStoreRecordsRepeatedCompletionDiagnostic(t *testing.T) {
+	store := newTestStore(t,
+		time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+		time.Date(2026, 6, 3, 10, 2, 0, 0, time.UTC),
+	)
+	attempt, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		Agent:    "recorder",
+		Branch:   "main",
+		Worktree: "/tmp/alpha",
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	if _, err := store.CompleteRun("alpha", "op-1", attempt.Attempt, taskstate.CompleteRunOptions{
+		Summary: "First summary",
+		Details: "First details.",
+	}); err != nil {
+		t.Fatalf("complete run: %v", err)
+	}
+
+	event, err := store.RecordRepeatedCompletion("alpha", "op-1", attempt.Attempt, taskstate.RepeatedCompletionOptions{
+		Summary: "Second summary",
+		Details: "Second details.",
+	})
+	if err != nil {
+		t.Fatalf("record repeated completion: %v", err)
+	}
+	if event.Type != taskstate.EventCompletionRepeated || event.Attempt != attempt.Attempt || event.Status != taskstate.RunStatusRunning {
+		t.Fatalf("event = %#v, want completion_repeated for running attempt", event)
+	}
+	if event.RequestedSummary != "Second summary" || event.RequestedDetails != "Second details." {
+		t.Fatalf("event requested payload = %#v", event)
+	}
+	if !strings.Contains(event.Message, "preserved first completion") {
+		t.Fatalf("event message = %q, want preservation diagnostic", event.Message)
+	}
+
+	loaded, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if len(loaded.Events) != 2 || loaded.Events[1].Type != taskstate.EventCompletionRepeated {
+		t.Fatalf("events = %#v, want repeated completion diagnostic", loaded.Events)
+	}
+	if loaded.Runs[0].Completion.Summary != "First summary" || loaded.Runs[0].Completion.Details != "First details." {
+		t.Fatalf("completion = %#v, want first payload preserved", loaded.Runs[0].Completion)
+	}
+
+	statePath, err := store.Path("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("state path: %v", err)
+	}
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read YAML: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"completion_repeated",
+		"requested_summary: Second summary",
+		"requested_details: Second details.",
+		"preserved first completion",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("YAML missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestStoreRecordsFinalizationFactsIdempotently(t *testing.T) {
 	store := newTestStore(t,
 		time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC),
