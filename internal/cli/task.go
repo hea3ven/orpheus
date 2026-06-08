@@ -168,7 +168,7 @@ func runTaskReady(command *cobra.Command, opts *rootOptions, detailed bool) erro
 	if len(runStateFailures) > 0 {
 		snapshot.Failures = append(snapshot.Failures, runStateFailures...)
 	}
-	rows := status.ReadyRowsWithRunStates(snapshot, runStates)
+	rows := status.ReadyRowsWithLocalTaskStates(snapshot, runStates)
 	logger.DebugContext(
 		command.Context(),
 		"projected ready tasks",

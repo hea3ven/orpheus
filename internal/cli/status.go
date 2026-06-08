@@ -48,7 +48,7 @@ func runStatus(command *cobra.Command, opts *rootOptions, full bool) error {
 	if len(runStateFailures) > 0 {
 		snapshot.Failures = append(snapshot.Failures, runStateFailures...)
 	}
-	projection := status.ProjectWithRunStates(snapshot, runStates)
+	projection := status.ProjectWithLocalTaskStates(snapshot, runStates)
 	logger.DebugContext(
 		command.Context(),
 		"projected local status",
@@ -70,27 +70,32 @@ func runStatus(command *cobra.Command, opts *rootOptions, full bool) error {
 func taskRunStateIndex(
 	paths state.Paths,
 	snapshot taskmodel.SnapshotResult,
-) (status.RunStateIndex, []taskmodel.RepoFailure) {
+) (status.LocalTaskStateIndex, []taskmodel.RepoFailure) {
 	store := taskstate.Service(taskstate.NewStore(paths))
-	index := status.RunStateIndex{}
+	index := status.LocalTaskStateIndex{}
 	failures := make([]taskmodel.RepoFailure, 0)
 
 	for _, repoSnapshot := range snapshot.Repositories {
 		for _, taskItem := range repoSnapshot.Tasks {
-			latest, ok, err := store.LatestRun(repoSnapshot.Repository.ID, taskItem.ID)
+			state, err := store.Load(repoSnapshot.Repository.ID, taskItem.ID)
 			if err != nil {
 				failures = append(failures, taskmodel.RepoFailure{
 					Repository: repoSnapshot.Repository,
 					Source:     "task_state",
-					Operation:  "latest_run",
+					Operation:  "load",
 					Err:        err,
 				})
 				continue
 			}
+			latest, ok := taskstate.LatestRun(state)
 			if !ok {
 				continue
 			}
-			index[status.RunStateKey(repoSnapshot.Repository.ID, taskItem.ID)] = latest
+			latestCopy := latest
+			index[status.RunStateKey(repoSnapshot.Repository.ID, taskItem.ID)] = status.LocalTaskState{
+				LatestRun:    &latestCopy,
+				Finalization: taskstate.FinalizationFacts(state),
+			}
 		}
 	}
 	return index, failures

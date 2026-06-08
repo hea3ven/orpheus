@@ -94,7 +94,7 @@ func TestStatusGroupsLocalTaskSnapshots(t *testing.T) {
 	is.Empty(stderr)
 	for _, want := range []string{
 		"Ready to run (3)", "Alpha Repo", "ar-ready", "Ready task", "ar-dep", "Open dependency", "ar-bug", "Bug item",
-		"Failed / needs retry (1)", "ar-failed", "Failed attached agent", "run attempt 1 failed",
+		"Needs attention (2)", "ar-failed", "Failed attached agent", "run attempt 1 failed",
 		"Working (1)", "ar-running", "Running attached agent", "run attempt 1 is running",
 		"Idle (2)",
 		"ar-idle",
@@ -102,9 +102,9 @@ func TestStatusGroupsLocalTaskSnapshots(t *testing.T) {
 		"no attached run recorded",
 		"ar-succeeded",
 		"Succeeded attached agent",
-		"does not infer implementation completion",
-		"In review (1)", "ar-review", "Review task", "https://example.test/pr/3",
-		"Unknown / needs attention (1)", "ar-missing", "Needs inspection", "missing dependency ar-gone",
+		"agent exited without completion",
+		"Reviewing (1)", "ar-review", "Review task", "https://example.test/pr/3",
+		"ar-missing", "Needs inspection", "missing dependency ar-gone",
 	} {
 		is.Contains(stdout, want)
 	}
@@ -113,11 +113,10 @@ func TestStatusGroupsLocalTaskSnapshots(t *testing.T) {
 	}
 
 	assertStatusGroupOrder(t, stdout, []string{
-		"Unknown / needs attention",
-		"Failed / needs retry",
+		"Needs attention",
+		"Reviewing",
 		"Working",
 		"Idle",
-		"In review",
 		"Ready to run",
 	})
 	is.NotContains(statusSection(t, stdout, "Ready to run", ""), "DETAIL")
@@ -132,11 +131,10 @@ func TestStatusGroupsLocalTaskSnapshots(t *testing.T) {
 	}
 	is.NotContains(fullStdout, "STATUS")
 	assertStatusGroupOrder(t, fullStdout, []string{
-		"Unknown / needs attention",
-		"Failed / needs retry",
+		"Needs attention",
+		"Reviewing",
 		"Working",
 		"Idle",
-		"In review",
 		"Ready to run",
 		"Blocked",
 		"Done / closed",
@@ -205,10 +203,10 @@ func TestStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t *testing.T) {
 	stdout, stderr := executeCommand(t, []string{"status"})
 
 	is.Empty(stderr)
-	is.Contains(stdout, "In review (1)")
+	is.Contains(stdout, "Reviewing (1)")
 	is.Contains(stdout, "ar-main")
 	is.Contains(stdout, "Local main review")
-	is.Contains(stdout, "local repo-root review (no PR URL)")
+	is.Contains(stdout, "local review; run task done")
 	is.Contains(stdout, "Working (0)")
 }
 
@@ -243,7 +241,7 @@ func TestStatusAndTaskReadyUseLocalRunHistoryOnOpenTaskAsNeedsAttention(t *testi
 	stdout, stderr := executeCommand(t, []string{"status"})
 
 	is.Empty(stderr)
-	is.Contains(stdout, "Unknown / needs attention (1)")
+	is.Contains(stdout, "Needs attention (1)")
 	is.Contains(stdout, "ar-running")
 	is.Contains(stdout, "backend status is open but local run attempt 1 is running")
 	is.Contains(stdout, "Ready to run (1)")
@@ -302,7 +300,7 @@ func TestStatusReportsRepoFailuresInUnknownGroupAndReturnsError(t *testing.T) {
 	is.Contains(stdout, "OK Repo")
 	is.Contains(stdout, "ok-1")
 	is.Contains(stdout, "Ready despite another repo failure")
-	is.Contains(stdout, "Unknown / needs attention (1)")
+	is.Contains(stdout, "Needs attention (1)")
 	is.Contains(stdout, "Broken Repo")
 	is.Contains(stdout, "task_backend/snapshot")
 	is.Contains(stdout, "bd exploded")
