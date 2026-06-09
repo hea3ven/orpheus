@@ -1412,6 +1412,168 @@ func TestTaskDoneCommitsPushesClosesAndRecordsFinalization(t *testing.T) {
 	must.NotNil(facts.ClosedAt)
 }
 
+func TestTaskSyncPushesPRReadyTaskBranch(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	taskWorktree := filepath.Join(root, "worktrees", "op-sync")
+	runGit(t, repoPath, "branch", "orpheus/op-sync", "main")
+	runGit(t, repoPath, "worktree", "add", taskWorktree, "orpheus/op-sync")
+	must.NoError(os.WriteFile(filepath.Join(taskWorktree, "sync.txt"), []byte("sync\n"), 0o644))
+	runGit(t, taskWorktree, "add", "sync.txt")
+	runGit(t, taskWorktree, "commit", "-m", "sync task branch")
+	commit := strings.TrimSpace(runGit(t, taskWorktree, "rev-parse", "HEAD"))
+	recordWorktreeCompletion(t, paths, "alpha", "op-sync", "orpheus/op-sync", taskWorktree, commit)
+
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
+		dir:    repoPath,
+		args:   "--json --readonly --sandbox show --id op-sync",
+		stdout: syncReadyTaskJSON("op-sync", "orpheus/op-sync", taskWorktree),
+	}})
+
+	stdout, stderr := executeCommand(t, []string{"task", "sync", "op-sync"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Synced op-sync")
+	is.Contains(stdout, "pushed branch orpheus/op-sync to origin")
+	is.Contains(stdout, "PR creation is not implemented")
+	is.Contains(stdout, "no PR URL metadata was written")
+	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
+	originCommit := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/orpheus/op-sync"))
+	is.Equal(commit, originCommit)
+}
+
+func TestTaskSyncSkipsBranchRunAtRepoRoot(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	runGit(t, repoPath, "checkout", "-b", "orpheus/op-sync")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "sync.txt"), []byte("sync\n"), 0o644))
+	runGit(t, repoPath, "add", "sync.txt")
+	runGit(t, repoPath, "commit", "-m", "sync task branch")
+	commit := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
+	recordWorktreeCompletion(t, paths, "alpha", "op-sync", "orpheus/op-sync", repoPath, commit)
+
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
+		dir:    repoPath,
+		args:   "--json --readonly --sandbox show --id op-sync",
+		stdout: syncReadyTaskJSON("op-sync", "orpheus/op-sync", repoPath),
+	}})
+
+	stdout, stderr := executeCommand(t, []string{"task", "sync", "op-sync"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Skipped op-sync")
+	is.Contains(stdout, "registered repo root")
+	is.Contains(stdout, "not a worktree/team task worktree")
+	is.Contains(stdout, "PR creation is not implemented")
+}
+
+func TestTaskSyncSkipsMainSoloLocalReadyTask(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Local ready", "Needs human review.")
+
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
+		dir:    repoPath,
+		args:   "--json --readonly --sandbox show --id op-main",
+		stdout: mainReadyTaskJSON("op-main", repoPath),
+	}})
+
+	stdout, stderr := executeCommand(t, []string{"task", "sync", "op-main"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Skipped op-main")
+	is.Contains(stdout, "main/solo local-review-ready")
+	is.Contains(stdout, "orpheus task done")
+	is.Contains(stdout, "PR creation is not implemented")
+}
+
+func TestTaskSyncPushFailureIsNonZero(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	taskWorktree := filepath.Join(root, "worktrees", "op-sync")
+	runGit(t, repoPath, "branch", "orpheus/op-sync", "main")
+	runGit(t, repoPath, "worktree", "add", taskWorktree, "orpheus/op-sync")
+	must.NoError(os.WriteFile(filepath.Join(taskWorktree, "sync.txt"), []byte("sync\n"), 0o644))
+	runGit(t, taskWorktree, "add", "sync.txt")
+	runGit(t, taskWorktree, "commit", "-m", "sync task branch")
+	commit := strings.TrimSpace(runGit(t, taskWorktree, "rev-parse", "HEAD"))
+	recordWorktreeCompletion(t, paths, "alpha", "op-sync", "orpheus/op-sync", taskWorktree, commit)
+	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
+	must.NoError(os.RemoveAll(originPath))
+
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
+		dir:    repoPath,
+		args:   "--json --readonly --sandbox show --id op-sync",
+		stdout: syncReadyTaskJSON("op-sync", "orpheus/op-sync", taskWorktree),
+	}})
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "sync", "op-sync"})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "push task branch")
+	is.ErrorContains(err, "origin")
+}
+
 func TestTaskDoneInfersSingleMainReadyTaskFromRepoRootAndUsesOverrides(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -1660,6 +1822,37 @@ func recordMainCompletion(t *testing.T, paths state.Paths, repoID string, taskID
 	}
 }
 
+func recordWorktreeCompletion(
+	t *testing.T,
+	paths state.Paths,
+	repoID string,
+	taskID string,
+	branch string,
+	worktree string,
+	commit string,
+) {
+	t.Helper()
+	store := taskstate.NewStore(paths)
+	attempt, err := store.StartRun(repoID, taskID, taskstate.StartRunOptions{
+		Agent:    "recorder",
+		Branch:   branch,
+		Worktree: worktree,
+	})
+	if err != nil {
+		t.Fatalf("start worktree run: %v", err)
+	}
+	if _, err := store.CompleteRun(repoID, taskID, attempt.Attempt, taskstate.CompleteRunOptions{
+		Summary: "Ready for PR",
+		Details: "Implemented task branch changes.",
+		Commit:  commit,
+	}); err != nil {
+		t.Fatalf("complete worktree run: %v", err)
+	}
+	if _, err := store.FinishRun(repoID, taskID, attempt.Attempt, taskstate.RunStatusSucceeded); err != nil {
+		t.Fatalf("finish worktree run: %v", err)
+	}
+}
+
 func mainReadyTaskJSON(taskID string, repoPath string) string {
 	return `[
 		{
@@ -1669,6 +1862,19 @@ func mainReadyTaskJSON(taskID string, repoPath string) string {
 			"priority":1,
 			"issue_type":"task",
 			"metadata":{"orpheus.branch":"main","orpheus.worktree":"` + repoPath + `"}
+		}
+	]`
+}
+
+func syncReadyTaskJSON(taskID string, branch string, worktree string) string {
+	return `[
+		{
+			"id":"` + taskID + `",
+			"title":"Ready for sync",
+			"status":"in_progress",
+			"priority":1,
+			"issue_type":"task",
+			"metadata":{"orpheus.branch":"` + branch + `","orpheus.worktree":"` + worktree + `"}
 		}
 	]`
 }

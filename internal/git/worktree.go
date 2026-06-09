@@ -636,6 +636,23 @@ func PushDefaultBranch(ctx context.Context, dir string, branch string) error {
 	return nil
 }
 
+// PushTaskBranch pushes a task branch to origin.
+func PushTaskBranch(ctx context.Context, dir string, branch string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return errors.New("task branch is required")
+	}
+
+	output, err := runGitContext(ctx, dir, "push", "-u", "origin", branch)
+	if err != nil {
+		return fmt.Errorf("push task branch %q to origin: %w%s", branch, err, gitOutputSuffix(output))
+	}
+	return nil
+}
+
 func runGitContextWithInput(ctx context.Context, dir string, input string, args ...string) (string, error) {
 	command := exec.CommandContext(ctx, "git", args...)
 	command.Dir = dir

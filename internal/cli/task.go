@@ -37,7 +37,14 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 		Args:  cobra.NoArgs,
 	}
 
-	cmd.AddCommand(newTaskListCommand(opts), newTaskReadyCommand(opts), newTaskShowCommand(opts), newTaskRunCommand(opts), newTaskDoneCommand(opts))
+	cmd.AddCommand(
+		newTaskListCommand(opts),
+		newTaskReadyCommand(opts),
+		newTaskShowCommand(opts),
+		newTaskRunCommand(opts),
+		newTaskDoneCommand(opts),
+		newTaskSyncCommand(opts),
+	)
 	return cmd
 }
 
@@ -138,6 +145,20 @@ func newTaskDoneCommand(opts *rootOptions) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&summary, "summary", "", "override the final commit summary")
 	cmd.Flags().StringVar(&details, "details", "", "override the final commit details")
+	return cmd
+}
+
+func newTaskSyncCommand(opts *rootOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "sync <task-id>",
+		Short: "Push a PR-ready task branch to origin",
+		Long: "Push a PR-ready task branch to origin.\n\n" +
+			"This M5 slice does not create pull requests and does not write PR URL metadata.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			return runTaskSync(command, opts, args[0])
+		},
+	}
 	return cmd
 }
 
@@ -386,6 +407,46 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summa
 		finalized.Repository.DefaultBranch,
 	)
 	return err
+}
+
+func runTaskSync(command *cobra.Command, opts *rootOptions, taskID string) error {
+	logger := opts.log().With(
+		slog.String("component", "cli"),
+		slog.String("operation", "task_sync"),
+	)
+	logger.DebugContext(command.Context(), "loading registered repos for task sync")
+
+	paths, err := state.ResolveFromEnvironment()
+	if err != nil {
+		return err
+	}
+	taskCtx, err := loadTaskContext()
+	if err != nil {
+		return err
+	}
+
+	service := taskmodel.SyncService{
+		Paths:   paths,
+		Sources: taskCtx.Sources,
+		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.Getter, error) {
+			return newBeadsTaskBackend(source.BackendDir)
+		},
+		RunStore: taskstate.NewStore(paths),
+	}
+	result, err := service.Sync(command.Context(), taskmodel.SyncOptions{TaskID: taskID})
+	if err != nil {
+		return fmt.Errorf("task sync: %w", err)
+	}
+
+	logger.DebugContext(
+		command.Context(),
+		"synced task",
+		slog.String("repo_id", result.Repository.ID),
+		slog.String("task_id", result.Task.ID),
+		slog.String("status", string(result.Status)),
+		slog.String("branch", result.Branch),
+	)
+	return renderTaskSyncResult(command.OutOrStdout(), result)
 }
 
 type taskRunStartOptions struct {
@@ -673,6 +734,29 @@ func taskRunMetadataMismatchDetail(metadata taskmodel.OrpheusMetadata, expected 
 		return "metadata does not match"
 	}
 	return strings.Join(problems, "; ")
+}
+
+func renderTaskSyncResult(output interface{ Write([]byte) (int, error) }, result taskmodel.SyncResult) error {
+	switch result.Status {
+	case taskmodel.SyncStatusPushed:
+		_, err := fmt.Fprintf(
+			output,
+			"Synced %s: pushed branch %s to origin. PR creation is not implemented in this slice; no PR URL metadata was written.\n",
+			result.Task.ID,
+			result.Branch,
+		)
+		return err
+	case taskmodel.SyncStatusSkipped:
+		_, err := fmt.Fprintf(
+			output,
+			"Skipped %s: %s. PR creation is not implemented in this slice; no PR URL metadata was written.\n",
+			result.Task.ID,
+			result.Reason,
+		)
+		return err
+	default:
+		return fmt.Errorf("unknown task sync result status %q", result.Status)
+	}
 }
 
 func activeTaskRunError(
