@@ -1496,14 +1496,80 @@ func TestTaskSyncPushesPRReadyTaskBranch(t *testing.T) {
 		args:   "--json --readonly --sandbox show --id op-sync",
 		stdout: syncReadyTaskJSON("op-sync", targets.WorktreeTeam.Branch, taskWorktree),
 	}})
+	ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{
+		listStdout:   "[]",
+		createStdout: "https://github.test/org/alpha/pull/42\n",
+	})
 
 	stdout, stderr := executeCommand(t, []string{"task", "sync", "op-sync"})
 
 	is.Empty(stderr)
 	is.Contains(stdout, "Synced op-sync")
 	is.Contains(stdout, "pushed branch orpheus/op-sync to origin")
-	is.Contains(stdout, "PR creation is not implemented")
+	is.Contains(stdout, "created PR https://github.test/org/alpha/pull/42")
+	is.Contains(stdout, "PR URL metadata storage is not implemented")
 	is.Contains(stdout, "no PR URL metadata was written")
+	ghLog, readErr := os.ReadFile(ghLogPath)
+	must.NoError(readErr)
+	is.Contains(string(ghLog), "ARG_1<<END\npr\nEND")
+	is.Contains(string(ghLog), "ARG_2<<END\nlist\nEND")
+	is.Contains(string(ghLog), "ARG_2<<END\ncreate\nEND")
+	is.Contains(string(ghLog), "ARG_8<<END\nop-sync: Ready for sync\nEND")
+	is.Contains(string(ghLog), "Created by Orpheus.")
+	is.Contains(string(ghLog), "Implemented task branch changes.")
+	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
+	originCommit := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/orpheus/op-sync"))
+	is.Equal(commit, originCommit)
+}
+
+func TestTaskSyncRecoversExistingBranchPR(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	targets := taskSyncExpectedTargets(t, paths, repoPath, "op-sync")
+	taskWorktree := targets.WorktreeTeam.Worktree
+	runGit(t, repoPath, "branch", targets.WorktreeTeam.Branch, "main")
+	runGit(t, repoPath, "worktree", "add", taskWorktree, targets.WorktreeTeam.Branch)
+	must.NoError(os.WriteFile(filepath.Join(taskWorktree, "sync.txt"), []byte("sync\n"), 0o644))
+	runGit(t, taskWorktree, "add", "sync.txt")
+	runGit(t, taskWorktree, "commit", "-m", "sync task branch")
+	commit := strings.TrimSpace(runGit(t, taskWorktree, "rev-parse", "HEAD"))
+	recordWorktreeCompletion(t, paths, "alpha", "op-sync", targets.WorktreeTeam.Branch, taskWorktree, commit)
+
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
+		dir:    repoPath,
+		args:   "--json --readonly --sandbox show --id op-sync",
+		stdout: syncReadyTaskJSON("op-sync", targets.WorktreeTeam.Branch, taskWorktree),
+	}})
+	ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{
+		listStdout:   `[{"url":"https://github.test/org/alpha/pull/7"}]`,
+		createStdout: "unexpected create\n",
+		createExit:   66,
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "sync", "op-sync"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "recovered existing PR https://github.test/org/alpha/pull/7")
+	is.Contains(stdout, "PR URL metadata storage is not implemented")
+	ghLog, readErr := os.ReadFile(ghLogPath)
+	must.NoError(readErr)
+	is.Contains(string(ghLog), "ARG_2<<END\nlist\nEND")
+	is.NotContains(string(ghLog), "ARG_2<<END\ncreate\nEND")
 	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
 	originCommit := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/orpheus/op-sync"))
 	is.Equal(commit, originCommit)
@@ -1546,7 +1612,7 @@ func TestTaskSyncSkipsBranchRunAtRepoRoot(t *testing.T) {
 	is.Contains(stdout, "Skipped op-sync")
 	is.Contains(stdout, "registered repo root")
 	is.Contains(stdout, "not a worktree/team task worktree")
-	is.Contains(stdout, "PR creation is not implemented")
+	is.Contains(stdout, "PR creation was not attempted")
 }
 
 func TestTaskSyncSkipsMainSoloLocalReadyTask(t *testing.T) {
@@ -1579,7 +1645,7 @@ func TestTaskSyncSkipsMainSoloLocalReadyTask(t *testing.T) {
 	is.Contains(stdout, "Skipped op-main")
 	is.Contains(stdout, "main/solo local-review-ready")
 	is.Contains(stdout, "orpheus task done")
-	is.Contains(stdout, "PR creation is not implemented")
+	is.Contains(stdout, "PR creation was not attempted")
 }
 
 func TestTaskSyncPushFailureIsNonZero(t *testing.T) {
@@ -1847,6 +1913,70 @@ exit 65
 	return logPath
 }
 
+type fakeGHPRResponses struct {
+	listStdout   string
+	listExit     int
+	createStdout string
+	createExit   int
+}
+
+func withFakeGHPRResponses(t *testing.T, responses fakeGHPRResponses) string {
+	t.Helper()
+
+	binDir := t.TempDir()
+	fixtureDir := filepath.Join(binDir, "fixtures")
+	if err := os.MkdirAll(fixtureDir, 0o755); err != nil {
+		t.Fatalf("create fake gh fixtures: %v", err)
+	}
+
+	listStdoutPath := filepath.Join(fixtureDir, "list-stdout.txt")
+	createStdoutPath := filepath.Join(fixtureDir, "create-stdout.txt")
+	if err := os.WriteFile(listStdoutPath, []byte(responses.listStdout), 0o644); err != nil {
+		t.Fatalf("write fake gh list stdout: %v", err)
+	}
+	if err := os.WriteFile(createStdoutPath, []byte(responses.createStdout), 0o644); err != nil {
+		t.Fatalf("write fake gh create stdout: %v", err)
+	}
+
+	logPath := filepath.Join(binDir, "gh.log")
+	script := fmt.Sprintf(`#!/bin/sh
+{
+  pwd
+  printf 'ARGC=%%s\n' "$#"
+  index=0
+  for arg in "$@"; do
+    index=$((index + 1))
+    printf 'ARG_%%s<<END\n%%s\nEND\n' "$index" "$arg"
+  done
+  if [ "$1 $2" = "pr create" ]; then
+    printf 'STDIN<<END\n'
+    cat
+    printf '\nEND\n'
+  fi
+} >> "$FAKE_GH_LOG"
+case "$1 $2" in
+  "pr list")
+    cat %s
+    exit %d
+    ;;
+  "pr create")
+    cat %s
+    exit %d
+    ;;
+esac
+echo "unexpected gh args: $*" >&2
+exit 65
+`, shellQuote(listStdoutPath), responses.listExit, shellQuote(createStdoutPath), responses.createExit)
+
+	ghPath := filepath.Join(binDir, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	t.Setenv("FAKE_GH_LOG", logPath)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return logPath
+}
+
 func configureTestGitUser(t *testing.T, repoPath string) {
 	t.Helper()
 	runGit(t, repoPath, "config", "user.name", "Orpheus Test")
@@ -1962,6 +2092,8 @@ func syncReadyTaskJSON(taskID string, branch string, worktree string) string {
 		{
 			"id":"` + taskID + `",
 			"title":"Ready for sync",
+			"description":"Create or recover a GitHub pull request.",
+			"acceptance_criteria":"The branch is pushed and no duplicate pull request is created.",
 			"status":"in_progress",
 			"priority":1,
 			"issue_type":"task",
