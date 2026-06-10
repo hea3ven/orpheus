@@ -236,6 +236,17 @@ type DispatchBackend interface {
 	DispatchMutator
 }
 
+// PRURLMutator is the narrow backend-neutral mutation used when a task enters PR review.
+type PRURLMutator interface {
+	SetPRURL(ctx context.Context, taskID string, prURL string) error
+}
+
+// SyncBackend is the backend capability set needed by task sync orchestration.
+type SyncBackend interface {
+	Getter
+	PRURLMutator
+}
+
 // CloseMutator is the narrow backend-neutral mutation used when finalizing a
 // reviewed main/solo task.
 type CloseMutator interface {

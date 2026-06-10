@@ -16,6 +16,7 @@ import (
 var (
 	_ task.ReadBackend     = TaskBackend{}
 	_ task.DispatchMutator = TaskBackend{}
+	_ task.PRURLMutator    = TaskBackend{}
 	_ task.CloseMutator    = TaskBackend{}
 )
 
@@ -136,6 +137,34 @@ func (b TaskBackend) MarkInProgress(ctx context.Context, id string, branch strin
 	if err != nil {
 		if isNotFoundResult(result) {
 			return fmt.Errorf("mark Beads task %q in progress in %q: %w%s", id, b.dir, task.ErrNotFound, formattedOutput(result))
+		}
+		return err
+	}
+	return nil
+}
+
+// SetPRURL stores the task pull request URL in Beads metadata.
+func (b TaskBackend) SetPRURL(ctx context.Context, id string, prURL string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("set Beads task PR URL in %q: task id is required", b.dir)
+	}
+	prURL = strings.TrimSpace(prURL)
+	if prURL == "" {
+		return fmt.Errorf("set Beads task %q PR URL in %q: PR URL is required", id, b.dir)
+	}
+
+	result, err := b.runWrite(
+		ctx,
+		"set PR URL",
+		"update",
+		id,
+		"--set-metadata",
+		task.MetadataPRURL+"="+prURL,
+	)
+	if err != nil {
+		if isNotFoundResult(result) {
+			return fmt.Errorf("set Beads task %q PR URL in %q: %w%s", id, b.dir, task.ErrNotFound, formattedOutput(result))
 		}
 		return err
 	}
