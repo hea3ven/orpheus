@@ -1,4 +1,4 @@
-package task
+package workflow
 
 import (
 	"context"
@@ -9,13 +9,14 @@ import (
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
 const syncLockOperation = "task sync"
 
 // SyncBackendFactory creates a read-only backend for one repository.
-type SyncBackendFactory func(RepositorySource) (Getter, error)
+type SyncBackendFactory func(task.RepositorySource) (task.Getter, error)
 
 // SyncRunStore reads task execution facts needed by sync.
 type SyncRunStore interface {
@@ -38,7 +39,7 @@ func (LocalSyncGit) PushTaskBranch(ctx context.Context, dir string, branch strin
 // SyncService pushes PR-ready task branches.
 type SyncService struct {
 	Paths          state.Paths
-	Sources        []RepositorySource
+	Sources        []task.RepositorySource
 	BackendFactory SyncBackendFactory
 	RunStore       SyncRunStore
 	Git            SyncGit
@@ -62,8 +63,8 @@ const (
 
 // SyncResult reports the resolved task and sync outcome.
 type SyncResult struct {
-	Repository Repository
-	Task       Task
+	Repository task.Repository
+	Task       task.Task
 	LatestRun  taskstate.RunAttempt
 	Status     SyncStatus
 	Reason     string
@@ -72,8 +73,8 @@ type SyncResult struct {
 }
 
 type syncTarget struct {
-	source RepositorySource
-	task   Task
+	source task.RepositorySource
+	task   task.Task
 }
 
 // Sync resolves one task, skips non-eligible states, and pushes eligible task branches.
@@ -122,7 +123,11 @@ func (s SyncService) syncLocked(ctx context.Context, opts SyncOptions, gitState 
 		return s.skip(target, taskstate.RunAttempt{}, "task has no Orpheus run attempts"), nil
 	}
 
-	eligible, reason, err := syncEligibility(target.source.Repository, target.task, latest)
+	targets, err := ExpectedTargetsForTask(target.source.Repository, target.task.ID, s.Paths)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	eligible, reason, err := syncEligibility(target.source.Repository, target.task, latest, targets)
 	if err != nil {
 		return SyncResult{}, err
 	}
@@ -145,7 +150,7 @@ func (s SyncService) syncLocked(ctx context.Context, opts SyncOptions, gitState 
 }
 
 func (s SyncService) resolveTarget(ctx context.Context, opts SyncOptions) (syncTarget, error) {
-	resolved, err := ResolveTaskSource(s.Sources, opts.TaskID)
+	resolved, err := task.ResolveTaskSource(s.Sources, opts.TaskID)
 	if err != nil {
 		return syncTarget{}, err
 	}
@@ -162,7 +167,7 @@ func (s SyncService) resolveTarget(ctx context.Context, opts SyncOptions) (syncT
 	}
 	taskItem, err := backend.Get(ctx, resolved.TaskID)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
+		if errors.Is(err, task.ErrNotFound) {
 			return syncTarget{}, fmt.Errorf(
 				"task sync %s: task was not found in repo %s (%s; prefix %s): %w",
 				resolved.TaskID,
@@ -197,14 +202,19 @@ func (s SyncService) skip(target syncTarget, latest taskstate.RunAttempt, reason
 	}
 }
 
-func syncEligibility(repo Repository, taskItem Task, latest taskstate.RunAttempt) (bool, string, error) {
+func syncEligibility(
+	repo task.Repository,
+	taskItem task.Task,
+	latest taskstate.RunAttempt,
+	targets ExpectedTargets,
+) (bool, string, error) {
 	metadata := taskItem.OrpheusMetadata()
 	prURLSet := metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != ""
-	if taskItem.Status == StatusClosed {
+	if taskItem.Status == task.StatusClosed {
 		return false, "task is closed", nil
 	}
 	if prURLSet {
-		return false, MetadataPRURL + " is already set", nil
+		return false, task.MetadataPRURL + " is already set", nil
 	}
 
 	switch latest.Status {
@@ -234,7 +244,8 @@ func syncEligibility(repo Repository, taskItem Task, latest taskstate.RunAttempt
 	if err != nil {
 		return false, "", err
 	}
-	if latestBranch == defaultBranch && runWorktree == repoRoot {
+	runTarget := ClassifyRunTarget(repo, latest.Branch, latest.Worktree)
+	if runTarget == TargetMainSolo {
 		return false, "latest run is a main/solo local-review-ready run; use `orpheus task done`", nil
 	}
 	if latestBranch == defaultBranch {
@@ -249,27 +260,26 @@ func syncEligibility(repo Repository, taskItem Task, latest taskstate.RunAttempt
 	if strings.TrimSpace(latest.Completion.Commit) == "" {
 		return false, "completion commit is missing", nil
 	}
-
 	if !metadata.HasBranch || strings.TrimSpace(metadata.Branch) == "" {
-		return false, "", fmt.Errorf("task %s metadata %s is missing", taskItem.ID, MetadataBranch)
+		return false, "", fmt.Errorf("task %s metadata %s is missing", taskItem.ID, task.MetadataBranch)
 	}
 	if !metadata.HasWorktree || strings.TrimSpace(metadata.Worktree) == "" {
-		return false, "", fmt.Errorf("task %s metadata %s is missing", taskItem.ID, MetadataWorktree)
+		return false, "", fmt.Errorf("task %s metadata %s is missing", taskItem.ID, task.MetadataWorktree)
 	}
-	metadataWorktree, err := cleanAbsPath(MetadataWorktree, metadata.Worktree)
+	metadataWorktree, err := cleanAbsPath(task.MetadataWorktree, metadata.Worktree)
 	if err != nil {
-		return false, "", fmt.Errorf("task %s metadata %s is invalid: %w", taskItem.ID, MetadataWorktree, err)
+		return false, "", fmt.Errorf("task %s metadata %s is invalid: %w", taskItem.ID, task.MetadataWorktree, err)
 	}
 
 	metadataBranch := strings.TrimSpace(metadata.Branch)
 	if strings.HasPrefix(metadataBranch, "-") {
-		return false, "", fmt.Errorf("task %s metadata %s is unsafe Git branch %q", taskItem.ID, MetadataBranch, metadataBranch)
+		return false, "", fmt.Errorf("task %s metadata %s is unsafe Git branch %q", taskItem.ID, task.MetadataBranch, metadataBranch)
 	}
 	if metadataBranch != strings.TrimSpace(latest.Branch) {
 		return false, "", fmt.Errorf(
 			"task %s metadata %s is %q, expected latest run branch %q",
 			taskItem.ID,
-			MetadataBranch,
+			task.MetadataBranch,
 			metadata.Branch,
 			latest.Branch,
 		)
@@ -278,10 +288,15 @@ func syncEligibility(repo Repository, taskItem Task, latest taskstate.RunAttempt
 		return false, "", fmt.Errorf(
 			"task %s metadata %s is %q, expected latest run worktree %q",
 			taskItem.ID,
-			MetadataWorktree,
+			task.MetadataWorktree,
 			filepath.Clean(metadata.Worktree),
 			runWorktree,
 		)
+	}
+	// MVP limitation: task sync pushes the named task branch but does not yet verify
+	// that the recorded completion commit is still the branch HEAD.
+	if _, ok := ClassifyExpectedPRReviewReady(targets, taskItem, &latest); !ok {
+		return false, "latest run is not a worktree/team PR-ready completion", nil
 	}
 
 	return true, "", nil

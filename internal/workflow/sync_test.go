@@ -1,4 +1,4 @@
-package task_test
+package workflow_test
 
 import (
 	"context"
@@ -11,11 +11,25 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
 type fakeSyncRunStore struct {
 	states map[string]taskstate.TaskState
 	err    error
+}
+
+type fakeReadBackend struct {
+	tasks []task.Task
+}
+
+func (b fakeReadBackend) Get(_ context.Context, id string) (task.Task, error) {
+	for _, candidate := range b.tasks {
+		if candidate.ID == id {
+			return candidate.Clone(), nil
+		}
+	}
+	return task.Task{}, task.ErrNotFound
 }
 
 func (s fakeSyncRunStore) Load(repoID, taskID string) (taskstate.TaskState, error) {
@@ -46,7 +60,8 @@ func (g *fakeSyncGit) PushTaskBranch(_ context.Context, dir string, branch strin
 
 func TestSyncServicePushesEligibleWorktreeCompletion(t *testing.T) {
 	repoPath := filepath.Join(t.TempDir(), "repo")
-	worktreePath := filepath.Join(t.TempDir(), "worktree")
+	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
+	worktreePath := targets.WorktreeTeam.Worktree
 	service, git := newSyncTestService(t, task.Task{
 		ID:       "op-1",
 		Status:   task.StatusInProgress,
@@ -62,13 +77,13 @@ func TestSyncServicePushesEligibleWorktreeCompletion(t *testing.T) {
 			Details: "Implemented.",
 			Commit:  "abc123",
 		},
-	}), repoPath)
+	}), paths, source)
 
-	result, err := service.Sync(context.Background(), task.SyncOptions{TaskID: "op-1"})
+	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if result.Status != task.SyncStatusPushed || result.Branch != "orpheus/op-1" {
+	if result.Status != workflow.SyncStatusPushed || result.Branch != "orpheus/op-1" {
 		t.Fatalf("result = %#v, want pushed orpheus/op-1", result)
 	}
 	if len(git.pushes) != 1 || git.pushes[0].dir != repoPath || git.pushes[0].branch != "orpheus/op-1" {
@@ -78,7 +93,8 @@ func TestSyncServicePushesEligibleWorktreeCompletion(t *testing.T) {
 
 func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 	repoPath := filepath.Join(t.TempDir(), "repo")
-	worktreePath := filepath.Join(t.TempDir(), "worktree")
+	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
+	worktreePath := targets.WorktreeTeam.Worktree
 	succeeded := taskstate.RunAttempt{
 		Attempt:   1,
 		Status:    taskstate.RunStatusSucceeded,
@@ -153,12 +169,12 @@ func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 		},
 		{
 			name:     "main solo",
-			taskItem: task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: "main", task.MetadataWorktree: repoPath}},
+			taskItem: task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: targets.MainSolo.Branch, task.MetadataWorktree: targets.MainSolo.Worktree}},
 			state: syncTaskState(taskstate.RunAttempt{
 				Attempt:    2,
 				Status:     taskstate.RunStatusSucceeded,
-				Branch:     "main",
-				Worktree:   repoPath,
+				Branch:     targets.MainSolo.Branch,
+				Worktree:   targets.MainSolo.Worktree,
 				Completion: &taskstate.Completion{Summary: "Done", Details: "Done."},
 			}),
 			wantReason: "main/solo",
@@ -195,12 +211,12 @@ func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service, git := newSyncTestService(t, tt.taskItem, tt.state, repoPath)
-			result, err := service.Sync(context.Background(), task.SyncOptions{TaskID: "op-1"})
+			service, git := newSyncTestService(t, tt.taskItem, tt.state, paths, source)
+			result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
 			if err != nil {
 				t.Fatalf("sync: %v", err)
 			}
-			if result.Status != task.SyncStatusSkipped || !strings.Contains(result.Reason, tt.wantReason) {
+			if result.Status != workflow.SyncStatusSkipped || !strings.Contains(result.Reason, tt.wantReason) {
 				t.Fatalf("result = %#v, want skipped reason containing %q", result, tt.wantReason)
 			}
 			if len(git.pushes) != 0 {
@@ -212,7 +228,8 @@ func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 
 func TestSyncServiceErrorsOnMalformedMetadataAndPushFailure(t *testing.T) {
 	repoPath := filepath.Join(t.TempDir(), "repo")
-	worktreePath := filepath.Join(t.TempDir(), "worktree")
+	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
+	worktreePath := targets.WorktreeTeam.Worktree
 	state := syncTaskState(taskstate.RunAttempt{
 		Attempt:   1,
 		Status:    taskstate.RunStatusSucceeded,
@@ -231,8 +248,8 @@ func TestSyncServiceErrorsOnMalformedMetadataAndPushFailure(t *testing.T) {
 		Status:   task.StatusInProgress,
 		Metadata: task.Metadata{task.MetadataWorktree: worktreePath},
 	}
-	service, _ := newSyncTestService(t, missingBranch, state, repoPath)
-	_, err := service.Sync(context.Background(), task.SyncOptions{TaskID: "op-1"})
+	service, _ := newSyncTestService(t, missingBranch, state, paths, source)
+	_, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
 	if err == nil || !strings.Contains(err.Error(), "orpheus.branch is missing") {
 		t.Fatalf("error = %v, want missing branch metadata", err)
 	}
@@ -242,9 +259,9 @@ func TestSyncServiceErrorsOnMalformedMetadataAndPushFailure(t *testing.T) {
 		ID:       "op-1",
 		Status:   task.StatusInProgress,
 		Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-1", task.MetadataWorktree: worktreePath},
-	}, state, repoPath)
+	}, state, paths, source)
 	service.Git = &fakeSyncGit{err: pushErr}
-	_, err = service.Sync(context.Background(), task.SyncOptions{TaskID: "op-1"})
+	_, err = service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
 	if !errors.Is(err, pushErr) {
 		t.Fatalf("error = %v, want push error", err)
 	}
@@ -254,14 +271,33 @@ func newSyncTestService(
 	t *testing.T,
 	taskItem task.Task,
 	taskState taskstate.TaskState,
+	paths state.Paths,
+	source task.RepositorySource,
+) (workflow.SyncService, *fakeSyncGit) {
+	t.Helper()
+	git := &fakeSyncGit{}
+	service := workflow.SyncService{
+		Paths:   paths,
+		Sources: []task.RepositorySource{source},
+		BackendFactory: func(task.RepositorySource) (task.Getter, error) {
+			return fakeReadBackend{tasks: []task.Task{taskItem}}, nil
+		},
+		RunStore: fakeSyncRunStore{states: map[string]taskstate.TaskState{"alpha/op-1": taskState}},
+		Git:      git,
+	}
+	return service, git
+}
+
+func newSyncTestSource(
+	t *testing.T,
 	repoPath string,
-) (task.SyncService, *fakeSyncGit) {
+	taskID string,
+) (state.Paths, task.RepositorySource, workflow.ExpectedTargets) {
 	t.Helper()
 	paths, err := state.NewPaths(filepath.Join(t.TempDir(), "config"), filepath.Join(t.TempDir(), "data"))
 	if err != nil {
 		t.Fatalf("create paths: %v", err)
 	}
-	git := &fakeSyncGit{}
 	source := task.RepositorySource{
 		Repository: task.Repository{
 			ID:            "alpha",
@@ -272,16 +308,11 @@ func newSyncTestService(
 		},
 		BackendDir: repoPath,
 	}
-	service := task.SyncService{
-		Paths:   paths,
-		Sources: []task.RepositorySource{source},
-		BackendFactory: func(task.RepositorySource) (task.Getter, error) {
-			return fakeReadBackend{tasks: []task.Task{taskItem}}, nil
-		},
-		RunStore: fakeSyncRunStore{states: map[string]taskstate.TaskState{"alpha/op-1": taskState}},
-		Git:      git,
+	targets, err := workflow.ExpectedTargetsForTask(source.Repository, taskID, paths)
+	if err != nil {
+		t.Fatalf("expected targets: %v", err)
 	}
-	return service, git
+	return paths, source, targets
 }
 
 func syncTaskState(runs ...taskstate.RunAttempt) taskstate.TaskState {

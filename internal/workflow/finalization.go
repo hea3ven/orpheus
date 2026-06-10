@@ -1,15 +1,15 @@
-package task
+package workflow
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
@@ -17,13 +17,13 @@ const finalizationLockOperation = "task finalization"
 
 // FinalizationBackend is the backend capability set needed to finalize a task.
 type FinalizationBackend interface {
-	Getter
-	Lister
-	CloseMutator
+	task.Getter
+	task.Lister
+	task.CloseMutator
 }
 
 // FinalizationBackendFactory creates a finalization-capable backend for one repository.
-type FinalizationBackendFactory func(RepositorySource) (FinalizationBackend, error)
+type FinalizationBackendFactory func(task.RepositorySource) (FinalizationBackend, error)
 
 // FinalizationRunStore persists and reads run/finalization facts.
 type FinalizationRunStore interface {
@@ -79,7 +79,7 @@ func (LocalFinalizationGit) PushDefaultBranch(ctx context.Context, dir string, b
 // FinalizationService finalizes reviewed main/solo task work.
 type FinalizationService struct {
 	Paths          state.Paths
-	Sources        []RepositorySource
+	Sources        []task.RepositorySource
 	BackendFactory FinalizationBackendFactory
 	RunStore       FinalizationRunStore
 	Git            FinalizationGit
@@ -95,15 +95,15 @@ type FinalizeOptions struct {
 
 // FinalizationResult reports the finalized task and recorded facts.
 type FinalizationResult struct {
-	Repository   Repository
-	Task         Task
+	Repository   task.Repository
+	Task         task.Task
 	Finalization taskstate.Finalization
 }
 
 type finalizationTarget struct {
-	source  RepositorySource
+	source  task.RepositorySource
 	backend FinalizationBackend
-	task    Task
+	task    task.Task
 }
 
 type finalizationContext struct {
@@ -158,7 +158,11 @@ func (s FinalizationService) finalizeLocked(
 	if err != nil {
 		return FinalizationResult{}, err
 	}
-	if err := validateFinalizationReady(repo, target.task, finalizeCtx); err != nil {
+	targets, err := ExpectedTargetsForTask(repo, target.task.ID, s.Paths)
+	if err != nil {
+		return FinalizationResult{}, err
+	}
+	if err := validateFinalizationReady(repo, target.task, finalizeCtx, targets); err != nil {
 		return FinalizationResult{}, err
 	}
 
@@ -241,7 +245,7 @@ func (s FinalizationService) finalizeLocked(
 	}
 
 	if finalization.ClosedAt == nil {
-		if target.task.Status != StatusClosed {
+		if target.task.Status != task.StatusClosed {
 			if err := target.backend.Close(ctx, target.task.ID); err != nil {
 				return FinalizationResult{}, err
 			}
@@ -265,7 +269,7 @@ func (s FinalizationService) resolveTarget(ctx context.Context, opts FinalizeOpt
 		return s.inferTarget(ctx, opts.CWD)
 	}
 
-	resolved, err := ResolveTaskSource(s.Sources, taskID)
+	resolved, err := task.ResolveTaskSource(s.Sources, taskID)
 	if err != nil {
 		return finalizationTarget{}, err
 	}
@@ -282,7 +286,7 @@ func (s FinalizationService) resolveTarget(ctx context.Context, opts FinalizeOpt
 	}
 	taskItem, err := backend.Get(ctx, resolved.TaskID)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
+		if errors.Is(err, task.ErrNotFound) {
 			return finalizationTarget{}, fmt.Errorf(
 				"task done %s: task was not found in repo %s (%s; prefix %s): %w",
 				resolved.TaskID,
@@ -310,7 +314,7 @@ func (s FinalizationService) inferTarget(ctx context.Context, cwd string) (final
 		return finalizationTarget{}, err
 	}
 
-	matches := make([]RepositorySource, 0, 1)
+	matches := make([]task.RepositorySource, 0, 1)
 	for _, source := range s.Sources {
 		repoPath, err := cleanAbsPath("registered repo root", source.Repository.Path)
 		if err != nil {
@@ -355,7 +359,7 @@ func (s FinalizationService) inferTarget(ctx context.Context, cwd string) (final
 		)
 	}
 
-	candidates := make([]Task, 0, 1)
+	candidates := make([]task.Task, 0, 1)
 	for _, taskItem := range tasks {
 		ok, err := s.isInferableMainLocalReady(source.Repository, taskItem)
 		if err != nil {
@@ -382,8 +386,8 @@ func (s FinalizationService) inferTarget(ctx context.Context, cwd string) (final
 	}
 }
 
-func (s FinalizationService) isInferableMainLocalReady(repo Repository, taskItem Task) (bool, error) {
-	if taskItem.Status == StatusClosed {
+func (s FinalizationService) isInferableMainLocalReady(repo task.Repository, taskItem task.Task) (bool, error) {
+	if taskItem.Status == task.StatusClosed {
 		return false, nil
 	}
 	state, err := s.RunStore.Load(repo.ID, taskItem.ID)
@@ -398,13 +402,17 @@ func (s FinalizationService) isInferableMainLocalReady(repo Repository, taskItem
 		latest:       latest,
 		finalization: taskstate.FinalizationFacts(state),
 	}
-	if err := validateFinalizationReady(repo, taskItem, ctx); err != nil {
+	targets, err := ExpectedTargetsForTask(repo, taskItem.ID, s.Paths)
+	if err != nil {
+		return false, err
+	}
+	if err := validateFinalizationReady(repo, taskItem, ctx, targets); err != nil {
 		return false, nil
 	}
 	return true, nil
 }
 
-func (s FinalizationService) loadFinalizationContext(repo Repository, taskItem Task) (finalizationContext, error) {
+func (s FinalizationService) loadFinalizationContext(repo task.Repository, taskItem task.Task) (finalizationContext, error) {
 	state, err := s.RunStore.Load(repo.ID, taskItem.ID)
 	if err != nil {
 		return finalizationContext{}, fmt.Errorf("load task state for %s/%s: %w", repo.ID, taskItem.ID, err)
@@ -419,7 +427,12 @@ func (s FinalizationService) loadFinalizationContext(repo Repository, taskItem T
 	}, nil
 }
 
-func validateFinalizationReady(repo Repository, taskItem Task, ctx finalizationContext) error {
+func validateFinalizationReady(
+	repo task.Repository,
+	taskItem task.Task,
+	ctx finalizationContext,
+	targets ExpectedTargets,
+) error {
 	if strings.TrimSpace(repo.ID) == "" {
 		return errors.New("repo id is required")
 	}
@@ -433,8 +446,8 @@ func validateFinalizationReady(repo Repository, taskItem Task, ctx finalizationC
 	}
 
 	switch taskItem.Status {
-	case StatusInProgress:
-	case StatusClosed:
+	case task.StatusInProgress:
+	case task.StatusClosed:
 		if strings.TrimSpace(ctx.finalization.Commit) == "" {
 			return fmt.Errorf("task %s is closed and has no recorded finalization commit; refusing to infer manual finalization", taskItem.ID)
 		}
@@ -444,26 +457,26 @@ func validateFinalizationReady(repo Repository, taskItem Task, ctx finalizationC
 
 	metadata := taskItem.OrpheusMetadata()
 	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
-		return fmt.Errorf("task %s has %s set; task done only finalizes main/solo local-ready tasks without PR URLs", taskItem.ID, MetadataPRURL)
+		return fmt.Errorf("task %s has %s set; task done only finalizes main/solo local-ready tasks without PR URLs", taskItem.ID, task.MetadataPRURL)
 	}
 	if !metadata.HasBranch || strings.TrimSpace(metadata.Branch) != defaultBranch {
 		return fmt.Errorf(
 			"task %s metadata %s is %q, expected registered default branch %q",
 			taskItem.ID,
-			MetadataBranch,
+			task.MetadataBranch,
 			metadata.Branch,
 			defaultBranch,
 		)
 	}
-	metadataWorktree, err := cleanAbsPath(MetadataWorktree, metadata.Worktree)
+	metadataWorktree, err := cleanAbsPath(task.MetadataWorktree, metadata.Worktree)
 	if !metadata.HasWorktree || err != nil || metadataWorktree != repoRoot {
 		if err != nil && metadata.HasWorktree {
-			return fmt.Errorf("task %s metadata %s is invalid: %w", taskItem.ID, MetadataWorktree, err)
+			return fmt.Errorf("task %s metadata %s is invalid: %w", taskItem.ID, task.MetadataWorktree, err)
 		}
 		return fmt.Errorf(
 			"task %s metadata %s is %q, expected registered repo root %q",
 			taskItem.ID,
-			MetadataWorktree,
+			task.MetadataWorktree,
 			metadata.Worktree,
 			repoRoot,
 		)
@@ -504,6 +517,9 @@ func validateFinalizationReady(repo Repository, taskItem Task, ctx finalizationC
 			repoRoot,
 		)
 	}
+	if _, ok := ClassifyExpectedLocalReviewReady(targets, taskItem, &latest); !ok {
+		return fmt.Errorf("latest run attempt %d for task %s is not a main/solo local-ready completion", latest.Attempt, taskItem.ID)
+	}
 	return nil
 }
 
@@ -540,18 +556,7 @@ func currentDirectory(cwd string) (string, error) {
 	return cleanAbsPath("current directory", cwd)
 }
 
-func cleanAbsPath(label string, path string) (string, error) {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return "", fmt.Errorf("%s is required", label)
-	}
-	if !filepath.IsAbs(path) {
-		return "", fmt.Errorf("%s must be absolute, got %q", label, path)
-	}
-	return filepath.Clean(path), nil
-}
-
-func taskIDs(tasks []Task) []string {
+func taskIDs(tasks []task.Task) []string {
 	ids := make([]string, 0, len(tasks))
 	for _, taskItem := range tasks {
 		ids = append(ids, taskItem.ID)
@@ -559,7 +564,7 @@ func taskIDs(tasks []Task) []string {
 	return ids
 }
 
-func formatStatusForFinalization(status Status) string {
+func formatStatusForFinalization(status task.Status) string {
 	statusText := strings.TrimSpace(string(status))
 	if statusText == "" {
 		return "unknown"

@@ -9,6 +9,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/status"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/spf13/cobra"
 )
 
@@ -92,10 +93,15 @@ func taskRunStateIndex(
 				continue
 			}
 			latestCopy := latest
-			index[status.RunStateKey(repoSnapshot.Repository.ID, taskItem.ID)] = status.LocalTaskState{
+			expectedTargets, err := workflow.ExpectedTargetsForTask(repoSnapshot.Repository, taskItem.ID, paths)
+			localState := status.LocalTaskState{
 				LatestRun:    &latestCopy,
 				Finalization: taskstate.FinalizationFacts(state),
 			}
+			if err == nil {
+				localState.ExpectedTargets = &expectedTargets
+			}
+			index[status.RunStateKey(repoSnapshot.Repository.ID, taskItem.ID)] = localState
 		}
 	}
 	return index, failures

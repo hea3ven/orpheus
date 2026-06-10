@@ -3,12 +3,12 @@ package status
 
 import (
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
 // GroupID identifies an M4 local status projection group.
@@ -76,8 +76,9 @@ type RunStateIndex map[string]taskstate.RunAttempt
 
 // LocalTaskState contains local Orpheus facts used by status projection.
 type LocalTaskState struct {
-	LatestRun    *taskstate.RunAttempt
-	Finalization taskstate.Finalization
+	LatestRun       *taskstate.RunAttempt
+	Finalization    taskstate.Finalization
+	ExpectedTargets *workflow.ExpectedTargets
 }
 
 // LocalTaskStateIndex contains local Orpheus facts by repository/task key.
@@ -188,22 +189,46 @@ func classify(repository task.Repository, taskItem task.Task, index map[string]t
 		return policyResult{state: readinessReview, detail: metadata.PRURL}
 	}
 
-	if isSuccessfulWorktreeCompletion(repository, taskItem, latestRun) {
+	expectedTargets := expectedTargetsFrom(localState)
+	if expectedTargets != nil {
+		if _, ok := workflow.ClassifyExpectedPRReviewReady(*expectedTargets, taskItem, latestRun); ok {
+			if strings.TrimSpace(latestRun.Completion.Commit) != "" {
+				return policyResult{state: readinessAttention, detail: "needs PR"}
+			}
+			return policyResult{
+				state:  readinessAttention,
+				detail: "completion recorded but commit failed; needs manual correction",
+			}
+		}
+	}
+	if expectedTargets != nil {
+		if _, ok := workflow.ClassifyExpectedLocalReviewReady(*expectedTargets, taskItem, latestRun); ok {
+			if localState == nil || localState.Finalization.ClosedAt == nil {
+				return policyResult{state: readinessReview, detail: "local review; run task done"}
+			}
+			return policyResult{
+				state:  readinessAttention,
+				detail: "finalization recorded but backend task is not closed",
+			}
+		}
+	}
+
+	if _, ok := workflow.ClassifyPRReviewReady(repository, taskItem, latestRun); ok {
 		if strings.TrimSpace(latestRun.Completion.Commit) != "" {
-			return policyResult{state: readinessAttention, detail: "needs PR"}
+			return policyResult{
+				state:  readinessAttention,
+				detail: "completion target is not the deterministic Orpheus worktree/team target",
+			}
 		}
 		return policyResult{
 			state:  readinessAttention,
 			detail: "completion recorded but commit failed; needs manual correction",
 		}
 	}
-	if isSuccessfulRepoRootCompletion(repository, taskItem, latestRun) {
-		if localState == nil || localState.Finalization.ClosedAt == nil {
-			return policyResult{state: readinessReview, detail: "local review; run task done"}
-		}
+	if _, ok := workflow.ClassifyLocalReviewReady(repository, taskItem, latestRun); ok {
 		return policyResult{
 			state:  readinessAttention,
-			detail: "finalization recorded but backend task is not closed",
+			detail: "completion target is not the deterministic Orpheus main/solo target",
 		}
 	}
 
@@ -273,70 +298,6 @@ func runAttemptDetail(run taskstate.RunAttempt) string {
 	}
 }
 
-func isSuccessfulRepoRootCompletion(repository task.Repository, taskItem task.Task, latestRun *taskstate.RunAttempt) bool {
-	if latestRun == nil || latestRun.Status != taskstate.RunStatusSucceeded {
-		return false
-	}
-	if latestRun.Completion == nil {
-		return false
-	}
-
-	metadata := taskItem.OrpheusMetadata()
-	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
-		return false
-	}
-	if !repoRootMetadataMatches(repository, metadata) {
-		return false
-	}
-	return strings.TrimSpace(latestRun.Branch) == strings.TrimSpace(repository.DefaultBranch) &&
-		cleanPath(latestRun.Worktree) == cleanPath(repository.Path)
-}
-
-func isSuccessfulWorktreeCompletion(repository task.Repository, taskItem task.Task, latestRun *taskstate.RunAttempt) bool {
-	if latestRun == nil || latestRun.Status != taskstate.RunStatusSucceeded {
-		return false
-	}
-	if latestRun.Completion == nil {
-		return false
-	}
-
-	metadata := taskItem.OrpheusMetadata()
-	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
-		return false
-	}
-	if !metadata.HasBranch || !metadata.HasWorktree {
-		return false
-	}
-
-	branch := strings.TrimSpace(latestRun.Branch)
-	worktree := cleanPath(latestRun.Worktree)
-	if branch == "" || worktree == "" {
-		return false
-	}
-	if branch == strings.TrimSpace(repository.DefaultBranch) || worktree == cleanPath(repository.Path) {
-		return false
-	}
-	return strings.TrimSpace(metadata.Branch) == branch && cleanPath(metadata.Worktree) == worktree
-}
-
-func repoRootMetadataMatches(repository task.Repository, metadata task.OrpheusMetadata) bool {
-	defaultBranch := strings.TrimSpace(repository.DefaultBranch)
-	repoPath := cleanPath(repository.Path)
-	if defaultBranch == "" || repoPath == "" {
-		return false
-	}
-	return metadata.HasBranch && strings.TrimSpace(metadata.Branch) == defaultBranch &&
-		metadata.HasWorktree && cleanPath(metadata.Worktree) == repoPath
-}
-
-func cleanPath(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return ""
-	}
-	return filepath.Clean(path)
-}
-
 func localTaskStatesFromRunStates(runStates RunStateIndex) LocalTaskStateIndex {
 	if len(runStates) == 0 {
 		return nil
@@ -365,6 +326,13 @@ func latestRunFrom(localState *LocalTaskState) *taskstate.RunAttempt {
 		return nil
 	}
 	return localState.LatestRun
+}
+
+func expectedTargetsFrom(localState *LocalTaskState) *workflow.ExpectedTargets {
+	if localState == nil {
+		return nil
+	}
+	return localState.ExpectedTargets
 }
 
 func newRepositoryIndex(tasks []task.Task) map[string]task.Task {

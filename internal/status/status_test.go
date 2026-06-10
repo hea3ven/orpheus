@@ -9,6 +9,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/status"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
 func TestProjectGroupsItemsByLocalM4Policy(t *testing.T) {
@@ -94,21 +95,25 @@ func TestProjectWithRunStatesShowsSuccessfulMainCompletionInReview(t *testing.T)
 			},
 		}},
 	}}}
-	runStates := status.RunStateIndex{
+	latestRun := taskstate.RunAttempt{
+		Attempt:  1,
+		Status:   taskstate.RunStatusSucceeded,
+		Branch:   "main",
+		Worktree: "/tmp/alpha",
+		Completion: &taskstate.Completion{
+			Summary:     "Done",
+			Details:     "Ready for review.",
+			CompletedAt: time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+		},
+	}
+	localStates := status.LocalTaskStateIndex{
 		status.RunStateKey("alpha", "a-main"): {
-			Attempt:  1,
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   "main",
-			Worktree: "/tmp/alpha",
-			Completion: &taskstate.Completion{
-				Summary:     "Done",
-				Details:     "Ready for review.",
-				CompletedAt: time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
-			},
+			LatestRun:       &latestRun,
+			ExpectedTargets: testExpectedTargets("main", "/tmp/alpha", "orpheus/a-main", "/tmp/orpheus/worktrees/a-main"),
 		},
 	}
 
-	got := status.ProjectWithRunStates(snapshot, runStates)
+	got := status.ProjectWithLocalTaskStates(snapshot, localStates)
 
 	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-main"})
 	reviewEntry := groupEntries(t, got, status.GroupInReview)[0]
@@ -132,22 +137,26 @@ func TestProjectWithRunStatesShowsSuccessfulWorktreeCompletionWithCommitNeedsPR(
 			},
 		}},
 	}}}
-	runStates := status.RunStateIndex{
+	latestRun := taskstate.RunAttempt{
+		Attempt:  1,
+		Status:   taskstate.RunStatusSucceeded,
+		Branch:   "orpheus/a-worktree",
+		Worktree: "/tmp/orpheus/worktrees/a-worktree",
+		Completion: &taskstate.Completion{
+			Summary:     "Done",
+			Details:     "Ready for PR.",
+			CompletedAt: time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+			Commit:      "abc123",
+		},
+	}
+	localStates := status.LocalTaskStateIndex{
 		status.RunStateKey("alpha", "a-worktree"): {
-			Attempt:  1,
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   "orpheus/a-worktree",
-			Worktree: "/tmp/orpheus/worktrees/a-worktree",
-			Completion: &taskstate.Completion{
-				Summary:     "Done",
-				Details:     "Ready for PR.",
-				CompletedAt: time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
-				Commit:      "abc123",
-			},
+			LatestRun:       &latestRun,
+			ExpectedTargets: testExpectedTargets("main", "/tmp/alpha", "orpheus/a-worktree", "/tmp/orpheus/worktrees/a-worktree"),
 		},
 	}
 
-	got := status.ProjectWithRunStates(snapshot, runStates)
+	got := status.ProjectWithLocalTaskStates(snapshot, localStates)
 
 	assertGroupTaskIDs(t, got, status.GroupNeedsAttention, []string{"a-worktree"})
 	entry := groupEntries(t, got, status.GroupNeedsAttention)[0]
@@ -170,22 +179,26 @@ func TestProjectWithRunStatesShowsWorktreeCompletionWithoutCommitNeedsManualCorr
 			},
 		}},
 	}}}
-	runStates := status.RunStateIndex{
+	latestRun := taskstate.RunAttempt{
+		Attempt:  1,
+		Status:   taskstate.RunStatusSucceeded,
+		Branch:   "orpheus/a-worktree",
+		Worktree: "/tmp/orpheus/worktrees/a-worktree",
+		Completion: &taskstate.Completion{
+			Summary:     "Done",
+			Details:     "Commit failed.",
+			CompletedAt: time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+			CommitError: "commit failed",
+		},
+	}
+	localStates := status.LocalTaskStateIndex{
 		status.RunStateKey("alpha", "a-worktree"): {
-			Attempt:  1,
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   "orpheus/a-worktree",
-			Worktree: "/tmp/orpheus/worktrees/a-worktree",
-			Completion: &taskstate.Completion{
-				Summary:     "Done",
-				Details:     "Commit failed.",
-				CompletedAt: time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
-				CommitError: "commit failed",
-			},
+			LatestRun:       &latestRun,
+			ExpectedTargets: testExpectedTargets("main", "/tmp/alpha", "orpheus/a-worktree", "/tmp/orpheus/worktrees/a-worktree"),
 		},
 	}
 
-	got := status.ProjectWithRunStates(snapshot, runStates)
+	got := status.ProjectWithLocalTaskStates(snapshot, localStates)
 
 	assertGroupTaskIDs(t, got, status.GroupNeedsAttention, []string{"a-worktree"})
 	entry := groupEntries(t, got, status.GroupNeedsAttention)[0]
@@ -260,6 +273,7 @@ func TestProjectWithLocalTaskStatesDoesNotShowClosedFinalizationAsLocalReview(t 
 				Commit:   "abc123",
 				ClosedAt: &closedAt,
 			},
+			ExpectedTargets: testExpectedTargets("main", "/tmp/alpha", "orpheus/a-main", "/tmp/orpheus/worktrees/a-main"),
 		},
 	}
 
@@ -554,4 +568,24 @@ func groupEntries(t *testing.T, projection status.Projection, groupID status.Gro
 	}
 	t.Fatalf("missing group %s", groupID)
 	return nil
+}
+
+func testExpectedTargets(
+	mainBranch string,
+	mainWorktree string,
+	worktreeBranch string,
+	worktreePath string,
+) *workflow.ExpectedTargets {
+	return &workflow.ExpectedTargets{
+		MainSolo: workflow.Target{
+			Kind:     workflow.TargetMainSolo,
+			Branch:   mainBranch,
+			Worktree: mainWorktree,
+		},
+		WorktreeTeam: workflow.Target{
+			Kind:     workflow.TargetWorktreeTeam,
+			Branch:   worktreeBranch,
+			Worktree: worktreePath,
+		},
+	}
 }

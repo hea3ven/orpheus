@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
 const (
@@ -23,14 +23,14 @@ const (
 )
 
 // ExecutionTarget identifies the validated workflow target for an active agent run.
-type ExecutionTarget string
+type ExecutionTarget = workflow.TargetKind
 
 const (
 	// ExecutionTargetWorktree means the agent runs in Orpheus' deterministic task worktree.
-	ExecutionTargetWorktree ExecutionTarget = "worktree"
+	ExecutionTargetWorktree = workflow.TargetWorktreeTeam
 
 	// ExecutionTargetMain means the agent runs in the registered repo root on the default branch.
-	ExecutionTargetMain ExecutionTarget = "main"
+	ExecutionTargetMain = workflow.TargetMainSolo
 )
 
 // ContextBackend is the backend-neutral read capability needed by agent context.
@@ -164,28 +164,12 @@ func (r ActiveContextResolver) Resolve(ctx context.Context) (ActiveContext, erro
 		)
 	}
 
-	repoTarget, err := gitmeta.ExpectedRepoRoot(gitmeta.RepoRootOptions{
-		RepoID:        repo.ID,
-		RepoName:      repo.Name,
-		RepoPath:      repo.Path,
-		DefaultBranch: repo.DefaultBranch,
-	})
+	targets, err := workflow.ExpectedTargetsForTask(source.Repository, env.TaskID, r.Paths)
 	if err != nil {
-		return ActiveContext{}, fmt.Errorf("resolve registered repo-root target: %w", err)
-	}
-	worktreeTarget, err := gitmeta.ExpectedTaskWorktree(gitmeta.TaskWorktreeOptions{
-		RepoID:        repo.ID,
-		RepoName:      repo.Name,
-		RepoPath:      repo.Path,
-		DefaultBranch: repo.DefaultBranch,
-		TaskID:        env.TaskID,
-		Paths:         r.Paths,
-	})
-	if err != nil {
-		return ActiveContext{}, fmt.Errorf("resolve deterministic task worktree target: %w", err)
+		return ActiveContext{}, err
 	}
 
-	candidate, err := classifyContextTarget(taskItem.OrpheusMetadata(), repoTarget, worktreeTarget)
+	candidate, err := classifyContextTarget(taskItem.OrpheusMetadata(), targets)
 	if err != nil {
 		return ActiveContext{}, fmt.Errorf("task %s has inconsistent Orpheus metadata: %w", env.TaskID, err)
 	}
@@ -215,8 +199,8 @@ func (r ActiveContextResolver) Resolve(ctx context.Context) (ActiveContext, erro
 		Repository: ContextRepository{
 			ID:            repo.ID,
 			Name:          repo.Name,
-			Root:          repoTarget.WorktreePath,
-			DefaultBranch: repoTarget.Branch,
+			Root:          targets.MainSolo.Worktree,
+			DefaultBranch: targets.MainSolo.Branch,
 		},
 		Task: ContextTask{
 			ID:                 taskItem.ID,
@@ -244,18 +228,6 @@ func cloneCompletion(completion *taskstate.Completion) *taskstate.Completion {
 	}
 	clone := *completion
 	return &clone
-}
-
-// DisplayName returns the agent-facing target name.
-func (t ExecutionTarget) DisplayName() string {
-	switch t {
-	case ExecutionTargetWorktree:
-		return "worktree/team"
-	case ExecutionTargetMain:
-		return "main/solo"
-	default:
-		return string(t)
-	}
 }
 
 func (r ActiveContextResolver) resolveEnvironment() (agentEnvironment, error) {
@@ -372,61 +344,17 @@ func validateContextTaskStatus(taskItem taskmodel.Task) error {
 
 func classifyContextTarget(
 	metadata taskmodel.OrpheusMetadata,
-	repoTarget gitmeta.TaskWorktreeSetupResult,
-	worktreeTarget gitmeta.TaskWorktreeSetupResult,
+	targets workflow.ExpectedTargets,
 ) (targetCandidate, error) {
-	if !metadata.HasBranch || strings.TrimSpace(metadata.Branch) == "" {
-		return targetCandidate{}, fmt.Errorf("%s is missing", taskmodel.MetadataBranch)
-	}
-	if !metadata.HasWorktree || strings.TrimSpace(metadata.Worktree) == "" {
-		return targetCandidate{}, fmt.Errorf("%s is missing", taskmodel.MetadataWorktree)
-	}
-
-	metadataWorktree, err := cleanAbsPath(taskmodel.MetadataWorktree, metadata.Worktree)
+	target, err := workflow.ClassifyMetadataTarget(metadata, targets)
 	if err != nil {
 		return targetCandidate{}, err
 	}
-	metadataBranch := strings.TrimSpace(metadata.Branch)
-
-	matchesMain := metadataBranch == repoTarget.Branch && metadataWorktree == filepath.Clean(repoTarget.WorktreePath)
-	matchesWorktree := metadataBranch == worktreeTarget.Branch &&
-		metadataWorktree == filepath.Clean(worktreeTarget.WorktreePath)
-	switch {
-	case matchesMain && matchesWorktree:
-		return targetCandidate{}, fmt.Errorf(
-			"%s and %s match both supported execution targets",
-			taskmodel.MetadataBranch,
-			taskmodel.MetadataWorktree,
-		)
-	case matchesMain:
-		return targetCandidate{
-			Kind:   ExecutionTargetMain,
-			Branch: repoTarget.Branch,
-			Path:   filepath.Clean(repoTarget.WorktreePath),
-		}, nil
-	case matchesWorktree:
-		return targetCandidate{
-			Kind:   ExecutionTargetWorktree,
-			Branch: worktreeTarget.Branch,
-			Path:   filepath.Clean(worktreeTarget.WorktreePath),
-		}, nil
-	default:
-		return targetCandidate{}, fmt.Errorf(
-			"%s=%q and %s=%q do not match repo-root target (%s=%q, %s=%q) or worktree target (%s=%q, %s=%q)",
-			taskmodel.MetadataBranch,
-			metadata.Branch,
-			taskmodel.MetadataWorktree,
-			metadata.Worktree,
-			taskmodel.MetadataBranch,
-			repoTarget.Branch,
-			taskmodel.MetadataWorktree,
-			repoTarget.WorktreePath,
-			taskmodel.MetadataBranch,
-			worktreeTarget.Branch,
-			taskmodel.MetadataWorktree,
-			worktreeTarget.WorktreePath,
-		)
-	}
+	return targetCandidate{
+		Kind:   target.Kind,
+		Branch: target.Branch,
+		Path:   target.Worktree,
+	}, nil
 }
 
 func validateEnvironmentMatchesTarget(env agentEnvironment, target targetCandidate) error {

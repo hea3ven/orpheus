@@ -17,6 +17,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/status"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/spf13/cobra"
 )
 
@@ -375,15 +376,15 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summa
 	}
 
 	store := taskstate.NewStore(paths)
-	service := taskmodel.FinalizationService{
+	service := workflow.FinalizationService{
 		Paths:   paths,
 		Sources: taskCtx.Sources,
-		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.FinalizationBackend, error) {
+		BackendFactory: func(source taskmodel.RepositorySource) (workflow.FinalizationBackend, error) {
 			return newBeadsTaskBackend(source.BackendDir)
 		},
 		RunStore: store,
 	}
-	finalized, err := service.Finalize(command.Context(), taskmodel.FinalizeOptions{
+	finalized, err := service.Finalize(command.Context(), workflow.FinalizeOptions{
 		TaskID:  taskID,
 		Summary: summary,
 		Details: details,
@@ -425,7 +426,7 @@ func runTaskSync(command *cobra.Command, opts *rootOptions, taskID string) error
 		return err
 	}
 
-	service := taskmodel.SyncService{
+	service := workflow.SyncService{
 		Paths:   paths,
 		Sources: taskCtx.Sources,
 		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.Getter, error) {
@@ -433,7 +434,7 @@ func runTaskSync(command *cobra.Command, opts *rootOptions, taskID string) error
 		},
 		RunStore: taskstate.NewStore(paths),
 	}
-	result, err := service.Sync(command.Context(), taskmodel.SyncOptions{TaskID: taskID})
+	result, err := service.Sync(command.Context(), workflow.SyncOptions{TaskID: taskID})
 	if err != nil {
 		return fmt.Errorf("task sync: %w", err)
 	}
@@ -736,9 +737,9 @@ func taskRunMetadataMismatchDetail(metadata taskmodel.OrpheusMetadata, expected 
 	return strings.Join(problems, "; ")
 }
 
-func renderTaskSyncResult(output interface{ Write([]byte) (int, error) }, result taskmodel.SyncResult) error {
+func renderTaskSyncResult(output interface{ Write([]byte) (int, error) }, result workflow.SyncResult) error {
 	switch result.Status {
-	case taskmodel.SyncStatusPushed:
+	case workflow.SyncStatusPushed:
 		_, err := fmt.Fprintf(
 			output,
 			"Synced %s: pushed branch %s to origin. PR creation is not implemented in this slice; no PR URL metadata was written.\n",
@@ -746,7 +747,7 @@ func renderTaskSyncResult(output interface{ Write([]byte) (int, error) }, result
 			result.Branch,
 		)
 		return err
-	case taskmodel.SyncStatusSkipped:
+	case workflow.SyncStatusSkipped:
 		_, err := fmt.Fprintf(
 			output,
 			"Skipped %s: %s. PR creation is not implemented in this slice; no PR URL metadata was written.\n",

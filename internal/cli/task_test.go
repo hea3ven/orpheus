@@ -11,7 +11,9 @@ import (
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
+	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1430,19 +1432,20 @@ func TestTaskSyncPushesPRReadyTaskBranch(t *testing.T) {
 		BeadsPrefix:   "op",
 	}}}))
 
-	taskWorktree := filepath.Join(root, "worktrees", "op-sync")
-	runGit(t, repoPath, "branch", "orpheus/op-sync", "main")
-	runGit(t, repoPath, "worktree", "add", taskWorktree, "orpheus/op-sync")
+	targets := taskSyncExpectedTargets(t, paths, repoPath, "op-sync")
+	taskWorktree := targets.WorktreeTeam.Worktree
+	runGit(t, repoPath, "branch", targets.WorktreeTeam.Branch, "main")
+	runGit(t, repoPath, "worktree", "add", taskWorktree, targets.WorktreeTeam.Branch)
 	must.NoError(os.WriteFile(filepath.Join(taskWorktree, "sync.txt"), []byte("sync\n"), 0o644))
 	runGit(t, taskWorktree, "add", "sync.txt")
 	runGit(t, taskWorktree, "commit", "-m", "sync task branch")
 	commit := strings.TrimSpace(runGit(t, taskWorktree, "rev-parse", "HEAD"))
-	recordWorktreeCompletion(t, paths, "alpha", "op-sync", "orpheus/op-sync", taskWorktree, commit)
+	recordWorktreeCompletion(t, paths, "alpha", "op-sync", targets.WorktreeTeam.Branch, taskWorktree, commit)
 
 	withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
 		dir:    repoPath,
 		args:   "--json --readonly --sandbox show --id op-sync",
-		stdout: syncReadyTaskJSON("op-sync", "orpheus/op-sync", taskWorktree),
+		stdout: syncReadyTaskJSON("op-sync", targets.WorktreeTeam.Branch, taskWorktree),
 	}})
 
 	stdout, stderr := executeCommand(t, []string{"task", "sync", "op-sync"})
@@ -1548,21 +1551,22 @@ func TestTaskSyncPushFailureIsNonZero(t *testing.T) {
 		BeadsPrefix:   "op",
 	}}}))
 
-	taskWorktree := filepath.Join(root, "worktrees", "op-sync")
-	runGit(t, repoPath, "branch", "orpheus/op-sync", "main")
-	runGit(t, repoPath, "worktree", "add", taskWorktree, "orpheus/op-sync")
+	targets := taskSyncExpectedTargets(t, paths, repoPath, "op-sync")
+	taskWorktree := targets.WorktreeTeam.Worktree
+	runGit(t, repoPath, "branch", targets.WorktreeTeam.Branch, "main")
+	runGit(t, repoPath, "worktree", "add", taskWorktree, targets.WorktreeTeam.Branch)
 	must.NoError(os.WriteFile(filepath.Join(taskWorktree, "sync.txt"), []byte("sync\n"), 0o644))
 	runGit(t, taskWorktree, "add", "sync.txt")
 	runGit(t, taskWorktree, "commit", "-m", "sync task branch")
 	commit := strings.TrimSpace(runGit(t, taskWorktree, "rev-parse", "HEAD"))
-	recordWorktreeCompletion(t, paths, "alpha", "op-sync", "orpheus/op-sync", taskWorktree, commit)
+	recordWorktreeCompletion(t, paths, "alpha", "op-sync", targets.WorktreeTeam.Branch, taskWorktree, commit)
 	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
 	must.NoError(os.RemoveAll(originPath))
 
 	withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
 		dir:    repoPath,
 		args:   "--json --readonly --sandbox show --id op-sync",
-		stdout: syncReadyTaskJSON("op-sync", "orpheus/op-sync", taskWorktree),
+		stdout: syncReadyTaskJSON("op-sync", targets.WorktreeTeam.Branch, taskWorktree),
 	}})
 
 	stdout, stderr, err := executeCommandWithError(t, []string{"task", "sync", "op-sync"})
@@ -1798,6 +1802,25 @@ func configureTestGitUser(t *testing.T, repoPath string) {
 	t.Helper()
 	runGit(t, repoPath, "config", "user.name", "Orpheus Test")
 	runGit(t, repoPath, "config", "user.email", "orpheus@example.com")
+}
+
+func taskSyncExpectedTargets(
+	t *testing.T,
+	paths state.Paths,
+	repoPath string,
+	taskID string,
+) workflow.ExpectedTargets {
+	t.Helper()
+	targets, err := workflow.ExpectedTargetsForTask(taskmodel.Repository{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+	}, taskID, paths)
+	if err != nil {
+		t.Fatalf("expected sync targets: %v", err)
+	}
+	return targets
 }
 
 func recordMainCompletion(t *testing.T, paths state.Paths, repoID string, taskID string, repoPath string, summary string, details string) {
