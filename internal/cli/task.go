@@ -14,6 +14,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/beads"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/status"
@@ -492,7 +493,8 @@ func runTaskSync(command *cobra.Command, opts *rootOptions, taskID string) error
 		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.Getter, error) {
 			return newBeadsTaskBackend(source.BackendDir)
 		},
-		RunStore: taskstate.NewStore(paths),
+		RunStore:   taskstate.NewStore(paths),
+		PRProvider: pullrequest.GHProvider{},
 	}
 	result, err := service.Sync(command.Context(), workflow.SyncOptions{TaskID: taskID})
 	if err != nil {
@@ -799,18 +801,28 @@ func taskRunMetadataMismatchDetail(metadata taskmodel.OrpheusMetadata, expected 
 
 func renderTaskSyncResult(output interface{ Write([]byte) (int, error) }, result workflow.SyncResult) error {
 	switch result.Status {
-	case workflow.SyncStatusPushed:
+	case workflow.SyncStatusPRCreated:
 		_, err := fmt.Fprintf(
 			output,
-			"Synced %s: pushed branch %s to origin. PR creation is not implemented in this slice; no PR URL metadata was written.\n",
+			"Synced %s: pushed branch %s to origin and created PR %s. PR URL metadata storage is not implemented in this slice; no PR URL metadata was written.\n",
 			result.Task.ID,
 			result.Branch,
+			result.PRURL,
+		)
+		return err
+	case workflow.SyncStatusPRRecovered:
+		_, err := fmt.Fprintf(
+			output,
+			"Synced %s: pushed branch %s to origin and recovered existing PR %s. PR URL metadata storage is not implemented in this slice; no PR URL metadata was written.\n",
+			result.Task.ID,
+			result.Branch,
+			result.PRURL,
 		)
 		return err
 	case workflow.SyncStatusSkipped:
 		_, err := fmt.Fprintf(
 			output,
-			"Skipped %s: %s. PR creation is not implemented in this slice; no PR URL metadata was written.\n",
+			"Skipped %s: %s. PR creation was not attempted; no PR URL metadata was written.\n",
 			result.Task.ID,
 			result.Reason,
 		)

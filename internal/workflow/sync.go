@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -43,6 +44,7 @@ type SyncService struct {
 	BackendFactory SyncBackendFactory
 	RunStore       SyncRunStore
 	Git            SyncGit
+	PRProvider     pullrequest.Provider
 }
 
 // SyncOptions are the CLI-provided sync controls.
@@ -54,8 +56,11 @@ type SyncOptions struct {
 type SyncStatus string
 
 const (
-	// SyncStatusPushed means the task branch was pushed to origin.
-	SyncStatusPushed SyncStatus = "pushed"
+	// SyncStatusPRCreated means the task branch was pushed and a new PR was created.
+	SyncStatusPRCreated SyncStatus = "pr_created"
+
+	// SyncStatusPRRecovered means the task branch was pushed and an existing PR was recovered.
+	SyncStatusPRRecovered SyncStatus = "pr_recovered"
 
 	// SyncStatusSkipped means the task was resolvable but not branch-push eligible.
 	SyncStatusSkipped SyncStatus = "skipped"
@@ -70,6 +75,7 @@ type SyncResult struct {
 	Reason     string
 	Branch     string
 	Worktree   string
+	PRURL      string
 }
 
 type syncTarget struct {
@@ -87,6 +93,9 @@ func (s SyncService) Sync(ctx context.Context, opts SyncOptions) (SyncResult, er
 	}
 	if s.RunStore == nil {
 		return SyncResult{}, errors.New("task sync run store is required")
+	}
+	if s.PRProvider == nil {
+		return SyncResult{}, errors.New("task sync PR provider is required")
 	}
 	gitState := s.Git
 	if gitState == nil {
@@ -139,13 +148,50 @@ func (s SyncService) syncLocked(ctx context.Context, opts SyncOptions, gitState 
 	if err := gitState.PushTaskBranch(ctx, target.source.Repository.Path, branch); err != nil {
 		return SyncResult{}, err
 	}
+
+	baseBranch := strings.TrimSpace(target.source.Repository.DefaultBranch)
+	found, ok, err := s.PRProvider.FindOpenByBranch(ctx, pullrequest.FindOpenByBranchRequest{
+		RepositoryPath: target.source.Repository.Path,
+		HeadBranch:     branch,
+		BaseBranch:     baseBranch,
+	})
+	if err != nil {
+		return SyncResult{}, err
+	}
+	if ok {
+		return SyncResult{
+			Repository: target.source.Repository,
+			Task:       target.task.Clone(),
+			LatestRun:  latest,
+			Status:     SyncStatusPRRecovered,
+			Branch:     branch,
+			Worktree:   strings.TrimSpace(target.task.OrpheusMetadata().Worktree),
+			PRURL:      strings.TrimSpace(found.URL),
+		}, nil
+	}
+
+	content, err := BuildSyncPullRequestContent(target.task, latest)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	created, err := s.PRProvider.Create(ctx, pullrequest.CreateRequest{
+		RepositoryPath: target.source.Repository.Path,
+		HeadBranch:     branch,
+		BaseBranch:     baseBranch,
+		Title:          content.Title,
+		Body:           content.Body,
+	})
+	if err != nil {
+		return SyncResult{}, err
+	}
 	return SyncResult{
 		Repository: target.source.Repository,
 		Task:       target.task.Clone(),
 		LatestRun:  latest,
-		Status:     SyncStatusPushed,
+		Status:     SyncStatusPRCreated,
 		Branch:     branch,
 		Worktree:   strings.TrimSpace(target.task.OrpheusMetadata().Worktree),
+		PRURL:      strings.TrimSpace(created.URL),
 	}, nil
 }
 
@@ -300,4 +346,40 @@ func syncEligibility(
 	}
 
 	return true, "", nil
+}
+
+// PullRequestContent is the generated title/body for a task sync PR.
+type PullRequestContent struct {
+	Title string
+	Body  string
+}
+
+// BuildSyncPullRequestContent generates PR text from the completion handoff.
+func BuildSyncPullRequestContent(taskItem task.Task, latest taskstate.RunAttempt) (PullRequestContent, error) {
+	if strings.TrimSpace(taskItem.ID) == "" {
+		return PullRequestContent{}, errors.New("task id is required")
+	}
+	if latest.Completion == nil {
+		return PullRequestContent{}, errors.New("completion is required")
+	}
+	title := singleLine(latest.Completion.Summary)
+	if title == "" {
+		return PullRequestContent{}, errors.New("completion summary is required")
+	}
+	body := strings.TrimSpace(latest.Completion.Details)
+	if body == "" {
+		return PullRequestContent{}, errors.New("completion details are required")
+	}
+	return PullRequestContent{
+		Title: title,
+		Body:  body + "\n",
+	}, nil
+}
+
+func singleLine(value string) string {
+	fields := strings.Fields(strings.TrimSpace(value))
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.Join(fields, " ")
 }
