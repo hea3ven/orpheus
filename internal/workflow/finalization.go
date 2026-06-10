@@ -87,10 +87,11 @@ type FinalizationService struct {
 
 // FinalizeOptions are the CLI-provided finalization controls.
 type FinalizeOptions struct {
-	TaskID  string
-	CWD     string
-	Summary string
-	Details string
+	TaskID                string
+	CWD                   string
+	Summary               string
+	Details               string
+	AllowRunningCompleted bool
 }
 
 // FinalizationResult reports the finalized task and recorded facts.
@@ -98,6 +99,41 @@ type FinalizationResult struct {
 	Repository   task.Repository
 	Task         task.Task
 	Finalization taskstate.Finalization
+}
+
+// RunningCompletionConfirmation describes a stale running run that can be
+// finalized only after explicit operator confirmation.
+type RunningCompletionConfirmation struct {
+	TaskID  string
+	Attempt int
+	Summary string
+}
+
+// RunningCompletionConfirmationError reports that finalization is otherwise
+// ready, but the latest completed run is still recorded as running.
+type RunningCompletionConfirmationError struct {
+	Confirmation RunningCompletionConfirmation
+}
+
+func (e *RunningCompletionConfirmationError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return fmt.Sprintf(
+		"latest run attempt %d for task %s is %q with a completion block; explicit interactive confirmation is required",
+		e.Confirmation.Attempt,
+		e.Confirmation.TaskID,
+		taskstate.RunStatusRunning,
+	)
+}
+
+// RunningCompletionConfirmationFromError extracts confirmation details from an error.
+func RunningCompletionConfirmationFromError(err error) (RunningCompletionConfirmation, bool) {
+	var confirmationErr *RunningCompletionConfirmationError
+	if errors.As(err, &confirmationErr) && confirmationErr != nil {
+		return confirmationErr.Confirmation, true
+	}
+	return RunningCompletionConfirmation{}, false
 }
 
 type finalizationTarget struct {
@@ -162,8 +198,15 @@ func (s FinalizationService) finalizeLocked(
 	if err != nil {
 		return FinalizationResult{}, err
 	}
-	if err := validateFinalizationReady(repo, target.task, finalizeCtx, targets); err != nil {
-		return FinalizationResult{}, err
+	var pendingConfirmation *RunningCompletionConfirmationError
+	if err := validateFinalizationReady(repo, target.task, finalizeCtx, targets, opts.AllowRunningCompleted); err != nil {
+		if errors.As(err, &pendingConfirmation) {
+			if pendingConfirmation == nil {
+				return FinalizationResult{}, err
+			}
+		} else {
+			return FinalizationResult{}, err
+		}
 	}
 
 	currentBranch, err := gitState.CurrentBranch(ctx, repo.Path)
@@ -221,6 +264,9 @@ func (s FinalizationService) finalizeLocked(
 				target.task.ID,
 			)
 		}
+		if pendingConfirmation != nil {
+			return FinalizationResult{}, pendingConfirmation
+		}
 		if err := gitState.StageAll(ctx, repo.Path); err != nil {
 			return FinalizationResult{}, err
 		}
@@ -232,6 +278,10 @@ func (s FinalizationService) finalizeLocked(
 		if err != nil {
 			return FinalizationResult{}, fmt.Errorf("record finalization commit: %w", err)
 		}
+	}
+
+	if pendingConfirmation != nil {
+		return FinalizationResult{}, pendingConfirmation
 	}
 
 	if finalization.PushedAt == nil {
@@ -266,7 +316,7 @@ func (s FinalizationService) finalizeLocked(
 func (s FinalizationService) resolveTarget(ctx context.Context, opts FinalizeOptions) (finalizationTarget, error) {
 	taskID := strings.TrimSpace(opts.TaskID)
 	if taskID == "" {
-		return s.inferTarget(ctx, opts.CWD)
+		return s.inferTarget(ctx, opts)
 	}
 
 	resolved, err := task.ResolveTaskSource(s.Sources, taskID)
@@ -308,8 +358,8 @@ func (s FinalizationService) resolveTarget(ctx context.Context, opts FinalizeOpt
 	return finalizationTarget{source: resolved.Source, backend: backend, task: taskItem}, nil
 }
 
-func (s FinalizationService) inferTarget(ctx context.Context, cwd string) (finalizationTarget, error) {
-	normalizedCWD, err := currentDirectory(cwd)
+func (s FinalizationService) inferTarget(ctx context.Context, opts FinalizeOptions) (finalizationTarget, error) {
+	normalizedCWD, err := currentDirectory(opts.CWD)
 	if err != nil {
 		return finalizationTarget{}, err
 	}
@@ -361,7 +411,25 @@ func (s FinalizationService) inferTarget(ctx context.Context, cwd string) (final
 
 	candidates := make([]task.Task, 0, 1)
 	for _, taskItem := range tasks {
-		ok, err := s.isInferableMainLocalReady(source.Repository, taskItem)
+		ok, err := s.isInferableMainLocalReady(source.Repository, taskItem, false)
+		if err != nil {
+			return finalizationTarget{}, err
+		}
+		if ok {
+			candidates = append(candidates, taskItem.Clone())
+			continue
+		}
+		if !opts.AllowRunningCompleted {
+			ok, err = s.isInferableMainLocalReady(source.Repository, taskItem, true)
+			if err != nil {
+				return finalizationTarget{}, err
+			}
+			if ok {
+				candidates = append(candidates, taskItem.Clone())
+			}
+			continue
+		}
+		ok, err = s.isInferableMainLocalReady(source.Repository, taskItem, true)
 		if err != nil {
 			return finalizationTarget{}, err
 		}
@@ -386,7 +454,7 @@ func (s FinalizationService) inferTarget(ctx context.Context, cwd string) (final
 	}
 }
 
-func (s FinalizationService) isInferableMainLocalReady(repo task.Repository, taskItem task.Task) (bool, error) {
+func (s FinalizationService) isInferableMainLocalReady(repo task.Repository, taskItem task.Task, allowRunningCompleted bool) (bool, error) {
 	if taskItem.Status == task.StatusClosed {
 		return false, nil
 	}
@@ -406,7 +474,7 @@ func (s FinalizationService) isInferableMainLocalReady(repo task.Repository, tas
 	if err != nil {
 		return false, err
 	}
-	if err := validateFinalizationReady(repo, taskItem, ctx, targets); err != nil {
+	if err := validateFinalizationReady(repo, taskItem, ctx, targets, allowRunningCompleted); err != nil {
 		return false, nil
 	}
 	return true, nil
@@ -432,6 +500,7 @@ func validateFinalizationReady(
 	taskItem task.Task,
 	ctx finalizationContext,
 	targets ExpectedTargets,
+	allowRunningCompleted bool,
 ) error {
 	if strings.TrimSpace(repo.ID) == "" {
 		return errors.New("repo id is required")
@@ -483,15 +552,6 @@ func validateFinalizationReady(
 	}
 
 	latest := ctx.latest
-	if latest.Status != taskstate.RunStatusSucceeded {
-		return fmt.Errorf(
-			"latest run attempt %d for task %s is %q, expected %q with a main-mode completion block",
-			latest.Attempt,
-			taskItem.ID,
-			latest.Status,
-			taskstate.RunStatusSucceeded,
-		)
-	}
 	if latest.Completion == nil {
 		return fmt.Errorf("latest run attempt %d for task %s has no main-mode completion block; run `orpheus agent done` first", latest.Attempt, taskItem.ID)
 	}
@@ -517,8 +577,33 @@ func validateFinalizationReady(
 			repoRoot,
 		)
 	}
-	if _, ok := ClassifyExpectedLocalReviewReady(targets, taskItem, &latest); !ok {
+	classificationRun := latest
+	if latest.Status != taskstate.RunStatusSucceeded {
+		classificationRun.Status = taskstate.RunStatusSucceeded
+	}
+	if _, ok := ClassifyExpectedLocalReviewReady(targets, taskItem, &classificationRun); !ok {
 		return fmt.Errorf("latest run attempt %d for task %s is not a main/solo local-ready completion", latest.Attempt, taskItem.ID)
+	}
+	if latest.Status != taskstate.RunStatusSucceeded {
+		if latest.Status == taskstate.RunStatusRunning {
+			if allowRunningCompleted {
+				return nil
+			}
+			return &RunningCompletionConfirmationError{
+				Confirmation: RunningCompletionConfirmation{
+					TaskID:  taskItem.ID,
+					Attempt: latest.Attempt,
+					Summary: strings.TrimSpace(latest.Completion.Summary),
+				},
+			}
+		}
+		return fmt.Errorf(
+			"latest run attempt %d for task %s is %q, expected %q with a main-mode completion block",
+			latest.Attempt,
+			taskItem.ID,
+			latest.Status,
+			taskstate.RunStatusSucceeded,
+		)
 	}
 	return nil
 }

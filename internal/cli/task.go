@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"path/filepath"
 	"strconv"
@@ -22,8 +24,9 @@ import (
 )
 
 var (
-	newBeadsTaskBackend                  = beads.NewTaskBackend
-	attachedAgentLauncher agent.Launcher = agent.AttachedLauncher{}
+	newBeadsTaskBackend                    = beads.NewTaskBackend
+	attachedAgentLauncher   agent.Launcher = agent.AttachedLauncher{}
+	taskDoneInputIsTerminal                = readerIsTerminal
 )
 
 const (
@@ -384,13 +387,29 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summa
 		},
 		RunStore: store,
 	}
-	finalized, err := service.Finalize(command.Context(), workflow.FinalizeOptions{
+	finalizeOpts := workflow.FinalizeOptions{
 		TaskID:  taskID,
 		Summary: summary,
 		Details: details,
-	})
+	}
+	finalized, err := service.Finalize(command.Context(), finalizeOpts)
 	if err != nil {
-		return fmt.Errorf("task done: %w", err)
+		if confirmation, ok := workflow.RunningCompletionConfirmationFromError(err); ok {
+			confirmed, confirmErr := confirmRunningCompletionFinalization(command, confirmation)
+			if confirmErr != nil {
+				return fmt.Errorf("task done: %w", confirmErr)
+			}
+			if !confirmed {
+				return fmt.Errorf("task done: %w", err)
+			}
+			finalizeOpts.AllowRunningCompleted = true
+			finalized, err = service.Finalize(command.Context(), finalizeOpts)
+			if err != nil {
+				return fmt.Errorf("task done: %w", err)
+			}
+		} else {
+			return fmt.Errorf("task done: %w", err)
+		}
 	}
 
 	logger.DebugContext(
@@ -408,6 +427,47 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summa
 		finalized.Repository.DefaultBranch,
 	)
 	return err
+}
+
+func confirmRunningCompletionFinalization(
+	command *cobra.Command,
+	confirmation workflow.RunningCompletionConfirmation,
+) (bool, error) {
+	input := command.InOrStdin()
+	if !taskDoneInputIsTerminal(input) {
+		return false, nil
+	}
+
+	output := command.ErrOrStderr()
+	if _, err := fmt.Fprintf(
+		output,
+		"Warning: latest run attempt %d for task %s is still recorded as running, but it has a completion block.\n",
+		confirmation.Attempt,
+		confirmation.TaskID,
+	); err != nil {
+		return false, err
+	}
+	if confirmation.Summary != "" {
+		if _, err := fmt.Fprintf(output, "Recorded completion summary: %s\n", confirmation.Summary); err != nil {
+			return false, err
+		}
+	}
+	if _, err := fmt.Fprintln(
+		output,
+		"Continuing will finalize the reviewed main/solo work without changing the recorded run status.",
+	); err != nil {
+		return false, err
+	}
+	if _, err := fmt.Fprint(output, "Finalize anyway? [y/N]: "); err != nil {
+		return false, err
+	}
+
+	line, err := bufio.NewReader(input).ReadString('\n')
+	if err != nil && (!errors.Is(err, io.EOF) || line == "") {
+		return false, fmt.Errorf("read finalization confirmation: %w", err)
+	}
+	answer := strings.ToLower(strings.TrimSpace(line))
+	return answer == "y" || answer == "yes", nil
 }
 
 func runTaskSync(command *cobra.Command, opts *rootOptions, taskID string) error {

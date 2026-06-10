@@ -1414,6 +1414,55 @@ func TestTaskDoneCommitsPushesClosesAndRecordsFinalization(t *testing.T) {
 	must.NotNil(facts.ClosedAt)
 }
 
+func TestTaskDoneRefusesRunningCompletionWithoutInteractiveConfirmation(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordRunningMainCompletion(t, paths, "alpha", "op-main", repoPath, "Implement task done", "Commit reviewed repo-root changes.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	headBefore := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	bdLogPath := withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
+	})
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "done", "op-main"})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "explicit interactive confirmation is required")
+	is.Equal(headBefore, strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")))
+	is.Contains(runGit(t, repoPath, "status", "--short"), "reviewed.txt")
+
+	bdLog, readErr := os.ReadFile(bdLogPath)
+	must.NoError(readErr)
+	is.Contains(string(bdLog), "--json --readonly --sandbox show --id op-main")
+	is.NotContains(string(bdLog), "--json --sandbox close op-main")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestRun(state)
+	must.True(ok)
+	is.Equal(taskstate.RunStatusRunning, latest.Status)
+	is.Empty(taskstate.FinalizationFacts(state).Commit)
+}
+
 func TestTaskSyncPushesPRReadyTaskBranch(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -1842,6 +1891,25 @@ func recordMainCompletion(t *testing.T, paths state.Paths, repoID string, taskID
 	}
 	if _, err := store.FinishRun(repoID, taskID, attempt.Attempt, taskstate.RunStatusSucceeded); err != nil {
 		t.Fatalf("finish main run: %v", err)
+	}
+}
+
+func recordRunningMainCompletion(t *testing.T, paths state.Paths, repoID string, taskID string, repoPath string, summary string, details string) {
+	t.Helper()
+	store := taskstate.NewStore(paths)
+	attempt, err := store.StartRun(repoID, taskID, taskstate.StartRunOptions{
+		Agent:    "recorder",
+		Branch:   "main",
+		Worktree: repoPath,
+	})
+	if err != nil {
+		t.Fatalf("start running main run: %v", err)
+	}
+	if _, err := store.CompleteRun(repoID, taskID, attempt.Attempt, taskstate.CompleteRunOptions{
+		Summary: summary,
+		Details: details,
+	}); err != nil {
+		t.Fatalf("complete running main run: %v", err)
 	}
 }
 
