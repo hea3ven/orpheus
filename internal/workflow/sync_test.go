@@ -129,8 +129,8 @@ func TestSyncServiceCreatesPRForEligibleWorktreeCompletion(t *testing.T) {
 	if create.RepositoryPath != repoPath || create.HeadBranch != "orpheus/op-1" || create.BaseBranch != "main" {
 		t.Fatalf("create request = %#v, want repo/head/base", create)
 	}
-	if !strings.Contains(create.Title, "op-1: Sync creates PR") || !strings.Contains(create.Body, "Created by Orpheus") {
-		t.Fatalf("created content title/body = %q/%q, want Orpheus task content", create.Title, create.Body)
+	if create.Title != "Done" || create.Body != "Implemented.\n" {
+		t.Fatalf("created content title/body = %q/%q, want completion summary/details", create.Title, create.Body)
 	}
 }
 
@@ -406,21 +406,24 @@ func TestBuildSyncPullRequestContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build content: %v", err)
 	}
-	for _, want := range []string{
-		"op-1: Create PR",
-		"Created by Orpheus.",
-		"- ID: op-1",
+	if content.Title != "Ready for review" {
+		t.Fatalf("title = %q, want completion summary", content.Title)
+	}
+	if content.Body != "Pushed the branch and wired the provider.\n" {
+		t.Fatalf("body = %q, want completion details only", content.Body)
+	}
+	for _, unwanted := range []string{
+		"op-1",
+		"Create PR",
 		"Implement sync PR creation.",
 		"No duplicate PRs are created.",
-		"Ready for review",
-		"Pushed the branch and wired the provider.",
+		"Created by Orpheus",
+		"Summary",
+		"Details",
 	} {
-		if !strings.Contains(content.Title+"\n"+content.Body, want) {
-			t.Fatalf("content = %#v, want %q", content, want)
+		if strings.Contains(content.Body, unwanted) {
+			t.Fatalf("body = %q, should not contain %q", content.Body, unwanted)
 		}
-	}
-	if strings.Contains(strings.ToLower(content.Body), "beads") {
-		t.Fatalf("content body = %q, want no backend-specific Beads text", content.Body)
 	}
 }
 

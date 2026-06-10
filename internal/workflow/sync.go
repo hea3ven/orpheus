@@ -354,7 +354,7 @@ type PullRequestContent struct {
 	Body  string
 }
 
-// BuildSyncPullRequestContent generates an Orpheus PR title/body from backend-neutral task data.
+// BuildSyncPullRequestContent generates PR text from the completion handoff.
 func BuildSyncPullRequestContent(taskItem task.Task, latest taskstate.RunAttempt) (PullRequestContent, error) {
 	if strings.TrimSpace(taskItem.ID) == "" {
 		return PullRequestContent{}, errors.New("task id is required")
@@ -362,54 +362,18 @@ func BuildSyncPullRequestContent(taskItem task.Task, latest taskstate.RunAttempt
 	if latest.Completion == nil {
 		return PullRequestContent{}, errors.New("completion is required")
 	}
-
-	titleText := strings.TrimSpace(taskItem.Title)
-	if titleText == "" {
-		titleText = "Task"
+	title := singleLine(latest.Completion.Summary)
+	if title == "" {
+		return PullRequestContent{}, errors.New("completion summary is required")
 	}
-	title := strings.TrimSpace(taskItem.ID + ": " + singleLine(titleText))
-
-	var body strings.Builder
-	body.WriteString("Created by Orpheus.\n\n")
-	body.WriteString("## Task\n\n")
-	writeBodyField(&body, "ID", taskItem.ID)
-	writeBodyField(&body, "Title", taskItem.Title)
-
-	if description := strings.TrimSpace(taskItem.Description); description != "" {
-		body.WriteString("\n## Description\n\n")
-		body.WriteString(description)
-		body.WriteString("\n")
+	body := strings.TrimSpace(latest.Completion.Details)
+	if body == "" {
+		return PullRequestContent{}, errors.New("completion details are required")
 	}
-	if criteria := strings.TrimSpace(taskItem.AcceptanceCriteria); criteria != "" {
-		body.WriteString("\n## Acceptance Criteria\n\n")
-		body.WriteString(criteria)
-		body.WriteString("\n")
-	}
-
-	body.WriteString("\n## Agent Completion\n\n")
-	writeBodyField(&body, "Summary", latest.Completion.Summary)
-	if details := strings.TrimSpace(latest.Completion.Details); details != "" {
-		body.WriteString("\n")
-		body.WriteString(details)
-		body.WriteString("\n")
-	}
-
 	return PullRequestContent{
 		Title: title,
-		Body:  strings.TrimRight(body.String(), "\n") + "\n",
+		Body:  body + "\n",
 	}, nil
-}
-
-func writeBodyField(builder *strings.Builder, label string, value string) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return
-	}
-	builder.WriteString("- ")
-	builder.WriteString(label)
-	builder.WriteString(": ")
-	builder.WriteString(singleLine(value))
-	builder.WriteString("\n")
 }
 
 func singleLine(value string) string {
