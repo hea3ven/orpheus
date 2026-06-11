@@ -121,6 +121,97 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 	is.NotContains(bdLog, "orpheus.pr_url")
 }
 
+func TestWorktreeSyncFlowEndToEnd(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(registry.NewStore(paths).Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	const taskID = "op-m5-sync"
+	bd := withStatefulCompletionBD(t, completionBDTask{
+		RepoPath:           repoPath,
+		TaskID:             taskID,
+		Title:              "M5 sync flow",
+		Description:        "Validate the single-task PR creation path.",
+		AcceptanceCriteria: "Sync pushes the branch, creates one PR, and projects in review.",
+	})
+	withOrpheusCLIHelper(t)
+	withCompletionFlowAgent(t, completionFlowAgentOptions{
+		Command:             "m5-sync-agent",
+		FileName:            "m5-sync-change.txt",
+		Body:                "m5 implementation",
+		Summary:             "Implement M5 sync validation",
+		Description:         "Created a change for PR sync validation.",
+		DetailedDescription: "## M5 sync\n\nCreated a PR sync validation change.",
+	})
+	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"default_agent": "m5-sync",
+		"agents": map[string]any{
+			"m5-sync": map[string]any{
+				"command": "m5-sync-agent",
+				"args":    []string{"--prompt", "{{prompt}}"},
+			},
+		},
+	}))
+
+	runOut, runErr := executeCommand(t, []string{"task", "run", taskID})
+
+	is.Empty(runErr)
+	is.Contains(runOut, "completion agent completed")
+	state := readCompletionTaskState(t, paths, "alpha", taskID)
+	latest, ok := taskstate.LatestRun(state)
+	must.True(ok)
+	must.NotNil(latest.Completion)
+	completionCommit := latest.Completion.Commit
+	must.NotEmpty(completionCommit)
+	is.Equal("orpheus/"+taskID, latest.Branch)
+	is.NotEmpty(latest.Worktree)
+
+	ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{
+		listStdout:   "[]",
+		createStdout: "https://github.test/org/alpha/pull/55\n",
+	})
+
+	syncOut, syncErr := executeCommand(t, []string{"task", "sync", taskID})
+
+	is.Empty(syncErr)
+	is.Contains(syncOut, "Synced "+taskID)
+	is.Contains(syncOut, "pushed branch orpheus/"+taskID+" to origin")
+	is.Contains(syncOut, "created PR https://github.test/org/alpha/pull/55")
+	is.Contains(syncOut, "Task is in review")
+	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
+	pushedCommit := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/orpheus/"+taskID))
+	is.Equal(completionCommit, pushedCommit)
+
+	statusOut, statusErr := executeCommand(t, []string{"status"})
+
+	is.Empty(statusErr)
+	is.Contains(statusOut, "Reviewing (1)")
+	is.Contains(statusOut, taskID)
+	is.Contains(statusOut, "M5 sync flow")
+	is.Contains(statusOut, "https://github.test/org/alpha/pull/55")
+	is.NotContains(statusOut, "needs PR")
+
+	ghLogBeforeRerun := readFileString(t, ghLogPath)
+	rerunOut, rerunErr := executeCommand(t, []string{"task", "sync", taskID})
+
+	is.Empty(rerunErr)
+	is.Contains(rerunOut, "already in review at https://github.test/org/alpha/pull/55")
+	is.Equal(ghLogBeforeRerun, readFileString(t, ghLogPath))
+	bdLog := readFileString(t, bd.LogPath)
+	is.Equal(1, strings.Count(bdLog, "--set-metadata orpheus.pr_url=https://github.test/org/alpha/pull/55"))
+}
+
 func TestMainCompletionFlowEndToEnd(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -292,6 +383,7 @@ func withStatefulCompletionBD(t *testing.T, task completionBDTask) statefulCompl
 	statusPath := filepath.Join(stateDir, "status")
 	branchPath := filepath.Join(stateDir, "branch")
 	worktreePath := filepath.Join(stateDir, "worktree")
+	prURLPath := filepath.Join(stateDir, "pr-url")
 	logPath := filepath.Join(binDir, "bd.log")
 	must.NoError(os.WriteFile(statusPath, []byte("open\n"), 0o644))
 
@@ -310,22 +402,33 @@ REPO_PATH=%s
 STATUS_FILE=%s
 BRANCH_FILE=%s
 WORKTREE_FILE=%s
+PR_URL_FILE=%s
 
 emit_task() {
   status="$(cat "$STATUS_FILE")"
   branch=""
   worktree=""
+  pr_url=""
   if [ -f "$BRANCH_FILE" ]; then
     branch="$(cat "$BRANCH_FILE")"
   fi
   if [ -f "$WORKTREE_FILE" ]; then
     worktree="$(cat "$WORKTREE_FILE")"
   fi
+  if [ -f "$PR_URL_FILE" ]; then
+    pr_url="$(cat "$PR_URL_FILE")"
+  fi
 
   printf '[{"id":"%%s","title":"%%s","description":"%%s","acceptance_criteria":"%%s","status":"%%s","priority":2,"issue_type":"task","metadata":{' \
     "$TASK_ID" "$TITLE" "$DESCRIPTION" "$ACCEPTANCE" "$status"
+  comma=""
   if [ -n "$branch" ] || [ -n "$worktree" ]; then
+    printf '%%s' "$comma"
     printf '"orpheus.branch":"%%s","orpheus.worktree":"%%s"' "$branch" "$worktree"
+    comma=","
+  fi
+  if [ -n "$pr_url" ]; then
+    printf '%%s"orpheus.pr_url":"%%s"' "$comma" "$pr_url"
   fi
   printf '}}]\n'
 }
@@ -353,6 +456,7 @@ if [ "${1-}" = "--json" ] && [ "${2-}" = "--sandbox" ] && [ "${3-}" = "update" ]
         case "$1" in
           orpheus.branch=*) printf '%%s\n' "${1#orpheus.branch=}" > "$BRANCH_FILE" ;;
           orpheus.worktree=*) printf '%%s\n' "${1#orpheus.worktree=}" > "$WORKTREE_FILE" ;;
+          orpheus.pr_url=*) printf '%%s\n' "${1#orpheus.pr_url=}" > "$PR_URL_FILE" ;;
         esac
         ;;
     esac
@@ -391,6 +495,7 @@ exit 65
 		shellQuote(statusPath),
 		shellQuote(branchPath),
 		shellQuote(worktreePath),
+		shellQuote(prURLPath),
 	)
 
 	bdPath := filepath.Join(binDir, "bd")
