@@ -57,10 +57,16 @@ func RenderActiveContext(ctx ActiveContext) string {
 
 func appendAgentDoneContract(builder *strings.Builder) {
 	builder.WriteString("- When implementation and checks are complete, finish with ")
-	builder.WriteString("`orpheus agent done --summary \"<summary>\" --details \"<details>\"`.\n")
+	builder.WriteString("`orpheus agent done --summary \"<summary>\" --description \"<description>\" ")
+	builder.WriteString("--detailed-description \"<markdown-pr-body>\"` ")
+	builder.WriteString("or `orpheus agent done --summary \"<summary>\" --description \"<description>\" ")
+	builder.WriteString("--detailed-description-file <path>`.\n")
 	builder.WriteString("- Use one commit-style summary line, 80 characters or fewer, ")
 	builder.WriteString("formatted as \"<type(fix,feat,test,chore,conf,etc)>: <description>\"; ")
 	builder.WriteString("do not include the task/bead ID; do not mention tests even if included.\n")
+	builder.WriteString("- Use `--description` for a concise, plain one-paragraph commit body.\n")
+	builder.WriteString("- Use exactly one detailed PR body source: inline `--detailed-description` ")
+	builder.WriteString("or `--detailed-description-file`; markdown is allowed.\n")
 	builder.WriteString("- `orpheus agent done` is a one-time completion handoff for this Orpheus run: ")
 	builder.WriteString("run it at most once, and do not run it again after it succeeds ")
 	builder.WriteString("even if this interactive session continues.\n")

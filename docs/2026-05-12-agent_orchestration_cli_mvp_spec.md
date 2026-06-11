@@ -330,7 +330,9 @@ started_at: 2026-05-12T10:15:00Z
 ended_at: 2026-05-12T10:32:00Z
 exit_code: 0
 summary: Add password reset endpoint
-details: Implemented endpoint, token generation, and expiry validation.
+description: Implemented endpoint, token generation, and expiry validation.
+detailed_description: |-
+  Implemented endpoint, token generation, and expiry validation.
 pr_ready: true
 ```
 
@@ -447,7 +449,7 @@ They infer context from environment variables and validate against the current d
 
 ```bash
 orpheus agent context
-orpheus agent done --summary "Short summary" --details "Detailed summary"
+orpheus agent done --summary "Short summary" --description "Concise commit body" --detailed-description "Markdown PR body"
 ```
 
 ### 9.2 Operator-Facing Task Commands
@@ -684,7 +686,7 @@ Notes: ...
 - Do not create a pull request.
 - Do not modify task-tracker state directly.
 - When implementation is complete, run:
-  orpheus agent done --summary "<max 80 chars>" --details "<what changed>"
+  orpheus agent done --summary "<max 80 chars>" --description "<concise commit body>" --detailed-description "<markdown PR body>"
 
 ## Repository
 Branch: task/myadmin-123-add-password-reset
@@ -705,12 +707,14 @@ It should not include broad planning/project context in the MVP.
 Agents signal completion with:
 
 ```bash
-orpheus agent done --summary "Short summary" --details "Detailed summary"
+orpheus agent done --summary "Short summary" --description "Concise commit body" --detailed-description "Markdown PR body"
 ```
 
 `--summary` is required and should be short enough for one-line status and commit messages, approximately 80 characters max.
 
-`--details` is used for run inspection and PR body generation.
+`--description` is required and is used as the commit body.
+
+Exactly one detailed PR-body source is required: inline `--detailed-description` or file-based `--detailed-description-file`.
 
 The MVP does not require `--tests` and does not require local validation reporting.
 
@@ -829,16 +833,8 @@ Presence of `orpheus.pr_url` on a non-closed task means the task is in review.
 
 ### 16.4 PR Body
 
-The PR body should include:
-
-- task id
-- task title
-- task description or acceptance criteria if available
-- agent short summary
-- agent detailed summary
-- note that PR was created by Orpheus
-
-Tests are not required in MVP PR body unless naturally included in details.
+The PR body is exactly the stored `detailed_description` from `orpheus agent done`.
+Orpheus does not add a template, task metadata, heading, or footer.
 
 ---
 
@@ -1119,7 +1115,7 @@ This validates:
 
 ```text
 orpheus agent context
-orpheus agent done --summary ... --details ...
+orpheus agent done --summary ... --description ... --detailed-description ...
 ```
 
 This validates:

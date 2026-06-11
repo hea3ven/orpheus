@@ -23,7 +23,7 @@ Flow:
 orpheus task run <task-id>
 agent runs orpheus agent context
 agent edits file
-agent runs orpheus agent done --summary ... --details ...
+agent runs orpheus agent done --summary ... --description ... --detailed-description ...
 orpheus status
 ```
 
@@ -32,7 +32,7 @@ Validated outcomes:
 - launch prompt is the minimal bootstrap prompt and tells the agent to run `orpheus agent context`;
 - prompt excludes task/repository details that should only be available from `agent context`;
 - `agent context` renders target-aware worktree/team context;
-- `agent done` records summary, details, completed_at, and commit;
+- `agent done` records summary, description, detailed_description, completed_at, and commit;
 - worktree changes are committed and the worktree is clean;
 - latest run attempt succeeds;
 - `status` shows `Needs attention` with detail `needs PR`;
@@ -47,7 +47,7 @@ Flow:
 orpheus task run --main <task-id>
 agent runs orpheus agent context
 agent edits file
-agent runs orpheus agent done --summary ... --details ...
+agent runs orpheus agent done --summary ... --description ... --detailed-description ...
 human review/adjustment adds local changes
 orpheus task done <task-id>
 orpheus status --full
@@ -56,7 +56,7 @@ orpheus status --full
 Validated outcomes:
 
 - `agent context` renders target-aware main/solo context;
-- `agent done` records summary, details, and completed_at without committing;
+- `agent done` records summary, description, detailed_description, and completed_at without committing;
 - repo-root changes remain uncommitted after agent completion;
 - `status` shows `Reviewing` with detail `local review; run task done`;
 - human review is represented by an additional uncommitted local change;

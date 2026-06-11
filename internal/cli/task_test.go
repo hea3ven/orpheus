@@ -1523,7 +1523,7 @@ func TestTaskSyncPushesPRReadyTaskBranch(t *testing.T) {
 	is.Contains(string(ghLog), "ARG_2<<END\nlist\nEND")
 	is.Contains(string(ghLog), "ARG_2<<END\ncreate\nEND")
 	is.Contains(string(ghLog), "ARG_8<<END\nReady for PR\nEND")
-	is.Contains(string(ghLog), "Implemented task branch changes.")
+	is.Contains(string(ghLog), "Detailed PR body.")
 	is.NotContains(string(ghLog), "Created by Orpheus.")
 	is.NotContains(string(ghLog), "Ready for sync")
 	is.NotContains(string(ghLog), "op-sync:")
@@ -1801,7 +1801,7 @@ func TestTaskDoneInfersSingleMainReadyTaskFromRepoRootAndUsesOverrides(t *testin
 		"done",
 		"--summary",
 		"Human reviewed summary",
-		"--details",
+		"--description",
 		"Human adjusted details.",
 	})
 
@@ -1809,6 +1809,24 @@ func TestTaskDoneInfersSingleMainReadyTaskFromRepoRootAndUsesOverrides(t *testin
 	is.Contains(stdout, "Finalized op-infer")
 	message := strings.TrimSpace(runGit(t, repoPath, "log", "-1", "--format=%B"))
 	is.Equal("Human reviewed summary\n\nHuman adjusted details.", message)
+}
+
+func TestTaskDoneRejectsRemovedDetailsOverride(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+
+	stdout, stderr, err := executeCommandWithError(t, []string{
+		"task",
+		"done",
+		"op-main",
+		"--details",
+		"Old details.",
+	})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.Contains(err.Error(), "unknown flag: --details")
 }
 
 func TestTaskDoneWithoutTaskIDRequiresExactRegisteredRepoRoot(t *testing.T) {
@@ -2077,7 +2095,7 @@ func taskSyncExpectedTargets(
 	return targets
 }
 
-func recordMainCompletion(t *testing.T, paths state.Paths, repoID string, taskID string, repoPath string, summary string, details string) {
+func recordMainCompletion(t *testing.T, paths state.Paths, repoID string, taskID string, repoPath string, summary string, description string) {
 	t.Helper()
 	store := taskstate.NewStore(paths)
 	attempt, err := store.StartRun(repoID, taskID, taskstate.StartRunOptions{
@@ -2089,8 +2107,9 @@ func recordMainCompletion(t *testing.T, paths state.Paths, repoID string, taskID
 		t.Fatalf("start main run: %v", err)
 	}
 	if _, err := store.CompleteRun(repoID, taskID, attempt.Attempt, taskstate.CompleteRunOptions{
-		Summary: summary,
-		Details: details,
+		Summary:             summary,
+		Description:         description,
+		DetailedDescription: "Detailed PR body.",
 	}); err != nil {
 		t.Fatalf("complete main run: %v", err)
 	}
@@ -2099,7 +2118,7 @@ func recordMainCompletion(t *testing.T, paths state.Paths, repoID string, taskID
 	}
 }
 
-func recordRunningMainCompletion(t *testing.T, paths state.Paths, repoID string, taskID string, repoPath string, summary string, details string) {
+func recordRunningMainCompletion(t *testing.T, paths state.Paths, repoID string, taskID string, repoPath string, summary string, description string) {
 	t.Helper()
 	store := taskstate.NewStore(paths)
 	attempt, err := store.StartRun(repoID, taskID, taskstate.StartRunOptions{
@@ -2111,8 +2130,9 @@ func recordRunningMainCompletion(t *testing.T, paths state.Paths, repoID string,
 		t.Fatalf("start running main run: %v", err)
 	}
 	if _, err := store.CompleteRun(repoID, taskID, attempt.Attempt, taskstate.CompleteRunOptions{
-		Summary: summary,
-		Details: details,
+		Summary:             summary,
+		Description:         description,
+		DetailedDescription: "Detailed PR body.",
 	}); err != nil {
 		t.Fatalf("complete running main run: %v", err)
 	}
@@ -2138,9 +2158,10 @@ func recordWorktreeCompletion(
 		t.Fatalf("start worktree run: %v", err)
 	}
 	if _, err := store.CompleteRun(repoID, taskID, attempt.Attempt, taskstate.CompleteRunOptions{
-		Summary: "Ready for PR",
-		Details: "Implemented task branch changes.",
-		Commit:  commit,
+		Summary:             "Ready for PR",
+		Description:         "Implemented task branch changes.",
+		DetailedDescription: "Detailed PR body.",
+		Commit:              commit,
 	}); err != nil {
 		t.Fatalf("complete worktree run: %v", err)
 	}

@@ -90,7 +90,7 @@ type FinalizeOptions struct {
 	TaskID                string
 	CWD                   string
 	Summary               string
-	Details               string
+	Description           string
 	AllowRunningCompleted bool
 }
 
@@ -222,11 +222,11 @@ func (s FinalizationService) finalizeLocked(
 		)
 	}
 
-	summary, details, err := finalizationMessageParts(finalizeCtx.latest.Completion, opts)
+	summary, description, err := finalizationMessageParts(finalizeCtx.latest.Completion, opts)
 	if err != nil {
 		return FinalizationResult{}, err
 	}
-	message := summary + "\n\n" + details
+	message := summary + "\n\n" + description
 
 	hasChanges, err := gitState.HasWorkingTreeChanges(ctx, repo.Path)
 	if err != nil {
@@ -616,17 +616,17 @@ func finalizationMessageParts(completion *taskstate.Completion, opts FinalizeOpt
 	if summary == "" {
 		summary = strings.TrimSpace(completion.Summary)
 	}
-	details := strings.TrimSpace(opts.Details)
-	if details == "" {
-		details = strings.TrimSpace(completion.Details)
+	description := strings.TrimSpace(opts.Description)
+	if description == "" {
+		description = strings.TrimSpace(completion.Description)
 	}
 	if summary == "" {
 		return "", "", errors.New("finalization summary is required")
 	}
-	if details == "" {
-		return "", "", errors.New("finalization details are required")
+	if description == "" {
+		return "", "", errors.New("finalization description is required")
 	}
-	return summary, details, nil
+	return summary, description, nil
 }
 
 func currentDirectory(cwd string) (string, error) {

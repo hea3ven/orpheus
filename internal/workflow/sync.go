@@ -394,7 +394,7 @@ type PullRequestContent struct {
 	Body  string
 }
 
-// BuildSyncPullRequestContent generates PR text from the completion handoff.
+// BuildSyncPullRequestContent returns PR text from the completion handoff.
 func BuildSyncPullRequestContent(taskItem task.Task, latest taskstate.RunAttempt) (PullRequestContent, error) {
 	if strings.TrimSpace(taskItem.ID) == "" {
 		return PullRequestContent{}, errors.New("task id is required")
@@ -406,13 +406,13 @@ func BuildSyncPullRequestContent(taskItem task.Task, latest taskstate.RunAttempt
 	if title == "" {
 		return PullRequestContent{}, errors.New("completion summary is required")
 	}
-	body := strings.TrimSpace(latest.Completion.Details)
-	if body == "" {
-		return PullRequestContent{}, errors.New("completion details are required")
+	body := latest.Completion.DetailedDescription
+	if strings.TrimSpace(body) == "" {
+		return PullRequestContent{}, errors.New("completion detailed description is required")
 	}
 	return PullRequestContent{
 		Title: title,
-		Body:  body + "\n",
+		Body:  body,
 	}, nil
 }
 

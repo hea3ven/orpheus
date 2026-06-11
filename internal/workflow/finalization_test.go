@@ -123,11 +123,15 @@ func TestFinalizeRequiresConfirmationForRunningCompletion(t *testing.T) {
 		finalizationMainTask("op-1", "/tmp/repo"),
 	}, map[string]taskstate.TaskState{
 		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
-			Attempt:    1,
-			Status:     taskstate.RunStatusRunning,
-			Branch:     "main",
-			Worktree:   "/tmp/repo",
-			Completion: &taskstate.Completion{Summary: "Done", Details: "Implemented."},
+			Attempt:  1,
+			Status:   taskstate.RunStatusRunning,
+			Branch:   "main",
+			Worktree: "/tmp/repo",
+			Completion: &taskstate.Completion{
+				Summary:             "Done",
+				Description:         "Implemented.",
+				DetailedDescription: "Detailed PR body.",
+			},
 		}),
 	})
 
@@ -153,11 +157,15 @@ func TestFinalizeAllowsConfirmedRunningCompletionWithoutMutatingRunStatus(t *tes
 		finalizationMainTask("op-1", "/tmp/repo"),
 	}, map[string]taskstate.TaskState{
 		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
-			Attempt:    1,
-			Status:     taskstate.RunStatusRunning,
-			Branch:     "main",
-			Worktree:   "/tmp/repo",
-			Completion: &taskstate.Completion{Summary: "Done", Details: "Implemented."},
+			Attempt:  1,
+			Status:   taskstate.RunStatusRunning,
+			Branch:   "main",
+			Worktree: "/tmp/repo",
+			Completion: &taskstate.Completion{
+				Summary:             "Done",
+				Description:         "Implemented.",
+				DetailedDescription: "Detailed PR body.",
+			},
 		}),
 	})
 
@@ -186,11 +194,15 @@ func TestFinalizeDoesNotRequestRunningConfirmationWhenOtherChecksFail(t *testing
 		finalizationMainTask("op-1", "/tmp/repo"),
 	}, map[string]taskstate.TaskState{
 		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
-			Attempt:    1,
-			Status:     taskstate.RunStatusRunning,
-			Branch:     "main",
-			Worktree:   "/tmp/repo",
-			Completion: &taskstate.Completion{Summary: "Done", Details: "Implemented."},
+			Attempt:  1,
+			Status:   taskstate.RunStatusRunning,
+			Branch:   "main",
+			Worktree: "/tmp/repo",
+			Completion: &taskstate.Completion{
+				Summary:             "Done",
+				Description:         "Implemented.",
+				DetailedDescription: "Detailed PR body.",
+			},
 		}),
 	})
 	git.hasChanges = false
@@ -210,11 +222,15 @@ func TestFinalizeInfersSingleRunningCompletionCandidate(t *testing.T) {
 		finalizationMainTask("op-1", "/tmp/repo"),
 	}, map[string]taskstate.TaskState{
 		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
-			Attempt:    2,
-			Status:     taskstate.RunStatusRunning,
-			Branch:     "main",
-			Worktree:   "/tmp/repo",
-			Completion: &taskstate.Completion{Summary: "Done", Details: "Implemented."},
+			Attempt:  2,
+			Status:   taskstate.RunStatusRunning,
+			Branch:   "main",
+			Worktree: "/tmp/repo",
+			Completion: &taskstate.Completion{
+				Summary:             "Done",
+				Description:         "Implemented.",
+				DetailedDescription: "Detailed PR body.",
+			},
 		}),
 	})
 
@@ -250,11 +266,12 @@ func TestFinalizeDoesNotOfferRunningEscapeHatchForInvalidTargets(t *testing.T) {
 		},
 	}, map[string]taskstate.TaskState{
 		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
-			Attempt:    1,
-			Status:     taskstate.RunStatusRunning,
-			Branch:     targets.WorktreeTeam.Branch,
-			Worktree:   targets.WorktreeTeam.Worktree,
-			Completion: &taskstate.Completion{Summary: "Done", Details: "Implemented.", Commit: "abc123"},
+			Attempt:  1,
+			Status:   taskstate.RunStatusRunning,
+			Branch:   targets.WorktreeTeam.Branch,
+			Worktree: targets.WorktreeTeam.Worktree,
+			Completion: &taskstate.Completion{Summary: "Done", Description: "Implemented.",
+				DetailedDescription: "Detailed PR body.", Commit: "abc123"},
 		}),
 	})
 

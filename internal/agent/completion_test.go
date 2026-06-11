@@ -71,8 +71,9 @@ func TestCompletionServiceCompletesMainRun(t *testing.T) {
 	}
 
 	completed, err := service.Complete(context.Background(), agent.CompleteOptions{
-		Summary: "Implemented main completion",
-		Details: "Recorded local review completion data.",
+		Summary:             "Implemented main completion",
+		Description:         "Recorded local review completion data.",
+		DetailedDescription: "Detailed PR body.",
 	})
 
 	must.NoError(err)
@@ -81,7 +82,8 @@ func TestCompletionServiceCompletesMainRun(t *testing.T) {
 	is.Equal(taskstate.RunStatusRunning, completed.Run.Status)
 	must.NotNil(completed.Run.Completion)
 	is.Equal("Implemented main completion", completed.Run.Completion.Summary)
-	is.Equal("Recorded local review completion data.", completed.Run.Completion.Details)
+	is.Equal("Recorded local review completion data.", completed.Run.Completion.Description)
+	is.Equal("Detailed PR body.", completed.Run.Completion.DetailedDescription)
 
 	latest, ok, err := fixture.store.LatestRun("alpha", "op-main")
 	must.NoError(err)
@@ -110,8 +112,9 @@ func TestCompletionServiceCompletesWorktreeRunWithCommit(t *testing.T) {
 	}
 
 	completed, err := service.Complete(context.Background(), agent.CompleteOptions{
-		Summary: "Done",
-		Details: "Details",
+		Summary:             "Done",
+		Description:         "Details",
+		DetailedDescription: "Detailed PR body.",
 	})
 
 	must.NoError(err)
@@ -148,8 +151,9 @@ func TestCompletionServiceRecordsWorktreeCommitFailureWithoutFailing(t *testing.
 	}
 
 	completed, err := service.Complete(context.Background(), agent.CompleteOptions{
-		Summary: "Done",
-		Details: "Details",
+		Summary:             "Done",
+		Description:         "Details",
+		DetailedDescription: "Detailed PR body.",
 	})
 
 	must.NoError(err)
@@ -171,8 +175,9 @@ func TestCompletionServiceIdempotentWorktreeCompletionDoesNotCommitAgain(t *test
 	})
 	must.NoError(err)
 	_, err = fixture.store.CompleteRun("alpha", "op-1", attempt.Attempt, taskstate.CompleteRunOptions{
-		Summary: "Done",
-		Details: "Details",
+		Summary:             "Done",
+		Description:         "Details",
+		DetailedDescription: "Detailed PR body.",
 	})
 	must.NoError(err)
 
@@ -185,8 +190,9 @@ func TestCompletionServiceIdempotentWorktreeCompletionDoesNotCommitAgain(t *test
 	}
 
 	completed, err := service.Complete(context.Background(), agent.CompleteOptions{
-		Summary: "Done",
-		Details: "Details",
+		Summary:             "Done",
+		Description:         "Details",
+		DetailedDescription: "Detailed PR body.",
 	})
 
 	must.NoError(err)
@@ -209,9 +215,10 @@ func TestCompletionServiceRepeatedWorktreeCompletionWithDifferentPayloadIsNoop(t
 	})
 	must.NoError(err)
 	first, err := fixture.store.CompleteRun("alpha", "op-1", attempt.Attempt, taskstate.CompleteRunOptions{
-		Summary: "First summary",
-		Details: "First details.",
-		Commit:  "abc123",
+		Summary:             "First summary",
+		Description:         "First details.",
+		DetailedDescription: "Detailed PR body.",
+		Commit:              "abc123",
 	})
 	must.NoError(err)
 
@@ -228,8 +235,9 @@ func TestCompletionServiceRepeatedWorktreeCompletionWithDifferentPayloadIsNoop(t
 	}
 
 	completed, err := service.Complete(context.Background(), agent.CompleteOptions{
-		Summary: "Second summary",
-		Details: "Second details.",
+		Summary:             "Second summary",
+		Description:         "Second details.",
+		DetailedDescription: "Detailed PR body.",
 	})
 
 	must.NoError(err)
@@ -238,19 +246,22 @@ func TestCompletionServiceRepeatedWorktreeCompletionWithDifferentPayloadIsNoop(t
 	is.Equal(0, gitState.committed)
 	must.NotNil(completed.Run.Completion)
 	is.Equal(first.Completion.Summary, completed.Run.Completion.Summary)
-	is.Equal(first.Completion.Details, completed.Run.Completion.Details)
+	is.Equal(first.Completion.Description, completed.Run.Completion.Description)
+	is.Equal(first.Completion.DetailedDescription, completed.Run.Completion.DetailedDescription)
 	is.Equal(first.Completion.Commit, completed.Run.Completion.Commit)
 	must.NotNil(completed.RepeatedDiagnostic)
 	is.Equal(taskstate.EventCompletionRepeated, completed.RepeatedDiagnostic.Type)
 	is.Equal("Second summary", completed.RepeatedDiagnostic.RequestedSummary)
-	is.Equal("Second details.", completed.RepeatedDiagnostic.RequestedDetails)
+	is.Equal("Second details.", completed.RepeatedDiagnostic.RequestedDescription)
+	is.Equal("Detailed PR body.", completed.RepeatedDiagnostic.RequestedDetailedDescription)
 
 	latest, ok, loadErr := fixture.store.LatestRun("alpha", "op-1")
 	must.NoError(loadErr)
 	must.True(ok)
 	must.NotNil(latest.Completion)
 	is.Equal("First summary", latest.Completion.Summary)
-	is.Equal("First details.", latest.Completion.Details)
+	is.Equal("First details.", latest.Completion.Description)
+	is.Equal("Detailed PR body.", latest.Completion.DetailedDescription)
 	is.Equal("abc123", latest.Completion.Commit)
 	events, eventsErr := fixture.store.Events("alpha", "op-1")
 	must.NoError(eventsErr)
@@ -276,8 +287,9 @@ func TestCompletionServiceRequiresChangesBeforeWriting(t *testing.T) {
 	}
 
 	_, err = service.Complete(context.Background(), agent.CompleteOptions{
-		Summary: "Done",
-		Details: "Details",
+		Summary:             "Done",
+		Description:         "Details",
+		DetailedDescription: "Detailed PR body.",
 	})
 
 	must.Error(err)
@@ -308,8 +320,9 @@ func TestCompletionServiceRejectsCurrentBranchMismatch(t *testing.T) {
 	}
 
 	_, err = service.Complete(context.Background(), agent.CompleteOptions{
-		Summary: "Done",
-		Details: "Details",
+		Summary:             "Done",
+		Description:         "Details",
+		DetailedDescription: "Detailed PR body.",
 	})
 
 	must.Error(err)
@@ -336,8 +349,9 @@ func TestCompletionServiceWrapsGitInspectionErrors(t *testing.T) {
 	}
 
 	_, err = service.Complete(context.Background(), agent.CompleteOptions{
-		Summary: "Done",
-		Details: "Details",
+		Summary:             "Done",
+		Description:         "Details",
+		DetailedDescription: "Detailed PR body.",
 	})
 
 	must.Error(err)

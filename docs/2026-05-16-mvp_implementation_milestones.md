@@ -258,7 +258,7 @@ Commands:
 
 ```bash
 orpheus agent context
-orpheus agent done --summary "Short summary" --details "Detailed summary"
+orpheus agent done --summary "Short summary" --description "Concise commit body" --detailed-description "Markdown PR body"
 ```
 
 Enhancements:
@@ -285,7 +285,8 @@ Implementation scope:
 - Run completion update:
   - status done
   - summary
-  - details
+  - description
+  - detailed_description
   - `pr_ready: true`
 - Status group:
   - `Implementation complete / needs PR`
@@ -304,7 +305,7 @@ agents:
     command: >
       sh -c 'orpheus agent context;
              echo hello >> ORPHEUS_TEST.txt;
-             orpheus agent done --summary "Add test file" --details "Created ORPHEUS_TEST.txt"'
+             orpheus agent done --summary "Add test file" --description "Created ORPHEUS_TEST.txt" --detailed-description "Created ORPHEUS_TEST.txt"'
 ```
 
 Then:

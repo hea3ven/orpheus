@@ -101,9 +101,10 @@ func TestProjectWithRunStatesShowsSuccessfulMainCompletionInReview(t *testing.T)
 		Branch:   "main",
 		Worktree: "/tmp/alpha",
 		Completion: &taskstate.Completion{
-			Summary:     "Done",
-			Details:     "Ready for review.",
-			CompletedAt: time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+			Summary:             "Done",
+			Description:         "Ready for review.",
+			DetailedDescription: "Detailed PR body.",
+			CompletedAt:         time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
 		},
 	}
 	localStates := status.LocalTaskStateIndex{
@@ -143,10 +144,11 @@ func TestProjectWithRunStatesShowsSuccessfulWorktreeCompletionWithCommitNeedsPR(
 		Branch:   "orpheus/a-worktree",
 		Worktree: "/tmp/orpheus/worktrees/a-worktree",
 		Completion: &taskstate.Completion{
-			Summary:     "Done",
-			Details:     "Ready for PR.",
-			CompletedAt: time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
-			Commit:      "abc123",
+			Summary:             "Done",
+			Description:         "Ready for PR.",
+			DetailedDescription: "Detailed PR body.",
+			CompletedAt:         time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+			Commit:              "abc123",
 		},
 	}
 	localStates := status.LocalTaskStateIndex{
@@ -185,10 +187,11 @@ func TestProjectWithRunStatesShowsWorktreeCompletionWithoutCommitNeedsManualCorr
 		Branch:   "orpheus/a-worktree",
 		Worktree: "/tmp/orpheus/worktrees/a-worktree",
 		Completion: &taskstate.Completion{
-			Summary:     "Done",
-			Details:     "Commit failed.",
-			CompletedAt: time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
-			CommitError: "commit failed",
+			Summary:             "Done",
+			Description:         "Commit failed.",
+			DetailedDescription: "Detailed PR body.",
+			CompletedAt:         time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+			CommitError:         "commit failed",
 		},
 	}
 	localStates := status.LocalTaskStateIndex{
@@ -261,9 +264,10 @@ func TestProjectWithLocalTaskStatesDoesNotShowClosedFinalizationAsLocalReview(t 
 		Branch:   "main",
 		Worktree: "/tmp/alpha",
 		Completion: &taskstate.Completion{
-			Summary:     "Done",
-			Details:     "Ready for local review.",
-			CompletedAt: time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+			Summary:             "Done",
+			Description:         "Ready for local review.",
+			DetailedDescription: "Detailed PR body.",
+			CompletedAt:         time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
 		},
 	}
 	localStates := status.LocalTaskStateIndex{
@@ -471,9 +475,10 @@ func TestReadyRowsWithRunStatesExcludesCompletionAndAttentionStates(t *testing.T
 			Branch:   "main",
 			Worktree: "/tmp/alpha",
 			Completion: &taskstate.Completion{
-				Summary:     "Done",
-				Details:     "Ready for local review.",
-				CompletedAt: time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+				Summary:             "Done",
+				Description:         "Ready for local review.",
+				DetailedDescription: "Detailed PR body.",
+				CompletedAt:         time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
 			},
 		},
 		status.RunStateKey("alpha", "a-worktree"): {
@@ -482,10 +487,11 @@ func TestReadyRowsWithRunStatesExcludesCompletionAndAttentionStates(t *testing.T
 			Branch:   "orpheus/a-worktree",
 			Worktree: "/tmp/orpheus/worktrees/a-worktree",
 			Completion: &taskstate.Completion{
-				Summary:     "Done",
-				Details:     "Ready for PR.",
-				CompletedAt: time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
-				Commit:      "abc123",
+				Summary:             "Done",
+				Description:         "Ready for PR.",
+				DetailedDescription: "Detailed PR body.",
+				CompletedAt:         time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+				Commit:              "abc123",
 			},
 		},
 		status.RunStateKey("alpha", "a-failed"):       {Attempt: 1, Status: taskstate.RunStatusFailed},

@@ -44,11 +44,12 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 	})
 	withOrpheusCLIHelper(t)
 	agentLogPath := withCompletionFlowAgent(t, completionFlowAgentOptions{
-		Command:  "worktree-completion-agent",
-		FileName: "worktree-change.txt",
-		Body:     "worktree implementation",
-		Summary:  "Implement worktree completion flow",
-		Details:  "Created a worktree validation change.",
+		Command:             "worktree-completion-agent",
+		FileName:            "worktree-change.txt",
+		Body:                "worktree implementation",
+		Summary:             "Implement worktree completion flow",
+		Description:         "Created a worktree validation change.",
+		DetailedDescription: "## Worktree completion\n\nCreated a worktree validation change.",
 	})
 	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
 		"default_agent": "worktree-completion",
@@ -96,7 +97,8 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 	must.NotNil(latest.FinishedAt)
 	must.NotNil(latest.Completion)
 	is.Equal("Implement worktree completion flow", latest.Completion.Summary)
-	is.Equal("Created a worktree validation change.", latest.Completion.Details)
+	is.Equal("Created a worktree validation change.", latest.Completion.Description)
+	is.Equal("## Worktree completion\n\nCreated a worktree validation change.", latest.Completion.DetailedDescription)
 	is.False(latest.Completion.CompletedAt.IsZero())
 	is.NotEmpty(latest.Completion.Commit)
 	is.Equal(strings.TrimSpace(runGit(t, worktreePath, "rev-parse", "HEAD")), latest.Completion.Commit)
@@ -145,11 +147,12 @@ func TestMainCompletionFlowEndToEnd(t *testing.T) {
 	})
 	withOrpheusCLIHelper(t)
 	agentLogPath := withCompletionFlowAgent(t, completionFlowAgentOptions{
-		Command:  "main-completion-agent",
-		FileName: "agent-main-change.txt",
-		Body:     "main implementation",
-		Summary:  "Implement main completion flow",
-		Details:  "Created a main-mode validation change.",
+		Command:             "main-completion-agent",
+		FileName:            "agent-main-change.txt",
+		Body:                "main implementation",
+		Summary:             "Implement main completion flow",
+		Description:         "Created a main-mode validation change.",
+		DetailedDescription: "## Main completion\n\nCreated a main-mode validation change.",
 	})
 	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
 		"default_agent": "main-completion",
@@ -194,7 +197,8 @@ func TestMainCompletionFlowEndToEnd(t *testing.T) {
 	must.NotNil(latest.FinishedAt)
 	must.NotNil(latest.Completion)
 	is.Equal("Implement main completion flow", latest.Completion.Summary)
-	is.Equal("Created a main-mode validation change.", latest.Completion.Details)
+	is.Equal("Created a main-mode validation change.", latest.Completion.Description)
+	is.Equal("## Main completion\n\nCreated a main-mode validation change.", latest.Completion.DetailedDescription)
 	is.False(latest.Completion.CompletedAt.IsZero())
 	is.Empty(latest.Completion.Commit)
 	is.Contains(runGit(t, repoPath, "status", "--porcelain=v1"), "agent-main-change.txt")
@@ -397,11 +401,12 @@ exit 65
 }
 
 type completionFlowAgentOptions struct {
-	Command  string
-	FileName string
-	Body     string
-	Summary  string
-	Details  string
+	Command             string
+	FileName            string
+	Body                string
+	Summary             string
+	Description         string
+	DetailedDescription string
 }
 
 func withCompletionFlowAgent(t *testing.T, opts completionFlowAgentOptions) string {
@@ -435,7 +440,7 @@ printf 'AGENT_CONTEXT<<END\n%%s\nEND\n' "$context_output" >> "$FAKE_COMPLETION_A
 
 printf '%%s\n' %s > "$PWD/%s"
 
-done_output="$(orpheus agent done --summary %s --details %s 2>&1)" || {
+done_output="$(orpheus agent done --summary %s --description %s --detailed-description %s 2>&1)" || {
   status=$?
   printf 'AGENT_DONE_ERROR<<END\n%%s\nEND\n' "$done_output" >> "$FAKE_COMPLETION_AGENT_LOG"
   exit "$status"
@@ -446,7 +451,8 @@ printf 'completion agent completed\n'
 		shellQuote(opts.Body),
 		opts.FileName,
 		shellQuote(opts.Summary),
-		shellQuote(opts.Details),
+		shellQuote(opts.Description),
+		shellQuote(opts.DetailedDescription),
 	)
 
 	agentPath := filepath.Join(binDir, opts.Command)
