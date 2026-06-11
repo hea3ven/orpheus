@@ -15,8 +15,9 @@ const completionLockOperation = "agent completion"
 
 // CompleteOptions describes the agent-authored completion payload.
 type CompleteOptions struct {
-	Summary string
-	Details string
+	Summary             string
+	Description         string
+	DetailedDescription string
 }
 
 // CompleteResult reports the validated context and persisted run completion.
@@ -111,9 +112,13 @@ func (s CompletionService) completeLocked(
 	if summary == "" {
 		return CompleteResult{}, errors.New("completion summary is required")
 	}
-	details := strings.TrimSpace(opts.Details)
-	if details == "" {
-		return CompleteResult{}, errors.New("completion details are required")
+	description := strings.TrimSpace(opts.Description)
+	if description == "" {
+		return CompleteResult{}, errors.New("completion description is required")
+	}
+	detailedDescription := opts.DetailedDescription
+	if strings.TrimSpace(detailedDescription) == "" {
+		return CompleteResult{}, errors.New("completion detailed description is required")
 	}
 
 	activeContext, err := s.Resolver.Resolve(ctx)
@@ -121,19 +126,20 @@ func (s CompletionService) completeLocked(
 		return CompleteResult{}, fmt.Errorf("resolve active context: %w", err)
 	}
 	if activeContext.Target.Kind != ExecutionTargetMain {
-		return s.completeWorktree(ctx, activeContext, summary, details, gitState)
+		return s.completeWorktree(ctx, activeContext, summary, description, detailedDescription, gitState)
 	}
-	return s.completeMain(ctx, activeContext, summary, details, gitState)
+	return s.completeMain(ctx, activeContext, summary, description, detailedDescription, gitState)
 }
 
 func (s CompletionService) completeMain(
 	ctx context.Context,
 	activeContext ActiveContext,
 	summary string,
-	details string,
+	description string,
+	detailedDescription string,
 	gitState GitStateReader,
 ) (CompleteResult, error) {
-	if existing, ok, err := s.existingCompletionResult(activeContext, summary, details); ok || err != nil {
+	if existing, ok, err := s.existingCompletionResult(activeContext, summary, description, detailedDescription); ok || err != nil {
 		return existing, err
 	}
 
@@ -162,8 +168,9 @@ func (s CompletionService) completeMain(
 		activeContext.Task.ID,
 		activeContext.Run.Attempt,
 		taskstate.CompleteRunOptions{
-			Summary: summary,
-			Details: details,
+			Summary:             summary,
+			Description:         description,
+			DetailedDescription: detailedDescription,
 		},
 	)
 	if err != nil {
@@ -176,10 +183,11 @@ func (s CompletionService) completeWorktree(
 	ctx context.Context,
 	activeContext ActiveContext,
 	summary string,
-	details string,
+	description string,
+	detailedDescription string,
 	gitState GitStateReader,
 ) (CompleteResult, error) {
-	if existing, ok, err := s.existingCompletionResult(activeContext, summary, details); ok || err != nil {
+	if existing, ok, err := s.existingCompletionResult(activeContext, summary, description, detailedDescription); ok || err != nil {
 		return existing, err
 	}
 
@@ -208,8 +216,9 @@ func (s CompletionService) completeWorktree(
 		activeContext.Task.ID,
 		activeContext.Run.Attempt,
 		taskstate.CompleteRunOptions{
-			Summary: summary,
-			Details: details,
+			Summary:             summary,
+			Description:         description,
+			DetailedDescription: detailedDescription,
 		},
 	)
 	if err != nil {
@@ -217,13 +226,13 @@ func (s CompletionService) completeWorktree(
 	}
 
 	if err := gitState.StageAll(ctx, activeContext.Target.Path); err != nil {
-		run = s.recordCommitError(activeContext, summary, details, run, err)
+		run = s.recordCommitError(activeContext, summary, description, detailedDescription, run, err)
 		return CompleteResult{Context: activeContext, Run: run, CommitError: err}, nil
 	}
-	message := summary + "\n\n" + details
+	message := summary + "\n\n" + description
 	commit, err := gitState.Commit(ctx, activeContext.Target.Path, message)
 	if err != nil {
-		run = s.recordCommitError(activeContext, summary, details, run, err)
+		run = s.recordCommitError(activeContext, summary, description, detailedDescription, run, err)
 		return CompleteResult{Context: activeContext, Run: run, CommitError: err}, nil
 	}
 
@@ -232,9 +241,10 @@ func (s CompletionService) completeWorktree(
 		activeContext.Task.ID,
 		activeContext.Run.Attempt,
 		taskstate.CompleteRunOptions{
-			Summary: summary,
-			Details: details,
-			Commit:  commit,
+			Summary:             summary,
+			Description:         description,
+			DetailedDescription: detailedDescription,
+			Commit:              commit,
 		},
 	)
 	if err != nil {
@@ -246,7 +256,8 @@ func (s CompletionService) completeWorktree(
 func (s CompletionService) recordCommitError(
 	activeContext ActiveContext,
 	summary string,
-	details string,
+	description string,
+	detailedDescription string,
 	run taskstate.RunAttempt,
 	commitErr error,
 ) taskstate.RunAttempt {
@@ -255,9 +266,10 @@ func (s CompletionService) recordCommitError(
 		activeContext.Task.ID,
 		activeContext.Run.Attempt,
 		taskstate.CompleteRunOptions{
-			Summary:     summary,
-			Details:     details,
-			CommitError: commitErr.Error(),
+			Summary:             summary,
+			Description:         description,
+			DetailedDescription: detailedDescription,
+			CommitError:         commitErr.Error(),
 		},
 	)
 	if updateErr == nil {
@@ -269,7 +281,8 @@ func (s CompletionService) recordCommitError(
 func (s CompletionService) existingCompletionResult(
 	activeContext ActiveContext,
 	summary string,
-	details string,
+	description string,
+	detailedDescription string,
 ) (CompleteResult, bool, error) {
 	if activeContext.Run.Completion == nil {
 		return CompleteResult{}, false, nil
@@ -280,8 +293,9 @@ func (s CompletionService) existingCompletionResult(
 		activeContext.Task.ID,
 		activeContext.Run.Attempt,
 		taskstate.RepeatedCompletionOptions{
-			Summary: summary,
-			Details: details,
+			Summary:             summary,
+			Description:         description,
+			DetailedDescription: detailedDescription,
 		},
 	)
 	if err != nil {

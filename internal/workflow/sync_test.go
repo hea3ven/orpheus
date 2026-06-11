@@ -110,9 +110,10 @@ func TestSyncServiceCreatesPRForEligibleWorktreeCompletion(t *testing.T) {
 		Worktree:  worktreePath,
 		StartedAt: time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC),
 		Completion: &taskstate.Completion{
-			Summary: "Done",
-			Details: "Implemented.",
-			Commit:  "abc123",
+			Summary:             "Done",
+			Description:         "Implemented.",
+			DetailedDescription: "Detailed PR body.",
+			Commit:              "abc123",
 		},
 	}), paths, source)
 
@@ -140,8 +141,8 @@ func TestSyncServiceCreatesPRForEligibleWorktreeCompletion(t *testing.T) {
 	if create.RepositoryPath != repoPath || create.HeadBranch != "orpheus/op-1" || create.BaseBranch != "main" {
 		t.Fatalf("create request = %#v, want repo/head/base", create)
 	}
-	if create.Title != "Done" || create.Body != "Implemented.\n" {
-		t.Fatalf("created content title/body = %q/%q, want completion summary/details", create.Title, create.Body)
+	if create.Title != "Done" || create.Body != "Detailed PR body." {
+		t.Fatalf("created content title/body = %q/%q, want completion summary/detailed description", create.Title, create.Body)
 	}
 	if len(backend.setPRURLs) != 1 || backend.setPRURLs[0].taskID != "op-1" ||
 		backend.setPRURLs[0].prURL != "https://github.test/org/repo/pull/42" {
@@ -163,9 +164,10 @@ func TestSyncServiceRecoversExistingPRBeforeCreate(t *testing.T) {
 		Branch:   "orpheus/op-1",
 		Worktree: worktreePath,
 		Completion: &taskstate.Completion{
-			Summary: "Done",
-			Details: "Implemented.",
-			Commit:  "abc123",
+			Summary:             "Done",
+			Description:         "Implemented.",
+			DetailedDescription: "Detailed PR body.",
+			Commit:              "abc123",
 		},
 	}), paths, source)
 	provider.found = pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/7"}
@@ -239,9 +241,10 @@ func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 		Worktree:  worktreePath,
 		StartedAt: time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC),
 		Completion: &taskstate.Completion{
-			Summary: "Done",
-			Details: "Implemented.",
-			Commit:  "abc123",
+			Summary:             "Done",
+			Description:         "Implemented.",
+			DetailedDescription: "Detailed PR body.",
+			Commit:              "abc123",
 		},
 	}
 	baseTask := task.Task{
@@ -284,11 +287,15 @@ func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 			name:     "missing commit",
 			taskItem: baseTask,
 			state: syncTaskState(taskstate.RunAttempt{
-				Attempt:    2,
-				Status:     taskstate.RunStatusSucceeded,
-				Branch:     "orpheus/op-1",
-				Worktree:   worktreePath,
-				Completion: &taskstate.Completion{Summary: "Done", Details: "Done."},
+				Attempt:  2,
+				Status:   taskstate.RunStatusSucceeded,
+				Branch:   "orpheus/op-1",
+				Worktree: worktreePath,
+				Completion: &taskstate.Completion{
+					Summary:             "Done",
+					Description:         "Done.",
+					DetailedDescription: "Detailed PR body.",
+				},
 			}),
 			wantReason: "commit is missing",
 		},
@@ -296,11 +303,12 @@ func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 			name:     "commit failed",
 			taskItem: baseTask,
 			state: syncTaskState(taskstate.RunAttempt{
-				Attempt:    2,
-				Status:     taskstate.RunStatusSucceeded,
-				Branch:     "orpheus/op-1",
-				Worktree:   worktreePath,
-				Completion: &taskstate.Completion{Summary: "Done", Details: "Done.", CommitError: "dirty worktree"},
+				Attempt:  2,
+				Status:   taskstate.RunStatusSucceeded,
+				Branch:   "orpheus/op-1",
+				Worktree: worktreePath,
+				Completion: &taskstate.Completion{Summary: "Done", Description: "Done.",
+					DetailedDescription: "Detailed PR body.", CommitError: "dirty worktree"},
 			}),
 			wantReason: "completion commit failed",
 		},
@@ -308,11 +316,15 @@ func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 			name:     "main solo",
 			taskItem: task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: targets.MainSolo.Branch, task.MetadataWorktree: targets.MainSolo.Worktree}},
 			state: syncTaskState(taskstate.RunAttempt{
-				Attempt:    2,
-				Status:     taskstate.RunStatusSucceeded,
-				Branch:     targets.MainSolo.Branch,
-				Worktree:   targets.MainSolo.Worktree,
-				Completion: &taskstate.Completion{Summary: "Done", Details: "Done."},
+				Attempt:  2,
+				Status:   taskstate.RunStatusSucceeded,
+				Branch:   targets.MainSolo.Branch,
+				Worktree: targets.MainSolo.Worktree,
+				Completion: &taskstate.Completion{
+					Summary:             "Done",
+					Description:         "Done.",
+					DetailedDescription: "Detailed PR body.",
+				},
 			}),
 			wantReason: "main/solo",
 		},
@@ -325,9 +337,10 @@ func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 				Branch:   "orpheus/op-1",
 				Worktree: repoPath,
 				Completion: &taskstate.Completion{
-					Summary: "Done",
-					Details: "Done.",
-					Commit:  "abc123",
+					Summary:             "Done",
+					Description:         "Done.",
+					DetailedDescription: "Detailed PR body.",
+					Commit:              "abc123",
 				},
 			}),
 			wantReason: "registered repo root",
@@ -374,9 +387,10 @@ func TestSyncServiceErrorsOnMalformedMetadataAndPushFailure(t *testing.T) {
 		Worktree:  worktreePath,
 		StartedAt: time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC),
 		Completion: &taskstate.Completion{
-			Summary: "Done",
-			Details: "Implemented.",
-			Commit:  "abc123",
+			Summary:             "Done",
+			Description:         "Implemented.",
+			DetailedDescription: "Detailed PR body.",
+			Commit:              "abc123",
 		},
 	})
 
@@ -414,9 +428,10 @@ func TestSyncServicePRProviderFailuresAreHardErrors(t *testing.T) {
 		Branch:   "orpheus/op-1",
 		Worktree: worktreePath,
 		Completion: &taskstate.Completion{
-			Summary: "Done",
-			Details: "Implemented.",
-			Commit:  "abc123",
+			Summary:             "Done",
+			Description:         "Implemented.",
+			DetailedDescription: "Detailed PR body.",
+			Commit:              "abc123",
 		},
 	})
 	taskItem := task.Task{
@@ -453,8 +468,9 @@ func TestBuildSyncPullRequestContent(t *testing.T) {
 		AcceptanceCriteria: "No duplicate PRs are created.",
 	}, taskstate.RunAttempt{
 		Completion: &taskstate.Completion{
-			Summary: "Ready for review",
-			Details: "Pushed the branch and wired the provider.",
+			Summary:             "Ready for review",
+			Description:         "Pushed the branch and wired the provider.",
+			DetailedDescription: "Detailed PR body.",
 		},
 	})
 	if err != nil {
@@ -463,8 +479,8 @@ func TestBuildSyncPullRequestContent(t *testing.T) {
 	if content.Title != "Ready for review" {
 		t.Fatalf("title = %q, want completion summary", content.Title)
 	}
-	if content.Body != "Pushed the branch and wired the provider.\n" {
-		t.Fatalf("body = %q, want completion details only", content.Body)
+	if content.Body != "Detailed PR body." {
+		t.Fatalf("body = %q, want detailed description exactly", content.Body)
 	}
 	for _, unwanted := range []string{
 		"op-1",

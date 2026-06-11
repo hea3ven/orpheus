@@ -196,8 +196,10 @@ func TestAgentDoneRecordsMainCompletionForLocalReview(t *testing.T) {
 		"done",
 		"--summary",
 		"Add local review file",
-		"--details",
+		"--description",
 		"Created ORPHEUS_TEST.txt for local review.",
+		"--detailed-description",
+		"## PR body\n\nCreated ORPHEUS_TEST.txt for local review.",
 	})
 
 	is.Empty(stderr)
@@ -209,7 +211,8 @@ func TestAgentDoneRecordsMainCompletionForLocalReview(t *testing.T) {
 	is.Equal(taskstate.RunStatusRunning, latest.Status)
 	must.NotNil(latest.Completion)
 	is.Equal("Add local review file", latest.Completion.Summary)
-	is.Equal("Created ORPHEUS_TEST.txt for local review.", latest.Completion.Details)
+	is.Equal("Created ORPHEUS_TEST.txt for local review.", latest.Completion.Description)
+	is.Equal("## PR body\n\nCreated ORPHEUS_TEST.txt for local review.", latest.Completion.DetailedDescription)
 	is.Contains(runGit(t, repoPath, "status", "--porcelain=v1"), "ORPHEUS_TEST.txt")
 	is.NotContains(runGit(t, repoPath, "log", "--oneline", "--max-count=1"), "Add local review file")
 
@@ -217,6 +220,93 @@ func TestAgentDoneRecordsMainCompletionForLocalReview(t *testing.T) {
 	must.NoError(err)
 	is.Contains(string(bdLog), "--json --readonly --sandbox show --id op-main")
 	is.NotContains(string(bdLog), "--json --sandbox update")
+}
+
+func TestAgentDoneRejectsMissingDescription(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+
+	stdout, stderr, err := executeCommandWithError(t, []string{
+		"agent",
+		"done",
+		"--summary",
+		"Missing description",
+		"--detailed-description",
+		"Detailed PR body.",
+	})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.Contains(err.Error(), `required flag(s) "description" not set`)
+}
+
+func TestAgentDoneRejectsMissingDetailedDescription(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+
+	stdout, stderr, err := executeCommandWithError(t, []string{
+		"agent",
+		"done",
+		"--summary",
+		"Missing detailed description",
+		"--description",
+		"Commit body.",
+	})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.Contains(err.Error(), "detailed description is required")
+}
+
+func TestAgentDoneRejectsMultipleDetailedDescriptionSources(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := t.TempDir()
+	detailedPath := filepath.Join(root, "body.md")
+	must.NoError(os.WriteFile(detailedPath, []byte("File PR body."), 0o644))
+
+	stdout, stderr, err := executeCommandWithError(t, []string{
+		"agent",
+		"done",
+		"--summary",
+		"Multiple detailed sources",
+		"--description",
+		"Commit body.",
+		"--detailed-description",
+		"Inline PR body.",
+		"--detailed-description-file",
+		detailedPath,
+	})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.Contains(err.Error(), "use exactly one of --detailed-description or --detailed-description-file")
+}
+
+func TestAgentDoneRejectsRemovedDetailsFlag(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+
+	stdout, stderr, err := executeCommandWithError(t, []string{
+		"agent",
+		"done",
+		"--summary",
+		"Removed flag",
+		"--description",
+		"Commit body.",
+		"--details",
+		"Old details.",
+		"--detailed-description",
+		"Detailed PR body.",
+	})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.Contains(err.Error(), "unknown flag: --details")
 }
 
 func TestAgentDoneRepeatedMainCompletionIsNoopWithGuidance(t *testing.T) {
@@ -255,8 +345,9 @@ func TestAgentDoneRepeatedMainCompletionIsNoopWithGuidance(t *testing.T) {
 	})
 	must.NoError(err)
 	_, err = runStore.CompleteRun("alpha", "op-main", attempt.Attempt, taskstate.CompleteRunOptions{
-		Summary: "First summary",
-		Details: "First details.",
+		Summary:             "First summary",
+		Description:         "First details.",
+		DetailedDescription: "Detailed PR body.",
 	})
 	must.NoError(err)
 	t.Setenv("ORPHEUS_REPO_ID", "alpha")
@@ -269,8 +360,10 @@ func TestAgentDoneRepeatedMainCompletionIsNoopWithGuidance(t *testing.T) {
 		"done",
 		"--summary",
 		"Second summary",
-		"--details",
+		"--description",
 		"Second details.",
+		"--detailed-description",
+		"Second detailed PR body.",
 	})
 
 	is.Empty(stderr)
@@ -284,7 +377,8 @@ func TestAgentDoneRepeatedMainCompletionIsNoopWithGuidance(t *testing.T) {
 	must.True(ok)
 	must.NotNil(latest.Completion)
 	is.Equal("First summary", latest.Completion.Summary)
-	is.Equal("First details.", latest.Completion.Details)
+	is.Equal("First details.", latest.Completion.Description)
+	is.Equal("Detailed PR body.", latest.Completion.DetailedDescription)
 	events, err := runStore.Events("alpha", "op-main")
 	must.NoError(err)
 	must.NotEmpty(events)
@@ -292,7 +386,8 @@ func TestAgentDoneRepeatedMainCompletionIsNoopWithGuidance(t *testing.T) {
 	is.Equal(taskstate.EventCompletionRepeated, last.Type)
 	is.Equal(attempt.Attempt, last.Attempt)
 	is.Equal("Second summary", last.RequestedSummary)
-	is.Equal("Second details.", last.RequestedDetails)
+	is.Equal("Second details.", last.RequestedDescription)
+	is.Equal("Second detailed PR body.", last.RequestedDetailedDescription)
 }
 
 func TestAgentDoneCommitsWorktreeCompletion(t *testing.T) {
@@ -348,8 +443,10 @@ func TestAgentDoneCommitsWorktreeCompletion(t *testing.T) {
 		"done",
 		"--summary",
 		"Add worktree review file",
-		"--details",
+		"--description",
 		"Created ORPHEUS_WORKTREE_TEST.txt for pull request review.",
+		"--detailed-description",
+		"## Pull request\n\nCreated ORPHEUS_WORKTREE_TEST.txt for pull request review.",
 	})
 
 	is.Empty(stderr)
@@ -413,8 +510,10 @@ func TestAgentDoneRequiresMainWorkingTreeChangesBeforeWriting(t *testing.T) {
 		"done",
 		"--summary",
 		"No changes",
-		"--details",
+		"--description",
 		"Should fail before writing.",
+		"--detailed-description",
+		"Should fail before writing a PR body.",
 	})
 
 	must.Error(err)

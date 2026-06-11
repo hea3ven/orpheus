@@ -130,7 +130,7 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 
 func newTaskDoneCommand(opts *rootOptions) *cobra.Command {
 	var summary string
-	var details string
+	var description string
 	cmd := &cobra.Command{
 		Use:   "done [<task-id>]",
 		Short: "Finalize a reviewed main/solo task",
@@ -145,11 +145,11 @@ func newTaskDoneCommand(opts *rootOptions) *cobra.Command {
 			if len(args) == 1 {
 				taskID = args[0]
 			}
-			return runTaskDone(command, opts, taskID, summary, details)
+			return runTaskDone(command, opts, taskID, summary, description)
 		},
 	}
 	cmd.Flags().StringVar(&summary, "summary", "", "override the final commit summary")
-	cmd.Flags().StringVar(&details, "details", "", "override the final commit details")
+	cmd.Flags().StringVar(&description, "description", "", "override the final commit description")
 	return cmd
 }
 
@@ -363,7 +363,7 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentN
 	return nil
 }
 
-func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summary string, details string) error {
+func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summary string, description string) error {
 	logger := opts.log().With(
 		slog.String("component", "cli"),
 		slog.String("operation", "task_done"),
@@ -389,9 +389,9 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summa
 		RunStore: store,
 	}
 	finalizeOpts := workflow.FinalizeOptions{
-		TaskID:  taskID,
-		Summary: summary,
-		Details: details,
+		TaskID:      taskID,
+		Summary:     summary,
+		Description: description,
 	}
 	finalized, err := service.Finalize(command.Context(), finalizeOpts)
 	if err != nil {

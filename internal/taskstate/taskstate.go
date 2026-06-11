@@ -45,8 +45,8 @@ var (
 	// ErrActiveRun indicates the latest run attempt is still running.
 	ErrActiveRun = errors.New("latest run attempt is still running")
 
-	// ErrCompletionConflict indicates a run already has different completion details.
-	ErrCompletionConflict = errors.New("run completion already recorded with different summary/details")
+	// ErrCompletionConflict indicates a run already has different completion content.
+	ErrCompletionConflict = errors.New("run completion already recorded with different summary/description/detailed_description")
 
 	// ErrFinalizationConflict indicates finalization facts already contain different data.
 	ErrFinalizationConflict = errors.New("task finalization already recorded with different facts")
@@ -108,11 +108,12 @@ type RunAttempt struct {
 
 // Completion records agent-authored completion facts for a run attempt.
 type Completion struct {
-	Summary     string    `yaml:"summary"`
-	Details     string    `yaml:"details"`
-	CompletedAt time.Time `yaml:"completed_at"`
-	Commit      string    `yaml:"commit,omitempty"`
-	CommitError string    `yaml:"commit_error,omitempty"`
+	Summary             string    `yaml:"summary"`
+	Description         string    `yaml:"description"`
+	DetailedDescription string    `yaml:"detailed_description"`
+	CompletedAt         time.Time `yaml:"completed_at"`
+	Commit              string    `yaml:"commit,omitempty"`
+	CommitError         string    `yaml:"commit_error,omitempty"`
 }
 
 // Finalization records factual data from human-side main/solo finalization.
@@ -136,9 +137,10 @@ type Event struct {
 	Worktree string `yaml:"worktree,omitempty"`
 	Error    string `yaml:"error,omitempty"`
 
-	Message          string `yaml:"message,omitempty"`
-	RequestedSummary string `yaml:"requested_summary,omitempty"`
-	RequestedDetails string `yaml:"requested_details,omitempty"`
+	Message                      string `yaml:"message,omitempty"`
+	RequestedSummary             string `yaml:"requested_summary,omitempty"`
+	RequestedDescription         string `yaml:"requested_description,omitempty"`
+	RequestedDetailedDescription string `yaml:"requested_detailed_description,omitempty"`
 }
 
 // WorktreeEventOptions describes worktree context for a trace event.
@@ -158,16 +160,18 @@ type StartRunOptions struct {
 
 // CompleteRunOptions describes the agent-authored completion payload.
 type CompleteRunOptions struct {
-	Summary     string
-	Details     string
-	Commit      string
-	CommitError string
+	Summary             string
+	Description         string
+	DetailedDescription string
+	Commit              string
+	CommitError         string
 }
 
 // RepeatedCompletionOptions describes an ignored repeated agent completion payload.
 type RepeatedCompletionOptions struct {
-	Summary string
-	Details string
+	Summary             string
+	Description         string
+	DetailedDescription string
 }
 
 // NewStore creates a per-task state store using paths.
@@ -300,9 +304,13 @@ func (s Store) CompleteRun(repoID, taskID string, attempt int, opts CompleteRunO
 	if summary == "" {
 		return RunAttempt{}, fmt.Errorf("complete run attempt for task %s/%s: summary is required", repoID, taskID)
 	}
-	details := strings.TrimSpace(opts.Details)
-	if details == "" {
-		return RunAttempt{}, fmt.Errorf("complete run attempt for task %s/%s: details are required", repoID, taskID)
+	description := strings.TrimSpace(opts.Description)
+	if description == "" {
+		return RunAttempt{}, fmt.Errorf("complete run attempt for task %s/%s: description is required", repoID, taskID)
+	}
+	detailedDescription := opts.DetailedDescription
+	if strings.TrimSpace(detailedDescription) == "" {
+		return RunAttempt{}, fmt.Errorf("complete run attempt for task %s/%s: detailed_description is required", repoID, taskID)
 	}
 	commit := strings.TrimSpace(opts.Commit)
 	commitError := strings.TrimSpace(opts.CommitError)
@@ -326,7 +334,9 @@ func (s Store) CompleteRun(repoID, taskID string, attempt int, opts CompleteRunO
 	run := state.Runs[index]
 	if run.Completion != nil {
 		completion := *run.Completion
-		if completion.Summary != summary || completion.Details != details {
+		if completion.Summary != summary ||
+			completion.Description != description ||
+			completion.DetailedDescription != detailedDescription {
 			return RunAttempt{}, fmt.Errorf(
 				"complete run attempt for task %s/%s: %w",
 				repoID,
@@ -380,11 +390,12 @@ func (s Store) CompleteRun(repoID, taskID string, attempt int, opts CompleteRunO
 	now := s.nowUTC()
 	completedAt := now
 	state.Runs[index].Completion = &Completion{
-		Summary:     summary,
-		Details:     details,
-		CompletedAt: completedAt,
-		Commit:      commit,
-		CommitError: commitError,
+		Summary:             summary,
+		Description:         description,
+		DetailedDescription: detailedDescription,
+		CompletedAt:         completedAt,
+		Commit:              commit,
+		CommitError:         commitError,
 	}
 
 	if err := s.save(state); err != nil {
@@ -425,7 +436,8 @@ func (s Store) RecordRepeatedCompletion(
 	event := runEvent(run, EventCompletionRepeated, now, run.Status, "")
 	event.Message = "agent done repeated after completion already recorded; preserved first completion"
 	event.RequestedSummary = strings.TrimSpace(opts.Summary)
-	event.RequestedDetails = strings.TrimSpace(opts.Details)
+	event.RequestedDescription = strings.TrimSpace(opts.Description)
+	event.RequestedDetailedDescription = opts.DetailedDescription
 	state.Events = append(state.Events, event)
 
 	if err := s.save(state); err != nil {
@@ -758,8 +770,11 @@ func validateCompletion(completion Completion) error {
 	if strings.TrimSpace(completion.Summary) == "" {
 		return errors.New("summary is required")
 	}
-	if strings.TrimSpace(completion.Details) == "" {
-		return errors.New("details are required")
+	if strings.TrimSpace(completion.Description) == "" {
+		return errors.New("description is required")
+	}
+	if strings.TrimSpace(completion.DetailedDescription) == "" {
+		return errors.New("detailed_description is required")
 	}
 	if completion.CompletedAt.IsZero() {
 		return errors.New("completed_at is required")

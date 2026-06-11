@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"strings"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/state"
@@ -36,19 +39,23 @@ func newAgentContextCommand(opts *rootOptions) *cobra.Command {
 
 func newAgentDoneCommand(opts *rootOptions) *cobra.Command {
 	var summary string
-	var details string
+	var description string
+	var detailedDescription string
+	var detailedDescriptionFile string
 	cmd := &cobra.Command{
 		Use:   "done",
 		Short: "Record active agent completion for local review",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
-			return runAgentDone(command, opts, summary, details)
+			return runAgentDone(command, opts, summary, description, detailedDescription, detailedDescriptionFile)
 		},
 	}
 	cmd.Flags().StringVar(&summary, "summary", "", "short completion summary")
-	cmd.Flags().StringVar(&details, "details", "", "detailed completion notes")
+	cmd.Flags().StringVar(&description, "description", "", "concise commit-body completion description")
+	cmd.Flags().StringVar(&detailedDescription, "detailed-description", "", "markdown pull request body")
+	cmd.Flags().StringVar(&detailedDescriptionFile, "detailed-description-file", "", "path to markdown pull request body")
 	_ = cmd.MarkFlagRequired("summary")
-	_ = cmd.MarkFlagRequired("details")
+	_ = cmd.MarkFlagRequired("description")
 	return cmd
 }
 
@@ -78,12 +85,24 @@ func runAgentContext(command *cobra.Command, opts *rootOptions) error {
 	return err
 }
 
-func runAgentDone(command *cobra.Command, opts *rootOptions, summary string, details string) error {
+func runAgentDone(
+	command *cobra.Command,
+	opts *rootOptions,
+	summary string,
+	description string,
+	detailedDescription string,
+	detailedDescriptionFile string,
+) error {
 	logger := opts.log().With(
 		slog.String("component", "cli"),
 		slog.String("operation", "agent_done"),
 	)
 	logger.DebugContext(command.Context(), "resolving active agent completion context")
+
+	detailedDescription, err := resolveDetailedDescription(detailedDescription, detailedDescriptionFile)
+	if err != nil {
+		return fmt.Errorf("agent done: %w", err)
+	}
 
 	paths, err := state.ResolveFromEnvironment()
 	if err != nil {
@@ -101,8 +120,9 @@ func runAgentDone(command *cobra.Command, opts *rootOptions, summary string, det
 		RunStore: store,
 	}
 	completed, err := service.Complete(command.Context(), agent.CompleteOptions{
-		Summary: summary,
-		Details: details,
+		Summary:             summary,
+		Description:         description,
+		DetailedDescription: detailedDescription,
 	})
 	if err != nil {
 		return fmt.Errorf("agent done: %w", err)
@@ -148,6 +168,29 @@ func runAgentDone(command *cobra.Command, opts *rootOptions, summary string, det
 	}
 	_, err = fmt.Fprintf(command.OutOrStdout(), "Recorded completion for %s; ready for local review.\n", completed.Context.Task.ID)
 	return err
+}
+
+func resolveDetailedDescription(inline string, filePath string) (string, error) {
+	hasInline := strings.TrimSpace(inline) != ""
+	filePath = strings.TrimSpace(filePath)
+	hasFile := filePath != ""
+	switch {
+	case hasInline && hasFile:
+		return "", errors.New("use exactly one of --detailed-description or --detailed-description-file")
+	case !hasInline && !hasFile:
+		return "", errors.New("detailed description is required; use --detailed-description or --detailed-description-file")
+	case hasInline:
+		return inline, nil
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("read detailed description file: %w", err)
+	}
+	if strings.TrimSpace(string(data)) == "" {
+		return "", errors.New("detailed description is required; file is empty")
+	}
+	return string(data), nil
 }
 
 func activeAgentContextResolver(
