@@ -20,17 +20,28 @@ type fakeSyncRunStore struct {
 	err    error
 }
 
-type fakeReadBackend struct {
-	tasks []task.Task
+type fakeSyncBackend struct {
+	tasks     []task.Task
+	setPRURLs []fakeSetPRURL
 }
 
-func (b fakeReadBackend) Get(_ context.Context, id string) (task.Task, error) {
+type fakeSetPRURL struct {
+	taskID string
+	prURL  string
+}
+
+func (b *fakeSyncBackend) Get(_ context.Context, id string) (task.Task, error) {
 	for _, candidate := range b.tasks {
 		if candidate.ID == id {
 			return candidate.Clone(), nil
 		}
 	}
 	return task.Task{}, task.ErrNotFound
+}
+
+func (b *fakeSyncBackend) SetPRURL(_ context.Context, taskID string, prURL string) error {
+	b.setPRURLs = append(b.setPRURLs, fakeSetPRURL{taskID: taskID, prURL: prURL})
+	return nil
 }
 
 func (s fakeSyncRunStore) Load(repoID, taskID string) (taskstate.TaskState, error) {
@@ -92,7 +103,7 @@ func TestSyncServiceCreatesPRForEligibleWorktreeCompletion(t *testing.T) {
 		Status:   task.StatusInProgress,
 		Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-1", task.MetadataWorktree: worktreePath},
 	}
-	service, git, provider := newSyncTestService(t, taskItem, syncTaskState(taskstate.RunAttempt{
+	service, git, provider, backend := newSyncTestService(t, taskItem, syncTaskState(taskstate.RunAttempt{
 		Attempt:   1,
 		Status:    taskstate.RunStatusSucceeded,
 		Branch:    "orpheus/op-1",
@@ -132,13 +143,17 @@ func TestSyncServiceCreatesPRForEligibleWorktreeCompletion(t *testing.T) {
 	if create.Title != "Done" || create.Body != "Implemented.\n" {
 		t.Fatalf("created content title/body = %q/%q, want completion summary/details", create.Title, create.Body)
 	}
+	if len(backend.setPRURLs) != 1 || backend.setPRURLs[0].taskID != "op-1" ||
+		backend.setPRURLs[0].prURL != "https://github.test/org/repo/pull/42" {
+		t.Fatalf("set PR URLs = %#v, want created PR URL stored", backend.setPRURLs)
+	}
 }
 
 func TestSyncServiceRecoversExistingPRBeforeCreate(t *testing.T) {
 	repoPath := filepath.Join(t.TempDir(), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	worktreePath := targets.WorktreeTeam.Worktree
-	service, _, provider := newSyncTestService(t, task.Task{
+	service, _, provider, backend := newSyncTestService(t, task.Task{
 		ID:       "op-1",
 		Status:   task.StatusInProgress,
 		Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-1", task.MetadataWorktree: worktreePath},
@@ -168,6 +183,48 @@ func TestSyncServiceRecoversExistingPRBeforeCreate(t *testing.T) {
 	}
 	if len(provider.createRequests) != 0 {
 		t.Fatalf("create requests = %#v, want none for recovered PR", provider.createRequests)
+	}
+	if len(backend.setPRURLs) != 1 || backend.setPRURLs[0].prURL != "https://github.test/org/repo/pull/7" {
+		t.Fatalf("set PR URLs = %#v, want recovered PR URL stored", backend.setPRURLs)
+	}
+}
+
+func TestSyncServiceAlreadyInReviewSkipsPushRunStoreAndProvider(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   "orpheus/op-1",
+			task.MetadataWorktree: targets.WorktreeTeam.Worktree,
+			task.MetadataPRURL:    " https://github.test/org/repo/pull/42 ",
+		},
+	}
+	service, git, provider, backend := newSyncTestService(
+		t,
+		taskItem,
+		taskstate.TaskState{},
+		paths,
+		source,
+	)
+	service.RunStore = fakeSyncRunStore{err: errors.New("run store should not be queried")}
+
+	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Status != workflow.SyncStatusAlreadyInReview || result.PRURL != "https://github.test/org/repo/pull/42" {
+		t.Fatalf("result = %#v, want already in review with trimmed PR URL", result)
+	}
+	if len(git.pushes) != 0 {
+		t.Fatalf("pushes = %#v, want no push", git.pushes)
+	}
+	if len(provider.findRequests) != 0 || len(provider.createRequests) != 0 {
+		t.Fatalf("provider calls = %#v/%#v, want none", provider.findRequests, provider.createRequests)
+	}
+	if len(backend.setPRURLs) != 0 {
+		t.Fatalf("set PR URLs = %#v, want no metadata write", backend.setPRURLs)
 	}
 }
 
@@ -276,12 +333,6 @@ func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 			wantReason: "registered repo root",
 		},
 		{
-			name:       "pr url",
-			taskItem:   withSyncMetadata(baseTask, task.MetadataPRURL, "https://example.test/pr/1"),
-			state:      syncTaskState(succeeded),
-			wantReason: "orpheus.pr_url is already set",
-		},
-		{
 			name:       "closed",
 			taskItem:   withSyncStatus(baseTask, task.StatusClosed),
 			state:      syncTaskState(succeeded),
@@ -291,7 +342,7 @@ func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service, git, provider := newSyncTestService(t, tt.taskItem, tt.state, paths, source)
+			service, git, provider, backend := newSyncTestService(t, tt.taskItem, tt.state, paths, source)
 			result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
 			if err != nil {
 				t.Fatalf("sync: %v", err)
@@ -304,6 +355,9 @@ func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 			}
 			if len(provider.findRequests) != 0 || len(provider.createRequests) != 0 {
 				t.Fatalf("provider calls = %#v/%#v, want no PR calls for skip", provider.findRequests, provider.createRequests)
+			}
+			if len(backend.setPRURLs) != 0 {
+				t.Fatalf("set PR URLs = %#v, want no metadata writes for skip", backend.setPRURLs)
 			}
 		})
 	}
@@ -331,14 +385,14 @@ func TestSyncServiceErrorsOnMalformedMetadataAndPushFailure(t *testing.T) {
 		Status:   task.StatusInProgress,
 		Metadata: task.Metadata{task.MetadataWorktree: worktreePath},
 	}
-	service, _, _ := newSyncTestService(t, missingBranch, state, paths, source)
+	service, _, _, _ := newSyncTestService(t, missingBranch, state, paths, source)
 	_, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
 	if err == nil || !strings.Contains(err.Error(), "orpheus.branch is missing") {
 		t.Fatalf("error = %v, want missing branch metadata", err)
 	}
 
 	pushErr := errors.New("remote rejected")
-	service, _, _ = newSyncTestService(t, task.Task{
+	service, _, _, _ = newSyncTestService(t, task.Task{
 		ID:       "op-1",
 		Status:   task.StatusInProgress,
 		Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-1", task.MetadataWorktree: worktreePath},
@@ -372,7 +426,7 @@ func TestSyncServicePRProviderFailuresAreHardErrors(t *testing.T) {
 	}
 
 	findErr := errors.New("auth missing")
-	service, _, provider := newSyncTestService(t, taskItem, state, paths, source)
+	service, _, provider, _ := newSyncTestService(t, taskItem, state, paths, source)
 	provider.findErr = findErr
 	_, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
 	if !errors.Is(err, findErr) {
@@ -383,7 +437,7 @@ func TestSyncServicePRProviderFailuresAreHardErrors(t *testing.T) {
 	}
 
 	createErr := errors.New("create failed")
-	service, _, provider = newSyncTestService(t, taskItem, state, paths, source)
+	service, _, provider, _ = newSyncTestService(t, taskItem, state, paths, source)
 	provider.createErr = createErr
 	_, err = service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
 	if !errors.Is(err, createErr) {
@@ -433,21 +487,22 @@ func newSyncTestService(
 	taskState taskstate.TaskState,
 	paths state.Paths,
 	source task.RepositorySource,
-) (workflow.SyncService, *fakeSyncGit, *fakePRProvider) {
+) (workflow.SyncService, *fakeSyncGit, *fakePRProvider, *fakeSyncBackend) {
 	t.Helper()
 	git := &fakeSyncGit{}
 	provider := &fakePRProvider{created: pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/42"}}
+	backend := &fakeSyncBackend{tasks: []task.Task{taskItem}}
 	service := workflow.SyncService{
 		Paths:   paths,
 		Sources: []task.RepositorySource{source},
-		BackendFactory: func(task.RepositorySource) (task.Getter, error) {
-			return fakeReadBackend{tasks: []task.Task{taskItem}}, nil
+		BackendFactory: func(task.RepositorySource) (task.SyncBackend, error) {
+			return backend, nil
 		},
 		RunStore:   fakeSyncRunStore{states: map[string]taskstate.TaskState{"alpha/op-1": taskState}},
 		Git:        git,
 		PRProvider: provider,
 	}
-	return service, git, provider
+	return service, git, provider, backend
 }
 
 func newSyncTestSource(
@@ -483,11 +538,5 @@ func syncTaskState(runs ...taskstate.RunAttempt) taskstate.TaskState {
 
 func withSyncStatus(taskItem task.Task, status task.Status) task.Task {
 	taskItem.Status = status
-	return taskItem
-}
-
-func withSyncMetadata(taskItem task.Task, key string, value string) task.Task {
-	taskItem.Metadata = taskItem.Metadata.Clone()
-	taskItem.Metadata[key] = value
 	return taskItem
 }

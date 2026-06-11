@@ -490,7 +490,7 @@ func runTaskSync(command *cobra.Command, opts *rootOptions, taskID string) error
 	service := workflow.SyncService{
 		Paths:   paths,
 		Sources: taskCtx.Sources,
-		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.Getter, error) {
+		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.SyncBackend, error) {
 			return newBeadsTaskBackend(source.BackendDir)
 		},
 		RunStore:   taskstate.NewStore(paths),
@@ -804,7 +804,7 @@ func renderTaskSyncResult(output interface{ Write([]byte) (int, error) }, result
 	case workflow.SyncStatusPRCreated:
 		_, err := fmt.Fprintf(
 			output,
-			"Synced %s: pushed branch %s to origin and created PR %s. PR URL metadata storage is not implemented in this slice; no PR URL metadata was written.\n",
+			"Synced %s: pushed branch %s to origin and created PR %s. Task is in review.\n",
 			result.Task.ID,
 			result.Branch,
 			result.PRURL,
@@ -813,16 +813,24 @@ func renderTaskSyncResult(output interface{ Write([]byte) (int, error) }, result
 	case workflow.SyncStatusPRRecovered:
 		_, err := fmt.Fprintf(
 			output,
-			"Synced %s: pushed branch %s to origin and recovered existing PR %s. PR URL metadata storage is not implemented in this slice; no PR URL metadata was written.\n",
+			"Synced %s: pushed branch %s to origin and recovered existing PR %s. Task is in review.\n",
 			result.Task.ID,
 			result.Branch,
+			result.PRURL,
+		)
+		return err
+	case workflow.SyncStatusAlreadyInReview:
+		_, err := fmt.Fprintf(
+			output,
+			"Synced %s: already in review at %s.\n",
+			result.Task.ID,
 			result.PRURL,
 		)
 		return err
 	case workflow.SyncStatusSkipped:
 		_, err := fmt.Fprintf(
 			output,
-			"Skipped %s: %s. PR creation was not attempted; no PR URL metadata was written.\n",
+			"Skipped %s: %s. PR creation was not attempted.\n",
 			result.Task.ID,
 			result.Reason,
 		)

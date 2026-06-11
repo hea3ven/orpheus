@@ -16,8 +16,8 @@ import (
 
 const syncLockOperation = "task sync"
 
-// SyncBackendFactory creates a read-only backend for one repository.
-type SyncBackendFactory func(task.RepositorySource) (task.Getter, error)
+// SyncBackendFactory creates a sync-capable backend for one repository.
+type SyncBackendFactory func(task.RepositorySource) (task.SyncBackend, error)
 
 // SyncRunStore reads task execution facts needed by sync.
 type SyncRunStore interface {
@@ -62,6 +62,9 @@ const (
 	// SyncStatusPRRecovered means the task branch was pushed and an existing PR was recovered.
 	SyncStatusPRRecovered SyncStatus = "pr_recovered"
 
+	// SyncStatusAlreadyInReview means the task already had a local PR URL recorded.
+	SyncStatusAlreadyInReview SyncStatus = "already_in_review"
+
 	// SyncStatusSkipped means the task was resolvable but not branch-push eligible.
 	SyncStatusSkipped SyncStatus = "skipped"
 )
@@ -79,8 +82,9 @@ type SyncResult struct {
 }
 
 type syncTarget struct {
-	source task.RepositorySource
-	task   task.Task
+	source  task.RepositorySource
+	backend task.SyncBackend
+	task    task.Task
 }
 
 // Sync resolves one task, skips non-eligible states, and pushes eligible task branches.
@@ -123,6 +127,10 @@ func (s SyncService) syncLocked(ctx context.Context, opts SyncOptions, gitState 
 		return SyncResult{}, err
 	}
 
+	if result, ok := s.alreadyInReview(target); ok {
+		return result, nil
+	}
+
 	taskState, err := s.RunStore.Load(target.source.Repository.ID, target.task.ID)
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("load task state for %s/%s: %w", target.source.Repository.ID, target.task.ID, err)
@@ -159,15 +167,11 @@ func (s SyncService) syncLocked(ctx context.Context, opts SyncOptions, gitState 
 		return SyncResult{}, err
 	}
 	if ok {
-		return SyncResult{
-			Repository: target.source.Repository,
-			Task:       target.task.Clone(),
-			LatestRun:  latest,
-			Status:     SyncStatusPRRecovered,
-			Branch:     branch,
-			Worktree:   strings.TrimSpace(target.task.OrpheusMetadata().Worktree),
-			PRURL:      strings.TrimSpace(found.URL),
-		}, nil
+		prURL := strings.TrimSpace(found.URL)
+		if err := target.backend.SetPRURL(ctx, target.task.ID, prURL); err != nil {
+			return SyncResult{}, err
+		}
+		return s.synced(target, latest, SyncStatusPRRecovered, branch, prURL), nil
 	}
 
 	content, err := BuildSyncPullRequestContent(target.task, latest)
@@ -184,15 +188,51 @@ func (s SyncService) syncLocked(ctx context.Context, opts SyncOptions, gitState 
 	if err != nil {
 		return SyncResult{}, err
 	}
+	prURL := strings.TrimSpace(created.URL)
+	if err := target.backend.SetPRURL(ctx, target.task.ID, prURL); err != nil {
+		return SyncResult{}, err
+	}
+	return s.synced(target, latest, SyncStatusPRCreated, branch, prURL), nil
+}
+
+func (s SyncService) synced(
+	target syncTarget,
+	latest taskstate.RunAttempt,
+	status SyncStatus,
+	branch string,
+	prURL string,
+) SyncResult {
+	updated := target.task.Clone()
+	if updated.Metadata == nil {
+		updated.Metadata = task.Metadata{}
+	}
+	updated.Metadata[task.MetadataPRURL] = prURL
+	return SyncResult{
+		Repository: target.source.Repository,
+		Task:       updated,
+		LatestRun:  latest,
+		Status:     status,
+		Branch:     branch,
+		Worktree:   strings.TrimSpace(target.task.OrpheusMetadata().Worktree),
+		PRURL:      prURL,
+	}
+}
+
+func (s SyncService) alreadyInReview(target syncTarget) (SyncResult, bool) {
+	metadata := target.task.OrpheusMetadata()
+	prURL := strings.TrimSpace(metadata.PRURL)
+	if !metadata.HasPRURL || prURL == "" {
+		return SyncResult{}, false
+	}
 	return SyncResult{
 		Repository: target.source.Repository,
 		Task:       target.task.Clone(),
-		LatestRun:  latest,
-		Status:     SyncStatusPRCreated,
-		Branch:     branch,
+		Status:     SyncStatusAlreadyInReview,
+		Reason:     task.MetadataPRURL + " is already set",
+		Branch:     strings.TrimSpace(metadata.Branch),
 		Worktree:   strings.TrimSpace(target.task.OrpheusMetadata().Worktree),
-		PRURL:      strings.TrimSpace(created.URL),
-	}, nil
+		PRURL:      prURL,
+	}, true
 }
 
 func (s SyncService) resolveTarget(ctx context.Context, opts SyncOptions) (syncTarget, error) {
@@ -232,7 +272,7 @@ func (s SyncService) resolveTarget(ctx context.Context, opts SyncOptions) (syncT
 			err,
 		)
 	}
-	return syncTarget{source: resolved.Source, task: taskItem}, nil
+	return syncTarget{source: resolved.Source, backend: backend, task: taskItem}, nil
 }
 
 func (s SyncService) skip(target syncTarget, latest taskstate.RunAttempt, reason string) SyncResult {

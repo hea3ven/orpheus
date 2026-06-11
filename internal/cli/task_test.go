@@ -1491,11 +1491,17 @@ func TestTaskSyncPushesPRReadyTaskBranch(t *testing.T) {
 	commit := strings.TrimSpace(runGit(t, taskWorktree, "rev-parse", "HEAD"))
 	recordWorktreeCompletion(t, paths, "alpha", "op-sync", targets.WorktreeTeam.Branch, taskWorktree, commit)
 
-	withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
-		dir:    repoPath,
-		args:   "--json --readonly --sandbox show --id op-sync",
-		stdout: syncReadyTaskJSON("op-sync", targets.WorktreeTeam.Branch, taskWorktree),
-	}})
+	bdLogPath := withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{
+			dir:    repoPath,
+			args:   "--json --readonly --sandbox show --id op-sync",
+			stdout: syncReadyTaskJSON("op-sync", targets.WorktreeTeam.Branch, taskWorktree),
+		},
+		{
+			dir:  repoPath,
+			args: "--json --sandbox update op-sync --set-metadata orpheus.pr_url=https://github.test/org/alpha/pull/42",
+		},
+	})
 	ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{
 		listStdout:   "[]",
 		createStdout: "https://github.test/org/alpha/pull/42\n",
@@ -1507,8 +1513,10 @@ func TestTaskSyncPushesPRReadyTaskBranch(t *testing.T) {
 	is.Contains(stdout, "Synced op-sync")
 	is.Contains(stdout, "pushed branch orpheus/op-sync to origin")
 	is.Contains(stdout, "created PR https://github.test/org/alpha/pull/42")
-	is.Contains(stdout, "PR URL metadata storage is not implemented")
-	is.Contains(stdout, "no PR URL metadata was written")
+	is.Contains(stdout, "Task is in review")
+	bdLog, readErr := os.ReadFile(bdLogPath)
+	must.NoError(readErr)
+	is.Contains(string(bdLog), "--json --sandbox update op-sync --set-metadata orpheus.pr_url=https://github.test/org/alpha/pull/42")
 	ghLog, readErr := os.ReadFile(ghLogPath)
 	must.NoError(readErr)
 	is.Contains(string(ghLog), "ARG_1<<END\npr\nEND")
@@ -1552,11 +1560,17 @@ func TestTaskSyncRecoversExistingBranchPR(t *testing.T) {
 	commit := strings.TrimSpace(runGit(t, taskWorktree, "rev-parse", "HEAD"))
 	recordWorktreeCompletion(t, paths, "alpha", "op-sync", targets.WorktreeTeam.Branch, taskWorktree, commit)
 
-	withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
-		dir:    repoPath,
-		args:   "--json --readonly --sandbox show --id op-sync",
-		stdout: syncReadyTaskJSON("op-sync", targets.WorktreeTeam.Branch, taskWorktree),
-	}})
+	bdLogPath := withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{
+			dir:    repoPath,
+			args:   "--json --readonly --sandbox show --id op-sync",
+			stdout: syncReadyTaskJSON("op-sync", targets.WorktreeTeam.Branch, taskWorktree),
+		},
+		{
+			dir:  repoPath,
+			args: "--json --sandbox update op-sync --set-metadata orpheus.pr_url=https://github.test/org/alpha/pull/7",
+		},
+	})
 	ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{
 		listStdout:   `[{"url":"https://github.test/org/alpha/pull/7"}]`,
 		createStdout: "unexpected create\n",
@@ -1567,7 +1581,10 @@ func TestTaskSyncRecoversExistingBranchPR(t *testing.T) {
 
 	is.Empty(stderr)
 	is.Contains(stdout, "recovered existing PR https://github.test/org/alpha/pull/7")
-	is.Contains(stdout, "PR URL metadata storage is not implemented")
+	is.Contains(stdout, "Task is in review")
+	bdLog, readErr := os.ReadFile(bdLogPath)
+	must.NoError(readErr)
+	is.Contains(string(bdLog), "--json --sandbox update op-sync --set-metadata orpheus.pr_url=https://github.test/org/alpha/pull/7")
 	ghLog, readErr := os.ReadFile(ghLogPath)
 	must.NoError(readErr)
 	is.Contains(string(ghLog), "ARG_2<<END\nlist\nEND")
@@ -1575,6 +1592,62 @@ func TestTaskSyncRecoversExistingBranchPR(t *testing.T) {
 	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
 	originCommit := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/orpheus/op-sync"))
 	is.Equal(commit, originCommit)
+}
+
+func TestTaskSyncSkipsExistingPRURLWithoutPushOrProvider(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	bdLogPath := withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
+		dir:  repoPath,
+		args: "--json --readonly --sandbox show --id op-sync",
+		stdout: `[
+			{
+				"id":"op-sync",
+				"title":"Already in review",
+				"status":"in_progress",
+				"priority":1,
+				"issue_type":"task",
+				"metadata":{
+					"orpheus.branch":"orpheus/op-sync",
+					"orpheus.worktree":"` + filepath.Join(root, "unused-worktree") + `",
+					"orpheus.pr_url":"https://github.test/org/alpha/pull/42"
+				}
+			}
+		]`,
+	}})
+	ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{
+		listStdout:   "[]",
+		createStdout: "unexpected create\n",
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "sync", "op-sync"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Synced op-sync")
+	is.Contains(stdout, "already in review at https://github.test/org/alpha/pull/42")
+	bdLog, readErr := os.ReadFile(bdLogPath)
+	must.NoError(readErr)
+	is.Contains(string(bdLog), "--json --readonly --sandbox show --id op-sync")
+	is.NotContains(string(bdLog), "--json --sandbox update")
+	if ghLog, err := os.ReadFile(ghLogPath); err == nil {
+		is.Empty(string(ghLog))
+	} else {
+		is.True(os.IsNotExist(err), "gh log read error = %v", err)
+	}
 }
 
 func TestTaskSyncSkipsBranchRunAtRepoRoot(t *testing.T) {
