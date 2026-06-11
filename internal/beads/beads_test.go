@@ -580,6 +580,48 @@ func TestTaskBackendMarkInProgressReportsUpdateCommandFailure(t *testing.T) {
 	}
 }
 
+func TestTaskBackendSetPRURLWritesMetadata(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{{
+		wantDir: dir,
+		wantArgs: []string{
+			"--json",
+			"--sandbox",
+			"update",
+			"op-5",
+			"--set-metadata",
+			"orpheus.pr_url=https://github.test/org/repo/pull/5",
+		},
+	}}}
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+
+	if err := backend.SetPRURL(context.Background(), " op-5 ", " https://github.test/org/repo/pull/5 "); err != nil {
+		t.Fatalf("set PR URL: %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
+func TestTaskBackendSetPRURLValidatesRequiredInputs(t *testing.T) {
+	backend, err := beads.NewTaskBackendWithRunner(t.TempDir(), &fakeRunner{})
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+
+	if err := backend.SetPRURL(context.Background(), "", "https://github.test/org/repo/pull/5"); err == nil ||
+		!strings.Contains(err.Error(), "task id is required") {
+		t.Fatalf("missing task id error = %v", err)
+	}
+	if err := backend.SetPRURL(context.Background(), "op-5", " "); err == nil ||
+		!strings.Contains(err.Error(), "PR URL is required") {
+		t.Fatalf("missing PR URL error = %v", err)
+	}
+}
+
 func TestTaskBackendCloseClosesOpenTask(t *testing.T) {
 	dir := t.TempDir()
 	runner := &fakeRunner{calls: []fakeCall{
