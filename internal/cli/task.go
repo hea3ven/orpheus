@@ -156,9 +156,10 @@ func newTaskDoneCommand(opts *rootOptions) *cobra.Command {
 func newTaskSyncCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sync <task-id>",
-		Short: "Push a PR-ready task branch to origin",
-		Long: "Push a PR-ready task branch to origin.\n\n" +
-			"This M5 slice does not create pull requests and does not write PR URL metadata.",
+		Short: "Sync a task with pull request review",
+		Long: "Sync a task with pull request review.\n\n" +
+			"Tasks with a recorded PR URL are polled from the PR provider. Tasks without a PR URL " +
+			"must be PR-ready before Orpheus pushes the task branch and creates or recovers a PR.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			return runTaskSync(command, opts, args[0])
@@ -822,7 +823,15 @@ func renderTaskSyncResult(output interface{ Write([]byte) (int, error) }, result
 	case workflow.SyncStatusAlreadyInReview:
 		_, err := fmt.Fprintf(
 			output,
-			"Synced %s: already in review at %s.\n",
+			"Synced %s: PR %s is still open for review. No backend changes were made.\n",
+			result.Task.ID,
+			result.PRURL,
+		)
+		return err
+	case workflow.SyncStatusPRMerged:
+		_, err := fmt.Fprintf(
+			output,
+			"Synced %s: PR %s is merged. Backend close is not implemented by this sync slice; no backend changes were made.\n",
 			result.Task.ID,
 			result.PRURL,
 		)

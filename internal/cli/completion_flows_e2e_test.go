@@ -180,6 +180,7 @@ func TestWorktreeSyncFlowEndToEnd(t *testing.T) {
 	ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{
 		listStdout:   "[]",
 		createStdout: "https://github.test/org/alpha/pull/55\n",
+		statusStdout: `{"url":"https://github.test/org/alpha/pull/55","state":"OPEN","merged":false}`,
 	})
 
 	syncOut, syncErr := executeCommand(t, []string{"task", "sync", taskID})
@@ -206,8 +207,10 @@ func TestWorktreeSyncFlowEndToEnd(t *testing.T) {
 	rerunOut, rerunErr := executeCommand(t, []string{"task", "sync", taskID})
 
 	is.Empty(rerunErr)
-	is.Contains(rerunOut, "already in review at https://github.test/org/alpha/pull/55")
-	is.Equal(ghLogBeforeRerun, readFileString(t, ghLogPath))
+	is.Contains(rerunOut, "PR https://github.test/org/alpha/pull/55 is still open for review")
+	ghLogAfterRerun := readFileString(t, ghLogPath)
+	is.Equal(0, strings.Count(ghLogBeforeRerun, "ARG_2<<END\nview\nEND"))
+	is.Equal(1, strings.Count(ghLogAfterRerun, "ARG_2<<END\nview\nEND"))
 	bdLog := readFileString(t, bd.LogPath)
 	is.Equal(1, strings.Count(bdLog, "--set-metadata orpheus.pr_url=https://github.test/org/alpha/pull/55"))
 }

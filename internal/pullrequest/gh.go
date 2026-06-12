@@ -46,6 +46,23 @@ func (GHProvider) FindOpenByBranch(ctx context.Context, req FindOpenByBranchRequ
 	return PullRequest{URL: prURL}, true, nil
 }
 
+// StatusByURL returns the current lifecycle state for a pull request URL.
+func (GHProvider) StatusByURL(ctx context.Context, req StatusByURLRequest) (PullRequestStatus, error) {
+	if err := validateStatusByURLRequest(req); err != nil {
+		return PullRequestStatus{}, err
+	}
+	prURL := strings.TrimSpace(req.URL)
+	output, err := runGH(ctx, "", "", "pr", "view", prURL, "--json", "url,state,merged")
+	if err != nil {
+		return PullRequestStatus{}, fmt.Errorf("poll GitHub PR %s: %w", prURL, err)
+	}
+	status, err := decodeGHPRStatus(output)
+	if err != nil {
+		return PullRequestStatus{}, fmt.Errorf("poll GitHub PR %s: %w", prURL, err)
+	}
+	return status, nil
+}
+
 // Create creates a GitHub pull request and returns its URL.
 func (GHProvider) Create(ctx context.Context, req CreateRequest) (PullRequest, error) {
 	if err := validateCreateRequest(req); err != nil {
@@ -65,6 +82,17 @@ func (GHProvider) Create(ctx context.Context, req CreateRequest) (PullRequest, e
 		return PullRequest{}, fmt.Errorf("create GitHub PR: provider output did not include a valid PR URL")
 	}
 	return PullRequest{URL: prURL}, nil
+}
+
+func validateStatusByURLRequest(req StatusByURLRequest) error {
+	prURL := strings.TrimSpace(req.URL)
+	if prURL == "" {
+		return errors.New("pull request URL is required")
+	}
+	if !isHTTPURL(prURL) {
+		return fmt.Errorf("pull request URL %q is invalid", req.URL)
+	}
+	return nil
 }
 
 func validateFindRequest(req FindOpenByBranchRequest) error {
@@ -106,6 +134,35 @@ func validateBranchArg(label string, branch string) error {
 		return fmt.Errorf("pull request %s %q is unsafe", label, branch)
 	}
 	return nil
+}
+
+func decodeGHPRStatus(output string) (PullRequestStatus, error) {
+	var row struct {
+		URL    string `json:"url"`
+		State  string `json:"state"`
+		Merged bool   `json:"merged"`
+	}
+	if err := json.Unmarshal([]byte(output), &row); err != nil {
+		return PullRequestStatus{}, fmt.Errorf("provider output was not JSON: %w", err)
+	}
+	prURL := strings.TrimSpace(row.URL)
+	if !isHTTPURL(prURL) {
+		return PullRequestStatus{}, errors.New("provider output did not include a valid PR URL")
+	}
+	if row.Merged {
+		return PullRequestStatus{URL: prURL, State: StateMerged}, nil
+	}
+
+	switch strings.ToUpper(strings.TrimSpace(row.State)) {
+	case "OPEN":
+		return PullRequestStatus{URL: prURL, State: StateOpen}, nil
+	case "MERGED":
+		return PullRequestStatus{URL: prURL, State: StateMerged}, nil
+	case "CLOSED":
+		return PullRequestStatus{URL: prURL, State: StateClosed}, nil
+	default:
+		return PullRequestStatus{}, fmt.Errorf("provider output included unsupported PR state %q", row.State)
+	}
 }
 
 func runGH(ctx context.Context, dir string, stdin string, args ...string) (string, error) {

@@ -62,8 +62,11 @@ const (
 	// SyncStatusPRRecovered means the task branch was pushed and an existing PR was recovered.
 	SyncStatusPRRecovered SyncStatus = "pr_recovered"
 
-	// SyncStatusAlreadyInReview means the task already had a local PR URL recorded.
+	// SyncStatusAlreadyInReview means the task's recorded PR is still open.
 	SyncStatusAlreadyInReview SyncStatus = "already_in_review"
+
+	// SyncStatusPRMerged means the task's recorded PR is merged.
+	SyncStatusPRMerged SyncStatus = "pr_merged"
 
 	// SyncStatusSkipped means the task was resolvable but not branch-push eligible.
 	SyncStatusSkipped SyncStatus = "skipped"
@@ -127,7 +130,14 @@ func (s SyncService) syncLocked(ctx context.Context, opts SyncOptions, gitState 
 		return SyncResult{}, err
 	}
 
-	if result, ok := s.alreadyInReview(target); ok {
+	if target.task.Status == task.StatusClosed {
+		return s.skip(target, taskstate.RunAttempt{}, "task is closed"), nil
+	}
+
+	if result, ok, err := s.pollExistingPR(ctx, target); ok || err != nil {
+		if err != nil {
+			return SyncResult{}, err
+		}
 		return result, nil
 	}
 
@@ -218,21 +228,44 @@ func (s SyncService) synced(
 	}
 }
 
-func (s SyncService) alreadyInReview(target syncTarget) (SyncResult, bool) {
+func (s SyncService) pollExistingPR(ctx context.Context, target syncTarget) (SyncResult, bool, error) {
 	metadata := target.task.OrpheusMetadata()
 	prURL := strings.TrimSpace(metadata.PRURL)
 	if !metadata.HasPRURL || prURL == "" {
-		return SyncResult{}, false
+		return SyncResult{}, false, nil
 	}
-	return SyncResult{
+
+	status, err := s.PRProvider.StatusByURL(ctx, pullrequest.StatusByURLRequest{URL: prURL})
+	if err != nil {
+		return SyncResult{}, true, err
+	}
+	observedURL := strings.TrimSpace(status.URL)
+	if observedURL == "" {
+		observedURL = prURL
+	}
+
+	result := SyncResult{
 		Repository: target.source.Repository,
 		Task:       target.task.Clone(),
-		Status:     SyncStatusAlreadyInReview,
-		Reason:     task.MetadataPRURL + " is already set",
 		Branch:     strings.TrimSpace(metadata.Branch),
 		Worktree:   strings.TrimSpace(target.task.OrpheusMetadata().Worktree),
-		PRURL:      prURL,
-	}, true
+		PRURL:      observedURL,
+	}
+
+	switch status.State {
+	case pullrequest.StateOpen:
+		result.Status = SyncStatusAlreadyInReview
+		result.Reason = "PR is still open for review"
+		return result, true, nil
+	case pullrequest.StateMerged:
+		result.Status = SyncStatusPRMerged
+		result.Reason = "PR is merged; backend close is not implemented by this sync slice"
+		return result, true, nil
+	case pullrequest.StateClosed:
+		return SyncResult{}, true, fmt.Errorf("task %s PR %s is closed without merge; no backend state was changed", target.task.ID, observedURL)
+	default:
+		return SyncResult{}, true, fmt.Errorf("task %s PR %s has unsupported provider state %q", target.task.ID, observedURL, status.State)
+	}
 }
 
 func (s SyncService) resolveTarget(ctx context.Context, opts SyncOptions) (syncTarget, error) {

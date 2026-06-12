@@ -1594,7 +1594,7 @@ func TestTaskSyncRecoversExistingBranchPR(t *testing.T) {
 	is.Equal(commit, originCommit)
 }
 
-func TestTaskSyncSkipsExistingPRURLWithoutPushOrProvider(t *testing.T) {
+func TestTaskSyncPollsExistingPRURLWithoutPushOrMutation(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -1630,24 +1630,28 @@ func TestTaskSyncSkipsExistingPRURLWithoutPushOrProvider(t *testing.T) {
 		]`,
 	}})
 	ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{
-		listStdout:   "[]",
+		listStdout:   "unexpected list\n",
+		listExit:     66,
 		createStdout: "unexpected create\n",
+		createExit:   66,
+		statusStdout: `{"url":"https://github.test/org/alpha/pull/42","state":"OPEN","merged":false}`,
+		statusExit:   0,
 	})
 
 	stdout, stderr := executeCommand(t, []string{"task", "sync", "op-sync"})
 
 	is.Empty(stderr)
 	is.Contains(stdout, "Synced op-sync")
-	is.Contains(stdout, "already in review at https://github.test/org/alpha/pull/42")
+	is.Contains(stdout, "PR https://github.test/org/alpha/pull/42 is still open for review")
 	bdLog, readErr := os.ReadFile(bdLogPath)
 	must.NoError(readErr)
 	is.Contains(string(bdLog), "--json --readonly --sandbox show --id op-sync")
 	is.NotContains(string(bdLog), "--json --sandbox update")
-	if ghLog, err := os.ReadFile(ghLogPath); err == nil {
-		is.Empty(string(ghLog))
-	} else {
-		is.True(os.IsNotExist(err), "gh log read error = %v", err)
-	}
+	ghLog, readErr := os.ReadFile(ghLogPath)
+	must.NoError(readErr)
+	is.Contains(string(ghLog), "ARG_2<<END\nview\nEND")
+	is.NotContains(string(ghLog), "ARG_2<<END\nlist\nEND")
+	is.NotContains(string(ghLog), "ARG_2<<END\ncreate\nEND")
 }
 
 func TestTaskSyncSkipsBranchRunAtRepoRoot(t *testing.T) {
@@ -2011,6 +2015,8 @@ type fakeGHPRResponses struct {
 	listExit     int
 	createStdout string
 	createExit   int
+	statusStdout string
+	statusExit   int
 }
 
 func withFakeGHPRResponses(t *testing.T, responses fakeGHPRResponses) string {
@@ -2024,11 +2030,15 @@ func withFakeGHPRResponses(t *testing.T, responses fakeGHPRResponses) string {
 
 	listStdoutPath := filepath.Join(fixtureDir, "list-stdout.txt")
 	createStdoutPath := filepath.Join(fixtureDir, "create-stdout.txt")
+	statusStdoutPath := filepath.Join(fixtureDir, "status-stdout.txt")
 	if err := os.WriteFile(listStdoutPath, []byte(responses.listStdout), 0o644); err != nil {
 		t.Fatalf("write fake gh list stdout: %v", err)
 	}
 	if err := os.WriteFile(createStdoutPath, []byte(responses.createStdout), 0o644); err != nil {
 		t.Fatalf("write fake gh create stdout: %v", err)
+	}
+	if err := os.WriteFile(statusStdoutPath, []byte(responses.statusStdout), 0o644); err != nil {
+		t.Fatalf("write fake gh status stdout: %v", err)
 	}
 
 	logPath := filepath.Join(binDir, "gh.log")
@@ -2056,10 +2066,14 @@ case "$1 $2" in
     cat %s
     exit %d
     ;;
+  "pr view")
+    cat %s
+    exit %d
+    ;;
 esac
 echo "unexpected gh args: $*" >&2
 exit 65
-`, shellQuote(listStdoutPath), responses.listExit, shellQuote(createStdoutPath), responses.createExit)
+`, shellQuote(listStdoutPath), responses.listExit, shellQuote(createStdoutPath), responses.createExit, shellQuote(statusStdoutPath), responses.statusExit)
 
 	ghPath := filepath.Join(binDir, "gh")
 	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
