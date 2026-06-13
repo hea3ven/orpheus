@@ -73,11 +73,14 @@ func (g *fakeSyncGit) PushTaskBranch(_ context.Context, dir string, branch strin
 type fakePRProvider struct {
 	findRequests   []pullrequest.FindOpenByBranchRequest
 	createRequests []pullrequest.CreateRequest
+	statusRequests []pullrequest.StatusByURLRequest
 	found          pullrequest.PullRequest
 	foundOK        bool
 	created        pullrequest.PullRequest
+	status         pullrequest.PullRequestStatus
 	findErr        error
 	createErr      error
+	statusErr      error
 }
 
 func (p *fakePRProvider) FindOpenByBranch(_ context.Context, req pullrequest.FindOpenByBranchRequest) (pullrequest.PullRequest, bool, error) {
@@ -91,6 +94,14 @@ func (p *fakePRProvider) Create(_ context.Context, req pullrequest.CreateRequest
 		return pullrequest.PullRequest{}, p.createErr
 	}
 	return p.created, nil
+}
+
+func (p *fakePRProvider) StatusByURL(_ context.Context, req pullrequest.StatusByURLRequest) (pullrequest.PullRequestStatus, error) {
+	p.statusRequests = append(p.statusRequests, req)
+	if p.statusErr != nil {
+		return pullrequest.PullRequestStatus{}, p.statusErr
+	}
+	return p.status, nil
 }
 
 func TestSyncServiceCreatesPRForEligibleWorktreeCompletion(t *testing.T) {
@@ -191,7 +202,7 @@ func TestSyncServiceRecoversExistingPRBeforeCreate(t *testing.T) {
 	}
 }
 
-func TestSyncServiceAlreadyInReviewSkipsPushRunStoreAndProvider(t *testing.T) {
+func TestSyncServicePollsOpenPRWithoutLocalEligibility(t *testing.T) {
 	repoPath := filepath.Join(t.TempDir(), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	taskItem := task.Task{
@@ -211,6 +222,7 @@ func TestSyncServiceAlreadyInReviewSkipsPushRunStoreAndProvider(t *testing.T) {
 		source,
 	)
 	service.RunStore = fakeSyncRunStore{err: errors.New("run store should not be queried")}
+	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateOpen}
 
 	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
 	if err != nil {
@@ -222,11 +234,135 @@ func TestSyncServiceAlreadyInReviewSkipsPushRunStoreAndProvider(t *testing.T) {
 	if len(git.pushes) != 0 {
 		t.Fatalf("pushes = %#v, want no push", git.pushes)
 	}
+	if len(provider.statusRequests) != 1 || provider.statusRequests[0].URL != "https://github.test/org/repo/pull/42" {
+		t.Fatalf("status requests = %#v, want recorded PR URL polling", provider.statusRequests)
+	}
 	if len(provider.findRequests) != 0 || len(provider.createRequests) != 0 {
-		t.Fatalf("provider calls = %#v/%#v, want none", provider.findRequests, provider.createRequests)
+		t.Fatalf("provider find/create calls = %#v/%#v, want none", provider.findRequests, provider.createRequests)
 	}
 	if len(backend.setPRURLs) != 0 {
 		t.Fatalf("set PR URLs = %#v, want no metadata write", backend.setPRURLs)
+	}
+}
+
+func TestSyncServiceReportsMergedPRWithoutMutation(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	paths, source, _ := newSyncTestSource(t, repoPath, "op-1")
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataPRURL: "https://github.test/org/repo/pull/42",
+		},
+	}
+	service, git, provider, backend := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
+	service.RunStore = fakeSyncRunStore{err: errors.New("run store should not be queried")}
+	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateMerged}
+
+	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Status != workflow.SyncStatusPRMerged ||
+		!strings.Contains(result.Reason, "backend close is not implemented") {
+		t.Fatalf("result = %#v, want merged read-only status", result)
+	}
+	if len(git.pushes) != 0 {
+		t.Fatalf("pushes = %#v, want no push", git.pushes)
+	}
+	if len(provider.findRequests) != 0 || len(provider.createRequests) != 0 {
+		t.Fatalf("provider find/create calls = %#v/%#v, want none", provider.findRequests, provider.createRequests)
+	}
+	if len(backend.setPRURLs) != 0 {
+		t.Fatalf("set PR URLs = %#v, want no metadata write", backend.setPRURLs)
+	}
+}
+
+func TestSyncServiceClosedTaskSkipsWithoutPRPolling(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	paths, source, _ := newSyncTestSource(t, repoPath, "op-1")
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusClosed,
+		Metadata: task.Metadata{
+			task.MetadataPRURL: "https://github.test/org/repo/pull/42",
+		},
+	}
+	service, git, provider, backend := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
+	service.RunStore = fakeSyncRunStore{err: errors.New("run store should not be queried")}
+	provider.statusErr = errors.New("provider should not be queried")
+
+	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Status != workflow.SyncStatusSkipped || !strings.Contains(result.Reason, "task is closed") {
+		t.Fatalf("result = %#v, want closed task skip", result)
+	}
+	if len(git.pushes) != 0 {
+		t.Fatalf("pushes = %#v, want no push", git.pushes)
+	}
+	if len(provider.statusRequests) != 0 || len(provider.findRequests) != 0 || len(provider.createRequests) != 0 {
+		t.Fatalf("provider calls = %#v/%#v/%#v, want none", provider.statusRequests, provider.findRequests, provider.createRequests)
+	}
+	if len(backend.setPRURLs) != 0 {
+		t.Fatalf("set PR URLs = %#v, want no metadata write", backend.setPRURLs)
+	}
+}
+
+func TestSyncServiceExistingPRFailuresAreHardErrors(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	paths, source, _ := newSyncTestSource(t, repoPath, "op-1")
+	taskItem := task.Task{
+		ID:       "op-1",
+		Status:   task.StatusInProgress,
+		Metadata: task.Metadata{task.MetadataPRURL: "https://github.test/org/repo/pull/42"},
+	}
+
+	tests := []struct {
+		name      string
+		status    pullrequest.PullRequestStatus
+		statusErr error
+		want      string
+	}{
+		{
+			name:   "closed unmerged",
+			status: pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateClosed},
+			want:   "closed without merge",
+		},
+		{
+			name:      "provider failure",
+			statusErr: errors.New("gh auth missing"),
+			want:      "gh auth missing",
+		},
+		{
+			name:   "unsupported state",
+			status: pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.State("draft")},
+			want:   "unsupported provider state",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service, git, provider, backend := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
+			service.RunStore = fakeSyncRunStore{err: errors.New("run store should not be queried")}
+			provider.status = tt.status
+			provider.statusErr = tt.statusErr
+
+			_, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want containing %q", err, tt.want)
+			}
+			if len(git.pushes) != 0 {
+				t.Fatalf("pushes = %#v, want no push", git.pushes)
+			}
+			if len(provider.findRequests) != 0 || len(provider.createRequests) != 0 {
+				t.Fatalf("provider find/create calls = %#v/%#v, want none", provider.findRequests, provider.createRequests)
+			}
+			if len(backend.setPRURLs) != 0 {
+				t.Fatalf("set PR URLs = %#v, want no metadata write", backend.setPRURLs)
+			}
+		})
 	}
 }
 
@@ -366,8 +502,8 @@ func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 			if len(git.pushes) != 0 {
 				t.Fatalf("pushes = %#v, want no push for skip", git.pushes)
 			}
-			if len(provider.findRequests) != 0 || len(provider.createRequests) != 0 {
-				t.Fatalf("provider calls = %#v/%#v, want no PR calls for skip", provider.findRequests, provider.createRequests)
+			if len(provider.statusRequests) != 0 || len(provider.findRequests) != 0 || len(provider.createRequests) != 0 {
+				t.Fatalf("provider calls = %#v/%#v/%#v, want no PR calls for skip", provider.statusRequests, provider.findRequests, provider.createRequests)
 			}
 			if len(backend.setPRURLs) != 0 {
 				t.Fatalf("set PR URLs = %#v, want no metadata writes for skip", backend.setPRURLs)
