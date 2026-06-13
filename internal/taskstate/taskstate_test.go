@@ -345,6 +345,69 @@ func TestStoreRecordsFinalizationFactsIdempotently(t *testing.T) {
 	}
 }
 
+func TestStoreRecordsTaskClosedPRMergedEventIdempotently(t *testing.T) {
+	store := newTestStore(t,
+		time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 6, 9, 10, 1, 0, 0, time.UTC),
+	)
+
+	event, err := store.RecordTaskClosedPRMerged("alpha", "op-1", taskstate.TaskClosedPRMergedOptions{
+		PRURL:           " https://github.test/org/repo/pull/42 ",
+		ObservedPRState: "merged",
+	})
+	if err != nil {
+		t.Fatalf("record merged PR close event: %v", err)
+	}
+	if event.Type != taskstate.EventTaskClosedPRMerged ||
+		event.PRURL != "https://github.test/org/repo/pull/42" ||
+		event.ObservedPRState != "merged" ||
+		!event.At.Equal(time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC)) {
+		t.Fatalf("event = %#v, want merged PR close facts", event)
+	}
+	if !strings.Contains(event.Message, "recorded PR was merged") {
+		t.Fatalf("event message = %q, want merged PR audit message", event.Message)
+	}
+
+	again, err := store.RecordTaskClosedPRMerged("alpha", "op-1", taskstate.TaskClosedPRMergedOptions{
+		PRURL:           "https://github.test/org/repo/pull/42",
+		ObservedPRState: "merged",
+	})
+	if err != nil {
+		t.Fatalf("record same merged PR close event again: %v", err)
+	}
+	if !again.At.Equal(event.At) {
+		t.Fatalf("idempotent event time = %s, want %s", again.At, event.At)
+	}
+
+	loaded, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(loaded.Events) != 1 {
+		t.Fatalf("events = %#v, want one idempotent merged PR close event", loaded.Events)
+	}
+
+	statePath, err := store.Path("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("state path: %v", err)
+	}
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read YAML: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"task_closed_due_to_pr_merged",
+		"at: 2026-06-09T10:00:00Z",
+		"pr_url: https://github.test/org/repo/pull/42",
+		"observed_pr_state: merged",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("YAML missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestStartRunRefusesLatestRunningAttempt(t *testing.T) {
 	store := newTestStore(t, time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC))
 	if _, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Agent: "recorder"}); err != nil {

@@ -39,6 +39,7 @@ const (
 	EventRunFinished        EventType = "run_finished"
 	EventRunStartFailed     EventType = "run_start_failed"
 	EventCompletionRepeated EventType = "completion_repeated"
+	EventTaskClosedPRMerged EventType = "task_closed_due_to_pr_merged"
 )
 
 var (
@@ -67,6 +68,7 @@ type Service interface {
 	RecordFinalizationCommit(repoID, taskID string, commit string) (Finalization, error)
 	RecordFinalizationPush(repoID, taskID string) (Finalization, error)
 	RecordFinalizationClose(repoID, taskID string) (Finalization, error)
+	RecordTaskClosedPRMerged(repoID, taskID string, opts TaskClosedPRMergedOptions) (Event, error)
 	Events(repoID, taskID string) ([]Event, error)
 }
 
@@ -141,6 +143,9 @@ type Event struct {
 	RequestedSummary             string `yaml:"requested_summary,omitempty"`
 	RequestedDescription         string `yaml:"requested_description,omitempty"`
 	RequestedDetailedDescription string `yaml:"requested_detailed_description,omitempty"`
+
+	PRURL           string `yaml:"pr_url,omitempty"`
+	ObservedPRState string `yaml:"observed_pr_state,omitempty"`
 }
 
 // WorktreeEventOptions describes worktree context for a trace event.
@@ -172,6 +177,12 @@ type RepeatedCompletionOptions struct {
 	Summary             string
 	Description         string
 	DetailedDescription string
+}
+
+// TaskClosedPRMergedOptions describes the PR observation that caused a backend close.
+type TaskClosedPRMergedOptions struct {
+	PRURL           string
+	ObservedPRState string
 }
 
 // NewStore creates a per-task state store using paths.
@@ -529,6 +540,47 @@ func (s Store) RecordFinalizationClose(repoID, taskID string) (Finalization, err
 	return finalization, nil
 }
 
+// RecordTaskClosedPRMerged appends an idempotent local audit event after a
+// backend task is closed because its recorded PR was observed merged.
+func (s Store) RecordTaskClosedPRMerged(repoID, taskID string, opts TaskClosedPRMergedOptions) (Event, error) {
+	prURL := strings.TrimSpace(opts.PRURL)
+	if prURL == "" {
+		return Event{}, fmt.Errorf("record merged PR close event for task %s/%s: PR URL is required", repoID, taskID)
+	}
+	observedState := strings.TrimSpace(opts.ObservedPRState)
+	if observedState == "" {
+		return Event{}, fmt.Errorf("record merged PR close event for task %s/%s: observed PR state is required", repoID, taskID)
+	}
+
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return Event{}, err
+	}
+	for _, event := range state.Events {
+		if event.Type == EventTaskClosedPRMerged &&
+			strings.TrimSpace(event.PRURL) == prURL &&
+			strings.TrimSpace(event.ObservedPRState) == observedState {
+			return event, nil
+		}
+	}
+
+	event := Event{
+		Type:            EventTaskClosedPRMerged,
+		At:              s.nowUTC(),
+		Message:         "backend task closed because recorded PR was merged",
+		PRURL:           prURL,
+		ObservedPRState: observedState,
+	}
+	if err := validateEvent(event); err != nil {
+		return Event{}, fmt.Errorf("record merged PR close event for task %s/%s: %w", repoID, taskID, err)
+	}
+	state.Events = append(state.Events, event)
+	if err := s.save(state); err != nil {
+		return Event{}, err
+	}
+	return event, nil
+}
+
 // FailRunStart records that an attempt failed before the agent process started.
 func (s Store) FailRunStart(repoID, taskID string, attempt int, cause error) (RunAttempt, error) {
 	errorText := ""
@@ -842,7 +894,7 @@ func validRunStatus(status RunStatus) bool {
 
 func validEventType(eventType EventType) bool {
 	switch eventType {
-	case EventWorktreeCreated, EventWorktreeReused, EventWorktreeRecreated, EventRunStarted, EventRunFinished, EventRunStartFailed, EventCompletionRepeated:
+	case EventWorktreeCreated, EventWorktreeReused, EventWorktreeRecreated, EventRunStarted, EventRunFinished, EventRunStartFailed, EventCompletionRepeated, EventTaskClosedPRMerged:
 		return true
 	default:
 		return false
