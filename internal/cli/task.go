@@ -831,7 +831,7 @@ func renderTaskSyncResult(output interface{ Write([]byte) (int, error) }, result
 	case workflow.SyncStatusPRMerged:
 		_, err := fmt.Fprintf(
 			output,
-			"Synced %s: PR %s is merged. Backend close is not implemented by this sync slice; no backend changes were made.\n",
+			"Synced %s: PR %s is merged. Backend task was closed.\n",
 			result.Task.ID,
 			result.PRURL,
 		)

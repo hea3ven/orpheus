@@ -22,6 +22,7 @@ type SyncBackendFactory func(task.RepositorySource) (task.SyncBackend, error)
 // SyncRunStore reads task execution facts needed by sync.
 type SyncRunStore interface {
 	Load(repoID, taskID string) (taskstate.TaskState, error)
+	RecordTaskClosedPRMerged(repoID, taskID string, opts taskstate.TaskClosedPRMergedOptions) (taskstate.Event, error)
 }
 
 // SyncGit performs the Git operation used by task sync.
@@ -259,7 +260,26 @@ func (s SyncService) pollExistingPR(ctx context.Context, target syncTarget) (Syn
 		return result, true, nil
 	case pullrequest.StateMerged:
 		result.Status = SyncStatusPRMerged
-		result.Reason = "PR is merged; backend close is not implemented by this sync slice"
+		result.Reason = "PR is merged; backend task was closed"
+		if err := target.backend.Close(ctx, target.task.ID); err != nil {
+			return SyncResult{}, true, fmt.Errorf("close backend task %s after merged PR %s: %w", target.task.ID, observedURL, err)
+		}
+		if _, err := s.RunStore.RecordTaskClosedPRMerged(
+			target.source.Repository.ID,
+			target.task.ID,
+			taskstate.TaskClosedPRMergedOptions{
+				PRURL:           observedURL,
+				ObservedPRState: string(pullrequest.StateMerged),
+			},
+		); err != nil {
+			return SyncResult{}, true, fmt.Errorf(
+				"backend task %s was closed after merged PR %s but local task-state audit event failed: %w",
+				target.task.ID,
+				observedURL,
+				err,
+			)
+		}
+		result.Task.Status = task.StatusClosed
 		return result, true, nil
 	case pullrequest.StateClosed:
 		return SyncResult{}, true, fmt.Errorf("task %s PR %s is closed without merge; no backend state was changed", target.task.ID, observedURL)

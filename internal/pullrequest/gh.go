@@ -52,7 +52,7 @@ func (GHProvider) StatusByURL(ctx context.Context, req StatusByURLRequest) (Pull
 		return PullRequestStatus{}, err
 	}
 	prURL := strings.TrimSpace(req.URL)
-	output, err := runGH(ctx, "", "", "pr", "view", prURL, "--json", "url,state,merged")
+	output, err := runGH(ctx, "", "", "pr", "view", prURL, "--json", "url,state,mergedAt")
 	if err != nil {
 		return PullRequestStatus{}, fmt.Errorf("poll GitHub PR %s: %w", prURL, err)
 	}
@@ -138,9 +138,9 @@ func validateBranchArg(label string, branch string) error {
 
 func decodeGHPRStatus(output string) (PullRequestStatus, error) {
 	var row struct {
-		URL    string `json:"url"`
-		State  string `json:"state"`
-		Merged bool   `json:"merged"`
+		URL      string `json:"url"`
+		State    string `json:"state"`
+		MergedAt string `json:"mergedAt"`
 	}
 	if err := json.Unmarshal([]byte(output), &row); err != nil {
 		return PullRequestStatus{}, fmt.Errorf("provider output was not JSON: %w", err)
@@ -149,7 +149,7 @@ func decodeGHPRStatus(output string) (PullRequestStatus, error) {
 	if !isHTTPURL(prURL) {
 		return PullRequestStatus{}, errors.New("provider output did not include a valid PR URL")
 	}
-	if row.Merged {
+	if strings.TrimSpace(row.MergedAt) != "" {
 		return PullRequestStatus{URL: prURL, State: StateMerged}, nil
 	}
 
@@ -200,7 +200,12 @@ func runGH(ctx context.Context, dir string, stdin string, args ...string) (strin
 func classifyGHError(message string, err error) error {
 	lower := strings.ToLower(message)
 	switch {
-	case strings.Contains(lower, "auth") || strings.Contains(lower, "login"):
+	case strings.Contains(lower, "authentication") ||
+		strings.Contains(lower, "authenticate") ||
+		strings.Contains(lower, "authorization") ||
+		strings.Contains(lower, "not logged in") ||
+		strings.Contains(lower, "gh auth login") ||
+		strings.Contains(lower, "login required"):
 		return fmt.Errorf("gh authentication failed or is missing: %w: %s", err, message)
 	case strings.Contains(lower, "not a git repository") ||
 		strings.Contains(lower, "no git remotes") ||

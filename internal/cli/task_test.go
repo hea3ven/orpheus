@@ -1654,6 +1654,79 @@ func TestTaskSyncPollsExistingPRURLWithoutPushOrMutation(t *testing.T) {
 	is.NotContains(string(ghLog), "ARG_2<<END\ncreate\nEND")
 }
 
+func TestTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	taskJSON := `[
+		{
+			"id":"op-sync",
+			"title":"Already merged",
+			"status":"in_progress",
+			"priority":1,
+			"issue_type":"task",
+			"metadata":{
+				"orpheus.branch":"orpheus/op-sync",
+				"orpheus.worktree":"` + filepath.Join(root, "unused-worktree") + `",
+				"orpheus.pr_url":"https://github.test/org/alpha/pull/42"
+			}
+		}
+	]`
+	bdLogPath := withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-sync", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-sync", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-sync", stdout: "{}"},
+	})
+	ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{
+		listStdout:   "unexpected list\n",
+		listExit:     66,
+		createStdout: "unexpected create\n",
+		createExit:   66,
+		statusStdout: `{"url":"https://github.test/org/alpha/pull/42","state":"MERGED","merged":true}`,
+		statusExit:   0,
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "sync", "op-sync"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Synced op-sync")
+	is.Contains(stdout, "PR https://github.test/org/alpha/pull/42 is merged")
+	is.Contains(stdout, "Backend task was closed")
+
+	bdLog, readErr := os.ReadFile(bdLogPath)
+	must.NoError(readErr)
+	is.Equal(2, strings.Count(string(bdLog), "--json --readonly --sandbox show --id op-sync"))
+	is.Contains(string(bdLog), "--json --sandbox close op-sync")
+	is.NotContains(string(bdLog), "--json --sandbox update")
+
+	ghLog, readErr := os.ReadFile(ghLogPath)
+	must.NoError(readErr)
+	is.Contains(string(ghLog), "ARG_2<<END\nview\nEND")
+	is.NotContains(string(ghLog), "ARG_2<<END\nlist\nEND")
+	is.NotContains(string(ghLog), "ARG_2<<END\ncreate\nEND")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-sync.yaml"), &state))
+	must.Len(state.Events, 1)
+	event := state.Events[0]
+	is.Equal(taskstate.EventTaskClosedPRMerged, event.Type)
+	is.Equal("https://github.test/org/alpha/pull/42", event.PRURL)
+	is.Equal("merged", event.ObservedPRState)
+}
+
 func TestTaskSyncSkipsBranchRunAtRepoRoot(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)

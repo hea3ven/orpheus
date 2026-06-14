@@ -16,18 +16,29 @@ import (
 )
 
 type fakeSyncRunStore struct {
-	states map[string]taskstate.TaskState
-	err    error
+	states     map[string]taskstate.TaskState
+	err        error
+	events     []fakeTaskClosedPRMergedEvent
+	recordErr  error
+	recordedAt time.Time
 }
 
 type fakeSyncBackend struct {
 	tasks     []task.Task
 	setPRURLs []fakeSetPRURL
+	closed    []string
+	closeErr  error
 }
 
 type fakeSetPRURL struct {
 	taskID string
 	prURL  string
+}
+
+type fakeTaskClosedPRMergedEvent struct {
+	repoID string
+	taskID string
+	opts   taskstate.TaskClosedPRMergedOptions
 }
 
 func (b *fakeSyncBackend) Get(_ context.Context, id string) (task.Task, error) {
@@ -44,6 +55,14 @@ func (b *fakeSyncBackend) SetPRURL(_ context.Context, taskID string, prURL strin
 	return nil
 }
 
+func (b *fakeSyncBackend) Close(_ context.Context, taskID string) error {
+	b.closed = append(b.closed, taskID)
+	if b.closeErr != nil {
+		return b.closeErr
+	}
+	return nil
+}
+
 func (s fakeSyncRunStore) Load(repoID, taskID string) (taskstate.TaskState, error) {
 	if s.err != nil {
 		return taskstate.TaskState{}, s.err
@@ -53,6 +72,23 @@ func (s fakeSyncRunStore) Load(repoID, taskID string) (taskstate.TaskState, erro
 		return taskstate.TaskState{RepoID: repoID, TaskID: taskID}, nil
 	}
 	return state, nil
+}
+
+func (s *fakeSyncRunStore) RecordTaskClosedPRMerged(repoID, taskID string, opts taskstate.TaskClosedPRMergedOptions) (taskstate.Event, error) {
+	s.events = append(s.events, fakeTaskClosedPRMergedEvent{repoID: repoID, taskID: taskID, opts: opts})
+	if s.recordErr != nil {
+		return taskstate.Event{}, s.recordErr
+	}
+	at := s.recordedAt
+	if at.IsZero() {
+		at = time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC)
+	}
+	return taskstate.Event{
+		Type:            taskstate.EventTaskClosedPRMerged,
+		At:              at,
+		PRURL:           opts.PRURL,
+		ObservedPRState: opts.ObservedPRState,
+	}, nil
 }
 
 type fakeSyncGit struct {
@@ -221,7 +257,7 @@ func TestSyncServicePollsOpenPRWithoutLocalEligibility(t *testing.T) {
 		paths,
 		source,
 	)
-	service.RunStore = fakeSyncRunStore{err: errors.New("run store should not be queried")}
+	service.RunStore = &fakeSyncRunStore{err: errors.New("run store should not be queried")}
 	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateOpen}
 
 	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
@@ -245,7 +281,7 @@ func TestSyncServicePollsOpenPRWithoutLocalEligibility(t *testing.T) {
 	}
 }
 
-func TestSyncServiceReportsMergedPRWithoutMutation(t *testing.T) {
+func TestSyncServiceClosesTaskAndRecordsAuditForMergedPR(t *testing.T) {
 	repoPath := filepath.Join(t.TempDir(), "repo")
 	paths, source, _ := newSyncTestSource(t, repoPath, "op-1")
 	taskItem := task.Task{
@@ -256,7 +292,8 @@ func TestSyncServiceReportsMergedPRWithoutMutation(t *testing.T) {
 		},
 	}
 	service, git, provider, backend := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
-	service.RunStore = fakeSyncRunStore{err: errors.New("run store should not be queried")}
+	runStore := &fakeSyncRunStore{err: errors.New("run store load should not be queried")}
+	service.RunStore = runStore
 	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateMerged}
 
 	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
@@ -264,8 +301,9 @@ func TestSyncServiceReportsMergedPRWithoutMutation(t *testing.T) {
 		t.Fatalf("sync: %v", err)
 	}
 	if result.Status != workflow.SyncStatusPRMerged ||
-		!strings.Contains(result.Reason, "backend close is not implemented") {
-		t.Fatalf("result = %#v, want merged read-only status", result)
+		result.Task.Status != task.StatusClosed ||
+		!strings.Contains(result.Reason, "backend task was closed") {
+		t.Fatalf("result = %#v, want merged close status", result)
 	}
 	if len(git.pushes) != 0 {
 		t.Fatalf("pushes = %#v, want no push", git.pushes)
@@ -275,6 +313,65 @@ func TestSyncServiceReportsMergedPRWithoutMutation(t *testing.T) {
 	}
 	if len(backend.setPRURLs) != 0 {
 		t.Fatalf("set PR URLs = %#v, want no metadata write", backend.setPRURLs)
+	}
+	if len(backend.closed) != 1 || backend.closed[0] != "op-1" {
+		t.Fatalf("closed = %#v, want backend close", backend.closed)
+	}
+	if len(runStore.events) != 1 {
+		t.Fatalf("audit events = %#v, want one", runStore.events)
+	}
+	event := runStore.events[0]
+	if event.repoID != "alpha" ||
+		event.taskID != "op-1" ||
+		event.opts.PRURL != "https://github.test/org/repo/pull/42" ||
+		event.opts.ObservedPRState != "merged" {
+		t.Fatalf("audit event = %#v, want repo/task/merged PR facts", event)
+	}
+}
+
+func TestSyncServiceMergedPRCloseAndAuditFailures(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	paths, source, _ := newSyncTestSource(t, repoPath, "op-1")
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataPRURL: "https://github.test/org/repo/pull/42",
+		},
+	}
+
+	closeErr := errors.New("close rejected")
+	service, _, provider, backend := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
+	runStore := &fakeSyncRunStore{err: errors.New("run store load should not be queried")}
+	service.RunStore = runStore
+	backend.closeErr = closeErr
+	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateMerged}
+
+	_, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
+	if !errors.Is(err, closeErr) || !strings.Contains(err.Error(), "close backend task op-1 after merged PR") {
+		t.Fatalf("error = %v, want close error with context", err)
+	}
+	if len(runStore.events) != 0 {
+		t.Fatalf("audit events = %#v, want none after close failure", runStore.events)
+	}
+
+	auditErr := errors.New("disk full")
+	service, _, provider, backend = newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
+	runStore = &fakeSyncRunStore{
+		err:       errors.New("run store load should not be queried"),
+		recordErr: auditErr,
+	}
+	service.RunStore = runStore
+	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateMerged}
+
+	_, err = service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
+	if !errors.Is(err, auditErr) ||
+		!strings.Contains(err.Error(), "backend task op-1 was closed") ||
+		!strings.Contains(err.Error(), "local task-state audit event failed") {
+		t.Fatalf("error = %v, want post-close audit failure", err)
+	}
+	if len(backend.closed) != 1 || backend.closed[0] != "op-1" {
+		t.Fatalf("closed = %#v, want backend close before audit error", backend.closed)
 	}
 }
 
@@ -289,7 +386,7 @@ func TestSyncServiceClosedTaskSkipsWithoutPRPolling(t *testing.T) {
 		},
 	}
 	service, git, provider, backend := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
-	service.RunStore = fakeSyncRunStore{err: errors.New("run store should not be queried")}
+	service.RunStore = &fakeSyncRunStore{err: errors.New("run store should not be queried")}
 	provider.statusErr = errors.New("provider should not be queried")
 
 	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
@@ -345,7 +442,7 @@ func TestSyncServiceExistingPRFailuresAreHardErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			service, git, provider, backend := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
-			service.RunStore = fakeSyncRunStore{err: errors.New("run store should not be queried")}
+			service.RunStore = &fakeSyncRunStore{err: errors.New("run store should not be queried")}
 			provider.status = tt.status
 			provider.statusErr = tt.statusErr
 
@@ -650,7 +747,7 @@ func newSyncTestService(
 		BackendFactory: func(task.RepositorySource) (task.SyncBackend, error) {
 			return backend, nil
 		},
-		RunStore:   fakeSyncRunStore{states: map[string]taskstate.TaskState{"alpha/op-1": taskState}},
+		RunStore:   &fakeSyncRunStore{states: map[string]taskstate.TaskState{"alpha/op-1": taskState}},
 		Git:        git,
 		PRProvider: provider,
 	}
