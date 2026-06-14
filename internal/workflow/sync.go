@@ -19,6 +19,9 @@ const syncLockOperation = "task sync"
 // SyncBackendFactory creates a sync-capable backend for one repository.
 type SyncBackendFactory func(task.RepositorySource) (task.SyncBackend, error)
 
+// SyncScanBackendFactory creates a read backend for batch sync candidate scanning.
+type SyncScanBackendFactory func(task.RepositorySource) (task.ReadBackend, error)
+
 // SyncRunStore reads task execution facts needed by sync.
 type SyncRunStore interface {
 	Load(repoID, taskID string) (taskstate.TaskState, error)
@@ -43,6 +46,7 @@ type SyncService struct {
 	Paths          state.Paths
 	Sources        []task.RepositorySource
 	BackendFactory SyncBackendFactory
+	ScanFactory    SyncScanBackendFactory
 	RunStore       SyncRunStore
 	Git            SyncGit
 	PRProvider     pullrequest.Provider
@@ -85,10 +89,34 @@ type SyncResult struct {
 	PRURL      string
 }
 
+// SyncAllFailure is a per-repository or per-task batch sync failure.
+type SyncAllFailure struct {
+	Repository task.Repository
+	TaskID     string
+	Operation  string
+	Err        error
+}
+
+// SyncAllResult reports grouped outcomes from a best-effort batch sync.
+type SyncAllResult struct {
+	Results  []SyncResult
+	Failures []SyncAllFailure
+}
+
+// HasFailures reports whether any repository or candidate failed.
+func (r SyncAllResult) HasFailures() bool {
+	return len(r.Failures) > 0
+}
+
 type syncTarget struct {
 	source  task.RepositorySource
 	backend task.SyncBackend
 	task    task.Task
+}
+
+type syncAllCandidate struct {
+	source task.RepositorySource
+	taskID string
 }
 
 // Sync resolves one task, skips non-eligible states, and pushes eligible task branches.
@@ -96,14 +124,8 @@ func (s SyncService) Sync(ctx context.Context, opts SyncOptions) (SyncResult, er
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if s.BackendFactory == nil {
-		return SyncResult{}, errors.New("task sync backend factory is required")
-	}
-	if s.RunStore == nil {
-		return SyncResult{}, errors.New("task sync run store is required")
-	}
-	if s.PRProvider == nil {
-		return SyncResult{}, errors.New("task sync PR provider is required")
+	if err := s.validate(); err != nil {
+		return SyncResult{}, err
 	}
 	gitState := s.Git
 	if gitState == nil {
@@ -123,6 +145,166 @@ func (s SyncService) Sync(ctx context.Context, opts SyncOptions) (SyncResult, er
 		return SyncResult{}, err
 	}
 	return result, nil
+}
+
+// SyncAll scans all registered repositories and syncs tasks already at a PR boundary.
+func (s SyncService) SyncAll(ctx context.Context) (SyncAllResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := s.validate(); err != nil {
+		return SyncAllResult{}, err
+	}
+	gitState := s.Git
+	if gitState == nil {
+		gitState = LocalSyncGit{}
+	}
+
+	var result SyncAllResult
+	err := state.WithGlobalMutationLock(s.Paths, syncLockOperation, func() error {
+		candidates, failures := s.scanSyncAllCandidates(ctx)
+		result.Failures = append(result.Failures, failures...)
+
+		for _, candidate := range candidates {
+			synced, err := s.syncLocked(ctx, SyncOptions{TaskID: candidate.taskID}, gitState)
+			if err != nil {
+				result.Failures = append(result.Failures, SyncAllFailure{
+					Repository: candidate.source.Repository,
+					TaskID:     candidate.taskID,
+					Operation:  "sync",
+					Err:        err,
+				})
+				continue
+			}
+			result.Results = append(result.Results, synced)
+		}
+		return nil
+	})
+	if err != nil {
+		return SyncAllResult{}, err
+	}
+	return result, nil
+}
+
+func (s SyncService) validate() error {
+	if s.BackendFactory == nil {
+		return errors.New("task sync backend factory is required")
+	}
+	if s.RunStore == nil {
+		return errors.New("task sync run store is required")
+	}
+	if s.PRProvider == nil {
+		return errors.New("task sync PR provider is required")
+	}
+	return nil
+}
+
+func (s SyncService) scanSyncAllCandidates(ctx context.Context) ([]syncAllCandidate, []SyncAllFailure) {
+	candidates := make([]syncAllCandidate, 0)
+	failures := make([]SyncAllFailure, 0)
+	for _, source := range s.Sources {
+		backend, err := s.syncScanBackend(source)
+		if err != nil {
+			failures = append(failures, SyncAllFailure{
+				Repository: source.Repository,
+				Operation:  "create_scan_backend",
+				Err:        err,
+			})
+			continue
+		}
+
+		tasks, err := backend.List(ctx)
+		if err != nil {
+			failures = append(failures, SyncAllFailure{
+				Repository: source.Repository,
+				Operation:  "scan_tasks",
+				Err:        err,
+			})
+			continue
+		}
+
+		repoCandidates, repoFailures := s.syncAllCandidatesForTasks(source, tasks)
+		candidates = append(candidates, repoCandidates...)
+		failures = append(failures, repoFailures...)
+	}
+	return candidates, failures
+}
+
+func (s SyncService) syncScanBackend(source task.RepositorySource) (task.ReadBackend, error) {
+	if s.ScanFactory != nil {
+		return s.ScanFactory(source)
+	}
+
+	backend, err := s.BackendFactory(source)
+	if err != nil {
+		return nil, err
+	}
+	readBackend, ok := backend.(task.ReadBackend)
+	if !ok {
+		return nil, errors.New("task sync scan backend must support list")
+	}
+	return readBackend, nil
+}
+
+func (s SyncService) syncAllCandidatesForTasks(
+	source task.RepositorySource,
+	tasks []task.Task,
+) ([]syncAllCandidate, []SyncAllFailure) {
+	candidates := make([]syncAllCandidate, 0)
+	failures := make([]SyncAllFailure, 0)
+	for _, taskItem := range tasks {
+		if !isSyncAllRunnableTask(taskItem) {
+			continue
+		}
+
+		metadata := taskItem.OrpheusMetadata()
+		if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
+			candidates = append(candidates, syncAllCandidate{source: source, taskID: taskItem.ID})
+			continue
+		}
+
+		eligible, err := s.isSyncAllPRCreationCandidate(source.Repository, taskItem)
+		if err != nil {
+			failures = append(failures, SyncAllFailure{
+				Repository: source.Repository,
+				TaskID:     taskItem.ID,
+				Operation:  "select_candidate",
+				Err:        err,
+			})
+			continue
+		}
+		if eligible {
+			candidates = append(candidates, syncAllCandidate{source: source, taskID: taskItem.ID})
+		}
+	}
+	return candidates, failures
+}
+
+func (s SyncService) isSyncAllPRCreationCandidate(repo task.Repository, taskItem task.Task) (bool, error) {
+	taskState, err := s.RunStore.Load(repo.ID, taskItem.ID)
+	if err != nil {
+		return false, fmt.Errorf("load task state for %s/%s: %w", repo.ID, taskItem.ID, err)
+	}
+	latest, ok := taskstate.LatestRun(taskState)
+	if !ok {
+		return false, nil
+	}
+	targets, err := ExpectedTargetsForTask(repo, taskItem.ID, s.Paths)
+	if err != nil {
+		return false, err
+	}
+	eligible, _, err := syncEligibility(repo, taskItem, latest, targets)
+	if err != nil {
+		return false, err
+	}
+	return eligible, nil
+}
+
+func isSyncAllRunnableTask(taskItem task.Task) bool {
+	if strings.TrimSpace(taskItem.ID) == "" || taskItem.Status == task.StatusClosed {
+		return false
+	}
+	return taskItem.IssueType != task.IssueTypeEpic
 }
 
 func (s SyncService) syncLocked(ctx context.Context, opts SyncOptions, gitState SyncGit) (SyncResult, error) {
