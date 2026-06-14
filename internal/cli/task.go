@@ -167,17 +167,30 @@ func newTaskDoneCommand(opts *rootOptions) *cobra.Command {
 }
 
 func newTaskSyncCommand(opts *rootOptions) *cobra.Command {
+	var all bool
 	cmd := &cobra.Command{
-		Use:   "sync <task-id>",
+		Use:   "sync [<task-id>]",
 		Short: "Sync a task with pull request review",
 		Long: "Sync a task with pull request review.\n\n" +
 			"Tasks with a recorded PR URL are polled from the PR provider. Tasks without a PR URL " +
 			"must be PR-ready before Orpheus pushes the task branch and creates or recovers a PR.",
-		Args: cobra.ExactArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			if all {
+				if len(args) != 0 {
+					return fmt.Errorf("--all cannot be combined with a task id")
+				}
+				return nil
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
 		RunE: func(command *cobra.Command, args []string) error {
+			if all {
+				return runTaskSyncAll(command, opts)
+			}
 			return runTaskSync(command, opts, args[0])
 		},
 	}
+	cmd.Flags().BoolVar(&all, "all", false, "sync all registered repositories at PR boundaries")
 	return cmd
 }
 
@@ -554,6 +567,54 @@ func runTaskSync(command *cobra.Command, opts *rootOptions, taskID string) error
 	return renderTaskSyncResult(command.OutOrStdout(), result)
 }
 
+func runTaskSyncAll(command *cobra.Command, opts *rootOptions) error {
+	logger := opts.log().With(
+		slog.String("component", "cli"),
+		slog.String("operation", "task_sync_all"),
+	)
+	logger.DebugContext(command.Context(), "loading registered repos for task sync all")
+
+	paths, err := state.ResolveFromEnvironment()
+	if err != nil {
+		return err
+	}
+	taskCtx, err := loadTaskContext()
+	if err != nil {
+		return err
+	}
+
+	service := workflow.SyncService{
+		Paths:   paths,
+		Sources: taskCtx.Sources,
+		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.SyncBackend, error) {
+			return newBeadsTaskBackend(source.BackendDir)
+		},
+		ScanFactory: func(source taskmodel.RepositorySource) (taskmodel.ReadBackend, error) {
+			return newBeadsTaskBackend(source.BackendDir)
+		},
+		RunStore:   taskstate.NewStore(paths),
+		PRProvider: pullrequest.GHProvider{},
+	}
+	result, err := service.SyncAll(command.Context())
+	if err != nil {
+		return fmt.Errorf("task sync --all: %w", err)
+	}
+
+	logger.DebugContext(
+		command.Context(),
+		"synced all PR-boundary tasks",
+		slog.Int("result_count", len(result.Results)),
+		slog.Int("failure_count", len(result.Failures)),
+	)
+	if err := renderTaskSyncAllResult(command.OutOrStdout(), result); err != nil {
+		return err
+	}
+	if result.HasFailures() {
+		return taskSyncAllFailureError{failures: result.Failures}
+	}
+	return nil
+}
+
 type taskRunStartOptions struct {
 	resolved  taskmodel.ResolvedTaskSource
 	repo      registry.Repo
@@ -926,6 +987,129 @@ func renderTaskSyncResult(output interface{ Write([]byte) (int, error) }, result
 	default:
 		return fmt.Errorf("unknown task sync result status %q", result.Status)
 	}
+}
+
+func renderTaskSyncAllResult(output interface{ Write([]byte) (int, error) }, result workflow.SyncAllResult) error {
+	if len(result.Results) == 0 && len(result.Failures) == 0 {
+		_, err := fmt.Fprintln(output, "No PR-boundary tasks found across registered repositories.")
+		return err
+	}
+
+	if err := renderTaskSyncAllGroup(output, "Created/recovered PRs", result.Results, func(syncResult workflow.SyncResult) bool {
+		return syncResult.Status == workflow.SyncStatusPRCreated ||
+			syncResult.Status == workflow.SyncStatusPRRecovered
+	}); err != nil {
+		return err
+	}
+	if err := renderTaskSyncAllGroup(output, "Open/in-review PRs", result.Results, func(syncResult workflow.SyncResult) bool {
+		return syncResult.Status == workflow.SyncStatusAlreadyInReview
+	}); err != nil {
+		return err
+	}
+	if err := renderTaskSyncAllGroup(output, "Merged/closed tasks", result.Results, func(syncResult workflow.SyncResult) bool {
+		return syncResult.Status == workflow.SyncStatusPRMerged
+	}); err != nil {
+		return err
+	}
+	if err := renderTaskSyncAllGroup(output, "Skipped", result.Results, func(syncResult workflow.SyncResult) bool {
+		return syncResult.Status == workflow.SyncStatusSkipped
+	}); err != nil {
+		return err
+	}
+	return renderTaskSyncAllFailures(output, result.Failures)
+}
+
+func renderTaskSyncAllGroup(
+	output interface{ Write([]byte) (int, error) },
+	title string,
+	results []workflow.SyncResult,
+	matches func(workflow.SyncResult) bool,
+) error {
+	matched := make([]workflow.SyncResult, 0)
+	for _, result := range results {
+		if matches(result) {
+			matched = append(matched, result)
+		}
+	}
+	if len(matched) == 0 {
+		return nil
+	}
+
+	if _, err := fmt.Fprintf(output, "%s (%d):\n", title, len(matched)); err != nil {
+		return err
+	}
+	for _, result := range matched {
+		if err := renderTaskSyncAllResultLine(output, result); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func renderTaskSyncAllResultLine(output interface{ Write([]byte) (int, error) }, result workflow.SyncResult) error {
+	prefix := fmt.Sprintf("  - %s (%s): ", result.Task.ID, result.Repository.ID)
+	switch result.Status {
+	case workflow.SyncStatusPRCreated:
+		_, err := fmt.Fprintf(output, "%spushed branch %s and created PR %s\n", prefix, result.Branch, result.PRURL)
+		return err
+	case workflow.SyncStatusPRRecovered:
+		_, err := fmt.Fprintf(output, "%spushed branch %s and recovered existing PR %s\n", prefix, result.Branch, result.PRURL)
+		return err
+	case workflow.SyncStatusAlreadyInReview:
+		_, err := fmt.Fprintf(output, "%sPR %s is still open for review\n", prefix, result.PRURL)
+		return err
+	case workflow.SyncStatusPRMerged:
+		_, err := fmt.Fprintf(output, "%sPR %s is merged; backend task was closed\n", prefix, result.PRURL)
+		return err
+	case workflow.SyncStatusSkipped:
+		_, err := fmt.Fprintf(output, "%s%s\n", prefix, result.Reason)
+		return err
+	default:
+		return fmt.Errorf("unknown task sync result status %q", result.Status)
+	}
+}
+
+func renderTaskSyncAllFailures(output interface{ Write([]byte) (int, error) }, failures []workflow.SyncAllFailure) error {
+	if len(failures) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintf(output, "Errors (%d):\n", len(failures)); err != nil {
+		return err
+	}
+	for _, failure := range failures {
+		taskID := strings.TrimSpace(failure.TaskID)
+		if taskID == "" {
+			if _, err := fmt.Fprintf(
+				output,
+				"  - repo %s: %s: %v\n",
+				failure.Repository.ID,
+				failure.Operation,
+				failure.Err,
+			); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := fmt.Fprintf(
+			output,
+			"  - %s (%s): %s: %v\n",
+			taskID,
+			failure.Repository.ID,
+			failure.Operation,
+			failure.Err,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type taskSyncAllFailureError struct {
+	failures []workflow.SyncAllFailure
+}
+
+func (e taskSyncAllFailureError) Error() string {
+	return fmt.Sprintf("task sync --all failed for %d item(s)", len(e.failures))
 }
 
 func activeTaskRunError(
