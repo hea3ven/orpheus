@@ -20,22 +20,22 @@ func TestGHProviderStatusByURL(t *testing.T) {
 	}{
 		{
 			name:      "open",
-			output:    `{"url":"https://github.com/org/repo/pull/1","state":"OPEN","merged":false}`,
+			output:    `{"url":"https://github.com/org/repo/pull/1","state":"OPEN","mergedAt":null}`,
 			wantState: pullrequest.StateOpen,
 		},
 		{
-			name:      "merged boolean wins",
-			output:    `{"url":"https://github.com/org/repo/pull/1","state":"CLOSED","merged":true}`,
+			name:      "merged timestamp wins",
+			output:    `{"url":"https://github.com/org/repo/pull/1","state":"CLOSED","mergedAt":"2026-06-14T10:00:00Z"}`,
 			wantState: pullrequest.StateMerged,
 		},
 		{
 			name:      "merged state",
-			output:    `{"url":"https://github.com/org/repo/pull/1","state":"MERGED","merged":false}`,
+			output:    `{"url":"https://github.com/org/repo/pull/1","state":"MERGED","mergedAt":null}`,
 			wantState: pullrequest.StateMerged,
 		},
 		{
 			name:      "closed unmerged",
-			output:    `{"url":"https://github.com/org/repo/pull/1","state":"CLOSED","merged":false}`,
+			output:    `{"url":"https://github.com/org/repo/pull/1","state":"CLOSED","mergedAt":null}`,
 			wantState: pullrequest.StateClosed,
 		},
 		{
@@ -45,12 +45,12 @@ func TestGHProviderStatusByURL(t *testing.T) {
 		},
 		{
 			name:    "invalid url",
-			output:  `{"url":"not-a-url","state":"OPEN","merged":false}`,
+			output:  `{"url":"not-a-url","state":"OPEN","mergedAt":null}`,
 			wantErr: "valid PR URL",
 		},
 		{
 			name:    "unsupported state",
-			output:  `{"url":"https://github.com/org/repo/pull/1","state":"DRAFT","merged":false}`,
+			output:  `{"url":"https://github.com/org/repo/pull/1","state":"DRAFT","mergedAt":null}`,
 			wantErr: "unsupported PR state",
 		},
 	}
@@ -78,6 +78,30 @@ func TestGHProviderStatusByURL(t *testing.T) {
 	}
 }
 
+func TestGHProviderStatusByURLRequestsSupportedFields(t *testing.T) {
+	logPath := installFakeGH(t, `{"url":"https://github.com/org/repo/pull/1","state":"OPEN","mergedAt":null}`, 0)
+
+	_, err := pullrequest.GHProvider{}.StatusByURL(
+		context.Background(),
+		pullrequest.StatusByURLRequest{URL: "https://github.com/org/repo/pull/1"},
+	)
+	if err != nil {
+		t.Fatalf("status by URL: %v", err)
+	}
+
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read gh log: %v", err)
+	}
+	text := string(logged)
+	if !strings.Contains(text, "--json url,state,mergedAt") {
+		t.Fatalf("gh args = %q, want mergedAt status fields", text)
+	}
+	if strings.Contains(text, "--json url,state,merged\n") {
+		t.Fatalf("gh args = %q, should not request unsupported merged field", text)
+	}
+}
+
 func TestGHProviderStatusByURLRejectsMalformedURL(t *testing.T) {
 	_, err := pullrequest.GHProvider{}.StatusByURL(
 		context.Background(),
@@ -99,15 +123,35 @@ func TestGHProviderStatusByURLWrapsProviderFailure(t *testing.T) {
 	}
 }
 
-func installFakeGH(t *testing.T, stdout string, exitCode int) {
+func TestGHProviderStatusByURLDoesNotMisclassifyUnknownJSONFieldAsAuth(t *testing.T) {
+	installFakeGH(t, "Unknown JSON field: \"merged\"\nAvailable fields:\n  author\n  autoMergeRequest\n", 1)
+
+	_, err := pullrequest.GHProvider{}.StatusByURL(
+		context.Background(),
+		pullrequest.StatusByURLRequest{URL: "https://github.com/org/repo/pull/1"},
+	)
+	if err == nil {
+		t.Fatal("error = nil, want provider failure")
+	}
+	if strings.Contains(err.Error(), "authentication failed") {
+		t.Fatalf("error = %v, should not classify author/autoMergeRequest output as auth failure", err)
+	}
+	if !strings.Contains(err.Error(), "gh provider command failed") {
+		t.Fatalf("error = %v, want generic provider command failure", err)
+	}
+}
+
+func installFakeGH(t *testing.T, stdout string, exitCode int) string {
 	t.Helper()
 
 	binDir := t.TempDir()
+	logPath := filepath.Join(binDir, "gh.log")
 	stdoutPath := filepath.Join(binDir, "stdout.txt")
 	if err := os.WriteFile(stdoutPath, []byte(stdout), 0o644); err != nil {
 		t.Fatalf("write fake gh stdout: %v", err)
 	}
 	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$*\" >> " + shellQuote(logPath) + "\n" +
 		"cat " + shellQuote(stdoutPath) + "\n" +
 		"exit " + strconv.Itoa(exitCode) + "\n"
 	ghPath := filepath.Join(binDir, "gh")
@@ -115,6 +159,7 @@ func installFakeGH(t *testing.T, stdout string, exitCode int) {
 		t.Fatalf("write fake gh: %v", err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return logPath
 }
 
 func shellQuote(value string) string {
