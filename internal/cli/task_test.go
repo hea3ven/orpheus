@@ -476,6 +476,207 @@ func TestTaskShowRendersActiveNonTaskItems(t *testing.T) {
 	}
 }
 
+func TestTaskDirPrintsWorktreeDirectory(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoDir := filepath.Join(t.TempDir(), "alpha")
+	otherRepoDir := filepath.Join(t.TempDir(), "beta")
+	worktreeDir := filepath.Join(t.TempDir(), "op-1-worktree")
+	must.NoError(os.MkdirAll(repoDir, 0o755))
+	must.NoError(os.MkdirAll(otherRepoDir, 0o755))
+	must.NoError(os.MkdirAll(worktreeDir, 0o755))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{
+		{
+			ID:            "alpha",
+			Name:          "Alpha",
+			Path:          repoDir,
+			DefaultBranch: "main",
+			BeadsMode:     registry.BeadsModeLocal,
+			BeadsPrefix:   "op",
+		},
+		{
+			ID:            "beta",
+			Name:          "Beta",
+			Path:          otherRepoDir,
+			DefaultBranch: "main",
+			BeadsMode:     registry.BeadsModeLocal,
+			BeadsPrefix:   "bt",
+		},
+	}}))
+
+	logPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[
+			{
+				"id":"op-1",
+				"title":"Worktree task",
+				"status":"in_progress",
+				"priority":2,
+				"issue_type":"task",
+				"metadata":{"orpheus.branch":"orpheus/op-1","orpheus.worktree":"` + worktreeDir + `"}
+			}
+		]`},
+		otherRepoDir: {stderr: "other repo should not be queried", exitCode: 70},
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "dir", "op-1"})
+
+	is.Empty(stderr)
+	is.Equal(worktreeDir+"\n", stdout)
+
+	logData, err := os.ReadFile(logPath)
+	must.NoError(err)
+	log := string(logData)
+	is.Contains(log, repoDir)
+	is.NotContains(log, otherRepoDir)
+	is.Contains(log, "--json --readonly --sandbox show --id op-1")
+	is.NotContains(log, "--json --readonly --sandbox list")
+}
+
+func TestTaskDirPrintsRepoRootForMainTask(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoDir := filepath.Join(t.TempDir(), "alpha")
+	metadataRepoDir := filepath.Join(repoDir, ".")
+	must.NoError(os.MkdirAll(repoDir, 0o755))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha",
+		Path:          repoDir,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[
+			{
+				"id":"op-main",
+				"title":"Main task",
+				"status":"in_progress",
+				"priority":1,
+				"issue_type":"task",
+				"metadata":{"orpheus.branch":"main","orpheus.worktree":"` + metadataRepoDir + `"}
+			}
+		]`},
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "dir", "op-main"})
+
+	is.Empty(stderr)
+	is.Equal(filepath.Clean(repoDir)+"\n", stdout)
+}
+
+func TestTaskDirReportsMalformedAndUnknownPrefixes(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoDir := filepath.Join(t.TempDir(), "alpha")
+	must.NoError(os.MkdirAll(repoDir, 0o755))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:          "alpha",
+		Name:        "Alpha",
+		Path:        repoDir,
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "op",
+	}}}))
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "dir", "notprefixed"})
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "malformed task id")
+	is.ErrorContains(err, "expected <prefix>-<number>")
+
+	stdout, stderr, err = executeCommandWithError(t, []string{"task", "dir", "zz-1"})
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "unknown task id prefix")
+	is.ErrorContains(err, "orpheus repo list")
+	is.ErrorContains(err, "register the repo")
+}
+
+func TestTaskDirReportsMissingAndInconsistentMetadata(t *testing.T) {
+	testCases := []struct {
+		name        string
+		taskID      string
+		metadata    string
+		wantMessage string
+	}{
+		{
+			name:        "missing worktree",
+			taskID:      "op-missing",
+			metadata:    `{}`,
+			wantMessage: "task has no Orpheus working directory metadata",
+		},
+		{
+			name:        "missing branch",
+			taskID:      "op-incomplete",
+			metadata:    `{"orpheus.worktree":"/tmp/op-incomplete"}`,
+			wantMessage: "orpheus.branch is missing",
+		},
+		{
+			name:        "inconsistent target",
+			taskID:      "op-inconsistent",
+			metadata:    `{"orpheus.branch":"main","orpheus.worktree":"/tmp/op-inconsistent"}`,
+			wantMessage: "task Orpheus target metadata is inconsistent",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			is := assert.New(t)
+			must := require.New(t)
+			newTestState(t)
+			paths := currentTestPaths(t)
+			store := registry.NewStore(paths)
+
+			repoDir := filepath.Join(t.TempDir(), "alpha")
+			must.NoError(os.MkdirAll(repoDir, 0o755))
+			must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+				ID:            "alpha",
+				Name:          "Alpha",
+				Path:          repoDir,
+				DefaultBranch: "main",
+				BeadsMode:     registry.BeadsModeLocal,
+				BeadsPrefix:   "op",
+			}}}))
+
+			withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+				repoDir: {stdout: `[
+					{
+						"id":"` + tc.taskID + `",
+						"title":"Task dir metadata case",
+						"status":"in_progress",
+						"priority":1,
+						"issue_type":"task",
+						"metadata":` + tc.metadata + `
+					}
+				]`},
+			})
+
+			stdout, stderr, err := executeCommandWithError(t, []string{"task", "dir", tc.taskID})
+
+			must.Error(err)
+			is.Empty(stdout)
+			is.Empty(stderr)
+			is.ErrorContains(err, "task dir "+tc.taskID)
+			is.ErrorContains(err, tc.wantMessage)
+		})
+	}
+}
+
 func TestTaskRunExecutesDefaultAgentAttachedFromDeterministicWorktree(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
