@@ -245,6 +245,7 @@ type PRURLMutator interface {
 type SyncBackend interface {
 	Getter
 	PRURLMutator
+	CloseMutator
 }
 
 // CloseMutator is the narrow backend-neutral mutation used when finalizing a
