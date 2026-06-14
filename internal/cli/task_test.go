@@ -1723,6 +1723,7 @@ func TestTaskSyncPushesPRReadyTaskBranch(t *testing.T) {
 	is.Contains(string(ghLog), "ARG_1<<END\npr\nEND")
 	is.Contains(string(ghLog), "ARG_2<<END\nlist\nEND")
 	is.Contains(string(ghLog), "ARG_2<<END\ncreate\nEND")
+	is.NotContains(string(ghLog), "ARG_2<<END\nview\nEND")
 	is.Contains(string(ghLog), "ARG_8<<END\nReady for PR\nEND")
 	is.Contains(string(ghLog), "Detailed PR body.")
 	is.NotContains(string(ghLog), "Created by Orpheus.")
@@ -1926,6 +1927,199 @@ func TestTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR(t *testing.T) {
 	is.Equal(taskstate.EventTaskClosedPRMerged, event.Type)
 	is.Equal("https://github.test/org/alpha/pull/42", event.PRURL)
 	is.Equal("merged", event.ObservedPRState)
+}
+
+func TestTaskSyncExistingPRErrorsDoNotMutateBackendOrAudit(t *testing.T) {
+	tests := []struct {
+		name         string
+		taskPRURL    string
+		statusStdout string
+		statusExit   int
+		wantError    string
+		wantGHView   bool
+	}{
+		{
+			name:      "stored PR URL rejected by provider",
+			taskPRURL: "not-a-url",
+			statusStdout: `could not parse pull request URL
+`,
+			statusExit: 65,
+			wantError:  "pull request URL \"not-a-url\" is invalid",
+		},
+		{
+			name:         "provider omits PR URL",
+			taskPRURL:    "https://github.test/org/alpha/pull/42",
+			statusStdout: `{"state":"OPEN","mergedAt":null}`,
+			wantError:    "valid PR URL",
+			wantGHView:   true,
+		},
+		{
+			name:         "provider returns malformed PR URL",
+			taskPRURL:    "https://github.test/org/alpha/pull/42",
+			statusStdout: `{"url":"not-a-url","state":"OPEN","mergedAt":null}`,
+			wantError:    "valid PR URL",
+			wantGHView:   true,
+		},
+		{
+			name:      "provider cannot access repository",
+			taskPRURL: "https://github.test/org/alpha/pull/42",
+			statusStdout: `Could not resolve to a Repository with the name 'org/alpha'
+`,
+			statusExit: 1,
+			wantError:  "could not be resolved by gh",
+			wantGHView: true,
+		},
+		{
+			name:      "provider authentication failure",
+			taskPRURL: "https://github.test/org/alpha/pull/42",
+			statusStdout: `gh auth login required
+`,
+			statusExit: 1,
+			wantError:  "gh authentication failed or is missing",
+			wantGHView: true,
+		},
+		{
+			name:         "closed without merge",
+			taskPRURL:    "https://github.test/org/alpha/pull/42",
+			statusStdout: `{"url":"https://github.test/org/alpha/pull/42","state":"CLOSED","mergedAt":null}`,
+			wantError:    "closed without merge",
+			wantGHView:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			is := assert.New(t)
+			must := require.New(t)
+			root := newTestState(t)
+			paths := currentTestPaths(t)
+			store := registry.NewStore(paths)
+
+			repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+			must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+				ID:            "alpha",
+				Name:          "Alpha Repo",
+				Path:          repoPath,
+				DefaultBranch: "main",
+				BeadsMode:     registry.BeadsModeLocal,
+				BeadsPrefix:   "op",
+			}}}))
+
+			taskJSON := `[
+				{
+					"id":"op-sync",
+					"title":"Existing PR error",
+					"status":"in_progress",
+					"priority":1,
+					"issue_type":"task",
+					"metadata":{"orpheus.pr_url":"` + tt.taskPRURL + `"}
+				}
+			]`
+			bdLogPath := withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
+				dir:    repoPath,
+				args:   "--json --readonly --sandbox show --id op-sync",
+				stdout: taskJSON,
+			}})
+			ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{
+				listStdout:   "unexpected list\n",
+				listExit:     66,
+				createStdout: "unexpected create\n",
+				createExit:   66,
+				statusStdout: tt.statusStdout,
+				statusExit:   tt.statusExit,
+			})
+
+			stdout, stderr, err := executeCommandWithError(t, []string{"task", "sync", "op-sync"})
+
+			must.Error(err)
+			is.Empty(stdout)
+			is.Empty(stderr)
+			is.ErrorContains(err, tt.wantError)
+
+			bdLog, readErr := os.ReadFile(bdLogPath)
+			must.NoError(readErr)
+			is.Contains(string(bdLog), "--json --readonly --sandbox show --id op-sync")
+			is.NotContains(string(bdLog), "--json --sandbox close op-sync")
+			is.NotContains(string(bdLog), "--json --sandbox update")
+
+			ghLog, readErr := os.ReadFile(ghLogPath)
+			if tt.wantGHView {
+				must.NoError(readErr)
+				is.Contains(string(ghLog), "ARG_2<<END\nview\nEND")
+				is.NotContains(string(ghLog), "ARG_2<<END\nlist\nEND")
+				is.NotContains(string(ghLog), "ARG_2<<END\ncreate\nEND")
+			} else if readErr == nil {
+				is.Empty(string(ghLog))
+			} else {
+				is.True(os.IsNotExist(readErr), "read gh log: %v", readErr)
+			}
+
+			_, statErr := os.Stat(filepath.Join(paths.DataRoot, "repos", "alpha", "tasks", "op-sync.yaml"))
+			is.True(os.IsNotExist(statErr), "task-state audit file should not be created: %v", statErr)
+		})
+	}
+}
+
+func TestTaskSyncSkipsClosedTaskWithoutPRPolling(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	closedTaskJSON := `[
+		{
+			"id":"op-sync",
+			"title":"Already closed",
+			"status":"closed",
+			"priority":1,
+			"issue_type":"task",
+			"metadata":{"orpheus.pr_url":"https://github.test/org/alpha/pull/42"}
+		}
+	]`
+	bdLogPath := withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
+		dir:    repoPath,
+		args:   "--json --readonly --sandbox show --id op-sync",
+		stdout: closedTaskJSON,
+	}})
+	ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{
+		listStdout:   "unexpected list\n",
+		listExit:     66,
+		createStdout: "unexpected create\n",
+		createExit:   66,
+		statusStdout: "unexpected view\n",
+		statusExit:   66,
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "sync", "op-sync"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Skipped op-sync")
+	is.Contains(stdout, "task is closed")
+	is.Contains(stdout, "PR creation was not attempted")
+
+	bdLog, readErr := os.ReadFile(bdLogPath)
+	must.NoError(readErr)
+	is.Contains(string(bdLog), "--json --readonly --sandbox show --id op-sync")
+	is.NotContains(string(bdLog), "--json --sandbox update")
+	is.NotContains(string(bdLog), "--json --sandbox close")
+
+	ghLog, readErr := os.ReadFile(ghLogPath)
+	if readErr == nil {
+		is.Empty(string(ghLog))
+	} else {
+		is.True(os.IsNotExist(readErr), "read gh log: %v", readErr)
+	}
 }
 
 func TestTaskSyncSkipsBranchRunAtRepoRoot(t *testing.T) {
@@ -2189,6 +2383,217 @@ func TestTaskSyncAllReturnsNonZeroAfterCandidateError(t *testing.T) {
 	is.ErrorContains(err, "task sync --all failed for 1 item")
 }
 
+func TestTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAfterFailures(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	alphaPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	betaPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "beta"))
+	gammaPath := filepath.Join(root, "repos", "gamma")
+	must.NoError(os.MkdirAll(gammaPath, 0o755))
+	configureTestGitUser(t, alphaPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{
+		{
+			ID:            "alpha",
+			Name:          "Alpha Repo",
+			Path:          alphaPath,
+			DefaultBranch: "main",
+			BeadsMode:     registry.BeadsModeLocal,
+			BeadsPrefix:   "a",
+		},
+		{
+			ID:            "beta",
+			Name:          "Beta Repo",
+			Path:          betaPath,
+			DefaultBranch: "main",
+			BeadsMode:     registry.BeadsModeLocal,
+			BeadsPrefix:   "b",
+		},
+		{
+			ID:            "gamma",
+			Name:          "Gamma Repo",
+			Path:          gammaPath,
+			DefaultBranch: "main",
+			BeadsMode:     registry.BeadsModeLocal,
+			BeadsPrefix:   "g",
+		},
+	}}))
+
+	alphaTargets, err := workflow.ExpectedTargetsForTask(taskmodel.Repository{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          alphaPath,
+		DefaultBranch: "main",
+	}, "a-create", paths)
+	must.NoError(err)
+	alphaWorktree := alphaTargets.WorktreeTeam.Worktree
+	runGit(t, alphaPath, "branch", alphaTargets.WorktreeTeam.Branch, "main")
+	runGit(t, alphaPath, "worktree", "add", alphaWorktree, alphaTargets.WorktreeTeam.Branch)
+	must.NoError(os.WriteFile(filepath.Join(alphaWorktree, "sync-all.txt"), []byte("sync all\n"), 0o644))
+	runGit(t, alphaWorktree, "add", "sync-all.txt")
+	runGit(t, alphaWorktree, "commit", "-m", "sync all task branch")
+	commit := strings.TrimSpace(runGit(t, alphaWorktree, "rev-parse", "HEAD"))
+	recordWorktreeCompletion(
+		t,
+		paths,
+		"alpha",
+		"a-create",
+		alphaTargets.WorktreeTeam.Branch,
+		alphaWorktree,
+		commit,
+	)
+
+	alphaListJSON := `[
+		{
+			"id":"a-create",
+			"title":"Create PR",
+			"status":"in_progress",
+			"priority":1,
+			"issue_type":"task",
+			"metadata":{"orpheus.branch":"` + alphaTargets.WorktreeTeam.Branch + `","orpheus.worktree":"` + alphaWorktree + `"}
+		},
+		{
+			"id":"a-open",
+			"title":"Already open",
+			"status":"in_progress",
+			"priority":1,
+			"issue_type":"task",
+			"metadata":{"orpheus.pr_url":"https://github.test/org/alpha/pull/77"}
+		}
+	]`
+	openTaskJSON := `[
+		{
+			"id":"a-open",
+			"title":"Already open",
+			"status":"in_progress",
+			"priority":1,
+			"issue_type":"task",
+			"metadata":{"orpheus.pr_url":"https://github.test/org/alpha/pull/77"}
+		}
+	]`
+	betaListJSON := `[
+		{
+			"id":"b-merged",
+			"title":"Merged PR",
+			"status":"in_progress",
+			"priority":1,
+			"issue_type":"task",
+			"metadata":{"orpheus.pr_url":"https://github.test/org/beta/pull/88"}
+		},
+		{
+			"id":"b-closed",
+			"title":"Closed PR",
+			"status":"in_progress",
+			"priority":1,
+			"issue_type":"task",
+			"metadata":{"orpheus.pr_url":"https://github.test/org/beta/pull/99"}
+		}
+	]`
+	mergedTaskJSON := `[
+		{
+			"id":"b-merged",
+			"title":"Merged PR",
+			"status":"in_progress",
+			"priority":1,
+			"issue_type":"task",
+			"metadata":{"orpheus.pr_url":"https://github.test/org/beta/pull/88"}
+		}
+	]`
+	closedTaskJSON := `[
+		{
+			"id":"b-closed",
+			"title":"Closed PR",
+			"status":"in_progress",
+			"priority":1,
+			"issue_type":"task",
+			"metadata":{"orpheus.pr_url":"https://github.test/org/beta/pull/99"}
+		}
+	]`
+	bdLogPath := withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: alphaPath, args: "--json --readonly --sandbox list --all --limit 0", stdout: alphaListJSON},
+		{dir: betaPath, args: "--json --readonly --sandbox list --all --limit 0", stdout: betaListJSON},
+		{
+			dir:      gammaPath,
+			args:     "--json --readonly --sandbox list --all --limit 0",
+			stderr:   "bd unavailable\n",
+			exitCode: 1,
+		},
+		{
+			dir:    alphaPath,
+			args:   "--json --readonly --sandbox show --id a-create",
+			stdout: syncReadyTaskJSON("a-create", alphaTargets.WorktreeTeam.Branch, alphaWorktree),
+		},
+		{
+			dir:  alphaPath,
+			args: "--json --sandbox update a-create --set-metadata orpheus.pr_url=https://github.test/org/alpha/pull/42",
+		},
+		{dir: alphaPath, args: "--json --readonly --sandbox show --id a-open", stdout: openTaskJSON},
+		{dir: betaPath, args: "--json --readonly --sandbox show --id b-merged", stdout: mergedTaskJSON},
+		{dir: betaPath, args: "--json --readonly --sandbox show --id b-merged", stdout: mergedTaskJSON},
+		{dir: betaPath, args: "--json --sandbox close b-merged", stdout: "{}"},
+		{dir: betaPath, args: "--json --readonly --sandbox show --id b-closed", stdout: closedTaskJSON},
+	})
+	ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{
+		listStdout:   "[]",
+		createStdout: "https://github.test/org/alpha/pull/42\n",
+		statusByURL: []fakeGHPRStatusResponse{
+			{
+				url:    "https://github.test/org/alpha/pull/77",
+				stdout: `{"url":"https://github.test/org/alpha/pull/77","state":"OPEN","mergedAt":null}`,
+			},
+			{
+				url:    "https://github.test/org/beta/pull/88",
+				stdout: `{"url":"https://github.test/org/beta/pull/88","state":"MERGED","mergedAt":"2026-06-14T10:00:00Z"}`,
+			},
+			{
+				url:    "https://github.test/org/beta/pull/99",
+				stdout: `{"url":"https://github.test/org/beta/pull/99","state":"CLOSED","mergedAt":null}`,
+			},
+		},
+	})
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "sync", "--all"})
+
+	must.Error(err)
+	is.Empty(stderr)
+	is.Contains(stdout, "Created/recovered PRs (1):")
+	is.Contains(stdout, "a-create (alpha): pushed branch orpheus/a-create and created PR https://github.test/org/alpha/pull/42")
+	is.Contains(stdout, "Open/in-review PRs (1):")
+	is.Contains(stdout, "a-open (alpha): PR https://github.test/org/alpha/pull/77 is still open for review")
+	is.Contains(stdout, "Merged/closed tasks (1):")
+	is.Contains(stdout, "b-merged (beta): PR https://github.test/org/beta/pull/88 is merged; backend task was closed")
+	is.Contains(stdout, "Errors (2):")
+	is.Contains(stdout, "repo gamma: scan_tasks:")
+	is.Contains(stdout, "bd unavailable")
+	is.Contains(stdout, "b-closed (beta): sync:")
+	is.Contains(stdout, "closed without merge")
+	is.ErrorContains(err, "task sync --all failed for 2 item")
+
+	bdLog := readFileString(t, bdLogPath)
+	is.Contains(bdLog, alphaPath+"\n--json --readonly --sandbox list --all --limit 0")
+	is.Contains(bdLog, betaPath+"\n--json --readonly --sandbox list --all --limit 0")
+	is.Contains(bdLog, gammaPath+"\n--json --readonly --sandbox list --all --limit 0")
+	is.Contains(bdLog, "--json --sandbox update a-create --set-metadata orpheus.pr_url=https://github.test/org/alpha/pull/42")
+	is.Contains(bdLog, "--json --sandbox close b-merged")
+	is.NotContains(bdLog, "--json --sandbox close b-closed")
+
+	ghLog := readFileString(t, ghLogPath)
+	is.Contains(ghLog, "ARG_2<<END\nlist\nEND")
+	is.Contains(ghLog, "ARG_2<<END\ncreate\nEND")
+	is.Equal(3, strings.Count(ghLog, "ARG_2<<END\nview\nEND"))
+
+	var betaState taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "beta", "tasks", "b-merged.yaml"), &betaState))
+	must.Len(betaState.Events, 1)
+	event := betaState.Events[0]
+	is.Equal(taskstate.EventTaskClosedPRMerged, event.Type)
+	is.Equal("https://github.test/org/beta/pull/88", event.PRURL)
+	is.Equal("merged", event.ObservedPRState)
+}
+
 func TestTaskDoneInfersSingleMainReadyTaskFromRepoRootAndUsesOverrides(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -2434,6 +2839,13 @@ type fakeGHPRResponses struct {
 	createExit   int
 	statusStdout string
 	statusExit   int
+	statusByURL  []fakeGHPRStatusResponse
+}
+
+type fakeGHPRStatusResponse struct {
+	url    string
+	stdout string
+	exit   int
 }
 
 func withFakeGHPRResponses(t *testing.T, responses fakeGHPRResponses) string {
@@ -2484,13 +2896,32 @@ case "$1 $2" in
     exit %d
     ;;
   "pr view")
-    cat %s
+`, shellQuote(listStdoutPath), responses.listExit, shellQuote(createStdoutPath), responses.createExit)
+
+	if len(responses.statusByURL) > 0 {
+		script += `    case "$3" in
+`
+		for i, response := range responses.statusByURL {
+			statusPath := filepath.Join(fixtureDir, fmt.Sprintf("status-stdout-url-%d.txt", i))
+			if err := os.WriteFile(statusPath, []byte(response.stdout), 0o644); err != nil {
+				t.Fatalf("write fake gh URL status stdout: %v", err)
+			}
+			script += fmt.Sprintf("      %s)\n", shellQuote(response.url))
+			script += fmt.Sprintf("        cat %s\n", shellQuote(statusPath))
+			script += fmt.Sprintf("        exit %d\n", response.exit)
+			script += "        ;;\n"
+		}
+		script += `    esac
+`
+	}
+
+	script += fmt.Sprintf(`    cat %s
     exit %d
     ;;
 esac
 echo "unexpected gh args: $*" >&2
 exit 65
-`, shellQuote(listStdoutPath), responses.listExit, shellQuote(createStdoutPath), responses.createExit, shellQuote(statusStdoutPath), responses.statusExit)
+`, shellQuote(statusStdoutPath), responses.statusExit)
 
 	ghPath := filepath.Join(binDir, "gh")
 	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
