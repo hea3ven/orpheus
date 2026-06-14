@@ -46,6 +46,7 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 		newTaskListCommand(opts),
 		newTaskReadyCommand(opts),
 		newTaskShowCommand(opts),
+		newTaskDirCommand(opts),
 		newTaskRunCommand(opts),
 		newTaskDoneCommand(opts),
 		newTaskSyncCommand(opts),
@@ -102,6 +103,18 @@ func newTaskShowCommand(opts *rootOptions) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			return runTaskShow(command, opts, args[0])
+		},
+	}
+	return cmd
+}
+
+func newTaskDirCommand(opts *rootOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "dir <task-id>",
+		Short: "Print a task's working directory",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			return runTaskDir(command, opts, args[0])
 		},
 	}
 	return cmd
@@ -267,6 +280,34 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 		Repository: resolvedCtx.Resolved.Source.Repository,
 		Task:       resolvedCtx.Task,
 	})
+}
+
+func runTaskDir(command *cobra.Command, opts *rootOptions, taskID string) error {
+	logger := opts.log().With(
+		slog.String("component", "cli"),
+		slog.String("operation", "task_dir"),
+	)
+	logger.DebugContext(command.Context(), "loading registered repos for task dir")
+
+	resolvedCtx, err := resolveTaskContext(command, "task dir", taskID)
+	if err != nil {
+		return err
+	}
+
+	dir, err := taskWorkingDirectory(resolvedCtx.Resolved.Source.Repository, resolvedCtx.Task)
+	if err != nil {
+		return fmt.Errorf("task dir %s: %w", resolvedCtx.Resolved.TaskID, err)
+	}
+
+	logger.DebugContext(
+		command.Context(),
+		"resolved task working directory",
+		slog.String("repo_id", resolvedCtx.Resolved.Source.Repository.ID),
+		slog.String("task_id", resolvedCtx.Resolved.TaskID),
+		slog.String("dir", dir),
+	)
+	_, err = fmt.Fprintln(command.OutOrStdout(), dir)
+	return err
 }
 
 func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentName string, mainMode bool) error {
@@ -737,6 +778,44 @@ func taskRunMetadataMatchesRepoRoot(metadata taskmodel.OrpheusMetadata, repo reg
 	}
 	return metadata.HasBranch && strings.TrimSpace(metadata.Branch) == defaultBranch &&
 		metadata.HasWorktree && cleanTaskRunPath(metadata.Worktree) == repoPath
+}
+
+func taskWorkingDirectory(repo taskmodel.Repository, taskItem taskmodel.Task) (string, error) {
+	metadata := taskItem.OrpheusMetadata()
+	if !metadata.HasWorktree || strings.TrimSpace(metadata.Worktree) == "" {
+		return "", fmt.Errorf(
+			"task has no Orpheus working directory metadata; run `orpheus task run %s` first",
+			taskItem.ID,
+		)
+	}
+	if !metadata.HasBranch || strings.TrimSpace(metadata.Branch) == "" {
+		return "", fmt.Errorf(
+			"task has incomplete Orpheus target metadata: %s is missing; run `orpheus task run %s` first",
+			taskmodel.MetadataBranch,
+			taskItem.ID,
+		)
+	}
+
+	worktree := cleanTaskRunPath(metadata.Worktree)
+	if !filepath.IsAbs(worktree) {
+		return "", fmt.Errorf("%s=%q is not an absolute path", taskmodel.MetadataWorktree, metadata.Worktree)
+	}
+
+	switch workflow.ClassifyRunTarget(repo, metadata.Branch, worktree) {
+	case workflow.TargetMainSolo:
+		return cleanTaskRunPath(repo.Path), nil
+	case workflow.TargetWorktreeTeam:
+		return worktree, nil
+	default:
+		return "", fmt.Errorf(
+			"task Orpheus target metadata is inconsistent: %s=%q, %s=%q do not identify a main/solo or worktree/team target for repo %s",
+			taskmodel.MetadataBranch,
+			metadata.Branch,
+			taskmodel.MetadataWorktree,
+			metadata.Worktree,
+			repo.ID,
+		)
+	}
 }
 
 func ensureRepoRootRunAvailable(
