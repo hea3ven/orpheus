@@ -3,6 +3,7 @@ package workflow_test
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -25,9 +26,11 @@ type fakeSyncRunStore struct {
 
 type fakeSyncBackend struct {
 	tasks     []task.Task
+	getTasks  []task.Task
 	setPRURLs []fakeSetPRURL
 	closed    []string
 	closeErr  error
+	onList    func()
 }
 
 type fakeSetPRURL struct {
@@ -42,12 +45,27 @@ type fakeTaskClosedPRMergedEvent struct {
 }
 
 func (b *fakeSyncBackend) Get(_ context.Context, id string) (task.Task, error) {
-	for _, candidate := range b.tasks {
+	tasks := b.tasks
+	if b.getTasks != nil {
+		tasks = b.getTasks
+	}
+	for _, candidate := range tasks {
 		if candidate.ID == id {
 			return candidate.Clone(), nil
 		}
 	}
 	return task.Task{}, task.ErrNotFound
+}
+
+func (b *fakeSyncBackend) List(_ context.Context) ([]task.Task, error) {
+	if b.onList != nil {
+		b.onList()
+	}
+	tasks := make([]task.Task, len(b.tasks))
+	for i, taskItem := range b.tasks {
+		tasks[i] = taskItem.Clone()
+	}
+	return tasks, nil
 }
 
 func (b *fakeSyncBackend) SetPRURL(_ context.Context, taskID string, prURL string) error {
@@ -94,6 +112,7 @@ func (s *fakeSyncRunStore) RecordTaskClosedPRMerged(repoID, taskID string, opts 
 type fakeSyncGit struct {
 	pushes []fakeSyncPush
 	err    error
+	onPush func()
 }
 
 type fakeSyncPush struct {
@@ -102,6 +121,9 @@ type fakeSyncPush struct {
 }
 
 func (g *fakeSyncGit) PushTaskBranch(_ context.Context, dir string, branch string) error {
+	if g.onPush != nil {
+		g.onPush()
+	}
 	g.pushes = append(g.pushes, fakeSyncPush{dir: dir, branch: branch})
 	return g.err
 }
@@ -114,6 +136,7 @@ type fakePRProvider struct {
 	foundOK        bool
 	created        pullrequest.PullRequest
 	status         pullrequest.PullRequestStatus
+	statusByURL    map[string]pullrequest.PullRequestStatus
 	findErr        error
 	createErr      error
 	statusErr      error
@@ -136,6 +159,12 @@ func (p *fakePRProvider) StatusByURL(_ context.Context, req pullrequest.StatusBy
 	p.statusRequests = append(p.statusRequests, req)
 	if p.statusErr != nil {
 		return pullrequest.PullRequestStatus{}, p.statusErr
+	}
+	if p.statusByURL != nil {
+		status, ok := p.statusByURL[req.URL]
+		if ok {
+			return status, nil
+		}
 	}
 	return p.status, nil
 }
@@ -693,6 +722,310 @@ func TestSyncServicePRProviderFailuresAreHardErrors(t *testing.T) {
 	}
 }
 
+func TestSyncServiceSyncAllScansPRBoundaryTasksAndContinuesAfterFailures(t *testing.T) {
+	root := t.TempDir()
+	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
+	if err != nil {
+		t.Fatalf("create paths: %v", err)
+	}
+	alphaPath := filepath.Join(root, "alpha")
+	betaPath := filepath.Join(root, "beta")
+	alpha := task.RepositorySource{
+		Repository: task.Repository{
+			ID:            "alpha",
+			Name:          "Alpha",
+			TaskIDPrefix:  "a",
+			Path:          alphaPath,
+			DefaultBranch: "main",
+		},
+		BackendDir: alphaPath,
+	}
+	beta := task.RepositorySource{
+		Repository: task.Repository{
+			ID:            "beta",
+			Name:          "Beta",
+			TaskIDPrefix:  "b",
+			Path:          betaPath,
+			DefaultBranch: "main",
+		},
+		BackendDir: betaPath,
+	}
+
+	createTargets, err := workflow.ExpectedTargetsForTask(alpha.Repository, "a-create", paths)
+	if err != nil {
+		t.Fatalf("expected targets: %v", err)
+	}
+	mainTargets, err := workflow.ExpectedTargetsForTask(alpha.Repository, "a-main", paths)
+	if err != nil {
+		t.Fatalf("expected targets: %v", err)
+	}
+	alphaBackend := &fakeSyncBackend{tasks: []task.Task{
+		{
+			ID:        "a-create",
+			Status:    task.StatusInProgress,
+			IssueType: task.IssueTypeTask,
+			Metadata: task.Metadata{
+				task.MetadataBranch:   createTargets.WorktreeTeam.Branch,
+				task.MetadataWorktree: createTargets.WorktreeTeam.Worktree,
+			},
+		},
+		{
+			ID:        "a-review",
+			Status:    task.StatusInProgress,
+			IssueType: task.IssueTypeTask,
+			Metadata:  task.Metadata{task.MetadataPRURL: "https://github.test/org/alpha/pull/10"},
+		},
+		{
+			ID:        "a-merged",
+			Status:    task.StatusInProgress,
+			IssueType: task.IssueTypeBug,
+			Metadata:  task.Metadata{task.MetadataPRURL: "https://github.test/org/alpha/pull/11"},
+		},
+		{
+			ID:        "a-closed-pr",
+			Status:    task.StatusInProgress,
+			IssueType: task.IssueTypeChore,
+			Metadata:  task.Metadata{task.MetadataPRURL: "https://github.test/org/alpha/pull/12"},
+		},
+		{
+			ID:        "a-main",
+			Status:    task.StatusInProgress,
+			IssueType: task.IssueTypeTask,
+			Metadata: task.Metadata{
+				task.MetadataBranch:   mainTargets.MainSolo.Branch,
+				task.MetadataWorktree: mainTargets.MainSolo.Worktree,
+			},
+		},
+		{ID: "a-ready", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
+		{
+			ID:        "a-epic-review",
+			Status:    task.StatusInProgress,
+			IssueType: task.IssueTypeEpic,
+			Metadata:  task.Metadata{task.MetadataPRURL: "https://github.test/org/alpha/pull/13"},
+		},
+		{
+			ID:        "a-closed",
+			Status:    task.StatusClosed,
+			IssueType: task.IssueTypeTask,
+			Metadata:  task.Metadata{task.MetadataPRURL: "https://github.test/org/alpha/pull/14"},
+		},
+	}}
+	scanErr := errors.New("bd unavailable")
+	runStore := &fakeSyncRunStore{states: map[string]taskstate.TaskState{
+		"alpha/a-create": syncStateFor("alpha", "a-create", taskstate.RunAttempt{
+			Attempt:  1,
+			Status:   taskstate.RunStatusSucceeded,
+			Branch:   createTargets.WorktreeTeam.Branch,
+			Worktree: createTargets.WorktreeTeam.Worktree,
+			Completion: &taskstate.Completion{
+				Summary:             "Create PR",
+				Description:         "Ready.",
+				DetailedDescription: "Detailed PR body.",
+				Commit:              "abc123",
+			},
+		}),
+		"alpha/a-main": syncStateFor("alpha", "a-main", taskstate.RunAttempt{
+			Attempt:  1,
+			Status:   taskstate.RunStatusSucceeded,
+			Branch:   mainTargets.MainSolo.Branch,
+			Worktree: mainTargets.MainSolo.Worktree,
+			Completion: &taskstate.Completion{
+				Summary:             "Main ready",
+				Description:         "Ready.",
+				DetailedDescription: "Detailed PR body.",
+				Commit:              "def456",
+			},
+		}),
+	}}
+	git := &fakeSyncGit{}
+	provider := &fakePRProvider{
+		created: pullrequest.PullRequest{URL: "https://github.test/org/alpha/pull/99"},
+		statusByURL: map[string]pullrequest.PullRequestStatus{
+			"https://github.test/org/alpha/pull/10": {
+				URL:   "https://github.test/org/alpha/pull/10",
+				State: pullrequest.StateOpen,
+			},
+			"https://github.test/org/alpha/pull/11": {
+				URL:   "https://github.test/org/alpha/pull/11",
+				State: pullrequest.StateMerged,
+			},
+			"https://github.test/org/alpha/pull/12": {
+				URL:   "https://github.test/org/alpha/pull/12",
+				State: pullrequest.StateClosed,
+			},
+		},
+	}
+	service := workflow.SyncService{
+		Paths:   paths,
+		Sources: []task.RepositorySource{alpha, beta},
+		BackendFactory: func(source task.RepositorySource) (task.SyncBackend, error) {
+			if source.Repository.ID == "beta" {
+				return nil, scanErr
+			}
+			return alphaBackend, nil
+		},
+		RunStore:   runStore,
+		Git:        git,
+		PRProvider: provider,
+	}
+
+	result, err := service.SyncAll(context.Background())
+	if err != nil {
+		t.Fatalf("sync all: %v", err)
+	}
+
+	if len(result.Results) != 3 {
+		t.Fatalf("results = %#v, want create/open/merged only", result.Results)
+	}
+	statuses := syncAllStatusesByTask(result.Results)
+	if statuses["a-create"] != workflow.SyncStatusPRCreated ||
+		statuses["a-review"] != workflow.SyncStatusAlreadyInReview ||
+		statuses["a-merged"] != workflow.SyncStatusPRMerged {
+		t.Fatalf("statuses = %#v, want created/open/merged", statuses)
+	}
+	if len(result.Failures) != 2 {
+		t.Fatalf("failures = %#v, want closed PR and beta scan failures", result.Failures)
+	}
+	if len(git.pushes) != 1 || git.pushes[0].branch != createTargets.WorktreeTeam.Branch {
+		t.Fatalf("pushes = %#v, want only created task branch push", git.pushes)
+	}
+	if len(provider.createRequests) != 1 || provider.createRequests[0].HeadBranch != createTargets.WorktreeTeam.Branch {
+		t.Fatalf("create requests = %#v, want one created task", provider.createRequests)
+	}
+	if len(provider.statusRequests) != 3 {
+		t.Fatalf("status requests = %#v, want only existing PR candidates", provider.statusRequests)
+	}
+	for _, req := range provider.statusRequests {
+		switch req.URL {
+		case "https://github.test/org/alpha/pull/10",
+			"https://github.test/org/alpha/pull/11",
+			"https://github.test/org/alpha/pull/12":
+		default:
+			t.Fatalf("unexpected status request = %#v", req)
+		}
+	}
+	if len(alphaBackend.closed) != 1 || alphaBackend.closed[0] != "a-merged" {
+		t.Fatalf("closed = %#v, want merged task closed", alphaBackend.closed)
+	}
+	if len(alphaBackend.setPRURLs) != 1 || alphaBackend.setPRURLs[0].taskID != "a-create" {
+		t.Fatalf("set PR URLs = %#v, want only created task metadata update", alphaBackend.setPRURLs)
+	}
+}
+
+func TestSyncServiceSyncAllReportsCleanNonSyncableActionAsSkipped(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
+	worktreePath := targets.WorktreeTeam.Worktree
+	listTask := task.Task{
+		ID:        "op-1",
+		Status:    task.StatusInProgress,
+		IssueType: task.IssueTypeTask,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   "orpheus/op-1",
+			task.MetadataWorktree: worktreePath,
+		},
+	}
+	backend := &fakeSyncBackend{
+		tasks:    []task.Task{listTask},
+		getTasks: []task.Task{withSyncStatus(listTask, task.StatusClosed)},
+	}
+	service := workflow.SyncService{
+		Paths:   paths,
+		Sources: []task.RepositorySource{source},
+		BackendFactory: func(task.RepositorySource) (task.SyncBackend, error) {
+			return backend, nil
+		},
+		RunStore: &fakeSyncRunStore{states: map[string]taskstate.TaskState{"alpha/op-1": syncTaskState(taskstate.RunAttempt{
+			Attempt:  1,
+			Status:   taskstate.RunStatusSucceeded,
+			Branch:   "orpheus/op-1",
+			Worktree: worktreePath,
+			Completion: &taskstate.Completion{
+				Summary:             "Done",
+				Description:         "Ready.",
+				DetailedDescription: "Detailed PR body.",
+				Commit:              "abc123",
+			},
+		})}},
+		Git:        &fakeSyncGit{},
+		PRProvider: &fakePRProvider{created: pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/42"}},
+	}
+
+	result, err := service.SyncAll(context.Background())
+	if err != nil {
+		t.Fatalf("sync all: %v", err)
+	}
+	if len(result.Failures) != 0 {
+		t.Fatalf("failures = %#v, want none", result.Failures)
+	}
+	if len(result.Results) != 1 ||
+		result.Results[0].Status != workflow.SyncStatusSkipped ||
+		!strings.Contains(result.Results[0].Reason, "task is closed") {
+		t.Fatalf("results = %#v, want closed skip", result.Results)
+	}
+}
+
+func TestSyncServiceSyncAllHoldsGlobalLockAcrossScanAndSync(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
+	worktreePath := targets.WorktreeTeam.Worktree
+	lockPath, err := paths.GlobalMutationLockPath()
+	if err != nil {
+		t.Fatalf("lock path: %v", err)
+	}
+	assertLockHeld := func(phase string) {
+		if _, err := os.Stat(lockPath); err != nil {
+			t.Fatalf("%s: expected global mutation lock at %s: %v", phase, lockPath, err)
+		}
+	}
+
+	backend := &fakeSyncBackend{
+		tasks: []task.Task{{
+			ID:        "op-1",
+			Status:    task.StatusInProgress,
+			IssueType: task.IssueTypeTask,
+			Metadata: task.Metadata{
+				task.MetadataBranch:   "orpheus/op-1",
+				task.MetadataWorktree: worktreePath,
+			},
+		}},
+		onList: func() { assertLockHeld("scan") },
+	}
+	git := &fakeSyncGit{onPush: func() { assertLockHeld("sync") }}
+	service := workflow.SyncService{
+		Paths:   paths,
+		Sources: []task.RepositorySource{source},
+		BackendFactory: func(task.RepositorySource) (task.SyncBackend, error) {
+			return backend, nil
+		},
+		RunStore: &fakeSyncRunStore{states: map[string]taskstate.TaskState{"alpha/op-1": syncTaskState(taskstate.RunAttempt{
+			Attempt:  1,
+			Status:   taskstate.RunStatusSucceeded,
+			Branch:   "orpheus/op-1",
+			Worktree: worktreePath,
+			Completion: &taskstate.Completion{
+				Summary:             "Done",
+				Description:         "Ready.",
+				DetailedDescription: "Detailed PR body.",
+				Commit:              "abc123",
+			},
+		})}},
+		Git:        git,
+		PRProvider: &fakePRProvider{created: pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/42"}},
+	}
+
+	result, err := service.SyncAll(context.Background())
+	if err != nil {
+		t.Fatalf("sync all: %v", err)
+	}
+	if len(result.Results) != 1 || result.Results[0].Status != workflow.SyncStatusPRCreated {
+		t.Fatalf("results = %#v, want one created PR", result.Results)
+	}
+	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("lock after sync all: %v, want removed", err)
+	}
+}
+
 func TestBuildSyncPullRequestContent(t *testing.T) {
 	content, err := workflow.BuildSyncPullRequestContent(task.Task{
 		ID:                 "op-1",
@@ -783,6 +1116,18 @@ func newSyncTestSource(
 
 func syncTaskState(runs ...taskstate.RunAttempt) taskstate.TaskState {
 	return taskstate.TaskState{RepoID: "alpha", TaskID: "op-1", Runs: runs}
+}
+
+func syncStateFor(repoID string, taskID string, runs ...taskstate.RunAttempt) taskstate.TaskState {
+	return taskstate.TaskState{RepoID: repoID, TaskID: taskID, Runs: runs}
+}
+
+func syncAllStatusesByTask(results []workflow.SyncResult) map[string]workflow.SyncStatus {
+	statuses := make(map[string]workflow.SyncStatus, len(results))
+	for _, result := range results {
+		statuses[result.Task.ID] = result.Status
+	}
+	return statuses
 }
 
 func withSyncStatus(taskItem task.Task, status task.Status) task.Task {
