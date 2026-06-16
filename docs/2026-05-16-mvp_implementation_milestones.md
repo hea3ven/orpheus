@@ -2,7 +2,34 @@
 
 This document breaks the Orpheus MVP into useful implementation milestones. Each milestone should produce a coherent, testable slice of functionality rather than a purely technical layer.
 
-The intended implementation order is:
+## 2026-06-16 retrospective scope update
+
+The implementation has moved beyond the original linear plan in this document. See [`2026-06-16-mvp_retrospective.md`](./2026-06-16-mvp_retrospective.md) for the current retrospective and recommended remaining scope.
+
+Current milestone interpretation:
+
+- M1 through M6 are substantially implemented: repo registry, global task visibility, attached dispatch, target-aware completion, single-task PR creation, PR polling, merge sync, and `task sync --all`.
+- The MVP shifted from background agents to attached interactive agents; `task logs` and batch `run-ready` remain deferred beyond the current MVP.
+- The remaining MVP should prioritize a local human review gate before PR creation, then support the missing repo-root + feature-branch + PR workflow.
+- Work directory and branch/review flow should be modeled as separate axes:
+  - dedicated worktree + feature branch + PR: supported and kept;
+  - repo root + default branch + local finalization: supported and kept;
+  - repo root + feature branch + PR: should be added;
+  - dedicated worktree + default branch + local finalization: should probably remain unsupported.
+- PR creation should require explicit operator intent after local review. Batch sync should not create new PRs by default unless a future explicit reviewed/approved signal or explicit create-PR option exists.
+
+Proposed remaining milestone order:
+
+1. M7 local review gate before PR creation.
+2. M8 repo-root feature-branch PR target.
+3. M9 failure, retry, and recovery hardening for the supported single-task workflows.
+4. M10 MVP polish and documentation.
+
+M6 documentation cleanup is recorded in [`2026-06-16-m6_pr_polling_merge_sync_validation.md`](./2026-06-16-m6_pr_polling_merge_sync_validation.md).
+
+The older detailed milestone sections below are preserved for historical context; where they conflict with this update, prefer the retrospective scope update above.
+
+The original intended implementation order was:
 
 1. Repo Registry + Beads Discovery
 2. Global Task Visibility
