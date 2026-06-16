@@ -9,6 +9,7 @@ The items below come from:
 - The original product brief: [`2026-05-07-agent_orchestration_cli_product_brief.md`](./2026-05-07-agent_orchestration_cli_product_brief.md)
 - The current MVP spec boundary: [`2026-05-12-agent_orchestration_cli_mvp_spec.md`](./2026-05-12-agent_orchestration_cli_mvp_spec.md)
 - The milestone 3 scope discussion on 2026-06-01
+- The MVP retrospective on 2026-06-16: [`2026-06-16-mvp_retrospective.md`](./2026-06-16-mvp_retrospective.md)
 
 ---
 
@@ -80,6 +81,41 @@ Deferred ideas:
 
 - Active and background modes should eventually use the same task, project, worktree, and PR lifecycle.
 - The difference between the modes is how much direct human interaction is expected while the agent is running.
+
+---
+
+## Task run session tracking and resume
+
+Persisting and resuming provider-specific agent sessions is deferred beyond the MVP.
+
+Idea from the 2026-06-16 MVP retrospective:
+
+- Orpheus could keep track of the interactive session created by `task run`.
+- If the operator runs `task run` again for a task that already has a previous run, Orpheus could restore or resume that session instead of starting from scratch.
+- The operator could then ask the same agent session to make follow-up changes or answer questions about the prior implementation.
+
+Why this is deferred:
+
+- Session identity and resume semantics are provider-specific.
+- Each agent CLI may expose different behavior for session ids, transcripts, cwd restoration, prompts, and interactive/non-interactive resume.
+- Some agents may not support reliable resume at all.
+- Orpheus should first keep task, branch, worktree, PR, and review state as the durable source of truth.
+
+Potential future behavior:
+
+```bash
+orpheus task run TASK-123          # starts a provider session
+orpheus task run TASK-123          # offers to resume the previous session
+orpheus task resume TASK-123       # explicit resume command, if added
+orpheus task ask TASK-123 "..."    # query/follow up through the stored session, if supported
+```
+
+Implementation notes to preserve:
+
+- Store provider name, run id, provider session id, cwd, branch/worktree target, and transcript/log pointers where available.
+- Keep provider session metadata attached to Orpheus run records, not as the authoritative task lifecycle.
+- Fall back to launching a fresh agent with task context when a provider cannot resume.
+- Avoid assuming the same session is required for correctness; resumed sessions should be convenience, not the only recovery path.
 
 ---
 
@@ -1070,6 +1106,25 @@ It could check:
 - Obvious architectural issues
 - Acceptance criteria coverage
 - Risky changes
+
+Additional idea from the 2026-06-16 MVP retrospective:
+
+- After an implementation run succeeds, Orpheus could optionally run a second agent-review step before the human creates the PR.
+- This review should happen on the local branch/worktree and should be advisory only.
+- The output could be a local review note, checklist, or suggested follow-up prompt.
+- The human remains the required reviewer before PR creation; the review agent should not publish or merge work on its own.
+
+Possible future flow:
+
+```text
+implementation agent done
+  ↓
+optional review agent checks local diff
+  ↓
+human reviews locally
+  ↓
+human explicitly creates PR
+```
 
 Related automation rule:
 
