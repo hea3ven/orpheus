@@ -117,7 +117,7 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 	is.NotContains(bdLog, "orpheus.pr_url")
 }
 
-func TestWorktreeSyncFlowEndToEnd(t *testing.T) {
+func TestWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -210,6 +210,33 @@ func TestWorktreeSyncFlowEndToEnd(t *testing.T) {
 	is.Equal(1, strings.Count(ghLogAfterRerun, "ARG_2<<END\nview\nEND"))
 	bdLog := readFileString(t, bd.LogPath)
 	is.Equal(1, strings.Count(bdLog, "--set-metadata orpheus.pr_url=https://github.test/org/alpha/pull/55"))
+
+	withFakeGHPRResponses(t, fakeGHPRResponses{
+		listStdout:   "unexpected list\n",
+		listExit:     66,
+		createStdout: "unexpected create\n",
+		createExit:   66,
+		statusStdout: `{"url":"https://github.test/org/alpha/pull/55","state":"MERGED","merged":true}`,
+	})
+
+	mergedOut, mergedErr := executeCommand(t, []string{"task", "sync", taskID})
+
+	is.Empty(mergedErr)
+	is.Contains(mergedOut, "PR https://github.test/org/alpha/pull/55 is merged")
+	is.Contains(mergedOut, "Backend task was closed")
+	is.Equal("closed", strings.TrimSpace(readFileString(t, bd.StatusPath)))
+
+	var mergedState taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", taskID+".yaml"), &mergedState))
+	must.NotEmpty(mergedState.Events)
+	mergedEvent := mergedState.Events[len(mergedState.Events)-1]
+	is.Equal(taskstate.EventTaskClosedPRMerged, mergedEvent.Type)
+	is.Equal("https://github.test/org/alpha/pull/55", mergedEvent.PRURL)
+
+	fullStatusOut, fullStatusErr := executeCommand(t, []string{"status", "--full"})
+	is.Empty(fullStatusErr)
+	is.Contains(fullStatusOut, "Done / closed (1)")
+	is.Contains(fullStatusOut, taskID)
 }
 
 func TestMainCompletionFlowEndToEnd(t *testing.T) {
