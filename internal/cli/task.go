@@ -170,10 +170,10 @@ func newTaskSyncCommand(opts *rootOptions) *cobra.Command {
 	var all bool
 	cmd := &cobra.Command{
 		Use:   "sync [<task-id>]",
-		Short: "Sync a task with pull request review",
-		Long: "Sync a task with pull request review.\n\n" +
-			"Tasks with a recorded PR URL are polled from the PR provider. Tasks without a PR URL " +
-			"must be PR-ready before Orpheus pushes the task branch and creates or recovers a PR.",
+		Short: "Reconcile tasks from recorded pull request state",
+		Long: "Reconcile tasks from recorded pull request state.\n\n" +
+			"Tasks with a recorded PR URL are polled from the PR provider. Merged PRs close " +
+			"the backend task and record a local audit event. Tasks without a PR URL are skipped.",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if all {
 				if len(args) != 0 {
@@ -959,24 +959,6 @@ func taskRunMetadataMismatchDetail(metadata taskmodel.OrpheusMetadata, expected 
 
 func renderTaskSyncResult(output interface{ Write([]byte) (int, error) }, result workflow.SyncResult) error {
 	switch result.Status {
-	case workflow.SyncStatusPRCreated:
-		_, err := fmt.Fprintf(
-			output,
-			"Synced %s: pushed branch %s to origin and created PR %s. Task is in review.\n",
-			result.Task.ID,
-			result.Branch,
-			result.PRURL,
-		)
-		return err
-	case workflow.SyncStatusPRRecovered:
-		_, err := fmt.Fprintf(
-			output,
-			"Synced %s: pushed branch %s to origin and recovered existing PR %s. Task is in review.\n",
-			result.Task.ID,
-			result.Branch,
-			result.PRURL,
-		)
-		return err
 	case workflow.SyncStatusAlreadyInReview:
 		_, err := fmt.Fprintf(
 			output,
@@ -996,7 +978,7 @@ func renderTaskSyncResult(output interface{ Write([]byte) (int, error) }, result
 	case workflow.SyncStatusSkipped:
 		_, err := fmt.Fprintf(
 			output,
-			"Skipped %s: %s. PR creation was not attempted.\n",
+			"Skipped %s: %s. No backend changes were made.\n",
 			result.Task.ID,
 			result.Reason,
 		)
@@ -1012,12 +994,6 @@ func renderTaskSyncAllResult(output interface{ Write([]byte) (int, error) }, res
 		return err
 	}
 
-	if err := renderTaskSyncAllGroup(output, "Created/recovered PRs", result.Results, func(syncResult workflow.SyncResult) bool {
-		return syncResult.Status == workflow.SyncStatusPRCreated ||
-			syncResult.Status == workflow.SyncStatusPRRecovered
-	}); err != nil {
-		return err
-	}
 	if err := renderTaskSyncAllGroup(output, "Open/in-review PRs", result.Results, func(syncResult workflow.SyncResult) bool {
 		return syncResult.Status == workflow.SyncStatusAlreadyInReview
 	}); err != nil {
@@ -1066,12 +1042,6 @@ func renderTaskSyncAllGroup(
 func renderTaskSyncAllResultLine(output interface{ Write([]byte) (int, error) }, result workflow.SyncResult) error {
 	prefix := fmt.Sprintf("  - %s (%s): ", result.Task.ID, result.Repository.ID)
 	switch result.Status {
-	case workflow.SyncStatusPRCreated:
-		_, err := fmt.Fprintf(output, "%spushed branch %s and created PR %s\n", prefix, result.Branch, result.PRURL)
-		return err
-	case workflow.SyncStatusPRRecovered:
-		_, err := fmt.Fprintf(output, "%spushed branch %s and recovered existing PR %s\n", prefix, result.Branch, result.PRURL)
-		return err
 	case workflow.SyncStatusAlreadyInReview:
 		_, err := fmt.Fprintf(output, "%sPR %s is still open for review\n", prefix, result.PRURL)
 		return err

@@ -2102,7 +2102,7 @@ func TestTaskSyncSkipsClosedTaskWithoutPRPolling(t *testing.T) {
 	is.Empty(stderr)
 	is.Contains(stdout, "Skipped op-sync")
 	is.Contains(stdout, "task is closed")
-	is.Contains(stdout, "PR creation was not attempted")
+	is.Contains(stdout, "No backend changes were made")
 
 	bdLog, readErr := os.ReadFile(bdLogPath)
 	must.NoError(readErr)
@@ -2118,7 +2118,7 @@ func TestTaskSyncSkipsClosedTaskWithoutPRPolling(t *testing.T) {
 	}
 }
 
-func TestTaskSyncSkipsBranchRunAtRepoRoot(t *testing.T) {
+func TestTaskSyncSkipsTaskWithoutPRURLAtRepoRoot(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -2153,12 +2153,11 @@ func TestTaskSyncSkipsBranchRunAtRepoRoot(t *testing.T) {
 
 	is.Empty(stderr)
 	is.Contains(stdout, "Skipped op-sync")
-	is.Contains(stdout, "registered repo root")
-	is.Contains(stdout, "not a worktree/team task worktree")
-	is.Contains(stdout, "PR creation was not attempted")
+	is.Contains(stdout, "orpheus.pr_url is not set")
+	is.Contains(stdout, "No backend changes were made")
 }
 
-func TestTaskSyncSkipsMainSoloLocalReadyTask(t *testing.T) {
+func TestTaskSyncSkipsMainSoloLocalReadyTaskWithoutPRURL(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -2186,9 +2185,8 @@ func TestTaskSyncSkipsMainSoloLocalReadyTask(t *testing.T) {
 
 	is.Empty(stderr)
 	is.Contains(stdout, "Skipped op-main")
-	is.Contains(stdout, "main/solo local-review-ready")
-	is.Contains(stdout, "orpheus task done")
-	is.Contains(stdout, "PR creation was not attempted")
+	is.Contains(stdout, "orpheus.pr_url is not set")
+	is.Contains(stdout, "No backend changes were made")
 }
 
 func TestTaskDoneFeatureBranchPushFailureIsNonZero(t *testing.T) {
@@ -2233,7 +2231,7 @@ func TestTaskDoneFeatureBranchPushFailureIsNonZero(t *testing.T) {
 	is.ErrorContains(err, "origin")
 }
 
-func TestTaskSyncAllCreatesAndPollsPRBoundaryTasks(t *testing.T) {
+func TestTaskSyncAllPollsPRBoundaryTasks(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -2310,7 +2308,6 @@ func TestTaskSyncAllCreatesAndPollsPRBoundaryTasks(t *testing.T) {
 	is.Empty(stderr)
 	is.Contains(stdout, "Open/in-review PRs (1):")
 	is.Contains(stdout, "op-open (alpha): PR https://github.test/org/alpha/pull/77 is still open for review")
-	is.NotContains(stdout, "Created/recovered PRs")
 	is.NotContains(stdout, "op-create")
 	is.NotContains(stdout, "op-epic")
 
@@ -3027,8 +3024,8 @@ func syncReadyTaskJSON(taskID string, branch string, worktree string) string {
 		{
 			"id":"` + taskID + `",
 			"title":"Ready for sync",
-			"description":"Create or recover a GitHub pull request.",
-			"acceptance_criteria":"The branch is pushed and no duplicate pull request is created.",
+			"description":"Ready for reviewed publication.",
+			"acceptance_criteria":"Sync skips tasks without recorded pull requests.",
 			"status":"in_progress",
 			"priority":1,
 			"issue_type":"task",
