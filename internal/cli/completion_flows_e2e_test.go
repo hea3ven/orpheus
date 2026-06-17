@@ -138,8 +138,8 @@ func TestWorktreeSyncFlowEndToEnd(t *testing.T) {
 		RepoPath:           repoPath,
 		TaskID:             taskID,
 		Title:              "M5 sync flow",
-		Description:        "Validate the single-task PR creation path.",
-		AcceptanceCriteria: "Sync pushes the branch, creates one PR, and projects in review.",
+		Description:        "Validate the reviewed PR publication and sync polling path.",
+		AcceptanceCriteria: "Task done creates one PR, and sync polls it as in review.",
 	})
 	withOrpheusCLIHelper(t)
 	withCompletionFlowAgent(t, completionFlowAgentOptions{
