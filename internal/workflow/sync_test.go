@@ -17,8 +17,6 @@ import (
 )
 
 type fakeSyncRunStore struct {
-	states     map[string]taskstate.TaskState
-	err        error
 	events     []fakeTaskClosedPRMergedEvent
 	recordErr  error
 	recordedAt time.Time
@@ -85,17 +83,6 @@ func (b *fakeSyncBackend) Close(_ context.Context, taskID string) error {
 	return nil
 }
 
-func (s fakeSyncRunStore) Load(repoID, taskID string) (taskstate.TaskState, error) {
-	if s.err != nil {
-		return taskstate.TaskState{}, s.err
-	}
-	state, ok := s.states[repoID+"/"+taskID]
-	if !ok {
-		return taskstate.TaskState{RepoID: repoID, TaskID: taskID}, nil
-	}
-	return state, nil
-}
-
 func (s *fakeSyncRunStore) RecordTaskClosedPRMerged(repoID, taskID string, opts taskstate.TaskClosedPRMergedOptions) (taskstate.Event, error) {
 	s.events = append(s.events, fakeTaskClosedPRMergedEvent{repoID: repoID, taskID: taskID, opts: opts})
 	if s.recordErr != nil {
@@ -111,25 +98,6 @@ func (s *fakeSyncRunStore) RecordTaskClosedPRMerged(repoID, taskID string, opts 
 		PRURL:           opts.PRURL,
 		ObservedPRState: opts.ObservedPRState,
 	}, nil
-}
-
-type fakeSyncGit struct {
-	pushes []fakeSyncPush
-	err    error
-	onPush func()
-}
-
-type fakeSyncPush struct {
-	dir    string
-	branch string
-}
-
-func (g *fakeSyncGit) PushTaskBranch(_ context.Context, dir string, branch string) error {
-	if g.onPush != nil {
-		g.onPush()
-	}
-	g.pushes = append(g.pushes, fakeSyncPush{dir: dir, branch: branch})
-	return g.err
 }
 
 type fakePRProvider struct {
@@ -179,11 +147,11 @@ func TestSyncServiceSkipsPRCreationForEligibleWorktreeCompletion(t *testing.T) {
 	worktreePath := targets.WorktreeTeam.Worktree
 	taskItem := task.Task{
 		ID:       "op-1",
-		Title:    "Sync creates PR",
+		Title:    "Sync skips missing PR URL",
 		Status:   task.StatusInProgress,
 		Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-1", task.MetadataWorktree: worktreePath},
 	}
-	service, git, provider, backend := newSyncTestService(t, taskItem, syncTaskState(taskstate.RunAttempt{
+	service, provider, backend := newSyncTestService(t, taskItem, syncTaskState(taskstate.RunAttempt{
 		Attempt:   1,
 		Status:    taskstate.RunStatusSucceeded,
 		Branch:    "orpheus/op-1",
@@ -202,13 +170,10 @@ func TestSyncServiceSkipsPRCreationForEligibleWorktreeCompletion(t *testing.T) {
 		t.Fatalf("sync: %v", err)
 	}
 	if result.Status != workflow.SyncStatusSkipped ||
-		!strings.Contains(result.Reason, "task done") ||
+		!strings.Contains(result.Reason, task.MetadataPRURL+" is not set") ||
 		result.Branch != "orpheus/op-1" ||
 		result.PRURL != "" {
-		t.Fatalf("result = %#v, want skipped publication for orpheus/op-1", result)
-	}
-	if len(git.pushes) != 0 {
-		t.Fatalf("pushes = %#v, want no push", git.pushes)
+		t.Fatalf("result = %#v, want skipped missing PR URL for orpheus/op-1", result)
 	}
 	if len(provider.findRequests) != 0 || len(provider.createRequests) != 0 {
 		t.Fatalf("find/create requests = %#v/%#v, want none", provider.findRequests, provider.createRequests)
@@ -222,7 +187,7 @@ func TestSyncServiceDoesNotRecoverBranchPRWithoutRecordedPRURL(t *testing.T) {
 	repoPath := filepath.Join(t.TempDir(), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	worktreePath := targets.WorktreeTeam.Worktree
-	service, _, provider, backend := newSyncTestService(t, task.Task{
+	service, provider, backend := newSyncTestService(t, task.Task{
 		ID:       "op-1",
 		Status:   task.StatusInProgress,
 		Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-1", task.MetadataWorktree: worktreePath},
@@ -245,8 +210,10 @@ func TestSyncServiceDoesNotRecoverBranchPRWithoutRecordedPRURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if result.Status != workflow.SyncStatusSkipped || !strings.Contains(result.Reason, "task done") || result.PRURL != "" {
-		t.Fatalf("result = %#v, want skipped publication", result)
+	if result.Status != workflow.SyncStatusSkipped ||
+		!strings.Contains(result.Reason, task.MetadataPRURL+" is not set") ||
+		result.PRURL != "" {
+		t.Fatalf("result = %#v, want skipped missing PR URL", result)
 	}
 	if len(provider.findRequests) != 0 || len(provider.createRequests) != 0 {
 		t.Fatalf("provider requests = %#v/%#v, want none", provider.findRequests, provider.createRequests)
@@ -268,14 +235,14 @@ func TestSyncServicePollsOpenPRWithoutLocalEligibility(t *testing.T) {
 			task.MetadataPRURL:    " https://github.test/org/repo/pull/42 ",
 		},
 	}
-	service, git, provider, backend := newSyncTestService(
+	service, provider, backend := newSyncTestService(
 		t,
 		taskItem,
 		taskstate.TaskState{},
 		paths,
 		source,
 	)
-	service.RunStore = &fakeSyncRunStore{err: errors.New("run store should not be queried")}
+	service.RunStore = &fakeSyncRunStore{}
 	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateOpen}
 
 	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
@@ -284,9 +251,6 @@ func TestSyncServicePollsOpenPRWithoutLocalEligibility(t *testing.T) {
 	}
 	if result.Status != workflow.SyncStatusAlreadyInReview || result.PRURL != "https://github.test/org/repo/pull/42" {
 		t.Fatalf("result = %#v, want already in review with trimmed PR URL", result)
-	}
-	if len(git.pushes) != 0 {
-		t.Fatalf("pushes = %#v, want no push", git.pushes)
 	}
 	if len(provider.statusRequests) != 1 || provider.statusRequests[0].URL != "https://github.test/org/repo/pull/42" {
 		t.Fatalf("status requests = %#v, want recorded PR URL polling", provider.statusRequests)
@@ -309,8 +273,8 @@ func TestSyncServiceClosesTaskAndRecordsAuditForMergedPR(t *testing.T) {
 			task.MetadataPRURL: "https://github.test/org/repo/pull/42",
 		},
 	}
-	service, git, provider, backend := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
-	runStore := &fakeSyncRunStore{err: errors.New("run store load should not be queried")}
+	service, provider, backend := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
+	runStore := &fakeSyncRunStore{}
 	service.RunStore = runStore
 	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateMerged}
 
@@ -322,9 +286,6 @@ func TestSyncServiceClosesTaskAndRecordsAuditForMergedPR(t *testing.T) {
 		result.Task.Status != task.StatusClosed ||
 		!strings.Contains(result.Reason, "backend task was closed") {
 		t.Fatalf("result = %#v, want merged close status", result)
-	}
-	if len(git.pushes) != 0 {
-		t.Fatalf("pushes = %#v, want no push", git.pushes)
 	}
 	if len(provider.findRequests) != 0 || len(provider.createRequests) != 0 {
 		t.Fatalf("provider find/create calls = %#v/%#v, want none", provider.findRequests, provider.createRequests)
@@ -359,8 +320,8 @@ func TestSyncServiceMergedPRCloseAndAuditFailures(t *testing.T) {
 	}
 
 	closeErr := errors.New("close rejected")
-	service, _, provider, backend := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
-	runStore := &fakeSyncRunStore{err: errors.New("run store load should not be queried")}
+	service, provider, backend := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
+	runStore := &fakeSyncRunStore{}
 	service.RunStore = runStore
 	backend.closeErr = closeErr
 	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateMerged}
@@ -374,9 +335,8 @@ func TestSyncServiceMergedPRCloseAndAuditFailures(t *testing.T) {
 	}
 
 	auditErr := errors.New("disk full")
-	service, _, provider, backend = newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
+	service, provider, backend = newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
 	runStore = &fakeSyncRunStore{
-		err:       errors.New("run store load should not be queried"),
 		recordErr: auditErr,
 	}
 	service.RunStore = runStore
@@ -403,8 +363,8 @@ func TestSyncServiceClosedTaskSkipsWithoutPRPolling(t *testing.T) {
 			task.MetadataPRURL: "https://github.test/org/repo/pull/42",
 		},
 	}
-	service, git, provider, backend := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
-	service.RunStore = &fakeSyncRunStore{err: errors.New("run store should not be queried")}
+	service, provider, backend := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
+	service.RunStore = &fakeSyncRunStore{}
 	provider.statusErr = errors.New("provider should not be queried")
 
 	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
@@ -413,9 +373,6 @@ func TestSyncServiceClosedTaskSkipsWithoutPRPolling(t *testing.T) {
 	}
 	if result.Status != workflow.SyncStatusSkipped || !strings.Contains(result.Reason, "task is closed") {
 		t.Fatalf("result = %#v, want closed task skip", result)
-	}
-	if len(git.pushes) != 0 {
-		t.Fatalf("pushes = %#v, want no push", git.pushes)
 	}
 	if len(provider.statusRequests) != 0 || len(provider.findRequests) != 0 || len(provider.createRequests) != 0 {
 		t.Fatalf("provider calls = %#v/%#v/%#v, want none", provider.statusRequests, provider.findRequests, provider.createRequests)
@@ -459,17 +416,14 @@ func TestSyncServiceExistingPRFailuresAreHardErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service, git, provider, backend := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
-			service.RunStore = &fakeSyncRunStore{err: errors.New("run store should not be queried")}
+			service, provider, backend := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
+			service.RunStore = &fakeSyncRunStore{}
 			provider.status = tt.status
 			provider.statusErr = tt.statusErr
 
 			_, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error = %v, want containing %q", err, tt.want)
-			}
-			if len(git.pushes) != 0 {
-				t.Fatalf("pushes = %#v, want no push", git.pushes)
 			}
 			if len(provider.findRequests) != 0 || len(provider.createRequests) != 0 {
 				t.Fatalf("provider find/create calls = %#v/%#v, want none", provider.findRequests, provider.createRequests)
@@ -514,25 +468,25 @@ func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 			name:       "no runs",
 			taskItem:   baseTask,
 			state:      taskstate.TaskState{RepoID: "alpha", TaskID: "op-1"},
-			wantReason: "no Orpheus run attempts",
+			wantReason: task.MetadataPRURL + " is not set",
 		},
 		{
 			name:       "running",
 			taskItem:   baseTask,
 			state:      syncTaskState(taskstate.RunAttempt{Attempt: 2, Status: taskstate.RunStatusRunning}),
-			wantReason: "still running",
+			wantReason: task.MetadataPRURL + " is not set",
 		},
 		{
 			name:       "failed",
 			taskItem:   baseTask,
 			state:      syncTaskState(taskstate.RunAttempt{Attempt: 2, Status: taskstate.RunStatusFailed}),
-			wantReason: "failed",
+			wantReason: task.MetadataPRURL + " is not set",
 		},
 		{
 			name:       "no completion",
 			taskItem:   baseTask,
 			state:      syncTaskState(taskstate.RunAttempt{Attempt: 2, Status: taskstate.RunStatusSucceeded}),
-			wantReason: "without a completion block",
+			wantReason: task.MetadataPRURL + " is not set",
 		},
 		{
 			name:     "missing commit",
@@ -548,7 +502,7 @@ func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 					DetailedDescription: "Detailed PR body.",
 				},
 			}),
-			wantReason: "commit is missing",
+			wantReason: task.MetadataPRURL + " is not set",
 		},
 		{
 			name:     "commit failed",
@@ -561,7 +515,7 @@ func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 				Completion: &taskstate.Completion{Summary: "Done", Description: "Done.",
 					DetailedDescription: "Detailed PR body.", CommitError: "dirty worktree"},
 			}),
-			wantReason: "completion commit failed",
+			wantReason: task.MetadataPRURL + " is not set",
 		},
 		{
 			name:     "main solo",
@@ -577,7 +531,7 @@ func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 					DetailedDescription: "Detailed PR body.",
 				},
 			}),
-			wantReason: "main/solo",
+			wantReason: task.MetadataPRURL + " is not set",
 		},
 		{
 			name:     "branch run at repo root",
@@ -594,7 +548,7 @@ func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 					Commit:              "abc123",
 				},
 			}),
-			wantReason: "registered repo root",
+			wantReason: task.MetadataPRURL + " is not set",
 		},
 		{
 			name:       "closed",
@@ -606,16 +560,13 @@ func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service, git, provider, backend := newSyncTestService(t, tt.taskItem, tt.state, paths, source)
+			service, provider, backend := newSyncTestService(t, tt.taskItem, tt.state, paths, source)
 			result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
 			if err != nil {
 				t.Fatalf("sync: %v", err)
 			}
 			if result.Status != workflow.SyncStatusSkipped || !strings.Contains(result.Reason, tt.wantReason) {
 				t.Fatalf("result = %#v, want skipped reason containing %q", result, tt.wantReason)
-			}
-			if len(git.pushes) != 0 {
-				t.Fatalf("pushes = %#v, want no push for skip", git.pushes)
 			}
 			if len(provider.statusRequests) != 0 || len(provider.findRequests) != 0 || len(provider.createRequests) != 0 {
 				t.Fatalf("provider calls = %#v/%#v/%#v, want no PR calls for skip", provider.statusRequests, provider.findRequests, provider.createRequests)
@@ -627,7 +578,7 @@ func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 	}
 }
 
-func TestSyncServiceErrorsOnMalformedMetadataWithoutPublishing(t *testing.T) {
+func TestSyncServiceSkipsTasksWithoutPRURLDespiteMalformedMetadata(t *testing.T) {
 	repoPath := filepath.Join(t.TempDir(), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	worktreePath := targets.WorktreeTeam.Worktree
@@ -650,26 +601,29 @@ func TestSyncServiceErrorsOnMalformedMetadataWithoutPublishing(t *testing.T) {
 		Status:   task.StatusInProgress,
 		Metadata: task.Metadata{task.MetadataWorktree: worktreePath},
 	}
-	service, _, _, _ := newSyncTestService(t, missingBranch, state, paths, source)
-	_, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
-	if err == nil || !strings.Contains(err.Error(), "orpheus.branch is missing") {
-		t.Fatalf("error = %v, want missing branch metadata", err)
-	}
-
-	service, git, provider, backend := newSyncTestService(t, task.Task{
-		ID:       "op-1",
-		Status:   task.StatusInProgress,
-		Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-1", task.MetadataWorktree: worktreePath},
-	}, state, paths, source)
+	service, _, _ := newSyncTestService(t, missingBranch, state, paths, source)
 	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if result.Status != workflow.SyncStatusSkipped || !strings.Contains(result.Reason, "task done") {
-		t.Fatalf("result = %#v, want skipped task done publication", result)
+	if result.Status != workflow.SyncStatusSkipped || !strings.Contains(result.Reason, task.MetadataPRURL+" is not set") {
+		t.Fatalf("result = %#v, want skipped missing PR URL", result)
 	}
-	if len(git.pushes) != 0 || len(provider.findRequests) != 0 || len(provider.createRequests) != 0 || len(backend.setPRURLs) != 0 {
-		t.Fatalf("mutations pushes=%#v provider=%#v/%#v set=%#v, want none", git.pushes, provider.findRequests, provider.createRequests, backend.setPRURLs)
+
+	service, provider, backend := newSyncTestService(t, task.Task{
+		ID:       "op-1",
+		Status:   task.StatusInProgress,
+		Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-1", task.MetadataWorktree: worktreePath},
+	}, state, paths, source)
+	result, err = service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Status != workflow.SyncStatusSkipped || !strings.Contains(result.Reason, task.MetadataPRURL+" is not set") {
+		t.Fatalf("result = %#v, want skipped missing PR URL", result)
+	}
+	if len(provider.findRequests) != 0 || len(provider.createRequests) != 0 || len(backend.setPRURLs) != 0 {
+		t.Fatalf("mutations provider=%#v/%#v set=%#v, want none", provider.findRequests, provider.createRequests, backend.setPRURLs)
 	}
 }
 
@@ -696,14 +650,14 @@ func TestSyncServiceDoesNotCallPRProviderForPublicationCandidates(t *testing.T) 
 	}
 
 	findErr := errors.New("auth missing")
-	service, _, provider, _ := newSyncTestService(t, taskItem, state, paths, source)
+	service, provider, _ := newSyncTestService(t, taskItem, state, paths, source)
 	provider.findErr = findErr
 	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if result.Status != workflow.SyncStatusSkipped || !strings.Contains(result.Reason, "task done") {
-		t.Fatalf("result = %#v, want skipped task done publication", result)
+	if result.Status != workflow.SyncStatusSkipped || !strings.Contains(result.Reason, task.MetadataPRURL+" is not set") {
+		t.Fatalf("result = %#v, want skipped missing PR URL", result)
 	}
 	if len(provider.findRequests) != 0 || len(provider.createRequests) != 0 {
 		t.Fatalf("provider requests = %#v/%#v, want none", provider.findRequests, provider.createRequests)
@@ -799,33 +753,7 @@ func TestSyncServiceSyncAllScansPRBoundaryTasksAndContinuesAfterFailures(t *test
 		},
 	}}
 	scanErr := errors.New("bd unavailable")
-	runStore := &fakeSyncRunStore{states: map[string]taskstate.TaskState{
-		"alpha/a-create": syncStateFor("alpha", "a-create", taskstate.RunAttempt{
-			Attempt:  1,
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   createTargets.WorktreeTeam.Branch,
-			Worktree: createTargets.WorktreeTeam.Worktree,
-			Completion: &taskstate.Completion{
-				Summary:             "Create PR",
-				Description:         "Ready.",
-				DetailedDescription: "Detailed PR body.",
-				Commit:              "abc123",
-			},
-		}),
-		"alpha/a-main": syncStateFor("alpha", "a-main", taskstate.RunAttempt{
-			Attempt:  1,
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   mainTargets.MainSolo.Branch,
-			Worktree: mainTargets.MainSolo.Worktree,
-			Completion: &taskstate.Completion{
-				Summary:             "Main ready",
-				Description:         "Ready.",
-				DetailedDescription: "Detailed PR body.",
-				Commit:              "def456",
-			},
-		}),
-	}}
-	git := &fakeSyncGit{}
+	runStore := &fakeSyncRunStore{}
 	provider := &fakePRProvider{
 		created: pullrequest.PullRequest{URL: "https://github.test/org/alpha/pull/99"},
 		statusByURL: map[string]pullrequest.PullRequestStatus{
@@ -853,7 +781,6 @@ func TestSyncServiceSyncAllScansPRBoundaryTasksAndContinuesAfterFailures(t *test
 			return alphaBackend, nil
 		},
 		RunStore:   runStore,
-		Git:        git,
 		PRProvider: provider,
 	}
 
@@ -872,9 +799,6 @@ func TestSyncServiceSyncAllScansPRBoundaryTasksAndContinuesAfterFailures(t *test
 	}
 	if len(result.Failures) != 2 {
 		t.Fatalf("failures = %#v, want closed PR and beta scan failures", result.Failures)
-	}
-	if len(git.pushes) != 0 {
-		t.Fatalf("pushes = %#v, want no task branch pushes", git.pushes)
 	}
 	if len(provider.createRequests) != 0 {
 		t.Fatalf("create requests = %#v, want none", provider.createRequests)
@@ -922,19 +846,7 @@ func TestSyncServiceSyncAllIgnoresTasksWithoutPRURL(t *testing.T) {
 		BackendFactory: func(task.RepositorySource) (task.SyncBackend, error) {
 			return backend, nil
 		},
-		RunStore: &fakeSyncRunStore{states: map[string]taskstate.TaskState{"alpha/op-1": syncTaskState(taskstate.RunAttempt{
-			Attempt:  1,
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   "orpheus/op-1",
-			Worktree: worktreePath,
-			Completion: &taskstate.Completion{
-				Summary:             "Done",
-				Description:         "Ready.",
-				DetailedDescription: "Detailed PR body.",
-				Commit:              "abc123",
-			},
-		})}},
-		Git:        &fakeSyncGit{},
+		RunStore:   &fakeSyncRunStore{},
 		PRProvider: &fakePRProvider{created: pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/42"}},
 	}
 
@@ -975,15 +887,13 @@ func TestSyncServiceSyncAllHoldsGlobalLockAcrossScanAndSync(t *testing.T) {
 		onList: func() { assertLockHeld("scan") },
 		onGet:  func() { assertLockHeld("sync") },
 	}
-	git := &fakeSyncGit{}
 	service := workflow.SyncService{
 		Paths:   paths,
 		Sources: []task.RepositorySource{source},
 		BackendFactory: func(task.RepositorySource) (task.SyncBackend, error) {
 			return backend, nil
 		},
-		RunStore: &fakeSyncRunStore{err: errors.New("run store should not be queried")},
-		Git:      git,
+		RunStore: &fakeSyncRunStore{},
 		PRProvider: &fakePRProvider{status: pullrequest.PullRequestStatus{
 			URL:   "https://github.test/org/repo/pull/42",
 			State: pullrequest.StateOpen,
@@ -1045,9 +955,8 @@ func newSyncTestService(
 	taskState taskstate.TaskState,
 	paths state.Paths,
 	source task.RepositorySource,
-) (workflow.SyncService, *fakeSyncGit, *fakePRProvider, *fakeSyncBackend) {
+) (workflow.SyncService, *fakePRProvider, *fakeSyncBackend) {
 	t.Helper()
-	git := &fakeSyncGit{}
 	provider := &fakePRProvider{created: pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/42"}}
 	backend := &fakeSyncBackend{tasks: []task.Task{taskItem}}
 	service := workflow.SyncService{
@@ -1056,11 +965,10 @@ func newSyncTestService(
 		BackendFactory: func(task.RepositorySource) (task.SyncBackend, error) {
 			return backend, nil
 		},
-		RunStore:   &fakeSyncRunStore{states: map[string]taskstate.TaskState{"alpha/op-1": taskState}},
-		Git:        git,
+		RunStore:   &fakeSyncRunStore{},
 		PRProvider: provider,
 	}
-	return service, git, provider, backend
+	return service, provider, backend
 }
 
 func newSyncTestSource(
@@ -1092,10 +1000,6 @@ func newSyncTestSource(
 
 func syncTaskState(runs ...taskstate.RunAttempt) taskstate.TaskState {
 	return taskstate.TaskState{RepoID: "alpha", TaskID: "op-1", Runs: runs}
-}
-
-func syncStateFor(repoID string, taskID string, runs ...taskstate.RunAttempt) taskstate.TaskState {
-	return taskstate.TaskState{RepoID: repoID, TaskID: taskID, Runs: runs}
 }
 
 func syncAllStatusesByTask(results []workflow.SyncResult) map[string]workflow.SyncStatus {
