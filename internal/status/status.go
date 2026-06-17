@@ -192,13 +192,7 @@ func classify(repository task.Repository, taskItem task.Task, index map[string]t
 	expectedTargets := expectedTargetsFrom(localState)
 	if expectedTargets != nil {
 		if _, ok := workflow.ClassifyExpectedPRReviewReady(*expectedTargets, taskItem, latestRun); ok {
-			if strings.TrimSpace(latestRun.Completion.Commit) != "" {
-				return policyResult{state: readinessAttention, detail: "needs PR"}
-			}
-			return policyResult{
-				state:  readinessAttention,
-				detail: "completion recorded but commit failed; needs manual correction",
-			}
+			return policyResult{state: readinessReview, detail: "local review; run task done"}
 		}
 	}
 	if expectedTargets != nil {
@@ -214,15 +208,9 @@ func classify(repository task.Repository, taskItem task.Task, index map[string]t
 	}
 
 	if _, ok := workflow.ClassifyPRReviewReady(repository, taskItem, latestRun); ok {
-		if strings.TrimSpace(latestRun.Completion.Commit) != "" {
-			return policyResult{
-				state:  readinessAttention,
-				detail: "completion target is not the deterministic Orpheus worktree/team target",
-			}
-		}
 		return policyResult{
 			state:  readinessAttention,
-			detail: "completion recorded but commit failed; needs manual correction",
+			detail: "completion target is not the deterministic Orpheus worktree/team target",
 		}
 	}
 	if _, ok := workflow.ClassifyLocalReviewReady(repository, taskItem, latestRun); ok {

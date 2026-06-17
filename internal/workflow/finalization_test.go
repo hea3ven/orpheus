@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -15,8 +16,14 @@ import (
 )
 
 type fakeFinalizationBackend struct {
-	tasks  []task.Task
-	closed []string
+	tasks     []task.Task
+	closed    []string
+	setPRURLs []fakeFinalizationSetPRURL
+}
+
+type fakeFinalizationSetPRURL struct {
+	taskID string
+	prURL  string
 }
 
 func (b *fakeFinalizationBackend) Get(_ context.Context, id string) (task.Task, error) {
@@ -38,6 +45,11 @@ func (b *fakeFinalizationBackend) List(context.Context) ([]task.Task, error) {
 
 func (b *fakeFinalizationBackend) Close(_ context.Context, id string) error {
 	b.closed = append(b.closed, id)
+	return nil
+}
+
+func (b *fakeFinalizationBackend) SetPRURL(_ context.Context, taskID string, prURL string) error {
+	b.setPRURLs = append(b.setPRURLs, fakeFinalizationSetPRURL{taskID: taskID, prURL: prURL})
 	return nil
 }
 
@@ -90,6 +102,7 @@ type fakeFinalizationGit struct {
 	commit     string
 	staged     bool
 	pushes     []string
+	taskPushes []string
 }
 
 func (g *fakeFinalizationGit) CurrentBranch(context.Context, string) (string, error) {
@@ -115,6 +128,11 @@ func (g *fakeFinalizationGit) Commit(context.Context, string, string) (string, e
 
 func (g *fakeFinalizationGit) PushDefaultBranch(_ context.Context, _ string, branch string) error {
 	g.pushes = append(g.pushes, branch)
+	return nil
+}
+
+func (g *fakeFinalizationGit) PushTaskBranch(_ context.Context, _ string, branch string) error {
+	g.taskPushes = append(g.taskPushes, branch)
 	return nil
 }
 
@@ -280,8 +298,156 @@ func TestFinalizeDoesNotOfferRunningEscapeHatchForInvalidTargets(t *testing.T) {
 	if _, ok := workflow.RunningCompletionConfirmationFromError(err); ok {
 		t.Fatalf("error = %v, did not want confirmation bypass for worktree/team target", err)
 	}
-	if err == nil || !strings.Contains(err.Error(), "expected registered default branch") {
-		t.Fatalf("error = %v, want metadata branch error", err)
+	if err == nil || !strings.Contains(err.Error(), `expected "succeeded"`) {
+		t.Fatalf("error = %v, want feature-branch running run error", err)
+	}
+}
+
+func TestFinalizePublishesFeatureBranchPRWithoutClosingTask(t *testing.T) {
+	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	worktree := targets.WorktreeTeam.Worktree
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   targets.WorktreeTeam.Branch,
+			task.MetadataWorktree: worktree,
+		},
+	}
+	service, git, store, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{taskItem}, map[string]taskstate.TaskState{
+		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
+			Attempt:  1,
+			Status:   taskstate.RunStatusSucceeded,
+			Branch:   targets.WorktreeTeam.Branch,
+			Worktree: worktree,
+			Completion: &taskstate.Completion{
+				Summary:             "Publish branch",
+				Description:         "Commit reviewed feature work.",
+				DetailedDescription: "Detailed PR body.",
+			},
+		}),
+	})
+	git.branch = targets.WorktreeTeam.Branch
+	provider := &fakePRProvider{created: pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/42"}}
+	service.PRProvider = provider
+
+	result, err := service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+
+	if result.PRURL != "https://github.test/org/repo/pull/42" || result.PRRecovered {
+		t.Fatalf("result = %#v, want created PR URL", result)
+	}
+	if result.Branch != targets.WorktreeTeam.Branch {
+		t.Fatalf("branch = %q, want %q", result.Branch, targets.WorktreeTeam.Branch)
+	}
+	if !git.staged || len(git.taskPushes) != 1 || git.taskPushes[0] != targets.WorktreeTeam.Branch {
+		t.Fatalf("staged=%v taskPushes=%#v, want staged branch push", git.staged, git.taskPushes)
+	}
+	if len(git.pushes) != 0 {
+		t.Fatalf("default branch pushes = %#v, want none", git.pushes)
+	}
+	if len(provider.findRequests) != 1 || len(provider.createRequests) != 1 {
+		t.Fatalf("provider find/create = %#v/%#v, want one each", provider.findRequests, provider.createRequests)
+	}
+	if len(backend.setPRURLs) != 1 || backend.setPRURLs[0].prURL != "https://github.test/org/repo/pull/42" {
+		t.Fatalf("set PR URLs = %#v, want created URL", backend.setPRURLs)
+	}
+	if len(backend.closed) != 0 {
+		t.Fatalf("closed = %#v, want backend task left open", backend.closed)
+	}
+	facts := taskstate.FinalizationFacts(store.states["alpha/op-1"])
+	if facts.Commit != "commit123" || facts.CommittedAt == nil || facts.PushedAt == nil || facts.ClosedAt != nil {
+		t.Fatalf("finalization facts = %#v, want commit/push without close", facts)
+	}
+}
+
+func TestFinalizeRecoversExistingFeatureBranchPR(t *testing.T) {
+	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	worktree := targets.WorktreeTeam.Worktree
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   targets.WorktreeTeam.Branch,
+			task.MetadataWorktree: worktree,
+		},
+	}
+	service, git, _, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{taskItem}, map[string]taskstate.TaskState{
+		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
+			Attempt:  1,
+			Status:   taskstate.RunStatusSucceeded,
+			Branch:   targets.WorktreeTeam.Branch,
+			Worktree: worktree,
+			Completion: &taskstate.Completion{
+				Summary:             "Publish branch",
+				Description:         "Commit reviewed feature work.",
+				DetailedDescription: "Detailed PR body.",
+			},
+		}),
+	})
+	git.branch = targets.WorktreeTeam.Branch
+	provider := &fakePRProvider{
+		found:   pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/7"},
+		foundOK: true,
+	}
+	service.PRProvider = provider
+
+	result, err := service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+
+	if result.PRURL != "https://github.test/org/repo/pull/7" || !result.PRRecovered {
+		t.Fatalf("result = %#v, want recovered PR URL", result)
+	}
+	if len(provider.createRequests) != 0 {
+		t.Fatalf("create requests = %#v, want none", provider.createRequests)
+	}
+	if len(backend.setPRURLs) != 1 || backend.setPRURLs[0].prURL != "https://github.test/org/repo/pull/7" {
+		t.Fatalf("set PR URLs = %#v, want recovered URL", backend.setPRURLs)
+	}
+}
+
+func TestFinalizeRefusesFeatureBranchPublicationWithoutReviewedChanges(t *testing.T) {
+	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	worktree := targets.WorktreeTeam.Worktree
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   targets.WorktreeTeam.Branch,
+			task.MetadataWorktree: worktree,
+		},
+	}
+	service, git, _, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{taskItem}, map[string]taskstate.TaskState{
+		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
+			Attempt:  1,
+			Status:   taskstate.RunStatusSucceeded,
+			Branch:   targets.WorktreeTeam.Branch,
+			Worktree: worktree,
+			Completion: &taskstate.Completion{
+				Summary:             "Publish branch",
+				Description:         "Commit reviewed feature work.",
+				DetailedDescription: "Detailed PR body.",
+			},
+		}),
+	})
+	git.branch = targets.WorktreeTeam.Branch
+	git.hasChanges = false
+	service.PRProvider = &fakePRProvider{created: pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/42"}}
+
+	_, err := service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
+
+	if err == nil || !strings.Contains(err.Error(), "no reviewed local changes to commit") {
+		t.Fatalf("error = %v, want no reviewed changes error", err)
+	}
+	if git.staged || len(git.taskPushes) != 0 {
+		t.Fatalf("staged=%v taskPushes=%#v, want no git mutation", git.staged, git.taskPushes)
+	}
+	if len(backend.setPRURLs) != 0 || len(backend.closed) != 0 {
+		t.Fatalf("backend set=%#v closed=%#v, want no backend mutation", backend.setPRURLs, backend.closed)
 	}
 }
 

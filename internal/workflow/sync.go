@@ -260,44 +260,9 @@ func (s SyncService) syncAllCandidatesForTasks(
 		metadata := taskItem.OrpheusMetadata()
 		if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
 			candidates = append(candidates, syncAllCandidate{source: source, taskID: taskItem.ID})
-			continue
-		}
-
-		eligible, err := s.isSyncAllPRCreationCandidate(source.Repository, taskItem)
-		if err != nil {
-			failures = append(failures, SyncAllFailure{
-				Repository: source.Repository,
-				TaskID:     taskItem.ID,
-				Operation:  "select_candidate",
-				Err:        err,
-			})
-			continue
-		}
-		if eligible {
-			candidates = append(candidates, syncAllCandidate{source: source, taskID: taskItem.ID})
 		}
 	}
 	return candidates, failures
-}
-
-func (s SyncService) isSyncAllPRCreationCandidate(repo task.Repository, taskItem task.Task) (bool, error) {
-	taskState, err := s.RunStore.Load(repo.ID, taskItem.ID)
-	if err != nil {
-		return false, fmt.Errorf("load task state for %s/%s: %w", repo.ID, taskItem.ID, err)
-	}
-	latest, ok := taskstate.LatestRun(taskState)
-	if !ok {
-		return false, nil
-	}
-	targets, err := ExpectedTargetsForTask(repo, taskItem.ID, s.Paths)
-	if err != nil {
-		return false, err
-	}
-	eligible, _, err := syncEligibility(repo, taskItem, latest, targets)
-	if err != nil {
-		return false, err
-	}
-	return eligible, nil
 }
 
 func isSyncAllRunnableTask(taskItem task.Task) bool {
@@ -620,7 +585,7 @@ func syncEligibility(
 		return false, "latest run is not a worktree/team PR-ready completion", nil
 	}
 
-	return true, "", nil
+	return false, "feature-branch publication is handled by `orpheus task done` after local review", nil
 }
 
 // PullRequestContent is the generated title/body for a task sync PR.

@@ -203,14 +203,6 @@ func (s CompletionService) completeWorktree(
 		)
 	}
 
-	hasChanges, err := gitState.HasWorkingTreeChanges(ctx, activeContext.Target.Path)
-	if err != nil {
-		return CompleteResult{}, err
-	}
-	if !hasChanges {
-		return CompleteResult{}, errors.New("working tree has no changes; make implementation changes before running agent done")
-	}
-
 	run, err := s.RunStore.CompleteRun(
 		activeContext.Repository.ID,
 		activeContext.Task.ID,
@@ -224,58 +216,7 @@ func (s CompletionService) completeWorktree(
 	if err != nil {
 		return CompleteResult{}, fmt.Errorf("record completion: %w", err)
 	}
-
-	if err := gitState.StageAll(ctx, activeContext.Target.Path); err != nil {
-		run = s.recordCommitError(activeContext, summary, description, detailedDescription, run, err)
-		return CompleteResult{Context: activeContext, Run: run, CommitError: err}, nil
-	}
-	message := summary + "\n\n" + description
-	commit, err := gitState.Commit(ctx, activeContext.Target.Path, message)
-	if err != nil {
-		run = s.recordCommitError(activeContext, summary, description, detailedDescription, run, err)
-		return CompleteResult{Context: activeContext, Run: run, CommitError: err}, nil
-	}
-
-	run, err = s.RunStore.CompleteRun(
-		activeContext.Repository.ID,
-		activeContext.Task.ID,
-		activeContext.Run.Attempt,
-		taskstate.CompleteRunOptions{
-			Summary:             summary,
-			Description:         description,
-			DetailedDescription: detailedDescription,
-			Commit:              commit,
-		},
-	)
-	if err != nil {
-		return CompleteResult{}, fmt.Errorf("record completion commit: %w", err)
-	}
 	return CompleteResult{Context: activeContext, Run: run}, nil
-}
-
-func (s CompletionService) recordCommitError(
-	activeContext ActiveContext,
-	summary string,
-	description string,
-	detailedDescription string,
-	run taskstate.RunAttempt,
-	commitErr error,
-) taskstate.RunAttempt {
-	updated, updateErr := s.RunStore.CompleteRun(
-		activeContext.Repository.ID,
-		activeContext.Task.ID,
-		activeContext.Run.Attempt,
-		taskstate.CompleteRunOptions{
-			Summary:             summary,
-			Description:         description,
-			DetailedDescription: detailedDescription,
-			CommitError:         commitErr.Error(),
-		},
-	)
-	if updateErr == nil {
-		return updated
-	}
-	return run
 }
 
 func (s CompletionService) existingCompletionResult(

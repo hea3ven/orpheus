@@ -92,7 +92,7 @@ func TestCompletionServiceCompletesMainRun(t *testing.T) {
 	must.NotNil(latest.Completion)
 }
 
-func TestCompletionServiceCompletesWorktreeRunWithCommit(t *testing.T) {
+func TestCompletionServiceCompletesWorktreeRunWithoutCommit(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newActiveContextFixture(t, "op-1")
@@ -120,17 +120,17 @@ func TestCompletionServiceCompletesWorktreeRunWithCommit(t *testing.T) {
 	must.NoError(err)
 	is.Equal(taskstate.RunStatusRunning, completed.Run.Status)
 	must.NotNil(completed.Run.Completion)
-	is.Equal("abc123", completed.Run.Completion.Commit)
+	is.Empty(completed.Run.Completion.Commit)
 
 	latest, ok, loadErr := fixture.store.LatestRun("alpha", "op-1")
 	must.NoError(loadErr)
 	must.True(ok)
 	is.Equal(taskstate.RunStatusRunning, latest.Status)
 	must.NotNil(latest.Completion)
-	is.Equal("abc123", latest.Completion.Commit)
+	is.Empty(latest.Completion.Commit)
 }
 
-func TestCompletionServiceRecordsWorktreeCommitFailureWithoutFailing(t *testing.T) {
+func TestCompletionServiceWorktreeCompletionDoesNotStageOrCommit(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newActiveContextFixture(t, "op-1")
@@ -143,11 +143,12 @@ func TestCompletionServiceRecordsWorktreeCommitFailureWithoutFailing(t *testing.
 	must.NoError(err)
 
 	commitErr := errors.New("commit failed")
+	gitState := &fakeGitState{branch: "orpheus/op-1", hasChanges: true, commitErr: commitErr}
 	service := agent.CompletionService{
 		Paths:    fixture.paths,
 		Resolver: fixture.resolver(taskItem, worktreeEnv("op-1", worktree), worktree),
 		RunStore: fixture.store,
-		Git:      &fakeGitState{branch: "orpheus/op-1", hasChanges: true, commitErr: commitErr},
+		Git:      gitState,
 	}
 
 	completed, err := service.Complete(context.Background(), agent.CompleteOptions{
@@ -157,10 +158,12 @@ func TestCompletionServiceRecordsWorktreeCommitFailureWithoutFailing(t *testing.
 	})
 
 	must.NoError(err)
-	is.ErrorIs(completed.CommitError, commitErr)
+	is.NoError(completed.CommitError)
+	is.Equal(0, gitState.staged)
+	is.Equal(0, gitState.committed)
 	must.NotNil(completed.Run.Completion)
 	is.Empty(completed.Run.Completion.Commit)
-	is.Contains(completed.Run.Completion.CommitError, "commit failed")
+	is.Empty(completed.Run.Completion.CommitError)
 }
 
 func TestCompletionServiceIdempotentWorktreeCompletionDoesNotCommitAgain(t *testing.T) {

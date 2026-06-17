@@ -81,7 +81,8 @@ func TestAgentContextRendersValidatedWorktreeContext(t *testing.T) {
 		"one-time completion handoff",
 		"run it at most once",
 		"do not run it again after it succeeds",
-		"Orpheus will create the pull request",
+		"local-review-ready completion data",
+		"The human operator will later run `orpheus task done op-1`",
 	} {
 		is.Contains(stdout, want)
 	}
@@ -450,19 +451,16 @@ func TestAgentDoneCommitsWorktreeCompletion(t *testing.T) {
 	})
 
 	is.Empty(stderr)
-	is.Contains(stdout, "Recorded completion for op-1 and committed")
-	is.Empty(strings.TrimSpace(runGit(t, worktreePath, "status", "--porcelain=v1")))
-	message := strings.TrimSpace(runGit(t, worktreePath, "log", "-1", "--format=%B"))
-	is.Equal("Add worktree review file\n\nCreated ORPHEUS_WORKTREE_TEST.txt for pull request review.", message)
+	is.Contains(stdout, "Recorded completion for op-1; ready for local review")
+	is.Contains(strings.TrimSpace(runGit(t, worktreePath, "status", "--porcelain=v1")), "ORPHEUS_WORKTREE_TEST.txt")
 
 	latest, ok, err := runStore.LatestRun("alpha", "op-1")
 	must.NoError(err)
 	must.True(ok)
 	is.Equal(taskstate.RunStatusRunning, latest.Status)
 	must.NotNil(latest.Completion)
-	is.NotEmpty(latest.Completion.Commit)
+	is.Empty(latest.Completion.Commit)
 	is.Empty(latest.Completion.CommitError)
-	is.Equal(strings.TrimSpace(runGit(t, worktreePath, "rev-parse", "HEAD")), latest.Completion.Commit)
 }
 
 func TestAgentDoneRequiresMainWorkingTreeChangesBeforeWriting(t *testing.T) {

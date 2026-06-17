@@ -76,7 +76,8 @@ func TestRenderActiveContextIncludesWorktreeContract(t *testing.T) {
 		"one-time completion handoff",
 		"run it at most once",
 		"do not run it again after it succeeds",
-		"Orpheus will create the pull request",
+		"local-review-ready completion data",
+		"The human operator will later run `orpheus task done op-1`",
 	} {
 		is.Contains(output, want)
 	}

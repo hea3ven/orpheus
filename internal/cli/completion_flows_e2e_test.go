@@ -85,7 +85,8 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 		"- Path: " + worktreePath,
 		"- Current directory: " + worktreePath,
 		"deterministic task worktree and task branch",
-		"Orpheus will create the pull request",
+		"local-review-ready completion data",
+		"The human operator will later run `orpheus task done " + taskID + "`",
 	} {
 		is.Contains(contextOutput, want)
 	}
@@ -100,19 +101,14 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 	is.Equal("Created a worktree validation change.", latest.Completion.Description)
 	is.Equal("## Worktree completion\n\nCreated a worktree validation change.", latest.Completion.DetailedDescription)
 	is.False(latest.Completion.CompletedAt.IsZero())
-	is.NotEmpty(latest.Completion.Commit)
-	is.Equal(strings.TrimSpace(runGit(t, worktreePath, "rev-parse", "HEAD")), latest.Completion.Commit)
-	is.Empty(strings.TrimSpace(runGit(t, worktreePath, "status", "--porcelain=v1")))
-	is.Equal(
-		"Implement worktree completion flow\n\nCreated a worktree validation change.",
-		strings.TrimSpace(runGit(t, worktreePath, "log", "-1", "--format=%B")),
-	)
+	is.Empty(latest.Completion.Commit)
+	is.Contains(strings.TrimSpace(runGit(t, worktreePath, "status", "--porcelain=v1")), "worktree-change.txt")
 
 	statusOut, statusErr := executeCommand(t, []string{"status"})
 	is.Empty(statusErr)
-	is.Contains(statusOut, "Needs attention (1)")
+	is.Contains(statusOut, "Reviewing (1)")
 	is.Contains(statusOut, taskID)
-	is.Contains(statusOut, "needs PR")
+	is.Contains(statusOut, "local review; run task done")
 	is.NotContains(statusOut, "https://")
 
 	is.Equal("in_progress", strings.TrimSpace(readFileString(t, bd.StatusPath)))
@@ -173,7 +169,7 @@ func TestWorktreeSyncFlowEndToEnd(t *testing.T) {
 	must.True(ok)
 	must.NotNil(latest.Completion)
 	completionCommit := latest.Completion.Commit
-	must.NotEmpty(completionCommit)
+	is.Empty(completionCommit)
 	is.Equal("orpheus/"+taskID, latest.Branch)
 	is.NotEmpty(latest.Worktree)
 
@@ -183,16 +179,17 @@ func TestWorktreeSyncFlowEndToEnd(t *testing.T) {
 		statusStdout: `{"url":"https://github.test/org/alpha/pull/55","state":"OPEN","merged":false}`,
 	})
 
-	syncOut, syncErr := executeCommand(t, []string{"task", "sync", taskID})
+	doneOut, doneErr := executeCommand(t, []string{"task", "done", taskID})
 
-	is.Empty(syncErr)
-	is.Contains(syncOut, "Synced "+taskID)
-	is.Contains(syncOut, "pushed branch orpheus/"+taskID+" to origin")
-	is.Contains(syncOut, "created PR https://github.test/org/alpha/pull/55")
-	is.Contains(syncOut, "Task is in review")
+	is.Empty(doneErr)
+	is.Contains(doneOut, "Published "+taskID)
+	is.Contains(doneOut, "pushed orpheus/"+taskID)
+	is.Contains(doneOut, "created PR https://github.test/org/alpha/pull/55")
+	is.Contains(doneOut, "Backend task remains open for PR review")
+	publicationCommit := strings.TrimSpace(runGit(t, latest.Worktree, "rev-parse", "HEAD"))
 	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
 	pushedCommit := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/orpheus/"+taskID))
-	is.Equal(completionCommit, pushedCommit)
+	is.Equal(publicationCommit, pushedCommit)
 
 	statusOut, statusErr := executeCommand(t, []string{"status"})
 
