@@ -441,7 +441,8 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summa
 		BackendFactory: func(source taskmodel.RepositorySource) (workflow.FinalizationBackend, error) {
 			return newBeadsTaskBackend(source.BackendDir)
 		},
-		RunStore: store,
+		RunStore:   store,
+		PRProvider: pullrequest.GHProvider{},
 	}
 	finalizeOpts := workflow.FinalizeOptions{
 		TaskID:      taskID,
@@ -475,6 +476,22 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summa
 		slog.String("task_id", finalized.Task.ID),
 		slog.String("commit", finalized.Finalization.Commit),
 	)
+	if finalized.PRURL != "" {
+		action := "created"
+		if finalized.PRRecovered {
+			action = "recovered existing"
+		}
+		_, err = fmt.Fprintf(
+			command.OutOrStdout(),
+			"Published %s: committed %s, pushed %s, and %s PR %s. Backend task remains open for PR review.\n",
+			finalized.Task.ID,
+			finalized.Finalization.Commit,
+			finalized.Branch,
+			action,
+			finalized.PRURL,
+		)
+		return err
+	}
 	_, err = fmt.Fprintf(
 		command.OutOrStdout(),
 		"Finalized %s: committed %s, pushed %s, and closed the backend task.\n",

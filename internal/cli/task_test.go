@@ -1664,7 +1664,7 @@ func TestTaskDoneRefusesRunningCompletionWithoutInteractiveConfirmation(t *testi
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestTaskSyncPushesPRReadyTaskBranch(t *testing.T) {
+func TestTaskDonePublishesPRReadyTaskBranch(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -1687,10 +1687,7 @@ func TestTaskSyncPushesPRReadyTaskBranch(t *testing.T) {
 	runGit(t, repoPath, "branch", targets.WorktreeTeam.Branch, "main")
 	runGit(t, repoPath, "worktree", "add", taskWorktree, targets.WorktreeTeam.Branch)
 	must.NoError(os.WriteFile(filepath.Join(taskWorktree, "sync.txt"), []byte("sync\n"), 0o644))
-	runGit(t, taskWorktree, "add", "sync.txt")
-	runGit(t, taskWorktree, "commit", "-m", "sync task branch")
-	commit := strings.TrimSpace(runGit(t, taskWorktree, "rev-parse", "HEAD"))
-	recordWorktreeCompletion(t, paths, "alpha", "op-sync", targets.WorktreeTeam.Branch, taskWorktree, commit)
+	recordWorktreeCompletion(t, paths, "alpha", "op-sync", targets.WorktreeTeam.Branch, taskWorktree, "")
 
 	bdLogPath := withFakeBDCommandResponses(t, []fakeBDCommandResponse{
 		{
@@ -1708,13 +1705,13 @@ func TestTaskSyncPushesPRReadyTaskBranch(t *testing.T) {
 		createStdout: "https://github.test/org/alpha/pull/42\n",
 	})
 
-	stdout, stderr := executeCommand(t, []string{"task", "sync", "op-sync"})
+	stdout, stderr := executeCommand(t, []string{"task", "done", "op-sync"})
 
 	is.Empty(stderr)
-	is.Contains(stdout, "Synced op-sync")
-	is.Contains(stdout, "pushed branch orpheus/op-sync to origin")
+	is.Contains(stdout, "Published op-sync")
+	is.Contains(stdout, "pushed orpheus/op-sync")
 	is.Contains(stdout, "created PR https://github.test/org/alpha/pull/42")
-	is.Contains(stdout, "Task is in review")
+	is.Contains(stdout, "Backend task remains open for PR review")
 	bdLog, readErr := os.ReadFile(bdLogPath)
 	must.NoError(readErr)
 	is.Contains(string(bdLog), "--json --sandbox update op-sync --set-metadata orpheus.pr_url=https://github.test/org/alpha/pull/42")
@@ -1731,10 +1728,11 @@ func TestTaskSyncPushesPRReadyTaskBranch(t *testing.T) {
 	is.NotContains(string(ghLog), "op-sync:")
 	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
 	originCommit := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/orpheus/op-sync"))
+	commit := strings.TrimSpace(runGit(t, taskWorktree, "rev-parse", "HEAD"))
 	is.Equal(commit, originCommit)
 }
 
-func TestTaskSyncRecoversExistingBranchPR(t *testing.T) {
+func TestTaskDoneRecoversExistingBranchPR(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -1757,10 +1755,7 @@ func TestTaskSyncRecoversExistingBranchPR(t *testing.T) {
 	runGit(t, repoPath, "branch", targets.WorktreeTeam.Branch, "main")
 	runGit(t, repoPath, "worktree", "add", taskWorktree, targets.WorktreeTeam.Branch)
 	must.NoError(os.WriteFile(filepath.Join(taskWorktree, "sync.txt"), []byte("sync\n"), 0o644))
-	runGit(t, taskWorktree, "add", "sync.txt")
-	runGit(t, taskWorktree, "commit", "-m", "sync task branch")
-	commit := strings.TrimSpace(runGit(t, taskWorktree, "rev-parse", "HEAD"))
-	recordWorktreeCompletion(t, paths, "alpha", "op-sync", targets.WorktreeTeam.Branch, taskWorktree, commit)
+	recordWorktreeCompletion(t, paths, "alpha", "op-sync", targets.WorktreeTeam.Branch, taskWorktree, "")
 
 	bdLogPath := withFakeBDCommandResponses(t, []fakeBDCommandResponse{
 		{
@@ -1779,11 +1774,11 @@ func TestTaskSyncRecoversExistingBranchPR(t *testing.T) {
 		createExit:   66,
 	})
 
-	stdout, stderr := executeCommand(t, []string{"task", "sync", "op-sync"})
+	stdout, stderr := executeCommand(t, []string{"task", "done", "op-sync"})
 
 	is.Empty(stderr)
 	is.Contains(stdout, "recovered existing PR https://github.test/org/alpha/pull/7")
-	is.Contains(stdout, "Task is in review")
+	is.Contains(stdout, "Backend task remains open for PR review")
 	bdLog, readErr := os.ReadFile(bdLogPath)
 	must.NoError(readErr)
 	is.Contains(string(bdLog), "--json --sandbox update op-sync --set-metadata orpheus.pr_url=https://github.test/org/alpha/pull/7")
@@ -1793,6 +1788,7 @@ func TestTaskSyncRecoversExistingBranchPR(t *testing.T) {
 	is.NotContains(string(ghLog), "ARG_2<<END\ncreate\nEND")
 	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
 	originCommit := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/orpheus/op-sync"))
+	commit := strings.TrimSpace(runGit(t, taskWorktree, "rev-parse", "HEAD"))
 	is.Equal(commit, originCommit)
 }
 
@@ -2195,7 +2191,7 @@ func TestTaskSyncSkipsMainSoloLocalReadyTask(t *testing.T) {
 	is.Contains(stdout, "PR creation was not attempted")
 }
 
-func TestTaskSyncPushFailureIsNonZero(t *testing.T) {
+func TestTaskDoneFeatureBranchPushFailureIsNonZero(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -2218,10 +2214,7 @@ func TestTaskSyncPushFailureIsNonZero(t *testing.T) {
 	runGit(t, repoPath, "branch", targets.WorktreeTeam.Branch, "main")
 	runGit(t, repoPath, "worktree", "add", taskWorktree, targets.WorktreeTeam.Branch)
 	must.NoError(os.WriteFile(filepath.Join(taskWorktree, "sync.txt"), []byte("sync\n"), 0o644))
-	runGit(t, taskWorktree, "add", "sync.txt")
-	runGit(t, taskWorktree, "commit", "-m", "sync task branch")
-	commit := strings.TrimSpace(runGit(t, taskWorktree, "rev-parse", "HEAD"))
-	recordWorktreeCompletion(t, paths, "alpha", "op-sync", targets.WorktreeTeam.Branch, taskWorktree, commit)
+	recordWorktreeCompletion(t, paths, "alpha", "op-sync", targets.WorktreeTeam.Branch, taskWorktree, "")
 	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
 	must.NoError(os.RemoveAll(originPath))
 
@@ -2231,7 +2224,7 @@ func TestTaskSyncPushFailureIsNonZero(t *testing.T) {
 		stdout: syncReadyTaskJSON("op-sync", targets.WorktreeTeam.Branch, taskWorktree),
 	}})
 
-	stdout, stderr, err := executeCommandWithError(t, []string{"task", "sync", "op-sync"})
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "done", "op-sync"})
 
 	must.Error(err)
 	is.Empty(stdout)
@@ -2306,35 +2299,31 @@ func TestTaskSyncAllCreatesAndPollsPRBoundaryTasks(t *testing.T) {
 	]`
 	bdLogPath := withFakeBDCommandResponses(t, []fakeBDCommandResponse{
 		{dir: repoPath, args: "--json --readonly --sandbox list --all --limit 0", stdout: listJSON},
-		{dir: repoPath, args: "--json --readonly --sandbox show --id op-create", stdout: syncReadyTaskJSON("op-create", targets.WorktreeTeam.Branch, taskWorktree)},
-		{dir: repoPath, args: "--json --sandbox update op-create --set-metadata orpheus.pr_url=https://github.test/org/alpha/pull/42"},
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-open", stdout: openTaskJSON},
 	})
 	ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{
-		listStdout:   "[]",
-		createStdout: "https://github.test/org/alpha/pull/42\n",
 		statusStdout: `{"url":"https://github.test/org/alpha/pull/77","state":"OPEN","merged":false}`,
 	})
 
 	stdout, stderr := executeCommand(t, []string{"task", "sync", "--all"})
 
 	is.Empty(stderr)
-	is.Contains(stdout, "Created/recovered PRs (1):")
-	is.Contains(stdout, "op-create (alpha): pushed branch orpheus/op-create and created PR https://github.test/org/alpha/pull/42")
 	is.Contains(stdout, "Open/in-review PRs (1):")
 	is.Contains(stdout, "op-open (alpha): PR https://github.test/org/alpha/pull/77 is still open for review")
+	is.NotContains(stdout, "Created/recovered PRs")
+	is.NotContains(stdout, "op-create")
 	is.NotContains(stdout, "op-epic")
 
 	bdLog, readErr := os.ReadFile(bdLogPath)
 	must.NoError(readErr)
 	is.Contains(string(bdLog), "--json --readonly --sandbox list --all --limit 0")
-	is.Contains(string(bdLog), "--json --readonly --sandbox show --id op-create")
 	is.Contains(string(bdLog), "--json --readonly --sandbox show --id op-open")
+	is.NotContains(string(bdLog), "--id op-create")
 	is.NotContains(string(bdLog), "--id op-epic")
 	ghLog, readErr := os.ReadFile(ghLogPath)
 	must.NoError(readErr)
-	is.Contains(string(ghLog), "ARG_2<<END\nlist\nEND")
-	is.Contains(string(ghLog), "ARG_2<<END\ncreate\nEND")
+	is.NotContains(string(ghLog), "ARG_2<<END\nlist\nEND")
+	is.NotContains(string(ghLog), "ARG_2<<END\ncreate\nEND")
 	is.Contains(string(ghLog), "ARG_2<<END\nview\nEND")
 }
 
@@ -2521,15 +2510,6 @@ func TestTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAfterFailures(t *test
 			stderr:   "bd unavailable\n",
 			exitCode: 1,
 		},
-		{
-			dir:    alphaPath,
-			args:   "--json --readonly --sandbox show --id a-create",
-			stdout: syncReadyTaskJSON("a-create", alphaTargets.WorktreeTeam.Branch, alphaWorktree),
-		},
-		{
-			dir:  alphaPath,
-			args: "--json --sandbox update a-create --set-metadata orpheus.pr_url=https://github.test/org/alpha/pull/42",
-		},
 		{dir: alphaPath, args: "--json --readonly --sandbox show --id a-open", stdout: openTaskJSON},
 		{dir: betaPath, args: "--json --readonly --sandbox show --id b-merged", stdout: mergedTaskJSON},
 		{dir: betaPath, args: "--json --readonly --sandbox show --id b-merged", stdout: mergedTaskJSON},
@@ -2537,8 +2517,6 @@ func TestTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAfterFailures(t *test
 		{dir: betaPath, args: "--json --readonly --sandbox show --id b-closed", stdout: closedTaskJSON},
 	})
 	ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{
-		listStdout:   "[]",
-		createStdout: "https://github.test/org/alpha/pull/42\n",
 		statusByURL: []fakeGHPRStatusResponse{
 			{
 				url:    "https://github.test/org/alpha/pull/77",
@@ -2559,8 +2537,6 @@ func TestTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAfterFailures(t *test
 
 	must.Error(err)
 	is.Empty(stderr)
-	is.Contains(stdout, "Created/recovered PRs (1):")
-	is.Contains(stdout, "a-create (alpha): pushed branch orpheus/a-create and created PR https://github.test/org/alpha/pull/42")
 	is.Contains(stdout, "Open/in-review PRs (1):")
 	is.Contains(stdout, "a-open (alpha): PR https://github.test/org/alpha/pull/77 is still open for review")
 	is.Contains(stdout, "Merged/closed tasks (1):")
@@ -2576,13 +2552,14 @@ func TestTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAfterFailures(t *test
 	is.Contains(bdLog, alphaPath+"\n--json --readonly --sandbox list --all --limit 0")
 	is.Contains(bdLog, betaPath+"\n--json --readonly --sandbox list --all --limit 0")
 	is.Contains(bdLog, gammaPath+"\n--json --readonly --sandbox list --all --limit 0")
-	is.Contains(bdLog, "--json --sandbox update a-create --set-metadata orpheus.pr_url=https://github.test/org/alpha/pull/42")
+	is.NotContains(bdLog, "--id a-create")
+	is.NotContains(bdLog, "--set-metadata orpheus.pr_url=https://github.test/org/alpha/pull/42")
 	is.Contains(bdLog, "--json --sandbox close b-merged")
 	is.NotContains(bdLog, "--json --sandbox close b-closed")
 
 	ghLog := readFileString(t, ghLogPath)
-	is.Contains(ghLog, "ARG_2<<END\nlist\nEND")
-	is.Contains(ghLog, "ARG_2<<END\ncreate\nEND")
+	is.NotContains(ghLog, "ARG_2<<END\nlist\nEND")
+	is.NotContains(ghLog, "ARG_2<<END\ncreate\nEND")
 	is.Equal(3, strings.Count(ghLog, "ARG_2<<END\nview\nEND"))
 
 	var betaState taskstate.TaskState

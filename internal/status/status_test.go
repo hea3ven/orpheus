@@ -124,7 +124,7 @@ func TestProjectWithRunStatesShowsSuccessfulMainCompletionInReview(t *testing.T)
 	assertGroupTaskIDs(t, got, status.GroupWorking, nil)
 }
 
-func TestProjectWithRunStatesShowsSuccessfulWorktreeCompletionWithCommitNeedsPR(t *testing.T) {
+func TestProjectWithRunStatesShowsWorktreeCompletionReadyForTaskDone(t *testing.T) {
 	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
 		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/tmp/alpha", DefaultBranch: "main"},
 		Tasks: []task.Task{{
@@ -160,14 +160,14 @@ func TestProjectWithRunStatesShowsSuccessfulWorktreeCompletionWithCommitNeedsPR(
 
 	got := status.ProjectWithLocalTaskStates(snapshot, localStates)
 
-	assertGroupTaskIDs(t, got, status.GroupNeedsAttention, []string{"a-worktree"})
-	entry := groupEntries(t, got, status.GroupNeedsAttention)[0]
-	if entry.Detail != "needs PR" {
-		t.Fatalf("needs-attention detail = %q, want needs PR", entry.Detail)
+	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-worktree"})
+	entry := groupEntries(t, got, status.GroupInReview)[0]
+	if entry.Detail != "local review; run task done" {
+		t.Fatalf("review detail = %q, want task done detail", entry.Detail)
 	}
 }
 
-func TestProjectWithRunStatesShowsWorktreeCompletionWithoutCommitNeedsManualCorrection(t *testing.T) {
+func TestProjectWithRunStatesShowsWorktreeCompletionWithoutCommitReadyForTaskDone(t *testing.T) {
 	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
 		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/tmp/alpha", DefaultBranch: "main"},
 		Tasks: []task.Task{{
@@ -203,10 +203,10 @@ func TestProjectWithRunStatesShowsWorktreeCompletionWithoutCommitNeedsManualCorr
 
 	got := status.ProjectWithLocalTaskStates(snapshot, localStates)
 
-	assertGroupTaskIDs(t, got, status.GroupNeedsAttention, []string{"a-worktree"})
-	entry := groupEntries(t, got, status.GroupNeedsAttention)[0]
-	if entry.Detail != "completion recorded but commit failed; needs manual correction" {
-		t.Fatalf("needs-attention detail = %q, want commit-failure detail", entry.Detail)
+	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-worktree"})
+	entry := groupEntries(t, got, status.GroupInReview)[0]
+	if entry.Detail != "local review; run task done" {
+		t.Fatalf("review detail = %q, want task done detail", entry.Detail)
 	}
 }
 
