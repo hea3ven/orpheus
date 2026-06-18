@@ -67,6 +67,12 @@ func TestProjectGroupsItemsByLocalM4Policy(t *testing.T) {
 	assertGroupTaskIDs(t, got, status.GroupDoneClosed, []string{"a-done", "a-epic-done"})
 	assertGroupTaskIDs(t, got, status.GroupNeedsAttention, []string{"a-unknown"})
 
+	assertLocalM4PolicyProjectionDetails(t, got)
+}
+
+func assertLocalM4PolicyProjectionDetails(t *testing.T, got status.Projection) {
+	t.Helper()
+
 	reviewEntry := groupEntries(t, got, status.GroupInReview)[0]
 	if reviewEntry.Detail != "https://example.test/pr/1" {
 		t.Fatalf("review detail = %q, want PR URL", reviewEntry.Detail)
@@ -258,6 +264,18 @@ func TestProjectWithRunStatesClassifiesLatestAttachedAttempts(t *testing.T) {
 
 	got := status.ProjectWithRunStates(snapshot, runStates)
 
+	assertLatestAttachedAttemptProjection(t, got)
+	assertGroupTaskIDs(t, got, status.GroupReadyToRun, []string{"a-ready"})
+
+	readyRows := status.ReadyRowsWithRunStates(snapshot, runStates)
+	if len(readyRows) != 1 || readyRows[0].Task.ID != "a-ready" {
+		t.Fatalf("ready rows = %#v, want only a-ready", readyRows)
+	}
+}
+
+func assertLatestAttachedAttemptProjection(t *testing.T, got status.Projection) {
+	t.Helper()
+
 	working := groupEntries(t, got, status.GroupWorking)
 	if len(working) != 1 || working[0].Task.ID != "a-running" || working[0].Detail != "run attempt 2 is running" {
 		t.Fatalf("working entries = %#v, want running attempt detail", working)
@@ -294,12 +312,6 @@ func TestProjectWithRunStatesClassifiesLatestAttachedAttempts(t *testing.T) {
 	)
 	if attention[1].Task.ID != "a-open-history" || !hasOpenStatusDetail || !hasFailedRunDetail {
 		t.Fatalf("needs-attention entries = %#v, want open task run-history detail", attention)
-	}
-	assertGroupTaskIDs(t, got, status.GroupReadyToRun, []string{"a-ready"})
-
-	readyRows := status.ReadyRowsWithRunStates(snapshot, runStates)
-	if len(readyRows) != 1 || readyRows[0].Task.ID != "a-ready" {
-		t.Fatalf("ready rows = %#v, want only a-ready", readyRows)
 	}
 }
 
@@ -386,68 +398,74 @@ func TestReadyRowsUsesCanonicalReadinessPolicyForEligibleIssueTypes(t *testing.T
 }
 
 func TestReadyRowsWithRunStatesExcludesCompletionAndAttentionStates(t *testing.T) {
-	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
-		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/tmp/alpha", DefaultBranch: "main"},
-		Tasks: []task.Task{
-			{ID: "a-ready", Title: "ready", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
-			{
-				ID:        "a-main",
-				Title:     "main local review",
-				Status:    task.StatusInProgress,
-				IssueType: task.IssueTypeTask,
-				Metadata: task.Metadata{
-					task.MetadataBranch:   "main",
-					task.MetadataWorktree: "/tmp/alpha",
-				},
-			},
-			{
-				ID:        "a-worktree",
-				Title:     "worktree needs PR",
-				Status:    task.StatusInProgress,
-				IssueType: task.IssueTypeTask,
-				Metadata: task.Metadata{
-					task.MetadataBranch:   "orpheus/a-worktree",
-					task.MetadataWorktree: "/tmp/orpheus/worktrees/a-worktree",
-				},
-			},
-			{ID: "a-failed", Title: "failed", Status: task.StatusInProgress, IssueType: task.IssueTypeTask},
-			{ID: "a-open-history", Title: "open history", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
-		},
-	}}}
-	runStates := status.RunStateIndex{
-		status.RunStateKey("alpha", "a-main"): {
-			Attempt:  1,
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   "main",
-			Worktree: "/tmp/alpha",
-			Completion: &taskstate.Completion{
-				Summary:             "Done",
-				Description:         "Ready for local review.",
-				DetailedDescription: "Detailed PR body.",
-				CompletedAt:         time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
-			},
-		},
-		status.RunStateKey("alpha", "a-worktree"): {
-			Attempt:  1,
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   "orpheus/a-worktree",
-			Worktree: "/tmp/orpheus/worktrees/a-worktree",
-			Completion: &taskstate.Completion{
-				Summary:             "Done",
-				Description:         "Ready for PR.",
-				DetailedDescription: "Detailed PR body.",
-				CompletedAt:         time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
-				Commit:              "abc123",
-			},
-		},
-		status.RunStateKey("alpha", "a-failed"):       {Attempt: 1, Status: taskstate.RunStatusFailed},
-		status.RunStateKey("alpha", "a-open-history"): {Attempt: 1, Status: taskstate.RunStatusSucceeded},
-	}
+	snapshot, runStates := readyRowsCompletionAndAttentionFixture()
 
 	got := status.ReadyRowsWithRunStates(snapshot, runStates)
 
 	if len(got) != 1 || got[0].Task.ID != "a-ready" {
 		t.Fatalf("ready rows = %#v, want only a-ready", got)
+	}
+}
+
+func readyRowsCompletionAndAttentionFixture() (task.SnapshotResult, status.RunStateIndex) {
+	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
+		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/tmp/alpha", DefaultBranch: "main"},
+		Tasks: []task.Task{
+			{ID: "a-ready", Title: "ready", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
+			reviewTask("a-main", "main local review", "main", "/tmp/alpha"),
+			reviewTask(
+				"a-worktree",
+				"worktree needs PR",
+				"orpheus/a-worktree",
+				"/tmp/orpheus/worktrees/a-worktree",
+			),
+			{ID: "a-failed", Title: "failed", Status: task.StatusInProgress, IssueType: task.IssueTypeTask},
+			{ID: "a-open-history", Title: "open history", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
+		},
+	}}}
+	runStates := status.RunStateIndex{
+		status.RunStateKey("alpha", "a-main"): completedRun("main", "/tmp/alpha", ""),
+		status.RunStateKey("alpha", "a-worktree"): completedRun(
+			"orpheus/a-worktree",
+			"/tmp/orpheus/worktrees/a-worktree",
+			"abc123",
+		),
+		status.RunStateKey("alpha", "a-failed"):       {Attempt: 1, Status: taskstate.RunStatusFailed},
+		status.RunStateKey("alpha", "a-open-history"): {Attempt: 1, Status: taskstate.RunStatusSucceeded},
+	}
+	return snapshot, runStates
+}
+
+func reviewTask(id string, title string, branch string, worktree string) task.Task {
+	return task.Task{
+		ID:        id,
+		Title:     title,
+		Status:    task.StatusInProgress,
+		IssueType: task.IssueTypeTask,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   branch,
+			task.MetadataWorktree: worktree,
+		},
+	}
+}
+
+func completedRun(branch string, worktree string, commit string) taskstate.RunAttempt {
+	description := "Ready for local review."
+	if commit != "" {
+		description = "Ready for PR."
+	}
+	return taskstate.RunAttempt{
+		Attempt:  1,
+		Status:   taskstate.RunStatusSucceeded,
+		Branch:   branch,
+		Worktree: worktree,
+		Completion: &taskstate.Completion{
+			Summary:             "Done",
+			Description:         description,
+			DetailedDescription: "Detailed PR body.",
+			CompletedAt:         time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+			Commit:              commit,
+		},
 	}
 }
 
