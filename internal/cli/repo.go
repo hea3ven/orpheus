@@ -12,8 +12,11 @@ import (
 	"github.com/hea3ven/orpheus/internal/beads"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/registry"
+	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/spf13/cobra"
 )
+
+const repoAddLockOperation = "repo add"
 
 var (
 	inspectLocalBeads      = beads.InspectLocal
@@ -50,7 +53,7 @@ func runRepoAdd(command *cobra.Command, opts *rootOptions, inputPath string) err
 	)
 	logger.DebugContext(command.Context(), "starting repo registration", slog.String("input_path", inputPath))
 
-	store, err := newRegistryStoreFromEnvironment()
+	store, paths, err := newRegistryStoreWithPathsFromEnvironment()
 	if err != nil {
 		return err
 	}
@@ -84,13 +87,26 @@ func runRepoAdd(command *cobra.Command, opts *rootOptions, inputPath string) err
 		return err
 	}
 
-	if err := registerInspectedRepo(command, store, repo, managed, logger); err != nil {
+	if err := registerInspectedRepo(command, paths, store, repo, managed, logger); err != nil {
 		return err
 	}
 	return renderRepoAdded(command, repo)
 }
 
 func registerInspectedRepo(
+	command *cobra.Command,
+	paths state.Paths,
+	store registry.Store,
+	repo registry.Repo,
+	managed bool,
+	logger *slog.Logger,
+) error {
+	return state.WithGlobalMutationLock(paths, repoAddLockOperation, func() error {
+		return registerInspectedRepoLocked(command, store, repo, managed, logger)
+	})
+}
+
+func registerInspectedRepoLocked(
 	command *cobra.Command,
 	store registry.Store,
 	repo registry.Repo,
