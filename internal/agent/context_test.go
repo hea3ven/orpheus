@@ -28,6 +28,14 @@ func (b fakeContextBackend) Get(ctx context.Context, id string) (taskmodel.Task,
 	return b.task, nil
 }
 
+type contextMutation func(
+	fixture *activeContextFixture,
+	worktree string,
+	taskItem *taskmodel.Task,
+	env map[string]string,
+	cwd *string,
+)
+
 func TestActiveContextResolverResolvesWorktreeTarget(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -146,86 +154,7 @@ func TestActiveContextResolverRejectsLatestRunThatIsNotRunning(t *testing.T) {
 }
 
 func TestActiveContextResolverRejectsUnsafeOrInconsistentContext(t *testing.T) {
-	type contextMutation func(
-		fixture *activeContextFixture,
-		worktree string,
-		taskItem *taskmodel.Task,
-		env map[string]string,
-		cwd *string,
-	)
-	tests := []struct {
-		name      string
-		mutate    contextMutation
-		wantError string
-	}{
-		{
-			name: "environment worktree mismatch",
-			mutate: func(
-				fixture *activeContextFixture,
-				worktree string,
-				taskItem *taskmodel.Task,
-				env map[string]string,
-				cwd *string,
-			) {
-				env["ORPHEUS_WORKTREE"] = fixture.repoPath
-			},
-			wantError: "ORPHEUS_WORKTREE",
-		},
-		{
-			name: "cwd outside target",
-			mutate: func(
-				fixture *activeContextFixture,
-				worktree string,
-				taskItem *taskmodel.Task,
-				env map[string]string,
-				cwd *string,
-			) {
-				*cwd = filepath.Dir(fixture.repoPath)
-			},
-			wantError: "outside the worktree/team execution target",
-		},
-		{
-			name: "closed task",
-			mutate: func(
-				fixture *activeContextFixture,
-				worktree string,
-				taskItem *taskmodel.Task,
-				env map[string]string,
-				cwd *string,
-			) {
-				taskItem.Status = taskmodel.StatusClosed
-			},
-			wantError: "task op-1 is closed",
-		},
-		{
-			name: "task already has pull request URL",
-			mutate: func(
-				fixture *activeContextFixture,
-				worktree string,
-				taskItem *taskmodel.Task,
-				env map[string]string,
-				cwd *string,
-			) {
-				taskItem.Metadata[taskmodel.MetadataPRURL] = "https://example.test/pr/1"
-			},
-			wantError: "already has a pull request URL recorded",
-		},
-		{
-			name: "metadata mismatch",
-			mutate: func(
-				fixture *activeContextFixture,
-				worktree string,
-				taskItem *taskmodel.Task,
-				env map[string]string,
-				cwd *string,
-			) {
-				taskItem.Metadata[taskmodel.MetadataBranch] = "other"
-			},
-			wantError: "inconsistent Orpheus metadata",
-		},
-	}
-
-	for _, tt := range tests {
+	for _, tt := range unsafeContextCases() {
 		t.Run(tt.name, func(t *testing.T) {
 			is := assert.New(t)
 			must := require.New(t)
@@ -254,6 +183,94 @@ func TestActiveContextResolverRejectsUnsafeOrInconsistentContext(t *testing.T) {
 			is.Contains(err.Error(), tt.wantError)
 		})
 	}
+}
+
+func unsafeContextCases() []struct {
+	name      string
+	mutate    contextMutation
+	wantError string
+} {
+	return []struct {
+		name      string
+		mutate    contextMutation
+		wantError string
+	}{
+		{
+			name:      "environment worktree mismatch",
+			mutate:    mutateEnvWorktreeMismatch,
+			wantError: "ORPHEUS_WORKTREE",
+		},
+		{
+			name:      "cwd outside target",
+			mutate:    mutateCWDOutsideTarget,
+			wantError: "outside the worktree/team execution target",
+		},
+		{
+			name:      "closed task",
+			mutate:    mutateClosedTask,
+			wantError: "task op-1 is closed",
+		},
+		{
+			name:      "task already has pull request URL",
+			mutate:    mutateTaskWithPRURL,
+			wantError: "already has a pull request URL recorded",
+		},
+		{
+			name:      "metadata mismatch",
+			mutate:    mutateMetadataMismatch,
+			wantError: "inconsistent Orpheus metadata",
+		},
+	}
+}
+
+func mutateEnvWorktreeMismatch(
+	fixture *activeContextFixture,
+	_ string,
+	_ *taskmodel.Task,
+	env map[string]string,
+	_ *string,
+) {
+	env["ORPHEUS_WORKTREE"] = fixture.repoPath
+}
+
+func mutateCWDOutsideTarget(
+	fixture *activeContextFixture,
+	_ string,
+	_ *taskmodel.Task,
+	_ map[string]string,
+	cwd *string,
+) {
+	*cwd = filepath.Dir(fixture.repoPath)
+}
+
+func mutateClosedTask(
+	_ *activeContextFixture,
+	_ string,
+	taskItem *taskmodel.Task,
+	_ map[string]string,
+	_ *string,
+) {
+	taskItem.Status = taskmodel.StatusClosed
+}
+
+func mutateTaskWithPRURL(
+	_ *activeContextFixture,
+	_ string,
+	taskItem *taskmodel.Task,
+	_ map[string]string,
+	_ *string,
+) {
+	taskItem.Metadata[taskmodel.MetadataPRURL] = "https://example.test/pr/1"
+}
+
+func mutateMetadataMismatch(
+	_ *activeContextFixture,
+	_ string,
+	taskItem *taskmodel.Task,
+	_ map[string]string,
+	_ *string,
+) {
+	taskItem.Metadata[taskmodel.MetadataBranch] = "other"
 }
 
 func TestActiveContextResolverWrapsBackendErrors(t *testing.T) {

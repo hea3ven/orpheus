@@ -107,71 +107,25 @@ type targetCandidate struct {
 
 // Resolve validates the active run, task metadata, environment, and cwd.
 func (r ActiveContextResolver) Resolve(ctx context.Context) (ActiveContext, error) {
-	if r.BackendFactory == nil {
-		return ActiveContext{}, errors.New("agent context backend factory is required")
+	if err := r.validateDependencies(); err != nil {
+		return ActiveContext{}, err
 	}
-	if r.RunStore == nil {
-		return ActiveContext{}, errors.New("agent context run store is required")
-	}
-
 	env, err := r.resolveEnvironment()
 	if err != nil {
 		return ActiveContext{}, err
 	}
 
-	repo, err := registeredRepoByID(r.Registry, env.RepoID)
+	repo, source, taskItem, err := r.resolveTask(ctx, env)
 	if err != nil {
 		return ActiveContext{}, err
 	}
-	source, err := repositorySourceByID(r.Sources, repo.ID)
+	run, err := r.resolveRunningRun(repo.ID, env.TaskID)
 	if err != nil {
 		return ActiveContext{}, err
 	}
-	if err := validateRepositorySource(repo, source); err != nil {
-		return ActiveContext{}, err
-	}
-
-	backend, err := r.BackendFactory(source)
-	if err != nil {
-		return ActiveContext{}, fmt.Errorf("create task backend for repo %s: %w", repo.ID, err)
-	}
-	taskItem, err := backend.Get(ctx, env.TaskID)
-	if err != nil {
-		return ActiveContext{}, fmt.Errorf("load task %s in repo %s: %w", env.TaskID, repo.ID, err)
-	}
-	if strings.TrimSpace(taskItem.ID) != env.TaskID {
-		return ActiveContext{}, fmt.Errorf("task backend returned task %q, expected %q", taskItem.ID, env.TaskID)
-	}
-	if err := validateContextTaskStatus(taskItem); err != nil {
-		return ActiveContext{}, err
-	}
-
-	run, ok, err := r.RunStore.LatestRun(repo.ID, env.TaskID)
-	if err != nil {
-		return ActiveContext{}, fmt.Errorf("load latest Orpheus run for task %s/%s: %w", repo.ID, env.TaskID, err)
-	}
-	if !ok {
-		return ActiveContext{}, fmt.Errorf("task %s/%s has no Orpheus run attempts", repo.ID, env.TaskID)
-	}
-	if run.Status != taskstate.RunStatusRunning {
-		return ActiveContext{}, fmt.Errorf(
-			"latest Orpheus run attempt %d for task %s/%s is %q, expected %q",
-			run.Attempt,
-			repo.ID,
-			env.TaskID,
-			run.Status,
-			taskstate.RunStatusRunning,
-		)
-	}
-
-	targets, err := workflow.ExpectedTargetsForTask(source.Repository, env.TaskID, r.Paths)
+	targets, candidate, err := r.resolveContextTarget(source, taskItem, env.TaskID)
 	if err != nil {
 		return ActiveContext{}, err
-	}
-
-	candidate, err := classifyContextTarget(taskItem.OrpheusMetadata(), targets)
-	if err != nil {
-		return ActiveContext{}, fmt.Errorf("task %s has inconsistent Orpheus metadata: %w", env.TaskID, err)
 	}
 	if err := validateEnvironmentMatchesTarget(env, candidate); err != nil {
 		return ActiveContext{}, err
@@ -180,21 +134,139 @@ func (r ActiveContextResolver) Resolve(ctx context.Context) (ActiveContext, erro
 		return ActiveContext{}, err
 	}
 
-	cwd, err := r.resolveCWD()
+	cwd, err := r.resolveTargetCWD(candidate)
 	if err != nil {
 		return ActiveContext{}, err
 	}
-	if ok, err := pathInside(cwd, candidate.Path); err != nil {
-		return ActiveContext{}, err
-	} else if !ok {
-		return ActiveContext{}, fmt.Errorf(
+
+	return newActiveContext(repo, targets, taskItem, run, candidate, cwd), nil
+}
+
+func (r ActiveContextResolver) validateDependencies() error {
+	if r.BackendFactory == nil {
+		return errors.New("agent context backend factory is required")
+	}
+	if r.RunStore == nil {
+		return errors.New("agent context run store is required")
+	}
+	return nil
+}
+
+func (r ActiveContextResolver) resolveTask(
+	ctx context.Context,
+	env agentEnvironment,
+) (registry.Repo, taskmodel.RepositorySource, taskmodel.Task, error) {
+	repo, err := registeredRepoByID(r.Registry, env.RepoID)
+	if err != nil {
+		return registry.Repo{}, taskmodel.RepositorySource{}, taskmodel.Task{}, err
+	}
+	source, err := repositorySourceByID(r.Sources, repo.ID)
+	if err != nil {
+		return registry.Repo{}, taskmodel.RepositorySource{}, taskmodel.Task{}, err
+	}
+	if err := validateRepositorySource(repo, source); err != nil {
+		return registry.Repo{}, taskmodel.RepositorySource{}, taskmodel.Task{}, err
+	}
+
+	taskItem, err := r.loadContextTask(ctx, source, repo.ID, env.TaskID)
+	if err != nil {
+		return registry.Repo{}, taskmodel.RepositorySource{}, taskmodel.Task{}, err
+	}
+	return repo, source, taskItem, nil
+}
+
+func (r ActiveContextResolver) loadContextTask(
+	ctx context.Context,
+	source taskmodel.RepositorySource,
+	repoID string,
+	taskID string,
+) (taskmodel.Task, error) {
+	backend, err := r.BackendFactory(source)
+	if err != nil {
+		return taskmodel.Task{}, fmt.Errorf("create task backend for repo %s: %w", repoID, err)
+	}
+	taskItem, err := backend.Get(ctx, taskID)
+	if err != nil {
+		return taskmodel.Task{}, fmt.Errorf("load task %s in repo %s: %w", taskID, repoID, err)
+	}
+	if strings.TrimSpace(taskItem.ID) != taskID {
+		return taskmodel.Task{}, fmt.Errorf("task backend returned task %q, expected %q", taskItem.ID, taskID)
+	}
+	if err := validateContextTaskStatus(taskItem); err != nil {
+		return taskmodel.Task{}, err
+	}
+	return taskItem, nil
+}
+
+func (r ActiveContextResolver) resolveRunningRun(repoID string, taskID string) (taskstate.RunAttempt, error) {
+	run, ok, err := r.RunStore.LatestRun(repoID, taskID)
+	if err != nil {
+		return taskstate.RunAttempt{}, fmt.Errorf("load latest Orpheus run for task %s/%s: %w", repoID, taskID, err)
+	}
+	if !ok {
+		return taskstate.RunAttempt{}, fmt.Errorf("task %s/%s has no Orpheus run attempts", repoID, taskID)
+	}
+	if run.Status != taskstate.RunStatusRunning {
+		return taskstate.RunAttempt{}, fmt.Errorf(
+			"latest Orpheus run attempt %d for task %s/%s is %q, expected %q",
+			run.Attempt,
+			repoID,
+			taskID,
+			run.Status,
+			taskstate.RunStatusRunning,
+		)
+	}
+	return run, nil
+}
+
+func (r ActiveContextResolver) resolveContextTarget(
+	source taskmodel.RepositorySource,
+	taskItem taskmodel.Task,
+	taskID string,
+) (workflow.ExpectedTargets, targetCandidate, error) {
+	targets, err := workflow.ExpectedTargetsForTask(source.Repository, taskID, r.Paths)
+	if err != nil {
+		return workflow.ExpectedTargets{}, targetCandidate{}, err
+	}
+	candidate, err := classifyContextTarget(taskItem.OrpheusMetadata(), targets)
+	if err != nil {
+		return workflow.ExpectedTargets{}, targetCandidate{}, fmt.Errorf(
+			"task %s has inconsistent Orpheus metadata: %w",
+			taskID,
+			err,
+		)
+	}
+	return targets, candidate, nil
+}
+
+func (r ActiveContextResolver) resolveTargetCWD(candidate targetCandidate) (string, error) {
+	cwd, err := r.resolveCWD()
+	if err != nil {
+		return "", err
+	}
+	ok, err := pathInside(cwd, candidate.Path)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf(
 			"current directory %q is outside the %s execution target %q",
 			cwd,
 			candidate.Kind.DisplayName(),
 			candidate.Path,
 		)
 	}
+	return cwd, nil
+}
 
+func newActiveContext(
+	repo registry.Repo,
+	targets workflow.ExpectedTargets,
+	taskItem taskmodel.Task,
+	run taskstate.RunAttempt,
+	candidate targetCandidate,
+	cwd string,
+) ActiveContext {
 	return ActiveContext{
 		Repository: ContextRepository{
 			ID:            repo.ID,
@@ -219,7 +291,7 @@ func (r ActiveContextResolver) Resolve(ctx context.Context) (ActiveContext, erro
 			Path:             candidate.Path,
 			CurrentDirectory: cwd,
 		},
-	}, nil
+	}
 }
 
 func cloneCompletion(completion *taskstate.Completion) *taskstate.Completion {
