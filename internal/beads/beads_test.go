@@ -26,6 +26,35 @@ type fakeCall struct {
 	err      error
 }
 
+const listVisibleTasksStdout = `[
+	{
+		"id":"op-1",
+		"title":"Implement adapter",
+		"description":"Read tasks",
+		"design":"Use bd JSON",
+		"acceptance_criteria":"Parses metadata",
+		"status":"open",
+		"priority":2,
+		"issue_type":"task",
+		"owner":"owner@example.com",
+		"created_by":"Hea3veN",
+		"created_at":"2026-05-24T06:30:53Z",
+		"updated_at":"2026-05-24T07:30:53Z",
+		"labels":["m2","mvp"],
+		"metadata":{
+			"orpheus.branch":"task/op-1",
+			"estimate":42,
+			"review":true,
+			"nested":{"team":"platform"}
+		},
+		"dependency_count":1,
+		"dependent_count":2,
+		"parent":"op"
+	},
+	{"id":"op-2","title":"Closed task","status":"closed","priority":2,"issue_type":"task"},
+	{"id":"op-3","title":"Bug","status":"open","priority":2,"issue_type":"bug"}
+]`
+
 func (r *fakeRunner) Run(dir string, args ...string) (beads.Result, error) {
 	if len(r.calls) == 0 {
 		return beads.Result{}, errors.New("unexpected bd call")
@@ -257,34 +286,7 @@ func TestTaskBackendListParsesVisibleTasksAndMetadata(t *testing.T) {
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir:  dir,
 		wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0"},
-		result: beads.Result{Stdout: `[
-			{
-				"id":"op-1",
-				"title":"Implement adapter",
-				"description":"Read tasks",
-				"design":"Use bd JSON",
-				"acceptance_criteria":"Parses metadata",
-				"status":"open",
-				"priority":2,
-				"issue_type":"task",
-				"owner":"owner@example.com",
-				"created_by":"Hea3veN",
-				"created_at":"2026-05-24T06:30:53Z",
-				"updated_at":"2026-05-24T07:30:53Z",
-				"labels":["m2","mvp"],
-				"metadata":{
-					"orpheus.branch":"task/op-1",
-					"estimate":42,
-					"review":true,
-					"nested":{"team":"platform"}
-				},
-				"dependency_count":1,
-				"dependent_count":2,
-				"parent":"op"
-			},
-			{"id":"op-2","title":"Closed task","status":"closed","priority":2,"issue_type":"task"},
-			{"id":"op-3","title":"Bug","status":"open","priority":2,"issue_type":"bug"}
-		]`},
+		result:   beads.Result{Stdout: listVisibleTasksStdout},
 	}}}
 
 	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
@@ -300,7 +302,15 @@ func TestTaskBackendListParsesVisibleTasksAndMetadata(t *testing.T) {
 		t.Fatalf("tasks = %#v, want active, closed, and non-task items", got)
 	}
 
-	taskItem := got[0]
+	assertParsedVisibleTask(t, got[0])
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
+func assertParsedVisibleTask(t *testing.T, taskItem task.Task) {
+	t.Helper()
+
 	if taskItem.ID != "op-1" || taskItem.Title != "Implement adapter" || taskItem.Status != task.StatusOpen || taskItem.IssueType != task.IssueTypeTask {
 		t.Fatalf("task = %#v, want parsed active task", taskItem)
 	}
@@ -321,9 +331,6 @@ func TestTaskBackendListParsesVisibleTasksAndMetadata(t *testing.T) {
 	}
 	if taskItem.CreatedAt == nil || !taskItem.CreatedAt.Equal(time.Date(2026, 5, 24, 6, 30, 53, 0, time.UTC)) {
 		t.Fatalf("created_at = %v, want parsed UTC time", taskItem.CreatedAt)
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("runner has %d unused calls", len(runner.calls))
 	}
 }
 
