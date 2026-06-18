@@ -275,7 +275,7 @@ func SetupRepoRoot(ctx context.Context, opts RepoRootOptions) (TaskWorktreeSetup
 		if err := checkoutDefaultBranch(ctx, repoRoot, plan.DefaultBranch); err != nil {
 			if currentErr != nil {
 				return TaskWorktreeSetupResult{}, fmt.Errorf(
-					"prepare repo-root task run: switch to default branch %q (current branch could not be read: %v): %w",
+					"prepare repo-root task run: switch to default branch %q (current branch could not be read: %w): %w",
 					plan.DefaultBranch,
 					currentErr,
 					err,

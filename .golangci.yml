@@ -7,9 +7,48 @@ run:
 
 linters:
   enable:
+    - errorlint
+    - gocritic
+    - misspell
+    - nilerr
+    - nolintlint
+    - predeclared
+    - revive
     - testpackage
+    - testifylint
+    - thelper
+    - unconvert
 
   settings:
+    revive:
+      # Use an explicit low-noise rule list instead of revive defaults. The
+      # defaults currently include broad documentation and unused-parameter
+      # style checks that are outside the MVP lint baseline.
+      rules:
+        - name: atomic
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: duplicated-imports
+        - name: early-return
+        - name: empty-block
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: identical-branches
+        - name: if-return
+        - name: increment-decrement
+        - name: modifies-parameter
+        - name: modifies-value-receiver
+        - name: range
+        - name: string-of-int
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unconditional-recursion
+        - name: unreachable-code
     testpackage:
       # Match the M1 testing convention: package-level behavior should use
       # external test packages, while focused private-helper tests may opt in to
@@ -18,3 +57,8 @@ linters:
       skip-regexp: '(export|internal)_test\.go'
       allow-packages:
         - main
+    testifylint:
+      # require-error mostly enforces assert-vs-require style and creates broad
+      # test churn. Keep the correctness-oriented testify checks enabled.
+      disable:
+        - require-error

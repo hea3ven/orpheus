@@ -318,9 +318,9 @@ func hintSuffix(hint string) string {
 	return "; hint: " + hint
 }
 
-func truncate(value string, max int) string {
-	if len(value) <= max {
+func truncate(value string, limit int) string {
+	if len(value) <= limit {
 		return value
 	}
-	return value[:max] + "…"
+	return value[:limit] + "…"
 }

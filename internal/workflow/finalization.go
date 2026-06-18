@@ -236,11 +236,10 @@ func (s FinalizationService) finalizeDefaultBranch(
 	}
 	var pendingConfirmation *RunningCompletionConfirmationError
 	if err := validateDefaultBranchFinalizationReady(repo, target.task, finalizeCtx, opts.AllowRunningCompleted); err != nil {
-		if errors.As(err, &pendingConfirmation) {
-			if pendingConfirmation == nil {
-				return FinalizationResult{}, err
-			}
-		} else {
+		if !errors.As(err, &pendingConfirmation) {
+			return FinalizationResult{}, err
+		}
+		if pendingConfirmation == nil {
 			return FinalizationResult{}, err
 		}
 	}
@@ -653,14 +652,27 @@ func (s FinalizationService) isInferableMainLocalReady(repo task.Repository, tas
 	if err != nil {
 		return false, err
 	}
-	target, err := ClassifyMetadataTarget(taskItem.OrpheusMetadata(), targets)
-	if err != nil || target.Kind != TargetMainSolo {
+	if !isMainSoloMetadataTarget(taskItem, targets) {
 		return false, nil
 	}
-	if err := validateDefaultBranchFinalizationReady(repo, taskItem, ctx, allowRunningCompleted); err != nil {
+	if !isDefaultBranchFinalizationReady(repo, taskItem, ctx, allowRunningCompleted) {
 		return false, nil
 	}
 	return true, nil
+}
+
+func isMainSoloMetadataTarget(taskItem task.Task, targets ExpectedTargets) bool {
+	target, err := ClassifyMetadataTarget(taskItem.OrpheusMetadata(), targets)
+	return err == nil && target.Kind == TargetMainSolo
+}
+
+func isDefaultBranchFinalizationReady(
+	repo task.Repository,
+	taskItem task.Task,
+	ctx finalizationContext,
+	allowRunningCompleted bool,
+) bool {
+	return validateDefaultBranchFinalizationReady(repo, taskItem, ctx, allowRunningCompleted) == nil
 }
 
 func (s FinalizationService) loadFinalizationContext(repo task.Repository, taskItem task.Task) (finalizationContext, error) {

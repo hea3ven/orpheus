@@ -407,7 +407,7 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentN
 			start.attempt.Attempt,
 			err,
 		); recordErr != nil {
-			return fmt.Errorf("task run %s: %w; additionally failed to record run failure: %v", resolved.TaskID, err, recordErr)
+			return fmt.Errorf("task run %s: %w; additionally failed to record run failure: %w", resolved.TaskID, err, recordErr)
 		}
 		return fmt.Errorf("task run %s: %w", resolved.TaskID, err)
 	}
@@ -451,20 +451,20 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summa
 	}
 	finalized, err := service.Finalize(command.Context(), finalizeOpts)
 	if err != nil {
-		if confirmation, ok := workflow.RunningCompletionConfirmationFromError(err); ok {
-			confirmed, confirmErr := confirmRunningCompletionFinalization(command, confirmation)
-			if confirmErr != nil {
-				return fmt.Errorf("task done: %w", confirmErr)
-			}
-			if !confirmed {
-				return fmt.Errorf("task done: %w", err)
-			}
-			finalizeOpts.AllowRunningCompleted = true
-			finalized, err = service.Finalize(command.Context(), finalizeOpts)
-			if err != nil {
-				return fmt.Errorf("task done: %w", err)
-			}
-		} else {
+		confirmation, ok := workflow.RunningCompletionConfirmationFromError(err)
+		if !ok {
+			return fmt.Errorf("task done: %w", err)
+		}
+		confirmed, confirmErr := confirmRunningCompletionFinalization(command, confirmation)
+		if confirmErr != nil {
+			return fmt.Errorf("task done: %w", confirmErr)
+		}
+		if !confirmed {
+			return fmt.Errorf("task done: %w", err)
+		}
+		finalizeOpts.AllowRunningCompleted = true
+		finalized, err = service.Finalize(command.Context(), finalizeOpts)
+		if err != nil {
 			return fmt.Errorf("task done: %w", err)
 		}
 	}
