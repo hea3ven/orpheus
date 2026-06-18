@@ -57,16 +57,7 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 		t.Fatalf("event types = %#v", loaded.Events)
 	}
 
-	statePath, err := store.Path("alpha", "op-1")
-	if err != nil {
-		t.Fatalf("state path: %v", err)
-	}
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("read YAML: %v", err)
-	}
-	text := string(data)
-	for _, want := range []string{
+	assertStoreYAMLContains(t, store, "alpha", "op-1",
 		"repo_id: alpha",
 		"task_id: op-1",
 		"attempt: 1",
@@ -75,11 +66,7 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 		"worktree_created",
 		"run_started",
 		"run_finished",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("YAML missing %q:\n%s", want, text)
-		}
-	}
+	)
 }
 
 func TestStoreCompleteRunRecordsCompletionFacts(t *testing.T) {
@@ -87,97 +74,44 @@ func TestStoreCompleteRunRecordsCompletionFacts(t *testing.T) {
 		time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC),
 		time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
 	)
-	attempt, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+	attempt := startAlphaRun(t, store, taskstate.StartRunOptions{
 		Agent:    "recorder",
 		Branch:   "main",
 		Worktree: "/tmp/alpha",
 	})
-	if err != nil {
-		t.Fatalf("start run: %v", err)
-	}
 
-	completed, err := store.CompleteRun("alpha", "op-1", attempt.Attempt, taskstate.CompleteRunOptions{
+	completed := completeAlphaRun(t, store, attempt.Attempt, "complete run", taskstate.CompleteRunOptions{
 		Summary:             "Implemented completion",
 		Description:         "Recorded local review data.",
 		DetailedDescription: "Detailed PR body.",
 	})
-	if err != nil {
-		t.Fatalf("complete run: %v", err)
-	}
-	if completed.Status != taskstate.RunStatusRunning || completed.FinishedAt != nil {
-		t.Fatalf("completed run = %#v, want still-running completion without finished_at", completed)
-	}
-	if completed.Completion == nil {
-		t.Fatalf("completed run missing completion: %#v", completed)
-	}
-	if completed.Completion.Summary != "Implemented completion" ||
-		completed.Completion.Description != "Recorded local review data." ||
-		completed.Completion.DetailedDescription != "Detailed PR body." ||
-		!completed.Completion.CompletedAt.Equal(time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC)) {
-		t.Fatalf("completion = %#v, want recorded summary/description/detailed_description/completed_at", completed.Completion)
-	}
+	assertInitialCompletionRecorded(t, completed)
 
-	withCommit, err := store.CompleteRun("alpha", "op-1", attempt.Attempt, taskstate.CompleteRunOptions{
+	withCommit := completeAlphaRun(t, store, attempt.Attempt, "record completion commit", taskstate.CompleteRunOptions{
 		Summary:             "Implemented completion",
 		Description:         "Recorded local review data.",
 		DetailedDescription: "Detailed PR body.",
 		Commit:              "abc123",
 	})
-	if err != nil {
-		t.Fatalf("record completion commit: %v", err)
-	}
 	if withCommit.Completion.Commit != "abc123" {
 		t.Fatalf("completion commit = %q, want abc123", withCommit.Completion.Commit)
 	}
 
-	finished, err := store.FinishRun("alpha", "op-1", attempt.Attempt, taskstate.RunStatusSucceeded)
-	if err != nil {
-		t.Fatalf("finish run: %v", err)
-	}
-	if finished.Status != taskstate.RunStatusSucceeded || finished.FinishedAt == nil {
-		t.Fatalf("finished run = %#v, want succeeded with finished_at", finished)
-	}
+	finishAlphaRunSucceeded(t, store, attempt.Attempt)
 
-	again, err := store.CompleteRun("alpha", "op-1", attempt.Attempt, taskstate.CompleteRunOptions{
+	again := completeAlphaRun(t, store, attempt.Attempt, "complete same run again", taskstate.CompleteRunOptions{
 		Summary:             "Implemented completion",
 		Description:         "Recorded local review data.",
 		DetailedDescription: "Detailed PR body.",
 		Commit:              "abc123",
 	})
-	if err != nil {
-		t.Fatalf("complete same run again: %v", err)
-	}
 	if !again.Completion.CompletedAt.Equal(completed.Completion.CompletedAt) {
 		t.Fatalf("idempotent completed_at = %s, want %s", again.Completion.CompletedAt, completed.Completion.CompletedAt)
 	}
 
-	_, err = store.CompleteRun("alpha", "op-1", attempt.Attempt, taskstate.CompleteRunOptions{
-		Summary:             "Different",
-		Description:         "Recorded local review data.",
-		DetailedDescription: "Detailed PR body.",
-	})
-	if !errors.Is(err, taskstate.ErrCompletionConflict) {
-		t.Fatalf("conflicting completion error = %v, want ErrCompletionConflict", err)
-	}
-
-	loaded, err := store.Load("alpha", "op-1")
-	if err != nil {
-		t.Fatalf("load state: %v", err)
-	}
-	if len(loaded.Runs) != 1 || loaded.Runs[0].Completion == nil || len(loaded.Events) != 2 {
-		t.Fatalf("loaded state = %#v, want one completed run and two events", loaded)
-	}
-
-	statePath, err := store.Path("alpha", "op-1")
-	if err != nil {
-		t.Fatalf("state path: %v", err)
-	}
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("read YAML: %v", err)
-	}
-	text := string(data)
-	for _, want := range []string{
+	assertConflictingCompletionRejected(t, store, attempt.Attempt)
+	assertCompletionStateLoaded(t, store)
+	assertStoreYAMLContains(t, store, "alpha", "op-1",
 		"status: succeeded",
 		"completion:",
 		"summary: Implemented completion",
@@ -185,11 +119,7 @@ func TestStoreCompleteRunRecordsCompletionFacts(t *testing.T) {
 		"detailed_description: Detailed PR body.",
 		"completed_at: 2026-06-03T10:01:00Z",
 		"commit: abc123",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("YAML missing %q:\n%s", want, text)
-		}
-	}
+	)
 }
 
 func TestStoreRecordsRepeatedCompletionDiagnostic(t *testing.T) {
@@ -198,21 +128,16 @@ func TestStoreRecordsRepeatedCompletionDiagnostic(t *testing.T) {
 		time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
 		time.Date(2026, 6, 3, 10, 2, 0, 0, time.UTC),
 	)
-	attempt, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+	attempt := startAlphaRun(t, store, taskstate.StartRunOptions{
 		Agent:    "recorder",
 		Branch:   "main",
 		Worktree: "/tmp/alpha",
 	})
-	if err != nil {
-		t.Fatalf("start run: %v", err)
-	}
-	if _, err := store.CompleteRun("alpha", "op-1", attempt.Attempt, taskstate.CompleteRunOptions{
+	completeAlphaRun(t, store, attempt.Attempt, "complete run", taskstate.CompleteRunOptions{
 		Summary:             "First summary",
 		Description:         "First details.",
 		DetailedDescription: "Detailed PR body.",
-	}); err != nil {
-		t.Fatalf("complete run: %v", err)
-	}
+	})
 
 	event, err := store.RecordRepeatedCompletion("alpha", "op-1", attempt.Attempt, taskstate.RepeatedCompletionOptions{
 		Summary:             "Second summary",
@@ -247,26 +172,13 @@ func TestStoreRecordsRepeatedCompletionDiagnostic(t *testing.T) {
 		t.Fatalf("completion = %#v, want first payload preserved", loaded.Runs[0].Completion)
 	}
 
-	statePath, err := store.Path("alpha", "op-1")
-	if err != nil {
-		t.Fatalf("state path: %v", err)
-	}
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("read YAML: %v", err)
-	}
-	text := string(data)
-	for _, want := range []string{
+	assertStoreYAMLContains(t, store, "alpha", "op-1",
 		"completion_repeated",
 		"requested_summary: Second summary",
 		"requested_description: Second details.",
 		"requested_detailed_description: Detailed PR body.",
 		"preserved first completion",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("YAML missing %q:\n%s", want, text)
-		}
-	}
+	)
 }
 
 func TestStoreRecordsFinalizationFactsIdempotently(t *testing.T) {
@@ -323,26 +235,13 @@ func TestStoreRecordsFinalizationFactsIdempotently(t *testing.T) {
 		t.Fatalf("loaded finalization = %#v, want all facts", facts)
 	}
 
-	statePath, err := store.Path("alpha", "op-1")
-	if err != nil {
-		t.Fatalf("state path: %v", err)
-	}
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("read YAML: %v", err)
-	}
-	text := string(data)
-	for _, want := range []string{
+	assertStoreYAMLContains(t, store, "alpha", "op-1",
 		"finalization:",
 		"committed_at: 2026-06-04T10:00:00Z",
 		"commit: abc123",
 		"pushed_at: 2026-06-04T10:01:00Z",
 		"closed_at: 2026-06-04T10:02:00Z",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("YAML missing %q:\n%s", want, text)
-		}
-	}
+	)
 }
 
 func TestStoreRecordsTaskClosedPRMergedEventIdempotently(t *testing.T) {
@@ -387,25 +286,12 @@ func TestStoreRecordsTaskClosedPRMergedEventIdempotently(t *testing.T) {
 		t.Fatalf("events = %#v, want one idempotent merged PR close event", loaded.Events)
 	}
 
-	statePath, err := store.Path("alpha", "op-1")
-	if err != nil {
-		t.Fatalf("state path: %v", err)
-	}
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("read YAML: %v", err)
-	}
-	text := string(data)
-	for _, want := range []string{
+	assertStoreYAMLContains(t, store, "alpha", "op-1",
 		"task_closed_due_to_pr_merged",
 		"at: 2026-06-09T10:00:00Z",
 		"pr_url: https://github.test/org/repo/pull/42",
 		"observed_pr_state: merged",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("YAML missing %q:\n%s", want, text)
-		}
-	}
+	)
 }
 
 func TestStartRunRefusesLatestRunningAttempt(t *testing.T) {
@@ -529,4 +415,103 @@ func newTestStore(t *testing.T, times ...time.Time) taskstate.Store {
 		return value
 	}
 	return taskstate.NewStoreWithClock(paths, clock)
+}
+
+func startAlphaRun(t *testing.T, store taskstate.Store, opts taskstate.StartRunOptions) taskstate.RunAttempt {
+	t.Helper()
+
+	attempt, err := store.StartRun("alpha", "op-1", opts)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	return attempt
+}
+
+func completeAlphaRun(
+	t *testing.T,
+	store taskstate.Store,
+	attempt int,
+	action string,
+	opts taskstate.CompleteRunOptions,
+) taskstate.RunAttempt {
+	t.Helper()
+
+	completed, err := store.CompleteRun("alpha", "op-1", attempt, opts)
+	if err != nil {
+		t.Fatalf("%s: %v", action, err)
+	}
+	return completed
+}
+
+func assertInitialCompletionRecorded(t *testing.T, completed taskstate.RunAttempt) {
+	t.Helper()
+
+	if completed.Status != taskstate.RunStatusRunning || completed.FinishedAt != nil {
+		t.Fatalf("completed run = %#v, want still-running completion without finished_at", completed)
+	}
+	if completed.Completion == nil {
+		t.Fatalf("completed run missing completion: %#v", completed)
+	}
+	if completed.Completion.Summary != "Implemented completion" ||
+		completed.Completion.Description != "Recorded local review data." ||
+		completed.Completion.DetailedDescription != "Detailed PR body." ||
+		!completed.Completion.CompletedAt.Equal(time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC)) {
+		t.Fatalf("completion = %#v, want recorded summary/description/detailed_description/completed_at", completed.Completion)
+	}
+}
+
+func finishAlphaRunSucceeded(t *testing.T, store taskstate.Store, attempt int) {
+	t.Helper()
+
+	finished, err := store.FinishRun("alpha", "op-1", attempt, taskstate.RunStatusSucceeded)
+	if err != nil {
+		t.Fatalf("finish run: %v", err)
+	}
+	if finished.Status != taskstate.RunStatusSucceeded || finished.FinishedAt == nil {
+		t.Fatalf("finished run = %#v, want succeeded with finished_at", finished)
+	}
+}
+
+func assertConflictingCompletionRejected(t *testing.T, store taskstate.Store, attempt int) {
+	t.Helper()
+
+	_, err := store.CompleteRun("alpha", "op-1", attempt, taskstate.CompleteRunOptions{
+		Summary:             "Different",
+		Description:         "Recorded local review data.",
+		DetailedDescription: "Detailed PR body.",
+	})
+	if !errors.Is(err, taskstate.ErrCompletionConflict) {
+		t.Fatalf("conflicting completion error = %v, want ErrCompletionConflict", err)
+	}
+}
+
+func assertCompletionStateLoaded(t *testing.T, store taskstate.Store) {
+	t.Helper()
+
+	loaded, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if len(loaded.Runs) != 1 || loaded.Runs[0].Completion == nil || len(loaded.Events) != 2 {
+		t.Fatalf("loaded state = %#v, want one completed run and two events", loaded)
+	}
+}
+
+func assertStoreYAMLContains(t *testing.T, store taskstate.Store, repoID, taskID string, wants ...string) {
+	t.Helper()
+
+	statePath, err := store.Path(repoID, taskID)
+	if err != nil {
+		t.Fatalf("state path: %v", err)
+	}
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read YAML: %v", err)
+	}
+	text := string(data)
+	for _, want := range wants {
+		if !strings.Contains(text, want) {
+			t.Fatalf("YAML missing %q:\n%s", want, text)
+		}
+	}
 }
