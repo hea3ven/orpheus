@@ -190,21 +190,8 @@ func classify(repository task.Repository, taskItem task.Task, index map[string]t
 	}
 
 	expectedTargets := expectedTargetsFrom(localState)
-	if expectedTargets != nil {
-		if _, ok := workflow.ClassifyExpectedPRReviewReady(*expectedTargets, taskItem, latestRun); ok {
-			return policyResult{state: readinessReview, detail: "local review; run task done"}
-		}
-	}
-	if expectedTargets != nil {
-		if _, ok := workflow.ClassifyExpectedLocalReviewReady(*expectedTargets, taskItem, latestRun); ok {
-			if localState == nil || localState.Finalization.ClosedAt == nil {
-				return policyResult{state: readinessReview, detail: "local review; run task done"}
-			}
-			return policyResult{
-				state:  readinessAttention,
-				detail: "finalization recorded but backend task is not closed",
-			}
-		}
+	if result, ok := classifyExpectedReviewReady(expectedTargets, taskItem, latestRun, localState); ok {
+		return result
 	}
 
 	if _, ok := workflow.ClassifyPRReviewReady(repository, taskItem, latestRun); ok {
@@ -243,6 +230,30 @@ func classify(repository task.Repository, taskItem task.Task, index map[string]t
 		state:  readinessAttention,
 		detail: fmt.Sprintf("status %s is not locally actionable", formatStatus(taskItem.Status)),
 	}
+}
+
+func classifyExpectedReviewReady(
+	expectedTargets *workflow.ExpectedTargets,
+	taskItem task.Task,
+	latestRun *taskstate.RunAttempt,
+	localState *LocalTaskState,
+) (policyResult, bool) {
+	if expectedTargets == nil {
+		return policyResult{}, false
+	}
+	if _, ok := workflow.ClassifyExpectedPRReviewReady(*expectedTargets, taskItem, latestRun); ok {
+		return policyResult{state: readinessReview, detail: "local review; run task done"}, true
+	}
+	if _, ok := workflow.ClassifyExpectedLocalReviewReady(*expectedTargets, taskItem, latestRun); !ok {
+		return policyResult{}, false
+	}
+	if localState == nil || localState.Finalization.ClosedAt == nil {
+		return policyResult{state: readinessReview, detail: "local review; run task done"}, true
+	}
+	return policyResult{
+		state:  readinessAttention,
+		detail: "finalization recorded but backend task is not closed",
+	}, true
 }
 
 func classifyInProgress(latestRun *taskstate.RunAttempt) policyResult {
