@@ -132,6 +132,10 @@ func withFakeBDInit(t *testing.T) string {
 	binDir := t.TempDir()
 	logPath := filepath.Join(binDir, "bd.log")
 	script := `#!/bin/sh
+if [ -n "${FAKE_BD_LOCK_PATH-}" ] && [ ! -f "$FAKE_BD_LOCK_PATH" ]; then
+  printf 'missing lock: %s\n' "$FAKE_BD_LOCK_PATH" >&2
+  exit 43
+fi
 {
   pwd
   printf '%s\n' "$@"

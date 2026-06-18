@@ -31,9 +31,17 @@ func loadRegistryContextFromStore(store registry.Store) (registryContext, error)
 }
 
 func newRegistryStoreFromEnvironment() (registry.Store, error) {
-	paths, err := state.ResolveFromEnvironment()
+	store, _, err := newRegistryStoreWithPathsFromEnvironment()
 	if err != nil {
 		return registry.Store{}, err
 	}
-	return registry.NewStore(paths), nil
+	return store, nil
+}
+
+func newRegistryStoreWithPathsFromEnvironment() (registry.Store, state.Paths, error) {
+	paths, err := state.ResolveFromEnvironment()
+	if err != nil {
+		return registry.Store{}, state.Paths{}, err
+	}
+	return registry.NewStore(paths), paths, nil
 }
