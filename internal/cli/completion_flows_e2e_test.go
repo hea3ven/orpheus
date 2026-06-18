@@ -16,21 +16,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	root := newTestState(t)
-	paths := currentTestPaths(t)
-	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
-	must.NoError(registry.NewStore(paths).Save(registry.Registry{Repos: []registry.Repo{{
-		ID:            "alpha",
-		Name:          "Alpha Repo",
-		Path:          repoPath,
-		DefaultBranch: "main",
-		BeadsMode:     registry.BeadsModeLocal,
-		BeadsPrefix:   "op",
-	}}}))
+	paths, repoPath := setupCompletionFlowRepo(t)
 
 	const taskID = "op-worktree-completion"
 	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", taskID))
@@ -51,15 +41,7 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 		Description:         "Created a worktree validation change.",
 		DetailedDescription: "## Worktree completion\n\nCreated a worktree validation change.",
 	})
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
-		"default_agent": "worktree-completion",
-		"agents": map[string]any{
-			"worktree-completion": map[string]any{
-				"command": "worktree-completion-agent",
-				"args":    []string{"--prompt", "{{prompt}}"},
-			},
-		},
-	}))
+	writeCompletionFlowAgentConfig(t, paths, "worktree-completion", "worktree-completion-agent")
 
 	stdout, stderr := executeCommand(t, []string{"task", "run", taskID})
 
@@ -117,21 +99,11 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 	is.NotContains(bdLog, "orpheus.pr_url")
 }
 
+//nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	root := newTestState(t)
-	paths := currentTestPaths(t)
-	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
-	must.NoError(registry.NewStore(paths).Save(registry.Registry{Repos: []registry.Repo{{
-		ID:            "alpha",
-		Name:          "Alpha Repo",
-		Path:          repoPath,
-		DefaultBranch: "main",
-		BeadsMode:     registry.BeadsModeLocal,
-		BeadsPrefix:   "op",
-	}}}))
+	paths, repoPath := setupCompletionFlowRepo(t)
 
 	const taskID = "op-m5-sync"
 	bd := withStatefulCompletionBD(t, completionBDTask{
@@ -150,15 +122,7 @@ func TestWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 		Description:         "Created a change for PR sync validation.",
 		DetailedDescription: "## M5 sync\n\nCreated a PR sync validation change.",
 	})
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
-		"default_agent": "m5-sync",
-		"agents": map[string]any{
-			"m5-sync": map[string]any{
-				"command": "m5-sync-agent",
-				"args":    []string{"--prompt", "{{prompt}}"},
-			},
-		},
-	}))
+	writeCompletionFlowAgentConfig(t, paths, "m5-sync", "m5-sync-agent")
 
 	runOut, runErr := executeCommand(t, []string{"task", "run", taskID})
 
@@ -239,21 +203,11 @@ func TestWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	is.Contains(fullStatusOut, taskID)
 }
 
+//nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestMainCompletionFlowEndToEnd(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	root := newTestState(t)
-	paths := currentTestPaths(t)
-	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
-	must.NoError(registry.NewStore(paths).Save(registry.Registry{Repos: []registry.Repo{{
-		ID:            "alpha",
-		Name:          "Alpha Repo",
-		Path:          repoPath,
-		DefaultBranch: "main",
-		BeadsMode:     registry.BeadsModeLocal,
-		BeadsPrefix:   "op",
-	}}}))
+	paths, repoPath := setupCompletionFlowRepo(t)
 
 	const taskID = "op-main-completion"
 	bd := withStatefulCompletionBD(t, completionBDTask{
@@ -272,15 +226,7 @@ func TestMainCompletionFlowEndToEnd(t *testing.T) {
 		Description:         "Created a main-mode validation change.",
 		DetailedDescription: "## Main completion\n\nCreated a main-mode validation change.",
 	})
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
-		"default_agent": "main-completion",
-		"agents": map[string]any{
-			"main-completion": map[string]any{
-				"command": "main-completion-agent",
-				"args":    []string{"--prompt", "{{prompt}}"},
-			},
-		},
-	}))
+	writeCompletionFlowAgentConfig(t, paths, "main-completion", "main-completion-agent")
 
 	stdout, stderr := executeCommand(t, []string{"task", "run", "--main", taskID})
 
@@ -400,21 +346,39 @@ type statefulCompletionBD struct {
 	StatusPath string
 }
 
-func withStatefulCompletionBD(t *testing.T, task completionBDTask) statefulCompletionBD {
+func setupCompletionFlowRepo(t *testing.T) (state.Paths, string) {
 	t.Helper()
 
-	binDir := t.TempDir()
-	stateDir := filepath.Join(binDir, "state")
-	must := require.New(t)
-	must.NoError(os.MkdirAll(stateDir, 0o755))
-	statusPath := filepath.Join(stateDir, "status")
-	branchPath := filepath.Join(stateDir, "branch")
-	worktreePath := filepath.Join(stateDir, "worktree")
-	prURLPath := filepath.Join(stateDir, "pr-url")
-	logPath := filepath.Join(binDir, "bd.log")
-	must.NoError(os.WriteFile(statusPath, []byte("open\n"), 0o644))
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	require.NoError(t, registry.NewStore(paths).Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	return paths, repoPath
+}
 
-	script := fmt.Sprintf(`#!/bin/sh
+func writeCompletionFlowAgentConfig(t *testing.T, paths state.Paths, name string, command string) {
+	t.Helper()
+
+	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"default_agent": name,
+		"agents": map[string]any{
+			name: map[string]any{
+				"command": command,
+				"args":    []string{"--prompt", "{{prompt}}"},
+			},
+		},
+	}))
+}
+
+const statefulCompletionBDScript = `#!/bin/sh
 set -eu
 {
   pwd
@@ -513,7 +477,24 @@ fi
 
 printf 'unexpected fake bd call: %%s|%%s\n' "$PWD" "$*" >&2
 exit 65
-`,
+`
+
+func withStatefulCompletionBD(t *testing.T, task completionBDTask) statefulCompletionBD {
+	t.Helper()
+
+	binDir := t.TempDir()
+	stateDir := filepath.Join(binDir, "state")
+	must := require.New(t)
+	must.NoError(os.MkdirAll(stateDir, 0o755))
+	statusPath := filepath.Join(stateDir, "status")
+	branchPath := filepath.Join(stateDir, "branch")
+	worktreePath := filepath.Join(stateDir, "worktree")
+	prURLPath := filepath.Join(stateDir, "pr-url")
+	logPath := filepath.Join(binDir, "bd.log")
+	must.NoError(os.WriteFile(statusPath, []byte("open\n"), 0o644))
+
+	script := fmt.Sprintf(
+		statefulCompletionBDScript,
 		shellQuote(task.TaskID),
 		shellQuote(task.Title),
 		shellQuote(task.Description),

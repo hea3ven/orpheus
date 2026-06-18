@@ -41,13 +41,17 @@ func registerLocalTaskTestRepo(t *testing.T, id string, name string, prefix stri
 	return repoDir
 }
 
-func TestTaskListListsActiveTasksAcrossRegisteredReposWithDefaultAndDetailedTables(t *testing.T) {
-	is := assert.New(t)
+type localManagedTaskRepos struct {
+	localDir   string
+	managedDir string
+}
+
+func registerLocalManagedTaskTestRepos(t *testing.T) localManagedTaskRepos {
+	t.Helper()
+
 	must := require.New(t)
-	newTestState(t)
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
-
 	localDir := filepath.Join(t.TempDir(), "local-alpha")
 	managedRepoPath := filepath.Join(t.TempDir(), "managed-beta")
 	managedDir, err := store.ManagedBeadsDir("managed-beta")
@@ -55,31 +59,25 @@ func TestTaskListListsActiveTasksAcrossRegisteredReposWithDefaultAndDetailedTabl
 	must.NoError(os.MkdirAll(localDir, 0o755))
 	must.NoError(os.MkdirAll(managedRepoPath, 0o755))
 	must.NoError(os.MkdirAll(managedDir, 0o755))
-
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{
-		{
-			ID:          "local-alpha",
-			Name:        "Local Alpha",
-			Path:        localDir,
-			BeadsMode:   registry.BeadsModeLocal,
-			BeadsPrefix: "la",
-		},
-		{
-			ID:          "managed-beta",
-			Name:        "Managed Beta",
-			Path:        managedRepoPath,
-			BeadsMode:   registry.BeadsModeManaged,
-			BeadsPrefix: "mb",
-		},
+		{ID: "local-alpha", Name: "Local Alpha", Path: localDir, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "la"},
+		{ID: "managed-beta", Name: "Managed Beta", Path: managedRepoPath, BeadsMode: registry.BeadsModeManaged, BeadsPrefix: "mb"},
 	}}))
+	return localManagedTaskRepos{localDir: localDir, managedDir: managedDir}
+}
+
+func TestTaskListListsActiveTasksAcrossRegisteredReposWithDefaultAndDetailedTables(t *testing.T) {
+	is := assert.New(t)
+	newTestState(t)
+	repos := registerLocalManagedTaskTestRepos(t)
 
 	logPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
-		localDir: {stdout: `[
+		repos.localDir: {stdout: `[
 			{"id":"la-1","title":"Local active","status":"open","priority":2,"issue_type":"task","metadata":{"orpheus.branch":"task/la-1","orpheus.worktree":"/tmp/la-1"}},
 			{"id":"la-closed","title":"Closed local task","status":"closed","priority":1,"issue_type":"task"},
 			{"id":"la-bug","title":"Local bug","status":"open","priority":1,"issue_type":"bug"}
 		]`},
-		managedDir: {stdout: `[
+		repos.managedDir: {stdout: `[
 			{"id":"mb-1","title":"Managed active","status":"in_progress","priority":3,"issue_type":"task","metadata":{"orpheus.pr_url":"https://example.test/pr/1"}}
 		]`},
 	})
@@ -97,11 +95,10 @@ func TestTaskListListsActiveTasksAcrossRegisteredReposWithDefaultAndDetailedTabl
 	}
 	for _, hidden := range []string{
 		"REPO_ID", "TASK_PREFIX", "ORPHEUS", "local-alpha", "managed-beta", "branch=task/la-1", "worktree=/tmp/la-1", "pr=https://example.test/pr/1",
+		"la-closed", "orpheus.branch",
 	} {
 		is.NotContains(stdout, hidden)
 	}
-	is.NotContains(stdout, "la-closed")
-	is.NotContains(stdout, "orpheus.branch")
 
 	detailedStdout, detailedStderr := executeCommand(t, []string{"task", "list", "--details"})
 
@@ -124,11 +121,16 @@ func TestTaskListListsActiveTasksAcrossRegisteredReposWithDefaultAndDetailedTabl
 	is.NotContains(detailedStdout, "la-closed")
 	is.NotContains(detailedStdout, "orpheus.branch")
 
-	logData, err := os.ReadFile(logPath)
-	must.NoError(err)
-	log := string(logData)
-	is.Contains(log, localDir)
-	is.Contains(log, managedDir)
+	assertTaskListBDLog(t, logPath, repos)
+}
+
+func assertTaskListBDLog(t *testing.T, logPath string, repos localManagedTaskRepos) {
+	t.Helper()
+
+	is := assert.New(t)
+	log := readFileString(t, logPath)
+	is.Contains(log, repos.localDir)
+	is.Contains(log, repos.managedDir)
 	is.Equal(4, strings.Count(log, "--json --readonly --sandbox list --all --limit 0"))
 }
 
@@ -136,43 +138,17 @@ func TestTaskReadyListsReadyTasksAcrossRegisteredRepos(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
-	paths := currentTestPaths(t)
-	store := registry.NewStore(paths)
-
-	localDir := filepath.Join(t.TempDir(), "local-alpha")
-	managedRepoPath := filepath.Join(t.TempDir(), "managed-beta")
-	managedDir, err := store.ManagedBeadsDir("managed-beta")
-	must.NoError(err)
-	must.NoError(os.MkdirAll(localDir, 0o755))
-	must.NoError(os.MkdirAll(managedRepoPath, 0o755))
-	must.NoError(os.MkdirAll(managedDir, 0o755))
-
-	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{
-		{
-			ID:          "local-alpha",
-			Name:        "Local Alpha",
-			Path:        localDir,
-			BeadsMode:   registry.BeadsModeLocal,
-			BeadsPrefix: "la",
-		},
-		{
-			ID:          "managed-beta",
-			Name:        "Managed Beta",
-			Path:        managedRepoPath,
-			BeadsMode:   registry.BeadsModeManaged,
-			BeadsPrefix: "mb",
-		},
-	}}))
+	repos := registerLocalManagedTaskTestRepos(t)
 
 	logPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
-		localDir: {stdout: `[
+		repos.localDir: {stdout: `[
 			{"id":"la-1","title":"Local ready","status":"open","priority":2,"issue_type":"task"},
 			{"id":"la-bug","title":"Local bug ready","status":"open","priority":1,"issue_type":"bug"},
 			{"id":"la-chore","title":"Local chore ready","status":"open","priority":3,"issue_type":"chore"},
 			{"id":"la-epic","title":"Local epic ready","status":"open","priority":1,"issue_type":"epic"},
 			{"id":"la-closed","title":"Closed local task","status":"closed","priority":1,"issue_type":"task"}
 		]`},
-		managedDir: {stdout: `[
+		repos.managedDir: {stdout: `[
 			{"id":"mb-1","title":"Managed ready","status":"open","priority":3,"issue_type":"task"},
 			{"id":"mb-review","title":"Managed in review","status":"open","priority":2,"issue_type":"task","metadata":{"orpheus.pr_url":"https://example.test/pr/7"}}
 		]`},
@@ -200,8 +176,8 @@ func TestTaskReadyListsReadyTasksAcrossRegisteredRepos(t *testing.T) {
 	logData, err := os.ReadFile(logPath)
 	must.NoError(err)
 	log := string(logData)
-	is.Contains(log, localDir)
-	is.Contains(log, managedDir)
+	is.Contains(log, repos.localDir)
+	is.Contains(log, repos.managedDir)
 	is.Equal(2, strings.Count(log, "--json --readonly --sandbox list --all --limit 0"))
 	is.NotContains(log, "--json --readonly --sandbox ready")
 }
@@ -311,38 +287,11 @@ func TestTaskReadyReportsPartialRepoFailures(t *testing.T) {
 
 func TestTaskShowResolvesPrefixQueriesOnlyResolvedRepoAndRendersDetails(t *testing.T) {
 	is := assert.New(t)
-	must := require.New(t)
 	newTestState(t)
-	paths := currentTestPaths(t)
-	store := registry.NewStore(paths)
-
-	localDir := filepath.Join(t.TempDir(), "local-alpha")
-	managedRepoPath := filepath.Join(t.TempDir(), "managed-beta")
-	managedDir, err := store.ManagedBeadsDir("managed-beta")
-	must.NoError(err)
-	must.NoError(os.MkdirAll(localDir, 0o755))
-	must.NoError(os.MkdirAll(managedRepoPath, 0o755))
-	must.NoError(os.MkdirAll(managedDir, 0o755))
-
-	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{
-		{
-			ID:          "local-alpha",
-			Name:        "Local Alpha",
-			Path:        localDir,
-			BeadsMode:   registry.BeadsModeLocal,
-			BeadsPrefix: "la",
-		},
-		{
-			ID:          "managed-beta",
-			Name:        "Managed Beta",
-			Path:        managedRepoPath,
-			BeadsMode:   registry.BeadsModeManaged,
-			BeadsPrefix: "mb",
-		},
-	}}))
+	repos := registerLocalManagedTaskTestRepos(t)
 
 	logPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
-		localDir: {stdout: `[
+		repos.localDir: {stdout: `[
 			{
 				"id":"la-42",
 				"title":"Implement local task show",
@@ -356,7 +305,7 @@ func TestTaskShowResolvesPrefixQueriesOnlyResolvedRepoAndRendersDetails(t *testi
 				"metadata":{"orpheus.branch":"task/la-42","orpheus.worktree":"/tmp/la-42","orpheus.pr_url":"https://example.test/pr/42"}
 			}
 		]`},
-		managedDir: {stderr: "managed repo should not be queried", exitCode: 70},
+		repos.managedDir: {stderr: "managed repo should not be queried", exitCode: 70},
 	})
 
 	stdout, stderr := executeCommand(t, []string{"task", "show", "la-42"})
@@ -389,11 +338,16 @@ func TestTaskShowResolvesPrefixQueriesOnlyResolvedRepoAndRendersDetails(t *testi
 	is.NotContains(stdout, "orpheus.branch")
 	is.NotContains(stdout, "managed-beta")
 
-	logData, err := os.ReadFile(logPath)
-	must.NoError(err)
-	log := string(logData)
-	is.Contains(log, localDir)
-	is.NotContains(log, managedDir)
+	assertTaskShowBDLog(t, logPath, repos)
+}
+
+func assertTaskShowBDLog(t *testing.T, logPath string, repos localManagedTaskRepos) {
+	t.Helper()
+
+	is := assert.New(t)
+	log := readFileString(t, logPath)
+	is.Contains(log, repos.localDir)
+	is.NotContains(log, repos.managedDir)
 	is.Contains(log, "--json --readonly --sandbox show --id la-42")
 	is.NotContains(log, "--json --readonly --sandbox list")
 	is.NotContains(log, "--json --readonly --sandbox ready")
@@ -603,33 +557,7 @@ func TestTaskDirReportsMalformedAndUnknownPrefixes(t *testing.T) {
 }
 
 func TestTaskDirReportsMissingAndInconsistentMetadata(t *testing.T) {
-	testCases := []struct {
-		name        string
-		taskID      string
-		metadata    string
-		wantMessage string
-	}{
-		{
-			name:        "missing worktree",
-			taskID:      "op-missing",
-			metadata:    `{}`,
-			wantMessage: "task has no Orpheus working directory metadata",
-		},
-		{
-			name:        "missing branch",
-			taskID:      "op-incomplete",
-			metadata:    `{"orpheus.worktree":"/tmp/op-incomplete"}`,
-			wantMessage: "orpheus.branch is missing",
-		},
-		{
-			name:        "inconsistent target",
-			taskID:      "op-inconsistent",
-			metadata:    `{"orpheus.branch":"main","orpheus.worktree":"/tmp/op-inconsistent"}`,
-			wantMessage: "task Orpheus target metadata is inconsistent",
-		},
-	}
-
-	for _, tc := range testCases {
+	for _, tc := range taskDirMetadataErrorCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			is := assert.New(t)
 			must := require.New(t)
@@ -672,6 +600,37 @@ func TestTaskDirReportsMissingAndInconsistentMetadata(t *testing.T) {
 	}
 }
 
+type taskDirMetadataErrorCase struct {
+	name        string
+	taskID      string
+	metadata    string
+	wantMessage string
+}
+
+func taskDirMetadataErrorCases() []taskDirMetadataErrorCase {
+	return []taskDirMetadataErrorCase{
+		{
+			name:        "missing worktree",
+			taskID:      "op-missing",
+			metadata:    `{}`,
+			wantMessage: "task has no Orpheus working directory metadata",
+		},
+		{
+			name:        "missing branch",
+			taskID:      "op-incomplete",
+			metadata:    `{"orpheus.worktree":"/tmp/op-incomplete"}`,
+			wantMessage: "orpheus.branch is missing",
+		},
+		{
+			name:        "inconsistent target",
+			taskID:      "op-inconsistent",
+			metadata:    `{"orpheus.branch":"main","orpheus.worktree":"/tmp/op-inconsistent"}`,
+			wantMessage: "task Orpheus target metadata is inconsistent",
+		},
+	}
+}
+
+//nolint:funlen // Workflow test is clearer when setup, command, and state assertions stay together.
 func TestTaskRunExecutesDefaultAgentAttachedFromDeterministicWorktree(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -793,6 +752,7 @@ func TestTaskRunExecutesDefaultAgentAttachedFromDeterministicWorktree(t *testing
 	is.Equal(taskstate.EventRunFinished, retriedState.Events[5].Type)
 }
 
+//nolint:funlen // Workflow test is clearer when setup, command, and state assertions stay together.
 func TestTaskRunMainExecutesAgentFromRegisteredRepoRoot(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -1160,6 +1120,7 @@ func TestTaskRunAllowsOwnedInProgressTaskWithMatchingMetadata(t *testing.T) {
 	is.Equal(worktreePath, state.Runs[0].Worktree)
 }
 
+//nolint:funlen // Failure workflow needs the fake command script and assertions in one scenario.
 func TestTaskRunDoesNotLaunchOrRecordAttemptWhenMarkInProgressFails(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -1659,6 +1620,7 @@ func TestTaskDoneRefusesRunningCompletionWithoutInteractiveConfirmation(t *testi
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
+//nolint:funlen // PR publication scenario is clearer as one linear workflow.
 func TestTaskDonePublishesPRReadyTaskBranch(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -1847,6 +1809,7 @@ func TestTaskSyncPollsExistingPRURLWithoutPushOrMutation(t *testing.T) {
 	is.NotContains(string(ghLog), "ARG_2<<END\ncreate\nEND")
 }
 
+//nolint:funlen // Sync scenario is clearer when provider, backend, and audit checks stay together.
 func TestTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -1920,6 +1883,7 @@ func TestTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR(t *testing.T) {
 	is.Equal("merged", event.ObservedPRState)
 }
 
+//nolint:funlen // Table-driven sync error scenarios share setup that is best kept adjacent.
 func TestTaskSyncExistingPRErrorsDoNotMutateBackendOrAudit(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -2227,6 +2191,7 @@ func TestTaskDoneFeatureBranchPushFailureIsNonZero(t *testing.T) {
 	is.ErrorContains(err, "origin")
 }
 
+//nolint:funlen // Sync-all boundary scenario is clearer as a single workflow.
 func TestTaskSyncAllPollsPRBoundaryTasks(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -2365,6 +2330,7 @@ func TestTaskSyncAllReturnsNonZeroAfterCandidateError(t *testing.T) {
 	is.ErrorContains(err, "task sync --all failed for 1 item")
 }
 
+//nolint:funlen // Cross-repo sync-all scenario is clearer as one integrated workflow.
 func TestTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAfterFailures(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -2765,27 +2731,7 @@ case "$PWD" in
 
 	index := 0
 	for dir, response := range responses {
-		stdoutPath := filepath.Join(fixtureDir, fmt.Sprintf("stdout-%d.json", index))
-		stderrPath := filepath.Join(fixtureDir, fmt.Sprintf("stderr-%d.txt", index))
-		if err := os.WriteFile(stdoutPath, []byte(response.stdout), 0o644); err != nil {
-			t.Fatalf("write fake bd stdout: %v", err)
-		}
-		if err := os.WriteFile(stderrPath, []byte(response.stderr), 0o644); err != nil {
-			t.Fatalf("write fake bd stderr: %v", err)
-		}
-		exitCode := response.exitCode
-		if exitCode == 0 && response.stderr != "" && response.stdout == "" {
-			exitCode = 1
-		}
-		fmt.Fprintf(&script, "  %s)\n", shellQuote(dir))
-		fmt.Fprintln(&script, "    if [ \"$is_update\" = 1 ]; then")
-		fmt.Fprintln(&script, "      printf '{}\\n'")
-		fmt.Fprintln(&script, "      exit 0")
-		fmt.Fprintln(&script, "    fi")
-		fmt.Fprintf(&script, "    cat %s\n", shellQuote(stdoutPath))
-		fmt.Fprintf(&script, "    cat %s >&2\n", shellQuote(stderrPath))
-		fmt.Fprintf(&script, "    exit %d\n", exitCode)
-		fmt.Fprintln(&script, "    ;;")
+		writeFakeBDTaskResponseCase(t, &script, fixtureDir, index, dir, response)
 		index++
 	}
 	script.WriteString(`esac
@@ -2800,6 +2746,35 @@ exit 65
 	t.Setenv("FAKE_BD_LOG", logPath)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return logPath
+}
+
+func writeFakeBDTaskResponseCase(
+	t *testing.T,
+	script *strings.Builder,
+	fixtureDir string,
+	index int,
+	dir string,
+	response fakeBDTaskResponse,
+) {
+	t.Helper()
+
+	stdoutPath := filepath.Join(fixtureDir, fmt.Sprintf("stdout-%d.json", index))
+	stderrPath := filepath.Join(fixtureDir, fmt.Sprintf("stderr-%d.txt", index))
+	writeTestFile(t, stdoutPath, response.stdout, "fake bd stdout")
+	writeTestFile(t, stderrPath, response.stderr, "fake bd stderr")
+	exitCode := response.exitCode
+	if exitCode == 0 && response.stderr != "" && response.stdout == "" {
+		exitCode = 1
+	}
+	fmt.Fprintf(script, "  %s)\n", shellQuote(dir))
+	fmt.Fprintln(script, "    if [ \"$is_update\" = 1 ]; then")
+	fmt.Fprintln(script, "      printf '{}\\n'")
+	fmt.Fprintln(script, "      exit 0")
+	fmt.Fprintln(script, "    fi")
+	fmt.Fprintf(script, "    cat %s\n", shellQuote(stdoutPath))
+	fmt.Fprintf(script, "    cat %s >&2\n", shellQuote(stderrPath))
+	fmt.Fprintf(script, "    exit %d\n", exitCode)
+	fmt.Fprintln(script, "    ;;")
 }
 
 type fakeGHPRResponses struct {
@@ -2818,30 +2793,7 @@ type fakeGHPRStatusResponse struct {
 	exit   int
 }
 
-func withFakeGHPRResponses(t *testing.T, responses fakeGHPRResponses) string {
-	t.Helper()
-
-	binDir := t.TempDir()
-	fixtureDir := filepath.Join(binDir, "fixtures")
-	if err := os.MkdirAll(fixtureDir, 0o755); err != nil {
-		t.Fatalf("create fake gh fixtures: %v", err)
-	}
-
-	listStdoutPath := filepath.Join(fixtureDir, "list-stdout.txt")
-	createStdoutPath := filepath.Join(fixtureDir, "create-stdout.txt")
-	statusStdoutPath := filepath.Join(fixtureDir, "status-stdout.txt")
-	if err := os.WriteFile(listStdoutPath, []byte(responses.listStdout), 0o644); err != nil {
-		t.Fatalf("write fake gh list stdout: %v", err)
-	}
-	if err := os.WriteFile(createStdoutPath, []byte(responses.createStdout), 0o644); err != nil {
-		t.Fatalf("write fake gh create stdout: %v", err)
-	}
-	if err := os.WriteFile(statusStdoutPath, []byte(responses.statusStdout), 0o644); err != nil {
-		t.Fatalf("write fake gh status stdout: %v", err)
-	}
-
-	logPath := filepath.Join(binDir, "gh.log")
-	script := fmt.Sprintf(`#!/bin/sh
+const fakeGHPRScriptHeader = `#!/bin/sh
 {
   pwd
   printf 'ARGC=%%s\n' "$#"
@@ -2866,7 +2818,34 @@ case "$1 $2" in
     exit %d
     ;;
   "pr view")
-`, shellQuote(listStdoutPath), responses.listExit, shellQuote(createStdoutPath), responses.createExit)
+`
+
+const fakeGHPRScriptFooter = `    cat %s
+    exit %d
+    ;;
+esac
+echo "unexpected gh args: $*" >&2
+exit 65
+`
+
+func withFakeGHPRResponses(t *testing.T, responses fakeGHPRResponses) string {
+	t.Helper()
+
+	binDir := t.TempDir()
+	fixtureDir := filepath.Join(binDir, "fixtures")
+	if err := os.MkdirAll(fixtureDir, 0o755); err != nil {
+		t.Fatalf("create fake gh fixtures: %v", err)
+	}
+
+	listStdoutPath, createStdoutPath, statusStdoutPath := writeFakeGHPRFixtures(t, fixtureDir, responses)
+	logPath := filepath.Join(binDir, "gh.log")
+	script := fmt.Sprintf(
+		fakeGHPRScriptHeader,
+		shellQuote(listStdoutPath),
+		responses.listExit,
+		shellQuote(createStdoutPath),
+		responses.createExit,
+	)
 
 	if len(responses.statusByURL) > 0 {
 		script += `    case "$3" in
@@ -2885,13 +2864,7 @@ case "$1 $2" in
 `
 	}
 
-	script += fmt.Sprintf(`    cat %s
-    exit %d
-    ;;
-esac
-echo "unexpected gh args: $*" >&2
-exit 65
-`, shellQuote(statusStdoutPath), responses.statusExit)
+	script += fmt.Sprintf(fakeGHPRScriptFooter, shellQuote(statusStdoutPath), responses.statusExit)
 
 	ghPath := filepath.Join(binDir, "gh")
 	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
@@ -2900,6 +2873,26 @@ exit 65
 	t.Setenv("FAKE_GH_LOG", logPath)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return logPath
+}
+
+func writeFakeGHPRFixtures(t *testing.T, fixtureDir string, responses fakeGHPRResponses) (string, string, string) {
+	t.Helper()
+
+	listStdoutPath := filepath.Join(fixtureDir, "list-stdout.txt")
+	createStdoutPath := filepath.Join(fixtureDir, "create-stdout.txt")
+	statusStdoutPath := filepath.Join(fixtureDir, "status-stdout.txt")
+	writeTestFile(t, listStdoutPath, responses.listStdout, "fake gh list stdout")
+	writeTestFile(t, createStdoutPath, responses.createStdout, "fake gh create stdout")
+	writeTestFile(t, statusStdoutPath, responses.statusStdout, "fake gh status stdout")
+	return listStdoutPath, createStdoutPath, statusStdoutPath
+}
+
+func writeTestFile(t *testing.T, path string, content string, label string) {
+	t.Helper()
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", label, err)
+	}
 }
 
 func configureTestGitUser(t *testing.T, repoPath string) {

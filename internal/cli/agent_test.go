@@ -15,48 +15,7 @@ import (
 func TestAgentContextRendersValidatedWorktreeContext(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	root := newTestState(t)
-	paths := currentTestPaths(t)
-	store := registry.NewStore(paths)
-	repoPath := filepath.Join(root, "repos", "alpha")
-	must.NoError(os.MkdirAll(repoPath, 0o755))
-	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
-		ID:            "alpha",
-		Name:          "Alpha Repo",
-		Path:          repoPath,
-		DefaultBranch: "main",
-		BeadsMode:     registry.BeadsModeLocal,
-		BeadsPrefix:   "op",
-	}}}))
-	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-1"))
-	must.NoError(err)
-	cwd := filepath.Join(worktreePath, "internal")
-	must.NoError(os.MkdirAll(cwd, 0o755))
-	t.Chdir(cwd)
-	bdLogPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
-		repoPath: {stdout: `[
-			{
-				"id":"op-1",
-				"title":"Render context",
-				"description":"Move detailed task instructions to agent context.",
-				"acceptance_criteria":"Only the latest running attempt can render context.",
-				"status":"in_progress",
-				"priority":2,
-				"issue_type":"task",
-				"metadata":{"orpheus.branch":"orpheus/op-1","orpheus.worktree":"` + worktreePath + `"}
-			}
-		]`},
-	})
-	_, err = taskstate.NewStore(paths).StartRun("alpha", "op-1", taskstate.StartRunOptions{
-		Agent:    "recorder",
-		Branch:   "orpheus/op-1",
-		Worktree: worktreePath,
-	})
-	must.NoError(err)
-	t.Setenv("ORPHEUS_REPO_ID", "alpha")
-	t.Setenv("ORPHEUS_TASK_ID", "op-1")
-	t.Setenv("ORPHEUS_WORKTREE", worktreePath)
-	t.Setenv("ORPHEUS_BRANCH", "orpheus/op-1")
+	repoPath, worktreePath, cwd, bdLogPath := setupAgentContextWorktree(t)
 
 	stdout, stderr := executeCommand(t, []string{"agent", "context"})
 
@@ -94,6 +53,78 @@ func TestAgentContextRendersValidatedWorktreeContext(t *testing.T) {
 	is.Contains(string(bdLog), "--json --readonly --sandbox show --id op-1")
 	is.NotContains(string(bdLog), "--json --sandbox update")
 	is.NotContains(string(bdLog), "--json --readonly --sandbox list")
+}
+
+func setupAgentContextWorktree(t *testing.T) (string, string, string, string) {
+	t.Helper()
+
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	repoPath := filepath.Join(root, "repos", "alpha")
+	registerAgentTestRepo(t, repoPath)
+	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-1"))
+	must.NoError(err)
+	cwd := filepath.Join(worktreePath, "internal")
+	must.NoError(os.MkdirAll(cwd, 0o755))
+	t.Chdir(cwd)
+	bdLogPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: agentContextTaskJSON(worktreePath)},
+	})
+	startAgentTestRun(t, "op-1", "orpheus/op-1", worktreePath)
+	setAgentRunEnv(t, "op-1", "orpheus/op-1", worktreePath)
+	return repoPath, worktreePath, cwd, bdLogPath
+}
+
+func agentContextTaskJSON(worktreePath string) string {
+	return `[
+		{
+			"id":"op-1",
+			"title":"Render context",
+			"description":"Move detailed task instructions to agent context.",
+			"acceptance_criteria":"Only the latest running attempt can render context.",
+			"status":"in_progress",
+			"priority":2,
+			"issue_type":"task",
+			"metadata":{"orpheus.branch":"orpheus/op-1","orpheus.worktree":"` + worktreePath + `"}
+		}
+	]`
+}
+
+func registerAgentTestRepo(t *testing.T, repoPath string) {
+	t.Helper()
+
+	must := require.New(t)
+	must.NoError(os.MkdirAll(repoPath, 0o755))
+	must.NoError(registry.NewStore(currentTestPaths(t)).Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+}
+
+func startAgentTestRun(t *testing.T, taskID string, branch string, worktreePath string) taskstate.RunAttempt {
+	t.Helper()
+
+	attempt, err := taskstate.NewStore(currentTestPaths(t)).StartRun("alpha", taskID, taskstate.StartRunOptions{
+		Agent:    "recorder",
+		Branch:   branch,
+		Worktree: worktreePath,
+	})
+	require.NoError(t, err)
+	return attempt
+}
+
+func setAgentRunEnv(t *testing.T, taskID string, branch string, worktreePath string) {
+	t.Helper()
+
+	t.Setenv("ORPHEUS_REPO_ID", "alpha")
+	t.Setenv("ORPHEUS_TASK_ID", taskID)
+	t.Setenv("ORPHEUS_WORKTREE", worktreePath)
+	t.Setenv("ORPHEUS_BRANCH", branch)
 }
 
 func TestAgentContextFailsBeforeRenderingWhenRunIsStale(t *testing.T) {
@@ -154,43 +185,9 @@ func TestAgentContextFailsBeforeRenderingWhenRunIsStale(t *testing.T) {
 func TestAgentDoneRecordsMainCompletionForLocalReview(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	root := newTestState(t)
-	paths := currentTestPaths(t)
-	store := registry.NewStore(paths)
-	repoPath := newTestRepoAt(t, root, filepath.Join("repos", "alpha"), testRepoConfig{withRemote: true})
-	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
-		ID:            "alpha",
-		Name:          "Alpha Repo",
-		Path:          repoPath,
-		DefaultBranch: "main",
-		BeadsMode:     registry.BeadsModeLocal,
-		BeadsPrefix:   "op",
-	}}}))
-	t.Chdir(repoPath)
+	repoPath, bdLogPath := setupAgentDoneMainRun(t, "op-main")
+	runStore := taskstate.NewStore(currentTestPaths(t))
 	must.NoError(os.WriteFile(filepath.Join(repoPath, "ORPHEUS_TEST.txt"), []byte("local review\n"), 0o644))
-	bdLogPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
-		repoPath: {stdout: `[
-			{
-				"id":"op-main",
-				"title":"Complete main run",
-				"status":"in_progress",
-				"priority":2,
-				"issue_type":"task",
-				"metadata":{"orpheus.branch":"main","orpheus.worktree":"` + repoPath + `"}
-			}
-		]`},
-	})
-	runStore := taskstate.NewStore(paths)
-	_, err := runStore.StartRun("alpha", "op-main", taskstate.StartRunOptions{
-		Agent:    "recorder",
-		Branch:   "main",
-		Worktree: repoPath,
-	})
-	must.NoError(err)
-	t.Setenv("ORPHEUS_REPO_ID", "alpha")
-	t.Setenv("ORPHEUS_TASK_ID", "op-main")
-	t.Setenv("ORPHEUS_WORKTREE", repoPath)
-	t.Setenv("ORPHEUS_BRANCH", "main")
 
 	stdout, stderr := executeCommand(t, []string{
 		"agent",
@@ -221,6 +218,34 @@ func TestAgentDoneRecordsMainCompletionForLocalReview(t *testing.T) {
 	must.NoError(err)
 	is.Contains(string(bdLog), "--json --readonly --sandbox show --id op-main")
 	is.NotContains(string(bdLog), "--json --sandbox update")
+}
+
+func setupAgentDoneMainRun(t *testing.T, taskID string) (string, string) {
+	t.Helper()
+
+	root := newTestState(t)
+	repoPath := newTestRepoAt(t, root, filepath.Join("repos", "alpha"), testRepoConfig{withRemote: true})
+	registerAgentTestRepo(t, repoPath)
+	t.Chdir(repoPath)
+	bdLogPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: agentDoneMainTaskJSON(taskID, repoPath)},
+	})
+	startAgentTestRun(t, taskID, "main", repoPath)
+	setAgentRunEnv(t, taskID, "main", repoPath)
+	return repoPath, bdLogPath
+}
+
+func agentDoneMainTaskJSON(taskID string, repoPath string) string {
+	return `[
+		{
+			"id":"` + taskID + `",
+			"title":"Complete main run",
+			"status":"in_progress",
+			"priority":2,
+			"issue_type":"task",
+			"metadata":{"orpheus.branch":"main","orpheus.worktree":"` + repoPath + `"}
+		}
+	]`
 }
 
 func TestAgentDoneRejectsMissingDescription(t *testing.T) {
@@ -313,48 +338,10 @@ func TestAgentDoneRejectsRemovedDetailsFlag(t *testing.T) {
 func TestAgentDoneRepeatedMainCompletionIsNoopWithGuidance(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	root := newTestState(t)
-	paths := currentTestPaths(t)
-	store := registry.NewStore(paths)
-	repoPath := newTestRepoAt(t, root, filepath.Join("repos", "alpha"), testRepoConfig{withRemote: true})
-	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
-		ID:            "alpha",
-		Name:          "Alpha Repo",
-		Path:          repoPath,
-		DefaultBranch: "main",
-		BeadsMode:     registry.BeadsModeLocal,
-		BeadsPrefix:   "op",
-	}}}))
-	t.Chdir(repoPath)
-	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
-		repoPath: {stdout: `[
-			{
-				"id":"op-main",
-				"title":"Complete main run",
-				"status":"in_progress",
-				"priority":2,
-				"issue_type":"task",
-				"metadata":{"orpheus.branch":"main","orpheus.worktree":"` + repoPath + `"}
-			}
-		]`},
-	})
-	runStore := taskstate.NewStore(paths)
-	attempt, err := runStore.StartRun("alpha", "op-main", taskstate.StartRunOptions{
-		Agent:    "recorder",
-		Branch:   "main",
-		Worktree: repoPath,
-	})
-	must.NoError(err)
-	_, err = runStore.CompleteRun("alpha", "op-main", attempt.Attempt, taskstate.CompleteRunOptions{
-		Summary:             "First summary",
-		Description:         "First details.",
-		DetailedDescription: "Detailed PR body.",
-	})
-	must.NoError(err)
-	t.Setenv("ORPHEUS_REPO_ID", "alpha")
-	t.Setenv("ORPHEUS_TASK_ID", "op-main")
-	t.Setenv("ORPHEUS_WORKTREE", repoPath)
-	t.Setenv("ORPHEUS_BRANCH", "main")
+	setupAgentDoneMainRun(t, "op-main")
+	runStore := taskstate.NewStore(currentTestPaths(t))
+	attempt := completeAgentTestRun(t, runStore)
+	must.NotZero(attempt.Attempt)
 
 	stdout, stderr := executeCommand(t, []string{
 		"agent",
@@ -368,11 +355,40 @@ func TestAgentDoneRepeatedMainCompletionIsNoopWithGuidance(t *testing.T) {
 	})
 
 	is.Empty(stderr)
+	assertRepeatedAgentDoneOutput(t, stdout)
+	assertRepeatedAgentCompletion(t, runStore, attempt)
+}
+
+func completeAgentTestRun(t *testing.T, runStore taskstate.Store) taskstate.RunAttempt {
+	t.Helper()
+
+	latest, ok, err := runStore.LatestRun("alpha", "op-main")
+	require.NoError(t, err)
+	require.True(t, ok)
+	completed, err := runStore.CompleteRun("alpha", "op-main", latest.Attempt, taskstate.CompleteRunOptions{
+		Summary:             "First summary",
+		Description:         "First details.",
+		DetailedDescription: "Detailed PR body.",
+	})
+	require.NoError(t, err)
+	return completed
+}
+
+func assertRepeatedAgentDoneOutput(t *testing.T, stdout string) {
+	t.Helper()
+
+	is := assert.New(t)
 	is.Contains(stdout, "already recorded")
 	is.Contains(stdout, "Do not run `orpheus agent done` again")
 	is.Contains(stdout, "first completion remains authoritative")
 	is.Contains(stdout, "local diagnostic")
+}
 
+func assertRepeatedAgentCompletion(t *testing.T, runStore taskstate.Store, attempt taskstate.RunAttempt) {
+	t.Helper()
+
+	is := assert.New(t)
+	must := require.New(t)
 	latest, ok, err := runStore.LatestRun("alpha", "op-main")
 	must.NoError(err)
 	must.True(ok)
@@ -394,50 +410,8 @@ func TestAgentDoneRepeatedMainCompletionIsNoopWithGuidance(t *testing.T) {
 func TestAgentDoneCommitsWorktreeCompletion(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	root := newTestState(t)
-	paths := currentTestPaths(t)
-	store := registry.NewStore(paths)
-	repoPath := newTestRepoAt(t, root, filepath.Join("repos", "alpha"), testRepoConfig{withRemote: true})
-	configureTestGitUser(t, repoPath)
-	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
-		ID:            "alpha",
-		Name:          "Alpha Repo",
-		Path:          repoPath,
-		DefaultBranch: "main",
-		BeadsMode:     registry.BeadsModeLocal,
-		BeadsPrefix:   "op",
-	}}}))
-
-	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-1"))
-	must.NoError(err)
-	runGit(t, repoPath, "branch", "orpheus/op-1", "main")
-	runGit(t, repoPath, "worktree", "add", worktreePath, "orpheus/op-1")
-	t.Chdir(worktreePath)
+	worktreePath := setupAgentDoneWorktreeRun(t)
 	must.NoError(os.WriteFile(filepath.Join(worktreePath, "ORPHEUS_WORKTREE_TEST.txt"), []byte("pr review\n"), 0o644))
-
-	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
-		repoPath: {stdout: `[
-			{
-				"id":"op-1",
-				"title":"Complete worktree run",
-				"status":"in_progress",
-				"priority":2,
-				"issue_type":"task",
-				"metadata":{"orpheus.branch":"orpheus/op-1","orpheus.worktree":"` + worktreePath + `"}
-			}
-		]`},
-	})
-	runStore := taskstate.NewStore(paths)
-	_, err = runStore.StartRun("alpha", "op-1", taskstate.StartRunOptions{
-		Agent:    "recorder",
-		Branch:   "orpheus/op-1",
-		Worktree: worktreePath,
-	})
-	must.NoError(err)
-	t.Setenv("ORPHEUS_REPO_ID", "alpha")
-	t.Setenv("ORPHEUS_TASK_ID", "op-1")
-	t.Setenv("ORPHEUS_WORKTREE", worktreePath)
-	t.Setenv("ORPHEUS_BRANCH", "orpheus/op-1")
 
 	stdout, stderr := executeCommand(t, []string{
 		"agent",
@@ -454,6 +428,7 @@ func TestAgentDoneCommitsWorktreeCompletion(t *testing.T) {
 	is.Contains(stdout, "Recorded completion for op-1; ready for local review")
 	is.Contains(strings.TrimSpace(runGit(t, worktreePath, "status", "--porcelain=v1")), "ORPHEUS_WORKTREE_TEST.txt")
 
+	runStore := taskstate.NewStore(currentTestPaths(t))
 	latest, ok, err := runStore.LatestRun("alpha", "op-1")
 	must.NoError(err)
 	must.True(ok)
@@ -461,6 +436,41 @@ func TestAgentDoneCommitsWorktreeCompletion(t *testing.T) {
 	must.NotNil(latest.Completion)
 	is.Empty(latest.Completion.Commit)
 	is.Empty(latest.Completion.CommitError)
+}
+
+func setupAgentDoneWorktreeRun(t *testing.T) string {
+	t.Helper()
+
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	repoPath := newTestRepoAt(t, root, filepath.Join("repos", "alpha"), testRepoConfig{withRemote: true})
+	configureTestGitUser(t, repoPath)
+	registerAgentTestRepo(t, repoPath)
+	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-1"))
+	must.NoError(err)
+	runGit(t, repoPath, "branch", "orpheus/op-1", "main")
+	runGit(t, repoPath, "worktree", "add", worktreePath, "orpheus/op-1")
+	t.Chdir(worktreePath)
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: agentDoneWorktreeTaskJSON(worktreePath)},
+	})
+	startAgentTestRun(t, "op-1", "orpheus/op-1", worktreePath)
+	setAgentRunEnv(t, "op-1", "orpheus/op-1", worktreePath)
+	return worktreePath
+}
+
+func agentDoneWorktreeTaskJSON(worktreePath string) string {
+	return `[
+		{
+			"id":"op-1",
+			"title":"Complete worktree run",
+			"status":"in_progress",
+			"priority":2,
+			"issue_type":"task",
+			"metadata":{"orpheus.branch":"orpheus/op-1","orpheus.worktree":"` + worktreePath + `"}
+		}
+	]`
 }
 
 func TestAgentDoneRequiresMainWorkingTreeChangesBeforeWriting(t *testing.T) {
