@@ -24,6 +24,60 @@ type fakeBDCommandResponse struct {
 func TestStatusGroupsLocalTaskSnapshots(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
+	logPath := setupStatusGroupsLocalTaskSnapshots(t)
+
+	stdout, stderr := executeCommand(t, []string{"status"})
+
+	is.Empty(stderr)
+	for _, want := range []string{
+		"Ready to run (3)", "Alpha Repo", "ar-ready", "Ready task", "ar-dep", "Open dependency", "ar-bug", "Bug item",
+		"Needs attention (2)", "ar-failed", "Failed attached agent", "run attempt 1 failed",
+		"Working (1)", "ar-running", "Running attached agent", "run attempt 1 is running",
+		"Idle (2)", "ar-idle", "Idle without run", "no attached run recorded",
+		"ar-succeeded", "Succeeded attached agent", "agent exited without completion",
+		"Reviewing (1)", "ar-review", "Review task", "https://example.test/pr/3",
+		"ar-missing", "Needs inspection", "missing dependency ar-gone",
+	} {
+		is.Contains(stdout, want)
+	}
+	for _, hidden := range []string{"Blocked (1)", "ar-blocked", "Done / closed (1)", "ar-closed", "STATUS"} {
+		is.NotContains(stdout, hidden)
+	}
+
+	assertStatusGroupOrder(t, stdout, []string{"Needs attention", "Reviewing", "Working", "Idle", "Ready to run"})
+	is.NotContains(statusSection(t, stdout, "Ready to run", ""), "DETAIL")
+
+	fullStdout, fullStderr := executeCommand(t, []string{"status", "--full"})
+	is.Empty(fullStderr)
+	assertFullStatusGroupOutput(t, fullStdout)
+
+	logData, err := os.ReadFile(logPath)
+	must.NoError(err)
+	log := string(logData)
+	is.Contains(log, "--json --readonly --sandbox list --all --limit 0")
+	is.NotContains(log, "--json --readonly --sandbox ready")
+	is.NotContains(log, "show --id")
+	is.NotContains(log, "gh ")
+}
+
+const statusGroupsLocalTasksJSON = `[
+	{"id":"ar-ready","title":"Ready task","status":"open","priority":1,"issue_type":"task"},
+	{"id":"ar-dep","title":"Open dependency","status":"open","priority":1,"issue_type":"task"},
+	{"id":"ar-idle","title":"Idle without run","status":"in_progress","priority":4,"issue_type":"task"},
+	{"id":"ar-running","title":"Running attached agent","status":"in_progress","priority":2,"issue_type":"task"},
+	{"id":"ar-failed","title":"Failed attached agent","status":"in_progress","priority":2,"issue_type":"task"},
+	{"id":"ar-succeeded","title":"Succeeded attached agent","status":"in_progress","priority":3,"issue_type":"task"},
+	{"id":"ar-blocked","title":"Blocked task","status":"open","priority":2,"issue_type":"task","dependencies":[{"id":"ar-dep","dependency_type":"blocks"}]},
+	{"id":"ar-review","title":"Review task","status":"open","priority":3,"issue_type":"task","metadata":{"orpheus.pr_url":"https://example.test/pr/3"}},
+	{"id":"ar-missing","title":"Needs inspection","status":"open","priority":4,"issue_type":"task","dependencies":[{"id":"ar-gone","dependency_type":"blocks"}]},
+	{"id":"ar-closed","title":"Closed task","status":"closed","priority":1,"issue_type":"task"},
+	{"id":"ar-bug","title":"Bug item","status":"open","priority":1,"issue_type":"bug"}
+]`
+
+func setupStatusGroupsLocalTaskSnapshots(t *testing.T) string {
+	t.Helper()
+
+	must := require.New(t)
 	newTestState(t)
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
@@ -50,79 +104,17 @@ func TestStatusGroupsLocalTaskSnapshots(t *testing.T) {
 	_, err = stateStore.FinishRun("alpha", "ar-succeeded", succeededRun.Attempt, taskstate.RunStatusSucceeded)
 	must.NoError(err)
 
-	logPath := withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
-		dir:  repoDir,
-		args: "--json --readonly --sandbox list --all --limit 0",
-		stdout: `[
-			{"id":"ar-ready","title":"Ready task","status":"open","priority":1,"issue_type":"task"},
-			{"id":"ar-dep","title":"Open dependency","status":"open","priority":1,"issue_type":"task"},
-			{"id":"ar-idle","title":"Idle without run","status":"in_progress","priority":4,"issue_type":"task"},
-			{"id":"ar-running","title":"Running attached agent","status":"in_progress","priority":2,"issue_type":"task"},
-			{"id":"ar-failed","title":"Failed attached agent","status":"in_progress","priority":2,"issue_type":"task"},
-			{"id":"ar-succeeded","title":"Succeeded attached agent","status":"in_progress","priority":3,"issue_type":"task"},
-			{
-				"id":"ar-blocked",
-				"title":"Blocked task",
-				"status":"open",
-				"priority":2,
-				"issue_type":"task",
-				"dependencies":[{"id":"ar-dep","dependency_type":"blocks"}]
-			},
-			{
-				"id":"ar-review",
-				"title":"Review task",
-				"status":"open",
-				"priority":3,
-				"issue_type":"task",
-				"metadata":{"orpheus.pr_url":"https://example.test/pr/3"}
-			},
-			{
-				"id":"ar-missing",
-				"title":"Needs inspection",
-				"status":"open",
-				"priority":4,
-				"issue_type":"task",
-				"dependencies":[{"id":"ar-gone","dependency_type":"blocks"}]
-			},
-			{"id":"ar-closed","title":"Closed task","status":"closed","priority":1,"issue_type":"task"},
-			{"id":"ar-bug","title":"Bug item","status":"open","priority":1,"issue_type":"bug"}
-		]`,
+	return withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
+		dir:    repoDir,
+		args:   "--json --readonly --sandbox list --all --limit 0",
+		stdout: statusGroupsLocalTasksJSON,
 	}})
+}
 
-	stdout, stderr := executeCommand(t, []string{"status"})
+func assertFullStatusGroupOutput(t *testing.T, fullStdout string) {
+	t.Helper()
 
-	is.Empty(stderr)
-	for _, want := range []string{
-		"Ready to run (3)", "Alpha Repo", "ar-ready", "Ready task", "ar-dep", "Open dependency", "ar-bug", "Bug item",
-		"Needs attention (2)", "ar-failed", "Failed attached agent", "run attempt 1 failed",
-		"Working (1)", "ar-running", "Running attached agent", "run attempt 1 is running",
-		"Idle (2)",
-		"ar-idle",
-		"Idle without run",
-		"no attached run recorded",
-		"ar-succeeded",
-		"Succeeded attached agent",
-		"agent exited without completion",
-		"Reviewing (1)", "ar-review", "Review task", "https://example.test/pr/3",
-		"ar-missing", "Needs inspection", "missing dependency ar-gone",
-	} {
-		is.Contains(stdout, want)
-	}
-	for _, hidden := range []string{"Blocked (1)", "ar-blocked", "Done / closed (1)", "ar-closed", "STATUS"} {
-		is.NotContains(stdout, hidden)
-	}
-
-	assertStatusGroupOrder(t, stdout, []string{
-		"Needs attention",
-		"Reviewing",
-		"Working",
-		"Idle",
-		"Ready to run",
-	})
-	is.NotContains(statusSection(t, stdout, "Ready to run", ""), "DETAIL")
-
-	fullStdout, fullStderr := executeCommand(t, []string{"status", "--full"})
-	is.Empty(fullStderr)
+	is := assert.New(t)
 	for _, want := range []string{
 		"Blocked (1)", "ar-blocked", "Blocked task", "blocked by ar-dep",
 		"Done / closed (1)", "ar-closed", "Closed task",
@@ -131,13 +123,7 @@ func TestStatusGroupsLocalTaskSnapshots(t *testing.T) {
 	}
 	is.NotContains(fullStdout, "STATUS")
 	assertStatusGroupOrder(t, fullStdout, []string{
-		"Needs attention",
-		"Reviewing",
-		"Working",
-		"Idle",
-		"Ready to run",
-		"Blocked",
-		"Done / closed",
+		"Needs attention", "Reviewing", "Working", "Idle", "Ready to run", "Blocked", "Done / closed",
 	})
 	for _, section := range []string{
 		statusSection(t, fullStdout, "Ready to run", "Blocked"),
@@ -147,14 +133,6 @@ func TestStatusGroupsLocalTaskSnapshots(t *testing.T) {
 	}
 	blockedHeader := statusSection(t, fullStdout, "Blocked", "Done / closed")
 	is.Less(strings.Index(blockedHeader, "TITLE"), strings.Index(blockedHeader, "DETAIL"))
-
-	logData, err := os.ReadFile(logPath)
-	must.NoError(err)
-	log := string(logData)
-	is.Contains(log, "--json --readonly --sandbox list --all --limit 0")
-	is.NotContains(log, "--json --readonly --sandbox ready")
-	is.NotContains(log, "show --id")
-	is.NotContains(log, "gh ")
 }
 
 func TestStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t *testing.T) {

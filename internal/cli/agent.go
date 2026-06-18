@@ -113,12 +113,7 @@ func runAgentDone(
 		return err
 	}
 
-	store := taskstate.NewStore(paths)
-	service := agent.CompletionService{
-		Paths:    paths,
-		Resolver: activeAgentContextResolver(paths, taskCtx, store),
-		RunStore: store,
-	}
+	service := newAgentCompletionService(paths, taskCtx)
 	completed, err := service.Complete(command.Context(), agent.CompleteOptions{
 		Summary:             summary,
 		Description:         description,
@@ -135,8 +130,21 @@ func runAgentDone(
 		slog.String("task_id", completed.Context.Task.ID),
 		slog.Int("attempt", completed.Run.Attempt),
 	)
+	return renderAgentDoneResult(command, completed)
+}
+
+func newAgentCompletionService(paths state.Paths, taskCtx taskContext) agent.CompletionService {
+	store := taskstate.NewStore(paths)
+	return agent.CompletionService{
+		Paths:    paths,
+		Resolver: activeAgentContextResolver(paths, taskCtx, store),
+		RunStore: store,
+	}
+}
+
+func renderAgentDoneResult(command *cobra.Command, completed agent.CompleteResult) error {
 	if completed.Repeated {
-		_, err = fmt.Fprintf(
+		_, err := fmt.Fprintf(
 			command.OutOrStdout(),
 			"Completion for %s was already recorded for this Orpheus run; no action taken. "+
 				"Do not run `orpheus agent done` again after it succeeds. "+
@@ -147,7 +155,7 @@ func runAgentDone(
 		return err
 	}
 	if completed.CommitError != nil {
-		_, err = fmt.Fprintf(
+		_, err := fmt.Fprintf(
 			command.OutOrStdout(),
 			"Recorded completion for %s, but commit creation failed: %v\n",
 			completed.Context.Task.ID,
@@ -158,7 +166,7 @@ func runAgentDone(
 	if completed.Context.Target.Kind == agent.ExecutionTargetWorktree &&
 		completed.Run.Completion != nil &&
 		completed.Run.Completion.Commit != "" {
-		_, err = fmt.Fprintf(
+		_, err := fmt.Fprintf(
 			command.OutOrStdout(),
 			"Recorded completion for %s and committed %s; ready for pull request review.\n",
 			completed.Context.Task.ID,
@@ -166,7 +174,7 @@ func runAgentDone(
 		)
 		return err
 	}
-	_, err = fmt.Fprintf(command.OutOrStdout(), "Recorded completion for %s; ready for local review.\n", completed.Context.Task.ID)
+	_, err := fmt.Fprintf(command.OutOrStdout(), "Recorded completion for %s; ready for local review.\n", completed.Context.Task.ID)
 	return err
 }
 

@@ -373,11 +373,30 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentN
 		return fmt.Errorf("task run %s: %w", resolved.TaskID, err)
 	}
 
+	logTaskRunLaunch(command, logger, repo.ID, resolved.TaskID, start)
+
+	if err := launchTaskRunAgent(command, paths, taskStateStore, repo.ID, resolved.TaskID, start); err != nil {
+		return err
+	}
+
+	if err := finishTaskRun(paths, taskStateStore, repo.ID, resolved.TaskID, start.attempt.Attempt); err != nil {
+		return fmt.Errorf("task run %s: record run finish: %w", resolved.TaskID, err)
+	}
+	return nil
+}
+
+func logTaskRunLaunch(
+	command *cobra.Command,
+	logger *slog.Logger,
+	repoID string,
+	taskID string,
+	start taskRunStartResult,
+) {
 	logger.DebugContext(
 		command.Context(),
 		"launching attached agent",
-		slog.String("repo_id", repo.ID),
-		slog.String("task_id", resolved.TaskID),
+		slog.String("repo_id", repoID),
+		slog.String("task_id", taskID),
 		slog.String("agent", start.command.AgentName),
 		slog.String("command", start.command.Command),
 		slog.Int("arg_count", len(start.command.Args)),
@@ -385,11 +404,20 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentN
 		slog.String("branch", start.setup.Branch),
 		slog.String("worktree_lifecycle", string(start.setup.Lifecycle)),
 	)
+}
 
-	if err := attachedAgentLauncher.Run(command.Context(), start.command, agent.LaunchOptions{
+func launchTaskRunAgent(
+	command *cobra.Command,
+	paths state.Paths,
+	taskStateStore taskstate.Service,
+	repoID string,
+	taskID string,
+	start taskRunStartResult,
+) error {
+	err := attachedAgentLauncher.Run(command.Context(), start.command, agent.LaunchOptions{
 		Dir: start.executionDir,
 		Env: taskRunEnvironment(
-			repo.ID,
+			repoID,
 			start.task.ID,
 			start.setup.WorktreePath,
 			start.setup.Branch,
@@ -398,24 +426,15 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentN
 		Stdin:  command.InOrStdin(),
 		Stdout: command.OutOrStdout(),
 		Stderr: command.ErrOrStderr(),
-	}); err != nil {
-		if recordErr := recordTaskRunFailure(
-			paths,
-			taskStateStore,
-			repo.ID,
-			resolved.TaskID,
-			start.attempt.Attempt,
-			err,
-		); recordErr != nil {
-			return fmt.Errorf("task run %s: %w; additionally failed to record run failure: %w", resolved.TaskID, err, recordErr)
-		}
-		return fmt.Errorf("task run %s: %w", resolved.TaskID, err)
+	})
+	if err == nil {
+		return nil
 	}
 
-	if err := finishTaskRun(paths, taskStateStore, repo.ID, resolved.TaskID, start.attempt.Attempt); err != nil {
-		return fmt.Errorf("task run %s: record run finish: %w", resolved.TaskID, err)
+	if recordErr := recordTaskRunFailure(paths, taskStateStore, repoID, taskID, start.attempt.Attempt, err); recordErr != nil {
+		return fmt.Errorf("task run %s: %w; additionally failed to record run failure: %w", taskID, err, recordErr)
 	}
-	return nil
+	return fmt.Errorf("task run %s: %w", taskID, err)
 }
 
 func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summary string, description string) error {
@@ -434,39 +453,14 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summa
 		return err
 	}
 
-	store := taskstate.NewStore(paths)
-	service := workflow.FinalizationService{
-		Paths:   paths,
-		Sources: taskCtx.Sources,
-		BackendFactory: func(source taskmodel.RepositorySource) (workflow.FinalizationBackend, error) {
-			return newBeadsTaskBackend(source.BackendDir)
-		},
-		RunStore:   store,
-		PRProvider: pullrequest.GHProvider{},
-	}
-	finalizeOpts := workflow.FinalizeOptions{
+	service := newTaskFinalizationService(paths, taskCtx)
+	finalized, err := finalizeTaskWithConfirmation(command, service, workflow.FinalizeOptions{
 		TaskID:      taskID,
 		Summary:     summary,
 		Description: description,
-	}
-	finalized, err := service.Finalize(command.Context(), finalizeOpts)
+	})
 	if err != nil {
-		confirmation, ok := workflow.RunningCompletionConfirmationFromError(err)
-		if !ok {
-			return fmt.Errorf("task done: %w", err)
-		}
-		confirmed, confirmErr := confirmRunningCompletionFinalization(command, confirmation)
-		if confirmErr != nil {
-			return fmt.Errorf("task done: %w", confirmErr)
-		}
-		if !confirmed {
-			return fmt.Errorf("task done: %w", err)
-		}
-		finalizeOpts.AllowRunningCompleted = true
-		finalized, err = service.Finalize(command.Context(), finalizeOpts)
-		if err != nil {
-			return fmt.Errorf("task done: %w", err)
-		}
+		return err
 	}
 
 	logger.DebugContext(
@@ -476,12 +470,57 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summa
 		slog.String("task_id", finalized.Task.ID),
 		slog.String("commit", finalized.Finalization.Commit),
 	)
+	return renderTaskDoneResult(command, finalized)
+}
+
+func newTaskFinalizationService(paths state.Paths, taskCtx taskContext) workflow.FinalizationService {
+	return workflow.FinalizationService{
+		Paths:   paths,
+		Sources: taskCtx.Sources,
+		BackendFactory: func(source taskmodel.RepositorySource) (workflow.FinalizationBackend, error) {
+			return newBeadsTaskBackend(source.BackendDir)
+		},
+		RunStore:   taskstate.NewStore(paths),
+		PRProvider: pullrequest.GHProvider{},
+	}
+}
+
+func finalizeTaskWithConfirmation(
+	command *cobra.Command,
+	service workflow.FinalizationService,
+	finalizeOpts workflow.FinalizeOptions,
+) (workflow.FinalizationResult, error) {
+	finalized, err := service.Finalize(command.Context(), finalizeOpts)
+	if err == nil {
+		return finalized, nil
+	}
+
+	confirmation, ok := workflow.RunningCompletionConfirmationFromError(err)
+	if !ok {
+		return workflow.FinalizationResult{}, fmt.Errorf("task done: %w", err)
+	}
+	confirmed, confirmErr := confirmRunningCompletionFinalization(command, confirmation)
+	if confirmErr != nil {
+		return workflow.FinalizationResult{}, fmt.Errorf("task done: %w", confirmErr)
+	}
+	if !confirmed {
+		return workflow.FinalizationResult{}, fmt.Errorf("task done: %w", err)
+	}
+	finalizeOpts.AllowRunningCompleted = true
+	finalized, err = service.Finalize(command.Context(), finalizeOpts)
+	if err != nil {
+		return workflow.FinalizationResult{}, fmt.Errorf("task done: %w", err)
+	}
+	return finalized, nil
+}
+
+func renderTaskDoneResult(command *cobra.Command, finalized workflow.FinalizationResult) error {
 	if finalized.PRURL != "" {
 		action := "created"
 		if finalized.PRRecovered {
 			action = "recovered existing"
 		}
-		_, err = fmt.Fprintf(
+		_, err := fmt.Fprintf(
 			command.OutOrStdout(),
 			"Published %s: committed %s, pushed %s, and %s PR %s. Backend task remains open for PR review.\n",
 			finalized.Task.ID,
@@ -492,7 +531,7 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summa
 		)
 		return err
 	}
-	_, err = fmt.Fprintf(
+	_, err := fmt.Fprintf(
 		command.OutOrStdout(),
 		"Finalized %s: committed %s, pushed %s, and closed the backend task.\n",
 		finalized.Task.ID,
@@ -1389,24 +1428,41 @@ func taskRepositorySources(store registry.Store, reg registry.Registry) ([]taskm
 }
 
 func renderTaskDetails(output interface{ Write([]byte) (int, error) }, row taskmodel.RepoTask) error {
-	metadata := row.Task.OrpheusMetadata()
-
-	if _, err := fmt.Fprintln(output, "Repository:"); err != nil {
+	if err := renderTaskRepositoryDetails(output, row.Repository); err != nil {
 		return err
 	}
-	if err := renderKeyValue(output, "  ID", row.Repository.ID); err != nil {
-		return err
-	}
-	if err := renderKeyValue(output, "  Name", row.Repository.Name); err != nil {
-		return err
-	}
-	if err := renderKeyValue(output, "  Task prefix", row.Repository.TaskIDPrefix); err != nil {
-		return err
-	}
-
 	if _, err := fmt.Fprintln(output); err != nil {
 		return err
 	}
+	if err := renderTaskBodyDetails(output, row.Task); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(output); err != nil {
+		return err
+	}
+	return renderTaskOrpheusMetadata(output, row.Task.OrpheusMetadata())
+}
+
+func renderTaskRepositoryDetails(output interface{ Write([]byte) (int, error) }, repo taskmodel.Repository) error {
+	if _, err := fmt.Fprintln(output, "Repository:"); err != nil {
+		return err
+	}
+	for _, field := range []struct {
+		label string
+		value string
+	}{
+		{label: "  ID", value: repo.ID},
+		{label: "  Name", value: repo.Name},
+		{label: "  Task prefix", value: repo.TaskIDPrefix},
+	} {
+		if err := renderKeyValue(output, field.label, field.value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func renderTaskBodyDetails(output interface{ Write([]byte) (int, error) }, task taskmodel.Task) error {
 	if _, err := fmt.Fprintln(output, "Task:"); err != nil {
 		return err
 	}
@@ -1414,33 +1470,37 @@ func renderTaskDetails(output interface{ Write([]byte) (int, error) }, row taskm
 		label string
 		value string
 	}{
-		{label: "  ID", value: row.Task.ID},
-		{label: "  Title", value: row.Task.Title},
-		{label: "  Status", value: string(row.Task.Status)},
-		{label: "  Priority", value: fmt.Sprintf("%d", row.Task.Priority)},
-		{label: "  Type", value: string(row.Task.IssueType)},
-		{label: "  Labels", value: formatLabels(row.Task.Labels)},
+		{label: "  ID", value: task.ID},
+		{label: "  Title", value: task.Title},
+		{label: "  Status", value: string(task.Status)},
+		{label: "  Priority", value: fmt.Sprintf("%d", task.Priority)},
+		{label: "  Type", value: string(task.IssueType)},
+		{label: "  Labels", value: formatLabels(task.Labels)},
 	} {
 		if err := renderKeyValue(output, field.label, field.value); err != nil {
 			return err
 		}
 	}
+	return renderTaskBlockDetails(output, task)
+}
+
+func renderTaskBlockDetails(output interface{ Write([]byte) (int, error) }, task taskmodel.Task) error {
 	for _, field := range []struct {
 		label string
 		value string
 	}{
-		{label: "  Description", value: row.Task.Description},
-		{label: "  Design", value: row.Task.Design},
-		{label: "  Acceptance criteria", value: row.Task.AcceptanceCriteria},
+		{label: "  Description", value: task.Description},
+		{label: "  Design", value: task.Design},
+		{label: "  Acceptance criteria", value: task.AcceptanceCriteria},
 	} {
 		if err := renderBlockValue(output, field.label, field.value); err != nil {
 			return err
 		}
 	}
+	return nil
+}
 
-	if _, err := fmt.Fprintln(output); err != nil {
-		return err
-	}
+func renderTaskOrpheusMetadata(output interface{ Write([]byte) (int, error) }, metadata taskmodel.OrpheusMetadata) error {
 	if _, err := fmt.Fprintln(output, "Orpheus metadata:"); err != nil {
 		return err
 	}

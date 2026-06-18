@@ -84,6 +84,19 @@ func runRepoAdd(command *cobra.Command, opts *rootOptions, inputPath string) err
 		return err
 	}
 
+	if err := registerInspectedRepo(command, store, repo, managed, logger); err != nil {
+		return err
+	}
+	return renderRepoAdded(command, repo)
+}
+
+func registerInspectedRepo(
+	command *cobra.Command,
+	store registry.Store,
+	repo registry.Repo,
+	managed bool,
+	logger *slog.Logger,
+) error {
 	registryCtx, err := loadRegistryContextFromStore(store)
 	if err != nil {
 		return err
@@ -108,8 +121,11 @@ func runRepoAdd(command *cobra.Command, opts *rootOptions, inputPath string) err
 		slog.String("beads_mode", repo.BeadsMode),
 		slog.String("beads_prefix", repo.BeadsPrefix),
 	)
+	return nil
+}
 
-	_, err = fmt.Fprintf(
+func renderRepoAdded(command *cobra.Command, repo registry.Repo) error {
+	_, err := fmt.Fprintf(
 		command.OutOrStdout(),
 		"Added repo %s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 		repo.ID,
