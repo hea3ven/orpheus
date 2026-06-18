@@ -102,10 +102,7 @@ func validateFindRequest(req FindOpenByBranchRequest) error {
 	if err := validateBranchArg("head branch", req.HeadBranch); err != nil {
 		return err
 	}
-	if err := validateBranchArg("base branch", req.BaseBranch); err != nil {
-		return err
-	}
-	return nil
+	return validateBranchArg("base branch", req.BaseBranch)
 }
 
 func validateCreateRequest(req CreateRequest) error {

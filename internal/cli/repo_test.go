@@ -185,7 +185,7 @@ func TestRepoAddValidatesManagedRegistryConflictsBeforeInitialization(t *testing
 
 	stdout, _, err := executeCommandWithError(t, []string{"repo", "add", repoPath})
 	must.Error(err)
-	is.ErrorContains(err, "duplicate beads prefix \"alpha\"")
+	must.ErrorContains(err, "duplicate beads prefix \"alpha\"")
 	is.Empty(stdout)
 	_, logErr := os.Stat(logPath)
 	is.ErrorIs(logErr, os.ErrNotExist)
@@ -347,7 +347,7 @@ func TestRepoBeadsDirRejectsUnknownRepo(t *testing.T) {
 	must.Error(err)
 	is.Empty(stdout)
 	is.Empty(stderr)
-	is.ErrorContains(err, "repo \"missing\" is not registered")
+	must.ErrorContains(err, "repo \"missing\" is not registered")
 	is.ErrorContains(err, "orpheus repo list")
 }
 

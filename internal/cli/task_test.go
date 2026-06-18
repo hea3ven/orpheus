@@ -843,7 +843,7 @@ func TestTaskRunMainExecutesAgentFromRegisteredRepoRoot(t *testing.T) {
 	is.Contains(stderr, "fake agent stderr")
 	is.Equal("main", strings.TrimSpace(runGit(t, repoPath, "symbolic-ref", "--quiet", "--short", "HEAD")))
 	_, statErr := os.Stat(worktreePath)
-	is.ErrorIs(statErr, os.ErrNotExist)
+	must.ErrorIs(statErr, os.ErrNotExist)
 
 	bdLog, err := os.ReadFile(bdLogPath)
 	must.NoError(err)
@@ -1239,8 +1239,8 @@ esac
 	must.Error(err)
 	is.Empty(stdout)
 	is.Empty(stderr)
-	is.ErrorContains(err, "mark task in progress")
-	is.ErrorContains(err, "task mutation conflict")
+	must.ErrorContains(err, "mark task in progress")
+	must.ErrorContains(err, "task mutation conflict")
 	is.ErrorContains(err, "orpheus.branch is missing")
 	_, agentLogErr := os.Stat(agentLogPath)
 	is.ErrorIs(agentLogErr, os.ErrNotExist)
@@ -1287,7 +1287,7 @@ func TestTaskRunFailsFastWhenGlobalMutationLockHeldBeforeSetup(t *testing.T) {
 	must.Error(err)
 	is.Empty(stdout)
 	is.Empty(stderr)
-	is.ErrorContains(err, "failed to acquire lock for task run setup: "+lockPath)
+	must.ErrorContains(err, "failed to acquire lock for task run setup: "+lockPath)
 	_, statErr := os.Stat(worktreePath)
 	is.ErrorIs(statErr, os.ErrNotExist)
 }
@@ -1553,8 +1553,8 @@ func TestTaskRunReportsUnknownAgentProfileBeforeLaunching(t *testing.T) {
 	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "--agent", "missing", "op-3"})
 
 	must.Error(err)
-	is.ErrorContains(err, "resolve agent profile")
-	is.ErrorContains(err, "agent profile \"missing\" is not configured")
+	must.ErrorContains(err, "resolve agent profile")
+	must.ErrorContains(err, "agent profile \"missing\" is not configured")
 	is.Empty(stdout)
 	is.Empty(stderr)
 	_, logErr := os.Stat(agentLogPath)
@@ -2039,14 +2039,15 @@ func TestTaskSyncExistingPRErrorsDoNotMutateBackendOrAudit(t *testing.T) {
 			is.NotContains(string(bdLog), "--json --sandbox update")
 
 			ghLog, readErr := os.ReadFile(ghLogPath)
-			if tt.wantGHView {
+			switch {
+			case tt.wantGHView:
 				must.NoError(readErr)
 				is.Contains(string(ghLog), "ARG_2<<END\nview\nEND")
 				is.NotContains(string(ghLog), "ARG_2<<END\nlist\nEND")
 				is.NotContains(string(ghLog), "ARG_2<<END\ncreate\nEND")
-			} else if readErr == nil {
+			case readErr == nil:
 				is.Empty(string(ghLog))
-			} else {
+			default:
 				is.True(os.IsNotExist(readErr), "read gh log: %v", readErr)
 			}
 
@@ -2654,7 +2655,7 @@ func TestTaskDoneWithoutTaskIDRequiresExactRegisteredRepoRoot(t *testing.T) {
 	must.Error(err)
 	is.Empty(stdout)
 	is.Empty(stderr)
-	is.ErrorContains(err, "cwd must be exactly a registered repo root")
+	must.ErrorContains(err, "cwd must be exactly a registered repo root")
 	is.ErrorContains(err, "pass <task-id>")
 }
 

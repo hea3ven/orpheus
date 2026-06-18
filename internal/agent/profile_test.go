@@ -1,7 +1,6 @@
 package agent_test
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,7 +49,7 @@ func TestLoadConfigReportsMissingFileWithSetupGuidance(t *testing.T) {
 	_, err := agent.LoadConfig(paths)
 
 	if assert.Error(t, err) {
-		is.True(errors.Is(err, os.ErrNotExist), "error should wrap os.ErrNotExist")
+		is.ErrorIs(err, os.ErrNotExist)
 		for _, want := range []string{"config.yaml", "default_agent", "agents"} {
 			is.Contains(err.Error(), want)
 		}

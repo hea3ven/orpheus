@@ -195,7 +195,7 @@ func defaultBranch(root string, current string, currentErr error) (string, Defau
 	}
 
 	if currentErr != nil {
-		return "", "", fmt.Errorf("%w: origin/HEAD is missing and current branch could not be read: %v", ErrNoDefaultBranch, currentErr)
+		return "", "", fmt.Errorf("%w: origin/HEAD is missing and current branch could not be read: %w", ErrNoDefaultBranch, currentErr)
 	}
 	return "", "", fmt.Errorf("%w: origin/HEAD is missing and current branch is empty", ErrNoDefaultBranch)
 }
