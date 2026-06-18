@@ -439,126 +439,13 @@ func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 	repoPath := filepath.Join(t.TempDir(), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	worktreePath := targets.WorktreeTeam.Worktree
-	succeeded := taskstate.RunAttempt{
-		Attempt:   1,
-		Status:    taskstate.RunStatusSucceeded,
-		Branch:    "orpheus/op-1",
-		Worktree:  worktreePath,
-		StartedAt: time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC),
-		Completion: &taskstate.Completion{
-			Summary:             "Done",
-			Description:         "Implemented.",
-			DetailedDescription: "Detailed PR body.",
-			Commit:              "abc123",
-		},
-	}
 	baseTask := task.Task{
 		ID:       "op-1",
 		Status:   task.StatusInProgress,
 		Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-1", task.MetadataWorktree: worktreePath},
 	}
 
-	tests := []struct {
-		name       string
-		taskItem   task.Task
-		state      taskstate.TaskState
-		wantReason string
-	}{
-		{
-			name:       "no runs",
-			taskItem:   baseTask,
-			state:      taskstate.TaskState{RepoID: "alpha", TaskID: "op-1"},
-			wantReason: task.MetadataPRURL + " is not set",
-		},
-		{
-			name:       "running",
-			taskItem:   baseTask,
-			state:      syncTaskState(taskstate.RunAttempt{Attempt: 2, Status: taskstate.RunStatusRunning}),
-			wantReason: task.MetadataPRURL + " is not set",
-		},
-		{
-			name:       "failed",
-			taskItem:   baseTask,
-			state:      syncTaskState(taskstate.RunAttempt{Attempt: 2, Status: taskstate.RunStatusFailed}),
-			wantReason: task.MetadataPRURL + " is not set",
-		},
-		{
-			name:       "no completion",
-			taskItem:   baseTask,
-			state:      syncTaskState(taskstate.RunAttempt{Attempt: 2, Status: taskstate.RunStatusSucceeded}),
-			wantReason: task.MetadataPRURL + " is not set",
-		},
-		{
-			name:     "missing commit",
-			taskItem: baseTask,
-			state: syncTaskState(taskstate.RunAttempt{
-				Attempt:  2,
-				Status:   taskstate.RunStatusSucceeded,
-				Branch:   "orpheus/op-1",
-				Worktree: worktreePath,
-				Completion: &taskstate.Completion{
-					Summary:             "Done",
-					Description:         "Done.",
-					DetailedDescription: "Detailed PR body.",
-				},
-			}),
-			wantReason: task.MetadataPRURL + " is not set",
-		},
-		{
-			name:     "commit failed",
-			taskItem: baseTask,
-			state: syncTaskState(taskstate.RunAttempt{
-				Attempt:  2,
-				Status:   taskstate.RunStatusSucceeded,
-				Branch:   "orpheus/op-1",
-				Worktree: worktreePath,
-				Completion: &taskstate.Completion{Summary: "Done", Description: "Done.",
-					DetailedDescription: "Detailed PR body.", CommitError: "dirty worktree"},
-			}),
-			wantReason: task.MetadataPRURL + " is not set",
-		},
-		{
-			name:     "main solo",
-			taskItem: task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: targets.MainSolo.Branch, task.MetadataWorktree: targets.MainSolo.Worktree}},
-			state: syncTaskState(taskstate.RunAttempt{
-				Attempt:  2,
-				Status:   taskstate.RunStatusSucceeded,
-				Branch:   targets.MainSolo.Branch,
-				Worktree: targets.MainSolo.Worktree,
-				Completion: &taskstate.Completion{
-					Summary:             "Done",
-					Description:         "Done.",
-					DetailedDescription: "Detailed PR body.",
-				},
-			}),
-			wantReason: task.MetadataPRURL + " is not set",
-		},
-		{
-			name:     "branch run at repo root",
-			taskItem: task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-1", task.MetadataWorktree: repoPath}},
-			state: syncTaskState(taskstate.RunAttempt{
-				Attempt:  2,
-				Status:   taskstate.RunStatusSucceeded,
-				Branch:   "orpheus/op-1",
-				Worktree: repoPath,
-				Completion: &taskstate.Completion{
-					Summary:             "Done",
-					Description:         "Done.",
-					DetailedDescription: "Detailed PR body.",
-					Commit:              "abc123",
-				},
-			}),
-			wantReason: task.MetadataPRURL + " is not set",
-		},
-		{
-			name:       "closed",
-			taskItem:   withSyncStatus(baseTask, task.StatusClosed),
-			state:      syncTaskState(succeeded),
-			wantReason: "task is closed",
-		},
-	}
-
-	for _, tt := range tests {
+	for _, tt := range syncNonEligibleTaskCases(baseTask, repoPath, worktreePath, targets) {
 		t.Run(tt.name, func(t *testing.T) {
 			service, provider, backend := newSyncTestService(t, tt.taskItem, tt.state, paths, source)
 			result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
@@ -575,6 +462,103 @@ func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 				t.Fatalf("set PR URLs = %#v, want no metadata writes for skip", backend.setPRURLs)
 			}
 		})
+	}
+}
+
+type syncNonEligibleTaskCase struct {
+	name       string
+	taskItem   task.Task
+	state      taskstate.TaskState
+	wantReason string
+}
+
+func syncNonEligibleTaskCases(
+	baseTask task.Task,
+	repoPath string,
+	worktreePath string,
+	targets workflow.ExpectedTargets,
+) []syncNonEligibleTaskCase {
+	cases := syncRunStateSkipCases(baseTask)
+	cases = append(cases, syncCompletionSkipCases(baseTask, repoPath, worktreePath, targets)...)
+	cases = append(cases, syncNonEligibleTaskCase{
+		name:       "closed",
+		taskItem:   withSyncStatus(baseTask, task.StatusClosed),
+		state:      syncTaskState(syncSucceededRun(worktreePath)),
+		wantReason: "task is closed",
+	})
+	return cases
+}
+
+func syncRunStateSkipCases(baseTask task.Task) []syncNonEligibleTaskCase {
+	missingPRURL := task.MetadataPRURL + " is not set"
+	return []syncNonEligibleTaskCase{
+		{name: "no runs", taskItem: baseTask, state: taskstate.TaskState{RepoID: "alpha", TaskID: "op-1"}, wantReason: missingPRURL},
+		{name: "running", taskItem: baseTask, state: syncTaskState(taskstate.RunAttempt{Attempt: 2, Status: taskstate.RunStatusRunning}), wantReason: missingPRURL},
+		{name: "failed", taskItem: baseTask, state: syncTaskState(taskstate.RunAttempt{Attempt: 2, Status: taskstate.RunStatusFailed}), wantReason: missingPRURL},
+		{name: "no completion", taskItem: baseTask, state: syncTaskState(taskstate.RunAttempt{Attempt: 2, Status: taskstate.RunStatusSucceeded}), wantReason: missingPRURL},
+	}
+}
+
+func syncCompletionSkipCases(
+	baseTask task.Task,
+	repoPath string,
+	worktreePath string,
+	targets workflow.ExpectedTargets,
+) []syncNonEligibleTaskCase {
+	missingPRURL := task.MetadataPRURL + " is not set"
+	return []syncNonEligibleTaskCase{
+		{name: "missing commit", taskItem: baseTask, state: syncTaskState(syncCompletionRun(worktreePath, "")), wantReason: missingPRURL},
+		{name: "commit failed", taskItem: baseTask, state: syncTaskState(syncCommitErrorRun(worktreePath)), wantReason: missingPRURL},
+		{name: "main solo", taskItem: syncTaskForTarget(targets.MainSolo), state: syncTaskState(syncCompletionRun(targets.MainSolo.Worktree, targets.MainSolo.Branch)), wantReason: missingPRURL},
+		{name: "branch run at repo root", taskItem: syncTaskForBranchWorktree("orpheus/op-1", repoPath), state: syncTaskState(syncCommittedCompletionRun(repoPath, "orpheus/op-1")), wantReason: missingPRURL},
+	}
+}
+
+func syncSucceededRun(worktreePath string) taskstate.RunAttempt {
+	run := syncCommittedCompletionRun(worktreePath, "orpheus/op-1")
+	run.Attempt = 1
+	run.StartedAt = time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC)
+	return run
+}
+
+func syncCompletionRun(worktreePath string, branch string) taskstate.RunAttempt {
+	if branch == "" {
+		branch = "orpheus/op-1"
+	}
+	return taskstate.RunAttempt{
+		Attempt:  2,
+		Status:   taskstate.RunStatusSucceeded,
+		Branch:   branch,
+		Worktree: worktreePath,
+		Completion: &taskstate.Completion{
+			Summary:             "Done",
+			Description:         "Done.",
+			DetailedDescription: "Detailed PR body.",
+		},
+	}
+}
+
+func syncCommittedCompletionRun(worktreePath string, branch string) taskstate.RunAttempt {
+	run := syncCompletionRun(worktreePath, branch)
+	run.Completion.Commit = "abc123"
+	return run
+}
+
+func syncCommitErrorRun(worktreePath string) taskstate.RunAttempt {
+	run := syncCompletionRun(worktreePath, "orpheus/op-1")
+	run.Completion.CommitError = "dirty worktree"
+	return run
+}
+
+func syncTaskForTarget(target workflow.Target) task.Task {
+	return syncTaskForBranchWorktree(target.Branch, target.Worktree)
+}
+
+func syncTaskForBranchWorktree(branch string, worktree string) task.Task {
+	return task.Task{
+		ID:       "op-1",
+		Status:   task.StatusInProgress,
+		Metadata: task.Metadata{task.MetadataBranch: branch, task.MetadataWorktree: worktree},
 	}
 }
 
@@ -665,112 +649,11 @@ func TestSyncServiceDoesNotCallPRProviderForPublicationCandidates(t *testing.T) 
 }
 
 func TestSyncServiceSyncAllScansPRBoundaryTasksAndContinuesAfterFailures(t *testing.T) {
-	root := t.TempDir()
-	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
-	if err != nil {
-		t.Fatalf("create paths: %v", err)
-	}
-	alphaPath := filepath.Join(root, "alpha")
-	betaPath := filepath.Join(root, "beta")
-	alpha := task.RepositorySource{
-		Repository: task.Repository{
-			ID:            "alpha",
-			Name:          "Alpha",
-			TaskIDPrefix:  "a",
-			Path:          alphaPath,
-			DefaultBranch: "main",
-		},
-		BackendDir: alphaPath,
-	}
-	beta := task.RepositorySource{
-		Repository: task.Repository{
-			ID:            "beta",
-			Name:          "Beta",
-			TaskIDPrefix:  "b",
-			Path:          betaPath,
-			DefaultBranch: "main",
-		},
-		BackendDir: betaPath,
-	}
-
-	createTargets, err := workflow.ExpectedTargetsForTask(alpha.Repository, "a-create", paths)
-	if err != nil {
-		t.Fatalf("expected targets: %v", err)
-	}
-	mainTargets, err := workflow.ExpectedTargetsForTask(alpha.Repository, "a-main", paths)
-	if err != nil {
-		t.Fatalf("expected targets: %v", err)
-	}
-	alphaBackend := &fakeSyncBackend{tasks: []task.Task{
-		{
-			ID:        "a-create",
-			Status:    task.StatusInProgress,
-			IssueType: task.IssueTypeTask,
-			Metadata: task.Metadata{
-				task.MetadataBranch:   createTargets.WorktreeTeam.Branch,
-				task.MetadataWorktree: createTargets.WorktreeTeam.Worktree,
-			},
-		},
-		{
-			ID:        "a-review",
-			Status:    task.StatusInProgress,
-			IssueType: task.IssueTypeTask,
-			Metadata:  task.Metadata{task.MetadataPRURL: "https://github.test/org/alpha/pull/10"},
-		},
-		{
-			ID:        "a-merged",
-			Status:    task.StatusInProgress,
-			IssueType: task.IssueTypeBug,
-			Metadata:  task.Metadata{task.MetadataPRURL: "https://github.test/org/alpha/pull/11"},
-		},
-		{
-			ID:        "a-closed-pr",
-			Status:    task.StatusInProgress,
-			IssueType: task.IssueTypeChore,
-			Metadata:  task.Metadata{task.MetadataPRURL: "https://github.test/org/alpha/pull/12"},
-		},
-		{
-			ID:        "a-main",
-			Status:    task.StatusInProgress,
-			IssueType: task.IssueTypeTask,
-			Metadata: task.Metadata{
-				task.MetadataBranch:   mainTargets.MainSolo.Branch,
-				task.MetadataWorktree: mainTargets.MainSolo.Worktree,
-			},
-		},
-		{ID: "a-ready", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
-		{
-			ID:        "a-epic-review",
-			Status:    task.StatusInProgress,
-			IssueType: task.IssueTypeEpic,
-			Metadata:  task.Metadata{task.MetadataPRURL: "https://github.test/org/alpha/pull/13"},
-		},
-		{
-			ID:        "a-closed",
-			Status:    task.StatusClosed,
-			IssueType: task.IssueTypeTask,
-			Metadata:  task.Metadata{task.MetadataPRURL: "https://github.test/org/alpha/pull/14"},
-		},
-	}}
+	paths, alpha, beta := newSyncAllScanSources(t)
+	alphaBackend := &fakeSyncBackend{tasks: syncAllScanAlphaTasks(t, paths, alpha)}
 	scanErr := errors.New("bd unavailable")
 	runStore := &fakeSyncRunStore{}
-	provider := &fakePRProvider{
-		created: pullrequest.PullRequest{URL: "https://github.test/org/alpha/pull/99"},
-		statusByURL: map[string]pullrequest.PullRequestStatus{
-			"https://github.test/org/alpha/pull/10": {
-				URL:   "https://github.test/org/alpha/pull/10",
-				State: pullrequest.StateOpen,
-			},
-			"https://github.test/org/alpha/pull/11": {
-				URL:   "https://github.test/org/alpha/pull/11",
-				State: pullrequest.StateMerged,
-			},
-			"https://github.test/org/alpha/pull/12": {
-				URL:   "https://github.test/org/alpha/pull/12",
-				State: pullrequest.StateClosed,
-			},
-		},
-	}
+	provider := newSyncAllScanPRProvider()
 	service := workflow.SyncService{
 		Paths:   paths,
 		Sources: []task.RepositorySource{alpha, beta},
@@ -820,6 +703,102 @@ func TestSyncServiceSyncAllScansPRBoundaryTasksAndContinuesAfterFailures(t *test
 	}
 	if len(alphaBackend.setPRURLs) != 0 {
 		t.Fatalf("set PR URLs = %#v, want none", alphaBackend.setPRURLs)
+	}
+}
+
+func newSyncAllScanSources(t *testing.T) (state.Paths, task.RepositorySource, task.RepositorySource) {
+	t.Helper()
+	root := t.TempDir()
+	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
+	if err != nil {
+		t.Fatalf("create paths: %v", err)
+	}
+	alphaPath := filepath.Join(root, "alpha")
+	betaPath := filepath.Join(root, "beta")
+	alpha := task.RepositorySource{
+		Repository: task.Repository{
+			ID:            "alpha",
+			Name:          "Alpha",
+			TaskIDPrefix:  "a",
+			Path:          alphaPath,
+			DefaultBranch: "main",
+		},
+		BackendDir: alphaPath,
+	}
+	beta := task.RepositorySource{
+		Repository: task.Repository{
+			ID:            "beta",
+			Name:          "Beta",
+			TaskIDPrefix:  "b",
+			Path:          betaPath,
+			DefaultBranch: "main",
+		},
+		BackendDir: betaPath,
+	}
+	return paths, alpha, beta
+}
+
+func syncAllScanAlphaTasks(t *testing.T, paths state.Paths, alpha task.RepositorySource) []task.Task {
+	t.Helper()
+	createTargets := mustSyncExpectedTargets(t, alpha.Repository, "a-create", paths)
+	mainTargets := mustSyncExpectedTargets(t, alpha.Repository, "a-main", paths)
+	return []task.Task{
+		syncAllMetadataTask("a-create", task.StatusInProgress, task.IssueTypeTask, task.Metadata{
+			task.MetadataBranch:   createTargets.WorktreeTeam.Branch,
+			task.MetadataWorktree: createTargets.WorktreeTeam.Worktree,
+		}),
+		syncAllPRTask("a-review", task.StatusInProgress, task.IssueTypeTask, "https://github.test/org/alpha/pull/10"),
+		syncAllPRTask("a-merged", task.StatusInProgress, task.IssueTypeBug, "https://github.test/org/alpha/pull/11"),
+		syncAllPRTask("a-closed-pr", task.StatusInProgress, task.IssueTypeChore, "https://github.test/org/alpha/pull/12"),
+		syncAllMetadataTask("a-main", task.StatusInProgress, task.IssueTypeTask, task.Metadata{
+			task.MetadataBranch:   mainTargets.MainSolo.Branch,
+			task.MetadataWorktree: mainTargets.MainSolo.Worktree,
+		}),
+		{ID: "a-ready", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
+		syncAllPRTask("a-epic-review", task.StatusInProgress, task.IssueTypeEpic, "https://github.test/org/alpha/pull/13"),
+		syncAllPRTask("a-closed", task.StatusClosed, task.IssueTypeTask, "https://github.test/org/alpha/pull/14"),
+	}
+}
+
+func mustSyncExpectedTargets(
+	t *testing.T,
+	repo task.Repository,
+	taskID string,
+	paths state.Paths,
+) workflow.ExpectedTargets {
+	t.Helper()
+	targets, err := workflow.ExpectedTargetsForTask(repo, taskID, paths)
+	if err != nil {
+		t.Fatalf("expected targets: %v", err)
+	}
+	return targets
+}
+
+func syncAllPRTask(id string, status task.Status, issueType task.IssueType, prURL string) task.Task {
+	return syncAllMetadataTask(id, status, issueType, task.Metadata{task.MetadataPRURL: prURL})
+}
+
+func syncAllMetadataTask(id string, status task.Status, issueType task.IssueType, metadata task.Metadata) task.Task {
+	return task.Task{ID: id, Status: status, IssueType: issueType, Metadata: metadata}
+}
+
+func newSyncAllScanPRProvider() *fakePRProvider {
+	return &fakePRProvider{
+		created: pullrequest.PullRequest{URL: "https://github.test/org/alpha/pull/99"},
+		statusByURL: map[string]pullrequest.PullRequestStatus{
+			"https://github.test/org/alpha/pull/10": {
+				URL:   "https://github.test/org/alpha/pull/10",
+				State: pullrequest.StateOpen,
+			},
+			"https://github.test/org/alpha/pull/11": {
+				URL:   "https://github.test/org/alpha/pull/11",
+				State: pullrequest.StateMerged,
+			},
+			"https://github.test/org/alpha/pull/12": {
+				URL:   "https://github.test/org/alpha/pull/12",
+				State: pullrequest.StateClosed,
+			},
+		},
 	}
 }
 
