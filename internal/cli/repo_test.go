@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -165,6 +166,54 @@ func TestRepoAddInitializesManagedBeadsAfterValidation(t *testing.T) {
 		is.Equal(registry.BeadsModeManaged, repo.BeadsMode)
 		is.Equal("alpha", repo.BeadsPrefix)
 	}
+}
+
+func TestRepoAddHoldsGlobalMutationLockDuringManagedInitialization(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	withFakeBDInit(t)
+	repoPath := newTestRepoPath(t)
+	paths := currentTestPaths(t)
+	lockPath, err := paths.GlobalMutationLockPath()
+	must.NoError(err)
+	t.Setenv("FAKE_BD_LOCK_PATH", lockPath)
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"repo", "add", repoPath})
+
+	must.NoError(err)
+	is.Empty(stderr)
+	is.Contains(stdout, "Added repo alpha")
+	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("lock after repo add: %v, want removed", err)
+	}
+}
+
+func TestRepoAddFailsFastWhenGlobalMutationLockIsHeld(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	logPath := withFakeBDInit(t)
+	repoPath := newTestRepoPath(t)
+	paths := currentTestPaths(t)
+	lockPath, err := paths.GlobalMutationLockPath()
+	must.NoError(err)
+	must.NoError(os.MkdirAll(filepath.Dir(lockPath), 0o755))
+	must.NoError(os.WriteFile(lockPath, []byte("held"), 0o644))
+
+	stdout, _, err := executeCommandWithError(t, []string{"repo", "add", repoPath})
+
+	must.Error(err)
+	var acquisitionErr *state.LockAcquisitionError
+	must.ErrorAs(err, &acquisitionErr)
+	is.Equal(lockPath, acquisitionErr.Path)
+	is.ErrorContains(err, "failed to acquire lock for repo add: "+lockPath)
+	is.Empty(stdout)
+	_, logErr := os.Stat(logPath)
+	is.ErrorIs(logErr, os.ErrNotExist)
+
+	store := registry.NewStore(paths)
+	reg, err := store.Load()
+	must.NoError(err)
+	is.Empty(reg.Repos)
 }
 
 func TestRepoAddValidatesManagedRegistryConflictsBeforeInitialization(t *testing.T) {
