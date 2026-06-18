@@ -11,51 +11,53 @@ import (
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 )
 
-func TestGHProviderStatusByURL(t *testing.T) {
-	tests := []struct {
-		name      string
-		output    string
-		wantState pullrequest.State
-		wantErr   string
-	}{
-		{
-			name:      "open",
-			output:    `{"url":"https://github.com/org/repo/pull/1","state":"OPEN","mergedAt":null}`,
-			wantState: pullrequest.StateOpen,
-		},
-		{
-			name:      "merged timestamp wins",
-			output:    `{"url":"https://github.com/org/repo/pull/1","state":"CLOSED","mergedAt":"2026-06-14T10:00:00Z"}`,
-			wantState: pullrequest.StateMerged,
-		},
-		{
-			name:      "merged state",
-			output:    `{"url":"https://github.com/org/repo/pull/1","state":"MERGED","mergedAt":null}`,
-			wantState: pullrequest.StateMerged,
-		},
-		{
-			name:      "closed unmerged",
-			output:    `{"url":"https://github.com/org/repo/pull/1","state":"CLOSED","mergedAt":null}`,
-			wantState: pullrequest.StateClosed,
-		},
-		{
-			name:    "invalid json",
-			output:  `{`,
-			wantErr: "provider output was not JSON",
-		},
-		{
-			name:    "invalid url",
-			output:  `{"url":"not-a-url","state":"OPEN","mergedAt":null}`,
-			wantErr: "valid PR URL",
-		},
-		{
-			name:    "unsupported state",
-			output:  `{"url":"https://github.com/org/repo/pull/1","state":"DRAFT","mergedAt":null}`,
-			wantErr: "unsupported PR state",
-		},
-	}
+type ghStatusByURLCase struct {
+	name      string
+	output    string
+	wantState pullrequest.State
+	wantErr   string
+}
 
-	for _, tt := range tests {
+var ghStatusByURLCases = []ghStatusByURLCase{
+	{
+		name:      "open",
+		output:    `{"url":"https://github.com/org/repo/pull/1","state":"OPEN","mergedAt":null}`,
+		wantState: pullrequest.StateOpen,
+	},
+	{
+		name:      "merged timestamp wins",
+		output:    `{"url":"https://github.com/org/repo/pull/1","state":"CLOSED","mergedAt":"2026-06-14T10:00:00Z"}`,
+		wantState: pullrequest.StateMerged,
+	},
+	{
+		name:      "merged state",
+		output:    `{"url":"https://github.com/org/repo/pull/1","state":"MERGED","mergedAt":null}`,
+		wantState: pullrequest.StateMerged,
+	},
+	{
+		name:      "closed unmerged",
+		output:    `{"url":"https://github.com/org/repo/pull/1","state":"CLOSED","mergedAt":null}`,
+		wantState: pullrequest.StateClosed,
+	},
+	{
+		name:    "invalid json",
+		output:  `{`,
+		wantErr: "provider output was not JSON",
+	},
+	{
+		name:    "invalid url",
+		output:  `{"url":"not-a-url","state":"OPEN","mergedAt":null}`,
+		wantErr: "valid PR URL",
+	},
+	{
+		name:    "unsupported state",
+		output:  `{"url":"https://github.com/org/repo/pull/1","state":"DRAFT","mergedAt":null}`,
+		wantErr: "unsupported PR state",
+	},
+}
+
+func TestGHProviderStatusByURL(t *testing.T) {
+	for _, tt := range ghStatusByURLCases {
 		t.Run(tt.name, func(t *testing.T) {
 			installFakeGH(t, tt.output, 0)
 			got, err := pullrequest.GHProvider{}.StatusByURL(
