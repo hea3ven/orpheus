@@ -7,9 +7,12 @@ run:
 
 linters:
   enable:
+    - dupl
     - errorlint
+    - gocognit
     - gocritic
     - misspell
+    - nestif
     - nilerr
     - nolintlint
     - predeclared

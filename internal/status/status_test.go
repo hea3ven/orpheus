@@ -125,40 +125,13 @@ func TestProjectWithRunStatesShowsSuccessfulMainCompletionInReview(t *testing.T)
 }
 
 func TestProjectWithRunStatesShowsWorktreeCompletionReadyForTaskDone(t *testing.T) {
-	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
-		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/tmp/alpha", DefaultBranch: "main"},
-		Tasks: []task.Task{{
-			ID:        "a-worktree",
-			Title:     "worktree review",
-			Status:    task.StatusInProgress,
-			IssueType: task.IssueTypeTask,
-			Metadata: task.Metadata{
-				task.MetadataBranch:   "orpheus/a-worktree",
-				task.MetadataWorktree: "/tmp/orpheus/worktrees/a-worktree",
-			},
-		}},
-	}}}
-	latestRun := taskstate.RunAttempt{
-		Attempt:  1,
-		Status:   taskstate.RunStatusSucceeded,
-		Branch:   "orpheus/a-worktree",
-		Worktree: "/tmp/orpheus/worktrees/a-worktree",
-		Completion: &taskstate.Completion{
-			Summary:             "Done",
-			Description:         "Ready for PR.",
-			DetailedDescription: "Detailed PR body.",
-			CompletedAt:         time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
-			Commit:              "abc123",
-		},
-	}
-	localStates := status.LocalTaskStateIndex{
-		status.RunStateKey("alpha", "a-worktree"): {
-			LatestRun:       &latestRun,
-			ExpectedTargets: testExpectedTargets("main", "/tmp/alpha", "orpheus/a-worktree", "/tmp/orpheus/worktrees/a-worktree"),
-		},
-	}
-
-	got := status.ProjectWithLocalTaskStates(snapshot, localStates)
+	got := projectWorktreeCompletion(taskstate.Completion{
+		Summary:             "Done",
+		Description:         "Ready for PR.",
+		DetailedDescription: "Detailed PR body.",
+		CompletedAt:         time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+		Commit:              "abc123",
+	})
 
 	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-worktree"})
 	entry := groupEntries(t, got, status.GroupInReview)[0]
@@ -168,40 +141,13 @@ func TestProjectWithRunStatesShowsWorktreeCompletionReadyForTaskDone(t *testing.
 }
 
 func TestProjectWithRunStatesShowsWorktreeCompletionWithoutCommitReadyForTaskDone(t *testing.T) {
-	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
-		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/tmp/alpha", DefaultBranch: "main"},
-		Tasks: []task.Task{{
-			ID:        "a-worktree",
-			Title:     "worktree review",
-			Status:    task.StatusInProgress,
-			IssueType: task.IssueTypeTask,
-			Metadata: task.Metadata{
-				task.MetadataBranch:   "orpheus/a-worktree",
-				task.MetadataWorktree: "/tmp/orpheus/worktrees/a-worktree",
-			},
-		}},
-	}}}
-	latestRun := taskstate.RunAttempt{
-		Attempt:  1,
-		Status:   taskstate.RunStatusSucceeded,
-		Branch:   "orpheus/a-worktree",
-		Worktree: "/tmp/orpheus/worktrees/a-worktree",
-		Completion: &taskstate.Completion{
-			Summary:             "Done",
-			Description:         "Commit failed.",
-			DetailedDescription: "Detailed PR body.",
-			CompletedAt:         time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
-			CommitError:         "commit failed",
-		},
-	}
-	localStates := status.LocalTaskStateIndex{
-		status.RunStateKey("alpha", "a-worktree"): {
-			LatestRun:       &latestRun,
-			ExpectedTargets: testExpectedTargets("main", "/tmp/alpha", "orpheus/a-worktree", "/tmp/orpheus/worktrees/a-worktree"),
-		},
-	}
-
-	got := status.ProjectWithLocalTaskStates(snapshot, localStates)
+	got := projectWorktreeCompletion(taskstate.Completion{
+		Summary:             "Done",
+		Description:         "Commit failed.",
+		DetailedDescription: "Detailed PR body.",
+		CompletedAt:         time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+		CommitError:         "commit failed",
+	})
 
 	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-worktree"})
 	entry := groupEntries(t, got, status.GroupInReview)[0]
@@ -574,6 +520,36 @@ func groupEntries(t *testing.T, projection status.Projection, groupID status.Gro
 	}
 	t.Fatalf("missing group %s", groupID)
 	return nil
+}
+
+func projectWorktreeCompletion(completion taskstate.Completion) status.Projection {
+	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
+		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/tmp/alpha", DefaultBranch: "main"},
+		Tasks: []task.Task{{
+			ID:        "a-worktree",
+			Title:     "worktree review",
+			Status:    task.StatusInProgress,
+			IssueType: task.IssueTypeTask,
+			Metadata: task.Metadata{
+				task.MetadataBranch:   "orpheus/a-worktree",
+				task.MetadataWorktree: "/tmp/orpheus/worktrees/a-worktree",
+			},
+		}},
+	}}}
+	latestRun := taskstate.RunAttempt{
+		Attempt:    1,
+		Status:     taskstate.RunStatusSucceeded,
+		Branch:     "orpheus/a-worktree",
+		Worktree:   "/tmp/orpheus/worktrees/a-worktree",
+		Completion: &completion,
+	}
+	localStates := status.LocalTaskStateIndex{
+		status.RunStateKey("alpha", "a-worktree"): {
+			LatestRun:       &latestRun,
+			ExpectedTargets: testExpectedTargets("main", "/tmp/alpha", "orpheus/a-worktree", "/tmp/orpheus/worktrees/a-worktree"),
+		},
+	}
+	return status.ProjectWithLocalTaskStates(snapshot, localStates)
 }
 
 func testExpectedTargets(

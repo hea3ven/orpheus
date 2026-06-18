@@ -270,49 +270,20 @@ func (s FinalizationService) finalizeDefaultBranch(
 
 	finalization := finalizeCtx.finalization
 	if strings.TrimSpace(finalization.Commit) != "" {
-		if hasChanges {
-			return FinalizationResult{}, fmt.Errorf(
-				"task %s already has finalization commit %s recorded, but repo root %q has new uncommitted changes; "+
-					"M4 will not create a second finalization commit, so stash, commit manually outside Orpheus, or remove the extra changes before retrying",
-				target.task.ID,
-				finalization.Commit,
-				repo.Path,
-			)
-		}
-		head, err := gitState.HeadCommit(ctx, repo.Path)
-		if err != nil {
-			return FinalizationResult{}, fmt.Errorf("verify recorded finalization commit: %w", err)
-		}
-		if head != finalization.Commit {
-			return FinalizationResult{}, fmt.Errorf(
-				"recorded finalization commit is %s, but current HEAD is %s; M4 will not infer or repair manually committed states",
-				finalization.Commit,
-				head,
-			)
-		}
+		err = verifyRecordedDefaultBranchCommit(ctx, gitState, repo.Path, target.task.ID, finalization, hasChanges)
 	} else {
-		if !hasChanges {
-			return FinalizationResult{}, fmt.Errorf(
-				"repo root %q has no changes to commit and task %s has no recorded finalization commit; "+
-					"review or adjust the repo-root changes before running task done, or pass the task id after repairing state manually",
-				repo.Path,
-				target.task.ID,
-			)
-		}
-		if pendingConfirmation != nil {
-			return FinalizationResult{}, pendingConfirmation
-		}
-		if err := gitState.StageAll(ctx, repo.Path); err != nil {
-			return FinalizationResult{}, err
-		}
-		commit, err := gitState.Commit(ctx, repo.Path, message)
-		if err != nil {
-			return FinalizationResult{}, err
-		}
-		finalization, err = s.RunStore.RecordFinalizationCommit(repo.ID, target.task.ID, commit)
-		if err != nil {
-			return FinalizationResult{}, fmt.Errorf("record finalization commit: %w", err)
-		}
+		finalization, err = s.createDefaultBranchFinalizationCommit(
+			ctx,
+			gitState,
+			repo,
+			target.task.ID,
+			message,
+			hasChanges,
+			pendingConfirmation,
+		)
+	}
+	if err != nil {
+		return FinalizationResult{}, err
 	}
 
 	if pendingConfirmation != nil {
@@ -347,6 +318,133 @@ func (s FinalizationService) finalizeDefaultBranch(
 		Finalization: finalization,
 		Branch:       repo.DefaultBranch,
 	}, nil
+}
+
+func verifyRecordedDefaultBranchCommit(
+	ctx context.Context,
+	gitState FinalizationGit,
+	repoPath string,
+	taskID string,
+	finalization taskstate.Finalization,
+	hasChanges bool,
+) error {
+	if hasChanges {
+		return fmt.Errorf(
+			"task %s already has finalization commit %s recorded, but repo root %q has new uncommitted changes; "+
+				"M4 will not create a second finalization commit, so stash, commit manually outside Orpheus, or remove the extra changes before retrying",
+			taskID,
+			finalization.Commit,
+			repoPath,
+		)
+	}
+	head, err := gitState.HeadCommit(ctx, repoPath)
+	if err != nil {
+		return fmt.Errorf("verify recorded finalization commit: %w", err)
+	}
+	if head != finalization.Commit {
+		return fmt.Errorf(
+			"recorded finalization commit is %s, but current HEAD is %s; M4 will not infer or repair manually committed states",
+			finalization.Commit,
+			head,
+		)
+	}
+	return nil
+}
+
+func (s FinalizationService) createDefaultBranchFinalizationCommit(
+	ctx context.Context,
+	gitState FinalizationGit,
+	repo task.Repository,
+	taskID string,
+	message string,
+	hasChanges bool,
+	pendingConfirmation *RunningCompletionConfirmationError,
+) (taskstate.Finalization, error) {
+	if !hasChanges {
+		return taskstate.Finalization{}, fmt.Errorf(
+			"repo root %q has no changes to commit and task %s has no recorded finalization commit; "+
+				"review or adjust the repo-root changes before running task done, or pass the task id after repairing state manually",
+			repo.Path,
+			taskID,
+		)
+	}
+	if pendingConfirmation != nil {
+		return taskstate.Finalization{}, pendingConfirmation
+	}
+	if err := gitState.StageAll(ctx, repo.Path); err != nil {
+		return taskstate.Finalization{}, err
+	}
+	commit, err := gitState.Commit(ctx, repo.Path, message)
+	if err != nil {
+		return taskstate.Finalization{}, err
+	}
+	finalization, err := s.RunStore.RecordFinalizationCommit(repo.ID, taskID, commit)
+	if err != nil {
+		return taskstate.Finalization{}, fmt.Errorf("record finalization commit: %w", err)
+	}
+	return finalization, nil
+}
+
+func verifyRecordedFeatureBranchCommit(
+	ctx context.Context,
+	gitState FinalizationGit,
+	worktree string,
+	taskID string,
+	finalization taskstate.Finalization,
+	hasChanges bool,
+) error {
+	if hasChanges {
+		return fmt.Errorf(
+			"task %s already has finalization commit %s recorded, but task worktree %q has new uncommitted changes; "+
+				"task done will not create a second publication commit, so stash, commit manually outside Orpheus, or remove the extra changes before retrying",
+			taskID,
+			finalization.Commit,
+			worktree,
+		)
+	}
+	head, err := gitState.HeadCommit(ctx, worktree)
+	if err != nil {
+		return fmt.Errorf("verify recorded publication commit: %w", err)
+	}
+	if head != finalization.Commit {
+		return fmt.Errorf(
+			"recorded publication commit is %s, but current HEAD is %s; task done will not infer or repair manually committed states",
+			finalization.Commit,
+			head,
+		)
+	}
+	return nil
+}
+
+func (s FinalizationService) createFeatureBranchFinalizationCommit(
+	ctx context.Context,
+	gitState FinalizationGit,
+	repoID string,
+	taskID string,
+	worktree string,
+	message string,
+	hasChanges bool,
+) (taskstate.Finalization, error) {
+	if !hasChanges {
+		return taskstate.Finalization{}, fmt.Errorf(
+			"task worktree %q has no reviewed local changes to commit for task %s; "+
+				"review or adjust the feature-branch changes before running task done",
+			worktree,
+			taskID,
+		)
+	}
+	if err := gitState.StageAll(ctx, worktree); err != nil {
+		return taskstate.Finalization{}, err
+	}
+	commit, err := gitState.Commit(ctx, worktree, message)
+	if err != nil {
+		return taskstate.Finalization{}, err
+	}
+	finalization, err := s.RunStore.RecordFinalizationCommit(repoID, taskID, commit)
+	if err != nil {
+		return taskstate.Finalization{}, fmt.Errorf("record publication commit: %w", err)
+	}
+	return finalization, nil
 }
 
 func (s FinalizationService) publishFeatureBranch(
@@ -390,46 +488,12 @@ func (s FinalizationService) publishFeatureBranch(
 
 	finalization := finalizeCtx.finalization
 	if strings.TrimSpace(finalization.Commit) != "" {
-		if hasChanges {
-			return FinalizationResult{}, fmt.Errorf(
-				"task %s already has finalization commit %s recorded, but task worktree %q has new uncommitted changes; "+
-					"task done will not create a second publication commit, so stash, commit manually outside Orpheus, or remove the extra changes before retrying",
-				target.task.ID,
-				finalization.Commit,
-				metadataTarget.Worktree,
-			)
-		}
-		head, err := gitState.HeadCommit(ctx, metadataTarget.Worktree)
-		if err != nil {
-			return FinalizationResult{}, fmt.Errorf("verify recorded publication commit: %w", err)
-		}
-		if head != finalization.Commit {
-			return FinalizationResult{}, fmt.Errorf(
-				"recorded publication commit is %s, but current HEAD is %s; task done will not infer or repair manually committed states",
-				finalization.Commit,
-				head,
-			)
-		}
+		err = verifyRecordedFeatureBranchCommit(ctx, gitState, metadataTarget.Worktree, target.task.ID, finalization, hasChanges)
 	} else {
-		if !hasChanges {
-			return FinalizationResult{}, fmt.Errorf(
-				"task worktree %q has no reviewed local changes to commit for task %s; "+
-					"review or adjust the feature-branch changes before running task done",
-				metadataTarget.Worktree,
-				target.task.ID,
-			)
-		}
-		if err := gitState.StageAll(ctx, metadataTarget.Worktree); err != nil {
-			return FinalizationResult{}, err
-		}
-		commit, err := gitState.Commit(ctx, metadataTarget.Worktree, message)
-		if err != nil {
-			return FinalizationResult{}, err
-		}
-		finalization, err = s.RunStore.RecordFinalizationCommit(repo.ID, target.task.ID, commit)
-		if err != nil {
-			return FinalizationResult{}, fmt.Errorf("record publication commit: %w", err)
-		}
+		finalization, err = s.createFeatureBranchFinalizationCommit(ctx, gitState, repo.ID, target.task.ID, metadataTarget.Worktree, message, hasChanges)
+	}
+	if err != nil {
+		return FinalizationResult{}, err
 	}
 
 	if finalization.PushedAt == nil {

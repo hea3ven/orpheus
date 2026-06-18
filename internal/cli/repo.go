@@ -37,132 +37,174 @@ func newRepoAddCommand(opts *rootOptions) *cobra.Command {
 		Short: "Register a repository path",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
-			logger := opts.log().With(
-				slog.String("component", "cli"),
-				slog.String("operation", "repo_add"),
-			)
-			logger.DebugContext(command.Context(), "starting repo registration", slog.String("input_path", args[0]))
-
-			store, err := newRegistryStoreFromEnvironment()
-			if err != nil {
-				return err
-			}
-			logger.DebugContext(command.Context(), "resolved registry store")
-
-			gitInspection, err := gitmeta.Inspect(args[0])
-			if err != nil {
-				return err
-			}
-			logger.DebugContext(
-				command.Context(),
-				"inspected git repository",
-				slog.String("repo_root", gitInspection.Root),
-				slog.Bool("remote_detected", gitInspection.RemoteCandidate != ""),
-				slog.String("remote_candidate_name", gitInspection.RemoteCandidateName),
-				slog.String("default_branch_candidate", gitInspection.DefaultBranchCandidate),
-				slog.String("default_branch_source", string(gitInspection.DefaultBranchSource)),
-			)
-
-			repo, err := registry.NewRepoFromPath(gitInspection.Root)
-			if err != nil {
-				return err
-			}
-			logger.DebugContext(command.Context(), "derived repo identity", slog.String("repo_id", repo.ID), slog.String("repo_name", repo.Name))
-
-			remote, defaultBranch, err := confirmGitValues(command, gitInspection)
-			if err != nil {
-				return err
-			}
-			repo.Remote = remote
-			repo.DefaultBranch = defaultBranch
-			logger.DebugContext(
-				command.Context(),
-				"confirmed git values",
-				slog.Bool("remote_set", repo.Remote != ""),
-				slog.String("default_branch", repo.DefaultBranch),
-			)
-
-			managed := false
-			beadsInspection, err := inspectLocalBeads(gitInspection.Root)
-			if err != nil {
-				if !errors.Is(err, beads.ErrNoLocal) {
-					return err
-				}
-
-				prefix, err := confirmManagedBeadsPrefix(command, repo.ID)
-				if err != nil {
-					return err
-				}
-				repo.BeadsMode = registry.BeadsModeManaged
-				repo.BeadsPrefix = prefix
-				managed = true
-				logger.DebugContext(
-					command.Context(),
-					"selected managed Beads mode",
-					slog.String("beads_prefix", repo.BeadsPrefix),
-				)
-			} else {
-				repo.BeadsMode = registry.BeadsModeLocal
-				repo.BeadsPrefix = beadsInspection.Prefix
-				logger.DebugContext(
-					command.Context(),
-					"detected repo-local Beads mode",
-					slog.String("beads_dir", beadsInspection.BeadsDir),
-					slog.String("beads_prefix", repo.BeadsPrefix),
-				)
-			}
-
-			registryCtx, err := loadRegistryContextFromStore(store)
-			if err != nil {
-				return err
-			}
-			reg := registryCtx.Registry
-			if err := reg.Add(repo); err != nil {
-				return err
-			}
-			logger.DebugContext(command.Context(), "validated registry update", slog.Int("repo_count", len(reg.Repos)))
-
-			var managedDir string
-			if managed {
-				managedDir, err = registryCtx.Store.ManagedBeadsDir(repo.ID)
-				if err != nil {
-					return err
-				}
-				logger.DebugContext(command.Context(), "initializing managed Beads", slog.String("beads_dir", managedDir))
-				if err := initializeManagedBeads(managedDir, repo.BeadsPrefix); err != nil {
-					return err
-				}
-			}
-
-			if err := registryCtx.Store.Save(reg); err != nil {
-				if managed {
-					return fmt.Errorf("managed Beads was initialized at %q, but saving the repo registry failed; remove that directory before retrying if you do not want to keep it: %w", managedDir, err)
-				}
-				return err
-			}
-			logger.DebugContext(
-				command.Context(),
-				"saved repo registration",
-				slog.String("repo_id", repo.ID),
-				slog.String("beads_mode", repo.BeadsMode),
-				slog.String("beads_prefix", repo.BeadsPrefix),
-			)
-
-			_, err = fmt.Fprintf(
-				command.OutOrStdout(),
-				"Added repo %s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				repo.ID,
-				repo.Name,
-				repo.Path,
-				repo.Remote,
-				repo.DefaultBranch,
-				repo.BeadsMode,
-				repo.BeadsPrefix,
-			)
-			return err
+			return runRepoAdd(command, opts, args[0])
 		},
 	}
 	return cmd
+}
+
+func runRepoAdd(command *cobra.Command, opts *rootOptions, inputPath string) error {
+	logger := opts.log().With(
+		slog.String("component", "cli"),
+		slog.String("operation", "repo_add"),
+	)
+	logger.DebugContext(command.Context(), "starting repo registration", slog.String("input_path", inputPath))
+
+	store, err := newRegistryStoreFromEnvironment()
+	if err != nil {
+		return err
+	}
+	logger.DebugContext(command.Context(), "resolved registry store")
+
+	gitInspection, err := gitmeta.Inspect(inputPath)
+	if err != nil {
+		return err
+	}
+	logger.DebugContext(
+		command.Context(),
+		"inspected git repository",
+		slog.String("repo_root", gitInspection.Root),
+		slog.Bool("remote_detected", gitInspection.RemoteCandidate != ""),
+		slog.String("remote_candidate_name", gitInspection.RemoteCandidateName),
+		slog.String("default_branch_candidate", gitInspection.DefaultBranchCandidate),
+		slog.String("default_branch_source", string(gitInspection.DefaultBranchSource)),
+	)
+
+	repo, err := registry.NewRepoFromPath(gitInspection.Root)
+	if err != nil {
+		return err
+	}
+	logger.DebugContext(command.Context(), "derived repo identity", slog.String("repo_id", repo.ID), slog.String("repo_name", repo.Name))
+
+	if err := configureRepoGitValues(command, &repo, gitInspection, logger); err != nil {
+		return err
+	}
+	managed, err := configureRepoBeads(command, &repo, gitInspection.Root, logger)
+	if err != nil {
+		return err
+	}
+
+	registryCtx, err := loadRegistryContextFromStore(store)
+	if err != nil {
+		return err
+	}
+	reg := registryCtx.Registry
+	if err := reg.Add(repo); err != nil {
+		return err
+	}
+	logger.DebugContext(command.Context(), "validated registry update", slog.Int("repo_count", len(reg.Repos)))
+
+	managedDir, err := initializeManagedRepoBeads(command, registryCtx, repo, managed, logger)
+	if err != nil {
+		return err
+	}
+	if err := saveRepoRegistration(registryCtx, reg, managed, managedDir); err != nil {
+		return err
+	}
+	logger.DebugContext(
+		command.Context(),
+		"saved repo registration",
+		slog.String("repo_id", repo.ID),
+		slog.String("beads_mode", repo.BeadsMode),
+		slog.String("beads_prefix", repo.BeadsPrefix),
+	)
+
+	_, err = fmt.Fprintf(
+		command.OutOrStdout(),
+		"Added repo %s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		repo.ID,
+		repo.Name,
+		repo.Path,
+		repo.Remote,
+		repo.DefaultBranch,
+		repo.BeadsMode,
+		repo.BeadsPrefix,
+	)
+	return err
+}
+
+func configureRepoGitValues(
+	command *cobra.Command,
+	repo *registry.Repo,
+	inspection gitmeta.Inspection,
+	logger *slog.Logger,
+) error {
+	remote, defaultBranch, err := confirmGitValues(command, inspection)
+	if err != nil {
+		return err
+	}
+	repo.Remote = remote
+	repo.DefaultBranch = defaultBranch
+	logger.DebugContext(
+		command.Context(),
+		"confirmed git values",
+		slog.Bool("remote_set", repo.Remote != ""),
+		slog.String("default_branch", repo.DefaultBranch),
+	)
+	return nil
+}
+
+func configureRepoBeads(command *cobra.Command, repo *registry.Repo, repoRoot string, logger *slog.Logger) (bool, error) {
+	beadsInspection, err := inspectLocalBeads(repoRoot)
+	if err == nil {
+		repo.BeadsMode = registry.BeadsModeLocal
+		repo.BeadsPrefix = beadsInspection.Prefix
+		logger.DebugContext(
+			command.Context(),
+			"detected repo-local Beads mode",
+			slog.String("beads_dir", beadsInspection.BeadsDir),
+			slog.String("beads_prefix", repo.BeadsPrefix),
+		)
+		return false, nil
+	}
+	if !errors.Is(err, beads.ErrNoLocal) {
+		return false, err
+	}
+
+	prefix, err := confirmManagedBeadsPrefix(command, repo.ID)
+	if err != nil {
+		return false, err
+	}
+	repo.BeadsMode = registry.BeadsModeManaged
+	repo.BeadsPrefix = prefix
+	logger.DebugContext(
+		command.Context(),
+		"selected managed Beads mode",
+		slog.String("beads_prefix", repo.BeadsPrefix),
+	)
+	return true, nil
+}
+
+func initializeManagedRepoBeads(
+	command *cobra.Command,
+	registryCtx registryContext,
+	repo registry.Repo,
+	managed bool,
+	logger *slog.Logger,
+) (string, error) {
+	if !managed {
+		return "", nil
+	}
+
+	managedDir, err := registryCtx.Store.ManagedBeadsDir(repo.ID)
+	if err != nil {
+		return "", err
+	}
+	logger.DebugContext(command.Context(), "initializing managed Beads", slog.String("beads_dir", managedDir))
+	if err := initializeManagedBeads(managedDir, repo.BeadsPrefix); err != nil {
+		return "", err
+	}
+	return managedDir, nil
+}
+
+func saveRepoRegistration(registryCtx registryContext, reg registry.Registry, managed bool, managedDir string) error {
+	if err := registryCtx.Store.Save(reg); err != nil {
+		if managed {
+			return fmt.Errorf("managed Beads was initialized at %q, but saving the repo registry failed; remove that directory before retrying if you do not want to keep it: %w", managedDir, err)
+		}
+		return err
+	}
+	return nil
 }
 
 func newRepoListCommand(opts *rootOptions) *cobra.Command {
@@ -352,15 +394,7 @@ func (w repoAddWizard) presentInspection(inspection gitmeta.Inspection) error {
 	if _, err := fmt.Fprintf(w.output, "  repository path: %s\n", inspection.Root); err != nil {
 		return err
 	}
-	if inspection.RemoteErr != nil {
-		if errors.Is(inspection.RemoteErr, gitmeta.ErrNoRemote) {
-			if _, err := fmt.Fprintln(w.output, "  git remote: not detected"); err != nil {
-				return err
-			}
-		} else if _, err := fmt.Fprintf(w.output, "  git remote: not detected (%v)\n", inspection.RemoteErr); err != nil {
-			return err
-		}
-	} else if _, err := fmt.Fprintf(w.output, "  git remote: %s (%s)\n", inspection.RemoteCandidate, inspection.RemoteCandidateName); err != nil {
+	if err := w.presentRemoteInspection(inspection); err != nil {
 		return err
 	}
 
@@ -378,17 +412,22 @@ func (w repoAddWizard) presentInspection(inspection gitmeta.Inspection) error {
 	return err
 }
 
+func (w repoAddWizard) presentRemoteInspection(inspection gitmeta.Inspection) error {
+	if inspection.RemoteErr == nil {
+		_, err := fmt.Fprintf(w.output, "  git remote: %s (%s)\n", inspection.RemoteCandidate, inspection.RemoteCandidateName)
+		return err
+	}
+	if errors.Is(inspection.RemoteErr, gitmeta.ErrNoRemote) {
+		_, err := fmt.Fprintln(w.output, "  git remote: not detected")
+		return err
+	}
+	_, err := fmt.Fprintf(w.output, "  git remote: not detected (%v)\n", inspection.RemoteErr)
+	return err
+}
+
 func (w repoAddWizard) promptValue(label string, defaultValue string, required bool) (string, error) {
 	defaultValue = strings.TrimSpace(defaultValue)
-	if defaultValue == "" {
-		if required {
-			if _, err := fmt.Fprintf(w.output, "%s: ", label); err != nil {
-				return "", err
-			}
-		} else if _, err := fmt.Fprintf(w.output, "%s (optional): ", label); err != nil {
-			return "", err
-		}
-	} else if _, err := fmt.Fprintf(w.output, "%s [%s]: ", label, defaultValue); err != nil {
+	if err := w.promptLabel(label, defaultValue, required); err != nil {
 		return "", err
 	}
 
@@ -405,6 +444,19 @@ func (w repoAddWizard) promptValue(label string, defaultValue string, required b
 		return "", fmt.Errorf("%s is required", strings.ToLower(label))
 	}
 	return value, nil
+}
+
+func (w repoAddWizard) promptLabel(label string, defaultValue string, required bool) error {
+	if defaultValue != "" {
+		_, err := fmt.Fprintf(w.output, "%s [%s]: ", label, defaultValue)
+		return err
+	}
+	if required {
+		_, err := fmt.Fprintf(w.output, "%s: ", label)
+		return err
+	}
+	_, err := fmt.Fprintf(w.output, "%s (optional): ", label)
+	return err
 }
 
 func readerIsTerminal(reader io.Reader) bool {

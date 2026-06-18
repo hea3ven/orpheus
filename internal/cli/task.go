@@ -662,98 +662,143 @@ func startTaskRunAttempt(
 ) (taskRunStartResult, error) {
 	var result taskRunStartResult
 	err := state.WithGlobalMutationLock(paths, taskRunSetupLockOperation, func() error {
-		if opts.backend == nil {
-			return errors.New("task dispatch backend is required")
-		}
-
-		taskItem, err := queryTaskFromBackend(command.Context(), "task run", opts.resolved, opts.backend)
+		started, err := startTaskRunAttemptLocked(command, paths, taskStateStore, opts)
 		if err != nil {
 			return err
 		}
-
-		if active, ok, err := taskStateStore.ActiveRun(opts.repo.ID, opts.resolved.TaskID); err != nil {
-			return fmt.Errorf("inspect task state: %w", err)
-		} else if ok {
-			return activeTaskRunError(taskStateStore, opts.repo.ID, opts.resolved.TaskID, active)
-		}
-
-		expected, err := expectedTaskRunSetup(paths, opts)
-		if err != nil {
-			return err
-		}
-		if err := ensureTaskRunEligible(taskItem, expected, opts.repo, opts.mainMode); err != nil {
-			return err
-		}
-		if opts.mainMode {
-			if err := ensureRepoRootRunAvailable(command.Context(), opts.backend, opts.repo, opts.resolved.TaskID, expected); err != nil {
-				return err
-			}
-		}
-
-		executionDir := expected.WorktreePath
-		prompt := agent.RenderBootstrapPrompt()
-		agentConfig, err := agent.LoadConfig(paths)
-		if err != nil {
-			return err
-		}
-		commandSnapshot, err := agentConfig.ResolveCommand(opts.agentName, prompt)
-		if err != nil {
-			return fmt.Errorf("resolve agent profile: %w", err)
-		}
-
-		setup, err := setupTaskRunTarget(command.Context(), paths, opts)
-		if err != nil {
-			return err
-		}
-
-		if err := opts.backend.MarkInProgress(command.Context(), opts.resolved.TaskID, setup.Branch, setup.WorktreePath); err != nil {
-			return fmt.Errorf("mark task in progress: %w", err)
-		}
-
-		worktreeEvent, err := taskRunWorktreeEvent(setup.Lifecycle)
-		if err != nil {
-			return err
-		}
-		if _, err := taskStateStore.RecordWorktreeEvent(
-			opts.repo.ID,
-			opts.resolved.TaskID,
-			worktreeEvent,
-			taskstate.WorktreeEventOptions{
-				Branch:   setup.Branch,
-				Worktree: setup.WorktreePath,
-			},
-		); err != nil {
-			return fmt.Errorf("record worktree event: %w", err)
-		}
-
-		attempt, err := taskStateStore.StartRun(opts.repo.ID, opts.resolved.TaskID, taskstate.StartRunOptions{
-			Agent:    commandSnapshot.AgentName,
-			Command:  commandSnapshot.Command,
-			Args:     commandSnapshot.Args,
-			Branch:   setup.Branch,
-			Worktree: setup.WorktreePath,
-		})
-		if err != nil {
-			if errors.Is(err, taskstate.ErrActiveRun) {
-				return fmt.Errorf("%w; M3 cannot reconcile stale attached runs automatically", err)
-			}
-			return fmt.Errorf("record run start: %w", err)
-		}
-
-		result = taskRunStartResult{
-			setup:        setup,
-			command:      commandSnapshot,
-			attempt:      attempt,
-			task:         taskItem,
-			executionDir: executionDir,
-			prompt:       prompt,
-		}
+		result = started
 		return nil
 	})
 	if err != nil {
 		return taskRunStartResult{}, err
 	}
 	return result, nil
+}
+
+func startTaskRunAttemptLocked(
+	command *cobra.Command,
+	paths state.Paths,
+	taskStateStore taskstate.Service,
+	opts taskRunStartOptions,
+) (taskRunStartResult, error) {
+	taskItem, expected, err := validateTaskRunAttempt(command, paths, taskStateStore, opts)
+	if err != nil {
+		return taskRunStartResult{}, err
+	}
+
+	prompt, commandSnapshot, err := resolveTaskRunAgentCommand(paths, opts.agentName)
+	if err != nil {
+		return taskRunStartResult{}, err
+	}
+
+	setup, err := setupTaskRunTarget(command.Context(), paths, opts)
+	if err != nil {
+		return taskRunStartResult{}, err
+	}
+	if err := opts.backend.MarkInProgress(command.Context(), opts.resolved.TaskID, setup.Branch, setup.WorktreePath); err != nil {
+		return taskRunStartResult{}, fmt.Errorf("mark task in progress: %w", err)
+	}
+
+	attempt, err := recordTaskRunStart(taskStateStore, opts, setup, commandSnapshot)
+	if err != nil {
+		return taskRunStartResult{}, err
+	}
+
+	return taskRunStartResult{
+		setup:        setup,
+		command:      commandSnapshot,
+		attempt:      attempt,
+		task:         taskItem,
+		executionDir: expected.WorktreePath,
+		prompt:       prompt,
+	}, nil
+}
+
+func validateTaskRunAttempt(
+	command *cobra.Command,
+	paths state.Paths,
+	taskStateStore taskstate.Service,
+	opts taskRunStartOptions,
+) (taskmodel.Task, gitmeta.TaskWorktreeSetupResult, error) {
+	if opts.backend == nil {
+		return taskmodel.Task{}, gitmeta.TaskWorktreeSetupResult{}, errors.New("task dispatch backend is required")
+	}
+
+	taskItem, err := queryTaskFromBackend(command.Context(), "task run", opts.resolved, opts.backend)
+	if err != nil {
+		return taskmodel.Task{}, gitmeta.TaskWorktreeSetupResult{}, err
+	}
+
+	if active, ok, err := taskStateStore.ActiveRun(opts.repo.ID, opts.resolved.TaskID); err != nil {
+		return taskmodel.Task{}, gitmeta.TaskWorktreeSetupResult{}, fmt.Errorf("inspect task state: %w", err)
+	} else if ok {
+		return taskmodel.Task{}, gitmeta.TaskWorktreeSetupResult{}, activeTaskRunError(taskStateStore, opts.repo.ID, opts.resolved.TaskID, active)
+	}
+
+	expected, err := expectedTaskRunSetup(paths, opts)
+	if err != nil {
+		return taskmodel.Task{}, gitmeta.TaskWorktreeSetupResult{}, err
+	}
+	if err := ensureTaskRunEligible(taskItem, expected, opts.repo, opts.mainMode); err != nil {
+		return taskmodel.Task{}, gitmeta.TaskWorktreeSetupResult{}, err
+	}
+	if opts.mainMode {
+		if err := ensureRepoRootRunAvailable(command.Context(), opts.backend, opts.repo, opts.resolved.TaskID, expected); err != nil {
+			return taskmodel.Task{}, gitmeta.TaskWorktreeSetupResult{}, err
+		}
+	}
+	return taskItem, expected, nil
+}
+
+func resolveTaskRunAgentCommand(paths state.Paths, agentName string) (string, agent.CommandSnapshot, error) {
+	prompt := agent.RenderBootstrapPrompt()
+	agentConfig, err := agent.LoadConfig(paths)
+	if err != nil {
+		return "", agent.CommandSnapshot{}, err
+	}
+	commandSnapshot, err := agentConfig.ResolveCommand(agentName, prompt)
+	if err != nil {
+		return "", agent.CommandSnapshot{}, fmt.Errorf("resolve agent profile: %w", err)
+	}
+	return prompt, commandSnapshot, nil
+}
+
+func recordTaskRunStart(
+	taskStateStore taskstate.Service,
+	opts taskRunStartOptions,
+	setup gitmeta.TaskWorktreeSetupResult,
+	commandSnapshot agent.CommandSnapshot,
+) (taskstate.RunAttempt, error) {
+	worktreeEvent, err := taskRunWorktreeEvent(setup.Lifecycle)
+	if err != nil {
+		return taskstate.RunAttempt{}, err
+	}
+	if _, err := taskStateStore.RecordWorktreeEvent(
+		opts.repo.ID,
+		opts.resolved.TaskID,
+		worktreeEvent,
+		taskstate.WorktreeEventOptions{
+			Branch:   setup.Branch,
+			Worktree: setup.WorktreePath,
+		},
+	); err != nil {
+		return taskstate.RunAttempt{}, fmt.Errorf("record worktree event: %w", err)
+	}
+
+	attempt, err := taskStateStore.StartRun(opts.repo.ID, opts.resolved.TaskID, taskstate.StartRunOptions{
+		Agent:    commandSnapshot.AgentName,
+		Command:  commandSnapshot.Command,
+		Args:     commandSnapshot.Args,
+		Branch:   setup.Branch,
+		Worktree: setup.WorktreePath,
+	})
+	if err != nil {
+		if errors.Is(err, taskstate.ErrActiveRun) {
+			return taskstate.RunAttempt{}, fmt.Errorf("%w; M3 cannot reconcile stale attached runs automatically", err)
+		}
+		return taskstate.RunAttempt{}, fmt.Errorf("record run start: %w", err)
+	}
+	return attempt, nil
 }
 
 func expectedTaskRunSetup(paths state.Paths, opts taskRunStartOptions) (gitmeta.TaskWorktreeSetupResult, error) {
