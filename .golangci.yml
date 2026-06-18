@@ -9,6 +9,7 @@ linters:
   enable:
     - dupl
     - errorlint
+    - funlen
     - gocognit
     - gocritic
     - misspell
@@ -23,6 +24,12 @@ linters:
     - unconvert
 
   settings:
+    funlen:
+      # Keep functions compact by default. Intentionally long workflow tests
+      # must use targeted //nolint:funlen comments with a justification.
+      lines: 60
+      statements: 40
+      ignore-comments: true
     revive:
       # Use an explicit low-noise rule list instead of revive defaults. The
       # defaults currently include broad documentation and unused-parameter
