@@ -247,16 +247,8 @@ func TestCompletionServiceRepeatedWorktreeCompletionWithDifferentPayloadIsNoop(t
 	is.True(completed.Repeated)
 	is.Equal(0, gitState.staged)
 	is.Equal(0, gitState.committed)
-	must.NotNil(completed.Run.Completion)
-	is.Equal(first.Completion.Summary, completed.Run.Completion.Summary)
-	is.Equal(first.Completion.Description, completed.Run.Completion.Description)
-	is.Equal(first.Completion.DetailedDescription, completed.Run.Completion.DetailedDescription)
-	is.Equal(first.Completion.Commit, completed.Run.Completion.Commit)
-	must.NotNil(completed.RepeatedDiagnostic)
-	is.Equal(taskstate.EventCompletionRepeated, completed.RepeatedDiagnostic.Type)
-	is.Equal("Second summary", completed.RepeatedDiagnostic.RequestedSummary)
-	is.Equal("Second details.", completed.RepeatedDiagnostic.RequestedDescription)
-	is.Equal("Detailed PR body.", completed.RepeatedDiagnostic.RequestedDetailedDescription)
+	assertCompletionMatchesFirst(t, completed, first)
+	assertRepeatedDiagnostic(t, completed)
 
 	latest, ok, loadErr := fixture.store.LatestRun("alpha", "op-1")
 	must.NoError(loadErr)
@@ -269,6 +261,34 @@ func TestCompletionServiceRepeatedWorktreeCompletionWithDifferentPayloadIsNoop(t
 	events, eventsErr := fixture.store.Events("alpha", "op-1")
 	must.NoError(eventsErr)
 	is.Equal(taskstate.EventCompletionRepeated, events[len(events)-1].Type)
+}
+
+func assertCompletionMatchesFirst(
+	t *testing.T,
+	completed agent.CompleteResult,
+	first taskstate.RunAttempt,
+) {
+	t.Helper()
+	is := assert.New(t)
+	must := require.New(t)
+
+	must.NotNil(completed.Run.Completion)
+	is.Equal(first.Completion.Summary, completed.Run.Completion.Summary)
+	is.Equal(first.Completion.Description, completed.Run.Completion.Description)
+	is.Equal(first.Completion.DetailedDescription, completed.Run.Completion.DetailedDescription)
+	is.Equal(first.Completion.Commit, completed.Run.Completion.Commit)
+}
+
+func assertRepeatedDiagnostic(t *testing.T, completed agent.CompleteResult) {
+	t.Helper()
+	is := assert.New(t)
+	must := require.New(t)
+
+	must.NotNil(completed.RepeatedDiagnostic)
+	is.Equal(taskstate.EventCompletionRepeated, completed.RepeatedDiagnostic.Type)
+	is.Equal("Second summary", completed.RepeatedDiagnostic.RequestedSummary)
+	is.Equal("Second details.", completed.RepeatedDiagnostic.RequestedDescription)
+	is.Equal("Detailed PR body.", completed.RepeatedDiagnostic.RequestedDetailedDescription)
 }
 
 func TestCompletionServiceRequiresChangesBeforeWriting(t *testing.T) {

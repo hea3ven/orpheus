@@ -9,36 +9,51 @@ import (
 func RenderActiveContext(ctx ActiveContext) string {
 	var builder strings.Builder
 
+	appendContextHeader(&builder, ctx)
+	appendRepositoryContext(&builder, ctx.Repository)
+	appendExecutionTargetContext(&builder, ctx)
+	appendExecutionContract(&builder, ctx)
+
+	return builder.String()
+}
+
+func appendContextHeader(builder *strings.Builder, ctx ActiveContext) {
 	builder.WriteString("# Orpheus Agent Context\n\n")
 
 	builder.WriteString("Task:\n")
-	appendPromptLine(&builder, "- ID", ctx.Task.ID)
-	appendPromptLine(&builder, "- Title", ctx.Task.Title)
-	appendPromptBlock(&builder, "- Description", ctx.Task.Description)
-	appendPromptBlock(&builder, "- Acceptance criteria", ctx.Task.AcceptanceCriteria)
+	appendPromptLine(builder, "- ID", ctx.Task.ID)
+	appendPromptLine(builder, "- Title", ctx.Task.Title)
+	appendPromptBlock(builder, "- Description", ctx.Task.Description)
+	appendPromptBlock(builder, "- Acceptance criteria", ctx.Task.AcceptanceCriteria)
+}
 
+func appendRepositoryContext(builder *strings.Builder, repo ContextRepository) {
 	builder.WriteString("\nRepository:\n")
-	appendPromptLine(&builder, "- ID", ctx.Repository.ID)
-	appendPromptLine(&builder, "- Name", ctx.Repository.Name)
-	appendPromptLine(&builder, "- Registered root", ctx.Repository.Root)
-	appendPromptLine(&builder, "- Registered default branch", ctx.Repository.DefaultBranch)
+	appendPromptLine(builder, "- ID", repo.ID)
+	appendPromptLine(builder, "- Name", repo.Name)
+	appendPromptLine(builder, "- Registered root", repo.Root)
+	appendPromptLine(builder, "- Registered default branch", repo.DefaultBranch)
+}
 
+func appendExecutionTargetContext(builder *strings.Builder, ctx ActiveContext) {
 	builder.WriteString("\nExecution target:\n")
-	appendPromptLine(&builder, "- Workflow", ctx.Target.Kind.DisplayName())
-	appendPromptLine(&builder, "- Branch", ctx.Target.Branch)
-	appendPromptLine(&builder, "- Path", ctx.Target.Path)
-	appendPromptLine(&builder, "- Current directory", ctx.Target.CurrentDirectory)
-	appendPromptLine(&builder, "- Run attempt", fmt.Sprintf("%d", ctx.Run.Attempt))
+	appendPromptLine(builder, "- Workflow", ctx.Target.Kind.DisplayName())
+	appendPromptLine(builder, "- Branch", ctx.Target.Branch)
+	appendPromptLine(builder, "- Path", ctx.Target.Path)
+	appendPromptLine(builder, "- Current directory", ctx.Target.CurrentDirectory)
+	appendPromptLine(builder, "- Run attempt", fmt.Sprintf("%d", ctx.Run.Attempt))
 	if strings.TrimSpace(ctx.Run.Agent) != "" {
-		appendPromptLine(&builder, "- Agent", ctx.Run.Agent)
+		appendPromptLine(builder, "- Agent", ctx.Run.Agent)
 	}
+}
 
+func appendExecutionContract(builder *strings.Builder, ctx ActiveContext) {
 	builder.WriteString("\nExecution contract:\n")
 	switch ctx.Target.Kind {
 	case ExecutionTargetWorktree:
 		builder.WriteString("- You are running in the deterministic task worktree and task branch.\n")
 		builder.WriteString("- Keep implementation work inside the execution target path.\n")
-		appendAgentDoneContract(&builder)
+		appendAgentDoneContract(builder)
 		builder.WriteString("- After `orpheus agent done`, Orpheus will record local-review-ready completion data.\n")
 		builder.WriteString("- The human operator will later run `orpheus task done ")
 		builder.WriteString(ctx.Task.ID)
@@ -46,7 +61,7 @@ func RenderActiveContext(ctx ActiveContext) string {
 	case ExecutionTargetMain:
 		builder.WriteString("- You are running in the registered repository root on the registered default branch.\n")
 		builder.WriteString("- Keep implementation work inside the execution target path.\n")
-		appendAgentDoneContract(&builder)
+		appendAgentDoneContract(builder)
 		builder.WriteString("- After `orpheus agent done`, Orpheus will record local-review-ready completion data.\n")
 		builder.WriteString("- The human operator will later run `orpheus task done ")
 		builder.WriteString(ctx.Task.ID)
@@ -54,8 +69,6 @@ func RenderActiveContext(ctx ActiveContext) string {
 	default:
 		builder.WriteString("- The execution target is unknown; stop and ask the human operator for help.\n")
 	}
-
-	return builder.String()
 }
 
 func appendAgentDoneContract(builder *strings.Builder) {
