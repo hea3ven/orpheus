@@ -172,6 +172,14 @@ type CompleteRunOptions struct {
 	CommitError         string
 }
 
+type completeRunPayload struct {
+	summary             string
+	description         string
+	detailedDescription string
+	commit              string
+	commitError         string
+}
+
 // RepeatedCompletionOptions describes an ignored repeated agent completion payload.
 type RepeatedCompletionOptions struct {
 	Summary             string
@@ -311,20 +319,10 @@ func (s Store) FinishRun(repoID, taskID string, attempt int, status RunStatus) (
 
 // CompleteRun records agent-authored completion facts without finishing the attached run.
 func (s Store) CompleteRun(repoID, taskID string, attempt int, opts CompleteRunOptions) (RunAttempt, error) {
-	summary := strings.TrimSpace(opts.Summary)
-	if summary == "" {
-		return RunAttempt{}, fmt.Errorf("complete run attempt for task %s/%s: summary is required", repoID, taskID)
+	payload, err := completeRunPayloadFromOptions(repoID, taskID, opts)
+	if err != nil {
+		return RunAttempt{}, err
 	}
-	description := strings.TrimSpace(opts.Description)
-	if description == "" {
-		return RunAttempt{}, fmt.Errorf("complete run attempt for task %s/%s: description is required", repoID, taskID)
-	}
-	detailedDescription := opts.DetailedDescription
-	if strings.TrimSpace(detailedDescription) == "" {
-		return RunAttempt{}, fmt.Errorf("complete run attempt for task %s/%s: detailed_description is required", repoID, taskID)
-	}
-	commit := strings.TrimSpace(opts.Commit)
-	commitError := strings.TrimSpace(opts.CommitError)
 
 	state, err := s.Load(repoID, taskID)
 	if err != nil {
@@ -344,47 +342,7 @@ func (s Store) CompleteRun(repoID, taskID string, attempt int, opts CompleteRunO
 
 	run := state.Runs[index]
 	if run.Completion != nil {
-		completion := *run.Completion
-		if completion.Summary != summary ||
-			completion.Description != description ||
-			completion.DetailedDescription != detailedDescription {
-			return RunAttempt{}, fmt.Errorf(
-				"complete run attempt for task %s/%s: %w",
-				repoID,
-				taskID,
-				ErrCompletionConflict,
-			)
-		}
-		if commit != "" {
-			if strings.TrimSpace(completion.Commit) != "" && completion.Commit != commit {
-				return RunAttempt{}, fmt.Errorf(
-					"complete run attempt for task %s/%s: %w",
-					repoID,
-					taskID,
-					ErrCompletionConflict,
-				)
-			}
-			completion.Commit = commit
-		}
-		if commitError != "" {
-			if strings.TrimSpace(completion.CommitError) != "" && completion.CommitError != commitError {
-				return RunAttempt{}, fmt.Errorf(
-					"complete run attempt for task %s/%s: %w",
-					repoID,
-					taskID,
-					ErrCompletionConflict,
-				)
-			}
-			completion.CommitError = commitError
-		}
-		if commit == "" && commitError == "" {
-			return run, nil
-		}
-		state.Runs[index].Completion = &completion
-		if err := s.save(state); err != nil {
-			return RunAttempt{}, err
-		}
-		return state.Runs[index], nil
+		return s.completeExistingRun(state, index, repoID, taskID, payload)
 	}
 
 	if run.Status != RunStatusRunning {
@@ -401,18 +359,92 @@ func (s Store) CompleteRun(repoID, taskID string, attempt int, opts CompleteRunO
 	now := s.nowUTC()
 	completedAt := now
 	state.Runs[index].Completion = &Completion{
-		Summary:             summary,
-		Description:         description,
-		DetailedDescription: detailedDescription,
+		Summary:             payload.summary,
+		Description:         payload.description,
+		DetailedDescription: payload.detailedDescription,
 		CompletedAt:         completedAt,
-		Commit:              commit,
-		CommitError:         commitError,
+		Commit:              payload.commit,
+		CommitError:         payload.commitError,
 	}
 
 	if err := s.save(state); err != nil {
 		return RunAttempt{}, err
 	}
 	return state.Runs[index], nil
+}
+
+func completeRunPayloadFromOptions(repoID, taskID string, opts CompleteRunOptions) (completeRunPayload, error) {
+	summary := strings.TrimSpace(opts.Summary)
+	if summary == "" {
+		return completeRunPayload{}, fmt.Errorf("complete run attempt for task %s/%s: summary is required", repoID, taskID)
+	}
+	description := strings.TrimSpace(opts.Description)
+	if description == "" {
+		return completeRunPayload{}, fmt.Errorf("complete run attempt for task %s/%s: description is required", repoID, taskID)
+	}
+	if strings.TrimSpace(opts.DetailedDescription) == "" {
+		return completeRunPayload{}, fmt.Errorf("complete run attempt for task %s/%s: detailed_description is required", repoID, taskID)
+	}
+	return completeRunPayload{
+		summary:             summary,
+		description:         description,
+		detailedDescription: opts.DetailedDescription,
+		commit:              strings.TrimSpace(opts.Commit),
+		commitError:         strings.TrimSpace(opts.CommitError),
+	}, nil
+}
+
+func (s Store) completeExistingRun(
+	state TaskState,
+	index int,
+	repoID string,
+	taskID string,
+	payload completeRunPayload,
+) (RunAttempt, error) {
+	run := state.Runs[index]
+	completion, changed, err := mergeCompletionPayload(*run.Completion, payload)
+	if err != nil {
+		return RunAttempt{}, fmt.Errorf("complete run attempt for task %s/%s: %w", repoID, taskID, err)
+	}
+	if !changed {
+		return run, nil
+	}
+
+	state.Runs[index].Completion = &completion
+	if err := s.save(state); err != nil {
+		return RunAttempt{}, err
+	}
+	return state.Runs[index], nil
+}
+
+func mergeCompletionPayload(completion Completion, payload completeRunPayload) (Completion, bool, error) {
+	if completion.Summary != payload.summary ||
+		completion.Description != payload.description ||
+		completion.DetailedDescription != payload.detailedDescription {
+		return Completion{}, false, ErrCompletionConflict
+	}
+
+	changed, err := mergeCompletionOptionalFact(&completion.Commit, payload.commit)
+	if err != nil {
+		return Completion{}, false, err
+	}
+	commitErrorChanged, err := mergeCompletionOptionalFact(&completion.CommitError, payload.commitError)
+	if err != nil {
+		return Completion{}, false, err
+	}
+	return completion, changed || commitErrorChanged, nil
+}
+
+func mergeCompletionOptionalFact(existing *string, requested string) (bool, error) {
+	if requested == "" {
+		return false, nil
+	}
+	if strings.TrimSpace(*existing) != "" && *existing != requested {
+		return false, ErrCompletionConflict
+	}
+	changed := *existing != requested
+	*existing = requested
+	return changed, nil
 }
 
 // RecordRepeatedCompletion records a local diagnostic for an ignored repeated agent completion.

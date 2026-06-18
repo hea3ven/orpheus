@@ -24,6 +24,23 @@ type fakeBDTaskResponse struct {
 	exitCode int
 }
 
+func registerLocalTaskTestRepo(t *testing.T, id string, name string, prefix string) string {
+	t.Helper()
+
+	must := require.New(t)
+	store := registry.NewStore(currentTestPaths(t))
+	repoDir := filepath.Join(t.TempDir(), id)
+	must.NoError(os.MkdirAll(repoDir, 0o755))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:          id,
+		Name:        name,
+		Path:        repoDir,
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: prefix,
+	}}}))
+	return repoDir
+}
+
 func TestTaskListListsActiveTasksAcrossRegisteredReposWithDefaultAndDetailedTables(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -386,18 +403,7 @@ func TestTaskShowReportsMalformedAndUnknownPrefixes(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
-	paths := currentTestPaths(t)
-	store := registry.NewStore(paths)
-
-	repoDir := filepath.Join(t.TempDir(), "alpha")
-	must.NoError(os.MkdirAll(repoDir, 0o755))
-	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
-		ID:          "alpha",
-		Name:        "Alpha",
-		Path:        repoDir,
-		BeadsMode:   registry.BeadsModeLocal,
-		BeadsPrefix: "op",
-	}}}))
+	registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
 
 	stdout, stderr, err := executeCommandWithError(t, []string{"task", "show", "notprefixed"})
 	must.Error(err)
@@ -578,18 +584,7 @@ func TestTaskDirReportsMalformedAndUnknownPrefixes(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
-	paths := currentTestPaths(t)
-	store := registry.NewStore(paths)
-
-	repoDir := filepath.Join(t.TempDir(), "alpha")
-	must.NoError(os.MkdirAll(repoDir, 0o755))
-	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
-		ID:          "alpha",
-		Name:        "Alpha",
-		Path:        repoDir,
-		BeadsMode:   registry.BeadsModeLocal,
-		BeadsPrefix: "op",
-	}}}))
+	registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
 
 	stdout, stderr, err := executeCommandWithError(t, []string{"task", "dir", "notprefixed"})
 	must.Error(err)
