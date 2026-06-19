@@ -89,6 +89,19 @@ func ExpectedRepoRoot(opts RepoRootOptions) (TaskWorktreeSetupResult, error) {
 	}, nil
 }
 
+// ExpectedRepoRootTaskBranch returns the repo-root/task-branch target without mutating Git.
+func ExpectedRepoRootTaskBranch(opts TaskWorktreeOptions) (TaskWorktreeSetupResult, error) {
+	plan, err := newTaskWorktreePlan(opts)
+	if err != nil {
+		return TaskWorktreeSetupResult{}, err
+	}
+	return TaskWorktreeSetupResult{
+		Branch:       plan.Branch,
+		WorktreePath: plan.RepoPath,
+		Lifecycle:    TaskWorktreeLifecycleReused,
+	}, nil
+}
+
 // SetupTaskWorktree prepares or reuses the deterministic branch and worktree for a task.
 //
 // The setup is intentionally conservative: it creates the expected branch only when it
@@ -175,6 +188,44 @@ func SetupRepoRoot(ctx context.Context, opts RepoRootOptions) (TaskWorktreeSetup
 	}
 	if err := syncCleanRepoRootWithOrigin(ctx, repoRoot, plan.DefaultBranch); err != nil {
 		return TaskWorktreeSetupResult{}, fmt.Errorf("prepare repo-root task run: %w", err)
+	}
+
+	return result, nil
+}
+
+// SetupRepoRootTaskBranch prepares the registered repo root on the deterministic task branch.
+//
+// It refuses to mutate the checkout until the repo root is clean, creates the
+// task branch from origin/default when needed, and switches the registered repo
+// root onto that branch. No deterministic task worktree is created for this mode.
+func SetupRepoRootTaskBranch(ctx context.Context, opts TaskWorktreeOptions) (TaskWorktreeSetupResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	plan, err := newTaskWorktreePlan(opts)
+	if err != nil {
+		return TaskWorktreeSetupResult{}, err
+	}
+	result := TaskWorktreeSetupResult{
+		Branch:       plan.Branch,
+		WorktreePath: plan.RepoPath,
+		Lifecycle:    TaskWorktreeLifecycleReused,
+	}
+
+	repoRoot, err := validateRepoRootTaskBranchRun(ctx, plan)
+	if err != nil {
+		return TaskWorktreeSetupResult{}, err
+	}
+	remoteRef, err := prepareDefaultBranchRef(ctx, repoRoot, plan.DefaultBranch)
+	if err != nil {
+		return TaskWorktreeSetupResult{}, fmt.Errorf("prepare repo-root task branch run %s: %w", plan.TaskID, err)
+	}
+	if err := ensureRepoRootOnTaskBranch(ctx, repoRoot, plan.Branch, remoteRef); err != nil {
+		return TaskWorktreeSetupResult{}, fmt.Errorf("prepare repo-root task branch run %s: %w", plan.TaskID, err)
+	}
+	if err := requireCleanRepoRootFor(ctx, repoRoot, "with --repo-root"); err != nil {
+		return TaskWorktreeSetupResult{}, fmt.Errorf("prepare repo-root task branch run %s: %w", plan.TaskID, err)
 	}
 
 	return result, nil
@@ -315,6 +366,56 @@ func validateRepoRootRun(ctx context.Context, plan repoRootPlan) (string, error)
 	return repoRoot, nil
 }
 
+func validateRepoRootTaskBranchRun(ctx context.Context, plan taskWorktreePlan) (string, error) {
+	repoRoot, err := worktreeRoot(ctx, plan.RepoPath)
+	if err != nil {
+		return "", fmt.Errorf(
+			"prepare repo-root task branch run %s for repo %s (%s): inspect registered repo root %q: %w",
+			plan.TaskID,
+			plan.RepoID,
+			plan.RepoName,
+			plan.RepoPath,
+			err,
+		)
+	}
+	if repoRoot != plan.RepoPath {
+		return "", fmt.Errorf(
+			"prepare repo-root task branch run %s for repo %s (%s): registered repo path %q resolves to Git root %q; register the repository root before running tasks",
+			plan.TaskID,
+			plan.RepoID,
+			plan.RepoName,
+			plan.RepoPath,
+			repoRoot,
+		)
+	}
+
+	if err := validateBranchRef(ctx, repoRoot, "task branch", plan.Branch); err != nil {
+		return "", fmt.Errorf("prepare repo-root task branch run %s: %w", plan.TaskID, err)
+	}
+	if err := validateBranchRef(ctx, repoRoot, "default branch", plan.DefaultBranch); err != nil {
+		return "", fmt.Errorf("prepare repo-root task branch run %s: %w", plan.TaskID, err)
+	}
+	if err := requireOriginRemoteFor(ctx, repoRoot, "repo-root task branch runs"); err != nil {
+		return "", fmt.Errorf(
+			"prepare repo-root task branch run %s for repo %s (%s): %w",
+			plan.TaskID,
+			plan.RepoID,
+			plan.RepoName,
+			err,
+		)
+	}
+	if err := requireCleanRepoRootFor(ctx, repoRoot, "with --repo-root"); err != nil {
+		return "", fmt.Errorf(
+			"prepare repo-root task branch run %s for repo %s (%s): %w",
+			plan.TaskID,
+			plan.RepoID,
+			plan.RepoName,
+			err,
+		)
+	}
+	return repoRoot, nil
+}
+
 func ensureRepoRootOnDefaultBranch(ctx context.Context, repoRoot string, defaultBranch string) error {
 	current, currentErr := currentBranchAt(ctx, repoRoot)
 	if currentErr != nil || current != defaultBranch {
@@ -340,6 +441,48 @@ func ensureRepoRootOnDefaultBranch(ctx context.Context, repoRoot string, default
 			"repo root is on branch %q after checkout; expected default branch %q",
 			current,
 			defaultBranch,
+		)
+	}
+	return nil
+}
+
+func ensureRepoRootOnTaskBranch(ctx context.Context, repoRoot string, branch string, startPoint string) error {
+	current, currentErr := currentBranchAt(ctx, repoRoot)
+	if currentErr == nil && current == branch {
+		return nil
+	}
+
+	branchExists, err := localBranchExists(ctx, repoRoot, branch)
+	if err != nil {
+		return err
+	}
+	if !branchExists {
+		if err := createBranch(ctx, repoRoot, branch, startPoint); err != nil {
+			return err
+		}
+	}
+
+	if err := checkoutTaskBranch(ctx, repoRoot, branch); err != nil {
+		if currentErr != nil {
+			return fmt.Errorf(
+				"switch to task branch %q (current branch could not be read: %w): %w",
+				branch,
+				currentErr,
+				err,
+			)
+		}
+		return fmt.Errorf("switch to task branch %q: %w", branch, err)
+	}
+
+	current, err = currentBranchAt(ctx, repoRoot)
+	if err != nil {
+		return fmt.Errorf("verify task branch checkout: %w", err)
+	}
+	if current != branch {
+		return fmt.Errorf(
+			"repo root is on branch %q after checkout; expected task branch %q",
+			current,
+			branch,
 		)
 	}
 	return nil
@@ -538,12 +681,20 @@ func fetchDefaultBranch(ctx context.Context, repoRoot string, defaultBranch stri
 }
 
 func requireCleanRepoRoot(ctx context.Context, repoRoot string) error {
+	return requireCleanRepoRootFor(ctx, repoRoot, "with --main")
+}
+
+func requireCleanRepoRootFor(ctx context.Context, repoRoot string, usage string) error {
 	output, err := runGitContext(ctx, repoRoot, "status", "--porcelain=v1")
 	if err != nil {
 		return fmt.Errorf("inspect repo-root working tree cleanliness: %w%s", err, gitOutputSuffix(output))
 	}
 	if strings.TrimSpace(output) != "" {
-		return fmt.Errorf("repo root %q has uncommitted changes; commit, stash, or discard them before running with --main", repoRoot)
+		usage = strings.TrimSpace(usage)
+		if usage == "" {
+			usage = "a repo-root task"
+		}
+		return fmt.Errorf("repo root %q has uncommitted changes; commit, stash, or discard them before running %s", repoRoot, usage)
 	}
 	return nil
 }
@@ -566,6 +717,14 @@ func checkoutDefaultBranch(ctx context.Context, repoRoot string, defaultBranch s
 	output, err := runGitContext(ctx, repoRoot, "checkout", "--track", "-b", defaultBranch, remoteBranch)
 	if err != nil {
 		return fmt.Errorf("checkout default branch %q from %s: %w%s", defaultBranch, remoteBranch, err, gitOutputSuffix(output))
+	}
+	return nil
+}
+
+func checkoutTaskBranch(ctx context.Context, repoRoot string, branch string) error {
+	output, err := runGitContext(ctx, repoRoot, "checkout", branch)
+	if err != nil {
+		return fmt.Errorf("checkout task branch %q: %w%s", branch, err, gitOutputSuffix(output))
 	}
 	return nil
 }

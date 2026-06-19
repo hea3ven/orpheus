@@ -63,6 +63,30 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 		wantLifecycle: workflow.ReviewLifecyclePRReady,
 	},
 	{
+		name: "repo-root team PR ready",
+		taskItem: task.Task{
+			ID: "op-1",
+			Metadata: task.Metadata{
+				task.MetadataBranch:   "orpheus/op-1",
+				task.MetadataWorktree: "/repo/alpha",
+			},
+		},
+		run: taskstate.RunAttempt{
+			Status:   taskstate.RunStatusSucceeded,
+			Branch:   "orpheus/op-1",
+			Worktree: "/repo/alpha",
+			Completion: &taskstate.Completion{
+				Summary:             "Done",
+				Description:         "Done.",
+				DetailedDescription: "Detailed PR body.",
+				Commit:              "abc123",
+			},
+		},
+		wantOK:        true,
+		wantTarget:    workflow.TargetRepoRootTeam,
+		wantLifecycle: workflow.ReviewLifecyclePRReady,
+	},
+	{
 		name: "metadata matches expected but run branch differs",
 		taskItem: task.Task{
 			ID: "op-1",
@@ -152,6 +176,11 @@ func TestClassifyExpectedCompletionTarget(t *testing.T) {
 			Branch:   "orpheus/op-1",
 			Worktree: "/state/worktrees/alpha/op-1",
 		},
+		RepoRootTeam: workflow.Target{
+			Kind:     workflow.TargetRepoRootTeam,
+			Branch:   "orpheus/op-1",
+			Worktree: "/repo/alpha",
+		},
 	}
 
 	for _, tt := range classifyExpectedCompletionTargetCases {
@@ -167,6 +196,16 @@ func TestClassifyExpectedCompletionTarget(t *testing.T) {
 				t.Fatalf("classification = %#v, want target %q lifecycle %q", got, tt.wantTarget, tt.wantLifecycle)
 			}
 		})
+	}
+}
+
+func TestClassifyRunTargetRecognizesRepoRootTaskBranch(t *testing.T) {
+	repo := task.Repository{Path: "/repo/alpha", DefaultBranch: "main"}
+
+	got := workflow.ClassifyRunTarget(repo, "orpheus/op-1", "/repo/alpha")
+
+	if got != workflow.TargetRepoRootTeam {
+		t.Fatalf("shape target = %q, want %q", got, workflow.TargetRepoRootTeam)
 	}
 }
 

@@ -838,6 +838,86 @@ func TestTaskRunMainExecutesAgentFromRegisteredRepoRoot(t *testing.T) {
 	is.Equal(taskstate.EventRunFinished, state.Events[2].Type)
 }
 
+//nolint:funlen // Workflow test is clearer when setup, command, and state assertions stay together.
+func TestTaskRunRepoRootExecutesAgentFromRegisteredRepoRootOnTaskBranch(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	bdLogPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[
+			{
+				"id":"op-root",
+				"title":"Run repo root task branch",
+				"description":"Use the registered repo root on the task branch.",
+				"acceptance_criteria":"The agent runs from the repo root.",
+				"status":"open",
+				"priority":2,
+				"issue_type":"task"
+			}
+		]`},
+	})
+	agentLogPath := withFakeAgent(t, "repo-root-agent", 0)
+	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"default_agent": "repo-root",
+		"agents":        map[string]any{"repo-root": map[string]any{"command": "repo-root-agent"}},
+	}))
+	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-root"))
+	must.NoError(err)
+
+	stdout, stderr := executeCommand(t, []string{"task", "run", "--repo-root", "op-root"})
+
+	is.Contains(stdout, "fake agent stdout")
+	is.Contains(stderr, "fake agent stderr")
+	is.Equal("orpheus/op-root", strings.TrimSpace(runGit(t, repoPath, "symbolic-ref", "--quiet", "--short", "HEAD")))
+	_, statErr := os.Stat(worktreePath)
+	must.ErrorIs(statErr, os.ErrNotExist)
+
+	bdLog, err := os.ReadFile(bdLogPath)
+	must.NoError(err)
+	is.Contains(string(bdLog), "--json --readonly --sandbox show --id op-root")
+	is.Contains(string(bdLog), "--json --readonly --sandbox list --all --limit 0")
+	is.Contains(string(bdLog), "--json --sandbox update op-root --status in_progress --set-metadata orpheus.branch=orpheus/op-root --set-metadata orpheus.worktree="+repoPath)
+
+	agentLog, err := os.ReadFile(agentLogPath)
+	must.NoError(err)
+	log := string(agentLog)
+	for _, want := range []string{
+		"PWD=" + repoPath,
+		"ORPHEUS_REPO_ID=alpha",
+		"ORPHEUS_TASK_ID=op-root",
+		"ORPHEUS_WORKTREE=" + repoPath,
+		"ORPHEUS_BRANCH=orpheus/op-root",
+		"Run `orpheus agent context` now",
+		"task instructions and execution contract",
+	} {
+		is.Contains(log, want)
+	}
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-root.yaml"), &state))
+	must.Len(state.Runs, 1)
+	is.Equal(taskstate.RunStatusSucceeded, state.Runs[0].Status)
+	is.Equal("orpheus/op-root", state.Runs[0].Branch)
+	is.Equal(repoPath, state.Runs[0].Worktree)
+	must.Len(state.Events, 3)
+	is.Equal(taskstate.EventWorktreeReused, state.Events[0].Type)
+	is.Equal(taskstate.EventRunStarted, state.Events[1].Type)
+	is.Equal(taskstate.EventRunFinished, state.Events[2].Type)
+}
+
 func TestTaskRunPlainRetryRequiresMainForRepoRootMetadata(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -879,6 +959,48 @@ func TestTaskRunPlainRetryRequiresMainForRepoRootMetadata(t *testing.T) {
 	is.ErrorContains(err, "retry with `orpheus task run --main op-main`")
 	_, statErr := os.Stat(worktreePath)
 	is.ErrorIs(statErr, os.ErrNotExist)
+}
+
+func TestTaskRunRepoRootFailsDirtyRepoRootBeforeLaunch(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "dirty.txt"), []byte("dirty"), 0o644))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[{"id":"op-root-dirty","title":"Dirty root","status":"open","priority":1,"issue_type":"task"}]`},
+	})
+	agentLogPath := withFakeAgent(t, "dirty-root-agent", 0)
+	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"default_agent": "dirty-root",
+		"agents":        map[string]any{"dirty-root": map[string]any{"command": "dirty-root-agent"}},
+	}))
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "--repo-root", "op-root-dirty"})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "uncommitted changes")
+	is.Equal("main", strings.TrimSpace(runGit(t, repoPath, "symbolic-ref", "--quiet", "--short", "HEAD")))
+	_, agentLogErr := os.Stat(agentLogPath)
+	is.ErrorIs(agentLogErr, os.ErrNotExist)
+	statePath, err := paths.DataPath(filepath.Join("repos", "alpha", "tasks", "op-root-dirty.yaml"))
+	must.NoError(err)
+	_, stateErr := os.Stat(statePath)
+	is.ErrorIs(stateErr, os.ErrNotExist)
 }
 
 func TestTaskRunMainAllowsOwnedInProgressRepoRootTask(t *testing.T) {
@@ -975,7 +1097,7 @@ func TestTaskRunMainBlocksOtherRepoRootOwnerButWorktreeRunStillWorks(t *testing.
 	must.Error(err)
 	is.Empty(stdout)
 	is.Empty(stderr)
-	is.ErrorContains(err, "already has non-closed task op-owner owning repo-root/default-branch metadata")
+	is.ErrorContains(err, "already has non-closed task op-owner owning repo-root metadata")
 	_, agentLogErr := os.Stat(agentLogPath)
 	is.ErrorIs(agentLogErr, os.ErrNotExist)
 
