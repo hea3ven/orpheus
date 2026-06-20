@@ -2695,6 +2695,117 @@ func TestTaskDoneInfersSingleMainReadyTaskFromRepoRootAndUsesOverrides(t *testin
 	is.Equal("Human reviewed summary\n\nHuman adjusted details.", message)
 }
 
+func TestTaskDoneInfersRepoRootFeatureBranchTask(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	const taskID = "op-root-infer"
+	const branch = "orpheus/op-root-infer"
+	runGit(t, repoPath, "checkout", "-b", branch)
+	recordWorktreeCompletion(t, paths, "alpha", taskID, branch, repoPath, "")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	t.Chdir(repoPath)
+
+	taskJSON := syncReadyTaskJSON(taskID, branch, repoPath)
+	bdLogPath := withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox list --all --limit 0", stdout: taskJSON},
+		{
+			dir:  repoPath,
+			args: "--json --sandbox update " + taskID + " --set-metadata orpheus.pr_url=https://github.test/org/alpha/pull/42",
+		},
+	})
+	withFakeGHPRResponses(t, fakeGHPRResponses{
+		listStdout:   "[]",
+		createStdout: "https://github.test/org/alpha/pull/42\n",
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "done"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Published "+taskID)
+	is.Contains(stdout, "pushed "+branch)
+	is.Contains(stdout, "created PR https://github.test/org/alpha/pull/42")
+	bdLog := readFileString(t, bdLogPath)
+	is.Contains(bdLog, "--json --sandbox update "+taskID+" --set-metadata orpheus.pr_url=https://github.test/org/alpha/pull/42")
+	is.NotContains(bdLog, "--json --sandbox close "+taskID)
+	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
+	is.Equal(
+		strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")),
+		strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/"+branch)),
+	)
+}
+
+func TestTaskDoneInfersWorktreeTask(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	const taskID = "op-worktree-infer"
+	targets := taskSyncExpectedTargets(t, paths, repoPath, taskID)
+	worktree := targets.WorktreeTeam.Worktree
+	branch := targets.WorktreeTeam.Branch
+	runGit(t, repoPath, "branch", branch, "main")
+	runGit(t, repoPath, "worktree", "add", worktree, branch)
+	recordWorktreeCompletion(t, paths, "alpha", taskID, branch, worktree, "")
+	must.NoError(os.WriteFile(filepath.Join(worktree, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	t.Chdir(worktree)
+
+	taskJSON := syncReadyTaskJSON(taskID, branch, worktree)
+	bdLogPath := withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox list --all --limit 0", stdout: taskJSON},
+		{
+			dir:  repoPath,
+			args: "--json --sandbox update " + taskID + " --set-metadata orpheus.pr_url=https://github.test/org/alpha/pull/42",
+		},
+	})
+	withFakeGHPRResponses(t, fakeGHPRResponses{
+		listStdout:   "[]",
+		createStdout: "https://github.test/org/alpha/pull/42\n",
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "done"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Published "+taskID)
+	is.Contains(stdout, "pushed "+branch)
+	is.Contains(stdout, "created PR https://github.test/org/alpha/pull/42")
+	bdLog := readFileString(t, bdLogPath)
+	is.Contains(bdLog, "--json --sandbox update "+taskID+" --set-metadata orpheus.pr_url=https://github.test/org/alpha/pull/42")
+	is.NotContains(bdLog, "--json --sandbox close "+taskID)
+	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
+	is.Equal(
+		strings.TrimSpace(runGit(t, worktree, "rev-parse", "HEAD")),
+		strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/"+branch)),
+	)
+}
+
 func TestTaskDoneRejectsRemovedDetailsOverride(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)

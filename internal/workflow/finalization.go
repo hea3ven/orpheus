@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
@@ -196,7 +197,7 @@ func (s FinalizationService) finalizeLocked(
 	opts FinalizeOptions,
 	gitState FinalizationGit,
 ) (FinalizationResult, error) {
-	target, err := s.resolveTarget(ctx, opts)
+	target, err := s.resolveTarget(ctx, opts, gitState)
 	if err != nil {
 		return FinalizationResult{}, err
 	}
@@ -689,10 +690,14 @@ func taskWithPRURL(taskItem task.Task, prURL string) task.Task {
 	return updated
 }
 
-func (s FinalizationService) resolveTarget(ctx context.Context, opts FinalizeOptions) (finalizationTarget, error) {
+func (s FinalizationService) resolveTarget(
+	ctx context.Context,
+	opts FinalizeOptions,
+	gitState FinalizationGit,
+) (finalizationTarget, error) {
 	taskID := strings.TrimSpace(opts.TaskID)
 	if taskID == "" {
-		return s.inferTarget(ctx, opts)
+		return s.inferTarget(ctx, opts, gitState)
 	}
 
 	resolved, err := task.ResolveTaskSource(s.Sources, taskID)
@@ -734,10 +739,18 @@ func (s FinalizationService) resolveTarget(ctx context.Context, opts FinalizeOpt
 	return finalizationTarget{source: resolved.Source, backend: backend, task: taskItem}, nil
 }
 
-func (s FinalizationService) inferTarget(ctx context.Context, opts FinalizeOptions) (finalizationTarget, error) {
+func (s FinalizationService) inferTarget(
+	ctx context.Context,
+	opts FinalizeOptions,
+	gitState FinalizationGit,
+) (finalizationTarget, error) {
 	normalizedCWD, err := currentDirectory(opts.CWD)
 	if err != nil {
 		return finalizationTarget{}, err
+	}
+	currentBranch, err := gitState.CurrentBranch(ctx, normalizedCWD)
+	if err != nil {
+		return finalizationTarget{}, fmt.Errorf("inspect current Git branch while inferring task: %w", err)
 	}
 
 	source, err := s.inferSourceFromCWD(normalizedCWD)
@@ -745,9 +758,38 @@ func (s FinalizationService) inferTarget(ctx context.Context, opts FinalizeOptio
 		return finalizationTarget{}, err
 	}
 
+	backend, candidates, err := s.loadInferenceCandidates(ctx, source, currentBranch, normalizedCWD)
+	if err != nil {
+		return finalizationTarget{}, err
+	}
+	switch len(candidates) {
+	case 1:
+		return finalizationTarget{source: source, backend: backend, task: candidates[0]}, nil
+	case 0:
+		return finalizationTarget{}, fmt.Errorf(
+			"cannot infer task to finalize from current directory %q on branch %q: no non-closed ready task owns the current branch; pass <task-id>",
+			normalizedCWD,
+			currentBranch,
+		)
+	default:
+		return finalizationTarget{}, fmt.Errorf(
+			"cannot infer task to finalize from current directory %q on branch %q: multiple non-closed ready tasks own the current branch (%s); pass <task-id>",
+			normalizedCWD,
+			currentBranch,
+			strings.Join(taskIDs(candidates), ", "),
+		)
+	}
+}
+
+func (s FinalizationService) loadInferenceCandidates(
+	ctx context.Context,
+	source task.RepositorySource,
+	currentBranch string,
+	workingDirectory string,
+) (FinalizationBackend, []task.Task, error) {
 	backend, err := s.BackendFactory(source)
 	if err != nil {
-		return finalizationTarget{}, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"task done: create backend for repo %s (%s; prefix %s): %w",
 			source.Repository.ID,
 			source.Repository.Name,
@@ -757,7 +799,7 @@ func (s FinalizationService) inferTarget(ctx context.Context, opts FinalizeOptio
 	}
 	tasks, err := backend.List(ctx)
 	if err != nil {
-		return finalizationTarget{}, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"task done: query repo %s (%s; prefix %s) while inferring task: %w",
 			source.Repository.ID,
 			source.Repository.Name,
@@ -765,26 +807,16 @@ func (s FinalizationService) inferTarget(ctx context.Context, opts FinalizeOptio
 			err,
 		)
 	}
-
-	candidates, err := s.inferableMainLocalReadyTasks(source.Repository, tasks)
+	candidates, err := s.inferableCurrentBranchReadyTasks(
+		source.Repository,
+		tasks,
+		currentBranch,
+		workingDirectory,
+	)
 	if err != nil {
-		return finalizationTarget{}, err
+		return nil, nil, err
 	}
-	switch len(candidates) {
-	case 1:
-		return finalizationTarget{source: source, backend: backend, task: candidates[0]}, nil
-	case 0:
-		return finalizationTarget{}, fmt.Errorf(
-			"cannot infer task to finalize from repo root %q: no non-closed main/solo local-ready task owns the registered root/default branch; pass <task-id>",
-			normalizedCWD,
-		)
-	default:
-		return finalizationTarget{}, fmt.Errorf(
-			"cannot infer task to finalize from repo root %q: multiple non-closed main/solo local-ready tasks own the registered root/default branch (%s); pass <task-id>",
-			normalizedCWD,
-			strings.Join(taskIDs(candidates), ", "),
-		)
-	}
+	return backend, candidates, nil
 }
 
 func (s FinalizationService) inferSourceFromCWD(normalizedCWD string) (task.RepositorySource, error) {
@@ -796,6 +828,14 @@ func (s FinalizationService) inferSourceFromCWD(normalizedCWD string) (task.Repo
 		}
 		if repoPath == normalizedCWD {
 			matches = append(matches, source)
+			continue
+		}
+		worktreeParent, err := s.Paths.DataPath(filepath.Join("repos", source.Repository.ID, "worktrees"))
+		if err != nil {
+			return task.RepositorySource{}, fmt.Errorf("resolve task worktree parent for repo %s: %w", source.Repository.ID, err)
+		}
+		if filepath.Dir(normalizedCWD) == filepath.Clean(worktreeParent) {
+			matches = append(matches, source)
 		}
 	}
 	switch len(matches) {
@@ -803,7 +843,7 @@ func (s FinalizationService) inferSourceFromCWD(normalizedCWD string) (task.Repo
 		return matches[0], nil
 	case 0:
 		return task.RepositorySource{}, fmt.Errorf(
-			"cannot infer task to finalize from current directory %q: cwd must be exactly a registered repo root; pass <task-id>",
+			"cannot infer task to finalize from current directory %q: cwd must be exactly a registered repo root or deterministic task worktree; pass <task-id>",
 			normalizedCWD,
 		)
 	default:
@@ -814,22 +854,29 @@ func (s FinalizationService) inferSourceFromCWD(normalizedCWD string) (task.Repo
 	}
 }
 
-func (s FinalizationService) inferableMainLocalReadyTasks(
+func (s FinalizationService) inferableCurrentBranchReadyTasks(
 	repo task.Repository,
 	tasks []task.Task,
+	currentBranch string,
+	workingDirectory string,
 ) ([]task.Task, error) {
 	candidates := make([]task.Task, 0, 1)
 	for _, taskItem := range tasks {
-		ok, err := s.isInferableMainLocalReady(repo, taskItem, false)
+		targets, err := ExpectedTargetsForTask(repo, taskItem.ID, s.Paths)
 		if err != nil {
 			return nil, err
 		}
-		if ok {
-			candidates = append(candidates, taskItem.Clone())
+		target, err := ClassifyMetadataTarget(taskItem.OrpheusMetadata(), targets)
+		if err != nil {
 			continue
 		}
-
-		ok, err = s.isInferableMainLocalReady(repo, taskItem, true)
+		ok, err := s.isInferableCurrentBranchReady(
+			repo,
+			taskItem,
+			currentBranch,
+			workingDirectory,
+			target,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -840,8 +887,20 @@ func (s FinalizationService) inferableMainLocalReadyTasks(
 	return candidates, nil
 }
 
-func (s FinalizationService) isInferableMainLocalReady(repo task.Repository, taskItem task.Task, allowRunningCompleted bool) (bool, error) {
+func (s FinalizationService) isInferableCurrentBranchReady(
+	repo task.Repository,
+	taskItem task.Task,
+	currentBranch string,
+	workingDirectory string,
+	target Target,
+) (bool, error) {
 	if taskItem.Status == task.StatusClosed {
+		return false, nil
+	}
+	if target.Branch != currentBranch {
+		return false, nil
+	}
+	if target.Worktree != workingDirectory {
 		return false, nil
 	}
 	state, err := s.RunStore.Load(repo.ID, taskItem.ID)
@@ -856,22 +915,19 @@ func (s FinalizationService) isInferableMainLocalReady(repo task.Repository, tas
 		latest:       latest,
 		finalization: taskstate.FinalizationFacts(state),
 	}
-	targets, err := ExpectedTargetsForTask(repo, taskItem.ID, s.Paths)
-	if err != nil {
-		return false, err
-	}
-	if !isMainSoloMetadataTarget(taskItem, targets) {
+	switch target.Kind {
+	case TargetMainSolo:
+		if isDefaultBranchFinalizationReady(repo, taskItem, ctx, false) {
+			return true, nil
+		}
+		return isDefaultBranchFinalizationReady(repo, taskItem, ctx, true), nil
+	case TargetRepoRootTeam:
+		return validateFeatureBranchPublicationReady(repo, taskItem, ctx, target) == nil, nil
+	case TargetWorktreeTeam:
+		return validateFeatureBranchPublicationReady(repo, taskItem, ctx, target) == nil, nil
+	default:
 		return false, nil
 	}
-	if !isDefaultBranchFinalizationReady(repo, taskItem, ctx, allowRunningCompleted) {
-		return false, nil
-	}
-	return true, nil
-}
-
-func isMainSoloMetadataTarget(taskItem task.Task, targets ExpectedTargets) bool {
-	target, err := ClassifyMetadataTarget(taskItem.OrpheusMetadata(), targets)
-	return err == nil && target.Kind == TargetMainSolo
 }
 
 func isDefaultBranchFinalizationReady(

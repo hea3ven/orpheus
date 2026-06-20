@@ -40,8 +40,8 @@ func TestAgentContextRendersValidatedWorktreeContext(t *testing.T) {
 		"one-time completion handoff",
 		"run it at most once",
 		"do not run it again after it succeeds",
-		"local-review-ready completion data",
-		"The human operator will later run `orpheus task done op-1`",
+		"PR-ready completion data for feature-branch publication",
+		"The human operator will later run `orpheus task done op-1` to publish the feature branch as a pull request",
 	} {
 		is.Contains(stdout, want)
 	}
@@ -53,6 +53,35 @@ func TestAgentContextRendersValidatedWorktreeContext(t *testing.T) {
 	is.Contains(string(bdLog), "--json --readonly --sandbox show --id op-1")
 	is.NotContains(string(bdLog), "--json --sandbox update")
 	is.NotContains(string(bdLog), "--json --readonly --sandbox list")
+}
+
+func TestAgentContextRendersRepoRootFeatureBranchContext(t *testing.T) {
+	is := assert.New(t)
+	root := newTestState(t)
+	repoPath := filepath.Join(root, "repos", "alpha")
+	registerAgentTestRepo(t, repoPath)
+	t.Chdir(repoPath)
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: agentContextRepoRootTaskJSON(repoPath)},
+	})
+	startAgentTestRun(t, "op-root", "orpheus/op-root", repoPath)
+	setAgentRunEnv(t, "op-root", "orpheus/op-root", repoPath)
+
+	stdout, stderr := executeCommand(t, []string{"agent", "context"})
+
+	is.Empty(stderr)
+	for _, want := range []string{
+		"- Workflow: repo-root/team",
+		"- Branch: orpheus/op-root",
+		"- Path: " + repoPath,
+		"registered repository root on the task branch",
+		"orpheus agent done",
+		"PR-ready completion data for feature-branch publication",
+		"The human operator will later run `orpheus task done op-root` to publish the feature branch as a pull request",
+	} {
+		is.Contains(stdout, want)
+	}
+	is.NotEmpty(stdout)
 }
 
 func setupAgentContextWorktree(t *testing.T) (string, string, string, string) {
@@ -87,6 +116,19 @@ func agentContextTaskJSON(worktreePath string) string {
 			"priority":2,
 			"issue_type":"task",
 			"metadata":{"orpheus.branch":"orpheus/op-1","orpheus.worktree":"` + worktreePath + `"}
+		}
+	]`
+}
+
+func agentContextRepoRootTaskJSON(repoPath string) string {
+	return `[
+		{
+			"id":"op-root",
+			"title":"Render repo-root context",
+			"status":"in_progress",
+			"priority":2,
+			"issue_type":"task",
+			"metadata":{"orpheus.branch":"orpheus/op-root","orpheus.worktree":"` + repoPath + `"}
 		}
 	]`
 }
@@ -425,7 +467,7 @@ func TestAgentDoneCommitsWorktreeCompletion(t *testing.T) {
 	})
 
 	is.Empty(stderr)
-	is.Contains(stdout, "Recorded completion for op-1; ready for local review")
+	is.Contains(stdout, "Recorded completion for op-1; ready for feature-branch publication with `orpheus task done op-1`")
 	is.Contains(strings.TrimSpace(runGit(t, worktreePath, "status", "--porcelain=v1")), "ORPHEUS_WORKTREE_TEST.txt")
 
 	runStore := taskstate.NewStore(currentTestPaths(t))
