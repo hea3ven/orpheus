@@ -21,6 +21,9 @@ const (
 	// TargetWorktreeTeam means work runs in Orpheus' deterministic task worktree and becomes PR-ready.
 	TargetWorktreeTeam TargetKind = "worktree"
 
+	// TargetRepoRootTeam means work runs in the registered repo root on a task branch and becomes PR-ready.
+	TargetRepoRootTeam TargetKind = "repo-root"
+
 	// TargetMainSolo means work runs in the registered repo root and becomes local-review-ready.
 	TargetMainSolo TargetKind = "main"
 )
@@ -30,6 +33,8 @@ func (k TargetKind) DisplayName() string {
 	switch k {
 	case TargetWorktreeTeam:
 		return "worktree/team"
+	case TargetRepoRootTeam:
+		return "repo-root/team"
 	case TargetMainSolo:
 		return "main/solo"
 	default:
@@ -58,10 +63,11 @@ type Target struct {
 	Worktree string
 }
 
-// ExpectedTargets describes the two supported execution targets for one task.
+// ExpectedTargets describes the supported execution targets for one task.
 type ExpectedTargets struct {
 	MainSolo     Target
 	WorktreeTeam Target
+	RepoRootTeam Target
 }
 
 // CompletionClassification describes the target and review lifecycle for a completed run.
@@ -92,6 +98,17 @@ func ExpectedTargetsForTask(repo task.Repository, taskID string, paths state.Pat
 	if err != nil {
 		return ExpectedTargets{}, fmt.Errorf("resolve deterministic task worktree target: %w", err)
 	}
+	repoRootTaskTarget, err := gitmeta.ExpectedRepoRootTaskBranch(gitmeta.TaskWorktreeOptions{
+		RepoID:        repo.ID,
+		RepoName:      repo.Name,
+		RepoPath:      repo.Path,
+		DefaultBranch: repo.DefaultBranch,
+		TaskID:        taskID,
+		Paths:         paths,
+	})
+	if err != nil {
+		return ExpectedTargets{}, fmt.Errorf("resolve repo-root task branch target: %w", err)
+	}
 
 	return ExpectedTargets{
 		MainSolo: Target{
@@ -103,6 +120,11 @@ func ExpectedTargetsForTask(repo task.Repository, taskID string, paths state.Pat
 			Kind:     TargetWorktreeTeam,
 			Branch:   worktreeTarget.Branch,
 			Worktree: filepath.Clean(worktreeTarget.WorktreePath),
+		},
+		RepoRootTeam: Target{
+			Kind:     TargetRepoRootTeam,
+			Branch:   repoRootTaskTarget.Branch,
+			Worktree: filepath.Clean(repoRootTaskTarget.WorktreePath),
 		},
 	}, nil
 }
@@ -125,10 +147,18 @@ func ClassifyMetadataTarget(metadata task.OrpheusMetadata, targets ExpectedTarge
 	matchesMain := metadataBranch == targets.MainSolo.Branch && metadataWorktree == targets.MainSolo.Worktree
 	matchesWorktree := metadataBranch == targets.WorktreeTeam.Branch &&
 		metadataWorktree == targets.WorktreeTeam.Worktree
+	matchesRepoRootTeam := metadataBranch == targets.RepoRootTeam.Branch &&
+		metadataWorktree == targets.RepoRootTeam.Worktree
+	matchCount := 0
+	for _, matches := range []bool{matchesMain, matchesWorktree, matchesRepoRootTeam} {
+		if matches {
+			matchCount++
+		}
+	}
 	switch {
-	case matchesMain && matchesWorktree:
+	case matchCount > 1:
 		return Target{}, fmt.Errorf(
-			"%s and %s match both supported execution targets",
+			"%s and %s match multiple supported execution targets",
 			task.MetadataBranch,
 			task.MetadataWorktree,
 		)
@@ -136,9 +166,11 @@ func ClassifyMetadataTarget(metadata task.OrpheusMetadata, targets ExpectedTarge
 		return targets.MainSolo, nil
 	case matchesWorktree:
 		return targets.WorktreeTeam, nil
+	case matchesRepoRootTeam:
+		return targets.RepoRootTeam, nil
 	default:
 		return Target{}, fmt.Errorf(
-			"%s=%q and %s=%q do not match repo-root target (%s=%q, %s=%q) or worktree target (%s=%q, %s=%q)",
+			"%s=%q and %s=%q do not match repo-root default target (%s=%q, %s=%q), worktree target (%s=%q, %s=%q), or repo-root task branch target (%s=%q, %s=%q)",
 			task.MetadataBranch,
 			metadata.Branch,
 			task.MetadataWorktree,
@@ -151,6 +183,10 @@ func ClassifyMetadataTarget(metadata task.OrpheusMetadata, targets ExpectedTarge
 			targets.WorktreeTeam.Branch,
 			task.MetadataWorktree,
 			targets.WorktreeTeam.Worktree,
+			task.MetadataBranch,
+			targets.RepoRootTeam.Branch,
+			task.MetadataWorktree,
+			targets.RepoRootTeam.Worktree,
 		)
 	}
 }
@@ -167,6 +203,9 @@ func ClassifyRunTarget(repo task.Repository, branch string, worktree string) Tar
 	}
 	if branch == defaultBranch && worktree == repoRoot {
 		return TargetMainSolo
+	}
+	if branch != defaultBranch && worktree == repoRoot {
+		return TargetRepoRootTeam
 	}
 	if branch != defaultBranch && worktree != repoRoot {
 		return TargetWorktreeTeam
@@ -213,6 +252,11 @@ func ClassifyCompletionTarget(
 			Target:    Target{Kind: TargetWorktreeTeam, Branch: branch, Worktree: worktree},
 			Lifecycle: ReviewLifecyclePRReady,
 		}, true
+	case TargetRepoRootTeam:
+		return CompletionClassification{
+			Target:    Target{Kind: TargetRepoRootTeam, Branch: branch, Worktree: worktree},
+			Lifecycle: ReviewLifecyclePRReady,
+		}, true
 	default:
 		return CompletionClassification{}, false
 	}
@@ -253,6 +297,11 @@ func ClassifyExpectedCompletionTarget(
 			Target:    target,
 			Lifecycle: ReviewLifecyclePRReady,
 		}, true
+	case TargetRepoRootTeam:
+		return CompletionClassification{
+			Target:    target,
+			Lifecycle: ReviewLifecyclePRReady,
+		}, true
 	default:
 		return CompletionClassification{}, false
 	}
@@ -275,7 +324,7 @@ func ClassifyPRReviewReady(
 	latestRun *taskstate.RunAttempt,
 ) (CompletionClassification, bool) {
 	classification, ok := ClassifyCompletionTarget(repo, taskItem, latestRun)
-	return classification, ok && classification.Target.Kind == TargetWorktreeTeam
+	return classification, ok && isPRReviewTarget(classification.Target.Kind)
 }
 
 // ClassifyExpectedLocalReviewReady reports whether a task has a strict main/solo local-ready completion.
@@ -295,7 +344,11 @@ func ClassifyExpectedPRReviewReady(
 	latestRun *taskstate.RunAttempt,
 ) (CompletionClassification, bool) {
 	classification, ok := ClassifyExpectedCompletionTarget(targets, taskItem, latestRun)
-	return classification, ok && classification.Target.Kind == TargetWorktreeTeam
+	return classification, ok && isPRReviewTarget(classification.Target.Kind)
+}
+
+func isPRReviewTarget(kind TargetKind) bool {
+	return kind == TargetWorktreeTeam || kind == TargetRepoRootTeam
 }
 
 func cleanAbsPath(label string, path string) (string, error) {

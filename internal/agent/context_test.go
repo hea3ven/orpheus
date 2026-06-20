@@ -86,43 +86,67 @@ func TestActiveContextResolverResolvesWorktreeTarget(t *testing.T) {
 	is.Equal(cwd, got.Target.CurrentDirectory)
 }
 
-func TestActiveContextResolverResolvesMainTarget(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newActiveContextFixture(t, "op-main")
-	cwd := filepath.Join(fixture.repoPath, "cmd", "orpheus")
-	must.NoError(testMkdirAll(cwd))
-
-	taskItem := taskmodel.Task{
-		ID:     "op-main",
-		Title:  "Main target",
-		Status: taskmodel.StatusInProgress,
-		Metadata: taskmodel.Metadata{
-			taskmodel.MetadataBranch:   "main",
-			taskmodel.MetadataWorktree: fixture.repoPath,
+func TestActiveContextResolverResolvesRepoRootTargets(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		taskID     string
+		branch     string
+		cwdRel     string
+		targetKind agent.ExecutionTarget
+	}{
+		{
+			name:       "main",
+			taskID:     "op-main",
+			branch:     "main",
+			cwdRel:     filepath.Join("cmd", "orpheus"),
+			targetKind: agent.ExecutionTargetMain,
 		},
+		{
+			name:       "task branch",
+			taskID:     "op-root",
+			branch:     "orpheus/op-root",
+			cwdRel:     filepath.Join("internal", "cli"),
+			targetKind: agent.ExecutionTargetRepoRoot,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			is := assert.New(t)
+			must := require.New(t)
+			fixture := newActiveContextFixture(t, tt.taskID)
+			cwd := filepath.Join(fixture.repoPath, tt.cwdRel)
+			must.NoError(testMkdirAll(cwd))
+
+			taskItem := taskmodel.Task{
+				ID:     tt.taskID,
+				Status: taskmodel.StatusInProgress,
+				Metadata: taskmodel.Metadata{
+					taskmodel.MetadataBranch:   tt.branch,
+					taskmodel.MetadataWorktree: fixture.repoPath,
+				},
+			}
+			_, err := fixture.store.StartRun("alpha", tt.taskID, taskstate.StartRunOptions{
+				Agent:    "recorder",
+				Branch:   tt.branch,
+				Worktree: fixture.repoPath,
+			})
+			must.NoError(err)
+
+			resolver := fixture.resolver(taskItem, map[string]string{
+				"ORPHEUS_REPO_ID":  "alpha",
+				"ORPHEUS_TASK_ID":  tt.taskID,
+				"ORPHEUS_WORKTREE": fixture.repoPath,
+				"ORPHEUS_BRANCH":   tt.branch,
+			}, cwd)
+
+			got, err := resolver.Resolve(context.Background())
+
+			must.NoError(err)
+			is.Equal(tt.targetKind, got.Target.Kind)
+			is.Equal(tt.branch, got.Target.Branch)
+			is.Equal(fixture.repoPath, got.Target.Path)
+			is.Equal(cwd, got.Target.CurrentDirectory)
+		})
 	}
-	_, err := fixture.store.StartRun("alpha", "op-main", taskstate.StartRunOptions{
-		Agent:    "recorder",
-		Branch:   "main",
-		Worktree: fixture.repoPath,
-	})
-	must.NoError(err)
-
-	resolver := fixture.resolver(taskItem, map[string]string{
-		"ORPHEUS_REPO_ID":  "alpha",
-		"ORPHEUS_TASK_ID":  "op-main",
-		"ORPHEUS_WORKTREE": fixture.repoPath,
-		"ORPHEUS_BRANCH":   "main",
-	}, cwd)
-
-	got, err := resolver.Resolve(context.Background())
-
-	must.NoError(err)
-	is.Equal(agent.ExecutionTargetMain, got.Target.Kind)
-	is.Equal("main", got.Target.Branch)
-	is.Equal(fixture.repoPath, got.Target.Path)
-	is.Equal(cwd, got.Target.CurrentDirectory)
 }
 
 func TestActiveContextResolverRejectsLatestRunThatIsNotRunning(t *testing.T) {
