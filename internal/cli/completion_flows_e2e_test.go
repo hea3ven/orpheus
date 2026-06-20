@@ -67,8 +67,8 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 		"- Path: " + worktreePath,
 		"- Current directory: " + worktreePath,
 		"deterministic task worktree and task branch",
-		"local-review-ready completion data",
-		"The human operator will later run `orpheus task done " + taskID + "`",
+		"PR-ready completion data for feature-branch publication",
+		"The human operator will later run `orpheus task done " + taskID + "` to publish the feature branch as a pull request",
 	} {
 		is.Contains(contextOutput, want)
 	}
