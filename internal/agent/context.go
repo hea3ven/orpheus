@@ -29,6 +29,9 @@ const (
 	// ExecutionTargetWorktree means the agent runs in Orpheus' deterministic task worktree.
 	ExecutionTargetWorktree = workflow.TargetWorktreeTeam
 
+	// ExecutionTargetRepoRoot means the agent runs in the registered repo root on a task branch.
+	ExecutionTargetRepoRoot = workflow.TargetRepoRootTeam
+
 	// ExecutionTargetMain means the agent runs in the registered repo root on the default branch.
 	ExecutionTargetMain = workflow.TargetMainSolo
 )

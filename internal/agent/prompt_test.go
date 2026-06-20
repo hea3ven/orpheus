@@ -124,3 +124,34 @@ func TestRenderActiveContextIncludesMainContract(t *testing.T) {
 	is.NotContains(output, "Beads")
 	is.NotContains(output, "bd")
 }
+
+func TestRenderActiveContextIncludesRepoRootTaskBranchContract(t *testing.T) {
+	is := assert.New(t)
+
+	output := agent.RenderActiveContext(agent.ActiveContext{
+		Repository: agent.ContextRepository{
+			ID:            "alpha",
+			Name:          "Alpha Repo",
+			Root:          "/repo/alpha",
+			DefaultBranch: "main",
+		},
+		Task: agent.ContextTask{ID: "op-root", Title: "Repo root"},
+		Run:  agent.ContextRun{Attempt: 1},
+		Target: agent.ContextTarget{
+			Kind:             agent.ExecutionTargetRepoRoot,
+			Branch:           "orpheus/op-root",
+			Path:             "/repo/alpha",
+			CurrentDirectory: "/repo/alpha/internal",
+		},
+	})
+
+	for _, want := range []string{
+		"- Workflow: repo-root/team",
+		"- Branch: orpheus/op-root",
+		"- Path: /repo/alpha",
+		"registered repository root on the task branch",
+		"orpheus agent done",
+	} {
+		is.Contains(output, want)
+	}
+}

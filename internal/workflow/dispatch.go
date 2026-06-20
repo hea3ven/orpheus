@@ -61,6 +61,7 @@ type DispatchStartOptions struct {
 	Command        DispatchCommand
 	ResolveCommand func() (DispatchCommand, error)
 	MainMode       bool
+	RepoRootMode   bool
 }
 
 // DispatchStartResult reports the prepared task run.
@@ -154,6 +155,10 @@ func (s DispatchService) startLocked(
 	ctx context.Context,
 	opts DispatchStartOptions,
 ) (DispatchStartResult, error) {
+	if opts.MainMode && opts.RepoRootMode {
+		return DispatchStartResult{}, errors.New("task dispatch cannot combine main mode and repo-root mode")
+	}
+
 	taskItem, expected, err := s.validateStart(ctx, opts)
 	if err != nil {
 		return DispatchStartResult{}, err
@@ -216,10 +221,10 @@ func (s DispatchService) validateStart(
 	if err != nil {
 		return task.Task{}, gitmeta.TaskWorktreeSetupResult{}, err
 	}
-	if err := ensureDispatchEligible(taskItem, expected, repo, opts.MainMode); err != nil {
+	if err := ensureDispatchEligible(taskItem, expected, repo, opts.MainMode, opts.RepoRootMode); err != nil {
 		return task.Task{}, gitmeta.TaskWorktreeSetupResult{}, err
 	}
-	if opts.MainMode {
+	if opts.MainMode || opts.RepoRootMode {
 		if err := ensureRepoRootDispatchAvailable(ctx, opts.Backend, repo, opts.TaskID, expected); err != nil {
 			return task.Task{}, gitmeta.TaskWorktreeSetupResult{}, err
 		}
@@ -277,6 +282,9 @@ func (s DispatchService) expectedSetup(opts DispatchStartOptions) (gitmeta.TaskW
 	if opts.MainMode {
 		return gitmeta.ExpectedRepoRoot(dispatchRepoRootOptions(opts.Source.Repository))
 	}
+	if opts.RepoRootMode {
+		return gitmeta.ExpectedRepoRootTaskBranch(dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID))
+	}
 	return gitmeta.ExpectedTaskWorktree(dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID))
 }
 
@@ -286,6 +294,9 @@ func (s DispatchService) setupTarget(
 ) (gitmeta.TaskWorktreeSetupResult, error) {
 	if opts.MainMode {
 		return gitmeta.SetupRepoRoot(ctx, dispatchRepoRootOptions(opts.Source.Repository))
+	}
+	if opts.RepoRootMode {
+		return gitmeta.SetupRepoRootTaskBranch(ctx, dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID))
 	}
 	return gitmeta.SetupTaskWorktree(ctx, dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID))
 }
@@ -343,6 +354,7 @@ func ensureDispatchEligible(
 	expected gitmeta.TaskWorktreeSetupResult,
 	repo task.Repository,
 	mainMode bool,
+	repoRootMode bool,
 ) error {
 	metadata := taskItem.OrpheusMetadata()
 	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
@@ -351,21 +363,29 @@ func ensureDispatchEligible(
 
 	switch taskItem.Status {
 	case task.StatusOpen:
-		if !mainMode && dispatchMetadataMatchesRepoRoot(metadata, repo) {
+		if !mainMode && !repoRootMode && dispatchMetadataMatchesRepoRoot(metadata, repo) {
 			return repoRootRetryRequiresMainError(taskItem.ID, metadata)
+		}
+		if !repoRootMode && dispatchMetadataMatchesRepoRootTaskBranch(metadata, repo) {
+			return repoRootRetryRequiresRepoRootError(taskItem.ID, metadata)
 		}
 		return nil
 	case task.StatusInProgress:
 		if dispatchMetadataMatches(metadata, expected) {
 			return nil
 		}
-		if !mainMode && dispatchMetadataMatchesRepoRoot(metadata, repo) {
+		if !mainMode && !repoRootMode && dispatchMetadataMatchesRepoRoot(metadata, repo) {
 			return repoRootRetryRequiresMainError(taskItem.ID, metadata)
+		}
+		if !repoRootMode && dispatchMetadataMatchesRepoRootTaskBranch(metadata, repo) {
+			return repoRootRetryRequiresRepoRootError(taskItem.ID, metadata)
 		}
 
 		target := "the deterministic Orpheus branch/worktree"
 		if mainMode {
 			target = "the registered default branch/repo root"
+		} else if repoRootMode {
+			target = "the task branch/repo root"
 		}
 		return fmt.Errorf(
 			"task %s is in_progress but is not tied to %s: %s",
@@ -396,6 +416,18 @@ func repoRootRetryRequiresMainError(taskID string, metadata task.OrpheusMetadata
 	)
 }
 
+func repoRootRetryRequiresRepoRootError(taskID string, metadata task.OrpheusMetadata) error {
+	return fmt.Errorf(
+		"task %s is tied to repo-root/task-branch metadata (%s=%q, %s=%q); retry with `orpheus task run --repo-root %s`",
+		taskID,
+		task.MetadataBranch,
+		metadata.Branch,
+		task.MetadataWorktree,
+		metadata.Worktree,
+		taskID,
+	)
+}
+
 func dispatchMetadataMatches(metadata task.OrpheusMetadata, expected gitmeta.TaskWorktreeSetupResult) bool {
 	return metadata.HasBranch && strings.TrimSpace(metadata.Branch) == expected.Branch &&
 		metadata.HasWorktree && cleanDispatchPath(metadata.Worktree) == cleanDispatchPath(expected.WorktreePath)
@@ -408,6 +440,17 @@ func dispatchMetadataMatchesRepoRoot(metadata task.OrpheusMetadata, repo task.Re
 		return false
 	}
 	return metadata.HasBranch && strings.TrimSpace(metadata.Branch) == defaultBranch &&
+		metadata.HasWorktree && cleanDispatchPath(metadata.Worktree) == repoPath
+}
+
+func dispatchMetadataMatchesRepoRootTaskBranch(metadata task.OrpheusMetadata, repo task.Repository) bool {
+	defaultBranch := strings.TrimSpace(repo.DefaultBranch)
+	repoPath := cleanDispatchPath(repo.Path)
+	branch := strings.TrimSpace(metadata.Branch)
+	if defaultBranch == "" || repoPath == "" || branch == "" {
+		return false
+	}
+	return metadata.HasBranch && branch != defaultBranch &&
 		metadata.HasWorktree && cleanDispatchPath(metadata.Worktree) == repoPath
 }
 
@@ -427,18 +470,20 @@ func ensureRepoRootDispatchAvailable(
 		if strings.TrimSpace(taskItem.ID) == currentTaskID || taskItem.Status == task.StatusClosed {
 			continue
 		}
-		if !dispatchMetadataMatches(taskItem.OrpheusMetadata(), expected) {
+		metadata := taskItem.OrpheusMetadata()
+		if !dispatchMetadataMatches(metadata, expected) &&
+			cleanDispatchPath(metadata.Worktree) != cleanDispatchPath(expected.WorktreePath) {
 			continue
 		}
 		return fmt.Errorf(
-			"repo %s (%s) already has non-closed task %s owning repo-root/default-branch metadata (%s=%q, %s=%q); finish local review or clear that metadata before running another task with --main",
+			"repo %s (%s) already has non-closed task %s owning repo-root metadata (%s=%q, %s=%q); finish local review or clear that metadata before running another task from the repo root",
 			repo.ID,
 			repo.Name,
 			taskItem.ID,
 			task.MetadataBranch,
-			expected.Branch,
+			metadata.Branch,
 			task.MetadataWorktree,
-			expected.WorktreePath,
+			metadata.Worktree,
 		)
 	}
 	return nil

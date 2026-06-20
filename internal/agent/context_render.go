@@ -58,6 +58,14 @@ func appendExecutionContract(builder *strings.Builder, ctx ActiveContext) {
 		builder.WriteString("- The human operator will later run `orpheus task done ")
 		builder.WriteString(ctx.Task.ID)
 		builder.WriteString("` after review; do not run it yourself unless explicitly asked.\n")
+	case ExecutionTargetRepoRoot:
+		builder.WriteString("- You are running in the registered repository root on the task branch.\n")
+		builder.WriteString("- Keep implementation work inside the execution target path.\n")
+		appendAgentDoneContract(builder)
+		builder.WriteString("- After `orpheus agent done`, Orpheus will record local-review-ready completion data.\n")
+		builder.WriteString("- The human operator will later run `orpheus task done ")
+		builder.WriteString(ctx.Task.ID)
+		builder.WriteString("` after review; do not run it yourself unless explicitly asked.\n")
 	case ExecutionTargetMain:
 		builder.WriteString("- You are running in the registered repository root on the registered default branch.\n")
 		builder.WriteString("- Keep implementation work inside the execution target path.\n")

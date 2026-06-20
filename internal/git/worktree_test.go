@@ -185,6 +185,60 @@ func TestSetupRepoRootSwitchesToDefaultBranchAndFastForwards(t *testing.T) {
 	}
 }
 
+func TestSetupRepoRootTaskBranchSwitchesToTaskBranch(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+
+	got, err := orpheusgit.SetupRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		TaskID:        "op-root",
+		Paths:         paths,
+	})
+	if err != nil {
+		t.Fatalf("setup repo-root task branch: %v", err)
+	}
+
+	if got.Branch != "orpheus/op-root" || got.WorktreePath != repoPath || got.Lifecycle != orpheusgit.TaskWorktreeLifecycleReused {
+		t.Fatalf("setup result = %#v, want task branch/repo root/reused", got)
+	}
+	assertGitBranch(t, repoPath, "orpheus/op-root")
+
+	expectedWorktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-root"))
+	if err != nil {
+		t.Fatalf("resolve deterministic worktree path: %v", err)
+	}
+	if _, err := os.Stat(expectedWorktreePath); !os.IsNotExist(err) {
+		t.Fatalf("deterministic worktree stat err = %v, want not exist", err)
+	}
+}
+
+func TestSetupRepoRootTaskBranchRefusesDirtyRepoBeforeSwitching(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	if err := os.WriteFile(filepath.Join(repoPath, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+
+	_, err := orpheusgit.SetupRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		TaskID:        "op-dirty",
+		Paths:         paths,
+	})
+	if err == nil {
+		t.Fatal("setup repo-root task branch succeeded, want dirty checkout error")
+	}
+	if !strings.Contains(err.Error(), "uncommitted changes") {
+		t.Fatalf("error = %v, want uncommitted changes", err)
+	}
+	assertGitBranch(t, repoPath, "main")
+}
+
 func TestSetupRepoRootRefusesDirtyRepoBeforeSwitching(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	runGit(t, repoPath, "checkout", "-b", "feature/local")

@@ -117,6 +117,7 @@ func newTaskDirCommand(opts *rootOptions) *cobra.Command {
 func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 	var agentName string
 	var mainMode bool
+	var repoRootMode bool
 	cmd := &cobra.Command{
 		Use:   "run <task-id>",
 		Short: "Run an attached agent for a task",
@@ -124,14 +125,16 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 			"By default, Orpheus prepares a deterministic task branch and worktree, " +
 			"records the attached run attempt, then runs the configured agent there. " +
 			"Use --main to run explicitly from the registered repo root on the " +
-			"registered default branch for local/manual review workflows.",
+			"registered default branch for local/manual review workflows. " +
+			"Use --repo-root to run from the registered repo root on the task branch.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
-			return runTaskRun(command, opts, args[0], agentName, mainMode)
+			return runTaskRun(command, opts, args[0], agentName, mainMode, repoRootMode)
 		},
 	}
 	cmd.Flags().StringVar(&agentName, "agent", "", "agent profile name to use instead of default_agent")
 	cmd.Flags().BoolVar(&mainMode, "main", false, "run from the registered repo root on the registered default branch")
+	cmd.Flags().BoolVar(&repoRootMode, "repo-root", false, "run from the registered repo root on the task branch")
 	return cmd
 }
 
@@ -317,11 +320,14 @@ func runTaskDir(command *cobra.Command, opts *rootOptions, taskID string) error 
 	return err
 }
 
-func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentName string, mainMode bool) error {
+func runTaskRun(command *cobra.Command, opts *rootOptions, taskID, agentName string, mainMode, repoRootMode bool) error {
 	logger := opts.log().With(
 		slog.String("component", "cli"),
 		slog.String("operation", "task_run"),
 	)
+	if mainMode && repoRootMode {
+		return fmt.Errorf("task run %s: --main cannot be combined with --repo-root", taskID)
+	}
 	logger.DebugContext(command.Context(), "loading registered repos for task run")
 
 	resolvedCtx, err := resolveTaskRunContext(taskID)
@@ -355,7 +361,7 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID string, agentN
 		)
 	}
 
-	dispatch, err := startTaskRunDispatch(command, paths, resolved, taskBackend, agentName, mainMode)
+	dispatch, err := startTaskRunDispatch(command, paths, resolved, taskBackend, agentName, mainMode, repoRootMode)
 	if err != nil {
 		return fmt.Errorf("task run %s: %w", resolved.TaskID, err)
 	}
@@ -385,6 +391,7 @@ func startTaskRunDispatch(
 	backend workflow.DispatchBackend,
 	agentName string,
 	mainMode bool,
+	repoRootMode bool,
 ) (taskRunDispatch, error) {
 	dispatch := taskRunDispatch{
 		service: workflow.DispatchService{
@@ -408,7 +415,8 @@ func startTaskRunDispatch(
 				Args:      commandSnapshot.Args,
 			}, nil
 		},
-		MainMode: mainMode,
+		MainMode:     mainMode,
+		RepoRootMode: repoRootMode,
 	})
 	if err != nil {
 		return taskRunDispatch{}, err
@@ -753,9 +761,11 @@ func taskWorkingDirectory(repo taskmodel.Repository, taskItem taskmodel.Task) (s
 		return cleanTaskRunPath(repo.Path), nil
 	case workflow.TargetWorktreeTeam:
 		return worktree, nil
+	case workflow.TargetRepoRootTeam:
+		return cleanTaskRunPath(repo.Path), nil
 	default:
 		return "", fmt.Errorf(
-			"task Orpheus target metadata is inconsistent: %s=%q, %s=%q do not identify a main/solo or worktree/team target for repo %s",
+			"task Orpheus target metadata is inconsistent: %s=%q, %s=%q do not identify a main/solo, worktree/team, or repo-root/team target for repo %s",
 			taskmodel.MetadataBranch,
 			metadata.Branch,
 			taskmodel.MetadataWorktree,

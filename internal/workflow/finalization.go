@@ -215,7 +215,7 @@ func (s FinalizationService) finalizeLocked(
 		return FinalizationResult{}, err
 	}
 
-	if metadataTarget.Kind == TargetWorktreeTeam {
+	if isFeatureBranchTarget(metadataTarget.Kind) {
 		return s.publishFeatureBranch(ctx, target, finalizeCtx, metadataTarget, gitState)
 	}
 
@@ -1085,7 +1085,7 @@ func validateDefaultBranchLatestStatus(
 }
 
 func validateFeatureBranchTarget(target Target, taskID string) error {
-	if target.Kind != TargetWorktreeTeam {
+	if !isFeatureBranchTarget(target.Kind) {
 		return fmt.Errorf("task %s is not a feature-branch publication target", taskID)
 	}
 	return nil
@@ -1134,10 +1134,21 @@ func validateFeatureBranchLatestRun(taskItem task.Task, latest taskstate.RunAtte
 	if err := validateLatestRunWorktree(target.Worktree, "task worktree", taskItem.ID, latest); err != nil {
 		return err
 	}
-	if _, ok := ClassifyExpectedPRReviewReady(ExpectedTargets{WorktreeTeam: target}, taskItem, &latest); !ok {
-		return fmt.Errorf("latest run attempt %d for task %s is not a worktree/team PR-ready completion", latest.Attempt, taskItem.ID)
+	if _, ok := ClassifyExpectedPRReviewReady(expectedTargetsForFeatureBranchTarget(target), taskItem, &latest); !ok {
+		return fmt.Errorf("latest run attempt %d for task %s is not a PR-ready feature-branch completion", latest.Attempt, taskItem.ID)
 	}
 	return nil
+}
+
+func isFeatureBranchTarget(kind TargetKind) bool {
+	return kind == TargetWorktreeTeam || kind == TargetRepoRootTeam
+}
+
+func expectedTargetsForFeatureBranchTarget(target Target) ExpectedTargets {
+	if target.Kind == TargetRepoRootTeam {
+		return ExpectedTargets{RepoRootTeam: target}
+	}
+	return ExpectedTargets{WorktreeTeam: target}
 }
 
 func finalizationMessageParts(completion *taskstate.Completion, opts FinalizeOptions) (string, string, error) {
