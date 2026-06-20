@@ -44,7 +44,7 @@ func newAgentDoneCommand(opts *rootOptions) *cobra.Command {
 	var detailedDescriptionFile string
 	cmd := &cobra.Command{
 		Use:   "done",
-		Short: "Record active agent completion for local review",
+		Short: "Record active agent completion",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
 			return runAgentDone(command, opts, summary, description, detailedDescription, detailedDescriptionFile)
@@ -163,14 +163,12 @@ func renderAgentDoneResult(command *cobra.Command, completed agent.CompleteResul
 		)
 		return err
 	}
-	if completed.Context.Target.Kind == agent.ExecutionTargetWorktree &&
-		completed.Run.Completion != nil &&
-		completed.Run.Completion.Commit != "" {
+	if completed.Context.Target.Kind != agent.ExecutionTargetMain {
 		_, err := fmt.Fprintf(
 			command.OutOrStdout(),
-			"Recorded completion for %s and committed %s; ready for pull request review.\n",
+			"Recorded completion for %s; ready for feature-branch publication with `orpheus task done %s`.\n",
 			completed.Context.Task.ID,
-			completed.Run.Completion.Commit,
+			completed.Context.Task.ID,
 		)
 		return err
 	}

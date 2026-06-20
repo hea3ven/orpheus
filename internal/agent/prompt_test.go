@@ -76,8 +76,8 @@ func TestRenderActiveContextIncludesWorktreeContract(t *testing.T) {
 		"one-time completion handoff",
 		"run it at most once",
 		"do not run it again after it succeeds",
-		"local-review-ready completion data",
-		"The human operator will later run `orpheus task done op-1`",
+		"PR-ready completion data for feature-branch publication",
+		"The human operator will later run `orpheus task done op-1` to publish the feature branch as a pull request",
 	} {
 		is.Contains(output, want)
 	}
@@ -151,6 +151,8 @@ func TestRenderActiveContextIncludesRepoRootTaskBranchContract(t *testing.T) {
 		"- Path: /repo/alpha",
 		"registered repository root on the task branch",
 		"orpheus agent done",
+		"PR-ready completion data for feature-branch publication",
+		"The human operator will later run `orpheus task done op-root` to publish the feature branch as a pull request",
 	} {
 		is.Contains(output, want)
 	}

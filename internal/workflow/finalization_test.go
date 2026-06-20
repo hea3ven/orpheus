@@ -363,6 +363,66 @@ func TestFinalizePublishesFeatureBranchPRWithoutClosingTask(t *testing.T) {
 	}
 }
 
+func TestFinalizePublishesRepoRootFeatureBranchPRWithoutClosingTask(t *testing.T) {
+	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	target := targets.RepoRootTeam
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   target.Branch,
+			task.MetadataWorktree: target.Worktree,
+		},
+	}
+	service, git, store, backend := newFinalizationTestServiceForSource(
+		t,
+		paths,
+		source,
+		[]task.Task{taskItem},
+		map[string]taskstate.TaskState{
+			"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
+				Attempt:  1,
+				Status:   taskstate.RunStatusSucceeded,
+				Branch:   target.Branch,
+				Worktree: target.Worktree,
+				Completion: &taskstate.Completion{
+					Summary:             "Publish repo-root branch",
+					Description:         "Commit reviewed feature work.",
+					DetailedDescription: "Detailed PR body.",
+				},
+			}),
+		},
+	)
+	git.branch = target.Branch
+	provider := &fakePRProvider{created: pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/42"}}
+	service.PRProvider = provider
+
+	result, err := service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+
+	if result.Branch != target.Branch || result.PRURL != "https://github.test/org/repo/pull/42" || result.PRRecovered {
+		t.Fatalf("result = %#v, want published repo-root feature branch", result)
+	}
+	if !git.staged || len(git.taskPushes) != 1 || git.taskPushes[0] != target.Branch {
+		t.Fatalf("staged=%v taskPushes=%#v, want staged feature branch push", git.staged, git.taskPushes)
+	}
+	if len(git.pushes) != 0 {
+		t.Fatalf("default branch pushes = %#v, want none", git.pushes)
+	}
+	if len(provider.findRequests) != 1 || len(provider.createRequests) != 1 {
+		t.Fatalf("provider find/create = %#v/%#v, want one each", provider.findRequests, provider.createRequests)
+	}
+	if len(backend.setPRURLs) != 1 || len(backend.closed) != 0 {
+		t.Fatalf("backend set=%#v closed=%#v, want PR recorded and task left open", backend.setPRURLs, backend.closed)
+	}
+	facts := taskstate.FinalizationFacts(store.states["alpha/op-1"])
+	if facts.Commit != "commit123" || facts.CommittedAt == nil || facts.PushedAt == nil || facts.ClosedAt != nil {
+		t.Fatalf("finalization facts = %#v, want commit/push without close", facts)
+	}
+}
+
 func TestFinalizeRecoversExistingFeatureBranchPR(t *testing.T) {
 	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
 	worktree := targets.WorktreeTeam.Worktree

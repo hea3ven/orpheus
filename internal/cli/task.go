@@ -143,12 +143,13 @@ func newTaskDoneCommand(opts *rootOptions) *cobra.Command {
 	var description string
 	cmd := &cobra.Command{
 		Use:   "done [<task-id>]",
-		Short: "Finalize a reviewed main/solo task",
-		Long: "Finalize a reviewed main/solo task.\n\n" +
-			"Commits the reviewed repo-root changes, pushes the registered default branch, " +
-			"then closes the backend task. Without a task id, the command only infers the task " +
-			"when the current directory is exactly a registered repo root with one matching " +
-			"main/solo local-ready task.",
+		Short: "Finalize a reviewed task",
+		Long: "Finalize a reviewed task.\n\n" +
+			"On the registered default branch, commits reviewed repo-root changes, pushes the " +
+			"default branch, and closes the backend task. On a repo-root task branch, publishes " +
+			"the feature branch as a pull request. Without a task id, the command infers one " +
+			"ready task only when the current directory is exactly a registered repo root or " +
+			"deterministic task worktree and the task owns the current branch.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			taskID := ""
