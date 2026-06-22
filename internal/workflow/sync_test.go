@@ -928,6 +928,26 @@ func TestBuildSyncPullRequestContent(t *testing.T) {
 	}
 }
 
+func TestBuildPublicationPullRequestContentUsesTitleTemplate(t *testing.T) {
+	content, err := workflow.BuildPublicationPullRequestContent("[OPS] {{summary}}", task.Task{
+		ID: "op-1",
+	}, taskstate.RunAttempt{
+		Completion: &taskstate.Completion{
+			Summary:             "Ready for review",
+			DetailedDescription: "Detailed PR body.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("build content: %v", err)
+	}
+	if content.Title != "[OPS] Ready for review" {
+		t.Fatalf("title = %q, want rendered title", content.Title)
+	}
+	if content.Body != "Detailed PR body." {
+		t.Fatalf("body = %q, want detailed description unchanged", content.Body)
+	}
+}
+
 func newSyncTestService(
 	t *testing.T,
 	taskItem task.Task,

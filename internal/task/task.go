@@ -283,6 +283,7 @@ type Repository struct {
 	TaskIDPrefix  string
 	Path          string
 	DefaultBranch string
+	TitleTemplate string
 }
 
 // RepoTask is one task row with repository context preserved for global views.

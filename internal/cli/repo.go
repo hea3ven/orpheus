@@ -11,6 +11,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/beads"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/spf13/cobra"
@@ -88,6 +89,9 @@ func runRepoAdd(command *cobra.Command, opts *rootOptions, inputPath string) err
 		return err
 	}
 	if err := configureRepoSummaryGuidance(command, &repo, logger); err != nil {
+		return err
+	}
+	if err := configureRepoTitleTemplate(command, &repo, logger); err != nil {
 		return err
 	}
 
@@ -230,6 +234,33 @@ func configureRepoSummaryGuidance(command *cobra.Command, repo *registry.Repo, l
 		command.Context(),
 		"configured custom summary guidance",
 		slog.Bool("summary_guidance_set", repo.SummaryGuidance != ""),
+	)
+	return nil
+}
+
+func configureRepoTitleTemplate(command *cobra.Command, repo *registry.Repo, logger *slog.Logger) error {
+	input := command.InOrStdin()
+	if !isTerminal(input) {
+		return nil
+	}
+
+	wizard := repoAddWizard{
+		reader: bufio.NewReader(input),
+		output: command.ErrOrStderr(),
+	}
+	template, err := wizard.promptValue("Publication title template", "", false)
+	if err != nil {
+		return err
+	}
+	template = strings.TrimSpace(template)
+	if err := publication.ValidateTitleTemplate(template); err != nil {
+		return err
+	}
+	repo.TitleTemplate = template
+	logger.DebugContext(
+		command.Context(),
+		"configured publication title template",
+		slog.Bool("title_template_set", repo.TitleTemplate != ""),
 	)
 	return nil
 }

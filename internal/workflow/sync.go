@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
@@ -379,15 +380,24 @@ type PullRequestContent struct {
 	Body  string
 }
 
-// BuildSyncPullRequestContent returns PR text from the completion handoff.
+// BuildSyncPullRequestContent returns default PR text from the completion handoff.
 func BuildSyncPullRequestContent(taskItem task.Task, latest taskstate.RunAttempt) (PullRequestContent, error) {
+	return BuildPublicationPullRequestContent("", taskItem, latest)
+}
+
+// BuildPublicationPullRequestContent returns PR text using an optional title template.
+func BuildPublicationPullRequestContent(titleTemplate string, taskItem task.Task, latest taskstate.RunAttempt) (PullRequestContent, error) {
 	if strings.TrimSpace(taskItem.ID) == "" {
 		return PullRequestContent{}, errors.New("task id is required")
 	}
 	if latest.Completion == nil {
 		return PullRequestContent{}, errors.New("completion is required")
 	}
-	title := singleLine(latest.Completion.Summary)
+	renderedTitle, err := publication.RenderTitle(titleTemplate, latest.Completion.Summary)
+	if err != nil {
+		return PullRequestContent{}, err
+	}
+	title := singleLine(renderedTitle)
 	if title == "" {
 		return PullRequestContent{}, errors.New("completion summary is required")
 	}

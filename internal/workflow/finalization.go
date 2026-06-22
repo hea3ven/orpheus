@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
@@ -334,12 +335,16 @@ func (s FinalizationService) ensureDefaultBranchFinalizationCommit(
 	if err != nil {
 		return taskstate.Finalization{}, err
 	}
+	title, err := publication.RenderTitle(repo.TitleTemplate, summary)
+	if err != nil {
+		return taskstate.Finalization{}, err
+	}
 	return s.createDefaultBranchFinalizationCommit(
 		ctx,
 		gitState,
 		repo,
 		target.task.ID,
-		summary+"\n\n"+description,
+		title+"\n\n"+description,
 		hasChanges,
 		pendingConfirmation,
 	)
@@ -535,7 +540,11 @@ func (s FinalizationService) publishFeatureBranch(
 	if err != nil {
 		return FinalizationResult{}, err
 	}
-	message := summary + "\n\n" + description
+	title, err := publication.RenderTitle(repo.TitleTemplate, summary)
+	if err != nil {
+		return FinalizationResult{}, err
+	}
+	message := title + "\n\n" + description
 
 	hasChanges, err := gitState.HasWorkingTreeChanges(ctx, metadataTarget.Worktree)
 	if err != nil {
@@ -664,7 +673,7 @@ func (s FinalizationService) findOrCreateFeatureBranchPR(
 		return strings.TrimSpace(found.URL), true, nil
 	}
 
-	content, err := BuildSyncPullRequestContent(taskItem, latest)
+	content, err := BuildPublicationPullRequestContent(repo.TitleTemplate, taskItem, latest)
 	if err != nil {
 		return "", false, err
 	}
