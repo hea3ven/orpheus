@@ -66,10 +66,11 @@ type ActiveContext struct {
 
 // ContextRepository describes the registered repository for an active context.
 type ContextRepository struct {
-	ID            string
-	Name          string
-	Root          string
-	DefaultBranch string
+	ID              string
+	Name            string
+	Root            string
+	DefaultBranch   string
+	SummaryGuidance string
 }
 
 // ContextTask describes the backend-neutral task details agents need.
@@ -272,10 +273,11 @@ func newActiveContext(
 ) ActiveContext {
 	return ActiveContext{
 		Repository: ContextRepository{
-			ID:            repo.ID,
-			Name:          repo.Name,
-			Root:          targets.MainSolo.Worktree,
-			DefaultBranch: targets.MainSolo.Branch,
+			ID:              repo.ID,
+			Name:            repo.Name,
+			Root:            targets.MainSolo.Worktree,
+			DefaultBranch:   targets.MainSolo.Branch,
+			SummaryGuidance: repo.SummaryGuidance,
 		},
 		Task: ContextTask{
 			ID:                 taskItem.ID,

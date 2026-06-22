@@ -21,6 +21,7 @@ const repoAddLockOperation = "repo add"
 var (
 	inspectLocalBeads      = beads.InspectLocal
 	initializeManagedBeads = beads.InitializeManaged
+	isTerminal             = readerIsTerminal
 )
 
 func newRepoCommand(opts *rootOptions) *cobra.Command {
@@ -84,6 +85,9 @@ func runRepoAdd(command *cobra.Command, opts *rootOptions, inputPath string) err
 	}
 	managed, err := configureRepoBeads(command, &repo, gitInspection.Root, logger)
 	if err != nil {
+		return err
+	}
+	if err := configureRepoSummaryGuidance(command, &repo, logger); err != nil {
 		return err
 	}
 
@@ -205,6 +209,29 @@ func configureRepoBeads(command *cobra.Command, repo *registry.Repo, repoRoot st
 		slog.String("beads_prefix", repo.BeadsPrefix),
 	)
 	return true, nil
+}
+
+func configureRepoSummaryGuidance(command *cobra.Command, repo *registry.Repo, logger *slog.Logger) error {
+	input := command.InOrStdin()
+	if !isTerminal(input) {
+		return nil
+	}
+
+	wizard := repoAddWizard{
+		reader: bufio.NewReader(input),
+		output: command.ErrOrStderr(),
+	}
+	guidance, err := wizard.promptValue("Custom summary guidance", "", false)
+	if err != nil {
+		return err
+	}
+	repo.SummaryGuidance = strings.TrimSpace(guidance)
+	logger.DebugContext(
+		command.Context(),
+		"configured custom summary guidance",
+		slog.Bool("summary_guidance_set", repo.SummaryGuidance != ""),
+	)
+	return nil
 }
 
 func initializeManagedRepoBeads(
@@ -330,7 +357,7 @@ func confirmGitValues(command *cobra.Command, inspection gitmeta.Inspection) (st
 		output: command.ErrOrStderr(),
 	}
 
-	if !readerIsTerminal(input) {
+	if !isTerminal(input) {
 		remote, defaultBranch, err := confirmedGitValuesFromInspection(inspection)
 		if err != nil {
 			return "", "", err
@@ -362,7 +389,7 @@ func confirmManagedBeadsPrefix(command *cobra.Command, defaultPrefix string) (st
 		return "", errors.New("managed Beads prefix is required")
 	}
 
-	if !readerIsTerminal(input) {
+	if !isTerminal(input) {
 		return defaultPrefix, nil
 	}
 

@@ -40,6 +40,7 @@ func TestActiveContextResolverResolvesWorktreeTarget(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newActiveContextFixture(t, "op-1")
+	fixture.repo.SummaryGuidance = "Use sentence-case summaries without a type prefix."
 	worktree := fixture.expectedWorktree(t, "op-1")
 	cwd := filepath.Join(worktree, "internal", "agent")
 	must.NoError(testMkdirAll(cwd))
@@ -76,6 +77,7 @@ func TestActiveContextResolverResolvesWorktreeTarget(t *testing.T) {
 	is.Equal("Alpha Repo", got.Repository.Name)
 	is.Equal(fixture.repoPath, got.Repository.Root)
 	is.Equal("main", got.Repository.DefaultBranch)
+	is.Equal(fixture.repo.SummaryGuidance, got.Repository.SummaryGuidance)
 	is.Equal("op-1", got.Task.ID)
 	is.Equal("Resolve context", got.Task.Title)
 	is.Equal(1, got.Run.Attempt)

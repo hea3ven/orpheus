@@ -40,13 +40,14 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 	paths := newTestPaths(t)
 	store := registry.NewStore(paths)
 	want := registry.Registry{Repos: []registry.Repo{{
-		ID:            "orpheus",
-		Name:          "orpheus",
-		Path:          filepath.Join(paths.DataRoot, "..", "repos", "orpheus"),
-		Remote:        "git@example.com:org/orpheus.git",
-		DefaultBranch: "main",
-		BeadsMode:     registry.BeadsModeLocal,
-		BeadsPrefix:   "op",
+		ID:              "orpheus",
+		Name:            "orpheus",
+		Path:            filepath.Join(paths.DataRoot, "..", "repos", "orpheus"),
+		Remote:          "git@example.com:org/orpheus.git",
+		DefaultBranch:   "main",
+		BeadsMode:       registry.BeadsModeLocal,
+		BeadsPrefix:     "op",
+		SummaryGuidance: "Use sentence-case summaries without a type prefix.",
 	}}}
 	want.Repos[0].Path = filepath.Clean(want.Repos[0].Path)
 
@@ -67,7 +68,8 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 		!strings.Contains(string(onDisk), "remote: git@example.com:org/orpheus.git") ||
 		!strings.Contains(string(onDisk), "default_branch: main") ||
 		!strings.Contains(string(onDisk), "beads_mode: local") ||
-		!strings.Contains(string(onDisk), "beads_prefix: op") {
+		!strings.Contains(string(onDisk), "beads_prefix: op") ||
+		!strings.Contains(string(onDisk), "summary_guidance: Use sentence-case summaries without a type prefix.") {
 		t.Fatalf("registry file is not human-editable YAML: %s", onDisk)
 	}
 

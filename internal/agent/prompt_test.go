@@ -125,6 +125,33 @@ func TestRenderActiveContextIncludesMainContract(t *testing.T) {
 	is.NotContains(output, "bd")
 }
 
+func TestRenderActiveContextUsesCustomSummaryGuidance(t *testing.T) {
+	is := assert.New(t)
+	guidance := "Use sentence-case summaries without a type prefix."
+
+	output := agent.RenderActiveContext(agent.ActiveContext{
+		Repository: agent.ContextRepository{
+			ID:              "alpha",
+			Name:            "Alpha Repo",
+			Root:            "/repo/alpha",
+			DefaultBranch:   "main",
+			SummaryGuidance: guidance,
+		},
+		Task: agent.ContextTask{ID: "op-main", Title: "Main target"},
+		Run:  agent.ContextRun{Attempt: 1},
+		Target: agent.ContextTarget{
+			Kind:             agent.ExecutionTargetMain,
+			Branch:           "main",
+			Path:             "/repo/alpha",
+			CurrentDirectory: "/repo/alpha",
+		},
+	})
+
+	is.Contains(output, "Write `--summary` following this repository guidance: "+guidance)
+	is.NotContains(output, "one commit-style summary line, 80 characters or fewer")
+	is.NotContains(output, "<type(fix,feat,test,chore,conf,etc)>: <description>")
+}
+
 func TestRenderActiveContextIncludesRepoRootTaskBranchContract(t *testing.T) {
 	is := assert.New(t)
 
