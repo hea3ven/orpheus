@@ -101,6 +101,7 @@ type fakeFinalizationGit struct {
 	hasChanges bool
 	commit     string
 	staged     bool
+	messages   []string
 	pushes     []string
 	taskPushes []string
 }
@@ -122,7 +123,8 @@ func (g *fakeFinalizationGit) StageAll(context.Context, string) error {
 	return nil
 }
 
-func (g *fakeFinalizationGit) Commit(context.Context, string, string) (string, error) {
+func (g *fakeFinalizationGit) Commit(_ context.Context, _ string, message string) (string, error) {
+	g.messages = append(g.messages, message)
 	return g.commit, nil
 }
 
@@ -305,6 +307,7 @@ func TestFinalizeDoesNotOfferRunningEscapeHatchForInvalidTargets(t *testing.T) {
 
 func TestFinalizePublishesFeatureBranchPRWithoutClosingTask(t *testing.T) {
 	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	source.Repository.TitleTemplate = "[OPS] {{summary}}"
 	worktree := targets.WorktreeTeam.Worktree
 	taskItem := task.Task{
 		ID:     "op-1",
@@ -351,6 +354,7 @@ func TestFinalizePublishesFeatureBranchPRWithoutClosingTask(t *testing.T) {
 	if len(provider.findRequests) != 1 || len(provider.createRequests) != 1 {
 		t.Fatalf("provider find/create = %#v/%#v, want one each", provider.findRequests, provider.createRequests)
 	}
+	assertFeatureBranchPublicationTitles(t, git, provider, "[OPS] Publish branch")
 	if len(backend.setPRURLs) != 1 || backend.setPRURLs[0].prURL != "https://github.test/org/repo/pull/42" {
 		t.Fatalf("set PR URLs = %#v, want created URL", backend.setPRURLs)
 	}
@@ -414,6 +418,7 @@ func TestFinalizePublishesRepoRootFeatureBranchPRWithoutClosingTask(t *testing.T
 	if len(provider.findRequests) != 1 || len(provider.createRequests) != 1 {
 		t.Fatalf("provider find/create = %#v/%#v, want one each", provider.findRequests, provider.createRequests)
 	}
+	assertFeatureBranchPublicationTitles(t, git, provider, "Publish repo-root branch")
 	if len(backend.setPRURLs) != 1 || len(backend.closed) != 0 {
 		t.Fatalf("backend set=%#v closed=%#v, want PR recorded and task left open", backend.setPRURLs, backend.closed)
 	}
@@ -519,6 +524,21 @@ func newFinalizationTestService(
 	t.Helper()
 	paths, source, _ := newFinalizationTestSource(t, "/tmp/repo", "op-1")
 	return newFinalizationTestServiceForSource(t, paths, source, tasks, states)
+}
+
+func assertFeatureBranchPublicationTitles(
+	t *testing.T,
+	git *fakeFinalizationGit,
+	provider *fakePRProvider,
+	title string,
+) {
+	t.Helper()
+	if got := git.messages; len(got) != 1 || got[0] != title+"\n\nCommit reviewed feature work." {
+		t.Fatalf("commit messages = %#v, want title with unchanged body", got)
+	}
+	if got := provider.createRequests[0]; got.Title != title || got.Body != "Detailed PR body." {
+		t.Fatalf("PR request = %#v, want title with unchanged body", got)
+	}
 }
 
 func newFinalizationTestServiceForSource(

@@ -1098,6 +1098,7 @@ func taskRepositorySources(store registry.Store, reg registry.Registry) ([]taskm
 				TaskIDPrefix:  repo.BeadsPrefix,
 				Path:          repo.Path,
 				DefaultBranch: repo.DefaultBranch,
+				TitleTemplate: repo.TitleTemplate,
 			},
 			BackendDir: beadsDir,
 		})

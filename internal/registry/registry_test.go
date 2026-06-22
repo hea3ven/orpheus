@@ -48,6 +48,7 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 		BeadsMode:       registry.BeadsModeLocal,
 		BeadsPrefix:     "op",
 		SummaryGuidance: "Use sentence-case summaries without a type prefix.",
+		TitleTemplate:   "[OPS] {{summary}}",
 	}}}
 	want.Repos[0].Path = filepath.Clean(want.Repos[0].Path)
 
@@ -69,7 +70,8 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 		!strings.Contains(string(onDisk), "default_branch: main") ||
 		!strings.Contains(string(onDisk), "beads_mode: local") ||
 		!strings.Contains(string(onDisk), "beads_prefix: op") ||
-		!strings.Contains(string(onDisk), "summary_guidance: Use sentence-case summaries without a type prefix.") {
+		!strings.Contains(string(onDisk), "summary_guidance: Use sentence-case summaries without a type prefix.") ||
+		!strings.Contains(string(onDisk), "title_template: '[OPS] {{summary}}'") {
 		t.Fatalf("registry file is not human-editable YAML: %s", onDisk)
 	}
 
@@ -91,6 +93,23 @@ func TestStoreLoadMalformedRegistry(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "load repo registry") || !strings.Contains(err.Error(), "registry.yaml") {
 		t.Fatalf("error is not actionable: %v", err)
+	}
+}
+
+func TestStoreLoadRejectsUnsupportedTitleTemplate(t *testing.T) {
+	paths := newTestPaths(t)
+	writeDataFile(t, paths, "registry.yaml", `repos:
+  - id: alpha
+    name: alpha
+    path: /tmp/alpha
+    title_template: "[{{external_ref}}] {{summary}}"
+`)
+	store := registry.NewStore(paths)
+
+	_, err := store.Load()
+
+	if err == nil || !strings.Contains(err.Error(), "only {{summary}} is supported") {
+		t.Fatalf("error = %v, want unsupported title template error", err)
 	}
 }
 

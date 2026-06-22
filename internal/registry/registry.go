@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/state"
 )
 
@@ -31,6 +32,7 @@ type Repo struct {
 	BeadsMode       string `yaml:"beads_mode,omitempty"`
 	BeadsPrefix     string `yaml:"beads_prefix,omitempty"`
 	SummaryGuidance string `yaml:"summary_guidance,omitempty"`
+	TitleTemplate   string `yaml:"title_template,omitempty"`
 }
 
 // Registry is the human-editable YAML schema for registered repositories.
@@ -295,6 +297,10 @@ func normalizeRepo(repo Repo) (Repo, error) {
 	repo.BeadsMode = strings.TrimSpace(repo.BeadsMode)
 	repo.BeadsPrefix = strings.TrimSpace(repo.BeadsPrefix)
 	repo.SummaryGuidance = strings.TrimSpace(repo.SummaryGuidance)
+	repo.TitleTemplate = strings.TrimSpace(repo.TitleTemplate)
+	if err := publication.ValidateTitleTemplate(repo.TitleTemplate); err != nil {
+		return Repo{}, fmt.Errorf("repo title_template is invalid: %w", err)
+	}
 	if repo.ID == "" {
 		return Repo{}, errors.New("repo id is required")
 	}
