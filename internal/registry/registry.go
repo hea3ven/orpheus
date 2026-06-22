@@ -23,13 +23,14 @@ const (
 
 // Repo is a repository record stored in the Orpheus registry.
 type Repo struct {
-	ID            string `yaml:"id"`
-	Name          string `yaml:"name"`
-	Path          string `yaml:"path"`
-	Remote        string `yaml:"remote,omitempty"`
-	DefaultBranch string `yaml:"default_branch,omitempty"`
-	BeadsMode     string `yaml:"beads_mode,omitempty"`
-	BeadsPrefix   string `yaml:"beads_prefix,omitempty"`
+	ID              string `yaml:"id"`
+	Name            string `yaml:"name"`
+	Path            string `yaml:"path"`
+	Remote          string `yaml:"remote,omitempty"`
+	DefaultBranch   string `yaml:"default_branch,omitempty"`
+	BeadsMode       string `yaml:"beads_mode,omitempty"`
+	BeadsPrefix     string `yaml:"beads_prefix,omitempty"`
+	SummaryGuidance string `yaml:"summary_guidance,omitempty"`
 }
 
 // Registry is the human-editable YAML schema for registered repositories.
@@ -293,6 +294,7 @@ func normalizeRepo(repo Repo) (Repo, error) {
 	repo.DefaultBranch = strings.TrimSpace(repo.DefaultBranch)
 	repo.BeadsMode = strings.TrimSpace(repo.BeadsMode)
 	repo.BeadsPrefix = strings.TrimSpace(repo.BeadsPrefix)
+	repo.SummaryGuidance = strings.TrimSpace(repo.SummaryGuidance)
 	if repo.ID == "" {
 		return Repo{}, errors.New("repo id is required")
 	}
