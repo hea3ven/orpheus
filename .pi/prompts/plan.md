@@ -15,6 +15,15 @@ Scope and constraints:
 - Avoid low-level implementation details: exact files, line numbers, mechanical coding steps, or step-by-step coding checklists.
 - Include enough context for an implementer to understand purpose, boundaries, interfaces, data flow, dependencies, and acceptance criteria.
 - Prefer clear outcomes and constraints over implementation prescriptions.
+- Prefer vertical, end-to-end task slices over horizontal slices by package, layer, subsystem, or implementation mechanism.
+
+Vertical slicing requirements:
+- A child task should usually deliver one small user-visible or operator-visible behavior that can be validated end to end.
+- Each vertical slice should include the necessary product surface, configuration, data flow, persistence, workflow behavior, and validation for that behavior, without splitting those concerns into separate layer-only tasks.
+- Avoid child tasks whose main outcome is only "add model field", "create config schema", "wire backend", "update status", "add tests", or "write docs" unless that work is independently valuable and cannot be bundled into a vertical slice.
+- If a temporary foundation task seems necessary, challenge it explicitly, keep it minimal, explain which later vertical slice consumes it, and prefer folding it into the first usable slice when practical.
+- For epics, propose the smallest sequence of vertical slices that progressively unlocks real behavior. A good sequence often starts with a limited hardcoded or non-interpolated user-visible path, then adds variants, enforcement, configuration UX, and final documentation/validation.
+- A final validation/documentation child is acceptable, but it must not be the only place where end-to-end acceptance is considered; each implementation child should still have observable acceptance criteria.
 
 Process:
 1. Research project context first.
@@ -33,6 +42,13 @@ Process:
 3. Decide task vs epic.
    - After the scope is clear, assess whether this should be a single task or an epic with multiple child tasks.
    - Recommend one option with rationale.
+   - If recommending an epic, propose vertical child slices, not layer-by-layer implementation tasks.
+   - Before asking for structure approval, run a verticality check on the proposed child breakdown:
+     - What user/operator-visible outcome does each child deliver?
+     - How can each child be validated end to end?
+     - Which children, if any, are horizontal/foundation-only, and why can they not be folded into a vertical slice?
+     - Are dependencies based on product sequencing, not merely package/layer order?
+   - Revise the breakdown yourself if the verticality check exposes horizontal slices.
    - Ask me to choose between:
      - Single task: one actionable bead is enough.
      - Epic: create a parent epic and multiple child tasks.
@@ -41,6 +57,7 @@ Process:
 4. Refine the proposed bead(s).
    - If single task: refine the task until its purpose, boundaries, interfaces, dependencies, and acceptance criteria are clear.
    - If epic: first propose the child task breakdown and get approval. Then refine each child task one by one; do not move to the next child until the current one is complete and actionable.
+   - For each child task in an epic, explicitly state the vertical slice it delivers and the end-to-end behavior that proves it works.
    - For each bead, define:
      - Title
      - Type (`task` or `epic`)
