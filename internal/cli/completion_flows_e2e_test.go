@@ -204,6 +204,113 @@ func TestWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 }
 
 //nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
+func TestRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	paths, repoPath := setupCompletionFlowRepo(t)
+
+	const taskID = "op-repo-root-sync"
+	branch := "orpheus/" + taskID
+	bd := withStatefulCompletionBD(t, completionBDTask{
+		RepoPath:           repoPath,
+		TaskID:             taskID,
+		Title:              "Repo-root PR flow",
+		Description:        "Validate repo-root feature branch publication and merge sync.",
+		AcceptanceCriteria: "Task done publishes a PR, and sync closes the merged task.",
+		CloseBranch:        branch,
+	})
+	withOrpheusCLIHelper(t)
+	agentLogPath := withCompletionFlowAgent(t, completionFlowAgentOptions{
+		Command:             "repo-root-sync-agent",
+		FileName:            "repo-root-sync-change.txt",
+		Body:                "repo-root implementation",
+		Summary:             "Implement repo-root PR validation",
+		Description:         "Created a repo-root feature-branch validation change.",
+		DetailedDescription: "## Repo-root PR flow\n\nCreated a repo-root feature-branch validation change.",
+	})
+	writeCompletionFlowAgentConfig(t, paths, "repo-root-sync", "repo-root-sync-agent")
+
+	runOut, runErr := executeCommand(t, []string{"task", "run", "--repo-root", taskID})
+
+	is.Empty(runErr)
+	is.Contains(runOut, "completion agent completed")
+	is.Equal(branch, strings.TrimSpace(runGit(t, repoPath, "branch", "--show-current")))
+
+	agentLog := readFileString(t, agentLogPath)
+	contextOutput := agentLogBlock(t, agentLog, "AGENT_CONTEXT")
+	for _, want := range []string{
+		"- Workflow: repo-root/team",
+		"- Branch: " + branch,
+		"- Path: " + repoPath,
+		"- Current directory: " + repoPath,
+		"registered repository root on the task branch",
+	} {
+		is.Contains(contextOutput, want)
+	}
+
+	dirOut, dirErr := executeCommand(t, []string{"task", "dir", taskID})
+	is.Empty(dirErr)
+	is.Equal(repoPath+"\n", dirOut)
+
+	state := readCompletionTaskState(t, paths, "alpha", taskID)
+	latest, ok := taskstate.LatestRun(state)
+	must.True(ok)
+	must.NotNil(latest.Completion)
+	is.Equal(branch, latest.Branch)
+	is.Equal(repoPath, latest.Worktree)
+	is.Empty(latest.Completion.Commit)
+	is.Contains(runGit(t, repoPath, "status", "--porcelain=v1"), "repo-root-sync-change.txt")
+
+	ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{
+		listStdout:   "[]",
+		createStdout: "https://github.test/org/alpha/pull/56\n",
+		statusStdout: `{"url":"https://github.test/org/alpha/pull/56","state":"OPEN","merged":false}`,
+	})
+
+	doneOut, doneErr := executeCommand(t, []string{"task", "done", taskID})
+
+	is.Empty(doneErr)
+	is.Contains(doneOut, "Published "+taskID)
+	is.Contains(doneOut, "pushed "+branch)
+	is.Contains(doneOut, "created PR https://github.test/org/alpha/pull/56")
+	is.Contains(doneOut, "Backend task remains open for PR review")
+	publicationCommit := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
+	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
+	pushedCommit := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/"+branch))
+	is.Equal(publicationCommit, pushedCommit)
+	is.Empty(strings.TrimSpace(runGit(t, repoPath, "status", "--porcelain=v1")))
+
+	bdLog := readFileString(t, bd.LogPath)
+	is.Equal(1, strings.Count(bdLog, "--set-metadata orpheus.pr_url=https://github.test/org/alpha/pull/56"))
+
+	openSyncOut, openSyncErr := executeCommand(t, []string{"task", "sync", taskID})
+	is.Empty(openSyncErr)
+	is.Contains(openSyncOut, "PR https://github.test/org/alpha/pull/56 is still open for review")
+	is.Equal(1, strings.Count(readFileString(t, ghLogPath), "ARG_2<<END\nview\nEND"))
+
+	withFakeGHPRResponses(t, fakeGHPRResponses{
+		listStdout:   "unexpected list\n",
+		listExit:     66,
+		createStdout: "unexpected create\n",
+		createExit:   66,
+		statusStdout: `{"url":"https://github.test/org/alpha/pull/56","state":"MERGED","merged":true}`,
+	})
+
+	mergedSyncOut, mergedSyncErr := executeCommand(t, []string{"task", "sync", taskID})
+
+	is.Empty(mergedSyncErr)
+	is.Contains(mergedSyncOut, "PR https://github.test/org/alpha/pull/56 is merged")
+	is.Contains(mergedSyncOut, "Backend task was closed")
+	is.Equal("closed", strings.TrimSpace(readFileString(t, bd.StatusPath)))
+
+	mergedState := readCompletionTaskState(t, paths, "alpha", taskID)
+	must.NotEmpty(mergedState.Events)
+	mergedEvent := mergedState.Events[len(mergedState.Events)-1]
+	is.Equal(taskstate.EventTaskClosedPRMerged, mergedEvent.Type)
+	is.Equal("https://github.test/org/alpha/pull/56", mergedEvent.PRURL)
+}
+
+//nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestMainCompletionFlowEndToEnd(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -339,6 +446,7 @@ type completionBDTask struct {
 	Title              string
 	Description        string
 	AcceptanceCriteria string
+	CloseBranch        string
 }
 
 type statefulCompletionBD struct {
@@ -394,6 +502,7 @@ STATUS_FILE=%s
 BRANCH_FILE=%s
 WORKTREE_FILE=%s
 PR_URL_FILE=%s
+CLOSE_BRANCH=%s
 
 emit_task() {
   status="$(cat "$STATUS_FILE")"
@@ -463,11 +572,11 @@ if [ "${1-}" = "--json" ] && [ "${2-}" = "--sandbox" ] && [ "${3-}" = "close" ] 
     printf 'close before reviewed changes were committed:\n%%s\n' "$dirty" >&2
     exit 66
   fi
-  current="$(git -C "$REPO_PATH" rev-parse HEAD)"
+  current="$(git -C "$REPO_PATH" rev-parse "$CLOSE_BRANCH")"
   remote="$(git -C "$REPO_PATH" remote get-url origin)"
-  pushed="$(git -C "$remote" rev-parse refs/heads/main 2>/dev/null || true)"
+  pushed="$(git -C "$remote" rev-parse "refs/heads/$CLOSE_BRANCH" 2>/dev/null || true)"
   if [ "$current" != "$pushed" ]; then
-    printf 'close before default branch push: head=%%s remote=%%s\n' "$current" "$pushed" >&2
+    printf 'close before branch push: branch=%%s head=%%s remote=%%s\n' "$CLOSE_BRANCH" "$current" "$pushed" >&2
     exit 66
   fi
   printf 'closed\n' > "$STATUS_FILE"
@@ -504,6 +613,7 @@ func withStatefulCompletionBD(t *testing.T, task completionBDTask) statefulCompl
 		shellQuote(branchPath),
 		shellQuote(worktreePath),
 		shellQuote(prURLPath),
+		shellQuote(completionCloseBranch(task)),
 	)
 
 	bdPath := filepath.Join(binDir, "bd")
@@ -511,6 +621,13 @@ func withStatefulCompletionBD(t *testing.T, task completionBDTask) statefulCompl
 	t.Setenv("FAKE_BD_LOG", logPath)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return statefulCompletionBD{LogPath: logPath, StatusPath: statusPath}
+}
+
+func completionCloseBranch(task completionBDTask) string {
+	if task.CloseBranch != "" {
+		return task.CloseBranch
+	}
+	return "main"
 }
 
 type completionFlowAgentOptions struct {
