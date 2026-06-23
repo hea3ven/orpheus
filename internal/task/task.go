@@ -142,6 +142,7 @@ func (r RelationSummary) Clone() RelationSummary {
 type Task struct {
 	ID                 string
 	Title              string
+	ExternalRef        string
 	Description        string
 	Design             string
 	AcceptanceCriteria string

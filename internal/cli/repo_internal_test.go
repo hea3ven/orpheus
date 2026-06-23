@@ -50,7 +50,7 @@ func TestConfigureRepoTitleTemplateInteractive(t *testing.T) {
 	require.Contains(t, stderr.String(), "Publication title template (optional):")
 }
 
-func TestConfigureRepoTitleTemplateRejectsUnsupportedPlaceholder(t *testing.T) {
+func TestConfigureRepoTitleTemplateAcceptsExternalReferencePlaceholder(t *testing.T) {
 	originalIsTerminal := isTerminal
 	isTerminal = func(io.Reader) bool { return true }
 	t.Cleanup(func() { isTerminal = originalIsTerminal })
@@ -63,5 +63,6 @@ func TestConfigureRepoTitleTemplateRejectsUnsupportedPlaceholder(t *testing.T) {
 
 	err := configureRepoTitleTemplate(command, &repo, logger)
 
-	require.ErrorContains(t, err, "only {{summary}} is supported")
+	require.NoError(t, err)
+	require.Equal(t, "[{{external_ref}}] {{summary}}", repo.TitleTemplate)
 }

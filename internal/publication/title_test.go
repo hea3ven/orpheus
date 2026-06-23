@@ -9,10 +9,11 @@ import (
 
 func TestRenderTitle(t *testing.T) {
 	tests := []struct {
-		name     string
-		template string
-		summary  string
-		expected string
+		name        string
+		template    string
+		summary     string
+		externalRef string
+		expected    string
 	}{
 		{
 			name:     "empty template preserves summary",
@@ -26,6 +27,13 @@ func TestRenderTitle(t *testing.T) {
 			expected: "[OPS] feat: add title templates",
 		},
 		{
+			name:        "template interpolates normalized external reference",
+			template:    "[{{external_ref}}] {{summary}}",
+			summary:     "Replaced the config for abc",
+			externalRef: " \n TREX-1234\t\n ",
+			expected:    "[TREX-1234] Replaced the config for abc",
+		},
+		{
 			name:     "literal template is valid",
 			template: "Publish configured changes",
 			summary:  "feat: add title templates",
@@ -35,7 +43,7 @@ func TestRenderTitle(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := publication.RenderTitle(test.template, test.summary)
+			got, err := publication.RenderTitle(test.template, test.summary, test.externalRef)
 
 			require.NoError(t, err)
 			require.Equal(t, test.expected, got)
@@ -48,7 +56,6 @@ func TestValidateTitleTemplateRejectsUnsupportedPlaceholders(t *testing.T) {
 		name     string
 		template string
 	}{
-		{name: "external reference", template: "[{{external_ref}}] {{summary}}"},
 		{name: "template expression", template: "{{ .Summary }}"},
 		{name: "unexpected closing delimiter", template: "summary }}"},
 	}
@@ -61,4 +68,10 @@ func TestValidateTitleTemplateRejectsUnsupportedPlaceholders(t *testing.T) {
 			require.Contains(t, err.Error(), "publication title template")
 		})
 	}
+}
+
+func TestRenderTitleRejectsMissingExternalReferenceWhenRequired(t *testing.T) {
+	_, err := publication.RenderTitle("[{{external_ref}}] {{summary}}", "Publish task", " \t\n ")
+
+	require.EqualError(t, err, "publication title template requires a task external reference")
 }

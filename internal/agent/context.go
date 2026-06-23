@@ -77,6 +77,7 @@ type ContextRepository struct {
 type ContextTask struct {
 	ID                 string
 	Title              string
+	ExternalRef        string
 	Description        string
 	AcceptanceCriteria string
 }
@@ -282,6 +283,7 @@ func newActiveContext(
 		Task: ContextTask{
 			ID:                 taskItem.ID,
 			Title:              taskItem.Title,
+			ExternalRef:        taskItem.ExternalRef,
 			Description:        taskItem.Description,
 			AcceptanceCriteria: taskItem.AcceptanceCriteria,
 		},

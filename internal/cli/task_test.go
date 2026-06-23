@@ -73,7 +73,7 @@ func TestTaskListListsActiveTasksAcrossRegisteredReposWithDefaultAndDetailedTabl
 
 	logPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
 		repos.localDir: {stdout: `[
-			{"id":"la-1","title":"Local active","status":"open","priority":2,"issue_type":"task","metadata":{"orpheus.branch":"task/la-1","orpheus.worktree":"/tmp/la-1"}},
+			{"id":"la-1","title":"Local active","external_ref":"TREX-1234","status":"open","priority":2,"issue_type":"task","metadata":{"orpheus.branch":"task/la-1","orpheus.worktree":"/tmp/la-1"}},
 			{"id":"la-closed","title":"Closed local task","status":"closed","priority":1,"issue_type":"task"},
 			{"id":"la-bug","title":"Local bug","status":"open","priority":1,"issue_type":"bug"}
 		]`},
@@ -104,15 +104,15 @@ func TestTaskListListsActiveTasksAcrossRegisteredReposWithDefaultAndDetailedTabl
 
 	is.Empty(detailedStderr)
 	for _, want := range []string{
-		"REPO_ID", "REPO", "TASK_PREFIX", "TASK_ID", "STATUS", "P", "BRANCH", "WORKTREE", "PR", "TITLE",
-		"local-alpha", "Local Alpha", "la", "la-1", "open", "2", "task/la-1", "/tmp/la-1", "Local active",
+		"REPO_ID", "REPO", "TASK_PREFIX", "TASK_ID", "STATUS", "P", "BRANCH", "WORKTREE", "PR", "EXTERNAL_REF", "TITLE",
+		"local-alpha", "Local Alpha", "la", "la-1", "open", "2", "task/la-1", "/tmp/la-1", "TREX-1234", "Local active",
 		"local-alpha", "Local Alpha", "la", "la-bug", "open", "1", "Local bug",
 		"managed-beta", "Managed Beta", "mb", "mb-1", "in_progress", "3", "https://example.test/pr/1", "Managed active",
 	} {
 		is.Contains(detailedStdout, want)
 	}
-	localDetail := regexp.MustCompile(`(?m)^local-alpha\s+Local Alpha\s+la\s+la-1\s+open\s+2\s+task/la-1\s+/tmp/la-1\s+-\s+Local active$`)
-	managedDetail := regexp.MustCompile(`(?m)^managed-beta\s+Managed Beta\s+mb\s+mb-1\s+in_progress\s+3\s+-\s+-\s+https://example\.test/pr/1\s+Managed active$`)
+	localDetail := regexp.MustCompile(`(?m)^local-alpha\s+Local Alpha\s+la\s+la-1\s+open\s+2\s+task/la-1\s+/tmp/la-1\s+-\s+TREX-1234\s+Local active$`)
+	managedDetail := regexp.MustCompile(`(?m)^managed-beta\s+Managed Beta\s+mb\s+mb-1\s+in_progress\s+3\s+-\s+-\s+https://example\.test/pr/1\s+-\s+Managed active$`)
 	is.True(localDetail.MatchString(detailedStdout), "local detail row should show absent PR metadata as -")
 	is.True(managedDetail.MatchString(detailedStdout), "managed detail row should show absent branch/worktree metadata as -")
 	is.NotContains(detailedStdout, "branch=task/la-1")
@@ -295,6 +295,7 @@ func TestTaskShowResolvesPrefixQueriesOnlyResolvedRepoAndRendersDetails(t *testi
 			{
 				"id":"la-42",
 				"title":"Implement local task show",
+				"external_ref":"TREX-1234",
 				"description":"Render a backend-neutral detail view.\nKeep it read-only.",
 				"design":"Use prefix resolution and the task backend.",
 				"acceptance_criteria":"Only the resolved repo is queried.",
@@ -319,6 +320,7 @@ func TestTaskShowResolvesPrefixQueriesOnlyResolvedRepoAndRendersDetails(t *testi
 		"Task:",
 		"ID: la-42",
 		"Title: Implement local task show",
+		"External reference: TREX-1234",
 		"Status: in_progress",
 		"Priority: 2",
 		"Type: task",

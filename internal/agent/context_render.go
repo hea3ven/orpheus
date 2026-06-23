@@ -23,6 +23,7 @@ func appendContextHeader(builder *strings.Builder, ctx ActiveContext) {
 	builder.WriteString("Task:\n")
 	appendPromptLine(builder, "- ID", ctx.Task.ID)
 	appendPromptLine(builder, "- Title", ctx.Task.Title)
+	appendPromptLine(builder, "- External reference", ctx.Task.ExternalRef)
 	appendPromptBlock(builder, "- Description", ctx.Task.Description)
 	appendPromptBlock(builder, "- Acceptance criteria", ctx.Task.AcceptanceCriteria)
 }
