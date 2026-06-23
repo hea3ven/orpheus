@@ -8,8 +8,10 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/beads"
@@ -277,9 +279,25 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for task show")
 
-	resolvedCtx, err := resolveTaskContext(command, "task show", taskID)
+	resolvedCtx, err := resolveTaskShowContext(command, taskID)
 	if err != nil {
 		return err
+	}
+	paths, err := state.ResolveFromEnvironment()
+	if err != nil {
+		return err
+	}
+	taskState, err := taskstate.NewStore(paths).Load(
+		resolvedCtx.Resolved.Source.Repository.ID,
+		resolvedCtx.Resolved.TaskID,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"task show %s: load local task-state for repo %s: %w",
+			resolvedCtx.Resolved.TaskID,
+			resolvedCtx.Resolved.Source.Repository.ID,
+			err,
+		)
 	}
 
 	logger.DebugContext(
@@ -287,11 +305,12 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 		"queried task from resolved repo",
 		slog.String("repo_id", resolvedCtx.Resolved.Source.Repository.ID),
 		slog.String("task_id", resolvedCtx.Resolved.TaskID),
+		slog.Int("history_event_count", len(taskState.Events)),
 	)
 	return renderTaskDetails(command.OutOrStdout(), taskmodel.RepoTask{
 		Repository: resolvedCtx.Resolved.Source.Repository,
 		Task:       resolvedCtx.Task,
-	})
+	}, taskState.Events)
 }
 
 func runTaskDir(command *cobra.Command, opts *rootOptions, taskID string) error {
@@ -964,6 +983,19 @@ type resolvedTaskRunContext struct {
 }
 
 func resolveTaskContext(command *cobra.Command, operation string, taskID string) (resolvedTaskContext, error) {
+	return resolveTaskContextWithScope(command, operation, taskID, true)
+}
+
+func resolveTaskShowContext(command *cobra.Command, taskID string) (resolvedTaskContext, error) {
+	return resolveTaskContextWithScope(command, "task show", taskID, false)
+}
+
+func resolveTaskContextWithScope(
+	command *cobra.Command,
+	operation string,
+	taskID string,
+	requireActiveItem bool,
+) (resolvedTaskContext, error) {
 	taskCtx, err := loadTaskContext()
 	if err != nil {
 		return resolvedTaskContext{}, err
@@ -982,6 +1014,15 @@ func resolveTaskContext(command *cobra.Command, operation string, taskID string)
 	taskItem, err := queryResolvedTask(command, operation, resolved)
 	if err != nil {
 		return resolvedTaskContext{}, err
+	}
+	if requireActiveItem && !taskmodel.IsM2TaskViewItem(taskItem) {
+		return resolvedTaskContext{}, fmt.Errorf(
+			"%s %s: item is out of scope for M2 task views; expected an active item, got issue_type=%s status=%s",
+			operation,
+			resolved.TaskID,
+			formatTaskField(string(taskItem.IssueType)),
+			formatTaskField(string(taskItem.Status)),
+		)
 	}
 	return resolvedTaskContext{
 		Resolved:       resolved,
@@ -1028,15 +1069,6 @@ func queryResolvedTask(command *cobra.Command, operation string, resolved taskmo
 	taskItem, err := queryTaskFromBackend(command.Context(), operation, resolved, backend)
 	if err != nil {
 		return taskmodel.Task{}, err
-	}
-	if !taskmodel.IsM2TaskViewItem(taskItem) {
-		return taskmodel.Task{}, fmt.Errorf(
-			"%s %s: item is out of scope for M2 task views; expected an active item, got issue_type=%s status=%s",
-			operation,
-			resolved.TaskID,
-			formatTaskField(string(taskItem.IssueType)),
-			formatTaskField(string(taskItem.Status)),
-		)
 	}
 	return taskItem, nil
 }
@@ -1132,7 +1164,11 @@ func taskRepositorySources(store registry.Store, reg registry.Registry) ([]taskm
 	return sources, nil
 }
 
-func renderTaskDetails(output interface{ Write([]byte) (int, error) }, row taskmodel.RepoTask) error {
+func renderTaskDetails(
+	output interface{ Write([]byte) (int, error) },
+	row taskmodel.RepoTask,
+	events []taskstate.Event,
+) error {
 	if err := renderTaskRepositoryDetails(output, row.Repository); err != nil {
 		return err
 	}
@@ -1145,7 +1181,39 @@ func renderTaskDetails(output interface{ Write([]byte) (int, error) }, row taskm
 	if _, err := fmt.Fprintln(output); err != nil {
 		return err
 	}
-	return renderTaskOrpheusMetadata(output, row.Task.OrpheusMetadata())
+	if err := renderTaskOrpheusMetadata(output, row.Task.OrpheusMetadata()); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(output); err != nil {
+		return err
+	}
+	return renderTaskHistory(output, events)
+}
+
+func renderTaskHistory(output interface{ Write([]byte) (int, error) }, events []taskstate.Event) error {
+	if _, err := fmt.Fprintln(output, "History:"); err != nil {
+		return err
+	}
+	if len(events) == 0 {
+		_, err := fmt.Fprintln(output, "  -")
+		return err
+	}
+
+	history := append([]taskstate.Event{}, events...)
+	sort.SliceStable(history, func(i, j int) bool {
+		return history[i].At.Before(history[j].At)
+	})
+	for _, event := range history {
+		if _, err := fmt.Fprintf(
+			output,
+			"  %s %s\n",
+			event.At.UTC().Format(time.RFC3339),
+			event.DisplayName(),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func renderTaskRepositoryDetails(output interface{ Write([]byte) (int, error) }, repo taskmodel.Repository) error {
