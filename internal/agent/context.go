@@ -66,11 +66,12 @@ type ActiveContext struct {
 
 // ContextRepository describes the registered repository for an active context.
 type ContextRepository struct {
-	ID              string
-	Name            string
-	Root            string
-	DefaultBranch   string
-	SummaryGuidance string
+	ID                   string
+	Name                 string
+	Root                 string
+	DefaultBranch        string
+	SummaryGuidance      string
+	SummaryGuidanceStyle string
 }
 
 // ContextTask describes the backend-neutral task details agents need.
@@ -144,7 +145,11 @@ func (r ActiveContextResolver) Resolve(ctx context.Context) (ActiveContext, erro
 		return ActiveContext{}, err
 	}
 
-	return newActiveContext(repo, targets, taskItem, run, candidate, cwd), nil
+	activeContext, err := newActiveContext(repo, targets, taskItem, run, candidate, cwd)
+	if err != nil {
+		return ActiveContext{}, err
+	}
+	return activeContext, nil
 }
 
 func (r ActiveContextResolver) validateDependencies() error {
@@ -271,14 +276,19 @@ func newActiveContext(
 	run taskstate.RunAttempt,
 	candidate targetCandidate,
 	cwd string,
-) ActiveContext {
+) (ActiveContext, error) {
+	if err := registry.ValidateSummaryGuidanceStyle(repo.SummaryGuidanceStyle); err != nil {
+		return ActiveContext{}, err
+	}
+
 	return ActiveContext{
 		Repository: ContextRepository{
-			ID:              repo.ID,
-			Name:            repo.Name,
-			Root:            targets.MainSolo.Worktree,
-			DefaultBranch:   targets.MainSolo.Branch,
-			SummaryGuidance: repo.SummaryGuidance,
+			ID:                   repo.ID,
+			Name:                 repo.Name,
+			Root:                 targets.MainSolo.Worktree,
+			DefaultBranch:        targets.MainSolo.Branch,
+			SummaryGuidance:      repo.SummaryGuidance,
+			SummaryGuidanceStyle: strings.TrimSpace(repo.SummaryGuidanceStyle),
 		},
 		Task: ContextTask{
 			ID:                 taskItem.ID,
@@ -298,7 +308,7 @@ func newActiveContext(
 			Path:             candidate.Path,
 			CurrentDirectory: cwd,
 		},
-	}
+	}, nil
 }
 
 func cloneCompletion(completion *taskstate.Completion) *taskstate.Completion {

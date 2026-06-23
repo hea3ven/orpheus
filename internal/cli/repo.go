@@ -17,7 +17,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const repoAddLockOperation = "repo add"
+const (
+	repoAddLockOperation = "repo add"
+
+	summaryGuidanceStyleCustom = "custom"
+	summaryGuidanceStylePrompt = "Summary guidance style (typed, capitalized, custom)"
+)
 
 var (
 	inspectLocalBeads      = beads.InspectLocal
@@ -218,6 +223,7 @@ func configureRepoBeads(command *cobra.Command, repo *registry.Repo, repoRoot st
 func configureRepoSummaryGuidance(command *cobra.Command, repo *registry.Repo, logger *slog.Logger) error {
 	input := command.InOrStdin()
 	if !isTerminal(input) {
+		repo.SummaryGuidanceStyle = registry.SummaryGuidanceStyleTyped
 		return nil
 	}
 
@@ -225,15 +231,33 @@ func configureRepoSummaryGuidance(command *cobra.Command, repo *registry.Repo, l
 		reader: bufio.NewReader(input),
 		output: command.ErrOrStderr(),
 	}
-	guidance, err := wizard.promptValue("Custom summary guidance", "", false)
+	style, err := wizard.promptValue(summaryGuidanceStylePrompt, registry.SummaryGuidanceStyleTyped, true)
 	if err != nil {
 		return err
 	}
-	repo.SummaryGuidance = strings.TrimSpace(guidance)
+	style = strings.TrimSpace(style)
+	if style == summaryGuidanceStyleCustom {
+		repo.SummaryGuidanceStyle = registry.SummaryGuidanceStyleTyped
+		guidance, err := wizard.promptValue("Custom summary guidance", "", true)
+		if err != nil {
+			return err
+		}
+		repo.SummaryGuidance = strings.TrimSpace(guidance)
+		logger.DebugContext(
+			command.Context(),
+			"configured custom summary guidance",
+			slog.String("summary_guidance_style", repo.SummaryGuidanceStyle),
+		)
+		return nil
+	}
+	if err := registry.ValidateSummaryGuidanceStyle(style); err != nil {
+		return err
+	}
+	repo.SummaryGuidanceStyle = style
 	logger.DebugContext(
 		command.Context(),
-		"configured custom summary guidance",
-		slog.Bool("summary_guidance_set", repo.SummaryGuidance != ""),
+		"configured summary guidance",
+		slog.String("summary_guidance_style", repo.SummaryGuidanceStyle),
 	)
 	return nil
 }

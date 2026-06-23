@@ -3,6 +3,8 @@ package agent
 import (
 	"fmt"
 	"strings"
+
+	"github.com/hea3ven/orpheus/internal/registry"
 )
 
 // RenderActiveContext renders backend-neutral instructions for the active agent.
@@ -53,14 +55,14 @@ func appendExecutionContract(builder *strings.Builder, ctx ActiveContext) {
 	switch ctx.Target.Kind {
 	case ExecutionTargetWorktree:
 		builder.WriteString("- You are running in the deterministic task worktree and task branch.\n")
-		appendFeatureBranchExecutionContract(builder, ctx.Task.ID, ctx.Repository.SummaryGuidance)
+		appendFeatureBranchExecutionContract(builder, ctx.Task.ID, ctx.Repository.SummaryGuidance, ctx.Repository.SummaryGuidanceStyle)
 	case ExecutionTargetRepoRoot:
 		builder.WriteString("- You are running in the registered repository root on the task branch.\n")
-		appendFeatureBranchExecutionContract(builder, ctx.Task.ID, ctx.Repository.SummaryGuidance)
+		appendFeatureBranchExecutionContract(builder, ctx.Task.ID, ctx.Repository.SummaryGuidance, ctx.Repository.SummaryGuidanceStyle)
 	case ExecutionTargetMain:
 		builder.WriteString("- You are running in the registered repository root on the registered default branch.\n")
 		builder.WriteString("- Keep implementation work inside the execution target path.\n")
-		appendAgentDoneContract(builder, ctx.Repository.SummaryGuidance)
+		appendAgentDoneContract(builder, ctx.Repository.SummaryGuidance, ctx.Repository.SummaryGuidanceStyle)
 		builder.WriteString("- After `orpheus agent done`, Orpheus will record local-review-ready completion data.\n")
 		builder.WriteString("- The human operator will later run `orpheus task done ")
 		builder.WriteString(ctx.Task.ID)
@@ -70,22 +72,27 @@ func appendExecutionContract(builder *strings.Builder, ctx ActiveContext) {
 	}
 }
 
-func appendFeatureBranchExecutionContract(builder *strings.Builder, taskID string, summaryGuidance string) {
+func appendFeatureBranchExecutionContract(
+	builder *strings.Builder,
+	taskID string,
+	summaryGuidance string,
+	summaryGuidanceStyle string,
+) {
 	builder.WriteString("- Keep implementation work inside the execution target path.\n")
-	appendAgentDoneContract(builder, summaryGuidance)
+	appendAgentDoneContract(builder, summaryGuidance, summaryGuidanceStyle)
 	builder.WriteString("- After `orpheus agent done`, Orpheus will record PR-ready completion data for feature-branch publication.\n")
 	builder.WriteString("- The human operator will later run `orpheus task done ")
 	builder.WriteString(taskID)
 	builder.WriteString("` to publish the feature branch as a pull request; do not run it yourself unless explicitly asked.\n")
 }
 
-func appendAgentDoneContract(builder *strings.Builder, summaryGuidance string) {
+func appendAgentDoneContract(builder *strings.Builder, summaryGuidance string, summaryGuidanceStyle string) {
 	builder.WriteString("- When implementation and checks are complete, finish with ")
 	builder.WriteString("`orpheus agent done --summary \"<summary>\" --description \"<description>\" ")
 	builder.WriteString("--detailed-description \"<markdown-pr-body>\"` ")
 	builder.WriteString("or `orpheus agent done --summary \"<summary>\" --description \"<description>\" ")
 	builder.WriteString("--detailed-description-file <path>`.\n")
-	appendSummaryGuidanceContract(builder, summaryGuidance)
+	appendSummaryGuidanceContract(builder, summaryGuidance, summaryGuidanceStyle)
 	builder.WriteString("- Use `--description` for a concise, plain one-paragraph commit body.\n")
 	builder.WriteString("- Use exactly one detailed PR body source: inline `--detailed-description` ")
 	builder.WriteString("or `--detailed-description-file`; markdown is allowed.\n")
@@ -94,10 +101,17 @@ func appendAgentDoneContract(builder *strings.Builder, summaryGuidance string) {
 	builder.WriteString("even if this interactive session continues.\n")
 }
 
-func appendSummaryGuidanceContract(builder *strings.Builder, summaryGuidance string) {
+func appendSummaryGuidanceContract(builder *strings.Builder, summaryGuidance string, summaryGuidanceStyle string) {
 	summaryGuidance = strings.TrimSpace(summaryGuidance)
 	if summaryGuidance != "" {
 		appendPromptBlock(builder, "- Write `--summary` following this repository guidance", summaryGuidance)
+		return
+	}
+
+	if strings.TrimSpace(summaryGuidanceStyle) == registry.SummaryGuidanceStyleCapitalized {
+		builder.WriteString("- Use one capitalized plain-English summary line, 80 characters or fewer, ")
+		builder.WriteString("with no task type prefix, for example \"Replaced the config for abc\"; ")
+		builder.WriteString("do not include the task/bead ID; do not mention tests even if included.\n")
 		return
 	}
 

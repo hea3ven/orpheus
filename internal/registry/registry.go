@@ -20,19 +20,26 @@ const (
 
 	// BeadsModeManaged means bd commands should run in Orpheus-managed state.
 	BeadsModeManaged = "managed"
+
+	// SummaryGuidanceStyleTyped guides agents to write conventional typed summaries.
+	SummaryGuidanceStyleTyped = "typed"
+
+	// SummaryGuidanceStyleCapitalized guides agents to write capitalized plain-English summaries.
+	SummaryGuidanceStyleCapitalized = "capitalized"
 )
 
 // Repo is a repository record stored in the Orpheus registry.
 type Repo struct {
-	ID              string `yaml:"id"`
-	Name            string `yaml:"name"`
-	Path            string `yaml:"path"`
-	Remote          string `yaml:"remote,omitempty"`
-	DefaultBranch   string `yaml:"default_branch,omitempty"`
-	BeadsMode       string `yaml:"beads_mode,omitempty"`
-	BeadsPrefix     string `yaml:"beads_prefix,omitempty"`
-	SummaryGuidance string `yaml:"summary_guidance,omitempty"`
-	TitleTemplate   string `yaml:"title_template,omitempty"`
+	ID                   string `yaml:"id"`
+	Name                 string `yaml:"name"`
+	Path                 string `yaml:"path"`
+	Remote               string `yaml:"remote,omitempty"`
+	DefaultBranch        string `yaml:"default_branch,omitempty"`
+	BeadsMode            string `yaml:"beads_mode,omitempty"`
+	BeadsPrefix          string `yaml:"beads_prefix,omitempty"`
+	SummaryGuidance      string `yaml:"summary_guidance,omitempty"`
+	SummaryGuidanceStyle string `yaml:"summary_guidance_style,omitempty"`
+	TitleTemplate        string `yaml:"title_template,omitempty"`
 }
 
 // Registry is the human-editable YAML schema for registered repositories.
@@ -121,6 +128,22 @@ func NormalizePath(inputPath string) (string, error) {
 		return "", fmt.Errorf("normalize repo path %q: %w", inputPath, err)
 	}
 	return filepath.Clean(absolutePath), nil
+}
+
+// ValidateSummaryGuidanceStyle checks whether style is one of the supported named styles.
+// An empty style preserves compatibility with registry entries created before named styles.
+func ValidateSummaryGuidanceStyle(style string) error {
+	switch strings.TrimSpace(style) {
+	case "", SummaryGuidanceStyleTyped, SummaryGuidanceStyleCapitalized:
+		return nil
+	default:
+		return fmt.Errorf(
+			"repo summary_guidance_style %q is invalid; expected %q or %q",
+			style,
+			SummaryGuidanceStyleTyped,
+			SummaryGuidanceStyleCapitalized,
+		)
+	}
 }
 
 // Load reads and validates the registry. Missing or empty registry state loads as empty.
@@ -297,6 +320,10 @@ func normalizeRepo(repo Repo) (Repo, error) {
 	repo.BeadsMode = strings.TrimSpace(repo.BeadsMode)
 	repo.BeadsPrefix = strings.TrimSpace(repo.BeadsPrefix)
 	repo.SummaryGuidance = strings.TrimSpace(repo.SummaryGuidance)
+	repo.SummaryGuidanceStyle = strings.TrimSpace(repo.SummaryGuidanceStyle)
+	if err := ValidateSummaryGuidanceStyle(repo.SummaryGuidanceStyle); err != nil {
+		return Repo{}, err
+	}
 	repo.TitleTemplate = strings.TrimSpace(repo.TitleTemplate)
 	if err := publication.ValidateTitleTemplate(repo.TitleTemplate); err != nil {
 		return Repo{}, fmt.Errorf("repo title_template is invalid: %w", err)

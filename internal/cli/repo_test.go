@@ -165,6 +165,7 @@ func TestRepoAddInitializesManagedBeadsAfterValidation(t *testing.T) {
 		repo := reg.Repos[0]
 		is.Equal(registry.BeadsModeManaged, repo.BeadsMode)
 		is.Equal("alpha", repo.BeadsPrefix)
+		is.Equal(registry.SummaryGuidanceStyleTyped, repo.SummaryGuidanceStyle)
 	}
 }
 
