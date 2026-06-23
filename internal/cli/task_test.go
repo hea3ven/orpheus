@@ -835,6 +835,49 @@ func TestTaskRunRejectsMissingRequiredExternalReferenceBeforeSetup(t *testing.T)
 	is.ErrorIs(statErr, os.ErrNotExist)
 }
 
+func TestTaskRunRejectsChildWhenImmediateParentEpicIsNotInProgress(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	bdLogPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[
+			{"id":"op-child","title":"Child task","status":"open","priority":1,"issue_type":"task","parent":"op-epic"},
+			{"id":"op-epic","title":"Paused epic","status":"open","priority":1,"issue_type":"epic"}
+		]`},
+	})
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "op-child"})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "immediate parent epic op-epic is open")
+	is.ErrorContains(err, "immediate parent epic must be in_progress")
+
+	bdLog := readFileString(t, bdLogPath)
+	is.Contains(bdLog, "--json --readonly --sandbox show --id op-child")
+	is.Contains(bdLog, "--json --readonly --sandbox list --all --limit 0")
+	is.NotContains(bdLog, "--json --sandbox update")
+
+	worktreePath, pathErr := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-child"))
+	must.NoError(pathErr)
+	_, statErr := os.Stat(worktreePath)
+	is.ErrorIs(statErr, os.ErrNotExist)
+}
+
 //nolint:funlen // Workflow test is clearer when setup, command, and state assertions stay together.
 func TestTaskRunMainExecutesAgentFromRegisteredRepoRoot(t *testing.T) {
 	is := assert.New(t)
