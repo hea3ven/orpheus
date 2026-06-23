@@ -69,6 +69,60 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 	)
 }
 
+func TestStoreRecordsFeatureBranchPREventsIdempotently(t *testing.T) {
+	tests := []struct {
+		name         string
+		wasRecovered bool
+		wantType     taskstate.EventType
+	}{
+		{
+			name:     "created PR",
+			wantType: taskstate.EventPRCreated,
+		},
+		{
+			name:         "recovered PR",
+			wasRecovered: true,
+			wantType:     taskstate.EventPRRecovered,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Date(2026, 6, 11, 10, 0, 0, 0, time.UTC)
+			store := newTestStore(t, now, now.Add(time.Minute))
+			opts := taskstate.FeatureBranchPROptions{
+				PRURL:        " https://github.test/org/repo/pull/42 ",
+				Branch:       "orpheus/op-1",
+				WasRecovered: tt.wasRecovered,
+			}
+
+			event, err := store.RecordFeatureBranchPR("alpha", "op-1", opts)
+			if err != nil {
+				t.Fatalf("record PR event: %v", err)
+			}
+			if event.Type != tt.wantType || event.PRURL != "https://github.test/org/repo/pull/42" || event.Branch != "orpheus/op-1" {
+				t.Fatalf("event = %#v, want %q with structured PR facts", event, tt.wantType)
+			}
+
+			again, err := store.RecordFeatureBranchPR("alpha", "op-1", opts)
+			if err != nil {
+				t.Fatalf("record same PR event: %v", err)
+			}
+			if !again.At.Equal(event.At) {
+				t.Fatalf("idempotent event time = %s, want %s", again.At, event.At)
+			}
+
+			loaded, err := store.Load("alpha", "op-1")
+			if err != nil {
+				t.Fatalf("load state: %v", err)
+			}
+			if len(loaded.Events) != 1 {
+				t.Fatalf("events = %#v, want one idempotent PR event", loaded.Events)
+			}
+		})
+	}
+}
+
 func TestStoreCompleteRunRecordsCompletionFacts(t *testing.T) {
 	store := newTestStore(t,
 		time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC),
@@ -163,7 +217,7 @@ func TestStoreRecordsRepeatedCompletionDiagnostic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load state: %v", err)
 	}
-	if len(loaded.Events) != 2 || loaded.Events[1].Type != taskstate.EventCompletionRepeated {
+	if len(loaded.Events) != 3 || loaded.Events[2].Type != taskstate.EventCompletionRepeated {
 		t.Fatalf("events = %#v, want repeated completion diagnostic", loaded.Events)
 	}
 	if loaded.Runs[0].Completion.Summary != "First summary" ||
@@ -181,6 +235,7 @@ func TestStoreRecordsRepeatedCompletionDiagnostic(t *testing.T) {
 	)
 }
 
+//nolint:funlen // The durable boundary sequence is the behavior under test.
 func TestStoreRecordsFinalizationFactsIdempotently(t *testing.T) {
 	store := newTestStore(t,
 		time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC),
@@ -197,7 +252,10 @@ func TestStoreRecordsFinalizationFactsIdempotently(t *testing.T) {
 		t.Fatalf("commit facts = %#v, want commit and committed_at", commitFacts)
 	}
 
-	pushFacts, err := store.RecordFinalizationPush("alpha", "op-1")
+	pushFacts, err := store.RecordFinalizationPush("alpha", "op-1", taskstate.FinalizationPushOptions{
+		Branch:     "main",
+		PushTarget: taskstate.PushTargetMain,
+	})
 	if err != nil {
 		t.Fatalf("record push: %v", err)
 	}
@@ -205,7 +263,9 @@ func TestStoreRecordsFinalizationFactsIdempotently(t *testing.T) {
 		t.Fatalf("push facts = %#v, want pushed_at", pushFacts)
 	}
 
-	closeFacts, err := store.RecordFinalizationClose("alpha", "op-1")
+	closeFacts, err := store.RecordFinalizationClose("alpha", "op-1", taskstate.FinalizationCloseOptions{
+		Reason: taskstate.CloseReasonDefaultBranchPublished,
+	})
 	if err != nil {
 		t.Fatalf("record close: %v", err)
 	}
@@ -219,6 +279,25 @@ func TestStoreRecordsFinalizationFactsIdempotently(t *testing.T) {
 	}
 	if !again.CommittedAt.Equal(*commitFacts.CommittedAt) || !again.PushedAt.Equal(*pushFacts.PushedAt) || !again.ClosedAt.Equal(*closeFacts.ClosedAt) {
 		t.Fatalf("idempotent facts = %#v, want original timestamps preserved", again)
+	}
+	repeatedPush, err := store.RecordFinalizationPush("alpha", "op-1", taskstate.FinalizationPushOptions{
+		Branch:     "main",
+		PushTarget: taskstate.PushTargetMain,
+	})
+	if err != nil {
+		t.Fatalf("record repeated push: %v", err)
+	}
+	if !repeatedPush.PushedAt.Equal(*pushFacts.PushedAt) {
+		t.Fatalf("repeated push facts = %#v, want original push timestamp", repeatedPush)
+	}
+	repeatedClose, err := store.RecordFinalizationClose("alpha", "op-1", taskstate.FinalizationCloseOptions{
+		Reason: taskstate.CloseReasonDefaultBranchPublished,
+	})
+	if err != nil {
+		t.Fatalf("record repeated close: %v", err)
+	}
+	if !repeatedClose.ClosedAt.Equal(*closeFacts.ClosedAt) {
+		t.Fatalf("repeated close facts = %#v, want original close timestamp", repeatedClose)
 	}
 
 	_, err = store.RecordFinalizationCommit("alpha", "op-1", "def456")
@@ -234,6 +313,9 @@ func TestStoreRecordsFinalizationFactsIdempotently(t *testing.T) {
 	if facts.Commit != "abc123" || facts.CommittedAt == nil || facts.PushedAt == nil || facts.ClosedAt == nil {
 		t.Fatalf("loaded finalization = %#v, want all facts", facts)
 	}
+	if len(loaded.Events) != 2 || loaded.Events[0].Type != taskstate.EventChangesPushed || loaded.Events[1].Type != taskstate.EventTaskClosed {
+		t.Fatalf("events = %#v, want one push and one close event", loaded.Events)
+	}
 
 	assertStoreYAMLContains(t, store, "alpha", "op-1",
 		"finalization:",
@@ -241,6 +323,10 @@ func TestStoreRecordsFinalizationFactsIdempotently(t *testing.T) {
 		"commit: abc123",
 		"pushed_at: 2026-06-04T10:01:00Z",
 		"closed_at: 2026-06-04T10:02:00Z",
+		"changes_pushed",
+		"push_target: main",
+		"task_closed",
+		"close_reason: default_branch_published",
 	)
 }
 
@@ -492,8 +578,8 @@ func assertCompletionStateLoaded(t *testing.T, store taskstate.Store) {
 	if err != nil {
 		t.Fatalf("load state: %v", err)
 	}
-	if len(loaded.Runs) != 1 || loaded.Runs[0].Completion == nil || len(loaded.Events) != 2 {
-		t.Fatalf("loaded state = %#v, want one completed run and two events", loaded)
+	if len(loaded.Runs) != 1 || loaded.Runs[0].Completion == nil || len(loaded.Events) != 3 {
+		t.Fatalf("loaded state = %#v, want one completed run and three events", loaded)
 	}
 }
 

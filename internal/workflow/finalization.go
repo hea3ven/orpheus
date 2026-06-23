@@ -33,8 +33,9 @@ type FinalizationBackendFactory func(task.RepositorySource) (FinalizationBackend
 type FinalizationRunStore interface {
 	Load(repoID, taskID string) (taskstate.TaskState, error)
 	RecordFinalizationCommit(repoID, taskID string, commit string) (taskstate.Finalization, error)
-	RecordFinalizationPush(repoID, taskID string) (taskstate.Finalization, error)
-	RecordFinalizationClose(repoID, taskID string) (taskstate.Finalization, error)
+	RecordFinalizationPush(repoID, taskID string, opts taskstate.FinalizationPushOptions) (taskstate.Finalization, error)
+	RecordFinalizationClose(repoID, taskID string, opts taskstate.FinalizationCloseOptions) (taskstate.Finalization, error)
+	RecordFeatureBranchPR(repoID, taskID string, opts taskstate.FeatureBranchPROptions) (taskstate.Event, error)
 }
 
 // FinalizationGit performs the Git operations used by task finalization.
@@ -363,7 +364,10 @@ func (s FinalizationService) ensureDefaultBranchPushed(
 	if err := gitState.PushDefaultBranch(ctx, repo.Path, repo.DefaultBranch); err != nil {
 		return taskstate.Finalization{}, err
 	}
-	finalization, err := s.RunStore.RecordFinalizationPush(repo.ID, taskID)
+	finalization, err := s.RunStore.RecordFinalizationPush(repo.ID, taskID, taskstate.FinalizationPushOptions{
+		Branch:     repo.DefaultBranch,
+		PushTarget: taskstate.PushTargetMain,
+	})
 	if err != nil {
 		return taskstate.Finalization{}, fmt.Errorf("record finalization push: %w", err)
 	}
@@ -384,7 +388,9 @@ func (s FinalizationService) ensureDefaultBranchClosed(
 			return taskstate.Finalization{}, err
 		}
 	}
-	finalization, err := s.RunStore.RecordFinalizationClose(repo.ID, target.task.ID)
+	finalization, err := s.RunStore.RecordFinalizationClose(repo.ID, target.task.ID, taskstate.FinalizationCloseOptions{
+		Reason: taskstate.CloseReasonDefaultBranchPublished,
+	})
 	if err != nil {
 		return taskstate.Finalization{}, fmt.Errorf("record finalization close: %w", err)
 	}
@@ -536,15 +542,10 @@ func (s FinalizationService) publishFeatureBranch(
 		return FinalizationResult{}, err
 	}
 
-	summary, description, err := finalizationMessageParts(finalizeCtx.latest.Completion, FinalizeOptions{})
+	message, err := featureBranchPublicationMessage(repo, target.task, finalizeCtx.latest)
 	if err != nil {
 		return FinalizationResult{}, err
 	}
-	title, err := publication.RenderTitle(repo.TitleTemplate, summary, target.task.ExternalRef)
-	if err != nil {
-		return FinalizationResult{}, err
-	}
-	message := title + "\n\n" + description
 
 	hasChanges, err := gitState.HasWorkingTreeChanges(ctx, metadataTarget.Worktree)
 	if err != nil {
@@ -577,8 +578,42 @@ func (s FinalizationService) publishFeatureBranch(
 	if err := target.backend.SetPRURL(ctx, target.task.ID, prURL); err != nil {
 		return FinalizationResult{}, err
 	}
+	if err := s.recordFeatureBranchPR(repo.ID, target.task.ID, prURL, metadataTarget.Branch, prRecovered); err != nil {
+		return FinalizationResult{}, fmt.Errorf("record feature branch PR: %w", err)
+	}
 
 	return featureBranchFinalizationResult(repo, target.task, finalization, metadataTarget.Branch, prURL, prRecovered), nil
+}
+
+func featureBranchPublicationMessage(
+	repo task.Repository,
+	taskItem task.Task,
+	latest taskstate.RunAttempt,
+) (string, error) {
+	summary, description, err := finalizationMessageParts(latest.Completion, FinalizeOptions{})
+	if err != nil {
+		return "", err
+	}
+	title, err := publication.RenderTitle(repo.TitleTemplate, summary, taskItem.ExternalRef)
+	if err != nil {
+		return "", err
+	}
+	return title + "\n\n" + description, nil
+}
+
+func (s FinalizationService) recordFeatureBranchPR(
+	repoID string,
+	taskID string,
+	prURL string,
+	branch string,
+	prRecovered bool,
+) error {
+	_, err := s.RunStore.RecordFeatureBranchPR(repoID, taskID, taskstate.FeatureBranchPROptions{
+		PRURL:        prURL,
+		Branch:       branch,
+		WasRecovered: prRecovered,
+	})
+	return err
 }
 
 func featureBranchFinalizationResult(
@@ -646,7 +681,10 @@ func (s FinalizationService) ensureFeatureBranchPushed(
 	if err := gitState.PushTaskBranch(ctx, target.Worktree, target.Branch); err != nil {
 		return taskstate.Finalization{}, err
 	}
-	finalization, err := s.RunStore.RecordFinalizationPush(repoID, taskID)
+	finalization, err := s.RunStore.RecordFinalizationPush(repoID, taskID, taskstate.FinalizationPushOptions{
+		Branch:     target.Branch,
+		PushTarget: taskstate.PushTargetBranch,
+	})
 	if err != nil {
 		return taskstate.Finalization{}, fmt.Errorf("record publication push: %w", err)
 	}

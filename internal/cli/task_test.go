@@ -441,6 +441,7 @@ func TestTaskShowRendersClosedItemsAndHistory(t *testing.T) {
 	is.Contains(stdout, "History:\n  -\n")
 }
 
+//nolint:funlen // The history sequence is the behavior under test.
 func TestTaskShowRendersChronologicalHistoryForClosedEpic(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -466,7 +467,28 @@ func TestTaskShowRendersChronologicalHistoryForClosedEpic(t *testing.T) {
 	run, err := stateStore.StartRun("alpha", "op-epic", taskstate.StartRunOptions{Agent: "codex"})
 	must.NoError(err)
 	now = now.Add(time.Minute)
+	_, err = stateStore.CompleteRun("alpha", "op-epic", run.Attempt, taskstate.CompleteRunOptions{
+		Summary:             "Record task history",
+		Description:         "Recorded completion history.",
+		DetailedDescription: "Detailed history.",
+	})
+	must.NoError(err)
+	now = now.Add(time.Minute)
 	_, err = stateStore.FinishRun("alpha", "op-epic", run.Attempt, taskstate.RunStatusSucceeded)
+	must.NoError(err)
+	now = now.Add(time.Minute)
+	_, err = stateStore.RecordFinalizationCommit("alpha", "op-epic", "abc123")
+	must.NoError(err)
+	now = now.Add(time.Minute)
+	_, err = stateStore.RecordFinalizationPush("alpha", "op-epic", taskstate.FinalizationPushOptions{
+		Branch:     "main",
+		PushTarget: taskstate.PushTargetMain,
+	})
+	must.NoError(err)
+	now = now.Add(time.Minute)
+	_, err = stateStore.RecordFinalizationClose("alpha", "op-epic", taskstate.FinalizationCloseOptions{
+		Reason: taskstate.CloseReasonDefaultBranchPublished,
+	})
 	must.NoError(err)
 
 	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
@@ -480,10 +502,16 @@ func TestTaskShowRendersChronologicalHistoryForClosedEpic(t *testing.T) {
 	is.Contains(stdout, "Status: closed")
 	first := strings.Index(stdout, "2026-01-02T03:04:05Z Worktree created")
 	second := strings.Index(stdout, "2026-01-02T03:05:05Z Run started")
-	third := strings.Index(stdout, "2026-01-02T03:06:05Z Run finished")
+	third := strings.Index(stdout, "2026-01-02T03:06:05Z Completion recorded")
+	fourth := strings.Index(stdout, "2026-01-02T03:07:05Z Run finished")
+	fifth := strings.Index(stdout, "2026-01-02T03:09:05Z Pushed main")
+	sixth := strings.Index(stdout, "2026-01-02T03:10:05Z Task closed")
 	is.Greater(first, -1)
 	is.Greater(second, first)
 	is.Greater(third, second)
+	is.Greater(fourth, third)
+	is.Greater(fifth, fourth)
+	is.Greater(sixth, fifth)
 	is.NotContains(stdout, "codex")
 	is.NotContains(stdout, "succeeded")
 }

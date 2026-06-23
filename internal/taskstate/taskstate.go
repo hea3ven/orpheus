@@ -38,8 +38,24 @@ const (
 	EventRunStarted         EventType = "run_started"
 	EventRunFinished        EventType = "run_finished"
 	EventRunStartFailed     EventType = "run_start_failed"
+	EventCompletionRecorded EventType = "completion_recorded"
 	EventCompletionRepeated EventType = "completion_repeated"
+	EventChangesPushed      EventType = "changes_pushed"
+	EventPRCreated          EventType = "pr_created"
+	EventPRRecovered        EventType = "pr_recovered"
+	EventTaskClosed         EventType = "task_closed"
 	EventTaskClosedPRMerged EventType = "task_closed_due_to_pr_merged"
+)
+
+const (
+	// PushTargetMain identifies a publication to the registered default branch.
+	PushTargetMain = "main"
+
+	// PushTargetBranch identifies a publication to a feature branch.
+	PushTargetBranch = "branch"
+
+	// CloseReasonDefaultBranchPublished identifies closure after a default-branch push.
+	CloseReasonDefaultBranchPublished = "default_branch_published"
 )
 
 var (
@@ -66,8 +82,9 @@ type Service interface {
 	FinishRun(repoID, taskID string, attempt int, status RunStatus) (RunAttempt, error)
 	FailRunStart(repoID, taskID string, attempt int, cause error) (RunAttempt, error)
 	RecordFinalizationCommit(repoID, taskID string, commit string) (Finalization, error)
-	RecordFinalizationPush(repoID, taskID string) (Finalization, error)
-	RecordFinalizationClose(repoID, taskID string) (Finalization, error)
+	RecordFinalizationPush(repoID, taskID string, opts FinalizationPushOptions) (Finalization, error)
+	RecordFinalizationClose(repoID, taskID string, opts FinalizationCloseOptions) (Finalization, error)
+	RecordFeatureBranchPR(repoID, taskID string, opts FeatureBranchPROptions) (Event, error)
 	RecordTaskClosedPRMerged(repoID, taskID string, opts TaskClosedPRMergedOptions) (Event, error)
 	Events(repoID, taskID string) ([]Event, error)
 }
@@ -146,6 +163,8 @@ type Event struct {
 
 	PRURL           string `yaml:"pr_url,omitempty"`
 	ObservedPRState string `yaml:"observed_pr_state,omitempty"`
+	PushTarget      string `yaml:"push_target,omitempty"`
+	CloseReason     string `yaml:"close_reason,omitempty"`
 }
 
 // DisplayName returns the concise human-readable name for an audit event.
@@ -163,8 +182,18 @@ func (e Event) DisplayName() string {
 		return "Run finished"
 	case EventRunStartFailed:
 		return "Run start failed"
+	case EventCompletionRecorded:
+		return "Completion recorded"
 	case EventCompletionRepeated:
 		return "Completion repeated"
+	case EventChangesPushed:
+		return "Pushed " + e.PushTarget
+	case EventPRCreated:
+		return "PR created"
+	case EventPRRecovered:
+		return "PR recovered"
+	case EventTaskClosed:
+		return "Task closed"
 	case EventTaskClosedPRMerged:
 		return "Task closed after PR merged"
 	default:
@@ -215,6 +244,24 @@ type RepeatedCompletionOptions struct {
 type TaskClosedPRMergedOptions struct {
 	PRURL           string
 	ObservedPRState string
+}
+
+// FinalizationPushOptions describes the successful publication boundary.
+type FinalizationPushOptions struct {
+	Branch     string
+	PushTarget string
+}
+
+// FinalizationCloseOptions describes why a successful task finalization closed a task.
+type FinalizationCloseOptions struct {
+	Reason string
+}
+
+// FeatureBranchPROptions describes a created or recovered feature-branch PR.
+type FeatureBranchPROptions struct {
+	PRURL        string
+	Branch       string
+	WasRecovered bool
 }
 
 // NewStore creates a per-task state store using paths.
@@ -390,6 +437,7 @@ func (s Store) CompleteRun(repoID, taskID string, attempt int, opts CompleteRunO
 		Commit:              payload.commit,
 		CommitError:         payload.commitError,
 	}
+	state.Events = append(state.Events, runEvent(run, EventCompletionRecorded, now, run.Status, ""))
 
 	if err := s.save(state); err != nil {
 		return RunAttempt{}, err
@@ -548,7 +596,16 @@ func (s Store) RecordFinalizationCommit(repoID, taskID string, commit string) (F
 }
 
 // RecordFinalizationPush records that the finalization commit was pushed.
-func (s Store) RecordFinalizationPush(repoID, taskID string) (Finalization, error) {
+func (s Store) RecordFinalizationPush(repoID, taskID string, opts FinalizationPushOptions) (Finalization, error) {
+	branch := strings.TrimSpace(opts.Branch)
+	pushTarget := strings.TrimSpace(opts.PushTarget)
+	if branch == "" {
+		return Finalization{}, fmt.Errorf("record finalization push for task %s/%s: branch is required", repoID, taskID)
+	}
+	if !validPushTarget(pushTarget) {
+		return Finalization{}, fmt.Errorf("record finalization push for task %s/%s: unsupported push target %q", repoID, taskID, pushTarget)
+	}
+
 	state, err := s.Load(repoID, taskID)
 	if err != nil {
 		return Finalization{}, err
@@ -564,6 +621,12 @@ func (s Store) RecordFinalizationPush(repoID, taskID string) (Finalization, erro
 	now := s.nowUTC()
 	finalization.PushedAt = &now
 	state.Finalization = &finalization
+	state.Events = append(state.Events, Event{
+		Type:       EventChangesPushed,
+		At:         now,
+		Branch:     branch,
+		PushTarget: pushTarget,
+	})
 	if err := s.save(state); err != nil {
 		return Finalization{}, err
 	}
@@ -571,7 +634,12 @@ func (s Store) RecordFinalizationPush(repoID, taskID string) (Finalization, erro
 }
 
 // RecordFinalizationClose records that the backend task was closed.
-func (s Store) RecordFinalizationClose(repoID, taskID string) (Finalization, error) {
+func (s Store) RecordFinalizationClose(repoID, taskID string, opts FinalizationCloseOptions) (Finalization, error) {
+	reason := strings.TrimSpace(opts.Reason)
+	if reason == "" {
+		return Finalization{}, fmt.Errorf("record finalization close for task %s/%s: reason is required", repoID, taskID)
+	}
+
 	state, err := s.Load(repoID, taskID)
 	if err != nil {
 		return Finalization{}, err
@@ -590,10 +658,55 @@ func (s Store) RecordFinalizationClose(repoID, taskID string) (Finalization, err
 	now := s.nowUTC()
 	finalization.ClosedAt = &now
 	state.Finalization = &finalization
+	state.Events = append(state.Events, Event{
+		Type:        EventTaskClosed,
+		At:          now,
+		CloseReason: reason,
+	})
 	if err := s.save(state); err != nil {
 		return Finalization{}, err
 	}
 	return finalization, nil
+}
+
+// RecordFeatureBranchPR appends an idempotent audit event after the backend
+// task has recorded a feature-branch PR URL.
+func (s Store) RecordFeatureBranchPR(repoID, taskID string, opts FeatureBranchPROptions) (Event, error) {
+	prURL := strings.TrimSpace(opts.PRURL)
+	branch := strings.TrimSpace(opts.Branch)
+	if prURL == "" {
+		return Event{}, fmt.Errorf("record feature branch PR for task %s/%s: PR URL is required", repoID, taskID)
+	}
+	if branch == "" {
+		return Event{}, fmt.Errorf("record feature branch PR for task %s/%s: branch is required", repoID, taskID)
+	}
+
+	eventType := EventPRCreated
+	if opts.WasRecovered {
+		eventType = EventPRRecovered
+	}
+
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return Event{}, err
+	}
+	for _, event := range state.Events {
+		if event.Type == eventType && strings.TrimSpace(event.PRURL) == prURL {
+			return event, nil
+		}
+	}
+
+	event := Event{
+		Type:   eventType,
+		At:     s.nowUTC(),
+		Branch: branch,
+		PRURL:  prURL,
+	}
+	state.Events = append(state.Events, event)
+	if err := s.save(state); err != nil {
+		return Event{}, err
+	}
+	return event, nil
 }
 
 // RecordTaskClosedPRMerged appends an idempotent local audit event after a
@@ -936,6 +1049,12 @@ func validateEvent(event Event) error {
 	if event.Status != "" && !validRunStatus(event.Status) {
 		return fmt.Errorf("event %q has unsupported run status %q", event.Type, event.Status)
 	}
+	if event.Type == EventChangesPushed && !validPushTarget(event.PushTarget) {
+		return fmt.Errorf("event %q has unsupported push target %q", event.Type, event.PushTarget)
+	}
+	if event.Type == EventTaskClosed && strings.TrimSpace(event.CloseReason) == "" {
+		return fmt.Errorf("event %q requires a close reason", event.Type)
+	}
 	return nil
 }
 
@@ -950,11 +1069,15 @@ func validRunStatus(status RunStatus) bool {
 
 func validEventType(eventType EventType) bool {
 	switch eventType {
-	case EventWorktreeCreated, EventWorktreeReused, EventWorktreeRecreated, EventRunStarted, EventRunFinished, EventRunStartFailed, EventCompletionRepeated, EventTaskClosedPRMerged:
+	case EventWorktreeCreated, EventWorktreeReused, EventWorktreeRecreated, EventRunStarted, EventRunFinished, EventRunStartFailed, EventCompletionRecorded, EventCompletionRepeated, EventChangesPushed, EventPRCreated, EventPRRecovered, EventTaskClosed, EventTaskClosedPRMerged:
 		return true
 	default:
 		return false
 	}
+}
+
+func validPushTarget(pushTarget string) bool {
+	return pushTarget == PushTargetMain || pushTarget == PushTargetBranch
 }
 
 func nextAttemptNumber(state TaskState) int {

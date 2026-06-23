@@ -76,24 +76,64 @@ func (s *fakeFinalizationRunStore) RecordFinalizationCommit(repoID, taskID strin
 	return finalization, nil
 }
 
-func (s *fakeFinalizationRunStore) RecordFinalizationPush(repoID, taskID string) (taskstate.Finalization, error) {
+func (s *fakeFinalizationRunStore) RecordFinalizationPush(
+	repoID string,
+	taskID string,
+	opts taskstate.FinalizationPushOptions,
+) (taskstate.Finalization, error) {
 	state := s.states[repoID+"/"+taskID]
 	now := time.Date(2026, 6, 10, 12, 1, 0, 0, time.UTC)
 	finalization := taskstate.FinalizationFacts(state)
 	finalization.PushedAt = &now
 	state.Finalization = &finalization
+	state.Events = append(state.Events, taskstate.Event{
+		Type:       taskstate.EventChangesPushed,
+		At:         now,
+		Branch:     opts.Branch,
+		PushTarget: opts.PushTarget,
+	})
 	s.states[repoID+"/"+taskID] = state
 	return finalization, nil
 }
 
-func (s *fakeFinalizationRunStore) RecordFinalizationClose(repoID, taskID string) (taskstate.Finalization, error) {
+func (s *fakeFinalizationRunStore) RecordFinalizationClose(
+	repoID string,
+	taskID string,
+	opts taskstate.FinalizationCloseOptions,
+) (taskstate.Finalization, error) {
 	state := s.states[repoID+"/"+taskID]
 	now := time.Date(2026, 6, 10, 12, 2, 0, 0, time.UTC)
 	finalization := taskstate.FinalizationFacts(state)
 	finalization.ClosedAt = &now
 	state.Finalization = &finalization
+	state.Events = append(state.Events, taskstate.Event{
+		Type:        taskstate.EventTaskClosed,
+		At:          now,
+		CloseReason: opts.Reason,
+	})
 	s.states[repoID+"/"+taskID] = state
 	return finalization, nil
+}
+
+func (s *fakeFinalizationRunStore) RecordFeatureBranchPR(
+	repoID string,
+	taskID string,
+	opts taskstate.FeatureBranchPROptions,
+) (taskstate.Event, error) {
+	state := s.states[repoID+"/"+taskID]
+	eventType := taskstate.EventPRCreated
+	if opts.WasRecovered {
+		eventType = taskstate.EventPRRecovered
+	}
+	event := taskstate.Event{
+		Type:   eventType,
+		At:     time.Date(2026, 6, 10, 12, 2, 0, 0, time.UTC),
+		Branch: opts.Branch,
+		PRURL:  opts.PRURL,
+	}
+	state.Events = append(state.Events, event)
+	s.states[repoID+"/"+taskID] = state
+	return event, nil
 }
 
 type fakeFinalizationGit struct {
@@ -203,6 +243,11 @@ func TestFinalizeAllowsConfirmedRunningCompletionWithoutMutatingRunStatus(t *tes
 	if len(backend.closed) != 1 || backend.closed[0] != "op-1" {
 		t.Fatalf("closed = %#v, want op-1", backend.closed)
 	}
+	if events := store.states["alpha/op-1"].Events; len(events) != 2 ||
+		events[0].PushTarget != taskstate.PushTargetMain ||
+		events[1].CloseReason != taskstate.CloseReasonDefaultBranchPublished {
+		t.Fatalf("events = %#v, want main push and default-branch close", events)
+	}
 	latest, _ := taskstate.LatestRun(store.states["alpha/op-1"])
 	if latest.Status != taskstate.RunStatusRunning {
 		t.Fatalf("latest status = %q, want still running", latest.Status)
@@ -305,6 +350,7 @@ func TestFinalizeDoesNotOfferRunningEscapeHatchForInvalidTargets(t *testing.T) {
 	}
 }
 
+//nolint:funlen // This end-to-end workflow is clearer as a linear scenario.
 func TestFinalizePublishesFeatureBranchPRWithoutClosingTask(t *testing.T) {
 	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
 	source.Repository.TitleTemplate = "[{{external_ref}}] {{summary}}"
@@ -365,6 +411,10 @@ func TestFinalizePublishesFeatureBranchPRWithoutClosingTask(t *testing.T) {
 	facts := taskstate.FinalizationFacts(store.states["alpha/op-1"])
 	if facts.Commit != "commit123" || facts.CommittedAt == nil || facts.PushedAt == nil || facts.ClosedAt != nil {
 		t.Fatalf("finalization facts = %#v, want commit/push without close", facts)
+	}
+	if events := store.states["alpha/op-1"].Events; len(events) != 2 ||
+		events[0].Type != taskstate.EventChangesPushed || events[1].Type != taskstate.EventPRCreated {
+		t.Fatalf("events = %#v, want branch push and created PR", events)
 	}
 }
 
@@ -485,7 +535,7 @@ func TestFinalizeRecoversExistingFeatureBranchPR(t *testing.T) {
 			task.MetadataWorktree: worktree,
 		},
 	}
-	service, git, _, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{taskItem}, map[string]taskstate.TaskState{
+	service, git, store, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{taskItem}, map[string]taskstate.TaskState{
 		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
 			Attempt:  1,
 			Status:   taskstate.RunStatusSucceeded,
@@ -518,6 +568,9 @@ func TestFinalizeRecoversExistingFeatureBranchPR(t *testing.T) {
 	}
 	if len(backend.setPRURLs) != 1 || backend.setPRURLs[0].prURL != "https://github.test/org/repo/pull/7" {
 		t.Fatalf("set PR URLs = %#v, want recovered URL", backend.setPRURLs)
+	}
+	if events := store.states["alpha/op-1"].Events; len(events) != 2 || events[1].Type != taskstate.EventPRRecovered {
+		t.Fatalf("events = %#v, want recovered PR event", events)
 	}
 }
 
