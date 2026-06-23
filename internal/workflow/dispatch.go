@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/readiness"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -204,6 +205,9 @@ func (s DispatchService) validateStart(
 	if err != nil {
 		return task.Task{}, gitmeta.TaskWorktreeSetupResult{}, err
 	}
+	if err := ensureDispatchParentEpicGate(ctx, opts.Backend, taskItem); err != nil {
+		return task.Task{}, gitmeta.TaskWorktreeSetupResult{}, err
+	}
 
 	repo := opts.Source.Repository
 	if active, ok, err := s.RunStore.ActiveRun(repo.ID, opts.TaskID); err != nil {
@@ -230,6 +234,21 @@ func (s DispatchService) validateStart(
 		}
 	}
 	return taskItem, expected, nil
+}
+
+func ensureDispatchParentEpicGate(ctx context.Context, backend DispatchBackend, taskItem task.Task) error {
+	if strings.TrimSpace(taskItem.Relations.ParentID) == "" {
+		return nil
+	}
+	tasks, err := backend.List(ctx)
+	if err != nil {
+		return fmt.Errorf("inspect immediate parent epic: %w", err)
+	}
+	gate := readiness.EvaluateParentEpicGate(taskItem, tasks)
+	if gate.State == readiness.ParentEpicGateAllowed {
+		return nil
+	}
+	return fmt.Errorf("task %s is not eligible for dispatch: %s", taskItem.ID, gate.Detail())
 }
 
 func (s DispatchService) recordStart(

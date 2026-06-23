@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/publication"
+	"github.com/hea3ven/orpheus/internal/readiness"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/workflow"
@@ -189,13 +190,18 @@ func classify(repository task.Repository, taskItem task.Task, index map[string]t
 	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
 		return policyResult{state: readinessReview, detail: metadata.PRURL}
 	}
-	if publication.RequiresExternalRef(repository.TitleTemplate) && strings.TrimSpace(taskItem.ExternalRef) == "" {
-		return policyResult{state: readinessAttention, detail: missingExternalRefDetail(taskItem.ID)}
-	}
-
 	expectedTargets := expectedTargetsFrom(localState)
 	if result, ok := classifyExpectedReviewReady(expectedTargets, taskItem, latestRun, localState); ok {
 		return result
+	}
+	if taskItem.Status == task.StatusInProgress && latestRun != nil && latestRun.Status == taskstate.RunStatusRunning {
+		return classifyInProgress(latestRun)
+	}
+	if result, ok := classifyParentEpicGate(taskItem, index); ok {
+		return result
+	}
+	if publication.RequiresExternalRef(repository.TitleTemplate) && strings.TrimSpace(taskItem.ExternalRef) == "" {
+		return policyResult{state: readinessAttention, detail: missingExternalRefDetail(taskItem.ID)}
 	}
 
 	if _, ok := workflow.ClassifyPRReviewReady(repository, taskItem, latestRun); ok {
@@ -234,6 +240,18 @@ func classify(repository task.Repository, taskItem task.Task, index map[string]t
 		state:  readinessAttention,
 		detail: fmt.Sprintf("status %s is not locally actionable", formatStatus(taskItem.Status)),
 	}
+}
+
+func classifyParentEpicGate(taskItem task.Task, index map[string]task.Task) (policyResult, bool) {
+	parentGate := readiness.EvaluateParentEpicGateFromIndex(taskItem, index)
+	if parentGate.State == readiness.ParentEpicGateAllowed {
+		return policyResult{}, false
+	}
+	state := readinessAttention
+	if parentGate.State == readiness.ParentEpicGateBlocked {
+		state = readinessBlocked
+	}
+	return policyResult{state: state, detail: parentGate.Detail()}, true
 }
 
 func classifyExpectedReviewReady(

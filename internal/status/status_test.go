@@ -113,6 +113,57 @@ func TestProjectRequiresExternalReferenceBeforePrePRWorkflowStates(t *testing.T)
 	}
 }
 
+func TestProjectGatesChildReadinessOnImmediateParentEpic(t *testing.T) {
+	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
+		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"},
+		Tasks: []task.Task{
+			{ID: "a-paused", Status: task.StatusOpen, IssueType: task.IssueTypeEpic},
+			{ID: "a-active", Status: task.StatusInProgress, IssueType: task.IssueTypeEpic, Relations: task.RelationSummary{ParentID: "a-paused"}},
+			{ID: "a-child-task", Status: task.StatusOpen, IssueType: task.IssueTypeTask, Relations: task.RelationSummary{ParentID: "a-active"}},
+			{ID: "a-child-epic", Status: task.StatusOpen, IssueType: task.IssueTypeEpic, Relations: task.RelationSummary{ParentID: "a-active"}},
+			{ID: "a-blocked-child", Status: task.StatusOpen, IssueType: task.IssueTypeBug, Relations: task.RelationSummary{ParentID: "a-paused"}},
+			{ID: "a-missing-parent", Status: task.StatusOpen, IssueType: task.IssueTypeTask, Relations: task.RelationSummary{ParentID: "a-gone"}},
+			{ID: "a-non-epic-parent", Status: task.StatusOpen, IssueType: task.IssueTypeTask, Relations: task.RelationSummary{ParentID: "a-child-task"}},
+			{ID: "a-closed-parent", Status: task.StatusClosed, IssueType: task.IssueTypeEpic},
+			{ID: "a-closed-parent-child", Status: task.StatusOpen, IssueType: task.IssueTypeTask, Relations: task.RelationSummary{ParentID: "a-closed-parent"}},
+			{ID: "a-unknown-parent", Status: task.Status("paused"), IssueType: task.IssueTypeEpic},
+			{ID: "a-unknown-parent-child", Status: task.StatusOpen, IssueType: task.IssueTypeTask, Relations: task.RelationSummary{ParentID: "a-unknown-parent"}},
+			{ID: "a-running", Status: task.StatusInProgress, IssueType: task.IssueTypeTask, Relations: task.RelationSummary{ParentID: "a-paused"}},
+			{ID: "a-reviewing", Status: task.StatusOpen, IssueType: task.IssueTypeTask, Metadata: task.Metadata{task.MetadataPRURL: "https://example.test/pr/1"}, Relations: task.RelationSummary{ParentID: "a-paused"}},
+			{ID: "a-done", Status: task.StatusClosed, IssueType: task.IssueTypeTask, Relations: task.RelationSummary{ParentID: "a-paused"}},
+		},
+	}}}
+	runStates := status.RunStateIndex{
+		status.RunStateKey("alpha", "a-running"): {Attempt: 1, Status: taskstate.RunStatusRunning},
+	}
+
+	projection := status.ProjectWithRunStates(snapshot, runStates)
+	assertGroupTaskIDs(t, projection, status.GroupReadyToRun, []string{"a-paused", "a-child-task", "a-child-epic"})
+	assertGroupTaskIDs(t, projection, status.GroupBlocked, []string{"a-active", "a-blocked-child"})
+	assertGroupTaskIDs(t, projection, status.GroupNeedsAttention, []string{"a-missing-parent", "a-non-epic-parent", "a-closed-parent-child", "a-unknown-parent", "a-unknown-parent-child"})
+	assertGroupTaskIDs(t, projection, status.GroupWorking, []string{"a-running"})
+	assertGroupTaskIDs(t, projection, status.GroupInReview, []string{"a-reviewing"})
+	assertGroupTaskIDs(t, projection, status.GroupDoneClosed, []string{"a-closed-parent", "a-done"})
+
+	blocked := groupEntries(t, projection, status.GroupBlocked)[1]
+	if blocked.Detail != "immediate parent epic a-paused is open; immediate parent epic must be in_progress" {
+		t.Fatalf("blocked detail = %q", blocked.Detail)
+	}
+	for _, entry := range groupEntries(t, projection, status.GroupNeedsAttention) {
+		if entry.Task.Relations.ParentID == "" {
+			continue
+		}
+		if !strings.Contains(entry.Detail, "immediate parent epic must be in_progress") {
+			t.Fatalf("attention detail = %q, want parent epic guidance", entry.Detail)
+		}
+	}
+
+	rows := status.ReadyRowsWithRunStates(snapshot, runStates)
+	if len(rows) != 3 || rows[0].Task.ID != "a-paused" || rows[1].Task.ID != "a-child-task" || rows[2].Task.ID != "a-child-epic" {
+		t.Fatalf("ready rows = %#v, want only children of the active immediate epic", rows)
+	}
+}
+
 func externalRefGateFixture() (task.SnapshotResult, status.RunStateIndex) {
 	const titleTemplate = "[{{external_ref}}] {{summary}}"
 
