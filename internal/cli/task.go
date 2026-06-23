@@ -13,6 +13,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/beads"
+	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
@@ -361,6 +362,9 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID, agentName str
 			err,
 		)
 	}
+	if err := validateTaskRunExternalRef(command, resolved, taskBackend); err != nil {
+		return err
+	}
 
 	dispatch, err := startTaskRunDispatch(command, paths, resolved, taskBackend, agentName, mainMode, repoRootMode)
 	if err != nil {
@@ -377,6 +381,28 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID, agentName str
 		return fmt.Errorf("task run %s: record run finish: %w", resolved.TaskID, err)
 	}
 	return nil
+}
+
+func validateTaskRunExternalRef(
+	command *cobra.Command,
+	resolved taskmodel.ResolvedTaskSource,
+	backend taskmodel.Getter,
+) error {
+	if !publication.RequiresExternalRef(resolved.Source.Repository.TitleTemplate) {
+		return nil
+	}
+	taskItem, err := queryTaskFromBackend(command.Context(), "task run", resolved, backend)
+	if err != nil {
+		return err
+	}
+	if taskItem.Status == taskmodel.StatusClosed || strings.TrimSpace(taskItem.ExternalRef) != "" {
+		return nil
+	}
+	return fmt.Errorf(
+		"task run %s: publication title template requires a task external reference; set it with `bd update %s --external-ref <reference>`",
+		resolved.TaskID,
+		resolved.TaskID,
+	)
 }
 
 type taskRunDispatch struct {

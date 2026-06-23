@@ -182,6 +182,38 @@ func TestTaskReadyListsReadyTasksAcrossRegisteredRepos(t *testing.T) {
 	is.NotContains(log, "--json --readonly --sandbox ready")
 }
 
+func TestTaskReadyExcludesTasksMissingRequiredExternalReference(t *testing.T) {
+	is := assert.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+	repoDir := filepath.Join(t.TempDir(), "gated")
+	require.NoError(t, os.MkdirAll(repoDir, 0o755))
+	require.NoError(t, store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "gated",
+		Name:          "Gated",
+		Path:          repoDir,
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "gt",
+		TitleTemplate: "[{{external_ref}}] {{summary}}",
+	}}}))
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[
+			{"id":"gt-missing","title":"Missing external reference","status":"open","priority":1,"issue_type":"task"},
+			{"id":"gt-set","title":"External reference set","external_ref":"TREX-1234","status":"open","priority":1,"issue_type":"task"}
+		]`},
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "ready"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "gt-set")
+	is.Contains(stdout, "External reference set")
+	is.NotContains(stdout, "gt-missing")
+	is.NotContains(stdout, "Missing external reference")
+}
+
 func TestTaskListReportsPartialRepoFailures(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -648,6 +680,7 @@ func TestTaskRunExecutesDefaultAgentAttachedFromDeterministicWorktree(t *testing
 		DefaultBranch: "main",
 		BeadsMode:     registry.BeadsModeLocal,
 		BeadsPrefix:   "op",
+		TitleTemplate: "[{{external_ref}}] {{summary}}",
 	}}}))
 
 	bdLogPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
@@ -655,6 +688,7 @@ func TestTaskRunExecutesDefaultAgentAttachedFromDeterministicWorktree(t *testing
 			{
 				"id":"op-1",
 				"title":"Implement attached run",
+				"external_ref":"TREX-1234",
 				"description":"Resolve the task and launch the configured agent.",
 				"acceptance_criteria":"The agent gets the rendered prompt and ORPHEUS environment.",
 				"status":"open",
@@ -752,6 +786,53 @@ func TestTaskRunExecutesDefaultAgentAttachedFromDeterministicWorktree(t *testing
 	is.Equal(taskstate.EventWorktreeReused, retriedState.Events[3].Type)
 	is.Equal(taskstate.EventRunStarted, retriedState.Events[4].Type)
 	is.Equal(taskstate.EventRunFinished, retriedState.Events[5].Type)
+}
+
+func TestTaskRunRejectsMissingRequiredExternalReferenceBeforeSetup(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "gated"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "gated",
+		Name:          "Gated Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "gt",
+		TitleTemplate: "[{{external_ref}}] {{summary}}",
+	}}}))
+
+	bdLogPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[
+			{"id":"gt-1","title":"Missing external reference","status":"open","priority":1,"issue_type":"task"}
+		]`},
+	})
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "gt-1"})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "publication title template requires a task external reference")
+	is.ErrorContains(err, "bd update gt-1 --external-ref <reference>")
+
+	bdLog := readFileString(t, bdLogPath)
+	is.Contains(bdLog, "--json --readonly --sandbox show --id gt-1")
+	is.NotContains(bdLog, "--json --sandbox update")
+
+	worktreePath, pathErr := paths.DataPath(filepath.Join("repos", "gated", "worktrees", "gt-1"))
+	must.NoError(pathErr)
+	_, statErr := os.Stat(worktreePath)
+	is.ErrorIs(statErr, os.ErrNotExist)
+
+	statePath, pathErr := paths.DataPath(filepath.Join("repos", "gated", "tasks", "gt-1.yaml"))
+	must.NoError(pathErr)
+	_, statErr = os.Stat(statePath)
+	is.ErrorIs(statErr, os.ErrNotExist)
 }
 
 //nolint:funlen // Workflow test is clearer when setup, command, and state assertions stay together.
