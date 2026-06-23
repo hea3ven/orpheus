@@ -99,6 +99,139 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 	is.NotContains(bdLog, "orpheus.pr_url")
 }
 
+func TestConfiguredPublicationPolicyEndToEnd(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	paths, repoPath := setupCompletionFlowRepo(t)
+
+	const taskID = "op-trex-title"
+	withStatefulCompletionBD(t, completionBDTask{
+		RepoPath:           repoPath,
+		TaskID:             taskID,
+		Title:              "Configured publication policy",
+		Description:        "Validate the configured work-repo title workflow.",
+		AcceptanceCriteria: "Publication uses the task external reference and capitalized summary.",
+		ExternalRef:        "TREX-1234",
+	})
+	withOrpheusCLIHelper(t)
+	agentLogPath := withCompletionFlowAgent(t, completionFlowAgentOptions{
+		Command:             "trex-title-agent",
+		FileName:            "trex-title-change.txt",
+		Body:                "configured publication implementation",
+		Summary:             "Replaced the config for abc",
+		Description:         "Replaced the config used for publication validation.",
+		DetailedDescription: "## Configured publication\n\nReplaced the config used for publication validation.",
+	})
+	writeCompletionFlowAgentConfig(t, paths, "trex-title", "trex-title-agent")
+
+	for _, args := range [][]string{
+		{"repo", "config", "set", "alpha", "summary-style", registry.SummaryGuidanceStyleCapitalized},
+		{"repo", "config", "set", "alpha", "title-template", "[{{external_ref}}] {{summary}}"},
+	} {
+		stdout, stderr := executeCommand(t, args)
+		is.Empty(stderr)
+		is.NotEmpty(stdout)
+	}
+
+	runOut, runErr := executeCommand(t, []string{"task", "run", taskID})
+	is.Empty(runErr)
+	is.Contains(runOut, "completion agent completed")
+
+	contextOutput := agentLogBlock(t, readFileString(t, agentLogPath), "AGENT_CONTEXT")
+	is.Contains(contextOutput, "- External reference: TREX-1234")
+	is.Contains(contextOutput, "Use one capitalized plain-English summary line")
+	is.Contains(contextOutput, "Replaced the config for abc")
+
+	state := readCompletionTaskState(t, paths, "alpha", taskID)
+	latest, ok := taskstate.LatestRun(state)
+	must.True(ok)
+	must.NotNil(latest.Completion)
+	is.Equal("Replaced the config for abc", latest.Completion.Summary)
+
+	ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{
+		listStdout:   "[]",
+		createStdout: "https://github.test/org/alpha/pull/57\n",
+	})
+	doneOut, doneErr := executeCommand(t, []string{"task", "done", taskID})
+	is.Empty(doneErr)
+	is.Contains(doneOut, "created PR https://github.test/org/alpha/pull/57")
+	is.Equal(
+		"[TREX-1234] Replaced the config for abc\n\nReplaced the config used for publication validation.",
+		strings.TrimSpace(runGit(t, latest.Worktree, "log", "-1", "--format=%B")),
+	)
+	is.Contains(readFileString(t, ghLogPath), "[TREX-1234] Replaced the config for abc")
+}
+
+//nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
+func TestMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	paths, repoPath := setupCompletionFlowRepo(t)
+
+	const taskID = "op-missing-title-ref"
+	withStatefulCompletionBD(t, completionBDTask{
+		RepoPath:           repoPath,
+		TaskID:             taskID,
+		Title:              "Missing publication reference",
+		Description:        "Validate missing-reference gates.",
+		AcceptanceCriteria: "Dispatch and publication require the external reference.",
+	})
+	withOrpheusCLIHelper(t)
+	withCompletionFlowAgent(t, completionFlowAgentOptions{
+		Command:             "missing-title-ref-agent",
+		FileName:            "missing-title-ref-change.txt",
+		Body:                "missing reference implementation",
+		Summary:             "feat: validate missing title reference",
+		Description:         "Created a change for missing-reference validation.",
+		DetailedDescription: "## Missing reference\n\nCreated a change for missing-reference validation.",
+	})
+	writeCompletionFlowAgentConfig(t, paths, "missing-title-ref", "missing-title-ref-agent")
+
+	_, configErr := executeCommand(t, []string{
+		"repo", "config", "set", "alpha", "title-template", "[{{external_ref}}] {{summary}}",
+	})
+	is.Empty(configErr)
+
+	stdout, stderr, runErr := executeCommandWithError(t, []string{"task", "run", taskID})
+	must.Error(runErr)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(runErr, "publication title template requires a task external reference")
+	is.ErrorContains(runErr, "bd update "+taskID+" --external-ref <reference>")
+
+	worktreePath, pathErr := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", taskID))
+	must.NoError(pathErr)
+	_, statErr := os.Stat(worktreePath)
+	is.ErrorIs(statErr, os.ErrNotExist)
+
+	_, clearErr := executeCommand(t, []string{"repo", "config", "set", "alpha", "title-template", ""})
+	is.Empty(clearErr)
+	runOut, allowedRunErr := executeCommand(t, []string{"task", "run", taskID})
+	is.Empty(allowedRunErr)
+	is.Contains(runOut, "completion agent completed")
+
+	state := readCompletionTaskState(t, paths, "alpha", taskID)
+	latest, ok := taskstate.LatestRun(state)
+	must.True(ok)
+	beforePublication := strings.TrimSpace(runGit(t, latest.Worktree, "rev-parse", "HEAD"))
+
+	_, configErr = executeCommand(t, []string{
+		"repo", "config", "set", "alpha", "title-template", "[{{external_ref}}] {{summary}}",
+	})
+	is.Empty(configErr)
+	ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{})
+
+	doneOut, doneStderr, doneErr := executeCommandWithError(t, []string{"task", "done", taskID})
+	is.Empty(doneOut)
+	is.Empty(doneStderr)
+	must.Error(doneErr)
+	is.ErrorContains(doneErr, "publication title template requires a task external reference")
+	is.Equal(beforePublication, strings.TrimSpace(runGit(t, latest.Worktree, "rev-parse", "HEAD")))
+	is.Contains(runGit(t, latest.Worktree, "status", "--porcelain=v1"), "missing-title-ref-change.txt")
+	_, statErr = os.Stat(ghLogPath)
+	is.ErrorIs(statErr, os.ErrNotExist)
+}
+
 //nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	is := assert.New(t)
@@ -446,6 +579,7 @@ type completionBDTask struct {
 	Title              string
 	Description        string
 	AcceptanceCriteria string
+	ExternalRef        string
 	CloseBranch        string
 }
 
@@ -503,6 +637,7 @@ BRANCH_FILE=%s
 WORKTREE_FILE=%s
 PR_URL_FILE=%s
 CLOSE_BRANCH=%s
+EXTERNAL_REF=%s
 
 emit_task() {
   status="$(cat "$STATUS_FILE")"
@@ -519,8 +654,8 @@ emit_task() {
     pr_url="$(cat "$PR_URL_FILE")"
   fi
 
-  printf '[{"id":"%%s","title":"%%s","description":"%%s","acceptance_criteria":"%%s","status":"%%s","priority":2,"issue_type":"task","metadata":{' \
-    "$TASK_ID" "$TITLE" "$DESCRIPTION" "$ACCEPTANCE" "$status"
+  printf '[{"id":"%%s","title":"%%s","description":"%%s","acceptance_criteria":"%%s","external_ref":"%%s","status":"%%s","priority":2,"issue_type":"task","metadata":{' \
+    "$TASK_ID" "$TITLE" "$DESCRIPTION" "$ACCEPTANCE" "$EXTERNAL_REF" "$status"
   comma=""
   if [ -n "$branch" ] || [ -n "$worktree" ]; then
     printf '%%s' "$comma"
@@ -614,6 +749,7 @@ func withStatefulCompletionBD(t *testing.T, task completionBDTask) statefulCompl
 		shellQuote(worktreePath),
 		shellQuote(prURLPath),
 		shellQuote(completionCloseBranch(task)),
+		shellQuote(task.ExternalRef),
 	)
 
 	bdPath := filepath.Join(binDir, "bd")

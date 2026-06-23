@@ -18,6 +18,10 @@ Inspired by the mythic Orpheus charming wild forces into motion, this project fo
 
 Early MVP design and implementation planning.
 
+## Documentation
+
+- [Repository publication titles](docs/2026-06-23_repo_publication_titles.md) explains how to configure Jira-style commit and pull-request titles, preserve defaults, and recover from a missing task reference.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
