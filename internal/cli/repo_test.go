@@ -31,6 +31,167 @@ func TestRepoAddAndListFlow(t *testing.T) {
 	}
 }
 
+func TestRepoConfigInspectsEffectivePublicationPolicy(t *testing.T) {
+	is := assert.New(t)
+	withFakeBDInit(t)
+	repoPath := newTestRepoPath(t)
+
+	_, addErr := executeCommand(t, []string{"repo", "add", repoPath})
+	is.Empty(addErr)
+
+	stdout, stderr := executeCommand(t, []string{"repo", "config", "get", "alpha"})
+	is.Empty(stderr)
+	is.Contains(stdout, "POLICY")
+	is.Contains(stdout, "summary guidance")
+	is.Contains(stdout, "(not set)")
+	is.Contains(stdout, "typed")
+	is.Contains(stdout, "publication title template")
+	is.Contains(stdout, "completion summary")
+}
+
+func TestRepoConfigUpdatesPublicationPolicyForExistingRepo(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	withFakeBDInit(t)
+	repoPath := newTestRepoPath(t)
+
+	_, addErr := executeCommand(t, []string{"repo", "add", repoPath})
+	is.Empty(addErr)
+
+	guidance := "Use sentence-case summaries without a type prefix."
+	template := "[{{external_ref}}] {{summary}}"
+	stdout, stderr := executeCommand(t, []string{
+		"repo", "config", "set", "alpha", "summary-guidance", guidance,
+	})
+	is.Empty(stderr)
+	is.Contains(stdout, guidance)
+	stdout, stderr = executeCommand(t, []string{
+		"repo", "config", "set", "alpha", "summary-style", registry.SummaryGuidanceStyleCapitalized,
+	})
+	is.Empty(stderr)
+	is.Contains(stdout, registry.SummaryGuidanceStyleCapitalized)
+	stdout, stderr = executeCommand(t, []string{
+		"repo", "config", "set", "alpha", "title-template", template,
+	})
+	is.Empty(stderr)
+	is.Contains(stdout, template)
+
+	store := registry.NewStore(currentTestPaths(t))
+	reg, err := store.Load()
+	must.NoError(err)
+	must.Len(reg.Repos, 1)
+	is.Equal(guidance, reg.Repos[0].SummaryGuidance)
+	is.Equal(registry.SummaryGuidanceStyleCapitalized, reg.Repos[0].SummaryGuidanceStyle)
+	is.Equal(template, reg.Repos[0].TitleTemplate)
+}
+
+func TestRepoConfigClearsPublicationPolicy(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	withFakeBDInit(t)
+	repoPath := newTestRepoPath(t)
+
+	_, addErr := executeCommand(t, []string{"repo", "add", repoPath})
+	is.Empty(addErr)
+	for _, args := range [][]string{
+		{"repo", "config", "set", "alpha", "summary-guidance", "Use sentence-case summaries."},
+		{"repo", "config", "set", "alpha", "summary-style", registry.SummaryGuidanceStyleCapitalized},
+		{"repo", "config", "set", "alpha", "title-template", "[OPS] {{summary}}"},
+	} {
+		_, configErr := executeCommand(t, args)
+		is.Empty(configErr)
+	}
+
+	_, stderr := executeCommand(t, []string{
+		"repo", "config", "set", "alpha", "summary-guidance", "",
+	})
+	is.Empty(stderr)
+	_, stderr = executeCommand(t, []string{
+		"repo", "config", "set", "alpha", "summary-style", "",
+	})
+	is.Empty(stderr)
+	_, stderr = executeCommand(t, []string{
+		"repo", "config", "set", "alpha", "title-template", "",
+	})
+	is.Empty(stderr)
+	stdout, stderr := executeCommand(t, []string{"repo", "config", "get", "alpha"})
+	is.Empty(stderr)
+	is.Contains(stdout, "(not set)")
+	is.Contains(stdout, "typed")
+	is.Contains(stdout, "completion summary")
+
+	store := registry.NewStore(currentTestPaths(t))
+	reg, err := store.Load()
+	must.NoError(err)
+	must.Len(reg.Repos, 1)
+	is.Empty(reg.Repos[0].SummaryGuidance)
+	is.Empty(reg.Repos[0].SummaryGuidanceStyle)
+	is.Empty(reg.Repos[0].TitleTemplate)
+}
+
+func TestRepoConfigRejectsInvalidPolicyWithoutMutatingRegistry(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	withFakeBDInit(t)
+	repoPath := newTestRepoPath(t)
+
+	_, addErr := executeCommand(t, []string{"repo", "add", repoPath})
+	is.Empty(addErr)
+	_, configErr := executeCommand(t, []string{"repo", "config", "set", "alpha", "title-template", "[OPS] {{summary}}"})
+	is.Empty(configErr)
+
+	for _, args := range [][]string{
+		{"repo", "config", "set", "alpha", "summary-style", "informal"},
+		{"repo", "config", "set", "alpha", "title-template", "{{task_id}}: {{summary}}"},
+	} {
+		stdout, _, err := executeCommandWithError(t, args)
+		must.Error(err)
+		is.Empty(stdout)
+	}
+
+	store := registry.NewStore(currentTestPaths(t))
+	reg, err := store.Load()
+	must.NoError(err)
+	must.Len(reg.Repos, 1)
+	is.Equal(registry.SummaryGuidanceStyleTyped, reg.Repos[0].SummaryGuidanceStyle)
+	is.Equal("[OPS] {{summary}}", reg.Repos[0].TitleTemplate)
+}
+
+func TestRepoConfigRejectsUnknownConfigName(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	withFakeBDInit(t)
+	repoPath := newTestRepoPath(t)
+
+	_, addErr := executeCommand(t, []string{"repo", "add", repoPath})
+	is.Empty(addErr)
+
+	stdout, _, err := executeCommandWithError(t, []string{
+		"repo", "config", "set", "alpha", "unknown", "value",
+	})
+	must.Error(err)
+	is.Empty(stdout)
+}
+
+func TestRepoConfigGetOnePolicyValue(t *testing.T) {
+	is := assert.New(t)
+	withFakeBDInit(t)
+	repoPath := newTestRepoPath(t)
+
+	_, addErr := executeCommand(t, []string{"repo", "add", repoPath})
+	is.Empty(addErr)
+	_, setErr := executeCommand(t, []string{
+		"repo", "config", "set", "alpha", "title-template", "[OPS] {{summary}}",
+	})
+	is.Empty(setErr)
+
+	stdout, stderr := executeCommand(t, []string{"repo", "config", "get", "alpha", "title-template"})
+	is.Empty(stderr)
+	is.Contains(stdout, "publication title template")
+	is.Contains(stdout, "[OPS] {{summary}}")
+	is.NotContains(stdout, "summary guidance style")
+}
+
 func TestRepoAddStoresGitRootWhenPathIsNested(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
