@@ -42,6 +42,31 @@ type Repo struct {
 	TitleTemplate        string `yaml:"title_template,omitempty"`
 }
 
+// PublicationPolicy is the resolved publication configuration for a repository.
+// Its values are safe for consumers to use without applying compatibility
+// defaults for older registry entries themselves.
+type PublicationPolicy struct {
+	SummaryGuidance      string
+	SummaryGuidanceStyle string
+	TitleTemplate        string
+}
+
+// EffectivePublicationPolicy returns a repository's publication policy with
+// compatibility defaults applied. A custom guidance string overrides the named
+// style when agents are instructed how to write completion summaries.
+func (r Repo) EffectivePublicationPolicy() PublicationPolicy {
+	style := strings.TrimSpace(r.SummaryGuidanceStyle)
+	if style != SummaryGuidanceStyleCapitalized {
+		style = SummaryGuidanceStyleTyped
+	}
+
+	return PublicationPolicy{
+		SummaryGuidance:      strings.TrimSpace(r.SummaryGuidance),
+		SummaryGuidanceStyle: style,
+		TitleTemplate:        strings.TrimSpace(r.TitleTemplate),
+	}
+}
+
 // Registry is the human-editable YAML schema for registered repositories.
 type Registry struct {
 	Repos []Repo `yaml:"repos"`

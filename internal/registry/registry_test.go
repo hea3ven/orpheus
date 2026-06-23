@@ -139,6 +139,41 @@ func TestStoreLoadAcceptsExternalReferenceTitleTemplate(t *testing.T) {
 	}
 }
 
+func TestRepoEffectivePublicationPolicyAppliesCompatibilityDefaults(t *testing.T) {
+	tests := []struct {
+		name string
+		repo registry.Repo
+		want registry.PublicationPolicy
+	}{
+		{
+			name: "legacy repo",
+			repo: registry.Repo{},
+			want: registry.PublicationPolicy{SummaryGuidanceStyle: registry.SummaryGuidanceStyleTyped},
+		},
+		{
+			name: "custom guidance overrides configured style",
+			repo: registry.Repo{
+				SummaryGuidance:      "  Write a concise release note.  ",
+				SummaryGuidanceStyle: registry.SummaryGuidanceStyleCapitalized,
+				TitleTemplate:        "  [OPS] {{summary}}  ",
+			},
+			want: registry.PublicationPolicy{
+				SummaryGuidance:      "Write a concise release note.",
+				SummaryGuidanceStyle: registry.SummaryGuidanceStyleCapitalized,
+				TitleTemplate:        "[OPS] {{summary}}",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.repo.EffectivePublicationPolicy(); got != test.want {
+				t.Fatalf("effective policy = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestStoreLoadRejectsUnknownRegistryFields(t *testing.T) {
 	paths := newTestPaths(t)
 	writeDataFile(t, paths, "registry.yaml", "repos: []\nunknown: true\n")

@@ -18,7 +18,8 @@ import (
 )
 
 const (
-	repoAddLockOperation = "repo add"
+	repoAddLockOperation    = "repo add"
+	repoConfigLockOperation = "repo config"
 
 	summaryGuidanceStyleCustom = "custom"
 	summaryGuidanceStylePrompt = "Summary guidance style (typed, capitalized, custom)"
@@ -37,8 +38,207 @@ func newRepoCommand(opts *rootOptions) *cobra.Command {
 		Args:  cobra.NoArgs,
 	}
 
-	cmd.AddCommand(newRepoAddCommand(opts), newRepoListCommand(opts), newRepoBeadsDirCommand(opts))
+	cmd.AddCommand(
+		newRepoAddCommand(opts),
+		newRepoConfigCommand(opts),
+		newRepoListCommand(opts),
+		newRepoBeadsDirCommand(opts),
+	)
 	return cmd
+}
+
+func newRepoConfigCommand(opts *rootOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "config",
+		Short: "Inspect or update repository publication policy",
+		Args:  cobra.NoArgs,
+	}
+	cmd.AddCommand(newRepoConfigGetCommand(), newRepoConfigSetCommand(opts))
+	return cmd
+}
+
+const (
+	repoConfigSummaryGuidance = "summary-guidance"
+	repoConfigSummaryStyle    = "summary-style"
+	repoConfigTitleTemplate   = "title-template"
+)
+
+func newRepoConfigGetCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "get <repo-id-name-or-prefix> [config-name]",
+		Short: "Show repository publication policy",
+		Args:  cobra.RangeArgs(1, 2),
+		RunE: func(command *cobra.Command, args []string) error {
+			registryCtx, err := loadRegistryContext()
+			if err != nil {
+				return err
+			}
+			repo, err := registryCtx.Registry.Resolve(args[0])
+			if err != nil {
+				return err
+			}
+			configName := ""
+			if len(args) == 2 {
+				configName, err = normalizeRepoConfigName(args[1])
+				if err != nil {
+					return err
+				}
+			}
+			return renderRepoConfig(command, repo, configName)
+		},
+	}
+}
+
+func newRepoConfigSetCommand(opts *rootOptions) *cobra.Command {
+	return &cobra.Command{
+		Use:   "set <repo-id-name-or-prefix> <config-name> <config-value>",
+		Short: "Set or clear repository publication policy",
+		Long:  "Set one repository publication policy value. Pass an empty config value to clear it.",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(command *cobra.Command, args []string) error {
+			return runRepoConfigSet(command, opts, args[0], args[1], args[2])
+		},
+	}
+}
+
+func runRepoConfigSet(command *cobra.Command, opts *rootOptions, token string, configName string, value string) error {
+	configName, err := normalizeRepoConfigName(configName)
+	if err != nil {
+		return err
+	}
+	value = strings.TrimSpace(value)
+	if err := validateRepoConfigValue(configName, value); err != nil {
+		return err
+	}
+
+	logger := opts.log().With(
+		slog.String("component", "cli"),
+		slog.String("operation", "repo_config_set"),
+		slog.String("token", token),
+		slog.String("config_name", configName),
+	)
+
+	store, paths, err := newRegistryStoreWithPathsFromEnvironment()
+	if err != nil {
+		return err
+	}
+	return state.WithGlobalMutationLock(paths, repoConfigLockOperation, func() error {
+		registryCtx, err := loadRegistryContextFromStore(store)
+		if err != nil {
+			return err
+		}
+		repo, err := registryCtx.Registry.Resolve(token)
+		if err != nil {
+			return err
+		}
+		updatedRepo := setRepoConfigValue(repo, configName, value)
+		if err := replaceRepo(&registryCtx.Registry, updatedRepo); err != nil {
+			return err
+		}
+		if err := registryCtx.Store.Save(registryCtx.Registry); err != nil {
+			return err
+		}
+		logger.DebugContext(command.Context(), "saved repository publication policy", slog.String("repo_id", updatedRepo.ID))
+		return renderRepoConfig(command, updatedRepo, configName)
+	})
+}
+
+func normalizeRepoConfigName(value string) (string, error) {
+	name := strings.TrimSpace(value)
+	switch name {
+	case repoConfigSummaryGuidance, repoConfigSummaryStyle, repoConfigTitleTemplate:
+		return name, nil
+	default:
+		return "", fmt.Errorf(
+			"unknown repo config %q; expected %q, %q, or %q",
+			value,
+			repoConfigSummaryGuidance,
+			repoConfigSummaryStyle,
+			repoConfigTitleTemplate,
+		)
+	}
+}
+
+func validateRepoConfigValue(name string, value string) error {
+	switch name {
+	case repoConfigSummaryStyle:
+		if value == "" {
+			return nil
+		}
+		return registry.ValidateSummaryGuidanceStyle(value)
+	case repoConfigTitleTemplate:
+		return publication.ValidateTitleTemplate(value)
+	default:
+		return nil
+	}
+}
+
+func setRepoConfigValue(repo registry.Repo, name string, value string) registry.Repo {
+	switch name {
+	case repoConfigSummaryGuidance:
+		repo.SummaryGuidance = value
+	case repoConfigSummaryStyle:
+		repo.SummaryGuidanceStyle = value
+	case repoConfigTitleTemplate:
+		repo.TitleTemplate = value
+	}
+	return repo
+}
+
+func replaceRepo(reg *registry.Registry, updated registry.Repo) error {
+	for index, repo := range reg.Repos {
+		if repo.ID == updated.ID {
+			reg.Repos[index] = updated
+			return reg.Validate()
+		}
+	}
+	return fmt.Errorf("repo %q is not registered", updated.ID)
+}
+
+func renderRepoConfig(command *cobra.Command, repo registry.Repo, configName string) error {
+	policy := repo.EffectivePublicationPolicy()
+	rows := [][]string{
+		{"summary guidance", displayConfigValue(repo.SummaryGuidance), effectiveSummaryGuidance(policy)},
+		{"summary guidance style", displayConfigValue(repo.SummaryGuidanceStyle), effectiveSummaryGuidanceStyle(policy)},
+		{"publication title template", displayConfigValue(repo.TitleTemplate), effectiveTitleTemplate(policy.TitleTemplate)},
+	}
+	switch configName {
+	case repoConfigSummaryGuidance:
+		rows = rows[:1]
+	case repoConfigSummaryStyle:
+		rows = rows[1:2]
+	case repoConfigTitleTemplate:
+		rows = rows[2:]
+	}
+	return renderTable(command.OutOrStdout(), []string{"POLICY", "STORED", "EFFECTIVE"}, rows)
+}
+
+func displayConfigValue(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "(not set)"
+	}
+	return value
+}
+
+func effectiveTitleTemplate(template string) string {
+	if strings.TrimSpace(template) == "" {
+		return "completion summary"
+	}
+	return template
+}
+
+func effectiveSummaryGuidance(policy registry.PublicationPolicy) string {
+	if policy.SummaryGuidance != "" {
+		return policy.SummaryGuidance
+	}
+	return policy.SummaryGuidanceStyle + " style"
+}
+
+func effectiveSummaryGuidanceStyle(policy registry.PublicationPolicy) string {
+	if policy.SummaryGuidance != "" {
+		return "overridden by custom guidance"
+	}
+	return policy.SummaryGuidanceStyle
 }
 
 func newRepoAddCommand(opts *rootOptions) *cobra.Command {
