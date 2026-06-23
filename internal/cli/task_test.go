@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/registry"
@@ -366,6 +367,8 @@ func TestTaskShowResolvesPrefixQueriesOnlyResolvedRepoAndRendersDetails(t *testi
 		"Branch: task/la-42",
 		"Worktree: /tmp/la-42",
 		"PR: https://example.test/pr/42",
+		"History:",
+		"  -",
 	} {
 		is.Contains(stdout, want)
 	}
@@ -409,7 +412,7 @@ func TestTaskShowReportsMalformedAndUnknownPrefixes(t *testing.T) {
 	is.ErrorContains(err, "register the repo")
 }
 
-func TestTaskShowReportsClosedItemsOutOfScope(t *testing.T) {
+func TestTaskShowRendersClosedItemsAndHistory(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -430,15 +433,94 @@ func TestTaskShowReportsClosedItemsOutOfScope(t *testing.T) {
 		repoDir: {stdout: `[{"id":"op-closed","title":"done","status":"closed","priority":2,"issue_type":"task"}]`},
 	})
 
-	stdout, stderr, err := executeCommandWithError(t, []string{"task", "show", "op-closed"})
+	stdout, stderr := executeCommand(t, []string{"task", "show", "op-closed"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "ID: op-closed")
+	is.Contains(stdout, "Status: closed")
+	is.Contains(stdout, "History:\n  -\n")
+}
+
+func TestTaskShowRendersChronologicalHistoryForClosedEpic(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoDir := filepath.Join(t.TempDir(), "alpha")
+	must.NoError(os.MkdirAll(repoDir, 0o755))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:          "alpha",
+		Name:        "Alpha",
+		Path:        repoDir,
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "op",
+	}}}))
+
+	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	stateStore := taskstate.NewStoreWithClock(paths, func() time.Time { return now })
+	_, err := stateStore.RecordWorktreeEvent("alpha", "op-epic", taskstate.EventWorktreeCreated, taskstate.WorktreeEventOptions{})
+	must.NoError(err)
+	now = now.Add(time.Minute)
+	run, err := stateStore.StartRun("alpha", "op-epic", taskstate.StartRunOptions{Agent: "codex"})
+	must.NoError(err)
+	now = now.Add(time.Minute)
+	_, err = stateStore.FinishRun("alpha", "op-epic", run.Attempt, taskstate.RunStatusSucceeded)
+	must.NoError(err)
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[{"id":"op-epic","title":"Closed epic","status":"closed","priority":1,"issue_type":"epic"}]`},
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "show", "op-epic"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Type: epic")
+	is.Contains(stdout, "Status: closed")
+	first := strings.Index(stdout, "2026-01-02T03:04:05Z Worktree created")
+	second := strings.Index(stdout, "2026-01-02T03:05:05Z Run started")
+	third := strings.Index(stdout, "2026-01-02T03:06:05Z Run finished")
+	is.Greater(first, -1)
+	is.Greater(second, first)
+	is.Greater(third, second)
+	is.NotContains(stdout, "codex")
+	is.NotContains(stdout, "succeeded")
+}
+
+func TestTaskShowFailsWhenLocalTaskStateCannotBeLoaded(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoDir := filepath.Join(t.TempDir(), "alpha")
+	must.NoError(os.MkdirAll(repoDir, 0o755))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:          "alpha",
+		Name:        "Alpha",
+		Path:        repoDir,
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "op",
+	}}}))
+
+	statePath, err := taskstate.NewStore(paths).Path("alpha", "op-corrupt")
+	must.NoError(err)
+	must.NoError(os.MkdirAll(filepath.Dir(statePath), 0o755))
+	must.NoError(os.WriteFile(statePath, []byte("version: 1\nrepo_id: wrong\ntask_id: op-corrupt\n"), 0o600))
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[{"id":"op-corrupt","title":"Corrupt state","status":"open","priority":1,"issue_type":"task"}]`},
+	})
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "show", "op-corrupt"})
 
 	must.Error(err)
 	is.Empty(stdout)
 	is.Empty(stderr)
-	is.ErrorContains(err, "out of scope for M2 task views")
-	is.ErrorContains(err, "expected an active item")
-	is.ErrorContains(err, "issue_type=task")
-	is.ErrorContains(err, "status=closed")
+	is.ErrorContains(err, "task show op-corrupt: load local task-state for repo alpha")
+	is.ErrorContains(err, `repo_id is "wrong", expected "alpha"`)
 }
 
 func TestTaskShowRendersActiveNonTaskItems(t *testing.T) {

@@ -148,6 +148,30 @@ type Event struct {
 	ObservedPRState string `yaml:"observed_pr_state,omitempty"`
 }
 
+// DisplayName returns the concise human-readable name for an audit event.
+func (e Event) DisplayName() string {
+	switch e.Type {
+	case EventWorktreeCreated:
+		return "Worktree created"
+	case EventWorktreeReused:
+		return "Worktree reused"
+	case EventWorktreeRecreated:
+		return "Worktree recreated"
+	case EventRunStarted:
+		return "Run started"
+	case EventRunFinished:
+		return "Run finished"
+	case EventRunStartFailed:
+		return "Run start failed"
+	case EventCompletionRepeated:
+		return "Completion repeated"
+	case EventTaskClosedPRMerged:
+		return "Task closed after PR merged"
+	default:
+		return string(e.Type)
+	}
+}
+
 // WorktreeEventOptions describes worktree context for a trace event.
 type WorktreeEventOptions struct {
 	Branch   string
