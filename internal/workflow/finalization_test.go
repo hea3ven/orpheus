@@ -307,11 +307,12 @@ func TestFinalizeDoesNotOfferRunningEscapeHatchForInvalidTargets(t *testing.T) {
 
 func TestFinalizePublishesFeatureBranchPRWithoutClosingTask(t *testing.T) {
 	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
-	source.Repository.TitleTemplate = "[OPS] {{summary}}"
+	source.Repository.TitleTemplate = "[{{external_ref}}] {{summary}}"
 	worktree := targets.WorktreeTeam.Worktree
 	taskItem := task.Task{
-		ID:     "op-1",
-		Status: task.StatusInProgress,
+		ID:          "op-1",
+		ExternalRef: " \nTREX-1234\t",
+		Status:      task.StatusInProgress,
 		Metadata: task.Metadata{
 			task.MetadataBranch:   targets.WorktreeTeam.Branch,
 			task.MetadataWorktree: worktree,
@@ -354,7 +355,7 @@ func TestFinalizePublishesFeatureBranchPRWithoutClosingTask(t *testing.T) {
 	if len(provider.findRequests) != 1 || len(provider.createRequests) != 1 {
 		t.Fatalf("provider find/create = %#v/%#v, want one each", provider.findRequests, provider.createRequests)
 	}
-	assertFeatureBranchPublicationTitles(t, git, provider, "[OPS] Publish branch")
+	assertFeatureBranchPublicationTitles(t, git, provider, "[TREX-1234] Publish branch")
 	if len(backend.setPRURLs) != 1 || backend.setPRURLs[0].prURL != "https://github.test/org/repo/pull/42" {
 		t.Fatalf("set PR URLs = %#v, want created URL", backend.setPRURLs)
 	}
@@ -364,6 +365,51 @@ func TestFinalizePublishesFeatureBranchPRWithoutClosingTask(t *testing.T) {
 	facts := taskstate.FinalizationFacts(store.states["alpha/op-1"])
 	if facts.Commit != "commit123" || facts.CommittedAt == nil || facts.PushedAt == nil || facts.ClosedAt != nil {
 		t.Fatalf("finalization facts = %#v, want commit/push without close", facts)
+	}
+}
+
+func TestFinalizeRejectsMissingExternalReferenceBeforeFeatureBranchPublication(t *testing.T) {
+	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	source.Repository.TitleTemplate = "[{{external_ref}}] {{summary}}"
+	worktree := targets.WorktreeTeam.Worktree
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   targets.WorktreeTeam.Branch,
+			task.MetadataWorktree: worktree,
+		},
+	}
+	service, git, _, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{taskItem}, map[string]taskstate.TaskState{
+		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
+			Attempt:  1,
+			Status:   taskstate.RunStatusSucceeded,
+			Branch:   targets.WorktreeTeam.Branch,
+			Worktree: worktree,
+			Completion: &taskstate.Completion{
+				Summary:             "Publish branch",
+				Description:         "Commit reviewed feature work.",
+				DetailedDescription: "Detailed PR body.",
+			},
+		}),
+	})
+	git.branch = targets.WorktreeTeam.Branch
+	provider := &fakePRProvider{created: pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/42"}}
+	service.PRProvider = provider
+
+	_, err := service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
+
+	if err == nil || !strings.Contains(err.Error(), "requires a task external reference") {
+		t.Fatalf("error = %v, want missing external reference error", err)
+	}
+	if git.staged || len(git.messages) != 0 || len(git.taskPushes) != 0 {
+		t.Fatalf("git staged=%v messages=%#v task pushes=%#v, want no publication writes", git.staged, git.messages, git.taskPushes)
+	}
+	if len(provider.findRequests) != 0 || len(provider.createRequests) != 0 {
+		t.Fatalf("provider requests = %#v/%#v, want no PR operations", provider.findRequests, provider.createRequests)
+	}
+	if len(backend.setPRURLs) != 0 {
+		t.Fatalf("set PR URLs = %#v, want none", backend.setPRURLs)
 	}
 }
 

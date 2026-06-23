@@ -335,7 +335,7 @@ func (s FinalizationService) ensureDefaultBranchFinalizationCommit(
 	if err != nil {
 		return taskstate.Finalization{}, err
 	}
-	title, err := publication.RenderTitle(repo.TitleTemplate, summary)
+	title, err := publication.RenderTitle(repo.TitleTemplate, summary, target.task.ExternalRef)
 	if err != nil {
 		return taskstate.Finalization{}, err
 	}
@@ -540,7 +540,7 @@ func (s FinalizationService) publishFeatureBranch(
 	if err != nil {
 		return FinalizationResult{}, err
 	}
-	title, err := publication.RenderTitle(repo.TitleTemplate, summary)
+	title, err := publication.RenderTitle(repo.TitleTemplate, summary, target.task.ExternalRef)
 	if err != nil {
 		return FinalizationResult{}, err
 	}

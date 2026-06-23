@@ -30,6 +30,7 @@ const listVisibleTasksStdout = `[
 	{
 		"id":"op-1",
 		"title":"Implement adapter",
+		"external_ref":"TREX-1234",
 		"description":"Read tasks",
 		"design":"Use bd JSON",
 		"acceptance_criteria":"Parses metadata",
@@ -313,6 +314,9 @@ func assertParsedVisibleTask(t *testing.T, taskItem task.Task) {
 
 	if taskItem.ID != "op-1" || taskItem.Title != "Implement adapter" || taskItem.Status != task.StatusOpen || taskItem.IssueType != task.IssueTypeTask {
 		t.Fatalf("task = %#v, want parsed active task", taskItem)
+	}
+	if taskItem.ExternalRef != "TREX-1234" {
+		t.Fatalf("external reference = %q, want TREX-1234", taskItem.ExternalRef)
 	}
 	if !reflect.DeepEqual(taskItem.Labels, []string{"m2", "mvp"}) {
 		t.Fatalf("labels = %#v, want m2/mvp", taskItem.Labels)

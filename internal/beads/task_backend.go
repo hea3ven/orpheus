@@ -299,6 +299,7 @@ func (b TaskBackend) runBD(ctx context.Context, operation string, globalArgs []s
 type bdTask struct {
 	ID                 string          `json:"id"`
 	Title              string          `json:"title"`
+	ExternalRef        string          `json:"external_ref"`
 	Description        string          `json:"description"`
 	Design             string          `json:"design"`
 	AcceptanceCriteria string          `json:"acceptance_criteria"`
@@ -391,6 +392,7 @@ func (t bdTask) toTask() (task.Task, error) {
 	return task.Task{
 		ID:                 t.ID,
 		Title:              t.Title,
+		ExternalRef:        t.ExternalRef,
 		Description:        t.Description,
 		Design:             t.Design,
 		AcceptanceCriteria: t.AcceptanceCriteria,

@@ -393,7 +393,7 @@ func BuildPublicationPullRequestContent(titleTemplate string, taskItem task.Task
 	if latest.Completion == nil {
 		return PullRequestContent{}, errors.New("completion is required")
 	}
-	renderedTitle, err := publication.RenderTitle(titleTemplate, latest.Completion.Summary)
+	renderedTitle, err := publication.RenderTitle(titleTemplate, latest.Completion.Summary, taskItem.ExternalRef)
 	if err != nil {
 		return PullRequestContent{}, err
 	}

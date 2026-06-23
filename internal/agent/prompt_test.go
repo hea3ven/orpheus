@@ -85,6 +85,14 @@ func TestRenderActiveContextIncludesWorktreeContract(t *testing.T) {
 	is.NotContains(output, "bd")
 }
 
+func TestRenderActiveContextIncludesExternalReference(t *testing.T) {
+	output := agent.RenderActiveContext(agent.ActiveContext{
+		Task: agent.ContextTask{ExternalRef: "TREX-1234"},
+	})
+
+	assert.Contains(t, output, "- External reference: TREX-1234")
+}
+
 func TestRenderActiveContextIncludesMainContract(t *testing.T) {
 	is := assert.New(t)
 

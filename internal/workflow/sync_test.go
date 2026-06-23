@@ -929,8 +929,9 @@ func TestBuildSyncPullRequestContent(t *testing.T) {
 }
 
 func TestBuildPublicationPullRequestContentUsesTitleTemplate(t *testing.T) {
-	content, err := workflow.BuildPublicationPullRequestContent("[OPS] {{summary}}", task.Task{
-		ID: "op-1",
+	content, err := workflow.BuildPublicationPullRequestContent("[{{external_ref}}] {{summary}}", task.Task{
+		ID:          "op-1",
+		ExternalRef: "\n TREX-1234\t",
 	}, taskstate.RunAttempt{
 		Completion: &taskstate.Completion{
 			Summary:             "Ready for review",
@@ -940,11 +941,26 @@ func TestBuildPublicationPullRequestContentUsesTitleTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build content: %v", err)
 	}
-	if content.Title != "[OPS] Ready for review" {
+	if content.Title != "[TREX-1234] Ready for review" {
 		t.Fatalf("title = %q, want rendered title", content.Title)
 	}
 	if content.Body != "Detailed PR body." {
 		t.Fatalf("body = %q, want detailed description unchanged", content.Body)
+	}
+}
+
+func TestBuildPublicationPullRequestContentRejectsMissingRequiredExternalReference(t *testing.T) {
+	_, err := workflow.BuildPublicationPullRequestContent("[{{external_ref}}] {{summary}}", task.Task{
+		ID: "op-1",
+	}, taskstate.RunAttempt{
+		Completion: &taskstate.Completion{
+			Summary:             "Ready for review",
+			DetailedDescription: "Detailed PR body.",
+		},
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "requires a task external reference") {
+		t.Fatalf("error = %v, want missing external reference error", err)
 	}
 }
 

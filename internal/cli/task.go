@@ -1151,6 +1151,7 @@ func renderTaskBodyDetails(output interface{ Write([]byte) (int, error) }, task 
 	}{
 		{label: "  ID", value: task.ID},
 		{label: "  Title", value: task.Title},
+		{label: "  External reference", value: task.ExternalRef},
 		{label: "  Status", value: string(task.Status)},
 		{label: "  Priority", value: fmt.Sprintf("%d", task.Priority)},
 		{label: "  Type", value: string(task.IssueType)},
@@ -1260,7 +1261,7 @@ func renderDetailedTaskRows(output interface{ Write([]byte) (int, error) }, rows
 	}
 	return renderTable(
 		output,
-		[]string{"REPO_ID", "REPO", "TASK_PREFIX", "TASK_ID", "STATUS", "P", "BRANCH", "WORKTREE", "PR", "TITLE"},
+		[]string{"REPO_ID", "REPO", "TASK_PREFIX", "TASK_ID", "STATUS", "P", "BRANCH", "WORKTREE", "PR", "EXTERNAL_REF", "TITLE"},
 		tableRows,
 	)
 }
@@ -1287,6 +1288,7 @@ func detailedTaskTableRow(row taskmodel.RepoTask) []string {
 		formatMetadataTableCell(metadata.Branch, metadata.HasBranch),
 		formatMetadataTableCell(metadata.Worktree, metadata.HasWorktree),
 		formatMetadataTableCell(metadata.PRURL, metadata.HasPRURL),
+		formatTaskField(row.Task.ExternalRef),
 		row.Task.Title,
 	}
 }

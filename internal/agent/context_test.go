@@ -48,6 +48,7 @@ func TestActiveContextResolverResolvesWorktreeTarget(t *testing.T) {
 	taskItem := taskmodel.Task{
 		ID:                 "op-1",
 		Title:              "Resolve context",
+		ExternalRef:        "TREX-1234",
 		Description:        "Render active context.",
 		AcceptanceCriteria: "Only active runs render.",
 		Status:             taskmodel.StatusInProgress,
@@ -80,6 +81,7 @@ func TestActiveContextResolverResolvesWorktreeTarget(t *testing.T) {
 	is.Equal(fixture.repo.SummaryGuidance, got.Repository.SummaryGuidance)
 	is.Equal("op-1", got.Task.ID)
 	is.Equal("Resolve context", got.Task.Title)
+	is.Equal("TREX-1234", got.Task.ExternalRef)
 	is.Equal(1, got.Run.Attempt)
 	is.Equal("recorder", got.Run.Agent)
 	is.Equal(agent.ExecutionTargetWorktree, got.Target.Kind)

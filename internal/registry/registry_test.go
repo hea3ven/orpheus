@@ -96,7 +96,7 @@ func TestStoreLoadMalformedRegistry(t *testing.T) {
 	}
 }
 
-func TestStoreLoadRejectsUnsupportedTitleTemplate(t *testing.T) {
+func TestStoreLoadAcceptsExternalReferenceTitleTemplate(t *testing.T) {
 	paths := newTestPaths(t)
 	writeDataFile(t, paths, "registry.yaml", `repos:
   - id: alpha
@@ -106,10 +106,13 @@ func TestStoreLoadRejectsUnsupportedTitleTemplate(t *testing.T) {
 `)
 	store := registry.NewStore(paths)
 
-	_, err := store.Load()
+	got, err := store.Load()
 
-	if err == nil || !strings.Contains(err.Error(), "only {{summary}} is supported") {
-		t.Fatalf("error = %v, want unsupported title template error", err)
+	if err != nil {
+		t.Fatalf("load registry: %v", err)
+	}
+	if got.Repos[0].TitleTemplate != "[{{external_ref}}] {{summary}}" {
+		t.Fatalf("title template = %q, want external reference template", got.Repos[0].TitleTemplate)
 	}
 }
 
