@@ -40,15 +40,16 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 	paths := newTestPaths(t)
 	store := registry.NewStore(paths)
 	want := registry.Registry{Repos: []registry.Repo{{
-		ID:              "orpheus",
-		Name:            "orpheus",
-		Path:            filepath.Join(paths.DataRoot, "..", "repos", "orpheus"),
-		Remote:          "git@example.com:org/orpheus.git",
-		DefaultBranch:   "main",
-		BeadsMode:       registry.BeadsModeLocal,
-		BeadsPrefix:     "op",
-		SummaryGuidance: "Use sentence-case summaries without a type prefix.",
-		TitleTemplate:   "[OPS] {{summary}}",
+		ID:                   "orpheus",
+		Name:                 "orpheus",
+		Path:                 filepath.Join(paths.DataRoot, "..", "repos", "orpheus"),
+		Remote:               "git@example.com:org/orpheus.git",
+		DefaultBranch:        "main",
+		BeadsMode:            registry.BeadsModeLocal,
+		BeadsPrefix:          "op",
+		SummaryGuidance:      "Use sentence-case summaries without a type prefix.",
+		SummaryGuidanceStyle: registry.SummaryGuidanceStyleCapitalized,
+		TitleTemplate:        "[OPS] {{summary}}",
 	}}}
 	want.Repos[0].Path = filepath.Clean(want.Repos[0].Path)
 
@@ -71,6 +72,7 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 		!strings.Contains(string(onDisk), "beads_mode: local") ||
 		!strings.Contains(string(onDisk), "beads_prefix: op") ||
 		!strings.Contains(string(onDisk), "summary_guidance: Use sentence-case summaries without a type prefix.") ||
+		!strings.Contains(string(onDisk), "summary_guidance_style: capitalized") ||
 		!strings.Contains(string(onDisk), "title_template: '[OPS] {{summary}}'") {
 		t.Fatalf("registry file is not human-editable YAML: %s", onDisk)
 	}
@@ -80,6 +82,27 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 		t.Fatalf("load registry: %v", err)
 	}
 	assertRepos(t, got.Repos, want.Repos)
+}
+
+func TestStoreLoadRejectsInvalidSummaryGuidanceStyle(t *testing.T) {
+	paths := newTestPaths(t)
+	writeDataFile(t, paths, "registry.yaml", `repos:
+  - id: alpha
+    name: alpha
+    path: /tmp/alpha
+    summary_guidance_style: informal
+`)
+	store := registry.NewStore(paths)
+
+	_, err := store.Load()
+
+	if err == nil {
+		t.Fatal("load registry with invalid summary guidance style succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), `summary_guidance_style "informal" is invalid`) ||
+		!strings.Contains(err.Error(), `expected "typed" or "capitalized"`) {
+		t.Fatalf("error = %v, want actionable style validation", err)
+	}
 }
 
 func TestStoreLoadMalformedRegistry(t *testing.T) {

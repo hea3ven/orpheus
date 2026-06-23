@@ -79,6 +79,7 @@ func TestActiveContextResolverResolvesWorktreeTarget(t *testing.T) {
 	is.Equal(fixture.repoPath, got.Repository.Root)
 	is.Equal("main", got.Repository.DefaultBranch)
 	is.Equal(fixture.repo.SummaryGuidance, got.Repository.SummaryGuidance)
+	is.Equal(fixture.repo.SummaryGuidanceStyle, got.Repository.SummaryGuidanceStyle)
 	is.Equal("op-1", got.Task.ID)
 	is.Equal("Resolve context", got.Task.Title)
 	is.Equal("TREX-1234", got.Task.ExternalRef)

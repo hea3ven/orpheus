@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agent"
+	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -139,11 +140,12 @@ func TestRenderActiveContextUsesCustomSummaryGuidance(t *testing.T) {
 
 	output := agent.RenderActiveContext(agent.ActiveContext{
 		Repository: agent.ContextRepository{
-			ID:              "alpha",
-			Name:            "Alpha Repo",
-			Root:            "/repo/alpha",
-			DefaultBranch:   "main",
-			SummaryGuidance: guidance,
+			ID:                   "alpha",
+			Name:                 "Alpha Repo",
+			Root:                 "/repo/alpha",
+			DefaultBranch:        "main",
+			SummaryGuidance:      guidance,
+			SummaryGuidanceStyle: registry.SummaryGuidanceStyleCapitalized,
 		},
 		Task: agent.ContextTask{ID: "op-main", Title: "Main target"},
 		Run:  agent.ContextRun{Attempt: 1},
@@ -158,6 +160,21 @@ func TestRenderActiveContextUsesCustomSummaryGuidance(t *testing.T) {
 	is.Contains(output, "Write `--summary` following this repository guidance: "+guidance)
 	is.NotContains(output, "one commit-style summary line, 80 characters or fewer")
 	is.NotContains(output, "<type(fix,feat,test,chore,conf,etc)>: <description>")
+	is.NotContains(output, "capitalized plain-English summary")
+}
+
+func TestRenderActiveContextUsesCapitalizedSummaryGuidance(t *testing.T) {
+	output := agent.RenderActiveContext(agent.ActiveContext{
+		Repository: agent.ContextRepository{
+			SummaryGuidanceStyle: registry.SummaryGuidanceStyleCapitalized,
+		},
+		Target: agent.ContextTarget{Kind: agent.ExecutionTargetMain},
+	})
+
+	assert.Contains(t, output, "capitalized plain-English summary line")
+	assert.Contains(t, output, "with no task type prefix")
+	assert.Contains(t, output, "Replaced the config for abc")
+	assert.NotContains(t, output, "<type(fix,feat,test,chore,conf,etc)>: <description>")
 }
 
 func TestRenderActiveContextIncludesRepoRootTaskBranchContract(t *testing.T) {
