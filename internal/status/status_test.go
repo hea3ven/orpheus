@@ -87,6 +87,89 @@ func assertLocalM4PolicyProjectionDetails(t *testing.T, got status.Projection) {
 	}
 }
 
+func TestProjectRequiresExternalReferenceBeforePrePRWorkflowStates(t *testing.T) {
+	const missingRefDetail = "missing required external reference; set it with `bd update gated-open --external-ref <reference>`"
+
+	snapshot, runStates := externalRefGateFixture()
+	projection := status.ProjectWithRunStates(snapshot, runStates)
+	attention := groupEntries(t, projection, status.GroupNeedsAttention)
+	if len(attention) != 3 {
+		t.Fatalf("needs-attention entries = %#v, want three missing-reference tasks", attention)
+	}
+	for _, entry := range attention {
+		if !strings.HasPrefix(entry.Detail, "missing required external reference; set it with `bd update ") {
+			t.Fatalf("needs-attention detail = %q, want external-reference guidance", entry.Detail)
+		}
+	}
+	if attention[0].Detail != missingRefDetail {
+		t.Fatalf("open task detail = %q, want %q", attention[0].Detail, missingRefDetail)
+	}
+	assertGroupTaskIDs(t, projection, status.GroupInReview, []string{"gated-pr"})
+	assertGroupTaskIDs(t, projection, status.GroupReadyToRun, []string{"gated-fixed", "default-open"})
+
+	rows := status.ReadyRowsWithRunStates(snapshot, runStates)
+	if len(rows) != 2 || rows[0].Task.ID != "gated-fixed" || rows[1].Task.ID != "default-open" {
+		t.Fatalf("ready rows = %#v, want fixed-reference and default-repo tasks", rows)
+	}
+}
+
+func externalRefGateFixture() (task.SnapshotResult, status.RunStateIndex) {
+	const titleTemplate = "[{{external_ref}}] {{summary}}"
+
+	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{
+		{
+			Repository: task.Repository{
+				ID:            "gated",
+				Name:          "Gated",
+				TaskIDPrefix:  "gated",
+				TitleTemplate: titleTemplate,
+			},
+			Tasks: []task.Task{
+				{ID: "gated-open", Title: "missing ref open", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
+				{ID: "gated-progress", Title: "missing ref in progress", Status: task.StatusInProgress, IssueType: task.IssueTypeTask},
+				{
+					ID:        "gated-local-review",
+					Title:     "missing ref local review",
+					Status:    task.StatusInProgress,
+					IssueType: task.IssueTypeTask,
+					Metadata: task.Metadata{
+						task.MetadataBranch:   "main",
+						task.MetadataWorktree: "/tmp/gated",
+					},
+				},
+				{ID: "gated-fixed", Title: "external ref set", ExternalRef: "TREX-1234", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
+				{
+					ID:        "gated-pr",
+					Title:     "external ref not needed after PR",
+					Status:    task.StatusInProgress,
+					IssueType: task.IssueTypeTask,
+					Metadata:  task.Metadata{task.MetadataPRURL: "https://example.test/pr/1"},
+				},
+			},
+		},
+		{
+			Repository: task.Repository{ID: "default", Name: "Default", TaskIDPrefix: "default"},
+			Tasks: []task.Task{
+				{ID: "default-open", Title: "default repo", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
+			},
+		},
+	}}
+	runStates := status.RunStateIndex{
+		status.RunStateKey("gated", "gated-local-review"): {
+			Attempt:  1,
+			Status:   taskstate.RunStatusSucceeded,
+			Branch:   "main",
+			Worktree: "/tmp/gated",
+			Completion: &taskstate.Completion{
+				Summary:             "Ready for review",
+				DetailedDescription: "Review details.",
+			},
+		},
+	}
+
+	return snapshot, runStates
+}
+
 func TestProjectWithRunStatesShowsSuccessfulMainCompletionInReview(t *testing.T) {
 	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
 		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/tmp/alpha", DefaultBranch: "main"},

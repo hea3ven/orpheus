@@ -38,6 +38,12 @@ func ValidateTitleTemplate(template string) error {
 	return nil
 }
 
+// RequiresExternalRef reports whether a publication title template requires a
+// task external reference.
+func RequiresExternalRef(template string) bool {
+	return strings.Contains(template, externalRefPlaceholder)
+}
+
 // RenderTitle applies a valid title template to a completion summary and task
 // external reference. An empty template preserves the summary unchanged.
 func RenderTitle(template string, summary string, externalRef string) (string, error) {
@@ -47,7 +53,7 @@ func RenderTitle(template string, summary string, externalRef string) (string, e
 	if strings.TrimSpace(template) == "" {
 		return summary, nil
 	}
-	if strings.Contains(template, externalRefPlaceholder) {
+	if RequiresExternalRef(template) {
 		externalRef = normalizeExternalRef(externalRef)
 		if externalRef == "" {
 			return "", errors.New("publication title template requires a task external reference")

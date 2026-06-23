@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/workflow"
@@ -188,6 +189,9 @@ func classify(repository task.Repository, taskItem task.Task, index map[string]t
 	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
 		return policyResult{state: readinessReview, detail: metadata.PRURL}
 	}
+	if publication.RequiresExternalRef(repository.TitleTemplate) && strings.TrimSpace(taskItem.ExternalRef) == "" {
+		return policyResult{state: readinessAttention, detail: missingExternalRefDetail(taskItem.ID)}
+	}
 
 	expectedTargets := expectedTargetsFrom(localState)
 	if result, ok := classifyExpectedReviewReady(expectedTargets, taskItem, latestRun, localState); ok {
@@ -278,6 +282,13 @@ func classifyInProgress(latestRun *taskstate.RunAttempt) policyResult {
 
 func openTaskRunHistoryDetail(latestRun taskstate.RunAttempt) string {
 	return fmt.Sprintf("backend status is open but local %s", runAttemptDetail(latestRun))
+}
+
+func missingExternalRefDetail(taskID string) string {
+	return fmt.Sprintf(
+		"missing required external reference; set it with `bd update %s --external-ref <reference>`",
+		taskID,
+	)
 }
 
 func runAttemptDetail(run taskstate.RunAttempt) string {
