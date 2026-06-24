@@ -23,7 +23,7 @@ type SyncScanBackendFactory func(task.RepositorySource) (task.ReadBackend, error
 
 // SyncRunStore records local audit events produced by sync reconciliation.
 type SyncRunStore interface {
-	RecordTaskClosedPRMerged(repoID, taskID string, opts taskstate.TaskClosedPRMergedOptions) (taskstate.Event, error)
+	RecordTaskClosed(repoID, taskID string, opts taskstate.TaskClosedOptions) (taskstate.Event, error)
 }
 
 // SyncService reconciles backend task state from recorded pull request state.
@@ -297,10 +297,11 @@ func (s SyncService) pollExistingPR(ctx context.Context, target syncTarget) (Syn
 		if err := target.backend.Close(ctx, target.task.ID); err != nil {
 			return SyncResult{}, true, fmt.Errorf("close backend task %s after merged PR %s: %w", target.task.ID, observedURL, err)
 		}
-		if _, err := s.RunStore.RecordTaskClosedPRMerged(
+		if _, err := s.RunStore.RecordTaskClosed(
 			target.source.Repository.ID,
 			target.task.ID,
-			taskstate.TaskClosedPRMergedOptions{
+			taskstate.TaskClosedOptions{
+				Reason:          taskstate.CloseReasonPRMerged,
 				PRURL:           observedURL,
 				ObservedPRState: string(pullrequest.StateMerged),
 			},

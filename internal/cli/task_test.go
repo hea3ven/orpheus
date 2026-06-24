@@ -433,12 +433,22 @@ func TestTaskShowRendersClosedItemsAndHistory(t *testing.T) {
 		repoDir: {stdout: `[{"id":"op-closed","title":"done","status":"closed","priority":2,"issue_type":"task"}]`},
 	})
 
+	stateStore := taskstate.NewStoreWithClock(paths, func() time.Time {
+		return time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	})
+	_, err := stateStore.RecordTaskClosed("alpha", "op-closed", taskstate.TaskClosedOptions{
+		Reason:          taskstate.CloseReasonPRMerged,
+		PRURL:           "https://github.test/org/alpha/pull/42",
+		ObservedPRState: "merged",
+	})
+	must.NoError(err)
+
 	stdout, stderr := executeCommand(t, []string{"task", "show", "op-closed"})
 
 	is.Empty(stderr)
 	is.Contains(stdout, "ID: op-closed")
 	is.Contains(stdout, "Status: closed")
-	is.Contains(stdout, "History:\n  -\n")
+	is.Contains(stdout, "History:\n  2026-01-02T03:04:05Z Task closed\n")
 }
 
 //nolint:funlen // The history sequence is the behavior under test.
@@ -2236,7 +2246,8 @@ func TestTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR(t *testing.T) {
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-sync.yaml"), &state))
 	must.Len(state.Events, 1)
 	event := state.Events[0]
-	is.Equal(taskstate.EventTaskClosedPRMerged, event.Type)
+	is.Equal(taskstate.EventTaskClosed, event.Type)
+	is.Equal(taskstate.CloseReasonPRMerged, event.CloseReason)
 	is.Equal("https://github.test/org/alpha/pull/42", event.PRURL)
 	is.Equal("merged", event.ObservedPRState)
 }
@@ -2883,7 +2894,8 @@ func TestTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAfterFailures(t *test
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "beta", "tasks", "b-merged.yaml"), &betaState))
 	must.Len(betaState.Events, 1)
 	event := betaState.Events[0]
-	is.Equal(taskstate.EventTaskClosedPRMerged, event.Type)
+	is.Equal(taskstate.EventTaskClosed, event.Type)
+	is.Equal(taskstate.CloseReasonPRMerged, event.CloseReason)
 	is.Equal("https://github.test/org/beta/pull/88", event.PRURL)
 	is.Equal("merged", event.ObservedPRState)
 }

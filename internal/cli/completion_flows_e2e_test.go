@@ -327,7 +327,8 @@ func TestWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", taskID+".yaml"), &mergedState))
 	must.NotEmpty(mergedState.Events)
 	mergedEvent := mergedState.Events[len(mergedState.Events)-1]
-	is.Equal(taskstate.EventTaskClosedPRMerged, mergedEvent.Type)
+	is.Equal(taskstate.EventTaskClosed, mergedEvent.Type)
+	is.Equal(taskstate.CloseReasonPRMerged, mergedEvent.CloseReason)
 	is.Equal("https://github.test/org/alpha/pull/55", mergedEvent.PRURL)
 
 	fullStatusOut, fullStatusErr := executeCommand(t, []string{"status", "--full"})
@@ -439,7 +440,8 @@ func TestRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	mergedState := readCompletionTaskState(t, paths, "alpha", taskID)
 	must.NotEmpty(mergedState.Events)
 	mergedEvent := mergedState.Events[len(mergedState.Events)-1]
-	is.Equal(taskstate.EventTaskClosedPRMerged, mergedEvent.Type)
+	is.Equal(taskstate.EventTaskClosed, mergedEvent.Type)
+	is.Equal(taskstate.CloseReasonPRMerged, mergedEvent.CloseReason)
 	is.Equal("https://github.test/org/alpha/pull/56", mergedEvent.PRURL)
 }
 
