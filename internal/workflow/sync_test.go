@@ -17,7 +17,7 @@ import (
 )
 
 type fakeSyncRunStore struct {
-	events     []fakeTaskClosedPRMergedEvent
+	events     []fakeTaskClosedEvent
 	recordErr  error
 	recordedAt time.Time
 }
@@ -37,10 +37,10 @@ type fakeSetPRURL struct {
 	prURL  string
 }
 
-type fakeTaskClosedPRMergedEvent struct {
+type fakeTaskClosedEvent struct {
 	repoID string
 	taskID string
-	opts   taskstate.TaskClosedPRMergedOptions
+	opts   taskstate.TaskClosedOptions
 }
 
 func (b *fakeSyncBackend) Get(_ context.Context, id string) (task.Task, error) {
@@ -83,8 +83,8 @@ func (b *fakeSyncBackend) Close(_ context.Context, taskID string) error {
 	return nil
 }
 
-func (s *fakeSyncRunStore) RecordTaskClosedPRMerged(repoID, taskID string, opts taskstate.TaskClosedPRMergedOptions) (taskstate.Event, error) {
-	s.events = append(s.events, fakeTaskClosedPRMergedEvent{repoID: repoID, taskID: taskID, opts: opts})
+func (s *fakeSyncRunStore) RecordTaskClosed(repoID, taskID string, opts taskstate.TaskClosedOptions) (taskstate.Event, error) {
+	s.events = append(s.events, fakeTaskClosedEvent{repoID: repoID, taskID: taskID, opts: opts})
 	if s.recordErr != nil {
 		return taskstate.Event{}, s.recordErr
 	}
@@ -93,8 +93,9 @@ func (s *fakeSyncRunStore) RecordTaskClosedPRMerged(repoID, taskID string, opts 
 		at = time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC)
 	}
 	return taskstate.Event{
-		Type:            taskstate.EventTaskClosedPRMerged,
+		Type:            taskstate.EventTaskClosed,
 		At:              at,
+		CloseReason:     opts.Reason,
 		PRURL:           opts.PRURL,
 		ObservedPRState: opts.ObservedPRState,
 	}, nil
@@ -302,6 +303,7 @@ func TestSyncServiceClosesTaskAndRecordsAuditForMergedPR(t *testing.T) {
 	event := runStore.events[0]
 	if event.repoID != "alpha" ||
 		event.taskID != "op-1" ||
+		event.opts.Reason != taskstate.CloseReasonPRMerged ||
 		event.opts.PRURL != "https://github.test/org/repo/pull/42" ||
 		event.opts.ObservedPRState != "merged" {
 		t.Fatalf("audit event = %#v, want repo/task/merged PR facts", event)

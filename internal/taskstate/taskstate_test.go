@@ -330,30 +330,29 @@ func TestStoreRecordsFinalizationFactsIdempotently(t *testing.T) {
 	)
 }
 
-func TestStoreRecordsTaskClosedPRMergedEventIdempotently(t *testing.T) {
+func TestStoreRecordsPRMergedTaskClosedEventIdempotently(t *testing.T) {
 	store := newTestStore(t,
 		time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC),
 		time.Date(2026, 6, 9, 10, 1, 0, 0, time.UTC),
 	)
 
-	event, err := store.RecordTaskClosedPRMerged("alpha", "op-1", taskstate.TaskClosedPRMergedOptions{
+	event, err := store.RecordTaskClosed("alpha", "op-1", taskstate.TaskClosedOptions{
+		Reason:          taskstate.CloseReasonPRMerged,
 		PRURL:           " https://github.test/org/repo/pull/42 ",
 		ObservedPRState: "merged",
 	})
 	if err != nil {
 		t.Fatalf("record merged PR close event: %v", err)
 	}
-	if event.Type != taskstate.EventTaskClosedPRMerged ||
+	if event.Type != taskstate.EventTaskClosed ||
+		event.CloseReason != taskstate.CloseReasonPRMerged ||
 		event.PRURL != "https://github.test/org/repo/pull/42" ||
 		event.ObservedPRState != "merged" ||
 		!event.At.Equal(time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC)) {
 		t.Fatalf("event = %#v, want merged PR close facts", event)
 	}
-	if !strings.Contains(event.Message, "recorded PR was merged") {
-		t.Fatalf("event message = %q, want merged PR audit message", event.Message)
-	}
-
-	again, err := store.RecordTaskClosedPRMerged("alpha", "op-1", taskstate.TaskClosedPRMergedOptions{
+	again, err := store.RecordTaskClosed("alpha", "op-1", taskstate.TaskClosedOptions{
+		Reason:          taskstate.CloseReasonPRMerged,
 		PRURL:           "https://github.test/org/repo/pull/42",
 		ObservedPRState: "merged",
 	})
@@ -373,8 +372,9 @@ func TestStoreRecordsTaskClosedPRMergedEventIdempotently(t *testing.T) {
 	}
 
 	assertStoreYAMLContains(t, store, "alpha", "op-1",
-		"task_closed_due_to_pr_merged",
+		"task_closed",
 		"at: 2026-06-09T10:00:00Z",
+		"close_reason: pr_merged",
 		"pr_url: https://github.test/org/repo/pull/42",
 		"observed_pr_state: merged",
 	)

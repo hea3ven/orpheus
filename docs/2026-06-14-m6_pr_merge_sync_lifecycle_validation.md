@@ -22,7 +22,7 @@ Focused CLI coverage in `internal/cli/task_test.go` validates:
 - PR-ready worktree task push and PR creation without immediate `gh pr view`: `TestTaskSyncPushesPRReadyTaskBranch`;
 - existing branch PR recovery without duplicate creation: `TestTaskSyncRecoversExistingBranchPR`;
 - existing PR URL polling even without local run/completion facts or a live worktree: `TestTaskSyncPollsExistingPRURLWithoutPushOrMutation`;
-- merged PR polling, backend close, and local `task_closed_due_to_pr_merged` audit event: `TestTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR`;
+- merged PR polling, backend close, and local `task_closed` audit event with `pr_merged` reason: `TestTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR`;
 - closed-unmerged PRs, malformed/missing provider PR URLs, inaccessible repositories, invalid stored PR URLs, and provider/auth failures return errors without backend close, metadata writes, or local audit events: `TestTaskSyncExistingPRErrorsDoNotMutateBackendOrAudit`;
 - closed backend tasks skip without PR polling: `TestTaskSyncSkipsClosedTaskWithoutPRPolling`;
 - `task sync --all` finds PR-ready and existing-PR candidates, groups created/open/merged/error results, continues after per-task and per-repo failures, and returns non-zero when any failure occurs: `TestTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAfterFailures`.

@@ -44,7 +44,6 @@ const (
 	EventPRCreated          EventType = "pr_created"
 	EventPRRecovered        EventType = "pr_recovered"
 	EventTaskClosed         EventType = "task_closed"
-	EventTaskClosedPRMerged EventType = "task_closed_due_to_pr_merged"
 )
 
 const (
@@ -56,6 +55,9 @@ const (
 
 	// CloseReasonDefaultBranchPublished identifies closure after a default-branch push.
 	CloseReasonDefaultBranchPublished = "default_branch_published"
+
+	// CloseReasonPRMerged identifies closure after a recorded pull request is merged.
+	CloseReasonPRMerged = "pr_merged"
 )
 
 var (
@@ -85,7 +87,7 @@ type Service interface {
 	RecordFinalizationPush(repoID, taskID string, opts FinalizationPushOptions) (Finalization, error)
 	RecordFinalizationClose(repoID, taskID string, opts FinalizationCloseOptions) (Finalization, error)
 	RecordFeatureBranchPR(repoID, taskID string, opts FeatureBranchPROptions) (Event, error)
-	RecordTaskClosedPRMerged(repoID, taskID string, opts TaskClosedPRMergedOptions) (Event, error)
+	RecordTaskClosed(repoID, taskID string, opts TaskClosedOptions) (Event, error)
 	Events(repoID, taskID string) ([]Event, error)
 }
 
@@ -194,8 +196,6 @@ func (e Event) DisplayName() string {
 		return "PR recovered"
 	case EventTaskClosed:
 		return "Task closed"
-	case EventTaskClosedPRMerged:
-		return "Task closed after PR merged"
 	default:
 		return string(e.Type)
 	}
@@ -240,8 +240,9 @@ type RepeatedCompletionOptions struct {
 	DetailedDescription string
 }
 
-// TaskClosedPRMergedOptions describes the PR observation that caused a backend close.
-type TaskClosedPRMergedOptions struct {
+// TaskClosedOptions describes the facts recorded when a task is closed.
+type TaskClosedOptions struct {
+	Reason          string
 	PRURL           string
 	ObservedPRState string
 }
@@ -709,16 +710,20 @@ func (s Store) RecordFeatureBranchPR(repoID, taskID string, opts FeatureBranchPR
 	return event, nil
 }
 
-// RecordTaskClosedPRMerged appends an idempotent local audit event after a
-// backend task is closed because its recorded PR was observed merged.
-func (s Store) RecordTaskClosedPRMerged(repoID, taskID string, opts TaskClosedPRMergedOptions) (Event, error) {
-	prURL := strings.TrimSpace(opts.PRURL)
-	if prURL == "" {
-		return Event{}, fmt.Errorf("record merged PR close event for task %s/%s: PR URL is required", repoID, taskID)
+// RecordTaskClosed appends an idempotent local audit event after a backend task
+// is closed. PR facts are recorded when the closure followed a merged PR.
+func (s Store) RecordTaskClosed(repoID, taskID string, opts TaskClosedOptions) (Event, error) {
+	reason := strings.TrimSpace(opts.Reason)
+	if reason == "" {
+		return Event{}, fmt.Errorf("record task closed event for task %s/%s: reason is required", repoID, taskID)
 	}
+	prURL := strings.TrimSpace(opts.PRURL)
 	observedState := strings.TrimSpace(opts.ObservedPRState)
-	if observedState == "" {
-		return Event{}, fmt.Errorf("record merged PR close event for task %s/%s: observed PR state is required", repoID, taskID)
+	if reason == CloseReasonPRMerged && prURL == "" {
+		return Event{}, fmt.Errorf("record task closed event for task %s/%s: PR URL is required for merged PR closure", repoID, taskID)
+	}
+	if reason == CloseReasonPRMerged && observedState == "" {
+		return Event{}, fmt.Errorf("record task closed event for task %s/%s: observed PR state is required for merged PR closure", repoID, taskID)
 	}
 
 	state, err := s.Load(repoID, taskID)
@@ -726,7 +731,8 @@ func (s Store) RecordTaskClosedPRMerged(repoID, taskID string, opts TaskClosedPR
 		return Event{}, err
 	}
 	for _, event := range state.Events {
-		if event.Type == EventTaskClosedPRMerged &&
+		if event.Type == EventTaskClosed &&
+			strings.TrimSpace(event.CloseReason) == reason &&
 			strings.TrimSpace(event.PRURL) == prURL &&
 			strings.TrimSpace(event.ObservedPRState) == observedState {
 			return event, nil
@@ -734,14 +740,14 @@ func (s Store) RecordTaskClosedPRMerged(repoID, taskID string, opts TaskClosedPR
 	}
 
 	event := Event{
-		Type:            EventTaskClosedPRMerged,
+		Type:            EventTaskClosed,
 		At:              s.nowUTC(),
-		Message:         "backend task closed because recorded PR was merged",
+		CloseReason:     reason,
 		PRURL:           prURL,
 		ObservedPRState: observedState,
 	}
 	if err := validateEvent(event); err != nil {
-		return Event{}, fmt.Errorf("record merged PR close event for task %s/%s: %w", repoID, taskID, err)
+		return Event{}, fmt.Errorf("record task closed event for task %s/%s: %w", repoID, taskID, err)
 	}
 	state.Events = append(state.Events, event)
 	if err := s.save(state); err != nil {
@@ -1069,7 +1075,7 @@ func validRunStatus(status RunStatus) bool {
 
 func validEventType(eventType EventType) bool {
 	switch eventType {
-	case EventWorktreeCreated, EventWorktreeReused, EventWorktreeRecreated, EventRunStarted, EventRunFinished, EventRunStartFailed, EventCompletionRecorded, EventCompletionRepeated, EventChangesPushed, EventPRCreated, EventPRRecovered, EventTaskClosed, EventTaskClosedPRMerged:
+	case EventWorktreeCreated, EventWorktreeReused, EventWorktreeRecreated, EventRunStarted, EventRunFinished, EventRunStartFailed, EventCompletionRecorded, EventCompletionRepeated, EventChangesPushed, EventPRCreated, EventPRRecovered, EventTaskClosed:
 		return true
 	default:
 		return false
