@@ -471,8 +471,16 @@ func TestTaskShowRendersChronologicalHistoryForClosedEpic(t *testing.T) {
 
 	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 	stateStore := taskstate.NewStoreWithClock(paths, func() time.Time { return now })
-	_, err := stateStore.RecordWorktreeEvent("alpha", "op-epic", taskstate.EventWorktreeCreated, taskstate.WorktreeEventOptions{})
+	_, err := stateStore.RecordSetupEvent("alpha", "op-epic", taskstate.EventWorktreeCreated, taskstate.SetupEventOptions{})
 	must.NoError(err)
+	now = now.Add(time.Minute)
+	taskState, err := stateStore.Load("alpha", "op-epic")
+	must.NoError(err)
+	taskState.Events = append(taskState.Events, taskstate.Event{
+		Type: taskstate.EventWorktreeReused,
+		At:   now,
+	})
+	must.NoError(paths.WriteDataYAML(filepath.Join("repos", "alpha", "tasks", "op-epic.yaml"), taskState))
 	now = now.Add(time.Minute)
 	run, err := stateStore.StartRun("alpha", "op-epic", taskstate.StartRunOptions{Agent: "codex"})
 	must.NoError(err)
@@ -511,17 +519,18 @@ func TestTaskShowRendersChronologicalHistoryForClosedEpic(t *testing.T) {
 	is.Contains(stdout, "Type: epic")
 	is.Contains(stdout, "Status: closed")
 	first := strings.Index(stdout, "2026-01-02T03:04:05Z Worktree created")
-	second := strings.Index(stdout, "2026-01-02T03:05:05Z Run started")
-	third := strings.Index(stdout, "2026-01-02T03:06:05Z Completion recorded")
-	fourth := strings.Index(stdout, "2026-01-02T03:07:05Z Run finished")
-	fifth := strings.Index(stdout, "2026-01-02T03:09:05Z Pushed main")
-	sixth := strings.Index(stdout, "2026-01-02T03:10:05Z Task closed")
+	second := strings.Index(stdout, "2026-01-02T03:06:05Z Run started")
+	third := strings.Index(stdout, "2026-01-02T03:07:05Z Completion recorded")
+	fourth := strings.Index(stdout, "2026-01-02T03:08:05Z Run finished")
+	fifth := strings.Index(stdout, "2026-01-02T03:10:05Z Pushed main")
+	sixth := strings.Index(stdout, "2026-01-02T03:11:05Z Task closed")
 	is.Greater(first, -1)
 	is.Greater(second, first)
 	is.Greater(third, second)
 	is.Greater(fourth, third)
 	is.Greater(fifth, fourth)
 	is.Greater(sixth, fifth)
+	is.NotContains(stdout, "Worktree reused")
 	is.NotContains(stdout, "codex")
 	is.NotContains(stdout, "succeeded")
 }
@@ -902,10 +911,9 @@ func TestTaskRunExecutesDefaultAgentAttachedFromDeterministicWorktree(t *testing
 	is.Equal(2, retriedState.Runs[1].Attempt)
 	is.Equal(taskstate.RunStatusSucceeded, retriedState.Runs[0].Status)
 	is.Equal(taskstate.RunStatusSucceeded, retriedState.Runs[1].Status)
-	must.Len(retriedState.Events, 6)
-	is.Equal(taskstate.EventWorktreeReused, retriedState.Events[3].Type)
-	is.Equal(taskstate.EventRunStarted, retriedState.Events[4].Type)
-	is.Equal(taskstate.EventRunFinished, retriedState.Events[5].Type)
+	must.Len(retriedState.Events, 5)
+	is.Equal(taskstate.EventRunStarted, retriedState.Events[3].Type)
+	is.Equal(taskstate.EventRunFinished, retriedState.Events[4].Type)
 }
 
 func TestTaskRunRejectsMissingRequiredExternalReferenceBeforeSetup(t *testing.T) {
@@ -1078,10 +1086,9 @@ func TestTaskRunMainExecutesAgentFromRegisteredRepoRoot(t *testing.T) {
 	is.Equal(taskstate.RunStatusSucceeded, state.Runs[0].Status)
 	is.Equal("main", state.Runs[0].Branch)
 	is.Equal(repoPath, state.Runs[0].Worktree)
-	must.Len(state.Events, 3)
-	is.Equal(taskstate.EventWorktreeReused, state.Events[0].Type)
-	is.Equal(taskstate.EventRunStarted, state.Events[1].Type)
-	is.Equal(taskstate.EventRunFinished, state.Events[2].Type)
+	must.Len(state.Events, 2)
+	is.Equal(taskstate.EventRunStarted, state.Events[0].Type)
+	is.Equal(taskstate.EventRunFinished, state.Events[1].Type)
 }
 
 //nolint:funlen // Workflow test is clearer when setup, command, and state assertions stay together.
@@ -1159,9 +1166,21 @@ func TestTaskRunRepoRootExecutesAgentFromRegisteredRepoRootOnTaskBranch(t *testi
 	is.Equal("orpheus/op-root", state.Runs[0].Branch)
 	is.Equal(repoPath, state.Runs[0].Worktree)
 	must.Len(state.Events, 3)
-	is.Equal(taskstate.EventWorktreeReused, state.Events[0].Type)
+	is.Equal(taskstate.EventTaskBranchCreated, state.Events[0].Type)
 	is.Equal(taskstate.EventRunStarted, state.Events[1].Type)
 	is.Equal(taskstate.EventRunFinished, state.Events[2].Type)
+
+	retryStdout, retryStderr := executeCommand(t, []string{"task", "run", "--repo-root", "op-root"})
+
+	is.Contains(retryStdout, "fake agent stdout")
+	is.Contains(retryStderr, "fake agent stderr")
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-root.yaml"), &state))
+	must.Len(state.Events, 5)
+	is.Equal(taskstate.EventTaskBranchCreated, state.Events[0].Type)
+	is.Equal(taskstate.EventRunStarted, state.Events[1].Type)
+	is.Equal(taskstate.EventRunFinished, state.Events[2].Type)
+	is.Equal(taskstate.EventRunStarted, state.Events[3].Type)
+	is.Equal(taskstate.EventRunFinished, state.Events[4].Type)
 }
 
 func TestTaskRunPlainRetryRequiresMainForRepoRootMetadata(t *testing.T) {

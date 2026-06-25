@@ -1194,12 +1194,17 @@ func renderTaskHistory(output interface{ Write([]byte) (int, error) }, events []
 	if _, err := fmt.Fprintln(output, "History:"); err != nil {
 		return err
 	}
-	if len(events) == 0 {
+	history := make([]taskstate.Event, 0, len(events))
+	for _, event := range events {
+		if event.Type != taskstate.EventWorktreeReused {
+			history = append(history, event)
+		}
+	}
+	if len(history) == 0 {
 		_, err := fmt.Fprintln(output, "  -")
 		return err
 	}
 
-	history := append([]taskstate.Event{}, events...)
 	sort.SliceStable(history, func(i, j int) bool {
 		return history[i].At.Before(history[j].At)
 	})

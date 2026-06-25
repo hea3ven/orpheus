@@ -201,8 +201,8 @@ func TestSetupRepoRootTaskBranchSwitchesToTaskBranch(t *testing.T) {
 		t.Fatalf("setup repo-root task branch: %v", err)
 	}
 
-	if got.Branch != "orpheus/op-root" || got.WorktreePath != repoPath || got.Lifecycle != orpheusgit.TaskWorktreeLifecycleReused {
-		t.Fatalf("setup result = %#v, want task branch/repo root/reused", got)
+	if got.Branch != "orpheus/op-root" || got.WorktreePath != repoPath || got.Lifecycle != orpheusgit.TaskWorktreeLifecycleTaskBranchCreated {
+		t.Fatalf("setup result = %#v, want task branch/repo root/task branch created", got)
 	}
 	assertGitBranch(t, repoPath, "orpheus/op-root")
 
@@ -212,6 +212,21 @@ func TestSetupRepoRootTaskBranchSwitchesToTaskBranch(t *testing.T) {
 	}
 	if _, err := os.Stat(expectedWorktreePath); !os.IsNotExist(err) {
 		t.Fatalf("deterministic worktree stat err = %v, want not exist", err)
+	}
+
+	reused, err := orpheusgit.SetupRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		TaskID:        "op-root",
+		Paths:         paths,
+	})
+	if err != nil {
+		t.Fatalf("reuse repo-root task branch: %v", err)
+	}
+	if reused.Lifecycle != orpheusgit.TaskWorktreeLifecycleReused {
+		t.Fatalf("reuse lifecycle = %q, want %q", reused.Lifecycle, orpheusgit.TaskWorktreeLifecycleReused)
 	}
 }
 
