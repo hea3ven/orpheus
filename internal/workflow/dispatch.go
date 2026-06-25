@@ -30,11 +30,11 @@ type DispatchRunStore interface {
 	Path(repoID, taskID string) (string, error)
 	LatestRun(repoID, taskID string) (taskstate.RunAttempt, bool, error)
 	ActiveRun(repoID, taskID string) (taskstate.RunAttempt, bool, error)
-	RecordWorktreeEvent(
+	RecordSetupEvent(
 		repoID,
 		taskID string,
 		eventType taskstate.EventType,
-		opts taskstate.WorktreeEventOptions,
+		opts taskstate.SetupEventOptions,
 	) (taskstate.Event, error)
 	StartRun(repoID, taskID string, opts taskstate.StartRunOptions) (taskstate.RunAttempt, error)
 	FinishRun(repoID, taskID string, attempt int, status taskstate.RunStatus) (taskstate.RunAttempt, error)
@@ -256,22 +256,24 @@ func (s DispatchService) recordStart(
 	setup gitmeta.TaskWorktreeSetupResult,
 	command DispatchCommand,
 ) (taskstate.RunAttempt, error) {
-	worktreeEvent, err := dispatchWorktreeEvent(setup.Lifecycle)
+	setupEvent, hasSetupEvent, err := dispatchSetupEvent(setup.Lifecycle)
 	if err != nil {
 		return taskstate.RunAttempt{}, err
 	}
 
 	repo := opts.Source.Repository
-	if _, err := s.RunStore.RecordWorktreeEvent(
-		repo.ID,
-		opts.TaskID,
-		worktreeEvent,
-		taskstate.WorktreeEventOptions{
-			Branch:   setup.Branch,
-			Worktree: setup.WorktreePath,
-		},
-	); err != nil {
-		return taskstate.RunAttempt{}, fmt.Errorf("record worktree event: %w", err)
+	if hasSetupEvent {
+		if _, err := s.RunStore.RecordSetupEvent(
+			repo.ID,
+			opts.TaskID,
+			setupEvent,
+			taskstate.SetupEventOptions{
+				Branch:   setup.Branch,
+				Worktree: setup.WorktreePath,
+			},
+		); err != nil {
+			return taskstate.RunAttempt{}, fmt.Errorf("record setup event: %w", err)
+		}
 	}
 
 	attempt, err := s.RunStore.StartRun(repo.ID, opts.TaskID, taskstate.StartRunOptions{
@@ -527,16 +529,18 @@ func activeDispatchRunError(
 	)
 }
 
-func dispatchWorktreeEvent(lifecycle gitmeta.TaskWorktreeLifecycle) (taskstate.EventType, error) {
+func dispatchSetupEvent(lifecycle gitmeta.TaskWorktreeLifecycle) (taskstate.EventType, bool, error) {
 	switch lifecycle {
 	case gitmeta.TaskWorktreeLifecycleCreated:
-		return taskstate.EventWorktreeCreated, nil
+		return taskstate.EventWorktreeCreated, true, nil
+	case gitmeta.TaskWorktreeLifecycleTaskBranchCreated:
+		return taskstate.EventTaskBranchCreated, true, nil
 	case gitmeta.TaskWorktreeLifecycleReused:
-		return taskstate.EventWorktreeReused, nil
+		return "", false, nil
 	case gitmeta.TaskWorktreeLifecycleRecreated:
-		return taskstate.EventWorktreeRecreated, nil
+		return taskstate.EventWorktreeRecreated, true, nil
 	default:
-		return "", fmt.Errorf("unknown worktree lifecycle %q", lifecycle)
+		return "", false, fmt.Errorf("unknown worktree lifecycle %q", lifecycle)
 	}
 }
 

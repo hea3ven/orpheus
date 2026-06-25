@@ -17,9 +17,10 @@ const taskWorktreeBranchPrefix = "orpheus/"
 type TaskWorktreeLifecycle string
 
 const (
-	TaskWorktreeLifecycleCreated   TaskWorktreeLifecycle = "created"
-	TaskWorktreeLifecycleReused    TaskWorktreeLifecycle = "reused"
-	TaskWorktreeLifecycleRecreated TaskWorktreeLifecycle = "recreated"
+	TaskWorktreeLifecycleCreated           TaskWorktreeLifecycle = "created"
+	TaskWorktreeLifecycleReused            TaskWorktreeLifecycle = "reused"
+	TaskWorktreeLifecycleRecreated         TaskWorktreeLifecycle = "recreated"
+	TaskWorktreeLifecycleTaskBranchCreated TaskWorktreeLifecycle = "task_branch_created"
 )
 
 // TaskWorktreeOptions describes the deterministic Git context for one task run.
@@ -221,11 +222,15 @@ func SetupRepoRootTaskBranch(ctx context.Context, opts TaskWorktreeOptions) (Tas
 	if err != nil {
 		return TaskWorktreeSetupResult{}, fmt.Errorf("prepare repo-root task branch run %s: %w", plan.TaskID, err)
 	}
-	if err := ensureRepoRootOnTaskBranch(ctx, repoRoot, plan.Branch, remoteRef); err != nil {
+	branchCreated, err := ensureRepoRootOnTaskBranch(ctx, repoRoot, plan.Branch, remoteRef)
+	if err != nil {
 		return TaskWorktreeSetupResult{}, fmt.Errorf("prepare repo-root task branch run %s: %w", plan.TaskID, err)
 	}
 	if err := requireCleanRepoRootFor(ctx, repoRoot, "with --repo-root"); err != nil {
 		return TaskWorktreeSetupResult{}, fmt.Errorf("prepare repo-root task branch run %s: %w", plan.TaskID, err)
+	}
+	if branchCreated {
+		result.Lifecycle = TaskWorktreeLifecycleTaskBranchCreated
 	}
 
 	return result, nil
@@ -446,46 +451,48 @@ func ensureRepoRootOnDefaultBranch(ctx context.Context, repoRoot string, default
 	return nil
 }
 
-func ensureRepoRootOnTaskBranch(ctx context.Context, repoRoot string, branch string, startPoint string) error {
+func ensureRepoRootOnTaskBranch(ctx context.Context, repoRoot string, branch string, startPoint string) (bool, error) {
 	current, currentErr := currentBranchAt(ctx, repoRoot)
 	if currentErr == nil && current == branch {
-		return nil
+		return false, nil
 	}
 
 	branchExists, err := localBranchExists(ctx, repoRoot, branch)
 	if err != nil {
-		return err
+		return false, err
 	}
+	branchCreated := false
 	if !branchExists {
 		if err := createBranch(ctx, repoRoot, branch, startPoint); err != nil {
-			return err
+			return false, err
 		}
+		branchCreated = true
 	}
 
 	if err := checkoutTaskBranch(ctx, repoRoot, branch); err != nil {
 		if currentErr != nil {
-			return fmt.Errorf(
+			return false, fmt.Errorf(
 				"switch to task branch %q (current branch could not be read: %w): %w",
 				branch,
 				currentErr,
 				err,
 			)
 		}
-		return fmt.Errorf("switch to task branch %q: %w", branch, err)
+		return false, fmt.Errorf("switch to task branch %q: %w", branch, err)
 	}
 
 	current, err = currentBranchAt(ctx, repoRoot)
 	if err != nil {
-		return fmt.Errorf("verify task branch checkout: %w", err)
+		return false, fmt.Errorf("verify task branch checkout: %w", err)
 	}
 	if current != branch {
-		return fmt.Errorf(
+		return false, fmt.Errorf(
 			"repo root is on branch %q after checkout; expected task branch %q",
 			current,
 			branch,
 		)
 	}
-	return nil
+	return branchCreated, nil
 }
 
 func syncCleanRepoRootWithOrigin(ctx context.Context, repoRoot string, defaultBranch string) error {

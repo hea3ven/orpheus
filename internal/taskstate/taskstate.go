@@ -33,6 +33,7 @@ type EventType string
 
 const (
 	EventWorktreeCreated    EventType = "worktree_created"
+	EventTaskBranchCreated  EventType = "task_branch_created"
 	EventWorktreeReused     EventType = "worktree_reused"
 	EventWorktreeRecreated  EventType = "worktree_recreated"
 	EventRunStarted         EventType = "run_started"
@@ -77,7 +78,7 @@ type Service interface {
 	Load(repoID, taskID string) (TaskState, error)
 	LatestRun(repoID, taskID string) (RunAttempt, bool, error)
 	ActiveRun(repoID, taskID string) (RunAttempt, bool, error)
-	RecordWorktreeEvent(repoID, taskID string, eventType EventType, opts WorktreeEventOptions) (Event, error)
+	RecordSetupEvent(repoID, taskID string, eventType EventType, opts SetupEventOptions) (Event, error)
 	StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt, error)
 	CompleteRun(repoID, taskID string, attempt int, opts CompleteRunOptions) (RunAttempt, error)
 	RecordRepeatedCompletion(repoID, taskID string, attempt int, opts RepeatedCompletionOptions) (Event, error)
@@ -174,6 +175,8 @@ func (e Event) DisplayName() string {
 	switch e.Type {
 	case EventWorktreeCreated:
 		return "Worktree created"
+	case EventTaskBranchCreated:
+		return "Task branch created"
 	case EventWorktreeReused:
 		return "Worktree reused"
 	case EventWorktreeRecreated:
@@ -201,8 +204,8 @@ func (e Event) DisplayName() string {
 	}
 }
 
-// WorktreeEventOptions describes worktree context for a trace event.
-type WorktreeEventOptions struct {
+// SetupEventOptions describes task execution target context for a setup event.
+type SetupEventOptions struct {
 	Branch   string
 	Worktree string
 }
@@ -328,12 +331,12 @@ func (s Store) ActiveRun(repoID, taskID string) (RunAttempt, bool, error) {
 	return latest, true, nil
 }
 
-// RecordWorktreeEvent appends a worktree lifecycle event.
-func (s Store) RecordWorktreeEvent(repoID, taskID string, eventType EventType, opts WorktreeEventOptions) (Event, error) {
+// RecordSetupEvent appends a durable task execution setup event.
+func (s Store) RecordSetupEvent(repoID, taskID string, eventType EventType, opts SetupEventOptions) (Event, error) {
 	switch eventType {
-	case EventWorktreeCreated, EventWorktreeReused, EventWorktreeRecreated:
+	case EventWorktreeCreated, EventTaskBranchCreated, EventWorktreeRecreated:
 	default:
-		return Event{}, fmt.Errorf("record worktree event for task %s/%s: unsupported worktree event type %q", repoID, taskID, eventType)
+		return Event{}, fmt.Errorf("record setup event for task %s/%s: unsupported setup event type %q", repoID, taskID, eventType)
 	}
 
 	return s.appendEvent(repoID, taskID, Event{
@@ -1075,7 +1078,7 @@ func validRunStatus(status RunStatus) bool {
 
 func validEventType(eventType EventType) bool {
 	switch eventType {
-	case EventWorktreeCreated, EventWorktreeReused, EventWorktreeRecreated, EventRunStarted, EventRunFinished, EventRunStartFailed, EventCompletionRecorded, EventCompletionRepeated, EventChangesPushed, EventPRCreated, EventPRRecovered, EventTaskClosed:
+	case EventWorktreeCreated, EventTaskBranchCreated, EventWorktreeReused, EventWorktreeRecreated, EventRunStarted, EventRunFinished, EventRunStartFailed, EventCompletionRecorded, EventCompletionRepeated, EventChangesPushed, EventPRCreated, EventPRRecovered, EventTaskClosed:
 		return true
 	default:
 		return false

@@ -19,7 +19,7 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 		time.Date(2026, 6, 3, 10, 2, 0, 0, time.UTC),
 	)
 
-	if _, err := store.RecordWorktreeEvent("alpha", "op-1", taskstate.EventWorktreeCreated, taskstate.WorktreeEventOptions{
+	if _, err := store.RecordSetupEvent("alpha", "op-1", taskstate.EventWorktreeCreated, taskstate.SetupEventOptions{
 		Branch:   "orpheus/op-1",
 		Worktree: "/tmp/op-1",
 	}); err != nil {
