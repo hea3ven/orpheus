@@ -1,0 +1,943 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PRD: Task Review Pipelines</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #ffffff;
+      --fg: #1f2937;
+      --muted: #6b7280;
+      --border: #d1d5db;
+      --panel: #f9fafb;
+      --accent: #2563eb;
+      --code-bg: #f3f4f6;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111827;
+        --fg: #f9fafb;
+        --muted: #9ca3af;
+        --border: #374151;
+        --panel: #1f2937;
+        --accent: #60a5fa;
+        --code-bg: #0f172a;
+      }
+    }
+
+    body {
+      margin: 0 auto;
+      max-width: 980px;
+      padding: 2rem;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+    }
+
+    h1, h2, h3, h4 {
+      line-height: 1.2;
+      margin-top: 2rem;
+    }
+
+    h1 {
+      margin-top: 0;
+      font-size: 2.2rem;
+    }
+
+    h2 {
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.35rem;
+    }
+
+    a { color: var(--accent); }
+
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+
+    code {
+      background: var(--code-bg);
+      padding: 0.1rem 0.25rem;
+      border-radius: 0.25rem;
+    }
+
+    pre {
+      overflow-x: auto;
+      background: var(--code-bg);
+      padding: 1rem;
+      border-radius: 0.5rem;
+      border: 1px solid var(--border);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0;
+    }
+
+    th, td {
+      border: 1px solid var(--border);
+      padding: 0.5rem 0.65rem;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--panel);
+      text-align: left;
+    }
+
+    .meta, .note, .decision, .warning {
+      border: 1px solid var(--border);
+      background: var(--panel);
+      padding: 1rem;
+      border-radius: 0.5rem;
+      margin: 1rem 0;
+    }
+
+    .meta dl {
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      column-gap: 1rem;
+      row-gap: 0.25rem;
+      margin: 0;
+    }
+
+    .meta dt {
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .meta dd {
+      margin: 0;
+    }
+
+    .decision strong, .note strong, .warning strong {
+      display: block;
+      margin-bottom: 0.25rem;
+    }
+
+    .warning {
+      border-color: #f59e0b;
+    }
+
+    .toc ol {
+      columns: 2;
+    }
+
+    @media (max-width: 720px) {
+      body { padding: 1rem; }
+      .toc ol { columns: 1; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>PRD: Task Review Pipelines</h1>
+    <div class="meta">
+      <dl>
+        <dt>Status</dt>
+        <dd>Planned</dd>
+        <dt>Date</dt>
+        <dd>2026-06-26</dd>
+        <dt>Product</dt>
+        <dd>Orpheus CLI task orchestration</dd>
+        <dt>Source</dt>
+        <dd>Brainstorming session from <code>REVIEW-IDEAS.md</code> and follow-up design decisions</dd>
+      </dl>
+    </div>
+  </header>
+
+  <section class="note">
+    <strong>Planning readiness</strong>
+    No major product-design blockers remain for an initial implementation. The remaining gaps are implementation-level details: the exact Git snapshot/restore mechanism, the narrow Beads task-creation interface, finalization-failure audit events, and tests around status projection. Those details should be handled during feature decomposition and implementation, not by reopening the product shape.
+  </section>
+
+  <nav class="toc" aria-label="Table of contents">
+    <h2>Contents</h2>
+    <ol>
+      <li><a href="#summary">Summary</a></li>
+      <li><a href="#problem">Problem</a></li>
+      <li><a href="#goals">Goals and non-goals</a></li>
+      <li><a href="#concepts">Core concepts</a></li>
+      <li><a href="#config">Configuration</a></li>
+      <li><a href="#workflow">Workflow</a></li>
+      <li><a href="#steps">Review step behavior</a></li>
+      <li><a href="#findings">Findings and follow-ups</a></li>
+      <li><a href="#task-state">Task-state model</a></li>
+      <li><a href="#commands">Command behavior</a></li>
+      <li><a href="#status">Status projection</a></li>
+      <li><a href="#requirements">Requirements</a></li>
+      <li><a href="#future">Deferred future ideas</a></li>
+      <li><a href="#slices">Suggested implementation slices</a></li>
+    </ol>
+  </nav>
+
+  <section id="summary">
+    <h2>1. Summary</h2>
+    <p>
+      Orpheus should promote local review from an informal operator habit into a first-class, configurable task workflow. After an implementation agent completes a task, the operator should run <code>orpheus task review &lt;task-id&gt;</code>. The selected review pipeline executes read-only review steps, records structured findings, blocks on current-task issues, optionally creates separate follow-up Beads, and publishes/finalizes the task only after the pipeline passes.
+    </p>
+    <p>
+      The review pipeline itself is the approval mechanism. A default zero-config pipeline contains a manual review step, so Orpheus remains safe by default. Repositories may opt into richer pipelines with deterministic checks and attached AI review agents. If a configured automated-only pipeline passes, automatic PR creation/finalization is intentional.
+    </p>
+
+    <h3>Target flow</h3>
+    <pre><code>orpheus task run TASK-123
+# agent implements the task and runs `orpheus agent done ...`
+
+orpheus task review TASK-123
+# review pipeline runs
+# blockers stop the pipeline
+# passing pipeline invokes the same finalization path as `task done`
+
+# if publication fails after review passed:
+orpheus task done TASK-123</code></pre>
+  </section>
+
+  <section id="problem">
+    <h2>2. Problem</h2>
+    <p>
+      Current Orpheus workflows distinguish agent completion from PR/merge state, but local review is still too implicit. Operators must remember how to inspect the right worktree, run any checks, decide whether the agent output is acceptable, and then run <code>task done</code>. This leaves several gaps:
+    </p>
+    <ul>
+      <li><strong>No explicit approval contract:</strong> <code>task done</code> can publish completed agent work without a recorded local review result.</li>
+      <li><strong>No structured review findings:</strong> AI, check, and manual review feedback are not captured in Orpheus state.</li>
+      <li><strong>No safe follow-up loop:</strong> Re-running an agent after review should address recorded blockers, not reimplement the original task.</li>
+      <li><strong>No configurable review policy:</strong> different repos need different checks, review agents, and manual review affordances.</li>
+      <li><strong>No read-only enforcement:</strong> review commands and review agents should not mutate candidate changes.</li>
+      <li><strong>No path for review-generated follow-up tasks:</strong> nonblocking findings that should become separate work need human-approved Beads creation.</li>
+    </ul>
+  </section>
+
+  <section id="goals">
+    <h2>3. Goals and non-goals</h2>
+
+    <h3>Goals</h3>
+    <ul>
+      <li>Make <code>task review</code> the required local approval gate before <code>task done</code> can publish/finalize.</li>
+      <li>Support typed review pipelines with <code>check</code>, <code>agent_review</code>, and <code>manual</code> steps.</li>
+      <li>Record review attempts, executed steps, findings, waivers, and separate-task creation results in Orpheus task state.</li>
+      <li>Keep review steps read-only through per-step snapshot/restore enforcement.</li>
+      <li>Let review agents record findings through an Orpheus CLI contract instead of provider-specific JSON schemas.</li>
+      <li>Let <code>task run</code> infer follow-up mode from blocked review state, with no <code>--follow-up</code> flag.</li>
+      <li>Support repo-specific review pipeline selection through the Orpheus registry.</li>
+      <li>Keep the initial manual review UX simple: terminal prompts, no TUI investment.</li>
+    </ul>
+
+    <h3>Non-goals for v1</h3>
+    <ul>
+      <li>No PR-comment response loop after a PR already exists.</li>
+      <li>No background/detached review agent supervision.</li>
+      <li>No provider-specific structured output schema or <code>codex exec --output-schema</code> integration.</li>
+      <li>No capture of full check or agent logs.</li>
+      <li>No exact final snapshot enforcement at <code>task done</code>; the user remains responsible for edits after review passes.</li>
+      <li>No <code>task done --skip-review</code> or force bypass.</li>
+      <li>No check waivers in v1.</li>
+      <li>No inline repo-local pipeline definitions.</li>
+      <li>No empty review pipelines.</li>
+      <li>No no-change finalization path.</li>
+    </ul>
+  </section>
+
+  <section id="concepts">
+    <h2>4. Core concepts</h2>
+
+    <h3>Candidate changes</h3>
+    <p>
+      The candidate is the current uncommitted Git-visible state that Orpheus will eventually commit through <code>task done</code>. It includes tracked modifications, tracked deletions, file mode changes, and untracked non-ignored files. Ignored files are out of scope.
+    </p>
+
+    <h3>Review pipeline</h3>
+    <p>
+      A named ordered list of review steps. The pipeline is the approval policy: if the pipeline passes, Orpheus may publish/finalize automatically.
+    </p>
+
+    <h3>Review attempt</h3>
+    <p>
+      One execution of <code>task review</code> for a task. Every invocation starts a fresh attempt. Older attempts are audit history only; the latest attempt is authoritative for status and follow-up behavior.
+    </p>
+
+    <h3>Review step</h3>
+    <p>
+      One executed step in a review attempt. Step kinds are <code>check</code>, <code>agent_review</code>, and <code>manual</code>.
+    </p>
+
+    <h3>Finding types</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Meaning</th>
+          <th>Blocks?</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>blocking</code></td>
+          <td>Must be fixed in the current task before publication, unless explicitly waived or converted.</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td><code>advisory</code></td>
+          <td>Useful note that does not block the current task.</td>
+          <td>No</td>
+        </tr>
+        <tr>
+          <td><code>separate-task</code></td>
+          <td>Nonblocking candidate for a new standalone Bead.</td>
+          <td>No</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Operational failure vs code blocker</h3>
+    <p>
+      A code blocker is normal review feedback: failing tests, AI review blockers, or manual blockers. An operational failure means the review process itself failed: invalid config, review agent non-zero exit, process start failure, mutation by a read-only step, or restore failure. Code blockers lead to follow-up implementation. Operational failures require operator attention.
+    </p>
+  </section>
+
+  <section id="config">
+    <h2>5. Configuration</h2>
+
+    <h3>Global config shape</h3>
+    <p>
+      This feature may introduce a breaking config schema. The project is early enough that avoiding legacy schema debt is preferred.
+    </p>
+
+    <pre><code>agents:
+  defaults:
+    implementer: gpt-medium
+    reviewer: gpt-smart
+
+  profiles:
+    gpt-medium:
+      harness: codex
+      model: gpt-5.5
+      effort: medium
+
+    gpt-smart:
+      harness: codex
+      model: gpt-5.5
+      effort: high
+
+reviews:
+  default_pipeline: standard
+  pipelines:
+    standard:
+      steps:
+        - kind: check
+          name: test
+          command: make
+          args: ["test"]
+
+        - kind: agent_review
+          name: ai-review
+
+        - kind: manual
+          name: local-review</code></pre>
+
+    <h3>Agent profile decisions</h3>
+    <ul>
+      <li><code>agents.defaults.implementer</code> is used for implementation and review follow-up runs.</li>
+      <li><code>agents.defaults.reviewer</code> is used for <code>agent_review</code> steps unless a step overrides the agent.</li>
+      <li><code>harness</code> and <code>model</code> are generic profile fields.</li>
+      <li><code>effort</code> is harness-specific but kept at the profile top level for readability.</li>
+      <li>No <code>extra_args</code> in v1.</li>
+      <li><code>harness: codex</code> assumes the <code>codex</code> executable; executable-path configuration is deferred.</li>
+      <li>Implementation and follow-up runs remain attached/interactive for v1.</li>
+      <li>Review agents also use the attached launcher/profile mechanism for v1.</li>
+    </ul>
+
+    <h3>Review pipeline resolution</h3>
+    <p>Pipeline selection precedence:</p>
+    <ol>
+      <li><code>orpheus task review --pipeline &lt;name&gt;</code></li>
+      <li>Repo registry field <code>review_pipeline</code></li>
+      <li>Global <code>reviews.default_pipeline</code></li>
+      <li>Built-in default manual pipeline</li>
+    </ol>
+
+    <p>Repo registry example:</p>
+    <pre><code>repos:
+  - id: orpheus
+    path: /home/mati/Documents/prog/orpheus
+    review_pipeline: go-standard</code></pre>
+
+    <h3>Built-in default pipeline</h3>
+    <p>If no configured pipeline is available, Orpheus uses a single manual step with no command:</p>
+    <pre><code>steps:
+  - kind: manual
+    name: local-review</code></pre>
+
+    <h3>Pipeline validation</h3>
+    <ul>
+      <li>Pipelines must contain at least one step.</li>
+      <li>Step names must be non-empty for readable output.</li>
+      <li>Step names do not need to be unique in v1 because they are not semantic IDs.</li>
+      <li>Commands run directly without shell parsing. Users can explicitly configure <code>bash -lc</code> if they need shell behavior.</li>
+      <li>No interpolation tokens in check/manual commands for v1; review environment variables are passed instead.</li>
+      <li>Repos may select named global pipelines only; no inline per-repo pipelines in v1.</li>
+    </ul>
+  </section>
+
+  <section id="workflow">
+    <h2>6. Workflow</h2>
+
+    <h3>Normal implementation and local review</h3>
+    <pre><code>orpheus task run TASK-123
+agent runs `orpheus agent context`
+agent edits files
+agent runs `orpheus agent done --summary ... --description ... --detailed-description ...`
+
+orpheus task review TASK-123
+  preflight finalization readiness
+  require candidate changes
+  require clean real Git index
+  run review pipeline
+  offer creation of separate-task candidates
+  mark review passed
+  call internal task done finalization path</code></pre>
+
+    <h3>Blocked review follow-up</h3>
+    <pre><code>orpheus task review TASK-123
+  step reports blocking findings
+  pipeline stops with review status blocked
+
+orpheus task run TASK-123
+  Orpheus infers follow-up mode from latest blocked review
+  agent context says: address only these findings
+  targeted findings are marked as targeted by this run
+
+orpheus task review TASK-123
+  starts a fresh authoritative review attempt</code></pre>
+
+    <h3>Publication failure after review passes</h3>
+    <pre><code>orpheus task review TASK-123
+  review passes
+  task done finalization fails, e.g. gh auth failure
+
+# Review remains passed. User fixes publication issue, then retries:
+orpheus task done TASK-123</code></pre>
+
+    <div class="decision">
+      <strong>Decision: review is independent of finalization</strong>
+      Review attempts record review outcomes only. Publication/finalization failures belong to the finalization path and related task-state events, not to review attempt fields. A passed review remains passed after publication failure so the operator can retry <code>task done</code> without rerunning review.
+    </div>
+  </section>
+
+  <section id="steps">
+    <h2>7. Review step behavior</h2>
+
+    <h3>Common step execution rules</h3>
+    <ul>
+      <li>Before each step, Orpheus snapshots the Git-visible candidate state.</li>
+      <li>After each step, Orpheus compares the candidate state.</li>
+      <li>If the step mutated files, Orpheus restores the snapshot automatically.</li>
+      <li>A mutation by any review step is an operational failure, even if restore succeeds.</li>
+      <li>If restore fails, the task projects to Needs attention and the user must inspect the repo manually.</li>
+      <li>Snapshot/restore covers tracked changes, tracked deletions, mode changes, and untracked non-ignored files.</li>
+      <li>Ignored files and external side effects are not guaranteed to be restored.</li>
+      <li>Stdout/stderr stream live to the terminal. No logs are captured in v1.</li>
+      <li>Review env is passed to all steps.</li>
+    </ul>
+
+    <h3>Review environment</h3>
+    <pre><code>ORPHEUS_REPO_ID=...
+ORPHEUS_TASK_ID=...
+ORPHEUS_AGENT_PURPOSE=review
+ORPHEUS_REVIEW_ATTEMPT=1
+ORPHEUS_REVIEW_STEP=ai-review</code></pre>
+    <p>
+      <code>ORPHEUS_REVIEW_STEP</code> is informational. <code>agent review add</code> validates the attempt and active current step kind, not the step name.
+    </p>
+
+    <h3>Check steps</h3>
+    <pre><code>- kind: check
+  name: test
+  command: make
+  args: ["test"]</code></pre>
+    <ul>
+      <li>Process start failure, such as executable not found, is an operational failure.</li>
+      <li>Exit code <code>0</code> passes.</li>
+      <li>Non-zero exit creates a blocking finding.</li>
+      <li>Check blockers are not waivable in v1.</li>
+      <li>No stdout/stderr log capture in v1; the fixing agent is expected to rerun the command and inspect output.</li>
+    </ul>
+
+    <h3>Agent review steps</h3>
+    <pre><code>- kind: agent_review
+  name: ai-review
+  agent: gpt-smart # optional; defaults to agents.defaults.reviewer</code></pre>
+    <ul>
+      <li>Uses the same attached launcher/profile mechanism as implementation agents.</li>
+      <li>Uses the bootstrap prompt pattern: the agent is instructed to run <code>orpheus agent context</code>.</li>
+      <li><code>orpheus agent context</code> renders review-specific context when <code>ORPHEUS_AGENT_PURPOSE=review</code>.</li>
+      <li>The context includes task details, completion summary, review instructions, the read-only contract, and exact <code>orpheus agent review add</code> usage.</li>
+      <li>The review agent is told to review current working-tree changes and may use Git commands as needed.</li>
+      <li>The agent records findings incrementally through <code>orpheus agent review add</code>.</li>
+      <li>No <code>agent review done</code> command exists in v1. Agent process exit is enough.</li>
+      <li>Exit <code>0</code> with no unwaived blockers passes.</li>
+      <li>Non-zero exit is an operational review failure, even if partial findings were recorded.</li>
+    </ul>
+
+    <h3>Manual steps</h3>
+    <pre><code>- kind: manual
+  name: local-review
+  command: git      # optional
+  args: ["diff"]   # optional</code></pre>
+    <p>At the start of every manual step, Orpheus prints context:</p>
+    <ul>
+      <li>task ID and title;</li>
+      <li>agent completion summary;</li>
+      <li><code>git status --short</code>;</li>
+      <li><code>git diff --stat</code>.</li>
+    </ul>
+    <p>If a manual command is configured, Orpheus runs it after printing context. Then it prompts:</p>
+    <pre><code>Manual review decision for TASK-123:
+  1. Approve and continue pipeline
+  2. Record blocking finding
+  3. Record advisory finding
+  4. Record separate-task candidate
+  5. Abort review</code></pre>
+    <p>
+      Manual findings are collected by Orpheus prompts, not by asking the user to call <code>orpheus agent review add</code>. Manual commands still receive review env for custom scripts.
+    </p>
+  </section>
+
+  <section id="findings">
+    <h2>8. Findings, blockers, waivers, and follow-up tasks</h2>
+
+    <h3>Finding schema</h3>
+    <pre><code>type: blocking | advisory | separate-task
+title: string
+description: string
+suggested_action: string # required for blocking, optional otherwise
+waiver:
+  reason: string
+  at: timestamp
+task_proposal:
+  title: string
+  description: string
+  acceptance_criteria: string
+created_task_id: string</code></pre>
+
+    <h3>Blocking findings</h3>
+    <ul>
+      <li>Blocking findings stop the pipeline unless waived or converted.</li>
+      <li>Agent-review blockers can be waived by the human with a reason.</li>
+      <li>Manual blockers are controlled by what the user records.</li>
+      <li>Check blockers cannot be waived in v1.</li>
+      <li>Waivers are scoped to the review attempt and do not carry to future attempts.</li>
+    </ul>
+
+    <h3>Converting blockers to separate-task candidates</h3>
+    <p>
+      The user may convert an agent-review blocker into a separate-task candidate when it is not required by the current task acceptance criteria. Conversion requires a task proposal or user-provided proposal fields and a reason. Once converted, it is nonblocking for the current attempt.
+    </p>
+
+    <h3>Separate-task candidates</h3>
+    <ul>
+      <li><code>separate-task</code> findings are nonblocking by definition.</li>
+      <li>After all blockers are cleared, Orpheus offers to create Beads for selected candidates before publication.</li>
+      <li>Created Beads are standalone tasks with provenance in their description, not dependencies or children by default.</li>
+      <li>Created task IDs are recorded back on the finding.</li>
+      <li>If creation fails, Orpheus stops by default and asks whether to continue publication anyway.</li>
+      <li>If the user declines to create candidates, review can still pass and publish.</li>
+      <li>No cross-attempt duplicate detection in v1. Within one attempt, already-created candidates are not offered again.</li>
+    </ul>
+  </section>
+
+  <section id="task-state">
+    <h2>9. Task-state model</h2>
+
+    <h3>Review attempts</h3>
+    <pre><code>review_attempts:
+  - attempt: 1
+    status: blocked
+    pipeline: go-standard
+    started_at: 2026-06-26T10:00:00Z
+    finished_at: 2026-06-26T10:12:00Z
+    steps:
+      - kind: check
+        name: test
+        command: make
+        args: ["test"]
+        exit_code: 2
+        failed: false
+        findings:
+          - type: blocking
+            title: "Check failed: test"
+            description: "Command `make test` exited with status 2."
+            suggested_action: "Run the check, inspect the output, fix it, then rerun task review."
+
+  - attempt: 2
+    status: passed
+    pipeline: go-standard
+    steps:
+      - kind: agent_review
+        name: ai-review
+        agent: gpt-smart
+        failed: false
+        findings: []
+      - kind: manual
+        name: local-review
+        failed: false
+        findings: []</code></pre>
+
+    <h3>Attempt statuses</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Status</th>
+          <th>Meaning</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>running</code></td>
+          <td>A review pipeline is currently executing.</td>
+        </tr>
+        <tr>
+          <td><code>blocked</code></td>
+          <td>The pipeline stopped on valid code/product blockers.</td>
+        </tr>
+        <tr>
+          <td><code>failed</code></td>
+          <td>The review process failed operationally.</td>
+        </tr>
+        <tr>
+          <td><code>passed</code></td>
+          <td>The review process completed successfully and publication is allowed.</td>
+        </tr>
+        <tr>
+          <td><code>aborted</code></td>
+          <td>The user aborted manual review, or the attempt was superseded by a new review run.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Current step</h3>
+    <p>
+      While a review attempt is running, task state persists a <code>current_step</code> so <code>orpheus agent review add</code> can append findings from a separate process.
+    </p>
+    <pre><code>review_attempts:
+  - attempt: 3
+    status: running
+    pipeline: go-standard
+    current_step:
+      kind: agent_review
+      name: ai-review
+      agent: gpt-smart
+      failed: false
+      findings: []
+    steps:
+      - kind: check
+        name: test
+        command: make
+        args: ["test"]
+        exit_code: 0
+        failed: false
+        findings: []</code></pre>
+    <p>
+      When the step completes, Orpheus moves <code>current_step</code> into <code>steps</code> and clears it. Historical attempts should not retain an active <code>current_step</code>.
+    </p>
+
+    <h3>State management decisions</h3>
+    <ul>
+      <li>Review attempt counters are separate from agent run attempt counters.</li>
+      <li>Attempt numbers are enough for v1; no opaque IDs.</li>
+      <li>Every <code>task review</code> invocation creates a new attempt.</li>
+      <li>Any previous <code>running</code> attempt is marked <code>aborted</code> and its current step is finalized into <code>steps</code>.</li>
+      <li>The latest review attempt is authoritative. Older attempts are audit history only.</li>
+      <li>No cross-attempt matching or resolution of findings.</li>
+    </ul>
+  </section>
+
+  <section id="commands">
+    <h2>10. Command behavior</h2>
+
+    <h3><code>orpheus task review &lt;task-id&gt;</code></h3>
+    <ul>
+      <li>Resolves the task and selected review pipeline.</li>
+      <li>Runs a finalization preflight using the same readiness checks as <code>task done</code>.</li>
+      <li>Refuses known unsupported finalization states before running the pipeline, such as an existing PR URL.</li>
+      <li>Requires candidate changes if there is no recorded finalization commit.</li>
+      <li>Requires a clean real Git index before review starts.</li>
+      <li>Starts a new review attempt and aborts any previous running attempt.</li>
+      <li>Runs steps in configured order.</li>
+      <li>Handles blockers, waivers, conversions, and separate-task candidates.</li>
+      <li>Marks the attempt <code>passed</code> only after nonblocking follow-up handling is complete.</li>
+      <li>Calls the same internal finalization path as <code>task done</code> without shelling out to the CLI.</li>
+    </ul>
+
+    <h3><code>orpheus task done &lt;task-id&gt;</code></h3>
+    <ul>
+      <li>Requires the latest review attempt to have status <code>passed</code>.</li>
+      <li>Refuses direct publication after <code>agent done</code> if review has not passed.</li>
+      <li>Refuses if the latest review has open blockers.</li>
+      <li>Does not support <code>--skip-review</code> in v1.</li>
+      <li>Does not compare a final candidate snapshot in v1; edits after review are the user's responsibility.</li>
+      <li>Records finalization/publication failures through the finalization path or task-state events, not on review attempts.</li>
+    </ul>
+
+    <h3><code>orpheus task run &lt;task-id&gt;</code></h3>
+    <p>
+      <code>task run</code> infers implementation vs follow-up from task state.
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th>State</th>
+          <th><code>task run</code> behavior</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>No prior completion / normal runnable task</td>
+          <td>Implementation run using <code>agents.defaults.implementer</code> unless overridden.</td>
+        </tr>
+        <tr>
+          <td>Latest review is <code>blocked</code> with untargeted blockers</td>
+          <td>Follow-up run. Context includes blockers and instructs the agent to address only those findings.</td>
+        </tr>
+        <tr>
+          <td>Blockers were already targeted by a follow-up run and no new review happened</td>
+          <td>Refuse; require <code>task review</code> again.</td>
+        </tr>
+        <tr>
+          <td>Latest review is <code>aborted</code>, <code>failed</code>, or <code>passed</code></td>
+          <td>Refuse; next action is review retry, operational fix, or publication.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3><code>orpheus agent context</code></h3>
+    <ul>
+      <li>Becomes purpose-aware through <code>ORPHEUS_AGENT_PURPOSE</code>.</li>
+      <li>Missing purpose defaults to implementation for compatibility inside normal <code>task run</code>.</li>
+      <li>Review context requires review env and renders review-specific instructions.</li>
+      <li>Review context includes task context and completion summary.</li>
+      <li>Review context instructs the agent to inspect current working-tree changes using Git commands as needed.</li>
+      <li>Review context documents the exact <code>agent review add</code> contract.</li>
+    </ul>
+
+    <h3><code>orpheus agent review add</code></h3>
+    <pre><code>orpheus agent review add \
+  --type blocking \
+  --title "Missing validation for empty ID" \
+  --description-file finding.md \
+  --suggested-action "Add validation and tests"</code></pre>
+
+    <pre><code>orpheus agent review add \
+  --type separate-task \
+  --title "Duplicate validation helper" \
+  --description-file finding.md \
+  --task-title "Extract shared validation helper" \
+  --task-description-file task.md \
+  --task-acceptance-criteria-file acceptance.md</code></pre>
+
+    <h4>Validation</h4>
+    <ul>
+      <li>Requires active review env.</li>
+      <li>Requires <code>ORPHEUS_REVIEW_ATTEMPT</code> to match the latest running attempt.</li>
+      <li>Requires <code>current_step.kind == agent_review</code>.</li>
+      <li>Appends findings directly to <code>current_step.findings</code>.</li>
+      <li>No edit/remove support in v1.</li>
+      <li>Exactly one <code>--type</code>: <code>blocking</code>, <code>advisory</code>, or <code>separate-task</code>.</li>
+      <li><code>--description</code> and <code>--description-file</code> are mutually exclusive; exactly one is required.</li>
+      <li><code>blocking</code> requires <code>--suggested-action</code>.</li>
+      <li><code>separate-task</code> requires task proposal fields.</li>
+    </ul>
+  </section>
+
+  <section id="status">
+    <h2>11. Status projection</h2>
+    <p>
+      Status groups should distinguish normal workflow state from operational problems. <code>Needs attention</code> is reserved for errors, inconsistent state, or operational failures. Normal review blockers are not errors.
+    </p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>State</th>
+          <th>Group</th>
+          <th>Detail</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Agent completed, no review yet</td>
+          <td>Reviewing</td>
+          <td><code>local review; run task review</code></td>
+        </tr>
+        <tr>
+          <td>Latest review blocked by code/product findings</td>
+          <td>Idle</td>
+          <td><code>review blocked by N finding(s); run task run</code></td>
+        </tr>
+        <tr>
+          <td>Follow-up run completed after targeting blockers</td>
+          <td>Reviewing</td>
+          <td><code>follow-up complete; run task review</code></td>
+        </tr>
+        <tr>
+          <td>Latest review aborted</td>
+          <td>Reviewing</td>
+          <td><code>review aborted; run task review</code></td>
+        </tr>
+        <tr>
+          <td>Latest review failed operationally</td>
+          <td>Needs attention</td>
+          <td><code>review failed: &lt;reason&gt;</code></td>
+        </tr>
+        <tr>
+          <td>Review passed, publication failed</td>
+          <td>Needs attention</td>
+          <td><code>review passed; publication failed; run task done</code></td>
+        </tr>
+        <tr>
+          <td>PR exists</td>
+          <td>Reviewing</td>
+          <td>PR URL</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="requirements">
+    <h2>12. Requirements</h2>
+
+    <h3>R1. Review pipeline config</h3>
+    <p>Orpheus must load and validate named review pipelines from global config and resolve repo-specific pipeline selection from the registry.</p>
+
+    <h3>R2. Built-in safe default</h3>
+    <p>If no review pipeline is configured, <code>task review</code> must use a built-in single manual step with no command.</p>
+
+    <h3>R3. Review attempt persistence</h3>
+    <p>Task state must persist review attempts, attempt status, pipeline name, current step while active, executed steps, findings, waivers, and created follow-up task IDs.</p>
+
+    <h3>R4. Review gate for task done</h3>
+    <p><code>task done</code> must refuse to publish/finalize unless the latest review attempt passed.</p>
+
+    <h3>R5. Preflight before review</h3>
+    <p><code>task review</code> must run the same finalization readiness checks as <code>task done</code> before executing the review pipeline, and again before final publication.</p>
+
+    <h3>R6. Candidate changes and index policy</h3>
+    <p><code>task review</code> must require candidate changes and a clean real Git index before starting.</p>
+
+    <h3>R7. Read-only step enforcement</h3>
+    <p>Every review step must be wrapped in snapshot/restore checks. Any mutation must be restored automatically and treated as operational failure.</p>
+
+    <h3>R8. Check steps</h3>
+    <p>Check steps must run direct commands, stream output live, create blocking findings on non-zero exit, and treat process start failures as operational failures.</p>
+
+    <h3>R9. Agent review steps</h3>
+    <p>Agent review steps must run attached reviewer agents, render review-specific context, and record findings through <code>agent review add</code>.</p>
+
+    <h3>R10. Manual steps</h3>
+    <p>Manual steps must print review context, optionally run a configured command, and collect approve/block/advisory/separate-task/abort decisions through simple prompts.</p>
+
+    <h3>R11. Follow-up run inference</h3>
+    <p><code>task run</code> must infer follow-up behavior from latest blocked review state, without requiring a <code>--follow-up</code> flag.</p>
+
+    <h3>R12. Separate-task candidate creation</h3>
+    <p>After a pipeline has no blockers, Orpheus must offer to create selected separate-task candidates as standalone Beads and record created task IDs.</p>
+
+    <h3>R13. Status projection</h3>
+    <p>Status must project normal review blockers to Idle, review boundaries to Reviewing, and operational review/finalization failures to Needs attention.</p>
+  </section>
+
+  <section id="future">
+    <h2>13. Deferred future ideas</h2>
+
+    <h3>Provider-specific structured review output</h3>
+    <p>
+      Codex and other agents may support schema-constrained output, such as <code>codex exec --output-schema</code>. This is useful later, but v1 should use the Orpheus CLI contract so review findings work with the existing raw command/args profile model and attached agents.
+    </p>
+
+    <h3>Background review agents</h3>
+    <p>
+      Running review agents non-interactively in the background remains valuable, but it requires process supervision, logs, stale process recovery, and possibly provider-specific harnesses. V1 keeps review attached and visible.
+    </p>
+
+    <h3>PR comment response loop</h3>
+    <p>
+      Future workflow: PR comments detected, <code>task run</code> addresses comments, <code>task review</code> reviews the update, and Orpheus pushes to the existing PR branch. V1 refuses local review once <code>orpheus.pr_url</code> is set through existing finalization readiness checks.
+    </p>
+
+    <h3>Exact review-to-publication snapshot enforcement</h3>
+    <p>
+      A future version may store a candidate tree hash at review pass and require <code>task done</code> to publish exactly that tree. V1 enforces read-only review steps but trusts the user after review passes.
+    </p>
+
+    <h3>Commit immediately after agent completion</h3>
+    <p>
+      Durable local commits after <code>agent done</code>, possibly squashed before PR publication, were considered. This improves recovery but adds branch/history complexity. V1 reviews uncommitted candidate changes and commits only after review passes.
+    </p>
+
+    <h3>Richer manual review UX</h3>
+    <p>
+      A TUI or editor-based structured findings form could improve ergonomics. V1 uses simple terminal prompts to keep the feature focused.
+    </p>
+
+    <h3>Check logs</h3>
+    <p>
+      Capturing full stdout/stderr logs into task-state data files is useful later. V1 streams output live and records only command/exit metadata in task state.
+    </p>
+
+    <h3>Repo-local and inline pipelines</h3>
+    <p>
+      Team-shared repo-local Orpheus config or inline per-repo pipeline definitions may be useful later. V1 keeps reusable global pipeline definitions and repo registry selection.
+    </p>
+
+    <h3>Sandboxed review execution</h3>
+    <p>
+      Disposable copied worktrees or stronger sandboxes could isolate review steps more completely. V1 runs in-place with snapshot/restore for simplicity and path/tooling fidelity.
+    </p>
+
+    <h3>Force publish / skip review</h3>
+    <p>
+      A <code>task done --force</code> or <code>--skip-review</code> escape hatch is intentionally deferred. Users can fall back to lower-level Git/Beads operations for exceptional cases.
+    </p>
+
+    <h3>No-change task finalization</h3>
+    <p>
+      Agents may report completion with no candidate changes. V1 allows <code>agent done</code> to record that claim, but <code>task review</code> refuses because there is no reviewable artifact. An explicit no-change close workflow is deferred.
+    </p>
+  </section>
+
+  <section id="slices">
+    <h2>14. Suggested implementation slices</h2>
+    <p>
+      These are product slices, not approved Beads. They are included to make the PRD easier to turn into implementation work later.
+    </p>
+
+    <ol>
+      <li>
+        <strong>Manual review gate MVP:</strong> add review attempts, built-in manual pipeline, <code>task review</code>, <code>task done</code> review-gate enforcement, and status projection for passed/aborted/blocked states.
+      </li>
+      <li>
+        <strong>Configurable pipelines and repo selection:</strong> add global pipeline config, registry <code>review_pipeline</code>, CLI <code>--pipeline</code>, and validation.
+      </li>
+      <li>
+        <strong>Check steps:</strong> add direct command execution, live output, non-zero blocking findings, and operational start-failure handling.
+      </li>
+      <li>
+        <strong>Read-only enforcement:</strong> add per-step snapshot/restore for tracked and untracked non-ignored candidate changes, with mutation failure status.
+      </li>
+      <li>
+        <strong>Agent review CLI contract:</strong> add purpose-aware <code>agent context</code>, attached review agent step execution, and <code>agent review add</code>.</li>
+      <li>
+        <strong>Review follow-up runs:</strong> make <code>task run</code> infer follow-up mode from blocked review attempts and target findings by run.</li>
+      <li>
+        <strong>Separate-task candidates:</strong> add task proposal fields, human-selected Beads creation, provenance text, failure handling, and created-task ID persistence.</li>
+      <li>
+        <strong>Hardening and docs:</strong> cover stale running attempt invalidation, finalization-failure retry, examples, and end-to-end tests.</li>
+    </ol>
+  </section>
+</body>
+</html>
