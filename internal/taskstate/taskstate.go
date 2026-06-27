@@ -64,6 +64,7 @@ const (
 	EventChangesPushed      EventType = "changes_pushed"
 	EventPRCreated          EventType = "pr_created"
 	EventPRRecovered        EventType = "pr_recovered"
+	EventFinalizationFailed EventType = "finalization_failed"
 	EventTaskClosed         EventType = "task_closed"
 )
 
@@ -110,6 +111,7 @@ type Service interface {
 	RecordFinalizationCommit(repoID, taskID string, commit string) (Finalization, error)
 	RecordFinalizationPush(repoID, taskID string, opts FinalizationPushOptions) (Finalization, error)
 	RecordFinalizationClose(repoID, taskID string, opts FinalizationCloseOptions) (Finalization, error)
+	RecordFinalizationFailure(repoID, taskID string, cause error) (Event, error)
 	RecordFeatureBranchPR(repoID, taskID string, opts FeatureBranchPROptions) (Event, error)
 	RecordTaskClosed(repoID, taskID string, opts TaskClosedOptions) (Event, error)
 	Events(repoID, taskID string) ([]Event, error)
@@ -246,6 +248,8 @@ func (e Event) DisplayName() string {
 		return "PR created"
 	case EventPRRecovered:
 		return "PR recovered"
+	case EventFinalizationFailed:
+		return "Finalization failed"
 	case EventTaskClosed:
 		return "Task closed"
 	default:
@@ -855,6 +859,23 @@ func (s Store) RecordFeatureBranchPR(repoID, taskID string, opts FeatureBranchPR
 	return event, nil
 }
 
+// RecordFinalizationFailure appends a durable diagnostic for a failed task done
+// publication/finalization attempt.
+func (s Store) RecordFinalizationFailure(repoID, taskID string, cause error) (Event, error) {
+	var message string
+	if cause != nil {
+		message = strings.TrimSpace(cause.Error())
+	}
+	if message == "" {
+		return Event{}, fmt.Errorf("record finalization failure for task %s/%s: error is required", repoID, taskID)
+	}
+
+	return s.appendEvent(repoID, taskID, Event{
+		Type:  EventFinalizationFailed,
+		Error: message,
+	})
+}
+
 // RecordTaskClosed appends an idempotent local audit event after a backend task
 // is closed. PR facts are recorded when the closure followed a merged PR.
 func (s Store) RecordTaskClosed(repoID, taskID string, opts TaskClosedOptions) (Event, error) {
@@ -947,6 +968,21 @@ func LatestReview(state TaskState) (ReviewAttempt, bool) {
 		}
 	}
 	return latest, true
+}
+
+// LatestFinalizationFailure returns the latest recorded task done
+// publication/finalization failure event from state.
+func LatestFinalizationFailure(state TaskState) (Event, bool) {
+	var latest Event
+	for _, event := range state.Events {
+		if event.Type != EventFinalizationFailed {
+			continue
+		}
+		if latest.Type == "" || event.At.After(latest.At) {
+			latest = event
+		}
+	}
+	return latest, latest.Type != ""
 }
 
 // ActiveRun returns the latest attempt only when it is running.
@@ -1280,6 +1316,9 @@ func validateEvent(event Event) error {
 	if event.Type == EventTaskClosed && strings.TrimSpace(event.CloseReason) == "" {
 		return fmt.Errorf("event %q requires a close reason", event.Type)
 	}
+	if event.Type == EventFinalizationFailed && strings.TrimSpace(event.Error) == "" {
+		return fmt.Errorf("event %q requires an error", event.Type)
+	}
 	return nil
 }
 
@@ -1312,7 +1351,7 @@ func validFindingType(findingType FindingType) bool {
 
 func validEventType(eventType EventType) bool {
 	switch eventType {
-	case EventWorktreeCreated, EventTaskBranchCreated, EventWorktreeReused, EventWorktreeRecreated, EventRunStarted, EventRunFinished, EventRunStartFailed, EventCompletionRecorded, EventCompletionRepeated, EventChangesPushed, EventPRCreated, EventPRRecovered, EventTaskClosed:
+	case EventWorktreeCreated, EventTaskBranchCreated, EventWorktreeReused, EventWorktreeRecreated, EventRunStarted, EventRunFinished, EventRunStartFailed, EventCompletionRecorded, EventCompletionRepeated, EventChangesPushed, EventPRCreated, EventPRRecovered, EventFinalizationFailed, EventTaskClosed:
 		return true
 	default:
 		return false

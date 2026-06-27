@@ -94,9 +94,17 @@ func taskRunStateIndex(
 			}
 			latestCopy := latest
 			expectedTargets, err := workflow.ExpectedTargetsForTask(repoSnapshot.Repository, taskItem.ID, paths)
+			latestReview, hasReview := taskstate.LatestReview(state)
+			latestFinalizationFailure, hasFinalizationFailure := taskstate.LatestFinalizationFailure(state)
 			localState := status.LocalTaskState{
 				LatestRun:    &latestCopy,
 				Finalization: taskstate.FinalizationFacts(state),
+			}
+			if hasReview {
+				localState.LatestReview = &latestReview
+			}
+			if hasFinalizationFailure {
+				localState.LatestFinalizationFailure = &latestFinalizationFailure
 			}
 			if err == nil {
 				localState.ExpectedTargets = &expectedTargets

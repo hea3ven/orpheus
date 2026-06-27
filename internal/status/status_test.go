@@ -377,6 +377,76 @@ func TestProjectWithLocalTaskStatesDoesNotShowClosedFinalizationAsLocalReview(t 
 	}
 }
 
+//nolint:funlen // The review-state table is clearer kept together.
+func TestProjectWithLocalTaskStatesClassifiesLatestReviewAttempts(t *testing.T) {
+	tests := []struct {
+		name           string
+		review         taskstate.ReviewAttempt
+		failure        *taskstate.Event
+		wantGroup      status.GroupID
+		wantDetail     string
+		wantDetailPart string
+	}{
+		{
+			name: "blocked review is idle follow-up work",
+			review: reviewAttempt(1, taskstate.ReviewStatusBlocked, []taskstate.ReviewFinding{
+				{Type: taskstate.FindingTypeBlocking, Title: "Bug", Description: "Fix it"},
+				{Type: taskstate.FindingTypeAdvisory, Title: "Note", Description: "Consider it"},
+			}),
+			wantGroup:  status.GroupIdle,
+			wantDetail: "review blocked by 1 finding(s); run task run",
+		},
+		{
+			name:       "aborted review is reviewing retry",
+			review:     reviewAttempt(1, taskstate.ReviewStatusAborted, nil),
+			wantGroup:  status.GroupInReview,
+			wantDetail: "review aborted; run task review",
+		},
+		{
+			name:       "failed review needs operator attention",
+			review:     reviewAttempt(1, taskstate.ReviewStatusFailed, nil),
+			wantGroup:  status.GroupNeedsAttention,
+			wantDetail: "review failed operationally; run task review",
+		},
+		{
+			name:   "passed review with publication failure needs task done retry",
+			review: reviewAttempt(1, taskstate.ReviewStatusPassed, nil),
+			failure: &taskstate.Event{
+				Type:  taskstate.EventFinalizationFailed,
+				At:    time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
+				Error: "push failed",
+			},
+			wantGroup:      status.GroupNeedsAttention,
+			wantDetailPart: "review passed; publication failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			snapshot := localReviewSnapshot("a-main", "/tmp/alpha")
+			latestRun := localReviewRun("/tmp/alpha")
+			localStates := status.LocalTaskStateIndex{
+				status.RunStateKey("alpha", "a-main"): {
+					LatestRun:                 &latestRun,
+					LatestReview:              &tt.review,
+					LatestFinalizationFailure: tt.failure,
+					ExpectedTargets:           testExpectedTargets("main", "/tmp/alpha", "orpheus/a-main", "/tmp/orpheus/worktrees/a-main"),
+				},
+			}
+
+			got := status.ProjectWithLocalTaskStates(snapshot, localStates)
+			assertGroupTaskIDs(t, got, tt.wantGroup, []string{"a-main"})
+			entry := groupEntries(t, got, tt.wantGroup)[0]
+			if tt.wantDetail != "" && entry.Detail != tt.wantDetail {
+				t.Fatalf("detail = %q, want %q", entry.Detail, tt.wantDetail)
+			}
+			if tt.wantDetailPart != "" && !strings.Contains(entry.Detail, tt.wantDetailPart) {
+				t.Fatalf("detail = %q, want to contain %q", entry.Detail, tt.wantDetailPart)
+			}
+		})
+	}
+}
+
 func TestProjectWithRunStatesClassifiesLatestAttachedAttempts(t *testing.T) {
 	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
 		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"},
@@ -404,6 +474,54 @@ func TestProjectWithRunStatesClassifiesLatestAttachedAttempts(t *testing.T) {
 	readyRows := status.ReadyRowsWithRunStates(snapshot, runStates)
 	if len(readyRows) != 1 || readyRows[0].Task.ID != "a-ready" {
 		t.Fatalf("ready rows = %#v, want only a-ready", readyRows)
+	}
+}
+
+func localReviewSnapshot(taskID string, repoPath string) task.SnapshotResult {
+	return task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
+		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: repoPath, DefaultBranch: "main"},
+		Tasks: []task.Task{{
+			ID:        taskID,
+			Title:     "local main review",
+			Status:    task.StatusInProgress,
+			IssueType: task.IssueTypeTask,
+			Metadata: task.Metadata{
+				task.MetadataBranch:   "main",
+				task.MetadataWorktree: repoPath,
+			},
+		}},
+	}}}
+}
+
+func localReviewRun(repoPath string) taskstate.RunAttempt {
+	return taskstate.RunAttempt{
+		Attempt:  1,
+		Status:   taskstate.RunStatusSucceeded,
+		Branch:   "main",
+		Worktree: repoPath,
+		Completion: &taskstate.Completion{
+			Summary:             "Done",
+			Description:         "Ready for local review.",
+			DetailedDescription: "Detailed PR body.",
+			CompletedAt:         time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+		},
+	}
+}
+
+func reviewAttempt(
+	attempt int,
+	reviewStatus taskstate.ReviewStatus,
+	findings []taskstate.ReviewFinding,
+) taskstate.ReviewAttempt {
+	finishedAt := time.Date(2026, 6, 3, 11, 0, 0, 0, time.UTC)
+	return taskstate.ReviewAttempt{
+		Attempt:    attempt,
+		Status:     reviewStatus,
+		Pipeline:   "default",
+		Step:       "local-review",
+		StartedAt:  time.Date(2026, 6, 3, 10, 30, 0, 0, time.UTC),
+		FinishedAt: &finishedAt,
+		Findings:   findings,
 	}
 }
 
