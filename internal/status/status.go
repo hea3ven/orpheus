@@ -78,9 +78,11 @@ type RunStateIndex map[string]taskstate.RunAttempt
 
 // LocalTaskState contains local Orpheus facts used by status projection.
 type LocalTaskState struct {
-	LatestRun       *taskstate.RunAttempt
-	Finalization    taskstate.Finalization
-	ExpectedTargets *workflow.ExpectedTargets
+	LatestRun                 *taskstate.RunAttempt
+	LatestReview              *taskstate.ReviewAttempt
+	LatestFinalizationFailure *taskstate.Event
+	Finalization              taskstate.Finalization
+	ExpectedTargets           *workflow.ExpectedTargets
 }
 
 // LocalTaskStateIndex contains local Orpheus facts by repository/task key.
@@ -269,6 +271,11 @@ func classifyExpectedReviewReady(
 	if _, ok := workflow.ClassifyExpectedLocalReviewReady(*expectedTargets, taskItem, latestRun); !ok {
 		return policyResult{}, false
 	}
+	if localState != nil {
+		if result, ok := classifyLatestReview(localState.LatestReview, localState.LatestFinalizationFailure); ok {
+			return result, true
+		}
+	}
 	if localState == nil || localState.Finalization.ClosedAt == nil {
 		return policyResult{state: readinessReview, detail: "local review; run task review"}, true
 	}
@@ -276,6 +283,52 @@ func classifyExpectedReviewReady(
 		state:  readinessAttention,
 		detail: "finalization recorded but backend task is not closed",
 	}, true
+}
+
+func classifyLatestReview(
+	latestReview *taskstate.ReviewAttempt,
+	latestFinalizationFailure *taskstate.Event,
+) (policyResult, bool) {
+	if latestReview == nil {
+		return policyResult{}, false
+	}
+
+	switch latestReview.Status {
+	case taskstate.ReviewStatusRunning:
+		return policyResult{state: readinessReview, detail: "review running"}, true
+	case taskstate.ReviewStatusBlocked:
+		return policyResult{
+			state:  readinessIdle,
+			detail: fmt.Sprintf("review blocked by %d finding(s); run task run", blockingFindingCount(*latestReview)),
+		}, true
+	case taskstate.ReviewStatusAborted:
+		return policyResult{state: readinessReview, detail: "review aborted; run task review"}, true
+	case taskstate.ReviewStatusFailed:
+		return policyResult{state: readinessAttention, detail: "review failed operationally; run task review"}, true
+	case taskstate.ReviewStatusPassed:
+		if latestFinalizationFailure != nil {
+			return policyResult{
+				state:  readinessAttention,
+				detail: "review passed; publication failed; fix publication issue, then run task done",
+			}, true
+		}
+		return policyResult{state: readinessReview, detail: "review passed; run task done"}, true
+	default:
+		return policyResult{
+			state:  readinessAttention,
+			detail: fmt.Sprintf("review attempt %d has status %s", latestReview.Attempt, valueOrUnknown(string(latestReview.Status))),
+		}, true
+	}
+}
+
+func blockingFindingCount(review taskstate.ReviewAttempt) int {
+	count := 0
+	for _, finding := range review.Findings {
+		if finding.Type == taskstate.FindingTypeBlocking && strings.TrimSpace(finding.Waiver) == "" {
+			count++
+		}
+	}
+	return count
 }
 
 func classifyInProgress(latestRun *taskstate.RunAttempt) policyResult {

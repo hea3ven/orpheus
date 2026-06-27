@@ -35,6 +35,7 @@ type FinalizationRunStore interface {
 	RecordFinalizationCommit(repoID, taskID string, commit string) (taskstate.Finalization, error)
 	RecordFinalizationPush(repoID, taskID string, opts taskstate.FinalizationPushOptions) (taskstate.Finalization, error)
 	RecordFinalizationClose(repoID, taskID string, opts taskstate.FinalizationCloseOptions) (taskstate.Finalization, error)
+	RecordFinalizationFailure(repoID, taskID string, cause error) (taskstate.Event, error)
 	RecordFeatureBranchPR(repoID, taskID string, opts taskstate.FeatureBranchPROptions) (taskstate.Event, error)
 }
 
@@ -217,6 +218,24 @@ func (s FinalizationService) finalizeLocked(
 			return FinalizationResult{}, err
 		}
 	}
+	result, err := s.finalizeAfterReviewGate(ctx, opts, target, finalizeCtx, gitState)
+	if err != nil && opts.RequirePassedReview {
+		recordErr := s.recordFinalizationFailure(repo.ID, target.task.ID, err)
+		if recordErr != nil {
+			return FinalizationResult{}, fmt.Errorf("%w; additionally failed to record finalization failure: %w", err, recordErr)
+		}
+	}
+	return result, err
+}
+
+func (s FinalizationService) finalizeAfterReviewGate(
+	ctx context.Context,
+	opts FinalizeOptions,
+	target finalizationTarget,
+	finalizeCtx finalizationContext,
+	gitState FinalizationGit,
+) (FinalizationResult, error) {
+	repo := target.source.Repository
 	targets, err := ExpectedTargetsForTask(repo, target.task.ID, s.Paths)
 	if err != nil {
 		return FinalizationResult{}, err
@@ -231,6 +250,11 @@ func (s FinalizationService) finalizeLocked(
 	}
 
 	return s.finalizeDefaultBranch(ctx, opts, target, finalizeCtx, metadataTarget, gitState)
+}
+
+func (s FinalizationService) recordFinalizationFailure(repoID string, taskID string, cause error) error {
+	_, err := s.RunStore.RecordFinalizationFailure(repoID, taskID, cause)
+	return err
 }
 
 func (s FinalizationService) finalizeDefaultBranch(

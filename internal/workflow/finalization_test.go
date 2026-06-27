@@ -115,6 +115,22 @@ func (s *fakeFinalizationRunStore) RecordFinalizationClose(
 	return finalization, nil
 }
 
+func (s *fakeFinalizationRunStore) RecordFinalizationFailure(
+	repoID string,
+	taskID string,
+	cause error,
+) (taskstate.Event, error) {
+	state := s.states[repoID+"/"+taskID]
+	event := taskstate.Event{
+		Type:  taskstate.EventFinalizationFailed,
+		At:    time.Date(2026, 6, 10, 12, 3, 0, 0, time.UTC),
+		Error: cause.Error(),
+	}
+	state.Events = append(state.Events, event)
+	s.states[repoID+"/"+taskID] = state
+	return event, nil
+}
+
 func (s *fakeFinalizationRunStore) RecordFeatureBranchPR(
 	repoID string,
 	taskID string,
@@ -140,6 +156,7 @@ type fakeFinalizationGit struct {
 	branch     string
 	hasChanges bool
 	commit     string
+	pushErr    error
 	staged     bool
 	messages   []string
 	pushes     []string
@@ -170,6 +187,9 @@ func (g *fakeFinalizationGit) Commit(_ context.Context, _ string, message string
 
 func (g *fakeFinalizationGit) PushDefaultBranch(_ context.Context, _ string, branch string) error {
 	g.pushes = append(g.pushes, branch)
+	if g.pushErr != nil {
+		return g.pushErr
+	}
 	return nil
 }
 
@@ -251,6 +271,73 @@ func TestFinalizeAllowsConfirmedRunningCompletionWithoutMutatingRunStatus(t *tes
 	latest, _ := taskstate.LatestRun(store.states["alpha/op-1"])
 	if latest.Status != taskstate.RunStatusRunning {
 		t.Fatalf("latest status = %q, want still running", latest.Status)
+	}
+}
+
+//nolint:funlen // The retry workflow is clearer as one linear scenario.
+func TestFinalizeRecordsPublicationFailureAndRetriesWithPassedReview(t *testing.T) {
+	taskState := finalizationTaskState("op-1", taskstate.RunAttempt{
+		Attempt:  1,
+		Status:   taskstate.RunStatusSucceeded,
+		Branch:   "main",
+		Worktree: "/tmp/repo",
+		Completion: &taskstate.Completion{
+			Summary:             "Done",
+			Description:         "Commit reviewed repo-root changes.",
+			DetailedDescription: "Detailed PR body.",
+		},
+	})
+	finishedAt := time.Date(2026, 6, 10, 11, 0, 0, 0, time.UTC)
+	taskState.Reviews = []taskstate.ReviewAttempt{{
+		Attempt:    1,
+		Status:     taskstate.ReviewStatusPassed,
+		Pipeline:   "default",
+		Step:       "local-review",
+		StartedAt:  time.Date(2026, 6, 10, 10, 30, 0, 0, time.UTC),
+		FinishedAt: &finishedAt,
+	}}
+	service, git, store, backend := newFinalizationTestService(t, []task.Task{
+		finalizationMainTask("op-1", "/tmp/repo"),
+	}, map[string]taskstate.TaskState{
+		"alpha/op-1": taskState,
+	})
+	git.pushErr = errors.New("push failed")
+
+	_, err := service.Finalize(context.Background(), workflow.FinalizeOptions{
+		TaskID:              "op-1",
+		RequirePassedReview: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "push failed") {
+		t.Fatalf("first finalize error = %v, want push failure", err)
+	}
+	stateAfterFailure := store.states["alpha/op-1"]
+	if latestReview, ok := taskstate.LatestReview(stateAfterFailure); !ok || latestReview.Status != taskstate.ReviewStatusPassed {
+		t.Fatalf("latest review = %#v/%v, want passed review preserved", latestReview, ok)
+	}
+	if failure, ok := taskstate.LatestFinalizationFailure(stateAfterFailure); !ok || !strings.Contains(failure.Error, "push failed") {
+		t.Fatalf("latest finalization failure = %#v/%v, want push failure event", failure, ok)
+	}
+	if len(backend.closed) != 0 {
+		t.Fatalf("closed after failed push = %#v, want none", backend.closed)
+	}
+
+	git.pushErr = nil
+	git.hasChanges = false
+	result, err := service.Finalize(context.Background(), workflow.FinalizeOptions{
+		TaskID:              "op-1",
+		RequirePassedReview: true,
+	})
+	if err != nil {
+		t.Fatalf("retry finalize: %v", err)
+	}
+	if result.Finalization.Commit != "commit123" || result.Finalization.PushedAt == nil || result.Finalization.ClosedAt == nil {
+		t.Fatalf("retry finalization = %#v, want committed, pushed, and closed", result.Finalization)
+	}
+	if len(git.messages) != 1 {
+		t.Fatalf("commit messages = %#v, want one commit reused across retry", git.messages)
+	}
+	if len(git.pushes) != 2 || len(backend.closed) != 1 || backend.closed[0] != "op-1" {
+		t.Fatalf("pushes=%#v closed=%#v, want failed push retried and task closed", git.pushes, backend.closed)
 	}
 }
 
