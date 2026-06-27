@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -45,6 +46,7 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 		newTaskShowCommand(opts),
 		newTaskDirCommand(opts),
 		newTaskRunCommand(opts),
+		newTaskReviewCommand(opts),
 		newTaskDoneCommand(opts),
 		newTaskSyncCommand(opts),
 	)
@@ -164,6 +166,22 @@ func newTaskDoneCommand(opts *rootOptions) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&summary, "summary", "", "override the final commit summary")
 	cmd.Flags().StringVar(&description, "description", "", "override the final commit description")
+	return cmd
+}
+
+func newTaskReviewCommand(opts *rootOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "review <task-id>",
+		Short: "Run the default local review gate for completed task work",
+		Long: "Run the default local review gate for completed task work.\n\n" +
+			"The built-in review pipeline contains one manual step named local-review. " +
+			"Approval records a passed review attempt and then finalizes through the same " +
+			"path as task done.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			return runTaskReview(command, opts, args[0])
+		},
+	}
 	return cmd
 }
 
@@ -534,6 +552,319 @@ func launchTaskRunAgent(
 	return fmt.Errorf("task run %s: %w", taskID, err)
 }
 
+func runTaskReview(command *cobra.Command, opts *rootOptions, taskID string) error {
+	logger := opts.log().With(
+		slog.String("component", "cli"),
+		slog.String("operation", "task_review"),
+	)
+	logger.DebugContext(command.Context(), "loading registered repos for task review")
+
+	paths, err := state.ResolveFromEnvironment()
+	if err != nil {
+		return err
+	}
+	resolvedCtx, err := resolveTaskContext(command, "task review", taskID)
+	if err != nil {
+		return err
+	}
+	store := taskstate.NewStore(paths)
+	review, err := store.StartReview(resolvedCtx.Resolved.Source.Repository.ID, resolvedCtx.Resolved.TaskID)
+	if err != nil {
+		return fmt.Errorf("task review %s: start review attempt: %w", resolvedCtx.Resolved.TaskID, err)
+	}
+
+	if err := renderManualReviewContext(command, store, resolvedCtx); err != nil {
+		_, _ = store.FinishReview(resolvedCtx.Resolved.Source.Repository.ID, resolvedCtx.Resolved.TaskID, review.Attempt, taskstate.ReviewStatusFailed)
+		return fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
+	}
+
+	result, err := runManualReviewPrompt(command, store, resolvedCtx, review)
+	if err != nil {
+		_, _ = store.FinishReview(resolvedCtx.Resolved.Source.Repository.ID, resolvedCtx.Resolved.TaskID, review.Attempt, taskstate.ReviewStatusFailed)
+		return err
+	}
+	if result != manualReviewApproved {
+		return nil
+	}
+
+	taskCtx, err := loadTaskContext()
+	if err != nil {
+		return err
+	}
+	service := newTaskFinalizationService(paths, taskCtx)
+	finalized, err := finalizeTaskWithConfirmation(command, service, workflow.FinalizeOptions{
+		TaskID:              resolvedCtx.Resolved.TaskID,
+		RequirePassedReview: true,
+	})
+	if err != nil {
+		return err
+	}
+
+	logger.DebugContext(
+		command.Context(),
+		"review approved and finalized task",
+		slog.String("repo_id", finalized.Repository.ID),
+		slog.String("task_id", finalized.Task.ID),
+		slog.String("commit", finalized.Finalization.Commit),
+	)
+	return renderTaskDoneResult(command, finalized)
+}
+
+type manualReviewResult int
+
+const (
+	manualReviewApproved manualReviewResult = iota
+	manualReviewBlocked
+	manualReviewAborted
+)
+
+func renderManualReviewContext(
+	command *cobra.Command,
+	store taskstate.Store,
+	resolvedCtx resolvedTaskContext,
+) error {
+	output := command.ErrOrStderr()
+	repo := resolvedCtx.Resolved.Source.Repository
+	taskItem := resolvedCtx.Task
+
+	taskState, err := store.Load(repo.ID, taskItem.ID)
+	if err != nil {
+		return fmt.Errorf("load task state: %w", err)
+	}
+	latest, ok := taskstate.LatestRun(taskState)
+	if !ok {
+		return fmt.Errorf("task has no Orpheus run attempts; run `orpheus task run %s` first", taskItem.ID)
+	}
+	if latest.Completion == nil {
+		return fmt.Errorf("latest run attempt %d has no completion block; run `orpheus agent done` first", latest.Attempt)
+	}
+
+	workdir, err := taskWorkingDirectory(repo, taskItem)
+	if err != nil {
+		return err
+	}
+	status, err := gitOutput(command.Context(), workdir, "status", "--short")
+	if err != nil {
+		return fmt.Errorf("read git status: %w", err)
+	}
+	diffStat, err := gitOutput(command.Context(), workdir, "diff", "--stat")
+	if err != nil {
+		return fmt.Errorf("read git diff stat: %w", err)
+	}
+
+	if _, err := fmt.Fprintf(output, "Task: %s - %s\n", taskItem.ID, taskItem.Title); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(output, "Latest completion: %s\n\n", strings.TrimSpace(latest.Completion.Summary)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(output, "git status --short:"); err != nil {
+		return err
+	}
+	if strings.TrimSpace(status) == "" {
+		if _, err := fmt.Fprintln(output, "(clean)"); err != nil {
+			return err
+		}
+	} else if _, err := fmt.Fprint(output, status); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(output, "\ngit diff --stat:"); err != nil {
+		return err
+	}
+	if strings.TrimSpace(diffStat) == "" {
+		_, err = fmt.Fprintln(output, "(no diff)")
+		return err
+	}
+	_, err = fmt.Fprint(output, diffStat)
+	return err
+}
+
+func runManualReviewPrompt(
+	command *cobra.Command,
+	store taskstate.Store,
+	resolvedCtx resolvedTaskContext,
+	review taskstate.ReviewAttempt,
+) (manualReviewResult, error) {
+	reader := bufio.NewReader(command.InOrStdin())
+	session := manualReviewSession{
+		command:     command,
+		store:       store,
+		resolvedCtx: resolvedCtx,
+		review:      review,
+	}
+	for {
+		action, err := promptManualReviewAction(command, reader)
+		if err != nil {
+			return manualReviewAborted, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
+		}
+
+		result, done, err := session.handleManualReviewAction(action, reader)
+		if err != nil || done {
+			return result, err
+		}
+	}
+}
+
+type manualReviewSession struct {
+	command     *cobra.Command
+	store       taskstate.Store
+	resolvedCtx resolvedTaskContext
+	review      taskstate.ReviewAttempt
+}
+
+func (s manualReviewSession) handleManualReviewAction(
+	action string,
+	reader *bufio.Reader,
+) (manualReviewResult, bool, error) {
+	switch action {
+	case "a", "approve":
+		return s.approve()
+	case "b", "block":
+		return s.block(reader)
+	case "v", "advisory":
+		return s.recordFinding(reader, taskstate.FindingTypeAdvisory, "advisory")
+	case "t", "task":
+		return s.recordFinding(reader, taskstate.FindingTypeSeparateTask, "separate-task")
+	case "q", "abort":
+		return s.abort()
+	default:
+		err := s.writeInvalidAction()
+		return manualReviewAborted, false, err
+	}
+}
+
+func (s manualReviewSession) approve() (manualReviewResult, bool, error) {
+	if _, err := s.store.FinishReview(
+		s.resolvedCtx.Resolved.Source.Repository.ID,
+		s.resolvedCtx.Resolved.TaskID,
+		s.review.Attempt,
+		taskstate.ReviewStatusPassed,
+	); err != nil {
+		return manualReviewAborted, true, fmt.Errorf("task review %s: record passed review: %w", s.resolvedCtx.Resolved.TaskID, err)
+	}
+	return manualReviewApproved, true, nil
+}
+
+func (s manualReviewSession) block(reader *bufio.Reader) (manualReviewResult, bool, error) {
+	if _, _, err := s.recordFinding(reader, taskstate.FindingTypeBlocking, "blocking"); err != nil {
+		return manualReviewAborted, true, err
+	}
+	if _, err := s.store.FinishReview(
+		s.resolvedCtx.Resolved.Source.Repository.ID,
+		s.resolvedCtx.Resolved.TaskID,
+		s.review.Attempt,
+		taskstate.ReviewStatusBlocked,
+	); err != nil {
+		return manualReviewAborted, true, fmt.Errorf("task review %s: record blocked review: %w", s.resolvedCtx.Resolved.TaskID, err)
+	}
+	_, err := fmt.Fprintf(s.command.ErrOrStderr(), "Review blocked for %s.\n", s.resolvedCtx.Resolved.TaskID)
+	return manualReviewBlocked, true, err
+}
+
+func (s manualReviewSession) recordFinding(
+	reader *bufio.Reader,
+	findingType taskstate.FindingType,
+	label string,
+) (manualReviewResult, bool, error) {
+	finding, err := promptReviewFinding(s.command, reader, findingType)
+	if err != nil {
+		return manualReviewAborted, true, fmt.Errorf("task review %s: %w", s.resolvedCtx.Resolved.TaskID, err)
+	}
+	if _, err := s.store.RecordReviewFinding(
+		s.resolvedCtx.Resolved.Source.Repository.ID,
+		s.resolvedCtx.Resolved.TaskID,
+		s.review.Attempt,
+		finding,
+	); err != nil {
+		return manualReviewAborted, true, fmt.Errorf("task review %s: record %s finding: %w", s.resolvedCtx.Resolved.TaskID, label, err)
+	}
+	return manualReviewAborted, false, nil
+}
+
+func (s manualReviewSession) abort() (manualReviewResult, bool, error) {
+	if _, err := s.store.FinishReview(
+		s.resolvedCtx.Resolved.Source.Repository.ID,
+		s.resolvedCtx.Resolved.TaskID,
+		s.review.Attempt,
+		taskstate.ReviewStatusAborted,
+	); err != nil {
+		return manualReviewAborted, true, fmt.Errorf("task review %s: record aborted review: %w", s.resolvedCtx.Resolved.TaskID, err)
+	}
+	_, err := fmt.Fprintf(s.command.ErrOrStderr(), "Review aborted for %s.\n", s.resolvedCtx.Resolved.TaskID)
+	return manualReviewAborted, true, err
+}
+
+func (s manualReviewSession) writeInvalidAction() error {
+	_, err := fmt.Fprintln(s.command.ErrOrStderr(), "Choose approve, block, advisory, task, or abort.")
+	return err
+}
+
+func promptManualReviewAction(command *cobra.Command, reader *bufio.Reader) (string, error) {
+	if _, err := fmt.Fprint(command.ErrOrStderr(), "\nReview action [a=approve, b=block, v=advisory, t=task, q=abort]: "); err != nil {
+		return "", err
+	}
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return "", fmt.Errorf("read review action: %w", err)
+	}
+	return strings.ToLower(strings.TrimSpace(line)), nil
+}
+
+func promptReviewFinding(
+	command *cobra.Command,
+	reader *bufio.Reader,
+	findingType taskstate.FindingType,
+) (taskstate.ReviewFinding, error) {
+	title, err := promptReviewLine(command, reader, "Finding title")
+	if err != nil {
+		return taskstate.ReviewFinding{}, err
+	}
+	description, err := promptReviewLine(command, reader, "Finding description")
+	if err != nil {
+		return taskstate.ReviewFinding{}, err
+	}
+	suggestedAction, err := promptReviewLine(command, reader, "Suggested action (optional)")
+	if err != nil {
+		return taskstate.ReviewFinding{}, err
+	}
+
+	finding := taskstate.ReviewFinding{
+		Type:            findingType,
+		Title:           title,
+		Description:     description,
+		SuggestedAction: suggestedAction,
+	}
+	if findingType == taskstate.FindingTypeSeparateTask {
+		taskProposal, err := promptReviewLine(command, reader, "Separate task proposal")
+		if err != nil {
+			return taskstate.ReviewFinding{}, err
+		}
+		finding.TaskProposal = taskProposal
+	}
+	return finding, nil
+}
+
+func promptReviewLine(command *cobra.Command, reader *bufio.Reader, label string) (string, error) {
+	if _, err := fmt.Fprintf(command.ErrOrStderr(), "%s: ", label); err != nil {
+		return "", err
+	}
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", strings.ToLower(label), err)
+	}
+	return strings.TrimSpace(line), nil
+}
+
+func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {
+	command := exec.CommandContext(ctx, "git", args...)
+	command.Dir = dir
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+	}
+	return string(output), nil
+}
+
 func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summary string, description string) error {
 	logger := opts.log().With(
 		slog.String("component", "cli"),
@@ -552,9 +883,10 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summa
 
 	service := newTaskFinalizationService(paths, taskCtx)
 	finalized, err := finalizeTaskWithConfirmation(command, service, workflow.FinalizeOptions{
-		TaskID:      taskID,
-		Summary:     summary,
-		Description: description,
+		TaskID:              taskID,
+		Summary:             summary,
+		Description:         description,
+		RequirePassedReview: true,
 	})
 	if err != nil {
 		return err

@@ -68,7 +68,7 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 		"- Current directory: " + worktreePath,
 		"deterministic task worktree and task branch",
 		"PR-ready completion data for feature-branch publication",
-		"The human operator will later run `orpheus task done " + taskID + "` to publish the feature branch as a pull request",
+		"The human operator will later run `orpheus task review " + taskID + "` to review and publish the feature branch as a pull request",
 	} {
 		is.Contains(contextOutput, want)
 	}
@@ -90,7 +90,7 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 	is.Empty(statusErr)
 	is.Contains(statusOut, "Reviewing (1)")
 	is.Contains(statusOut, taskID)
-	is.Contains(statusOut, "local review; run task done")
+	is.Contains(statusOut, "local review; run task review")
 	is.NotContains(statusOut, "https://")
 
 	is.Equal("in_progress", strings.TrimSpace(readFileString(t, bd.StatusPath)))
@@ -99,6 +99,7 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 	is.NotContains(bdLog, "orpheus.pr_url")
 }
 
+//nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -147,6 +148,7 @@ func TestConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 	must.True(ok)
 	must.NotNil(latest.Completion)
 	is.Equal("Replaced the config for abc", latest.Completion.Summary)
+	recordPassedReview(t, paths, "alpha", taskID)
 
 	ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{
 		listStdout:   "[]",
@@ -214,6 +216,7 @@ func TestMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd
 	latest, ok := taskstate.LatestRun(state)
 	must.True(ok)
 	beforePublication := strings.TrimSpace(runGit(t, latest.Worktree, "rev-parse", "HEAD"))
+	recordPassedReview(t, paths, "alpha", taskID)
 
 	_, configErr = executeCommand(t, []string{
 		"repo", "config", "set", "alpha", "title-template", "[{{external_ref}}] {{summary}}",
@@ -269,6 +272,7 @@ func TestWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	is.Empty(completionCommit)
 	is.Equal("orpheus/"+taskID, latest.Branch)
 	is.NotEmpty(latest.Worktree)
+	recordPassedReview(t, paths, "alpha", taskID)
 
 	ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{
 		listStdout:   "[]",
@@ -394,6 +398,7 @@ func TestRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	is.Equal(repoPath, latest.Worktree)
 	is.Empty(latest.Completion.Commit)
 	is.Contains(runGit(t, repoPath, "status", "--porcelain=v1"), "repo-root-sync-change.txt")
+	recordPassedReview(t, paths, "alpha", taskID)
 
 	ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{
 		listStdout:   "[]",
@@ -491,7 +496,7 @@ func TestMainCompletionFlowEndToEnd(t *testing.T) {
 		"- Path: " + repoPath,
 		"registered repository root on the registered default branch",
 		"Orpheus will record local-review-ready completion data",
-		"The human operator will later run `orpheus task done " + taskID + "`",
+		"The human operator will later run `orpheus task review " + taskID + "`",
 	} {
 		is.Contains(contextOutput, want)
 	}
@@ -514,9 +519,10 @@ func TestMainCompletionFlowEndToEnd(t *testing.T) {
 	is.Empty(statusErr)
 	is.Contains(statusOut, "Reviewing (1)")
 	is.Contains(statusOut, taskID)
-	is.Contains(statusOut, "local review; run task done")
+	is.Contains(statusOut, "local review; run task review")
 
 	must.NoError(os.WriteFile(filepath.Join(repoPath, "human-review.txt"), []byte("human reviewed\n"), 0o644))
+	recordPassedReview(t, paths, "alpha", taskID)
 	doneOut, doneErr := executeCommand(t, []string{"task", "done", taskID})
 	is.Empty(doneErr)
 	is.Contains(doneOut, "Finalized "+taskID)

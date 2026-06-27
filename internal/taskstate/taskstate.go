@@ -28,6 +28,26 @@ const (
 	RunStatusFailed RunStatus = "failed"
 )
 
+// ReviewStatus is the status for a local review attempt.
+type ReviewStatus string
+
+const (
+	ReviewStatusRunning ReviewStatus = "running"
+	ReviewStatusBlocked ReviewStatus = "blocked"
+	ReviewStatusFailed  ReviewStatus = "failed"
+	ReviewStatusPassed  ReviewStatus = "passed"
+	ReviewStatusAborted ReviewStatus = "aborted"
+)
+
+// FindingType classifies a human-recorded review finding.
+type FindingType string
+
+const (
+	FindingTypeBlocking     FindingType = "blocking"
+	FindingTypeAdvisory     FindingType = "advisory"
+	FindingTypeSeparateTask FindingType = "separate_task"
+)
+
 // EventType is a trace/audit event type stored in the per-task state file.
 type EventType string
 
@@ -84,6 +104,9 @@ type Service interface {
 	RecordRepeatedCompletion(repoID, taskID string, attempt int, opts RepeatedCompletionOptions) (Event, error)
 	FinishRun(repoID, taskID string, attempt int, status RunStatus) (RunAttempt, error)
 	FailRunStart(repoID, taskID string, attempt int, cause error) (RunAttempt, error)
+	StartReview(repoID, taskID string) (ReviewAttempt, error)
+	RecordReviewFinding(repoID, taskID string, attempt int, finding ReviewFinding) (ReviewAttempt, error)
+	FinishReview(repoID, taskID string, attempt int, status ReviewStatus) (ReviewAttempt, error)
 	RecordFinalizationCommit(repoID, taskID string, commit string) (Finalization, error)
 	RecordFinalizationPush(repoID, taskID string, opts FinalizationPushOptions) (Finalization, error)
 	RecordFinalizationClose(repoID, taskID string, opts FinalizationCloseOptions) (Finalization, error)
@@ -106,8 +129,9 @@ type TaskState struct {
 	RepoID  string `yaml:"repo_id"`
 	TaskID  string `yaml:"task_id"`
 
-	Runs   []RunAttempt `yaml:"runs,omitempty"`
-	Events []Event      `yaml:"events,omitempty"`
+	Runs    []RunAttempt    `yaml:"runs,omitempty"`
+	Reviews []ReviewAttempt `yaml:"reviews,omitempty"`
+	Events  []Event         `yaml:"events,omitempty"`
 
 	Finalization *Finalization `yaml:"finalization,omitempty"`
 }
@@ -136,6 +160,31 @@ type Completion struct {
 	CompletedAt         time.Time `yaml:"completed_at"`
 	Commit              string    `yaml:"commit,omitempty"`
 	CommitError         string    `yaml:"commit_error,omitempty"`
+}
+
+// ReviewAttempt records one local review pipeline attempt.
+type ReviewAttempt struct {
+	Attempt int          `yaml:"attempt"`
+	Status  ReviewStatus `yaml:"status"`
+
+	Pipeline string `yaml:"pipeline"`
+	Step     string `yaml:"step"`
+
+	StartedAt  time.Time       `yaml:"started_at"`
+	FinishedAt *time.Time      `yaml:"finished_at,omitempty"`
+	Findings   []ReviewFinding `yaml:"findings,omitempty"`
+}
+
+// ReviewFinding records one human finding from the manual review gate.
+type ReviewFinding struct {
+	Type        FindingType `yaml:"type"`
+	Title       string      `yaml:"title"`
+	Description string      `yaml:"description"`
+
+	SuggestedAction string `yaml:"suggested_action,omitempty"`
+	Waiver          string `yaml:"waiver,omitempty"`
+	TaskProposal    string `yaml:"task_proposal,omitempty"`
+	CreatedTaskID   string `yaml:"created_task_id,omitempty"`
 }
 
 // Finalization records factual data from human-side main/solo finalization.
@@ -565,6 +614,99 @@ func (s Store) RecordRepeatedCompletion(
 	return event, nil
 }
 
+// StartReview appends a new running local review attempt for the built-in pipeline.
+func (s Store) StartReview(repoID, taskID string) (ReviewAttempt, error) {
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+
+	now := s.nowUTC()
+	attempt := ReviewAttempt{
+		Attempt:   nextReviewAttemptNumber(state),
+		Status:    ReviewStatusRunning,
+		Pipeline:  "default",
+		Step:      "local-review",
+		StartedAt: now,
+	}
+	state.Reviews = append(state.Reviews, attempt)
+	if err := s.save(state); err != nil {
+		return ReviewAttempt{}, err
+	}
+	return attempt, nil
+}
+
+// RecordReviewFinding appends a finding to a running review attempt.
+func (s Store) RecordReviewFinding(
+	repoID,
+	taskID string,
+	attempt int,
+	finding ReviewFinding,
+) (ReviewAttempt, error) {
+	normalizedFinding, err := normalizeReviewFinding(finding)
+	if err != nil {
+		return ReviewAttempt{}, fmt.Errorf("record review finding for task %s/%s: %w", repoID, taskID, err)
+	}
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+	index := reviewAttemptIndex(state, attempt)
+	if index < 0 {
+		return ReviewAttempt{}, fmt.Errorf("record review finding for task %s/%s: review attempt %d was not found", repoID, taskID, attempt)
+	}
+	if state.Reviews[index].Status != ReviewStatusRunning {
+		return ReviewAttempt{}, fmt.Errorf(
+			"record review finding for task %s/%s: review attempt %d is %q, expected %q",
+			repoID,
+			taskID,
+			attempt,
+			state.Reviews[index].Status,
+			ReviewStatusRunning,
+		)
+	}
+
+	state.Reviews[index].Findings = append(state.Reviews[index].Findings, normalizedFinding)
+	if err := s.save(state); err != nil {
+		return ReviewAttempt{}, err
+	}
+	return state.Reviews[index], nil
+}
+
+// FinishReview records the terminal status for a running review attempt.
+func (s Store) FinishReview(repoID, taskID string, attempt int, status ReviewStatus) (ReviewAttempt, error) {
+	if status == ReviewStatusRunning || !validReviewStatus(status) {
+		return ReviewAttempt{}, fmt.Errorf("finish review attempt for task %s/%s: unsupported terminal status %q", repoID, taskID, status)
+	}
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+	index := reviewAttemptIndex(state, attempt)
+	if index < 0 {
+		return ReviewAttempt{}, fmt.Errorf("finish review attempt for task %s/%s: review attempt %d was not found", repoID, taskID, attempt)
+	}
+	if state.Reviews[index].Status != ReviewStatusRunning {
+		return ReviewAttempt{}, fmt.Errorf(
+			"finish review attempt for task %s/%s: review attempt %d is %q, expected %q",
+			repoID,
+			taskID,
+			attempt,
+			state.Reviews[index].Status,
+			ReviewStatusRunning,
+		)
+	}
+
+	now := s.nowUTC()
+	finished := now
+	state.Reviews[index].Status = status
+	state.Reviews[index].FinishedAt = &finished
+	if err := s.save(state); err != nil {
+		return ReviewAttempt{}, err
+	}
+	return state.Reviews[index], nil
+}
+
 // RecordFinalizationCommit records the commit created by task finalization.
 func (s Store) RecordFinalizationCommit(repoID, taskID string, commit string) (Finalization, error) {
 	commit = strings.TrimSpace(commit)
@@ -792,6 +934,21 @@ func LatestRun(state TaskState) (RunAttempt, bool) {
 	return latest, true
 }
 
+// LatestReview returns the highest-numbered review attempt from state.
+func LatestReview(state TaskState) (ReviewAttempt, bool) {
+	if len(state.Reviews) == 0 {
+		return ReviewAttempt{}, false
+	}
+
+	latest := state.Reviews[0]
+	for _, review := range state.Reviews[1:] {
+		if review.Attempt > latest.Attempt {
+			latest = review
+		}
+	}
+	return latest, true
+}
+
 // ActiveRun returns the latest attempt only when it is running.
 func ActiveRun(state TaskState) (RunAttempt, bool) {
 	latest, ok := LatestRun(state)
@@ -950,6 +1107,11 @@ func validateLoadedState(taskState TaskState, repoID, taskID string) error {
 			return err
 		}
 	}
+	for _, review := range taskState.Reviews {
+		if err := validateReview(review); err != nil {
+			return err
+		}
+	}
 	if err := validateFinalization(taskState.Finalization); err != nil {
 		return fmt.Errorf("finalization is invalid: %w", err)
 	}
@@ -1015,6 +1177,60 @@ func validateCompletion(completion Completion) error {
 	return nil
 }
 
+func validateReview(review ReviewAttempt) error {
+	if review.Attempt <= 0 {
+		return fmt.Errorf("review attempt must be positive, got %d", review.Attempt)
+	}
+	if !validReviewStatus(review.Status) {
+		return fmt.Errorf("review attempt %d has unsupported status %q", review.Attempt, review.Status)
+	}
+	if strings.TrimSpace(review.Pipeline) == "" {
+		return fmt.Errorf("review attempt %d requires pipeline", review.Attempt)
+	}
+	if strings.TrimSpace(review.Step) == "" {
+		return fmt.Errorf("review attempt %d requires step", review.Attempt)
+	}
+	if review.StartedAt.IsZero() {
+		return fmt.Errorf("review attempt %d requires started_at", review.Attempt)
+	}
+	if review.Status == ReviewStatusRunning && review.FinishedAt != nil {
+		return fmt.Errorf("review attempt %d cannot have finished_at while running", review.Attempt)
+	}
+	if review.Status != ReviewStatusRunning && (review.FinishedAt == nil || review.FinishedAt.IsZero()) {
+		return fmt.Errorf("review attempt %d requires finished_at for status %q", review.Attempt, review.Status)
+	}
+	for _, finding := range review.Findings {
+		if _, err := normalizeReviewFinding(finding); err != nil {
+			return fmt.Errorf("review attempt %d has invalid finding: %w", review.Attempt, err)
+		}
+	}
+	return nil
+}
+
+func normalizeReviewFinding(finding ReviewFinding) (ReviewFinding, error) {
+	finding.Type = FindingType(strings.TrimSpace(string(finding.Type)))
+	finding.Title = strings.TrimSpace(finding.Title)
+	finding.Description = strings.TrimSpace(finding.Description)
+	finding.SuggestedAction = strings.TrimSpace(finding.SuggestedAction)
+	finding.Waiver = strings.TrimSpace(finding.Waiver)
+	finding.TaskProposal = strings.TrimSpace(finding.TaskProposal)
+	finding.CreatedTaskID = strings.TrimSpace(finding.CreatedTaskID)
+
+	if !validFindingType(finding.Type) {
+		return ReviewFinding{}, fmt.Errorf("unsupported finding type %q", finding.Type)
+	}
+	if finding.Title == "" {
+		return ReviewFinding{}, errors.New("title is required")
+	}
+	if finding.Description == "" {
+		return ReviewFinding{}, errors.New("description is required")
+	}
+	if finding.Type == FindingTypeSeparateTask && finding.TaskProposal == "" {
+		return ReviewFinding{}, errors.New("task_proposal is required for separate-task findings")
+	}
+	return finding, nil
+}
+
 func validateFinalization(finalization *Finalization) error {
 	if finalization == nil {
 		return nil
@@ -1076,6 +1292,24 @@ func validRunStatus(status RunStatus) bool {
 	}
 }
 
+func validReviewStatus(status ReviewStatus) bool {
+	switch status {
+	case ReviewStatusRunning, ReviewStatusBlocked, ReviewStatusFailed, ReviewStatusPassed, ReviewStatusAborted:
+		return true
+	default:
+		return false
+	}
+}
+
+func validFindingType(findingType FindingType) bool {
+	switch findingType {
+	case FindingTypeBlocking, FindingTypeAdvisory, FindingTypeSeparateTask:
+		return true
+	default:
+		return false
+	}
+}
+
 func validEventType(eventType EventType) bool {
 	switch eventType {
 	case EventWorktreeCreated, EventTaskBranchCreated, EventWorktreeReused, EventWorktreeRecreated, EventRunStarted, EventRunFinished, EventRunStartFailed, EventCompletionRecorded, EventCompletionRepeated, EventChangesPushed, EventPRCreated, EventPRRecovered, EventTaskClosed:
@@ -1095,6 +1329,23 @@ func nextAttemptNumber(state TaskState) int {
 		return 1
 	}
 	return latest.Attempt + 1
+}
+
+func nextReviewAttemptNumber(state TaskState) int {
+	latest, ok := LatestReview(state)
+	if !ok {
+		return 1
+	}
+	return latest.Attempt + 1
+}
+
+func reviewAttemptIndex(state TaskState, attempt int) int {
+	for i, review := range state.Reviews {
+		if review.Attempt == attempt {
+			return i
+		}
+	}
+	return -1
 }
 
 func nonZeroTime(value time.Time, fallback time.Time) time.Time {

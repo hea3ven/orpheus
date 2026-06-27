@@ -264,13 +264,13 @@ func classifyExpectedReviewReady(
 		return policyResult{}, false
 	}
 	if _, ok := workflow.ClassifyExpectedPRReviewReady(*expectedTargets, taskItem, latestRun); ok {
-		return policyResult{state: readinessReview, detail: "local review; run task done"}, true
+		return policyResult{state: readinessReview, detail: "local review; run task review"}, true
 	}
 	if _, ok := workflow.ClassifyExpectedLocalReviewReady(*expectedTargets, taskItem, latestRun); !ok {
 		return policyResult{}, false
 	}
 	if localState == nil || localState.Finalization.ClosedAt == nil {
-		return policyResult{state: readinessReview, detail: "local review; run task done"}, true
+		return policyResult{state: readinessReview, detail: "local review; run task review"}, true
 	}
 	return policyResult{
 		state:  readinessAttention,

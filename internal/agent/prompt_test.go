@@ -78,7 +78,7 @@ func TestRenderActiveContextIncludesWorktreeContract(t *testing.T) {
 		"run it at most once",
 		"do not run it again after it succeeds",
 		"PR-ready completion data for feature-branch publication",
-		"The human operator will later run `orpheus task done op-1` to publish the feature branch as a pull request",
+		"The human operator will later run `orpheus task review op-1` to review and publish the feature branch as a pull request",
 	} {
 		is.Contains(output, want)
 	}
@@ -125,7 +125,7 @@ func TestRenderActiveContextIncludesMainContract(t *testing.T) {
 		"run it at most once",
 		"do not run it again after it succeeds",
 		"Orpheus will record local-review-ready completion data",
-		"The human operator will later run `orpheus task done op-main`",
+		"The human operator will later run `orpheus task review op-main`",
 		"do not run it yourself unless explicitly asked",
 	} {
 		is.Contains(output, want)
@@ -204,7 +204,7 @@ func TestRenderActiveContextIncludesRepoRootTaskBranchContract(t *testing.T) {
 		"registered repository root on the task branch",
 		"orpheus agent done",
 		"PR-ready completion data for feature-branch publication",
-		"The human operator will later run `orpheus task done op-root` to publish the feature branch as a pull request",
+		"The human operator will later run `orpheus task review op-root` to review and publish the feature branch as a pull request",
 	} {
 		is.Contains(output, want)
 	}

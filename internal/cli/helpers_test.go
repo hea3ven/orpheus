@@ -114,11 +114,25 @@ func executeCommand(t *testing.T, args []string) (stdout string, stderr string) 
 
 func executeCommandWithError(t *testing.T, args []string) (stdout string, stderr string, err error) {
 	t.Helper()
+	return executeCommandWithInputAndError(t, args, nil)
+}
+
+func executeCommandWithInput(t *testing.T, args []string, input string) (stdout string, stderr string) {
+	t.Helper()
+	must := require.New(t)
+
+	stdout, stderr, err := executeCommandWithInputAndError(t, args, []byte(input))
+	must.NoError(err, "execute %v\nstderr: %s", args, stderr)
+	return stdout, stderr
+}
+
+func executeCommandWithInputAndError(t *testing.T, args []string, input []byte) (stdout string, stderr string, err error) {
+	t.Helper()
 
 	cmd := cli.NewRootCommand()
 	out := new(bytes.Buffer)
 	errOut := new(bytes.Buffer)
-	cmd.SetIn(bytes.NewBuffer(nil))
+	cmd.SetIn(bytes.NewBuffer(input))
 	cmd.SetOut(out)
 	cmd.SetErr(errOut)
 	cmd.SetArgs(args)

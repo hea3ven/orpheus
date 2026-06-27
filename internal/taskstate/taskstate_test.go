@@ -235,6 +235,63 @@ func TestStoreRecordsRepeatedCompletionDiagnostic(t *testing.T) {
 	)
 }
 
+func TestStoreRecordsReviewAttemptsAndFindings(t *testing.T) {
+	store := newTestStore(t,
+		time.Date(2026, 6, 26, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 6, 26, 10, 1, 0, 0, time.UTC),
+		time.Date(2026, 6, 26, 10, 2, 0, 0, time.UTC),
+	)
+
+	review, err := store.StartReview("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("start review: %v", err)
+	}
+	if review.Attempt != 1 || review.Status != taskstate.ReviewStatusRunning ||
+		review.Pipeline != "default" || review.Step != "local-review" {
+		t.Fatalf("review = %#v, want running default local-review attempt", review)
+	}
+
+	review, err = store.RecordReviewFinding("alpha", "op-1", review.Attempt, taskstate.ReviewFinding{
+		Type:            taskstate.FindingTypeSeparateTask,
+		Title:           "Follow-up",
+		Description:     "Track a later cleanup.",
+		SuggestedAction: "Plan separately.",
+		TaskProposal:    "Create a cleanup task.",
+	})
+	if err != nil {
+		t.Fatalf("record finding: %v", err)
+	}
+	if len(review.Findings) != 1 || review.Findings[0].Type != taskstate.FindingTypeSeparateTask {
+		t.Fatalf("findings = %#v, want separate-task finding", review.Findings)
+	}
+
+	passed, err := store.FinishReview("alpha", "op-1", review.Attempt, taskstate.ReviewStatusPassed)
+	if err != nil {
+		t.Fatalf("finish review: %v", err)
+	}
+	if passed.Status != taskstate.ReviewStatusPassed || passed.FinishedAt == nil {
+		t.Fatalf("passed review = %#v, want passed with finished_at", passed)
+	}
+
+	loaded, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	latest, ok := taskstate.LatestReview(loaded)
+	if !ok || latest.Status != taskstate.ReviewStatusPassed {
+		t.Fatalf("latest review = %#v ok=%v, want passed", latest, ok)
+	}
+
+	assertStoreYAMLContains(t, store, "alpha", "op-1",
+		"reviews:",
+		"status: passed",
+		"pipeline: default",
+		"step: local-review",
+		"type: separate_task",
+		"task_proposal: Create a cleanup task.",
+	)
+}
+
 //nolint:funlen // The durable boundary sequence is the behavior under test.
 func TestStoreRecordsFinalizationFactsIdempotently(t *testing.T) {
 	store := newTestStore(t,

@@ -64,7 +64,7 @@ func appendExecutionContract(builder *strings.Builder, ctx ActiveContext) {
 		builder.WriteString("- Keep implementation work inside the execution target path.\n")
 		appendAgentDoneContract(builder, ctx.Repository.SummaryGuidance, ctx.Repository.SummaryGuidanceStyle)
 		builder.WriteString("- After `orpheus agent done`, Orpheus will record local-review-ready completion data.\n")
-		builder.WriteString("- The human operator will later run `orpheus task done ")
+		builder.WriteString("- The human operator will later run `orpheus task review ")
 		builder.WriteString(ctx.Task.ID)
 		builder.WriteString("` after review; do not run it yourself unless explicitly asked.\n")
 	default:
@@ -81,9 +81,9 @@ func appendFeatureBranchExecutionContract(
 	builder.WriteString("- Keep implementation work inside the execution target path.\n")
 	appendAgentDoneContract(builder, summaryGuidance, summaryGuidanceStyle)
 	builder.WriteString("- After `orpheus agent done`, Orpheus will record PR-ready completion data for feature-branch publication.\n")
-	builder.WriteString("- The human operator will later run `orpheus task done ")
+	builder.WriteString("- The human operator will later run `orpheus task review ")
 	builder.WriteString(taskID)
-	builder.WriteString("` to publish the feature branch as a pull request; do not run it yourself unless explicitly asked.\n")
+	builder.WriteString("` to review and publish the feature branch as a pull request; do not run it yourself unless explicitly asked.\n")
 }
 
 func appendAgentDoneContract(builder *strings.Builder, summaryGuidance string, summaryGuidanceStyle string) {

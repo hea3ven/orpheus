@@ -1922,6 +1922,7 @@ func TestTaskDoneCommitsPushesClosesAndRecordsFinalization(t *testing.T) {
 		BeadsPrefix:   "op",
 	}}}))
 	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Implement task done", "Commit reviewed repo-root changes.")
+	recordPassedReview(t, paths, "alpha", "op-main")
 	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
 
 	taskJSON := mainReadyTaskJSON("op-main", repoPath)
@@ -1958,6 +1959,222 @@ func TestTaskDoneCommitsPushesClosesAndRecordsFinalization(t *testing.T) {
 	must.NotNil(facts.ClosedAt)
 }
 
+func TestTaskDoneRequiresPassedReview(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Implement task done", "Commit reviewed repo-root changes.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	headBefore := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+	})
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "done", "op-main"})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "has no local review attempt")
+	is.ErrorContains(err, "orpheus task review op-main")
+	is.Equal(headBefore, strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")))
+	is.Contains(runGit(t, repoPath, "status", "--short"), "reviewed.txt")
+}
+
+func TestTaskReviewApproveFinalizesAndRecordsPassedAttempt(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review approval", "Finalize after approval.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
+	})
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "a\n")
+
+	is.Contains(stderr, "Task: op-main - Ready for task done")
+	is.Contains(stderr, "Latest completion: Review approval")
+	is.Contains(stderr, "git status --short:")
+	is.Contains(stderr, "reviewed.txt")
+	is.Contains(stderr, "git diff --stat:")
+	is.Contains(stdout, "Finalized op-main")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+	is.Empty(latest.Findings)
+	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
+}
+
+func TestTaskReviewBlockingFindingBlocksWithoutFinalizing(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review blocking", "Do not finalize.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	headBefore := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+	})
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "b\nBug\nMust fix\nPatch it\n")
+
+	is.Empty(stdout)
+	is.Contains(stderr, "Review blocked for op-main.")
+	is.Equal(headBefore, strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")))
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
+	must.Len(latest.Findings, 1)
+	is.Equal(taskstate.FindingTypeBlocking, latest.Findings[0].Type)
+	is.Empty(taskstate.FinalizationFacts(state).Commit)
+}
+
+func TestTaskReviewAdvisoryAndSeparateTaskFindingsDoNotBlockApproval(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review advisory", "Finalize with notes.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
+	})
+
+	input := strings.Join([]string{
+		"v",
+		"Nit",
+		"Small cleanup remains",
+		"Consider later",
+		"t",
+		"Follow-up",
+		"Extract helper later",
+		"Track separately",
+		"Create helper extraction task",
+		"a",
+		"",
+	}, "\n")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, input)
+
+	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stderr, "Finding title:")
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+	must.Len(latest.Findings, 2)
+	is.Equal(taskstate.FindingTypeAdvisory, latest.Findings[0].Type)
+	is.Equal(taskstate.FindingTypeSeparateTask, latest.Findings[1].Type)
+}
+
+func TestTaskReviewAbortDoesNotFinalize(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review abort", "Do not finalize.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	headBefore := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+	})
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "q\n")
+
+	is.Empty(stdout)
+	is.Contains(stderr, "Review aborted for op-main.")
+	is.Equal(headBefore, strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")))
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusAborted, latest.Status)
+	is.Empty(taskstate.FinalizationFacts(state).Commit)
+}
+
 func TestTaskDoneRefusesRunningCompletionWithoutInteractiveConfirmation(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -1976,6 +2193,7 @@ func TestTaskDoneRefusesRunningCompletionWithoutInteractiveConfirmation(t *testi
 		BeadsPrefix:   "op",
 	}}}))
 	recordRunningMainCompletion(t, paths, "alpha", "op-main", repoPath, "Implement task done", "Commit reviewed repo-root changes.")
+	recordPassedReview(t, paths, "alpha", "op-main")
 	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
 	headBefore := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
 
@@ -2032,6 +2250,7 @@ func TestTaskDonePublishesPRReadyTaskBranch(t *testing.T) {
 	runGit(t, repoPath, "worktree", "add", taskWorktree, targets.WorktreeTeam.Branch)
 	must.NoError(os.WriteFile(filepath.Join(taskWorktree, "sync.txt"), []byte("sync\n"), 0o644))
 	recordWorktreeCompletion(t, paths, "alpha", "op-sync", targets.WorktreeTeam.Branch, taskWorktree, "")
+	recordPassedReview(t, paths, "alpha", "op-sync")
 
 	bdLogPath := withFakeBDCommandResponses(t, []fakeBDCommandResponse{
 		{
@@ -2100,6 +2319,7 @@ func TestTaskDoneRecoversExistingBranchPR(t *testing.T) {
 	runGit(t, repoPath, "worktree", "add", taskWorktree, targets.WorktreeTeam.Branch)
 	must.NoError(os.WriteFile(filepath.Join(taskWorktree, "sync.txt"), []byte("sync\n"), 0o644))
 	recordWorktreeCompletion(t, paths, "alpha", "op-sync", targets.WorktreeTeam.Branch, taskWorktree, "")
+	recordPassedReview(t, paths, "alpha", "op-sync")
 
 	bdLogPath := withFakeBDCommandResponses(t, []fakeBDCommandResponse{
 		{
@@ -2561,6 +2781,7 @@ func TestTaskDoneFeatureBranchPushFailureIsNonZero(t *testing.T) {
 	runGit(t, repoPath, "worktree", "add", taskWorktree, targets.WorktreeTeam.Branch)
 	must.NoError(os.WriteFile(filepath.Join(taskWorktree, "sync.txt"), []byte("sync\n"), 0o644))
 	recordWorktreeCompletion(t, paths, "alpha", "op-sync", targets.WorktreeTeam.Branch, taskWorktree, "")
+	recordPassedReview(t, paths, "alpha", "op-sync")
 	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
 	must.NoError(os.RemoveAll(originPath))
 
@@ -2937,6 +3158,7 @@ func TestTaskDoneInfersSingleMainReadyTaskFromRepoRootAndUsesOverrides(t *testin
 		BeadsPrefix:   "op",
 	}}}))
 	recordMainCompletion(t, paths, "alpha", "op-infer", repoPath, "Stored summary", "Stored details.")
+	recordPassedReview(t, paths, "alpha", "op-infer")
 	must.NoError(os.WriteFile(filepath.Join(repoPath, "human-review.txt"), []byte("human\n"), 0o644))
 	t.Chdir(repoPath)
 
@@ -2984,6 +3206,7 @@ func TestTaskDoneInfersRepoRootFeatureBranchTask(t *testing.T) {
 	const branch = "orpheus/op-root-infer"
 	runGit(t, repoPath, "checkout", "-b", branch)
 	recordWorktreeCompletion(t, paths, "alpha", taskID, branch, repoPath, "")
+	recordPassedReview(t, paths, "alpha", taskID)
 	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
 	t.Chdir(repoPath)
 
@@ -3041,6 +3264,7 @@ func TestTaskDoneInfersWorktreeTask(t *testing.T) {
 	runGit(t, repoPath, "branch", branch, "main")
 	runGit(t, repoPath, "worktree", "add", worktree, branch)
 	recordWorktreeCompletion(t, paths, "alpha", taskID, branch, worktree, "")
+	recordPassedReview(t, paths, "alpha", taskID)
 	must.NoError(os.WriteFile(filepath.Join(worktree, "reviewed.txt"), []byte("reviewed\n"), 0o644))
 	t.Chdir(worktree)
 
@@ -3137,6 +3361,7 @@ func TestTaskDoneRefusesNoChangesWithoutRecordedFinalizationCommit(t *testing.T)
 		BeadsPrefix:   "op",
 	}}}))
 	recordMainCompletion(t, paths, "alpha", "op-clean", repoPath, "Clean summary", "Clean details.")
+	recordPassedReview(t, paths, "alpha", "op-clean")
 	withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
 		dir:    repoPath,
 		args:   "--json --readonly --sandbox show --id op-clean",
@@ -3170,6 +3395,7 @@ func TestTaskDoneRetriesPushAndCloseFromRecordedFinalizationCommit(t *testing.T)
 		BeadsPrefix:   "op",
 	}}}))
 	recordMainCompletion(t, paths, "alpha", "op-retry", repoPath, "Retry summary", "Retry details.")
+	recordPassedReview(t, paths, "alpha", "op-retry")
 	must.NoError(os.WriteFile(filepath.Join(repoPath, "already-committed.txt"), []byte("committed\n"), 0o644))
 	runGit(t, repoPath, "add", "already-committed.txt")
 	runGit(t, repoPath, "commit", "-m", "Retry summary", "-m", "Retry details.")
@@ -3460,6 +3686,18 @@ func recordRunningMainCompletion(t *testing.T, paths state.Paths, repoID string,
 		DetailedDescription: "Detailed PR body.",
 	}); err != nil {
 		t.Fatalf("complete running main run: %v", err)
+	}
+}
+
+func recordPassedReview(t *testing.T, paths state.Paths, repoID string, taskID string) {
+	t.Helper()
+	store := taskstate.NewStore(paths)
+	review, err := store.StartReview(repoID, taskID)
+	if err != nil {
+		t.Fatalf("start review: %v", err)
+	}
+	if _, err := store.FinishReview(repoID, taskID, review.Attempt, taskstate.ReviewStatusPassed); err != nil {
+		t.Fatalf("finish review: %v", err)
 	}
 }
 

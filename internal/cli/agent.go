@@ -166,7 +166,7 @@ func renderAgentDoneResult(command *cobra.Command, completed agent.CompleteResul
 	if completed.Context.Target.Kind != agent.ExecutionTargetMain {
 		_, err := fmt.Fprintf(
 			command.OutOrStdout(),
-			"Recorded completion for %s; ready for feature-branch publication with `orpheus task done %s`.\n",
+			"Recorded completion for %s; ready for feature-branch review with `orpheus task review %s`.\n",
 			completed.Context.Task.ID,
 			completed.Context.Task.ID,
 		)
