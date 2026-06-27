@@ -104,6 +104,7 @@ type FinalizeOptions struct {
 	Summary               string
 	Description           string
 	AllowRunningCompleted bool
+	RequirePassedReview   bool
 }
 
 // FinalizationResult reports the finalized task and recorded facts.
@@ -159,6 +160,8 @@ type finalizationTarget struct {
 
 type finalizationContext struct {
 	latest       taskstate.RunAttempt
+	latestReview taskstate.ReviewAttempt
+	hasReview    bool
 	finalization taskstate.Finalization
 }
 
@@ -208,6 +211,11 @@ func (s FinalizationService) finalizeLocked(
 	finalizeCtx, err := s.loadFinalizationContext(repo, target.task)
 	if err != nil {
 		return FinalizationResult{}, err
+	}
+	if opts.RequirePassedReview {
+		if err := validateLatestReviewPassed(target.task.ID, finalizeCtx); err != nil {
+			return FinalizationResult{}, err
+		}
 	}
 	targets, err := ExpectedTargetsForTask(repo, target.task.ID, s.Paths)
 	if err != nil {
@@ -995,10 +1003,30 @@ func (s FinalizationService) loadFinalizationContext(repo task.Repository, taskI
 	if !ok {
 		return finalizationContext{}, fmt.Errorf("task %s has no Orpheus run attempts; run `orpheus task run --main %s` first", taskItem.ID, taskItem.ID)
 	}
+	latestReview, hasReview := taskstate.LatestReview(state)
 	return finalizationContext{
 		latest:       latest,
+		latestReview: latestReview,
+		hasReview:    hasReview,
 		finalization: taskstate.FinalizationFacts(state),
 	}, nil
+}
+
+func validateLatestReviewPassed(taskID string, ctx finalizationContext) error {
+	if !ctx.hasReview {
+		return fmt.Errorf("task %s has no local review attempt; run `orpheus task review %s` before `orpheus task done %s`", taskID, taskID, taskID)
+	}
+	if ctx.latestReview.Status != taskstate.ReviewStatusPassed {
+		return fmt.Errorf(
+			"latest review attempt %d for task %s is %q, expected %q; run `orpheus task review %s`",
+			ctx.latestReview.Attempt,
+			taskID,
+			ctx.latestReview.Status,
+			taskstate.ReviewStatusPassed,
+			taskID,
+		)
+	}
+	return nil
 }
 
 func validateDefaultBranchFinalizationReady(

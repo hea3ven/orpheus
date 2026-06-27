@@ -258,7 +258,7 @@ func TestProjectWithRunStatesShowsSuccessfulMainCompletionInReview(t *testing.T)
 
 	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-main"})
 	reviewEntry := groupEntries(t, got, status.GroupInReview)[0]
-	if reviewEntry.Detail != "local review; run task done" {
+	if reviewEntry.Detail != "local review; run task review" {
 		t.Fatalf("review detail = %q, want local review detail", reviewEntry.Detail)
 	}
 	assertGroupTaskIDs(t, got, status.GroupWorking, nil)
@@ -275,8 +275,8 @@ func TestProjectWithRunStatesShowsWorktreeCompletionReadyForTaskDone(t *testing.
 
 	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-worktree"})
 	entry := groupEntries(t, got, status.GroupInReview)[0]
-	if entry.Detail != "local review; run task done" {
-		t.Fatalf("review detail = %q, want task done detail", entry.Detail)
+	if entry.Detail != "local review; run task review" {
+		t.Fatalf("review detail = %q, want task review detail", entry.Detail)
 	}
 }
 
@@ -291,8 +291,8 @@ func TestProjectWithRunStatesShowsWorktreeCompletionWithoutCommitReadyForTaskDon
 
 	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-worktree"})
 	entry := groupEntries(t, got, status.GroupInReview)[0]
-	if entry.Detail != "local review; run task done" {
-		t.Fatalf("review detail = %q, want task done detail", entry.Detail)
+	if entry.Detail != "local review; run task review" {
+		t.Fatalf("review detail = %q, want task review detail", entry.Detail)
 	}
 }
 

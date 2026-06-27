@@ -41,7 +41,7 @@ func TestAgentContextRendersValidatedWorktreeContext(t *testing.T) {
 		"run it at most once",
 		"do not run it again after it succeeds",
 		"PR-ready completion data for feature-branch publication",
-		"The human operator will later run `orpheus task done op-1` to publish the feature branch as a pull request",
+		"The human operator will later run `orpheus task review op-1` to review and publish the feature branch as a pull request",
 	} {
 		is.Contains(stdout, want)
 	}
@@ -77,7 +77,7 @@ func TestAgentContextRendersRepoRootFeatureBranchContext(t *testing.T) {
 		"registered repository root on the task branch",
 		"orpheus agent done",
 		"PR-ready completion data for feature-branch publication",
-		"The human operator will later run `orpheus task done op-root` to publish the feature branch as a pull request",
+		"The human operator will later run `orpheus task review op-root` to review and publish the feature branch as a pull request",
 	} {
 		is.Contains(stdout, want)
 	}
@@ -467,7 +467,7 @@ func TestAgentDoneCommitsWorktreeCompletion(t *testing.T) {
 	})
 
 	is.Empty(stderr)
-	is.Contains(stdout, "Recorded completion for op-1; ready for feature-branch publication with `orpheus task done op-1`")
+	is.Contains(stdout, "Recorded completion for op-1; ready for feature-branch review with `orpheus task review op-1`")
 	is.Contains(strings.TrimSpace(runGit(t, worktreePath, "status", "--porcelain=v1")), "ORPHEUS_WORKTREE_TEST.txt")
 
 	runStore := taskstate.NewStore(currentTestPaths(t))

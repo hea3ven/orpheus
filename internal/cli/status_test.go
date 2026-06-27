@@ -185,7 +185,7 @@ func TestStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t *testing.T) {
 	is.Contains(stdout, "Reviewing (1)")
 	is.Contains(stdout, "ar-main")
 	is.Contains(stdout, "Local main review")
-	is.Contains(stdout, "local review; run task done")
+	is.Contains(stdout, "local review; run task review")
 	is.Contains(stdout, "Working (0)")
 }
 
