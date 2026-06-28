@@ -828,7 +828,13 @@ func TestTaskRunExecutesImplementerDefaultAttachedFromDeterministicWorktree(t *t
 		]`},
 	})
 	agentLogPath := withFakeAgent(t, "fake-agent", 0)
-	writeTaskRunAgentConfig(t, paths, "recorder", "fake-agent", []string{"--prompt", "{{prompt}}", "--literal", "unchanged"})
+	writeTaskRunAgentConfig(
+		t,
+		paths,
+		"recorder",
+		"fake-agent",
+		[]string{"--name", "{{session_name}}", "--prompt", "{{prompt}}", "--literal", "unchanged"},
+	)
 	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-1"))
 	must.NoError(err)
 
@@ -851,10 +857,12 @@ func TestTaskRunExecutesImplementerDefaultAttachedFromDeterministicWorktree(t *t
 	log := string(agentLog)
 	for _, want := range []string{
 		"PWD=" + worktreePath,
-		"ARG_COUNT=4",
-		"ARG_1<<END\n--prompt\nEND",
-		"ARG_3<<END\n--literal\nEND",
-		"ARG_4<<END\nunchanged\nEND",
+		"ARG_COUNT=6",
+		"ARG_1<<END\n--name\nEND",
+		"ARG_2<<END\n(op-1) Implement attached run\nEND",
+		"ARG_3<<END\n--prompt\nEND",
+		"ARG_5<<END\n--literal\nEND",
+		"ARG_6<<END\nunchanged\nEND",
 		"ORPHEUS_REPO_ID=alpha",
 		"ORPHEUS_TASK_ID=op-1",
 		"ORPHEUS_WORKTREE=" + worktreePath,
@@ -865,7 +873,9 @@ func TestTaskRunExecutesImplementerDefaultAttachedFromDeterministicWorktree(t *t
 	} {
 		is.Contains(log, want)
 	}
-	is.Contains(log, "ARG_2<<END\nYou are an attached implementation agent dispatched by Orpheus.")
+	promptArg := agentLogBlock(t, log, "ARG_4")
+	is.Contains(promptArg, "You are an attached implementation agent dispatched by Orpheus.")
+	is.NotContains(promptArg, "Implement attached run")
 	is.NotContains(log, "Resolve the task and launch the configured agent.")
 	is.NotContains(log, "The agent gets the rendered prompt and ORPHEUS environment.")
 	is.NotContains(log, "- Deterministic worktree: "+worktreePath)
@@ -878,13 +888,16 @@ func TestTaskRunExecutesImplementerDefaultAttachedFromDeterministicWorktree(t *t
 	is.Equal(taskstate.RunStatusSucceeded, state.Runs[0].Status)
 	is.Equal("recorder", state.Runs[0].Agent)
 	is.Equal("fake-agent", state.Runs[0].Command)
-	must.Len(state.Runs[0].Args, 4)
-	is.Equal("--prompt", state.Runs[0].Args[0])
-	is.Contains(state.Runs[0].Args[1], "You are an attached implementation agent dispatched by Orpheus.")
-	is.Contains(state.Runs[0].Args[1], "Run `orpheus agent context` now")
-	is.NotContains(state.Runs[0].Args[1], "Implement attached run")
-	is.Equal("--literal", state.Runs[0].Args[2])
-	is.Equal("unchanged", state.Runs[0].Args[3])
+	is.Equal("(op-1) Implement attached run", state.Runs[0].SessionName)
+	must.Len(state.Runs[0].Args, 6)
+	is.Equal("--name", state.Runs[0].Args[0])
+	is.Equal("(op-1) Implement attached run", state.Runs[0].Args[1])
+	is.Equal("--prompt", state.Runs[0].Args[2])
+	is.Contains(state.Runs[0].Args[3], "You are an attached implementation agent dispatched by Orpheus.")
+	is.Contains(state.Runs[0].Args[3], "Run `orpheus agent context` now")
+	is.NotContains(state.Runs[0].Args[3], "Implement attached run")
+	is.Equal("--literal", state.Runs[0].Args[4])
+	is.Equal("unchanged", state.Runs[0].Args[5])
 	is.Equal("orpheus/op-1", state.Runs[0].Branch)
 	is.Equal(worktreePath, state.Runs[0].Worktree)
 	must.NotNil(state.Runs[0].FinishedAt)

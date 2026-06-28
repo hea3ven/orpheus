@@ -16,7 +16,8 @@ const (
 	// ConfigFile is the Orpheus global configuration file containing agent profiles.
 	ConfigFile = "config.yaml"
 
-	promptToken = "{{prompt}}"
+	promptToken      = "{{prompt}}"
+	sessionNameToken = "{{session_name}}"
 )
 
 // Config is Orpheus' global agent profile configuration.
@@ -70,6 +71,12 @@ type CommandSnapshot struct {
 	Args      []string
 }
 
+// InterpolationValues are values available to agent profile command templates.
+type InterpolationValues struct {
+	Prompt      string
+	SessionName string
+}
+
 // LoadConfig reads and validates the global Orpheus agent configuration.
 func LoadConfig(paths state.Paths) (Config, error) {
 	var config Config
@@ -100,6 +107,19 @@ func (c Config) ResolveCommand(selectedAgent string, prompt string) (CommandSnap
 // ResolveImplementerCommand resolves selectedAgent, or agents.defaults.implementer
 // when selectedAgent is blank.
 func (c Config) ResolveImplementerCommand(selectedAgent string, prompt string) (CommandSnapshot, error) {
+	return c.ResolveImplementerCommandWithValues(selectedAgent, InterpolationValues{Prompt: prompt})
+}
+
+// ResolveCommandWithValues resolves selectedAgent, or agents.defaults.implementer
+// when selectedAgent is blank, and applies profile interpolation.
+func (c Config) ResolveCommandWithValues(selectedAgent string, values InterpolationValues) (CommandSnapshot, error) {
+	return c.ResolveImplementerCommandWithValues(selectedAgent, values)
+}
+
+// ResolveImplementerCommandWithValues resolves selectedAgent, or
+// agents.defaults.implementer when selectedAgent is blank, and applies profile
+// interpolation.
+func (c Config) ResolveImplementerCommandWithValues(selectedAgent string, values InterpolationValues) (CommandSnapshot, error) {
 	normalized, err := c.normalized()
 	if err != nil {
 		return CommandSnapshot{}, err
@@ -109,10 +129,10 @@ func (c Config) ResolveImplementerCommand(selectedAgent string, prompt string) (
 	if agentName == "" {
 		agentName = strings.TrimSpace(normalized.Defaults.Implementer)
 	}
-	return normalized.resolveAgentProfile(agentName, prompt)
+	return normalized.resolveAgentProfile(agentName, values)
 }
 
-func (c Config) resolveAgentProfile(agentName string, prompt string) (CommandSnapshot, error) {
+func (c Config) resolveAgentProfile(agentName string, values InterpolationValues) (CommandSnapshot, error) {
 	profile, ok := c.Agents[agentName]
 	if !ok {
 		return CommandSnapshot{}, fmt.Errorf(
@@ -124,12 +144,12 @@ func (c Config) resolveAgentProfile(agentName string, prompt string) (CommandSna
 
 	args := make([]string, len(profile.Args))
 	for i, arg := range profile.Args {
-		args[i] = interpolatePrompt(arg, prompt)
+		args[i] = interpolateProfileValue(arg, values)
 	}
 
 	return CommandSnapshot{
 		AgentName: agentName,
-		Command:   interpolatePrompt(profile.Command, prompt),
+		Command:   interpolateProfileValue(profile.Command, values),
 		Args:      args,
 	}, nil
 }
@@ -205,19 +225,30 @@ func normalizeProfile(name string, profile Profile) (Profile, error) {
 }
 
 func validateInterpolationToken(field string, value string) error {
-	withoutPromptTokens := strings.ReplaceAll(value, promptToken, "")
-	if strings.Contains(withoutPromptTokens, "{{") || strings.Contains(withoutPromptTokens, "}}") {
+	withoutSupportedTokens := value
+	for _, token := range supportedInterpolationTokens() {
+		withoutSupportedTokens = strings.ReplaceAll(withoutSupportedTokens, token, "")
+	}
+	if strings.Contains(withoutSupportedTokens, "{{") || strings.Contains(withoutSupportedTokens, "}}") {
 		return fmt.Errorf(
-			"%s contains an unsupported interpolation token; supported interpolation token: %s",
+			"%s contains an unsupported interpolation token; supported interpolation tokens: %s",
 			field,
-			promptToken,
+			strings.Join(supportedInterpolationTokens(), ", "),
 		)
 	}
 	return nil
 }
 
-func interpolatePrompt(value string, prompt string) string {
-	return strings.ReplaceAll(value, promptToken, prompt)
+func interpolateProfileValue(value string, values InterpolationValues) string {
+	replacer := strings.NewReplacer(
+		promptToken, values.Prompt,
+		sessionNameToken, values.SessionName,
+	)
+	return replacer.Replace(value)
+}
+
+func supportedInterpolationTokens() []string {
+	return []string{promptToken, sessionNameToken}
 }
 
 func (c Config) agentNames() []string {

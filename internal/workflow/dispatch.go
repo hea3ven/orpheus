@@ -50,6 +50,13 @@ type DispatchCommand struct {
 	Args      []string
 }
 
+// DispatchCommandContext describes task-run values available while resolving
+// the agent command.
+type DispatchCommandContext struct {
+	Task        task.Task
+	SessionName string
+}
+
 // DispatchService prepares task run targets and records dispatch state.
 type DispatchService struct {
 	Paths    state.Paths
@@ -62,8 +69,8 @@ type DispatchStartOptions struct {
 	Source                 task.RepositorySource
 	Backend                DispatchBackend
 	Command                DispatchCommand
-	ResolveCommand         func() (DispatchCommand, error)
-	ResolveFollowUpCommand func() (DispatchCommand, error)
+	ResolveCommand         func(DispatchCommandContext) (DispatchCommand, error)
+	ResolveFollowUpCommand func(DispatchCommandContext) (DispatchCommand, error)
 	MainMode               bool
 	RepoRootMode           bool
 }
@@ -180,7 +187,11 @@ func (s DispatchService) startLocked(
 		return DispatchStartResult{}, err
 	}
 
-	command, err := resolveDispatchCommand(opts, plan.followUp != nil)
+	commandContext := DispatchCommandContext{
+		Task:        plan.taskItem.Clone(),
+		SessionName: plan.taskItem.SessionName(),
+	}
+	command, err := resolveDispatchCommand(opts, plan.followUp != nil, commandContext)
 	if err != nil {
 		return DispatchStartResult{}, err
 	}
@@ -193,7 +204,7 @@ func (s DispatchService) startLocked(
 		return DispatchStartResult{}, fmt.Errorf("mark task in progress: %w", err)
 	}
 
-	attempt, err := s.recordStart(opts, setup, command, plan.followUp)
+	attempt, err := s.recordStart(opts, setup, command, commandContext, plan.followUp)
 	if err != nil {
 		return DispatchStartResult{}, err
 	}
@@ -369,6 +380,7 @@ func (s DispatchService) recordStart(
 	opts DispatchStartOptions,
 	setup gitmeta.TaskWorktreeSetupResult,
 	command DispatchCommand,
+	commandContext DispatchCommandContext,
 	followUp *dispatchFollowUpPlan,
 ) (taskstate.RunAttempt, error) {
 	setupEvent, hasSetupEvent, err := dispatchSetupEvent(setup.Lifecycle)
@@ -395,6 +407,7 @@ func (s DispatchService) recordStart(
 		Agent:          command.AgentName,
 		Command:        command.Command,
 		Args:           command.Args,
+		SessionName:    commandContext.SessionName,
 		Branch:         setup.Branch,
 		Worktree:       setup.WorktreePath,
 		ReviewFollowUp: taskstateReviewFollowUp(followUp),
@@ -423,14 +436,18 @@ func taskstateReviewFollowUp(followUp *dispatchFollowUpPlan) *taskstate.ReviewFo
 	}
 }
 
-func resolveDispatchCommand(opts DispatchStartOptions, followUp bool) (DispatchCommand, error) {
+func resolveDispatchCommand(
+	opts DispatchStartOptions,
+	followUp bool,
+	commandContext DispatchCommandContext,
+) (DispatchCommand, error) {
 	if followUp && opts.ResolveFollowUpCommand != nil {
-		return opts.ResolveFollowUpCommand()
+		return opts.ResolveFollowUpCommand(commandContext)
 	}
 	if opts.ResolveCommand == nil {
 		return opts.Command, nil
 	}
-	return opts.ResolveCommand()
+	return opts.ResolveCommand(commandContext)
 }
 
 func (s DispatchService) expectedSetup(

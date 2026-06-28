@@ -27,9 +27,10 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 	}
 
 	attempt, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
-		Agent:    "recorder",
-		Branch:   "orpheus/op-1",
-		Worktree: "/tmp/op-1",
+		Agent:       "recorder",
+		SessionName: "(op-1) Implement task",
+		Branch:      "orpheus/op-1",
+		Worktree:    "/tmp/op-1",
 	})
 	if err != nil {
 		t.Fatalf("start run: %v", err)
@@ -63,6 +64,7 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 		"attempt: 1",
 		"status: succeeded",
 		"agent: recorder",
+		"session_name: (op-1) Implement task",
 		"worktree_created",
 		"run_started",
 		"run_finished",

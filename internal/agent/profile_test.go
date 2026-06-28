@@ -46,6 +46,38 @@ func TestLoadConfigResolvesImplementerDefaultAndInterpolatesPrompt(t *testing.T)
 	is.Equal([]string{"--model", "test-model", "rendered prompt", "literal"}, snapshot.Args)
 }
 
+func TestResolveCommandInterpolatesPromptAndSessionName(t *testing.T) {
+	is := assert.New(t)
+	config := agent.Config{
+		Defaults: agent.AgentDefaults{Implementer: "pi"},
+		Agents: map[string]agent.Profile{
+			"pi": {
+				Command: "pi-{{session_name}}",
+				Args: []string{
+					"--name",
+					"{{session_name}}",
+					"--prompt",
+					"{{session_name}} - {{prompt}}",
+				},
+			},
+		},
+	}
+
+	snapshot, err := config.ResolveCommandWithValues("", agent.InterpolationValues{
+		Prompt:      "rendered prompt",
+		SessionName: "(op-1) Implement task",
+	})
+
+	require.NoError(t, err)
+	is.Equal("pi-(op-1) Implement task", snapshot.Command)
+	is.Equal([]string{
+		"--name",
+		"(op-1) Implement task",
+		"--prompt",
+		"(op-1) Implement task - rendered prompt",
+	}, snapshot.Args)
+}
+
 func TestLoadConfigResolvesNestedImplementerDefault(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -140,7 +172,7 @@ func TestConfigValidationErrorsAreActionable(t *testing.T) {
 					},
 				},
 			),
-			want: "supported interpolation token: {{prompt}}",
+			want: "supported interpolation tokens: {{prompt}}, {{session_name}}",
 		},
 	}
 

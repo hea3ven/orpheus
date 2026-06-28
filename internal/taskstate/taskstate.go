@@ -144,11 +144,12 @@ type RunAttempt struct {
 	Attempt int       `yaml:"attempt"`
 	Status  RunStatus `yaml:"status"`
 
-	Agent    string   `yaml:"agent,omitempty"`
-	Command  string   `yaml:"command,omitempty"`
-	Args     []string `yaml:"args,omitempty"`
-	Branch   string   `yaml:"branch,omitempty"`
-	Worktree string   `yaml:"worktree,omitempty"`
+	Agent       string   `yaml:"agent,omitempty"`
+	Command     string   `yaml:"command,omitempty"`
+	Args        []string `yaml:"args,omitempty"`
+	SessionName string   `yaml:"session_name,omitempty"`
+	Branch      string   `yaml:"branch,omitempty"`
+	Worktree    string   `yaml:"worktree,omitempty"`
 
 	StartedAt  time.Time   `yaml:"started_at"`
 	FinishedAt *time.Time  `yaml:"finished_at,omitempty"`
@@ -276,11 +277,12 @@ type SetupEventOptions struct {
 
 // StartRunOptions describes the run attempt being started.
 type StartRunOptions struct {
-	Agent    string
-	Command  string
-	Args     []string
-	Branch   string
-	Worktree string
+	Agent       string
+	Command     string
+	Args        []string
+	SessionName string
+	Branch      string
+	Worktree    string
 
 	ReviewFollowUp *ReviewFollowUp
 }
@@ -429,6 +431,7 @@ func (s Store) StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt
 		Agent:          strings.TrimSpace(opts.Agent),
 		Command:        strings.TrimSpace(opts.Command),
 		Args:           cloneStrings(opts.Args),
+		SessionName:    opts.SessionName,
 		Branch:         strings.TrimSpace(opts.Branch),
 		Worktree:       strings.TrimSpace(opts.Worktree),
 		StartedAt:      now,

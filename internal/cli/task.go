@@ -470,8 +470,8 @@ func startTaskRunDispatch(
 		TaskID:  resolved.TaskID,
 		Source:  resolved.Source,
 		Backend: backend,
-		ResolveCommand: func() (workflow.DispatchCommand, error) {
-			prompt, commandSnapshot, err := resolveTaskRunAgentCommand(paths, agentName)
+		ResolveCommand: func(commandContext workflow.DispatchCommandContext) (workflow.DispatchCommand, error) {
+			prompt, commandSnapshot, err := resolveTaskRunAgentCommand(paths, agentName, commandContext.SessionName)
 			if err != nil {
 				return workflow.DispatchCommand{}, err
 			}
@@ -482,8 +482,8 @@ func startTaskRunDispatch(
 				Args:      commandSnapshot.Args,
 			}, nil
 		},
-		ResolveFollowUpCommand: func() (workflow.DispatchCommand, error) {
-			prompt, commandSnapshot, err := resolveTaskRunFollowUpAgentCommand(paths, agentName)
+		ResolveFollowUpCommand: func(commandContext workflow.DispatchCommandContext) (workflow.DispatchCommand, error) {
+			prompt, commandSnapshot, err := resolveTaskRunFollowUpAgentCommand(paths, agentName, commandContext.SessionName)
 			if err != nil {
 				return workflow.DispatchCommand{}, err
 			}
@@ -1440,26 +1440,32 @@ func runTaskSyncAll(command *cobra.Command, opts *rootOptions) error {
 	return nil
 }
 
-func resolveTaskRunAgentCommand(paths state.Paths, agentName string) (string, agent.CommandSnapshot, error) {
+func resolveTaskRunAgentCommand(paths state.Paths, agentName string, sessionName string) (string, agent.CommandSnapshot, error) {
 	prompt := agent.RenderBootstrapPrompt()
 	agentConfig, err := agent.LoadConfig(paths)
 	if err != nil {
 		return "", agent.CommandSnapshot{}, err
 	}
-	commandSnapshot, err := agentConfig.ResolveCommand(agentName, prompt)
+	commandSnapshot, err := agentConfig.ResolveCommandWithValues(agentName, agent.InterpolationValues{
+		Prompt:      prompt,
+		SessionName: sessionName,
+	})
 	if err != nil {
 		return "", agent.CommandSnapshot{}, fmt.Errorf("resolve agent profile: %w", err)
 	}
 	return prompt, commandSnapshot, nil
 }
 
-func resolveTaskRunFollowUpAgentCommand(paths state.Paths, agentName string) (string, agent.CommandSnapshot, error) {
+func resolveTaskRunFollowUpAgentCommand(paths state.Paths, agentName string, sessionName string) (string, agent.CommandSnapshot, error) {
 	prompt := agent.RenderBootstrapPrompt()
 	agentConfig, err := agent.LoadConfig(paths)
 	if err != nil {
 		return "", agent.CommandSnapshot{}, err
 	}
-	commandSnapshot, err := agentConfig.ResolveImplementerCommand(agentName, prompt)
+	commandSnapshot, err := agentConfig.ResolveImplementerCommandWithValues(agentName, agent.InterpolationValues{
+		Prompt:      prompt,
+		SessionName: sessionName,
+	})
 	if err != nil {
 		return "", agent.CommandSnapshot{}, fmt.Errorf("resolve agent profile: %w", err)
 	}
