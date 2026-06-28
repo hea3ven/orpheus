@@ -2,11 +2,14 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -571,34 +574,80 @@ func runTaskReview(command *cobra.Command, opts *rootOptions, taskID string) err
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for task review")
 
-	paths, err := state.ResolveFromEnvironment()
+	start, err := startTaskReview(command, taskID)
 	if err != nil {
 		return err
-	}
-	resolvedCtx, err := resolveTaskContext(command, "task review", taskID)
-	if err != nil {
-		return err
-	}
-	store := taskstate.NewStore(paths)
-	review, err := store.StartReview(resolvedCtx.Resolved.Source.Repository.ID, resolvedCtx.Resolved.TaskID)
-	if err != nil {
-		return fmt.Errorf("task review %s: start review attempt: %w", resolvedCtx.Resolved.TaskID, err)
 	}
 
-	if err := renderManualReviewContext(command, store, resolvedCtx); err != nil {
-		_, _ = store.FinishReview(resolvedCtx.Resolved.Source.Repository.ID, resolvedCtx.Resolved.TaskID, review.Attempt, taskstate.ReviewStatusFailed)
-		return fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
-	}
-
-	result, err := runManualReviewPrompt(command, store, resolvedCtx, review)
+	outcome, err := runReadOnlyManualReviewStep(command, start.store, start.resolvedCtx, start.review, start.workdir)
 	if err != nil {
-		_, _ = store.FinishReview(resolvedCtx.Resolved.Source.Repository.ID, resolvedCtx.Resolved.TaskID, review.Attempt, taskstate.ReviewStatusFailed)
+		_, _ = start.store.FinishReview(start.repoID(), start.taskID(), start.review.Attempt, taskstate.ReviewStatusFailed)
 		return err
 	}
-	if result != manualReviewApproved {
+	if _, err := start.store.FinishReview(start.repoID(), start.taskID(), start.review.Attempt, outcome.status); err != nil {
+		_, _ = start.store.FinishReview(start.repoID(), start.taskID(), start.review.Attempt, taskstate.ReviewStatusFailed)
+		return fmt.Errorf("task review %s: record %s review: %w", start.taskID(), outcome.status, err)
+	}
+	if outcome.result != manualReviewApproved {
 		return nil
 	}
 
+	return finalizeApprovedTaskReview(command, logger, start.paths, start.resolvedCtx)
+}
+
+type taskReviewStart struct {
+	paths       state.Paths
+	resolvedCtx resolvedTaskContext
+	store       taskstate.Store
+	workdir     string
+	review      taskstate.ReviewAttempt
+}
+
+func (s taskReviewStart) repoID() string {
+	return s.resolvedCtx.Resolved.Source.Repository.ID
+}
+
+func (s taskReviewStart) taskID() string {
+	return s.resolvedCtx.Resolved.TaskID
+}
+
+func startTaskReview(command *cobra.Command, taskID string) (taskReviewStart, error) {
+	paths, err := state.ResolveFromEnvironment()
+	if err != nil {
+		return taskReviewStart{}, err
+	}
+	resolvedCtx, err := resolveTaskContext(command, "task review", taskID)
+	if err != nil {
+		return taskReviewStart{}, err
+	}
+	store := taskstate.NewStore(paths)
+	workdir, err := taskWorkingDirectory(resolvedCtx.Resolved.Source.Repository, resolvedCtx.Task)
+	if err != nil {
+		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
+	}
+	if err := validateReviewCandidateReady(command.Context(), store, resolvedCtx, workdir); err != nil {
+		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
+	}
+
+	review, err := store.StartReview(resolvedCtx.Resolved.Source.Repository.ID, resolvedCtx.Resolved.TaskID)
+	if err != nil {
+		return taskReviewStart{}, fmt.Errorf("task review %s: start review attempt: %w", resolvedCtx.Resolved.TaskID, err)
+	}
+	return taskReviewStart{
+		paths:       paths,
+		resolvedCtx: resolvedCtx,
+		store:       store,
+		workdir:     workdir,
+		review:      review,
+	}, nil
+}
+
+func finalizeApprovedTaskReview(
+	command *cobra.Command,
+	logger *slog.Logger,
+	paths state.Paths,
+	resolvedCtx resolvedTaskContext,
+) error {
 	taskCtx, err := loadTaskContext()
 	if err != nil {
 		return err
@@ -622,6 +671,277 @@ func runTaskReview(command *cobra.Command, opts *rootOptions, taskID string) err
 	return renderTaskDoneResult(command, finalized)
 }
 
+func validateReviewCandidateReady(
+	ctx context.Context,
+	store taskstate.Store,
+	resolvedCtx resolvedTaskContext,
+	workdir string,
+) error {
+	if err := requireCleanReviewIndex(ctx, workdir); err != nil {
+		return err
+	}
+
+	hasCandidate, err := hasReviewCandidateChanges(ctx, workdir)
+	if err != nil {
+		return err
+	}
+	if hasCandidate {
+		return nil
+	}
+
+	taskState, err := store.Load(resolvedCtx.Resolved.Source.Repository.ID, resolvedCtx.Resolved.TaskID)
+	if err != nil {
+		return fmt.Errorf("load task state: %w", err)
+	}
+	if strings.TrimSpace(taskstate.FinalizationFacts(taskState).Commit) != "" {
+		return nil
+	}
+	return fmt.Errorf(
+		"worktree %q has no candidate changes to review and task has no recorded finalization commit",
+		workdir,
+	)
+}
+
+func requireCleanReviewIndex(ctx context.Context, workdir string) error {
+	output, err := gitCombinedOutput(ctx, workdir, "diff", "--cached", "--quiet", "--")
+	if err == nil {
+		return nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		status, statusErr := gitOutput(ctx, workdir, "status", "--short")
+		if statusErr != nil {
+			status = "unable to read git status: " + statusErr.Error()
+		}
+		return fmt.Errorf(
+			"review requires a clean Git index, but staged changes are present in %q; unstage them before running task review\n%s",
+			workdir,
+			strings.TrimSpace(status),
+		)
+	}
+	return fmt.Errorf("inspect staged changes: git diff --cached --quiet: %w: %s", err, strings.TrimSpace(string(output)))
+}
+
+func hasReviewCandidateChanges(ctx context.Context, workdir string) (bool, error) {
+	status, err := reviewCandidateStatus(ctx, workdir)
+	if err != nil {
+		return false, err
+	}
+	return len(bytes.TrimSpace(status)) > 0, nil
+}
+
+type manualReviewOutcome struct {
+	result manualReviewResult
+	status taskstate.ReviewStatus
+}
+
+func runReadOnlyManualReviewStep(
+	command *cobra.Command,
+	store taskstate.Store,
+	resolvedCtx resolvedTaskContext,
+	review taskstate.ReviewAttempt,
+	workdir string,
+) (manualReviewOutcome, error) {
+	snapshot, err := captureReviewCandidateSnapshot(command.Context(), workdir)
+	if err != nil {
+		return manualReviewOutcome{}, fmt.Errorf("task review %s: snapshot candidate changes: %w", resolvedCtx.Resolved.TaskID, err)
+	}
+
+	outcome, stepErr := runManualReviewStep(command, store, resolvedCtx, review)
+	mutationErr := restoreReviewCandidateIfMutated(command.Context(), snapshot)
+	if mutationErr != nil {
+		return manualReviewOutcome{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, mutationErr)
+	}
+	if stepErr != nil {
+		return manualReviewOutcome{}, stepErr
+	}
+	return outcome, nil
+}
+
+type reviewCandidateSnapshot struct {
+	workdir   string
+	status    []byte
+	patch     []byte
+	untracked []reviewSnapshotFile
+}
+
+type reviewSnapshotFile struct {
+	path          string
+	mode          fs.FileMode
+	data          []byte
+	symlinkTarget string
+	isSymlink     bool
+}
+
+func captureReviewCandidateSnapshot(ctx context.Context, workdir string) (reviewCandidateSnapshot, error) {
+	status, err := reviewCandidateStatus(ctx, workdir)
+	if err != nil {
+		return reviewCandidateSnapshot{}, err
+	}
+	patch, err := gitCombinedOutput(ctx, workdir, "diff", "--binary", "--no-ext-diff")
+	if err != nil {
+		return reviewCandidateSnapshot{}, fmt.Errorf("capture tracked diff: %w: %s", err, strings.TrimSpace(string(patch)))
+	}
+	untracked, err := captureUntrackedReviewFiles(ctx, workdir)
+	if err != nil {
+		return reviewCandidateSnapshot{}, err
+	}
+	return reviewCandidateSnapshot{
+		workdir:   workdir,
+		status:    status,
+		patch:     patch,
+		untracked: untracked,
+	}, nil
+}
+
+func reviewCandidateStatus(ctx context.Context, workdir string) ([]byte, error) {
+	status, err := gitCombinedOutput(ctx, workdir, "status", "--porcelain=v1", "-z", "--untracked-files=normal")
+	if err != nil {
+		return nil, fmt.Errorf("read candidate status: %w: %s", err, strings.TrimSpace(string(status)))
+	}
+	return status, nil
+}
+
+func captureUntrackedReviewFiles(ctx context.Context, workdir string) ([]reviewSnapshotFile, error) {
+	output, err := gitCombinedOutput(ctx, workdir, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, fmt.Errorf("list untracked candidate files: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	paths := splitNUL(output)
+	files := make([]reviewSnapshotFile, 0, len(paths))
+	for _, path := range paths {
+		file, err := captureReviewSnapshotFile(workdir, path)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, file)
+	}
+	return files, nil
+}
+
+func captureReviewSnapshotFile(workdir string, path string) (reviewSnapshotFile, error) {
+	fullPath := filepath.Join(workdir, filepath.FromSlash(path))
+	info, err := os.Lstat(fullPath)
+	if err != nil {
+		return reviewSnapshotFile{}, fmt.Errorf("snapshot untracked file %q: %w", path, err)
+	}
+	file := reviewSnapshotFile{
+		path: path,
+		mode: info.Mode(),
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(fullPath)
+		if err != nil {
+			return reviewSnapshotFile{}, fmt.Errorf("snapshot untracked symlink %q: %w", path, err)
+		}
+		file.symlinkTarget = target
+		file.isSymlink = true
+		return file, nil
+	}
+	if !info.Mode().IsRegular() {
+		return reviewSnapshotFile{}, fmt.Errorf("snapshot untracked file %q: unsupported mode %s", path, info.Mode())
+	}
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return reviewSnapshotFile{}, fmt.Errorf("snapshot untracked file %q: %w", path, err)
+	}
+	file.data = data
+	return file, nil
+}
+
+func splitNUL(output []byte) []string {
+	if len(output) == 0 {
+		return nil
+	}
+	parts := bytes.Split(output, []byte{0})
+	paths := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if len(part) == 0 {
+			continue
+		}
+		paths = append(paths, string(part))
+	}
+	return paths
+}
+
+func restoreReviewCandidateIfMutated(ctx context.Context, snapshot reviewCandidateSnapshot) error {
+	current, err := reviewCandidateStatus(ctx, snapshot.workdir)
+	if err != nil {
+		return err
+	}
+	if bytes.Equal(current, snapshot.status) {
+		return nil
+	}
+	if err := restoreReviewCandidateSnapshot(ctx, snapshot); err != nil {
+		return fmt.Errorf(
+			"review step mutated candidate changes and automatic restore failed: %w; "+
+				"manual repair required in %q: inspect `git status --short`, restore the intended candidate changes, then rerun `orpheus task review`",
+			err,
+			snapshot.workdir,
+		)
+	}
+	restored, err := reviewCandidateStatus(ctx, snapshot.workdir)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(restored, snapshot.status) {
+		return fmt.Errorf(
+			"review step mutated candidate changes and automatic restore did not return the worktree to the pre-step snapshot; "+
+				"manual repair required in %q: inspect `git status --short`, restore the intended candidate changes, then rerun `orpheus task review`",
+			snapshot.workdir,
+		)
+	}
+	return errors.New("review step mutated candidate changes; restored the pre-step snapshot and marked review failed")
+}
+
+func restoreReviewCandidateSnapshot(ctx context.Context, snapshot reviewCandidateSnapshot) error {
+	if output, err := gitCombinedOutput(ctx, snapshot.workdir, "reset", "--mixed", "HEAD", "--"); err != nil {
+		return fmt.Errorf("reset Git index: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	if output, err := gitCombinedOutput(ctx, snapshot.workdir, "clean", "-fd", "--"); err != nil {
+		return fmt.Errorf("remove new untracked files: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	if output, err := gitCombinedOutput(ctx, snapshot.workdir, "restore", "--worktree", "--source=HEAD", "--", "."); err != nil {
+		return fmt.Errorf("restore tracked files from HEAD: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	if len(bytes.TrimSpace(snapshot.patch)) > 0 {
+		output, err := gitCombinedOutputWithInput(
+			ctx,
+			snapshot.workdir,
+			snapshot.patch,
+			"apply",
+			"--binary",
+			"--whitespace=nowarn",
+		)
+		if err != nil {
+			return fmt.Errorf("reapply tracked candidate patch: %w: %s", err, strings.TrimSpace(string(output)))
+		}
+	}
+	for _, file := range snapshot.untracked {
+		if err := restoreReviewSnapshotFile(snapshot.workdir, file); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func restoreReviewSnapshotFile(workdir string, file reviewSnapshotFile) error {
+	fullPath := filepath.Join(workdir, filepath.FromSlash(file.path))
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		return fmt.Errorf("restore untracked file %q: %w", file.path, err)
+	}
+	if file.isSymlink {
+		if err := os.Symlink(file.symlinkTarget, fullPath); err != nil {
+			return fmt.Errorf("restore untracked symlink %q: %w", file.path, err)
+		}
+		return nil
+	}
+	if err := os.WriteFile(fullPath, file.data, file.mode.Perm()); err != nil {
+		return fmt.Errorf("restore untracked file %q: %w", file.path, err)
+	}
+	return nil
+}
+
 type manualReviewResult int
 
 const (
@@ -629,6 +949,18 @@ const (
 	manualReviewBlocked
 	manualReviewAborted
 )
+
+func runManualReviewStep(
+	command *cobra.Command,
+	store taskstate.Store,
+	resolvedCtx resolvedTaskContext,
+	review taskstate.ReviewAttempt,
+) (manualReviewOutcome, error) {
+	if err := renderManualReviewContext(command, store, resolvedCtx); err != nil {
+		return manualReviewOutcome{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
+	}
+	return runManualReviewPrompt(command, store, resolvedCtx, review)
+}
 
 func renderManualReviewContext(
 	command *cobra.Command,
@@ -696,7 +1028,7 @@ func runManualReviewPrompt(
 	store taskstate.Store,
 	resolvedCtx resolvedTaskContext,
 	review taskstate.ReviewAttempt,
-) (manualReviewResult, error) {
+) (manualReviewOutcome, error) {
 	reader := bufio.NewReader(command.InOrStdin())
 	session := manualReviewSession{
 		command:     command,
@@ -707,7 +1039,7 @@ func runManualReviewPrompt(
 	for {
 		action, err := promptManualReviewAction(command, reader)
 		if err != nil {
-			return manualReviewAborted, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
+			return manualReviewOutcome{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
 		}
 
 		result, done, err := session.handleManualReviewAction(action, reader)
@@ -727,7 +1059,7 @@ type manualReviewSession struct {
 func (s manualReviewSession) handleManualReviewAction(
 	action string,
 	reader *bufio.Reader,
-) (manualReviewResult, bool, error) {
+) (manualReviewOutcome, bool, error) {
 	switch action {
 	case "a", "approve":
 		return s.approve()
@@ -741,46 +1073,36 @@ func (s manualReviewSession) handleManualReviewAction(
 		return s.abort()
 	default:
 		err := s.writeInvalidAction()
-		return manualReviewAborted, false, err
+		return manualReviewOutcome{}, false, err
 	}
 }
 
-func (s manualReviewSession) approve() (manualReviewResult, bool, error) {
-	if _, err := s.store.FinishReview(
-		s.resolvedCtx.Resolved.Source.Repository.ID,
-		s.resolvedCtx.Resolved.TaskID,
-		s.review.Attempt,
-		taskstate.ReviewStatusPassed,
-	); err != nil {
-		return manualReviewAborted, true, fmt.Errorf("task review %s: record passed review: %w", s.resolvedCtx.Resolved.TaskID, err)
-	}
-	return manualReviewApproved, true, nil
+func (s manualReviewSession) approve() (manualReviewOutcome, bool, error) {
+	return manualReviewOutcome{
+		result: manualReviewApproved,
+		status: taskstate.ReviewStatusPassed,
+	}, true, nil
 }
 
-func (s manualReviewSession) block(reader *bufio.Reader) (manualReviewResult, bool, error) {
+func (s manualReviewSession) block(reader *bufio.Reader) (manualReviewOutcome, bool, error) {
 	if _, _, err := s.recordFinding(reader, taskstate.FindingTypeBlocking, "blocking"); err != nil {
-		return manualReviewAborted, true, err
-	}
-	if _, err := s.store.FinishReview(
-		s.resolvedCtx.Resolved.Source.Repository.ID,
-		s.resolvedCtx.Resolved.TaskID,
-		s.review.Attempt,
-		taskstate.ReviewStatusBlocked,
-	); err != nil {
-		return manualReviewAborted, true, fmt.Errorf("task review %s: record blocked review: %w", s.resolvedCtx.Resolved.TaskID, err)
+		return manualReviewOutcome{}, true, err
 	}
 	_, err := fmt.Fprintf(s.command.ErrOrStderr(), "Review blocked for %s.\n", s.resolvedCtx.Resolved.TaskID)
-	return manualReviewBlocked, true, err
+	return manualReviewOutcome{
+		result: manualReviewBlocked,
+		status: taskstate.ReviewStatusBlocked,
+	}, true, err
 }
 
 func (s manualReviewSession) recordFinding(
 	reader *bufio.Reader,
 	findingType taskstate.FindingType,
 	label string,
-) (manualReviewResult, bool, error) {
+) (manualReviewOutcome, bool, error) {
 	finding, err := promptReviewFinding(s.command, reader, findingType)
 	if err != nil {
-		return manualReviewAborted, true, fmt.Errorf("task review %s: %w", s.resolvedCtx.Resolved.TaskID, err)
+		return manualReviewOutcome{}, true, fmt.Errorf("task review %s: %w", s.resolvedCtx.Resolved.TaskID, err)
 	}
 	if _, err := s.store.RecordReviewFinding(
 		s.resolvedCtx.Resolved.Source.Repository.ID,
@@ -788,22 +1110,17 @@ func (s manualReviewSession) recordFinding(
 		s.review.Attempt,
 		finding,
 	); err != nil {
-		return manualReviewAborted, true, fmt.Errorf("task review %s: record %s finding: %w", s.resolvedCtx.Resolved.TaskID, label, err)
+		return manualReviewOutcome{}, true, fmt.Errorf("task review %s: record %s finding: %w", s.resolvedCtx.Resolved.TaskID, label, err)
 	}
-	return manualReviewAborted, false, nil
+	return manualReviewOutcome{}, false, nil
 }
 
-func (s manualReviewSession) abort() (manualReviewResult, bool, error) {
-	if _, err := s.store.FinishReview(
-		s.resolvedCtx.Resolved.Source.Repository.ID,
-		s.resolvedCtx.Resolved.TaskID,
-		s.review.Attempt,
-		taskstate.ReviewStatusAborted,
-	); err != nil {
-		return manualReviewAborted, true, fmt.Errorf("task review %s: record aborted review: %w", s.resolvedCtx.Resolved.TaskID, err)
-	}
+func (s manualReviewSession) abort() (manualReviewOutcome, bool, error) {
 	_, err := fmt.Fprintf(s.command.ErrOrStderr(), "Review aborted for %s.\n", s.resolvedCtx.Resolved.TaskID)
-	return manualReviewAborted, true, err
+	return manualReviewOutcome{
+		result: manualReviewAborted,
+		status: taskstate.ReviewStatusAborted,
+	}, true, err
 }
 
 func (s manualReviewSession) writeInvalidAction() error {
@@ -868,13 +1185,24 @@ func promptReviewLine(command *cobra.Command, reader *bufio.Reader, label string
 }
 
 func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {
-	command := exec.CommandContext(ctx, "git", args...)
-	command.Dir = dir
-	output, err := command.CombinedOutput()
+	output, err := gitCombinedOutput(ctx, dir, args...)
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}
 	return string(output), nil
+}
+
+func gitCombinedOutput(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, "git", args...)
+	command.Dir = dir
+	return command.CombinedOutput()
+}
+
+func gitCombinedOutputWithInput(ctx context.Context, dir string, input []byte, args ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, "git", args...)
+	command.Dir = dir
+	command.Stdin = bytes.NewReader(input)
+	return command.CombinedOutput()
 }
 
 func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summary string, description string) error {

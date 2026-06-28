@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -2061,6 +2062,169 @@ func TestTaskReviewApproveFinalizesAndRecordsPassedAttempt(t *testing.T) {
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
 	is.Empty(latest.Findings)
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
+}
+
+func TestTaskReviewRejectsStagedCandidateChanges(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review staged", "Refuse staged changes.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	runGit(t, repoPath, "add", "reviewed.txt")
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+	})
+
+	stdout, stderr, err := executeCommandWithInputAndError(t, []string{"task", "review", "op-main"}, []byte("a\n"))
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "review requires a clean Git index")
+	is.Contains(runGit(t, repoPath, "status", "--short"), "A  reviewed.txt")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	_, ok := taskstate.LatestReview(state)
+	is.False(ok)
+}
+
+func TestTaskReviewRejectsMissingCandidateChangesWithoutFinalizationCommit(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review empty", "There are no changes.")
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+	})
+
+	stdout, stderr, err := executeCommandWithInputAndError(t, []string{"task", "review", "op-main"}, []byte("a\n"))
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "has no candidate changes to review")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	_, ok := taskstate.LatestReview(state)
+	is.False(ok)
+}
+
+//nolint:funlen // The setup and restoration assertions are clearer in one workflow test.
+func TestTaskReviewRestoresCandidateChangesMutatedDuringManualStep(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "tracked.txt"), []byte("base\n"), 0o644))
+	runGit(t, repoPath, "add", "tracked.txt")
+	runGit(t, repoPath, "commit", "-m", "add tracked file")
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review restore", "Restore mutated candidates.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "tracked.txt"), []byte("candidate\n"), 0o644))
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "untracked.txt"), []byte("candidate untracked\n"), 0o644))
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+	})
+	input := &mutatingReviewInput{
+		input:    bytes.NewBufferString("b\nMutating finding\nThe step changed files\nRestore it\n"),
+		repoPath: repoPath,
+		mutate: func(repoPath string) error {
+			if err := os.WriteFile(filepath.Join(repoPath, "tracked.txt"), []byte("mutated\n"), 0o644); err != nil {
+				return err
+			}
+			if err := os.Remove(filepath.Join(repoPath, "untracked.txt")); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(repoPath, "created-by-review.txt"), []byte("new\n"), 0o644)
+		},
+	}
+
+	stdout, stderr, err := executeCommandWithReaderAndError(t, []string{"task", "review", "op-main"}, input)
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Contains(stderr, "Review action")
+	is.ErrorContains(err, "review step mutated candidate changes")
+	is.ErrorContains(err, "restored the pre-step snapshot")
+	is.Equal("candidate\n", readFileString(t, filepath.Join(repoPath, "tracked.txt")))
+	is.Equal("candidate untracked\n", readFileString(t, filepath.Join(repoPath, "untracked.txt")))
+	_, statErr := os.Stat(filepath.Join(repoPath, "created-by-review.txt"))
+	is.ErrorIs(statErr, os.ErrNotExist)
+	status := runGit(t, repoPath, "status", "--short")
+	is.Contains(status, " M tracked.txt")
+	is.Contains(status, "?? untracked.txt")
+	is.NotContains(status, "created-by-review.txt")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusFailed, latest.Status)
+	must.Len(latest.Findings, 1)
+	is.Equal(taskstate.FindingTypeBlocking, latest.Findings[0].Type)
+	is.Empty(taskstate.FinalizationFacts(state).Commit)
+}
+
+type mutatingReviewInput struct {
+	input    *bytes.Buffer
+	repoPath string
+	mutate   func(string) error
+	done     bool
+	err      error
+}
+
+func (r *mutatingReviewInput) Read(p []byte) (int, error) {
+	if !r.done {
+		r.done = true
+		r.err = r.mutate(r.repoPath)
+	}
+	if r.err != nil {
+		return 0, r.err
+	}
+	return r.input.Read(p)
 }
 
 func TestTaskReviewBlockingFindingBlocksWithoutFinalizing(t *testing.T) {

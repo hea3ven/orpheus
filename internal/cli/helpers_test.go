@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -128,11 +129,16 @@ func executeCommandWithInput(t *testing.T, args []string, input string) (stdout 
 
 func executeCommandWithInputAndError(t *testing.T, args []string, input []byte) (stdout string, stderr string, err error) {
 	t.Helper()
+	return executeCommandWithReaderAndError(t, args, bytes.NewBuffer(input))
+}
+
+func executeCommandWithReaderAndError(t *testing.T, args []string, input io.Reader) (stdout string, stderr string, err error) {
+	t.Helper()
 
 	cmd := cli.NewRootCommand()
 	out := new(bytes.Buffer)
 	errOut := new(bytes.Buffer)
-	cmd.SetIn(bytes.NewBuffer(input))
+	cmd.SetIn(input)
 	cmd.SetOut(out)
 	cmd.SetErr(errOut)
 	cmd.SetArgs(args)
