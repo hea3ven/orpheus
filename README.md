@@ -22,6 +22,38 @@ Early MVP design and implementation planning.
 
 - [Repository publication titles](docs/2026-06-23_repo_publication_titles.md) explains how to configure Jira-style commit and pull-request titles, preserve defaults, and recover from a missing task reference.
 
+## Agent profile session names
+
+Task-run agent profiles can interpolate `{{session_name}}` anywhere `{{prompt}}` is supported. Orpheus formats the value as `(<task_id>) <task title>`, or `(<task_id>)` when the task has no title.
+
+Pi-style native naming:
+
+```yaml
+agents:
+  defaults:
+    implementer: pi
+  profiles:
+    pi:
+      command: pi
+      args:
+        - --name
+        - "{{session_name}}"
+        - "{{prompt}}"
+```
+
+Codex-style prompt prefix:
+
+```yaml
+agents:
+  defaults:
+    implementer: codex
+  profiles:
+    codex:
+      command: codex
+      args:
+        - "{{session_name}} - {{prompt}}"
+```
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

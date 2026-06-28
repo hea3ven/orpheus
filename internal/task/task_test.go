@@ -114,6 +114,40 @@ func TestTaskCloneCopiesMutableFields(t *testing.T) {
 	}
 }
 
+func TestTaskSessionName(t *testing.T) {
+	tests := []struct {
+		name string
+		task task.Task
+		want string
+	}{
+		{
+			name: "with title",
+			task: task.Task{ID: "op-1", Title: "Implement attached run"},
+			want: "(op-1) Implement attached run",
+		},
+		{
+			name: "without title",
+			task: task.Task{ID: "op-2"},
+			want: "(op-2)",
+		},
+		{
+			name: "blank title",
+			task: task.Task{ID: "op-3", Title: "  "},
+			want: "(op-3)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.task.SessionName()
+
+			if got != tt.want {
+				t.Fatalf("SessionName() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestTaskOrpheusMetadataProjectsKnownKeys(t *testing.T) {
 	taskItem := task.Task{Metadata: task.Metadata{
 		task.MetadataBranch:   "task/op-1-model",

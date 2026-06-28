@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -177,6 +178,14 @@ func (t Task) Clone() Task {
 	t.ClosedAt = cloneTime(t.ClosedAt)
 	t.Relations = t.Relations.Clone()
 	return t
+}
+
+// SessionName returns the generic agent session name for a task run.
+func (t Task) SessionName() string {
+	if strings.TrimSpace(t.Title) == "" {
+		return fmt.Sprintf("(%s)", t.ID)
+	}
+	return fmt.Sprintf("(%s) %s", t.ID, t.Title)
 }
 
 // ProjectOrpheusMetadata projects Orpheus-owned metadata keys into named fields.
