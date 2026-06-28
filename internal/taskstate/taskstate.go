@@ -107,6 +107,7 @@ type Service interface {
 	FailRunStart(repoID, taskID string, attempt int, cause error) (RunAttempt, error)
 	StartReview(repoID, taskID string) (ReviewAttempt, error)
 	RecordReviewFinding(repoID, taskID string, attempt int, finding ReviewFinding) (ReviewAttempt, error)
+	TargetReviewFindings(repoID, taskID string, reviewAttempt int, findingIndexes []int, runAttempt int) (ReviewAttempt, error)
 	FinishReview(repoID, taskID string, attempt int, status ReviewStatus) (ReviewAttempt, error)
 	RecordFinalizationCommit(repoID, taskID string, commit string) (Finalization, error)
 	RecordFinalizationPush(repoID, taskID string, opts FinalizationPushOptions) (Finalization, error)
@@ -152,6 +153,14 @@ type RunAttempt struct {
 	StartedAt  time.Time   `yaml:"started_at"`
 	FinishedAt *time.Time  `yaml:"finished_at,omitempty"`
 	Completion *Completion `yaml:"completion,omitempty"`
+
+	ReviewFollowUp *ReviewFollowUp `yaml:"review_follow_up,omitempty"`
+}
+
+// ReviewFollowUp records which review attempt caused a follow-up run.
+type ReviewFollowUp struct {
+	ReviewAttempt  int   `yaml:"review_attempt"`
+	FindingIndexes []int `yaml:"finding_indexes,omitempty"`
 }
 
 // Completion records agent-authored completion facts for a run attempt.
@@ -187,6 +196,8 @@ type ReviewFinding struct {
 	Waiver          string `yaml:"waiver,omitempty"`
 	TaskProposal    string `yaml:"task_proposal,omitempty"`
 	CreatedTaskID   string `yaml:"created_task_id,omitempty"`
+
+	TargetedByRunAttempt int `yaml:"targeted_by_run_attempt,omitempty"`
 }
 
 // Finalization records factual data from human-side main/solo finalization.
@@ -270,6 +281,8 @@ type StartRunOptions struct {
 	Args     []string
 	Branch   string
 	Worktree string
+
+	ReviewFollowUp *ReviewFollowUp
 }
 
 // CompleteRunOptions describes the agent-authored completion payload.
@@ -411,14 +424,15 @@ func (s Store) StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt
 
 	now := s.nowUTC()
 	attempt := RunAttempt{
-		Attempt:   nextAttemptNumber(state),
-		Status:    RunStatusRunning,
-		Agent:     strings.TrimSpace(opts.Agent),
-		Command:   strings.TrimSpace(opts.Command),
-		Args:      cloneStrings(opts.Args),
-		Branch:    strings.TrimSpace(opts.Branch),
-		Worktree:  strings.TrimSpace(opts.Worktree),
-		StartedAt: now,
+		Attempt:        nextAttemptNumber(state),
+		Status:         RunStatusRunning,
+		Agent:          strings.TrimSpace(opts.Agent),
+		Command:        strings.TrimSpace(opts.Command),
+		Args:           cloneStrings(opts.Args),
+		Branch:         strings.TrimSpace(opts.Branch),
+		Worktree:       strings.TrimSpace(opts.Worktree),
+		StartedAt:      now,
+		ReviewFollowUp: normalizeReviewFollowUp(opts.ReviewFollowUp),
 	}
 	state.Runs = append(state.Runs, attempt)
 	state.Events = append(state.Events, Event{
@@ -435,6 +449,55 @@ func (s Store) StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt
 		return RunAttempt{}, err
 	}
 	return attempt, nil
+}
+
+// TargetReviewFindings marks findings from a review as addressed by a run attempt.
+func (s Store) TargetReviewFindings(
+	repoID,
+	taskID string,
+	reviewAttempt int,
+	findingIndexes []int,
+	runAttempt int,
+) (ReviewAttempt, error) {
+	if reviewAttempt <= 0 {
+		return ReviewAttempt{}, fmt.Errorf("target review findings for task %s/%s: review attempt must be positive", repoID, taskID)
+	}
+	if runAttempt <= 0 {
+		return ReviewAttempt{}, fmt.Errorf("target review findings for task %s/%s: run attempt must be positive", repoID, taskID)
+	}
+	if len(findingIndexes) == 0 {
+		return ReviewAttempt{}, fmt.Errorf("target review findings for task %s/%s: at least one finding index is required", repoID, taskID)
+	}
+
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+	reviewIndex := reviewAttemptIndex(state, reviewAttempt)
+	if reviewIndex < 0 {
+		return ReviewAttempt{}, fmt.Errorf("target review findings for task %s/%s: review attempt %d was not found", repoID, taskID, reviewAttempt)
+	}
+	for _, findingIndex := range findingIndexes {
+		if findingIndex < 0 || findingIndex >= len(state.Reviews[reviewIndex].Findings) {
+			return ReviewAttempt{}, fmt.Errorf("target review findings for task %s/%s: finding index %d is out of range", repoID, taskID, findingIndex)
+		}
+		finding := state.Reviews[reviewIndex].Findings[findingIndex]
+		if finding.TargetedByRunAttempt != 0 && finding.TargetedByRunAttempt != runAttempt {
+			return ReviewAttempt{}, fmt.Errorf(
+				"target review findings for task %s/%s: finding index %d is already targeted by run attempt %d",
+				repoID,
+				taskID,
+				findingIndex,
+				finding.TargetedByRunAttempt,
+			)
+		}
+		state.Reviews[reviewIndex].Findings[findingIndex].TargetedByRunAttempt = runAttempt
+	}
+
+	if err := s.save(state); err != nil {
+		return ReviewAttempt{}, err
+	}
+	return state.Reviews[reviewIndex], nil
 }
 
 // FinishRun records a succeeded or failed attached process exit and appends run_finished.
@@ -1191,6 +1254,11 @@ func validateRun(run RunAttempt) error {
 			return fmt.Errorf("run attempt %d has invalid completion: %w", run.Attempt, err)
 		}
 	}
+	if run.ReviewFollowUp != nil {
+		if err := validateReviewFollowUp(*run.ReviewFollowUp); err != nil {
+			return fmt.Errorf("run attempt %d has invalid review follow-up: %w", run.Attempt, err)
+		}
+	}
 	return nil
 }
 
@@ -1264,7 +1332,36 @@ func normalizeReviewFinding(finding ReviewFinding) (ReviewFinding, error) {
 	if finding.Type == FindingTypeSeparateTask && finding.TaskProposal == "" {
 		return ReviewFinding{}, errors.New("task_proposal is required for separate-task findings")
 	}
+	if finding.TargetedByRunAttempt < 0 {
+		return ReviewFinding{}, errors.New("targeted_by_run_attempt cannot be negative")
+	}
 	return finding, nil
+}
+
+func normalizeReviewFollowUp(followUp *ReviewFollowUp) *ReviewFollowUp {
+	if followUp == nil {
+		return nil
+	}
+	clone := ReviewFollowUp{
+		ReviewAttempt:  followUp.ReviewAttempt,
+		FindingIndexes: cloneInts(followUp.FindingIndexes),
+	}
+	return &clone
+}
+
+func validateReviewFollowUp(followUp ReviewFollowUp) error {
+	if followUp.ReviewAttempt <= 0 {
+		return errors.New("review_attempt must be positive")
+	}
+	if len(followUp.FindingIndexes) == 0 {
+		return errors.New("finding_indexes is required")
+	}
+	for _, index := range followUp.FindingIndexes {
+		if index < 0 {
+			return errors.New("finding index cannot be negative")
+		}
+	}
+	return nil
 }
 
 func validateFinalization(finalization *Finalization) error {
@@ -1408,6 +1505,15 @@ func cloneStrings(values []string) []string {
 		return nil
 	}
 	clone := make([]string, len(values))
+	copy(clone, values)
+	return clone
+}
+
+func cloneInts(values []int) []int {
+	if values == nil {
+		return nil
+	}
+	clone := make([]int, len(values))
 	copy(clone, values)
 	return clone
 }

@@ -31,6 +31,7 @@ type TaskWorktreeOptions struct {
 	DefaultBranch string
 	TaskID        string
 	Paths         state.Paths
+	AllowDirty    bool
 }
 
 // RepoRootOptions describes a repo-root/default-branch task run target.
@@ -39,6 +40,7 @@ type RepoRootOptions struct {
 	RepoName      string
 	RepoPath      string
 	DefaultBranch string
+	AllowDirty    bool
 }
 
 // TaskWorktreeSetupResult is the backend-neutral result of preparing a task execution target.
@@ -177,9 +179,15 @@ func SetupRepoRoot(ctx context.Context, opts RepoRootOptions) (TaskWorktreeSetup
 		Lifecycle:    TaskWorktreeLifecycleReused,
 	}
 
-	repoRoot, err := validateRepoRootRun(ctx, plan)
+	repoRoot, err := validateRepoRootRun(ctx, plan, opts.AllowDirty)
 	if err != nil {
 		return TaskWorktreeSetupResult{}, err
+	}
+	if opts.AllowDirty {
+		if err := requireCurrentBranch(ctx, repoRoot, plan.DefaultBranch, "default branch"); err != nil {
+			return TaskWorktreeSetupResult{}, fmt.Errorf("prepare repo-root task run: %w", err)
+		}
+		return result, nil
 	}
 	if _, err := prepareDefaultBranchRef(ctx, repoRoot, plan.DefaultBranch); err != nil {
 		return TaskWorktreeSetupResult{}, fmt.Errorf("prepare repo-root task run: %w", err)
@@ -214,9 +222,15 @@ func SetupRepoRootTaskBranch(ctx context.Context, opts TaskWorktreeOptions) (Tas
 		Lifecycle:    TaskWorktreeLifecycleReused,
 	}
 
-	repoRoot, err := validateRepoRootTaskBranchRun(ctx, plan)
+	repoRoot, err := validateRepoRootTaskBranchRun(ctx, plan, opts.AllowDirty)
 	if err != nil {
 		return TaskWorktreeSetupResult{}, err
+	}
+	if opts.AllowDirty {
+		if err := requireCurrentBranch(ctx, repoRoot, plan.Branch, "task branch"); err != nil {
+			return TaskWorktreeSetupResult{}, fmt.Errorf("prepare repo-root task branch run %s: %w", plan.TaskID, err)
+		}
+		return result, nil
 	}
 	remoteRef, err := prepareDefaultBranchRef(ctx, repoRoot, plan.DefaultBranch)
 	if err != nil {
@@ -328,7 +342,7 @@ func prepareDefaultBranchRef(ctx context.Context, repoRoot string, defaultBranch
 	return remoteRef, nil
 }
 
-func validateRepoRootRun(ctx context.Context, plan repoRootPlan) (string, error) {
+func validateRepoRootRun(ctx context.Context, plan repoRootPlan, allowDirty bool) (string, error) {
 	repoRoot, err := worktreeRoot(ctx, plan.RepoPath)
 	if err != nil {
 		return "", fmt.Errorf(
@@ -360,18 +374,20 @@ func validateRepoRootRun(ctx context.Context, plan repoRootPlan) (string, error)
 			err,
 		)
 	}
-	if err := requireCleanRepoRoot(ctx, repoRoot); err != nil {
-		return "", fmt.Errorf(
-			"prepare repo-root task run for repo %s (%s): %w",
-			plan.RepoID,
-			plan.RepoName,
-			err,
-		)
+	if !allowDirty {
+		if err := requireCleanRepoRoot(ctx, repoRoot); err != nil {
+			return "", fmt.Errorf(
+				"prepare repo-root task run for repo %s (%s): %w",
+				plan.RepoID,
+				plan.RepoName,
+				err,
+			)
+		}
 	}
 	return repoRoot, nil
 }
 
-func validateRepoRootTaskBranchRun(ctx context.Context, plan taskWorktreePlan) (string, error) {
+func validateRepoRootTaskBranchRun(ctx context.Context, plan taskWorktreePlan, allowDirty bool) (string, error) {
 	repoRoot, err := worktreeRoot(ctx, plan.RepoPath)
 	if err != nil {
 		return "", fmt.Errorf(
@@ -409,16 +425,29 @@ func validateRepoRootTaskBranchRun(ctx context.Context, plan taskWorktreePlan) (
 			err,
 		)
 	}
-	if err := requireCleanRepoRootFor(ctx, repoRoot, "with --repo-root"); err != nil {
-		return "", fmt.Errorf(
-			"prepare repo-root task branch run %s for repo %s (%s): %w",
-			plan.TaskID,
-			plan.RepoID,
-			plan.RepoName,
-			err,
-		)
+	if !allowDirty {
+		if err := requireCleanRepoRootFor(ctx, repoRoot, "with --repo-root"); err != nil {
+			return "", fmt.Errorf(
+				"prepare repo-root task branch run %s for repo %s (%s): %w",
+				plan.TaskID,
+				plan.RepoID,
+				plan.RepoName,
+				err,
+			)
+		}
 	}
 	return repoRoot, nil
+}
+
+func requireCurrentBranch(ctx context.Context, repoRoot string, expected string, label string) error {
+	current, err := currentBranchAt(ctx, repoRoot)
+	if err != nil {
+		return fmt.Errorf("verify current %s checkout: %w", label, err)
+	}
+	if current != expected {
+		return fmt.Errorf("repo root is on branch %q; expected %s %q", current, label, expected)
+	}
+	return nil
 }
 
 func ensureRepoRootOnDefaultBranch(ctx context.Context, repoRoot string, defaultBranch string) error {

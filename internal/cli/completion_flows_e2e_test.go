@@ -618,11 +618,13 @@ func writeCompletionFlowAgentConfig(t *testing.T, paths state.Paths, name string
 	t.Helper()
 
 	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
-		"default_agent": name,
 		"agents": map[string]any{
-			name: map[string]any{
-				"command": command,
-				"args":    []string{"--prompt", "{{prompt}}"},
+			"defaults": map[string]any{"implementer": name},
+			"profiles": map[string]any{
+				name: map[string]any{
+					"command": command,
+					"args":    []string{"--prompt", "{{prompt}}"},
+				},
 			},
 		},
 	}))

@@ -266,6 +266,11 @@ func classifyExpectedReviewReady(
 		return policyResult{}, false
 	}
 	if _, ok := workflow.ClassifyExpectedPRReviewReady(*expectedTargets, taskItem, latestRun); ok {
+		if localState != nil {
+			if result, ok := classifyLatestReview(localState.LatestReview, localState.LatestFinalizationFailure); ok {
+				return result, true
+			}
+		}
 		return policyResult{state: readinessReview, detail: "local review; run task review"}, true
 	}
 	if _, ok := workflow.ClassifyExpectedLocalReviewReady(*expectedTargets, taskItem, latestRun); !ok {
@@ -297,9 +302,16 @@ func classifyLatestReview(
 	case taskstate.ReviewStatusRunning:
 		return policyResult{state: readinessReview, detail: "review running"}, true
 	case taskstate.ReviewStatusBlocked:
+		count := untargetedBlockingFindingCount(*latestReview)
+		if count == 0 {
+			return policyResult{
+				state:  readinessReview,
+				detail: "review blockers targeted; run task review",
+			}, true
+		}
 		return policyResult{
 			state:  readinessIdle,
-			detail: fmt.Sprintf("review blocked by %d finding(s); run task run", blockingFindingCount(*latestReview)),
+			detail: fmt.Sprintf("review blocked by %d finding(s); run task run", count),
 		}, true
 	case taskstate.ReviewStatusAborted:
 		return policyResult{state: readinessReview, detail: "review aborted; run task review"}, true
@@ -321,10 +333,13 @@ func classifyLatestReview(
 	}
 }
 
-func blockingFindingCount(review taskstate.ReviewAttempt) int {
+func untargetedBlockingFindingCount(review taskstate.ReviewAttempt) int {
 	count := 0
 	for _, finding := range review.Findings {
-		if finding.Type == taskstate.FindingTypeBlocking && strings.TrimSpace(finding.Waiver) == "" {
+		if finding.Type == taskstate.FindingTypeBlocking &&
+			strings.TrimSpace(finding.Waiver) == "" &&
+			strings.TrimSpace(finding.CreatedTaskID) == "" &&
+			finding.TargetedByRunAttempt == 0 {
 			count++
 		}
 	}

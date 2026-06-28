@@ -94,6 +94,46 @@ func TestRenderActiveContextIncludesExternalReference(t *testing.T) {
 	assert.Contains(t, output, "- External reference: TREX-1234")
 }
 
+func TestRenderActiveContextIncludesReviewFollowUpContract(t *testing.T) {
+	output := agent.RenderActiveContext(agent.ActiveContext{
+		Task: agent.ContextTask{ID: "op-1", Title: "Follow up"},
+		Run:  agent.ContextRun{Attempt: 2},
+		Target: agent.ContextTarget{
+			Kind:             agent.ExecutionTargetMain,
+			Branch:           "main",
+			Path:             "/repo/alpha",
+			CurrentDirectory: "/repo/alpha",
+		},
+		FollowUp: &agent.ContextFollowUp{
+			ReviewAttempt: 1,
+			Findings: []agent.ContextReviewFinding{
+				{
+					Index:           0,
+					Title:           "Fix panic",
+					Description:     "The command panics on empty input.",
+					SuggestedAction: "Add input validation.",
+				},
+			},
+		},
+	})
+
+	for _, want := range []string{
+		"Review follow-up:",
+		"- Review attempt: 1",
+		"This is a continuation of completed work.",
+		"Do not reimplement the original task.",
+		"Address only the listed review findings.",
+		"Preserve the current task branch and worktree target.",
+		"Blocking findings:",
+		"- Finding 1 title: Fix panic",
+		"Description: The command panics on empty input.",
+		"Suggested action: Add input validation.",
+		"This run must address only the listed review findings",
+	} {
+		assert.Contains(t, output, want)
+	}
+}
+
 func TestRenderActiveContextIncludesMainContract(t *testing.T) {
 	is := assert.New(t)
 

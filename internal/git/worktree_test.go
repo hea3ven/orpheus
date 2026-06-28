@@ -254,6 +254,32 @@ func TestSetupRepoRootTaskBranchRefusesDirtyRepoBeforeSwitching(t *testing.T) {
 	assertGitBranch(t, repoPath, "main")
 }
 
+func TestSetupRepoRootTaskBranchAllowsDirtyWhenAlreadyOnTarget(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	runGit(t, repoPath, "checkout", "-b", "orpheus/op-dirty")
+	if err := os.WriteFile(filepath.Join(repoPath, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+
+	got, err := orpheusgit.SetupRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		TaskID:        "op-dirty",
+		Paths:         paths,
+		AllowDirty:    true,
+	})
+	if err != nil {
+		t.Fatalf("setup dirty repo-root task branch: %v", err)
+	}
+	if got.Branch != "orpheus/op-dirty" || got.WorktreePath != repoPath {
+		t.Fatalf("setup result = %#v, want dirty task branch target", got)
+	}
+	assertGitBranch(t, repoPath, "orpheus/op-dirty")
+}
+
 func TestSetupRepoRootRefusesDirtyRepoBeforeSwitching(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	runGit(t, repoPath, "checkout", "-b", "feature/local")
@@ -274,6 +300,28 @@ func TestSetupRepoRootRefusesDirtyRepoBeforeSwitching(t *testing.T) {
 		t.Fatalf("error = %v, want uncommitted changes", err)
 	}
 	assertGitBranch(t, repoPath, "feature/local")
+}
+
+func TestSetupRepoRootAllowsDirtyWhenAlreadyOnDefaultBranch(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	if err := os.WriteFile(filepath.Join(repoPath, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+
+	got, err := orpheusgit.SetupRepoRoot(context.Background(), orpheusgit.RepoRootOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		AllowDirty:    true,
+	})
+	if err != nil {
+		t.Fatalf("setup dirty repo root: %v", err)
+	}
+	if got.Branch != "main" || got.WorktreePath != repoPath {
+		t.Fatalf("setup result = %#v, want dirty main target", got)
+	}
+	assertGitBranch(t, repoPath, "main")
 }
 
 func TestSetupRepoRootRefusesDivergentDefaultBranch(t *testing.T) {

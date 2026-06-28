@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/state"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -20,8 +21,40 @@ const (
 
 // Config is Orpheus' global agent profile configuration.
 type Config struct {
-	DefaultAgent string             `yaml:"default_agent"`
-	Agents       map[string]Profile `yaml:"agents"`
+	Defaults AgentDefaults      `yaml:"-"`
+	Agents   map[string]Profile `yaml:"-"`
+}
+
+// AgentDefaults names purpose-specific default agent profiles.
+type AgentDefaults struct {
+	Implementer string `yaml:"implementer"`
+	Reviewer    string `yaml:"reviewer"`
+}
+
+// UnmarshalYAML decodes the agents.defaults/profiles shape.
+func (c *Config) UnmarshalYAML(value *yaml.Node) error {
+	var raw struct {
+		Agents yaml.Node `yaml:"agents"`
+	}
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+
+	*c = Config{}
+	if raw.Agents.Kind == 0 {
+		return nil
+	}
+
+	var nested struct {
+		Defaults AgentDefaults      `yaml:"defaults"`
+		Profiles map[string]Profile `yaml:"profiles"`
+	}
+	if err := raw.Agents.Decode(&nested); err != nil {
+		return err
+	}
+	c.Defaults = nested.Defaults
+	c.Agents = nested.Profiles
+	return nil
 }
 
 // Profile describes one directly executed agent command.
@@ -43,7 +76,7 @@ func LoadConfig(paths state.Paths) (Config, error) {
 	if err := paths.ReadConfigYAML(ConfigFile, &config); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return Config{}, fmt.Errorf(
-				"load agent profiles from %s: file does not exist; create it with default_agent and agents entries: %w",
+				"load agent profiles from %s: file does not exist; create it with agents.defaults and agents.profiles entries: %w",
 				ConfigFile,
 				err,
 			)
@@ -58,9 +91,15 @@ func LoadConfig(paths state.Paths) (Config, error) {
 	return normalized, nil
 }
 
-// ResolveCommand resolves selectedAgent, or default_agent when selectedAgent is blank,
-// and applies bootstrap prompt interpolation.
+// ResolveCommand resolves selectedAgent, or agents.defaults.implementer when
+// selectedAgent is blank, and applies bootstrap prompt interpolation.
 func (c Config) ResolveCommand(selectedAgent string, prompt string) (CommandSnapshot, error) {
+	return c.ResolveImplementerCommand(selectedAgent, prompt)
+}
+
+// ResolveImplementerCommand resolves selectedAgent, or agents.defaults.implementer
+// when selectedAgent is blank.
+func (c Config) ResolveImplementerCommand(selectedAgent string, prompt string) (CommandSnapshot, error) {
 	normalized, err := c.normalized()
 	if err != nil {
 		return CommandSnapshot{}, err
@@ -68,15 +107,18 @@ func (c Config) ResolveCommand(selectedAgent string, prompt string) (CommandSnap
 
 	agentName := strings.TrimSpace(selectedAgent)
 	if agentName == "" {
-		agentName = normalized.DefaultAgent
+		agentName = strings.TrimSpace(normalized.Defaults.Implementer)
 	}
+	return normalized.resolveAgentProfile(agentName, prompt)
+}
 
-	profile, ok := normalized.Agents[agentName]
+func (c Config) resolveAgentProfile(agentName string, prompt string) (CommandSnapshot, error) {
+	profile, ok := c.Agents[agentName]
 	if !ok {
 		return CommandSnapshot{}, fmt.Errorf(
 			"agent profile %q is not configured; configured agents: %s",
 			agentName,
-			strings.Join(normalized.agentNames(), ", "),
+			strings.Join(c.agentNames(), ", "),
 		)
 	}
 
@@ -93,9 +135,12 @@ func (c Config) ResolveCommand(selectedAgent string, prompt string) (CommandSnap
 }
 
 func (c Config) normalized() (Config, error) {
-	defaultAgent := strings.TrimSpace(c.DefaultAgent)
-	if defaultAgent == "" {
-		return Config{}, errors.New("default_agent is required")
+	defaults := AgentDefaults{
+		Implementer: strings.TrimSpace(c.Defaults.Implementer),
+		Reviewer:    strings.TrimSpace(c.Defaults.Reviewer),
+	}
+	if defaults.Implementer == "" {
+		return Config{}, errors.New("agents.defaults.implementer is required")
 	}
 
 	if len(c.Agents) == 0 {
@@ -119,29 +164,38 @@ func (c Config) normalized() (Config, error) {
 		agents[name] = profile
 	}
 
-	if _, ok := agents[defaultAgent]; !ok {
+	if _, ok := agents[defaults.Implementer]; !ok {
 		return Config{}, fmt.Errorf(
-			"default_agent %q does not match a configured agent; configured agents: %s",
-			defaultAgent,
+			"agents.defaults.implementer %q does not match a configured agent; configured agents: %s",
+			defaults.Implementer,
 			strings.Join(agentNames(agents), ", "),
 		)
 	}
+	if defaults.Reviewer != "" {
+		if _, ok := agents[defaults.Reviewer]; !ok {
+			return Config{}, fmt.Errorf(
+				"agents.defaults.reviewer %q does not match a configured agent; configured agents: %s",
+				defaults.Reviewer,
+				strings.Join(agentNames(agents), ", "),
+			)
+		}
+	}
 
-	return Config{DefaultAgent: defaultAgent, Agents: agents}, nil
+	return Config{Defaults: defaults, Agents: agents}, nil
 }
 
 func normalizeProfile(name string, profile Profile) (Profile, error) {
 	command := strings.TrimSpace(profile.Command)
 	if command == "" {
-		return Profile{}, fmt.Errorf("agents.%s.command is required", name)
+		return Profile{}, fmt.Errorf("agents.profiles.%s.command is required", name)
 	}
-	if err := validateInterpolationToken(fmt.Sprintf("agents.%s.command", name), command); err != nil {
+	if err := validateInterpolationToken(fmt.Sprintf("agents.profiles.%s.command", name), command); err != nil {
 		return Profile{}, err
 	}
 
 	args := make([]string, len(profile.Args))
 	for i, arg := range profile.Args {
-		if err := validateInterpolationToken(fmt.Sprintf("agents.%s.args[%d]", name, i), arg); err != nil {
+		if err := validateInterpolationToken(fmt.Sprintf("agents.profiles.%s.args[%d]", name, i), arg); err != nil {
 			return Profile{}, err
 		}
 		args[i] = arg

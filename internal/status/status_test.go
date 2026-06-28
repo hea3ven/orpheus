@@ -397,6 +397,14 @@ func TestProjectWithLocalTaskStatesClassifiesLatestReviewAttempts(t *testing.T) 
 			wantDetail: "review blocked by 1 finding(s); run task run",
 		},
 		{
+			name: "blocked review targeted by follow-up returns to review",
+			review: reviewAttempt(1, taskstate.ReviewStatusBlocked, []taskstate.ReviewFinding{
+				{Type: taskstate.FindingTypeBlocking, Title: "Bug", Description: "Fix it", TargetedByRunAttempt: 2},
+			}),
+			wantGroup:  status.GroupInReview,
+			wantDetail: "review blockers targeted; run task review",
+		},
+		{
 			name:       "aborted review is reviewing retry",
 			review:     reviewAttempt(1, taskstate.ReviewStatusAborted, nil),
 			wantGroup:  status.GroupInReview,

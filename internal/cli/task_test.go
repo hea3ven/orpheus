@@ -794,7 +794,7 @@ func taskDirMetadataErrorCases() []taskDirMetadataErrorCase {
 }
 
 //nolint:funlen // Workflow test is clearer when setup, command, and state assertions stay together.
-func TestTaskRunExecutesDefaultAgentAttachedFromDeterministicWorktree(t *testing.T) {
+func TestTaskRunExecutesImplementerDefaultAttachedFromDeterministicWorktree(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -827,15 +827,7 @@ func TestTaskRunExecutesDefaultAgentAttachedFromDeterministicWorktree(t *testing
 		]`},
 	})
 	agentLogPath := withFakeAgent(t, "fake-agent", 0)
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
-		"default_agent": "recorder",
-		"agents": map[string]any{
-			"recorder": map[string]any{
-				"command": "fake-agent",
-				"args":    []string{"--prompt", "{{prompt}}", "--literal", "unchanged"},
-			},
-		},
-	}))
+	writeTaskRunAgentConfig(t, paths, "recorder", "fake-agent", []string{"--prompt", "{{prompt}}", "--literal", "unchanged"})
 	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-1"))
 	must.NoError(err)
 
@@ -1039,10 +1031,7 @@ func TestTaskRunMainExecutesAgentFromRegisteredRepoRoot(t *testing.T) {
 		]`},
 	})
 	agentLogPath := withFakeAgent(t, "main-agent", 0)
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
-		"default_agent": "main",
-		"agents":        map[string]any{"main": map[string]any{"command": "main-agent"}},
-	}))
+	writeTaskRunAgentConfig(t, paths, "main", "main-agent", nil)
 	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-main"))
 	must.NoError(err)
 
@@ -1123,10 +1112,7 @@ func TestTaskRunRepoRootExecutesAgentFromRegisteredRepoRootOnTaskBranch(t *testi
 		]`},
 	})
 	agentLogPath := withFakeAgent(t, "repo-root-agent", 0)
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
-		"default_agent": "repo-root",
-		"agents":        map[string]any{"repo-root": map[string]any{"command": "repo-root-agent"}},
-	}))
+	writeTaskRunAgentConfig(t, paths, "repo-root", "repo-root-agent", nil)
 	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-root"))
 	must.NoError(err)
 
@@ -1248,10 +1234,7 @@ func TestTaskRunRepoRootFailsDirtyRepoRootBeforeLaunch(t *testing.T) {
 		repoPath: {stdout: `[{"id":"op-root-dirty","title":"Dirty root","status":"open","priority":1,"issue_type":"task"}]`},
 	})
 	agentLogPath := withFakeAgent(t, "dirty-root-agent", 0)
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
-		"default_agent": "dirty-root",
-		"agents":        map[string]any{"dirty-root": map[string]any{"command": "dirty-root-agent"}},
-	}))
+	writeTaskRunAgentConfig(t, paths, "dirty-root", "dirty-root-agent", nil)
 
 	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "--repo-root", "op-root-dirty"})
 
@@ -1298,10 +1281,7 @@ func TestTaskRunMainAllowsOwnedInProgressRepoRootTask(t *testing.T) {
 		]`},
 	})
 	withFakeAgent(t, "main-retry-agent", 0)
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
-		"default_agent": "main-retry",
-		"agents":        map[string]any{"main-retry": map[string]any{"command": "main-retry-agent"}},
-	}))
+	writeTaskRunAgentConfig(t, paths, "main-retry", "main-retry-agent", nil)
 
 	stdout, stderr := executeCommand(t, []string{"task", "run", "--main", "op-main"})
 
@@ -1352,10 +1332,7 @@ func TestTaskRunMainBlocksOtherRepoRootOwnerButWorktreeRunStillWorks(t *testing.
 		]`},
 	})
 	agentLogPath := withFakeAgent(t, "next-agent", 0)
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
-		"default_agent": "next",
-		"agents":        map[string]any{"next": map[string]any{"command": "next-agent"}},
-	}))
+	writeTaskRunAgentConfig(t, paths, "next", "next-agent", nil)
 
 	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "--main", "op-next"})
 
@@ -1397,10 +1374,7 @@ func TestTaskRunMainFailsDirtyRepoRootBeforeLaunch(t *testing.T) {
 		repoPath: {stdout: `[{"id":"op-dirty","title":"Dirty root","status":"open","priority":1,"issue_type":"task"}]`},
 	})
 	agentLogPath := withFakeAgent(t, "dirty-agent", 0)
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
-		"default_agent": "dirty",
-		"agents":        map[string]any{"dirty": map[string]any{"command": "dirty-agent"}},
-	}))
+	writeTaskRunAgentConfig(t, paths, "dirty", "dirty-agent", nil)
 
 	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "--main", "op-dirty"})
 
@@ -1414,6 +1388,73 @@ func TestTaskRunMainFailsDirtyRepoRootBeforeLaunch(t *testing.T) {
 	must.NoError(err)
 	_, stateErr := os.Stat(statePath)
 	is.ErrorIs(stateErr, os.ErrNotExist)
+}
+
+//nolint:funlen // The dirty follow-up dispatch path is clearer as one linear CLI workflow.
+func TestTaskRunReviewFollowUpAllowsDirtyMainTarget(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	registryStore := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	must.NoError(registryStore.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	runStore := taskstate.NewStore(paths)
+	review, err := runStore.StartReview("alpha", "op-followup")
+	must.NoError(err)
+	_, err = runStore.RecordReviewFinding("alpha", "op-followup", review.Attempt, taskstate.ReviewFinding{
+		Type:            taskstate.FindingTypeBlocking,
+		Title:           "Fix bug",
+		Description:     "The reviewed change still has a blocker.",
+		SuggestedAction: "Patch the dirty candidate changes.",
+	})
+	must.NoError(err)
+	_, err = runStore.FinishReview("alpha", "op-followup", review.Attempt, taskstate.ReviewStatusBlocked)
+	must.NoError(err)
+
+	taskJSON := `[
+		{
+			"id":"op-followup",
+			"title":"Follow up dirty main",
+			"status":"in_progress",
+			"priority":1,
+			"issue_type":"task",
+			"metadata":{"orpheus.branch":"main","orpheus.worktree":"` + repoPath + `"}
+		}
+	]`
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: taskJSON},
+	})
+	withFakeAgent(t, "followup-agent", 0)
+	writeTaskRunAgentConfig(t, paths, "followup", "followup-agent", nil)
+
+	stdout, stderr := executeCommand(t, []string{"task", "run", "op-followup"})
+
+	is.Contains(stdout, "fake agent stdout")
+	is.Contains(stderr, "fake agent stderr")
+	is.Contains(runGit(t, repoPath, "status", "--short"), "reviewed.txt")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-followup.yaml"), &state))
+	latestReview, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	must.Len(latestReview.Findings, 1)
+	is.Equal(1, latestReview.Findings[0].TargetedByRunAttempt)
+	must.Len(state.Runs, 1)
+	is.Equal("main", state.Runs[0].Branch)
+	is.Equal(repoPath, state.Runs[0].Worktree)
+	must.NotNil(state.Runs[0].ReviewFollowUp)
+	is.Equal([]int{0}, state.Runs[0].ReviewFollowUp.FindingIndexes)
 }
 
 func TestTaskRunWorktreeModeDoesNotCareAboutDirtyRepoRoot(t *testing.T) {
@@ -1438,10 +1479,7 @@ func TestTaskRunWorktreeModeDoesNotCareAboutDirtyRepoRoot(t *testing.T) {
 		repoPath: {stdout: `[{"id":"op-worktree","title":"Dirty root does not block worktree","status":"open","priority":1,"issue_type":"task"}]`},
 	})
 	withFakeAgent(t, "worktree-agent", 0)
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
-		"default_agent": "worktree",
-		"agents":        map[string]any{"worktree": map[string]any{"command": "worktree-agent"}},
-	}))
+	writeTaskRunAgentConfig(t, paths, "worktree", "worktree-agent", nil)
 
 	stdout, stderr := executeCommand(t, []string{"task", "run", "op-worktree"})
 
@@ -1485,10 +1523,7 @@ func TestTaskRunAllowsOwnedInProgressTaskWithMatchingMetadata(t *testing.T) {
 		]`},
 	})
 	withFakeAgent(t, "owned-agent", 0)
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
-		"default_agent": "owned",
-		"agents":        map[string]any{"owned": map[string]any{"command": "owned-agent"}},
-	}))
+	writeTaskRunAgentConfig(t, paths, "owned", "owned-agent", nil)
 
 	stdout, stderr := executeCommand(t, []string{"task", "run", "op-owned"})
 
@@ -1572,10 +1607,7 @@ esac
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	agentLogPath := withFakeAgent(t, "race-agent", 0)
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
-		"default_agent": "race",
-		"agents":        map[string]any{"race": map[string]any{"command": "race-agent"}},
-	}))
+	writeTaskRunAgentConfig(t, paths, "race", "race-agent", nil)
 
 	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "op-race"})
 
@@ -1671,10 +1703,7 @@ printf 'agent stdout\n'
 `, shellQuote(lockPath), shellQuote(agentLogPath), shellQuote(lockPath))
 	must.NoError(os.WriteFile(agentPath, []byte(script), 0o755))
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
-		"default_agent": "lock-check",
-		"agents":        map[string]any{"lock-check": map[string]any{"command": "lock-agent"}},
-	}))
+	writeTaskRunAgentConfig(t, paths, "lock-check", "lock-agent", nil)
 
 	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "op-finalize"})
 
@@ -1718,10 +1747,12 @@ func TestTaskRunAgentFlagSelectsNamedProfile(t *testing.T) {
 	})
 	agentLogPath := withFakeAgent(t, "selected-agent", 0)
 	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
-		"default_agent": "default",
 		"agents": map[string]any{
-			"default": map[string]any{"command": "missing-agent"},
-			"custom":  map[string]any{"command": "selected-agent", "args": []string{"selected", "{{prompt}}"}},
+			"defaults": map[string]any{"implementer": "default"},
+			"profiles": map[string]any{
+				"default": map[string]any{"command": "missing-agent"},
+				"custom":  map[string]any{"command": "selected-agent", "args": []string{"selected", "{{prompt}}"}},
+			},
 		},
 	}))
 
@@ -1761,10 +1792,7 @@ func TestTaskRunRecordsFailedAttemptWhenAgentExitsNonZero(t *testing.T) {
 		repoPath: {stdout: `[{"id":"op-3","title":"Failing agent","status":"open","priority":1,"issue_type":"task"}]`},
 	})
 	withFakeAgent(t, "failing-agent", 7)
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
-		"default_agent": "failing",
-		"agents":        map[string]any{"failing": map[string]any{"command": "failing-agent"}},
-	}))
+	writeTaskRunAgentConfig(t, paths, "failing", "failing-agent", nil)
 
 	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "op-3"})
 
@@ -1805,10 +1833,7 @@ func TestTaskRunRecordsStartFailureWhenAgentProcessDoesNotStart(t *testing.T) {
 	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
 		repoPath: {stdout: `[{"id":"op-4","title":"Missing executable","status":"open","priority":1,"issue_type":"task"}]`},
 	})
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
-		"default_agent": "missing",
-		"agents":        map[string]any{"missing": map[string]any{"command": "definitely-missing-orpheus-agent"}},
-	}))
+	writeTaskRunAgentConfig(t, paths, "missing", "definitely-missing-orpheus-agent", nil)
 
 	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "op-4"})
 
@@ -1888,10 +1913,7 @@ func TestTaskRunReportsUnknownAgentProfileBeforeLaunching(t *testing.T) {
 		repoPath: {stdout: `[{"id":"op-3","title":"Missing agent","status":"open","priority":1,"issue_type":"task"}]`},
 	})
 	agentLogPath := withFakeAgent(t, "known-agent", 0)
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
-		"default_agent": "known",
-		"agents":        map[string]any{"known": map[string]any{"command": "known-agent"}},
-	}))
+	writeTaskRunAgentConfig(t, paths, "known", "known-agent", nil)
 
 	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "--agent", "missing", "op-3"})
 
@@ -3793,6 +3815,23 @@ exit %d
 	t.Setenv("FAKE_AGENT_LOG", logPath)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return logPath
+}
+
+func writeTaskRunAgentConfig(t *testing.T, paths state.Paths, name string, command string, args []string) {
+	t.Helper()
+
+	profile := map[string]any{"command": command}
+	if args != nil {
+		profile["args"] = args
+	}
+	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"agents": map[string]any{
+			"defaults": map[string]any{"implementer": name},
+			"profiles": map[string]any{
+				name: profile,
+			},
+		},
+	}))
 }
 
 func shellQuote(value string) string {
