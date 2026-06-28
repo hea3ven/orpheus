@@ -14,9 +14,29 @@ func RenderActiveContext(ctx ActiveContext) string {
 	appendContextHeader(&builder, ctx)
 	appendRepositoryContext(&builder, ctx.Repository)
 	appendExecutionTargetContext(&builder, ctx)
+	appendFollowUpContext(&builder, ctx.FollowUp)
 	appendExecutionContract(&builder, ctx)
 
 	return builder.String()
+}
+
+func appendFollowUpContext(builder *strings.Builder, followUp *ContextFollowUp) {
+	if followUp == nil {
+		return
+	}
+
+	builder.WriteString("\nReview follow-up:\n")
+	appendPromptLine(builder, "- Review attempt", fmt.Sprintf("%d", followUp.ReviewAttempt))
+	builder.WriteString("- This is a continuation of completed work.\n")
+	builder.WriteString("- Do not reimplement the original task.\n")
+	builder.WriteString("- Address only the listed review findings.\n")
+	builder.WriteString("- Preserve the current task branch and worktree target.\n")
+	builder.WriteString("\nBlocking findings:\n")
+	for _, finding := range followUp.Findings {
+		appendPromptLine(builder, fmt.Sprintf("- Finding %d title", finding.Index+1), finding.Title)
+		appendPromptBlock(builder, "  Description", finding.Description)
+		appendPromptBlock(builder, "  Suggested action", finding.SuggestedAction)
+	}
 }
 
 func appendContextHeader(builder *strings.Builder, ctx ActiveContext) {
@@ -52,6 +72,10 @@ func appendExecutionTargetContext(builder *strings.Builder, ctx ActiveContext) {
 
 func appendExecutionContract(builder *strings.Builder, ctx ActiveContext) {
 	builder.WriteString("\nExecution contract:\n")
+	if ctx.FollowUp != nil {
+		builder.WriteString("- This run must address only the listed review findings; do not reimplement the original task.\n")
+		builder.WriteString("- Preserve the current task branch/worktree target.\n")
+	}
 	switch ctx.Target.Kind {
 	case ExecutionTargetWorktree:
 		builder.WriteString("- You are running in the deterministic task worktree and task branch.\n")

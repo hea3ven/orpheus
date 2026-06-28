@@ -62,6 +62,7 @@ type ActiveContext struct {
 	Task       ContextTask
 	Run        ContextRun
 	Target     ContextTarget
+	FollowUp   *ContextFollowUp
 }
 
 // ContextRepository describes the registered repository for an active context.
@@ -88,6 +89,20 @@ type ContextRun struct {
 	Attempt    int
 	Agent      string
 	Completion *taskstate.Completion
+}
+
+// ContextFollowUp describes targeted review blockers for a continuation run.
+type ContextFollowUp struct {
+	ReviewAttempt int
+	Findings      []ContextReviewFinding
+}
+
+// ContextReviewFinding describes one review finding targeted by this run.
+type ContextReviewFinding struct {
+	Index           int
+	Title           string
+	Description     string
+	SuggestedAction string
 }
 
 // ContextTarget describes the validated execution target.
@@ -145,10 +160,16 @@ func (r ActiveContextResolver) Resolve(ctx context.Context) (ActiveContext, erro
 		return ActiveContext{}, err
 	}
 
+	followUp, err := r.resolveFollowUpContext(repo.ID, env.TaskID, run)
+	if err != nil {
+		return ActiveContext{}, err
+	}
+
 	activeContext, err := newActiveContext(repo, targets, taskItem, run, candidate, cwd)
 	if err != nil {
 		return ActiveContext{}, err
 	}
+	activeContext.FollowUp = followUp
 	return activeContext, nil
 }
 
@@ -227,6 +248,46 @@ func (r ActiveContextResolver) resolveRunningRun(repoID string, taskID string) (
 		)
 	}
 	return run, nil
+}
+
+func (r ActiveContextResolver) resolveFollowUpContext(
+	repoID string,
+	taskID string,
+	run taskstate.RunAttempt,
+) (*ContextFollowUp, error) {
+	if run.ReviewFollowUp == nil {
+		return nil, nil
+	}
+
+	state, err := r.RunStore.Load(repoID, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("load review follow-up context for task %s/%s: %w", repoID, taskID, err)
+	}
+	latestReview, ok := taskstate.LatestReview(state)
+	if !ok || latestReview.Attempt != run.ReviewFollowUp.ReviewAttempt {
+		return nil, fmt.Errorf("latest review attempt for task %s/%s no longer matches follow-up run attempt %d", repoID, taskID, run.Attempt)
+	}
+
+	findings := make([]ContextReviewFinding, 0, len(run.ReviewFollowUp.FindingIndexes))
+	for _, index := range run.ReviewFollowUp.FindingIndexes {
+		if index < 0 || index >= len(latestReview.Findings) {
+			return nil, fmt.Errorf("review follow-up finding index %d is out of range for task %s/%s", index, repoID, taskID)
+		}
+		finding := latestReview.Findings[index]
+		if finding.TargetedByRunAttempt != run.Attempt {
+			return nil, fmt.Errorf("review finding %d for task %s/%s is not targeted by run attempt %d", index, repoID, taskID, run.Attempt)
+		}
+		findings = append(findings, ContextReviewFinding{
+			Index:           index,
+			Title:           finding.Title,
+			Description:     finding.Description,
+			SuggestedAction: finding.SuggestedAction,
+		})
+	}
+	return &ContextFollowUp{
+		ReviewAttempt: latestReview.Attempt,
+		Findings:      findings,
+	}, nil
 }
 
 func (r ActiveContextResolver) resolveContextTarget(

@@ -137,7 +137,7 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 			return runTaskRun(command, opts, args[0], agentName, mainMode, repoRootMode)
 		},
 	}
-	cmd.Flags().StringVar(&agentName, "agent", "", "agent profile name to use instead of default_agent")
+	cmd.Flags().StringVar(&agentName, "agent", "", "agent profile name to use instead of agents.defaults.implementer")
 	cmd.Flags().BoolVar(&mainMode, "main", false, "run from the registered repo root on the registered default branch")
 	cmd.Flags().BoolVar(&repoRootMode, "repo-root", false, "run from the registered repo root on the task branch")
 	return cmd
@@ -469,6 +469,18 @@ func startTaskRunDispatch(
 		Backend: backend,
 		ResolveCommand: func() (workflow.DispatchCommand, error) {
 			prompt, commandSnapshot, err := resolveTaskRunAgentCommand(paths, agentName)
+			if err != nil {
+				return workflow.DispatchCommand{}, err
+			}
+			dispatch.prompt = prompt
+			return workflow.DispatchCommand{
+				AgentName: commandSnapshot.AgentName,
+				Command:   commandSnapshot.Command,
+				Args:      commandSnapshot.Args,
+			}, nil
+		},
+		ResolveFollowUpCommand: func() (workflow.DispatchCommand, error) {
+			prompt, commandSnapshot, err := resolveTaskRunFollowUpAgentCommand(paths, agentName)
 			if err != nil {
 				return workflow.DispatchCommand{}, err
 			}
@@ -1107,6 +1119,19 @@ func resolveTaskRunAgentCommand(paths state.Paths, agentName string) (string, ag
 		return "", agent.CommandSnapshot{}, err
 	}
 	commandSnapshot, err := agentConfig.ResolveCommand(agentName, prompt)
+	if err != nil {
+		return "", agent.CommandSnapshot{}, fmt.Errorf("resolve agent profile: %w", err)
+	}
+	return prompt, commandSnapshot, nil
+}
+
+func resolveTaskRunFollowUpAgentCommand(paths state.Paths, agentName string) (string, agent.CommandSnapshot, error) {
+	prompt := agent.RenderBootstrapPrompt()
+	agentConfig, err := agent.LoadConfig(paths)
+	if err != nil {
+		return "", agent.CommandSnapshot{}, err
+	}
+	commandSnapshot, err := agentConfig.ResolveImplementerCommand(agentName, prompt)
 	if err != nil {
 		return "", agent.CommandSnapshot{}, fmt.Errorf("resolve agent profile: %w", err)
 	}

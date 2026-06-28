@@ -359,6 +359,8 @@ func shortReviewDetail(detail string) string {
 		return "review running"
 	case strings.HasPrefix(detail, "review blocked by "):
 		return "review blocked"
+	case detail == "review blockers targeted; run task review":
+		return "review follow-up ready"
 	case detail == "review aborted; run task review":
 		return "review aborted"
 	case detail == "review failed operationally; run task review":
@@ -541,7 +543,9 @@ func watchTerminalWidth() (int, bool) {
 	if err != nil {
 		return 0, false
 	}
-	defer terminal.Close()
+	defer func() {
+		_ = terminal.Close()
+	}()
 	return terminalWidth(terminal.Fd())
 }
 

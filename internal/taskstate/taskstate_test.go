@@ -292,6 +292,67 @@ func TestStoreRecordsReviewAttemptsAndFindings(t *testing.T) {
 	)
 }
 
+func TestStoreTargetsReviewFindingsByRunAttempt(t *testing.T) {
+	store := newTestStore(t,
+		time.Date(2026, 6, 26, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 6, 26, 10, 1, 0, 0, time.UTC),
+		time.Date(2026, 6, 26, 10, 2, 0, 0, time.UTC),
+		time.Date(2026, 6, 26, 10, 3, 0, 0, time.UTC),
+	)
+
+	review, err := store.StartReview("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("start review: %v", err)
+	}
+	review, err = store.RecordReviewFinding("alpha", "op-1", review.Attempt, taskstate.ReviewFinding{
+		Type:        taskstate.FindingTypeBlocking,
+		Title:       "Bug",
+		Description: "Fix it.",
+	})
+	if err != nil {
+		t.Fatalf("record blocking finding: %v", err)
+	}
+	if _, err := store.FinishReview("alpha", "op-1", review.Attempt, taskstate.ReviewStatusBlocked); err != nil {
+		t.Fatalf("finish review: %v", err)
+	}
+
+	run, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		Agent:    "recorder",
+		Branch:   "main",
+		Worktree: "/tmp/alpha",
+		ReviewFollowUp: &taskstate.ReviewFollowUp{
+			ReviewAttempt:  review.Attempt,
+			FindingIndexes: []int{0},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start follow-up run: %v", err)
+	}
+	targeted, err := store.TargetReviewFindings("alpha", "op-1", review.Attempt, []int{0}, run.Attempt)
+	if err != nil {
+		t.Fatalf("target review findings: %v", err)
+	}
+	if targeted.Findings[0].TargetedByRunAttempt != run.Attempt {
+		t.Fatalf("targeted finding = %#v, want run attempt %d", targeted.Findings[0], run.Attempt)
+	}
+
+	again, err := store.TargetReviewFindings("alpha", "op-1", review.Attempt, []int{0}, run.Attempt)
+	if err != nil {
+		t.Fatalf("target same review finding: %v", err)
+	}
+	if again.Findings[0].TargetedByRunAttempt != run.Attempt {
+		t.Fatalf("retargeted finding = %#v, want run attempt %d", again.Findings[0], run.Attempt)
+	}
+
+	assertStoreYAMLContains(t, store, "alpha", "op-1",
+		"review_follow_up:",
+		"review_attempt: 1",
+		"finding_indexes:",
+		"- 0",
+		"targeted_by_run_attempt: 1",
+	)
+}
+
 //nolint:funlen // The durable boundary sequence is the behavior under test.
 func TestStoreRecordsFinalizationFactsIdempotently(t *testing.T) {
 	store := newTestStore(t,

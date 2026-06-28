@@ -12,21 +12,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoadConfigResolvesDefaultAgentAndInterpolatesPrompt(t *testing.T) {
+func TestLoadConfigResolvesImplementerDefaultAndInterpolatesPrompt(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	paths := newAgentTestPaths(t)
 
 	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
-		"default_agent": "pi",
 		"agents": map[string]any{
-			"pi": map[string]any{
-				"command": "pi",
-				"args": []string{
-					"--model",
-					"test-model",
-					"{{prompt}}",
-					"literal",
+			"defaults": map[string]any{
+				"implementer": "pi",
+			},
+			"profiles": map[string]any{
+				"pi": map[string]any{
+					"command": "pi",
+					"args": []string{
+						"--model",
+						"test-model",
+						"{{prompt}}",
+						"literal",
+					},
 				},
 			},
 		},
@@ -42,6 +46,43 @@ func TestLoadConfigResolvesDefaultAgentAndInterpolatesPrompt(t *testing.T) {
 	is.Equal([]string{"--model", "test-model", "rendered prompt", "literal"}, snapshot.Args)
 }
 
+func TestLoadConfigResolvesNestedImplementerDefault(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	paths := newAgentTestPaths(t)
+
+	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"implementer": "impl",
+			},
+			"profiles": map[string]any{
+				"impl": map[string]any{
+					"command": "codex",
+					"args":    []string{"{{prompt}}"},
+				},
+				"other": map[string]any{
+					"command": "other",
+				},
+			},
+		},
+	}))
+
+	config, err := agent.LoadConfig(paths)
+	must.NoError(err)
+
+	snapshot, err := config.ResolveImplementerCommand("", "follow-up prompt")
+	must.NoError(err)
+	is.Equal("impl", snapshot.AgentName)
+	is.Equal("codex", snapshot.Command)
+	is.Equal([]string{"follow-up prompt"}, snapshot.Args)
+
+	override, err := config.ResolveImplementerCommand("other", "follow-up prompt")
+	must.NoError(err)
+	is.Equal("other", override.AgentName)
+	is.Equal("other", override.Command)
+}
+
 func TestLoadConfigReportsMissingFileWithSetupGuidance(t *testing.T) {
 	is := assert.New(t)
 	paths := newAgentTestPaths(t)
@@ -50,7 +91,7 @@ func TestLoadConfigReportsMissingFileWithSetupGuidance(t *testing.T) {
 
 	if assert.Error(t, err) {
 		is.ErrorIs(err, os.ErrNotExist)
-		for _, want := range []string{"config.yaml", "default_agent", "agents"} {
+		for _, want := range []string{"config.yaml", "agents.defaults", "agents.profiles"} {
 			is.Contains(err.Error(), want)
 		}
 	}
@@ -63,44 +104,42 @@ func TestConfigValidationErrorsAreActionable(t *testing.T) {
 		want string
 	}{
 		{
-			name: "missing default",
-			data: map[string]any{
-				"agents": map[string]any{"pi": map[string]any{"command": "pi"}},
-			},
-			want: "default_agent is required",
+			name: "missing implementer default",
+			data: agentConfigYAML(nil, map[string]any{"pi": map[string]any{"command": "pi"}}),
+			want: "agents.defaults.implementer is required",
 		},
 		{
 			name: "missing agents",
-			data: map[string]any{"default_agent": "pi"},
+			data: agentConfigYAML(map[string]any{"implementer": "pi"}, nil),
 			want: "agents must define at least one",
 		},
 		{
-			name: "unknown default",
-			data: map[string]any{
-				"default_agent": "missing",
-				"agents":        map[string]any{"pi": map[string]any{"command": "pi"}},
-			},
-			want: "default_agent \"missing\" does not match",
+			name: "unknown implementer default",
+			data: agentConfigYAML(
+				map[string]any{"implementer": "missing"},
+				map[string]any{"pi": map[string]any{"command": "pi"}},
+			),
+			want: "agents.defaults.implementer \"missing\" does not match",
 		},
 		{
 			name: "missing command",
-			data: map[string]any{
-				"default_agent": "pi",
-				"agents":        map[string]any{"pi": map[string]any{}},
-			},
-			want: "agents.pi.command is required",
+			data: agentConfigYAML(
+				map[string]any{"implementer": "pi"},
+				map[string]any{"pi": map[string]any{}},
+			),
+			want: "agents.profiles.pi.command is required",
 		},
 		{
 			name: "unsupported interpolation",
-			data: map[string]any{
-				"default_agent": "pi",
-				"agents": map[string]any{
+			data: agentConfigYAML(
+				map[string]any{"implementer": "pi"},
+				map[string]any{
 					"pi": map[string]any{
 						"command": "pi",
 						"args":    []string{"{{task_id}}"},
 					},
 				},
-			},
+			),
 			want: "supported interpolation token: {{prompt}}",
 		},
 	}
@@ -122,7 +161,7 @@ func TestConfigValidationErrorsAreActionable(t *testing.T) {
 func TestResolveCommandSelectsNamedAgent(t *testing.T) {
 	is := assert.New(t)
 	config := agent.Config{
-		DefaultAgent: "default",
+		Defaults: agent.AgentDefaults{Implementer: "default"},
 		Agents: map[string]agent.Profile{
 			"default": {Command: "default-agent"},
 			"custom":  {Command: "custom-agent", Args: []string{"{{prompt}}"}},
@@ -146,4 +185,15 @@ func newAgentTestPaths(t *testing.T) state.Paths {
 		t.Fatalf("new paths: %v", err)
 	}
 	return paths
+}
+
+func agentConfigYAML(defaults map[string]any, profiles map[string]any) map[string]any {
+	agents := map[string]any{}
+	if defaults != nil {
+		agents["defaults"] = defaults
+	}
+	if profiles != nil {
+		agents["profiles"] = profiles
+	}
+	return map[string]any{"agents": agents}
 }
