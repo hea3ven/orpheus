@@ -1,6 +1,6 @@
-.PHONY: build test fmt lint
+.PHONY: build test fmt lint check
 
-build:
+build: check
 	go build ./cmd/orpheus
 
 test:
@@ -11,3 +11,5 @@ fmt:
 
 lint:
 	golangci-lint run ./...
+
+check: fmt test lint

@@ -40,6 +40,7 @@ type Repo struct {
 	SummaryGuidance      string `yaml:"summary_guidance,omitempty"`
 	SummaryGuidanceStyle string `yaml:"summary_guidance_style,omitempty"`
 	TitleTemplate        string `yaml:"title_template,omitempty"`
+	ReviewPipeline       string `yaml:"review_pipeline,omitempty"`
 }
 
 // PublicationPolicy is the resolved publication configuration for a repository.
@@ -353,6 +354,7 @@ func normalizeRepo(repo Repo) (Repo, error) {
 	if err := publication.ValidateTitleTemplate(repo.TitleTemplate); err != nil {
 		return Repo{}, fmt.Errorf("repo title_template is invalid: %w", err)
 	}
+	repo.ReviewPipeline = strings.TrimSpace(repo.ReviewPipeline)
 	if repo.ID == "" {
 		return Repo{}, errors.New("repo id is required")
 	}

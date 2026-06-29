@@ -35,7 +35,8 @@ type AgentDefaults struct {
 // UnmarshalYAML decodes the agents.defaults/profiles shape.
 func (c *Config) UnmarshalYAML(value *yaml.Node) error {
 	var raw struct {
-		Agents yaml.Node `yaml:"agents"`
+		Agents  yaml.Node `yaml:"agents"`
+		Reviews yaml.Node `yaml:"reviews"`
 	}
 	if err := value.Decode(&raw); err != nil {
 		return err

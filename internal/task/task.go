@@ -288,12 +288,13 @@ func (e MutationConflictError) Unwrap() error {
 
 // Repository identifies the registered repository that produced a task row or failure.
 type Repository struct {
-	ID            string
-	Name          string
-	TaskIDPrefix  string
-	Path          string
-	DefaultBranch string
-	TitleTemplate string
+	ID             string
+	Name           string
+	TaskIDPrefix   string
+	Path           string
+	DefaultBranch  string
+	TitleTemplate  string
+	ReviewPipeline string
 }
 
 // RepoTask is one task row with repository context preserved for global views.
