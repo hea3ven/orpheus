@@ -12,6 +12,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/registry"
+	reviewconfig "github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -2374,6 +2375,226 @@ func TestTaskReviewAbortDoesNotFinalize(t *testing.T) {
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
+func TestTaskReviewPassingCheckContinuesToManualStep(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review checks", "Run checks before approval.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+	check := writeReviewScript(t, `#!/bin/sh
+printf 'check stdout %s %s\n' "$ORPHEUS_REVIEW_ATTEMPT" "$ORPHEUS_REVIEW_STEP"
+printf 'check stderr %s\n' "$ORPHEUS_AGENT_PURPOSE" >&2
+exit 0
+`)
+	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+		"standard": []map[string]any{
+			{"kind": "check", "name": "unit", "command": check, "args": []string{"--direct"}},
+			{"kind": "manual", "name": "approval"},
+		},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
+	})
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "standard", "op-main"}, "a\n")
+
+	is.Contains(stdout, "check stdout 1 unit")
+	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stderr, "check stderr review")
+	is.Contains(stderr, "Review action")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+	is.Equal("standard", latest.Pipeline)
+	must.Len(latest.Steps, 2)
+	is.Equal("unit", latest.Steps[0].Name)
+	must.NotNil(latest.Steps[0].ExitCode)
+	is.Equal(0, *latest.Steps[0].ExitCode)
+	is.Equal([]string{"--direct"}, latest.Steps[0].Args)
+	is.Equal("approval", latest.Steps[1].Name)
+	is.Empty(latest.Findings)
+}
+
+func TestTaskReviewNonZeroCheckRecordsBlockingFindingAndStops(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:             "alpha",
+		Name:           "Alpha Repo",
+		Path:           repoPath,
+		DefaultBranch:  "main",
+		BeadsMode:      registry.BeadsModeLocal,
+		BeadsPrefix:    "op",
+		ReviewPipeline: "standard",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review failed check", "Block on check failure.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	headBefore := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
+
+	check := writeReviewScript(t, `#!/bin/sh
+printf 'failing check output\n'
+exit 7
+`)
+	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+		"standard": []map[string]any{
+			{"kind": "check", "name": "unit", "command": check},
+			{"kind": "manual", "name": "approval"},
+		},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+	})
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "")
+
+	is.Contains(stdout, "failing check output")
+	is.Contains(stderr, "Review blocked for op-main by check \"unit\".")
+	is.NotContains(stderr, "Review action")
+	is.Equal(headBefore, strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")))
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
+	must.Len(latest.Steps, 1)
+	must.NotNil(latest.Steps[0].ExitCode)
+	is.Equal(7, *latest.Steps[0].ExitCode)
+	must.Len(latest.Findings, 1)
+	is.Equal(taskstate.FindingTypeBlocking, latest.Findings[0].Type)
+	is.Equal("unit", latest.Findings[0].Step)
+	is.Empty(taskstate.FinalizationFacts(state).Commit)
+}
+
+func TestTaskReviewCheckStartFailureMarksOperationalFailure(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review missing check", "Fail operationally.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+		"standard": []map[string]any{
+			{"kind": "check", "name": "missing", "command": "definitely-missing-orpheus-check"},
+		},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+	})
+
+	stdout, stderr, err := executeCommandWithInputAndError(
+		t,
+		[]string{"task", "review", "--pipeline", "standard", "op-main"},
+		nil,
+	)
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "start check step \"missing\"")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusFailed, latest.Status)
+	must.Len(latest.Steps, 1)
+	is.Nil(latest.Steps[0].ExitCode)
+	is.Empty(latest.Findings)
+}
+
+func TestTaskReviewPipelineOverridePrecedence(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:             "alpha",
+		Name:           "Alpha Repo",
+		Path:           repoPath,
+		DefaultBranch:  "main",
+		BeadsMode:      registry.BeadsModeLocal,
+		BeadsPrefix:    "op",
+		ReviewPipeline: "repo",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review override", "Use CLI-selected pipeline.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+	fail := writeReviewScript(t, "#!/bin/sh\nprintf 'wrong pipeline\n'\nexit 9\n")
+	pass := writeReviewScript(t, "#!/bin/sh\nprintf 'cli pipeline\n'\nexit 0\n")
+	writeReviewPipelineConfig(t, paths, "global", map[string][]map[string]any{
+		"global": []map[string]any{{"kind": "check", "name": "global", "command": fail}},
+		"repo":   []map[string]any{{"kind": "check", "name": "repo", "command": fail}},
+		"cli":    []map[string]any{{"kind": "check", "name": "cli", "command": pass}},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
+	})
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "cli", "op-main"}, "")
+
+	is.Contains(stdout, "cli pipeline")
+	is.NotContains(stdout, "wrong pipeline")
+	is.Contains(stdout, "Finalized op-main")
+	is.Empty(stderr)
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal("cli", latest.Pipeline)
+	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+}
+
 func TestTaskDoneRefusesRunningCompletionWithoutInteractiveConfirmation(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -4009,6 +4230,36 @@ func writeTaskRunAgentConfig(t *testing.T, paths state.Paths, name string, comma
 			},
 		},
 	}))
+}
+
+func writeReviewPipelineConfig(
+	t *testing.T,
+	paths state.Paths,
+	defaultPipeline string,
+	pipelines map[string][]map[string]any,
+) {
+	t.Helper()
+
+	configPipelines := map[string]any{}
+	for name, steps := range pipelines {
+		configPipelines[name] = map[string]any{"steps": steps}
+	}
+	require.NoError(t, paths.WriteConfigYAML(reviewconfig.ConfigFile, map[string]any{
+		"reviews": map[string]any{
+			"default_pipeline": defaultPipeline,
+			"pipelines":        configPipelines,
+		},
+	}))
+}
+
+func writeReviewScript(t *testing.T, content string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "review-step")
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write review script: %v", err)
+	}
+	return path
 }
 
 func shellQuote(value string) string {

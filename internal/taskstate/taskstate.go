@@ -106,6 +106,8 @@ type Service interface {
 	FinishRun(repoID, taskID string, attempt int, status RunStatus) (RunAttempt, error)
 	FailRunStart(repoID, taskID string, attempt int, cause error) (RunAttempt, error)
 	StartReview(repoID, taskID string) (ReviewAttempt, error)
+	StartReviewWithOptions(repoID, taskID string, opts StartReviewOptions) (ReviewAttempt, error)
+	RecordReviewStep(repoID, taskID string, attempt int, opts RecordReviewStepOptions) (ReviewAttempt, error)
 	RecordReviewFinding(repoID, taskID string, attempt int, finding ReviewFinding) (ReviewAttempt, error)
 	TargetReviewFindings(repoID, taskID string, reviewAttempt int, findingIndexes []int, runAttempt int) (ReviewAttempt, error)
 	FinishReview(repoID, taskID string, attempt int, status ReviewStatus) (ReviewAttempt, error)
@@ -184,15 +186,26 @@ type ReviewAttempt struct {
 
 	StartedAt  time.Time       `yaml:"started_at"`
 	FinishedAt *time.Time      `yaml:"finished_at,omitempty"`
+	Steps      []ReviewStep    `yaml:"steps,omitempty"`
 	Findings   []ReviewFinding `yaml:"findings,omitempty"`
 }
 
-// ReviewFinding records one human finding from the manual review gate.
+// ReviewStep records one executed review pipeline step.
+type ReviewStep struct {
+	Kind     string   `yaml:"kind"`
+	Name     string   `yaml:"name"`
+	Command  string   `yaml:"command,omitempty"`
+	Args     []string `yaml:"args,omitempty"`
+	ExitCode *int     `yaml:"exit_code,omitempty"`
+}
+
+// ReviewFinding records one review finding.
 type ReviewFinding struct {
 	Type        FindingType `yaml:"type"`
 	Title       string      `yaml:"title"`
 	Description string      `yaml:"description"`
 
+	Step            string `yaml:"step,omitempty"`
 	SuggestedAction string `yaml:"suggested_action,omitempty"`
 	Waiver          string `yaml:"waiver,omitempty"`
 	TaskProposal    string `yaml:"task_proposal,omitempty"`
@@ -309,6 +322,21 @@ type RepeatedCompletionOptions struct {
 	Summary             string
 	Description         string
 	DetailedDescription string
+}
+
+// StartReviewOptions describes the selected review pipeline.
+type StartReviewOptions struct {
+	Pipeline string
+	Step     string
+}
+
+// RecordReviewStepOptions describes one executed review step.
+type RecordReviewStepOptions struct {
+	Kind     string
+	Name     string
+	Command  string
+	Args     []string
+	ExitCode *int
 }
 
 // TaskClosedOptions describes the facts recorded when a task is closed.
@@ -686,6 +714,23 @@ func (s Store) RecordRepeatedCompletion(
 
 // StartReview appends a new running local review attempt for the built-in pipeline.
 func (s Store) StartReview(repoID, taskID string) (ReviewAttempt, error) {
+	return s.StartReviewWithOptions(repoID, taskID, StartReviewOptions{
+		Pipeline: "default",
+		Step:     "local-review",
+	})
+}
+
+// StartReviewWithOptions appends a new running local review attempt.
+func (s Store) StartReviewWithOptions(repoID, taskID string, opts StartReviewOptions) (ReviewAttempt, error) {
+	pipeline := strings.TrimSpace(opts.Pipeline)
+	if pipeline == "" {
+		return ReviewAttempt{}, fmt.Errorf("start review attempt for task %s/%s: pipeline is required", repoID, taskID)
+	}
+	step := strings.TrimSpace(opts.Step)
+	if step == "" {
+		return ReviewAttempt{}, fmt.Errorf("start review attempt for task %s/%s: step is required", repoID, taskID)
+	}
+
 	state, err := s.Load(repoID, taskID)
 	if err != nil {
 		return ReviewAttempt{}, err
@@ -695,8 +740,8 @@ func (s Store) StartReview(repoID, taskID string) (ReviewAttempt, error) {
 	attempt := ReviewAttempt{
 		Attempt:   nextReviewAttemptNumber(state),
 		Status:    ReviewStatusRunning,
-		Pipeline:  "default",
-		Step:      "local-review",
+		Pipeline:  pipeline,
+		Step:      step,
 		StartedAt: now,
 	}
 	state.Reviews = append(state.Reviews, attempt)
@@ -704,6 +749,51 @@ func (s Store) StartReview(repoID, taskID string) (ReviewAttempt, error) {
 		return ReviewAttempt{}, err
 	}
 	return attempt, nil
+}
+
+// RecordReviewStep appends an executed step record to a running review attempt.
+func (s Store) RecordReviewStep(
+	repoID,
+	taskID string,
+	attempt int,
+	opts RecordReviewStepOptions,
+) (ReviewAttempt, error) {
+	step, err := normalizeReviewStep(ReviewStep{
+		Kind:     opts.Kind,
+		Name:     opts.Name,
+		Command:  opts.Command,
+		Args:     cloneStrings(opts.Args),
+		ExitCode: cloneIntPointer(opts.ExitCode),
+	})
+	if err != nil {
+		return ReviewAttempt{}, fmt.Errorf("record review step for task %s/%s: %w", repoID, taskID, err)
+	}
+
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+	index := reviewAttemptIndex(state, attempt)
+	if index < 0 {
+		return ReviewAttempt{}, fmt.Errorf("record review step for task %s/%s: review attempt %d was not found", repoID, taskID, attempt)
+	}
+	if state.Reviews[index].Status != ReviewStatusRunning {
+		return ReviewAttempt{}, fmt.Errorf(
+			"record review step for task %s/%s: review attempt %d is %q, expected %q",
+			repoID,
+			taskID,
+			attempt,
+			state.Reviews[index].Status,
+			ReviewStatusRunning,
+		)
+	}
+
+	state.Reviews[index].Step = step.Name
+	state.Reviews[index].Steps = append(state.Reviews[index].Steps, step)
+	if err := s.save(state); err != nil {
+		return ReviewAttempt{}, err
+	}
+	return state.Reviews[index], nil
 }
 
 // RecordReviewFinding appends a finding to a running review attempt.
@@ -1306,6 +1396,11 @@ func validateReview(review ReviewAttempt) error {
 	if review.Status != ReviewStatusRunning && (review.FinishedAt == nil || review.FinishedAt.IsZero()) {
 		return fmt.Errorf("review attempt %d requires finished_at for status %q", review.Attempt, review.Status)
 	}
+	for _, step := range review.Steps {
+		if _, err := normalizeReviewStep(step); err != nil {
+			return fmt.Errorf("review attempt %d has invalid step: %w", review.Attempt, err)
+		}
+	}
 	for _, finding := range review.Findings {
 		if _, err := normalizeReviewFinding(finding); err != nil {
 			return fmt.Errorf("review attempt %d has invalid finding: %w", review.Attempt, err)
@@ -1314,10 +1409,30 @@ func validateReview(review ReviewAttempt) error {
 	return nil
 }
 
+func normalizeReviewStep(step ReviewStep) (ReviewStep, error) {
+	step.Kind = strings.TrimSpace(step.Kind)
+	step.Name = strings.TrimSpace(step.Name)
+	step.Command = strings.TrimSpace(step.Command)
+	step.Args = cloneStrings(step.Args)
+	step.ExitCode = cloneIntPointer(step.ExitCode)
+
+	if step.Kind == "" {
+		return ReviewStep{}, errors.New("kind is required")
+	}
+	if step.Name == "" {
+		return ReviewStep{}, errors.New("name is required")
+	}
+	if step.ExitCode != nil && *step.ExitCode < 0 {
+		return ReviewStep{}, errors.New("exit_code cannot be negative")
+	}
+	return step, nil
+}
+
 func normalizeReviewFinding(finding ReviewFinding) (ReviewFinding, error) {
 	finding.Type = FindingType(strings.TrimSpace(string(finding.Type)))
 	finding.Title = strings.TrimSpace(finding.Title)
 	finding.Description = strings.TrimSpace(finding.Description)
+	finding.Step = strings.TrimSpace(finding.Step)
 	finding.SuggestedAction = strings.TrimSpace(finding.SuggestedAction)
 	finding.Waiver = strings.TrimSpace(finding.Waiver)
 	finding.TaskProposal = strings.TrimSpace(finding.TaskProposal)
@@ -1519,4 +1634,12 @@ func cloneInts(values []int) []int {
 	clone := make([]int, len(values))
 	copy(clone, values)
 	return clone
+}
+
+func cloneIntPointer(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }

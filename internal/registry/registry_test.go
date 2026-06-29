@@ -50,6 +50,7 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 		SummaryGuidance:      "Use sentence-case summaries without a type prefix.",
 		SummaryGuidanceStyle: registry.SummaryGuidanceStyleCapitalized,
 		TitleTemplate:        "[OPS] {{summary}}",
+		ReviewPipeline:       "go-standard",
 	}}}
 	want.Repos[0].Path = filepath.Clean(want.Repos[0].Path)
 
@@ -73,7 +74,8 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 		!strings.Contains(string(onDisk), "beads_prefix: op") ||
 		!strings.Contains(string(onDisk), "summary_guidance: Use sentence-case summaries without a type prefix.") ||
 		!strings.Contains(string(onDisk), "summary_guidance_style: capitalized") ||
-		!strings.Contains(string(onDisk), "title_template: '[OPS] {{summary}}'") {
+		!strings.Contains(string(onDisk), "title_template: '[OPS] {{summary}}'") ||
+		!strings.Contains(string(onDisk), "review_pipeline: go-standard") {
 		t.Fatalf("registry file is not human-editable YAML: %s", onDisk)
 	}
 
