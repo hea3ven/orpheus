@@ -47,6 +47,7 @@ func TestAgentContextRendersValidatedWorktreeContext(t *testing.T) {
 	}
 	is.NotContains(stdout, "Beads")
 	is.NotContains(stdout, "bd")
+	is.NotContains(stdout, "Interaction guidance:")
 
 	bdLog, err := os.ReadFile(bdLogPath)
 	must.NoError(err)
@@ -84,10 +85,31 @@ func TestAgentContextRendersRepoRootFeatureBranchContext(t *testing.T) {
 	is.NotEmpty(stdout)
 }
 
+func TestAgentContextRendersOptInInteractiveGuidance(t *testing.T) {
+	is := assert.New(t)
+	setupAgentContextWorktree(t)
+	t.Setenv("ORPHEUS_EXPERIMENTAL_INTERACTIVE_AGENT_GUIDANCE", "1")
+
+	stdout, stderr := executeCommand(t, []string{"agent", "context"})
+
+	is.Empty(stderr)
+	for _, want := range []string{
+		"Interaction guidance:",
+		"attached interactive implementation session",
+		"may ask the human operator for clarification or decisions",
+		"Minimize interruptions",
+		"ask only for critical ambiguity or major product/architecture decisions",
+		"Make low-risk, low-level implementation decisions independently",
+	} {
+		is.Contains(stdout, want)
+	}
+}
+
 func TestAgentContextRendersReviewContext(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	repoPath, review := setupActiveAgentReview(t, "op-review")
+	t.Setenv("ORPHEUS_EXPERIMENTAL_INTERACTIVE_AGENT_GUIDANCE", "1")
 
 	stdout, stderr := executeCommand(t, []string{"agent", "context"})
 
@@ -113,6 +135,8 @@ func TestAgentContextRendersReviewContext(t *testing.T) {
 	} {
 		is.Contains(stdout, want)
 	}
+	is.NotContains(stdout, "Interaction guidance:")
+	is.NotContains(stdout, "attached interactive implementation session")
 	is.Equal(1, review.Attempt)
 	must.NotEmpty(stdout)
 }
