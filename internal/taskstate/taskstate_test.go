@@ -265,7 +265,6 @@ func TestStoreRecordsReviewAttemptsAndFindings(t *testing.T) {
 	store := newTestStore(t,
 		time.Date(2026, 6, 26, 10, 0, 0, 0, time.UTC),
 		time.Date(2026, 6, 26, 10, 1, 0, 0, time.UTC),
-		time.Date(2026, 6, 26, 10, 2, 0, 0, time.UTC),
 	)
 
 	review, err := store.StartReview("alpha", "op-1")
@@ -282,7 +281,11 @@ func TestStoreRecordsReviewAttemptsAndFindings(t *testing.T) {
 		Title:           "Follow-up",
 		Description:     "Track a later cleanup.",
 		SuggestedAction: "Plan separately.",
-		TaskProposal:    "Create a cleanup task.",
+		TaskProposal: taskstate.ReviewTaskProposal{
+			Title:              "Create a cleanup task",
+			Description:        "Clean up the implementation later.",
+			AcceptanceCriteria: "Cleanup is complete.",
+		},
 	})
 	if err != nil {
 		t.Fatalf("record finding: %v", err)
@@ -314,7 +317,10 @@ func TestStoreRecordsReviewAttemptsAndFindings(t *testing.T) {
 		"pipeline: default",
 		"step: local-review",
 		"type: separate_task",
-		"task_proposal: Create a cleanup task.",
+		"task_proposal:",
+		"title: Create a cleanup task",
+		"description: Clean up the implementation later.",
+		"acceptance_criteria: Cleanup is complete.",
 	)
 }
 
