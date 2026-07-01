@@ -14,8 +14,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const envExperimentalInteractiveAgentGuidance = "ORPHEUS_EXPERIMENTAL_INTERACTIVE_AGENT_GUIDANCE"
-
 func newAgentCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "agent",
@@ -150,18 +148,33 @@ func runAgentContext(command *cobra.Command, opts *rootOptions) error {
 	if err != nil {
 		return fmt.Errorf("agent context: %w", err)
 	}
+	interactionMode, err := activeAgentInteractionMode(paths, activeContext.Run.Agent)
+	if err != nil {
+		return fmt.Errorf("agent context: %w", err)
+	}
 
 	_, err = fmt.Fprint(command.OutOrStdout(), agent.RenderActiveContextWithOptions(
 		activeContext,
 		agent.ActiveContextRenderOptions{
-			InteractiveAgentGuidance: experimentalInteractiveAgentGuidanceEnabled(),
+			InteractionMode: interactionMode,
 		},
 	))
 	return err
 }
 
-func experimentalInteractiveAgentGuidanceEnabled() bool {
-	return strings.TrimSpace(os.Getenv(envExperimentalInteractiveAgentGuidance)) == "1"
+func activeAgentInteractionMode(paths state.Paths, agentName string) (agent.AgentInteractionMode, error) {
+	config, err := agent.LoadConfig(paths)
+	if err != nil {
+		return agent.AgentInteractionModeUnspecified, err
+	}
+	_, profile, err := config.ResolveImplementerProfile(agentName)
+	if err != nil {
+		return agent.AgentInteractionModeUnspecified, fmt.Errorf("resolve agent profile: %w", err)
+	}
+	if profile.Interactive {
+		return agent.AgentInteractionModeInteractive, nil
+	}
+	return agent.AgentInteractionModeNonInteractive, nil
 }
 
 type agentReviewAddOptions struct {

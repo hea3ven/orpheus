@@ -44,6 +44,38 @@ func TestLoadConfigResolvesImplementerDefaultAndInterpolatesPrompt(t *testing.T)
 	is.Equal("pi", snapshot.AgentName)
 	is.Equal("pi", snapshot.Command)
 	is.Equal([]string{"--model", "test-model", "rendered prompt", "literal"}, snapshot.Args)
+
+	_, profile, err := config.ResolveImplementerProfile("")
+	must.NoError(err)
+	is.True(profile.Interactive)
+}
+
+func TestLoadConfigPreservesExplicitNonInteractiveProfile(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	paths := newAgentTestPaths(t)
+
+	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"implementer": "autonomous",
+			},
+			"profiles": map[string]any{
+				"autonomous": map[string]any{
+					"command":     "codex",
+					"interactive": false,
+				},
+			},
+		},
+	}))
+
+	config, err := agent.LoadConfig(paths)
+	must.NoError(err)
+
+	name, profile, err := config.ResolveImplementerProfile("")
+	must.NoError(err)
+	is.Equal("autonomous", name)
+	is.False(profile.Interactive)
 }
 
 func TestResolveCommandInterpolatesPromptAndSessionName(t *testing.T) {

@@ -42,12 +42,17 @@ func TestAgentContextRendersValidatedWorktreeContext(t *testing.T) {
 		"do not run it again after it succeeds",
 		"PR-ready completion data for feature-branch publication",
 		"The human operator will later run `orpheus task review op-1` to review and publish the feature branch as a pull request",
+		"Interaction guidance:",
+		"attached interactive implementation session",
+		"may ask the human operator for clarification or decisions",
+		"Minimize interruptions",
+		"ask only for critical ambiguity or major product/architecture decisions",
+		"Make low-risk, low-level implementation decisions independently",
 	} {
 		is.Contains(stdout, want)
 	}
 	is.NotContains(stdout, "Beads")
 	is.NotContains(stdout, "bd")
-	is.NotContains(stdout, "Interaction guidance:")
 
 	bdLog, err := os.ReadFile(bdLogPath)
 	must.NoError(err)
@@ -60,6 +65,7 @@ func TestAgentContextRendersRepoRootFeatureBranchContext(t *testing.T) {
 	is := assert.New(t)
 	root := newTestState(t)
 	repoPath := filepath.Join(root, "repos", "alpha")
+	writeAgentContextProfileConfig(t, "recorder", true)
 	registerAgentTestRepo(t, repoPath)
 	t.Chdir(repoPath)
 	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
@@ -85,31 +91,33 @@ func TestAgentContextRendersRepoRootFeatureBranchContext(t *testing.T) {
 	is.NotEmpty(stdout)
 }
 
-func TestAgentContextRendersOptInInteractiveGuidance(t *testing.T) {
+func TestAgentContextRendersNonInteractiveProfileGuidance(t *testing.T) {
 	is := assert.New(t)
 	setupAgentContextWorktree(t)
-	t.Setenv("ORPHEUS_EXPERIMENTAL_INTERACTIVE_AGENT_GUIDANCE", "1")
+	writeAgentContextProfileConfig(t, "recorder", false)
 
 	stdout, stderr := executeCommand(t, []string{"agent", "context"})
 
 	is.Empty(stderr)
 	for _, want := range []string{
 		"Interaction guidance:",
-		"attached interactive implementation session",
-		"may ask the human operator for clarification or decisions",
-		"Minimize interruptions",
-		"ask only for critical ambiguity or major product/architecture decisions",
-		"Make low-risk, low-level implementation decisions independently",
+		"non-interactive implementation session",
+		"do not ask the human operator for clarification or decisions",
+		"Decide independently when a reasonable, low-risk path exists",
+		"fail clearly",
+		"missing information",
+		"summarize significant decisions in the visible terminal/session output",
 	} {
 		is.Contains(stdout, want)
 	}
+	is.NotContains(stdout, "attached interactive implementation session")
 }
 
 func TestAgentContextRendersReviewContext(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	repoPath, review := setupActiveAgentReview(t, "op-review")
-	t.Setenv("ORPHEUS_EXPERIMENTAL_INTERACTIVE_AGENT_GUIDANCE", "1")
+	writeAgentContextProfileConfig(t, "recorder", false)
 
 	stdout, stderr := executeCommand(t, []string{"agent", "context"})
 
@@ -251,6 +259,7 @@ func setupAgentContextWorktree(t *testing.T) (string, string, string, string) {
 	must := require.New(t)
 	root := newTestState(t)
 	paths := currentTestPaths(t)
+	writeAgentContextProfileConfig(t, "recorder", true)
 	repoPath := filepath.Join(root, "repos", "alpha")
 	registerAgentTestRepo(t, repoPath)
 	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-1"))
@@ -307,6 +316,25 @@ func registerAgentTestRepo(t *testing.T, repoPath string) {
 		BeadsMode:     registry.BeadsModeLocal,
 		BeadsPrefix:   "op",
 	}}}))
+}
+
+func writeAgentContextProfileConfig(t *testing.T, name string, interactive bool) {
+	t.Helper()
+
+	profile := map[string]any{"command": name}
+	if !interactive {
+		profile["interactive"] = false
+	}
+	require.NoError(t, currentTestPaths(t).WriteConfigYAML("config.yaml", map[string]any{
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"implementer": name,
+			},
+			"profiles": map[string]any{
+				name: profile,
+			},
+		},
+	}))
 }
 
 func startAgentTestRun(t *testing.T, taskID string, branch string, worktreePath string) taskstate.RunAttempt {

@@ -61,8 +61,9 @@ func (c *Config) UnmarshalYAML(value *yaml.Node) error {
 
 // Profile describes one directly executed agent command.
 type Profile struct {
-	Command string   `yaml:"command"`
-	Args    []string `yaml:"args,omitempty"`
+	Command     string   `yaml:"command"`
+	Args        []string `yaml:"args,omitempty"`
+	Interactive bool     `yaml:"interactive,omitempty"`
 }
 
 // CommandSnapshot is the resolved command line for one dispatch.
@@ -70,6 +71,18 @@ type CommandSnapshot struct {
 	AgentName string
 	Command   string
 	Args      []string
+}
+
+// UnmarshalYAML decodes an agent profile while preserving backwards
+// compatibility for profiles that predate the interactive flag.
+func (p *Profile) UnmarshalYAML(value *yaml.Node) error {
+	type profile Profile
+	decoded := profile{Interactive: true}
+	if err := value.Decode(&decoded); err != nil {
+		return err
+	}
+	*p = Profile(decoded)
+	return nil
 }
 
 // InterpolationValues are values available to agent profile command templates.
@@ -131,6 +144,29 @@ func (c Config) ResolveImplementerCommandWithValues(selectedAgent string, values
 		agentName = strings.TrimSpace(normalized.Defaults.Implementer)
 	}
 	return normalized.resolveAgentProfile(agentName, values)
+}
+
+// ResolveImplementerProfile resolves selectedAgent, or agents.defaults.implementer
+// when selectedAgent is blank, and returns the normalized profile.
+func (c Config) ResolveImplementerProfile(selectedAgent string) (string, Profile, error) {
+	normalized, err := c.normalized()
+	if err != nil {
+		return "", Profile{}, err
+	}
+
+	agentName := strings.TrimSpace(selectedAgent)
+	if agentName == "" {
+		agentName = strings.TrimSpace(normalized.Defaults.Implementer)
+	}
+	profile, ok := normalized.Agents[agentName]
+	if !ok {
+		return "", Profile{}, fmt.Errorf(
+			"agent profile %q is not configured; configured agents: %s",
+			agentName,
+			strings.Join(normalized.agentNames(), ", "),
+		)
+	}
+	return agentName, profile, nil
 }
 
 // ResolveReviewerCommand resolves selectedAgent, or agents.defaults.reviewer
@@ -247,7 +283,7 @@ func normalizeProfile(name string, profile Profile) (Profile, error) {
 		args[i] = arg
 	}
 
-	return Profile{Command: command, Args: args}, nil
+	return Profile{Command: command, Args: args, Interactive: profile.Interactive}, nil
 }
 
 func validateInterpolationToken(field string, value string) error {
