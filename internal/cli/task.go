@@ -580,34 +580,7 @@ func runTaskReview(command *cobra.Command, opts *rootOptions, taskID string, pip
 		return err
 	}
 
-	outcome, err := review.RunPipeline(review.PipelineRunOptions{
-		Context:  command.Context(),
-		Store:    start.store,
-		RepoID:   start.repoID(),
-		TaskID:   start.taskID(),
-		Branch:   start.resolvedCtx.Task.OrpheusMetadata().Branch,
-		Workdir:  start.workdir,
-		Attempt:  start.review,
-		Pipeline: start.pipeline,
-		Stdout:   command.OutOrStdout(),
-		Stderr:   command.ErrOrStderr(),
-		RenderManualStep: func(review.Step) error {
-			return renderManualReviewContext(command, start.store, start.resolvedCtx)
-		},
-		PromptManualStep: func(review.Step) (review.ManualResult, error) {
-			outcome, err := runManualReviewPrompt(command, start.store, start.resolvedCtx, start.review)
-			if err != nil {
-				return review.ManualResult{}, err
-			}
-			if outcome.result == manualReviewApproved {
-				return review.ManualResult{}, nil
-			}
-			return review.ManualResult{
-				Status: outcome.status,
-				Stop:   true,
-			}, nil
-		},
-	})
+	outcome, err := review.RunPipeline(taskReviewPipelineOptions(command, start))
 	if err != nil {
 		_, _ = start.store.FinishReview(start.repoID(), start.taskID(), start.review.Attempt, taskstate.ReviewStatusFailed)
 		return err
@@ -628,6 +601,41 @@ func runTaskReview(command *cobra.Command, opts *rootOptions, taskID string, pip
 	return finalizeApprovedTaskReview(command, logger, start.paths, start.resolvedCtx)
 }
 
+func taskReviewPipelineOptions(command *cobra.Command, start taskReviewStart) review.PipelineRunOptions {
+	return review.PipelineRunOptions{
+		Context:       command.Context(),
+		Store:         start.store,
+		RepoID:        start.repoID(),
+		TaskID:        start.taskID(),
+		Branch:        start.resolvedCtx.Task.OrpheusMetadata().Branch,
+		Workdir:       start.workdir,
+		Attempt:       start.review,
+		Pipeline:      start.pipeline,
+		SessionName:   start.resolvedCtx.Task.ReviewSessionName(),
+		Stdout:        command.OutOrStdout(),
+		Stderr:        command.ErrOrStderr(),
+		Stdin:         command.InOrStdin(),
+		AgentConfig:   start.agentConfig,
+		AgentLauncher: attachedAgentLauncher,
+		RenderManualStep: func(review.Step) error {
+			return renderManualReviewContext(command, start.store, start.resolvedCtx)
+		},
+		PromptManualStep: func(review.Step) (review.ManualResult, error) {
+			outcome, err := runManualReviewPrompt(command, start.store, start.resolvedCtx, start.review)
+			if err != nil {
+				return review.ManualResult{}, err
+			}
+			if outcome.result == manualReviewApproved {
+				return review.ManualResult{}, nil
+			}
+			return review.ManualResult{
+				Status: outcome.status,
+				Stop:   true,
+			}, nil
+		},
+	}
+}
+
 type taskReviewStart struct {
 	paths       state.Paths
 	resolvedCtx resolvedTaskContext
@@ -635,6 +643,7 @@ type taskReviewStart struct {
 	workdir     string
 	review      taskstate.ReviewAttempt
 	pipeline    review.Pipeline
+	agentConfig agent.Config
 }
 
 func (s taskReviewStart) repoID() string {
@@ -666,6 +675,10 @@ func startTaskReview(command *cobra.Command, taskID string, pipelineName string)
 	if err := validateReviewCandidateReady(command.Context(), store, resolvedCtx, workdir); err != nil {
 		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
 	}
+	agentConfig, err := resolveTaskReviewAgentConfig(paths, pipeline)
+	if err != nil {
+		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
+	}
 
 	reviewAttempt, err := store.StartReviewWithOptions(
 		resolvedCtx.Resolved.Source.Repository.ID,
@@ -685,7 +698,21 @@ func startTaskReview(command *cobra.Command, taskID string, pipelineName string)
 		workdir:     workdir,
 		review:      reviewAttempt,
 		pipeline:    pipeline,
+		agentConfig: agentConfig,
 	}, nil
+}
+
+func resolveTaskReviewAgentConfig(paths state.Paths, pipeline review.Pipeline) (agent.Config, error) {
+	for _, step := range pipeline.Steps {
+		if step.Kind == review.KindAgentReview {
+			config, err := agent.LoadConfig(paths)
+			if err != nil {
+				return agent.Config{}, err
+			}
+			return config, nil
+		}
+	}
+	return agent.Config{}, nil
 }
 
 func resolveTaskReviewPipeline(

@@ -16,10 +16,13 @@ import (
 )
 
 const (
-	envRepoID   = "ORPHEUS_REPO_ID"
-	envTaskID   = "ORPHEUS_TASK_ID"
-	envWorktree = "ORPHEUS_WORKTREE"
-	envBranch   = "ORPHEUS_BRANCH"
+	envRepoID        = "ORPHEUS_REPO_ID"
+	envTaskID        = "ORPHEUS_TASK_ID"
+	envWorktree      = "ORPHEUS_WORKTREE"
+	envBranch        = "ORPHEUS_BRANCH"
+	envAgentPurpose  = "ORPHEUS_AGENT_PURPOSE"
+	envReviewAttempt = "ORPHEUS_REVIEW_ATTEMPT"
+	envReviewStep    = "ORPHEUS_REVIEW_STEP"
 )
 
 // ExecutionTarget identifies the validated workflow target for an active agent run.

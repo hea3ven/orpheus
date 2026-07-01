@@ -9,7 +9,7 @@ import (
 func RenderBootstrapPrompt() string {
 	var builder strings.Builder
 
-	builder.WriteString("You are an attached implementation agent dispatched by Orpheus.\n\n")
+	builder.WriteString("You are an agent dispatched by Orpheus.\n\n")
 	builder.WriteString("Run `orpheus agent context` now to obtain the task instructions ")
 	builder.WriteString("and execution contract before starting implementation.\n")
 

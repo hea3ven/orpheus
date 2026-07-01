@@ -133,6 +133,31 @@ func (c Config) ResolveImplementerCommandWithValues(selectedAgent string, values
 	return normalized.resolveAgentProfile(agentName, values)
 }
 
+// ResolveReviewerCommand resolves selectedAgent, or agents.defaults.reviewer
+// when selectedAgent is blank.
+func (c Config) ResolveReviewerCommand(selectedAgent string, prompt string) (CommandSnapshot, error) {
+	return c.ResolveReviewerCommandWithValues(selectedAgent, InterpolationValues{Prompt: prompt})
+}
+
+// ResolveReviewerCommandWithValues resolves selectedAgent, or
+// agents.defaults.reviewer when selectedAgent is blank, and applies profile
+// interpolation.
+func (c Config) ResolveReviewerCommandWithValues(selectedAgent string, values InterpolationValues) (CommandSnapshot, error) {
+	normalized, err := c.normalized()
+	if err != nil {
+		return CommandSnapshot{}, err
+	}
+
+	agentName := strings.TrimSpace(selectedAgent)
+	if agentName == "" {
+		agentName = strings.TrimSpace(normalized.Defaults.Reviewer)
+	}
+	if agentName == "" {
+		return CommandSnapshot{}, errors.New("agents.defaults.reviewer is required for agent_review steps without an agent override")
+	}
+	return normalized.resolveAgentProfile(agentName, values)
+}
+
 func (c Config) resolveAgentProfile(agentName string, values InterpolationValues) (CommandSnapshot, error) {
 	profile, ok := c.Agents[agentName]
 	if !ok {
