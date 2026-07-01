@@ -66,7 +66,7 @@ func TestRenderActiveContextIncludesWorktreeContract(t *testing.T) {
 	is.Equal(output, agent.RenderActiveContextWithOptions(ctx, agent.ActiveContextRenderOptions{}))
 	is.Equal(output, agent.RenderActiveContextWithOptions(
 		ctx,
-		agent.ActiveContextRenderOptions{InteractiveAgentGuidance: false},
+		agent.ActiveContextRenderOptions{InteractionMode: agent.AgentInteractionModeUnspecified},
 	))
 }
 
@@ -111,7 +111,7 @@ func TestRenderActiveContextIncludesOptInInteractiveGuidance(t *testing.T) {
 			Task:   agent.ContextTask{ID: "op-1"},
 			Target: agent.ContextTarget{Kind: agent.ExecutionTargetMain},
 		},
-		agent.ActiveContextRenderOptions{InteractiveAgentGuidance: true},
+		agent.ActiveContextRenderOptions{InteractionMode: agent.AgentInteractionModeInteractive},
 	)
 
 	for _, want := range []string{
@@ -121,6 +121,28 @@ func TestRenderActiveContextIncludesOptInInteractiveGuidance(t *testing.T) {
 		"Minimize interruptions",
 		"ask only for critical ambiguity or major product/architecture decisions",
 		"Make low-risk, low-level implementation decisions independently",
+	} {
+		assert.Contains(t, output, want)
+	}
+}
+
+func TestRenderActiveContextIncludesNonInteractiveGuidance(t *testing.T) {
+	output := agent.RenderActiveContextWithOptions(
+		agent.ActiveContext{
+			Task:   agent.ContextTask{ID: "op-1"},
+			Target: agent.ContextTarget{Kind: agent.ExecutionTargetMain},
+		},
+		agent.ActiveContextRenderOptions{InteractionMode: agent.AgentInteractionModeNonInteractive},
+	)
+
+	for _, want := range []string{
+		"Interaction guidance:",
+		"non-interactive implementation session",
+		"do not ask the human operator for clarification or decisions",
+		"Decide independently when a reasonable, low-risk path exists",
+		"fail clearly",
+		"missing information",
+		"summarize significant decisions in the visible terminal/session output",
 	} {
 		assert.Contains(t, output, want)
 	}

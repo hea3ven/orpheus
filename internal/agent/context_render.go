@@ -9,8 +9,24 @@ import (
 
 // ActiveContextRenderOptions controls optional implementation-agent context sections.
 type ActiveContextRenderOptions struct {
-	InteractiveAgentGuidance bool
+	InteractionMode AgentInteractionMode
 }
+
+// AgentInteractionMode controls how implementation agents should handle
+// human-facing decisions during a run.
+type AgentInteractionMode string
+
+const (
+	// AgentInteractionModeUnspecified omits profile-controlled interaction guidance.
+	AgentInteractionModeUnspecified AgentInteractionMode = ""
+
+	// AgentInteractionModeInteractive tells the agent it may ask the operator
+	// for critical clarifications.
+	AgentInteractionModeInteractive AgentInteractionMode = "interactive"
+
+	// AgentInteractionModeNonInteractive tells the agent to proceed autonomously.
+	AgentInteractionModeNonInteractive AgentInteractionMode = "non-interactive"
+)
 
 // RenderActiveContext renders backend-neutral instructions for the active agent.
 func RenderActiveContext(ctx ActiveContext) string {
@@ -25,23 +41,39 @@ func RenderActiveContextWithOptions(ctx ActiveContext, opts ActiveContextRenderO
 	appendRepositoryContext(&builder, ctx.Repository)
 	appendExecutionTargetContext(&builder, ctx)
 	appendFollowUpContext(&builder, ctx.FollowUp)
-	appendInteractiveAgentGuidance(&builder, opts)
+	appendAgentInteractionGuidance(&builder, opts)
 	appendExecutionContract(&builder, ctx)
 
 	return builder.String()
 }
 
-func appendInteractiveAgentGuidance(builder *strings.Builder, opts ActiveContextRenderOptions) {
-	if !opts.InteractiveAgentGuidance {
-		return
+func appendAgentInteractionGuidance(builder *strings.Builder, opts ActiveContextRenderOptions) {
+	switch opts.InteractionMode {
+	case AgentInteractionModeInteractive:
+		appendInteractiveAgentGuidance(builder)
+	case AgentInteractionModeNonInteractive:
+		appendNonInteractiveAgentGuidance(builder)
 	}
+}
 
+func appendInteractiveAgentGuidance(builder *strings.Builder) {
 	builder.WriteString("\nInteraction guidance:\n")
 	builder.WriteString("- This is an attached interactive implementation session; ")
 	builder.WriteString("you may ask the human operator for clarification or decisions.\n")
 	builder.WriteString("- Minimize interruptions: ask only for critical ambiguity ")
 	builder.WriteString("or major product/architecture decisions.\n")
 	builder.WriteString("- Make low-risk, low-level implementation decisions independently.\n")
+}
+
+func appendNonInteractiveAgentGuidance(builder *strings.Builder) {
+	builder.WriteString("\nInteraction guidance:\n")
+	builder.WriteString("- This is a non-interactive implementation session; ")
+	builder.WriteString("do not ask the human operator for clarification or decisions.\n")
+	builder.WriteString("- Decide independently when a reasonable, low-risk path exists.\n")
+	builder.WriteString("- If continuation is impossible without human input, fail clearly ")
+	builder.WriteString("and explain the blocking decision or missing information.\n")
+	builder.WriteString("- Before finishing, summarize significant decisions in the visible ")
+	builder.WriteString("terminal/session output.\n")
 }
 
 func appendFollowUpContext(builder *strings.Builder, followUp *ContextFollowUp) {
