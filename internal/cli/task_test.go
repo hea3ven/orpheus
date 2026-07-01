@@ -2319,7 +2319,10 @@ func TestTaskReviewAdvisoryAndSeparateTaskFindingsDoNotBlockApproval(t *testing.
 		"Extract helper later",
 		"Track separately",
 		"Create helper extraction task",
+		"Extract the helper in a focused follow-up.",
+		"Helper extraction has acceptance tests.",
 		"a",
+		"n",
 		"",
 	}, "\n")
 	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, input)
@@ -2334,6 +2337,123 @@ func TestTaskReviewAdvisoryAndSeparateTaskFindingsDoNotBlockApproval(t *testing.
 	must.Len(latest.Findings, 2)
 	is.Equal(taskstate.FindingTypeAdvisory, latest.Findings[0].Type)
 	is.Equal(taskstate.FindingTypeSeparateTask, latest.Findings[1].Type)
+	is.Empty(latest.Findings[1].CreatedTaskID)
+}
+
+func TestTaskReviewCreatesSelectedSeparateTaskFollowUp(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review follow-up", "Create follow-up task.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	bdLogPath := withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{
+			dir:    repoPath,
+			args:   "--json --sandbox create Extract helper --description Extract the helper later.\n\nProvenance:\nDiscovered during review of op-main in repository alpha (review attempt 1, finding 1). --acceptance Helper extraction has tests. --type task",
+			stdout: `{"id":"op-41","title":"Extract helper","status":"open","issue_type":"task"}`,
+		},
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
+	})
+
+	input := strings.Join([]string{
+		"t",
+		"Follow-up",
+		"Extract helper later",
+		"",
+		"Extract helper",
+		"Extract the helper later.",
+		"Helper extraction has tests.",
+		"a",
+		"1",
+		"",
+	}, "\n")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, input)
+
+	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stderr, "Created follow-up Bead op-41 for review finding 1.")
+	is.Contains(readFileString(t, bdLogPath), "--json --sandbox create Extract helper")
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+	must.Len(latest.Findings, 1)
+	is.Equal("op-41", latest.Findings[0].CreatedTaskID)
+}
+
+func TestTaskReviewCanAbortWhenSeparateTaskCreationFails(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review follow-up", "Creation can fail.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	headBefore := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{
+			dir:      repoPath,
+			args:     "--json --sandbox create Extract helper --description Extract the helper later.\n\nProvenance:\nDiscovered during review of op-main in repository alpha (review attempt 1, finding 1). --acceptance Helper extraction has tests. --type task",
+			stderr:   "database locked",
+			exitCode: 1,
+		},
+	})
+
+	input := strings.Join([]string{
+		"t",
+		"Follow-up",
+		"Extract helper later",
+		"",
+		"Extract helper",
+		"Extract the helper later.",
+		"Helper extraction has tests.",
+		"a",
+		"1",
+		"n",
+	}, "\n")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, input)
+
+	is.Empty(stdout)
+	is.Contains(stderr, "Failed to create follow-up Bead for review finding 1")
+	is.Equal(headBefore, strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")))
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusAborted, latest.Status)
+	must.Len(latest.Findings, 1)
+	is.Empty(latest.Findings[0].CreatedTaskID)
 }
 
 func TestTaskReviewAbortDoesNotFinalize(t *testing.T) {

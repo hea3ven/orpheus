@@ -580,10 +580,30 @@ func runTaskReview(command *cobra.Command, opts *rootOptions, taskID string, pip
 		return err
 	}
 
-	outcome, err := review.RunPipeline(taskReviewPipelineOptions(command, start))
+	reviewInput := bufio.NewReader(command.InOrStdin())
+	outcome, err := review.RunPipeline(taskReviewPipelineOptions(command, start, reviewInput))
 	if err != nil {
 		_, _ = start.store.FinishReview(start.repoID(), start.taskID(), start.review.Attempt, taskstate.ReviewStatusFailed)
 		return err
+	}
+	if outcome.Status == taskstate.ReviewStatusPassed {
+		shouldPublish, err := processSeparateTaskReviewCandidates(command, start, reviewInput)
+		if err != nil {
+			_, _ = start.store.FinishReview(start.repoID(), start.taskID(), start.review.Attempt, taskstate.ReviewStatusFailed)
+			return err
+		}
+		if !shouldPublish {
+			if _, err := start.store.FinishReview(
+				start.repoID(),
+				start.taskID(),
+				start.review.Attempt,
+				taskstate.ReviewStatusAborted,
+			); err != nil {
+				_, _ = start.store.FinishReview(start.repoID(), start.taskID(), start.review.Attempt, taskstate.ReviewStatusFailed)
+				return fmt.Errorf("task review %s: record aborted review: %w", start.taskID(), err)
+			}
+			return nil
+		}
 	}
 	if _, err := start.store.FinishReview(
 		start.repoID(),
@@ -601,7 +621,11 @@ func runTaskReview(command *cobra.Command, opts *rootOptions, taskID string, pip
 	return finalizeApprovedTaskReview(command, logger, start.paths, start.resolvedCtx)
 }
 
-func taskReviewPipelineOptions(command *cobra.Command, start taskReviewStart) review.PipelineRunOptions {
+func taskReviewPipelineOptions(
+	command *cobra.Command,
+	start taskReviewStart,
+	reviewInput *bufio.Reader,
+) review.PipelineRunOptions {
 	return review.PipelineRunOptions{
 		Context:       command.Context(),
 		Store:         start.store,
@@ -621,7 +645,7 @@ func taskReviewPipelineOptions(command *cobra.Command, start taskReviewStart) re
 			return renderManualReviewContext(command, start.store, start.resolvedCtx)
 		},
 		PromptManualStep: func(review.Step) (review.ManualResult, error) {
-			outcome, err := runManualReviewPrompt(command, start.store, start.resolvedCtx, start.review)
+			outcome, err := runManualReviewPrompt(command, reviewInput, start.store, start.resolvedCtx, start.review)
 			if err != nil {
 				return review.ManualResult{}, err
 			}
@@ -756,6 +780,204 @@ func finalizeApprovedTaskReview(
 	return renderTaskDoneResult(command, finalized)
 }
 
+type separateTaskCandidate struct {
+	index   int
+	finding taskstate.ReviewFinding
+}
+
+func processSeparateTaskReviewCandidates(
+	command *cobra.Command,
+	start taskReviewStart,
+	reader *bufio.Reader,
+) (bool, error) {
+	candidates, err := pendingSeparateTaskCandidates(start.store, start.repoID(), start.taskID(), start.review.Attempt)
+	if err != nil {
+		return false, fmt.Errorf("task review %s: load separate-task candidates: %w", start.taskID(), err)
+	}
+	if len(candidates) == 0 {
+		return true, nil
+	}
+
+	selected, err := promptSeparateTaskCandidateSelection(command, reader, candidates)
+	if err != nil {
+		return false, fmt.Errorf("task review %s: %w", start.taskID(), err)
+	}
+	if len(selected) == 0 {
+		return true, nil
+	}
+
+	backend, err := newBeadsTaskBackend(start.resolvedCtx.Resolved.Source.BackendDir)
+	if err != nil {
+		return false, fmt.Errorf("task review %s: create follow-up task backend: %w", start.taskID(), err)
+	}
+	for _, candidate := range selected {
+		created, err := backend.Create(command.Context(), createOptionsForReviewCandidate(start, candidate))
+		if err != nil {
+			return promptContinueAfterFollowUpCreationFailure(command, reader, candidate, err)
+		}
+		if _, err := start.store.RecordReviewFindingCreatedTask(
+			start.repoID(),
+			start.taskID(),
+			start.review.Attempt,
+			candidate.index,
+			created.ID,
+		); err != nil {
+			return false, fmt.Errorf("task review %s: record created follow-up task %s: %w", start.taskID(), created.ID, err)
+		}
+		if _, err := fmt.Fprintf(
+			command.ErrOrStderr(),
+			"Created follow-up Bead %s for review finding %d.\n",
+			created.ID,
+			candidate.index+1,
+		); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func pendingSeparateTaskCandidates(
+	store taskstate.Store,
+	repoID string,
+	taskID string,
+	attempt int,
+) ([]separateTaskCandidate, error) {
+	state, err := store.Load(repoID, taskID)
+	if err != nil {
+		return nil, err
+	}
+	for _, reviewAttempt := range state.Reviews {
+		if reviewAttempt.Attempt != attempt {
+			continue
+		}
+		candidates := make([]separateTaskCandidate, 0)
+		for index, finding := range reviewAttempt.Findings {
+			if finding.Type != taskstate.FindingTypeSeparateTask || strings.TrimSpace(finding.CreatedTaskID) != "" {
+				continue
+			}
+			candidates = append(candidates, separateTaskCandidate{index: index, finding: finding})
+		}
+		return candidates, nil
+	}
+	return nil, fmt.Errorf("review attempt %d was not found", attempt)
+}
+
+func promptSeparateTaskCandidateSelection(
+	command *cobra.Command,
+	reader *bufio.Reader,
+	candidates []separateTaskCandidate,
+) ([]separateTaskCandidate, error) {
+	output := command.ErrOrStderr()
+	if _, err := fmt.Fprintln(output, "\nSeparate-task review findings can be created as standalone Beads:"); err != nil {
+		return nil, err
+	}
+	for displayIndex, candidate := range candidates {
+		if _, err := fmt.Fprintf(
+			output,
+			"%d. %s (review finding %d)\n",
+			displayIndex+1,
+			candidate.finding.TaskProposal.Title,
+			candidate.index+1,
+		); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := fmt.Fprint(output, "Create follow-up Beads [numbers, a=all, n=none]: "); err != nil {
+		return nil, err
+	}
+
+	line, err := reader.ReadString('\n')
+	if err != nil && (!errors.Is(err, io.EOF) || line == "") {
+		return nil, fmt.Errorf("read follow-up task selection: %w", err)
+	}
+	return selectSeparateTaskCandidates(candidates, line)
+}
+
+func selectSeparateTaskCandidates(candidates []separateTaskCandidate, input string) ([]separateTaskCandidate, error) {
+	answer := strings.ToLower(strings.TrimSpace(input))
+	switch answer {
+	case "", "n", "no", "none", "skip":
+		return nil, nil
+	case "a", "all":
+		return candidates, nil
+	}
+
+	fields := strings.FieldsFunc(answer, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t'
+	})
+	if len(fields) == 0 {
+		return nil, nil
+	}
+
+	seen := map[int]bool{}
+	selected := make([]separateTaskCandidate, 0, len(fields))
+	for _, field := range fields {
+		number, err := strconv.Atoi(field)
+		if err != nil || number < 1 || number > len(candidates) {
+			return nil, fmt.Errorf("invalid follow-up task selection %q", strings.TrimSpace(input))
+		}
+		if seen[number] {
+			continue
+		}
+		seen[number] = true
+		selected = append(selected, candidates[number-1])
+	}
+	return selected, nil
+}
+
+func createOptionsForReviewCandidate(start taskReviewStart, candidate separateTaskCandidate) taskmodel.CreateOptions {
+	proposal := candidate.finding.TaskProposal
+	return taskmodel.CreateOptions{
+		Title:              proposal.Title,
+		Description:        reviewFollowUpTaskDescription(start, candidate),
+		AcceptanceCriteria: proposal.AcceptanceCriteria,
+		IssueType:          taskmodel.IssueTypeTask,
+	}
+}
+
+func reviewFollowUpTaskDescription(start taskReviewStart, candidate separateTaskCandidate) string {
+	proposal := candidate.finding.TaskProposal
+	provenance := fmt.Sprintf(
+		"Discovered during review of %s in repository %s (review attempt %d, finding %d).",
+		start.taskID(),
+		start.repoID(),
+		start.review.Attempt,
+		candidate.index+1,
+	)
+	if strings.TrimSpace(candidate.finding.Step) != "" {
+		provenance += " Review step: " + candidate.finding.Step + "."
+	}
+	return strings.TrimSpace(proposal.Description) + "\n\nProvenance:\n" + provenance
+}
+
+func promptContinueAfterFollowUpCreationFailure(
+	command *cobra.Command,
+	reader *bufio.Reader,
+	candidate separateTaskCandidate,
+	cause error,
+) (bool, error) {
+	output := command.ErrOrStderr()
+	if _, err := fmt.Fprintf(
+		output,
+		"Failed to create follow-up Bead for review finding %d (%s): %v\n",
+		candidate.index+1,
+		candidate.finding.TaskProposal.Title,
+		cause,
+	); err != nil {
+		return false, err
+	}
+	if _, err := fmt.Fprint(output, "Continue publication without creating this follow-up Bead? [y/N]: "); err != nil {
+		return false, err
+	}
+
+	line, err := reader.ReadString('\n')
+	if err != nil && (!errors.Is(err, io.EOF) || line == "") {
+		return false, fmt.Errorf("read follow-up task failure confirmation: %w", err)
+	}
+	answer := strings.ToLower(strings.TrimSpace(line))
+	return answer == "y" || answer == "yes", nil
+}
+
 func validateReviewCandidateReady(
 	ctx context.Context,
 	store taskstate.Store,
@@ -887,11 +1109,11 @@ func renderManualReviewContext(
 
 func runManualReviewPrompt(
 	command *cobra.Command,
+	reader *bufio.Reader,
 	store taskstate.Store,
 	resolvedCtx resolvedTaskContext,
 	review taskstate.ReviewAttempt,
 ) (manualReviewOutcome, error) {
-	reader := bufio.NewReader(command.InOrStdin())
 	session := manualReviewSession{
 		command:     command,
 		store:       store,
@@ -1026,11 +1248,23 @@ func promptReviewFinding(
 		SuggestedAction: suggestedAction,
 	}
 	if findingType == taskstate.FindingTypeSeparateTask {
-		taskProposal, err := promptReviewLine(command, reader, "Separate task proposal")
+		taskTitle, err := promptReviewLine(command, reader, "Separate task title")
 		if err != nil {
 			return taskstate.ReviewFinding{}, err
 		}
-		finding.TaskProposal = taskProposal
+		taskDescription, err := promptReviewLine(command, reader, "Separate task description")
+		if err != nil {
+			return taskstate.ReviewFinding{}, err
+		}
+		taskAcceptanceCriteria, err := promptReviewLine(command, reader, "Separate task acceptance criteria")
+		if err != nil {
+			return taskstate.ReviewFinding{}, err
+		}
+		finding.TaskProposal = taskstate.ReviewTaskProposal{
+			Title:              taskTitle,
+			Description:        taskDescription,
+			AcceptanceCriteria: taskAcceptanceCriteria,
+		}
 	}
 	return finding, nil
 }

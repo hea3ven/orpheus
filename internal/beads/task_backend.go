@@ -18,6 +18,7 @@ var (
 	_ task.DispatchMutator = TaskBackend{}
 	_ task.PRURLMutator    = TaskBackend{}
 	_ task.CloseMutator    = TaskBackend{}
+	_ task.CreateMutator   = TaskBackend{}
 )
 
 // TaskBackend reads task items from one explicit Beads workspace.
@@ -94,6 +95,39 @@ func (b TaskBackend) List(ctx context.Context) ([]task.Task, error) {
 		return nil, fmt.Errorf("list Beads tasks in %q: parse bd list JSON: %w%s", b.dir, err, formattedOutput(result))
 	}
 	return tasks, nil
+}
+
+// Create creates a standalone Beads task.
+func (b TaskBackend) Create(ctx context.Context, opts task.CreateOptions) (task.Task, error) {
+	createOpts, err := normalizeCreateOptions(opts)
+	if err != nil {
+		return task.Task{}, fmt.Errorf("create Beads task in %q: %w", b.dir, err)
+	}
+
+	result, err := b.runWrite(
+		ctx,
+		"create",
+		"create",
+		createOpts.Title,
+		"--description",
+		createOpts.Description,
+		"--acceptance",
+		createOpts.AcceptanceCriteria,
+		"--type",
+		string(createOpts.IssueType),
+	)
+	if err != nil {
+		return task.Task{}, err
+	}
+
+	created, err := parseCreatedTask(result.Stdout)
+	if err != nil {
+		return task.Task{}, fmt.Errorf("create Beads task in %q: parse bd create JSON: %w%s", b.dir, err, formattedOutput(result))
+	}
+	if strings.TrimSpace(created.ID) == "" {
+		return task.Task{}, fmt.Errorf("create Beads task in %q: bd create response did not include task id%s", b.dir, formattedOutput(result))
+	}
+	return created, nil
 }
 
 // MarkInProgress marks a Beads task in progress and stores Orpheus dispatch pointers.
@@ -195,6 +229,31 @@ func (b TaskBackend) Close(ctx context.Context, id string) error {
 		return err
 	}
 	return nil
+}
+
+func normalizeCreateOptions(opts task.CreateOptions) (task.CreateOptions, error) {
+	normalized := task.CreateOptions{
+		Title:              strings.TrimSpace(opts.Title),
+		Description:        strings.TrimSpace(opts.Description),
+		AcceptanceCriteria: strings.TrimSpace(opts.AcceptanceCriteria),
+		IssueType:          opts.IssueType,
+	}
+	if normalized.Title == "" {
+		return task.CreateOptions{}, errors.New("title is required")
+	}
+	if normalized.Description == "" {
+		return task.CreateOptions{}, errors.New("description is required")
+	}
+	if normalized.AcceptanceCriteria == "" {
+		return task.CreateOptions{}, errors.New("acceptance criteria is required")
+	}
+	if normalized.IssueType == task.IssueTypeUnknown {
+		normalized.IssueType = task.IssueTypeTask
+	}
+	if normalized.IssueType != task.IssueTypeTask {
+		return task.CreateOptions{}, fmt.Errorf("unsupported issue type %q", normalized.IssueType)
+	}
+	return normalized, nil
 }
 
 func validateMarkInProgressState(taskItem task.Task, branch string, worktree string) error {
@@ -355,6 +414,22 @@ func parseTaskArray(output string) ([]task.Task, error) {
 		tasks = append(tasks, taskItem)
 	}
 	return tasks, nil
+}
+
+func parseCreatedTask(output string) (task.Task, error) {
+	var rawTask bdTask
+	if err := json.Unmarshal([]byte(output), &rawTask); err == nil && strings.TrimSpace(rawTask.ID) != "" {
+		return rawTask.toTask()
+	}
+
+	tasks, err := parseTaskArray(output)
+	if err != nil {
+		return task.Task{}, err
+	}
+	if len(tasks) != 1 {
+		return task.Task{}, fmt.Errorf("expected exactly one created task, got %d", len(tasks))
+	}
+	return tasks[0], nil
 }
 
 func (t bdTask) toTask() (task.Task, error) {

@@ -267,14 +267,14 @@ func parseAgentReviewFindingType(raw string) (taskstate.FindingType, error) {
 	}
 }
 
-func buildSeparateTaskProposal(opts agentReviewAddOptions) (string, error) {
+func buildSeparateTaskProposal(opts agentReviewAddOptions) (taskstate.ReviewTaskProposal, error) {
 	title := strings.TrimSpace(opts.taskTitle)
 	if title == "" {
-		return "", errors.New("separate-task findings require --task-title")
+		return taskstate.ReviewTaskProposal{}, errors.New("separate-task findings require --task-title")
 	}
 	description, err := resolveExactlyOneText("task description", opts.taskDescription, opts.taskDescriptionFile)
 	if err != nil {
-		return "", fmt.Errorf("separate-task findings require %w", err)
+		return taskstate.ReviewTaskProposal{}, fmt.Errorf("separate-task findings require %w", err)
 	}
 	acceptanceCriteria, err := resolveExactlyOneText(
 		"task acceptance criteria",
@@ -282,17 +282,13 @@ func buildSeparateTaskProposal(opts agentReviewAddOptions) (string, error) {
 		opts.taskAcceptanceCriteriaFile,
 	)
 	if err != nil {
-		return "", fmt.Errorf("separate-task findings require %w", err)
+		return taskstate.ReviewTaskProposal{}, fmt.Errorf("separate-task findings require %w", err)
 	}
-	return strings.Join([]string{
-		"Title: " + title,
-		"",
-		"Description:",
-		description,
-		"",
-		"Acceptance criteria:",
-		acceptanceCriteria,
-	}, "\n"), nil
+	return taskstate.ReviewTaskProposal{
+		Title:              title,
+		Description:        description,
+		AcceptanceCriteria: acceptanceCriteria,
+	}, nil
 }
 
 func resolveExactlyOneText(label string, inline string, filePath string) (string, error) {

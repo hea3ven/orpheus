@@ -10,6 +10,7 @@ import (
 	"time"
 
 	orstate "github.com/hea3ven/orpheus/internal/state"
+	"gopkg.in/yaml.v3"
 )
 
 const schemaVersion = 1
@@ -109,6 +110,7 @@ type Service interface {
 	StartReviewWithOptions(repoID, taskID string, opts StartReviewOptions) (ReviewAttempt, error)
 	RecordReviewStep(repoID, taskID string, attempt int, opts RecordReviewStepOptions) (ReviewAttempt, error)
 	RecordReviewFinding(repoID, taskID string, attempt int, finding ReviewFinding) (ReviewAttempt, error)
+	RecordReviewFindingCreatedTask(repoID, taskID string, attempt int, findingIndex int, createdTaskID string) (ReviewAttempt, error)
 	TargetReviewFindings(repoID, taskID string, reviewAttempt int, findingIndexes []int, runAttempt int) (ReviewAttempt, error)
 	FinishReview(repoID, taskID string, attempt int, status ReviewStatus) (ReviewAttempt, error)
 	RecordFinalizationCommit(repoID, taskID string, commit string) (Finalization, error)
@@ -205,13 +207,48 @@ type ReviewFinding struct {
 	Title       string      `yaml:"title"`
 	Description string      `yaml:"description"`
 
-	Step            string `yaml:"step,omitempty"`
-	SuggestedAction string `yaml:"suggested_action,omitempty"`
-	Waiver          string `yaml:"waiver,omitempty"`
-	TaskProposal    string `yaml:"task_proposal,omitempty"`
-	CreatedTaskID   string `yaml:"created_task_id,omitempty"`
+	Step            string             `yaml:"step,omitempty"`
+	SuggestedAction string             `yaml:"suggested_action,omitempty"`
+	Waiver          string             `yaml:"waiver,omitempty"`
+	TaskProposal    ReviewTaskProposal `yaml:"task_proposal,omitempty"`
+	CreatedTaskID   string             `yaml:"created_task_id,omitempty"`
 
 	TargetedByRunAttempt int `yaml:"targeted_by_run_attempt,omitempty"`
+}
+
+// ReviewTaskProposal describes follow-up work proposed by a separate-task finding.
+type ReviewTaskProposal struct {
+	Title              string `yaml:"title,omitempty"`
+	Description        string `yaml:"description,omitempty"`
+	AcceptanceCriteria string `yaml:"acceptance_criteria,omitempty"`
+}
+
+// IsZero allows YAML omitempty to omit empty task proposals.
+func (p ReviewTaskProposal) IsZero() bool {
+	return strings.TrimSpace(p.Title) == "" &&
+		strings.TrimSpace(p.Description) == "" &&
+		strings.TrimSpace(p.AcceptanceCriteria) == ""
+}
+
+// UnmarshalYAML accepts the structured proposal schema and older scalar proposals.
+func (p *ReviewTaskProposal) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		text := strings.TrimSpace(value.Value)
+		*p = ReviewTaskProposal{
+			Title:              text,
+			Description:        text,
+			AcceptanceCriteria: text,
+		}
+		return nil
+	}
+
+	type plain ReviewTaskProposal
+	var decoded plain
+	if err := value.Decode(&decoded); err != nil {
+		return err
+	}
+	*p = ReviewTaskProposal(decoded)
+	return nil
 }
 
 // Finalization records factual data from human-side main/solo finalization.
@@ -827,6 +864,55 @@ func (s Store) RecordReviewFinding(
 	}
 
 	state.Reviews[index].Findings = append(state.Reviews[index].Findings, normalizedFinding)
+	if err := s.save(state); err != nil {
+		return ReviewAttempt{}, err
+	}
+	return state.Reviews[index], nil
+}
+
+// RecordReviewFindingCreatedTask records the backend task created from a separate-task finding.
+func (s Store) RecordReviewFindingCreatedTask(
+	repoID,
+	taskID string,
+	attempt int,
+	findingIndex int,
+	createdTaskID string,
+) (ReviewAttempt, error) {
+	createdTaskID = strings.TrimSpace(createdTaskID)
+	if createdTaskID == "" {
+		return ReviewAttempt{}, fmt.Errorf("record created review task for task %s/%s: created task id is required", repoID, taskID)
+	}
+
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+	index := reviewAttemptIndex(state, attempt)
+	if index < 0 {
+		return ReviewAttempt{}, fmt.Errorf("record created review task for task %s/%s: review attempt %d was not found", repoID, taskID, attempt)
+	}
+	if state.Reviews[index].Status != ReviewStatusRunning {
+		return ReviewAttempt{}, fmt.Errorf(
+			"record created review task for task %s/%s: review attempt %d is %q, expected %q",
+			repoID,
+			taskID,
+			attempt,
+			state.Reviews[index].Status,
+			ReviewStatusRunning,
+		)
+	}
+	if findingIndex < 0 || findingIndex >= len(state.Reviews[index].Findings) {
+		return ReviewAttempt{}, fmt.Errorf("record created review task for task %s/%s: finding index %d is out of range", repoID, taskID, findingIndex)
+	}
+	finding := state.Reviews[index].Findings[findingIndex]
+	if finding.Type != FindingTypeSeparateTask {
+		return ReviewAttempt{}, fmt.Errorf("record created review task for task %s/%s: finding index %d is %q, expected %q", repoID, taskID, findingIndex, finding.Type, FindingTypeSeparateTask)
+	}
+	if finding.CreatedTaskID != "" && finding.CreatedTaskID != createdTaskID {
+		return ReviewAttempt{}, fmt.Errorf("record created review task for task %s/%s: finding index %d already created task %q", repoID, taskID, findingIndex, finding.CreatedTaskID)
+	}
+
+	state.Reviews[index].Findings[findingIndex].CreatedTaskID = createdTaskID
 	if err := s.save(state); err != nil {
 		return ReviewAttempt{}, err
 	}
@@ -1463,7 +1549,7 @@ func normalizeReviewFinding(finding ReviewFinding) (ReviewFinding, error) {
 	finding.Step = strings.TrimSpace(finding.Step)
 	finding.SuggestedAction = strings.TrimSpace(finding.SuggestedAction)
 	finding.Waiver = strings.TrimSpace(finding.Waiver)
-	finding.TaskProposal = strings.TrimSpace(finding.TaskProposal)
+	finding.TaskProposal = normalizeReviewTaskProposal(finding.TaskProposal)
 	finding.CreatedTaskID = strings.TrimSpace(finding.CreatedTaskID)
 
 	if !validFindingType(finding.Type) {
@@ -1475,13 +1561,31 @@ func normalizeReviewFinding(finding ReviewFinding) (ReviewFinding, error) {
 	if finding.Description == "" {
 		return ReviewFinding{}, errors.New("description is required")
 	}
-	if finding.Type == FindingTypeSeparateTask && finding.TaskProposal == "" {
-		return ReviewFinding{}, errors.New("task_proposal is required for separate-task findings")
+	if finding.Type == FindingTypeSeparateTask {
+		if finding.TaskProposal.Title == "" {
+			return ReviewFinding{}, errors.New("task_proposal.title is required for separate-task findings")
+		}
+		if finding.TaskProposal.Description == "" {
+			return ReviewFinding{}, errors.New("task_proposal.description is required for separate-task findings")
+		}
+		if finding.TaskProposal.AcceptanceCriteria == "" {
+			return ReviewFinding{}, errors.New("task_proposal.acceptance_criteria is required for separate-task findings")
+		}
+	} else if !finding.TaskProposal.IsZero() {
+		return ReviewFinding{}, errors.New("task_proposal is only supported for separate-task findings")
 	}
 	if finding.TargetedByRunAttempt < 0 {
 		return ReviewFinding{}, errors.New("targeted_by_run_attempt cannot be negative")
 	}
 	return finding, nil
+}
+
+func normalizeReviewTaskProposal(proposal ReviewTaskProposal) ReviewTaskProposal {
+	return ReviewTaskProposal{
+		Title:              strings.TrimSpace(proposal.Title),
+		Description:        strings.TrimSpace(proposal.Description),
+		AcceptanceCriteria: strings.TrimSpace(proposal.AcceptanceCriteria),
+	}
 }
 
 func normalizeReviewFollowUp(followUp *ReviewFollowUp) *ReviewFollowUp {

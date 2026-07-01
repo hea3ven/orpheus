@@ -309,6 +309,47 @@ func TestTaskBackendListParsesVisibleTasksAndMetadata(t *testing.T) {
 	}
 }
 
+func TestTaskBackendCreateCreatesStandaloneTask(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{{
+		wantDir: dir,
+		wantArgs: []string{
+			"--json",
+			"--sandbox",
+			"create",
+			"Follow-up cleanup",
+			"--description",
+			"Clean up the review finding.\n\nProvenance:\nDiscovered during review.",
+			"--acceptance",
+			"Cleanup has tests.",
+			"--type",
+			"task",
+		},
+		result: beads.Result{Stdout: `{"id":"op-7","title":"Follow-up cleanup","description":"Clean up the review finding.","acceptance_criteria":"Cleanup has tests.","status":"open","issue_type":"task"}`},
+	}}}
+
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+
+	created, err := backend.Create(context.Background(), task.CreateOptions{
+		Title:              " Follow-up cleanup ",
+		Description:        "Clean up the review finding.\n\nProvenance:\nDiscovered during review.",
+		AcceptanceCriteria: " Cleanup has tests. ",
+		IssueType:          task.IssueTypeTask,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	if created.ID != "op-7" || created.Title != "Follow-up cleanup" || created.IssueType != task.IssueTypeTask {
+		t.Fatalf("created task = %#v, want op-7 task", created)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
 func assertParsedVisibleTask(t *testing.T, taskItem task.Task) {
 	t.Helper()
 

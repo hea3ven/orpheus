@@ -172,8 +172,9 @@ func TestAgentReviewAddRecordsFindingTypesAndRejectsStaleAttempt(t *testing.T) {
 	is.Equal("Reject empty IDs and add tests.", latest.Findings[0].SuggestedAction)
 	is.Equal(taskstate.FindingTypeAdvisory, latest.Findings[1].Type)
 	is.Equal(taskstate.FindingTypeSeparateTask, latest.Findings[2].Type)
-	is.Contains(latest.Findings[2].TaskProposal, "Title: Extract shared validation helper")
-	is.Contains(latest.Findings[2].TaskProposal, "Callers use the shared helper.")
+	is.Equal("Extract shared validation helper", latest.Findings[2].TaskProposal.Title)
+	is.Equal("Create a shared helper for validation.", latest.Findings[2].TaskProposal.Description)
+	is.Equal("Callers use the shared helper.", latest.Findings[2].TaskProposal.AcceptanceCriteria)
 
 	_, err = store.FinishReview("alpha", "op-review", review.Attempt, taskstate.ReviewStatusBlocked)
 	must.NoError(err)

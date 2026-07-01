@@ -273,6 +273,20 @@ type SyncBackend interface {
 	CloseMutator
 }
 
+// CreateOptions describes a standalone backend task to create.
+type CreateOptions struct {
+	Title              string
+	Description        string
+	AcceptanceCriteria string
+	IssueType          IssueType
+}
+
+// CreateMutator is the narrow backend-neutral mutation used to preserve
+// follow-up work discovered during review.
+type CreateMutator interface {
+	Create(ctx context.Context, opts CreateOptions) (Task, error)
+}
+
 // CloseMutator is the narrow backend-neutral mutation used when finalizing a
 // reviewed main/solo task.
 type CloseMutator interface {
