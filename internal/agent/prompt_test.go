@@ -27,30 +27,8 @@ func TestRenderBootstrapPromptTellsAgentToFetchContext(t *testing.T) {
 func TestRenderActiveContextIncludesWorktreeContract(t *testing.T) {
 	is := assert.New(t)
 
-	output := agent.RenderActiveContext(agent.ActiveContext{
-		Repository: agent.ContextRepository{
-			ID:            "alpha",
-			Name:          "Alpha Repo",
-			Root:          "/repo/alpha",
-			DefaultBranch: "main",
-		},
-		Task: agent.ContextTask{
-			ID:                 "op-1",
-			Title:              "Implement context",
-			Description:        "Resolve the active run.",
-			AcceptanceCriteria: "Context renders only for running attempts.",
-		},
-		Run: agent.ContextRun{
-			Attempt: 2,
-			Agent:   "recorder",
-		},
-		Target: agent.ContextTarget{
-			Kind:             agent.ExecutionTargetWorktree,
-			Branch:           "orpheus/op-1",
-			Path:             "/worktrees/op-1",
-			CurrentDirectory: "/worktrees/op-1/internal",
-		},
-	})
+	ctx := sampleWorktreeActiveContext()
+	output := agent.RenderActiveContext(ctx)
 
 	for _, want := range []string{
 		"# Orpheus Agent Context",
@@ -84,6 +62,39 @@ func TestRenderActiveContextIncludesWorktreeContract(t *testing.T) {
 	}
 	is.NotContains(output, "Beads")
 	is.NotContains(output, "bd")
+	is.NotContains(output, "Interaction guidance:")
+	is.Equal(output, agent.RenderActiveContextWithOptions(ctx, agent.ActiveContextRenderOptions{}))
+	is.Equal(output, agent.RenderActiveContextWithOptions(
+		ctx,
+		agent.ActiveContextRenderOptions{InteractiveAgentGuidance: false},
+	))
+}
+
+func sampleWorktreeActiveContext() agent.ActiveContext {
+	return agent.ActiveContext{
+		Repository: agent.ContextRepository{
+			ID:            "alpha",
+			Name:          "Alpha Repo",
+			Root:          "/repo/alpha",
+			DefaultBranch: "main",
+		},
+		Task: agent.ContextTask{
+			ID:                 "op-1",
+			Title:              "Implement context",
+			Description:        "Resolve the active run.",
+			AcceptanceCriteria: "Context renders only for running attempts.",
+		},
+		Run: agent.ContextRun{
+			Attempt: 2,
+			Agent:   "recorder",
+		},
+		Target: agent.ContextTarget{
+			Kind:             agent.ExecutionTargetWorktree,
+			Branch:           "orpheus/op-1",
+			Path:             "/worktrees/op-1",
+			CurrentDirectory: "/worktrees/op-1/internal",
+		},
+	}
 }
 
 func TestRenderActiveContextIncludesExternalReference(t *testing.T) {
@@ -92,6 +103,27 @@ func TestRenderActiveContextIncludesExternalReference(t *testing.T) {
 	})
 
 	assert.Contains(t, output, "- External reference: TREX-1234")
+}
+
+func TestRenderActiveContextIncludesOptInInteractiveGuidance(t *testing.T) {
+	output := agent.RenderActiveContextWithOptions(
+		agent.ActiveContext{
+			Task:   agent.ContextTask{ID: "op-1"},
+			Target: agent.ContextTarget{Kind: agent.ExecutionTargetMain},
+		},
+		agent.ActiveContextRenderOptions{InteractiveAgentGuidance: true},
+	)
+
+	for _, want := range []string{
+		"Interaction guidance:",
+		"attached interactive implementation session",
+		"may ask the human operator for clarification or decisions",
+		"Minimize interruptions",
+		"ask only for critical ambiguity or major product/architecture decisions",
+		"Make low-risk, low-level implementation decisions independently",
+	} {
+		assert.Contains(t, output, want)
+	}
 }
 
 func TestRenderActiveContextIncludesReviewFollowUpContract(t *testing.T) {

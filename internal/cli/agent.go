@@ -14,6 +14,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const envExperimentalInteractiveAgentGuidance = "ORPHEUS_EXPERIMENTAL_INTERACTIVE_AGENT_GUIDANCE"
+
 func newAgentCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "agent",
@@ -149,8 +151,17 @@ func runAgentContext(command *cobra.Command, opts *rootOptions) error {
 		return fmt.Errorf("agent context: %w", err)
 	}
 
-	_, err = fmt.Fprint(command.OutOrStdout(), agent.RenderActiveContext(activeContext))
+	_, err = fmt.Fprint(command.OutOrStdout(), agent.RenderActiveContextWithOptions(
+		activeContext,
+		agent.ActiveContextRenderOptions{
+			InteractiveAgentGuidance: experimentalInteractiveAgentGuidanceEnabled(),
+		},
+	))
 	return err
+}
+
+func experimentalInteractiveAgentGuidanceEnabled() bool {
+	return strings.TrimSpace(os.Getenv(envExperimentalInteractiveAgentGuidance)) == "1"
 }
 
 type agentReviewAddOptions struct {

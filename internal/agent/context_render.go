@@ -7,17 +7,41 @@ import (
 	"github.com/hea3ven/orpheus/internal/registry"
 )
 
+// ActiveContextRenderOptions controls optional implementation-agent context sections.
+type ActiveContextRenderOptions struct {
+	InteractiveAgentGuidance bool
+}
+
 // RenderActiveContext renders backend-neutral instructions for the active agent.
 func RenderActiveContext(ctx ActiveContext) string {
+	return RenderActiveContextWithOptions(ctx, ActiveContextRenderOptions{})
+}
+
+// RenderActiveContextWithOptions renders backend-neutral instructions for the active agent.
+func RenderActiveContextWithOptions(ctx ActiveContext, opts ActiveContextRenderOptions) string {
 	var builder strings.Builder
 
 	appendContextHeader(&builder, ctx)
 	appendRepositoryContext(&builder, ctx.Repository)
 	appendExecutionTargetContext(&builder, ctx)
 	appendFollowUpContext(&builder, ctx.FollowUp)
+	appendInteractiveAgentGuidance(&builder, opts)
 	appendExecutionContract(&builder, ctx)
 
 	return builder.String()
+}
+
+func appendInteractiveAgentGuidance(builder *strings.Builder, opts ActiveContextRenderOptions) {
+	if !opts.InteractiveAgentGuidance {
+		return
+	}
+
+	builder.WriteString("\nInteraction guidance:\n")
+	builder.WriteString("- This is an attached interactive implementation session; ")
+	builder.WriteString("you may ask the human operator for clarification or decisions.\n")
+	builder.WriteString("- Minimize interruptions: ask only for critical ambiguity ")
+	builder.WriteString("or major product/architecture decisions.\n")
+	builder.WriteString("- Make low-risk, low-level implementation decisions independently.\n")
 }
 
 func appendFollowUpContext(builder *strings.Builder, followUp *ContextFollowUp) {
