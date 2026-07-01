@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
@@ -23,11 +24,16 @@ type PipelineRunOptions struct {
 	Branch  string
 	Workdir string
 
-	Attempt  taskstate.ReviewAttempt
-	Pipeline Pipeline
+	Attempt     taskstate.ReviewAttempt
+	Pipeline    Pipeline
+	SessionName string
 
 	Stdout io.Writer
 	Stderr io.Writer
+	Stdin  io.Reader
+
+	AgentConfig   agent.Config
+	AgentLauncher agent.Launcher
 
 	RenderManualStep func(step Step) error
 	PromptManualStep func(step Step) (ManualResult, error)
@@ -97,14 +103,7 @@ func runStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome, err
 	case KindManual:
 		return runManualStep(opts, step, env)
 	case KindAgentReview:
-		if err := recordStep(opts, step, nil); err != nil {
-			return stepOutcome{}, err
-		}
-		return stepOutcome{}, fmt.Errorf(
-			"task review %s: agent_review step %q is not supported yet",
-			opts.TaskID,
-			step.Name,
-		)
+		return runAgentReviewStep(opts, step, env)
 	default:
 		return stepOutcome{}, fmt.Errorf(
 			"task review %s: review step %q has unsupported kind %q",
@@ -176,6 +175,59 @@ func runManualStep(opts PipelineRunOptions, step Step, env []string) (stepOutcom
 	return stepOutcome{status: outcome.Status, stop: outcome.Stop}, nil
 }
 
+func runAgentReviewStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome, error) {
+	if opts.AgentLauncher == nil {
+		return stepOutcome{}, fmt.Errorf(
+			"task review %s: agent_review step %q requires an agent launcher",
+			opts.TaskID,
+			step.Name,
+		)
+	}
+
+	prompt := agent.RenderBootstrapPrompt()
+	command, err := opts.AgentConfig.ResolveReviewerCommandWithValues(step.Agent, agent.InterpolationValues{
+		Prompt:      prompt,
+		SessionName: opts.SessionName,
+	})
+	if err != nil {
+		return stepOutcome{}, fmt.Errorf("task review %s: resolve agent_review step %q: %w", opts.TaskID, step.Name, err)
+	}
+
+	stepForState := step
+	stepForState.Command = command.Command
+	stepForState.Args = command.Args
+	if err := recordStep(opts, stepForState, nil); err != nil {
+		return stepOutcome{}, err
+	}
+
+	err = opts.AgentLauncher.Run(opts.Context, command, agent.LaunchOptions{
+		Dir:    opts.Workdir,
+		Env:    env,
+		Stdin:  opts.Stdin,
+		Stdout: opts.Stdout,
+		Stderr: opts.Stderr,
+	})
+	if err != nil {
+		return stepOutcome{}, fmt.Errorf("task review %s: run agent_review step %q: %w", opts.TaskID, step.Name, err)
+	}
+
+	reviewAttempt, err := opts.Store.Load(opts.RepoID, opts.TaskID)
+	if err != nil {
+		return stepOutcome{}, fmt.Errorf("task review %s: load agent_review findings: %w", opts.TaskID, err)
+	}
+	latest, ok := taskstate.LatestReview(reviewAttempt)
+	if !ok || latest.Attempt != opts.Attempt.Attempt {
+		return stepOutcome{}, fmt.Errorf("task review %s: latest review attempt no longer matches attempt %d", opts.TaskID, opts.Attempt.Attempt)
+	}
+	for _, finding := range latest.Findings {
+		if finding.Step == step.Name && finding.Type == taskstate.FindingTypeBlocking {
+			_, writeErr := fmt.Fprintf(opts.Stderr, "Review blocked for %s by agent_review %q.\n", opts.TaskID, step.Name)
+			return stepOutcome{status: taskstate.ReviewStatusBlocked, stop: true}, writeErr
+		}
+	}
+	return stepOutcome{}, nil
+}
+
 func runStepCommand(opts PipelineRunOptions, step Step, env []string) (*int, error) {
 	process := exec.CommandContext(opts.Context, step.Command, step.Args...)
 	process.Dir = opts.Workdir
@@ -211,11 +263,13 @@ func recordStep(opts PipelineRunOptions, step Step, exitCode *int) error {
 }
 
 func stepEnvironment(opts PipelineRunOptions, stepName string) []string {
+	prompt := agent.RenderBootstrapPrompt()
 	return []string{
 		"ORPHEUS_REPO_ID=" + opts.RepoID,
 		"ORPHEUS_TASK_ID=" + opts.TaskID,
 		"ORPHEUS_WORKTREE=" + opts.Workdir,
 		"ORPHEUS_BRANCH=" + opts.Branch,
+		"ORPHEUS_AGENT_PROMPT=" + prompt,
 		"ORPHEUS_AGENT_PURPOSE=review",
 		"ORPHEUS_REVIEW_ATTEMPT=" + strconv.Itoa(opts.Attempt.Attempt),
 		"ORPHEUS_REVIEW_STEP=" + stepName,

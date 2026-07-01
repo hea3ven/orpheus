@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -853,14 +854,12 @@ func TestTaskRunExecutesImplementerDefaultAttachedFromDeterministicWorktree(t *t
 	is.Contains(string(bdLog), "--json --sandbox update op-1 --status in_progress --set-metadata orpheus.branch=orpheus/op-1 --set-metadata orpheus.worktree="+worktreePath)
 	is.NotContains(string(bdLog), "--json --readonly --sandbox list")
 
-	agentLog, err := os.ReadFile(agentLogPath)
-	must.NoError(err)
-	log := string(agentLog)
+	log := readTestFileString(t, agentLogPath)
 	for _, want := range []string{
 		"PWD=" + worktreePath,
 		"ARG_COUNT=6",
 		"ARG_1<<END\n--name\nEND",
-		"ARG_2<<END\n(op-1) Implement attached run\nEND",
+		"ARG_2<<END\nImplementing op-1 Implement attached run\nEND",
 		"ARG_3<<END\n--prompt\nEND",
 		"ARG_5<<END\n--literal\nEND",
 		"ARG_6<<END\nunchanged\nEND",
@@ -875,7 +874,7 @@ func TestTaskRunExecutesImplementerDefaultAttachedFromDeterministicWorktree(t *t
 		is.Contains(log, want)
 	}
 	promptArg := agentLogBlock(t, log, "ARG_4")
-	is.Contains(promptArg, "You are an attached implementation agent dispatched by Orpheus.")
+	is.Contains(promptArg, "You are an agent dispatched by Orpheus.")
 	is.NotContains(promptArg, "Implement attached run")
 	is.NotContains(log, "Resolve the task and launch the configured agent.")
 	is.NotContains(log, "The agent gets the rendered prompt and ORPHEUS environment.")
@@ -889,12 +888,12 @@ func TestTaskRunExecutesImplementerDefaultAttachedFromDeterministicWorktree(t *t
 	is.Equal(taskstate.RunStatusSucceeded, state.Runs[0].Status)
 	is.Equal("recorder", state.Runs[0].Agent)
 	is.Equal("fake-agent", state.Runs[0].Command)
-	is.Equal("(op-1) Implement attached run", state.Runs[0].SessionName)
+	is.Equal("Implementing op-1 Implement attached run", state.Runs[0].SessionName)
 	must.Len(state.Runs[0].Args, 6)
 	is.Equal("--name", state.Runs[0].Args[0])
-	is.Equal("(op-1) Implement attached run", state.Runs[0].Args[1])
+	is.Equal("Implementing op-1 Implement attached run", state.Runs[0].Args[1])
 	is.Equal("--prompt", state.Runs[0].Args[2])
-	is.Contains(state.Runs[0].Args[3], "You are an attached implementation agent dispatched by Orpheus.")
+	is.Contains(state.Runs[0].Args[3], "You are an agent dispatched by Orpheus.")
 	is.Contains(state.Runs[0].Args[3], "Run `orpheus agent context` now")
 	is.NotContains(state.Runs[0].Args[3], "Implement attached run")
 	is.Equal("--literal", state.Runs[0].Args[4])
@@ -1468,6 +1467,7 @@ func TestTaskRunReviewFollowUpAllowsDirtyMainTarget(t *testing.T) {
 	must.Len(state.Runs, 1)
 	is.Equal("main", state.Runs[0].Branch)
 	is.Equal(repoPath, state.Runs[0].Worktree)
+	is.Equal("Resolving issues in op-followup Follow up dirty main", state.Runs[0].SessionName)
 	must.NotNil(state.Runs[0].ReviewFollowUp)
 	is.Equal([]int{0}, state.Runs[0].ReviewFollowUp.FindingIndexes)
 }
@@ -1780,7 +1780,7 @@ func TestTaskRunAgentFlagSelectsNamedProfile(t *testing.T) {
 	must.NoError(err)
 	log := string(agentLog)
 	is.Contains(log, "ARG_1<<END\nselected\nEND")
-	is.Contains(log, "ARG_2<<END\nYou are an attached implementation agent dispatched by Orpheus.")
+	is.Contains(log, "ARG_2<<END\nYou are an agent dispatched by Orpheus.")
 	is.Contains(log, "Run `orpheus agent context` now")
 	is.NotContains(log, "- ID: op-2")
 	is.NotContains(log, "- Title: Use selected agent")
@@ -2543,6 +2543,178 @@ func TestTaskReviewCheckStartFailureMarksOperationalFailure(t *testing.T) {
 	must.Len(latest.Steps, 1)
 	is.Nil(latest.Steps[0].ExitCode)
 	is.Empty(latest.Findings)
+}
+
+func TestTaskReviewAgentReviewStepLaunchesReviewerAndPassesWithoutFindings(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review agent", "Run attached reviewer.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	agentLogPath := withFakeAgent(t, "review-agent", 0)
+	writeReviewAgentPipelineConfig(t, paths, "reviewer", "review-agent", []string{"{{session_name}} - {{prompt}}"}, "standard", map[string][]map[string]any{
+		"standard": []map[string]any{{"kind": "agent_review", "name": "ai-review"}},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
+	})
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "")
+
+	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stderr, "fake agent stderr")
+
+	agentLog, err := os.ReadFile(agentLogPath)
+	must.NoError(err)
+	log := string(agentLog)
+	is.Contains(log, "PWD="+repoPath)
+	is.Contains(log, "ORPHEUS_AGENT_PURPOSE=review")
+	is.Contains(log, "ORPHEUS_REVIEW_ATTEMPT=1")
+	is.Contains(log, "ORPHEUS_REVIEW_STEP=ai-review")
+	is.Contains(log, "ORPHEUS_AGENT_PROMPT<<END")
+	is.Contains(log, "You are an agent dispatched by Orpheus.")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+	must.Len(latest.Steps, 1)
+	is.Equal("agent_review", latest.Steps[0].Kind)
+	is.Equal("ai-review", latest.Steps[0].Name)
+	is.Equal("review-agent", latest.Steps[0].Command)
+	must.Len(latest.Steps[0].Args, 1)
+	is.Contains(latest.Steps[0].Args[0], "Reviewing op-main Ready for task done - ")
+	is.Contains(latest.Steps[0].Args[0], "You are an agent dispatched by Orpheus.")
+	is.Empty(latest.Findings)
+	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
+}
+
+func TestTaskReviewAgentReviewBlockingFindingStopsPipeline(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	must.NoError(err)
+	orpheusBin := buildOrpheusTestBinary(t, sourceRoot)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review agent blocker", "Record a blocker.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	reviewer := writeReviewScript(t, fmt.Sprintf(`#!/bin/sh
+%s agent review add \
+  --type blocking \
+  --title "Generated blocker" \
+  --description "The review agent found a blocker." \
+  --suggested-action "Fix the blocker."
+`, shellQuote(orpheusBin)))
+	writeReviewAgentPipelineConfig(t, paths, "reviewer", reviewer, nil, "standard", map[string][]map[string]any{
+		"standard": []map[string]any{
+			{"kind": "agent_review", "name": "ai-review"},
+			{"kind": "manual", "name": "approval"},
+		},
+	})
+	headBefore := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+	})
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "")
+
+	is.Contains(stdout, "Recorded blocking review finding 1 for op-main.")
+	is.Contains(stderr, "Review blocked for op-main by agent_review \"ai-review\".")
+	is.NotContains(stderr, "Review action")
+	is.Equal(headBefore, strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")))
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
+	must.Len(latest.Findings, 1)
+	is.Equal(taskstate.FindingTypeBlocking, latest.Findings[0].Type)
+	is.Equal("ai-review", latest.Findings[0].Step)
+	is.Empty(taskstate.FinalizationFacts(state).Commit)
+}
+
+func TestTaskReviewAgentReviewNonZeroExitMarksOperationalFailure(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review agent failure", "Fail operationally.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	withFakeAgent(t, "failing-review-agent", 7)
+	writeReviewAgentPipelineConfig(t, paths, "reviewer", "failing-review-agent", nil, "standard", map[string][]map[string]any{
+		"standard": []map[string]any{{"kind": "agent_review", "name": "ai-review"}},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+	})
+
+	stdout, stderr, err := executeCommandWithInputAndError(
+		t,
+		[]string{"task", "review", "op-main"},
+		nil,
+	)
+
+	must.Error(err)
+	is.Contains(stdout, "fake agent stdout")
+	is.Contains(stderr, "fake agent stderr")
+	is.ErrorContains(err, "run agent_review step \"ai-review\"")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusFailed, latest.Status)
+	must.Len(latest.Steps, 1)
+	is.Equal("agent_review", latest.Steps[0].Kind)
+	is.Empty(latest.Findings)
+	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
 func TestTaskReviewPipelineOverridePrecedence(t *testing.T) {
@@ -4199,6 +4371,9 @@ func withFakeAgent(t *testing.T, name string, exitCode int) string {
   printf 'ORPHEUS_TASK_ID=%%s\n' "$ORPHEUS_TASK_ID"
   printf 'ORPHEUS_WORKTREE=%%s\n' "$ORPHEUS_WORKTREE"
   printf 'ORPHEUS_BRANCH=%%s\n' "$ORPHEUS_BRANCH"
+  printf 'ORPHEUS_AGENT_PURPOSE=%%s\n' "$ORPHEUS_AGENT_PURPOSE"
+  printf 'ORPHEUS_REVIEW_ATTEMPT=%%s\n' "$ORPHEUS_REVIEW_ATTEMPT"
+  printf 'ORPHEUS_REVIEW_STEP=%%s\n' "$ORPHEUS_REVIEW_STEP"
   printf 'ORPHEUS_AGENT_PROMPT<<END\n%%s\nEND\n' "$ORPHEUS_AGENT_PROMPT"
 } >> "$FAKE_AGENT_LOG"
 printf 'fake agent stdout\n'
@@ -4252,6 +4427,43 @@ func writeReviewPipelineConfig(
 	}))
 }
 
+func writeReviewAgentPipelineConfig(
+	t *testing.T,
+	paths state.Paths,
+	reviewerName string,
+	reviewerCommand string,
+	reviewerArgs []string,
+	defaultPipeline string,
+	pipelines map[string][]map[string]any,
+) {
+	t.Helper()
+
+	configPipelines := map[string]any{}
+	for name, steps := range pipelines {
+		configPipelines[name] = map[string]any{"steps": steps}
+	}
+	reviewerProfile := map[string]any{"command": reviewerCommand}
+	if reviewerArgs != nil {
+		reviewerProfile["args"] = reviewerArgs
+	}
+	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"implementer": "implementer",
+				"reviewer":    reviewerName,
+			},
+			"profiles": map[string]any{
+				"implementer": map[string]any{"command": "unused-implementer"},
+				reviewerName:  reviewerProfile,
+			},
+		},
+		"reviews": map[string]any{
+			"default_pipeline": defaultPipeline,
+			"pipelines":        configPipelines,
+		},
+	}))
+}
+
 func writeReviewScript(t *testing.T, content string) string {
 	t.Helper()
 
@@ -4260,6 +4472,27 @@ func writeReviewScript(t *testing.T, content string) string {
 		t.Fatalf("write review script: %v", err)
 	}
 	return path
+}
+
+func buildOrpheusTestBinary(t *testing.T, sourceRoot string) string {
+	t.Helper()
+
+	binPath := filepath.Join(t.TempDir(), "orpheus")
+	command := exec.Command("go", "build", "-o", binPath, "./cmd/orpheus")
+	command.Dir = sourceRoot
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("build orpheus test binary: %v\n%s", err, output)
+	}
+	return binPath
+}
+
+func readTestFileString(t *testing.T, path string) string {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return string(data)
 }
 
 func shellQuote(value string) string {

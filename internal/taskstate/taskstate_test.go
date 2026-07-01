@@ -71,6 +71,30 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 	)
 }
 
+func TestStoreRejectsUnsafeRunArgsBeforeWritingState(t *testing.T) {
+	store := newTestStore(t)
+
+	_, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		Agent: "recorder",
+		Args:  []string{" - You are an agent dispatched by Orpheus.\n\nRun `orpheus agent context` now.\n"},
+	})
+	if err == nil {
+		t.Fatal("start run with unsafe args succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "run attempt 1 has invalid args") ||
+		!strings.Contains(err.Error(), `multi-line value starting with " - "`) {
+		t.Fatalf("error = %v, want unsafe args context", err)
+	}
+
+	statePath, err := store.Path("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("state path: %v", err)
+	}
+	if _, err := os.Stat(statePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state file exists after rejected write: %v", err)
+	}
+}
+
 func TestStoreRecordsFeatureBranchPREventsIdempotently(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -292,6 +316,42 @@ func TestStoreRecordsReviewAttemptsAndFindings(t *testing.T) {
 		"type: separate_task",
 		"task_proposal: Create a cleanup task.",
 	)
+}
+
+func TestStoreRejectsUnsafeReviewStepArgsAndPreservesState(t *testing.T) {
+	store := newTestStore(t)
+	review, err := store.StartReview("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("start review: %v", err)
+	}
+	statePath, err := store.Path("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("state path: %v", err)
+	}
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state before: %v", err)
+	}
+
+	_, err = store.RecordReviewStep("alpha", "op-1", review.Attempt, taskstate.RecordReviewStepOptions{
+		Kind:    "agent_review",
+		Name:    "ai-review",
+		Command: "review-agent",
+		Args:    []string{" - You are an agent dispatched by Orpheus.\n\nRun `orpheus agent context` now.\n"},
+	})
+	if err == nil {
+		t.Fatal("record review step with unsafe args succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), `review attempt 1 step "ai-review" has invalid args`) {
+		t.Fatalf("error = %v, want review step args context", err)
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state after: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("state changed after rejected write:\nbefore:%s\nafter:%s", before, after)
+	}
 }
 
 func TestStoreTargetsReviewFindingsByRunAttempt(t *testing.T) {

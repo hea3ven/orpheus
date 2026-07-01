@@ -1321,6 +1321,9 @@ func normalizeStateForSave(taskState TaskState) (TaskState, error) {
 	if err := validateLoadedState(taskState, repoID, taskID); err != nil {
 		return TaskState{}, err
 	}
+	if err := validateCommandArgsForSave(taskState); err != nil {
+		return TaskState{}, err
+	}
 	return normalizeState(taskState, repoID, taskID), nil
 }
 
@@ -1426,6 +1429,31 @@ func normalizeReviewStep(step ReviewStep) (ReviewStep, error) {
 		return ReviewStep{}, errors.New("exit_code cannot be negative")
 	}
 	return step, nil
+}
+
+func validateCommandArgsForSave(taskState TaskState) error {
+	for _, run := range taskState.Runs {
+		if err := validateCommandArgs(run.Args); err != nil {
+			return fmt.Errorf("run attempt %d has invalid args: %w", run.Attempt, err)
+		}
+	}
+	for _, review := range taskState.Reviews {
+		for _, step := range review.Steps {
+			if err := validateCommandArgs(step.Args); err != nil {
+				return fmt.Errorf("review attempt %d step %q has invalid args: %w", review.Attempt, step.Name, err)
+			}
+		}
+	}
+	return nil
+}
+
+func validateCommandArgs(args []string) error {
+	for index, arg := range args {
+		if strings.HasPrefix(arg, " - ") && strings.Contains(arg, "\n") {
+			return fmt.Errorf("arg %d cannot be a multi-line value starting with %q", index, " - ")
+		}
+	}
+	return nil
 }
 
 func normalizeReviewFinding(finding ReviewFinding) (ReviewFinding, error) {

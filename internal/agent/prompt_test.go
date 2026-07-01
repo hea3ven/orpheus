@@ -13,7 +13,7 @@ func TestRenderBootstrapPromptTellsAgentToFetchContext(t *testing.T) {
 
 	prompt := agent.RenderBootstrapPrompt()
 
-	is.Contains(prompt, "You are an attached implementation agent dispatched by Orpheus.")
+	is.Contains(prompt, "You are an agent dispatched by Orpheus.")
 	is.Contains(prompt, "Run `orpheus agent context` now")
 	is.Contains(prompt, "task instructions")
 	is.Contains(prompt, "execution contract")

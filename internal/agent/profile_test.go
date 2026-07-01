@@ -115,6 +115,48 @@ func TestLoadConfigResolvesNestedImplementerDefault(t *testing.T) {
 	is.Equal("other", override.Command)
 }
 
+func TestResolveReviewerCommandUsesReviewerDefaultOrOverride(t *testing.T) {
+	is := assert.New(t)
+	config := agent.Config{
+		Defaults: agent.AgentDefaults{Implementer: "impl", Reviewer: "reviewer"},
+		Agents: map[string]agent.Profile{
+			"impl":     {Command: "impl-agent"},
+			"reviewer": {Command: "review-agent", Args: []string{"{{session_name}}", "{{prompt}}"}},
+			"custom":   {Command: "custom-review"},
+		},
+	}
+
+	snapshot, err := config.ResolveReviewerCommandWithValues("", agent.InterpolationValues{
+		Prompt:      "review prompt",
+		SessionName: "Reviewing op-1 Review task",
+	})
+
+	require.NoError(t, err)
+	is.Equal("reviewer", snapshot.AgentName)
+	is.Equal("review-agent", snapshot.Command)
+	is.Equal([]string{"Reviewing op-1 Review task", "review prompt"}, snapshot.Args)
+
+	override, err := config.ResolveReviewerCommand("custom", "review prompt")
+	require.NoError(t, err)
+	is.Equal("custom", override.AgentName)
+	is.Equal("custom-review", override.Command)
+}
+
+func TestResolveReviewerCommandRequiresReviewerDefaultWithoutOverride(t *testing.T) {
+	config := agent.Config{
+		Defaults: agent.AgentDefaults{Implementer: "impl"},
+		Agents: map[string]agent.Profile{
+			"impl": {Command: "impl-agent"},
+		},
+	}
+
+	_, err := config.ResolveReviewerCommand("", "review prompt")
+
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "agents.defaults.reviewer is required")
+	}
+}
+
 func TestLoadConfigReportsMissingFileWithSetupGuidance(t *testing.T) {
 	is := assert.New(t)
 	paths := newAgentTestPaths(t)

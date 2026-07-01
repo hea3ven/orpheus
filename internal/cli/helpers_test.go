@@ -77,7 +77,25 @@ func newTestState(t *testing.T) string {
 	root := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "xdg-config"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(root, "xdg-data"))
+	clearOrpheusAgentEnv(t)
 	return root
+}
+
+func clearOrpheusAgentEnv(t *testing.T) {
+	t.Helper()
+
+	for _, name := range []string{
+		"ORPHEUS_REPO_ID",
+		"ORPHEUS_TASK_ID",
+		"ORPHEUS_WORKTREE",
+		"ORPHEUS_BRANCH",
+		"ORPHEUS_AGENT_PROMPT",
+		"ORPHEUS_AGENT_PURPOSE",
+		"ORPHEUS_REVIEW_ATTEMPT",
+		"ORPHEUS_REVIEW_STEP",
+	} {
+		t.Setenv(name, "")
+	}
 }
 
 func initGitRepo(t *testing.T, repoPath string) {

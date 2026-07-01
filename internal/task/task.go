@@ -180,12 +180,27 @@ func (t Task) Clone() Task {
 	return t
 }
 
-// SessionName returns the generic agent session name for a task run.
+// SessionName returns the implementation agent session name for a task run.
 func (t Task) SessionName() string {
+	return t.sessionName("Implementing")
+}
+
+// FollowUpSessionName returns the implementation agent session name for a
+// review follow-up run.
+func (t Task) FollowUpSessionName() string {
+	return t.sessionName("Resolving issues in")
+}
+
+// ReviewSessionName returns the review agent session name for a task review.
+func (t Task) ReviewSessionName() string {
+	return t.sessionName("Reviewing")
+}
+
+func (t Task) sessionName(prefix string) string {
 	if strings.TrimSpace(t.Title) == "" {
-		return fmt.Sprintf("(%s)", t.ID)
+		return fmt.Sprintf("%s %s", prefix, t.ID)
 	}
-	return fmt.Sprintf("(%s) %s", t.ID, t.Title)
+	return fmt.Sprintf("%s %s %s", prefix, t.ID, t.Title)
 }
 
 // ProjectOrpheusMetadata projects Orpheus-owned metadata keys into named fields.

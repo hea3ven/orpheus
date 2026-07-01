@@ -84,6 +84,142 @@ func TestAgentContextRendersRepoRootFeatureBranchContext(t *testing.T) {
 	is.NotEmpty(stdout)
 }
 
+func TestAgentContextRendersReviewContext(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	repoPath, review := setupActiveAgentReview(t, "op-review")
+
+	stdout, stderr := executeCommand(t, []string{"agent", "context"})
+
+	is.Empty(stderr)
+	for _, want := range []string{
+		"# Orpheus Review Agent Context",
+		"- ID: op-review",
+		"- Title: Ready for task done",
+		"- Registered root: " + repoPath,
+		"- Workflow: main/solo",
+		"- Review attempt: 1",
+		"- Review step: ai-review",
+		"Latest completion:",
+		"- Summary: Review summary",
+		"- Description: Review description.",
+		"strict read-only review step",
+		"git status --short",
+		"orpheus agent review add",
+		"--type blocking",
+		"--type separate-task",
+		"Blocking findings require `--suggested-action`",
+		"Do not call `orpheus agent done`",
+	} {
+		is.Contains(stdout, want)
+	}
+	is.Equal(1, review.Attempt)
+	must.NotEmpty(stdout)
+}
+
+//nolint:funlen // The three finding types and stale-write assertion share one active review setup.
+func TestAgentReviewAddRecordsFindingTypesAndRejectsStaleAttempt(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	_, review := setupActiveAgentReview(t, "op-review")
+	paths := currentTestPaths(t)
+	descriptionFile := filepath.Join(t.TempDir(), "finding.md")
+	taskDescriptionFile := filepath.Join(t.TempDir(), "task.md")
+	taskAcceptanceFile := filepath.Join(t.TempDir(), "acceptance.md")
+	must.NoError(os.WriteFile(descriptionFile, []byte("Extracting validation would reduce duplication.\n"), 0o644))
+	must.NoError(os.WriteFile(taskDescriptionFile, []byte("Create a shared helper for validation.\n"), 0o644))
+	must.NoError(os.WriteFile(taskAcceptanceFile, []byte("Callers use the shared helper.\n"), 0o644))
+
+	stdout, stderr := executeCommand(t, []string{
+		"agent", "review", "add",
+		"--type", "blocking",
+		"--title", "Missing validation",
+		"--description", "Empty IDs are accepted.",
+		"--suggested-action", "Reject empty IDs and add tests.",
+	})
+	is.Empty(stderr)
+	is.Contains(stdout, "Recorded blocking review finding 1 for op-review.")
+
+	stdout, stderr = executeCommand(t, []string{
+		"agent", "review", "add",
+		"--type", "advisory",
+		"--title", "Small cleanup",
+		"--description", "A helper could be renamed later.",
+	})
+	is.Empty(stderr)
+	is.Contains(stdout, "Recorded advisory review finding 2 for op-review.")
+
+	stdout, stderr = executeCommand(t, []string{
+		"agent", "review", "add",
+		"--type", "separate-task",
+		"--title", "Duplicate validation helper",
+		"--description-file", descriptionFile,
+		"--task-title", "Extract shared validation helper",
+		"--task-description-file", taskDescriptionFile,
+		"--task-acceptance-criteria-file", taskAcceptanceFile,
+	})
+	is.Empty(stderr)
+	is.Contains(stdout, "Recorded separate-task review finding 3 for op-review.")
+
+	store := taskstate.NewStore(paths)
+	state, err := store.Load("alpha", "op-review")
+	must.NoError(err)
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	must.Len(latest.Findings, 3)
+	is.Equal(taskstate.FindingTypeBlocking, latest.Findings[0].Type)
+	is.Equal("ai-review", latest.Findings[0].Step)
+	is.Equal("Reject empty IDs and add tests.", latest.Findings[0].SuggestedAction)
+	is.Equal(taskstate.FindingTypeAdvisory, latest.Findings[1].Type)
+	is.Equal(taskstate.FindingTypeSeparateTask, latest.Findings[2].Type)
+	is.Contains(latest.Findings[2].TaskProposal, "Title: Extract shared validation helper")
+	is.Contains(latest.Findings[2].TaskProposal, "Callers use the shared helper.")
+
+	_, err = store.FinishReview("alpha", "op-review", review.Attempt, taskstate.ReviewStatusBlocked)
+	must.NoError(err)
+	stdout, stderr, err = executeCommandWithError(t, []string{
+		"agent", "review", "add",
+		"--type", "blocking",
+		"--title", "Too late",
+		"--description", "This should not write.",
+		"--suggested-action", "Do not record.",
+	})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "expected \"running\"")
+	state, err = store.Load("alpha", "op-review")
+	must.NoError(err)
+	latest, ok = taskstate.LatestReview(state)
+	must.True(ok)
+	is.Len(latest.Findings, 3)
+}
+
+func TestAgentReviewAddRejectsInvalidFindingWithoutWriting(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	setupActiveAgentReview(t, "op-review")
+
+	stdout, stderr, err := executeCommandWithError(t, []string{
+		"agent", "review", "add",
+		"--type", "blocking",
+		"--title", "Missing suggested action",
+		"--description", "Blocking findings need remediation guidance.",
+	})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "blocking findings require --suggested-action")
+
+	state, err := taskstate.NewStore(currentTestPaths(t)).Load("alpha", "op-review")
+	must.NoError(err)
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Empty(latest.Findings)
+}
+
 func setupAgentContextWorktree(t *testing.T) (string, string, string, string) {
 	t.Helper()
 
@@ -167,6 +303,37 @@ func setAgentRunEnv(t *testing.T, taskID string, branch string, worktreePath str
 	t.Setenv("ORPHEUS_TASK_ID", taskID)
 	t.Setenv("ORPHEUS_WORKTREE", worktreePath)
 	t.Setenv("ORPHEUS_BRANCH", branch)
+}
+
+func setupActiveAgentReview(t *testing.T, taskID string) (string, taskstate.ReviewAttempt) {
+	t.Helper()
+
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	repoPath := filepath.Join(root, "repos", "alpha")
+	registerAgentTestRepo(t, repoPath)
+	t.Chdir(repoPath)
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: mainReadyTaskJSON(taskID, repoPath)},
+	})
+	recordMainCompletion(t, paths, "alpha", taskID, repoPath, "Review summary", "Review description.")
+	store := taskstate.NewStore(paths)
+	review, err := store.StartReviewWithOptions("alpha", taskID, taskstate.StartReviewOptions{
+		Pipeline: "standard",
+		Step:     "ai-review",
+	})
+	must.NoError(err)
+	_, err = store.RecordReviewStep("alpha", taskID, review.Attempt, taskstate.RecordReviewStepOptions{
+		Kind: "agent_review",
+		Name: "ai-review",
+	})
+	must.NoError(err)
+	setAgentRunEnv(t, taskID, "main", repoPath)
+	t.Setenv("ORPHEUS_AGENT_PURPOSE", "review")
+	t.Setenv("ORPHEUS_REVIEW_ATTEMPT", "1")
+	t.Setenv("ORPHEUS_REVIEW_STEP", "ai-review")
+	return repoPath, review
 }
 
 func TestAgentContextFailsBeforeRenderingWhenRunIsStale(t *testing.T) {

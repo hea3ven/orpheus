@@ -189,7 +189,7 @@ func (s DispatchService) startLocked(
 
 	commandContext := DispatchCommandContext{
 		Task:        plan.taskItem.Clone(),
-		SessionName: plan.taskItem.SessionName(),
+		SessionName: dispatchSessionName(plan.taskItem, plan.followUp),
 	}
 	command, err := resolveDispatchCommand(opts, plan.followUp != nil, commandContext)
 	if err != nil {
@@ -217,6 +217,13 @@ func (s DispatchService) startLocked(
 		Attempt:      attempt,
 		ExecutionDir: plan.expected.WorktreePath,
 	}, nil
+}
+
+func dispatchSessionName(taskItem task.Task, followUp *dispatchFollowUpPlan) string {
+	if followUp != nil {
+		return taskItem.FollowUpSessionName()
+	}
+	return taskItem.SessionName()
 }
 
 func (s DispatchService) validateStart(

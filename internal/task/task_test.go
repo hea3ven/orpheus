@@ -123,17 +123,17 @@ func TestTaskSessionName(t *testing.T) {
 		{
 			name: "with title",
 			task: task.Task{ID: "op-1", Title: "Implement attached run"},
-			want: "(op-1) Implement attached run",
+			want: "Implementing op-1 Implement attached run",
 		},
 		{
 			name: "without title",
 			task: task.Task{ID: "op-2"},
-			want: "(op-2)",
+			want: "Implementing op-2",
 		},
 		{
 			name: "blank title",
 			task: task.Task{ID: "op-3", Title: "  "},
-			want: "(op-3)",
+			want: "Implementing op-3",
 		},
 	}
 
@@ -145,6 +145,20 @@ func TestTaskSessionName(t *testing.T) {
 				t.Fatalf("SessionName() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestTaskPurposeSessionNames(t *testing.T) {
+	taskItem := task.Task{ID: "op-1", Title: "Implement attached run"}
+
+	if got := taskItem.SessionName(); got != "Implementing op-1 Implement attached run" {
+		t.Fatalf("SessionName() = %q", got)
+	}
+	if got := taskItem.FollowUpSessionName(); got != "Resolving issues in op-1 Implement attached run" {
+		t.Fatalf("FollowUpSessionName() = %q", got)
+	}
+	if got := taskItem.ReviewSessionName(); got != "Reviewing op-1 Implement attached run" {
+		t.Fatalf("ReviewSessionName() = %q", got)
 	}
 }
 
