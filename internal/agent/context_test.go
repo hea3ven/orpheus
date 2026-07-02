@@ -327,6 +327,46 @@ func TestActiveContextResolverWrapsBackendErrors(t *testing.T) {
 	is.Contains(err.Error(), "backend unavailable")
 }
 
+func TestRenderReviewContextRequiresExhaustiveMultiFindingReview(t *testing.T) {
+	is := assert.New(t)
+
+	got := agent.RenderReviewContext(agent.ReviewContext{
+		Repository: agent.ContextRepository{
+			ID:            "alpha",
+			Name:          "Alpha Repo",
+			Root:          "/repo",
+			DefaultBranch: "main",
+		},
+		Task: agent.ContextTask{
+			ID:    "op-1",
+			Title: "Review context",
+		},
+		Target: agent.ContextTarget{
+			Kind:             agent.ExecutionTargetMain,
+			Branch:           "main",
+			Path:             "/repo",
+			CurrentDirectory: "/repo",
+		},
+		Review: agent.ContextReview{
+			Attempt: 1,
+			Step:    "ai-review",
+			Completion: taskstate.Completion{
+				Summary:     "Complete review context",
+				Description: "Implementation is ready for review.",
+			},
+		},
+	})
+
+	for _, want := range []string{
+		"Review the complete change set before exiting, even if you find an issue early.",
+		"Do not stop after the first issue; continue reviewing for additional distinct findings.",
+		"Record each distinct finding with its own `orpheus agent review add` call",
+		"When multiple findings exist, run `orpheus agent review add` multiple times, once per finding.",
+	} {
+		is.Contains(got, want)
+	}
+}
+
 type activeContextFixture struct {
 	paths    state.Paths
 	repoPath string
