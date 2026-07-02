@@ -160,7 +160,9 @@ type finalizationTarget struct {
 }
 
 type finalizationContext struct {
+	state        taskstate.TaskState
 	latest       taskstate.RunAttempt
+	publication  taskstate.RunAttempt
 	latestReview taskstate.ReviewAttempt
 	hasReview    bool
 	finalization taskstate.Finalization
@@ -364,7 +366,7 @@ func (s FinalizationService) ensureDefaultBranchFinalizationCommit(
 		return finalization, err
 	}
 
-	summary, description, err := finalizationMessageParts(finalizeCtx.latest.Completion, opts)
+	summary, description, err := finalizationMessageParts(finalizeCtx.publication.Completion, opts)
 	if err != nil {
 		return taskstate.Finalization{}, err
 	}
@@ -574,7 +576,7 @@ func (s FinalizationService) publishFeatureBranch(
 		return FinalizationResult{}, err
 	}
 
-	message, err := featureBranchPublicationMessage(repo, target.task, finalizeCtx.latest)
+	message, err := featureBranchPublicationMessage(repo, target.task, finalizeCtx.publication)
 	if err != nil {
 		return FinalizationResult{}, err
 	}
@@ -603,7 +605,7 @@ func (s FinalizationService) publishFeatureBranch(
 		return FinalizationResult{}, err
 	}
 
-	prURL, prRecovered, err := s.findOrCreateFeatureBranchPR(ctx, repo, target.task, finalizeCtx.latest, metadataTarget)
+	prURL, prRecovered, err := s.findOrCreateFeatureBranchPR(ctx, repo, target.task, finalizeCtx, metadataTarget)
 	if err != nil {
 		return FinalizationResult{}, err
 	}
@@ -727,7 +729,7 @@ func (s FinalizationService) findOrCreateFeatureBranchPR(
 	ctx context.Context,
 	repo task.Repository,
 	taskItem task.Task,
-	latest taskstate.RunAttempt,
+	finalizeCtx finalizationContext,
 	target Target,
 ) (string, bool, error) {
 	baseBranch := strings.TrimSpace(repo.DefaultBranch)
@@ -743,7 +745,7 @@ func (s FinalizationService) findOrCreateFeatureBranchPR(
 		return strings.TrimSpace(found.URL), true, nil
 	}
 
-	content, err := BuildPublicationPullRequestContent(repo.TitleTemplate, taskItem, latest)
+	content, err := BuildPublicationPullRequestContentFromState(repo.TitleTemplate, taskItem, finalizeCtx.state)
 	if err != nil {
 		return "", false, err
 	}
@@ -992,6 +994,7 @@ func (s FinalizationService) isInferableCurrentBranchReady(
 	}
 	ctx := finalizationContext{
 		latest:       latest,
+		publication:  latest,
 		finalization: taskstate.FinalizationFacts(state),
 	}
 	switch target.Kind {
@@ -1027,9 +1030,15 @@ func (s FinalizationService) loadFinalizationContext(repo task.Repository, taskI
 	if !ok {
 		return finalizationContext{}, fmt.Errorf("task %s has no Orpheus run attempts; run `orpheus task run --main %s` first", taskItem.ID, taskItem.ID)
 	}
+	publicationRun, err := publicationRun(state)
+	if err != nil {
+		return finalizationContext{}, fmt.Errorf("select publication completion for task %s: %w", taskItem.ID, err)
+	}
 	latestReview, hasReview := taskstate.LatestReview(state)
 	return finalizationContext{
+		state:        state,
 		latest:       latest,
+		publication:  publicationRun,
 		latestReview: latestReview,
 		hasReview:    hasReview,
 		finalization: taskstate.FinalizationFacts(state),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/publication"
@@ -410,6 +411,233 @@ func BuildPublicationPullRequestContent(titleTemplate string, taskItem task.Task
 		Title: title,
 		Body:  body,
 	}, nil
+}
+
+// BuildPublicationPullRequestContentFromState returns PR text from the
+// canonical implementation completion plus any recorded review process.
+func BuildPublicationPullRequestContentFromState(
+	titleTemplate string,
+	taskItem task.Task,
+	state taskstate.TaskState,
+) (PullRequestContent, error) {
+	run, err := publicationRun(state)
+	if err != nil {
+		return PullRequestContent{}, err
+	}
+	content, err := BuildPublicationPullRequestContent(titleTemplate, taskItem, run)
+	if err != nil {
+		return PullRequestContent{}, err
+	}
+	content.Body = appendReviewProcess(content.Body, state)
+	return content, nil
+}
+
+func publicationRun(state taskstate.TaskState) (taskstate.RunAttempt, error) {
+	var selected taskstate.RunAttempt
+	for _, run := range state.Runs {
+		if run.Completion == nil || run.ReviewFollowUp != nil {
+			continue
+		}
+		if selected.Attempt == 0 || run.Attempt > selected.Attempt {
+			selected = run
+		}
+	}
+	if selected.Attempt == 0 {
+		return taskstate.RunAttempt{}, errors.New("original implementation completion is required")
+	}
+	return selected, nil
+}
+
+func appendReviewProcess(body string, state taskstate.TaskState) string {
+	if len(state.Reviews) == 0 {
+		return body
+	}
+
+	var builder strings.Builder
+	builder.WriteString(strings.TrimRight(body, "\n"))
+	builder.WriteString("\n\n## Review process\n")
+	for _, review := range state.Reviews {
+		appendReviewAttempt(&builder, review, state.Runs)
+	}
+	return builder.String()
+}
+
+func appendReviewAttempt(builder *strings.Builder, review taskstate.ReviewAttempt, runs []taskstate.RunAttempt) {
+	builder.WriteString("\n### Review attempt ")
+	builder.WriteString(strconv.Itoa(review.Attempt))
+	builder.WriteString(" — ")
+	builder.WriteString(reviewProcessStatus(review.Status))
+	builder.WriteString("\n\n")
+
+	for _, stepName := range reviewStepNames(review) {
+		builder.WriteString("- ")
+		builder.WriteString(reviewStepIcon(review, stepName))
+		builder.WriteString(" `")
+		builder.WriteString(stepName)
+		builder.WriteString("`\n")
+		for _, finding := range review.Findings {
+			if findingStepName(finding, review.Step) == stepName {
+				appendReviewFinding(builder, finding)
+			}
+		}
+	}
+	appendFixRuns(builder, review, runs)
+}
+
+func reviewProcessStatus(status taskstate.ReviewStatus) string {
+	statusText := strings.TrimSpace(string(status))
+	if statusText == "" {
+		return "unknown"
+	}
+	return statusText
+}
+
+func reviewStepNames(review taskstate.ReviewAttempt) []string {
+	names := make([]string, 0, len(review.Steps)+1)
+	seen := map[string]bool{}
+	for _, step := range review.Steps {
+		name := strings.TrimSpace(step.Name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	for _, finding := range review.Findings {
+		name := findingStepName(finding, review.Step)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		name := strings.TrimSpace(review.Step)
+		if name == "" {
+			name = "review"
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
+func findingStepName(finding taskstate.ReviewFinding, fallback string) string {
+	name := strings.TrimSpace(finding.Step)
+	if name != "" {
+		return name
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func reviewStepIcon(review taskstate.ReviewAttempt, stepName string) string {
+	for _, finding := range review.Findings {
+		if findingStepName(finding, review.Step) != stepName {
+			continue
+		}
+		if finding.Type == taskstate.FindingTypeBlocking && strings.TrimSpace(finding.Waiver) == "" {
+			return "❌"
+		}
+	}
+	if review.Status == taskstate.ReviewStatusFailed {
+		return "⚠️"
+	}
+	return "✅"
+}
+
+func appendReviewFinding(builder *strings.Builder, finding taskstate.ReviewFinding) {
+	title := singleLine(finding.Title)
+	if title == "" {
+		title = "Finding"
+	}
+	builder.WriteString("  - **")
+	builder.WriteString(reviewFindingLabel(finding))
+	builder.WriteString(":** ")
+	builder.WriteString(title)
+	builder.WriteString("\n")
+
+	if strings.TrimSpace(finding.Waiver) != "" {
+		builder.WriteString("    - Waived.\n")
+		return
+	}
+	if finding.Type == taskstate.FindingTypeBlocking {
+		appendBlockingFindingResolution(builder, finding)
+		return
+	}
+	if finding.Type == taskstate.FindingTypeSeparateTask {
+		createdTaskID := strings.TrimSpace(finding.CreatedTaskID)
+		if createdTaskID != "" {
+			builder.WriteString("    - Created task: ")
+			builder.WriteString(createdTaskID)
+			builder.WriteString("\n")
+		}
+	}
+}
+
+func appendBlockingFindingResolution(builder *strings.Builder, finding taskstate.ReviewFinding) {
+	if finding.TargetedByRunAttempt > 0 {
+		builder.WriteString("    - Fixed by run attempt ")
+		builder.WriteString(strconv.Itoa(finding.TargetedByRunAttempt))
+		builder.WriteString("\n")
+		return
+	}
+	builder.WriteString("    - No targeted fix run recorded.\n")
+}
+
+func reviewFindingLabel(finding taskstate.ReviewFinding) string {
+	switch finding.Type {
+	case taskstate.FindingTypeBlocking:
+		if strings.TrimSpace(finding.Waiver) != "" {
+			return "Blocking (waived)"
+		}
+		return "Blocking"
+	case taskstate.FindingTypeAdvisory:
+		return "Advisory"
+	case taskstate.FindingTypeSeparateTask:
+		return "Separate task"
+	default:
+		return "Finding"
+	}
+}
+
+func appendFixRuns(builder *strings.Builder, review taskstate.ReviewAttempt, runs []taskstate.RunAttempt) {
+	for _, run := range reviewFixRuns(review, runs) {
+		if run.Completion == nil {
+			continue
+		}
+		builder.WriteString("\n  **Fix run attempt ")
+		builder.WriteString(strconv.Itoa(run.Attempt))
+		builder.WriteString("**\n")
+		builder.WriteString("  - Summary: `")
+		builder.WriteString(singleLine(run.Completion.Summary))
+		builder.WriteString("`\n")
+		builder.WriteString("  - Description: ")
+		builder.WriteString(strings.TrimSpace(run.Completion.Description))
+		builder.WriteString("\n")
+	}
+}
+
+func reviewFixRuns(review taskstate.ReviewAttempt, runs []taskstate.RunAttempt) []taskstate.RunAttempt {
+	attempts := make([]int, 0)
+	seen := map[int]bool{}
+	for _, finding := range review.Findings {
+		attempt := finding.TargetedByRunAttempt
+		if attempt <= 0 || seen[attempt] {
+			continue
+		}
+		seen[attempt] = true
+		attempts = append(attempts, attempt)
+	}
+
+	result := make([]taskstate.RunAttempt, 0, len(attempts))
+	for _, attempt := range attempts {
+		for _, run := range runs {
+			if run.Attempt == attempt {
+				result = append(result, run)
+				break
+			}
+		}
+	}
+	return result
 }
 
 func singleLine(value string) string {
