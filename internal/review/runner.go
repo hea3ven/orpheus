@@ -35,8 +35,9 @@ type PipelineRunOptions struct {
 	AgentConfig   agent.Config
 	AgentLauncher agent.Launcher
 
-	RenderManualStep func(step Step) error
-	PromptManualStep func(step Step) (ManualResult, error)
+	RenderManualStep     func(step Step) error
+	ConfirmManualCommand func(step Step) (bool, error)
+	PromptManualStep     func(step Step) (ManualResult, error)
 }
 
 // PipelineOutcome records the terminal status from a pipeline execution.
@@ -63,6 +64,9 @@ func RunPipeline(opts PipelineRunOptions) (PipelineOutcome, error) {
 	for _, step := range opts.Pipeline.Steps {
 		stepEnv := stepEnvironment(opts, step.Name)
 		outcome, err := runReadOnlyStep(opts.Context, opts.Workdir, func() (stepOutcome, error) {
+			if err := writeStepHeader(opts.Stderr, step); err != nil {
+				return stepOutcome{}, err
+			}
 			return runStep(opts, step, stepEnv)
 		})
 		if err != nil {
@@ -157,12 +161,12 @@ func runManualStep(opts PipelineRunOptions, step Step, env []string) (stepOutcom
 	var exitCode *int
 	if step.Command != "" {
 		var err error
-		exitCode, err = runStepCommand(opts, step, env)
-		if recordErr := recordStep(opts, step, exitCode); recordErr != nil {
-			return stepOutcome{}, recordErr
-		}
+		exitCode, err = runConfirmedManualCommand(opts, step, env)
 		if err != nil {
-			return stepOutcome{}, fmt.Errorf("task review %s: run manual step %q: %w", opts.TaskID, step.Name, err)
+			return stepOutcome{}, err
+		}
+		if exitCode == nil {
+			return stepOutcome{status: taskstate.ReviewStatusAborted, stop: true}, nil
 		}
 	} else if err := recordStep(opts, step, nil); err != nil {
 		return stepOutcome{}, err
@@ -173,6 +177,40 @@ func runManualStep(opts PipelineRunOptions, step Step, env []string) (stepOutcom
 		return stepOutcome{}, err
 	}
 	return stepOutcome{status: outcome.Status, stop: outcome.Stop}, nil
+}
+
+func runConfirmedManualCommand(opts PipelineRunOptions, step Step, env []string) (*int, error) {
+	if opts.ConfirmManualCommand == nil {
+		return nil, fmt.Errorf(
+			"task review %s: manual step %q requires manual command confirmation hook",
+			opts.TaskID,
+			step.Name,
+		)
+	}
+	confirmed, err := opts.ConfirmManualCommand(step)
+	if err != nil {
+		return nil, err
+	}
+	if !confirmed {
+		return nil, nil
+	}
+
+	exitCode, err := runStepCommand(opts, step, env)
+	if recordErr := recordStep(opts, step, exitCode); recordErr != nil {
+		return nil, recordErr
+	}
+	if err != nil {
+		return nil, fmt.Errorf("task review %s: run manual step %q: %w", opts.TaskID, step.Name, err)
+	}
+	return exitCode, nil
+}
+
+func writeStepHeader(output io.Writer, step Step) error {
+	if output == nil {
+		return nil
+	}
+	_, err := fmt.Fprintf(output, "\n== Review step: %s (%s) ==\n", step.Name, step.Kind)
+	return err
 }
 
 func runAgentReviewStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome, error) {

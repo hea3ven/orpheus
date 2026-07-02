@@ -644,6 +644,17 @@ func taskReviewPipelineOptions(
 		RenderManualStep: func(review.Step) error {
 			return renderManualReviewContext(command, start.store, start.resolvedCtx)
 		},
+		ConfirmManualCommand: func(step review.Step) (bool, error) {
+			confirmed, err := promptManualCommandConfirmation(command, reviewInput, step)
+			if err != nil {
+				return false, fmt.Errorf("task review %s: %w", start.taskID(), err)
+			}
+			if confirmed {
+				return true, nil
+			}
+			_, err = fmt.Fprintf(command.ErrOrStderr(), "Review aborted for %s.\n", start.taskID())
+			return false, err
+		},
 		PromptManualStep: func(review.Step) (review.ManualResult, error) {
 			outcome, err := runManualReviewPrompt(command, reviewInput, start.store, start.resolvedCtx, start.review)
 			if err != nil {
@@ -1075,15 +1086,14 @@ func renderManualReviewContext(
 	if err != nil {
 		return fmt.Errorf("read git status: %w", err)
 	}
-	diffStat, err := gitOutput(command.Context(), workdir, "diff", "--stat")
-	if err != nil {
-		return fmt.Errorf("read git diff stat: %w", err)
-	}
 
 	if _, err := fmt.Fprintf(output, "Task: %s - %s\n", taskItem.ID, taskItem.Title); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(output, "Latest completion: %s\n\n", strings.TrimSpace(latest.Completion.Summary)); err != nil {
+	if _, err := fmt.Fprintf(output, "Latest completion: %s\n", strings.TrimSpace(latest.Completion.Summary)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(output, "Completion description: %s\n\n", strings.TrimSpace(latest.Completion.Description)); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintln(output, "git status --short:"); err != nil {
@@ -1096,14 +1106,7 @@ func renderManualReviewContext(
 	} else if _, err := fmt.Fprint(output, status); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(output, "\ngit diff --stat:"); err != nil {
-		return err
-	}
-	if strings.TrimSpace(diffStat) == "" {
-		_, err = fmt.Fprintln(output, "(no diff)")
-		return err
-	}
-	_, err = fmt.Fprint(output, diffStat)
+	_, err = fmt.Fprintln(output)
 	return err
 }
 
@@ -1221,6 +1224,44 @@ func promptManualReviewAction(command *cobra.Command, reader *bufio.Reader) (str
 		return "", fmt.Errorf("read review action: %w", err)
 	}
 	return strings.ToLower(strings.TrimSpace(line)), nil
+}
+
+func promptManualCommandConfirmation(
+	command *cobra.Command,
+	reader *bufio.Reader,
+	step review.Step,
+) (bool, error) {
+	if _, err := fmt.Fprintf(
+		command.ErrOrStderr(),
+		"\nRun manual command for step %q (%s)? [Y/n]: ",
+		step.Name,
+		commandLineForReviewStep(step),
+	); err != nil {
+		return false, err
+	}
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		if errors.Is(err, io.EOF) && line == "" {
+			return false, nil
+		}
+		if !errors.Is(err, io.EOF) {
+			return false, fmt.Errorf("read manual command confirmation: %w", err)
+		}
+	}
+	answer := strings.ToLower(strings.TrimSpace(line))
+	if answer == "" {
+		return true, nil
+	}
+	return answer == "y" || answer == "yes", nil
+}
+
+func commandLineForReviewStep(step review.Step) string {
+	parts := make([]string, 0, len(step.Args)+1)
+	parts = append(parts, strconv.Quote(step.Command))
+	for _, arg := range step.Args {
+		parts = append(parts, strconv.Quote(arg))
+	}
+	return strings.Join(parts, " ")
 }
 
 func promptReviewFinding(

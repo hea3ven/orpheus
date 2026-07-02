@@ -2064,9 +2064,11 @@ func TestTaskReviewApproveFinalizesAndRecordsPassedAttempt(t *testing.T) {
 
 	is.Contains(stderr, "Task: op-main - Ready for task done")
 	is.Contains(stderr, "Latest completion: Review approval")
+	is.Contains(stderr, "Completion description: Finalize after approval.")
 	is.Contains(stderr, "git status --short:")
 	is.Contains(stderr, "reviewed.txt")
-	is.Contains(stderr, "git diff --stat:")
+	is.NotContains(stderr, "git diff --stat:")
+	is.Contains(stderr, "== Review step: local-review (manual) ==")
 	is.Contains(stdout, "Finalized op-main")
 
 	var state taskstate.TaskState
@@ -2538,6 +2540,8 @@ exit 0
 
 	is.Contains(stdout, "check stdout 1 unit")
 	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stderr, "== Review step: unit (check) ==")
+	is.Contains(stderr, "== Review step: approval (manual) ==")
 	is.Contains(stderr, "check stderr review")
 	is.Contains(stderr, "Review action")
 
@@ -2554,6 +2558,205 @@ exit 0
 	is.Equal([]string{"--direct"}, latest.Steps[0].Args)
 	is.Equal("approval", latest.Steps[1].Name)
 	is.Empty(latest.Findings)
+}
+
+func TestTaskReviewConfirmedManualCommandRunsAndRecordsStep(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review manual command", "Confirm before command.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+	manual := writeReviewScript(t, `#!/bin/sh
+printf 'manual command ran %s\n' "$ORPHEUS_REVIEW_STEP"
+`)
+	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+		"standard": []map[string]any{
+			{"kind": "manual", "name": "inspect", "command": manual, "args": []string{"--hint"}},
+		},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
+	})
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "standard", "op-main"}, "\na\n")
+
+	is.Contains(stdout, "manual command ran inspect")
+	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stderr, "== Review step: inspect (manual) ==")
+	is.Contains(stderr, "Task: op-main - Ready for task done")
+	is.Contains(stderr, "Completion description: Confirm before command.")
+	is.Contains(stderr, "git status --short:")
+	is.NotContains(stderr, "git diff --stat:")
+	is.Contains(stderr, "Run manual command for step \"inspect\"")
+	is.Contains(stderr, "[Y/n]")
+	is.Contains(stderr, "Review action")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+	must.Len(latest.Steps, 1)
+	is.Equal("manual", latest.Steps[0].Kind)
+	is.Equal("inspect", latest.Steps[0].Name)
+	is.Equal(manual, latest.Steps[0].Command)
+	is.Equal([]string{"--hint"}, latest.Steps[0].Args)
+	must.NotNil(latest.Steps[0].ExitCode)
+	is.Equal(0, *latest.Steps[0].ExitCode)
+}
+
+func TestTaskReviewDeclinedManualCommandAbortsWithoutRunningCommand(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review decline", "Decline command.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	headBefore := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
+
+	markerPath := filepath.Join(repoPath, "manual-ran.txt")
+	manual := writeReviewScript(t, fmt.Sprintf(`#!/bin/sh
+printf 'unexpected manual command\n'
+printf 'ran\n' > %s
+`, shellQuote(markerPath)))
+	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+		"standard": []map[string]any{
+			{"kind": "manual", "name": "inspect", "command": manual},
+		},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+	})
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "standard", "op-main"}, "n\n")
+
+	is.Empty(stdout)
+	is.Contains(stderr, "== Review step: inspect (manual) ==")
+	is.Contains(stderr, "Task: op-main - Ready for task done")
+	is.Contains(stderr, "Completion description: Decline command.")
+	is.Contains(stderr, "Run manual command for step \"inspect\"")
+	is.Contains(stderr, "Review aborted for op-main.")
+	is.NotContains(stderr, "Review action")
+	is.Equal(headBefore, strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")))
+	_, statErr := os.Stat(markerPath)
+	is.ErrorIs(statErr, os.ErrNotExist)
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusAborted, latest.Status)
+	is.Empty(latest.Steps)
+	is.Empty(taskstate.FinalizationFacts(state).Commit)
+}
+
+//nolint:funlen // The EOF confirmation fixture is clearer inline with its assertions.
+func TestTaskReviewManualCommandEOFConfirmationAbortsWithoutRunningCommand(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []byte
+	}{
+		{
+			name:  "empty EOF",
+			input: nil,
+		},
+		{
+			name:  "decline without newline",
+			input: []byte("n"),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			is := assert.New(t)
+			must := require.New(t)
+			root := newTestState(t)
+			paths := currentTestPaths(t)
+			store := registry.NewStore(paths)
+
+			repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+			configureTestGitUser(t, repoPath)
+			must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+				ID:            "alpha",
+				Name:          "Alpha Repo",
+				Path:          repoPath,
+				DefaultBranch: "main",
+				BeadsMode:     registry.BeadsModeLocal,
+				BeadsPrefix:   "op",
+			}}}))
+			recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review EOF", "Abort on EOF.")
+			must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+			markerPath := filepath.Join(repoPath, "manual-ran.txt")
+			manual := writeReviewScript(t, fmt.Sprintf(`#!/bin/sh
+printf 'unexpected manual command\n'
+printf 'ran\n' > %s
+`, shellQuote(markerPath)))
+			writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+				"standard": []map[string]any{
+					{"kind": "manual", "name": "inspect", "command": manual},
+				},
+			})
+
+			taskJSON := mainReadyTaskJSON("op-main", repoPath)
+			withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+				{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+			})
+
+			stdout, stderr, err := executeCommandWithInputAndError(
+				t,
+				[]string{"task", "review", "--pipeline", "standard", "op-main"},
+				test.input,
+			)
+
+			must.NoError(err)
+			is.Empty(stdout)
+			is.Contains(stderr, "Run manual command for step \"inspect\"")
+			is.Contains(stderr, "Review aborted for op-main.")
+			is.NotContains(stderr, "Review action")
+			_, statErr := os.Stat(markerPath)
+			is.ErrorIs(statErr, os.ErrNotExist)
+
+			var state taskstate.TaskState
+			must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+			latest, ok := taskstate.LatestReview(state)
+			must.True(ok)
+			is.Equal(taskstate.ReviewStatusAborted, latest.Status)
+			is.Empty(latest.Steps)
+		})
+	}
 }
 
 func TestTaskReviewNonZeroCheckRecordsBlockingFindingAndStops(t *testing.T) {
@@ -2597,6 +2800,7 @@ exit 7
 	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "")
 
 	is.Contains(stdout, "failing check output")
+	is.Contains(stderr, "== Review step: unit (check) ==")
 	is.Contains(stderr, "Review blocked for op-main by check \"unit\".")
 	is.NotContains(stderr, "Review action")
 	is.Equal(headBefore, strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")))
@@ -2652,7 +2856,7 @@ func TestTaskReviewCheckStartFailureMarksOperationalFailure(t *testing.T) {
 
 	must.Error(err)
 	is.Empty(stdout)
-	is.Empty(stderr)
+	is.Contains(stderr, "== Review step: missing (check) ==")
 	is.ErrorContains(err, "start check step \"missing\"")
 
 	var state taskstate.TaskState
@@ -2772,6 +2976,7 @@ func TestTaskReviewAgentReviewBlockingFindingStopsPipeline(t *testing.T) {
 	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "")
 
 	is.Contains(stdout, "Recorded blocking review finding 1 for op-main.")
+	is.Contains(stderr, "== Review step: ai-review (agent_review) ==")
 	is.Contains(stderr, "Review blocked for op-main by agent_review \"ai-review\".")
 	is.NotContains(stderr, "Review action")
 	is.Equal(headBefore, strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")))
@@ -2877,7 +3082,7 @@ func TestTaskReviewPipelineOverridePrecedence(t *testing.T) {
 	is.Contains(stdout, "cli pipeline")
 	is.NotContains(stdout, "wrong pipeline")
 	is.Contains(stdout, "Finalized op-main")
-	is.Empty(stderr)
+	is.Contains(stderr, "== Review step: cli (check) ==")
 
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
