@@ -57,8 +57,11 @@ func appendReviewContract(builder *strings.Builder) {
 	builder.WriteString("\nReview contract:\n")
 	builder.WriteString("- You are reviewing the current working-tree changes for the task above.\n")
 	builder.WriteString("- Use Git commands such as `git status --short`, `git diff`, and `git log` as needed.\n")
+	builder.WriteString("- Review the complete change set before exiting, even if you find an issue early.\n")
+	builder.WriteString("- Do not stop after the first issue; continue reviewing for additional distinct findings.\n")
 	builder.WriteString("- This is a strict read-only review step. Do not edit files, stage changes, commit, run formatters that write files, or otherwise mutate the worktree.\n")
-	builder.WriteString("- Record each finding with `orpheus agent review add`; there is no `orpheus agent review done` command.\n")
+	builder.WriteString("- Record each distinct finding with its own `orpheus agent review add` call; there is no `orpheus agent review done` command.\n")
+	builder.WriteString("- When multiple findings exist, run `orpheus agent review add` multiple times, once per finding.\n")
 	builder.WriteString("- Exit 0 after recording all findings. Exit non-zero only for an operational review failure.\n")
 
 	builder.WriteString("\nFinding examples:\n")
