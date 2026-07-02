@@ -951,6 +951,125 @@ func TestBuildPublicationPullRequestContentUsesTitleTemplate(t *testing.T) {
 	}
 }
 
+//nolint:funlen // The review process fixture is easier to verify as one content example.
+func TestBuildPublicationPullRequestContentFromStateFormatsReviewProcess(t *testing.T) {
+	finishedAt := time.Date(2026, 6, 10, 11, 0, 0, 0, time.UTC)
+	content, err := workflow.BuildPublicationPullRequestContentFromState("", task.Task{
+		ID: "op-1",
+	}, taskstate.TaskState{
+		Runs: []taskstate.RunAttempt{
+			{
+				Attempt: 1,
+				Completion: &taskstate.Completion{
+					Summary:             "Original summary",
+					DetailedDescription: "Original PR body.",
+				},
+			},
+			{
+				Attempt: 2,
+				Completion: &taskstate.Completion{
+					Summary:             "Fix review findings",
+					Description:         "Addressed review feedback.",
+					DetailedDescription: "Fix run detailed body must be omitted.",
+				},
+				ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1},
+			},
+		},
+		Reviews: []taskstate.ReviewAttempt{
+			{
+				Attempt:    1,
+				Status:     taskstate.ReviewStatusPassed,
+				Pipeline:   "default",
+				Step:       "manual-review",
+				StartedAt:  time.Date(2026, 6, 10, 10, 0, 0, 0, time.UTC),
+				FinishedAt: &finishedAt,
+				Steps: []taskstate.ReviewStep{
+					{Kind: "manual", Name: "manual-review"},
+				},
+				Findings: []taskstate.ReviewFinding{
+					{
+						Type:                 taskstate.FindingTypeBlocking,
+						Title:                "Fixed blocker",
+						Description:          "Finding details must be omitted.",
+						Step:                 "manual-review",
+						TargetedByRunAttempt: 2,
+					},
+					{
+						Type:   taskstate.FindingTypeBlocking,
+						Title:  "Waived blocker",
+						Step:   "manual-review",
+						Waiver: "Accepted for this task.",
+					},
+					{
+						Type:  taskstate.FindingTypeBlocking,
+						Title: "Unfixed blocker",
+						Step:  "manual-review",
+					},
+					{
+						Type:  taskstate.FindingTypeAdvisory,
+						Title: "Advisory note",
+						Step:  "manual-review",
+					},
+					{
+						Type:          taskstate.FindingTypeSeparateTask,
+						Title:         "Future cleanup",
+						Step:          "manual-review",
+						CreatedTaskID: "op-2",
+					},
+				},
+			},
+			{
+				Attempt:    2,
+				Status:     taskstate.ReviewStatusFailed,
+				Pipeline:   "default",
+				Step:       "lint",
+				StartedAt:  time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
+				FinishedAt: &finishedAt,
+				Steps: []taskstate.ReviewStep{
+					{Kind: "check", Name: "lint"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("build content: %v", err)
+	}
+	if content.Title != "Original summary" || !strings.HasPrefix(content.Body, "Original PR body.") {
+		t.Fatalf("content = %#v, want original completion first", content)
+	}
+	for _, want := range []string{
+		"### Review attempt 1 — passed",
+		"- ❌ `manual-review`",
+		"  - **Blocking:** Fixed blocker",
+		"    - Fixed by run attempt 2",
+		"  - **Blocking (waived):** Waived blocker",
+		"    - Waived.",
+		"  - **Blocking:** Unfixed blocker",
+		"    - No targeted fix run recorded.",
+		"  - **Advisory:** Advisory note",
+		"  - **Separate task:** Future cleanup",
+		"    - Created task: op-2",
+		"  **Fix run attempt 2**",
+		"  - Summary: `Fix review findings`",
+		"  - Description: Addressed review feedback.",
+		"### Review attempt 2 — failed",
+		"- ⚠️ `lint`",
+	} {
+		if !strings.Contains(content.Body, want) {
+			t.Fatalf("body missing %q:\n%s", want, content.Body)
+		}
+	}
+	for _, unwanted := range []string{
+		"Finding details must be omitted.",
+		"Fix run detailed body must be omitted.",
+		"Accepted for this task.",
+	} {
+		if strings.Contains(content.Body, unwanted) {
+			t.Fatalf("body = %q, should not contain %q", content.Body, unwanted)
+		}
+	}
+}
+
 func TestBuildPublicationPullRequestContentRejectsMissingRequiredExternalReference(t *testing.T) {
 	_, err := workflow.BuildPublicationPullRequestContent("[{{external_ref}}] {{summary}}", task.Task{
 		ID: "op-1",

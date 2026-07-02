@@ -661,6 +661,146 @@ func TestFinalizeRecoversExistingFeatureBranchPR(t *testing.T) {
 	}
 }
 
+//nolint:funlen // The review follow-up scenario is easier to verify as one fixture.
+func TestFinalizePublishesOriginalCompletionAfterReviewFollowUp(t *testing.T) {
+	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	source.Repository.TitleTemplate = "[{{external_ref}}] {{summary}}"
+	worktree := targets.WorktreeTeam.Worktree
+	taskItem := task.Task{
+		ID:          "op-1",
+		ExternalRef: "TREX-1234",
+		Status:      task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   targets.WorktreeTeam.Branch,
+			task.MetadataWorktree: worktree,
+		},
+	}
+	finishedAt := time.Date(2026, 6, 10, 11, 0, 0, 0, time.UTC)
+	taskState := finalizationTaskState(
+		"op-1",
+		taskstate.RunAttempt{
+			Attempt:  1,
+			Status:   taskstate.RunStatusSucceeded,
+			Branch:   targets.WorktreeTeam.Branch,
+			Worktree: worktree,
+			Completion: &taskstate.Completion{
+				Summary:             "Implement original feature",
+				Description:         "Commit the original implementation.",
+				DetailedDescription: "## Original PR body\n\nThe primary implementation details.",
+			},
+		},
+		taskstate.RunAttempt{
+			Attempt:  2,
+			Status:   taskstate.RunStatusSucceeded,
+			Branch:   targets.WorktreeTeam.Branch,
+			Worktree: worktree,
+			Completion: &taskstate.Completion{
+				Summary:             "Fix review blocker",
+				Description:         "Addressed review-only follow-up work.",
+				DetailedDescription: "## Fix run PR body\n\nThis must not become the PR body.",
+			},
+			ReviewFollowUp: &taskstate.ReviewFollowUp{
+				ReviewAttempt:  1,
+				FindingIndexes: []int{0, 1},
+			},
+		},
+	)
+	taskState.Reviews = []taskstate.ReviewAttempt{
+		{
+			Attempt:    1,
+			Status:     taskstate.ReviewStatusBlocked,
+			Pipeline:   "default",
+			Step:       "agent-review",
+			StartedAt:  time.Date(2026, 6, 10, 10, 0, 0, 0, time.UTC),
+			FinishedAt: &finishedAt,
+			Steps: []taskstate.ReviewStep{
+				{Kind: "agent_review", Name: "agent-review"},
+			},
+			Findings: []taskstate.ReviewFinding{
+				{
+					Type:                 taskstate.FindingTypeBlocking,
+					Title:                "Preserve original PR title",
+					Description:          "Long description must be omitted.",
+					Step:                 "agent-review",
+					SuggestedAction:      "Suggested action must be omitted.",
+					TargetedByRunAttempt: 2,
+				},
+				{
+					Type:                 taskstate.FindingTypeBlocking,
+					Title:                "Preserve original PR body",
+					Step:                 "agent-review",
+					TargetedByRunAttempt: 2,
+				},
+			},
+		},
+		{
+			Attempt:    2,
+			Status:     taskstate.ReviewStatusPassed,
+			Pipeline:   "default",
+			Step:       "agent-review",
+			StartedAt:  time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
+			FinishedAt: &finishedAt,
+			Steps: []taskstate.ReviewStep{
+				{Kind: "agent_review", Name: "agent-review"},
+			},
+		},
+	}
+	service, git, _, _ := newFinalizationTestServiceForSource(
+		t,
+		paths,
+		source,
+		[]task.Task{taskItem},
+		map[string]taskstate.TaskState{"alpha/op-1": taskState},
+	)
+	git.branch = targets.WorktreeTeam.Branch
+	provider := &fakePRProvider{created: pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/42"}}
+	service.PRProvider = provider
+
+	_, err := service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	if len(git.messages) != 1 ||
+		git.messages[0] != "[TREX-1234] Implement original feature\n\nCommit the original implementation." {
+		t.Fatalf("commit messages = %#v, want original implementation completion", git.messages)
+	}
+	if len(provider.createRequests) != 1 {
+		t.Fatalf("create requests = %#v, want one PR creation", provider.createRequests)
+	}
+	request := provider.createRequests[0]
+	if request.Title != "[TREX-1234] Implement original feature" {
+		t.Fatalf("PR title = %q, want original implementation title", request.Title)
+	}
+	if !strings.HasPrefix(request.Body, "## Original PR body\n\nThe primary implementation details.") {
+		t.Fatalf("PR body = %q, want original detailed description first", request.Body)
+	}
+	if strings.Contains(request.Body, "Fix run PR body") ||
+		strings.Contains(request.Body, "Long description must be omitted") ||
+		strings.Contains(request.Body, "Suggested action must be omitted") {
+		t.Fatalf("PR body = %q, want concise review process without fix body or finding details", request.Body)
+	}
+	for _, want := range []string{
+		"## Review process",
+		"### Review attempt 1 — blocked",
+		"- ❌ `agent-review`",
+		"  - **Blocking:** Preserve original PR title",
+		"    - Fixed by run attempt 2",
+		"  - **Blocking:** Preserve original PR body",
+		"  **Fix run attempt 2**",
+		"  - Summary: `Fix review blocker`",
+		"  - Description: Addressed review-only follow-up work.",
+		"### Review attempt 2 — passed",
+		"- ✅ `agent-review`",
+	} {
+		if !strings.Contains(request.Body, want) {
+			t.Fatalf("PR body missing %q:\n%s", want, request.Body)
+		}
+	}
+	if strings.Count(request.Body, "**Fix run attempt 2**") != 1 {
+		t.Fatalf("PR body = %q, want one fix run summary", request.Body)
+	}
+}
+
 func TestFinalizeRefusesFeatureBranchPublicationWithoutReviewedChanges(t *testing.T) {
 	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
 	worktree := targets.WorktreeTeam.Worktree
