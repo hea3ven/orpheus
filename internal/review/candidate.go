@@ -128,12 +128,18 @@ func splitNUL(output []byte) []string {
 }
 
 func restoreCandidateIfMutated(ctx context.Context, snapshot candidateSnapshot) error {
-	current, err := candidateStatus(ctx, snapshot.workdir)
+	currentStatus, err := candidateStatus(ctx, snapshot.workdir)
 	if err != nil {
 		return err
 	}
-	if bytes.Equal(current, snapshot.status) {
-		return nil
+	if bytes.Equal(currentStatus, snapshot.status) {
+		current, err := captureCandidateSnapshot(ctx, snapshot.workdir)
+		if err != nil {
+			return err
+		}
+		if candidateSnapshotsEqual(current, snapshot) {
+			return nil
+		}
 	}
 	if err := restoreCandidateSnapshot(ctx, snapshot); err != nil {
 		return fmt.Errorf(
@@ -144,11 +150,11 @@ func restoreCandidateIfMutated(ctx context.Context, snapshot candidateSnapshot) 
 			snapshot.workdir,
 		)
 	}
-	restored, err := candidateStatus(ctx, snapshot.workdir)
+	restored, err := captureCandidateSnapshot(ctx, snapshot.workdir)
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(restored, snapshot.status) {
+	if !candidateSnapshotsEqual(restored, snapshot) {
 		return fmt.Errorf(
 			"review step mutated candidate changes and automatic restore did not return the worktree to the pre-step snapshot; "+
 				"manual repair required in %q: inspect `git status --short`, restore the intended "+
@@ -157,6 +163,29 @@ func restoreCandidateIfMutated(ctx context.Context, snapshot candidateSnapshot) 
 		)
 	}
 	return errors.New("review step mutated candidate changes; restored the pre-step snapshot and marked review failed")
+}
+
+func candidateSnapshotsEqual(a, b candidateSnapshot) bool {
+	if a.workdir != b.workdir ||
+		!bytes.Equal(a.status, b.status) ||
+		!bytes.Equal(a.patch, b.patch) ||
+		len(a.untracked) != len(b.untracked) {
+		return false
+	}
+	for i := range a.untracked {
+		if !snapshotFilesEqual(a.untracked[i], b.untracked[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func snapshotFilesEqual(a, b snapshotFile) bool {
+	return a.path == b.path &&
+		a.mode == b.mode &&
+		a.symlinkTarget == b.symlinkTarget &&
+		a.isSymlink == b.isSymlink &&
+		bytes.Equal(a.data, b.data)
 }
 
 func restoreCandidateSnapshot(ctx context.Context, snapshot candidateSnapshot) error {
