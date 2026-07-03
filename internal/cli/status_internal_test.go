@@ -60,6 +60,59 @@ func TestStatusRenderOptionsNoTruncateSkipsWidthDetection(t *testing.T) {
 	}
 }
 
+func TestRenderStatusHidesEmptyNeedsAttentionOnly(t *testing.T) {
+	projection := status.Projection{Groups: []status.Group{
+		{ID: status.GroupNeedsAttention, Title: "Needs attention"},
+		{ID: status.GroupInReview, Title: "Reviewing"},
+		{ID: status.GroupWorking, Title: "Working"},
+		{ID: status.GroupIdle, Title: "Idle"},
+		{ID: status.GroupReadyToRun, Title: "Ready to run"},
+		{ID: status.GroupBlocked, Title: "Blocked"},
+		{ID: status.GroupDoneClosed, Title: "Done / closed"},
+	}}
+
+	var output bytes.Buffer
+	err := renderStatus(&output, projection, false, statusRenderOptions{})
+	if err != nil {
+		t.Fatalf("render status: %v", err)
+	}
+
+	normal := output.String()
+	for _, hidden := range []string{"Needs attention (0)", "Blocked (0)", "Done / closed (0)"} {
+		if strings.Contains(normal, hidden) {
+			t.Fatalf("normal output contains hidden section %q:\n%s", hidden, normal)
+		}
+	}
+	for _, want := range []string{"Reviewing (0)", "Working (0)", "Idle (0)", "Ready to run (0)"} {
+		if !strings.Contains(normal, want) {
+			t.Fatalf("normal output missing %q:\n%s", want, normal)
+		}
+	}
+
+	output.Reset()
+	err = renderStatus(&output, projection, true, statusRenderOptions{})
+	if err != nil {
+		t.Fatalf("render full status: %v", err)
+	}
+
+	full := output.String()
+	if strings.Contains(full, "Needs attention (0)") {
+		t.Fatalf("full output contains empty Needs attention section:\n%s", full)
+	}
+	for _, want := range []string{
+		"Reviewing (0)",
+		"Working (0)",
+		"Idle (0)",
+		"Ready to run (0)",
+		"Blocked (0)",
+		"Done / closed (0)",
+	} {
+		if !strings.Contains(full, want) {
+			t.Fatalf("full output missing %q:\n%s", want, full)
+		}
+	}
+}
+
 func TestRenderStatusResponsiveUsesShortDetailHidesRepoAndTruncatesTitle(t *testing.T) {
 	projection := status.Projection{Groups: []status.Group{{
 		ID:    status.GroupInReview,
