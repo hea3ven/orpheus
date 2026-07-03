@@ -143,18 +143,15 @@ func (r ActiveContextResolver) Resolve(ctx context.Context) (ActiveContext, erro
 	if err != nil {
 		return ActiveContext{}, err
 	}
-	run, err := r.resolveRunningRun(repo.ID, env.TaskID)
+	run, taskTarget, err := r.resolveRunningRun(repo.ID, env.TaskID)
 	if err != nil {
 		return ActiveContext{}, err
 	}
-	targets, candidate, err := r.resolveContextTarget(source, taskItem, env.TaskID, run)
+	targets, candidate, err := r.resolveContextTarget(source, taskItem, env.TaskID, taskTarget)
 	if err != nil {
 		return ActiveContext{}, err
 	}
 	if err := validateEnvironmentMatchesTarget(env, candidate); err != nil {
-		return ActiveContext{}, err
-	}
-	if err := validateRunMatchesTarget(run, candidate); err != nil {
 		return ActiveContext{}, err
 	}
 
@@ -232,16 +229,29 @@ func (r ActiveContextResolver) loadContextTask(
 	return taskItem, nil
 }
 
-func (r ActiveContextResolver) resolveRunningRun(repoID string, taskID string) (taskstate.RunAttempt, error) {
-	run, ok, err := r.RunStore.LatestRun(repoID, taskID)
+func (r ActiveContextResolver) resolveRunningRun(
+	repoID string,
+	taskID string,
+) (taskstate.RunAttempt, taskstate.TaskTarget, error) {
+	state, err := r.RunStore.Load(repoID, taskID)
 	if err != nil {
-		return taskstate.RunAttempt{}, fmt.Errorf("load latest Orpheus run for task %s/%s: %w", repoID, taskID, err)
+		return taskstate.RunAttempt{}, taskstate.TaskTarget{}, fmt.Errorf(
+			"load latest Orpheus run for task %s/%s: %w",
+			repoID,
+			taskID,
+			err,
+		)
 	}
+	run, ok := taskstate.LatestRun(state)
 	if !ok {
-		return taskstate.RunAttempt{}, fmt.Errorf("task %s/%s has no Orpheus run attempts", repoID, taskID)
+		return taskstate.RunAttempt{}, taskstate.TaskTarget{}, fmt.Errorf(
+			"task %s/%s has no Orpheus run attempts",
+			repoID,
+			taskID,
+		)
 	}
 	if run.Status != taskstate.RunStatusRunning {
-		return taskstate.RunAttempt{}, fmt.Errorf(
+		return taskstate.RunAttempt{}, taskstate.TaskTarget{}, fmt.Errorf(
 			"latest Orpheus run attempt %d for task %s/%s is %q, expected %q",
 			run.Attempt,
 			repoID,
@@ -250,7 +260,15 @@ func (r ActiveContextResolver) resolveRunningRun(repoID string, taskID string) (
 			taskstate.RunStatusRunning,
 		)
 	}
-	return run, nil
+	target, ok := taskstate.Target(state)
+	if !ok {
+		return taskstate.RunAttempt{}, taskstate.TaskTarget{}, fmt.Errorf(
+			"task %s/%s has no taskstate target",
+			repoID,
+			taskID,
+		)
+	}
+	return run, target, nil
 }
 
 func (r ActiveContextResolver) resolveFollowUpContext(
@@ -297,13 +315,13 @@ func (r ActiveContextResolver) resolveContextTarget(
 	source taskmodel.RepositorySource,
 	taskItem taskmodel.Task,
 	taskID string,
-	run taskstate.RunAttempt,
+	taskTarget taskstate.TaskTarget,
 ) (workflow.ExpectedTargets, targetCandidate, error) {
 	targets, err := workflow.ExpectedTargetsForTask(source.Repository, taskID, r.Paths)
 	if err != nil {
 		return workflow.ExpectedTargets{}, targetCandidate{}, err
 	}
-	candidate, err := classifyContextTargetFromRun(source.Repository, run)
+	candidate, err := classifyContextTarget(source.Repository, taskTarget)
 	if err != nil {
 		return workflow.ExpectedTargets{}, targetCandidate{}, fmt.Errorf(
 			"task %s has inconsistent taskstate target: %w",
@@ -503,9 +521,9 @@ func validateContextTaskStatus(taskItem taskmodel.Task) error {
 	}
 }
 
-func classifyContextTargetFromRun(repo taskmodel.Repository, run taskstate.RunAttempt) (targetCandidate, error) {
-	branch := strings.TrimSpace(run.Branch)
-	worktree, err := cleanAbsPath("taskstate target worktree", run.Worktree)
+func classifyContextTarget(repo taskmodel.Repository, taskTarget taskstate.TaskTarget) (targetCandidate, error) {
+	branch := strings.TrimSpace(taskTarget.Branch)
+	worktree, err := cleanAbsPath("taskstate target worktree", taskTarget.Worktree)
 	if err != nil {
 		return targetCandidate{}, err
 	}
@@ -535,33 +553,6 @@ func validateEnvironmentMatchesTarget(env agentEnvironment, target targetCandida
 			"%s is %q, expected %q for %s execution target",
 			envWorktree,
 			env.Worktree,
-			target.Path,
-			target.Kind.DisplayName(),
-		)
-	}
-	return nil
-}
-
-func validateRunMatchesTarget(run taskstate.RunAttempt, target targetCandidate) error {
-	if strings.TrimSpace(run.Branch) != target.Branch {
-		return fmt.Errorf(
-			"latest Orpheus run attempt %d branch is %q, expected %q for %s execution target",
-			run.Attempt,
-			run.Branch,
-			target.Branch,
-			target.Kind.DisplayName(),
-		)
-	}
-
-	runWorktree, err := cleanAbsPath("latest Orpheus run worktree", run.Worktree)
-	if err != nil {
-		return err
-	}
-	if runWorktree != target.Path {
-		return fmt.Errorf(
-			"latest Orpheus run attempt %d worktree is %q, expected %q for %s execution target",
-			run.Attempt,
-			run.Worktree,
 			target.Path,
 			target.Kind.DisplayName(),
 		)

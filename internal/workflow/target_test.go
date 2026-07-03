@@ -11,6 +11,7 @@ import (
 type classifyExpectedCompletionTargetCase struct {
 	name          string
 	taskItem      task.Task
+	taskTarget    taskstate.TaskTarget
 	run           taskstate.RunAttempt
 	wantOK        bool
 	wantTarget    workflow.TargetKind
@@ -24,10 +25,9 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 			ID:       "op-1",
 			Metadata: task.Metadata{task.MetadataBranch: "main", task.MetadataWorktree: "/repo/alpha"},
 		},
+		taskTarget: taskstate.TaskTarget{Branch: "main", Worktree: "/repo/alpha"},
 		run: taskstate.RunAttempt{
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   "main",
-			Worktree: "/repo/alpha",
+			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
 				Summary:             "Done",
 				Description:         "Done.",
@@ -47,10 +47,9 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 				task.MetadataWorktree: "/state/worktrees/alpha/op-1",
 			},
 		},
+		taskTarget: taskstate.TaskTarget{Branch: "orpheus/op-1", Worktree: "/state/worktrees/alpha/op-1"},
 		run: taskstate.RunAttempt{
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   "orpheus/op-1",
-			Worktree: "/state/worktrees/alpha/op-1",
+			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
 				Summary:             "Done",
 				Description:         "Done.",
@@ -71,10 +70,9 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 				task.MetadataWorktree: "/repo/alpha",
 			},
 		},
+		taskTarget: taskstate.TaskTarget{Branch: "orpheus/op-1", Worktree: "/repo/alpha"},
 		run: taskstate.RunAttempt{
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   "orpheus/op-1",
-			Worktree: "/repo/alpha",
+			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
 				Summary:             "Done",
 				Description:         "Done.",
@@ -87,7 +85,7 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 		wantLifecycle: workflow.ReviewLifecyclePRReady,
 	},
 	{
-		name: "metadata matches expected but run branch differs",
+		name: "metadata matches expected but taskstate target differs",
 		taskItem: task.Task{
 			ID: "op-1",
 			Metadata: task.Metadata{
@@ -95,10 +93,9 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 				task.MetadataWorktree: "/state/worktrees/alpha/op-1",
 			},
 		},
+		taskTarget: taskstate.TaskTarget{Branch: "manual/op-1", Worktree: "/state/worktrees/alpha/op-1"},
 		run: taskstate.RunAttempt{
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   "manual/op-1",
-			Worktree: "/state/worktrees/alpha/op-1",
+			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
 				Summary:             "Done",
 				Description:         "Done.",
@@ -116,10 +113,9 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 				task.MetadataWorktree: "/tmp/manual-worktree",
 			},
 		},
+		taskTarget: taskstate.TaskTarget{Branch: "manual/op-1", Worktree: "/tmp/manual-worktree"},
 		run: taskstate.RunAttempt{
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   "manual/op-1",
-			Worktree: "/tmp/manual-worktree",
+			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
 				Summary:             "Done",
 				Description:         "Done.",
@@ -138,10 +134,9 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 				task.MetadataPRURL:    "https://example.test/pr/1",
 			},
 		},
+		taskTarget: taskstate.TaskTarget{Branch: "orpheus/op-1", Worktree: "/state/worktrees/alpha/op-1"},
 		run: taskstate.RunAttempt{
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   "orpheus/op-1",
-			Worktree: "/state/worktrees/alpha/op-1",
+			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
 				Summary:             "Done",
 				Description:         "Done.",
@@ -156,10 +151,9 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 			ID:       "op-1",
 			Metadata: task.Metadata{task.MetadataBranch: "main", task.MetadataWorktree: "/repo/alpha"},
 		},
+		taskTarget: taskstate.TaskTarget{Branch: "main", Worktree: "/repo/alpha"},
 		run: taskstate.RunAttempt{
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   "main",
-			Worktree: "/repo/alpha",
+			Status: taskstate.RunStatusSucceeded,
 		},
 	},
 }
@@ -185,7 +179,7 @@ func TestClassifyExpectedCompletionTarget(t *testing.T) {
 
 	for _, tt := range classifyExpectedCompletionTargetCases {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := workflow.ClassifyExpectedCompletionTarget(targets, tt.taskItem, &tt.run)
+			got, ok := workflow.ClassifyExpectedCompletionTarget(targets, tt.taskItem, tt.taskTarget, &tt.run)
 			if ok != tt.wantOK {
 				t.Fatalf("ok = %v, want %v; classification = %#v", ok, tt.wantOK, got)
 			}

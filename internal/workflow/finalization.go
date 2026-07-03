@@ -161,6 +161,7 @@ type finalizationTarget struct {
 
 type finalizationContext struct {
 	state        taskstate.TaskState
+	target       taskstate.TaskTarget
 	latest       taskstate.RunAttempt
 	publication  taskstate.RunAttempt
 	latestReview taskstate.ReviewAttempt
@@ -244,14 +245,28 @@ func (s FinalizationService) finalizeAfterReviewGate(
 	}
 	metadataTarget, err := ClassifyMetadataTarget(target.task.OrpheusMetadata(), targets)
 	if err != nil {
-		return FinalizationResult{}, err
+		return FinalizationResult{}, fmt.Errorf("task %s metadata target is invalid: %w", target.task.ID, err)
+	}
+	taskTarget, err := ClassifyTaskStateTarget(finalizeCtx.target, targets)
+	if err != nil {
+		return FinalizationResult{}, fmt.Errorf("task %s has inconsistent taskstate target: %w", target.task.ID, err)
+	}
+	if metadataTarget.Branch != taskTarget.Branch || metadataTarget.Worktree != taskTarget.Worktree {
+		return FinalizationResult{}, fmt.Errorf(
+			"task %s metadata target %q/%q does not mirror taskstate target %q/%q",
+			target.task.ID,
+			metadataTarget.Branch,
+			metadataTarget.Worktree,
+			taskTarget.Branch,
+			taskTarget.Worktree,
+		)
 	}
 
-	if isFeatureBranchTarget(metadataTarget.Kind) {
-		return s.publishFeatureBranch(ctx, target, finalizeCtx, metadataTarget, gitState)
+	if isFeatureBranchTarget(taskTarget.Kind) {
+		return s.publishFeatureBranch(ctx, target, finalizeCtx, taskTarget, gitState)
 	}
 
-	return s.finalizeDefaultBranch(ctx, opts, target, finalizeCtx, metadataTarget, gitState)
+	return s.finalizeDefaultBranch(ctx, opts, target, finalizeCtx, taskTarget, gitState)
 }
 
 func (s FinalizationService) recordFinalizationFailure(repoID string, taskID string, cause error) error {
@@ -264,12 +279,12 @@ func (s FinalizationService) finalizeDefaultBranch(
 	opts FinalizeOptions,
 	target finalizationTarget,
 	finalizeCtx finalizationContext,
-	metadataTarget Target,
+	taskTarget Target,
 	gitState FinalizationGit,
 ) (FinalizationResult, error) {
 	repo := target.source.Repository
-	if metadataTarget.Kind != TargetMainSolo {
-		return FinalizationResult{}, fmt.Errorf("task %s target %q cannot be finalized by task done", target.task.ID, metadataTarget.Kind)
+	if taskTarget.Kind != TargetMainSolo {
+		return FinalizationResult{}, fmt.Errorf("task %s target %q cannot be finalized by task done", target.task.ID, taskTarget.Kind)
 	}
 
 	pendingConfirmation, err := defaultBranchPendingConfirmation(repo, target.task, finalizeCtx, opts.AllowRunningCompleted)
@@ -562,17 +577,17 @@ func (s FinalizationService) publishFeatureBranch(
 	ctx context.Context,
 	target finalizationTarget,
 	finalizeCtx finalizationContext,
-	metadataTarget Target,
+	taskTarget Target,
 	gitState FinalizationGit,
 ) (FinalizationResult, error) {
 	repo := target.source.Repository
-	if err := validateFeatureBranchPublicationReady(repo, target.task, finalizeCtx, metadataTarget); err != nil {
+	if err := validateFeatureBranchPublicationReady(repo, target.task, finalizeCtx, taskTarget); err != nil {
 		return FinalizationResult{}, err
 	}
 	if s.PRProvider == nil {
 		return FinalizationResult{}, errors.New("task done PR provider is required")
 	}
-	if err := ensureFeatureBranchCheckout(ctx, gitState, metadataTarget); err != nil {
+	if err := ensureFeatureBranchCheckout(ctx, gitState, taskTarget); err != nil {
 		return FinalizationResult{}, err
 	}
 
@@ -581,7 +596,7 @@ func (s FinalizationService) publishFeatureBranch(
 		return FinalizationResult{}, err
 	}
 
-	hasChanges, err := gitState.HasWorkingTreeChanges(ctx, metadataTarget.Worktree)
+	hasChanges, err := gitState.HasWorkingTreeChanges(ctx, taskTarget.Worktree)
 	if err != nil {
 		return FinalizationResult{}, fmt.Errorf("inspect task worktree changes: %w", err)
 	}
@@ -591,7 +606,7 @@ func (s FinalizationService) publishFeatureBranch(
 		gitState,
 		repo.ID,
 		target.task.ID,
-		metadataTarget.Worktree,
+		taskTarget.Worktree,
 		message,
 		hasChanges,
 		finalizeCtx.finalization,
@@ -600,23 +615,23 @@ func (s FinalizationService) publishFeatureBranch(
 		return FinalizationResult{}, err
 	}
 
-	finalization, err = s.ensureFeatureBranchPushed(ctx, gitState, repo.ID, target.task.ID, metadataTarget, finalization)
+	finalization, err = s.ensureFeatureBranchPushed(ctx, gitState, repo.ID, target.task.ID, taskTarget, finalization)
 	if err != nil {
 		return FinalizationResult{}, err
 	}
 
-	prURL, prRecovered, err := s.findOrCreateFeatureBranchPR(ctx, repo, target.task, finalizeCtx, metadataTarget)
+	prURL, prRecovered, err := s.findOrCreateFeatureBranchPR(ctx, repo, target.task, finalizeCtx, taskTarget)
 	if err != nil {
 		return FinalizationResult{}, err
 	}
 	if err := target.backend.SetPRURL(ctx, target.task.ID, prURL); err != nil {
 		return FinalizationResult{}, err
 	}
-	if err := s.recordFeatureBranchPR(repo.ID, target.task.ID, prURL, metadataTarget.Branch, prRecovered); err != nil {
+	if err := s.recordFeatureBranchPR(repo.ID, target.task.ID, prURL, taskTarget.Branch, prRecovered); err != nil {
 		return FinalizationResult{}, fmt.Errorf("record feature branch PR: %w", err)
 	}
 
-	return featureBranchFinalizationResult(repo, target.task, finalization, metadataTarget.Branch, prURL, prRecovered), nil
+	return featureBranchFinalizationResult(repo, target.task, finalization, taskTarget.Branch, prURL, prRecovered), nil
 }
 
 func featureBranchPublicationMessage(
@@ -947,16 +962,25 @@ func (s FinalizationService) inferableCurrentBranchReadyTasks(
 		if err != nil {
 			return nil, err
 		}
-		target, err := ClassifyMetadataTarget(taskItem.OrpheusMetadata(), targets)
+		state, err := s.RunStore.Load(repo.ID, taskItem.ID)
+		if err != nil {
+			return nil, fmt.Errorf("load task state for %s/%s: %w", repo.ID, taskItem.ID, err)
+		}
+		taskTarget, ok := taskstate.Target(state)
+		if !ok {
+			continue
+		}
+		target, err := ClassifyTaskStateTarget(taskTarget, targets)
 		if err != nil {
 			continue
 		}
-		ok, err := s.isInferableCurrentBranchReady(
+		ok, err = s.isInferableCurrentBranchReady(
 			repo,
 			taskItem,
 			currentBranch,
 			workingDirectory,
 			target,
+			state,
 		)
 		if err != nil {
 			return nil, err
@@ -974,6 +998,7 @@ func (s FinalizationService) isInferableCurrentBranchReady(
 	currentBranch string,
 	workingDirectory string,
 	target Target,
+	state taskstate.TaskState,
 ) (bool, error) {
 	if taskItem.Status == task.StatusClosed {
 		return false, nil
@@ -984,41 +1009,76 @@ func (s FinalizationService) isInferableCurrentBranchReady(
 	if target.Worktree != workingDirectory {
 		return false, nil
 	}
-	state, err := s.RunStore.Load(repo.ID, taskItem.ID)
-	if err != nil {
-		return false, fmt.Errorf("load task state for %s/%s: %w", repo.ID, taskItem.ID, err)
-	}
 	latest, ok := taskstate.LatestRun(state)
 	if !ok {
 		return false, nil
 	}
+	taskTarget, ok := taskstate.Target(state)
+	if !ok {
+		return false, nil
+	}
 	ctx := finalizationContext{
+		target:       taskTarget,
 		latest:       latest,
 		publication:  latest,
 		finalization: taskstate.FinalizationFacts(state),
 	}
 	switch target.Kind {
 	case TargetMainSolo:
-		if isDefaultBranchFinalizationReady(repo, taskItem, ctx, false) {
-			return true, nil
-		}
-		return isDefaultBranchFinalizationReady(repo, taskItem, ctx, true), nil
+		return isInferableDefaultBranchFinalizationReady(repo, taskItem, ctx), nil
 	case TargetRepoRootTeam:
-		return validateFeatureBranchPublicationReady(repo, taskItem, ctx, target) == nil, nil
+		return isInferableFeatureBranchPublicationReady(repo, taskItem, ctx, target), nil
 	case TargetWorktreeTeam:
-		return validateFeatureBranchPublicationReady(repo, taskItem, ctx, target) == nil, nil
+		return isInferableFeatureBranchPublicationReady(repo, taskItem, ctx, target), nil
 	default:
 		return false, nil
 	}
 }
 
-func isDefaultBranchFinalizationReady(
+func isInferableDefaultBranchFinalizationReady(
 	repo task.Repository,
 	taskItem task.Task,
 	ctx finalizationContext,
-	allowRunningCompleted bool,
 ) bool {
-	return validateDefaultBranchFinalizationReady(repo, taskItem, ctx, allowRunningCompleted) == nil
+	if _, err := finalizationDefaultBranch(repo); err != nil {
+		return false
+	}
+	if taskItem.Status != task.StatusInProgress {
+		return false
+	}
+	metadata := taskItem.OrpheusMetadata()
+	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
+		return false
+	}
+	if ctx.latest.Completion == nil {
+		return false
+	}
+	return ctx.latest.Status == taskstate.RunStatusSucceeded || ctx.latest.Status == taskstate.RunStatusRunning
+}
+
+func isInferableFeatureBranchPublicationReady(
+	repo task.Repository,
+	taskItem task.Task,
+	ctx finalizationContext,
+	target Target,
+) bool {
+	if _, err := finalizationDefaultBranch(repo); err != nil {
+		return false
+	}
+	if !isFeatureBranchTarget(target.Kind) {
+		return false
+	}
+	if taskItem.Status != task.StatusInProgress {
+		return false
+	}
+	metadata := taskItem.OrpheusMetadata()
+	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
+		return false
+	}
+	if ctx.latest.Completion == nil {
+		return false
+	}
+	return ctx.latest.Status == taskstate.RunStatusSucceeded
 }
 
 func (s FinalizationService) loadFinalizationContext(repo task.Repository, taskItem task.Task) (finalizationContext, error) {
@@ -1030,6 +1090,10 @@ func (s FinalizationService) loadFinalizationContext(repo task.Repository, taskI
 	if !ok {
 		return finalizationContext{}, fmt.Errorf("task %s has no Orpheus run attempts; run `orpheus task run --main %s` first", taskItem.ID, taskItem.ID)
 	}
+	taskTarget, ok := taskstate.Target(state)
+	if !ok {
+		return finalizationContext{}, fmt.Errorf("task %s has no taskstate target; run `orpheus task run %s` first", taskItem.ID, taskItem.ID)
+	}
 	publicationRun, err := publicationRun(state)
 	if err != nil {
 		return finalizationContext{}, fmt.Errorf("select publication completion for task %s: %w", taskItem.ID, err)
@@ -1037,6 +1101,7 @@ func (s FinalizationService) loadFinalizationContext(repo task.Repository, taskI
 	latestReview, hasReview := taskstate.LatestReview(state)
 	return finalizationContext{
 		state:        state,
+		target:       taskTarget,
 		latest:       latest,
 		publication:  publicationRun,
 		latestReview: latestReview,
@@ -1082,7 +1147,7 @@ func validateDefaultBranchFinalizationReady(
 	if err := validateDefaultBranchTaskMetadata(repoRoot, defaultBranch, taskItem); err != nil {
 		return err
 	}
-	if err := validateDefaultBranchLatestRun(repoRoot, defaultBranch, taskItem, ctx.latest); err != nil {
+	if err := validateDefaultBranchLatestRun(repoRoot, defaultBranch, taskItem, ctx.target, ctx.latest); err != nil {
 		return err
 	}
 	return validateDefaultBranchLatestStatus(taskItem, ctx.latest, allowRunningCompleted)
@@ -1106,7 +1171,7 @@ func validateFeatureBranchPublicationReady(
 	if err := validateFeatureBranchTaskMetadata(taskItem); err != nil {
 		return err
 	}
-	return validateFeatureBranchLatestRun(taskItem, ctx.latest, target)
+	return validateFeatureBranchLatestRun(taskItem, ctx.target, ctx.latest, target)
 }
 
 func finalizationDefaultBranch(repo task.Repository) (string, error) {
@@ -1172,21 +1237,21 @@ func validateDefaultBranchLatestRun(
 	repoRoot string,
 	defaultBranch string,
 	taskItem task.Task,
+	taskTarget taskstate.TaskTarget,
 	latest taskstate.RunAttempt,
 ) error {
 	if latest.Completion == nil {
 		return fmt.Errorf("latest run attempt %d for task %s has no main-mode completion block; run `orpheus agent done` first", latest.Attempt, taskItem.ID)
 	}
-	if strings.TrimSpace(latest.Branch) != defaultBranch {
+	if strings.TrimSpace(taskTarget.Branch) != defaultBranch {
 		return fmt.Errorf(
-			"latest run attempt %d for task %s branch is %q, expected registered default branch %q",
-			latest.Attempt,
+			"task %s taskstate target branch is %q, expected registered default branch %q",
 			taskItem.ID,
-			latest.Branch,
+			taskTarget.Branch,
 			defaultBranch,
 		)
 	}
-	if err := validateLatestRunWorktree(repoRoot, "registered repo root", taskItem.ID, latest); err != nil {
+	if err := validateTaskTargetWorktree(repoRoot, "registered repo root", taskItem.ID, taskTarget); err != nil {
 		return err
 	}
 
@@ -1195,23 +1260,32 @@ func validateDefaultBranchLatestRun(
 		classificationRun.Status = taskstate.RunStatusSucceeded
 	}
 	localTarget := Target{Kind: TargetMainSolo, Branch: defaultBranch, Worktree: repoRoot}
-	if _, ok := ClassifyExpectedLocalReviewReady(ExpectedTargets{MainSolo: localTarget}, taskItem, &classificationRun); !ok {
+	if _, ok := ClassifyExpectedLocalReviewReady(
+		ExpectedTargets{MainSolo: localTarget},
+		taskItem,
+		taskTarget,
+		&classificationRun,
+	); !ok {
 		return fmt.Errorf("latest run attempt %d for task %s is not a main/solo local-ready completion", latest.Attempt, taskItem.ID)
 	}
 	return nil
 }
 
-func validateLatestRunWorktree(expected string, expectedLabel string, taskID string, latest taskstate.RunAttempt) error {
-	runWorktree, err := cleanAbsPath("latest run worktree", latest.Worktree)
+func validateTaskTargetWorktree(
+	expected string,
+	expectedLabel string,
+	taskID string,
+	taskTarget taskstate.TaskTarget,
+) error {
+	targetWorktree, err := cleanAbsPath("taskstate target worktree", taskTarget.Worktree)
 	if err != nil {
 		return err
 	}
-	if runWorktree != expected {
+	if targetWorktree != expected {
 		return fmt.Errorf(
-			"latest run attempt %d for task %s worktree is %q, expected %s %q",
-			latest.Attempt,
+			"task %s taskstate target worktree is %q, expected %s %q",
 			taskID,
-			latest.Worktree,
+			taskTarget.Worktree,
 			expectedLabel,
 			expected,
 		)
@@ -1273,7 +1347,12 @@ func validateFeatureBranchTaskMetadata(taskItem task.Task) error {
 	return nil
 }
 
-func validateFeatureBranchLatestRun(taskItem task.Task, latest taskstate.RunAttempt, target Target) error {
+func validateFeatureBranchLatestRun(
+	taskItem task.Task,
+	taskTarget taskstate.TaskTarget,
+	latest taskstate.RunAttempt,
+	target Target,
+) error {
 	if latest.Completion == nil {
 		return fmt.Errorf("latest run attempt %d for task %s has no completion block; run `orpheus agent done` first", latest.Attempt, taskItem.ID)
 	}
@@ -1286,19 +1365,23 @@ func validateFeatureBranchLatestRun(taskItem task.Task, latest taskstate.RunAtte
 			taskstate.RunStatusSucceeded,
 		)
 	}
-	if strings.TrimSpace(latest.Branch) != target.Branch {
+	if strings.TrimSpace(taskTarget.Branch) != target.Branch {
 		return fmt.Errorf(
-			"latest run attempt %d for task %s branch is %q, expected task branch %q",
-			latest.Attempt,
+			"task %s taskstate target branch is %q, expected task branch %q",
 			taskItem.ID,
-			latest.Branch,
+			taskTarget.Branch,
 			target.Branch,
 		)
 	}
-	if err := validateLatestRunWorktree(target.Worktree, "task worktree", taskItem.ID, latest); err != nil {
+	if err := validateTaskTargetWorktree(target.Worktree, "task worktree", taskItem.ID, taskTarget); err != nil {
 		return err
 	}
-	if _, ok := ClassifyExpectedPRReviewReady(expectedTargetsForFeatureBranchTarget(target), taskItem, &latest); !ok {
+	if _, ok := ClassifyExpectedPRReviewReady(
+		expectedTargetsForFeatureBranchTarget(target),
+		taskItem,
+		taskTarget,
+		&latest,
+	); !ok {
 		return fmt.Errorf("latest run attempt %d for task %s is not a PR-ready feature-branch completion", latest.Attempt, taskItem.ID)
 	}
 	return nil

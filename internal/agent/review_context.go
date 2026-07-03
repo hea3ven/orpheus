@@ -47,18 +47,15 @@ func (r ActiveContextResolver) ResolveReview(ctx context.Context) (ReviewContext
 	if err != nil {
 		return ReviewContext{}, err
 	}
-	run, err := r.resolveLatestCompletedRun(repo.ID, env.TaskID)
+	run, taskTarget, err := r.resolveLatestCompletedRun(repo.ID, env.TaskID)
 	if err != nil {
 		return ReviewContext{}, err
 	}
-	targets, candidate, err := r.resolveContextTarget(source, taskItem, env.TaskID, run)
+	targets, candidate, err := r.resolveContextTarget(source, taskItem, env.TaskID, taskTarget)
 	if err != nil {
 		return ReviewContext{}, err
 	}
 	if err := validateEnvironmentMatchesTarget(env, candidate); err != nil {
-		return ReviewContext{}, err
-	}
-	if err := validateRunMatchesTarget(run, candidate); err != nil {
 		return ReviewContext{}, err
 	}
 	cwd, err := r.resolveTargetCWD(candidate)
@@ -89,18 +86,42 @@ func (r ActiveContextResolver) ResolveReview(ctx context.Context) (ReviewContext
 	}, nil
 }
 
-func (r ActiveContextResolver) resolveLatestCompletedRun(repoID string, taskID string) (taskstate.RunAttempt, error) {
-	run, ok, err := r.RunStore.LatestRun(repoID, taskID)
+func (r ActiveContextResolver) resolveLatestCompletedRun(
+	repoID string,
+	taskID string,
+) (taskstate.RunAttempt, taskstate.TaskTarget, error) {
+	state, err := r.RunStore.Load(repoID, taskID)
 	if err != nil {
-		return taskstate.RunAttempt{}, fmt.Errorf("load latest Orpheus run for task %s/%s: %w", repoID, taskID, err)
+		return taskstate.RunAttempt{}, taskstate.TaskTarget{}, fmt.Errorf(
+			"load latest Orpheus run for task %s/%s: %w",
+			repoID,
+			taskID,
+			err,
+		)
 	}
+	run, ok := taskstate.LatestRun(state)
 	if !ok {
-		return taskstate.RunAttempt{}, fmt.Errorf("task %s/%s has no Orpheus run attempts", repoID, taskID)
+		return taskstate.RunAttempt{}, taskstate.TaskTarget{}, fmt.Errorf(
+			"task %s/%s has no Orpheus run attempts",
+			repoID,
+			taskID,
+		)
 	}
 	if run.Completion == nil {
-		return taskstate.RunAttempt{}, fmt.Errorf("latest Orpheus run attempt %d has no completion block", run.Attempt)
+		return taskstate.RunAttempt{}, taskstate.TaskTarget{}, fmt.Errorf(
+			"latest Orpheus run attempt %d has no completion block",
+			run.Attempt,
+		)
 	}
-	return run, nil
+	target, ok := taskstate.Target(state)
+	if !ok {
+		return taskstate.RunAttempt{}, taskstate.TaskTarget{}, fmt.Errorf(
+			"task %s/%s has no taskstate target",
+			repoID,
+			taskID,
+		)
+	}
+	return run, target, nil
 }
 
 func (r ActiveContextResolver) requiredReviewAttempt() (int, error) {

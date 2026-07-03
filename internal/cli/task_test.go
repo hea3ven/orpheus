@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -898,8 +899,8 @@ func TestTaskRunExecutesImplementerDefaultAttachedFromDeterministicWorktree(t *t
 	is.NotContains(state.Runs[0].Args[3], "Implement attached run")
 	is.Equal("--literal", state.Runs[0].Args[4])
 	is.Equal("unchanged", state.Runs[0].Args[5])
-	is.Equal("orpheus/op-1", state.Runs[0].Branch)
-	is.Equal(worktreePath, state.Runs[0].Worktree)
+	is.Equal("orpheus/op-1", state.Target.Branch)
+	is.Equal(worktreePath, state.Target.Worktree)
 	must.NotNil(state.Runs[0].FinishedAt)
 	must.Len(state.Events, 3)
 	is.Equal(taskstate.EventWorktreeCreated, state.Events[0].Type)
@@ -1088,8 +1089,8 @@ func TestTaskRunMainExecutesAgentFromRegisteredRepoRoot(t *testing.T) {
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
 	must.Len(state.Runs, 1)
 	is.Equal(taskstate.RunStatusSucceeded, state.Runs[0].Status)
-	is.Equal("main", state.Runs[0].Branch)
-	is.Equal(repoPath, state.Runs[0].Worktree)
+	is.Equal("main", state.Target.Branch)
+	is.Equal(repoPath, state.Target.Worktree)
 	must.Len(state.Events, 3)
 	is.Equal(taskstate.EventWorktreeReused, state.Events[0].Type)
 	is.Equal(taskstate.EventRunStarted, state.Events[1].Type)
@@ -1165,8 +1166,8 @@ func TestTaskRunRepoRootExecutesAgentFromRegisteredRepoRootOnTaskBranch(t *testi
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-root.yaml"), &state))
 	must.Len(state.Runs, 1)
 	is.Equal(taskstate.RunStatusSucceeded, state.Runs[0].Status)
-	is.Equal("orpheus/op-root", state.Runs[0].Branch)
-	is.Equal(repoPath, state.Runs[0].Worktree)
+	is.Equal("orpheus/op-root", state.Target.Branch)
+	is.Equal(repoPath, state.Target.Worktree)
 	must.Len(state.Events, 3)
 	is.Equal(taskstate.EventTaskBranchCreated, state.Events[0].Type)
 	is.Equal(taskstate.EventRunStarted, state.Events[1].Type)
@@ -1312,8 +1313,8 @@ func TestTaskRunMainAllowsOwnedInProgressRepoRootTask(t *testing.T) {
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
 	must.Len(state.Runs, 1)
 	is.Equal(taskstate.RunStatusSucceeded, state.Runs[0].Status)
-	is.Equal("main", state.Runs[0].Branch)
-	is.Equal(repoPath, state.Runs[0].Worktree)
+	is.Equal("main", state.Target.Branch)
+	is.Equal(repoPath, state.Target.Worktree)
 }
 
 func TestTaskRunMainBlocksOtherRepoRootOwnerButWorktreeRunStillWorks(t *testing.T) {
@@ -1562,8 +1563,8 @@ func TestTaskRunAllowsOwnedInProgressTaskWithMatchingMetadata(t *testing.T) {
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-owned.yaml"), &state))
 	must.Len(state.Runs, 1)
 	is.Equal(taskstate.RunStatusSucceeded, state.Runs[0].Status)
-	is.Equal("orpheus/op-owned", state.Runs[0].Branch)
-	is.Equal(worktreePath, state.Runs[0].Worktree)
+	is.Equal("orpheus/op-owned", state.Target.Branch)
+	is.Equal(worktreePath, state.Target.Worktree)
 }
 
 //nolint:funlen // Failure workflow needs the fake command script and assertions in one scenario.
@@ -2087,6 +2088,45 @@ func TestTaskReviewApproveFinalizesAndRecordsPassedAttempt(t *testing.T) {
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
 	is.Empty(latest.Findings)
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
+}
+
+func TestTaskReviewRejectsStaleMetadataMirror(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review approval", "Finalize after approval.")
+
+	staleWorktree := filepath.Join(root, "stale-worktree")
+	taskJSON := mainReadyTaskJSON("op-main", staleWorktree)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+	})
+
+	stdout, stderr, err := executeCommandWithInputAndError(t, []string{"task", "review", "op-main"}, []byte("a\n"))
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "task review op-main: task op-main metadata target is invalid")
+	is.ErrorContains(err, taskmodel.MetadataWorktree+"="+strconv.Quote(staleWorktree))
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	_, ok := taskstate.LatestReview(state)
+	is.False(ok)
 }
 
 func TestTaskReviewRejectsStagedCandidateChanges(t *testing.T) {

@@ -631,7 +631,7 @@ func taskReviewPipelineOptions(
 		Store:         start.store,
 		RepoID:        start.repoID(),
 		TaskID:        start.taskID(),
-		Branch:        start.resolvedCtx.Task.OrpheusMetadata().Branch,
+		Branch:        start.target.Branch,
 		Workdir:       start.workdir,
 		Attempt:       start.review,
 		Pipeline:      start.pipeline,
@@ -642,7 +642,7 @@ func taskReviewPipelineOptions(
 		AgentConfig:   start.agentConfig,
 		AgentLauncher: attachedAgentLauncher,
 		RenderManualStep: func(review.Step) error {
-			return renderManualReviewContext(command, start.store, start.resolvedCtx)
+			return renderManualReviewContext(command, start.store, start.resolvedCtx, start.workdir)
 		},
 		ConfirmManualCommand: func(step review.Step) (bool, error) {
 			confirmed, err := promptManualCommandConfirmation(command, reviewInput, step)
@@ -676,6 +676,7 @@ type taskReviewStart struct {
 	resolvedCtx resolvedTaskContext
 	store       taskstate.Store
 	workdir     string
+	target      workflow.Target
 	review      taskstate.ReviewAttempt
 	pipeline    review.Pipeline
 	agentConfig agent.Config
@@ -703,10 +704,11 @@ func startTaskReview(command *cobra.Command, taskID string, pipelineName string)
 		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
 	}
 	store := taskstate.NewStore(paths)
-	workdir, err := taskWorkingDirectory(resolvedCtx.Resolved.Source.Repository, resolvedCtx.Task)
+	target, err := taskReviewTarget(store, paths, resolvedCtx)
 	if err != nil {
 		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
 	}
+	workdir := target.Worktree
 	if err := validateReviewCandidateReady(command.Context(), store, resolvedCtx, workdir); err != nil {
 		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
 	}
@@ -731,10 +733,62 @@ func startTaskReview(command *cobra.Command, taskID string, pipelineName string)
 		resolvedCtx: resolvedCtx,
 		store:       store,
 		workdir:     workdir,
+		target:      target,
 		review:      reviewAttempt,
 		pipeline:    pipeline,
 		agentConfig: agentConfig,
 	}, nil
+}
+
+func taskReviewTarget(
+	store taskstate.Store,
+	paths state.Paths,
+	resolvedCtx resolvedTaskContext,
+) (workflow.Target, error) {
+	repo := resolvedCtx.Resolved.Source.Repository
+	taskID := resolvedCtx.Resolved.TaskID
+	taskState, err := store.Load(repo.ID, taskID)
+	if err != nil {
+		return workflow.Target{}, fmt.Errorf("load task state: %w", err)
+	}
+	taskTarget, ok := taskstate.Target(taskState)
+	if !ok {
+		return workflow.Target{}, fmt.Errorf("task has no Orpheus target; run `orpheus task run %s` first", taskID)
+	}
+	targets, err := workflow.ExpectedTargetsForTask(repo, taskID, paths)
+	if err != nil {
+		return workflow.Target{}, err
+	}
+	target, err := workflow.ClassifyTaskStateTarget(taskTarget, targets)
+	if err != nil {
+		return workflow.Target{}, fmt.Errorf("task has inconsistent taskstate target: %w", err)
+	}
+	if err := validateTaskMetadataMirror(resolvedCtx.Task, targets, target); err != nil {
+		return workflow.Target{}, err
+	}
+	return target, nil
+}
+
+func validateTaskMetadataMirror(
+	taskItem taskmodel.Task,
+	targets workflow.ExpectedTargets,
+	target workflow.Target,
+) error {
+	metadataTarget, err := workflow.ClassifyMetadataTarget(taskItem.OrpheusMetadata(), targets)
+	if err != nil {
+		return fmt.Errorf("task %s metadata target is invalid: %w", taskItem.ID, err)
+	}
+	if metadataTarget.Branch == target.Branch && metadataTarget.Worktree == target.Worktree {
+		return nil
+	}
+	return fmt.Errorf(
+		"task %s metadata target %q/%q does not mirror taskstate target %q/%q",
+		taskItem.ID,
+		metadataTarget.Branch,
+		metadataTarget.Worktree,
+		target.Branch,
+		target.Worktree,
+	)
 }
 
 func resolveTaskReviewAgentConfig(paths state.Paths, pipeline review.Pipeline) (agent.Config, error) {
@@ -1061,6 +1115,7 @@ func renderManualReviewContext(
 	command *cobra.Command,
 	store taskstate.Store,
 	resolvedCtx resolvedTaskContext,
+	workdir string,
 ) error {
 	output := command.ErrOrStderr()
 	repo := resolvedCtx.Resolved.Source.Repository
@@ -1078,10 +1133,6 @@ func renderManualReviewContext(
 		return fmt.Errorf("latest run attempt %d has no completion block; run `orpheus agent done` first", latest.Attempt)
 	}
 
-	workdir, err := taskWorkingDirectory(repo, taskItem)
-	if err != nil {
-		return err
-	}
 	status, err := gitOutput(command.Context(), workdir, "status", "--short")
 	if err != nil {
 		return fmt.Errorf("read git status: %w", err)
