@@ -147,7 +147,7 @@ func (r ActiveContextResolver) Resolve(ctx context.Context) (ActiveContext, erro
 	if err != nil {
 		return ActiveContext{}, err
 	}
-	targets, candidate, err := r.resolveContextTarget(source, taskItem, env.TaskID)
+	targets, candidate, err := r.resolveContextTarget(source, taskItem, env.TaskID, run)
 	if err != nil {
 		return ActiveContext{}, err
 	}
@@ -297,13 +297,21 @@ func (r ActiveContextResolver) resolveContextTarget(
 	source taskmodel.RepositorySource,
 	taskItem taskmodel.Task,
 	taskID string,
+	run taskstate.RunAttempt,
 ) (workflow.ExpectedTargets, targetCandidate, error) {
 	targets, err := workflow.ExpectedTargetsForTask(source.Repository, taskID, r.Paths)
 	if err != nil {
 		return workflow.ExpectedTargets{}, targetCandidate{}, err
 	}
-	candidate, err := classifyContextTarget(taskItem.OrpheusMetadata(), targets)
+	candidate, err := classifyContextTargetFromRun(source.Repository, run)
 	if err != nil {
+		return workflow.ExpectedTargets{}, targetCandidate{}, fmt.Errorf(
+			"task %s has inconsistent taskstate target: %w",
+			taskID,
+			err,
+		)
+	}
+	if _, err := workflow.ClassifyMetadataTarget(taskItem.OrpheusMetadata(), targets); err != nil {
 		return workflow.ExpectedTargets{}, targetCandidate{}, fmt.Errorf(
 			"task %s has inconsistent Orpheus metadata: %w",
 			taskID,
@@ -495,18 +503,20 @@ func validateContextTaskStatus(taskItem taskmodel.Task) error {
 	}
 }
 
-func classifyContextTarget(
-	metadata taskmodel.OrpheusMetadata,
-	targets workflow.ExpectedTargets,
-) (targetCandidate, error) {
-	target, err := workflow.ClassifyMetadataTarget(metadata, targets)
+func classifyContextTargetFromRun(repo taskmodel.Repository, run taskstate.RunAttempt) (targetCandidate, error) {
+	branch := strings.TrimSpace(run.Branch)
+	worktree, err := cleanAbsPath("taskstate target worktree", run.Worktree)
 	if err != nil {
 		return targetCandidate{}, err
 	}
+	kind := workflow.ClassifyRunTarget(repo, branch, worktree)
+	if kind == workflow.TargetUnknown {
+		return targetCandidate{}, fmt.Errorf("branch %q and worktree %q do not match a supported execution target", branch, worktree)
+	}
 	return targetCandidate{
-		Kind:   target.Kind,
-		Branch: target.Branch,
-		Path:   target.Worktree,
+		Kind:   kind,
+		Branch: branch,
+		Path:   worktree,
 	}, nil
 }
 

@@ -86,9 +86,10 @@ type DispatchStartResult struct {
 }
 
 type dispatchStartPlan struct {
-	taskItem task.Task
-	expected gitmeta.TaskWorktreeSetupResult
-	followUp *dispatchFollowUpPlan
+	taskItem   task.Task
+	expected   gitmeta.TaskWorktreeSetupResult
+	targetKind TargetKind
+	followUp   *dispatchFollowUpPlan
 }
 
 type dispatchFollowUpPlan struct {
@@ -196,7 +197,7 @@ func (s DispatchService) startLocked(
 		return DispatchStartResult{}, err
 	}
 
-	setup, err := s.setupTarget(ctx, opts, plan.followUp)
+	setup, err := s.setupTarget(ctx, opts, plan.targetKind, plan.followUp != nil)
 	if err != nil {
 		return DispatchStartResult{}, err
 	}
@@ -226,6 +227,7 @@ func dispatchSessionName(taskItem task.Task, followUp *dispatchFollowUpPlan) str
 	return taskItem.SessionName()
 }
 
+//nolint:funlen // Dispatch eligibility is clearer when target-lock decisions stay together.
 func (s DispatchService) validateStart(
 	ctx context.Context,
 	opts DispatchStartOptions,
@@ -254,24 +256,49 @@ func (s DispatchService) validateStart(
 		)
 	}
 
-	reviewPlan, err := s.resolveReviewFollowUpPlan(repo.ID, opts.TaskID, repo, taskItem, opts)
+	state, err := s.RunStore.Load(repo.ID, opts.TaskID)
+	if err != nil {
+		return dispatchStartPlan{}, fmt.Errorf("inspect task target state: %w", err)
+	}
+	lockedTarget, hasLockedTarget, err := dispatchLockedTarget(repo, state)
+	if err != nil {
+		return dispatchStartPlan{}, err
+	}
+	if hasLockedTarget && opts.MainMode {
+		return dispatchStartPlan{}, fmt.Errorf(
+			"task %s already has target branch %q and worktree %q; retry without --main",
+			opts.TaskID,
+			lockedTarget.Branch,
+			lockedTarget.Worktree,
+		)
+	}
+	if hasLockedTarget && opts.RepoRootMode {
+		return dispatchStartPlan{}, fmt.Errorf(
+			"task %s already has target branch %q and worktree %q; retry without --repo-root",
+			opts.TaskID,
+			lockedTarget.Branch,
+			lockedTarget.Worktree,
+		)
+	}
+
+	reviewPlan, err := s.resolveReviewFollowUpPlan(repo.ID, opts.TaskID, repo, taskItem, lockedTarget, hasLockedTarget)
 	if err != nil {
 		return dispatchStartPlan{}, err
 	}
 
-	expected, err := s.expectedSetup(opts, taskItem, reviewPlan)
+	expected, targetKind, err := s.expectedSetup(opts, taskItem, lockedTarget, hasLockedTarget, reviewPlan)
 	if err != nil {
 		return dispatchStartPlan{}, err
 	}
 	if err := ensureDispatchEligible(taskItem, expected, repo, opts.MainMode, opts.RepoRootMode, reviewPlan != nil); err != nil {
 		return dispatchStartPlan{}, err
 	}
-	if opts.MainMode || opts.RepoRootMode || followUpTargetIs(reviewPlan, TargetMainSolo) || followUpTargetIs(reviewPlan, TargetRepoRootTeam) {
+	if targetKind == TargetMainSolo || targetKind == TargetRepoRootTeam {
 		if err := ensureRepoRootDispatchAvailable(ctx, opts.Backend, repo, opts.TaskID, expected); err != nil {
 			return dispatchStartPlan{}, err
 		}
 	}
-	return dispatchStartPlan{taskItem: taskItem, expected: expected, followUp: reviewPlan}, nil
+	return dispatchStartPlan{taskItem: taskItem, expected: expected, targetKind: targetKind, followUp: reviewPlan}, nil
 }
 
 func ensureDispatchParentEpicGate(ctx context.Context, backend DispatchBackend, taskItem task.Task) error {
@@ -289,12 +316,36 @@ func ensureDispatchParentEpicGate(ctx context.Context, backend DispatchBackend, 
 	return fmt.Errorf("task %s is not eligible for dispatch: %s", taskItem.ID, gate.Detail())
 }
 
+func dispatchLockedTarget(repo task.Repository, state taskstate.TaskState) (Target, bool, error) {
+	locked, ok := taskstate.Target(state)
+	if !ok {
+		return Target{}, false, nil
+	}
+	branch := strings.TrimSpace(locked.Branch)
+	worktree := cleanDispatchPath(locked.Worktree)
+	kind := ClassifyRunTarget(repo, branch, worktree)
+	if kind == TargetUnknown {
+		return Target{}, false, fmt.Errorf(
+			"task %s has unsupported taskstate target branch %q and worktree %q",
+			state.TaskID,
+			locked.Branch,
+			locked.Worktree,
+		)
+	}
+	return Target{
+		Kind:     kind,
+		Branch:   branch,
+		Worktree: worktree,
+	}, true, nil
+}
+
 func (s DispatchService) resolveReviewFollowUpPlan(
 	repoID string,
 	taskID string,
 	repo task.Repository,
 	taskItem task.Task,
-	opts DispatchStartOptions,
+	lockedTarget Target,
+	hasLockedTarget bool,
 ) (*dispatchFollowUpPlan, error) {
 	state, err := s.RunStore.Load(repoID, taskID)
 	if err != nil {
@@ -317,20 +368,13 @@ func (s DispatchService) resolveReviewFollowUpPlan(
 				taskID,
 			)
 		}
-		targetKind, err := followUpTargetKind(repo, taskItem)
-		if err != nil {
-			return nil, err
-		}
-		if opts.MainMode && targetKind != TargetMainSolo {
-			return nil, fmt.Errorf("task %s follow-up must preserve current %s target; retry without --main", taskID, targetKind.DisplayName())
-		}
-		if opts.RepoRootMode && targetKind != TargetRepoRootTeam {
-			return nil, fmt.Errorf("task %s follow-up must preserve current %s target; retry without --repo-root", taskID, targetKind.DisplayName())
+		if !hasLockedTarget {
+			return nil, fmt.Errorf("task %s follow-up cannot preserve target: taskstate target is missing", taskID)
 		}
 		return &dispatchFollowUpPlan{
 			reviewAttempt:  latestReview.Attempt,
 			findingIndexes: indexes,
-			targetKind:     targetKind,
+			targetKind:     lockedTarget.Kind,
 		}, nil
 	case taskstate.ReviewStatusAborted:
 		return nil, fmt.Errorf("latest review attempt %d for task %s was aborted; rerun `orpheus task review %s`", latestReview.Attempt, taskID, taskID)
@@ -360,27 +404,6 @@ func untargetedBlockingFindingIndexes(review taskstate.ReviewAttempt) []int {
 		indexes = append(indexes, index)
 	}
 	return indexes
-}
-
-func followUpTargetKind(repo task.Repository, taskItem task.Task) (TargetKind, error) {
-	metadata := taskItem.OrpheusMetadata()
-	if !metadata.HasBranch || strings.TrimSpace(metadata.Branch) == "" {
-		return TargetUnknown, fmt.Errorf("task %s follow-up cannot preserve target: %s is missing", taskItem.ID, task.MetadataBranch)
-	}
-	if !metadata.HasWorktree || strings.TrimSpace(metadata.Worktree) == "" {
-		return TargetUnknown, fmt.Errorf("task %s follow-up cannot preserve target: %s is missing", taskItem.ID, task.MetadataWorktree)
-	}
-
-	worktree := cleanDispatchPath(metadata.Worktree)
-	repoPath := cleanDispatchPath(repo.Path)
-	branch := strings.TrimSpace(metadata.Branch)
-	if worktree == repoPath {
-		if branch == strings.TrimSpace(repo.DefaultBranch) {
-			return TargetMainSolo, nil
-		}
-		return TargetRepoRootTeam, nil
-	}
-	return TargetWorktreeTeam, nil
 }
 
 func (s DispatchService) recordStart(
@@ -460,26 +483,36 @@ func resolveDispatchCommand(
 func (s DispatchService) expectedSetup(
 	opts DispatchStartOptions,
 	taskItem task.Task,
+	lockedTarget Target,
+	hasLockedTarget bool,
 	followUp *dispatchFollowUpPlan,
-) (gitmeta.TaskWorktreeSetupResult, error) {
+) (gitmeta.TaskWorktreeSetupResult, TargetKind, error) {
+	if hasLockedTarget {
+		setup, err := s.expectedSetupForTargetKind(opts, taskItem, lockedTarget.Kind)
+		return setup, lockedTarget.Kind, err
+	}
 	if followUp != nil {
-		return s.followUpExpectedSetup(opts, taskItem, followUp)
+		setup, err := s.expectedSetupForTargetKind(opts, taskItem, followUp.targetKind)
+		return setup, followUp.targetKind, err
 	}
 	if opts.MainMode {
-		return gitmeta.ExpectedRepoRoot(dispatchRepoRootOptions(opts.Source.Repository, false))
+		setup, err := gitmeta.ExpectedRepoRoot(dispatchRepoRootOptions(opts.Source.Repository, false))
+		return setup, TargetMainSolo, err
 	}
 	if opts.RepoRootMode {
-		return gitmeta.ExpectedRepoRootTaskBranch(dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, false))
+		setup, err := gitmeta.ExpectedRepoRootTaskBranch(dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, false))
+		return setup, TargetRepoRootTeam, err
 	}
-	return gitmeta.ExpectedTaskWorktree(dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, false))
+	setup, err := gitmeta.ExpectedTaskWorktree(dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, false))
+	return setup, TargetWorktreeTeam, err
 }
 
-func (s DispatchService) followUpExpectedSetup(
+func (s DispatchService) expectedSetupForTargetKind(
 	opts DispatchStartOptions,
 	taskItem task.Task,
-	followUp *dispatchFollowUpPlan,
+	targetKind TargetKind,
 ) (gitmeta.TaskWorktreeSetupResult, error) {
-	switch followUp.targetKind {
+	switch targetKind {
 	case TargetMainSolo:
 		return gitmeta.ExpectedRepoRoot(dispatchRepoRootOptions(opts.Source.Repository, false))
 	case TargetRepoRootTeam:
@@ -487,26 +520,26 @@ func (s DispatchService) followUpExpectedSetup(
 	case TargetWorktreeTeam:
 		return gitmeta.ExpectedTaskWorktree(dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, false))
 	default:
-		return gitmeta.TaskWorktreeSetupResult{}, fmt.Errorf("task %s follow-up has unsupported target %q", taskItem.ID, followUp.targetKind)
+		return gitmeta.TaskWorktreeSetupResult{}, fmt.Errorf("task %s has unsupported target %q", taskItem.ID, targetKind)
 	}
 }
 
 func (s DispatchService) setupTarget(
 	ctx context.Context,
 	opts DispatchStartOptions,
-	followUp *dispatchFollowUpPlan,
+	targetKind TargetKind,
+	allowDirty bool,
 ) (gitmeta.TaskWorktreeSetupResult, error) {
-	if opts.MainMode || followUpTargetIs(followUp, TargetMainSolo) {
-		return gitmeta.SetupRepoRoot(ctx, dispatchRepoRootOptions(opts.Source.Repository, followUp != nil))
+	switch targetKind {
+	case TargetMainSolo:
+		return gitmeta.SetupRepoRoot(ctx, dispatchRepoRootOptions(opts.Source.Repository, allowDirty))
+	case TargetRepoRootTeam:
+		return gitmeta.SetupRepoRootTaskBranch(ctx, dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, allowDirty))
+	case TargetWorktreeTeam:
+		return gitmeta.SetupTaskWorktree(ctx, dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, false))
+	default:
+		return gitmeta.TaskWorktreeSetupResult{}, fmt.Errorf("task %s has unsupported target %q", opts.TaskID, targetKind)
 	}
-	if opts.RepoRootMode || followUpTargetIs(followUp, TargetRepoRootTeam) {
-		return gitmeta.SetupRepoRootTaskBranch(ctx, dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, followUp != nil))
-	}
-	return gitmeta.SetupTaskWorktree(ctx, dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, false))
-}
-
-func followUpTargetIs(followUp *dispatchFollowUpPlan, target TargetKind) bool {
-	return followUp != nil && followUp.targetKind == target
 }
 
 func queryDispatchTask(
@@ -726,7 +759,7 @@ func dispatchSetupEvent(lifecycle gitmeta.TaskWorktreeLifecycle) (taskstate.Even
 	case gitmeta.TaskWorktreeLifecycleTaskBranchCreated:
 		return taskstate.EventTaskBranchCreated, true, nil
 	case gitmeta.TaskWorktreeLifecycleReused:
-		return "", false, nil
+		return taskstate.EventWorktreeReused, true, nil
 	case gitmeta.TaskWorktreeLifecycleRecreated:
 		return taskstate.EventWorktreeRecreated, true, nil
 	default:
