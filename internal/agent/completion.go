@@ -249,8 +249,6 @@ func (s CompletionService) existingCompletionResult(
 			Attempt:    activeContext.Run.Attempt,
 			Status:     taskstate.RunStatusRunning,
 			Agent:      activeContext.Run.Agent,
-			Branch:     activeContext.Target.Branch,
-			Worktree:   activeContext.Target.Path,
 			Completion: activeContext.Run.Completion,
 		},
 		Repeated:           true,

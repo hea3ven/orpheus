@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -217,6 +218,7 @@ func ClassifyRunTarget(repo task.Repository, branch string, worktree string) Tar
 func ClassifyCompletionTarget(
 	repo task.Repository,
 	taskItem task.Task,
+	taskTarget taskstate.TaskTarget,
 	latestRun *taskstate.RunAttempt,
 ) (CompletionClassification, bool) {
 	if latestRun == nil || latestRun.Status != taskstate.RunStatusSucceeded || latestRun.Completion == nil {
@@ -231,8 +233,8 @@ func ClassifyCompletionTarget(
 		return CompletionClassification{}, false
 	}
 
-	branch := strings.TrimSpace(latestRun.Branch)
-	worktree := cleanPath(latestRun.Worktree)
+	branch := strings.TrimSpace(taskTarget.Branch)
+	worktree := cleanPath(taskTarget.Worktree)
 	if branch == "" || worktree == "" {
 		return CompletionClassification{}, false
 	}
@@ -263,10 +265,11 @@ func ClassifyCompletionTarget(
 }
 
 // ClassifyExpectedCompletionTarget classifies a completed run only when task metadata
-// and run facts match one of the exact expected workflow targets.
+// and task-level target facts match one of the exact expected workflow targets.
 func ClassifyExpectedCompletionTarget(
 	targets ExpectedTargets,
 	taskItem task.Task,
+	taskTarget taskstate.TaskTarget,
 	latestRun *taskstate.RunAttempt,
 ) (CompletionClassification, bool) {
 	if latestRun == nil || latestRun.Status != taskstate.RunStatusSucceeded || latestRun.Completion == nil {
@@ -278,11 +281,15 @@ func ClassifyExpectedCompletionTarget(
 		return CompletionClassification{}, false
 	}
 
-	target, err := ClassifyMetadataTarget(metadata, targets)
+	metadataTarget, err := ClassifyMetadataTarget(metadata, targets)
 	if err != nil {
 		return CompletionClassification{}, false
 	}
-	if strings.TrimSpace(latestRun.Branch) != target.Branch || cleanPath(latestRun.Worktree) != target.Worktree {
+	target, err := ClassifyTaskStateTarget(taskTarget, targets)
+	if err != nil {
+		return CompletionClassification{}, false
+	}
+	if metadataTarget.Branch != target.Branch || metadataTarget.Worktree != target.Worktree {
 		return CompletionClassification{}, false
 	}
 
@@ -311,9 +318,10 @@ func ClassifyExpectedCompletionTarget(
 func ClassifyLocalReviewReady(
 	repo task.Repository,
 	taskItem task.Task,
+	taskTarget taskstate.TaskTarget,
 	latestRun *taskstate.RunAttempt,
 ) (CompletionClassification, bool) {
-	classification, ok := ClassifyCompletionTarget(repo, taskItem, latestRun)
+	classification, ok := ClassifyCompletionTarget(repo, taskItem, taskTarget, latestRun)
 	return classification, ok && classification.Target.Kind == TargetMainSolo
 }
 
@@ -321,9 +329,10 @@ func ClassifyLocalReviewReady(
 func ClassifyPRReviewReady(
 	repo task.Repository,
 	taskItem task.Task,
+	taskTarget taskstate.TaskTarget,
 	latestRun *taskstate.RunAttempt,
 ) (CompletionClassification, bool) {
-	classification, ok := ClassifyCompletionTarget(repo, taskItem, latestRun)
+	classification, ok := ClassifyCompletionTarget(repo, taskItem, taskTarget, latestRun)
 	return classification, ok && isPRReviewTarget(classification.Target.Kind)
 }
 
@@ -331,9 +340,10 @@ func ClassifyPRReviewReady(
 func ClassifyExpectedLocalReviewReady(
 	targets ExpectedTargets,
 	taskItem task.Task,
+	taskTarget taskstate.TaskTarget,
 	latestRun *taskstate.RunAttempt,
 ) (CompletionClassification, bool) {
-	classification, ok := ClassifyExpectedCompletionTarget(targets, taskItem, latestRun)
+	classification, ok := ClassifyExpectedCompletionTarget(targets, taskItem, taskTarget, latestRun)
 	return classification, ok && classification.Target.Kind == TargetMainSolo
 }
 
@@ -341,14 +351,42 @@ func ClassifyExpectedLocalReviewReady(
 func ClassifyExpectedPRReviewReady(
 	targets ExpectedTargets,
 	taskItem task.Task,
+	taskTarget taskstate.TaskTarget,
 	latestRun *taskstate.RunAttempt,
 ) (CompletionClassification, bool) {
-	classification, ok := ClassifyExpectedCompletionTarget(targets, taskItem, latestRun)
+	classification, ok := ClassifyExpectedCompletionTarget(targets, taskItem, taskTarget, latestRun)
 	return classification, ok && isPRReviewTarget(classification.Target.Kind)
 }
 
 func isPRReviewTarget(kind TargetKind) bool {
 	return kind == TargetWorktreeTeam || kind == TargetRepoRootTeam
+}
+
+// ClassifyTaskStateTarget matches the canonical taskstate target against exact expected workflow targets.
+func ClassifyTaskStateTarget(taskTarget taskstate.TaskTarget, targets ExpectedTargets) (Target, error) {
+	branch := strings.TrimSpace(taskTarget.Branch)
+	if branch == "" {
+		return Target{}, errors.New("taskstate target branch is missing")
+	}
+	worktree, err := cleanAbsPath("taskstate target worktree", taskTarget.Worktree)
+	if err != nil {
+		return Target{}, err
+	}
+
+	switch {
+	case branch == targets.MainSolo.Branch && worktree == targets.MainSolo.Worktree:
+		return targets.MainSolo, nil
+	case branch == targets.WorktreeTeam.Branch && worktree == targets.WorktreeTeam.Worktree:
+		return targets.WorktreeTeam, nil
+	case branch == targets.RepoRootTeam.Branch && worktree == targets.RepoRootTeam.Worktree:
+		return targets.RepoRootTeam, nil
+	default:
+		return Target{}, fmt.Errorf(
+			"taskstate target branch/worktree %q/%q does not match an expected workflow target",
+			taskTarget.Branch,
+			taskTarget.Worktree,
+		)
+	}
 }
 
 func cleanAbsPath(label string, path string) (string, error) {

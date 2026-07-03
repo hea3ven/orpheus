@@ -145,7 +145,7 @@ type TaskState struct {
 	Finalization *Finalization `yaml:"finalization,omitempty"`
 }
 
-// UnmarshalYAML normalizes transient fields after direct YAML decodes.
+// UnmarshalYAML normalizes task-level state after direct YAML decodes.
 func (s *TaskState) UnmarshalYAML(value *yaml.Node) error {
 	type plain TaskState
 	var decoded plain
@@ -154,12 +154,6 @@ func (s *TaskState) UnmarshalYAML(value *yaml.Node) error {
 	}
 	normalized := TaskState(decoded)
 	normalized.Target = normalizeTaskTarget(normalized.Target)
-	if target, ok := Target(normalized); ok {
-		for i := range normalized.Runs {
-			normalized.Runs[i].Branch = target.Branch
-			normalized.Runs[i].Worktree = target.Worktree
-		}
-	}
 	*s = normalized
 	return nil
 }
@@ -184,8 +178,6 @@ type RunAttempt struct {
 	Command     string   `yaml:"command,omitempty"`
 	Args        []string `yaml:"args,omitempty"`
 	SessionName string   `yaml:"session_name,omitempty"`
-	Branch      string   `yaml:"-"`
-	Worktree    string   `yaml:"-"`
 
 	StartedAt  time.Time   `yaml:"started_at"`
 	FinishedAt *time.Time  `yaml:"finished_at,omitempty"`
@@ -540,10 +532,6 @@ func (s Store) StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt
 		Worktree: opts.Worktree,
 	}); err != nil {
 		return RunAttempt{}, fmt.Errorf("start run attempt for task %s/%s: %w", repoID, taskID, err)
-	}
-	if target, ok := Target(state); ok {
-		attempt.Branch = target.Branch
-		attempt.Worktree = target.Worktree
 	}
 	state.Runs = append(state.Runs, attempt)
 	state.Events = append(state.Events, Event{
@@ -1469,12 +1457,6 @@ func normalizeState(taskState TaskState, repoID, taskID string) TaskState {
 	if taskState.Finalization != nil {
 		finalization := ensureFinalization(taskState.Finalization)
 		taskState.Finalization = &finalization
-	}
-	if target, ok := Target(taskState); ok {
-		for i := range taskState.Runs {
-			taskState.Runs[i].Branch = target.Branch
-			taskState.Runs[i].Worktree = target.Worktree
-		}
 	}
 	return taskState
 }

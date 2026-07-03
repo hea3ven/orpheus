@@ -155,8 +155,6 @@ func TestSyncServiceSkipsPRCreationForEligibleWorktreeCompletion(t *testing.T) {
 	service, provider, backend := newSyncTestService(t, taskItem, syncTaskState(taskstate.RunAttempt{
 		Attempt:   1,
 		Status:    taskstate.RunStatusSucceeded,
-		Branch:    "orpheus/op-1",
-		Worktree:  worktreePath,
 		StartedAt: time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC),
 		Completion: &taskstate.Completion{
 			Summary:             "Done",
@@ -193,10 +191,8 @@ func TestSyncServiceDoesNotRecoverBranchPRWithoutRecordedPRURL(t *testing.T) {
 		Status:   task.StatusInProgress,
 		Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-1", task.MetadataWorktree: worktreePath},
 	}, syncTaskState(taskstate.RunAttempt{
-		Attempt:  1,
-		Status:   taskstate.RunStatusSucceeded,
-		Branch:   "orpheus/op-1",
-		Worktree: worktreePath,
+		Attempt: 1,
+		Status:  taskstate.RunStatusSucceeded,
 		Completion: &taskstate.Completion{
 			Summary:             "Done",
 			Description:         "Implemented.",
@@ -523,15 +519,10 @@ func syncSucceededRun(worktreePath string) taskstate.RunAttempt {
 	return run
 }
 
-func syncCompletionRun(worktreePath string, branch string) taskstate.RunAttempt {
-	if branch == "" {
-		branch = "orpheus/op-1"
-	}
+func syncCompletionRun(_ string, _ string) taskstate.RunAttempt {
 	return taskstate.RunAttempt{
-		Attempt:  2,
-		Status:   taskstate.RunStatusSucceeded,
-		Branch:   branch,
-		Worktree: worktreePath,
+		Attempt: 2,
+		Status:  taskstate.RunStatusSucceeded,
 		Completion: &taskstate.Completion{
 			Summary:             "Done",
 			Description:         "Done.",
@@ -571,8 +562,6 @@ func TestSyncServiceSkipsTasksWithoutPRURLDespiteMalformedMetadata(t *testing.T)
 	state := syncTaskState(taskstate.RunAttempt{
 		Attempt:   1,
 		Status:    taskstate.RunStatusSucceeded,
-		Branch:    "orpheus/op-1",
-		Worktree:  worktreePath,
 		StartedAt: time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC),
 		Completion: &taskstate.Completion{
 			Summary:             "Done",
@@ -618,10 +607,8 @@ func TestSyncServiceDoesNotCallPRProviderForPublicationCandidates(t *testing.T) 
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	worktreePath := targets.WorktreeTeam.Worktree
 	state := syncTaskState(taskstate.RunAttempt{
-		Attempt:  1,
-		Status:   taskstate.RunStatusSucceeded,
-		Branch:   "orpheus/op-1",
-		Worktree: worktreePath,
+		Attempt: 1,
+		Status:  taskstate.RunStatusSucceeded,
 		Completion: &taskstate.Completion{
 			Summary:             "Done",
 			Description:         "Implemented.",

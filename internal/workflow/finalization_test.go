@@ -203,10 +203,8 @@ func TestFinalizeRequiresConfirmationForRunningCompletion(t *testing.T) {
 		finalizationMainTask("op-1", "/tmp/repo"),
 	}, map[string]taskstate.TaskState{
 		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
-			Attempt:  1,
-			Status:   taskstate.RunStatusRunning,
-			Branch:   "main",
-			Worktree: "/tmp/repo",
+			Attempt: 1,
+			Status:  taskstate.RunStatusRunning,
 			Completion: &taskstate.Completion{
 				Summary:             "Done",
 				Description:         "Implemented.",
@@ -237,10 +235,8 @@ func TestFinalizeAllowsConfirmedRunningCompletionWithoutMutatingRunStatus(t *tes
 		finalizationMainTask("op-1", "/tmp/repo"),
 	}, map[string]taskstate.TaskState{
 		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
-			Attempt:  1,
-			Status:   taskstate.RunStatusRunning,
-			Branch:   "main",
-			Worktree: "/tmp/repo",
+			Attempt: 1,
+			Status:  taskstate.RunStatusRunning,
 			Completion: &taskstate.Completion{
 				Summary:             "Done",
 				Description:         "Implemented.",
@@ -277,10 +273,8 @@ func TestFinalizeAllowsConfirmedRunningCompletionWithoutMutatingRunStatus(t *tes
 //nolint:funlen // The retry workflow is clearer as one linear scenario.
 func TestFinalizeRecordsPublicationFailureAndRetriesWithPassedReview(t *testing.T) {
 	taskState := finalizationTaskState("op-1", taskstate.RunAttempt{
-		Attempt:  1,
-		Status:   taskstate.RunStatusSucceeded,
-		Branch:   "main",
-		Worktree: "/tmp/repo",
+		Attempt: 1,
+		Status:  taskstate.RunStatusSucceeded,
 		Completion: &taskstate.Completion{
 			Summary:             "Done",
 			Description:         "Commit reviewed repo-root changes.",
@@ -346,10 +340,8 @@ func TestFinalizeDoesNotRequestRunningConfirmationWhenOtherChecksFail(t *testing
 		finalizationMainTask("op-1", "/tmp/repo"),
 	}, map[string]taskstate.TaskState{
 		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
-			Attempt:  1,
-			Status:   taskstate.RunStatusRunning,
-			Branch:   "main",
-			Worktree: "/tmp/repo",
+			Attempt: 1,
+			Status:  taskstate.RunStatusRunning,
 			Completion: &taskstate.Completion{
 				Summary:             "Done",
 				Description:         "Implemented.",
@@ -374,10 +366,8 @@ func TestFinalizeInfersSingleRunningCompletionCandidate(t *testing.T) {
 		finalizationMainTask("op-1", "/tmp/repo"),
 	}, map[string]taskstate.TaskState{
 		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
-			Attempt:  2,
-			Status:   taskstate.RunStatusRunning,
-			Branch:   "main",
-			Worktree: "/tmp/repo",
+			Attempt: 2,
+			Status:  taskstate.RunStatusRunning,
 			Completion: &taskstate.Completion{
 				Summary:             "Done",
 				Description:         "Implemented.",
@@ -405,6 +395,51 @@ func TestFinalizeInfersSingleRunningCompletionCandidate(t *testing.T) {
 	}
 }
 
+func TestFinalizeInfersFromTaskStateTargetBeforeMetadataMirrorValidation(t *testing.T) {
+	service, _, _, _ := newFinalizationTestService(t, []task.Task{
+		{
+			ID:     "op-1",
+			Status: task.StatusInProgress,
+			Metadata: task.Metadata{
+				task.MetadataBranch:   "main",
+				task.MetadataWorktree: "/tmp/stale-worktree",
+			},
+		},
+	}, map[string]taskstate.TaskState{
+		"alpha/op-1": {
+			RepoID: "alpha",
+			TaskID: "op-1",
+			Target: taskstate.TaskTarget{
+				Branch:   "main",
+				Worktree: "/tmp/repo",
+			},
+			Runs: []taskstate.RunAttempt{
+				{
+					Attempt: 1,
+					Status:  taskstate.RunStatusSucceeded,
+					Completion: &taskstate.Completion{
+						Summary:             "Done",
+						Description:         "Implemented.",
+						DetailedDescription: "Detailed PR body.",
+					},
+				},
+			},
+		},
+	})
+
+	_, err := service.Finalize(context.Background(), workflow.FinalizeOptions{CWD: "/tmp/repo"})
+
+	if err == nil {
+		t.Fatal("error = nil, want stale metadata mirror error")
+	}
+	if strings.Contains(err.Error(), "no non-closed ready task owns the current branch") {
+		t.Fatalf("error = %v, want inferred task before metadata validation", err)
+	}
+	if !strings.Contains(err.Error(), "metadata target") {
+		t.Fatalf("error = %v, want metadata mirror validation error", err)
+	}
+}
+
 func TestFinalizeDoesNotOfferRunningEscapeHatchForInvalidTargets(t *testing.T) {
 	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
 	service, _, _, _ := newFinalizationTestServiceForSource(t, paths, source, []task.Task{
@@ -418,10 +453,8 @@ func TestFinalizeDoesNotOfferRunningEscapeHatchForInvalidTargets(t *testing.T) {
 		},
 	}, map[string]taskstate.TaskState{
 		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
-			Attempt:  1,
-			Status:   taskstate.RunStatusRunning,
-			Branch:   targets.WorktreeTeam.Branch,
-			Worktree: targets.WorktreeTeam.Worktree,
+			Attempt: 1,
+			Status:  taskstate.RunStatusRunning,
 			Completion: &taskstate.Completion{Summary: "Done", Description: "Implemented.",
 				DetailedDescription: "Detailed PR body.", Commit: "abc123"},
 		}),
@@ -453,10 +486,8 @@ func TestFinalizePublishesFeatureBranchPRWithoutClosingTask(t *testing.T) {
 	}
 	service, git, store, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{taskItem}, map[string]taskstate.TaskState{
 		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
-			Attempt:  1,
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   targets.WorktreeTeam.Branch,
-			Worktree: worktree,
+			Attempt: 1,
+			Status:  taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
 				Summary:             "Publish branch",
 				Description:         "Commit reviewed feature work.",
@@ -519,10 +550,8 @@ func TestFinalizeRejectsMissingExternalReferenceBeforeFeatureBranchPublication(t
 	}
 	service, git, _, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{taskItem}, map[string]taskstate.TaskState{
 		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
-			Attempt:  1,
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   targets.WorktreeTeam.Branch,
-			Worktree: worktree,
+			Attempt: 1,
+			Status:  taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
 				Summary:             "Publish branch",
 				Description:         "Commit reviewed feature work.",
@@ -568,10 +597,8 @@ func TestFinalizePublishesRepoRootFeatureBranchPRWithoutClosingTask(t *testing.T
 		[]task.Task{taskItem},
 		map[string]taskstate.TaskState{
 			"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
-				Attempt:  1,
-				Status:   taskstate.RunStatusSucceeded,
-				Branch:   target.Branch,
-				Worktree: target.Worktree,
+				Attempt: 1,
+				Status:  taskstate.RunStatusSucceeded,
 				Completion: &taskstate.Completion{
 					Summary:             "Publish repo-root branch",
 					Description:         "Commit reviewed feature work.",
@@ -624,10 +651,8 @@ func TestFinalizeRecoversExistingFeatureBranchPR(t *testing.T) {
 	}
 	service, git, store, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{taskItem}, map[string]taskstate.TaskState{
 		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
-			Attempt:  1,
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   targets.WorktreeTeam.Branch,
-			Worktree: worktree,
+			Attempt: 1,
+			Status:  taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
 				Summary:             "Publish branch",
 				Description:         "Commit reviewed feature work.",
@@ -679,10 +704,8 @@ func TestFinalizePublishesOriginalCompletionAfterReviewFollowUp(t *testing.T) {
 	taskState := finalizationTaskState(
 		"op-1",
 		taskstate.RunAttempt{
-			Attempt:  1,
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   targets.WorktreeTeam.Branch,
-			Worktree: worktree,
+			Attempt: 1,
+			Status:  taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
 				Summary:             "Implement original feature",
 				Description:         "Commit the original implementation.",
@@ -690,10 +713,8 @@ func TestFinalizePublishesOriginalCompletionAfterReviewFollowUp(t *testing.T) {
 			},
 		},
 		taskstate.RunAttempt{
-			Attempt:  2,
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   targets.WorktreeTeam.Branch,
-			Worktree: worktree,
+			Attempt: 2,
+			Status:  taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
 				Summary:             "Fix review blocker",
 				Description:         "Addressed review-only follow-up work.",
@@ -814,10 +835,8 @@ func TestFinalizeRefusesFeatureBranchPublicationWithoutReviewedChanges(t *testin
 	}
 	service, git, _, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{taskItem}, map[string]taskstate.TaskState{
 		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
-			Attempt:  1,
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   targets.WorktreeTeam.Branch,
-			Worktree: worktree,
+			Attempt: 1,
+			Status:  taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
 				Summary:             "Publish branch",
 				Description:         "Commit reviewed feature work.",
@@ -876,6 +895,24 @@ func newFinalizationTestServiceForSource(
 ) (workflow.FinalizationService, *fakeFinalizationGit, *fakeFinalizationRunStore, *fakeFinalizationBackend) {
 	t.Helper()
 	backend := &fakeFinalizationBackend{tasks: tasks}
+	for key, state := range states {
+		if !state.Target.IsZero() {
+			continue
+		}
+		taskID := strings.TrimPrefix(key, source.Repository.ID+"/")
+		taskItem, ok := finalizationTaskByID(tasks, taskID)
+		if !ok {
+			continue
+		}
+		metadata := taskItem.OrpheusMetadata()
+		if metadata.HasBranch && metadata.HasWorktree {
+			state.Target = taskstate.TaskTarget{
+				Branch:   metadata.Branch,
+				Worktree: metadata.Worktree,
+			}
+			states[key] = state
+		}
+	}
 	store := &fakeFinalizationRunStore{states: states}
 	git := &fakeFinalizationGit{branch: source.Repository.DefaultBranch, hasChanges: true, commit: "commit123"}
 	service := workflow.FinalizationService{
@@ -888,6 +925,15 @@ func newFinalizationTestServiceForSource(
 		Git:      git,
 	}
 	return service, git, store, backend
+}
+
+func finalizationTaskByID(tasks []task.Task, taskID string) (task.Task, bool) {
+	for _, taskItem := range tasks {
+		if taskItem.ID == taskID {
+			return taskItem, true
+		}
+	}
+	return task.Task{}, false
 }
 
 func newFinalizationTestSource(

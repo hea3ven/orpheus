@@ -147,6 +147,8 @@ func TestConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 	latest, ok := taskstate.LatestRun(state)
 	must.True(ok)
 	must.NotNil(latest.Completion)
+	target, ok := taskstate.Target(state)
+	must.True(ok)
 	is.Equal("Replaced the config for abc", latest.Completion.Summary)
 	recordPassedReview(t, paths, "alpha", taskID)
 
@@ -159,7 +161,7 @@ func TestConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 	is.Contains(doneOut, "created PR https://github.test/org/alpha/pull/57")
 	is.Equal(
 		"[TREX-1234] Replaced the config for abc\n\nReplaced the config used for publication validation.",
-		strings.TrimSpace(runGit(t, latest.Worktree, "log", "-1", "--format=%B")),
+		strings.TrimSpace(runGit(t, target.Worktree, "log", "-1", "--format=%B")),
 	)
 	is.Contains(readFileString(t, ghLogPath), "[TREX-1234] Replaced the config for abc")
 }
@@ -213,9 +215,11 @@ func TestMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd
 	is.Contains(runOut, "completion agent completed")
 
 	state := readCompletionTaskState(t, paths, "alpha", taskID)
-	latest, ok := taskstate.LatestRun(state)
+	_, ok := taskstate.LatestRun(state)
 	must.True(ok)
-	beforePublication := strings.TrimSpace(runGit(t, latest.Worktree, "rev-parse", "HEAD"))
+	target, ok := taskstate.Target(state)
+	must.True(ok)
+	beforePublication := strings.TrimSpace(runGit(t, target.Worktree, "rev-parse", "HEAD"))
 	recordPassedReview(t, paths, "alpha", taskID)
 
 	_, configErr = executeCommand(t, []string{
@@ -229,8 +233,8 @@ func TestMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd
 	is.Empty(doneStderr)
 	must.Error(doneErr)
 	is.ErrorContains(doneErr, "publication title template requires a task external reference")
-	is.Equal(beforePublication, strings.TrimSpace(runGit(t, latest.Worktree, "rev-parse", "HEAD")))
-	is.Contains(runGit(t, latest.Worktree, "status", "--porcelain=v1"), "missing-title-ref-change.txt")
+	is.Equal(beforePublication, strings.TrimSpace(runGit(t, target.Worktree, "rev-parse", "HEAD")))
+	is.Contains(runGit(t, target.Worktree, "status", "--porcelain=v1"), "missing-title-ref-change.txt")
 	_, statErr = os.Stat(ghLogPath)
 	is.ErrorIs(statErr, os.ErrNotExist)
 }
@@ -268,10 +272,12 @@ func TestWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	latest, ok := taskstate.LatestRun(state)
 	must.True(ok)
 	must.NotNil(latest.Completion)
+	target, ok := taskstate.Target(state)
+	must.True(ok)
 	completionCommit := latest.Completion.Commit
 	is.Empty(completionCommit)
-	is.Equal("orpheus/"+taskID, latest.Branch)
-	is.NotEmpty(latest.Worktree)
+	is.Equal("orpheus/"+taskID, target.Branch)
+	is.NotEmpty(target.Worktree)
 	recordPassedReview(t, paths, "alpha", taskID)
 
 	ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{
@@ -287,7 +293,7 @@ func TestWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	is.Contains(doneOut, "pushed orpheus/"+taskID)
 	is.Contains(doneOut, "created PR https://github.test/org/alpha/pull/55")
 	is.Contains(doneOut, "Backend task remains open for PR review")
-	publicationCommit := strings.TrimSpace(runGit(t, latest.Worktree, "rev-parse", "HEAD"))
+	publicationCommit := strings.TrimSpace(runGit(t, target.Worktree, "rev-parse", "HEAD"))
 	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
 	pushedCommit := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/orpheus/"+taskID))
 	is.Equal(publicationCommit, pushedCommit)
@@ -394,8 +400,10 @@ func TestRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	latest, ok := taskstate.LatestRun(state)
 	must.True(ok)
 	must.NotNil(latest.Completion)
-	is.Equal(branch, latest.Branch)
-	is.Equal(repoPath, latest.Worktree)
+	target, ok := taskstate.Target(state)
+	must.True(ok)
+	is.Equal(branch, target.Branch)
+	is.Equal(repoPath, target.Worktree)
 	is.Empty(latest.Completion.Commit)
 	is.Contains(runGit(t, repoPath, "status", "--porcelain=v1"), "repo-root-sync-change.txt")
 	recordPassedReview(t, paths, "alpha", taskID)

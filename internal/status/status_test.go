@@ -207,10 +207,8 @@ func externalRefGateFixture() (task.SnapshotResult, status.RunStateIndex) {
 	}}
 	runStates := status.RunStateIndex{
 		status.RunStateKey("gated", "gated-local-review"): {
-			Attempt:  1,
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   "main",
-			Worktree: "/tmp/gated",
+			Attempt: 1,
+			Status:  taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
 				Summary:             "Ready for review",
 				DetailedDescription: "Review details.",
@@ -236,10 +234,8 @@ func TestProjectWithRunStatesShowsSuccessfulMainCompletionInReview(t *testing.T)
 		}},
 	}}}
 	latestRun := taskstate.RunAttempt{
-		Attempt:  1,
-		Status:   taskstate.RunStatusSucceeded,
-		Branch:   "main",
-		Worktree: "/tmp/alpha",
+		Attempt: 1,
+		Status:  taskstate.RunStatusSucceeded,
 		Completion: &taskstate.Completion{
 			Summary:             "Done",
 			Description:         "Ready for review.",
@@ -250,6 +246,7 @@ func TestProjectWithRunStatesShowsSuccessfulMainCompletionInReview(t *testing.T)
 	localStates := status.LocalTaskStateIndex{
 		status.RunStateKey("alpha", "a-main"): {
 			LatestRun:       &latestRun,
+			Target:          testTaskTarget("main", "/tmp/alpha"),
 			ExpectedTargets: testExpectedTargets("main", "/tmp/alpha", "orpheus/a-main", "/tmp/orpheus/worktrees/a-main"),
 		},
 	}
@@ -312,10 +309,8 @@ func TestProjectWithRunStatesDoesNotInferRepoRootReviewWithoutCompletion(t *test
 	}}}
 	runStates := status.RunStateIndex{
 		status.RunStateKey("alpha", "a-main"): {
-			Attempt:  1,
-			Status:   taskstate.RunStatusSucceeded,
-			Branch:   "main",
-			Worktree: "/tmp/alpha",
+			Attempt: 1,
+			Status:  taskstate.RunStatusSucceeded,
 		},
 	}
 
@@ -345,10 +340,8 @@ func TestProjectWithLocalTaskStatesDoesNotShowClosedFinalizationAsLocalReview(t 
 		}},
 	}}}
 	latestRun := taskstate.RunAttempt{
-		Attempt:  1,
-		Status:   taskstate.RunStatusSucceeded,
-		Branch:   "main",
-		Worktree: "/tmp/alpha",
+		Attempt: 1,
+		Status:  taskstate.RunStatusSucceeded,
 		Completion: &taskstate.Completion{
 			Summary:             "Done",
 			Description:         "Ready for local review.",
@@ -359,6 +352,7 @@ func TestProjectWithLocalTaskStatesDoesNotShowClosedFinalizationAsLocalReview(t 
 	localStates := status.LocalTaskStateIndex{
 		status.RunStateKey("alpha", "a-main"): {
 			LatestRun: &latestRun,
+			Target:    testTaskTarget("main", "/tmp/alpha"),
 			Finalization: taskstate.Finalization{
 				Commit:   "abc123",
 				ClosedAt: &closedAt,
@@ -436,6 +430,7 @@ func TestProjectWithLocalTaskStatesClassifiesLatestReviewAttempts(t *testing.T) 
 			localStates := status.LocalTaskStateIndex{
 				status.RunStateKey("alpha", "a-main"): {
 					LatestRun:                 &latestRun,
+					Target:                    testTaskTarget("main", "/tmp/alpha"),
 					LatestReview:              &tt.review,
 					LatestFinalizationFailure: tt.failure,
 					ExpectedTargets:           testExpectedTargets("main", "/tmp/alpha", "orpheus/a-main", "/tmp/orpheus/worktrees/a-main"),
@@ -503,10 +498,8 @@ func localReviewSnapshot(taskID string, repoPath string) task.SnapshotResult {
 
 func localReviewRun(repoPath string) taskstate.RunAttempt {
 	return taskstate.RunAttempt{
-		Attempt:  1,
-		Status:   taskstate.RunStatusSucceeded,
-		Branch:   "main",
-		Worktree: repoPath,
+		Attempt: 1,
+		Status:  taskstate.RunStatusSucceeded,
 		Completion: &taskstate.Completion{
 			Summary:             "Done",
 			Description:         "Ready for local review.",
@@ -715,10 +708,8 @@ func completedRun(branch string, worktree string, commit string) taskstate.RunAt
 		description = "Ready for PR."
 	}
 	return taskstate.RunAttempt{
-		Attempt:  1,
-		Status:   taskstate.RunStatusSucceeded,
-		Branch:   branch,
-		Worktree: worktree,
+		Attempt: 1,
+		Status:  taskstate.RunStatusSucceeded,
 		Completion: &taskstate.Completion{
 			Summary:             "Done",
 			Description:         description,
@@ -817,17 +808,23 @@ func projectWorktreeCompletion(completion taskstate.Completion) status.Projectio
 	latestRun := taskstate.RunAttempt{
 		Attempt:    1,
 		Status:     taskstate.RunStatusSucceeded,
-		Branch:     "orpheus/a-worktree",
-		Worktree:   "/tmp/orpheus/worktrees/a-worktree",
 		Completion: &completion,
 	}
 	localStates := status.LocalTaskStateIndex{
 		status.RunStateKey("alpha", "a-worktree"): {
 			LatestRun:       &latestRun,
+			Target:          testTaskTarget("orpheus/a-worktree", "/tmp/orpheus/worktrees/a-worktree"),
 			ExpectedTargets: testExpectedTargets("main", "/tmp/alpha", "orpheus/a-worktree", "/tmp/orpheus/worktrees/a-worktree"),
 		},
 	}
 	return status.ProjectWithLocalTaskStates(snapshot, localStates)
+}
+
+func testTaskTarget(branch string, worktree string) *taskstate.TaskTarget {
+	return &taskstate.TaskTarget{
+		Branch:   branch,
+		Worktree: worktree,
+	}
 }
 
 func testExpectedTargets(

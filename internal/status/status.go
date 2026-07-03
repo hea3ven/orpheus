@@ -79,6 +79,7 @@ type RunStateIndex map[string]taskstate.RunAttempt
 // LocalTaskState contains local Orpheus facts used by status projection.
 type LocalTaskState struct {
 	LatestRun                 *taskstate.RunAttempt
+	Target                    *taskstate.TaskTarget
 	LatestReview              *taskstate.ReviewAttempt
 	LatestFinalizationFailure *taskstate.Event
 	Finalization              taskstate.Finalization
@@ -193,7 +194,8 @@ func classify(repository task.Repository, taskItem task.Task, index map[string]t
 		return policyResult{state: readinessReview, detail: metadata.PRURL}
 	}
 	expectedTargets := expectedTargetsFrom(localState)
-	if result, ok := classifyExpectedReviewReady(expectedTargets, taskItem, latestRun, localState); ok {
+	taskTarget := taskTargetFrom(localState)
+	if result, ok := classifyExpectedReviewReady(expectedTargets, taskItem, taskTarget, latestRun, localState); ok {
 		return result
 	}
 	if taskItem.Status == task.StatusInProgress && latestRun != nil && latestRun.Status == taskstate.RunStatusRunning {
@@ -206,24 +208,18 @@ func classify(repository task.Repository, taskItem task.Task, index map[string]t
 		return policyResult{state: readinessAttention, detail: missingExternalRefDetail(taskItem.ID)}
 	}
 
-	if _, ok := workflow.ClassifyPRReviewReady(repository, taskItem, latestRun); ok {
-		return policyResult{
-			state:  readinessAttention,
-			detail: "completion target is not the deterministic Orpheus worktree/team target",
-		}
-	}
-	if _, ok := workflow.ClassifyLocalReviewReady(repository, taskItem, latestRun); ok {
-		return policyResult{
-			state:  readinessAttention,
-			detail: "completion target is not the deterministic Orpheus main/solo target",
-		}
+	if result, ok := classifyUnexpectedCompletionTarget(repository, taskItem, taskTarget, latestRun); ok {
+		return result
 	}
 
 	if taskItem.Status == task.StatusInProgress {
 		return classifyInProgress(latestRun)
 	}
 	if taskItem.Status == task.StatusOpen && latestRun != nil {
-		return policyResult{state: readinessAttention, detail: openTaskRunHistoryDetail(*latestRun)}
+		return policyResult{
+			state:  readinessAttention,
+			detail: openTaskRunHistoryDetail(*latestRun),
+		}
 	}
 	deps := dependencyIDs(taskItem)
 	missingDetail := missingDependencyDetail(taskItem, deps, index)
@@ -244,6 +240,30 @@ func classify(repository task.Repository, taskItem task.Task, index map[string]t
 	}
 }
 
+func classifyUnexpectedCompletionTarget(
+	repository task.Repository,
+	taskItem task.Task,
+	taskTarget *taskstate.TaskTarget,
+	latestRun *taskstate.RunAttempt,
+) (policyResult, bool) {
+	if taskTarget == nil {
+		return policyResult{}, false
+	}
+	if _, ok := workflow.ClassifyPRReviewReady(repository, taskItem, *taskTarget, latestRun); ok {
+		return policyResult{
+			state:  readinessAttention,
+			detail: "completion target is not the deterministic Orpheus worktree/team target",
+		}, true
+	}
+	if _, ok := workflow.ClassifyLocalReviewReady(repository, taskItem, *taskTarget, latestRun); ok {
+		return policyResult{
+			state:  readinessAttention,
+			detail: "completion target is not the deterministic Orpheus main/solo target",
+		}, true
+	}
+	return policyResult{}, false
+}
+
 func classifyParentEpicGate(taskItem task.Task, index map[string]task.Task) (policyResult, bool) {
 	parentGate := readiness.EvaluateParentEpicGateFromIndex(taskItem, index)
 	if parentGate.State == readiness.ParentEpicGateAllowed {
@@ -259,13 +279,14 @@ func classifyParentEpicGate(taskItem task.Task, index map[string]task.Task) (pol
 func classifyExpectedReviewReady(
 	expectedTargets *workflow.ExpectedTargets,
 	taskItem task.Task,
+	taskTarget *taskstate.TaskTarget,
 	latestRun *taskstate.RunAttempt,
 	localState *LocalTaskState,
 ) (policyResult, bool) {
-	if expectedTargets == nil {
+	if expectedTargets == nil || taskTarget == nil {
 		return policyResult{}, false
 	}
-	if _, ok := workflow.ClassifyExpectedPRReviewReady(*expectedTargets, taskItem, latestRun); ok {
+	if _, ok := workflow.ClassifyExpectedPRReviewReady(*expectedTargets, taskItem, *taskTarget, latestRun); ok {
 		if localState != nil {
 			if result, ok := classifyLatestReview(localState.LatestReview, localState.LatestFinalizationFailure); ok {
 				return result, true
@@ -273,7 +294,7 @@ func classifyExpectedReviewReady(
 		}
 		return policyResult{state: readinessReview, detail: "local review; run task review"}, true
 	}
-	if _, ok := workflow.ClassifyExpectedLocalReviewReady(*expectedTargets, taskItem, latestRun); !ok {
+	if _, ok := workflow.ClassifyExpectedLocalReviewReady(*expectedTargets, taskItem, *taskTarget, latestRun); !ok {
 		return policyResult{}, false
 	}
 	if localState != nil {
@@ -422,6 +443,13 @@ func latestRunFrom(localState *LocalTaskState) *taskstate.RunAttempt {
 		return nil
 	}
 	return localState.LatestRun
+}
+
+func taskTargetFrom(localState *LocalTaskState) *taskstate.TaskTarget {
+	if localState == nil {
+		return nil
+	}
+	return localState.Target
 }
 
 func expectedTargetsFrom(localState *LocalTaskState) *workflow.ExpectedTargets {
