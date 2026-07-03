@@ -13,7 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 // RunStatus is the M3 status for an attached run attempt.
 type RunStatus string
@@ -136,11 +136,43 @@ type TaskState struct {
 	RepoID  string `yaml:"repo_id"`
 	TaskID  string `yaml:"task_id"`
 
+	Target TaskTarget `yaml:"target,omitempty"`
+
 	Runs    []RunAttempt    `yaml:"runs,omitempty"`
 	Reviews []ReviewAttempt `yaml:"reviews,omitempty"`
 	Events  []Event         `yaml:"events,omitempty"`
 
 	Finalization *Finalization `yaml:"finalization,omitempty"`
+}
+
+// UnmarshalYAML normalizes transient fields after direct YAML decodes.
+func (s *TaskState) UnmarshalYAML(value *yaml.Node) error {
+	type plain TaskState
+	var decoded plain
+	if err := value.Decode(&decoded); err != nil {
+		return err
+	}
+	normalized := TaskState(decoded)
+	normalized.Target = normalizeTaskTarget(normalized.Target)
+	if target, ok := Target(normalized); ok {
+		for i := range normalized.Runs {
+			normalized.Runs[i].Branch = target.Branch
+			normalized.Runs[i].Worktree = target.Worktree
+		}
+	}
+	*s = normalized
+	return nil
+}
+
+// TaskTarget records the task-owned execution target selected by first dispatch.
+type TaskTarget struct {
+	Branch   string `yaml:"branch,omitempty"`
+	Worktree string `yaml:"worktree,omitempty"`
+}
+
+// IsZero allows YAML omitempty to omit an unlocked target.
+func (t TaskTarget) IsZero() bool {
+	return strings.TrimSpace(t.Branch) == "" && strings.TrimSpace(t.Worktree) == ""
 }
 
 // RunAttempt records one attached execution attempt.
@@ -152,8 +184,8 @@ type RunAttempt struct {
 	Command     string   `yaml:"command,omitempty"`
 	Args        []string `yaml:"args,omitempty"`
 	SessionName string   `yaml:"session_name,omitempty"`
-	Branch      string   `yaml:"branch,omitempty"`
-	Worktree    string   `yaml:"worktree,omitempty"`
+	Branch      string   `yaml:"-"`
+	Worktree    string   `yaml:"-"`
 
 	StartedAt  time.Time   `yaml:"started_at"`
 	FinishedAt *time.Time  `yaml:"finished_at,omitempty"`
@@ -331,8 +363,11 @@ type StartRunOptions struct {
 	Command     string
 	Args        []string
 	SessionName string
-	Branch      string
-	Worktree    string
+
+	// Branch and Worktree lock the task-level target on the first run. Later
+	// runs must pass the same values.
+	Branch   string
+	Worktree string
 
 	ReviewFollowUp *ReviewFollowUp
 }
@@ -467,7 +502,7 @@ func (s Store) ActiveRun(repoID, taskID string) (RunAttempt, bool, error) {
 // RecordSetupEvent appends a durable task execution setup event.
 func (s Store) RecordSetupEvent(repoID, taskID string, eventType EventType, opts SetupEventOptions) (Event, error) {
 	switch eventType {
-	case EventWorktreeCreated, EventTaskBranchCreated, EventWorktreeRecreated:
+	case EventWorktreeCreated, EventTaskBranchCreated, EventWorktreeReused, EventWorktreeRecreated:
 	default:
 		return Event{}, fmt.Errorf("record setup event for task %s/%s: unsupported setup event type %q", repoID, taskID, eventType)
 	}
@@ -497,20 +532,26 @@ func (s Store) StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt
 		Command:        strings.TrimSpace(opts.Command),
 		Args:           cloneStrings(opts.Args),
 		SessionName:    opts.SessionName,
-		Branch:         strings.TrimSpace(opts.Branch),
-		Worktree:       strings.TrimSpace(opts.Worktree),
 		StartedAt:      now,
 		ReviewFollowUp: normalizeReviewFollowUp(opts.ReviewFollowUp),
 	}
+	if err := lockTaskTarget(&state, TaskTarget{
+		Branch:   opts.Branch,
+		Worktree: opts.Worktree,
+	}); err != nil {
+		return RunAttempt{}, fmt.Errorf("start run attempt for task %s/%s: %w", repoID, taskID, err)
+	}
+	if target, ok := Target(state); ok {
+		attempt.Branch = target.Branch
+		attempt.Worktree = target.Worktree
+	}
 	state.Runs = append(state.Runs, attempt)
 	state.Events = append(state.Events, Event{
-		Type:     EventRunStarted,
-		At:       now,
-		Attempt:  attempt.Attempt,
-		Status:   RunStatusRunning,
-		Agent:    attempt.Agent,
-		Branch:   attempt.Branch,
-		Worktree: attempt.Worktree,
+		Type:    EventRunStarted,
+		At:      now,
+		Attempt: attempt.Attempt,
+		Status:  RunStatusRunning,
+		Agent:   attempt.Agent,
 	})
 
 	if err := s.save(state); err != nil {
@@ -1244,6 +1285,12 @@ func FinalizationFacts(state TaskState) Finalization {
 	return ensureFinalization(state.Finalization)
 }
 
+// Target returns a task's locked execution target, if one has been recorded.
+func Target(state TaskState) (TaskTarget, bool) {
+	target := normalizeTaskTarget(state.Target)
+	return target, !target.IsZero()
+}
+
 func (s Store) appendEvent(repoID, taskID string, event Event) (Event, error) {
 	state, err := s.Load(repoID, taskID)
 	if err != nil {
@@ -1292,14 +1339,12 @@ func (s Store) completeRun(repoID, taskID string, attempt int, status RunStatus,
 
 func runEvent(run RunAttempt, eventType EventType, at time.Time, status RunStatus, errorText string) Event {
 	return Event{
-		Type:     eventType,
-		At:       at,
-		Attempt:  run.Attempt,
-		Status:   status,
-		Agent:    run.Agent,
-		Branch:   run.Branch,
-		Worktree: run.Worktree,
-		Error:    strings.TrimSpace(errorText),
+		Type:    eventType,
+		At:      at,
+		Attempt: run.Attempt,
+		Status:  status,
+		Agent:   run.Agent,
+		Error:   strings.TrimSpace(errorText),
 	}
 }
 
@@ -1375,6 +1420,9 @@ func validateLoadedState(taskState TaskState, repoID, taskID string) error {
 	if taskState.Version != 0 && taskState.Version != schemaVersion {
 		return fmt.Errorf("unsupported task state version %d", taskState.Version)
 	}
+	if err := validateTaskTarget(taskState.Target); err != nil {
+		return fmt.Errorf("target is invalid: %w", err)
+	}
 	for _, run := range taskState.Runs {
 		if err := validateRun(run); err != nil {
 			return err
@@ -1417,11 +1465,69 @@ func normalizeState(taskState TaskState, repoID, taskID string) TaskState {
 	taskState.Version = schemaVersion
 	taskState.RepoID = repoID
 	taskState.TaskID = taskID
+	taskState.Target = normalizeTaskTarget(taskState.Target)
 	if taskState.Finalization != nil {
 		finalization := ensureFinalization(taskState.Finalization)
 		taskState.Finalization = &finalization
 	}
+	if target, ok := Target(taskState); ok {
+		for i := range taskState.Runs {
+			taskState.Runs[i].Branch = target.Branch
+			taskState.Runs[i].Worktree = target.Worktree
+		}
+	}
 	return taskState
+}
+
+func lockTaskTarget(state *TaskState, requested TaskTarget) error {
+	requested = normalizeTaskTarget(requested)
+	if requested.IsZero() {
+		return nil
+	}
+	if err := validateTaskTarget(requested); err != nil {
+		return err
+	}
+
+	current, ok := Target(*state)
+	if !ok {
+		state.Target = requested
+		return nil
+	}
+	if current.Branch != requested.Branch || current.Worktree != requested.Worktree {
+		return fmt.Errorf(
+			"task target is already locked to branch %q and worktree %q; requested branch %q and worktree %q",
+			current.Branch,
+			current.Worktree,
+			requested.Branch,
+			requested.Worktree,
+		)
+	}
+	state.Target = current
+	return nil
+}
+
+func normalizeTaskTarget(target TaskTarget) TaskTarget {
+	return TaskTarget{
+		Branch:   strings.TrimSpace(target.Branch),
+		Worktree: strings.TrimSpace(target.Worktree),
+	}
+}
+
+func validateTaskTarget(target TaskTarget) error {
+	target = normalizeTaskTarget(target)
+	if target.IsZero() {
+		return nil
+	}
+	if target.Branch == "" {
+		return errors.New("branch is required when worktree is set")
+	}
+	if target.Worktree == "" {
+		return errors.New("worktree is required when branch is set")
+	}
+	if !filepath.IsAbs(target.Worktree) {
+		return fmt.Errorf("worktree must be absolute, got %q", target.Worktree)
+	}
+	return nil
 }
 
 func validateRun(run RunAttempt) error {

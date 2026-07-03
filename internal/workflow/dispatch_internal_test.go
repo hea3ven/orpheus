@@ -12,6 +12,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
+//nolint:funlen // The fixture is intentionally explicit about blocked review state.
 func TestDispatchValidateStartInfersBlockedReviewFollowUpTarget(t *testing.T) {
 	paths := newDispatchTestPaths(t)
 	repoPath := filepath.Join(t.TempDir(), "repo")
@@ -32,9 +33,13 @@ func TestDispatchValidateStartInfersBlockedReviewFollowUpTarget(t *testing.T) {
 	}
 	store := fakeDispatchRunStore{
 		state: taskstate.TaskState{
-			Version: 1,
+			Version: 2,
 			RepoID:  repo.ID,
 			TaskID:  taskItem.ID,
+			Target: taskstate.TaskTarget{
+				Branch:   "main",
+				Worktree: repoPath,
+			},
 			Reviews: []taskstate.ReviewAttempt{
 				{
 					Attempt:  1,
@@ -92,9 +97,13 @@ func TestDispatchValidateStartRefusesAlreadyTargetedBlockedReview(t *testing.T) 
 	}
 	store := fakeDispatchRunStore{
 		state: taskstate.TaskState{
-			Version: 1,
+			Version: 2,
 			RepoID:  repo.ID,
 			TaskID:  taskItem.ID,
+			Target: taskstate.TaskTarget{
+				Branch:   "main",
+				Worktree: repoPath,
+			},
 			Reviews: []taskstate.ReviewAttempt{
 				{
 					Attempt:  1,
@@ -125,6 +134,52 @@ func TestDispatchValidateStartRefusesAlreadyTargetedBlockedReview(t *testing.T) 
 
 	if err == nil || !strings.Contains(err.Error(), "run `orpheus task review op-1`") {
 		t.Fatalf("validate error = %v, want task review guidance", err)
+	}
+}
+
+func TestDispatchValidateStartRejectsMainModeAfterTargetLock(t *testing.T) {
+	paths := newDispatchTestPaths(t)
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	repo := task.Repository{
+		ID:            "alpha",
+		Name:          "Alpha",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		TaskIDPrefix:  "op",
+	}
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   "orpheus/op-1",
+			task.MetadataWorktree: filepath.Join(paths.DataRoot, "repos", "alpha", "worktrees", "op-1"),
+		},
+	}
+	store := fakeDispatchRunStore{
+		state: taskstate.TaskState{
+			Version: 2,
+			RepoID:  repo.ID,
+			TaskID:  taskItem.ID,
+			Target: taskstate.TaskTarget{
+				Branch:   taskItem.Metadata[task.MetadataBranch],
+				Worktree: taskItem.Metadata[task.MetadataWorktree],
+			},
+			Runs: []taskstate.RunAttempt{
+				{Attempt: 1, Status: taskstate.RunStatusFailed},
+			},
+		},
+	}
+	service := DispatchService{Paths: paths, RunStore: store}
+
+	_, err := service.validateStart(context.Background(), DispatchStartOptions{
+		TaskID:   taskItem.ID,
+		Source:   task.RepositorySource{Repository: repo},
+		Backend:  fakeDispatchBackend{taskItem: taskItem},
+		MainMode: true,
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "retry without --main") {
+		t.Fatalf("validate error = %v, want --main rejection after target lock", err)
 	}
 }
 

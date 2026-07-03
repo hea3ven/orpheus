@@ -917,9 +917,10 @@ func TestTaskRunExecutesImplementerDefaultAttachedFromDeterministicWorktree(t *t
 	is.Equal(2, retriedState.Runs[1].Attempt)
 	is.Equal(taskstate.RunStatusSucceeded, retriedState.Runs[0].Status)
 	is.Equal(taskstate.RunStatusSucceeded, retriedState.Runs[1].Status)
-	must.Len(retriedState.Events, 5)
-	is.Equal(taskstate.EventRunStarted, retriedState.Events[3].Type)
-	is.Equal(taskstate.EventRunFinished, retriedState.Events[4].Type)
+	must.Len(retriedState.Events, 6)
+	is.Equal(taskstate.EventWorktreeReused, retriedState.Events[3].Type)
+	is.Equal(taskstate.EventRunStarted, retriedState.Events[4].Type)
+	is.Equal(taskstate.EventRunFinished, retriedState.Events[5].Type)
 }
 
 func TestTaskRunRejectsMissingRequiredExternalReferenceBeforeSetup(t *testing.T) {
@@ -1089,9 +1090,10 @@ func TestTaskRunMainExecutesAgentFromRegisteredRepoRoot(t *testing.T) {
 	is.Equal(taskstate.RunStatusSucceeded, state.Runs[0].Status)
 	is.Equal("main", state.Runs[0].Branch)
 	is.Equal(repoPath, state.Runs[0].Worktree)
-	must.Len(state.Events, 2)
-	is.Equal(taskstate.EventRunStarted, state.Events[0].Type)
-	is.Equal(taskstate.EventRunFinished, state.Events[1].Type)
+	must.Len(state.Events, 3)
+	is.Equal(taskstate.EventWorktreeReused, state.Events[0].Type)
+	is.Equal(taskstate.EventRunStarted, state.Events[1].Type)
+	is.Equal(taskstate.EventRunFinished, state.Events[2].Type)
 }
 
 //nolint:funlen // Workflow test is clearer when setup, command, and state assertions stay together.
@@ -1170,17 +1172,16 @@ func TestTaskRunRepoRootExecutesAgentFromRegisteredRepoRootOnTaskBranch(t *testi
 	is.Equal(taskstate.EventRunStarted, state.Events[1].Type)
 	is.Equal(taskstate.EventRunFinished, state.Events[2].Type)
 
-	retryStdout, retryStderr := executeCommand(t, []string{"task", "run", "--repo-root", "op-root"})
+	_, _, retryErr := executeCommandWithError(t, []string{"task", "run", "--repo-root", "op-root"})
 
-	is.Contains(retryStdout, "fake agent stdout")
-	is.Contains(retryStderr, "fake agent stderr")
+	must.Error(retryErr)
+	is.Contains(retryErr.Error(), "already has target branch")
+	is.Contains(retryErr.Error(), "retry without --repo-root")
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-root.yaml"), &state))
-	must.Len(state.Events, 5)
+	must.Len(state.Events, 3)
 	is.Equal(taskstate.EventTaskBranchCreated, state.Events[0].Type)
 	is.Equal(taskstate.EventRunStarted, state.Events[1].Type)
 	is.Equal(taskstate.EventRunFinished, state.Events[2].Type)
-	is.Equal(taskstate.EventRunStarted, state.Events[3].Type)
-	is.Equal(taskstate.EventRunFinished, state.Events[4].Type)
 }
 
 func TestTaskRunPlainRetryRequiresMainForRepoRootMetadata(t *testing.T) {
@@ -1424,6 +1425,14 @@ func TestTaskRunReviewFollowUpAllowsDirtyMainTarget(t *testing.T) {
 	}}}))
 
 	runStore := taskstate.NewStore(paths)
+	initialRun, err := runStore.StartRun("alpha", "op-followup", taskstate.StartRunOptions{
+		Agent:    "recorder",
+		Branch:   "main",
+		Worktree: repoPath,
+	})
+	must.NoError(err)
+	_, err = runStore.FinishRun("alpha", "op-followup", initialRun.Attempt, taskstate.RunStatusSucceeded)
+	must.NoError(err)
 	review, err := runStore.StartReview("alpha", "op-followup")
 	must.NoError(err)
 	_, err = runStore.RecordReviewFinding("alpha", "op-followup", review.Attempt, taskstate.ReviewFinding{
@@ -1463,13 +1472,13 @@ func TestTaskRunReviewFollowUpAllowsDirtyMainTarget(t *testing.T) {
 	latestReview, ok := taskstate.LatestReview(state)
 	must.True(ok)
 	must.Len(latestReview.Findings, 1)
-	is.Equal(1, latestReview.Findings[0].TargetedByRunAttempt)
-	must.Len(state.Runs, 1)
-	is.Equal("main", state.Runs[0].Branch)
-	is.Equal(repoPath, state.Runs[0].Worktree)
-	is.Equal("Resolving issues in op-followup Follow up dirty main", state.Runs[0].SessionName)
-	must.NotNil(state.Runs[0].ReviewFollowUp)
-	is.Equal([]int{0}, state.Runs[0].ReviewFollowUp.FindingIndexes)
+	is.Equal(2, latestReview.Findings[0].TargetedByRunAttempt)
+	must.Len(state.Runs, 2)
+	is.Equal("main", state.Target.Branch)
+	is.Equal(repoPath, state.Target.Worktree)
+	is.Equal("Resolving issues in op-followup Follow up dirty main", state.Runs[1].SessionName)
+	must.NotNil(state.Runs[1].ReviewFollowUp)
+	is.Equal([]int{0}, state.Runs[1].ReviewFollowUp.FindingIndexes)
 }
 
 func TestTaskRunWorktreeModeDoesNotCareAboutDirtyRepoRoot(t *testing.T) {

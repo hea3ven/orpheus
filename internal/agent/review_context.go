@@ -51,7 +51,7 @@ func (r ActiveContextResolver) ResolveReview(ctx context.Context) (ReviewContext
 	if err != nil {
 		return ReviewContext{}, err
 	}
-	targets, candidate, err := r.resolveContextTarget(source, taskItem, env.TaskID)
+	targets, candidate, err := r.resolveContextTarget(source, taskItem, env.TaskID, run)
 	if err != nil {
 		return ReviewContext{}, err
 	}

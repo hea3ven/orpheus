@@ -3,6 +3,7 @@ package taskstate_test
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
+//nolint:funlen // The persisted YAML shape is the behavior under test.
 func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 	store := newTestStore(t,
 		time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC),
@@ -59,8 +61,12 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 	}
 
 	assertStoreYAMLContains(t, store, "alpha", "op-1",
+		"version: 2",
 		"repo_id: alpha",
 		"task_id: op-1",
+		"target:",
+		"branch: orpheus/op-1",
+		"worktree: /tmp/op-1",
 		"attempt: 1",
 		"status: succeeded",
 		"agent: recorder",
@@ -69,6 +75,108 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 		"run_started",
 		"run_finished",
 	)
+	assertStoreYAMLNotContains(t, store, "alpha", "op-1",
+		"  branch: orpheus/op-1\n  worktree: /tmp/op-1\n  started_at",
+	)
+}
+
+func TestStoreRejectsOldRunLevelTargetSchema(t *testing.T) {
+	store := newTestStore(t)
+	path, err := store.Path("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("state path: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
+	oldYAML := strings.Join([]string{
+		"version: 1",
+		"repo_id: alpha",
+		"task_id: op-1",
+		"runs:",
+		"- attempt: 1",
+		"  status: succeeded",
+		"  branch: orpheus/op-1",
+		"  worktree: /tmp/op-1",
+		"  started_at: 2026-06-03T10:00:00Z",
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(oldYAML), 0o644); err != nil {
+		t.Fatalf("write old state: %v", err)
+	}
+
+	_, err = store.Load("alpha", "op-1")
+	if err == nil {
+		t.Fatal("load old run-level target state succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "unsupported task state version 1") {
+		t.Fatalf("error = %v, want old schema rejection", err)
+	}
+}
+
+//nolint:funlen // The migration fixture needs enough YAML to cover target and timestamp rewriting.
+func TestMigrationScriptPromotesRunTarget(t *testing.T) {
+	script := "/tmp/orpheus_migrate_taskstate_targets.py"
+	if _, err := os.Stat(script); err != nil {
+		t.Fatalf("migration script %s is unavailable: %v", script, err)
+	}
+
+	path := filepath.Join(t.TempDir(), "op-1.yaml")
+	oldYAML := strings.Join([]string{
+		"version: 1",
+		"repo_id: alpha",
+		"task_id: op-1",
+		"runs:",
+		"- attempt: 1",
+		"  status: succeeded",
+		"  branch: orpheus/op-1",
+		"  worktree: /tmp/op-1",
+		"  started_at: 2026-06-03T10:00:00Z",
+		"events:",
+		"- type: worktree_created",
+		"  at: 2026-06-03T10:00:00Z",
+		"  branch: orpheus/op-1",
+		"  worktree: /tmp/op-1",
+		"- type: run_started",
+		"  at: 2026-06-03T10:00:00Z",
+		"  attempt: 1",
+		"  branch: orpheus/op-1",
+		"  worktree: /tmp/op-1",
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(oldYAML), 0o644); err != nil {
+		t.Fatalf("write old state: %v", err)
+	}
+
+	output, err := exec.Command(script, path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("run migration: %v\n%s", err, output)
+	}
+
+	migrated, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read migrated state: %v", err)
+	}
+	text := string(migrated)
+	for _, want := range []string{
+		"version: 2",
+		"target:",
+		"branch: orpheus/op-1",
+		"worktree: /tmp/op-1",
+		"2026-06-03T10:00:00Z",
+		"type: worktree_created",
+		"type: run_started",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("migrated YAML missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "  branch: orpheus/op-1\n  worktree: /tmp/op-1\n  started_at") {
+		t.Fatalf("run-level target was not removed:\n%s", text)
+	}
+	if strings.Contains(text, "2026-06-03 10:00:00") {
+		t.Fatalf("timestamp was not preserved as RFC3339:\n%s", text)
+	}
 }
 
 func TestStoreRejectsUnsafeRunArgsBeforeWritingState(t *testing.T) {
@@ -784,6 +892,25 @@ func assertStoreYAMLContains(t *testing.T, store taskstate.Store, repoID, taskID
 	for _, want := range wants {
 		if !strings.Contains(text, want) {
 			t.Fatalf("YAML missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func assertStoreYAMLNotContains(t *testing.T, store taskstate.Store, repoID, taskID string, values ...string) {
+	t.Helper()
+
+	statePath, err := store.Path(repoID, taskID)
+	if err != nil {
+		t.Fatalf("state path: %v", err)
+	}
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read YAML: %v", err)
+	}
+	text := string(data)
+	for _, value := range values {
+		if strings.Contains(text, value) {
+			t.Fatalf("YAML contains %q:\n%s", value, text)
 		}
 	}
 }
