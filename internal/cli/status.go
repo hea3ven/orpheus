@@ -555,18 +555,21 @@ func watchTerminalWidth() (int, bool) {
 }
 
 func visibleStatusGroups(groups []status.Group, full bool) []status.Group {
-	if full {
-		return groups
-	}
-
 	visible := make([]status.Group, 0, len(groups))
 	for _, group := range groups {
-		if statusGroupHiddenByDefault(group.ID) {
+		if statusGroupHiddenWhenEmpty(group) {
+			continue
+		}
+		if !full && statusGroupHiddenByDefault(group.ID) {
 			continue
 		}
 		visible = append(visible, group)
 	}
 	return visible
+}
+
+func statusGroupHiddenWhenEmpty(group status.Group) bool {
+	return group.ID == status.GroupNeedsAttention && len(group.Entries) == 0
 }
 
 func statusGroupHiddenByDefault(groupID status.GroupID) bool {
