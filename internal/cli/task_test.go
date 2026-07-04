@@ -1482,6 +1482,237 @@ func TestTaskRunReviewFollowUpAllowsDirtyMainTarget(t *testing.T) {
 	is.Equal([]int{0}, state.Runs[1].ReviewFollowUp.FindingIndexes)
 }
 
+func TestTaskReviewShowDisplaysLatestFindingsAndCreatedFollowUps(t *testing.T) {
+	is := assert.New(t)
+	paths, repoPath := setupTaskReviewShowRepo(t, "op-main")
+	seedTaskReviewShowState(t, paths, repoPath)
+
+	stdout, stderr := executeCommand(t, []string{"task", "review", "show", "op-main"})
+
+	is.Empty(stderr)
+	for _, want := range []string{
+		"Review state for op-main (repo alpha)",
+		"Latest authoritative review attempt:",
+		"Attempt: 2",
+		"Status: blocked",
+		"Pipeline: quality",
+		"Current step: ai-review",
+		"- unit-tests (check), exit code 1",
+		"- ai-review (agent_review)",
+		"Step: unit-tests",
+		"Finding 1:",
+		"Type: blocking",
+		"Title: Tests fail",
+		"Description: make test fails.",
+		"Resolution: open",
+		"Suggested action: Fix failing tests.",
+		"Step: ai-review",
+		"Title: Race condition",
+		"Resolution: targeted by follow-up run attempt 1",
+		"Title: Known limitation",
+		"Resolution: waived: Accepted risk for now.",
+		"Title: Extract helper",
+		"Resolution: converted/created task op-42",
+		"Created follow-up Beads:",
+		"op-41 (review attempt 1, finding 1, step manual): Older cleanup",
+		"op-42 (review attempt 2, finding 4, step ai-review): Extract helper",
+		"Next step: run `orpheus task run op-main` to address open blocking findings",
+	} {
+		is.Contains(stdout, want)
+	}
+}
+
+func TestTaskReviewShowGuidesWhenTaskHasNoReviewAttempts(t *testing.T) {
+	is := assert.New(t)
+	setupTaskReviewShowRepo(t, "op-empty")
+
+	stdout, stderr := executeCommand(t, []string{"task", "review", "show", "op-empty"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Review state for op-empty (repo alpha)")
+	is.Contains(stdout, "No review attempts recorded for op-empty.")
+	is.Contains(stdout, "Next step: run `orpheus task review op-empty` after task work is ready.")
+}
+
+func TestTaskReviewShowDisplaysClosedTaskReviewState(t *testing.T) {
+	is := assert.New(t)
+	paths, repoPath := setupTaskReviewShowRepoWithStatus(t, "op-main", "closed")
+	seedTaskReviewShowState(t, paths, repoPath)
+
+	stdout, stderr := executeCommand(t, []string{"task", "review", "show", "op-main"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Review state for op-main (repo alpha)")
+	is.Contains(stdout, "Latest authoritative review attempt:")
+	is.Contains(stdout, "Status: blocked")
+	is.Contains(stdout, "Title: Tests fail")
+	is.Contains(stdout, "Created follow-up Beads:")
+	is.Contains(stdout, "op-42 (review attempt 2, finding 4, step ai-review): Extract helper")
+}
+
+func setupTaskReviewShowRepo(t *testing.T, taskID string) (state.Paths, string) {
+	t.Helper()
+
+	return setupTaskReviewShowRepoWithStatus(t, taskID, "in_progress")
+}
+
+func setupTaskReviewShowRepoWithStatus(t *testing.T, taskID string, status string) (state.Paths, string) {
+	t.Helper()
+
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	registryStore := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(registryStore.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: taskReviewShowTaskJSON(taskID, repoPath, status)},
+	})
+	return paths, repoPath
+}
+
+func taskReviewShowTaskJSON(taskID string, repoPath string, status string) string {
+	return `[
+		{
+			"id":"` + taskID + `",
+			"title":"Ready for review show",
+			"status":"` + status + `",
+			"priority":1,
+			"issue_type":"task",
+			"metadata":{"orpheus.branch":"main","orpheus.worktree":"` + repoPath + `"}
+		}
+	]`
+}
+
+func seedTaskReviewShowState(t *testing.T, paths state.Paths, repoPath string) {
+	t.Helper()
+
+	must := require.New(t)
+	runStore := taskstate.NewStore(paths)
+	oldReview := recordCreatedReviewFollowUp(t, runStore)
+	_, err := runStore.FinishReview("alpha", "op-main", oldReview.Attempt, taskstate.ReviewStatusPassed)
+	must.NoError(err)
+
+	latestReview := recordMixedReviewFindings(t, runStore)
+	_, err = runStore.FinishReview("alpha", "op-main", latestReview.Attempt, taskstate.ReviewStatusBlocked)
+	must.NoError(err)
+	followUpRun, err := runStore.StartRun("alpha", "op-main", taskstate.StartRunOptions{
+		Agent:    "codex",
+		Branch:   "main",
+		Worktree: repoPath,
+	})
+	must.NoError(err)
+	_, err = runStore.TargetReviewFindings("alpha", "op-main", latestReview.Attempt, []int{1}, followUpRun.Attempt)
+	must.NoError(err)
+}
+
+func recordCreatedReviewFollowUp(t *testing.T, runStore taskstate.Store) taskstate.ReviewAttempt {
+	t.Helper()
+
+	must := require.New(t)
+	oldReview, err := runStore.StartReviewWithOptions("alpha", "op-main", taskstate.StartReviewOptions{
+		Pipeline: "manual",
+		Step:     "manual",
+	})
+	must.NoError(err)
+	_, err = runStore.RecordReviewStep("alpha", "op-main", oldReview.Attempt, taskstate.RecordReviewStepOptions{
+		Kind: "manual",
+		Name: "manual",
+	})
+	must.NoError(err)
+	_, err = runStore.RecordReviewFinding("alpha", "op-main", oldReview.Attempt, taskstate.ReviewFinding{
+		Type:        taskstate.FindingTypeSeparateTask,
+		Title:       "Older cleanup",
+		Description: "Track old cleanup separately.",
+		Step:        "manual",
+		TaskProposal: taskstate.ReviewTaskProposal{
+			Title:              "Older cleanup",
+			Description:        "Clean up old code.",
+			AcceptanceCriteria: "Cleanup is tested.",
+		},
+	})
+	must.NoError(err)
+	_, err = runStore.RecordReviewFindingCreatedTask("alpha", "op-main", oldReview.Attempt, 0, "op-41")
+	must.NoError(err)
+	return oldReview
+}
+
+func recordMixedReviewFindings(t *testing.T, runStore taskstate.Store) taskstate.ReviewAttempt {
+	t.Helper()
+
+	must := require.New(t)
+	latestReview, err := runStore.StartReviewWithOptions("alpha", "op-main", taskstate.StartReviewOptions{
+		Pipeline: "quality",
+		Step:     "unit-tests",
+	})
+	must.NoError(err)
+	exitCode := 1
+	_, err = runStore.RecordReviewStep("alpha", "op-main", latestReview.Attempt, taskstate.RecordReviewStepOptions{
+		Kind:     "check",
+		Name:     "unit-tests",
+		ExitCode: &exitCode,
+	})
+	must.NoError(err)
+	_, err = runStore.RecordReviewStep("alpha", "op-main", latestReview.Attempt, taskstate.RecordReviewStepOptions{
+		Kind: "agent_review",
+		Name: "ai-review",
+	})
+	must.NoError(err)
+	for _, finding := range mixedReviewFindings() {
+		_, err = runStore.RecordReviewFinding("alpha", "op-main", latestReview.Attempt, finding)
+		must.NoError(err)
+	}
+	_, err = runStore.RecordReviewFindingCreatedTask("alpha", "op-main", latestReview.Attempt, 3, "op-42")
+	must.NoError(err)
+	return latestReview
+}
+
+func mixedReviewFindings() []taskstate.ReviewFinding {
+	return []taskstate.ReviewFinding{
+		{
+			Type:            taskstate.FindingTypeBlocking,
+			Title:           "Tests fail",
+			Description:     "make test fails.",
+			Step:            "unit-tests",
+			SuggestedAction: "Fix failing tests.",
+		},
+		{
+			Type:            taskstate.FindingTypeBlocking,
+			Title:           "Race condition",
+			Description:     "The update path can race.",
+			Step:            "ai-review",
+			SuggestedAction: "Guard the shared state.",
+		},
+		{
+			Type:            taskstate.FindingTypeBlocking,
+			Title:           "Known limitation",
+			Description:     "This is accepted for the MVP.",
+			Step:            "ai-review",
+			SuggestedAction: "Document the limitation.",
+			Waiver:          "Accepted risk for now.",
+		},
+		{
+			Type:        taskstate.FindingTypeSeparateTask,
+			Title:       "Extract helper",
+			Description: "A helper would reduce duplication.",
+			Step:        "ai-review",
+			TaskProposal: taskstate.ReviewTaskProposal{
+				Title:              "Extract helper",
+				Description:        "Extract the repeated helper.",
+				AcceptanceCriteria: "Helper has focused tests.",
+			},
+		},
+	}
+}
+
 func TestTaskRunWorktreeModeDoesNotCareAboutDirtyRepoRoot(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
