@@ -186,6 +186,7 @@ func newTaskReviewCommand(opts *rootOptions) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&pipelineName, "pipeline", "", "review pipeline name to use instead of repo/global defaults")
+	cmd.AddCommand(newTaskReviewShowCommand(opts))
 	return cmd
 }
 
