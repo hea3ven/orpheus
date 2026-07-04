@@ -779,9 +779,39 @@ func readerIsTerminal(reader io.Reader) bool {
 		return false
 	}
 
+	return fileDescriptorIsTerminal(file.Fd())
+}
+
+func writerIsTerminal(writer io.Writer) bool {
+	return inspectWriterTerminal(writer).interactive
+}
+
+type writerTerminalInspection struct {
+	interactive bool
+	writerType  string
+	isFile      bool
+	fd          uintptr
+	name        string
+	statMode    string
+	statError   string
+}
+
+func inspectWriterTerminal(writer io.Writer) writerTerminalInspection {
+	inspection := writerTerminalInspection{writerType: fmt.Sprintf("%T", writer)}
+	file, ok := writer.(*os.File)
+	if !ok {
+		return inspection
+	}
+	inspection.isFile = true
+	inspection.fd = file.Fd()
+	inspection.name = file.Name()
+
 	stat, err := file.Stat()
 	if err != nil {
-		return false
+		inspection.statError = err.Error()
+	} else {
+		inspection.statMode = stat.Mode().String()
 	}
-	return stat.Mode()&os.ModeCharDevice != 0
+	inspection.interactive = fileDescriptorIsTerminal(inspection.fd)
+	return inspection
 }

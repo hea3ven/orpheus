@@ -194,6 +194,32 @@ func (c Config) ResolveReviewerCommandWithValues(selectedAgent string, values In
 	return normalized.resolveAgentProfile(agentName, values)
 }
 
+// ResolveReviewerProfile resolves selectedAgent, or agents.defaults.reviewer
+// when selectedAgent is blank, and returns the normalized profile.
+func (c Config) ResolveReviewerProfile(selectedAgent string) (string, Profile, error) {
+	normalized, err := c.normalized()
+	if err != nil {
+		return "", Profile{}, err
+	}
+
+	agentName := strings.TrimSpace(selectedAgent)
+	if agentName == "" {
+		agentName = strings.TrimSpace(normalized.Defaults.Reviewer)
+	}
+	if agentName == "" {
+		return "", Profile{}, errors.New("agents.defaults.reviewer is required for agent_review steps without an agent override")
+	}
+	profile, ok := normalized.Agents[agentName]
+	if !ok {
+		return "", Profile{}, fmt.Errorf(
+			"agent profile %q is not configured; configured agents: %s",
+			agentName,
+			strings.Join(normalized.agentNames(), ", "),
+		)
+	}
+	return agentName, profile, nil
+}
+
 func (c Config) resolveAgentProfile(agentName string, values InterpolationValues) (CommandSnapshot, error) {
 	profile, ok := c.Agents[agentName]
 	if !ok {
