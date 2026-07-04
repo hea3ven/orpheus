@@ -29,9 +29,10 @@ import (
 )
 
 var (
-	newBeadsTaskBackend                    = beads.NewTaskBackend
-	attachedAgentLauncher   agent.Launcher = agent.AttachedLauncher{}
-	taskDoneInputIsTerminal                = readerIsTerminal
+	newBeadsTaskBackend                       = beads.NewTaskBackend
+	attachedAgentLauncher      agent.Launcher = agent.AttachedLauncher{}
+	taskDoneInputIsTerminal                   = readerIsTerminal
+	taskReviewOutputIsTerminal                = writerIsTerminal
 )
 
 func newTaskCommand(opts *rootOptions) *cobra.Command {
@@ -582,7 +583,7 @@ func runTaskReview(command *cobra.Command, opts *rootOptions, taskID string, pip
 	}
 
 	reviewInput := bufio.NewReader(command.InOrStdin())
-	outcome, err := review.RunPipeline(taskReviewPipelineOptions(command, start, reviewInput))
+	outcome, err := review.RunPipeline(taskReviewPipelineOptions(command, start, reviewInput, logger))
 	if err != nil {
 		_, _ = start.store.FinishReview(start.repoID(), start.taskID(), start.review.Attempt, taskstate.ReviewStatusFailed)
 		return err
@@ -626,22 +627,26 @@ func taskReviewPipelineOptions(
 	command *cobra.Command,
 	start taskReviewStart,
 	reviewInput *bufio.Reader,
+	logger *slog.Logger,
 ) review.PipelineRunOptions {
+	outputMode := taskReviewOutputMode(command, logger)
 	return review.PipelineRunOptions{
-		Context:       command.Context(),
-		Store:         start.store,
-		RepoID:        start.repoID(),
-		TaskID:        start.taskID(),
-		Branch:        start.target.Branch,
-		Workdir:       start.workdir,
-		Attempt:       start.review,
-		Pipeline:      start.pipeline,
-		SessionName:   start.resolvedCtx.Task.ReviewSessionName(),
-		Stdout:        command.OutOrStdout(),
-		Stderr:        command.ErrOrStderr(),
-		Stdin:         command.InOrStdin(),
-		AgentConfig:   start.agentConfig,
-		AgentLauncher: attachedAgentLauncher,
+		Context:           command.Context(),
+		Store:             start.store,
+		RepoID:            start.repoID(),
+		TaskID:            start.taskID(),
+		Branch:            start.target.Branch,
+		Workdir:           start.workdir,
+		Attempt:           start.review,
+		Pipeline:          start.pipeline,
+		SessionName:       start.resolvedCtx.Task.ReviewSessionName(),
+		Stdout:            outputMode.stdout,
+		Stderr:            outputMode.stderr,
+		Stdin:             command.InOrStdin(),
+		InteractiveOutput: outputMode.interactive,
+		OutputWidth:       outputMode.width,
+		AgentConfig:       start.agentConfig,
+		AgentLauncher:     attachedAgentLauncher,
 		RenderManualStep: func(review.Step) error {
 			return renderManualReviewContext(command, start.store, start.resolvedCtx, start.workdir)
 		},
@@ -670,6 +675,71 @@ func taskReviewPipelineOptions(
 			}, nil
 		},
 	}
+}
+
+type taskReviewOutputModeResult struct {
+	stdout      io.Writer
+	stderr      io.Writer
+	interactive bool
+	width       int
+}
+
+func taskReviewOutputMode(command *cobra.Command, logger *slog.Logger) taskReviewOutputModeResult {
+	stdout := command.OutOrStdout()
+	stderr := command.ErrOrStderr()
+	stdoutInspection := inspectWriterTerminal(stdout)
+	stderrInspection := inspectWriterTerminal(stderr)
+	stdoutInteractive := taskReviewOutputIsTerminal(stdout)
+	stderrInteractive := taskReviewOutputIsTerminal(stderr)
+	interactiveOutput := stdoutInteractive && stderrInteractive
+	outputWidth, _ := interactiveTerminalWidth(stderr)
+	logTaskReviewOutputDetection(
+		command.Context(),
+		logger,
+		stdoutInspection,
+		stderrInspection,
+		interactiveOutput,
+		outputWidth,
+	)
+	return taskReviewOutputModeResult{
+		stdout:      stdout,
+		stderr:      stderr,
+		interactive: interactiveOutput,
+		width:       outputWidth,
+	}
+}
+
+func logTaskReviewOutputDetection(
+	ctx context.Context,
+	logger *slog.Logger,
+	stdout writerTerminalInspection,
+	stderr writerTerminalInspection,
+	interactiveOutput bool,
+	outputWidth int,
+) {
+	if logger == nil {
+		return
+	}
+	logger.DebugContext(
+		ctx,
+		"resolved task review output mode",
+		slog.Bool("interactive_output", interactiveOutput),
+		slog.Int("output_width", outputWidth),
+		slog.Bool("stdout_interactive", stdout.interactive),
+		slog.String("stdout_writer_type", stdout.writerType),
+		slog.Bool("stdout_is_file", stdout.isFile),
+		slog.Uint64("stdout_fd", uint64(stdout.fd)),
+		slog.String("stdout_name", stdout.name),
+		slog.String("stdout_stat_mode", stdout.statMode),
+		slog.String("stdout_stat_error", stdout.statError),
+		slog.Bool("stderr_interactive", stderr.interactive),
+		slog.String("stderr_writer_type", stderr.writerType),
+		slog.Bool("stderr_is_file", stderr.isFile),
+		slog.Uint64("stderr_fd", uint64(stderr.fd)),
+		slog.String("stderr_name", stderr.name),
+		slog.String("stderr_stat_mode", stderr.statMode),
+		slog.String("stderr_stat_error", stderr.statError),
+	)
 }
 
 type taskReviewStart struct {

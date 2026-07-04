@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 
@@ -11,6 +12,17 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTerminalDetectionRejectsNonTTYCharacterDevice(t *testing.T) {
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, devNull.Close())
+	})
+
+	require.False(t, readerIsTerminal(devNull))
+	require.False(t, writerIsTerminal(devNull))
+}
 
 func TestConfigureRepoSummaryGuidanceInteractiveDefaultsToTyped(t *testing.T) {
 	originalIsTerminal := isTerminal

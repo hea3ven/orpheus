@@ -1,7 +1,9 @@
 package review_test
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -9,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
@@ -92,6 +95,225 @@ func TestRunPipelineRestoresHeaderWrittenToWorktreeStderr(t *testing.T) {
 	}
 }
 
+func TestRunPipelineInteractivePassingCheckClearsRollingTail(t *testing.T) {
+	workdir := t.TempDir()
+	initReviewTestGitRepo(t, workdir)
+	check := writeReviewTestScript(t, workdir, "passing-check", `#!/bin/sh
+i=1
+while [ "$i" -le 12 ]; do
+  printf 'stdout %02d\n' "$i"
+  printf 'stderr %02d\n' "$i" >&2
+  i=$((i + 1))
+done
+`)
+	store, attempt := startReviewTestAttempt(t)
+	var stdout bytes.Buffer
+	terminal := newVisualTerminal()
+
+	outcome, err := review.RunPipeline(review.PipelineRunOptions{
+		Context:           context.Background(),
+		Store:             store,
+		RepoID:            "alpha",
+		TaskID:            "op-1",
+		Branch:            "main",
+		Workdir:           workdir,
+		Attempt:           attempt,
+		Pipeline:          singleStepPipeline(review.KindCheck, "unit", check),
+		Stdout:            &stdout,
+		Stderr:            terminal,
+		InteractiveOutput: true,
+	})
+
+	if err != nil {
+		t.Fatalf("RunPipeline error = %v", err)
+	}
+	if outcome.Status != taskstate.ReviewStatusPassed {
+		t.Fatalf("outcome = %q, want passed", outcome.Status)
+	}
+	if stdout.String() != "" {
+		t.Fatalf("stdout = %q, want rolling output captured away from stdout", stdout.String())
+	}
+	visible := terminal.Visible()
+	if !strings.Contains(visible, "== Review step: unit (check) ==") {
+		t.Fatalf("visible terminal = %q, want step header", visible)
+	}
+	if strings.Contains(visible, "stdout") || strings.Contains(visible, "stderr") {
+		t.Fatalf("visible terminal = %q, want passing check tail cleared", visible)
+	}
+	if !strings.Contains(terminal.raw.String(), "\x1b[31mstderr 12\x1b[0m") {
+		t.Fatalf("raw terminal output does not color stderr distinctly: %q", terminal.raw.String())
+	}
+}
+
+func TestRunPipelineInteractiveBlockedCheckLeavesExpandedRollingTail(t *testing.T) {
+	workdir := t.TempDir()
+	initReviewTestGitRepo(t, workdir)
+	check := writeReviewTestScript(t, workdir, "blocked-check", `#!/bin/sh
+i=1
+while [ "$i" -le 35 ]; do
+  printf 'stdout %02d\n' "$i"
+  i=$((i + 1))
+done
+exit 7
+`)
+	store, attempt := startReviewTestAttempt(t)
+	var stdout bytes.Buffer
+	terminal := newVisualTerminal()
+
+	outcome, err := review.RunPipeline(review.PipelineRunOptions{
+		Context:           context.Background(),
+		Store:             store,
+		RepoID:            "alpha",
+		TaskID:            "op-1",
+		Branch:            "main",
+		Workdir:           workdir,
+		Attempt:           attempt,
+		Pipeline:          singleStepPipeline(review.KindCheck, "unit", check),
+		Stdout:            &stdout,
+		Stderr:            terminal,
+		InteractiveOutput: true,
+	})
+
+	if err != nil {
+		t.Fatalf("RunPipeline error = %v", err)
+	}
+	if outcome.Status != taskstate.ReviewStatusBlocked {
+		t.Fatalf("outcome = %q, want blocked", outcome.Status)
+	}
+	if stdout.String() != "" {
+		t.Fatalf("stdout = %q, want rolling output captured away from stdout", stdout.String())
+	}
+	visible := terminal.Visible()
+	for _, want := range []string{"stdout 06", "stdout 35", "Review blocked for op-1 by check \"unit\"."} {
+		if !strings.Contains(visible, want) {
+			t.Fatalf("visible terminal = %q, want %q", visible, want)
+		}
+	}
+	if strings.Contains(visible, "stdout 05") {
+		t.Fatalf("visible terminal = %q, want expanded tail bounded to latest 30 lines", visible)
+	}
+}
+
+func TestRunPipelineInteractiveAgentReviewOutputDependsOnProfileMode(t *testing.T) {
+	tests := []struct {
+		name           string
+		interactive    bool
+		wantStdout     string
+		wantVisible    string
+		notWantVisible string
+	}{
+		{
+			name:        "interactive reviewer streams attached output",
+			interactive: true,
+			wantStdout:  "agent stdout\n",
+			wantVisible: "agent stderr",
+		},
+		{
+			name:           "non-interactive reviewer clears passing rolling output",
+			interactive:    false,
+			notWantVisible: "agent stderr",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := runAgentReviewPipelineTest(t, test.interactive, fakeReviewLauncher{})
+			outcome := result.outcome
+			err := result.err
+			if err != nil {
+				t.Fatalf("RunPipeline error = %v", err)
+			}
+			if outcome.Status != taskstate.ReviewStatusPassed {
+				t.Fatalf("outcome = %q, want passed", outcome.Status)
+			}
+			if result.stdout != test.wantStdout {
+				t.Fatalf("stdout = %q, want %q", result.stdout, test.wantStdout)
+			}
+			if test.wantVisible != "" && !strings.Contains(result.visible, test.wantVisible) {
+				t.Fatalf("visible terminal = %q, want %q", result.visible, test.wantVisible)
+			}
+			if test.notWantVisible != "" && strings.Contains(result.visible, test.notWantVisible) {
+				t.Fatalf("visible terminal = %q, do not want %q", result.visible, test.notWantVisible)
+			}
+		})
+	}
+}
+
+func TestRunPipelineInteractiveAgentReviewNonBlockingFindingLeavesLiveTail(t *testing.T) {
+	harness := newAgentReviewPipelineHarness(t)
+	result := harness.run(t, false, fakeReviewLauncherFunc(func(
+		ctx context.Context,
+		command agent.CommandSnapshot,
+		opts agent.LaunchOptions,
+	) error {
+		return writeAgentReviewAdvisoryOutput(ctx, opts, harness.store, harness.attempt)
+	}))
+
+	if result.err != nil {
+		t.Fatalf("RunPipeline error = %v", result.err)
+	}
+	if result.outcome.Status != taskstate.ReviewStatusPassed {
+		t.Fatalf("outcome = %q, want passed", result.outcome.Status)
+	}
+	if result.stdout != "" {
+		t.Fatalf("stdout = %q, want rolling output captured away from stdout", result.stdout)
+	}
+	for _, want := range []string{"agent stdout 05", "agent stdout 12"} {
+		if !strings.Contains(result.visible, want) {
+			t.Fatalf("visible terminal = %q, want %q", result.visible, want)
+		}
+	}
+	if strings.Contains(result.visible, "agent stdout 04") {
+		t.Fatalf("visible terminal = %q, want final live tail bounded to latest 8 lines", result.visible)
+	}
+}
+
+func TestRunPipelineInteractivePassingAgentReviewClearsWrappedRollingTail(t *testing.T) {
+	harness := newAgentReviewPipelineHarness(t)
+	var stdout bytes.Buffer
+	terminal := newVisualTerminalWithWidth(20)
+
+	outcome, err := review.RunPipeline(review.PipelineRunOptions{
+		Context:           context.Background(),
+		Store:             harness.store,
+		RepoID:            "alpha",
+		TaskID:            "op-1",
+		Branch:            "main",
+		Workdir:           harness.workdir,
+		Attempt:           harness.attempt,
+		Pipeline:          agentReviewPipeline(),
+		Stdout:            &stdout,
+		Stderr:            terminal,
+		InteractiveOutput: true,
+		OutputWidth:       20,
+		AgentConfig:       reviewAgentConfig(false),
+		AgentLauncher: fakeReviewLauncherFunc(func(
+			ctx context.Context,
+			command agent.CommandSnapshot,
+			opts agent.LaunchOptions,
+		) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			_, err := fmt.Fprintln(opts.Stdout, "wrapped "+strings.Repeat("x", 80))
+			return err
+		}),
+	})
+
+	if err != nil {
+		t.Fatalf("RunPipeline error = %v", err)
+	}
+	if outcome.Status != taskstate.ReviewStatusPassed {
+		t.Fatalf("outcome = %q, want passed", outcome.Status)
+	}
+	if stdout.String() != "" {
+		t.Fatalf("stdout = %q, want rolling output captured away from stdout", stdout.String())
+	}
+	if visible := terminal.Visible(); strings.Contains(visible, "wrapped") || strings.Contains(visible, "xxxx") {
+		t.Fatalf("visible terminal = %q, want passing wrapped output cleared", visible)
+	}
+}
+
 func initReviewTestGitRepo(t *testing.T, dir string) {
 	t.Helper()
 
@@ -114,4 +336,231 @@ func runReviewTestGit(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v failed: %v\n%s", args, err, output)
 	}
 	return string(output)
+}
+
+func startReviewTestAttempt(t *testing.T) (taskstate.Store, taskstate.ReviewAttempt) {
+	t.Helper()
+
+	store := taskstate.NewStore(newTestPaths(t))
+	attempt, err := store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{
+		Pipeline: "standard",
+		Step:     "unit",
+	})
+	if err != nil {
+		t.Fatalf("start review: %v", err)
+	}
+	return store, attempt
+}
+
+func singleStepPipeline(kind string, name string, command string) review.Pipeline {
+	return review.Pipeline{
+		Name: "standard",
+		Steps: []review.Step{{
+			Kind:    kind,
+			Name:    name,
+			Command: command,
+		}},
+	}
+}
+
+type agentReviewPipelineHarness struct {
+	store   taskstate.Store
+	attempt taskstate.ReviewAttempt
+	workdir string
+}
+
+type agentReviewPipelineResult struct {
+	outcome review.PipelineOutcome
+	stdout  string
+	visible string
+	err     error
+}
+
+func newAgentReviewPipelineHarness(t *testing.T) agentReviewPipelineHarness {
+	t.Helper()
+
+	workdir := t.TempDir()
+	initReviewTestGitRepo(t, workdir)
+	store, attempt := startReviewTestAttempt(t)
+	return agentReviewPipelineHarness{store: store, attempt: attempt, workdir: workdir}
+}
+
+func runAgentReviewPipelineTest(
+	t *testing.T,
+	interactive bool,
+	launcher agent.Launcher,
+) agentReviewPipelineResult {
+	t.Helper()
+
+	harness := newAgentReviewPipelineHarness(t)
+	return harness.run(t, interactive, launcher)
+}
+
+func (h agentReviewPipelineHarness) run(
+	t *testing.T,
+	interactive bool,
+	launcher agent.Launcher,
+) agentReviewPipelineResult {
+	t.Helper()
+
+	var stdout bytes.Buffer
+	terminal := newVisualTerminal()
+	outcome, err := review.RunPipeline(review.PipelineRunOptions{
+		Context:           context.Background(),
+		Store:             h.store,
+		RepoID:            "alpha",
+		TaskID:            "op-1",
+		Branch:            "main",
+		Workdir:           h.workdir,
+		Attempt:           h.attempt,
+		Pipeline:          agentReviewPipeline(),
+		Stdout:            &stdout,
+		Stderr:            terminal,
+		InteractiveOutput: true,
+		AgentConfig:       reviewAgentConfig(interactive),
+		AgentLauncher:     launcher,
+	})
+	return agentReviewPipelineResult{
+		outcome: outcome,
+		stdout:  stdout.String(),
+		visible: terminal.Visible(),
+		err:     err,
+	}
+}
+
+func agentReviewPipeline() review.Pipeline {
+	return review.Pipeline{
+		Name: "standard",
+		Steps: []review.Step{{
+			Kind: review.KindAgentReview,
+			Name: "ai-review",
+		}},
+	}
+}
+
+func reviewAgentConfig(interactive bool) agent.Config {
+	return agent.Config{
+		Defaults: agent.AgentDefaults{Implementer: "impl", Reviewer: "reviewer"},
+		Agents: map[string]agent.Profile{
+			"impl":     {Command: "impl"},
+			"reviewer": {Command: "review-agent", Interactive: interactive},
+		},
+	}
+}
+
+func writeAgentReviewAdvisoryOutput(
+	ctx context.Context,
+	opts agent.LaunchOptions,
+	store taskstate.Store,
+	attempt taskstate.ReviewAttempt,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for i := 1; i <= 12; i++ {
+		if _, err := fmt.Fprintf(opts.Stdout, "agent stdout %02d\n", i); err != nil {
+			return err
+		}
+	}
+	_, err := store.RecordReviewFinding("alpha", "op-1", attempt.Attempt, taskstate.ReviewFinding{
+		Type:        taskstate.FindingTypeAdvisory,
+		Title:       "Advisory finding",
+		Description: "The reviewer left an advisory note.",
+		Step:        "ai-review",
+	})
+	return err
+}
+
+func writeReviewTestScript(t *testing.T, dir string, name string, content string) string {
+	t.Helper()
+
+	path := filepath.Join(dir, name+".sh")
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	return path
+}
+
+type fakeReviewLauncher struct{}
+
+func (fakeReviewLauncher) Run(ctx context.Context, command agent.CommandSnapshot, opts agent.LaunchOptions) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(opts.Stdout, "agent stdout"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(opts.Stderr, "agent stderr"); err != nil {
+		return err
+	}
+	return nil
+}
+
+type fakeReviewLauncherFunc func(context.Context, agent.CommandSnapshot, agent.LaunchOptions) error
+
+func (f fakeReviewLauncherFunc) Run(ctx context.Context, command agent.CommandSnapshot, opts agent.LaunchOptions) error {
+	return f(ctx, command, opts)
+}
+
+type visualTerminal struct {
+	raw   bytes.Buffer
+	lines []string
+	row   int
+	width int
+}
+
+func newVisualTerminal() *visualTerminal {
+	return &visualTerminal{lines: []string{""}}
+}
+
+func newVisualTerminalWithWidth(width int) *visualTerminal {
+	return &visualTerminal{lines: []string{""}, width: width}
+}
+
+func (t *visualTerminal) Write(p []byte) (int, error) {
+	t.raw.Write(p)
+	for index := 0; index < len(p); {
+		if bytes.HasPrefix(p[index:], []byte("\x1b[1A\r\x1b[2K")) {
+			if t.row > 0 {
+				t.row--
+			}
+			t.lines[t.row] = ""
+			index += len("\x1b[1A\r\x1b[2K")
+			continue
+		}
+		if bytes.HasPrefix(p[index:], []byte("\x1b[2K")) {
+			t.lines[t.row] = ""
+			index += len("\x1b[2K")
+			continue
+		}
+		switch p[index] {
+		case '\r':
+			t.lines[t.row] = ""
+		case '\n':
+			t.row++
+			t.ensureRow()
+		default:
+			if t.width > 0 && len([]rune(t.lines[t.row])) >= t.width {
+				t.row++
+				t.ensureRow()
+			}
+			t.lines[t.row] += string(p[index])
+		}
+		index++
+	}
+	return len(p), nil
+}
+
+func (t *visualTerminal) Visible() string {
+	last := len(t.lines)
+	for last > 0 && t.lines[last-1] == "" {
+		last--
+	}
+	return strings.Join(t.lines[:last], "\n")
+}
+
+func (t *visualTerminal) ensureRow() {
+	for t.row >= len(t.lines) {
+		t.lines = append(t.lines, "")
+	}
 }

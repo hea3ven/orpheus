@@ -32,6 +32,9 @@ type PipelineRunOptions struct {
 	Stderr io.Writer
 	Stdin  io.Reader
 
+	InteractiveOutput bool
+	OutputWidth       int
+
 	AgentConfig   agent.Config
 	AgentLauncher agent.Launcher
 
@@ -119,16 +122,20 @@ func runStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome, err
 }
 
 func runCheckStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome, error) {
-	exitCode, err := runStepCommand(opts, step, env)
+	output := newStepOutput(opts, true)
+	exitCode, err := runStepCommandWithOutput(opts, step, env, output.stdout(), output.stderr())
 	if recordErr := recordStep(opts, step, exitCode); recordErr != nil {
+		output.finishExpanded()
 		return stepOutcome{}, recordErr
 	}
 	if err == nil {
+		output.finishClear()
 		return stepOutcome{}, nil
 	}
 
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) {
+		output.finishExpanded()
 		return stepOutcome{}, fmt.Errorf("task review %s: start check step %q: %w", opts.TaskID, step.Name, err)
 	}
 
@@ -140,8 +147,10 @@ func runCheckStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome
 		SuggestedAction: "Inspect the check output, fix the issue, then rerun task review.",
 	}
 	if _, err := opts.Store.RecordReviewFinding(opts.RepoID, opts.TaskID, opts.Attempt.Attempt, finding); err != nil {
+		output.finishExpanded()
 		return stepOutcome{}, fmt.Errorf("task review %s: record check finding: %w", opts.TaskID, err)
 	}
+	output.finishExpanded()
 	_, writeErr := fmt.Fprintf(opts.Stderr, "Review blocked for %s by check %q.\n", opts.TaskID, step.Name)
 	return stepOutcome{status: taskstate.ReviewStatusBlocked, stop: true}, writeErr
 }
@@ -230,48 +239,84 @@ func runAgentReviewStep(opts PipelineRunOptions, step Step, env []string) (stepO
 	if err != nil {
 		return stepOutcome{}, fmt.Errorf("task review %s: resolve agent_review step %q: %w", opts.TaskID, step.Name, err)
 	}
+	_, profile, err := opts.AgentConfig.ResolveReviewerProfile(step.Agent)
+	if err != nil {
+		return stepOutcome{}, fmt.Errorf("task review %s: resolve agent_review step %q: %w", opts.TaskID, step.Name, err)
+	}
 
-	stepForState := step
-	stepForState.Command = command.Command
-	stepForState.Args = command.Args
-	if err := recordStep(opts, stepForState, nil); err != nil {
+	if err := recordAgentReviewStep(opts, step, command); err != nil {
 		return stepOutcome{}, err
 	}
 
-	err = opts.AgentLauncher.Run(opts.Context, command, agent.LaunchOptions{
+	output := newStepOutput(opts, !profile.Interactive)
+	if err := opts.AgentLauncher.Run(opts.Context, command, agent.LaunchOptions{
 		Dir:    opts.Workdir,
 		Env:    env,
 		Stdin:  opts.Stdin,
-		Stdout: opts.Stdout,
-		Stderr: opts.Stderr,
-	})
-	if err != nil {
+		Stdout: output.stdout(),
+		Stderr: output.stderr(),
+	}); err != nil {
+		output.finishExpanded()
 		return stepOutcome{}, fmt.Errorf("task review %s: run agent_review step %q: %w", opts.TaskID, step.Name, err)
 	}
 
+	return finishAgentReviewStep(opts, step, output)
+}
+
+func recordAgentReviewStep(opts PipelineRunOptions, step Step, command agent.CommandSnapshot) error {
+	stepForState := step
+	stepForState.Command = command.Command
+	stepForState.Args = command.Args
+	return recordStep(opts, stepForState, nil)
+}
+
+func finishAgentReviewStep(opts PipelineRunOptions, step Step, output stepOutput) (stepOutcome, error) {
 	reviewAttempt, err := opts.Store.Load(opts.RepoID, opts.TaskID)
 	if err != nil {
+		output.finishExpanded()
 		return stepOutcome{}, fmt.Errorf("task review %s: load agent_review findings: %w", opts.TaskID, err)
 	}
 	latest, ok := taskstate.LatestReview(reviewAttempt)
 	if !ok || latest.Attempt != opts.Attempt.Attempt {
+		output.finishExpanded()
 		return stepOutcome{}, fmt.Errorf("task review %s: latest review attempt no longer matches attempt %d", opts.TaskID, opts.Attempt.Attempt)
 	}
+	hasStepFinding := false
 	for _, finding := range latest.Findings {
-		if finding.Step == step.Name && finding.Type == taskstate.FindingTypeBlocking {
+		if finding.Step != step.Name {
+			continue
+		}
+		hasStepFinding = true
+		if finding.Type == taskstate.FindingTypeBlocking {
+			output.finishExpanded()
 			_, writeErr := fmt.Fprintf(opts.Stderr, "Review blocked for %s by agent_review %q.\n", opts.TaskID, step.Name)
 			return stepOutcome{status: taskstate.ReviewStatusBlocked, stop: true}, writeErr
 		}
+	}
+	if hasStepFinding {
+		output.finishTail()
+	} else {
+		output.finishClear()
 	}
 	return stepOutcome{}, nil
 }
 
 func runStepCommand(opts PipelineRunOptions, step Step, env []string) (*int, error) {
+	return runStepCommandWithOutput(opts, step, env, opts.Stdout, opts.Stderr)
+}
+
+func runStepCommandWithOutput(
+	opts PipelineRunOptions,
+	step Step,
+	env []string,
+	stdout io.Writer,
+	stderr io.Writer,
+) (*int, error) {
 	process := exec.CommandContext(opts.Context, step.Command, step.Args...)
 	process.Dir = opts.Workdir
 	process.Env = append(os.Environ(), env...)
-	process.Stdout = opts.Stdout
-	process.Stderr = opts.Stderr
+	process.Stdout = stdout
+	process.Stderr = stderr
 
 	err := process.Run()
 	if process.ProcessState == nil {
