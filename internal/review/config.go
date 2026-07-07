@@ -119,6 +119,17 @@ func ResolvePipeline(config Config, cliPipeline string, repoPipeline string) (Pi
 	return BuiltinManualPipeline(), nil
 }
 
+// HasPipeline reports whether name matches a configured global review pipeline.
+func (c Config) HasPipeline(name string) bool {
+	_, ok := c.Pipelines[strings.TrimSpace(name)]
+	return ok
+}
+
+// PipelineNames returns configured global review pipeline names in display order.
+func (c Config) PipelineNames() []string {
+	return c.pipelineNames()
+}
+
 func (c Config) namedPipeline(name string, source string) (Pipeline, error) {
 	pipeline, ok := c.Pipelines[name]
 	if ok {

@@ -41,12 +41,14 @@ func TestRepoConfigInspectsEffectivePublicationPolicy(t *testing.T) {
 
 	stdout, stderr := executeCommand(t, []string{"repo", "config", "get", "alpha"})
 	is.Empty(stderr)
-	is.Contains(stdout, "POLICY")
-	is.Contains(stdout, "summary guidance")
+	is.Contains(stdout, "CONFIG")
+	is.Contains(stdout, "summary-guidance")
 	is.Contains(stdout, "(not set)")
 	is.Contains(stdout, "typed")
-	is.Contains(stdout, "publication title template")
+	is.Contains(stdout, "title-template")
 	is.Contains(stdout, "completion summary")
+	is.Contains(stdout, "review-pipeline")
+	is.Contains(stdout, "default")
 }
 
 func TestRepoConfigUpdatesPublicationPolicyForExistingRepo(t *testing.T) {
@@ -187,9 +189,128 @@ func TestRepoConfigGetOnePolicyValue(t *testing.T) {
 
 	stdout, stderr := executeCommand(t, []string{"repo", "config", "get", "alpha", "title-template"})
 	is.Empty(stderr)
-	is.Contains(stdout, "publication title template")
+	is.Contains(stdout, "title-template")
 	is.Contains(stdout, "[OPS] {{summary}}")
-	is.NotContains(stdout, "summary guidance style")
+	is.NotContains(stdout, "summary-style")
+}
+
+func TestRepoConfigSetsAndClearsReviewPipelineDefault(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	withFakeBDInit(t)
+	repoPath := newTestRepoPath(t)
+	paths := currentTestPaths(t)
+
+	_, addErr := executeCommand(t, []string{"repo", "add", repoPath})
+	is.Empty(addErr)
+	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+		"standard": {{"kind": "manual", "name": "standard-review"}},
+		"go":       {{"kind": "manual", "name": "go-review"}},
+	})
+
+	stdout, stderr := executeCommand(t, []string{"repo", "config", "set", "alpha", "review-pipeline", "go"})
+	is.Empty(stderr)
+	is.Contains(stdout, "review-pipeline")
+	is.Contains(stdout, "go")
+
+	stdout, stderr = executeCommand(t, []string{"repo", "config", "get", "alpha", "review-pipeline"})
+	is.Empty(stderr)
+	is.Contains(stdout, "review-pipeline")
+	is.Contains(stdout, "go")
+	is.NotContains(stdout, "summary-guidance")
+
+	store := registry.NewStore(paths)
+	reg, err := store.Load()
+	must.NoError(err)
+	must.Len(reg.Repos, 1)
+	is.Equal("go", reg.Repos[0].ReviewPipeline)
+
+	stdout, stderr = executeCommand(t, []string{"repo", "config", "set", "alpha", "review-pipeline", ""})
+	is.Empty(stderr)
+	is.Contains(stdout, "(not set)")
+	is.Contains(stdout, "standard")
+
+	reg, err = store.Load()
+	must.NoError(err)
+	must.Len(reg.Repos, 1)
+	is.Empty(reg.Repos[0].ReviewPipeline)
+}
+
+func TestRepoConfigSetsAndClearsReviewPipelineAlias(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	withFakeBDInit(t)
+	repoPath := newTestRepoPath(t)
+	paths := currentTestPaths(t)
+
+	_, addErr := executeCommand(t, []string{"repo", "add", repoPath})
+	is.Empty(addErr)
+	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+		"standard": {{"kind": "manual", "name": "standard-review"}},
+		"go":       {{"kind": "manual", "name": "go-review"}},
+	})
+
+	stdout, stderr := executeCommand(t, []string{
+		"repo", "config", "set", "alpha", "review-pipeline-alias.quick", "go",
+	})
+	is.Empty(stderr)
+	is.Contains(stdout, "review-pipeline-alias.quick")
+	is.Contains(stdout, "go")
+
+	stdout, stderr = executeCommand(t, []string{"repo", "config", "get", "alpha"})
+	is.Empty(stderr)
+	is.Contains(stdout, "review-pipeline-alias.quick")
+	is.Contains(stdout, "go")
+
+	store := registry.NewStore(paths)
+	reg, err := store.Load()
+	must.NoError(err)
+	must.Len(reg.Repos, 1)
+	is.Equal(map[string]string{"quick": "go"}, reg.Repos[0].ReviewPipelineAliases)
+
+	stdout, stderr = executeCommand(t, []string{
+		"repo", "config", "set", "alpha", "review-pipeline-alias.quick", "",
+	})
+	is.Empty(stderr)
+	is.Contains(stdout, "review-pipeline-alias.quick")
+	is.Contains(stdout, "(not set)")
+
+	reg, err = store.Load()
+	must.NoError(err)
+	must.Len(reg.Repos, 1)
+	is.Empty(reg.Repos[0].ReviewPipelineAliases)
+}
+
+func TestRepoConfigRejectsUnknownReviewPipelineWithoutMutatingRegistry(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	withFakeBDInit(t)
+	repoPath := newTestRepoPath(t)
+	paths := currentTestPaths(t)
+
+	_, addErr := executeCommand(t, []string{"repo", "add", repoPath})
+	is.Empty(addErr)
+	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+		"standard": {{"kind": "manual", "name": "standard-review"}},
+	})
+
+	for _, args := range [][]string{
+		{"repo", "config", "set", "alpha", "review-pipeline", "missing"},
+		{"repo", "config", "set", "alpha", "review-pipeline-alias.quick", "missing"},
+	} {
+		stdout, _, err := executeCommandWithError(t, args)
+		must.Error(err)
+		is.Empty(stdout)
+		is.ErrorContains(err, "does not match a configured global review pipeline")
+		is.ErrorContains(err, "configured pipelines: standard")
+	}
+
+	store := registry.NewStore(paths)
+	reg, err := store.Load()
+	must.NoError(err)
+	must.Len(reg.Repos, 1)
+	is.Empty(reg.Repos[0].ReviewPipeline)
+	is.Empty(reg.Repos[0].ReviewPipelineAliases)
 }
 
 func TestRepoAddStoresGitRootWhenPathIsNested(t *testing.T) {
