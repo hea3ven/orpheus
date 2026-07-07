@@ -21,6 +21,7 @@ Early MVP design and implementation planning.
 ## Documentation
 
 - [Repository publication titles](docs/2026-06-23_repo_publication_titles.md) explains how to configure Jira-style commit and pull-request titles, preserve defaults, and recover from a missing task reference.
+- [Review pipelines](docs/review_pipelines.md) explains global pipeline configuration, repository defaults, repo-local aliases, clearing behavior, and selection precedence.
 
 ## Agent profile session names
 

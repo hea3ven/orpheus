@@ -30,17 +30,18 @@ const (
 
 // Repo is a repository record stored in the Orpheus registry.
 type Repo struct {
-	ID                   string `yaml:"id"`
-	Name                 string `yaml:"name"`
-	Path                 string `yaml:"path"`
-	Remote               string `yaml:"remote,omitempty"`
-	DefaultBranch        string `yaml:"default_branch,omitempty"`
-	BeadsMode            string `yaml:"beads_mode,omitempty"`
-	BeadsPrefix          string `yaml:"beads_prefix,omitempty"`
-	SummaryGuidance      string `yaml:"summary_guidance,omitempty"`
-	SummaryGuidanceStyle string `yaml:"summary_guidance_style,omitempty"`
-	TitleTemplate        string `yaml:"title_template,omitempty"`
-	ReviewPipeline       string `yaml:"review_pipeline,omitempty"`
+	ID                    string            `yaml:"id"`
+	Name                  string            `yaml:"name"`
+	Path                  string            `yaml:"path"`
+	Remote                string            `yaml:"remote,omitempty"`
+	DefaultBranch         string            `yaml:"default_branch,omitempty"`
+	BeadsMode             string            `yaml:"beads_mode,omitempty"`
+	BeadsPrefix           string            `yaml:"beads_prefix,omitempty"`
+	SummaryGuidance       string            `yaml:"summary_guidance,omitempty"`
+	SummaryGuidanceStyle  string            `yaml:"summary_guidance_style,omitempty"`
+	TitleTemplate         string            `yaml:"title_template,omitempty"`
+	ReviewPipeline        string            `yaml:"review_pipeline,omitempty"`
+	ReviewPipelineAliases map[string]string `yaml:"review_pipeline_aliases,omitempty"`
 }
 
 // PublicationPolicy is the resolved publication configuration for a repository.
@@ -355,6 +356,11 @@ func normalizeRepo(repo Repo) (Repo, error) {
 		return Repo{}, fmt.Errorf("repo title_template is invalid: %w", err)
 	}
 	repo.ReviewPipeline = strings.TrimSpace(repo.ReviewPipeline)
+	aliases, err := normalizeReviewPipelineAliases(repo.ReviewPipelineAliases)
+	if err != nil {
+		return Repo{}, err
+	}
+	repo.ReviewPipelineAliases = aliases
 	if repo.ID == "" {
 		return Repo{}, errors.New("repo id is required")
 	}
@@ -380,4 +386,27 @@ func normalizeRepo(repo Repo) (Repo, error) {
 	}
 	repo.Path = filepath.Clean(repo.Path)
 	return repo, nil
+}
+
+func normalizeReviewPipelineAliases(raw map[string]string) (map[string]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	aliases := make(map[string]string, len(raw))
+	for rawAlias, rawTarget := range raw {
+		alias := strings.TrimSpace(rawAlias)
+		if alias == "" {
+			return nil, errors.New("repo review_pipeline_aliases name is required")
+		}
+		if _, exists := aliases[alias]; exists {
+			return nil, fmt.Errorf("repo review_pipeline_aliases.%s is duplicated after trimming whitespace", alias)
+		}
+		target := strings.TrimSpace(rawTarget)
+		if target == "" {
+			return nil, fmt.Errorf("repo review_pipeline_aliases.%s target is required", alias)
+		}
+		aliases[alias] = target
+	}
+	return aliases, nil
 }

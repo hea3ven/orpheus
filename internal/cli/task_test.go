@@ -3372,6 +3372,91 @@ func TestTaskReviewPipelineOverridePrecedence(t *testing.T) {
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
 }
 
+func TestTaskReviewPipelineAliasResolvesToGlobalPipeline(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:                    "alpha",
+		Name:                  "Alpha Repo",
+		Path:                  repoPath,
+		DefaultBranch:         "main",
+		BeadsMode:             registry.BeadsModeLocal,
+		BeadsPrefix:           "op",
+		ReviewPipeline:        "repo",
+		ReviewPipelineAliases: map[string]string{"quick": "cli"},
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review alias", "Use alias-selected pipeline.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+	fail := writeReviewScript(t, "#!/bin/sh\nprintf 'wrong pipeline\n'\nexit 9\n")
+	pass := writeReviewScript(t, "#!/bin/sh\nprintf 'alias pipeline\n'\nexit 0\n")
+	writeReviewPipelineConfig(t, paths, "global", map[string][]map[string]any{
+		"global": {{"kind": "check", "name": "global", "command": fail}},
+		"repo":   {{"kind": "check", "name": "repo", "command": fail}},
+		"cli":    {{"kind": "check", "name": "cli", "command": pass}},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
+	})
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "quick", "op-main"}, "")
+
+	is.Contains(stdout, "alias pipeline")
+	is.NotContains(stdout, "wrong pipeline")
+	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stderr, "== Review step: cli (check) ==")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal("cli", latest.Pipeline)
+	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+}
+
+func TestTaskReviewUnknownPipelineIncludesRepoAliases(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:                    "alpha",
+		Name:                  "Alpha Repo",
+		Path:                  repoPath,
+		DefaultBranch:         "main",
+		BeadsMode:             registry.BeadsModeLocal,
+		BeadsPrefix:           "op",
+		ReviewPipelineAliases: map[string]string{"quick": "standard"},
+	}}}))
+	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+		"standard": {{"kind": "manual", "name": "standard-review"}},
+	})
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+	})
+
+	stdout, _, err := executeCommandWithError(t, []string{"task", "review", "--pipeline", "unknown", "op-main"})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.ErrorContains(err, `CLI --pipeline "unknown" does not match a configured review pipeline`)
+	is.ErrorContains(err, "configured pipelines: standard")
+	is.ErrorContains(err, "configured repo aliases: quick=standard")
+}
+
 func TestTaskDoneRefusesRunningCompletionWithoutInteractiveConfirmation(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
