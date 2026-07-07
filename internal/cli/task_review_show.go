@@ -16,7 +16,12 @@ func newTaskReviewShowCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "show <task-id>",
 		Short: "Show persisted review findings and follow-up tasks for a task",
-		Args:  cobra.ExactArgs(1),
+		Long: "Show persisted review findings and follow-up tasks for a task.\n\n" +
+			"This is the inspection surface for review state. It shows the latest " +
+			"authoritative review attempt, executed steps, blocking/advisory/separate-task " +
+			"findings, created follow-up Beads, and the next command, such as task run " +
+			"for open blockers or task review after targeted follow-up work.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			return runTaskReviewShow(command, opts, args[0])
 		},
