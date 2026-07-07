@@ -133,7 +133,11 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 			"records the attached run attempt, then runs the configured agent there. " +
 			"Use --main to run explicitly from the registered repo root on the " +
 			"registered default branch for local/manual review workflows. " +
-			"Use --repo-root to run from the registered repo root on the task branch.",
+			"Use --repo-root to run from the registered repo root on the task branch.\n\n" +
+			"When the latest review is blocked by open current-task findings, task run " +
+			"automatically starts a review follow-up run and targets those findings. " +
+			"After the agent records completion with agent done, run task review to " +
+			"approve, block again, or publish/finalize.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			return runTaskRun(command, opts, args[0], agentName, mainMode, repoRootMode)
@@ -152,11 +156,16 @@ func newTaskDoneCommand(opts *rootOptions) *cobra.Command {
 		Use:   "done [<task-id>]",
 		Short: "Finalize a reviewed task",
 		Long: "Finalize a reviewed task.\n\n" +
+			"task done is not the normal approval command after agent done. It refuses " +
+			"publication until the latest local review attempt has passed; run task review " +
+			"first to record approval.\n\n" +
 			"On the registered default branch, commits reviewed repo-root changes, pushes the " +
 			"default branch, and closes the backend task. On a repo-root task branch, publishes " +
 			"the feature branch as a pull request. Without a task id, the command infers one " +
 			"ready task only when the current directory is exactly a registered repo root or " +
-			"deterministic task worktree and the task owns the current branch.",
+			"deterministic task worktree and the task owns the current branch.\n\n" +
+			"Use task done to retry publication or finalization after a review has passed " +
+			"and the previous publication attempt failed.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			taskID := ""
@@ -175,12 +184,17 @@ func newTaskReviewCommand(opts *rootOptions) *cobra.Command {
 	var pipelineName string
 	cmd := &cobra.Command{
 		Use:   "review <task-id>",
-		Short: "Run the default local review gate for completed task work",
+		Short: "Run the local review pipeline for completed task work",
 		Long: "Run the selected local review gate for completed task work.\n\n" +
 			"Pipeline selection uses --pipeline, then the repo registry review_pipeline, " +
 			"then reviews.default_pipeline, then the built-in manual local-review step. " +
+			"Configured pipelines may include check, manual, and agent_review steps. " +
 			"Approval records a passed review attempt and then finalizes through the same " +
-			"path as task done.",
+			"path as task done.\n\n" +
+			"Blocking findings leave the task ready for task run follow-up. Operational " +
+			"review failures require fixing the review command, environment, or process " +
+			"and rerunning task review. Use task review show to inspect persisted findings " +
+			"and created follow-up tasks.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			return runTaskReview(command, opts, args[0], pipelineName)
