@@ -188,9 +188,10 @@ func newTaskReviewCommand(opts *rootOptions) *cobra.Command {
 		Long: "Run the selected local review gate for completed task work.\n\n" +
 			"Pipeline selection uses --pipeline, then the repo registry review_pipeline, " +
 			"then reviews.default_pipeline, then the built-in manual local-review step. " +
-			"Configured pipelines may include check, manual, and agent_review steps. " +
-			"Approval records a passed review attempt and then finalizes through the same " +
-			"path as task done.\n\n" +
+			"--pipeline accepts configured global pipeline names and repo-local aliases " +
+			"from review-pipeline-alias.<alias>. Configured pipelines may include check, " +
+			"manual, and agent_review steps. Approval records a passed review attempt and " +
+			"then finalizes through the same path as task done.\n\n" +
 			"Blocking findings leave the task ready for task run follow-up. Operational " +
 			"review failures require fixing the review command, environment, or process " +
 			"and rerunning task review. Use task review show to inspect persisted findings " +
@@ -898,7 +899,34 @@ func resolveTaskReviewPipeline(
 	if err != nil {
 		return review.Pipeline{}, err
 	}
+	if name := strings.TrimSpace(pipelineName); name != "" {
+		if target, ok := repo.ReviewPipelineAliases[name]; ok {
+			pipeline, err := review.ResolvePipeline(config, target, "")
+			if err != nil {
+				return review.Pipeline{}, fmt.Errorf("CLI --pipeline alias %q targets %q: %w", name, target, err)
+			}
+			return pipeline, nil
+		}
+
+		pipeline, err := review.ResolvePipeline(config, name, "")
+		if err != nil {
+			return review.Pipeline{}, appendRepoReviewPipelineAliases(err, repo)
+		}
+		return pipeline, nil
+	}
 	return review.ResolvePipeline(config, pipelineName, repo.ReviewPipeline)
+}
+
+func appendRepoReviewPipelineAliases(err error, repo taskmodel.Repository) error {
+	aliases := make([]string, 0, len(repo.ReviewPipelineAliases))
+	for alias, target := range repo.ReviewPipelineAliases {
+		aliases = append(aliases, fmt.Sprintf("%s=%s", alias, target))
+	}
+	sort.Strings(aliases)
+	if len(aliases) == 0 {
+		return err
+	}
+	return fmt.Errorf("%w; configured repo aliases: %s", err, strings.Join(aliases, ", "))
 }
 
 func finalizeApprovedTaskReview(
@@ -2108,18 +2136,30 @@ func taskRepositorySources(store registry.Store, reg registry.Registry) ([]taskm
 		}
 		sources = append(sources, taskmodel.RepositorySource{
 			Repository: taskmodel.Repository{
-				ID:             repo.ID,
-				Name:           repo.Name,
-				TaskIDPrefix:   repo.BeadsPrefix,
-				Path:           repo.Path,
-				DefaultBranch:  repo.DefaultBranch,
-				TitleTemplate:  repo.TitleTemplate,
-				ReviewPipeline: repo.ReviewPipeline,
+				ID:                    repo.ID,
+				Name:                  repo.Name,
+				TaskIDPrefix:          repo.BeadsPrefix,
+				Path:                  repo.Path,
+				DefaultBranch:         repo.DefaultBranch,
+				TitleTemplate:         repo.TitleTemplate,
+				ReviewPipeline:        repo.ReviewPipeline,
+				ReviewPipelineAliases: cloneStringMap(repo.ReviewPipelineAliases),
 			},
 			BackendDir: beadsDir,
 		})
 	}
 	return sources, nil
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	clone := make(map[string]string, len(values))
+	for key, value := range values {
+		clone[key] = value
+	}
+	return clone
 }
 
 func renderTaskDetails(
