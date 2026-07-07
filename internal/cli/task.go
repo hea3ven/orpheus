@@ -189,9 +189,9 @@ func newTaskReviewCommand(opts *rootOptions) *cobra.Command {
 			"Pipeline selection uses --pipeline, then the repo registry review_pipeline, " +
 			"then reviews.default_pipeline, then the built-in manual local-review step. " +
 			"--pipeline accepts configured global pipeline names and repo-local aliases " +
-			"from review-pipeline-alias.<alias>. " +
-			"Approval records a passed review attempt and then finalizes through the same " +
-			"path as task done.\n\n" +
+			"from review-pipeline-alias.<alias>. Configured pipelines may include check, " +
+			"manual, and agent_review steps. Approval records a passed review attempt and " +
+			"then finalizes through the same path as task done.\n\n" +
 			"Blocking findings leave the task ready for task run follow-up. Operational " +
 			"review failures require fixing the review command, environment, or process " +
 			"and rerunning task review. Use task review show to inspect persisted findings " +
