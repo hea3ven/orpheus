@@ -78,6 +78,32 @@ func TestLoadConfigPreservesExplicitNonInteractiveProfile(t *testing.T) {
 	is.False(profile.Interactive)
 }
 
+func TestLoadConfigInfersCodexHarnessAndModel(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	paths := newAgentTestPaths(t)
+
+	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"agents": map[string]any{
+			"defaults": map[string]any{"implementer": "codex"},
+			"profiles": map[string]any{
+				"codex": map[string]any{
+					"command": "/usr/local/bin/codex",
+					"args":    []string{"exec", "--model", "gpt-5.1", "{{prompt}}"},
+				},
+			},
+		},
+	}))
+
+	config, err := agent.LoadConfig(paths)
+	must.NoError(err)
+	snapshot, err := config.ResolveCommand("", "prompt")
+	must.NoError(err)
+
+	is.Equal("codex", snapshot.Harness)
+	is.Equal("gpt-5.1", snapshot.Model)
+}
+
 func TestResolveCommandInterpolatesPromptAndSessionName(t *testing.T) {
 	is := assert.New(t)
 	config := agent.Config{

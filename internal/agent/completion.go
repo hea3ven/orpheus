@@ -248,7 +248,7 @@ func (s CompletionService) existingCompletionResult(
 		Run: taskstate.RunAttempt{
 			Attempt:    activeContext.Run.Attempt,
 			Status:     taskstate.RunStatusRunning,
-			Agent:      activeContext.Run.Agent,
+			Execution:  activeContext.Run.Execution,
 			Completion: activeContext.Run.Completion,
 		},
 		Repeated:           true,

@@ -91,6 +91,7 @@ type ContextTask struct {
 type ContextRun struct {
 	Attempt    int
 	Agent      string
+	Execution  taskstate.AgentExecution
 	Completion *taskstate.Completion
 }
 
@@ -389,7 +390,8 @@ func newActiveContext(
 		},
 		Run: ContextRun{
 			Attempt:    run.Attempt,
-			Agent:      run.Agent,
+			Agent:      run.Execution.Agent,
+			Execution:  run.Execution,
 			Completion: cloneCompletion(run.Completion),
 		},
 		Target: ContextTarget{

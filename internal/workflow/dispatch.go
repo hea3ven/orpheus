@@ -38,6 +38,7 @@ type DispatchRunStore interface {
 		opts taskstate.SetupEventOptions,
 	) (taskstate.Event, error)
 	StartRun(repoID, taskID string, opts taskstate.StartRunOptions) (taskstate.RunAttempt, error)
+	RecordRunUsage(repoID, taskID string, attempt int, opts taskstate.RecordRunUsageOptions) (taskstate.RunAttempt, error)
 	TargetReviewFindings(repoID, taskID string, reviewAttempt int, findingIndexes []int, runAttempt int) (taskstate.ReviewAttempt, error)
 	FinishRun(repoID, taskID string, attempt int, status taskstate.RunStatus) (taskstate.RunAttempt, error)
 	FailRunStart(repoID, taskID string, attempt int, cause error) (taskstate.RunAttempt, error)
@@ -48,6 +49,8 @@ type DispatchCommand struct {
 	AgentName string
 	Command   string
 	Args      []string
+	Harness   string
+	Model     string
 }
 
 // DispatchCommandContext describes task-run values available while resolving
@@ -435,6 +438,9 @@ func (s DispatchService) recordStart(
 
 	attempt, err := s.RunStore.StartRun(repo.ID, opts.TaskID, taskstate.StartRunOptions{
 		Agent:          command.AgentName,
+		Profile:        command.AgentName,
+		Harness:        command.Harness,
+		Model:          command.Model,
 		Command:        command.Command,
 		Args:           command.Args,
 		SessionName:    commandContext.SessionName,

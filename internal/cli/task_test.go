@@ -416,6 +416,68 @@ func TestTaskShowReportsMalformedAndUnknownPrefixes(t *testing.T) {
 	is.ErrorContains(err, "register the repo")
 }
 
+func TestTaskStatsRendersImplementationExecutionUsage(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[{"id":"op-1","title":"Stats","status":"in_progress","priority":1,"issue_type":"task"}]`},
+	})
+
+	stateStore := taskstate.NewStoreWithClock(
+		paths,
+		clockSequence(
+			time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
+			time.Date(2026, 7, 7, 10, 1, 0, 0, time.UTC),
+			time.Date(2026, 7, 7, 10, 2, 0, 0, time.UTC),
+		),
+	)
+	run, err := stateStore.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		Agent:    "codex-profile",
+		Profile:  "codex-profile",
+		Harness:  "codex",
+		Model:    "gpt-5",
+		Command:  "codex",
+		Args:     []string{"exec", "--model", "gpt-5"},
+		Branch:   "main",
+		Worktree: repoDir,
+	})
+	must.NoError(err)
+	_, err = stateStore.RecordRunUsage("alpha", "op-1", run.Attempt, taskstate.RecordRunUsageOptions{
+		Session: &taskstate.AgentSession{ID: "session-123", LogPath: "/tmp/codex.jsonl"},
+		Usage: &taskstate.AgentUsage{
+			InputTokens:           123,
+			CachedInputTokens:     45,
+			OutputTokens:          67,
+			ReasoningOutputTokens: 8,
+			TotalTokens:           190,
+		},
+		UsageCapture: taskstate.AgentUsageCapture{
+			Status:         taskstate.UsageCaptureCaptured,
+			Reason:         "matched_codex_session",
+			CandidateCount: 1,
+		},
+	})
+	must.NoError(err)
+	_, err = stateStore.FinishRun("alpha", "op-1", run.Attempt, taskstate.RunStatusSucceeded)
+	must.NoError(err)
+
+	stdout, stderr := executeCommand(t, []string{"task", "stats", "op-1"})
+
+	is.Empty(stderr)
+	for _, want := range []string{
+		"ATTEMPT", "PROFILE", "HARNESS", "MODEL", "COMMAND", "STARTED", "FINISHED", "DURATION", "STATUS", "SESSION", "USAGE",
+		"1", "codex-profile", "codex", "gpt-5", `"codex" "exec" "--model" "gpt-5"`,
+		"2026-07-07T10:00:00Z", "2026-07-07T10:02:00Z", "2m0s", "succeeded", "session-123",
+		"total=190 input=123 cached_input=45 output=67 reasoning_output=8",
+	} {
+		is.Contains(stdout, want)
+	}
+}
+
 func TestTaskShowRendersClosedItemsAndHistory(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -887,21 +949,22 @@ func TestTaskRunExecutesImplementerDefaultAttachedFromDeterministicWorktree(t *t
 	must.Len(state.Runs, 1)
 	is.Equal(1, state.Runs[0].Attempt)
 	is.Equal(taskstate.RunStatusSucceeded, state.Runs[0].Status)
-	is.Equal("recorder", state.Runs[0].Agent)
-	is.Equal("fake-agent", state.Runs[0].Command)
-	is.Equal("Implementing op-1 Implement attached run", state.Runs[0].SessionName)
-	must.Len(state.Runs[0].Args, 6)
-	is.Equal("--name", state.Runs[0].Args[0])
-	is.Equal("Implementing op-1 Implement attached run", state.Runs[0].Args[1])
-	is.Equal("--prompt", state.Runs[0].Args[2])
-	is.Contains(state.Runs[0].Args[3], "You are an agent dispatched by Orpheus.")
-	is.Contains(state.Runs[0].Args[3], "Run `orpheus agent context` now")
-	is.NotContains(state.Runs[0].Args[3], "Implement attached run")
-	is.Equal("--literal", state.Runs[0].Args[4])
-	is.Equal("unchanged", state.Runs[0].Args[5])
+	is.Equal("recorder", state.Runs[0].Execution.Agent)
+	is.Equal("recorder", state.Runs[0].Execution.Profile)
+	is.Equal("fake-agent", state.Runs[0].Execution.Command)
+	is.Equal("Implementing op-1 Implement attached run", state.Runs[0].Execution.SessionName)
+	must.Len(state.Runs[0].Execution.Args, 6)
+	is.Equal("--name", state.Runs[0].Execution.Args[0])
+	is.Equal("Implementing op-1 Implement attached run", state.Runs[0].Execution.Args[1])
+	is.Equal("--prompt", state.Runs[0].Execution.Args[2])
+	is.Contains(state.Runs[0].Execution.Args[3], "You are an agent dispatched by Orpheus.")
+	is.Contains(state.Runs[0].Execution.Args[3], "Run `orpheus agent context` now")
+	is.NotContains(state.Runs[0].Execution.Args[3], "Implement attached run")
+	is.Equal("--literal", state.Runs[0].Execution.Args[4])
+	is.Equal("unchanged", state.Runs[0].Execution.Args[5])
 	is.Equal("orpheus/op-1", state.Target.Branch)
 	is.Equal(worktreePath, state.Target.Worktree)
-	must.NotNil(state.Runs[0].FinishedAt)
+	must.NotNil(state.Runs[0].Execution.FinishedAt)
 	must.Len(state.Events, 3)
 	is.Equal(taskstate.EventWorktreeCreated, state.Events[0].Type)
 	is.Equal(taskstate.EventRunStarted, state.Events[1].Type)
@@ -1477,7 +1540,7 @@ func TestTaskRunReviewFollowUpAllowsDirtyMainTarget(t *testing.T) {
 	must.Len(state.Runs, 2)
 	is.Equal("main", state.Target.Branch)
 	is.Equal(repoPath, state.Target.Worktree)
-	is.Equal("Resolving issues in op-followup Follow up dirty main", state.Runs[1].SessionName)
+	is.Equal("Resolving issues in op-followup Follow up dirty main", state.Runs[1].Execution.SessionName)
 	must.NotNil(state.Runs[1].ReviewFollowUp)
 	is.Equal([]int{0}, state.Runs[1].ReviewFollowUp.FindingIndexes)
 }
@@ -2061,7 +2124,7 @@ func TestTaskRunRecordsFailedAttemptWhenAgentExitsNonZero(t *testing.T) {
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-3.yaml"), &state))
 	must.Len(state.Runs, 1)
 	is.Equal(taskstate.RunStatusFailed, state.Runs[0].Status)
-	must.NotNil(state.Runs[0].FinishedAt)
+	must.NotNil(state.Runs[0].Execution.FinishedAt)
 	must.Len(state.Events, 3)
 	is.Equal(taskstate.EventWorktreeCreated, state.Events[0].Type)
 	is.Equal(taskstate.EventRunStarted, state.Events[1].Type)
@@ -2103,7 +2166,7 @@ func TestTaskRunRecordsStartFailureWhenAgentProcessDoesNotStart(t *testing.T) {
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-4.yaml"), &state))
 	must.Len(state.Runs, 1)
 	is.Equal(taskstate.RunStatusFailed, state.Runs[0].Status)
-	must.NotNil(state.Runs[0].FinishedAt)
+	must.NotNil(state.Runs[0].Execution.FinishedAt)
 	must.Len(state.Events, 3)
 	is.Equal(taskstate.EventWorktreeCreated, state.Events[0].Type)
 	is.Equal(taskstate.EventRunStarted, state.Events[1].Type)
@@ -2835,7 +2898,7 @@ exit 0
 	is.Equal("unit", latest.Steps[0].Name)
 	must.NotNil(latest.Steps[0].ExitCode)
 	is.Equal(0, *latest.Steps[0].ExitCode)
-	is.Equal([]string{"--direct"}, latest.Steps[0].Args)
+	is.Nil(latest.Steps[0].Execution)
 	is.Equal("approval", latest.Steps[1].Name)
 	is.Empty(latest.Findings)
 }
@@ -2897,8 +2960,7 @@ printf 'manual command ran %s\n' "$ORPHEUS_REVIEW_STEP"
 	must.Len(latest.Steps, 1)
 	is.Equal("manual", latest.Steps[0].Kind)
 	is.Equal("inspect", latest.Steps[0].Name)
-	is.Equal(manual, latest.Steps[0].Command)
-	is.Equal([]string{"--hint"}, latest.Steps[0].Args)
+	is.Nil(latest.Steps[0].Execution)
 	must.NotNil(latest.Steps[0].ExitCode)
 	is.Equal(0, *latest.Steps[0].ExitCode)
 }
@@ -3149,6 +3211,7 @@ func TestTaskReviewCheckStartFailureMarksOperationalFailure(t *testing.T) {
 	is.Empty(latest.Findings)
 }
 
+//nolint:funlen // The review-agent CLI fixture is clearer as one end-to-end scenario.
 func TestTaskReviewAgentReviewStepLaunchesReviewerAndPassesWithoutFindings(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -3202,10 +3265,11 @@ func TestTaskReviewAgentReviewStepLaunchesReviewerAndPassesWithoutFindings(t *te
 	must.Len(latest.Steps, 1)
 	is.Equal("agent_review", latest.Steps[0].Kind)
 	is.Equal("ai-review", latest.Steps[0].Name)
-	is.Equal("review-agent", latest.Steps[0].Command)
-	must.Len(latest.Steps[0].Args, 1)
-	is.Contains(latest.Steps[0].Args[0], "Reviewing op-main Ready for task done - ")
-	is.Contains(latest.Steps[0].Args[0], "You are an agent dispatched by Orpheus.")
+	must.NotNil(latest.Steps[0].Execution)
+	is.Equal("review-agent", latest.Steps[0].Execution.Command)
+	must.Len(latest.Steps[0].Execution.Args, 1)
+	is.Contains(latest.Steps[0].Execution.Args[0], "Reviewing op-main Ready for task done - ")
+	is.Contains(latest.Steps[0].Execution.Args[0], "You are an agent dispatched by Orpheus.")
 	is.Empty(latest.Findings)
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
 }
@@ -4907,6 +4971,21 @@ func configureTestGitUser(t *testing.T, repoPath string) {
 	t.Helper()
 	runGit(t, repoPath, "config", "user.name", "Orpheus Test")
 	runGit(t, repoPath, "config", "user.email", "orpheus@example.com")
+}
+
+func clockSequence(times ...time.Time) func() time.Time {
+	index := 0
+	return func() time.Time {
+		if len(times) == 0 {
+			return time.Now().UTC()
+		}
+		if index >= len(times) {
+			return times[len(times)-1]
+		}
+		value := times[index]
+		index++
+		return value
+	}
 }
 
 func taskSyncExpectedTargets(

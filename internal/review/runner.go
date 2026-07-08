@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -124,7 +125,7 @@ func runStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome, err
 func runCheckStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome, error) {
 	output := newStepOutput(opts, true)
 	exitCode, err := runStepCommandWithOutput(opts, step, env, output.stdout(), output.stderr())
-	if recordErr := recordStep(opts, step, exitCode); recordErr != nil {
+	if recordErr := recordStep(opts, step, nil, exitCode); recordErr != nil {
 		output.finishExpanded()
 		return stepOutcome{}, recordErr
 	}
@@ -177,7 +178,7 @@ func runManualStep(opts PipelineRunOptions, step Step, env []string) (stepOutcom
 		if exitCode == nil {
 			return stepOutcome{status: taskstate.ReviewStatusAborted, stop: true}, nil
 		}
-	} else if err := recordStep(opts, step, nil); err != nil {
+	} else if err := recordStep(opts, step, nil, nil); err != nil {
 		return stepOutcome{}, err
 	}
 
@@ -205,7 +206,7 @@ func runConfirmedManualCommand(opts PipelineRunOptions, step Step, env []string)
 	}
 
 	exitCode, err := runStepCommand(opts, step, env)
-	if recordErr := recordStep(opts, step, exitCode); recordErr != nil {
+	if recordErr := recordStep(opts, step, nil, exitCode); recordErr != nil {
 		return nil, recordErr
 	}
 	if err != nil {
@@ -264,10 +265,19 @@ func runAgentReviewStep(opts PipelineRunOptions, step Step, env []string) (stepO
 }
 
 func recordAgentReviewStep(opts PipelineRunOptions, step Step, command agent.CommandSnapshot) error {
-	stepForState := step
-	stepForState.Command = command.Command
-	stepForState.Args = command.Args
-	return recordStep(opts, stepForState, nil)
+	execution := taskstate.AgentExecution{
+		Purpose:     taskstate.AgentExecutionPurposeReview,
+		Status:      taskstate.RunStatusRunning,
+		Agent:       command.AgentName,
+		Profile:     command.AgentName,
+		Harness:     command.Harness,
+		Model:       command.Model,
+		Command:     command.Command,
+		Args:        command.Args,
+		SessionName: opts.SessionName,
+		StartedAt:   time.Now().UTC(),
+	}
+	return recordStep(opts, step, &execution, nil)
 }
 
 func finishAgentReviewStep(opts PipelineRunOptions, step Step, output stepOutput) (stepOutcome, error) {
@@ -326,17 +336,16 @@ func runStepCommandWithOutput(
 	return &exitCode, err
 }
 
-func recordStep(opts PipelineRunOptions, step Step, exitCode *int) error {
+func recordStep(opts PipelineRunOptions, step Step, execution *taskstate.AgentExecution, exitCode *int) error {
 	_, err := opts.Store.RecordReviewStep(
 		opts.RepoID,
 		opts.TaskID,
 		opts.Attempt.Attempt,
 		taskstate.RecordReviewStepOptions{
-			Kind:     step.Kind,
-			Name:     step.Name,
-			Command:  step.Command,
-			Args:     step.Args,
-			ExitCode: exitCode,
+			Kind:      step.Kind,
+			Name:      step.Name,
+			Execution: execution,
+			ExitCode:  exitCode,
 		},
 	)
 	if err != nil {

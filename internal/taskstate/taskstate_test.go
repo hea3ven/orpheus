@@ -45,7 +45,7 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("finish run: %v", err)
 	}
-	if finished.Status != taskstate.RunStatusSucceeded || finished.FinishedAt == nil {
+	if finished.Status != taskstate.RunStatusSucceeded || finished.Execution.FinishedAt == nil {
 		t.Fatalf("finished attempt = %#v, want succeeded with finished_at", finished)
 	}
 
@@ -61,7 +61,7 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 	}
 
 	assertStoreYAMLContains(t, store, "alpha", "op-1",
-		"version: 2",
+		"version: 3",
 		"repo_id: alpha",
 		"task_id: op-1",
 		"target:",
@@ -69,7 +69,10 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 		"worktree: /tmp/op-1",
 		"attempt: 1",
 		"status: succeeded",
+		"execution:",
+		"purpose: implementation",
 		"agent: recorder",
+		"profile: recorder",
 		"session_name: (op-1) Implement task",
 		"worktree_created",
 		"run_started",
@@ -114,24 +117,66 @@ func TestStoreRejectsOldRunLevelTargetSchema(t *testing.T) {
 	}
 }
 
-//nolint:funlen // The migration fixture needs enough YAML to cover target and timestamp rewriting.
-func TestMigrationScriptPromotesRunTarget(t *testing.T) {
-	script := "/tmp/orpheus_migrate_taskstate_targets.py"
+func TestStoreRejectsVersionTwoStateWithMigrationGuidance(t *testing.T) {
+	store := newTestStore(t)
+	path, err := store.Path("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("state path: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
+	oldYAML := strings.Join([]string{
+		"version: 2",
+		"repo_id: alpha",
+		"task_id: op-1",
+		"runs:",
+		"- attempt: 1",
+		"  status: succeeded",
+		"  agent: recorder",
+		"  started_at: 2026-06-03T10:00:00Z",
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(oldYAML), 0o644); err != nil {
+		t.Fatalf("write old state: %v", err)
+	}
+
+	_, err = store.Load("alpha", "op-1")
+	if err == nil {
+		t.Fatal("load v2 state succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "unsupported task state version 2") ||
+		!strings.Contains(err.Error(), "/tmp/orpheus_migrate_taskstate_agent_executions.py") {
+		t.Fatalf("error = %v, want migration guidance", err)
+	}
+}
+
+//nolint:funlen // The migration fixture needs enough YAML to cover execution rewriting.
+func TestMigrationScriptPromotesRunExecution(t *testing.T) {
+	script := "/tmp/orpheus_migrate_taskstate_agent_executions.py"
 	if _, err := os.Stat(script); err != nil {
 		t.Fatalf("migration script %s is unavailable: %v", script, err)
 	}
 
 	path := filepath.Join(t.TempDir(), "op-1.yaml")
 	oldYAML := strings.Join([]string{
-		"version: 1",
+		"version: 2",
 		"repo_id: alpha",
 		"task_id: op-1",
+		"target:",
+		"  branch: orpheus/op-1",
+		"  worktree: /tmp/op-1",
 		"runs:",
 		"- attempt: 1",
 		"  status: succeeded",
-		"  branch: orpheus/op-1",
-		"  worktree: /tmp/op-1",
+		"  agent: recorder",
+		"  command: codex",
+		"  args:",
+		"  - --model",
+		"  - gpt-5",
+		"  session_name: (op-1) Implement task",
 		"  started_at: 2026-06-03T10:00:00Z",
+		"  finished_at: 2026-06-03T10:02:00Z",
 		"events:",
 		"- type: worktree_created",
 		"  at: 2026-06-03T10:00:00Z",
@@ -142,6 +187,19 @@ func TestMigrationScriptPromotesRunTarget(t *testing.T) {
 		"  attempt: 1",
 		"  branch: orpheus/op-1",
 		"  worktree: /tmp/op-1",
+		"reviews:",
+		"- attempt: 1",
+		"  status: passed",
+		"  pipeline: default",
+		"  step: ai-review",
+		"  started_at: 2026-06-03T10:03:00Z",
+		"  finished_at: 2026-06-03T10:04:00Z",
+		"  steps:",
+		"  - kind: agent_review",
+		"    name: ai-review",
+		"    command: codex",
+		"    args:",
+		"    - --model=gpt-5-review",
 		"",
 	}, "\n")
 	if err := os.WriteFile(path, []byte(oldYAML), 0o644); err != nil {
@@ -159,11 +217,17 @@ func TestMigrationScriptPromotesRunTarget(t *testing.T) {
 	}
 	text := string(migrated)
 	for _, want := range []string{
-		"version: 2",
-		"target:",
-		"branch: orpheus/op-1",
-		"worktree: /tmp/op-1",
-		"2026-06-03T10:00:00Z",
+		"version: 3",
+		"execution:",
+		"purpose: implementation",
+		"agent: recorder",
+		"profile: recorder",
+		"harness: codex",
+		"model: gpt-5",
+		"session_name: (op-1) Implement task",
+		"duration_millis: 120000",
+		"model: gpt-5-review",
+		"2026-06-03T10:03:00Z",
 		"type: worktree_created",
 		"type: run_started",
 	} {
@@ -171,8 +235,8 @@ func TestMigrationScriptPromotesRunTarget(t *testing.T) {
 			t.Fatalf("migrated YAML missing %q:\n%s", want, text)
 		}
 	}
-	if strings.Contains(text, "  branch: orpheus/op-1\n  worktree: /tmp/op-1\n  started_at") {
-		t.Fatalf("run-level target was not removed:\n%s", text)
+	if strings.Contains(text, "  agent: recorder\n  command: codex") {
+		t.Fatalf("old run-level execution fields were not removed:\n%s", text)
 	}
 	if strings.Contains(text, "2026-06-03 10:00:00") {
 		t.Fatalf("timestamp was not preserved as RFC3339:\n%s", text)
@@ -448,10 +512,15 @@ func TestStoreRejectsUnsafeReviewStepArgsAndPreservesState(t *testing.T) {
 	}
 
 	_, err = store.RecordReviewStep("alpha", "op-1", review.Attempt, taskstate.RecordReviewStepOptions{
-		Kind:    "agent_review",
-		Name:    "ai-review",
-		Command: "review-agent",
-		Args:    []string{" - You are an agent dispatched by Orpheus.\n\nRun `orpheus agent context` now.\n"},
+		Kind: "agent_review",
+		Name: "ai-review",
+		Execution: &taskstate.AgentExecution{
+			Purpose:   taskstate.AgentExecutionPurposeReview,
+			Status:    taskstate.RunStatusRunning,
+			Command:   "review-agent",
+			Args:      []string{" - You are an agent dispatched by Orpheus.\n\nRun `orpheus agent context` now.\n"},
+			StartedAt: time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC),
+		},
 	})
 	if err == nil {
 		t.Fatal("record review step with unsafe args succeeded, want error")
@@ -826,7 +895,7 @@ func completeAlphaRun(
 func assertInitialCompletionRecorded(t *testing.T, completed taskstate.RunAttempt) {
 	t.Helper()
 
-	if completed.Status != taskstate.RunStatusRunning || completed.FinishedAt != nil {
+	if completed.Status != taskstate.RunStatusRunning || completed.Execution.FinishedAt != nil {
 		t.Fatalf("completed run = %#v, want still-running completion without finished_at", completed)
 	}
 	if completed.Completion == nil {
@@ -847,7 +916,7 @@ func finishAlphaRunSucceeded(t *testing.T, store taskstate.Store, attempt int) {
 	if err != nil {
 		t.Fatalf("finish run: %v", err)
 	}
-	if finished.Status != taskstate.RunStatusSucceeded || finished.FinishedAt == nil {
+	if finished.Status != taskstate.RunStatusSucceeded || finished.Execution.FinishedAt == nil {
 		t.Fatalf("finished run = %#v, want succeeded with finished_at", finished)
 	}
 }
