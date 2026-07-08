@@ -77,7 +77,7 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 	must.Len(state.Runs, 1)
 	latest := state.Runs[0]
 	is.Equal(taskstate.RunStatusSucceeded, latest.Status)
-	must.NotNil(latest.FinishedAt)
+	must.NotNil(latest.Execution.FinishedAt)
 	must.NotNil(latest.Completion)
 	is.Equal("Implement worktree completion flow", latest.Completion.Summary)
 	is.Equal("Created a worktree validation change.", latest.Completion.Description)
@@ -513,7 +513,7 @@ func TestMainCompletionFlowEndToEnd(t *testing.T) {
 	must.Len(state.Runs, 1)
 	latest := state.Runs[0]
 	is.Equal(taskstate.RunStatusSucceeded, latest.Status)
-	must.NotNil(latest.FinishedAt)
+	must.NotNil(latest.Execution.FinishedAt)
 	must.NotNil(latest.Completion)
 	is.Equal("Implement main completion flow", latest.Completion.Summary)
 	is.Equal("Created a main-mode validation change.", latest.Completion.Description)

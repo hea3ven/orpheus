@@ -7,12 +7,14 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/beads"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/registry"
+	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -50,7 +52,7 @@ func newRepoCommand(opts *rootOptions) *cobra.Command {
 func newRepoConfigCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
-		Short: "Inspect or update repository publication policy",
+		Short: "Inspect or update repository configuration",
 		Args:  cobra.NoArgs,
 	}
 	cmd.AddCommand(newRepoConfigGetCommand(), newRepoConfigSetCommand(opts))
@@ -61,15 +63,25 @@ const (
 	repoConfigSummaryGuidance = "summary-guidance"
 	repoConfigSummaryStyle    = "summary-style"
 	repoConfigTitleTemplate   = "title-template"
+
+	repoConfigReviewPipeline            = "review-pipeline"
+	repoConfigReviewPipelineAliasPrefix = "review-pipeline-alias."
 )
 
 func newRepoConfigGetCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "get <repo-id-name-or-prefix> [config-name]",
-		Short: "Show repository publication policy",
-		Args:  cobra.RangeArgs(1, 2),
+		Short: "Show repository configuration",
+		Long: "Show repository configuration.\n\n" +
+			"Supported config names are summary-guidance, summary-style, title-template, " +
+			"review-pipeline, and review-pipeline-alias.<alias>.",
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(command *cobra.Command, args []string) error {
-			registryCtx, err := loadRegistryContext()
+			store, paths, err := newRegistryStoreWithPathsFromEnvironment()
+			if err != nil {
+				return err
+			}
+			registryCtx, err := loadRegistryContextFromStore(store)
 			if err != nil {
 				return err
 			}
@@ -84,7 +96,11 @@ func newRepoConfigGetCommand() *cobra.Command {
 					return err
 				}
 			}
-			return renderRepoConfig(command, repo, configName)
+			reviewConfig, err := loadRepoConfigReviewConfig(paths, configName)
+			if err != nil {
+				return err
+			}
+			return renderRepoConfig(command, repo, configName, reviewConfig)
 		},
 	}
 }
@@ -92,9 +108,11 @@ func newRepoConfigGetCommand() *cobra.Command {
 func newRepoConfigSetCommand(opts *rootOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <repo-id-name-or-prefix> <config-name> <config-value>",
-		Short: "Set or clear repository publication policy",
-		Long:  "Set one repository publication policy value. Pass an empty config value to clear it.",
-		Args:  cobra.ExactArgs(3),
+		Short: "Set or clear repository configuration",
+		Long: "Set one repository configuration value. Pass an empty config value to clear it.\n\n" +
+			"review-pipeline and review-pipeline-alias.<alias> values must name a configured " +
+			"global reviews.pipelines entry. Setting an alias to an empty value deletes it.",
+		Args: cobra.ExactArgs(3),
 		RunE: func(command *cobra.Command, args []string) error {
 			return runRepoConfigSet(command, opts, args[0], args[1], args[2])
 		},
@@ -127,6 +145,16 @@ func runRepoConfigSet(command *cobra.Command, opts *rootOptions, token string, c
 		if err != nil {
 			return err
 		}
+		var reviewConfig review.Config
+		if isReviewPipelineConfigName(configName) {
+			reviewConfig, err = review.LoadConfig(paths)
+			if err != nil {
+				return err
+			}
+			if err := validateRepoReviewConfigValue(reviewConfig, configName, value); err != nil {
+				return err
+			}
+		}
 		repo, err := registryCtx.Registry.Resolve(token)
 		if err != nil {
 			return err
@@ -138,23 +166,34 @@ func runRepoConfigSet(command *cobra.Command, opts *rootOptions, token string, c
 		if err := registryCtx.Store.Save(registryCtx.Registry); err != nil {
 			return err
 		}
-		logger.DebugContext(command.Context(), "saved repository publication policy", slog.String("repo_id", updatedRepo.ID))
-		return renderRepoConfig(command, updatedRepo, configName)
+		logger.DebugContext(command.Context(), "saved repository configuration", slog.String("repo_id", updatedRepo.ID))
+		return renderRepoConfig(command, updatedRepo, configName, reviewConfig)
 	})
 }
 
 func normalizeRepoConfigName(value string) (string, error) {
 	name := strings.TrimSpace(value)
 	switch name {
-	case repoConfigSummaryGuidance, repoConfigSummaryStyle, repoConfigTitleTemplate:
+	case repoConfigSummaryGuidance,
+		repoConfigSummaryStyle,
+		repoConfigTitleTemplate,
+		repoConfigReviewPipeline:
 		return name, nil
 	default:
+		if alias, ok := repoConfigAliasName(name); ok {
+			if alias == "" {
+				return "", fmt.Errorf("unknown repo config %q; review pipeline alias name is required", value)
+			}
+			return repoConfigReviewPipelineAliasPrefix + alias, nil
+		}
 		return "", fmt.Errorf(
-			"unknown repo config %q; expected %q, %q, or %q",
+			"unknown repo config %q; expected %q, %q, %q, %q, or %q<alias>",
 			value,
 			repoConfigSummaryGuidance,
 			repoConfigSummaryStyle,
 			repoConfigTitleTemplate,
+			repoConfigReviewPipeline,
+			repoConfigReviewPipelineAliasPrefix,
 		)
 	}
 }
@@ -173,6 +212,39 @@ func validateRepoConfigValue(name string, value string) error {
 	}
 }
 
+func loadRepoConfigReviewConfig(paths state.Paths, name string) (review.Config, error) {
+	if name != "" && !isReviewPipelineConfigName(name) {
+		return review.Config{}, nil
+	}
+	return review.LoadConfig(paths)
+}
+
+func isReviewPipelineConfigName(name string) bool {
+	if name == repoConfigReviewPipeline {
+		return true
+	}
+	_, ok := repoConfigAliasName(name)
+	return ok
+}
+
+func validateRepoReviewConfigValue(config review.Config, name string, value string) error {
+	if !isReviewPipelineConfigName(name) {
+		return nil
+	}
+	if value == "" {
+		return nil
+	}
+	if config.HasPipeline(value) {
+		return nil
+	}
+	return fmt.Errorf(
+		"repo config %s target %q does not match a configured global review pipeline; configured pipelines: %s",
+		name,
+		value,
+		strings.Join(config.PipelineNames(), ", "),
+	)
+}
+
 func setRepoConfigValue(repo registry.Repo, name string, value string) registry.Repo {
 	switch name {
 	case repoConfigSummaryGuidance:
@@ -181,8 +253,37 @@ func setRepoConfigValue(repo registry.Repo, name string, value string) registry.
 		repo.SummaryGuidanceStyle = value
 	case repoConfigTitleTemplate:
 		repo.TitleTemplate = value
+	case repoConfigReviewPipeline:
+		repo.ReviewPipeline = value
+	default:
+		if alias, ok := repoConfigAliasName(name); ok {
+			repo.ReviewPipelineAliases = setReviewPipelineAlias(repo.ReviewPipelineAliases, alias, value)
+		}
 	}
 	return repo
+}
+
+func setReviewPipelineAlias(aliases map[string]string, alias string, value string) map[string]string {
+	updated := make(map[string]string, len(aliases)+1)
+	for name, target := range aliases {
+		updated[name] = target
+	}
+	if value == "" {
+		delete(updated, alias)
+		if len(updated) == 0 {
+			return nil
+		}
+		return updated
+	}
+	updated[alias] = value
+	return updated
+}
+
+func repoConfigAliasName(name string) (string, bool) {
+	if !strings.HasPrefix(name, repoConfigReviewPipelineAliasPrefix) {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimPrefix(name, repoConfigReviewPipelineAliasPrefix)), true
 }
 
 func replaceRepo(reg *registry.Registry, updated registry.Repo) error {
@@ -195,22 +296,48 @@ func replaceRepo(reg *registry.Registry, updated registry.Repo) error {
 	return fmt.Errorf("repo %q is not registered", updated.ID)
 }
 
-func renderRepoConfig(command *cobra.Command, repo registry.Repo, configName string) error {
+func renderRepoConfig(command *cobra.Command, repo registry.Repo, configName string, reviewConfig review.Config) error {
 	policy := repo.EffectivePublicationPolicy()
 	rows := [][]string{
-		{"summary guidance", displayConfigValue(repo.SummaryGuidance), effectiveSummaryGuidance(policy)},
-		{"summary guidance style", displayConfigValue(repo.SummaryGuidanceStyle), effectiveSummaryGuidanceStyle(policy)},
-		{"publication title template", displayConfigValue(repo.TitleTemplate), effectiveTitleTemplate(policy.TitleTemplate)},
+		{repoConfigSummaryGuidance, displayConfigValue(repo.SummaryGuidance), effectiveSummaryGuidance(policy)},
+		{repoConfigSummaryStyle, displayConfigValue(repo.SummaryGuidanceStyle), effectiveSummaryGuidanceStyle(policy)},
+		{repoConfigTitleTemplate, displayConfigValue(repo.TitleTemplate), effectiveTitleTemplate(policy.TitleTemplate)},
+		{repoConfigReviewPipeline, displayConfigValue(repo.ReviewPipeline), effectiveReviewPipeline(repo, reviewConfig)},
 	}
+	rows = append(rows, reviewPipelineAliasRows(repo)...)
 	switch configName {
 	case repoConfigSummaryGuidance:
 		rows = rows[:1]
 	case repoConfigSummaryStyle:
 		rows = rows[1:2]
 	case repoConfigTitleTemplate:
-		rows = rows[2:]
+		rows = rows[2:3]
+	case repoConfigReviewPipeline:
+		rows = rows[3:4]
+	default:
+		if alias, ok := repoConfigAliasName(configName); ok {
+			rows = [][]string{reviewPipelineAliasRow(alias, repo.ReviewPipelineAliases[alias])}
+		}
 	}
-	return renderTable(command.OutOrStdout(), []string{"POLICY", "STORED", "EFFECTIVE"}, rows)
+	return renderTable(command.OutOrStdout(), []string{"CONFIG", "STORED", "EFFECTIVE"}, rows)
+}
+
+func reviewPipelineAliasRows(repo registry.Repo) [][]string {
+	aliases := make([]string, 0, len(repo.ReviewPipelineAliases))
+	for alias := range repo.ReviewPipelineAliases {
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+
+	rows := make([][]string, 0, len(aliases))
+	for _, alias := range aliases {
+		rows = append(rows, reviewPipelineAliasRow(alias, repo.ReviewPipelineAliases[alias]))
+	}
+	return rows
+}
+
+func reviewPipelineAliasRow(alias string, target string) []string {
+	return []string{repoConfigReviewPipelineAliasPrefix + alias, displayConfigValue(target), displayConfigValue(target)}
 }
 
 func displayConfigValue(value string) string {
@@ -239,6 +366,14 @@ func effectiveSummaryGuidanceStyle(policy registry.PublicationPolicy) string {
 		return "overridden by custom guidance"
 	}
 	return policy.SummaryGuidanceStyle
+}
+
+func effectiveReviewPipeline(repo registry.Repo, config review.Config) string {
+	pipeline, err := review.ResolvePipeline(config, "", repo.ReviewPipeline)
+	if err != nil {
+		return "invalid: " + err.Error()
+	}
+	return pipeline.Name
 }
 
 func newRepoAddCommand(opts *rootOptions) *cobra.Command {

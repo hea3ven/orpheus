@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -46,6 +47,7 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 		newTaskListCommand(opts),
 		newTaskReadyCommand(opts),
 		newTaskShowCommand(opts),
+		newTaskStatsCommand(opts),
 		newTaskDirCommand(opts),
 		newTaskRunCommand(opts),
 		newTaskReviewCommand(opts),
@@ -109,6 +111,18 @@ func newTaskShowCommand(opts *rootOptions) *cobra.Command {
 	return cmd
 }
 
+func newTaskStatsCommand(opts *rootOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "stats <task-id>",
+		Short: "Show local implementation execution stats for a task",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			return runTaskStats(command, opts, args[0])
+		},
+	}
+	return cmd
+}
+
 func newTaskDirCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "dir <task-id>",
@@ -133,7 +147,11 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 			"records the attached run attempt, then runs the configured agent there. " +
 			"Use --main to run explicitly from the registered repo root on the " +
 			"registered default branch for local/manual review workflows. " +
-			"Use --repo-root to run from the registered repo root on the task branch.",
+			"Use --repo-root to run from the registered repo root on the task branch.\n\n" +
+			"When the latest review is blocked by open current-task findings, task run " +
+			"automatically starts a review follow-up run and targets those findings. " +
+			"After the agent records completion with agent done, run task review to " +
+			"approve, block again, or publish/finalize.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			return runTaskRun(command, opts, args[0], agentName, mainMode, repoRootMode)
@@ -152,11 +170,16 @@ func newTaskDoneCommand(opts *rootOptions) *cobra.Command {
 		Use:   "done [<task-id>]",
 		Short: "Finalize a reviewed task",
 		Long: "Finalize a reviewed task.\n\n" +
+			"task done is not the normal approval command after agent done. It refuses " +
+			"publication until the latest local review attempt has passed; run task review " +
+			"first to record approval.\n\n" +
 			"On the registered default branch, commits reviewed repo-root changes, pushes the " +
 			"default branch, and closes the backend task. On a repo-root task branch, publishes " +
 			"the feature branch as a pull request. Without a task id, the command infers one " +
 			"ready task only when the current directory is exactly a registered repo root or " +
-			"deterministic task worktree and the task owns the current branch.",
+			"deterministic task worktree and the task owns the current branch.\n\n" +
+			"Use task done to retry publication or finalization after a review has passed " +
+			"and the previous publication attempt failed.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			taskID := ""
@@ -175,12 +198,18 @@ func newTaskReviewCommand(opts *rootOptions) *cobra.Command {
 	var pipelineName string
 	cmd := &cobra.Command{
 		Use:   "review <task-id>",
-		Short: "Run the default local review gate for completed task work",
+		Short: "Run the local review pipeline for completed task work",
 		Long: "Run the selected local review gate for completed task work.\n\n" +
 			"Pipeline selection uses --pipeline, then the repo registry review_pipeline, " +
 			"then reviews.default_pipeline, then the built-in manual local-review step. " +
-			"Approval records a passed review attempt and then finalizes through the same " +
-			"path as task done.",
+			"--pipeline accepts configured global pipeline names and repo-local aliases " +
+			"from review-pipeline-alias.<alias>. Configured pipelines may include check, " +
+			"manual, and agent_review steps. Approval records a passed review attempt and " +
+			"then finalizes through the same path as task done.\n\n" +
+			"Blocking findings leave the task ready for task run follow-up. Operational " +
+			"review failures require fixing the review command, environment, or process " +
+			"and rerunning task review. Use task review show to inspect persisted findings " +
+			"and created follow-up tasks.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			return runTaskReview(command, opts, args[0], pipelineName)
@@ -337,6 +366,36 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 	}, taskState.Events)
 }
 
+func runTaskStats(command *cobra.Command, opts *rootOptions, taskID string) error {
+	logger := opts.log().With(
+		slog.String("component", "cli"),
+		slog.String("operation", "task_stats"),
+	)
+	logger.DebugContext(command.Context(), "loading registered repos for task stats")
+
+	resolvedCtx, err := resolveTaskShowContext(command, taskID)
+	if err != nil {
+		return err
+	}
+	paths, err := state.ResolveFromEnvironment()
+	if err != nil {
+		return err
+	}
+	taskState, err := taskstate.NewStore(paths).Load(
+		resolvedCtx.Resolved.Source.Repository.ID,
+		resolvedCtx.Resolved.TaskID,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"task stats %s: load local task-state for repo %s: %w",
+			resolvedCtx.Resolved.TaskID,
+			resolvedCtx.Resolved.Source.Repository.ID,
+			err,
+		)
+	}
+	return renderTaskStats(command.OutOrStdout(), taskState)
+}
+
 func runTaskDir(command *cobra.Command, opts *rootOptions, taskID string) error {
 	logger := opts.log().With(
 		slog.String("component", "cli"),
@@ -420,10 +479,7 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID, agentName str
 		return err
 	}
 
-	if err := dispatch.service.Finish(repo.ID, resolved.TaskID, dispatch.start.Attempt.Attempt); err != nil {
-		return fmt.Errorf("task run %s: record run finish: %w", resolved.TaskID, err)
-	}
-	return nil
+	return finishTaskRun(command, dispatch.service, repo.ID, resolved.TaskID, dispatch.start)
 }
 
 func validateTaskRunExternalRef(
@@ -483,6 +539,8 @@ func startTaskRunDispatch(
 				AgentName: commandSnapshot.AgentName,
 				Command:   commandSnapshot.Command,
 				Args:      commandSnapshot.Args,
+				Harness:   commandSnapshot.Harness,
+				Model:     commandSnapshot.Model,
 			}, nil
 		},
 		ResolveFollowUpCommand: func(commandContext workflow.DispatchCommandContext) (workflow.DispatchCommand, error) {
@@ -495,6 +553,8 @@ func startTaskRunDispatch(
 				AgentName: commandSnapshot.AgentName,
 				Command:   commandSnapshot.Command,
 				Args:      commandSnapshot.Args,
+				Harness:   commandSnapshot.Harness,
+				Model:     commandSnapshot.Model,
 			}, nil
 		},
 		MainMode:     mainMode,
@@ -568,6 +628,63 @@ func launchTaskRunAgent(
 		return fmt.Errorf("task run %s: %w; additionally failed to record run failure: %w", taskID, err, recordErr)
 	}
 	return fmt.Errorf("task run %s: %w", taskID, err)
+}
+
+func recordTaskRunUsage(
+	command *cobra.Command,
+	service workflow.DispatchService,
+	repoID string,
+	taskID string,
+	start workflow.DispatchStartResult,
+) error {
+	usageOpts := taskRunUsageOptions(command, start)
+	_, err := service.RunStore.RecordRunUsage(repoID, taskID, start.Attempt.Attempt, usageOpts)
+	return err
+}
+
+func finishTaskRun(
+	command *cobra.Command,
+	service workflow.DispatchService,
+	repoID string,
+	taskID string,
+	start workflow.DispatchStartResult,
+) error {
+	usageErr := recordTaskRunUsage(command, service, repoID, taskID, start)
+	if err := service.Finish(repoID, taskID, start.Attempt.Attempt); err != nil {
+		return fmt.Errorf("task run %s: record run finish: %w", taskID, err)
+	}
+	if usageErr != nil {
+		return fmt.Errorf("task run %s: record run usage: %w", taskID, usageErr)
+	}
+	return nil
+}
+
+func taskRunUsageOptions(command *cobra.Command, start workflow.DispatchStartResult) taskstate.RecordRunUsageOptions {
+	if start.Attempt.Execution.Harness != "codex" {
+		return taskstate.RecordRunUsageOptions{
+			UsageCapture: taskstate.AgentUsageCapture{
+				Status: taskstate.UsageCaptureUnknown,
+				Reason: "usage capture is not supported for harness " +
+					formatTaskStatsField(start.Attempt.Execution.Harness),
+			},
+		}
+	}
+	return agent.CaptureCodexUsage(agent.CodexUsageCaptureOptions{
+		ExecutionDir: start.ExecutionDir,
+		StartedAt:    start.Attempt.Execution.StartedAt,
+		FinishedAt:   time.Now().UTC(),
+		Env:          usageCaptureEnvironment(),
+	})
+}
+
+func usageCaptureEnvironment() map[string]string {
+	env := map[string]string{}
+	for _, key := range []string{"CODEX_HOME", "HOME"} {
+		if value, ok := os.LookupEnv(key); ok {
+			env[key] = value
+		}
+	}
+	return env
 }
 
 func runTaskReview(command *cobra.Command, opts *rootOptions, taskID string, pipelineName string) error {
@@ -884,7 +1001,34 @@ func resolveTaskReviewPipeline(
 	if err != nil {
 		return review.Pipeline{}, err
 	}
+	if name := strings.TrimSpace(pipelineName); name != "" {
+		if target, ok := repo.ReviewPipelineAliases[name]; ok {
+			pipeline, err := review.ResolvePipeline(config, target, "")
+			if err != nil {
+				return review.Pipeline{}, fmt.Errorf("CLI --pipeline alias %q targets %q: %w", name, target, err)
+			}
+			return pipeline, nil
+		}
+
+		pipeline, err := review.ResolvePipeline(config, name, "")
+		if err != nil {
+			return review.Pipeline{}, appendRepoReviewPipelineAliases(err, repo)
+		}
+		return pipeline, nil
+	}
 	return review.ResolvePipeline(config, pipelineName, repo.ReviewPipeline)
+}
+
+func appendRepoReviewPipelineAliases(err error, repo taskmodel.Repository) error {
+	aliases := make([]string, 0, len(repo.ReviewPipelineAliases))
+	for alias, target := range repo.ReviewPipelineAliases {
+		aliases = append(aliases, fmt.Sprintf("%s=%s", alias, target))
+	}
+	sort.Strings(aliases)
+	if len(aliases) == 0 {
+		return err
+	}
+	return fmt.Errorf("%w; configured repo aliases: %s", err, strings.Join(aliases, ", "))
 }
 
 func finalizeApprovedTaskReview(
@@ -2094,18 +2238,30 @@ func taskRepositorySources(store registry.Store, reg registry.Registry) ([]taskm
 		}
 		sources = append(sources, taskmodel.RepositorySource{
 			Repository: taskmodel.Repository{
-				ID:             repo.ID,
-				Name:           repo.Name,
-				TaskIDPrefix:   repo.BeadsPrefix,
-				Path:           repo.Path,
-				DefaultBranch:  repo.DefaultBranch,
-				TitleTemplate:  repo.TitleTemplate,
-				ReviewPipeline: repo.ReviewPipeline,
+				ID:                    repo.ID,
+				Name:                  repo.Name,
+				TaskIDPrefix:          repo.BeadsPrefix,
+				Path:                  repo.Path,
+				DefaultBranch:         repo.DefaultBranch,
+				TitleTemplate:         repo.TitleTemplate,
+				ReviewPipeline:        repo.ReviewPipeline,
+				ReviewPipelineAliases: cloneStringMap(repo.ReviewPipelineAliases),
 			},
 			BackendDir: beadsDir,
 		})
 	}
 	return sources, nil
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	clone := make(map[string]string, len(values))
+	for key, value := range values {
+		clone[key] = value
+	}
+	return clone
 }
 
 func renderTaskDetails(
@@ -2241,6 +2397,129 @@ func renderTaskOrpheusMetadata(output interface{ Write([]byte) (int, error) }, m
 		}
 	}
 	return nil
+}
+
+func renderTaskStats(output interface{ Write([]byte) (int, error) }, state taskstate.TaskState) error {
+	rows := make([][]string, 0, len(state.Runs))
+	for _, run := range state.Runs {
+		rows = append(rows, taskStatsRow(run))
+	}
+	return renderTable(
+		output,
+		[]string{"ATTEMPT", "PROFILE", "HARNESS", "MODEL", "COMMAND", "STARTED", "FINISHED", "DURATION", "STATUS", "SESSION", "USAGE"},
+		rows,
+	)
+}
+
+func taskStatsRow(run taskstate.RunAttempt) []string {
+	execution := run.Execution
+	return []string{
+		strconv.Itoa(run.Attempt),
+		formatTaskStatsField(firstNonEmpty(execution.Profile, execution.Agent)),
+		formatTaskStatsField(execution.Harness),
+		formatTaskStatsField(execution.Model),
+		formatTaskStatsCommand(execution),
+		formatTaskStatsTime(execution.StartedAt),
+		formatTaskStatsTimePointer(execution.FinishedAt),
+		formatTaskStatsDuration(execution),
+		string(run.Status),
+		formatTaskStatsSession(execution.Session),
+		formatTaskStatsUsage(execution),
+	}
+}
+
+func formatTaskStatsCommand(execution taskstate.AgentExecution) string {
+	if strings.TrimSpace(execution.Command) == "" {
+		return "-"
+	}
+	return commandLineForStats(execution.Command, execution.Args)
+}
+
+func commandLineForStats(command string, args []string) string {
+	parts := make([]string, 0, len(args)+1)
+	parts = append(parts, strconv.Quote(command))
+	for _, arg := range args {
+		parts = append(parts, strconv.Quote(arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+func formatTaskStatsTime(value time.Time) string {
+	if value.IsZero() {
+		return "-"
+	}
+	return value.UTC().Format(time.RFC3339)
+}
+
+func formatTaskStatsTimePointer(value *time.Time) string {
+	if value == nil {
+		return "-"
+	}
+	return formatTaskStatsTime(*value)
+}
+
+func formatTaskStatsDuration(execution taskstate.AgentExecution) string {
+	if execution.DurationMillis > 0 {
+		return (time.Duration(execution.DurationMillis) * time.Millisecond).String()
+	}
+	if execution.FinishedAt == nil || execution.StartedAt.IsZero() {
+		return "-"
+	}
+	duration := execution.FinishedAt.Sub(execution.StartedAt)
+	if duration < 0 {
+		return "-"
+	}
+	return duration.String()
+}
+
+func formatTaskStatsSession(session *taskstate.AgentSession) string {
+	if session == nil {
+		return "-"
+	}
+	return formatTaskStatsField(firstNonEmpty(session.ID, session.LogPath))
+}
+
+func formatTaskStatsUsage(execution taskstate.AgentExecution) string {
+	if execution.Usage != nil {
+		return fmt.Sprintf(
+			"total=%d input=%d cached_input=%d output=%d reasoning_output=%d",
+			execution.Usage.TotalTokens,
+			execution.Usage.InputTokens,
+			execution.Usage.CachedInputTokens,
+			execution.Usage.OutputTokens,
+			execution.Usage.ReasoningOutputTokens,
+		)
+	}
+	capture := execution.UsageCapture
+	status := string(capture.Status)
+	if status == "" {
+		status = string(taskstate.UsageCaptureUnknown)
+	}
+	reason := strings.TrimSpace(capture.Reason)
+	if reason == "" {
+		reason = "usage_not_recorded"
+	}
+	if capture.CandidateCount > 0 {
+		return fmt.Sprintf("%s: %s (candidates=%d)", status, reason, capture.CandidateCount)
+	}
+	return fmt.Sprintf("%s: %s", status, reason)
+}
+
+func formatTaskStatsField(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "-"
+	}
+	return value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func renderKeyValue(output interface{ Write([]byte) (int, error) }, label string, value string) error {
