@@ -224,6 +224,17 @@ func usageFromCodexSession(session codexSessionCandidate) taskstate.RecordRunUsa
 	return result
 }
 
+// CodexUsageCaptureEnvironment returns environment values needed to find Codex session logs.
+func CodexUsageCaptureEnvironment() map[string]string {
+	env := map[string]string{}
+	for _, key := range []string{"CODEX_HOME", "HOME"} {
+		if value, ok := os.LookupEnv(key); ok {
+			env[key] = value
+		}
+	}
+	return env
+}
+
 func unknownUsage(reason string, candidateCount int) taskstate.RecordRunUsageOptions {
 	return taskstate.RecordRunUsageOptions{
 		UsageCapture: taskstate.AgentUsageCapture{

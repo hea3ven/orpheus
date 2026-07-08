@@ -245,26 +245,46 @@ func runAgentReviewStep(opts PipelineRunOptions, step Step, env []string) (stepO
 		return stepOutcome{}, fmt.Errorf("task review %s: resolve agent_review step %q: %w", opts.TaskID, step.Name, err)
 	}
 
-	if err := recordAgentReviewStep(opts, step, command); err != nil {
+	execution, err := recordAgentReviewStep(opts, step, command)
+	if err != nil {
 		return stepOutcome{}, err
 	}
 
 	output := newStepOutput(opts, !profile.Interactive)
-	if err := opts.AgentLauncher.Run(opts.Context, command, agent.LaunchOptions{
+	runErr := opts.AgentLauncher.Run(opts.Context, command, agent.LaunchOptions{
 		Dir:    opts.Workdir,
 		Env:    env,
 		Stdin:  opts.Stdin,
 		Stdout: output.stdout(),
 		Stderr: output.stderr(),
-	}); err != nil {
+	})
+	finishedAt := time.Now().UTC()
+	status := taskstate.RunStatusSucceeded
+	if runErr != nil {
+		status = taskstate.RunStatusFailed
+	}
+	if err := finishAgentReviewExecution(opts, step, command, execution, status, finishedAt, runErr); err != nil {
 		output.finishExpanded()
-		return stepOutcome{}, fmt.Errorf("task review %s: run agent_review step %q: %w", opts.TaskID, step.Name, err)
+		if runErr != nil {
+			return stepOutcome{}, fmt.Errorf(
+				"task review %s: run agent_review step %q: %w; additionally failed to record agent execution: %w",
+				opts.TaskID,
+				step.Name,
+				runErr,
+				err,
+			)
+		}
+		return stepOutcome{}, err
+	}
+	if runErr != nil {
+		output.finishExpanded()
+		return stepOutcome{}, fmt.Errorf("task review %s: run agent_review step %q: %w", opts.TaskID, step.Name, runErr)
 	}
 
 	return finishAgentReviewStep(opts, step, output)
 }
 
-func recordAgentReviewStep(opts PipelineRunOptions, step Step, command agent.CommandSnapshot) error {
+func recordAgentReviewStep(opts PipelineRunOptions, step Step, command agent.CommandSnapshot) (taskstate.AgentExecution, error) {
 	execution := taskstate.AgentExecution{
 		Purpose:     taskstate.AgentExecutionPurposeReview,
 		Status:      taskstate.RunStatusRunning,
@@ -277,7 +297,77 @@ func recordAgentReviewStep(opts PipelineRunOptions, step Step, command agent.Com
 		SessionName: opts.SessionName,
 		StartedAt:   time.Now().UTC(),
 	}
-	return recordStep(opts, step, &execution, nil)
+	return execution, recordStep(opts, step, &execution, nil)
+}
+
+func finishAgentReviewExecution(
+	opts PipelineRunOptions,
+	step Step,
+	command agent.CommandSnapshot,
+	execution taskstate.AgentExecution,
+	status taskstate.RunStatus,
+	finishedAt time.Time,
+	runErr error,
+) error {
+	usageOpts := agentReviewUsageOptions(command, opts.Workdir, execution, finishedAt, runErr)
+	_, err := opts.Store.FinishReviewStepExecution(
+		opts.RepoID,
+		opts.TaskID,
+		opts.Attempt.Attempt,
+		step.Name,
+		taskstate.FinishReviewStepExecutionOptions{
+			Status:       status,
+			FinishedAt:   finishedAt,
+			Session:      usageOpts.Session,
+			Usage:        usageOpts.Usage,
+			UsageCapture: usageOpts.UsageCapture,
+			Model:        usageOpts.Model,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("task review %s: record agent_review step %q execution: %w", opts.TaskID, step.Name, err)
+	}
+	return nil
+}
+
+func agentReviewUsageOptions(
+	command agent.CommandSnapshot,
+	workdir string,
+	execution taskstate.AgentExecution,
+	finishedAt time.Time,
+	runErr error,
+) taskstate.RecordRunUsageOptions {
+	if agent.IsStartError(runErr) {
+		return taskstate.RecordRunUsageOptions{
+			UsageCapture: taskstate.AgentUsageCapture{
+				Status: taskstate.UsageCaptureUnknown,
+				Reason: "agent process failed before usage capture",
+			},
+		}
+	}
+	if command.Harness != "codex" {
+		return taskstate.RecordRunUsageOptions{
+			UsageCapture: taskstate.AgentUsageCapture{
+				Status: taskstate.UsageCaptureUnknown,
+				Reason: "usage capture is not supported for harness " +
+					formatUsageHarness(command.Harness),
+			},
+		}
+	}
+	return agent.CaptureCodexUsage(agent.CodexUsageCaptureOptions{
+		ExecutionDir: workdir,
+		StartedAt:    execution.StartedAt,
+		FinishedAt:   finishedAt,
+		Env:          agent.CodexUsageCaptureEnvironment(),
+	})
+}
+
+func formatUsageHarness(harness string) string {
+	harness = strings.TrimSpace(harness)
+	if harness == "" {
+		return "-"
+	}
+	return harness
 }
 
 func finishAgentReviewStep(opts PipelineRunOptions, step Step, output stepOutput) (stepOutcome, error) {

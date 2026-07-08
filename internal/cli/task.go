@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -673,18 +672,8 @@ func taskRunUsageOptions(command *cobra.Command, start workflow.DispatchStartRes
 		ExecutionDir: start.ExecutionDir,
 		StartedAt:    start.Attempt.Execution.StartedAt,
 		FinishedAt:   time.Now().UTC(),
-		Env:          usageCaptureEnvironment(),
+		Env:          agent.CodexUsageCaptureEnvironment(),
 	})
-}
-
-func usageCaptureEnvironment() map[string]string {
-	env := map[string]string{}
-	for _, key := range []string{"CODEX_HOME", "HOME"} {
-		if value, ok := os.LookupEnv(key); ok {
-			env[key] = value
-		}
-	}
-	return env
 }
 
 func runTaskReview(command *cobra.Command, opts *rootOptions, taskID string, pipelineName string) error {
@@ -2400,21 +2389,97 @@ func renderTaskOrpheusMetadata(output interface{ Write([]byte) (int, error) }, m
 }
 
 func renderTaskStats(output interface{ Write([]byte) (int, error) }, state taskstate.TaskState) error {
-	rows := make([][]string, 0, len(state.Runs))
-	for _, run := range state.Runs {
-		rows = append(rows, taskStatsRow(run))
+	records := taskStatsExecutionRecords(state)
+	rows := make([][]string, 0, len(records))
+	for _, record := range records {
+		rows = append(rows, taskStatsRow(record))
+	}
+	if _, err := fmt.Fprintln(output, "Executions"); err != nil {
+		return err
+	}
+	if err := renderTable(
+		output,
+		[]string{
+			"TYPE",
+			"ATTEMPT",
+			"STEP",
+			"PROFILE",
+			"HARNESS",
+			"MODEL",
+			"COMMAND",
+			"STARTED",
+			"FINISHED",
+			"DURATION",
+			"STATUS",
+			"SESSION",
+			"USAGE",
+		},
+		rows,
+	); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(output, "\nTotals"); err != nil {
+		return err
 	}
 	return renderTable(
 		output,
-		[]string{"ATTEMPT", "PROFILE", "HARNESS", "MODEL", "COMMAND", "STARTED", "FINISHED", "DURATION", "STATUS", "SESSION", "USAGE"},
-		rows,
+		[]string{
+			"TYPE",
+			"EXECUTIONS",
+			"ACTIVE_AGENT_TIME",
+			"TOTAL_TOKENS",
+			"INPUT_TOKENS",
+			"CACHED_INPUT_TOKENS",
+			"OUTPUT_TOKENS",
+			"REASONING_OUTPUT_TOKENS",
+			"UNKNOWN_USAGE",
+		},
+		taskStatsTotalRows(records),
 	)
 }
 
-func taskStatsRow(run taskstate.RunAttempt) []string {
-	execution := run.Execution
+type taskStatsExecutionRecord struct {
+	activity  string
+	attempt   string
+	step      string
+	status    string
+	execution taskstate.AgentExecution
+}
+
+func taskStatsExecutionRecords(state taskstate.TaskState) []taskStatsExecutionRecord {
+	records := make([]taskStatsExecutionRecord, 0, len(state.Runs))
+	for _, run := range state.Runs {
+		records = append(records, taskStatsExecutionRecord{
+			activity:  "implementation",
+			attempt:   strconv.Itoa(run.Attempt),
+			step:      "-",
+			status:    string(run.Status),
+			execution: run.Execution,
+		})
+	}
+	for _, reviewAttempt := range state.Reviews {
+		for _, step := range reviewAttempt.Steps {
+			if step.Execution == nil {
+				continue
+			}
+			records = append(records, taskStatsExecutionRecord{
+				activity:  "review-agent",
+				attempt:   strconv.Itoa(reviewAttempt.Attempt),
+				step:      step.Name,
+				status:    string(step.Execution.Status),
+				execution: *step.Execution,
+			})
+		}
+	}
+	return records
+}
+
+func taskStatsRow(record taskStatsExecutionRecord) []string {
+	execution := record.execution
 	return []string{
-		strconv.Itoa(run.Attempt),
+		record.activity,
+		record.attempt,
+		formatTaskStatsField(record.step),
 		formatTaskStatsField(firstNonEmpty(execution.Profile, execution.Agent)),
 		formatTaskStatsField(execution.Harness),
 		formatTaskStatsField(execution.Model),
@@ -2422,10 +2487,99 @@ func taskStatsRow(run taskstate.RunAttempt) []string {
 		formatTaskStatsTime(execution.StartedAt),
 		formatTaskStatsTimePointer(execution.FinishedAt),
 		formatTaskStatsDuration(execution),
-		string(run.Status),
+		formatTaskStatsField(record.status),
 		formatTaskStatsSession(execution.Session),
 		formatTaskStatsUsage(execution),
 	}
+}
+
+type taskStatsTotals struct {
+	executions   int
+	duration     time.Duration
+	usage        taskstate.AgentUsage
+	unknownUsage int
+}
+
+func taskStatsTotalRows(records []taskStatsExecutionRecord) [][]string {
+	implementation := taskStatsTotals{}
+	review := taskStatsTotals{}
+	for _, record := range records {
+		switch record.activity {
+		case "implementation":
+			implementation.add(record.execution)
+		case "review-agent":
+			review.add(record.execution)
+		}
+	}
+	combined := implementation
+	combined.addTotals(review)
+	return [][]string{
+		taskStatsTotalRow("implementation", implementation),
+		taskStatsTotalRow("review-agent", review),
+		taskStatsTotalRow("combined", combined),
+	}
+}
+
+func (t *taskStatsTotals) add(execution taskstate.AgentExecution) {
+	t.executions++
+	if duration, ok := taskStatsDurationValue(execution); ok {
+		t.duration += duration
+	}
+	if execution.Usage != nil {
+		t.usage.InputTokens += execution.Usage.InputTokens
+		t.usage.CachedInputTokens += execution.Usage.CachedInputTokens
+		t.usage.OutputTokens += execution.Usage.OutputTokens
+		t.usage.ReasoningOutputTokens += execution.Usage.ReasoningOutputTokens
+		t.usage.TotalTokens += execution.Usage.TotalTokens
+		return
+	}
+	t.unknownUsage++
+}
+
+func (t *taskStatsTotals) addTotals(other taskStatsTotals) {
+	t.executions += other.executions
+	t.duration += other.duration
+	t.usage.InputTokens += other.usage.InputTokens
+	t.usage.CachedInputTokens += other.usage.CachedInputTokens
+	t.usage.OutputTokens += other.usage.OutputTokens
+	t.usage.ReasoningOutputTokens += other.usage.ReasoningOutputTokens
+	t.usage.TotalTokens += other.usage.TotalTokens
+	t.unknownUsage += other.unknownUsage
+}
+
+func taskStatsTotalRow(activity string, totals taskStatsTotals) []string {
+	return []string{
+		activity,
+		strconv.Itoa(totals.executions),
+		formatTaskStatsTotalDuration(totals.duration),
+		strconv.Itoa(totals.usage.TotalTokens),
+		strconv.Itoa(totals.usage.InputTokens),
+		strconv.Itoa(totals.usage.CachedInputTokens),
+		strconv.Itoa(totals.usage.OutputTokens),
+		strconv.Itoa(totals.usage.ReasoningOutputTokens),
+		strconv.Itoa(totals.unknownUsage),
+	}
+}
+
+func taskStatsDurationValue(execution taskstate.AgentExecution) (time.Duration, bool) {
+	if execution.DurationMillis > 0 {
+		return time.Duration(execution.DurationMillis) * time.Millisecond, true
+	}
+	if execution.FinishedAt == nil || execution.StartedAt.IsZero() {
+		return 0, false
+	}
+	duration := execution.FinishedAt.Sub(execution.StartedAt)
+	if duration < 0 {
+		return 0, false
+	}
+	return duration, true
+}
+
+func formatTaskStatsTotalDuration(duration time.Duration) string {
+	if duration <= 0 {
+		return "0s"
+	}
+	return duration.String()
 }
 
 func formatTaskStatsCommand(execution taskstate.AgentExecution) string {
