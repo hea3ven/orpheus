@@ -127,6 +127,7 @@ type Service interface {
 	StartReview(repoID, taskID string) (ReviewAttempt, error)
 	StartReviewWithOptions(repoID, taskID string, opts StartReviewOptions) (ReviewAttempt, error)
 	RecordReviewStep(repoID, taskID string, attempt int, opts RecordReviewStepOptions) (ReviewAttempt, error)
+	FinishReviewStepExecution(repoID, taskID string, attempt int, stepName string, opts FinishReviewStepExecutionOptions) (ReviewAttempt, error)
 	RecordReviewFinding(repoID, taskID string, attempt int, finding ReviewFinding) (ReviewAttempt, error)
 	RecordReviewFindingCreatedTask(repoID, taskID string, attempt int, findingIndex int, createdTaskID string) (ReviewAttempt, error)
 	TargetReviewFindings(repoID, taskID string, reviewAttempt int, findingIndexes []int, runAttempt int) (ReviewAttempt, error)
@@ -479,6 +480,17 @@ type RecordReviewStepOptions struct {
 	ExitCode  *int
 }
 
+// FinishReviewStepExecutionOptions describes terminal facts for a review agent step execution.
+type FinishReviewStepExecutionOptions struct {
+	Status     RunStatus
+	FinishedAt time.Time
+
+	Session      *AgentSession
+	Usage        *AgentUsage
+	UsageCapture AgentUsageCapture
+	Model        string
+}
+
 // TaskClosedOptions describes the facts recorded when a task is closed.
 type TaskClosedOptions struct {
 	Reason          string
@@ -647,27 +659,9 @@ func (s Store) RecordRunUsage(
 		return RunAttempt{}, fmt.Errorf("record run usage for task %s/%s: attempt %d was not found", repoID, taskID, attempt)
 	}
 
-	execution := state.Runs[index].Execution
-	if strings.TrimSpace(opts.Model) != "" {
-		execution.Model = strings.TrimSpace(opts.Model)
-	}
-	if opts.Session != nil {
-		session := normalizeAgentSession(*opts.Session)
-		if !agentSessionIsZero(session) {
-			execution.Session = &session
-		}
-	}
-	if opts.Usage != nil {
-		usage := normalizeAgentUsage(*opts.Usage)
-		if !agentUsageIsZero(usage) {
-			execution.Usage = &usage
-		}
-	}
-	capture := normalizeAgentUsageCapture(opts.UsageCapture, s.nowUTC())
-	if !capture.IsZero() {
-		execution.UsageCapture = capture
-	}
-	state.Runs[index].Execution = normalizeAgentExecution(execution)
+	state.Runs[index].Execution = normalizeAgentExecution(
+		applyRunUsageOptions(state.Runs[index].Execution, opts, s.nowUTC()),
+	)
 	if err := s.save(state); err != nil {
 		return RunAttempt{}, err
 	}
@@ -975,6 +969,104 @@ func (s Store) RecordReviewStep(
 	return state.Reviews[index], nil
 }
 
+// FinishReviewStepExecution records terminal state and best-effort usage telemetry for a review agent step.
+func (s Store) FinishReviewStepExecution(
+	repoID,
+	taskID string,
+	attempt int,
+	stepName string,
+	opts FinishReviewStepExecutionOptions,
+) (ReviewAttempt, error) {
+	stepName = strings.TrimSpace(stepName)
+	if err := validateFinishReviewStepExecutionInput(repoID, taskID, stepName, opts.Status); err != nil {
+		return ReviewAttempt{}, err
+	}
+
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+	reviewIndex, stepIndex, err := finishReviewStepExecutionIndexes(state, repoID, taskID, attempt, stepName)
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+
+	finishedAt := opts.FinishedAt
+	if finishedAt.IsZero() {
+		finishedAt = s.nowUTC()
+	}
+	finishedAt = finishedAt.UTC()
+	usageOpts := RecordRunUsageOptions{
+		Session:      opts.Session,
+		Usage:        opts.Usage,
+		UsageCapture: opts.UsageCapture,
+		Model:        opts.Model,
+	}
+	execution := *state.Reviews[reviewIndex].Steps[stepIndex].Execution
+	execution = applyRunUsageOptions(execution, usageOpts, finishedAt)
+	execution.Status = opts.Status
+	execution.FinishedAt = &finishedAt
+	execution.DurationMillis = durationMillis(execution.StartedAt, finishedAt)
+	state.Reviews[reviewIndex].Steps[stepIndex].Execution = normalizeOptionalAgentExecution(&execution)
+
+	if err := s.save(state); err != nil {
+		return ReviewAttempt{}, err
+	}
+	return state.Reviews[reviewIndex], nil
+}
+
+func validateFinishReviewStepExecutionInput(repoID, taskID, stepName string, status RunStatus) error {
+	if stepName == "" {
+		return fmt.Errorf("finish review step execution for task %s/%s: step name is required", repoID, taskID)
+	}
+	if status != RunStatusSucceeded && status != RunStatusFailed {
+		return fmt.Errorf(
+			"finish review step execution for task %s/%s: status must be %q or %q, got %q",
+			repoID,
+			taskID,
+			RunStatusSucceeded,
+			RunStatusFailed,
+			status,
+		)
+	}
+	return nil
+}
+
+func finishReviewStepExecutionIndexes(
+	state TaskState,
+	repoID,
+	taskID string,
+	attempt int,
+	stepName string,
+) (int, int, error) {
+	reviewIndex := reviewAttemptIndex(state, attempt)
+	if reviewIndex < 0 {
+		return 0, 0, fmt.Errorf("finish review step execution for task %s/%s: review attempt %d was not found", repoID, taskID, attempt)
+	}
+	if state.Reviews[reviewIndex].Status != ReviewStatusRunning {
+		return 0, 0, fmt.Errorf(
+			"finish review step execution for task %s/%s: review attempt %d is %q, expected %q",
+			repoID,
+			taskID,
+			attempt,
+			state.Reviews[reviewIndex].Status,
+			ReviewStatusRunning,
+		)
+	}
+
+	stepIndex := latestReviewStepExecutionIndex(state.Reviews[reviewIndex], stepName)
+	if stepIndex < 0 {
+		return 0, 0, fmt.Errorf(
+			"finish review step execution for task %s/%s: review attempt %d step %q was not found",
+			repoID,
+			taskID,
+			attempt,
+			stepName,
+		)
+	}
+	return reviewIndex, stepIndex, nil
+}
+
 // RecordReviewFinding appends a finding to a running review attempt.
 func (s Store) RecordReviewFinding(
 	repoID,
@@ -1010,6 +1102,39 @@ func (s Store) RecordReviewFinding(
 		return ReviewAttempt{}, err
 	}
 	return state.Reviews[index], nil
+}
+
+func latestReviewStepExecutionIndex(review ReviewAttempt, stepName string) int {
+	for index := len(review.Steps) - 1; index >= 0; index-- {
+		step := review.Steps[index]
+		if step.Name == stepName && step.Execution != nil {
+			return index
+		}
+	}
+	return -1
+}
+
+func applyRunUsageOptions(execution AgentExecution, opts RecordRunUsageOptions, capturedAt time.Time) AgentExecution {
+	if strings.TrimSpace(opts.Model) != "" {
+		execution.Model = strings.TrimSpace(opts.Model)
+	}
+	if opts.Session != nil {
+		session := normalizeAgentSession(*opts.Session)
+		if !agentSessionIsZero(session) {
+			execution.Session = &session
+		}
+	}
+	if opts.Usage != nil {
+		usage := normalizeAgentUsage(*opts.Usage)
+		if !agentUsageIsZero(usage) {
+			execution.Usage = &usage
+		}
+	}
+	capture := normalizeAgentUsageCapture(opts.UsageCapture, capturedAt)
+	if !capture.IsZero() {
+		execution.UsageCapture = capture
+	}
+	return execution
 }
 
 // RecordReviewFindingCreatedTask records the backend task created from a separate-task finding.

@@ -416,6 +416,7 @@ func TestTaskShowReportsMalformedAndUnknownPrefixes(t *testing.T) {
 	is.ErrorContains(err, "register the repo")
 }
 
+//nolint:funlen // The stats fixture is clearer with implementation, review, and totals assertions together.
 func TestTaskStatsRendersImplementationExecutionUsage(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -433,6 +434,9 @@ func TestTaskStatsRendersImplementationExecutionUsage(t *testing.T) {
 			time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
 			time.Date(2026, 7, 7, 10, 1, 0, 0, time.UTC),
 			time.Date(2026, 7, 7, 10, 2, 0, 0, time.UTC),
+			time.Date(2026, 7, 7, 10, 3, 0, 0, time.UTC),
+			time.Date(2026, 7, 7, 10, 4, 0, 0, time.UTC),
+			time.Date(2026, 7, 7, 10, 5, 0, 0, time.UTC),
 		),
 	)
 	run, err := stateStore.StartRun("alpha", "op-1", taskstate.StartRunOptions{
@@ -464,15 +468,62 @@ func TestTaskStatsRendersImplementationExecutionUsage(t *testing.T) {
 	must.NoError(err)
 	_, err = stateStore.FinishRun("alpha", "op-1", run.Attempt, taskstate.RunStatusSucceeded)
 	must.NoError(err)
+	reviewAttempt, err := stateStore.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{
+		Pipeline: "standard",
+		Step:     "ai-review",
+	})
+	must.NoError(err)
+	_, err = stateStore.RecordReviewStep("alpha", "op-1", reviewAttempt.Attempt, taskstate.RecordReviewStepOptions{
+		Kind: "agent_review",
+		Name: "ai-review",
+		Execution: &taskstate.AgentExecution{
+			Purpose:   taskstate.AgentExecutionPurposeReview,
+			Status:    taskstate.RunStatusRunning,
+			Agent:     "reviewer",
+			Profile:   "reviewer",
+			Harness:   "codex",
+			Model:     "gpt-5",
+			Command:   "codex",
+			Args:      []string{"exec", "--model", "gpt-5", "review"},
+			StartedAt: time.Date(2026, 7, 7, 10, 3, 0, 0, time.UTC),
+		},
+	})
+	must.NoError(err)
+	_, err = stateStore.FinishReviewStepExecution("alpha", "op-1", reviewAttempt.Attempt, "ai-review", taskstate.FinishReviewStepExecutionOptions{
+		Status:  taskstate.RunStatusSucceeded,
+		Session: &taskstate.AgentSession{ID: "review-session-123", LogPath: "/tmp/codex-review.jsonl"},
+		Usage: &taskstate.AgentUsage{
+			InputTokens:           20,
+			CachedInputTokens:     5,
+			OutputTokens:          30,
+			ReasoningOutputTokens: 7,
+			TotalTokens:           50,
+		},
+		UsageCapture: taskstate.AgentUsageCapture{
+			Status:         taskstate.UsageCaptureCaptured,
+			Reason:         "matched_codex_session",
+			CandidateCount: 1,
+		},
+	})
+	must.NoError(err)
+	_, err = stateStore.FinishReview("alpha", "op-1", reviewAttempt.Attempt, taskstate.ReviewStatusPassed)
+	must.NoError(err)
 
 	stdout, stderr := executeCommand(t, []string{"task", "stats", "op-1"})
 
 	is.Empty(stderr)
 	for _, want := range []string{
-		"ATTEMPT", "PROFILE", "HARNESS", "MODEL", "COMMAND", "STARTED", "FINISHED", "DURATION", "STATUS", "SESSION", "USAGE",
-		"1", "codex-profile", "codex", "gpt-5", `"codex" "exec" "--model" "gpt-5"`,
+		"Executions", "TYPE", "ATTEMPT", "STEP", "PROFILE", "HARNESS", "MODEL", "COMMAND", "STARTED", "FINISHED", "DURATION", "STATUS", "SESSION", "USAGE",
+		"implementation", "1", "codex-profile", "codex", "gpt-5", `"codex" "exec" "--model" "gpt-5"`,
 		"2026-07-07T10:00:00Z", "2026-07-07T10:02:00Z", "2m0s", "succeeded", "session-123",
 		"total=190 input=123 cached_input=45 output=67 reasoning_output=8",
+		"review-agent", "ai-review", `"codex" "exec" "--model" "gpt-5" "review"`,
+		"2026-07-07T10:03:00Z", "2026-07-07T10:04:00Z", "1m0s", "review-session-123",
+		"total=50 input=20 cached_input=5 output=30 reasoning_output=7",
+		"Totals", "ACTIVE_AGENT_TIME", "TOTAL_TOKENS", "UNKNOWN_USAGE",
+		"implementation", "1", "2m0s", "190", "123", "45", "67", "8", "0",
+		"review-agent", "1", "1m0s", "50", "20", "5", "30", "7", "0",
+		"combined", "2", "3m0s", "240", "143", "50", "97", "15", "0",
 	} {
 		is.Contains(stdout, want)
 	}
@@ -3266,12 +3317,80 @@ func TestTaskReviewAgentReviewStepLaunchesReviewerAndPassesWithoutFindings(t *te
 	is.Equal("agent_review", latest.Steps[0].Kind)
 	is.Equal("ai-review", latest.Steps[0].Name)
 	must.NotNil(latest.Steps[0].Execution)
+	is.Equal(taskstate.RunStatusSucceeded, latest.Steps[0].Execution.Status)
 	is.Equal("review-agent", latest.Steps[0].Execution.Command)
+	must.NotNil(latest.Steps[0].Execution.FinishedAt)
+	is.Positive(latest.Steps[0].Execution.DurationMillis)
+	is.Equal(taskstate.UsageCaptureUnknown, latest.Steps[0].Execution.UsageCapture.Status)
+	is.Equal("usage capture is not supported for harness -", latest.Steps[0].Execution.UsageCapture.Reason)
 	must.Len(latest.Steps[0].Execution.Args, 1)
 	is.Contains(latest.Steps[0].Execution.Args[0], "Reviewing op-main Ready for task done - ")
 	is.Contains(latest.Steps[0].Execution.Args[0], "You are an agent dispatched by Orpheus.")
 	is.Empty(latest.Findings)
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
+}
+
+//nolint:funlen // The Codex review-agent usage fixture is clearer as one end-to-end scenario.
+func TestTaskReviewAgentReviewStepCapturesCodexUsage(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review agent", "Run attached reviewer.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+	withFakeAgent(t, "codex", 0)
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	sessionDir := filepath.Join(codexHome, "sessions", "2026", "07", "07")
+	must.NoError(os.MkdirAll(sessionDir, 0o755))
+	sessionPath := filepath.Join(sessionDir, "review-session.jsonl")
+	writeCodexSessionLogForCLI(t, sessionPath, repoPath, "review-session", time.Now().UTC())
+	writeReviewAgentPipelineConfig(t, paths, "codex", "codex", []string{"exec", "{{prompt}}"}, "standard", map[string][]map[string]any{
+		"standard": []map[string]any{{"kind": "agent_review", "name": "ai-review"}},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
+	})
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "")
+
+	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stderr, "fake agent stderr")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	must.Len(latest.Steps, 1)
+	must.NotNil(latest.Steps[0].Execution)
+	execution := latest.Steps[0].Execution
+	is.Equal(taskstate.RunStatusSucceeded, execution.Status)
+	is.Equal("codex", execution.Harness)
+	is.Equal("gpt-5", execution.Model)
+	must.NotNil(execution.Session)
+	is.Equal("review-session", execution.Session.ID)
+	is.Equal(sessionPath, execution.Session.LogPath)
+	must.NotNil(execution.Usage)
+	is.Equal(190, execution.Usage.TotalTokens)
+	is.Equal(taskstate.UsageCaptureCaptured, execution.UsageCapture.Status)
+	is.Equal("matched_codex_session", execution.UsageCapture.Reason)
+	is.Equal(1, execution.UsageCapture.CandidateCount)
 }
 
 func TestTaskReviewAgentReviewBlockingFindingStopsPipeline(t *testing.T) {
@@ -5157,6 +5276,16 @@ exit %d
 	t.Setenv("FAKE_AGENT_LOG", logPath)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return logPath
+}
+
+func writeCodexSessionLogForCLI(t *testing.T, path string, cwd string, sessionID string, startedAt time.Time) {
+	t.Helper()
+
+	timestamp := startedAt.UTC().Format(time.RFC3339Nano)
+	content := `{"timestamp":"` + timestamp + `","type":"session_meta","payload":{"session_id":"` + sessionID + `","id":"` + sessionID + `","timestamp":"` + timestamp + `","cwd":"` + cwd + `","model":"gpt-5"}}
+{"timestamp":"` + timestamp + `","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":123,"cached_input_tokens":45,"output_tokens":67,"reasoning_output_tokens":8,"total_tokens":190}}}}
+`
+	writeTestFile(t, path, content, "codex session log")
 }
 
 func writeTaskRunAgentConfig(t *testing.T, paths state.Paths, name string, command string, args []string) {
