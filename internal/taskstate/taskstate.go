@@ -13,7 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 // RunStatus is the M3 status for an attached run attempt.
 type RunStatus string
@@ -27,6 +27,23 @@ const (
 
 	// RunStatusFailed means the attached agent attempt failed or could not start.
 	RunStatusFailed RunStatus = "failed"
+)
+
+// AgentExecutionPurpose identifies why an agent process was launched.
+type AgentExecutionPurpose string
+
+const (
+	AgentExecutionPurposeImplementation AgentExecutionPurpose = "implementation"
+	AgentExecutionPurposeReview         AgentExecutionPurpose = "review"
+)
+
+// UsageCaptureStatus records whether usage telemetry was captured.
+type UsageCaptureStatus string
+
+const (
+	UsageCaptureCaptured  UsageCaptureStatus = "captured"
+	UsageCaptureUnknown   UsageCaptureStatus = "unknown"
+	UsageCaptureAmbiguous UsageCaptureStatus = "ambiguous"
 )
 
 // ReviewStatus is the status for a local review attempt.
@@ -102,6 +119,7 @@ type Service interface {
 	ActiveRun(repoID, taskID string) (RunAttempt, bool, error)
 	RecordSetupEvent(repoID, taskID string, eventType EventType, opts SetupEventOptions) (Event, error)
 	StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt, error)
+	RecordRunUsage(repoID, taskID string, attempt int, opts RecordRunUsageOptions) (RunAttempt, error)
 	CompleteRun(repoID, taskID string, attempt int, opts CompleteRunOptions) (RunAttempt, error)
 	RecordRepeatedCompletion(repoID, taskID string, attempt int, opts RepeatedCompletionOptions) (Event, error)
 	FinishRun(repoID, taskID string, attempt int, status RunStatus) (RunAttempt, error)
@@ -174,16 +192,65 @@ type RunAttempt struct {
 	Attempt int       `yaml:"attempt"`
 	Status  RunStatus `yaml:"status"`
 
-	Agent       string   `yaml:"agent,omitempty"`
+	Execution AgentExecution `yaml:"execution"`
+
+	Completion *Completion `yaml:"completion,omitempty"`
+
+	ReviewFollowUp *ReviewFollowUp `yaml:"review_follow_up,omitempty"`
+}
+
+// AgentExecution records common facts for one agent process execution.
+type AgentExecution struct {
+	Purpose AgentExecutionPurpose `yaml:"purpose"`
+	Status  RunStatus             `yaml:"status"`
+
+	Agent   string `yaml:"agent,omitempty"`
+	Profile string `yaml:"profile,omitempty"`
+	Harness string `yaml:"harness,omitempty"`
+	Model   string `yaml:"model,omitempty"`
+
 	Command     string   `yaml:"command,omitempty"`
 	Args        []string `yaml:"args,omitempty"`
 	SessionName string   `yaml:"session_name,omitempty"`
 
-	StartedAt  time.Time   `yaml:"started_at"`
-	FinishedAt *time.Time  `yaml:"finished_at,omitempty"`
-	Completion *Completion `yaml:"completion,omitempty"`
+	StartedAt      time.Time  `yaml:"started_at"`
+	FinishedAt     *time.Time `yaml:"finished_at,omitempty"`
+	DurationMillis int64      `yaml:"duration_millis,omitempty"`
 
-	ReviewFollowUp *ReviewFollowUp `yaml:"review_follow_up,omitempty"`
+	Session      *AgentSession     `yaml:"session,omitempty"`
+	Usage        *AgentUsage       `yaml:"usage,omitempty"`
+	UsageCapture AgentUsageCapture `yaml:"usage_capture,omitempty"`
+}
+
+// AgentSession records harness-specific session correlation facts.
+type AgentSession struct {
+	ID      string `yaml:"id,omitempty"`
+	LogPath string `yaml:"log_path,omitempty"`
+}
+
+// AgentUsage records token usage fields reported by the agent harness.
+type AgentUsage struct {
+	InputTokens           int `yaml:"input_tokens,omitempty" json:"input_tokens,omitempty"`
+	CachedInputTokens     int `yaml:"cached_input_tokens,omitempty" json:"cached_input_tokens,omitempty"`
+	OutputTokens          int `yaml:"output_tokens,omitempty" json:"output_tokens,omitempty"`
+	ReasoningOutputTokens int `yaml:"reasoning_output_tokens,omitempty" json:"reasoning_output_tokens,omitempty"`
+	TotalTokens           int `yaml:"total_tokens,omitempty" json:"total_tokens,omitempty"`
+}
+
+// AgentUsageCapture records diagnostics from a usage-capture attempt.
+type AgentUsageCapture struct {
+	Status         UsageCaptureStatus `yaml:"status,omitempty"`
+	Reason         string             `yaml:"reason,omitempty"`
+	CandidateCount int                `yaml:"candidate_count,omitempty"`
+	CapturedAt     *time.Time         `yaml:"captured_at,omitempty"`
+}
+
+// IsZero allows YAML omitempty to omit absent usage-capture diagnostics.
+func (c AgentUsageCapture) IsZero() bool {
+	return c.Status == "" &&
+		strings.TrimSpace(c.Reason) == "" &&
+		c.CandidateCount == 0 &&
+		c.CapturedAt == nil
 }
 
 // ReviewFollowUp records which review attempt caused a follow-up run.
@@ -218,11 +285,10 @@ type ReviewAttempt struct {
 
 // ReviewStep records one executed review pipeline step.
 type ReviewStep struct {
-	Kind     string   `yaml:"kind"`
-	Name     string   `yaml:"name"`
-	Command  string   `yaml:"command,omitempty"`
-	Args     []string `yaml:"args,omitempty"`
-	ExitCode *int     `yaml:"exit_code,omitempty"`
+	Kind      string          `yaml:"kind"`
+	Name      string          `yaml:"name"`
+	Execution *AgentExecution `yaml:"execution,omitempty"`
+	ExitCode  *int            `yaml:"exit_code,omitempty"`
 }
 
 // ReviewFinding records one review finding.
@@ -352,6 +418,9 @@ type SetupEventOptions struct {
 // StartRunOptions describes the run attempt being started.
 type StartRunOptions struct {
 	Agent       string
+	Profile     string
+	Harness     string
+	Model       string
 	Command     string
 	Args        []string
 	SessionName string
@@ -371,6 +440,14 @@ type CompleteRunOptions struct {
 	DetailedDescription string
 	Commit              string
 	CommitError         string
+}
+
+// RecordRunUsageOptions describes usage and correlation facts to attach to a run.
+type RecordRunUsageOptions struct {
+	Session      *AgentSession
+	Usage        *AgentUsage
+	UsageCapture AgentUsageCapture
+	Model        string
 }
 
 type completeRunPayload struct {
@@ -396,11 +473,10 @@ type StartReviewOptions struct {
 
 // RecordReviewStepOptions describes one executed review step.
 type RecordReviewStepOptions struct {
-	Kind     string
-	Name     string
-	Command  string
-	Args     []string
-	ExitCode *int
+	Kind      string
+	Name      string
+	Execution *AgentExecution
+	ExitCode  *int
 }
 
 // TaskClosedOptions describes the facts recorded when a task is closed.
@@ -518,13 +594,20 @@ func (s Store) StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt
 
 	now := s.nowUTC()
 	attempt := RunAttempt{
-		Attempt:        nextAttemptNumber(state),
-		Status:         RunStatusRunning,
-		Agent:          strings.TrimSpace(opts.Agent),
-		Command:        strings.TrimSpace(opts.Command),
-		Args:           cloneStrings(opts.Args),
-		SessionName:    opts.SessionName,
-		StartedAt:      now,
+		Attempt: nextAttemptNumber(state),
+		Status:  RunStatusRunning,
+		Execution: normalizeAgentExecution(AgentExecution{
+			Purpose:     AgentExecutionPurposeImplementation,
+			Status:      RunStatusRunning,
+			Agent:       opts.Agent,
+			Profile:     opts.Profile,
+			Harness:     opts.Harness,
+			Model:       opts.Model,
+			Command:     opts.Command,
+			Args:        cloneStrings(opts.Args),
+			SessionName: opts.SessionName,
+			StartedAt:   now,
+		}),
 		ReviewFollowUp: normalizeReviewFollowUp(opts.ReviewFollowUp),
 	}
 	if err := lockTaskTarget(&state, TaskTarget{
@@ -539,13 +622,56 @@ func (s Store) StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt
 		At:      now,
 		Attempt: attempt.Attempt,
 		Status:  RunStatusRunning,
-		Agent:   attempt.Agent,
+		Agent:   attempt.Execution.Agent,
 	})
 
 	if err := s.save(state); err != nil {
 		return RunAttempt{}, err
 	}
 	return attempt, nil
+}
+
+// RecordRunUsage records best-effort session and usage telemetry for a run.
+func (s Store) RecordRunUsage(
+	repoID,
+	taskID string,
+	attempt int,
+	opts RecordRunUsageOptions,
+) (RunAttempt, error) {
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return RunAttempt{}, err
+	}
+	index := runAttemptIndex(state, attempt)
+	if index < 0 {
+		return RunAttempt{}, fmt.Errorf("record run usage for task %s/%s: attempt %d was not found", repoID, taskID, attempt)
+	}
+
+	execution := state.Runs[index].Execution
+	if strings.TrimSpace(opts.Model) != "" {
+		execution.Model = strings.TrimSpace(opts.Model)
+	}
+	if opts.Session != nil {
+		session := normalizeAgentSession(*opts.Session)
+		if !agentSessionIsZero(session) {
+			execution.Session = &session
+		}
+	}
+	if opts.Usage != nil {
+		usage := normalizeAgentUsage(*opts.Usage)
+		if !agentUsageIsZero(usage) {
+			execution.Usage = &usage
+		}
+	}
+	capture := normalizeAgentUsageCapture(opts.UsageCapture, s.nowUTC())
+	if !capture.IsZero() {
+		execution.UsageCapture = capture
+	}
+	state.Runs[index].Execution = normalizeAgentExecution(execution)
+	if err := s.save(state); err != nil {
+		return RunAttempt{}, err
+	}
+	return state.Runs[index], nil
 }
 
 // TargetReviewFindings marks findings from a review as addressed by a run attempt.
@@ -617,13 +743,7 @@ func (s Store) CompleteRun(repoID, taskID string, attempt int, opts CompleteRunO
 		return RunAttempt{}, err
 	}
 
-	index := -1
-	for i, run := range state.Runs {
-		if run.Attempt == attempt {
-			index = i
-			break
-		}
-	}
+	index := runAttemptIndex(state, attempt)
 	if index < 0 {
 		return RunAttempt{}, fmt.Errorf("complete run attempt for task %s/%s: attempt %d was not found", repoID, taskID, attempt)
 	}
@@ -748,13 +868,7 @@ func (s Store) RecordRepeatedCompletion(
 		return Event{}, err
 	}
 
-	index := -1
-	for i, run := range state.Runs {
-		if run.Attempt == attempt {
-			index = i
-			break
-		}
-	}
+	index := runAttemptIndex(state, attempt)
 	if index < 0 {
 		return Event{}, fmt.Errorf("record repeated completion for task %s/%s: attempt %d was not found", repoID, taskID, attempt)
 	}
@@ -825,11 +939,10 @@ func (s Store) RecordReviewStep(
 	opts RecordReviewStepOptions,
 ) (ReviewAttempt, error) {
 	step, err := normalizeReviewStep(ReviewStep{
-		Kind:     opts.Kind,
-		Name:     opts.Name,
-		Command:  opts.Command,
-		Args:     cloneStrings(opts.Args),
-		ExitCode: cloneIntPointer(opts.ExitCode),
+		Kind:      opts.Kind,
+		Name:      opts.Name,
+		Execution: cloneAgentExecutionPointer(opts.Execution),
+		ExitCode:  cloneIntPointer(opts.ExitCode),
 	})
 	if err != nil {
 		return ReviewAttempt{}, fmt.Errorf("record review step for task %s/%s: %w", repoID, taskID, err)
@@ -1301,13 +1414,7 @@ func (s Store) completeRun(repoID, taskID string, attempt int, status RunStatus,
 		return RunAttempt{}, err
 	}
 
-	index := -1
-	for i, run := range state.Runs {
-		if run.Attempt == attempt {
-			index = i
-			break
-		}
-	}
+	index := runAttemptIndex(state, attempt)
 	if index < 0 {
 		return RunAttempt{}, fmt.Errorf("complete run attempt for task %s/%s: attempt %d was not found", repoID, taskID, attempt)
 	}
@@ -1315,7 +1422,9 @@ func (s Store) completeRun(repoID, taskID string, attempt int, status RunStatus,
 	now := s.nowUTC()
 	finished := now
 	state.Runs[index].Status = status
-	state.Runs[index].FinishedAt = &finished
+	state.Runs[index].Execution.Status = status
+	state.Runs[index].Execution.FinishedAt = &finished
+	state.Runs[index].Execution.DurationMillis = durationMillis(state.Runs[index].Execution.StartedAt, finished)
 	updated := state.Runs[index]
 	state.Events = append(state.Events, runEvent(updated, eventType, now, status, errorText))
 
@@ -1331,7 +1440,7 @@ func runEvent(run RunAttempt, eventType EventType, at time.Time, status RunStatu
 		At:      at,
 		Attempt: run.Attempt,
 		Status:  status,
-		Agent:   run.Agent,
+		Agent:   run.Execution.Agent,
 		Error:   strings.TrimSpace(errorText),
 	}
 }
@@ -1405,8 +1514,10 @@ func validateLoadedState(taskState TaskState, repoID, taskID string) error {
 	if strings.TrimSpace(taskState.TaskID) != taskID {
 		return fmt.Errorf("task_id is %q, expected %q", taskState.TaskID, taskID)
 	}
-	if taskState.Version != 0 && taskState.Version != schemaVersion {
-		return fmt.Errorf("unsupported task state version %d", taskState.Version)
+	if taskState.Version != schemaVersion {
+		if taskState.Version != 0 || !taskStateContentIsEmpty(taskState) {
+			return unsupportedTaskStateVersionError(taskState.Version)
+		}
 	}
 	if err := validateTaskTarget(taskState.Target); err != nil {
 		return fmt.Errorf("target is invalid: %w", err)
@@ -1430,6 +1541,21 @@ func validateLoadedState(taskState TaskState, repoID, taskID string) error {
 		return fmt.Errorf("finalization is invalid: %w", err)
 	}
 	return nil
+}
+
+func unsupportedTaskStateVersionError(version int) error {
+	return fmt.Errorf(
+		"unsupported task state version %d; migrate local task-state files with /tmp/orpheus_migrate_taskstate_agent_executions.py before running this command",
+		version,
+	)
+}
+
+func taskStateContentIsEmpty(taskState TaskState) bool {
+	return taskState.Target.IsZero() &&
+		len(taskState.Runs) == 0 &&
+		len(taskState.Reviews) == 0 &&
+		len(taskState.Events) == 0 &&
+		taskState.Finalization == nil
 }
 
 func normalizeStateForSave(taskState TaskState) (TaskState, error) {
@@ -1458,7 +1584,171 @@ func normalizeState(taskState TaskState, repoID, taskID string) TaskState {
 		finalization := ensureFinalization(taskState.Finalization)
 		taskState.Finalization = &finalization
 	}
+	for i := range taskState.Runs {
+		taskState.Runs[i] = normalizeRunAttempt(taskState.Runs[i])
+	}
+	for i := range taskState.Reviews {
+		for j := range taskState.Reviews[i].Steps {
+			step, err := normalizeReviewStep(taskState.Reviews[i].Steps[j])
+			if err == nil {
+				taskState.Reviews[i].Steps[j] = step
+			}
+		}
+	}
 	return taskState
+}
+
+func normalizeRunAttempt(run RunAttempt) RunAttempt {
+	run.Execution = normalizeAgentExecution(run.Execution)
+	run.Status = run.Execution.Status
+	if run.Status == "" {
+		run.Status = RunStatusRunning
+		run.Execution.Status = run.Status
+	}
+	return run
+}
+
+func normalizeAgentExecution(execution AgentExecution) AgentExecution {
+	execution.Purpose = AgentExecutionPurpose(strings.TrimSpace(string(execution.Purpose)))
+	execution.Status = RunStatus(strings.TrimSpace(string(execution.Status)))
+	execution.Agent = strings.TrimSpace(execution.Agent)
+	execution.Profile = strings.TrimSpace(execution.Profile)
+	if execution.Profile == "" {
+		execution.Profile = execution.Agent
+	}
+	execution.Harness = strings.TrimSpace(execution.Harness)
+	execution.Model = strings.TrimSpace(execution.Model)
+	execution.Command = strings.TrimSpace(execution.Command)
+	execution.Args = cloneStrings(execution.Args)
+	execution.SessionName = strings.TrimSpace(execution.SessionName)
+	if !execution.StartedAt.IsZero() {
+		execution.StartedAt = execution.StartedAt.UTC()
+	}
+	if execution.FinishedAt != nil {
+		finished := execution.FinishedAt.UTC()
+		execution.FinishedAt = &finished
+		if execution.DurationMillis == 0 {
+			execution.DurationMillis = durationMillis(execution.StartedAt, finished)
+		}
+	}
+	if execution.Session != nil {
+		session := normalizeAgentSession(*execution.Session)
+		if agentSessionIsZero(session) {
+			execution.Session = nil
+		} else {
+			execution.Session = &session
+		}
+	}
+	if execution.Usage != nil {
+		usage := normalizeAgentUsage(*execution.Usage)
+		if agentUsageIsZero(usage) {
+			execution.Usage = nil
+		} else {
+			execution.Usage = &usage
+		}
+	}
+	execution.UsageCapture = normalizeAgentUsageCapture(execution.UsageCapture, time.Time{})
+	return execution
+}
+
+func normalizeOptionalAgentExecution(execution *AgentExecution) *AgentExecution {
+	if execution == nil {
+		return nil
+	}
+	normalized := normalizeAgentExecution(*execution)
+	return &normalized
+}
+
+func validateAgentExecution(execution AgentExecution) error {
+	if !validAgentExecutionPurpose(execution.Purpose) {
+		return fmt.Errorf("unsupported purpose %q", execution.Purpose)
+	}
+	if !validRunStatus(execution.Status) {
+		return fmt.Errorf("unsupported status %q", execution.Status)
+	}
+	if execution.StartedAt.IsZero() {
+		return errors.New("started_at is required")
+	}
+	if execution.Status == RunStatusRunning && execution.FinishedAt != nil {
+		return errors.New("finished_at cannot be recorded while running")
+	}
+	if execution.Status != RunStatusRunning && (execution.FinishedAt == nil || execution.FinishedAt.IsZero()) {
+		return fmt.Errorf("finished_at is required for status %q", execution.Status)
+	}
+	if execution.DurationMillis < 0 {
+		return errors.New("duration_millis cannot be negative")
+	}
+	if execution.Session != nil && agentSessionIsZero(normalizeAgentSession(*execution.Session)) {
+		return errors.New("session must include id or log_path")
+	}
+	if execution.Usage != nil && agentUsageIsZero(normalizeAgentUsage(*execution.Usage)) {
+		return errors.New("usage must include at least one token field")
+	}
+	if !execution.UsageCapture.IsZero() && !validUsageCaptureStatus(execution.UsageCapture.Status) {
+		return fmt.Errorf("unsupported usage_capture status %q", execution.UsageCapture.Status)
+	}
+	return nil
+}
+
+func normalizeAgentSession(session AgentSession) AgentSession {
+	return AgentSession{
+		ID:      strings.TrimSpace(session.ID),
+		LogPath: strings.TrimSpace(session.LogPath),
+	}
+}
+
+func agentSessionIsZero(session AgentSession) bool {
+	return strings.TrimSpace(session.ID) == "" && strings.TrimSpace(session.LogPath) == ""
+}
+
+func normalizeAgentUsage(usage AgentUsage) AgentUsage {
+	if usage.InputTokens < 0 {
+		usage.InputTokens = 0
+	}
+	if usage.CachedInputTokens < 0 {
+		usage.CachedInputTokens = 0
+	}
+	if usage.OutputTokens < 0 {
+		usage.OutputTokens = 0
+	}
+	if usage.ReasoningOutputTokens < 0 {
+		usage.ReasoningOutputTokens = 0
+	}
+	if usage.TotalTokens < 0 {
+		usage.TotalTokens = 0
+	}
+	return usage
+}
+
+func agentUsageIsZero(usage AgentUsage) bool {
+	return usage.InputTokens == 0 &&
+		usage.CachedInputTokens == 0 &&
+		usage.OutputTokens == 0 &&
+		usage.ReasoningOutputTokens == 0 &&
+		usage.TotalTokens == 0
+}
+
+func normalizeAgentUsageCapture(capture AgentUsageCapture, capturedAt time.Time) AgentUsageCapture {
+	capture.Status = UsageCaptureStatus(strings.TrimSpace(string(capture.Status)))
+	capture.Reason = strings.TrimSpace(capture.Reason)
+	if capture.CandidateCount < 0 {
+		capture.CandidateCount = 0
+	}
+	if capture.CapturedAt != nil {
+		at := capture.CapturedAt.UTC()
+		capture.CapturedAt = &at
+	} else if capture.Status != "" && !capturedAt.IsZero() {
+		at := capturedAt.UTC()
+		capture.CapturedAt = &at
+	}
+	return capture
+}
+
+func durationMillis(started time.Time, finished time.Time) int64 {
+	if started.IsZero() || finished.IsZero() || finished.Before(started) {
+		return 0
+	}
+	return finished.Sub(started).Milliseconds()
 }
 
 func lockTaskTarget(state *TaskState, requested TaskTarget) error {
@@ -1518,6 +1808,15 @@ func validateRun(run RunAttempt) error {
 	}
 	if !validRunStatus(run.Status) {
 		return fmt.Errorf("run attempt %d has unsupported status %q", run.Attempt, run.Status)
+	}
+	if err := validateAgentExecution(run.Execution); err != nil {
+		return fmt.Errorf("run attempt %d has invalid execution: %w", run.Attempt, err)
+	}
+	if run.Execution.Purpose != AgentExecutionPurposeImplementation {
+		return fmt.Errorf("run attempt %d execution purpose is %q, expected %q", run.Attempt, run.Execution.Purpose, AgentExecutionPurposeImplementation)
+	}
+	if run.Execution.Status != run.Status {
+		return fmt.Errorf("run attempt %d execution status is %q, expected %q", run.Attempt, run.Execution.Status, run.Status)
 	}
 	if run.Completion != nil {
 		if err := validateCompletion(*run.Completion); err != nil {
@@ -1589,8 +1888,7 @@ func validateReview(review ReviewAttempt) error {
 func normalizeReviewStep(step ReviewStep) (ReviewStep, error) {
 	step.Kind = strings.TrimSpace(step.Kind)
 	step.Name = strings.TrimSpace(step.Name)
-	step.Command = strings.TrimSpace(step.Command)
-	step.Args = cloneStrings(step.Args)
+	step.Execution = normalizeOptionalAgentExecution(step.Execution)
 	step.ExitCode = cloneIntPointer(step.ExitCode)
 
 	if step.Kind == "" {
@@ -1602,18 +1900,29 @@ func normalizeReviewStep(step ReviewStep) (ReviewStep, error) {
 	if step.ExitCode != nil && *step.ExitCode < 0 {
 		return ReviewStep{}, errors.New("exit_code cannot be negative")
 	}
+	if step.Execution != nil {
+		if step.Execution.Purpose != AgentExecutionPurposeReview {
+			return ReviewStep{}, fmt.Errorf("execution purpose is %q, expected %q", step.Execution.Purpose, AgentExecutionPurposeReview)
+		}
+		if err := validateAgentExecution(*step.Execution); err != nil {
+			return ReviewStep{}, fmt.Errorf("execution is invalid: %w", err)
+		}
+	}
 	return step, nil
 }
 
 func validateCommandArgsForSave(taskState TaskState) error {
 	for _, run := range taskState.Runs {
-		if err := validateCommandArgs(run.Args); err != nil {
+		if err := validateCommandArgs(run.Execution.Args); err != nil {
 			return fmt.Errorf("run attempt %d has invalid args: %w", run.Attempt, err)
 		}
 	}
 	for _, review := range taskState.Reviews {
 		for _, step := range review.Steps {
-			if err := validateCommandArgs(step.Args); err != nil {
+			if step.Execution == nil {
+				continue
+			}
+			if err := validateCommandArgs(step.Execution.Args); err != nil {
 				return fmt.Errorf("review attempt %d step %q has invalid args: %w", review.Attempt, step.Name, err)
 			}
 		}
@@ -1766,6 +2075,24 @@ func validRunStatus(status RunStatus) bool {
 	}
 }
 
+func validAgentExecutionPurpose(purpose AgentExecutionPurpose) bool {
+	switch purpose {
+	case AgentExecutionPurposeImplementation, AgentExecutionPurposeReview:
+		return true
+	default:
+		return false
+	}
+}
+
+func validUsageCaptureStatus(status UsageCaptureStatus) bool {
+	switch status {
+	case UsageCaptureCaptured, UsageCaptureUnknown, UsageCaptureAmbiguous:
+		return true
+	default:
+		return false
+	}
+}
+
 func validReviewStatus(status ReviewStatus) bool {
 	switch status {
 	case ReviewStatusRunning, ReviewStatusBlocked, ReviewStatusFailed, ReviewStatusPassed, ReviewStatusAborted:
@@ -1803,6 +2130,15 @@ func nextAttemptNumber(state TaskState) int {
 		return 1
 	}
 	return latest.Attempt + 1
+}
+
+func runAttemptIndex(state TaskState, attempt int) int {
+	for i, run := range state.Runs {
+		if run.Attempt == attempt {
+			return i
+		}
+	}
+	return -1
 }
 
 func nextReviewAttemptNumber(state TaskState) int {
@@ -1861,5 +2197,13 @@ func cloneIntPointer(value *int) *int {
 		return nil
 	}
 	clone := *value
+	return &clone
+}
+
+func cloneAgentExecutionPointer(value *AgentExecution) *AgentExecution {
+	if value == nil {
+		return nil
+	}
+	clone := normalizeAgentExecution(*value)
 	return &clone
 }

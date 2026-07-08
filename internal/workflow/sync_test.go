@@ -153,9 +153,12 @@ func TestSyncServiceSkipsPRCreationForEligibleWorktreeCompletion(t *testing.T) {
 		Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-1", task.MetadataWorktree: worktreePath},
 	}
 	service, provider, backend := newSyncTestService(t, taskItem, syncTaskState(taskstate.RunAttempt{
-		Attempt:   1,
-		Status:    taskstate.RunStatusSucceeded,
-		StartedAt: time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC),
+		Attempt: 1,
+		Status:  taskstate.RunStatusSucceeded,
+		Execution: syncRunExecution(
+			taskstate.RunStatusSucceeded,
+			time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC),
+		),
 		Completion: &taskstate.Completion{
 			Summary:             "Done",
 			Description:         "Implemented.",
@@ -515,7 +518,7 @@ func syncCompletionSkipCases(
 func syncSucceededRun(worktreePath string) taskstate.RunAttempt {
 	run := syncCommittedCompletionRun(worktreePath, "orpheus/op-1")
 	run.Attempt = 1
-	run.StartedAt = time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC)
+	run.Execution.StartedAt = time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC)
 	return run
 }
 
@@ -523,11 +526,28 @@ func syncCompletionRun(_ string, _ string) taskstate.RunAttempt {
 	return taskstate.RunAttempt{
 		Attempt: 2,
 		Status:  taskstate.RunStatusSucceeded,
+		Execution: syncRunExecution(
+			taskstate.RunStatusSucceeded,
+			time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC),
+		),
 		Completion: &taskstate.Completion{
 			Summary:             "Done",
 			Description:         "Done.",
 			DetailedDescription: "Detailed PR body.",
 		},
+	}
+}
+
+func syncRunExecution(status taskstate.RunStatus, startedAt time.Time) taskstate.AgentExecution {
+	finishedAt := startedAt.Add(time.Minute)
+	return taskstate.AgentExecution{
+		Purpose:        taskstate.AgentExecutionPurposeImplementation,
+		Status:         status,
+		Agent:          "recorder",
+		Profile:        "recorder",
+		StartedAt:      startedAt,
+		FinishedAt:     &finishedAt,
+		DurationMillis: finishedAt.Sub(startedAt).Milliseconds(),
 	}
 }
 
@@ -560,9 +580,12 @@ func TestSyncServiceSkipsTasksWithoutPRURLDespiteMalformedMetadata(t *testing.T)
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	worktreePath := targets.WorktreeTeam.Worktree
 	state := syncTaskState(taskstate.RunAttempt{
-		Attempt:   1,
-		Status:    taskstate.RunStatusSucceeded,
-		StartedAt: time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC),
+		Attempt: 1,
+		Status:  taskstate.RunStatusSucceeded,
+		Execution: syncRunExecution(
+			taskstate.RunStatusSucceeded,
+			time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC),
+		),
 		Completion: &taskstate.Completion{
 			Summary:             "Done",
 			Description:         "Implemented.",

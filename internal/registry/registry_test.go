@@ -3,6 +3,7 @@ package registry_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -51,6 +52,9 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 		SummaryGuidanceStyle: registry.SummaryGuidanceStyleCapitalized,
 		TitleTemplate:        "[OPS] {{summary}}",
 		ReviewPipeline:       "go-standard",
+		ReviewPipelineAliases: map[string]string{
+			"quick": "go-standard",
+		},
 	}}}
 	want.Repos[0].Path = filepath.Clean(want.Repos[0].Path)
 
@@ -75,7 +79,9 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 		!strings.Contains(string(onDisk), "summary_guidance: Use sentence-case summaries without a type prefix.") ||
 		!strings.Contains(string(onDisk), "summary_guidance_style: capitalized") ||
 		!strings.Contains(string(onDisk), "title_template: '[OPS] {{summary}}'") ||
-		!strings.Contains(string(onDisk), "review_pipeline: go-standard") {
+		!strings.Contains(string(onDisk), "review_pipeline: go-standard") ||
+		!strings.Contains(string(onDisk), "review_pipeline_aliases:") ||
+		!strings.Contains(string(onDisk), "quick: go-standard") {
 		t.Fatalf("registry file is not human-editable YAML: %s", onDisk)
 	}
 
@@ -84,6 +90,27 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 		t.Fatalf("load registry: %v", err)
 	}
 	assertRepos(t, got.Repos, want.Repos)
+}
+
+func TestStoreLoadRejectsInvalidReviewPipelineAliases(t *testing.T) {
+	paths := newTestPaths(t)
+	writeDataFile(t, paths, "registry.yaml", `repos:
+  - id: alpha
+    name: alpha
+    path: /tmp/alpha
+    review_pipeline_aliases:
+      " ": standard
+`)
+	store := registry.NewStore(paths)
+
+	_, err := store.Load()
+
+	if err == nil {
+		t.Fatal("load registry with invalid review pipeline alias succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "review_pipeline_aliases name is required") {
+		t.Fatalf("error = %v, want actionable alias validation", err)
+	}
 }
 
 func TestStoreLoadRejectsInvalidSummaryGuidanceStyle(t *testing.T) {
@@ -413,7 +440,7 @@ func TestRegistryResolveByIDNameAndBeadsPrefix(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolve %q: %v", tt.token, err)
 			}
-			if got != tt.want {
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("resolve %q = %#v, want %#v", tt.token, got, tt.want)
 			}
 		})
@@ -544,7 +571,7 @@ func assertRepos(t *testing.T, got []registry.Repo, want []registry.Repo) {
 		t.Fatalf("repo count = %d, want %d: %#v", len(got), len(want), got)
 	}
 	for i := range got {
-		if got[i] != want[i] {
+		if !reflect.DeepEqual(got[i], want[i]) {
 			t.Fatalf("repo[%d] = %#v, want %#v", i, got[i], want[i])
 		}
 	}

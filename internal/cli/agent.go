@@ -84,7 +84,15 @@ func newAgentReviewAddCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add",
 		Short: "Record a finding from an active review agent",
-		Args:  cobra.NoArgs,
+		Long: "Record a finding from an active review agent.\n\n" +
+			"Use this only from an attached agent_review pipeline step. Blocking findings " +
+			"stop approval and should include --suggested-action for the follow-up task run. " +
+			"Advisory findings are recorded without blocking. Separate-task findings propose " +
+			"standalone follow-up work that task review may create as Beads with provenance.\n\n" +
+			"After the review agent exits, task review records the step outcome. Operators " +
+			"inspect findings with task review show, run task run for open blockers, and " +
+			"rerun task review after follow-up completion.",
+		Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
 			return runAgentReviewAdd(command, opts, agentReviewAddOptions{
 				findingType:                findingType,

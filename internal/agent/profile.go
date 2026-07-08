@@ -64,6 +64,8 @@ type Profile struct {
 	Command     string   `yaml:"command"`
 	Args        []string `yaml:"args,omitempty"`
 	Interactive bool     `yaml:"interactive,omitempty"`
+	Harness     string   `yaml:"harness,omitempty"`
+	Model       string   `yaml:"model,omitempty"`
 }
 
 // CommandSnapshot is the resolved command line for one dispatch.
@@ -71,6 +73,8 @@ type CommandSnapshot struct {
 	AgentName string
 	Command   string
 	Args      []string
+	Harness   string
+	Model     string
 }
 
 // UnmarshalYAML decodes an agent profile while preserving backwards
@@ -239,6 +243,8 @@ func (c Config) resolveAgentProfile(agentName string, values InterpolationValues
 		AgentName: agentName,
 		Command:   interpolateProfileValue(profile.Command, values),
 		Args:      args,
+		Harness:   profile.Harness,
+		Model:     profile.Model,
 	}, nil
 }
 
@@ -309,7 +315,44 @@ func normalizeProfile(name string, profile Profile) (Profile, error) {
 		args[i] = arg
 	}
 
-	return Profile{Command: command, Args: args, Interactive: profile.Interactive}, nil
+	harness := strings.TrimSpace(profile.Harness)
+	if harness == "" && isCodexCommand(command) {
+		harness = "codex"
+	}
+	model := strings.TrimSpace(profile.Model)
+	if model == "" && harness == "codex" {
+		model = codexModelFromArgs(args)
+	}
+	return Profile{Command: command, Args: args, Interactive: profile.Interactive, Harness: harness, Model: model}, nil
+}
+
+func isCodexCommand(command string) bool {
+	base := command
+	if strings.ContainsAny(base, `/\`) {
+		parts := strings.FieldsFunc(base, func(r rune) bool {
+			return r == '/' || r == '\\'
+		})
+		if len(parts) > 0 {
+			base = parts[len(parts)-1]
+		}
+	}
+	return base == "codex"
+}
+
+func codexModelFromArgs(args []string) string {
+	for i, arg := range args {
+		arg = strings.TrimSpace(arg)
+		if arg == "--model" || arg == "-m" {
+			if i+1 < len(args) {
+				return strings.TrimSpace(args[i+1])
+			}
+			return ""
+		}
+		if value, ok := strings.CutPrefix(arg, "--model="); ok {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func validateInterpolationToken(field string, value string) error {
