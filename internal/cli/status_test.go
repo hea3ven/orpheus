@@ -30,22 +30,21 @@ func TestStatusGroupsLocalTaskSnapshots(t *testing.T) {
 
 	is.Empty(stderr)
 	for _, want := range []string{
-		"Ready to run (3)", "Alpha Repo", "ar-ready", "Ready task", "ar-dep", "Open dependency", "ar-bug", "Bug item",
-		"Needs attention (2)", "ar-failed", "Failed attached agent", "run attempt 1 failed",
-		"Working (1)", "ar-running", "Running attached agent", "run attempt 1 is running",
-		"Idle (2)", "ar-idle", "Idle without run", "no attached run recorded",
+		"TASK_ID", "STATUS", "Ready", "Alpha Repo", "ar-ready", "Ready task", "ar-dep", "Open dependency", "ar-bug", "Bug item",
+		"Needs attention", "ar-failed", "Failed attached agent", "run attempt 1 failed",
+		"Working", "ar-running", "Running attached agent", "run attempt 1 is running",
+		"Idle", "ar-idle", "Idle without run", "no attached run recorded",
 		"ar-succeeded", "Succeeded attached agent", "agent exited without completion",
-		"Reviewing (1)", "ar-review", "Review task", "https://example.test/pr/3",
+		"Reviewing", "ar-review", "Review task", "https://example.test/pr/3",
 		"ar-missing", "Needs inspection", "missing dependency ar-gone",
 	} {
 		is.Contains(stdout, want)
 	}
-	for _, hidden := range []string{"Blocked (1)", "ar-blocked", "Done / closed (1)", "ar-closed", "STATUS"} {
+	for _, hidden := range []string{"Blocked", "ar-blocked", "Done / closed", "ar-closed"} {
 		is.NotContains(stdout, hidden)
 	}
 
-	assertStatusGroupOrder(t, stdout, []string{"Needs attention", "Reviewing", "Working", "Idle", "Ready to run"})
-	is.NotContains(statusSection(t, stdout, "Ready to run", ""), "DETAIL")
+	assertStatusGroupOrder(t, stdout, []string{"Needs attention", "Reviewing", "Working", "Idle", "Ready"})
 
 	fullStdout, fullStderr := executeCommand(t, []string{"status", "--full"})
 	is.Empty(fullStderr)
@@ -116,23 +115,17 @@ func assertFullStatusGroupOutput(t *testing.T, fullStdout string) {
 
 	is := assert.New(t)
 	for _, want := range []string{
-		"Blocked (1)", "ar-blocked", "Blocked task", "blocked by ar-dep",
-		"Done / closed (1)", "ar-closed", "Closed task",
+		"Blocked", "ar-blocked", "Blocked task", "blocked by ar-dep",
+		"Done / closed", "ar-closed", "Closed task",
 	} {
 		is.Contains(fullStdout, want)
 	}
-	is.NotContains(fullStdout, "STATUS")
+	is.Contains(fullStdout, "STATUS")
 	assertStatusGroupOrder(t, fullStdout, []string{
-		"Needs attention", "Reviewing", "Working", "Idle", "Ready to run", "Blocked", "Done / closed",
+		"Needs attention", "Reviewing", "Working", "Idle", "Ready", "Blocked", "Done / closed",
 	})
-	for _, section := range []string{
-		statusSection(t, fullStdout, "Ready to run", "Blocked"),
-		statusSection(t, fullStdout, "Done / closed", ""),
-	} {
-		is.NotContains(section, "DETAIL")
-	}
-	blockedHeader := statusSection(t, fullStdout, "Blocked", "Done / closed")
-	is.Less(strings.Index(blockedHeader, "TITLE"), strings.Index(blockedHeader, "DETAIL"))
+	header := strings.SplitN(fullStdout, "\n", 2)[0]
+	is.Less(strings.Index(header, "TITLE"), strings.Index(header, "DETAIL"))
 }
 
 func TestStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t *testing.T) {
@@ -182,11 +175,10 @@ func TestStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t *testing.T) {
 	stdout, stderr := executeCommand(t, []string{"status"})
 
 	is.Empty(stderr)
-	is.Contains(stdout, "Reviewing (1)")
+	is.Contains(stdout, "Reviewing")
 	is.Contains(stdout, "ar-main")
 	is.Contains(stdout, "Local main review")
 	is.Contains(stdout, "local review; run task review")
-	is.Contains(stdout, "Working (0)")
 }
 
 func TestStatusAndTaskReadyUseLocalRunHistoryOnOpenTaskAsNeedsAttention(t *testing.T) {
@@ -220,10 +212,10 @@ func TestStatusAndTaskReadyUseLocalRunHistoryOnOpenTaskAsNeedsAttention(t *testi
 	stdout, stderr := executeCommand(t, []string{"status"})
 
 	is.Empty(stderr)
-	is.Contains(stdout, "Needs attention (1)")
+	is.Contains(stdout, "Needs attention")
 	is.Contains(stdout, "ar-running")
 	is.Contains(stdout, "backend status is open but local run attempt 1 is running")
-	is.Contains(stdout, "Ready to run (1)")
+	is.Contains(stdout, "Ready")
 	is.Contains(stdout, "ar-ready")
 
 	readyStdout, readyStderr := executeCommand(t, []string{"task", "ready"})
@@ -231,6 +223,63 @@ func TestStatusAndTaskReadyUseLocalRunHistoryOnOpenTaskAsNeedsAttention(t *testi
 	is.Empty(readyStderr)
 	is.Contains(readyStdout, "ar-ready")
 	is.NotContains(readyStdout, "ar-running")
+}
+
+func TestStatusRendersEpicChildrenAsIntegratedTreeRows(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoDir := filepath.Join(t.TempDir(), "alpha")
+	must.NoError(os.MkdirAll(repoDir, 0o755))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:          "alpha",
+		Name:        "Alpha Repo",
+		Path:        repoDir,
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "ar",
+	}}}))
+
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
+		dir:  repoDir,
+		args: "--json --readonly --sandbox list --all --limit 0",
+		stdout: `[
+			{"id":"ar-epic","title":"Active epic","status":"in_progress","priority":1,"issue_type":"epic","child_count":4},
+			{"id":"ar-ready","title":"Ready child","status":"open","priority":2,"issue_type":"task","parent":"ar-epic"},
+			{"id":"ar-nested","title":"Nested epic","status":"in_progress","priority":2,"issue_type":"epic","parent":"ar-epic"},
+			{"id":"ar-nested-child","title":"Nested child","status":"open","priority":3,"issue_type":"task","parent":"ar-nested"},
+			{"id":"ar-blocked","title":"Hidden blocked child","status":"open","priority":2,"issue_type":"task","parent":"ar-epic","dependencies":[{"id":"ar-ready","dependency_type":"blocks"}]},
+			{"id":"ar-done","title":"Hidden done child","status":"closed","priority":2,"issue_type":"task","parent":"ar-epic"}
+		]`,
+	}})
+
+	stdout, stderr := executeCommand(t, []string{"status"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "STATUS")
+	is.Contains(stdout, "Working")
+	is.Contains(stdout, "ar-epic")
+	is.Contains(stdout, "1/4 done")
+	is.Contains(stdout, "└─ ar-ready")
+	is.NotContains(stdout, "ar-blocked")
+	is.NotContains(stdout, "ar-done")
+	assertStatusGroupOrder(t, stdout, []string{"ar-epic", "├─ ar-nested", "│ └─ ar-nested-child", "└─ ar-ready"})
+
+	fullStdout, fullStderr := executeCommand(t, []string{"status", "--full"})
+
+	is.Empty(fullStderr)
+	is.Contains(fullStdout, "├─ ar-blocked")
+	is.Contains(fullStdout, "└─ ar-done")
+	assertStatusGroupOrder(t, fullStdout, []string{
+		"ar-epic",
+		"├─ ar-nested",
+		"│ └─ ar-nested-child",
+		"├─ ar-ready",
+		"├─ ar-blocked",
+		"└─ ar-done",
+	})
 }
 
 func TestStatusReportsRepoFailuresInUnknownGroupAndReturnsError(t *testing.T) {
@@ -275,11 +324,11 @@ func TestStatusReportsRepoFailuresInUnknownGroupAndReturnsError(t *testing.T) {
 
 	must.Error(err)
 	is.ErrorContains(err, "status completed with 1 repo failure")
-	is.Contains(stdout, "Ready to run (1)")
+	is.Contains(stdout, "Ready")
 	is.Contains(stdout, "OK Repo")
 	is.Contains(stdout, "ok-1")
 	is.Contains(stdout, "Ready despite another repo failure")
-	is.Contains(stdout, "Needs attention (1)")
+	is.Contains(stdout, "Needs attention")
 	is.Contains(stdout, "Broken Repo")
 	is.Contains(stdout, "task_backend/snapshot")
 	is.Contains(stdout, "bd exploded")
@@ -305,23 +354,6 @@ func assertStatusGroupOrder(t *testing.T, output string, groups []string) {
 		}
 		previous = index
 	}
-}
-
-func statusSection(t *testing.T, output string, start string, end string) string {
-	t.Helper()
-
-	startIndex := strings.Index(output, start)
-	if startIndex < 0 {
-		t.Fatalf("output missing section %q:\n%s", start, output)
-	}
-	if end == "" {
-		return output[startIndex:]
-	}
-	endIndex := strings.Index(output[startIndex:], "\n"+end)
-	if endIndex < 0 {
-		return output[startIndex:]
-	}
-	return output[startIndex : startIndex+endIndex]
 }
 
 func withFakeBDCommandResponses(t *testing.T, responses []fakeBDCommandResponse) string {

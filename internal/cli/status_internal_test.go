@@ -60,7 +60,7 @@ func TestStatusRenderOptionsNoTruncateSkipsWidthDetection(t *testing.T) {
 	}
 }
 
-func TestRenderStatusHidesEmptyNeedsAttentionOnly(t *testing.T) {
+func TestRenderStatusEmptyProjectionRendersIntegratedTableOnly(t *testing.T) {
 	projection := status.Projection{Groups: []status.Group{
 		{ID: status.GroupNeedsAttention, Title: "Needs attention"},
 		{ID: status.GroupInReview, Title: "Reviewing"},
@@ -78,15 +78,8 @@ func TestRenderStatusHidesEmptyNeedsAttentionOnly(t *testing.T) {
 	}
 
 	normal := output.String()
-	for _, hidden := range []string{"Needs attention (0)", "Blocked (0)", "Done / closed (0)"} {
-		if strings.Contains(normal, hidden) {
-			t.Fatalf("normal output contains hidden section %q:\n%s", hidden, normal)
-		}
-	}
-	for _, want := range []string{"Reviewing (0)", "Working (0)", "Idle (0)", "Ready to run (0)"} {
-		if !strings.Contains(normal, want) {
-			t.Fatalf("normal output missing %q:\n%s", want, normal)
-		}
+	if normal != "TASK_ID  STATUS  P  TITLE  REPO\n" {
+		t.Fatalf("normal output = %q, want integrated header only", normal)
 	}
 
 	output.Reset()
@@ -96,20 +89,8 @@ func TestRenderStatusHidesEmptyNeedsAttentionOnly(t *testing.T) {
 	}
 
 	full := output.String()
-	if strings.Contains(full, "Needs attention (0)") {
-		t.Fatalf("full output contains empty Needs attention section:\n%s", full)
-	}
-	for _, want := range []string{
-		"Reviewing (0)",
-		"Working (0)",
-		"Idle (0)",
-		"Ready to run (0)",
-		"Blocked (0)",
-		"Done / closed (0)",
-	} {
-		if !strings.Contains(full, want) {
-			t.Fatalf("full output missing %q:\n%s", want, full)
-		}
+	if full != "TASK_ID  STATUS  P  TITLE  REPO\n" {
+		t.Fatalf("full output = %q, want integrated header only", full)
 	}
 }
 
@@ -161,7 +142,7 @@ func TestRenderStatusResponsiveUsesShortDetailHidesRepoAndTruncatesTitle(t *test
 		strings.Contains(got, "Short Repo") {
 		t.Fatalf("responsive output kept repo column:\n%s", got)
 	}
-	for _, want := range []string{"TASK_ID", "TITLE", "DETAIL", "op-123456", "PR #123456", "..."} {
+	for _, want := range []string{"STATUS", "TASK_ID", "TITLE", "DETAIL", "op-123456", "PR #123456", "..."} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("responsive output missing %q:\n%s", want, got)
 		}
@@ -170,6 +151,45 @@ func TestRenderStatusResponsiveUsesShortDetailHidesRepoAndTruncatesTitle(t *test
 		t.Fatalf("responsive output kept full PR URL:\n%s", got)
 	}
 	assertStatusLinesWithinWidth(t, got, 48)
+}
+
+func TestRenderStatusResponsiveHidesPriorityAtLowWidth(t *testing.T) {
+	projection := status.Projection{Groups: []status.Group{{
+		ID:    status.GroupInReview,
+		Title: "Reviewing",
+		Entries: []status.Entry{{
+			Kind: status.EntryTask,
+			Repository: task.Repository{
+				ID:           "alpha",
+				Name:         "Repo",
+				TaskIDPrefix: "op",
+			},
+			Task: task.Task{
+				ID:       "op-123456789",
+				Priority: 2,
+				Title:    "Implement a compact status row",
+			},
+			Detail: "local review; run task review",
+		}},
+	}}}
+
+	var output bytes.Buffer
+	err := renderStatus(&output, projection, true, statusRenderOptions{MaxWidth: 44})
+	if err != nil {
+		t.Fatalf("render status: %v", err)
+	}
+
+	got := output.String()
+	header := strings.SplitN(got, "\n", 2)[0]
+	if strings.Contains(header, " P ") || strings.HasSuffix(header, " P") {
+		t.Fatalf("responsive output kept priority column:\n%s", got)
+	}
+	for _, want := range []string{"TASK_ID", "STATUS", "TITLE", "DETAIL", "op-123456789", "Reviewing"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("responsive output missing %q:\n%s", want, got)
+		}
+	}
+	assertStatusLinesWithinWidth(t, got, 44)
 }
 
 func TestRenderStatusNoTruncatePreservesUnboundedOutput(t *testing.T) {

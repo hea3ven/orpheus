@@ -88,7 +88,7 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 
 	statusOut, statusErr := executeCommand(t, []string{"status"})
 	is.Empty(statusErr)
-	is.Contains(statusOut, "Reviewing (1)")
+	is.Contains(statusOut, "Reviewing")
 	is.Contains(statusOut, taskID)
 	is.Contains(statusOut, "local review; run task review")
 	is.NotContains(statusOut, "https://")
@@ -301,7 +301,7 @@ func TestWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	statusOut, statusErr := executeCommand(t, []string{"status"})
 
 	is.Empty(statusErr)
-	is.Contains(statusOut, "Reviewing (1)")
+	is.Contains(statusOut, "Reviewing")
 	is.Contains(statusOut, taskID)
 	is.Contains(statusOut, "M5 sync flow")
 	is.Contains(statusOut, "https://github.test/org/alpha/pull/55")
@@ -343,7 +343,7 @@ func TestWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 
 	fullStatusOut, fullStatusErr := executeCommand(t, []string{"status", "--full"})
 	is.Empty(fullStatusErr)
-	is.Contains(fullStatusOut, "Done / closed (1)")
+	is.Contains(fullStatusOut, "Done / closed")
 	is.Contains(fullStatusOut, taskID)
 }
 
@@ -525,7 +525,7 @@ func TestMainCompletionFlowEndToEnd(t *testing.T) {
 
 	statusOut, statusErr := executeCommand(t, []string{"status"})
 	is.Empty(statusErr)
-	is.Contains(statusOut, "Reviewing (1)")
+	is.Contains(statusOut, "Reviewing")
 	is.Contains(statusOut, taskID)
 	is.Contains(statusOut, "local review; run task review")
 
@@ -555,7 +555,7 @@ func TestMainCompletionFlowEndToEnd(t *testing.T) {
 
 	fullStatusOut, fullStatusErr := executeCommand(t, []string{"status", "--full"})
 	is.Empty(fullStatusErr)
-	is.Contains(fullStatusOut, "Done / closed (1)")
+	is.Contains(fullStatusOut, "Done / closed")
 	is.Contains(fullStatusOut, taskID)
 	is.Contains(fullStatusOut, "Main completion flow")
 }

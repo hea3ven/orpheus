@@ -144,10 +144,30 @@ var defaultStatusWidthDetector = statusWidthDetector{
 }
 
 type statusRenderLayout struct {
-	IncludeRepo    bool
-	ShortDetail    bool
-	TruncateTitles bool
-	MaxWidth       int
+	IncludeRepo     bool
+	IncludePriority bool
+	ShortDetail     bool
+	TruncateTitles  bool
+	MaxWidth        int
+}
+
+type statusDisplayRow struct {
+	Entry      status.Entry
+	Status     string
+	TaskID     string
+	Detail     string
+	ShowDetail bool
+}
+
+type statusTaskKey struct {
+	RepoID string
+	TaskID string
+}
+
+type epicChildProgress struct {
+	Completed     int
+	ObservedTotal int
+	DeclaredTotal int
 }
 
 func statusRenderOptionsForOutput(
@@ -180,40 +200,23 @@ func renderStatus(
 	options statusRenderOptions,
 ) error {
 	visibleGroups := visibleStatusGroups(projection.Groups, full)
-	layout := statusLayoutFor(visibleGroups, options)
-	for i, group := range visibleGroups {
-		if i > 0 {
-			if _, err := fmt.Fprintln(output); err != nil {
-				return err
-			}
-		}
-		if _, err := fmt.Fprintf(output, "%s (%d)\n", group.Title, len(group.Entries)); err != nil {
-			return err
-		}
-		if len(group.Entries) == 0 {
-			if _, err := fmt.Fprintln(output, "-"); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := renderStatusEntries(output, group, layout); err != nil {
-			return err
-		}
-	}
-	return nil
+	rows := statusDisplayRows(projection.Groups, visibleGroups)
+	layout := statusLayoutFor(rows, options)
+	return renderStatusRows(output, rows, layout)
 }
 
-func statusLayoutFor(groups []status.Group, options statusRenderOptions) statusRenderLayout {
+func statusLayoutFor(rows []statusDisplayRow, options statusRenderOptions) statusRenderLayout {
 	if options.NoTruncate || options.MaxWidth <= 0 {
-		return statusRenderLayout{IncludeRepo: true}
+		return statusRenderLayout{IncludeRepo: true, IncludePriority: true}
 	}
 	candidates := []statusRenderLayout{
-		{IncludeRepo: true, MaxWidth: options.MaxWidth},
-		{IncludeRepo: true, ShortDetail: true, MaxWidth: options.MaxWidth},
+		{IncludeRepo: true, IncludePriority: true, MaxWidth: options.MaxWidth},
+		{IncludeRepo: true, IncludePriority: true, ShortDetail: true, MaxWidth: options.MaxWidth},
+		{IncludePriority: true, ShortDetail: true, MaxWidth: options.MaxWidth},
 		{ShortDetail: true, MaxWidth: options.MaxWidth},
 	}
 	for _, candidate := range candidates {
-		if statusGroupsFit(groups, candidate) {
+		if statusRowsFit(rows, candidate) {
 			return candidate
 		}
 	}
@@ -224,27 +227,13 @@ func statusLayoutFor(groups []status.Group, options statusRenderOptions) statusR
 	}
 }
 
-func statusGroupsFit(groups []status.Group, layout statusRenderLayout) bool {
-	for _, group := range groups {
-		if len(group.Entries) == 0 {
-			continue
-		}
-		headers, rows := statusEntryTable(
-			group,
-			statusGroupShowsDetail(group.ID),
-			layout.IncludeRepo,
-			layout.ShortDetail,
-		)
-		if tableWidth(headers, rows) > layout.MaxWidth {
-			return false
-		}
-	}
-	return true
+func statusRowsFit(rows []statusDisplayRow, layout statusRenderLayout) bool {
+	headers, tableRows := statusEntryTable(rows, layout.IncludeRepo, layout.IncludePriority, layout.ShortDetail)
+	return tableWidth(headers, tableRows) <= layout.MaxWidth
 }
 
-func renderStatusEntries(output io.Writer, group status.Group, layout statusRenderLayout) error {
-	showDetail := statusGroupShowsDetail(group.ID)
-	headers, rows := statusEntryTable(group, showDetail, layout.IncludeRepo, layout.ShortDetail)
+func renderStatusRows(output io.Writer, statusRows []statusDisplayRow, layout statusRenderLayout) error {
+	headers, rows := statusEntryTable(statusRows, layout.IncludeRepo, layout.IncludePriority, layout.ShortDetail)
 	if layout.TruncateTitles {
 		rows = truncateStatusTitles(headers, rows, layout.MaxWidth)
 	}
@@ -252,39 +241,58 @@ func renderStatusEntries(output io.Writer, group status.Group, layout statusRend
 }
 
 func statusEntryTable(
-	group status.Group,
-	showDetail bool,
+	statusRows []statusDisplayRow,
 	includeRepo bool,
+	includePriority bool,
 	shortDetail bool,
 ) ([]string, [][]string) {
-	headers := []string{"REPO", "TASK_ID", "P", "TITLE"}
-	if !includeRepo {
-		headers = headers[1:]
+	headers := []string{"TASK_ID", "STATUS"}
+	if includePriority {
+		headers = append(headers, "P")
 	}
-	if showDetail {
+	headers = append(headers, "TITLE")
+	if includeRepo {
+		headers = append(headers, "REPO")
+	}
+	includeDetail := statusRowsShowDetail(statusRows)
+	if includeDetail {
 		headers = append(headers, "DETAIL")
 	}
 
-	rows := make([][]string, 0, len(group.Entries))
-	for _, entry := range group.Entries {
-		switch entry.Kind {
+	rows := make([][]string, 0, len(statusRows))
+	for _, row := range statusRows {
+		switch row.Entry.Kind {
 		case status.EntryTask:
-			rows = append(rows, statusTaskEntryTableRow(entry, showDetail, includeRepo, shortDetail))
+			rows = append(rows, statusTaskEntryTableRow(row, includeDetail, includeRepo, includePriority, shortDetail))
 		case status.EntryRepoFailure:
-			rows = append(rows, statusFailureEntryTableRow(entry, showDetail, includeRepo, shortDetail))
+			rows = append(rows, statusFailureEntryTableRow(row, includeDetail, includeRepo, includePriority, shortDetail))
 		}
 	}
 	return headers, rows
 }
 
-func statusTaskEntryTableRow(entry status.Entry, showDetail bool, includeRepo bool, shortDetail bool) []string {
-	row := make([]string, 0, 5)
+func statusTaskEntryTableRow(
+	entryRow statusDisplayRow,
+	includeDetail bool,
+	includeRepo bool,
+	includePriority bool,
+	shortDetail bool,
+) []string {
+	entry := entryRow.Entry
+	row := make([]string, 0, 6)
+	row = append(row, entryRow.TaskID, entryRow.Status)
+	if includePriority {
+		row = append(row, strconv.Itoa(entry.Task.Priority))
+	}
+	row = append(row, statusDisplayTitle(entry.Task))
 	if includeRepo {
 		row = append(row, entry.Repository.Name)
 	}
-	row = append(row, entry.Task.ID, strconv.Itoa(entry.Task.Priority), entry.Task.Title)
-	if showDetail {
-		detail := entry.Detail
+	if includeDetail {
+		detail := ""
+		if entryRow.ShowDetail {
+			detail = entryRow.Detail
+		}
 		if shortDetail {
 			detail = shortStatusDetail(entry, detail)
 		}
@@ -293,25 +301,224 @@ func statusTaskEntryTableRow(entry status.Entry, showDetail bool, includeRepo bo
 	return row
 }
 
-func statusFailureEntryTableRow(entry status.Entry, showDetail bool, includeRepo bool, shortDetail bool) []string {
-	detail := entry.Detail
+func statusFailureEntryTableRow(
+	entryRow statusDisplayRow,
+	includeDetail bool,
+	includeRepo bool,
+	includePriority bool,
+	shortDetail bool,
+) []string {
+	entry := entryRow.Entry
+	detail := entryRow.Detail
 	if detail == "" && entry.Failure != nil {
 		detail = entry.Failure.Error()
 	}
 	title := fmt.Sprintf("repo %s (prefix %s)", entry.Repository.ID, entry.Repository.TaskIDPrefix)
 
-	row := make([]string, 0, 5)
+	row := make([]string, 0, 6)
+	row = append(row, "-", entryRow.Status)
+	if includePriority {
+		row = append(row, "-")
+	}
+	row = append(row, title)
 	if includeRepo {
 		row = append(row, entry.Repository.Name)
 	}
-	row = append(row, "-", "-", title)
-	if showDetail {
+	if includeDetail {
 		if shortDetail {
 			detail = shortStatusDetail(entry, detail)
 		}
 		row = append(row, detail)
 	}
 	return row
+}
+
+func statusDisplayTitle(taskItem taskmodel.Task) string {
+	if taskItem.IssueType != taskmodel.IssueTypeEpic {
+		return taskItem.Title
+	}
+	return "◆ " + taskItem.Title
+}
+
+func statusDisplayRows(allGroups []status.Group, visibleGroups []status.Group) []statusDisplayRow {
+	progressByEpic := epicChildProgressByParent(allGroups)
+	rows := make([]statusDisplayRow, 0)
+	for _, group := range visibleGroups {
+		for _, entry := range group.Entries {
+			row := statusDisplayRow{
+				Entry:      entry,
+				Status:     statusDisplayLabel(group),
+				Detail:     entry.Detail,
+				ShowDetail: statusGroupShowsDetail(group.ID),
+			}
+			if entry.Kind == status.EntryTask {
+				row.TaskID = entry.Task.ID
+				if entry.Task.IssueType == taskmodel.IssueTypeEpic {
+					row.ShowDetail = true
+					row.Detail = epicProgressDetail(progressByEpic[statusKey(entry.Repository.ID, entry.Task.ID)])
+					if entry.Task.Status == taskmodel.StatusInProgress {
+						row.Status = "Working"
+					}
+				}
+			}
+			rows = append(rows, row)
+		}
+	}
+	return statusTreeRows(rows)
+}
+
+func statusDisplayLabel(group status.Group) string {
+	if group.ID == status.GroupReadyToRun {
+		return "Ready"
+	}
+	return group.Title
+}
+
+func statusRowsShowDetail(rows []statusDisplayRow) bool {
+	for _, row := range rows {
+		if row.ShowDetail {
+			return true
+		}
+	}
+	return false
+}
+
+func epicChildProgressByParent(groups []status.Group) map[statusTaskKey]epicChildProgress {
+	progressByEpic := map[statusTaskKey]epicChildProgress{}
+	for _, group := range groups {
+		for _, entry := range group.Entries {
+			if entry.Kind != status.EntryTask {
+				continue
+			}
+			if entry.Task.IssueType == taskmodel.IssueTypeEpic {
+				key := statusKey(entry.Repository.ID, entry.Task.ID)
+				progress := progressByEpic[key]
+				if entry.Task.Relations.ChildCount > progress.DeclaredTotal {
+					progress.DeclaredTotal = entry.Task.Relations.ChildCount
+				}
+				progressByEpic[key] = progress
+			}
+			parentID := strings.TrimSpace(entry.Task.Relations.ParentID)
+			if parentID == "" {
+				continue
+			}
+			key := statusKey(entry.Repository.ID, parentID)
+			progress := progressByEpic[key]
+			progress.ObservedTotal++
+			if entry.Task.Status == taskmodel.StatusClosed {
+				progress.Completed++
+			}
+			progressByEpic[key] = progress
+		}
+	}
+	return progressByEpic
+}
+
+func epicProgressDetail(progress epicChildProgress) string {
+	total := max(progress.ObservedTotal, progress.DeclaredTotal)
+	return fmt.Sprintf("%d/%d done", progress.Completed, total)
+}
+
+func statusTreeRows(rows []statusDisplayRow) []statusDisplayRow {
+	childrenByParent, hasVisibleParent := statusTreeChildIndex(rows, visibleEpicKeys(rows))
+
+	ordered := make([]statusDisplayRow, 0, len(rows))
+	rendered := make(map[int]struct{}, len(rows))
+	var appendNode func(int, string, string, string)
+	appendNode = func(index int, displayPrefix string, childPrefix string, marker string) {
+		if _, ok := rendered[index]; ok {
+			return
+		}
+		rendered[index] = struct{}{}
+
+		row := rows[index]
+		if marker != "" && row.Entry.Kind == status.EntryTask {
+			row.TaskID = displayPrefix + marker + row.Entry.Task.ID
+		}
+		ordered = append(ordered, row)
+
+		key, ok := rowTreeKey(row)
+		if !ok {
+			return
+		}
+		children := unrenderedChildren(childrenByParent[key], rendered)
+		for i, childIndex := range children {
+			childMarker := "├─ "
+			nextChildPrefix := childPrefix + "│ "
+			if i == len(children)-1 {
+				childMarker = "└─ "
+				nextChildPrefix = childPrefix + "  "
+			}
+			appendNode(childIndex, childPrefix, nextChildPrefix, childMarker)
+		}
+	}
+
+	for i := range rows {
+		if _, ok := hasVisibleParent[i]; ok {
+			continue
+		}
+		appendNode(i, "", "", "")
+	}
+	for i := range rows {
+		appendNode(i, "", "", "")
+	}
+	return ordered
+}
+
+func visibleEpicKeys(rows []statusDisplayRow) map[statusTaskKey]struct{} {
+	visibleEpics := make(map[statusTaskKey]struct{})
+	for _, row := range rows {
+		if row.Entry.Kind == status.EntryTask && row.Entry.Task.IssueType == taskmodel.IssueTypeEpic {
+			visibleEpics[statusKey(row.Entry.Repository.ID, row.Entry.Task.ID)] = struct{}{}
+		}
+	}
+	return visibleEpics
+}
+
+func statusTreeChildIndex(
+	rows []statusDisplayRow,
+	visibleEpics map[statusTaskKey]struct{},
+) (map[statusTaskKey][]int, map[int]struct{}) {
+	childrenByParent := make(map[statusTaskKey][]int)
+	hasVisibleParent := make(map[int]struct{})
+	for i, row := range rows {
+		if row.Entry.Kind != status.EntryTask {
+			continue
+		}
+		parentID := strings.TrimSpace(row.Entry.Task.Relations.ParentID)
+		if parentID == "" {
+			continue
+		}
+		parentKey := statusKey(row.Entry.Repository.ID, parentID)
+		if _, ok := visibleEpics[parentKey]; !ok {
+			continue
+		}
+		childrenByParent[parentKey] = append(childrenByParent[parentKey], i)
+		hasVisibleParent[i] = struct{}{}
+	}
+	return childrenByParent, hasVisibleParent
+}
+
+func rowTreeKey(row statusDisplayRow) (statusTaskKey, bool) {
+	if row.Entry.Kind != status.EntryTask || row.Entry.Task.IssueType != taskmodel.IssueTypeEpic {
+		return statusTaskKey{}, false
+	}
+	return statusKey(row.Entry.Repository.ID, row.Entry.Task.ID), true
+}
+
+func unrenderedChildren(children []int, rendered map[int]struct{}) []int {
+	unrendered := make([]int, 0, len(children))
+	for _, child := range children {
+		if _, ok := rendered[child]; ok {
+			continue
+		}
+		unrendered = append(unrendered, child)
+	}
+	return unrendered
+}
+
+func statusKey(repoID string, taskID string) statusTaskKey {
+	return statusTaskKey{RepoID: repoID, TaskID: taskID}
 }
 
 func shortStatusDetail(entry status.Entry, detail string) string {
