@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -46,6 +47,7 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 		newTaskListCommand(opts),
 		newTaskReadyCommand(opts),
 		newTaskShowCommand(opts),
+		newTaskStatsCommand(opts),
 		newTaskDirCommand(opts),
 		newTaskRunCommand(opts),
 		newTaskReviewCommand(opts),
@@ -104,6 +106,18 @@ func newTaskShowCommand(opts *rootOptions) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			return runTaskShow(command, opts, args[0])
+		},
+	}
+	return cmd
+}
+
+func newTaskStatsCommand(opts *rootOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "stats <task-id>",
+		Short: "Show local implementation execution stats for a task",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			return runTaskStats(command, opts, args[0])
 		},
 	}
 	return cmd
@@ -352,6 +366,36 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 	}, taskState.Events)
 }
 
+func runTaskStats(command *cobra.Command, opts *rootOptions, taskID string) error {
+	logger := opts.log().With(
+		slog.String("component", "cli"),
+		slog.String("operation", "task_stats"),
+	)
+	logger.DebugContext(command.Context(), "loading registered repos for task stats")
+
+	resolvedCtx, err := resolveTaskShowContext(command, taskID)
+	if err != nil {
+		return err
+	}
+	paths, err := state.ResolveFromEnvironment()
+	if err != nil {
+		return err
+	}
+	taskState, err := taskstate.NewStore(paths).Load(
+		resolvedCtx.Resolved.Source.Repository.ID,
+		resolvedCtx.Resolved.TaskID,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"task stats %s: load local task-state for repo %s: %w",
+			resolvedCtx.Resolved.TaskID,
+			resolvedCtx.Resolved.Source.Repository.ID,
+			err,
+		)
+	}
+	return renderTaskStats(command.OutOrStdout(), taskState)
+}
+
 func runTaskDir(command *cobra.Command, opts *rootOptions, taskID string) error {
 	logger := opts.log().With(
 		slog.String("component", "cli"),
@@ -435,10 +479,7 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID, agentName str
 		return err
 	}
 
-	if err := dispatch.service.Finish(repo.ID, resolved.TaskID, dispatch.start.Attempt.Attempt); err != nil {
-		return fmt.Errorf("task run %s: record run finish: %w", resolved.TaskID, err)
-	}
-	return nil
+	return finishTaskRun(command, dispatch.service, repo.ID, resolved.TaskID, dispatch.start)
 }
 
 func validateTaskRunExternalRef(
@@ -498,6 +539,8 @@ func startTaskRunDispatch(
 				AgentName: commandSnapshot.AgentName,
 				Command:   commandSnapshot.Command,
 				Args:      commandSnapshot.Args,
+				Harness:   commandSnapshot.Harness,
+				Model:     commandSnapshot.Model,
 			}, nil
 		},
 		ResolveFollowUpCommand: func(commandContext workflow.DispatchCommandContext) (workflow.DispatchCommand, error) {
@@ -510,6 +553,8 @@ func startTaskRunDispatch(
 				AgentName: commandSnapshot.AgentName,
 				Command:   commandSnapshot.Command,
 				Args:      commandSnapshot.Args,
+				Harness:   commandSnapshot.Harness,
+				Model:     commandSnapshot.Model,
 			}, nil
 		},
 		MainMode:     mainMode,
@@ -583,6 +628,63 @@ func launchTaskRunAgent(
 		return fmt.Errorf("task run %s: %w; additionally failed to record run failure: %w", taskID, err, recordErr)
 	}
 	return fmt.Errorf("task run %s: %w", taskID, err)
+}
+
+func recordTaskRunUsage(
+	command *cobra.Command,
+	service workflow.DispatchService,
+	repoID string,
+	taskID string,
+	start workflow.DispatchStartResult,
+) error {
+	usageOpts := taskRunUsageOptions(command, start)
+	_, err := service.RunStore.RecordRunUsage(repoID, taskID, start.Attempt.Attempt, usageOpts)
+	return err
+}
+
+func finishTaskRun(
+	command *cobra.Command,
+	service workflow.DispatchService,
+	repoID string,
+	taskID string,
+	start workflow.DispatchStartResult,
+) error {
+	usageErr := recordTaskRunUsage(command, service, repoID, taskID, start)
+	if err := service.Finish(repoID, taskID, start.Attempt.Attempt); err != nil {
+		return fmt.Errorf("task run %s: record run finish: %w", taskID, err)
+	}
+	if usageErr != nil {
+		return fmt.Errorf("task run %s: record run usage: %w", taskID, usageErr)
+	}
+	return nil
+}
+
+func taskRunUsageOptions(command *cobra.Command, start workflow.DispatchStartResult) taskstate.RecordRunUsageOptions {
+	if start.Attempt.Execution.Harness != "codex" {
+		return taskstate.RecordRunUsageOptions{
+			UsageCapture: taskstate.AgentUsageCapture{
+				Status: taskstate.UsageCaptureUnknown,
+				Reason: "usage capture is not supported for harness " +
+					formatTaskStatsField(start.Attempt.Execution.Harness),
+			},
+		}
+	}
+	return agent.CaptureCodexUsage(agent.CodexUsageCaptureOptions{
+		ExecutionDir: start.ExecutionDir,
+		StartedAt:    start.Attempt.Execution.StartedAt,
+		FinishedAt:   time.Now().UTC(),
+		Env:          usageCaptureEnvironment(),
+	})
+}
+
+func usageCaptureEnvironment() map[string]string {
+	env := map[string]string{}
+	for _, key := range []string{"CODEX_HOME", "HOME"} {
+		if value, ok := os.LookupEnv(key); ok {
+			env[key] = value
+		}
+	}
+	return env
 }
 
 func runTaskReview(command *cobra.Command, opts *rootOptions, taskID string, pipelineName string) error {
@@ -2295,6 +2397,129 @@ func renderTaskOrpheusMetadata(output interface{ Write([]byte) (int, error) }, m
 		}
 	}
 	return nil
+}
+
+func renderTaskStats(output interface{ Write([]byte) (int, error) }, state taskstate.TaskState) error {
+	rows := make([][]string, 0, len(state.Runs))
+	for _, run := range state.Runs {
+		rows = append(rows, taskStatsRow(run))
+	}
+	return renderTable(
+		output,
+		[]string{"ATTEMPT", "PROFILE", "HARNESS", "MODEL", "COMMAND", "STARTED", "FINISHED", "DURATION", "STATUS", "SESSION", "USAGE"},
+		rows,
+	)
+}
+
+func taskStatsRow(run taskstate.RunAttempt) []string {
+	execution := run.Execution
+	return []string{
+		strconv.Itoa(run.Attempt),
+		formatTaskStatsField(firstNonEmpty(execution.Profile, execution.Agent)),
+		formatTaskStatsField(execution.Harness),
+		formatTaskStatsField(execution.Model),
+		formatTaskStatsCommand(execution),
+		formatTaskStatsTime(execution.StartedAt),
+		formatTaskStatsTimePointer(execution.FinishedAt),
+		formatTaskStatsDuration(execution),
+		string(run.Status),
+		formatTaskStatsSession(execution.Session),
+		formatTaskStatsUsage(execution),
+	}
+}
+
+func formatTaskStatsCommand(execution taskstate.AgentExecution) string {
+	if strings.TrimSpace(execution.Command) == "" {
+		return "-"
+	}
+	return commandLineForStats(execution.Command, execution.Args)
+}
+
+func commandLineForStats(command string, args []string) string {
+	parts := make([]string, 0, len(args)+1)
+	parts = append(parts, strconv.Quote(command))
+	for _, arg := range args {
+		parts = append(parts, strconv.Quote(arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+func formatTaskStatsTime(value time.Time) string {
+	if value.IsZero() {
+		return "-"
+	}
+	return value.UTC().Format(time.RFC3339)
+}
+
+func formatTaskStatsTimePointer(value *time.Time) string {
+	if value == nil {
+		return "-"
+	}
+	return formatTaskStatsTime(*value)
+}
+
+func formatTaskStatsDuration(execution taskstate.AgentExecution) string {
+	if execution.DurationMillis > 0 {
+		return (time.Duration(execution.DurationMillis) * time.Millisecond).String()
+	}
+	if execution.FinishedAt == nil || execution.StartedAt.IsZero() {
+		return "-"
+	}
+	duration := execution.FinishedAt.Sub(execution.StartedAt)
+	if duration < 0 {
+		return "-"
+	}
+	return duration.String()
+}
+
+func formatTaskStatsSession(session *taskstate.AgentSession) string {
+	if session == nil {
+		return "-"
+	}
+	return formatTaskStatsField(firstNonEmpty(session.ID, session.LogPath))
+}
+
+func formatTaskStatsUsage(execution taskstate.AgentExecution) string {
+	if execution.Usage != nil {
+		return fmt.Sprintf(
+			"total=%d input=%d cached_input=%d output=%d reasoning_output=%d",
+			execution.Usage.TotalTokens,
+			execution.Usage.InputTokens,
+			execution.Usage.CachedInputTokens,
+			execution.Usage.OutputTokens,
+			execution.Usage.ReasoningOutputTokens,
+		)
+	}
+	capture := execution.UsageCapture
+	status := string(capture.Status)
+	if status == "" {
+		status = string(taskstate.UsageCaptureUnknown)
+	}
+	reason := strings.TrimSpace(capture.Reason)
+	if reason == "" {
+		reason = "usage_not_recorded"
+	}
+	if capture.CandidateCount > 0 {
+		return fmt.Sprintf("%s: %s (candidates=%d)", status, reason, capture.CandidateCount)
+	}
+	return fmt.Sprintf("%s: %s", status, reason)
+}
+
+func formatTaskStatsField(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "-"
+	}
+	return value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func renderKeyValue(output interface{ Write([]byte) (int, error) }, label string, value string) error {
