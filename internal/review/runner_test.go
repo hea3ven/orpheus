@@ -254,6 +254,172 @@ done
 	}
 }
 
+func TestRunPipelineHunkManualCommandContinuesWhenSessionMissing(t *testing.T) {
+	workdir := t.TempDir()
+	initReviewTestGitRepo(t, workdir)
+
+	controlDir := t.TempDir()
+	hunkCallPath := filepath.Join(controlDir, "hunk-called")
+	installReviewTestHunkCommandScript(t, fmt.Sprintf(`#!/bin/sh
+if [ "$1" = "session" ] && [ "$2" = "comment" ] && [ "$3" = "list" ]; then
+  : > %s
+  exit 64
+fi
+printf 'unexpected fake hunk call: %%s\n' "$*" >&2
+exit 65
+`, shellQuoteReviewTest(hunkCallPath)))
+	manualRanPath := filepath.Join(controlDir, "manual-ran")
+	manual := writeReviewTestScript(t, workdir, "hunk-missing-session-manual", fmt.Sprintf(`#!/bin/sh
+: > %s
+`, shellQuoteReviewTest(manualRanPath)))
+	store, attempt := startReviewTestAttempt(t)
+	pipeline := singleStepPipeline(review.KindManual, "inspect", manual)
+	pipeline.Steps[0].HunkNotes = true
+	var captured []review.HunkNote
+
+	outcome, err := review.RunPipeline(review.PipelineRunOptions{
+		Context:  context.Background(),
+		Store:    store,
+		RepoID:   "alpha",
+		TaskID:   "op-1",
+		Branch:   "main",
+		Workdir:  workdir,
+		Attempt:  attempt,
+		Pipeline: pipeline,
+		Stdout:   io.Discard,
+		Stderr:   io.Discard,
+		RenderManualStep: func(step review.Step) error {
+			return nil
+		},
+		ConfirmManualCommand: func(step review.Step) (bool, error) {
+			return true, nil
+		},
+		PromptManualStep: func(step review.ManualStep) (review.ManualResult, error) {
+			captured = append([]review.HunkNote{}, step.HunkNotes...)
+			return review.ManualResult{Status: taskstate.ReviewStatusPassed}, nil
+		},
+	})
+
+	if err != nil {
+		t.Fatalf("RunPipeline error = %v", err)
+	}
+	if outcome.Status != taskstate.ReviewStatusPassed {
+		t.Fatalf("outcome = %q, want passed", outcome.Status)
+	}
+	if len(captured) != 0 {
+		t.Fatalf("captured Hunk notes = %#v, want none", captured)
+	}
+	if _, err := os.Stat(manualRanPath); err != nil {
+		t.Fatalf("manual command marker: %v", err)
+	}
+	if _, err := os.Stat(hunkCallPath); err != nil {
+		t.Fatalf("hunk capture marker: %v", err)
+	}
+}
+
+func TestRunPipelineGenericManualCommandDoesNotPollHunkNotes(t *testing.T) {
+	workdir := t.TempDir()
+	initReviewTestGitRepo(t, workdir)
+
+	controlDir := t.TempDir()
+	hunkCallPath := filepath.Join(controlDir, "hunk-called")
+	installReviewTestHunkCommandScript(t, fmt.Sprintf(`#!/bin/sh
+: > %s
+printf '{"comments":[{"noteId":"unexpected","source":"user","body":"unexpected"}]}\n'
+`, shellQuoteReviewTest(hunkCallPath)))
+	manual := writeReviewTestScript(t, workdir, "generic-manual", "#!/bin/sh\n")
+	store, attempt := startReviewTestAttempt(t)
+	pipeline := singleStepPipeline(review.KindManual, "inspect", manual)
+	var captured []review.HunkNote
+
+	outcome, err := review.RunPipeline(review.PipelineRunOptions{
+		Context:  context.Background(),
+		Store:    store,
+		RepoID:   "alpha",
+		TaskID:   "op-1",
+		Branch:   "main",
+		Workdir:  workdir,
+		Attempt:  attempt,
+		Pipeline: pipeline,
+		Stdout:   io.Discard,
+		Stderr:   io.Discard,
+		RenderManualStep: func(step review.Step) error {
+			return nil
+		},
+		ConfirmManualCommand: func(step review.Step) (bool, error) {
+			return true, nil
+		},
+		PromptManualStep: func(step review.ManualStep) (review.ManualResult, error) {
+			captured = append([]review.HunkNote{}, step.HunkNotes...)
+			return review.ManualResult{Status: taskstate.ReviewStatusPassed}, nil
+		},
+	})
+
+	if err != nil {
+		t.Fatalf("RunPipeline error = %v", err)
+	}
+	if outcome.Status != taskstate.ReviewStatusPassed {
+		t.Fatalf("outcome = %q, want passed", outcome.Status)
+	}
+	if len(captured) != 0 {
+		t.Fatalf("captured Hunk notes = %#v, want none", captured)
+	}
+	if _, err := os.Stat(hunkCallPath); !os.IsNotExist(err) {
+		t.Fatalf("hunk capture marker exists or stat failed: %v", err)
+	}
+}
+
+func TestRunPipelineHunkManualCommandFailureRemainsOperationalError(t *testing.T) {
+	workdir := t.TempDir()
+	initReviewTestGitRepo(t, workdir)
+
+	installReviewTestHunkCommandScript(t, `#!/bin/sh
+if [ "$1" = "session" ] && [ "$2" = "comment" ] && [ "$3" = "list" ]; then
+  printf '{"comments":[]}\n'
+  exit 0
+fi
+printf 'unexpected fake hunk call: %s\n' "$*" >&2
+exit 65
+`)
+	manual := writeReviewTestScript(t, workdir, "failing-hunk-manual", `#!/bin/sh
+exit 42
+`)
+	store, attempt := startReviewTestAttempt(t)
+	pipeline := singleStepPipeline(review.KindManual, "inspect", manual)
+	pipeline.Steps[0].HunkNotes = true
+	prompted := false
+
+	_, err := review.RunPipeline(review.PipelineRunOptions{
+		Context:  context.Background(),
+		Store:    store,
+		RepoID:   "alpha",
+		TaskID:   "op-1",
+		Branch:   "main",
+		Workdir:  workdir,
+		Attempt:  attempt,
+		Pipeline: pipeline,
+		Stdout:   io.Discard,
+		Stderr:   io.Discard,
+		RenderManualStep: func(step review.Step) error {
+			return nil
+		},
+		ConfirmManualCommand: func(step review.Step) (bool, error) {
+			return true, nil
+		},
+		PromptManualStep: func(step review.ManualStep) (review.ManualResult, error) {
+			prompted = true
+			return review.ManualResult{Status: taskstate.ReviewStatusPassed}, nil
+		},
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "run manual step \"inspect\"") {
+		t.Fatalf("RunPipeline error = %v, want manual command failure", err)
+	}
+	if prompted {
+		t.Fatal("PromptManualStep was called, want operational command failure before prompt")
+	}
+}
+
 func TestRunPipelineInteractiveAgentReviewOutputDependsOnProfileMode(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -544,8 +710,6 @@ func writeReviewTestScript(t *testing.T, dir string, name string, content string
 func installReviewTestHunkCommand(t *testing.T, initialCapturePath string, commandCompletePath string) {
 	t.Helper()
 
-	binDir := t.TempDir()
-	hunkPath := filepath.Join(binDir, "hunk")
 	noteResponse := `{"comments":[{"noteId":"user:late","source":"user","filePath":"late.go","newRange":[42,42],"body":"late note"}]}`
 	script := fmt.Sprintf(`#!/bin/sh
 if [ "$1" = "session" ] && [ "$2" = "comment" ] && [ "$3" = "list" ]; then
@@ -564,6 +728,14 @@ exit 65
 		shellQuoteReviewTest(noteResponse),
 		shellQuoteReviewTest(initialCapturePath),
 	)
+	installReviewTestHunkCommandScript(t, script)
+}
+
+func installReviewTestHunkCommandScript(t *testing.T, script string) {
+	t.Helper()
+
+	binDir := t.TempDir()
+	hunkPath := filepath.Join(binDir, "hunk")
 	if err := os.WriteFile(hunkPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake hunk command: %v", err)
 	}
