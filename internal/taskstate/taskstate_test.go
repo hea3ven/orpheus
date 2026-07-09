@@ -598,6 +598,91 @@ func TestStoreTargetsReviewFindingsByRunAttempt(t *testing.T) {
 	)
 }
 
+func TestStorePromotesReviewAdvisoryFinding(t *testing.T) {
+	store := newTestStore(t)
+	review, err := store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{
+		Pipeline: "standard",
+		Step:     "ai-review",
+	})
+	if err != nil {
+		t.Fatalf("start review: %v", err)
+	}
+	review, err = store.RecordReviewFinding("alpha", "op-1", review.Attempt, taskstate.ReviewFinding{
+		Type:            taskstate.FindingTypeAdvisory,
+		Title:           "Generated advisory",
+		Description:     "The review agent found a risk.",
+		Step:            "ai-review",
+		SuggestedAction: "Make it block publication.",
+	})
+	if err != nil {
+		t.Fatalf("record advisory finding: %v", err)
+	}
+
+	promoted, err := store.PromoteReviewAdvisoryFinding("alpha", "op-1", review.Attempt, 0)
+	if err != nil {
+		t.Fatalf("promote advisory finding: %v", err)
+	}
+	if promoted.Findings[0].Type != taskstate.FindingTypeBlocking {
+		t.Fatalf("promoted finding type = %q, want blocking", promoted.Findings[0].Type)
+	}
+	if promoted.Findings[0].Title != "Generated advisory" ||
+		promoted.Findings[0].SuggestedAction != "Make it block publication." {
+		t.Fatalf("promoted finding = %#v, want content preserved", promoted.Findings[0])
+	}
+
+	assertStoreYAMLContains(t, store, "alpha", "op-1",
+		"type: blocking",
+		"title: Generated advisory",
+		"suggested_action: Make it block publication.",
+	)
+}
+
+func TestStoreRejectsPromotingResolvedOrNonAdvisoryFindings(t *testing.T) {
+	tests := []struct {
+		name    string
+		finding taskstate.ReviewFinding
+		wantErr string
+	}{
+		{
+			name: "blocking",
+			finding: taskstate.ReviewFinding{
+				Type:        taskstate.FindingTypeBlocking,
+				Title:       "Already blocking",
+				Description: "This is already blocking.",
+			},
+			wantErr: "is \"blocking\", expected \"advisory\"",
+		},
+		{
+			name: "targeted advisory",
+			finding: taskstate.ReviewFinding{
+				Type:                 taskstate.FindingTypeAdvisory,
+				Title:                "Targeted",
+				Description:          "This was already targeted.",
+				TargetedByRunAttempt: 2,
+			},
+			wantErr: "is already resolved",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := newTestStore(t)
+			review, err := store.StartReview("alpha", "op-1")
+			if err != nil {
+				t.Fatalf("start review: %v", err)
+			}
+			if _, err := store.RecordReviewFinding("alpha", "op-1", review.Attempt, test.finding); err != nil {
+				t.Fatalf("record finding: %v", err)
+			}
+
+			_, err = store.PromoteReviewAdvisoryFinding("alpha", "op-1", review.Attempt, 0)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("promote advisory error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
 //nolint:funlen // The durable boundary sequence is the behavior under test.
 func TestStoreRecordsFinalizationFactsIdempotently(t *testing.T) {
 	store := newTestStore(t,

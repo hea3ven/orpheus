@@ -753,8 +753,8 @@ func taskReviewPipelineOptions(
 		OutputWidth:       outputMode.width,
 		AgentConfig:       start.agentConfig,
 		AgentLauncher:     attachedAgentLauncher,
-		RenderManualStep: func(review.Step) error {
-			return renderManualReviewContext(command, start.store, start.resolvedCtx, start.workdir)
+		RenderManualStep: func(step review.Step) error {
+			return renderManualReviewContext(command, start.store, start.resolvedCtx, start.workdir, start.review, step)
 		},
 		ConfirmManualCommand: func(step review.Step) (bool, error) {
 			confirmed, err := promptManualCommandConfirmation(command, reviewInput, step)
@@ -767,8 +767,8 @@ func taskReviewPipelineOptions(
 			_, err = fmt.Fprintf(command.ErrOrStderr(), "Review aborted for %s.\n", start.taskID())
 			return false, err
 		},
-		PromptManualStep: func(review.Step) (review.ManualResult, error) {
-			outcome, err := runManualReviewPrompt(command, reviewInput, start.store, start.resolvedCtx, start.review)
+		PromptManualStep: func(step review.Step) (review.ManualResult, error) {
+			outcome, err := runManualReviewPrompt(command, reviewInput, start.store, start.resolvedCtx, start.review, step.Name)
 			if err != nil {
 				return review.ManualResult{}, err
 			}
@@ -1320,6 +1320,8 @@ func renderManualReviewContext(
 	store taskstate.Store,
 	resolvedCtx resolvedTaskContext,
 	workdir string,
+	reviewAttempt taskstate.ReviewAttempt,
+	step review.Step,
 ) error {
 	output := command.ErrOrStderr()
 	repo := resolvedCtx.Resolved.Source.Repository
@@ -1361,8 +1363,11 @@ func renderManualReviewContext(
 	} else if _, err := fmt.Fprint(output, status); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(output)
-	return err
+	if _, err := fmt.Fprintln(output); err != nil {
+		return err
+	}
+
+	return renderPriorReviewAdvisories(output, taskState, reviewAttempt.Attempt, step.Name)
 }
 
 func runManualReviewPrompt(
@@ -1371,12 +1376,14 @@ func runManualReviewPrompt(
 	store taskstate.Store,
 	resolvedCtx resolvedTaskContext,
 	review taskstate.ReviewAttempt,
+	stepName string,
 ) (manualReviewOutcome, error) {
 	session := manualReviewSession{
 		command:     command,
 		store:       store,
 		resolvedCtx: resolvedCtx,
 		review:      review,
+		stepName:    stepName,
 	}
 	for {
 		action, err := promptManualReviewAction(command, reader)
@@ -1396,6 +1403,7 @@ type manualReviewSession struct {
 	store       taskstate.Store
 	resolvedCtx resolvedTaskContext
 	review      taskstate.ReviewAttempt
+	stepName    string
 }
 
 func (s manualReviewSession) handleManualReviewAction(
@@ -1407,6 +1415,8 @@ func (s manualReviewSession) handleManualReviewAction(
 		return s.approve()
 	case "b", "block":
 		return s.block(reader)
+	case "p", "promote":
+		return s.promotePriorAdvisories(reader)
 	case "v", "advisory":
 		return s.recordFinding(reader, taskstate.FindingTypeAdvisory, "advisory")
 	case "t", "task":
@@ -1420,6 +1430,17 @@ func (s manualReviewSession) handleManualReviewAction(
 }
 
 func (s manualReviewSession) approve() (manualReviewOutcome, bool, error) {
+	latest, err := s.loadLatestReview()
+	if err != nil {
+		return manualReviewOutcome{}, true, err
+	}
+	if hasOpenBlockingReviewFinding(latest) {
+		_, err := fmt.Fprintf(s.command.ErrOrStderr(), "Review blocked for %s.\n", s.resolvedCtx.Resolved.TaskID)
+		return manualReviewOutcome{
+			result: manualReviewBlocked,
+			status: taskstate.ReviewStatusBlocked,
+		}, true, err
+	}
 	return manualReviewOutcome{
 		result: manualReviewApproved,
 		status: taskstate.ReviewStatusPassed,
@@ -1446,6 +1467,7 @@ func (s manualReviewSession) recordFinding(
 	if err != nil {
 		return manualReviewOutcome{}, true, fmt.Errorf("task review %s: %w", s.resolvedCtx.Resolved.TaskID, err)
 	}
+	finding.Step = s.stepName
 	if _, err := s.store.RecordReviewFinding(
 		s.resolvedCtx.Resolved.Source.Repository.ID,
 		s.resolvedCtx.Resolved.TaskID,
@@ -1457,6 +1479,55 @@ func (s manualReviewSession) recordFinding(
 	return manualReviewOutcome{}, false, nil
 }
 
+func (s manualReviewSession) promotePriorAdvisories(reader *bufio.Reader) (manualReviewOutcome, bool, error) {
+	latest, err := s.loadLatestReview()
+	if err != nil {
+		return manualReviewOutcome{}, true, err
+	}
+	advisories := unresolvedPriorReviewAdvisories(latest, s.stepName)
+	if len(advisories) == 0 {
+		_, err := fmt.Fprintln(s.command.ErrOrStderr(), "No unresolved prior advisories to promote.")
+		return manualReviewOutcome{}, false, err
+	}
+	if err := renderPriorReviewAdvisoryList(s.command.ErrOrStderr(), advisories); err != nil {
+		return manualReviewOutcome{}, true, err
+	}
+
+	indexes, err := promptReviewAdvisoryPromotionSelection(s.command, reader, advisories)
+	if err != nil {
+		return manualReviewOutcome{}, true, fmt.Errorf("task review %s: %w", s.resolvedCtx.Resolved.TaskID, err)
+	}
+	if len(indexes) == 0 {
+		return manualReviewOutcome{}, false, nil
+	}
+	for _, index := range indexes {
+		if _, err := s.store.PromoteReviewAdvisoryFinding(
+			s.resolvedCtx.Resolved.Source.Repository.ID,
+			s.resolvedCtx.Resolved.TaskID,
+			s.review.Attempt,
+			index,
+		); err != nil {
+			return manualReviewOutcome{}, true, fmt.Errorf("task review %s: promote advisory finding %d: %w", s.resolvedCtx.Resolved.TaskID, index+1, err)
+		}
+		if _, err := fmt.Fprintf(s.command.ErrOrStderr(), "Promoted advisory finding %d to blocking.\n", index+1); err != nil {
+			return manualReviewOutcome{}, true, err
+		}
+	}
+	return manualReviewOutcome{}, false, nil
+}
+
+func (s manualReviewSession) loadLatestReview() (taskstate.ReviewAttempt, error) {
+	taskState, err := s.store.Load(s.resolvedCtx.Resolved.Source.Repository.ID, s.resolvedCtx.Resolved.TaskID)
+	if err != nil {
+		return taskstate.ReviewAttempt{}, fmt.Errorf("task review %s: load review state: %w", s.resolvedCtx.Resolved.TaskID, err)
+	}
+	latest, ok := taskstate.LatestReview(taskState)
+	if !ok || latest.Attempt != s.review.Attempt {
+		return taskstate.ReviewAttempt{}, fmt.Errorf("task review %s: latest review attempt no longer matches attempt %d", s.resolvedCtx.Resolved.TaskID, s.review.Attempt)
+	}
+	return latest, nil
+}
+
 func (s manualReviewSession) abort() (manualReviewOutcome, bool, error) {
 	_, err := fmt.Fprintf(s.command.ErrOrStderr(), "Review aborted for %s.\n", s.resolvedCtx.Resolved.TaskID)
 	return manualReviewOutcome{
@@ -1466,12 +1537,12 @@ func (s manualReviewSession) abort() (manualReviewOutcome, bool, error) {
 }
 
 func (s manualReviewSession) writeInvalidAction() error {
-	_, err := fmt.Fprintln(s.command.ErrOrStderr(), "Choose approve, block, advisory, task, or abort.")
+	_, err := fmt.Fprintln(s.command.ErrOrStderr(), "Choose approve, block, promote, advisory, task, or abort.")
 	return err
 }
 
 func promptManualReviewAction(command *cobra.Command, reader *bufio.Reader) (string, error) {
-	if _, err := fmt.Fprint(command.ErrOrStderr(), "\nReview action [a=approve, b=block, v=advisory, t=task, q=abort]: "); err != nil {
+	if _, err := fmt.Fprint(command.ErrOrStderr(), "\nReview action [a=approve, b=block, p=promote advisory, v=advisory, t=task, q=abort]: "); err != nil {
 		return "", err
 	}
 	line, err := reader.ReadString('\n')
@@ -1479,6 +1550,123 @@ func promptManualReviewAction(command *cobra.Command, reader *bufio.Reader) (str
 		return "", fmt.Errorf("read review action: %w", err)
 	}
 	return strings.ToLower(strings.TrimSpace(line)), nil
+}
+
+type priorReviewAdvisory struct {
+	index   int
+	finding taskstate.ReviewFinding
+}
+
+func renderPriorReviewAdvisories(
+	output io.Writer,
+	taskState taskstate.TaskState,
+	reviewAttempt int,
+	currentStep string,
+) error {
+	latest, ok := taskstate.LatestReview(taskState)
+	if !ok || latest.Attempt != reviewAttempt {
+		return nil
+	}
+	advisories := unresolvedPriorReviewAdvisories(latest, currentStep)
+	if len(advisories) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintln(output, "Prior unresolved advisories:"); err != nil {
+		return err
+	}
+	return renderPriorReviewAdvisoryList(output, advisories)
+}
+
+func renderPriorReviewAdvisoryList(output io.Writer, advisories []priorReviewAdvisory) error {
+	for _, advisory := range advisories {
+		finding := advisory.finding
+		step := strings.TrimSpace(finding.Step)
+		if step == "" {
+			step = "(unspecified)"
+		}
+		if _, err := fmt.Fprintf(output, "  Finding %d (%s): %s\n", advisory.index+1, step, finding.Title); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(output, "    Description: %s\n", finding.Description); err != nil {
+			return err
+		}
+		if strings.TrimSpace(finding.SuggestedAction) != "" {
+			if _, err := fmt.Fprintf(output, "    Suggested action: %s\n", finding.SuggestedAction); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func unresolvedPriorReviewAdvisories(review taskstate.ReviewAttempt, currentStep string) []priorReviewAdvisory {
+	advisories := make([]priorReviewAdvisory, 0)
+	currentStep = strings.TrimSpace(currentStep)
+	for index, finding := range review.Findings {
+		if finding.Type != taskstate.FindingTypeAdvisory {
+			continue
+		}
+		if currentStep != "" && strings.TrimSpace(finding.Step) == currentStep {
+			continue
+		}
+		if strings.TrimSpace(finding.Waiver) != "" ||
+			strings.TrimSpace(finding.CreatedTaskID) != "" ||
+			finding.TargetedByRunAttempt > 0 {
+			continue
+		}
+		advisories = append(advisories, priorReviewAdvisory{index: index, finding: finding})
+	}
+	return advisories
+}
+
+func promptReviewAdvisoryPromotionSelection(
+	command *cobra.Command,
+	reader *bufio.Reader,
+	advisories []priorReviewAdvisory,
+) ([]int, error) {
+	if _, err := fmt.Fprint(command.ErrOrStderr(), "Promote advisory finding numbers (blank to cancel): "); err != nil {
+		return nil, err
+	}
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, fmt.Errorf("read advisory promotion selection: %w", err)
+	}
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return nil, nil
+	}
+	return parseReviewAdvisoryPromotionSelection(line, advisories)
+}
+
+func parseReviewAdvisoryPromotionSelection(input string, advisories []priorReviewAdvisory) ([]int, error) {
+	allowed := make(map[int]struct{}, len(advisories))
+	for _, advisory := range advisories {
+		allowed[advisory.index] = struct{}{}
+	}
+
+	seen := map[int]struct{}{}
+	indexes := make([]int, 0)
+	for _, field := range strings.FieldsFunc(input, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t'
+	}) {
+		number, err := strconv.Atoi(field)
+		if err != nil {
+			return nil, fmt.Errorf("invalid advisory finding number %q", field)
+		}
+		index := number - 1
+		if _, ok := allowed[index]; !ok {
+			return nil, fmt.Errorf("finding %d is not an unresolved prior advisory", number)
+		}
+		if _, ok := seen[index]; ok {
+			continue
+		}
+		seen[index] = struct{}{}
+		indexes = append(indexes, index)
+	}
+	if len(indexes) == 0 {
+		return nil, errors.New("at least one advisory finding number is required")
+	}
+	return indexes, nil
 }
 
 func promptManualCommandConfirmation(
