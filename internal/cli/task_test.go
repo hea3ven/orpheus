@@ -3016,6 +3016,225 @@ printf 'manual command ran %s\n' "$ORPHEUS_REVIEW_STEP"
 	is.Equal(0, *latest.Steps[0].ExitCode)
 }
 
+func TestTaskReviewImportsHunkBlockingNoteAndBlocksApproval(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review Hunk blocker", "Import blocking notes.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	installFakeHunkNotes(t, `{"comments":[{"noteId":"user:1","source":"user","filePath":"README.md","newRange":[12,12],"body":"This must be fixed before publication.","author":"user","createdAt":"2026-07-09T00:00:00.000Z","editable":true}]}`)
+
+	manual := writeReviewScript(t, "#!/bin/sh\nprintf 'hunk command ran\\n'\n")
+	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+		"standard": []map[string]any{
+			{"kind": "manual", "name": "inspect", "command": manual, "hunk_notes": true},
+		},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+	})
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "standard", "op-main"}, "\nb\na\n")
+
+	is.Contains(stdout, "hunk command ran")
+	is.Contains(stderr, "Captured 1 Hunk note(s)")
+	is.Contains(stderr, "Imported Hunk note user:1 as blocking finding.")
+	is.Contains(stderr, "Review blocked for op-main.")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
+	must.Len(latest.Findings, 1)
+	finding := latest.Findings[0]
+	is.Equal(taskstate.FindingTypeBlocking, finding.Type)
+	is.Equal("inspect", finding.Step)
+	is.Contains(finding.Description, "Note ID: user:1")
+	is.Contains(finding.Description, "File: README.md")
+	is.Contains(finding.Description, "Location: new line 12")
+	is.Contains(finding.Description, "Note body:\nThis must be fixed before publication.")
+	is.Empty(taskstate.FinalizationFacts(state).Commit)
+}
+
+func TestTaskReviewImportsHunkAdvisoryNoteAndAllowsApproval(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review Hunk advisory", "Import advisory notes.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	installFakeHunkNotes(t, `{"comments":[{"noteId":"user:2","source":"user","filePath":"docs.md","oldRange":[4,5],"body":"Consider tightening this wording later.","editable":true}]}`)
+
+	manual := writeReviewScript(t, "#!/bin/sh\n")
+	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+		"standard": []map[string]any{
+			{"kind": "manual", "name": "inspect", "command": manual, "hunk_notes": true},
+		},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
+	})
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "standard", "op-main"}, "\nv\na\n")
+
+	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stderr, "Imported Hunk note user:2 as advisory finding.")
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+	must.Len(latest.Findings, 1)
+	is.Equal(taskstate.FindingTypeAdvisory, latest.Findings[0].Type)
+	is.Contains(latest.Findings[0].Description, "Location: old lines 4-5")
+}
+
+//nolint:funlen // The workflow spans Hunk import, approval, and Beads follow-up creation.
+func TestTaskReviewImportsHunkSeparateTaskNoteAndCreatesFollowUp(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review Hunk follow-up", "Import separate-task notes.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	installFakeHunkNotes(t, `{"comments":[{"noteId":"user:3","source":"user","filePath":"internal/app.go","newRange":[30,31],"body":"This helper extraction can be separate.","editable":true}]}`)
+
+	manual := writeReviewScript(t, "#!/bin/sh\n")
+	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+		"standard": []map[string]any{
+			{"kind": "manual", "name": "inspect", "command": manual, "hunk_notes": true},
+		},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{
+			dir:    repoPath,
+			args:   "--json --sandbox create Extract helper --description Extract the helper later.\n\nProvenance:\nDiscovered during review of op-main in repository alpha (review attempt 1, finding 1). Review step: inspect. --acceptance Helper extraction has tests. --type task",
+			stdout: `{"id":"op-41","title":"Extract helper","status":"open","issue_type":"task"}`,
+		},
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
+	})
+
+	input := strings.Join([]string{
+		"",
+		"t",
+		"Extract helper",
+		"Extract the helper later.",
+		"Helper extraction has tests.",
+		"a",
+		"a",
+		"",
+	}, "\n")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "standard", "op-main"}, input)
+
+	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stderr, "Imported Hunk note user:3 as separate-task finding.")
+	is.Contains(stderr, "Created follow-up Bead op-41 for review finding 1.")
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+	must.Len(latest.Findings, 1)
+	is.Equal(taskstate.FindingTypeSeparateTask, latest.Findings[0].Type)
+	is.Equal("op-41", latest.Findings[0].CreatedTaskID)
+}
+
+func TestTaskReviewHunkManualCommandWithNoCapturedNotesContinuesPrompt(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review Hunk empty", "No notes.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	installFakeHunkNotes(t, `{"comments":[]}`)
+
+	manual := writeReviewScript(t, "#!/bin/sh\n")
+	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+		"standard": []map[string]any{
+			{"kind": "manual", "name": "inspect", "command": manual, "hunk_notes": true},
+		},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
+	})
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "standard", "op-main"}, "\na\n")
+
+	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stderr, "Review action")
+	is.NotContains(stderr, "Captured 1 Hunk note")
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+	is.Empty(latest.Findings)
+}
+
 func TestTaskReviewDeclinedManualCommandAbortsWithoutRunningCommand(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -5501,6 +5720,23 @@ func readTestFileString(t *testing.T, path string) string {
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 	return string(data)
+}
+
+func installFakeHunkNotes(t *testing.T, response string) {
+	t.Helper()
+
+	binDir := t.TempDir()
+	hunkPath := filepath.Join(binDir, "hunk")
+	script := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = "session" ] && [ "$2" = "comment" ] && [ "$3" = "list" ]; then
+  printf '%%s\n' %s
+  exit 0
+fi
+printf 'unexpected fake hunk call: %%s\n' "$*" >&2
+exit 65
+`, shellQuote(response))
+	require.NoError(t, os.WriteFile(hunkPath, []byte(script), 0o755))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func shellQuote(value string) string {

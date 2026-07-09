@@ -767,8 +767,16 @@ func taskReviewPipelineOptions(
 			_, err = fmt.Fprintf(command.ErrOrStderr(), "Review aborted for %s.\n", start.taskID())
 			return false, err
 		},
-		PromptManualStep: func(step review.Step) (review.ManualResult, error) {
-			outcome, err := runManualReviewPrompt(command, reviewInput, start.store, start.resolvedCtx, start.review, step.Name)
+		PromptManualStep: func(step review.ManualStep) (review.ManualResult, error) {
+			outcome, err := runManualReviewPrompt(
+				command,
+				reviewInput,
+				start.store,
+				start.resolvedCtx,
+				start.review,
+				step.Step.Name,
+				step.HunkNotes,
+			)
 			if err != nil {
 				return review.ManualResult{}, err
 			}
@@ -1377,6 +1385,7 @@ func runManualReviewPrompt(
 	resolvedCtx resolvedTaskContext,
 	review taskstate.ReviewAttempt,
 	stepName string,
+	hunkNotes []review.HunkNote,
 ) (manualReviewOutcome, error) {
 	session := manualReviewSession{
 		command:     command,
@@ -1384,6 +1393,9 @@ func runManualReviewPrompt(
 		resolvedCtx: resolvedCtx,
 		review:      review,
 		stepName:    stepName,
+	}
+	if err := session.importHunkNotes(reader, hunkNotes); err != nil {
+		return manualReviewOutcome{}, err
 	}
 	for {
 		action, err := promptManualReviewAction(command, reader)
@@ -1404,6 +1416,40 @@ type manualReviewSession struct {
 	resolvedCtx resolvedTaskContext
 	review      taskstate.ReviewAttempt
 	stepName    string
+}
+
+func (s manualReviewSession) importHunkNotes(reader *bufio.Reader, notes []review.HunkNote) error {
+	if len(notes) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintf(s.command.ErrOrStderr(), "\nCaptured %d Hunk note(s). Classify notes to import them as review findings.\n", len(notes)); err != nil {
+		return err
+	}
+	for index, note := range notes {
+		if err := renderHunkNoteForImport(s.command.ErrOrStderr(), index, note); err != nil {
+			return err
+		}
+		finding, importNote, err := promptHunkNoteFinding(s.command, reader, note)
+		if err != nil {
+			return fmt.Errorf("task review %s: import Hunk note %s: %w", s.resolvedCtx.Resolved.TaskID, hunkNoteID(note), err)
+		}
+		if !importNote {
+			continue
+		}
+		finding.Step = s.stepName
+		if _, err := s.store.RecordReviewFinding(
+			s.resolvedCtx.Resolved.Source.Repository.ID,
+			s.resolvedCtx.Resolved.TaskID,
+			s.review.Attempt,
+			finding,
+		); err != nil {
+			return fmt.Errorf("task review %s: record Hunk note finding: %w", s.resolvedCtx.Resolved.TaskID, err)
+		}
+		if _, err := fmt.Fprintf(s.command.ErrOrStderr(), "Imported Hunk note %s as %s finding.\n", hunkNoteID(note), hunkNoteFindingTypeLabel(finding.Type)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s manualReviewSession) handleManualReviewAction(
@@ -1539,6 +1585,179 @@ func (s manualReviewSession) abort() (manualReviewOutcome, bool, error) {
 func (s manualReviewSession) writeInvalidAction() error {
 	_, err := fmt.Fprintln(s.command.ErrOrStderr(), "Choose approve, block, promote, advisory, task, or abort.")
 	return err
+}
+
+func renderHunkNoteForImport(output io.Writer, index int, note review.HunkNote) error {
+	lines := []string{
+		fmt.Sprintf("\nHunk note %d: %s", index+1, hunkNoteID(note)),
+		fmt.Sprintf("  File: %s", formatReviewValue(strings.TrimSpace(note.FilePath))),
+		fmt.Sprintf("  Location: %s", formatReviewValue(formatHunkNoteLocation(note))),
+	}
+	if strings.TrimSpace(note.Title) != "" {
+		lines = append(lines, fmt.Sprintf("  Title: %s", strings.TrimSpace(note.Title)))
+	}
+	lines = append(lines, fmt.Sprintf("  Body: %s", formatReviewValue(strings.TrimSpace(note.Body))))
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(output, line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func promptHunkNoteFinding(
+	command *cobra.Command,
+	reader *bufio.Reader,
+	note review.HunkNote,
+) (taskstate.ReviewFinding, bool, error) {
+	for {
+		if _, err := fmt.Fprintf(command.ErrOrStderr(), "Classify Hunk note %s [b=blocking, v=advisory, t=task, s=skip]: ", hunkNoteID(note)); err != nil {
+			return taskstate.ReviewFinding{}, false, err
+		}
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return taskstate.ReviewFinding{}, false, fmt.Errorf("read Hunk note classification: %w", err)
+		}
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "b", "blocking":
+			return buildHunkNoteFinding(note, taskstate.FindingTypeBlocking, taskstate.ReviewTaskProposal{}), true, nil
+		case "v", "advisory":
+			return buildHunkNoteFinding(note, taskstate.FindingTypeAdvisory, taskstate.ReviewTaskProposal{}), true, nil
+		case "t", "task", "separate-task":
+			proposal, err := promptHunkNoteTaskProposal(command, reader)
+			if err != nil {
+				return taskstate.ReviewFinding{}, false, err
+			}
+			return buildHunkNoteFinding(note, taskstate.FindingTypeSeparateTask, proposal), true, nil
+		case "s", "skip":
+			return taskstate.ReviewFinding{}, false, nil
+		default:
+			if _, err := fmt.Fprintln(command.ErrOrStderr(), "Choose blocking, advisory, task, or skip."); err != nil {
+				return taskstate.ReviewFinding{}, false, err
+			}
+		}
+	}
+}
+
+func promptHunkNoteTaskProposal(command *cobra.Command, reader *bufio.Reader) (taskstate.ReviewTaskProposal, error) {
+	taskTitle, err := promptReviewLine(command, reader, "Separate task title")
+	if err != nil {
+		return taskstate.ReviewTaskProposal{}, err
+	}
+	taskDescription, err := promptReviewLine(command, reader, "Separate task description")
+	if err != nil {
+		return taskstate.ReviewTaskProposal{}, err
+	}
+	taskAcceptanceCriteria, err := promptReviewLine(command, reader, "Separate task acceptance criteria")
+	if err != nil {
+		return taskstate.ReviewTaskProposal{}, err
+	}
+	return taskstate.ReviewTaskProposal{
+		Title:              taskTitle,
+		Description:        taskDescription,
+		AcceptanceCriteria: taskAcceptanceCriteria,
+	}, nil
+}
+
+func buildHunkNoteFinding(
+	note review.HunkNote,
+	findingType taskstate.FindingType,
+	proposal taskstate.ReviewTaskProposal,
+) taskstate.ReviewFinding {
+	return taskstate.ReviewFinding{
+		Type:         findingType,
+		Title:        hunkNoteFindingTitle(note),
+		Description:  hunkNoteFindingDescription(note),
+		TaskProposal: proposal,
+	}
+}
+
+func hunkNoteFindingTypeLabel(findingType taskstate.FindingType) string {
+	if findingType == taskstate.FindingTypeSeparateTask {
+		return "separate-task"
+	}
+	return string(findingType)
+}
+
+func hunkNoteFindingTitle(note review.HunkNote) string {
+	if title := strings.TrimSpace(note.Title); title != "" {
+		return "Hunk note: " + abbreviateReviewTitle(title)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(note.Body), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return "Hunk note: " + abbreviateReviewTitle(line)
+		}
+	}
+	if filePath := strings.TrimSpace(note.FilePath); filePath != "" {
+		return "Hunk note on " + filePath
+	}
+	return "Hunk note " + hunkNoteID(note)
+}
+
+func abbreviateReviewTitle(value string) string {
+	value = strings.TrimSpace(value)
+	const maxTitleLength = 72
+	runes := []rune(value)
+	if len(runes) <= maxTitleLength {
+		return value
+	}
+	return strings.TrimSpace(string(runes[:maxTitleLength-3])) + "..."
+}
+
+func hunkNoteFindingDescription(note review.HunkNote) string {
+	lines := []string{
+		"Hunk provenance:",
+		"Note ID: " + hunkNoteID(note),
+		"File: " + formatReviewValue(strings.TrimSpace(note.FilePath)),
+		"Location: " + formatReviewValue(formatHunkNoteLocation(note)),
+	}
+	if note.HunkIndex != nil {
+		lines = append(lines, fmt.Sprintf("Hunk index: %d", *note.HunkIndex))
+	}
+	if strings.TrimSpace(note.Source) != "" {
+		lines = append(lines, "Source: "+strings.TrimSpace(note.Source))
+	}
+	if strings.TrimSpace(note.Author) != "" {
+		lines = append(lines, "Author: "+strings.TrimSpace(note.Author))
+	}
+	lines = append(lines, "", "Note body:", strings.TrimSpace(note.Body))
+	return strings.Join(lines, "\n")
+}
+
+func hunkNoteID(note review.HunkNote) string {
+	if id := strings.TrimSpace(note.NoteID); id != "" {
+		return id
+	}
+	return "(unknown)"
+}
+
+func formatHunkNoteLocation(note review.HunkNote) string {
+	locations := make([]string, 0, 2)
+	if location := formatHunkNoteRange("old", note.OldRange); location != "" {
+		locations = append(locations, location)
+	}
+	if location := formatHunkNoteRange("new", note.NewRange); location != "" {
+		locations = append(locations, location)
+	}
+	return strings.Join(locations, "; ")
+}
+
+func formatHunkNoteRange(side string, lineRange []int) string {
+	if len(lineRange) == 0 {
+		return ""
+	}
+	start := lineRange[0]
+	end := start
+	if len(lineRange) > 1 && lineRange[1] > 0 {
+		end = lineRange[1]
+	}
+	if start <= 0 {
+		return ""
+	}
+	if end <= start {
+		return fmt.Sprintf("%s line %d", side, start)
+	}
+	return fmt.Sprintf("%s lines %d-%d", side, start, end)
 }
 
 func promptManualReviewAction(command *cobra.Command, reader *bufio.Reader) (string, error) {

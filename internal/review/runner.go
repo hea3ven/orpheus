@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -41,7 +42,7 @@ type PipelineRunOptions struct {
 
 	RenderManualStep     func(step Step) error
 	ConfirmManualCommand func(step Step) (bool, error)
-	PromptManualStep     func(step Step) (ManualResult, error)
+	PromptManualStep     func(step ManualStep) (ManualResult, error)
 }
 
 // PipelineOutcome records the terminal status from a pipeline execution.
@@ -55,10 +56,34 @@ type ManualResult struct {
 	Stop   bool
 }
 
+// ManualStep carries operator-facing manual step context after any configured
+// manual command has finished.
+type ManualStep struct {
+	Step      Step
+	HunkNotes []HunkNote
+}
+
+// HunkNote is a cached user-authored Hunk review note.
+type HunkNote struct {
+	NoteID    string `json:"noteId"`
+	Source    string `json:"source"`
+	FilePath  string `json:"filePath"`
+	HunkIndex *int   `json:"hunkIndex,omitempty"`
+	OldRange  []int  `json:"oldRange,omitempty"`
+	NewRange  []int  `json:"newRange,omitempty"`
+	Body      string `json:"body"`
+	Title     string `json:"title,omitempty"`
+	Author    string `json:"author,omitempty"`
+	CreatedAt string `json:"createdAt,omitempty"`
+	UpdatedAt string `json:"updatedAt,omitempty"`
+}
+
 type stepOutcome struct {
 	status taskstate.ReviewStatus
 	stop   bool
 }
+
+var hunkNotePollInterval = 250 * time.Millisecond
 
 // RunPipeline executes a configured review pipeline.
 func RunPipeline(opts PipelineRunOptions) (PipelineOutcome, error) {
@@ -169,9 +194,10 @@ func runManualStep(opts PipelineRunOptions, step Step, env []string) (stepOutcom
 	}
 
 	var exitCode *int
+	var hunkNotes []HunkNote
 	if step.Command != "" {
 		var err error
-		exitCode, err = runConfirmedManualCommand(opts, step, env)
+		exitCode, hunkNotes, err = runConfirmedManualCommand(opts, step, env)
 		if err != nil {
 			return stepOutcome{}, err
 		}
@@ -182,16 +208,19 @@ func runManualStep(opts PipelineRunOptions, step Step, env []string) (stepOutcom
 		return stepOutcome{}, err
 	}
 
-	outcome, err := opts.PromptManualStep(step)
+	outcome, err := opts.PromptManualStep(ManualStep{
+		Step:      step,
+		HunkNotes: hunkNotes,
+	})
 	if err != nil {
 		return stepOutcome{}, err
 	}
 	return stepOutcome{status: outcome.Status, stop: outcome.Stop}, nil
 }
 
-func runConfirmedManualCommand(opts PipelineRunOptions, step Step, env []string) (*int, error) {
+func runConfirmedManualCommand(opts PipelineRunOptions, step Step, env []string) (*int, []HunkNote, error) {
 	if opts.ConfirmManualCommand == nil {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"task review %s: manual step %q requires manual command confirmation hook",
 			opts.TaskID,
 			step.Name,
@@ -199,20 +228,96 @@ func runConfirmedManualCommand(opts PipelineRunOptions, step Step, env []string)
 	}
 	confirmed, err := opts.ConfirmManualCommand(step)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !confirmed {
-		return nil, nil
+		return nil, nil, nil
 	}
 
-	exitCode, err := runStepCommand(opts, step, env)
+	exitCode, hunkNotes, err := runManualStepCommand(opts, step, env)
 	if recordErr := recordStep(opts, step, nil, exitCode); recordErr != nil {
-		return nil, recordErr
+		return nil, nil, recordErr
 	}
 	if err != nil {
-		return nil, fmt.Errorf("task review %s: run manual step %q: %w", opts.TaskID, step.Name, err)
+		return nil, nil, fmt.Errorf("task review %s: run manual step %q: %w", opts.TaskID, step.Name, err)
 	}
-	return exitCode, nil
+	return exitCode, hunkNotes, nil
+}
+
+func runManualStepCommand(opts PipelineRunOptions, step Step, env []string) (*int, []HunkNote, error) {
+	if !step.HunkNotes {
+		exitCode, err := runStepCommand(opts, step, env)
+		return exitCode, nil, err
+	}
+	return runHunkBackedManualCommand(opts, step, env)
+}
+
+func runHunkBackedManualCommand(opts PipelineRunOptions, step Step, env []string) (*int, []HunkNote, error) {
+	process := exec.CommandContext(opts.Context, step.Command, step.Args...)
+	process.Dir = opts.Workdir
+	process.Env = append(os.Environ(), env...)
+	process.Stdout = opts.Stdout
+	process.Stderr = opts.Stderr
+
+	if err := process.Start(); err != nil {
+		return nil, nil, err
+	}
+
+	var latest []HunkNote
+	if notes, err := captureHunkUserNotes(opts.Context, opts.Workdir); err == nil {
+		latest = notes
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- process.Wait()
+	}()
+
+	ticker := time.NewTicker(hunkNotePollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-done:
+			latest = captureFinalHunkUserNotes(opts.Context, opts.Workdir, latest)
+			exitCode := process.ProcessState.ExitCode()
+			return &exitCode, latest, err
+		case <-ticker.C:
+			notes, err := captureHunkUserNotes(opts.Context, opts.Workdir)
+			if err == nil {
+				latest = notes
+			}
+		case <-opts.Context.Done():
+			err := <-done
+			latest = captureFinalHunkUserNotes(opts.Context, opts.Workdir, latest)
+			exitCode := process.ProcessState.ExitCode()
+			return &exitCode, latest, err
+		}
+	}
+}
+
+func captureFinalHunkUserNotes(ctx context.Context, workdir string, fallback []HunkNote) []HunkNote {
+	notes, err := captureHunkUserNotes(ctx, workdir)
+	if err != nil {
+		return fallback
+	}
+	return notes
+}
+
+func captureHunkUserNotes(ctx context.Context, workdir string) ([]HunkNote, error) {
+	command := exec.CommandContext(ctx, "hunk", "session", "comment", "list", "--repo", workdir, "--type", "user", "--json")
+	command.Dir = workdir
+	output, err := command.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	var response struct {
+		Comments []HunkNote `json:"comments"`
+	}
+	if err := json.Unmarshal(output, &response); err != nil {
+		return nil, fmt.Errorf("decode Hunk user notes: %w", err)
+	}
+	return response.Comments, nil
 }
 
 func writeStepHeader(output io.Writer, step Step) error {

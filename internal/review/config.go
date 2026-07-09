@@ -35,11 +35,12 @@ type Pipeline struct {
 
 // Step is one configured review pipeline step.
 type Step struct {
-	Kind    string   `yaml:"kind"`
-	Name    string   `yaml:"name"`
-	Command string   `yaml:"command,omitempty"`
-	Args    []string `yaml:"args,omitempty"`
-	Agent   string   `yaml:"agent,omitempty"`
+	Kind      string   `yaml:"kind"`
+	Name      string   `yaml:"name"`
+	Command   string   `yaml:"command,omitempty"`
+	Args      []string `yaml:"args,omitempty"`
+	Agent     string   `yaml:"agent,omitempty"`
+	HunkNotes bool     `yaml:"hunk_notes,omitempty"`
 }
 
 // UnmarshalYAML decodes only the top-level reviews section while allowing the
