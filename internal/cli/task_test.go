@@ -2420,6 +2420,8 @@ func TestTaskReviewApproveFinalizesAndRecordsPassedAttempt(t *testing.T) {
 	is.Contains(stderr, "Task: op-main - Ready for task done")
 	is.Contains(stderr, "Latest completion: Review approval")
 	is.Contains(stderr, "Completion description: Finalize after approval.")
+	is.NotContains(stderr, "Original completion:")
+	is.NotContains(stderr, "Latest fix completion:")
 	is.Contains(stderr, "git status --short:")
 	is.Contains(stderr, "reviewed.txt")
 	is.NotContains(stderr, "git diff --stat:")
@@ -2433,6 +2435,49 @@ func TestTaskReviewApproveFinalizesAndRecordsPassedAttempt(t *testing.T) {
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
 	is.Empty(latest.Findings)
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
+}
+
+func TestTaskReviewManualContextShowsOriginalAndLatestFollowUpCompletion(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Original implementation", "Implemented the main task.")
+	recordReviewFollowUpCompletion(t, paths, "alpha", "op-main", repoPath, 1, "First fix", "Addressed the first review blocker.")
+	recordReviewFollowUpCompletion(t, paths, "alpha", "op-main", repoPath, 2, "Latest fix", "Addressed the most recent review blocker.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
+	})
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "a\n")
+
+	is.Contains(stderr, "Original completion: Original implementation")
+	is.Contains(stderr, "Original completion description: Implemented the main task.")
+	is.Contains(stderr, "Latest fix completion: Latest fix")
+	is.Contains(stderr, "Latest fix completion description: Addressed the most recent review blocker.")
+	is.NotContains(stderr, "Latest completion: Latest fix")
+	is.NotContains(stderr, "Latest fix completion: First fix")
+	is.Contains(stdout, "Finalized op-main")
+
+	message := strings.TrimSpace(runGit(t, repoPath, "log", "-1", "--format=%B"))
+	is.Equal("Original implementation\n\nImplemented the main task.", message)
 }
 
 func TestTaskReviewRejectsStaleMetadataMirror(t *testing.T) {
@@ -5475,6 +5520,42 @@ func recordMainCompletion(t *testing.T, paths state.Paths, repoID string, taskID
 	}
 	if _, err := store.FinishRun(repoID, taskID, attempt.Attempt, taskstate.RunStatusSucceeded); err != nil {
 		t.Fatalf("finish main run: %v", err)
+	}
+}
+
+func recordReviewFollowUpCompletion(
+	t *testing.T,
+	paths state.Paths,
+	repoID string,
+	taskID string,
+	repoPath string,
+	reviewAttempt int,
+	summary string,
+	description string,
+) {
+	t.Helper()
+	store := taskstate.NewStore(paths)
+	attempt, err := store.StartRun(repoID, taskID, taskstate.StartRunOptions{
+		Agent:    "recorder",
+		Branch:   "main",
+		Worktree: repoPath,
+		ReviewFollowUp: &taskstate.ReviewFollowUp{
+			ReviewAttempt:  reviewAttempt,
+			FindingIndexes: []int{0},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start review follow-up run: %v", err)
+	}
+	if _, err := store.CompleteRun(repoID, taskID, attempt.Attempt, taskstate.CompleteRunOptions{
+		Summary:             summary,
+		Description:         description,
+		DetailedDescription: "Detailed follow-up body.",
+	}); err != nil {
+		t.Fatalf("complete review follow-up run: %v", err)
+	}
+	if _, err := store.FinishRun(repoID, taskID, attempt.Attempt, taskstate.RunStatusSucceeded); err != nil {
+		t.Fatalf("finish review follow-up run: %v", err)
 	}
 }
 

@@ -1346,6 +1346,10 @@ func renderManualReviewContext(
 	if latest.Completion == nil {
 		return fmt.Errorf("latest run attempt %d has no completion block; run `orpheus agent done` first", latest.Attempt)
 	}
+	completions, err := manualReviewCompletions(taskState)
+	if err != nil {
+		return err
+	}
 
 	status, err := gitOutput(command.Context(), workdir, "status", "--short")
 	if err != nil {
@@ -1355,10 +1359,7 @@ func renderManualReviewContext(
 	if _, err := fmt.Fprintf(output, "Task: %s - %s\n", taskItem.ID, taskItem.Title); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(output, "Latest completion: %s\n", strings.TrimSpace(latest.Completion.Summary)); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(output, "Completion description: %s\n\n", strings.TrimSpace(latest.Completion.Description)); err != nil {
+	if err := renderManualReviewCompletions(output, completions); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintln(output, "git status --short:"); err != nil {
@@ -1376,6 +1377,60 @@ func renderManualReviewContext(
 	}
 
 	return renderPriorReviewAdvisories(output, taskState, reviewAttempt.Attempt, step.Name)
+}
+
+type manualReviewCompletionContext struct {
+	original taskstate.RunAttempt
+	latest   taskstate.RunAttempt
+}
+
+func manualReviewCompletions(taskState taskstate.TaskState) (manualReviewCompletionContext, error) {
+	var original taskstate.RunAttempt
+	var latest taskstate.RunAttempt
+	for _, run := range taskState.Runs {
+		if run.Completion == nil {
+			continue
+		}
+		if original.Attempt == 0 && run.ReviewFollowUp == nil {
+			original = run
+		}
+		if latest.Attempt == 0 || run.Attempt > latest.Attempt {
+			latest = run
+		}
+	}
+	if original.Attempt == 0 {
+		return manualReviewCompletionContext{}, errors.New("original implementation completion is required")
+	}
+	if latest.Attempt == 0 {
+		return manualReviewCompletionContext{}, errors.New("latest completion is required")
+	}
+	return manualReviewCompletionContext{
+		original: original,
+		latest:   latest,
+	}, nil
+}
+
+func renderManualReviewCompletions(output io.Writer, ctx manualReviewCompletionContext) error {
+	if ctx.latest.ReviewFollowUp == nil {
+		return renderManualReviewCompletion(output, "Latest completion", "Completion description", ctx.latest.Completion)
+	}
+	if err := renderManualReviewCompletion(output, "Original completion", "Original completion description", ctx.original.Completion); err != nil {
+		return err
+	}
+	return renderManualReviewCompletion(output, "Latest fix completion", "Latest fix completion description", ctx.latest.Completion)
+}
+
+func renderManualReviewCompletion(output io.Writer, summaryLabel string, descriptionLabel string, completion *taskstate.Completion) error {
+	if completion == nil {
+		return errors.New("completion is required")
+	}
+	if _, err := fmt.Fprintf(output, "%s: %s\n", summaryLabel, strings.TrimSpace(completion.Summary)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(output, "%s: %s\n\n", descriptionLabel, strings.TrimSpace(completion.Description)); err != nil {
+		return err
+	}
+	return nil
 }
 
 func runManualReviewPrompt(
