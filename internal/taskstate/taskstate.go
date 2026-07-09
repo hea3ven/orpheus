@@ -129,6 +129,7 @@ type Service interface {
 	RecordReviewStep(repoID, taskID string, attempt int, opts RecordReviewStepOptions) (ReviewAttempt, error)
 	FinishReviewStepExecution(repoID, taskID string, attempt int, stepName string, opts FinishReviewStepExecutionOptions) (ReviewAttempt, error)
 	RecordReviewFinding(repoID, taskID string, attempt int, finding ReviewFinding) (ReviewAttempt, error)
+	PromoteReviewAdvisoryFinding(repoID, taskID string, attempt int, findingIndex int) (ReviewAttempt, error)
 	RecordReviewFindingCreatedTask(repoID, taskID string, attempt int, findingIndex int, createdTaskID string) (ReviewAttempt, error)
 	TargetReviewFindings(repoID, taskID string, reviewAttempt int, findingIndexes []int, runAttempt int) (ReviewAttempt, error)
 	FinishReview(repoID, taskID string, attempt int, status ReviewStatus) (ReviewAttempt, error)
@@ -1102,6 +1103,59 @@ func (s Store) RecordReviewFinding(
 		return ReviewAttempt{}, err
 	}
 	return state.Reviews[index], nil
+}
+
+// PromoteReviewAdvisoryFinding changes an unresolved advisory finding into a blocking finding.
+func (s Store) PromoteReviewAdvisoryFinding(
+	repoID,
+	taskID string,
+	attempt int,
+	findingIndex int,
+) (ReviewAttempt, error) {
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+	reviewIndex := reviewAttemptIndex(state, attempt)
+	if reviewIndex < 0 {
+		return ReviewAttempt{}, fmt.Errorf("promote review advisory for task %s/%s: review attempt %d was not found", repoID, taskID, attempt)
+	}
+	if state.Reviews[reviewIndex].Status != ReviewStatusRunning {
+		return ReviewAttempt{}, fmt.Errorf(
+			"promote review advisory for task %s/%s: review attempt %d is %q, expected %q",
+			repoID,
+			taskID,
+			attempt,
+			state.Reviews[reviewIndex].Status,
+			ReviewStatusRunning,
+		)
+	}
+	if findingIndex < 0 || findingIndex >= len(state.Reviews[reviewIndex].Findings) {
+		return ReviewAttempt{}, fmt.Errorf("promote review advisory for task %s/%s: finding index %d is out of range", repoID, taskID, findingIndex)
+	}
+
+	finding := state.Reviews[reviewIndex].Findings[findingIndex]
+	if finding.Type != FindingTypeAdvisory {
+		return ReviewAttempt{}, fmt.Errorf(
+			"promote review advisory for task %s/%s: finding index %d is %q, expected %q",
+			repoID,
+			taskID,
+			findingIndex,
+			finding.Type,
+			FindingTypeAdvisory,
+		)
+	}
+	if strings.TrimSpace(finding.Waiver) != "" ||
+		strings.TrimSpace(finding.CreatedTaskID) != "" ||
+		finding.TargetedByRunAttempt > 0 {
+		return ReviewAttempt{}, fmt.Errorf("promote review advisory for task %s/%s: finding index %d is already resolved", repoID, taskID, findingIndex)
+	}
+
+	state.Reviews[reviewIndex].Findings[findingIndex].Type = FindingTypeBlocking
+	if err := s.save(state); err != nil {
+		return ReviewAttempt{}, err
+	}
+	return state.Reviews[reviewIndex], nil
 }
 
 func latestReviewStepExecutionIndex(review ReviewAttempt, stepName string) int {

@@ -2761,7 +2761,7 @@ func TestTaskReviewCreatesSelectedSeparateTaskFollowUp(t *testing.T) {
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
 		{
 			dir:    repoPath,
-			args:   "--json --sandbox create Extract helper --description Extract the helper later.\n\nProvenance:\nDiscovered during review of op-main in repository alpha (review attempt 1, finding 1). --acceptance Helper extraction has tests. --type task",
+			args:   "--json --sandbox create Extract helper --description Extract the helper later.\n\nProvenance:\nDiscovered during review of op-main in repository alpha (review attempt 1, finding 1). Review step: local-review. --acceptance Helper extraction has tests. --type task",
 			stdout: `{"id":"op-41","title":"Extract helper","status":"open","issue_type":"task"}`,
 		},
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
@@ -2820,7 +2820,7 @@ func TestTaskReviewCanAbortWhenSeparateTaskCreationFails(t *testing.T) {
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
 		{
 			dir:      repoPath,
-			args:     "--json --sandbox create Extract helper --description Extract the helper later.\n\nProvenance:\nDiscovered during review of op-main in repository alpha (review attempt 1, finding 1). --acceptance Helper extraction has tests. --type task",
+			args:     "--json --sandbox create Extract helper --description Extract the helper later.\n\nProvenance:\nDiscovered during review of op-main in repository alpha (review attempt 1, finding 1). Review step: local-review. --acceptance Helper extraction has tests. --type task",
 			stderr:   "database locked",
 			exitCode: 1,
 		},
@@ -3453,6 +3453,116 @@ func TestTaskReviewAgentReviewBlockingFindingStopsPipeline(t *testing.T) {
 	is.Equal(taskstate.FindingTypeBlocking, latest.Findings[0].Type)
 	is.Equal("ai-review", latest.Findings[0].Step)
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
+}
+
+//nolint:funlen // The promotion workflow spans review, inspection, and follow-up dispatch.
+func TestTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	must.NoError(err)
+	orpheusBin := buildOrpheusTestBinary(t, sourceRoot)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review agent advisory", "Promote advisory if needed.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	reviewer := writeReviewScript(t, fmt.Sprintf(`#!/bin/sh
+%s agent review add \
+  --type advisory \
+  --title "Generated advisory" \
+  --description "The review agent found a risky edge case." \
+  --suggested-action "Handle the edge case before publishing."
+`, shellQuote(orpheusBin)))
+	writeReviewAgentPipelineConfig(t, paths, "reviewer", reviewer, nil, "standard", map[string][]map[string]any{
+		"standard": []map[string]any{
+			{"kind": "agent_review", "name": "ai-review"},
+			{"kind": "manual", "name": "approval"},
+		},
+	})
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: taskJSON},
+	})
+	headBefore := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
+
+	input := strings.Join([]string{
+		"p",
+		"1",
+		"v",
+		"Manual advisory",
+		"The human reviewer added a non-blocking note.",
+		"Keep this in mind later.",
+		"p",
+		"a",
+		"",
+	}, "\n")
+	inputPath := filepath.Join(t.TempDir(), "review-input.txt")
+	must.NoError(os.WriteFile(inputPath, []byte(input), 0o644))
+	inputFile, err := os.Open(inputPath)
+	must.NoError(err)
+	t.Cleanup(func() { _ = inputFile.Close() })
+	stdout, stderr, err := executeCommandWithReaderAndError(t, []string{"task", "review", "op-main"}, inputFile)
+	must.NoError(err, "execute task review\nstderr: %s", stderr)
+
+	is.Contains(stdout, "Recorded advisory review finding 1 for op-main.")
+	is.Contains(stderr, "Prior unresolved advisories:")
+	is.Contains(stderr, "Finding 1 (ai-review): Generated advisory")
+	is.Contains(stderr, "Review action [a=approve, b=block, p=promote advisory")
+	is.Contains(stderr, "Promoted advisory finding 1 to blocking.")
+	is.Contains(stderr, "No unresolved prior advisories to promote.")
+	is.NotContains(stderr, "Finding 2 (approval): Manual advisory")
+	is.Contains(stderr, "Review blocked for op-main.")
+	is.Equal(headBefore, strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")))
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
+	must.Len(latest.Findings, 2)
+	is.Equal(taskstate.FindingTypeBlocking, latest.Findings[0].Type)
+	is.Equal("Generated advisory", latest.Findings[0].Title)
+	is.Equal("ai-review", latest.Findings[0].Step)
+	is.Equal(taskstate.FindingTypeAdvisory, latest.Findings[1].Type)
+	is.Equal("approval", latest.Findings[1].Step)
+	is.Empty(taskstate.FinalizationFacts(state).Commit)
+
+	showStdout, showStderr := executeCommand(t, []string{"task", "review", "show", "op-main"})
+	is.Empty(showStderr)
+	is.Contains(showStdout, "Status: blocked")
+	is.Contains(showStdout, "Type: blocking")
+	is.Contains(showStdout, "Title: Generated advisory")
+	is.Contains(showStdout, "Resolution: open")
+	is.Contains(showStdout, "Next step: run `orpheus task run op-main` to address open blocking findings")
+
+	withFakeAgent(t, "followup-agent", 0)
+	writeTaskRunAgentConfig(t, paths, "followup", "followup-agent", nil)
+	runStdout, runStderr := executeCommand(t, []string{"task", "run", "op-main"})
+
+	is.Contains(runStdout, "fake agent stdout")
+	is.Contains(runStderr, "fake agent stderr")
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok = taskstate.LatestReview(state)
+	must.True(ok)
+	must.Len(latest.Findings, 2)
+	is.Equal(2, latest.Findings[0].TargetedByRunAttempt)
+	is.Zero(latest.Findings[1].TargetedByRunAttempt)
+	must.Len(state.Runs, 2)
+	must.NotNil(state.Runs[1].ReviewFollowUp)
+	is.Equal(latest.Attempt, state.Runs[1].ReviewFollowUp.ReviewAttempt)
+	is.Equal([]int{0}, state.Runs[1].ReviewFollowUp.FindingIndexes)
 }
 
 func TestTaskReviewAgentReviewNonZeroExitMarksOperationalFailure(t *testing.T) {
