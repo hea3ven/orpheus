@@ -513,17 +513,78 @@ func TestTaskStatsRendersImplementationExecutionUsage(t *testing.T) {
 
 	is.Empty(stderr)
 	for _, want := range []string{
-		"Executions", "TYPE", "ATTEMPT", "STEP", "PROFILE", "HARNESS", "MODEL", "COMMAND", "STARTED", "FINISHED", "DURATION", "STATUS", "SESSION", "USAGE",
+		"Executions", "Estimated API-equivalent cost",
+		"TYPE", "ATTEMPT", "STEP", "PROFILE", "HARNESS", "MODEL", "COMMAND", "STARTED", "FINISHED", "DURATION", "STATUS", "SESSION", "USAGE", "ESTIMATED_API_EQUIVALENT_COST",
 		"implementation", "1", "codex-profile", "codex", "gpt-5", `"codex" "exec" "--model" "gpt-5"`,
 		"2026-07-07T10:00:00Z", "2026-07-07T10:02:00Z", "2m0s", "succeeded", "session-123",
 		"total=190 input=123 cached_input=45 output=67 reasoning_output=8",
+		"estimated API-equivalent cost=$0.000773", "kind=estimated_api_equivalent", "pricing=openai/gpt-5/standard",
 		"review-agent", "ai-review", `"codex" "exec" "--model" "gpt-5" "review"`,
 		"2026-07-07T10:03:00Z", "2026-07-07T10:04:00Z", "1m0s", "review-session-123",
 		"total=50 input=20 cached_input=5 output=30 reasoning_output=7",
-		"Totals", "ACTIVE_AGENT_TIME", "TOTAL_TOKENS", "UNKNOWN_USAGE",
-		"implementation", "1", "2m0s", "190", "123", "45", "67", "8", "0",
-		"review-agent", "1", "1m0s", "50", "20", "5", "30", "7", "0",
-		"combined", "2", "3m0s", "240", "143", "50", "97", "15", "0",
+		"estimated API-equivalent cost=$0.000319",
+		"Totals", "ACTIVE_AGENT_TIME", "TOTAL_TOKENS", "UNKNOWN_USAGE", "UNKNOWN_COST",
+		"implementation", "1", "2m0s", "190", "123", "45", "67", "8", "$0.000773", "0", "0",
+		"review-agent", "1", "1m0s", "50", "20", "5", "30", "7", "$0.000319", "0", "0",
+		"combined", "2", "3m0s", "240", "143", "50", "97", "15", "$0.001092", "0", "0",
+	} {
+		is.Contains(stdout, want)
+	}
+}
+
+func TestTaskStatsKeepsTokenUsageWhenCostPricingIsUnknown(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[{"id":"op-1","title":"Stats","status":"in_progress","priority":1,"issue_type":"task"}]`},
+	})
+
+	stateStore := taskstate.NewStoreWithClock(
+		paths,
+		clockSequence(
+			time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
+			time.Date(2026, 7, 7, 10, 1, 0, 0, time.UTC),
+			time.Date(2026, 7, 7, 10, 2, 0, 0, time.UTC),
+		),
+	)
+	run, err := stateStore.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		Agent:    "codex-profile",
+		Profile:  "codex-profile",
+		Harness:  "codex",
+		Model:    "vendor-model",
+		Command:  "codex",
+		Args:     []string{"exec", "--model", "vendor-model"},
+		Branch:   "main",
+		Worktree: repoDir,
+	})
+	must.NoError(err)
+	_, err = stateStore.RecordRunUsage("alpha", "op-1", run.Attempt, taskstate.RecordRunUsageOptions{
+		Usage: &taskstate.AgentUsage{
+			InputTokens:  100,
+			OutputTokens: 50,
+			TotalTokens:  150,
+		},
+		UsageCapture: taskstate.AgentUsageCapture{
+			Status: taskstate.UsageCaptureCaptured,
+			Reason: "matched_codex_session",
+		},
+	})
+	must.NoError(err)
+	_, err = stateStore.FinishRun("alpha", "op-1", run.Attempt, taskstate.RunStatusSucceeded)
+	must.NoError(err)
+
+	stdout, stderr := executeCommand(t, []string{"task", "stats", "op-1"})
+
+	is.Empty(stderr)
+	for _, want := range []string{
+		"total=150 input=100 cached_input=0 output=50 reasoning_output=0",
+		"unknown: no public pricing metadata for model vendor-model",
+		"implementation", "1", "2m0s", "150", "100", "0", "50", "0", "$0.000000", "0", "1",
+		"combined", "1", "2m0s", "150", "100", "0", "50", "0", "$0.000000", "0", "1",
 	} {
 		is.Contains(stdout, want)
 	}
