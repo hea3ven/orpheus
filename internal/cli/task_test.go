@@ -2610,7 +2610,7 @@ func TestTaskReviewApproveFinalizesAndRecordsPassedAttempt(t *testing.T) {
 		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "a\n")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "x\na\n")
 
 	is.Contains(stderr, "Task: op-main - Ready for task done")
 	is.Contains(stderr, "Latest completion: Review approval")
@@ -2621,6 +2621,9 @@ func TestTaskReviewApproveFinalizesAndRecordsPassedAttempt(t *testing.T) {
 	is.Contains(stderr, "reviewed.txt")
 	is.NotContains(stderr, "git diff --stat:")
 	is.Contains(stderr, "== Review step: local-review (manual) ==")
+	is.Contains(stderr, "Review action [a=approve, b=block, v=advisory, t=task, q=abort]")
+	is.NotContains(stderr, "p=promote advisory")
+	is.Contains(stderr, "Choose approve, block, advisory, task, or abort.")
 	is.Contains(stdout, "Finalized op-main")
 
 	var state taskstate.TaskState
@@ -3292,11 +3295,12 @@ func TestTaskReviewImportsHunkBlockingNoteAndBlocksApproval(t *testing.T) {
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "standard", "op-main"}, "\nb\na\n")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "standard", "op-main"}, "\nb\nf\n")
 
 	is.Contains(stdout, "hunk command ran")
 	is.Contains(stderr, "Captured 1 Hunk note(s)")
 	is.Contains(stderr, "Imported Hunk note user:1 as blocking finding.")
+	is.Contains(stderr, "Review action [f=finish/block, b=block, v=advisory, t=task, q=abort]")
 	is.Contains(stderr, "Review blocked for op-main.")
 
 	var state taskstate.TaskState
@@ -4195,12 +4199,12 @@ func TestTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
 	input := strings.Join([]string{
 		"p",
 		"1",
+		"a",
 		"v",
 		"Manual advisory",
 		"The human reviewer added a non-blocking note.",
 		"Keep this in mind later.",
-		"p",
-		"a",
+		"f",
 		"",
 	}, "\n")
 	inputPath := filepath.Join(t.TempDir(), "review-input.txt")
@@ -4216,7 +4220,8 @@ func TestTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
 	is.Contains(stderr, "Finding 1 (ai-review): Generated advisory")
 	is.Contains(stderr, "Review action [a=approve, b=block, p=promote advisory")
 	is.Contains(stderr, "Promoted advisory finding 1 to blocking.")
-	is.Contains(stderr, "No unresolved prior advisories to promote.")
+	is.Contains(stderr, "Review action [f=finish/block, b=block, v=advisory, t=task, q=abort]")
+	is.Contains(stderr, "Choose finish/block, block, advisory, task, or abort.")
 	is.NotContains(stderr, "Finding 2 (approval): Manual advisory")
 	is.Contains(stderr, "Review blocked for op-main.")
 	is.Equal(headBefore, strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")))
