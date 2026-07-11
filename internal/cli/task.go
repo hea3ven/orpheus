@@ -2921,12 +2921,36 @@ func reviewHistoryItems(reviews []taskstate.ReviewAttempt) []taskHistoryItem {
 				display: fmt.Sprintf("Review attempt %d started", review.Attempt),
 			})
 		}
+		items = append(items, reviewCreatedTaskHistoryItems(review)...)
 		if review.Status == taskstate.ReviewStatusRunning || review.FinishedAt == nil || review.FinishedAt.IsZero() {
 			continue
 		}
 		items = append(items, taskHistoryItem{
 			at:      *review.FinishedAt,
 			display: fmt.Sprintf("Review attempt %d %s", review.Attempt, review.Status),
+		})
+	}
+	return items
+}
+
+func reviewCreatedTaskHistoryItems(review taskstate.ReviewAttempt) []taskHistoryItem {
+	items := make([]taskHistoryItem, 0, len(review.Findings))
+	for index, finding := range review.Findings {
+		if finding.CreatedTaskAt == nil || finding.CreatedTaskAt.IsZero() {
+			continue
+		}
+		createdTaskID := strings.TrimSpace(finding.CreatedTaskID)
+		if createdTaskID == "" {
+			continue
+		}
+		items = append(items, taskHistoryItem{
+			at: *finding.CreatedTaskAt,
+			display: fmt.Sprintf(
+				"Review attempt %d finding %d created follow-up task %s",
+				review.Attempt,
+				index+1,
+				createdTaskID,
+			),
 		})
 	}
 	return items
