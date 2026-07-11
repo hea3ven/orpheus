@@ -307,6 +307,7 @@ type ReviewFinding struct {
 	Waiver          string             `yaml:"waiver,omitempty"`
 	TaskProposal    ReviewTaskProposal `yaml:"task_proposal,omitempty"`
 	CreatedTaskID   string             `yaml:"created_task_id,omitempty"`
+	CreatedTaskAt   *time.Time         `yaml:"created_task_at,omitempty"`
 
 	TargetedByRunAttempt int `yaml:"targeted_by_run_attempt,omitempty"`
 }
@@ -1487,6 +1488,10 @@ func (s Store) RecordReviewFindingCreatedTask(
 		return ReviewAttempt{}, fmt.Errorf("record created review task for task %s/%s: finding index %d already created task %q", repoID, taskID, findingIndex, finding.CreatedTaskID)
 	}
 
+	if state.Reviews[index].Findings[findingIndex].CreatedTaskID == "" {
+		now := s.nowUTC()
+		state.Reviews[index].Findings[findingIndex].CreatedTaskAt = &now
+	}
 	state.Reviews[index].Findings[findingIndex].CreatedTaskID = createdTaskID
 	if err := s.save(state); err != nil {
 		return ReviewAttempt{}, err
@@ -2382,6 +2387,9 @@ func normalizeReviewFinding(finding ReviewFinding) (ReviewFinding, error) {
 	finding.Waiver = strings.TrimSpace(finding.Waiver)
 	finding.TaskProposal = normalizeReviewTaskProposal(finding.TaskProposal)
 	finding.CreatedTaskID = strings.TrimSpace(finding.CreatedTaskID)
+	if finding.CreatedTaskAt != nil && finding.CreatedTaskAt.IsZero() {
+		finding.CreatedTaskAt = nil
+	}
 
 	if !validFindingType(finding.Type) {
 		return ReviewFinding{}, fmt.Errorf("unsupported finding type %q", finding.Type)

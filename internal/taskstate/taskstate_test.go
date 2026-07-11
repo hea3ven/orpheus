@@ -598,6 +598,45 @@ func TestStoreTargetsReviewFindingsByRunAttempt(t *testing.T) {
 	)
 }
 
+func TestStoreRecordsReviewFindingCreatedTaskTimestamp(t *testing.T) {
+	store := newTestStore(t,
+		time.Date(2026, 6, 26, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 6, 26, 10, 1, 0, 0, time.UTC),
+	)
+
+	review, err := store.StartReview("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("start review: %v", err)
+	}
+	review, err = store.RecordReviewFinding("alpha", "op-1", review.Attempt, taskstate.ReviewFinding{
+		Type:        taskstate.FindingTypeSeparateTask,
+		Title:       "Follow-up",
+		Description: "Track separately.",
+		TaskProposal: taskstate.ReviewTaskProposal{
+			Title:              "Clean up",
+			Description:        "Clean up separately.",
+			AcceptanceCriteria: "Cleanup has tests.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("record separate-task finding: %v", err)
+	}
+
+	review, err = store.RecordReviewFindingCreatedTask("alpha", "op-1", review.Attempt, 0, "op-2")
+	if err != nil {
+		t.Fatalf("record created task: %v", err)
+	}
+
+	if review.Findings[0].CreatedTaskAt == nil ||
+		!review.Findings[0].CreatedTaskAt.Equal(time.Date(2026, 6, 26, 10, 1, 0, 0, time.UTC)) {
+		t.Fatalf("created task timestamp = %#v, want 2026-06-26T10:01:00Z", review.Findings[0].CreatedTaskAt)
+	}
+	assertStoreYAMLContains(t, store, "alpha", "op-1",
+		"created_task_id: op-2",
+		"created_task_at: 2026-06-26T10:01:00Z",
+	)
+}
+
 func TestStorePromotesReviewAdvisoryFinding(t *testing.T) {
 	store := newTestStore(t)
 	review, err := store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{

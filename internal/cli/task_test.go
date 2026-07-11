@@ -766,6 +766,62 @@ func TestTaskShowProjectsReviewAttemptMilestonesIntoHistory(t *testing.T) {
 	}
 }
 
+func TestTaskShowProjectsReviewFollowUpCreationIntoHistory(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+
+	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	stateStore := taskstate.NewStoreWithClock(paths, func() time.Time { return now })
+	review, err := stateStore.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{
+		Pipeline: "local",
+		Step:     "manual",
+	})
+	must.NoError(err)
+	_, err = stateStore.RecordReviewFinding("alpha", "op-review", review.Attempt, taskstate.ReviewFinding{
+		Type:        taskstate.FindingTypeSeparateTask,
+		Title:       "Extract helper",
+		Description: "Track separately.",
+		TaskProposal: taskstate.ReviewTaskProposal{
+			Title:              "Extract helper",
+			Description:        "Extract helper separately.",
+			AcceptanceCriteria: "Helper extraction has tests.",
+		},
+	})
+	must.NoError(err)
+	now = now.Add(time.Minute)
+	_, err = stateStore.RecordReviewFindingCreatedTask("alpha", "op-review", review.Attempt, 0, "op-42")
+	must.NoError(err)
+
+	taskState, err := stateStore.Load("alpha", "op-review")
+	must.NoError(err)
+	taskState.Reviews[0].Findings = append(taskState.Reviews[0].Findings, taskstate.ReviewFinding{
+		Type:          taskstate.FindingTypeSeparateTask,
+		Title:         "Legacy follow-up",
+		Description:   "Created before timestamps were recorded.",
+		CreatedTaskID: "op-legacy",
+		TaskProposal: taskstate.ReviewTaskProposal{
+			Title:              "Legacy follow-up",
+			Description:        "Created before timestamps were recorded.",
+			AcceptanceCriteria: "Legacy task exists.",
+		},
+	})
+	must.NoError(paths.WriteDataYAML(filepath.Join("repos", "alpha", "tasks", "op-review.yaml"), taskState))
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[{"id":"op-review","title":"Review history","status":"open","priority":1,"issue_type":"task"}]`},
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "show", "op-review"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "2026-01-02T03:04:05Z Review attempt 1 started")
+	is.Contains(stdout, "2026-01-02T03:05:05Z Review attempt 1 finding 1 created follow-up task op-42")
+	is.NotContains(stdout, "op-legacy")
+}
+
 func recordTaskShowReviewAttempt(
 	t *testing.T,
 	store taskstate.Store,
@@ -2918,6 +2974,7 @@ func TestTaskReviewAdvisoryAndSeparateTaskFindingsDoNotBlockApproval(t *testing.
 	is.Equal(taskstate.FindingTypeAdvisory, latest.Findings[0].Type)
 	is.Equal(taskstate.FindingTypeSeparateTask, latest.Findings[1].Type)
 	is.Empty(latest.Findings[1].CreatedTaskID)
+	is.Nil(latest.Findings[1].CreatedTaskAt)
 }
 
 func TestTaskReviewCreatesSelectedSeparateTaskFollowUp(t *testing.T) {
@@ -2976,6 +3033,7 @@ func TestTaskReviewCreatesSelectedSeparateTaskFollowUp(t *testing.T) {
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
 	must.Len(latest.Findings, 1)
 	is.Equal("op-41", latest.Findings[0].CreatedTaskID)
+	is.NotNil(latest.Findings[0].CreatedTaskAt)
 }
 
 func TestTaskReviewCanAbortWhenSeparateTaskCreationFails(t *testing.T) {
@@ -3034,6 +3092,7 @@ func TestTaskReviewCanAbortWhenSeparateTaskCreationFails(t *testing.T) {
 	is.Equal(taskstate.ReviewStatusAborted, latest.Status)
 	must.Len(latest.Findings, 1)
 	is.Empty(latest.Findings[0].CreatedTaskID)
+	is.Nil(latest.Findings[0].CreatedTaskAt)
 }
 
 func TestTaskReviewAbortDoesNotFinalize(t *testing.T) {
@@ -3369,6 +3428,7 @@ func TestTaskReviewImportsHunkSeparateTaskNoteAndCreatesFollowUp(t *testing.T) {
 	must.Len(latest.Findings, 1)
 	is.Equal(taskstate.FindingTypeSeparateTask, latest.Findings[0].Type)
 	is.Equal("op-41", latest.Findings[0].CreatedTaskID)
+	is.NotNil(latest.Findings[0].CreatedTaskAt)
 }
 
 func TestTaskReviewHunkManualCommandWithNoCapturedNotesContinuesPrompt(t *testing.T) {
