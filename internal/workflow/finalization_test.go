@@ -803,7 +803,7 @@ func TestFinalizePublishesOriginalCompletionAfterReviewFollowUp(t *testing.T) {
 	for _, want := range []string{
 		"## Review process",
 		"### Review attempt 1 — blocked",
-		"- ❌ `agent-review`",
+		"- ✅ `agent-review`",
 		"  - **Blocking:** Preserve original PR title",
 		"    - Fixed by run attempt 2",
 		"  - **Blocking:** Preserve original PR body",

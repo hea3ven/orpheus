@@ -361,7 +361,7 @@ func (s DispatchService) resolveReviewFollowUpPlan(
 
 	switch latestReview.Status {
 	case taskstate.ReviewStatusBlocked:
-		indexes := untargetedBlockingFindingIndexes(latestReview)
+		indexes := taskstate.UntargetedBlockingFindingIndexes(latestReview)
 		if len(indexes) == 0 {
 			return nil, fmt.Errorf(
 				"latest review attempt %d for task %s has no untargeted blocking findings; run `orpheus task review %s` before another `orpheus task run %s`",
@@ -390,23 +390,6 @@ func (s DispatchService) resolveReviewFollowUpPlan(
 	default:
 		return nil, fmt.Errorf("latest review attempt %d for task %s has unsupported status %q", latestReview.Attempt, taskID, latestReview.Status)
 	}
-}
-
-func untargetedBlockingFindingIndexes(review taskstate.ReviewAttempt) []int {
-	var indexes []int
-	for index, finding := range review.Findings {
-		if finding.Type != taskstate.FindingTypeBlocking {
-			continue
-		}
-		if strings.TrimSpace(finding.Waiver) != "" || strings.TrimSpace(finding.CreatedTaskID) != "" {
-			continue
-		}
-		if finding.TargetedByRunAttempt != 0 {
-			continue
-		}
-		indexes = append(indexes, index)
-	}
-	return indexes
 }
 
 func (s DispatchService) recordStart(

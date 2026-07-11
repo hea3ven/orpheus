@@ -788,6 +788,16 @@ func taskReviewPipelineOptions(
 				Stop:   true,
 			}, nil
 		},
+		PromptAutomatedBlockers: taskReviewAutomatedBlockerPrompt(command, reviewInput),
+	}
+}
+
+func taskReviewAutomatedBlockerPrompt(
+	command *cobra.Command,
+	reviewInput *bufio.Reader,
+) func(review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
+	return func(blockerReview review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
+		return promptAutomatedBlockerDecisions(command, reviewInput, blockerReview)
 	}
 }
 
@@ -1535,7 +1545,7 @@ func (s manualReviewSession) approve() (manualReviewOutcome, bool, error) {
 	if err != nil {
 		return manualReviewOutcome{}, true, err
 	}
-	if hasOpenBlockingReviewFinding(latest) {
+	if taskstate.ReviewHasOpenBlockers(latest) {
 		_, err := fmt.Fprintf(s.command.ErrOrStderr(), "Review blocked for %s.\n", s.resolvedCtx.Resolved.TaskID)
 		return manualReviewOutcome{
 			result: manualReviewBlocked,
@@ -1826,6 +1836,129 @@ func promptManualReviewAction(command *cobra.Command, reader *bufio.Reader) (str
 	return strings.ToLower(strings.TrimSpace(line)), nil
 }
 
+func promptAutomatedBlockerDecisions(
+	command *cobra.Command,
+	reader *bufio.Reader,
+	blockerReview review.AutomatedBlockerReview,
+) ([]review.AutomatedBlockerDecision, error) {
+	if len(blockerReview.Blockers) == 0 {
+		return nil, nil
+	}
+	output := command.ErrOrStderr()
+	if _, err := fmt.Fprintf(
+		output,
+		"\nAutomated blocking findings from step %q can be kept, downgraded, or waived/canceled.\n",
+		blockerReview.Step.Name,
+	); err != nil {
+		return nil, err
+	}
+
+	decisions := make([]review.AutomatedBlockerDecision, 0, len(blockerReview.Blockers))
+	for _, blocker := range blockerReview.Blockers {
+		if err := renderAutomatedBlocker(output, blocker); err != nil {
+			return nil, err
+		}
+		decision, err := promptAutomatedBlockerDecision(command, reader, blocker)
+		if err != nil {
+			return nil, err
+		}
+		decisions = append(decisions, decision)
+	}
+	return decisions, nil
+}
+
+func renderAutomatedBlocker(output io.Writer, blocker review.AutomatedBlocker) error {
+	finding := blocker.Finding
+	lines := []string{
+		fmt.Sprintf("  Finding %d:", blocker.Index+1),
+		fmt.Sprintf("    Title: %s", formatReviewValue(finding.Title)),
+		fmt.Sprintf("    Description: %s", formatReviewValue(finding.Description)),
+	}
+	if strings.TrimSpace(finding.SuggestedAction) != "" {
+		lines = append(lines, fmt.Sprintf("    Suggested action: %s", finding.SuggestedAction))
+	}
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(output, line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func promptAutomatedBlockerDecision(
+	command *cobra.Command,
+	reader *bufio.Reader,
+	blocker review.AutomatedBlocker,
+) (review.AutomatedBlockerDecision, error) {
+	for {
+		if _, err := fmt.Fprintf(
+			command.ErrOrStderr(),
+			"Decision for finding %d [k=keep, d=downgrade advisory, w=waive/cancel]: ",
+			blocker.Index+1,
+		); err != nil {
+			return review.AutomatedBlockerDecision{}, err
+		}
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return keepAutomatedBlockerDecision(blocker), nil
+			}
+			return review.AutomatedBlockerDecision{}, fmt.Errorf("read automated blocker decision: %w", err)
+		}
+
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "", "k", "keep":
+			return keepAutomatedBlockerDecision(blocker), nil
+		case "d", "downgrade", "advisory":
+			reason, err := promptRequiredReviewReason(command, reader, "Downgrade reason")
+			if err != nil {
+				return review.AutomatedBlockerDecision{}, err
+			}
+			return review.AutomatedBlockerDecision{
+				FindingIndex: blocker.Index,
+				Action:       review.AutomatedBlockerActionDowngrade,
+				Reason:       reason,
+			}, nil
+		case "w", "waive", "c", "cancel":
+			reason, err := promptRequiredReviewReason(command, reader, "Waiver reason")
+			if err != nil {
+				return review.AutomatedBlockerDecision{}, err
+			}
+			return review.AutomatedBlockerDecision{
+				FindingIndex: blocker.Index,
+				Action:       review.AutomatedBlockerActionWaive,
+				Reason:       reason,
+			}, nil
+		default:
+			if _, err := fmt.Fprintln(command.ErrOrStderr(), "Choose keep, downgrade, waive, or cancel."); err != nil {
+				return review.AutomatedBlockerDecision{}, err
+			}
+		}
+	}
+}
+
+func keepAutomatedBlockerDecision(blocker review.AutomatedBlocker) review.AutomatedBlockerDecision {
+	return review.AutomatedBlockerDecision{
+		FindingIndex: blocker.Index,
+		Action:       review.AutomatedBlockerActionKeep,
+	}
+}
+
+func promptRequiredReviewReason(command *cobra.Command, reader *bufio.Reader, label string) (string, error) {
+	for {
+		reason, err := promptReviewLine(command, reader, label)
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(reason) != "" {
+			return reason, nil
+		}
+		if _, err := fmt.Fprintln(command.ErrOrStderr(), "A reason is required."); err != nil {
+			return "", err
+		}
+	}
+}
+
 type priorReviewAdvisory struct {
 	index   int
 	finding taskstate.ReviewFinding
@@ -1877,15 +2010,10 @@ func unresolvedPriorReviewAdvisories(review taskstate.ReviewAttempt, currentStep
 	advisories := make([]priorReviewAdvisory, 0)
 	currentStep = strings.TrimSpace(currentStep)
 	for index, finding := range review.Findings {
-		if finding.Type != taskstate.FindingTypeAdvisory {
+		if !taskstate.IsOpenAdvisoryReviewFinding(finding) {
 			continue
 		}
 		if currentStep != "" && strings.TrimSpace(finding.Step) == currentStep {
-			continue
-		}
-		if strings.TrimSpace(finding.Waiver) != "" ||
-			strings.TrimSpace(finding.CreatedTaskID) != "" ||
-			finding.TargetedByRunAttempt > 0 {
 			continue
 		}
 		advisories = append(advisories, priorReviewAdvisory{index: index, finding: finding})
