@@ -1039,6 +1039,37 @@ func TestBuildPublicationPullRequestContentFromStateFormatsReviewProcess(t *test
 					{Kind: "check", Name: "lint"},
 				},
 			},
+			{
+				Attempt:    3,
+				Status:     taskstate.ReviewStatusPassed,
+				Pipeline:   "default",
+				Step:       "agent-review",
+				StartedAt:  time.Date(2026, 6, 10, 13, 0, 0, 0, time.UTC),
+				FinishedAt: &finishedAt,
+				Steps: []taskstate.ReviewStep{
+					{Kind: "agent_review", Name: "agent-review"},
+				},
+				Findings: []taskstate.ReviewFinding{
+					{
+						Type:                 taskstate.FindingTypeBlocking,
+						Title:                "Resolved blocker",
+						Step:                 "agent-review",
+						TargetedByRunAttempt: 2,
+					},
+					{
+						Type:            taskstate.FindingTypeAdvisory,
+						Title:           "Downgraded blocker",
+						Step:            "agent-review",
+						DowngradeReason: "False positive for this task.",
+					},
+					{
+						Type:   taskstate.FindingTypeBlocking,
+						Title:  "Waived automated blocker",
+						Step:   "agent-review",
+						Waiver: "Accepted for this task.",
+					},
+				},
+			},
 		},
 	})
 	if err != nil {
@@ -1064,6 +1095,12 @@ func TestBuildPublicationPullRequestContentFromStateFormatsReviewProcess(t *test
 		"  - Description: Addressed review feedback.",
 		"### Review attempt 2 — failed",
 		"- ⚠️ `lint`",
+		"### Review attempt 3 — passed",
+		"- ✅ `agent-review`",
+		"  - **Blocking:** Resolved blocker",
+		"  - **Advisory (downgraded):** Downgraded blocker",
+		"    - Downgraded to advisory.",
+		"  - **Blocking (waived):** Waived automated blocker",
 	} {
 		if !strings.Contains(content.Body, want) {
 			t.Fatalf("body missing %q:\n%s", want, content.Body)

@@ -220,22 +220,22 @@ func renderReviewFinding(output io.Writer, indexed indexedReviewFinding) error {
 }
 
 func reviewFindingResolution(finding taskstate.ReviewFinding) string {
-	if strings.TrimSpace(finding.Waiver) != "" {
+	switch taskstate.ResolveReviewFinding(finding) {
+	case taskstate.ReviewFindingResolutionWaived:
 		return "waived: " + strings.TrimSpace(finding.Waiver)
-	}
-	if strings.TrimSpace(finding.CreatedTaskID) != "" {
+	case taskstate.ReviewFindingResolutionDowngraded:
+		return "downgraded to advisory: " + strings.TrimSpace(finding.DowngradeReason)
+	case taskstate.ReviewFindingResolutionCreatedTask:
 		return "converted/created task " + strings.TrimSpace(finding.CreatedTaskID)
-	}
-	if finding.TargetedByRunAttempt > 0 {
+	case taskstate.ReviewFindingResolutionTargetedByRun:
 		return fmt.Sprintf("targeted by follow-up run attempt %d", finding.TargetedByRunAttempt)
-	}
-	if finding.Type == taskstate.FindingTypeBlocking {
+	case taskstate.ReviewFindingResolutionOpen:
 		return "open"
-	}
-	if finding.Type == taskstate.FindingTypeSeparateTask {
+	case taskstate.ReviewFindingResolutionSeparateTask:
 		return "open separate-task proposal"
+	default:
+		return "advisory/non-blocking"
 	}
-	return "advisory/non-blocking"
 }
 
 func renderCreatedReviewFollowUps(output io.Writer, taskState taskstate.TaskState) error {
@@ -304,7 +304,7 @@ func createdReviewFollowUps(taskState taskstate.TaskState) []createdReviewFollow
 func renderReviewNextStep(output io.Writer, taskID string, review taskstate.ReviewAttempt) error {
 	switch review.Status {
 	case taskstate.ReviewStatusBlocked:
-		if hasOpenBlockingReviewFinding(review) {
+		if taskstate.ReviewHasOpenBlockers(review) {
 			_, err := fmt.Fprintf(
 				output,
 				"\nNext step: run `orpheus task run %s` to address open blocking findings, then rerun `orpheus task review %s`.\n",
@@ -321,21 +321,6 @@ func renderReviewNextStep(output io.Writer, taskID string, review taskstate.Revi
 	default:
 		return nil
 	}
-}
-
-func hasOpenBlockingReviewFinding(review taskstate.ReviewAttempt) bool {
-	for _, finding := range review.Findings {
-		if finding.Type != taskstate.FindingTypeBlocking {
-			continue
-		}
-		if strings.TrimSpace(finding.Waiver) != "" ||
-			strings.TrimSpace(finding.CreatedTaskID) != "" ||
-			finding.TargetedByRunAttempt > 0 {
-			continue
-		}
-		return true
-	}
-	return false
 }
 
 func formatReviewValue(value string) string {

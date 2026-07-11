@@ -355,16 +355,7 @@ func classifyLatestReview(
 }
 
 func untargetedBlockingFindingCount(review taskstate.ReviewAttempt) int {
-	count := 0
-	for _, finding := range review.Findings {
-		if finding.Type == taskstate.FindingTypeBlocking &&
-			strings.TrimSpace(finding.Waiver) == "" &&
-			strings.TrimSpace(finding.CreatedTaskID) == "" &&
-			finding.TargetedByRunAttempt == 0 {
-			count++
-		}
-	}
-	return count
+	return len(taskstate.UntargetedBlockingFindingIndexes(review))
 }
 
 func classifyInProgress(latestRun *taskstate.RunAttempt) policyResult {

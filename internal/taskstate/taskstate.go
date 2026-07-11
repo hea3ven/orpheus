@@ -130,6 +130,8 @@ type Service interface {
 	FinishReviewStepExecution(repoID, taskID string, attempt int, stepName string, opts FinishReviewStepExecutionOptions) (ReviewAttempt, error)
 	RecordReviewFinding(repoID, taskID string, attempt int, finding ReviewFinding) (ReviewAttempt, error)
 	PromoteReviewAdvisoryFinding(repoID, taskID string, attempt int, findingIndex int) (ReviewAttempt, error)
+	DowngradeReviewBlockingFinding(repoID, taskID string, attempt int, findingIndex int, reason string) (ReviewAttempt, error)
+	WaiveReviewBlockingFinding(repoID, taskID string, attempt int, findingIndex int, reason string) (ReviewAttempt, error)
 	RecordReviewFindingCreatedTask(repoID, taskID string, attempt int, findingIndex int, createdTaskID string) (ReviewAttempt, error)
 	TargetReviewFindings(repoID, taskID string, reviewAttempt int, findingIndexes []int, runAttempt int) (ReviewAttempt, error)
 	FinishReview(repoID, taskID string, attempt int, status ReviewStatus) (ReviewAttempt, error)
@@ -301,6 +303,7 @@ type ReviewFinding struct {
 
 	Step            string             `yaml:"step,omitempty"`
 	SuggestedAction string             `yaml:"suggested_action,omitempty"`
+	DowngradeReason string             `yaml:"downgrade_reason,omitempty"`
 	Waiver          string             `yaml:"waiver,omitempty"`
 	TaskProposal    ReviewTaskProposal `yaml:"task_proposal,omitempty"`
 	CreatedTaskID   string             `yaml:"created_task_id,omitempty"`
@@ -1145,9 +1148,7 @@ func (s Store) PromoteReviewAdvisoryFinding(
 			FindingTypeAdvisory,
 		)
 	}
-	if strings.TrimSpace(finding.Waiver) != "" ||
-		strings.TrimSpace(finding.CreatedTaskID) != "" ||
-		finding.TargetedByRunAttempt > 0 {
+	if ReviewFindingResolved(finding) {
 		return ReviewAttempt{}, fmt.Errorf("promote review advisory for task %s/%s: finding index %d is already resolved", repoID, taskID, findingIndex)
 	}
 
@@ -1156,6 +1157,259 @@ func (s Store) PromoteReviewAdvisoryFinding(
 		return ReviewAttempt{}, err
 	}
 	return state.Reviews[reviewIndex], nil
+}
+
+// DowngradeReviewBlockingFinding changes an unresolved blocking finding into an advisory finding.
+func (s Store) DowngradeReviewBlockingFinding(
+	repoID,
+	taskID string,
+	attempt int,
+	findingIndex int,
+	reason string,
+) (ReviewAttempt, error) {
+	return s.reclassifyReviewBlockingFinding(
+		repoID,
+		taskID,
+		attempt,
+		findingIndex,
+		reason,
+		reviewBlockingReclassificationDowngrade,
+	)
+}
+
+// WaiveReviewBlockingFinding records an operator waiver for an unresolved blocking finding.
+func (s Store) WaiveReviewBlockingFinding(
+	repoID,
+	taskID string,
+	attempt int,
+	findingIndex int,
+	reason string,
+) (ReviewAttempt, error) {
+	return s.reclassifyReviewBlockingFinding(
+		repoID,
+		taskID,
+		attempt,
+		findingIndex,
+		reason,
+		reviewBlockingReclassificationWaive,
+	)
+}
+
+type reviewBlockingReclassification string
+
+const (
+	reviewBlockingReclassificationDowngrade reviewBlockingReclassification = "downgrade"
+	reviewBlockingReclassificationWaive     reviewBlockingReclassification = "waive"
+)
+
+func (s Store) reclassifyReviewBlockingFinding(
+	repoID,
+	taskID string,
+	attempt int,
+	findingIndex int,
+	reason string,
+	reclassification reviewBlockingReclassification,
+) (ReviewAttempt, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return ReviewAttempt{}, fmt.Errorf(
+			"%s review blocking finding for task %s/%s: reason is required",
+			reclassification,
+			repoID,
+			taskID,
+		)
+	}
+
+	state, reviewIndex, err := s.reviewBlockingReclassificationTarget(
+		repoID,
+		taskID,
+		attempt,
+		findingIndex,
+		reclassification,
+	)
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+	applyReviewBlockingReclassification(&state, reviewIndex, findingIndex, reason, reclassification)
+
+	if err := s.save(state); err != nil {
+		return ReviewAttempt{}, err
+	}
+	return state.Reviews[reviewIndex], nil
+}
+
+func (s Store) reviewBlockingReclassificationTarget(
+	repoID,
+	taskID string,
+	attempt int,
+	findingIndex int,
+	reclassification reviewBlockingReclassification,
+) (TaskState, int, error) {
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return TaskState{}, -1, err
+	}
+	reviewIndex, err := requireRunningReviewFinding(
+		state,
+		repoID,
+		taskID,
+		attempt,
+		findingIndex,
+		string(reclassification)+" review blocking finding",
+	)
+	if err != nil {
+		return TaskState{}, -1, err
+	}
+	finding := state.Reviews[reviewIndex].Findings[findingIndex]
+	if finding.Type != FindingTypeBlocking {
+		return TaskState{}, -1, fmt.Errorf(
+			"%s review blocking finding for task %s/%s: finding index %d is %q, expected %q",
+			reclassification,
+			repoID,
+			taskID,
+			findingIndex,
+			finding.Type,
+			FindingTypeBlocking,
+		)
+	}
+	if ReviewFindingResolved(finding) {
+		return TaskState{}, -1, fmt.Errorf(
+			"%s review blocking finding for task %s/%s: finding index %d is already resolved",
+			reclassification,
+			repoID,
+			taskID,
+			findingIndex,
+		)
+	}
+	return state, reviewIndex, nil
+}
+
+func applyReviewBlockingReclassification(
+	state *TaskState,
+	reviewIndex int,
+	findingIndex int,
+	reason string,
+	reclassification reviewBlockingReclassification,
+) {
+	switch reclassification {
+	case reviewBlockingReclassificationDowngrade:
+		state.Reviews[reviewIndex].Findings[findingIndex].Type = FindingTypeAdvisory
+		state.Reviews[reviewIndex].Findings[findingIndex].DowngradeReason = reason
+	case reviewBlockingReclassificationWaive:
+		state.Reviews[reviewIndex].Findings[findingIndex].Waiver = reason
+	}
+}
+
+func requireRunningReviewFinding(
+	state TaskState,
+	repoID,
+	taskID string,
+	attempt int,
+	findingIndex int,
+	operation string,
+) (int, error) {
+	reviewIndex := reviewAttemptIndex(state, attempt)
+	if reviewIndex < 0 {
+		return -1, fmt.Errorf("%s for task %s/%s: review attempt %d was not found", operation, repoID, taskID, attempt)
+	}
+	if state.Reviews[reviewIndex].Status != ReviewStatusRunning {
+		return -1, fmt.Errorf(
+			"%s for task %s/%s: review attempt %d is %q, expected %q",
+			operation,
+			repoID,
+			taskID,
+			attempt,
+			state.Reviews[reviewIndex].Status,
+			ReviewStatusRunning,
+		)
+	}
+	if findingIndex < 0 || findingIndex >= len(state.Reviews[reviewIndex].Findings) {
+		return -1, fmt.Errorf("%s for task %s/%s: finding index %d is out of range", operation, repoID, taskID, findingIndex)
+	}
+	return reviewIndex, nil
+}
+
+// ReviewFindingResolution describes the current lifecycle outcome for a review finding.
+type ReviewFindingResolution string
+
+const (
+	ReviewFindingResolutionOpen          ReviewFindingResolution = "open"
+	ReviewFindingResolutionWaived        ReviewFindingResolution = "waived"
+	ReviewFindingResolutionDowngraded    ReviewFindingResolution = "downgraded"
+	ReviewFindingResolutionCreatedTask   ReviewFindingResolution = "created_task"
+	ReviewFindingResolutionTargetedByRun ReviewFindingResolution = "targeted_by_run"
+	ReviewFindingResolutionNonBlocking   ReviewFindingResolution = "non_blocking"
+	ReviewFindingResolutionSeparateTask  ReviewFindingResolution = "separate_task"
+)
+
+// ResolveReviewFinding classifies the finding lifecycle state used for blocking decisions.
+func ResolveReviewFinding(finding ReviewFinding) ReviewFindingResolution {
+	if strings.TrimSpace(finding.Waiver) != "" {
+		return ReviewFindingResolutionWaived
+	}
+	if strings.TrimSpace(finding.DowngradeReason) != "" {
+		return ReviewFindingResolutionDowngraded
+	}
+	if strings.TrimSpace(finding.CreatedTaskID) != "" {
+		return ReviewFindingResolutionCreatedTask
+	}
+	if finding.TargetedByRunAttempt > 0 {
+		return ReviewFindingResolutionTargetedByRun
+	}
+	switch finding.Type {
+	case FindingTypeBlocking:
+		return ReviewFindingResolutionOpen
+	case FindingTypeSeparateTask:
+		return ReviewFindingResolutionSeparateTask
+	default:
+		return ReviewFindingResolutionNonBlocking
+	}
+}
+
+// ReviewFindingResolved reports whether a finding has an explicit audit resolution.
+func ReviewFindingResolved(finding ReviewFinding) bool {
+	switch ResolveReviewFinding(finding) {
+	case ReviewFindingResolutionWaived,
+		ReviewFindingResolutionDowngraded,
+		ReviewFindingResolutionCreatedTask,
+		ReviewFindingResolutionTargetedByRun:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsOpenBlockingReviewFinding reports whether a finding currently blocks review progress.
+func IsOpenBlockingReviewFinding(finding ReviewFinding) bool {
+	return finding.Type == FindingTypeBlocking &&
+		ResolveReviewFinding(finding) == ReviewFindingResolutionOpen
+}
+
+// IsOpenAdvisoryReviewFinding reports whether an advisory can still be promoted or acted on.
+func IsOpenAdvisoryReviewFinding(finding ReviewFinding) bool {
+	return finding.Type == FindingTypeAdvisory &&
+		ResolveReviewFinding(finding) == ReviewFindingResolutionNonBlocking
+}
+
+// ReviewHasOpenBlockers reports whether an attempt still has unresolved blocking findings.
+func ReviewHasOpenBlockers(review ReviewAttempt) bool {
+	for _, finding := range review.Findings {
+		if IsOpenBlockingReviewFinding(finding) {
+			return true
+		}
+	}
+	return false
+}
+
+// UntargetedBlockingFindingIndexes returns open blocker indexes eligible for follow-up work.
+func UntargetedBlockingFindingIndexes(review ReviewAttempt) []int {
+	indexes := make([]int, 0)
+	for index, finding := range review.Findings {
+		if IsOpenBlockingReviewFinding(finding) {
+			indexes = append(indexes, index)
+		}
+	}
+	return indexes
 }
 
 func latestReviewStepExecutionIndex(review ReviewAttempt, stepName string) int {
@@ -2124,6 +2378,7 @@ func normalizeReviewFinding(finding ReviewFinding) (ReviewFinding, error) {
 	finding.Description = strings.TrimSpace(finding.Description)
 	finding.Step = strings.TrimSpace(finding.Step)
 	finding.SuggestedAction = strings.TrimSpace(finding.SuggestedAction)
+	finding.DowngradeReason = strings.TrimSpace(finding.DowngradeReason)
 	finding.Waiver = strings.TrimSpace(finding.Waiver)
 	finding.TaskProposal = normalizeReviewTaskProposal(finding.TaskProposal)
 	finding.CreatedTaskID = strings.TrimSpace(finding.CreatedTaskID)

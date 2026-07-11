@@ -637,6 +637,300 @@ func TestStorePromotesReviewAdvisoryFinding(t *testing.T) {
 	)
 }
 
+func TestStoreDowngradesReviewBlockingFinding(t *testing.T) {
+	store := newTestStore(t)
+	review, err := store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{
+		Pipeline: "standard",
+		Step:     "unit",
+	})
+	if err != nil {
+		t.Fatalf("start review: %v", err)
+	}
+	review, err = store.RecordReviewFinding("alpha", "op-1", review.Attempt, taskstate.ReviewFinding{
+		Type:            taskstate.FindingTypeBlocking,
+		Title:           "Generated blocker",
+		Description:     "The automated step found a blocker.",
+		Step:            "unit",
+		SuggestedAction: "Fix the blocker.",
+	})
+	if err != nil {
+		t.Fatalf("record blocking finding: %v", err)
+	}
+
+	downgraded, err := store.DowngradeReviewBlockingFinding(
+		"alpha",
+		"op-1",
+		review.Attempt,
+		0,
+		"False positive for this task.",
+	)
+	if err != nil {
+		t.Fatalf("downgrade blocking finding: %v", err)
+	}
+	finding := downgraded.Findings[0]
+	if finding.Type != taskstate.FindingTypeAdvisory {
+		t.Fatalf("downgraded finding type = %q, want advisory", finding.Type)
+	}
+	if finding.Title != "Generated blocker" ||
+		finding.Description != "The automated step found a blocker." ||
+		finding.Step != "unit" ||
+		finding.SuggestedAction != "Fix the blocker." {
+		t.Fatalf("downgraded finding = %#v, want content preserved", finding)
+	}
+	if finding.DowngradeReason != "False positive for this task." {
+		t.Fatalf("downgrade reason = %q", finding.DowngradeReason)
+	}
+
+	assertStoreYAMLContains(t, store, "alpha", "op-1",
+		"type: advisory",
+		"title: Generated blocker",
+		"downgrade_reason: False positive for this task.",
+	)
+}
+
+func TestStoreWaivesReviewBlockingFinding(t *testing.T) {
+	store := newTestStore(t)
+	review, err := store.StartReview("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("start review: %v", err)
+	}
+	review, err = store.RecordReviewFinding("alpha", "op-1", review.Attempt, taskstate.ReviewFinding{
+		Type:        taskstate.FindingTypeBlocking,
+		Title:       "Check failed",
+		Description: "The check failed.",
+	})
+	if err != nil {
+		t.Fatalf("record blocking finding: %v", err)
+	}
+
+	waived, err := store.WaiveReviewBlockingFinding("alpha", "op-1", review.Attempt, 0, "Known flaky check.")
+	if err != nil {
+		t.Fatalf("waive blocking finding: %v", err)
+	}
+	finding := waived.Findings[0]
+	if finding.Type != taskstate.FindingTypeBlocking {
+		t.Fatalf("waived finding type = %q, want blocking audit type preserved", finding.Type)
+	}
+	if finding.Waiver != "Known flaky check." {
+		t.Fatalf("waiver = %q", finding.Waiver)
+	}
+
+	assertStoreYAMLContains(t, store, "alpha", "op-1",
+		"type: blocking",
+		"waiver: Known flaky check.",
+	)
+}
+
+func TestStoreRejectsReclassifyingResolvedOrNonBlockingFindings(t *testing.T) {
+	for _, test := range reviewBlockingReclassificationRejectionCases() {
+		t.Run(test.name, func(t *testing.T) {
+			store := newTestStore(t)
+			review, err := store.StartReview("alpha", "op-1")
+			if err != nil {
+				t.Fatalf("start review: %v", err)
+			}
+			if _, err := store.RecordReviewFinding("alpha", "op-1", review.Attempt, test.finding); err != nil {
+				t.Fatalf("record finding: %v", err)
+			}
+
+			err = test.run(store, review)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("reclassify error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestReviewFindingResolutionContract(t *testing.T) {
+	for _, test := range reviewFindingResolutionContractCases {
+		t.Run(test.name, func(t *testing.T) {
+			if got := taskstate.ResolveReviewFinding(test.finding); got != test.resolution {
+				t.Fatalf("ResolveReviewFinding() = %q, want %q", got, test.resolution)
+			}
+			if got := taskstate.ReviewFindingResolved(test.finding); got != test.resolved {
+				t.Fatalf("ReviewFindingResolved() = %v, want %v", got, test.resolved)
+			}
+			if got := taskstate.IsOpenBlockingReviewFinding(test.finding); got != test.openBlocking {
+				t.Fatalf("IsOpenBlockingReviewFinding() = %v, want %v", got, test.openBlocking)
+			}
+			if got := taskstate.IsOpenAdvisoryReviewFinding(test.finding); got != test.openAdvisory {
+				t.Fatalf("IsOpenAdvisoryReviewFinding() = %v, want %v", got, test.openAdvisory)
+			}
+		})
+	}
+}
+
+type reviewFindingResolutionContractCase struct {
+	name         string
+	finding      taskstate.ReviewFinding
+	resolution   taskstate.ReviewFindingResolution
+	resolved     bool
+	openBlocking bool
+	openAdvisory bool
+}
+
+var reviewFindingResolutionContractCases = []reviewFindingResolutionContractCase{
+	{
+		name: "open blocking",
+		finding: taskstate.ReviewFinding{
+			Type:        taskstate.FindingTypeBlocking,
+			Title:       "Blocker",
+			Description: "Still open.",
+		},
+		resolution:   taskstate.ReviewFindingResolutionOpen,
+		openBlocking: true,
+	},
+	{
+		name: "waived blocking",
+		finding: taskstate.ReviewFinding{
+			Type:        taskstate.FindingTypeBlocking,
+			Title:       "Waived",
+			Description: "Accepted.",
+			Waiver:      "Accepted risk.",
+		},
+		resolution: taskstate.ReviewFindingResolutionWaived,
+		resolved:   true,
+	},
+	{
+		name: "downgraded advisory",
+		finding: taskstate.ReviewFinding{
+			Type:            taskstate.FindingTypeAdvisory,
+			Title:           "Downgraded",
+			Description:     "No longer blocking.",
+			DowngradeReason: "False positive.",
+		},
+		resolution: taskstate.ReviewFindingResolutionDowngraded,
+		resolved:   true,
+	},
+	{
+		name: "created follow-up task",
+		finding: taskstate.ReviewFinding{
+			Type:          taskstate.FindingTypeSeparateTask,
+			Title:         "Follow-up",
+			Description:   "Track later.",
+			CreatedTaskID: "op-2",
+		},
+		resolution: taskstate.ReviewFindingResolutionCreatedTask,
+		resolved:   true,
+	},
+	{
+		name: "targeted blocker",
+		finding: taskstate.ReviewFinding{
+			Type:                 taskstate.FindingTypeBlocking,
+			Title:                "Targeted",
+			Description:          "Follow-up in progress.",
+			TargetedByRunAttempt: 2,
+		},
+		resolution: taskstate.ReviewFindingResolutionTargetedByRun,
+		resolved:   true,
+	},
+	{
+		name: "open advisory",
+		finding: taskstate.ReviewFinding{
+			Type:        taskstate.FindingTypeAdvisory,
+			Title:       "Advisory",
+			Description: "Could be promoted.",
+		},
+		resolution:   taskstate.ReviewFindingResolutionNonBlocking,
+		openAdvisory: true,
+	},
+}
+
+func TestUntargetedBlockingFindingIndexes(t *testing.T) {
+	review := taskstate.ReviewAttempt{
+		Findings: []taskstate.ReviewFinding{
+			{
+				Type:        taskstate.FindingTypeBlocking,
+				Title:       "Open",
+				Description: "Needs follow-up.",
+			},
+			{
+				Type:        taskstate.FindingTypeBlocking,
+				Title:       "Waived",
+				Description: "Accepted.",
+				Waiver:      "Not relevant.",
+			},
+			{
+				Type:            taskstate.FindingTypeAdvisory,
+				Title:           "Downgraded",
+				Description:     "Not blocking.",
+				DowngradeReason: "False positive.",
+			},
+			{
+				Type:                 taskstate.FindingTypeBlocking,
+				Title:                "Targeted",
+				Description:          "Already has follow-up.",
+				TargetedByRunAttempt: 2,
+			},
+			{
+				Type:        taskstate.FindingTypeBlocking,
+				Title:       "Second open",
+				Description: "Also needs follow-up.",
+			},
+		},
+	}
+
+	indexes := taskstate.UntargetedBlockingFindingIndexes(review)
+	if len(indexes) != 2 || indexes[0] != 0 || indexes[1] != 4 {
+		t.Fatalf("UntargetedBlockingFindingIndexes() = %#v, want []int{0, 4}", indexes)
+	}
+	if !taskstate.ReviewHasOpenBlockers(review) {
+		t.Fatal("ReviewHasOpenBlockers() = false, want true")
+	}
+}
+
+type reviewBlockingReclassificationRejectionCase struct {
+	name    string
+	finding taskstate.ReviewFinding
+	run     func(taskstate.Store, taskstate.ReviewAttempt) error
+	wantErr string
+}
+
+func reviewBlockingReclassificationRejectionCases() []reviewBlockingReclassificationRejectionCase {
+	return []reviewBlockingReclassificationRejectionCase{
+		{
+			name: "advisory downgrade",
+			finding: taskstate.ReviewFinding{
+				Type:        taskstate.FindingTypeAdvisory,
+				Title:       "Advisory",
+				Description: "Already advisory.",
+			},
+			run: func(store taskstate.Store, review taskstate.ReviewAttempt) error {
+				_, err := store.DowngradeReviewBlockingFinding("alpha", "op-1", review.Attempt, 0, "Not blocking.")
+				return err
+			},
+			wantErr: "is \"advisory\", expected \"blocking\"",
+		},
+		{
+			name: "waive without reason",
+			finding: taskstate.ReviewFinding{
+				Type:        taskstate.FindingTypeBlocking,
+				Title:       "Blocker",
+				Description: "Needs a reason.",
+			},
+			run: func(store taskstate.Store, review taskstate.ReviewAttempt) error {
+				_, err := store.WaiveReviewBlockingFinding("alpha", "op-1", review.Attempt, 0, " ")
+				return err
+			},
+			wantErr: "reason is required",
+		},
+		{
+			name: "already waived",
+			finding: taskstate.ReviewFinding{
+				Type:        taskstate.FindingTypeBlocking,
+				Title:       "Waived",
+				Description: "Already waived.",
+				Waiver:      "Existing reason.",
+			},
+			run: func(store taskstate.Store, review taskstate.ReviewAttempt) error {
+				_, err := store.DowngradeReviewBlockingFinding("alpha", "op-1", review.Attempt, 0, "Now advisory.")
+				return err
+			},
+			wantErr: "is already resolved",
+		},
+	}
+}
+
 func TestStoreRejectsPromotingResolvedOrNonAdvisoryFindings(t *testing.T) {
 	tests := []struct {
 		name    string

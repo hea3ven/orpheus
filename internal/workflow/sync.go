@@ -534,7 +534,7 @@ func reviewStepIcon(review taskstate.ReviewAttempt, stepName string) string {
 		if findingStepName(finding, review.Step) != stepName {
 			continue
 		}
-		if finding.Type == taskstate.FindingTypeBlocking && strings.TrimSpace(finding.Waiver) == "" {
+		if taskstate.IsOpenBlockingReviewFinding(finding) {
 			return "❌"
 		}
 	}
@@ -555,14 +555,23 @@ func appendReviewFinding(builder *strings.Builder, finding taskstate.ReviewFindi
 	builder.WriteString(title)
 	builder.WriteString("\n")
 
-	if strings.TrimSpace(finding.Waiver) != "" {
+	switch taskstate.ResolveReviewFinding(finding) {
+	case taskstate.ReviewFindingResolutionWaived:
 		builder.WriteString("    - Waived.\n")
 		return
-	}
-	if finding.Type == taskstate.FindingTypeBlocking {
+	case taskstate.ReviewFindingResolutionDowngraded:
+		builder.WriteString("    - Downgraded to advisory.\n")
+		return
+	case taskstate.ReviewFindingResolutionTargetedByRun:
 		appendBlockingFindingResolution(builder, finding)
 		return
 	}
+
+	if taskstate.IsOpenBlockingReviewFinding(finding) {
+		appendBlockingFindingResolution(builder, finding)
+		return
+	}
+
 	if finding.Type == taskstate.FindingTypeSeparateTask {
 		createdTaskID := strings.TrimSpace(finding.CreatedTaskID)
 		if createdTaskID != "" {
@@ -574,21 +583,27 @@ func appendReviewFinding(builder *strings.Builder, finding taskstate.ReviewFindi
 }
 
 func appendBlockingFindingResolution(builder *strings.Builder, finding taskstate.ReviewFinding) {
-	if finding.TargetedByRunAttempt > 0 {
+	switch taskstate.ResolveReviewFinding(finding) {
+	case taskstate.ReviewFindingResolutionTargetedByRun:
 		builder.WriteString("    - Fixed by run attempt ")
 		builder.WriteString(strconv.Itoa(finding.TargetedByRunAttempt))
 		builder.WriteString("\n")
 		return
+	case taskstate.ReviewFindingResolutionOpen:
+		builder.WriteString("    - No targeted fix run recorded.\n")
 	}
-	builder.WriteString("    - No targeted fix run recorded.\n")
 }
 
 func reviewFindingLabel(finding taskstate.ReviewFinding) string {
+	switch taskstate.ResolveReviewFinding(finding) {
+	case taskstate.ReviewFindingResolutionWaived:
+		return "Blocking (waived)"
+	case taskstate.ReviewFindingResolutionDowngraded:
+		return "Advisory (downgraded)"
+	}
+
 	switch finding.Type {
 	case taskstate.FindingTypeBlocking:
-		if strings.TrimSpace(finding.Waiver) != "" {
-			return "Blocking (waived)"
-		}
 		return "Blocking"
 	case taskstate.FindingTypeAdvisory:
 		return "Advisory"

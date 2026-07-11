@@ -40,9 +40,10 @@ type PipelineRunOptions struct {
 	AgentConfig   agent.Config
 	AgentLauncher agent.Launcher
 
-	RenderManualStep     func(step Step) error
-	ConfirmManualCommand func(step Step) (bool, error)
-	PromptManualStep     func(step ManualStep) (ManualResult, error)
+	RenderManualStep        func(step Step) error
+	ConfirmManualCommand    func(step Step) (bool, error)
+	PromptManualStep        func(step ManualStep) (ManualResult, error)
+	PromptAutomatedBlockers func(review AutomatedBlockerReview) ([]AutomatedBlockerDecision, error)
 }
 
 // PipelineOutcome records the terminal status from a pipeline execution.
@@ -61,6 +62,34 @@ type ManualResult struct {
 type ManualStep struct {
 	Step      Step
 	HunkNotes []HunkNote
+}
+
+// AutomatedBlockerReview carries blocking findings recorded by one automated step.
+type AutomatedBlockerReview struct {
+	Step     Step
+	Blockers []AutomatedBlocker
+}
+
+// AutomatedBlocker identifies one persisted review finding by index.
+type AutomatedBlocker struct {
+	Index   int
+	Finding taskstate.ReviewFinding
+}
+
+// AutomatedBlockerAction records the operator decision for an automated blocker.
+type AutomatedBlockerAction string
+
+const (
+	AutomatedBlockerActionKeep      AutomatedBlockerAction = "keep"
+	AutomatedBlockerActionDowngrade AutomatedBlockerAction = "downgrade"
+	AutomatedBlockerActionWaive     AutomatedBlockerAction = "waive"
+)
+
+// AutomatedBlockerDecision applies one operator decision to a persisted finding.
+type AutomatedBlockerDecision struct {
+	FindingIndex int
+	Action       AutomatedBlockerAction
+	Reason       string
 }
 
 // HunkNote is a cached user-authored Hunk review note.
@@ -172,11 +201,23 @@ func runCheckStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome
 		Step:            step.Name,
 		SuggestedAction: "Inspect the check output, fix the issue, then rerun task review.",
 	}
-	if _, err := opts.Store.RecordReviewFinding(opts.RepoID, opts.TaskID, opts.Attempt.Attempt, finding); err != nil {
+	reviewAttempt, err := opts.Store.RecordReviewFinding(opts.RepoID, opts.TaskID, opts.Attempt.Attempt, finding)
+	if err != nil {
 		output.finishExpanded()
 		return stepOutcome{}, fmt.Errorf("task review %s: record check finding: %w", opts.TaskID, err)
 	}
 	output.finishExpanded()
+	findingIndex := len(reviewAttempt.Findings) - 1
+	blocked, err := reviewAutomatedBlockers(opts, step, []AutomatedBlocker{{
+		Index:   findingIndex,
+		Finding: reviewAttempt.Findings[findingIndex],
+	}})
+	if err != nil {
+		return stepOutcome{}, err
+	}
+	if !blocked {
+		return stepOutcome{}, nil
+	}
 	_, writeErr := fmt.Fprintf(opts.Stderr, "Review blocked for %s by check %q.\n", opts.TaskID, step.Name)
 	return stepOutcome{status: taskstate.ReviewStatusBlocked, stop: true}, writeErr
 }
@@ -349,6 +390,10 @@ func runAgentReviewStep(opts PipelineRunOptions, step Step, env []string) (stepO
 	if err != nil {
 		return stepOutcome{}, fmt.Errorf("task review %s: resolve agent_review step %q: %w", opts.TaskID, step.Name, err)
 	}
+	initialFindingCount, err := currentReviewFindingCount(opts)
+	if err != nil {
+		return stepOutcome{}, err
+	}
 
 	execution, err := recordAgentReviewStep(opts, step, command)
 	if err != nil {
@@ -356,13 +401,7 @@ func runAgentReviewStep(opts PipelineRunOptions, step Step, env []string) (stepO
 	}
 
 	output := newStepOutput(opts, !profile.Interactive)
-	runErr := opts.AgentLauncher.Run(opts.Context, command, agent.LaunchOptions{
-		Dir:    opts.Workdir,
-		Env:    env,
-		Stdin:  opts.Stdin,
-		Stdout: output.stdout(),
-		Stderr: output.stderr(),
-	})
+	runErr := launchAgentReview(opts, profile, command, env, output)
 	finishedAt := time.Now().UTC()
 	status := taskstate.RunStatusSucceeded
 	if runErr != nil {
@@ -386,7 +425,27 @@ func runAgentReviewStep(opts PipelineRunOptions, step Step, env []string) (stepO
 		return stepOutcome{}, fmt.Errorf("task review %s: run agent_review step %q: %w", opts.TaskID, step.Name, runErr)
 	}
 
-	return finishAgentReviewStep(opts, step, output)
+	return finishAgentReviewStep(opts, step, output, initialFindingCount)
+}
+
+func launchAgentReview(
+	opts PipelineRunOptions,
+	profile agent.Profile,
+	command agent.CommandSnapshot,
+	env []string,
+	output stepOutput,
+) error {
+	reviewerStdin := opts.Stdin
+	if !profile.Interactive {
+		reviewerStdin = nil
+	}
+	return opts.AgentLauncher.Run(opts.Context, command, agent.LaunchOptions{
+		Dir:    opts.Workdir,
+		Env:    env,
+		Stdin:  reviewerStdin,
+		Stdout: output.stdout(),
+		Stderr: output.stderr(),
+	})
 }
 
 func recordAgentReviewStep(opts PipelineRunOptions, step Step, command agent.CommandSnapshot) (taskstate.AgentExecution, error) {
@@ -475,7 +534,12 @@ func formatUsageHarness(harness string) string {
 	return harness
 }
 
-func finishAgentReviewStep(opts PipelineRunOptions, step Step, output stepOutput) (stepOutcome, error) {
+func finishAgentReviewStep(
+	opts PipelineRunOptions,
+	step Step,
+	output stepOutput,
+	initialFindingCount int,
+) (stepOutcome, error) {
 	reviewAttempt, err := opts.Store.Load(opts.RepoID, opts.TaskID)
 	if err != nil {
 		output.finishExpanded()
@@ -486,17 +550,29 @@ func finishAgentReviewStep(opts PipelineRunOptions, step Step, output stepOutput
 		output.finishExpanded()
 		return stepOutcome{}, fmt.Errorf("task review %s: latest review attempt no longer matches attempt %d", opts.TaskID, opts.Attempt.Attempt)
 	}
+	blockers := make([]AutomatedBlocker, 0)
 	hasStepFinding := false
-	for _, finding := range latest.Findings {
+	for index, finding := range latest.Findings {
 		if finding.Step != step.Name {
 			continue
 		}
 		hasStepFinding = true
-		if finding.Type == taskstate.FindingTypeBlocking {
-			output.finishExpanded()
+		if index < initialFindingCount || !taskstate.IsOpenBlockingReviewFinding(finding) {
+			continue
+		}
+		blockers = append(blockers, AutomatedBlocker{Index: index, Finding: finding})
+	}
+	if len(blockers) > 0 {
+		output.finishExpanded()
+		blocked, err := reviewAutomatedBlockers(opts, step, blockers)
+		if err != nil {
+			return stepOutcome{}, err
+		}
+		if blocked {
 			_, writeErr := fmt.Fprintf(opts.Stderr, "Review blocked for %s by agent_review %q.\n", opts.TaskID, step.Name)
 			return stepOutcome{status: taskstate.ReviewStatusBlocked, stop: true}, writeErr
 		}
+		return stepOutcome{}, nil
 	}
 	if hasStepFinding {
 		output.finishTail()
@@ -504,6 +580,131 @@ func finishAgentReviewStep(opts PipelineRunOptions, step Step, output stepOutput
 		output.finishClear()
 	}
 	return stepOutcome{}, nil
+}
+
+func currentReviewFindingCount(opts PipelineRunOptions) (int, error) {
+	taskState, err := opts.Store.Load(opts.RepoID, opts.TaskID)
+	if err != nil {
+		return 0, fmt.Errorf("task review %s: load review findings: %w", opts.TaskID, err)
+	}
+	latest, ok := taskstate.LatestReview(taskState)
+	if !ok || latest.Attempt != opts.Attempt.Attempt {
+		return 0, fmt.Errorf("task review %s: latest review attempt no longer matches attempt %d", opts.TaskID, opts.Attempt.Attempt)
+	}
+	return len(latest.Findings), nil
+}
+
+func reviewAutomatedBlockers(
+	opts PipelineRunOptions,
+	step Step,
+	blockers []AutomatedBlocker,
+) (bool, error) {
+	if len(blockers) == 0 {
+		return currentReviewHasOpenBlockers(opts)
+	}
+	decisions := keepAutomatedBlockerDecisions(blockers)
+	if opts.PromptAutomatedBlockers != nil {
+		prompted, err := opts.PromptAutomatedBlockers(AutomatedBlockerReview{
+			Step:     step,
+			Blockers: blockers,
+		})
+		if err != nil {
+			return false, fmt.Errorf("task review %s: review automated blockers: %w", opts.TaskID, err)
+		}
+		decisions = mergeAutomatedBlockerDecisions(decisions, prompted)
+	}
+	if err := applyAutomatedBlockerDecisions(opts, decisions); err != nil {
+		return false, err
+	}
+	return currentReviewHasOpenBlockers(opts)
+}
+
+func keepAutomatedBlockerDecisions(blockers []AutomatedBlocker) []AutomatedBlockerDecision {
+	decisions := make([]AutomatedBlockerDecision, 0, len(blockers))
+	for _, blocker := range blockers {
+		decisions = append(decisions, AutomatedBlockerDecision{
+			FindingIndex: blocker.Index,
+			Action:       AutomatedBlockerActionKeep,
+		})
+	}
+	return decisions
+}
+
+func mergeAutomatedBlockerDecisions(
+	defaults []AutomatedBlockerDecision,
+	overrides []AutomatedBlockerDecision,
+) []AutomatedBlockerDecision {
+	indexByFinding := make(map[int]int, len(defaults))
+	for index, decision := range defaults {
+		indexByFinding[decision.FindingIndex] = index
+	}
+	for _, override := range overrides {
+		index, ok := indexByFinding[override.FindingIndex]
+		if !ok {
+			continue
+		}
+		defaults[index] = override
+	}
+	return defaults
+}
+
+func applyAutomatedBlockerDecisions(opts PipelineRunOptions, decisions []AutomatedBlockerDecision) error {
+	for _, decision := range decisions {
+		switch decision.Action {
+		case AutomatedBlockerActionKeep:
+			continue
+		case AutomatedBlockerActionDowngrade:
+			if _, err := opts.Store.DowngradeReviewBlockingFinding(
+				opts.RepoID,
+				opts.TaskID,
+				opts.Attempt.Attempt,
+				decision.FindingIndex,
+				decision.Reason,
+			); err != nil {
+				return fmt.Errorf(
+					"task review %s: downgrade automated blocker finding %d: %w",
+					opts.TaskID,
+					decision.FindingIndex+1,
+					err,
+				)
+			}
+		case AutomatedBlockerActionWaive:
+			if _, err := opts.Store.WaiveReviewBlockingFinding(
+				opts.RepoID,
+				opts.TaskID,
+				opts.Attempt.Attempt,
+				decision.FindingIndex,
+				decision.Reason,
+			); err != nil {
+				return fmt.Errorf(
+					"task review %s: waive automated blocker finding %d: %w",
+					opts.TaskID,
+					decision.FindingIndex+1,
+					err,
+				)
+			}
+		default:
+			return fmt.Errorf(
+				"task review %s: automated blocker finding %d has unsupported action %q",
+				opts.TaskID,
+				decision.FindingIndex+1,
+				decision.Action,
+			)
+		}
+	}
+	return nil
+}
+
+func currentReviewHasOpenBlockers(opts PipelineRunOptions) (bool, error) {
+	taskState, err := opts.Store.Load(opts.RepoID, opts.TaskID)
+	if err != nil {
+		return false, fmt.Errorf("task review %s: load review blockers: %w", opts.TaskID, err)
+	}
+	latest, ok := taskstate.LatestReview(taskState)
+	if !ok || latest.Attempt != opts.Attempt.Attempt {
+		return false, fmt.Errorf("task review %s: latest review attempt no longer matches attempt %d", opts.TaskID, opts.Attempt.Attempt)
+	}
+	return taskstate.ReviewHasOpenBlockers(latest), nil
 }
 
 func runStepCommand(opts PipelineRunOptions, step Step, env []string) (*int, error) {
