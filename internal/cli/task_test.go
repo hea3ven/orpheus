@@ -713,6 +713,84 @@ func TestTaskShowRendersChronologicalHistoryForClosedEpic(t *testing.T) {
 	is.NotContains(stdout, "succeeded")
 }
 
+func TestTaskShowProjectsReviewAttemptMilestonesIntoHistory(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+
+	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	stateStore := taskstate.NewStoreWithClock(paths, func() time.Time { return now })
+	_, err := stateStore.RecordSetupEvent(
+		"alpha",
+		"op-review",
+		taskstate.EventWorktreeCreated,
+		taskstate.SetupEventOptions{},
+	)
+	must.NoError(err)
+	now = now.Add(time.Minute)
+	recordTaskShowReviewAttempt(t, stateStore, &now, taskstate.ReviewStatusPassed)
+	_, err = stateStore.StartRun("alpha", "op-review", taskstate.StartRunOptions{Agent: "codex"})
+	must.NoError(err)
+	now = now.Add(time.Minute)
+	recordTaskShowReviewAttempt(t, stateStore, &now, taskstate.ReviewStatusBlocked)
+	recordTaskShowReviewAttempt(t, stateStore, &now, taskstate.ReviewStatusFailed)
+	recordTaskShowReviewAttempt(t, stateStore, &now, taskstate.ReviewStatusAborted)
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[{"id":"op-review","title":"Review history","status":"open","priority":1,"issue_type":"task"}]`},
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "show", "op-review"})
+
+	is.Empty(stderr)
+	expected := []string{
+		"2026-01-02T03:04:05Z Worktree created",
+		"2026-01-02T03:05:05Z Review attempt 1 started",
+		"2026-01-02T03:06:05Z Review attempt 1 passed",
+		"2026-01-02T03:07:05Z Run started",
+		"2026-01-02T03:08:05Z Review attempt 2 started",
+		"2026-01-02T03:09:05Z Review attempt 2 blocked",
+		"2026-01-02T03:10:05Z Review attempt 3 started",
+		"2026-01-02T03:11:05Z Review attempt 3 failed",
+		"2026-01-02T03:12:05Z Review attempt 4 started",
+		"2026-01-02T03:13:05Z Review attempt 4 aborted",
+	}
+	previous := strings.Index(stdout, "History:")
+	is.Greater(previous, -1)
+	for _, want := range expected {
+		index := strings.Index(stdout, want)
+		is.Greater(index, previous, want)
+		previous = index
+	}
+}
+
+func recordTaskShowReviewAttempt(
+	t *testing.T,
+	store taskstate.Store,
+	now *time.Time,
+	status taskstate.ReviewStatus,
+) {
+	t.Helper()
+
+	must := require.New(t)
+	reviewAttempt, err := store.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{
+		Pipeline: "local",
+		Step:     "manual",
+	})
+	must.NoError(err)
+	*now = now.Add(time.Minute)
+	_, err = store.FinishReview(
+		"alpha",
+		"op-review",
+		reviewAttempt.Attempt,
+		status,
+	)
+	must.NoError(err)
+	*now = now.Add(time.Minute)
+}
+
 func TestTaskShowFailsWhenLocalTaskStateCannotBeLoaded(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)

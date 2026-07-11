@@ -365,7 +365,7 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 	return renderTaskDetails(command.OutOrStdout(), taskmodel.RepoTask{
 		Repository: resolvedCtx.Resolved.Source.Repository,
 		Task:       resolvedCtx.Task,
-	}, taskState.Events)
+	}, taskState)
 }
 
 func runTaskStats(command *cobra.Command, opts *rootOptions, taskID string) error {
@@ -2849,7 +2849,7 @@ func cloneStringMap(values map[string]string) map[string]string {
 func renderTaskDetails(
 	output interface{ Write([]byte) (int, error) },
 	row taskmodel.RepoTask,
-	events []taskstate.Event,
+	state taskstate.TaskState,
 ) error {
 	if err := renderTaskRepositoryDetails(output, row.Repository); err != nil {
 		return err
@@ -2869,38 +2869,67 @@ func renderTaskDetails(
 	if _, err := fmt.Fprintln(output); err != nil {
 		return err
 	}
-	return renderTaskHistory(output, events)
+	return renderTaskHistory(output, state)
 }
 
-func renderTaskHistory(output interface{ Write([]byte) (int, error) }, events []taskstate.Event) error {
+type taskHistoryItem struct {
+	at      time.Time
+	display string
+}
+
+func renderTaskHistory(output interface{ Write([]byte) (int, error) }, state taskstate.TaskState) error {
 	if _, err := fmt.Fprintln(output, "History:"); err != nil {
 		return err
 	}
-	history := make([]taskstate.Event, 0, len(events))
-	for _, event := range events {
+	history := make([]taskHistoryItem, 0, len(state.Events)+len(state.Reviews)*2)
+	for _, event := range state.Events {
 		if event.Type != taskstate.EventWorktreeReused {
-			history = append(history, event)
+			history = append(history, taskHistoryItem{
+				at:      event.At,
+				display: event.DisplayName(),
+			})
 		}
 	}
+	history = append(history, reviewHistoryItems(state.Reviews)...)
 	if len(history) == 0 {
 		_, err := fmt.Fprintln(output, "  -")
 		return err
 	}
 
 	sort.SliceStable(history, func(i, j int) bool {
-		return history[i].At.Before(history[j].At)
+		return history[i].at.Before(history[j].at)
 	})
-	for _, event := range history {
+	for _, item := range history {
 		if _, err := fmt.Fprintf(
 			output,
 			"  %s %s\n",
-			event.At.UTC().Format(time.RFC3339),
-			event.DisplayName(),
+			item.at.UTC().Format(time.RFC3339),
+			item.display,
 		); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func reviewHistoryItems(reviews []taskstate.ReviewAttempt) []taskHistoryItem {
+	items := make([]taskHistoryItem, 0, len(reviews)*2)
+	for _, review := range reviews {
+		if !review.StartedAt.IsZero() {
+			items = append(items, taskHistoryItem{
+				at:      review.StartedAt,
+				display: fmt.Sprintf("Review attempt %d started", review.Attempt),
+			})
+		}
+		if review.Status == taskstate.ReviewStatusRunning || review.FinishedAt == nil || review.FinishedAt.IsZero() {
+			continue
+		}
+		items = append(items, taskHistoryItem{
+			at:      *review.FinishedAt,
+			display: fmt.Sprintf("Review attempt %d %s", review.Attempt, review.Status),
+		})
+	}
+	return items
 }
 
 func renderTaskRepositoryDetails(output interface{ Write([]byte) (int, error) }, repo taskmodel.Repository) error {
