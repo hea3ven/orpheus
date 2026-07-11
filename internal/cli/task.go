@@ -35,6 +35,9 @@ var (
 	taskReviewOutputIsTerminal                = writerIsTerminal
 )
 
+const taskStatsCostEstimateDisclaimer = "Estimated API-equivalent cost is calculated from recorded token usage " +
+	"and public pricing metadata; it may not match subscription billing or vendor invoices."
+
 func newTaskCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "task",
@@ -2859,6 +2862,9 @@ func renderTaskStats(output interface{ Write([]byte) (int, error) }, state tasks
 	if _, err := fmt.Fprintln(output, "Executions"); err != nil {
 		return err
 	}
+	if _, err := fmt.Fprintln(output, taskStatsCostEstimateDisclaimer); err != nil {
+		return err
+	}
 	if err := renderTable(
 		output,
 		[]string{
@@ -2875,6 +2881,7 @@ func renderTaskStats(output interface{ Write([]byte) (int, error) }, state tasks
 			"STATUS",
 			"SESSION",
 			"USAGE",
+			"ESTIMATED_API_EQUIVALENT_COST",
 		},
 		rows,
 	); err != nil {
@@ -2894,7 +2901,9 @@ func renderTaskStats(output interface{ Write([]byte) (int, error) }, state tasks
 			"CACHED_INPUT_TOKENS",
 			"OUTPUT_TOKENS",
 			"REASONING_OUTPUT_TOKENS",
+			"ESTIMATED_API_EQUIVALENT_COST",
 			"UNKNOWN_USAGE",
+			"UNKNOWN_COST",
 		},
 		taskStatsTotalRows(records),
 	)
@@ -2952,6 +2961,7 @@ func taskStatsRow(record taskStatsExecutionRecord) []string {
 		formatTaskStatsField(record.status),
 		formatTaskStatsSession(execution.Session),
 		formatTaskStatsUsage(execution),
+		formatTaskStatsUsageCost(execution),
 	}
 }
 
@@ -2959,7 +2969,9 @@ type taskStatsTotals struct {
 	executions   int
 	duration     time.Duration
 	usage        taskstate.AgentUsage
+	costMicroUSD int64
 	unknownUsage int
+	unknownCost  int
 }
 
 func taskStatsTotalRows(records []taskStatsExecutionRecord) [][]string {
@@ -2993,6 +3005,11 @@ func (t *taskStatsTotals) add(execution taskstate.AgentExecution) {
 		t.usage.OutputTokens += execution.Usage.OutputTokens
 		t.usage.ReasoningOutputTokens += execution.Usage.ReasoningOutputTokens
 		t.usage.TotalTokens += execution.Usage.TotalTokens
+		if cost, ok := taskStatsExecutionCost(execution); ok {
+			t.costMicroUSD += cost.AmountMicroUSD
+		} else {
+			t.unknownCost++
+		}
 		return
 	}
 	t.unknownUsage++
@@ -3006,7 +3023,9 @@ func (t *taskStatsTotals) addTotals(other taskStatsTotals) {
 	t.usage.OutputTokens += other.usage.OutputTokens
 	t.usage.ReasoningOutputTokens += other.usage.ReasoningOutputTokens
 	t.usage.TotalTokens += other.usage.TotalTokens
+	t.costMicroUSD += other.costMicroUSD
 	t.unknownUsage += other.unknownUsage
+	t.unknownCost += other.unknownCost
 }
 
 func taskStatsTotalRow(activity string, totals taskStatsTotals) []string {
@@ -3019,7 +3038,9 @@ func taskStatsTotalRow(activity string, totals taskStatsTotals) []string {
 		strconv.Itoa(totals.usage.CachedInputTokens),
 		strconv.Itoa(totals.usage.OutputTokens),
 		strconv.Itoa(totals.usage.ReasoningOutputTokens),
+		agent.FormatUsageCostUSD(totals.costMicroUSD),
 		strconv.Itoa(totals.unknownUsage),
+		strconv.Itoa(totals.unknownCost),
 	}
 }
 
@@ -3119,6 +3140,41 @@ func formatTaskStatsUsage(execution taskstate.AgentExecution) string {
 		return fmt.Sprintf("%s: %s (candidates=%d)", status, reason, capture.CandidateCount)
 	}
 	return fmt.Sprintf("%s: %s", status, reason)
+}
+
+func formatTaskStatsUsageCost(execution taskstate.AgentExecution) string {
+	if execution.Usage == nil {
+		return "-"
+	}
+	cost, ok := taskStatsExecutionCost(execution)
+	if !ok {
+		return fmt.Sprintf("unknown: no public pricing metadata for model %s", formatTaskStatsField(execution.Model))
+	}
+	kind := strings.TrimSpace(cost.Kind)
+	if kind == "" {
+		kind = agent.UsageCostKindEstimatedAPIEquivalent
+	}
+	pricing := cost.Pricing
+	source := firstNonEmpty(pricing.SourceAccessed, pricing.SourcePublished, pricing.Source)
+	if source == "" {
+		source = "pricing_metadata"
+	}
+	return fmt.Sprintf(
+		"estimated API-equivalent cost=%s kind=%s pricing=%s/%s/%s source=%s",
+		agent.FormatUsageCostUSD(cost.AmountMicroUSD),
+		kind,
+		formatTaskStatsField(pricing.Provider),
+		formatTaskStatsField(pricing.Model),
+		formatTaskStatsField(pricing.ServiceTier),
+		source,
+	)
+}
+
+func taskStatsExecutionCost(execution taskstate.AgentExecution) (agent.UsageCost, bool) {
+	if execution.Usage == nil {
+		return agent.UsageCost{}, false
+	}
+	return agent.EstimateUsageCost(execution.Model, *execution.Usage)
 }
 
 func formatTaskStatsField(value string) string {
