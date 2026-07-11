@@ -1466,12 +1466,16 @@ func runManualReviewPrompt(
 		return manualReviewOutcome{}, err
 	}
 	for {
-		action, err := promptManualReviewAction(command, reader)
+		actions, err := session.availableActions()
+		if err != nil {
+			return manualReviewOutcome{}, err
+		}
+		action, err := promptManualReviewAction(command, reader, actions)
 		if err != nil {
 			return manualReviewOutcome{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
 		}
 
-		result, done, err := session.handleManualReviewAction(action, reader)
+		result, done, err := session.handleManualReviewAction(action, reader, actions)
 		if err != nil || done {
 			return result, err
 		}
@@ -1523,24 +1527,48 @@ func (s manualReviewSession) importHunkNotes(reader *bufio.Reader, notes []revie
 func (s manualReviewSession) handleManualReviewAction(
 	action string,
 	reader *bufio.Reader,
+	actions manualReviewActions,
 ) (manualReviewOutcome, bool, error) {
 	switch action {
 	case "a", "approve":
-		return s.approve()
+		if !actions.hasOpenBlockers {
+			return s.approve()
+		}
+	case "f", "finish", "finish/block":
+		if actions.hasOpenBlockers {
+			return s.approve()
+		}
 	case "b", "block":
 		return s.block(reader)
 	case "p", "promote":
-		return s.promotePriorAdvisories(reader)
+		if actions.hasPromotableAdvisories {
+			return s.promotePriorAdvisories(reader)
+		}
 	case "v", "advisory":
 		return s.recordFinding(reader, taskstate.FindingTypeAdvisory, "advisory")
 	case "t", "task":
 		return s.recordFinding(reader, taskstate.FindingTypeSeparateTask, "separate-task")
 	case "q", "abort":
 		return s.abort()
-	default:
-		err := s.writeInvalidAction()
-		return manualReviewOutcome{}, false, err
 	}
+	err := s.writeInvalidAction(actions)
+	return manualReviewOutcome{}, false, err
+}
+
+func (s manualReviewSession) availableActions() (manualReviewActions, error) {
+	latest, err := s.loadLatestReview()
+	if err != nil {
+		return manualReviewActions{}, err
+	}
+	return manualReviewActions{
+		hasOpenBlockers:         taskstate.ReviewHasOpenBlockers(latest),
+		hasPromotableAdvisories: len(unresolvedPriorReviewAdvisories(latest, s.stepName)) > 0,
+	}, nil
+}
+
+type manualReviewActions struct {
+	hasOpenBlockers         bool
+	hasPromotableAdvisories bool
 }
 
 func (s manualReviewSession) approve() (manualReviewOutcome, bool, error) {
@@ -1650,9 +1678,52 @@ func (s manualReviewSession) abort() (manualReviewOutcome, bool, error) {
 	}, true, err
 }
 
-func (s manualReviewSession) writeInvalidAction() error {
-	_, err := fmt.Fprintln(s.command.ErrOrStderr(), "Choose approve, block, promote, advisory, task, or abort.")
+func (s manualReviewSession) writeInvalidAction(actions manualReviewActions) error {
+	_, err := fmt.Fprintf(s.command.ErrOrStderr(), "Choose %s.\n", actions.invalidActionChoices())
 	return err
+}
+
+func (a manualReviewActions) promptChoices() string {
+	choices := make([]string, 0, 6)
+	if a.hasOpenBlockers {
+		choices = append(choices, "f=finish/block")
+	} else {
+		choices = append(choices, "a=approve")
+	}
+	choices = append(choices, "b=block")
+	if a.hasPromotableAdvisories {
+		choices = append(choices, "p=promote advisory")
+	}
+	choices = append(choices, "v=advisory", "t=task", "q=abort")
+	return strings.Join(choices, ", ")
+}
+
+func (a manualReviewActions) invalidActionChoices() string {
+	choices := make([]string, 0, 6)
+	if a.hasOpenBlockers {
+		choices = append(choices, "finish/block")
+	} else {
+		choices = append(choices, "approve")
+	}
+	choices = append(choices, "block")
+	if a.hasPromotableAdvisories {
+		choices = append(choices, "promote")
+	}
+	choices = append(choices, "advisory", "task", "abort")
+	return joinReviewChoiceLabels(choices)
+}
+
+func joinReviewChoiceLabels(choices []string) string {
+	switch len(choices) {
+	case 0:
+		return ""
+	case 1:
+		return choices[0]
+	case 2:
+		return choices[0] + " or " + choices[1]
+	default:
+		return strings.Join(choices[:len(choices)-1], ", ") + ", or " + choices[len(choices)-1]
+	}
 }
 
 func renderHunkNoteForImport(output io.Writer, index int, note review.HunkNote) error {
@@ -1828,8 +1899,12 @@ func formatHunkNoteRange(side string, lineRange []int) string {
 	return fmt.Sprintf("%s lines %d-%d", side, start, end)
 }
 
-func promptManualReviewAction(command *cobra.Command, reader *bufio.Reader) (string, error) {
-	if _, err := fmt.Fprint(command.ErrOrStderr(), "\nReview action [a=approve, b=block, p=promote advisory, v=advisory, t=task, q=abort]: "); err != nil {
+func promptManualReviewAction(
+	command *cobra.Command,
+	reader *bufio.Reader,
+	actions manualReviewActions,
+) (string, error) {
+	if _, err := fmt.Fprintf(command.ErrOrStderr(), "\nReview action [%s]: ", actions.promptChoices()); err != nil {
 		return "", err
 	}
 	line, err := reader.ReadString('\n')
