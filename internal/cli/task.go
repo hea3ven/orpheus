@@ -24,6 +24,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/status"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/taskstats"
 	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/spf13/cobra"
 )
@@ -114,14 +115,28 @@ func newTaskShowCommand(opts *rootOptions) *cobra.Command {
 }
 
 func newTaskStatsCommand(opts *rootOptions) *cobra.Command {
+	var group string
 	cmd := &cobra.Command{
-		Use:   "stats <task-id>",
-		Short: "Show local implementation execution stats for a task",
-		Args:  cobra.ExactArgs(1),
+		Use:   "stats [<task-id>]",
+		Short: "Show implementation execution stats for one task or aggregate trends",
+		Args: func(command *cobra.Command, args []string) error {
+			if strings.TrimSpace(group) == "" {
+				return cobra.ExactArgs(1)(command, args)
+			}
+			if len(args) != 0 {
+				return fmt.Errorf("--group cannot be combined with a task id")
+			}
+			return nil
+		},
 		RunE: func(command *cobra.Command, args []string) error {
-			return runTaskStats(command, opts, args[0])
+			taskID := ""
+			if len(args) == 1 {
+				taskID = args[0]
+			}
+			return runTaskStats(command, opts, taskID, taskStatsOptions{group: group})
 		},
 	}
+	cmd.Flags().StringVar(&group, "group", "", "aggregate resolved task stats by day or month")
 	return cmd
 }
 
@@ -368,12 +383,20 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 	}, taskState)
 }
 
-func runTaskStats(command *cobra.Command, opts *rootOptions, taskID string) error {
+type taskStatsOptions struct {
+	group string
+}
+
+func runTaskStats(command *cobra.Command, opts *rootOptions, taskID string, statsOpts taskStatsOptions) error {
 	logger := opts.log().With(
 		slog.String("component", "cli"),
 		slog.String("operation", "task_stats"),
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for task stats")
+
+	if strings.TrimSpace(statsOpts.group) != "" {
+		return runAggregateTaskStats(command, opts, statsOpts.group)
+	}
 
 	resolvedCtx, err := resolveTaskShowContext(command, taskID)
 	if err != nil {
@@ -396,6 +419,50 @@ func runTaskStats(command *cobra.Command, opts *rootOptions, taskID string) erro
 		)
 	}
 	return renderTaskStats(command.OutOrStdout(), taskState)
+}
+
+func runAggregateTaskStats(command *cobra.Command, opts *rootOptions, group string) error {
+	logger := opts.log().With(
+		slog.String("component", "cli"),
+		slog.String("operation", "task_stats_aggregate"),
+	)
+	normalizedGroup, err := taskstats.ParseGroup(group)
+	if err != nil {
+		return err
+	}
+
+	taskCtx, err := loadTaskContext()
+	if err != nil {
+		return err
+	}
+	paths, err := state.ResolveFromEnvironment()
+	if err != nil {
+		return err
+	}
+
+	logger.DebugContext(
+		command.Context(),
+		"querying task snapshots for aggregate stats",
+		slog.String("group", string(normalizedGroup)),
+		slog.Int("repo_count", len(taskCtx.Sources)),
+	)
+	snapshot := taskCtx.Aggregator.Snapshot(command.Context())
+	report, stateFailures := taskstats.AggregateReportFromSnapshot(
+		snapshot,
+		taskstate.NewStore(paths),
+		normalizedGroup,
+	)
+	if len(stateFailures) > 0 {
+		snapshot.Failures = append(snapshot.Failures, stateFailures...)
+	}
+	if err := renderTaskStatsAggregate(command.OutOrStdout(), report); err != nil {
+		return err
+	}
+	if snapshot.HasFailures() {
+		writeRepoFailures(command.ErrOrStderr(), "task stats", snapshot.Failures)
+		return partialRepoFailureError{operation: "task stats", failures: snapshot.Failures}
+	}
+	return nil
 }
 
 func runTaskDir(command *cobra.Command, opts *rootOptions, taskID string) error {
@@ -3163,6 +3230,211 @@ func renderTaskStats(output interface{ Write([]byte) (int, error) }, state tasks
 		},
 		taskStatsTotalRows(records),
 	)
+}
+
+type taskStatsAggregateTable struct {
+	title   string
+	headers []string
+	rows    [][]string
+}
+
+func renderTaskStatsAggregate(output interface{ Write([]byte) (int, error) }, report taskstats.AggregateReport) error {
+	if _, err := fmt.Fprintf(output, "Aggregate stats grouped by %s\n", report.Group); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(output, taskStatsCostEstimateDisclaimer); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(
+		output,
+		"Tasks without resolved timestamp: %d\n\n",
+		report.TasksWithoutResolvedTimestamp,
+	); err != nil {
+		return err
+	}
+
+	maxResolved := maxTaskStatsResolved(report.Periods)
+	tables := []taskStatsAggregateTable{
+		{
+			title:   "Resolved Tasks",
+			headers: []string{"PERIOD", "RESOLVED_TASKS", "TREND"},
+			rows:    taskStatsAggregateResolvedRows(report.Periods, maxResolved),
+		},
+		{
+			title:   "Lifecycle Time",
+			headers: []string{"PERIOD", "FULL_AVG", "FULL_UNKNOWN", "IMPLEMENTATION_AVG", "IMPLEMENTATION_UNKNOWN"},
+			rows:    taskStatsAggregateLifecycleRows(report.Periods),
+		},
+		{
+			title:   "Agent Work",
+			headers: []string{"PERIOD", "EXECUTIONS", "ACTIVE_AVG", "ACTIVE_TOTAL"},
+			rows:    taskStatsAggregateWorkRows(report.Periods),
+		},
+		{
+			title:   "Token Usage",
+			headers: []string{"PERIOD", "TOTAL_TOKENS", "AVG_TOKENS", "UNKNOWN_USAGE"},
+			rows:    taskStatsAggregateUsageRows(report.Periods),
+		},
+		{
+			title:   "Estimated API-Equivalent Cost",
+			headers: []string{"PERIOD", "TOTAL_COST", "AVG_COST", "UNKNOWN_COST"},
+			rows:    taskStatsAggregateCostRows(report.Periods),
+		},
+	}
+	return renderTaskStatsAggregateTables(output, tables)
+}
+
+func renderTaskStatsAggregateTables(
+	output interface{ Write([]byte) (int, error) },
+	tables []taskStatsAggregateTable,
+) error {
+	for i, table := range tables {
+		if i > 0 {
+			if _, err := fmt.Fprintln(output); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprintln(output, table.title); err != nil {
+			return err
+		}
+		if err := renderTable(output, table.headers, table.rows); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func maxTaskStatsResolved(periods []taskstats.AggregatePeriod) int {
+	maxResolved := 0
+	for _, period := range periods {
+		if period.Resolved > maxResolved {
+			maxResolved = period.Resolved
+		}
+	}
+	return maxResolved
+}
+
+func taskStatsAggregateResolvedRows(periods []taskstats.AggregatePeriod, maxResolved int) [][]string {
+	rows := make([][]string, 0, len(periods))
+	for _, period := range periods {
+		rows = append(rows, []string{
+			period.Key,
+			strconv.Itoa(period.Resolved),
+			taskStatsTrendBar(period.Resolved, maxResolved),
+		})
+	}
+	return rows
+}
+
+func taskStatsAggregateLifecycleRows(periods []taskstats.AggregatePeriod) [][]string {
+	rows := make([][]string, 0, len(periods))
+	for _, period := range periods {
+		rows = append(rows, []string{
+			period.Key,
+			formatTaskStatsOptionalDuration(period.AverageFullTaskTime()),
+			strconv.Itoa(period.UnknownFullTaskTime),
+			formatTaskStatsOptionalDuration(period.AverageImplementationTime()),
+			strconv.Itoa(period.UnknownImplementationTime),
+		})
+	}
+	return rows
+}
+
+func taskStatsAggregateWorkRows(periods []taskstats.AggregatePeriod) [][]string {
+	rows := make([][]string, 0, len(periods))
+	for _, period := range periods {
+		rows = append(rows, []string{
+			period.Key,
+			strconv.Itoa(period.Totals.Executions),
+			formatTaskStatsOptionalDuration(period.AverageActiveAgentTime()),
+			formatTaskStatsTotalDuration(period.Totals.Duration),
+		})
+	}
+	return rows
+}
+
+func taskStatsAggregateUsageRows(periods []taskstats.AggregatePeriod) [][]string {
+	rows := make([][]string, 0, len(periods))
+	for _, period := range periods {
+		rows = append(rows, []string{
+			period.Key,
+			formatTaskStatsTokenCount(period.Totals.Usage.TotalTokens),
+			formatTaskStatsOptionalTokenCount(period.AverageTokenCount()),
+			strconv.Itoa(period.Totals.UnknownUsage),
+		})
+	}
+	return rows
+}
+
+func taskStatsAggregateCostRows(periods []taskstats.AggregatePeriod) [][]string {
+	rows := make([][]string, 0, len(periods))
+	for _, period := range periods {
+		rows = append(rows, []string{
+			period.Key,
+			agent.FormatUsageCostUSD(period.Totals.CostMicroUSD),
+			formatTaskStatsOptionalCost(period.AverageCostMicroUSD()),
+			strconv.Itoa(period.Totals.UnknownCost),
+		})
+	}
+	return rows
+}
+
+func formatTaskStatsOptionalDuration(duration time.Duration, ok bool) string {
+	if !ok {
+		return "-"
+	}
+	return duration.String()
+}
+
+func formatTaskStatsOptionalTokenCount(tokens int, ok bool) string {
+	if !ok {
+		return "-"
+	}
+	return formatTaskStatsTokenCount(tokens)
+}
+
+func formatTaskStatsTokenCount(tokens int) string {
+	if tokens < 0 {
+		tokens = 0
+	}
+	units := []struct {
+		value int
+		unit  string
+	}{
+		{value: 1_000_000_000, unit: "B"},
+		{value: 1_000_000, unit: "M"},
+		{value: 1_000, unit: "K"},
+	}
+	for _, unit := range units {
+		if tokens >= unit.value {
+			whole := tokens / unit.value
+			tenth := tokens % unit.value * 10 / unit.value
+			if tenth == 0 {
+				return fmt.Sprintf("%d%s", whole, unit.unit)
+			}
+			return fmt.Sprintf("%d.%d%s", whole, tenth, unit.unit)
+		}
+	}
+	return strconv.Itoa(tokens)
+}
+
+func formatTaskStatsOptionalCost(totalMicroUSD int64, ok bool) string {
+	if !ok {
+		return "-"
+	}
+	return agent.FormatUsageCostUSD(totalMicroUSD)
+}
+
+func taskStatsTrendBar(value int, maxValue int) string {
+	const width = 20
+	if value <= 0 || maxValue <= 0 {
+		return "-"
+	}
+	length := value * width / maxValue
+	if length == 0 {
+		length = 1
+	}
+	return strings.Repeat("#", length)
 }
 
 type taskStatsExecutionRecord struct {
