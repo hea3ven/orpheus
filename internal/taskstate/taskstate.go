@@ -142,6 +142,7 @@ type Service interface {
 	RecordReviewFindingCreatedTask(repoID, taskID string, attempt int, findingIndex int, createdTaskID string) (ReviewAttempt, error)
 	TargetReviewFindings(repoID, taskID string, reviewAttempt int, findingIndexes []int, runAttempt int) (ReviewAttempt, error)
 	FinishReview(repoID, taskID string, attempt int, status ReviewStatus) (ReviewAttempt, error)
+	MarkReviewAutonomousBudgetExhausted(repoID, taskID string, attempt int) (ReviewAttempt, error)
 	RecordFinalizationCommit(repoID, taskID string, commit string) (Finalization, error)
 	RecordFinalizationPush(repoID, taskID string, opts FinalizationPushOptions) (Finalization, error)
 	RecordFinalizationClose(repoID, taskID string, opts FinalizationCloseOptions) (Finalization, error)
@@ -292,6 +293,8 @@ type ReviewAttempt struct {
 	FinishedAt *time.Time      `yaml:"finished_at,omitempty"`
 	Steps      []ReviewStep    `yaml:"steps,omitempty"`
 	Findings   []ReviewFinding `yaml:"findings,omitempty"`
+
+	AutonomousBudgetExhausted bool `yaml:"autonomous_budget_exhausted,omitempty"`
 }
 
 // ReviewStep records one executed review pipeline step.
@@ -1681,6 +1684,34 @@ func (s Store) FinishReview(repoID, taskID string, attempt int, status ReviewSta
 	finished := now
 	state.Reviews[index].Status = status
 	state.Reviews[index].FinishedAt = &finished
+	if err := s.save(state); err != nil {
+		return ReviewAttempt{}, err
+	}
+	return state.Reviews[index], nil
+}
+
+// MarkReviewAutonomousBudgetExhausted records that automatic review/fix attempts stopped at the budget.
+func (s Store) MarkReviewAutonomousBudgetExhausted(repoID, taskID string, attempt int) (ReviewAttempt, error) {
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+	index := reviewAttemptIndex(state, attempt)
+	if index < 0 {
+		return ReviewAttempt{}, fmt.Errorf("mark autonomous review budget exhausted for task %s/%s: review attempt %d was not found", repoID, taskID, attempt)
+	}
+	if state.Reviews[index].Status != ReviewStatusBlocked {
+		return ReviewAttempt{}, fmt.Errorf(
+			"mark autonomous review budget exhausted for task %s/%s: review attempt %d is %q, expected %q",
+			repoID,
+			taskID,
+			attempt,
+			state.Reviews[index].Status,
+			ReviewStatusBlocked,
+		)
+	}
+
+	state.Reviews[index].AutonomousBudgetExhausted = true
 	if err := s.save(state); err != nil {
 		return ReviewAttempt{}, err
 	}

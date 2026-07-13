@@ -62,7 +62,7 @@ Review steps are read-only. If a review step mutates the candidate changes, Orph
 
 Review findings describe product or code feedback:
 
-- Blocking findings stop approval. The next command is `orpheus task run <task-id>` so an implementer can address the open blockers. After the follow-up run completes, rerun `orpheus task review <task-id>`.
+- Blocking findings stop approval. During `task run`, and during the autonomous portion of a resumed `task review`, check and agent-review blockers automatically trigger bounded targeted fixes and fresh review attempts. Manual blockers stop for the operator.
 - Advisory findings are recorded but do not block approval.
 - Separate-task findings do not block approval by themselves. During review, Orpheus can create standalone Beads for selected candidates.
 
@@ -72,13 +72,9 @@ Operational review failures are different from code or product blockers. Example
 
 When the latest review is blocked by open current-task findings, `task run` enters follow-up mode automatically. There is no `--follow-up` flag. The new run targets the open blocking findings, records that targeting in task state, and keeps the task on the same implementation target.
 
-After the follow-up agent runs `agent done`, rerun:
+Within one `task run` or resumed `task review` invocation, Orpheus keeps automated blockers by default, dispatches the selected implementer for targeted fixes, and starts a fresh review from step 1 after each completed fix. The global `reviews.max_autonomous_review_attempts` setting bounds the loop and defaults to `4`; the initial review counts, so the default allows at most three fix runs before the fourth blocked review stops.
 
-```text
-orpheus task review <task-id>
-```
-
-If all blockers from the latest authoritative review are targeted, status guides the operator back to `task review`. Older review attempts remain audit history; the latest attempt controls status and follow-up behavior.
+If the budget is exhausted, Orpheus preserves the latest blockers and audit history, marks the blocked review as autonomous-budget-exhausted, and tells the operator to explicitly continue with a fresh command. A new `task run` or `task review` invocation receives a fresh configured budget. Older review attempts remain audit history; the latest attempt controls status and follow-up behavior.
 
 ## Inspecting Review State
 
@@ -88,7 +84,7 @@ Use:
 orpheus task review show <task-id>
 ```
 
-This is the inspection surface for persisted review state. It shows the latest authoritative review attempt, executed steps, findings, resolution state, created follow-up Beads, and the next command.
+This is the inspection surface for persisted review state. It shows the latest authoritative review attempt, executed steps, findings, resolution state, autonomous budget exhaustion, created follow-up Beads, and the next command.
 
 Separate-task findings can be converted into Beads during `task review`. Created tasks include provenance in their description identifying the source task, repository, review attempt, and finding index. `task review show` lists those created follow-up tasks.
 
@@ -115,6 +111,7 @@ Status groups and details tell the operator which command comes next:
 
 - `Reviewing` with `local review; run task review`: implementation completed and needs approval.
 - `Idle` with `review blocked by N finding(s); run task run`: open blocking findings need follow-up implementation.
+- `Idle` with `review blocked after autonomous attempt budget by N finding(s); run task run to continue`: bounded autonomous repair stopped; explicitly continue to grant a fresh budget.
 - `Reviewing` with `review blockers targeted; run task review`: follow-up work has targeted the blockers and needs another review.
 - `Reviewing` with `review aborted; run task review`: review was stopped intentionally; rerun review when ready.
 - `Needs attention` with `review failed operationally; run task review`: fix the review process or environment, then rerun review.
