@@ -322,6 +322,11 @@ func classifyLatestReview(
 	switch latestReview.Status {
 	case taskstate.ReviewStatusRunning:
 		return policyResult{state: readinessReview, detail: "review running"}, true
+	case taskstate.ReviewStatusWaitingForManual:
+		return policyResult{
+			state:  readinessReview,
+			detail: fmt.Sprintf("local review; run task review (waiting for manual step %s)", valueOrUnknown(latestReview.Step)),
+		}, true
 	case taskstate.ReviewStatusBlocked:
 		count := untargetedBlockingFindingCount(*latestReview)
 		if count == 0 {

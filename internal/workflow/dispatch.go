@@ -387,6 +387,14 @@ func (s DispatchService) resolveReviewFollowUpPlan(
 		return nil, fmt.Errorf("latest review attempt %d for task %s passed; run `orpheus task done %s`", latestReview.Attempt, taskID, taskID)
 	case taskstate.ReviewStatusRunning:
 		return nil, fmt.Errorf("latest review attempt %d for task %s is still running; wait for it to finish or rerun `orpheus task review %s` after repairing state", latestReview.Attempt, taskID, taskID)
+	case taskstate.ReviewStatusWaitingForManual:
+		return nil, fmt.Errorf(
+			"latest review attempt %d for task %s is waiting for manual step %q; run `orpheus task review %s` to resume it",
+			latestReview.Attempt,
+			taskID,
+			latestReview.Step,
+			taskID,
+		)
 	default:
 		return nil, fmt.Errorf("latest review attempt %d for task %s has unsupported status %q", latestReview.Attempt, taskID, latestReview.Status)
 	}
