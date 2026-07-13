@@ -40,6 +40,8 @@ type PipelineRunOptions struct {
 	AgentConfig   agent.Config
 	AgentLauncher agent.Launcher
 
+	ResumeFromStep          bool
+	PauseBeforeManual       bool
 	RenderManualStep        func(step Step) error
 	ConfirmManualCommand    func(step Step) (bool, error)
 	PromptManualStep        func(step ManualStep) (ManualResult, error)
@@ -119,7 +121,31 @@ func RunPipeline(opts PipelineRunOptions) (PipelineOutcome, error) {
 	if opts.Context == nil {
 		opts.Context = context.Background()
 	}
-	for _, step := range opts.Pipeline.Steps {
+	startIndex := 0
+	if opts.ResumeFromStep {
+		var err error
+		startIndex, err = pipelineStartIndex(opts.Pipeline, opts.Attempt.Step)
+		if err != nil {
+			return PipelineOutcome{}, err
+		}
+	}
+	for _, step := range opts.Pipeline.Steps[startIndex:] {
+		if opts.PauseBeforeManual && step.Kind == KindManual {
+			if _, err := opts.Store.PauseReviewForManual(opts.RepoID, opts.TaskID, opts.Attempt.Attempt, step.Name); err != nil {
+				return PipelineOutcome{}, err
+			}
+			_, err := fmt.Fprintf(
+				opts.Stderr,
+				"Review for %s is waiting for manual step %q. Resume with `orpheus task review %s`.\n",
+				opts.TaskID,
+				step.Name,
+				opts.TaskID,
+			)
+			if err != nil {
+				return PipelineOutcome{}, err
+			}
+			return PipelineOutcome{Status: taskstate.ReviewStatusWaitingForManual}, nil
+		}
 		stepEnv := stepEnvironment(opts, step.Name)
 		outcome, err := runReadOnlyStep(opts.Context, opts.Workdir, func() (stepOutcome, error) {
 			if err := writeStepHeader(opts.Stderr, step); err != nil {
@@ -135,6 +161,23 @@ func RunPipeline(opts PipelineRunOptions) (PipelineOutcome, error) {
 		}
 	}
 	return PipelineOutcome{Status: taskstate.ReviewStatusPassed}, nil
+}
+
+func pipelineStartIndex(pipeline Pipeline, stepName string) (int, error) {
+	stepName = strings.TrimSpace(stepName)
+	if stepName == "" {
+		return 0, nil
+	}
+	for index, step := range pipeline.Steps {
+		if step.Name == stepName {
+			return index, nil
+		}
+	}
+	return 0, fmt.Errorf(
+		"review pipeline %q does not contain pending step %q",
+		pipeline.Name,
+		stepName,
+	)
 }
 
 func runReadOnlyStep(

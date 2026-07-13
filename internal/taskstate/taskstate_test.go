@@ -403,6 +403,57 @@ func TestStoreRecordsReviewAttemptsAndFindings(t *testing.T) {
 	)
 }
 
+func TestStorePausesAndResumesReviewForManualStep(t *testing.T) {
+	store := newTestStore(t,
+		time.Date(2026, 6, 26, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 6, 26, 10, 1, 0, 0, time.UTC),
+	)
+
+	review, err := store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{
+		Pipeline: "standard",
+		Step:     "lint",
+	})
+	if err != nil {
+		t.Fatalf("start review: %v", err)
+	}
+	paused, err := store.PauseReviewForManual("alpha", "op-1", review.Attempt, "inspect")
+	if err != nil {
+		t.Fatalf("pause review: %v", err)
+	}
+	if paused.Status != taskstate.ReviewStatusWaitingForManual || paused.Step != "inspect" || paused.FinishedAt != nil {
+		t.Fatalf("paused review = %#v, want waiting inspect without finished_at", paused)
+	}
+	if _, err := store.RecordReviewFinding("alpha", "op-1", review.Attempt, taskstate.ReviewFinding{
+		Type:        taskstate.FindingTypeAdvisory,
+		Title:       "Advisory",
+		Description: "Record after resume only.",
+	}); err == nil {
+		t.Fatal("record finding while waiting succeeded, want error")
+	}
+
+	resumed, err := store.ResumeReview("alpha", "op-1", review.Attempt)
+	if err != nil {
+		t.Fatalf("resume review: %v", err)
+	}
+	if resumed.Status != taskstate.ReviewStatusRunning || resumed.Step != "inspect" {
+		t.Fatalf("resumed review = %#v, want running inspect", resumed)
+	}
+	if _, err := store.RecordReviewFinding("alpha", "op-1", review.Attempt, taskstate.ReviewFinding{
+		Type:        taskstate.FindingTypeAdvisory,
+		Title:       "Advisory",
+		Description: "Recorded after resume.",
+	}); err != nil {
+		t.Fatalf("record finding after resume: %v", err)
+	}
+
+	assertStoreYAMLContains(t, store, "alpha", "op-1",
+		"status: running",
+		"pipeline: standard",
+		"step: inspect",
+		"type: advisory",
+	)
+}
+
 func TestStoreRejectsUnsafeReviewStepArgsAndPreservesState(t *testing.T) {
 	store := newTestStore(t)
 	review, err := store.StartReview("alpha", "op-1")

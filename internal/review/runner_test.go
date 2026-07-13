@@ -194,6 +194,59 @@ exit 7
 	}
 }
 
+func TestRunPipelinePausesBeforeManualStep(t *testing.T) {
+	workdir := t.TempDir()
+	initReviewTestGitRepo(t, workdir)
+	check := writeReviewTestScript(t, workdir, "passing-check", `#!/bin/sh
+printf 'checked\n'
+`)
+	store, attempt := startReviewTestAttempt(t)
+	pipeline := review.Pipeline{
+		Name: "standard",
+		Steps: []review.Step{
+			{Kind: review.KindCheck, Name: "lint", Command: check},
+			{Kind: review.KindManual, Name: "inspect"},
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	outcome, err := review.RunPipeline(review.PipelineRunOptions{
+		Context:           context.Background(),
+		Store:             store,
+		RepoID:            "alpha",
+		TaskID:            "op-1",
+		Branch:            "main",
+		Workdir:           workdir,
+		Attempt:           attempt,
+		Pipeline:          pipeline,
+		Stdout:            &stdout,
+		Stderr:            &stderr,
+		PauseBeforeManual: true,
+	})
+
+	if err != nil {
+		t.Fatalf("RunPipeline error = %v", err)
+	}
+	if outcome.Status != taskstate.ReviewStatusWaitingForManual {
+		t.Fatalf("outcome = %q, want waiting_for_manual", outcome.Status)
+	}
+	taskState, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load task state: %v", err)
+	}
+	latest, ok := taskstate.LatestReview(taskState)
+	if !ok {
+		t.Fatal("latest review missing")
+	}
+	if latest.Status != taskstate.ReviewStatusWaitingForManual || latest.Step != "inspect" || len(latest.Steps) != 1 {
+		t.Fatalf("latest review = %#v, want paused at inspect after one check", latest)
+	}
+	if !strings.Contains(stderr.String(), "Resume with `orpheus task review op-1`") {
+		t.Fatalf("stderr = %q, want resume guidance", stderr.String())
+	}
+}
+
 func TestRunPipelineHunkManualCommandCapturesNotesAfterCommandExit(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepo(t, workdir)
