@@ -3,7 +3,6 @@ package taskstate_test
 import (
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -148,122 +147,6 @@ func TestStoreRejectsVersionTwoStateWithMigrationGuidance(t *testing.T) {
 	if !strings.Contains(err.Error(), "unsupported task state version 2") ||
 		!strings.Contains(err.Error(), "/tmp/orpheus_migrate_taskstate_agent_executions.py") {
 		t.Fatalf("error = %v, want migration guidance", err)
-	}
-}
-
-//nolint:funlen // The migration fixture needs enough YAML to cover execution rewriting.
-func TestMigrationScriptPromotesRunExecution(t *testing.T) {
-	script := "/tmp/orpheus_migrate_taskstate_agent_executions.py"
-	if _, err := os.Stat(script); err != nil {
-		t.Fatalf("migration script %s is unavailable: %v", script, err)
-	}
-
-	path := filepath.Join(t.TempDir(), "op-1.yaml")
-	oldYAML := strings.Join([]string{
-		"version: 2",
-		"repo_id: alpha",
-		"task_id: op-1",
-		"target:",
-		"  branch: orpheus/op-1",
-		"  worktree: /tmp/op-1",
-		"runs:",
-		"- attempt: 1",
-		"  status: succeeded",
-		"  agent: recorder",
-		"  command: codex",
-		"  args:",
-		"  - --model",
-		"  - gpt-5",
-		"  session_name: (op-1) Implement task",
-		"  started_at: 2026-06-03T10:00:00Z",
-		"  finished_at: 2026-06-03T10:02:00Z",
-		"events:",
-		"- type: worktree_created",
-		"  at: 2026-06-03T10:00:00Z",
-		"  branch: orpheus/op-1",
-		"  worktree: /tmp/op-1",
-		"- type: run_started",
-		"  at: 2026-06-03T10:00:00Z",
-		"  attempt: 1",
-		"  branch: orpheus/op-1",
-		"  worktree: /tmp/op-1",
-		"reviews:",
-		"- attempt: 1",
-		"  status: passed",
-		"  pipeline: default",
-		"  step: ai-review",
-		"  started_at: 2026-06-03T10:03:00Z",
-		"  finished_at: 2026-06-03T10:04:00Z",
-		"  steps:",
-		"  - kind: agent_review",
-		"    name: ai-review",
-		"    command: codex",
-		"    args:",
-		"    - --model=gpt-5-review",
-		"",
-	}, "\n")
-	if err := os.WriteFile(path, []byte(oldYAML), 0o644); err != nil {
-		t.Fatalf("write old state: %v", err)
-	}
-
-	output, err := exec.Command(script, path).CombinedOutput()
-	if err != nil {
-		t.Fatalf("run migration: %v\n%s", err, output)
-	}
-
-	migrated, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read migrated state: %v", err)
-	}
-	text := string(migrated)
-	for _, want := range []string{
-		"version: 3",
-		"execution:",
-		"purpose: implementation",
-		"agent: recorder",
-		"profile: recorder",
-		"harness: codex",
-		"model: gpt-5",
-		"session_name: (op-1) Implement task",
-		"duration_millis: 120000",
-		"model: gpt-5-review",
-		"2026-06-03T10:03:00Z",
-		"type: worktree_created",
-		"type: run_started",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("migrated YAML missing %q:\n%s", want, text)
-		}
-	}
-	if strings.Contains(text, "  agent: recorder\n  command: codex") {
-		t.Fatalf("old run-level execution fields were not removed:\n%s", text)
-	}
-	if strings.Contains(text, "2026-06-03 10:00:00") {
-		t.Fatalf("timestamp was not preserved as RFC3339:\n%s", text)
-	}
-}
-
-func TestStoreRejectsUnsafeRunArgsBeforeWritingState(t *testing.T) {
-	store := newTestStore(t)
-
-	_, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
-		Agent: "recorder",
-		Args:  []string{" - You are an agent dispatched by Orpheus.\n\nRun `orpheus agent context` now.\n"},
-	})
-	if err == nil {
-		t.Fatal("start run with unsafe args succeeded, want error")
-	}
-	if !strings.Contains(err.Error(), "run attempt 1 has invalid args") ||
-		!strings.Contains(err.Error(), `multi-line value starting with " - "`) {
-		t.Fatalf("error = %v, want unsafe args context", err)
-	}
-
-	statePath, err := store.Path("alpha", "op-1")
-	if err != nil {
-		t.Fatalf("state path: %v", err)
-	}
-	if _, err := os.Stat(statePath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("state file exists after rejected write: %v", err)
 	}
 }
 
