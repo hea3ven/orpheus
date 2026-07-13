@@ -467,7 +467,7 @@ func resolveDetailedDescription(inline string, filePath string) (string, error) 
 func activeAgentContextResolver(
 	paths state.Paths,
 	taskCtx taskContext,
-	runStore taskstate.Service,
+	runStore agent.ContextStateLoader,
 ) agent.ActiveContextResolver {
 	return agent.ActiveContextResolver{
 		Paths:    paths,
