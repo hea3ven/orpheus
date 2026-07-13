@@ -46,7 +46,8 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 	stdout, stderr := executeCommand(t, []string{"task", "run", taskID})
 
 	is.Contains(stdout, "completion agent completed")
-	is.Empty(stderr)
+	is.Contains(stderr, "Review for "+taskID+" is waiting for manual step \"local-review\"")
+	is.Contains(stderr, "Resume with `orpheus task review "+taskID+"`")
 
 	agentLog := readFileString(t, agentLogPath)
 	prompt := agentLogBlock(t, agentLog, "ORPHEUS_AGENT_PROMPT")
@@ -135,7 +136,7 @@ func TestConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 	}
 
 	runOut, runErr := executeCommand(t, []string{"task", "run", taskID})
-	is.Empty(runErr)
+	is.Contains(runErr, "Review for "+taskID+" is waiting for manual step \"local-review\"")
 	is.Contains(runOut, "completion agent completed")
 
 	contextOutput := agentLogBlock(t, readFileString(t, agentLogPath), "AGENT_CONTEXT")
@@ -211,7 +212,7 @@ func TestMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd
 	_, clearErr := executeCommand(t, []string{"repo", "config", "set", "alpha", "title-template", ""})
 	is.Empty(clearErr)
 	runOut, allowedRunErr := executeCommand(t, []string{"task", "run", taskID})
-	is.Empty(allowedRunErr)
+	is.Contains(allowedRunErr, "Review for "+taskID+" is waiting for manual step \"local-review\"")
 	is.Contains(runOut, "completion agent completed")
 
 	state := readCompletionTaskState(t, paths, "alpha", taskID)
@@ -266,7 +267,7 @@ func TestWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 
 	runOut, runErr := executeCommand(t, []string{"task", "run", taskID})
 
-	is.Empty(runErr)
+	is.Contains(runErr, "Review for "+taskID+" is waiting for manual step \"local-review\"")
 	is.Contains(runOut, "completion agent completed")
 	state := readCompletionTaskState(t, paths, "alpha", taskID)
 	latest, ok := taskstate.LatestRun(state)
@@ -376,7 +377,7 @@ func TestRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 
 	runOut, runErr := executeCommand(t, []string{"task", "run", "--repo-root", taskID})
 
-	is.Empty(runErr)
+	is.Contains(runErr, "Review for "+taskID+" is waiting for manual step \"local-review\"")
 	is.Contains(runOut, "completion agent completed")
 	is.Equal(branch, strings.TrimSpace(runGit(t, repoPath, "branch", "--show-current")))
 
@@ -486,7 +487,8 @@ func TestMainCompletionFlowEndToEnd(t *testing.T) {
 	stdout, stderr := executeCommand(t, []string{"task", "run", "--main", taskID})
 
 	is.Contains(stdout, "completion agent completed")
-	is.Empty(stderr)
+	is.Contains(stderr, "Review for "+taskID+" is waiting for manual step \"local-review\"")
+	is.Contains(stderr, "Resume with `orpheus task review "+taskID+"`")
 
 	agentLog := readFileString(t, agentLogPath)
 	prompt := agentLogBlock(t, agentLog, "ORPHEUS_AGENT_PROMPT")

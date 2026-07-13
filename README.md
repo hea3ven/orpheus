@@ -22,7 +22,7 @@ Early MVP design and implementation planning.
 
 - [Review pipeline workflow](docs/2026-07-05_review_pipeline_workflow.md) explains the operator path from `task run` through `agent done`, `task review`, follow-up work, approval, and publication/finalization retry.
 - [Repository publication titles](docs/2026-06-23_repo_publication_titles.md) explains how to configure Jira-style commit and pull-request titles, preserve defaults, and recover from a missing task reference.
-- [Review pipelines](docs/review_pipelines.md) explains global pipeline configuration, repository defaults, repo-local aliases, clearing behavior, and selection precedence.
+- [Review pipelines](docs/review_pipelines.md) explains automatic review after `task run`, manual gate resumption, global pipeline configuration, repository defaults, repo-local aliases, clearing behavior, and selection precedence.
 
 ## Agent profile session names
 
