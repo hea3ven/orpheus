@@ -116,7 +116,7 @@ func TestStoreRejectsOldRunLevelTargetSchema(t *testing.T) {
 	}
 }
 
-func TestStoreRejectsVersionTwoStateWithMigrationGuidance(t *testing.T) {
+func TestStoreRejectsVersionTwoState(t *testing.T) {
 	store := newTestStore(t)
 	path, err := store.Path("alpha", "op-1")
 	if err != nil {
@@ -144,9 +144,8 @@ func TestStoreRejectsVersionTwoStateWithMigrationGuidance(t *testing.T) {
 	if err == nil {
 		t.Fatal("load v2 state succeeded, want error")
 	}
-	if !strings.Contains(err.Error(), "unsupported task state version 2") ||
-		!strings.Contains(err.Error(), "/tmp/orpheus_migrate_taskstate_agent_executions.py") {
-		t.Fatalf("error = %v, want migration guidance", err)
+	if !strings.Contains(err.Error(), "unsupported task state version 2") {
+		t.Fatalf("error = %v, want old schema rejection", err)
 	}
 }
 

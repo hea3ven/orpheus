@@ -47,13 +47,18 @@ type ContextBackend interface {
 // ContextBackendFactory creates a task backend for one registered repository source.
 type ContextBackendFactory func(taskmodel.RepositorySource) (ContextBackend, error)
 
+// ContextStateLoader is the task-state read capability needed by agent context.
+type ContextStateLoader interface {
+	Load(repoID, taskID string) (taskstate.TaskState, error)
+}
+
 // ActiveContextResolver validates and resolves the active Orpheus agent context.
 type ActiveContextResolver struct {
 	Paths          state.Paths
 	Registry       registry.Registry
 	Sources        []taskmodel.RepositorySource
 	BackendFactory ContextBackendFactory
-	RunStore       taskstate.Service
+	RunStore       ContextStateLoader
 
 	Env map[string]string
 	CWD string

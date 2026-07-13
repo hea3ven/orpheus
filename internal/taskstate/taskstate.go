@@ -115,49 +115,11 @@ var (
 	ErrFinalizationConflict = errors.New("task finalization already recorded with different facts")
 )
 
-// Service is the small task-state API consumed by orchestration and projections.
-type Service interface {
-	Path(repoID, taskID string) (string, error)
-	Load(repoID, taskID string) (TaskState, error)
-	LatestRun(repoID, taskID string) (RunAttempt, bool, error)
-	ActiveRun(repoID, taskID string) (RunAttempt, bool, error)
-	RecordSetupEvent(repoID, taskID string, eventType EventType, opts SetupEventOptions) (Event, error)
-	StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt, error)
-	RecordRunUsage(repoID, taskID string, attempt int, opts RecordRunUsageOptions) (RunAttempt, error)
-	CompleteRun(repoID, taskID string, attempt int, opts CompleteRunOptions) (RunAttempt, error)
-	RecordRepeatedCompletion(repoID, taskID string, attempt int, opts RepeatedCompletionOptions) (Event, error)
-	FinishRun(repoID, taskID string, attempt int, status RunStatus) (RunAttempt, error)
-	FailRunStart(repoID, taskID string, attempt int, cause error) (RunAttempt, error)
-	StartReview(repoID, taskID string) (ReviewAttempt, error)
-	StartReviewWithOptions(repoID, taskID string, opts StartReviewOptions) (ReviewAttempt, error)
-	PauseReviewForManual(repoID, taskID string, attempt int, step string) (ReviewAttempt, error)
-	ResumeReview(repoID, taskID string, attempt int) (ReviewAttempt, error)
-	RecordReviewStep(repoID, taskID string, attempt int, opts RecordReviewStepOptions) (ReviewAttempt, error)
-	FinishReviewStepExecution(repoID, taskID string, attempt int, stepName string, opts FinishReviewStepExecutionOptions) (ReviewAttempt, error)
-	RecordReviewStepUsage(repoID, taskID string, attempt int, stepName string, opts RecordRunUsageOptions) (ReviewAttempt, error)
-	RecordReviewFinding(repoID, taskID string, attempt int, finding ReviewFinding) (ReviewAttempt, error)
-	PromoteReviewAdvisoryFinding(repoID, taskID string, attempt int, findingIndex int) (ReviewAttempt, error)
-	DowngradeReviewBlockingFinding(repoID, taskID string, attempt int, findingIndex int, reason string) (ReviewAttempt, error)
-	WaiveReviewBlockingFinding(repoID, taskID string, attempt int, findingIndex int, reason string) (ReviewAttempt, error)
-	RecordReviewFindingCreatedTask(repoID, taskID string, attempt int, findingIndex int, createdTaskID string) (ReviewAttempt, error)
-	TargetReviewFindings(repoID, taskID string, reviewAttempt int, findingIndexes []int, runAttempt int) (ReviewAttempt, error)
-	FinishReview(repoID, taskID string, attempt int, status ReviewStatus) (ReviewAttempt, error)
-	RecordFinalizationCommit(repoID, taskID string, commit string) (Finalization, error)
-	RecordFinalizationPush(repoID, taskID string, opts FinalizationPushOptions) (Finalization, error)
-	RecordFinalizationClose(repoID, taskID string, opts FinalizationCloseOptions) (Finalization, error)
-	RecordFinalizationFailure(repoID, taskID string, cause error) (Event, error)
-	RecordFeatureBranchPR(repoID, taskID string, opts FeatureBranchPROptions) (Event, error)
-	RecordTaskClosed(repoID, taskID string, opts TaskClosedOptions) (Event, error)
-	Events(repoID, taskID string) ([]Event, error)
-}
-
 // Store is a YAML-backed per-task state store under the Orpheus data root.
 type Store struct {
 	paths orstate.Paths
 	now   func() time.Time
 }
-
-var _ Service = Store{}
 
 // TaskState is the human-readable YAML schema for one task's Orpheus state.
 type TaskState struct {
@@ -2136,10 +2098,7 @@ func validateLoadedState(taskState TaskState, repoID, taskID string) error {
 }
 
 func unsupportedTaskStateVersionError(version int) error {
-	return fmt.Errorf(
-		"unsupported task state version %d; migrate local task-state files with /tmp/orpheus_migrate_taskstate_agent_executions.py before running this command",
-		version,
-	)
+	return fmt.Errorf("unsupported task state version %d", version)
 }
 
 func taskStateContentIsEmpty(taskState TaskState) bool {
