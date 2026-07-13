@@ -790,7 +790,6 @@ func taskRunUsageOptions(command *cobra.Command, start workflow.DispatchStartRes
 	return agent.CaptureCodexUsage(agent.CodexUsageCaptureOptions{
 		ExecutionDir: start.ExecutionDir,
 		StartedAt:    start.Attempt.Execution.StartedAt,
-		FinishedAt:   time.Now().UTC(),
 		Env:          agent.CodexUsageCaptureEnvironment(),
 	})
 }

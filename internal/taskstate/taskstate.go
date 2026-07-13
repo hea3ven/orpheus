@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -133,6 +134,7 @@ type Service interface {
 	ResumeReview(repoID, taskID string, attempt int) (ReviewAttempt, error)
 	RecordReviewStep(repoID, taskID string, attempt int, opts RecordReviewStepOptions) (ReviewAttempt, error)
 	FinishReviewStepExecution(repoID, taskID string, attempt int, stepName string, opts FinishReviewStepExecutionOptions) (ReviewAttempt, error)
+	RecordReviewStepUsage(repoID, taskID string, attempt int, stepName string, opts RecordRunUsageOptions) (ReviewAttempt, error)
 	RecordReviewFinding(repoID, taskID string, attempt int, finding ReviewFinding) (ReviewAttempt, error)
 	PromoteReviewAdvisoryFinding(repoID, taskID string, attempt int, findingIndex int) (ReviewAttempt, error)
 	DowngradeReviewBlockingFinding(repoID, taskID string, attempt int, findingIndex int, reason string) (ReviewAttempt, error)
@@ -547,6 +549,39 @@ func (s Store) Path(repoID, taskID string) (string, error) {
 		return "", err
 	}
 	return s.paths.DataPath(rel)
+}
+
+// TaskIDs returns task IDs with persisted local Orpheus state for repoID.
+func (s Store) TaskIDs(repoID string) ([]string, error) {
+	repoID, err := cleanPathComponent("repo id", repoID)
+	if err != nil {
+		return nil, err
+	}
+	dir, err := s.paths.DataPath(filepath.Join("repos", repoID, "tasks"))
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return []string{}, nil
+		}
+		return nil, fmt.Errorf("list task states for repo %s: %w", repoID, err)
+	}
+
+	taskIDs := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
+			continue
+		}
+		taskID := strings.TrimSuffix(entry.Name(), ".yaml")
+		if _, err := cleanPathComponent("task id", taskID); err != nil {
+			continue
+		}
+		taskIDs = append(taskIDs, taskID)
+	}
+	sort.Strings(taskIDs)
+	return taskIDs, nil
 }
 
 // Load reads a task state file. Missing files load as an empty task state.
@@ -1083,6 +1118,56 @@ func (s Store) FinishReviewStepExecution(
 	execution.DurationMillis = durationMillis(execution.StartedAt, finishedAt)
 	state.Reviews[reviewIndex].Steps[stepIndex].Execution = normalizeOptionalAgentExecution(&execution)
 
+	if err := s.save(state); err != nil {
+		return ReviewAttempt{}, err
+	}
+	return state.Reviews[reviewIndex], nil
+}
+
+// RecordReviewStepUsage records best-effort usage telemetry for an existing review agent step.
+func (s Store) RecordReviewStepUsage(
+	repoID,
+	taskID string,
+	attempt int,
+	stepName string,
+	opts RecordRunUsageOptions,
+) (ReviewAttempt, error) {
+	stepName = strings.TrimSpace(stepName)
+	if stepName == "" {
+		return ReviewAttempt{}, fmt.Errorf("record review step usage for task %s/%s: step name is required", repoID, taskID)
+	}
+
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+	reviewIndex := reviewAttemptIndex(state, attempt)
+	if reviewIndex < 0 {
+		return ReviewAttempt{}, fmt.Errorf("record review step usage for task %s/%s: review attempt %d was not found", repoID, taskID, attempt)
+	}
+	stepIndex := latestReviewStepExecutionIndex(state.Reviews[reviewIndex], stepName)
+	if stepIndex < 0 {
+		return ReviewAttempt{}, fmt.Errorf(
+			"record review step usage for task %s/%s: review attempt %d step %q was not found",
+			repoID,
+			taskID,
+			attempt,
+			stepName,
+		)
+	}
+	if state.Reviews[reviewIndex].Steps[stepIndex].Execution == nil {
+		return ReviewAttempt{}, fmt.Errorf(
+			"record review step usage for task %s/%s: review attempt %d step %q has no agent execution",
+			repoID,
+			taskID,
+			attempt,
+			stepName,
+		)
+	}
+
+	execution := *state.Reviews[reviewIndex].Steps[stepIndex].Execution
+	execution = applyRunUsageOptions(execution, opts, s.nowUTC())
+	state.Reviews[reviewIndex].Steps[stepIndex].Execution = normalizeOptionalAgentExecution(&execution)
 	if err := s.save(state); err != nil {
 		return ReviewAttempt{}, err
 	}

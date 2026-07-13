@@ -516,7 +516,7 @@ func finishAgentReviewExecution(
 	finishedAt time.Time,
 	runErr error,
 ) error {
-	usageOpts := agentReviewUsageOptions(command, opts.Workdir, execution, finishedAt, runErr)
+	usageOpts := agentReviewUsageOptions(command, opts.Workdir, execution, runErr)
 	_, err := opts.Store.FinishReviewStepExecution(
 		opts.RepoID,
 		opts.TaskID,
@@ -541,7 +541,6 @@ func agentReviewUsageOptions(
 	command agent.CommandSnapshot,
 	workdir string,
 	execution taskstate.AgentExecution,
-	finishedAt time.Time,
 	runErr error,
 ) taskstate.RecordRunUsageOptions {
 	if agent.IsStartError(runErr) {
@@ -564,7 +563,6 @@ func agentReviewUsageOptions(
 	return agent.CaptureCodexUsage(agent.CodexUsageCaptureOptions{
 		ExecutionDir: workdir,
 		StartedAt:    execution.StartedAt,
-		FinishedAt:   finishedAt,
 		Env:          agent.CodexUsageCaptureEnvironment(),
 	})
 }
