@@ -150,6 +150,30 @@ func TestStoreRejectsVersionTwoStateWithMigrationGuidance(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsUnsafeRunArgsBeforeWritingState(t *testing.T) {
+	store := newTestStore(t)
+
+	_, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		Agent: "recorder",
+		Args:  []string{" - You are an agent dispatched by Orpheus.\n\nRun `orpheus agent context` now.\n"},
+	})
+	if err == nil {
+		t.Fatal("start run with unsafe args succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "run attempt 1 has invalid args") ||
+		!strings.Contains(err.Error(), `multi-line value starting with " - "`) {
+		t.Fatalf("error = %v, want unsafe args context", err)
+	}
+
+	statePath, err := store.Path("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("state path: %v", err)
+	}
+	if _, err := os.Stat(statePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state file exists after rejected write: %v", err)
+	}
+}
+
 func TestStoreRecordsFeatureBranchPREventsIdempotently(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -376,6 +400,57 @@ func TestStoreRecordsReviewAttemptsAndFindings(t *testing.T) {
 		"title: Create a cleanup task",
 		"description: Clean up the implementation later.",
 		"acceptance_criteria: Cleanup is complete.",
+	)
+}
+
+func TestStorePausesAndResumesReviewForManualStep(t *testing.T) {
+	store := newTestStore(t,
+		time.Date(2026, 6, 26, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 6, 26, 10, 1, 0, 0, time.UTC),
+	)
+
+	review, err := store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{
+		Pipeline: "standard",
+		Step:     "lint",
+	})
+	if err != nil {
+		t.Fatalf("start review: %v", err)
+	}
+	paused, err := store.PauseReviewForManual("alpha", "op-1", review.Attempt, "inspect")
+	if err != nil {
+		t.Fatalf("pause review: %v", err)
+	}
+	if paused.Status != taskstate.ReviewStatusWaitingForManual || paused.Step != "inspect" || paused.FinishedAt != nil {
+		t.Fatalf("paused review = %#v, want waiting inspect without finished_at", paused)
+	}
+	if _, err := store.RecordReviewFinding("alpha", "op-1", review.Attempt, taskstate.ReviewFinding{
+		Type:        taskstate.FindingTypeAdvisory,
+		Title:       "Advisory",
+		Description: "Record after resume only.",
+	}); err == nil {
+		t.Fatal("record finding while waiting succeeded, want error")
+	}
+
+	resumed, err := store.ResumeReview("alpha", "op-1", review.Attempt)
+	if err != nil {
+		t.Fatalf("resume review: %v", err)
+	}
+	if resumed.Status != taskstate.ReviewStatusRunning || resumed.Step != "inspect" {
+		t.Fatalf("resumed review = %#v, want running inspect", resumed)
+	}
+	if _, err := store.RecordReviewFinding("alpha", "op-1", review.Attempt, taskstate.ReviewFinding{
+		Type:        taskstate.FindingTypeAdvisory,
+		Title:       "Advisory",
+		Description: "Recorded after resume.",
+	}); err != nil {
+		t.Fatalf("record finding after resume: %v", err)
+	}
+
+	assertStoreYAMLContains(t, store, "alpha", "op-1",
+		"status: running",
+		"pipeline: standard",
+		"step: inspect",
+		"type: advisory",
 	)
 }
 

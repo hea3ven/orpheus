@@ -590,6 +590,170 @@ func TestTaskStatsKeepsTokenUsageWhenCostPricingIsUnknown(t *testing.T) {
 	}
 }
 
+//nolint:funlen // The aggregate fixture setup documents the period metrics under test.
+func TestTaskStatsAggregateGroupsResolvedTasksByDay(t *testing.T) {
+	is := assert.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[
+			{"id":"op-1","title":"First","status":"closed","priority":1,"issue_type":"task","created_at":"2026-07-01T00:00:00Z","closed_at":"2026-07-02T12:00:00Z"},
+			{"id":"op-2","title":"Second","status":"closed","priority":1,"issue_type":"task","created_at":"2026-07-02T08:00:00Z","closed_at":"2026-07-02T18:00:00Z"},
+			{"id":"op-3","title":"Unknown usage","status":"closed","priority":1,"issue_type":"task","closed_at":"2026-07-03T11:00:00Z"},
+			{"id":"op-open","title":"Still open","status":"open","priority":1,"issue_type":"task","created_at":"2026-07-03T12:00:00Z"}
+		]`},
+	})
+
+	aggregateStatsNow := time.Time{}
+	stateStore := taskstate.NewStoreWithClock(paths, func() time.Time { return aggregateStatsNow })
+	recordTaskStatsAggregateRun(t, stateStore, &aggregateStatsNow, repoDir, taskStatsAggregateRunFixture{
+		taskID:     "op-1",
+		model:      "gpt-5",
+		startedAt:  time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC),
+		finishedAt: time.Date(2026, 7, 2, 10, 30, 0, 0, time.UTC),
+		usage: &taskstate.AgentUsage{
+			InputTokens:           123,
+			CachedInputTokens:     45,
+			OutputTokens:          67,
+			ReasoningOutputTokens: 8,
+			TotalTokens:           1900,
+		},
+	})
+	recordTaskStatsAggregateRun(t, stateStore, &aggregateStatsNow, repoDir, taskStatsAggregateRunFixture{
+		taskID:     "op-2",
+		model:      "vendor-model",
+		startedAt:  time.Date(2026, 7, 2, 16, 0, 0, 0, time.UTC),
+		finishedAt: time.Date(2026, 7, 2, 16, 20, 0, 0, time.UTC),
+		usage: &taskstate.AgentUsage{
+			InputTokens:  100,
+			OutputTokens: 50,
+			TotalTokens:  1150,
+		},
+	})
+	recordTaskStatsAggregateRun(t, stateStore, &aggregateStatsNow, repoDir, taskStatsAggregateRunFixture{
+		taskID:     "op-3",
+		model:      "gpt-5",
+		startedAt:  time.Date(2026, 7, 3, 10, 0, 0, 0, time.UTC),
+		finishedAt: time.Date(2026, 7, 3, 10, 15, 0, 0, time.UTC),
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "stats", "--group", "day"})
+
+	is.Empty(stderr)
+	for _, want := range []string{
+		"Aggregate stats grouped by day",
+		"Estimated API-equivalent cost",
+		"Tasks without resolved timestamp: 1",
+		"Resolved Tasks",
+		"Lifecycle Time",
+		"Agent Work",
+		"Token Usage",
+		"Estimated API-Equivalent Cost",
+		"PERIOD", "RESOLVED_TASKS", "TREND",
+		"FULL_AVG", "IMPLEMENTATION_AVG",
+		"ACTIVE_AVG", "ACTIVE_TOTAL",
+		"TOTAL_TOKENS", "UNKNOWN_USAGE", "UNKNOWN_COST",
+	} {
+		is.Contains(stdout, want)
+	}
+	is.Regexp(`(?m)^2026-07-02\s+2\s+#{20}$`, stdout)
+	is.Regexp(`(?m)^2026-07-03\s+1\s+#{10}$`, stdout)
+	is.Regexp(`(?m)^2026-07-02\s+23h0m0s\s+0\s+2h0m0s\s+0$`, stdout)
+	is.Regexp(`(?m)^2026-07-03\s+-\s+1\s+1h0m0s\s+0$`, stdout)
+	is.Regexp(`(?m)^2026-07-02\s+2\s+25m0s\s+50m0s$`, stdout)
+	is.Regexp(`(?m)^2026-07-03\s+1\s+15m0s\s+15m0s$`, stdout)
+	is.Regexp(`(?m)^2026-07-02\s+3K\s+1\.5K\s+0$`, stdout)
+	is.Regexp(`(?m)^2026-07-03\s+0\s+-\s+1$`, stdout)
+	is.Regexp(`(?m)^2026-07-02\s+\$0\.000773\s+\$0\.000773\s+1$`, stdout)
+	is.Regexp(`(?m)^2026-07-03\s+\$0\.000000\s+-\s+1$`, stdout)
+	assertTaskStatsAggregateTableLinesWithinWidth(t, stdout, 80)
+}
+
+func TestTaskStatsAggregateGroupsResolvedTasksByMonth(t *testing.T) {
+	is := assert.New(t)
+	newTestState(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[
+			{"id":"op-1","title":"July","status":"closed","priority":1,"issue_type":"task","created_at":"2026-07-01T00:00:00Z","closed_at":"2026-07-02T12:00:00Z"},
+			{"id":"op-2","title":"August","status":"closed","priority":1,"issue_type":"task","created_at":"2026-08-01T00:00:00Z","closed_at":"2026-08-03T00:00:00Z"}
+		]`},
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "stats", "--group", "month"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Aggregate stats grouped by month")
+	is.Contains(stdout, "Tasks without resolved timestamp: 0")
+	is.Regexp(`(?m)^2026-07\s+1\s+#{20}$`, stdout)
+	is.Regexp(`(?m)^2026-08\s+1\s+#{20}$`, stdout)
+	is.Regexp(`(?m)^2026-07\s+36h0m0s\s+0\s+-\s+1$`, stdout)
+	is.Regexp(`(?m)^2026-08\s+48h0m0s\s+0\s+-\s+1$`, stdout)
+	assertTaskStatsAggregateTableLinesWithinWidth(t, stdout, 80)
+}
+
+func assertTaskStatsAggregateTableLinesWithinWidth(t *testing.T, output string, width int) {
+	t.Helper()
+
+	for _, line := range strings.Split(output, "\n") {
+		if line == "" ||
+			strings.HasPrefix(line, "Aggregate stats grouped by ") ||
+			strings.HasPrefix(line, "Estimated API-equivalent cost is calculated") ||
+			strings.HasPrefix(line, "Tasks without resolved timestamp: ") {
+			continue
+		}
+		lineWidth := len([]rune(line))
+		if lineWidth > width {
+			t.Fatalf("aggregate table line width = %d, want <= %d:\n%s", lineWidth, width, output)
+		}
+	}
+}
+
+type taskStatsAggregateRunFixture struct {
+	taskID     string
+	model      string
+	startedAt  time.Time
+	finishedAt time.Time
+	usage      *taskstate.AgentUsage
+}
+
+func recordTaskStatsAggregateRun(
+	t *testing.T,
+	stateStore taskstate.Store,
+	now *time.Time,
+	repoDir string,
+	fixture taskStatsAggregateRunFixture,
+) {
+	t.Helper()
+	must := require.New(t)
+
+	*now = fixture.startedAt
+	run, err := stateStore.StartRun("alpha", fixture.taskID, taskstate.StartRunOptions{
+		Agent:    "codex",
+		Profile:  "codex-profile",
+		Harness:  "codex",
+		Model:    fixture.model,
+		Command:  "codex",
+		Args:     []string{"exec", "--model", fixture.model},
+		Branch:   "main",
+		Worktree: repoDir,
+	})
+	must.NoError(err)
+	if fixture.usage != nil {
+		_, err = stateStore.RecordRunUsage("alpha", fixture.taskID, run.Attempt, taskstate.RecordRunUsageOptions{
+			Usage: fixture.usage,
+		})
+		must.NoError(err)
+	}
+
+	*now = fixture.finishedAt
+	_, err = stateStore.FinishRun("alpha", fixture.taskID, run.Attempt, taskstate.RunStatusSucceeded)
+	must.NoError(err)
+}
+
 func TestTaskShowRendersClosedItemsAndHistory(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -4414,6 +4578,118 @@ func TestTaskReviewPipelineAliasResolvesToGlobalPipeline(t *testing.T) {
 	must.True(ok)
 	is.Equal("cli", latest.Pipeline)
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+}
+
+func TestTaskReviewResumesManualWaitingAttempt(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:             "alpha",
+		Name:           "Alpha Repo",
+		Path:           repoPath,
+		DefaultBranch:  "main",
+		BeadsMode:      registry.BeadsModeLocal,
+		BeadsPrefix:    "op",
+		ReviewPipeline: "standard",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review resume", "Resume manual gate.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+	fail := writeReviewScript(t, "#!/bin/sh\nprintf 'check reran\n'\nexit 9\n")
+	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+		"standard": {
+			{"kind": "check", "name": "lint", "command": fail},
+			{"kind": "manual", "name": "inspect"},
+		},
+	})
+	runStore := taskstate.NewStore(paths)
+	reviewAttempt, err := runStore.StartReviewWithOptions("alpha", "op-main", taskstate.StartReviewOptions{
+		Pipeline: "standard",
+		Step:     "lint",
+	})
+	must.NoError(err)
+	_, err = runStore.RecordReviewStep("alpha", "op-main", reviewAttempt.Attempt, taskstate.RecordReviewStepOptions{
+		Kind: "check",
+		Name: "lint",
+	})
+	must.NoError(err)
+	_, err = runStore.PauseReviewForManual("alpha", "op-main", reviewAttempt.Attempt, "inspect")
+	must.NoError(err)
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
+	})
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "a\n")
+
+	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stderr, "Resuming review attempt 1 at manual step \"inspect\".")
+	is.Contains(stderr, "== Review step: inspect (manual) ==")
+	is.NotContains(stdout, "check reran")
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(reviewAttempt.Attempt, latest.Attempt)
+	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+}
+
+func TestTaskReviewRejectsConflictingPipelineForManualWaitingAttempt(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review conflict", "Reject replacement.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+		"standard": {{"kind": "manual", "name": "inspect"}},
+		"other":    {{"kind": "manual", "name": "other-inspect"}},
+	})
+	runStore := taskstate.NewStore(paths)
+	reviewAttempt, err := runStore.StartReviewWithOptions("alpha", "op-main", taskstate.StartReviewOptions{
+		Pipeline: "standard",
+		Step:     "inspect",
+	})
+	must.NoError(err)
+	_, err = runStore.PauseReviewForManual("alpha", "op-main", reviewAttempt.Attempt, "inspect")
+	must.NoError(err)
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+	})
+
+	stdout, _, err := executeCommandWithError(t, []string{"task", "review", "--pipeline", "other", "op-main"})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.ErrorContains(err, "cannot replace a paused review")
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusWaitingForManual, latest.Status)
+	is.Equal("standard", latest.Pipeline)
+	is.Equal("inspect", latest.Step)
 }
 
 func TestTaskReviewUnknownPipelineIncludesRepoAliases(t *testing.T) {

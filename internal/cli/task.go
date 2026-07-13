@@ -24,6 +24,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/status"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/taskstats"
 	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/spf13/cobra"
 )
@@ -114,14 +115,28 @@ func newTaskShowCommand(opts *rootOptions) *cobra.Command {
 }
 
 func newTaskStatsCommand(opts *rootOptions) *cobra.Command {
+	var group string
 	cmd := &cobra.Command{
-		Use:   "stats <task-id>",
-		Short: "Show local implementation execution stats for a task",
-		Args:  cobra.ExactArgs(1),
+		Use:   "stats [<task-id>]",
+		Short: "Show implementation execution stats for one task or aggregate trends",
+		Args: func(command *cobra.Command, args []string) error {
+			if strings.TrimSpace(group) == "" {
+				return cobra.ExactArgs(1)(command, args)
+			}
+			if len(args) != 0 {
+				return fmt.Errorf("--group cannot be combined with a task id")
+			}
+			return nil
+		},
 		RunE: func(command *cobra.Command, args []string) error {
-			return runTaskStats(command, opts, args[0])
+			taskID := ""
+			if len(args) == 1 {
+				taskID = args[0]
+			}
+			return runTaskStats(command, opts, taskID, taskStatsOptions{group: group})
 		},
 	}
+	cmd.Flags().StringVar(&group, "group", "", "aggregate resolved task stats by day or month")
 	return cmd
 }
 
@@ -139,6 +154,7 @@ func newTaskDirCommand(opts *rootOptions) *cobra.Command {
 
 func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 	var agentName string
+	var pipelineName string
 	var mainMode bool
 	var repoRootMode bool
 	cmd := &cobra.Command{
@@ -152,14 +168,19 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 			"Use --repo-root to run from the registered repo root on the task branch.\n\n" +
 			"When the latest review is blocked by open current-task findings, task run " +
 			"automatically starts a review follow-up run and targets those findings. " +
-			"After the agent records completion with agent done, run task review to " +
-			"approve, block again, or publish/finalize.",
+			"After the agent records completion with agent done, task run continues into " +
+			"the effective review pipeline. Automated review proceeds until it passes, " +
+			"blocks, fails operationally, or reaches a manual step. Manual steps are " +
+			"persisted for resume with task review. After the agent records completion " +
+			"with agent done, run task review when automatic review reports a waiting " +
+			"manual step.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
-			return runTaskRun(command, opts, args[0], agentName, mainMode, repoRootMode)
+			return runTaskRun(command, opts, args[0], agentName, pipelineName, mainMode, repoRootMode)
 		},
 	}
 	cmd.Flags().StringVar(&agentName, "agent", "", "agent profile name to use instead of agents.defaults.implementer")
+	cmd.Flags().StringVar(&pipelineName, "pipeline", "", "review pipeline name to use after implementation instead of repo/global defaults")
 	cmd.Flags().BoolVar(&mainMode, "main", false, "run from the registered repo root on the registered default branch")
 	cmd.Flags().BoolVar(&repoRootMode, "repo-root", false, "run from the registered repo root on the task branch")
 	return cmd
@@ -207,7 +228,9 @@ func newTaskReviewCommand(opts *rootOptions) *cobra.Command {
 			"--pipeline accepts configured global pipeline names and repo-local aliases " +
 			"from review-pipeline-alias.<alias>. Configured pipelines may include check, " +
 			"manual, and agent_review steps. Approval records a passed review attempt and " +
-			"then finalizes through the same path as task done.\n\n" +
+			"then finalizes through the same path as task done. When task run has paused " +
+			"at a manual step, task review resumes that same attempt; --pipeline may only " +
+			"name the already selected pipeline and cannot replace it.\n\n" +
 			"Blocking findings leave the task ready for task run follow-up. Operational " +
 			"review failures require fixing the review command, environment, or process " +
 			"and rerunning task review. Use task review show to inspect persisted findings " +
@@ -368,12 +391,20 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 	}, taskState)
 }
 
-func runTaskStats(command *cobra.Command, opts *rootOptions, taskID string) error {
+type taskStatsOptions struct {
+	group string
+}
+
+func runTaskStats(command *cobra.Command, opts *rootOptions, taskID string, statsOpts taskStatsOptions) error {
 	logger := opts.log().With(
 		slog.String("component", "cli"),
 		slog.String("operation", "task_stats"),
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for task stats")
+
+	if strings.TrimSpace(statsOpts.group) != "" {
+		return runAggregateTaskStats(command, opts, statsOpts.group)
+	}
 
 	resolvedCtx, err := resolveTaskShowContext(command, taskID)
 	if err != nil {
@@ -396,6 +427,50 @@ func runTaskStats(command *cobra.Command, opts *rootOptions, taskID string) erro
 		)
 	}
 	return renderTaskStats(command.OutOrStdout(), taskState)
+}
+
+func runAggregateTaskStats(command *cobra.Command, opts *rootOptions, group string) error {
+	logger := opts.log().With(
+		slog.String("component", "cli"),
+		slog.String("operation", "task_stats_aggregate"),
+	)
+	normalizedGroup, err := taskstats.ParseGroup(group)
+	if err != nil {
+		return err
+	}
+
+	taskCtx, err := loadTaskContext()
+	if err != nil {
+		return err
+	}
+	paths, err := state.ResolveFromEnvironment()
+	if err != nil {
+		return err
+	}
+
+	logger.DebugContext(
+		command.Context(),
+		"querying task snapshots for aggregate stats",
+		slog.String("group", string(normalizedGroup)),
+		slog.Int("repo_count", len(taskCtx.Sources)),
+	)
+	snapshot := taskCtx.Aggregator.Snapshot(command.Context())
+	report, stateFailures := taskstats.AggregateReportFromSnapshot(
+		snapshot,
+		taskstate.NewStore(paths),
+		normalizedGroup,
+	)
+	if len(stateFailures) > 0 {
+		snapshot.Failures = append(snapshot.Failures, stateFailures...)
+	}
+	if err := renderTaskStatsAggregate(command.OutOrStdout(), report); err != nil {
+		return err
+	}
+	if snapshot.HasFailures() {
+		writeRepoFailures(command.ErrOrStderr(), "task stats", snapshot.Failures)
+		return partialRepoFailureError{operation: "task stats", failures: snapshot.Failures}
+	}
+	return nil
 }
 
 func runTaskDir(command *cobra.Command, opts *rootOptions, taskID string) error {
@@ -426,7 +501,15 @@ func runTaskDir(command *cobra.Command, opts *rootOptions, taskID string) error 
 	return err
 }
 
-func runTaskRun(command *cobra.Command, opts *rootOptions, taskID, agentName string, mainMode, repoRootMode bool) error {
+func runTaskRun(
+	command *cobra.Command,
+	opts *rootOptions,
+	taskID string,
+	agentName string,
+	pipelineName string,
+	mainMode bool,
+	repoRootMode bool,
+) error {
 	logger := opts.log().With(
 		slog.String("component", "cli"),
 		slog.String("operation", "task_run"),
@@ -434,7 +517,6 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID, agentName str
 	if mainMode && repoRootMode {
 		return fmt.Errorf("task run %s: --main cannot be combined with --repo-root", taskID)
 	}
-	logger.DebugContext(command.Context(), "loading registered repos for task run")
 
 	resolvedCtx, err := resolveTaskRunContext(taskID)
 	if err != nil {
@@ -443,13 +525,6 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID, agentName str
 
 	resolved := resolvedCtx.Resolved
 	repo := resolvedCtx.RegisteredRepo
-
-	logger.DebugContext(
-		command.Context(),
-		"resolved task source",
-		slog.String("repo_id", resolved.Source.Repository.ID),
-		slog.String("task_id", resolved.TaskID),
-	)
 
 	paths, err := state.ResolveFromEnvironment()
 	if err != nil {
@@ -481,7 +556,48 @@ func runTaskRun(command *cobra.Command, opts *rootOptions, taskID, agentName str
 		return err
 	}
 
-	return finishTaskRun(command, dispatch.service, repo.ID, resolved.TaskID, dispatch.start)
+	return finishTaskRunAndReview(command, opts, dispatch, repo.ID, resolved.TaskID, pipelineName)
+}
+
+func finishTaskRunAndReview(
+	command *cobra.Command,
+	opts *rootOptions,
+	dispatch taskRunDispatch,
+	repoID string,
+	taskID string,
+	pipelineName string,
+) error {
+	if err := finishTaskRun(command, dispatch.service, repoID, taskID, dispatch.start); err != nil {
+		return err
+	}
+	shouldReview, err := completedTaskRunReadyForReview(
+		dispatch.service.RunStore,
+		repoID,
+		taskID,
+		dispatch.start.Attempt.Attempt,
+	)
+	if err != nil {
+		return fmt.Errorf("task run %s: inspect completion before review: %w", taskID, err)
+	}
+	if !shouldReview {
+		return nil
+	}
+	return runTaskRunReview(command, opts, taskID, pipelineName)
+}
+
+func completedTaskRunReadyForReview(
+	store workflow.DispatchRunStore,
+	repoID string,
+	taskID string,
+	attempt int,
+) (bool, error) {
+	latest, ok, err := store.LatestRun(repoID, taskID)
+	if err != nil || !ok {
+		return false, err
+	}
+	return latest.Attempt == attempt &&
+		latest.Status == taskstate.RunStatusSucceeded &&
+		latest.Completion != nil, nil
 }
 
 func validateTaskRunExternalRef(
@@ -690,14 +806,51 @@ func runTaskReview(command *cobra.Command, opts *rootOptions, taskID string, pip
 		return err
 	}
 
+	return executeTaskReview(command, logger, start, taskReviewExecutionOptions{
+		interactiveManual: true,
+	})
+}
+
+func runTaskRunReview(command *cobra.Command, opts *rootOptions, taskID string, pipelineName string) error {
+	logger := opts.log().With(
+		slog.String("component", "cli"),
+		slog.String("operation", "task_run_review"),
+	)
+	logger.DebugContext(command.Context(), "starting automatic review after task run")
+
+	start, err := startTaskReview(command, taskID, pipelineName)
+	if err != nil {
+		return err
+	}
+	return executeTaskReview(command, logger, start, taskReviewExecutionOptions{
+		pauseBeforeManual: true,
+		autoSeparateTasks: true,
+	})
+}
+
+type taskReviewExecutionOptions struct {
+	pauseBeforeManual bool
+	autoSeparateTasks bool
+	interactiveManual bool
+}
+
+func executeTaskReview(
+	command *cobra.Command,
+	logger *slog.Logger,
+	start taskReviewStart,
+	opts taskReviewExecutionOptions,
+) error {
 	reviewInput := bufio.NewReader(command.InOrStdin())
-	outcome, err := review.RunPipeline(taskReviewPipelineOptions(command, start, reviewInput, logger))
+	outcome, err := review.RunPipeline(taskReviewPipelineOptions(command, start, reviewInput, logger, opts))
 	if err != nil {
 		_, _ = start.store.FinishReview(start.repoID(), start.taskID(), start.review.Attempt, taskstate.ReviewStatusFailed)
 		return err
 	}
+	if outcome.Status == taskstate.ReviewStatusWaitingForManual {
+		return nil
+	}
 	if outcome.Status == taskstate.ReviewStatusPassed {
-		shouldPublish, err := processSeparateTaskReviewCandidates(command, start, reviewInput)
+		shouldPublish, err := processSeparateTaskReviewCandidates(command, start, reviewInput, opts.autoSeparateTasks)
 		if err != nil {
 			_, _ = start.store.FinishReview(start.repoID(), start.taskID(), start.review.Attempt, taskstate.ReviewStatusFailed)
 			return err
@@ -736,9 +889,14 @@ func taskReviewPipelineOptions(
 	start taskReviewStart,
 	reviewInput *bufio.Reader,
 	logger *slog.Logger,
+	execOptions ...taskReviewExecutionOptions,
 ) review.PipelineRunOptions {
+	execOpts := taskReviewExecutionOptions{interactiveManual: true}
+	if len(execOptions) > 0 {
+		execOpts = execOptions[0]
+	}
 	outputMode := taskReviewOutputMode(command, logger)
-	return review.PipelineRunOptions{
+	opts := review.PipelineRunOptions{
 		Context:           command.Context(),
 		Store:             start.store,
 		RepoID:            start.repoID(),
@@ -755,43 +913,58 @@ func taskReviewPipelineOptions(
 		OutputWidth:       outputMode.width,
 		AgentConfig:       start.agentConfig,
 		AgentLauncher:     attachedAgentLauncher,
-		RenderManualStep: func(step review.Step) error {
-			return renderManualReviewContext(command, start.store, start.resolvedCtx, start.workdir, start.review, step)
-		},
-		ConfirmManualCommand: func(step review.Step) (bool, error) {
-			confirmed, err := promptManualCommandConfirmation(command, reviewInput, step)
-			if err != nil {
-				return false, fmt.Errorf("task review %s: %w", start.taskID(), err)
-			}
-			if confirmed {
-				return true, nil
-			}
-			_, err = fmt.Fprintf(command.ErrOrStderr(), "Review aborted for %s.\n", start.taskID())
-			return false, err
-		},
-		PromptManualStep: func(step review.ManualStep) (review.ManualResult, error) {
-			outcome, err := runManualReviewPrompt(
-				command,
-				reviewInput,
-				start.store,
-				start.resolvedCtx,
-				start.review,
-				step.Step.Name,
-				step.HunkNotes,
-			)
-			if err != nil {
-				return review.ManualResult{}, err
-			}
-			if outcome.result == manualReviewApproved {
-				return review.ManualResult{}, nil
-			}
-			return review.ManualResult{
-				Status: outcome.status,
-				Stop:   true,
-			}, nil
-		},
-		PromptAutomatedBlockers: taskReviewAutomatedBlockerPrompt(command, reviewInput),
+		ResumeFromStep:    start.resumed,
+		PauseBeforeManual: execOpts.pauseBeforeManual,
 	}
+	if !execOpts.interactiveManual {
+		return opts
+	}
+	return attachInteractiveReviewHooks(command, start, reviewInput, opts)
+}
+
+func attachInteractiveReviewHooks(
+	command *cobra.Command,
+	start taskReviewStart,
+	reviewInput *bufio.Reader,
+	opts review.PipelineRunOptions,
+) review.PipelineRunOptions {
+	opts.RenderManualStep = func(step review.Step) error {
+		return renderManualReviewContext(command, start.store, start.resolvedCtx, start.workdir, start.review, step)
+	}
+	opts.ConfirmManualCommand = func(step review.Step) (bool, error) {
+		confirmed, err := promptManualCommandConfirmation(command, reviewInput, step)
+		if err != nil {
+			return false, fmt.Errorf("task review %s: %w", start.taskID(), err)
+		}
+		if confirmed {
+			return true, nil
+		}
+		_, err = fmt.Fprintf(command.ErrOrStderr(), "Review aborted for %s.\n", start.taskID())
+		return false, err
+	}
+	opts.PromptManualStep = func(step review.ManualStep) (review.ManualResult, error) {
+		outcome, err := runManualReviewPrompt(
+			command,
+			reviewInput,
+			start.store,
+			start.resolvedCtx,
+			start.review,
+			step.Step.Name,
+			step.HunkNotes,
+		)
+		if err != nil {
+			return review.ManualResult{}, err
+		}
+		if outcome.result == manualReviewApproved {
+			return review.ManualResult{}, nil
+		}
+		return review.ManualResult{
+			Status: outcome.status,
+			Stop:   true,
+		}, nil
+	}
+	opts.PromptAutomatedBlockers = taskReviewAutomatedBlockerPrompt(command, reviewInput)
+	return opts
 }
 
 func taskReviewAutomatedBlockerPrompt(
@@ -877,6 +1050,7 @@ type taskReviewStart struct {
 	review      taskstate.ReviewAttempt
 	pipeline    review.Pipeline
 	agentConfig agent.Config
+	resumed     bool
 }
 
 func (s taskReviewStart) repoID() string {
@@ -896,9 +1070,13 @@ func startTaskReview(command *cobra.Command, taskID string, pipelineName string)
 	if err != nil {
 		return taskReviewStart{}, err
 	}
-	pipeline, err := resolveTaskReviewPipeline(paths, resolvedCtx.Resolved.Source.Repository, pipelineName)
-	if err != nil {
-		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
+	var requestedPipeline *review.Pipeline
+	if strings.TrimSpace(pipelineName) != "" {
+		pipeline, err := resolveTaskReviewPipeline(paths, resolvedCtx.Resolved.Source.Repository, pipelineName)
+		if err != nil {
+			return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
+		}
+		requestedPipeline = &pipeline
 	}
 	store := taskstate.NewStore(paths)
 	target, err := taskReviewTarget(store, paths, resolvedCtx)
@@ -909,6 +1087,31 @@ func startTaskReview(command *cobra.Command, taskID string, pipelineName string)
 	if err := validateReviewCandidateReady(command.Context(), store, resolvedCtx, workdir); err != nil {
 		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
 	}
+
+	if paused, ok, err := latestManualWaitingReview(store, resolvedCtx); err != nil {
+		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
+	} else if ok {
+		return resumeTaskReview(command, paths, resolvedCtx, store, target, workdir, paused, pipelineName)
+	}
+
+	if requestedPipeline != nil {
+		return startFreshTaskReview(paths, resolvedCtx, store, target, workdir, *requestedPipeline)
+	}
+	pipeline, err := resolveTaskReviewPipeline(paths, resolvedCtx.Resolved.Source.Repository, pipelineName)
+	if err != nil {
+		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
+	}
+	return startFreshTaskReview(paths, resolvedCtx, store, target, workdir, pipeline)
+}
+
+func startFreshTaskReview(
+	paths state.Paths,
+	resolvedCtx resolvedTaskContext,
+	store taskstate.Store,
+	target workflow.Target,
+	workdir string,
+	pipeline review.Pipeline,
+) (taskReviewStart, error) {
 	agentConfig, err := resolveTaskReviewAgentConfig(paths, pipeline)
 	if err != nil {
 		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
@@ -934,6 +1137,72 @@ func startTaskReview(command *cobra.Command, taskID string, pipelineName string)
 		review:      reviewAttempt,
 		pipeline:    pipeline,
 		agentConfig: agentConfig,
+	}, nil
+}
+
+func latestManualWaitingReview(
+	store taskstate.Store,
+	resolvedCtx resolvedTaskContext,
+) (taskstate.ReviewAttempt, bool, error) {
+	taskState, err := store.Load(
+		resolvedCtx.Resolved.Source.Repository.ID,
+		resolvedCtx.Resolved.TaskID,
+	)
+	if err != nil {
+		return taskstate.ReviewAttempt{}, false, fmt.Errorf("load task state: %w", err)
+	}
+	latest, ok := taskstate.LatestReview(taskState)
+	if !ok || latest.Status != taskstate.ReviewStatusWaitingForManual {
+		return taskstate.ReviewAttempt{}, false, nil
+	}
+	return latest, true, nil
+}
+
+func resumeTaskReview(
+	command *cobra.Command,
+	paths state.Paths,
+	resolvedCtx resolvedTaskContext,
+	store taskstate.Store,
+	target workflow.Target,
+	workdir string,
+	paused taskstate.ReviewAttempt,
+	pipelineName string,
+) (taskReviewStart, error) {
+	pipeline, err := resolvePausedTaskReviewPipeline(paths, resolvedCtx.Resolved.Source.Repository, paused, pipelineName)
+	if err != nil {
+		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
+	}
+	agentConfig, err := resolveTaskReviewAgentConfig(paths, pipeline)
+	if err != nil {
+		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
+	}
+	reviewAttempt, err := store.ResumeReview(
+		resolvedCtx.Resolved.Source.Repository.ID,
+		resolvedCtx.Resolved.TaskID,
+		paused.Attempt,
+	)
+	if err != nil {
+		return taskReviewStart{}, fmt.Errorf("task review %s: resume review attempt: %w", resolvedCtx.Resolved.TaskID, err)
+	}
+	_, err = fmt.Fprintf(
+		command.ErrOrStderr(),
+		"Resuming review attempt %d at manual step %q.\n",
+		reviewAttempt.Attempt,
+		reviewAttempt.Step,
+	)
+	if err != nil {
+		return taskReviewStart{}, err
+	}
+	return taskReviewStart{
+		paths:       paths,
+		resolvedCtx: resolvedCtx,
+		store:       store,
+		workdir:     workdir,
+		target:      target,
+		review:      reviewAttempt,
+		pipeline:    pipeline,
+		agentConfig: agentConfig,
+		resumed:     true,
 	}, nil
 }
 
@@ -1028,6 +1297,57 @@ func resolveTaskReviewPipeline(
 	return review.ResolvePipeline(config, pipelineName, repo.ReviewPipeline)
 }
 
+func resolvePausedTaskReviewPipeline(
+	paths state.Paths,
+	repo taskmodel.Repository,
+	paused taskstate.ReviewAttempt,
+	pipelineName string,
+) (review.Pipeline, error) {
+	storedPipeline := strings.TrimSpace(paused.Pipeline)
+	if storedPipeline == "" {
+		return review.Pipeline{}, fmt.Errorf("paused review attempt %d has no recorded pipeline", paused.Attempt)
+	}
+	pipeline, err := resolveStoredTaskReviewPipeline(paths, storedPipeline)
+	if err != nil {
+		return review.Pipeline{}, fmt.Errorf("resolve paused review pipeline %q: %w", storedPipeline, err)
+	}
+
+	if strings.TrimSpace(pipelineName) == "" {
+		return pipeline, nil
+	}
+	requested, err := resolveTaskReviewPipeline(paths, repo, pipelineName)
+	if err != nil {
+		return review.Pipeline{}, err
+	}
+	if requested.Name != pipeline.Name {
+		return review.Pipeline{}, fmt.Errorf(
+			"review attempt %d is waiting for manual step %q in pipeline %q; --pipeline %q resolves to %q and cannot replace a paused review",
+			paused.Attempt,
+			paused.Step,
+			pipeline.Name,
+			strings.TrimSpace(pipelineName),
+			requested.Name,
+		)
+	}
+	return pipeline, nil
+}
+
+func resolveStoredTaskReviewPipeline(paths state.Paths, pipelineName string) (review.Pipeline, error) {
+	config, err := review.LoadConfig(paths)
+	if err != nil {
+		return review.Pipeline{}, err
+	}
+	pipeline, err := review.ResolvePipeline(config, pipelineName, "")
+	if err == nil {
+		return pipeline, nil
+	}
+	builtin := review.BuiltinManualPipeline()
+	if pipelineName == builtin.Name {
+		return builtin, nil
+	}
+	return review.Pipeline{}, err
+}
+
 func appendRepoReviewPipelineAliases(err error, repo taskmodel.Repository) error {
 	aliases := make([]string, 0, len(repo.ReviewPipelineAliases))
 	for alias, target := range repo.ReviewPipelineAliases {
@@ -1078,6 +1398,7 @@ func processSeparateTaskReviewCandidates(
 	command *cobra.Command,
 	start taskReviewStart,
 	reader *bufio.Reader,
+	createAll bool,
 ) (bool, error) {
 	candidates, err := pendingSeparateTaskCandidates(start.store, start.repoID(), start.taskID(), start.review.Attempt)
 	if err != nil {
@@ -1085,6 +1406,9 @@ func processSeparateTaskReviewCandidates(
 	}
 	if len(candidates) == 0 {
 		return true, nil
+	}
+	if createAll {
+		return createSeparateTaskCandidates(command, start, candidates)
 	}
 
 	selected, err := promptSeparateTaskCandidateSelection(command, reader, candidates)
@@ -1094,7 +1418,56 @@ func processSeparateTaskReviewCandidates(
 	if len(selected) == 0 {
 		return true, nil
 	}
+	return createSelectedSeparateTaskCandidates(command, start, reader, selected)
+}
 
+func createSeparateTaskCandidates(
+	command *cobra.Command,
+	start taskReviewStart,
+	candidates []separateTaskCandidate,
+) (bool, error) {
+	backend, err := newBeadsTaskBackend(start.resolvedCtx.Resolved.Source.BackendDir)
+	if err != nil {
+		return false, fmt.Errorf("task review %s: create follow-up task backend: %w", start.taskID(), err)
+	}
+	for _, candidate := range candidates {
+		created, err := backend.Create(command.Context(), createOptionsForReviewCandidate(start, candidate))
+		if err != nil {
+			return false, fmt.Errorf(
+				"task review %s: create follow-up Bead for review finding %d (%s): %w; fix the backend issue, then rerun task review",
+				start.taskID(),
+				candidate.index+1,
+				candidate.finding.TaskProposal.Title,
+				err,
+			)
+		}
+		if _, err := start.store.RecordReviewFindingCreatedTask(
+			start.repoID(),
+			start.taskID(),
+			start.review.Attempt,
+			candidate.index,
+			created.ID,
+		); err != nil {
+			return false, fmt.Errorf("task review %s: record created follow-up task %s: %w", start.taskID(), created.ID, err)
+		}
+		if _, err := fmt.Fprintf(
+			command.ErrOrStderr(),
+			"Created follow-up Bead %s for review finding %d.\n",
+			created.ID,
+			candidate.index+1,
+		); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func createSelectedSeparateTaskCandidates(
+	command *cobra.Command,
+	start taskReviewStart,
+	reader *bufio.Reader,
+	selected []separateTaskCandidate,
+) (bool, error) {
 	backend, err := newBeadsTaskBackend(start.resolvedCtx.Resolved.Source.BackendDir)
 	if err != nil {
 		return false, fmt.Errorf("task review %s: create follow-up task backend: %w", start.taskID(), err)
@@ -3162,6 +3535,211 @@ func renderTaskStats(output interface{ Write([]byte) (int, error) }, state tasks
 		},
 		taskStatsTotalRows(records),
 	)
+}
+
+type taskStatsAggregateTable struct {
+	title   string
+	headers []string
+	rows    [][]string
+}
+
+func renderTaskStatsAggregate(output interface{ Write([]byte) (int, error) }, report taskstats.AggregateReport) error {
+	if _, err := fmt.Fprintf(output, "Aggregate stats grouped by %s\n", report.Group); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(output, taskStatsCostEstimateDisclaimer); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(
+		output,
+		"Tasks without resolved timestamp: %d\n\n",
+		report.TasksWithoutResolvedTimestamp,
+	); err != nil {
+		return err
+	}
+
+	maxResolved := maxTaskStatsResolved(report.Periods)
+	tables := []taskStatsAggregateTable{
+		{
+			title:   "Resolved Tasks",
+			headers: []string{"PERIOD", "RESOLVED_TASKS", "TREND"},
+			rows:    taskStatsAggregateResolvedRows(report.Periods, maxResolved),
+		},
+		{
+			title:   "Lifecycle Time",
+			headers: []string{"PERIOD", "FULL_AVG", "FULL_UNKNOWN", "IMPLEMENTATION_AVG", "IMPLEMENTATION_UNKNOWN"},
+			rows:    taskStatsAggregateLifecycleRows(report.Periods),
+		},
+		{
+			title:   "Agent Work",
+			headers: []string{"PERIOD", "EXECUTIONS", "ACTIVE_AVG", "ACTIVE_TOTAL"},
+			rows:    taskStatsAggregateWorkRows(report.Periods),
+		},
+		{
+			title:   "Token Usage",
+			headers: []string{"PERIOD", "TOTAL_TOKENS", "AVG_TOKENS", "UNKNOWN_USAGE"},
+			rows:    taskStatsAggregateUsageRows(report.Periods),
+		},
+		{
+			title:   "Estimated API-Equivalent Cost",
+			headers: []string{"PERIOD", "TOTAL_COST", "AVG_COST", "UNKNOWN_COST"},
+			rows:    taskStatsAggregateCostRows(report.Periods),
+		},
+	}
+	return renderTaskStatsAggregateTables(output, tables)
+}
+
+func renderTaskStatsAggregateTables(
+	output interface{ Write([]byte) (int, error) },
+	tables []taskStatsAggregateTable,
+) error {
+	for i, table := range tables {
+		if i > 0 {
+			if _, err := fmt.Fprintln(output); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprintln(output, table.title); err != nil {
+			return err
+		}
+		if err := renderTable(output, table.headers, table.rows); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func maxTaskStatsResolved(periods []taskstats.AggregatePeriod) int {
+	maxResolved := 0
+	for _, period := range periods {
+		if period.Resolved > maxResolved {
+			maxResolved = period.Resolved
+		}
+	}
+	return maxResolved
+}
+
+func taskStatsAggregateResolvedRows(periods []taskstats.AggregatePeriod, maxResolved int) [][]string {
+	rows := make([][]string, 0, len(periods))
+	for _, period := range periods {
+		rows = append(rows, []string{
+			period.Key,
+			strconv.Itoa(period.Resolved),
+			taskStatsTrendBar(period.Resolved, maxResolved),
+		})
+	}
+	return rows
+}
+
+func taskStatsAggregateLifecycleRows(periods []taskstats.AggregatePeriod) [][]string {
+	rows := make([][]string, 0, len(periods))
+	for _, period := range periods {
+		rows = append(rows, []string{
+			period.Key,
+			formatTaskStatsOptionalDuration(period.AverageFullTaskTime()),
+			strconv.Itoa(period.UnknownFullTaskTime),
+			formatTaskStatsOptionalDuration(period.AverageImplementationTime()),
+			strconv.Itoa(period.UnknownImplementationTime),
+		})
+	}
+	return rows
+}
+
+func taskStatsAggregateWorkRows(periods []taskstats.AggregatePeriod) [][]string {
+	rows := make([][]string, 0, len(periods))
+	for _, period := range periods {
+		rows = append(rows, []string{
+			period.Key,
+			strconv.Itoa(period.Totals.Executions),
+			formatTaskStatsOptionalDuration(period.AverageActiveAgentTime()),
+			formatTaskStatsTotalDuration(period.Totals.Duration),
+		})
+	}
+	return rows
+}
+
+func taskStatsAggregateUsageRows(periods []taskstats.AggregatePeriod) [][]string {
+	rows := make([][]string, 0, len(periods))
+	for _, period := range periods {
+		rows = append(rows, []string{
+			period.Key,
+			formatTaskStatsTokenCount(period.Totals.Usage.TotalTokens),
+			formatTaskStatsOptionalTokenCount(period.AverageTokenCount()),
+			strconv.Itoa(period.Totals.UnknownUsage),
+		})
+	}
+	return rows
+}
+
+func taskStatsAggregateCostRows(periods []taskstats.AggregatePeriod) [][]string {
+	rows := make([][]string, 0, len(periods))
+	for _, period := range periods {
+		rows = append(rows, []string{
+			period.Key,
+			agent.FormatUsageCostUSD(period.Totals.CostMicroUSD),
+			formatTaskStatsOptionalCost(period.AverageCostMicroUSD()),
+			strconv.Itoa(period.Totals.UnknownCost),
+		})
+	}
+	return rows
+}
+
+func formatTaskStatsOptionalDuration(duration time.Duration, ok bool) string {
+	if !ok {
+		return "-"
+	}
+	return duration.String()
+}
+
+func formatTaskStatsOptionalTokenCount(tokens int, ok bool) string {
+	if !ok {
+		return "-"
+	}
+	return formatTaskStatsTokenCount(tokens)
+}
+
+func formatTaskStatsTokenCount(tokens int) string {
+	if tokens < 0 {
+		tokens = 0
+	}
+	units := []struct {
+		value int
+		unit  string
+	}{
+		{value: 1_000_000_000, unit: "B"},
+		{value: 1_000_000, unit: "M"},
+		{value: 1_000, unit: "K"},
+	}
+	for _, unit := range units {
+		if tokens >= unit.value {
+			whole := tokens / unit.value
+			tenth := tokens % unit.value * 10 / unit.value
+			if tenth == 0 {
+				return fmt.Sprintf("%d%s", whole, unit.unit)
+			}
+			return fmt.Sprintf("%d.%d%s", whole, tenth, unit.unit)
+		}
+	}
+	return strconv.Itoa(tokens)
+}
+
+func formatTaskStatsOptionalCost(totalMicroUSD int64, ok bool) string {
+	if !ok {
+		return "-"
+	}
+	return agent.FormatUsageCostUSD(totalMicroUSD)
+}
+
+func taskStatsTrendBar(value int, maxValue int) string {
+	const width = 20
+	if value <= 0 || maxValue <= 0 {
+		return "-"
+	}
+	length := value * width / maxValue
+	if length == 0 {
+		length = 1
+	}
+	return strings.Repeat("#", length)
 }
 
 type taskStatsExecutionRecord struct {

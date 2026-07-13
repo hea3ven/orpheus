@@ -303,6 +303,14 @@ func createdReviewFollowUps(taskState taskstate.TaskState) []createdReviewFollow
 
 func renderReviewNextStep(output io.Writer, taskID string, review taskstate.ReviewAttempt) error {
 	switch review.Status {
+	case taskstate.ReviewStatusWaitingForManual:
+		_, err := fmt.Fprintf(
+			output,
+			"\nNext step: run `orpheus task review %s` to resume manual step %s.\n",
+			taskID,
+			formatReviewValue(review.Step),
+		)
+		return err
 	case taskstate.ReviewStatusBlocked:
 		if taskstate.ReviewHasOpenBlockers(review) {
 			_, err := fmt.Fprintf(
