@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/state"
@@ -27,6 +28,25 @@ type SyncRunStore interface {
 	RecordTaskClosed(repoID, taskID string, opts taskstate.TaskClosedOptions) (taskstate.Event, error)
 }
 
+// SyncGit performs the Git operations used by task sync branch updates.
+type SyncGit interface {
+	SyncTaskBranchWithDefault(
+		ctx context.Context,
+		opts gitmeta.TaskBranchSyncOptions,
+	) (gitmeta.TaskBranchSyncResult, error)
+}
+
+// LocalSyncGit delegates sync Git operations to the local git binary.
+type LocalSyncGit struct{}
+
+// SyncTaskBranchWithDefault merges origin/default into a task branch and pushes it.
+func (LocalSyncGit) SyncTaskBranchWithDefault(
+	ctx context.Context,
+	opts gitmeta.TaskBranchSyncOptions,
+) (gitmeta.TaskBranchSyncResult, error) {
+	return gitmeta.SyncTaskBranchWithDefault(ctx, opts)
+}
+
 // SyncService reconciles backend task state from recorded pull request state.
 type SyncService struct {
 	Paths          state.Paths
@@ -34,6 +54,7 @@ type SyncService struct {
 	BackendFactory SyncBackendFactory
 	ScanFactory    SyncScanBackendFactory
 	RunStore       SyncRunStore
+	Git            SyncGit
 	PRProvider     pullrequest.Provider
 }
 
@@ -48,6 +69,9 @@ type SyncStatus string
 const (
 	// SyncStatusAlreadyInReview means the task's recorded PR is still open.
 	SyncStatusAlreadyInReview SyncStatus = "already_in_review"
+
+	// SyncStatusBranchUpdated means an open PR branch was updated from the default branch.
+	SyncStatusBranchUpdated SyncStatus = "branch_updated"
 
 	// SyncStatusPRMerged means the task's recorded PR is merged.
 	SyncStatusPRMerged SyncStatus = "pr_merged"
@@ -106,10 +130,14 @@ func (s SyncService) Sync(ctx context.Context, opts SyncOptions) (SyncResult, er
 	if err := s.validate(); err != nil {
 		return SyncResult{}, err
 	}
+	gitState := s.Git
+	if gitState == nil {
+		gitState = LocalSyncGit{}
+	}
 
 	var result SyncResult
 	err := state.WithGlobalMutationLock(s.Paths, syncLockOperation, func() error {
-		synced, err := s.syncLocked(ctx, opts)
+		synced, err := s.syncLocked(ctx, opts, gitState)
 		if err != nil {
 			return err
 		}
@@ -130,6 +158,10 @@ func (s SyncService) SyncAll(ctx context.Context) (SyncAllResult, error) {
 	if err := s.validate(); err != nil {
 		return SyncAllResult{}, err
 	}
+	gitState := s.Git
+	if gitState == nil {
+		gitState = LocalSyncGit{}
+	}
 
 	var result SyncAllResult
 	err := state.WithGlobalMutationLock(s.Paths, syncLockOperation, func() error {
@@ -137,7 +169,7 @@ func (s SyncService) SyncAll(ctx context.Context) (SyncAllResult, error) {
 		result.Failures = append(result.Failures, failures...)
 
 		for _, candidate := range candidates {
-			synced, err := s.syncLocked(ctx, SyncOptions{TaskID: candidate.taskID})
+			synced, err := s.syncLocked(ctx, SyncOptions{TaskID: candidate.taskID}, gitState)
 			if err != nil {
 				result.Failures = append(result.Failures, SyncAllFailure{
 					Repository: candidate.source.Repository,
@@ -243,7 +275,7 @@ func isSyncAllRunnableTask(taskItem task.Task) bool {
 	return taskItem.IssueType != task.IssueTypeEpic
 }
 
-func (s SyncService) syncLocked(ctx context.Context, opts SyncOptions) (SyncResult, error) {
+func (s SyncService) syncLocked(ctx context.Context, opts SyncOptions, gitState SyncGit) (SyncResult, error) {
 	target, err := s.resolveTarget(ctx, opts)
 	if err != nil {
 		return SyncResult{}, err
@@ -253,7 +285,7 @@ func (s SyncService) syncLocked(ctx context.Context, opts SyncOptions) (SyncResu
 		return s.skip(target, taskstate.RunAttempt{}, "task is closed"), nil
 	}
 
-	if result, ok, err := s.pollExistingPR(ctx, target); ok || err != nil {
+	if result, ok, err := s.pollExistingPR(ctx, target, gitState); ok || err != nil {
 		if err != nil {
 			return SyncResult{}, err
 		}
@@ -263,7 +295,7 @@ func (s SyncService) syncLocked(ctx context.Context, opts SyncOptions) (SyncResu
 	return s.skip(target, taskstate.RunAttempt{}, task.MetadataPRURL+" is not set"), nil
 }
 
-func (s SyncService) pollExistingPR(ctx context.Context, target syncTarget) (SyncResult, bool, error) {
+func (s SyncService) pollExistingPR(ctx context.Context, target syncTarget, gitState SyncGit) (SyncResult, bool, error) {
 	metadata := target.task.OrpheusMetadata()
 	prURL := strings.TrimSpace(metadata.PRURL)
 	if !metadata.HasPRURL || prURL == "" {
@@ -287,11 +319,20 @@ func (s SyncService) pollExistingPR(ctx context.Context, target syncTarget) (Syn
 		PRURL:      observedURL,
 	}
 
+	return s.handleExistingPRStatus(ctx, target, gitState, status, result, observedURL)
+}
+
+func (s SyncService) handleExistingPRStatus(
+	ctx context.Context,
+	target syncTarget,
+	gitState SyncGit,
+	status pullrequest.PullRequestStatus,
+	result SyncResult,
+	observedURL string,
+) (SyncResult, bool, error) {
 	switch status.State {
 	case pullrequest.StateOpen:
-		result.Status = SyncStatusAlreadyInReview
-		result.Reason = "PR is still open for review"
-		return result, true, nil
+		return s.handleOpenPR(ctx, target, gitState, result)
 	case pullrequest.StateMerged:
 		result.Status = SyncStatusPRMerged
 		result.Reason = "PR is merged; backend task was closed"
@@ -320,6 +361,88 @@ func (s SyncService) pollExistingPR(ctx context.Context, target syncTarget) (Syn
 		return SyncResult{}, true, fmt.Errorf("task %s PR %s is closed without merge; no backend state was changed", target.task.ID, observedURL)
 	default:
 		return SyncResult{}, true, fmt.Errorf("task %s PR %s has unsupported provider state %q", target.task.ID, observedURL, status.State)
+	}
+}
+
+func (s SyncService) handleOpenPR(
+	ctx context.Context,
+	target syncTarget,
+	gitState SyncGit,
+	result SyncResult,
+) (SyncResult, bool, error) {
+	result.Status = SyncStatusAlreadyInReview
+	result.Reason = "PR is still open for review"
+	updated, err := s.syncOpenPRBranch(ctx, target, gitState)
+	if err != nil {
+		return SyncResult{}, true, err
+	}
+	if updated.Status == SyncStatus("") {
+		result.Reason = "branch update skipped: " + updated.Reason
+		return result, true, nil
+	}
+	result.Status = updated.Status
+	result.Reason = updated.Reason
+	return result, true, nil
+}
+
+func (s SyncService) syncOpenPRBranch(ctx context.Context, target syncTarget, gitState SyncGit) (SyncResult, error) {
+	repo := target.source.Repository
+	targets, err := ExpectedTargetsForTask(repo, target.task.ID, s.Paths)
+	if err != nil {
+		return SyncResult{}, fmt.Errorf("resolve sync targets for task %s: %w", target.task.ID, err)
+	}
+	taskTarget, err := ClassifyMetadataTarget(target.task.OrpheusMetadata(), targets)
+	if err != nil {
+		return SyncResult{
+			Reason: fmt.Sprintf("task metadata target is incomplete or unsupported: %v", err),
+		}, nil
+	}
+	if !isFeatureBranchTarget(taskTarget.Kind) {
+		return SyncResult{
+			Reason: fmt.Sprintf("task target %s is not an Orpheus-managed PR branch", taskTarget.Kind.DisplayName()),
+		}, nil
+	}
+
+	branchSync, err := gitState.SyncTaskBranchWithDefault(ctx, gitmeta.TaskBranchSyncOptions{
+		RepoPath:      repo.Path,
+		DefaultBranch: repo.DefaultBranch,
+		Branch:        taskTarget.Branch,
+		Worktree:      taskTarget.Worktree,
+	})
+	if err != nil {
+		return SyncResult{}, fmt.Errorf("update open PR branch for task %s: %w", target.task.ID, err)
+	}
+
+	switch branchSync.Status {
+	case gitmeta.TaskBranchSyncAlreadyCurrent:
+		return SyncResult{
+			Status: SyncStatusAlreadyInReview,
+			Reason: fmt.Sprintf(
+				"branch %s already includes %s",
+				taskTarget.Branch,
+				repo.DefaultBranch,
+			),
+		}, nil
+	case gitmeta.TaskBranchSyncPushed:
+		return SyncResult{
+			Status: SyncStatusBranchUpdated,
+			Reason: fmt.Sprintf(
+				"pushed %s because the local branch already includes %s but origin was behind",
+				taskTarget.Branch,
+				repo.DefaultBranch,
+			),
+		}, nil
+	case gitmeta.TaskBranchSyncUpdated:
+		return SyncResult{
+			Status: SyncStatusBranchUpdated,
+			Reason: fmt.Sprintf(
+				"merged %s into %s and pushed the branch",
+				repo.DefaultBranch,
+				taskTarget.Branch,
+			),
+		}, nil
+	default:
+		return SyncResult{}, fmt.Errorf("update open PR branch for task %s: unsupported branch sync status %q", target.task.ID, branchSync.Status)
 	}
 }
 

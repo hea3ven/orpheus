@@ -2950,9 +2950,19 @@ func renderTaskSyncResult(output interface{ Write([]byte) (int, error) }, result
 	case workflow.SyncStatusAlreadyInReview:
 		_, err := fmt.Fprintf(
 			output,
-			"Synced %s: PR %s is still open for review. No backend changes were made.\n",
+			"Synced %s: PR %s is still open for review. %s. No backend changes were made.\n",
 			result.Task.ID,
 			result.PRURL,
+			result.Reason,
+		)
+		return err
+	case workflow.SyncStatusBranchUpdated:
+		_, err := fmt.Fprintf(
+			output,
+			"Synced %s: PR %s is still open for review. %s.\n",
+			result.Task.ID,
+			result.PRURL,
+			result.Reason,
 		)
 		return err
 	case workflow.SyncStatusPRMerged:
@@ -2984,6 +2994,11 @@ func renderTaskSyncAllResult(output interface{ Write([]byte) (int, error) }, res
 
 	if err := renderTaskSyncAllGroup(output, "Open/in-review PRs", result.Results, func(syncResult workflow.SyncResult) bool {
 		return syncResult.Status == workflow.SyncStatusAlreadyInReview
+	}); err != nil {
+		return err
+	}
+	if err := renderTaskSyncAllGroup(output, "Updated open PR branches", result.Results, func(syncResult workflow.SyncResult) bool {
+		return syncResult.Status == workflow.SyncStatusBranchUpdated
 	}); err != nil {
 		return err
 	}
@@ -3031,7 +3046,10 @@ func renderTaskSyncAllResultLine(output interface{ Write([]byte) (int, error) },
 	prefix := fmt.Sprintf("  - %s (%s): ", result.Task.ID, result.Repository.ID)
 	switch result.Status {
 	case workflow.SyncStatusAlreadyInReview:
-		_, err := fmt.Fprintf(output, "%sPR %s is still open for review\n", prefix, result.PRURL)
+		_, err := fmt.Fprintf(output, "%sPR %s is still open for review; %s\n", prefix, result.PRURL, result.Reason)
+		return err
+	case workflow.SyncStatusBranchUpdated:
+		_, err := fmt.Fprintf(output, "%sPR %s branch updated; %s\n", prefix, result.PRURL, result.Reason)
 		return err
 	case workflow.SyncStatusPRMerged:
 		_, err := fmt.Fprintf(output, "%sPR %s is merged; backend task was closed\n", prefix, result.PRURL)

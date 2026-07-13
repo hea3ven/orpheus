@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
@@ -20,6 +21,14 @@ type fakeSyncRunStore struct {
 	events     []fakeTaskClosedEvent
 	recordErr  error
 	recordedAt time.Time
+}
+
+type fakeSyncGit struct {
+	requests        []gitmeta.TaskBranchSyncOptions
+	result          gitmeta.TaskBranchSyncResult
+	resultsByBranch map[string]gitmeta.TaskBranchSyncResult
+	err             error
+	errsByBranch    map[string]error
 }
 
 type fakeSyncBackend struct {
@@ -41,6 +50,27 @@ type fakeTaskClosedEvent struct {
 	repoID string
 	taskID string
 	opts   taskstate.TaskClosedOptions
+}
+
+func (g *fakeSyncGit) SyncTaskBranchWithDefault(
+	_ context.Context,
+	opts gitmeta.TaskBranchSyncOptions,
+) (gitmeta.TaskBranchSyncResult, error) {
+	g.requests = append(g.requests, opts)
+	if err, ok := g.errsByBranch[opts.Branch]; ok {
+		return gitmeta.TaskBranchSyncResult{}, err
+	}
+	if g.err != nil {
+		return gitmeta.TaskBranchSyncResult{}, g.err
+	}
+	if result, ok := g.resultsByBranch[opts.Branch]; ok {
+		return result, nil
+	}
+	result := g.result
+	if result.Status == "" {
+		result.Status = gitmeta.TaskBranchSyncAlreadyCurrent
+	}
+	return result, nil
 }
 
 func (b *fakeSyncBackend) Get(_ context.Context, id string) (task.Task, error) {
@@ -260,6 +290,110 @@ func TestSyncServicePollsOpenPRWithoutLocalEligibility(t *testing.T) {
 	}
 	if len(backend.setPRURLs) != 0 {
 		t.Fatalf("set PR URLs = %#v, want no metadata write", backend.setPRURLs)
+	}
+}
+
+func TestSyncServiceUpdatesOpenPRBranchFromDefault(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   targets.WorktreeTeam.Branch,
+			task.MetadataWorktree: targets.WorktreeTeam.Worktree,
+			task.MetadataPRURL:    "https://github.test/org/repo/pull/42",
+		},
+	}
+	service, provider, backend := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
+	gitState := &fakeSyncGit{
+		result: gitmeta.TaskBranchSyncResult{Status: gitmeta.TaskBranchSyncUpdated},
+	}
+	service.Git = gitState
+	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateOpen}
+
+	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Status != workflow.SyncStatusBranchUpdated ||
+		!strings.Contains(result.Reason, "merged main into "+targets.WorktreeTeam.Branch) {
+		t.Fatalf("result = %#v, want branch updated result", result)
+	}
+	if len(gitState.requests) != 1 {
+		t.Fatalf("git requests = %#v, want one branch sync", gitState.requests)
+	}
+	req := gitState.requests[0]
+	if req.RepoPath != repoPath ||
+		req.DefaultBranch != "main" ||
+		req.Branch != targets.WorktreeTeam.Branch ||
+		req.Worktree != targets.WorktreeTeam.Worktree {
+		t.Fatalf("git request = %#v, want repo/default/task branch metadata", req)
+	}
+	if len(backend.closed) != 0 || len(backend.setPRURLs) != 0 {
+		t.Fatalf("backend closed=%#v set=%#v, want no backend mutation", backend.closed, backend.setPRURLs)
+	}
+}
+
+func TestSyncServiceReportsOpenPRBranchAlreadyCurrent(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   targets.WorktreeTeam.Branch,
+			task.MetadataWorktree: targets.WorktreeTeam.Worktree,
+			task.MetadataPRURL:    "https://github.test/org/repo/pull/42",
+		},
+	}
+	service, provider, _ := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
+	gitState := &fakeSyncGit{
+		result: gitmeta.TaskBranchSyncResult{Status: gitmeta.TaskBranchSyncAlreadyCurrent},
+	}
+	service.Git = gitState
+	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateOpen}
+
+	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Status != workflow.SyncStatusAlreadyInReview ||
+		!strings.Contains(result.Reason, "already includes main") {
+		t.Fatalf("result = %#v, want already-current open PR branch", result)
+	}
+	if len(gitState.requests) != 1 {
+		t.Fatalf("git requests = %#v, want one branch sync", gitState.requests)
+	}
+}
+
+func TestSyncServiceSkipsOpenPRBranchUpdateWithoutManagedMetadata(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	paths, source, _ := newSyncTestSource(t, repoPath, "op-1")
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataPRURL: "https://github.test/org/repo/pull/42",
+		},
+	}
+	service, provider, _ := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
+	gitState := &fakeSyncGit{
+		err: errors.New("git should not be called"),
+	}
+	service.Git = gitState
+	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateOpen}
+
+	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Status != workflow.SyncStatusAlreadyInReview ||
+		!strings.Contains(result.Reason, "branch update skipped") {
+		t.Fatalf("result = %#v, want open PR with branch update skipped", result)
+	}
+	if len(gitState.requests) != 0 {
+		t.Fatalf("git requests = %#v, want none", gitState.requests)
 	}
 }
 
@@ -718,6 +852,85 @@ func TestSyncServiceSyncAllScansPRBoundaryTasksAndContinuesAfterFailures(t *test
 	}
 }
 
+//nolint:funlen // The batch continuation scenario is clearer as one integrated workflow fixture.
+func TestSyncServiceSyncAllContinuesAfterOpenPRBranchUpdateFailure(t *testing.T) {
+	paths, source, targets := newSyncTestSource(t, filepath.Join(t.TempDir(), "repo"), "op-fail")
+	currentTargets := mustSyncExpectedTargets(t, source.Repository, "op-current", paths)
+	backend := &fakeSyncBackend{
+		tasks: []task.Task{
+			{
+				ID:        "op-fail",
+				Status:    task.StatusInProgress,
+				IssueType: task.IssueTypeTask,
+				Metadata: task.Metadata{
+					task.MetadataBranch:   targets.WorktreeTeam.Branch,
+					task.MetadataWorktree: targets.WorktreeTeam.Worktree,
+					task.MetadataPRURL:    "https://github.test/org/repo/pull/1",
+				},
+			},
+			{
+				ID:        "op-current",
+				Status:    task.StatusInProgress,
+				IssueType: task.IssueTypeTask,
+				Metadata: task.Metadata{
+					task.MetadataBranch:   currentTargets.WorktreeTeam.Branch,
+					task.MetadataWorktree: currentTargets.WorktreeTeam.Worktree,
+					task.MetadataPRURL:    "https://github.test/org/repo/pull/2",
+				},
+			},
+		},
+	}
+	provider := &fakePRProvider{
+		statusByURL: map[string]pullrequest.PullRequestStatus{
+			"https://github.test/org/repo/pull/1": {
+				URL:   "https://github.test/org/repo/pull/1",
+				State: pullrequest.StateOpen,
+			},
+			"https://github.test/org/repo/pull/2": {
+				URL:   "https://github.test/org/repo/pull/2",
+				State: pullrequest.StateOpen,
+			},
+		},
+	}
+	gitErr := errors.New("merge conflict")
+	gitState := &fakeSyncGit{
+		errsByBranch: map[string]error{
+			targets.WorktreeTeam.Branch: gitErr,
+		},
+		resultsByBranch: map[string]gitmeta.TaskBranchSyncResult{
+			currentTargets.WorktreeTeam.Branch: {Status: gitmeta.TaskBranchSyncAlreadyCurrent},
+		},
+	}
+	service := workflow.SyncService{
+		Paths:   paths,
+		Sources: []task.RepositorySource{source},
+		BackendFactory: func(task.RepositorySource) (task.SyncBackend, error) {
+			return backend, nil
+		},
+		RunStore:   &fakeSyncRunStore{},
+		Git:        gitState,
+		PRProvider: provider,
+	}
+
+	result, err := service.SyncAll(context.Background())
+	if err != nil {
+		t.Fatalf("sync all: %v", err)
+	}
+	if len(result.Results) != 1 ||
+		result.Results[0].Task.ID != "op-current" ||
+		result.Results[0].Status != workflow.SyncStatusAlreadyInReview {
+		t.Fatalf("results = %#v, want op-current already in review", result.Results)
+	}
+	if len(result.Failures) != 1 ||
+		result.Failures[0].TaskID != "op-fail" ||
+		!errors.Is(result.Failures[0].Err, gitErr) {
+		t.Fatalf("failures = %#v, want op-fail git failure", result.Failures)
+	}
+	if len(gitState.requests) != 2 {
+		t.Fatalf("git requests = %#v, want both open PR candidates attempted", gitState.requests)
+	}
+}
+
 func newSyncAllScanSources(t *testing.T) (state.Paths, task.RepositorySource, task.RepositorySource) {
 	t.Helper()
 	root := t.TempDir()
@@ -1149,6 +1362,7 @@ func newSyncTestService(
 			return backend, nil
 		},
 		RunStore:   &fakeSyncRunStore{},
+		Git:        &fakeSyncGit{},
 		PRProvider: provider,
 	}
 	return service, provider, backend
