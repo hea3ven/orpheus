@@ -50,6 +50,37 @@ type TaskWorktreeSetupResult struct {
 	Lifecycle    TaskWorktreeLifecycle
 }
 
+// TaskBranchSyncStatus describes whether a PR branch changed during sync.
+type TaskBranchSyncStatus string
+
+const (
+	// TaskBranchSyncAlreadyCurrent means the task branch already contains origin/default.
+	TaskBranchSyncAlreadyCurrent TaskBranchSyncStatus = "already_current"
+
+	// TaskBranchSyncPushed means the task branch already contains origin/default and was pushed.
+	TaskBranchSyncPushed TaskBranchSyncStatus = "pushed"
+
+	// TaskBranchSyncUpdated means origin/default was merged and the task branch was pushed.
+	TaskBranchSyncUpdated TaskBranchSyncStatus = "updated"
+)
+
+// TaskBranchSyncOptions describes a PR branch update from the registered default branch.
+type TaskBranchSyncOptions struct {
+	RepoPath      string
+	DefaultBranch string
+	Branch        string
+	Worktree      string
+}
+
+// TaskBranchSyncResult reports the local branch state after sync.
+type TaskBranchSyncResult struct {
+	Status        TaskBranchSyncStatus
+	Branch        string
+	DefaultBranch string
+	PreviousHead  string
+	Head          string
+}
+
 type taskWorktreePlan struct {
 	RepoID        string
 	RepoName      string
@@ -65,6 +96,13 @@ type repoRootPlan struct {
 	RepoName      string
 	RepoPath      string
 	DefaultBranch string
+}
+
+type taskBranchSyncPlan struct {
+	RepoPath      string
+	DefaultBranch string
+	Branch        string
+	Worktree      string
 }
 
 // ExpectedTaskWorktree returns the deterministic branch and worktree path for a task without mutating Git.
@@ -247,6 +285,97 @@ func SetupRepoRootTaskBranch(ctx context.Context, opts TaskWorktreeOptions) (Tas
 		result.Lifecycle = TaskWorktreeLifecycleTaskBranchCreated
 	}
 
+	return result, nil
+}
+
+// SyncTaskBranchWithDefault fetches origin branches, merges default into a clean task branch, and pushes the branch.
+func SyncTaskBranchWithDefault(ctx context.Context, opts TaskBranchSyncOptions) (TaskBranchSyncResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	plan, err := newTaskBranchSyncPlan(opts)
+	if err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	result := TaskBranchSyncResult{
+		Branch:        plan.Branch,
+		DefaultBranch: plan.DefaultBranch,
+	}
+
+	if err := validateTaskBranchSyncCheckout(ctx, plan); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if err := requireCleanRepoRootFor(ctx, plan.Worktree, "task sync branch update"); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	taskBranchFetched, err := fetchTaskBranch(ctx, plan.Worktree, plan.Branch)
+	if err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if taskBranchFetched {
+		if err := fastForwardTaskBranchFromOrigin(ctx, plan.Worktree, plan.Branch); err != nil {
+			return TaskBranchSyncResult{}, err
+		}
+		if err := requireCleanRepoRootFor(ctx, plan.Worktree, "task sync branch update"); err != nil {
+			return TaskBranchSyncResult{}, err
+		}
+	}
+	if _, err := prepareDefaultBranchRef(ctx, plan.Worktree, plan.DefaultBranch); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+
+	return syncFetchedTaskBranchWithDefault(ctx, plan, result)
+}
+
+func syncFetchedTaskBranchWithDefault(
+	ctx context.Context,
+	plan taskBranchSyncPlan,
+	result TaskBranchSyncResult,
+) (TaskBranchSyncResult, error) {
+	previousHead, err := HeadCommit(ctx, plan.Worktree)
+	if err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	result.PreviousHead = previousHead
+
+	remoteRef := "refs/remotes/origin/" + plan.DefaultBranch
+	containsDefault, err := branchContainsRef(ctx, plan.Worktree, "HEAD", remoteRef)
+	if err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if containsDefault {
+		pushed, err := pushTaskBranchIfRemoteBehind(ctx, plan.Worktree, plan.Branch, previousHead)
+		if err != nil {
+			return TaskBranchSyncResult{}, err
+		}
+		result.Status = TaskBranchSyncAlreadyCurrent
+		if pushed {
+			result.Status = TaskBranchSyncPushed
+		}
+		result.Head = previousHead
+		return result, nil
+	}
+
+	if err := verifyMergeWouldBeClean(ctx, plan.Worktree, remoteRef); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if err := mergeDefaultIntoTaskBranch(ctx, plan.Worktree, plan.DefaultBranch, remoteRef); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if err := requireCleanRepoRootFor(ctx, plan.Worktree, "task sync branch update"); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if err := PushTaskBranch(ctx, plan.Worktree, plan.Branch); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+
+	head, err := HeadCommit(ctx, plan.Worktree)
+	if err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	result.Status = TaskBranchSyncUpdated
+	result.Head = head
 	return result, nil
 }
 
@@ -570,6 +699,24 @@ func newTaskWorktreePlan(opts TaskWorktreeOptions) (taskWorktreePlan, error) {
 	}, nil
 }
 
+func newTaskBranchSyncPlan(opts TaskBranchSyncOptions) (taskBranchSyncPlan, error) {
+	repoPath, err := normalizeRegisteredRepoPath(opts.RepoPath)
+	if err != nil {
+		return taskBranchSyncPlan{}, err
+	}
+	worktree, err := normalizeRegisteredRepoPath(opts.Worktree)
+	if err != nil {
+		return taskBranchSyncPlan{}, fmt.Errorf("task branch worktree: %w", err)
+	}
+
+	return taskBranchSyncPlan{
+		RepoPath:      repoPath,
+		DefaultBranch: strings.TrimSpace(opts.DefaultBranch),
+		Branch:        strings.TrimSpace(opts.Branch),
+		Worktree:      worktree,
+	}, nil
+}
+
 func newRepoRootPlan(opts RepoRootOptions) (repoRootPlan, error) {
 	repoID, err := cleanPathComponent("repo id", opts.RepoID)
 	if err != nil {
@@ -614,6 +761,82 @@ func cleanPathComponent(label string, value string) (string, error) {
 		return "", fmt.Errorf("%s %q cannot be used in deterministic task worktree path", label, value)
 	}
 	return value, nil
+}
+
+func validateTaskBranchSyncCheckout(ctx context.Context, plan taskBranchSyncPlan) error {
+	repoCommonDir, err := validateTaskBranchSyncRegisteredRepo(ctx, plan)
+	if err != nil {
+		return err
+	}
+	if err := validateTaskBranchSyncWorktree(ctx, plan, repoCommonDir); err != nil {
+		return err
+	}
+	current, err := currentBranchAt(ctx, plan.Worktree)
+	if err != nil {
+		return fmt.Errorf("sync task branch %q: inspect current branch: %w", plan.Branch, err)
+	}
+	if current != plan.Branch {
+		return fmt.Errorf("sync task branch %q: worktree %q is on branch %q", plan.Branch, plan.Worktree, current)
+	}
+	return nil
+}
+
+func validateTaskBranchSyncRegisteredRepo(ctx context.Context, plan taskBranchSyncPlan) (string, error) {
+	repoRoot, err := worktreeRoot(ctx, plan.RepoPath)
+	if err != nil {
+		return "", fmt.Errorf("sync task branch %q: inspect registered repo root %q: %w", plan.Branch, plan.RepoPath, err)
+	}
+	if repoRoot != plan.RepoPath {
+		return "", fmt.Errorf(
+			"sync task branch %q: registered repo path %q resolves to Git root %q; register the repository root before syncing PR branches",
+			plan.Branch,
+			plan.RepoPath,
+			repoRoot,
+		)
+	}
+	if err := validateBranchRef(ctx, repoRoot, "task branch", plan.Branch); err != nil {
+		return "", fmt.Errorf("sync task branch %q: %w", plan.Branch, err)
+	}
+	if err := validateBranchRef(ctx, repoRoot, "default branch", plan.DefaultBranch); err != nil {
+		return "", fmt.Errorf("sync task branch %q: %w", plan.Branch, err)
+	}
+	if err := requireOriginRemoteFor(ctx, repoRoot, "task sync branch updates"); err != nil {
+		return "", fmt.Errorf("sync task branch %q: %w", plan.Branch, err)
+	}
+	repoCommonDir, err := gitCommonDir(ctx, repoRoot)
+	if err != nil {
+		return "", fmt.Errorf("sync task branch %q: inspect registered repo common Git dir: %w", plan.Branch, err)
+	}
+	return repoCommonDir, nil
+}
+
+func validateTaskBranchSyncWorktree(ctx context.Context, plan taskBranchSyncPlan, repoCommonDir string) error {
+	worktreeRootPath, err := worktreeRoot(ctx, plan.Worktree)
+	if err != nil {
+		return fmt.Errorf("sync task branch %q: inspect worktree %q: %w", plan.Branch, plan.Worktree, err)
+	}
+	if worktreeRootPath != plan.Worktree {
+		return fmt.Errorf(
+			"sync task branch %q: worktree %q resolves to Git root %q; expected the worktree root itself",
+			plan.Branch,
+			plan.Worktree,
+			worktreeRootPath,
+		)
+	}
+	worktreeCommonDir, err := gitCommonDir(ctx, plan.Worktree)
+	if err != nil {
+		return fmt.Errorf("sync task branch %q: inspect worktree common Git dir: %w", plan.Branch, err)
+	}
+	if worktreeCommonDir != repoCommonDir {
+		return fmt.Errorf(
+			"sync task branch %q: worktree %q points at Git common dir %q; expected %q",
+			plan.Branch,
+			plan.Worktree,
+			worktreeCommonDir,
+			repoCommonDir,
+		)
+	}
+	return nil
 }
 
 func validateBranchRef(ctx context.Context, dir string, label string, branch string) error {
@@ -716,6 +939,32 @@ func fetchDefaultBranch(ctx context.Context, repoRoot string, defaultBranch stri
 	return nil
 }
 
+func fetchTaskBranch(ctx context.Context, repoRoot string, branch string) (bool, error) {
+	remoteHead := "refs/heads/" + branch
+	output, err := runGitContext(ctx, repoRoot, "ls-remote", "--exit-code", "origin", remoteHead)
+	if err != nil {
+		if gitExitCode(err) == 2 {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect origin/%s: %w%s", branch, err, gitOutputSuffix(output))
+	}
+	if strings.TrimSpace(output) == "" {
+		return false, nil
+	}
+
+	refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branch, branch)
+	output, err = runGitContext(ctx, repoRoot, "fetch", "origin", refspec)
+	if err != nil {
+		return false, fmt.Errorf("fetch origin/%s: %w%s", branch, err, gitOutputSuffix(output))
+	}
+
+	remoteRef := "refs/remotes/origin/" + branch
+	if err := verifyRef(ctx, repoRoot, remoteRef); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func requireCleanRepoRoot(ctx context.Context, repoRoot string) error {
 	return requireCleanRepoRootFor(ctx, repoRoot, "with --main")
 }
@@ -785,6 +1034,90 @@ func fastForwardFromOrigin(ctx context.Context, repoRoot string, defaultBranch s
 		return fmt.Errorf("fast-forward default branch %q from origin/%s: %w%s", defaultBranch, defaultBranch, err, gitOutputSuffix(output))
 	}
 	return nil
+}
+
+func fastForwardTaskBranchFromOrigin(ctx context.Context, repoRoot string, branch string) error {
+	remoteRef := "refs/remotes/origin/" + branch
+	containsRemote, err := branchContainsRef(ctx, repoRoot, "HEAD", remoteRef)
+	if err != nil {
+		return fmt.Errorf("fast-forward task branch %q from origin/%s: inspect ancestry: %w", branch, branch, err)
+	}
+	if containsRemote {
+		return nil
+	}
+
+	remoteContainsLocal, err := branchContainsRef(ctx, repoRoot, remoteRef, "HEAD")
+	if err != nil {
+		return fmt.Errorf("fast-forward task branch %q from origin/%s: inspect ancestry: %w", branch, branch, err)
+	}
+	if !remoteContainsLocal {
+		return fmt.Errorf(
+			"fast-forward task branch %q from origin/%s: local branch is divergent from origin/%s",
+			branch,
+			branch,
+			branch,
+		)
+	}
+
+	output, err := runGitContext(ctx, repoRoot, "merge", "--ff-only", remoteRef)
+	if err != nil {
+		return fmt.Errorf("fast-forward task branch %q from origin/%s: %w%s", branch, branch, err, gitOutputSuffix(output))
+	}
+	return nil
+}
+
+func branchContainsRef(ctx context.Context, dir string, branch string, ref string) (bool, error) {
+	output, err := runGitContext(ctx, dir, "merge-base", "--is-ancestor", ref, branch)
+	if err == nil {
+		return true, nil
+	}
+	if gitExitCode(err) == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("inspect whether %s contains %s: %w%s", branch, ref, err, gitOutputSuffix(output))
+}
+
+func verifyMergeWouldBeClean(ctx context.Context, dir string, remoteRef string) error {
+	output, err := runGitContext(ctx, dir, "merge-tree", "--write-tree", "HEAD", remoteRef)
+	if err == nil {
+		return nil
+	}
+	if gitExitCode(err) == 1 {
+		return fmt.Errorf("merge default branch %s into task branch would conflict; no changes were pushed%s", remoteRef, gitOutputSuffix(output))
+	}
+	return fmt.Errorf("preflight merge default branch %s into task branch: %w%s", remoteRef, err, gitOutputSuffix(output))
+}
+
+func mergeDefaultIntoTaskBranch(ctx context.Context, dir string, defaultBranch string, remoteRef string) error {
+	output, err := runGitContext(ctx, dir, "merge", "--no-edit", remoteRef)
+	if err == nil {
+		return nil
+	}
+
+	abortOutput, abortErr := runGitContext(ctx, dir, "merge", "--abort")
+	if abortErr != nil {
+		return fmt.Errorf(
+			"merge default branch %q into task branch: %w%s; additionally failed to abort merge: %w%s",
+			defaultBranch,
+			err,
+			gitOutputSuffix(output),
+			abortErr,
+			gitOutputSuffix(abortOutput),
+		)
+	}
+	return fmt.Errorf("merge default branch %q into task branch: %w%s", defaultBranch, err, gitOutputSuffix(output))
+}
+
+func pushTaskBranchIfRemoteBehind(ctx context.Context, dir string, branch string, head string) (bool, error) {
+	remoteRef := "refs/remotes/origin/" + branch
+	output, err := runGitContext(ctx, dir, "rev-parse", "--verify", remoteRef)
+	if err == nil && strings.TrimSpace(output) == head {
+		return false, nil
+	}
+	if err := PushTaskBranch(ctx, dir, branch); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // CurrentBranch returns the current branch for dir without mutating the repository.
