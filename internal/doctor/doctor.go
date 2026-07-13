@@ -1,0 +1,328 @@
+// Package doctor contains local diagnostics and safe repair routines.
+package doctor
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hea3ven/orpheus/internal/agent"
+	"github.com/hea3ven/orpheus/internal/registry"
+	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/taskstate"
+)
+
+const (
+	OutcomeWouldRecover = "would_recover"
+	OutcomeRecovered    = "recovered"
+	OutcomeUnknown      = "unknown"
+	OutcomeAmbiguous    = "ambiguous"
+)
+
+// Options describes one doctor diagnostics run.
+type Options struct {
+	Paths    state.Paths
+	Registry registry.Registry
+	Fix      bool
+	Env      map[string]string
+}
+
+// Result summarizes one doctor diagnostics run.
+type Result struct {
+	Rows    []Row
+	Summary Summary
+}
+
+// Summary contains operator/script-friendly diagnostic counts.
+type Summary struct {
+	Checked            int
+	Recoverable        int
+	Recovered          int
+	UnresolvedUnknowns int
+	Ambiguous          int
+}
+
+// Row describes one Codex usage telemetry diagnostic.
+type Row struct {
+	RepoID         string
+	TaskID         string
+	Activity       string
+	Attempt        int
+	Step           string
+	Outcome        string
+	Reason         string
+	CandidateCount int
+	SessionID      string
+	LogPath        string
+	Model          string
+	TotalTokens    int
+}
+
+type executionRef struct {
+	repoID        string
+	taskID        string
+	activity      string
+	attempt       int
+	step          string
+	reviewAttempt int
+	execution     taskstate.AgentExecution
+}
+
+// Run executes doctor diagnostics across registered repositories and local task state.
+func Run(opts Options) (Result, error) {
+	store := taskstate.NewStore(opts.Paths)
+	env := opts.Env
+	if env == nil {
+		env = agent.CodexUsageCaptureEnvironment()
+	}
+
+	var result Result
+	for _, repo := range opts.Registry.Repos {
+		taskIDs, err := store.TaskIDs(repo.ID)
+		if err != nil {
+			return Result{}, fmt.Errorf("doctor repo %s: %w", repo.ID, err)
+		}
+		for _, taskID := range taskIDs {
+			taskState, err := store.Load(repo.ID, taskID)
+			if err != nil {
+				return Result{}, fmt.Errorf("doctor repo %s task %s: %w", repo.ID, taskID, err)
+			}
+			if err := diagnoseTask(&result, store, env, repo, taskState, opts.Fix); err != nil {
+				return Result{}, err
+			}
+		}
+	}
+	return result, nil
+}
+
+func diagnoseTask(
+	result *Result,
+	store taskstate.Store,
+	env map[string]string,
+	repo registry.Repo,
+	taskState taskstate.TaskState,
+	fix bool,
+) error {
+	executionDirs := taskExecutionDirs(repo, taskState)
+	for _, run := range taskState.Runs {
+		ref := executionRef{
+			repoID:    repo.ID,
+			taskID:    taskState.TaskID,
+			activity:  "implementation",
+			attempt:   run.Attempt,
+			step:      "-",
+			execution: run.Execution,
+		}
+		row, err := diagnoseExecution(store, env, executionDirs, ref, fix)
+		if err != nil {
+			return err
+		}
+		appendRow(result, row)
+	}
+	for _, reviewAttempt := range taskState.Reviews {
+		for _, step := range reviewAttempt.Steps {
+			if step.Execution == nil {
+				continue
+			}
+			ref := executionRef{
+				repoID:        repo.ID,
+				taskID:        taskState.TaskID,
+				activity:      "review-agent",
+				attempt:       reviewAttempt.Attempt,
+				step:          step.Name,
+				reviewAttempt: reviewAttempt.Attempt,
+				execution:     *step.Execution,
+			}
+			row, err := diagnoseExecution(store, env, executionDirs, ref, fix)
+			if err != nil {
+				return err
+			}
+			appendRow(result, row)
+		}
+	}
+	return nil
+}
+
+func diagnoseExecution(
+	store taskstate.Store,
+	env map[string]string,
+	executionDirs []string,
+	ref executionRef,
+	fix bool,
+) (*Row, error) {
+	if !needsCodexUsageDiagnostic(ref.execution) {
+		return nil, nil
+	}
+	if len(executionDirs) == 0 {
+		return unknownRow(ref, "missing_task_execution_directory"), nil
+	}
+	if ref.execution.StartedAt.IsZero() {
+		return unknownRow(ref, "missing_execution_started_at"), nil
+	}
+	usageOpts := agent.CaptureCodexUsage(agent.CodexUsageCaptureOptions{
+		ExecutionDirs: executionDirs,
+		StartedAt:     ref.execution.StartedAt,
+		Env:           env,
+	})
+	if usageOpts.UsageCapture.Status != taskstate.UsageCaptureCaptured ||
+		usageOpts.Session == nil ||
+		usageOpts.Usage == nil {
+		return unresolvedRow(ref, usageOpts.UsageCapture), nil
+	}
+
+	row := recoveredRow(ref, usageOpts, fix)
+	if !fix {
+		return &row, nil
+	}
+	if err := persistRecovery(store, ref, usageOpts); err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+func needsCodexUsageDiagnostic(execution taskstate.AgentExecution) bool {
+	if strings.TrimSpace(execution.Harness) != "codex" {
+		return false
+	}
+	if execution.Usage == nil || execution.Session == nil {
+		return true
+	}
+	if strings.TrimSpace(execution.Session.ID) == "" && strings.TrimSpace(execution.Session.LogPath) == "" {
+		return true
+	}
+	if strings.TrimSpace(execution.Model) == "" {
+		return true
+	}
+	return execution.UsageCapture.Status != taskstate.UsageCaptureCaptured
+}
+
+func taskExecutionDirs(repo registry.Repo, taskState taskstate.TaskState) []string {
+	dirs := make([]string, 0, 2)
+	dirs = appendTaskExecutionDir(dirs, taskState.Target.Worktree)
+	if len(dirs) == 0 {
+		dirs = appendTaskExecutionDir(dirs, repo.Path)
+	}
+	return dirs
+}
+
+func appendTaskExecutionDir(dirs []string, dir string) []string {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return dirs
+	}
+	for _, existing := range dirs {
+		if existing == dir {
+			return dirs
+		}
+	}
+	return append(dirs, dir)
+}
+
+func unresolvedRow(ref executionRef, capture taskstate.AgentUsageCapture) *Row {
+	outcome := OutcomeUnknown
+	if capture.Status == taskstate.UsageCaptureAmbiguous {
+		outcome = OutcomeAmbiguous
+	}
+	reason := strings.TrimSpace(capture.Reason)
+	if reason == "" {
+		reason = "usage_not_recorded"
+	}
+	return &Row{
+		RepoID:         ref.repoID,
+		TaskID:         ref.taskID,
+		Activity:       ref.activity,
+		Attempt:        ref.attempt,
+		Step:           ref.step,
+		Outcome:        outcome,
+		Reason:         reason,
+		CandidateCount: capture.CandidateCount,
+	}
+}
+
+func unknownRow(ref executionRef, reason string) *Row {
+	return unresolvedRow(ref, taskstate.AgentUsageCapture{
+		Status: taskstate.UsageCaptureUnknown,
+		Reason: reason,
+	})
+}
+
+func recoveredRow(ref executionRef, usageOpts taskstate.RecordRunUsageOptions, fix bool) Row {
+	outcome := OutcomeWouldRecover
+	if fix {
+		outcome = OutcomeRecovered
+	}
+	row := Row{
+		RepoID:         ref.repoID,
+		TaskID:         ref.taskID,
+		Activity:       ref.activity,
+		Attempt:        ref.attempt,
+		Step:           ref.step,
+		Outcome:        outcome,
+		Reason:         usageOpts.UsageCapture.Reason,
+		CandidateCount: usageOpts.UsageCapture.CandidateCount,
+		Model:          usageOpts.Model,
+	}
+	if usageOpts.Session != nil {
+		row.SessionID = usageOpts.Session.ID
+		row.LogPath = usageOpts.Session.LogPath
+	}
+	if usageOpts.Usage != nil {
+		row.TotalTokens = usageOpts.Usage.TotalTokens
+	}
+	return row
+}
+
+func persistRecovery(
+	store taskstate.Store,
+	ref executionRef,
+	usageOpts taskstate.RecordRunUsageOptions,
+) error {
+	switch ref.activity {
+	case "implementation":
+		if _, err := store.RecordRunUsage(ref.repoID, ref.taskID, ref.attempt, usageOpts); err != nil {
+			return fmt.Errorf("doctor recover implementation usage for %s/%s attempt %d: %w",
+				ref.repoID,
+				ref.taskID,
+				ref.attempt,
+				err,
+			)
+		}
+	case "review-agent":
+		if _, err := store.RecordReviewStepUsage(
+			ref.repoID,
+			ref.taskID,
+			ref.reviewAttempt,
+			ref.step,
+			usageOpts,
+		); err != nil {
+			return fmt.Errorf("doctor recover review usage for %s/%s attempt %d step %s: %w",
+				ref.repoID,
+				ref.taskID,
+				ref.attempt,
+				ref.step,
+				err,
+			)
+		}
+	default:
+		return fmt.Errorf("doctor recover usage for %s/%s: unsupported activity %q", ref.repoID, ref.taskID, ref.activity)
+	}
+	return nil
+}
+
+func appendRow(result *Result, row *Row) {
+	if row == nil {
+		return
+	}
+	result.Rows = append(result.Rows, *row)
+	result.Summary.Checked++
+	switch row.Outcome {
+	case OutcomeWouldRecover:
+		result.Summary.Recoverable++
+	case OutcomeRecovered:
+		result.Summary.Recoverable++
+		result.Summary.Recovered++
+	case OutcomeAmbiguous:
+		result.Summary.Ambiguous++
+	default:
+		result.Summary.UnresolvedUnknowns++
+	}
+}

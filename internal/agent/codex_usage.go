@@ -8,20 +8,26 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
-const codexUsageCorrelationSlack = 2 * time.Minute
+const (
+	codexUsageCorrelationSlack       = 2 * time.Minute
+	codexUsageClosestSessionMaxDelay = 15 * time.Second
+	codexUsageClosestSessionMinGap   = 30 * time.Second
+	codexUsageClosestSessionRatio    = 5
+)
 
 // CodexUsageCaptureOptions describes the launched Codex-backed process.
 type CodexUsageCaptureOptions struct {
-	ExecutionDir string
-	StartedAt    time.Time
-	FinishedAt   time.Time
-	Env          map[string]string
+	ExecutionDir  string
+	ExecutionDirs []string
+	StartedAt     time.Time
+	Env           map[string]string
 }
 
 // CaptureCodexUsage correlates an Orpheus run with one Codex session log.
@@ -41,6 +47,12 @@ func CaptureCodexUsage(opts CodexUsageCaptureOptions) taskstate.RecordRunUsageOp
 	case 1:
 		return usageFromCodexSession(candidates[0])
 	default:
+		if candidate, ok := closestCodexSession(candidates, opts.StartedAt); ok {
+			result := usageFromCodexSession(candidate)
+			result.UsageCapture.Reason = "matched_closest_codex_session"
+			result.UsageCapture.CandidateCount = len(candidates)
+			return result
+		}
 		return taskstate.RecordRunUsageOptions{
 			UsageCapture: taskstate.AgentUsageCapture{
 				Status:         taskstate.UsageCaptureAmbiguous,
@@ -49,6 +61,30 @@ func CaptureCodexUsage(opts CodexUsageCaptureOptions) taskstate.RecordRunUsageOp
 			},
 		}
 	}
+}
+
+func closestCodexSession(
+	candidates []codexSessionCandidate,
+	startedAt time.Time,
+) (codexSessionCandidate, bool) {
+	sort.Slice(candidates, func(i int, j int) bool {
+		return codexSessionStartOffset(candidates[i], startedAt) <
+			codexSessionStartOffset(candidates[j], startedAt)
+	})
+	closestOffset := codexSessionStartOffset(candidates[0], startedAt)
+	secondOffset := codexSessionStartOffset(candidates[1], startedAt)
+	closeEnough := closestOffset <= codexUsageClosestSessionMaxDelay
+	clearlyCloser := secondOffset >= closestOffset*codexUsageClosestSessionRatio
+	largeEnoughGap := secondOffset-closestOffset >= codexUsageClosestSessionMinGap
+	return candidates[0], closeEnough && clearlyCloser && largeEnoughGap
+}
+
+func codexSessionStartOffset(candidate codexSessionCandidate, startedAt time.Time) time.Duration {
+	offset := candidate.startedAt.Sub(startedAt)
+	if offset < 0 {
+		return -offset
+	}
+	return offset
 }
 
 func codexRoot(env map[string]string) (string, error) {
@@ -108,15 +144,55 @@ func matchingCodexSessions(root string, opts CodexUsageCaptureOptions) ([]codexS
 }
 
 func codexSessionMatches(session codexSessionCandidate, opts CodexUsageCaptureOptions) bool {
-	if filepath.Clean(session.cwd) != filepath.Clean(opts.ExecutionDir) {
+	if !codexSessionCWDMatches(session.cwd, opts) {
 		return false
 	}
 	started := opts.StartedAt.Add(-codexUsageCorrelationSlack)
-	finished := opts.FinishedAt.Add(codexUsageCorrelationSlack)
-	if opts.FinishedAt.IsZero() {
-		finished = time.Now().UTC().Add(codexUsageCorrelationSlack)
-	}
+	finished := opts.StartedAt.Add(codexUsageCorrelationSlack)
 	return !session.startedAt.Before(started) && !session.startedAt.After(finished)
+}
+
+func codexSessionCWDMatches(cwd string, opts CodexUsageCaptureOptions) bool {
+	cleanCWD := cleanCodexExecutionDir(cwd)
+	if cleanCWD == "" {
+		return false
+	}
+	for _, dir := range codexExecutionDirs(opts) {
+		if cleanCWD == dir {
+			return true
+		}
+	}
+	return false
+}
+
+func codexExecutionDirs(opts CodexUsageCaptureOptions) []string {
+	dirs := make([]string, 0, len(opts.ExecutionDirs)+1)
+	dirs = appendCleanCodexExecutionDir(dirs, opts.ExecutionDir)
+	for _, dir := range opts.ExecutionDirs {
+		dirs = appendCleanCodexExecutionDir(dirs, dir)
+	}
+	return dirs
+}
+
+func appendCleanCodexExecutionDir(dirs []string, dir string) []string {
+	cleaned := cleanCodexExecutionDir(dir)
+	if cleaned == "" {
+		return dirs
+	}
+	for _, existing := range dirs {
+		if existing == cleaned {
+			return dirs
+		}
+	}
+	return append(dirs, cleaned)
+}
+
+func cleanCodexExecutionDir(dir string) string {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return ""
+	}
+	return filepath.Clean(dir)
 }
 
 type codexLogRecord struct {
