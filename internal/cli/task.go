@@ -3260,7 +3260,7 @@ func (r syncConflictAgentResolver) PrepareSyncConflictResolution(
 		return workflow.PreparedSyncConflictResolution{}, err
 	}
 	sessionName := syncConflictAgentSessionName(opts.Task.ID)
-	commandSnapshot, err := agentConfig.ResolveImplementerCommandWithValues("", agent.InterpolationValues{
+	commandSnapshot, err := agentConfig.ResolveSyncConflictResolverCommand(agent.InterpolationValues{
 		SessionName: sessionName,
 	})
 	if err != nil {

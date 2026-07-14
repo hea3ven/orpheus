@@ -35,6 +35,7 @@ agents:
   defaults:
     implementer: codex-medium
     reviewer: codex-review
+    sync_conflict_resolver: codex-sync
   profiles:
     codex-medium:
       harness: codex
@@ -45,9 +46,15 @@ agents:
       harness: codex
       model: gpt-5.4-mini
       interactive: false
+    codex-sync:
+      harness: codex
+      model: gpt-5.4-mini
+      interactive: false
 ```
 
 Interactive Codex profiles launch `codex --model <model> --dangerously-bypass-approvals-and-sandbox "{{session_name}} - {{prompt}}"`. Non-interactive profiles launch the same command through `codex exec`. When `thinking` is set, Orpheus adds `-c model_reasoning_effort=<thinking>` to the Codex command.
+
+`agents.defaults.sync_conflict_resolver` is optional. When set, `orpheus task sync <task-id>` and `orpheus task sync --all` use that profile for merge-conflict repair while syncing open PR branches. When it is unset, sync conflict repair falls back to `agents.defaults.implementer`, preserving existing configs.
 
 Pi-style native naming:
 

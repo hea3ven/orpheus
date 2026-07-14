@@ -277,6 +277,45 @@ func TestResolveReviewerCommandRequiresReviewerDefaultWithoutOverride(t *testing
 	}
 }
 
+func TestResolveSyncConflictResolverCommandUsesDedicatedDefault(t *testing.T) {
+	is := assert.New(t)
+	config := agent.Config{
+		Defaults: agent.AgentDefaults{
+			Implementer:          "impl",
+			SyncConflictResolver: "sync-resolver",
+		},
+		Agents: map[string]agent.Profile{
+			"impl":          {Command: "impl-agent"},
+			"sync-resolver": {Command: "resolver-agent", Args: []string{"{{session_name}}", "{{prompt}}"}},
+		},
+	}
+
+	snapshot, err := config.ResolveSyncConflictResolverCommand(agent.InterpolationValues{
+		SessionName: "sync-conflict-op-1",
+	})
+
+	require.NoError(t, err)
+	is.Equal("sync-resolver", snapshot.AgentName)
+	is.Equal("resolver-agent", snapshot.Command)
+	is.Equal([]string{"sync-conflict-op-1", agent.RenderBootstrapPrompt()}, snapshot.Args)
+}
+
+func TestResolveSyncConflictResolverCommandFallsBackToImplementerDefault(t *testing.T) {
+	is := assert.New(t)
+	config := agent.Config{
+		Defaults: agent.AgentDefaults{Implementer: "impl"},
+		Agents: map[string]agent.Profile{
+			"impl": {Command: "impl-agent"},
+		},
+	}
+
+	snapshot, err := config.ResolveSyncConflictResolverCommand(agent.InterpolationValues{})
+
+	require.NoError(t, err)
+	is.Equal("impl", snapshot.AgentName)
+	is.Equal("impl-agent", snapshot.Command)
+}
+
 func TestLoadConfigReportsMissingFileWithSetupGuidance(t *testing.T) {
 	is := assert.New(t)
 	paths := newAgentTestPaths(t)
@@ -315,6 +354,14 @@ func TestConfigValidationErrorsAreActionable(t *testing.T) {
 				map[string]any{"pi": map[string]any{"command": "pi"}},
 			),
 			want: "agents.defaults.implementer \"missing\" does not match",
+		},
+		{
+			name: "unknown sync conflict resolver default",
+			data: agentConfigYAML(
+				map[string]any{"implementer": "pi", "sync_conflict_resolver": "missing"},
+				map[string]any{"pi": map[string]any{"command": "pi"}},
+			),
+			want: "agents.defaults.sync_conflict_resolver \"missing\" does not match",
 		},
 		{
 			name: "missing command",
