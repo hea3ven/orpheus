@@ -37,6 +37,7 @@ type PipelineRunOptions struct {
 
 	InteractiveOutput bool
 	OutputWidth       int
+	OutputWidthFunc   func() (int, bool)
 
 	AgentConfig   agent.Config
 	AgentLauncher agentexec.Launcher

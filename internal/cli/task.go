@@ -1218,6 +1218,7 @@ func taskReviewPipelineOptions(
 		Stdin:             command.InOrStdin(),
 		InteractiveOutput: outputMode.interactive,
 		OutputWidth:       outputMode.width,
+		OutputWidthFunc:   outputMode.widthFunc,
 		AgentConfig:       start.agentConfig,
 		AgentLauncher:     attachedAgentLauncher,
 		ResumeFromStep:    start.resumed,
@@ -1291,6 +1292,7 @@ type taskReviewOutputModeResult struct {
 	stderr      io.Writer
 	interactive bool
 	width       int
+	widthFunc   func() (int, bool)
 }
 
 func taskReviewOutputMode(command *cobra.Command, logger *slog.Logger) taskReviewOutputModeResult {
@@ -1315,6 +1317,9 @@ func taskReviewOutputMode(command *cobra.Command, logger *slog.Logger) taskRevie
 		stderr:      stderr,
 		interactive: interactiveOutput,
 		width:       outputWidth,
+		widthFunc: func() (int, bool) {
+			return interactiveTerminalWidth(stderr)
+		},
 	}
 }
 
