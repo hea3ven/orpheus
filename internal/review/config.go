@@ -16,6 +16,9 @@ const (
 	// ConfigFile is the Orpheus global configuration file containing review pipelines.
 	ConfigFile = "config.yaml"
 
+	// DefaultMaxAutonomousReviewAttempts limits one command's automatic review/fix loop.
+	DefaultMaxAutonomousReviewAttempts = 4
+
 	KindManual      = "manual"
 	KindCheck       = "check"
 	KindAgentReview = "agent_review"
@@ -23,8 +26,10 @@ const (
 
 // Config is the reviews section of Orpheus' global configuration.
 type Config struct {
-	DefaultPipeline string
-	Pipelines       map[string]Pipeline
+	DefaultPipeline                string
+	MaxAutonomousReviewAttempts    int
+	Pipelines                      map[string]Pipeline
+	maxAutonomousReviewAttemptsSet bool
 }
 
 // Pipeline is a named ordered list of review steps.
@@ -60,13 +65,18 @@ func (c *Config) UnmarshalYAML(value *yaml.Node) error {
 	}
 
 	var nested struct {
-		DefaultPipeline string              `yaml:"default_pipeline"`
-		Pipelines       map[string]Pipeline `yaml:"pipelines"`
+		DefaultPipeline             string              `yaml:"default_pipeline"`
+		MaxAutonomousReviewAttempts *int                `yaml:"max_autonomous_review_attempts"`
+		Pipelines                   map[string]Pipeline `yaml:"pipelines"`
 	}
 	if err := raw.Reviews.Decode(&nested); err != nil {
 		return err
 	}
 	c.DefaultPipeline = nested.DefaultPipeline
+	if nested.MaxAutonomousReviewAttempts != nil {
+		c.MaxAutonomousReviewAttempts = *nested.MaxAutonomousReviewAttempts
+		c.maxAutonomousReviewAttemptsSet = true
+	}
 	c.Pipelines = nested.Pipelines
 	return nil
 }
@@ -78,7 +88,7 @@ func LoadConfig(paths state.Paths) (Config, error) {
 	var config Config
 	if err := paths.ReadConfigYAML(ConfigFile, &config); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return Config{}, nil
+			return Config{MaxAutonomousReviewAttempts: DefaultMaxAutonomousReviewAttempts}, nil
 		}
 		return Config{}, fmt.Errorf("load review pipelines from %s: %w", ConfigFile, err)
 	}
@@ -146,6 +156,16 @@ func (c Config) namedPipeline(name string, source string) (Pipeline, error) {
 
 func (c Config) normalized() (Config, error) {
 	defaultPipeline := strings.TrimSpace(c.DefaultPipeline)
+	maxAutonomousReviewAttempts := c.MaxAutonomousReviewAttempts
+	if !c.maxAutonomousReviewAttemptsSet && maxAutonomousReviewAttempts == 0 {
+		maxAutonomousReviewAttempts = DefaultMaxAutonomousReviewAttempts
+	}
+	if maxAutonomousReviewAttempts <= 0 {
+		return Config{}, fmt.Errorf(
+			"reviews.max_autonomous_review_attempts must be positive, got %d",
+			c.MaxAutonomousReviewAttempts,
+		)
+	}
 	pipelines := map[string]Pipeline{}
 	for rawName, rawPipeline := range c.Pipelines {
 		name := strings.TrimSpace(rawName)
@@ -173,8 +193,10 @@ func (c Config) normalized() (Config, error) {
 	}
 
 	return Config{
-		DefaultPipeline: defaultPipeline,
-		Pipelines:       pipelines,
+		DefaultPipeline:                defaultPipeline,
+		MaxAutonomousReviewAttempts:    maxAutonomousReviewAttempts,
+		Pipelines:                      pipelines,
+		maxAutonomousReviewAttemptsSet: true,
 	}, nil
 }
 

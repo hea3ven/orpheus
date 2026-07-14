@@ -2,8 +2,16 @@
 
 `orpheus task run` continues into review automatically after the attached agent
 records a successful completion with `orpheus agent done`. Automated pipeline
-steps run without operator input until the review passes, blocks, fails
-operationally, or reaches a manual step.
+steps run without operator input until the review passes, exhausts its bounded
+fix budget, fails operationally, or reaches a manual step.
+
+Check and agent-review blockers are kept by default during autonomous execution.
+Orpheus dispatches a targeted implementer follow-up, records which findings the
+run targets, and starts a fresh review attempt after the fix records completion.
+The global `reviews.max_autonomous_review_attempts` setting defaults to `4`.
+The initial review counts toward that limit, so the default permits at most
+three targeted fix runs before a fourth blocked review stops and preserves the
+open blockers for explicit continuation.
 
 When the next step is manual, Orpheus stops before running that step, records the
 latest review attempt as `waiting_for_manual`, and stores the pending step name.
@@ -18,6 +26,10 @@ pending manual step. It does not rerun completed steps. If a paused attempt
 exists, `task review --pipeline` may only resolve to the stored pipeline; a
 different override is rejected without replacing the paused state.
 
+If a resumed review later launches an autonomous fix after a manual approval,
+the next review starts again from step 1. Any earlier manual gate must pass
+again before publication.
+
 Orpheus selects a task review pipeline in this order:
 
 1. `orpheus task run --pipeline <name-or-alias> <task-id>` or
@@ -31,6 +43,7 @@ Global pipelines are defined under `reviews.pipelines` in Orpheus config:
 ```yaml
 reviews:
   default_pipeline: standard
+  max_autonomous_review_attempts: 4
   pipelines:
     standard:
       steps:

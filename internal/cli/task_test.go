@@ -3843,6 +3843,214 @@ exit 7
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
+//nolint:funlen // The autonomous loop spans dispatch, review, follow-up, and publication.
+func TestTaskRunAutonomousReviewFollowUpRepairsCheckAndPublishes(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	must.NoError(err)
+	orpheusBin := buildOrpheusTestBinary(t, sourceRoot)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	agentPath := writeAutonomousReviewFixAgent(t, "auto-fix-agent", orpheusBin, true)
+	check := writeReviewScript(t, `#!/bin/sh
+if [ "$(cat status.txt 2>/dev/null)" = "pass" ]; then
+  exit 0
+fi
+printf 'status is not pass\n'
+exit 7
+`)
+	writeAutonomousReviewLoopConfig(t, paths, "auto-fix", agentPath, 4, []map[string]any{
+		{"kind": "check", "name": "status", "command": check},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-auto", repoPath)
+	bdLogPath := withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-auto", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox list --all --limit 0", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-auto", stdout: "{}"},
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "run", "--main", "op-auto"})
+
+	is.Contains(stdout, "Finalized op-auto")
+	is.Contains(stderr, "Review blocked for op-auto by check \"status\".")
+	is.Contains(stderr, "Autonomous review follow-up for op-auto targets review attempt 1 finding(s) 1.")
+	is.NotContains(stderr, "Autonomous review attempt budget exhausted")
+	is.Equal("pass\n", readFileString(t, filepath.Join(repoPath, "status.txt")))
+	is.NotEmpty(strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")))
+
+	bdLog, err := os.ReadFile(bdLogPath)
+	must.NoError(err)
+	is.Contains(string(bdLog), "--json --sandbox close op-auto")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-auto.yaml"), &state))
+	must.Len(state.Runs, 2)
+	must.Len(state.Reviews, 2)
+	must.NotNil(state.Runs[1].ReviewFollowUp)
+	is.Equal([]int{0}, state.Runs[1].ReviewFollowUp.FindingIndexes)
+	is.Equal(2, state.Reviews[0].Findings[0].TargetedByRunAttempt)
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+	is.False(latest.AutonomousBudgetExhausted)
+	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
+}
+
+//nolint:funlen // The exhaustion workflow needs two complete review/fix attempts.
+func TestTaskRunAutonomousReviewLoopExhaustsPersistentCheckBlockers(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	must.NoError(err)
+	orpheusBin := buildOrpheusTestBinary(t, sourceRoot)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	agentPath := writeAutonomousReviewFixAgent(t, "persistent-agent", orpheusBin, false)
+	check := writeReviewScript(t, `#!/bin/sh
+printf 'persistent failure\n'
+exit 7
+`)
+	writeAutonomousReviewLoopConfig(t, paths, "persistent", agentPath, 2, []map[string]any{
+		{"kind": "check", "name": "unit", "command": check},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-stubborn", repoPath)
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: taskJSON},
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "run", "--main", "op-stubborn"})
+
+	is.Contains(stdout, "Recorded completion for op-stubborn")
+	is.NotContains(stdout, "Finalized op-stubborn")
+	is.Equal(2, strings.Count(stderr, "Review blocked for op-stubborn by check \"unit\"."))
+	is.Contains(stderr, "Autonomous review follow-up for op-stubborn targets review attempt 1 finding(s) 1.")
+	is.Contains(stderr, "Autonomous review attempt budget exhausted for op-stubborn after 2 review attempt(s).")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-stubborn.yaml"), &state))
+	must.Len(state.Runs, 2)
+	must.Len(state.Reviews, 2)
+	is.Equal(2, state.Reviews[0].Findings[0].TargetedByRunAttempt)
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
+	is.True(latest.AutonomousBudgetExhausted)
+	must.Len(latest.Findings, 1)
+	is.Zero(latest.Findings[0].TargetedByRunAttempt)
+	is.Empty(taskstate.FinalizationFacts(state).Commit)
+
+	showStdout, showStderr := executeCommand(t, []string{"task", "review", "show", "op-stubborn"})
+	is.Empty(showStderr)
+	is.Contains(showStdout, "Autonomous review: attempt budget exhausted")
+	is.Contains(showStdout, "Next step: autonomous review attempts are exhausted")
+
+	taskStdout, taskStderr := executeCommand(t, []string{"task", "show", "op-stubborn"})
+	is.Empty(taskStderr)
+	is.Contains(taskStdout, "Review attempt 2 blocked (autonomous review budget exhausted)")
+}
+
+//nolint:funlen // The resumed review regression spans two commands and a nested follow-up dispatch.
+func TestTaskReviewResumedAutonomousFollowUpPreservesSelectedImplementer(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	must.NoError(err)
+	orpheusBin := buildOrpheusTestBinary(t, sourceRoot)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	selectedAgentPath := writeAutonomousReviewFixAgent(t, "selected-agent", orpheusBin, true)
+	otherAgentPath := writeAutonomousReviewFixAgent(t, "other-agent", orpheusBin, false)
+	check := writeReviewScript(t, `#!/bin/sh
+if [ "$(cat status.txt 2>/dev/null)" = "pass" ]; then
+  exit 0
+fi
+printf 'status is not pass\n'
+exit 7
+`)
+	steps := []map[string]any{
+		{"kind": "manual", "name": "approval"},
+		{"kind": "check", "name": "status", "command": check},
+	}
+	writeAutonomousReviewLoopConfigWithImplementers(t, paths, "selected", selectedAgentPath, "other", otherAgentPath, "selected", 4, steps)
+
+	taskJSON := mainReadyTaskJSON("op-resume", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-resume", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox list --all --limit 0", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-resume", stdout: "{}"},
+	})
+
+	runStdout, runStderr := executeCommand(t, []string{"task", "run", "--main", "--agent", "selected", "op-resume"})
+	is.Contains(runStdout, "Recorded completion for op-resume")
+	is.Contains(runStderr, "Review for op-resume is waiting for manual step \"approval\"")
+	is.Equal("fail\n", readFileString(t, filepath.Join(repoPath, "status.txt")))
+
+	writeAutonomousReviewLoopConfigWithImplementers(t, paths, "selected", selectedAgentPath, "other", otherAgentPath, "other", 4, steps)
+
+	reviewStdout, reviewStderr := executeCommandWithInput(t, []string{"task", "review", "op-resume"}, "a\na\n")
+	is.Contains(reviewStdout, "Finalized op-resume")
+	is.Contains(reviewStderr, "Resuming review attempt 1 at manual step \"approval\".")
+	is.Contains(reviewStderr, "Review blocked for op-resume by check \"status\".")
+	is.Contains(reviewStderr, "Autonomous review follow-up for op-resume targets review attempt 1 finding(s) 1.")
+	is.NotContains(reviewStderr, "Autonomous review attempt budget exhausted")
+	is.Equal("pass\n", readFileString(t, filepath.Join(repoPath, "status.txt")))
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-resume.yaml"), &state))
+	must.Len(state.Runs, 2)
+	is.Equal("selected", state.Runs[0].Execution.Agent)
+	is.Equal("selected", state.Runs[1].Execution.Agent)
+	must.NotNil(state.Runs[1].ReviewFollowUp)
+	is.Equal([]int{0}, state.Runs[1].ReviewFollowUp.FindingIndexes)
+	must.Len(state.Reviews, 2)
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
+}
+
 func TestTaskReviewCheckBlockerDowngradeContinuesPipeline(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -6482,6 +6690,99 @@ func writeReviewAgentPipelineConfig(
 			"pipelines":        configPipelines,
 		},
 	}))
+}
+
+func writeAutonomousReviewLoopConfig(
+	t *testing.T,
+	paths state.Paths,
+	implementerName string,
+	implementerCommand string,
+	maxAttempts int,
+	steps []map[string]any,
+) {
+	t.Helper()
+
+	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"implementer": implementerName,
+			},
+			"profiles": map[string]any{
+				implementerName: map[string]any{"command": implementerCommand},
+			},
+		},
+		"reviews": map[string]any{
+			"default_pipeline":               "standard",
+			"max_autonomous_review_attempts": maxAttempts,
+			"pipelines": map[string]any{
+				"standard": map[string]any{"steps": steps},
+			},
+		},
+	}))
+}
+
+func writeAutonomousReviewLoopConfigWithImplementers(
+	t *testing.T,
+	paths state.Paths,
+	firstName string,
+	firstCommand string,
+	secondName string,
+	secondCommand string,
+	defaultName string,
+	maxAttempts int,
+	steps []map[string]any,
+) {
+	t.Helper()
+
+	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"implementer": defaultName,
+			},
+			"profiles": map[string]any{
+				firstName:  map[string]any{"command": firstCommand},
+				secondName: map[string]any{"command": secondCommand},
+			},
+		},
+		"reviews": map[string]any{
+			"default_pipeline":               "standard",
+			"max_autonomous_review_attempts": maxAttempts,
+			"pipelines": map[string]any{
+				"standard": map[string]any{"steps": steps},
+			},
+		},
+	}))
+}
+
+func writeAutonomousReviewFixAgent(t *testing.T, name string, orpheusBin string, repair bool) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), name)
+	passWrite := "printf 'still failing %s\\n' \"$count\" > status.txt"
+	if repair {
+		passWrite = `if [ "$count" -gt 1 ]; then
+  printf 'pass\n' > status.txt
+else
+  printf 'fail\n' > status.txt
+fi`
+	}
+	script := fmt.Sprintf(`#!/bin/sh
+set -eu
+count=1
+if [ -f run-count.txt ]; then
+  count=$(( $(cat run-count.txt) + 1 ))
+fi
+printf '%%s\n' "$count" > run-count.txt
+%s
+%s agent done \
+  --summary "Autonomous run $count" \
+  --description "Autonomous run $count completed." \
+  --detailed-description "Detailed autonomous run $count."
+`, passWrite, shellQuote(orpheusBin))
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write autonomous review fix agent: %v", err)
+	}
+	return path
 }
 
 func writeReviewScript(t *testing.T, content string) string {

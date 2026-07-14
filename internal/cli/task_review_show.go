@@ -19,8 +19,9 @@ func newTaskReviewShowCommand(opts *rootOptions) *cobra.Command {
 		Long: "Show persisted review findings and follow-up tasks for a task.\n\n" +
 			"This is the inspection surface for review state. It shows the latest " +
 			"authoritative review attempt, executed steps, blocking/advisory/separate-task " +
-			"findings, created follow-up Beads, and the next command, such as task run " +
-			"for open blockers or task review after targeted follow-up work.",
+			"findings, autonomous budget exhaustion, created follow-up Beads, and the " +
+			"next command, such as task run for open blockers or task review after " +
+			"targeted follow-up work.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			return runTaskReviewShow(command, opts, args[0])
@@ -109,6 +110,9 @@ func renderLatestReviewAttempt(output io.Writer, review taskstate.ReviewAttempt)
 		fmt.Sprintf("  Status: %s", formatReviewValue(string(review.Status))),
 		fmt.Sprintf("  Pipeline: %s", formatReviewValue(review.Pipeline)),
 		fmt.Sprintf("  Current step: %s", formatReviewValue(review.Step)),
+	}
+	if review.AutonomousBudgetExhausted {
+		rows = append(rows, "  Autonomous review: attempt budget exhausted")
 	}
 	for _, row := range rows {
 		if _, err := fmt.Fprintln(output, row); err != nil {
@@ -312,6 +316,14 @@ func renderReviewNextStep(output io.Writer, taskID string, review taskstate.Revi
 		)
 		return err
 	case taskstate.ReviewStatusBlocked:
+		if review.AutonomousBudgetExhausted {
+			_, err := fmt.Fprintf(
+				output,
+				"\nNext step: autonomous review attempts are exhausted; run `orpheus task run %s` to continue with a fresh budget.\n",
+				taskID,
+			)
+			return err
+		}
 		if taskstate.ReviewHasOpenBlockers(review) {
 			_, err := fmt.Fprintf(
 				output,

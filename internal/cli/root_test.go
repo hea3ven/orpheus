@@ -47,7 +47,7 @@ var reviewWorkflowHelpCases = []reviewWorkflowHelpCase{
 		args: []string{"task", "run", "--help"},
 		want: []string{
 			"automatically starts a review follow-up run",
-			"After the agent records completion with agent done, run task review",
+			"exhausts reviews.max_autonomous_review_attempts",
 		},
 	},
 	{
@@ -56,6 +56,7 @@ var reviewWorkflowHelpCases = []reviewWorkflowHelpCase{
 		want: []string{
 			"Configured pipelines may include check, manual, and agent_review steps.",
 			"Blocking findings leave the task ready for task run follow-up.",
+			"Exhausted autonomous blockers stay blocked",
 			"Use task review show to inspect persisted findings",
 		},
 	},
@@ -65,6 +66,7 @@ var reviewWorkflowHelpCases = []reviewWorkflowHelpCase{
 		want: []string{
 			"inspection surface for review state",
 			"blocking/advisory/separate-task findings",
+			"autonomous budget exhaustion",
 			"created follow-up Beads",
 		},
 	},

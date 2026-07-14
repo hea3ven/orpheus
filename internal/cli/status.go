@@ -569,6 +569,8 @@ func shortReviewDetail(detail string) string {
 		return "local review"
 	case detail == "review running":
 		return "review running"
+	case strings.HasPrefix(detail, "review blocked after autonomous attempt budget"):
+		return "review budget exhausted"
 	case strings.HasPrefix(detail, "review blocked by "):
 		return "review blocked"
 	case detail == "review blockers targeted; run task review":
