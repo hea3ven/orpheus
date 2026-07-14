@@ -158,6 +158,68 @@ func TestLoadConfigRejectsInvalidReviewPipelines(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsDuplicateStepNameWithinPipeline(t *testing.T) {
+	paths := newTestPaths(t)
+	if err := paths.WriteConfigYAML(review.ConfigFile, map[string]any{
+		"reviews": map[string]any{
+			"pipelines": map[string]any{
+				"standard": map[string]any{
+					"steps": []map[string]any{
+						{"kind": "manual", "name": " local-review "},
+						{"kind": "check", "name": "local-review", "command": "make"},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := review.LoadConfig(paths)
+	if err == nil {
+		t.Fatal("load invalid config succeeded, want error")
+	}
+	want := `reviews.pipelines.standard.steps contains duplicate step name "local-review" after trimming whitespace`
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("error = %v, want substring %q", err, want)
+	}
+}
+
+func TestLoadConfigAllowsStepNameReuseAcrossPipelines(t *testing.T) {
+	paths := newTestPaths(t)
+	if err := paths.WriteConfigYAML(review.ConfigFile, map[string]any{
+		"reviews": map[string]any{
+			"pipelines": map[string]any{
+				"standard": map[string]any{
+					"steps": []map[string]any{{
+						"kind": "manual",
+						"name": "local-review",
+					}},
+				},
+				"strict": map[string]any{
+					"steps": []map[string]any{{
+						"kind": "manual",
+						"name": " local-review ",
+					}},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	config, err := review.LoadConfig(paths)
+	if err != nil {
+		t.Fatalf("load review config: %v", err)
+	}
+	if config.Pipelines["standard"].Steps[0].Name != "local-review" {
+		t.Fatalf("standard step = %#v, want trimmed name", config.Pipelines["standard"].Steps[0])
+	}
+	if config.Pipelines["strict"].Steps[0].Name != "local-review" {
+		t.Fatalf("strict step = %#v, want trimmed name", config.Pipelines["strict"].Steps[0])
+	}
+}
+
 func TestLoadConfigRejectsInvalidMaxAutonomousReviewAttempts(t *testing.T) {
 	paths := newTestPaths(t)
 	if err := paths.WriteConfigYAML(review.ConfigFile, map[string]any{
