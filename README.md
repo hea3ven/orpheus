@@ -24,9 +24,30 @@ Early MVP design and implementation planning.
 - [Repository publication titles](docs/2026-06-23_repo_publication_titles.md) explains how to configure Jira-style commit and pull-request titles, preserve defaults, and recover from a missing task reference.
 - [Review pipelines](docs/review_pipelines.md) explains automatic review after `task run`, manual gate resumption, global pipeline configuration, repository defaults, repo-local aliases, clearing behavior, and selection precedence.
 
-## Agent profile session names
+## Agent profiles
 
 Task-run agent profiles can interpolate `{{session_name}}` anywhere `{{prompt}}` is supported. Orpheus formats the value as `(<task_id>) <task title>`, or `(<task_id>)` when the task has no title.
+
+Structured Codex profiles let Orpheus build the launch command and capture Codex usage telemetry:
+
+```yaml
+agents:
+  defaults:
+    implementer: codex-medium
+    reviewer: codex-review
+  profiles:
+    codex-medium:
+      harness: codex
+      model: gpt-5.4
+      thinking: high
+      interactive: true
+    codex-review:
+      harness: codex
+      model: gpt-5.4-mini
+      interactive: false
+```
+
+Interactive Codex profiles launch `codex --model <model> --dangerously-bypass-approvals-and-sandbox "{{session_name}} - {{prompt}}"`. Non-interactive profiles launch the same command through `codex exec`. When `thinking` is set, Orpheus adds `-c model_reasoning_effort=<thinking>` to the Codex command.
 
 Pi-style native naming:
 
@@ -43,7 +64,7 @@ agents:
         - "{{prompt}}"
 ```
 
-Codex-style prompt prefix:
+Raw command profiles remain generic, even when they invoke `codex`. Orpheus runs the configured command exactly and does not infer Codex model, launch mode, or telemetry support from raw args:
 
 ```yaml
 agents:
@@ -55,6 +76,8 @@ agents:
       args:
         - "{{session_name}} - {{prompt}}"
 ```
+
+Use raw profiles for custom launch contracts. Use structured `harness: codex` profiles when task stats should attempt Codex session and token capture.
 
 ## License
 

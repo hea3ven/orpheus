@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agent"
+	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
@@ -522,8 +523,8 @@ func TestRunPipelineInteractiveAgentReviewNonBlockingFindingLeavesLiveTail(t *te
 	harness := newAgentReviewPipelineHarness(t)
 	result := harness.run(t, false, fakeReviewLauncherFunc(func(
 		ctx context.Context,
-		command agent.CommandSnapshot,
-		opts agent.LaunchOptions,
+		command agentexec.Command,
+		opts agentexec.LaunchOptions,
 	) error {
 		return writeAgentReviewAdvisoryOutput(ctx, opts, harness.store, harness.attempt)
 	}))
@@ -568,8 +569,8 @@ func TestRunPipelineInteractivePassingAgentReviewClearsWrappedRollingTail(t *tes
 		AgentConfig:       reviewAgentConfig(false),
 		AgentLauncher: fakeReviewLauncherFunc(func(
 			ctx context.Context,
-			command agent.CommandSnapshot,
-			opts agent.LaunchOptions,
+			command agentexec.Command,
+			opts agentexec.LaunchOptions,
 		) error {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -667,7 +668,7 @@ func newAgentReviewPipelineHarness(t *testing.T) agentReviewPipelineHarness {
 func runAgentReviewPipelineTest(
 	t *testing.T,
 	interactive bool,
-	launcher agent.Launcher,
+	launcher agentexec.Launcher,
 ) agentReviewPipelineResult {
 	t.Helper()
 
@@ -678,7 +679,7 @@ func runAgentReviewPipelineTest(
 func (h agentReviewPipelineHarness) run(
 	t *testing.T,
 	interactive bool,
-	launcher agent.Launcher,
+	launcher agentexec.Launcher,
 ) agentReviewPipelineResult {
 	t.Helper()
 
@@ -729,7 +730,7 @@ func reviewAgentConfig(interactive bool) agent.Config {
 
 func writeAgentReviewAdvisoryOutput(
 	ctx context.Context,
-	opts agent.LaunchOptions,
+	opts agentexec.LaunchOptions,
 	store taskstate.Store,
 	attempt taskstate.ReviewAttempt,
 ) error {
@@ -801,7 +802,7 @@ func shellQuoteReviewTest(value string) string {
 
 type fakeReviewLauncher struct{}
 
-func (fakeReviewLauncher) Run(ctx context.Context, command agent.CommandSnapshot, opts agent.LaunchOptions) error {
+func (fakeReviewLauncher) Run(ctx context.Context, command agentexec.Command, opts agentexec.LaunchOptions) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -814,9 +815,9 @@ func (fakeReviewLauncher) Run(ctx context.Context, command agent.CommandSnapshot
 	return nil
 }
 
-type fakeReviewLauncherFunc func(context.Context, agent.CommandSnapshot, agent.LaunchOptions) error
+type fakeReviewLauncherFunc func(context.Context, agentexec.Command, agentexec.LaunchOptions) error
 
-func (f fakeReviewLauncherFunc) Run(ctx context.Context, command agent.CommandSnapshot, opts agent.LaunchOptions) error {
+func (f fakeReviewLauncherFunc) Run(ctx context.Context, command agentexec.Command, opts agentexec.LaunchOptions) error {
 	return f(ctx, command, opts)
 }
 

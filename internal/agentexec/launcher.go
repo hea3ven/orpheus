@@ -1,4 +1,5 @@
-package agent
+// Package agentexec runs resolved agent commands through a shared process boundary.
+package agentexec
 
 import (
 	"context"
@@ -9,6 +10,13 @@ import (
 	"os/exec"
 	"strings"
 )
+
+// Command is a resolved direct process invocation.
+type Command struct {
+	Name    string
+	Command string
+	Args    []string
+}
 
 // LaunchOptions controls one attached agent process invocation.
 type LaunchOptions struct {
@@ -21,13 +29,13 @@ type LaunchOptions struct {
 
 // Launcher runs a resolved agent command.
 type Launcher interface {
-	Run(ctx context.Context, command CommandSnapshot, opts LaunchOptions) error
+	Run(ctx context.Context, command Command, opts LaunchOptions) error
 }
 
 // StartError wraps a failure that happened before the agent process started.
 type StartError struct {
-	AgentName string
-	Err       error
+	Name string
+	Err  error
 }
 
 // Error returns a human-readable start failure.
@@ -35,7 +43,7 @@ func (e *StartError) Error() string {
 	if e == nil {
 		return "run agent: start process"
 	}
-	return fmt.Sprintf("run agent %q: start process: %v", e.AgentName, e.Err)
+	return fmt.Sprintf("run agent %q: start process: %v", e.Name, e.Err)
 }
 
 // Unwrap returns the underlying process-start error.
@@ -56,15 +64,15 @@ func IsStartError(err error) bool {
 type AttachedLauncher struct{}
 
 // Run executes command directly with no implicit shell parsing.
-func (l AttachedLauncher) Run(ctx context.Context, command CommandSnapshot, opts LaunchOptions) error {
+func (l AttachedLauncher) Run(ctx context.Context, command Command, opts LaunchOptions) error {
 	if strings.TrimSpace(command.Command) == "" {
-		return &StartError{AgentName: command.AgentName, Err: errors.New("command is required")}
+		return &StartError{Name: command.Name, Err: errors.New("command is required")}
 	}
 	if strings.TrimSpace(opts.Dir) == "" {
-		return &StartError{AgentName: command.AgentName, Err: errors.New("execution directory is required")}
+		return &StartError{Name: command.Name, Err: errors.New("execution directory is required")}
 	}
 	if err := ctx.Err(); err != nil {
-		return &StartError{AgentName: command.AgentName, Err: err}
+		return &StartError{Name: command.Name, Err: err}
 	}
 
 	process := exec.CommandContext(ctx, command.Command, command.Args...)
@@ -76,16 +84,16 @@ func (l AttachedLauncher) Run(ctx context.Context, command CommandSnapshot, opts
 
 	if err := process.Start(); err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
-			return &StartError{AgentName: command.AgentName, Err: fmt.Errorf(
+			return &StartError{Name: command.Name, Err: fmt.Errorf(
 				"executable %q not found; check the agent profile command or PATH: %w",
 				command.Command,
 				err,
 			)}
 		}
-		return &StartError{AgentName: command.AgentName, Err: err}
+		return &StartError{Name: command.Name, Err: err}
 	}
 	if err := process.Wait(); err != nil {
-		return fmt.Errorf("run agent %q: %w", command.AgentName, err)
+		return fmt.Errorf("run agent %q: %w", command.Name, err)
 	}
 	return nil
 }

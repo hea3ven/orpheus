@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/hea3ven/orpheus/internal/agent"
+	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/beads"
 	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
@@ -30,10 +31,10 @@ import (
 )
 
 var (
-	newBeadsTaskBackend                       = beads.NewTaskBackend
-	attachedAgentLauncher      agent.Launcher = agent.AttachedLauncher{}
-	taskDoneInputIsTerminal                   = readerIsTerminal
-	taskReviewOutputIsTerminal                = writerIsTerminal
+	newBeadsTaskBackend                           = beads.NewTaskBackend
+	attachedAgentLauncher      agentexec.Launcher = agentexec.AttachedLauncher{}
+	taskDoneInputIsTerminal                       = readerIsTerminal
+	taskReviewOutputIsTerminal                    = writerIsTerminal
 )
 
 const taskStatsCostEstimateDisclaimer = "Estimated API-equivalent cost is calculated from recorded token usage " +
@@ -721,11 +722,11 @@ func launchTaskRunAgent(
 	start workflow.DispatchStartResult,
 	prompt string,
 ) error {
-	err := attachedAgentLauncher.Run(command.Context(), agent.CommandSnapshot{
-		AgentName: start.Command.AgentName,
-		Command:   start.Command.Command,
-		Args:      start.Command.Args,
-	}, agent.LaunchOptions{
+	err := attachedAgentLauncher.Run(command.Context(), agentexec.Command{
+		Name:    start.Command.AgentName,
+		Command: start.Command.Command,
+		Args:    append([]string{}, start.Command.Args...),
+	}, agentexec.LaunchOptions{
 		Dir: start.ExecutionDir,
 		Env: taskRunEnvironment(
 			repoID,
@@ -747,7 +748,7 @@ func launchTaskRunAgent(
 		TaskID:      taskID,
 		Attempt:     start.Attempt.Attempt,
 		Cause:       err,
-		StartFailed: agent.IsStartError(err),
+		StartFailed: agentexec.IsStartError(err),
 	})
 	if recordErr != nil {
 		return fmt.Errorf("task run %s: %w; additionally failed to record run failure: %w", taskID, err, recordErr)
@@ -3242,7 +3243,7 @@ type syncConflictAgentResolver struct {
 	paths    state.Paths
 	stdout   io.Writer
 	stderr   io.Writer
-	launcher agent.Launcher
+	launcher agentexec.Launcher
 }
 
 func (r syncConflictAgentResolver) PrepareSyncConflictResolution(
@@ -3264,7 +3265,7 @@ func (r syncConflictAgentResolver) PrepareSyncConflictResolution(
 
 	launcher := r.launcher
 	if launcher == nil {
-		launcher = agent.AttachedLauncher{}
+		launcher = agentexec.AttachedLauncher{}
 	}
 	return workflow.PreparedSyncConflictResolution{
 		Execution: taskstate.AgentExecution{
@@ -3279,7 +3280,7 @@ func (r syncConflictAgentResolver) PrepareSyncConflictResolution(
 			SessionName: sessionName,
 		},
 		Resolve: func(ctx context.Context) error {
-			return launcher.Run(ctx, commandSnapshot, agent.LaunchOptions{
+			return launcher.Run(ctx, commandSnapshot.ExecCommand(), agentexec.LaunchOptions{
 				Dir: opts.Worktree,
 				Env: syncConflictAgentEnvironment(
 					opts.Repository.ID,

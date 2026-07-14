@@ -1397,6 +1397,80 @@ func TestTaskRunExecutesImplementerDefaultAttachedFromDeterministicWorktree(t *t
 	is.Equal(taskstate.EventRunFinished, retriedState.Events[5].Type)
 }
 
+//nolint:funlen // The generated Codex launch contract is best asserted end to end.
+func TestTaskRunStructuredCodexProfileBuildsAttachedCommand(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[
+			{
+				"id":"op-codex",
+				"title":"Structured Codex",
+				"description":"Launch Codex through the structured profile.",
+				"status":"open",
+				"priority":2,
+				"issue_type":"task"
+			}
+		]`},
+	})
+	agentLogPath := withFakeAgent(t, "codex", 0)
+	writeStructuredCodexTaskRunAgentConfig(t, paths, "codex-medium", "gpt-5.4", "high", true)
+	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-codex"))
+	must.NoError(err)
+
+	stdout, stderr := executeCommand(t, []string{"task", "run", "op-codex"})
+
+	is.Contains(stdout, "fake agent stdout")
+	is.Contains(stderr, "fake agent stderr")
+
+	log := readTestFileString(t, agentLogPath)
+	for _, want := range []string{
+		"PWD=" + worktreePath,
+		"ARG_COUNT=6",
+		"ARG_1<<END\n--model\nEND",
+		"ARG_2<<END\ngpt-5.4\nEND",
+		"ARG_3<<END\n--dangerously-bypass-approvals-and-sandbox\nEND",
+		"ARG_4<<END\n-c\nEND",
+		"ARG_5<<END\nmodel_reasoning_effort=high\nEND",
+	} {
+		is.Contains(log, want)
+	}
+	promptArg := agentLogBlock(t, log, "ARG_6")
+	is.Contains(promptArg, "Implementing op-codex Structured Codex - ")
+	is.Contains(promptArg, "You are an agent dispatched by Orpheus.")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-codex.yaml"), &state))
+	must.Len(state.Runs, 1)
+	execution := state.Runs[0].Execution
+	is.Equal("codex-medium", execution.Agent)
+	is.Equal("codex", execution.Harness)
+	is.Equal("gpt-5.4", execution.Model)
+	is.Equal("codex", execution.Command)
+	is.Equal([]string{
+		"--model",
+		"gpt-5.4",
+		"--dangerously-bypass-approvals-and-sandbox",
+		"-c",
+		"model_reasoning_effort=high",
+		"Implementing op-codex Structured Codex - " + agent.RenderBootstrapPrompt(),
+	}, execution.Args)
+}
+
 func TestTaskRunRejectsMissingRequiredExternalReferenceBeforeSetup(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -4309,7 +4383,7 @@ func TestTaskReviewAgentReviewStepCapturesCodexUsage(t *testing.T) {
 	must.NoError(os.MkdirAll(sessionDir, 0o755))
 	sessionPath := filepath.Join(sessionDir, "review-session.jsonl")
 	writeCodexSessionLogForCLI(t, sessionPath, repoPath, "review-session", time.Now().UTC())
-	writeReviewAgentPipelineConfig(t, paths, "codex", "codex", []string{"exec", "{{prompt}}"}, "standard", map[string][]map[string]any{
+	writeStructuredCodexReviewAgentPipelineConfig(t, paths, "codex", "gpt-5", false, "standard", map[string][]map[string]any{
 		"standard": []map[string]any{{"kind": "agent_review", "name": "ai-review"}},
 	})
 
@@ -6635,6 +6709,31 @@ func writeTaskRunAgentConfig(t *testing.T, paths state.Paths, name string, comma
 	}))
 }
 
+func writeStructuredCodexTaskRunAgentConfig(
+	t *testing.T,
+	paths state.Paths,
+	name string,
+	model string,
+	thinking string,
+	interactive bool,
+) {
+	t.Helper()
+
+	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"agents": map[string]any{
+			"defaults": map[string]any{"implementer": name},
+			"profiles": map[string]any{
+				name: map[string]any{
+					"harness":     "codex",
+					"model":       model,
+					"thinking":    thinking,
+					"interactive": interactive,
+				},
+			},
+		},
+	}))
+}
+
 func writeReviewPipelineConfig(
 	t *testing.T,
 	paths state.Paths,
@@ -6683,6 +6782,43 @@ func writeReviewAgentPipelineConfig(
 			"profiles": map[string]any{
 				"implementer": map[string]any{"command": "unused-implementer"},
 				reviewerName:  reviewerProfile,
+			},
+		},
+		"reviews": map[string]any{
+			"default_pipeline": defaultPipeline,
+			"pipelines":        configPipelines,
+		},
+	}))
+}
+
+func writeStructuredCodexReviewAgentPipelineConfig(
+	t *testing.T,
+	paths state.Paths,
+	reviewerName string,
+	model string,
+	interactive bool,
+	defaultPipeline string,
+	pipelines map[string][]map[string]any,
+) {
+	t.Helper()
+
+	configPipelines := map[string]any{}
+	for name, steps := range pipelines {
+		configPipelines[name] = map[string]any{"steps": steps}
+	}
+	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"implementer": "implementer",
+				"reviewer":    reviewerName,
+			},
+			"profiles": map[string]any{
+				"implementer": map[string]any{"command": "unused-implementer"},
+				reviewerName: map[string]any{
+					"harness":     "codex",
+					"model":       model,
+					"interactive": interactive,
+				},
 			},
 		},
 		"reviews": map[string]any{
