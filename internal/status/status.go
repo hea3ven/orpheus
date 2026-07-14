@@ -329,6 +329,15 @@ func classifyLatestReview(
 		}, true
 	case taskstate.ReviewStatusBlocked:
 		count := untargetedBlockingFindingCount(*latestReview)
+		if latestReview.AutonomousBudgetExhausted {
+			return policyResult{
+				state: readinessIdle,
+				detail: fmt.Sprintf(
+					"review blocked after autonomous attempt budget by %d finding(s); run task run to continue",
+					count,
+				),
+			}, true
+		}
 		if count == 0 {
 			return policyResult{
 				state:  readinessReview,

@@ -41,9 +41,57 @@ func TestLoadConfigValidatesAndResolvesPipelines(t *testing.T) {
 	if pipeline.Name != "standard" || len(pipeline.Steps) != 1 {
 		t.Fatalf("pipeline = %#v, want standard with one step", pipeline)
 	}
+	if config.MaxAutonomousReviewAttempts != review.DefaultMaxAutonomousReviewAttempts {
+		t.Fatalf(
+			"max autonomous review attempts = %d, want %d",
+			config.MaxAutonomousReviewAttempts,
+			review.DefaultMaxAutonomousReviewAttempts,
+		)
+	}
 	step := pipeline.Steps[0]
 	if step.Command != "go" || strings.Join(step.Args, " ") != "test ./..." {
 		t.Fatalf("step = %#v, want direct command and args", step)
+	}
+}
+
+func TestLoadConfigMaxAutonomousReviewAttempts(t *testing.T) {
+	paths := newTestPaths(t)
+	if err := paths.WriteConfigYAML(review.ConfigFile, map[string]any{
+		"reviews": map[string]any{
+			"max_autonomous_review_attempts": 2,
+			"pipelines": map[string]any{
+				"standard": map[string]any{
+					"steps": []map[string]any{{
+						"kind": review.KindManual,
+						"name": "approval",
+					}},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	config, err := review.LoadConfig(paths)
+	if err != nil {
+		t.Fatalf("load review config: %v", err)
+	}
+	if config.MaxAutonomousReviewAttempts != 2 {
+		t.Fatalf("max autonomous review attempts = %d, want 2", config.MaxAutonomousReviewAttempts)
+	}
+}
+
+func TestLoadConfigMissingFileDefaultsMaxAutonomousReviewAttempts(t *testing.T) {
+	config, err := review.LoadConfig(newTestPaths(t))
+	if err != nil {
+		t.Fatalf("load missing review config: %v", err)
+	}
+	if config.MaxAutonomousReviewAttempts != review.DefaultMaxAutonomousReviewAttempts {
+		t.Fatalf(
+			"max autonomous review attempts = %d, want %d",
+			config.MaxAutonomousReviewAttempts,
+			review.DefaultMaxAutonomousReviewAttempts,
+		)
 	}
 }
 
@@ -107,6 +155,25 @@ func TestLoadConfigRejectsInvalidReviewPipelines(t *testing.T) {
 				t.Fatalf("error = %v, want substring %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestLoadConfigRejectsInvalidMaxAutonomousReviewAttempts(t *testing.T) {
+	paths := newTestPaths(t)
+	if err := paths.WriteConfigYAML(review.ConfigFile, map[string]any{
+		"reviews": map[string]any{
+			"max_autonomous_review_attempts": 0,
+		},
+	}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := review.LoadConfig(paths)
+	if err == nil {
+		t.Fatal("load invalid config succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "reviews.max_autonomous_review_attempts must be positive, got 0") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
