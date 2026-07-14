@@ -532,6 +532,83 @@ func TestTaskStatsRendersImplementationExecutionUsage(t *testing.T) {
 	}
 }
 
+//nolint:funlen // The stats fixture documents the persisted conflict-repair telemetry.
+func TestTaskStatsRendersSyncConflictResolutionExecutionUsage(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[{"id":"op-1","title":"Stats","status":"in_progress","priority":1,"issue_type":"task"}]`},
+	})
+
+	startedAt := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
+	finishedAt := time.Date(2026, 7, 7, 10, 12, 0, 0, time.UTC)
+	stateStore := taskstate.NewStoreWithClock(paths, clockSequence(startedAt, finishedAt))
+	opts := taskstate.SyncConflictResolutionEventOptions{
+		Execution: taskstate.AgentExecution{
+			Agent:       "codex",
+			Profile:     "sync-profile",
+			Harness:     "codex",
+			Model:       "gpt-5",
+			Command:     "codex",
+			Args:        []string{"exec", "--profile", "sync-profile"},
+			SessionName: "sync-conflict-op-1",
+			StartedAt:   startedAt,
+		},
+		Branch:        "orpheus/op-1",
+		DefaultBranch: "main",
+		Worktree:      repoDir,
+		PRURL:         "https://github.test/org/repo/pull/42",
+		ConflictFiles: []string{"conflict.txt"},
+	}
+	_, err := stateStore.RecordSyncConflictResolutionStarted("alpha", "op-1", opts)
+	must.NoError(err)
+
+	finishedOpts := opts
+	finishedOpts.Commit = "merge123"
+	finishedOpts.Usage = taskstate.RecordRunUsageOptions{
+		Session: &taskstate.AgentSession{ID: "sync-session-123", LogPath: "/tmp/codex-sync.jsonl"},
+		Usage: &taskstate.AgentUsage{
+			InputTokens:           120,
+			CachedInputTokens:     10,
+			OutputTokens:          30,
+			ReasoningOutputTokens: 5,
+			TotalTokens:           165,
+		},
+		UsageCapture: taskstate.AgentUsageCapture{
+			Status:         taskstate.UsageCaptureCaptured,
+			Reason:         "matched_codex_session",
+			CandidateCount: 1,
+		},
+	}
+	_, err = stateStore.RecordSyncConflictResolutionFinished("alpha", "op-1", finishedOpts)
+	must.NoError(err)
+
+	stdout, stderr := executeCommand(t, []string{"task", "stats", "op-1"})
+
+	is.Empty(stderr)
+	for _, want := range []string{
+		"sync-conflict-resolution", "sync-profile", "codex", "gpt-5",
+		`"codex" "exec" "--profile" "sync-profile"`,
+		"2026-07-07T10:00:00Z", "2026-07-07T10:12:00Z", "12m0s", "succeeded",
+		"sync-session-123", "total=165 input=120 cached_input=10 output=30 reasoning_output=5",
+		"estimated API-equivalent cost=$", "kind=estimated_api_equivalent", "Totals",
+	} {
+		is.Contains(stdout, want)
+	}
+	is.Regexp(
+		`(?m)^sync-conflict-resolution\s+1\s+12m0s\s+165\s+120\s+10\s+30\s+5\s+\$[0-9.]+\s+0\s+0$`,
+		stdout,
+	)
+	is.Regexp(
+		`(?m)^combined\s+1\s+12m0s\s+165\s+120\s+10\s+30\s+5\s+\$[0-9.]+\s+0\s+0$`,
+		stdout,
+	)
+}
+
 func TestTaskStatsKeepsTokenUsageWhenCostPricingIsUnknown(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -5249,6 +5326,116 @@ func TestTaskSyncPollsExistingPRURLWithoutPushOrMutation(t *testing.T) {
 	is.NotContains(string(ghLog), "ARG_2<<END\ncreate\nEND")
 }
 
+//nolint:funlen // The conflict-repair sync path needs Git, PR, agent, and state assertions together.
+func TestTaskSyncRecordsConflictResolutionUsageTelemetry(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	writeStructuredCodexTaskRunAgentConfig(t, paths, "sync-codex", "gpt-5", "", false)
+
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "conflict.txt"), []byte("base\n"), 0o644))
+	runGit(t, repoPath, "add", "conflict.txt")
+	runGit(t, repoPath, "commit", "-m", "add conflict base")
+	runGit(t, repoPath, "push", "origin", "main")
+
+	targets := taskSyncExpectedTargets(t, paths, repoPath, "op-sync")
+	taskWorktree := targets.WorktreeTeam.Worktree
+	runGit(t, repoPath, "branch", targets.WorktreeTeam.Branch, "main")
+	runGit(t, repoPath, "worktree", "add", taskWorktree, targets.WorktreeTeam.Branch)
+	must.NoError(os.WriteFile(filepath.Join(taskWorktree, "conflict.txt"), []byte("task\n"), 0o644))
+	runGit(t, taskWorktree, "add", "conflict.txt")
+	runGit(t, taskWorktree, "commit", "-m", "task conflict side")
+	runGit(t, taskWorktree, "push", "--set-upstream", "origin", targets.WorktreeTeam.Branch)
+	taskHeadBefore := strings.TrimSpace(runGit(t, taskWorktree, "rev-parse", "HEAD"))
+
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "conflict.txt"), []byte("default\n"), 0o644))
+	runGit(t, repoPath, "add", "conflict.txt")
+	runGit(t, repoPath, "commit", "-m", "default conflict side")
+	runGit(t, repoPath, "push", "origin", "main")
+
+	codexHome := filepath.Join(root, "codex-home")
+	t.Setenv("CODEX_HOME", codexHome)
+	writeCodexSessionLogForCLI(
+		t,
+		filepath.Join(codexHome, "sessions", "sync-conflict.jsonl"),
+		taskWorktree,
+		"sync-session",
+		time.Now().UTC(),
+	)
+	writeResolvingCodexCommand(t)
+
+	taskJSON := `[
+		{
+			"id":"op-sync",
+			"title":"Conflict repair",
+			"status":"in_progress",
+			"priority":1,
+			"issue_type":"task",
+			"metadata":{
+				"orpheus.branch":"` + targets.WorktreeTeam.Branch + `",
+				"orpheus.worktree":"` + taskWorktree + `",
+				"orpheus.pr_url":"https://github.test/org/alpha/pull/42"
+			}
+		}
+	]`
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
+		dir:    repoPath,
+		args:   "--json --readonly --sandbox show --id op-sync",
+		stdout: taskJSON,
+	}})
+	withFakeGHPRResponses(t, fakeGHPRResponses{
+		listStdout:   "unexpected list\n",
+		listExit:     66,
+		createStdout: "unexpected create\n",
+		createExit:   66,
+		statusStdout: `{"url":"https://github.test/org/alpha/pull/42","state":"OPEN","merged":false}`,
+		statusExit:   0,
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "sync", "op-sync"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Synced op-sync")
+	is.Contains(stdout, "resolved merge conflicts with the configured agent")
+	is.Equal("resolved\n", readFileString(t, filepath.Join(taskWorktree, "conflict.txt")))
+	taskHeadAfter := strings.TrimSpace(runGit(t, taskWorktree, "rev-parse", "HEAD"))
+	is.NotEqual(taskHeadBefore, taskHeadAfter)
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-sync.yaml"), &state))
+	must.Len(state.Events, 2)
+	started := state.Events[0]
+	finished := state.Events[1]
+	is.Equal(taskstate.EventSyncConflictStarted, started.Type)
+	must.NotNil(started.Execution)
+	is.Equal("sync-codex", started.Execution.Profile)
+	is.Equal(taskstate.EventSyncConflictFinished, finished.Type)
+	is.Equal(taskHeadAfter, finished.Commit)
+	must.NotNil(finished.Execution)
+	is.Equal(taskstate.AgentExecutionPurposeSyncConflictResolution, finished.Execution.Purpose)
+	is.Equal("sync-codex", finished.Execution.Profile)
+	is.Equal(taskstate.RunStatusSucceeded, finished.Execution.Status)
+	must.NotNil(finished.Execution.Session)
+	is.Equal("sync-session", finished.Execution.Session.ID)
+	must.NotNil(finished.Execution.Usage)
+	is.Equal(190, finished.Execution.Usage.TotalTokens)
+	is.Equal(taskstate.UsageCaptureCaptured, finished.Execution.UsageCapture.Status)
+	is.Equal("matched_codex_session", finished.Execution.UsageCapture.Reason)
+}
+
 //nolint:funlen // Sync scenario is clearer when provider, backend, and audit checks stay together.
 func TestTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR(t *testing.T) {
 	is := assert.New(t)
@@ -6682,9 +6869,27 @@ exit %d
 	return logPath
 }
 
+func writeResolvingCodexCommand(t *testing.T) {
+	t.Helper()
+
+	binDir := t.TempDir()
+	script := `#!/bin/sh
+printf 'resolved\n' > conflict.txt
+git add conflict.txt
+`
+	agentPath := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(agentPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 func writeCodexSessionLogForCLI(t *testing.T, path string, cwd string, sessionID string, startedAt time.Time) {
 	t.Helper()
 
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create codex session log directory: %v", err)
+	}
 	timestamp := startedAt.UTC().Format(time.RFC3339Nano)
 	content := `{"timestamp":"` + timestamp + `","type":"session_meta","payload":{"session_id":"` + sessionID + `","id":"` + sessionID + `","timestamp":"` + timestamp + `","cwd":"` + cwd + `","model":"gpt-5"}}
 {"timestamp":"` + timestamp + `","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":123,"cached_input_tokens":45,"output_tokens":67,"reasoning_output_tokens":8,"total_tokens":190}}}}

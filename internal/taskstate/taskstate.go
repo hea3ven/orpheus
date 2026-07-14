@@ -450,6 +450,7 @@ type SyncConflictResolutionEventOptions struct {
 	PRURL         string
 	ConflictFiles []string
 	Commit        string
+	Usage         RecordRunUsageOptions
 }
 
 type completeRunPayload struct {
@@ -2152,6 +2153,7 @@ func syncConflictResolutionEvent(
 		execution.StartedAt = at
 	}
 	if status != RunStatusRunning {
+		execution = applyRunUsageOptions(execution, opts.Usage, at)
 		finished := at
 		execution.FinishedAt = &finished
 		execution.DurationMillis = durationMillis(execution.StartedAt, finished)

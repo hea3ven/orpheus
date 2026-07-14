@@ -1156,6 +1156,25 @@ func TestStoreRecordsSyncConflictResolutionEvents(t *testing.T) {
 
 	finishedOpts := opts
 	finishedOpts.Commit = "abc123"
+	finishedOpts.Usage = taskstate.RecordRunUsageOptions{
+		Session: &taskstate.AgentSession{
+			ID:      "session-123",
+			LogPath: "/tmp/codex/session.jsonl",
+		},
+		Usage: &taskstate.AgentUsage{
+			InputTokens:           100,
+			CachedInputTokens:     25,
+			OutputTokens:          50,
+			ReasoningOutputTokens: 10,
+			TotalTokens:           150,
+		},
+		UsageCapture: taskstate.AgentUsageCapture{
+			Status:         taskstate.UsageCaptureCaptured,
+			Reason:         "matched_codex_session",
+			CandidateCount: 1,
+		},
+		Model: "gpt-5-mini",
+	}
 	finished, err := store.RecordSyncConflictResolutionFinished("alpha", "op-1", finishedOpts)
 	if err != nil {
 		t.Fatalf("record finished: %v", err)
@@ -1164,7 +1183,12 @@ func TestStoreRecordsSyncConflictResolutionEvents(t *testing.T) {
 		finished.Status != taskstate.RunStatusSucceeded ||
 		finished.Commit != "abc123" ||
 		finished.Execution == nil ||
-		finished.Execution.FinishedAt == nil {
+		finished.Execution.FinishedAt == nil ||
+		finished.Execution.Session == nil ||
+		finished.Execution.Usage == nil ||
+		finished.Execution.Usage.TotalTokens != 150 ||
+		finished.Execution.UsageCapture.Status != taskstate.UsageCaptureCaptured ||
+		finished.Execution.Model != "gpt-5-mini" {
 		t.Fatalf("finished = %#v, want succeeded conflict-resolution execution", finished)
 	}
 
@@ -1195,6 +1219,17 @@ func TestStoreRecordsSyncConflictResolutionEvents(t *testing.T) {
 		"agent: codex",
 		"profile: codex",
 		"session_name: sync-conflict-op-1",
+		"id: session-123",
+		"log_path: /tmp/codex/session.jsonl",
+		"input_tokens: 100",
+		"cached_input_tokens: 25",
+		"output_tokens: 50",
+		"reasoning_output_tokens: 10",
+		"total_tokens: 150",
+		"usage_capture:",
+		"status: captured",
+		"reason: matched_codex_session",
+		"candidate_count: 1",
 		"branch: orpheus/op-1",
 		"default_branch: main",
 		"worktree: /tmp/op-1",

@@ -99,8 +99,9 @@ type SyncConflictResolver interface {
 
 // PreparedSyncConflictResolution describes a selected conflict-repair agent launch.
 type PreparedSyncConflictResolution struct {
-	Execution taskstate.AgentExecution
-	Resolve   func(context.Context) error
+	Execution    taskstate.AgentExecution
+	Resolve      func(context.Context) error
+	CaptureUsage func(taskstate.AgentExecution, error) taskstate.RecordRunUsageOptions
 }
 
 // SyncConflictResolutionOptions describes one conflicted open-PR branch repair.
@@ -552,7 +553,8 @@ func (s SyncService) resolveOpenPRBranchConflict(
 		}
 		return result, statusErr
 	}
-	finishedAuditOpts := syncConflictResolutionEventOptions(conflictOpts, auditOpts.Execution, completed.Head)
+	finishedAuditOpts := auditOpts
+	finishedAuditOpts.Commit = strings.TrimSpace(completed.Head)
 	if _, err := s.RunStore.RecordSyncConflictResolutionFinished(repo.ID, target.task.ID, finishedAuditOpts); err != nil {
 		return SyncResult{}, fmt.Errorf("record conflict resolution finish for task %s: %w", target.task.ID, err)
 	}
@@ -594,6 +596,7 @@ func (s SyncService) runSyncConflictResolver(
 	}
 
 	err = prepared.Resolve(ctx)
+	auditOpts.Usage = syncConflictResolverUsageOptions(prepared, auditOpts.Execution, err)
 	if err != nil {
 		if recordErr := s.recordSyncConflictResolutionFailure(repoID, taskID, auditOpts, err); recordErr != nil {
 			err = errors.Join(err, recordErr)
@@ -605,6 +608,17 @@ func (s SyncService) runSyncConflictResolver(
 		)
 	}
 	return auditOpts, nil
+}
+
+func syncConflictResolverUsageOptions(
+	prepared PreparedSyncConflictResolution,
+	execution taskstate.AgentExecution,
+	runErr error,
+) taskstate.RecordRunUsageOptions {
+	if prepared.CaptureUsage == nil {
+		return taskstate.RecordRunUsageOptions{}
+	}
+	return prepared.CaptureUsage(execution, runErr)
 }
 
 func (s SyncService) recordSyncConflictResolutionFailure(

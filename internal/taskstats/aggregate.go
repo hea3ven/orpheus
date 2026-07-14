@@ -44,7 +44,8 @@ type AggregatePeriod struct {
 	ImplementationTimeCount   int
 	UnknownImplementationTime int
 
-	Totals AggregateTotals
+	Totals          AggregateTotals
+	TotalsByPurpose map[taskstate.AgentExecutionPurpose]AggregateTotals
 }
 
 // AggregateTotals contains execution, active time, token, and cost totals.
@@ -174,7 +175,9 @@ func (p *AggregatePeriod) addTask(
 		p.UnknownImplementationTime++
 	}
 
-	p.Totals.addTask(executionRecords(state))
+	records := executionRecords(state)
+	p.Totals.addTask(records)
+	p.addTaskByPurpose(records)
 }
 
 func resolvedAt(taskItem taskmodel.Task, state taskstate.TaskState) (time.Time, bool) {
@@ -230,23 +233,77 @@ func periodKey(value time.Time, group Group) string {
 }
 
 type executionRecord struct {
+	purpose   taskstate.AgentExecutionPurpose
 	execution taskstate.AgentExecution
 }
 
 func executionRecords(state taskstate.TaskState) []executionRecord {
 	records := make([]executionRecord, 0, len(state.Runs))
 	for _, run := range state.Runs {
-		records = append(records, executionRecord{execution: run.Execution})
+		records = append(records, newExecutionRecord(
+			taskstate.AgentExecutionPurposeImplementation,
+			run.Execution,
+		))
 	}
 	for _, reviewAttempt := range state.Reviews {
 		for _, step := range reviewAttempt.Steps {
 			if step.Execution == nil {
 				continue
 			}
-			records = append(records, executionRecord{execution: *step.Execution})
+			records = append(records, newExecutionRecord(
+				taskstate.AgentExecutionPurposeReview,
+				*step.Execution,
+			))
 		}
 	}
+	for _, event := range state.Events {
+		if !isTerminalSyncConflictResolutionEvent(event) || event.Execution == nil {
+			continue
+		}
+		records = append(records, newExecutionRecord(
+			taskstate.AgentExecutionPurposeSyncConflictResolution,
+			*event.Execution,
+		))
+	}
 	return records
+}
+
+func newExecutionRecord(
+	fallbackPurpose taskstate.AgentExecutionPurpose,
+	execution taskstate.AgentExecution,
+) executionRecord {
+	purpose := execution.Purpose
+	if purpose == "" {
+		purpose = fallbackPurpose
+	}
+	return executionRecord{
+		purpose:   purpose,
+		execution: execution,
+	}
+}
+
+func isTerminalSyncConflictResolutionEvent(event taskstate.Event) bool {
+	return event.Type == taskstate.EventSyncConflictFinished ||
+		event.Type == taskstate.EventSyncConflictFailed
+}
+
+func (p *AggregatePeriod) addTaskByPurpose(records []executionRecord) {
+	if len(records) == 0 {
+		return
+	}
+	if p.TotalsByPurpose == nil {
+		p.TotalsByPurpose = make(map[taskstate.AgentExecutionPurpose]AggregateTotals)
+	}
+
+	recordsByPurpose := make(map[taskstate.AgentExecutionPurpose][]executionRecord)
+	for _, record := range records {
+		recordsByPurpose[record.purpose] = append(recordsByPurpose[record.purpose], record)
+	}
+	for purpose, records := range recordsByPurpose {
+		totals := p.TotalsByPurpose[purpose]
+		totals.addTask(records)
+		p.TotalsByPurpose[purpose] = totals
+	}
 }
 
 func (t *AggregateTotals) addTask(records []executionRecord) {
