@@ -198,6 +198,96 @@ func TestAggregateReportFromSnapshotAveragesKnownUsageAndCostOnly(t *testing.T) 
 	is.False(ok)
 }
 
+//nolint:funlen // The fixture keeps combined and per-purpose aggregate assertions together.
+func TestAggregateReportIncludesTerminalSyncConflictResolutionExecutions(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+
+	closedAt := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	implementationStartedAt := time.Date(2026, 7, 2, 9, 0, 0, 0, time.UTC)
+	implementationFinishedAt := time.Date(2026, 7, 2, 9, 6, 0, 0, time.UTC)
+	startedAt := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	finishedAt := time.Date(2026, 7, 2, 10, 12, 0, 0, time.UTC)
+	snapshot := taskmodel.SnapshotResult{
+		Repositories: []taskmodel.RepositorySnapshot{{
+			Repository: taskmodel.Repository{ID: "alpha", Name: "Alpha"},
+			Tasks:      []taskmodel.Task{{ID: "op-conflict", ClosedAt: &closedAt}},
+		}},
+	}
+	loader := fakeStateLoader{
+		states: map[string]taskstate.TaskState{
+			"alpha/op-conflict": {
+				Runs: []taskstate.RunAttempt{{
+					Execution: taskstate.AgentExecution{
+						Purpose:    taskstate.AgentExecutionPurposeImplementation,
+						Status:     taskstate.RunStatusSucceeded,
+						Model:      "gpt-5",
+						StartedAt:  implementationStartedAt,
+						FinishedAt: &implementationFinishedAt,
+						Usage: &taskstate.AgentUsage{
+							InputTokens:  50,
+							OutputTokens: 10,
+							TotalTokens:  60,
+						},
+					},
+				}},
+				Events: []taskstate.Event{
+					{
+						Type: taskstate.EventSyncConflictStarted,
+						Execution: &taskstate.AgentExecution{
+							Purpose:   taskstate.AgentExecutionPurposeSyncConflictResolution,
+							Status:    taskstate.RunStatusRunning,
+							Model:     "gpt-5",
+							StartedAt: startedAt,
+						},
+					},
+					{
+						Type: taskstate.EventSyncConflictFinished,
+						Execution: &taskstate.AgentExecution{
+							Purpose:    taskstate.AgentExecutionPurposeSyncConflictResolution,
+							Status:     taskstate.RunStatusSucceeded,
+							Model:      "gpt-5",
+							StartedAt:  startedAt,
+							FinishedAt: &finishedAt,
+							Usage: &taskstate.AgentUsage{
+								InputTokens:  120,
+								OutputTokens: 30,
+								TotalTokens:  150,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	got, failures := taskstats.AggregateReportFromSnapshot(snapshot, loader, taskstats.GroupDay)
+
+	must.Empty(failures)
+	must.Len(got.Periods, 1)
+	period := got.Periods[0]
+	is.Equal(2, period.Totals.Executions)
+	is.Equal(18*time.Minute, period.Totals.Duration)
+	is.Equal(210, period.Totals.Usage.TotalTokens)
+	is.Equal(1, period.Totals.KnownUsageTasks)
+	is.Zero(period.Totals.UnknownUsage)
+	must.Len(period.TotalsByPurpose, 2)
+
+	implementationTotals := period.TotalsByPurpose[taskstate.AgentExecutionPurposeImplementation]
+	is.Equal(1, implementationTotals.Executions)
+	is.Equal(6*time.Minute, implementationTotals.Duration)
+	is.Equal(60, implementationTotals.Usage.TotalTokens)
+	is.Equal(1, implementationTotals.KnownUsageTasks)
+	is.Zero(implementationTotals.UnknownUsage)
+
+	conflictTotals := period.TotalsByPurpose[taskstate.AgentExecutionPurposeSyncConflictResolution]
+	is.Equal(1, conflictTotals.Executions)
+	is.Equal(12*time.Minute, conflictTotals.Duration)
+	is.Equal(150, conflictTotals.Usage.TotalTokens)
+	is.Equal(1, conflictTotals.KnownUsageTasks)
+	is.Zero(conflictTotals.UnknownUsage)
+}
+
 func TestAggregateReportFromSnapshotExcludesPartialUnknownTaskFromAverages(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)

@@ -42,9 +42,12 @@ type fakeSyncGit struct {
 }
 
 type fakeSyncConflictResolver struct {
-	requests  []workflow.SyncConflictResolutionOptions
-	execution taskstate.AgentExecution
-	err       error
+	requests       []workflow.SyncConflictResolutionOptions
+	execution      taskstate.AgentExecution
+	usage          taskstate.RecordRunUsageOptions
+	usageExecution taskstate.AgentExecution
+	usageErr       error
+	err            error
 }
 
 type fakeSyncBackend struct {
@@ -152,6 +155,11 @@ func (r *fakeSyncConflictResolver) PrepareSyncConflictResolution(
 		Execution: execution,
 		Resolve: func(context.Context) error {
 			return r.err
+		},
+		CaptureUsage: func(execution taskstate.AgentExecution, err error) taskstate.RecordRunUsageOptions {
+			r.usageExecution = execution
+			r.usageErr = err
+			return r.usage
 		},
 	}, nil
 }
@@ -517,9 +525,24 @@ func TestSyncServiceResolvesOpenPRBranchConflictWithAgent(t *testing.T) {
 			DefaultBranch: "main",
 			ConflictFiles: []string{"conflict.txt"},
 		},
-		completeResult: gitmeta.TaskBranchSyncResult{Status: gitmeta.TaskBranchSyncUpdated},
+		completeResult: gitmeta.TaskBranchSyncResult{Status: gitmeta.TaskBranchSyncUpdated, Head: "merge123"},
 	}
-	resolver := &fakeSyncConflictResolver{}
+	resolver := &fakeSyncConflictResolver{
+		usage: taskstate.RecordRunUsageOptions{
+			Session: &taskstate.AgentSession{ID: "session-123"},
+			Usage: &taskstate.AgentUsage{
+				InputTokens:  100,
+				OutputTokens: 50,
+				TotalTokens:  150,
+			},
+			UsageCapture: taskstate.AgentUsageCapture{
+				Status:         taskstate.UsageCaptureCaptured,
+				Reason:         "matched_codex_session",
+				CandidateCount: 1,
+			},
+			Model: "gpt-5",
+		},
+	}
 	service.Git = gitState
 	service.ConflictResolver = resolver
 	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateOpen}
@@ -552,6 +575,15 @@ func TestSyncServiceResolvesOpenPRBranchConflictWithAgent(t *testing.T) {
 		t.Fatalf("resolver requests = %#v, want one conflict repair", resolver.requests)
 	}
 	assertSyncConflictResolverRequest(t, resolver.requests[0], targets.WorktreeTeam)
+	if resolver.usageErr != nil ||
+		resolver.usageExecution.Agent != "codex" ||
+		resolver.usageExecution.SessionName != "sync-conflict-op-1" {
+		t.Fatalf(
+			"usage capture got execution=%#v err=%v, want successful conflict execution context",
+			resolver.usageExecution,
+			resolver.usageErr,
+		)
+	}
 	if len(runStore.conflictEvents) != 2 ||
 		runStore.conflictEvents[0].eventType != taskstate.EventSyncConflictStarted ||
 		runStore.conflictEvents[1].eventType != taskstate.EventSyncConflictFinished {
@@ -559,6 +591,10 @@ func TestSyncServiceResolvesOpenPRBranchConflictWithAgent(t *testing.T) {
 	}
 	assertSyncConflictAuditEvent(t, runStore.conflictEvents[0], taskstate.EventSyncConflictStarted, targets.WorktreeTeam)
 	assertSyncConflictAuditEvent(t, runStore.conflictEvents[1], taskstate.EventSyncConflictFinished, targets.WorktreeTeam)
+	assertSyncConflictUsage(t, runStore.conflictEvents[1])
+	if runStore.conflictEvents[1].opts.Commit != "merge123" {
+		t.Fatalf("finished commit = %q, want merge123", runStore.conflictEvents[1].opts.Commit)
+	}
 }
 
 func assertSyncConflictResolverRequest(
@@ -577,6 +613,19 @@ func assertSyncConflictResolverRequest(
 		len(req.ConflictFiles) != 1 ||
 		req.ConflictFiles[0] != "conflict.txt" {
 		t.Fatalf("resolver request = %#v, want repo/task/target/conflict context", req)
+	}
+}
+
+func assertSyncConflictUsage(t *testing.T, event fakeConflictEvent) {
+	t.Helper()
+
+	if event.opts.Usage.Session == nil ||
+		event.opts.Usage.Session.ID != "session-123" ||
+		event.opts.Usage.Usage == nil ||
+		event.opts.Usage.Usage.TotalTokens != 150 ||
+		event.opts.Usage.UsageCapture.Status != taskstate.UsageCaptureCaptured ||
+		event.opts.Usage.Model != "gpt-5" {
+		t.Fatalf("conflict usage = %#v, want captured session and token telemetry", event.opts.Usage)
 	}
 }
 
@@ -624,7 +673,15 @@ func TestSyncServiceReportsConflictAgentFailure(t *testing.T) {
 			ConflictFiles: []string{"conflict.txt"},
 		},
 	}
-	resolver := &fakeSyncConflictResolver{err: agentErr}
+	resolver := &fakeSyncConflictResolver{
+		err: agentErr,
+		usage: taskstate.RecordRunUsageOptions{
+			UsageCapture: taskstate.AgentUsageCapture{
+				Status: taskstate.UsageCaptureUnknown,
+				Reason: "agent process failed before usage capture",
+			},
+		},
+	}
 	service.Git = gitState
 	service.ConflictResolver = resolver
 	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateOpen}
@@ -642,6 +699,13 @@ func TestSyncServiceReportsConflictAgentFailure(t *testing.T) {
 		runStore.conflictEvents[1].eventType != taskstate.EventSyncConflictFailed ||
 		!errors.Is(runStore.conflictEvents[1].err, agentErr) {
 		t.Fatalf("conflict events = %#v, want started and failed with agent error", runStore.conflictEvents)
+	}
+	if !errors.Is(resolver.usageErr, agentErr) {
+		t.Fatalf("usage capture error = %v, want agent error", resolver.usageErr)
+	}
+	if runStore.conflictEvents[1].opts.Usage.Usage != nil ||
+		runStore.conflictEvents[1].opts.Usage.UsageCapture.Status != taskstate.UsageCaptureUnknown {
+		t.Fatalf("failed usage = %#v, want unknown capture without usage tokens", runStore.conflictEvents[1].opts.Usage)
 	}
 }
 
@@ -1245,6 +1309,97 @@ func TestSyncServiceSyncAllContinuesAfterOpenPRBranchUpdateFailure(t *testing.T)
 	}
 	if len(gitState.requests) != 2 {
 		t.Fatalf("git requests = %#v, want both open PR candidates attempted", gitState.requests)
+	}
+}
+
+//nolint:funlen // The batch conflict-repair path needs repository, PR, Git, and telemetry fixtures together.
+func TestSyncServiceSyncAllRecordsConflictResolutionTelemetry(t *testing.T) {
+	paths, source, targets := newSyncTestSource(t, filepath.Join(t.TempDir(), "repo"), "op-conflict")
+	backend := &fakeSyncBackend{
+		tasks: []task.Task{{
+			ID:        "op-conflict",
+			Status:    task.StatusInProgress,
+			IssueType: task.IssueTypeTask,
+			Metadata: task.Metadata{
+				task.MetadataBranch:   targets.WorktreeTeam.Branch,
+				task.MetadataWorktree: targets.WorktreeTeam.Worktree,
+				task.MetadataPRURL:    "https://github.test/org/repo/pull/1",
+			},
+		}},
+	}
+	provider := &fakePRProvider{
+		statusByURL: map[string]pullrequest.PullRequestStatus{
+			"https://github.test/org/repo/pull/1": {
+				URL:   "https://github.test/org/repo/pull/1",
+				State: pullrequest.StateOpen,
+			},
+		},
+	}
+	gitState := &fakeSyncGit{
+		err: fmt.Errorf("%w: conflict.txt", gitmeta.ErrMergeConflict),
+		beginResult: gitmeta.TaskBranchSyncResult{
+			Status:        gitmeta.TaskBranchSyncConflicted,
+			ConflictFiles: []string{"conflict.txt"},
+		},
+		completeResult: gitmeta.TaskBranchSyncResult{
+			Status: gitmeta.TaskBranchSyncUpdated,
+			Head:   "merge456",
+		},
+	}
+	resolver := &fakeSyncConflictResolver{
+		usage: taskstate.RecordRunUsageOptions{
+			Session: &taskstate.AgentSession{ID: "session-456"},
+			Usage: &taskstate.AgentUsage{
+				InputTokens:  200,
+				OutputTokens: 75,
+				TotalTokens:  275,
+			},
+			UsageCapture: taskstate.AgentUsageCapture{
+				Status:         taskstate.UsageCaptureCaptured,
+				Reason:         "matched_codex_session",
+				CandidateCount: 1,
+			},
+			Model: "gpt-5",
+		},
+	}
+	runStore := &fakeSyncRunStore{}
+	service := workflow.SyncService{
+		Paths:   paths,
+		Sources: []task.RepositorySource{source},
+		BackendFactory: func(task.RepositorySource) (task.SyncBackend, error) {
+			return backend, nil
+		},
+		RunStore:         runStore,
+		Git:              gitState,
+		ConflictResolver: resolver,
+		PRProvider:       provider,
+	}
+
+	result, err := service.SyncAll(context.Background())
+	if err != nil {
+		t.Fatalf("sync all: %v", err)
+	}
+	if len(result.Results) != 1 ||
+		result.Results[0].Task.ID != "op-conflict" ||
+		result.Results[0].Status != workflow.SyncStatusBranchUpdated {
+		t.Fatalf("results = %#v, want conflict-resolved branch update", result.Results)
+	}
+	if len(result.Failures) != 0 {
+		t.Fatalf("failures = %#v, want none", result.Failures)
+	}
+	if len(runStore.conflictEvents) != 2 ||
+		runStore.conflictEvents[0].eventType != taskstate.EventSyncConflictStarted ||
+		runStore.conflictEvents[1].eventType != taskstate.EventSyncConflictFinished {
+		t.Fatalf("conflict events = %#v, want started and finished", runStore.conflictEvents)
+	}
+	if runStore.conflictEvents[1].opts.Commit != "merge456" {
+		t.Fatalf("finished commit = %q, want merge456", runStore.conflictEvents[1].opts.Commit)
+	}
+	if runStore.conflictEvents[1].opts.Usage.Usage == nil ||
+		runStore.conflictEvents[1].opts.Usage.Usage.TotalTokens != 275 ||
+		runStore.conflictEvents[1].opts.Usage.Session == nil ||
+		runStore.conflictEvents[1].opts.Usage.Session.ID != "session-456" {
+		t.Fatalf("finished usage = %#v, want sync-all conflict telemetry", runStore.conflictEvents[1].opts.Usage)
 	}
 }
 

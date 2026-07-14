@@ -790,8 +790,7 @@ func taskRunUsageOptions(command *cobra.Command, start workflow.DispatchStartRes
 		return taskstate.RecordRunUsageOptions{
 			UsageCapture: taskstate.AgentUsageCapture{
 				Status: taskstate.UsageCaptureUnknown,
-				Reason: "usage capture is not supported for harness " +
-					formatTaskStatsField(start.Attempt.Execution.Harness),
+				Reason: unsupportedUsageCaptureHarnessReason(start.Attempt.Execution.Harness),
 			},
 		}
 	}
@@ -3295,7 +3294,45 @@ func (r syncConflictAgentResolver) PrepareSyncConflictResolution(
 				Stderr: r.stderr,
 			})
 		},
+		CaptureUsage: syncConflictAgentUsageOptions(commandSnapshot, opts.Worktree),
 	}, nil
+}
+
+func syncConflictAgentUsageOptions(
+	command agent.CommandSnapshot,
+	worktree string,
+) func(taskstate.AgentExecution, error) taskstate.RecordRunUsageOptions {
+	return func(execution taskstate.AgentExecution, runErr error) taskstate.RecordRunUsageOptions {
+		if agentexec.IsStartError(runErr) {
+			return taskstate.RecordRunUsageOptions{
+				UsageCapture: taskstate.AgentUsageCapture{
+					Status: taskstate.UsageCaptureUnknown,
+					Reason: "agent process failed before usage capture",
+				},
+			}
+		}
+		if command.Harness != "codex" {
+			return taskstate.RecordRunUsageOptions{
+				UsageCapture: taskstate.AgentUsageCapture{
+					Status: taskstate.UsageCaptureUnknown,
+					Reason: unsupportedUsageCaptureHarnessReason(command.Harness),
+				},
+			}
+		}
+		return agent.CaptureCodexUsage(agent.CodexUsageCaptureOptions{
+			ExecutionDir: worktree,
+			StartedAt:    execution.StartedAt,
+			Env:          agent.CodexUsageCaptureEnvironment(),
+		})
+	}
+}
+
+func unsupportedUsageCaptureHarnessReason(harness string) string {
+	harness = strings.TrimSpace(harness)
+	if harness == "" {
+		harness = "unknown"
+	}
+	return "unsupported_harness:" + harness
 }
 
 func syncConflictAgentSessionName(taskID string) string {
@@ -4222,7 +4259,28 @@ func taskStatsExecutionRecords(state taskstate.TaskState) []taskStatsExecutionRe
 			})
 		}
 	}
+	for _, event := range state.Events {
+		if !isTerminalTaskStatsSyncConflictEvent(event) || event.Execution == nil {
+			continue
+		}
+		status := event.Status
+		if status == "" {
+			status = event.Execution.Status
+		}
+		records = append(records, taskStatsExecutionRecord{
+			activity:  "sync-conflict-resolution",
+			attempt:   "-",
+			step:      "-",
+			status:    string(status),
+			execution: *event.Execution,
+		})
+	}
 	return records
+}
+
+func isTerminalTaskStatsSyncConflictEvent(event taskstate.Event) bool {
+	return event.Type == taskstate.EventSyncConflictFinished ||
+		event.Type == taskstate.EventSyncConflictFailed
 }
 
 func taskStatsRow(record taskStatsExecutionRecord) []string {
@@ -4257,19 +4315,24 @@ type taskStatsTotals struct {
 func taskStatsTotalRows(records []taskStatsExecutionRecord) [][]string {
 	implementation := taskStatsTotals{}
 	review := taskStatsTotals{}
+	syncConflictResolution := taskStatsTotals{}
 	for _, record := range records {
 		switch record.activity {
 		case "implementation":
 			implementation.add(record.execution)
 		case "review-agent":
 			review.add(record.execution)
+		case "sync-conflict-resolution":
+			syncConflictResolution.add(record.execution)
 		}
 	}
 	combined := implementation
 	combined.addTotals(review)
+	combined.addTotals(syncConflictResolution)
 	return [][]string{
 		taskStatsTotalRow("implementation", implementation),
 		taskStatsTotalRow("review-agent", review),
+		taskStatsTotalRow("sync-conflict-resolution", syncConflictResolution),
 		taskStatsTotalRow("combined", combined),
 	}
 }
