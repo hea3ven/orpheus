@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/state"
@@ -62,6 +63,10 @@ const (
 
 	// TaskBranchSyncUpdated means origin/default was merged and the task branch was pushed.
 	TaskBranchSyncUpdated TaskBranchSyncStatus = "updated"
+
+	// TaskBranchSyncConflicted means origin/default was merged into the task branch
+	// and left conflicts for an agent to resolve.
+	TaskBranchSyncConflicted TaskBranchSyncStatus = "conflicted"
 )
 
 // TaskBranchSyncOptions describes a PR branch update from the registered default branch.
@@ -79,6 +84,7 @@ type TaskBranchSyncResult struct {
 	DefaultBranch string
 	PreviousHead  string
 	Head          string
+	ConflictFiles []string
 }
 
 type taskWorktreePlan struct {
@@ -298,34 +304,128 @@ func SyncTaskBranchWithDefault(ctx context.Context, opts TaskBranchSyncOptions) 
 	if err != nil {
 		return TaskBranchSyncResult{}, err
 	}
-	result := TaskBranchSyncResult{
-		Branch:        plan.Branch,
-		DefaultBranch: plan.DefaultBranch,
-	}
+	result := newTaskBranchSyncResult(plan)
 
-	if err := validateTaskBranchSyncCheckout(ctx, plan); err != nil {
+	if err := prepareTaskBranchSync(ctx, plan); err != nil {
 		return TaskBranchSyncResult{}, err
-	}
-	if err := requireCleanRepoRootFor(ctx, plan.Worktree, "task sync branch update"); err != nil {
-		return TaskBranchSyncResult{}, err
-	}
-	taskBranchFetched, err := fetchTaskBranch(ctx, plan.Worktree, plan.Branch)
-	if err != nil {
-		return TaskBranchSyncResult{}, err
-	}
-	if taskBranchFetched {
-		if err := fastForwardTaskBranchFromOrigin(ctx, plan.Worktree, plan.Branch); err != nil {
-			return TaskBranchSyncResult{}, err
-		}
-		if err := requireCleanRepoRootFor(ctx, plan.Worktree, "task sync branch update"); err != nil {
-			return TaskBranchSyncResult{}, err
-		}
 	}
 	if _, err := prepareDefaultBranchRef(ctx, plan.Worktree, plan.DefaultBranch); err != nil {
 		return TaskBranchSyncResult{}, err
 	}
 
 	return syncFetchedTaskBranchWithDefault(ctx, plan, result)
+}
+
+// BeginTaskBranchConflictResolution fetches origin branches and attempts to
+// merge origin/default into a task branch, leaving merge conflicts in the
+// worktree when the merge cannot be completed automatically.
+func BeginTaskBranchConflictResolution(
+	ctx context.Context,
+	opts TaskBranchSyncOptions,
+) (TaskBranchSyncResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	plan, err := newTaskBranchSyncPlan(opts)
+	if err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	result := newTaskBranchSyncResult(plan)
+
+	if err := prepareTaskBranchSync(ctx, plan); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if _, err := prepareDefaultBranchRef(ctx, plan.Worktree, plan.DefaultBranch); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	return beginFetchedTaskBranchConflictResolution(ctx, plan, result)
+}
+
+// CompleteTaskBranchConflictResolution verifies an in-progress conflicted merge
+// is resolved, creates the merge commit, and pushes the task branch.
+func CompleteTaskBranchConflictResolution(
+	ctx context.Context,
+	opts TaskBranchSyncOptions,
+	conflictFiles []string,
+) (TaskBranchSyncResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	plan, err := newTaskBranchSyncPlan(opts)
+	if err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	result := newTaskBranchSyncResult(plan)
+
+	if err := validateTaskBranchSyncCheckout(ctx, plan); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if err := requireMergeInProgress(ctx, plan.Worktree); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	resolutionState, err := mergeResolutionState(ctx, plan.Worktree, conflictFiles)
+	if err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	unresolved, err := unmergedFiles(ctx, plan.Worktree)
+	if err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if len(unresolved) > 0 {
+		result.Status = TaskBranchSyncConflicted
+		result.ConflictFiles = unresolved
+		return result, fmt.Errorf(
+			"complete conflict resolution for task branch %q: unresolved merge conflicts remain: %s",
+			plan.Branch,
+			strings.Join(unresolved, ", "),
+		)
+	}
+	if err := stageResolvedConflictFiles(ctx, plan.Worktree, conflictFiles); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if err := requireExpectedConflictResolutionChanges(ctx, plan.Worktree, resolutionState); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if err := rejectConflictMarkers(plan.Worktree, conflictFiles); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	head, err := commitAndPushResolvedMerge(ctx, plan.Worktree, plan.Branch)
+	if err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	result.Status = TaskBranchSyncUpdated
+	result.Head = head
+	return result, nil
+}
+
+func newTaskBranchSyncResult(plan taskBranchSyncPlan) TaskBranchSyncResult {
+	return TaskBranchSyncResult{
+		Branch:        plan.Branch,
+		DefaultBranch: plan.DefaultBranch,
+		ConflictFiles: []string{},
+	}
+}
+
+func prepareTaskBranchSync(ctx context.Context, plan taskBranchSyncPlan) error {
+	if err := validateTaskBranchSyncCheckout(ctx, plan); err != nil {
+		return err
+	}
+	if err := requireCleanRepoRootFor(ctx, plan.Worktree, "task sync branch update"); err != nil {
+		return err
+	}
+	taskBranchFetched, err := fetchTaskBranch(ctx, plan.Worktree, plan.Branch)
+	if err != nil {
+		return err
+	}
+	if !taskBranchFetched {
+		return nil
+	}
+	if err := fastForwardTaskBranchFromOrigin(ctx, plan.Worktree, plan.Branch); err != nil {
+		return err
+	}
+	return requireCleanRepoRootFor(ctx, plan.Worktree, "task sync branch update")
 }
 
 func syncFetchedTaskBranchWithDefault(
@@ -361,6 +461,64 @@ func syncFetchedTaskBranchWithDefault(
 		return TaskBranchSyncResult{}, err
 	}
 	if err := mergeDefaultIntoTaskBranch(ctx, plan.Worktree, plan.DefaultBranch, remoteRef); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if err := requireCleanRepoRootFor(ctx, plan.Worktree, "task sync branch update"); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if err := PushTaskBranch(ctx, plan.Worktree, plan.Branch); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+
+	head, err := HeadCommit(ctx, plan.Worktree)
+	if err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	result.Status = TaskBranchSyncUpdated
+	result.Head = head
+	return result, nil
+}
+
+func beginFetchedTaskBranchConflictResolution(
+	ctx context.Context,
+	plan taskBranchSyncPlan,
+	result TaskBranchSyncResult,
+) (TaskBranchSyncResult, error) {
+	previousHead, err := HeadCommit(ctx, plan.Worktree)
+	if err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	result.PreviousHead = previousHead
+
+	remoteRef := "refs/remotes/origin/" + plan.DefaultBranch
+	containsDefault, err := branchContainsRef(ctx, plan.Worktree, "HEAD", remoteRef)
+	if err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if containsDefault {
+		pushed, err := pushTaskBranchIfRemoteBehind(ctx, plan.Worktree, plan.Branch, previousHead)
+		if err != nil {
+			return TaskBranchSyncResult{}, err
+		}
+		result.Status = TaskBranchSyncAlreadyCurrent
+		if pushed {
+			result.Status = TaskBranchSyncPushed
+		}
+		result.Head = previousHead
+		return result, nil
+	}
+
+	if err := mergeDefaultIntoTaskBranchForResolution(ctx, plan.Worktree, plan.DefaultBranch, remoteRef); err != nil {
+		if errors.Is(err, ErrMergeConflict) {
+			conflictFiles, filesErr := unmergedFiles(ctx, plan.Worktree)
+			if filesErr != nil {
+				return TaskBranchSyncResult{}, filesErr
+			}
+			result.Status = TaskBranchSyncConflicted
+			result.Head = previousHead
+			result.ConflictFiles = conflictFiles
+			return result, nil
+		}
 		return TaskBranchSyncResult{}, err
 	}
 	if err := requireCleanRepoRootFor(ctx, plan.Worktree, "task sync branch update"); err != nil {
@@ -1083,7 +1241,7 @@ func verifyMergeWouldBeClean(ctx context.Context, dir string, remoteRef string) 
 		return nil
 	}
 	if gitExitCode(err) == 1 {
-		return fmt.Errorf("merge default branch %s into task branch would conflict; no changes were pushed%s", remoteRef, gitOutputSuffix(output))
+		return fmt.Errorf("%w: merge default branch %s into task branch would conflict; no changes were pushed%s", ErrMergeConflict, remoteRef, gitOutputSuffix(output))
 	}
 	return fmt.Errorf("preflight merge default branch %s into task branch: %w%s", remoteRef, err, gitOutputSuffix(output))
 }
@@ -1106,6 +1264,331 @@ func mergeDefaultIntoTaskBranch(ctx context.Context, dir string, defaultBranch s
 		)
 	}
 	return fmt.Errorf("merge default branch %q into task branch: %w%s", defaultBranch, err, gitOutputSuffix(output))
+}
+
+func mergeDefaultIntoTaskBranchForResolution(
+	ctx context.Context,
+	dir string,
+	defaultBranch string,
+	remoteRef string,
+) error {
+	output, err := runGitContext(ctx, dir, "merge", "--no-edit", remoteRef)
+	if err == nil {
+		return nil
+	}
+	if gitExitCode(err) == 1 {
+		return fmt.Errorf("%w: merge default branch %q into task branch%s", ErrMergeConflict, defaultBranch, gitOutputSuffix(output))
+	}
+	return fmt.Errorf("merge default branch %q into task branch for conflict resolution: %w%s", defaultBranch, err, gitOutputSuffix(output))
+}
+
+func requireMergeInProgress(ctx context.Context, dir string) error {
+	output, err := runGitContext(ctx, dir, "rev-parse", "--verify", "--quiet", "MERGE_HEAD")
+	if err != nil {
+		return fmt.Errorf("verify merge in progress: no merge is in progress%s", gitOutputSuffix(output))
+	}
+	if strings.TrimSpace(output) == "" {
+		return errors.New("verify merge in progress: git returned an empty MERGE_HEAD")
+	}
+	return nil
+}
+
+func unmergedFiles(ctx context.Context, dir string) ([]string, error) {
+	output, err := runGitContext(ctx, dir, "diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return nil, fmt.Errorf("inspect unresolved merge conflicts: %w%s", err, gitOutputSuffix(output))
+	}
+	files := make([]string, 0)
+	for _, line := range strings.Split(output, "\n") {
+		file := strings.TrimSpace(line)
+		if file != "" {
+			files = append(files, file)
+		}
+	}
+	return files, nil
+}
+
+type conflictResolutionState struct {
+	mergeFiles    map[string]bool
+	conflictFiles map[string]bool
+}
+
+func mergeResolutionState(
+	ctx context.Context,
+	dir string,
+	conflictFiles []string,
+) (conflictResolutionState, error) {
+	output, err := runGitContext(ctx, dir, "diff", "--name-only", "-z", "HEAD", "MERGE_HEAD")
+	if err != nil {
+		return conflictResolutionState{}, fmt.Errorf("inspect merge resolution files: %w%s", err, gitOutputSuffix(output))
+	}
+
+	state := conflictResolutionState{
+		mergeFiles:    map[string]bool{},
+		conflictFiles: map[string]bool{},
+	}
+	for _, file := range splitNULPaths(output) {
+		if path, ok := cleanGitPath(file); ok {
+			state.mergeFiles[path] = true
+		}
+	}
+	for _, file := range conflictFiles {
+		path, ok := cleanGitPath(file)
+		if !ok {
+			continue
+		}
+		state.mergeFiles[path] = true
+		state.conflictFiles[path] = true
+	}
+	return state, nil
+}
+
+func requireExpectedConflictResolutionChanges(
+	ctx context.Context,
+	dir string,
+	state conflictResolutionState,
+) error {
+	output, err := runGitContext(ctx, dir, "status", "--porcelain=v1", "-z", "--untracked-files=normal")
+	if err != nil {
+		return fmt.Errorf("inspect resolved merge status: %w%s", err, gitOutputSuffix(output))
+	}
+
+	unexpected := map[string]bool{}
+	for _, entry := range parseStatusPorcelainZ(output) {
+		for _, file := range entry.contentPaths() {
+			path, ok := cleanGitPath(file)
+			if !ok {
+				unexpected[file] = true
+				continue
+			}
+			if !state.mergeFiles[path] || (!state.conflictFiles[path] && entry.hasWorktreeChange()) {
+				unexpected[path] = true
+			}
+		}
+	}
+	if err := addUnexpectedCleanMergeIndexChanges(ctx, dir, state, unexpected); err != nil {
+		return err
+	}
+	if len(unexpected) == 0 {
+		return nil
+	}
+
+	files := make([]string, 0, len(unexpected))
+	for file := range unexpected {
+		files = append(files, file)
+	}
+	sort.Strings(files)
+	return fmt.Errorf(
+		"complete conflict resolution: unexpected changes outside merge conflict files: %s; "+
+			"resolve only the reported merge conflicts or clean up the extra changes before retrying",
+		strings.Join(files, ", "),
+	)
+}
+
+func addUnexpectedCleanMergeIndexChanges(
+	ctx context.Context,
+	dir string,
+	state conflictResolutionState,
+	unexpected map[string]bool,
+) error {
+	cleanMergeFiles := make([]string, 0)
+	for file := range state.mergeFiles {
+		if !state.conflictFiles[file] {
+			cleanMergeFiles = append(cleanMergeFiles, file)
+		}
+	}
+	if len(cleanMergeFiles) == 0 {
+		return nil
+	}
+	exists, err := gitRefExists(ctx, dir, "AUTO_MERGE")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+
+	args := append([]string{"diff", "--cached", "--name-only", "-z", "AUTO_MERGE", "--"}, cleanMergeFiles...)
+	output, err := runGitContext(ctx, dir, args...)
+	if err != nil {
+		return fmt.Errorf("inspect clean merge index changes: %w%s", err, gitOutputSuffix(output))
+	}
+	for _, file := range splitNULPaths(output) {
+		if path, ok := cleanGitPath(file); ok {
+			unexpected[path] = true
+		}
+	}
+	return nil
+}
+
+type statusEntry struct {
+	x     byte
+	y     byte
+	paths []string
+}
+
+func (e statusEntry) hasWorktreeChange() bool {
+	return e.y != ' '
+}
+
+func (e statusEntry) contentPaths() []string {
+	if !e.isRenameOrCopy() || len(e.paths) <= 1 {
+		return e.paths
+	}
+	return e.paths[:1]
+}
+
+func (e statusEntry) isRenameOrCopy() bool {
+	return e.x == 'R' || e.x == 'C' || e.y == 'R' || e.y == 'C'
+}
+
+func parseStatusPorcelainZ(output string) []statusEntry {
+	records := splitNULPaths(output)
+	entries := make([]statusEntry, 0, len(records))
+	for i := 0; i < len(records); i++ {
+		record := records[i]
+		if len(record) < 4 {
+			continue
+		}
+		entry := statusEntry{
+			x:     record[0],
+			y:     record[1],
+			paths: []string{record[3:]},
+		}
+		if entry.isRenameOrCopy() && i+1 < len(records) {
+			entry.paths = append(entry.paths, records[i+1])
+			i++
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+func splitNULPaths(output string) []string {
+	parts := strings.Split(output, "\x00")
+	paths := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" {
+			paths = append(paths, part)
+		}
+	}
+	return paths
+}
+
+func gitRefExists(ctx context.Context, dir string, ref string) (bool, error) {
+	output, err := runGitContext(ctx, dir, "rev-parse", "--verify", "--quiet", ref)
+	if err == nil {
+		return strings.TrimSpace(output) != "", nil
+	}
+	if gitExitCode(err) == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("inspect git ref %q: %w%s", ref, err, gitOutputSuffix(output))
+}
+
+func cleanGitPath(file string) (string, bool) {
+	file = strings.TrimSpace(file)
+	if file == "" || filepath.IsAbs(file) {
+		return "", false
+	}
+	path := filepath.ToSlash(filepath.Clean(file))
+	if path == "." || path == ".." || strings.HasPrefix(path, "../") {
+		return "", false
+	}
+	return path, true
+}
+
+func stageResolvedConflictFiles(ctx context.Context, dir string, conflictFiles []string) error {
+	files := make([]string, 0, len(conflictFiles))
+	seen := map[string]bool{}
+	for _, file := range conflictFiles {
+		file = strings.TrimSpace(file)
+		if file == "" || seen[file] {
+			continue
+		}
+		seen[file] = true
+		files = append(files, file)
+	}
+	if len(files) == 0 {
+		return nil
+	}
+
+	args := append([]string{"add", "--"}, files...)
+	output, err := runGitContext(ctx, dir, args...)
+	if err != nil {
+		return fmt.Errorf("stage resolved conflict files: %w%s", err, gitOutputSuffix(output))
+	}
+	return nil
+}
+
+func rejectConflictMarkers(dir string, conflictFiles []string) error {
+	for _, file := range conflictFiles {
+		path, ok := cleanConflictFilePath(file)
+		if !ok {
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(dir, path))
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return fmt.Errorf("inspect resolved conflict file %q: %w", file, err)
+		}
+		if hasConflictMarker(content) {
+			return fmt.Errorf("resolved conflict file %q still contains conflict markers", file)
+		}
+	}
+	return nil
+}
+
+func cleanConflictFilePath(file string) (string, bool) {
+	file = strings.TrimSpace(file)
+	if file == "" || filepath.IsAbs(file) {
+		return "", false
+	}
+	path := filepath.Clean(file)
+	if path == "." || path == ".." || strings.HasPrefix(path, ".."+string(os.PathSeparator)) {
+		return "", false
+	}
+	return path, true
+}
+
+func hasConflictMarker(content []byte) bool {
+	for _, line := range strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "<<<<<<< ") ||
+			trimmed == "=======" ||
+			strings.HasPrefix(trimmed, ">>>>>>> ") {
+			return true
+		}
+	}
+	return false
+}
+
+func commitResolvedMerge(ctx context.Context, dir string) error {
+	output, err := runGitContext(ctx, dir, "commit", "--no-edit")
+	if err != nil {
+		return fmt.Errorf("commit resolved merge: %w%s", err, gitOutputSuffix(output))
+	}
+	return nil
+}
+
+func commitAndPushResolvedMerge(ctx context.Context, dir string, branch string) (string, error) {
+	if err := commitResolvedMerge(ctx, dir); err != nil {
+		return "", err
+	}
+	if err := requireCleanRepoRootFor(ctx, dir, "resolved task branch merge push"); err != nil {
+		return "", err
+	}
+	if err := PushTaskBranch(ctx, dir, branch); err != nil {
+		return "", err
+	}
+
+	head, err := HeadCommit(ctx, dir)
+	if err != nil {
+		return "", err
+	}
+	return head, nil
 }
 
 func pushTaskBranchIfRemoteBehind(ctx context.Context, dir string, branch string, head string) (bool, error) {
