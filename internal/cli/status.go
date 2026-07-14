@@ -80,7 +80,7 @@ func taskRunStateIndex(
 	paths state.Paths,
 	snapshot taskmodel.SnapshotResult,
 ) (status.LocalTaskStateIndex, []taskmodel.RepoFailure) {
-	store := taskstate.Service(taskstate.NewStore(paths))
+	store := taskstate.NewStore(paths)
 	index := status.LocalTaskStateIndex{}
 	failures := make([]taskmodel.RepoFailure, 0)
 

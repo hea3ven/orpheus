@@ -34,8 +34,9 @@ const (
 type AgentExecutionPurpose string
 
 const (
-	AgentExecutionPurposeImplementation AgentExecutionPurpose = "implementation"
-	AgentExecutionPurposeReview         AgentExecutionPurpose = "review"
+	AgentExecutionPurposeImplementation         AgentExecutionPurpose = "implementation"
+	AgentExecutionPurposeReview                 AgentExecutionPurpose = "review"
+	AgentExecutionPurposeSyncConflictResolution AgentExecutionPurpose = "sync_conflict_resolution"
 )
 
 // UsageCaptureStatus records whether usage telemetry was captured.
@@ -74,20 +75,23 @@ const (
 type EventType string
 
 const (
-	EventWorktreeCreated    EventType = "worktree_created"
-	EventTaskBranchCreated  EventType = "task_branch_created"
-	EventWorktreeReused     EventType = "worktree_reused"
-	EventWorktreeRecreated  EventType = "worktree_recreated"
-	EventRunStarted         EventType = "run_started"
-	EventRunFinished        EventType = "run_finished"
-	EventRunStartFailed     EventType = "run_start_failed"
-	EventCompletionRecorded EventType = "completion_recorded"
-	EventCompletionRepeated EventType = "completion_repeated"
-	EventChangesPushed      EventType = "changes_pushed"
-	EventPRCreated          EventType = "pr_created"
-	EventPRRecovered        EventType = "pr_recovered"
-	EventFinalizationFailed EventType = "finalization_failed"
-	EventTaskClosed         EventType = "task_closed"
+	EventWorktreeCreated      EventType = "worktree_created"
+	EventTaskBranchCreated    EventType = "task_branch_created"
+	EventWorktreeReused       EventType = "worktree_reused"
+	EventWorktreeRecreated    EventType = "worktree_recreated"
+	EventRunStarted           EventType = "run_started"
+	EventRunFinished          EventType = "run_finished"
+	EventRunStartFailed       EventType = "run_start_failed"
+	EventCompletionRecorded   EventType = "completion_recorded"
+	EventCompletionRepeated   EventType = "completion_repeated"
+	EventChangesPushed        EventType = "changes_pushed"
+	EventPRCreated            EventType = "pr_created"
+	EventPRRecovered          EventType = "pr_recovered"
+	EventFinalizationFailed   EventType = "finalization_failed"
+	EventTaskClosed           EventType = "task_closed"
+	EventSyncConflictStarted  EventType = "sync_conflict_started"
+	EventSyncConflictFinished EventType = "sync_conflict_finished"
+	EventSyncConflictFailed   EventType = "sync_conflict_failed"
 )
 
 const (
@@ -115,50 +119,11 @@ var (
 	ErrFinalizationConflict = errors.New("task finalization already recorded with different facts")
 )
 
-// Service is the small task-state API consumed by orchestration and projections.
-type Service interface {
-	Path(repoID, taskID string) (string, error)
-	Load(repoID, taskID string) (TaskState, error)
-	LatestRun(repoID, taskID string) (RunAttempt, bool, error)
-	ActiveRun(repoID, taskID string) (RunAttempt, bool, error)
-	RecordSetupEvent(repoID, taskID string, eventType EventType, opts SetupEventOptions) (Event, error)
-	StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt, error)
-	RecordRunUsage(repoID, taskID string, attempt int, opts RecordRunUsageOptions) (RunAttempt, error)
-	CompleteRun(repoID, taskID string, attempt int, opts CompleteRunOptions) (RunAttempt, error)
-	RecordRepeatedCompletion(repoID, taskID string, attempt int, opts RepeatedCompletionOptions) (Event, error)
-	FinishRun(repoID, taskID string, attempt int, status RunStatus) (RunAttempt, error)
-	FailRunStart(repoID, taskID string, attempt int, cause error) (RunAttempt, error)
-	StartReview(repoID, taskID string) (ReviewAttempt, error)
-	StartReviewWithOptions(repoID, taskID string, opts StartReviewOptions) (ReviewAttempt, error)
-	PauseReviewForManual(repoID, taskID string, attempt int, step string) (ReviewAttempt, error)
-	ResumeReview(repoID, taskID string, attempt int) (ReviewAttempt, error)
-	RecordReviewStep(repoID, taskID string, attempt int, opts RecordReviewStepOptions) (ReviewAttempt, error)
-	FinishReviewStepExecution(repoID, taskID string, attempt int, stepName string, opts FinishReviewStepExecutionOptions) (ReviewAttempt, error)
-	RecordReviewStepUsage(repoID, taskID string, attempt int, stepName string, opts RecordRunUsageOptions) (ReviewAttempt, error)
-	RecordReviewFinding(repoID, taskID string, attempt int, finding ReviewFinding) (ReviewAttempt, error)
-	PromoteReviewAdvisoryFinding(repoID, taskID string, attempt int, findingIndex int) (ReviewAttempt, error)
-	DowngradeReviewBlockingFinding(repoID, taskID string, attempt int, findingIndex int, reason string) (ReviewAttempt, error)
-	WaiveReviewBlockingFinding(repoID, taskID string, attempt int, findingIndex int, reason string) (ReviewAttempt, error)
-	RecordReviewFindingCreatedTask(repoID, taskID string, attempt int, findingIndex int, createdTaskID string) (ReviewAttempt, error)
-	TargetReviewFindings(repoID, taskID string, reviewAttempt int, findingIndexes []int, runAttempt int) (ReviewAttempt, error)
-	FinishReview(repoID, taskID string, attempt int, status ReviewStatus) (ReviewAttempt, error)
-	MarkReviewAutonomousBudgetExhausted(repoID, taskID string, attempt int) (ReviewAttempt, error)
-	RecordFinalizationCommit(repoID, taskID string, commit string) (Finalization, error)
-	RecordFinalizationPush(repoID, taskID string, opts FinalizationPushOptions) (Finalization, error)
-	RecordFinalizationClose(repoID, taskID string, opts FinalizationCloseOptions) (Finalization, error)
-	RecordFinalizationFailure(repoID, taskID string, cause error) (Event, error)
-	RecordFeatureBranchPR(repoID, taskID string, opts FeatureBranchPROptions) (Event, error)
-	RecordTaskClosed(repoID, taskID string, opts TaskClosedOptions) (Event, error)
-	Events(repoID, taskID string) ([]Event, error)
-}
-
 // Store is a YAML-backed per-task state store under the Orpheus data root.
 type Store struct {
 	paths orstate.Paths
 	now   func() time.Time
 }
-
-var _ Service = Store{}
 
 // TaskState is the human-readable YAML schema for one task's Orpheus state.
 type TaskState struct {
@@ -370,13 +335,17 @@ type Event struct {
 	Type EventType `yaml:"type"`
 	At   time.Time `yaml:"at"`
 
-	Attempt int       `yaml:"attempt,omitempty"`
-	Status  RunStatus `yaml:"status,omitempty"`
-	Agent   string    `yaml:"agent,omitempty"`
+	Attempt   int             `yaml:"attempt,omitempty"`
+	Status    RunStatus       `yaml:"status,omitempty"`
+	Agent     string          `yaml:"agent,omitempty"`
+	Execution *AgentExecution `yaml:"execution,omitempty"`
 
-	Branch   string `yaml:"branch,omitempty"`
-	Worktree string `yaml:"worktree,omitempty"`
-	Error    string `yaml:"error,omitempty"`
+	Branch        string   `yaml:"branch,omitempty"`
+	DefaultBranch string   `yaml:"default_branch,omitempty"`
+	Worktree      string   `yaml:"worktree,omitempty"`
+	ConflictFiles []string `yaml:"conflict_files,omitempty"`
+	Commit        string   `yaml:"commit,omitempty"`
+	Error         string   `yaml:"error,omitempty"`
 
 	Message                      string `yaml:"message,omitempty"`
 	RequestedSummary             string `yaml:"requested_summary,omitempty"`
@@ -420,6 +389,12 @@ func (e Event) DisplayName() string {
 		return "Finalization failed"
 	case EventTaskClosed:
 		return "Task closed"
+	case EventSyncConflictStarted:
+		return "Sync conflict resolution started"
+	case EventSyncConflictFinished:
+		return "Sync conflict resolution finished"
+	case EventSyncConflictFailed:
+		return "Sync conflict resolution failed"
 	default:
 		return string(e.Type)
 	}
@@ -464,6 +439,17 @@ type RecordRunUsageOptions struct {
 	Usage        *AgentUsage
 	UsageCapture AgentUsageCapture
 	Model        string
+}
+
+// SyncConflictResolutionEventOptions describes a sync conflict-repair audit event.
+type SyncConflictResolutionEventOptions struct {
+	Execution     AgentExecution
+	Branch        string
+	DefaultBranch string
+	Worktree      string
+	PRURL         string
+	ConflictFiles []string
+	Commit        string
 }
 
 type completeRunPayload struct {
@@ -1883,6 +1869,55 @@ func (s Store) RecordFinalizationFailure(repoID, taskID string, cause error) (Ev
 	})
 }
 
+// RecordSyncConflictResolutionStarted records the launch of a sync conflict-repair agent.
+func (s Store) RecordSyncConflictResolutionStarted(
+	repoID,
+	taskID string,
+	opts SyncConflictResolutionEventOptions,
+) (Event, error) {
+	return s.recordSyncConflictResolutionEvent(
+		repoID,
+		taskID,
+		EventSyncConflictStarted,
+		RunStatusRunning,
+		opts,
+		nil,
+	)
+}
+
+// RecordSyncConflictResolutionFinished records a successful sync conflict repair and pushed merge.
+func (s Store) RecordSyncConflictResolutionFinished(
+	repoID,
+	taskID string,
+	opts SyncConflictResolutionEventOptions,
+) (Event, error) {
+	return s.recordSyncConflictResolutionEvent(
+		repoID,
+		taskID,
+		EventSyncConflictFinished,
+		RunStatusSucceeded,
+		opts,
+		nil,
+	)
+}
+
+// RecordSyncConflictResolutionFailed records a failed sync conflict-repair attempt.
+func (s Store) RecordSyncConflictResolutionFailed(
+	repoID,
+	taskID string,
+	opts SyncConflictResolutionEventOptions,
+	cause error,
+) (Event, error) {
+	return s.recordSyncConflictResolutionEvent(
+		repoID,
+		taskID,
+		EventSyncConflictFailed,
+		RunStatusFailed,
+		opts,
+		cause,
+	)
+}
+
 // RecordTaskClosed appends an idempotent local audit event after a backend task
 // is closed. PR facts are recorded when the closure followed a merged PR.
 func (s Store) RecordTaskClosed(repoID, taskID string, opts TaskClosedOptions) (Event, error) {
@@ -1936,6 +1971,30 @@ func (s Store) FailRunStart(repoID, taskID string, attempt int, cause error) (Ru
 		errorText = cause.Error()
 	}
 	return s.completeRun(repoID, taskID, attempt, RunStatusFailed, EventRunStartFailed, errorText)
+}
+
+func (s Store) recordSyncConflictResolutionEvent(
+	repoID,
+	taskID string,
+	eventType EventType,
+	status RunStatus,
+	opts SyncConflictResolutionEventOptions,
+	cause error,
+) (Event, error) {
+	event, err := syncConflictResolutionEvent(eventType, status, s.nowUTC(), opts, cause)
+	if err != nil {
+		return Event{}, fmt.Errorf("record sync conflict resolution for task %s/%s: %w", repoID, taskID, err)
+	}
+
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return Event{}, err
+	}
+	state.Events = append(state.Events, event)
+	if err := s.save(state); err != nil {
+		return Event{}, err
+	}
+	return event, nil
 }
 
 // Events returns a copy of trace/audit events for a task.
@@ -2068,6 +2127,56 @@ func runEvent(run RunAttempt, eventType EventType, at time.Time, status RunStatu
 	}
 }
 
+func syncConflictResolutionEvent(
+	eventType EventType,
+	status RunStatus,
+	at time.Time,
+	opts SyncConflictResolutionEventOptions,
+	cause error,
+) (Event, error) {
+	if status != RunStatusRunning && status != RunStatusSucceeded && status != RunStatusFailed {
+		return Event{}, fmt.Errorf("unsupported status %q", status)
+	}
+	errorText := ""
+	if cause != nil {
+		errorText = strings.TrimSpace(cause.Error())
+	}
+	if eventType == EventSyncConflictFailed && errorText == "" {
+		return Event{}, errors.New("failed conflict resolution event requires an error")
+	}
+
+	execution := normalizeAgentExecution(opts.Execution)
+	execution.Purpose = AgentExecutionPurposeSyncConflictResolution
+	execution.Status = status
+	if execution.StartedAt.IsZero() {
+		execution.StartedAt = at
+	}
+	if status != RunStatusRunning {
+		finished := at
+		execution.FinishedAt = &finished
+		execution.DurationMillis = durationMillis(execution.StartedAt, finished)
+	}
+
+	event := Event{
+		Type:          eventType,
+		At:            at,
+		Status:        status,
+		Agent:         execution.Agent,
+		Execution:     &execution,
+		Branch:        strings.TrimSpace(opts.Branch),
+		DefaultBranch: strings.TrimSpace(opts.DefaultBranch),
+		Worktree:      strings.TrimSpace(opts.Worktree),
+		ConflictFiles: cloneStrings(opts.ConflictFiles),
+		Commit:        strings.TrimSpace(opts.Commit),
+		Error:         errorText,
+		PRURL:         strings.TrimSpace(opts.PRURL),
+	}
+	if err := validateEvent(event); err != nil {
+		return Event{}, err
+	}
+	return event, nil
+}
+
 func (s Store) save(taskState TaskState) error {
 	normalized, err := normalizeStateForSave(taskState)
 	if err != nil {
@@ -2167,10 +2276,7 @@ func validateLoadedState(taskState TaskState, repoID, taskID string) error {
 }
 
 func unsupportedTaskStateVersionError(version int) error {
-	return fmt.Errorf(
-		"unsupported task state version %d; migrate local task-state files with /tmp/orpheus_migrate_taskstate_agent_executions.py before running this command",
-		version,
-	)
+	return fmt.Errorf("unsupported task state version %d", version)
 }
 
 func taskStateContentIsEmpty(taskState TaskState) bool {
@@ -2210,6 +2316,9 @@ func normalizeState(taskState TaskState, repoID, taskID string) TaskState {
 	for i := range taskState.Runs {
 		taskState.Runs[i] = normalizeRunAttempt(taskState.Runs[i])
 	}
+	for i := range taskState.Events {
+		taskState.Events[i] = normalizeEvent(taskState.Events[i])
+	}
 	for i := range taskState.Reviews {
 		for j := range taskState.Reviews[i].Steps {
 			step, err := normalizeReviewStep(taskState.Reviews[i].Steps[j])
@@ -2229,6 +2338,34 @@ func normalizeRunAttempt(run RunAttempt) RunAttempt {
 		run.Execution.Status = run.Status
 	}
 	return run
+}
+
+func normalizeEvent(event Event) Event {
+	event.Type = EventType(strings.TrimSpace(string(event.Type)))
+	event.Status = RunStatus(strings.TrimSpace(string(event.Status)))
+	event.Agent = strings.TrimSpace(event.Agent)
+	if event.Execution != nil {
+		execution := normalizeAgentExecution(*event.Execution)
+		event.Execution = &execution
+		if event.Agent == "" {
+			event.Agent = execution.Agent
+		}
+	}
+	event.Branch = strings.TrimSpace(event.Branch)
+	event.DefaultBranch = strings.TrimSpace(event.DefaultBranch)
+	event.Worktree = strings.TrimSpace(event.Worktree)
+	event.ConflictFiles = cloneStrings(event.ConflictFiles)
+	event.Commit = strings.TrimSpace(event.Commit)
+	event.Error = strings.TrimSpace(event.Error)
+	event.Message = strings.TrimSpace(event.Message)
+	event.RequestedSummary = strings.TrimSpace(event.RequestedSummary)
+	event.RequestedDescription = strings.TrimSpace(event.RequestedDescription)
+	event.RequestedDetailedDescription = strings.TrimSpace(event.RequestedDetailedDescription)
+	event.PRURL = strings.TrimSpace(event.PRURL)
+	event.ObservedPRState = strings.TrimSpace(event.ObservedPRState)
+	event.PushTarget = strings.TrimSpace(event.PushTarget)
+	event.CloseReason = strings.TrimSpace(event.CloseReason)
+	return event
 }
 
 func normalizeAgentExecution(execution AgentExecution) AgentExecution {
@@ -2685,6 +2822,11 @@ func validateEvent(event Event) error {
 	if event.Status != "" && !validRunStatus(event.Status) {
 		return fmt.Errorf("event %q has unsupported run status %q", event.Type, event.Status)
 	}
+	if event.Execution != nil {
+		if err := validateAgentExecution(*event.Execution); err != nil {
+			return fmt.Errorf("event %q execution is invalid: %w", event.Type, err)
+		}
+	}
 	if event.Type == EventChangesPushed && !validPushTarget(event.PushTarget) {
 		return fmt.Errorf("event %q has unsupported push target %q", event.Type, event.PushTarget)
 	}
@@ -2693,6 +2835,29 @@ func validateEvent(event Event) error {
 	}
 	if event.Type == EventFinalizationFailed && strings.TrimSpace(event.Error) == "" {
 		return fmt.Errorf("event %q requires an error", event.Type)
+	}
+	switch event.Type {
+	case EventSyncConflictStarted, EventSyncConflictFinished, EventSyncConflictFailed:
+		if event.Execution == nil {
+			return fmt.Errorf("event %q requires execution facts", event.Type)
+		}
+		if event.Execution.Purpose != AgentExecutionPurposeSyncConflictResolution {
+			return fmt.Errorf(
+				"event %q execution purpose is %q, expected %q",
+				event.Type,
+				event.Execution.Purpose,
+				AgentExecutionPurposeSyncConflictResolution,
+			)
+		}
+		if strings.TrimSpace(event.Branch) == "" {
+			return fmt.Errorf("event %q requires a branch", event.Type)
+		}
+		if strings.TrimSpace(event.DefaultBranch) == "" {
+			return fmt.Errorf("event %q requires a default branch", event.Type)
+		}
+		if event.Type == EventSyncConflictFailed && strings.TrimSpace(event.Error) == "" {
+			return fmt.Errorf("event %q requires an error", event.Type)
+		}
 	}
 	return nil
 }
@@ -2708,7 +2873,9 @@ func validRunStatus(status RunStatus) bool {
 
 func validAgentExecutionPurpose(purpose AgentExecutionPurpose) bool {
 	switch purpose {
-	case AgentExecutionPurposeImplementation, AgentExecutionPurposeReview:
+	case AgentExecutionPurposeImplementation,
+		AgentExecutionPurposeReview,
+		AgentExecutionPurposeSyncConflictResolution:
 		return true
 	default:
 		return false
@@ -2749,7 +2916,23 @@ func validFindingType(findingType FindingType) bool {
 
 func validEventType(eventType EventType) bool {
 	switch eventType {
-	case EventWorktreeCreated, EventTaskBranchCreated, EventWorktreeReused, EventWorktreeRecreated, EventRunStarted, EventRunFinished, EventRunStartFailed, EventCompletionRecorded, EventCompletionRepeated, EventChangesPushed, EventPRCreated, EventPRRecovered, EventFinalizationFailed, EventTaskClosed:
+	case EventWorktreeCreated,
+		EventTaskBranchCreated,
+		EventWorktreeReused,
+		EventWorktreeRecreated,
+		EventRunStarted,
+		EventRunFinished,
+		EventRunStartFailed,
+		EventCompletionRecorded,
+		EventCompletionRepeated,
+		EventChangesPushed,
+		EventPRCreated,
+		EventPRRecovered,
+		EventFinalizationFailed,
+		EventTaskClosed,
+		EventSyncConflictStarted,
+		EventSyncConflictFinished,
+		EventSyncConflictFailed:
 		return true
 	default:
 		return false
@@ -2807,6 +2990,10 @@ func cloneEvents(events []Event) []Event {
 	}
 	clone := make([]Event, len(events))
 	copy(clone, events)
+	for i := range clone {
+		clone[i].Execution = cloneAgentExecutionPointer(clone[i].Execution)
+		clone[i].ConflictFiles = cloneStrings(clone[i].ConflictFiles)
+	}
 	return clone
 }
 

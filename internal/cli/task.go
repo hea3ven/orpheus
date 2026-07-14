@@ -3129,7 +3129,13 @@ func runTaskSync(command *cobra.Command, opts *rootOptions, taskID string) error
 		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.SyncBackend, error) {
 			return newBeadsTaskBackend(source.BackendDir)
 		},
-		RunStore:   taskstate.NewStore(paths),
+		RunStore: taskstate.NewStore(paths),
+		ConflictResolver: syncConflictAgentResolver{
+			paths:    paths,
+			stdout:   command.OutOrStdout(),
+			stderr:   command.ErrOrStderr(),
+			launcher: attachedAgentLauncher,
+		},
 		PRProvider: pullrequest.GHProvider{},
 	}
 	result, err := service.Sync(command.Context(), workflow.SyncOptions{TaskID: taskID})
@@ -3173,7 +3179,13 @@ func runTaskSyncAll(command *cobra.Command, opts *rootOptions) error {
 		ScanFactory: func(source taskmodel.RepositorySource) (taskmodel.ReadBackend, error) {
 			return newBeadsTaskBackend(source.BackendDir)
 		},
-		RunStore:   taskstate.NewStore(paths),
+		RunStore: taskstate.NewStore(paths),
+		ConflictResolver: syncConflictAgentResolver{
+			paths:    paths,
+			stdout:   command.OutOrStdout(),
+			stderr:   command.ErrOrStderr(),
+			launcher: attachedAgentLauncher,
+		},
 		PRProvider: pullrequest.GHProvider{},
 	}
 	result, err := service.SyncAll(command.Context())
@@ -3203,7 +3215,6 @@ func resolveTaskRunAgentCommand(paths state.Paths, agentName string, sessionName
 		return "", agent.CommandSnapshot{}, err
 	}
 	commandSnapshot, err := agentConfig.ResolveCommandWithValues(agentName, agent.InterpolationValues{
-		Prompt:      prompt,
 		SessionName: sessionName,
 	})
 	if err != nil {
@@ -3219,13 +3230,95 @@ func resolveTaskRunFollowUpAgentCommand(paths state.Paths, agentName string, ses
 		return "", agent.CommandSnapshot{}, err
 	}
 	commandSnapshot, err := agentConfig.ResolveImplementerCommandWithValues(agentName, agent.InterpolationValues{
-		Prompt:      prompt,
 		SessionName: sessionName,
 	})
 	if err != nil {
 		return "", agent.CommandSnapshot{}, fmt.Errorf("resolve agent profile: %w", err)
 	}
 	return prompt, commandSnapshot, nil
+}
+
+type syncConflictAgentResolver struct {
+	paths    state.Paths
+	stdout   io.Writer
+	stderr   io.Writer
+	launcher agent.Launcher
+}
+
+func (r syncConflictAgentResolver) PrepareSyncConflictResolution(
+	_ context.Context,
+	opts workflow.SyncConflictResolutionOptions,
+) (workflow.PreparedSyncConflictResolution, error) {
+	prompt := agent.RenderBootstrapPrompt()
+	agentConfig, err := agent.LoadConfig(r.paths)
+	if err != nil {
+		return workflow.PreparedSyncConflictResolution{}, err
+	}
+	sessionName := syncConflictAgentSessionName(opts.Task.ID)
+	commandSnapshot, err := agentConfig.ResolveImplementerCommandWithValues("", agent.InterpolationValues{
+		SessionName: sessionName,
+	})
+	if err != nil {
+		return workflow.PreparedSyncConflictResolution{}, fmt.Errorf("resolve conflict agent profile: %w", err)
+	}
+
+	launcher := r.launcher
+	if launcher == nil {
+		launcher = agent.AttachedLauncher{}
+	}
+	return workflow.PreparedSyncConflictResolution{
+		Execution: taskstate.AgentExecution{
+			Purpose:     taskstate.AgentExecutionPurposeSyncConflictResolution,
+			Status:      taskstate.RunStatusRunning,
+			Agent:       commandSnapshot.AgentName,
+			Profile:     commandSnapshot.AgentName,
+			Harness:     commandSnapshot.Harness,
+			Model:       commandSnapshot.Model,
+			Command:     commandSnapshot.Command,
+			Args:        append([]string{}, commandSnapshot.Args...),
+			SessionName: sessionName,
+		},
+		Resolve: func(ctx context.Context) error {
+			return launcher.Run(ctx, commandSnapshot, agent.LaunchOptions{
+				Dir: opts.Worktree,
+				Env: syncConflictAgentEnvironment(
+					opts.Repository.ID,
+					opts.Task.ID,
+					opts.Worktree,
+					opts.Branch,
+					prompt,
+					opts.ConflictFiles,
+				),
+				Stdin:  strings.NewReader(""),
+				Stdout: r.stdout,
+				Stderr: r.stderr,
+			})
+		},
+	}, nil
+}
+
+func syncConflictAgentSessionName(taskID string) string {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return "sync-conflict"
+	}
+	return "sync-conflict-" + taskID
+}
+
+func syncConflictAgentEnvironment(
+	repoID string,
+	taskID string,
+	worktree string,
+	branch string,
+	prompt string,
+	conflictFiles []string,
+) []string {
+	env := taskRunEnvironment(repoID, taskID, worktree, branch, prompt)
+	env = append(env,
+		"ORPHEUS_AGENT_PURPOSE=conflict_resolution",
+		"ORPHEUS_CONFLICT_FILES="+strings.Join(conflictFiles, "\n"),
+	)
+	return env
 }
 
 func taskWorkingDirectory(repo taskmodel.Repository, taskItem taskmodel.Task) (string, error) {
@@ -3281,9 +3374,19 @@ func renderTaskSyncResult(output interface{ Write([]byte) (int, error) }, result
 	case workflow.SyncStatusAlreadyInReview:
 		_, err := fmt.Fprintf(
 			output,
-			"Synced %s: PR %s is still open for review. No backend changes were made.\n",
+			"Synced %s: PR %s is still open for review. %s. No backend changes were made.\n",
 			result.Task.ID,
 			result.PRURL,
+			result.Reason,
+		)
+		return err
+	case workflow.SyncStatusBranchUpdated:
+		_, err := fmt.Fprintf(
+			output,
+			"Synced %s: PR %s is still open for review. %s.\n",
+			result.Task.ID,
+			result.PRURL,
+			result.Reason,
 		)
 		return err
 	case workflow.SyncStatusPRMerged:
@@ -3315,6 +3418,11 @@ func renderTaskSyncAllResult(output interface{ Write([]byte) (int, error) }, res
 
 	if err := renderTaskSyncAllGroup(output, "Open/in-review PRs", result.Results, func(syncResult workflow.SyncResult) bool {
 		return syncResult.Status == workflow.SyncStatusAlreadyInReview
+	}); err != nil {
+		return err
+	}
+	if err := renderTaskSyncAllGroup(output, "Updated open PR branches", result.Results, func(syncResult workflow.SyncResult) bool {
+		return syncResult.Status == workflow.SyncStatusBranchUpdated
 	}); err != nil {
 		return err
 	}
@@ -3362,7 +3470,10 @@ func renderTaskSyncAllResultLine(output interface{ Write([]byte) (int, error) },
 	prefix := fmt.Sprintf("  - %s (%s): ", result.Task.ID, result.Repository.ID)
 	switch result.Status {
 	case workflow.SyncStatusAlreadyInReview:
-		_, err := fmt.Fprintf(output, "%sPR %s is still open for review\n", prefix, result.PRURL)
+		_, err := fmt.Fprintf(output, "%sPR %s is still open for review; %s\n", prefix, result.PRURL, result.Reason)
+		return err
+	case workflow.SyncStatusBranchUpdated:
+		_, err := fmt.Fprintf(output, "%sPR %s branch updated; %s\n", prefix, result.PRURL, result.Reason)
 		return err
 	case workflow.SyncStatusPRMerged:
 		_, err := fmt.Fprintf(output, "%sPR %s is merged; backend task was closed\n", prefix, result.PRURL)

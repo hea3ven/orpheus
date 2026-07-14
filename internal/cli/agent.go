@@ -149,6 +149,13 @@ func runAgentContext(command *cobra.Command, opts *rootOptions) error {
 		}
 		_, err = fmt.Fprint(command.OutOrStdout(), agent.RenderReviewContext(reviewContext))
 		return err
+	case "conflict_resolution":
+		conflictContext, err := resolver.ResolveConflictResolution(command.Context())
+		if err != nil {
+			return fmt.Errorf("agent context: %w", err)
+		}
+		_, err = fmt.Fprint(command.OutOrStdout(), agent.RenderConflictResolutionContext(conflictContext))
+		return err
 	default:
 		return fmt.Errorf("agent context: unsupported ORPHEUS_AGENT_PURPOSE %q", os.Getenv("ORPHEUS_AGENT_PURPOSE"))
 	}
@@ -467,7 +474,7 @@ func resolveDetailedDescription(inline string, filePath string) (string, error) 
 func activeAgentContextResolver(
 	paths state.Paths,
 	taskCtx taskContext,
-	runStore taskstate.Service,
+	runStore agent.ContextStateLoader,
 ) agent.ActiveContextResolver {
 	return agent.ActiveContextResolver{
 		Paths:    paths,

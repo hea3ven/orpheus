@@ -21,6 +21,7 @@ const (
 	envWorktree      = "ORPHEUS_WORKTREE"
 	envBranch        = "ORPHEUS_BRANCH"
 	envAgentPurpose  = "ORPHEUS_AGENT_PURPOSE"
+	envConflictFiles = "ORPHEUS_CONFLICT_FILES"
 	envReviewAttempt = "ORPHEUS_REVIEW_ATTEMPT"
 	envReviewStep    = "ORPHEUS_REVIEW_STEP"
 )
@@ -47,13 +48,18 @@ type ContextBackend interface {
 // ContextBackendFactory creates a task backend for one registered repository source.
 type ContextBackendFactory func(taskmodel.RepositorySource) (ContextBackend, error)
 
+// ContextStateLoader is the task-state read capability needed by agent context.
+type ContextStateLoader interface {
+	Load(repoID, taskID string) (taskstate.TaskState, error)
+}
+
 // ActiveContextResolver validates and resolves the active Orpheus agent context.
 type ActiveContextResolver struct {
 	Paths          state.Paths
 	Registry       registry.Registry
 	Sources        []taskmodel.RepositorySource
 	BackendFactory ContextBackendFactory
-	RunStore       taskstate.Service
+	RunStore       ContextStateLoader
 
 	Env map[string]string
 	CWD string
@@ -66,6 +72,15 @@ type ActiveContext struct {
 	Run        ContextRun
 	Target     ContextTarget
 	FollowUp   *ContextFollowUp
+}
+
+// ConflictResolutionContext is the agent-facing contract for sync conflict repair.
+type ConflictResolutionContext struct {
+	Repository    ContextRepository
+	Task          ContextTask
+	Target        ContextTarget
+	PRURL         string
+	ConflictFiles []string
 }
 
 // ContextRepository describes the registered repository for an active context.
@@ -174,6 +189,37 @@ func (r ActiveContextResolver) Resolve(ctx context.Context) (ActiveContext, erro
 	return activeContext, nil
 }
 
+// ResolveConflictResolution validates the active sync conflict-repair context.
+func (r ActiveContextResolver) ResolveConflictResolution(ctx context.Context) (ConflictResolutionContext, error) {
+	if err := r.validateDependencies(); err != nil {
+		return ConflictResolutionContext{}, err
+	}
+	env, err := r.resolveEnvironment()
+	if err != nil {
+		return ConflictResolutionContext{}, err
+	}
+
+	repo, source, taskItem, err := r.resolveConflictResolutionTask(ctx, env)
+	if err != nil {
+		return ConflictResolutionContext{}, err
+	}
+	targets, candidate, err := r.resolveConflictResolutionTarget(source, taskItem, env.TaskID)
+	if err != nil {
+		return ConflictResolutionContext{}, err
+	}
+	if err := validateEnvironmentMatchesTarget(env, candidate); err != nil {
+		return ConflictResolutionContext{}, err
+	}
+
+	cwd, err := r.resolveTargetCWD(candidate)
+	if err != nil {
+		return ConflictResolutionContext{}, err
+	}
+
+	conflictFiles := parseConflictFiles(r.envValue(envConflictFiles))
+	return newConflictResolutionContext(repo, targets, taskItem, candidate, cwd, conflictFiles), nil
+}
+
 func (r ActiveContextResolver) validateDependencies() error {
 	if r.BackendFactory == nil {
 		return errors.New("agent context backend factory is required")
@@ -228,6 +274,39 @@ func (r ActiveContextResolver) loadContextTask(
 		return taskmodel.Task{}, err
 	}
 	return taskItem, nil
+}
+
+func (r ActiveContextResolver) resolveConflictResolutionTask(
+	ctx context.Context,
+	env agentEnvironment,
+) (registry.Repo, taskmodel.RepositorySource, taskmodel.Task, error) {
+	repo, err := registeredRepoByID(r.Registry, env.RepoID)
+	if err != nil {
+		return registry.Repo{}, taskmodel.RepositorySource{}, taskmodel.Task{}, err
+	}
+	source, err := repositorySourceByID(r.Sources, repo.ID)
+	if err != nil {
+		return registry.Repo{}, taskmodel.RepositorySource{}, taskmodel.Task{}, err
+	}
+	if err := validateRepositorySource(repo, source); err != nil {
+		return registry.Repo{}, taskmodel.RepositorySource{}, taskmodel.Task{}, err
+	}
+
+	backend, err := r.BackendFactory(source)
+	if err != nil {
+		return registry.Repo{}, taskmodel.RepositorySource{}, taskmodel.Task{}, fmt.Errorf("create task backend for repo %s: %w", repo.ID, err)
+	}
+	taskItem, err := backend.Get(ctx, env.TaskID)
+	if err != nil {
+		return registry.Repo{}, taskmodel.RepositorySource{}, taskmodel.Task{}, fmt.Errorf("load task %s in repo %s: %w", env.TaskID, repo.ID, err)
+	}
+	if strings.TrimSpace(taskItem.ID) != env.TaskID {
+		return registry.Repo{}, taskmodel.RepositorySource{}, taskmodel.Task{}, fmt.Errorf("task backend returned task %q, expected %q", taskItem.ID, env.TaskID)
+	}
+	if taskItem.Status != taskmodel.StatusInProgress {
+		return registry.Repo{}, taskmodel.RepositorySource{}, taskmodel.Task{}, fmt.Errorf("task %s is %s, expected in_progress for conflict resolution", taskItem.ID, taskItem.Status)
+	}
+	return repo, source, taskItem, nil
 }
 
 func (r ActiveContextResolver) resolveRunningRun(
@@ -340,6 +419,37 @@ func (r ActiveContextResolver) resolveContextTarget(
 	return targets, candidate, nil
 }
 
+func (r ActiveContextResolver) resolveConflictResolutionTarget(
+	source taskmodel.RepositorySource,
+	taskItem taskmodel.Task,
+	taskID string,
+) (workflow.ExpectedTargets, targetCandidate, error) {
+	targets, err := workflow.ExpectedTargetsForTask(source.Repository, taskID, r.Paths)
+	if err != nil {
+		return workflow.ExpectedTargets{}, targetCandidate{}, err
+	}
+	candidate, err := workflow.ClassifyMetadataTarget(taskItem.OrpheusMetadata(), targets)
+	if err != nil {
+		return workflow.ExpectedTargets{}, targetCandidate{}, fmt.Errorf(
+			"task %s has inconsistent Orpheus metadata: %w",
+			taskID,
+			err,
+		)
+	}
+	if candidate.Kind != workflow.TargetWorktreeTeam && candidate.Kind != workflow.TargetRepoRootTeam {
+		return workflow.ExpectedTargets{}, targetCandidate{}, fmt.Errorf(
+			"task %s target is %s, expected an Orpheus-managed PR branch for sync conflict resolution",
+			taskID,
+			candidate.Kind.DisplayName(),
+		)
+	}
+	return targets, targetCandidate{
+		Kind:   candidate.Kind,
+		Branch: candidate.Branch,
+		Path:   candidate.Worktree,
+	}, nil
+}
+
 func (r ActiveContextResolver) resolveTargetCWD(candidate targetCandidate) (string, error) {
 	cwd, err := r.resolveCWD()
 	if err != nil {
@@ -401,6 +511,55 @@ func newActiveContext(
 			CurrentDirectory: cwd,
 		},
 	}, nil
+}
+
+func newConflictResolutionContext(
+	repo registry.Repo,
+	targets workflow.ExpectedTargets,
+	taskItem taskmodel.Task,
+	candidate targetCandidate,
+	cwd string,
+	conflictFiles []string,
+) ConflictResolutionContext {
+	metadata := taskItem.OrpheusMetadata()
+	prURL := ""
+	if metadata.HasPRURL {
+		prURL = strings.TrimSpace(metadata.PRURL)
+	}
+	return ConflictResolutionContext{
+		Repository: ContextRepository{
+			ID:            repo.ID,
+			Name:          repo.Name,
+			Root:          targets.MainSolo.Worktree,
+			DefaultBranch: targets.MainSolo.Branch,
+		},
+		Task: ContextTask{
+			ID:                 taskItem.ID,
+			Title:              taskItem.Title,
+			ExternalRef:        taskItem.ExternalRef,
+			Description:        taskItem.Description,
+			AcceptanceCriteria: taskItem.AcceptanceCriteria,
+		},
+		Target: ContextTarget{
+			Kind:             candidate.Kind,
+			Branch:           candidate.Branch,
+			Path:             candidate.Path,
+			CurrentDirectory: cwd,
+		},
+		PRURL:         prURL,
+		ConflictFiles: append([]string{}, conflictFiles...),
+	}
+}
+
+func parseConflictFiles(value string) []string {
+	files := []string{}
+	for _, line := range strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n") {
+		file := strings.TrimSpace(line)
+		if file != "" {
+			files = append(files, file)
+		}
+	}
+	return files
 }
 
 func cloneCompletion(completion *taskstate.Completion) *taskstate.Completion {

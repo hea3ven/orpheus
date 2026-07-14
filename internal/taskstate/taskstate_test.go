@@ -116,7 +116,7 @@ func TestStoreRejectsOldRunLevelTargetSchema(t *testing.T) {
 	}
 }
 
-func TestStoreRejectsVersionTwoStateWithMigrationGuidance(t *testing.T) {
+func TestStoreRejectsVersionTwoState(t *testing.T) {
 	store := newTestStore(t)
 	path, err := store.Path("alpha", "op-1")
 	if err != nil {
@@ -144,9 +144,8 @@ func TestStoreRejectsVersionTwoStateWithMigrationGuidance(t *testing.T) {
 	if err == nil {
 		t.Fatal("load v2 state succeeded, want error")
 	}
-	if !strings.Contains(err.Error(), "unsupported task state version 2") ||
-		!strings.Contains(err.Error(), "/tmp/orpheus_migrate_taskstate_agent_executions.py") {
-		t.Fatalf("error = %v, want migration guidance", err)
+	if !strings.Contains(err.Error(), "unsupported task state version 2") {
+		t.Fatalf("error = %v, want old schema rejection", err)
 	}
 }
 
@@ -1116,6 +1115,95 @@ func TestStoreRecordsPRMergedTaskClosedEventIdempotently(t *testing.T) {
 		"close_reason: pr_merged",
 		"pr_url: https://github.test/org/repo/pull/42",
 		"observed_pr_state: merged",
+	)
+}
+
+//nolint:funlen // The persisted conflict-repair YAML shape is the behavior under test.
+func TestStoreRecordsSyncConflictResolutionEvents(t *testing.T) {
+	store := newTestStore(t,
+		time.Date(2026, 6, 10, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 6, 10, 10, 3, 0, 0, time.UTC),
+		time.Date(2026, 6, 10, 10, 5, 0, 0, time.UTC),
+	)
+	opts := taskstate.SyncConflictResolutionEventOptions{
+		Execution: taskstate.AgentExecution{
+			Agent:       "codex",
+			Profile:     "codex",
+			Harness:     "codex",
+			Model:       "gpt-5",
+			Command:     "codex",
+			Args:        []string{"exec"},
+			SessionName: "sync-conflict-op-1",
+		},
+		Branch:        "orpheus/op-1",
+		DefaultBranch: "main",
+		Worktree:      "/tmp/op-1",
+		PRURL:         "https://github.test/org/repo/pull/42",
+		ConflictFiles: []string{"conflict.txt", "pkg/service.go"},
+	}
+
+	started, err := store.RecordSyncConflictResolutionStarted("alpha", "op-1", opts)
+	if err != nil {
+		t.Fatalf("record started: %v", err)
+	}
+	if started.Type != taskstate.EventSyncConflictStarted ||
+		started.Status != taskstate.RunStatusRunning ||
+		started.Execution == nil ||
+		started.Execution.Purpose != taskstate.AgentExecutionPurposeSyncConflictResolution ||
+		started.Execution.SessionName != "sync-conflict-op-1" {
+		t.Fatalf("started = %#v, want running conflict-resolution execution", started)
+	}
+
+	finishedOpts := opts
+	finishedOpts.Commit = "abc123"
+	finished, err := store.RecordSyncConflictResolutionFinished("alpha", "op-1", finishedOpts)
+	if err != nil {
+		t.Fatalf("record finished: %v", err)
+	}
+	if finished.Type != taskstate.EventSyncConflictFinished ||
+		finished.Status != taskstate.RunStatusSucceeded ||
+		finished.Commit != "abc123" ||
+		finished.Execution == nil ||
+		finished.Execution.FinishedAt == nil {
+		t.Fatalf("finished = %#v, want succeeded conflict-resolution execution", finished)
+	}
+
+	agentErr := errors.New("agent exited 1")
+	failed, err := store.RecordSyncConflictResolutionFailed("alpha", "op-1", opts, agentErr)
+	if err != nil {
+		t.Fatalf("record failed: %v", err)
+	}
+	if failed.Type != taskstate.EventSyncConflictFailed ||
+		failed.Status != taskstate.RunStatusFailed ||
+		failed.Error != agentErr.Error() {
+		t.Fatalf("failed = %#v, want failed conflict-resolution event", failed)
+	}
+
+	loaded, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(loaded.Events) != 3 {
+		t.Fatalf("events = %#v, want three conflict-resolution events", loaded.Events)
+	}
+
+	assertStoreYAMLContains(t, store, "alpha", "op-1",
+		"sync_conflict_started",
+		"sync_conflict_finished",
+		"sync_conflict_failed",
+		"purpose: sync_conflict_resolution",
+		"agent: codex",
+		"profile: codex",
+		"session_name: sync-conflict-op-1",
+		"branch: orpheus/op-1",
+		"default_branch: main",
+		"worktree: /tmp/op-1",
+		"pr_url: https://github.test/org/repo/pull/42",
+		"conflict_files:",
+		"- conflict.txt",
+		"- pkg/service.go",
+		"commit: abc123",
+		"error: agent exited 1",
 	)
 }
 
