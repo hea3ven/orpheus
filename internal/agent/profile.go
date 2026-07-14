@@ -1,4 +1,4 @@
-// Package agent defines backend-neutral agent prompt, profile, and launch helpers.
+// Package agent defines backend-neutral agent prompt, profile, and command helpers.
 package agent
 
 import (
@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/state"
 	"gopkg.in/yaml.v3"
 )
@@ -18,6 +19,10 @@ const (
 
 	promptToken      = "{{prompt}}"
 	sessionNameToken = "{{session_name}}"
+
+	codexHarness = "codex"
+	codexCommand = "codex"
+	codexYoloArg = "--dangerously-bypass-approvals-and-sandbox"
 )
 
 // Config is Orpheus' global agent profile configuration.
@@ -66,6 +71,7 @@ type Profile struct {
 	Interactive bool     `yaml:"interactive,omitempty"`
 	Harness     string   `yaml:"harness,omitempty"`
 	Model       string   `yaml:"model,omitempty"`
+	Thinking    string   `yaml:"thinking,omitempty"`
 }
 
 // CommandSnapshot is the resolved command line for one dispatch.
@@ -75,6 +81,15 @@ type CommandSnapshot struct {
 	Args      []string
 	Harness   string
 	Model     string
+}
+
+// ExecCommand returns the harness-neutral process invocation for this command.
+func (s CommandSnapshot) ExecCommand() agentexec.Command {
+	return agentexec.Command{
+		Name:    s.AgentName,
+		Command: s.Command,
+		Args:    append([]string{}, s.Args...),
+	}
 }
 
 // UnmarshalYAML decodes an agent profile while preserving backwards
@@ -233,6 +248,10 @@ func (c Config) resolveAgentProfile(agentName string, values InterpolationValues
 		)
 	}
 
+	if profile.isStructuredCodex() {
+		return resolveCodexProfile(agentName, profile, values), nil
+	}
+
 	args := make([]string, len(profile.Args))
 	for i, arg := range profile.Args {
 		args[i] = interpolateProfileValue(arg, values)
@@ -299,13 +318,6 @@ func (c Config) normalized() (Config, error) {
 
 func normalizeProfile(name string, profile Profile) (Profile, error) {
 	command := strings.TrimSpace(profile.Command)
-	if command == "" {
-		return Profile{}, fmt.Errorf("agents.profiles.%s.command is required", name)
-	}
-	if err := validateInterpolationToken(fmt.Sprintf("agents.profiles.%s.command", name), command); err != nil {
-		return Profile{}, err
-	}
-
 	args := make([]string, len(profile.Args))
 	for i, arg := range profile.Args {
 		if err := validateInterpolationToken(fmt.Sprintf("agents.profiles.%s.args[%d]", name, i), arg); err != nil {
@@ -313,45 +325,81 @@ func normalizeProfile(name string, profile Profile) (Profile, error) {
 		}
 		args[i] = arg
 	}
-
-	harness := strings.TrimSpace(profile.Harness)
-	if harness == "" && isCodexCommand(command) {
-		harness = "codex"
-	}
+	harness := strings.ToLower(strings.TrimSpace(profile.Harness))
 	model := strings.TrimSpace(profile.Model)
-	if model == "" && harness == "codex" {
-		model = codexModelFromArgs(args)
+	thinking := strings.TrimSpace(profile.Thinking)
+
+	if harness == codexHarness {
+		if command != "" || len(args) > 0 {
+			return Profile{}, fmt.Errorf(
+				"agents.profiles.%s mixes structured Codex configuration with raw command/args; "+
+					"use harness: codex with model and no command/args, or remove harness/model for a generic raw command profile",
+				name,
+			)
+		}
+		if model == "" {
+			return Profile{}, fmt.Errorf("agents.profiles.%s.model is required for harness: codex", name)
+		}
+		return Profile{
+			Interactive: profile.Interactive,
+			Harness:     harness,
+			Model:       model,
+			Thinking:    thinking,
+		}, nil
+	}
+	if harness != "" {
+		return Profile{}, fmt.Errorf("agents.profiles.%s.harness %q is not supported; supported harnesses: codex", name, harness)
+	}
+	if command == "" {
+		return Profile{}, fmt.Errorf("agents.profiles.%s.command is required", name)
+	}
+	if err := validateInterpolationToken(fmt.Sprintf("agents.profiles.%s.command", name), command); err != nil {
+		return Profile{}, err
+	}
+	if model != "" {
+		return Profile{}, fmt.Errorf(
+			"agents.profiles.%s.model requires structured harness: codex; remove model for a generic raw command profile",
+			name,
+		)
+	}
+	if thinking != "" {
+		return Profile{}, fmt.Errorf(
+			"agents.profiles.%s.thinking requires structured harness: codex; remove thinking for a generic raw command profile",
+			name,
+		)
 	}
 	return Profile{Command: command, Args: args, Interactive: profile.Interactive, Harness: harness, Model: model}, nil
 }
 
-func isCodexCommand(command string) bool {
-	base := command
-	if strings.ContainsAny(base, `/\`) {
-		parts := strings.FieldsFunc(base, func(r rune) bool {
-			return r == '/' || r == '\\'
-		})
-		if len(parts) > 0 {
-			base = parts[len(parts)-1]
-		}
+func resolveCodexProfile(agentName string, profile Profile, values InterpolationValues) CommandSnapshot {
+	args := []string{}
+	if !profile.Interactive {
+		args = append(args, "exec")
 	}
-	return base == "codex"
+	args = append(args,
+		"--model",
+		profile.Model,
+		codexYoloArg,
+	)
+	if profile.Thinking != "" {
+		args = append(args, "-c", "model_reasoning_effort="+profile.Thinking)
+	}
+	args = append(args, interpolateCodexPrompt(values))
+	return CommandSnapshot{
+		AgentName: agentName,
+		Command:   codexCommand,
+		Args:      args,
+		Harness:   profile.Harness,
+		Model:     profile.Model,
+	}
 }
 
-func codexModelFromArgs(args []string) string {
-	for i, arg := range args {
-		arg = strings.TrimSpace(arg)
-		if arg == "--model" || arg == "-m" {
-			if i+1 < len(args) {
-				return strings.TrimSpace(args[i+1])
-			}
-			return ""
-		}
-		if value, ok := strings.CutPrefix(arg, "--model="); ok {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
+func (p Profile) isStructuredCodex() bool {
+	return p.Harness == codexHarness
+}
+
+func interpolateCodexPrompt(values InterpolationValues) string {
+	return values.SessionName + " - " + RenderBootstrapPrompt()
 }
 
 func validateInterpolationToken(field string, value string) error {

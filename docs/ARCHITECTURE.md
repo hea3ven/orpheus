@@ -7,7 +7,7 @@ Orpheus is a daemonless Go CLI that coordinates coding-agent work across registe
 The architecture uses a pragmatic layered structure:
 
 - `cmd/orpheus` and `internal/cli` form the executable and presentation layer. The CLI is also the composition root that connects concrete adapters to application services.
-- `internal/workflow`, `internal/review`, `internal/agent`, and `internal/doctor` implement the main task, review, agent execution, and local diagnostic use cases.
+- `internal/workflow`, `internal/review`, `internal/agent`, `internal/agentexec`, and `internal/doctor` implement the main task, review, agent profile, shared agent execution, and local diagnostic use cases.
 - `internal/task`, `internal/taskstate`, `internal/readiness`, `internal/status`, and `internal/publication` define the core models, policies, state transitions, and operator-facing projections.
 - `internal/beads`, `internal/git`, and `internal/pullrequest` adapt external command-line tools. `internal/registry`, `internal/state`, and `internal/logging` provide local infrastructure.
 
@@ -20,8 +20,8 @@ The main runtime integrations are the `bd`, `git`, and `gh` executables, configu
 1. `internal/cli` resolves XDG paths and loads the registered repository catalog.
 2. A task ID is mapped to a repository and Beads workspace through `internal/task` and `internal/registry`; `internal/beads` supplies the task data.
 3. `internal/workflow` validates readiness, prepares a deterministic Git target, updates backend metadata, and records a run in `internal/taskstate`.
-4. `internal/agent` resolves a configured profile, launches the attached process, renders its validated context, and records its completion and usage facts.
-5. `internal/review` executes the selected read-only review pipeline and persists steps and findings in `internal/taskstate`.
+4. `internal/agent` resolves a configured profile and renders its validated context; `internal/agentexec` launches the attached process; `internal/agent` records completion and Codex usage facts.
+5. `internal/review` executes the selected read-only review pipeline, launches review-agent steps through `internal/agentexec`, and persists steps and findings in `internal/taskstate`.
 6. After a passed review, `internal/workflow` commits and publishes the reviewed changes. Default-branch work is pushed and closed directly; feature-branch work is pushed and opened as a pull request.
 7. Later sync commands poll recorded pull requests, update open task branches from the registered default branch, close merged backend tasks, and add local audit events. `internal/status` combines backend snapshots with Orpheus-owned state into the operator action queue.
 
@@ -36,6 +36,7 @@ flowchart TD
     cmd["cmd/orpheus"] --> cli["internal/cli"]
 
     cli --> agent["internal/agent"]
+    cli --> agentexec["internal/agentexec"]
     cli --> beads["internal/beads"]
     cli --> doctor["internal/doctor"]
     cli --> git["internal/git"]
@@ -50,6 +51,7 @@ flowchart TD
     cli --> taskstate["internal/taskstate"]
     cli --> workflow["internal/workflow"]
 
+    agent --> agentexec["internal/agentexec"]
     agent --> git
     agent --> registry
     agent --> state
@@ -67,6 +69,7 @@ flowchart TD
     registry --> publication
     registry --> state
     review --> agent
+    review --> agentexec
     review --> state
     review --> taskstate
     status --> publication
@@ -84,9 +87,9 @@ flowchart TD
     workflow --> taskstate
 ```
 
-The graph is acyclic. The leaf packages with no imports of other project packages are `internal/logging`, `internal/publication`, `internal/pullrequest`, `internal/state`, and `internal/task`.
+The graph is acyclic. The leaf packages with no imports of other project packages are `internal/agentexec`, `internal/logging`, `internal/publication`, `internal/pullrequest`, `internal/state`, and `internal/task`.
 
-In dependency-direction terms, `internal/state`, `internal/task`, `internal/publication`, `internal/pullrequest`, and `internal/logging` provide lower-level contracts or infrastructure. `internal/beads`, `internal/git`, and `internal/registry` adapt external or local resources into those contracts. `internal/taskstate` and `internal/readiness` own persisted execution state and shared policy. `internal/agent`, `internal/doctor`, `internal/review`, `internal/status`, and `internal/workflow` are application packages that combine lower-level concepts, while `internal/cli` is the composition and presentation package.
+In dependency-direction terms, `internal/state`, `internal/task`, `internal/publication`, `internal/pullrequest`, `internal/logging`, and `internal/agentexec` provide lower-level contracts or infrastructure. `internal/beads`, `internal/git`, and `internal/registry` adapt external or local resources into those contracts. `internal/taskstate` and `internal/readiness` own persisted execution state and shared policy. `internal/agent`, `internal/doctor`, `internal/review`, `internal/status`, and `internal/workflow` are application packages that combine lower-level concepts, while `internal/cli` is the composition and presentation package.
 
 ## Package Responsibilities
 
@@ -96,9 +99,15 @@ In dependency-direction terms, `internal/state`, `internal/task`, `internal/publ
 
 ### `internal/agent`
 
-- Integrates configured coding agents by loading and validating implementer and reviewer profiles, interpolating command arguments, launching attached processes, and distinguishing process-start failures from runtime failures.
+- Integrates configured coding-agent profiles by loading and validating implementer and reviewer profile configuration, interpolating raw command arguments, and constructing structured Codex launch commands.
 - Owns the agent-facing execution contract: it resolves active implementation or review context from environment, registry, backend, task-state, and workflow-target facts; renders backend-neutral prompts; and records idempotent implementation completion handoffs.
 - Captures agent execution telemetry where supported, currently by correlating Codex session logs, and estimates API-equivalent cost for recognized models.
+
+### `internal/agentexec`
+
+- Defines the harness-neutral process execution contract used by implementation agents and review-agent steps.
+- Runs resolved commands as attached child processes with caller-supplied stdio, environment, execution directory, and cancellation context.
+- Classifies process-start failures separately from runtime failures without importing profile, CLI, workflow, or review packages.
 
 ### `internal/beads`
 

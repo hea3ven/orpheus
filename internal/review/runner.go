@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hea3ven/orpheus/internal/agent"
+	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
@@ -38,7 +39,7 @@ type PipelineRunOptions struct {
 	OutputWidth       int
 
 	AgentConfig   agent.Config
-	AgentLauncher agent.Launcher
+	AgentLauncher agentexec.Launcher
 
 	ResumeFromStep          bool
 	PauseBeforeManual       bool
@@ -480,7 +481,7 @@ func launchAgentReview(
 	if !profile.Interactive {
 		reviewerStdin = nil
 	}
-	return opts.AgentLauncher.Run(opts.Context, command, agent.LaunchOptions{
+	return opts.AgentLauncher.Run(opts.Context, command.ExecCommand(), agentexec.LaunchOptions{
 		Dir:    opts.Workdir,
 		Env:    env,
 		Stdin:  reviewerStdin,
@@ -541,7 +542,7 @@ func agentReviewUsageOptions(
 	execution taskstate.AgentExecution,
 	runErr error,
 ) taskstate.RecordRunUsageOptions {
-	if agent.IsStartError(runErr) {
+	if agentexec.IsStartError(runErr) {
 		return taskstate.RecordRunUsageOptions{
 			UsageCapture: taskstate.AgentUsageCapture{
 				Status: taskstate.UsageCaptureUnknown,

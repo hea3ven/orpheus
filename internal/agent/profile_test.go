@@ -62,7 +62,7 @@ func TestLoadConfigPreservesExplicitNonInteractiveProfile(t *testing.T) {
 			},
 			"profiles": map[string]any{
 				"autonomous": map[string]any{
-					"command":     "codex",
+					"command":     "agent",
 					"interactive": false,
 				},
 			},
@@ -78,7 +78,69 @@ func TestLoadConfigPreservesExplicitNonInteractiveProfile(t *testing.T) {
 	is.False(profile.Interactive)
 }
 
-func TestLoadConfigInfersCodexHarnessAndModel(t *testing.T) {
+func TestLoadConfigBuildsStructuredCodexCommands(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	paths := newAgentTestPaths(t)
+
+	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"agents": map[string]any{
+			"defaults": map[string]any{"implementer": "codex-interactive", "reviewer": "codex-exec"},
+			"profiles": map[string]any{
+				"codex-interactive": map[string]any{
+					"harness":     "codex",
+					"model":       "gpt-5.4",
+					"thinking":    "high",
+					"interactive": true,
+				},
+				"codex-exec": map[string]any{
+					"harness":     "codex",
+					"model":       "gpt-5.4-mini",
+					"interactive": false,
+				},
+			},
+		},
+	}))
+
+	config, err := agent.LoadConfig(paths)
+	must.NoError(err)
+	impl, err := config.ResolveCommandWithValues("", agent.InterpolationValues{
+		SessionName: "(op-1) Implement task",
+	})
+	must.NoError(err)
+
+	is.Equal("codex-interactive", impl.AgentName)
+	is.Equal("codex", impl.Command)
+	is.Equal("codex", impl.Harness)
+	is.Equal("gpt-5.4", impl.Model)
+	is.Equal([]string{
+		"--model",
+		"gpt-5.4",
+		"--dangerously-bypass-approvals-and-sandbox",
+		"-c",
+		"model_reasoning_effort=high",
+		"(op-1) Implement task - " + agent.RenderBootstrapPrompt(),
+	}, impl.Args)
+
+	reviewer, err := config.ResolveReviewerCommandWithValues("", agent.InterpolationValues{
+		SessionName: "Reviewing op-1 Implement task",
+	})
+	must.NoError(err)
+
+	is.Equal("codex-exec", reviewer.AgentName)
+	is.Equal("codex", reviewer.Command)
+	is.Equal("codex", reviewer.Harness)
+	is.Equal("gpt-5.4-mini", reviewer.Model)
+	is.Equal([]string{
+		"exec",
+		"--model",
+		"gpt-5.4-mini",
+		"--dangerously-bypass-approvals-and-sandbox",
+		"Reviewing op-1 Implement task - " + agent.RenderBootstrapPrompt(),
+	}, reviewer.Args)
+}
+
+func TestLoadConfigLeavesRawCodexCommandGeneric(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	paths := newAgentTestPaths(t)
@@ -88,7 +150,7 @@ func TestLoadConfigInfersCodexHarnessAndModel(t *testing.T) {
 			"defaults": map[string]any{"implementer": "codex"},
 			"profiles": map[string]any{
 				"codex": map[string]any{
-					"command": "/usr/local/bin/codex",
+					"command": "codex",
 					"args":    []string{"exec", "--model", "gpt-5.1", "{{prompt}}"},
 				},
 			},
@@ -100,8 +162,10 @@ func TestLoadConfigInfersCodexHarnessAndModel(t *testing.T) {
 	snapshot, err := config.ResolveCommand("")
 	must.NoError(err)
 
-	is.Equal("codex", snapshot.Harness)
-	is.Equal("gpt-5.1", snapshot.Model)
+	is.Equal("codex", snapshot.Command)
+	is.Equal([]string{"exec", "--model", "gpt-5.1", agent.RenderBootstrapPrompt()}, snapshot.Args)
+	is.Empty(snapshot.Harness)
+	is.Empty(snapshot.Model)
 }
 
 func TestResolveCommandInterpolatesBootstrapPromptAndSessionName(t *testing.T) {
@@ -227,6 +291,7 @@ func TestLoadConfigReportsMissingFileWithSetupGuidance(t *testing.T) {
 	}
 }
 
+//nolint:funlen // The validation matrix is clearer as one table of config failures.
 func TestConfigValidationErrorsAreActionable(t *testing.T) {
 	tests := []struct {
 		name string
@@ -258,6 +323,54 @@ func TestConfigValidationErrorsAreActionable(t *testing.T) {
 				map[string]any{"pi": map[string]any{}},
 			),
 			want: "agents.profiles.pi.command is required",
+		},
+		{
+			name: "structured codex missing model",
+			data: agentConfigYAML(
+				map[string]any{"implementer": "codex"},
+				map[string]any{"codex": map[string]any{"harness": "codex"}},
+			),
+			want: "agents.profiles.codex.model is required for harness: codex",
+		},
+		{
+			name: "structured codex mixed with raw command",
+			data: agentConfigYAML(
+				map[string]any{"implementer": "codex"},
+				map[string]any{
+					"codex": map[string]any{
+						"harness": "codex",
+						"model":   "gpt-5.4",
+						"command": "codex",
+					},
+				},
+			),
+			want: "mixes structured Codex configuration with raw command/args",
+		},
+		{
+			name: "raw command cannot set model",
+			data: agentConfigYAML(
+				map[string]any{"implementer": "custom"},
+				map[string]any{
+					"custom": map[string]any{
+						"command": "custom-agent",
+						"model":   "gpt-5.4",
+					},
+				},
+			),
+			want: "model requires structured harness: codex",
+		},
+		{
+			name: "raw command cannot set thinking",
+			data: agentConfigYAML(
+				map[string]any{"implementer": "custom"},
+				map[string]any{
+					"custom": map[string]any{
+						"command":  "custom-agent",
+						"thinking": "high",
+					},
+				},
+			),
+			want: "thinking requires structured harness: codex",
 		},
 		{
 			name: "unsupported interpolation",
