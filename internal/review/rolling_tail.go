@@ -5,11 +5,14 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
 	liveTailLines    = 8
 	blockedTailLines = 30
+	tailTabWidth     = 8
 
 	stderrColor = "\x1b[31m"
 	resetColor  = "\x1b[0m"
@@ -28,7 +31,7 @@ func newStepOutput(opts PipelineRunOptions, rolling bool) stepOutput {
 		return stepOutput{stdoutDest: opts.Stdout, stderrDest: opts.Stderr}
 	}
 
-	tail := newRollingTail(opts.Stderr, opts.OutputWidth)
+	tail := newRollingTail(opts.Stderr, opts.OutputWidth, opts.OutputWidthFunc)
 	stdout := newTailStreamWriter(tail, tailStreamStdout)
 	stderr := newTailStreamWriter(tail, tailStreamStderr)
 	return stepOutput{
@@ -98,18 +101,21 @@ const (
 )
 
 type rollingTail struct {
-	mu       sync.Mutex
-	output   io.Writer
-	width    int
-	lines    []tailLine
-	rendered int
+	mu           sync.Mutex
+	output       io.Writer
+	width        int
+	widthFunc    func() (int, bool)
+	lines        []tailLine
+	rendered     []string
+	renderedRows int
 }
 
-func newRollingTail(output io.Writer, width int) *rollingTail {
+func newRollingTail(output io.Writer, width int, widthFunc func() (int, bool)) *rollingTail {
 	return &rollingTail{
-		output: output,
-		width:  width,
-		lines:  make([]tailLine, 0, blockedTailLines),
+		output:    output,
+		width:     width,
+		widthFunc: widthFunc,
+		lines:     make([]tailLine, 0, blockedTailLines),
 	}
 }
 
@@ -117,7 +123,7 @@ func (t *rollingTail) append(stream tailStream, text string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	t.lines = append(t.lines, tailLine{stream: stream, text: strings.TrimSuffix(text, "\r")})
+	t.lines = append(t.lines, tailLine{stream: stream, text: sanitizeTailText(strings.TrimSuffix(text, "\r"))})
 	if len(t.lines) > blockedTailLines {
 		copy(t.lines, t.lines[len(t.lines)-blockedTailLines:])
 		t.lines = t.lines[:blockedTailLines]
@@ -142,30 +148,43 @@ func (t *rollingTail) finish(mode tailFinishMode) {
 func (t *rollingTail) renderLocked(limit int, trailingNewline bool) {
 	t.clearLocked()
 	visible := t.visibleLines(limit)
+	width := t.currentWidth()
+	rendered := make([]string, 0, len(visible))
+	var renderedRows int
 	for index, line := range visible {
 		if index > 0 {
 			_, _ = fmt.Fprint(t.output, "\n")
 		}
-		_, _ = fmt.Fprint(t.output, formatTailLine(line, t.width))
+		text, formatted, rows := formatTailLine(line, width)
+		_, _ = fmt.Fprint(t.output, formatted)
+		rendered = append(rendered, text)
+		renderedRows += rows
 	}
 	if trailingNewline && len(visible) > 0 {
 		_, _ = fmt.Fprint(t.output, "\n")
 	}
-	t.rendered = len(visible)
+	t.rendered = rendered
+	t.renderedRows = renderedRows
 	if trailingNewline {
-		t.rendered = 0
+		t.rendered = nil
+		t.renderedRows = 0
 	}
 }
 
 func (t *rollingTail) clearLocked() {
-	if t.rendered == 0 {
+	rows := t.renderedRows
+	if len(t.rendered) > 0 {
+		rows = tailRenderedRows(t.rendered, t.currentWidth())
+	}
+	if rows == 0 {
 		return
 	}
 	_, _ = fmt.Fprint(t.output, "\r\x1b[2K")
-	for i := 1; i < t.rendered; i++ {
+	for i := 1; i < rows; i++ {
 		_, _ = fmt.Fprint(t.output, "\x1b[1A\r\x1b[2K")
 	}
-	t.rendered = 0
+	t.rendered = nil
+	t.renderedRows = 0
 }
 
 func (t *rollingTail) visibleLines(limit int) []tailLine {
@@ -175,29 +194,211 @@ func (t *rollingTail) visibleLines(limit int) []tailLine {
 	return t.lines[len(t.lines)-limit:]
 }
 
-func formatTailLine(line tailLine, width int) string {
-	text := truncateTailLine(line.text, width)
-	if line.stream != tailStreamStderr {
-		return text
+func (t *rollingTail) currentWidth() int {
+	if t.widthFunc != nil {
+		if width, ok := t.widthFunc(); ok {
+			return width
+		}
 	}
-	return stderrColor + text + resetColor
+	return t.width
+}
+
+func formatTailLine(line tailLine, width int) (string, string, int) {
+	text := truncateTailLine(line.text, width)
+	rows := tailTerminalRows(text, width)
+	if line.stream != tailStreamStderr {
+		return text, text, rows
+	}
+	return text, stderrColor + text + resetColor, rows
 }
 
 func truncateTailLine(text string, width int) string {
+	text = expandTailTabs(sanitizeTailText(text))
 	if width <= 0 {
 		return text
 	}
 	if width > 1 {
 		width--
 	}
-	runes := []rune(text)
-	if len(runes) <= width {
+	if tailDisplayWidth(text) <= width {
 		return text
 	}
 	if width <= 3 {
-		return string(runes[:width])
+		return tailCellPrefix(text, width)
 	}
-	return string(runes[:width-3]) + "..."
+	return tailCellPrefix(text, width-3) + "..."
+}
+
+func sanitizeTailText(text string) string {
+	var builder strings.Builder
+	for i := 0; i < len(text); {
+		switch text[i] {
+		case '\x1b':
+			i += tailEscapeSequenceLen(text[i:])
+			continue
+		case '\t':
+			builder.WriteByte('\t')
+			i++
+			continue
+		}
+
+		r, size := utf8.DecodeRuneInString(text[i:])
+		if r == utf8.RuneError && size == 1 {
+			builder.WriteRune(r)
+			i++
+			continue
+		}
+		if tailControlRune(r) {
+			i += size
+			continue
+		}
+		builder.WriteRune(r)
+		i += size
+	}
+	return builder.String()
+}
+
+func tailEscapeSequenceLen(text string) int {
+	if len(text) <= 1 {
+		return 1
+	}
+	switch text[1] {
+	case '[':
+		return tailCSISequenceLen(text)
+	case ']':
+		return tailOSCSequenceLen(text)
+	default:
+		if text[1] >= 0x40 && text[1] <= 0x5f {
+			return 2
+		}
+		return 1
+	}
+}
+
+func tailCSISequenceLen(text string) int {
+	for i := 2; i < len(text); i++ {
+		if text[i] >= 0x40 && text[i] <= 0x7e {
+			return i + 1
+		}
+	}
+	return len(text)
+}
+
+func tailOSCSequenceLen(text string) int {
+	for i := 2; i < len(text); i++ {
+		if text[i] == '\a' {
+			return i + 1
+		}
+		if text[i] == '\x1b' && i+1 < len(text) && text[i+1] == '\\' {
+			return i + 2
+		}
+	}
+	return len(text)
+}
+
+func tailControlRune(r rune) bool {
+	return r < ' ' || r == '\x7f' || (r >= '\u0080' && r <= '\u009f')
+}
+
+func expandTailTabs(text string) string {
+	if !strings.ContainsRune(text, '\t') {
+		return text
+	}
+
+	var builder strings.Builder
+	var cells int
+	for _, r := range text {
+		if r != '\t' {
+			builder.WriteRune(r)
+			cells += tailRuneWidth(r)
+			continue
+		}
+		spaces := tailTabWidth - cells%tailTabWidth
+		builder.WriteString(strings.Repeat(" ", spaces))
+		cells += spaces
+	}
+	return builder.String()
+}
+
+func tailTerminalRows(text string, width int) int {
+	if width <= 0 {
+		return 1
+	}
+	rows := 1
+	var cells int
+	for _, r := range text {
+		runeWidth := tailRuneWidth(r)
+		if runeWidth == 0 {
+			continue
+		}
+		if cells+runeWidth > width {
+			rows++
+			cells = 0
+		}
+		cells += runeWidth
+	}
+	return rows
+}
+
+func tailRenderedRows(lines []string, width int) int {
+	var rows int
+	for _, line := range lines {
+		rows += tailTerminalRows(line, width)
+	}
+	return rows
+}
+
+func tailDisplayWidth(text string) int {
+	var cells int
+	for _, r := range text {
+		cells += tailRuneWidth(r)
+	}
+	return cells
+}
+
+func tailCellPrefix(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	var builder strings.Builder
+	var cells int
+	for _, r := range text {
+		runeWidth := tailRuneWidth(r)
+		if cells+runeWidth > width {
+			break
+		}
+		builder.WriteRune(r)
+		cells += runeWidth
+	}
+	return builder.String()
+}
+
+func tailRuneWidth(r rune) int {
+	switch {
+	case tailControlRune(r):
+		return 0
+	case unicode.In(r, unicode.Mn, unicode.Me, unicode.Cf):
+		return 0
+	case tailWideRune(r):
+		return 2
+	default:
+		return 1
+	}
+}
+
+func tailWideRune(r rune) bool {
+	return (r >= 0x1100 && r <= 0x115f) ||
+		r == 0x2329 ||
+		r == 0x232a ||
+		(r >= 0x2e80 && r <= 0xa4cf && r != 0x303f) ||
+		(r >= 0xac00 && r <= 0xd7a3) ||
+		(r >= 0xf900 && r <= 0xfaff) ||
+		(r >= 0xfe10 && r <= 0xfe19) ||
+		(r >= 0xfe30 && r <= 0xfe6f) ||
+		(r >= 0xff00 && r <= 0xff60) ||
+		(r >= 0xffe0 && r <= 0xffe6) ||
+		(r >= 0x1f300 && r <= 0x1faff) ||
+		(r >= 0x20000 && r <= 0x3fffd)
 }
 
 type tailStreamWriter struct {
