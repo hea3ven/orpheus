@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoadConfigResolvesImplementerDefaultAndInterpolatesPrompt(t *testing.T) {
+func TestLoadConfigResolvesImplementerDefaultAndInterpolatesBootstrapPrompt(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	paths := newAgentTestPaths(t)
@@ -39,11 +39,11 @@ func TestLoadConfigResolvesImplementerDefaultAndInterpolatesPrompt(t *testing.T)
 	config, err := agent.LoadConfig(paths)
 	must.NoError(err)
 
-	snapshot, err := config.ResolveCommand("", "rendered prompt")
+	snapshot, err := config.ResolveCommand("")
 	must.NoError(err)
 	is.Equal("pi", snapshot.AgentName)
 	is.Equal("pi", snapshot.Command)
-	is.Equal([]string{"--model", "test-model", "rendered prompt", "literal"}, snapshot.Args)
+	is.Equal([]string{"--model", "test-model", agent.RenderBootstrapPrompt(), "literal"}, snapshot.Args)
 
 	_, profile, err := config.ResolveImplementerProfile("")
 	must.NoError(err)
@@ -97,14 +97,14 @@ func TestLoadConfigInfersCodexHarnessAndModel(t *testing.T) {
 
 	config, err := agent.LoadConfig(paths)
 	must.NoError(err)
-	snapshot, err := config.ResolveCommand("", "prompt")
+	snapshot, err := config.ResolveCommand("")
 	must.NoError(err)
 
 	is.Equal("codex", snapshot.Harness)
 	is.Equal("gpt-5.1", snapshot.Model)
 }
 
-func TestResolveCommandInterpolatesPromptAndSessionName(t *testing.T) {
+func TestResolveCommandInterpolatesBootstrapPromptAndSessionName(t *testing.T) {
 	is := assert.New(t)
 	config := agent.Config{
 		Defaults: agent.AgentDefaults{Implementer: "pi"},
@@ -122,7 +122,6 @@ func TestResolveCommandInterpolatesPromptAndSessionName(t *testing.T) {
 	}
 
 	snapshot, err := config.ResolveCommandWithValues("", agent.InterpolationValues{
-		Prompt:      "rendered prompt",
 		SessionName: "(op-1) Implement task",
 	})
 
@@ -132,7 +131,7 @@ func TestResolveCommandInterpolatesPromptAndSessionName(t *testing.T) {
 		"--name",
 		"(op-1) Implement task",
 		"--prompt",
-		"(op-1) Implement task - rendered prompt",
+		"(op-1) Implement task - " + agent.RenderBootstrapPrompt(),
 	}, snapshot.Args)
 }
 
@@ -161,13 +160,13 @@ func TestLoadConfigResolvesNestedImplementerDefault(t *testing.T) {
 	config, err := agent.LoadConfig(paths)
 	must.NoError(err)
 
-	snapshot, err := config.ResolveImplementerCommand("", "follow-up prompt")
+	snapshot, err := config.ResolveImplementerCommand("")
 	must.NoError(err)
 	is.Equal("impl", snapshot.AgentName)
 	is.Equal("codex", snapshot.Command)
-	is.Equal([]string{"follow-up prompt"}, snapshot.Args)
+	is.Equal([]string{agent.RenderBootstrapPrompt()}, snapshot.Args)
 
-	override, err := config.ResolveImplementerCommand("other", "follow-up prompt")
+	override, err := config.ResolveImplementerCommand("other")
 	must.NoError(err)
 	is.Equal("other", override.AgentName)
 	is.Equal("other", override.Command)
@@ -185,16 +184,15 @@ func TestResolveReviewerCommandUsesReviewerDefaultOrOverride(t *testing.T) {
 	}
 
 	snapshot, err := config.ResolveReviewerCommandWithValues("", agent.InterpolationValues{
-		Prompt:      "review prompt",
 		SessionName: "Reviewing op-1 Review task",
 	})
 
 	require.NoError(t, err)
 	is.Equal("reviewer", snapshot.AgentName)
 	is.Equal("review-agent", snapshot.Command)
-	is.Equal([]string{"Reviewing op-1 Review task", "review prompt"}, snapshot.Args)
+	is.Equal([]string{"Reviewing op-1 Review task", agent.RenderBootstrapPrompt()}, snapshot.Args)
 
-	override, err := config.ResolveReviewerCommand("custom", "review prompt")
+	override, err := config.ResolveReviewerCommand("custom")
 	require.NoError(t, err)
 	is.Equal("custom", override.AgentName)
 	is.Equal("custom-review", override.Command)
@@ -208,7 +206,7 @@ func TestResolveReviewerCommandRequiresReviewerDefaultWithoutOverride(t *testing
 		},
 	}
 
-	_, err := config.ResolveReviewerCommand("", "review prompt")
+	_, err := config.ResolveReviewerCommand("")
 
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "agents.defaults.reviewer is required")
@@ -300,12 +298,12 @@ func TestResolveCommandSelectsNamedAgent(t *testing.T) {
 		},
 	}
 
-	snapshot, err := config.ResolveCommand(" custom ", "prompt text")
+	snapshot, err := config.ResolveCommand(" custom ")
 
 	require.NoError(t, err)
 	is.Equal("custom", snapshot.AgentName)
 	is.Equal("custom-agent", snapshot.Command)
-	is.Equal([]string{"prompt text"}, snapshot.Args)
+	is.Equal([]string{agent.RenderBootstrapPrompt()}, snapshot.Args)
 }
 
 func newAgentTestPaths(t *testing.T) state.Paths {

@@ -20,6 +20,9 @@ var (
 
 	// ErrNoDefaultBranch indicates no local default-branch candidate was found.
 	ErrNoDefaultBranch = errors.New("no git default branch candidate found")
+
+	// ErrMergeConflict indicates a default-branch merge into a task branch conflicts.
+	ErrMergeConflict = errors.New("task branch merge conflict")
 )
 
 // DefaultBranchSource describes the local metadata used to select a default branch candidate.

@@ -91,7 +91,6 @@ func (p *Profile) UnmarshalYAML(value *yaml.Node) error {
 
 // InterpolationValues are values available to agent profile command templates.
 type InterpolationValues struct {
-	Prompt      string
 	SessionName string
 }
 
@@ -117,15 +116,15 @@ func LoadConfig(paths state.Paths) (Config, error) {
 }
 
 // ResolveCommand resolves selectedAgent, or agents.defaults.implementer when
-// selectedAgent is blank, and applies bootstrap prompt interpolation.
-func (c Config) ResolveCommand(selectedAgent string, prompt string) (CommandSnapshot, error) {
-	return c.ResolveImplementerCommand(selectedAgent, prompt)
+// selectedAgent is blank, and applies standard profile interpolation.
+func (c Config) ResolveCommand(selectedAgent string) (CommandSnapshot, error) {
+	return c.ResolveImplementerCommand(selectedAgent)
 }
 
 // ResolveImplementerCommand resolves selectedAgent, or agents.defaults.implementer
 // when selectedAgent is blank.
-func (c Config) ResolveImplementerCommand(selectedAgent string, prompt string) (CommandSnapshot, error) {
-	return c.ResolveImplementerCommandWithValues(selectedAgent, InterpolationValues{Prompt: prompt})
+func (c Config) ResolveImplementerCommand(selectedAgent string) (CommandSnapshot, error) {
+	return c.ResolveImplementerCommandWithValues(selectedAgent, InterpolationValues{})
 }
 
 // ResolveCommandWithValues resolves selectedAgent, or agents.defaults.implementer
@@ -175,8 +174,8 @@ func (c Config) ResolveImplementerProfile(selectedAgent string) (string, Profile
 
 // ResolveReviewerCommand resolves selectedAgent, or agents.defaults.reviewer
 // when selectedAgent is blank.
-func (c Config) ResolveReviewerCommand(selectedAgent string, prompt string) (CommandSnapshot, error) {
-	return c.ResolveReviewerCommandWithValues(selectedAgent, InterpolationValues{Prompt: prompt})
+func (c Config) ResolveReviewerCommand(selectedAgent string) (CommandSnapshot, error) {
+	return c.ResolveReviewerCommandWithValues(selectedAgent, InterpolationValues{})
 }
 
 // ResolveReviewerCommandWithValues resolves selectedAgent, or
@@ -372,7 +371,7 @@ func validateInterpolationToken(field string, value string) error {
 
 func interpolateProfileValue(value string, values InterpolationValues) string {
 	replacer := strings.NewReplacer(
-		promptToken, values.Prompt,
+		promptToken, RenderBootstrapPrompt(),
 		sessionNameToken, values.SessionName,
 	)
 	return replacer.Replace(value)

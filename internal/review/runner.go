@@ -421,9 +421,7 @@ func runAgentReviewStep(opts PipelineRunOptions, step Step, env []string) (stepO
 		)
 	}
 
-	prompt := agent.RenderBootstrapPrompt()
 	command, err := opts.AgentConfig.ResolveReviewerCommandWithValues(step.Agent, agent.InterpolationValues{
-		Prompt:      prompt,
 		SessionName: opts.SessionName,
 	})
 	if err != nil {

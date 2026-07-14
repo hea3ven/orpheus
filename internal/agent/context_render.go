@@ -47,6 +47,19 @@ func RenderActiveContextWithOptions(ctx ActiveContext, opts ActiveContextRenderO
 	return builder.String()
 }
 
+// RenderConflictResolutionContext renders instructions for a sync conflict agent.
+func RenderConflictResolutionContext(ctx ConflictResolutionContext) string {
+	var builder strings.Builder
+
+	appendConflictResolutionContextHeader(&builder, ctx)
+	appendRepositoryContext(&builder, ctx.Repository)
+	appendConflictResolutionTargetContext(&builder, ctx)
+	appendConflictResolutionGuidance(&builder, ctx)
+	appendConflictResolutionContract(&builder)
+
+	return builder.String()
+}
+
 func appendAgentInteractionGuidance(builder *strings.Builder, opts ActiveContextRenderOptions) {
 	switch opts.InteractionMode {
 	case AgentInteractionModeInteractive:
@@ -106,6 +119,18 @@ func appendContextHeader(builder *strings.Builder, ctx ActiveContext) {
 	appendPromptBlock(builder, "- Acceptance criteria", ctx.Task.AcceptanceCriteria)
 }
 
+func appendConflictResolutionContextHeader(builder *strings.Builder, ctx ConflictResolutionContext) {
+	builder.WriteString("# Orpheus Sync Conflict Resolution Context\n\n")
+
+	builder.WriteString("Task:\n")
+	appendPromptLine(builder, "- ID", ctx.Task.ID)
+	appendPromptLine(builder, "- Title", ctx.Task.Title)
+	appendPromptLine(builder, "- External reference", ctx.Task.ExternalRef)
+	appendPromptBlock(builder, "- Description", ctx.Task.Description)
+	appendPromptBlock(builder, "- Acceptance criteria", ctx.Task.AcceptanceCriteria)
+	appendPromptLine(builder, "- Pull request", ctx.PRURL)
+}
+
 func appendRepositoryContext(builder *strings.Builder, repo ContextRepository) {
 	builder.WriteString("\nRepository:\n")
 	appendPromptLine(builder, "- ID", repo.ID)
@@ -124,6 +149,40 @@ func appendExecutionTargetContext(builder *strings.Builder, ctx ActiveContext) {
 	if strings.TrimSpace(ctx.Run.Agent) != "" {
 		appendPromptLine(builder, "- Agent", ctx.Run.Agent)
 	}
+}
+
+func appendConflictResolutionTargetContext(builder *strings.Builder, ctx ConflictResolutionContext) {
+	builder.WriteString("\nExecution target:\n")
+	appendPromptLine(builder, "- Workflow", ctx.Target.Kind.DisplayName())
+	appendPromptLine(builder, "- Branch", ctx.Target.Branch)
+	appendPromptLine(builder, "- Path", ctx.Target.Path)
+	appendPromptLine(builder, "- Current directory", ctx.Target.CurrentDirectory)
+}
+
+func appendConflictResolutionGuidance(builder *strings.Builder, ctx ConflictResolutionContext) {
+	builder.WriteString("\nConflict resolution scope:\n")
+	builder.WriteString("- Resolve only the merge conflicts from syncing the registered default branch into this open PR branch.\n")
+	builder.WriteString("- Do not implement unrelated task changes, refactor unrelated code, or address review feedback.\n")
+	builder.WriteString("- Inspect `git status` and the conflicted files, edit only what is needed to resolve those conflicts, and stage the resolved conflict files.\n")
+	if len(ctx.ConflictFiles) == 0 {
+		builder.WriteString("- Conflicted files: inspect `git status --short` in the execution target.\n")
+		return
+	}
+	builder.WriteString("- Conflicted files:\n")
+	for _, file := range ctx.ConflictFiles {
+		builder.WriteString("  - ")
+		builder.WriteString(strings.TrimSpace(file))
+		builder.WriteString("\n")
+	}
+}
+
+func appendConflictResolutionContract(builder *strings.Builder) {
+	builder.WriteString("\nExecution contract:\n")
+	builder.WriteString("- This is a non-interactive sync conflict-resolution session; do not ask the human operator for clarification or decisions.\n")
+	builder.WriteString("- Do not run `orpheus agent done`, `orpheus task review`, or `orpheus task done`.\n")
+	builder.WriteString("- Do not create commits, push branches, merge pull requests, close tasks, or change task metadata.\n")
+	builder.WriteString("- Leave the merge in progress after staging the resolved conflict files; Orpheus sync will commit and push after you exit.\n")
+	builder.WriteString("- If the conflicts cannot be resolved safely, exit nonzero and explain the blocker in the visible terminal/session output.\n")
 }
 
 func appendExecutionContract(builder *strings.Builder, ctx ActiveContext) {
