@@ -5344,7 +5344,26 @@ func TestTaskSyncRecordsConflictResolutionUsageTelemetry(t *testing.T) {
 		BeadsMode:     registry.BeadsModeLocal,
 		BeadsPrefix:   "op",
 	}}}))
-	writeStructuredCodexTaskRunAgentConfig(t, paths, "sync-codex", "gpt-5", "", false)
+	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"implementer":            "impl-codex",
+				"sync_conflict_resolver": "sync-codex",
+			},
+			"profiles": map[string]any{
+				"impl-codex": map[string]any{
+					"harness":     "codex",
+					"model":       "gpt-5",
+					"interactive": false,
+				},
+				"sync-codex": map[string]any{
+					"harness":     "codex",
+					"model":       "gpt-5",
+					"interactive": false,
+				},
+			},
+		},
+	}))
 
 	must.NoError(os.WriteFile(filepath.Join(repoPath, "conflict.txt"), []byte("base\n"), 0o644))
 	runGit(t, repoPath, "add", "conflict.txt")

@@ -33,8 +33,9 @@ type Config struct {
 
 // AgentDefaults names purpose-specific default agent profiles.
 type AgentDefaults struct {
-	Implementer string `yaml:"implementer"`
-	Reviewer    string `yaml:"reviewer"`
+	Implementer          string `yaml:"implementer"`
+	Reviewer             string `yaml:"reviewer"`
+	SyncConflictResolver string `yaml:"sync_conflict_resolver"`
 }
 
 // UnmarshalYAML decodes the agents.defaults/profiles shape.
@@ -238,6 +239,21 @@ func (c Config) ResolveReviewerProfile(selectedAgent string) (string, Profile, e
 	return agentName, profile, nil
 }
 
+// ResolveSyncConflictResolverCommand resolves the conflict-specific default
+// agent profile, falling back to agents.defaults.implementer when unset.
+func (c Config) ResolveSyncConflictResolverCommand(values InterpolationValues) (CommandSnapshot, error) {
+	normalized, err := c.normalized()
+	if err != nil {
+		return CommandSnapshot{}, err
+	}
+
+	agentName := strings.TrimSpace(normalized.Defaults.SyncConflictResolver)
+	if agentName == "" {
+		agentName = strings.TrimSpace(normalized.Defaults.Implementer)
+	}
+	return normalized.resolveAgentProfile(agentName, values)
+}
+
 func (c Config) resolveAgentProfile(agentName string, values InterpolationValues) (CommandSnapshot, error) {
 	profile, ok := c.Agents[agentName]
 	if !ok {
@@ -268,8 +284,9 @@ func (c Config) resolveAgentProfile(agentName string, values InterpolationValues
 
 func (c Config) normalized() (Config, error) {
 	defaults := AgentDefaults{
-		Implementer: strings.TrimSpace(c.Defaults.Implementer),
-		Reviewer:    strings.TrimSpace(c.Defaults.Reviewer),
+		Implementer:          strings.TrimSpace(c.Defaults.Implementer),
+		Reviewer:             strings.TrimSpace(c.Defaults.Reviewer),
+		SyncConflictResolver: strings.TrimSpace(c.Defaults.SyncConflictResolver),
 	}
 	if defaults.Implementer == "" {
 		return Config{}, errors.New("agents.defaults.implementer is required")
@@ -308,6 +325,15 @@ func (c Config) normalized() (Config, error) {
 			return Config{}, fmt.Errorf(
 				"agents.defaults.reviewer %q does not match a configured agent; configured agents: %s",
 				defaults.Reviewer,
+				strings.Join(agentNames(agents), ", "),
+			)
+		}
+	}
+	if defaults.SyncConflictResolver != "" {
+		if _, ok := agents[defaults.SyncConflictResolver]; !ok {
+			return Config{}, fmt.Errorf(
+				"agents.defaults.sync_conflict_resolver %q does not match a configured agent; configured agents: %s",
+				defaults.SyncConflictResolver,
 				strings.Join(agentNames(agents), ", "),
 			)
 		}
