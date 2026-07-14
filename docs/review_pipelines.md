@@ -57,6 +57,9 @@ reviews:
           args: ["test"]
 ```
 
+Step names are trimmed when config loads and must be unique within a pipeline.
+Different pipelines may reuse the same step name.
+
 ## Repository default pipeline
 
 Inspect a repository's stored and effective review pipeline:

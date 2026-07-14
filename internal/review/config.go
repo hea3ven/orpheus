@@ -206,11 +206,20 @@ func normalizePipeline(name string, pipeline Pipeline) (Pipeline, error) {
 	}
 
 	steps := make([]Step, 0, len(pipeline.Steps))
+	stepNames := make(map[string]struct{}, len(pipeline.Steps))
 	for index, rawStep := range pipeline.Steps {
 		step, err := normalizeStep(name, index, rawStep)
 		if err != nil {
 			return Pipeline{}, err
 		}
+		if _, exists := stepNames[step.Name]; exists {
+			return Pipeline{}, fmt.Errorf(
+				"reviews.pipelines.%s.steps contains duplicate step name %q after trimming whitespace",
+				name,
+				step.Name,
+			)
+		}
+		stepNames[step.Name] = struct{}{}
 		steps = append(steps, step)
 	}
 	return Pipeline{Name: name, Steps: steps}, nil
