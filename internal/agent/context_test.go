@@ -154,6 +154,46 @@ func TestActiveContextResolverResolvesRepoRootTargets(t *testing.T) {
 	}
 }
 
+func TestActiveContextResolverResolvesConflictResolutionContext(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	fixture := newActiveContextFixture(t, "op-1")
+	worktree := fixture.expectedWorktree(t, "op-1")
+	cwd := filepath.Join(worktree, "internal")
+	must.NoError(testMkdirAll(cwd))
+
+	taskItem := taskmodel.Task{
+		ID:          "op-1",
+		Title:       "Conflict task",
+		Description: "Original task.",
+		Status:      taskmodel.StatusInProgress,
+		Metadata: taskmodel.Metadata{
+			taskmodel.MetadataBranch:   "orpheus/op-1",
+			taskmodel.MetadataWorktree: worktree,
+			taskmodel.MetadataPRURL:    "https://github.test/org/repo/pull/42",
+		},
+	}
+	resolver := fixture.resolver(taskItem, map[string]string{
+		"ORPHEUS_REPO_ID":        "alpha",
+		"ORPHEUS_TASK_ID":        "op-1",
+		"ORPHEUS_WORKTREE":       worktree,
+		"ORPHEUS_BRANCH":         "orpheus/op-1",
+		"ORPHEUS_CONFLICT_FILES": "conflict.txt\npkg/service.go\n",
+	}, cwd)
+
+	got, err := resolver.ResolveConflictResolution(context.Background())
+
+	must.NoError(err)
+	is.Equal("alpha", got.Repository.ID)
+	is.Equal("op-1", got.Task.ID)
+	is.Equal(agent.ExecutionTargetWorktree, got.Target.Kind)
+	is.Equal("orpheus/op-1", got.Target.Branch)
+	is.Equal(worktree, got.Target.Path)
+	is.Equal(cwd, got.Target.CurrentDirectory)
+	is.Equal("https://github.test/org/repo/pull/42", got.PRURL)
+	is.Equal([]string{"conflict.txt", "pkg/service.go"}, got.ConflictFiles)
+}
+
 func TestActiveContextResolverRejectsLatestRunThatIsNotRunning(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)

@@ -70,6 +70,51 @@ func TestRenderActiveContextIncludesWorktreeContract(t *testing.T) {
 	))
 }
 
+func TestRenderConflictResolutionContextConstrainsAgentScope(t *testing.T) {
+	output := agent.RenderConflictResolutionContext(agent.ConflictResolutionContext{
+		Repository: agent.ContextRepository{
+			ID:            "alpha",
+			Name:          "Alpha Repo",
+			Root:          "/repo/alpha",
+			DefaultBranch: "main",
+		},
+		Task: agent.ContextTask{
+			ID:          "op-1",
+			Title:       "Resolve sync",
+			Description: "Original task context.",
+		},
+		Target: agent.ContextTarget{
+			Kind:             agent.ExecutionTargetWorktree,
+			Branch:           "orpheus/op-1",
+			Path:             "/worktrees/op-1",
+			CurrentDirectory: "/worktrees/op-1",
+		},
+		PRURL:         "https://github.test/org/repo/pull/42",
+		ConflictFiles: []string{"conflict.txt", "pkg/service.go"},
+	})
+
+	for _, want := range []string{
+		"# Orpheus Sync Conflict Resolution Context",
+		"- ID: op-1",
+		"- Pull request: https://github.test/org/repo/pull/42",
+		"- Registered default branch: main",
+		"- Branch: orpheus/op-1",
+		"Resolve only the merge conflicts",
+		"Do not implement unrelated task changes",
+		"  - conflict.txt",
+		"  - pkg/service.go",
+		"non-interactive sync conflict-resolution session",
+		"Do not run `orpheus agent done`, `orpheus task review`, or `orpheus task done`",
+		"Do not create commits, push branches",
+		"Leave the merge in progress",
+		"Orpheus sync will commit and push after you exit",
+	} {
+		assert.Contains(t, output, want)
+	}
+	assert.NotContains(t, output, "one-time completion handoff")
+	assert.NotContains(t, output, "PR-ready completion data")
+}
+
 func sampleWorktreeActiveContext() agent.ActiveContext {
 	return agent.ActiveContext{
 		Repository: agent.ContextRepository{

@@ -3,6 +3,7 @@ package workflow_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,17 +19,32 @@ import (
 )
 
 type fakeSyncRunStore struct {
-	events     []fakeTaskClosedEvent
-	recordErr  error
-	recordedAt time.Time
+	events           []fakeTaskClosedEvent
+	conflictEvents   []fakeConflictEvent
+	recordErr        error
+	conflictEventErr error
+	recordedAt       time.Time
 }
 
 type fakeSyncGit struct {
-	requests        []gitmeta.TaskBranchSyncOptions
-	result          gitmeta.TaskBranchSyncResult
-	resultsByBranch map[string]gitmeta.TaskBranchSyncResult
-	err             error
-	errsByBranch    map[string]error
+	requests         []gitmeta.TaskBranchSyncOptions
+	beginRequests    []gitmeta.TaskBranchSyncOptions
+	completeRequests []gitmeta.TaskBranchSyncOptions
+	completeFiles    [][]string
+	result           gitmeta.TaskBranchSyncResult
+	beginResult      gitmeta.TaskBranchSyncResult
+	completeResult   gitmeta.TaskBranchSyncResult
+	resultsByBranch  map[string]gitmeta.TaskBranchSyncResult
+	err              error
+	beginErr         error
+	completeErr      error
+	errsByBranch     map[string]error
+}
+
+type fakeSyncConflictResolver struct {
+	requests  []workflow.SyncConflictResolutionOptions
+	execution taskstate.AgentExecution
+	err       error
 }
 
 type fakeSyncBackend struct {
@@ -52,6 +68,14 @@ type fakeTaskClosedEvent struct {
 	opts   taskstate.TaskClosedOptions
 }
 
+type fakeConflictEvent struct {
+	eventType taskstate.EventType
+	repoID    string
+	taskID    string
+	opts      taskstate.SyncConflictResolutionEventOptions
+	err       error
+}
+
 func (g *fakeSyncGit) SyncTaskBranchWithDefault(
 	_ context.Context,
 	opts gitmeta.TaskBranchSyncOptions,
@@ -71,6 +95,65 @@ func (g *fakeSyncGit) SyncTaskBranchWithDefault(
 		result.Status = gitmeta.TaskBranchSyncAlreadyCurrent
 	}
 	return result, nil
+}
+
+func (g *fakeSyncGit) BeginTaskBranchConflictResolution(
+	_ context.Context,
+	opts gitmeta.TaskBranchSyncOptions,
+) (gitmeta.TaskBranchSyncResult, error) {
+	g.beginRequests = append(g.beginRequests, opts)
+	if g.beginErr != nil {
+		return gitmeta.TaskBranchSyncResult{}, g.beginErr
+	}
+	result := g.beginResult
+	if result.Status == "" {
+		result.Status = gitmeta.TaskBranchSyncConflicted
+	}
+	return result, nil
+}
+
+func (g *fakeSyncGit) CompleteTaskBranchConflictResolution(
+	_ context.Context,
+	opts gitmeta.TaskBranchSyncOptions,
+	conflictFiles []string,
+) (gitmeta.TaskBranchSyncResult, error) {
+	g.completeRequests = append(g.completeRequests, opts)
+	g.completeFiles = append(g.completeFiles, append([]string{}, conflictFiles...))
+	if g.completeErr != nil {
+		return gitmeta.TaskBranchSyncResult{}, g.completeErr
+	}
+	result := g.completeResult
+	if result.Status == "" {
+		result.Status = gitmeta.TaskBranchSyncUpdated
+	}
+	return result, nil
+}
+
+func (r *fakeSyncConflictResolver) PrepareSyncConflictResolution(
+	_ context.Context,
+	opts workflow.SyncConflictResolutionOptions,
+) (workflow.PreparedSyncConflictResolution, error) {
+	r.requests = append(r.requests, opts)
+	execution := r.execution
+	if execution.Agent == "" {
+		execution = taskstate.AgentExecution{
+			Purpose:     taskstate.AgentExecutionPurposeSyncConflictResolution,
+			Status:      taskstate.RunStatusRunning,
+			Agent:       "codex",
+			Profile:     "codex",
+			Harness:     "codex",
+			Model:       "gpt-5",
+			Command:     "codex",
+			Args:        []string{"exec"},
+			SessionName: "sync-conflict-" + opts.Task.ID,
+		}
+	}
+	return workflow.PreparedSyncConflictResolution{
+		Execution: execution,
+		Resolve: func(context.Context) error {
+			return r.err
+		},
+	}, nil
 }
 
 func (b *fakeSyncBackend) Get(_ context.Context, id string) (task.Task, error) {
@@ -129,6 +212,51 @@ func (s *fakeSyncRunStore) RecordTaskClosed(repoID, taskID string, opts taskstat
 		PRURL:           opts.PRURL,
 		ObservedPRState: opts.ObservedPRState,
 	}, nil
+}
+
+func (s *fakeSyncRunStore) RecordSyncConflictResolutionStarted(
+	repoID,
+	taskID string,
+	opts taskstate.SyncConflictResolutionEventOptions,
+) (taskstate.Event, error) {
+	return s.recordConflictEvent(taskstate.EventSyncConflictStarted, repoID, taskID, opts, nil)
+}
+
+func (s *fakeSyncRunStore) RecordSyncConflictResolutionFinished(
+	repoID,
+	taskID string,
+	opts taskstate.SyncConflictResolutionEventOptions,
+) (taskstate.Event, error) {
+	return s.recordConflictEvent(taskstate.EventSyncConflictFinished, repoID, taskID, opts, nil)
+}
+
+func (s *fakeSyncRunStore) RecordSyncConflictResolutionFailed(
+	repoID,
+	taskID string,
+	opts taskstate.SyncConflictResolutionEventOptions,
+	err error,
+) (taskstate.Event, error) {
+	return s.recordConflictEvent(taskstate.EventSyncConflictFailed, repoID, taskID, opts, err)
+}
+
+func (s *fakeSyncRunStore) recordConflictEvent(
+	eventType taskstate.EventType,
+	repoID string,
+	taskID string,
+	opts taskstate.SyncConflictResolutionEventOptions,
+	err error,
+) (taskstate.Event, error) {
+	s.conflictEvents = append(s.conflictEvents, fakeConflictEvent{
+		eventType: eventType,
+		repoID:    repoID,
+		taskID:    taskID,
+		opts:      opts,
+		err:       err,
+	})
+	if s.conflictEventErr != nil {
+		return taskstate.Event{}, s.conflictEventErr
+	}
+	return taskstate.Event{Type: eventType}, nil
 }
 
 type fakePRProvider struct {
@@ -364,6 +492,195 @@ func TestSyncServiceReportsOpenPRBranchAlreadyCurrent(t *testing.T) {
 	}
 	if len(gitState.requests) != 1 {
 		t.Fatalf("git requests = %#v, want one branch sync", gitState.requests)
+	}
+}
+
+//nolint:funlen // The successful conflict-repair workflow is clearer as one integrated fixture.
+func TestSyncServiceResolvesOpenPRBranchConflictWithAgent(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   targets.WorktreeTeam.Branch,
+			task.MetadataWorktree: targets.WorktreeTeam.Worktree,
+			task.MetadataPRURL:    "https://github.test/org/repo/pull/42",
+		},
+	}
+	service, provider, _ := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
+	gitState := &fakeSyncGit{
+		err: fmt.Errorf("%w: conflict.txt", gitmeta.ErrMergeConflict),
+		beginResult: gitmeta.TaskBranchSyncResult{
+			Status:        gitmeta.TaskBranchSyncConflicted,
+			Branch:        targets.WorktreeTeam.Branch,
+			DefaultBranch: "main",
+			ConflictFiles: []string{"conflict.txt"},
+		},
+		completeResult: gitmeta.TaskBranchSyncResult{Status: gitmeta.TaskBranchSyncUpdated},
+	}
+	resolver := &fakeSyncConflictResolver{}
+	service.Git = gitState
+	service.ConflictResolver = resolver
+	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateOpen}
+	runStore := service.RunStore.(*fakeSyncRunStore)
+
+	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Status != workflow.SyncStatusBranchUpdated ||
+		!strings.Contains(result.Reason, "resolved merge conflicts with the configured agent") {
+		t.Fatalf("result = %#v, want conflict-resolved branch update", result)
+	}
+	if len(gitState.requests) != 1 ||
+		len(gitState.beginRequests) != 1 ||
+		len(gitState.completeRequests) != 1 {
+		t.Fatalf(
+			"git calls sync=%#v begin=%#v complete=%#v, want one call each",
+			gitState.requests,
+			gitState.beginRequests,
+			gitState.completeRequests,
+		)
+	}
+	if len(gitState.completeFiles) != 1 ||
+		len(gitState.completeFiles[0]) != 1 ||
+		gitState.completeFiles[0][0] != "conflict.txt" {
+		t.Fatalf("complete files = %#v, want conflict file forwarded", gitState.completeFiles)
+	}
+	if len(resolver.requests) != 1 {
+		t.Fatalf("resolver requests = %#v, want one conflict repair", resolver.requests)
+	}
+	assertSyncConflictResolverRequest(t, resolver.requests[0], targets.WorktreeTeam)
+	if len(runStore.conflictEvents) != 2 ||
+		runStore.conflictEvents[0].eventType != taskstate.EventSyncConflictStarted ||
+		runStore.conflictEvents[1].eventType != taskstate.EventSyncConflictFinished {
+		t.Fatalf("conflict events = %#v, want started and finished", runStore.conflictEvents)
+	}
+	assertSyncConflictAuditEvent(t, runStore.conflictEvents[0], taskstate.EventSyncConflictStarted, targets.WorktreeTeam)
+	assertSyncConflictAuditEvent(t, runStore.conflictEvents[1], taskstate.EventSyncConflictFinished, targets.WorktreeTeam)
+}
+
+func assertSyncConflictResolverRequest(
+	t *testing.T,
+	req workflow.SyncConflictResolutionOptions,
+	target workflow.Target,
+) {
+	t.Helper()
+
+	if req.Repository.ID != "alpha" ||
+		req.Task.ID != "op-1" ||
+		req.Branch != target.Branch ||
+		req.Worktree != target.Worktree ||
+		req.DefaultBranch != "main" ||
+		req.PRURL != "https://github.test/org/repo/pull/42" ||
+		len(req.ConflictFiles) != 1 ||
+		req.ConflictFiles[0] != "conflict.txt" {
+		t.Fatalf("resolver request = %#v, want repo/task/target/conflict context", req)
+	}
+}
+
+func assertSyncConflictAuditEvent(
+	t *testing.T,
+	event fakeConflictEvent,
+	eventType taskstate.EventType,
+	target workflow.Target,
+) {
+	t.Helper()
+
+	if event.eventType != eventType ||
+		event.repoID != "alpha" ||
+		event.taskID != "op-1" ||
+		event.opts.Execution.Agent != "codex" ||
+		event.opts.Execution.SessionName != "sync-conflict-op-1" ||
+		event.opts.Branch != target.Branch ||
+		event.opts.DefaultBranch != "main" ||
+		event.opts.Worktree != target.Worktree ||
+		event.opts.PRURL != "https://github.test/org/repo/pull/42" ||
+		len(event.opts.ConflictFiles) != 1 ||
+		event.opts.ConflictFiles[0] != "conflict.txt" {
+		t.Fatalf("conflict audit event = %#v, want persisted agent/branch/conflict facts", event)
+	}
+}
+
+func TestSyncServiceReportsConflictAgentFailure(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   targets.WorktreeTeam.Branch,
+			task.MetadataWorktree: targets.WorktreeTeam.Worktree,
+			task.MetadataPRURL:    "https://github.test/org/repo/pull/42",
+		},
+	}
+	service, provider, _ := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
+	agentErr := errors.New("agent exited 1")
+	gitState := &fakeSyncGit{
+		err: fmt.Errorf("%w: conflict.txt", gitmeta.ErrMergeConflict),
+		beginResult: gitmeta.TaskBranchSyncResult{
+			Status:        gitmeta.TaskBranchSyncConflicted,
+			ConflictFiles: []string{"conflict.txt"},
+		},
+	}
+	resolver := &fakeSyncConflictResolver{err: agentErr}
+	service.Git = gitState
+	service.ConflictResolver = resolver
+	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateOpen}
+	runStore := service.RunStore.(*fakeSyncRunStore)
+
+	_, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
+	if !errors.Is(err, agentErr) || !strings.Contains(err.Error(), "resolve merge conflicts for task op-1 with agent") {
+		t.Fatalf("error = %v, want agent failure with context", err)
+	}
+	if len(gitState.completeRequests) != 0 {
+		t.Fatalf("complete requests = %#v, want none after agent failure", gitState.completeRequests)
+	}
+	if len(runStore.conflictEvents) != 2 ||
+		runStore.conflictEvents[0].eventType != taskstate.EventSyncConflictStarted ||
+		runStore.conflictEvents[1].eventType != taskstate.EventSyncConflictFailed ||
+		!errors.Is(runStore.conflictEvents[1].err, agentErr) {
+		t.Fatalf("conflict events = %#v, want started and failed with agent error", runStore.conflictEvents)
+	}
+}
+
+func TestSyncServiceReportsUnresolvedConflictAfterAgent(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   targets.WorktreeTeam.Branch,
+			task.MetadataWorktree: targets.WorktreeTeam.Worktree,
+			task.MetadataPRURL:    "https://github.test/org/repo/pull/42",
+		},
+	}
+	service, provider, _ := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
+	completeErr := errors.New("unresolved merge conflicts remain: conflict.txt")
+	gitState := &fakeSyncGit{
+		err: fmt.Errorf("%w: conflict.txt", gitmeta.ErrMergeConflict),
+		beginResult: gitmeta.TaskBranchSyncResult{
+			Status:        gitmeta.TaskBranchSyncConflicted,
+			ConflictFiles: []string{"conflict.txt"},
+		},
+		completeErr: completeErr,
+	}
+	service.Git = gitState
+	service.ConflictResolver = &fakeSyncConflictResolver{}
+	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateOpen}
+	runStore := service.RunStore.(*fakeSyncRunStore)
+
+	_, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
+	if !errors.Is(err, completeErr) || !strings.Contains(err.Error(), "complete resolved merge for task op-1") {
+		t.Fatalf("error = %v, want unresolved conflict completion failure", err)
+	}
+	if len(runStore.conflictEvents) != 2 ||
+		runStore.conflictEvents[0].eventType != taskstate.EventSyncConflictStarted ||
+		runStore.conflictEvents[1].eventType != taskstate.EventSyncConflictFailed ||
+		!errors.Is(runStore.conflictEvents[1].err, completeErr) {
+		t.Fatalf("conflict events = %#v, want started and failed with completion error", runStore.conflictEvents)
 	}
 }
 
@@ -928,6 +1245,90 @@ func TestSyncServiceSyncAllContinuesAfterOpenPRBranchUpdateFailure(t *testing.T)
 	}
 	if len(gitState.requests) != 2 {
 		t.Fatalf("git requests = %#v, want both open PR candidates attempted", gitState.requests)
+	}
+}
+
+//nolint:funlen // The batch conflict-agent failure is clearer as one integrated fixture.
+func TestSyncServiceSyncAllContinuesAfterConflictAgentFailure(t *testing.T) {
+	paths, source, targets := newSyncTestSource(t, filepath.Join(t.TempDir(), "repo"), "op-conflict")
+	currentTargets := mustSyncExpectedTargets(t, source.Repository, "op-current", paths)
+	backend := &fakeSyncBackend{
+		tasks: []task.Task{
+			{
+				ID:        "op-conflict",
+				Status:    task.StatusInProgress,
+				IssueType: task.IssueTypeTask,
+				Metadata: task.Metadata{
+					task.MetadataBranch:   targets.WorktreeTeam.Branch,
+					task.MetadataWorktree: targets.WorktreeTeam.Worktree,
+					task.MetadataPRURL:    "https://github.test/org/repo/pull/1",
+				},
+			},
+			{
+				ID:        "op-current",
+				Status:    task.StatusInProgress,
+				IssueType: task.IssueTypeTask,
+				Metadata: task.Metadata{
+					task.MetadataBranch:   currentTargets.WorktreeTeam.Branch,
+					task.MetadataWorktree: currentTargets.WorktreeTeam.Worktree,
+					task.MetadataPRURL:    "https://github.test/org/repo/pull/2",
+				},
+			},
+		},
+	}
+	provider := &fakePRProvider{
+		statusByURL: map[string]pullrequest.PullRequestStatus{
+			"https://github.test/org/repo/pull/1": {
+				URL:   "https://github.test/org/repo/pull/1",
+				State: pullrequest.StateOpen,
+			},
+			"https://github.test/org/repo/pull/2": {
+				URL:   "https://github.test/org/repo/pull/2",
+				State: pullrequest.StateOpen,
+			},
+		},
+	}
+	gitState := &fakeSyncGit{
+		errsByBranch: map[string]error{
+			targets.WorktreeTeam.Branch: fmt.Errorf("%w: conflict.txt", gitmeta.ErrMergeConflict),
+		},
+		beginResult: gitmeta.TaskBranchSyncResult{
+			Status:        gitmeta.TaskBranchSyncConflicted,
+			ConflictFiles: []string{"conflict.txt"},
+		},
+		resultsByBranch: map[string]gitmeta.TaskBranchSyncResult{
+			currentTargets.WorktreeTeam.Branch: {Status: gitmeta.TaskBranchSyncAlreadyCurrent},
+		},
+	}
+	agentErr := errors.New("agent exited 1")
+	service := workflow.SyncService{
+		Paths:   paths,
+		Sources: []task.RepositorySource{source},
+		BackendFactory: func(task.RepositorySource) (task.SyncBackend, error) {
+			return backend, nil
+		},
+		RunStore:         &fakeSyncRunStore{},
+		Git:              gitState,
+		ConflictResolver: &fakeSyncConflictResolver{err: agentErr},
+		PRProvider:       provider,
+	}
+
+	result, err := service.SyncAll(context.Background())
+	if err != nil {
+		t.Fatalf("sync all: %v", err)
+	}
+	if len(result.Results) != 1 ||
+		result.Results[0].Task.ID != "op-current" ||
+		result.Results[0].Status != workflow.SyncStatusAlreadyInReview {
+		t.Fatalf("results = %#v, want op-current already in review", result.Results)
+	}
+	if len(result.Failures) != 1 ||
+		result.Failures[0].TaskID != "op-conflict" ||
+		!errors.Is(result.Failures[0].Err, agentErr) {
+		t.Fatalf("failures = %#v, want op-conflict agent failure", result.Failures)
+	}
+	if len(gitState.completeRequests) != 0 {
+		t.Fatalf("complete requests = %#v, want none after agent failure", gitState.completeRequests)
 	}
 }
 

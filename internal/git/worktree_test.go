@@ -526,6 +526,355 @@ func TestSyncTaskBranchWithDefaultDetectsConflictWithoutPushing(t *testing.T) {
 	}
 }
 
+func TestTaskBranchConflictResolutionCompletesMergeAndPushes(t *testing.T) {
+	fixture := newConflictResolutionFixture(t, "orpheus/op-resolve", nil, func(t *testing.T, repoPath string) {
+		t.Helper()
+		pushRemoteCommit(t, repoPath, "clean.txt", "clean merge\n")
+	})
+	repoPath := fixture.repoPath
+	worktreePath := fixture.worktreePath
+	result := fixture.result
+	if result.Status != orpheusgit.TaskBranchSyncConflicted ||
+		result.PreviousHead == "" ||
+		len(result.ConflictFiles) != 1 ||
+		result.ConflictFiles[0] != "conflict.txt" {
+		t.Fatalf("result = %#v, want conflicted conflict.txt", result)
+	}
+	status := runGit(t, worktreePath, "status", "--porcelain=v1")
+	if !strings.Contains(status, "conflict.txt") {
+		t.Fatalf("status = %q, want unresolved conflict", status)
+	}
+
+	if err := os.WriteFile(filepath.Join(worktreePath, "conflict.txt"), []byte("resolved\n"), 0o644); err != nil {
+		t.Fatalf("write resolved conflict: %v", err)
+	}
+	runGit(t, worktreePath, "add", "conflict.txt")
+	completed, err := orpheusgit.CompleteTaskBranchConflictResolution(
+		context.Background(),
+		orpheusgit.TaskBranchSyncOptions{
+			RepoPath:      repoPath,
+			DefaultBranch: "main",
+			Branch:        "orpheus/op-resolve",
+			Worktree:      worktreePath,
+		},
+		result.ConflictFiles,
+	)
+	if err != nil {
+		t.Fatalf("complete conflict resolution: %v", err)
+	}
+	if completed.Status != orpheusgit.TaskBranchSyncUpdated || completed.Head == "" {
+		t.Fatalf("completed = %#v, want updated head", completed)
+	}
+	runGit(t, worktreePath, "merge-base", "--is-ancestor", "refs/remotes/origin/main", "HEAD")
+
+	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
+	originTaskHead := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/orpheus/op-resolve"))
+	localTaskHead := strings.TrimSpace(runGit(t, worktreePath, "rev-parse", "HEAD"))
+	if originTaskHead != localTaskHead {
+		t.Fatalf("origin task branch head = %s, want local head %s", originTaskHead, localTaskHead)
+	}
+	if status := strings.TrimSpace(runGit(t, worktreePath, "status", "--porcelain=v1")); status != "" {
+		t.Fatalf("status = %q, want clean after completion", status)
+	}
+	cleanContent, err := os.ReadFile(filepath.Join(worktreePath, "clean.txt"))
+	if err != nil {
+		t.Fatalf("read clean merge file: %v", err)
+	}
+	if string(cleanContent) != "clean merge\n" {
+		t.Fatalf("clean merge file = %q, want default branch content", string(cleanContent))
+	}
+}
+
+func TestTaskBranchConflictResolutionCompletesMergeWithCleanDefaultRename(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	commitFile(t, repoPath, "old.txt", "base\n", "add old file")
+	runGit(t, repoPath, "push", "origin", "main")
+
+	branch := "orpheus/op-resolve-rename"
+	worktreePath := addTaskBranchWorktree(t, repoPath, branch)
+	commitFile(t, worktreePath, "conflict.txt", "task\n", "task conflict")
+	runGit(t, worktreePath, "push", "--set-upstream", "origin", branch)
+	pushRemoteRenameAndConflict(t, repoPath)
+
+	result, err := orpheusgit.BeginTaskBranchConflictResolution(context.Background(), orpheusgit.TaskBranchSyncOptions{
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		Branch:        branch,
+		Worktree:      worktreePath,
+	})
+	if err != nil {
+		t.Fatalf("begin conflict resolution: %v", err)
+	}
+	if result.Status != orpheusgit.TaskBranchSyncConflicted ||
+		len(result.ConflictFiles) != 1 ||
+		result.ConflictFiles[0] != "conflict.txt" {
+		t.Fatalf("result = %#v, want conflicted conflict.txt", result)
+	}
+	status := runGit(t, worktreePath, "status", "--porcelain=v1")
+	if !strings.Contains(status, "R  old.txt -> new.txt") {
+		t.Fatalf("status = %q, want clean default rename", status)
+	}
+
+	if err := os.WriteFile(filepath.Join(worktreePath, "conflict.txt"), []byte("resolved\n"), 0o644); err != nil {
+		t.Fatalf("write resolved conflict: %v", err)
+	}
+	runGit(t, worktreePath, "add", "conflict.txt")
+	completed, err := orpheusgit.CompleteTaskBranchConflictResolution(
+		context.Background(),
+		orpheusgit.TaskBranchSyncOptions{
+			RepoPath:      repoPath,
+			DefaultBranch: "main",
+			Branch:        branch,
+			Worktree:      worktreePath,
+		},
+		result.ConflictFiles,
+	)
+	if err != nil {
+		t.Fatalf("complete conflict resolution: %v", err)
+	}
+	if completed.Status != orpheusgit.TaskBranchSyncUpdated || completed.Head == "" {
+		t.Fatalf("completed = %#v, want updated head", completed)
+	}
+	if _, err := os.Stat(filepath.Join(worktreePath, "old.txt")); !os.IsNotExist(err) {
+		t.Fatalf("old.txt stat error = %v, want file removed by rename", err)
+	}
+	newContent, err := os.ReadFile(filepath.Join(worktreePath, "new.txt"))
+	if err != nil {
+		t.Fatalf("read renamed file: %v", err)
+	}
+	if string(newContent) != "base\n" {
+		t.Fatalf("new.txt = %q, want renamed default content", string(newContent))
+	}
+}
+
+func TestCompleteTaskBranchConflictResolutionRejectsStagedConflictMarkers(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	worktreePath := addTaskBranchWorktree(t, repoPath, "orpheus/op-markers")
+	commitFile(t, worktreePath, "conflict.txt", "task\n", "task conflict")
+	runGit(t, worktreePath, "push", "--set-upstream", "origin", "orpheus/op-markers")
+	pushRemoteCommit(t, repoPath, "conflict.txt", "default\n")
+
+	result, err := orpheusgit.BeginTaskBranchConflictResolution(context.Background(), orpheusgit.TaskBranchSyncOptions{
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		Branch:        "orpheus/op-markers",
+		Worktree:      worktreePath,
+	})
+	if err != nil {
+		t.Fatalf("begin conflict resolution: %v", err)
+	}
+	markerContent := "<<<<<<< HEAD\nstill task\n=======\nstill default\n>>>>>>> origin/main\n"
+	if err := os.WriteFile(filepath.Join(worktreePath, "conflict.txt"), []byte(markerContent), 0o644); err != nil {
+		t.Fatalf("write marker conflict file: %v", err)
+	}
+	runGit(t, worktreePath, "add", "conflict.txt")
+
+	_, err = orpheusgit.CompleteTaskBranchConflictResolution(
+		context.Background(),
+		orpheusgit.TaskBranchSyncOptions{
+			RepoPath:      repoPath,
+			DefaultBranch: "main",
+			Branch:        "orpheus/op-markers",
+			Worktree:      worktreePath,
+		},
+		result.ConflictFiles,
+	)
+	if err == nil || !strings.Contains(err.Error(), "still contains conflict markers") {
+		t.Fatalf("error = %v, want conflict marker failure", err)
+	}
+}
+
+func TestCompleteTaskBranchConflictResolutionRejectsUnresolvedModifyDeleteConflict(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	commitFile(t, repoPath, "deleted.txt", "base\n", "add deleted file")
+	runGit(t, repoPath, "push", "origin", "main")
+
+	branch := "orpheus/op-unresolved-modify-delete"
+	worktreePath := addTaskBranchWorktree(t, repoPath, branch)
+	runGit(t, worktreePath, "rm", "deleted.txt")
+	runGit(t, worktreePath,
+		"-c", "user.name=Orpheus Test",
+		"-c", "user.email=orpheus@example.com",
+		"commit", "-m", "delete file on task branch",
+	)
+	runGit(t, worktreePath, "push", "--set-upstream", "origin", branch)
+	pushRemoteCommit(t, repoPath, "deleted.txt", "default\n")
+
+	result, err := orpheusgit.BeginTaskBranchConflictResolution(context.Background(), orpheusgit.TaskBranchSyncOptions{
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		Branch:        branch,
+		Worktree:      worktreePath,
+	})
+	if err != nil {
+		t.Fatalf("begin conflict resolution: %v", err)
+	}
+	if result.Status != orpheusgit.TaskBranchSyncConflicted ||
+		len(result.ConflictFiles) != 1 ||
+		result.ConflictFiles[0] != "deleted.txt" {
+		t.Fatalf("result = %#v, want conflicted deleted.txt", result)
+	}
+
+	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
+	originHeadBefore := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/"+branch))
+	completed, err := orpheusgit.CompleteTaskBranchConflictResolution(
+		context.Background(),
+		orpheusgit.TaskBranchSyncOptions{
+			RepoPath:      repoPath,
+			DefaultBranch: "main",
+			Branch:        branch,
+			Worktree:      worktreePath,
+		},
+		result.ConflictFiles,
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "unresolved merge conflicts remain") ||
+		!strings.Contains(err.Error(), "deleted.txt") {
+		t.Fatalf("error = %v, want unresolved deleted.txt conflict", err)
+	}
+	if completed.Status != orpheusgit.TaskBranchSyncConflicted ||
+		len(completed.ConflictFiles) != 1 ||
+		completed.ConflictFiles[0] != "deleted.txt" {
+		t.Fatalf("completed = %#v, want conflicted deleted.txt", completed)
+	}
+	if unresolved := strings.TrimSpace(runGit(t, worktreePath, "diff", "--name-only", "--diff-filter=U")); unresolved != "deleted.txt" {
+		t.Fatalf("unresolved files = %q, want deleted.txt still unmerged", unresolved)
+	}
+	originHeadAfter := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/"+branch))
+	if originHeadAfter != originHeadBefore {
+		t.Fatalf("origin task branch head = %s, want unchanged %s", originHeadAfter, originHeadBefore)
+	}
+}
+
+//nolint:funlen // The dirty-state table is clearer as one conflict completion boundary test.
+func TestCompleteTaskBranchConflictResolutionRejectsUnexpectedChanges(t *testing.T) {
+	tests := []struct {
+		name        string
+		branch      string
+		beforeBegin func(t *testing.T, worktreePath string)
+		afterBegin  func(t *testing.T, worktreePath string)
+		wantPath    string
+	}{
+		{
+			name:   "staged unrelated file",
+			branch: "orpheus/op-unexpected-staged",
+			afterBegin: func(t *testing.T, worktreePath string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(worktreePath, "unexpected.txt"), []byte("extra\n"), 0o644); err != nil {
+					t.Fatalf("write unexpected file: %v", err)
+				}
+				runGit(t, worktreePath, "add", "unexpected.txt")
+			},
+			wantPath: "unexpected.txt",
+		},
+		{
+			name:   "untracked unrelated file",
+			branch: "orpheus/op-unexpected-untracked",
+			afterBegin: func(t *testing.T, worktreePath string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(worktreePath, "untracked.txt"), []byte("extra\n"), 0o644); err != nil {
+					t.Fatalf("write untracked file: %v", err)
+				}
+			},
+			wantPath: "untracked.txt",
+		},
+		{
+			name:   "unstaged tracked file",
+			branch: "orpheus/op-unexpected-modified",
+			beforeBegin: func(t *testing.T, worktreePath string) {
+				t.Helper()
+				commitFile(t, worktreePath, "notes.txt", "original\n", "add notes")
+			},
+			afterBegin: func(t *testing.T, worktreePath string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(worktreePath, "notes.txt"), []byte("changed\n"), 0o644); err != nil {
+					t.Fatalf("modify notes file: %v", err)
+				}
+			},
+			wantPath: "notes.txt",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newConflictResolutionFixture(t, tt.branch, tt.beforeBegin, nil)
+			repoPath := fixture.repoPath
+			worktreePath := fixture.worktreePath
+			result := fixture.result
+			if err := os.WriteFile(filepath.Join(worktreePath, "conflict.txt"), []byte("resolved\n"), 0o644); err != nil {
+				t.Fatalf("write resolved conflict: %v", err)
+			}
+			runGit(t, worktreePath, "add", "conflict.txt")
+			tt.afterBegin(t, worktreePath)
+
+			originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
+			originHeadBefore := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/"+tt.branch))
+			_, err := orpheusgit.CompleteTaskBranchConflictResolution(
+				context.Background(),
+				orpheusgit.TaskBranchSyncOptions{
+					RepoPath:      repoPath,
+					DefaultBranch: "main",
+					Branch:        tt.branch,
+					Worktree:      worktreePath,
+				},
+				result.ConflictFiles,
+			)
+			if err == nil ||
+				!strings.Contains(err.Error(), "unexpected changes outside merge conflict files") ||
+				!strings.Contains(err.Error(), tt.wantPath) {
+				t.Fatalf("error = %v, want unexpected change for %s", err, tt.wantPath)
+			}
+
+			originHeadAfter := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/"+tt.branch))
+			if originHeadAfter != originHeadBefore {
+				t.Fatalf("origin task branch head = %s, want unchanged %s", originHeadAfter, originHeadBefore)
+			}
+		})
+	}
+}
+
+type conflictResolutionFixture struct {
+	repoPath     string
+	worktreePath string
+	result       orpheusgit.TaskBranchSyncResult
+}
+
+func newConflictResolutionFixture(
+	t *testing.T,
+	branch string,
+	beforePush func(t *testing.T, worktreePath string),
+	afterDefaultConflict func(t *testing.T, repoPath string),
+) conflictResolutionFixture {
+	t.Helper()
+
+	repoPath := newGitRepoWithLocalOrigin(t)
+	worktreePath := addTaskBranchWorktree(t, repoPath, branch)
+	commitFile(t, worktreePath, "conflict.txt", "task\n", "task conflict")
+	if beforePush != nil {
+		beforePush(t, worktreePath)
+	}
+	runGit(t, worktreePath, "push", "--set-upstream", "origin", branch)
+	pushRemoteCommit(t, repoPath, "conflict.txt", "default\n")
+	if afterDefaultConflict != nil {
+		afterDefaultConflict(t, repoPath)
+	}
+
+	result, err := orpheusgit.BeginTaskBranchConflictResolution(context.Background(), orpheusgit.TaskBranchSyncOptions{
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		Branch:        branch,
+		Worktree:      worktreePath,
+	})
+	if err != nil {
+		t.Fatalf("begin conflict resolution: %v", err)
+	}
+	return conflictResolutionFixture{
+		repoPath:     repoPath,
+		worktreePath: worktreePath,
+		result:       result,
+	}
+}
+
 func newStatePaths(t *testing.T) state.Paths {
 	t.Helper()
 
@@ -591,6 +940,27 @@ func pushRemoteCommit(t *testing.T, repoPath string, name string, content string
 	t.Helper()
 
 	pushRemoteBranchCommit(t, repoPath, "main", name, content, "remote commit")
+}
+
+func pushRemoteRenameAndConflict(t *testing.T, repoPath string) {
+	t.Helper()
+
+	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
+	cloneParent := t.TempDir()
+	clonePath := filepath.Join(cloneParent, "origin-work")
+	runGit(t, cloneParent, "clone", originPath, clonePath)
+	runGit(t, clonePath, "checkout", "main")
+	runGit(t, clonePath, "mv", "old.txt", "new.txt")
+	if err := os.WriteFile(filepath.Join(clonePath, "conflict.txt"), []byte("default\n"), 0o644); err != nil {
+		t.Fatalf("write remote conflict file: %v", err)
+	}
+	runGit(t, clonePath, "add", "conflict.txt")
+	runGit(t, clonePath,
+		"-c", "user.name=Orpheus Test",
+		"-c", "user.email=orpheus@example.com",
+		"commit", "-m", "rename file and add conflict",
+	)
+	runGit(t, clonePath, "push", "origin", "main")
 }
 
 func pushRemoteBranchCommit(
