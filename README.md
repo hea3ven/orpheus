@@ -54,6 +54,32 @@ agents:
 
 Interactive Codex profiles launch `codex --model <model> --dangerously-bypass-approvals-and-sandbox "{{session_name}} - {{prompt}}"`. Non-interactive profiles launch the same command through `codex exec`. When `thinking` is set, Orpheus adds `-c model_reasoning_effort=<thinking>` to the Codex command.
 
+Structured Codex and Pi profiles can set `prompt_append` to append literal supplemental instructions after the standard Orpheus bootstrap prompt. One-line and YAML multiline values are supported. Blank values are ignored.
+
+The same effective prompt is passed to the harness launch and exposed as `ORPHEUS_AGENT_PROMPT`. Raw command profiles cannot set `prompt_append`; put any custom text directly in the raw argument that contains `{{prompt}}`, or switch to `harness: codex` or `harness: pi`.
+
+Specialized reviewers can stay on a structured harness profile and keep model metadata plus supported telemetry capture:
+
+```yaml
+agents:
+  defaults:
+    implementer: codex-medium
+    reviewer: codex-architecture-review
+  profiles:
+    codex-medium:
+      harness: codex
+      model: gpt-5.4
+      thinking: high
+      interactive: true
+    codex-architecture-review:
+      harness: codex
+      model: gpt-5.4
+      interactive: false
+      prompt_append: |
+        Review from an architecture perspective.
+        Focus on module boundaries, dependency direction, data ownership, and long-term maintainability.
+```
+
 `agents.defaults.sync_conflict_resolver` is optional. When set, `orpheus task sync <task-id>` and `orpheus task sync --all` use that profile for merge-conflict repair while syncing open PR branches. When it is unset, sync conflict repair falls back to `agents.defaults.implementer`, preserving existing configs.
 
 Pi-style native naming:
