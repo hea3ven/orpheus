@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -17,6 +16,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/beads"
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/registry"
@@ -1993,23 +1993,22 @@ func validateReviewCandidateReady(
 }
 
 func requireCleanReviewIndex(ctx context.Context, workdir string) error {
-	output, err := gitCombinedOutput(ctx, workdir, "diff", "--cached", "--quiet", "--")
-	if err == nil {
+	hasStagedChanges, err := gitmeta.HasStagedChanges(ctx, workdir)
+	if err != nil {
+		return err
+	}
+	if !hasStagedChanges {
 		return nil
 	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-		status, statusErr := gitOutput(ctx, workdir, "status", "--short")
-		if statusErr != nil {
-			status = "unable to read git status: " + statusErr.Error()
-		}
-		return fmt.Errorf(
-			"review requires a clean Git index, but staged changes are present in %q; unstage them before running task review\n%s",
-			workdir,
-			strings.TrimSpace(status),
-		)
+	status, statusErr := gitmeta.ShortStatus(ctx, workdir)
+	if statusErr != nil {
+		status = "unable to read git status: " + statusErr.Error()
 	}
-	return fmt.Errorf("inspect staged changes: git diff --cached --quiet: %w: %s", err, strings.TrimSpace(string(output)))
+	return fmt.Errorf(
+		"review requires a clean Git index, but staged changes are present in %q; unstage them before running task review\n%s",
+		workdir,
+		strings.TrimSpace(status),
+	)
 }
 
 func hasReviewCandidateChanges(ctx context.Context, workdir string) (bool, error) {
@@ -2057,7 +2056,7 @@ func renderManualReviewContext(
 		return err
 	}
 
-	status, err := gitOutput(command.Context(), workdir, "status", "--short")
+	status, err := gitmeta.ShortStatus(command.Context(), workdir)
 	if err != nil {
 		return fmt.Errorf("read git status: %w", err)
 	}
@@ -3042,21 +3041,6 @@ func renderManualReviewHandoff(command *cobra.Command, taskID string, stepName s
 	}
 	return review.ErrManualInputUnavailable
 }
-
-func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {
-	output, err := gitCombinedOutput(ctx, dir, args...)
-	if err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
-	}
-	return string(output), nil
-}
-
-func gitCombinedOutput(ctx context.Context, dir string, args ...string) ([]byte, error) {
-	command := exec.CommandContext(ctx, "git", args...)
-	command.Dir = dir
-	return command.CombinedOutput()
-}
-
 func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summary string, description string) error {
 	logger := opts.log().With(
 		slog.String("component", "cli"),
