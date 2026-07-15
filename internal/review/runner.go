@@ -118,6 +118,11 @@ type stepOutcome struct {
 
 var hunkNotePollInterval = 250 * time.Millisecond
 
+// ErrManualInputUnavailable reports that an attached manual step could not
+// continue because operator input disappeared. The review attempt should remain
+// paused for task review resumption instead of being marked failed.
+var ErrManualInputUnavailable = errors.New("manual review input unavailable")
+
 // RunPipeline executes a configured review pipeline.
 func RunPipeline(opts PipelineRunOptions) (PipelineOutcome, error) {
 	if opts.Context == nil {
@@ -132,22 +137,6 @@ func RunPipeline(opts PipelineRunOptions) (PipelineOutcome, error) {
 		}
 	}
 	for _, step := range opts.Pipeline.Steps[startIndex:] {
-		if opts.PauseBeforeManual && step.Kind == KindManual {
-			if _, err := opts.Store.PauseReviewForManual(opts.RepoID, opts.TaskID, opts.Attempt.Attempt, step.Name); err != nil {
-				return PipelineOutcome{}, err
-			}
-			_, err := fmt.Fprintf(
-				opts.Stderr,
-				"Review for %s is waiting for manual step %q. Resume with `orpheus task review %s`.\n",
-				opts.TaskID,
-				step.Name,
-				opts.TaskID,
-			)
-			if err != nil {
-				return PipelineOutcome{}, err
-			}
-			return PipelineOutcome{Status: taskstate.ReviewStatusWaitingForManual}, nil
-		}
 		stepEnv := stepEnvironment(opts, step.Name)
 		outcome, err := runReadOnlyStep(opts.Context, opts.Workdir, func() (stepOutcome, error) {
 			if err := writeStepHeader(opts.Stderr, step); err != nil {
@@ -268,40 +257,103 @@ func runCheckStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome
 }
 
 func runManualStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome, error) {
+	if _, err := opts.Store.PauseReviewForManual(opts.RepoID, opts.TaskID, opts.Attempt.Attempt, step.Name); err != nil {
+		return stepOutcome{}, err
+	}
+	if opts.PauseBeforeManual {
+		return pauseManualStep(opts, step)
+	}
 	if opts.RenderManualStep == nil || opts.PromptManualStep == nil {
-		return stepOutcome{}, fmt.Errorf(
+		return failManualStep(opts, step, fmt.Errorf(
 			"task review %s: manual step %q requires manual review hooks",
 			opts.TaskID,
 			step.Name,
-		)
+		))
 	}
 	if err := opts.RenderManualStep(step); err != nil {
-		return stepOutcome{}, fmt.Errorf("task review %s: %w", opts.TaskID, err)
+		return failManualStep(opts, step, fmt.Errorf("task review %s: %w", opts.TaskID, err))
 	}
 
-	var exitCode *int
-	var hunkNotes []HunkNote
-	if step.Command != "" {
-		var err error
-		exitCode, hunkNotes, err = runConfirmedManualCommand(opts, step, env)
-		if err != nil {
+	prep, err := prepareManualStepPrompt(opts, step, env)
+	if err != nil {
+		return failManualStep(opts, step, err)
+	}
+	if prep.commandDeclined {
+		if err := resumeManualReviewStep(opts, step); err != nil {
 			return stepOutcome{}, err
 		}
-		if exitCode == nil {
-			return stepOutcome{status: taskstate.ReviewStatusAborted, stop: true}, nil
-		}
-	} else if err := recordStep(opts, step, nil, nil); err != nil {
-		return stepOutcome{}, err
+		return stepOutcome{status: taskstate.ReviewStatusAborted, stop: true}, nil
 	}
 
 	outcome, err := opts.PromptManualStep(ManualStep{
 		Step:      step,
-		HunkNotes: hunkNotes,
+		HunkNotes: prep.hunkNotes,
 	})
 	if err != nil {
+		return failManualStep(opts, step, err)
+	}
+	if err := resumeManualReviewStep(opts, step); err != nil {
 		return stepOutcome{}, err
 	}
 	return stepOutcome{status: outcome.Status, stop: outcome.Stop}, nil
+}
+
+func pauseManualStep(opts PipelineRunOptions, step Step) (stepOutcome, error) {
+	_, err := fmt.Fprintf(
+		opts.Stderr,
+		"Review for %s is waiting for manual step %q. Resume with `orpheus task review %s`.\n",
+		opts.TaskID,
+		step.Name,
+		opts.TaskID,
+	)
+	if err != nil {
+		return stepOutcome{}, err
+	}
+	return stepOutcome{status: taskstate.ReviewStatusWaitingForManual, stop: true}, nil
+}
+
+type manualStepPreparation struct {
+	commandDeclined bool
+	hunkNotes       []HunkNote
+}
+
+func prepareManualStepPrompt(
+	opts PipelineRunOptions,
+	step Step,
+	env []string,
+) (manualStepPreparation, error) {
+	if step.Command == "" {
+		return manualStepPreparation{}, recordStep(opts, step, nil, nil)
+	}
+	exitCode, hunkNotes, err := runConfirmedManualCommand(opts, step, env)
+	if err != nil {
+		return manualStepPreparation{}, err
+	}
+	return manualStepPreparation{
+		commandDeclined: exitCode == nil,
+		hunkNotes:       hunkNotes,
+	}, nil
+}
+
+func failManualStep(opts PipelineRunOptions, step Step, err error) (stepOutcome, error) {
+	if errors.Is(err, ErrManualInputUnavailable) || opts.Context.Err() != nil {
+		return manualWaitingStepOutcome()
+	}
+	if resumeErr := resumeManualReviewStep(opts, step); resumeErr != nil {
+		return stepOutcome{}, resumeErr
+	}
+	return stepOutcome{}, err
+}
+
+func manualWaitingStepOutcome() (stepOutcome, error) {
+	return stepOutcome{status: taskstate.ReviewStatusWaitingForManual, stop: true}, nil
+}
+
+func resumeManualReviewStep(opts PipelineRunOptions, step Step) error {
+	if _, err := opts.Store.ResumeReview(opts.RepoID, opts.TaskID, opts.Attempt.Attempt); err != nil {
+		return fmt.Errorf("task review %s: resume manual step %q: %w", opts.TaskID, step.Name, err)
+	}
+	return nil
 }
 
 func runConfirmedManualCommand(opts PipelineRunOptions, step Step, env []string) (*int, []HunkNote, error) {
