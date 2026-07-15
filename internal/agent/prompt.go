@@ -16,6 +16,16 @@ func RenderBootstrapPrompt() string {
 	return builder.String()
 }
 
+// RenderEffectivePrompt appends structured profile supplemental instructions
+// after the standard bootstrap prompt.
+func RenderEffectivePrompt(promptAppend string) string {
+	promptAppend = strings.TrimSpace(strings.ReplaceAll(promptAppend, "\r\n", "\n"))
+	if promptAppend == "" {
+		return RenderBootstrapPrompt()
+	}
+	return RenderBootstrapPrompt() + "\nSupplemental instructions:\n" + promptAppend + "\n"
+}
+
 func appendPromptLine(builder *strings.Builder, label string, value string) {
 	value = strings.TrimSpace(value)
 	if value == "" {

@@ -69,12 +69,13 @@ func (c *Config) UnmarshalYAML(value *yaml.Node) error {
 
 // Profile describes one directly executed agent command.
 type Profile struct {
-	Command     string   `yaml:"command"`
-	Args        []string `yaml:"args,omitempty"`
-	Interactive bool     `yaml:"interactive,omitempty"`
-	Harness     string   `yaml:"harness,omitempty"`
-	Model       string   `yaml:"model,omitempty"`
-	Thinking    string   `yaml:"thinking,omitempty"`
+	Command      string   `yaml:"command"`
+	Args         []string `yaml:"args,omitempty"`
+	Interactive  bool     `yaml:"interactive,omitempty"`
+	Harness      string   `yaml:"harness,omitempty"`
+	Model        string   `yaml:"model,omitempty"`
+	Thinking     string   `yaml:"thinking,omitempty"`
+	PromptAppend string   `yaml:"prompt_append,omitempty"`
 }
 
 // CommandSnapshot is the resolved command line for one dispatch.
@@ -84,6 +85,7 @@ type CommandSnapshot struct {
 	Args      []string
 	Harness   string
 	Model     string
+	Prompt    string
 }
 
 // ExecCommand returns the harness-neutral process invocation for this command.
@@ -284,6 +286,7 @@ func (c Config) resolveAgentProfile(agentName string, values InterpolationValues
 		Args:      args,
 		Harness:   profile.Harness,
 		Model:     profile.Model,
+		Prompt:    RenderBootstrapPrompt(),
 	}, nil
 }
 
@@ -359,6 +362,7 @@ func normalizeProfile(name string, profile Profile) (Profile, error) {
 	harness := strings.ToLower(strings.TrimSpace(profile.Harness))
 	model := strings.TrimSpace(profile.Model)
 	thinking := strings.TrimSpace(profile.Thinking)
+	promptAppend := strings.TrimSpace(profile.PromptAppend)
 
 	switch harness {
 	case codexHarness:
@@ -370,6 +374,7 @@ func normalizeProfile(name string, profile Profile) (Profile, error) {
 			harness:        harness,
 			model:          model,
 			thinking:       thinking,
+			promptAppend:   promptAppend,
 			displayHarness: "Codex",
 		})
 	case piHarness:
@@ -381,31 +386,23 @@ func normalizeProfile(name string, profile Profile) (Profile, error) {
 			harness:        harness,
 			model:          model,
 			thinking:       thinking,
+			promptAppend:   promptAppend,
 			displayHarness: "Pi",
 		})
 	case "":
 	default:
 		return Profile{}, fmt.Errorf("agents.profiles.%s.harness %q is not supported; supported harnesses: codex, pi", name, harness)
 	}
-	if command == "" {
-		return Profile{}, fmt.Errorf("agents.profiles.%s.command is required", name)
-	}
-	if err := validateInterpolationToken(fmt.Sprintf("agents.profiles.%s.command", name), command); err != nil {
-		return Profile{}, err
-	}
-	if model != "" {
-		return Profile{}, fmt.Errorf(
-			"agents.profiles.%s.model requires structured harness: codex or pi; remove model for a generic raw command profile",
-			name,
-		)
-	}
-	if thinking != "" {
-		return Profile{}, fmt.Errorf(
-			"agents.profiles.%s.thinking requires structured harness: codex or pi; remove thinking for a generic raw command profile",
-			name,
-		)
-	}
-	return Profile{Command: command, Args: args, Interactive: profile.Interactive, Harness: harness, Model: model}, nil
+	return normalizeRawProfile(rawProfileOptions{
+		name:         name,
+		profile:      profile,
+		command:      command,
+		args:         args,
+		harness:      harness,
+		model:        model,
+		thinking:     thinking,
+		promptAppend: promptAppend,
+	})
 }
 
 type structuredProfileOptions struct {
@@ -416,7 +413,19 @@ type structuredProfileOptions struct {
 	harness        string
 	model          string
 	thinking       string
+	promptAppend   string
 	displayHarness string
+}
+
+type rawProfileOptions struct {
+	name         string
+	profile      Profile
+	command      string
+	args         []string
+	harness      string
+	model        string
+	thinking     string
+	promptAppend string
 }
 
 func normalizeStructuredProfile(opts structuredProfileOptions) (Profile, error) {
@@ -433,10 +442,47 @@ func normalizeStructuredProfile(opts structuredProfileOptions) (Profile, error) 
 		return Profile{}, fmt.Errorf("agents.profiles.%s.model is required for harness: %s", opts.name, opts.harness)
 	}
 	return Profile{
+		Interactive:  opts.profile.Interactive,
+		Harness:      opts.harness,
+		Model:        opts.model,
+		Thinking:     opts.thinking,
+		PromptAppend: opts.promptAppend,
+	}, nil
+}
+
+func normalizeRawProfile(opts rawProfileOptions) (Profile, error) {
+	if opts.command == "" {
+		return Profile{}, fmt.Errorf("agents.profiles.%s.command is required", opts.name)
+	}
+	if err := validateInterpolationToken(fmt.Sprintf("agents.profiles.%s.command", opts.name), opts.command); err != nil {
+		return Profile{}, err
+	}
+	if opts.model != "" {
+		return Profile{}, fmt.Errorf(
+			"agents.profiles.%s.model requires structured harness: codex or pi; remove model for a generic raw command profile",
+			opts.name,
+		)
+	}
+	if opts.thinking != "" {
+		return Profile{}, fmt.Errorf(
+			"agents.profiles.%s.thinking requires structured harness: codex or pi; remove thinking for a generic raw command profile",
+			opts.name,
+		)
+	}
+	if opts.promptAppend != "" {
+		return Profile{}, fmt.Errorf(
+			"agents.profiles.%s.prompt_append requires structured harness: codex or pi; "+
+				"use a structured harness profile, or compose supplemental instructions directly "+
+				"in the raw command's {{prompt}} argument",
+			opts.name,
+		)
+	}
+	return Profile{
+		Command:     opts.command,
+		Args:        opts.args,
 		Interactive: opts.profile.Interactive,
 		Harness:     opts.harness,
 		Model:       opts.model,
-		Thinking:    opts.thinking,
 	}, nil
 }
 
@@ -453,13 +499,15 @@ func resolveCodexProfile(agentName string, profile Profile, values Interpolation
 	if profile.Thinking != "" {
 		args = append(args, "-c", "model_reasoning_effort="+profile.Thinking)
 	}
-	args = append(args, interpolateCodexPrompt(values))
+	prompt := interpolateCodexPrompt(values, profile.PromptAppend)
+	args = append(args, prompt)
 	return CommandSnapshot{
 		AgentName: agentName,
 		Command:   codexCommand,
 		Args:      args,
 		Harness:   profile.Harness,
 		Model:     profile.Model,
+		Prompt:    prompt,
 	}
 }
 
@@ -475,13 +523,15 @@ func resolvePiProfile(agentName string, profile Profile, values InterpolationVal
 	if strings.TrimSpace(values.SessionName) != "" {
 		args = append(args, "--name", values.SessionName)
 	}
-	args = append(args, RenderBootstrapPrompt())
+	prompt := RenderEffectivePrompt(profile.PromptAppend)
+	args = append(args, prompt)
 	return CommandSnapshot{
 		AgentName: agentName,
 		Command:   piCommand,
 		Args:      args,
 		Harness:   profile.Harness,
 		Model:     profile.Model,
+		Prompt:    prompt,
 	}
 }
 
@@ -493,8 +543,8 @@ func (p Profile) isStructuredPi() bool {
 	return p.Harness == piHarness
 }
 
-func interpolateCodexPrompt(values InterpolationValues) string {
-	return values.SessionName + " - " + RenderBootstrapPrompt()
+func interpolateCodexPrompt(values InterpolationValues, promptAppend string) string {
+	return values.SessionName + " - " + RenderEffectivePrompt(promptAppend)
 }
 
 func validateInterpolationToken(field string, value string) error {

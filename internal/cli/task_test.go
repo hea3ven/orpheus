@@ -1658,6 +1658,7 @@ func TestTaskRunStructuredCodexProfileBuildsAttachedCommand(t *testing.T) {
 	promptArg := agentLogBlock(t, log, "ARG_6")
 	is.Contains(promptArg, "Implementing op-codex Structured Codex - ")
 	is.Contains(promptArg, "You are an agent dispatched by Orpheus.")
+	is.Equal(promptArg, agentLogBlock(t, log, "ORPHEUS_AGENT_PROMPT"))
 
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-codex.yaml"), &state))
