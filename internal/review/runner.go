@@ -579,6 +579,7 @@ func finishAgentReviewExecution(
 			FinishedAt:   finishedAt,
 			Session:      usageOpts.Session,
 			Usage:        usageOpts.Usage,
+			UsageCost:    usageOpts.UsageCost,
 			UsageCapture: usageOpts.UsageCapture,
 			Model:        usageOpts.Model,
 		},
@@ -603,7 +604,7 @@ func agentReviewUsageOptions(
 			},
 		}
 	}
-	if command.Harness != "codex" {
+	if command.Harness != "codex" && command.Harness != "pi" {
 		return taskstate.RecordRunUsageOptions{
 			UsageCapture: taskstate.AgentUsageCapture{
 				Status: taskstate.UsageCaptureUnknown,
@@ -612,10 +613,12 @@ func agentReviewUsageOptions(
 			},
 		}
 	}
-	return agent.CaptureCodexUsage(agent.CodexUsageCaptureOptions{
+	return agent.CaptureUsage(agent.UsageCaptureOptions{
+		Harness:      command.Harness,
 		ExecutionDir: workdir,
+		SessionName:  execution.SessionName,
 		StartedAt:    execution.StartedAt,
-		Env:          agent.CodexUsageCaptureEnvironment(),
+		Env:          agent.UsageCaptureEnvironment(),
 	})
 }
 

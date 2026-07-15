@@ -10,6 +10,21 @@ const (
 	// UsageCostKindEstimatedAPIEquivalent marks token cost derived from public API rates.
 	UsageCostKindEstimatedAPIEquivalent = "estimated_api_equivalent"
 
+	// UsageCostKindPiReportedEstimated marks Pi's own usage.cost.total value.
+	UsageCostKindPiReportedEstimated = "pi_reported_estimated"
+
+	// UsageCostUnknownNoUsage means the execution has no captured token usage.
+	UsageCostUnknownNoUsage = "usage_not_recorded"
+
+	// UsageCostUnknownStoredCostInvalid means a stored cost was incomplete.
+	UsageCostUnknownStoredCostInvalid = "stored_usage_cost_invalid"
+
+	// UsageCostUnknownPiReportedCostMissing means Pi did not report cost.
+	UsageCostUnknownPiReportedCostMissing = "pi_reported_cost_not_captured"
+
+	// UsageCostUnknownPricingMetadataMissing means Orpheus has no pricing row.
+	UsageCostUnknownPricingMetadataMissing = "pricing_metadata_missing"
+
 	usageCostCurrencyUSD = "USD"
 	usageCostUnit        = "usd_per_1m_tokens"
 
@@ -17,6 +32,8 @@ const (
 	tokensPerPricingUnit      = int64(1_000_000)
 	reasoningOutputAsOutput   = "billed at output rate using max(output_tokens, reasoning_output_tokens)"
 	subscriptionBillingCaveat = "Estimate only; may not match subscription billing or vendor invoices."
+	piReportedCostSource      = "Pi usage.cost.total"
+	piReportedCostCaveat      = "Pi-reported estimate only; not exact billed cost or invoice reconciliation."
 	openAIAPIPricingSource    = "OpenAI API pricing"
 	openAIAPIPricingSourceURL = "https://developers.openai.com/api/docs/pricing"
 	openAIAPIPricingAccessed  = "2026-07-10"
@@ -49,6 +66,13 @@ type UsagePricingMetadata struct {
 	SourceAccessed            string
 	SourcePublished           string
 	Notes                     string
+}
+
+// ResolvedUsageCost reports whether an execution has known cost and why not.
+type ResolvedUsageCost struct {
+	Cost          UsageCost
+	Known         bool
+	UnknownReason string
 }
 
 type usagePrice struct {
@@ -84,6 +108,66 @@ var usagePrices = map[string]usagePrice{
 	"gpt-5.6-luna":  openAIAPIPrice("gpt-5.6-luna", 1_000_000, 100_000, 6_000_000),
 	"gpt-5.3-codex": openAIAPIPrice("gpt-5.3-codex", 1_750_000, 175_000, 14_000_000),
 	"chat-latest":   openAIAPIPrice("chat-latest", 5_000_000, 500_000, 30_000_000),
+}
+
+// PiReportedUsageCost records a Pi-reported estimated cost in micro-USD.
+func PiReportedUsageCost(amountMicroUSD int64) taskstate.AgentUsageCost {
+	if amountMicroUSD < 0 {
+		amountMicroUSD = 0
+	}
+	return taskstate.AgentUsageCost{
+		Kind:           UsageCostKindPiReportedEstimated,
+		Currency:       usageCostCurrencyUSD,
+		AmountMicroUSD: amountMicroUSD,
+		Source:         piReportedCostSource,
+		Notes:          piReportedCostCaveat,
+	}
+}
+
+// UsageCostFromStored converts a persisted usage cost into report metadata.
+func UsageCostFromStored(stored taskstate.AgentUsageCost) (UsageCost, bool) {
+	if stored.AmountMicroUSD <= 0 {
+		return UsageCost{}, false
+	}
+	kind := strings.TrimSpace(stored.Kind)
+	if kind == "" {
+		kind = UsageCostKindEstimatedAPIEquivalent
+	}
+	currency := strings.TrimSpace(stored.Currency)
+	if currency == "" {
+		currency = usageCostCurrencyUSD
+	}
+	return UsageCost{
+		Kind:           kind,
+		Currency:       currency,
+		AmountMicroUSD: stored.AmountMicroUSD,
+		Pricing: UsagePricingMetadata{
+			Source: strings.TrimSpace(stored.Source),
+			Notes:  strings.TrimSpace(stored.Notes),
+		},
+	}, true
+}
+
+// ResolveExecutionUsageCost applies the cost policy for one recorded execution.
+func ResolveExecutionUsageCost(execution taskstate.AgentExecution) ResolvedUsageCost {
+	if execution.Usage == nil {
+		return ResolvedUsageCost{UnknownReason: UsageCostUnknownNoUsage}
+	}
+	if execution.UsageCost != nil {
+		cost, ok := UsageCostFromStored(*execution.UsageCost)
+		if !ok {
+			return ResolvedUsageCost{UnknownReason: UsageCostUnknownStoredCostInvalid}
+		}
+		return ResolvedUsageCost{Cost: cost, Known: true}
+	}
+	if strings.TrimSpace(execution.Harness) == piHarness {
+		return ResolvedUsageCost{UnknownReason: UsageCostUnknownPiReportedCostMissing}
+	}
+	cost, ok := EstimateUsageCost(execution.Model, *execution.Usage)
+	if !ok {
+		return ResolvedUsageCost{UnknownReason: UsageCostUnknownPricingMetadataMissing}
+	}
+	return ResolvedUsageCost{Cost: cost, Known: true}
 }
 
 // EstimateUsageCost estimates the API-equivalent cost for recorded token usage.

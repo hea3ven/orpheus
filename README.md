@@ -84,7 +84,32 @@ agents:
         - "{{session_name}} - {{prompt}}"
 ```
 
-Use raw profiles for custom launch contracts. Use structured `harness: codex` profiles when task stats should attempt Codex session and token capture.
+Structured Pi profiles let Orpheus launch Pi with native session naming and recover Pi session telemetry:
+
+```yaml
+agents:
+  defaults:
+    implementer: pi-codex
+    reviewer: pi-review
+  profiles:
+    pi-codex:
+      harness: pi
+      model: openai-codex/gpt-5.5
+      thinking: high
+      interactive: true
+    pi-review:
+      harness: pi
+      model: openai-codex/gpt-5.4-mini
+      interactive: false
+```
+
+Interactive Pi profiles launch `pi --model <model> --thinking <thinking> --name "{{session_name}}" "{{prompt}}"`. Non-interactive profiles add `--print`. Orpheus correlates supported Pi executions with JSONL sessions under `PI_CODING_AGENT_SESSION_DIR`, `PI_CODING_AGENT_DIR/sessions`, or `~/.pi/agent/sessions`, matching by cwd, session name when Pi recorded it, and execution start time.
+
+`orpheus task stats` reports Pi assistant-message token usage from the matched session: input, cached input, output, reasoning output, and total tokens. When Pi records `usage.cost.total`, Orpheus stores and reports that value as `pi_reported_estimated`. This is a Pi-reported estimate only, not exact billing or invoice reconciliation. If Pi usage or reported cost is missing, stats keep the value unknown rather than treating it as zero.
+
+`orpheus doctor` checks supported harness telemetry for existing task state. With `--fix`, it repairs missing Codex or Pi usage only when exactly one safe session correlation exists, or when the closest match is clearly safe. Ambiguous Pi or Codex matches remain unresolved and show candidate counts.
+
+Use raw profiles for custom launch contracts. Use structured `harness: codex` or `harness: pi` profiles when task stats should attempt session and token capture.
 
 ## License
 
