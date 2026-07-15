@@ -3,6 +3,7 @@ package cli_test
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -3858,18 +3859,24 @@ printf 'ran\n' > %s
 }
 
 //nolint:funlen // The EOF confirmation fixture is clearer inline with its assertions.
-func TestTaskReviewManualCommandEOFConfirmationAbortsWithoutRunningCommand(t *testing.T) {
+func TestTaskReviewManualCommandEOFConfirmationHandlesUnavailableInput(t *testing.T) {
 	tests := []struct {
-		name  string
-		input []byte
+		name        string
+		input       []byte
+		wantMessage string
+		wantStatus  taskstate.ReviewStatus
 	}{
 		{
-			name:  "empty EOF",
-			input: nil,
+			name:        "empty EOF",
+			input:       nil,
+			wantMessage: "Review for op-main is waiting for manual step \"inspect\" because manual review input is unavailable.",
+			wantStatus:  taskstate.ReviewStatusWaitingForManual,
 		},
 		{
-			name:  "decline without newline",
-			input: []byte("n"),
+			name:        "decline without newline",
+			input:       []byte("n"),
+			wantMessage: "Review aborted for op-main.",
+			wantStatus:  taskstate.ReviewStatusAborted,
 		},
 	}
 
@@ -3919,7 +3926,7 @@ printf 'ran\n' > %s
 			must.NoError(err)
 			is.Empty(stdout)
 			is.Contains(stderr, "Run manual command for step \"inspect\"")
-			is.Contains(stderr, "Review aborted for op-main.")
+			is.Contains(stderr, test.wantMessage)
 			is.NotContains(stderr, "Review action")
 			_, statErr := os.Stat(markerPath)
 			is.ErrorIs(statErr, os.ErrNotExist)
@@ -3928,7 +3935,7 @@ printf 'ran\n' > %s
 			must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
 			latest, ok := taskstate.LatestReview(state)
 			must.True(ok)
-			is.Equal(taskstate.ReviewStatusAborted, latest.Status)
+			is.Equal(test.wantStatus, latest.Status)
 			is.Empty(latest.Steps)
 		})
 	}
@@ -4060,6 +4067,82 @@ exit 7
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
 	is.False(latest.AutonomousBudgetExhausted)
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
+}
+
+func TestTaskRunAttachedManualReviewApprovalFinalizes(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	must.NoError(err)
+	orpheusBin := buildOrpheusTestBinary(t, sourceRoot)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	agentDoneMarker := filepath.Join(root, "agent-done-marker")
+	agentPath := writeManualApprovalAgent(t, "manual-approval-agent", orpheusBin, agentDoneMarker)
+	writeAutonomousReviewLoopConfig(t, paths, "manual-approval", agentPath, 4, []map[string]any{
+		{"kind": "manual", "name": "approval"},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-manual", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-manual", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox list --all --limit 0", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-manual", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-manual", stdout: "{}"},
+	})
+
+	stdout, stderr, err := executeCommandWithReaderAndError(
+		t,
+		[]string{"task", "run", "--main", "op-manual"},
+		&delayedManualInput{
+			markerPath: agentDoneMarker,
+			input:      strings.NewReader("a\n"),
+		},
+	)
+
+	must.NoError(err)
+	is.Contains(stdout, "Recorded completion for op-manual")
+	is.Contains(stdout, "Finalized op-manual")
+	is.Contains(stderr, "== Review step: approval (manual) ==")
+	is.Contains(stderr, "Review action [a=approve, b=block, v=advisory, t=task, q=abort]")
+	is.NotContains(stderr, "Resume with `orpheus task review op-manual`")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-manual.yaml"), &state))
+	must.Len(state.Runs, 1)
+	must.Len(state.Reviews, 1)
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
+}
+
+type delayedManualInput struct {
+	markerPath string
+	input      *strings.Reader
+}
+
+func (r *delayedManualInput) Read(p []byte) (int, error) {
+	if _, err := os.Stat(r.markerPath); err != nil {
+		if os.IsNotExist(err) {
+			return 0, io.EOF
+		}
+		return 0, err
+	}
+	return r.input.Read(p)
 }
 
 //nolint:funlen // The exhaustion workflow needs two complete review/fix attempts.
@@ -4937,6 +5020,68 @@ func TestTaskReviewPipelineAliasResolvesToGlobalPipeline(t *testing.T) {
 	must.True(ok)
 	is.Equal("cli", latest.Pipeline)
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+}
+
+func TestTaskReviewManualInputLossReplaysRecordedFindings(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review replay", "Replay manual findings.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
+	})
+
+	firstInput := strings.Join([]string{
+		"v",
+		"Existing note",
+		"Remember this during replay",
+		"Consider later",
+		"",
+	}, "\n")
+	firstStdout, firstStderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, firstInput)
+
+	is.Empty(firstStdout)
+	is.Contains(firstStderr, "Review for op-main is waiting for manual step \"local-review\" because manual review input is unavailable.")
+	var waiting taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &waiting))
+	paused, ok := taskstate.LatestReview(waiting)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusWaitingForManual, paused.Status)
+	must.Len(paused.Findings, 1)
+	is.Equal("Existing note", paused.Findings[0].Title)
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "a\n")
+
+	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stderr, "Resuming review attempt 1 at manual step \"local-review\".")
+	is.Contains(stderr, "Recorded findings for this manual step:")
+	is.Contains(stderr, "Finding 1 (advisory): Existing note")
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(paused.Attempt, latest.Attempt)
+	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+	must.Len(latest.Findings, 1)
+	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
 }
 
 func TestTaskReviewResumesManualWaitingAttempt(t *testing.T) {
@@ -7141,6 +7286,26 @@ printf '%%s\n' "$count" > run-count.txt
 `, passWrite, shellQuote(orpheusBin))
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("write autonomous review fix agent: %v", err)
+	}
+	return path
+}
+
+func writeManualApprovalAgent(t *testing.T, name string, orpheusBin string, markerPath string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), name)
+	script := fmt.Sprintf(`#!/bin/sh
+set -eu
+printf '1\n' > run-count.txt
+printf 'pass\n' > status.txt
+%s agent done \
+  --summary "Manual approval run" \
+  --description "Manual approval run completed." \
+  --detailed-description "Detailed manual approval run."
+touch %s
+`, shellQuote(orpheusBin), shellQuote(markerPath))
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write manual approval agent: %v", err)
 	}
 	return path
 }
