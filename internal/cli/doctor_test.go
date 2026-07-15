@@ -199,6 +199,168 @@ func TestDoctorFallsBackToRegisteredRepoRootWhenTaskTargetIsMissing(t *testing.T
 	is.NotContains(stdout, "wrong-repo-session")
 }
 
+func TestDoctorRecoversPiUsageAndReportedCost(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+	piSessionDir := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", piSessionDir)
+
+	store := taskstate.NewStoreWithClock(paths, clockSequence(
+		time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 7, 7, 10, 2, 0, 0, time.UTC),
+	))
+	run, err := store.StartRun("alpha", "op-pi", taskstate.StartRunOptions{
+		Agent:       "pi-profile",
+		Profile:     "pi-profile",
+		Harness:     "pi",
+		Command:     "pi",
+		Args:        []string{"--model", "openai-codex/gpt-5.5"},
+		SessionName: "(op-pi) Pi task",
+		Branch:      "main",
+		Worktree:    repoDir,
+	})
+	must.NoError(err)
+	_, err = store.FinishRun("alpha", "op-pi", run.Attempt, taskstate.RunStatusSucceeded)
+	must.NoError(err)
+	writeDoctorPiSessionLog(
+		t,
+		piSessionDir,
+		"pi-session",
+		"(op-pi) Pi task",
+		repoDir,
+		time.Date(2026, 7, 7, 10, 1, 0, 0, time.UTC),
+	)
+
+	stdout, stderr := executeCommand(t, []string{"doctor", "--fix"})
+	is.Empty(stderr)
+	is.Contains(stdout, "Agent usage telemetry")
+	is.Contains(stdout, "recovered")
+	is.Contains(stdout, "pi-session")
+	is.Contains(stdout, "$0.001240")
+
+	loaded, err := store.Load("alpha", "op-pi")
+	must.NoError(err)
+	execution := loaded.Runs[0].Execution
+	must.NotNil(execution.Session)
+	must.NotNil(execution.Usage)
+	must.NotNil(execution.UsageCost)
+	is.Equal("pi-session", execution.Session.ID)
+	is.Equal("openai-codex/gpt-5.5", execution.Model)
+	is.Equal(180, execution.Usage.TotalTokens)
+	is.Equal(int64(1240), execution.UsageCost.AmountMicroUSD)
+	is.Equal("pi_reported_estimated", execution.UsageCost.Kind)
+	is.Equal(taskstate.UsageCaptureCaptured, execution.UsageCapture.Status)
+}
+
+func TestDoctorRecoversPiUsageWhenMatchedSessionHasNoReportedCost(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+	piSessionDir := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", piSessionDir)
+
+	store := taskstate.NewStoreWithClock(paths, clockSequence(
+		time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 7, 7, 10, 2, 0, 0, time.UTC),
+	))
+	run, err := store.StartRun("alpha", "op-pi-usage-no-cost", doctorPiStartOptions(
+		repoDir,
+		"(op-pi-usage-no-cost) Pi task",
+	))
+	must.NoError(err)
+	_, err = store.FinishRun("alpha", "op-pi-usage-no-cost", run.Attempt, taskstate.RunStatusSucceeded)
+	must.NoError(err)
+	writeDoctorPiSessionLogWithoutReportedCost(
+		t,
+		piSessionDir,
+		"pi-usage-no-cost",
+		"(op-pi-usage-no-cost) Pi task",
+		repoDir,
+		time.Date(2026, 7, 7, 10, 1, 0, 0, time.UTC),
+	)
+
+	stdout, stderr := executeCommand(t, []string{"doctor", "--fix"})
+	is.Empty(stderr)
+	is.Contains(stdout, "recovered")
+	is.Contains(stdout, "pi-usage-no-cost")
+	is.Contains(stdout, "180")
+	is.NotContains(stdout, "matching_pi_session_has_no_reported_cost")
+
+	loaded, err := store.Load("alpha", "op-pi-usage-no-cost")
+	must.NoError(err)
+	execution := loaded.Runs[0].Execution
+	must.NotNil(execution.Session)
+	must.NotNil(execution.Usage)
+	is.Nil(execution.UsageCost)
+	is.Equal("pi-usage-no-cost", execution.Session.ID)
+	is.Equal("openai-codex/gpt-5.5", execution.Model)
+	is.Equal(180, execution.Usage.TotalTokens)
+	is.Equal(taskstate.UsageCaptureCaptured, execution.UsageCapture.Status)
+}
+
+func TestDoctorDoesNotRecoverPiCostWhenMatchedSessionHasNoReportedCost(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+	piSessionDir := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", piSessionDir)
+
+	store := taskstate.NewStoreWithClock(paths, clockSequence(
+		time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 7, 7, 10, 2, 0, 0, time.UTC),
+		time.Date(2026, 7, 7, 10, 3, 0, 0, time.UTC),
+	))
+	run, err := store.StartRun("alpha", "op-pi-no-cost", doctorPiStartOptions(repoDir, "(op-pi-no-cost) Pi task"))
+	must.NoError(err)
+	_, err = store.FinishRun("alpha", "op-pi-no-cost", run.Attempt, taskstate.RunStatusSucceeded)
+	must.NoError(err)
+	_, err = store.RecordRunUsage("alpha", "op-pi-no-cost", run.Attempt, taskstate.RecordRunUsageOptions{
+		Session: &taskstate.AgentSession{
+			ID:      "existing-pi-session",
+			LogPath: filepath.Join(piSessionDir, "existing-pi-session.jsonl"),
+		},
+		Usage: &taskstate.AgentUsage{
+			TotalTokens: 180,
+		},
+		UsageCapture: taskstate.AgentUsageCapture{
+			Status: taskstate.UsageCaptureCaptured,
+			Reason: "matched_pi_session",
+		},
+		Model: "openai-codex/gpt-5.5",
+	})
+	must.NoError(err)
+	writeDoctorPiSessionLogWithoutReportedCost(
+		t,
+		piSessionDir,
+		"pi-no-cost",
+		"(op-pi-no-cost) Pi task",
+		repoDir,
+		time.Date(2026, 7, 7, 10, 1, 0, 0, time.UTC),
+	)
+
+	stdout, stderr := executeCommand(t, []string{"doctor", "--fix"})
+	is.Empty(stderr)
+	is.Contains(stdout, "unknown")
+	is.Contains(stdout, "matching_pi_session_has_no_reported_cost")
+	is.NotContains(stdout, "recovered")
+
+	loaded, err := store.Load("alpha", "op-pi-no-cost")
+	must.NoError(err)
+	execution := loaded.Runs[0].Execution
+	must.NotNil(execution.Session)
+	must.NotNil(execution.Usage)
+	is.Nil(execution.UsageCost)
+	is.Equal("existing-pi-session", execution.Session.ID)
+	is.Equal(180, execution.Usage.TotalTokens)
+}
+
 func TestDoctorRecoversUsageForUnfinishedExecution(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -293,6 +455,57 @@ func TestDoctorReportsAmbiguousAndNoMatchWithoutMutating(t *testing.T) {
 	is.Nil(missingState.Runs[0].Execution.Usage)
 }
 
+func TestDoctorReportsAmbiguousPiMatchesWithoutMutating(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+	piSessionDir := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", piSessionDir)
+
+	store := taskstate.NewStoreWithClock(paths, clockSequence(
+		time.Date(2026, 7, 7, 11, 0, 0, 0, time.UTC),
+		time.Date(2026, 7, 7, 11, 5, 0, 0, time.UTC),
+	))
+	run, err := store.StartRun("alpha", "op-pi-ambiguous", taskstate.StartRunOptions{
+		Agent:    "pi-profile",
+		Profile:  "pi-profile",
+		Harness:  "pi",
+		Command:  "pi",
+		Branch:   "main",
+		Worktree: repoDir,
+	})
+	must.NoError(err)
+	_, err = store.FinishRun("alpha", "op-pi-ambiguous", run.Attempt, taskstate.RunStatusSucceeded)
+	must.NoError(err)
+	writeDoctorPiSessionLog(t, piSessionDir, "pi-one", "Pi one", repoDir, time.Date(2026, 7, 7, 11, 1, 0, 0, time.UTC))
+	writeDoctorPiSessionLog(t, piSessionDir, "pi-two", "Pi two", repoDir, time.Date(2026, 7, 7, 11, 2, 0, 0, time.UTC))
+
+	stdout, stderr := executeCommand(t, []string{"doctor", "--fix"})
+	is.Empty(stderr)
+	is.Contains(stdout, "ambiguous")
+	is.Contains(stdout, "multiple_matching_pi_sessions")
+	is.Contains(stdout, "CANDIDATE_DETAILS")
+	is.Contains(stdout, "id=pi-one")
+	is.Contains(stdout, "name=Pi one")
+	is.Contains(stdout, "started=2026-07-07T11:01:00Z")
+	is.Contains(stdout, "offset=1m0s")
+	is.Contains(stdout, "cwd="+repoDir)
+	is.Contains(stdout, "model=openai-codex/gpt-5.5")
+	is.Contains(stdout, "log="+doctorPiSessionLogPath(piSessionDir, repoDir, "pi-one"))
+	is.Contains(stdout, "id=pi-two")
+	is.Contains(stdout, "name=Pi two")
+	is.Contains(stdout, "started=2026-07-07T11:02:00Z")
+	is.Contains(stdout, "offset=2m0s")
+	is.Contains(stdout, "log="+doctorPiSessionLogPath(piSessionDir, repoDir, "pi-two"))
+
+	loaded, err := store.Load("alpha", "op-pi-ambiguous")
+	must.NoError(err)
+	is.Nil(loaded.Runs[0].Execution.Usage)
+	is.Nil(loaded.Runs[0].Execution.UsageCost)
+}
+
 func TestDoctorTraversesAllRegisteredRepos(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -349,6 +562,18 @@ func doctorCodexStartOptions(worktree string) taskstate.StartRunOptions {
 	}
 }
 
+func doctorPiStartOptions(worktree string, sessionName string) taskstate.StartRunOptions {
+	return taskstate.StartRunOptions{
+		Agent:       "pi-profile",
+		Profile:     "pi-profile",
+		Harness:     "pi",
+		Command:     "pi",
+		SessionName: sessionName,
+		Branch:      "main",
+		Worktree:    worktree,
+	}
+}
+
 func writeDoctorCodexSessionLog(
 	t *testing.T,
 	codexHome string,
@@ -366,6 +591,72 @@ func writeDoctorCodexSessionLog(
 	content := strings.Join([]string{
 		`{"timestamp":"` + timestamp + `","type":"session_meta","payload":{"session_id":"` + sessionID + `","id":"` + sessionID + `","timestamp":"` + timestamp + `","cwd":"` + cwd + `","model":"gpt-5"}}`,
 		`{"timestamp":"` + timestamp + `","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":` + "1" + `,"cached_input_tokens":2,"output_tokens":` + "3" + `,"reasoning_output_tokens":4,"total_tokens":` + strconv.Itoa(totalTokens) + `}}}}`,
+		"",
+	}, "\n")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+}
+
+func doctorPiSessionLogPath(sessionRoot string, cwd string, sessionID string) string {
+	trimmedCWD := strings.Trim(cwd, string(os.PathSeparator))
+	pathComponent := strings.ReplaceAll(trimmedCWD, string(os.PathSeparator), "-")
+	sessionDir := filepath.Join(sessionRoot, pathComponent)
+	return filepath.Join(sessionDir, sessionID+".jsonl")
+}
+
+func writeDoctorPiSessionLog(
+	t *testing.T,
+	sessionRoot string,
+	sessionID string,
+	sessionName string,
+	cwd string,
+	startedAt time.Time,
+) {
+	t.Helper()
+	writeDoctorPiSessionLogWithCost(t, sessionRoot, sessionID, sessionName, cwd, startedAt, true)
+}
+
+func writeDoctorPiSessionLogWithoutReportedCost(
+	t *testing.T,
+	sessionRoot string,
+	sessionID string,
+	sessionName string,
+	cwd string,
+	startedAt time.Time,
+) {
+	t.Helper()
+	writeDoctorPiSessionLogWithCost(t, sessionRoot, sessionID, sessionName, cwd, startedAt, false)
+}
+
+func writeDoctorPiSessionLogWithCost(
+	t *testing.T,
+	sessionRoot string,
+	sessionID string,
+	sessionName string,
+	cwd string,
+	startedAt time.Time,
+	includeCost bool,
+) {
+	t.Helper()
+
+	sessionDir := filepath.Join(sessionRoot, strings.ReplaceAll(strings.Trim(cwd, string(os.PathSeparator)), string(os.PathSeparator), "-"))
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	path := filepath.Join(sessionDir, sessionID+".jsonl")
+	timestamp := startedAt.UTC().Format(time.RFC3339Nano)
+	nameField := ""
+	if sessionName != "" {
+		nameField = `,"name":"` + sessionName + `"`
+	}
+	firstUsageCost := ""
+	secondUsageCost := ""
+	if includeCost {
+		firstUsageCost = `,"cost":{"total":0.001234}`
+		secondUsageCost = `,"cost":{"total":0.000006}`
+	}
+	content := strings.Join([]string{
+		`{"type":"session","version":3,"id":"` + sessionID + `","timestamp":"` + timestamp + `","cwd":"` + cwd + `"` + nameField + `}`,
+		`{"type":"model_change","id":"model","timestamp":"` + timestamp + `","provider":"openai-codex","modelId":"gpt-5.5"}`,
+		`{"type":"message","id":"assistant-1","timestamp":"` + timestamp + `","message":{"role":"assistant"},"usage":{"input":100,"output":20,"cacheRead":10,"cacheWrite":3,"reasoning":5,"totalTokens":120` + firstUsageCost + `}}`,
+		`{"type":"message","id":"assistant-2","timestamp":"` + timestamp + `","message":{"role":"assistant"},"usage":{"input":50,"output":10,"cacheRead":7,"cacheWrite":0,"reasoning":0,"totalTokens":60` + secondUsageCost + `}}`,
 		"",
 	}, "\n")
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))

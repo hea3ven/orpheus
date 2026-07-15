@@ -25,7 +25,7 @@ The main runtime integrations are the `bd`, `git`, and `gh` executables, configu
 6. After a passed review, `internal/workflow` commits and publishes the reviewed changes. Default-branch work is pushed and closed directly; feature-branch work is pushed and opened as a pull request.
 7. Later sync commands poll recorded pull requests, update open task branches from the registered default branch, close merged backend tasks, and add local audit events. `internal/status` combines backend snapshots with Orpheus-owned state into the operator action queue.
 
-The independent `doctor` flow scans registered repositories and Orpheus-owned task state for recoverable local inconsistencies. Its first diagnostic correlates missing Codex usage facts with local session logs and mutates task state only when the operator supplies `--fix` and the match is safe.
+The independent `doctor` flow scans registered repositories and Orpheus-owned task state for recoverable local inconsistencies. Its first diagnostic correlates missing supported harness usage facts, currently Codex and Pi, with local session logs and mutates task state only when the operator supplies `--fix` and the match is safe.
 
 ## Package Dependency Graph
 
@@ -101,7 +101,7 @@ In dependency-direction terms, `internal/state`, `internal/task`, `internal/publ
 
 - Integrates configured coding-agent profiles by loading and validating implementer and reviewer profile configuration, interpolating raw command arguments, and constructing structured Codex launch commands.
 - Owns the agent-facing execution contract: it resolves active implementation or review context from environment, registry, backend, task-state, and workflow-target facts; renders backend-neutral prompts; and records idempotent implementation completion handoffs.
-- Captures agent execution telemetry where supported, currently by correlating Codex session logs, and estimates API-equivalent cost for recognized models.
+- Captures agent execution telemetry where supported, currently by correlating Codex and Pi session logs, records Pi-reported estimated cost when present, and estimates API-equivalent cost for recognized non-Pi models.
 
 ### `internal/agentexec`
 
@@ -123,7 +123,7 @@ In dependency-direction terms, `internal/state`, `internal/task`, `internal/publ
 ### `internal/doctor`
 
 - Runs local, cross-repository diagnostics over registered repositories and Orpheus-owned task state, returning structured outcomes for CLI rendering.
-- Owns safe repair policy for recoverable local facts. The current diagnostic re-correlates missing Codex execution usage from local session logs and persists only unique or safely disambiguated matches when explicitly requested.
+- Owns safe repair policy for recoverable local facts. The current diagnostic re-correlates missing Codex and Pi execution usage from local session logs and persists only unique or safely disambiguated matches when explicitly requested.
 
 ### `internal/git`
 

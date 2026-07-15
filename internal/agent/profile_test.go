@@ -140,6 +140,71 @@ func TestLoadConfigBuildsStructuredCodexCommands(t *testing.T) {
 	}, reviewer.Args)
 }
 
+//nolint:funlen // The structured Pi profile fixture is clearer with implementer and reviewer assertions together.
+func TestLoadConfigBuildsStructuredPiCommands(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	paths := newAgentTestPaths(t)
+
+	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"agents": map[string]any{
+			"defaults": map[string]any{"implementer": "pi-interactive", "reviewer": "pi-print"},
+			"profiles": map[string]any{
+				"pi-interactive": map[string]any{
+					"harness":     "pi",
+					"model":       "openai-codex/gpt-5.5",
+					"thinking":    "high",
+					"interactive": true,
+				},
+				"pi-print": map[string]any{
+					"harness":     "pi",
+					"model":       "openai-codex/gpt-5.4-mini",
+					"interactive": false,
+				},
+			},
+		},
+	}))
+
+	config, err := agent.LoadConfig(paths)
+	must.NoError(err)
+	impl, err := config.ResolveCommandWithValues("", agent.InterpolationValues{
+		SessionName: "(op-1) Implement task",
+	})
+	must.NoError(err)
+
+	is.Equal("pi-interactive", impl.AgentName)
+	is.Equal("pi", impl.Command)
+	is.Equal("pi", impl.Harness)
+	is.Equal("openai-codex/gpt-5.5", impl.Model)
+	is.Equal([]string{
+		"--model",
+		"openai-codex/gpt-5.5",
+		"--thinking",
+		"high",
+		"--name",
+		"(op-1) Implement task",
+		agent.RenderBootstrapPrompt(),
+	}, impl.Args)
+
+	reviewer, err := config.ResolveReviewerCommandWithValues("", agent.InterpolationValues{
+		SessionName: "Reviewing op-1 Implement task",
+	})
+	must.NoError(err)
+
+	is.Equal("pi-print", reviewer.AgentName)
+	is.Equal("pi", reviewer.Command)
+	is.Equal("pi", reviewer.Harness)
+	is.Equal("openai-codex/gpt-5.4-mini", reviewer.Model)
+	is.Equal([]string{
+		"--print",
+		"--model",
+		"openai-codex/gpt-5.4-mini",
+		"--name",
+		"Reviewing op-1 Implement task",
+		agent.RenderBootstrapPrompt(),
+	}, reviewer.Args)
+}
+
 func TestLoadConfigLeavesRawCodexCommandGeneric(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -394,6 +459,28 @@ func TestConfigValidationErrorsAreActionable(t *testing.T) {
 			want: "mixes structured Codex configuration with raw command/args",
 		},
 		{
+			name: "structured pi missing model",
+			data: agentConfigYAML(
+				map[string]any{"implementer": "pi"},
+				map[string]any{"pi": map[string]any{"harness": "pi"}},
+			),
+			want: "agents.profiles.pi.model is required for harness: pi",
+		},
+		{
+			name: "structured pi mixed with raw command",
+			data: agentConfigYAML(
+				map[string]any{"implementer": "pi"},
+				map[string]any{
+					"pi": map[string]any{
+						"harness": "pi",
+						"model":   "openai-codex/gpt-5.5",
+						"command": "pi",
+					},
+				},
+			),
+			want: "mixes structured Pi configuration with raw command/args",
+		},
+		{
 			name: "raw command cannot set model",
 			data: agentConfigYAML(
 				map[string]any{"implementer": "custom"},
@@ -404,7 +491,7 @@ func TestConfigValidationErrorsAreActionable(t *testing.T) {
 					},
 				},
 			),
-			want: "model requires structured harness: codex",
+			want: "model requires structured harness: codex or pi",
 		},
 		{
 			name: "raw command cannot set thinking",
@@ -417,7 +504,7 @@ func TestConfigValidationErrorsAreActionable(t *testing.T) {
 					},
 				},
 			),
-			want: "thinking requires structured harness: codex",
+			want: "thinking requires structured harness: codex or pi",
 		},
 		{
 			name: "unsupported interpolation",

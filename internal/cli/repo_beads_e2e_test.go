@@ -15,6 +15,12 @@ import (
 	"github.com/hea3ven/orpheus/internal/registry"
 )
 
+func TestMain(m *testing.M) {
+	code := m.Run()
+	cleanupLocalBeadsFixture()
+	os.Exit(code)
+}
+
 func TestRepoAddDetectsLocalBeadsEndToEnd(t *testing.T) {
 	requireBD(t)
 	withoutBeadsEnv(t)
@@ -189,6 +195,7 @@ func requireBD(t *testing.T) {
 
 var (
 	localBeadsFixtureOnce sync.Once
+	localBeadsFixtureRoot string
 	localBeadsFixturePath string
 	localBeadsFixtureErr  error
 )
@@ -202,6 +209,7 @@ func localBeadsFixtureDir(t *testing.T) string {
 			localBeadsFixtureErr = err
 			return
 		}
+		localBeadsFixtureRoot = root
 
 		repoPath := filepath.Join(root, "repo")
 		if err := os.MkdirAll(repoPath, 0o755); err != nil {
@@ -219,6 +227,13 @@ func localBeadsFixtureDir(t *testing.T) string {
 		t.Fatalf("create local Beads fixture: %v", localBeadsFixtureErr)
 	}
 	return localBeadsFixturePath
+}
+
+func cleanupLocalBeadsFixture() {
+	if localBeadsFixtureRoot == "" {
+		return
+	}
+	_ = os.RemoveAll(localBeadsFixtureRoot)
 }
 
 func runBD(t *testing.T, dir string, args ...string) string {

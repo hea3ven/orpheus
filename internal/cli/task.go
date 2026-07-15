@@ -37,8 +37,9 @@ var (
 	taskReviewOutputIsTerminal                    = writerIsTerminal
 )
 
-const taskStatsCostEstimateDisclaimer = "Estimated API-equivalent cost is calculated from recorded token usage " +
-	"and public pricing metadata; it may not match subscription billing or vendor invoices."
+const taskStatsCostEstimateDisclaimer = "Estimated cost uses harness-reported estimates when available; " +
+	"otherwise Orpheus may calculate API-equivalent estimates from recorded token usage and public pricing metadata. " +
+	"Costs may not match subscription billing or vendor invoices."
 
 func newTaskCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
@@ -786,18 +787,12 @@ func finishTaskRun(
 }
 
 func taskRunUsageOptions(command *cobra.Command, start workflow.DispatchStartResult) taskstate.RecordRunUsageOptions {
-	if start.Attempt.Execution.Harness != "codex" {
-		return taskstate.RecordRunUsageOptions{
-			UsageCapture: taskstate.AgentUsageCapture{
-				Status: taskstate.UsageCaptureUnknown,
-				Reason: unsupportedUsageCaptureHarnessReason(start.Attempt.Execution.Harness),
-			},
-		}
-	}
-	return agent.CaptureCodexUsage(agent.CodexUsageCaptureOptions{
+	return agent.CaptureUsage(agent.UsageCaptureOptions{
+		Harness:      start.Attempt.Execution.Harness,
 		ExecutionDir: start.ExecutionDir,
+		SessionName:  start.Attempt.Execution.SessionName,
 		StartedAt:    start.Attempt.Execution.StartedAt,
-		Env:          agent.CodexUsageCaptureEnvironment(),
+		Env:          agent.UsageCaptureEnvironment(),
 	})
 }
 
@@ -3316,28 +3311,14 @@ func syncConflictAgentUsageOptions(
 				},
 			}
 		}
-		if command.Harness != "codex" {
-			return taskstate.RecordRunUsageOptions{
-				UsageCapture: taskstate.AgentUsageCapture{
-					Status: taskstate.UsageCaptureUnknown,
-					Reason: unsupportedUsageCaptureHarnessReason(command.Harness),
-				},
-			}
-		}
-		return agent.CaptureCodexUsage(agent.CodexUsageCaptureOptions{
+		return agent.CaptureUsage(agent.UsageCaptureOptions{
+			Harness:      command.Harness,
 			ExecutionDir: worktree,
+			SessionName:  execution.SessionName,
 			StartedAt:    execution.StartedAt,
-			Env:          agent.CodexUsageCaptureEnvironment(),
+			Env:          agent.UsageCaptureEnvironment(),
 		})
 	}
-}
-
-func unsupportedUsageCaptureHarnessReason(harness string) string {
-	harness = strings.TrimSpace(harness)
-	if harness == "" {
-		harness = "unknown"
-	}
-	return "unsupported_harness:" + harness
 }
 
 func syncConflictAgentSessionName(taskID string) string {
@@ -3998,7 +3979,7 @@ func renderTaskStats(output interface{ Write([]byte) (int, error) }, state tasks
 			"STATUS",
 			"SESSION",
 			"USAGE",
-			"ESTIMATED_API_EQUIVALENT_COST",
+			"ESTIMATED_COST",
 		},
 		rows,
 	); err != nil {
@@ -4018,7 +3999,7 @@ func renderTaskStats(output interface{ Write([]byte) (int, error) }, state tasks
 			"CACHED_INPUT_TOKENS",
 			"OUTPUT_TOKENS",
 			"REASONING_OUTPUT_TOKENS",
-			"ESTIMATED_API_EQUIVALENT_COST",
+			"ESTIMATED_COST",
 			"UNKNOWN_USAGE",
 			"UNKNOWN_COST",
 		},
@@ -4070,7 +4051,7 @@ func renderTaskStatsAggregate(output interface{ Write([]byte) (int, error) }, re
 			rows:    taskStatsAggregateUsageRows(report.Periods),
 		},
 		{
-			title:   "Estimated API-Equivalent Cost",
+			title:   "Estimated Cost",
 			headers: []string{"PERIOD", "TOTAL_COST", "AVG_COST", "UNKNOWN_COST"},
 			rows:    taskStatsAggregateCostRows(report.Periods),
 		},
@@ -4353,14 +4334,16 @@ func (t *taskStatsTotals) add(execution taskstate.AgentExecution) {
 		t.usage.OutputTokens += execution.Usage.OutputTokens
 		t.usage.ReasoningOutputTokens += execution.Usage.ReasoningOutputTokens
 		t.usage.TotalTokens += execution.Usage.TotalTokens
-		if cost, ok := taskStatsExecutionCost(execution); ok {
-			t.costMicroUSD += cost.AmountMicroUSD
+		resolved := agent.ResolveExecutionUsageCost(execution)
+		if resolved.Known {
+			t.costMicroUSD += resolved.Cost.AmountMicroUSD
 		} else {
 			t.unknownCost++
 		}
 		return
 	}
 	t.unknownUsage++
+	t.unknownCost++
 }
 
 func (t *taskStatsTotals) addTotals(other taskStatsTotals) {
@@ -4494,13 +4477,28 @@ func formatTaskStatsUsageCost(execution taskstate.AgentExecution) string {
 	if execution.Usage == nil {
 		return "-"
 	}
-	cost, ok := taskStatsExecutionCost(execution)
-	if !ok {
-		return fmt.Sprintf("unknown: no public pricing metadata for model %s", formatTaskStatsField(execution.Model))
+	resolved := agent.ResolveExecutionUsageCost(execution)
+	if !resolved.Known {
+		return formatTaskStatsUsageCostUnknown(execution, resolved.UnknownReason)
 	}
+	cost := resolved.Cost
 	kind := strings.TrimSpace(cost.Kind)
 	if kind == "" {
 		kind = agent.UsageCostKindEstimatedAPIEquivalent
+	}
+	if kind == agent.UsageCostKindPiReportedEstimated {
+		source := firstNonEmpty(cost.Pricing.Source, "usage.cost.total")
+		notes := strings.TrimSpace(cost.Pricing.Notes)
+		if notes == "" {
+			notes = "estimate only"
+		}
+		return fmt.Sprintf(
+			"Pi-reported estimated cost=%s kind=%s source=%s note=%s",
+			agent.FormatUsageCostUSD(cost.AmountMicroUSD),
+			kind,
+			formatTaskStatsField(source),
+			notes,
+		)
 	}
 	pricing := cost.Pricing
 	source := firstNonEmpty(pricing.SourceAccessed, pricing.SourcePublished, pricing.Source)
@@ -4518,11 +4516,17 @@ func formatTaskStatsUsageCost(execution taskstate.AgentExecution) string {
 	)
 }
 
-func taskStatsExecutionCost(execution taskstate.AgentExecution) (agent.UsageCost, bool) {
-	if execution.Usage == nil {
-		return agent.UsageCost{}, false
+func formatTaskStatsUsageCostUnknown(execution taskstate.AgentExecution, reason string) string {
+	switch reason {
+	case agent.UsageCostUnknownPiReportedCostMissing:
+		return "unknown: Pi usage.cost.total was not captured"
+	case agent.UsageCostUnknownStoredCostInvalid:
+		return "unknown: stored usage_cost is incomplete"
+	case agent.UsageCostUnknownNoUsage:
+		return "unknown: usage was not recorded"
+	default:
+		return fmt.Sprintf("unknown: no public pricing metadata for model %s", formatTaskStatsField(execution.Model))
 	}
-	return agent.EstimateUsageCost(execution.Model, *execution.Usage)
 }
 
 func formatTaskStatsField(value string) string {

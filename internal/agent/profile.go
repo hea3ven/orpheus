@@ -23,6 +23,8 @@ const (
 	codexHarness = "codex"
 	codexCommand = "codex"
 	codexYoloArg = "--dangerously-bypass-approvals-and-sandbox"
+	piHarness    = "pi"
+	piCommand    = "pi"
 )
 
 // Config is Orpheus' global agent profile configuration.
@@ -267,6 +269,9 @@ func (c Config) resolveAgentProfile(agentName string, values InterpolationValues
 	if profile.isStructuredCodex() {
 		return resolveCodexProfile(agentName, profile, values), nil
 	}
+	if profile.isStructuredPi() {
+		return resolvePiProfile(agentName, profile, values), nil
+	}
 
 	args := make([]string, len(profile.Args))
 	for i, arg := range profile.Args {
@@ -355,26 +360,32 @@ func normalizeProfile(name string, profile Profile) (Profile, error) {
 	model := strings.TrimSpace(profile.Model)
 	thinking := strings.TrimSpace(profile.Thinking)
 
-	if harness == codexHarness {
-		if command != "" || len(args) > 0 {
-			return Profile{}, fmt.Errorf(
-				"agents.profiles.%s mixes structured Codex configuration with raw command/args; "+
-					"use harness: codex with model and no command/args, or remove harness/model for a generic raw command profile",
-				name,
-			)
-		}
-		if model == "" {
-			return Profile{}, fmt.Errorf("agents.profiles.%s.model is required for harness: codex", name)
-		}
-		return Profile{
-			Interactive: profile.Interactive,
-			Harness:     harness,
-			Model:       model,
-			Thinking:    thinking,
-		}, nil
-	}
-	if harness != "" {
-		return Profile{}, fmt.Errorf("agents.profiles.%s.harness %q is not supported; supported harnesses: codex", name, harness)
+	switch harness {
+	case codexHarness:
+		return normalizeStructuredProfile(structuredProfileOptions{
+			name:           name,
+			profile:        profile,
+			command:        command,
+			args:           args,
+			harness:        harness,
+			model:          model,
+			thinking:       thinking,
+			displayHarness: "Codex",
+		})
+	case piHarness:
+		return normalizeStructuredProfile(structuredProfileOptions{
+			name:           name,
+			profile:        profile,
+			command:        command,
+			args:           args,
+			harness:        harness,
+			model:          model,
+			thinking:       thinking,
+			displayHarness: "Pi",
+		})
+	case "":
+	default:
+		return Profile{}, fmt.Errorf("agents.profiles.%s.harness %q is not supported; supported harnesses: codex, pi", name, harness)
 	}
 	if command == "" {
 		return Profile{}, fmt.Errorf("agents.profiles.%s.command is required", name)
@@ -384,17 +395,49 @@ func normalizeProfile(name string, profile Profile) (Profile, error) {
 	}
 	if model != "" {
 		return Profile{}, fmt.Errorf(
-			"agents.profiles.%s.model requires structured harness: codex; remove model for a generic raw command profile",
+			"agents.profiles.%s.model requires structured harness: codex or pi; remove model for a generic raw command profile",
 			name,
 		)
 	}
 	if thinking != "" {
 		return Profile{}, fmt.Errorf(
-			"agents.profiles.%s.thinking requires structured harness: codex; remove thinking for a generic raw command profile",
+			"agents.profiles.%s.thinking requires structured harness: codex or pi; remove thinking for a generic raw command profile",
 			name,
 		)
 	}
 	return Profile{Command: command, Args: args, Interactive: profile.Interactive, Harness: harness, Model: model}, nil
+}
+
+type structuredProfileOptions struct {
+	name           string
+	profile        Profile
+	command        string
+	args           []string
+	harness        string
+	model          string
+	thinking       string
+	displayHarness string
+}
+
+func normalizeStructuredProfile(opts structuredProfileOptions) (Profile, error) {
+	if opts.command != "" || len(opts.args) > 0 {
+		return Profile{}, fmt.Errorf(
+			"agents.profiles.%s mixes structured %s configuration with raw command/args; "+
+				"use harness: %s with model and no command/args, or remove harness/model for a generic raw command profile",
+			opts.name,
+			opts.displayHarness,
+			opts.harness,
+		)
+	}
+	if opts.model == "" {
+		return Profile{}, fmt.Errorf("agents.profiles.%s.model is required for harness: %s", opts.name, opts.harness)
+	}
+	return Profile{
+		Interactive: opts.profile.Interactive,
+		Harness:     opts.harness,
+		Model:       opts.model,
+		Thinking:    opts.thinking,
+	}, nil
 }
 
 func resolveCodexProfile(agentName string, profile Profile, values InterpolationValues) CommandSnapshot {
@@ -420,8 +463,34 @@ func resolveCodexProfile(agentName string, profile Profile, values Interpolation
 	}
 }
 
+func resolvePiProfile(agentName string, profile Profile, values InterpolationValues) CommandSnapshot {
+	args := []string{}
+	if !profile.Interactive {
+		args = append(args, "--print")
+	}
+	args = append(args, "--model", profile.Model)
+	if profile.Thinking != "" {
+		args = append(args, "--thinking", profile.Thinking)
+	}
+	if strings.TrimSpace(values.SessionName) != "" {
+		args = append(args, "--name", values.SessionName)
+	}
+	args = append(args, RenderBootstrapPrompt())
+	return CommandSnapshot{
+		AgentName: agentName,
+		Command:   piCommand,
+		Args:      args,
+		Harness:   profile.Harness,
+		Model:     profile.Model,
+	}
+}
+
 func (p Profile) isStructuredCodex() bool {
 	return p.Harness == codexHarness
+}
+
+func (p Profile) isStructuredPi() bool {
+	return p.Harness == piHarness
 }
 
 func interpolateCodexPrompt(values InterpolationValues) string {

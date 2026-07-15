@@ -198,6 +198,57 @@ func TestAggregateReportFromSnapshotAveragesKnownUsageAndCostOnly(t *testing.T) 
 	is.False(ok)
 }
 
+func TestAggregateReportUsesStoredPiReportedCost(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+
+	closedAt := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	startedAt := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	finishedAt := time.Date(2026, 7, 2, 10, 30, 0, 0, time.UTC)
+	snapshot := taskmodel.SnapshotResult{
+		Repositories: []taskmodel.RepositorySnapshot{{
+			Repository: taskmodel.Repository{ID: "alpha", Name: "Alpha"},
+			Tasks:      []taskmodel.Task{{ID: "op-pi", ClosedAt: &closedAt}},
+		}},
+	}
+	loader := fakeStateLoader{
+		states: map[string]taskstate.TaskState{
+			"alpha/op-pi": {
+				Runs: []taskstate.RunAttempt{{
+					Execution: taskstate.AgentExecution{
+						Harness:    "pi",
+						Model:      "openai-codex/gpt-5.5",
+						StartedAt:  startedAt,
+						FinishedAt: &finishedAt,
+						Usage: &taskstate.AgentUsage{
+							InputTokens:  100,
+							OutputTokens: 50,
+							TotalTokens:  150,
+						},
+						UsageCost: &taskstate.AgentUsageCost{
+							Kind:           "pi_reported_estimated",
+							Currency:       "USD",
+							AmountMicroUSD: 1240,
+							Source:         "Pi usage.cost.total",
+						},
+					},
+				}},
+			},
+		},
+	}
+
+	got, failures := taskstats.AggregateReportFromSnapshot(snapshot, loader, taskstats.GroupDay)
+
+	must.Empty(failures)
+	must.Len(got.Periods, 1)
+	period := got.Periods[0]
+	is.Equal(int64(1240), period.Totals.CostMicroUSD)
+	is.Equal(1, period.Totals.KnownCostTasks)
+	is.Zero(period.Totals.UnknownCost)
+	averageCostMicroUSD, ok := period.AverageCostMicroUSD()
+	assertInt64Value(t, averageCostMicroUSD, ok, 1240)
+}
+
 //nolint:funlen // The fixture keeps combined and per-purpose aggregate assertions together.
 func TestAggregateReportIncludesTerminalSyncConflictResolutionExecutions(t *testing.T) {
 	is := assert.New(t)

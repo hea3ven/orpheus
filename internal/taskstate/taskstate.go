@@ -196,6 +196,7 @@ type AgentExecution struct {
 
 	Session      *AgentSession     `yaml:"session,omitempty"`
 	Usage        *AgentUsage       `yaml:"usage,omitempty"`
+	UsageCost    *AgentUsageCost   `yaml:"usage_cost,omitempty"`
 	UsageCapture AgentUsageCapture `yaml:"usage_capture,omitempty"`
 }
 
@@ -212,6 +213,15 @@ type AgentUsage struct {
 	OutputTokens          int `yaml:"output_tokens,omitempty" json:"output_tokens,omitempty"`
 	ReasoningOutputTokens int `yaml:"reasoning_output_tokens,omitempty" json:"reasoning_output_tokens,omitempty"`
 	TotalTokens           int `yaml:"total_tokens,omitempty" json:"total_tokens,omitempty"`
+}
+
+// AgentUsageCost records a harness-reported or Orpheus-estimated usage cost.
+type AgentUsageCost struct {
+	Kind           string `yaml:"kind,omitempty"`
+	Currency       string `yaml:"currency,omitempty"`
+	AmountMicroUSD int64  `yaml:"amount_micro_usd,omitempty"`
+	Source         string `yaml:"source,omitempty"`
+	Notes          string `yaml:"notes,omitempty"`
 }
 
 // AgentUsageCapture records diagnostics from a usage-capture attempt.
@@ -437,8 +447,21 @@ type CompleteRunOptions struct {
 type RecordRunUsageOptions struct {
 	Session      *AgentSession
 	Usage        *AgentUsage
+	UsageCost    *AgentUsageCost
 	UsageCapture AgentUsageCapture
+	Candidates   []UsageCaptureCandidate
 	Model        string
+}
+
+// UsageCaptureCandidate describes a session candidate considered during usage capture.
+type UsageCaptureCandidate struct {
+	SessionID         string
+	SessionName       string
+	LogPath           string
+	CWD               string
+	Model             string
+	StartedAt         time.Time
+	StartOffsetMillis int64
 }
 
 // SyncConflictResolutionEventOptions describes a sync conflict-repair audit event.
@@ -489,6 +512,7 @@ type FinishReviewStepExecutionOptions struct {
 
 	Session      *AgentSession
 	Usage        *AgentUsage
+	UsageCost    *AgentUsageCost
 	UsageCapture AgentUsageCapture
 	Model        string
 }
@@ -1098,6 +1122,7 @@ func (s Store) FinishReviewStepExecution(
 	usageOpts := RecordRunUsageOptions{
 		Session:      opts.Session,
 		Usage:        opts.Usage,
+		UsageCost:    opts.UsageCost,
 		UsageCapture: opts.UsageCapture,
 		Model:        opts.Model,
 	}
@@ -1581,6 +1606,12 @@ func applyRunUsageOptions(execution AgentExecution, opts RecordRunUsageOptions, 
 		usage := normalizeAgentUsage(*opts.Usage)
 		if !agentUsageIsZero(usage) {
 			execution.Usage = &usage
+		}
+	}
+	if opts.UsageCost != nil {
+		cost := normalizeAgentUsageCost(*opts.UsageCost)
+		if !agentUsageCostIsZero(cost) {
+			execution.UsageCost = &cost
 		}
 	}
 	capture := normalizeAgentUsageCapture(opts.UsageCapture, capturedAt)
@@ -2409,6 +2440,14 @@ func normalizeAgentExecution(execution AgentExecution) AgentExecution {
 			execution.Usage = &usage
 		}
 	}
+	if execution.UsageCost != nil {
+		cost := normalizeAgentUsageCost(*execution.UsageCost)
+		if agentUsageCostIsZero(cost) {
+			execution.UsageCost = nil
+		} else {
+			execution.UsageCost = &cost
+		}
+	}
 	execution.UsageCapture = normalizeAgentUsageCapture(execution.UsageCapture, time.Time{})
 	return execution
 }
@@ -2445,6 +2484,9 @@ func validateAgentExecution(execution AgentExecution) error {
 	}
 	if execution.Usage != nil && agentUsageIsZero(normalizeAgentUsage(*execution.Usage)) {
 		return errors.New("usage must include at least one token field")
+	}
+	if execution.UsageCost != nil && agentUsageCostIsZero(normalizeAgentUsageCost(*execution.UsageCost)) {
+		return errors.New("usage_cost must include a positive amount")
 	}
 	if !execution.UsageCapture.IsZero() && !validUsageCaptureStatus(execution.UsageCapture.Status) {
 		return fmt.Errorf("unsupported usage_capture status %q", execution.UsageCapture.Status)
@@ -2488,6 +2530,21 @@ func agentUsageIsZero(usage AgentUsage) bool {
 		usage.OutputTokens == 0 &&
 		usage.ReasoningOutputTokens == 0 &&
 		usage.TotalTokens == 0
+}
+
+func normalizeAgentUsageCost(cost AgentUsageCost) AgentUsageCost {
+	cost.Kind = strings.TrimSpace(cost.Kind)
+	cost.Currency = strings.TrimSpace(cost.Currency)
+	if cost.AmountMicroUSD < 0 {
+		cost.AmountMicroUSD = 0
+	}
+	cost.Source = strings.TrimSpace(cost.Source)
+	cost.Notes = strings.TrimSpace(cost.Notes)
+	return cost
+}
+
+func agentUsageCostIsZero(cost AgentUsageCost) bool {
+	return cost.AmountMicroUSD == 0
 }
 
 func normalizeAgentUsageCapture(capture AgentUsageCapture, capturedAt time.Time) AgentUsageCapture {
