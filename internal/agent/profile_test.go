@@ -205,6 +205,83 @@ func TestLoadConfigBuildsStructuredPiCommands(t *testing.T) {
 	}, reviewer.Args)
 }
 
+func TestLoadConfigBuildsStructuredCommandsWithPromptAppend(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	paths := newAgentTestPaths(t)
+	configPath, err := paths.ConfigPath(agent.ConfigFile)
+	must.NoError(err)
+	must.NoError(os.MkdirAll(filepath.Dir(configPath), 0o755))
+	must.NoError(os.WriteFile(configPath, []byte(`
+agents:
+  defaults:
+    implementer: codex-arch
+    reviewer: pi-review
+  profiles:
+    codex-arch:
+      harness: codex
+      model: gpt-5.4
+      prompt_append: Focus on architecture boundaries.
+    pi-review:
+      harness: pi
+      model: openai-codex/gpt-5.4-mini
+      interactive: false
+      prompt_append: |
+        Review module boundaries.
+        Call out dependency direction risks.
+`), 0o644))
+
+	config, err := agent.LoadConfig(paths)
+	must.NoError(err)
+
+	impl, err := config.ResolveCommandWithValues("", agent.InterpolationValues{
+		SessionName: "Implementing op-1 Architecture task",
+	})
+	must.NoError(err)
+	codexPrompt := "Implementing op-1 Architecture task - " +
+		agent.RenderEffectivePrompt("Focus on architecture boundaries.")
+	is.Equal(codexPrompt, impl.Prompt)
+	is.Equal(codexPrompt, impl.Args[len(impl.Args)-1])
+	is.Equal("codex", impl.Harness)
+	is.Equal("gpt-5.4", impl.Model)
+
+	reviewer, err := config.ResolveReviewerCommandWithValues("", agent.InterpolationValues{
+		SessionName: "Reviewing op-1 Architecture task",
+	})
+	must.NoError(err)
+	piPrompt := agent.RenderEffectivePrompt("Review module boundaries.\nCall out dependency direction risks.")
+	is.Equal(piPrompt, reviewer.Prompt)
+	is.Equal(piPrompt, reviewer.Args[len(reviewer.Args)-1])
+	is.Equal([]string{
+		"--print",
+		"--model",
+		"openai-codex/gpt-5.4-mini",
+		"--name",
+		"Reviewing op-1 Architecture task",
+		piPrompt,
+	}, reviewer.Args)
+}
+
+func TestStructuredBlankPromptAppendPreservesBootstrapPrompt(t *testing.T) {
+	is := assert.New(t)
+	config := agent.Config{
+		Defaults: agent.AgentDefaults{Implementer: "pi"},
+		Agents: map[string]agent.Profile{
+			"pi": {
+				Harness:      "pi",
+				Model:        "openai-codex/gpt-5.5",
+				PromptAppend: " \n\t ",
+			},
+		},
+	}
+
+	snapshot, err := config.ResolveCommand("")
+
+	require.NoError(t, err)
+	is.Equal(agent.RenderBootstrapPrompt(), snapshot.Prompt)
+	is.Equal(agent.RenderBootstrapPrompt(), snapshot.Args[len(snapshot.Args)-1])
+}
+
 func TestLoadConfigLeavesRawCodexCommandGeneric(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -505,6 +582,19 @@ func TestConfigValidationErrorsAreActionable(t *testing.T) {
 				},
 			),
 			want: "thinking requires structured harness: codex or pi",
+		},
+		{
+			name: "raw command cannot set prompt append",
+			data: agentConfigYAML(
+				map[string]any{"implementer": "custom"},
+				map[string]any{
+					"custom": map[string]any{
+						"command":       "custom-agent",
+						"prompt_append": "Review architecture.",
+					},
+				},
+			),
+			want: "prompt_append requires structured harness: codex or pi",
 		},
 		{
 			name: "unsupported interpolation",

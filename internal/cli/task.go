@@ -3284,7 +3284,6 @@ func runTaskSyncAll(command *cobra.Command, opts *rootOptions) error {
 }
 
 func resolveTaskRunAgentCommand(paths state.Paths, agentName string, sessionName string) (string, agent.CommandSnapshot, error) {
-	prompt := agent.RenderBootstrapPrompt()
 	agentConfig, err := agent.LoadConfig(paths)
 	if err != nil {
 		return "", agent.CommandSnapshot{}, err
@@ -3295,11 +3294,10 @@ func resolveTaskRunAgentCommand(paths state.Paths, agentName string, sessionName
 	if err != nil {
 		return "", agent.CommandSnapshot{}, fmt.Errorf("resolve agent profile: %w", err)
 	}
-	return prompt, commandSnapshot, nil
+	return commandSnapshot.Prompt, commandSnapshot, nil
 }
 
 func resolveTaskRunFollowUpAgentCommand(paths state.Paths, agentName string, sessionName string) (string, agent.CommandSnapshot, error) {
-	prompt := agent.RenderBootstrapPrompt()
 	agentConfig, err := agent.LoadConfig(paths)
 	if err != nil {
 		return "", agent.CommandSnapshot{}, err
@@ -3310,7 +3308,7 @@ func resolveTaskRunFollowUpAgentCommand(paths state.Paths, agentName string, ses
 	if err != nil {
 		return "", agent.CommandSnapshot{}, fmt.Errorf("resolve agent profile: %w", err)
 	}
-	return prompt, commandSnapshot, nil
+	return commandSnapshot.Prompt, commandSnapshot, nil
 }
 
 type syncConflictAgentResolver struct {
@@ -3324,7 +3322,6 @@ func (r syncConflictAgentResolver) PrepareSyncConflictResolution(
 	_ context.Context,
 	opts workflow.SyncConflictResolutionOptions,
 ) (workflow.PreparedSyncConflictResolution, error) {
-	prompt := agent.RenderBootstrapPrompt()
 	agentConfig, err := agent.LoadConfig(r.paths)
 	if err != nil {
 		return workflow.PreparedSyncConflictResolution{}, err
@@ -3361,7 +3358,7 @@ func (r syncConflictAgentResolver) PrepareSyncConflictResolution(
 					opts.Task.ID,
 					opts.Worktree,
 					opts.Branch,
-					prompt,
+					commandSnapshot.Prompt,
 					opts.ConflictFiles,
 				),
 				Stdin:  strings.NewReader(""),

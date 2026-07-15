@@ -137,12 +137,11 @@ func RunPipeline(opts PipelineRunOptions) (PipelineOutcome, error) {
 		}
 	}
 	for _, step := range opts.Pipeline.Steps[startIndex:] {
-		stepEnv := stepEnvironment(opts, step.Name)
 		outcome, err := runReadOnlyStep(opts.Context, opts.Workdir, func() (stepOutcome, error) {
 			if err := writeStepHeader(opts.Stderr, step); err != nil {
 				return stepOutcome{}, err
 			}
-			return runStep(opts, step, stepEnv)
+			return runStep(opts, step)
 		})
 		if err != nil {
 			return PipelineOutcome{}, err
@@ -192,14 +191,16 @@ func runReadOnlyStep(
 	return outcome, nil
 }
 
-func runStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome, error) {
+func runStep(opts PipelineRunOptions, step Step) (stepOutcome, error) {
 	switch step.Kind {
 	case KindCheck:
+		env := stepEnvironment(opts, step.Name, agent.RenderBootstrapPrompt())
 		return runCheckStep(opts, step, env)
 	case KindManual:
+		env := stepEnvironment(opts, step.Name, agent.RenderBootstrapPrompt())
 		return runManualStep(opts, step, env)
 	case KindAgentReview:
-		return runAgentReviewStep(opts, step, env)
+		return runAgentReviewStep(opts, step)
 	default:
 		return stepOutcome{}, fmt.Errorf(
 			"task review %s: review step %q has unsupported kind %q",
@@ -466,7 +467,7 @@ func writeStepHeader(output io.Writer, step Step) error {
 	return err
 }
 
-func runAgentReviewStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome, error) {
+func runAgentReviewStep(opts PipelineRunOptions, step Step) (stepOutcome, error) {
 	if opts.AgentLauncher == nil {
 		return stepOutcome{}, fmt.Errorf(
 			"task review %s: agent_review step %q requires an agent launcher",
@@ -481,6 +482,7 @@ func runAgentReviewStep(opts PipelineRunOptions, step Step, env []string) (stepO
 	if err != nil {
 		return stepOutcome{}, fmt.Errorf("task review %s: resolve agent_review step %q: %w", opts.TaskID, step.Name, err)
 	}
+	env := stepEnvironment(opts, step.Name, command.Prompt)
 	_, profile, err := opts.AgentConfig.ResolveReviewerProfile(step.Agent)
 	if err != nil {
 		return stepOutcome{}, fmt.Errorf("task review %s: resolve agent_review step %q: %w", opts.TaskID, step.Name, err)
@@ -846,8 +848,7 @@ func recordStep(opts PipelineRunOptions, step Step, execution *taskstate.AgentEx
 	return nil
 }
 
-func stepEnvironment(opts PipelineRunOptions, stepName string) []string {
-	prompt := agent.RenderBootstrapPrompt()
+func stepEnvironment(opts PipelineRunOptions, stepName string, prompt string) []string {
 	return []string{
 		"ORPHEUS_REPO_ID=" + opts.RepoID,
 		"ORPHEUS_TASK_ID=" + opts.TaskID,

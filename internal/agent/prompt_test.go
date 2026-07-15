@@ -1,6 +1,7 @@
 package agent_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agent"
@@ -22,6 +23,22 @@ func TestRenderBootstrapPromptTellsAgentToFetchContext(t *testing.T) {
 	is.NotContains(prompt, "Summary:")
 	is.NotContains(prompt, "Beads")
 	is.NotContains(prompt, "bd")
+}
+
+func TestRenderEffectivePromptAppendsSupplementalInstructions(t *testing.T) {
+	is := assert.New(t)
+
+	blank := agent.RenderEffectivePrompt(" \n\t ")
+	is.Equal(agent.RenderBootstrapPrompt(), blank)
+
+	prompt := agent.RenderEffectivePrompt("Review architecture boundaries.\nCheck dependency direction.")
+	is.Contains(prompt, agent.RenderBootstrapPrompt())
+	is.Contains(prompt, "\nSupplemental instructions:\n")
+	is.Contains(prompt, "Review architecture boundaries.\nCheck dependency direction.\n")
+	is.Less(
+		strings.Index(prompt, "Run `orpheus agent context` now"),
+		strings.Index(prompt, "Supplemental instructions:"),
+	)
 }
 
 func TestRenderActiveContextIncludesWorktreeContract(t *testing.T) {

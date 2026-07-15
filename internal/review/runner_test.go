@@ -548,6 +548,85 @@ func TestRunPipelineInteractiveAgentReviewNonBlockingFindingLeavesLiveTail(t *te
 	}
 }
 
+func TestRunPipelineAgentReviewUsesEffectivePromptInCommandAndEnvironment(t *testing.T) {
+	harness := newAgentReviewPipelineHarness(t)
+	promptAppend := "Review architecture boundaries.\nCall out dependency direction risks."
+	wantPrompt := agent.RenderEffectivePrompt(promptAppend)
+	var stdout bytes.Buffer
+	terminal := newVisualTerminal()
+
+	outcome, err := review.RunPipeline(review.PipelineRunOptions{
+		Context:           context.Background(),
+		Store:             harness.store,
+		RepoID:            "alpha",
+		TaskID:            "op-1",
+		Branch:            "main",
+		Workdir:           harness.workdir,
+		Attempt:           harness.attempt,
+		Pipeline:          agentReviewPipeline(),
+		Stdout:            &stdout,
+		Stderr:            terminal,
+		InteractiveOutput: true,
+		AgentConfig:       piReviewPromptAgentConfig(promptAppend),
+		AgentLauncher:     promptAssertingReviewLauncher(wantPrompt),
+	})
+
+	if err != nil {
+		t.Fatalf("RunPipeline error = %v", err)
+	}
+	if outcome.Status != taskstate.ReviewStatusPassed {
+		t.Fatalf("outcome = %q, want passed", outcome.Status)
+	}
+	assertLatestReviewExecutionModel(t, harness.store, "pi", "openai-codex/gpt-5.4-mini")
+}
+
+func piReviewPromptAgentConfig(promptAppend string) agent.Config {
+	return agent.Config{
+		Defaults: agent.AgentDefaults{Implementer: "impl", Reviewer: "reviewer"},
+		Agents: map[string]agent.Profile{
+			"impl": {Command: "impl"},
+			"reviewer": {
+				Harness:      "pi",
+				Model:        "openai-codex/gpt-5.4-mini",
+				Interactive:  false,
+				PromptAppend: promptAppend,
+			},
+		},
+	}
+}
+
+func promptAssertingReviewLauncher(wantPrompt string) fakeReviewLauncherFunc {
+	return func(ctx context.Context, command agentexec.Command, opts agentexec.LaunchOptions) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if got := command.Args[len(command.Args)-1]; got != wantPrompt {
+			return fmt.Errorf("prompt arg = %q, want %q", got, wantPrompt)
+		}
+		if got := envValue(opts.Env, "ORPHEUS_AGENT_PROMPT"); got != wantPrompt {
+			return fmt.Errorf("env prompt = %q, want %q", got, wantPrompt)
+		}
+		return nil
+	}
+}
+
+func assertLatestReviewExecutionModel(t *testing.T, store taskstate.Store, harnessName string, model string) {
+	t.Helper()
+
+	taskState, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load task state: %v", err)
+	}
+	latest, ok := taskstate.LatestReview(taskState)
+	if !ok || len(latest.Steps) != 1 || latest.Steps[0].Execution == nil {
+		t.Fatalf("latest review execution missing: %#v", latest)
+	}
+	execution := latest.Steps[0].Execution
+	if execution.Harness != harnessName || execution.Model != model {
+		t.Fatalf("execution harness/model = %q/%q, want %s/%s", execution.Harness, execution.Model, harnessName, model)
+	}
+}
+
 func TestRunPipelineInteractivePassingAgentReviewClearsWrappedRollingTail(t *testing.T) {
 	harness := newAgentReviewPipelineHarness(t)
 	var stdout bytes.Buffer
@@ -819,6 +898,16 @@ type fakeReviewLauncherFunc func(context.Context, agentexec.Command, agentexec.L
 
 func (f fakeReviewLauncherFunc) Run(ctx context.Context, command agentexec.Command, opts agentexec.LaunchOptions) error {
 	return f(ctx, command, opts)
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return strings.TrimPrefix(entry, prefix)
+		}
+	}
+	return ""
 }
 
 type visualTerminal struct {
