@@ -1049,7 +1049,7 @@ func (s Store) RecordReviewStep(
 	if index < 0 {
 		return ReviewAttempt{}, fmt.Errorf("record review step for task %s/%s: review attempt %d was not found", repoID, taskID, attempt)
 	}
-	if state.Reviews[index].Status != ReviewStatusRunning {
+	if !reviewCanRecordStep(state.Reviews[index], step) {
 		return ReviewAttempt{}, fmt.Errorf(
 			"record review step for task %s/%s: review attempt %d is %q, expected %q",
 			repoID,
@@ -1235,7 +1235,7 @@ func (s Store) RecordReviewFinding(
 	if index < 0 {
 		return ReviewAttempt{}, fmt.Errorf("record review finding for task %s/%s: review attempt %d was not found", repoID, taskID, attempt)
 	}
-	if state.Reviews[index].Status != ReviewStatusRunning {
+	if !reviewCanRecordFinding(state.Reviews[index], normalizedFinding) {
 		return ReviewAttempt{}, fmt.Errorf(
 			"record review finding for task %s/%s: review attempt %d is %q, expected %q",
 			repoID,
@@ -1268,7 +1268,7 @@ func (s Store) PromoteReviewAdvisoryFinding(
 	if reviewIndex < 0 {
 		return ReviewAttempt{}, fmt.Errorf("promote review advisory for task %s/%s: review attempt %d was not found", repoID, taskID, attempt)
 	}
-	if state.Reviews[reviewIndex].Status != ReviewStatusRunning {
+	if !reviewCanChangeManualFinding(state.Reviews[reviewIndex]) {
 		return ReviewAttempt{}, fmt.Errorf(
 			"promote review advisory for task %s/%s: review attempt %d is %q, expected %q",
 			repoID,
@@ -1320,6 +1320,27 @@ func (s Store) DowngradeReviewBlockingFinding(
 		reason,
 		reviewBlockingReclassificationDowngrade,
 	)
+}
+
+func reviewCanRecordStep(review ReviewAttempt, step ReviewStep) bool {
+	if review.Status == ReviewStatusRunning {
+		return true
+	}
+	return review.Status == ReviewStatusWaitingForManual &&
+		step.Kind == "manual" &&
+		strings.TrimSpace(step.Name) == strings.TrimSpace(review.Step)
+}
+
+func reviewCanRecordFinding(review ReviewAttempt, finding ReviewFinding) bool {
+	if review.Status == ReviewStatusRunning {
+		return true
+	}
+	return review.Status == ReviewStatusWaitingForManual &&
+		strings.TrimSpace(finding.Step) == strings.TrimSpace(review.Step)
+}
+
+func reviewCanChangeManualFinding(review ReviewAttempt) bool {
+	return review.Status == ReviewStatusRunning || review.Status == ReviewStatusWaitingForManual
 }
 
 // WaiveReviewBlockingFinding records an operator waiver for an unresolved blocking finding.

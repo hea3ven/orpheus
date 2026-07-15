@@ -173,7 +173,8 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 			"the effective review pipeline. Automated review keeps automated blockers, " +
 			"runs targeted fixes, and starts fresh review attempts until it passes, " +
 			"fails operationally, exhausts reviews.max_autonomous_review_attempts, or " +
-			"reaches a manual step. Manual steps are persisted for resume with task review.",
+			"needs operator input that is no longer available. Manual steps are persisted " +
+			"before prompting and can be resumed with task review.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			return runTaskRun(command, opts, args[0], agentName, pipelineName, mainMode, repoRootMode)
@@ -856,8 +857,8 @@ func runTaskRunReview(command *cobra.Command, opts *rootOptions, taskID string, 
 		maxAttempts:       maxAttempts,
 		dispatchAgentName: agentName,
 		review: taskReviewExecutionOptions{
-			pauseBeforeManual:     true,
 			autoSeparateTasks:     true,
+			interactiveManual:     true,
 			keepAutomatedBlockers: true,
 		},
 	})
@@ -1242,6 +1243,9 @@ func attachInteractiveReviewHooks(
 	opts.ConfirmManualCommand = func(step review.Step) (bool, error) {
 		confirmed, err := promptManualCommandConfirmation(command, reviewInput, step)
 		if err != nil {
+			if errors.Is(err, review.ErrManualInputUnavailable) {
+				return false, renderManualReviewHandoff(command, start.taskID(), step.Name)
+			}
 			return false, fmt.Errorf("task review %s: %w", start.taskID(), err)
 		}
 		if confirmed {
@@ -1261,6 +1265,9 @@ func attachInteractiveReviewHooks(
 			step.HunkNotes,
 		)
 		if err != nil {
+			if errors.Is(err, review.ErrManualInputUnavailable) {
+				return review.ManualResult{}, renderManualReviewHandoff(command, start.taskID(), step.Step.Name)
+			}
 			return review.ManualResult{}, err
 		}
 		if outcome.result == manualReviewApproved {
@@ -2075,6 +2082,9 @@ func renderManualReviewContext(
 		return err
 	}
 
+	if err := renderCurrentManualStepFindings(output, taskState, reviewAttempt.Attempt, step.Name); err != nil {
+		return err
+	}
 	return renderPriorReviewAdvisories(output, taskState, reviewAttempt.Attempt, step.Name)
 }
 
@@ -2463,7 +2473,7 @@ func promptHunkNoteFinding(
 		}
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			return taskstate.ReviewFinding{}, false, fmt.Errorf("read Hunk note classification: %w", err)
+			return taskstate.ReviewFinding{}, false, manualInputReadError("read Hunk note classification", err)
 		}
 		switch strings.ToLower(strings.TrimSpace(line)) {
 		case "b", "blocking":
@@ -2617,7 +2627,7 @@ func promptManualReviewAction(
 	}
 	line, err := reader.ReadString('\n')
 	if err != nil {
-		return "", fmt.Errorf("read review action: %w", err)
+		return "", manualInputReadError("read review action", err)
 	}
 	return strings.ToLower(strings.TrimSpace(line)), nil
 }
@@ -2792,6 +2802,68 @@ func renderPriorReviewAdvisoryList(output io.Writer, advisories []priorReviewAdv
 	return nil
 }
 
+func renderCurrentManualStepFindings(
+	output io.Writer,
+	taskState taskstate.TaskState,
+	reviewAttempt int,
+	currentStep string,
+) error {
+	latest, ok := taskstate.LatestReview(taskState)
+	if !ok || latest.Attempt != reviewAttempt {
+		return nil
+	}
+	findings := currentManualStepFindings(latest, currentStep)
+	if len(findings) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintln(output, "Recorded findings for this manual step:"); err != nil {
+		return err
+	}
+	for _, finding := range findings {
+		if err := renderManualStepFinding(output, finding); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func currentManualStepFindings(
+	reviewAttempt taskstate.ReviewAttempt,
+	currentStep string,
+) []indexedReviewFinding {
+	currentStep = strings.TrimSpace(currentStep)
+	findings := make([]indexedReviewFinding, 0)
+	for index, finding := range reviewAttempt.Findings {
+		if strings.TrimSpace(finding.Step) != currentStep {
+			continue
+		}
+		findings = append(findings, indexedReviewFinding{index: index, finding: finding})
+	}
+	return findings
+}
+
+func renderManualStepFinding(output io.Writer, indexed indexedReviewFinding) error {
+	finding := indexed.finding
+	if _, err := fmt.Fprintf(
+		output,
+		"  Finding %d (%s): %s\n",
+		indexed.index+1,
+		formatReviewValue(string(finding.Type)),
+		formatReviewValue(finding.Title),
+	); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(output, "    Description: %s\n", formatReviewValue(finding.Description)); err != nil {
+		return err
+	}
+	if strings.TrimSpace(finding.SuggestedAction) != "" {
+		if _, err := fmt.Fprintf(output, "    Suggested action: %s\n", finding.SuggestedAction); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func unresolvedPriorReviewAdvisories(review taskstate.ReviewAttempt, currentStep string) []priorReviewAdvisory {
 	advisories := make([]priorReviewAdvisory, 0)
 	currentStep = strings.TrimSpace(currentStep)
@@ -2817,7 +2889,7 @@ func promptReviewAdvisoryPromotionSelection(
 	}
 	line, err := reader.ReadString('\n')
 	if err != nil {
-		return nil, fmt.Errorf("read advisory promotion selection: %w", err)
+		return nil, manualInputReadError("read advisory promotion selection", err)
 	}
 	line = strings.TrimSpace(line)
 	if line == "" {
@@ -2873,10 +2945,10 @@ func promptManualCommandConfirmation(
 	line, err := reader.ReadString('\n')
 	if err != nil {
 		if errors.Is(err, io.EOF) && line == "" {
-			return false, nil
+			return false, manualInputReadError("read manual command confirmation", err)
 		}
 		if !errors.Is(err, io.EOF) {
-			return false, fmt.Errorf("read manual command confirmation: %w", err)
+			return false, manualInputReadError("read manual command confirmation", err)
 		}
 	}
 	answer := strings.ToLower(strings.TrimSpace(line))
@@ -2947,9 +3019,28 @@ func promptReviewLine(command *cobra.Command, reader *bufio.Reader, label string
 	}
 	line, err := reader.ReadString('\n')
 	if err != nil {
-		return "", fmt.Errorf("read %s: %w", strings.ToLower(label), err)
+		return "", manualInputReadError("read "+strings.ToLower(label), err)
 	}
 	return strings.TrimSpace(line), nil
+}
+
+func manualInputReadError(operation string, err error) error {
+	return fmt.Errorf("%s: %w: %w", operation, err, review.ErrManualInputUnavailable)
+}
+
+func renderManualReviewHandoff(command *cobra.Command, taskID string, stepName string) error {
+	_, err := fmt.Fprintf(
+		command.ErrOrStderr(),
+		"\nReview for %s is waiting for manual step %q because manual review input is unavailable. "+
+			"Resume with `orpheus task review %s`.\n",
+		taskID,
+		stepName,
+		taskID,
+	)
+	if err != nil {
+		return err
+	}
+	return review.ErrManualInputUnavailable
 }
 
 func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {
