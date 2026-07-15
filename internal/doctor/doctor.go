@@ -55,6 +55,8 @@ type Row struct {
 	LogPath        string
 	Model          string
 	TotalTokens    int
+	CostMicroUSD   int64
+	Candidates     []taskstate.UsageCaptureCandidate
 }
 
 type executionRef struct {
@@ -72,7 +74,7 @@ func Run(opts Options) (Result, error) {
 	store := taskstate.NewStore(opts.Paths)
 	env := opts.Env
 	if env == nil {
-		env = agent.CodexUsageCaptureEnvironment()
+		env = agent.UsageCaptureEnvironment()
 	}
 
 	var result Result
@@ -149,7 +151,7 @@ func diagnoseExecution(
 	ref executionRef,
 	fix bool,
 ) (*Row, error) {
-	if !needsCodexUsageDiagnostic(ref.execution) {
+	if !needsUsageDiagnostic(ref.execution) {
 		return nil, nil
 	}
 	if len(executionDirs) == 0 {
@@ -158,15 +160,24 @@ func diagnoseExecution(
 	if ref.execution.StartedAt.IsZero() {
 		return unknownRow(ref, "missing_execution_started_at"), nil
 	}
-	usageOpts := agent.CaptureCodexUsage(agent.CodexUsageCaptureOptions{
+	usageOpts := agent.CaptureUsage(agent.UsageCaptureOptions{
+		Harness:       ref.execution.Harness,
 		ExecutionDirs: executionDirs,
+		SessionName:   ref.execution.SessionName,
 		StartedAt:     ref.execution.StartedAt,
 		Env:           env,
 	})
 	if usageOpts.UsageCapture.Status != taskstate.UsageCaptureCaptured ||
 		usageOpts.Session == nil ||
 		usageOpts.Usage == nil {
-		return unresolvedRow(ref, usageOpts.UsageCapture), nil
+		return unresolvedRow(ref, usageOpts.UsageCapture, usageOpts.Candidates), nil
+	}
+	if missingRequiredPiUsageCost(ref.execution, usageOpts) {
+		return unresolvedRow(ref, taskstate.AgentUsageCapture{
+			Status:         taskstate.UsageCaptureUnknown,
+			Reason:         "matching_pi_session_has_no_reported_cost",
+			CandidateCount: usageOpts.UsageCapture.CandidateCount,
+		}, usageOpts.Candidates), nil
 	}
 
 	row := recoveredRow(ref, usageOpts, fix)
@@ -179,10 +190,38 @@ func diagnoseExecution(
 	return &row, nil
 }
 
-func needsCodexUsageDiagnostic(execution taskstate.AgentExecution) bool {
-	if strings.TrimSpace(execution.Harness) != "codex" {
+func needsUsageDiagnostic(execution taskstate.AgentExecution) bool {
+	switch strings.TrimSpace(execution.Harness) {
+	case "codex", "pi":
+	default:
 		return false
 	}
+	if execution.Usage == nil || execution.Session == nil {
+		return true
+	}
+	if strings.TrimSpace(execution.Session.ID) == "" && strings.TrimSpace(execution.Session.LogPath) == "" {
+		return true
+	}
+	if strings.TrimSpace(execution.Model) == "" {
+		return true
+	}
+	if strings.TrimSpace(execution.Harness) == "pi" && execution.UsageCost == nil {
+		return true
+	}
+	return execution.UsageCapture.Status != taskstate.UsageCaptureCaptured
+}
+
+func missingRequiredPiUsageCost(
+	execution taskstate.AgentExecution,
+	usageOpts taskstate.RecordRunUsageOptions,
+) bool {
+	return strings.TrimSpace(execution.Harness) == "pi" &&
+		execution.UsageCost == nil &&
+		usageOpts.UsageCost == nil &&
+		!hasRecoverableUsageDetails(execution)
+}
+
+func hasRecoverableUsageDetails(execution taskstate.AgentExecution) bool {
 	if execution.Usage == nil || execution.Session == nil {
 		return true
 	}
@@ -217,7 +256,11 @@ func appendTaskExecutionDir(dirs []string, dir string) []string {
 	return append(dirs, dir)
 }
 
-func unresolvedRow(ref executionRef, capture taskstate.AgentUsageCapture) *Row {
+func unresolvedRow(
+	ref executionRef,
+	capture taskstate.AgentUsageCapture,
+	candidates []taskstate.UsageCaptureCandidate,
+) *Row {
 	outcome := OutcomeUnknown
 	if capture.Status == taskstate.UsageCaptureAmbiguous {
 		outcome = OutcomeAmbiguous
@@ -235,6 +278,7 @@ func unresolvedRow(ref executionRef, capture taskstate.AgentUsageCapture) *Row {
 		Outcome:        outcome,
 		Reason:         reason,
 		CandidateCount: capture.CandidateCount,
+		Candidates:     candidates,
 	}
 }
 
@@ -242,7 +286,7 @@ func unknownRow(ref executionRef, reason string) *Row {
 	return unresolvedRow(ref, taskstate.AgentUsageCapture{
 		Status: taskstate.UsageCaptureUnknown,
 		Reason: reason,
-	})
+	}, nil)
 }
 
 func recoveredRow(ref executionRef, usageOpts taskstate.RecordRunUsageOptions, fix bool) Row {
@@ -267,6 +311,9 @@ func recoveredRow(ref executionRef, usageOpts taskstate.RecordRunUsageOptions, f
 	}
 	if usageOpts.Usage != nil {
 		row.TotalTokens = usageOpts.Usage.TotalTokens
+	}
+	if usageOpts.UsageCost != nil {
+		row.CostMicroUSD = usageOpts.UsageCost.AmountMicroUSD
 	}
 	return row
 }

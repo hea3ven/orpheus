@@ -47,13 +47,16 @@ func CaptureCodexUsage(opts CodexUsageCaptureOptions) taskstate.RecordRunUsageOp
 	case 1:
 		return usageFromCodexSession(candidates[0])
 	default:
+		descriptors := codexUsageCaptureCandidates(candidates, opts.StartedAt)
 		if candidate, ok := closestCodexSession(candidates, opts.StartedAt); ok {
 			result := usageFromCodexSession(candidate)
 			result.UsageCapture.Reason = "matched_closest_codex_session"
 			result.UsageCapture.CandidateCount = len(candidates)
+			result.Candidates = descriptors
 			return result
 		}
 		return taskstate.RecordRunUsageOptions{
+			Candidates: descriptors,
 			UsageCapture: taskstate.AgentUsageCapture{
 				Status:         taskstate.UsageCaptureAmbiguous,
 				Reason:         "multiple_matching_codex_sessions",
@@ -61,6 +64,24 @@ func CaptureCodexUsage(opts CodexUsageCaptureOptions) taskstate.RecordRunUsageOp
 			},
 		}
 	}
+}
+
+func codexUsageCaptureCandidates(
+	candidates []codexSessionCandidate,
+	startedAt time.Time,
+) []taskstate.UsageCaptureCandidate {
+	descriptors := make([]taskstate.UsageCaptureCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		descriptors = append(descriptors, taskstate.UsageCaptureCandidate{
+			SessionID:         candidate.id,
+			LogPath:           candidate.path,
+			CWD:               candidate.cwd,
+			Model:             candidate.model,
+			StartedAt:         candidate.startedAt,
+			StartOffsetMillis: codexSessionStartOffset(candidate, startedAt).Milliseconds(),
+		})
+	}
+	return descriptors
 }
 
 func closestCodexSession(

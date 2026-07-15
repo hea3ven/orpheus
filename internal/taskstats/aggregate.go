@@ -379,10 +379,8 @@ func durationValue(execution taskstate.AgentExecution) (time.Duration, bool) {
 }
 
 func executionCost(execution taskstate.AgentExecution) (agent.UsageCost, bool) {
-	if execution.Usage == nil {
-		return agent.UsageCost{}, false
-	}
-	return agent.EstimateUsageCost(execution.Model, *execution.Usage)
+	resolved := agent.ResolveExecutionUsageCost(execution)
+	return resolved.Cost, resolved.Known
 }
 
 func averageDuration(total time.Duration, count int) (time.Duration, bool) {

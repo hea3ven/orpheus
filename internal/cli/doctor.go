@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
+	"time"
 
+	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/doctor"
 	"github.com/spf13/cobra"
 )
@@ -55,11 +58,11 @@ func runDoctor(command *cobra.Command, opts *rootOptions, fix bool) error {
 }
 
 func renderDoctorResult(output interface{ Write([]byte) (int, error) }, result doctor.Result) error {
-	if _, err := fmt.Fprintln(output, "Codex usage telemetry"); err != nil {
+	if _, err := fmt.Fprintln(output, "Agent usage telemetry"); err != nil {
 		return err
 	}
 	if len(result.Rows) == 0 {
-		if _, err := fmt.Fprintln(output, "No Codex usage telemetry issues found."); err != nil {
+		if _, err := fmt.Fprintln(output, "No supported agent usage telemetry issues found."); err != nil {
 			return err
 		}
 	} else if err := renderTable(
@@ -73,9 +76,11 @@ func renderDoctorResult(output interface{ Write([]byte) (int, error) }, result d
 			"OUTCOME",
 			"REASON",
 			"CANDIDATES",
+			"CANDIDATE_DETAILS",
 			"SESSION",
 			"MODEL",
 			"TOTAL_TOKENS",
+			"ESTIMATED_COST",
 			"LOG",
 		},
 		doctorRows(result.Rows),
@@ -117,13 +122,53 @@ func doctorRows(rows []doctor.Row) [][]string {
 			formatTaskStatsField(row.Outcome),
 			formatTaskStatsField(row.Reason),
 			strconv.Itoa(row.CandidateCount),
+			formatDoctorCandidateDetails(row),
 			formatTaskStatsField(row.SessionID),
 			formatTaskStatsField(row.Model),
 			formatDoctorInt(row.TotalTokens),
+			formatDoctorCost(row.CostMicroUSD),
 			formatTaskStatsField(row.LogPath),
 		})
 	}
 	return rendered
+}
+
+func formatDoctorCandidateDetails(row doctor.Row) string {
+	if len(row.Candidates) == 0 {
+		return "-"
+	}
+	summaries := make([]string, 0, len(row.Candidates))
+	for _, candidate := range row.Candidates {
+		parts := make([]string, 0, 7)
+		if candidate.SessionID != "" {
+			parts = append(parts, "id="+candidate.SessionID)
+		}
+		if candidate.SessionName != "" {
+			parts = append(parts, "name="+candidate.SessionName)
+		}
+		if !candidate.StartedAt.IsZero() {
+			parts = append(parts, "started="+candidate.StartedAt.UTC().Format(time.RFC3339))
+		}
+		parts = append(parts, "offset="+formatDoctorCandidateOffset(candidate.StartOffsetMillis))
+		if candidate.CWD != "" {
+			parts = append(parts, "cwd="+candidate.CWD)
+		}
+		if candidate.Model != "" {
+			parts = append(parts, "model="+candidate.Model)
+		}
+		if candidate.LogPath != "" {
+			parts = append(parts, "log="+candidate.LogPath)
+		}
+		summaries = append(summaries, strings.Join(parts, " "))
+	}
+	return strings.Join(summaries, "; ")
+}
+
+func formatDoctorCandidateOffset(offsetMillis int64) string {
+	if offsetMillis < 0 {
+		offsetMillis = -offsetMillis
+	}
+	return (time.Duration(offsetMillis) * time.Millisecond).String()
 }
 
 func formatDoctorInt(value int) string {
@@ -131,4 +176,11 @@ func formatDoctorInt(value int) string {
 		return "-"
 	}
 	return strconv.Itoa(value)
+}
+
+func formatDoctorCost(value int64) string {
+	if value == 0 {
+		return "-"
+	}
+	return agent.FormatUsageCostUSD(value)
 }

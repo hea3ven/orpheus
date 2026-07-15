@@ -514,8 +514,8 @@ func TestTaskStatsRendersImplementationExecutionUsage(t *testing.T) {
 
 	is.Empty(stderr)
 	for _, want := range []string{
-		"Executions", "Estimated API-equivalent cost",
-		"TYPE", "ATTEMPT", "STEP", "PROFILE", "HARNESS", "MODEL", "COMMAND", "STARTED", "FINISHED", "DURATION", "STATUS", "SESSION", "USAGE", "ESTIMATED_API_EQUIVALENT_COST",
+		"Executions", "Estimated cost uses harness-reported estimates",
+		"TYPE", "ATTEMPT", "STEP", "PROFILE", "HARNESS", "MODEL", "COMMAND", "STARTED", "FINISHED", "DURATION", "STATUS", "SESSION", "USAGE", "ESTIMATED_COST",
 		"implementation", "1", "codex-profile", "codex", "gpt-5", `"codex" "exec" "--model" "gpt-5"`,
 		"2026-07-07T10:00:00Z", "2026-07-07T10:02:00Z", "2m0s", "succeeded", "session-123",
 		"total=190 input=123 cached_input=45 output=67 reasoning_output=8",
@@ -668,6 +668,134 @@ func TestTaskStatsKeepsTokenUsageWhenCostPricingIsUnknown(t *testing.T) {
 	}
 }
 
+//nolint:funlen // The Pi stats fixture keeps persisted usage, cost, and rendered totals together.
+func TestTaskStatsUsesPiReportedEstimatedCost(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[{"id":"op-1","title":"Stats","status":"in_progress","priority":1,"issue_type":"task"}]`},
+	})
+
+	stateStore := taskstate.NewStoreWithClock(
+		paths,
+		clockSequence(
+			time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
+			time.Date(2026, 7, 7, 10, 1, 0, 0, time.UTC),
+			time.Date(2026, 7, 7, 10, 2, 0, 0, time.UTC),
+		),
+	)
+	run, err := stateStore.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		Agent:    "pi-profile",
+		Profile:  "pi-profile",
+		Harness:  "pi",
+		Model:    "openai-codex/gpt-5.5",
+		Command:  "pi",
+		Args:     []string{"--model", "openai-codex/gpt-5.5"},
+		Branch:   "main",
+		Worktree: repoDir,
+	})
+	must.NoError(err)
+	_, err = stateStore.RecordRunUsage("alpha", "op-1", run.Attempt, taskstate.RecordRunUsageOptions{
+		Session: &taskstate.AgentSession{ID: "pi-session", LogPath: "/tmp/pi.jsonl"},
+		Usage: &taskstate.AgentUsage{
+			InputTokens:           100,
+			CachedInputTokens:     20,
+			OutputTokens:          30,
+			ReasoningOutputTokens: 5,
+			TotalTokens:           130,
+		},
+		UsageCost: &taskstate.AgentUsageCost{
+			Kind:           agent.UsageCostKindPiReportedEstimated,
+			Currency:       "USD",
+			AmountMicroUSD: 1240,
+			Source:         "Pi usage.cost.total",
+			Notes:          "Pi-reported estimate only; not exact billed cost or invoice reconciliation.",
+		},
+		UsageCapture: taskstate.AgentUsageCapture{
+			Status: taskstate.UsageCaptureCaptured,
+			Reason: "matched_pi_session",
+		},
+	})
+	must.NoError(err)
+	_, err = stateStore.FinishRun("alpha", "op-1", run.Attempt, taskstate.RunStatusSucceeded)
+	must.NoError(err)
+
+	stdout, stderr := executeCommand(t, []string{"task", "stats", "op-1"})
+
+	is.Empty(stderr)
+	for _, want := range []string{
+		"Estimated cost uses harness-reported estimates",
+		"ESTIMATED_COST",
+		"pi-profile", "pi", "openai-codex/gpt-5.5", "pi-session",
+		"total=130 input=100 cached_input=20 output=30 reasoning_output=5",
+		"Pi-reported estimated cost=$0.001240",
+		"kind=pi_reported_estimated",
+		"source=Pi usage.cost.total",
+		"implementation", "1", "2m0s", "130", "100", "20", "30", "5", "$0.001240", "0", "0",
+		"combined", "1", "2m0s", "130", "100", "20", "30", "5", "$0.001240", "0", "0",
+	} {
+		is.Contains(stdout, want)
+	}
+}
+
+func TestTaskStatsCountsMissingPiUsageCostAsUnknown(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[{"id":"op-1","title":"Stats","status":"in_progress","priority":1,"issue_type":"task"}]`},
+	})
+
+	stateStore := taskstate.NewStoreWithClock(
+		paths,
+		clockSequence(
+			time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
+			time.Date(2026, 7, 7, 10, 1, 0, 0, time.UTC),
+			time.Date(2026, 7, 7, 10, 2, 0, 0, time.UTC),
+		),
+	)
+	run, err := stateStore.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		Agent:    "pi-profile",
+		Profile:  "pi-profile",
+		Harness:  "pi",
+		Model:    "openai-codex/gpt-5.5",
+		Command:  "pi",
+		Args:     []string{"--model", "openai-codex/gpt-5.5"},
+		Branch:   "main",
+		Worktree: repoDir,
+	})
+	must.NoError(err)
+	_, err = stateStore.RecordRunUsage("alpha", "op-1", run.Attempt, taskstate.RecordRunUsageOptions{
+		UsageCapture: taskstate.AgentUsageCapture{
+			Status:         taskstate.UsageCaptureUnknown,
+			Reason:         "matching_pi_session_has_no_assistant_usage",
+			CandidateCount: 1,
+		},
+	})
+	must.NoError(err)
+	_, err = stateStore.FinishRun("alpha", "op-1", run.Attempt, taskstate.RunStatusSucceeded)
+	must.NoError(err)
+
+	stdout, stderr := executeCommand(t, []string{"task", "stats", "op-1"})
+
+	is.Empty(stderr)
+	for _, want := range []string{
+		"pi-profile", "pi", "openai-codex/gpt-5.5",
+		"unknown: matching_pi_session_has_no_assistant_usage (candidates=1)",
+		"implementation", "1", "2m0s", "0", "0", "0", "0", "0", "$0.000000", "1", "1",
+		"combined", "1", "2m0s", "0", "0", "0", "0", "0", "$0.000000", "1", "1",
+	} {
+		is.Contains(stdout, want)
+	}
+}
+
 //nolint:funlen // The aggregate fixture setup documents the period metrics under test.
 func TestTaskStatsAggregateGroupsResolvedTasksByDay(t *testing.T) {
 	is := assert.New(t)
@@ -722,13 +850,13 @@ func TestTaskStatsAggregateGroupsResolvedTasksByDay(t *testing.T) {
 	is.Empty(stderr)
 	for _, want := range []string{
 		"Aggregate stats grouped by day",
-		"Estimated API-equivalent cost",
+		"Estimated cost uses harness-reported estimates",
 		"Tasks without resolved timestamp: 1",
 		"Resolved Tasks",
 		"Lifecycle Time",
 		"Agent Work",
 		"Token Usage",
-		"Estimated API-Equivalent Cost",
+		"Estimated Cost",
 		"PERIOD", "RESOLVED_TASKS", "TREND",
 		"FULL_AVG", "IMPLEMENTATION_AVG",
 		"ACTIVE_AVG", "ACTIVE_TOTAL",
@@ -779,7 +907,7 @@ func assertTaskStatsAggregateTableLinesWithinWidth(t *testing.T, output string, 
 	for _, line := range strings.Split(output, "\n") {
 		if line == "" ||
 			strings.HasPrefix(line, "Aggregate stats grouped by ") ||
-			strings.HasPrefix(line, "Estimated API-equivalent cost is calculated") ||
+			strings.HasPrefix(line, "Estimated cost uses harness-reported estimates") ||
 			strings.HasPrefix(line, "Tasks without resolved timestamp: ") {
 			continue
 		}
