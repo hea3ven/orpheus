@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
+
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
 )
 
 // HasCandidateChanges reports whether the review worktree contains candidate changes.
@@ -41,9 +41,9 @@ func captureCandidateSnapshot(ctx context.Context, workdir string) (candidateSna
 	if err != nil {
 		return candidateSnapshot{}, err
 	}
-	patch, err := gitCombinedOutput(ctx, workdir, "diff", "--binary", "--no-ext-diff")
+	patch, err := gitmeta.BinaryDiff(ctx, workdir)
 	if err != nil {
-		return candidateSnapshot{}, fmt.Errorf("capture tracked diff: %w: %s", err, strings.TrimSpace(string(patch)))
+		return candidateSnapshot{}, err
 	}
 	untracked, err := captureUntrackedFiles(ctx, workdir)
 	if err != nil {
@@ -58,19 +58,14 @@ func captureCandidateSnapshot(ctx context.Context, workdir string) (candidateSna
 }
 
 func candidateStatus(ctx context.Context, workdir string) ([]byte, error) {
-	status, err := gitCombinedOutput(ctx, workdir, "status", "--porcelain=v1", "-z", "--untracked-files=normal")
-	if err != nil {
-		return nil, fmt.Errorf("read candidate status: %w: %s", err, strings.TrimSpace(string(status)))
-	}
-	return status, nil
+	return gitmeta.CandidateStatus(ctx, workdir)
 }
 
 func captureUntrackedFiles(ctx context.Context, workdir string) ([]snapshotFile, error) {
-	output, err := gitCombinedOutput(ctx, workdir, "ls-files", "--others", "--exclude-standard", "-z")
+	paths, err := gitmeta.UntrackedFiles(ctx, workdir)
 	if err != nil {
-		return nil, fmt.Errorf("list untracked candidate files: %w: %s", err, strings.TrimSpace(string(output)))
+		return nil, err
 	}
-	paths := splitNUL(output)
 	files := make([]snapshotFile, 0, len(paths))
 	for _, path := range paths {
 		file, err := captureSnapshotFile(workdir, path)
@@ -110,21 +105,6 @@ func captureSnapshotFile(workdir string, path string) (snapshotFile, error) {
 	}
 	file.data = data
 	return file, nil
-}
-
-func splitNUL(output []byte) []string {
-	if len(output) == 0 {
-		return nil
-	}
-	parts := bytes.Split(output, []byte{0})
-	paths := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if len(part) == 0 {
-			continue
-		}
-		paths = append(paths, string(part))
-	}
-	return paths
 }
 
 func restoreCandidateIfMutated(ctx context.Context, snapshot candidateSnapshot) error {
@@ -189,34 +169,23 @@ func snapshotFilesEqual(a, b snapshotFile) bool {
 }
 
 func restoreCandidateSnapshot(ctx context.Context, snapshot candidateSnapshot) error {
-	if output, err := gitCombinedOutput(ctx, snapshot.workdir, "reset", "--mixed", "HEAD", "--"); err != nil {
-		return fmt.Errorf("reset Git index: %w: %s", err, strings.TrimSpace(string(output)))
+	if err := gitmeta.ResetIndexToHEAD(ctx, snapshot.workdir); err != nil {
+		return err
 	}
-	if output, err := gitCombinedOutput(ctx, snapshot.workdir, "clean", "-fd", "--"); err != nil {
-		return fmt.Errorf("remove new untracked files: %w: %s", err, strings.TrimSpace(string(output)))
+	if err := gitmeta.CleanUntrackedFiles(ctx, snapshot.workdir); err != nil {
+		return err
 	}
-	if output, err := gitCombinedOutput(
-		ctx,
-		snapshot.workdir,
-		"restore",
-		"--worktree",
-		"--source=HEAD",
-		"--",
-		".",
-	); err != nil {
-		return fmt.Errorf("restore tracked files from HEAD: %w: %s", err, strings.TrimSpace(string(output)))
+	if err := gitmeta.RestoreTrackedFilesFromHEAD(ctx, snapshot.workdir); err != nil {
+		return err
 	}
 	if len(bytes.TrimSpace(snapshot.patch)) > 0 {
-		output, err := gitCombinedOutputWithInput(
+		err := gitmeta.ApplyBinaryPatch(
 			ctx,
 			snapshot.workdir,
 			snapshot.patch,
-			"apply",
-			"--binary",
-			"--whitespace=nowarn",
 		)
 		if err != nil {
-			return fmt.Errorf("reapply tracked candidate patch: %w: %s", err, strings.TrimSpace(string(output)))
+			return err
 		}
 	}
 	for _, file := range snapshot.untracked {
@@ -242,17 +211,4 @@ func restoreSnapshotFile(workdir string, file snapshotFile) error {
 		return fmt.Errorf("restore untracked file %q: %w", file.path, err)
 	}
 	return nil
-}
-
-func gitCombinedOutput(ctx context.Context, dir string, args ...string) ([]byte, error) {
-	command := exec.CommandContext(ctx, "git", args...)
-	command.Dir = dir
-	return command.CombinedOutput()
-}
-
-func gitCombinedOutputWithInput(ctx context.Context, dir string, input []byte, args ...string) ([]byte, error) {
-	command := exec.CommandContext(ctx, "git", args...)
-	command.Dir = dir
-	command.Stdin = bytes.NewReader(input)
-	return command.CombinedOutput()
 }
