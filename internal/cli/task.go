@@ -292,18 +292,18 @@ func runTaskReady(command *cobra.Command, opts *rootOptions, detailed bool) erro
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for task ready")
 
-	taskCtx, err := loadTaskContext()
+	deps, err := opts.invocation(command)
+	if err != nil {
+		return err
+	}
+	taskCtx, err := loadTaskContextFromInvocation(deps)
 	if err != nil {
 		return err
 	}
 	logger.DebugContext(command.Context(), "querying task snapshots", slog.Int("repo_count", len(taskCtx.Sources)))
 
 	snapshot := taskCtx.Aggregator.Snapshot(command.Context())
-	paths, err := state.ResolveFromEnvironment()
-	if err != nil {
-		return err
-	}
-	runStates, runStateFailures := taskRunStateIndex(paths, snapshot)
+	runStates, runStateFailures := taskRunStateIndex(deps, snapshot)
 	if len(runStateFailures) > 0 {
 		snapshot.Failures = append(snapshot.Failures, runStateFailures...)
 	}
@@ -333,7 +333,11 @@ func runTaskRows(command *cobra.Command, opts *rootOptions, rowOpts taskRowsOpti
 	)
 	logger.DebugContext(command.Context(), rowOpts.loadingLog)
 
-	taskCtx, err := loadTaskContext()
+	deps, err := opts.invocation(command)
+	if err != nil {
+		return err
+	}
+	taskCtx, err := loadTaskContextFromInvocation(deps)
 	if err != nil {
 		return err
 	}
@@ -364,15 +368,15 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for task show")
 
-	resolvedCtx, err := resolveTaskShowContext(command, taskID)
+	deps, err := opts.invocation(command)
 	if err != nil {
 		return err
 	}
-	paths, err := state.ResolveFromEnvironment()
+	resolvedCtx, err := resolveTaskShowContext(command, deps, taskID)
 	if err != nil {
 		return err
 	}
-	taskState, err := taskstate.NewStore(paths).Load(
+	taskState, err := deps.taskStateStore.Load(
 		resolvedCtx.Resolved.Source.Repository.ID,
 		resolvedCtx.Resolved.TaskID,
 	)
@@ -413,15 +417,15 @@ func runTaskStats(command *cobra.Command, opts *rootOptions, taskID string, stat
 		return runAggregateTaskStats(command, opts, statsOpts.group)
 	}
 
-	resolvedCtx, err := resolveTaskShowContext(command, taskID)
+	deps, err := opts.invocation(command)
 	if err != nil {
 		return err
 	}
-	paths, err := state.ResolveFromEnvironment()
+	resolvedCtx, err := resolveTaskShowContext(command, deps, taskID)
 	if err != nil {
 		return err
 	}
-	taskState, err := taskstate.NewStore(paths).Load(
+	taskState, err := deps.taskStateStore.Load(
 		resolvedCtx.Resolved.Source.Repository.ID,
 		resolvedCtx.Resolved.TaskID,
 	)
@@ -446,11 +450,11 @@ func runAggregateTaskStats(command *cobra.Command, opts *rootOptions, group stri
 		return err
 	}
 
-	taskCtx, err := loadTaskContext()
+	deps, err := opts.invocation(command)
 	if err != nil {
 		return err
 	}
-	paths, err := state.ResolveFromEnvironment()
+	taskCtx, err := loadTaskContextFromInvocation(deps)
 	if err != nil {
 		return err
 	}
@@ -464,7 +468,7 @@ func runAggregateTaskStats(command *cobra.Command, opts *rootOptions, group stri
 	snapshot := taskCtx.Aggregator.Snapshot(command.Context())
 	report, stateFailures := taskstats.AggregateReportFromSnapshot(
 		snapshot,
-		taskstate.NewStore(paths),
+		deps.taskStateStore,
 		normalizedGroup,
 	)
 	if len(stateFailures) > 0 {
@@ -487,7 +491,11 @@ func runTaskDir(command *cobra.Command, opts *rootOptions, taskID string) error 
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for task dir")
 
-	resolvedCtx, err := resolveTaskContext(command, "task dir", taskID)
+	deps, err := opts.invocation(command)
+	if err != nil {
+		return err
+	}
+	resolvedCtx, err := resolveTaskContext(command, deps, "task dir", taskID)
 	if err != nil {
 		return err
 	}
@@ -806,7 +814,7 @@ func runTaskReview(command *cobra.Command, opts *rootOptions, taskID string, pip
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for task review")
 
-	start, err := startTaskReview(command, taskID, pipelineName)
+	start, err := startTaskReview(command, opts, taskID, pipelineName)
 	if err != nil {
 		return err
 	}
@@ -839,7 +847,7 @@ func runTaskRunReview(command *cobra.Command, opts *rootOptions, taskID string, 
 	)
 	logger.DebugContext(command.Context(), "starting automatic review after task run")
 
-	start, err := startTaskReview(command, taskID, pipelineName)
+	start, err := startTaskReview(command, opts, taskID, pipelineName)
 	if err != nil {
 		return err
 	}
@@ -1336,12 +1344,13 @@ func (s taskReviewStart) taskID() string {
 	return s.resolvedCtx.Resolved.TaskID
 }
 
-func startTaskReview(command *cobra.Command, taskID string, pipelineName string) (taskReviewStart, error) {
-	paths, err := state.ResolveFromEnvironment()
+func startTaskReview(command *cobra.Command, opts *rootOptions, taskID string, pipelineName string) (taskReviewStart, error) {
+	deps, err := opts.invocation(command)
 	if err != nil {
 		return taskReviewStart{}, err
 	}
-	resolvedCtx, err := resolveTaskContext(command, "task review", taskID)
+	paths := deps.paths
+	resolvedCtx, err := resolveTaskContext(command, deps, "task review", taskID)
 	if err != nil {
 		return taskReviewStart{}, err
 	}
@@ -3613,21 +3622,22 @@ type resolvedTaskRunContext struct {
 	RegisteredRepo registry.Repo
 }
 
-func resolveTaskContext(command *cobra.Command, operation string, taskID string) (resolvedTaskContext, error) {
-	return resolveTaskContextWithScope(command, operation, taskID, true)
+func resolveTaskContext(command *cobra.Command, deps *invocationDependencies, operation string, taskID string) (resolvedTaskContext, error) {
+	return resolveTaskContextWithScope(command, deps, operation, taskID, true)
 }
 
-func resolveTaskShowContext(command *cobra.Command, taskID string) (resolvedTaskContext, error) {
-	return resolveTaskContextWithScope(command, "task show", taskID, false)
+func resolveTaskShowContext(command *cobra.Command, deps *invocationDependencies, taskID string) (resolvedTaskContext, error) {
+	return resolveTaskContextWithScope(command, deps, "task show", taskID, false)
 }
 
 func resolveTaskContextWithScope(
 	command *cobra.Command,
+	deps *invocationDependencies,
 	operation string,
 	taskID string,
 	requireActiveItem bool,
 ) (resolvedTaskContext, error) {
-	taskCtx, err := loadTaskContext()
+	taskCtx, err := loadTaskContextFromInvocation(deps)
 	if err != nil {
 		return resolvedTaskContext{}, err
 	}
@@ -3642,7 +3652,7 @@ func resolveTaskContextWithScope(
 		return resolvedTaskContext{}, err
 	}
 
-	taskItem, err := queryResolvedTask(command, operation, resolved)
+	taskItem, err := queryResolvedTask(command, deps, operation, resolved)
 	if err != nil {
 		return resolvedTaskContext{}, err
 	}
@@ -3684,8 +3694,13 @@ func resolveTaskRunContext(taskID string) (resolvedTaskRunContext, error) {
 	}, nil
 }
 
-func queryResolvedTask(command *cobra.Command, operation string, resolved taskmodel.ResolvedTaskSource) (taskmodel.Task, error) {
-	backend, err := newBeadsTaskBackend(resolved.Source.BackendDir)
+func queryResolvedTask(
+	command *cobra.Command,
+	deps *invocationDependencies,
+	operation string,
+	resolved taskmodel.ResolvedTaskSource,
+) (taskmodel.Task, error) {
+	backend, err := deps.taskBackendFactory(resolved.Source)
 	if err != nil {
 		return taskmodel.Task{}, fmt.Errorf("%s %s: create backend for repo %s (%s; prefix %s): %w",
 			operation,

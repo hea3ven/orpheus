@@ -40,3 +40,27 @@ func loadTaskContext() (taskContext, error) {
 		Aggregator: aggregator,
 	}, nil
 }
+
+func loadTaskContextFromInvocation(deps *invocationDependencies) (taskContext, error) {
+	registryCtx, err := loadRegistryContextFromInvocation(deps)
+	if err != nil {
+		return taskContext{}, err
+	}
+
+	sources, err := taskRepositorySources(registryCtx.Store, registryCtx.Registry)
+	if err != nil {
+		return taskContext{}, err
+	}
+
+	aggregator, err := taskmodel.NewAggregatorWithLogger(sources, deps.taskBackendFactory, deps.logger)
+	if err != nil {
+		return taskContext{}, err
+	}
+
+	return taskContext{
+		Store:      registryCtx.Store,
+		Registry:   registryCtx.Registry,
+		Sources:    sources,
+		Aggregator: aggregator,
+	}, nil
+}

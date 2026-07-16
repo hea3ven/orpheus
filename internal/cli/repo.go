@@ -12,6 +12,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/beads"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/review"
@@ -27,11 +28,7 @@ const (
 	summaryGuidanceStylePrompt = "Summary guidance style (typed, capitalized, custom)"
 )
 
-var (
-	inspectLocalBeads      = beads.InspectLocal
-	initializeManagedBeads = beads.InitializeManaged
-	isTerminal             = readerIsTerminal
-)
+var isTerminal = readerIsTerminal
 
 func newRepoCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
@@ -55,7 +52,7 @@ func newRepoConfigCommand(opts *rootOptions) *cobra.Command {
 		Short: "Inspect or update repository configuration",
 		Args:  cobra.NoArgs,
 	}
-	cmd.AddCommand(newRepoConfigGetCommand(), newRepoConfigSetCommand(opts))
+	cmd.AddCommand(newRepoConfigGetCommand(opts), newRepoConfigSetCommand(opts))
 	return cmd
 }
 
@@ -68,7 +65,7 @@ const (
 	repoConfigReviewPipelineAliasPrefix = "review-pipeline-alias."
 )
 
-func newRepoConfigGetCommand() *cobra.Command {
+func newRepoConfigGetCommand(opts *rootOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:   "get <repo-id-name-or-prefix> [config-name]",
 		Short: "Show repository configuration",
@@ -77,11 +74,12 @@ func newRepoConfigGetCommand() *cobra.Command {
 			"review-pipeline, and review-pipeline-alias.<alias>.",
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(command *cobra.Command, args []string) error {
-			store, paths, err := newRegistryStoreWithPathsFromEnvironment()
+			deps, err := opts.invocation(command)
 			if err != nil {
 				return err
 			}
-			registryCtx, err := loadRegistryContextFromStore(store)
+			paths := deps.paths
+			registryCtx, err := loadRegistryContextFromInvocation(deps)
 			if err != nil {
 				return err
 			}
@@ -136,11 +134,13 @@ func runRepoConfigSet(command *cobra.Command, opts *rootOptions, token string, c
 		slog.String("config_name", configName),
 	)
 
-	store, paths, err := newRegistryStoreWithPathsFromEnvironment()
+	deps, err := opts.invocation(command)
 	if err != nil {
 		return err
 	}
-	return state.WithGlobalMutationLock(paths, repoConfigLockOperation, func() error {
+	paths := deps.paths
+	store := deps.registryStore
+	return state.WithGlobalMutationLockLogger(command.Context(), paths, repoConfigLockOperation, deps.logger, func() error {
 		registryCtx, err := loadRegistryContextFromStore(store)
 		if err != nil {
 			return err
@@ -395,13 +395,15 @@ func runRepoAdd(command *cobra.Command, opts *rootOptions, inputPath string) err
 	)
 	logger.DebugContext(command.Context(), "starting repo registration", slog.String("input_path", inputPath))
 
-	store, paths, err := newRegistryStoreWithPathsFromEnvironment()
+	deps, err := opts.invocation(command)
 	if err != nil {
 		return err
 	}
+	store := deps.registryStore
+	paths := deps.paths
 	logger.DebugContext(command.Context(), "resolved registry store")
 
-	gitInspection, err := gitmeta.Inspect(inputPath)
+	gitInspection, err := deps.inspectGit(command.Context(), inputPath)
 	if err != nil {
 		return err
 	}
@@ -424,7 +426,7 @@ func runRepoAdd(command *cobra.Command, opts *rootOptions, inputPath string) err
 	if err := configureRepoGitValues(command, &repo, gitInspection, logger); err != nil {
 		return err
 	}
-	managed, err := configureRepoBeads(command, &repo, gitInspection.Root, logger)
+	managed, err := configureRepoBeads(command, deps, &repo, gitInspection.Root, logger)
 	if err != nil {
 		return err
 	}
@@ -435,7 +437,7 @@ func runRepoAdd(command *cobra.Command, opts *rootOptions, inputPath string) err
 		return err
 	}
 
-	if err := registerInspectedRepo(command, paths, store, repo, managed, logger); err != nil {
+	if err := registerInspectedRepo(command, deps, paths, store, repo, managed, logger); err != nil {
 		return err
 	}
 	return renderRepoAdded(command, repo)
@@ -443,19 +445,21 @@ func runRepoAdd(command *cobra.Command, opts *rootOptions, inputPath string) err
 
 func registerInspectedRepo(
 	command *cobra.Command,
+	deps *invocationDependencies,
 	paths state.Paths,
 	store registry.Store,
 	repo registry.Repo,
 	managed bool,
 	logger *slog.Logger,
 ) error {
-	return state.WithGlobalMutationLock(paths, repoAddLockOperation, func() error {
-		return registerInspectedRepoLocked(command, store, repo, managed, logger)
+	return state.WithGlobalMutationLockLogger(command.Context(), paths, repoAddLockOperation, deps.logger, func() error {
+		return registerInspectedRepoLocked(command, deps, store, repo, managed, logger)
 	})
 }
 
 func registerInspectedRepoLocked(
 	command *cobra.Command,
+	deps *invocationDependencies,
 	store registry.Store,
 	repo registry.Repo,
 	managed bool,
@@ -471,7 +475,7 @@ func registerInspectedRepoLocked(
 	}
 	logger.DebugContext(command.Context(), "validated registry update", slog.Int("repo_count", len(reg.Repos)))
 
-	managedDir, err := initializeManagedRepoBeads(command, registryCtx, repo, managed, logger)
+	managedDir, err := initializeManagedRepoBeads(command, deps, registryCtx, repo, managed, logger)
 	if err != nil {
 		return err
 	}
@@ -524,9 +528,24 @@ func configureRepoGitValues(
 	return nil
 }
 
-func configureRepoBeads(command *cobra.Command, repo *registry.Repo, repoRoot string, logger *slog.Logger) (bool, error) {
-	beadsInspection, err := inspectLocalBeads(repoRoot)
+func configureRepoBeads(
+	command *cobra.Command,
+	deps *invocationDependencies,
+	repo *registry.Repo,
+	repoRoot string,
+	logger *slog.Logger,
+) (bool, error) {
+	span := logging.Start(command.Context(), deps.logger, "local Beads inspection",
+		slog.String("component", "beads"),
+		slog.String("operation", "inspect_local"),
+		slog.String("path", repoRoot),
+		slog.String("repo_id", repo.ID),
+	)
+	beadsInspection, err := deps.inspectLocalBeads(repoRoot, slog.String("repo_id", repo.ID))
 	if err == nil {
+		span.Finish(command.Context(), logging.StatusSuccess,
+			slog.String("beads_dir", beadsInspection.BeadsDir),
+		)
 		repo.BeadsMode = registry.BeadsModeLocal
 		repo.BeadsPrefix = beadsInspection.Prefix
 		logger.DebugContext(
@@ -538,8 +557,10 @@ func configureRepoBeads(command *cobra.Command, repo *registry.Repo, repoRoot st
 		return false, nil
 	}
 	if !errors.Is(err, beads.ErrNoLocal) {
+		span.FinishError(command.Context(), err)
 		return false, err
 	}
+	span.Finish(command.Context(), logging.StatusExpectedAbsence)
 
 	prefix, err := confirmManagedBeadsPrefix(command, repo.ID)
 	if err != nil {
@@ -626,6 +647,7 @@ func configureRepoTitleTemplate(command *cobra.Command, repo *registry.Repo, log
 
 func initializeManagedRepoBeads(
 	command *cobra.Command,
+	deps *invocationDependencies,
 	registryCtx registryContext,
 	repo registry.Repo,
 	managed bool,
@@ -640,7 +662,7 @@ func initializeManagedRepoBeads(
 		return "", err
 	}
 	logger.DebugContext(command.Context(), "initializing managed Beads", slog.String("beads_dir", managedDir))
-	if err := initializeManagedBeads(managedDir, repo.BeadsPrefix); err != nil {
+	if err := deps.initializeBeads(managedDir, repo.BeadsPrefix, slog.String("repo_id", repo.ID)); err != nil {
 		return "", err
 	}
 	return managedDir, nil
@@ -668,7 +690,11 @@ func newRepoListCommand(opts *rootOptions) *cobra.Command {
 			)
 			logger.DebugContext(command.Context(), "loading registered repos")
 
-			registryCtx, err := loadRegistryContext()
+			deps, err := opts.invocation(command)
+			if err != nil {
+				return err
+			}
+			registryCtx, err := loadRegistryContextFromInvocation(deps)
 			if err != nil {
 				return err
 			}
@@ -710,7 +736,11 @@ func newRepoBeadsDirCommand(opts *rootOptions) *cobra.Command {
 			)
 			logger.DebugContext(command.Context(), "resolving repo Beads directory")
 
-			registryCtx, err := loadRegistryContext()
+			deps, err := opts.invocation(command)
+			if err != nil {
+				return err
+			}
+			registryCtx, err := loadRegistryContextFromInvocation(deps)
 			if err != nil {
 				return err
 			}

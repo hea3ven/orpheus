@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"strings"
 	"time"
@@ -31,9 +32,19 @@ type TaskBackend struct {
 	runner Runner
 }
 
+type diagnosticRunner interface {
+	Runner
+	WithDiagnosticAttrs(attrs ...slog.Attr) Runner
+}
+
 // NewTaskBackend returns a Beads-backed task reader using the bd binary.
 func NewTaskBackend(dir string) (TaskBackend, error) {
-	return NewTaskBackendWithRunner(dir, CommandRunner{})
+	return NewTaskBackendWithLogger(dir, nil)
+}
+
+// NewTaskBackendWithLogger returns a Beads-backed task reader with diagnostics.
+func NewTaskBackendWithLogger(dir string, logger *slog.Logger) (TaskBackend, error) {
+	return NewTaskBackendWithRunner(dir, CommandRunner{Logger: logger})
 }
 
 // NewTaskBackendWithRunner returns a Beads-backed task reader using runner.
@@ -57,7 +68,7 @@ func (b TaskBackend) Get(ctx context.Context, id string) (task.Task, error) {
 		return task.Task{}, fmt.Errorf("get Beads task in %q: task id is required", b.dir)
 	}
 
-	result, err := b.run(ctx, "get", "show", "--id", id)
+	result, err := b.runWithAttrs(ctx, "get", []slog.Attr{slog.String("task_id", id)}, "show", "--id", id)
 	if err != nil {
 		if isNotFoundResult(result) {
 			return task.Task{}, fmt.Errorf("get Beads task %q in %q: %w%s", id, b.dir, task.ErrNotFound, formattedOutput(result))
@@ -156,9 +167,10 @@ func (b TaskBackend) MarkInProgress(ctx context.Context, id string, branch strin
 		return nil
 	}
 
-	result, err := b.runWrite(
+	result, err := b.runWriteWithAttrs(
 		ctx,
 		"mark in-progress",
+		[]slog.Attr{slog.String("task_id", id)},
 		"update",
 		id,
 		"--status",
@@ -188,9 +200,10 @@ func (b TaskBackend) SetPRURL(ctx context.Context, id string, prURL string) erro
 		return fmt.Errorf("set Beads task %q PR URL in %q: PR URL is required", id, b.dir)
 	}
 
-	result, err := b.runWrite(
+	result, err := b.runWriteWithAttrs(
 		ctx,
 		"set PR URL",
+		[]slog.Attr{slog.String("task_id", id)},
 		"update",
 		id,
 		"--set-metadata",
@@ -221,7 +234,7 @@ func (b TaskBackend) Close(ctx context.Context, id string) error {
 		return nil
 	}
 
-	result, err := b.runWrite(ctx, "close", "close", id)
+	result, err := b.runWriteWithAttrs(ctx, "close", []slog.Attr{slog.String("task_id", id)}, "close", id)
 	if err != nil {
 		if isNotFoundResult(result) {
 			return fmt.Errorf("close Beads task %q in %q: %w%s", id, b.dir, task.ErrNotFound, formattedOutput(result))
@@ -326,14 +339,22 @@ func normalizeTaskBackendDir(dir string) (string, error) {
 }
 
 func (b TaskBackend) run(ctx context.Context, operation string, args ...string) (Result, error) {
-	return b.runBD(ctx, operation, []string{"--json", "--readonly", "--sandbox"}, args...)
+	return b.runWithAttrs(ctx, operation, nil, args...)
+}
+
+func (b TaskBackend) runWithAttrs(ctx context.Context, operation string, attrs []slog.Attr, args ...string) (Result, error) {
+	return b.runBD(ctx, operation, []string{"--json", "--readonly", "--sandbox"}, attrs, args...)
 }
 
 func (b TaskBackend) runWrite(ctx context.Context, operation string, args ...string) (Result, error) {
-	return b.runBD(ctx, operation, []string{"--json", "--sandbox"}, args...)
+	return b.runWriteWithAttrs(ctx, operation, nil, args...)
 }
 
-func (b TaskBackend) runBD(ctx context.Context, operation string, globalArgs []string, args ...string) (Result, error) {
+func (b TaskBackend) runWriteWithAttrs(ctx context.Context, operation string, attrs []slog.Attr, args ...string) (Result, error) {
+	return b.runBD(ctx, operation, []string{"--json", "--sandbox"}, attrs, args...)
+}
+
+func (b TaskBackend) runBD(ctx context.Context, operation string, globalArgs []string, attrs []slog.Attr, args ...string) (Result, error) {
 	if b.runner == nil {
 		return Result{}, fmt.Errorf("%s Beads tasks in %q: runner is required", operation, b.dir)
 	}
@@ -345,7 +366,11 @@ func (b TaskBackend) runBD(ctx context.Context, operation string, globalArgs []s
 	}
 
 	allArgs := append(append([]string{}, globalArgs...), args...)
-	result, err := b.runner.Run(b.dir, allArgs...)
+	runner := b.runner
+	if diagnostics, ok := runner.(diagnosticRunner); ok && len(attrs) > 0 {
+		runner = diagnostics.WithDiagnosticAttrs(attrs...)
+	}
+	result, err := runner.Run(b.dir, allArgs...)
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
 			return result, fmt.Errorf("%s Beads tasks in %q: bd executable not found; install Beads or ensure bd is on PATH: %w", operation, b.dir, err)

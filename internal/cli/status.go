@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/status"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -40,18 +39,18 @@ func runStatus(command *cobra.Command, opts *rootOptions, full bool, noTruncate 
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for status projection")
 
-	taskCtx, err := loadTaskContext()
+	deps, err := opts.invocation(command)
+	if err != nil {
+		return err
+	}
+	taskCtx, err := loadTaskContextFromInvocation(deps)
 	if err != nil {
 		return err
 	}
 	logger.DebugContext(command.Context(), "querying local task snapshots", slog.Int("repo_count", len(taskCtx.Sources)))
 
 	snapshot := taskCtx.Aggregator.Snapshot(command.Context())
-	paths, err := state.ResolveFromEnvironment()
-	if err != nil {
-		return err
-	}
-	runStates, runStateFailures := taskRunStateIndex(paths, snapshot)
+	runStates, runStateFailures := taskRunStateIndex(deps, snapshot)
 	if len(runStateFailures) > 0 {
 		snapshot.Failures = append(snapshot.Failures, runStateFailures...)
 	}
@@ -77,10 +76,10 @@ func runStatus(command *cobra.Command, opts *rootOptions, full bool, noTruncate 
 }
 
 func taskRunStateIndex(
-	paths state.Paths,
+	deps *invocationDependencies,
 	snapshot taskmodel.SnapshotResult,
 ) (status.LocalTaskStateIndex, []taskmodel.RepoFailure) {
-	store := taskstate.NewStore(paths)
+	store := deps.taskStateStore
 	index := status.LocalTaskStateIndex{}
 	failures := make([]taskmodel.RepoFailure, 0)
 
@@ -102,7 +101,7 @@ func taskRunStateIndex(
 			}
 			latestCopy := latest
 			target, hasTarget := taskstate.Target(state)
-			expectedTargets, err := workflow.ExpectedTargetsForTask(repoSnapshot.Repository, taskItem.ID, paths)
+			expectedTargets, err := workflow.ExpectedTargetsForTask(repoSnapshot.Repository, taskItem.ID, deps.paths)
 			latestReview, hasReview := taskstate.LatestReview(state)
 			latestFinalizationFailure, hasFinalizationFailure := taskstate.LatestFinalizationFailure(state)
 			localState := status.LocalTaskState{

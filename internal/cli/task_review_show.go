@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/spf13/cobra"
 )
@@ -37,15 +36,15 @@ func runTaskReviewShow(command *cobra.Command, opts *rootOptions, taskID string)
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for task review show")
 
-	resolvedCtx, err := resolveTaskContextWithScope(command, "task review show", taskID, false)
+	deps, err := opts.invocation(command)
 	if err != nil {
 		return err
 	}
-	paths, err := state.ResolveFromEnvironment()
+	resolvedCtx, err := resolveTaskContextWithScope(command, deps, "task review show", taskID, false)
 	if err != nil {
 		return err
 	}
-	taskState, err := taskstate.NewStore(paths).Load(
+	taskState, err := deps.taskStateStore.Load(
 		resolvedCtx.Resolved.Source.Repository.ID,
 		resolvedCtx.Resolved.TaskID,
 	)
