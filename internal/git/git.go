@@ -6,9 +6,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/hea3ven/orpheus/internal/logging"
 )
 
 var (
@@ -62,14 +65,19 @@ type Inspection struct {
 // Inspect only reads local Git metadata. It does not fetch, contact remotes,
 // create branches, create worktrees, or mutate the repository.
 func Inspect(inputPath string) (Inspection, error) {
-	root, err := discoverRoot(inputPath)
+	return InspectWithLogger(context.Background(), inputPath, nil)
+}
+
+// InspectWithLogger discovers local Git repository metadata and emits safe diagnostics.
+func InspectWithLogger(ctx context.Context, inputPath string, logger *slog.Logger) (Inspection, error) {
+	root, err := discoverRootWithLogger(ctx, inputPath, logger)
 	if err != nil {
 		return Inspection{}, err
 	}
 
 	inspection := Inspection{Root: root}
 
-	remotes, err := listRemotes(root)
+	remotes, err := listRemotesWithLogger(ctx, root, logger)
 	if err != nil {
 		inspection.RemoteErr = err
 	} else {
@@ -79,12 +87,12 @@ func Inspect(inputPath string) (Inspection, error) {
 		inspection.RemoteCandidateName = candidate.Name
 	}
 
-	currentBranch, currentBranchErr := currentBranch(root)
+	currentBranch, currentBranchErr := currentBranchWithLogger(ctx, root, logger)
 	if currentBranchErr == nil {
 		inspection.CurrentBranch = currentBranch
 	}
 
-	branch, source, err := defaultBranch(root, currentBranch, currentBranchErr)
+	branch, source, err := defaultBranchWithLogger(ctx, root, currentBranch, currentBranchErr, logger)
 	if err != nil {
 		inspection.DefaultBranchErr = err
 	} else {
@@ -95,12 +103,12 @@ func Inspect(inputPath string) (Inspection, error) {
 	return inspection, nil
 }
 
-func discoverRoot(inputPath string) (string, error) {
+func discoverRootWithLogger(ctx context.Context, inputPath string, logger *slog.Logger) (string, error) {
 	if strings.TrimSpace(inputPath) == "" {
 		return "", fmt.Errorf("inspect git repository: %w: path is required", ErrNotRepository)
 	}
 
-	output, err := runGit(inputPath, "rev-parse", "--show-toplevel")
+	output, err := runGitContextLogger(ctx, logger, inputPath, "rev_parse_root", "rev-parse", "--show-toplevel")
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
 			return "", fmt.Errorf("inspect git repository at %q: run git rev-parse: %w", inputPath, err)
@@ -125,8 +133,8 @@ func discoverRoot(inputPath string) (string, error) {
 	return filepath.Clean(absoluteRoot), nil
 }
 
-func listRemotes(root string) ([]Remote, error) {
-	output, err := runGit(root, "config", "--get-regexp", `^remote\..*\.url$`)
+func listRemotesWithLogger(ctx context.Context, root string, logger *slog.Logger) ([]Remote, error) {
+	output, err := runGitContextLogger(ctx, logger, root, "list_remotes", "config", "--get-regexp", `^remote\..*\.url$`)
 	if err != nil {
 		if strings.TrimSpace(output) == "" {
 			return nil, ErrNoRemote
@@ -187,8 +195,14 @@ func chooseRemoteCandidate(remotes []Remote) Remote {
 	return remotes[0]
 }
 
-func defaultBranch(root string, current string, currentErr error) (string, DefaultBranchSource, error) {
-	originHEAD, err := originHEADBranch(root)
+func defaultBranchWithLogger(
+	ctx context.Context,
+	root string,
+	current string,
+	currentErr error,
+	logger *slog.Logger,
+) (string, DefaultBranchSource, error) {
+	originHEAD, err := originHEADBranchWithLogger(ctx, root, logger)
 	if err == nil {
 		return originHEAD, DefaultBranchSourceOriginHEAD, nil
 	}
@@ -203,8 +217,8 @@ func defaultBranch(root string, current string, currentErr error) (string, Defau
 	return "", "", fmt.Errorf("%w: origin/HEAD is missing and current branch is empty", ErrNoDefaultBranch)
 }
 
-func originHEADBranch(root string) (string, error) {
-	output, err := runGit(root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+func originHEADBranchWithLogger(ctx context.Context, root string, logger *slog.Logger) (string, error) {
+	output, err := runGitContextLogger(ctx, logger, root, "origin_head", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
 	if err != nil {
 		return "", fmt.Errorf("read origin/HEAD: %w", err)
 	}
@@ -222,8 +236,8 @@ func originHEADBranch(root string) (string, error) {
 	return branch, nil
 }
 
-func currentBranch(root string) (string, error) {
-	output, err := runGit(root, "symbolic-ref", "--quiet", "--short", "HEAD")
+func currentBranchWithLogger(ctx context.Context, root string, logger *slog.Logger) (string, error) {
+	output, err := runGitContextLogger(ctx, logger, root, "current_branch", "symbolic-ref", "--quiet", "--short", "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("read current branch: %w", err)
 	}
@@ -235,11 +249,16 @@ func currentBranch(root string) (string, error) {
 	return branch, nil
 }
 
-func runGit(dir string, args ...string) (string, error) {
-	return runGitContext(context.Background(), dir, args...)
+func runGitContext(ctx context.Context, dir string, args ...string) (string, error) {
+	return runGitContextLogger(ctx, nil, dir, "git", args...)
 }
 
-func runGitContext(ctx context.Context, dir string, args ...string) (string, error) {
+func runGitContextLogger(ctx context.Context, logger *slog.Logger, dir string, operation string, args ...string) (string, error) {
+	span := logging.Start(ctx, logger, "git command",
+		slog.String("component", "git"),
+		slog.String("operation", operation),
+		slog.String("cwd", dir),
+	)
 	command := exec.CommandContext(ctx, "git", args...)
 	command.Dir = dir
 
@@ -256,5 +275,35 @@ func runGitContext(ctx context.Context, dir string, args ...string) (string, err
 		}
 		output += stderr.String()
 	}
+	finishAttrs := gitExitAttrs(command, err)
+	if err != nil && expectedGitAbsence(operation, output, err) {
+		span.Finish(ctx, logging.StatusExpectedAbsence, finishAttrs...)
+	} else {
+		span.FinishError(ctx, err, finishAttrs...)
+	}
 	return output, err
+}
+
+func gitExitAttrs(command *exec.Cmd, err error) []slog.Attr {
+	if command != nil && command.ProcessState != nil {
+		return []slog.Attr{slog.Int("exit_code", command.ProcessState.ExitCode())}
+	}
+	if exitCode, ok := logging.ExitCode(err); ok {
+		return []slog.Attr{slog.Int("exit_code", exitCode)}
+	}
+	return nil
+}
+
+func expectedGitAbsence(operation string, output string, err error) bool {
+	exitCode, hasExitCode := logging.ExitCode(err)
+	switch operation {
+	case "list_remotes":
+		return hasExitCode && exitCode == 1 && strings.TrimSpace(output) == ""
+	case "origin_head":
+		return hasExitCode && exitCode == 1
+	case "current_branch":
+		return hasExitCode && exitCode == 1 && strings.TrimSpace(output) == ""
+	default:
+		return false
+	}
 }

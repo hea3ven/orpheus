@@ -2,12 +2,15 @@
 package registry
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/state"
 )
@@ -76,12 +79,18 @@ type Registry struct {
 
 // Store persists the registry under the Orpheus data root.
 type Store struct {
-	paths state.Paths
+	paths  state.Paths
+	logger *slog.Logger
 }
 
 // NewStore returns a YAML-backed registry store using the supplied Orpheus paths.
 func NewStore(paths state.Paths) Store {
-	return Store{paths: paths}
+	return NewStoreWithLogger(paths, nil)
+}
+
+// NewStoreWithLogger returns a YAML-backed registry store that emits diagnostics to logger.
+func NewStoreWithLogger(paths state.Paths, logger *slog.Logger) Store {
+	return Store{paths: paths, logger: logger}
 }
 
 // ManagedBeadsDir returns the deterministic Orpheus-managed Beads workspace for repoID.
@@ -175,33 +184,62 @@ func ValidateSummaryGuidanceStyle(style string) error {
 
 // Load reads and validates the registry. Missing or empty registry state loads as empty.
 func (s Store) Load() (Registry, error) {
+	path, pathErr := s.paths.DataPath(registryFile)
+	span := logging.Start(context.Background(), s.logger, "repo registry load",
+		slog.String("component", "registry"),
+		slog.String("operation", "load"),
+		slog.String("path", path),
+	)
+	if pathErr != nil {
+		err := fmt.Errorf("load repo registry: %w", pathErr)
+		span.FinishError(context.Background(), err)
+		return Registry{}, err
+	}
+
 	var registry Registry
 	if err := s.paths.ReadDataYAML(registryFile, &registry); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			span.Finish(context.Background(), logging.StatusExpectedAbsence, slog.Int("repo_count", 0))
 			return Registry{}, nil
 		}
-		return Registry{}, fmt.Errorf("load repo registry: %w", err)
+		err = fmt.Errorf("load repo registry: %w", err)
+		span.FinishError(context.Background(), err)
+		return Registry{}, err
 	}
 
 	normalizedRegistry, err := registry.normalized()
 	if err != nil {
-		return Registry{}, fmt.Errorf("load repo registry: %w", err)
+		err = fmt.Errorf("load repo registry: %w", err)
+		span.FinishError(context.Background(), err)
+		return Registry{}, err
 	}
+	span.Finish(context.Background(), logging.StatusSuccess, slog.Int("repo_count", len(normalizedRegistry.Repos)))
 	return normalizedRegistry, nil
 }
 
 // Save validates and writes the registry.
 func (s Store) Save(registry Registry) error {
+	path, _ := s.paths.DataPath(registryFile)
+	span := logging.Start(context.Background(), s.logger, "repo registry save",
+		slog.String("component", "registry"),
+		slog.String("operation", "save"),
+		slog.String("path", path),
+	)
 	normalizedRegistry, err := registry.normalized()
 	if err != nil {
-		return fmt.Errorf("save repo registry: %w", err)
+		err = fmt.Errorf("save repo registry: %w", err)
+		span.FinishError(context.Background(), err)
+		return err
 	}
 	if normalizedRegistry.Repos == nil {
 		normalizedRegistry.Repos = []Repo{}
 	}
 	if err := s.paths.WriteDataYAML(registryFile, normalizedRegistry); err != nil {
-		return fmt.Errorf("save repo registry: %w", err)
+		err = fmt.Errorf("save repo registry: %w", err)
+		span.FinishError(context.Background(), err)
+		return err
 	}
+	span.Finish(context.Background(), logging.StatusSuccess, slog.Int("repo_count", len(normalizedRegistry.Repos)))
 	return nil
 }
 

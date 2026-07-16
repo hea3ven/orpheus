@@ -8,8 +8,9 @@ import (
 )
 
 type rootOptions struct {
-	verbose bool
-	logger  *slog.Logger
+	verbose        bool
+	logger         *slog.Logger
+	invocationDeps *invocationDependencies
 }
 
 func (o *rootOptions) loggingConfig() logging.Config {
@@ -40,8 +41,10 @@ control.`,
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		PersistentPreRun: func(command *cobra.Command, args []string) {
+		PersistentPreRunE: func(command *cobra.Command, args []string) error {
 			opts.configureLogging(command)
+			_, err := opts.invocation(command)
+			return err
 		},
 		RunE: func(command *cobra.Command, args []string) error {
 			opts.log().DebugContext(

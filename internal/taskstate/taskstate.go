@@ -2,14 +2,17 @@
 package taskstate
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/hea3ven/orpheus/internal/logging"
 	orstate "github.com/hea3ven/orpheus/internal/state"
 	"gopkg.in/yaml.v3"
 )
@@ -121,8 +124,9 @@ var (
 
 // Store is a YAML-backed per-task state store under the Orpheus data root.
 type Store struct {
-	paths orstate.Paths
-	now   func() time.Time
+	paths  orstate.Paths
+	now    func() time.Time
+	logger *slog.Logger
 }
 
 // TaskState is the human-readable YAML schema for one task's Orpheus state.
@@ -555,12 +559,26 @@ type FeatureBranchPROptions struct {
 
 // NewStore creates a per-task state store using paths.
 func NewStore(paths orstate.Paths) Store {
-	return Store{paths: paths, now: func() time.Time { return time.Now().UTC() }}
+	return NewStoreWithLogger(paths, nil)
+}
+
+// NewStoreWithLogger creates a per-task state store that emits diagnostics to logger.
+func NewStoreWithLogger(paths orstate.Paths, logger *slog.Logger) Store {
+	return Store{paths: paths, now: func() time.Time { return time.Now().UTC() }, logger: logger}
 }
 
 // NewStoreWithClock creates a store with a deterministic clock for tests.
 func NewStoreWithClock(paths orstate.Paths, now func() time.Time) Store {
 	store := NewStore(paths)
+	if now != nil {
+		store.now = now
+	}
+	return store
+}
+
+// NewStoreWithClockAndLogger creates a store with a deterministic clock and logger.
+func NewStoreWithClockAndLogger(paths orstate.Paths, now func() time.Time, logger *slog.Logger) Store {
+	store := NewStoreWithLogger(paths, logger)
 	if now != nil {
 		store.now = now
 	}
@@ -615,19 +633,34 @@ func (s Store) Load(repoID, taskID string) (TaskState, error) {
 	if err != nil {
 		return TaskState{}, err
 	}
+	path, _ := s.paths.DataPath(rel)
+	span := logging.Start(context.Background(), s.logger, "task state load",
+		slog.String("component", "taskstate"),
+		slog.String("operation", "load"),
+		slog.String("path", path),
+		slog.String("repo_id", repoID),
+		slog.String("task_id", taskID),
+	)
 
 	loaded := emptyTaskState(repoID, taskID)
 	if err := s.paths.ReadDataYAML(rel, &loaded); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			span.Finish(context.Background(), logging.StatusExpectedAbsence, slog.Int("event_count", 0))
 			return emptyTaskState(repoID, taskID), nil
 		}
-		return TaskState{}, fmt.Errorf("load task state %s/%s: %w", repoID, taskID, err)
+		err = fmt.Errorf("load task state %s/%s: %w", repoID, taskID, err)
+		span.FinishError(context.Background(), err)
+		return TaskState{}, err
 	}
 
 	if err := validateLoadedState(loaded, repoID, taskID); err != nil {
-		return TaskState{}, fmt.Errorf("load task state %s/%s: %w", repoID, taskID, err)
+		err = fmt.Errorf("load task state %s/%s: %w", repoID, taskID, err)
+		span.FinishError(context.Background(), err)
+		return TaskState{}, err
 	}
-	return normalizeState(loaded, repoID, taskID), nil
+	loaded = normalizeState(loaded, repoID, taskID)
+	span.Finish(context.Background(), logging.StatusSuccess, slog.Int("event_count", len(loaded.Events)))
+	return loaded, nil
 }
 
 // LatestRun returns the highest-numbered run attempt for a task.
@@ -2366,9 +2399,20 @@ func (s Store) save(taskState TaskState) error {
 	if err != nil {
 		return err
 	}
+	path, _ := s.paths.DataPath(rel)
+	span := logging.Start(context.Background(), s.logger, "task state save",
+		slog.String("component", "taskstate"),
+		slog.String("operation", "save"),
+		slog.String("path", path),
+		slog.String("repo_id", normalized.RepoID),
+		slog.String("task_id", normalized.TaskID),
+	)
 	if err := s.paths.WriteDataYAML(rel, normalized); err != nil {
-		return fmt.Errorf("save task state %s/%s: %w", normalized.RepoID, normalized.TaskID, err)
+		err = fmt.Errorf("save task state %s/%s: %w", normalized.RepoID, normalized.TaskID, err)
+		span.FinishError(context.Background(), err)
+		return err
 	}
+	span.Finish(context.Background(), logging.StatusSuccess, slog.Int("event_count", len(normalized.Events)))
 	return nil
 }
 

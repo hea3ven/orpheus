@@ -3,13 +3,17 @@ package beads
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/hea3ven/orpheus/internal/logging"
 )
 
 var (
@@ -28,10 +32,33 @@ type Runner interface {
 	Run(dir string, args ...string) (Result, error)
 }
 
+type diagnosticStatusClassifier func(operation string, result Result, err error) string
+
 // CommandRunner executes the real bd binary.
 type CommandRunner struct {
 	// Binary is the executable name or path. Empty uses "bd".
 	Binary string
+	// Logger receives safe command diagnostics. Raw argv, output, and environment are not logged.
+	Logger *slog.Logger
+	// DiagnosticAttrs are safe semantic fields included on every command diagnostic.
+	DiagnosticAttrs  []slog.Attr
+	diagnosticStatus diagnosticStatusClassifier
+}
+
+// NewInspectLocalRunner returns a bd runner with diagnostics classified for local discovery.
+func NewInspectLocalRunner(logger *slog.Logger, attrs ...slog.Attr) Runner {
+	return CommandRunner{
+		Logger:           logger,
+		DiagnosticAttrs:  append([]slog.Attr{}, attrs...),
+		diagnosticStatus: inspectLocalDiagnosticStatus,
+	}
+}
+
+// WithDiagnosticAttrs returns a runner copy that includes additional safe diagnostic fields.
+func (r CommandRunner) WithDiagnosticAttrs(attrs ...slog.Attr) Runner {
+	copied := r
+	copied.DiagnosticAttrs = append(append([]slog.Attr{}, r.DiagnosticAttrs...), attrs...)
+	return copied
 }
 
 // Run executes bd in dir and captures stdout and stderr separately.
@@ -41,6 +68,14 @@ func (r CommandRunner) Run(dir string, args ...string) (Result, error) {
 		binary = "bd"
 	}
 
+	operation := bdSemanticOperation(args)
+	attrs := []slog.Attr{
+		slog.String("component", "beads"),
+		slog.String("operation", operation),
+		slog.String("cwd", dir),
+	}
+	attrs = append(attrs, r.DiagnosticAttrs...)
+	span := logging.Start(context.Background(), r.Logger, "beads command", attrs...)
 	command := exec.Command(binary, args...)
 	command.Dir = dir
 	command.Env = sanitizedEnvironment()
@@ -51,7 +86,72 @@ func (r CommandRunner) Run(dir string, args ...string) (Result, error) {
 	command.Stderr = &stderr
 
 	err := command.Run()
-	return Result{Stdout: stdout.String(), Stderr: stderr.String()}, err
+	result := Result{Stdout: stdout.String(), Stderr: stderr.String()}
+	finishAttrs := subprocessExitAttrs(command, err)
+	span.Finish(context.Background(), r.finishStatus(operation, result, err), finishAttrs...)
+	return result, err
+}
+
+func (r CommandRunner) finishStatus(operation string, result Result, err error) string {
+	if r.diagnosticStatus != nil {
+		if status := r.diagnosticStatus(operation, result, err); status != "" {
+			return status
+		}
+	}
+	if err != nil {
+		return logging.StatusFailure
+	}
+	return logging.StatusSuccess
+}
+
+func inspectLocalDiagnosticStatus(operation string, result Result, _ error) string {
+	if operation != "context" {
+		return ""
+	}
+	response, parseErr := parseContextResponse(result.Stdout)
+	if parseErr == nil && response.Error == "no_beads_directory" {
+		return logging.StatusExpectedAbsence
+	}
+	return ""
+}
+
+func subprocessExitAttrs(command *exec.Cmd, err error) []slog.Attr {
+	if command != nil && command.ProcessState != nil {
+		return []slog.Attr{slog.Int("exit_code", command.ProcessState.ExitCode())}
+	}
+	if exitCode, ok := logging.ExitCode(err); ok {
+		return []slog.Attr{slog.Int("exit_code", exitCode)}
+	}
+	return nil
+}
+
+func bdSemanticOperation(args []string) string {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		switch arg {
+		case "context":
+			return "context"
+		case "config":
+			return "config"
+		case "init":
+			return "init"
+		case "list":
+			return "list"
+		case "show":
+			return "show"
+		case "get":
+			return "get"
+		case "create":
+			return "create"
+		case "update":
+			return "update"
+		case "close":
+			return "close"
+		}
+	}
+	return "bd"
 }
 
 // LocalInspection describes repo-local Beads state discovered for a repository root.
@@ -63,12 +163,22 @@ type LocalInspection struct {
 
 // InspectLocal inspects root using the bd binary.
 func InspectLocal(root string) (LocalInspection, error) {
-	return InspectLocalWithRunner(root, CommandRunner{})
+	return InspectLocalWithLogger(root, nil)
+}
+
+// InspectLocalWithLogger inspects root using the bd binary and emits diagnostics.
+func InspectLocalWithLogger(root string, logger *slog.Logger) (LocalInspection, error) {
+	return InspectLocalWithRunner(root, NewInspectLocalRunner(logger))
 }
 
 // InitializeManaged initializes Beads state in an Orpheus-managed workspace using the bd binary.
 func InitializeManaged(dir string, prefix string) error {
-	return InitializeManagedWithRunner(dir, prefix, CommandRunner{})
+	return InitializeManagedWithLogger(dir, prefix, nil)
+}
+
+// InitializeManagedWithLogger initializes Beads state and emits diagnostics.
+func InitializeManagedWithLogger(dir string, prefix string, logger *slog.Logger) error {
+	return InitializeManagedWithRunner(dir, prefix, CommandRunner{Logger: logger})
 }
 
 // InitializeManagedWithRunner initializes a Beads database rooted at dir with prefix.

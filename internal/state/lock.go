@@ -1,11 +1,15 @@
 package state
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/hea3ven/orpheus/internal/logging"
 )
 
 const (
@@ -64,26 +68,56 @@ func (p Paths) GlobalMutationLockPath() (string, error) {
 }
 
 // WithGlobalMutationLock runs mutate while holding the global mutation lock.
-func WithGlobalMutationLock(paths Paths, operation string, mutate func() error) (err error) {
+func WithGlobalMutationLock(paths Paths, operation string, mutate func() error) error {
+	return WithGlobalMutationLockLogger(context.Background(), paths, operation, nil, mutate)
+}
+
+// WithGlobalMutationLockLogger runs mutate while holding the global mutation lock and emits diagnostics.
+func WithGlobalMutationLockLogger(
+	ctx context.Context,
+	paths Paths,
+	operation string,
+	logger *slog.Logger,
+	mutate func() error,
+) (err error) {
 	if mutate == nil {
 		return errors.New("global mutation lock callback is nil")
 	}
 
+	lockPath := globalMutationLockPathCandidate(paths)
+	span := logging.Start(ctx, logger, "global mutation lock", lockAttrs(operation, lockPath)...)
 	lock, err := acquireGlobalMutationLock(paths, operation)
 	if err != nil {
+		span.FinishError(ctx, err)
 		return err
 	}
+	span.Finish(ctx, logging.StatusSuccess)
+
+	held := logging.Start(ctx, logger, "global mutation lock held", lockAttrs(operation, lock.path)...)
 	defer func() {
 		if releaseErr := lock.release(); releaseErr != nil {
 			if err != nil {
 				err = errors.Join(err, releaseErr)
+				held.FinishError(ctx, err)
 				return
 			}
 			err = releaseErr
+			held.FinishError(ctx, releaseErr)
+			return
 		}
+		held.FinishError(ctx, err)
 	}()
 
 	return mutate()
+}
+
+func lockAttrs(operation string, path string) []slog.Attr {
+	return []slog.Attr{
+		slog.String("component", "state"),
+		slog.String("operation", "mutation_lock"),
+		slog.String("semantic_operation", operation),
+		slog.String("path", path),
+	}
 }
 
 func acquireGlobalMutationLock(paths Paths, operation string) (*mutationLock, error) {
