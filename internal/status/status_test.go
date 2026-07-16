@@ -399,6 +399,30 @@ func TestProjectWithLocalTaskStatesClassifiesLatestReviewAttempts(t *testing.T) 
 			wantDetail: "review blockers targeted; run task review",
 		},
 		{
+			name: "interrupted automated blocker decision returns to review",
+			review: func() taskstate.ReviewAttempt {
+				review := reviewAttempt(1, taskstate.ReviewStatusBlocked, []taskstate.ReviewFinding{
+					{Type: taskstate.FindingTypeBlocking, Title: "Bug", Description: "Fix it"},
+				})
+				review.AutomatedBlockerDecisionInterrupted = true
+				return review
+			}(),
+			wantGroup:  status.GroupInReview,
+			wantDetail: "review blocker decision interrupted; run task review",
+		},
+		{
+			name: "unkept automated blocker decision returns to review",
+			review: func() taskstate.ReviewAttempt {
+				review := reviewAttempt(1, taskstate.ReviewStatusBlocked, []taskstate.ReviewFinding{
+					{Type: taskstate.FindingTypeBlocking, Step: "lint", Title: "Bug", Description: "Fix it"},
+				})
+				review.Steps = []taskstate.ReviewStep{{Kind: taskstate.ReviewStepKindCheck, Name: "lint"}}
+				return review
+			}(),
+			wantGroup:  status.GroupInReview,
+			wantDetail: "review blocker decision required; run task review",
+		},
+		{
 			name:       "aborted review is reviewing retry",
 			review:     reviewAttempt(1, taskstate.ReviewStatusAborted, nil),
 			wantGroup:  status.GroupInReview,

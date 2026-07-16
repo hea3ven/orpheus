@@ -171,10 +171,11 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 			"When the latest review is blocked by open current-task findings, task run " +
 			"automatically starts a review follow-up run and targets those findings. " +
 			"After the agent records completion with agent done, task run continues into " +
-			"the effective review pipeline. Automated review keeps automated blockers, " +
-			"runs targeted fixes, and starts fresh review attempts until it passes, " +
-			"fails operationally, exhausts reviews.max_autonomous_review_attempts, or " +
-			"needs operator input that is no longer available. Manual steps are persisted " +
+			"the effective review pipeline. Automated blockers require an explicit " +
+			"keep, downgrade, or waive/cancel decision. Kept blockers run targeted " +
+			"fixes and start fresh review attempts until the review passes, fails " +
+			"operationally, exhausts reviews.max_autonomous_review_attempts, or needs " +
+			"operator input that is no longer available. Manual steps are persisted " +
 			"before prompting and can be resumed with task review.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
@@ -232,14 +233,15 @@ func newTaskReviewCommand(opts *rootOptions) *cobra.Command {
 			"manual, and agent_review steps. Approval records a passed review attempt and " +
 			"then finalizes through the same path as task done. When task run has paused " +
 			"at a manual step, task review resumes that same attempt; --pipeline may only " +
-			"name the already selected pipeline and cannot replace it. If later automated " +
-			"steps block after a resumed manual gate, task review runs bounded targeted " +
-			"fixes and restarts the pipeline from step 1 so manual gates must pass again.\n\n" +
-			"Blocking findings leave the task ready for task run follow-up. Operational " +
-			"review failures require fixing the review command, environment, or process " +
-			"and rerunning task review. Exhausted autonomous blockers stay blocked until " +
-			"the operator explicitly continues. Use task review show to inspect persisted " +
-			"findings and created follow-up tasks.",
+			"name the already selected pipeline and cannot replace it. Automated blockers " +
+			"require an explicit keep, downgrade, or waive/cancel decision. Kept blockers " +
+			"run bounded targeted fixes and restart the pipeline from step 1 so manual " +
+			"gates must pass again. If blocker-decision input disappears, the current " +
+			"attempt is blocked and recovery starts a fresh task review.\n\n" +
+			"Operational review failures require fixing the review command, environment, " +
+			"or process and rerunning task review. Exhausted autonomous blockers stay " +
+			"blocked until the operator explicitly continues. Use task review show to " +
+			"inspect persisted findings and created follow-up tasks.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			return runTaskReview(command, opts, args[0], pipelineName)
@@ -817,27 +819,24 @@ func runTaskReview(command *cobra.Command, opts *rootOptions, taskID string, pip
 		return err
 	}
 
-	if start.resumed {
-		maxAttempts, err := taskReviewMaxAutonomousReviewAttempts(start.paths)
-		if err != nil {
-			return fmt.Errorf("task review %s: %w", start.taskID(), err)
-		}
-		dispatchAgentName, err := resumedReviewImplementerName(start)
-		if err != nil {
-			return fmt.Errorf("task review %s: %w", start.taskID(), err)
-		}
-		return executeAutonomousReviewLoop(command, logger, start, autonomousReviewLoopOptions{
-			maxAttempts:       maxAttempts,
-			dispatchAgentName: dispatchAgentName,
-			review: taskReviewExecutionOptions{
-				interactiveManual:     true,
-				keepAutomatedBlockers: true,
-			},
-		})
+	maxAttempts, err := taskReviewMaxAutonomousReviewAttempts(start.paths)
+	if err != nil {
+		return fmt.Errorf("task review %s: %w", start.taskID(), err)
 	}
-
-	return executeTaskReview(command, logger, start, taskReviewExecutionOptions{
-		interactiveManual: true,
+	dispatchAgentName := ""
+	if start.resumed {
+		var err error
+		dispatchAgentName, err = resumedReviewImplementerName(start)
+		if err != nil {
+			return fmt.Errorf("task review %s: %w", start.taskID(), err)
+		}
+	}
+	return executeAutonomousReviewLoop(command, logger, start, autonomousReviewLoopOptions{
+		maxAttempts:       maxAttempts,
+		dispatchAgentName: dispatchAgentName,
+		review: taskReviewExecutionOptions{
+			interactiveManual: true,
+		},
 	})
 }
 
@@ -860,18 +859,14 @@ func runTaskRunReview(command *cobra.Command, opts *rootOptions, taskID string, 
 		maxAttempts:       maxAttempts,
 		dispatchAgentName: agentName,
 		review: taskReviewExecutionOptions{
-			autoSeparateTasks:     true,
-			interactiveManual:     true,
-			keepAutomatedBlockers: true,
+			interactiveManual: true,
 		},
 	})
 }
 
 type taskReviewExecutionOptions struct {
-	pauseBeforeManual     bool
-	autoSeparateTasks     bool
-	interactiveManual     bool
-	keepAutomatedBlockers bool
+	pauseBeforeManual bool
+	interactiveManual bool
 }
 
 type taskReviewAttemptResult struct {
@@ -882,24 +877,6 @@ type autonomousReviewLoopOptions struct {
 	maxAttempts       int
 	dispatchAgentName string
 	review            taskReviewExecutionOptions
-}
-
-func executeTaskReview(
-	command *cobra.Command,
-	logger *slog.Logger,
-	start taskReviewStart,
-	opts taskReviewExecutionOptions,
-) error {
-	reviewInput := bufio.NewReader(command.InOrStdin())
-	result, err := executeTaskReviewAttempt(command, logger, start, reviewInput, opts)
-	if err != nil {
-		return err
-	}
-	if result.status != taskstate.ReviewStatusPassed {
-		return nil
-	}
-
-	return finalizeApprovedTaskReview(command, logger, start.paths, start.resolvedCtx)
 }
 
 func executeAutonomousReviewLoop(
@@ -996,7 +973,7 @@ func executeTaskReviewAttempt(
 		return taskReviewAttemptResult{status: outcome.Status}, nil
 	}
 	if outcome.Status == taskstate.ReviewStatusPassed {
-		shouldPublish, err := processSeparateTaskReviewCandidates(command, start, reviewInput, opts.autoSeparateTasks)
+		shouldPublish, err := processSeparateTaskReviewCandidates(command, start, reviewInput)
 		if err != nil {
 			_, _ = start.store.FinishReview(start.repoID(), start.taskID(), start.review.Attempt, taskstate.ReviewStatusFailed)
 			return taskReviewAttemptResult{}, err
@@ -1047,8 +1024,11 @@ func latestAutonomousReviewBlockers(
 	if !ok || latest.Status != taskstate.ReviewStatusBlocked {
 		return taskstate.ReviewAttempt{}, nil, false, nil
 	}
+	if latest.AutomatedBlockerDecisionInterrupted || taskstate.HasUnkeptAutomatedBlockingFindings(latest) {
+		return latest, nil, false, nil
+	}
 
-	indexes := automatedBlockingFindingIndexes(latest)
+	indexes := taskstate.UntargetedAutomatedBlockingFindingIndexes(latest)
 	if len(indexes) == 0 {
 		return latest, nil, false, nil
 	}
@@ -1056,25 +1036,6 @@ func latestAutonomousReviewBlockers(
 		return latest, nil, false, nil
 	}
 	return latest, indexes, true, nil
-}
-
-func automatedBlockingFindingIndexes(reviewAttempt taskstate.ReviewAttempt) []int {
-	automatedStepKinds := map[string]bool{}
-	for _, step := range reviewAttempt.Steps {
-		switch step.Kind {
-		case review.KindCheck, review.KindAgentReview:
-			automatedStepKinds[step.Name] = true
-		}
-	}
-
-	indexes := make([]int, 0)
-	for _, index := range taskstate.UntargetedBlockingFindingIndexes(reviewAttempt) {
-		finding := reviewAttempt.Findings[index]
-		if automatedStepKinds[finding.Step] {
-			indexes = append(indexes, index)
-		}
-	}
-	return indexes
 }
 
 func runAutonomousReviewFollowUp(
@@ -1281,9 +1242,7 @@ func attachInteractiveReviewHooks(
 			Stop:   true,
 		}, nil
 	}
-	if !execOpts.keepAutomatedBlockers {
-		opts.PromptAutomatedBlockers = taskReviewAutomatedBlockerPrompt(command, reviewInput)
-	}
+	opts.PromptAutomatedBlockers = taskReviewAutomatedBlockerPrompt(command, reviewInput)
 	return opts
 }
 
@@ -1422,6 +1381,15 @@ func startTaskReview(command *cobra.Command, opts *rootOptions, taskID string, p
 	if requestedPipeline != nil {
 		return startFreshTaskReview(paths, resolvedCtx, store, target, workdir, *requestedPipeline)
 	}
+	if interrupted, ok, err := latestInterruptedAutomatedBlockerReview(store, resolvedCtx); err != nil {
+		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
+	} else if ok {
+		pipeline, err := resolveTaskReviewPipeline(paths, resolvedCtx.Resolved.Source.Repository, interrupted.Pipeline)
+		if err != nil {
+			return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
+		}
+		return startFreshTaskReview(paths, resolvedCtx, store, target, workdir, pipeline)
+	}
 	pipeline, err := resolveTaskReviewPipeline(paths, resolvedCtx.Resolved.Source.Repository, pipelineName)
 	if err != nil {
 		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
@@ -1478,6 +1446,27 @@ func latestManualWaitingReview(
 	}
 	latest, ok := taskstate.LatestReview(taskState)
 	if !ok || latest.Status != taskstate.ReviewStatusWaitingForManual {
+		return taskstate.ReviewAttempt{}, false, nil
+	}
+	return latest, true, nil
+}
+
+func latestInterruptedAutomatedBlockerReview(
+	store taskstate.Store,
+	resolvedCtx resolvedTaskContext,
+) (taskstate.ReviewAttempt, bool, error) {
+	taskState, err := store.Load(
+		resolvedCtx.Resolved.Source.Repository.ID,
+		resolvedCtx.Resolved.TaskID,
+	)
+	if err != nil {
+		return taskstate.ReviewAttempt{}, false, fmt.Errorf("load task state: %w", err)
+	}
+	latest, ok := taskstate.LatestReview(taskState)
+	if !ok || latest.Status != taskstate.ReviewStatusBlocked || !latest.AutomatedBlockerDecisionInterrupted {
+		return taskstate.ReviewAttempt{}, false, nil
+	}
+	if strings.TrimSpace(latest.Pipeline) == "" {
 		return taskstate.ReviewAttempt{}, false, nil
 	}
 	return latest, true, nil
@@ -1723,7 +1712,6 @@ func processSeparateTaskReviewCandidates(
 	command *cobra.Command,
 	start taskReviewStart,
 	reader *bufio.Reader,
-	createAll bool,
 ) (bool, error) {
 	candidates, err := pendingSeparateTaskCandidates(start.store, start.repoID(), start.taskID(), start.review.Attempt)
 	if err != nil {
@@ -1732,10 +1720,6 @@ func processSeparateTaskReviewCandidates(
 	if len(candidates) == 0 {
 		return true, nil
 	}
-	if createAll {
-		return createSeparateTaskCandidates(command, start, candidates)
-	}
-
 	selected, err := promptSeparateTaskCandidateSelection(command, reader, candidates)
 	if err != nil {
 		return false, fmt.Errorf("task review %s: %w", start.taskID(), err)
@@ -1744,47 +1728,6 @@ func processSeparateTaskReviewCandidates(
 		return true, nil
 	}
 	return createSelectedSeparateTaskCandidates(command, start, reader, selected)
-}
-
-func createSeparateTaskCandidates(
-	command *cobra.Command,
-	start taskReviewStart,
-	candidates []separateTaskCandidate,
-) (bool, error) {
-	backend, err := newBeadsTaskBackend(start.resolvedCtx.Resolved.Source.BackendDir)
-	if err != nil {
-		return false, fmt.Errorf("task review %s: create follow-up task backend: %w", start.taskID(), err)
-	}
-	for _, candidate := range candidates {
-		created, err := backend.Create(command.Context(), createOptionsForReviewCandidate(start, candidate))
-		if err != nil {
-			return false, fmt.Errorf(
-				"task review %s: create follow-up Bead for review finding %d (%s): %w; fix the backend issue, then rerun task review",
-				start.taskID(),
-				candidate.index+1,
-				candidate.finding.TaskProposal.Title,
-				err,
-			)
-		}
-		if _, err := start.store.RecordReviewFindingCreatedTask(
-			start.repoID(),
-			start.taskID(),
-			start.review.Attempt,
-			candidate.index,
-			created.ID,
-		); err != nil {
-			return false, fmt.Errorf("task review %s: record created follow-up task %s: %w", start.taskID(), created.ID, err)
-		}
-		if _, err := fmt.Fprintf(
-			command.ErrOrStderr(),
-			"Created follow-up Bead %s for review finding %d.\n",
-			created.ID,
-			candidate.index+1,
-		); err != nil {
-			return false, err
-		}
-	}
-	return true, nil
 }
 
 func createSelectedSeparateTaskCandidates(
@@ -2697,19 +2640,20 @@ func promptAutomatedBlockerDecision(
 		); err != nil {
 			return review.AutomatedBlockerDecision{}, err
 		}
-		line, err := reader.ReadString('\n')
+		line, err := readReviewLineWithReadError(
+			reader,
+			"read automated blocker decision",
+			automatedBlockerInputReadError,
+		)
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return keepAutomatedBlockerDecision(blocker), nil
-			}
-			return review.AutomatedBlockerDecision{}, fmt.Errorf("read automated blocker decision: %w", err)
+			return review.AutomatedBlockerDecision{}, err
 		}
 
 		switch strings.ToLower(strings.TrimSpace(line)) {
 		case "", "k", "keep":
 			return keepAutomatedBlockerDecision(blocker), nil
 		case "d", "downgrade", "advisory":
-			reason, err := promptRequiredReviewReason(command, reader, "Downgrade reason")
+			reason, err := promptRequiredAutomatedBlockerReason(command, reader, "Downgrade reason")
 			if err != nil {
 				return review.AutomatedBlockerDecision{}, err
 			}
@@ -2719,7 +2663,7 @@ func promptAutomatedBlockerDecision(
 				Reason:       reason,
 			}, nil
 		case "w", "waive", "c", "cancel":
-			reason, err := promptRequiredReviewReason(command, reader, "Waiver reason")
+			reason, err := promptRequiredAutomatedBlockerReason(command, reader, "Waiver reason")
 			if err != nil {
 				return review.AutomatedBlockerDecision{}, err
 			}
@@ -2743,9 +2687,18 @@ func keepAutomatedBlockerDecision(blocker review.AutomatedBlocker) review.Automa
 	}
 }
 
-func promptRequiredReviewReason(command *cobra.Command, reader *bufio.Reader, label string) (string, error) {
+func promptRequiredAutomatedBlockerReason(command *cobra.Command, reader *bufio.Reader, label string) (string, error) {
+	return promptRequiredReviewReasonWithReadError(command, reader, label, automatedBlockerInputReadError)
+}
+
+func promptRequiredReviewReasonWithReadError(
+	command *cobra.Command,
+	reader *bufio.Reader,
+	label string,
+	readError func(string, error) error,
+) (string, error) {
 	for {
-		reason, err := promptReviewLine(command, reader, label)
+		reason, err := promptReviewLineWithReadError(command, reader, label, readError)
 		if err != nil {
 			return "", err
 		}
@@ -3017,18 +2970,42 @@ func promptReviewFinding(
 }
 
 func promptReviewLine(command *cobra.Command, reader *bufio.Reader, label string) (string, error) {
+	return promptReviewLineWithReadError(command, reader, label, manualInputReadError)
+}
+
+func promptReviewLineWithReadError(
+	command *cobra.Command,
+	reader *bufio.Reader,
+	label string,
+	readError func(string, error) error,
+) (string, error) {
 	if _, err := fmt.Fprintf(command.ErrOrStderr(), "%s: ", label); err != nil {
 		return "", err
 	}
+	return readReviewLineWithReadError(reader, "read "+strings.ToLower(label), readError)
+}
+
+func readReviewLineWithReadError(
+	reader *bufio.Reader,
+	operation string,
+	readError func(string, error) error,
+) (string, error) {
 	line, err := reader.ReadString('\n')
 	if err != nil {
-		return "", manualInputReadError("read "+strings.ToLower(label), err)
+		if errors.Is(err, io.EOF) && line != "" {
+			return strings.TrimSpace(line), nil
+		}
+		return "", readError(operation, err)
 	}
 	return strings.TrimSpace(line), nil
 }
 
 func manualInputReadError(operation string, err error) error {
 	return fmt.Errorf("%s: %w: %w", operation, err, review.ErrManualInputUnavailable)
+}
+
+func automatedBlockerInputReadError(operation string, err error) error {
+	return fmt.Errorf("%s: %w: %w", operation, err, review.ErrAutomatedBlockerInputUnavailable)
 }
 
 func renderManualReviewHandoff(command *cobra.Command, taskID string, stepName string) error {
@@ -3928,6 +3905,9 @@ func reviewHistoryItems(reviews []taskstate.ReviewAttempt) []taskHistoryItem {
 		display := fmt.Sprintf("Review attempt %d %s", review.Attempt, review.Status)
 		if review.AutonomousBudgetExhausted {
 			display += " (autonomous review budget exhausted)"
+		}
+		if review.AutomatedBlockerDecisionInterrupted {
+			display += " (automated blocker decision interrupted)"
 		}
 		items = append(items, taskHistoryItem{
 			at:      *review.FinishedAt,

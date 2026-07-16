@@ -123,6 +123,11 @@ var hunkNotePollInterval = 250 * time.Millisecond
 // paused for task review resumption instead of being marked failed.
 var ErrManualInputUnavailable = errors.New("manual review input unavailable")
 
+// ErrAutomatedBlockerInputUnavailable reports that automated blocker
+// classification could not continue because operator input disappeared. The
+// review attempt should finish blocked without launching a targeted fix.
+var ErrAutomatedBlockerInputUnavailable = errors.New("automated blocker decision input unavailable")
+
 // RunPipeline executes a configured review pipeline.
 func RunPipeline(opts PipelineRunOptions) (PipelineOutcome, error) {
 	if opts.Context == nil {
@@ -700,21 +705,44 @@ func reviewAutomatedBlockers(
 	if len(blockers) == 0 {
 		return currentReviewHasOpenBlockers(opts)
 	}
-	decisions := keepAutomatedBlockerDecisions(blockers)
-	if opts.PromptAutomatedBlockers != nil {
-		prompted, err := opts.PromptAutomatedBlockers(AutomatedBlockerReview{
-			Step:     step,
-			Blockers: blockers,
-		})
-		if err != nil {
-			return false, fmt.Errorf("task review %s: review automated blockers: %w", opts.TaskID, err)
-		}
-		decisions = mergeAutomatedBlockerDecisions(decisions, prompted)
+	if opts.PromptAutomatedBlockers == nil {
+		return interruptAutomatedBlockerDecision(opts)
 	}
+	decisions := keepAutomatedBlockerDecisions(blockers)
+	prompted, err := opts.PromptAutomatedBlockers(AutomatedBlockerReview{
+		Step:     step,
+		Blockers: blockers,
+	})
+	if err != nil {
+		if errors.Is(err, ErrAutomatedBlockerInputUnavailable) {
+			return interruptAutomatedBlockerDecision(opts)
+		}
+		return false, fmt.Errorf("task review %s: review automated blockers: %w", opts.TaskID, err)
+	}
+	decisions = mergeAutomatedBlockerDecisions(decisions, prompted)
 	if err := applyAutomatedBlockerDecisions(opts, decisions); err != nil {
 		return false, err
 	}
 	return currentReviewHasOpenBlockers(opts)
+}
+
+func interruptAutomatedBlockerDecision(opts PipelineRunOptions) (bool, error) {
+	if _, err := opts.Store.MarkReviewAutomatedBlockerDecisionInterrupted(
+		opts.RepoID,
+		opts.TaskID,
+		opts.Attempt.Attempt,
+	); err != nil {
+		return false, fmt.Errorf("task review %s: record interrupted automated blocker decision: %w", opts.TaskID, err)
+	}
+	if _, err := fmt.Fprintf(
+		opts.Stderr,
+		"Automated blocker decisions for %s were interrupted; run `orpheus task review %s` to start a fresh review.\n",
+		opts.TaskID,
+		opts.TaskID,
+	); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func keepAutomatedBlockerDecisions(blockers []AutomatedBlocker) []AutomatedBlockerDecision {
@@ -750,7 +778,18 @@ func applyAutomatedBlockerDecisions(opts PipelineRunOptions, decisions []Automat
 	for _, decision := range decisions {
 		switch decision.Action {
 		case AutomatedBlockerActionKeep:
-			continue
+			if _, err := opts.Store.MarkReviewAutomatedBlockerDecisionKept(
+				opts.RepoID,
+				opts.TaskID,
+				opts.Attempt.Attempt,
+			); err != nil {
+				return fmt.Errorf(
+					"task review %s: record kept automated blocker finding %d: %w",
+					opts.TaskID,
+					decision.FindingIndex+1,
+					err,
+				)
+			}
 		case AutomatedBlockerActionDowngrade:
 			if _, err := opts.Store.DowngradeReviewBlockingFinding(
 				opts.RepoID,
