@@ -55,8 +55,8 @@ var reviewWorkflowHelpCases = []reviewWorkflowHelpCase{
 		args: []string{"task", "review", "--help"},
 		want: []string{
 			"Configured pipelines may include check, manual, and agent_review steps.",
-			"Blocking findings leave the task ready for task run follow-up.",
-			"Exhausted autonomous blockers stay blocked",
+			"Automated blockers require an explicit keep, downgrade, or waive/cancel decision.",
+			"If blocker-decision input disappears",
 			"Use task review show to inspect persisted findings",
 		},
 	},
@@ -67,7 +67,7 @@ var reviewWorkflowHelpCases = []reviewWorkflowHelpCase{
 			"inspection surface for review state",
 			"blocking/advisory/separate-task findings",
 			"autonomous budget exhaustion",
-			"created follow-up Beads",
+			"interrupted automated blocker decisions",
 		},
 	},
 	{

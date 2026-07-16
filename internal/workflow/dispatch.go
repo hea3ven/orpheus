@@ -361,24 +361,7 @@ func (s DispatchService) resolveReviewFollowUpPlan(
 
 	switch latestReview.Status {
 	case taskstate.ReviewStatusBlocked:
-		indexes := taskstate.UntargetedBlockingFindingIndexes(latestReview)
-		if len(indexes) == 0 {
-			return nil, fmt.Errorf(
-				"latest review attempt %d for task %s has no untargeted blocking findings; run `orpheus task review %s` before another `orpheus task run %s`",
-				latestReview.Attempt,
-				taskID,
-				taskID,
-				taskID,
-			)
-		}
-		if !hasLockedTarget {
-			return nil, fmt.Errorf("task %s follow-up cannot preserve target: taskstate target is missing", taskID)
-		}
-		return &dispatchFollowUpPlan{
-			reviewAttempt:  latestReview.Attempt,
-			findingIndexes: indexes,
-			targetKind:     lockedTarget.Kind,
-		}, nil
+		return blockedReviewFollowUpPlan(taskID, latestReview, lockedTarget, hasLockedTarget)
 	case taskstate.ReviewStatusAborted:
 		return nil, fmt.Errorf("latest review attempt %d for task %s was aborted; rerun `orpheus task review %s`", latestReview.Attempt, taskID, taskID)
 	case taskstate.ReviewStatusFailed:
@@ -398,6 +381,58 @@ func (s DispatchService) resolveReviewFollowUpPlan(
 	default:
 		return nil, fmt.Errorf("latest review attempt %d for task %s has unsupported status %q", latestReview.Attempt, taskID, latestReview.Status)
 	}
+}
+
+func blockedReviewFollowUpPlan(
+	taskID string,
+	latestReview taskstate.ReviewAttempt,
+	lockedTarget Target,
+	hasLockedTarget bool,
+) (*dispatchFollowUpPlan, error) {
+	if latestReview.AutomatedBlockerDecisionInterrupted {
+		return nil, interruptedAutomatedBlockerDecisionError(latestReview, taskID)
+	}
+	indexes, followUpEligible := taskstate.UntargetedBlockingFindingIndexesForFollowUp(latestReview)
+	if !followUpEligible {
+		return nil, unkeptAutomatedBlockerDecisionError(latestReview, taskID)
+	}
+	if len(indexes) == 0 {
+		return nil, fmt.Errorf(
+			"latest review attempt %d for task %s has no untargeted blocking findings; run `orpheus task review %s` before another `orpheus task run %s`",
+			latestReview.Attempt,
+			taskID,
+			taskID,
+			taskID,
+		)
+	}
+	if !hasLockedTarget {
+		return nil, fmt.Errorf("task %s follow-up cannot preserve target: taskstate target is missing", taskID)
+	}
+	return &dispatchFollowUpPlan{
+		reviewAttempt:  latestReview.Attempt,
+		findingIndexes: indexes,
+		targetKind:     lockedTarget.Kind,
+	}, nil
+}
+
+func interruptedAutomatedBlockerDecisionError(latestReview taskstate.ReviewAttempt, taskID string) error {
+	return fmt.Errorf(
+		"latest review attempt %d for task %s has interrupted automated blocker decisions; run `orpheus task review %s` to start a fresh review before another `orpheus task run %s`",
+		latestReview.Attempt,
+		taskID,
+		taskID,
+		taskID,
+	)
+}
+
+func unkeptAutomatedBlockerDecisionError(latestReview taskstate.ReviewAttempt, taskID string) error {
+	return fmt.Errorf(
+		"latest review attempt %d for task %s has automated blockers without an explicit keep decision; run `orpheus task review %s` to start a fresh review before another `orpheus task run %s`",
+		latestReview.Attempt,
+		taskID,
+		taskID,
+		taskID,
+	)
 }
 
 func (s DispatchService) recordStart(

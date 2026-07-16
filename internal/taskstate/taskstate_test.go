@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -603,6 +604,13 @@ func TestStorePromotesReviewAdvisoryFinding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start review: %v", err)
 	}
+	_, err = store.RecordReviewStep("alpha", "op-1", review.Attempt, taskstate.RecordReviewStepOptions{
+		Kind: taskstate.ReviewStepKindAgentReview,
+		Name: "ai-review",
+	})
+	if err != nil {
+		t.Fatalf("record review step: %v", err)
+	}
 	review, err = store.RecordReviewFinding("alpha", "op-1", review.Attempt, taskstate.ReviewFinding{
 		Type:            taskstate.FindingTypeAdvisory,
 		Title:           "Generated advisory",
@@ -625,7 +633,6 @@ func TestStorePromotesReviewAdvisoryFinding(t *testing.T) {
 		promoted.Findings[0].SuggestedAction != "Make it block publication." {
 		t.Fatalf("promoted finding = %#v, want content preserved", promoted.Findings[0])
 	}
-
 	assertStoreYAMLContains(t, store, "alpha", "op-1",
 		"type: blocking",
 		"title: Generated advisory",
@@ -872,6 +879,105 @@ func TestUntargetedBlockingFindingIndexes(t *testing.T) {
 	}
 	if !taskstate.ReviewHasOpenBlockers(review) {
 		t.Fatal("ReviewHasOpenBlockers() = false, want true")
+	}
+}
+
+//nolint:funlen // The table documents each follow-up eligibility branch.
+func TestUntargetedBlockingFindingIndexesForFollowUp(t *testing.T) {
+	tests := []struct {
+		name        string
+		review      taskstate.ReviewAttempt
+		wantIndexes []int
+		wantOK      bool
+	}{
+		{
+			name: "manual blocker is eligible",
+			review: taskstate.ReviewAttempt{
+				Steps: []taskstate.ReviewStep{{Kind: taskstate.ReviewStepKindManual, Name: "inspect"}},
+				Findings: []taskstate.ReviewFinding{{
+					Type:        taskstate.FindingTypeBlocking,
+					Step:        "inspect",
+					Title:       "Manual issue",
+					Description: "Fix it.",
+				}},
+			},
+			wantIndexes: []int{0},
+			wantOK:      true,
+		},
+		{
+			name: "unkept automated blocker is ineligible",
+			review: taskstate.ReviewAttempt{
+				Steps: []taskstate.ReviewStep{{Kind: taskstate.ReviewStepKindCheck, Name: "lint"}},
+				Findings: []taskstate.ReviewFinding{{
+					Type:        taskstate.FindingTypeBlocking,
+					Step:        "lint",
+					Title:       "Lint failed",
+					Description: "Fix it.",
+				}},
+			},
+			wantOK: false,
+		},
+		{
+			name: "kept automated blocker is eligible",
+			review: taskstate.ReviewAttempt{
+				Step:                         "ai-review",
+				AutomatedBlockerDecisionKept: true,
+				Steps:                        []taskstate.ReviewStep{{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review"}},
+				Findings: []taskstate.ReviewFinding{{
+					Type:        taskstate.FindingTypeBlocking,
+					Step:        "ai-review",
+					Title:       "AI blocker",
+					Description: "Fix it.",
+				}},
+			},
+			wantIndexes: []int{0},
+			wantOK:      true,
+		},
+		{
+			name: "manual gate promoted prior automated advisory is eligible",
+			review: taskstate.ReviewAttempt{
+				Step: "approval",
+				Steps: []taskstate.ReviewStep{
+					{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review"},
+					{Kind: taskstate.ReviewStepKindManual, Name: "approval"},
+				},
+				Findings: []taskstate.ReviewFinding{{
+					Type:        taskstate.FindingTypeBlocking,
+					Step:        "ai-review",
+					Title:       "Promoted advisory",
+					Description: "Fix it.",
+				}},
+			},
+			wantIndexes: []int{0},
+			wantOK:      true,
+		},
+		{
+			name: "targeted automated blocker is ignored",
+			review: taskstate.ReviewAttempt{
+				Steps: []taskstate.ReviewStep{{Kind: taskstate.ReviewStepKindCheck, Name: "lint"}},
+				Findings: []taskstate.ReviewFinding{{
+					Type:                 taskstate.FindingTypeBlocking,
+					Step:                 "lint",
+					Title:                "Lint failed",
+					Description:          "Fix it.",
+					TargetedByRunAttempt: 2,
+				}},
+			},
+			wantIndexes: []int{},
+			wantOK:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			indexes, ok := taskstate.UntargetedBlockingFindingIndexesForFollowUp(tt.review)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if !reflect.DeepEqual(indexes, tt.wantIndexes) {
+				t.Fatalf("indexes = %#v, want %#v", indexes, tt.wantIndexes)
+			}
+		})
 	}
 }
 

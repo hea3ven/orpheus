@@ -62,7 +62,7 @@ Review steps are read-only. If a review step mutates the candidate changes, Orph
 
 Review findings describe product or code feedback:
 
-- Blocking findings stop approval. During `task run`, and during the autonomous portion of a resumed `task review`, check and agent-review blockers automatically trigger bounded targeted fixes and fresh review attempts. Manual blockers stop for the operator.
+- Blocking findings stop approval. Check and agent-review blockers prompt for an explicit keep, downgrade, or waive/cancel decision from both `task run` and `task review`. Keeping an automated blocker triggers bounded targeted fixes and fresh review attempts. Manual blockers stop for the operator.
 - Advisory findings are recorded but do not block approval.
 - Separate-task findings do not block approval by themselves. During review, Orpheus can create standalone Beads for selected candidates.
 
@@ -72,7 +72,9 @@ Operational review failures are different from code or product blockers. Example
 
 When the latest review is blocked by open current-task findings, `task run` enters follow-up mode automatically. There is no `--follow-up` flag. The new run targets the open blocking findings, records that targeting in task state, and keeps the task on the same implementation target.
 
-Within one `task run` or resumed `task review` invocation, Orpheus keeps automated blockers by default, dispatches the selected implementer for targeted fixes, and starts a fresh review from step 1 after each completed fix. The global `reviews.max_autonomous_review_attempts` setting bounds the loop and defaults to `4`; the initial review counts, so the default allows at most three fix runs before the fourth blocked review stops.
+Within one `task run` or `task review` invocation, Orpheus asks the operator to classify automated blockers. `keep` preserves a blocker, dispatches the selected implementer for targeted fixes, and starts a fresh review from step 1 after each completed fix. `downgrade` converts the finding to advisory with a required reason. `waive`/`cancel` records a required waiver reason. The global `reviews.max_autonomous_review_attempts` setting bounds the keep/fix loop and defaults to `4`; the initial review counts, so the default allows at most three fix runs before the fourth blocked review stops.
+
+If blocker-decision input disappears, Orpheus marks the current attempt blocked with an interrupted automated-decision flag, performs no publication/finalization, and launches no targeted fix. Recovery is a fresh `orpheus task review <task-id>`, which reruns the selected pipeline in a new authoritative attempt.
 
 If the budget is exhausted, Orpheus preserves the latest blockers and audit history, marks the blocked review as autonomous-budget-exhausted, and tells the operator to explicitly continue with a fresh command. A new `task run` or `task review` invocation receives a fresh configured budget. Older review attempts remain audit history; the latest attempt controls status and follow-up behavior.
 
@@ -84,7 +86,7 @@ Use:
 orpheus task review show <task-id>
 ```
 
-This is the inspection surface for persisted review state. It shows the latest authoritative review attempt, executed steps, findings, resolution state, autonomous budget exhaustion, created follow-up Beads, and the next command.
+This is the inspection surface for persisted review state. It shows the latest authoritative review attempt, executed steps, findings, resolution state, autonomous budget exhaustion, interrupted automated blocker decisions, created follow-up Beads, and the next command.
 
 Separate-task findings can be converted into Beads during `task review`. Created tasks include provenance in their description identifying the source task, repository, review attempt, and finding index. `task review show` lists those created follow-up tasks.
 
@@ -110,6 +112,7 @@ For pull requests created after review follow-up runs, the PR title and leading 
 Status groups and details tell the operator which command comes next:
 
 - `Reviewing` with `local review; run task review`: implementation completed and needs approval.
+- `Reviewing` with `review blocker decision interrupted; run task review`: automated-blocker classification lost input; start a fresh review.
 - `Idle` with `review blocked by N finding(s); run task run`: open blocking findings need follow-up implementation.
 - `Idle` with `review blocked after autonomous attempt budget by N finding(s); run task run to continue`: bounded autonomous repair stopped; explicitly continue to grant a fresh budget.
 - `Reviewing` with `review blockers targeted; run task review`: follow-up work has targeted the blockers and needs another review.
