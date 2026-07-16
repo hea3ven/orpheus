@@ -573,6 +573,8 @@ func shortReviewDetail(detail string) string {
 		return "review budget exhausted"
 	case strings.HasPrefix(detail, "review blocked by "):
 		return "review blocked"
+	case detail == "review blocker decision required; run task review":
+		return "review decision required"
 	case detail == "review blockers targeted; run task review":
 		return "review follow-up ready"
 	case detail == "review aborted; run task review":

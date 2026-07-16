@@ -2288,6 +2288,35 @@ func TestTaskReviewShowGuidesWhenTaskHasNoReviewAttempts(t *testing.T) {
 	is.Contains(stdout, "Next step: run `orpheus task review op-empty` after task work is ready.")
 }
 
+func TestTaskReviewShowGuidesInterruptedAutomatedBlockerDecision(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	paths, _ := setupTaskReviewShowRepo(t, "op-interrupted")
+	runStore := taskstate.NewStore(paths)
+	reviewAttempt, err := runStore.StartReviewWithOptions("alpha", "op-interrupted", taskstate.StartReviewOptions{
+		Pipeline: "quality",
+		Step:     "unit",
+	})
+	must.NoError(err)
+	_, err = runStore.RecordReviewFinding("alpha", "op-interrupted", reviewAttempt.Attempt, taskstate.ReviewFinding{
+		Type:        taskstate.FindingTypeBlocking,
+		Title:       "Check failed",
+		Description: "make test failed.",
+		Step:        "unit",
+	})
+	must.NoError(err)
+	_, err = runStore.MarkReviewAutomatedBlockerDecisionInterrupted("alpha", "op-interrupted", reviewAttempt.Attempt)
+	must.NoError(err)
+	_, err = runStore.FinishReview("alpha", "op-interrupted", reviewAttempt.Attempt, taskstate.ReviewStatusBlocked)
+	must.NoError(err)
+
+	stdout, stderr := executeCommand(t, []string{"task", "review", "show", "op-interrupted"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Automated blocker decisions: interrupted")
+	is.Contains(stdout, "Next step: automated blocker decisions were interrupted; run `orpheus task review op-interrupted` to start a fresh review.")
+}
+
 func TestTaskReviewShowDisplaysClosedTaskReviewState(t *testing.T) {
 	is := assert.New(t)
 	paths, repoPath := setupTaskReviewShowRepoWithStatus(t, "op-main", "closed")
@@ -2356,6 +2385,8 @@ func seedTaskReviewShowState(t *testing.T, paths state.Paths, repoPath string) {
 	must.NoError(err)
 
 	latestReview := recordMixedReviewFindings(t, runStore)
+	latestReview, err = runStore.MarkReviewAutomatedBlockerDecisionKept("alpha", "op-main", latestReview.Attempt)
+	must.NoError(err)
 	_, err = runStore.FinishReview("alpha", "op-main", latestReview.Attempt, taskstate.ReviewStatusBlocked)
 	must.NoError(err)
 	followUpRun, err := runStore.StartRun("alpha", "op-main", taskstate.StartRunOptions{
@@ -3484,6 +3515,88 @@ func TestTaskReviewCreatesSelectedSeparateTaskFollowUp(t *testing.T) {
 	is.NotNil(latest.Findings[0].CreatedTaskAt)
 }
 
+//nolint:funlen // The task-run proposal selection flow spans implementation, review, and publication.
+func TestTaskRunUsesSeparateTaskProposalSelection(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	must.NoError(err)
+	orpheusBin := buildOrpheusTestBinary(t, sourceRoot)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	implementer := writeReviewScript(t, fmt.Sprintf(`#!/bin/sh
+printf 'reviewed\n' > reviewed.txt
+%s agent done --summary "Implementation" --description "Implemented." --detailed-description "Implemented details."
+`, shellQuote(orpheusBin)))
+	reviewer := writeReviewScript(t, fmt.Sprintf(`#!/bin/sh
+%s agent review add \
+  --type separate-task \
+  --title "Extract helper" \
+  --description "The helper can be extracted later." \
+  --task-title "Extract shared helper" \
+  --task-description "Create a shared helper." \
+  --task-acceptance-criteria "Helper is covered by tests."
+`, shellQuote(orpheusBin)))
+	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"implementer": "implementer",
+				"reviewer":    "reviewer",
+			},
+			"profiles": map[string]any{
+				"implementer": map[string]any{"command": implementer, "interactive": false},
+				"reviewer": map[string]any{
+					"command":     reviewer,
+					"interactive": false,
+				},
+			},
+		},
+		"reviews": map[string]any{
+			"default_pipeline": "standard",
+			"pipelines": map[string]any{
+				"standard": map[string]any{
+					"steps": []map[string]any{{"kind": "agent_review", "name": "ai-review"}},
+				},
+			},
+		},
+	}))
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox list --all --limit 0", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
+	})
+
+	stdout, stderr := executeCommandWithScriptedInput(t, []string{"task", "run", "--main", "op-main"}, "", "n\n")
+
+	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stderr, "Separate-task review findings can be created as standalone Beads")
+	is.Contains(stderr, "Create follow-up Beads [numbers, a=all, n=none]")
+	is.NotContains(stderr, "Created follow-up Bead")
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+	must.Len(latest.Findings, 1)
+	is.Equal(taskstate.FindingTypeSeparateTask, latest.Findings[0].Type)
+	is.Empty(latest.Findings[0].CreatedTaskID)
+}
+
 func TestTaskReviewCanAbortWhenSeparateTaskCreationFails(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -4112,6 +4225,8 @@ exit 7
 
 	is.Contains(stdout, "failing check output")
 	is.Contains(stderr, "== Review step: unit (check) ==")
+	is.Contains(stderr, "Automated blocking findings from step \"unit\"")
+	is.Contains(stderr, "Automated blocker decisions for op-main were interrupted")
 	is.Contains(stderr, "Review blocked for op-main by check \"unit\".")
 	is.NotContains(stderr, "Review action")
 	is.Equal(headBefore, strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")))
@@ -4121,12 +4236,282 @@ exit 7
 	latest, ok := taskstate.LatestReview(state)
 	must.True(ok)
 	is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
+	is.True(latest.AutomatedBlockerDecisionInterrupted)
 	must.Len(latest.Steps, 1)
 	must.NotNil(latest.Steps[0].ExitCode)
 	is.Equal(7, *latest.Steps[0].ExitCode)
 	must.Len(latest.Findings, 1)
 	is.Equal(taskstate.FindingTypeBlocking, latest.Findings[0].Type)
 	is.Equal("unit", latest.Findings[0].Step)
+	is.Empty(taskstate.FinalizationFacts(state).Commit)
+}
+
+//nolint:funlen // Each case needs an end-to-end review fixture to exercise EOF handling.
+func TestTaskReviewCheckBlockerReasonEOFRecordsInterrupted(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		label string
+	}{
+		{name: "downgrade", input: "d\n", label: "Downgrade reason"},
+		{name: "waive", input: "w\n", label: "Waiver reason"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			is := assert.New(t)
+			must := require.New(t)
+			root := newTestState(t)
+			paths := currentTestPaths(t)
+			store := registry.NewStore(paths)
+
+			repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+			configureTestGitUser(t, repoPath)
+			must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+				ID:            "alpha",
+				Name:          "Alpha Repo",
+				Path:          repoPath,
+				DefaultBranch: "main",
+				BeadsMode:     registry.BeadsModeLocal,
+				BeadsPrefix:   "op",
+			}}}))
+			recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review reason EOF", "Interrupt blocker reason.")
+			must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+			check := writeReviewScript(t, "#!/bin/sh\nexit 7\n")
+			writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+				"standard": []map[string]any{{"kind": "check", "name": "unit", "command": check}},
+			})
+
+			taskJSON := mainReadyTaskJSON("op-main", repoPath)
+			withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+				{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+			})
+
+			stdout, stderr := executeCommandWithInput(
+				t,
+				[]string{"task", "review", "--pipeline", "standard", "op-main"},
+				test.input,
+			)
+
+			is.Empty(stdout)
+			is.Contains(stderr, test.label)
+			is.Contains(stderr, "Automated blocker decisions for op-main were interrupted")
+			is.Contains(stderr, "Review blocked for op-main by check \"unit\".")
+
+			var state taskstate.TaskState
+			must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+			latest, ok := taskstate.LatestReview(state)
+			must.True(ok)
+			is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
+			is.True(latest.AutomatedBlockerDecisionInterrupted)
+			is.False(latest.AutomatedBlockerDecisionKept)
+			must.Len(latest.Findings, 1)
+			is.Equal(taskstate.FindingTypeBlocking, latest.Findings[0].Type)
+			is.Empty(latest.Findings[0].DowngradeReason)
+			is.Empty(latest.Findings[0].Waiver)
+			is.Empty(taskstate.FinalizationFacts(state).Commit)
+		})
+	}
+}
+
+func TestTaskReviewCheckBlockerKeepAcceptsEOFAnswer(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review keep EOF", "Keep blocker without newline.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+	check := writeReviewScript(t, "#!/bin/sh\nexit 7\n")
+	must.NoError(paths.WriteConfigYAML(reviewconfig.ConfigFile, map[string]any{
+		"reviews": map[string]any{
+			"default_pipeline":               "standard",
+			"max_autonomous_review_attempts": 1,
+			"pipelines": map[string]any{
+				"standard": map[string]any{"steps": []map[string]any{{"kind": "check", "name": "unit", "command": check}}},
+			},
+		},
+	}))
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+	})
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "standard", "op-main"}, "k")
+
+	is.Empty(stdout)
+	is.Contains(stderr, "Decision for finding 1")
+	is.Contains(stderr, "Autonomous review attempt budget exhausted")
+	is.NotContains(stderr, "Automated blocker decisions for op-main were interrupted")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
+	is.True(latest.AutomatedBlockerDecisionKept)
+	is.False(latest.AutomatedBlockerDecisionInterrupted)
+	is.True(latest.AutonomousBudgetExhausted)
+	must.Len(latest.Findings, 1)
+	is.Equal(taskstate.FindingTypeBlocking, latest.Findings[0].Type)
+	is.Empty(taskstate.FinalizationFacts(state).Commit)
+}
+
+//nolint:funlen // Each case needs an end-to-end review fixture to exercise final EOF handling.
+func TestTaskReviewCheckBlockerReasonAcceptsEOFAnswer(t *testing.T) {
+	tests := []struct {
+		name          string
+		input         string
+		wantType      taskstate.FindingType
+		wantDowngrade string
+		wantWaiver    string
+		wantPrompt    string
+	}{
+		{
+			name:          "downgrade",
+			input:         "d\nFalse positive for this task.",
+			wantType:      taskstate.FindingTypeAdvisory,
+			wantDowngrade: "False positive for this task.",
+			wantPrompt:    "Downgrade reason",
+		},
+		{
+			name:       "waive",
+			input:      "w\nKnown flaky check.",
+			wantType:   taskstate.FindingTypeBlocking,
+			wantWaiver: "Known flaky check.",
+			wantPrompt: "Waiver reason",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			is := assert.New(t)
+			must := require.New(t)
+			root := newTestState(t)
+			paths := currentTestPaths(t)
+			store := registry.NewStore(paths)
+
+			repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+			configureTestGitUser(t, repoPath)
+			must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+				ID:            "alpha",
+				Name:          "Alpha Repo",
+				Path:          repoPath,
+				DefaultBranch: "main",
+				BeadsMode:     registry.BeadsModeLocal,
+				BeadsPrefix:   "op",
+			}}}))
+			recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review reason EOF", "Accept blocker reason.")
+			must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+			check := writeReviewScript(t, "#!/bin/sh\nexit 7\n")
+			writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+				"standard": {{"kind": "check", "name": "unit", "command": check}},
+			})
+
+			taskJSON := mainReadyTaskJSON("op-main", repoPath)
+			withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+				{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+				{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+				{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
+			})
+
+			stdout, stderr := executeCommandWithInput(
+				t,
+				[]string{"task", "review", "--pipeline", "standard", "op-main"},
+				test.input,
+			)
+
+			is.Contains(stdout, "Finalized op-main")
+			is.Contains(stderr, test.wantPrompt)
+			is.NotContains(stderr, "Automated blocker decisions for op-main were interrupted")
+
+			var state taskstate.TaskState
+			must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+			latest, ok := taskstate.LatestReview(state)
+			must.True(ok)
+			is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+			must.Len(latest.Findings, 1)
+			is.Equal(test.wantType, latest.Findings[0].Type)
+			is.Equal(test.wantDowngrade, latest.Findings[0].DowngradeReason)
+			is.Equal(test.wantWaiver, latest.Findings[0].Waiver)
+			is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
+		})
+	}
+}
+
+func TestTaskRunAfterInterruptedAutomatedBlockerDecisionRequiresFreshReview(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review interrupted", "Do not launch follow-up.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+	check := writeReviewScript(t, "#!/bin/sh\nexit 7\n")
+	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+		"standard": []map[string]any{{"kind": "check", "name": "unit", "command": check}},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: taskJSON},
+	})
+	agentLogPath := withFakeAgent(t, "followup-agent", 0)
+
+	reviewStdout, reviewStderr := executeCommandWithInput(
+		t,
+		[]string{"task", "review", "--pipeline", "standard", "op-main"},
+		"",
+	)
+	is.Empty(reviewStdout)
+	is.Contains(reviewStderr, "Automated blocker decisions for op-main were interrupted")
+	writeTaskRunAgentConfig(t, paths, "followup", "followup-agent", nil)
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "op-main"})
+	must.Error(err)
+	is.Empty(stdout)
+	is.Contains(err.Error(), "interrupted automated blocker decisions")
+	is.Contains(err.Error(), "orpheus task review op-main")
+	is.Empty(stderr)
+	_, statErr := os.Stat(agentLogPath)
+	is.ErrorIs(statErr, os.ErrNotExist)
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	must.Len(state.Runs, 1)
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
+	is.True(latest.AutomatedBlockerDecisionInterrupted)
+	must.Len(latest.Findings, 1)
+	is.Zero(latest.Findings[0].TargetedByRunAttempt)
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
@@ -4171,7 +4556,7 @@ exit 7
 		{dir: repoPath, args: "--json --sandbox close op-auto", stdout: "{}"},
 	})
 
-	stdout, stderr := executeCommand(t, []string{"task", "run", "--main", "op-auto"})
+	stdout, stderr := executeCommandWithScriptedInput(t, []string{"task", "run", "--main", "op-auto"}, "", "k\n", "")
 
 	is.Contains(stdout, "Finalized op-auto")
 	is.Contains(stderr, "Review blocked for op-auto by check \"status\".")
@@ -4310,7 +4695,7 @@ exit 7
 		repoPath: {stdout: taskJSON},
 	})
 
-	stdout, stderr := executeCommand(t, []string{"task", "run", "--main", "op-stubborn"})
+	stdout, stderr := executeCommandWithScriptedInput(t, []string{"task", "run", "--main", "op-stubborn"}, "", "k\n", "", "k\n")
 
 	is.Contains(stdout, "Recorded completion for op-stubborn")
 	is.NotContains(stdout, "Finalized op-stubborn")
@@ -4392,7 +4777,7 @@ exit 7
 
 	writeAutonomousReviewLoopConfigWithImplementers(t, paths, "selected", selectedAgentPath, "other", otherAgentPath, "other", 4, steps)
 
-	reviewStdout, reviewStderr := executeCommandWithInput(t, []string{"task", "review", "op-resume"}, "a\na\n")
+	reviewStdout, reviewStderr := executeCommandWithScriptedInput(t, []string{"task", "review", "op-resume"}, "a\nk\n", "", "a\n")
 	is.Contains(reviewStdout, "Finalized op-resume")
 	is.Contains(reviewStderr, "Resuming review attempt 1 at manual step \"approval\".")
 	is.Contains(reviewStderr, "Review blocked for op-resume by check \"status\".")
@@ -4812,7 +5197,8 @@ func TestTaskReviewAgentReviewMixedAutomatedBlockerDecisions(t *testing.T) {
 			},
 		},
 		"reviews": map[string]any{
-			"default_pipeline": "standard",
+			"default_pipeline":               "standard",
+			"max_autonomous_review_attempts": 1,
 			"pipelines": map[string]any{
 				"standard": map[string]any{
 					"steps": []map[string]any{
@@ -5048,6 +5434,77 @@ func TestTaskReviewAgentReviewNonZeroExitMarksOperationalFailure(t *testing.T) {
 	is.Equal("agent_review", latest.Steps[0].Kind)
 	is.Empty(latest.Findings)
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
+}
+
+//nolint:funlen // The interrupted recovery path spans two review commands and finalization.
+func TestTaskReviewInterruptedAutomatedBlockerRecoveryReusesRecordedPipeline(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:             "alpha",
+		Name:           "Alpha Repo",
+		Path:           repoPath,
+		DefaultBranch:  "main",
+		BeadsMode:      registry.BeadsModeLocal,
+		BeadsPrefix:    "op",
+		ReviewPipeline: "default",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review strict recovery", "Recover with selected pipeline.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+	defaultCheck := writeReviewScript(t, "#!/bin/sh\nprintf 'default pipeline\\n'\nexit 7\n")
+	strictCheck := writeReviewScript(t, "#!/bin/sh\nprintf 'strict pipeline\\n'\nexit 7\n")
+	writeReviewPipelineConfig(t, paths, "default", map[string][]map[string]any{
+		"default": {{"kind": "check", "name": "default", "command": defaultCheck}},
+		"strict":  {{"kind": "check", "name": "strict", "command": strictCheck}},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
+	})
+
+	firstStdout, firstStderr := executeCommandWithInput(
+		t,
+		[]string{"task", "review", "--pipeline", "strict", "op-main"},
+		"",
+	)
+	is.Contains(firstStdout, "strict pipeline")
+	is.NotContains(firstStdout, "default pipeline")
+	is.Contains(firstStderr, "Automated blocker decisions for op-main were interrupted")
+
+	recoveryStdout, recoveryStderr := executeCommandWithInput(
+		t,
+		[]string{"task", "review", "op-main"},
+		"d\nStrict failure accepted.",
+	)
+
+	is.Contains(recoveryStdout, "strict pipeline")
+	is.NotContains(recoveryStdout, "default pipeline")
+	is.Contains(recoveryStdout, "Finalized op-main")
+	is.Contains(recoveryStderr, "== Review step: strict (check) ==")
+	is.NotContains(recoveryStderr, "== Review step: default (check) ==")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	must.Len(state.Reviews, 2)
+	is.Equal("strict", state.Reviews[0].Pipeline)
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+	is.Equal("strict", latest.Pipeline)
+	must.Len(latest.Findings, 1)
+	is.Equal(taskstate.FindingTypeAdvisory, latest.Findings[0].Type)
+	is.Equal("Strict failure accepted.", latest.Findings[0].DowngradeReason)
 }
 
 func TestTaskReviewPipelineOverridePrecedence(t *testing.T) {
@@ -7342,7 +7799,7 @@ func writeAutonomousReviewLoopConfig(
 				"implementer": implementerName,
 			},
 			"profiles": map[string]any{
-				implementerName: map[string]any{"command": implementerCommand},
+				implementerName: map[string]any{"command": implementerCommand, "interactive": false},
 			},
 		},
 		"reviews": map[string]any{
@@ -7374,8 +7831,8 @@ func writeAutonomousReviewLoopConfigWithImplementers(
 				"implementer": defaultName,
 			},
 			"profiles": map[string]any{
-				firstName:  map[string]any{"command": firstCommand},
-				secondName: map[string]any{"command": secondCommand},
+				firstName:  map[string]any{"command": firstCommand, "interactive": false},
+				secondName: map[string]any{"command": secondCommand, "interactive": false},
 			},
 		},
 		"reviews": map[string]any{

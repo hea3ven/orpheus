@@ -151,6 +151,40 @@ func executeCommandWithInputAndError(t *testing.T, args []string, input []byte) 
 	return executeCommandWithReaderAndError(t, args, bytes.NewBuffer(input))
 }
 
+func executeCommandWithScriptedInput(t *testing.T, args []string, input ...string) (stdout string, stderr string) {
+	t.Helper()
+	must := require.New(t)
+
+	stdout, stderr, err := executeCommandWithReaderAndError(t, args, &scriptedInput{chunks: input})
+	must.NoError(err, "execute %v\nstderr: %s", args, stderr)
+	return stdout, stderr
+}
+
+type scriptedInput struct {
+	chunks []string
+	index  int
+	offset int
+}
+
+func (r *scriptedInput) Read(p []byte) (int, error) {
+	if r.index >= len(r.chunks) {
+		return 0, io.EOF
+	}
+	chunk := r.chunks[r.index]
+	if chunk == "" {
+		r.index++
+		r.offset = 0
+		return 0, io.EOF
+	}
+	n := copy(p, chunk[r.offset:])
+	r.offset += n
+	if r.offset >= len(chunk) {
+		r.index++
+		r.offset = 0
+	}
+	return n, nil
+}
+
 func executeCommandWithReaderAndError(t *testing.T, args []string, input io.Reader) (stdout string, stderr string, err error) {
 	t.Helper()
 
