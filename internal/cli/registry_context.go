@@ -18,6 +18,10 @@ func loadRegistryContext() (registryContext, error) {
 	return loadRegistryContextFromStore(store)
 }
 
+func loadRegistryContextFromInvocation(deps *invocationDependencies) (registryContext, error) {
+	return loadRegistryContextFromStore(deps.registryStore)
+}
+
 func loadRegistryContextFromStore(store registry.Store) (registryContext, error) {
 	reg, err := store.Load()
 	if err != nil {
