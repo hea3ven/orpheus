@@ -118,6 +118,10 @@ func AggregateReportFromSnapshot(
 
 	for _, repoSnapshot := range snapshot.Repositories {
 		for _, taskItem := range repoSnapshot.Tasks {
+			if taskItem.IssueType == taskmodel.IssueTypeEpic {
+				continue
+			}
+
 			taskState, err := stateLoader.Load(repoSnapshot.Repository.ID, taskItem.ID)
 			if err != nil {
 				failures = append(failures, taskmodel.RepoFailure{

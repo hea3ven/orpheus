@@ -94,6 +94,59 @@ func TestAggregateReportFromSnapshotProjectsResolvedTaskMetrics(t *testing.T) {
 	is.False(ok)
 }
 
+func TestAggregateReportFromSnapshotExcludesEpicsBeforeStateLoading(t *testing.T) {
+	closedAt := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	snapshot := taskmodel.SnapshotResult{
+		Repositories: []taskmodel.RepositorySnapshot{{
+			Repository: taskmodel.Repository{ID: "alpha", Name: "Alpha"},
+			Tasks: []taskmodel.Task{
+				{ID: "op-task", IssueType: taskmodel.IssueTypeTask, ClosedAt: &closedAt},
+				{ID: "op-bug", IssueType: taskmodel.IssueTypeBug, ClosedAt: &closedAt},
+				{ID: "op-chore", IssueType: taskmodel.IssueTypeChore, ClosedAt: &closedAt},
+				{ID: "op-custom", IssueType: taskmodel.IssueType("custom"), ClosedAt: &closedAt},
+				{ID: "op-unknown", ClosedAt: &closedAt},
+				{ID: "op-epic-resolved", IssueType: taskmodel.IssueTypeEpic, ClosedAt: &closedAt},
+				{ID: "op-epic-open", IssueType: taskmodel.IssueTypeEpic},
+			},
+		}},
+	}
+
+	for _, tc := range []struct {
+		name    string
+		group   taskstats.Group
+		wantKey string
+	}{
+		{name: "day", group: taskstats.GroupDay, wantKey: "2026-07-02"},
+		{name: "month", group: taskstats.GroupMonth, wantKey: "2026-07"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			is := assert.New(t)
+			must := require.New(t)
+			loader := &recordingStateLoader{}
+
+			got, failures := taskstats.AggregateReportFromSnapshot(snapshot, loader, tc.group)
+
+			must.Empty(failures)
+			is.Zero(got.TasksWithoutResolvedTimestamp)
+			must.Len(got.Periods, 1)
+			period := got.Periods[0]
+			is.Equal(tc.wantKey, period.Key)
+			is.Equal(5, period.Resolved)
+			is.Equal(5, period.UnknownFullTaskTime)
+			is.Equal(5, period.UnknownImplementationTime)
+			is.Equal(5, period.Totals.UnknownUsage)
+			is.Equal(5, period.Totals.UnknownCost)
+			is.ElementsMatch([]string{
+				"alpha/op-task",
+				"alpha/op-bug",
+				"alpha/op-chore",
+				"alpha/op-custom",
+				"alpha/op-unknown",
+			}, loader.loaded)
+		})
+	}
+}
+
 //nolint:funlen // The fixture captures mixed and all-unknown average semantics together.
 func TestAggregateReportFromSnapshotAveragesKnownUsageAndCostOnly(t *testing.T) {
 	is := assert.New(t)
@@ -418,6 +471,15 @@ func assertInt64Value(t *testing.T, got int64, ok bool, want int64) {
 	t.Helper()
 	require.True(t, ok)
 	assert.Equal(t, want, got)
+}
+
+type recordingStateLoader struct {
+	loaded []string
+}
+
+func (l *recordingStateLoader) Load(repoID, taskID string) (taskstate.TaskState, error) {
+	l.loaded = append(l.loaded, repoID+"/"+taskID)
+	return taskstate.TaskState{}, nil
 }
 
 type fakeStateLoader struct {

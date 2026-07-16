@@ -138,7 +138,7 @@ func newTaskStatsCommand(opts *rootOptions) *cobra.Command {
 			return runTaskStats(command, opts, taskID, taskStatsOptions{group: group})
 		},
 	}
-	cmd.Flags().StringVar(&group, "group", "", "aggregate resolved task stats by day or month")
+	cmd.Flags().StringVar(&group, "group", "", "aggregate non-epic resolved task stats by day or month")
 	return cmd
 }
 
