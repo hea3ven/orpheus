@@ -269,8 +269,19 @@ type ReviewAttempt struct {
 	Steps      []ReviewStep    `yaml:"steps,omitempty"`
 	Findings   []ReviewFinding `yaml:"findings,omitempty"`
 
-	AutonomousBudgetExhausted bool `yaml:"autonomous_budget_exhausted,omitempty"`
+	AutonomousBudgetExhausted           bool `yaml:"autonomous_budget_exhausted,omitempty"`
+	AutomatedBlockerDecisionKept        bool `yaml:"automated_blocker_decision_kept,omitempty"`
+	AutomatedBlockerDecisionInterrupted bool `yaml:"automated_blocker_decision_interrupted,omitempty"`
 }
+
+const (
+	// ReviewStepKindManual identifies review steps that wait for operator input.
+	ReviewStepKindManual = "manual"
+	// ReviewStepKindCheck identifies automated command-based review steps.
+	ReviewStepKindCheck = "check"
+	// ReviewStepKindAgentReview identifies automated agent-review steps.
+	ReviewStepKindAgentReview = "agent_review"
+)
 
 // ReviewStep records one executed review pipeline step.
 type ReviewStep struct {
@@ -1592,7 +1603,7 @@ func ReviewHasOpenBlockers(review ReviewAttempt) bool {
 	return false
 }
 
-// UntargetedBlockingFindingIndexes returns open blocker indexes eligible for follow-up work.
+// UntargetedBlockingFindingIndexes returns open blocker indexes.
 func UntargetedBlockingFindingIndexes(review ReviewAttempt) []int {
 	indexes := make([]int, 0)
 	for index, finding := range review.Findings {
@@ -1601,6 +1612,63 @@ func UntargetedBlockingFindingIndexes(review ReviewAttempt) []int {
 		}
 	}
 	return indexes
+}
+
+// UntargetedAutomatedBlockingFindingIndexes returns open blocker indexes that
+// came from automated review steps and therefore require an explicit operator
+// keep decision before follow-up implementation work may target them. When the
+// attempt stopped at a manual step, prior automated-step advisories promoted by
+// the operator are treated as manual blocker decisions.
+func UntargetedAutomatedBlockingFindingIndexes(review ReviewAttempt) []int {
+	if currentReviewStepKind(review) == ReviewStepKindManual {
+		return nil
+	}
+	automatedSteps := automatedReviewStepNames(review)
+	indexes := make([]int, 0)
+	for _, index := range UntargetedBlockingFindingIndexes(review) {
+		finding := review.Findings[index]
+		if automatedSteps[finding.Step] {
+			indexes = append(indexes, index)
+		}
+	}
+	return indexes
+}
+
+// HasUnkeptAutomatedBlockingFindings reports whether follow-up work would
+// silently keep automated blockers that were not explicitly kept by the
+// operator.
+func HasUnkeptAutomatedBlockingFindings(review ReviewAttempt) bool {
+	return !review.AutomatedBlockerDecisionKept && len(UntargetedAutomatedBlockingFindingIndexes(review)) > 0
+}
+
+// UntargetedBlockingFindingIndexesForFollowUp returns open blocker indexes that
+// task-run follow-up may target. ok is false when automated blockers still need
+// an explicit keep, downgrade, or waive decision from a fresh task review.
+func UntargetedBlockingFindingIndexesForFollowUp(review ReviewAttempt) ([]int, bool) {
+	if HasUnkeptAutomatedBlockingFindings(review) {
+		return nil, false
+	}
+	return UntargetedBlockingFindingIndexes(review), true
+}
+
+func automatedReviewStepNames(review ReviewAttempt) map[string]bool {
+	automatedSteps := make(map[string]bool)
+	for _, step := range review.Steps {
+		switch step.Kind {
+		case ReviewStepKindCheck, ReviewStepKindAgentReview:
+			automatedSteps[step.Name] = true
+		}
+	}
+	return automatedSteps
+}
+
+func currentReviewStepKind(review ReviewAttempt) string {
+	for index := len(review.Steps) - 1; index >= 0; index-- {
+		if review.Steps[index].Name == review.Step {
+			return review.Steps[index].Kind
+		}
+	}
+	return ""
 }
 
 func latestReviewStepExecutionIndex(review ReviewAttempt, stepName string) int {
@@ -1723,6 +1791,64 @@ func (s Store) FinishReview(repoID, taskID string, attempt int, status ReviewSta
 	finished := now
 	state.Reviews[index].Status = status
 	state.Reviews[index].FinishedAt = &finished
+	if err := s.save(state); err != nil {
+		return ReviewAttempt{}, err
+	}
+	return state.Reviews[index], nil
+}
+
+// MarkReviewAutomatedBlockerDecisionKept records that the operator explicitly
+// kept at least one automated blocker during classification.
+func (s Store) MarkReviewAutomatedBlockerDecisionKept(repoID, taskID string, attempt int) (ReviewAttempt, error) {
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+	index := reviewAttemptIndex(state, attempt)
+	if index < 0 {
+		return ReviewAttempt{}, fmt.Errorf("mark automated blocker decision kept for task %s/%s: review attempt %d was not found", repoID, taskID, attempt)
+	}
+	if state.Reviews[index].Status != ReviewStatusRunning {
+		return ReviewAttempt{}, fmt.Errorf(
+			"mark automated blocker decision kept for task %s/%s: review attempt %d is %q, expected %q",
+			repoID,
+			taskID,
+			attempt,
+			state.Reviews[index].Status,
+			ReviewStatusRunning,
+		)
+	}
+
+	state.Reviews[index].AutomatedBlockerDecisionKept = true
+	if err := s.save(state); err != nil {
+		return ReviewAttempt{}, err
+	}
+	return state.Reviews[index], nil
+}
+
+// MarkReviewAutomatedBlockerDecisionInterrupted records that automated blocker
+// classification could not continue because operator input was unavailable.
+func (s Store) MarkReviewAutomatedBlockerDecisionInterrupted(repoID, taskID string, attempt int) (ReviewAttempt, error) {
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+	index := reviewAttemptIndex(state, attempt)
+	if index < 0 {
+		return ReviewAttempt{}, fmt.Errorf("mark automated blocker decision interrupted for task %s/%s: review attempt %d was not found", repoID, taskID, attempt)
+	}
+	if state.Reviews[index].Status != ReviewStatusRunning {
+		return ReviewAttempt{}, fmt.Errorf(
+			"mark automated blocker decision interrupted for task %s/%s: review attempt %d is %q, expected %q",
+			repoID,
+			taskID,
+			attempt,
+			state.Reviews[index].Status,
+			ReviewStatusRunning,
+		)
+	}
+
+	state.Reviews[index].AutomatedBlockerDecisionInterrupted = true
 	if err := s.save(state); err != nil {
 		return ReviewAttempt{}, err
 	}

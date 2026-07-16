@@ -77,6 +77,149 @@ func TestDispatchValidateStartInfersBlockedReviewFollowUpTarget(t *testing.T) {
 	}
 }
 
+func TestDispatchValidateStartRefusesInterruptedAutomatedBlockerDecision(t *testing.T) {
+	paths := newDispatchTestPaths(t)
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	repo := task.Repository{
+		ID:            "alpha",
+		Name:          "Alpha",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		TaskIDPrefix:  "op",
+	}
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   "main",
+			task.MetadataWorktree: repoPath,
+		},
+	}
+	store := fakeDispatchRunStore{
+		state: taskstate.TaskState{
+			Version: 2,
+			RepoID:  repo.ID,
+			TaskID:  taskItem.ID,
+			Target: taskstate.TaskTarget{
+				Branch:   "main",
+				Worktree: repoPath,
+			},
+			Reviews: []taskstate.ReviewAttempt{
+				{
+					Attempt:                             1,
+					Status:                              taskstate.ReviewStatusBlocked,
+					Pipeline:                            "default",
+					Step:                                "local-review",
+					AutomatedBlockerDecisionInterrupted: true,
+					Findings: []taskstate.ReviewFinding{
+						{Type: taskstate.FindingTypeBlocking, Title: "Bug", Description: "Fix it."},
+					},
+				},
+			},
+		},
+	}
+	service := DispatchService{Paths: paths, RunStore: store}
+
+	_, err := service.validateStart(context.Background(), DispatchStartOptions{
+		TaskID: taskItem.ID,
+		Source: task.RepositorySource{
+			Repository: repo,
+		},
+		Backend: fakeDispatchBackend{taskItem: taskItem},
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "interrupted automated blocker decisions") {
+		t.Fatalf("validate error = %v, want interrupted blocker guidance", err)
+	}
+	if !strings.Contains(err.Error(), "run `orpheus task review op-1`") {
+		t.Fatalf("validate error = %v, want task review guidance", err)
+	}
+}
+
+func TestDispatchValidateStartRefusesUnkeptAutomatedBlockers(t *testing.T) {
+	reviewAttempt := taskstate.ReviewAttempt{
+		Attempt:  1,
+		Status:   taskstate.ReviewStatusBlocked,
+		Pipeline: "default",
+		Step:     "unit",
+		Steps: []taskstate.ReviewStep{{
+			Kind: taskstate.ReviewStepKindCheck,
+			Name: "unit",
+		}},
+		Findings: []taskstate.ReviewFinding{{
+			Type:        taskstate.FindingTypeBlocking,
+			Step:        "unit",
+			Title:       "Check failed",
+			Description: "Fix it.",
+		}},
+	}
+
+	_, err := validateDispatchStartForReview(t, reviewAttempt)
+
+	if err == nil || !strings.Contains(err.Error(), "automated blockers without an explicit keep decision") {
+		t.Fatalf("validate error = %v, want explicit-keep guidance", err)
+	}
+	if !strings.Contains(err.Error(), "run `orpheus task review op-1`") {
+		t.Fatalf("validate error = %v, want task review guidance", err)
+	}
+}
+
+func TestDispatchValidateStartAllowsManualBlockersWithoutKeepDecision(t *testing.T) {
+	reviewAttempt := taskstate.ReviewAttempt{
+		Attempt:  1,
+		Status:   taskstate.ReviewStatusBlocked,
+		Pipeline: "default",
+		Step:     "inspect",
+		Steps: []taskstate.ReviewStep{{
+			Kind: taskstate.ReviewStepKindManual,
+			Name: "inspect",
+		}},
+		Findings: []taskstate.ReviewFinding{{
+			Type:        taskstate.FindingTypeBlocking,
+			Step:        "inspect",
+			Title:       "Manual issue",
+			Description: "Fix it.",
+		}},
+	}
+
+	plan, err := validateDispatchStartForReview(t, reviewAttempt)
+	if err != nil {
+		t.Fatalf("validate start: %v", err)
+	}
+	if plan.followUp == nil || len(plan.followUp.findingIndexes) != 1 || plan.followUp.findingIndexes[0] != 0 {
+		t.Fatalf("follow-up plan = %#v, want finding 0", plan.followUp)
+	}
+}
+
+func TestDispatchValidateStartAllowsKeptBudgetExhaustedAutomatedBlockers(t *testing.T) {
+	reviewAttempt := taskstate.ReviewAttempt{
+		Attempt:                      1,
+		Status:                       taskstate.ReviewStatusBlocked,
+		Pipeline:                     "default",
+		Step:                         "agent-review",
+		AutomatedBlockerDecisionKept: true,
+		AutonomousBudgetExhausted:    true,
+		Steps: []taskstate.ReviewStep{{
+			Kind: taskstate.ReviewStepKindAgentReview,
+			Name: "agent-review",
+		}},
+		Findings: []taskstate.ReviewFinding{{
+			Type:        taskstate.FindingTypeBlocking,
+			Step:        "agent-review",
+			Title:       "Agent blocker",
+			Description: "Fix it.",
+		}},
+	}
+
+	plan, err := validateDispatchStartForReview(t, reviewAttempt)
+	if err != nil {
+		t.Fatalf("validate start: %v", err)
+	}
+	if plan.followUp == nil || len(plan.followUp.findingIndexes) != 1 || plan.followUp.findingIndexes[0] != 0 {
+		t.Fatalf("follow-up plan = %#v, want finding 0", plan.followUp)
+	}
+}
+
 func TestDispatchValidateStartRefusesAlreadyTargetedBlockedReview(t *testing.T) {
 	paths := newDispatchTestPaths(t)
 	repoPath := filepath.Join(t.TempDir(), "repo")
@@ -181,6 +324,52 @@ func TestDispatchValidateStartRejectsMainModeAfterTargetLock(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "retry without --main") {
 		t.Fatalf("validate error = %v, want --main rejection after target lock", err)
 	}
+}
+
+func validateDispatchStartForReview(
+	t *testing.T,
+	reviewAttempt taskstate.ReviewAttempt,
+) (dispatchStartPlan, error) {
+	t.Helper()
+
+	paths := newDispatchTestPaths(t)
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	repo := task.Repository{
+		ID:            "alpha",
+		Name:          "Alpha",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		TaskIDPrefix:  "op",
+	}
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   "main",
+			task.MetadataWorktree: repoPath,
+		},
+	}
+	store := fakeDispatchRunStore{
+		state: taskstate.TaskState{
+			Version: 2,
+			RepoID:  repo.ID,
+			TaskID:  taskItem.ID,
+			Target: taskstate.TaskTarget{
+				Branch:   "main",
+				Worktree: repoPath,
+			},
+			Reviews: []taskstate.ReviewAttempt{reviewAttempt},
+		},
+	}
+	service := DispatchService{Paths: paths, RunStore: store}
+
+	return service.validateStart(context.Background(), DispatchStartOptions{
+		TaskID: taskItem.ID,
+		Source: task.RepositorySource{
+			Repository: repo,
+		},
+		Backend: fakeDispatchBackend{taskItem: taskItem},
+	})
 }
 
 type fakeDispatchBackend struct {

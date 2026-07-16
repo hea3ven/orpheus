@@ -328,26 +328,7 @@ func classifyLatestReview(
 			detail: fmt.Sprintf("local review; run task review (waiting for manual step %s)", valueOrUnknown(latestReview.Step)),
 		}, true
 	case taskstate.ReviewStatusBlocked:
-		count := untargetedBlockingFindingCount(*latestReview)
-		if latestReview.AutonomousBudgetExhausted {
-			return policyResult{
-				state: readinessIdle,
-				detail: fmt.Sprintf(
-					"review blocked after autonomous attempt budget by %d finding(s); run task run to continue",
-					count,
-				),
-			}, true
-		}
-		if count == 0 {
-			return policyResult{
-				state:  readinessReview,
-				detail: "review blockers targeted; run task review",
-			}, true
-		}
-		return policyResult{
-			state:  readinessIdle,
-			detail: fmt.Sprintf("review blocked by %d finding(s); run task run", count),
-		}, true
+		return classifyBlockedReview(*latestReview), true
 	case taskstate.ReviewStatusAborted:
 		return policyResult{state: readinessReview, detail: "review aborted; run task review"}, true
 	case taskstate.ReviewStatusFailed:
@@ -365,6 +346,41 @@ func classifyLatestReview(
 			state:  readinessAttention,
 			detail: fmt.Sprintf("review attempt %d has status %s", latestReview.Attempt, valueOrUnknown(string(latestReview.Status))),
 		}, true
+	}
+}
+
+func classifyBlockedReview(review taskstate.ReviewAttempt) policyResult {
+	count := untargetedBlockingFindingCount(review)
+	if review.AutomatedBlockerDecisionInterrupted {
+		return policyResult{
+			state:  readinessReview,
+			detail: "review blocker decision interrupted; run task review",
+		}
+	}
+	if taskstate.HasUnkeptAutomatedBlockingFindings(review) {
+		return policyResult{
+			state:  readinessReview,
+			detail: "review blocker decision required; run task review",
+		}
+	}
+	if review.AutonomousBudgetExhausted {
+		return policyResult{
+			state: readinessIdle,
+			detail: fmt.Sprintf(
+				"review blocked after autonomous attempt budget by %d finding(s); run task run to continue",
+				count,
+			),
+		}
+	}
+	if count == 0 {
+		return policyResult{
+			state:  readinessReview,
+			detail: "review blockers targeted; run task review",
+		}
+	}
+	return policyResult{
+		state:  readinessIdle,
+		detail: fmt.Sprintf("review blocked by %d finding(s); run task run", count),
 	}
 }
 

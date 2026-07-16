@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/taskstate"
 	"gopkg.in/yaml.v3"
 )
 
@@ -19,9 +20,9 @@ const (
 	// DefaultMaxAutonomousReviewAttempts limits one command's automatic review/fix loop.
 	DefaultMaxAutonomousReviewAttempts = 4
 
-	KindManual      = "manual"
-	KindCheck       = "check"
-	KindAgentReview = "agent_review"
+	KindManual      = taskstate.ReviewStepKindManual
+	KindCheck       = taskstate.ReviewStepKindCheck
+	KindAgentReview = taskstate.ReviewStepKindAgentReview
 )
 
 // Config is the reviews section of Orpheus' global configuration.

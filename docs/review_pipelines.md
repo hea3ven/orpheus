@@ -2,16 +2,21 @@
 
 `orpheus task run` continues into review automatically after the attached agent
 records a successful completion with `orpheus agent done`. Automated pipeline
-steps run without operator input until the review passes, exhausts its bounded
-fix budget, fails operationally, or reaches a manual step.
+steps run unattended only while they pass or produce no operator decisions; a
+check or agent-review blocker prompts for an explicit keep, downgrade, or
+waive/cancel decision from both `task run` and `task review`.
 
-Check and agent-review blockers are kept by default during autonomous execution.
-Orpheus dispatches a targeted implementer follow-up, records which findings the
-run targets, and starts a fresh review attempt after the fix records completion.
-The global `reviews.max_autonomous_review_attempts` setting defaults to `4`.
-The initial review counts toward that limit, so the default permits at most
-three targeted fix runs before a fourth blocked review stops and preserves the
-open blockers for explicit continuation.
+Keeping a check or agent-review blocker preserves it, dispatches a targeted
+implementer follow-up, records which findings the run targets, and starts a
+fresh review attempt after the fix records completion. Downgrades and waivers
+require reasons and keep their persisted semantics. If blocker-decision input is
+unavailable, the current attempt is marked blocked with an interrupted decision
+flag; Orpheus launches no fix and recovery starts with a fresh
+`orpheus task review <task-id>`. The global
+`reviews.max_autonomous_review_attempts` setting defaults to `4`. The initial
+review counts toward that limit, so the default permits at most three targeted
+fix runs before a fourth blocked review stops and preserves the open blockers
+for explicit continuation.
 
 When the next step is manual, Orpheus stops before running that step, records the
 latest review attempt as `waiting_for_manual`, and stores the pending step name.
@@ -120,10 +125,9 @@ orpheus repo config get my-repo
 
 ## Separate-task proposals
 
-For automated-only pipelines that pass from `task run`, Orpheus creates every
-valid separate-task review proposal as a Bead before publication/finalization.
-If any follow-up task cannot be created, publication stops as an operational
-review failure; fix the backend issue and rerun `task review`.
-
-Pipelines with a manual step keep separate-task proposal selection under
-operator control during the resumed `task review`.
+When a passing review attempt contains separate-task proposals, Orpheus uses the
+same operator selection flow from both `task run` and `task review`: choose
+numbered proposals, `a=all`, or `n=none`. Selected proposals become Beads before
+publication/finalization. If any selected follow-up task cannot be created, the
+operator can continue without that task or stop publication, fix the backend
+issue, and rerun `task review`.
