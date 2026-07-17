@@ -699,12 +699,16 @@ func (s Store) RecordSetupEvent(repoID, taskID string, eventType EventType, opts
 
 // StartRun appends a new running attempt and a run_started event.
 func (s Store) StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt, error) {
+	span := s.operationSpan("start_run", repoID, taskID)
 	state, err := s.Load(repoID, taskID)
 	if err != nil {
+		span.FinishError(context.Background(), err)
 		return RunAttempt{}, err
 	}
 	if active, ok := ActiveRun(state); ok {
-		return RunAttempt{}, fmt.Errorf("start run attempt for task %s/%s: %w (attempt %d)", repoID, taskID, ErrActiveRun, active.Attempt)
+		err := fmt.Errorf("start run attempt for task %s/%s: %w (attempt %d)", repoID, taskID, ErrActiveRun, active.Attempt)
+		span.FinishError(context.Background(), err, slog.Int("active_attempt", active.Attempt))
+		return RunAttempt{}, err
 	}
 
 	now := s.nowUTC()
@@ -729,7 +733,9 @@ func (s Store) StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt
 		Branch:   opts.Branch,
 		Worktree: opts.Worktree,
 	}); err != nil {
-		return RunAttempt{}, fmt.Errorf("start run attempt for task %s/%s: %w", repoID, taskID, err)
+		err = fmt.Errorf("start run attempt for task %s/%s: %w", repoID, taskID, err)
+		span.FinishError(context.Background(), err, slog.Int("attempt", attempt.Attempt))
+		return RunAttempt{}, err
 	}
 	state.Runs = append(state.Runs, attempt)
 	state.Events = append(state.Events, Event{
@@ -741,8 +747,10 @@ func (s Store) StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt
 	})
 
 	if err := s.save(state); err != nil {
+		span.FinishError(context.Background(), err, slog.Int("attempt", attempt.Attempt))
 		return RunAttempt{}, err
 	}
+	span.Finish(context.Background(), logging.StatusSuccess, slog.Int("attempt", attempt.Attempt))
 	return attempt, nil
 }
 
@@ -753,21 +761,30 @@ func (s Store) RecordRunUsage(
 	attempt int,
 	opts RecordRunUsageOptions,
 ) (RunAttempt, error) {
+	span := s.operationSpan("record_run_usage", repoID, taskID, slog.Int("attempt", attempt))
 	state, err := s.Load(repoID, taskID)
 	if err != nil {
+		span.FinishError(context.Background(), err)
 		return RunAttempt{}, err
 	}
 	index := runAttemptIndex(state, attempt)
 	if index < 0 {
-		return RunAttempt{}, fmt.Errorf("record run usage for task %s/%s: attempt %d was not found", repoID, taskID, attempt)
+		err := fmt.Errorf("record run usage for task %s/%s: attempt %d was not found", repoID, taskID, attempt)
+		span.FinishError(context.Background(), err)
+		return RunAttempt{}, err
 	}
 
 	state.Runs[index].Execution = normalizeAgentExecution(
 		applyRunUsageOptions(state.Runs[index].Execution, opts, s.nowUTC()),
 	)
 	if err := s.save(state); err != nil {
+		span.FinishError(context.Background(), err)
 		return RunAttempt{}, err
 	}
+	span.Finish(context.Background(), logging.StatusSuccess,
+		slog.String("capture_status", string(opts.UsageCapture.Status)),
+		slog.Int("candidate_count", opts.UsageCapture.CandidateCount),
+	)
 	return state.Runs[index], nil
 }
 
@@ -830,28 +847,35 @@ func (s Store) FinishRun(repoID, taskID string, attempt int, status RunStatus) (
 
 // CompleteRun records agent-authored completion facts without finishing the attached run.
 func (s Store) CompleteRun(repoID, taskID string, attempt int, opts CompleteRunOptions) (RunAttempt, error) {
+	span := s.operationSpan("record_completion", repoID, taskID, slog.Int("attempt", attempt))
 	payload, err := completeRunPayloadFromOptions(repoID, taskID, opts)
 	if err != nil {
+		span.FinishError(context.Background(), err)
 		return RunAttempt{}, err
 	}
 
 	state, err := s.Load(repoID, taskID)
 	if err != nil {
+		span.FinishError(context.Background(), err)
 		return RunAttempt{}, err
 	}
 
 	index := runAttemptIndex(state, attempt)
 	if index < 0 {
-		return RunAttempt{}, fmt.Errorf("complete run attempt for task %s/%s: attempt %d was not found", repoID, taskID, attempt)
+		err := fmt.Errorf("complete run attempt for task %s/%s: attempt %d was not found", repoID, taskID, attempt)
+		span.FinishError(context.Background(), err)
+		return RunAttempt{}, err
 	}
 
 	run := state.Runs[index]
 	if run.Completion != nil {
-		return s.completeExistingRun(state, index, repoID, taskID, payload)
+		updated, err := s.completeExistingRun(state, index, repoID, taskID, payload)
+		span.FinishError(context.Background(), err)
+		return updated, err
 	}
 
 	if run.Status != RunStatusRunning {
-		return RunAttempt{}, fmt.Errorf(
+		err := fmt.Errorf(
 			"complete run attempt for task %s/%s: attempt %d is %q, expected %q",
 			repoID,
 			taskID,
@@ -859,6 +883,8 @@ func (s Store) CompleteRun(repoID, taskID string, attempt int, opts CompleteRunO
 			run.Status,
 			RunStatusRunning,
 		)
+		span.FinishError(context.Background(), err)
+		return RunAttempt{}, err
 	}
 
 	now := s.nowUTC()
@@ -874,8 +900,10 @@ func (s Store) CompleteRun(repoID, taskID string, attempt int, opts CompleteRunO
 	state.Events = append(state.Events, runEvent(run, EventCompletionRecorded, now, run.Status, ""))
 
 	if err := s.save(state); err != nil {
+		span.FinishError(context.Background(), err)
 		return RunAttempt{}, err
 	}
+	span.Finish(context.Background(), logging.StatusSuccess)
 	return state.Runs[index], nil
 }
 
@@ -2303,14 +2331,22 @@ func (s Store) appendEvent(repoID, taskID string, event Event) (Event, error) {
 }
 
 func (s Store) completeRun(repoID, taskID string, attempt int, status RunStatus, eventType EventType, errorText string) (RunAttempt, error) {
+	span := s.operationSpan("complete_run", repoID, taskID,
+		slog.Int("attempt", attempt),
+		slog.String("run_status", string(status)),
+		slog.String("event_type", string(eventType)),
+	)
 	state, err := s.Load(repoID, taskID)
 	if err != nil {
+		span.FinishError(context.Background(), err)
 		return RunAttempt{}, err
 	}
 
 	index := runAttemptIndex(state, attempt)
 	if index < 0 {
-		return RunAttempt{}, fmt.Errorf("complete run attempt for task %s/%s: attempt %d was not found", repoID, taskID, attempt)
+		err := fmt.Errorf("complete run attempt for task %s/%s: attempt %d was not found", repoID, taskID, attempt)
+		span.FinishError(context.Background(), err)
+		return RunAttempt{}, err
 	}
 
 	now := s.nowUTC()
@@ -2323,8 +2359,10 @@ func (s Store) completeRun(repoID, taskID string, attempt int, status RunStatus,
 	state.Events = append(state.Events, runEvent(updated, eventType, now, status, errorText))
 
 	if err := s.save(state); err != nil {
+		span.FinishError(context.Background(), err)
 		return RunAttempt{}, err
 	}
+	span.Finish(context.Background(), logging.StatusSuccess)
 	return updated, nil
 }
 
@@ -2414,6 +2452,17 @@ func (s Store) save(taskState TaskState) error {
 	}
 	span.Finish(context.Background(), logging.StatusSuccess, slog.Int("event_count", len(normalized.Events)))
 	return nil
+}
+
+func (s Store) operationSpan(operation string, repoID string, taskID string, attrs ...slog.Attr) logging.Span {
+	baseAttrs := []slog.Attr{
+		slog.String("component", "taskstate"),
+		slog.String("operation", operation),
+		slog.String("repo_id", repoID),
+		slog.String("task_id", taskID),
+	}
+	baseAttrs = append(baseAttrs, attrs...)
+	return logging.Start(context.Background(), s.logger, "task state operation", baseAttrs...)
 }
 
 func (s Store) nowUTC() time.Time {

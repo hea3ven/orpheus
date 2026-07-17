@@ -130,16 +130,17 @@ func runAgentContext(command *cobra.Command, opts *rootOptions) error {
 	)
 	logger.DebugContext(command.Context(), "resolving active agent context")
 
-	paths, err := state.ResolveFromEnvironment()
+	deps, err := opts.invocation(command)
 	if err != nil {
 		return err
 	}
-	taskCtx, err := loadTaskContext()
+	taskCtx, err := loadTaskContextFromInvocation(deps)
 	if err != nil {
 		return err
 	}
+	paths := deps.paths
 
-	resolver := activeAgentContextResolver(paths, taskCtx, taskstate.NewStore(paths))
+	resolver := activeAgentContextResolver(deps, taskCtx, deps.taskStateStore)
 	switch strings.TrimSpace(os.Getenv("ORPHEUS_AGENT_PURPOSE")) {
 	case "", "implementation":
 	case "review":
@@ -212,16 +213,16 @@ func runAgentReviewAdd(command *cobra.Command, opts *rootOptions, addOpts agentR
 	)
 	logger.DebugContext(command.Context(), "resolving active review agent context")
 
-	paths, err := state.ResolveFromEnvironment()
+	deps, err := opts.invocation(command)
 	if err != nil {
 		return err
 	}
-	taskCtx, err := loadTaskContext()
+	taskCtx, err := loadTaskContextFromInvocation(deps)
 	if err != nil {
 		return err
 	}
-	store := taskstate.NewStore(paths)
-	resolver := activeAgentContextResolver(paths, taskCtx, store)
+	store := deps.taskStateStore
+	resolver := activeAgentContextResolver(deps, taskCtx, store)
 	reviewContext, err := resolver.ResolveReview(command.Context())
 	if err != nil {
 		return fmt.Errorf("agent review add: %w", err)
@@ -376,16 +377,16 @@ func runAgentDone(
 		return fmt.Errorf("agent done: %w", err)
 	}
 
-	paths, err := state.ResolveFromEnvironment()
+	deps, err := opts.invocation(command)
 	if err != nil {
 		return err
 	}
-	taskCtx, err := loadTaskContext()
+	taskCtx, err := loadTaskContextFromInvocation(deps)
 	if err != nil {
 		return err
 	}
 
-	service := newAgentCompletionService(paths, taskCtx)
+	service := newAgentCompletionService(deps, taskCtx)
 	completed, err := service.Complete(command.Context(), agent.CompleteOptions{
 		Summary:             summary,
 		Description:         description,
@@ -405,12 +406,13 @@ func runAgentDone(
 	return renderAgentDoneResult(command, completed)
 }
 
-func newAgentCompletionService(paths state.Paths, taskCtx taskContext) agent.CompletionService {
-	store := taskstate.NewStore(paths)
+func newAgentCompletionService(deps *invocationDependencies, taskCtx taskContext) agent.CompletionService {
+	store := deps.taskStateStore
 	return agent.CompletionService{
-		Paths:    paths,
-		Resolver: activeAgentContextResolver(paths, taskCtx, store),
+		Paths:    deps.paths,
+		Resolver: activeAgentContextResolver(deps, taskCtx, store),
 		RunStore: store,
+		Logger:   deps.logger,
 	}
 }
 
@@ -472,16 +474,24 @@ func resolveDetailedDescription(inline string, filePath string) (string, error) 
 }
 
 func activeAgentContextResolver(
-	paths state.Paths,
+	deps *invocationDependencies,
 	taskCtx taskContext,
 	runStore agent.ContextStateLoader,
 ) agent.ActiveContextResolver {
 	return agent.ActiveContextResolver{
-		Paths:    paths,
+		Paths:    deps.paths,
 		Registry: taskCtx.Registry,
 		Sources:  taskCtx.Sources,
 		BackendFactory: func(source taskmodel.RepositorySource) (agent.ContextBackend, error) {
-			return newBeadsTaskBackend(source.BackendDir)
+			backend, err := deps.taskBackendFactory(source)
+			if err != nil {
+				return nil, err
+			}
+			contextBackend, ok := backend.(agent.ContextBackend)
+			if !ok {
+				return nil, fmt.Errorf("backend for repo %s does not support agent context", source.Repository.ID)
+			}
+			return contextBackend, nil
 		},
 		RunStore: runStore,
 	}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/registry"
+	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,6 +25,24 @@ func TestVerboseRepoListDiagnosticsDistinguishMissingRegistry(t *testing.T) {
 	require.Contains(t, stderr, `status=expected_absence`)
 	require.Contains(t, stderr, `duration_ms=`)
 	require.NotContains(t, stdout, "level=DEBUG")
+}
+
+func TestVerboseTaskRunSetupFailureUsesInvocationDiagnostics(t *testing.T) {
+	newTestState(t)
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"--verbose", "task", "run", "op-missing"})
+
+	require.Error(t, err)
+	require.Empty(t, stdout)
+	for _, want := range []string{
+		`msg="xdg path resolution started"`,
+		`msg="xdg path resolution finished"`,
+		`component=registry operation=load`,
+		`status=expected_absence`,
+		`duration_ms=`,
+	} {
+		require.Contains(t, stderr, want)
+	}
 }
 
 func TestVerboseRepoAddDiagnosticsCoverDiscoveryLockAndPersistence(t *testing.T) {
@@ -183,6 +202,163 @@ func TestVerboseTaskShowBeadsFailureDiagnosticsIncludeRepoAndTask(t *testing.T) 
 	for _, secret := range []string{"SECRET_PROCESS_OUTPUT", "--id op-1"} {
 		require.NotContains(t, stderr, secret)
 	}
+}
+
+func TestVerboseTaskRunDiagnosticsCoverDispatchProcessUsageAndPersistence(t *testing.T) {
+	paths, repoPath := setupVerboseTaskRunDiagnostics(t, "op-diag", "Inspect dispatch diagnostics", "fake-agent", 0)
+	writeTaskRunAgentConfig(t, paths, "recorder", "fake-agent", nil)
+
+	stdout, stderr := executeCommand(t, []string{"--verbose", "task", "run", "op-diag"})
+
+	require.Contains(t, stdout, "fake agent stdout")
+	for _, want := range []string{
+		`msg="dispatch setup started"`,
+		`msg="git target preparation finished"`,
+		`msg="backend task mutation finished"`,
+		`msg="task run persistence finished"`,
+		`component=state operation=mutation_lock`,
+		`component=beads operation=update`,
+		`component=taskstate operation=start_run`,
+		`component=cli operation=task_run_agent_process`,
+		`lifecycle_outcome=success`,
+		`component=agent operation=usage_capture`,
+		`reason=unsupported_harness:unknown`,
+		`repo_id=alpha`,
+		`task_id=op-diag`,
+		`attempt=1`,
+	} {
+		require.Contains(t, stderr, want)
+	}
+	usageStartLine := diagnosticLineContaining(t, stderr,
+		`msg="agent usage capture started"`,
+		`repo_id=alpha`,
+		`task_id=op-diag`,
+		`attempt=1`,
+	)
+	require.Contains(t, usageStartLine, `status=started`)
+	usageFinishLine := diagnosticLineContaining(t, stderr,
+		`msg="agent usage capture finished"`,
+		`repo_id=alpha`,
+		`task_id=op-diag`,
+		`attempt=1`,
+	)
+	for _, want := range []string{`status=failure`, `reason=unsupported_harness:unknown`} {
+		require.Contains(t, usageFinishLine, want)
+	}
+	processLine := diagnosticLineContaining(t, stderr,
+		`msg="attached agent process finished"`,
+		`task_id=op-diag`,
+	)
+	for _, want := range []string{`lifecycle_outcome=success`, `exit_code=0`} {
+		require.Contains(t, processLine, want)
+	}
+	for _, secret := range []string{"ORPHEUS_AGENT_PROMPT", "Run `orpheus agent context`", "fake agent stdout"} {
+		require.NotContains(t, stderr, secret)
+	}
+	_ = repoPath
+}
+
+func TestVerboseAgentDoneDiagnosticsCoverContextAndCompletionPersistence(t *testing.T) {
+	setupAgentDoneWorktreeRun(t)
+
+	stdout, stderr := executeCommand(t, []string{
+		"--verbose",
+		"agent",
+		"done",
+		"--summary",
+		"Record diagnostics",
+		"--description",
+		"Recorded completion diagnostics.",
+		"--detailed-description",
+		"## Details\n\nRecorded completion diagnostics.",
+	})
+
+	require.Contains(t, stdout, "Recorded completion for op-1")
+	for _, want := range []string{
+		`component=state operation=mutation_lock semantic_operation="agent completion"`,
+		`msg="agent completion context resolution finished"`,
+		`msg="agent completion persistence finished"`,
+		`component=taskstate operation=record_completion`,
+		`component=taskstate operation=save`,
+		`repo_id=alpha`,
+		`task_id=op-1`,
+		`attempt=1`,
+	} {
+		require.Contains(t, stderr, want)
+	}
+	for _, message := range []string{
+		`msg="global mutation lock started"`,
+		`msg="global mutation lock finished"`,
+		`msg="global mutation lock held started"`,
+		`msg="global mutation lock held finished"`,
+	} {
+		line := diagnosticLineContaining(t, stderr, message, `semantic_operation="agent completion"`)
+		require.Contains(t, line, `repo_id=alpha`)
+		require.Contains(t, line, `task_id=op-1`)
+		require.Contains(t, line, `attempt=1`)
+	}
+	require.NotContains(t, stderr, "## Details")
+}
+
+func TestVerboseTaskRunDiagnosticsDistinguishAgentStartAndRuntimeFailures(t *testing.T) {
+	paths, _ := setupVerboseTaskRunDiagnostics(t, "op-runtime", "Runtime diagnostics", "failing-agent", 7)
+	writeTaskRunAgentConfig(t, paths, "failing", "failing-agent", nil)
+
+	_, runtimeStderr, runtimeErr := executeCommandWithError(t, []string{"--verbose", "task", "run", "op-runtime"})
+
+	require.Error(t, runtimeErr)
+	runtimeLine := diagnosticLineContaining(t, runtimeStderr,
+		`msg="attached agent process finished"`,
+		`task_id=op-runtime`,
+	)
+	require.Contains(t, runtimeLine, `lifecycle_outcome=nonzero_exit`)
+	require.Contains(t, runtimeLine, `exit_code=7`)
+
+	paths, _ = setupVerboseTaskRunDiagnostics(t, "op-start", "Start diagnostics", "missing-agent", 0)
+	writeTaskRunAgentConfig(t, paths, "missing", "definitely-missing-orpheus-agent", nil)
+
+	_, startStderr, startErr := executeCommandWithError(t, []string{"--verbose", "task", "run", "op-start"})
+
+	require.Error(t, startErr)
+	startLine := diagnosticLineContaining(t, startStderr,
+		`msg="attached agent process finished"`,
+		`task_id=op-start`,
+	)
+	require.Contains(t, startLine, `lifecycle_outcome=start_failure`)
+	require.NotContains(t, startLine, `exit_code=`)
+}
+
+func setupVerboseTaskRunDiagnostics(
+	t *testing.T,
+	taskID string,
+	title string,
+	agentCommand string,
+	exitCode int,
+) (state.Paths, string) {
+	t.Helper()
+
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", taskID))
+	require.NoError(t, registry.NewStore(paths).Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: fmt.Sprintf(
+			`[{"id":%q,"title":%q,"status":"open","priority":1,"issue_type":"task"}]`,
+			taskID,
+			title,
+		)},
+	})
+	if agentCommand != "definitely-missing-orpheus-agent" {
+		withFakeAgent(t, agentCommand, exitCode)
+	}
+	return paths, repoPath
 }
 
 func setupVerboseTaskShowDiagnostics(t *testing.T) (string, string) {

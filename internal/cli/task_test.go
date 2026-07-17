@@ -901,6 +901,76 @@ func TestTaskStatsAggregateGroupsResolvedTasksByMonth(t *testing.T) {
 	assertTaskStatsAggregateTableLinesWithinWidth(t, stdout, 80)
 }
 
+func TestTaskStatsAggregateExcludesEpicsAndKeepsMixedExecutableTypes(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[
+			{"id":"op-task","title":"Task","status":"closed","priority":1,"issue_type":"task","closed_at":"2026-07-02T12:00:00Z"},
+			{"id":"op-bug","title":"Bug","status":"closed","priority":1,"issue_type":"bug","closed_at":"2026-07-02T12:00:00Z"},
+			{"id":"op-chore","title":"Chore","status":"closed","priority":1,"issue_type":"chore","closed_at":"2026-07-02T12:00:00Z"},
+			{"id":"op-custom","title":"Custom","status":"closed","priority":1,"issue_type":"custom","closed_at":"2026-07-02T12:00:00Z"},
+			{"id":"op-epic-closed","title":"Closed epic","status":"closed","priority":1,"issue_type":"epic","closed_at":"2026-07-02T12:00:00Z"},
+			{"id":"op-epic-open","title":"Open epic","status":"open","priority":1,"issue_type":"epic"}
+		]`},
+	})
+
+	epicStatePath, err := paths.DataPath(filepath.Join("repos", "alpha", "tasks", "op-epic-closed.yaml"))
+	must.NoError(err)
+	must.NoError(os.MkdirAll(filepath.Dir(epicStatePath), 0o755))
+	must.NoError(os.WriteFile(epicStatePath, []byte("runs: [\n"), 0o644))
+
+	stdout, stderr := executeCommand(t, []string{"task", "stats", "--group", "day"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Aggregate stats grouped by day")
+	is.Contains(stdout, "Tasks without resolved timestamp: 0")
+	is.Regexp(`(?m)^2026-07-02\s+4\s+#{20}$`, stdout)
+	is.Regexp(`(?m)^2026-07-02\s+-\s+4\s+-\s+4$`, stdout)
+	is.Regexp(`(?m)^2026-07-02\s+0\s+-\s+4$`, stdout)
+	is.Regexp(`(?m)^2026-07-02\s+\$0\.000000\s+-\s+4$`, stdout)
+}
+
+func TestTaskStatsDirectEpicStatsRemainAvailable(t *testing.T) {
+	is := assert.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[
+			{"id":"op-epic","title":"Closed epic","status":"closed","priority":1,"issue_type":"epic","closed_at":"2026-07-02T12:00:00Z"}
+		]`},
+	})
+
+	statsNow := time.Time{}
+	stateStore := taskstate.NewStoreWithClock(paths, func() time.Time { return statsNow })
+	recordTaskStatsAggregateRun(t, stateStore, &statsNow, repoDir, taskStatsAggregateRunFixture{
+		taskID:     "op-epic",
+		model:      "gpt-5",
+		startedAt:  time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC),
+		finishedAt: time.Date(2026, 7, 2, 10, 5, 0, 0, time.UTC),
+		usage: &taskstate.AgentUsage{
+			InputTokens:  100,
+			OutputTokens: 50,
+			TotalTokens:  150,
+		},
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "stats", "op-epic"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Executions")
+	is.Contains(stdout, "implementation")
+	is.Contains(stdout, "gpt-5")
+	is.Contains(stdout, "5m0s")
+	is.Contains(stdout, "150")
+}
+
 func assertTaskStatsAggregateTableLinesWithinWidth(t *testing.T, output string, width int) {
 	t.Helper()
 

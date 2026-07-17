@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
@@ -72,6 +74,7 @@ type CompletionService struct {
 	Resolver ActiveContextResolver
 	RunStore CompletionRunStore
 	Git      GitStateReader
+	Logger   *slog.Logger
 }
 
 // Complete records completion for the active agent run.
@@ -88,19 +91,54 @@ func (s CompletionService) Complete(ctx context.Context, opts CompleteOptions) (
 		gitState = LocalGitState{}
 	}
 
+	lockAttrs := s.completionLockAttrs()
 	var result CompleteResult
-	err := state.WithGlobalMutationLock(s.Paths, completionLockOperation, func() error {
+	err := state.WithGlobalMutationLockLogger(ctx, s.Paths, completionLockOperation, s.Logger, func() error {
 		completed, err := s.completeLocked(ctx, opts, gitState)
 		if err != nil {
 			return err
 		}
 		result = completed
 		return nil
-	})
+	}, lockAttrs...)
 	if err != nil {
 		return CompleteResult{}, err
 	}
 	return result, nil
+}
+
+func (s CompletionService) completionLockAttrs() []slog.Attr {
+	repoID := strings.TrimSpace(s.Resolver.envValue(envRepoID))
+	taskID := strings.TrimSpace(s.Resolver.envValue(envTaskID))
+	attrs := make([]slog.Attr, 0, 3)
+	if repoID != "" {
+		attrs = append(attrs, slog.String("repo_id", repoID))
+	}
+	if taskID != "" {
+		attrs = append(attrs, slog.String("task_id", taskID))
+	}
+	if repoID == "" || taskID == "" {
+		return attrs
+	}
+
+	loader := s.Resolver.RunStore
+	if loader == nil {
+		if runStoreLoader, ok := s.RunStore.(ContextStateLoader); ok {
+			loader = runStoreLoader
+		}
+	}
+	if loader == nil {
+		return attrs
+	}
+
+	state, err := loader.Load(repoID, taskID)
+	if err != nil {
+		return attrs
+	}
+	if run, ok := taskstate.LatestRun(state); ok {
+		attrs = append(attrs, slog.Int("attempt", run.Attempt))
+	}
+	return attrs
 }
 
 func (s CompletionService) completeLocked(
@@ -121,10 +159,21 @@ func (s CompletionService) completeLocked(
 		return CompleteResult{}, errors.New("completion detailed description is required")
 	}
 
+	span := logging.Start(ctx, s.Logger, "agent completion context resolution",
+		slog.String("component", "agent"),
+		slog.String("operation", "agent_done"),
+	)
 	activeContext, err := s.Resolver.Resolve(ctx)
 	if err != nil {
+		span.FinishError(ctx, err)
 		return CompleteResult{}, fmt.Errorf("resolve active context: %w", err)
 	}
+	span.Finish(ctx, logging.StatusSuccess,
+		slog.String("repo_id", activeContext.Repository.ID),
+		slog.String("task_id", activeContext.Task.ID),
+		slog.Int("attempt", activeContext.Run.Attempt),
+		slog.String("target_kind", string(activeContext.Target.Kind)),
+	)
 	if activeContext.Target.Kind != ExecutionTargetMain {
 		return s.completeWorktree(ctx, activeContext, summary, description, detailedDescription, gitState)
 	}
@@ -163,6 +212,7 @@ func (s CompletionService) completeMain(
 		return CompleteResult{}, errors.New("working tree has no changes; make implementation changes before running agent done")
 	}
 
+	span := s.startCompletionPersistence(ctx, activeContext)
 	run, err := s.RunStore.CompleteRun(
 		activeContext.Repository.ID,
 		activeContext.Task.ID,
@@ -174,8 +224,10 @@ func (s CompletionService) completeMain(
 		},
 	)
 	if err != nil {
+		span.FinishError(ctx, err)
 		return CompleteResult{}, fmt.Errorf("record completion: %w", err)
 	}
+	span.Finish(ctx, logging.StatusSuccess)
 	return CompleteResult{Context: activeContext, Run: run}, nil
 }
 
@@ -203,6 +255,7 @@ func (s CompletionService) completeWorktree(
 		)
 	}
 
+	span := s.startCompletionPersistence(ctx, activeContext)
 	run, err := s.RunStore.CompleteRun(
 		activeContext.Repository.ID,
 		activeContext.Task.ID,
@@ -214,9 +267,21 @@ func (s CompletionService) completeWorktree(
 		},
 	)
 	if err != nil {
+		span.FinishError(ctx, err)
 		return CompleteResult{}, fmt.Errorf("record completion: %w", err)
 	}
+	span.Finish(ctx, logging.StatusSuccess)
 	return CompleteResult{Context: activeContext, Run: run}, nil
+}
+
+func (s CompletionService) startCompletionPersistence(ctx context.Context, activeContext ActiveContext) logging.Span {
+	return logging.Start(ctx, s.Logger, "agent completion persistence",
+		slog.String("component", "agent"),
+		slog.String("operation", "agent_done"),
+		slog.String("repo_id", activeContext.Repository.ID),
+		slog.String("task_id", activeContext.Task.ID),
+		slog.Int("attempt", activeContext.Run.Attempt),
+	)
 }
 
 func (s CompletionService) existingCompletionResult(

@@ -16,6 +16,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/beads"
+	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/registry"
@@ -137,7 +138,7 @@ func newTaskStatsCommand(opts *rootOptions) *cobra.Command {
 			return runTaskStats(command, opts, taskID, taskStatsOptions{group: group})
 		},
 	}
-	cmd.Flags().StringVar(&group, "group", "", "aggregate resolved task stats by day or month")
+	cmd.Flags().StringVar(&group, "group", "", "aggregate non-epic resolved task stats by day or month")
 	return cmd
 }
 
@@ -532,20 +533,21 @@ func runTaskRun(
 		return fmt.Errorf("task run %s: --main cannot be combined with --repo-root", taskID)
 	}
 
-	resolvedCtx, err := resolveTaskRunContext(taskID)
+	deps, err := opts.invocation(command)
+	if err != nil {
+		return err
+	}
+
+	resolvedCtx, err := resolveTaskRunContextFromInvocation(deps, taskID)
 	if err != nil {
 		return err
 	}
 
 	resolved := resolvedCtx.Resolved
 	repo := resolvedCtx.RegisteredRepo
+	paths := deps.paths
 
-	paths, err := state.ResolveFromEnvironment()
-	if err != nil {
-		return err
-	}
-
-	taskBackend, err := newBeadsTaskBackend(resolved.Source.BackendDir)
+	readBackend, err := deps.taskBackendFactory(resolved.Source)
 	if err != nil {
 		return fmt.Errorf("task run %s: create backend for repo %s (%s; prefix %s): %w",
 			resolved.TaskID,
@@ -555,18 +557,22 @@ func runTaskRun(
 			err,
 		)
 	}
+	taskBackend, ok := readBackend.(workflow.DispatchBackend)
+	if !ok {
+		return fmt.Errorf("task run %s: backend for repo %s does not support dispatch mutations", resolved.TaskID, resolved.Source.Repository.ID)
+	}
 	if err := validateTaskRunExternalRef(command, resolved, taskBackend); err != nil {
 		return err
 	}
 
-	dispatch, err := startTaskRunDispatch(command, paths, resolved, taskBackend, agentName, mainMode, repoRootMode)
+	dispatch, err := startTaskRunDispatch(command, opts.log(), paths, resolved, taskBackend, agentName, mainMode, repoRootMode)
 	if err != nil {
 		return fmt.Errorf("task run %s: %w", resolved.TaskID, err)
 	}
 
 	logTaskRunLaunch(command, logger, repo.ID, resolved.TaskID, dispatch.start)
 
-	if err := launchTaskRunAgent(command, dispatch.service, repo.ID, resolved.TaskID, dispatch.start, dispatch.prompt); err != nil {
+	if err := launchTaskRunAgent(command, opts.log(), dispatch.service, repo.ID, resolved.TaskID, dispatch.start, dispatch.prompt); err != nil {
 		return err
 	}
 
@@ -646,6 +652,7 @@ type taskRunDispatch struct {
 
 func startTaskRunDispatch(
 	command *cobra.Command,
+	logger *slog.Logger,
 	paths state.Paths,
 	resolved taskmodel.ResolvedTaskSource,
 	backend workflow.DispatchBackend,
@@ -656,7 +663,8 @@ func startTaskRunDispatch(
 	dispatch := taskRunDispatch{
 		service: workflow.DispatchService{
 			Paths:    paths,
-			RunStore: taskstate.NewStore(paths),
+			RunStore: taskstate.NewStoreWithLogger(paths, logger),
+			Logger:   logger,
 		},
 	}
 	start, err := dispatch.service.Start(command.Context(), workflow.DispatchStartOptions{
@@ -714,7 +722,8 @@ func logTaskRunLaunch(
 		slog.String("repo_id", repoID),
 		slog.String("task_id", taskID),
 		slog.String("agent", start.Command.AgentName),
-		slog.String("command", start.Command.Command),
+		slog.String("profile", start.Attempt.Execution.Profile),
+		slog.String("harness", start.Command.Harness),
 		slog.Int("arg_count", len(start.Command.Args)),
 		slog.String("execution_dir", start.ExecutionDir),
 		slog.String("branch", start.Setup.Branch),
@@ -724,12 +733,16 @@ func logTaskRunLaunch(
 
 func launchTaskRunAgent(
 	command *cobra.Command,
+	logger *slog.Logger,
 	service workflow.DispatchService,
 	repoID string,
 	taskID string,
 	start workflow.DispatchStartResult,
 	prompt string,
 ) error {
+	span := logging.Start(command.Context(), logger, "attached agent process",
+		taskRunProcessAttrs(repoID, taskID, start)...,
+	)
 	err := attachedAgentLauncher.Run(command.Context(), agentexec.Command{
 		Name:    start.Command.AgentName,
 		Command: start.Command.Command,
@@ -748,9 +761,14 @@ func launchTaskRunAgent(
 		Stderr: command.ErrOrStderr(),
 	})
 	if err == nil {
+		span.Finish(command.Context(), logging.StatusSuccess,
+			slog.String("lifecycle_outcome", "success"),
+			slog.Int("exit_code", 0),
+		)
 		return nil
 	}
 
+	span.Finish(command.Context(), taskRunProcessStatus(command.Context(), err), taskRunProcessOutcomeAttrs(command.Context(), err)...)
 	recordErr := service.Fail(workflow.DispatchFailureOptions{
 		RepoID:      repoID,
 		TaskID:      taskID,
@@ -764,6 +782,48 @@ func launchTaskRunAgent(
 	return fmt.Errorf("task run %s: %w", taskID, err)
 }
 
+func taskRunProcessAttrs(repoID string, taskID string, start workflow.DispatchStartResult) []slog.Attr {
+	return []slog.Attr{
+		slog.String("component", "cli"),
+		slog.String("operation", "task_run_agent_process"),
+		slog.String("repo_id", repoID),
+		slog.String("task_id", taskID),
+		slog.Int("attempt", start.Attempt.Attempt),
+		slog.String("purpose", string(start.Attempt.Execution.Purpose)),
+		slog.String("agent", start.Command.AgentName),
+		slog.String("profile", start.Attempt.Execution.Profile),
+		slog.String("harness", start.Command.Harness),
+		slog.String("execution_dir", start.ExecutionDir),
+	}
+}
+
+func taskRunProcessStatus(ctx context.Context, err error) string {
+	if taskRunProcessCanceled(ctx, err) {
+		return "canceled"
+	}
+	return logging.StatusFailure
+}
+
+func taskRunProcessOutcomeAttrs(ctx context.Context, err error) []slog.Attr {
+	outcome := "runtime_failure"
+	if taskRunProcessCanceled(ctx, err) {
+		outcome = "canceled"
+	} else if agentexec.IsStartError(err) {
+		outcome = "start_failure"
+	} else if _, ok := logging.ExitCode(err); ok {
+		outcome = "nonzero_exit"
+	}
+	attrs := []slog.Attr{slog.String("lifecycle_outcome", outcome)}
+	if exitCode, ok := logging.ExitCode(err); ok {
+		attrs = append(attrs, slog.Int("exit_code", exitCode))
+	}
+	return attrs
+}
+
+func taskRunProcessCanceled(ctx context.Context, err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil
+}
+
 func recordTaskRunUsage(
 	command *cobra.Command,
 	service workflow.DispatchService,
@@ -771,7 +831,7 @@ func recordTaskRunUsage(
 	taskID string,
 	start workflow.DispatchStartResult,
 ) error {
-	usageOpts := taskRunUsageOptions(command, start)
+	usageOpts := taskRunUsageOptions(command, repoID, taskID, start, service.Logger)
 	_, err := service.RunStore.RecordRunUsage(repoID, taskID, start.Attempt.Attempt, usageOpts)
 	return err
 }
@@ -793,13 +853,24 @@ func finishTaskRun(
 	return nil
 }
 
-func taskRunUsageOptions(command *cobra.Command, start workflow.DispatchStartResult) taskstate.RecordRunUsageOptions {
+func taskRunUsageOptions(
+	command *cobra.Command,
+	repoID string,
+	taskID string,
+	start workflow.DispatchStartResult,
+	logger *slog.Logger,
+) taskstate.RecordRunUsageOptions {
 	return agent.CaptureUsage(agent.UsageCaptureOptions{
 		Harness:      start.Attempt.Execution.Harness,
 		ExecutionDir: start.ExecutionDir,
 		SessionName:  start.Attempt.Execution.SessionName,
 		StartedAt:    start.Attempt.Execution.StartedAt,
 		Env:          agent.UsageCaptureEnvironment(),
+		Logger:       logger,
+		Context:      command.Context(),
+		RepoID:       repoID,
+		TaskID:       taskID,
+		Attempt:      start.Attempt.Attempt,
 	})
 }
 
@@ -852,8 +923,7 @@ type taskReviewExecutionOptions struct {
 	interactiveManual bool
 }
 
-func taskReviewPipelinePresentation(
-	command *cobra.Command,
+func taskReviewPipelinePresentation(command *cobra.Command,
 	start taskReviewStart,
 	reviewInput *bufio.Reader,
 	logger *slog.Logger,
@@ -2673,8 +2743,8 @@ func resolveTaskContextWithScope(
 	}, nil
 }
 
-func resolveTaskRunContext(taskID string) (resolvedTaskRunContext, error) {
-	taskCtx, err := loadTaskContext()
+func resolveTaskRunContextFromInvocation(deps *invocationDependencies, taskID string) (resolvedTaskRunContext, error) {
+	taskCtx, err := loadTaskContextFromInvocation(deps)
 	if err != nil {
 		return resolvedTaskRunContext{}, err
 	}
