@@ -79,13 +79,14 @@ func WithGlobalMutationLockLogger(
 	operation string,
 	logger *slog.Logger,
 	mutate func() error,
+	attrs ...slog.Attr,
 ) (err error) {
 	if mutate == nil {
 		return errors.New("global mutation lock callback is nil")
 	}
 
 	lockPath := globalMutationLockPathCandidate(paths)
-	span := logging.Start(ctx, logger, "global mutation lock", lockAttrs(operation, lockPath)...)
+	span := logging.Start(ctx, logger, "global mutation lock", lockAttrs(operation, lockPath, attrs...)...)
 	lock, err := acquireGlobalMutationLock(paths, operation)
 	if err != nil {
 		span.FinishError(ctx, err)
@@ -93,7 +94,7 @@ func WithGlobalMutationLockLogger(
 	}
 	span.Finish(ctx, logging.StatusSuccess)
 
-	held := logging.Start(ctx, logger, "global mutation lock held", lockAttrs(operation, lock.path)...)
+	held := logging.Start(ctx, logger, "global mutation lock held", lockAttrs(operation, lock.path, attrs...)...)
 	defer func() {
 		if releaseErr := lock.release(); releaseErr != nil {
 			if err != nil {
@@ -111,13 +112,15 @@ func WithGlobalMutationLockLogger(
 	return mutate()
 }
 
-func lockAttrs(operation string, path string) []slog.Attr {
-	return []slog.Attr{
+func lockAttrs(operation string, path string, attrs ...slog.Attr) []slog.Attr {
+	lockAttrs := []slog.Attr{
 		slog.String("component", "state"),
 		slog.String("operation", "mutation_lock"),
 		slog.String("semantic_operation", operation),
 		slog.String("path", path),
 	}
+	lockAttrs = append(lockAttrs, attrs...)
+	return lockAttrs
 }
 
 func acquireGlobalMutationLock(paths Paths, operation string) (*mutationLock, error) {
