@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/readiness"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
@@ -64,6 +66,7 @@ type DispatchCommandContext struct {
 type DispatchService struct {
 	Paths    state.Paths
 	RunStore DispatchRunStore
+	Logger   *slog.Logger
 }
 
 // DispatchStartOptions describes the task run to start.
@@ -121,14 +124,14 @@ func (s DispatchService) Start(ctx context.Context, opts DispatchStartOptions) (
 	}
 
 	var result DispatchStartResult
-	err := state.WithGlobalMutationLock(s.Paths, dispatchSetupLockOperation, func() error {
+	err := state.WithGlobalMutationLockLogger(ctx, s.Paths, dispatchSetupLockOperation, s.Logger, func() error {
 		started, err := s.startLocked(ctx, opts)
 		if err != nil {
 			return err
 		}
 		result = started
 		return nil
-	})
+	}, dispatchContextAttrs(opts.Source.Repository.ID, opts.TaskID)...)
 	if err != nil {
 		return DispatchStartResult{}, err
 	}
@@ -141,7 +144,7 @@ func (s DispatchService) Finish(repoID string, taskID string, attempt int) error
 		return err
 	}
 
-	return state.WithGlobalMutationLock(s.Paths, dispatchFinalizationLockOperation, func() error {
+	return state.WithGlobalMutationLockLogger(context.Background(), s.Paths, dispatchFinalizationLockOperation, s.Logger, func() error {
 		latest, ok, err := s.RunStore.LatestRun(repoID, taskID)
 		if err != nil {
 			return err
@@ -152,7 +155,7 @@ func (s DispatchService) Finish(repoID string, taskID string, attempt int) error
 
 		_, err = s.RunStore.FinishRun(repoID, taskID, attempt, taskstate.RunStatusSucceeded)
 		return err
-	})
+	}, dispatchAttemptAttrs(repoID, taskID, attempt)...)
 }
 
 // Fail records a failed attached run while holding the global mutation lock.
@@ -161,14 +164,14 @@ func (s DispatchService) Fail(opts DispatchFailureOptions) error {
 		return err
 	}
 
-	return state.WithGlobalMutationLock(s.Paths, dispatchFinalizationLockOperation, func() error {
+	return state.WithGlobalMutationLockLogger(context.Background(), s.Paths, dispatchFinalizationLockOperation, s.Logger, func() error {
 		if opts.StartFailed {
 			_, err := s.RunStore.FailRunStart(opts.RepoID, opts.TaskID, opts.Attempt, opts.Cause)
 			return err
 		}
 		_, err := s.RunStore.FinishRun(opts.RepoID, opts.TaskID, opts.Attempt, taskstate.RunStatusFailed)
 		return err
-	})
+	}, dispatchAttemptAttrs(opts.RepoID, opts.TaskID, opts.Attempt)...)
 }
 
 func (s DispatchService) validate() error {
@@ -178,6 +181,26 @@ func (s DispatchService) validate() error {
 	return nil
 }
 
+func (s DispatchService) startPhase(ctx context.Context, msg string, repoID string, taskID string, attrs ...slog.Attr) logging.Span {
+	return logging.Start(ctx, s.Logger, msg, append(dispatchContextAttrs(repoID, taskID), attrs...)...)
+}
+
+func dispatchContextAttrs(repoID string, taskID string) []slog.Attr {
+	return []slog.Attr{
+		slog.String("component", "workflow"),
+		slog.String("operation", "task_dispatch"),
+		slog.String("repo_id", repoID),
+		slog.String("task_id", taskID),
+	}
+}
+
+func dispatchAttemptAttrs(repoID string, taskID string, attempt int) []slog.Attr {
+	attrs := dispatchContextAttrs(repoID, taskID)
+	attrs = append(attrs, slog.Int("attempt", attempt))
+	return attrs
+}
+
+//nolint:funlen // Dispatch phase diagnostics are kept inline with ordered setup mutations.
 func (s DispatchService) startLocked(
 	ctx context.Context,
 	opts DispatchStartOptions,
@@ -186,32 +209,61 @@ func (s DispatchService) startLocked(
 		return DispatchStartResult{}, errors.New("task dispatch cannot combine main mode and repo-root mode")
 	}
 
+	span := s.startPhase(ctx, "dispatch setup", opts.Source.Repository.ID, opts.TaskID)
 	plan, err := s.validateStart(ctx, opts)
 	if err != nil {
+		span.FinishError(ctx, err)
 		return DispatchStartResult{}, err
 	}
+	span.Finish(ctx, logging.StatusSuccess,
+		slog.String("target_kind", string(plan.targetKind)),
+		slog.Bool("review_follow_up", plan.followUp != nil),
+	)
 
 	commandContext := DispatchCommandContext{
 		Task:        plan.taskItem.Clone(),
 		SessionName: dispatchSessionName(plan.taskItem, plan.followUp),
 	}
+	span = s.startPhase(ctx, "agent command resolution", opts.Source.Repository.ID, opts.TaskID)
 	command, err := resolveDispatchCommand(opts, plan.followUp != nil, commandContext)
 	if err != nil {
+		span.FinishError(ctx, err)
 		return DispatchStartResult{}, err
 	}
+	span.Finish(ctx, logging.StatusSuccess,
+		slog.String("agent", command.AgentName),
+		slog.String("profile", command.AgentName),
+		slog.String("harness", command.Harness),
+	)
 
+	span = s.startPhase(ctx, "git target preparation", opts.Source.Repository.ID, opts.TaskID,
+		slog.String("target_kind", string(plan.targetKind)),
+	)
 	setup, err := s.setupTarget(ctx, opts, plan.targetKind, plan.followUp != nil)
 	if err != nil {
+		span.FinishError(ctx, err)
 		return DispatchStartResult{}, err
 	}
+	span.Finish(ctx, logging.StatusSuccess,
+		slog.String("branch", setup.Branch),
+		slog.String("worktree", setup.WorktreePath),
+		slog.String("worktree_lifecycle", string(setup.Lifecycle)),
+	)
+
+	span = s.startPhase(ctx, "backend task mutation", opts.Source.Repository.ID, opts.TaskID)
 	if err := opts.Backend.MarkInProgress(ctx, opts.TaskID, setup.Branch, setup.WorktreePath); err != nil {
+		span.FinishError(ctx, err)
 		return DispatchStartResult{}, fmt.Errorf("mark task in progress: %w", err)
 	}
+	span.Finish(ctx, logging.StatusSuccess)
 
+	span = s.startPhase(ctx, "task run persistence", opts.Source.Repository.ID, opts.TaskID)
 	attempt, err := s.recordStart(opts, setup, command, commandContext, plan.followUp)
 	if err != nil {
+		span.FinishError(ctx, err)
 		return DispatchStartResult{}, err
 	}
+	span.Finish(ctx, logging.StatusSuccess, slog.Int("attempt", attempt.Attempt))
 
 	return DispatchStartResult{
 		Repository:   opts.Source.Repository,
