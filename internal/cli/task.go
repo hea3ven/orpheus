@@ -16,7 +16,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/beads"
-	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/registry"
@@ -586,38 +585,35 @@ func finishTaskRunAndReview(
 	if err := finishTaskRun(command, dispatch.service, repoID, taskID, dispatch.start); err != nil {
 		return err
 	}
-	shouldReview, err := completedTaskRunReadyForReview(
-		dispatch.service.RunStore,
-		repoID,
-		taskID,
-		dispatch.start.Attempt.Attempt,
+
+	logger := opts.log().With(
+		slog.String("component", "cli"),
+		slog.String("operation", "task_run_review"),
 	)
+	deps, err := opts.invocation(command)
 	if err != nil {
-		return fmt.Errorf("task run %s: inspect completion before review: %w", taskID, err)
+		return err
 	}
-	if !shouldReview {
+	taskCtx, err := loadTaskContextFromInvocation(deps)
+	if err != nil {
+		return err
+	}
+	service := newTaskReviewLifecycleService(command, deps.paths, taskCtx, logger, bufio.NewReader(command.InOrStdin()))
+	outcome, reviewed, err := service.RunAfterCompletedRun(command.Context(), workflow.ReviewAfterRunCompletionOptions{
+		RepoID:                    repoID,
+		TaskID:                    taskID,
+		RunAttempt:                dispatch.start.Attempt.Attempt,
+		SelectedDispatchAgentName: dispatch.start.Command.AgentName,
+		FallbackDispatchAgentName: agentName,
+		PipelineName:              pipelineName,
+	})
+	if err != nil {
+		return err
+	}
+	if !reviewed {
 		return nil
 	}
-	selectedAgentName := dispatch.start.Command.AgentName
-	if strings.TrimSpace(selectedAgentName) == "" {
-		selectedAgentName = agentName
-	}
-	return runTaskRunReview(command, opts, taskID, selectedAgentName, pipelineName)
-}
-
-func completedTaskRunReadyForReview(
-	store workflow.DispatchRunStore,
-	repoID string,
-	taskID string,
-	attempt int,
-) (bool, error) {
-	latest, ok, err := store.LatestRun(repoID, taskID)
-	if err != nil || !ok {
-		return false, err
-	}
-	return latest.Attempt == attempt &&
-		latest.Status == taskstate.RunStatusSucceeded &&
-		latest.Completion != nil, nil
+	return renderTaskReviewLifecycleOutcome(command, logger, outcome)
 }
 
 func validateTaskRunExternalRef(
@@ -814,54 +810,41 @@ func runTaskReview(command *cobra.Command, opts *rootOptions, taskID string, pip
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for task review")
 
-	start, err := startTaskReview(command, opts, taskID, pipelineName)
+	deps, err := opts.invocation(command)
 	if err != nil {
 		return err
 	}
-
-	maxAttempts, err := taskReviewMaxAutonomousReviewAttempts(start.paths)
+	taskCtx, err := loadTaskContextFromInvocation(deps)
 	if err != nil {
-		return fmt.Errorf("task review %s: %w", start.taskID(), err)
+		return err
 	}
-	dispatchAgentName := ""
-	if start.resumed {
-		var err error
-		dispatchAgentName, err = resumedReviewImplementerName(start)
-		if err != nil {
-			return fmt.Errorf("task review %s: %w", start.taskID(), err)
-		}
-	}
-	return executeAutonomousReviewLoop(command, logger, start, autonomousReviewLoopOptions{
-		maxAttempts:       maxAttempts,
-		dispatchAgentName: dispatchAgentName,
-		review: taskReviewExecutionOptions{
-			interactiveManual: true,
-		},
+	service := newTaskReviewLifecycleService(command, deps.paths, taskCtx, logger, bufio.NewReader(command.InOrStdin()))
+	outcome, err := service.Run(command.Context(), workflow.ReviewLifecycleOptions{
+		TaskID:       taskID,
+		PipelineName: pipelineName,
 	})
+	if err != nil {
+		return err
+	}
+	return renderTaskReviewLifecycleOutcome(command, logger, outcome)
 }
 
-func runTaskRunReview(command *cobra.Command, opts *rootOptions, taskID string, agentName string, pipelineName string) error {
-	logger := opts.log().With(
-		slog.String("component", "cli"),
-		slog.String("operation", "task_run_review"),
+func renderTaskReviewLifecycleOutcome(
+	command *cobra.Command,
+	logger *slog.Logger,
+	outcome workflow.ReviewLifecycleOutcome,
+) error {
+	if outcome.Kind != workflow.ReviewLifecycleOutcomePassed {
+		return nil
+	}
+	logger.DebugContext(
+		command.Context(),
+		"review approved and finalized task",
+		slog.String("repo_id", outcome.Finalization.Repository.ID),
+		slog.String("task_id", outcome.Finalization.Task.ID),
+		slog.String("commit", outcome.Finalization.Finalization.Commit),
 	)
-	logger.DebugContext(command.Context(), "starting automatic review after task run")
-
-	start, err := startTaskReview(command, opts, taskID, pipelineName)
-	if err != nil {
-		return err
-	}
-	maxAttempts, err := taskReviewMaxAutonomousReviewAttempts(start.paths)
-	if err != nil {
-		return fmt.Errorf("task review %s: %w", start.taskID(), err)
-	}
-	return executeAutonomousReviewLoop(command, logger, start, autonomousReviewLoopOptions{
-		maxAttempts:       maxAttempts,
-		dispatchAgentName: agentName,
-		review: taskReviewExecutionOptions{
-			interactiveManual: true,
-		},
-	})
+	return renderTaskDoneResult(command, outcome.Finalization)
 }
 
 type taskReviewExecutionOptions struct {
@@ -869,342 +852,43 @@ type taskReviewExecutionOptions struct {
 	interactiveManual bool
 }
 
-type taskReviewAttemptResult struct {
-	status taskstate.ReviewStatus
-}
-
-type autonomousReviewLoopOptions struct {
-	maxAttempts       int
-	dispatchAgentName string
-	review            taskReviewExecutionOptions
-}
-
-func executeAutonomousReviewLoop(
-	command *cobra.Command,
-	logger *slog.Logger,
-	start taskReviewStart,
-	opts autonomousReviewLoopOptions,
-) error {
-	if opts.maxAttempts <= 0 {
-		return fmt.Errorf("task review %s: autonomous review attempt budget must be positive", start.taskID())
-	}
-
-	attemptsUsed := 0
-	current := start
-	reviewInput := bufio.NewReader(command.InOrStdin())
-	for {
-		attemptsUsed++
-		result, err := executeTaskReviewAttempt(command, logger, current, reviewInput, opts.review)
-		if err != nil {
-			return err
-		}
-
-		switch result.status {
-		case taskstate.ReviewStatusPassed:
-			return finalizeApprovedTaskReview(command, logger, current.paths, current.resolvedCtx)
-		case taskstate.ReviewStatusBlocked:
-		case taskstate.ReviewStatusWaitingForManual,
-			taskstate.ReviewStatusAborted,
-			taskstate.ReviewStatusFailed:
-			return nil
-		default:
-			return nil
-		}
-
-		latest, indexes, ok, err := latestAutonomousReviewBlockers(current.store, current.repoID(), current.taskID())
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return nil
-		}
-		if attemptsUsed >= opts.maxAttempts {
-			return markAutonomousReviewBudgetExhausted(command, current, latest.Attempt, attemptsUsed)
-		}
-
-		if err := runAutonomousReviewFollowUp(command, logger, current, opts.dispatchAgentName, latest.Attempt, indexes); err != nil {
-			return err
-		}
-		next, err := startFreshAutonomousReview(command, current)
-		if err != nil {
-			return err
-		}
-		current = next
-	}
-}
-
-func markAutonomousReviewBudgetExhausted(
-	command *cobra.Command,
-	start taskReviewStart,
-	reviewAttempt int,
-	attemptsUsed int,
-) error {
-	if _, err := start.store.MarkReviewAutonomousBudgetExhausted(
-		start.repoID(),
-		start.taskID(),
-		reviewAttempt,
-	); err != nil {
-		return fmt.Errorf("task review %s: mark autonomous review budget exhausted: %w", start.taskID(), err)
-	}
-	_, err := fmt.Fprintf(
-		command.ErrOrStderr(),
-		"Autonomous review attempt budget exhausted for %s after %d review attempt(s). "+
-			"Open blockers were preserved. Run `orpheus task run %s` to continue with a fresh budget.\n",
-		start.taskID(),
-		attemptsUsed,
-		start.taskID(),
-	)
-	return err
-}
-
-func executeTaskReviewAttempt(
-	command *cobra.Command,
-	logger *slog.Logger,
-	start taskReviewStart,
-	reviewInput *bufio.Reader,
-	opts taskReviewExecutionOptions,
-) (taskReviewAttemptResult, error) {
-	outcome, err := review.RunPipeline(taskReviewPipelineOptions(command, start, reviewInput, logger, opts))
-	if err != nil {
-		_, _ = start.store.FinishReview(start.repoID(), start.taskID(), start.review.Attempt, taskstate.ReviewStatusFailed)
-		return taskReviewAttemptResult{}, err
-	}
-	if outcome.Status == taskstate.ReviewStatusWaitingForManual {
-		return taskReviewAttemptResult{status: outcome.Status}, nil
-	}
-	if outcome.Status == taskstate.ReviewStatusPassed {
-		shouldPublish, err := processSeparateTaskReviewCandidates(command, start, reviewInput)
-		if err != nil {
-			_, _ = start.store.FinishReview(start.repoID(), start.taskID(), start.review.Attempt, taskstate.ReviewStatusFailed)
-			return taskReviewAttemptResult{}, err
-		}
-		if !shouldPublish {
-			if _, err := start.store.FinishReview(
-				start.repoID(),
-				start.taskID(),
-				start.review.Attempt,
-				taskstate.ReviewStatusAborted,
-			); err != nil {
-				_, _ = start.store.FinishReview(start.repoID(), start.taskID(), start.review.Attempt, taskstate.ReviewStatusFailed)
-				return taskReviewAttemptResult{}, fmt.Errorf("task review %s: record aborted review: %w", start.taskID(), err)
-			}
-			return taskReviewAttemptResult{status: taskstate.ReviewStatusAborted}, nil
-		}
-	}
-	if _, err := start.store.FinishReview(
-		start.repoID(),
-		start.taskID(),
-		start.review.Attempt,
-		outcome.Status,
-	); err != nil {
-		_, _ = start.store.FinishReview(start.repoID(), start.taskID(), start.review.Attempt, taskstate.ReviewStatusFailed)
-		return taskReviewAttemptResult{}, fmt.Errorf("task review %s: record %s review: %w", start.taskID(), outcome.Status, err)
-	}
-	return taskReviewAttemptResult{status: outcome.Status}, nil
-}
-
-func taskReviewMaxAutonomousReviewAttempts(paths state.Paths) (int, error) {
-	config, err := review.LoadConfig(paths)
-	if err != nil {
-		return 0, err
-	}
-	return config.MaxAutonomousReviewAttempts, nil
-}
-
-func latestAutonomousReviewBlockers(
-	store taskstate.Store,
-	repoID string,
-	taskID string,
-) (taskstate.ReviewAttempt, []int, bool, error) {
-	taskState, err := store.Load(repoID, taskID)
-	if err != nil {
-		return taskstate.ReviewAttempt{}, nil, false, fmt.Errorf("task review %s: load review blockers: %w", taskID, err)
-	}
-	latest, ok := taskstate.LatestReview(taskState)
-	if !ok || latest.Status != taskstate.ReviewStatusBlocked {
-		return taskstate.ReviewAttempt{}, nil, false, nil
-	}
-	if latest.AutomatedBlockerDecisionInterrupted || taskstate.HasUnkeptAutomatedBlockingFindings(latest) {
-		return latest, nil, false, nil
-	}
-
-	indexes := taskstate.UntargetedAutomatedBlockingFindingIndexes(latest)
-	if len(indexes) == 0 {
-		return latest, nil, false, nil
-	}
-	if len(indexes) != len(taskstate.UntargetedBlockingFindingIndexes(latest)) {
-		return latest, nil, false, nil
-	}
-	return latest, indexes, true, nil
-}
-
-func runAutonomousReviewFollowUp(
-	command *cobra.Command,
-	logger *slog.Logger,
-	start taskReviewStart,
-	agentName string,
-	reviewAttempt int,
-	findingIndexes []int,
-) error {
-	_, err := fmt.Fprintf(
-		command.ErrOrStderr(),
-		"Autonomous review follow-up for %s targets review attempt %d finding(s) %s.\n",
-		start.taskID(),
-		reviewAttempt,
-		formatReviewFindingIndexes(findingIndexes),
-	)
-	if err != nil {
-		return err
-	}
-
-	backend, err := newBeadsTaskBackend(start.resolvedCtx.Resolved.Source.BackendDir)
-	if err != nil {
-		return fmt.Errorf("task review %s: create backend for autonomous follow-up: %w", start.taskID(), err)
-	}
-	dispatch, err := startAutonomousReviewFollowUpDispatch(command, start, backend, agentName)
-	if err != nil {
-		return err
-	}
-	logTaskRunLaunch(command, logger, start.repoID(), start.taskID(), dispatch.start)
-	if err := launchTaskRunAgent(
-		command,
-		dispatch.service,
-		start.repoID(),
-		start.taskID(),
-		dispatch.start,
-		dispatch.prompt,
-	); err != nil {
-		return err
-	}
-	if err := finishTaskRun(command, dispatch.service, start.repoID(), start.taskID(), dispatch.start); err != nil {
-		return err
-	}
-	return requireAutonomousReviewFollowUpCompletion(command, start, dispatch)
-}
-
-func startAutonomousReviewFollowUpDispatch(
-	command *cobra.Command,
-	start taskReviewStart,
-	backend workflow.DispatchBackend,
-	agentName string,
-) (taskRunDispatch, error) {
-	dispatch, err := startTaskRunDispatch(
-		command,
-		start.paths,
-		start.resolvedCtx.Resolved,
-		backend,
-		agentName,
-		false,
-		false,
-	)
-	if err != nil {
-		return taskRunDispatch{}, fmt.Errorf("task review %s: start autonomous follow-up: %w", start.taskID(), err)
-	}
-	return dispatch, nil
-}
-
-func requireAutonomousReviewFollowUpCompletion(
-	command *cobra.Command,
-	start taskReviewStart,
-	dispatch taskRunDispatch,
-) error {
-	ready, err := completedTaskRunReadyForReview(
-		dispatch.service.RunStore,
-		start.repoID(),
-		start.taskID(),
-		dispatch.start.Attempt.Attempt,
-	)
-	if err != nil {
-		return fmt.Errorf("task review %s: inspect autonomous follow-up completion: %w", start.taskID(), err)
-	}
-	if !ready {
-		_, err := fmt.Fprintf(
-			command.ErrOrStderr(),
-			"Autonomous follow-up run attempt %d exited without completion; run `orpheus agent done` or `orpheus task run %s` before reviewing again.\n",
-			dispatch.start.Attempt.Attempt,
-			start.taskID(),
-		)
-		return err
-	}
-	return nil
-}
-
-func startFreshAutonomousReview(command *cobra.Command, previous taskReviewStart) (taskReviewStart, error) {
-	target, err := taskReviewTarget(previous.store, previous.paths, previous.resolvedCtx)
-	if err != nil {
-		return taskReviewStart{}, fmt.Errorf("task review %s: %w", previous.taskID(), err)
-	}
-	if err := validateReviewCandidateReady(command.Context(), previous.store, previous.resolvedCtx, target.Worktree); err != nil {
-		return taskReviewStart{}, fmt.Errorf("task review %s: %w", previous.taskID(), err)
-	}
-	return startFreshTaskReview(
-		previous.paths,
-		previous.resolvedCtx,
-		previous.store,
-		target,
-		target.Worktree,
-		previous.pipeline,
-	)
-}
-
-func formatReviewFindingIndexes(indexes []int) string {
-	labels := make([]string, 0, len(indexes))
-	for _, index := range indexes {
-		labels = append(labels, strconv.Itoa(index+1))
-	}
-	return strings.Join(labels, ", ")
-}
-
-func taskReviewPipelineOptions(
+func taskReviewPipelinePresentation(
 	command *cobra.Command,
 	start taskReviewStart,
 	reviewInput *bufio.Reader,
 	logger *slog.Logger,
 	execOptions ...taskReviewExecutionOptions,
-) review.PipelineRunOptions {
+) workflow.ReviewPipelinePresentation {
 	execOpts := taskReviewExecutionOptions{interactiveManual: true}
 	if len(execOptions) > 0 {
 		execOpts = execOptions[0]
 	}
 	outputMode := taskReviewOutputMode(command, logger)
-	opts := review.PipelineRunOptions{
-		Context:           command.Context(),
-		Store:             start.store,
-		RepoID:            start.repoID(),
-		TaskID:            start.taskID(),
-		Branch:            start.target.Branch,
-		Workdir:           start.workdir,
-		Attempt:           start.review,
-		Pipeline:          start.pipeline,
-		SessionName:       start.resolvedCtx.Task.ReviewSessionName(),
+	presentation := workflow.ReviewPipelinePresentation{
 		Stdout:            outputMode.stdout,
 		Stderr:            outputMode.stderr,
 		Stdin:             command.InOrStdin(),
 		InteractiveOutput: outputMode.interactive,
 		OutputWidth:       outputMode.width,
 		OutputWidthFunc:   outputMode.widthFunc,
-		AgentConfig:       start.agentConfig,
-		AgentLauncher:     attachedAgentLauncher,
-		ResumeFromStep:    start.resumed,
 		PauseBeforeManual: execOpts.pauseBeforeManual,
 	}
 	if !execOpts.interactiveManual {
-		return opts
+		return presentation
 	}
-	return attachInteractiveReviewHooks(command, start, reviewInput, opts, execOpts)
+	return attachInteractiveReviewHooks(command, start, reviewInput, presentation)
 }
 
 func attachInteractiveReviewHooks(
 	command *cobra.Command,
 	start taskReviewStart,
 	reviewInput *bufio.Reader,
-	opts review.PipelineRunOptions,
-	execOpts taskReviewExecutionOptions,
-) review.PipelineRunOptions {
-	opts.RenderManualStep = func(step review.Step) error {
-		return renderManualReviewContext(command, start.store, start.resolvedCtx, start.workdir, start.review, step)
+	presentation workflow.ReviewPipelinePresentation,
+) workflow.ReviewPipelinePresentation {
+	presentation.RenderManualStep = func(ctx workflow.ReviewManualStepContext) error {
+		return renderManualReviewContext(command, ctx)
 	}
-	opts.ConfirmManualCommand = func(step review.Step) (bool, error) {
+	presentation.ConfirmManualCommand = func(step review.Step) (bool, error) {
 		confirmed, err := promptManualCommandConfirmation(command, reviewInput, step)
 		if err != nil {
 			if errors.Is(err, review.ErrManualInputUnavailable) {
@@ -1218,19 +902,18 @@ func attachInteractiveReviewHooks(
 		_, err = fmt.Fprintf(command.ErrOrStderr(), "Review aborted for %s.\n", start.taskID())
 		return false, err
 	}
-	opts.PromptManualStep = func(step review.ManualStep) (review.ManualResult, error) {
+	presentation.PromptManualStep = func(prompt workflow.ReviewManualStepPrompt) (review.ManualResult, error) {
 		outcome, err := runManualReviewPrompt(
 			command,
 			reviewInput,
-			start.store,
-			start.resolvedCtx,
-			start.review,
-			step.Step.Name,
-			step.HunkNotes,
+			prompt.Recorder,
+			prompt.TaskID(),
+			prompt.Step.Name,
+			prompt.HunkNotes,
 		)
 		if err != nil {
 			if errors.Is(err, review.ErrManualInputUnavailable) {
-				return review.ManualResult{}, renderManualReviewHandoff(command, start.taskID(), step.Step.Name)
+				return review.ManualResult{}, renderManualReviewHandoff(command, prompt.TaskID(), prompt.Step.Name)
 			}
 			return review.ManualResult{}, err
 		}
@@ -1242,8 +925,8 @@ func attachInteractiveReviewHooks(
 			Stop:   true,
 		}, nil
 	}
-	opts.PromptAutomatedBlockers = taskReviewAutomatedBlockerPrompt(command, reviewInput)
-	return opts
+	presentation.PromptAutomatedBlockers = taskReviewAutomatedBlockerPrompt(command, reviewInput)
+	return presentation
 }
 
 func taskReviewAutomatedBlockerPrompt(
@@ -1325,641 +1008,16 @@ func logTaskReviewOutputDetection(
 }
 
 type taskReviewStart struct {
-	paths       state.Paths
 	resolvedCtx resolvedTaskContext
-	store       taskstate.Store
 	workdir     string
 	target      workflow.Target
 	review      taskstate.ReviewAttempt
 	pipeline    review.Pipeline
-	agentConfig agent.Config
 	resumed     bool
-}
-
-func (s taskReviewStart) repoID() string {
-	return s.resolvedCtx.Resolved.Source.Repository.ID
 }
 
 func (s taskReviewStart) taskID() string {
 	return s.resolvedCtx.Resolved.TaskID
-}
-
-func startTaskReview(command *cobra.Command, opts *rootOptions, taskID string, pipelineName string) (taskReviewStart, error) {
-	deps, err := opts.invocation(command)
-	if err != nil {
-		return taskReviewStart{}, err
-	}
-	paths := deps.paths
-	resolvedCtx, err := resolveTaskContext(command, deps, "task review", taskID)
-	if err != nil {
-		return taskReviewStart{}, err
-	}
-	var requestedPipeline *review.Pipeline
-	if strings.TrimSpace(pipelineName) != "" {
-		pipeline, err := resolveTaskReviewPipeline(paths, resolvedCtx.Resolved.Source.Repository, pipelineName)
-		if err != nil {
-			return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
-		}
-		requestedPipeline = &pipeline
-	}
-	store := taskstate.NewStore(paths)
-	target, err := taskReviewTarget(store, paths, resolvedCtx)
-	if err != nil {
-		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
-	}
-	workdir := target.Worktree
-	if err := validateReviewCandidateReady(command.Context(), store, resolvedCtx, workdir); err != nil {
-		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
-	}
-
-	if paused, ok, err := latestManualWaitingReview(store, resolvedCtx); err != nil {
-		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
-	} else if ok {
-		return resumeTaskReview(command, paths, resolvedCtx, store, target, workdir, paused, pipelineName)
-	}
-
-	if requestedPipeline != nil {
-		return startFreshTaskReview(paths, resolvedCtx, store, target, workdir, *requestedPipeline)
-	}
-	if interrupted, ok, err := latestInterruptedAutomatedBlockerReview(store, resolvedCtx); err != nil {
-		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
-	} else if ok {
-		pipeline, err := resolveTaskReviewPipeline(paths, resolvedCtx.Resolved.Source.Repository, interrupted.Pipeline)
-		if err != nil {
-			return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
-		}
-		return startFreshTaskReview(paths, resolvedCtx, store, target, workdir, pipeline)
-	}
-	pipeline, err := resolveTaskReviewPipeline(paths, resolvedCtx.Resolved.Source.Repository, pipelineName)
-	if err != nil {
-		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
-	}
-	return startFreshTaskReview(paths, resolvedCtx, store, target, workdir, pipeline)
-}
-
-func startFreshTaskReview(
-	paths state.Paths,
-	resolvedCtx resolvedTaskContext,
-	store taskstate.Store,
-	target workflow.Target,
-	workdir string,
-	pipeline review.Pipeline,
-) (taskReviewStart, error) {
-	agentConfig, err := resolveTaskReviewAgentConfig(paths, pipeline)
-	if err != nil {
-		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
-	}
-
-	reviewAttempt, err := store.StartReviewWithOptions(
-		resolvedCtx.Resolved.Source.Repository.ID,
-		resolvedCtx.Resolved.TaskID,
-		taskstate.StartReviewOptions{
-			Pipeline: pipeline.Name,
-			Step:     pipeline.Steps[0].Name,
-		},
-	)
-	if err != nil {
-		return taskReviewStart{}, fmt.Errorf("task review %s: start review attempt: %w", resolvedCtx.Resolved.TaskID, err)
-	}
-	return taskReviewStart{
-		paths:       paths,
-		resolvedCtx: resolvedCtx,
-		store:       store,
-		workdir:     workdir,
-		target:      target,
-		review:      reviewAttempt,
-		pipeline:    pipeline,
-		agentConfig: agentConfig,
-	}, nil
-}
-
-func latestManualWaitingReview(
-	store taskstate.Store,
-	resolvedCtx resolvedTaskContext,
-) (taskstate.ReviewAttempt, bool, error) {
-	taskState, err := store.Load(
-		resolvedCtx.Resolved.Source.Repository.ID,
-		resolvedCtx.Resolved.TaskID,
-	)
-	if err != nil {
-		return taskstate.ReviewAttempt{}, false, fmt.Errorf("load task state: %w", err)
-	}
-	latest, ok := taskstate.LatestReview(taskState)
-	if !ok || latest.Status != taskstate.ReviewStatusWaitingForManual {
-		return taskstate.ReviewAttempt{}, false, nil
-	}
-	return latest, true, nil
-}
-
-func latestInterruptedAutomatedBlockerReview(
-	store taskstate.Store,
-	resolvedCtx resolvedTaskContext,
-) (taskstate.ReviewAttempt, bool, error) {
-	taskState, err := store.Load(
-		resolvedCtx.Resolved.Source.Repository.ID,
-		resolvedCtx.Resolved.TaskID,
-	)
-	if err != nil {
-		return taskstate.ReviewAttempt{}, false, fmt.Errorf("load task state: %w", err)
-	}
-	latest, ok := taskstate.LatestReview(taskState)
-	if !ok || latest.Status != taskstate.ReviewStatusBlocked || !latest.AutomatedBlockerDecisionInterrupted {
-		return taskstate.ReviewAttempt{}, false, nil
-	}
-	if strings.TrimSpace(latest.Pipeline) == "" {
-		return taskstate.ReviewAttempt{}, false, nil
-	}
-	return latest, true, nil
-}
-
-func resumeTaskReview(
-	command *cobra.Command,
-	paths state.Paths,
-	resolvedCtx resolvedTaskContext,
-	store taskstate.Store,
-	target workflow.Target,
-	workdir string,
-	paused taskstate.ReviewAttempt,
-	pipelineName string,
-) (taskReviewStart, error) {
-	pipeline, err := resolvePausedTaskReviewPipeline(paths, resolvedCtx.Resolved.Source.Repository, paused, pipelineName)
-	if err != nil {
-		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
-	}
-	agentConfig, err := resolveTaskReviewAgentConfig(paths, pipeline)
-	if err != nil {
-		return taskReviewStart{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
-	}
-	reviewAttempt, err := store.ResumeReview(
-		resolvedCtx.Resolved.Source.Repository.ID,
-		resolvedCtx.Resolved.TaskID,
-		paused.Attempt,
-	)
-	if err != nil {
-		return taskReviewStart{}, fmt.Errorf("task review %s: resume review attempt: %w", resolvedCtx.Resolved.TaskID, err)
-	}
-	_, err = fmt.Fprintf(
-		command.ErrOrStderr(),
-		"Resuming review attempt %d at manual step %q.\n",
-		reviewAttempt.Attempt,
-		reviewAttempt.Step,
-	)
-	if err != nil {
-		return taskReviewStart{}, err
-	}
-	return taskReviewStart{
-		paths:       paths,
-		resolvedCtx: resolvedCtx,
-		store:       store,
-		workdir:     workdir,
-		target:      target,
-		review:      reviewAttempt,
-		pipeline:    pipeline,
-		agentConfig: agentConfig,
-		resumed:     true,
-	}, nil
-}
-
-func taskReviewTarget(
-	store taskstate.Store,
-	paths state.Paths,
-	resolvedCtx resolvedTaskContext,
-) (workflow.Target, error) {
-	repo := resolvedCtx.Resolved.Source.Repository
-	taskID := resolvedCtx.Resolved.TaskID
-	taskState, err := store.Load(repo.ID, taskID)
-	if err != nil {
-		return workflow.Target{}, fmt.Errorf("load task state: %w", err)
-	}
-	taskTarget, ok := taskstate.Target(taskState)
-	if !ok {
-		return workflow.Target{}, fmt.Errorf("task has no Orpheus target; run `orpheus task run %s` first", taskID)
-	}
-	targets, err := workflow.ExpectedTargetsForTask(repo, taskID, paths)
-	if err != nil {
-		return workflow.Target{}, err
-	}
-	target, err := workflow.ClassifyTaskStateTarget(taskTarget, targets)
-	if err != nil {
-		return workflow.Target{}, fmt.Errorf("task has inconsistent taskstate target: %w", err)
-	}
-	if err := validateTaskMetadataMirror(resolvedCtx.Task, targets, target); err != nil {
-		return workflow.Target{}, err
-	}
-	return target, nil
-}
-
-func validateTaskMetadataMirror(
-	taskItem taskmodel.Task,
-	targets workflow.ExpectedTargets,
-	target workflow.Target,
-) error {
-	metadataTarget, err := workflow.ClassifyMetadataTarget(taskItem.OrpheusMetadata(), targets)
-	if err != nil {
-		return fmt.Errorf("task %s metadata target is invalid: %w", taskItem.ID, err)
-	}
-	if metadataTarget.Branch == target.Branch && metadataTarget.Worktree == target.Worktree {
-		return nil
-	}
-	return fmt.Errorf(
-		"task %s metadata target %q/%q does not mirror taskstate target %q/%q",
-		taskItem.ID,
-		metadataTarget.Branch,
-		metadataTarget.Worktree,
-		target.Branch,
-		target.Worktree,
-	)
-}
-
-func resolveTaskReviewAgentConfig(paths state.Paths, pipeline review.Pipeline) (agent.Config, error) {
-	for _, step := range pipeline.Steps {
-		if step.Kind == review.KindAgentReview {
-			config, err := agent.LoadConfig(paths)
-			if err != nil {
-				return agent.Config{}, err
-			}
-			return config, nil
-		}
-	}
-	return agent.Config{}, nil
-}
-
-func resolveTaskReviewPipeline(
-	paths state.Paths,
-	repo taskmodel.Repository,
-	pipelineName string,
-) (review.Pipeline, error) {
-	config, err := review.LoadConfig(paths)
-	if err != nil {
-		return review.Pipeline{}, err
-	}
-	if name := strings.TrimSpace(pipelineName); name != "" {
-		if target, ok := repo.ReviewPipelineAliases[name]; ok {
-			pipeline, err := review.ResolvePipeline(config, target, "")
-			if err != nil {
-				return review.Pipeline{}, fmt.Errorf("CLI --pipeline alias %q targets %q: %w", name, target, err)
-			}
-			return pipeline, nil
-		}
-
-		pipeline, err := review.ResolvePipeline(config, name, "")
-		if err != nil {
-			return review.Pipeline{}, appendRepoReviewPipelineAliases(err, repo)
-		}
-		return pipeline, nil
-	}
-	return review.ResolvePipeline(config, pipelineName, repo.ReviewPipeline)
-}
-
-func resolvePausedTaskReviewPipeline(
-	paths state.Paths,
-	repo taskmodel.Repository,
-	paused taskstate.ReviewAttempt,
-	pipelineName string,
-) (review.Pipeline, error) {
-	storedPipeline := strings.TrimSpace(paused.Pipeline)
-	if storedPipeline == "" {
-		return review.Pipeline{}, fmt.Errorf("paused review attempt %d has no recorded pipeline", paused.Attempt)
-	}
-	pipeline, err := resolveStoredTaskReviewPipeline(paths, storedPipeline)
-	if err != nil {
-		return review.Pipeline{}, fmt.Errorf("resolve paused review pipeline %q: %w", storedPipeline, err)
-	}
-
-	if strings.TrimSpace(pipelineName) == "" {
-		return pipeline, nil
-	}
-	requested, err := resolveTaskReviewPipeline(paths, repo, pipelineName)
-	if err != nil {
-		return review.Pipeline{}, err
-	}
-	if requested.Name != pipeline.Name {
-		return review.Pipeline{}, fmt.Errorf(
-			"review attempt %d is waiting for manual step %q in pipeline %q; --pipeline %q resolves to %q and cannot replace a paused review",
-			paused.Attempt,
-			paused.Step,
-			pipeline.Name,
-			strings.TrimSpace(pipelineName),
-			requested.Name,
-		)
-	}
-	return pipeline, nil
-}
-
-func resolveStoredTaskReviewPipeline(paths state.Paths, pipelineName string) (review.Pipeline, error) {
-	config, err := review.LoadConfig(paths)
-	if err != nil {
-		return review.Pipeline{}, err
-	}
-	pipeline, err := review.ResolvePipeline(config, pipelineName, "")
-	if err == nil {
-		return pipeline, nil
-	}
-	builtin := review.BuiltinManualPipeline()
-	if pipelineName == builtin.Name {
-		return builtin, nil
-	}
-	return review.Pipeline{}, err
-}
-
-func appendRepoReviewPipelineAliases(err error, repo taskmodel.Repository) error {
-	aliases := make([]string, 0, len(repo.ReviewPipelineAliases))
-	for alias, target := range repo.ReviewPipelineAliases {
-		aliases = append(aliases, fmt.Sprintf("%s=%s", alias, target))
-	}
-	sort.Strings(aliases)
-	if len(aliases) == 0 {
-		return err
-	}
-	return fmt.Errorf("%w; configured repo aliases: %s", err, strings.Join(aliases, ", "))
-}
-
-func finalizeApprovedTaskReview(
-	command *cobra.Command,
-	logger *slog.Logger,
-	paths state.Paths,
-	resolvedCtx resolvedTaskContext,
-) error {
-	taskCtx, err := loadTaskContext()
-	if err != nil {
-		return err
-	}
-	service := newTaskFinalizationService(paths, taskCtx)
-	finalized, err := finalizeTaskWithConfirmation(command, service, workflow.FinalizeOptions{
-		TaskID:              resolvedCtx.Resolved.TaskID,
-		RequirePassedReview: true,
-	})
-	if err != nil {
-		return err
-	}
-
-	logger.DebugContext(
-		command.Context(),
-		"review approved and finalized task",
-		slog.String("repo_id", finalized.Repository.ID),
-		slog.String("task_id", finalized.Task.ID),
-		slog.String("commit", finalized.Finalization.Commit),
-	)
-	return renderTaskDoneResult(command, finalized)
-}
-
-type separateTaskCandidate struct {
-	index   int
-	finding taskstate.ReviewFinding
-}
-
-func processSeparateTaskReviewCandidates(
-	command *cobra.Command,
-	start taskReviewStart,
-	reader *bufio.Reader,
-) (bool, error) {
-	candidates, err := pendingSeparateTaskCandidates(start.store, start.repoID(), start.taskID(), start.review.Attempt)
-	if err != nil {
-		return false, fmt.Errorf("task review %s: load separate-task candidates: %w", start.taskID(), err)
-	}
-	if len(candidates) == 0 {
-		return true, nil
-	}
-	selected, err := promptSeparateTaskCandidateSelection(command, reader, candidates)
-	if err != nil {
-		return false, fmt.Errorf("task review %s: %w", start.taskID(), err)
-	}
-	if len(selected) == 0 {
-		return true, nil
-	}
-	return createSelectedSeparateTaskCandidates(command, start, reader, selected)
-}
-
-func createSelectedSeparateTaskCandidates(
-	command *cobra.Command,
-	start taskReviewStart,
-	reader *bufio.Reader,
-	selected []separateTaskCandidate,
-) (bool, error) {
-	backend, err := newBeadsTaskBackend(start.resolvedCtx.Resolved.Source.BackendDir)
-	if err != nil {
-		return false, fmt.Errorf("task review %s: create follow-up task backend: %w", start.taskID(), err)
-	}
-	for _, candidate := range selected {
-		created, err := backend.Create(command.Context(), createOptionsForReviewCandidate(start, candidate))
-		if err != nil {
-			return promptContinueAfterFollowUpCreationFailure(command, reader, candidate, err)
-		}
-		if _, err := start.store.RecordReviewFindingCreatedTask(
-			start.repoID(),
-			start.taskID(),
-			start.review.Attempt,
-			candidate.index,
-			created.ID,
-		); err != nil {
-			return false, fmt.Errorf("task review %s: record created follow-up task %s: %w", start.taskID(), created.ID, err)
-		}
-		if _, err := fmt.Fprintf(
-			command.ErrOrStderr(),
-			"Created follow-up Bead %s for review finding %d.\n",
-			created.ID,
-			candidate.index+1,
-		); err != nil {
-			return false, err
-		}
-	}
-	return true, nil
-}
-
-func pendingSeparateTaskCandidates(
-	store taskstate.Store,
-	repoID string,
-	taskID string,
-	attempt int,
-) ([]separateTaskCandidate, error) {
-	state, err := store.Load(repoID, taskID)
-	if err != nil {
-		return nil, err
-	}
-	for _, reviewAttempt := range state.Reviews {
-		if reviewAttempt.Attempt != attempt {
-			continue
-		}
-		candidates := make([]separateTaskCandidate, 0)
-		for index, finding := range reviewAttempt.Findings {
-			if finding.Type != taskstate.FindingTypeSeparateTask || strings.TrimSpace(finding.CreatedTaskID) != "" {
-				continue
-			}
-			candidates = append(candidates, separateTaskCandidate{index: index, finding: finding})
-		}
-		return candidates, nil
-	}
-	return nil, fmt.Errorf("review attempt %d was not found", attempt)
-}
-
-func promptSeparateTaskCandidateSelection(
-	command *cobra.Command,
-	reader *bufio.Reader,
-	candidates []separateTaskCandidate,
-) ([]separateTaskCandidate, error) {
-	output := command.ErrOrStderr()
-	if _, err := fmt.Fprintln(output, "\nSeparate-task review findings can be created as standalone Beads:"); err != nil {
-		return nil, err
-	}
-	for displayIndex, candidate := range candidates {
-		if _, err := fmt.Fprintf(
-			output,
-			"%d. %s (review finding %d)\n",
-			displayIndex+1,
-			candidate.finding.TaskProposal.Title,
-			candidate.index+1,
-		); err != nil {
-			return nil, err
-		}
-	}
-	if _, err := fmt.Fprint(output, "Create follow-up Beads [numbers, a=all, n=none]: "); err != nil {
-		return nil, err
-	}
-
-	line, err := reader.ReadString('\n')
-	if err != nil && (!errors.Is(err, io.EOF) || line == "") {
-		return nil, fmt.Errorf("read follow-up task selection: %w", err)
-	}
-	return selectSeparateTaskCandidates(candidates, line)
-}
-
-func selectSeparateTaskCandidates(candidates []separateTaskCandidate, input string) ([]separateTaskCandidate, error) {
-	answer := strings.ToLower(strings.TrimSpace(input))
-	switch answer {
-	case "", "n", "no", "none", "skip":
-		return nil, nil
-	case "a", "all":
-		return candidates, nil
-	}
-
-	fields := strings.FieldsFunc(answer, func(r rune) bool {
-		return r == ',' || r == ' ' || r == '\t'
-	})
-	if len(fields) == 0 {
-		return nil, nil
-	}
-
-	seen := map[int]bool{}
-	selected := make([]separateTaskCandidate, 0, len(fields))
-	for _, field := range fields {
-		number, err := strconv.Atoi(field)
-		if err != nil || number < 1 || number > len(candidates) {
-			return nil, fmt.Errorf("invalid follow-up task selection %q", strings.TrimSpace(input))
-		}
-		if seen[number] {
-			continue
-		}
-		seen[number] = true
-		selected = append(selected, candidates[number-1])
-	}
-	return selected, nil
-}
-
-func createOptionsForReviewCandidate(start taskReviewStart, candidate separateTaskCandidate) taskmodel.CreateOptions {
-	proposal := candidate.finding.TaskProposal
-	return taskmodel.CreateOptions{
-		Title:              proposal.Title,
-		Description:        reviewFollowUpTaskDescription(start, candidate),
-		AcceptanceCriteria: proposal.AcceptanceCriteria,
-		IssueType:          taskmodel.IssueTypeTask,
-	}
-}
-
-func reviewFollowUpTaskDescription(start taskReviewStart, candidate separateTaskCandidate) string {
-	proposal := candidate.finding.TaskProposal
-	provenance := fmt.Sprintf(
-		"Discovered during review of %s in repository %s (review attempt %d, finding %d).",
-		start.taskID(),
-		start.repoID(),
-		start.review.Attempt,
-		candidate.index+1,
-	)
-	if strings.TrimSpace(candidate.finding.Step) != "" {
-		provenance += " Review step: " + candidate.finding.Step + "."
-	}
-	return strings.TrimSpace(proposal.Description) + "\n\nProvenance:\n" + provenance
-}
-
-func promptContinueAfterFollowUpCreationFailure(
-	command *cobra.Command,
-	reader *bufio.Reader,
-	candidate separateTaskCandidate,
-	cause error,
-) (bool, error) {
-	output := command.ErrOrStderr()
-	if _, err := fmt.Fprintf(
-		output,
-		"Failed to create follow-up Bead for review finding %d (%s): %v\n",
-		candidate.index+1,
-		candidate.finding.TaskProposal.Title,
-		cause,
-	); err != nil {
-		return false, err
-	}
-	if _, err := fmt.Fprint(output, "Continue publication without creating this follow-up Bead? [y/N]: "); err != nil {
-		return false, err
-	}
-
-	line, err := reader.ReadString('\n')
-	if err != nil && (!errors.Is(err, io.EOF) || line == "") {
-		return false, fmt.Errorf("read follow-up task failure confirmation: %w", err)
-	}
-	answer := strings.ToLower(strings.TrimSpace(line))
-	return answer == "y" || answer == "yes", nil
-}
-
-func validateReviewCandidateReady(
-	ctx context.Context,
-	store taskstate.Store,
-	resolvedCtx resolvedTaskContext,
-	workdir string,
-) error {
-	if err := requireCleanReviewIndex(ctx, workdir); err != nil {
-		return err
-	}
-
-	hasCandidate, err := hasReviewCandidateChanges(ctx, workdir)
-	if err != nil {
-		return err
-	}
-	if hasCandidate {
-		return nil
-	}
-
-	taskState, err := store.Load(resolvedCtx.Resolved.Source.Repository.ID, resolvedCtx.Resolved.TaskID)
-	if err != nil {
-		return fmt.Errorf("load task state: %w", err)
-	}
-	if strings.TrimSpace(taskstate.FinalizationFacts(taskState).Commit) != "" {
-		return nil
-	}
-	return fmt.Errorf(
-		"worktree %q has no candidate changes to review and task has no recorded finalization commit",
-		workdir,
-	)
-}
-
-func requireCleanReviewIndex(ctx context.Context, workdir string) error {
-	hasStagedChanges, err := gitmeta.HasStagedChanges(ctx, workdir)
-	if err != nil {
-		return err
-	}
-	if !hasStagedChanges {
-		return nil
-	}
-	status, statusErr := gitmeta.ShortStatus(ctx, workdir)
-	if statusErr != nil {
-		status = "unable to read git status: " + statusErr.Error()
-	}
-	return fmt.Errorf(
-		"review requires a clean Git index, but staged changes are present in %q; unstage them before running task review\n%s",
-		workdir,
-		strings.TrimSpace(status),
-	)
-}
-
-func hasReviewCandidateChanges(ctx context.Context, workdir string) (bool, error) {
-	return review.HasCandidateChanges(ctx, workdir)
 }
 
 type manualReviewOutcome struct {
@@ -1975,38 +1033,16 @@ const (
 	manualReviewAborted
 )
 
-func renderManualReviewContext(
-	command *cobra.Command,
-	store taskstate.Store,
-	resolvedCtx resolvedTaskContext,
-	workdir string,
-	reviewAttempt taskstate.ReviewAttempt,
-	step review.Step,
-) error {
+func renderManualReviewContext(command *cobra.Command, ctx workflow.ReviewManualStepContext) error {
 	output := command.ErrOrStderr()
-	repo := resolvedCtx.Resolved.Source.Repository
-	taskItem := resolvedCtx.Task
-
-	taskState, err := store.Load(repo.ID, taskItem.ID)
-	if err != nil {
-		return fmt.Errorf("load task state: %w", err)
-	}
-	latest, ok := taskstate.LatestRun(taskState)
-	if !ok {
-		return fmt.Errorf("task has no Orpheus run attempts; run `orpheus task run %s` first", taskItem.ID)
-	}
-	if latest.Completion == nil {
-		return fmt.Errorf("latest run attempt %d has no completion block; run `orpheus agent done` first", latest.Attempt)
-	}
+	taskItem := ctx.Task
+	taskState := ctx.TaskState
 	completions, err := manualReviewCompletions(taskState)
 	if err != nil {
 		return err
 	}
 
-	status, err := gitmeta.ShortStatus(command.Context(), workdir)
-	if err != nil {
-		return fmt.Errorf("read git status: %w", err)
-	}
+	status := ctx.GitStatus
 
 	if _, err := fmt.Fprintf(output, "Task: %s - %s\n", taskItem.ID, taskItem.Title); err != nil {
 		return err
@@ -2028,10 +1064,10 @@ func renderManualReviewContext(
 		return err
 	}
 
-	if err := renderCurrentManualStepFindings(output, taskState, reviewAttempt.Attempt, step.Name); err != nil {
+	if err := renderCurrentManualStepFindings(output, taskState, ctx.Review.Attempt, ctx.Step.Name); err != nil {
 		return err
 	}
-	return renderPriorReviewAdvisories(output, taskState, reviewAttempt.Attempt, step.Name)
+	return renderPriorReviewAdvisories(output, taskState, ctx.Review.Attempt, ctx.Step.Name)
 }
 
 type manualReviewCompletionContext struct {
@@ -2065,28 +1101,6 @@ func manualReviewCompletions(taskState taskstate.TaskState) (manualReviewComplet
 	}, nil
 }
 
-func resumedReviewImplementerName(start taskReviewStart) (string, error) {
-	taskState, err := start.store.Load(start.repoID(), start.taskID())
-	if err != nil {
-		return "", fmt.Errorf("load task state for resumed review implementer: %w", err)
-	}
-	completions, err := manualReviewCompletions(taskState)
-	if err != nil {
-		return "", fmt.Errorf("resolve resumed review implementer: %w", err)
-	}
-	agentName := strings.TrimSpace(completions.latest.Execution.Agent)
-	if agentName == "" {
-		agentName = strings.TrimSpace(completions.latest.Execution.Profile)
-	}
-	if agentName == "" {
-		return "", fmt.Errorf(
-			"resolve resumed review implementer: latest completed run attempt %d has no recorded agent profile",
-			completions.latest.Attempt,
-		)
-	}
-	return agentName, nil
-}
-
 func renderManualReviewCompletions(output io.Writer, ctx manualReviewCompletionContext) error {
 	if ctx.latest.ReviewFollowUp == nil {
 		return renderManualReviewCompletion(output, "Latest completion", "Completion description", ctx.latest.Completion)
@@ -2113,18 +1127,16 @@ func renderManualReviewCompletion(output io.Writer, summaryLabel string, descrip
 func runManualReviewPrompt(
 	command *cobra.Command,
 	reader *bufio.Reader,
-	store taskstate.Store,
-	resolvedCtx resolvedTaskContext,
-	review taskstate.ReviewAttempt,
+	recorder workflow.ReviewManualStepRecorder,
+	taskID string,
 	stepName string,
 	hunkNotes []review.HunkNote,
 ) (manualReviewOutcome, error) {
 	session := manualReviewSession{
-		command:     command,
-		store:       store,
-		resolvedCtx: resolvedCtx,
-		review:      review,
-		stepName:    stepName,
+		command:  command,
+		recorder: recorder,
+		taskID:   taskID,
+		stepName: stepName,
 	}
 	if err := session.importHunkNotes(reader, hunkNotes); err != nil {
 		return manualReviewOutcome{}, err
@@ -2136,7 +1148,7 @@ func runManualReviewPrompt(
 		}
 		action, err := promptManualReviewAction(command, reader, actions)
 		if err != nil {
-			return manualReviewOutcome{}, fmt.Errorf("task review %s: %w", resolvedCtx.Resolved.TaskID, err)
+			return manualReviewOutcome{}, fmt.Errorf("task review %s: %w", taskID, err)
 		}
 
 		result, done, err := session.handleManualReviewAction(action, reader, actions)
@@ -2147,11 +1159,10 @@ func runManualReviewPrompt(
 }
 
 type manualReviewSession struct {
-	command     *cobra.Command
-	store       taskstate.Store
-	resolvedCtx resolvedTaskContext
-	review      taskstate.ReviewAttempt
-	stepName    string
+	command  *cobra.Command
+	recorder workflow.ReviewManualStepRecorder
+	taskID   string
+	stepName string
 }
 
 func (s manualReviewSession) importHunkNotes(reader *bufio.Reader, notes []review.HunkNote) error {
@@ -2167,19 +1178,13 @@ func (s manualReviewSession) importHunkNotes(reader *bufio.Reader, notes []revie
 		}
 		finding, importNote, err := promptHunkNoteFinding(s.command, reader, note)
 		if err != nil {
-			return fmt.Errorf("task review %s: import Hunk note %s: %w", s.resolvedCtx.Resolved.TaskID, hunkNoteID(note), err)
+			return fmt.Errorf("task review %s: import Hunk note %s: %w", s.taskID, hunkNoteID(note), err)
 		}
 		if !importNote {
 			continue
 		}
-		finding.Step = s.stepName
-		if _, err := s.store.RecordReviewFinding(
-			s.resolvedCtx.Resolved.Source.Repository.ID,
-			s.resolvedCtx.Resolved.TaskID,
-			s.review.Attempt,
-			finding,
-		); err != nil {
-			return fmt.Errorf("task review %s: record Hunk note finding: %w", s.resolvedCtx.Resolved.TaskID, err)
+		if _, err := s.recorder.RecordFinding(finding); err != nil {
+			return fmt.Errorf("task review %s: record Hunk note finding: %w", s.taskID, err)
 		}
 		if _, err := fmt.Fprintf(s.command.ErrOrStderr(), "Imported Hunk note %s as %s finding.\n", hunkNoteID(note), hunkNoteFindingTypeLabel(finding.Type)); err != nil {
 			return err
@@ -2241,7 +1246,7 @@ func (s manualReviewSession) approve() (manualReviewOutcome, bool, error) {
 		return manualReviewOutcome{}, true, err
 	}
 	if taskstate.ReviewHasOpenBlockers(latest) {
-		_, err := fmt.Fprintf(s.command.ErrOrStderr(), "Review blocked for %s.\n", s.resolvedCtx.Resolved.TaskID)
+		_, err := fmt.Fprintf(s.command.ErrOrStderr(), "Review blocked for %s.\n", s.taskID)
 		return manualReviewOutcome{
 			result: manualReviewBlocked,
 			status: taskstate.ReviewStatusBlocked,
@@ -2257,7 +1262,7 @@ func (s manualReviewSession) block(reader *bufio.Reader) (manualReviewOutcome, b
 	if _, _, err := s.recordFinding(reader, taskstate.FindingTypeBlocking, "blocking"); err != nil {
 		return manualReviewOutcome{}, true, err
 	}
-	_, err := fmt.Fprintf(s.command.ErrOrStderr(), "Review blocked for %s.\n", s.resolvedCtx.Resolved.TaskID)
+	_, err := fmt.Fprintf(s.command.ErrOrStderr(), "Review blocked for %s.\n", s.taskID)
 	return manualReviewOutcome{
 		result: manualReviewBlocked,
 		status: taskstate.ReviewStatusBlocked,
@@ -2271,16 +1276,10 @@ func (s manualReviewSession) recordFinding(
 ) (manualReviewOutcome, bool, error) {
 	finding, err := promptReviewFinding(s.command, reader, findingType)
 	if err != nil {
-		return manualReviewOutcome{}, true, fmt.Errorf("task review %s: %w", s.resolvedCtx.Resolved.TaskID, err)
+		return manualReviewOutcome{}, true, fmt.Errorf("task review %s: %w", s.taskID, err)
 	}
-	finding.Step = s.stepName
-	if _, err := s.store.RecordReviewFinding(
-		s.resolvedCtx.Resolved.Source.Repository.ID,
-		s.resolvedCtx.Resolved.TaskID,
-		s.review.Attempt,
-		finding,
-	); err != nil {
-		return manualReviewOutcome{}, true, fmt.Errorf("task review %s: record %s finding: %w", s.resolvedCtx.Resolved.TaskID, label, err)
+	if _, err := s.recorder.RecordFinding(finding); err != nil {
+		return manualReviewOutcome{}, true, fmt.Errorf("task review %s: record %s finding: %w", s.taskID, label, err)
 	}
 	return manualReviewOutcome{}, false, nil
 }
@@ -2301,19 +1300,14 @@ func (s manualReviewSession) promotePriorAdvisories(reader *bufio.Reader) (manua
 
 	indexes, err := promptReviewAdvisoryPromotionSelection(s.command, reader, advisories)
 	if err != nil {
-		return manualReviewOutcome{}, true, fmt.Errorf("task review %s: %w", s.resolvedCtx.Resolved.TaskID, err)
+		return manualReviewOutcome{}, true, fmt.Errorf("task review %s: %w", s.taskID, err)
 	}
 	if len(indexes) == 0 {
 		return manualReviewOutcome{}, false, nil
 	}
 	for _, index := range indexes {
-		if _, err := s.store.PromoteReviewAdvisoryFinding(
-			s.resolvedCtx.Resolved.Source.Repository.ID,
-			s.resolvedCtx.Resolved.TaskID,
-			s.review.Attempt,
-			index,
-		); err != nil {
-			return manualReviewOutcome{}, true, fmt.Errorf("task review %s: promote advisory finding %d: %w", s.resolvedCtx.Resolved.TaskID, index+1, err)
+		if _, err := s.recorder.PromoteAdvisoryFinding(index); err != nil {
+			return manualReviewOutcome{}, true, fmt.Errorf("task review %s: promote advisory finding %d: %w", s.taskID, index+1, err)
 		}
 		if _, err := fmt.Fprintf(s.command.ErrOrStderr(), "Promoted advisory finding %d to blocking.\n", index+1); err != nil {
 			return manualReviewOutcome{}, true, err
@@ -2323,19 +1317,15 @@ func (s manualReviewSession) promotePriorAdvisories(reader *bufio.Reader) (manua
 }
 
 func (s manualReviewSession) loadLatestReview() (taskstate.ReviewAttempt, error) {
-	taskState, err := s.store.Load(s.resolvedCtx.Resolved.Source.Repository.ID, s.resolvedCtx.Resolved.TaskID)
+	latest, err := s.recorder.LatestReview()
 	if err != nil {
-		return taskstate.ReviewAttempt{}, fmt.Errorf("task review %s: load review state: %w", s.resolvedCtx.Resolved.TaskID, err)
-	}
-	latest, ok := taskstate.LatestReview(taskState)
-	if !ok || latest.Attempt != s.review.Attempt {
-		return taskstate.ReviewAttempt{}, fmt.Errorf("task review %s: latest review attempt no longer matches attempt %d", s.resolvedCtx.Resolved.TaskID, s.review.Attempt)
+		return taskstate.ReviewAttempt{}, fmt.Errorf("task review %s: %w", s.taskID, err)
 	}
 	return latest, nil
 }
 
 func (s manualReviewSession) abort() (manualReviewOutcome, bool, error) {
-	_, err := fmt.Fprintf(s.command.ErrOrStderr(), "Review aborted for %s.\n", s.resolvedCtx.Resolved.TaskID)
+	_, err := fmt.Fprintf(s.command.ErrOrStderr(), "Review aborted for %s.\n", s.taskID)
 	return manualReviewOutcome{
 		result: manualReviewAborted,
 		status: taskstate.ReviewStatusAborted,
@@ -3131,9 +2121,20 @@ func confirmRunningCompletionFinalization(
 	command *cobra.Command,
 	confirmation workflow.RunningCompletionConfirmation,
 ) (bool, error) {
+	return confirmRunningCompletionFinalizationWithReader(command, confirmation, nil)
+}
+
+func confirmRunningCompletionFinalizationWithReader(
+	command *cobra.Command,
+	confirmation workflow.RunningCompletionConfirmation,
+	reader *bufio.Reader,
+) (bool, error) {
 	input := command.InOrStdin()
 	if !taskDoneInputIsTerminal(input) {
 		return false, nil
+	}
+	if reader == nil {
+		reader = bufio.NewReader(input)
 	}
 
 	output := command.ErrOrStderr()
@@ -3160,7 +2161,7 @@ func confirmRunningCompletionFinalization(
 		return false, err
 	}
 
-	line, err := bufio.NewReader(input).ReadString('\n')
+	line, err := reader.ReadString('\n')
 	if err != nil && (!errors.Is(err, io.EOF) || line == "") {
 		return false, fmt.Errorf("read finalization confirmation: %w", err)
 	}

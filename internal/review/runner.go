@@ -17,10 +17,24 @@ import (
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
+// PipelineStore persists and reads review pipeline state.
+type PipelineStore interface {
+	Load(repoID, taskID string) (taskstate.TaskState, error)
+	RecordReviewFinding(repoID, taskID string, attempt int, finding taskstate.ReviewFinding) (taskstate.ReviewAttempt, error)
+	PauseReviewForManual(repoID, taskID string, attempt int, step string) (taskstate.ReviewAttempt, error)
+	ResumeReview(repoID, taskID string, attempt int) (taskstate.ReviewAttempt, error)
+	FinishReviewStepExecution(repoID, taskID string, attempt int, stepName string, opts taskstate.FinishReviewStepExecutionOptions) (taskstate.ReviewAttempt, error)
+	MarkReviewAutomatedBlockerDecisionInterrupted(repoID, taskID string, attempt int) (taskstate.ReviewAttempt, error)
+	MarkReviewAutomatedBlockerDecisionKept(repoID, taskID string, attempt int) (taskstate.ReviewAttempt, error)
+	DowngradeReviewBlockingFinding(repoID, taskID string, attempt int, findingIndex int, reason string) (taskstate.ReviewAttempt, error)
+	WaiveReviewBlockingFinding(repoID, taskID string, attempt int, findingIndex int, reason string) (taskstate.ReviewAttempt, error)
+	RecordReviewStep(repoID, taskID string, attempt int, opts taskstate.RecordReviewStepOptions) (taskstate.ReviewAttempt, error)
+}
+
 // PipelineRunOptions describes one local review pipeline execution.
 type PipelineRunOptions struct {
 	Context context.Context
-	Store   taskstate.Store
+	Store   PipelineStore
 
 	RepoID  string
 	TaskID  string

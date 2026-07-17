@@ -4961,6 +4961,103 @@ func TestTaskReviewCheckStartFailureMarksOperationalFailure(t *testing.T) {
 	is.Empty(latest.Findings)
 }
 
+func TestTaskReviewInvalidReviewAgentConfigDoesNotStartFreshAttempt(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review agent config", "Validate preflight.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+		"standard": {{"kind": "agent_review", "name": "ai-review"}},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+	})
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "review", "op-main"})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "load agent profiles")
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	_, ok := taskstate.LatestReview(state)
+	is.False(ok, "fresh invalid agent config must not persist a review attempt")
+}
+
+func TestTaskReviewInvalidReviewAgentConfigDoesNotResumeManualAttempt(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review agent resume", "Validate preflight.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+		"standard": {
+			{"kind": "agent_review", "name": "ai-review"},
+			{"kind": "manual", "name": "inspect"},
+		},
+	})
+	runStore := taskstate.NewStore(paths)
+	reviewAttempt, err := runStore.StartReviewWithOptions("alpha", "op-main", taskstate.StartReviewOptions{
+		Pipeline: "standard",
+		Step:     "ai-review",
+	})
+	must.NoError(err)
+	_, err = runStore.RecordReviewStep("alpha", "op-main", reviewAttempt.Attempt, taskstate.RecordReviewStepOptions{
+		Kind: "agent_review",
+		Name: "ai-review",
+	})
+	must.NoError(err)
+	_, err = runStore.PauseReviewForManual("alpha", "op-main", reviewAttempt.Attempt, "inspect")
+	must.NoError(err)
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+	})
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "review", "op-main"})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "load agent profiles")
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(reviewAttempt.Attempt, latest.Attempt)
+	is.Equal(taskstate.ReviewStatusWaitingForManual, latest.Status)
+	is.Equal("inspect", latest.Step)
+}
+
 //nolint:funlen // The review-agent CLI fixture is clearer as one end-to-end scenario.
 func TestTaskReviewAgentReviewStepLaunchesReviewerAndPassesWithoutFindings(t *testing.T) {
 	is := assert.New(t)
