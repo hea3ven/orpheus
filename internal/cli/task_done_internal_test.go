@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"io"
 	"strings"
@@ -55,6 +56,37 @@ func TestConfirmRunningCompletionFinalizationRequiresAffirmativeAnswer(t *testin
 				}
 			}
 		})
+	}
+}
+
+func TestTaskReviewLifecycleFrontendConfirmsRunningCompletionWithSharedReader(t *testing.T) {
+	original := taskDoneInputIsTerminal
+	taskDoneInputIsTerminal = func(io.Reader) bool { return true }
+	t.Cleanup(func() { taskDoneInputIsTerminal = original })
+
+	var stderr bytes.Buffer
+	command := &cobra.Command{}
+	command.SetIn(strings.NewReader(""))
+	command.SetErr(&stderr)
+	reader := bufio.NewReader(strings.NewReader("a\ny\n"))
+	if line, err := reader.ReadString('\n'); err != nil || line != "a\n" {
+		t.Fatalf("prime shared reader = %q, %v", line, err)
+	}
+	frontend := taskReviewLifecycleFrontend{command: command, reader: reader}
+
+	confirmed, err := frontend.ConfirmRunningCompletionFinalization(
+		workflow.ReviewAttemptContext{},
+		workflow.RunningCompletionConfirmation{TaskID: "op-1", Attempt: 1, Summary: "Reviewed"},
+	)
+	if err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if !confirmed {
+		t.Fatal("confirmed = false, want true")
+	}
+	output := stderr.String()
+	if !strings.Contains(output, "Finalize anyway? [y/N]:") {
+		t.Fatalf("stderr = %q, want finalization prompt", output)
 	}
 }
 

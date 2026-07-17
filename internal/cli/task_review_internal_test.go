@@ -15,7 +15,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func TestTaskReviewPipelineOptionsRequiresBothOutputStreamsTerminal(t *testing.T) {
+func TestTaskReviewPipelinePresentationRequiresBothOutputStreamsTerminal(t *testing.T) {
 	stdout := new(bytes.Buffer)
 	stderr := new(bytes.Buffer)
 	original := taskReviewOutputIsTerminal
@@ -28,26 +28,26 @@ func TestTaskReviewPipelineOptionsRequiresBothOutputStreamsTerminal(t *testing.T
 	command.SetOut(stdout)
 	command.SetErr(stderr)
 
-	opts := taskReviewPipelineOptions(
+	presentation := taskReviewPipelinePresentation(
 		command,
 		minimalTaskReviewStart(),
 		bufio.NewReader(bytes.NewReader(nil)),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
-	if opts.InteractiveOutput {
+	if presentation.InteractiveOutput {
 		t.Fatal("InteractiveOutput = true, want false when stdout is redirected")
 	}
 
 	taskReviewOutputIsTerminal = func(writer io.Writer) bool {
 		return writer == stdout || writer == stderr
 	}
-	opts = taskReviewPipelineOptions(
+	presentation = taskReviewPipelinePresentation(
 		command,
 		minimalTaskReviewStart(),
 		bufio.NewReader(bytes.NewReader(nil)),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
-	if !opts.InteractiveOutput {
+	if !presentation.InteractiveOutput {
 		t.Fatal("InteractiveOutput = false, want true when stdout and stderr are terminals")
 	}
 }

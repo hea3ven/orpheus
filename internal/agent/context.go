@@ -12,7 +12,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
-	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/tasktarget"
 )
 
 const (
@@ -27,17 +27,17 @@ const (
 )
 
 // ExecutionTarget identifies the validated workflow target for an active agent run.
-type ExecutionTarget = workflow.TargetKind
+type ExecutionTarget = tasktarget.TargetKind
 
 const (
 	// ExecutionTargetWorktree means the agent runs in Orpheus' deterministic task worktree.
-	ExecutionTargetWorktree = workflow.TargetWorktreeTeam
+	ExecutionTargetWorktree = tasktarget.TargetWorktreeTeam
 
 	// ExecutionTargetRepoRoot means the agent runs in the registered repo root on a task branch.
-	ExecutionTargetRepoRoot = workflow.TargetRepoRootTeam
+	ExecutionTargetRepoRoot = tasktarget.TargetRepoRootTeam
 
 	// ExecutionTargetMain means the agent runs in the registered repo root on the default branch.
-	ExecutionTargetMain = workflow.TargetMainSolo
+	ExecutionTargetMain = tasktarget.TargetMainSolo
 )
 
 // ContextBackend is the backend-neutral read capability needed by agent context.
@@ -396,21 +396,21 @@ func (r ActiveContextResolver) resolveContextTarget(
 	taskItem taskmodel.Task,
 	taskID string,
 	taskTarget taskstate.TaskTarget,
-) (workflow.ExpectedTargets, targetCandidate, error) {
-	targets, err := workflow.ExpectedTargetsForTask(source.Repository, taskID, r.Paths)
+) (tasktarget.ExpectedTargets, targetCandidate, error) {
+	targets, err := tasktarget.ExpectedTargetsForTask(source.Repository, taskID, r.Paths)
 	if err != nil {
-		return workflow.ExpectedTargets{}, targetCandidate{}, err
+		return tasktarget.ExpectedTargets{}, targetCandidate{}, err
 	}
 	candidate, err := classifyContextTarget(source.Repository, taskTarget)
 	if err != nil {
-		return workflow.ExpectedTargets{}, targetCandidate{}, fmt.Errorf(
+		return tasktarget.ExpectedTargets{}, targetCandidate{}, fmt.Errorf(
 			"task %s has inconsistent taskstate target: %w",
 			taskID,
 			err,
 		)
 	}
-	if _, err := workflow.ClassifyMetadataTarget(taskItem.OrpheusMetadata(), targets); err != nil {
-		return workflow.ExpectedTargets{}, targetCandidate{}, fmt.Errorf(
+	if _, err := tasktarget.ClassifyMetadataTarget(taskItem.OrpheusMetadata(), targets); err != nil {
+		return tasktarget.ExpectedTargets{}, targetCandidate{}, fmt.Errorf(
 			"task %s has inconsistent Orpheus metadata: %w",
 			taskID,
 			err,
@@ -423,21 +423,21 @@ func (r ActiveContextResolver) resolveConflictResolutionTarget(
 	source taskmodel.RepositorySource,
 	taskItem taskmodel.Task,
 	taskID string,
-) (workflow.ExpectedTargets, targetCandidate, error) {
-	targets, err := workflow.ExpectedTargetsForTask(source.Repository, taskID, r.Paths)
+) (tasktarget.ExpectedTargets, targetCandidate, error) {
+	targets, err := tasktarget.ExpectedTargetsForTask(source.Repository, taskID, r.Paths)
 	if err != nil {
-		return workflow.ExpectedTargets{}, targetCandidate{}, err
+		return tasktarget.ExpectedTargets{}, targetCandidate{}, err
 	}
-	candidate, err := workflow.ClassifyMetadataTarget(taskItem.OrpheusMetadata(), targets)
+	candidate, err := tasktarget.ClassifyMetadataTarget(taskItem.OrpheusMetadata(), targets)
 	if err != nil {
-		return workflow.ExpectedTargets{}, targetCandidate{}, fmt.Errorf(
+		return tasktarget.ExpectedTargets{}, targetCandidate{}, fmt.Errorf(
 			"task %s has inconsistent Orpheus metadata: %w",
 			taskID,
 			err,
 		)
 	}
-	if candidate.Kind != workflow.TargetWorktreeTeam && candidate.Kind != workflow.TargetRepoRootTeam {
-		return workflow.ExpectedTargets{}, targetCandidate{}, fmt.Errorf(
+	if candidate.Kind != tasktarget.TargetWorktreeTeam && candidate.Kind != tasktarget.TargetRepoRootTeam {
+		return tasktarget.ExpectedTargets{}, targetCandidate{}, fmt.Errorf(
 			"task %s target is %s, expected an Orpheus-managed PR branch for sync conflict resolution",
 			taskID,
 			candidate.Kind.DisplayName(),
@@ -472,7 +472,7 @@ func (r ActiveContextResolver) resolveTargetCWD(candidate targetCandidate) (stri
 
 func newActiveContext(
 	repo registry.Repo,
-	targets workflow.ExpectedTargets,
+	targets tasktarget.ExpectedTargets,
 	taskItem taskmodel.Task,
 	run taskstate.RunAttempt,
 	candidate targetCandidate,
@@ -515,7 +515,7 @@ func newActiveContext(
 
 func newConflictResolutionContext(
 	repo registry.Repo,
-	targets workflow.ExpectedTargets,
+	targets tasktarget.ExpectedTargets,
 	taskItem taskmodel.Task,
 	candidate targetCandidate,
 	cwd string,
@@ -688,8 +688,8 @@ func classifyContextTarget(repo taskmodel.Repository, taskTarget taskstate.TaskT
 	if err != nil {
 		return targetCandidate{}, err
 	}
-	kind := workflow.ClassifyRunTarget(repo, branch, worktree)
-	if kind == workflow.TargetUnknown {
+	kind := tasktarget.ClassifyRunTarget(repo, branch, worktree)
+	if kind == tasktarget.TargetUnknown {
 		return targetCandidate{}, fmt.Errorf("branch %q and worktree %q do not match a supported execution target", branch, worktree)
 	}
 	return targetCandidate{
