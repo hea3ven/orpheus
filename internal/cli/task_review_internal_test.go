@@ -11,7 +11,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/review"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
-	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/tasktarget"
 	"github.com/spf13/cobra"
 )
 
@@ -54,7 +54,7 @@ func TestTaskReviewPipelinePresentationRequiresBothOutputStreamsTerminal(t *test
 
 func minimalTaskReviewStart() taskReviewStart {
 	return taskReviewStart{
-		target: workflow.Target{Branch: "main"},
+		target: tasktarget.Target{Branch: "main"},
 		review: taskstate.ReviewAttempt{
 			Attempt:  1,
 			Pipeline: "standard",

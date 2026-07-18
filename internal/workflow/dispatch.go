@@ -14,6 +14,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/tasktarget"
 )
 
 const (
@@ -94,14 +95,14 @@ type DispatchStartResult struct {
 type dispatchStartPlan struct {
 	taskItem   task.Task
 	expected   gitmeta.TaskWorktreeSetupResult
-	targetKind TargetKind
+	targetKind tasktarget.TargetKind
 	followUp   *dispatchFollowUpPlan
 }
 
 type dispatchFollowUpPlan struct {
 	reviewAttempt  int
 	findingIndexes []int
-	targetKind     TargetKind
+	targetKind     tasktarget.TargetKind
 }
 
 // DispatchFailureOptions describes how a failed dispatch attempt ended.
@@ -348,7 +349,7 @@ func (s DispatchService) validateStart(
 	if err := ensureDispatchEligible(taskItem, expected, repo, opts.MainMode, opts.RepoRootMode, reviewPlan != nil); err != nil {
 		return dispatchStartPlan{}, err
 	}
-	if targetKind == TargetMainSolo || targetKind == TargetRepoRootTeam {
+	if targetKind == tasktarget.TargetMainSolo || targetKind == tasktarget.TargetRepoRootTeam {
 		if err := ensureRepoRootDispatchAvailable(ctx, opts.Backend, repo, opts.TaskID, expected); err != nil {
 			return dispatchStartPlan{}, err
 		}
@@ -371,23 +372,23 @@ func ensureDispatchParentEpicGate(ctx context.Context, backend DispatchBackend, 
 	return fmt.Errorf("task %s is not eligible for dispatch: %s", taskItem.ID, gate.Detail())
 }
 
-func dispatchLockedTarget(repo task.Repository, state taskstate.TaskState) (Target, bool, error) {
+func dispatchLockedTarget(repo task.Repository, state taskstate.TaskState) (tasktarget.Target, bool, error) {
 	locked, ok := taskstate.Target(state)
 	if !ok {
-		return Target{}, false, nil
+		return tasktarget.Target{}, false, nil
 	}
 	branch := strings.TrimSpace(locked.Branch)
 	worktree := cleanDispatchPath(locked.Worktree)
-	kind := ClassifyRunTarget(repo, branch, worktree)
-	if kind == TargetUnknown {
-		return Target{}, false, fmt.Errorf(
+	kind := tasktarget.ClassifyRunTarget(repo, branch, worktree)
+	if kind == tasktarget.TargetUnknown {
+		return tasktarget.Target{}, false, fmt.Errorf(
 			"task %s has unsupported taskstate target branch %q and worktree %q",
 			state.TaskID,
 			locked.Branch,
 			locked.Worktree,
 		)
 	}
-	return Target{
+	return tasktarget.Target{
 		Kind:     kind,
 		Branch:   branch,
 		Worktree: worktree,
@@ -399,7 +400,7 @@ func (s DispatchService) resolveReviewFollowUpPlan(
 	taskID string,
 	repo task.Repository,
 	taskItem task.Task,
-	lockedTarget Target,
+	lockedTarget tasktarget.Target,
 	hasLockedTarget bool,
 ) (*dispatchFollowUpPlan, error) {
 	state, err := s.RunStore.Load(repoID, taskID)
@@ -438,7 +439,7 @@ func (s DispatchService) resolveReviewFollowUpPlan(
 func blockedReviewFollowUpPlan(
 	taskID string,
 	latestReview taskstate.ReviewAttempt,
-	lockedTarget Target,
+	lockedTarget tasktarget.Target,
 	hasLockedTarget bool,
 ) (*dispatchFollowUpPlan, error) {
 	if latestReview.AutomatedBlockerDecisionInterrupted {
@@ -567,10 +568,10 @@ func resolveDispatchCommand(
 func (s DispatchService) expectedSetup(
 	opts DispatchStartOptions,
 	taskItem task.Task,
-	lockedTarget Target,
+	lockedTarget tasktarget.Target,
 	hasLockedTarget bool,
 	followUp *dispatchFollowUpPlan,
-) (gitmeta.TaskWorktreeSetupResult, TargetKind, error) {
+) (gitmeta.TaskWorktreeSetupResult, tasktarget.TargetKind, error) {
 	if hasLockedTarget {
 		setup, err := s.expectedSetupForTargetKind(opts, taskItem, lockedTarget.Kind)
 		return setup, lockedTarget.Kind, err
@@ -581,27 +582,27 @@ func (s DispatchService) expectedSetup(
 	}
 	if opts.MainMode {
 		setup, err := gitmeta.ExpectedRepoRoot(dispatchRepoRootOptions(opts.Source.Repository, false))
-		return setup, TargetMainSolo, err
+		return setup, tasktarget.TargetMainSolo, err
 	}
 	if opts.RepoRootMode {
 		setup, err := gitmeta.ExpectedRepoRootTaskBranch(dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, false))
-		return setup, TargetRepoRootTeam, err
+		return setup, tasktarget.TargetRepoRootTeam, err
 	}
 	setup, err := gitmeta.ExpectedTaskWorktree(dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, false))
-	return setup, TargetWorktreeTeam, err
+	return setup, tasktarget.TargetWorktreeTeam, err
 }
 
 func (s DispatchService) expectedSetupForTargetKind(
 	opts DispatchStartOptions,
 	taskItem task.Task,
-	targetKind TargetKind,
+	targetKind tasktarget.TargetKind,
 ) (gitmeta.TaskWorktreeSetupResult, error) {
 	switch targetKind {
-	case TargetMainSolo:
+	case tasktarget.TargetMainSolo:
 		return gitmeta.ExpectedRepoRoot(dispatchRepoRootOptions(opts.Source.Repository, false))
-	case TargetRepoRootTeam:
+	case tasktarget.TargetRepoRootTeam:
 		return gitmeta.ExpectedRepoRootTaskBranch(dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, false))
-	case TargetWorktreeTeam:
+	case tasktarget.TargetWorktreeTeam:
 		return gitmeta.ExpectedTaskWorktree(dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, false))
 	default:
 		return gitmeta.TaskWorktreeSetupResult{}, fmt.Errorf("task %s has unsupported target %q", taskItem.ID, targetKind)
@@ -611,15 +612,15 @@ func (s DispatchService) expectedSetupForTargetKind(
 func (s DispatchService) setupTarget(
 	ctx context.Context,
 	opts DispatchStartOptions,
-	targetKind TargetKind,
+	targetKind tasktarget.TargetKind,
 	allowDirty bool,
 ) (gitmeta.TaskWorktreeSetupResult, error) {
 	switch targetKind {
-	case TargetMainSolo:
+	case tasktarget.TargetMainSolo:
 		return gitmeta.SetupRepoRoot(ctx, dispatchRepoRootOptions(opts.Source.Repository, allowDirty))
-	case TargetRepoRootTeam:
+	case tasktarget.TargetRepoRootTeam:
 		return gitmeta.SetupRepoRootTaskBranch(ctx, dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, allowDirty))
-	case TargetWorktreeTeam:
+	case tasktarget.TargetWorktreeTeam:
 		return gitmeta.SetupTaskWorktree(ctx, dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, false))
 	default:
 		return gitmeta.TaskWorktreeSetupResult{}, fmt.Errorf("task %s has unsupported target %q", opts.TaskID, targetKind)

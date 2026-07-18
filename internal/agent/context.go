@@ -139,12 +139,6 @@ type agentEnvironment struct {
 	Branch   string
 }
 
-type targetCandidate struct {
-	Kind   ExecutionTarget
-	Branch string
-	Path   string
-}
-
 // Resolve validates the active run, task metadata, environment, and cwd.
 func (r ActiveContextResolver) Resolve(ctx context.Context) (ActiveContext, error) {
 	if err := r.validateDependencies(); err != nil {
@@ -396,66 +390,73 @@ func (r ActiveContextResolver) resolveContextTarget(
 	taskItem taskmodel.Task,
 	taskID string,
 	taskTarget taskstate.TaskTarget,
-) (tasktarget.ExpectedTargets, targetCandidate, error) {
+) (tasktarget.ExpectedTargets, tasktarget.Target, error) {
 	targets, err := tasktarget.ExpectedTargetsForTask(source.Repository, taskID, r.Paths)
 	if err != nil {
-		return tasktarget.ExpectedTargets{}, targetCandidate{}, err
+		return tasktarget.ExpectedTargets{}, tasktarget.Target{}, err
 	}
-	candidate, err := classifyContextTarget(source.Repository, taskTarget)
+	target, err := tasktarget.ClassifyTaskStateTarget(taskTarget, targets)
 	if err != nil {
-		return tasktarget.ExpectedTargets{}, targetCandidate{}, fmt.Errorf(
+		return tasktarget.ExpectedTargets{}, tasktarget.Target{}, fmt.Errorf(
 			"task %s has inconsistent taskstate target: %w",
 			taskID,
 			err,
 		)
 	}
-	if _, err := tasktarget.ClassifyMetadataTarget(taskItem.OrpheusMetadata(), targets); err != nil {
-		return tasktarget.ExpectedTargets{}, targetCandidate{}, fmt.Errorf(
+	metadataTarget, err := tasktarget.ClassifyMetadataTarget(taskItem.OrpheusMetadata(), targets)
+	if err != nil {
+		return tasktarget.ExpectedTargets{}, tasktarget.Target{}, fmt.Errorf(
 			"task %s has inconsistent Orpheus metadata: %w",
 			taskID,
 			err,
 		)
 	}
-	return targets, candidate, nil
+	if metadataTarget.Branch != target.Branch || metadataTarget.Worktree != target.Worktree {
+		return tasktarget.ExpectedTargets{}, tasktarget.Target{}, fmt.Errorf(
+			"task %s metadata target %q/%q does not match taskstate target %q/%q",
+			taskID,
+			metadataTarget.Branch,
+			metadataTarget.Worktree,
+			target.Branch,
+			target.Worktree,
+		)
+	}
+	return targets, target, nil
 }
 
 func (r ActiveContextResolver) resolveConflictResolutionTarget(
 	source taskmodel.RepositorySource,
 	taskItem taskmodel.Task,
 	taskID string,
-) (tasktarget.ExpectedTargets, targetCandidate, error) {
+) (tasktarget.ExpectedTargets, tasktarget.Target, error) {
 	targets, err := tasktarget.ExpectedTargetsForTask(source.Repository, taskID, r.Paths)
 	if err != nil {
-		return tasktarget.ExpectedTargets{}, targetCandidate{}, err
+		return tasktarget.ExpectedTargets{}, tasktarget.Target{}, err
 	}
 	candidate, err := tasktarget.ClassifyMetadataTarget(taskItem.OrpheusMetadata(), targets)
 	if err != nil {
-		return tasktarget.ExpectedTargets{}, targetCandidate{}, fmt.Errorf(
+		return tasktarget.ExpectedTargets{}, tasktarget.Target{}, fmt.Errorf(
 			"task %s has inconsistent Orpheus metadata: %w",
 			taskID,
 			err,
 		)
 	}
 	if candidate.Kind != tasktarget.TargetWorktreeTeam && candidate.Kind != tasktarget.TargetRepoRootTeam {
-		return tasktarget.ExpectedTargets{}, targetCandidate{}, fmt.Errorf(
+		return tasktarget.ExpectedTargets{}, tasktarget.Target{}, fmt.Errorf(
 			"task %s target is %s, expected an Orpheus-managed PR branch for sync conflict resolution",
 			taskID,
 			candidate.Kind.DisplayName(),
 		)
 	}
-	return targets, targetCandidate{
-		Kind:   candidate.Kind,
-		Branch: candidate.Branch,
-		Path:   candidate.Worktree,
-	}, nil
+	return targets, candidate, nil
 }
 
-func (r ActiveContextResolver) resolveTargetCWD(candidate targetCandidate) (string, error) {
+func (r ActiveContextResolver) resolveTargetCWD(candidate tasktarget.Target) (string, error) {
 	cwd, err := r.resolveCWD()
 	if err != nil {
 		return "", err
 	}
-	ok, err := pathInside(cwd, candidate.Path)
+	ok, err := pathInside(cwd, candidate.Worktree)
 	if err != nil {
 		return "", err
 	}
@@ -464,7 +465,7 @@ func (r ActiveContextResolver) resolveTargetCWD(candidate targetCandidate) (stri
 			"current directory %q is outside the %s execution target %q",
 			cwd,
 			candidate.Kind.DisplayName(),
-			candidate.Path,
+			candidate.Worktree,
 		)
 	}
 	return cwd, nil
@@ -475,7 +476,7 @@ func newActiveContext(
 	targets tasktarget.ExpectedTargets,
 	taskItem taskmodel.Task,
 	run taskstate.RunAttempt,
-	candidate targetCandidate,
+	candidate tasktarget.Target,
 	cwd string,
 ) (ActiveContext, error) {
 	if err := registry.ValidateSummaryGuidanceStyle(repo.SummaryGuidanceStyle); err != nil {
@@ -507,7 +508,7 @@ func newActiveContext(
 		Target: ContextTarget{
 			Kind:             candidate.Kind,
 			Branch:           candidate.Branch,
-			Path:             candidate.Path,
+			Path:             candidate.Worktree,
 			CurrentDirectory: cwd,
 		},
 	}, nil
@@ -517,7 +518,7 @@ func newConflictResolutionContext(
 	repo registry.Repo,
 	targets tasktarget.ExpectedTargets,
 	taskItem taskmodel.Task,
-	candidate targetCandidate,
+	candidate tasktarget.Target,
 	cwd string,
 	conflictFiles []string,
 ) ConflictResolutionContext {
@@ -543,7 +544,7 @@ func newConflictResolutionContext(
 		Target: ContextTarget{
 			Kind:             candidate.Kind,
 			Branch:           candidate.Branch,
-			Path:             candidate.Path,
+			Path:             candidate.Worktree,
 			CurrentDirectory: cwd,
 		},
 		PRURL:         prURL,
@@ -682,24 +683,7 @@ func validateContextTaskStatus(taskItem taskmodel.Task) error {
 	}
 }
 
-func classifyContextTarget(repo taskmodel.Repository, taskTarget taskstate.TaskTarget) (targetCandidate, error) {
-	branch := strings.TrimSpace(taskTarget.Branch)
-	worktree, err := cleanAbsPath("taskstate target worktree", taskTarget.Worktree)
-	if err != nil {
-		return targetCandidate{}, err
-	}
-	kind := tasktarget.ClassifyRunTarget(repo, branch, worktree)
-	if kind == tasktarget.TargetUnknown {
-		return targetCandidate{}, fmt.Errorf("branch %q and worktree %q do not match a supported execution target", branch, worktree)
-	}
-	return targetCandidate{
-		Kind:   kind,
-		Branch: branch,
-		Path:   worktree,
-	}, nil
-}
-
-func validateEnvironmentMatchesTarget(env agentEnvironment, target targetCandidate) error {
+func validateEnvironmentMatchesTarget(env agentEnvironment, target tasktarget.Target) error {
 	if env.Branch != target.Branch {
 		return fmt.Errorf(
 			"%s is %q, expected %q for %s execution target",
@@ -709,12 +693,12 @@ func validateEnvironmentMatchesTarget(env agentEnvironment, target targetCandida
 			target.Kind.DisplayName(),
 		)
 	}
-	if env.Worktree != target.Path {
+	if env.Worktree != target.Worktree {
 		return fmt.Errorf(
 			"%s is %q, expected %q for %s execution target",
 			envWorktree,
 			env.Worktree,
-			target.Path,
+			target.Worktree,
 			target.Kind.DisplayName(),
 		)
 	}

@@ -12,7 +12,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
-// TargetKind identifies an Orpheus task workflow target.
+// TargetKind identifies an Orpheus task execution target.
 type TargetKind string
 
 const (
@@ -43,21 +43,7 @@ func (k TargetKind) DisplayName() string {
 	}
 }
 
-// ReviewLifecycle identifies the review step unlocked by a successful completion.
-type ReviewLifecycle string
-
-const (
-	// ReviewLifecycleUnknown means no supported review lifecycle was classified.
-	ReviewLifecycleUnknown ReviewLifecycle = ""
-
-	// ReviewLifecyclePRReady means a worktree/team completion is ready for PR creation/review.
-	ReviewLifecyclePRReady ReviewLifecycle = "pr-ready"
-
-	// ReviewLifecycleLocalReady means a main/solo completion is ready for local human review.
-	ReviewLifecycleLocalReady ReviewLifecycle = "local-ready"
-)
-
-// Target describes a concrete workflow branch/worktree pair.
+// Target describes a concrete branch/worktree pair for a supported execution target.
 type Target struct {
 	Kind     TargetKind
 	Branch   string
@@ -69,12 +55,6 @@ type ExpectedTargets struct {
 	MainSolo     Target
 	WorktreeTeam Target
 	RepoRootTeam Target
-}
-
-// CompletionClassification describes the target and review lifecycle for a completed run.
-type CompletionClassification struct {
-	Target    Target
-	Lifecycle ReviewLifecycle
 }
 
 // ExpectedTargetsForTask returns the strict execution targets used when dispatching or validating an active run.
@@ -130,7 +110,7 @@ func ExpectedTargetsForTask(repo task.Repository, taskID string, paths state.Pat
 	}, nil
 }
 
-// ClassifyMetadataTarget matches Orpheus task metadata against exact expected workflow targets.
+// ClassifyMetadataTarget matches Orpheus task metadata against exact expected execution targets.
 func ClassifyMetadataTarget(metadata task.OrpheusMetadata, targets ExpectedTargets) (Target, error) {
 	if !metadata.HasBranch || strings.TrimSpace(metadata.Branch) == "" {
 		return Target{}, fmt.Errorf("%s is missing", task.MetadataBranch)
@@ -214,155 +194,7 @@ func ClassifyRunTarget(repo task.Repository, branch string, worktree string) Tar
 	return TargetUnknown
 }
 
-// ClassifyCompletionTarget classifies a successful Orpheus completion into its review lifecycle.
-func ClassifyCompletionTarget(
-	repo task.Repository,
-	taskItem task.Task,
-	taskTarget taskstate.TaskTarget,
-	latestRun *taskstate.RunAttempt,
-) (CompletionClassification, bool) {
-	if latestRun == nil || latestRun.Status != taskstate.RunStatusSucceeded || latestRun.Completion == nil {
-		return CompletionClassification{}, false
-	}
-
-	metadata := taskItem.OrpheusMetadata()
-	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
-		return CompletionClassification{}, false
-	}
-	if !metadata.HasBranch || !metadata.HasWorktree {
-		return CompletionClassification{}, false
-	}
-
-	branch := strings.TrimSpace(taskTarget.Branch)
-	worktree := cleanPath(taskTarget.Worktree)
-	if branch == "" || worktree == "" {
-		return CompletionClassification{}, false
-	}
-	if strings.TrimSpace(metadata.Branch) != branch || cleanPath(metadata.Worktree) != worktree {
-		return CompletionClassification{}, false
-	}
-
-	targetKind := ClassifyRunTarget(repo, branch, worktree)
-	switch targetKind {
-	case TargetMainSolo:
-		return CompletionClassification{
-			Target:    Target{Kind: TargetMainSolo, Branch: branch, Worktree: worktree},
-			Lifecycle: ReviewLifecycleLocalReady,
-		}, true
-	case TargetWorktreeTeam:
-		return CompletionClassification{
-			Target:    Target{Kind: TargetWorktreeTeam, Branch: branch, Worktree: worktree},
-			Lifecycle: ReviewLifecyclePRReady,
-		}, true
-	case TargetRepoRootTeam:
-		return CompletionClassification{
-			Target:    Target{Kind: TargetRepoRootTeam, Branch: branch, Worktree: worktree},
-			Lifecycle: ReviewLifecyclePRReady,
-		}, true
-	default:
-		return CompletionClassification{}, false
-	}
-}
-
-// ClassifyExpectedCompletionTarget classifies a completed run only when task metadata
-// and task-level target facts match one of the exact expected workflow targets.
-func ClassifyExpectedCompletionTarget(
-	targets ExpectedTargets,
-	taskItem task.Task,
-	taskTarget taskstate.TaskTarget,
-	latestRun *taskstate.RunAttempt,
-) (CompletionClassification, bool) {
-	if latestRun == nil || latestRun.Status != taskstate.RunStatusSucceeded || latestRun.Completion == nil {
-		return CompletionClassification{}, false
-	}
-
-	metadata := taskItem.OrpheusMetadata()
-	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
-		return CompletionClassification{}, false
-	}
-
-	metadataTarget, err := ClassifyMetadataTarget(metadata, targets)
-	if err != nil {
-		return CompletionClassification{}, false
-	}
-	target, err := ClassifyTaskStateTarget(taskTarget, targets)
-	if err != nil {
-		return CompletionClassification{}, false
-	}
-	if metadataTarget.Branch != target.Branch || metadataTarget.Worktree != target.Worktree {
-		return CompletionClassification{}, false
-	}
-
-	switch target.Kind {
-	case TargetMainSolo:
-		return CompletionClassification{
-			Target:    target,
-			Lifecycle: ReviewLifecycleLocalReady,
-		}, true
-	case TargetWorktreeTeam:
-		return CompletionClassification{
-			Target:    target,
-			Lifecycle: ReviewLifecyclePRReady,
-		}, true
-	case TargetRepoRootTeam:
-		return CompletionClassification{
-			Target:    target,
-			Lifecycle: ReviewLifecyclePRReady,
-		}, true
-	default:
-		return CompletionClassification{}, false
-	}
-}
-
-// ClassifyLocalReviewReady reports whether a task has a main/solo local-ready completion.
-func ClassifyLocalReviewReady(
-	repo task.Repository,
-	taskItem task.Task,
-	taskTarget taskstate.TaskTarget,
-	latestRun *taskstate.RunAttempt,
-) (CompletionClassification, bool) {
-	classification, ok := ClassifyCompletionTarget(repo, taskItem, taskTarget, latestRun)
-	return classification, ok && classification.Target.Kind == TargetMainSolo
-}
-
-// ClassifyPRReviewReady reports whether a task has a worktree/team PR-ready completion.
-func ClassifyPRReviewReady(
-	repo task.Repository,
-	taskItem task.Task,
-	taskTarget taskstate.TaskTarget,
-	latestRun *taskstate.RunAttempt,
-) (CompletionClassification, bool) {
-	classification, ok := ClassifyCompletionTarget(repo, taskItem, taskTarget, latestRun)
-	return classification, ok && isPRReviewTarget(classification.Target.Kind)
-}
-
-// ClassifyExpectedLocalReviewReady reports whether a task has a strict main/solo local-ready completion.
-func ClassifyExpectedLocalReviewReady(
-	targets ExpectedTargets,
-	taskItem task.Task,
-	taskTarget taskstate.TaskTarget,
-	latestRun *taskstate.RunAttempt,
-) (CompletionClassification, bool) {
-	classification, ok := ClassifyExpectedCompletionTarget(targets, taskItem, taskTarget, latestRun)
-	return classification, ok && classification.Target.Kind == TargetMainSolo
-}
-
-// ClassifyExpectedPRReviewReady reports whether a task has a strict worktree/team PR-ready completion.
-func ClassifyExpectedPRReviewReady(
-	targets ExpectedTargets,
-	taskItem task.Task,
-	taskTarget taskstate.TaskTarget,
-	latestRun *taskstate.RunAttempt,
-) (CompletionClassification, bool) {
-	classification, ok := ClassifyExpectedCompletionTarget(targets, taskItem, taskTarget, latestRun)
-	return classification, ok && isPRReviewTarget(classification.Target.Kind)
-}
-
-func isPRReviewTarget(kind TargetKind) bool {
-	return kind == TargetWorktreeTeam || kind == TargetRepoRootTeam
-}
-
-// ClassifyTaskStateTarget matches the canonical taskstate target against exact expected workflow targets.
+// ClassifyTaskStateTarget matches the canonical taskstate target against exact expected execution targets.
 func ClassifyTaskStateTarget(taskTarget taskstate.TaskTarget, targets ExpectedTargets) (Target, error) {
 	branch := strings.TrimSpace(taskTarget.Branch)
 	if branch == "" {

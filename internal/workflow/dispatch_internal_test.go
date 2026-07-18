@@ -10,6 +10,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/tasktarget"
 )
 
 //nolint:funlen // The fixture is intentionally explicit about blocked review state.
@@ -69,8 +70,8 @@ func TestDispatchValidateStartInfersBlockedReviewFollowUpTarget(t *testing.T) {
 	if plan.followUp == nil {
 		t.Fatalf("follow-up plan is nil")
 	}
-	if plan.followUp.targetKind != TargetMainSolo {
-		t.Fatalf("follow-up target = %q, want %q", plan.followUp.targetKind, TargetMainSolo)
+	if plan.followUp.targetKind != tasktarget.TargetMainSolo {
+		t.Fatalf("follow-up target = %q, want %q", plan.followUp.targetKind, tasktarget.TargetMainSolo)
 	}
 	if plan.expected.Branch != "main" || plan.expected.WorktreePath != repoPath {
 		t.Fatalf("expected target = %#v, want main repo root", plan.expected)

@@ -26,6 +26,7 @@ import (
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/taskstats"
+	"github.com/hea3ven/orpheus/internal/tasktarget"
 	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/spf13/cobra"
 )
@@ -1190,7 +1191,7 @@ func logTaskReviewOutputDetection(
 type taskReviewStart struct {
 	resolvedCtx resolvedTaskContext
 	workdir     string
-	target      workflow.Target
+	target      tasktarget.Target
 	review      taskstate.ReviewAttempt
 	pipeline    review.Pipeline
 	resumed     bool
@@ -2605,12 +2606,12 @@ func taskWorkingDirectory(repo taskmodel.Repository, taskItem taskmodel.Task) (s
 		return "", fmt.Errorf("%s=%q is not an absolute path", taskmodel.MetadataWorktree, metadata.Worktree)
 	}
 
-	switch workflow.ClassifyRunTarget(repo, metadata.Branch, worktree) {
-	case workflow.TargetMainSolo:
+	switch tasktarget.ClassifyRunTarget(repo, metadata.Branch, worktree) {
+	case tasktarget.TargetMainSolo:
 		return cleanTaskRunPath(repo.Path), nil
-	case workflow.TargetWorktreeTeam:
+	case tasktarget.TargetWorktreeTeam:
 		return worktree, nil
-	case workflow.TargetRepoRootTeam:
+	case tasktarget.TargetRepoRootTeam:
 		return cleanTaskRunPath(repo.Path), nil
 	default:
 		return "", fmt.Errorf(

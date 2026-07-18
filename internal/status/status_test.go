@@ -9,7 +9,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/status"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
-	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/tasktarget"
 )
 
 func TestProjectGroupsItemsByLocalM4Policy(t *testing.T) {
@@ -856,15 +856,15 @@ func testExpectedTargets(
 	mainWorktree string,
 	worktreeBranch string,
 	worktreePath string,
-) *workflow.ExpectedTargets {
-	return &workflow.ExpectedTargets{
-		MainSolo: workflow.Target{
-			Kind:     workflow.TargetMainSolo,
+) *tasktarget.ExpectedTargets {
+	return &tasktarget.ExpectedTargets{
+		MainSolo: tasktarget.Target{
+			Kind:     tasktarget.TargetMainSolo,
 			Branch:   mainBranch,
 			Worktree: mainWorktree,
 		},
-		WorktreeTeam: workflow.Target{
-			Kind:     workflow.TargetWorktreeTeam,
+		WorktreeTeam: tasktarget.Target{
+			Kind:     tasktarget.TargetWorktreeTeam,
 			Branch:   worktreeBranch,
 			Worktree: worktreePath,
 		},

@@ -194,6 +194,67 @@ func TestActiveContextResolverResolvesConflictResolutionContext(t *testing.T) {
 	is.Equal([]string{"conflict.txt", "pkg/service.go"}, got.ConflictFiles)
 }
 
+func TestActiveContextResolverRejectsMetadataTaskstateTargetMismatch(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	fixture := newActiveContextFixture(t, "op-1")
+	worktree := fixture.expectedWorktree(t, "op-1")
+	taskItem := taskmodel.Task{
+		ID:     "op-1",
+		Status: taskmodel.StatusInProgress,
+		Metadata: taskmodel.Metadata{
+			taskmodel.MetadataBranch:   "main",
+			taskmodel.MetadataWorktree: fixture.repoPath,
+		},
+	}
+	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		Branch:   "orpheus/op-1",
+		Worktree: worktree,
+	})
+	must.NoError(err)
+
+	resolver := fixture.resolver(taskItem, map[string]string{
+		"ORPHEUS_REPO_ID":  "alpha",
+		"ORPHEUS_TASK_ID":  "op-1",
+		"ORPHEUS_WORKTREE": worktree,
+		"ORPHEUS_BRANCH":   "orpheus/op-1",
+	}, worktree)
+
+	_, err = resolver.Resolve(context.Background())
+
+	must.Error(err)
+	is.Contains(err.Error(), "metadata target")
+	is.Contains(err.Error(), "does not match taskstate target")
+}
+
+func TestActiveContextResolverRejectsNonCanonicalTaskstateTarget(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	fixture := newActiveContextFixture(t, "op-1")
+	expectedWorktree := fixture.expectedWorktree(t, "op-1")
+	manualWorktree := filepath.Join(t.TempDir(), "manual-worktree")
+	must.NoError(testMkdirAll(manualWorktree))
+	taskItem := fixture.worktreeTask("op-1", expectedWorktree)
+	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		Branch:   "orpheus/op-1",
+		Worktree: manualWorktree,
+	})
+	must.NoError(err)
+
+	resolver := fixture.resolver(taskItem, map[string]string{
+		"ORPHEUS_REPO_ID":  "alpha",
+		"ORPHEUS_TASK_ID":  "op-1",
+		"ORPHEUS_WORKTREE": manualWorktree,
+		"ORPHEUS_BRANCH":   "orpheus/op-1",
+	}, manualWorktree)
+
+	_, err = resolver.Resolve(context.Background())
+
+	must.Error(err)
+	is.Contains(err.Error(), "inconsistent taskstate target")
+	is.Contains(err.Error(), "does not match an expected workflow target")
+}
+
 func TestActiveContextResolverRejectsLatestRunThatIsNotRunning(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
