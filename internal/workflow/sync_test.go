@@ -1,6 +1,7 @@
 package workflow_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
@@ -952,6 +954,96 @@ func TestSyncServiceExistingPRFailuresAreHardErrors(t *testing.T) {
 	}
 }
 
+func TestSyncServiceDiagnosticsCorrelateFailedPRPolling(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   targets.WorktreeTeam.Branch,
+			task.MetadataWorktree: targets.WorktreeTeam.Worktree,
+			task.MetadataPRURL:    "https://github.test/org/repo/pull/42",
+		},
+	}
+	service, provider, _ := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
+	service.RunStore = &fakeSyncRunStore{}
+	provider.statusErr = errors.New("gh auth missing")
+	var diagnostics bytes.Buffer
+	service.Logger = logging.New(&diagnostics, logging.Config{Verbose: true})
+
+	_, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
+	if err == nil || !strings.Contains(err.Error(), "gh auth missing") {
+		t.Fatalf("error = %v, want PR polling failure", err)
+	}
+	wantDiagnostics := pullrequest.DiagnosticContext{
+		RepoID: "alpha",
+		TaskID: "op-1",
+		Branch: targets.WorktreeTeam.Branch,
+		HasPR:  true,
+	}
+	if len(provider.statusRequests) != 1 || provider.statusRequests[0].Diagnostics != wantDiagnostics {
+		t.Fatalf("provider diagnostics = %#v, want %#v", provider.statusRequests, wantDiagnostics)
+	}
+
+	logs := diagnostics.String()
+	for _, want := range []string{
+		`msg="task sync workflow finished"`,
+		`operation=task_sync`,
+		`repo_id=alpha`,
+		`task_id=op-1`,
+		`branch=` + targets.WorktreeTeam.Branch,
+		`has_pr=true`,
+		`status=failure`,
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("diagnostics missing %q:\n%s", want, logs)
+		}
+	}
+	if strings.Contains(logs, "https://github.test") {
+		t.Fatalf("diagnostics leaked PR URL:\n%s", logs)
+	}
+}
+
+func TestSyncServiceDiagnosticsUseSyncStatusForDomainOutcome(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   targets.WorktreeTeam.Branch,
+			task.MetadataWorktree: targets.WorktreeTeam.Worktree,
+			task.MetadataPRURL:    "https://github.test/org/repo/pull/42",
+		},
+	}
+	service, provider, _ := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
+	service.RunStore = &fakeSyncRunStore{}
+	service.Git = &fakeSyncGit{result: gitmeta.TaskBranchSyncResult{Status: gitmeta.TaskBranchSyncAlreadyCurrent}}
+	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateOpen}
+	var diagnostics bytes.Buffer
+	service.Logger = logging.New(&diagnostics, logging.Config{Verbose: true})
+
+	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Status != workflow.SyncStatusAlreadyInReview {
+		t.Fatalf("status = %q, want already in review", result.Status)
+	}
+
+	logs := diagnostics.String()
+	if !strings.Contains(logs, `sync_status=already_in_review`) {
+		t.Fatalf("diagnostics missing sync_status domain outcome:\n%s", logs)
+	}
+	if strings.Contains(logs, ` status=already_in_review`) {
+		t.Fatalf("diagnostics used reserved status key for sync outcome:\n%s", logs)
+	}
+	if strings.Contains(logs, "https://github.test") {
+		t.Fatalf("diagnostics leaked PR URL:\n%s", logs)
+	}
+}
+
 func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
 	repoPath := filepath.Join(t.TempDir(), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
@@ -1182,6 +1274,7 @@ func TestSyncServiceSyncAllScansPRBoundaryTasksAndContinuesAfterFailures(t *test
 	scanErr := errors.New("bd unavailable")
 	runStore := &fakeSyncRunStore{}
 	provider := newSyncAllScanPRProvider()
+	var diagnostics bytes.Buffer
 	service := workflow.SyncService{
 		Paths:   paths,
 		Sources: []task.RepositorySource{alpha, beta},
@@ -1193,6 +1286,7 @@ func TestSyncServiceSyncAllScansPRBoundaryTasksAndContinuesAfterFailures(t *test
 		},
 		RunStore:   runStore,
 		PRProvider: provider,
+		Logger:     logging.New(&diagnostics, logging.Config{Verbose: true}),
 	}
 
 	result, err := service.SyncAll(context.Background())
@@ -1231,6 +1325,32 @@ func TestSyncServiceSyncAllScansPRBoundaryTasksAndContinuesAfterFailures(t *test
 	}
 	if len(alphaBackend.setPRURLs) != 0 {
 		t.Fatalf("set PR URLs = %#v, want none", alphaBackend.setPRURLs)
+	}
+	assertSyncAllDiagnostics(t, diagnostics.String())
+}
+
+func assertSyncAllDiagnostics(t *testing.T, logs string) {
+	t.Helper()
+	for _, want := range []string{
+		`msg="task sync all workflow started"`,
+		`msg="task sync all workflow finished"`,
+		`operation=task_sync_all`,
+		`result_count=2`,
+		`failure_count=2`,
+		`operation=task_sync_all_item`,
+		`repo_id=alpha`,
+		`repo_id=beta`,
+		`task_id=a-review`,
+		`task_id=a-merged`,
+		`task_id=a-closed`,
+		`status=failure`,
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("diagnostics missing %q:\n%s", want, logs)
+		}
+	}
+	if strings.Contains(logs, "https://github.test") {
+		t.Fatalf("diagnostics leaked PR URL:\n%s", logs)
 	}
 }
 

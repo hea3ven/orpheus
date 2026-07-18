@@ -1,6 +1,7 @@
 package workflow_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
@@ -102,11 +104,12 @@ func TestReviewLifecycleRunRecordsBlockedOutcomeWithoutCobra(t *testing.T) {
 }
 
 //nolint:funlen // The test sets up a full lifecycle fixture without Cobra.
-func TestReviewLifecycleManualPromptPersistsFindingsThroughWorkflowRecorder(t *testing.T) {
+func TestReviewLifecycleRunLogsGitDiagnosticsForGatingFailure(t *testing.T) {
 	t.Parallel()
 
 	paths := testPaths(t)
 	repoPath := testRepoWithCandidateChange(t)
+	runGit(t, repoPath, "add", "candidate.txt")
 	store := taskstate.NewStore(paths)
 	_, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
 		Agent:       "implementer",
@@ -129,16 +132,7 @@ func TestReviewLifecycleManualPromptPersistsFindingsThroughWorkflowRecorder(t *t
 			task.MetadataWorktree: repoPath,
 		},
 	}
-	frontend := &recordingReviewFrontend{
-		manualPrompt: func(prompt workflow.ReviewManualStepPrompt) (review.ManualResult, error) {
-			_, err := prompt.Recorder.RecordFinding(taskstate.ReviewFinding{
-				Type:        taskstate.FindingTypeBlocking,
-				Title:       "Manual blocker",
-				Description: "Recorded through workflow recorder.",
-			})
-			return review.ManualResult{Status: taskstate.ReviewStatusBlocked, Stop: true}, err
-		},
-	}
+	var diagnostics bytes.Buffer
 	service := workflow.ReviewLifecycleService{
 		Paths: paths,
 		Sources: []task.RepositorySource{{Repository: task.Repository{
@@ -148,9 +142,101 @@ func TestReviewLifecycleManualPromptPersistsFindingsThroughWorkflowRecorder(t *t
 		BackendFactory: func(task.RepositorySource) (workflow.ReviewLifecycleBackend, error) {
 			return &fakeReviewLifecycleBackend{task: taskItem}, nil
 		},
+		Logger:   logging.New(&diagnostics, logging.Config{Verbose: true}),
+		Frontend: &recordingReviewFrontend{},
+		PipelineRunner: func(review.PipelineRunOptions) (review.PipelineOutcome, error) {
+			t.Fatal("pipeline should not run after review gating failure")
+			return review.PipelineOutcome{}, nil
+		},
+	}
+
+	outcome, err := service.Run(context.Background(), workflow.ReviewLifecycleOptions{TaskID: "op-1"})
+
+	if err == nil {
+		t.Fatal("run lifecycle succeeded, want review gating failure")
+	}
+	if !strings.Contains(err.Error(), "review requires a clean Git index") {
+		t.Fatalf("run lifecycle error = %v, want clean index failure", err)
+	}
+	if outcome.Kind != workflow.ReviewLifecycleOutcomeOperationalFail {
+		t.Fatalf("outcome kind = %q, want %q", outcome.Kind, workflow.ReviewLifecycleOutcomeOperationalFail)
+	}
+	logs := diagnostics.String()
+	for _, want := range []string{
+		`component=git operation=diff_cached`,
+		`component=git operation=status`,
+		`exit_code=1`,
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("diagnostics missing %q:\n%s", want, logs)
+		}
+	}
+}
+
+//nolint:funlen // The test sets up a full lifecycle fixture without Cobra.
+func TestReviewLifecycleManualPromptPersistsFindingsThroughWorkflowRecorder(t *testing.T) {
+	t.Parallel()
+
+	paths := testPaths(t)
+	repoPath := testRepoWithCandidateChange(t)
+	store := taskstate.NewStore(paths)
+	run, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		Agent:       "implementer",
+		Profile:     "implementer",
+		Command:     "agent",
+		SessionName: "Implementing op-1",
+		Branch:      "main",
+		Worktree:    repoPath,
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	if _, err := store.CompleteRun("alpha", "op-1", run.Attempt, taskstate.CompleteRunOptions{
+		Summary:             "Implementation complete",
+		Description:         "Ready for local review.",
+		DetailedDescription: "Ready for publication.",
+	}); err != nil {
+		t.Fatalf("complete run: %v", err)
+	}
+
+	taskItem := task.Task{
+		ID:     "op-1",
+		Title:  "Lifecycle task",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   "main",
+			task.MetadataWorktree: repoPath,
+		},
+	}
+	frontend := &recordingReviewFrontend{
+		manualRender: func(workflow.ReviewManualStepContext) error { return nil },
+		manualPrompt: func(prompt workflow.ReviewManualStepPrompt) (review.ManualResult, error) {
+			_, err := prompt.Recorder.RecordFinding(taskstate.ReviewFinding{
+				Type:        taskstate.FindingTypeBlocking,
+				Title:       "Manual blocker",
+				Description: "Recorded through workflow recorder.",
+			})
+			return review.ManualResult{Status: taskstate.ReviewStatusBlocked, Stop: true}, err
+		},
+	}
+	var diagnostics bytes.Buffer
+	service := workflow.ReviewLifecycleService{
+		Paths: paths,
+		Sources: []task.RepositorySource{{Repository: task.Repository{
+			ID: "alpha", Name: "Alpha", TaskIDPrefix: "op", Path: repoPath, DefaultBranch: "main",
+		}}},
+		RunStore: store,
+		BackendFactory: func(task.RepositorySource) (workflow.ReviewLifecycleBackend, error) {
+			return &fakeReviewLifecycleBackend{task: taskItem}, nil
+		},
+		Logger:   logging.New(&diagnostics, logging.Config{Verbose: true}),
 		Frontend: frontend,
 		PipelineRunner: func(opts review.PipelineRunOptions) (review.PipelineOutcome, error) {
-			result, err := opts.PromptManualStep(review.ManualStep{Step: review.Step{Name: "local-review"}})
+			step := review.Step{Name: "local-review"}
+			if err := opts.RenderManualStep(step); err != nil {
+				return review.PipelineOutcome{}, err
+			}
+			result, err := opts.PromptManualStep(review.ManualStep{Step: step})
 			return review.PipelineOutcome{Status: result.Status}, err
 		},
 	}
@@ -172,6 +258,16 @@ func TestReviewLifecycleManualPromptPersistsFindingsThroughWorkflowRecorder(t *t
 	}
 	if latest.Findings[0].Step != "local-review" {
 		t.Fatalf("manual finding step = %q, want local-review", latest.Findings[0].Step)
+	}
+	logs := diagnostics.String()
+	for _, want := range []string{
+		`component=git operation=diff_cached`,
+		`component=git operation=candidate_status`,
+		`component=git operation=status`,
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("diagnostics missing %q:\n%s", want, logs)
+		}
 	}
 }
 
@@ -759,12 +855,13 @@ type recordingReviewFrontend struct {
 	autonomousFollowUps      int
 	confirmRunningCompletion bool
 	runningConfirmations     int
+	manualRender             func(workflow.ReviewManualStepContext) error
 	manualPrompt             func(workflow.ReviewManualStepPrompt) (review.ManualResult, error)
 }
 
 func (f *recordingReviewFrontend) PipelinePresentation(workflow.ReviewAttemptContext) (workflow.ReviewPipelinePresentation, error) {
 	f.pipelineCalls++
-	return workflow.ReviewPipelinePresentation{PromptManualStep: f.manualPrompt}, nil
+	return workflow.ReviewPipelinePresentation{RenderManualStep: f.manualRender, PromptManualStep: f.manualPrompt}, nil
 }
 
 func (f *recordingReviewFrontend) ReviewResumed(workflow.ReviewAttemptContext) error { return nil }

@@ -204,6 +204,54 @@ func TestVerboseTaskShowBeadsFailureDiagnosticsIncludeRepoAndTask(t *testing.T) 
 	}
 }
 
+func TestVerboseTaskSyncCLIDiagnosticsUsesSyncStatusKey(t *testing.T) {
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	require.NoError(t, registry.NewStore(paths).Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
+		dir:  repoPath,
+		args: "--json --readonly --sandbox show --id op-sync",
+		stdout: `[
+			{
+				"id":"op-sync",
+				"title":"Already in review",
+				"status":"in_progress",
+				"priority":1,
+				"issue_type":"task",
+				"metadata":{
+					"orpheus.branch":"orpheus/op-sync",
+					"orpheus.worktree":"` + filepath.Join(root, "unused-worktree") + `",
+					"orpheus.pr_url":"https://github.test/org/alpha/pull/42"
+				}
+			}
+		]`,
+	}})
+	withFakeGHPRResponses(t, fakeGHPRResponses{
+		listStdout:   "unexpected list\n",
+		listExit:     66,
+		createStdout: "unexpected create\n",
+		createExit:   66,
+		statusStdout: `{"url":"https://github.test/org/alpha/pull/42","state":"OPEN","merged":false}`,
+		statusExit:   0,
+	})
+
+	stdout, stderr := executeCommand(t, []string{"--verbose", "task", "sync", "op-sync"})
+
+	require.Contains(t, stdout, "Synced op-sync")
+	finishLine := diagnosticLineContaining(t, stderr, `msg="synced task"`, `task_id=op-sync`)
+	require.Contains(t, finishLine, `sync_status=already_in_review`)
+	require.NotContains(t, stderr, ` status=already_in_review`)
+	require.NotContains(t, stderr, "https://github.test/org/alpha/pull/42")
+}
+
 func TestVerboseTaskRunDiagnosticsCoverDispatchProcessUsageAndPersistence(t *testing.T) {
 	paths, repoPath := setupVerboseTaskRunDiagnostics(t, "op-diag", "Inspect dispatch diagnostics", "fake-agent", 0)
 	writeTaskRunAgentConfig(t, paths, "recorder", "fake-agent", nil)

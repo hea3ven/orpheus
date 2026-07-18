@@ -1,6 +1,7 @@
 package pullrequest_test
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 )
 
@@ -122,6 +124,125 @@ func TestGHProviderStatusByURLWrapsProviderFailure(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "poll GitHub PR https://github.com/org/repo/pull/1") {
 		t.Fatalf("error = %v, want polling context", err)
+	}
+}
+
+func TestGHProviderVerboseDiagnosticsDoNotLogUnsafeArgumentsOrOutput(t *testing.T) {
+	installFakeGH(t, "authentication required SECRET_OUTPUT", 9)
+	var diagnostics bytes.Buffer
+	_, err := pullrequest.GHProvider{
+		Logger: logging.New(&diagnostics, logging.Config{Verbose: true}),
+	}.StatusByURL(
+		context.Background(),
+		pullrequest.StatusByURLRequest{
+			URL: "https://github.com/org/repo/pull/1",
+			Diagnostics: pullrequest.DiagnosticContext{
+				RepoID: "alpha",
+				TaskID: "op-1",
+				Branch: "orpheus/op-1",
+				HasPR:  true,
+			},
+		},
+	)
+	if err == nil {
+		t.Fatal("error = nil, want provider failure")
+	}
+
+	logs := diagnostics.String()
+	for _, want := range []string{
+		`msg="github cli command started"`,
+		`msg="github cli command finished"`,
+		`component=github`,
+		`operation=poll_pr`,
+		`status=failure`,
+		`exit_code=9`,
+		`repo_id=alpha`,
+		`task_id=op-1`,
+		`branch=orpheus/op-1`,
+		`has_pr=true`,
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("diagnostics missing %q:\n%s", want, logs)
+		}
+	}
+	for _, leaked := range []string{"https://github.com/org/repo/pull/1", "SECRET_OUTPUT", "--json"} {
+		if strings.Contains(logs, leaked) {
+			t.Fatalf("diagnostics leaked unsafe value %q:\n%s", leaked, logs)
+		}
+	}
+}
+
+func TestGHProviderFindAndCreateVerboseDiagnosticsIncludeCorrelation(t *testing.T) {
+	diagnosticsContext := pullrequest.DiagnosticContext{
+		RepoID: "alpha",
+		TaskID: "op-1",
+		Branch: "orpheus/op-1",
+	}
+
+	t.Run("find open PR", func(t *testing.T) {
+		installFakeGH(t, `[{"url":"https://github.com/org/repo/pull/7"}]`, 0)
+		var diagnostics bytes.Buffer
+		_, ok, err := pullrequest.GHProvider{
+			Logger: logging.New(&diagnostics, logging.Config{Verbose: true}),
+		}.FindOpenByBranch(
+			context.Background(),
+			pullrequest.FindOpenByBranchRequest{
+				RepositoryPath: t.TempDir(),
+				HeadBranch:     "orpheus/op-1",
+				BaseBranch:     "main",
+				Diagnostics:    diagnosticsContext,
+			},
+		)
+		if err != nil || !ok {
+			t.Fatalf("find open PR ok=%v err=%v, want found", ok, err)
+		}
+		assertGHCorrelationDiagnostics(t, diagnostics.String(), "find_open_pr")
+	})
+
+	t.Run("create PR", func(t *testing.T) {
+		installFakeGH(t, "https://github.com/org/repo/pull/8", 0)
+		var diagnostics bytes.Buffer
+		_, err := pullrequest.GHProvider{
+			Logger: logging.New(&diagnostics, logging.Config{Verbose: true}),
+		}.Create(
+			context.Background(),
+			pullrequest.CreateRequest{
+				RepositoryPath: t.TempDir(),
+				HeadBranch:     "orpheus/op-1",
+				BaseBranch:     "main",
+				Title:          "SECRET_TITLE",
+				Body:           "SECRET_BODY",
+				Diagnostics:    diagnosticsContext,
+			},
+		)
+		if err != nil {
+			t.Fatalf("create PR: %v", err)
+		}
+		logs := diagnostics.String()
+		assertGHCorrelationDiagnostics(t, logs, "create_pr")
+		for _, leaked := range []string{"SECRET_TITLE", "SECRET_BODY", "https://github.com/org/repo/pull/8"} {
+			if strings.Contains(logs, leaked) {
+				t.Fatalf("diagnostics leaked unsafe value %q:\n%s", leaked, logs)
+			}
+		}
+	})
+}
+
+func assertGHCorrelationDiagnostics(t *testing.T, logs string, operation string) {
+	t.Helper()
+	for _, want := range []string{
+		`msg="github cli command finished"`,
+		`component=github`,
+		`operation=` + operation,
+		`repo_id=alpha`,
+		`task_id=op-1`,
+		`branch=orpheus/op-1`,
+		`status=success`,
+		`exit_code=0`,
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("diagnostics missing %q:\n%s", want, logs)
+		}
 	}
 }
 

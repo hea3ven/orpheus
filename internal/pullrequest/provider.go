@@ -28,11 +28,20 @@ type PullRequestStatus struct {
 	State State
 }
 
+// DiagnosticContext carries safe workflow correlation for PR provider diagnostics.
+type DiagnosticContext struct {
+	RepoID string
+	TaskID string
+	Branch string
+	HasPR  bool
+}
+
 // FindOpenByBranchRequest identifies an open PR by repository and branch pair.
 type FindOpenByBranchRequest struct {
 	RepositoryPath string
 	HeadBranch     string
 	BaseBranch     string
+	Diagnostics    DiagnosticContext
 }
 
 // CreateRequest describes a PR to create.
@@ -42,11 +51,13 @@ type CreateRequest struct {
 	BaseBranch     string
 	Title          string
 	Body           string
+	Diagnostics    DiagnosticContext
 }
 
 // StatusByURLRequest identifies a pull request by URL.
 type StatusByURLRequest struct {
-	URL string
+	URL         string
+	Diagnostics DiagnosticContext
 }
 
 // Provider creates and recovers pull requests for a repository.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -36,13 +37,49 @@ func ShortStatus(ctx context.Context, dir string) (string, error) {
 	return output, nil
 }
 
+// CandidateOperations runs Git commands used to capture and restore review candidates.
+//
+// The zero value is valid and emits no diagnostics unless the context carries a
+// Git logger. Use NewCandidateOperations at diagnostic boundaries so callers
+// pass logging intent explicitly instead of depending on context values.
+type CandidateOperations struct {
+	logger *slog.Logger
+}
+
+// NewCandidateOperations returns review-candidate Git operations with safe
+// diagnostics enabled.
+func NewCandidateOperations(logger *slog.Logger) CandidateOperations {
+	return CandidateOperations{logger: logger}
+}
+
+func (ops CandidateOperations) loggerFor(ctx context.Context) *slog.Logger {
+	if ops.logger != nil {
+		return ops.logger
+	}
+	return loggerFromContext(ctx)
+}
+
 // CandidateStatus returns the porcelain status used to detect review candidate changes.
 func CandidateStatus(ctx context.Context, dir string) ([]byte, error) {
+	return CandidateOperations{}.Status(ctx, dir)
+}
+
+// Status returns the porcelain status used to detect review candidate changes.
+func (ops CandidateOperations) Status(ctx context.Context, dir string) ([]byte, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	output, err := runGitContext(ctx, dir, "status", "--porcelain=v1", "-z", "--untracked-files=normal")
+	output, err := runGitContextLogger(
+		ctx,
+		ops.loggerFor(ctx),
+		dir,
+		"candidate_status",
+		"status",
+		"--porcelain=v1",
+		"-z",
+		"--untracked-files=normal",
+	)
 	if err != nil {
 		return nil, fmt.Errorf("read candidate status: %w: %s", err, strings.TrimSpace(output))
 	}
@@ -51,11 +88,24 @@ func CandidateStatus(ctx context.Context, dir string) ([]byte, error) {
 
 // BinaryDiff returns the tracked binary diff for dir without external diff drivers.
 func BinaryDiff(ctx context.Context, dir string) ([]byte, error) {
+	return CandidateOperations{}.BinaryDiff(ctx, dir)
+}
+
+// BinaryDiff returns the tracked binary diff for dir without external diff drivers.
+func (ops CandidateOperations) BinaryDiff(ctx context.Context, dir string) ([]byte, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	output, err := runGitContext(ctx, dir, "diff", "--binary", "--no-ext-diff")
+	output, err := runGitContextLogger(
+		ctx,
+		ops.loggerFor(ctx),
+		dir,
+		"candidate_diff",
+		"diff",
+		"--binary",
+		"--no-ext-diff",
+	)
 	if err != nil {
 		return nil, fmt.Errorf("capture tracked diff: %w: %s", err, strings.TrimSpace(output))
 	}
@@ -64,11 +114,25 @@ func BinaryDiff(ctx context.Context, dir string) ([]byte, error) {
 
 // UntrackedFiles returns unignored untracked file paths using slash-separated Git paths.
 func UntrackedFiles(ctx context.Context, dir string) ([]string, error) {
+	return CandidateOperations{}.UntrackedFiles(ctx, dir)
+}
+
+// UntrackedFiles returns unignored untracked file paths using slash-separated Git paths.
+func (ops CandidateOperations) UntrackedFiles(ctx context.Context, dir string) ([]string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	output, err := runGitContext(ctx, dir, "ls-files", "--others", "--exclude-standard", "-z")
+	output, err := runGitContextLogger(
+		ctx,
+		ops.loggerFor(ctx),
+		dir,
+		"candidate_untracked",
+		"ls-files",
+		"--others",
+		"--exclude-standard",
+		"-z",
+	)
 	if err != nil {
 		return nil, fmt.Errorf("list untracked candidate files: %w: %s", err, strings.TrimSpace(output))
 	}
@@ -77,11 +141,25 @@ func UntrackedFiles(ctx context.Context, dir string) ([]string, error) {
 
 // ResetIndexToHEAD resets the Git index to HEAD without changing tracked files.
 func ResetIndexToHEAD(ctx context.Context, dir string) error {
+	return CandidateOperations{}.ResetIndexToHEAD(ctx, dir)
+}
+
+// ResetIndexToHEAD resets the Git index to HEAD without changing tracked files.
+func (ops CandidateOperations) ResetIndexToHEAD(ctx context.Context, dir string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	output, err := runGitContext(ctx, dir, "reset", "--mixed", "HEAD", "--")
+	output, err := runGitContextLogger(
+		ctx,
+		ops.loggerFor(ctx),
+		dir,
+		"candidate_reset_index",
+		"reset",
+		"--mixed",
+		"HEAD",
+		"--",
+	)
 	if err != nil {
 		return fmt.Errorf("reset Git index: %w: %s", err, strings.TrimSpace(output))
 	}
@@ -90,11 +168,24 @@ func ResetIndexToHEAD(ctx context.Context, dir string) error {
 
 // CleanUntrackedFiles removes untracked files and directories from dir.
 func CleanUntrackedFiles(ctx context.Context, dir string) error {
+	return CandidateOperations{}.CleanUntrackedFiles(ctx, dir)
+}
+
+// CleanUntrackedFiles removes untracked files and directories from dir.
+func (ops CandidateOperations) CleanUntrackedFiles(ctx context.Context, dir string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	output, err := runGitContext(ctx, dir, "clean", "-fd", "--")
+	output, err := runGitContextLogger(
+		ctx,
+		ops.loggerFor(ctx),
+		dir,
+		"candidate_clean_untracked",
+		"clean",
+		"-fd",
+		"--",
+	)
 	if err != nil {
 		return fmt.Errorf("remove new untracked files: %w: %s", err, strings.TrimSpace(output))
 	}
@@ -103,11 +194,26 @@ func CleanUntrackedFiles(ctx context.Context, dir string) error {
 
 // RestoreTrackedFilesFromHEAD restores tracked worktree files from HEAD.
 func RestoreTrackedFilesFromHEAD(ctx context.Context, dir string) error {
+	return CandidateOperations{}.RestoreTrackedFilesFromHEAD(ctx, dir)
+}
+
+// RestoreTrackedFilesFromHEAD restores tracked worktree files from HEAD.
+func (ops CandidateOperations) RestoreTrackedFilesFromHEAD(ctx context.Context, dir string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	output, err := runGitContext(ctx, dir, "restore", "--worktree", "--source=HEAD", "--", ".")
+	output, err := runGitContextLogger(
+		ctx,
+		ops.loggerFor(ctx),
+		dir,
+		"candidate_restore_tracked",
+		"restore",
+		"--worktree",
+		"--source=HEAD",
+		"--",
+		".",
+	)
 	if err != nil {
 		return fmt.Errorf("restore tracked files from HEAD: %w: %s", err, strings.TrimSpace(output))
 	}
@@ -116,13 +222,20 @@ func RestoreTrackedFilesFromHEAD(ctx context.Context, dir string) error {
 
 // ApplyBinaryPatch applies a binary patch to dir with whitespace warnings disabled.
 func ApplyBinaryPatch(ctx context.Context, dir string, patch []byte) error {
+	return CandidateOperations{}.ApplyBinaryPatch(ctx, dir, patch)
+}
+
+// ApplyBinaryPatch applies a binary patch to dir with whitespace warnings disabled.
+func (ops CandidateOperations) ApplyBinaryPatch(ctx context.Context, dir string, patch []byte) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	output, err := runGitContextWithInput(
+	output, err := runGitContextWithInputLogger(
 		ctx,
+		ops.loggerFor(ctx),
 		dir,
+		"candidate_apply_patch",
 		string(patch),
 		"apply",
 		"--binary",

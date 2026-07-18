@@ -232,16 +232,17 @@ func newTaskReviewLifecycleService(
 	logger *slog.Logger,
 	reader *bufio.Reader,
 ) workflow.ReviewLifecycleService {
-	store := taskstate.NewStore(paths)
+	store := taskstate.NewStoreWithLogger(paths, logger)
 	service := workflow.ReviewLifecycleService{
 		Paths:    paths,
 		Sources:  taskCtx.Sources,
 		RunStore: store,
 		BackendFactory: func(source taskmodel.RepositorySource) (workflow.ReviewLifecycleBackend, error) {
-			return newBeadsTaskBackend(source.BackendDir)
+			return newDiagnosticBeadsTaskBackend(source, logger)
 		},
-		PRProvider:    pullrequest.GHProvider{},
+		PRProvider:    pullrequest.GHProvider{Logger: logger},
 		AgentLauncher: attachedAgentLauncher,
+		Logger:        logger,
 		Frontend: &taskReviewLifecycleFrontend{
 			command: command,
 			logger:  logger,
