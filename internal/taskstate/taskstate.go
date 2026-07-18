@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -2158,6 +2159,64 @@ func (s Store) RecordSyncConflictResolutionFailed(
 	)
 }
 
+// RecordSyncConflictResolutionUsage attaches recovered usage telemetry to one terminal sync-conflict event.
+func (s Store) RecordSyncConflictResolutionUsage(
+	repoID,
+	taskID string,
+	target Event,
+	opts RecordRunUsageOptions,
+) (Event, error) {
+	if !isTerminalSyncConflictEventType(target.Type) {
+		return Event{}, fmt.Errorf(
+			"record sync conflict resolution usage for task %s/%s: event type %q is not terminal sync conflict resolution",
+			repoID,
+			taskID,
+			target.Type,
+		)
+	}
+	if target.Execution == nil {
+		return Event{}, fmt.Errorf(
+			"record sync conflict resolution usage for task %s/%s: target event has no execution facts",
+			repoID,
+			taskID,
+		)
+	}
+
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return Event{}, err
+	}
+
+	matchIndex := -1
+	for index, event := range state.Events {
+		if syncConflictResolutionUsageTargetMatches(event, target) {
+			if matchIndex >= 0 {
+				return Event{}, fmt.Errorf(
+					"record sync conflict resolution usage for task %s/%s: multiple terminal sync conflict events match stable execution facts",
+					repoID,
+					taskID,
+				)
+			}
+			matchIndex = index
+		}
+	}
+	if matchIndex < 0 {
+		return Event{}, fmt.Errorf(
+			"record sync conflict resolution usage for task %s/%s: terminal sync conflict event was not found",
+			repoID,
+			taskID,
+		)
+	}
+
+	execution := *state.Events[matchIndex].Execution
+	execution = applyRunUsageOptions(execution, opts, s.nowUTC())
+	state.Events[matchIndex].Execution = normalizeOptionalAgentExecution(&execution)
+	if err := s.save(state); err != nil {
+		return Event{}, err
+	}
+	return state.Events[matchIndex], nil
+}
+
 // RecordTaskClosed appends an idempotent local audit event after a backend task
 // is closed. PR facts are recorded when the closure followed a merged PR.
 func (s Store) RecordTaskClosed(repoID, taskID string, opts TaskClosedOptions) (Event, error) {
@@ -2375,6 +2434,46 @@ func runEvent(run RunAttempt, eventType EventType, at time.Time, status RunStatu
 		Agent:   run.Execution.Agent,
 		Error:   strings.TrimSpace(errorText),
 	}
+}
+
+func isTerminalSyncConflictEventType(eventType EventType) bool {
+	return eventType == EventSyncConflictFinished || eventType == EventSyncConflictFailed
+}
+
+func syncConflictResolutionUsageTargetMatches(event Event, target Event) bool {
+	if event.Type != target.Type || event.Status != target.Status || !isTerminalSyncConflictEventType(event.Type) {
+		return false
+	}
+	if event.Execution == nil || target.Execution == nil {
+		return false
+	}
+	if event.Branch != target.Branch || event.DefaultBranch != target.DefaultBranch || event.Worktree != target.Worktree {
+		return false
+	}
+	return agentExecutionStableFactsMatch(*event.Execution, *target.Execution)
+}
+
+func agentExecutionStableFactsMatch(left AgentExecution, right AgentExecution) bool {
+	if left.Purpose != right.Purpose || left.Status != right.Status {
+		return false
+	}
+	if left.Agent != right.Agent || left.Profile != right.Profile || left.Harness != right.Harness || left.Command != right.Command {
+		return false
+	}
+	if left.SessionName != right.SessionName || !slices.Equal(left.Args, right.Args) {
+		return false
+	}
+	if !left.StartedAt.Equal(right.StartedAt) || left.DurationMillis != right.DurationMillis {
+		return false
+	}
+	return equalOptionalTimes(left.FinishedAt, right.FinishedAt)
+}
+
+func equalOptionalTimes(left, right *time.Time) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
 }
 
 func syncConflictResolutionEvent(
