@@ -513,6 +513,198 @@ func TestDoctorReportsAmbiguousPiMatchesWithoutMutating(t *testing.T) {
 	is.Nil(loaded.Runs[0].Execution.UsageCost)
 }
 
+//nolint:funlen // The sync-conflict recovery fixture covers terminal event repair and stats integration.
+func TestDoctorRecoversSyncConflictTerminalUsage(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[{"id":"op-sync","title":"Sync conflict","status":"in_progress","priority":1,"issue_type":"task"}]`},
+	})
+	codexHome := t.TempDir()
+	piSessionDir := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", piSessionDir)
+
+	store := taskstate.NewStoreWithClock(paths, clockSequence(
+		time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 7, 7, 10, 5, 0, 0, time.UTC),
+		time.Date(2026, 7, 7, 11, 0, 0, 0, time.UTC),
+		time.Date(2026, 7, 7, 11, 5, 0, 0, time.UTC),
+	))
+	codexOpts := doctorSyncConflictOptions(repoDir, taskstate.AgentExecution{
+		Agent:       "sync-codex",
+		Profile:     "sync-codex",
+		Harness:     "codex",
+		Command:     "codex",
+		Args:        []string{"exec", "resolve"},
+		SessionName: "sync-conflict-op-sync",
+		StartedAt:   time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
+	})
+	_, err := store.RecordSyncConflictResolutionStarted("alpha", "op-sync", codexOpts)
+	must.NoError(err)
+	codexOpts.Commit = "codex-merge"
+	_, err = store.RecordSyncConflictResolutionFinished("alpha", "op-sync", codexOpts)
+	must.NoError(err)
+
+	piOpts := doctorSyncConflictOptions(repoDir, taskstate.AgentExecution{
+		Agent:       "sync-pi",
+		Profile:     "sync-pi",
+		Harness:     "pi",
+		Command:     "pi",
+		Args:        []string{"--model", "openai-codex/gpt-5.5"},
+		SessionName: "sync-conflict-op-sync-pi",
+		StartedAt:   time.Date(2026, 7, 7, 11, 0, 0, 0, time.UTC),
+	})
+	_, err = store.RecordSyncConflictResolutionStarted("alpha", "op-sync", piOpts)
+	must.NoError(err)
+	_, err = store.RecordSyncConflictResolutionFailed("alpha", "op-sync", piOpts, assert.AnError)
+	must.NoError(err)
+
+	writeDoctorCodexSessionLog(
+		t,
+		codexHome,
+		"sync-codex-session",
+		repoDir,
+		time.Date(2026, 7, 7, 10, 1, 0, 0, time.UTC),
+		165,
+	)
+	writeDoctorPiSessionLog(
+		t,
+		piSessionDir,
+		"sync-pi-session",
+		"sync-conflict-op-sync-pi",
+		repoDir,
+		time.Date(2026, 7, 7, 11, 1, 0, 0, time.UTC),
+	)
+
+	dryRunStdout, dryRunStderr := executeCommand(t, []string{"doctor"})
+	is.Empty(dryRunStderr)
+	is.Contains(dryRunStdout, "sync-conflict-resolution")
+	is.Contains(dryRunStdout, "would_recover")
+	is.Contains(dryRunStdout, "sync-codex-session")
+	is.Contains(dryRunStdout, "sync-pi-session")
+
+	loaded, err := store.Load("alpha", "op-sync")
+	must.NoError(err)
+	must.Len(loaded.Events, 4)
+	is.Nil(loaded.Events[1].Execution.Usage)
+	is.Nil(loaded.Events[3].Execution.Usage)
+
+	beforeEvents := loaded.Events
+	stdout, stderr := executeCommand(t, []string{"doctor", "--fix"})
+	is.Empty(stderr)
+	is.Contains(stdout, "recovered")
+	is.Contains(stdout, "sync-conflict-resolution")
+
+	loaded, err = store.Load("alpha", "op-sync")
+	must.NoError(err)
+	must.Len(loaded.Events, 4)
+	is.Equal(taskstate.EventSyncConflictStarted, loaded.Events[0].Type)
+	is.Equal(taskstate.EventSyncConflictFinished, loaded.Events[1].Type)
+	is.Equal(taskstate.EventSyncConflictStarted, loaded.Events[2].Type)
+	is.Equal(taskstate.EventSyncConflictFailed, loaded.Events[3].Type)
+	is.Equal(beforeEvents[1].At, loaded.Events[1].At)
+	is.Equal(beforeEvents[3].Error, loaded.Events[3].Error)
+	is.Nil(loaded.Events[0].Execution.Usage)
+	is.Nil(loaded.Events[2].Execution.Usage)
+
+	codexExecution := loaded.Events[1].Execution
+	must.NotNil(codexExecution.Session)
+	must.NotNil(codexExecution.Usage)
+	is.Equal("sync-codex-session", codexExecution.Session.ID)
+	is.Equal("gpt-5", codexExecution.Model)
+	is.Equal(165, codexExecution.Usage.TotalTokens)
+	is.Equal(taskstate.UsageCaptureCaptured, codexExecution.UsageCapture.Status)
+
+	piExecution := loaded.Events[3].Execution
+	must.NotNil(piExecution.Session)
+	must.NotNil(piExecution.Usage)
+	must.NotNil(piExecution.UsageCost)
+	is.Equal("sync-pi-session", piExecution.Session.ID)
+	is.Equal("openai-codex/gpt-5.5", piExecution.Model)
+	is.Equal(180, piExecution.Usage.TotalTokens)
+	is.Equal(int64(1240), piExecution.UsageCost.AmountMicroUSD)
+	is.Equal(taskstate.UsageCaptureCaptured, piExecution.UsageCapture.Status)
+
+	secondStdout, secondStderr := executeCommand(t, []string{"doctor"})
+	is.Empty(secondStderr)
+	is.NotContains(secondStdout, "sync-codex-session")
+	is.NotContains(secondStdout, "sync-pi-session")
+
+	statsOut, statsErr := executeCommand(t, []string{"task", "stats", "op-sync"})
+	is.Empty(statsErr)
+	is.Contains(statsOut, "sync-conflict-resolution")
+	is.Contains(statsOut, "total=165")
+	is.Contains(statsOut, "total=180")
+	is.Regexp(`(?m)^sync-conflict-resolution\s+2\s+10m0s\s+345\s+151\s+22\s+33\s+9\s+\$[0-9.]+\s+0\s+0$`, statsOut)
+}
+
+func TestDoctorPrefersRecordedSyncConflictWorktreeBeforeFallbackDirs(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	targetWorktree := filepath.Join(t.TempDir(), "target-worktree")
+	eventWorktree := filepath.Join(t.TempDir(), "event-worktree")
+
+	startedAt := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
+	store := taskstate.NewStoreWithClock(paths, clockSequence(
+		time.Date(2026, 7, 7, 9, 50, 0, 0, time.UTC),
+		time.Date(2026, 7, 7, 10, 5, 0, 0, time.UTC),
+	))
+	_, err := store.StartRun("alpha", "op-sync-priority", taskstate.StartRunOptions{
+		Agent:    "raw-profile",
+		Profile:  "raw-profile",
+		Harness:  "raw",
+		Command:  "sh",
+		Args:     []string{"-c", "true"},
+		Branch:   "main",
+		Worktree: targetWorktree,
+	})
+	must.NoError(err)
+	_, err = store.RecordSyncConflictResolutionFinished(
+		"alpha",
+		"op-sync-priority",
+		doctorSyncConflictOptions(eventWorktree, taskstate.AgentExecution{
+			Agent:       "sync-codex",
+			Profile:     "sync-codex",
+			Harness:     "codex",
+			Command:     "codex",
+			Args:        []string{"exec", "resolve"},
+			SessionName: "sync-conflict-op-sync-priority",
+			StartedAt:   startedAt,
+		}),
+	)
+	must.NoError(err)
+	writeDoctorCodexSessionLog(t, codexHome, "recorded-worktree-session", eventWorktree, startedAt.Add(90*time.Second), 111)
+	writeDoctorCodexSessionLog(t, codexHome, "fallback-worktree-session", targetWorktree, startedAt.Add(time.Second), 999)
+
+	stdout, stderr := executeCommand(t, []string{"doctor", "--fix"})
+	is.Empty(stderr)
+	is.Contains(stdout, "sync-conflict-resolution")
+	is.Contains(stdout, "recorded-worktree-session")
+	is.NotContains(stdout, "fallback-worktree-session")
+
+	loaded, err := store.Load("alpha", "op-sync-priority")
+	must.NoError(err)
+	must.Len(loaded.Events, 2)
+	syncEvent := loaded.Events[1]
+	is.Equal(taskstate.EventSyncConflictFinished, syncEvent.Type)
+	execution := syncEvent.Execution
+	must.NotNil(execution)
+	must.NotNil(execution.Session)
+	must.NotNil(execution.Usage)
+	is.Equal("recorded-worktree-session", execution.Session.ID)
+	is.Equal(111, execution.Usage.TotalTokens)
+	is.Equal(eventWorktree, syncEvent.Worktree)
+}
+
 func TestDoctorTraversesAllRegisteredRepos(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -555,6 +747,20 @@ func TestDoctorTraversesAllRegisteredRepos(t *testing.T) {
 	is.Contains(stdout, "beta")
 	is.Contains(stdout, "bt-1")
 	is.Contains(stdout, "beta-session")
+}
+
+func doctorSyncConflictOptions(
+	worktree string,
+	execution taskstate.AgentExecution,
+) taskstate.SyncConflictResolutionEventOptions {
+	return taskstate.SyncConflictResolutionEventOptions{
+		Execution:     execution,
+		Branch:        "orpheus/op-sync",
+		DefaultBranch: "main",
+		Worktree:      worktree,
+		PRURL:         "https://github.test/org/repo/pull/42",
+		ConflictFiles: []string{"conflict.txt"},
+	}
 }
 
 func doctorCodexStartOptions(worktree string) taskstate.StartRunOptions {

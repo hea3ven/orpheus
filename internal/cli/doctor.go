@@ -117,7 +117,7 @@ func doctorRows(rows []doctor.Row) [][]string {
 			formatTaskStatsField(row.RepoID),
 			formatTaskStatsField(row.TaskID),
 			formatTaskStatsField(row.Activity),
-			strconv.Itoa(row.Attempt),
+			formatDoctorAttempt(row.Attempt),
 			formatTaskStatsField(row.Step),
 			formatTaskStatsField(row.Outcome),
 			formatTaskStatsField(row.Reason),
@@ -169,6 +169,13 @@ func formatDoctorCandidateOffset(offsetMillis int64) string {
 		offsetMillis = -offsetMillis
 	}
 	return (time.Duration(offsetMillis) * time.Millisecond).String()
+}
+
+func formatDoctorAttempt(value int) string {
+	if value <= 0 {
+		return "-"
+	}
+	return strconv.Itoa(value)
 }
 
 func formatDoctorInt(value int) string {

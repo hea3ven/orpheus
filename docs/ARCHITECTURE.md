@@ -25,7 +25,7 @@ The main runtime integrations are the `bd`, `git`, and `gh` executables, configu
 6. After a passed review, `internal/workflow` commits and publishes the reviewed changes. Default-branch work is pushed and closed directly; feature-branch work is pushed and opened as a pull request.
 7. Later sync commands poll recorded pull requests, update open task branches from the registered default branch, close merged backend tasks, and add local audit events. `internal/status` combines backend snapshots with Orpheus-owned state into the operator action queue.
 
-The independent `doctor` flow scans registered repositories and Orpheus-owned task state for recoverable local inconsistencies. Its first diagnostic correlates missing supported harness usage facts, currently Codex and Pi, with local session logs and mutates task state only when the operator supplies `--fix` and the match is safe.
+The independent `doctor` flow scans registered repositories and Orpheus-owned task state for recoverable local inconsistencies. Its first diagnostic correlates missing supported harness usage facts, currently Codex and Pi, for implementation, review-agent, and terminal sync-conflict resolution executions with local session logs and mutates task state only when the operator supplies `--fix` and the match is safe.
 
 ## Package Dependency Graph
 
@@ -130,7 +130,7 @@ In dependency-direction terms, `internal/state`, `internal/task`, `internal/publ
 ### `internal/doctor`
 
 - Runs local, cross-repository diagnostics over registered repositories and Orpheus-owned task state, returning structured outcomes for CLI rendering.
-- Owns safe repair policy for recoverable local facts. The current diagnostic re-correlates missing Codex and Pi execution usage from local session logs and persists only unique or safely disambiguated matches when explicitly requested.
+- Owns safe repair policy for recoverable local facts. The current diagnostic re-correlates missing Codex and Pi execution usage from local session logs and persists only unique or safely disambiguated implementation, review-agent, or terminal sync-conflict matches when explicitly requested.
 
 ### `internal/git`
 
