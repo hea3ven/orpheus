@@ -16,7 +16,18 @@ type Group string
 
 const (
 	GroupDay   Group = "day"
+	GroupWeek  Group = "week"
 	GroupMonth Group = "month"
+)
+
+// View identifies the analytical aggregate stats view.
+type View string
+
+const (
+	ViewThroughput     View = "throughput"
+	ViewImplementation View = "implementation"
+	ViewReview         View = "review"
+	ViewConsumption    View = "consumption"
 )
 
 // StateLoader loads local Orpheus task state for aggregate projection.
@@ -24,18 +35,57 @@ type StateLoader interface {
 	Load(repoID, taskID string) (taskstate.TaskState, error)
 }
 
-// AggregateReport is the non-rendering projection for resolved task trends.
-type AggregateReport struct {
-	Group                         Group
-	Periods                       []AggregatePeriod
-	TasksWithoutResolvedTimestamp int
+// AggregateReportOptions controls time-based aggregate projection.
+type AggregateReportOptions struct {
+	Group        Group
+	View         View
+	From         *time.Time
+	To           *time.Time
+	Repositories []string
 }
 
-// AggregatePeriod contains metrics for one resolved task period.
+// AggregateReport is the non-rendering projection for time-grouped task stats.
+type AggregateReport struct {
+	Group Group
+	View  View
+	From  *time.Time
+	To    *time.Time
+	Repos []string
+
+	Periods []AggregatePeriod
+
+	TasksWithoutAnchor            int
+	TasksWithoutResolvedTimestamp int
+	TasksWithoutImplementation    int
+	TasksWithoutReviewActivity    int
+	ExecutionsWithoutStartedAt    int
+}
+
+// AggregatePeriod contains metrics for one time period.
 type AggregatePeriod struct {
-	Key      string
+	Key   string
+	Tasks int
+
 	Resolved int
 
+	WorkflowTime            DurationCohort
+	ImplementationAgentTime DurationCohort
+	ReviewTime              DurationCohort
+	RepairCycles            IntCohort
+	Tokens                  IntCohort
+	Cost                    CostCohort
+
+	Executions          int
+	ImplementationFails int
+	FirstPassApprovals  int
+	RepairTasks         int
+	BlockedReviews      int
+	BlockingFindings    int
+	OperationalFailures int
+	AbortedReviews      int
+	PausedReviews       int
+
+	// Legacy fields retained for callers/tests that still inspect the pre-view projection.
 	FullTaskTime        time.Duration
 	FullTaskTimeCount   int
 	UnknownFullTaskTime int
@@ -47,6 +97,45 @@ type AggregatePeriod struct {
 	Totals          AggregateTotals
 	TotalsByPurpose map[taskstate.AgentExecutionPurpose]AggregateTotals
 }
+
+// DurationCohort stores per-task duration distribution and known-data coverage.
+type DurationCohort struct {
+	Samples int
+	Known   int
+	Median  time.Duration
+	P75     time.Duration
+
+	values []time.Duration
+}
+
+// Unknown returns the number of samples without known data.
+func (c DurationCohort) Unknown() int { return c.Samples - c.Known }
+
+// IntCohort stores per-task integer distribution and known-data coverage.
+type IntCohort struct {
+	Samples int
+	Known   int
+	Median  int
+	Total   int
+
+	values []int
+}
+
+// Unknown returns the number of samples without known data.
+func (c IntCohort) Unknown() int { return c.Samples - c.Known }
+
+// CostCohort stores per-task cost distribution, totals, and known-data coverage.
+type CostCohort struct {
+	Samples        int
+	Known          int
+	MedianMicroUSD int64
+	TotalMicroUSD  int64
+
+	values []int64
+}
+
+// Unknown returns the number of samples without known data.
+func (c CostCohort) Unknown() int { return c.Samples - c.Known }
 
 // AggregateTotals contains execution, active time, token, and cost totals.
 type AggregateTotals struct {
@@ -99,10 +188,28 @@ func ParseGroup(group string) (Group, error) {
 	switch strings.ToLower(strings.TrimSpace(group)) {
 	case "day", "daily":
 		return GroupDay, nil
+	case "week", "weekly":
+		return GroupWeek, nil
 	case "month", "monthly":
 		return GroupMonth, nil
 	default:
-		return "", fmt.Errorf("unsupported stats group %q; expected day or month", group)
+		return "", fmt.Errorf("unsupported stats group %q; expected day, week, or month", group)
+	}
+}
+
+// ParseView normalizes a user-facing aggregate stats view value.
+func ParseView(view string) (View, error) {
+	switch strings.ToLower(strings.TrimSpace(view)) {
+	case "", "throughput":
+		return ViewThroughput, nil
+	case "implementation", "implementer", "speed":
+		return ViewImplementation, nil
+	case "review", "reviewer":
+		return ViewReview, nil
+	case "consumption", "usage", "cost":
+		return ViewConsumption, nil
+	default:
+		return "", fmt.Errorf("unsupported stats view %q; expected throughput, implementation, review, or consumption", view)
 	}
 }
 
@@ -112,11 +219,45 @@ func AggregateReportFromSnapshot(
 	stateLoader StateLoader,
 	group Group,
 ) (AggregateReport, []taskmodel.RepoFailure) {
+	return AggregateReportFromSnapshotWithOptions(snapshot, stateLoader, AggregateReportOptions{
+		Group: group,
+		View:  ViewThroughput,
+	})
+}
+
+// AggregateReportFromSnapshotWithOptions projects focused time-based analytical stats.
+//
+//nolint:funlen // The projection loop keeps loading, filtering, and view dispatch together.
+func AggregateReportFromSnapshotWithOptions(
+	snapshot taskmodel.SnapshotResult,
+	stateLoader StateLoader,
+	opts AggregateReportOptions,
+) (AggregateReport, []taskmodel.RepoFailure) {
+	group := opts.Group
+	if group == "" {
+		group = GroupDay
+	}
+	view := opts.View
+	if view == "" {
+		view = ViewThroughput
+	}
+
+	report := AggregateReport{
+		Group: group,
+		View:  view,
+		From:  cloneTime(opts.From),
+		To:    cloneTime(opts.To),
+		Repos: append([]string(nil), opts.Repositories...),
+	}
 	periods := map[string]*AggregatePeriod{}
 	failures := make([]taskmodel.RepoFailure, 0)
-	report := AggregateReport{Group: group}
+	repoFilter := newRepositoryFilter(opts.Repositories)
+	consumptionBuckets := map[string]map[string][]executionRecord{}
 
 	for _, repoSnapshot := range snapshot.Repositories {
+		if !repoFilter.matches(repoSnapshot.Repository) {
+			continue
+		}
 		for _, taskItem := range repoSnapshot.Tasks {
 			if taskItem.IssueType == taskmodel.IssueTypeEpic {
 				continue
@@ -133,55 +274,234 @@ func AggregateReportFromSnapshot(
 				continue
 			}
 
-			resolvedAt, ok := resolvedAt(taskItem, taskState)
-			if !ok {
-				report.TasksWithoutResolvedTimestamp++
-				continue
+			switch view {
+			case ViewImplementation:
+				addImplementationTask(&report, periods, group, opts, repoSnapshot.Repository, taskItem, taskState)
+			case ViewReview:
+				addReviewTask(&report, periods, group, opts, repoSnapshot.Repository, taskItem, taskState)
+			case ViewConsumption:
+				collectConsumptionTask(&report, consumptionBuckets, group, opts, repoSnapshot.Repository, taskItem, taskState)
+			default:
+				addThroughputTask(&report, periods, group, opts, taskItem, taskState)
 			}
-
-			key := periodKey(resolvedAt, group)
-			period := periods[key]
-			if period == nil {
-				period = &AggregatePeriod{Key: key}
-				periods[key] = period
-			}
-			period.addTask(taskItem, taskState, resolvedAt)
 		}
 	}
 
-	report.Periods = make([]AggregatePeriod, 0, len(periods))
-	for _, period := range periods {
-		report.Periods = append(report.Periods, *period)
+	if view == ViewConsumption {
+		for key, taskRecords := range consumptionBuckets {
+			period := ensurePeriod(periods, key)
+			for _, records := range taskRecords {
+				period.addConsumptionRecords(records)
+			}
+		}
 	}
-	sort.Slice(report.Periods, func(i, j int) bool {
-		return report.Periods[i].Key < report.Periods[j].Key
-	})
+
+	report.Periods = sortedPeriods(periods)
+	for i := range report.Periods {
+		report.Periods[i].finish()
+	}
 	return report, failures
 }
 
-func (p *AggregatePeriod) addTask(
+func addThroughputTask(
+	report *AggregateReport,
+	periods map[string]*AggregatePeriod,
+	group Group,
+	opts AggregateReportOptions,
+	taskItem taskmodel.Task,
+	state taskstate.TaskState,
+) {
+	resolvedAt, ok := resolvedAt(taskItem, state)
+	if !ok {
+		report.TasksWithoutAnchor++
+		report.TasksWithoutResolvedTimestamp++
+		return
+	}
+	if !inDateRange(resolvedAt, opts) {
+		return
+	}
+
+	period := ensurePeriod(periods, periodKey(resolvedAt, group))
+	period.addThroughputTask(taskItem, state, resolvedAt)
+}
+
+func addImplementationTask(
+	report *AggregateReport,
+	periods map[string]*AggregatePeriod,
+	group Group,
+	opts AggregateReportOptions,
+	_ taskmodel.Repository,
+	_ taskmodel.Task,
+	state taskstate.TaskState,
+) {
+	anchor, ok := firstImplementationDispatchAt(state)
+	if !ok {
+		report.TasksWithoutAnchor++
+		report.TasksWithoutImplementation++
+		return
+	}
+	if !inDateRange(anchor, opts) {
+		return
+	}
+
+	period := ensurePeriod(periods, periodKey(anchor, group))
+	period.addImplementationTask(state)
+}
+
+func addReviewTask(
+	report *AggregateReport,
+	periods map[string]*AggregatePeriod,
+	group Group,
+	opts AggregateReportOptions,
+	_ taskmodel.Repository,
+	_ taskmodel.Task,
+	state taskstate.TaskState,
+) {
+	anchor, ok := firstReviewActivityAt(state)
+	if !ok {
+		report.TasksWithoutAnchor++
+		report.TasksWithoutReviewActivity++
+		return
+	}
+	if !inDateRange(anchor, opts) {
+		return
+	}
+
+	period := ensurePeriod(periods, periodKey(anchor, group))
+	period.addReviewTask(state)
+}
+
+func collectConsumptionTask(
+	report *AggregateReport,
+	buckets map[string]map[string][]executionRecord,
+	group Group,
+	opts AggregateReportOptions,
+	repository taskmodel.Repository,
+	taskItem taskmodel.Task,
+	state taskstate.TaskState,
+) {
+	taskKey := repository.ID + "/" + taskItem.ID
+	for _, record := range executionRecords(state) {
+		anchor := record.execution.StartedAt
+		if anchor.IsZero() {
+			report.ExecutionsWithoutStartedAt++
+			continue
+		}
+		if !inDateRange(anchor, opts) {
+			continue
+		}
+		key := periodKey(anchor, group)
+		if buckets[key] == nil {
+			buckets[key] = map[string][]executionRecord{}
+		}
+		buckets[key][taskKey] = append(buckets[key][taskKey], record)
+	}
+}
+
+func ensurePeriod(periods map[string]*AggregatePeriod, key string) *AggregatePeriod {
+	period := periods[key]
+	if period == nil {
+		period = &AggregatePeriod{Key: key}
+		periods[key] = period
+	}
+	return period
+}
+
+func sortedPeriods(periods map[string]*AggregatePeriod) []AggregatePeriod {
+	result := make([]AggregatePeriod, 0, len(periods))
+	for _, period := range periods {
+		result = append(result, *period)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Key < result[j].Key
+	})
+	return result
+}
+
+func (p *AggregatePeriod) finish() {
+	p.WorkflowTime.finish()
+	p.ImplementationAgentTime.finish()
+	p.ReviewTime.finish()
+	p.RepairCycles.finish()
+	p.Tokens.finish()
+	p.Cost.finish()
+}
+
+func (p *AggregatePeriod) addThroughputTask(
 	taskItem taskmodel.Task,
 	state taskstate.TaskState,
 	resolvedAt time.Time,
 ) {
+	p.Tasks++
 	p.Resolved++
+	if workflowDuration, ok := workflowDuration(state, resolvedAt); ok {
+		p.WorkflowTime.addKnown(workflowDuration)
+	} else {
+		p.WorkflowTime.addUnknown()
+	}
+
+	// Legacy aggregate semantics.
 	if taskItem.CreatedAt != nil && !taskItem.CreatedAt.IsZero() && !resolvedAt.Before(*taskItem.CreatedAt) {
 		p.FullTaskTime += resolvedAt.Sub(*taskItem.CreatedAt)
 		p.FullTaskTimeCount++
 	} else {
 		p.UnknownFullTaskTime++
 	}
-
 	if firstDispatch, ok := firstImplementationDispatchAt(state); ok && !resolvedAt.Before(firstDispatch) {
 		p.ImplementationTime += resolvedAt.Sub(firstDispatch)
 		p.ImplementationTimeCount++
 	} else {
 		p.UnknownImplementationTime++
 	}
-
 	records := executionRecords(state)
 	p.Totals.addTask(records)
 	p.addTaskByPurpose(records)
+}
+
+func (p *AggregatePeriod) addImplementationTask(state taskstate.TaskState) {
+	p.Tasks++
+	if duration, ok := implementationAgentDuration(state); ok {
+		p.ImplementationAgentTime.addKnown(duration)
+	} else {
+		p.ImplementationAgentTime.addUnknown()
+	}
+	records := implementationRecords(state)
+	usage, knownUsage := taskUsage(records)
+	p.Tokens.add(usage.TotalTokens, knownUsage)
+	cost, knownCost := taskCost(records)
+	p.Cost.add(cost, knownCost)
+	p.ImplementationFails += implementationFailureCount(state)
+}
+
+func (p *AggregatePeriod) addReviewTask(state taskstate.TaskState) {
+	p.Tasks++
+	if duration, ok := reviewActivityDuration(state); ok {
+		p.ReviewTime.addKnown(duration)
+	} else {
+		p.ReviewTime.addUnknown()
+	}
+	repairCycles := repairCycleCount(state)
+	p.RepairCycles.addKnown(repairCycles)
+	if repairCycles > 0 {
+		p.RepairTasks++
+	}
+	if firstReviewPassed(state) {
+		p.FirstPassApprovals++
+	}
+	p.BlockedReviews += reviewStatusCount(state, taskstate.ReviewStatusBlocked)
+	p.OperationalFailures += reviewStatusCount(state, taskstate.ReviewStatusFailed)
+	p.AbortedReviews += reviewStatusCount(state, taskstate.ReviewStatusAborted)
+	p.PausedReviews += reviewStatusCount(state, taskstate.ReviewStatusWaitingForManual)
+	p.BlockingFindings += blockingFindingCount(state)
+}
+
+func (p *AggregatePeriod) addConsumptionRecords(records []executionRecord) {
+	p.Tasks++
+	p.Executions += len(records)
+	usage, knownUsage := taskUsage(records)
+	p.Tokens.add(usage.TotalTokens, knownUsage)
+	cost, knownCost := taskCost(records)
+	p.Cost.add(cost, knownCost)
 }
 
 func resolvedAt(taskItem taskmodel.Task, state taskstate.TaskState) (time.Time, bool) {
@@ -225,15 +545,38 @@ func firstImplementationDispatchAt(state taskstate.TaskState) (time.Time, bool) 
 			first = startedAt
 		}
 	}
-	return first, !first.IsZero()
+	return first.UTC(), !first.IsZero()
+}
+
+func firstReviewActivityAt(state taskstate.TaskState) (time.Time, bool) {
+	var first time.Time
+	for _, review := range state.Reviews {
+		if !review.StartedAt.IsZero() && (first.IsZero() || review.StartedAt.Before(first)) {
+			first = review.StartedAt
+		}
+		for _, step := range review.Steps {
+			if step.Execution == nil || step.Execution.StartedAt.IsZero() {
+				continue
+			}
+			if first.IsZero() || step.Execution.StartedAt.Before(first) {
+				first = step.Execution.StartedAt
+			}
+		}
+	}
+	return first.UTC(), !first.IsZero()
 }
 
 func periodKey(value time.Time, group Group) string {
 	value = value.UTC()
-	if group == GroupMonth {
+	switch group {
+	case GroupMonth:
 		return value.Format("2006-01")
+	case GroupWeek:
+		year, week := value.ISOWeek()
+		return fmt.Sprintf("%04d-W%02d", year, week)
+	default:
+		return value.Format("2006-01-02")
 	}
-	return value.Format("2006-01-02")
 }
 
 type executionRecord struct {
@@ -243,12 +586,7 @@ type executionRecord struct {
 
 func executionRecords(state taskstate.TaskState) []executionRecord {
 	records := make([]executionRecord, 0, len(state.Runs))
-	for _, run := range state.Runs {
-		records = append(records, newExecutionRecord(
-			taskstate.AgentExecutionPurposeImplementation,
-			run.Execution,
-		))
-	}
+	records = append(records, implementationRecords(state)...)
 	for _, reviewAttempt := range state.Reviews {
 		for _, step := range reviewAttempt.Steps {
 			if step.Execution == nil {
@@ -267,6 +605,17 @@ func executionRecords(state taskstate.TaskState) []executionRecord {
 		records = append(records, newExecutionRecord(
 			taskstate.AgentExecutionPurposeSyncConflictResolution,
 			*event.Execution,
+		))
+	}
+	return records
+}
+
+func implementationRecords(state taskstate.TaskState) []executionRecord {
+	records := make([]executionRecord, 0, len(state.Runs))
+	for _, run := range state.Runs {
+		records = append(records, newExecutionRecord(
+			taskstate.AgentExecutionPurposeImplementation,
+			run.Execution,
 		))
 	}
 	return records
@@ -317,55 +666,195 @@ func (t *AggregateTotals) addTask(records []executionRecord) {
 		return
 	}
 
-	knownUsage := true
-	knownCost := true
-	var taskUsage taskstate.AgentUsage
-	var taskCostMicroUSD int64
+	usage, knownUsage := taskUsage(records)
+	cost, knownCost := taskCost(records)
 	for _, record := range records {
-		execution := record.execution
 		t.Executions++
-		if duration, ok := durationValue(execution); ok {
+		if duration, ok := durationValue(record.execution); ok {
 			t.Duration += duration
 		}
-		if execution.Usage == nil {
-			knownUsage = false
-			knownCost = false
-			continue
+		if record.execution.Usage != nil {
+			t.Usage.InputTokens += record.execution.Usage.InputTokens
+			t.Usage.CachedInputTokens += record.execution.Usage.CachedInputTokens
+			t.Usage.OutputTokens += record.execution.Usage.OutputTokens
+			t.Usage.ReasoningOutputTokens += record.execution.Usage.ReasoningOutputTokens
+			t.Usage.TotalTokens += record.execution.Usage.TotalTokens
 		}
-		taskUsage.InputTokens += execution.Usage.InputTokens
-		taskUsage.CachedInputTokens += execution.Usage.CachedInputTokens
-		taskUsage.OutputTokens += execution.Usage.OutputTokens
-		taskUsage.ReasoningOutputTokens += execution.Usage.ReasoningOutputTokens
-		taskUsage.TotalTokens += execution.Usage.TotalTokens
-		t.Usage.InputTokens += execution.Usage.InputTokens
-		t.Usage.CachedInputTokens += execution.Usage.CachedInputTokens
-		t.Usage.OutputTokens += execution.Usage.OutputTokens
-		t.Usage.ReasoningOutputTokens += execution.Usage.ReasoningOutputTokens
-		t.Usage.TotalTokens += execution.Usage.TotalTokens
-		if cost, ok := executionCost(execution); ok {
-			taskCostMicroUSD += cost.AmountMicroUSD
-			t.CostMicroUSD += cost.AmountMicroUSD
-		} else {
-			knownCost = false
+		if executionCost, ok := executionCost(record.execution); ok {
+			t.CostMicroUSD += executionCost.AmountMicroUSD
 		}
 	}
-
 	if knownUsage {
 		t.KnownUsageTasks++
-		t.usageForAverage.InputTokens += taskUsage.InputTokens
-		t.usageForAverage.CachedInputTokens += taskUsage.CachedInputTokens
-		t.usageForAverage.OutputTokens += taskUsage.OutputTokens
-		t.usageForAverage.ReasoningOutputTokens += taskUsage.ReasoningOutputTokens
-		t.usageForAverage.TotalTokens += taskUsage.TotalTokens
+		t.usageForAverage.InputTokens += usage.InputTokens
+		t.usageForAverage.CachedInputTokens += usage.CachedInputTokens
+		t.usageForAverage.OutputTokens += usage.OutputTokens
+		t.usageForAverage.ReasoningOutputTokens += usage.ReasoningOutputTokens
+		t.usageForAverage.TotalTokens += usage.TotalTokens
 	} else {
 		t.UnknownUsage++
 	}
 	if knownCost {
 		t.KnownCostTasks++
-		t.costMicroUSDForAverage += taskCostMicroUSD
+		t.costMicroUSDForAverage += cost
 	} else {
 		t.UnknownCost++
 	}
+}
+
+func implementationAgentDuration(state taskstate.TaskState) (time.Duration, bool) {
+	if len(state.Runs) == 0 {
+		return 0, false
+	}
+	var total time.Duration
+	for _, run := range state.Runs {
+		if run.Completion == nil || run.Completion.CompletedAt.IsZero() || run.Execution.StartedAt.IsZero() {
+			return 0, false
+		}
+		duration := run.Completion.CompletedAt.Sub(run.Execution.StartedAt)
+		if duration < 0 {
+			return 0, false
+		}
+		total += duration
+	}
+	return total, true
+}
+
+func workflowDuration(state taskstate.TaskState, resolvedAt time.Time) (time.Duration, bool) {
+	firstLaunch, ok := firstImplementationDispatchAt(state)
+	if !ok || resolvedAt.Before(firstLaunch) {
+		return 0, false
+	}
+	return resolvedAt.Sub(firstLaunch), true
+}
+
+func reviewActivityDuration(state taskstate.TaskState) (time.Duration, bool) {
+	if len(state.Reviews) == 0 {
+		return 0, false
+	}
+	var total time.Duration
+	for _, review := range state.Reviews {
+		if review.StartedAt.IsZero() || review.FinishedAt == nil || review.FinishedAt.IsZero() {
+			return 0, false
+		}
+		duration := review.FinishedAt.Sub(review.StartedAt)
+		if duration < 0 {
+			return 0, false
+		}
+		total += duration
+	}
+	return total, true
+}
+
+func taskUsage(records []executionRecord) (taskstate.AgentUsage, bool) {
+	if len(records) == 0 {
+		return taskstate.AgentUsage{}, false
+	}
+	known := true
+	var usage taskstate.AgentUsage
+	for _, record := range records {
+		execution := record.execution
+		if execution.Usage == nil {
+			known = false
+			continue
+		}
+		usage.InputTokens += execution.Usage.InputTokens
+		usage.CachedInputTokens += execution.Usage.CachedInputTokens
+		usage.OutputTokens += execution.Usage.OutputTokens
+		usage.ReasoningOutputTokens += execution.Usage.ReasoningOutputTokens
+		usage.TotalTokens += execution.Usage.TotalTokens
+	}
+	return usage, known
+}
+
+func taskCost(records []executionRecord) (int64, bool) {
+	if len(records) == 0 {
+		return 0, false
+	}
+	known := true
+	var total int64
+	for _, record := range records {
+		cost, ok := executionCost(record.execution)
+		if !ok {
+			known = false
+			continue
+		}
+		total += cost.AmountMicroUSD
+	}
+	return total, known
+}
+
+func implementationFailureCount(state taskstate.TaskState) int {
+	count := 0
+	for _, run := range state.Runs {
+		if run.Status == taskstate.RunStatusFailed || run.Execution.Status == taskstate.RunStatusFailed {
+			count++
+		}
+	}
+	return count
+}
+
+func repairCycleCount(state taskstate.TaskState) int {
+	blockedReviews := map[int]bool{}
+	for _, review := range state.Reviews {
+		if review.Status == taskstate.ReviewStatusBlocked {
+			blockedReviews[review.Attempt] = false
+		}
+	}
+	for _, run := range state.Runs {
+		if run.ReviewFollowUp == nil {
+			continue
+		}
+		if _, ok := blockedReviews[run.ReviewFollowUp.ReviewAttempt]; ok {
+			blockedReviews[run.ReviewFollowUp.ReviewAttempt] = true
+		}
+	}
+	count := 0
+	for _, repaired := range blockedReviews {
+		if repaired {
+			count++
+		}
+	}
+	return count
+}
+
+func firstReviewPassed(state taskstate.TaskState) bool {
+	if len(state.Reviews) == 0 {
+		return false
+	}
+	first := state.Reviews[0]
+	for _, review := range state.Reviews[1:] {
+		if review.Attempt > 0 && (first.Attempt == 0 || review.Attempt < first.Attempt) {
+			first = review
+			continue
+		}
+		if first.Attempt == 0 && !review.StartedAt.IsZero() && review.StartedAt.Before(first.StartedAt) {
+			first = review
+		}
+	}
+	return first.Status == taskstate.ReviewStatusPassed
+}
+
+func reviewStatusCount(state taskstate.TaskState, status taskstate.ReviewStatus) int {
+	count := 0
+	for _, review := range state.Reviews {
+		if review.Status == status {
+			count++
+		}
+	}
+	return count
+}
+
+func blockingFindingCount(state taskstate.TaskState) int {
+	count := 0
+	for _, review := range state.Reviews {
+		for _, finding := range review.Findings {
+			if finding.Type == taskstate.FindingTypeBlocking {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 func durationValue(execution taskstate.AgentExecution) (time.Duration, bool) {
@@ -392,4 +881,153 @@ func averageDuration(total time.Duration, count int) (time.Duration, bool) {
 		return 0, false
 	}
 	return total / time.Duration(count), true
+}
+
+func (c *DurationCohort) addKnown(value time.Duration) {
+	c.Samples++
+	c.Known++
+	c.values = append(c.values, value)
+}
+
+func (c *DurationCohort) addUnknown() {
+	c.Samples++
+}
+
+func (c *DurationCohort) finish() {
+	if len(c.values) == 0 {
+		return
+	}
+	sort.Slice(c.values, func(i, j int) bool { return c.values[i] < c.values[j] })
+	c.Median = medianDuration(c.values)
+	c.P75 = percentileDuration(c.values, 75)
+}
+
+func (c *IntCohort) add(value int, known bool) {
+	if known {
+		c.addKnown(value)
+		return
+	}
+	c.addUnknown()
+	c.Total += value
+}
+
+func (c *IntCohort) addKnown(value int) {
+	c.Samples++
+	c.Known++
+	c.Total += value
+	c.values = append(c.values, value)
+}
+
+func (c *IntCohort) addUnknown() {
+	c.Samples++
+}
+
+func (c *IntCohort) finish() {
+	if len(c.values) == 0 {
+		return
+	}
+	sort.Ints(c.values)
+	c.Median = medianInt(c.values)
+}
+
+func (c *CostCohort) add(value int64, known bool) {
+	c.Samples++
+	c.TotalMicroUSD += value
+	if !known {
+		return
+	}
+	c.Known++
+	c.values = append(c.values, value)
+}
+
+func (c *CostCohort) finish() {
+	if len(c.values) == 0 {
+		return
+	}
+	sort.Slice(c.values, func(i, j int) bool { return c.values[i] < c.values[j] })
+	c.MedianMicroUSD = medianInt64(c.values)
+}
+
+func medianDuration(values []time.Duration) time.Duration {
+	mid := len(values) / 2
+	if len(values)%2 == 1 {
+		return values[mid]
+	}
+	return (values[mid-1] + values[mid]) / 2
+}
+
+func medianInt(values []int) int {
+	mid := len(values) / 2
+	if len(values)%2 == 1 {
+		return values[mid]
+	}
+	return (values[mid-1] + values[mid]) / 2
+}
+
+func medianInt64(values []int64) int64 {
+	mid := len(values) / 2
+	if len(values)%2 == 1 {
+		return values[mid]
+	}
+	return (values[mid-1] + values[mid]) / 2
+}
+
+func percentileDuration(values []time.Duration, percentile int) time.Duration {
+	return values[percentileIndex(len(values), percentile)]
+}
+
+func percentileIndex(length int, percentile int) int {
+	if length <= 1 {
+		return 0
+	}
+	index := (length*percentile + 99) / 100
+	if index <= 0 {
+		return 0
+	}
+	if index > length {
+		return length - 1
+	}
+	return index - 1
+}
+
+func inDateRange(anchor time.Time, opts AggregateReportOptions) bool {
+	anchor = anchor.UTC()
+	if opts.From != nil && anchor.Before(opts.From.UTC()) {
+		return false
+	}
+	if opts.To != nil && !anchor.Before(opts.To.UTC()) {
+		return false
+	}
+	return true
+}
+
+type repositoryFilter map[string]struct{}
+
+func newRepositoryFilter(values []string) repositoryFilter {
+	filter := repositoryFilter{}
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" {
+			continue
+		}
+		filter[value] = struct{}{}
+	}
+	return filter
+}
+
+func (f repositoryFilter) matches(repository taskmodel.Repository) bool {
+	if len(f) == 0 {
+		return true
+	}
+	_, idOK := f[strings.ToLower(strings.TrimSpace(repository.ID))]
+	_, nameOK := f[strings.ToLower(strings.TrimSpace(repository.Name))]
+	return idOK || nameOK
+}
+
+func cloneTime(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	cloned := value.UTC()
+	return &cloned
 }

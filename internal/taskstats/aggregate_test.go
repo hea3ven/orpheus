@@ -392,6 +392,253 @@ func TestAggregateReportIncludesTerminalSyncConflictResolutionExecutions(t *test
 	is.Zero(conflictTotals.UnknownUsage)
 }
 
+//nolint:funlen // The fixture documents completed, follow-up, incomplete, and filtered runs together.
+func TestAggregateImplementationViewUsesAgentDoneDurationAndKeepsKnownUsage(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+
+	startedAt := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	completedAt := startedAt.Add(5 * time.Minute)
+	followUpStartedAt := startedAt.Add(time.Hour)
+	followUpCompletedAt := followUpStartedAt.Add(10 * time.Minute)
+	processFinishedAt := startedAt.Add(30 * time.Minute)
+	incompleteStartedAt := startedAt.Add(2 * time.Hour)
+	incompleteFinishedAt := incompleteStartedAt.Add(20 * time.Minute)
+	snapshot := taskmodel.SnapshotResult{Repositories: []taskmodel.RepositorySnapshot{
+		{
+			Repository: taskmodel.Repository{ID: "alpha", Name: "Alpha"},
+			Tasks: []taskmodel.Task{
+				{ID: "op-complete"},
+				{ID: "op-incomplete"},
+			},
+		},
+		{
+			Repository: taskmodel.Repository{ID: "beta", Name: "Beta"},
+			Tasks:      []taskmodel.Task{{ID: "op-filtered"}},
+		},
+	}}
+	loader := fakeStateLoader{states: map[string]taskstate.TaskState{
+		"alpha/op-complete": {
+			Runs: []taskstate.RunAttempt{
+				{
+					Execution: taskstate.AgentExecution{
+						Model:      "gpt-5",
+						StartedAt:  startedAt,
+						FinishedAt: &processFinishedAt,
+						Usage:      &taskstate.AgentUsage{TotalTokens: 100},
+					},
+					Completion: &taskstate.Completion{CompletedAt: completedAt},
+				},
+				{
+					Execution: taskstate.AgentExecution{
+						Model:     "gpt-5",
+						StartedAt: followUpStartedAt,
+						Usage:     &taskstate.AgentUsage{TotalTokens: 200},
+					},
+					Completion: &taskstate.Completion{CompletedAt: followUpCompletedAt},
+					ReviewFollowUp: &taskstate.ReviewFollowUp{
+						ReviewAttempt:  1,
+						FindingIndexes: []int{0},
+					},
+				},
+			},
+		},
+		"alpha/op-incomplete": {
+			Runs: []taskstate.RunAttempt{{
+				Execution: taskstate.AgentExecution{
+					Model:      "gpt-5",
+					StartedAt:  incompleteStartedAt,
+					FinishedAt: &incompleteFinishedAt,
+					Usage:      &taskstate.AgentUsage{TotalTokens: 300},
+				},
+			}},
+		},
+		"beta/op-filtered": {
+			Runs: []taskstate.RunAttempt{{Execution: taskstate.AgentExecution{StartedAt: startedAt}}},
+		},
+	}}
+
+	got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{
+		Group:        taskstats.GroupWeek,
+		View:         taskstats.ViewImplementation,
+		Repositories: []string{"alpha"},
+	})
+
+	must.Empty(failures)
+	must.Len(got.Periods, 1)
+	period := got.Periods[0]
+	is.Equal("2026-W27", period.Key)
+	is.Equal(2, period.Tasks)
+	is.Equal(15*time.Minute, period.ImplementationAgentTime.Median)
+	is.Equal(15*time.Minute, period.ImplementationAgentTime.P75)
+	is.Equal(1, period.ImplementationAgentTime.Known)
+	is.Equal(2, period.ImplementationAgentTime.Samples)
+	is.Equal(300, period.Tokens.Median)
+	is.Equal(2, period.Tokens.Known)
+	is.Equal(2, period.Tokens.Samples)
+}
+
+func TestAggregateImplementationViewKeepsPartialKnownConsumptionTotals(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	snapshot, loader := partialKnownConsumptionFixture()
+
+	got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{
+		Group: taskstats.GroupDay,
+		View:  taskstats.ViewImplementation,
+	})
+
+	must.Empty(failures)
+	must.Len(got.Periods, 1)
+	period := got.Periods[0]
+	is.Equal(150, period.Tokens.Total)
+	is.Zero(period.Tokens.Known)
+	is.Equal(1, period.Tokens.Samples)
+	is.Equal(int64(625), period.Cost.TotalMicroUSD)
+	is.Zero(period.Cost.Known)
+	is.Equal(1, period.Cost.Samples)
+}
+
+func TestAggregateConsumptionViewKeepsPartialKnownConsumptionTotals(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	snapshot, loader := partialKnownConsumptionFixture()
+
+	got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{
+		Group: taskstats.GroupDay,
+		View:  taskstats.ViewConsumption,
+	})
+
+	must.Empty(failures)
+	must.Len(got.Periods, 1)
+	period := got.Periods[0]
+	is.Equal(1, period.Tasks)
+	is.Equal(2, period.Executions)
+	is.Equal(150, period.Tokens.Total)
+	is.Zero(period.Tokens.Known)
+	is.Equal(1, period.Tokens.Samples)
+	is.Equal(int64(625), period.Cost.TotalMicroUSD)
+	is.Zero(period.Cost.Known)
+	is.Equal(1, period.Cost.Samples)
+}
+
+func TestAggregateReviewViewSumsReviewActivityWithoutFollowUpGap(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+
+	startedAt := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	blockedFinishedAt := startedAt.Add(10 * time.Minute)
+	followUpStartedAt := startedAt.Add(20 * time.Minute)
+	followUpCompletedAt := startedAt.Add(2 * time.Hour)
+	passedStartedAt := followUpCompletedAt
+	passedFinishedAt := passedStartedAt.Add(15 * time.Minute)
+	snapshot := taskmodel.SnapshotResult{Repositories: []taskmodel.RepositorySnapshot{{
+		Repository: taskmodel.Repository{ID: "alpha", Name: "Alpha"},
+		Tasks:      []taskmodel.Task{{ID: "op-review-gap"}},
+	}}}
+	loader := fakeStateLoader{states: map[string]taskstate.TaskState{
+		"alpha/op-review-gap": {
+			Runs: []taskstate.RunAttempt{{
+				Execution: taskstate.AgentExecution{StartedAt: followUpStartedAt},
+				Completion: &taskstate.Completion{
+					CompletedAt: followUpCompletedAt,
+				},
+				ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{0}},
+			}},
+			Reviews: []taskstate.ReviewAttempt{
+				{
+					Attempt:    1,
+					Status:     taskstate.ReviewStatusBlocked,
+					StartedAt:  startedAt,
+					FinishedAt: &blockedFinishedAt,
+					Findings:   []taskstate.ReviewFinding{{Type: taskstate.FindingTypeBlocking}},
+				},
+				{
+					Attempt:    2,
+					Status:     taskstate.ReviewStatusPassed,
+					StartedAt:  passedStartedAt,
+					FinishedAt: &passedFinishedAt,
+				},
+			},
+		},
+	}}
+
+	got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{
+		Group: taskstats.GroupDay,
+		View:  taskstats.ViewReview,
+	})
+
+	must.Empty(failures)
+	must.Len(got.Periods, 1)
+	period := got.Periods[0]
+	is.Equal(1, period.Tasks)
+	is.Equal(25*time.Minute, period.ReviewTime.Median)
+	is.Equal(25*time.Minute, period.ReviewTime.P75)
+	is.Equal(1, period.ReviewTime.Known)
+	is.Equal(1, period.ReviewTime.Samples)
+	is.Equal(1, period.RepairCycles.Median)
+	is.Equal(1, period.RepairTasks)
+	is.Equal(1, period.BlockedReviews)
+	is.Equal(1, period.BlockingFindings)
+}
+
+func TestAggregateReviewViewSeparatesRepairCyclesAndOperationalOutcomes(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+
+	startedAt := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	blockedFinishedAt := startedAt.Add(10 * time.Minute)
+	passedStartedAt := startedAt.Add(2 * time.Hour)
+	passedFinishedAt := passedStartedAt.Add(15 * time.Minute)
+	snapshot := taskmodel.SnapshotResult{Repositories: []taskmodel.RepositorySnapshot{{
+		Repository: taskmodel.Repository{ID: "alpha", Name: "Alpha"},
+		Tasks:      []taskmodel.Task{{ID: "op-review"}},
+	}}}
+	loader := fakeStateLoader{states: map[string]taskstate.TaskState{
+		"alpha/op-review": {
+			Runs: []taskstate.RunAttempt{{
+				ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{0}},
+			}},
+			Reviews: []taskstate.ReviewAttempt{
+				{
+					Attempt:    1,
+					Status:     taskstate.ReviewStatusBlocked,
+					StartedAt:  startedAt,
+					FinishedAt: &blockedFinishedAt,
+					Findings:   []taskstate.ReviewFinding{{Type: taskstate.FindingTypeBlocking}},
+				},
+				{
+					Attempt:    2,
+					Status:     taskstate.ReviewStatusFailed,
+					StartedAt:  passedStartedAt,
+					FinishedAt: &passedFinishedAt,
+				},
+				{Attempt: 3, Status: taskstate.ReviewStatusAborted, StartedAt: passedStartedAt, FinishedAt: &passedFinishedAt},
+				{Attempt: 4, Status: taskstate.ReviewStatusWaitingForManual, StartedAt: passedStartedAt},
+			},
+		},
+	}}
+
+	got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{
+		Group: taskstats.GroupDay,
+		View:  taskstats.ViewReview,
+	})
+
+	must.Empty(failures)
+	must.Len(got.Periods, 1)
+	period := got.Periods[0]
+	is.Equal(1, period.Tasks)
+	is.Equal(1, period.RepairCycles.Median)
+	is.Equal(1, period.RepairTasks)
+	is.Equal(1, period.BlockedReviews)
+	is.Equal(1, period.BlockingFindings)
+	is.Equal(1, period.OperationalFailures)
+	is.Equal(1, period.AbortedReviews)
+	is.Equal(1, period.PausedReviews)
+	is.Equal(0, period.ReviewTime.Known)
+	is.Equal(1, period.ReviewTime.Samples)
+}
+
 func TestAggregateReportFromSnapshotExcludesPartialUnknownTaskFromAverages(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -453,6 +700,36 @@ func TestAggregateReportFromSnapshotExcludesPartialUnknownTaskFromAverages(t *te
 	is.Equal(1, period.Totals.UnknownCost)
 	_, ok = period.AverageCostMicroUSD()
 	is.False(ok)
+}
+
+func partialKnownConsumptionFixture() (taskmodel.SnapshotResult, fakeStateLoader) {
+	startedAt := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	finishedAt := startedAt.Add(30 * time.Minute)
+	missingStartedAt := startedAt.Add(time.Hour)
+	snapshot := taskmodel.SnapshotResult{Repositories: []taskmodel.RepositorySnapshot{{
+		Repository: taskmodel.Repository{ID: "alpha", Name: "Alpha"},
+		Tasks:      []taskmodel.Task{{ID: "op-partial"}},
+	}}}
+	loader := fakeStateLoader{states: map[string]taskstate.TaskState{
+		"alpha/op-partial": {
+			Runs: []taskstate.RunAttempt{
+				{
+					Execution: taskstate.AgentExecution{
+						Model:      "gpt-5",
+						StartedAt:  startedAt,
+						FinishedAt: &finishedAt,
+						Usage: &taskstate.AgentUsage{
+							InputTokens:  100,
+							OutputTokens: 50,
+							TotalTokens:  150,
+						},
+					},
+				},
+				{Execution: taskstate.AgentExecution{Model: "gpt-5", StartedAt: missingStartedAt}},
+			},
+		},
+	}}
+	return snapshot, loader
 }
 
 func assertDurationValue(t *testing.T, got time.Duration, ok bool, want time.Duration) {
