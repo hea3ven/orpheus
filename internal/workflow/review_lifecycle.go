@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
@@ -112,6 +114,7 @@ type ReviewLifecycleService struct {
 	PipelineRunner         func(review.PipelineRunOptions) (review.PipelineOutcome, error)
 	ResolveCommand         func(DispatchCommandContext, string) (DispatchCommand, string, error)
 	ResolveFollowUpCommand func(DispatchCommandContext, string) (DispatchCommand, string, error)
+	Logger                 *slog.Logger
 }
 
 // ReviewLifecycleOptions describes a task review invocation.
@@ -261,30 +264,59 @@ func (s ReviewLifecycleService) Run(ctx context.Context, opts ReviewLifecycleOpt
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx = gitmeta.ContextWithLogger(ctx, s.Logger)
+	span := logging.Start(ctx, s.Logger, "task review workflow",
+		slog.String("component", "workflow"),
+		slog.String("operation", "task_review"),
+		slog.String("task_id", opts.TaskID),
+		slog.String("pipeline", strings.TrimSpace(opts.PipelineName)),
+	)
+	var finalOutcome ReviewLifecycleOutcome
+	var finalErr error
+	defer func() {
+		attrs := []slog.Attr{}
+		if finalOutcome.Kind != "" {
+			attrs = append(attrs, slog.String("outcome", string(finalOutcome.Kind)))
+		}
+		if finalOutcome.Context.Source.Repository.ID != "" {
+			attrs = append(attrs, slog.String("repo_id", finalOutcome.Context.RepoID()))
+		}
+		span.FinishError(ctx, finalErr, attrs...)
+	}()
+
 	if err := s.validate(); err != nil {
-		return reviewLifecycleOperationalFailure(ReviewAttemptContext{}, err), err
+		finalErr = err
+		finalOutcome = reviewLifecycleOperationalFailure(ReviewAttemptContext{}, err)
+		return finalOutcome, err
 	}
 	maxAttempts, err := reviewMaxAutonomousReviewAttempts(s.Paths)
 	if err != nil {
 		err = fmt.Errorf("task review %s: %w", opts.TaskID, err)
-		return reviewLifecycleOperationalFailure(ReviewAttemptContext{}, err), err
+		finalErr = err
+		finalOutcome = reviewLifecycleOperationalFailure(ReviewAttemptContext{}, err)
+		return finalOutcome, err
 	}
 	start, err := s.startReview(ctx, opts.TaskID, opts.PipelineName)
 	if err != nil {
-		return reviewLifecycleOperationalFailure(start, err), err
+		finalErr = err
+		finalOutcome = reviewLifecycleOperationalFailure(start, err)
+		return finalOutcome, err
 	}
 	dispatchAgentName := opts.DispatchAgentName
 	if start.Resumed && strings.TrimSpace(dispatchAgentName) == "" {
 		dispatchAgentName, err = resumedReviewImplementerName(start)
 		if err != nil {
 			err = fmt.Errorf("task review %s: %w", start.TaskID(), err)
-			return reviewLifecycleOperationalFailure(start, err), err
+			finalErr = err
+			finalOutcome = reviewLifecycleOperationalFailure(start, err)
+			return finalOutcome, err
 		}
 	}
-	return s.executeAutonomousReviewLoop(ctx, start, autonomousReviewLoopOptions{
+	finalOutcome, finalErr = s.executeAutonomousReviewLoop(ctx, start, autonomousReviewLoopOptions{
 		maxAttempts:       maxAttempts,
 		dispatchAgentName: dispatchAgentName,
 	})
+	return finalOutcome, finalErr
 }
 
 // RunAfterCompletedRun inspects a completed task run and starts review when the
@@ -434,6 +466,7 @@ func (s ReviewLifecycleService) pipelineRunOptions(runCtx context.Context, ctx R
 	return review.PipelineRunOptions{
 		Context:                 runCtx,
 		Store:                   ctx.store,
+		Logger:                  s.Logger,
 		RepoID:                  ctx.RepoID(),
 		TaskID:                  ctx.TaskID(),
 		Branch:                  ctx.Target.Branch,
@@ -528,11 +561,21 @@ func (s ReviewLifecycleService) executeReviewAttempt(runCtx context.Context, ctx
 		_, _ = ctx.store.FinishReview(ctx.RepoID(), ctx.TaskID(), ctx.Review.Attempt, taskstate.ReviewStatusFailed)
 		return "", err
 	}
+	span := logging.Start(runCtx, s.Logger, "review attempt execution",
+		slog.String("component", "workflow"),
+		slog.String("operation", "review_attempt"),
+		slog.String("repo_id", ctx.RepoID()),
+		slog.String("task_id", ctx.TaskID()),
+		slog.Int("attempt", ctx.Review.Attempt),
+		slog.String("pipeline", ctx.Pipeline.Name),
+	)
 	outcome, err := runner(opts)
 	if err != nil {
+		span.FinishError(runCtx, err)
 		_, _ = ctx.store.FinishReview(ctx.RepoID(), ctx.TaskID(), ctx.Review.Attempt, taskstate.ReviewStatusFailed)
 		return "", err
 	}
+	span.Finish(runCtx, logging.StatusSuccess, slog.String("review_status", string(outcome.Status)))
 	if outcome.Status == taskstate.ReviewStatusWaitingForManual {
 		return outcome.Status, nil
 	}
@@ -1152,6 +1195,7 @@ func (s ReviewLifecycleService) finalizeApprovedReview(ctx context.Context, revi
 		BackendFactory: func(source task.RepositorySource) (FinalizationBackend, error) { return s.BackendFactory(source) },
 		RunStore:       s.RunStore,
 		PRProvider:     s.PRProvider,
+		Logger:         s.Logger,
 	}
 	opts := FinalizeOptions{TaskID: reviewCtx.TaskID(), RequirePassedReview: true}
 	finalized, err := service.Finalize(ctx, opts)

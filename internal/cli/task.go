@@ -2098,7 +2098,7 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summa
 		return err
 	}
 
-	service := newTaskFinalizationService(paths, taskCtx)
+	service := newTaskFinalizationService(paths, taskCtx, logger)
 	finalized, err := finalizeTaskWithConfirmation(command, service, workflow.FinalizeOptions{
 		TaskID:              taskID,
 		Summary:             summary,
@@ -2119,16 +2119,26 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summa
 	return renderTaskDoneResult(command, finalized)
 }
 
-func newTaskFinalizationService(paths state.Paths, taskCtx taskContext) workflow.FinalizationService {
+func newTaskFinalizationService(paths state.Paths, taskCtx taskContext, logger *slog.Logger) workflow.FinalizationService {
 	return workflow.FinalizationService{
 		Paths:   paths,
 		Sources: taskCtx.Sources,
 		BackendFactory: func(source taskmodel.RepositorySource) (workflow.FinalizationBackend, error) {
-			return newBeadsTaskBackend(source.BackendDir)
+			return newDiagnosticBeadsTaskBackend(source, logger)
 		},
-		RunStore:   taskstate.NewStore(paths),
-		PRProvider: pullrequest.GHProvider{},
+		RunStore:   taskstate.NewStoreWithLogger(paths, logger),
+		PRProvider: pullrequest.GHProvider{Logger: logger},
+		Logger:     logger,
 	}
+}
+
+func newDiagnosticBeadsTaskBackend(source taskmodel.RepositorySource, logger *slog.Logger) (beads.TaskBackend, error) {
+	return beads.NewTaskBackendWithRunner(source.BackendDir, beads.CommandRunner{
+		Logger: logger,
+		DiagnosticAttrs: []slog.Attr{
+			slog.String("repo_id", source.Repository.ID),
+		},
+	})
 }
 
 func finalizeTaskWithConfirmation(
@@ -2259,16 +2269,17 @@ func runTaskSync(command *cobra.Command, opts *rootOptions, taskID string) error
 		Paths:   paths,
 		Sources: taskCtx.Sources,
 		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.SyncBackend, error) {
-			return newBeadsTaskBackend(source.BackendDir)
+			return newDiagnosticBeadsTaskBackend(source, logger)
 		},
-		RunStore: taskstate.NewStore(paths),
+		RunStore: taskstate.NewStoreWithLogger(paths, logger),
 		ConflictResolver: syncConflictAgentResolver{
 			paths:    paths,
 			stdout:   command.OutOrStdout(),
 			stderr:   command.ErrOrStderr(),
 			launcher: attachedAgentLauncher,
 		},
-		PRProvider: pullrequest.GHProvider{},
+		PRProvider: pullrequest.GHProvider{Logger: logger},
+		Logger:     logger,
 	}
 	result, err := service.Sync(command.Context(), workflow.SyncOptions{TaskID: taskID})
 	if err != nil {
@@ -2280,7 +2291,7 @@ func runTaskSync(command *cobra.Command, opts *rootOptions, taskID string) error
 		"synced task",
 		slog.String("repo_id", result.Repository.ID),
 		slog.String("task_id", result.Task.ID),
-		slog.String("status", string(result.Status)),
+		slog.String("sync_status", string(result.Status)),
 		slog.String("branch", result.Branch),
 	)
 	return renderTaskSyncResult(command.OutOrStdout(), result)
@@ -2306,19 +2317,20 @@ func runTaskSyncAll(command *cobra.Command, opts *rootOptions) error {
 		Paths:   paths,
 		Sources: taskCtx.Sources,
 		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.SyncBackend, error) {
-			return newBeadsTaskBackend(source.BackendDir)
+			return newDiagnosticBeadsTaskBackend(source, logger)
 		},
 		ScanFactory: func(source taskmodel.RepositorySource) (taskmodel.ReadBackend, error) {
-			return newBeadsTaskBackend(source.BackendDir)
+			return newDiagnosticBeadsTaskBackend(source, logger)
 		},
-		RunStore: taskstate.NewStore(paths),
+		RunStore: taskstate.NewStoreWithLogger(paths, logger),
 		ConflictResolver: syncConflictAgentResolver{
 			paths:    paths,
 			stdout:   command.OutOrStdout(),
 			stderr:   command.ErrOrStderr(),
 			launcher: attachedAgentLauncher,
 		},
-		PRProvider: pullrequest.GHProvider{},
+		PRProvider: pullrequest.GHProvider{Logger: logger},
+		Logger:     logger,
 	}
 	result, err := service.SyncAll(command.Context())
 	if err != nil {

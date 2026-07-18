@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/state"
@@ -125,6 +127,7 @@ type SyncService struct {
 	Git              SyncGit
 	ConflictResolver SyncConflictResolver
 	PRProvider       pullrequest.Provider
+	Logger           *slog.Logger
 }
 
 // SyncOptions are the CLI-provided sync controls.
@@ -186,6 +189,26 @@ type syncTarget struct {
 	task    task.Task
 }
 
+type syncDiagnosticTarget struct {
+	repoID string
+	taskID string
+	branch string
+	hasPR  bool
+}
+
+func (t *syncDiagnosticTarget) recordTarget(target syncTarget) {
+	if t == nil {
+		return
+	}
+	t.repoID = target.source.Repository.ID
+	t.taskID = target.task.ID
+	metadata := target.task.OrpheusMetadata()
+	if metadata.HasBranch {
+		t.branch = strings.TrimSpace(metadata.Branch)
+	}
+	t.hasPR = metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != ""
+}
+
 type syncAllCandidate struct {
 	source task.RepositorySource
 	taskID string
@@ -196,7 +219,21 @@ func (s SyncService) Sync(ctx context.Context, opts SyncOptions) (SyncResult, er
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx = gitmeta.ContextWithLogger(ctx, s.Logger)
+	span := logging.Start(ctx, s.Logger, "task sync workflow",
+		slog.String("component", "workflow"),
+		slog.String("operation", "task_sync"),
+		slog.String("task_id", opts.TaskID),
+	)
+	var result SyncResult
+	var finalErr error
+	diagnosticTarget := syncDiagnosticTarget{taskID: strings.TrimSpace(opts.TaskID)}
+	defer func() {
+		span.FinishError(ctx, finalErr, syncFinishAttrs(result, diagnosticTarget)...)
+	}()
+
 	if err := s.validate(); err != nil {
+		finalErr = err
 		return SyncResult{}, err
 	}
 	gitState := s.Git
@@ -204,19 +241,52 @@ func (s SyncService) Sync(ctx context.Context, opts SyncOptions) (SyncResult, er
 		gitState = LocalSyncGit{}
 	}
 
-	var result SyncResult
-	err := state.WithGlobalMutationLock(s.Paths, syncLockOperation, func() error {
-		synced, err := s.syncLocked(ctx, opts, gitState)
+	finalErr = state.WithGlobalMutationLockLogger(ctx, s.Paths, syncLockOperation, s.Logger, func() error {
+		synced, err := s.syncLocked(ctx, opts, gitState, &diagnosticTarget)
 		if err != nil {
 			return err
 		}
 		result = synced
 		return nil
 	})
-	if err != nil {
-		return SyncResult{}, err
+	if finalErr != nil {
+		return SyncResult{}, finalErr
 	}
 	return result, nil
+}
+
+func syncFinishAttrs(result SyncResult, target syncDiagnosticTarget) []slog.Attr {
+	repoID := result.Repository.ID
+	if repoID == "" {
+		repoID = target.repoID
+	}
+	taskID := result.Task.ID
+	if taskID == "" {
+		taskID = target.taskID
+	}
+	branch := result.Branch
+	if branch == "" {
+		branch = target.branch
+	}
+	hasPR := result.PRURL != "" || target.hasPR
+
+	attrs := make([]slog.Attr, 0, 5)
+	if repoID != "" {
+		attrs = append(attrs, slog.String("repo_id", repoID))
+	}
+	if taskID != "" {
+		attrs = append(attrs, slog.String("task_id", taskID))
+	}
+	if result.Status != SyncStatus("") {
+		attrs = append(attrs, slog.String("sync_status", string(result.Status)))
+	}
+	if branch != "" {
+		attrs = append(attrs, slog.String("branch", branch))
+	}
+	if hasPR {
+		attrs = append(attrs, slog.Bool("has_pr", true))
+	}
+	return attrs
 }
 
 // SyncAll scans all registered repositories and syncs tasks already at a PR boundary.
@@ -224,7 +294,22 @@ func (s SyncService) SyncAll(ctx context.Context) (SyncAllResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx = gitmeta.ContextWithLogger(ctx, s.Logger)
+	span := logging.Start(ctx, s.Logger, "task sync all workflow",
+		slog.String("component", "workflow"),
+		slog.String("operation", "task_sync_all"),
+	)
+	var result SyncAllResult
+	var finalErr error
+	defer func() {
+		span.FinishError(ctx, finalErr,
+			slog.Int("result_count", len(result.Results)),
+			slog.Int("failure_count", len(result.Failures)),
+		)
+	}()
+
 	if err := s.validate(); err != nil {
+		finalErr = err
 		return SyncAllResult{}, err
 	}
 	gitState := s.Git
@@ -232,30 +317,59 @@ func (s SyncService) SyncAll(ctx context.Context) (SyncAllResult, error) {
 		gitState = LocalSyncGit{}
 	}
 
-	var result SyncAllResult
-	err := state.WithGlobalMutationLock(s.Paths, syncLockOperation, func() error {
+	finalErr = state.WithGlobalMutationLockLogger(ctx, s.Paths, syncLockOperation, s.Logger, func() error {
 		candidates, failures := s.scanSyncAllCandidates(ctx)
 		result.Failures = append(result.Failures, failures...)
+		for _, failure := range failures {
+			s.logSyncAllOutcome(ctx, failure, SyncResult{})
+		}
 
 		for _, candidate := range candidates {
-			synced, err := s.syncLocked(ctx, SyncOptions{TaskID: candidate.taskID}, gitState)
+			synced, err := s.syncLocked(ctx, SyncOptions{TaskID: candidate.taskID}, gitState, nil)
 			if err != nil {
-				result.Failures = append(result.Failures, SyncAllFailure{
+				failure := SyncAllFailure{
 					Repository: candidate.source.Repository,
 					TaskID:     candidate.taskID,
 					Operation:  "sync",
 					Err:        err,
-				})
+				}
+				result.Failures = append(result.Failures, failure)
+				s.logSyncAllOutcome(ctx, failure, SyncResult{})
 				continue
 			}
 			result.Results = append(result.Results, synced)
+			s.logSyncAllOutcome(ctx, SyncAllFailure{}, synced)
 		}
 		return nil
 	})
-	if err != nil {
-		return SyncAllResult{}, err
+	if finalErr != nil {
+		return SyncAllResult{}, finalErr
 	}
 	return result, nil
+}
+
+func (s SyncService) logSyncAllOutcome(ctx context.Context, failure SyncAllFailure, result SyncResult) {
+	if s.Logger == nil || !s.Logger.Enabled(ctx, slog.LevelDebug) {
+		return
+	}
+	attrs := []slog.Attr{slog.String("component", "workflow"), slog.String("operation", "task_sync_all_item")}
+	status := logging.StatusSuccess
+	if failure.Err != nil {
+		status = logging.StatusFailure
+		attrs = append(attrs,
+			slog.String("repo_id", failure.Repository.ID),
+			slog.String("task_id", failure.TaskID),
+			slog.String("item_operation", failure.Operation),
+		)
+	} else {
+		attrs = append(attrs,
+			slog.String("repo_id", result.Repository.ID),
+			slog.String("task_id", result.Task.ID),
+			slog.String("sync_status", string(result.Status)),
+			slog.String("branch", result.Branch),
+		)
+	}
+	s.Logger.LogAttrs(ctx, slog.LevelDebug, "task sync all item finished", append(attrs, slog.String("status", status))...)
 }
 
 func (s SyncService) validate() error {
@@ -344,11 +458,17 @@ func isSyncAllRunnableTask(taskItem task.Task) bool {
 	return taskItem.IssueType != task.IssueTypeEpic
 }
 
-func (s SyncService) syncLocked(ctx context.Context, opts SyncOptions, gitState SyncGit) (SyncResult, error) {
+func (s SyncService) syncLocked(
+	ctx context.Context,
+	opts SyncOptions,
+	gitState SyncGit,
+	diagnosticTarget *syncDiagnosticTarget,
+) (SyncResult, error) {
 	target, err := s.resolveTarget(ctx, opts)
 	if err != nil {
 		return SyncResult{}, err
 	}
+	diagnosticTarget.recordTarget(target)
 
 	if target.task.Status == task.StatusClosed {
 		return s.skip(target, taskstate.RunAttempt{}, "task is closed"), nil
@@ -371,10 +491,26 @@ func (s SyncService) pollExistingPR(ctx context.Context, target syncTarget, gitS
 		return SyncResult{}, false, nil
 	}
 
-	status, err := s.PRProvider.StatusByURL(ctx, pullrequest.StatusByURLRequest{URL: prURL})
+	span := logging.Start(ctx, s.Logger, "pull request poll",
+		slog.String("component", "workflow"),
+		slog.String("operation", "poll_pr"),
+		slog.String("repo_id", target.source.Repository.ID),
+		slog.String("task_id", target.task.ID),
+	)
+	status, err := s.PRProvider.StatusByURL(ctx, pullrequest.StatusByURLRequest{
+		URL: prURL,
+		Diagnostics: pullrequest.DiagnosticContext{
+			RepoID: target.source.Repository.ID,
+			TaskID: target.task.ID,
+			Branch: strings.TrimSpace(metadata.Branch),
+			HasPR:  true,
+		},
+	})
 	if err != nil {
+		span.FinishError(ctx, err)
 		return SyncResult{}, true, err
 	}
+	span.Finish(ctx, logging.StatusSuccess, slog.String("pr_state", string(status.State)))
 	observedURL := strings.TrimSpace(status.URL)
 	if observedURL == "" {
 		observedURL = prURL
@@ -472,6 +608,14 @@ func (s SyncService) syncOpenPRBranch(ctx context.Context, target syncTarget, gi
 		}, nil
 	}
 
+	span := logging.Start(ctx, s.Logger, "sync task branch",
+		slog.String("component", "workflow"),
+		slog.String("operation", "sync_task_branch"),
+		slog.String("repo_id", repo.ID),
+		slog.String("task_id", target.task.ID),
+		slog.String("branch", taskTarget.Branch),
+		slog.String("cwd", taskTarget.Worktree),
+	)
 	branchSync, err := gitState.SyncTaskBranchWithDefault(ctx, gitmeta.TaskBranchSyncOptions{
 		RepoPath:      repo.Path,
 		DefaultBranch: repo.DefaultBranch,
@@ -480,10 +624,14 @@ func (s SyncService) syncOpenPRBranch(ctx context.Context, target syncTarget, gi
 	})
 	if err != nil {
 		if errors.Is(err, gitmeta.ErrMergeConflict) {
+			span.Finish(ctx, "merge_conflict")
 			return s.resolveOpenPRBranchConflict(ctx, target, gitState, taskTarget, prURLFromTask(target.task))
 		}
-		return SyncResult{}, fmt.Errorf("update open PR branch for task %s: %w", target.task.ID, err)
+		wrapped := fmt.Errorf("update open PR branch for task %s: %w", target.task.ID, err)
+		span.FinishError(ctx, wrapped)
+		return SyncResult{}, wrapped
 	}
+	span.Finish(ctx, logging.StatusSuccess, slog.String("sync_status", string(branchSync.Status)))
 
 	return branchSyncResult(repo.DefaultBranch, taskTarget.Branch, target.task.ID, branchSync)
 }

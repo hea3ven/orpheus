@@ -14,6 +14,27 @@ import (
 	"github.com/hea3ven/orpheus/internal/logging"
 )
 
+type loggerContextKey struct{}
+
+// ContextWithLogger returns a child context that enables safe Git command diagnostics.
+func ContextWithLogger(ctx context.Context, logger *slog.Logger) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if logger == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, loggerContextKey{}, logger)
+}
+
+func loggerFromContext(ctx context.Context) *slog.Logger {
+	if ctx == nil {
+		return nil
+	}
+	logger, _ := ctx.Value(loggerContextKey{}).(*slog.Logger)
+	return logger
+}
+
 var (
 	// ErrNotRepository indicates the supplied path is not inside a Git worktree.
 	ErrNotRepository = errors.New("not a git worktree")
@@ -250,7 +271,7 @@ func currentBranchWithLogger(ctx context.Context, root string, logger *slog.Logg
 }
 
 func runGitContext(ctx context.Context, dir string, args ...string) (string, error) {
-	return runGitContextLogger(ctx, nil, dir, "git", args...)
+	return runGitContextLogger(ctx, loggerFromContext(ctx), dir, gitOperationName(args), args...)
 }
 
 func runGitContextLogger(ctx context.Context, logger *slog.Logger, dir string, operation string, args ...string) (string, error) {
@@ -282,6 +303,60 @@ func runGitContextLogger(ctx context.Context, logger *slog.Logger, dir string, o
 		span.FinishError(ctx, err, finishAttrs...)
 	}
 	return output, err
+}
+
+var gitOperationNames = map[string]string{
+	"add":              "stage_all",
+	"branch":           "create_branch",
+	"check-ref-format": "validate_ref",
+	"checkout":         "checkout",
+	"clean":            "clean_untracked",
+	"commit":           "commit",
+	"config":           "config",
+	"fetch":            "fetch",
+	"ls-files":         "list_untracked",
+	"ls-remote":        "ls_remote",
+	"merge-base":       "merge_base",
+	"merge-tree":       "merge_tree",
+	"push":             "push",
+	"remote":           "remote",
+	"reset":            "reset_index",
+	"restore":          "restore_tracked",
+	"rev-parse":        "rev_parse",
+	"show-ref":         "show_ref",
+	"status":           "status",
+	"symbolic-ref":     "current_branch",
+	"worktree":         "worktree",
+}
+
+func gitOperationName(args []string) string {
+	if len(args) == 0 {
+		return "git"
+	}
+	if args[0] == "diff" {
+		return gitDiffOperationName(args)
+	}
+	if args[0] == "merge" {
+		return gitMergeOperationName(args)
+	}
+	if name, ok := gitOperationNames[args[0]]; ok {
+		return name
+	}
+	return args[0]
+}
+
+func gitDiffOperationName(args []string) string {
+	if len(args) > 1 && args[1] == "--cached" {
+		return "diff_cached"
+	}
+	return "diff"
+}
+
+func gitMergeOperationName(args []string) string {
+	if len(args) > 1 && args[1] == "--abort" {
+		return "merge_abort"
+	}
+	return "merge"
 }
 
 func gitExitAttrs(command *exec.Cmd, err error) []slog.Attr {

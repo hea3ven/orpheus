@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/state"
@@ -96,6 +98,7 @@ type FinalizationService struct {
 	RunStore       FinalizationRunStore
 	Git            FinalizationGit
 	PRProvider     pullrequest.Provider
+	Logger         *slog.Logger
 }
 
 // FinalizeOptions are the CLI-provided finalization controls.
@@ -159,6 +162,31 @@ type finalizationTarget struct {
 	task    task.Task
 }
 
+type finalizationDiagnosticTarget struct {
+	repoID string
+	taskID string
+	branch string
+}
+
+func (t *finalizationDiagnosticTarget) recordTarget(target finalizationTarget) {
+	if t == nil {
+		return
+	}
+	t.repoID = target.source.Repository.ID
+	t.taskID = target.task.ID
+	metadata := target.task.OrpheusMetadata()
+	if metadata.HasBranch {
+		t.branch = strings.TrimSpace(metadata.Branch)
+	}
+}
+
+func (t *finalizationDiagnosticTarget) recordBranch(branch string) {
+	if t == nil {
+		return
+	}
+	t.branch = strings.TrimSpace(branch)
+}
+
 type finalizationContext struct {
 	state        taskstate.TaskState
 	target       taskstate.TaskTarget
@@ -175,41 +203,90 @@ func (s FinalizationService) Finalize(ctx context.Context, opts FinalizeOptions)
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx = gitmeta.ContextWithLogger(ctx, s.Logger)
+	span := logging.Start(ctx, s.Logger, "task finalization workflow",
+		slog.String("component", "workflow"),
+		slog.String("operation", "task_finalization"),
+		slog.String("task_id", opts.TaskID),
+	)
+	var result FinalizationResult
+	var finalErr error
+	diagnosticTarget := finalizationDiagnosticTarget{taskID: strings.TrimSpace(opts.TaskID)}
+	defer func() {
+		span.FinishError(ctx, finalErr, finalizationFinishAttrs(result, diagnosticTarget)...)
+	}()
+
 	if s.BackendFactory == nil {
-		return FinalizationResult{}, errors.New("task finalization backend factory is required")
+		finalErr = errors.New("task finalization backend factory is required")
+		return FinalizationResult{}, finalErr
 	}
 	if s.RunStore == nil {
-		return FinalizationResult{}, errors.New("task finalization run store is required")
+		finalErr = errors.New("task finalization run store is required")
+		return FinalizationResult{}, finalErr
 	}
 	gitState := s.Git
 	if gitState == nil {
 		gitState = LocalFinalizationGit{}
 	}
 
-	var result FinalizationResult
-	err := state.WithGlobalMutationLock(s.Paths, finalizationLockOperation, func() error {
-		finalized, err := s.finalizeLocked(ctx, opts, gitState)
+	finalErr = state.WithGlobalMutationLockLogger(ctx, s.Paths, finalizationLockOperation, s.Logger, func() error {
+		finalized, err := s.finalizeLocked(ctx, opts, gitState, &diagnosticTarget)
 		if err != nil {
 			return err
 		}
 		result = finalized
 		return nil
 	})
-	if err != nil {
-		return FinalizationResult{}, err
+	if finalErr != nil {
+		return FinalizationResult{}, finalErr
 	}
 	return result, nil
+}
+
+func finalizationFinishAttrs(
+	result FinalizationResult,
+	target finalizationDiagnosticTarget,
+) []slog.Attr {
+	repoID := result.Repository.ID
+	if repoID == "" {
+		repoID = target.repoID
+	}
+	taskID := result.Task.ID
+	if taskID == "" {
+		taskID = target.taskID
+	}
+	branch := result.Branch
+	if branch == "" {
+		branch = target.branch
+	}
+
+	attrs := make([]slog.Attr, 0, 4)
+	if repoID != "" {
+		attrs = append(attrs, slog.String("repo_id", repoID))
+	}
+	if taskID != "" {
+		attrs = append(attrs, slog.String("task_id", taskID))
+	}
+	if branch != "" {
+		attrs = append(attrs, slog.String("branch", branch))
+	}
+	if result.PRURL != "" {
+		attrs = append(attrs, slog.Bool("has_pr", true))
+	}
+	return attrs
 }
 
 func (s FinalizationService) finalizeLocked(
 	ctx context.Context,
 	opts FinalizeOptions,
 	gitState FinalizationGit,
+	diagnosticTarget *finalizationDiagnosticTarget,
 ) (FinalizationResult, error) {
 	target, err := s.resolveTarget(ctx, opts, gitState)
 	if err != nil {
 		return FinalizationResult{}, err
 	}
+	diagnosticTarget.recordTarget(target)
 	repo := target.source.Repository
 
 	finalizeCtx, err := s.loadFinalizationContext(repo, target.task)
@@ -221,7 +298,7 @@ func (s FinalizationService) finalizeLocked(
 			return FinalizationResult{}, err
 		}
 	}
-	result, err := s.finalizeAfterReviewGate(ctx, opts, target, finalizeCtx, gitState)
+	result, err := s.finalizeAfterReviewGate(ctx, opts, target, finalizeCtx, gitState, diagnosticTarget)
 	if err != nil && opts.RequirePassedReview {
 		recordErr := s.recordFinalizationFailure(repo.ID, target.task.ID, err)
 		if recordErr != nil {
@@ -237,6 +314,7 @@ func (s FinalizationService) finalizeAfterReviewGate(
 	target finalizationTarget,
 	finalizeCtx finalizationContext,
 	gitState FinalizationGit,
+	diagnosticTarget *finalizationDiagnosticTarget,
 ) (FinalizationResult, error) {
 	repo := target.source.Repository
 	targets, err := ExpectedTargetsForTask(repo, target.task.ID, s.Paths)
@@ -262,6 +340,7 @@ func (s FinalizationService) finalizeAfterReviewGate(
 		)
 	}
 
+	diagnosticTarget.recordBranch(taskTarget.Branch)
 	if isFeatureBranchTarget(taskTarget.Kind) {
 		return s.publishFeatureBranch(ctx, target, finalizeCtx, taskTarget, gitState)
 	}
@@ -748,10 +827,16 @@ func (s FinalizationService) findOrCreateFeatureBranchPR(
 	target Target,
 ) (string, bool, error) {
 	baseBranch := strings.TrimSpace(repo.DefaultBranch)
+	diagnostics := pullrequest.DiagnosticContext{
+		RepoID: repo.ID,
+		TaskID: taskItem.ID,
+		Branch: target.Branch,
+	}
 	found, ok, err := s.PRProvider.FindOpenByBranch(ctx, pullrequest.FindOpenByBranchRequest{
 		RepositoryPath: repo.Path,
 		HeadBranch:     target.Branch,
 		BaseBranch:     baseBranch,
+		Diagnostics:    diagnostics,
 	})
 	if err != nil {
 		return "", false, err
@@ -770,6 +855,7 @@ func (s FinalizationService) findOrCreateFeatureBranchPR(
 		BaseBranch:     baseBranch,
 		Title:          content.Title,
 		Body:           content.Body,
+		Diagnostics:    diagnostics,
 	})
 	if err != nil {
 		return "", false, err

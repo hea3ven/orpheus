@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/state"
 )
 
@@ -1711,6 +1713,22 @@ func PushTaskBranch(ctx context.Context, dir string, branch string) error {
 }
 
 func runGitContextWithInput(ctx context.Context, dir string, input string, args ...string) (string, error) {
+	return runGitContextWithInputLogger(ctx, loggerFromContext(ctx), dir, gitOperationName(args), input, args...)
+}
+
+func runGitContextWithInputLogger(
+	ctx context.Context,
+	logger *slog.Logger,
+	dir string,
+	operation string,
+	input string,
+	args ...string,
+) (string, error) {
+	span := logging.Start(ctx, logger, "git command",
+		slog.String("component", "git"),
+		slog.String("operation", operation),
+		slog.String("cwd", dir),
+	)
 	command := exec.CommandContext(ctx, "git", args...)
 	command.Dir = dir
 	command.Stdin = strings.NewReader(input)
@@ -1721,6 +1739,7 @@ func runGitContextWithInput(ctx context.Context, dir string, input string, args 
 	command.Stderr = &stderr
 
 	err := command.Run()
+	span.FinishError(ctx, err, gitExitAttrs(command, err)...)
 	output := stdout.String()
 	if stderr.Len() > 0 {
 		if output != "" && !strings.HasSuffix(output, "\n") {
