@@ -117,16 +117,19 @@ func newTaskShowCommand(opts *rootOptions) *cobra.Command {
 }
 
 func newTaskStatsCommand(opts *rootOptions) *cobra.Command {
-	var group string
+	var statsOpts taskStatsOptions
 	cmd := &cobra.Command{
 		Use:   "stats [<task-id>]",
-		Short: "Show implementation execution stats for one task or aggregate trends",
+		Short: "Show implementation execution stats for one task or time-grouped analytical views",
+		Long: "Show implementation execution stats for one task or time-grouped analytical views.\n\n" +
+			"Aggregate views use --group day|week|month and --view throughput|implementation|review|consumption. " +
+			"Date filters use YYYY-MM-DD boundaries. Repository filters match registered repository id or name.",
 		Args: func(command *cobra.Command, args []string) error {
-			if strings.TrimSpace(group) == "" {
+			if !statsOpts.aggregateSelected() {
 				return cobra.ExactArgs(1)(command, args)
 			}
 			if len(args) != 0 {
-				return fmt.Errorf("--group cannot be combined with a task id")
+				return fmt.Errorf("aggregate stats flags cannot be combined with a task id")
 			}
 			return nil
 		},
@@ -135,10 +138,14 @@ func newTaskStatsCommand(opts *rootOptions) *cobra.Command {
 			if len(args) == 1 {
 				taskID = args[0]
 			}
-			return runTaskStats(command, opts, taskID, taskStatsOptions{group: group})
+			return runTaskStats(command, opts, taskID, statsOpts)
 		},
 	}
-	cmd.Flags().StringVar(&group, "group", "", "aggregate non-epic resolved task stats by day or month")
+	cmd.Flags().StringVar(&statsOpts.group, "group", "", "aggregate non-epic task stats by day, week, or month")
+	cmd.Flags().StringVar(&statsOpts.view, "view", "", "aggregate view: throughput, implementation, review, or consumption")
+	cmd.Flags().StringVar(&statsOpts.from, "from", "", "include aggregate rows anchored on or after YYYY-MM-DD")
+	cmd.Flags().StringVar(&statsOpts.to, "to", "", "include aggregate rows anchored before the day after YYYY-MM-DD")
+	cmd.Flags().StringArrayVar(&statsOpts.repos, "repo", nil, "limit aggregate stats to a repository id or name; repeatable")
 	return cmd
 }
 
@@ -404,6 +411,18 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 
 type taskStatsOptions struct {
 	group string
+	view  string
+	from  string
+	to    string
+	repos []string
+}
+
+func (o taskStatsOptions) aggregateSelected() bool {
+	return strings.TrimSpace(o.group) != "" ||
+		strings.TrimSpace(o.view) != "" ||
+		strings.TrimSpace(o.from) != "" ||
+		strings.TrimSpace(o.to) != "" ||
+		len(o.repos) > 0
 }
 
 func runTaskStats(command *cobra.Command, opts *rootOptions, taskID string, statsOpts taskStatsOptions) error {
@@ -413,8 +432,8 @@ func runTaskStats(command *cobra.Command, opts *rootOptions, taskID string, stat
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for task stats")
 
-	if strings.TrimSpace(statsOpts.group) != "" {
-		return runAggregateTaskStats(command, opts, statsOpts.group)
+	if statsOpts.aggregateSelected() {
+		return runAggregateTaskStats(command, opts, statsOpts)
 	}
 
 	deps, err := opts.invocation(command)
@@ -440,12 +459,12 @@ func runTaskStats(command *cobra.Command, opts *rootOptions, taskID string, stat
 	return renderTaskStats(command.OutOrStdout(), taskState)
 }
 
-func runAggregateTaskStats(command *cobra.Command, opts *rootOptions, group string) error {
+func runAggregateTaskStats(command *cobra.Command, opts *rootOptions, statsOpts taskStatsOptions) error {
 	logger := opts.log().With(
 		slog.String("component", "cli"),
 		slog.String("operation", "task_stats_aggregate"),
 	)
-	normalizedGroup, err := taskstats.ParseGroup(group)
+	aggregateOpts, err := parseTaskStatsAggregateOptions(statsOpts)
 	if err != nil {
 		return err
 	}
@@ -459,17 +478,24 @@ func runAggregateTaskStats(command *cobra.Command, opts *rootOptions, group stri
 		return err
 	}
 
+	sources := filterTaskStatsRepositorySources(taskCtx.Sources, statsOpts.repos)
+	aggregator, err := taskmodel.NewAggregatorWithLogger(sources, deps.taskBackendFactory, deps.logger)
+	if err != nil {
+		return err
+	}
+
 	logger.DebugContext(
 		command.Context(),
 		"querying task snapshots for aggregate stats",
-		slog.String("group", string(normalizedGroup)),
-		slog.Int("repo_count", len(taskCtx.Sources)),
+		slog.String("group", string(aggregateOpts.Group)),
+		slog.String("view", string(aggregateOpts.View)),
+		slog.Int("repo_count", len(sources)),
 	)
-	snapshot := taskCtx.Aggregator.Snapshot(command.Context())
-	report, stateFailures := taskstats.AggregateReportFromSnapshot(
+	snapshot := aggregator.Snapshot(command.Context())
+	report, stateFailures := taskstats.AggregateReportFromSnapshotWithOptions(
 		snapshot,
 		deps.taskStateStore,
-		normalizedGroup,
+		aggregateOpts,
 	)
 	if len(stateFailures) > 0 {
 		snapshot.Failures = append(snapshot.Failures, stateFailures...)
@@ -482,6 +508,90 @@ func runAggregateTaskStats(command *cobra.Command, opts *rootOptions, group stri
 		return partialRepoFailureError{operation: "task stats", failures: snapshot.Failures}
 	}
 	return nil
+}
+
+func parseTaskStatsAggregateOptions(statsOpts taskStatsOptions) (taskstats.AggregateReportOptions, error) {
+	group := strings.TrimSpace(statsOpts.group)
+	if group == "" {
+		group = string(taskstats.GroupDay)
+	}
+	normalizedGroup, err := taskstats.ParseGroup(group)
+	if err != nil {
+		return taskstats.AggregateReportOptions{}, err
+	}
+	normalizedView, err := taskstats.ParseView(statsOpts.view)
+	if err != nil {
+		return taskstats.AggregateReportOptions{}, err
+	}
+	rangeStart, rangeEnd, err := parseTaskStatsDateRange(statsOpts.from, statsOpts.to)
+	if err != nil {
+		return taskstats.AggregateReportOptions{}, err
+	}
+	return taskstats.AggregateReportOptions{
+		Group:        normalizedGroup,
+		View:         normalizedView,
+		From:         rangeStart,
+		To:           rangeEnd,
+		Repositories: statsOpts.repos,
+	}, nil
+}
+
+func filterTaskStatsRepositorySources(
+	sources []taskmodel.RepositorySource,
+	repositories []string,
+) []taskmodel.RepositorySource {
+	filter := taskStatsRepositoryFilter{}
+	for _, repository := range repositories {
+		repository = strings.ToLower(strings.TrimSpace(repository))
+		if repository == "" {
+			continue
+		}
+		filter[repository] = struct{}{}
+	}
+	if len(filter) == 0 {
+		return sources
+	}
+
+	filtered := make([]taskmodel.RepositorySource, 0, len(sources))
+	for _, source := range sources {
+		if filter.matches(source.Repository) {
+			filtered = append(filtered, source)
+		}
+	}
+	return filtered
+}
+
+type taskStatsRepositoryFilter map[string]struct{}
+
+func (f taskStatsRepositoryFilter) matches(repository taskmodel.Repository) bool {
+	_, idOK := f[strings.ToLower(strings.TrimSpace(repository.ID))]
+	_, nameOK := f[strings.ToLower(strings.TrimSpace(repository.Name))]
+	return idOK || nameOK
+}
+
+func parseTaskStatsDateRange(from string, to string) (*time.Time, *time.Time, error) {
+	var rangeStart *time.Time
+	if strings.TrimSpace(from) != "" {
+		parsed, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(from), time.UTC)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid --from date %q; expected YYYY-MM-DD", from)
+		}
+		rangeStart = &parsed
+	}
+
+	var rangeEnd *time.Time
+	if strings.TrimSpace(to) != "" {
+		parsed, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(to), time.UTC)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid --to date %q; expected YYYY-MM-DD", to)
+		}
+		end := parsed.AddDate(0, 0, 1)
+		rangeEnd = &end
+	}
+	if rangeStart != nil && rangeEnd != nil && !rangeStart.Before(*rangeEnd) {
+		return nil, nil, fmt.Errorf("--from must be on or before --to")
+	}
+	return rangeStart, rangeEnd, nil
 }
 
 func runTaskDir(command *cobra.Command, opts *rootOptions, taskID string) error {
@@ -3145,157 +3255,234 @@ func renderTaskStats(output interface{ Write([]byte) (int, error) }, state tasks
 	)
 }
 
-type taskStatsAggregateTable struct {
-	title   string
-	headers []string
-	rows    [][]string
-}
-
 func renderTaskStatsAggregate(output interface{ Write([]byte) (int, error) }, report taskstats.AggregateReport) error {
-	if _, err := fmt.Fprintf(output, "Aggregate stats grouped by %s\n", report.Group); err != nil {
+	if _, err := fmt.Fprintf(output, "Task stats %s view grouped by %s\n", report.View, report.Group); err != nil {
 		return err
+	}
+	if _, err := fmt.Fprintf(output, "Date anchor: %s\n", taskStatsAggregateDateAnchor(report.View)); err != nil {
+		return err
+	}
+	if filter := taskStatsAggregateFilterLine(report); filter != "" {
+		if _, err := fmt.Fprintln(output, filter); err != nil {
+			return err
+		}
 	}
 	if _, err := fmt.Fprintln(output, taskStatsCostEstimateDisclaimer); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(
-		output,
-		"Tasks without resolved timestamp: %d\n\n",
-		report.TasksWithoutResolvedTimestamp,
-	); err != nil {
+	if warning := taskStatsAggregateUnknownAnchorLine(report); warning != "" {
+		if _, err := fmt.Fprintln(output, warning); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintln(output); err != nil {
 		return err
 	}
 
-	maxResolved := maxTaskStatsResolved(report.Periods)
-	tables := []taskStatsAggregateTable{
-		{
-			title:   "Resolved Tasks",
-			headers: []string{"PERIOD", "RESOLVED_TASKS", "TREND"},
-			rows:    taskStatsAggregateResolvedRows(report.Periods, maxResolved),
-		},
-		{
-			title:   "Lifecycle Time",
-			headers: []string{"PERIOD", "FULL_AVG", "FULL_UNKNOWN", "IMPLEMENTATION_AVG", "IMPLEMENTATION_UNKNOWN"},
-			rows:    taskStatsAggregateLifecycleRows(report.Periods),
-		},
-		{
-			title:   "Agent Work",
-			headers: []string{"PERIOD", "EXECUTIONS", "ACTIVE_AVG", "ACTIVE_TOTAL"},
-			rows:    taskStatsAggregateWorkRows(report.Periods),
-		},
-		{
-			title:   "Token Usage",
-			headers: []string{"PERIOD", "TOTAL_TOKENS", "AVG_TOKENS", "UNKNOWN_USAGE"},
-			rows:    taskStatsAggregateUsageRows(report.Periods),
-		},
-		{
-			title:   "Estimated Cost",
-			headers: []string{"PERIOD", "TOTAL_COST", "AVG_COST", "UNKNOWN_COST"},
-			rows:    taskStatsAggregateCostRows(report.Periods),
-		},
-	}
-	return renderTaskStatsAggregateTables(output, tables)
+	headers, rows := taskStatsAggregateViewRows(report)
+	return renderTable(output, headers, rows)
 }
 
-func renderTaskStatsAggregateTables(
-	output interface{ Write([]byte) (int, error) },
-	tables []taskStatsAggregateTable,
-) error {
-	for i, table := range tables {
-		if i > 0 {
-			if _, err := fmt.Fprintln(output); err != nil {
-				return err
-			}
-		}
-		if _, err := fmt.Fprintln(output, table.title); err != nil {
-			return err
-		}
-		if err := renderTable(output, table.headers, table.rows); err != nil {
-			return err
-		}
+func taskStatsAggregateDateAnchor(view taskstats.View) string {
+	switch view {
+	case taskstats.ViewImplementation:
+		return "first implementation launch; implementation duration sums launch-to-agent-done for completed runs"
+	case taskstats.ViewReview:
+		return "first review activity; repair cycles count blocked reviews followed by implementation runs"
+	case taskstats.ViewConsumption:
+		return "execution launch; token and cost totals include only known captured values"
+	default:
+		return "task resolution; workflow duration is first implementation launch to resolution"
 	}
-	return nil
 }
 
-func maxTaskStatsResolved(periods []taskstats.AggregatePeriod) int {
-	maxResolved := 0
-	for _, period := range periods {
-		if period.Resolved > maxResolved {
-			maxResolved = period.Resolved
-		}
+func taskStatsAggregateFilterLine(report taskstats.AggregateReport) string {
+	filters := make([]string, 0, 3)
+	if report.From != nil {
+		filters = append(filters, "from="+report.From.Format("2006-01-02"))
 	}
-	return maxResolved
+	if report.To != nil {
+		filters = append(filters, "to="+report.To.AddDate(0, 0, -1).Format("2006-01-02"))
+	}
+	if len(report.Repos) > 0 {
+		filters = append(filters, "repo="+strings.Join(report.Repos, ","))
+	}
+	if len(filters) == 0 {
+		return ""
+	}
+	return "Filters: " + strings.Join(filters, " ")
 }
 
-func taskStatsAggregateResolvedRows(periods []taskstats.AggregatePeriod, maxResolved int) [][]string {
+func taskStatsAggregateUnknownAnchorLine(report taskstats.AggregateReport) string {
+	switch report.View {
+	case taskstats.ViewImplementation:
+		return fmt.Sprintf("Tasks without implementation launch timestamp: %d", report.TasksWithoutImplementation)
+	case taskstats.ViewReview:
+		return fmt.Sprintf("Tasks without review activity timestamp: %d", report.TasksWithoutReviewActivity)
+	case taskstats.ViewConsumption:
+		return fmt.Sprintf("Executions without launch timestamp: %d", report.ExecutionsWithoutStartedAt)
+	default:
+		return fmt.Sprintf("Tasks without resolved timestamp: %d", report.TasksWithoutResolvedTimestamp)
+	}
+}
+
+func taskStatsAggregateViewRows(report taskstats.AggregateReport) ([]string, [][]string) {
+	switch report.View {
+	case taskstats.ViewImplementation:
+		return []string{
+			"PERIOD",
+			"TASKS",
+			"AGENT_MEDIAN",
+			"AGENT_P75",
+			"AGENT_COVERAGE",
+			"TOKEN_MEDIAN",
+			"TOKEN_COVERAGE",
+			"COST_MEDIAN",
+			"COST_COVERAGE",
+			"FAILURES",
+		}, taskStatsAggregateImplementationRows(report.Periods)
+	case taskstats.ViewReview:
+		return []string{
+			"PERIOD",
+			"TASKS",
+			"REVIEW_MEDIAN",
+			"REVIEW_P75",
+			"REVIEW_COVERAGE",
+			"REPAIR_MEDIAN",
+			"REPAIR_COVERAGE",
+			"FIRST_PASS",
+			"REPAIRED",
+			"BLOCKING_FINDINGS",
+			"OP_FAIL",
+			"ABORTED",
+			"PAUSED",
+		}, taskStatsAggregateReviewRows(report.Periods)
+	case taskstats.ViewConsumption:
+		return []string{
+			"PERIOD",
+			"TASKS",
+			"EXECUTIONS",
+			"TOTAL_TOKENS",
+			"TOKEN_MEDIAN",
+			"TOKEN_COVERAGE",
+			"TOTAL_COST",
+			"COST_MEDIAN",
+			"COST_COVERAGE",
+		}, taskStatsAggregateConsumptionRows(report.Periods)
+	default:
+		return []string{
+			"PERIOD",
+			"RESOLVED",
+			"WORKFLOW_MEDIAN",
+			"WORKFLOW_P75",
+			"WORKFLOW_COVERAGE",
+		}, taskStatsAggregateThroughputRows(report.Periods)
+	}
+}
+
+func taskStatsAggregateThroughputRows(periods []taskstats.AggregatePeriod) [][]string {
 	rows := make([][]string, 0, len(periods))
 	for _, period := range periods {
 		rows = append(rows, []string{
 			period.Key,
 			strconv.Itoa(period.Resolved),
-			taskStatsTrendBar(period.Resolved, maxResolved),
+			formatTaskStatsKnownDuration(period.WorkflowTime.Median, period.WorkflowTime.Known > 0),
+			formatTaskStatsKnownDuration(period.WorkflowTime.P75, period.WorkflowTime.Known > 0),
+			formatTaskStatsCoverage(period.WorkflowTime.Known, period.WorkflowTime.Samples),
 		})
 	}
 	return rows
 }
 
-func taskStatsAggregateLifecycleRows(periods []taskstats.AggregatePeriod) [][]string {
+func taskStatsAggregateImplementationRows(periods []taskstats.AggregatePeriod) [][]string {
 	rows := make([][]string, 0, len(periods))
 	for _, period := range periods {
 		rows = append(rows, []string{
 			period.Key,
-			formatTaskStatsOptionalDuration(period.AverageFullTaskTime()),
-			strconv.Itoa(period.UnknownFullTaskTime),
-			formatTaskStatsOptionalDuration(period.AverageImplementationTime()),
-			strconv.Itoa(period.UnknownImplementationTime),
+			strconv.Itoa(period.Tasks),
+			formatTaskStatsKnownDuration(period.ImplementationAgentTime.Median, period.ImplementationAgentTime.Known > 0),
+			formatTaskStatsKnownDuration(period.ImplementationAgentTime.P75, period.ImplementationAgentTime.Known > 0),
+			formatTaskStatsCoverage(period.ImplementationAgentTime.Known, period.ImplementationAgentTime.Samples),
+			formatTaskStatsOptionalTokenCount(period.Tokens.Median, period.Tokens.Known > 0),
+			formatTaskStatsCoverage(period.Tokens.Known, period.Tokens.Samples),
+			formatTaskStatsOptionalCost(period.Cost.MedianMicroUSD, period.Cost.Known > 0),
+			formatTaskStatsCoverage(period.Cost.Known, period.Cost.Samples),
+			strconv.Itoa(period.ImplementationFails),
 		})
 	}
 	return rows
 }
 
-func taskStatsAggregateWorkRows(periods []taskstats.AggregatePeriod) [][]string {
+func taskStatsAggregateReviewRows(periods []taskstats.AggregatePeriod) [][]string {
 	rows := make([][]string, 0, len(periods))
 	for _, period := range periods {
 		rows = append(rows, []string{
 			period.Key,
-			strconv.Itoa(period.Totals.Executions),
-			formatTaskStatsOptionalDuration(period.AverageActiveAgentTime()),
-			formatTaskStatsTotalDuration(period.Totals.Duration),
+			strconv.Itoa(period.Tasks),
+			formatTaskStatsKnownDuration(period.ReviewTime.Median, period.ReviewTime.Known > 0),
+			formatTaskStatsKnownDuration(period.ReviewTime.P75, period.ReviewTime.Known > 0),
+			formatTaskStatsCoverage(period.ReviewTime.Known, period.ReviewTime.Samples),
+			formatTaskStatsOptionalTokenCount(period.RepairCycles.Median, period.RepairCycles.Known > 0),
+			formatTaskStatsCoverage(period.RepairCycles.Known, period.RepairCycles.Samples),
+			strconv.Itoa(period.FirstPassApprovals),
+			strconv.Itoa(period.RepairTasks),
+			strconv.Itoa(period.BlockingFindings),
+			strconv.Itoa(period.OperationalFailures),
+			strconv.Itoa(period.AbortedReviews),
+			strconv.Itoa(period.PausedReviews),
 		})
 	}
 	return rows
 }
 
-func taskStatsAggregateUsageRows(periods []taskstats.AggregatePeriod) [][]string {
+func taskStatsAggregateConsumptionRows(periods []taskstats.AggregatePeriod) [][]string {
 	rows := make([][]string, 0, len(periods))
 	for _, period := range periods {
 		rows = append(rows, []string{
 			period.Key,
-			formatTaskStatsTokenCount(period.Totals.Usage.TotalTokens),
-			formatTaskStatsOptionalTokenCount(period.AverageTokenCount()),
-			strconv.Itoa(period.Totals.UnknownUsage),
+			strconv.Itoa(period.Tasks),
+			strconv.Itoa(period.Executions),
+			formatTaskStatsTotalTokens(period.Tokens),
+			formatTaskStatsOptionalTokenCount(period.Tokens.Median, period.Tokens.Known > 0),
+			formatTaskStatsCoverage(period.Tokens.Known, period.Tokens.Samples),
+			formatTaskStatsTotalCost(period.Cost),
+			formatTaskStatsOptionalCost(period.Cost.MedianMicroUSD, period.Cost.Known > 0),
+			formatTaskStatsCoverage(period.Cost.Known, period.Cost.Samples),
 		})
 	}
 	return rows
 }
 
-func taskStatsAggregateCostRows(periods []taskstats.AggregatePeriod) [][]string {
-	rows := make([][]string, 0, len(periods))
-	for _, period := range periods {
-		rows = append(rows, []string{
-			period.Key,
-			agent.FormatUsageCostUSD(period.Totals.CostMicroUSD),
-			formatTaskStatsOptionalCost(period.AverageCostMicroUSD()),
-			strconv.Itoa(period.Totals.UnknownCost),
-		})
-	}
-	return rows
+func formatTaskStatsCoverage(known int, samples int) string {
+	return fmt.Sprintf("%d/%d", known, samples)
 }
 
-func formatTaskStatsOptionalDuration(duration time.Duration, ok bool) string {
+func formatTaskStatsTotalTokens(cohort taskstats.IntCohort) string {
+	if cohort.Known == 0 && cohort.Total == 0 {
+		return "-"
+	}
+	return formatTaskStatsTokenCount(cohort.Total)
+}
+
+func formatTaskStatsTotalCost(cohort taskstats.CostCohort) string {
+	if cohort.Known == 0 && cohort.TotalMicroUSD == 0 {
+		return "-"
+	}
+	return agent.FormatUsageCostUSD(cohort.TotalMicroUSD)
+}
+
+func formatTaskStatsKnownDuration(duration time.Duration, ok bool) string {
 	if !ok {
 		return "-"
 	}
+	return formatTaskStatsRoundedDuration(duration)
+}
+
+func formatTaskStatsRoundedDuration(duration time.Duration) string {
+	if duration < 0 {
+		duration = 0
+	}
+	duration = duration.Round(time.Second)
 	return duration.String()
 }
 
@@ -3336,18 +3523,6 @@ func formatTaskStatsOptionalCost(totalMicroUSD int64, ok bool) string {
 		return "-"
 	}
 	return agent.FormatUsageCostUSD(totalMicroUSD)
-}
-
-func taskStatsTrendBar(value int, maxValue int) string {
-	const width = 20
-	if value <= 0 || maxValue <= 0 {
-		return "-"
-	}
-	length := value * width / maxValue
-	if length == 0 {
-		length = 1
-	}
-	return strings.Repeat("#", length)
 }
 
 type taskStatsExecutionRecord struct {
@@ -3531,7 +3706,7 @@ func formatTaskStatsTotalDuration(duration time.Duration) string {
 	if duration <= 0 {
 		return "0s"
 	}
-	return duration.String()
+	return formatTaskStatsRoundedDuration(duration)
 }
 
 func formatTaskStatsCommand(execution taskstate.AgentExecution) string {
@@ -3566,7 +3741,7 @@ func formatTaskStatsTimePointer(value *time.Time) string {
 
 func formatTaskStatsDuration(execution taskstate.AgentExecution) string {
 	if execution.DurationMillis > 0 {
-		return (time.Duration(execution.DurationMillis) * time.Millisecond).String()
+		return formatTaskStatsRoundedDuration(time.Duration(execution.DurationMillis) * time.Millisecond)
 	}
 	if execution.FinishedAt == nil || execution.StartedAt.IsZero() {
 		return "-"
@@ -3575,7 +3750,7 @@ func formatTaskStatsDuration(execution taskstate.AgentExecution) string {
 	if duration < 0 {
 		return "-"
 	}
-	return duration.String()
+	return formatTaskStatsRoundedDuration(duration)
 }
 
 func formatTaskStatsSession(session *taskstate.AgentSession) string {

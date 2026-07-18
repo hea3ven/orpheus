@@ -849,32 +849,30 @@ func TestTaskStatsAggregateGroupsResolvedTasksByDay(t *testing.T) {
 
 	is.Empty(stderr)
 	for _, want := range []string{
-		"Aggregate stats grouped by day",
+		"Task stats throughput view grouped by day",
+		"Date anchor: task resolution",
 		"Estimated cost uses harness-reported estimates",
 		"Tasks without resolved timestamp: 1",
-		"Resolved Tasks",
-		"Lifecycle Time",
-		"Agent Work",
-		"Token Usage",
-		"Estimated Cost",
-		"PERIOD", "RESOLVED_TASKS", "TREND",
-		"FULL_AVG", "IMPLEMENTATION_AVG",
-		"ACTIVE_AVG", "ACTIVE_TOTAL",
-		"TOTAL_TOKENS", "UNKNOWN_USAGE", "UNKNOWN_COST",
+		"PERIOD", "RESOLVED", "WORKFLOW_MEDIAN", "WORKFLOW_P75", "WORKFLOW_COVERAGE",
 	} {
 		is.Contains(stdout, want)
 	}
-	is.Regexp(`(?m)^2026-07-02\s+2\s+#{20}$`, stdout)
-	is.Regexp(`(?m)^2026-07-03\s+1\s+#{10}$`, stdout)
-	is.Regexp(`(?m)^2026-07-02\s+23h0m0s\s+0\s+2h0m0s\s+0$`, stdout)
-	is.Regexp(`(?m)^2026-07-03\s+-\s+1\s+1h0m0s\s+0$`, stdout)
-	is.Regexp(`(?m)^2026-07-02\s+2\s+25m0s\s+50m0s$`, stdout)
-	is.Regexp(`(?m)^2026-07-03\s+1\s+15m0s\s+15m0s$`, stdout)
-	is.Regexp(`(?m)^2026-07-02\s+3K\s+1\.5K\s+0$`, stdout)
-	is.Regexp(`(?m)^2026-07-03\s+0\s+-\s+1$`, stdout)
-	is.Regexp(`(?m)^2026-07-02\s+\$0\.000773\s+\$0\.000773\s+1$`, stdout)
-	is.Regexp(`(?m)^2026-07-03\s+\$0\.000000\s+-\s+1$`, stdout)
-	assertTaskStatsAggregateTableLinesWithinWidth(t, stdout, 80)
+	is.NotContains(stdout, "Resolved Tasks")
+	is.NotContains(stdout, "TREND")
+	is.Regexp(`(?m)^2026-07-02\s+2\s+2h0m0s\s+2h0m0s\s+2/2$`, stdout)
+	is.Regexp(`(?m)^2026-07-03\s+1\s+1h0m0s\s+1h0m0s\s+1/1$`, stdout)
+	assertTaskStatsAggregateTableLinesWithinWidth(t, stdout, 100)
+
+	stdout, stderr = executeCommand(t, []string{
+		"task", "stats", "--group", "day", "--view", "consumption",
+		"--from", "2026-07-02", "--to", "2026-07-02", "--repo", "alpha",
+	})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Task stats consumption view grouped by day")
+	is.Contains(stdout, "Filters: from=2026-07-02 to=2026-07-02 repo=alpha")
+	is.Contains(stdout, "Executions without launch timestamp: 0")
+	is.Regexp(`(?m)^2026-07-02\s+2\s+2\s+3K\s+1\.5K\s+2/2\s+\$0\.000773\s+\$0\.000773\s+1/2$`, stdout)
 }
 
 func TestTaskStatsAggregateGroupsResolvedTasksByMonth(t *testing.T) {
@@ -892,13 +890,45 @@ func TestTaskStatsAggregateGroupsResolvedTasksByMonth(t *testing.T) {
 	stdout, stderr := executeCommand(t, []string{"task", "stats", "--group", "month"})
 
 	is.Empty(stderr)
-	is.Contains(stdout, "Aggregate stats grouped by month")
+	is.Contains(stdout, "Task stats throughput view grouped by month")
 	is.Contains(stdout, "Tasks without resolved timestamp: 0")
-	is.Regexp(`(?m)^2026-07\s+1\s+#{20}$`, stdout)
-	is.Regexp(`(?m)^2026-08\s+1\s+#{20}$`, stdout)
-	is.Regexp(`(?m)^2026-07\s+36h0m0s\s+0\s+-\s+1$`, stdout)
-	is.Regexp(`(?m)^2026-08\s+48h0m0s\s+0\s+-\s+1$`, stdout)
-	assertTaskStatsAggregateTableLinesWithinWidth(t, stdout, 80)
+	is.Regexp(`(?m)^2026-07\s+1\s+-\s+-\s+0/1$`, stdout)
+	is.Regexp(`(?m)^2026-08\s+1\s+-\s+-\s+0/1$`, stdout)
+	assertTaskStatsAggregateTableLinesWithinWidth(t, stdout, 100)
+}
+
+func TestTaskStatsAggregateRepoFilterSkipsUnselectedRepoFailures(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+	alphaDir := filepath.Join(t.TempDir(), "alpha")
+	betaDir := filepath.Join(t.TempDir(), "beta")
+	must.NoError(os.MkdirAll(alphaDir, 0o755))
+	must.NoError(os.MkdirAll(betaDir, 0o755))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{
+		{ID: "alpha", Name: "Alpha", Path: alphaDir, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "op"},
+		{ID: "beta", Name: "Beta", Path: betaDir, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "bt"},
+	}}))
+
+	bdLogPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		alphaDir: {stdout: `[
+			{"id":"op-1","title":"Selected","status":"closed","priority":1,"issue_type":"task","closed_at":"2026-07-02T12:00:00Z"}
+		]`},
+		betaDir: {stderr: "bd exploded", exitCode: 7},
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "stats", "--group", "day", "--repo", "alpha"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Task stats throughput view grouped by day")
+	is.Contains(stdout, "Filters: repo=alpha")
+	is.Regexp(`(?m)^2026-07-02\s+1\s+-\s+-\s+0/1$`, stdout)
+	bdLog, err := os.ReadFile(bdLogPath)
+	must.NoError(err)
+	is.Contains(string(bdLog), alphaDir)
+	is.NotContains(string(bdLog), betaDir)
 }
 
 func TestTaskStatsAggregateExcludesEpicsAndKeepsMixedExecutableTypes(t *testing.T) {
@@ -927,12 +957,9 @@ func TestTaskStatsAggregateExcludesEpicsAndKeepsMixedExecutableTypes(t *testing.
 	stdout, stderr := executeCommand(t, []string{"task", "stats", "--group", "day"})
 
 	is.Empty(stderr)
-	is.Contains(stdout, "Aggregate stats grouped by day")
+	is.Contains(stdout, "Task stats throughput view grouped by day")
 	is.Contains(stdout, "Tasks without resolved timestamp: 0")
-	is.Regexp(`(?m)^2026-07-02\s+4\s+#{20}$`, stdout)
-	is.Regexp(`(?m)^2026-07-02\s+-\s+4\s+-\s+4$`, stdout)
-	is.Regexp(`(?m)^2026-07-02\s+0\s+-\s+4$`, stdout)
-	is.Regexp(`(?m)^2026-07-02\s+\$0\.000000\s+-\s+4$`, stdout)
+	is.Regexp(`(?m)^2026-07-02\s+4\s+-\s+-\s+0/4$`, stdout)
 }
 
 func TestTaskStatsDirectEpicStatsRemainAvailable(t *testing.T) {
@@ -977,8 +1004,12 @@ func assertTaskStatsAggregateTableLinesWithinWidth(t *testing.T, output string, 
 	for _, line := range strings.Split(output, "\n") {
 		if line == "" ||
 			strings.HasPrefix(line, "Aggregate stats grouped by ") ||
+			strings.HasPrefix(line, "Task stats ") ||
+			strings.HasPrefix(line, "Date anchor: ") ||
+			strings.HasPrefix(line, "Filters: ") ||
 			strings.HasPrefix(line, "Estimated cost uses harness-reported estimates") ||
-			strings.HasPrefix(line, "Tasks without resolved timestamp: ") {
+			strings.HasPrefix(line, "Tasks without resolved timestamp: ") ||
+			strings.HasPrefix(line, "Executions without launch timestamp: ") {
 			continue
 		}
 		lineWidth := len([]rune(line))
