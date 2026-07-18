@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCapturePiUsageCorrelatesSessionAssistantUsageAndReportedCost(t *testing.T) {
+func TestCapturePiUsageCorrelatesSessionAssistantMessageUsageAndReportedCost(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	root := t.TempDir()
@@ -130,6 +130,35 @@ func TestCapturePiUsageReportsAmbiguousMatches(t *testing.T) {
 	}, got.Candidates[1])
 }
 
+func TestCapturePiUsageIgnoresNonAssistantUsageFreeAndTopLevelUsageMessages(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := t.TempDir()
+	workdir := filepath.Join(t.TempDir(), "worktree")
+	must.NoError(os.MkdirAll(workdir, 0o755))
+	startedAt := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
+	sessionPath := filepath.Join(root, "only-unsupported-usage.jsonl")
+	writePiSessionLog(t, sessionPath, piSessionLogFixture{
+		cwd:                workdir,
+		sessionID:          "only-unsupported-usage",
+		startedAt:          startedAt,
+		omitAssistantUsage: true,
+	})
+
+	got := agent.CapturePiUsage(agent.PiUsageCaptureOptions{
+		ExecutionDir: workdir,
+		StartedAt:    startedAt,
+		Env:          map[string]string{"PI_CODING_AGENT_SESSION_DIR": root},
+	})
+
+	must.NotNil(got.Session)
+	is.Equal("only-unsupported-usage", got.Session.ID)
+	is.Nil(got.Usage)
+	is.Nil(got.UsageCost)
+	is.Equal(taskstate.UsageCaptureUnknown, got.UsageCapture.Status)
+	is.Equal("matching_pi_session_has_no_assistant_usage", got.UsageCapture.Reason)
+}
+
 func TestCapturePiUsagePreservesNoAssistantUsageReasonForClosestSession(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -182,12 +211,14 @@ func writePiSessionLog(t *testing.T, path string, fixture piSessionLogFixture) {
 	}
 	content := `{"type":"session","version":3,"id":"` + fixture.sessionID + `","timestamp":"` + timestamp + `","cwd":"` + fixture.cwd + `"` + nameField + `}
 {"type":"model_change","id":"model","timestamp":"` + timestamp + `","provider":"openai-codex","modelId":"gpt-5.5"}
-{"type":"message","id":"user","timestamp":"` + timestamp + `","message":{"role":"user"}}
+{"type":"message","id":"user","timestamp":"` + timestamp + `","message":{"role":"user","usage":{"input":999,"output":999,"cacheRead":999,"cacheWrite":999,"reasoning":999,"totalTokens":999,"cost":{"total":0.999999}}}}
+{"type":"message","id":"assistant-no-usage","timestamp":"` + timestamp + `","message":{"role":"assistant"}}
+{"type":"message","id":"assistant-top-level-usage","timestamp":"` + timestamp + `","message":{"role":"assistant"},"usage":{"input":999,"output":999,"cacheRead":999,"cacheWrite":999,"reasoning":999,"totalTokens":999,"cost":{"total":0.999999}}}
 `
 	if !fixture.omitAssistantUsage {
 		content += `
-{"type":"message","id":"assistant-1","timestamp":"` + timestamp + `","message":{"role":"assistant"},"usage":{"input":100,"output":20,"cacheRead":10,"cacheWrite":3,"reasoning":5,"totalTokens":120,"cost":{"total":0.001234}}}
-{"type":"message","id":"assistant-2","timestamp":"` + timestamp + `","message":{"role":"assistant"},"usage":{"input":50,"output":10,"cacheRead":7,"cacheWrite":0,"reasoning":0,"totalTokens":60,"cost":{"total":0.000006}}}
+{"type":"message","id":"assistant-1","timestamp":"` + timestamp + `","message":{"role":"assistant","usage":{"input":100,"output":20,"cacheRead":10,"cacheWrite":3,"reasoning":5,"totalTokens":120,"cost":{"total":0.001234}}}}
+{"type":"message","id":"assistant-2","timestamp":"` + timestamp + `","message":{"role":"assistant","usage":{"input":50,"output":10,"cacheRead":7,"cacheWrite":0,"reasoning":0,"totalTokens":60,"cost":{"total":0.000006}}}}
 `
 	}
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))

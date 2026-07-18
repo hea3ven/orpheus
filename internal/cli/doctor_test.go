@@ -234,6 +234,13 @@ func TestDoctorRecoversPiUsageAndReportedCost(t *testing.T) {
 		time.Date(2026, 7, 7, 10, 1, 0, 0, time.UTC),
 	)
 
+	dryRunStdout, dryRunStderr := executeCommand(t, []string{"doctor"})
+	is.Empty(dryRunStderr)
+	is.Contains(dryRunStdout, "Agent usage telemetry")
+	is.Contains(dryRunStdout, "would_recover")
+	is.Contains(dryRunStdout, "pi-session")
+	is.Contains(dryRunStdout, "$0.001240")
+
 	stdout, stderr := executeCommand(t, []string{"doctor", "--fix"})
 	is.Empty(stderr)
 	is.Contains(stdout, "Agent usage telemetry")
@@ -655,8 +662,8 @@ func writeDoctorPiSessionLogWithCost(
 	content := strings.Join([]string{
 		`{"type":"session","version":3,"id":"` + sessionID + `","timestamp":"` + timestamp + `","cwd":"` + cwd + `"` + nameField + `}`,
 		`{"type":"model_change","id":"model","timestamp":"` + timestamp + `","provider":"openai-codex","modelId":"gpt-5.5"}`,
-		`{"type":"message","id":"assistant-1","timestamp":"` + timestamp + `","message":{"role":"assistant"},"usage":{"input":100,"output":20,"cacheRead":10,"cacheWrite":3,"reasoning":5,"totalTokens":120` + firstUsageCost + `}}`,
-		`{"type":"message","id":"assistant-2","timestamp":"` + timestamp + `","message":{"role":"assistant"},"usage":{"input":50,"output":10,"cacheRead":7,"cacheWrite":0,"reasoning":0,"totalTokens":60` + secondUsageCost + `}}`,
+		`{"type":"message","id":"assistant-1","timestamp":"` + timestamp + `","message":{"role":"assistant","usage":{"input":100,"output":20,"cacheRead":10,"cacheWrite":3,"reasoning":5,"totalTokens":120` + firstUsageCost + `}}}`,
+		`{"type":"message","id":"assistant-2","timestamp":"` + timestamp + `","message":{"role":"assistant","usage":{"input":50,"output":10,"cacheRead":7,"cacheWrite":0,"reasoning":0,"totalTokens":60` + secondUsageCost + `}}}`,
 		"",
 	}, "\n")
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
