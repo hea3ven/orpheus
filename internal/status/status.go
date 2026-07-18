@@ -10,6 +10,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/readiness"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/tasktarget"
 	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
@@ -83,7 +84,7 @@ type LocalTaskState struct {
 	LatestReview              *taskstate.ReviewAttempt
 	LatestFinalizationFailure *taskstate.Event
 	Finalization              taskstate.Finalization
-	ExpectedTargets           *workflow.ExpectedTargets
+	ExpectedTargets           *tasktarget.ExpectedTargets
 }
 
 // LocalTaskStateIndex contains local Orpheus facts by repository/task key.
@@ -277,7 +278,7 @@ func classifyParentEpicGate(taskItem task.Task, index map[string]task.Task) (pol
 }
 
 func classifyExpectedReviewReady(
-	expectedTargets *workflow.ExpectedTargets,
+	expectedTargets *tasktarget.ExpectedTargets,
 	taskItem task.Task,
 	taskTarget *taskstate.TaskTarget,
 	latestRun *taskstate.RunAttempt,
@@ -473,7 +474,7 @@ func taskTargetFrom(localState *LocalTaskState) *taskstate.TaskTarget {
 	return localState.Target
 }
 
-func expectedTargetsFrom(localState *LocalTaskState) *workflow.ExpectedTargets {
+func expectedTargetsFrom(localState *LocalTaskState) *tasktarget.ExpectedTargets {
 	if localState == nil {
 		return nil
 	}

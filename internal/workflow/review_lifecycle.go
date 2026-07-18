@@ -17,6 +17,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/tasktarget"
 )
 
 // ReviewLifecycleBackend is the backend capability set needed by the review
@@ -160,7 +161,7 @@ type ReviewAttemptContext struct {
 	Source      task.RepositorySource
 	Task        task.Task
 	Workdir     string
-	Target      Target
+	Target      tasktarget.Target
 	Review      taskstate.ReviewAttempt
 	Pipeline    review.Pipeline
 	AgentConfig agent.Config
@@ -845,34 +846,34 @@ func appendRepoReviewPipelineAliases(err error, repo task.Repository) error {
 }
 
 // ReviewTarget returns the taskstate-backed review target after mirror validation.
-func ReviewTarget(store ReviewLifecycleStore, paths state.Paths, ctx ReviewAttemptContext) (Target, error) {
+func ReviewTarget(store ReviewLifecycleStore, paths state.Paths, ctx ReviewAttemptContext) (tasktarget.Target, error) {
 	repo := ctx.Source.Repository
 	taskID := ctx.TaskID()
 	taskState, err := store.Load(repo.ID, taskID)
 	if err != nil {
-		return Target{}, fmt.Errorf("load task state: %w", err)
+		return tasktarget.Target{}, fmt.Errorf("load task state: %w", err)
 	}
 	taskTarget, ok := taskstate.Target(taskState)
 	if !ok {
-		return Target{}, fmt.Errorf("task has no Orpheus target; run `orpheus task run %s` first", taskID)
+		return tasktarget.Target{}, fmt.Errorf("task has no Orpheus target; run `orpheus task run %s` first", taskID)
 	}
-	targets, err := ExpectedTargetsForTask(repo, taskID, paths)
+	targets, err := tasktarget.ExpectedTargetsForTask(repo, taskID, paths)
 	if err != nil {
-		return Target{}, err
+		return tasktarget.Target{}, err
 	}
-	target, err := ClassifyTaskStateTarget(taskTarget, targets)
+	target, err := tasktarget.ClassifyTaskStateTarget(taskTarget, targets)
 	if err != nil {
-		return Target{}, fmt.Errorf("task has inconsistent taskstate target: %w", err)
+		return tasktarget.Target{}, fmt.Errorf("task has inconsistent taskstate target: %w", err)
 	}
 	if err := ValidateTaskMetadataMirror(ctx.Task, targets, target); err != nil {
-		return Target{}, err
+		return tasktarget.Target{}, err
 	}
 	return target, nil
 }
 
 // ValidateTaskMetadataMirror ensures backend metadata and taskstate target agree.
-func ValidateTaskMetadataMirror(taskItem task.Task, targets ExpectedTargets, target Target) error {
-	metadataTarget, err := ClassifyMetadataTarget(taskItem.OrpheusMetadata(), targets)
+func ValidateTaskMetadataMirror(taskItem task.Task, targets tasktarget.ExpectedTargets, target tasktarget.Target) error {
+	metadataTarget, err := tasktarget.ClassifyMetadataTarget(taskItem.OrpheusMetadata(), targets)
 	if err != nil {
 		return fmt.Errorf("task %s metadata target is invalid: %w", taskItem.ID, err)
 	}
