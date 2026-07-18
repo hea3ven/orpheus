@@ -5,6 +5,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/tasktarget"
 	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
@@ -14,7 +15,7 @@ type classifyExpectedCompletionTargetCase struct {
 	taskTarget    taskstate.TaskTarget
 	run           taskstate.RunAttempt
 	wantOK        bool
-	wantTarget    workflow.TargetKind
+	wantTarget    tasktarget.TargetKind
 	wantLifecycle workflow.ReviewLifecycle
 }
 
@@ -35,7 +36,7 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 			},
 		},
 		wantOK:        true,
-		wantTarget:    workflow.TargetMainSolo,
+		wantTarget:    tasktarget.TargetMainSolo,
 		wantLifecycle: workflow.ReviewLifecycleLocalReady,
 	},
 	{
@@ -58,7 +59,7 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 			},
 		},
 		wantOK:        true,
-		wantTarget:    workflow.TargetWorktreeTeam,
+		wantTarget:    tasktarget.TargetWorktreeTeam,
 		wantLifecycle: workflow.ReviewLifecyclePRReady,
 	},
 	{
@@ -81,7 +82,7 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 			},
 		},
 		wantOK:        true,
-		wantTarget:    workflow.TargetRepoRootTeam,
+		wantTarget:    tasktarget.TargetRepoRootTeam,
 		wantLifecycle: workflow.ReviewLifecyclePRReady,
 	},
 	{
@@ -159,19 +160,19 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 }
 
 func TestClassifyExpectedCompletionTarget(t *testing.T) {
-	targets := workflow.ExpectedTargets{
-		MainSolo: workflow.Target{
-			Kind:     workflow.TargetMainSolo,
+	targets := tasktarget.ExpectedTargets{
+		MainSolo: tasktarget.Target{
+			Kind:     tasktarget.TargetMainSolo,
 			Branch:   "main",
 			Worktree: "/repo/alpha",
 		},
-		WorktreeTeam: workflow.Target{
-			Kind:     workflow.TargetWorktreeTeam,
+		WorktreeTeam: tasktarget.Target{
+			Kind:     tasktarget.TargetWorktreeTeam,
 			Branch:   "orpheus/op-1",
 			Worktree: "/state/worktrees/alpha/op-1",
 		},
-		RepoRootTeam: workflow.Target{
-			Kind:     workflow.TargetRepoRootTeam,
+		RepoRootTeam: tasktarget.Target{
+			Kind:     tasktarget.TargetRepoRootTeam,
 			Branch:   "orpheus/op-1",
 			Worktree: "/repo/alpha",
 		},
@@ -190,25 +191,5 @@ func TestClassifyExpectedCompletionTarget(t *testing.T) {
 				t.Fatalf("classification = %#v, want target %q lifecycle %q", got, tt.wantTarget, tt.wantLifecycle)
 			}
 		})
-	}
-}
-
-func TestClassifyRunTargetRecognizesRepoRootTaskBranch(t *testing.T) {
-	repo := task.Repository{Path: "/repo/alpha", DefaultBranch: "main"}
-
-	got := workflow.ClassifyRunTarget(repo, "orpheus/op-1", "/repo/alpha")
-
-	if got != workflow.TargetRepoRootTeam {
-		t.Fatalf("shape target = %q, want %q", got, workflow.TargetRepoRootTeam)
-	}
-}
-
-func TestClassifyRunTargetRemainsShapeOnlyForDiagnostics(t *testing.T) {
-	repo := task.Repository{Path: "/repo/alpha", DefaultBranch: "main"}
-
-	got := workflow.ClassifyRunTarget(repo, "manual/op-1", "/tmp/manual-worktree")
-
-	if got != workflow.TargetWorktreeTeam {
-		t.Fatalf("shape target = %q, want %q", got, workflow.TargetWorktreeTeam)
 	}
 }

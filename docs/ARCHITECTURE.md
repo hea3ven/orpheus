@@ -8,7 +8,7 @@ The architecture uses a pragmatic layered structure:
 
 - `cmd/orpheus` and `internal/cli` form the executable and presentation layer. The CLI is also the composition root that connects concrete adapters to application services.
 - `internal/workflow`, `internal/review`, `internal/agent`, `internal/agentexec`, and `internal/doctor` implement the main task, review, agent profile, shared agent execution, and local diagnostic use cases.
-- `internal/task`, `internal/taskstate`, `internal/readiness`, `internal/status`, and `internal/publication` define the core models, policies, state transitions, and operator-facing projections.
+- `internal/task`, `internal/taskstate`, `internal/tasktarget`, `internal/readiness`, `internal/status`, and `internal/publication` define the core models, policies, state transitions, and operator-facing projections.
 - `internal/beads`, `internal/git`, and `internal/pullrequest` adapt external command-line tools. `internal/registry`, `internal/state`, and `internal/logging` provide local infrastructure.
 
 State ownership is intentionally split. The configured task backend, currently Beads, is authoritative for task lifecycle data such as task identity, status, relations, and Orpheus workflow pointers stored in task metadata. Orpheus owns the repository registry and per-task execution history, including targets, agent runs, completions, reviews, finalization facts, and audit events. Orpheus persists its state as human-readable YAML below the XDG config and data roots.
@@ -19,7 +19,7 @@ The main runtime integrations are the `bd`, `git`, and `gh` executables, configu
 
 1. `internal/cli` resolves XDG paths and loads the registered repository catalog.
 2. A task ID is mapped to a repository and Beads workspace through `internal/task` and `internal/registry`; `internal/beads` supplies the task data.
-3. `internal/workflow` validates readiness, prepares a deterministic Git target, updates backend metadata, and records a run in `internal/taskstate`.
+3. `internal/workflow` validates readiness, uses `internal/tasktarget` policy to reconcile the deterministic execution target, prepares that target through `internal/git`, updates backend metadata, and records a run in `internal/taskstate`.
 4. `internal/agent` resolves a configured profile and renders its validated context; `internal/agentexec` launches the attached process; `internal/agent` records completion and Codex usage facts.
 5. `internal/review` executes the selected read-only review pipeline, launches review-agent steps through `internal/agentexec`, and persists steps and findings in `internal/taskstate`.
 6. After a passed review, `internal/workflow` commits and publishes the reviewed changes. Default-branch work is pushed and closed directly; feature-branch work is pushed and opened as a pull request.
@@ -49,6 +49,7 @@ flowchart TD
     cli --> status["internal/status"]
     cli --> task["internal/task"]
     cli --> taskstate["internal/taskstate"]
+    cli --> tasktarget["internal/tasktarget"]
     cli --> workflow["internal/workflow"]
 
     agent --> agentexec["internal/agentexec"]
@@ -57,7 +58,7 @@ flowchart TD
     agent --> state
     agent --> task
     agent --> taskstate
-    agent --> workflow
+    agent --> tasktarget
 
     beads --> task
     doctor --> agent
@@ -76,8 +77,13 @@ flowchart TD
     status --> readiness
     status --> task
     status --> taskstate
+    status --> tasktarget
     status --> workflow
     taskstate --> state
+    tasktarget --> git
+    tasktarget --> state
+    tasktarget --> task
+    tasktarget --> taskstate
     workflow --> git
     workflow --> publication
     workflow --> pullrequest
@@ -85,11 +91,12 @@ flowchart TD
     workflow --> state
     workflow --> task
     workflow --> taskstate
+    workflow --> tasktarget
 ```
 
 The graph is acyclic. The leaf packages with no imports of other project packages are `internal/agentexec`, `internal/logging`, `internal/publication`, `internal/pullrequest`, `internal/state`, and `internal/task`.
 
-In dependency-direction terms, `internal/state`, `internal/task`, `internal/publication`, `internal/pullrequest`, `internal/logging`, and `internal/agentexec` provide lower-level contracts or infrastructure. `internal/beads`, `internal/git`, and `internal/registry` adapt external or local resources into those contracts. `internal/taskstate` and `internal/readiness` own persisted execution state and shared policy. `internal/agent`, `internal/doctor`, `internal/review`, `internal/status`, and `internal/workflow` are application packages that combine lower-level concepts, while `internal/cli` is the composition and presentation package.
+In dependency-direction terms, `internal/state`, `internal/task`, `internal/publication`, `internal/pullrequest`, `internal/logging`, and `internal/agentexec` provide lower-level contracts or infrastructure. `internal/beads`, `internal/git`, and `internal/registry` adapt external or local resources into those contracts. `internal/taskstate`, `internal/tasktarget`, and `internal/readiness` own persisted execution state and shared policies, including canonical execution-target identity and reconciliation. `internal/agent`, `internal/doctor`, `internal/review`, `internal/status`, and `internal/workflow` are application packages that combine lower-level concepts, while `internal/cli` is the composition and presentation package.
 
 ## Package Responsibilities
 
@@ -100,7 +107,7 @@ In dependency-direction terms, `internal/state`, `internal/task`, `internal/publ
 ### `internal/agent`
 
 - Integrates configured coding-agent profiles by loading and validating implementer and reviewer profile configuration, interpolating raw command arguments, and constructing structured Codex launch commands.
-- Owns the agent-facing execution contract: it resolves active implementation or review context from environment, registry, backend, task-state, and workflow-target facts; renders backend-neutral prompts; and records idempotent implementation completion handoffs.
+- Owns the agent-facing execution contract: it resolves active implementation or review context from environment, registry, backend, task-state, and execution-target facts; renders backend-neutral prompts; and records idempotent implementation completion handoffs.
 - Captures agent execution telemetry where supported, currently by correlating Codex and Pi session logs, records Pi-reported estimated cost when present, and estimates API-equivalent cost for recognized non-Pi models.
 
 ### `internal/agentexec`
@@ -166,7 +173,7 @@ In dependency-direction terms, `internal/state`, `internal/task`, `internal/publ
 ### `internal/status`
 
 - Projects cross-repository backend snapshots and local Orpheus task-state facts into the ordered operator action queue: needs attention, reviewing, working, idle, ready, blocked, and done.
-- Applies the canonical local readiness and next-action policy, including dependency state, parent-epic gating, publication requirements, run/review/finalization state, target consistency, and partial repository failures. It also supplies the ready-task view used by the CLI.
+- Applies the canonical local readiness and next-action policy, including dependency state, parent-epic gating, publication requirements, run/review/finalization state, execution-target consistency, and partial repository failures. It also supplies the ready-task view used by the CLI.
 
 ### `internal/task`
 
@@ -178,9 +185,14 @@ In dependency-direction terms, `internal/state`, `internal/task`, `internal/publ
 - Owns the versioned, per-task Orpheus execution aggregate stored at `repos/<repo-id>/tasks/<task-id>.yaml`, including the locked target, agent runs and usage, completion handoffs, review attempts and findings, finalization facts, and audit events.
 - Provides validated and mostly idempotent state transitions for run, review, finding-resolution, publication, closure, and failure recording, together with query helpers for the latest or active lifecycle facts.
 
+### `internal/tasktarget`
+
+- Owns the reusable execution-target identity and reconciliation policy shared by workflow, agent, CLI, and status consumers.
+- Defines supported target kinds and values, computes expected targets from task and repository facts, and classifies backend metadata, task-state, and Git target facts without changing persisted schemas or Git behavior.
+
 ### `internal/workflow`
 
-- Defines and classifies the supported execution targets and review lifecycles, reconciling expected Git locations with backend metadata and the canonical target stored in `internal/taskstate`.
+- Classifies review lifecycles and completion readiness while consuming `internal/tasktarget` for execution-target identity, expected-target calculation, and target-fact reconciliation.
 - Orchestrates the task lifecycle through narrow backend, Git, PR-provider, and run-store contracts: dispatch and retry setup, attached-run outcomes, review follow-up targeting, review-gated default-branch finalization, feature-branch publication, open-PR branch updates, PR polling, merged-task closure, and batch sync.
 - Builds publication handoffs from task data and persisted completion/review history, including repository title policy and concise review-process details for pull requests.
 

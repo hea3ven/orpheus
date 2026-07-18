@@ -14,6 +14,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/tasktarget"
 )
 
 const finalizationLockOperation = "task finalization"
@@ -239,15 +240,15 @@ func (s FinalizationService) finalizeAfterReviewGate(
 	gitState FinalizationGit,
 ) (FinalizationResult, error) {
 	repo := target.source.Repository
-	targets, err := ExpectedTargetsForTask(repo, target.task.ID, s.Paths)
+	targets, err := tasktarget.ExpectedTargetsForTask(repo, target.task.ID, s.Paths)
 	if err != nil {
 		return FinalizationResult{}, err
 	}
-	metadataTarget, err := ClassifyMetadataTarget(target.task.OrpheusMetadata(), targets)
+	metadataTarget, err := tasktarget.ClassifyMetadataTarget(target.task.OrpheusMetadata(), targets)
 	if err != nil {
 		return FinalizationResult{}, fmt.Errorf("task %s metadata target is invalid: %w", target.task.ID, err)
 	}
-	taskTarget, err := ClassifyTaskStateTarget(finalizeCtx.target, targets)
+	taskTarget, err := tasktarget.ClassifyTaskStateTarget(finalizeCtx.target, targets)
 	if err != nil {
 		return FinalizationResult{}, fmt.Errorf("task %s has inconsistent taskstate target: %w", target.task.ID, err)
 	}
@@ -279,11 +280,11 @@ func (s FinalizationService) finalizeDefaultBranch(
 	opts FinalizeOptions,
 	target finalizationTarget,
 	finalizeCtx finalizationContext,
-	taskTarget Target,
+	taskTarget tasktarget.Target,
 	gitState FinalizationGit,
 ) (FinalizationResult, error) {
 	repo := target.source.Repository
-	if taskTarget.Kind != TargetMainSolo {
+	if taskTarget.Kind != tasktarget.TargetMainSolo {
 		return FinalizationResult{}, fmt.Errorf("task %s target %q cannot be finalized by task done", target.task.ID, taskTarget.Kind)
 	}
 
@@ -577,7 +578,7 @@ func (s FinalizationService) publishFeatureBranch(
 	ctx context.Context,
 	target finalizationTarget,
 	finalizeCtx finalizationContext,
-	taskTarget Target,
+	taskTarget tasktarget.Target,
 	gitState FinalizationGit,
 ) (FinalizationResult, error) {
 	repo := target.source.Repository
@@ -683,7 +684,7 @@ func featureBranchFinalizationResult(
 	}
 }
 
-func ensureFeatureBranchCheckout(ctx context.Context, gitState FinalizationGit, target Target) error {
+func ensureFeatureBranchCheckout(ctx context.Context, gitState FinalizationGit, target tasktarget.Target) error {
 	currentBranch, err := gitState.CurrentBranch(ctx, target.Worktree)
 	if err != nil {
 		return fmt.Errorf("inspect current Git branch: %w", err)
@@ -721,7 +722,7 @@ func (s FinalizationService) ensureFeatureBranchPushed(
 	gitState FinalizationGit,
 	repoID string,
 	taskID string,
-	target Target,
+	target tasktarget.Target,
 	finalization taskstate.Finalization,
 ) (taskstate.Finalization, error) {
 	if finalization.PushedAt != nil {
@@ -745,7 +746,7 @@ func (s FinalizationService) findOrCreateFeatureBranchPR(
 	repo task.Repository,
 	taskItem task.Task,
 	finalizeCtx finalizationContext,
-	target Target,
+	target tasktarget.Target,
 ) (string, bool, error) {
 	baseBranch := strings.TrimSpace(repo.DefaultBranch)
 	found, ok, err := s.PRProvider.FindOpenByBranch(ctx, pullrequest.FindOpenByBranchRequest{
@@ -958,7 +959,7 @@ func (s FinalizationService) inferableCurrentBranchReadyTasks(
 ) ([]task.Task, error) {
 	candidates := make([]task.Task, 0, 1)
 	for _, taskItem := range tasks {
-		targets, err := ExpectedTargetsForTask(repo, taskItem.ID, s.Paths)
+		targets, err := tasktarget.ExpectedTargetsForTask(repo, taskItem.ID, s.Paths)
 		if err != nil {
 			return nil, err
 		}
@@ -970,7 +971,7 @@ func (s FinalizationService) inferableCurrentBranchReadyTasks(
 		if !ok {
 			continue
 		}
-		target, err := ClassifyTaskStateTarget(taskTarget, targets)
+		target, err := tasktarget.ClassifyTaskStateTarget(taskTarget, targets)
 		if err != nil {
 			continue
 		}
@@ -997,7 +998,7 @@ func (s FinalizationService) isInferableCurrentBranchReady(
 	taskItem task.Task,
 	currentBranch string,
 	workingDirectory string,
-	target Target,
+	target tasktarget.Target,
 	state taskstate.TaskState,
 ) (bool, error) {
 	if taskItem.Status == task.StatusClosed {
@@ -1024,11 +1025,11 @@ func (s FinalizationService) isInferableCurrentBranchReady(
 		finalization: taskstate.FinalizationFacts(state),
 	}
 	switch target.Kind {
-	case TargetMainSolo:
+	case tasktarget.TargetMainSolo:
 		return isInferableDefaultBranchFinalizationReady(repo, taskItem, ctx), nil
-	case TargetRepoRootTeam:
+	case tasktarget.TargetRepoRootTeam:
 		return isInferableFeatureBranchPublicationReady(repo, taskItem, ctx, target), nil
-	case TargetWorktreeTeam:
+	case tasktarget.TargetWorktreeTeam:
 		return isInferableFeatureBranchPublicationReady(repo, taskItem, ctx, target), nil
 	default:
 		return false, nil
@@ -1060,7 +1061,7 @@ func isInferableFeatureBranchPublicationReady(
 	repo task.Repository,
 	taskItem task.Task,
 	ctx finalizationContext,
-	target Target,
+	target tasktarget.Target,
 ) bool {
 	if _, err := finalizationDefaultBranch(repo); err != nil {
 		return false
@@ -1157,7 +1158,7 @@ func validateFeatureBranchPublicationReady(
 	repo task.Repository,
 	taskItem task.Task,
 	ctx finalizationContext,
-	target Target,
+	target tasktarget.Target,
 ) error {
 	if _, err := finalizationDefaultBranch(repo); err != nil {
 		return err
@@ -1259,9 +1260,9 @@ func validateDefaultBranchLatestRun(
 	if latest.Status != taskstate.RunStatusSucceeded {
 		classificationRun.Status = taskstate.RunStatusSucceeded
 	}
-	localTarget := Target{Kind: TargetMainSolo, Branch: defaultBranch, Worktree: repoRoot}
+	localTarget := tasktarget.Target{Kind: tasktarget.TargetMainSolo, Branch: defaultBranch, Worktree: repoRoot}
 	if _, ok := ClassifyExpectedLocalReviewReady(
-		ExpectedTargets{MainSolo: localTarget},
+		tasktarget.ExpectedTargets{MainSolo: localTarget},
 		taskItem,
 		taskTarget,
 		&classificationRun,
@@ -1322,7 +1323,7 @@ func validateDefaultBranchLatestStatus(
 	)
 }
 
-func validateFeatureBranchTarget(target Target, taskID string) error {
+func validateFeatureBranchTarget(target tasktarget.Target, taskID string) error {
 	if !isFeatureBranchTarget(target.Kind) {
 		return fmt.Errorf("task %s is not a feature-branch publication target", taskID)
 	}
@@ -1351,7 +1352,7 @@ func validateFeatureBranchLatestRun(
 	taskItem task.Task,
 	taskTarget taskstate.TaskTarget,
 	latest taskstate.RunAttempt,
-	target Target,
+	target tasktarget.Target,
 ) error {
 	if latest.Completion == nil {
 		return fmt.Errorf("latest run attempt %d for task %s has no completion block; run `orpheus agent done` first", latest.Attempt, taskItem.ID)
@@ -1387,15 +1388,15 @@ func validateFeatureBranchLatestRun(
 	return nil
 }
 
-func isFeatureBranchTarget(kind TargetKind) bool {
-	return kind == TargetWorktreeTeam || kind == TargetRepoRootTeam
+func isFeatureBranchTarget(kind tasktarget.TargetKind) bool {
+	return kind == tasktarget.TargetWorktreeTeam || kind == tasktarget.TargetRepoRootTeam
 }
 
-func expectedTargetsForFeatureBranchTarget(target Target) ExpectedTargets {
-	if target.Kind == TargetRepoRootTeam {
-		return ExpectedTargets{RepoRootTeam: target}
+func expectedTargetsForFeatureBranchTarget(target tasktarget.Target) tasktarget.ExpectedTargets {
+	if target.Kind == tasktarget.TargetRepoRootTeam {
+		return tasktarget.ExpectedTargets{RepoRootTeam: target}
 	}
-	return ExpectedTargets{WorktreeTeam: target}
+	return tasktarget.ExpectedTargets{WorktreeTeam: target}
 }
 
 func finalizationMessageParts(completion *taskstate.Completion, opts FinalizeOptions) (string, string, error) {

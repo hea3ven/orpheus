@@ -19,7 +19,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
-	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/tasktarget"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -6947,7 +6947,7 @@ func TestTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAfterFailures(t *test
 		},
 	}}))
 
-	alphaTargets, err := workflow.ExpectedTargetsForTask(taskmodel.Repository{
+	alphaTargets, err := tasktarget.ExpectedTargetsForTask(taskmodel.Repository{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
 		Path:          alphaPath,
@@ -7615,9 +7615,9 @@ func taskSyncExpectedTargets(
 	paths state.Paths,
 	repoPath string,
 	taskID string,
-) workflow.ExpectedTargets {
+) tasktarget.ExpectedTargets {
 	t.Helper()
-	targets, err := workflow.ExpectedTargetsForTask(taskmodel.Repository{
+	targets, err := tasktarget.ExpectedTargetsForTask(taskmodel.Repository{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
 		Path:          repoPath,

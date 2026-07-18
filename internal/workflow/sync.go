@@ -13,6 +13,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/tasktarget"
 )
 
 const syncLockOperation = "task sync"
@@ -456,11 +457,11 @@ func (s SyncService) handleOpenPR(
 
 func (s SyncService) syncOpenPRBranch(ctx context.Context, target syncTarget, gitState SyncGit) (SyncResult, error) {
 	repo := target.source.Repository
-	targets, err := ExpectedTargetsForTask(repo, target.task.ID, s.Paths)
+	targets, err := tasktarget.ExpectedTargetsForTask(repo, target.task.ID, s.Paths)
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("resolve sync targets for task %s: %w", target.task.ID, err)
 	}
-	taskTarget, err := ClassifyMetadataTarget(target.task.OrpheusMetadata(), targets)
+	taskTarget, err := tasktarget.ClassifyMetadataTarget(target.task.OrpheusMetadata(), targets)
 	if err != nil {
 		return SyncResult{
 			Reason: fmt.Sprintf("task metadata target is incomplete or unsupported: %v", err),
@@ -493,7 +494,7 @@ func (s SyncService) resolveOpenPRBranchConflict(
 	ctx context.Context,
 	target syncTarget,
 	gitState SyncGit,
-	taskTarget Target,
+	taskTarget tasktarget.Target,
 	prURL string,
 ) (SyncResult, error) {
 	if s.ConflictResolver == nil {

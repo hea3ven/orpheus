@@ -15,6 +15,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/tasktarget"
 	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
@@ -600,7 +601,7 @@ func TestSyncServiceResolvesOpenPRBranchConflictWithAgent(t *testing.T) {
 func assertSyncConflictResolverRequest(
 	t *testing.T,
 	req workflow.SyncConflictResolutionOptions,
-	target workflow.Target,
+	target tasktarget.Target,
 ) {
 	t.Helper()
 
@@ -633,7 +634,7 @@ func assertSyncConflictAuditEvent(
 	t *testing.T,
 	event fakeConflictEvent,
 	eventType taskstate.EventType,
-	target workflow.Target,
+	target tasktarget.Target,
 ) {
 	t.Helper()
 
@@ -992,7 +993,7 @@ func syncNonEligibleTaskCases(
 	baseTask task.Task,
 	repoPath string,
 	worktreePath string,
-	targets workflow.ExpectedTargets,
+	targets tasktarget.ExpectedTargets,
 ) []syncNonEligibleTaskCase {
 	cases := syncRunStateSkipCases(baseTask)
 	cases = append(cases, syncCompletionSkipCases(baseTask, repoPath, worktreePath, targets)...)
@@ -1019,7 +1020,7 @@ func syncCompletionSkipCases(
 	baseTask task.Task,
 	repoPath string,
 	worktreePath string,
-	targets workflow.ExpectedTargets,
+	targets tasktarget.ExpectedTargets,
 ) []syncNonEligibleTaskCase {
 	missingPRURL := task.MetadataPRURL + " is not set"
 	return []syncNonEligibleTaskCase{
@@ -1078,7 +1079,7 @@ func syncCommitErrorRun(worktreePath string) taskstate.RunAttempt {
 	return run
 }
 
-func syncTaskForTarget(target workflow.Target) task.Task {
+func syncTaskForTarget(target tasktarget.Target) task.Task {
 	return syncTaskForBranchWorktree(target.Branch, target.Worktree)
 }
 
@@ -1546,9 +1547,9 @@ func mustSyncExpectedTargets(
 	repo task.Repository,
 	taskID string,
 	paths state.Paths,
-) workflow.ExpectedTargets {
+) tasktarget.ExpectedTargets {
 	t.Helper()
-	targets, err := workflow.ExpectedTargetsForTask(repo, taskID, paths)
+	targets, err := tasktarget.ExpectedTargetsForTask(repo, taskID, paths)
 	if err != nil {
 		t.Fatalf("expected targets: %v", err)
 	}
@@ -1928,7 +1929,7 @@ func newSyncTestSource(
 	t *testing.T,
 	repoPath string,
 	taskID string,
-) (state.Paths, task.RepositorySource, workflow.ExpectedTargets) {
+) (state.Paths, task.RepositorySource, tasktarget.ExpectedTargets) {
 	t.Helper()
 	paths, err := state.NewPaths(filepath.Join(t.TempDir(), "config"), filepath.Join(t.TempDir(), "data"))
 	if err != nil {
@@ -1944,7 +1945,7 @@ func newSyncTestSource(
 		},
 		BackendDir: repoPath,
 	}
-	targets, err := workflow.ExpectedTargetsForTask(source.Repository, taskID, paths)
+	targets, err := tasktarget.ExpectedTargetsForTask(source.Repository, taskID, paths)
 	if err != nil {
 		t.Fatalf("expected targets: %v", err)
 	}

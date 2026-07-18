@@ -12,6 +12,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/tasktarget"
 	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
@@ -940,7 +941,7 @@ func newFinalizationTestSource(
 	t *testing.T,
 	repoPath string,
 	taskID string,
-) (state.Paths, task.RepositorySource, workflow.ExpectedTargets) {
+) (state.Paths, task.RepositorySource, tasktarget.ExpectedTargets) {
 	t.Helper()
 	paths := mustFinalizationTestPaths(t)
 	source := task.RepositorySource{
@@ -953,7 +954,7 @@ func newFinalizationTestSource(
 		},
 		BackendDir: repoPath,
 	}
-	targets, err := workflow.ExpectedTargetsForTask(source.Repository, taskID, paths)
+	targets, err := tasktarget.ExpectedTargetsForTask(source.Repository, taskID, paths)
 	if err != nil {
 		t.Fatalf("expected targets: %v", err)
 	}
