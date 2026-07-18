@@ -1779,6 +1779,73 @@ func TestTaskRunStructuredCodexProfileBuildsAttachedCommand(t *testing.T) {
 	}, execution.Args)
 }
 
+//nolint:funlen // The Pi usage fixture is clearer as one end-to-end run scenario.
+func TestTaskRunStructuredPiProfileCapturesUsage(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[
+			{
+				"id":"op-pi",
+				"title":"Structured Pi",
+				"description":"Launch Pi through the structured profile.",
+				"status":"open",
+				"priority":2,
+				"issue_type":"task"
+			}
+		]`},
+	})
+	withFakeAgent(t, "pi", 0)
+	writeStructuredPiTaskRunAgentConfig(t, paths, "pi-medium", "openai-codex/gpt-5.5", "high", false)
+	piSessionDir := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", piSessionDir)
+	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-pi"))
+	must.NoError(err)
+	sessionPath := filepath.Join(piSessionDir, "task-run-session.jsonl")
+	writePiSessionLogForCLI(t, sessionPath, worktreePath, "task-run-session", time.Now().UTC())
+
+	stdout, stderr := executeCommand(t, []string{"task", "run", "op-pi"})
+
+	is.Contains(stdout, "fake agent stdout")
+	is.Contains(stderr, "fake agent stderr")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-pi.yaml"), &state))
+	must.Len(state.Runs, 1)
+	execution := state.Runs[0].Execution
+	is.Equal(taskstate.RunStatusSucceeded, execution.Status)
+	is.Equal("pi-medium", execution.Agent)
+	is.Equal("pi", execution.Harness)
+	is.Equal("openai-codex/gpt-5.5", execution.Model)
+	must.NotNil(execution.Session)
+	is.Equal("task-run-session", execution.Session.ID)
+	is.Equal(sessionPath, execution.Session.LogPath)
+	must.NotNil(execution.Usage)
+	is.Equal(150, execution.Usage.InputTokens)
+	is.Equal(20, execution.Usage.CachedInputTokens)
+	is.Equal(30, execution.Usage.OutputTokens)
+	is.Equal(5, execution.Usage.ReasoningOutputTokens)
+	is.Equal(180, execution.Usage.TotalTokens)
+	must.NotNil(execution.UsageCost)
+	is.Equal(int64(1240), execution.UsageCost.AmountMicroUSD)
+	is.Equal(taskstate.UsageCaptureCaptured, execution.UsageCapture.Status)
+	is.Equal("matched_pi_session", execution.UsageCapture.Reason)
+}
+
 func TestTaskRunRejectsMissingRequiredExternalReferenceBeforeSetup(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -5290,6 +5357,69 @@ func TestTaskReviewAgentReviewStepCapturesCodexUsage(t *testing.T) {
 	is.Equal(1, execution.UsageCapture.CandidateCount)
 }
 
+//nolint:funlen // The Pi review-agent usage fixture is clearer as one end-to-end scenario.
+func TestTaskReviewAgentReviewStepCapturesPiUsage(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review agent", "Run attached reviewer.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+	withFakeAgent(t, "pi", 0)
+	piSessionDir := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", piSessionDir)
+	sessionPath := filepath.Join(piSessionDir, "review-pi-session.jsonl")
+	writePiSessionLogForCLI(t, sessionPath, repoPath, "review-pi-session", time.Now().UTC())
+	writeStructuredPiReviewAgentPipelineConfig(t, paths, "pi", "openai-codex/gpt-5.5", false, "standard", map[string][]map[string]any{
+		"standard": []map[string]any{{"kind": "agent_review", "name": "ai-review"}},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
+	})
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "")
+
+	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stderr, "fake agent stderr")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	must.Len(latest.Steps, 1)
+	must.NotNil(latest.Steps[0].Execution)
+	execution := latest.Steps[0].Execution
+	is.Equal(taskstate.RunStatusSucceeded, execution.Status)
+	is.Equal("pi", execution.Harness)
+	is.Equal("openai-codex/gpt-5.5", execution.Model)
+	must.NotNil(execution.Session)
+	is.Equal("review-pi-session", execution.Session.ID)
+	is.Equal(sessionPath, execution.Session.LogPath)
+	must.NotNil(execution.Usage)
+	is.Equal(180, execution.Usage.TotalTokens)
+	must.NotNil(execution.UsageCost)
+	is.Equal(int64(1240), execution.UsageCost.AmountMicroUSD)
+	is.Equal(taskstate.UsageCaptureCaptured, execution.UsageCapture.Status)
+	is.Equal("matched_pi_session", execution.UsageCapture.Reason)
+	is.Equal(1, execution.UsageCapture.CandidateCount)
+}
+
 func TestTaskReviewAgentReviewBlockingFindingStopsPipeline(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -7845,6 +7975,23 @@ func writeCodexSessionLogForCLI(t *testing.T, path string, cwd string, sessionID
 	writeTestFile(t, path, content, "codex session log")
 }
 
+func writePiSessionLogForCLI(t *testing.T, path string, cwd string, sessionID string, startedAt time.Time) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create pi session log directory: %v", err)
+	}
+	timestamp := startedAt.UTC().Format(time.RFC3339Nano)
+	content := strings.Join([]string{
+		`{"type":"session","version":3,"id":"` + sessionID + `","timestamp":"` + timestamp + `","cwd":"` + cwd + `"}`,
+		`{"type":"model_change","id":"model","timestamp":"` + timestamp + `","provider":"openai-codex","modelId":"gpt-5.5"}`,
+		`{"type":"message","id":"assistant-1","timestamp":"` + timestamp + `","message":{"role":"assistant","usage":{"input":100,"output":20,"cacheRead":10,"cacheWrite":3,"reasoning":5,"totalTokens":120,"cost":{"total":0.001234}}}}`,
+		`{"type":"message","id":"assistant-2","timestamp":"` + timestamp + `","message":{"role":"assistant","usage":{"input":50,"output":10,"cacheRead":7,"cacheWrite":0,"reasoning":0,"totalTokens":60,"cost":{"total":0.000006}}}}`,
+		"",
+	}, "\n")
+	writeTestFile(t, path, content, "pi session log")
+}
+
 func writeTaskRunAgentConfig(t *testing.T, paths state.Paths, name string, command string, args []string) {
 	t.Helper()
 
@@ -7878,6 +8025,31 @@ func writeStructuredCodexTaskRunAgentConfig(
 			"profiles": map[string]any{
 				name: map[string]any{
 					"harness":     "codex",
+					"model":       model,
+					"thinking":    thinking,
+					"interactive": interactive,
+				},
+			},
+		},
+	}))
+}
+
+func writeStructuredPiTaskRunAgentConfig(
+	t *testing.T,
+	paths state.Paths,
+	name string,
+	model string,
+	thinking string,
+	interactive bool,
+) {
+	t.Helper()
+
+	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"agents": map[string]any{
+			"defaults": map[string]any{"implementer": name},
+			"profiles": map[string]any{
+				name: map[string]any{
+					"harness":     "pi",
 					"model":       model,
 					"thinking":    thinking,
 					"interactive": interactive,
@@ -7969,6 +8141,43 @@ func writeStructuredCodexReviewAgentPipelineConfig(
 				"implementer": map[string]any{"command": "unused-implementer"},
 				reviewerName: map[string]any{
 					"harness":     "codex",
+					"model":       model,
+					"interactive": interactive,
+				},
+			},
+		},
+		"reviews": map[string]any{
+			"default_pipeline": defaultPipeline,
+			"pipelines":        configPipelines,
+		},
+	}))
+}
+
+func writeStructuredPiReviewAgentPipelineConfig(
+	t *testing.T,
+	paths state.Paths,
+	reviewerName string,
+	model string,
+	interactive bool,
+	defaultPipeline string,
+	pipelines map[string][]map[string]any,
+) {
+	t.Helper()
+
+	configPipelines := map[string]any{}
+	for name, steps := range pipelines {
+		configPipelines[name] = map[string]any{"steps": steps}
+	}
+	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"implementer": "implementer",
+				"reviewer":    reviewerName,
+			},
+			"profiles": map[string]any{
+				"implementer": map[string]any{"command": "unused-implementer"},
+				reviewerName: map[string]any{
+					"harness":     "pi",
 					"model":       model,
 					"interactive": interactive,
 				},

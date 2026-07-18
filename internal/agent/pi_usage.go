@@ -243,11 +243,11 @@ type piLogRecord struct {
 	Provider  string          `json:"provider"`
 	ModelID   string          `json:"modelId"`
 	Message   piMessageRecord `json:"message"`
-	Usage     piUsageRecord   `json:"usage"`
 }
 
 type piMessageRecord struct {
-	Role string `json:"role"`
+	Role  string        `json:"role"`
+	Usage piUsageRecord `json:"usage"`
 }
 
 type piUsageRecord struct {
@@ -327,24 +327,28 @@ func applyPiModelChange(session *piSessionCandidate, record piLogRecord) {
 }
 
 func applyPiAssistantUsage(session *piSessionCandidate, record piLogRecord) {
-	if record.Message.Role != "assistant" || piUsageRecordIsZero(record.Usage) {
+	usageRecord := record.Message.Usage
+	if record.Message.Role != "assistant" || piUsageRecordIsZero(usageRecord) {
 		return
 	}
 	usage := taskstate.AgentUsage{}
 	if session.usage != nil {
 		usage = *session.usage
 	}
-	usage.InputTokens += piJSONInt(record.Usage.Input)
-	usage.CachedInputTokens += piJSONInt(record.Usage.CacheRead) + piJSONInt(record.Usage.CacheWrite)
-	usage.OutputTokens += piJSONInt(record.Usage.Output)
-	usage.ReasoningOutputTokens += piJSONInt(record.Usage.Reasoning)
-	usage.TotalTokens += piJSONInt(record.Usage.TotalTokens)
-	if usage.TotalTokens == 0 {
-		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	inputTokens := piJSONInt(usageRecord.Input)
+	outputTokens := piJSONInt(usageRecord.Output)
+	totalTokens := piJSONInt(usageRecord.TotalTokens)
+	if totalTokens == 0 {
+		totalTokens = inputTokens + outputTokens
 	}
+	usage.InputTokens += inputTokens
+	usage.CachedInputTokens += piJSONInt(usageRecord.CacheRead) + piJSONInt(usageRecord.CacheWrite)
+	usage.OutputTokens += outputTokens
+	usage.ReasoningOutputTokens += piJSONInt(usageRecord.Reasoning)
+	usage.TotalTokens += totalTokens
 	session.usage = &usage
 
-	costMicroUSD := piCostMicroUSD(record.Usage.Cost.Total)
+	costMicroUSD := piCostMicroUSD(usageRecord.Cost.Total)
 	if costMicroUSD <= 0 {
 		return
 	}
