@@ -13,6 +13,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
+	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
@@ -94,6 +95,146 @@ func TestRunPipelineRestoresHeaderWrittenToWorktreeStderr(t *testing.T) {
 	if strings.Contains(status, "review.log") && err != nil {
 		t.Fatalf("git status = %q, want redirected stderr file removed", status)
 	}
+}
+
+func TestRunPipelineVerboseDiagnosticsDistinguishCheckExitAndRestoration(t *testing.T) {
+	workdir := t.TempDir()
+	initReviewTestGitRepoWithCandidateChange(t, workdir)
+
+	check := writeReviewTestScript(t, workdir, "failing-check", `#!/bin/sh
+printf 'SECRET REVIEW OUTPUT\n'
+exit 7
+`)
+	store, attempt := startReviewTestAttempt(t)
+	var diagnostics bytes.Buffer
+	_, err := review.RunPipeline(review.PipelineRunOptions{
+		Context:  context.Background(),
+		Store:    store,
+		Logger:   logging.New(&diagnostics, logging.Config{Verbose: true}),
+		RepoID:   "alpha",
+		TaskID:   "op-1",
+		Branch:   "main",
+		Workdir:  workdir,
+		Attempt:  attempt,
+		Pipeline: singleStepPipeline(review.KindCheck, "unit", check),
+		Stdout:   io.Discard,
+		Stderr:   io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("RunPipeline error = %v", err)
+	}
+
+	logs := diagnostics.String()
+	for _, want := range []string{
+		`msg="review pipeline started"`,
+		`msg="review step started"`,
+		`msg="review command finished"`,
+		`operation=check_command`,
+		`status=nonzero_exit`,
+		`exit_code=7`,
+		`repo_id=alpha`,
+		`task_id=op-1`,
+		`attempt=1`,
+		`pipeline=standard`,
+		`step=unit`,
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("diagnostics missing %q:\n%s", want, logs)
+		}
+	}
+	if strings.Contains(logs, "SECRET REVIEW OUTPUT") {
+		t.Fatalf("diagnostics leaked process output:\n%s", logs)
+	}
+}
+
+func TestRunPipelineVerboseDiagnosticsCaptureAndRestoreCandidateMutation(t *testing.T) {
+	workdir := t.TempDir()
+	candidatePath := initReviewTestGitRepoWithCandidateChange(t, workdir)
+
+	mutator := writeReviewTestScript(t, workdir, "mutating-check", `#!/bin/sh
+printf 'mutated\n' > candidate.txt
+`)
+	store, attempt := startReviewTestAttempt(t)
+	var diagnostics bytes.Buffer
+	_, err := review.RunPipeline(review.PipelineRunOptions{
+		Context:  context.Background(),
+		Store:    store,
+		Logger:   logging.New(&diagnostics, logging.Config{Verbose: true}),
+		RepoID:   "alpha",
+		TaskID:   "op-1",
+		Branch:   "main",
+		Workdir:  workdir,
+		Attempt:  attempt,
+		Pipeline: singleStepPipeline(review.KindCheck, "unit", mutator),
+		Stdout:   io.Discard,
+		Stderr:   io.Discard,
+	})
+	if err == nil || !strings.Contains(err.Error(), "review step mutated candidate changes") {
+		t.Fatalf("RunPipeline error = %v, want mutation error", err)
+	}
+	if got := string(mustReadFile(t, candidatePath)); got != "candidate\n" {
+		t.Fatalf("candidate file = %q, want restored candidate change", got)
+	}
+
+	logs := diagnostics.String()
+	for _, want := range []string{
+		`msg="candidate snapshot capture started"`,
+		`msg="candidate mutation check finished"`,
+		`mutated=true`,
+		`status=restored_mutation`,
+		`msg="candidate snapshot restoration finished"`,
+		`status=success`,
+		`msg="git command finished"`,
+		`component=git`,
+		`operation=candidate_status`,
+		`operation=candidate_diff`,
+		`operation=candidate_untracked`,
+		`operation=candidate_reset_index`,
+		`operation=candidate_clean_untracked`,
+		`operation=candidate_restore_tracked`,
+		`operation=candidate_apply_patch`,
+		`cwd=` + workdir,
+		`duration_ms=`,
+		`exit_code=0`,
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("diagnostics missing %q:\n%s", want, logs)
+		}
+	}
+	for _, leaked := range []string{"candidate\\n", "mutated\\n"} {
+		if strings.Contains(logs, leaked) {
+			t.Fatalf("diagnostics leaked candidate content %q:\n%s", leaked, logs)
+		}
+	}
+}
+
+func initReviewTestGitRepoWithCandidateChange(t *testing.T, workdir string) string {
+	t.Helper()
+
+	initReviewTestGitRepo(t, workdir)
+	candidatePath := filepath.Join(workdir, "candidate.txt")
+	if err := os.WriteFile(candidatePath, []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write base candidate file: %v", err)
+	}
+	runReviewTestGit(t, workdir, "add", "candidate.txt")
+	runReviewTestGit(t, workdir,
+		"-c", "user.name=Orpheus Test",
+		"-c", "user.email=orpheus@example.com",
+		"commit", "-m", "add candidate file",
+	)
+	if err := os.WriteFile(candidatePath, []byte("candidate\n"), 0o644); err != nil {
+		t.Fatalf("write candidate change: %v", err)
+	}
+	return candidatePath
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return data
 }
 
 func TestRunPipelineInteractivePassingCheckClearsRollingTail(t *testing.T) {
@@ -578,6 +719,139 @@ func TestRunPipelineAgentReviewUsesEffectivePromptInCommandAndEnvironment(t *tes
 		t.Fatalf("outcome = %q, want passed", outcome.Status)
 	}
 	assertLatestReviewExecutionModel(t, harness.store, "pi", "openai-codex/gpt-5.4-mini")
+}
+
+func TestRunPipelineVerboseDiagnosticsCorrelateAgentReviewCommand(t *testing.T) {
+	tests := []struct {
+		name      string
+		launcher  agentexec.Launcher
+		wantErr   bool
+		wantAttrs []string
+	}{
+		{
+			name:     "success",
+			launcher: fakeReviewLauncher{},
+			wantAttrs: []string{
+				`status=success`,
+				`exit_code=0`,
+			},
+		},
+		{
+			name: "nonzero exit",
+			launcher: fakeReviewLauncherFunc(func(ctx context.Context, command agentexec.Command, opts agentexec.LaunchOptions) error {
+				return exec.CommandContext(ctx, "sh", "-c", "exit 9").Run()
+			}),
+			wantErr: true,
+			wantAttrs: []string{
+				`status=nonzero_exit`,
+				`exit_code=9`,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			outcome, logs, err := runAgentReviewDiagnosticsTest(t, test.launcher)
+			assertAgentReviewDiagnosticsOutcome(t, outcome, err, test.wantErr)
+			assertAgentReviewDiagnostics(t, logs, test.wantAttrs)
+		})
+	}
+}
+
+func runAgentReviewDiagnosticsTest(
+	t *testing.T,
+	launcher agentexec.Launcher,
+) (review.PipelineOutcome, string, error) {
+	t.Helper()
+
+	harness := newAgentReviewPipelineHarness(t)
+	var diagnostics bytes.Buffer
+	var stdout bytes.Buffer
+	terminal := newVisualTerminal()
+
+	outcome, err := review.RunPipeline(review.PipelineRunOptions{
+		Context:           context.Background(),
+		Store:             harness.store,
+		Logger:            logging.New(&diagnostics, logging.Config{Verbose: true}),
+		RepoID:            "alpha",
+		TaskID:            "op-1",
+		Branch:            "main",
+		Workdir:           harness.workdir,
+		Attempt:           harness.attempt,
+		Pipeline:          agentReviewPipeline(),
+		Stdout:            &stdout,
+		Stderr:            terminal,
+		InteractiveOutput: true,
+		AgentConfig:       piReviewPromptAgentConfig(""),
+		AgentLauncher:     launcher,
+	})
+	return outcome, diagnostics.String(), err
+}
+
+func assertAgentReviewDiagnosticsOutcome(t *testing.T, outcome review.PipelineOutcome, err error, wantErr bool) {
+	t.Helper()
+
+	if wantErr {
+		if err == nil || !strings.Contains(err.Error(), `run agent_review step "ai-review"`) {
+			t.Fatalf("RunPipeline error = %v, want agent_review step failure", err)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("RunPipeline error = %v", err)
+	}
+	if outcome.Status != taskstate.ReviewStatusPassed {
+		t.Fatalf("outcome = %q, want passed", outcome.Status)
+	}
+}
+
+func assertAgentReviewDiagnostics(t *testing.T, logs string, wantAttrs []string) {
+	t.Helper()
+
+	start := diagnosticLine(t, logs, `msg="review command started"`, `operation=agent_review_command`)
+	finish := diagnosticLine(t, logs, `msg="review command finished"`, `operation=agent_review_command`)
+	for _, line := range []string{start, finish} {
+		assertDiagnosticsLineAttrs(t, logs, line, []string{
+			`repo_id=alpha`,
+			`task_id=op-1`,
+			`attempt=1`,
+			`pipeline=standard`,
+			`step=ai-review`,
+			`kind=agent_review`,
+			`agent=reviewer`,
+			`harness=pi`,
+		})
+	}
+	assertDiagnosticsLineAttrs(t, logs, finish, wantAttrs)
+}
+
+func diagnosticLine(t *testing.T, logs string, required ...string) string {
+	t.Helper()
+
+	for _, line := range strings.Split(logs, "\n") {
+		matched := true
+		for _, attr := range required {
+			if !strings.Contains(line, attr) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return line
+		}
+	}
+	t.Fatalf("diagnostics missing line with %v:\n%s", required, logs)
+	return ""
+}
+
+func assertDiagnosticsLineAttrs(t *testing.T, logs string, line string, attrs []string) {
+	t.Helper()
+
+	for _, attr := range attrs {
+		if !strings.Contains(line, attr) {
+			t.Fatalf("diagnostics line missing %q:\nline: %s\nlogs:\n%s", attr, line, logs)
+		}
+	}
 }
 
 func piReviewPromptAgentConfig(promptAppend string) agent.Config {

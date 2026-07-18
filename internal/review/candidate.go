@@ -6,15 +6,17 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/logging"
 )
 
 // HasCandidateChanges reports whether the review worktree contains candidate changes.
 func HasCandidateChanges(ctx context.Context, workdir string) (bool, error) {
-	status, err := candidateStatus(ctx, workdir)
+	status, err := gitmeta.CandidateStatus(ctx, workdir)
 	if err != nil {
 		return false, err
 	}
@@ -36,33 +38,56 @@ type snapshotFile struct {
 	isSymlink     bool
 }
 
-func captureCandidateSnapshot(ctx context.Context, workdir string) (candidateSnapshot, error) {
-	status, err := candidateStatus(ctx, workdir)
+func captureCandidateSnapshot(
+	ctx context.Context,
+	workdir string,
+	logger *slog.Logger,
+	attrs ...slog.Attr,
+) (candidateSnapshot, error) {
+	spanAttrs := candidateDiagnosticAttrs(workdir, attrs...)
+	span := logging.Start(ctx, logger, "candidate snapshot capture", spanAttrs...)
+	var snapshot candidateSnapshot
+	var err error
+	defer func() {
+		finishAttrs := []slog.Attr{}
+		if err == nil {
+			finishAttrs = append(finishAttrs,
+				slog.Bool("has_status", len(bytes.TrimSpace(snapshot.status)) > 0),
+				slog.Bool("has_patch", len(bytes.TrimSpace(snapshot.patch)) > 0),
+				slog.Int("untracked_count", len(snapshot.untracked)),
+			)
+		}
+		span.FinishError(ctx, err, finishAttrs...)
+	}()
+
+	gitOps := gitmeta.NewCandidateOperations(logger)
+	status, err := candidateStatus(ctx, gitOps, workdir)
 	if err != nil {
 		return candidateSnapshot{}, err
 	}
-	patch, err := gitmeta.BinaryDiff(ctx, workdir)
+	patch, err := gitOps.BinaryDiff(ctx, workdir)
 	if err != nil {
 		return candidateSnapshot{}, err
 	}
-	untracked, err := captureUntrackedFiles(ctx, workdir)
+	untracked, err := captureUntrackedFiles(ctx, gitOps, workdir)
 	if err != nil {
 		return candidateSnapshot{}, err
 	}
-	return candidateSnapshot{
+	snapshot = candidateSnapshot{
 		workdir:   workdir,
 		status:    status,
 		patch:     patch,
 		untracked: untracked,
-	}, nil
+	}
+	return snapshot, nil
 }
 
-func candidateStatus(ctx context.Context, workdir string) ([]byte, error) {
-	return gitmeta.CandidateStatus(ctx, workdir)
+func candidateStatus(ctx context.Context, gitOps gitmeta.CandidateOperations, workdir string) ([]byte, error) {
+	return gitOps.Status(ctx, workdir)
 }
 
-func captureUntrackedFiles(ctx context.Context, workdir string) ([]snapshotFile, error) {
-	paths, err := gitmeta.UntrackedFiles(ctx, workdir)
+func captureUntrackedFiles(ctx context.Context, gitOps gitmeta.CandidateOperations, workdir string) ([]snapshotFile, error) {
+	paths, err := gitOps.UntrackedFiles(ctx, workdir)
 	if err != nil {
 		return nil, err
 	}
@@ -107,42 +132,102 @@ func captureSnapshotFile(workdir string, path string) (snapshotFile, error) {
 	return file, nil
 }
 
-func restoreCandidateIfMutated(ctx context.Context, snapshot candidateSnapshot) error {
-	currentStatus, err := candidateStatus(ctx, snapshot.workdir)
+func restoreCandidateIfMutated(
+	ctx context.Context,
+	snapshot candidateSnapshot,
+	logger *slog.Logger,
+	attrs ...slog.Attr,
+) error {
+	span := logging.Start(ctx, logger, "candidate mutation check", candidateDiagnosticAttrs(snapshot.workdir, attrs...)...)
+	var mutated bool
+	var restored bool
+	var finalErr error
+	defer func() {
+		finishAttrs := []slog.Attr{slog.Bool("mutated", mutated), slog.Bool("restored", restored)}
+		span.Finish(ctx, candidateMutationStatus(mutated, restored, finalErr), finishAttrs...)
+	}()
+
+	gitOps := gitmeta.NewCandidateOperations(logger)
+	currentStatus, err := candidateStatus(ctx, gitOps, snapshot.workdir)
 	if err != nil {
+		finalErr = err
 		return err
 	}
 	if bytes.Equal(currentStatus, snapshot.status) {
-		current, err := captureCandidateSnapshot(ctx, snapshot.workdir)
+		current, err := captureCandidateSnapshot(ctx, snapshot.workdir, logger, attrs...)
 		if err != nil {
+			finalErr = err
 			return err
 		}
 		if candidateSnapshotsEqual(current, snapshot) {
 			return nil
 		}
 	}
-	if err := restoreCandidateSnapshot(ctx, snapshot); err != nil {
+
+	mutated = true
+	restoreSpan := logging.Start(ctx, logger, "candidate snapshot restoration", candidateDiagnosticAttrs(snapshot.workdir, attrs...)...)
+	restoreErr := restoreCandidateSnapshot(ctx, gitOps, snapshot)
+	if restoreErr != nil {
+		restoreSpan.FinishError(ctx, restoreErr)
+		finalErr = restoreErr
 		return fmt.Errorf(
 			"review step mutated candidate changes and automatic restore failed: %w; "+
 				"manual repair required in %q: inspect `git status --short`, restore the intended "+
 				"candidate changes, then rerun `orpheus task review`",
-			err,
+			restoreErr,
 			snapshot.workdir,
 		)
 	}
-	restored, err := captureCandidateSnapshot(ctx, snapshot.workdir)
+	if err := verifyRestoredCandidateSnapshot(ctx, snapshot, logger, attrs...); err != nil {
+		restoreSpan.FinishError(ctx, err)
+		finalErr = err
+		return err
+	}
+
+	restored = true
+	restoreSpan.Finish(ctx, logging.StatusSuccess)
+	finalErr = errors.New("review step mutated candidate changes; restored the pre-step snapshot and marked review failed")
+	return finalErr
+}
+
+func verifyRestoredCandidateSnapshot(
+	ctx context.Context,
+	snapshot candidateSnapshot,
+	logger *slog.Logger,
+	attrs ...slog.Attr,
+) error {
+	restoredSnapshot, err := captureCandidateSnapshot(ctx, snapshot.workdir, logger, attrs...)
 	if err != nil {
 		return err
 	}
-	if !candidateSnapshotsEqual(restored, snapshot) {
-		return fmt.Errorf(
-			"review step mutated candidate changes and automatic restore did not return the worktree to the pre-step snapshot; "+
-				"manual repair required in %q: inspect `git status --short`, restore the intended "+
-				"candidate changes, then rerun `orpheus task review`",
-			snapshot.workdir,
-		)
+	if candidateSnapshotsEqual(restoredSnapshot, snapshot) {
+		return nil
 	}
-	return errors.New("review step mutated candidate changes; restored the pre-step snapshot and marked review failed")
+	return fmt.Errorf(
+		"review step mutated candidate changes and automatic restore did not return the worktree to the pre-step snapshot; "+
+			"manual repair required in %q: inspect `git status --short`, restore the intended "+
+			"candidate changes, then rerun `orpheus task review`",
+		snapshot.workdir,
+	)
+}
+
+func candidateDiagnosticAttrs(workdir string, attrs ...slog.Attr) []slog.Attr {
+	out := []slog.Attr{
+		slog.String("component", "review"),
+		slog.String("operation", "candidate_snapshot"),
+		slog.String("cwd", workdir),
+	}
+	return append(out, attrs...)
+}
+
+func candidateMutationStatus(mutated bool, restored bool, err error) string {
+	if err == nil {
+		return logging.StatusSuccess
+	}
+	if mutated && restored {
+		return "restored_mutation"
+	}
+	return logging.StatusFailure
 }
 
 func candidateSnapshotsEqual(a, b candidateSnapshot) bool {
@@ -168,18 +253,18 @@ func snapshotFilesEqual(a, b snapshotFile) bool {
 		bytes.Equal(a.data, b.data)
 }
 
-func restoreCandidateSnapshot(ctx context.Context, snapshot candidateSnapshot) error {
-	if err := gitmeta.ResetIndexToHEAD(ctx, snapshot.workdir); err != nil {
+func restoreCandidateSnapshot(ctx context.Context, gitOps gitmeta.CandidateOperations, snapshot candidateSnapshot) error {
+	if err := gitOps.ResetIndexToHEAD(ctx, snapshot.workdir); err != nil {
 		return err
 	}
-	if err := gitmeta.CleanUntrackedFiles(ctx, snapshot.workdir); err != nil {
+	if err := gitOps.CleanUntrackedFiles(ctx, snapshot.workdir); err != nil {
 		return err
 	}
-	if err := gitmeta.RestoreTrackedFilesFromHEAD(ctx, snapshot.workdir); err != nil {
+	if err := gitOps.RestoreTrackedFilesFromHEAD(ctx, snapshot.workdir); err != nil {
 		return err
 	}
 	if len(bytes.TrimSpace(snapshot.patch)) > 0 {
-		err := gitmeta.ApplyBinaryPatch(
+		err := gitOps.ApplyBinaryPatch(
 			ctx,
 			snapshot.workdir,
 			snapshot.patch,

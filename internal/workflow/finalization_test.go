@@ -1,6 +1,7 @@
 package workflow_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
@@ -499,6 +501,8 @@ func TestFinalizePublishesFeatureBranchPRWithoutClosingTask(t *testing.T) {
 	git.branch = targets.WorktreeTeam.Branch
 	provider := &fakePRProvider{created: pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/42"}}
 	service.PRProvider = provider
+	var diagnostics bytes.Buffer
+	service.Logger = logging.New(&diagnostics, logging.Config{Verbose: true})
 
 	result, err := service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
 	if err != nil {
@@ -520,6 +524,10 @@ func TestFinalizePublishesFeatureBranchPRWithoutClosingTask(t *testing.T) {
 	if len(provider.findRequests) != 1 || len(provider.createRequests) != 1 {
 		t.Fatalf("provider find/create = %#v/%#v, want one each", provider.findRequests, provider.createRequests)
 	}
+	wantDiagnostics := pullrequest.DiagnosticContext{RepoID: "alpha", TaskID: "op-1", Branch: targets.WorktreeTeam.Branch}
+	if provider.findRequests[0].Diagnostics != wantDiagnostics || provider.createRequests[0].Diagnostics != wantDiagnostics {
+		t.Fatalf("provider diagnostics = %#v/%#v, want %#v", provider.findRequests[0].Diagnostics, provider.createRequests[0].Diagnostics, wantDiagnostics)
+	}
 	assertFeatureBranchPublicationTitles(t, git, provider, "[TREX-1234] Publish branch")
 	if len(backend.setPRURLs) != 1 || backend.setPRURLs[0].prURL != "https://github.test/org/repo/pull/42" {
 		t.Fatalf("set PR URLs = %#v, want created URL", backend.setPRURLs)
@@ -534,6 +542,78 @@ func TestFinalizePublishesFeatureBranchPRWithoutClosingTask(t *testing.T) {
 	if events := store.states["alpha/op-1"].Events; len(events) != 2 ||
 		events[0].Type != taskstate.EventChangesPushed || events[1].Type != taskstate.EventPRCreated {
 		t.Fatalf("events = %#v, want branch push and created PR", events)
+	}
+	logs := diagnostics.String()
+	for _, want := range []string{
+		`msg="task finalization workflow started"`,
+		`msg="task finalization workflow finished"`,
+		`component=workflow`,
+		`operation=task_finalization`,
+		`repo_id=alpha`,
+		`task_id=op-1`,
+		`branch=` + targets.WorktreeTeam.Branch,
+		`has_pr=true`,
+		`status=success`,
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("diagnostics missing %q:\n%s", want, logs)
+		}
+	}
+	for _, leaked := range []string{"Detailed PR body.", "[TREX-1234] Publish branch"} {
+		if strings.Contains(logs, leaked) {
+			t.Fatalf("diagnostics leaked publication content %q:\n%s", leaked, logs)
+		}
+	}
+}
+
+func TestFinalizeDiagnosticsCorrelateFailedFeatureBranchPRCreation(t *testing.T) {
+	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   targets.WorktreeTeam.Branch,
+			task.MetadataWorktree: targets.WorktreeTeam.Worktree,
+		},
+	}
+	service, git, _, _ := newFinalizationTestServiceForSource(t, paths, source, []task.Task{taskItem}, map[string]taskstate.TaskState{
+		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
+			Attempt: 1,
+			Status:  taskstate.RunStatusSucceeded,
+			Completion: &taskstate.Completion{
+				Summary:             "Publish branch",
+				Description:         "Commit reviewed feature work.",
+				DetailedDescription: "Detailed PR body.",
+			},
+		}),
+	})
+	git.branch = targets.WorktreeTeam.Branch
+	service.PRProvider = &fakePRProvider{createErr: errors.New("gh pr create failed")}
+	var diagnostics bytes.Buffer
+	service.Logger = logging.New(&diagnostics, logging.Config{Verbose: true})
+
+	_, err := service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
+	if err == nil || !strings.Contains(err.Error(), "gh pr create failed") {
+		t.Fatalf("error = %v, want PR creation failure", err)
+	}
+
+	logs := diagnostics.String()
+	for _, want := range []string{
+		`msg="task finalization workflow finished"`,
+		`operation=task_finalization`,
+		`repo_id=alpha`,
+		`task_id=op-1`,
+		`branch=` + targets.WorktreeTeam.Branch,
+		`status=failure`,
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("diagnostics missing %q:\n%s", want, logs)
+		}
+	}
+	for _, leaked := range []string{"Detailed PR body.", "Publish branch"} {
+		if strings.Contains(logs, leaked) {
+			t.Fatalf("diagnostics leaked publication content %q:\n%s", leaked, logs)
+		}
 	}
 }
 

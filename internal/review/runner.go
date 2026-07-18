@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
+	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
@@ -35,6 +37,7 @@ type PipelineStore interface {
 type PipelineRunOptions struct {
 	Context context.Context
 	Store   PipelineStore
+	Logger  *slog.Logger
 
 	RepoID  string
 	TaskID  string
@@ -147,29 +150,66 @@ func RunPipeline(opts PipelineRunOptions) (PipelineOutcome, error) {
 	if opts.Context == nil {
 		opts.Context = context.Background()
 	}
+	span := logging.Start(opts.Context, opts.Logger, "review pipeline",
+		slog.String("component", "review"),
+		slog.String("operation", "pipeline"),
+		slog.String("repo_id", opts.RepoID),
+		slog.String("task_id", opts.TaskID),
+		slog.Int("attempt", opts.Attempt.Attempt),
+		slog.String("pipeline", opts.Pipeline.Name),
+		slog.String("branch", opts.Branch),
+		slog.String("cwd", opts.Workdir),
+	)
+	var finalOutcome PipelineOutcome
+	var finalErr error
+	defer func() {
+		attrs := []slog.Attr{}
+		if finalOutcome.Status != "" {
+			attrs = append(attrs, slog.String("review_status", string(finalOutcome.Status)))
+		}
+		span.Finish(opts.Context, reviewPipelineDiagnosticStatus(opts.Context, finalOutcome, finalErr), attrs...)
+	}()
+
 	startIndex := 0
 	if opts.ResumeFromStep {
 		var err error
 		startIndex, err = pipelineStartIndex(opts.Pipeline, opts.Attempt.Step)
 		if err != nil {
+			finalErr = err
 			return PipelineOutcome{}, err
 		}
 	}
 	for _, step := range opts.Pipeline.Steps[startIndex:] {
-		outcome, err := runReadOnlyStep(opts.Context, opts.Workdir, func() (stepOutcome, error) {
+		outcome, err := runReadOnlyStep(opts, step, func() (stepOutcome, error) {
 			if err := writeStepHeader(opts.Stderr, step); err != nil {
 				return stepOutcome{}, err
 			}
 			return runStep(opts, step)
 		})
 		if err != nil {
+			finalErr = err
 			return PipelineOutcome{}, err
 		}
 		if outcome.stop {
-			return PipelineOutcome{Status: outcome.status}, nil
+			finalOutcome = PipelineOutcome{Status: outcome.status}
+			return finalOutcome, nil
 		}
 	}
-	return PipelineOutcome{Status: taskstate.ReviewStatusPassed}, nil
+	finalOutcome = PipelineOutcome{Status: taskstate.ReviewStatusPassed}
+	return finalOutcome, nil
+}
+
+func reviewPipelineDiagnosticStatus(ctx context.Context, outcome PipelineOutcome, err error) string {
+	if err == nil {
+		return logging.StatusSuccess
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return "canceled"
+	}
+	if outcome.Status != "" {
+		return string(outcome.Status)
+	}
+	return logging.StatusFailure
 }
 
 func pipelineStartIndex(pipeline Pipeline, stepName string) (int, error) {
@@ -190,24 +230,73 @@ func pipelineStartIndex(pipeline Pipeline, stepName string) (int, error) {
 }
 
 func runReadOnlyStep(
-	ctx context.Context,
-	workdir string,
+	opts PipelineRunOptions,
+	step Step,
 	run func() (stepOutcome, error),
 ) (stepOutcome, error) {
-	snapshot, err := captureCandidateSnapshot(ctx, workdir)
+	span := logging.Start(opts.Context, opts.Logger, "review step",
+		slog.String("component", "review"),
+		slog.String("operation", "step"),
+		slog.String("repo_id", opts.RepoID),
+		slog.String("task_id", opts.TaskID),
+		slog.Int("attempt", opts.Attempt.Attempt),
+		slog.String("pipeline", opts.Pipeline.Name),
+		slog.String("step", step.Name),
+		slog.String("kind", step.Kind),
+		slog.String("cwd", opts.Workdir),
+	)
+	var outcome stepOutcome
+	var finalErr error
+	defer func() {
+		attrs := []slog.Attr{}
+		if outcome.status != "" {
+			attrs = append(attrs, slog.String("review_status", string(outcome.status)))
+		}
+		span.Finish(opts.Context, reviewStepDiagnosticStatus(opts.Context, outcome, finalErr), attrs...)
+	}()
+
+	snapshot, err := captureCandidateSnapshot(opts.Context, opts.Workdir, opts.Logger, reviewStepAttrs(opts, step)...)
 	if err != nil {
-		return stepOutcome{}, fmt.Errorf("snapshot candidate changes: %w", err)
+		finalErr = fmt.Errorf("snapshot candidate changes: %w", err)
+		return stepOutcome{}, finalErr
 	}
 
 	outcome, stepErr := run()
-	mutationErr := restoreCandidateIfMutated(ctx, snapshot)
+	mutationErr := restoreCandidateIfMutated(opts.Context, snapshot, opts.Logger, reviewStepAttrs(opts, step)...)
 	if mutationErr != nil {
+		finalErr = mutationErr
 		return stepOutcome{}, mutationErr
 	}
 	if stepErr != nil {
+		finalErr = stepErr
 		return stepOutcome{}, stepErr
 	}
 	return outcome, nil
+}
+
+func reviewStepDiagnosticStatus(ctx context.Context, outcome stepOutcome, err error) string {
+	if err == nil {
+		return logging.StatusSuccess
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return "canceled"
+	}
+	if outcome.status != "" {
+		return string(outcome.status)
+	}
+	return logging.StatusFailure
+}
+
+func reviewStepAttrs(opts PipelineRunOptions, step Step) []slog.Attr {
+	return []slog.Attr{
+		slog.String("repo_id", opts.RepoID),
+		slog.String("task_id", opts.TaskID),
+		slog.Int("attempt", opts.Attempt.Attempt),
+		slog.String("pipeline", opts.Pipeline.Name),
+		slog.String("step", step.Name),
+		slog.String("kind", step.Kind),
+		slog.String("cwd", opts.Workdir),
+	}
 }
 
 func runStep(opts PipelineRunOptions, step Step) (stepOutcome, error) {
@@ -411,6 +500,9 @@ func runManualStepCommand(opts PipelineRunOptions, step Step, env []string) (*in
 }
 
 func runHunkBackedManualCommand(opts PipelineRunOptions, step Step, env []string) (*int, []HunkNote, error) {
+	span := logging.Start(opts.Context, opts.Logger, "review command",
+		reviewCommandAttrs(opts, step)...,
+	)
 	process := exec.CommandContext(opts.Context, step.Command, step.Args...)
 	process.Dir = opts.Workdir
 	process.Env = append(os.Environ(), env...)
@@ -418,11 +510,12 @@ func runHunkBackedManualCommand(opts PipelineRunOptions, step Step, env []string
 	process.Stderr = opts.Stderr
 
 	if err := process.Start(); err != nil {
+		span.Finish(opts.Context, reviewCommandStatus(opts.Context, process, err), reviewCommandExitAttrs(process, err)...)
 		return nil, nil, err
 	}
 
 	var latest []HunkNote
-	if notes, err := captureHunkUserNotes(opts.Context, opts.Workdir); err == nil {
+	if notes, err := captureHunkUserNotes(opts.Context, opts.Workdir, opts.Logger, reviewStepAttrs(opts, step)...); err == nil {
 		latest = notes
 	}
 
@@ -436,36 +529,52 @@ func runHunkBackedManualCommand(opts PipelineRunOptions, step Step, env []string
 	for {
 		select {
 		case err := <-done:
-			latest = captureFinalHunkUserNotes(opts.Context, opts.Workdir, latest)
+			latest = captureFinalHunkUserNotes(opts.Context, opts.Workdir, opts.Logger, latest, reviewStepAttrs(opts, step)...)
 			exitCode := process.ProcessState.ExitCode()
+			span.Finish(opts.Context, reviewCommandStatus(opts.Context, process, err), reviewCommandExitAttrs(process, err)...)
 			return &exitCode, latest, err
 		case <-ticker.C:
-			notes, err := captureHunkUserNotes(opts.Context, opts.Workdir)
+			notes, err := captureHunkUserNotes(opts.Context, opts.Workdir, opts.Logger, reviewStepAttrs(opts, step)...)
 			if err == nil {
 				latest = notes
 			}
 		case <-opts.Context.Done():
 			err := <-done
-			latest = captureFinalHunkUserNotes(opts.Context, opts.Workdir, latest)
+			latest = captureFinalHunkUserNotes(opts.Context, opts.Workdir, opts.Logger, latest, reviewStepAttrs(opts, step)...)
 			exitCode := process.ProcessState.ExitCode()
+			span.Finish(opts.Context, "canceled", reviewCommandExitAttrs(process, err)...)
 			return &exitCode, latest, err
 		}
 	}
 }
 
-func captureFinalHunkUserNotes(ctx context.Context, workdir string, fallback []HunkNote) []HunkNote {
-	notes, err := captureHunkUserNotes(ctx, workdir)
+func captureFinalHunkUserNotes(
+	ctx context.Context,
+	workdir string,
+	logger *slog.Logger,
+	fallback []HunkNote,
+	attrs ...slog.Attr,
+) []HunkNote {
+	notes, err := captureHunkUserNotes(ctx, workdir, logger, attrs...)
 	if err != nil {
 		return fallback
 	}
 	return notes
 }
 
-func captureHunkUserNotes(ctx context.Context, workdir string) ([]HunkNote, error) {
+func captureHunkUserNotes(ctx context.Context, workdir string, logger *slog.Logger, attrs ...slog.Attr) ([]HunkNote, error) {
+	spanAttrs := []slog.Attr{
+		slog.String("component", "review"),
+		slog.String("operation", "hunk_notes_poll"),
+		slog.String("cwd", workdir),
+	}
+	spanAttrs = append(spanAttrs, attrs...)
+	span := logging.Start(ctx, logger, "hunk notes poll", spanAttrs...)
 	command := exec.CommandContext(ctx, "hunk", "session", "comment", "list", "--repo", workdir, "--type", "user", "--json")
 	command.Dir = workdir
 	output, err := command.Output()
 	if err != nil {
+		span.Finish(ctx, reviewCommandStatus(ctx, command, err), reviewCommandExitAttrs(command, err)...)
 		return nil, err
 	}
 
@@ -473,8 +582,13 @@ func captureHunkUserNotes(ctx context.Context, workdir string) ([]HunkNote, erro
 		Comments []HunkNote `json:"comments"`
 	}
 	if err := json.Unmarshal(output, &response); err != nil {
+		span.FinishError(ctx, err)
 		return nil, fmt.Errorf("decode Hunk user notes: %w", err)
 	}
+	span.Finish(ctx, logging.StatusSuccess,
+		slog.Int("note_count", len(response.Comments)),
+		slog.Int("exit_code", command.ProcessState.ExitCode()),
+	)
 	return response.Comments, nil
 }
 
@@ -517,7 +631,7 @@ func runAgentReviewStep(opts PipelineRunOptions, step Step) (stepOutcome, error)
 	}
 
 	output := newStepOutput(opts, !profile.Interactive)
-	runErr := launchAgentReview(opts, profile, command, env, output)
+	runErr := launchAgentReview(opts, step, profile, command, env, output)
 	finishedAt := time.Now().UTC()
 	status := taskstate.RunStatusSucceeded
 	if runErr != nil {
@@ -546,22 +660,56 @@ func runAgentReviewStep(opts PipelineRunOptions, step Step) (stepOutcome, error)
 
 func launchAgentReview(
 	opts PipelineRunOptions,
+	step Step,
 	profile agent.Profile,
 	command agent.CommandSnapshot,
 	env []string,
 	output stepOutput,
 ) error {
+	attrs := append(reviewCommandAttrs(opts, step),
+		slog.String("agent", command.AgentName),
+		slog.String("harness", command.Harness),
+	)
+	span := logging.Start(opts.Context, opts.Logger, "review command", attrs...)
 	reviewerStdin := opts.Stdin
 	if !profile.Interactive {
 		reviewerStdin = nil
 	}
-	return opts.AgentLauncher.Run(opts.Context, command.ExecCommand(), agentexec.LaunchOptions{
+	err := opts.AgentLauncher.Run(opts.Context, command.ExecCommand(), agentexec.LaunchOptions{
 		Dir:    opts.Workdir,
 		Env:    env,
 		Stdin:  reviewerStdin,
 		Stdout: output.stdout(),
 		Stderr: output.stderr(),
 	})
+	span.Finish(opts.Context, agentReviewCommandStatus(opts.Context, err), agentReviewCommandExitAttrs(err)...)
+	return err
+}
+
+func agentReviewCommandStatus(ctx context.Context, err error) string {
+	if err == nil {
+		return logging.StatusSuccess
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return "canceled"
+	}
+	if agentexec.IsStartError(err) {
+		return "start_failure"
+	}
+	if _, ok := logging.ExitCode(err); ok {
+		return "nonzero_exit"
+	}
+	return logging.StatusFailure
+}
+
+func agentReviewCommandExitAttrs(err error) []slog.Attr {
+	if err == nil {
+		return []slog.Attr{slog.Int("exit_code", 0)}
+	}
+	if exitCode, ok := logging.ExitCode(err); ok {
+		return []slog.Attr{slog.Int("exit_code", exitCode)}
+	}
+	return nil
 }
 
 func recordAgentReviewStep(opts PipelineRunOptions, step Step, command agent.CommandSnapshot) (taskstate.AgentExecution, error) {
@@ -869,6 +1017,9 @@ func runStepCommandWithOutput(
 	stdout io.Writer,
 	stderr io.Writer,
 ) (*int, error) {
+	span := logging.Start(opts.Context, opts.Logger, "review command",
+		reviewCommandAttrs(opts, step)...,
+	)
 	process := exec.CommandContext(opts.Context, step.Command, step.Args...)
 	process.Dir = opts.Workdir
 	process.Env = append(os.Environ(), env...)
@@ -876,11 +1027,54 @@ func runStepCommandWithOutput(
 	process.Stderr = stderr
 
 	err := process.Run()
+	finishAttrs := reviewCommandExitAttrs(process, err)
+	span.Finish(opts.Context, reviewCommandStatus(opts.Context, process, err), finishAttrs...)
 	if process.ProcessState == nil {
 		return nil, err
 	}
 	exitCode := process.ProcessState.ExitCode()
 	return &exitCode, err
+}
+
+func reviewCommandAttrs(opts PipelineRunOptions, step Step) []slog.Attr {
+	attrs := []slog.Attr{
+		slog.String("component", "review"),
+		slog.String("operation", reviewCommandOperation(step)),
+	}
+	return append(attrs, reviewStepAttrs(opts, step)...)
+}
+
+func reviewCommandOperation(step Step) string {
+	if step.Kind == KindManual && step.HunkNotes {
+		return "hunk_manual_command"
+	}
+	return step.Kind + "_command"
+}
+
+func reviewCommandStatus(ctx context.Context, process *exec.Cmd, err error) string {
+	if err == nil {
+		return logging.StatusSuccess
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return "canceled"
+	}
+	if process == nil || process.ProcessState == nil {
+		return "start_failure"
+	}
+	if _, ok := logging.ExitCode(err); ok {
+		return "nonzero_exit"
+	}
+	return logging.StatusFailure
+}
+
+func reviewCommandExitAttrs(process *exec.Cmd, err error) []slog.Attr {
+	if process != nil && process.ProcessState != nil {
+		return []slog.Attr{slog.Int("exit_code", process.ProcessState.ExitCode())}
+	}
+	if exitCode, ok := logging.ExitCode(err); ok {
+		return []slog.Attr{slog.Int("exit_code", exitCode)}
+	}
+	return nil
 }
 
 func recordStep(opts PipelineRunOptions, step Step, execution *taskstate.AgentExecution, exitCode *int) error {

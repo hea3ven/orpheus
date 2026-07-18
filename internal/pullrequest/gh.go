@@ -6,20 +6,25 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os/exec"
 	"strings"
+
+	"github.com/hea3ven/orpheus/internal/logging"
 )
 
 // GHProvider implements Provider with the GitHub CLI.
-type GHProvider struct{}
+type GHProvider struct {
+	Logger *slog.Logger
+}
 
 // FindOpenByBranch returns the first open PR matching head/base, when any exists.
-func (GHProvider) FindOpenByBranch(ctx context.Context, req FindOpenByBranchRequest) (PullRequest, bool, error) {
+func (p GHProvider) FindOpenByBranch(ctx context.Context, req FindOpenByBranchRequest) (PullRequest, bool, error) {
 	if err := validateFindRequest(req); err != nil {
 		return PullRequest{}, false, err
 	}
-	output, err := runGH(ctx, req.RepositoryPath, "", "pr", "list",
+	output, err := runGH(ctx, p.Logger, req.RepositoryPath, "find_open_pr", "", diagnosticAttrs(req.Diagnostics), "pr", "list",
 		"--state", "open",
 		"--head", req.HeadBranch,
 		"--base", req.BaseBranch,
@@ -47,12 +52,12 @@ func (GHProvider) FindOpenByBranch(ctx context.Context, req FindOpenByBranchRequ
 }
 
 // StatusByURL returns the current lifecycle state for a pull request URL.
-func (GHProvider) StatusByURL(ctx context.Context, req StatusByURLRequest) (PullRequestStatus, error) {
+func (p GHProvider) StatusByURL(ctx context.Context, req StatusByURLRequest) (PullRequestStatus, error) {
 	if err := validateStatusByURLRequest(req); err != nil {
 		return PullRequestStatus{}, err
 	}
 	prURL := strings.TrimSpace(req.URL)
-	output, err := runGH(ctx, "", "", "pr", "view", prURL, "--json", "url,state,mergedAt")
+	output, err := runGH(ctx, p.Logger, "", "poll_pr", "", diagnosticAttrs(req.Diagnostics), "pr", "view", prURL, "--json", "url,state,mergedAt")
 	if err != nil {
 		return PullRequestStatus{}, fmt.Errorf("poll GitHub PR %s: %w", prURL, err)
 	}
@@ -64,11 +69,11 @@ func (GHProvider) StatusByURL(ctx context.Context, req StatusByURLRequest) (Pull
 }
 
 // Create creates a GitHub pull request and returns its URL.
-func (GHProvider) Create(ctx context.Context, req CreateRequest) (PullRequest, error) {
+func (p GHProvider) Create(ctx context.Context, req CreateRequest) (PullRequest, error) {
 	if err := validateCreateRequest(req); err != nil {
 		return PullRequest{}, err
 	}
-	output, err := runGH(ctx, req.RepositoryPath, req.Body, "pr", "create",
+	output, err := runGH(ctx, p.Logger, req.RepositoryPath, "create_pr", req.Body, diagnosticAttrs(req.Diagnostics), "pr", "create",
 		"--base", req.BaseBranch,
 		"--head", req.HeadBranch,
 		"--title", req.Title,
@@ -162,10 +167,25 @@ func decodeGHPRStatus(output string) (PullRequestStatus, error) {
 	}
 }
 
-func runGH(ctx context.Context, dir string, stdin string, args ...string) (string, error) {
+func runGH(
+	ctx context.Context,
+	logger *slog.Logger,
+	dir string,
+	operation string,
+	stdin string,
+	attrs []slog.Attr,
+	args ...string,
+) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	startAttrs := []slog.Attr{
+		slog.String("component", "github"),
+		slog.String("operation", operation),
+		slog.String("cwd", dir),
+	}
+	startAttrs = append(startAttrs, attrs...)
+	span := logging.Start(ctx, logger, "github cli command", startAttrs...)
 	command := exec.CommandContext(ctx, "gh", args...)
 	command.Dir = dir
 	if stdin != "" {
@@ -178,6 +198,8 @@ func runGH(ctx context.Context, dir string, stdin string, args ...string) (strin
 	command.Stderr = &stderr
 
 	err := command.Run()
+	finishAttrs := ghExitAttrs(command, err)
+	span.FinishError(ctx, err, finishAttrs...)
 	if err == nil {
 		return stdout.String(), nil
 	}
@@ -192,6 +214,33 @@ func runGH(ctx context.Context, dir string, stdin string, args ...string) (strin
 		message = err.Error()
 	}
 	return "", classifyGHError(message, err)
+}
+
+func diagnosticAttrs(diagnostics DiagnosticContext) []slog.Attr {
+	attrs := make([]slog.Attr, 0, 4)
+	if repoID := strings.TrimSpace(diagnostics.RepoID); repoID != "" {
+		attrs = append(attrs, slog.String("repo_id", repoID))
+	}
+	if taskID := strings.TrimSpace(diagnostics.TaskID); taskID != "" {
+		attrs = append(attrs, slog.String("task_id", taskID))
+	}
+	if branch := strings.TrimSpace(diagnostics.Branch); branch != "" {
+		attrs = append(attrs, slog.String("branch", branch))
+	}
+	if diagnostics.HasPR {
+		attrs = append(attrs, slog.Bool("has_pr", true))
+	}
+	return attrs
+}
+
+func ghExitAttrs(command *exec.Cmd, err error) []slog.Attr {
+	if command != nil && command.ProcessState != nil {
+		return []slog.Attr{slog.Int("exit_code", command.ProcessState.ExitCode())}
+	}
+	if exitCode, ok := logging.ExitCode(err); ok {
+		return []slog.Attr{slog.Int("exit_code", exitCode)}
+	}
+	return nil
 }
 
 func classifyGHError(message string, err error) error {
