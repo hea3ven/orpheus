@@ -18,7 +18,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const schemaVersion = 3
+const schemaVersion = 4
 
 // RunStatus is the M3 status for an attached run attempt.
 type RunStatus string
@@ -253,12 +253,13 @@ type ReviewFollowUp struct {
 
 // Completion records agent-authored completion facts for a run attempt.
 type Completion struct {
-	Summary             string    `yaml:"summary"`
-	Description         string    `yaml:"description"`
-	DetailedDescription string    `yaml:"detailed_description"`
-	CompletedAt         time.Time `yaml:"completed_at"`
-	Commit              string    `yaml:"commit,omitempty"`
-	CommitError         string    `yaml:"commit_error,omitempty"`
+	Summary              string    `yaml:"summary"`
+	Description          string    `yaml:"description"`
+	DetailedDescription  string    `yaml:"detailed_description"`
+	TechnicalExplanation string    `yaml:"technical_explanation"`
+	CompletedAt          time.Time `yaml:"completed_at"`
+	Commit               string    `yaml:"commit,omitempty"`
+	CommitError          string    `yaml:"commit_error,omitempty"`
 }
 
 // ReviewAttempt records one local review pipeline attempt.
@@ -373,10 +374,11 @@ type Event struct {
 	Commit        string   `yaml:"commit,omitempty"`
 	Error         string   `yaml:"error,omitempty"`
 
-	Message                      string `yaml:"message,omitempty"`
-	RequestedSummary             string `yaml:"requested_summary,omitempty"`
-	RequestedDescription         string `yaml:"requested_description,omitempty"`
-	RequestedDetailedDescription string `yaml:"requested_detailed_description,omitempty"`
+	Message                       string `yaml:"message,omitempty"`
+	RequestedSummary              string `yaml:"requested_summary,omitempty"`
+	RequestedDescription          string `yaml:"requested_description,omitempty"`
+	RequestedDetailedDescription  string `yaml:"requested_detailed_description,omitempty"`
+	RequestedTechnicalExplanation string `yaml:"requested_technical_explanation,omitempty"`
 
 	PRURL           string `yaml:"pr_url,omitempty"`
 	ObservedPRState string `yaml:"observed_pr_state,omitempty"`
@@ -452,11 +454,12 @@ type StartRunOptions struct {
 
 // CompleteRunOptions describes the agent-authored completion payload.
 type CompleteRunOptions struct {
-	Summary             string
-	Description         string
-	DetailedDescription string
-	Commit              string
-	CommitError         string
+	Summary              string
+	Description          string
+	DetailedDescription  string
+	TechnicalExplanation string
+	Commit               string
+	CommitError          string
 }
 
 // RecordRunUsageOptions describes usage and correlation facts to attach to a run.
@@ -493,18 +496,20 @@ type SyncConflictResolutionEventOptions struct {
 }
 
 type completeRunPayload struct {
-	summary             string
-	description         string
-	detailedDescription string
-	commit              string
-	commitError         string
+	summary              string
+	description          string
+	detailedDescription  string
+	technicalExplanation string
+	commit               string
+	commitError          string
 }
 
 // RepeatedCompletionOptions describes an ignored repeated agent completion payload.
 type RepeatedCompletionOptions struct {
-	Summary             string
-	Description         string
-	DetailedDescription string
+	Summary              string
+	Description          string
+	DetailedDescription  string
+	TechnicalExplanation string
 }
 
 // StartReviewOptions describes the selected review pipeline.
@@ -654,6 +659,7 @@ func (s Store) Load(repoID, taskID string) (TaskState, error) {
 		return TaskState{}, err
 	}
 
+	loaded = migrateLoadedState(loaded)
 	if err := validateLoadedState(loaded, repoID, taskID); err != nil {
 		err = fmt.Errorf("load task state %s/%s: %w", repoID, taskID, err)
 		span.FinishError(context.Background(), err)
@@ -891,12 +897,13 @@ func (s Store) CompleteRun(repoID, taskID string, attempt int, opts CompleteRunO
 	now := s.nowUTC()
 	completedAt := now
 	state.Runs[index].Completion = &Completion{
-		Summary:             payload.summary,
-		Description:         payload.description,
-		DetailedDescription: payload.detailedDescription,
-		CompletedAt:         completedAt,
-		Commit:              payload.commit,
-		CommitError:         payload.commitError,
+		Summary:              payload.summary,
+		Description:          payload.description,
+		DetailedDescription:  payload.detailedDescription,
+		TechnicalExplanation: payload.technicalExplanation,
+		CompletedAt:          completedAt,
+		Commit:               payload.commit,
+		CommitError:          payload.commitError,
 	}
 	state.Events = append(state.Events, runEvent(run, EventCompletionRecorded, now, run.Status, ""))
 
@@ -920,12 +927,16 @@ func completeRunPayloadFromOptions(repoID, taskID string, opts CompleteRunOption
 	if strings.TrimSpace(opts.DetailedDescription) == "" {
 		return completeRunPayload{}, fmt.Errorf("complete run attempt for task %s/%s: detailed_description is required", repoID, taskID)
 	}
+	if strings.TrimSpace(opts.TechnicalExplanation) == "" {
+		return completeRunPayload{}, fmt.Errorf("complete run attempt for task %s/%s: technical_explanation is required", repoID, taskID)
+	}
 	return completeRunPayload{
-		summary:             summary,
-		description:         description,
-		detailedDescription: opts.DetailedDescription,
-		commit:              strings.TrimSpace(opts.Commit),
-		commitError:         strings.TrimSpace(opts.CommitError),
+		summary:              summary,
+		description:          description,
+		detailedDescription:  opts.DetailedDescription,
+		technicalExplanation: opts.TechnicalExplanation,
+		commit:               strings.TrimSpace(opts.Commit),
+		commitError:          strings.TrimSpace(opts.CommitError),
 	}, nil
 }
 
@@ -955,7 +966,8 @@ func (s Store) completeExistingRun(
 func mergeCompletionPayload(completion Completion, payload completeRunPayload) (Completion, bool, error) {
 	if completion.Summary != payload.summary ||
 		completion.Description != payload.description ||
-		completion.DetailedDescription != payload.detailedDescription {
+		completion.DetailedDescription != payload.detailedDescription ||
+		completion.TechnicalExplanation != payload.technicalExplanation {
 		return Completion{}, false, ErrCompletionConflict
 	}
 
@@ -1010,6 +1022,7 @@ func (s Store) RecordRepeatedCompletion(
 	event.RequestedSummary = strings.TrimSpace(opts.Summary)
 	event.RequestedDescription = strings.TrimSpace(opts.Description)
 	event.RequestedDetailedDescription = opts.DetailedDescription
+	event.RequestedTechnicalExplanation = opts.TechnicalExplanation
 	state.Events = append(state.Events, event)
 
 	if err := s.save(state); err != nil {
@@ -2320,6 +2333,42 @@ func LatestRun(state TaskState) (RunAttempt, bool) {
 	return latest, true
 }
 
+// CompletionRunHistory identifies the original implementation completion and
+// latest run completion for review-facing contexts.
+type CompletionRunHistory struct {
+	Original RunAttempt
+	Latest   RunAttempt
+}
+
+// CompletionRunsForReview returns the original implementation completion and
+// the latest run completion, allowing review contexts to distinguish follow-up
+// rationale from the original implementation rationale. The latest run attempt
+// must have completed so reviewers never receive stale completion rationale for
+// a newer incomplete attempt.
+func CompletionRunsForReview(state TaskState) (CompletionRunHistory, error) {
+	latest, ok := LatestRun(state)
+	if !ok {
+		return CompletionRunHistory{}, errors.New("latest run completion is required")
+	}
+	if latest.Completion == nil {
+		return CompletionRunHistory{}, fmt.Errorf("latest run attempt %d completion is required", latest.Attempt)
+	}
+
+	var original RunAttempt
+	for _, run := range state.Runs {
+		if run.Completion == nil || run.ReviewFollowUp != nil {
+			continue
+		}
+		if original.Attempt == 0 || run.Attempt < original.Attempt {
+			original = run
+		}
+	}
+	if original.Attempt == 0 {
+		return CompletionRunHistory{}, errors.New("original implementation completion is required")
+	}
+	return CompletionRunHistory{Original: original, Latest: latest}, nil
+}
+
 // LatestReview returns the highest-numbered review attempt from state.
 func LatestReview(state TaskState) (ReviewAttempt, bool) {
 	if len(state.Reviews) == 0 {
@@ -2651,6 +2700,38 @@ func unsupportedTaskStateVersionError(version int) error {
 	return fmt.Errorf("unsupported task state version %d", version)
 }
 
+func migrateLoadedState(taskState TaskState) TaskState {
+	switch taskState.Version {
+	case 3:
+		return migrateTaskStateV3(taskState)
+	case 0:
+		if taskStateContentIsEmpty(taskState) {
+			taskState.Version = schemaVersion
+		}
+	}
+	return taskState
+}
+
+func migrateTaskStateV3(taskState TaskState) TaskState {
+	taskState.Version = schemaVersion
+	for i := range taskState.Runs {
+		completion := taskState.Runs[i].Completion
+		if completion == nil || strings.TrimSpace(completion.TechnicalExplanation) != "" {
+			continue
+		}
+		completion.TechnicalExplanation = legacyTechnicalExplanation(*completion)
+	}
+	return taskState
+}
+
+func legacyTechnicalExplanation(completion Completion) string {
+	return strings.TrimSpace(strings.Join([]string{
+		"This completion was recorded before Orpheus required a dedicated technical explanation.",
+		"Legacy detailed description:",
+		strings.TrimSpace(completion.DetailedDescription),
+	}, "\n\n"))
+}
+
 func taskStateContentIsEmpty(taskState TaskState) bool {
 	return taskState.Target.IsZero() &&
 		len(taskState.Runs) == 0 &&
@@ -2733,6 +2814,7 @@ func normalizeEvent(event Event) Event {
 	event.RequestedSummary = strings.TrimSpace(event.RequestedSummary)
 	event.RequestedDescription = strings.TrimSpace(event.RequestedDescription)
 	event.RequestedDetailedDescription = strings.TrimSpace(event.RequestedDetailedDescription)
+	event.RequestedTechnicalExplanation = strings.TrimSpace(event.RequestedTechnicalExplanation)
 	event.PRURL = strings.TrimSpace(event.PRURL)
 	event.ObservedPRState = strings.TrimSpace(event.ObservedPRState)
 	event.PushTarget = strings.TrimSpace(event.PushTarget)
@@ -2998,6 +3080,9 @@ func validateCompletion(completion Completion) error {
 	}
 	if strings.TrimSpace(completion.DetailedDescription) == "" {
 		return errors.New("detailed_description is required")
+	}
+	if strings.TrimSpace(completion.TechnicalExplanation) == "" {
+		return errors.New("technical_explanation is required")
 	}
 	if completion.CompletedAt.IsZero() {
 		return errors.New("completed_at is required")

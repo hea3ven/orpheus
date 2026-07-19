@@ -329,10 +329,11 @@ func TestSyncServiceSkipsPRCreationForEligibleWorktreeCompletion(t *testing.T) {
 			time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC),
 		),
 		Completion: &taskstate.Completion{
-			Summary:             "Done",
-			Description:         "Implemented.",
-			DetailedDescription: "Detailed PR body.",
-			Commit:              "abc123",
+			Summary:              "Done",
+			Description:          "Implemented.",
+			DetailedDescription:  "Detailed PR body.",
+			TechnicalExplanation: "Technical explanation.",
+			Commit:               "abc123",
 		},
 	}), paths, source)
 
@@ -366,10 +367,11 @@ func TestSyncServiceDoesNotRecoverBranchPRWithoutRecordedPRURL(t *testing.T) {
 		Attempt: 1,
 		Status:  taskstate.RunStatusSucceeded,
 		Completion: &taskstate.Completion{
-			Summary:             "Done",
-			Description:         "Implemented.",
-			DetailedDescription: "Detailed PR body.",
-			Commit:              "abc123",
+			Summary:              "Done",
+			Description:          "Implemented.",
+			DetailedDescription:  "Detailed PR body.",
+			TechnicalExplanation: "Technical explanation.",
+			Commit:               "abc123",
 		},
 	}), paths, source)
 	provider.found = pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/7"}
@@ -1139,9 +1141,10 @@ func syncCompletionRun(_ string, _ string) taskstate.RunAttempt {
 			time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC),
 		),
 		Completion: &taskstate.Completion{
-			Summary:             "Done",
-			Description:         "Done.",
-			DetailedDescription: "Detailed PR body.",
+			Summary:              "Done",
+			Description:          "Done.",
+			DetailedDescription:  "Detailed PR body.",
+			TechnicalExplanation: "Technical explanation.",
 		},
 	}
 }
@@ -1195,10 +1198,11 @@ func TestSyncServiceSkipsTasksWithoutPRURLDespiteMalformedMetadata(t *testing.T)
 			time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC),
 		),
 		Completion: &taskstate.Completion{
-			Summary:             "Done",
-			Description:         "Implemented.",
-			DetailedDescription: "Detailed PR body.",
-			Commit:              "abc123",
+			Summary:              "Done",
+			Description:          "Implemented.",
+			DetailedDescription:  "Detailed PR body.",
+			TechnicalExplanation: "Technical explanation.",
+			Commit:               "abc123",
 		},
 	})
 
@@ -1241,10 +1245,11 @@ func TestSyncServiceDoesNotCallPRProviderForPublicationCandidates(t *testing.T) 
 		Attempt: 1,
 		Status:  taskstate.RunStatusSucceeded,
 		Completion: &taskstate.Completion{
-			Summary:             "Done",
-			Description:         "Implemented.",
-			DetailedDescription: "Detailed PR body.",
-			Commit:              "abc123",
+			Summary:              "Done",
+			Description:          "Implemented.",
+			DetailedDescription:  "Detailed PR body.",
+			TechnicalExplanation: "Technical explanation.",
+			Commit:               "abc123",
 		},
 	})
 	taskItem := task.Task{
@@ -1801,9 +1806,10 @@ func TestBuildSyncPullRequestContent(t *testing.T) {
 		AcceptanceCriteria: "No duplicate PRs are created.",
 	}, taskstate.RunAttempt{
 		Completion: &taskstate.Completion{
-			Summary:             "Ready for review",
-			Description:         "Pushed the branch and wired the provider.",
-			DetailedDescription: "Detailed PR body.",
+			Summary:              "Ready for review",
+			Description:          "Pushed the branch and wired the provider.",
+			DetailedDescription:  "Detailed PR body.",
+			TechnicalExplanation: "Technical explanation.",
 		},
 	})
 	if err != nil {
@@ -1836,8 +1842,9 @@ func TestBuildPublicationPullRequestContentUsesTitleTemplate(t *testing.T) {
 		ExternalRef: "\n TREX-1234\t",
 	}, taskstate.RunAttempt{
 		Completion: &taskstate.Completion{
-			Summary:             "Ready for review",
-			DetailedDescription: "Detailed PR body.",
+			Summary:              "Ready for review",
+			DetailedDescription:  "Detailed PR body.",
+			TechnicalExplanation: "Technical explanation.",
 		},
 	})
 	if err != nil {
@@ -1861,16 +1868,18 @@ func TestBuildPublicationPullRequestContentFromStateFormatsReviewProcess(t *test
 			{
 				Attempt: 1,
 				Completion: &taskstate.Completion{
-					Summary:             "Original summary",
-					DetailedDescription: "Original PR body.",
+					Summary:              "Original summary",
+					DetailedDescription:  "Original PR body.",
+					TechnicalExplanation: "Technical explanation.",
 				},
 			},
 			{
 				Attempt: 2,
 				Completion: &taskstate.Completion{
-					Summary:             "Fix review findings",
-					Description:         "Addressed review feedback.",
-					DetailedDescription: "Fix run detailed body must be omitted.",
+					Summary:              "Fix review findings",
+					Description:          "Addressed review feedback.",
+					DetailedDescription:  "Fix run detailed body must be omitted.",
+					TechnicalExplanation: "Technical explanation.",
 				},
 				ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1},
 			},
@@ -2012,8 +2021,9 @@ func TestBuildPublicationPullRequestContentRejectsMissingRequiredExternalReferen
 		ID: "op-1",
 	}, taskstate.RunAttempt{
 		Completion: &taskstate.Completion{
-			Summary:             "Ready for review",
-			DetailedDescription: "Detailed PR body.",
+			Summary:              "Ready for review",
+			DetailedDescription:  "Detailed PR body.",
+			TechnicalExplanation: "Technical explanation.",
 		},
 	})
 

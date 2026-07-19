@@ -149,6 +149,66 @@ func TestAgentContextRendersReviewContext(t *testing.T) {
 	must.NotEmpty(stdout)
 }
 
+func TestAgentContextRendersReviewFollowUpCompletionHistory(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	const taskID = "op-review-followup"
+	repoPath, review := setupActiveAgentReview(t, taskID)
+	paths := currentTestPaths(t)
+	store := taskstate.NewStore(paths)
+	writeAgentContextProfileConfig(t, "recorder", false)
+
+	_, err := store.FinishReview("alpha", taskID, review.Attempt, taskstate.ReviewStatusBlocked)
+	must.NoError(err)
+	followUp, err := store.StartRun("alpha", taskID, taskstate.StartRunOptions{
+		Agent:    "recorder",
+		Branch:   "main",
+		Worktree: repoPath,
+		ReviewFollowUp: &taskstate.ReviewFollowUp{
+			ReviewAttempt:  review.Attempt,
+			FindingIndexes: []int{0},
+		},
+	})
+	must.NoError(err)
+	_, err = store.CompleteRun("alpha", taskID, followUp.Attempt, taskstate.CompleteRunOptions{
+		Summary:              "Follow-up summary",
+		Description:          "Follow-up description.",
+		DetailedDescription:  "Follow-up detailed PR body.",
+		TechnicalExplanation: "Follow-up technical explanation.",
+	})
+	must.NoError(err)
+	_, err = store.FinishRun("alpha", taskID, followUp.Attempt, taskstate.RunStatusSucceeded)
+	must.NoError(err)
+	nextReview, err := store.StartReviewWithOptions("alpha", taskID, taskstate.StartReviewOptions{
+		Pipeline: "standard",
+		Step:     "ai-review",
+	})
+	must.NoError(err)
+	_, err = store.RecordReviewStep("alpha", taskID, nextReview.Attempt, taskstate.RecordReviewStepOptions{
+		Kind: "agent_review",
+		Name: "ai-review",
+	})
+	must.NoError(err)
+	t.Setenv("ORPHEUS_REVIEW_ATTEMPT", "2")
+
+	stdout, stderr := executeCommand(t, []string{"agent", "context"})
+
+	is.Empty(stderr)
+	for _, want := range []string{
+		"Original completion:",
+		"- Summary: Review summary",
+		"- Technical explanation: Technical explanation.",
+		"Latest fix completion:",
+		"- Summary: Follow-up summary",
+		"- Description: Follow-up description.",
+		"- Detailed description: Follow-up detailed PR body.",
+		"- Technical explanation: Follow-up technical explanation.",
+	} {
+		is.Contains(stdout, want)
+	}
+	is.NotContains(stdout, "Latest completion:")
+}
+
 //nolint:funlen // The three finding types and stale-write assertion share one active review setup.
 func TestAgentReviewAddRecordsFindingTypesAndRejectsStaleAttempt(t *testing.T) {
 	is := assert.New(t)
@@ -460,6 +520,8 @@ func TestAgentDoneRecordsMainCompletionForLocalReview(t *testing.T) {
 		"Created ORPHEUS_TEST.txt for local review.",
 		"--detailed-description",
 		"## PR body\n\nCreated ORPHEUS_TEST.txt for local review.",
+		"--technical-explanation",
+		"Updated the main-target completion path and left changes uncommitted for local review.",
 	})
 
 	is.Empty(stderr)
@@ -473,6 +535,7 @@ func TestAgentDoneRecordsMainCompletionForLocalReview(t *testing.T) {
 	is.Equal("Add local review file", latest.Completion.Summary)
 	is.Equal("Created ORPHEUS_TEST.txt for local review.", latest.Completion.Description)
 	is.Equal("## PR body\n\nCreated ORPHEUS_TEST.txt for local review.", latest.Completion.DetailedDescription)
+	is.Equal("Updated the main-target completion path and left changes uncommitted for local review.", latest.Completion.TechnicalExplanation)
 	is.Contains(runGit(t, repoPath, "status", "--porcelain=v1"), "ORPHEUS_TEST.txt")
 	is.NotContains(runGit(t, repoPath, "log", "--oneline", "--max-count=1"), "Add local review file")
 
@@ -521,6 +584,8 @@ func TestAgentDoneRejectsMissingDescription(t *testing.T) {
 		"Missing description",
 		"--detailed-description",
 		"Detailed PR body.",
+		"--technical-explanation",
+		"Technical explanation.",
 	})
 
 	must.Error(err)
@@ -540,6 +605,8 @@ func TestAgentDoneRejectsMissingDetailedDescription(t *testing.T) {
 		"Missing detailed description",
 		"--description",
 		"Commit body.",
+		"--technical-explanation",
+		"Technical explanation.",
 	})
 
 	must.Error(err)
@@ -566,6 +633,8 @@ func TestAgentDoneRejectsMultipleDetailedDescriptionSources(t *testing.T) {
 		"Inline PR body.",
 		"--detailed-description-file",
 		detailedPath,
+		"--technical-explanation",
+		"Technical explanation.",
 	})
 
 	must.Error(err)
@@ -589,12 +658,63 @@ func TestAgentDoneRejectsRemovedDetailsFlag(t *testing.T) {
 		"Old details.",
 		"--detailed-description",
 		"Detailed PR body.",
+		"--technical-explanation",
+		"Technical explanation.",
 	})
 
 	must.Error(err)
 	is.Empty(stdout)
 	is.Empty(stderr)
 	is.Contains(err.Error(), "unknown flag: --details")
+}
+
+func TestAgentDoneRejectsMissingTechnicalExplanation(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+
+	stdout, stderr, err := executeCommandWithError(t, []string{
+		"agent",
+		"done",
+		"--summary",
+		"Missing technical explanation",
+		"--description",
+		"Commit body.",
+		"--detailed-description",
+		"Detailed PR body.",
+	})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.Contains(err.Error(), "technical explanation is required")
+}
+
+func TestAgentDoneRejectsMultipleTechnicalExplanationSources(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := t.TempDir()
+	technicalPath := filepath.Join(root, "technical.md")
+	must.NoError(os.WriteFile(technicalPath, []byte("File technical explanation."), 0o644))
+
+	stdout, stderr, err := executeCommandWithError(t, []string{
+		"agent",
+		"done",
+		"--summary",
+		"Multiple technical sources",
+		"--description",
+		"Commit body.",
+		"--detailed-description",
+		"Detailed PR body.",
+		"--technical-explanation",
+		"Inline technical explanation.",
+		"--technical-explanation-file",
+		technicalPath,
+	})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.Contains(err.Error(), "use exactly one of --technical-explanation or --technical-explanation-file")
 }
 
 func TestAgentDoneRepeatedMainCompletionIsNoopWithGuidance(t *testing.T) {
@@ -614,6 +734,8 @@ func TestAgentDoneRepeatedMainCompletionIsNoopWithGuidance(t *testing.T) {
 		"Second details.",
 		"--detailed-description",
 		"Second detailed PR body.",
+		"--technical-explanation",
+		"Second technical explanation.",
 	})
 
 	is.Empty(stderr)
@@ -628,9 +750,10 @@ func completeAgentTestRun(t *testing.T, runStore taskstate.Store) taskstate.RunA
 	require.NoError(t, err)
 	require.True(t, ok)
 	completed, err := runStore.CompleteRun("alpha", "op-main", latest.Attempt, taskstate.CompleteRunOptions{
-		Summary:             "First summary",
-		Description:         "First details.",
-		DetailedDescription: "Detailed PR body.",
+		Summary:              "First summary",
+		Description:          "First details.",
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
 	})
 	require.NoError(t, err)
 	return completed
@@ -658,6 +781,7 @@ func assertRepeatedAgentCompletion(t *testing.T, runStore taskstate.Store, attem
 	is.Equal("First summary", latest.Completion.Summary)
 	is.Equal("First details.", latest.Completion.Description)
 	is.Equal("Detailed PR body.", latest.Completion.DetailedDescription)
+	is.Equal("Technical explanation.", latest.Completion.TechnicalExplanation)
 	events, err := runStore.Events("alpha", "op-main")
 	must.NoError(err)
 	must.NotEmpty(events)
@@ -667,6 +791,7 @@ func assertRepeatedAgentCompletion(t *testing.T, runStore taskstate.Store, attem
 	is.Equal("Second summary", last.RequestedSummary)
 	is.Equal("Second details.", last.RequestedDescription)
 	is.Equal("Second detailed PR body.", last.RequestedDetailedDescription)
+	is.Equal("Second technical explanation.", last.RequestedTechnicalExplanation)
 }
 
 func TestAgentDoneCommitsWorktreeCompletion(t *testing.T) {
@@ -684,6 +809,8 @@ func TestAgentDoneCommitsWorktreeCompletion(t *testing.T) {
 		"Created ORPHEUS_WORKTREE_TEST.txt for pull request review.",
 		"--detailed-description",
 		"## Pull request\n\nCreated ORPHEUS_WORKTREE_TEST.txt for pull request review.",
+		"--technical-explanation",
+		"Added the worktree validation fixture so review can inspect an uncommitted candidate change.",
 	})
 
 	is.Empty(stderr)
@@ -696,6 +823,7 @@ func TestAgentDoneCommitsWorktreeCompletion(t *testing.T) {
 	must.True(ok)
 	is.Equal(taskstate.RunStatusRunning, latest.Status)
 	must.NotNil(latest.Completion)
+	is.Equal("Added the worktree validation fixture so review can inspect an uncommitted candidate change.", latest.Completion.TechnicalExplanation)
 	is.Empty(latest.Completion.Commit)
 	is.Empty(latest.Completion.CommitError)
 }
@@ -738,42 +866,8 @@ func agentDoneWorktreeTaskJSON(worktreePath string) string {
 func TestAgentDoneRequiresMainWorkingTreeChangesBeforeWriting(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	root := newTestState(t)
-	paths := currentTestPaths(t)
-	store := registry.NewStore(paths)
-	repoPath := newTestRepoAt(t, root, filepath.Join("repos", "alpha"), testRepoConfig{withRemote: true})
-	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
-		ID:            "alpha",
-		Name:          "Alpha Repo",
-		Path:          repoPath,
-		DefaultBranch: "main",
-		BeadsMode:     registry.BeadsModeLocal,
-		BeadsPrefix:   "op",
-	}}}))
-	t.Chdir(repoPath)
-	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
-		repoPath: {stdout: `[
-			{
-				"id":"op-main",
-				"title":"Complete main run",
-				"status":"in_progress",
-				"priority":2,
-				"issue_type":"task",
-				"metadata":{"orpheus.branch":"main","orpheus.worktree":"` + repoPath + `"}
-			}
-		]`},
-	})
-	runStore := taskstate.NewStore(paths)
-	_, err := runStore.StartRun("alpha", "op-main", taskstate.StartRunOptions{
-		Agent:    "recorder",
-		Branch:   "main",
-		Worktree: repoPath,
-	})
-	must.NoError(err)
-	t.Setenv("ORPHEUS_REPO_ID", "alpha")
-	t.Setenv("ORPHEUS_TASK_ID", "op-main")
-	t.Setenv("ORPHEUS_WORKTREE", repoPath)
-	t.Setenv("ORPHEUS_BRANCH", "main")
+	setupAgentDoneMainRun(t, "op-main")
+	runStore := taskstate.NewStore(currentTestPaths(t))
 
 	stdout, stderr, err := executeCommandWithError(t, []string{
 		"agent",
@@ -784,6 +878,8 @@ func TestAgentDoneRequiresMainWorkingTreeChangesBeforeWriting(t *testing.T) {
 		"Should fail before writing.",
 		"--detailed-description",
 		"Should fail before writing a PR body.",
+		"--technical-explanation",
+		"Should fail before writing a technical explanation.",
 	})
 
 	must.Error(err)

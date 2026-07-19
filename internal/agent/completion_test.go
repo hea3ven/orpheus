@@ -71,9 +71,10 @@ func TestCompletionServiceCompletesMainRun(t *testing.T) {
 	}
 
 	completed, err := service.Complete(context.Background(), agent.CompleteOptions{
-		Summary:             "Implemented main completion",
-		Description:         "Recorded local review completion data.",
-		DetailedDescription: "Detailed PR body.",
+		Summary:              "Implemented main completion",
+		Description:          "Recorded local review completion data.",
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
 	})
 
 	must.NoError(err)
@@ -84,6 +85,7 @@ func TestCompletionServiceCompletesMainRun(t *testing.T) {
 	is.Equal("Implemented main completion", completed.Run.Completion.Summary)
 	is.Equal("Recorded local review completion data.", completed.Run.Completion.Description)
 	is.Equal("Detailed PR body.", completed.Run.Completion.DetailedDescription)
+	is.Equal("Technical explanation.", completed.Run.Completion.TechnicalExplanation)
 
 	latest, ok, err := fixture.store.LatestRun("alpha", "op-main")
 	must.NoError(err)
@@ -112,9 +114,10 @@ func TestCompletionServiceCompletesWorktreeRunWithoutCommit(t *testing.T) {
 	}
 
 	completed, err := service.Complete(context.Background(), agent.CompleteOptions{
-		Summary:             "Done",
-		Description:         "Details",
-		DetailedDescription: "Detailed PR body.",
+		Summary:              "Done",
+		Description:          "Details",
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
 	})
 
 	must.NoError(err)
@@ -152,9 +155,10 @@ func TestCompletionServiceWorktreeCompletionDoesNotStageOrCommit(t *testing.T) {
 	}
 
 	completed, err := service.Complete(context.Background(), agent.CompleteOptions{
-		Summary:             "Done",
-		Description:         "Details",
-		DetailedDescription: "Detailed PR body.",
+		Summary:              "Done",
+		Description:          "Details",
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
 	})
 
 	must.NoError(err)
@@ -178,9 +182,10 @@ func TestCompletionServiceIdempotentWorktreeCompletionDoesNotCommitAgain(t *test
 	})
 	must.NoError(err)
 	_, err = fixture.store.CompleteRun("alpha", "op-1", attempt.Attempt, taskstate.CompleteRunOptions{
-		Summary:             "Done",
-		Description:         "Details",
-		DetailedDescription: "Detailed PR body.",
+		Summary:              "Done",
+		Description:          "Details",
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
 	})
 	must.NoError(err)
 
@@ -193,9 +198,10 @@ func TestCompletionServiceIdempotentWorktreeCompletionDoesNotCommitAgain(t *test
 	}
 
 	completed, err := service.Complete(context.Background(), agent.CompleteOptions{
-		Summary:             "Done",
-		Description:         "Details",
-		DetailedDescription: "Detailed PR body.",
+		Summary:              "Done",
+		Description:          "Details",
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
 	})
 
 	must.NoError(err)
@@ -218,10 +224,11 @@ func TestCompletionServiceRepeatedWorktreeCompletionWithDifferentPayloadIsNoop(t
 	})
 	must.NoError(err)
 	first, err := fixture.store.CompleteRun("alpha", "op-1", attempt.Attempt, taskstate.CompleteRunOptions{
-		Summary:             "First summary",
-		Description:         "First details.",
-		DetailedDescription: "Detailed PR body.",
-		Commit:              "abc123",
+		Summary:              "First summary",
+		Description:          "First details.",
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
+		Commit:               "abc123",
 	})
 	must.NoError(err)
 
@@ -238,9 +245,10 @@ func TestCompletionServiceRepeatedWorktreeCompletionWithDifferentPayloadIsNoop(t
 	}
 
 	completed, err := service.Complete(context.Background(), agent.CompleteOptions{
-		Summary:             "Second summary",
-		Description:         "Second details.",
-		DetailedDescription: "Detailed PR body.",
+		Summary:              "Second summary",
+		Description:          "Second details.",
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
 	})
 
 	must.NoError(err)
@@ -257,6 +265,7 @@ func TestCompletionServiceRepeatedWorktreeCompletionWithDifferentPayloadIsNoop(t
 	is.Equal("First summary", latest.Completion.Summary)
 	is.Equal("First details.", latest.Completion.Description)
 	is.Equal("Detailed PR body.", latest.Completion.DetailedDescription)
+	is.Equal("Technical explanation.", latest.Completion.TechnicalExplanation)
 	is.Equal("abc123", latest.Completion.Commit)
 	events, eventsErr := fixture.store.Events("alpha", "op-1")
 	must.NoError(eventsErr)
@@ -276,6 +285,7 @@ func assertCompletionMatchesFirst(
 	is.Equal(first.Completion.Summary, completed.Run.Completion.Summary)
 	is.Equal(first.Completion.Description, completed.Run.Completion.Description)
 	is.Equal(first.Completion.DetailedDescription, completed.Run.Completion.DetailedDescription)
+	is.Equal(first.Completion.TechnicalExplanation, completed.Run.Completion.TechnicalExplanation)
 	is.Equal(first.Completion.Commit, completed.Run.Completion.Commit)
 }
 
@@ -289,6 +299,39 @@ func assertRepeatedDiagnostic(t *testing.T, completed agent.CompleteResult) {
 	is.Equal("Second summary", completed.RepeatedDiagnostic.RequestedSummary)
 	is.Equal("Second details.", completed.RepeatedDiagnostic.RequestedDescription)
 	is.Equal("Detailed PR body.", completed.RepeatedDiagnostic.RequestedDetailedDescription)
+	is.Equal("Technical explanation.", completed.RepeatedDiagnostic.RequestedTechnicalExplanation)
+}
+
+func TestCompletionServiceRejectsMissingTechnicalExplanation(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	fixture := newActiveContextFixture(t, "op-main")
+	taskItem := mainTask("op-main", fixture.repoPath)
+	_, err := fixture.store.StartRun("alpha", "op-main", taskstate.StartRunOptions{
+		Branch:   "main",
+		Worktree: fixture.repoPath,
+	})
+	must.NoError(err)
+
+	service := agent.CompletionService{
+		Paths:    fixture.paths,
+		Resolver: fixture.resolver(taskItem, mainEnv("op-main", fixture.repoPath), fixture.repoPath),
+		RunStore: fixture.store,
+		Git:      &fakeGitState{branch: "main", hasChanges: true},
+	}
+
+	_, err = service.Complete(context.Background(), agent.CompleteOptions{
+		Summary:             "Done",
+		Description:         "Details",
+		DetailedDescription: "Detailed PR body.",
+	})
+
+	must.Error(err)
+	is.Contains(err.Error(), "completion technical explanation is required")
+	latest, ok, loadErr := fixture.store.LatestRun("alpha", "op-main")
+	must.NoError(loadErr)
+	must.True(ok)
+	is.Nil(latest.Completion)
 }
 
 func TestCompletionServiceRequiresChangesBeforeWriting(t *testing.T) {
@@ -310,9 +353,10 @@ func TestCompletionServiceRequiresChangesBeforeWriting(t *testing.T) {
 	}
 
 	_, err = service.Complete(context.Background(), agent.CompleteOptions{
-		Summary:             "Done",
-		Description:         "Details",
-		DetailedDescription: "Detailed PR body.",
+		Summary:              "Done",
+		Description:          "Details",
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
 	})
 
 	must.Error(err)
@@ -343,9 +387,10 @@ func TestCompletionServiceRejectsCurrentBranchMismatch(t *testing.T) {
 	}
 
 	_, err = service.Complete(context.Background(), agent.CompleteOptions{
-		Summary:             "Done",
-		Description:         "Details",
-		DetailedDescription: "Detailed PR body.",
+		Summary:              "Done",
+		Description:          "Details",
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
 	})
 
 	must.Error(err)
@@ -372,9 +417,10 @@ func TestCompletionServiceWrapsGitInspectionErrors(t *testing.T) {
 	}
 
 	_, err = service.Complete(context.Background(), agent.CompleteOptions{
-		Summary:             "Done",
-		Description:         "Details",
-		DetailedDescription: "Detailed PR body.",
+		Summary:              "Done",
+		Description:          "Details",
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
 	})
 
 	must.Error(err)
