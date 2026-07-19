@@ -713,13 +713,15 @@ func agentReviewCommandExitAttrs(err error) []slog.Attr {
 }
 
 func recordAgentReviewStep(opts PipelineRunOptions, step Step, command agent.CommandSnapshot) (taskstate.AgentExecution, error) {
+	selection := command.AgentSelection()
 	execution := taskstate.AgentExecution{
 		Purpose:     taskstate.AgentExecutionPurposeReview,
 		Status:      taskstate.RunStatusRunning,
 		Agent:       command.AgentName,
 		Profile:     command.AgentName,
-		Harness:     command.Harness,
-		Model:       command.Model,
+		Harness:     selection.Harness,
+		Model:       selection.Model,
+		Thinking:    selection.Thinking,
 		Command:     command.Command,
 		Args:        command.Args,
 		SessionName: opts.SessionName,

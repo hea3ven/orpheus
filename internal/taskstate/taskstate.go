@@ -181,15 +181,80 @@ type RunAttempt struct {
 	ReviewFollowUp *ReviewFollowUp `yaml:"review_follow_up,omitempty"`
 }
 
+// AgentSelection records the normalized model cohort selected for an agent process.
+type AgentSelection struct {
+	Harness  string `yaml:"harness,omitempty"`
+	Model    string `yaml:"model,omitempty"`
+	Thinking string `yaml:"thinking,omitempty"`
+}
+
+const agentSelectionDefaultThinking = "default"
+
+// NewAgentSelection returns normalized agent selection metadata for persistence and stats cohorts.
+func NewAgentSelection(harness string, model string, thinking string) AgentSelection {
+	selection := AgentSelection{
+		Harness:  strings.TrimSpace(harness),
+		Model:    strings.TrimSpace(model),
+		Thinking: strings.TrimSpace(thinking),
+	}
+	if agentSelectionHasDefaultThinking(selection.Harness) && selection.Thinking == "" {
+		selection.Thinking = agentSelectionDefaultThinking
+	}
+	return selection
+}
+
+func agentSelectionHasDefaultThinking(harness string) bool {
+	switch strings.ToLower(strings.TrimSpace(harness)) {
+	case "codex", "pi":
+		return true
+	default:
+		return false
+	}
+}
+
+// IsZero reports whether the selection carries no model-cohort metadata.
+func (s AgentSelection) IsZero() bool {
+	return strings.TrimSpace(s.Harness) == "" &&
+		strings.TrimSpace(s.Model) == "" &&
+		strings.TrimSpace(s.Thinking) == ""
+}
+
+// CohortLabel returns a stable display key for model-comparison cohorts.
+func (s AgentSelection) CohortLabel() string {
+	selection := NewAgentSelection(s.Harness, s.Model, s.Thinking)
+	model := selection.Model
+	if model == "" {
+		model = "unknown"
+	}
+
+	qualifiers := make([]string, 0, 2)
+	if selection.Harness != "" {
+		qualifiers = append(qualifiers, "harness="+selection.Harness)
+	}
+	if selection.Harness != "" && selection.Thinking != "" {
+		qualifiers = append(qualifiers, "thinking="+selection.Thinking)
+	}
+	if len(qualifiers) == 0 {
+		return model
+	}
+	return model + " (" + strings.Join(qualifiers, ", ") + ")"
+}
+
+// AgentSelection returns normalized model-cohort metadata for this execution.
+func (e AgentExecution) AgentSelection() AgentSelection {
+	return NewAgentSelection(e.Harness, e.Model, e.Thinking)
+}
+
 // AgentExecution records common facts for one agent process execution.
 type AgentExecution struct {
 	Purpose AgentExecutionPurpose `yaml:"purpose"`
 	Status  RunStatus             `yaml:"status"`
 
-	Agent   string `yaml:"agent,omitempty"`
-	Profile string `yaml:"profile,omitempty"`
-	Harness string `yaml:"harness,omitempty"`
-	Model   string `yaml:"model,omitempty"`
+	Agent    string `yaml:"agent,omitempty"`
+	Profile  string `yaml:"profile,omitempty"`
+	Harness  string `yaml:"harness,omitempty"`
+	Model    string `yaml:"model,omitempty"`
+	Thinking string `yaml:"thinking,omitempty"`
 
 	Command     string   `yaml:"command,omitempty"`
 	Args        []string `yaml:"args,omitempty"`
@@ -434,10 +499,13 @@ type SetupEventOptions struct {
 
 // StartRunOptions describes the run attempt being started.
 type StartRunOptions struct {
-	Agent       string
-	Profile     string
-	Harness     string
-	Model       string
+	Agent     string
+	Profile   string
+	Selection AgentSelection
+	Harness   string
+	Model     string
+	Thinking  string
+
 	Command     string
 	Args        []string
 	SessionName string
@@ -448,6 +516,13 @@ type StartRunOptions struct {
 	Worktree string
 
 	ReviewFollowUp *ReviewFollowUp
+}
+
+func (opts StartRunOptions) agentSelection() AgentSelection {
+	if !opts.Selection.IsZero() {
+		return NewAgentSelection(opts.Selection.Harness, opts.Selection.Model, opts.Selection.Thinking)
+	}
+	return NewAgentSelection(opts.Harness, opts.Model, opts.Thinking)
 }
 
 // CompleteRunOptions describes the agent-authored completion payload.
@@ -713,6 +788,7 @@ func (s Store) StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt
 	}
 
 	now := s.nowUTC()
+	selection := opts.agentSelection()
 	attempt := RunAttempt{
 		Attempt: nextAttemptNumber(state),
 		Status:  RunStatusRunning,
@@ -721,8 +797,9 @@ func (s Store) StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt
 			Status:      RunStatusRunning,
 			Agent:       opts.Agent,
 			Profile:     opts.Profile,
-			Harness:     opts.Harness,
-			Model:       opts.Model,
+			Harness:     selection.Harness,
+			Model:       selection.Model,
+			Thinking:    selection.Thinking,
 			Command:     opts.Command,
 			Args:        cloneStrings(opts.Args),
 			SessionName: opts.SessionName,
@@ -2748,8 +2825,10 @@ func normalizeAgentExecution(execution AgentExecution) AgentExecution {
 	if execution.Profile == "" {
 		execution.Profile = execution.Agent
 	}
-	execution.Harness = strings.TrimSpace(execution.Harness)
-	execution.Model = strings.TrimSpace(execution.Model)
+	selection := NewAgentSelection(execution.Harness, execution.Model, execution.Thinking)
+	execution.Harness = selection.Harness
+	execution.Model = selection.Model
+	execution.Thinking = selection.Thinking
 	execution.Command = strings.TrimSpace(execution.Command)
 	execution.Args = cloneStrings(execution.Args)
 	execution.SessionName = strings.TrimSpace(execution.SessionName)
