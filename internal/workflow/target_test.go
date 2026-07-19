@@ -30,9 +30,10 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 		run: taskstate.RunAttempt{
 			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
-				Summary:             "Done",
-				Description:         "Done.",
-				DetailedDescription: "Detailed PR body.",
+				Summary:              "Done",
+				Description:          "Done.",
+				DetailedDescription:  "Detailed PR body.",
+				TechnicalExplanation: "Technical explanation.",
 			},
 		},
 		wantOK:        true,
@@ -52,10 +53,11 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 		run: taskstate.RunAttempt{
 			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
-				Summary:             "Done",
-				Description:         "Done.",
-				DetailedDescription: "Detailed PR body.",
-				Commit:              "abc123",
+				Summary:              "Done",
+				Description:          "Done.",
+				DetailedDescription:  "Detailed PR body.",
+				TechnicalExplanation: "Technical explanation.",
+				Commit:               "abc123",
 			},
 		},
 		wantOK:        true,
@@ -75,10 +77,11 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 		run: taskstate.RunAttempt{
 			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
-				Summary:             "Done",
-				Description:         "Done.",
-				DetailedDescription: "Detailed PR body.",
-				Commit:              "abc123",
+				Summary:              "Done",
+				Description:          "Done.",
+				DetailedDescription:  "Detailed PR body.",
+				TechnicalExplanation: "Technical explanation.",
+				Commit:               "abc123",
 			},
 		},
 		wantOK:        true,
@@ -98,10 +101,11 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 		run: taskstate.RunAttempt{
 			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
-				Summary:             "Done",
-				Description:         "Done.",
-				DetailedDescription: "Detailed PR body.",
-				Commit:              "abc123",
+				Summary:              "Done",
+				Description:          "Done.",
+				DetailedDescription:  "Detailed PR body.",
+				TechnicalExplanation: "Technical explanation.",
+				Commit:               "abc123",
 			},
 		},
 	},
@@ -118,10 +122,11 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 		run: taskstate.RunAttempt{
 			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
-				Summary:             "Done",
-				Description:         "Done.",
-				DetailedDescription: "Detailed PR body.",
-				Commit:              "abc123",
+				Summary:              "Done",
+				Description:          "Done.",
+				DetailedDescription:  "Detailed PR body.",
+				TechnicalExplanation: "Technical explanation.",
+				Commit:               "abc123",
 			},
 		},
 	},
@@ -139,10 +144,11 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 		run: taskstate.RunAttempt{
 			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
-				Summary:             "Done",
-				Description:         "Done.",
-				DetailedDescription: "Detailed PR body.",
-				Commit:              "abc123",
+				Summary:              "Done",
+				Description:          "Done.",
+				DetailedDescription:  "Detailed PR body.",
+				TechnicalExplanation: "Technical explanation.",
+				Commit:               "abc123",
 			},
 		},
 	},

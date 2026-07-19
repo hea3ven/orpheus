@@ -17,9 +17,10 @@ const completionLockOperation = "agent completion"
 
 // CompleteOptions describes the agent-authored completion payload.
 type CompleteOptions struct {
-	Summary             string
-	Description         string
-	DetailedDescription string
+	Summary              string
+	Description          string
+	DetailedDescription  string
+	TechnicalExplanation string
 }
 
 // CompleteResult reports the validated context and persisted run completion.
@@ -158,6 +159,10 @@ func (s CompletionService) completeLocked(
 	if strings.TrimSpace(detailedDescription) == "" {
 		return CompleteResult{}, errors.New("completion detailed description is required")
 	}
+	technicalExplanation := opts.TechnicalExplanation
+	if strings.TrimSpace(technicalExplanation) == "" {
+		return CompleteResult{}, errors.New("completion technical explanation is required")
+	}
 
 	span := logging.Start(ctx, s.Logger, "agent completion context resolution",
 		slog.String("component", "agent"),
@@ -175,9 +180,9 @@ func (s CompletionService) completeLocked(
 		slog.String("target_kind", string(activeContext.Target.Kind)),
 	)
 	if activeContext.Target.Kind != ExecutionTargetMain {
-		return s.completeWorktree(ctx, activeContext, summary, description, detailedDescription, gitState)
+		return s.completeWorktree(ctx, activeContext, summary, description, detailedDescription, technicalExplanation, gitState)
 	}
-	return s.completeMain(ctx, activeContext, summary, description, detailedDescription, gitState)
+	return s.completeMain(ctx, activeContext, summary, description, detailedDescription, technicalExplanation, gitState)
 }
 
 func (s CompletionService) completeMain(
@@ -186,9 +191,10 @@ func (s CompletionService) completeMain(
 	summary string,
 	description string,
 	detailedDescription string,
+	technicalExplanation string,
 	gitState GitStateReader,
 ) (CompleteResult, error) {
-	if existing, ok, err := s.existingCompletionResult(activeContext, summary, description, detailedDescription); ok || err != nil {
+	if existing, ok, err := s.existingCompletionResult(activeContext, summary, description, detailedDescription, technicalExplanation); ok || err != nil {
 		return existing, err
 	}
 
@@ -218,9 +224,10 @@ func (s CompletionService) completeMain(
 		activeContext.Task.ID,
 		activeContext.Run.Attempt,
 		taskstate.CompleteRunOptions{
-			Summary:             summary,
-			Description:         description,
-			DetailedDescription: detailedDescription,
+			Summary:              summary,
+			Description:          description,
+			DetailedDescription:  detailedDescription,
+			TechnicalExplanation: technicalExplanation,
 		},
 	)
 	if err != nil {
@@ -237,9 +244,10 @@ func (s CompletionService) completeWorktree(
 	summary string,
 	description string,
 	detailedDescription string,
+	technicalExplanation string,
 	gitState GitStateReader,
 ) (CompleteResult, error) {
-	if existing, ok, err := s.existingCompletionResult(activeContext, summary, description, detailedDescription); ok || err != nil {
+	if existing, ok, err := s.existingCompletionResult(activeContext, summary, description, detailedDescription, technicalExplanation); ok || err != nil {
 		return existing, err
 	}
 
@@ -261,9 +269,10 @@ func (s CompletionService) completeWorktree(
 		activeContext.Task.ID,
 		activeContext.Run.Attempt,
 		taskstate.CompleteRunOptions{
-			Summary:             summary,
-			Description:         description,
-			DetailedDescription: detailedDescription,
+			Summary:              summary,
+			Description:          description,
+			DetailedDescription:  detailedDescription,
+			TechnicalExplanation: technicalExplanation,
 		},
 	)
 	if err != nil {
@@ -289,6 +298,7 @@ func (s CompletionService) existingCompletionResult(
 	summary string,
 	description string,
 	detailedDescription string,
+	technicalExplanation string,
 ) (CompleteResult, bool, error) {
 	if activeContext.Run.Completion == nil {
 		return CompleteResult{}, false, nil
@@ -299,9 +309,10 @@ func (s CompletionService) existingCompletionResult(
 		activeContext.Task.ID,
 		activeContext.Run.Attempt,
 		taskstate.RepeatedCompletionOptions{
-			Summary:             summary,
-			Description:         description,
-			DetailedDescription: detailedDescription,
+			Summary:              summary,
+			Description:          description,
+			DetailedDescription:  detailedDescription,
+			TechnicalExplanation: technicalExplanation,
 		},
 	)
 	if err != nil {

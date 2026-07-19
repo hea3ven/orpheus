@@ -1251,55 +1251,57 @@ func renderManualReviewContext(command *cobra.Command, ctx workflow.ReviewManual
 	return renderPriorReviewAdvisories(output, taskState, ctx.Review.Attempt, ctx.Step.Name)
 }
 
-type manualReviewCompletionContext struct {
-	original taskstate.RunAttempt
-	latest   taskstate.RunAttempt
-}
+type manualReviewCompletionContext = taskstate.CompletionRunHistory
 
 func manualReviewCompletions(taskState taskstate.TaskState) (manualReviewCompletionContext, error) {
-	var original taskstate.RunAttempt
-	var latest taskstate.RunAttempt
-	for _, run := range taskState.Runs {
-		if run.Completion == nil {
-			continue
-		}
-		if original.Attempt == 0 && run.ReviewFollowUp == nil {
-			original = run
-		}
-		if latest.Attempt == 0 || run.Attempt > latest.Attempt {
-			latest = run
-		}
-	}
-	if original.Attempt == 0 {
-		return manualReviewCompletionContext{}, errors.New("original implementation completion is required")
-	}
-	if latest.Attempt == 0 {
-		return manualReviewCompletionContext{}, errors.New("latest completion is required")
-	}
-	return manualReviewCompletionContext{
-		original: original,
-		latest:   latest,
-	}, nil
+	return taskstate.CompletionRunsForReview(taskState)
 }
 
 func renderManualReviewCompletions(output io.Writer, ctx manualReviewCompletionContext) error {
-	if ctx.latest.ReviewFollowUp == nil {
-		return renderManualReviewCompletion(output, "Latest completion", "Completion description", ctx.latest.Completion)
+	if ctx.Latest.ReviewFollowUp == nil {
+		return renderManualReviewCompletion(
+			output,
+			"Latest completion",
+			"Completion description",
+			"Completion technical explanation",
+			ctx.Latest.Completion,
+		)
 	}
-	if err := renderManualReviewCompletion(output, "Original completion", "Original completion description", ctx.original.Completion); err != nil {
+	if err := renderManualReviewCompletion(
+		output,
+		"Original completion",
+		"Original completion description",
+		"Original completion technical explanation",
+		ctx.Original.Completion,
+	); err != nil {
 		return err
 	}
-	return renderManualReviewCompletion(output, "Latest fix completion", "Latest fix completion description", ctx.latest.Completion)
+	return renderManualReviewCompletion(
+		output,
+		"Latest fix completion",
+		"Latest fix completion description",
+		"Latest fix completion technical explanation",
+		ctx.Latest.Completion,
+	)
 }
 
-func renderManualReviewCompletion(output io.Writer, summaryLabel string, descriptionLabel string, completion *taskstate.Completion) error {
+func renderManualReviewCompletion(
+	output io.Writer,
+	summaryLabel string,
+	descriptionLabel string,
+	technicalExplanationLabel string,
+	completion *taskstate.Completion,
+) error {
 	if completion == nil {
 		return errors.New("completion is required")
 	}
 	if _, err := fmt.Fprintf(output, "%s: %s\n", summaryLabel, strings.TrimSpace(completion.Summary)); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(output, "%s: %s\n\n", descriptionLabel, strings.TrimSpace(completion.Description)); err != nil {
+	if _, err := fmt.Fprintf(output, "%s: %s\n", descriptionLabel, strings.TrimSpace(completion.Description)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(output, "%s:\n%s\n\n", technicalExplanationLabel, strings.TrimSpace(completion.TechnicalExplanation)); err != nil {
 		return err
 	}
 	return nil

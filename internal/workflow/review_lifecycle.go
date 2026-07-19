@@ -1091,42 +1091,20 @@ func resumedReviewImplementerName(ctx ReviewAttemptContext) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve resumed review implementer: %w", err)
 	}
-	agentName := strings.TrimSpace(completions.latest.Execution.Agent)
+	agentName := strings.TrimSpace(completions.Latest.Execution.Agent)
 	if agentName == "" {
-		agentName = strings.TrimSpace(completions.latest.Execution.Profile)
+		agentName = strings.TrimSpace(completions.Latest.Execution.Profile)
 	}
 	if agentName == "" {
-		return "", fmt.Errorf("resolve resumed review implementer: latest completed run attempt %d has no recorded agent profile", completions.latest.Attempt)
+		return "", fmt.Errorf("resolve resumed review implementer: latest completed run attempt %d has no recorded agent profile", completions.Latest.Attempt)
 	}
 	return agentName, nil
 }
 
-type manualReviewCompletionContext struct {
-	original taskstate.RunAttempt
-	latest   taskstate.RunAttempt
-}
+type manualReviewCompletionContext = taskstate.CompletionRunHistory
 
 func manualReviewCompletions(taskState taskstate.TaskState) (manualReviewCompletionContext, error) {
-	var original taskstate.RunAttempt
-	var latest taskstate.RunAttempt
-	for _, run := range taskState.Runs {
-		if run.Completion == nil {
-			continue
-		}
-		if original.Attempt == 0 && run.ReviewFollowUp == nil {
-			original = run
-		}
-		if latest.Attempt == 0 || run.Attempt > latest.Attempt {
-			latest = run
-		}
-	}
-	if original.Attempt == 0 {
-		return manualReviewCompletionContext{}, errors.New("original implementation completion is required")
-	}
-	if latest.Attempt == 0 {
-		return manualReviewCompletionContext{}, errors.New("latest completion is required")
-	}
-	return manualReviewCompletionContext{original: original, latest: latest}, nil
+	return taskstate.CompletionRunsForReview(taskState)
 }
 
 func (s ReviewLifecycleService) processSeparateTaskReviewCandidates(runCtx context.Context, ctx ReviewAttemptContext) (bool, error) {

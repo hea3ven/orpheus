@@ -428,6 +428,84 @@ func TestActiveContextResolverWrapsBackendErrors(t *testing.T) {
 	is.Contains(err.Error(), "backend unavailable")
 }
 
+func TestActiveContextResolverRejectsReviewContextWhenLatestRunHasNoCompletion(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	fixture := newActiveContextFixture(t, "op-1")
+	worktree := fixture.expectedWorktree(t, "op-1")
+	must.NoError(testMkdirAll(worktree))
+	taskItem := fixture.worktreeTask("op-1", worktree)
+	recordCompletedContextRun(t, fixture, worktree, nil)
+	recordCompletedContextRun(t, fixture, worktree, &taskstate.ReviewFollowUp{
+		ReviewAttempt:  1,
+		FindingIndexes: []int{0},
+	})
+
+	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		Agent:    "implementer",
+		Branch:   "orpheus/op-1",
+		Worktree: worktree,
+		ReviewFollowUp: &taskstate.ReviewFollowUp{
+			ReviewAttempt:  2,
+			FindingIndexes: []int{0},
+		},
+	})
+	must.NoError(err)
+	review, err := fixture.store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{
+		Pipeline: "default",
+		Step:     "ai-review",
+	})
+	must.NoError(err)
+	_, err = fixture.store.RecordReviewStep("alpha", "op-1", review.Attempt, taskstate.RecordReviewStepOptions{
+		Kind: "agent_review",
+		Name: "ai-review",
+	})
+	must.NoError(err)
+
+	resolver := fixture.resolver(taskItem, map[string]string{
+		"ORPHEUS_REPO_ID":        "alpha",
+		"ORPHEUS_TASK_ID":        "op-1",
+		"ORPHEUS_WORKTREE":       worktree,
+		"ORPHEUS_BRANCH":         "orpheus/op-1",
+		"ORPHEUS_AGENT_PURPOSE":  "review",
+		"ORPHEUS_REVIEW_ATTEMPT": "1",
+		"ORPHEUS_REVIEW_STEP":    "ai-review",
+	}, worktree)
+
+	_, err = resolver.ResolveReview(context.Background())
+
+	must.Error(err)
+	is.Contains(err.Error(), "resolve review completion history")
+	is.Contains(err.Error(), "latest run attempt 3 completion is required")
+}
+
+func recordCompletedContextRun(
+	t *testing.T,
+	fixture *activeContextFixture,
+	worktree string,
+	followUp *taskstate.ReviewFollowUp,
+) {
+	t.Helper()
+	must := require.New(t)
+
+	run, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		Agent:          "implementer",
+		Branch:         "orpheus/op-1",
+		Worktree:       worktree,
+		ReviewFollowUp: followUp,
+	})
+	must.NoError(err)
+	_, err = fixture.store.CompleteRun("alpha", "op-1", run.Attempt, taskstate.CompleteRunOptions{
+		Summary:              "Complete work",
+		Description:          "Implemented the requested work.",
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
+	})
+	must.NoError(err)
+	_, err = fixture.store.FinishRun("alpha", "op-1", run.Attempt, taskstate.RunStatusSucceeded)
+	must.NoError(err)
+}
+
 func TestRenderReviewContextRequiresExhaustiveMultiFindingReview(t *testing.T) {
 	is := assert.New(t)
 
@@ -452,8 +530,10 @@ func TestRenderReviewContextRequiresExhaustiveMultiFindingReview(t *testing.T) {
 			Attempt: 1,
 			Step:    "ai-review",
 			Completion: taskstate.Completion{
-				Summary:     "Complete review context",
-				Description: "Implementation is ready for review.",
+				Summary:              "Complete review context",
+				Description:          "Implementation is ready for review.",
+				DetailedDescription:  "PR body for review.",
+				TechnicalExplanation: "Explains the implementation rationale for review.",
 			},
 		},
 	})
@@ -461,6 +541,7 @@ func TestRenderReviewContextRequiresExhaustiveMultiFindingReview(t *testing.T) {
 	for _, want := range []string{
 		"Review the complete change set before exiting, even if you find an issue early.",
 		"Do not stop after the first issue; continue reviewing for additional distinct findings.",
+		"- Technical explanation: Explains the implementation rationale for review.",
 		"Record each distinct finding with its own `orpheus agent review add` call",
 		"When multiple findings exist, run `orpheus agent review add` multiple times, once per finding.",
 	} {

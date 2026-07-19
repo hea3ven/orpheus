@@ -319,6 +319,8 @@ func TestVerboseAgentDoneDiagnosticsCoverContextAndCompletionPersistence(t *test
 		"Recorded completion diagnostics.",
 		"--detailed-description",
 		"## Details\n\nRecorded completion diagnostics.",
+		"--technical-explanation",
+		"Recorded the diagnostic completion path for a worktree run.",
 	})
 
 	require.Contains(t, stdout, "Recorded completion for op-1")

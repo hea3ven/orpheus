@@ -192,9 +192,10 @@ func TestReviewLifecycleManualPromptPersistsFindingsThroughWorkflowRecorder(t *t
 		t.Fatalf("start run: %v", err)
 	}
 	if _, err := store.CompleteRun("alpha", "op-1", run.Attempt, taskstate.CompleteRunOptions{
-		Summary:             "Implementation complete",
-		Description:         "Ready for local review.",
-		DetailedDescription: "Ready for publication.",
+		Summary:              "Implementation complete",
+		Description:          "Ready for local review.",
+		DetailedDescription:  "Ready for publication.",
+		TechnicalExplanation: "Technical explanation.",
 	}); err != nil {
 		t.Fatalf("complete run: %v", err)
 	}
@@ -288,9 +289,10 @@ func TestReviewLifecycleConfirmsRunningCompletionBeforeFinalizing(t *testing.T) 
 		t.Fatalf("start run: %v", err)
 	}
 	if _, err := store.CompleteRun("alpha", "op-1", run.Attempt, taskstate.CompleteRunOptions{
-		Summary:             "Implementation complete",
-		Description:         "Ready for local review.",
-		DetailedDescription: "Ready for publication.",
+		Summary:              "Implementation complete",
+		Description:          "Ready for local review.",
+		DetailedDescription:  "Ready for publication.",
+		TechnicalExplanation: "Technical explanation.",
 	}); err != nil {
 		t.Fatalf("complete run: %v", err)
 	}
@@ -712,9 +714,10 @@ func TestReviewLifecycleRunAfterCompletedRunStartsReviewAndPropagatesAgent(t *te
 		t.Fatalf("start run: %v", err)
 	}
 	if _, err := store.CompleteRun("alpha", "op-1", run.Attempt, taskstate.CompleteRunOptions{
-		Summary:             "Implementation complete",
-		Description:         "Ready for local review.",
-		DetailedDescription: "Ready for publication.",
+		Summary:              "Implementation complete",
+		Description:          "Ready for local review.",
+		DetailedDescription:  "Ready for publication.",
+		TechnicalExplanation: "Technical explanation.",
 	}); err != nil {
 		t.Fatalf("complete run: %v", err)
 	}
@@ -915,9 +918,10 @@ func (r *recordingReviewAgentRunner) RunReviewLifecycleAgent(
 ) (workflow.ReviewLifecycleAgentRunResult, error) {
 	if r.complete {
 		if _, err := r.store.CompleteRun(run.RepoID, run.TaskID, run.Start.Attempt.Attempt, taskstate.CompleteRunOptions{
-			Summary:             "Follow-up complete",
-			Description:         "Review blockers were addressed.",
-			DetailedDescription: "Ready for another review.",
+			Summary:              "Follow-up complete",
+			Description:          "Review blockers were addressed.",
+			DetailedDescription:  "Ready for another review.",
+			TechnicalExplanation: "Technical explanation.",
 		}); err != nil {
 			return workflow.ReviewLifecycleAgentRunResult{}, err
 		}

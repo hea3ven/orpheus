@@ -34,12 +34,13 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 	})
 	withOrpheusCLIHelper(t)
 	agentLogPath := withCompletionFlowAgent(t, completionFlowAgentOptions{
-		Command:             "worktree-completion-agent",
-		FileName:            "worktree-change.txt",
-		Body:                "worktree implementation",
-		Summary:             "Implement worktree completion flow",
-		Description:         "Created a worktree validation change.",
-		DetailedDescription: "## Worktree completion\n\nCreated a worktree validation change.",
+		Command:              "worktree-completion-agent",
+		FileName:             "worktree-change.txt",
+		Body:                 "worktree implementation",
+		Summary:              "Implement worktree completion flow",
+		Description:          "Created a worktree validation change.",
+		DetailedDescription:  "## Worktree completion\n\nCreated a worktree validation change.",
+		TechnicalExplanation: "Technical explanation.",
 	})
 	writeCompletionFlowAgentConfig(t, paths, "worktree-completion", "worktree-completion-agent")
 
@@ -117,12 +118,13 @@ func TestConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 	})
 	withOrpheusCLIHelper(t)
 	agentLogPath := withCompletionFlowAgent(t, completionFlowAgentOptions{
-		Command:             "trex-title-agent",
-		FileName:            "trex-title-change.txt",
-		Body:                "configured publication implementation",
-		Summary:             "Replaced the config for abc",
-		Description:         "Replaced the config used for publication validation.",
-		DetailedDescription: "## Configured publication\n\nReplaced the config used for publication validation.",
+		Command:              "trex-title-agent",
+		FileName:             "trex-title-change.txt",
+		Body:                 "configured publication implementation",
+		Summary:              "Replaced the config for abc",
+		Description:          "Replaced the config used for publication validation.",
+		DetailedDescription:  "## Configured publication\n\nReplaced the config used for publication validation.",
+		TechnicalExplanation: "Technical explanation.",
 	})
 	writeCompletionFlowAgentConfig(t, paths, "trex-title", "trex-title-agent")
 
@@ -183,12 +185,13 @@ func TestMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd
 	})
 	withOrpheusCLIHelper(t)
 	withCompletionFlowAgent(t, completionFlowAgentOptions{
-		Command:             "missing-title-ref-agent",
-		FileName:            "missing-title-ref-change.txt",
-		Body:                "missing reference implementation",
-		Summary:             "feat: validate missing title reference",
-		Description:         "Created a change for missing-reference validation.",
-		DetailedDescription: "## Missing reference\n\nCreated a change for missing-reference validation.",
+		Command:              "missing-title-ref-agent",
+		FileName:             "missing-title-ref-change.txt",
+		Body:                 "missing reference implementation",
+		Summary:              "feat: validate missing title reference",
+		Description:          "Created a change for missing-reference validation.",
+		DetailedDescription:  "## Missing reference\n\nCreated a change for missing-reference validation.",
+		TechnicalExplanation: "Technical explanation.",
 	})
 	writeCompletionFlowAgentConfig(t, paths, "missing-title-ref", "missing-title-ref-agent")
 
@@ -256,12 +259,13 @@ func TestWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	})
 	withOrpheusCLIHelper(t)
 	withCompletionFlowAgent(t, completionFlowAgentOptions{
-		Command:             "m5-sync-agent",
-		FileName:            "m5-sync-change.txt",
-		Body:                "m5 implementation",
-		Summary:             "Implement M5 sync validation",
-		Description:         "Created a change for PR sync validation.",
-		DetailedDescription: "## M5 sync\n\nCreated a PR sync validation change.",
+		Command:              "m5-sync-agent",
+		FileName:             "m5-sync-change.txt",
+		Body:                 "m5 implementation",
+		Summary:              "Implement M5 sync validation",
+		Description:          "Created a change for PR sync validation.",
+		DetailedDescription:  "## M5 sync\n\nCreated a PR sync validation change.",
+		TechnicalExplanation: "Technical explanation.",
 	})
 	writeCompletionFlowAgentConfig(t, paths, "m5-sync", "m5-sync-agent")
 
@@ -366,12 +370,13 @@ func TestRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	})
 	withOrpheusCLIHelper(t)
 	agentLogPath := withCompletionFlowAgent(t, completionFlowAgentOptions{
-		Command:             "repo-root-sync-agent",
-		FileName:            "repo-root-sync-change.txt",
-		Body:                "repo-root implementation",
-		Summary:             "Implement repo-root PR validation",
-		Description:         "Created a repo-root feature-branch validation change.",
-		DetailedDescription: "## Repo-root PR flow\n\nCreated a repo-root feature-branch validation change.",
+		Command:              "repo-root-sync-agent",
+		FileName:             "repo-root-sync-change.txt",
+		Body:                 "repo-root implementation",
+		Summary:              "Implement repo-root PR validation",
+		Description:          "Created a repo-root feature-branch validation change.",
+		DetailedDescription:  "## Repo-root PR flow\n\nCreated a repo-root feature-branch validation change.",
+		TechnicalExplanation: "Technical explanation.",
 	})
 	writeCompletionFlowAgentConfig(t, paths, "repo-root-sync", "repo-root-sync-agent")
 
@@ -475,12 +480,13 @@ func TestMainCompletionFlowEndToEnd(t *testing.T) {
 	})
 	withOrpheusCLIHelper(t)
 	agentLogPath := withCompletionFlowAgent(t, completionFlowAgentOptions{
-		Command:             "main-completion-agent",
-		FileName:            "agent-main-change.txt",
-		Body:                "main implementation",
-		Summary:             "Implement main completion flow",
-		Description:         "Created a main-mode validation change.",
-		DetailedDescription: "## Main completion\n\nCreated a main-mode validation change.",
+		Command:              "main-completion-agent",
+		FileName:             "agent-main-change.txt",
+		Body:                 "main implementation",
+		Summary:              "Implement main completion flow",
+		Description:          "Created a main-mode validation change.",
+		DetailedDescription:  "## Main completion\n\nCreated a main-mode validation change.",
+		TechnicalExplanation: "Technical explanation.",
 	})
 	writeCompletionFlowAgentConfig(t, paths, "main-completion", "main-completion-agent")
 
@@ -787,12 +793,13 @@ func completionCloseBranch(task completionBDTask) string {
 }
 
 type completionFlowAgentOptions struct {
-	Command             string
-	FileName            string
-	Body                string
-	Summary             string
-	Description         string
-	DetailedDescription string
+	Command              string
+	FileName             string
+	Body                 string
+	Summary              string
+	Description          string
+	DetailedDescription  string
+	TechnicalExplanation string
 }
 
 func withCompletionFlowAgent(t *testing.T, opts completionFlowAgentOptions) string {
@@ -826,7 +833,7 @@ printf 'AGENT_CONTEXT<<END\n%%s\nEND\n' "$context_output" >> "$FAKE_COMPLETION_A
 
 printf '%%s\n' %s > "$PWD/%s"
 
-done_output="$(orpheus agent done --summary %s --description %s --detailed-description %s 2>&1)" || {
+done_output="$(orpheus agent done --summary %s --description %s --detailed-description %s --technical-explanation %s 2>&1)" || {
   status=$?
   printf 'AGENT_DONE_ERROR<<END\n%%s\nEND\n' "$done_output" >> "$FAKE_COMPLETION_AGENT_LOG"
   exit "$status"
@@ -839,6 +846,7 @@ printf 'completion agent completed\n'
 		shellQuote(opts.Summary),
 		shellQuote(opts.Description),
 		shellQuote(opts.DetailedDescription),
+		shellQuote(opts.TechnicalExplanation),
 	)
 
 	agentPath := filepath.Join(binDir, opts.Command)

@@ -210,8 +210,9 @@ func externalRefGateFixture() (task.SnapshotResult, status.RunStateIndex) {
 			Attempt: 1,
 			Status:  taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
-				Summary:             "Ready for review",
-				DetailedDescription: "Review details.",
+				Summary:              "Ready for review",
+				DetailedDescription:  "Review details.",
+				TechnicalExplanation: "Technical explanation.",
 			},
 		},
 	}
@@ -237,10 +238,11 @@ func TestProjectWithRunStatesShowsSuccessfulMainCompletionInReview(t *testing.T)
 		Attempt: 1,
 		Status:  taskstate.RunStatusSucceeded,
 		Completion: &taskstate.Completion{
-			Summary:             "Done",
-			Description:         "Ready for review.",
-			DetailedDescription: "Detailed PR body.",
-			CompletedAt:         time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+			Summary:              "Done",
+			Description:          "Ready for review.",
+			DetailedDescription:  "Detailed PR body.",
+			TechnicalExplanation: "Technical explanation.",
+			CompletedAt:          time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
 		},
 	}
 	localStates := status.LocalTaskStateIndex{
@@ -263,11 +265,12 @@ func TestProjectWithRunStatesShowsSuccessfulMainCompletionInReview(t *testing.T)
 
 func TestProjectWithRunStatesShowsWorktreeCompletionReadyForTaskDone(t *testing.T) {
 	got := projectWorktreeCompletion(taskstate.Completion{
-		Summary:             "Done",
-		Description:         "Ready for PR.",
-		DetailedDescription: "Detailed PR body.",
-		CompletedAt:         time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
-		Commit:              "abc123",
+		Summary:              "Done",
+		Description:          "Ready for PR.",
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
+		CompletedAt:          time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+		Commit:               "abc123",
 	})
 
 	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-worktree"})
@@ -279,11 +282,12 @@ func TestProjectWithRunStatesShowsWorktreeCompletionReadyForTaskDone(t *testing.
 
 func TestProjectWithRunStatesShowsWorktreeCompletionWithoutCommitReadyForTaskDone(t *testing.T) {
 	got := projectWorktreeCompletion(taskstate.Completion{
-		Summary:             "Done",
-		Description:         "Commit failed.",
-		DetailedDescription: "Detailed PR body.",
-		CompletedAt:         time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
-		CommitError:         "commit failed",
+		Summary:              "Done",
+		Description:          "Commit failed.",
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
+		CompletedAt:          time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+		CommitError:          "commit failed",
 	})
 
 	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-worktree"})
@@ -343,10 +347,11 @@ func TestProjectWithLocalTaskStatesDoesNotShowClosedFinalizationAsLocalReview(t 
 		Attempt: 1,
 		Status:  taskstate.RunStatusSucceeded,
 		Completion: &taskstate.Completion{
-			Summary:             "Done",
-			Description:         "Ready for local review.",
-			DetailedDescription: "Detailed PR body.",
-			CompletedAt:         time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+			Summary:              "Done",
+			Description:          "Ready for local review.",
+			DetailedDescription:  "Detailed PR body.",
+			TechnicalExplanation: "Technical explanation.",
+			CompletedAt:          time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
 		},
 	}
 	localStates := status.LocalTaskStateIndex{
@@ -525,10 +530,11 @@ func localReviewRun(repoPath string) taskstate.RunAttempt {
 		Attempt: 1,
 		Status:  taskstate.RunStatusSucceeded,
 		Completion: &taskstate.Completion{
-			Summary:             "Done",
-			Description:         "Ready for local review.",
-			DetailedDescription: "Detailed PR body.",
-			CompletedAt:         time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+			Summary:              "Done",
+			Description:          "Ready for local review.",
+			DetailedDescription:  "Detailed PR body.",
+			TechnicalExplanation: "Technical explanation.",
+			CompletedAt:          time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
 		},
 	}
 }
@@ -735,11 +741,12 @@ func completedRun(branch string, worktree string, commit string) taskstate.RunAt
 		Attempt: 1,
 		Status:  taskstate.RunStatusSucceeded,
 		Completion: &taskstate.Completion{
-			Summary:             "Done",
-			Description:         description,
-			DetailedDescription: "Detailed PR body.",
-			CompletedAt:         time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
-			Commit:              commit,
+			Summary:              "Done",
+			Description:          description,
+			DetailedDescription:  "Detailed PR body.",
+			TechnicalExplanation: "Technical explanation.",
+			CompletedAt:          time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+			Commit:               commit,
 		},
 	}
 }

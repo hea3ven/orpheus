@@ -1135,9 +1135,10 @@ func TestTaskShowRendersChronologicalHistoryForClosedEpic(t *testing.T) {
 	must.NoError(err)
 	now = now.Add(time.Minute)
 	_, err = stateStore.CompleteRun("alpha", "op-epic", run.Attempt, taskstate.CompleteRunOptions{
-		Summary:             "Record task history",
-		Description:         "Recorded completion history.",
-		DetailedDescription: "Detailed history.",
+		Summary:              "Record task history",
+		Description:          "Recorded completion history.",
+		DetailedDescription:  "Detailed history.",
+		TechnicalExplanation: "Technical explanation.",
 	})
 	must.NoError(err)
 	now = now.Add(time.Minute)
@@ -3259,6 +3260,7 @@ func TestTaskReviewApproveFinalizesAndRecordsPassedAttempt(t *testing.T) {
 	is.Contains(stderr, "Task: op-main - Ready for task done")
 	is.Contains(stderr, "Latest completion: Review approval")
 	is.Contains(stderr, "Completion description: Finalize after approval.")
+	is.Contains(stderr, "Completion technical explanation:\nTechnical explanation.")
 	is.NotContains(stderr, "Original completion:")
 	is.NotContains(stderr, "Latest fix completion:")
 	is.Contains(stderr, "git status --short:")
@@ -3312,8 +3314,10 @@ func TestTaskReviewManualContextShowsOriginalAndLatestFollowUpCompletion(t *test
 
 	is.Contains(stderr, "Original completion: Original implementation")
 	is.Contains(stderr, "Original completion description: Implemented the main task.")
+	is.Contains(stderr, "Original completion technical explanation:\nTechnical explanation.")
 	is.Contains(stderr, "Latest fix completion: Latest fix")
 	is.Contains(stderr, "Latest fix completion description: Addressed the most recent review blocker.")
+	is.Contains(stderr, "Latest fix completion technical explanation:\nTechnical explanation.")
 	is.NotContains(stderr, "Latest completion: Latest fix")
 	is.NotContains(stderr, "Latest fix completion: First fix")
 	is.Contains(stdout, "Finalized op-main")
@@ -3707,7 +3711,7 @@ func TestTaskRunUsesSeparateTaskProposalSelection(t *testing.T) {
 
 	implementer := writeReviewScript(t, fmt.Sprintf(`#!/bin/sh
 printf 'reviewed\n' > reviewed.txt
-%s agent done --summary "Implementation" --description "Implemented." --detailed-description "Implemented details."
+%s agent done --summary "Implementation" --description "Implemented." --detailed-description "Implemented details." --technical-explanation "Implemented the review fixture."
 `, shellQuote(orpheusBin)))
 	reviewer := writeReviewScript(t, fmt.Sprintf(`#!/bin/sh
 %s agent review add \
@@ -3969,6 +3973,7 @@ printf 'manual command ran %s\n' "$ORPHEUS_REVIEW_STEP"
 	is.Contains(stderr, "== Review step: inspect (manual) ==")
 	is.Contains(stderr, "Task: op-main - Ready for task done")
 	is.Contains(stderr, "Completion description: Confirm before command.")
+	is.Contains(stderr, "Completion technical explanation:\nTechnical explanation.")
 	is.Contains(stderr, "git status --short:")
 	is.NotContains(stderr, "git diff --stat:")
 	is.Contains(stderr, "Run manual command for step \"inspect\"")
@@ -4252,6 +4257,7 @@ printf 'ran\n' > %s
 	is.Contains(stderr, "== Review step: inspect (manual) ==")
 	is.Contains(stderr, "Task: op-main - Ready for task done")
 	is.Contains(stderr, "Completion description: Decline command.")
+	is.Contains(stderr, "Completion technical explanation:\nTechnical explanation.")
 	is.Contains(stderr, "Run manual command for step \"inspect\"")
 	is.Contains(stderr, "Review aborted for op-main.")
 	is.NotContains(stderr, "Review action")
@@ -7771,9 +7777,10 @@ func recordMainCompletion(t *testing.T, paths state.Paths, repoID string, taskID
 		t.Fatalf("start main run: %v", err)
 	}
 	if _, err := store.CompleteRun(repoID, taskID, attempt.Attempt, taskstate.CompleteRunOptions{
-		Summary:             summary,
-		Description:         description,
-		DetailedDescription: "Detailed PR body.",
+		Summary:              summary,
+		Description:          description,
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
 	}); err != nil {
 		t.Fatalf("complete main run: %v", err)
 	}
@@ -7807,9 +7814,10 @@ func recordReviewFollowUpCompletion(
 		t.Fatalf("start review follow-up run: %v", err)
 	}
 	if _, err := store.CompleteRun(repoID, taskID, attempt.Attempt, taskstate.CompleteRunOptions{
-		Summary:             summary,
-		Description:         description,
-		DetailedDescription: "Detailed follow-up body.",
+		Summary:              summary,
+		Description:          description,
+		DetailedDescription:  "Detailed follow-up body.",
+		TechnicalExplanation: "Technical explanation.",
 	}); err != nil {
 		t.Fatalf("complete review follow-up run: %v", err)
 	}
@@ -7830,9 +7838,10 @@ func recordRunningMainCompletion(t *testing.T, paths state.Paths, repoID string,
 		t.Fatalf("start running main run: %v", err)
 	}
 	if _, err := store.CompleteRun(repoID, taskID, attempt.Attempt, taskstate.CompleteRunOptions{
-		Summary:             summary,
-		Description:         description,
-		DetailedDescription: "Detailed PR body.",
+		Summary:              summary,
+		Description:          description,
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
 	}); err != nil {
 		t.Fatalf("complete running main run: %v", err)
 	}
@@ -7870,10 +7879,11 @@ func recordWorktreeCompletion(
 		t.Fatalf("start worktree run: %v", err)
 	}
 	if _, err := store.CompleteRun(repoID, taskID, attempt.Attempt, taskstate.CompleteRunOptions{
-		Summary:             "Ready for PR",
-		Description:         "Implemented task branch changes.",
-		DetailedDescription: "Detailed PR body.",
-		Commit:              commit,
+		Summary:              "Ready for PR",
+		Description:          "Implemented task branch changes.",
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
+		Commit:               commit,
 	}); err != nil {
 		t.Fatalf("complete worktree run: %v", err)
 	}
@@ -8275,7 +8285,8 @@ printf '%%s\n' "$count" > run-count.txt
 %s agent done \
   --summary "Autonomous run $count" \
   --description "Autonomous run $count completed." \
-  --detailed-description "Detailed autonomous run $count."
+  --detailed-description "Detailed autonomous run $count." \
+  --technical-explanation "Technical autonomous run $count."
 `, passWrite, shellQuote(orpheusBin))
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("write autonomous review fix agent: %v", err)
@@ -8294,7 +8305,8 @@ printf 'pass\n' > status.txt
 %s agent done \
   --summary "Manual approval run" \
   --description "Manual approval run completed." \
-  --detailed-description "Detailed manual approval run."
+  --detailed-description "Detailed manual approval run." \
+  --technical-explanation "Technical manual approval run."
 touch %s
 `, shellQuote(orpheusBin), shellQuote(markerPath))
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {

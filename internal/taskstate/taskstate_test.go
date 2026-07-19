@@ -61,7 +61,7 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 	}
 
 	assertStoreYAMLContains(t, store, "alpha", "op-1",
-		"version: 3",
+		"version: 4",
 		"repo_id: alpha",
 		"task_id: op-1",
 		"target:",
@@ -114,6 +114,55 @@ func TestStoreRejectsOldRunLevelTargetSchema(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported task state version 1") {
 		t.Fatalf("error = %v, want old schema rejection", err)
+	}
+}
+
+func TestStoreMigratesVersionThreeCompletionsMissingTechnicalExplanation(t *testing.T) {
+	store := newTestStore(t)
+	path, err := store.Path("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("state path: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
+	legacyYAML := strings.Join([]string{
+		"version: 3",
+		"repo_id: alpha",
+		"task_id: op-1",
+		"runs:",
+		"- attempt: 1",
+		"  status: succeeded",
+		"  execution:",
+		"    purpose: implementation",
+		"    status: succeeded",
+		"    started_at: 2026-06-03T10:00:00Z",
+		"    finished_at: 2026-06-03T10:01:00Z",
+		"  completion:",
+		"    summary: Legacy implementation",
+		"    description: Recorded before the technical explanation field.",
+		"    detailed_description: Legacy PR body.",
+		"    completed_at: 2026-06-03T10:01:00Z",
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(legacyYAML), 0o644); err != nil {
+		t.Fatalf("write legacy state: %v", err)
+	}
+
+	loaded, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load legacy state: %v", err)
+	}
+	if loaded.Version != 4 {
+		t.Fatalf("version = %d, want migrated version 4", loaded.Version)
+	}
+	if len(loaded.Runs) != 1 || loaded.Runs[0].Completion == nil {
+		t.Fatalf("runs = %#v, want migrated completion", loaded.Runs)
+	}
+	completion := loaded.Runs[0].Completion
+	if !strings.Contains(completion.TechnicalExplanation, "before Orpheus required a dedicated technical explanation") ||
+		!strings.Contains(completion.TechnicalExplanation, "Legacy PR body.") {
+		t.Fatalf("technical explanation = %q, want compatibility backfill from legacy completion", completion.TechnicalExplanation)
 	}
 }
 
@@ -228,6 +277,84 @@ func TestStoreRecordsFeatureBranchPREventsIdempotently(t *testing.T) {
 	}
 }
 
+func TestCompletionRunsForReviewSelectsOriginalAndLatestCompletions(t *testing.T) {
+	originalCompletion := taskstate.Completion{Summary: "original"}
+	firstFixCompletion := taskstate.Completion{Summary: "first fix"}
+	latestFixCompletion := taskstate.Completion{Summary: "latest fix"}
+	state := taskstate.TaskState{Runs: []taskstate.RunAttempt{
+		{
+			Attempt:    3,
+			Completion: &firstFixCompletion,
+			ReviewFollowUp: &taskstate.ReviewFollowUp{
+				ReviewAttempt:  1,
+				FindingIndexes: []int{0},
+			},
+		},
+		{
+			Attempt:    1,
+			Completion: &originalCompletion,
+		},
+		{
+			Attempt: 4,
+		},
+		{
+			Attempt:    5,
+			Completion: &latestFixCompletion,
+			ReviewFollowUp: &taskstate.ReviewFollowUp{
+				ReviewAttempt:  2,
+				FindingIndexes: []int{0},
+			},
+		},
+	}}
+
+	history, err := taskstate.CompletionRunsForReview(state)
+
+	if err != nil {
+		t.Fatalf("completion runs for review: %v", err)
+	}
+	if history.Original.Attempt != 1 || history.Original.Completion.Summary != "original" {
+		t.Fatalf("original completion = %#v, want attempt 1", history.Original)
+	}
+	if history.Latest.Attempt != 5 || history.Latest.Completion.Summary != "latest fix" {
+		t.Fatalf("latest completion = %#v, want attempt 5", history.Latest)
+	}
+}
+
+func TestCompletionRunsForReviewRequiresLatestRunCompletion(t *testing.T) {
+	originalCompletion := taskstate.Completion{Summary: "original"}
+	latestCompletedCompletion := taskstate.Completion{Summary: "latest completed"}
+	state := taskstate.TaskState{Runs: []taskstate.RunAttempt{
+		{
+			Attempt:    1,
+			Completion: &originalCompletion,
+		},
+		{
+			Attempt:    2,
+			Completion: &latestCompletedCompletion,
+			ReviewFollowUp: &taskstate.ReviewFollowUp{
+				ReviewAttempt:  1,
+				FindingIndexes: []int{0},
+			},
+		},
+		{
+			Attempt: 3,
+			ReviewFollowUp: &taskstate.ReviewFollowUp{
+				ReviewAttempt:  2,
+				FindingIndexes: []int{0},
+			},
+		},
+	}}
+
+	history, err := taskstate.CompletionRunsForReview(state)
+
+	if err == nil {
+		t.Fatalf("CompletionRunsForReview() error = nil, history = %#v", history)
+	}
+	if !strings.Contains(err.Error(), "latest run attempt 3 completion is required") {
+		t.Fatalf("CompletionRunsForReview() error = %q, want latest run completion requirement", err)
+	}
+}
+
 func TestStoreCompleteRunRecordsCompletionFacts(t *testing.T) {
 	store := newTestStore(t,
 		time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC),
@@ -240,17 +367,19 @@ func TestStoreCompleteRunRecordsCompletionFacts(t *testing.T) {
 	})
 
 	completed := completeAlphaRun(t, store, attempt.Attempt, "complete run", taskstate.CompleteRunOptions{
-		Summary:             "Implemented completion",
-		Description:         "Recorded local review data.",
-		DetailedDescription: "Detailed PR body.",
+		Summary:              "Implemented completion",
+		Description:          "Recorded local review data.",
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
 	})
 	assertInitialCompletionRecorded(t, completed)
 
 	withCommit := completeAlphaRun(t, store, attempt.Attempt, "record completion commit", taskstate.CompleteRunOptions{
-		Summary:             "Implemented completion",
-		Description:         "Recorded local review data.",
-		DetailedDescription: "Detailed PR body.",
-		Commit:              "abc123",
+		Summary:              "Implemented completion",
+		Description:          "Recorded local review data.",
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
+		Commit:               "abc123",
 	})
 	if withCommit.Completion.Commit != "abc123" {
 		t.Fatalf("completion commit = %q, want abc123", withCommit.Completion.Commit)
@@ -259,10 +388,11 @@ func TestStoreCompleteRunRecordsCompletionFacts(t *testing.T) {
 	finishAlphaRunSucceeded(t, store, attempt.Attempt)
 
 	again := completeAlphaRun(t, store, attempt.Attempt, "complete same run again", taskstate.CompleteRunOptions{
-		Summary:             "Implemented completion",
-		Description:         "Recorded local review data.",
-		DetailedDescription: "Detailed PR body.",
-		Commit:              "abc123",
+		Summary:              "Implemented completion",
+		Description:          "Recorded local review data.",
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
+		Commit:               "abc123",
 	})
 	if !again.Completion.CompletedAt.Equal(completed.Completion.CompletedAt) {
 		t.Fatalf("idempotent completed_at = %s, want %s", again.Completion.CompletedAt, completed.Completion.CompletedAt)
@@ -276,6 +406,7 @@ func TestStoreCompleteRunRecordsCompletionFacts(t *testing.T) {
 		"summary: Implemented completion",
 		"description: Recorded local review data.",
 		"detailed_description: Detailed PR body.",
+		"technical_explanation: Technical explanation.",
 		"completed_at: 2026-06-03T10:01:00Z",
 		"commit: abc123",
 	)
@@ -293,27 +424,22 @@ func TestStoreRecordsRepeatedCompletionDiagnostic(t *testing.T) {
 		Worktree: "/tmp/alpha",
 	})
 	completeAlphaRun(t, store, attempt.Attempt, "complete run", taskstate.CompleteRunOptions{
-		Summary:             "First summary",
-		Description:         "First details.",
-		DetailedDescription: "Detailed PR body.",
+		Summary:              "First summary",
+		Description:          "First details.",
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
 	})
 
 	event, err := store.RecordRepeatedCompletion("alpha", "op-1", attempt.Attempt, taskstate.RepeatedCompletionOptions{
-		Summary:             "Second summary",
-		Description:         "Second details.",
-		DetailedDescription: "Detailed PR body.",
+		Summary:              "Second summary",
+		Description:          "Second details.",
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
 	})
 	if err != nil {
 		t.Fatalf("record repeated completion: %v", err)
 	}
-	if event.Type != taskstate.EventCompletionRepeated || event.Attempt != attempt.Attempt || event.Status != taskstate.RunStatusRunning {
-		t.Fatalf("event = %#v, want completion_repeated for running attempt", event)
-	}
-	if event.RequestedSummary != "Second summary" ||
-		event.RequestedDescription != "Second details." ||
-		event.RequestedDetailedDescription != "Detailed PR body." {
-		t.Fatalf("event requested payload = %#v", event)
-	}
+	assertRepeatedCompletionEvent(t, event, attempt.Attempt)
 	if !strings.Contains(event.Message, "preserved first completion") {
 		t.Fatalf("event message = %q, want preservation diagnostic", event.Message)
 	}
@@ -327,7 +453,8 @@ func TestStoreRecordsRepeatedCompletionDiagnostic(t *testing.T) {
 	}
 	if loaded.Runs[0].Completion.Summary != "First summary" ||
 		loaded.Runs[0].Completion.Description != "First details." ||
-		loaded.Runs[0].Completion.DetailedDescription != "Detailed PR body." {
+		loaded.Runs[0].Completion.DetailedDescription != "Detailed PR body." ||
+		loaded.Runs[0].Completion.TechnicalExplanation != "Technical explanation." {
 		t.Fatalf("completion = %#v, want first payload preserved", loaded.Runs[0].Completion)
 	}
 
@@ -336,8 +463,23 @@ func TestStoreRecordsRepeatedCompletionDiagnostic(t *testing.T) {
 		"requested_summary: Second summary",
 		"requested_description: Second details.",
 		"requested_detailed_description: Detailed PR body.",
+		"requested_technical_explanation: Technical explanation.",
 		"preserved first completion",
 	)
+}
+
+func assertRepeatedCompletionEvent(t *testing.T, event taskstate.Event, attempt int) {
+	t.Helper()
+
+	if event.Type != taskstate.EventCompletionRepeated || event.Attempt != attempt || event.Status != taskstate.RunStatusRunning {
+		t.Fatalf("event = %#v, want completion_repeated for running attempt", event)
+	}
+	if event.RequestedSummary != "Second summary" ||
+		event.RequestedDescription != "Second details." ||
+		event.RequestedDetailedDescription != "Detailed PR body." ||
+		event.RequestedTechnicalExplanation != "Technical explanation." {
+		t.Fatalf("event requested payload = %#v", event)
+	}
 }
 
 func TestStoreRecordsReviewAttemptsAndFindings(t *testing.T) {
@@ -1509,8 +1651,9 @@ func assertInitialCompletionRecorded(t *testing.T, completed taskstate.RunAttemp
 	if completed.Completion.Summary != "Implemented completion" ||
 		completed.Completion.Description != "Recorded local review data." ||
 		completed.Completion.DetailedDescription != "Detailed PR body." ||
+		completed.Completion.TechnicalExplanation != "Technical explanation." ||
 		!completed.Completion.CompletedAt.Equal(time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC)) {
-		t.Fatalf("completion = %#v, want recorded summary/description/detailed_description/completed_at", completed.Completion)
+		t.Fatalf("completion = %#v, want recorded summary/description/detailed_description/technical_explanation/completed_at", completed.Completion)
 	}
 }
 
@@ -1530,9 +1673,10 @@ func assertConflictingCompletionRejected(t *testing.T, store taskstate.Store, at
 	t.Helper()
 
 	_, err := store.CompleteRun("alpha", "op-1", attempt, taskstate.CompleteRunOptions{
-		Summary:             "Different",
-		Description:         "Recorded local review data.",
-		DetailedDescription: "Detailed PR body.",
+		Summary:              "Different",
+		Description:          "Recorded local review data.",
+		DetailedDescription:  "Detailed PR body.",
+		TechnicalExplanation: "Technical explanation.",
 	})
 	if !errors.Is(err, taskstate.ErrCompletionConflict) {
 		t.Fatalf("conflicting completion error = %v, want ErrCompletionConflict", err)
