@@ -42,18 +42,29 @@ func newAgentDoneCommand(opts *rootOptions) *cobra.Command {
 	var description string
 	var detailedDescription string
 	var detailedDescriptionFile string
+	var technicalExplanation string
+	var technicalExplanationFile string
 	cmd := &cobra.Command{
 		Use:   "done",
 		Short: "Record active agent completion",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
-			return runAgentDone(command, opts, summary, description, detailedDescription, detailedDescriptionFile)
+			return runAgentDone(command, opts, agentDoneOptions{
+				summary:                  summary,
+				description:              description,
+				detailedDescription:      detailedDescription,
+				detailedDescriptionFile:  detailedDescriptionFile,
+				technicalExplanation:     technicalExplanation,
+				technicalExplanationFile: technicalExplanationFile,
+			})
 		},
 	}
 	cmd.Flags().StringVar(&summary, "summary", "", "short completion summary")
 	cmd.Flags().StringVar(&description, "description", "", "concise commit-body completion description")
 	cmd.Flags().StringVar(&detailedDescription, "detailed-description", "", "markdown pull request body")
 	cmd.Flags().StringVar(&detailedDescriptionFile, "detailed-description-file", "", "path to markdown pull request body")
+	cmd.Flags().StringVar(&technicalExplanation, "technical-explanation", "", "markdown technical explanation of code changes")
+	cmd.Flags().StringVar(&technicalExplanationFile, "technical-explanation-file", "", "path to markdown technical explanation of code changes")
 	_ = cmd.MarkFlagRequired("summary")
 	_ = cmd.MarkFlagRequired("description")
 	return cmd
@@ -358,13 +369,19 @@ func flagLabel(label string) string {
 	return strings.ReplaceAll(label, " ", "-")
 }
 
+type agentDoneOptions struct {
+	summary                  string
+	description              string
+	detailedDescription      string
+	detailedDescriptionFile  string
+	technicalExplanation     string
+	technicalExplanationFile string
+}
+
 func runAgentDone(
 	command *cobra.Command,
 	opts *rootOptions,
-	summary string,
-	description string,
-	detailedDescription string,
-	detailedDescriptionFile string,
+	doneOpts agentDoneOptions,
 ) error {
 	logger := opts.log().With(
 		slog.String("component", "cli"),
@@ -372,7 +389,11 @@ func runAgentDone(
 	)
 	logger.DebugContext(command.Context(), "resolving active agent completion context")
 
-	detailedDescription, err := resolveDetailedDescription(detailedDescription, detailedDescriptionFile)
+	detailedDescription, err := resolveDetailedDescription(doneOpts.detailedDescription, doneOpts.detailedDescriptionFile)
+	if err != nil {
+		return fmt.Errorf("agent done: %w", err)
+	}
+	technicalExplanation, err := resolveTechnicalExplanation(doneOpts.technicalExplanation, doneOpts.technicalExplanationFile)
 	if err != nil {
 		return fmt.Errorf("agent done: %w", err)
 	}
@@ -388,9 +409,10 @@ func runAgentDone(
 
 	service := newAgentCompletionService(deps, taskCtx)
 	completed, err := service.Complete(command.Context(), agent.CompleteOptions{
-		Summary:             summary,
-		Description:         description,
-		DetailedDescription: detailedDescription,
+		Summary:              doneOpts.summary,
+		Description:          doneOpts.description,
+		DetailedDescription:  detailedDescription,
+		TechnicalExplanation: technicalExplanation,
 	})
 	if err != nil {
 		return fmt.Errorf("agent done: %w", err)
@@ -451,24 +473,55 @@ func renderAgentDoneResult(command *cobra.Command, completed agent.CompleteResul
 }
 
 func resolveDetailedDescription(inline string, filePath string) (string, error) {
-	hasInline := strings.TrimSpace(inline) != ""
-	filePath = strings.TrimSpace(filePath)
+	return resolveDoneText(doneTextOptions{
+		label:      "detailed description",
+		flag:       "detailed-description",
+		fileFlag:   "detailed-description-file",
+		readAction: "read detailed description file",
+		inline:     inline,
+		filePath:   filePath,
+	})
+}
+
+func resolveTechnicalExplanation(inline string, filePath string) (string, error) {
+	return resolveDoneText(doneTextOptions{
+		label:      "technical explanation",
+		flag:       "technical-explanation",
+		fileFlag:   "technical-explanation-file",
+		readAction: "read technical explanation file",
+		inline:     inline,
+		filePath:   filePath,
+	})
+}
+
+type doneTextOptions struct {
+	label      string
+	flag       string
+	fileFlag   string
+	readAction string
+	inline     string
+	filePath   string
+}
+
+func resolveDoneText(opts doneTextOptions) (string, error) {
+	hasInline := strings.TrimSpace(opts.inline) != ""
+	filePath := strings.TrimSpace(opts.filePath)
 	hasFile := filePath != ""
 	switch {
 	case hasInline && hasFile:
-		return "", errors.New("use exactly one of --detailed-description or --detailed-description-file")
+		return "", fmt.Errorf("use exactly one of --%s or --%s", opts.flag, opts.fileFlag)
 	case !hasInline && !hasFile:
-		return "", errors.New("detailed description is required; use --detailed-description or --detailed-description-file")
+		return "", fmt.Errorf("%s is required; use --%s or --%s", opts.label, opts.flag, opts.fileFlag)
 	case hasInline:
-		return inline, nil
+		return opts.inline, nil
 	}
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return "", fmt.Errorf("read detailed description file: %w", err)
+		return "", fmt.Errorf("%s: %w", opts.readAction, err)
 	}
 	if strings.TrimSpace(string(data)) == "" {
-		return "", errors.New("detailed description is required; file is empty")
+		return "", fmt.Errorf("%s is required; file is empty", opts.label)
 	}
 	return string(data), nil
 }

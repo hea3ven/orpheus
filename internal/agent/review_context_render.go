@@ -15,7 +15,7 @@ func RenderReviewContext(ctx ReviewContext) string {
 	appendReviewTaskContext(&builder, ctx)
 	appendRepositoryContext(&builder, ctx.Repository)
 	appendReviewTargetContext(&builder, ctx)
-	appendReviewCompletionContext(&builder, ctx.Review.Completion)
+	appendReviewCompletionContext(&builder, ctx.Review)
 	appendReviewContract(&builder)
 
 	return builder.String()
@@ -43,11 +43,23 @@ func appendReviewTargetContext(builder *strings.Builder, ctx ReviewContext) {
 	}
 }
 
-func appendReviewCompletionContext(builder *strings.Builder, completion taskstate.Completion) {
-	builder.WriteString("\nLatest completion:\n")
+func appendReviewCompletionContext(builder *strings.Builder, review ContextReview) {
+	if review.OriginalCompletion != nil && review.LatestFixCompletion != nil {
+		appendReviewCompletionBlock(builder, "Original completion", *review.OriginalCompletion)
+		appendReviewCompletionBlock(builder, "Latest fix completion", *review.LatestFixCompletion)
+		return
+	}
+	appendReviewCompletionBlock(builder, "Latest completion", review.Completion)
+}
+
+func appendReviewCompletionBlock(builder *strings.Builder, label string, completion taskstate.Completion) {
+	builder.WriteString("\n")
+	builder.WriteString(label)
+	builder.WriteString(":\n")
 	appendPromptLine(builder, "- Summary", completion.Summary)
 	appendPromptBlock(builder, "- Description", completion.Description)
 	appendPromptBlock(builder, "- Detailed description", completion.DetailedDescription)
+	appendPromptBlock(builder, "- Technical explanation", completion.TechnicalExplanation)
 	if strings.TrimSpace(completion.Commit) != "" {
 		appendPromptLine(builder, "- Commit", completion.Commit)
 	}

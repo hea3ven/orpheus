@@ -20,10 +20,12 @@ type ReviewContext struct {
 
 // ContextReview describes the active review attempt and step.
 type ContextReview struct {
-	Attempt    int
-	Step       string
-	EnvStep    string
-	Completion taskstate.Completion
+	Attempt             int
+	Step                string
+	EnvStep             string
+	Completion          taskstate.Completion
+	OriginalCompletion  *taskstate.Completion
+	LatestFixCompletion *taskstate.Completion
 }
 
 // ResolveReview validates the active Orpheus review-agent context.
@@ -47,7 +49,7 @@ func (r ActiveContextResolver) ResolveReview(ctx context.Context) (ReviewContext
 	if err != nil {
 		return ReviewContext{}, err
 	}
-	run, taskTarget, err := r.resolveLatestCompletedRun(repo.ID, env.TaskID)
+	completions, taskTarget, err := r.resolveReviewCompletionRuns(repo.ID, env.TaskID)
 	if err != nil {
 		return ReviewContext{}, err
 	}
@@ -67,61 +69,79 @@ func (r ActiveContextResolver) ResolveReview(ctx context.Context) (ReviewContext
 	if err != nil {
 		return ReviewContext{}, err
 	}
-	activeContext, err := newActiveContext(repo, targets, taskItem, run, candidate, cwd)
+	activeContext, err := newActiveContext(repo, targets, taskItem, completions.Latest, candidate, cwd)
 	if err != nil {
 		return ReviewContext{}, err
 	}
 
+	completion := reviewCompletionContext(completions)
 	return ReviewContext{
 		Repository: activeContext.Repository,
 		Task:       activeContext.Task,
 		Run:        activeContext.Run,
 		Target:     activeContext.Target,
 		Review: ContextReview{
-			Attempt:    review.Attempt,
-			Step:       latestReviewStep(review).Name,
-			EnvStep:    strings.TrimSpace(r.envValue(envReviewStep)),
-			Completion: *run.Completion,
+			Attempt:             review.Attempt,
+			Step:                latestReviewStep(review).Name,
+			EnvStep:             strings.TrimSpace(r.envValue(envReviewStep)),
+			Completion:          completion.latest,
+			OriginalCompletion:  completion.original,
+			LatestFixCompletion: completion.latestFix,
 		},
 	}, nil
 }
 
-func (r ActiveContextResolver) resolveLatestCompletedRun(
+type reviewCompletionSelection struct {
+	latest    taskstate.Completion
+	original  *taskstate.Completion
+	latestFix *taskstate.Completion
+}
+
+func reviewCompletionContext(history taskstate.CompletionRunHistory) reviewCompletionSelection {
+	latest := *history.Latest.Completion
+	if history.Latest.ReviewFollowUp == nil {
+		return reviewCompletionSelection{latest: latest}
+	}
+	original := *history.Original.Completion
+	latestFix := latest
+	return reviewCompletionSelection{
+		latest:    latest,
+		original:  &original,
+		latestFix: &latestFix,
+	}
+}
+
+func (r ActiveContextResolver) resolveReviewCompletionRuns(
 	repoID string,
 	taskID string,
-) (taskstate.RunAttempt, taskstate.TaskTarget, error) {
+) (taskstate.CompletionRunHistory, taskstate.TaskTarget, error) {
 	state, err := r.RunStore.Load(repoID, taskID)
 	if err != nil {
-		return taskstate.RunAttempt{}, taskstate.TaskTarget{}, fmt.Errorf(
+		return taskstate.CompletionRunHistory{}, taskstate.TaskTarget{}, fmt.Errorf(
 			"load latest Orpheus run for task %s/%s: %w",
 			repoID,
 			taskID,
 			err,
 		)
 	}
-	run, ok := taskstate.LatestRun(state)
-	if !ok {
-		return taskstate.RunAttempt{}, taskstate.TaskTarget{}, fmt.Errorf(
-			"task %s/%s has no Orpheus run attempts",
+	history, historyErr := taskstate.CompletionRunsForReview(state)
+	if historyErr != nil {
+		return taskstate.CompletionRunHistory{}, taskstate.TaskTarget{}, fmt.Errorf(
+			"resolve review completion history for task %s/%s: %w",
 			repoID,
 			taskID,
-		)
-	}
-	if run.Completion == nil {
-		return taskstate.RunAttempt{}, taskstate.TaskTarget{}, fmt.Errorf(
-			"latest Orpheus run attempt %d has no completion block",
-			run.Attempt,
+			historyErr,
 		)
 	}
 	target, ok := taskstate.Target(state)
 	if !ok {
-		return taskstate.RunAttempt{}, taskstate.TaskTarget{}, fmt.Errorf(
+		return taskstate.CompletionRunHistory{}, taskstate.TaskTarget{}, fmt.Errorf(
 			"task %s/%s has no taskstate target",
 			repoID,
 			taskID,
 		)
 	}
-	return run, target, nil
+	return history, target, nil
 }
 
 func (r ActiveContextResolver) requiredReviewAttempt() (int, error) {

@@ -209,9 +209,10 @@ func TestFinalizeRequiresConfirmationForRunningCompletion(t *testing.T) {
 			Attempt: 1,
 			Status:  taskstate.RunStatusRunning,
 			Completion: &taskstate.Completion{
-				Summary:             "Done",
-				Description:         "Implemented.",
-				DetailedDescription: "Detailed PR body.",
+				Summary:              "Done",
+				Description:          "Implemented.",
+				DetailedDescription:  "Detailed PR body.",
+				TechnicalExplanation: "Technical explanation.",
 			},
 		}),
 	})
@@ -241,9 +242,10 @@ func TestFinalizeAllowsConfirmedRunningCompletionWithoutMutatingRunStatus(t *tes
 			Attempt: 1,
 			Status:  taskstate.RunStatusRunning,
 			Completion: &taskstate.Completion{
-				Summary:             "Done",
-				Description:         "Implemented.",
-				DetailedDescription: "Detailed PR body.",
+				Summary:              "Done",
+				Description:          "Implemented.",
+				DetailedDescription:  "Detailed PR body.",
+				TechnicalExplanation: "Technical explanation.",
 			},
 		}),
 	})
@@ -279,9 +281,10 @@ func TestFinalizeRecordsPublicationFailureAndRetriesWithPassedReview(t *testing.
 		Attempt: 1,
 		Status:  taskstate.RunStatusSucceeded,
 		Completion: &taskstate.Completion{
-			Summary:             "Done",
-			Description:         "Commit reviewed repo-root changes.",
-			DetailedDescription: "Detailed PR body.",
+			Summary:              "Done",
+			Description:          "Commit reviewed repo-root changes.",
+			DetailedDescription:  "Detailed PR body.",
+			TechnicalExplanation: "Technical explanation.",
 		},
 	})
 	finishedAt := time.Date(2026, 6, 10, 11, 0, 0, 0, time.UTC)
@@ -346,9 +349,10 @@ func TestFinalizeDoesNotRequestRunningConfirmationWhenOtherChecksFail(t *testing
 			Attempt: 1,
 			Status:  taskstate.RunStatusRunning,
 			Completion: &taskstate.Completion{
-				Summary:             "Done",
-				Description:         "Implemented.",
-				DetailedDescription: "Detailed PR body.",
+				Summary:              "Done",
+				Description:          "Implemented.",
+				DetailedDescription:  "Detailed PR body.",
+				TechnicalExplanation: "Technical explanation.",
 			},
 		}),
 	})
@@ -372,9 +376,10 @@ func TestFinalizeInfersSingleRunningCompletionCandidate(t *testing.T) {
 			Attempt: 2,
 			Status:  taskstate.RunStatusRunning,
 			Completion: &taskstate.Completion{
-				Summary:             "Done",
-				Description:         "Implemented.",
-				DetailedDescription: "Detailed PR body.",
+				Summary:              "Done",
+				Description:          "Implemented.",
+				DetailedDescription:  "Detailed PR body.",
+				TechnicalExplanation: "Technical explanation.",
 			},
 		}),
 	})
@@ -421,9 +426,10 @@ func TestFinalizeInfersFromTaskStateTargetBeforeMetadataMirrorValidation(t *test
 					Attempt: 1,
 					Status:  taskstate.RunStatusSucceeded,
 					Completion: &taskstate.Completion{
-						Summary:             "Done",
-						Description:         "Implemented.",
-						DetailedDescription: "Detailed PR body.",
+						Summary:              "Done",
+						Description:          "Implemented.",
+						DetailedDescription:  "Detailed PR body.",
+						TechnicalExplanation: "Technical explanation.",
 					},
 				},
 			},
@@ -458,8 +464,13 @@ func TestFinalizeDoesNotOfferRunningEscapeHatchForInvalidTargets(t *testing.T) {
 		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
 			Attempt: 1,
 			Status:  taskstate.RunStatusRunning,
-			Completion: &taskstate.Completion{Summary: "Done", Description: "Implemented.",
-				DetailedDescription: "Detailed PR body.", Commit: "abc123"},
+			Completion: &taskstate.Completion{
+				Summary:              "Done",
+				Description:          "Implemented.",
+				DetailedDescription:  "Detailed PR body.",
+				TechnicalExplanation: "Technical explanation.",
+				Commit:               "abc123",
+			},
 		}),
 	})
 
@@ -492,9 +503,10 @@ func TestFinalizePublishesFeatureBranchPRWithoutClosingTask(t *testing.T) {
 			Attempt: 1,
 			Status:  taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
-				Summary:             "Publish branch",
-				Description:         "Commit reviewed feature work.",
-				DetailedDescription: "Detailed PR body.",
+				Summary:              "Publish branch",
+				Description:          "Commit reviewed feature work.",
+				DetailedDescription:  "Detailed PR body.",
+				TechnicalExplanation: "Technical explanation.",
 			},
 		}),
 	})
@@ -581,9 +593,10 @@ func TestFinalizeDiagnosticsCorrelateFailedFeatureBranchPRCreation(t *testing.T)
 			Attempt: 1,
 			Status:  taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
-				Summary:             "Publish branch",
-				Description:         "Commit reviewed feature work.",
-				DetailedDescription: "Detailed PR body.",
+				Summary:              "Publish branch",
+				Description:          "Commit reviewed feature work.",
+				DetailedDescription:  "Detailed PR body.",
+				TechnicalExplanation: "Technical explanation.",
 			},
 		}),
 	})
@@ -634,9 +647,10 @@ func TestFinalizeRejectsMissingExternalReferenceBeforeFeatureBranchPublication(t
 			Attempt: 1,
 			Status:  taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
-				Summary:             "Publish branch",
-				Description:         "Commit reviewed feature work.",
-				DetailedDescription: "Detailed PR body.",
+				Summary:              "Publish branch",
+				Description:          "Commit reviewed feature work.",
+				DetailedDescription:  "Detailed PR body.",
+				TechnicalExplanation: "Technical explanation.",
 			},
 		}),
 	})
@@ -681,9 +695,10 @@ func TestFinalizePublishesRepoRootFeatureBranchPRWithoutClosingTask(t *testing.T
 				Attempt: 1,
 				Status:  taskstate.RunStatusSucceeded,
 				Completion: &taskstate.Completion{
-					Summary:             "Publish repo-root branch",
-					Description:         "Commit reviewed feature work.",
-					DetailedDescription: "Detailed PR body.",
+					Summary:              "Publish repo-root branch",
+					Description:          "Commit reviewed feature work.",
+					DetailedDescription:  "Detailed PR body.",
+					TechnicalExplanation: "Technical explanation.",
 				},
 			}),
 		},
@@ -735,9 +750,10 @@ func TestFinalizeRecoversExistingFeatureBranchPR(t *testing.T) {
 			Attempt: 1,
 			Status:  taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
-				Summary:             "Publish branch",
-				Description:         "Commit reviewed feature work.",
-				DetailedDescription: "Detailed PR body.",
+				Summary:              "Publish branch",
+				Description:          "Commit reviewed feature work.",
+				DetailedDescription:  "Detailed PR body.",
+				TechnicalExplanation: "Technical explanation.",
 			},
 		}),
 	})
@@ -788,18 +804,20 @@ func TestFinalizePublishesOriginalCompletionAfterReviewFollowUp(t *testing.T) {
 			Attempt: 1,
 			Status:  taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
-				Summary:             "Implement original feature",
-				Description:         "Commit the original implementation.",
-				DetailedDescription: "## Original PR body\n\nThe primary implementation details.",
+				Summary:              "Implement original feature",
+				Description:          "Commit the original implementation.",
+				DetailedDescription:  "## Original PR body\n\nThe primary implementation details.",
+				TechnicalExplanation: "Technical explanation.",
 			},
 		},
 		taskstate.RunAttempt{
 			Attempt: 2,
 			Status:  taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
-				Summary:             "Fix review blocker",
-				Description:         "Addressed review-only follow-up work.",
-				DetailedDescription: "## Fix run PR body\n\nThis must not become the PR body.",
+				Summary:              "Fix review blocker",
+				Description:          "Addressed review-only follow-up work.",
+				DetailedDescription:  "## Fix run PR body\n\nThis must not become the PR body.",
+				TechnicalExplanation: "Technical explanation.",
 			},
 			ReviewFollowUp: &taskstate.ReviewFollowUp{
 				ReviewAttempt:  1,
@@ -919,9 +937,10 @@ func TestFinalizeRefusesFeatureBranchPublicationWithoutReviewedChanges(t *testin
 			Attempt: 1,
 			Status:  taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
-				Summary:             "Publish branch",
-				Description:         "Commit reviewed feature work.",
-				DetailedDescription: "Detailed PR body.",
+				Summary:              "Publish branch",
+				Description:          "Commit reviewed feature work.",
+				DetailedDescription:  "Detailed PR body.",
+				TechnicalExplanation: "Technical explanation.",
 			},
 		}),
 	})

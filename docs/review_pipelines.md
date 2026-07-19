@@ -6,6 +6,13 @@ steps run unattended only while they pass or produce no operator decisions; a
 check or agent-review blocker prompts for an explicit keep, downgrade, or
 waive/cancel decision from both `task run` and `task review`.
 
+`orpheus agent done` requires the usual summary, commit description, and detailed
+PR body source plus exactly one technical explanation source:
+`--technical-explanation <markdown>` or `--technical-explanation-file <path>`.
+The technical explanation is stored with the implementation or targeted follow-up
+completion and is rendered into review-agent context so reviewers can understand
+the code-change rationale without changing PR title or body selection.
+
 Keeping a check or agent-review blocker preserves it, dispatches a targeted
 implementer follow-up, records which findings the run targets, and starts a
 fresh review attempt after the fix records completion. Downgrades and waivers
