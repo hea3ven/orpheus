@@ -566,6 +566,8 @@ func shortReviewDetail(detail string) string {
 	switch {
 	case detail == "local review; run task review":
 		return "local review"
+	case strings.HasPrefix(detail, "local review; run task review (waiting for manual step ") && strings.HasSuffix(detail, ")"):
+		return "manual; task review"
 	case detail == "review running":
 		return "review running"
 	case strings.HasPrefix(detail, "review blocked after autonomous attempt budget"):

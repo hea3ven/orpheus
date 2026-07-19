@@ -192,6 +192,75 @@ func TestRenderStatusResponsiveHidesPriorityAtLowWidth(t *testing.T) {
 	assertStatusLinesWithinWidth(t, got, 44)
 }
 
+func TestRenderStatusResponsiveCompactsManualReviewWaitDetail(t *testing.T) {
+	const fullDetail = "local review; run task review (waiting for manual step local-review)"
+	projection := manualReviewStatusProjection(fullDetail)
+
+	t.Run("narrow output uses compact manual wait detail", func(t *testing.T) {
+		var output bytes.Buffer
+		err := renderStatus(&output, projection, true, statusRenderOptions{MaxWidth: 52})
+		if err != nil {
+			t.Fatalf("render status: %v", err)
+		}
+
+		got := output.String()
+		if !strings.Contains(got, "manual; task review") {
+			t.Fatalf("responsive output missing compact manual review detail:\n%s", got)
+		}
+		if strings.Contains(got, "waiting for manual step") || strings.Contains(got, "local-review") {
+			t.Fatalf("responsive output kept full manual wait detail:\n%s", got)
+		}
+		assertStatusLinesWithinWidth(t, got, 52)
+	})
+
+	t.Run("unbounded output preserves full manual step detail", func(t *testing.T) {
+		var output bytes.Buffer
+		err := renderStatus(&output, projection, true, statusRenderOptions{})
+		if err != nil {
+			t.Fatalf("render status: %v", err)
+		}
+
+		got := output.String()
+		if !strings.Contains(got, fullDetail) {
+			t.Fatalf("unbounded output missing full manual wait detail:\n%s", got)
+		}
+	})
+
+	t.Run("no truncate output preserves full manual step detail", func(t *testing.T) {
+		var output bytes.Buffer
+		err := renderStatus(&output, projection, true, statusRenderOptions{MaxWidth: 52, NoTruncate: true})
+		if err != nil {
+			t.Fatalf("render status: %v", err)
+		}
+
+		got := output.String()
+		if !strings.Contains(got, fullDetail) {
+			t.Fatalf("no-truncate output missing full manual wait detail:\n%s", got)
+		}
+	})
+}
+
+func manualReviewStatusProjection(detail string) status.Projection {
+	return status.Projection{Groups: []status.Group{{
+		ID:    status.GroupInReview,
+		Title: "Reviewing",
+		Entries: []status.Entry{{
+			Kind: status.EntryTask,
+			Repository: task.Repository{
+				ID:           "alpha",
+				Name:         "Repository Name",
+				TaskIDPrefix: "op",
+			},
+			Task: task.Task{
+				ID:       "op-manual",
+				Priority: 2,
+				Title:    "Resume the paused review attempt",
+			},
+			Detail: detail,
+		}},
+	}}}
+}
+
 func TestRenderStatusNoTruncatePreservesUnboundedOutput(t *testing.T) {
 	projection := status.Projection{Groups: []status.Group{{
 		ID:    status.GroupInReview,
