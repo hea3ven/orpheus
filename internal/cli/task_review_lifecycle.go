@@ -255,26 +255,14 @@ func newTaskReviewLifecycleService(
 		if err != nil {
 			return workflow.DispatchCommand{}, "", err
 		}
-		return workflow.DispatchCommand{
-			AgentName: commandSnapshot.AgentName,
-			Command:   commandSnapshot.Command,
-			Args:      commandSnapshot.Args,
-			Harness:   commandSnapshot.Harness,
-			Model:     commandSnapshot.Model,
-		}, prompt, nil
+		return workflow.NewDispatchCommand(commandSnapshot), prompt, nil
 	}
 	service.ResolveFollowUpCommand = func(commandContext workflow.DispatchCommandContext, agentName string) (workflow.DispatchCommand, string, error) {
 		prompt, commandSnapshot, err := resolveTaskRunFollowUpAgentCommand(paths, agentName, commandContext.SessionName)
 		if err != nil {
 			return workflow.DispatchCommand{}, "", err
 		}
-		return workflow.DispatchCommand{
-			AgentName: commandSnapshot.AgentName,
-			Command:   commandSnapshot.Command,
-			Args:      commandSnapshot.Args,
-			Harness:   commandSnapshot.Harness,
-			Model:     commandSnapshot.Model,
-		}, prompt, nil
+		return workflow.NewDispatchCommand(commandSnapshot), prompt, nil
 	}
 	return service
 }

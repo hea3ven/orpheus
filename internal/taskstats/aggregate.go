@@ -24,11 +24,25 @@ const (
 type View string
 
 const (
-	ViewThroughput     View = "throughput"
-	ViewImplementation View = "implementation"
-	ViewReview         View = "review"
-	ViewConsumption    View = "consumption"
+	ViewThroughput          View = "throughput"
+	ViewImplementation      View = "implementation"
+	ViewReview              View = "review"
+	ViewConsumption         View = "consumption"
+	ViewImplementationModel View = "implementation-model"
+	ViewReviewerModel       View = "reviewer-model"
+	ViewModelPair           View = "model-pair"
 )
+
+const (
+	modelCohortMixed      = "mixed"
+	modelCohortManualOnly = "manual-only"
+	modelCohortUnknown    = "unknown"
+)
+
+type modelCohortKey struct {
+	implementationModel string
+	reviewerModel       string
+}
 
 // StateLoader loads local Orpheus task state for aggregate projection.
 type StateLoader interface {
@@ -53,6 +67,7 @@ type AggregateReport struct {
 	Repos []string
 
 	Periods []AggregatePeriod
+	Cohorts []AggregateModelCohort
 
 	TasksWithoutAnchor            int
 	TasksWithoutResolvedTimestamp int
@@ -96,6 +111,26 @@ type AggregatePeriod struct {
 
 	Totals          AggregateTotals
 	TotalsByPurpose map[taskstate.AgentExecutionPurpose]AggregateTotals
+}
+
+// AggregateModelCohort contains metrics for one implementation/reviewer model cohort.
+type AggregateModelCohort struct {
+	Key                 string
+	ImplementationModel string
+	ReviewerModel       string
+	Tasks               int
+
+	CompletionTime DurationCohort
+	WorkflowTime   DurationCohort
+	RepairCycles   IntCohort
+	Tokens         IntCohort
+	Cost           CostCohort
+
+	FirstPassApprovals  int
+	RepairTasks         int
+	BlockedReviews      int
+	BlockingFindings    int
+	OperationalFailures int
 }
 
 // DurationCohort stores per-task duration distribution and known-data coverage.
@@ -208,8 +243,17 @@ func ParseView(view string) (View, error) {
 		return ViewReview, nil
 	case "consumption", "usage", "cost":
 		return ViewConsumption, nil
+	case "implementation-model", "implementer-model", "implementation_model", "implementer_model":
+		return ViewImplementationModel, nil
+	case "reviewer-model", "review-model", "reviewer_model", "review_model":
+		return ViewReviewerModel, nil
+	case "model-pair", "pair", "model_pair", "implementation-reviewer-pair", "implementer-reviewer-pair":
+		return ViewModelPair, nil
 	default:
-		return "", fmt.Errorf("unsupported stats view %q; expected throughput, implementation, review, or consumption", view)
+		return "", fmt.Errorf(
+			"unsupported stats view %q; expected throughput, implementation, review, consumption, implementation-model, reviewer-model, or model-pair",
+			view,
+		)
 	}
 }
 
@@ -250,6 +294,7 @@ func AggregateReportFromSnapshotWithOptions(
 		Repos: append([]string(nil), opts.Repositories...),
 	}
 	periods := map[string]*AggregatePeriod{}
+	cohorts := map[modelCohortKey]*AggregateModelCohort{}
 	failures := make([]taskmodel.RepoFailure, 0)
 	repoFilter := newRepositoryFilter(opts.Repositories)
 	consumptionBuckets := map[string]map[string][]executionRecord{}
@@ -281,6 +326,8 @@ func AggregateReportFromSnapshotWithOptions(
 				addReviewTask(&report, periods, group, opts, repoSnapshot.Repository, taskItem, taskState)
 			case ViewConsumption:
 				collectConsumptionTask(&report, consumptionBuckets, group, opts, repoSnapshot.Repository, taskItem, taskState)
+			case ViewImplementationModel, ViewReviewerModel, ViewModelPair:
+				addModelComparisonTask(&report, cohorts, opts, taskItem, taskState)
 			default:
 				addThroughputTask(&report, periods, group, opts, taskItem, taskState)
 			}
@@ -299,6 +346,10 @@ func AggregateReportFromSnapshotWithOptions(
 	report.Periods = sortedPeriods(periods)
 	for i := range report.Periods {
 		report.Periods[i].finish()
+	}
+	report.Cohorts = sortedModelCohorts(cohorts)
+	for i := range report.Cohorts {
+		report.Cohorts[i].finish()
 	}
 	return report, failures
 }
@@ -398,6 +449,149 @@ func collectConsumptionTask(
 	}
 }
 
+func addModelComparisonTask(
+	report *AggregateReport,
+	cohorts map[modelCohortKey]*AggregateModelCohort,
+	opts AggregateReportOptions,
+	taskItem taskmodel.Task,
+	state taskstate.TaskState,
+) {
+	anchor, ok := modelComparisonAnchor(report.View, state)
+	if !ok {
+		report.TasksWithoutAnchor++
+		report.addMissingModelComparisonAnchor()
+		return
+	}
+	if !inDateRange(anchor, opts) {
+		return
+	}
+
+	implementationCohort := implementationModelCohort(state)
+	reviewerCohort := reviewerModelCohort(state)
+	outcomeCohort := ensureModelCohort(cohorts, modelOutcomeKey(report.View, implementationCohort, reviewerCohort))
+	outcomeCohort.addModelOutcomeTask(taskItem, state)
+	addModelComparisonUsage(cohorts, report.View, implementationCohort, reviewerCohort, state)
+}
+
+func modelComparisonAnchor(view View, state taskstate.TaskState) (time.Time, bool) {
+	switch view {
+	case ViewReviewerModel:
+		return firstReviewActivityAt(state)
+	default:
+		return firstImplementationDispatchAt(state)
+	}
+}
+
+func (r *AggregateReport) addMissingModelComparisonAnchor() {
+	switch r.View {
+	case ViewReviewerModel:
+		r.TasksWithoutReviewActivity++
+	default:
+		r.TasksWithoutImplementation++
+	}
+}
+
+func modelOutcomeKey(view View, implementationCohort string, reviewerCohort string) modelCohortKey {
+	switch view {
+	case ViewImplementationModel:
+		return newImplementationModelCohortKey(implementationCohort)
+	case ViewReviewerModel:
+		return newReviewerModelCohortKey(reviewerCohort)
+	default:
+		return newModelPairCohortKey(implementationCohort, reviewerCohort)
+	}
+}
+
+func addModelComparisonUsage(
+	cohorts map[modelCohortKey]*AggregateModelCohort,
+	view View,
+	implementationCohort string,
+	reviewerCohort string,
+	state taskstate.TaskState,
+) {
+	switch view {
+	case ViewImplementationModel:
+		addUsageByModel(cohorts, implementationRecords(state), newImplementationModelCohortKey)
+	case ViewReviewerModel:
+		addUsageByModel(cohorts, reviewRecords(state), newReviewerModelCohortKey)
+	case ViewModelPair:
+		addUsageByModelPair(cohorts, implementationCohort, reviewerCohort, state)
+	}
+}
+
+func addUsageByModelPair(
+	cohorts map[modelCohortKey]*AggregateModelCohort,
+	implementationCohort string,
+	reviewerCohort string,
+	state taskstate.TaskState,
+) {
+	recordsByPair := map[modelCohortKey][]executionRecord{}
+
+	for _, record := range implementationRecords(state) {
+		pairKey := newModelPairCohortKey(executionModelCohort(record.execution), reviewerCohort)
+		recordsByPair[pairKey] = append(recordsByPair[pairKey], record)
+	}
+	for _, record := range reviewRecords(state) {
+		pairKey := newModelPairCohortKey(implementationCohort, executionModelCohort(record.execution))
+		recordsByPair[pairKey] = append(recordsByPair[pairKey], record)
+	}
+
+	for pairKey, records := range recordsByPair {
+		cohort := ensureModelCohort(cohorts, pairKey)
+		cohort.addUsageRecords(records)
+	}
+}
+
+func addUsageByModel(
+	cohorts map[modelCohortKey]*AggregateModelCohort,
+	records []executionRecord,
+	keyForModel func(string) modelCohortKey,
+) {
+	recordsByModel := map[modelCohortKey][]executionRecord{}
+	for _, record := range records {
+		model := executionModelCohort(record.execution)
+		key := keyForModel(model)
+		recordsByModel[key] = append(recordsByModel[key], record)
+	}
+	for key, records := range recordsByModel {
+		cohort := ensureModelCohort(cohorts, key)
+		cohort.addUsageRecords(records)
+	}
+}
+
+func newImplementationModelCohortKey(model string) modelCohortKey {
+	return modelCohortKey{implementationModel: model}
+}
+
+func newReviewerModelCohortKey(model string) modelCohortKey {
+	return modelCohortKey{reviewerModel: model}
+}
+
+func newModelPairCohortKey(implementationModel string, reviewerModel string) modelCohortKey {
+	return modelCohortKey{
+		implementationModel: implementationModel,
+		reviewerModel:       reviewerModel,
+	}
+}
+
+func (k modelCohortKey) toCohort() AggregateModelCohort {
+	return AggregateModelCohort{
+		Key:                 k.displayKey(),
+		ImplementationModel: k.implementationModel,
+		ReviewerModel:       k.reviewerModel,
+	}
+}
+
+func (k modelCohortKey) displayKey() string {
+	if k.implementationModel == "" {
+		return k.reviewerModel
+	}
+	if k.reviewerModel == "" {
+		return k.implementationModel
+	}
+	return k.implementationModel + "/" + k.reviewerModel
+}
+
 func ensurePeriod(periods map[string]*AggregatePeriod, key string) *AggregatePeriod {
 	period := periods[key]
 	if period == nil {
@@ -405,6 +599,16 @@ func ensurePeriod(periods map[string]*AggregatePeriod, key string) *AggregatePer
 		periods[key] = period
 	}
 	return period
+}
+
+func ensureModelCohort(cohorts map[modelCohortKey]*AggregateModelCohort, key modelCohortKey) *AggregateModelCohort {
+	cohort := cohorts[key]
+	if cohort == nil {
+		newCohort := key.toCohort()
+		cohort = &newCohort
+		cohorts[key] = cohort
+	}
+	return cohort
 }
 
 func sortedPeriods(periods map[string]*AggregatePeriod) []AggregatePeriod {
@@ -418,6 +622,23 @@ func sortedPeriods(periods map[string]*AggregatePeriod) []AggregatePeriod {
 	return result
 }
 
+func sortedModelCohorts(cohorts map[modelCohortKey]*AggregateModelCohort) []AggregateModelCohort {
+	result := make([]AggregateModelCohort, 0, len(cohorts))
+	for _, cohort := range cohorts {
+		result = append(result, *cohort)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Key != result[j].Key {
+			return result[i].Key < result[j].Key
+		}
+		if result[i].ImplementationModel != result[j].ImplementationModel {
+			return result[i].ImplementationModel < result[j].ImplementationModel
+		}
+		return result[i].ReviewerModel < result[j].ReviewerModel
+	})
+	return result
+}
+
 func (p *AggregatePeriod) finish() {
 	p.WorkflowTime.finish()
 	p.ImplementationAgentTime.finish()
@@ -425,6 +646,14 @@ func (p *AggregatePeriod) finish() {
 	p.RepairCycles.finish()
 	p.Tokens.finish()
 	p.Cost.finish()
+}
+
+func (c *AggregateModelCohort) finish() {
+	c.CompletionTime.finish()
+	c.WorkflowTime.finish()
+	c.RepairCycles.finish()
+	c.Tokens.finish()
+	c.Cost.finish()
 }
 
 func (p *AggregatePeriod) addThroughputTask(
@@ -502,6 +731,42 @@ func (p *AggregatePeriod) addConsumptionRecords(records []executionRecord) {
 	p.Tokens.add(usage.TotalTokens, knownUsage)
 	cost, knownCost := taskCost(records)
 	p.Cost.add(cost, knownCost)
+}
+
+func (c *AggregateModelCohort) addModelOutcomeTask(taskItem taskmodel.Task, state taskstate.TaskState) {
+	c.Tasks++
+	if completionTime, ok := implementationAgentDuration(state); ok {
+		c.CompletionTime.addKnown(completionTime)
+	} else {
+		c.CompletionTime.addUnknown()
+	}
+	if resolvedAt, ok := resolvedAt(taskItem, state); ok {
+		if workflowTime, ok := workflowDuration(state, resolvedAt); ok {
+			c.WorkflowTime.addKnown(workflowTime)
+		} else {
+			c.WorkflowTime.addUnknown()
+		}
+	} else {
+		c.WorkflowTime.addUnknown()
+	}
+	repairCycles := repairCycleCount(state)
+	c.RepairCycles.addKnown(repairCycles)
+	if repairCycles > 0 {
+		c.RepairTasks++
+	}
+	if firstReviewPassed(state) {
+		c.FirstPassApprovals++
+	}
+	c.BlockedReviews += reviewStatusCount(state, taskstate.ReviewStatusBlocked)
+	c.OperationalFailures += reviewStatusCount(state, taskstate.ReviewStatusFailed)
+	c.BlockingFindings += blockingFindingCount(state)
+}
+
+func (c *AggregateModelCohort) addUsageRecords(records []executionRecord) {
+	usage, knownUsage := taskUsage(records)
+	c.Tokens.add(usage.TotalTokens, knownUsage)
+	cost, knownCost := taskCost(records)
+	c.Cost.add(cost, knownCost)
 }
 
 func resolvedAt(taskItem taskmodel.Task, state taskstate.TaskState) (time.Time, bool) {
@@ -619,6 +884,80 @@ func implementationRecords(state taskstate.TaskState) []executionRecord {
 		))
 	}
 	return records
+}
+
+func reviewRecords(state taskstate.TaskState) []executionRecord {
+	records := make([]executionRecord, 0)
+	for _, reviewAttempt := range state.Reviews {
+		for _, step := range reviewAttempt.Steps {
+			if step.Kind != taskstate.ReviewStepKindAgentReview || step.Execution == nil {
+				continue
+			}
+			records = append(records, newExecutionRecord(
+				taskstate.AgentExecutionPurposeReview,
+				*step.Execution,
+			))
+		}
+	}
+	return records
+}
+
+func implementationModelCohort(state taskstate.TaskState) string {
+	return recordsModelCohort(implementationRecords(state), false)
+}
+
+func reviewerModelCohort(state taskstate.TaskState) string {
+	if len(state.Reviews) == 0 {
+		return modelCohortUnknown
+	}
+
+	models := map[string]struct{}{}
+	for _, reviewAttempt := range state.Reviews {
+		for _, step := range reviewAttempt.Steps {
+			if step.Kind != taskstate.ReviewStepKindAgentReview {
+				continue
+			}
+			if step.Execution == nil {
+				models[modelCohortUnknown] = struct{}{}
+				continue
+			}
+			models[executionModelCohort(*step.Execution)] = struct{}{}
+		}
+	}
+	if len(models) == 0 {
+		return modelCohortManualOnly
+	}
+	if len(models) > 1 {
+		return modelCohortMixed
+	}
+	for model := range models {
+		return model
+	}
+	return modelCohortUnknown
+}
+
+func recordsModelCohort(records []executionRecord, manualOnlyWhenEmpty bool) string {
+	if len(records) == 0 {
+		if manualOnlyWhenEmpty {
+			return modelCohortManualOnly
+		}
+		return modelCohortUnknown
+	}
+	models := map[string]struct{}{}
+	for _, record := range records {
+		models[executionModelCohort(record.execution)] = struct{}{}
+	}
+	if len(models) > 1 {
+		return modelCohortMixed
+	}
+	for model := range models {
+		return model
+	}
+	return modelCohortUnknown
+}
+
+func executionModelCohort(execution taskstate.AgentExecution) string {
+	return execution.AgentSelection().CohortLabel()
 }
 
 func newExecutionRecord(

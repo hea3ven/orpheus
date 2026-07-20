@@ -702,6 +702,579 @@ func TestAggregateReportFromSnapshotExcludesPartialUnknownTaskFromAverages(t *te
 	is.False(ok)
 }
 
+//nolint:funlen // The fixture documents model outcome and execution-usage attribution together.
+func TestAggregateImplementationModelViewSeparatesOutcomesAndUsageAttribution(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+
+	startedAt := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	singleDoneAt := startedAt.Add(20 * time.Minute)
+	singleClosedAt := startedAt.Add(3 * time.Hour)
+	mixedGPTDoneAt := startedAt.Add(2*time.Hour + 10*time.Minute)
+	mixedClaudeStartedAt := startedAt.Add(3 * time.Hour)
+	mixedClaudeDoneAt := mixedClaudeStartedAt.Add(5 * time.Minute)
+	mixedClosedAt := startedAt.Add(5 * time.Hour)
+	blockedFinishedAt := startedAt.Add(time.Hour + 15*time.Minute)
+	snapshot := taskmodel.SnapshotResult{Repositories: []taskmodel.RepositorySnapshot{{
+		Repository: taskmodel.Repository{ID: "alpha", Name: "Alpha"},
+		Tasks: []taskmodel.Task{
+			{ID: "op-single", ClosedAt: &singleClosedAt},
+			{ID: "op-mixed", ClosedAt: &mixedClosedAt},
+			{ID: "op-unknown", ClosedAt: &singleClosedAt},
+		},
+	}}}
+	loader := fakeStateLoader{states: map[string]taskstate.TaskState{
+		"alpha/op-single": {
+			Runs: []taskstate.RunAttempt{{
+				Execution: taskstate.AgentExecution{
+					Model:     "gpt-5",
+					StartedAt: startedAt,
+					Usage:     &taskstate.AgentUsage{TotalTokens: 100},
+				},
+				Completion: &taskstate.Completion{CompletedAt: singleDoneAt},
+			}},
+			Reviews: []taskstate.ReviewAttempt{{Status: taskstate.ReviewStatusPassed, StartedAt: startedAt.Add(time.Hour)}},
+		},
+		"alpha/op-unknown": {
+			Runs: []taskstate.RunAttempt{{
+				Execution: taskstate.AgentExecution{
+					StartedAt: startedAt.Add(30 * time.Minute),
+					Usage:     &taskstate.AgentUsage{TotalTokens: 25},
+				},
+				Completion: &taskstate.Completion{CompletedAt: startedAt.Add(35 * time.Minute)},
+			}},
+		},
+		"alpha/op-mixed": {
+			Runs: []taskstate.RunAttempt{
+				{
+					Execution: taskstate.AgentExecution{
+						Model:     "gpt-5",
+						StartedAt: startedAt.Add(2 * time.Hour),
+						Usage:     &taskstate.AgentUsage{TotalTokens: 150},
+					},
+					Completion: &taskstate.Completion{CompletedAt: mixedGPTDoneAt},
+				},
+				{
+					Execution: taskstate.AgentExecution{
+						Model:     "claude-sonnet",
+						StartedAt: mixedClaudeStartedAt,
+						Usage:     &taskstate.AgentUsage{TotalTokens: 90},
+					},
+					Completion:     &taskstate.Completion{CompletedAt: mixedClaudeDoneAt},
+					ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1},
+				},
+			},
+			Reviews: []taskstate.ReviewAttempt{{
+				Attempt:    1,
+				Status:     taskstate.ReviewStatusBlocked,
+				StartedAt:  startedAt.Add(time.Hour),
+				FinishedAt: &blockedFinishedAt,
+				Findings:   []taskstate.ReviewFinding{{Type: taskstate.FindingTypeBlocking}},
+			}},
+		},
+	}}
+
+	got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{
+		Group: taskstats.GroupDay,
+		View:  taskstats.ViewImplementationModel,
+	})
+
+	must.Empty(failures)
+	gpt := modelCohortByKey(t, got.Cohorts, "gpt-5")
+	is.Equal(1, gpt.Tasks)
+	is.Equal(20*time.Minute, gpt.CompletionTime.Median)
+	is.Equal(1, gpt.FirstPassApprovals)
+	is.Equal(250, gpt.Tokens.Total)
+	is.Equal(2, gpt.Tokens.Known)
+	is.Equal(2, gpt.Tokens.Samples)
+
+	mixed := modelCohortByKey(t, got.Cohorts, "mixed")
+	is.Equal(1, mixed.Tasks)
+	is.Equal(1, mixed.RepairCycles.Median)
+	is.Equal(1, mixed.RepairTasks)
+	is.Equal(1, mixed.BlockingFindings)
+	is.Zero(mixed.Tokens.Samples)
+
+	claude := modelCohortByKey(t, got.Cohorts, "claude-sonnet")
+	is.Zero(claude.Tasks)
+	is.Equal(90, claude.Tokens.Total)
+	is.Equal(1, claude.Tokens.Known)
+
+	unknown := modelCohortByKey(t, got.Cohorts, "unknown")
+	is.Equal(1, unknown.Tasks)
+	is.Equal(25, unknown.Tokens.Total)
+}
+
+//nolint:funlen // The fixture documents harness/thinking cohort selection and sparse usage rows.
+func TestAggregateImplementationModelViewIncludesHarnessAndThinkingInCohorts(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+
+	startedAt := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	doneAt := startedAt.Add(10 * time.Minute)
+	snapshot := taskmodel.SnapshotResult{Repositories: []taskmodel.RepositorySnapshot{{
+		Repository: taskmodel.Repository{ID: "alpha", Name: "Alpha"},
+		Tasks: []taskmodel.Task{
+			{ID: "op-codex-high"},
+			{ID: "op-pi-high"},
+			{ID: "op-codex-default"},
+			{ID: "op-mixed-thinking"},
+		},
+	}}}
+	loader := fakeStateLoader{states: map[string]taskstate.TaskState{
+		"alpha/op-codex-high": {
+			Runs: []taskstate.RunAttempt{{
+				Execution: taskstate.AgentExecution{
+					Harness:   "codex",
+					Model:     "gpt-5",
+					Thinking:  "high",
+					StartedAt: startedAt,
+					Usage:     &taskstate.AgentUsage{TotalTokens: 100},
+				},
+				Completion: &taskstate.Completion{CompletedAt: doneAt},
+			}},
+		},
+		"alpha/op-pi-high": {
+			Runs: []taskstate.RunAttempt{{
+				Execution: taskstate.AgentExecution{
+					Harness:   "pi",
+					Model:     "gpt-5",
+					Thinking:  "high",
+					StartedAt: startedAt.Add(time.Hour),
+					Usage:     &taskstate.AgentUsage{TotalTokens: 200},
+				},
+				Completion: &taskstate.Completion{CompletedAt: doneAt.Add(time.Hour)},
+			}},
+		},
+		"alpha/op-codex-default": {
+			Runs: []taskstate.RunAttempt{{
+				Execution: taskstate.AgentExecution{
+					Harness:   "codex",
+					Model:     "gpt-5",
+					Args:      []string{"exec", "--model", "gpt-5"},
+					StartedAt: startedAt.Add(2 * time.Hour),
+					Usage:     &taskstate.AgentUsage{TotalTokens: 300},
+				},
+				Completion: &taskstate.Completion{CompletedAt: doneAt.Add(2 * time.Hour)},
+			}},
+		},
+		"alpha/op-mixed-thinking": {
+			Runs: []taskstate.RunAttempt{
+				{
+					Execution: taskstate.AgentExecution{
+						Harness:   "codex",
+						Model:     "gpt-5",
+						Thinking:  "high",
+						StartedAt: startedAt.Add(3 * time.Hour),
+						Usage:     &taskstate.AgentUsage{TotalTokens: 400},
+					},
+					Completion: &taskstate.Completion{CompletedAt: doneAt.Add(3 * time.Hour)},
+				},
+				{
+					Execution: taskstate.AgentExecution{
+						Harness:   "codex",
+						Model:     "gpt-5",
+						Thinking:  "medium",
+						StartedAt: startedAt.Add(4 * time.Hour),
+						Usage:     &taskstate.AgentUsage{TotalTokens: 500},
+					},
+					Completion: &taskstate.Completion{CompletedAt: doneAt.Add(4 * time.Hour)},
+				},
+			},
+		},
+	}}
+
+	got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{
+		Group: taskstats.GroupDay,
+		View:  taskstats.ViewImplementationModel,
+	})
+
+	must.Empty(failures)
+	codexHigh := modelCohortByKey(t, got.Cohorts, "gpt-5 (harness=codex, thinking=high)")
+	is.Equal(1, codexHigh.Tasks)
+	is.Equal(500, codexHigh.Tokens.Total)
+	piHigh := modelCohortByKey(t, got.Cohorts, "gpt-5 (harness=pi, thinking=high)")
+	is.Equal(1, piHigh.Tasks)
+	is.Equal(200, piHigh.Tokens.Total)
+	codexDefault := modelCohortByKey(t, got.Cohorts, "gpt-5 (harness=codex, thinking=default)")
+	is.Equal(1, codexDefault.Tasks)
+	is.Equal(300, codexDefault.Tokens.Total)
+	codexMedium := modelCohortByKey(t, got.Cohorts, "gpt-5 (harness=codex, thinking=medium)")
+	is.Zero(codexMedium.Tasks)
+	is.Equal(500, codexMedium.Tokens.Total)
+	mixed := modelCohortByKey(t, got.Cohorts, "mixed")
+	is.Equal(1, mixed.Tasks)
+	is.Zero(mixed.Tokens.Samples)
+}
+
+//nolint:funlen // The fixture keeps manual-only, mixed reviewer, and usage attribution assertions together.
+func TestAggregateReviewerModelViewKeepsManualOnlyAndMixedCohortsVisible(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+
+	startedAt := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	finishedAt := startedAt.Add(10 * time.Minute)
+	snapshot := taskmodel.SnapshotResult{Repositories: []taskmodel.RepositorySnapshot{{
+		Repository: taskmodel.Repository{ID: "alpha", Name: "Alpha"},
+		Tasks: []taskmodel.Task{
+			{ID: "op-manual"},
+			{ID: "op-reviewer"},
+			{ID: "op-mixed-reviewer"},
+		},
+	}}}
+	loader := fakeStateLoader{states: map[string]taskstate.TaskState{
+		"alpha/op-manual": {
+			Reviews: []taskstate.ReviewAttempt{{
+				Status:     taskstate.ReviewStatusPassed,
+				StartedAt:  startedAt,
+				FinishedAt: &finishedAt,
+				Steps:      []taskstate.ReviewStep{{Kind: taskstate.ReviewStepKindManual, Name: "operator"}},
+			}},
+		},
+		"alpha/op-reviewer": {
+			Reviews: []taskstate.ReviewAttempt{{
+				Status:     taskstate.ReviewStatusPassed,
+				StartedAt:  startedAt,
+				FinishedAt: &finishedAt,
+				Steps: []taskstate.ReviewStep{{
+					Kind: taskstate.ReviewStepKindAgentReview,
+					Name: "agent",
+					Execution: &taskstate.AgentExecution{
+						Model:     "reviewer-gpt",
+						StartedAt: startedAt,
+						Usage:     &taskstate.AgentUsage{TotalTokens: 100},
+					},
+				}},
+			}},
+		},
+		"alpha/op-mixed-reviewer": {
+			Reviews: []taskstate.ReviewAttempt{{
+				Status:     taskstate.ReviewStatusBlocked,
+				StartedAt:  startedAt,
+				FinishedAt: &finishedAt,
+				Findings:   []taskstate.ReviewFinding{{Type: taskstate.FindingTypeBlocking}},
+				Steps: []taskstate.ReviewStep{
+					{
+						Kind: taskstate.ReviewStepKindAgentReview,
+						Name: "gpt",
+						Execution: &taskstate.AgentExecution{
+							Model:     "reviewer-gpt",
+							StartedAt: startedAt,
+							Usage:     &taskstate.AgentUsage{TotalTokens: 50},
+						},
+					},
+					{
+						Kind: taskstate.ReviewStepKindAgentReview,
+						Name: "claude",
+						Execution: &taskstate.AgentExecution{
+							Model:     "reviewer-claude",
+							StartedAt: startedAt,
+							Usage:     &taskstate.AgentUsage{TotalTokens: 70},
+						},
+					},
+				},
+			}},
+		},
+	}}
+
+	got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{
+		Group: taskstats.GroupDay,
+		View:  taskstats.ViewReviewerModel,
+	})
+
+	must.Empty(failures)
+	manual := modelCohortByKey(t, got.Cohorts, "manual-only")
+	is.Equal(1, manual.Tasks)
+	is.Equal(1, manual.FirstPassApprovals)
+	is.Zero(manual.Tokens.Samples)
+
+	gpt := modelCohortByKey(t, got.Cohorts, "reviewer-gpt")
+	is.Equal(1, gpt.Tasks)
+	is.Equal(150, gpt.Tokens.Total)
+	is.Equal(2, gpt.Tokens.Known)
+
+	mixed := modelCohortByKey(t, got.Cohorts, "mixed")
+	is.Equal(1, mixed.Tasks)
+	is.Equal(1, mixed.BlockingFindings)
+	is.Zero(mixed.Tokens.Samples)
+
+	claude := modelCohortByKey(t, got.Cohorts, "reviewer-claude")
+	is.Zero(claude.Tasks)
+	is.Equal(70, claude.Tokens.Total)
+}
+
+func TestAggregateReviewerModelViewTreatsAgentReviewWithoutExecutionAsUnknown(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	snapshot, loader := missingReviewerExecutionFixture()
+
+	got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{
+		Group: taskstats.GroupDay,
+		View:  taskstats.ViewReviewerModel,
+	})
+
+	must.Empty(failures)
+	unknown := modelCohortByKey(t, got.Cohorts, "unknown")
+	is.Equal(1, unknown.Tasks)
+	is.Equal(1, unknown.FirstPassApprovals)
+	is.Zero(unknown.Tokens.Samples)
+
+	mixed := modelCohortByKey(t, got.Cohorts, "mixed")
+	is.Equal(1, mixed.Tasks)
+	is.Equal(1, mixed.BlockingFindings)
+	is.Zero(mixed.Tokens.Samples)
+
+	gpt := modelCohortByKey(t, got.Cohorts, "reviewer-gpt")
+	is.Zero(gpt.Tasks)
+	is.Equal(50, gpt.Tokens.Total)
+	assertNoModelCohort(t, got.Cohorts, "manual-only")
+}
+
+func TestAggregateModelPairViewTreatsAgentReviewWithoutExecutionAsUnknown(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	snapshot, loader := missingReviewerExecutionFixture()
+
+	got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{
+		Group: taskstats.GroupDay,
+		View:  taskstats.ViewModelPair,
+	})
+
+	must.Empty(failures)
+	unknownPair := modelCohortByKey(t, got.Cohorts, "gpt-5/unknown")
+	is.Equal(1, unknownPair.Tasks)
+	is.Equal(1, unknownPair.FirstPassApprovals)
+	is.Equal(100, unknownPair.Tokens.Total)
+
+	mixedPair := modelCohortByKey(t, got.Cohorts, "gpt-5/mixed")
+	is.Equal(1, mixedPair.Tasks)
+	is.Equal(1, mixedPair.BlockingFindings)
+	is.Equal(75, mixedPair.Tokens.Total)
+
+	gptSparse := modelCohortByKey(t, got.Cohorts, "gpt-5/reviewer-gpt")
+	is.Zero(gptSparse.Tasks)
+	is.Equal(50, gptSparse.Tokens.Total)
+	assertNoModelCohort(t, got.Cohorts, "gpt-5/manual-only")
+}
+
+func TestAggregateModelPairViewCombinesSamePairUsagePerTask(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+
+	startedAt := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	completedAt := startedAt.Add(10 * time.Minute)
+	reviewStartedAt := startedAt.Add(20 * time.Minute)
+	reviewFinishedAt := startedAt.Add(30 * time.Minute)
+	snapshot := taskmodel.SnapshotResult{Repositories: []taskmodel.RepositorySnapshot{{
+		Repository: taskmodel.Repository{ID: "alpha", Name: "Alpha"},
+		Tasks:      []taskmodel.Task{{ID: "op-agent-reviewed"}},
+	}}}
+	loader := fakeStateLoader{states: map[string]taskstate.TaskState{
+		"alpha/op-agent-reviewed": {
+			Runs: []taskstate.RunAttempt{{
+				Execution: taskstate.AgentExecution{
+					Model:     "gpt-5",
+					StartedAt: startedAt,
+					Usage:     &taskstate.AgentUsage{TotalTokens: 100},
+					UsageCost: &taskstate.AgentUsageCost{AmountMicroUSD: 1000},
+				},
+				Completion: &taskstate.Completion{CompletedAt: completedAt},
+			}},
+			Reviews: []taskstate.ReviewAttempt{{
+				Status:     taskstate.ReviewStatusPassed,
+				StartedAt:  reviewStartedAt,
+				FinishedAt: &reviewFinishedAt,
+				Steps: []taskstate.ReviewStep{{
+					Kind: taskstate.ReviewStepKindAgentReview,
+					Name: "agent",
+					Execution: &taskstate.AgentExecution{
+						Model:     "reviewer-gpt",
+						StartedAt: reviewStartedAt,
+						Usage:     &taskstate.AgentUsage{TotalTokens: 50},
+						UsageCost: &taskstate.AgentUsageCost{AmountMicroUSD: 500},
+					},
+				}},
+			}},
+		},
+	}}
+
+	got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{
+		Group: taskstats.GroupDay,
+		View:  taskstats.ViewModelPair,
+	})
+
+	must.Empty(failures)
+	pair := modelCohortByKey(t, got.Cohorts, "gpt-5/reviewer-gpt")
+	is.Equal(1, pair.Tasks)
+	is.Equal(1, pair.FirstPassApprovals)
+	is.Equal(150, pair.Tokens.Total)
+	is.Equal(150, pair.Tokens.Median)
+	is.Equal(1, pair.Tokens.Known)
+	is.Equal(1, pair.Tokens.Samples)
+	is.Equal(int64(1500), pair.Cost.TotalMicroUSD)
+	is.Equal(int64(1500), pair.Cost.MedianMicroUSD)
+	is.Equal(1, pair.Cost.Known)
+	is.Equal(1, pair.Cost.Samples)
+}
+
+//nolint:funlen // The fixture verifies slash-containing model IDs do not collapse pair cohorts.
+func TestAggregateModelPairViewKeepsSlashContainingModelIDsDistinct(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+
+	startedAt := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	completedAt := startedAt.Add(10 * time.Minute)
+	reviewStartedAt := startedAt.Add(20 * time.Minute)
+	reviewFinishedAt := startedAt.Add(30 * time.Minute)
+	snapshot := taskmodel.SnapshotResult{Repositories: []taskmodel.RepositorySnapshot{{
+		Repository: taskmodel.Repository{ID: "alpha", Name: "Alpha"},
+		Tasks: []taskmodel.Task{
+			{ID: "op-implementation-slash"},
+			{ID: "op-reviewer-slash"},
+		},
+	}}}
+	loader := fakeStateLoader{states: map[string]taskstate.TaskState{
+		"alpha/op-implementation-slash": modelPairState(modelPairStateInput{
+			implementationModel:  "openai-codex/gpt-5.5",
+			reviewerModel:        "mini",
+			startedAt:            startedAt,
+			completedAt:          completedAt,
+			reviewStartedAt:      reviewStartedAt,
+			reviewFinishedAt:     reviewFinishedAt,
+			implementationTokens: 100,
+			reviewerTokens:       10,
+		}),
+		"alpha/op-reviewer-slash": modelPairState(modelPairStateInput{
+			implementationModel:  "openai-codex",
+			reviewerModel:        "gpt-5.5/mini",
+			startedAt:            startedAt.Add(time.Hour),
+			completedAt:          completedAt.Add(time.Hour),
+			reviewStartedAt:      reviewStartedAt.Add(time.Hour),
+			reviewFinishedAt:     reviewFinishedAt.Add(time.Hour),
+			implementationTokens: 200,
+			reviewerTokens:       20,
+		}),
+	}}
+
+	got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{
+		Group: taskstats.GroupDay,
+		View:  taskstats.ViewModelPair,
+	})
+
+	must.Empty(failures)
+	slashImplementation := modelCohortByModels(
+		t,
+		got.Cohorts,
+		"openai-codex/gpt-5.5",
+		"mini",
+	)
+	is.Equal(1, slashImplementation.Tasks)
+	is.Equal(1, slashImplementation.FirstPassApprovals)
+	is.Equal(110, slashImplementation.Tokens.Total)
+
+	slashReviewer := modelCohortByModels(
+		t,
+		got.Cohorts,
+		"openai-codex",
+		"gpt-5.5/mini",
+	)
+	is.Equal(1, slashReviewer.Tasks)
+	is.Equal(1, slashReviewer.FirstPassApprovals)
+	is.Equal(220, slashReviewer.Tokens.Total)
+}
+
+//nolint:funlen // The fixture verifies pair rows and sparse actual-execution attribution rows together.
+func TestAggregateModelPairViewComparesImplementationReviewerPairings(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+
+	startedAt := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	completedAt := startedAt.Add(10 * time.Minute)
+	reviewFinishedAt := startedAt.Add(30 * time.Minute)
+	snapshot := taskmodel.SnapshotResult{Repositories: []taskmodel.RepositorySnapshot{{
+		Repository: taskmodel.Repository{ID: "alpha", Name: "Alpha"},
+		Tasks: []taskmodel.Task{
+			{ID: "op-manual-pair"},
+			{ID: "op-unreviewed-pair"},
+			{ID: "op-mixed-pair"},
+		},
+	}}}
+	loader := fakeStateLoader{states: map[string]taskstate.TaskState{
+		"alpha/op-manual-pair": {
+			Runs: []taskstate.RunAttempt{{
+				Execution:  taskstate.AgentExecution{Model: "gpt-5", StartedAt: startedAt, Usage: &taskstate.AgentUsage{TotalTokens: 100}},
+				Completion: &taskstate.Completion{CompletedAt: completedAt},
+			}},
+			Reviews: []taskstate.ReviewAttempt{{
+				Status:     taskstate.ReviewStatusPassed,
+				StartedAt:  startedAt.Add(20 * time.Minute),
+				FinishedAt: &reviewFinishedAt,
+			}},
+		},
+		"alpha/op-unreviewed-pair": {
+			Runs: []taskstate.RunAttempt{{
+				Execution: taskstate.AgentExecution{
+					Model:     "gpt-5",
+					StartedAt: startedAt.Add(40 * time.Minute),
+					Usage:     &taskstate.AgentUsage{TotalTokens: 40},
+				},
+				Completion: &taskstate.Completion{CompletedAt: startedAt.Add(45 * time.Minute)},
+			}},
+		},
+		"alpha/op-mixed-pair": {
+			Runs: []taskstate.RunAttempt{
+				{
+					Execution:  taskstate.AgentExecution{Model: "gpt-5", StartedAt: startedAt.Add(time.Hour), Usage: &taskstate.AgentUsage{TotalTokens: 50}},
+					Completion: &taskstate.Completion{CompletedAt: startedAt.Add(time.Hour + 5*time.Minute)},
+				},
+				{
+					Execution:  taskstate.AgentExecution{Model: "claude-sonnet", StartedAt: startedAt.Add(2 * time.Hour), Usage: &taskstate.AgentUsage{TotalTokens: 70}},
+					Completion: &taskstate.Completion{CompletedAt: startedAt.Add(2*time.Hour + 5*time.Minute)},
+				},
+			},
+			Reviews: []taskstate.ReviewAttempt{{
+				Status:     taskstate.ReviewStatusPassed,
+				StartedAt:  startedAt.Add(3 * time.Hour),
+				FinishedAt: &reviewFinishedAt,
+				Steps: []taskstate.ReviewStep{{
+					Kind: taskstate.ReviewStepKindAgentReview,
+					Name: "agent",
+					Execution: &taskstate.AgentExecution{
+						Model:     "reviewer-gpt",
+						StartedAt: startedAt.Add(3 * time.Hour),
+						Usage:     &taskstate.AgentUsage{TotalTokens: 30},
+					},
+				}},
+			}},
+		},
+	}}
+
+	got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{
+		Group: taskstats.GroupDay,
+		View:  taskstats.ViewModelPair,
+	})
+
+	must.Empty(failures)
+	manualPair := modelCohortByKey(t, got.Cohorts, "gpt-5/manual-only")
+	is.Equal(1, manualPair.Tasks)
+	is.Equal(1, manualPair.FirstPassApprovals)
+	is.Equal(100, manualPair.Tokens.Total)
+
+	unknownPair := modelCohortByKey(t, got.Cohorts, "gpt-5/unknown")
+	is.Equal(1, unknownPair.Tasks)
+	is.Zero(unknownPair.FirstPassApprovals)
+	is.Equal(40, unknownPair.Tokens.Total)
+
+	mixedPair := modelCohortByKey(t, got.Cohorts, "mixed/reviewer-gpt")
+	is.Equal(1, mixedPair.Tasks)
+	is.Equal(1, mixedPair.FirstPassApprovals)
+	is.Equal(30, mixedPair.Tokens.Total)
+
+	claudeSparse := modelCohortByKey(t, got.Cohorts, "claude-sonnet/reviewer-gpt")
+	is.Zero(claudeSparse.Tasks)
+	is.Equal(70, claudeSparse.Tokens.Total)
+}
+
 func partialKnownConsumptionFixture() (taskmodel.SnapshotResult, fakeStateLoader) {
 	startedAt := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
 	finishedAt := startedAt.Add(30 * time.Minute)
@@ -730,6 +1303,146 @@ func partialKnownConsumptionFixture() (taskmodel.SnapshotResult, fakeStateLoader
 		},
 	}}
 	return snapshot, loader
+}
+
+func missingReviewerExecutionFixture() (taskmodel.SnapshotResult, fakeStateLoader) {
+	startedAt := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	completedAt := startedAt.Add(10 * time.Minute)
+	reviewStartedAt := startedAt.Add(20 * time.Minute)
+	reviewFinishedAt := startedAt.Add(30 * time.Minute)
+	snapshot := taskmodel.SnapshotResult{Repositories: []taskmodel.RepositorySnapshot{{
+		Repository: taskmodel.Repository{ID: "alpha", Name: "Alpha"},
+		Tasks: []taskmodel.Task{
+			{ID: "op-unknown-reviewer"},
+			{ID: "op-mixed-reviewer"},
+		},
+	}}}
+	loader := fakeStateLoader{states: map[string]taskstate.TaskState{
+		"alpha/op-unknown-reviewer": {
+			Runs: []taskstate.RunAttempt{{
+				Execution:  taskstate.AgentExecution{Model: "gpt-5", StartedAt: startedAt, Usage: &taskstate.AgentUsage{TotalTokens: 100}},
+				Completion: &taskstate.Completion{CompletedAt: completedAt},
+			}},
+			Reviews: []taskstate.ReviewAttempt{{
+				Status:     taskstate.ReviewStatusPassed,
+				StartedAt:  reviewStartedAt,
+				FinishedAt: &reviewFinishedAt,
+				Steps:      []taskstate.ReviewStep{{Kind: taskstate.ReviewStepKindAgentReview, Name: "agent"}},
+			}},
+		},
+		"alpha/op-mixed-reviewer": {
+			Runs: []taskstate.RunAttempt{{
+				Execution:  taskstate.AgentExecution{Model: "gpt-5", StartedAt: startedAt.Add(time.Hour), Usage: &taskstate.AgentUsage{TotalTokens: 75}},
+				Completion: &taskstate.Completion{CompletedAt: completedAt.Add(time.Hour)},
+			}},
+			Reviews: []taskstate.ReviewAttempt{{
+				Status:     taskstate.ReviewStatusBlocked,
+				StartedAt:  reviewStartedAt.Add(time.Hour),
+				FinishedAt: &reviewFinishedAt,
+				Findings:   []taskstate.ReviewFinding{{Type: taskstate.FindingTypeBlocking}},
+				Steps: []taskstate.ReviewStep{
+					{Kind: taskstate.ReviewStepKindAgentReview, Name: "agent"},
+					{
+						Kind: taskstate.ReviewStepKindAgentReview,
+						Name: "known-agent",
+						Execution: &taskstate.AgentExecution{
+							Model:     "reviewer-gpt",
+							StartedAt: reviewStartedAt.Add(time.Hour),
+							Usage:     &taskstate.AgentUsage{TotalTokens: 50},
+						},
+					},
+				},
+			}},
+		},
+	}}
+	return snapshot, loader
+}
+
+type modelPairStateInput struct {
+	implementationModel  string
+	reviewerModel        string
+	startedAt            time.Time
+	completedAt          time.Time
+	reviewStartedAt      time.Time
+	reviewFinishedAt     time.Time
+	implementationTokens int
+	reviewerTokens       int
+}
+
+func modelPairState(input modelPairStateInput) taskstate.TaskState {
+	return taskstate.TaskState{
+		Runs: []taskstate.RunAttempt{{
+			Execution: taskstate.AgentExecution{
+				Model:     input.implementationModel,
+				StartedAt: input.startedAt,
+				Usage:     &taskstate.AgentUsage{TotalTokens: input.implementationTokens},
+			},
+			Completion: &taskstate.Completion{CompletedAt: input.completedAt},
+		}},
+		Reviews: []taskstate.ReviewAttempt{{
+			Status:     taskstate.ReviewStatusPassed,
+			StartedAt:  input.reviewStartedAt,
+			FinishedAt: &input.reviewFinishedAt,
+			Steps: []taskstate.ReviewStep{{
+				Kind: taskstate.ReviewStepKindAgentReview,
+				Name: "agent",
+				Execution: &taskstate.AgentExecution{
+					Model:     input.reviewerModel,
+					StartedAt: input.reviewStartedAt,
+					Usage:     &taskstate.AgentUsage{TotalTokens: input.reviewerTokens},
+				},
+			}},
+		}},
+	}
+}
+
+func modelCohortByKey(
+	t *testing.T,
+	cohorts []taskstats.AggregateModelCohort,
+	key string,
+) taskstats.AggregateModelCohort {
+	t.Helper()
+	for _, cohort := range cohorts {
+		if cohort.Key == key {
+			return cohort
+		}
+	}
+	require.Failf(t, "missing model cohort", "key %q not found in %#v", key, cohorts)
+	return taskstats.AggregateModelCohort{}
+}
+
+func modelCohortByModels(
+	t *testing.T,
+	cohorts []taskstats.AggregateModelCohort,
+	implementationModel string,
+	reviewerModel string,
+) taskstats.AggregateModelCohort {
+	t.Helper()
+	for _, cohort := range cohorts {
+		matchesImplementation := cohort.ImplementationModel == implementationModel
+		matchesReviewer := cohort.ReviewerModel == reviewerModel
+		if matchesImplementation && matchesReviewer {
+			return cohort
+		}
+	}
+	require.Failf(
+		t,
+		"missing model cohort",
+		"implementation model %q reviewer model %q not found in %#v",
+		implementationModel,
+		reviewerModel,
+		cohorts,
+	)
+	return taskstats.AggregateModelCohort{}
+}
+
+func assertNoModelCohort(t *testing.T, cohorts []taskstats.AggregateModelCohort, key string) {
+	t.Helper()
+	for _, cohort := range cohorts {
+		if cohort.Key == key {
+			require.Failf(t, "unexpected model cohort", "key %q found in %#v", key, cohorts)
+		}
+	}
 }
 
 func assertDurationValue(t *testing.T, got time.Duration, ok bool, want time.Duration) {
