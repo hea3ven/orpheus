@@ -156,7 +156,7 @@ In dependency-direction terms, `internal/state`, `internal/task`, `internal/publ
 
 ### `internal/registry`
 
-- Persists and validates the machine-local repository catalog, including canonical identity, paths, Git defaults, Beads mode/prefix, publication policy, and review-pipeline selection and aliases.
+- Persists and validates the machine-local repository catalog, including canonical identity, paths, Git defaults, Beads mode/prefix, publication policy, PR review-process section overrides, and review-pipeline selection and aliases.
 - Resolves repository tokens and deterministic local resources, particularly the local or managed Beads workspace, while preventing identity, path, prefix, and configuration collisions.
 
 ### `internal/review`
@@ -194,7 +194,7 @@ In dependency-direction terms, `internal/state`, `internal/task`, `internal/publ
 
 - Classifies review lifecycles and completion readiness while consuming `internal/tasktarget` for execution-target identity, expected-target calculation, and target-fact reconciliation.
 - Orchestrates the task lifecycle through narrow backend, Git, PR-provider, and run-store contracts: dispatch and retry setup, attached-run outcomes, review follow-up targeting, review-gated default-branch finalization, feature-branch publication, open-PR branch updates, PR polling, merged-task closure, and batch sync.
-- Builds publication handoffs from task data and persisted completion/review history, including repository title policy and concise review-process details for pull requests.
+- Builds publication handoffs from task data and persisted completion/review history, including repository title policy and configurable concise review-process details for pull requests.
 
 ## Evolution Decisions
 

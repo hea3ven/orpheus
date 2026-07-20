@@ -56,6 +56,7 @@ Global pipelines are defined under `reviews.pipelines` in Orpheus config:
 reviews:
   default_pipeline: standard
   max_autonomous_review_attempts: 4
+  include_pr_review_process: true
   pipelines:
     standard:
       steps:
@@ -71,6 +72,40 @@ reviews:
 
 Step names are trimmed when config loads and must be unique within a pipeline.
 Different pipelines may reuse the same step name.
+
+## Pull-request review process section
+
+For reviewed feature-branch publication, Orpheus builds the PR title and leading
+body from the original implementation completion. By default, it then appends a
+generated `## Review process` section summarizing review attempts, finding
+outcomes, and targeted follow-up run summaries.
+
+Set the global default in Orpheus `config.yaml`:
+
+```yaml
+reviews:
+  include_pr_review_process: false
+```
+
+When the global value is unset, Orpheus preserves existing behavior and includes
+the section. A repository override can include or omit the section regardless of
+the global default:
+
+```bash
+orpheus repo config get my-repo include-pr-review-process
+orpheus repo config set my-repo include-pr-review-process false
+orpheus repo config set my-repo include-pr-review-process true
+```
+
+Clear the repository override to inherit the global default again:
+
+```bash
+orpheus repo config set my-repo include-pr-review-process ''
+```
+
+This option controls only the generated review-process section. It does not
+change the detailed PR body supplied by the implementation agent, PR titles,
+commit messages, review-state persistence, or review pipeline execution.
 
 ## Repository default pipeline
 

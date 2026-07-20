@@ -81,6 +81,51 @@ func TestLoadConfigMaxAutonomousReviewAttempts(t *testing.T) {
 	}
 }
 
+func TestLoadConfigIncludePRReviewProcess(t *testing.T) {
+	tests := []struct {
+		name string
+		data map[string]any
+		want bool
+	}{
+		{
+			name: "unset defaults true",
+			data: map[string]any{"reviews": map[string]any{}},
+			want: true,
+		},
+		{
+			name: "explicit false",
+			data: map[string]any{
+				"reviews": map[string]any{"include_pr_review_process": false},
+			},
+			want: false,
+		},
+		{
+			name: "explicit true",
+			data: map[string]any{
+				"reviews": map[string]any{"include_pr_review_process": true},
+			},
+			want: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			paths := newTestPaths(t)
+			if err := paths.WriteConfigYAML(review.ConfigFile, test.data); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			config, err := review.LoadConfig(paths)
+			if err != nil {
+				t.Fatalf("load review config: %v", err)
+			}
+			if config.IncludePRReviewProcess != test.want {
+				t.Fatalf("include PR review process = %t, want %t", config.IncludePRReviewProcess, test.want)
+			}
+		})
+	}
+}
+
 func TestLoadConfigMissingFileDefaultsMaxAutonomousReviewAttempts(t *testing.T) {
 	config, err := review.LoadConfig(newTestPaths(t))
 	if err != nil {
@@ -92,6 +137,9 @@ func TestLoadConfigMissingFileDefaultsMaxAutonomousReviewAttempts(t *testing.T) 
 			config.MaxAutonomousReviewAttempts,
 			review.DefaultMaxAutonomousReviewAttempts,
 		)
+	}
+	if !config.IncludePRReviewProcess {
+		t.Fatal("include PR review process = false, want default true")
 	}
 }
 
