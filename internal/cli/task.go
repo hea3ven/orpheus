@@ -121,9 +121,10 @@ func newTaskStatsCommand(opts *rootOptions) *cobra.Command {
 	var statsOpts taskStatsOptions
 	cmd := &cobra.Command{
 		Use:   "stats [<task-id>]",
-		Short: "Show implementation execution stats for one task or time-grouped analytical views",
-		Long: "Show implementation execution stats for one task or time-grouped analytical views.\n\n" +
-			"Aggregate views use --group day|week|month and --view throughput|implementation|review|consumption. " +
+		Short: "Show implementation execution stats for one task or aggregate analytical views",
+		Long: "Show implementation execution stats for one task or aggregate analytical views.\n\n" +
+			"Aggregate views use --group day|week|month and --view throughput|implementation|review|consumption|implementation-model|reviewer-model|model-pair. " +
+			"Model comparison cohorts include known harness and thinking/default qualifiers. " +
 			"Date filters use YYYY-MM-DD boundaries. Repository filters match registered repository id or name.",
 		Args: func(command *cobra.Command, args []string) error {
 			if !statsOpts.aggregateSelected() {
@@ -143,7 +144,7 @@ func newTaskStatsCommand(opts *rootOptions) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&statsOpts.group, "group", "", "aggregate non-epic task stats by day, week, or month")
-	cmd.Flags().StringVar(&statsOpts.view, "view", "", "aggregate view: throughput, implementation, review, or consumption")
+	cmd.Flags().StringVar(&statsOpts.view, "view", "", "aggregate view: throughput, implementation, review, consumption, implementation-model, reviewer-model, or model-pair")
 	cmd.Flags().StringVar(&statsOpts.from, "from", "", "include aggregate rows anchored on or after YYYY-MM-DD")
 	cmd.Flags().StringVar(&statsOpts.to, "to", "", "include aggregate rows anchored before the day after YYYY-MM-DD")
 	cmd.Flags().StringArrayVar(&statsOpts.repos, "repo", nil, "limit aggregate stats to a repository id or name; repeatable")
@@ -788,13 +789,7 @@ func startTaskRunDispatch(
 				return workflow.DispatchCommand{}, err
 			}
 			dispatch.prompt = prompt
-			return workflow.DispatchCommand{
-				AgentName: commandSnapshot.AgentName,
-				Command:   commandSnapshot.Command,
-				Args:      commandSnapshot.Args,
-				Harness:   commandSnapshot.Harness,
-				Model:     commandSnapshot.Model,
-			}, nil
+			return workflow.NewDispatchCommand(commandSnapshot), nil
 		},
 		ResolveFollowUpCommand: func(commandContext workflow.DispatchCommandContext) (workflow.DispatchCommand, error) {
 			prompt, commandSnapshot, err := resolveTaskRunFollowUpAgentCommand(paths, agentName, commandContext.SessionName)
@@ -802,13 +797,7 @@ func startTaskRunDispatch(
 				return workflow.DispatchCommand{}, err
 			}
 			dispatch.prompt = prompt
-			return workflow.DispatchCommand{
-				AgentName: commandSnapshot.AgentName,
-				Command:   commandSnapshot.Command,
-				Args:      commandSnapshot.Args,
-				Harness:   commandSnapshot.Harness,
-				Model:     commandSnapshot.Model,
-			}, nil
+			return workflow.NewDispatchCommand(commandSnapshot), nil
 		},
 		MainMode:     mainMode,
 		RepoRootMode: repoRootMode,
@@ -2520,14 +2509,16 @@ func (r syncConflictAgentResolver) PrepareSyncConflictResolution(
 	if launcher == nil {
 		launcher = agentexec.AttachedLauncher{}
 	}
+	selection := commandSnapshot.AgentSelection()
 	return workflow.PreparedSyncConflictResolution{
 		Execution: taskstate.AgentExecution{
 			Purpose:     taskstate.AgentExecutionPurposeSyncConflictResolution,
 			Status:      taskstate.RunStatusRunning,
 			Agent:       commandSnapshot.AgentName,
 			Profile:     commandSnapshot.AgentName,
-			Harness:     commandSnapshot.Harness,
-			Model:       commandSnapshot.Model,
+			Harness:     selection.Harness,
+			Model:       selection.Model,
+			Thinking:    selection.Thinking,
 			Command:     commandSnapshot.Command,
 			Args:        append([]string{}, commandSnapshot.Args...),
 			SessionName: sessionName,
@@ -3271,7 +3262,11 @@ func renderTaskStats(output interface{ Write([]byte) (int, error) }, state tasks
 }
 
 func renderTaskStatsAggregate(output interface{ Write([]byte) (int, error) }, report taskstats.AggregateReport) error {
-	if _, err := fmt.Fprintf(output, "Task stats %s view grouped by %s\n", report.View, report.Group); err != nil {
+	if taskStatsAggregateIsModelView(report.View) {
+		if _, err := fmt.Fprintf(output, "Task stats %s comparison view\n", report.View); err != nil {
+			return err
+		}
+	} else if _, err := fmt.Fprintf(output, "Task stats %s view grouped by %s\n", report.View, report.Group); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(output, "Date anchor: %s\n", taskStatsAggregateDateAnchor(report.View)); err != nil {
@@ -3295,7 +3290,13 @@ func renderTaskStatsAggregate(output interface{ Write([]byte) (int, error) }, re
 	}
 
 	headers, rows := taskStatsAggregateViewRows(report)
-	return renderTable(output, headers, rows)
+	if err := renderTable(output, headers, rows); err != nil {
+		return err
+	}
+	if taskStatsAggregateIsModelView(report.View) {
+		return renderTaskStatsAggregateModelCoverageNotes(output, report.Cohorts)
+	}
+	return nil
 }
 
 func taskStatsAggregateDateAnchor(view taskstats.View) string {
@@ -3306,9 +3307,21 @@ func taskStatsAggregateDateAnchor(view taskstats.View) string {
 		return "first review activity; repair cycles count blocked reviews followed by implementation runs"
 	case taskstats.ViewConsumption:
 		return "execution launch; token and cost totals include only known captured values"
+	case taskstats.ViewImplementationModel:
+		return "first implementation launch; task outcomes use implementation-model cohorts"
+	case taskstats.ViewReviewerModel:
+		return "first review activity; task outcomes use reviewer-model cohorts"
+	case taskstats.ViewModelPair:
+		return "first implementation launch; task outcomes use implementation/reviewer model-pair cohorts"
 	default:
 		return "task resolution; workflow duration is first implementation launch to resolution"
 	}
+}
+
+func taskStatsAggregateIsModelView(view taskstats.View) bool {
+	return view == taskstats.ViewImplementationModel ||
+		view == taskstats.ViewReviewerModel ||
+		view == taskstats.ViewModelPair
 }
 
 func taskStatsAggregateFilterLine(report taskstats.AggregateReport) string {
@@ -3330,9 +3343,9 @@ func taskStatsAggregateFilterLine(report taskstats.AggregateReport) string {
 
 func taskStatsAggregateUnknownAnchorLine(report taskstats.AggregateReport) string {
 	switch report.View {
-	case taskstats.ViewImplementation:
+	case taskstats.ViewImplementation, taskstats.ViewImplementationModel, taskstats.ViewModelPair:
 		return fmt.Sprintf("Tasks without implementation launch timestamp: %d", report.TasksWithoutImplementation)
-	case taskstats.ViewReview:
+	case taskstats.ViewReview, taskstats.ViewReviewerModel:
 		return fmt.Sprintf("Tasks without review activity timestamp: %d", report.TasksWithoutReviewActivity)
 	case taskstats.ViewConsumption:
 		return fmt.Sprintf("Executions without launch timestamp: %d", report.ExecutionsWithoutStartedAt)
@@ -3384,6 +3397,14 @@ func taskStatsAggregateViewRows(report taskstats.AggregateReport) ([]string, [][
 			"COST_MEDIAN",
 			"COST_COVERAGE",
 		}, taskStatsAggregateConsumptionRows(report.Periods)
+	case taskstats.ViewImplementationModel:
+		return taskStatsAggregateModelHeaders("IMPLEMENTATION_MODEL"),
+			taskStatsAggregateModelRows(report.Cohorts, taskStatsImplementationModelCohortLabel)
+	case taskstats.ViewReviewerModel:
+		return taskStatsAggregateModelHeaders("REVIEWER_MODEL"),
+			taskStatsAggregateModelRows(report.Cohorts, taskStatsReviewerModelCohortLabel)
+	case taskstats.ViewModelPair:
+		return taskStatsAggregatePairHeaders(), taskStatsAggregatePairRows(report.Cohorts)
 	default:
 		return []string{
 			"PERIOD",
@@ -3466,6 +3487,135 @@ func taskStatsAggregateConsumptionRows(periods []taskstats.AggregatePeriod) [][]
 		})
 	}
 	return rows
+}
+
+func taskStatsAggregateModelHeaders(cohortHeader string) []string {
+	return append([]string{cohortHeader}, taskStatsAggregateModelMetricHeaders()...)
+}
+
+func taskStatsAggregatePairHeaders() []string {
+	return append([]string{"PAIR"}, taskStatsAggregateModelMetricHeaders()...)
+}
+
+func taskStatsAggregateModelMetricHeaders() []string {
+	return []string{
+		"TASKS",
+		"COMPLETION",
+		"WORKFLOW",
+		"REPAIR_MEDIAN",
+		"FIRST_PASS",
+		"REPAIRED",
+		"BLOCKED_REVIEWS",
+		"BLOCKING_FINDINGS",
+		"OP_FAIL",
+		"TOTAL_TOKENS",
+		"TOKEN_MEDIAN",
+		"TOTAL_COST",
+		"COST_MEDIAN",
+	}
+}
+
+func taskStatsAggregateModelRows(
+	cohorts []taskstats.AggregateModelCohort,
+	label func(taskstats.AggregateModelCohort) string,
+) [][]string {
+	rows := make([][]string, 0, len(cohorts))
+	for _, cohort := range cohorts {
+		rows = append(rows, append([]string{label(cohort)}, taskStatsAggregateModelMetricRow(cohort)...))
+	}
+	return rows
+}
+
+func taskStatsAggregatePairRows(cohorts []taskstats.AggregateModelCohort) [][]string {
+	rows := make([][]string, 0, len(cohorts))
+	for _, cohort := range cohorts {
+		rows = append(rows, append([]string{cohort.Key}, taskStatsAggregateModelMetricRow(cohort)...))
+	}
+	return rows
+}
+
+func taskStatsAggregateModelMetricRow(cohort taskstats.AggregateModelCohort) []string {
+	return []string{
+		strconv.Itoa(cohort.Tasks),
+		formatTaskStatsKnownDuration(cohort.CompletionTime.Median, cohort.CompletionTime.Known > 0),
+		formatTaskStatsKnownDuration(cohort.WorkflowTime.Median, cohort.WorkflowTime.Known > 0),
+		formatTaskStatsOptionalTokenCount(cohort.RepairCycles.Median, cohort.RepairCycles.Known > 0),
+		strconv.Itoa(cohort.FirstPassApprovals),
+		strconv.Itoa(cohort.RepairTasks),
+		strconv.Itoa(cohort.BlockedReviews),
+		strconv.Itoa(cohort.BlockingFindings),
+		strconv.Itoa(cohort.OperationalFailures),
+		formatTaskStatsTotalTokens(cohort.Tokens),
+		formatTaskStatsOptionalTokenCount(cohort.Tokens.Median, cohort.Tokens.Known > 0),
+		formatTaskStatsTotalCost(cohort.Cost),
+		formatTaskStatsOptionalCost(cohort.Cost.MedianMicroUSD, cohort.Cost.Known > 0),
+	}
+}
+
+func renderTaskStatsAggregateModelCoverageNotes(
+	output interface{ Write([]byte) (int, error) },
+	cohorts []taskstats.AggregateModelCohort,
+) error {
+	notes := taskStatsAggregateModelCoverageNotes(cohorts)
+	if len(notes) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintln(output); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(output, "Missing data coverage (known/samples; omitted cohorts are complete or have no samples):"); err != nil {
+		return err
+	}
+	for _, note := range notes {
+		if _, err := fmt.Fprintln(output, "- "+note); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func taskStatsAggregateModelCoverageNotes(cohorts []taskstats.AggregateModelCohort) []string {
+	notes := make([]string, 0, len(cohorts))
+	for _, cohort := range cohorts {
+		missing := taskStatsAggregateModelCoverageMissing(cohort)
+		if len(missing) == 0 {
+			continue
+		}
+		notes = append(notes, formatTaskStatsField(cohort.Key)+": "+strings.Join(missing, ", "))
+	}
+	return notes
+}
+
+func taskStatsAggregateModelCoverageMissing(cohort taskstats.AggregateModelCohort) []string {
+	missing := make([]string, 0, 5)
+	if cohort.CompletionTime.Unknown() > 0 {
+		missing = append(missing, taskStatsCoverageNote("completion", cohort.CompletionTime.Known, cohort.CompletionTime.Samples))
+	}
+	if cohort.WorkflowTime.Unknown() > 0 {
+		missing = append(missing, taskStatsCoverageNote("workflow", cohort.WorkflowTime.Known, cohort.WorkflowTime.Samples))
+	}
+	if cohort.RepairCycles.Unknown() > 0 {
+		missing = append(missing, taskStatsCoverageNote("repair", cohort.RepairCycles.Known, cohort.RepairCycles.Samples))
+	}
+	if cohort.Tokens.Unknown() > 0 {
+		missing = append(missing, taskStatsCoverageNote("tokens", cohort.Tokens.Known, cohort.Tokens.Samples))
+	}
+	if cohort.Cost.Unknown() > 0 {
+		missing = append(missing, taskStatsCoverageNote("cost", cohort.Cost.Known, cohort.Cost.Samples))
+	}
+	return missing
+}
+
+func taskStatsCoverageNote(label string, known int, samples int) string {
+	return fmt.Sprintf("%s %s", label, formatTaskStatsCoverage(known, samples))
+}
+
+func taskStatsImplementationModelCohortLabel(cohort taskstats.AggregateModelCohort) string {
+	return formatTaskStatsField(cohort.ImplementationModel)
+}
+
+func taskStatsReviewerModelCohortLabel(cohort taskstats.AggregateModelCohort) string {
+	return formatTaskStatsField(cohort.ReviewerModel)
 }
 
 func formatTaskStatsCoverage(known int, samples int) string {

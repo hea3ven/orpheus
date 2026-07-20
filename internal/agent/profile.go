@@ -10,6 +10,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/taskstate"
 	"gopkg.in/yaml.v3"
 )
 
@@ -83,9 +84,19 @@ type CommandSnapshot struct {
 	AgentName string
 	Command   string
 	Args      []string
+	Selection taskstate.AgentSelection
 	Harness   string
 	Model     string
+	Thinking  string
 	Prompt    string
+}
+
+// AgentSelection returns the normalized model-cohort selection for this command.
+func (s CommandSnapshot) AgentSelection() taskstate.AgentSelection {
+	if !s.Selection.IsZero() {
+		return taskstate.NewAgentSelection(s.Selection.Harness, s.Selection.Model, s.Selection.Thinking)
+	}
+	return taskstate.NewAgentSelection(s.Harness, s.Model, s.Thinking)
 }
 
 // ExecCommand returns the harness-neutral process invocation for this command.
@@ -280,12 +291,15 @@ func (c Config) resolveAgentProfile(agentName string, values InterpolationValues
 		args[i] = interpolateProfileValue(arg, values)
 	}
 
+	selection := taskstate.NewAgentSelection(profile.Harness, profile.Model, profile.Thinking)
 	return CommandSnapshot{
 		AgentName: agentName,
 		Command:   interpolateProfileValue(profile.Command, values),
 		Args:      args,
-		Harness:   profile.Harness,
-		Model:     profile.Model,
+		Selection: selection,
+		Harness:   selection.Harness,
+		Model:     selection.Model,
+		Thinking:  selection.Thinking,
 		Prompt:    RenderBootstrapPrompt(),
 	}, nil
 }
@@ -501,14 +515,7 @@ func resolveCodexProfile(agentName string, profile Profile, values Interpolation
 	}
 	prompt := interpolateCodexPrompt(values, profile.PromptAppend)
 	args = append(args, prompt)
-	return CommandSnapshot{
-		AgentName: agentName,
-		Command:   codexCommand,
-		Args:      args,
-		Harness:   profile.Harness,
-		Model:     profile.Model,
-		Prompt:    prompt,
-	}
+	return newCommandSnapshot(agentName, codexCommand, args, profile, prompt)
 }
 
 func resolvePiProfile(agentName string, profile Profile, values InterpolationValues) CommandSnapshot {
@@ -525,12 +532,19 @@ func resolvePiProfile(agentName string, profile Profile, values InterpolationVal
 	}
 	prompt := RenderEffectivePrompt(profile.PromptAppend)
 	args = append(args, prompt)
+	return newCommandSnapshot(agentName, piCommand, args, profile, prompt)
+}
+
+func newCommandSnapshot(agentName string, command string, args []string, profile Profile, prompt string) CommandSnapshot {
+	selection := taskstate.NewAgentSelection(profile.Harness, profile.Model, profile.Thinking)
 	return CommandSnapshot{
 		AgentName: agentName,
-		Command:   piCommand,
+		Command:   command,
 		Args:      args,
-		Harness:   profile.Harness,
-		Model:     profile.Model,
+		Selection: selection,
+		Harness:   selection.Harness,
+		Model:     selection.Model,
+		Thinking:  selection.Thinking,
 		Prompt:    prompt,
 	}
 }

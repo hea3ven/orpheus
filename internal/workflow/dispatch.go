@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/hea3ven/orpheus/internal/agent"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/readiness"
@@ -52,8 +53,32 @@ type DispatchCommand struct {
 	AgentName string
 	Command   string
 	Args      []string
+	Selection taskstate.AgentSelection
 	Harness   string
 	Model     string
+	Thinking  string
+}
+
+// NewDispatchCommand converts a resolved agent command into workflow dispatch metadata.
+func NewDispatchCommand(command agent.CommandSnapshot) DispatchCommand {
+	selection := command.AgentSelection()
+	return DispatchCommand{
+		AgentName: command.AgentName,
+		Command:   command.Command,
+		Args:      append([]string{}, command.Args...),
+		Selection: selection,
+		Harness:   selection.Harness,
+		Model:     selection.Model,
+		Thinking:  selection.Thinking,
+	}
+}
+
+// AgentSelection returns the normalized model-cohort selection for this dispatch.
+func (c DispatchCommand) AgentSelection() taskstate.AgentSelection {
+	if !c.Selection.IsZero() {
+		return taskstate.NewAgentSelection(c.Selection.Harness, c.Selection.Model, c.Selection.Thinking)
+	}
+	return taskstate.NewAgentSelection(c.Harness, c.Model, c.Thinking)
 }
 
 // DispatchCommandContext describes task-run values available while resolving
@@ -518,8 +543,7 @@ func (s DispatchService) recordStart(
 	attempt, err := s.RunStore.StartRun(repo.ID, opts.TaskID, taskstate.StartRunOptions{
 		Agent:          command.AgentName,
 		Profile:        command.AgentName,
-		Harness:        command.Harness,
-		Model:          command.Model,
+		Selection:      command.AgentSelection(),
 		Command:        command.Command,
 		Args:           command.Args,
 		SessionName:    commandContext.SessionName,
