@@ -3470,7 +3470,7 @@ func TestTaskReviewRestoresCandidateChangesMutatedDuringManualStep(t *testing.T)
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
 	})
 	input := &mutatingReviewInput{
-		input:    bytes.NewBufferString("b\nMutating finding\nThe step changed files\nRestore it\n"),
+		input:    bytes.NewBufferString("b\nMutating finding\nThe step changed files\nRestore it\nf\n"),
 		repoPath: repoPath,
 		mutate: func(repoPath string) error {
 			if err := os.WriteFile(filepath.Join(repoPath, "tracked.txt"), []byte("mutated\n"), 0o644); err != nil {
@@ -3554,9 +3554,29 @@ func TestTaskReviewBlockingFindingBlocksWithoutFinalizing(t *testing.T) {
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "b\nBug\nMust fix\nPatch it\n")
+	input := strings.Join([]string{
+		"b",
+		"Bug",
+		"Must fix",
+		"Patch it",
+		"v",
+		"Nit",
+		"Small cleanup remains",
+		"Consider later",
+		"t",
+		"Follow-up",
+		"Extract helper later",
+		"Track separately",
+		"Create helper extraction task",
+		"Extract the helper in a focused follow-up.",
+		"Helper extraction has acceptance tests.",
+		"f",
+		"",
+	}, "\n")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, input)
 
 	is.Empty(stdout)
+	is.Contains(stderr, "Review action [f=finish/block, b=block, v=advisory, t=task, q=abort]")
 	is.Contains(stderr, "Review blocked for op-main.")
 	is.Equal(headBefore, strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")))
 	var state taskstate.TaskState
@@ -3564,8 +3584,10 @@ func TestTaskReviewBlockingFindingBlocksWithoutFinalizing(t *testing.T) {
 	latest, ok := taskstate.LatestReview(state)
 	must.True(ok)
 	is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
-	must.Len(latest.Findings, 1)
+	must.Len(latest.Findings, 3)
 	is.Equal(taskstate.FindingTypeBlocking, latest.Findings[0].Type)
+	is.Equal(taskstate.FindingTypeAdvisory, latest.Findings[1].Type)
+	is.Equal(taskstate.FindingTypeSeparateTask, latest.Findings[2].Type)
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
@@ -5638,7 +5660,12 @@ func TestTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
   --title "Generated advisory" \
   --description "The review agent found a risky edge case." \
   --suggested-action "Handle the edge case before publishing."
-`, shellQuote(orpheusBin)))
+%s agent review add \
+  --type advisory \
+  --title "Second generated advisory" \
+  --description "The review agent found an issue that needs attention." \
+  --suggested-action "Address it before publishing."
+`, shellQuote(orpheusBin), shellQuote(orpheusBin)))
 	writeReviewAgentPipelineConfig(t, paths, "reviewer", reviewer, nil, "standard", map[string][]map[string]any{
 		"standard": []map[string]any{
 			{"kind": "agent_review", "name": "ai-review"},
@@ -5651,10 +5678,33 @@ func TestTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
 	})
 	headBefore := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
 
-	input := strings.Join([]string{
+	firstInput := strings.Join([]string{
 		"p",
-		"1",
-		"a",
+		"k",
+		"p",
+		"",
+	}, "\n")
+	inputPath := filepath.Join(t.TempDir(), "review-input.txt")
+	must.NoError(os.WriteFile(inputPath, []byte(firstInput), 0o644))
+	inputFile, err := os.Open(inputPath)
+	must.NoError(err)
+	t.Cleanup(func() { _ = inputFile.Close() })
+	firstStdout, firstStderr, err := executeCommandWithReaderAndError(t, []string{"task", "review", "op-main"}, inputFile)
+	must.NoError(err, "execute task review\nstderr: %s", firstStderr)
+
+	is.Contains(firstStdout, "Recorded advisory review finding 1 for op-main.")
+	is.Contains(firstStdout, "Recorded advisory review finding 2 for op-main.")
+	is.Contains(firstStderr, "Promoted advisory finding 2 to blocking.")
+	is.Contains(firstStderr, "Review for op-main is waiting for manual step \"approval\" because manual review input is unavailable.")
+	var waiting taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &waiting))
+	paused, ok := taskstate.LatestReview(waiting)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusWaitingForManual, paused.Status)
+	must.Len(paused.Findings, 2)
+	is.Equal(taskstate.FindingTypeBlocking, paused.Findings[1].Type)
+
+	input := strings.Join([]string{
 		"v",
 		"Manual advisory",
 		"The human reviewer added a non-blocking note.",
@@ -5662,21 +5712,32 @@ func TestTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
 		"f",
 		"",
 	}, "\n")
-	inputPath := filepath.Join(t.TempDir(), "review-input.txt")
-	must.NoError(os.WriteFile(inputPath, []byte(input), 0o644))
-	inputFile, err := os.Open(inputPath)
-	must.NoError(err)
-	t.Cleanup(func() { _ = inputFile.Close() })
-	stdout, stderr, err := executeCommandWithReaderAndError(t, []string{"task", "review", "op-main"}, inputFile)
-	must.NoError(err, "execute task review\nstderr: %s", stderr)
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, input)
 
-	is.Contains(stdout, "Recorded advisory review finding 1 for op-main.")
-	is.Contains(stderr, "Prior unresolved advisories:")
-	is.Contains(stderr, "Finding 1 (ai-review): Generated advisory")
-	is.Contains(stderr, "Review action [a=approve, b=block, p=promote advisory")
-	is.Contains(stderr, "Promoted advisory finding 1 to blocking.")
-	is.Contains(stderr, "Review action [f=finish/block, b=block, v=advisory, t=task, q=abort]")
-	is.Contains(stderr, "Choose finish/block, block, advisory, task, or abort.")
+	is.Empty(stdout)
+	priorStart := strings.Index(firstStderr, "Prior unresolved advisories:")
+	must.NotEqual(-1, priorStart)
+	menuStart := strings.Index(firstStderr[priorStart:], "Review action [")
+	must.NotEqual(-1, menuStart)
+	priorSummary := firstStderr[priorStart : priorStart+menuStart]
+	is.Contains(priorSummary, "Finding 1 (ai-review): Generated advisory")
+	is.Contains(priorSummary, "Finding 2 (ai-review): Second generated advisory")
+	is.NotContains(priorSummary, "Description:")
+	is.NotContains(priorSummary, "Suggested action:")
+	is.Contains(firstStderr, "Review action [a=approve, b=block, p=review advisories")
+	is.Contains(firstStderr, "Advisory finding 1 (ai-review): Generated advisory")
+	is.Contains(firstStderr, "Description: The review agent found a risky edge case.")
+	is.Contains(firstStderr, "Suggested action: Handle the edge case before publishing.")
+	is.Contains(firstStderr, "Advisory finding 1 [k=keep advisory, p=promote, q=return]")
+	is.Contains(firstStderr, "Advisory finding 2 (ai-review): Second generated advisory")
+	is.Contains(firstStderr, "Description: The review agent found an issue that needs attention.")
+	is.Contains(firstStderr, "Suggested action: Address it before publishing.")
+	is.Contains(stderr, "Resuming review attempt 1 at manual step \"approval\".")
+	is.Contains(stderr, "Open blockers from earlier review steps:")
+	is.Contains(stderr, "Finding 2 (blocking): Second generated advisory")
+	is.Contains(stderr, "Description: The review agent found an issue that needs attention.")
+	is.Contains(stderr, "Suggested action: Address it before publishing.")
+	is.Contains(stderr, "Review action [f=finish/block, b=block, p=review advisories, v=advisory, t=task, q=abort]")
 	is.NotContains(stderr, "Finding 2 (approval): Manual advisory")
 	is.Contains(stderr, "Review blocked for op-main.")
 	is.Equal(headBefore, strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")))
@@ -5686,12 +5747,18 @@ func TestTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
 	latest, ok := taskstate.LatestReview(state)
 	must.True(ok)
 	is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
-	must.Len(latest.Findings, 2)
-	is.Equal(taskstate.FindingTypeBlocking, latest.Findings[0].Type)
+	must.Len(latest.Findings, 3)
+	is.Equal(taskstate.FindingTypeAdvisory, latest.Findings[0].Type)
 	is.Equal("Generated advisory", latest.Findings[0].Title)
 	is.Equal("ai-review", latest.Findings[0].Step)
-	is.Equal(taskstate.FindingTypeAdvisory, latest.Findings[1].Type)
-	is.Equal("approval", latest.Findings[1].Step)
+	is.Empty(latest.Findings[0].DowngradeReason)
+	is.Empty(latest.Findings[0].Waiver)
+	is.Zero(latest.Findings[0].TargetedByRunAttempt)
+	is.Equal(taskstate.FindingTypeBlocking, latest.Findings[1].Type)
+	is.Equal("Second generated advisory", latest.Findings[1].Title)
+	is.Equal("ai-review", latest.Findings[1].Step)
+	is.Equal(taskstate.FindingTypeAdvisory, latest.Findings[2].Type)
+	is.Equal("approval", latest.Findings[2].Step)
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 
 	showStdout, showStderr := executeCommand(t, []string{"task", "review", "show", "op-main"})
@@ -5711,13 +5778,14 @@ func TestTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
 	latest, ok = taskstate.LatestReview(state)
 	must.True(ok)
-	must.Len(latest.Findings, 2)
-	is.Equal(2, latest.Findings[0].TargetedByRunAttempt)
-	is.Zero(latest.Findings[1].TargetedByRunAttempt)
+	must.Len(latest.Findings, 3)
+	is.Zero(latest.Findings[0].TargetedByRunAttempt)
+	is.Equal(2, latest.Findings[1].TargetedByRunAttempt)
+	is.Zero(latest.Findings[2].TargetedByRunAttempt)
 	must.Len(state.Runs, 2)
 	must.NotNil(state.Runs[1].ReviewFollowUp)
 	is.Equal(latest.Attempt, state.Runs[1].ReviewFollowUp.ReviewAttempt)
-	is.Equal([]int{0}, state.Runs[1].ReviewFollowUp.FindingIndexes)
+	is.Equal([]int{1}, state.Runs[1].ReviewFollowUp.FindingIndexes)
 }
 
 func TestTaskReviewAgentReviewNonZeroExitMarksOperationalFailure(t *testing.T) {
@@ -5942,6 +6010,7 @@ func TestTaskReviewPipelineAliasResolvesToGlobalPipeline(t *testing.T) {
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
 }
 
+//nolint:funlen // The interrupted recovery path verifies persisted mixed findings.
 func TestTaskReviewManualInputLossReplaysRecordedFindings(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -5974,6 +6043,10 @@ func TestTaskReviewManualInputLossReplaysRecordedFindings(t *testing.T) {
 		"Existing note",
 		"Remember this during replay",
 		"Consider later",
+		"b",
+		"Existing blocker",
+		"Fix this before completing the review",
+		"Address the blocking issue",
 		"",
 	}, "\n")
 	firstStdout, firstStderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, firstInput)
@@ -5985,23 +6058,28 @@ func TestTaskReviewManualInputLossReplaysRecordedFindings(t *testing.T) {
 	paused, ok := taskstate.LatestReview(waiting)
 	must.True(ok)
 	is.Equal(taskstate.ReviewStatusWaitingForManual, paused.Status)
-	must.Len(paused.Findings, 1)
+	must.Len(paused.Findings, 2)
 	is.Equal("Existing note", paused.Findings[0].Title)
+	is.Equal("Existing blocker", paused.Findings[1].Title)
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "a\n")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "f\n")
 
-	is.Contains(stdout, "Finalized op-main")
+	is.Empty(stdout)
 	is.Contains(stderr, "Resuming review attempt 1 at manual step \"local-review\".")
 	is.Contains(stderr, "Recorded findings for this manual step:")
 	is.Contains(stderr, "Finding 1 (advisory): Existing note")
+	is.Contains(stderr, "Finding 2 (blocking): Existing blocker")
+	is.Contains(stderr, "Review action [f=finish/block, b=block, v=advisory, t=task, q=abort]")
+	is.Contains(stderr, "Review blocked for op-main.")
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
 	latest, ok := taskstate.LatestReview(state)
 	must.True(ok)
 	is.Equal(paused.Attempt, latest.Attempt)
-	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
-	must.Len(latest.Findings, 1)
-	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
+	is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
+	must.Len(latest.Findings, 2)
+	is.Equal(taskstate.FindingTypeBlocking, latest.Findings[1].Type)
+	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
 func TestTaskReviewResumesManualWaitingAttempt(t *testing.T) {
