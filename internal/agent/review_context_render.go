@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -16,7 +17,11 @@ func RenderReviewContext(ctx ReviewContext) string {
 	appendRepositoryContext(&builder, ctx.Repository)
 	appendReviewTargetContext(&builder, ctx)
 	appendReviewCompletionContext(&builder, ctx.Review)
-	appendReviewContract(&builder)
+	if exhaustiveReviewContextEnabled() {
+		appendExhaustiveReviewContract(&builder)
+	} else {
+		appendLegacyReviewContract(&builder)
+	}
 
 	return builder.String()
 }
@@ -65,7 +70,11 @@ func appendReviewCompletionBlock(builder *strings.Builder, label string, complet
 	}
 }
 
-func appendReviewContract(builder *strings.Builder) {
+func exhaustiveReviewContextEnabled() bool {
+	return strings.TrimSpace(os.Getenv(envExhaustiveReviewContext)) == "1"
+}
+
+func appendLegacyReviewContract(builder *strings.Builder) {
 	builder.WriteString("\nReview contract:\n")
 	builder.WriteString("- You are reviewing the current working-tree changes for the task above.\n")
 	builder.WriteString("- Use Git commands such as `git status --short`, `git diff`, and `git log` as needed.\n")
@@ -76,6 +85,28 @@ func appendReviewContract(builder *strings.Builder) {
 	builder.WriteString("- When multiple findings exist, run `orpheus agent review add` multiple times, once per finding.\n")
 	builder.WriteString("- Exit 0 after recording all findings. Exit non-zero only for an operational review failure.\n")
 
+	appendReviewFindingInstructions(builder)
+}
+
+func appendExhaustiveReviewContract(builder *strings.Builder) {
+	builder.WriteString("\nReview contract:\n")
+	builder.WriteString("- You are reviewing the current working-tree changes for the task above.\n")
+	builder.WriteString("- This is a strict read-only review step. Do not edit files, stage changes, commit, run formatters that write files, or otherwise mutate the worktree.\n")
+	builder.WriteString("- Exhaustive coverage is required within your assigned reviewer scope. Preserve any profile or supplemental review focus; for example, architecture reviewers must review the full relevant architectural change set without broadening into general code review.\n")
+	builder.WriteString("- Follow this staged procedure before exiting:\n")
+	builder.WriteString("  1. Inventory the complete changed surface and the task acceptance criteria in scope.\n")
+	builder.WriteString("  2. Inspect the relevant changes, tests, callers, error paths, and cross-cutting effects for that scope.\n")
+	builder.WriteString("  3. Accumulate candidate findings privately. Do not call `orpheus agent review add` during this initial inspection.\n")
+	builder.WriteString("  4. Perform a final coverage sweep against the inventory to look for missed files, missed criteria, and duplicate or overlapping findings.\n")
+	builder.WriteString("  5. Only after the initial inspection and final coverage sweep are complete, record findings with `orpheus agent review add`.\n")
+	builder.WriteString("- Calling `orpheus agent review add` before completing the initial inspection and final coverage sweep is prohibited.\n")
+	builder.WriteString("- Record every collected distinct finding before exit, with a separate `orpheus agent review add` call for each finding.\n")
+	builder.WriteString("- Exit 0 after recording all findings. Exit non-zero only for an operational review failure.\n")
+
+	appendReviewFindingInstructions(builder)
+}
+
+func appendReviewFindingInstructions(builder *strings.Builder) {
 	builder.WriteString("\nFinding examples:\n")
 	builder.WriteString("```bash\n")
 	builder.WriteString("orpheus agent review add \\\n")
