@@ -87,6 +87,55 @@ func assertLocalM4PolicyProjectionDetails(t *testing.T, got status.Projection) {
 	}
 }
 
+func TestProjectCarriesEpicProgressWithoutReplacingStatusDetail(t *testing.T) {
+	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
+		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"},
+		Tasks: []task.Task{
+			{
+				ID:        "a-epic",
+				Title:     "epic",
+				Status:    task.StatusInProgress,
+				IssueType: task.IssueTypeEpic,
+				Metadata:  task.Metadata{task.MetadataPRURL: "https://github.test/org/alpha/pull/44"},
+				Relations: task.RelationSummary{ChildCount: 4},
+			},
+			{
+				ID:        "a-open-child",
+				Title:     "open child",
+				Status:    task.StatusOpen,
+				IssueType: task.IssueTypeTask,
+				Relations: task.RelationSummary{ParentID: "a-epic"},
+			},
+			{
+				ID:        "a-closed-child",
+				Title:     "closed child",
+				Status:    task.StatusClosed,
+				IssueType: task.IssueTypeTask,
+				Relations: task.RelationSummary{ParentID: "a-epic"},
+			},
+		},
+	}}}
+
+	projection := status.Project(snapshot)
+	entry := projectionEntryByTaskID(t, projection, "a-epic")
+	if entry.Detail != "https://github.test/org/alpha/pull/44" {
+		t.Fatalf("epic detail = %q, want PR URL", entry.Detail)
+	}
+	if entry.SemanticDetail.Kind != status.DetailPullRequest {
+		t.Fatalf("epic semantic detail kind = %q, want %q", entry.SemanticDetail.Kind, status.DetailPullRequest)
+	}
+	if entry.EpicProgress.Kind != status.DetailEpicProgress {
+		t.Fatalf("epic progress kind = %q, want %q", entry.EpicProgress.Kind, status.DetailEpicProgress)
+	}
+	if entry.EpicProgress.Completed != 1 || entry.EpicProgress.Total != 4 {
+		t.Fatalf(
+			"epic progress = %d/%d, want 1/4",
+			entry.EpicProgress.Completed,
+			entry.EpicProgress.Total,
+		)
+	}
+}
+
 func TestProjectRequiresExternalReferenceBeforePrePRWorkflowStates(t *testing.T) {
 	const missingRefDetail = "missing required external reference; set it with `bd update gated-open --external-ref <reference>`"
 
@@ -820,6 +869,20 @@ func groupEntries(t *testing.T, projection status.Projection, groupID status.Gro
 	}
 	t.Fatalf("missing group %s", groupID)
 	return nil
+}
+
+func projectionEntryByTaskID(t *testing.T, projection status.Projection, taskID string) status.Entry {
+	t.Helper()
+
+	for _, group := range projection.Groups {
+		for _, entry := range group.Entries {
+			if entry.Kind == status.EntryTask && entry.Task.ID == taskID {
+				return entry
+			}
+		}
+	}
+	t.Fatalf("missing projected task %s", taskID)
+	return status.Entry{}
 }
 
 func projectWorktreeCompletion(completion taskstate.Completion) status.Projection {
