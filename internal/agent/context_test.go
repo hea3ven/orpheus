@@ -506,10 +506,61 @@ func recordCompletedContextRun(
 	must.NoError(err)
 }
 
-func TestRenderReviewContextRequiresExhaustiveMultiFindingReview(t *testing.T) {
+func TestRenderReviewContextUsesLegacyMultiFindingReviewByDefault(t *testing.T) {
 	is := assert.New(t)
+	t.Setenv("ORPHEUS_EXHAUSTIVE_REVIEW_CONTEXT", "")
 
-	got := agent.RenderReviewContext(agent.ReviewContext{
+	got := agent.RenderReviewContext(reviewContextRenderFixture())
+
+	for _, want := range []string{
+		"Review the complete change set before exiting, even if you find an issue early.",
+		"Do not stop after the first issue; continue reviewing for additional distinct findings.",
+		"- Technical explanation: Explains the implementation rationale for review.",
+		"Record each distinct finding with its own `orpheus agent review add` call",
+		"When multiple findings exist, run `orpheus agent review add` multiple times, once per finding.",
+	} {
+		is.Contains(got, want)
+	}
+	is.NotContains(got, "Follow this staged procedure before exiting:")
+	is.NotContains(got, "Calling `orpheus agent review add` before completing the initial inspection")
+}
+
+func TestRenderReviewContextUsesLegacyMultiFindingReviewWhenToggleDisabled(t *testing.T) {
+	is := assert.New(t)
+	t.Setenv("ORPHEUS_EXHAUSTIVE_REVIEW_CONTEXT", "0")
+
+	got := agent.RenderReviewContext(reviewContextRenderFixture())
+
+	is.Contains(got, "Review the complete change set before exiting, even if you find an issue early.")
+	is.Contains(got, "Record each distinct finding with its own `orpheus agent review add` call")
+	is.NotContains(got, "Exhaustive coverage is required within your assigned reviewer scope.")
+}
+
+func TestRenderReviewContextUsesStagedExhaustiveReviewWhenToggleEnabled(t *testing.T) {
+	is := assert.New(t)
+	t.Setenv("ORPHEUS_EXHAUSTIVE_REVIEW_CONTEXT", "1")
+
+	got := agent.RenderReviewContext(reviewContextRenderFixture())
+
+	for _, want := range []string{
+		"Exhaustive coverage is required within your assigned reviewer scope.",
+		"architecture reviewers must review the full relevant architectural change set without broadening into general code review",
+		"1. Inventory the complete changed surface and the task acceptance criteria in scope.",
+		"2. Inspect the relevant changes, tests, callers, error paths, and cross-cutting effects for that scope.",
+		"3. Accumulate candidate findings privately. Do not call `orpheus agent review add` during this initial inspection.",
+		"4. Perform a final coverage sweep against the inventory",
+		"5. Only after the initial inspection and final coverage sweep are complete, record findings with `orpheus agent review add`.",
+		"Calling `orpheus agent review add` before completing the initial inspection and final coverage sweep is prohibited.",
+		"Record every collected distinct finding before exit, with a separate `orpheus agent review add` call for each finding.",
+		"- Technical explanation: Explains the implementation rationale for review.",
+	} {
+		is.Contains(got, want)
+	}
+	is.NotContains(got, "Review the complete change set before exiting, even if you find an issue early.")
+}
+
+func reviewContextRenderFixture() agent.ReviewContext {
+	return agent.ReviewContext{
 		Repository: agent.ContextRepository{
 			ID:            "alpha",
 			Name:          "Alpha Repo",
@@ -536,16 +587,6 @@ func TestRenderReviewContextRequiresExhaustiveMultiFindingReview(t *testing.T) {
 				TechnicalExplanation: "Explains the implementation rationale for review.",
 			},
 		},
-	})
-
-	for _, want := range []string{
-		"Review the complete change set before exiting, even if you find an issue early.",
-		"Do not stop after the first issue; continue reviewing for additional distinct findings.",
-		"- Technical explanation: Explains the implementation rationale for review.",
-		"Record each distinct finding with its own `orpheus agent review add` call",
-		"When multiple findings exist, run `orpheus agent review add` multiple times, once per finding.",
-	} {
-		is.Contains(got, want)
 	}
 }
 

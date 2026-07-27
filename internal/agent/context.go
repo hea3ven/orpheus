@@ -24,6 +24,8 @@ const (
 	envConflictFiles = "ORPHEUS_CONFLICT_FILES"
 	envReviewAttempt = "ORPHEUS_REVIEW_ATTEMPT"
 	envReviewStep    = "ORPHEUS_REVIEW_STEP"
+
+	envExhaustiveReviewContext = "ORPHEUS_EXHAUSTIVE_REVIEW_CONTEXT"
 )
 
 // ExecutionTarget identifies the validated workflow target for an active agent run.

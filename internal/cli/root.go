@@ -7,6 +7,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const skipInvocationAnnotation = "orpheus.skipInvocation"
+
 type rootOptions struct {
 	verbose        bool
 	logger         *slog.Logger
@@ -43,6 +45,9 @@ control.`,
 		SilenceUsage:  true,
 		PersistentPreRunE: func(command *cobra.Command, args []string) error {
 			opts.configureLogging(command)
+			if skipsInvocation(command) {
+				return nil
+			}
 			_, err := opts.invocation(command)
 			return err
 		},
@@ -70,8 +75,18 @@ control.`,
 		newTaskCommand(opts),
 		newStatusCommand(opts),
 		newAgentCommand(opts),
+		newEvalCommand(opts),
 		newDoctorCommand(opts),
 	)
 
 	return cmd
+}
+
+func skipsInvocation(command *cobra.Command) bool {
+	for current := command; current != nil; current = current.Parent() {
+		if current.Annotations[skipInvocationAnnotation] == "true" {
+			return true
+		}
+	}
+	return false
 }
