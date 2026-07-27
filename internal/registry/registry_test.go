@@ -383,7 +383,10 @@ func TestNewRepoFromPathDerivesIdentityAndNormalizesPath(t *testing.T) {
 		t.Fatalf("new repo from path: %v", err)
 	}
 
-	wantPath := filepath.Join(root, "my-repo")
+	wantPath, err := registry.NormalizePath(filepath.Join(root, "my-repo"))
+	if err != nil {
+		t.Fatalf("normalize expected path: %v", err)
+	}
 	if got.ID != "my-repo" || got.Name != "my-repo" || got.Path != wantPath {
 		t.Fatalf("repo = %#v, want id/name my-repo path %q", got, wantPath)
 	}

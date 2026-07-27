@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/logging"
+	"github.com/hea3ven/orpheus/internal/pathutil"
 	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/state"
 )
@@ -160,11 +161,11 @@ func NormalizePath(inputPath string) (string, error) {
 		return "", errors.New("repo path is required")
 	}
 
-	absolutePath, err := filepath.Abs(inputPath)
+	canonicalPath, err := pathutil.CanonicalAbs(inputPath)
 	if err != nil {
 		return "", fmt.Errorf("normalize repo path %q: %w", inputPath, err)
 	}
-	return filepath.Clean(absolutePath), nil
+	return canonicalPath, nil
 }
 
 // ValidateSummaryGuidanceStyle checks whether style is one of the supported named styles.

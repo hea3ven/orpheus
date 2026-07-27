@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hea3ven/orpheus/internal/pathutil"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
@@ -212,6 +213,11 @@ func cleanCodexExecutionDir(dir string) string {
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
 		return ""
+	}
+	if filepath.IsAbs(dir) {
+		if canonicalDir, err := pathutil.CanonicalAbs(dir); err == nil {
+			return canonicalDir
+		}
 	}
 	return filepath.Clean(dir)
 }

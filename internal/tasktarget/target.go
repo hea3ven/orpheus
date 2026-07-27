@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/pathutil"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -95,23 +96,24 @@ func ExpectedTargetsForTask(repo task.Repository, taskID string, paths state.Pat
 		MainSolo: Target{
 			Kind:     TargetMainSolo,
 			Branch:   repoTarget.Branch,
-			Worktree: filepath.Clean(repoTarget.WorktreePath),
+			Worktree: cleanPath(repoTarget.WorktreePath),
 		},
 		WorktreeTeam: Target{
 			Kind:     TargetWorktreeTeam,
 			Branch:   worktreeTarget.Branch,
-			Worktree: filepath.Clean(worktreeTarget.WorktreePath),
+			Worktree: cleanPath(worktreeTarget.WorktreePath),
 		},
 		RepoRootTeam: Target{
 			Kind:     TargetRepoRootTeam,
 			Branch:   repoRootTaskTarget.Branch,
-			Worktree: filepath.Clean(repoRootTaskTarget.WorktreePath),
+			Worktree: cleanPath(repoRootTaskTarget.WorktreePath),
 		},
 	}, nil
 }
 
 // ClassifyMetadataTarget matches Orpheus task metadata against exact expected execution targets.
 func ClassifyMetadataTarget(metadata task.OrpheusMetadata, targets ExpectedTargets) (Target, error) {
+	targets = cleanExpectedTargets(targets)
 	if !metadata.HasBranch || strings.TrimSpace(metadata.Branch) == "" {
 		return Target{}, fmt.Errorf("%s is missing", task.MetadataBranch)
 	}
@@ -196,6 +198,7 @@ func ClassifyRunTarget(repo task.Repository, branch string, worktree string) Tar
 
 // ClassifyTaskStateTarget matches the canonical taskstate target against exact expected execution targets.
 func ClassifyTaskStateTarget(taskTarget taskstate.TaskTarget, targets ExpectedTargets) (Target, error) {
+	targets = cleanExpectedTargets(targets)
 	branch := strings.TrimSpace(taskTarget.Branch)
 	if branch == "" {
 		return Target{}, errors.New("taskstate target branch is missing")
@@ -221,6 +224,13 @@ func ClassifyTaskStateTarget(taskTarget taskstate.TaskTarget, targets ExpectedTa
 	}
 }
 
+func cleanExpectedTargets(targets ExpectedTargets) ExpectedTargets {
+	targets.MainSolo.Worktree = cleanPath(targets.MainSolo.Worktree)
+	targets.WorktreeTeam.Worktree = cleanPath(targets.WorktreeTeam.Worktree)
+	targets.RepoRootTeam.Worktree = cleanPath(targets.RepoRootTeam.Worktree)
+	return targets
+}
+
 func cleanAbsPath(label string, path string) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -229,13 +239,22 @@ func cleanAbsPath(label string, path string) (string, error) {
 	if !filepath.IsAbs(path) {
 		return "", fmt.Errorf("%s must be absolute, got %q", label, path)
 	}
-	return filepath.Clean(path), nil
+	canonicalPath, err := pathutil.CanonicalAbs(path)
+	if err != nil {
+		return "", fmt.Errorf("normalize %s %q: %w", label, path, err)
+	}
+	return canonicalPath, nil
 }
 
 func cleanPath(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return ""
+	}
+	if filepath.IsAbs(path) {
+		if canonicalPath, err := pathutil.CanonicalAbs(path); err == nil {
+			return canonicalPath
+		}
 	}
 	return filepath.Clean(path)
 }

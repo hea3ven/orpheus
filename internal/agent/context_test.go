@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agent"
+	"github.com/hea3ven/orpheus/internal/pathutil"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
@@ -602,7 +603,7 @@ func newActiveContextFixture(t *testing.T, taskID string) *activeContextFixture 
 	t.Helper()
 	must := require.New(t)
 
-	root := t.TempDir()
+	root := canonicalTestPath(t, t.TempDir())
 	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
 	must.NoError(err)
 	repoPath := filepath.Join(root, "repo")
@@ -680,4 +681,14 @@ func (f *activeContextFixture) resolverWithBackend(
 
 func testMkdirAll(path string) error {
 	return os.MkdirAll(path, 0o755)
+}
+
+func canonicalTestPath(t *testing.T, path string) string {
+	t.Helper()
+
+	canonicalPath, err := pathutil.CanonicalAbs(path)
+	if err != nil {
+		t.Fatalf("canonicalize test path %q: %v", path, err)
+	}
+	return canonicalPath
 }

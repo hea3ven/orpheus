@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	orpheusgit "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/pathutil"
 )
 
 func TestInspectDetectsRootRemoteAndOriginHEAD(t *testing.T) {
@@ -218,7 +219,7 @@ func gitDiagnostic(t *testing.T, logs string, operation string, status string) (
 func newGitRepo(t *testing.T) string {
 	t.Helper()
 
-	repoPath := t.TempDir()
+	repoPath := canonicalTestPath(t, t.TempDir())
 	runGit(t, repoPath, "init")
 	runGit(t, repoPath, "checkout", "-b", "main")
 	runGit(t, repoPath,
@@ -239,4 +240,14 @@ func runGit(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v failed: %v\n%s", args, err, output)
 	}
 	return string(output)
+}
+
+func canonicalTestPath(t *testing.T, path string) string {
+	t.Helper()
+
+	canonicalPath, err := pathutil.CanonicalAbs(path)
+	if err != nil {
+		t.Fatalf("canonicalize test path %q: %v", path, err)
+	}
+	return canonicalPath
 }

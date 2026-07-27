@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/logging"
+	"github.com/hea3ven/orpheus/internal/pathutil"
 )
 
 var (
@@ -301,11 +302,7 @@ func ensureManagedDirIsEmpty(dir string) error {
 }
 
 func normalizePath(path string) (string, error) {
-	absolutePath, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Clean(absolutePath), nil
+	return pathutil.CanonicalAbs(path)
 }
 
 func requireLocalBeadsDir(path string) error {
