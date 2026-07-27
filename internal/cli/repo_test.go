@@ -87,6 +87,66 @@ func TestRepoConfigUpdatesPublicationPolicyForExistingRepo(t *testing.T) {
 	is.Equal(template, reg.Repos[0].TitleTemplate)
 }
 
+func TestRepoConfigSetsAndClearsIncludePRReviewProcess(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	withFakeBDInit(t)
+	repoPath := newTestRepoPath(t)
+	paths := currentTestPaths(t)
+
+	_, addErr := executeCommand(t, []string{"repo", "add", repoPath})
+	is.Empty(addErr)
+
+	stdout, stderr := executeCommand(t, []string{
+		"repo", "config", "get", "alpha", "include-pr-review-process",
+	})
+	is.Empty(stderr)
+	is.Contains(stdout, "include-pr-review-process")
+	is.Contains(stdout, "(not set)")
+	is.Contains(stdout, "true")
+
+	stdout, stderr = executeCommand(t, []string{
+		"repo", "config", "set", "alpha", "include-pr-review-process", "false",
+	})
+	is.Empty(stderr)
+	is.Contains(stdout, "include-pr-review-process")
+	is.Contains(stdout, "false")
+
+	store := registry.NewStore(paths)
+	reg, err := store.Load()
+	must.NoError(err)
+	must.Len(reg.Repos, 1)
+	must.NotNil(reg.Repos[0].IncludePRReviewProcess)
+	is.False(*reg.Repos[0].IncludePRReviewProcess)
+
+	must.NoError(paths.WriteConfigYAML("config.yaml", map[string]any{
+		"reviews": map[string]any{"include_pr_review_process": false},
+	}))
+	stdout, stderr = executeCommand(t, []string{
+		"repo", "config", "set", "alpha", "include-pr-review-process", "true",
+	})
+	is.Empty(stderr)
+	is.Contains(stdout, "true")
+
+	reg, err = store.Load()
+	must.NoError(err)
+	must.Len(reg.Repos, 1)
+	must.NotNil(reg.Repos[0].IncludePRReviewProcess)
+	is.True(*reg.Repos[0].IncludePRReviewProcess)
+
+	stdout, stderr = executeCommand(t, []string{
+		"repo", "config", "set", "alpha", "include-pr-review-process", "",
+	})
+	is.Empty(stderr)
+	is.Contains(stdout, "(not set)")
+	is.Contains(stdout, "false")
+
+	reg, err = store.Load()
+	must.NoError(err)
+	must.Len(reg.Repos, 1)
+	is.Nil(reg.Repos[0].IncludePRReviewProcess)
+}
+
 func TestRepoConfigClearsPublicationPolicy(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)

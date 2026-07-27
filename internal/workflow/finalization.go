@@ -846,7 +846,11 @@ func (s FinalizationService) findOrCreateFeatureBranchPR(
 		return strings.TrimSpace(found.URL), true, nil
 	}
 
-	content, err := BuildPublicationPullRequestContentFromState(repo.TitleTemplate, taskItem, finalizeCtx.state)
+	publicationOptions, err := ResolvePublicationOptions(s.Paths, repo)
+	if err != nil {
+		return "", false, err
+	}
+	content, err := BuildPublicationPullRequestContentFromStateWithOptions(publicationOptions, taskItem, finalizeCtx.state)
 	if err != nil {
 		return "", false, err
 	}

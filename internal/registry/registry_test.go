@@ -41,17 +41,18 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 	paths := newTestPaths(t)
 	store := registry.NewStore(paths)
 	want := registry.Registry{Repos: []registry.Repo{{
-		ID:                   "orpheus",
-		Name:                 "orpheus",
-		Path:                 filepath.Join(paths.DataRoot, "..", "repos", "orpheus"),
-		Remote:               "git@example.com:org/orpheus.git",
-		DefaultBranch:        "main",
-		BeadsMode:            registry.BeadsModeLocal,
-		BeadsPrefix:          "op",
-		SummaryGuidance:      "Use sentence-case summaries without a type prefix.",
-		SummaryGuidanceStyle: registry.SummaryGuidanceStyleCapitalized,
-		TitleTemplate:        "[OPS] {{summary}}",
-		ReviewPipeline:       "go-standard",
+		ID:                     "orpheus",
+		Name:                   "orpheus",
+		Path:                   filepath.Join(paths.DataRoot, "..", "repos", "orpheus"),
+		Remote:                 "git@example.com:org/orpheus.git",
+		DefaultBranch:          "main",
+		BeadsMode:              registry.BeadsModeLocal,
+		BeadsPrefix:            "op",
+		SummaryGuidance:        "Use sentence-case summaries without a type prefix.",
+		SummaryGuidanceStyle:   registry.SummaryGuidanceStyleCapitalized,
+		TitleTemplate:          "[OPS] {{summary}}",
+		IncludePRReviewProcess: boolPtr(false),
+		ReviewPipeline:         "go-standard",
 		ReviewPipelineAliases: map[string]string{
 			"quick": "go-standard",
 		},
@@ -79,6 +80,7 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 		!strings.Contains(string(onDisk), "summary_guidance: Use sentence-case summaries without a type prefix.") ||
 		!strings.Contains(string(onDisk), "summary_guidance_style: capitalized") ||
 		!strings.Contains(string(onDisk), "title_template: '[OPS] {{summary}}'") ||
+		!strings.Contains(string(onDisk), "include_pr_review_process: false") ||
 		!strings.Contains(string(onDisk), "review_pipeline: go-standard") ||
 		!strings.Contains(string(onDisk), "review_pipeline_aliases:") ||
 		!strings.Contains(string(onDisk), "quick: go-standard") {
@@ -90,6 +92,10 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 		t.Fatalf("load registry: %v", err)
 	}
 	assertRepos(t, got.Repos, want.Repos)
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func TestStoreLoadRejectsInvalidReviewPipelineAliases(t *testing.T) {
