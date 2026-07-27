@@ -104,12 +104,8 @@ _Avoid_: Prompt, task dump, Beads context
 The point where an agent reports that implementation work is finished and hands Orpheus the summary and descriptions needed for review and publication; it makes the task ready for task review, not publication or task completion.
 _Avoid_: Completion handshake, task completion, done state, merge readiness
 
-**Task Target**:
-The immutable task-level combination of work directory and integration flow, locked when Orpheus starts the task's first run.
-_Avoid_: Run target, mode, execution mode, workflow type
-
 **Work Directory**:
-The checkout where an agent edits files for a task, either the registered repository root or a dedicated Orpheus worktree.
+The checkout selected on first dispatch where an agent edits files for a task, either the registered repository root or a dedicated Orpheus worktree. It remains fixed across the task's runs even if the checked-out branch changes during publication.
 _Avoid_: Workspace, folder, working copy
 
 **Worktree**:
@@ -117,12 +113,12 @@ A dedicated Git worktree created or reused by Orpheus as a task's isolated work 
 _Avoid_: Workspace, clone, checkout
 
 **Task Branch**:
-The deterministic feature branch associated with a task for pull-request-based work.
+The deterministic feature branch that carries a task's reviewed changes through publication. Worktree-based tasks use it during implementation, while repository-root tasks may materialize it only after review.
 _Avoid_: Work branch, feature branch, implementation branch
 
 **Integration Flow**:
-The chosen way a reviewed task is integrated: through a task branch and pull request, or directly on the default branch.
-_Avoid_: Branch mode, review mode
+The way reviewed task work is integrated: through a pull request or by merging the task branch into the registered default branch. It is resolved after review from configured defaults and any task-specific choice made during manual review, independently of the work directory.
+_Avoid_: Task target, publishing target, branch mode, review mode
 
 **Task Review**:
 The operator-side review gate after agent completion and before publication or finalization; a passed task review authorizes finalization or publication.
