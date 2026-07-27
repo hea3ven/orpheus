@@ -3,31 +3,63 @@ package cli
 import (
 	"io"
 	"strings"
-	"text/tabwriter"
 )
 
 func renderTable(output io.Writer, headers []string, rows [][]string) error {
-	writer := tabwriter.NewWriter(output, 0, 0, 2, ' ', 0)
+	widths := tableRenderWidths(headers, rows)
 	if len(headers) > 0 {
-		if err := renderTableRow(writer, headers); err != nil {
+		if err := renderTableRow(output, headers, widths); err != nil {
 			return err
 		}
 	}
 	for _, row := range rows {
-		if err := renderTableRow(writer, row); err != nil {
+		if err := renderTableRow(output, row, widths); err != nil {
 			return err
 		}
 	}
-	return writer.Flush()
+	return nil
 }
 
-func renderTableRow(output io.Writer, cells []string) error {
+func renderTableRow(output io.Writer, cells []string, widths []int) error {
 	sanitized := make([]string, 0, len(cells))
 	for _, cell := range cells {
 		sanitized = append(sanitized, sanitizeTableCell(cell))
 	}
-	_, err := io.WriteString(output, strings.Join(sanitized, "\t")+"\n")
+	for i, width := range widths {
+		cell := ""
+		if i < len(sanitized) {
+			cell = sanitized[i]
+		}
+		if _, err := io.WriteString(output, cell); err != nil {
+			return err
+		}
+		if i == len(widths)-1 {
+			continue
+		}
+		padding := width - displayWidth(cell) + 2
+		if _, err := io.WriteString(output, strings.Repeat(" ", padding)); err != nil {
+			return err
+		}
+	}
+	_, err := io.WriteString(output, "\n")
 	return err
+}
+
+func tableRenderWidths(headers []string, rows [][]string) []int {
+	columnCount := len(headers)
+	for _, row := range rows {
+		columnCount = max(columnCount, len(row))
+	}
+	widths := make([]int, columnCount)
+	for i, header := range headers {
+		widths[i] = displayWidth(sanitizeTableCell(header))
+	}
+	for _, row := range rows {
+		for i, cell := range row {
+			widths[i] = max(widths[i], displayWidth(sanitizeTableCell(cell)))
+		}
+	}
+	return widths
 }
 
 func sanitizeTableCell(value string) string {

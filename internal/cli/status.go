@@ -13,6 +13,7 @@ import (
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/tasktarget"
+	"github.com/mattn/go-runewidth"
 	"github.com/spf13/cobra"
 )
 
@@ -142,31 +143,34 @@ var defaultStatusWidthDetector = statusWidthDetector{
 	WatchWidth:  watchTerminalWidth,
 }
 
+const statusSymbolPreferredTitleWidth = 35
+
 type statusRenderLayout struct {
 	IncludeRepo     bool
 	IncludePriority bool
 	ShortDetail     bool
+	SymbolStatus    bool
 	TruncateTitles  bool
+	ShowLegend      bool
 	MaxWidth        int
+	MaxDetailWidth  int
+	TaskIDWidth     int
 }
 
 type statusDisplayRow struct {
-	Entry      status.Entry
-	Status     string
-	TaskID     string
-	Detail     string
-	ShowDetail bool
+	Entry          status.Entry
+	Status         string
+	TaskID         string
+	TreeDepth      int
+	Detail         string
+	SemanticDetail status.Detail
+	EpicProgress   status.Detail
+	ShowDetail     bool
 }
 
 type statusTaskKey struct {
 	RepoID string
 	TaskID string
-}
-
-type epicChildProgress struct {
-	Completed     int
-	ObservedTotal int
-	DeclaredTotal int
 }
 
 func statusRenderOptionsForOutput(
@@ -199,7 +203,7 @@ func renderStatus(
 	options statusRenderOptions,
 ) error {
 	visibleGroups := visibleStatusGroups(projection.Groups, full)
-	rows := statusDisplayRows(projection.Groups, visibleGroups)
+	rows := statusDisplayRows(visibleGroups)
 	layout := statusLayoutFor(rows, options)
 	return renderStatusRows(output, rows, layout)
 }
@@ -219,38 +223,71 @@ func statusLayoutFor(rows []statusDisplayRow, options statusRenderOptions) statu
 			return candidate
 		}
 	}
-	return statusRenderLayout{
+	symbolPreferenceTarget := min(statusSymbolPreferredTitleWidth, maxStatusTitleWidth(rows))
+	for _, candidate := range candidates[1:] {
+		candidate.TruncateTitles = true
+		candidate = alignResponsiveStatusColumn(rows, candidate)
+		budget := statusTitleBudget(rows, candidate)
+		if budget >= symbolPreferenceTarget {
+			return candidate
+		}
+	}
+	symbolLayout := statusRenderLayout{
 		ShortDetail:    true,
+		SymbolStatus:   true,
 		TruncateTitles: true,
+		ShowLegend:     true,
 		MaxWidth:       options.MaxWidth,
 	}
+	symbolLayout = alignResponsiveStatusColumn(rows, symbolLayout)
+	symbolLayout = capStatusDetailWidth(rows, symbolLayout, symbolPreferenceTarget)
+	return symbolLayout
 }
 
 func statusRowsFit(rows []statusDisplayRow, layout statusRenderLayout) bool {
-	headers, tableRows := statusEntryTable(rows, layout.IncludeRepo, layout.IncludePriority, layout.ShortDetail)
+	headers, tableRows := statusEntryTable(rows, layout)
+	if layout.TruncateTitles {
+		tableRows = truncateStatusTitles(headers, tableRows, layout)
+		return responsiveStatusTableWidth(headers, tableRows, layout) <= layout.MaxWidth
+	}
 	return tableWidth(headers, tableRows) <= layout.MaxWidth
 }
 
 func renderStatusRows(output io.Writer, statusRows []statusDisplayRow, layout statusRenderLayout) error {
-	headers, rows := statusEntryTable(statusRows, layout.IncludeRepo, layout.IncludePriority, layout.ShortDetail)
+	headers, rows := statusEntryTable(statusRows, layout)
 	if layout.TruncateTitles {
-		rows = truncateStatusTitles(headers, rows, layout.MaxWidth)
+		rows = truncateStatusTitles(headers, rows, layout)
+		if err := renderResponsiveStatusTable(output, headers, rows, layout); err != nil {
+			return err
+		}
+	} else if err := renderTable(output, headers, rows); err != nil {
+		return err
 	}
-	return renderTable(output, headers, rows)
+	if !layout.ShowLegend {
+		return nil
+	}
+	for _, line := range statusSymbolLegendLines(layout.MaxWidth) {
+		if _, err := io.WriteString(output, line+"\n"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func statusEntryTable(
 	statusRows []statusDisplayRow,
-	includeRepo bool,
-	includePriority bool,
-	shortDetail bool,
+	layout statusRenderLayout,
 ) ([]string, [][]string) {
-	headers := []string{"TASK_ID", "STATUS"}
-	if includePriority {
+	statusHeader := "STATUS"
+	if layout.SymbolStatus {
+		statusHeader = "S"
+	}
+	headers := []string{"TASK_ID", statusHeader}
+	if layout.IncludePriority {
 		headers = append(headers, "P")
 	}
 	headers = append(headers, "TITLE")
-	if includeRepo {
+	if layout.IncludeRepo {
 		headers = append(headers, "REPO")
 	}
 	includeDetail := statusRowsShowDetail(statusRows)
@@ -262,9 +299,9 @@ func statusEntryTable(
 	for _, row := range statusRows {
 		switch row.Entry.Kind {
 		case status.EntryTask:
-			rows = append(rows, statusTaskEntryTableRow(row, includeDetail, includeRepo, includePriority, shortDetail))
+			rows = append(rows, statusTaskEntryTableRow(row, includeDetail, layout))
 		case status.EntryRepoFailure:
-			rows = append(rows, statusFailureEntryTableRow(row, includeDetail, includeRepo, includePriority, shortDetail))
+			rows = append(rows, statusFailureEntryTableRow(row, includeDetail, layout))
 		}
 	}
 	return headers, rows
@@ -273,29 +310,20 @@ func statusEntryTable(
 func statusTaskEntryTableRow(
 	entryRow statusDisplayRow,
 	includeDetail bool,
-	includeRepo bool,
-	includePriority bool,
-	shortDetail bool,
+	layout statusRenderLayout,
 ) []string {
 	entry := entryRow.Entry
 	row := make([]string, 0, 6)
-	row = append(row, entryRow.TaskID, entryRow.Status)
-	if includePriority {
+	row = append(row, entryRow.TaskID, statusRowLabel(entryRow, layout.SymbolStatus))
+	if layout.IncludePriority {
 		row = append(row, strconv.Itoa(entry.Task.Priority))
 	}
-	row = append(row, statusDisplayTitle(entry.Task))
-	if includeRepo {
+	row = append(row, statusDisplayTitleForLayout(entry.Task, layout))
+	if layout.IncludeRepo {
 		row = append(row, entry.Repository.Name)
 	}
 	if includeDetail {
-		detail := ""
-		if entryRow.ShowDetail {
-			detail = entryRow.Detail
-		}
-		if shortDetail {
-			detail = shortStatusDetail(entry, detail)
-		}
-		row = append(row, detail)
+		row = append(row, statusRenderedDetail(entryRow, layout))
 	}
 	return row
 }
@@ -303,9 +331,7 @@ func statusTaskEntryTableRow(
 func statusFailureEntryTableRow(
 	entryRow statusDisplayRow,
 	includeDetail bool,
-	includeRepo bool,
-	includePriority bool,
-	shortDetail bool,
+	layout statusRenderLayout,
 ) []string {
 	entry := entryRow.Entry
 	detail := entryRow.Detail
@@ -315,19 +341,17 @@ func statusFailureEntryTableRow(
 	title := fmt.Sprintf("repo %s (prefix %s)", entry.Repository.ID, entry.Repository.TaskIDPrefix)
 
 	row := make([]string, 0, 6)
-	row = append(row, "-", entryRow.Status)
-	if includePriority {
+	row = append(row, "-", statusRowLabel(entryRow, layout.SymbolStatus))
+	if layout.IncludePriority {
 		row = append(row, "-")
 	}
 	row = append(row, title)
-	if includeRepo {
+	if layout.IncludeRepo {
 		row = append(row, entry.Repository.Name)
 	}
 	if includeDetail {
-		if shortDetail {
-			detail = shortStatusDetail(entry, detail)
-		}
-		row = append(row, detail)
+		entryRow.Detail = detail
+		row = append(row, statusRenderedDetail(entryRow, layout))
 	}
 	return row
 }
@@ -339,22 +363,29 @@ func statusDisplayTitle(taskItem taskmodel.Task) string {
 	return "◆ " + taskItem.Title
 }
 
-func statusDisplayRows(allGroups []status.Group, visibleGroups []status.Group) []statusDisplayRow {
-	progressByEpic := epicChildProgressByParent(allGroups)
+func statusDisplayTitleForLayout(taskItem taskmodel.Task, layout statusRenderLayout) string {
+	if layout.TruncateTitles && taskItem.IssueType == taskmodel.IssueTypeEpic {
+		return taskItem.Title
+	}
+	return statusDisplayTitle(taskItem)
+}
+
+func statusDisplayRows(visibleGroups []status.Group) []statusDisplayRow {
 	rows := make([]statusDisplayRow, 0)
 	for _, group := range visibleGroups {
 		for _, entry := range group.Entries {
 			row := statusDisplayRow{
-				Entry:      entry,
-				Status:     statusDisplayLabel(group),
-				Detail:     entry.Detail,
-				ShowDetail: statusGroupShowsDetail(group.ID),
+				Entry:          entry,
+				Status:         statusDisplayLabel(group),
+				Detail:         entry.Detail,
+				SemanticDetail: entry.SemanticDetail,
+				EpicProgress:   entry.EpicProgress,
+				ShowDetail:     statusGroupShowsDetail(group.ID),
 			}
 			if entry.Kind == status.EntryTask {
 				row.TaskID = entry.Task.ID
 				if entry.Task.IssueType == taskmodel.IssueTypeEpic {
 					row.ShowDetail = true
-					row.Detail = epicProgressDetail(progressByEpic[statusKey(entry.Repository.ID, entry.Task.ID)])
 					if entry.Task.Status == taskmodel.StatusInProgress {
 						row.Status = "Working"
 					}
@@ -382,55 +413,20 @@ func statusRowsShowDetail(rows []statusDisplayRow) bool {
 	return false
 }
 
-func epicChildProgressByParent(groups []status.Group) map[statusTaskKey]epicChildProgress {
-	progressByEpic := map[statusTaskKey]epicChildProgress{}
-	for _, group := range groups {
-		for _, entry := range group.Entries {
-			if entry.Kind != status.EntryTask {
-				continue
-			}
-			if entry.Task.IssueType == taskmodel.IssueTypeEpic {
-				key := statusKey(entry.Repository.ID, entry.Task.ID)
-				progress := progressByEpic[key]
-				if entry.Task.Relations.ChildCount > progress.DeclaredTotal {
-					progress.DeclaredTotal = entry.Task.Relations.ChildCount
-				}
-				progressByEpic[key] = progress
-			}
-			parentID := strings.TrimSpace(entry.Task.Relations.ParentID)
-			if parentID == "" {
-				continue
-			}
-			key := statusKey(entry.Repository.ID, parentID)
-			progress := progressByEpic[key]
-			progress.ObservedTotal++
-			if entry.Task.Status == taskmodel.StatusClosed {
-				progress.Completed++
-			}
-			progressByEpic[key] = progress
-		}
-	}
-	return progressByEpic
-}
-
-func epicProgressDetail(progress epicChildProgress) string {
-	total := max(progress.ObservedTotal, progress.DeclaredTotal)
-	return fmt.Sprintf("%d/%d done", progress.Completed, total)
-}
-
 func statusTreeRows(rows []statusDisplayRow) []statusDisplayRow {
 	childrenByParent, hasVisibleParent := statusTreeChildIndex(rows, visibleEpicKeys(rows))
 
 	ordered := make([]statusDisplayRow, 0, len(rows))
 	rendered := make(map[int]struct{}, len(rows))
-	var appendNode func(int, string, string, string)
-	appendNode = func(index int, displayPrefix string, childPrefix string, marker string) {
+	var appendNode func(int, string, string, string, int)
+	appendNode = func(index int, displayPrefix string, childPrefix string, marker string, depth int) {
 		if _, ok := rendered[index]; ok {
 			return
 		}
 		rendered[index] = struct{}{}
 
 		row := rows[index]
+		row.TreeDepth = depth
 		if marker != "" && row.Entry.Kind == status.EntryTask {
 			row.TaskID = displayPrefix + marker + row.Entry.Task.ID
 		}
@@ -448,7 +444,7 @@ func statusTreeRows(rows []statusDisplayRow) []statusDisplayRow {
 				childMarker = "└─ "
 				nextChildPrefix = childPrefix + "  "
 			}
-			appendNode(childIndex, childPrefix, nextChildPrefix, childMarker)
+			appendNode(childIndex, childPrefix, nextChildPrefix, childMarker, depth+1)
 		}
 	}
 
@@ -456,10 +452,10 @@ func statusTreeRows(rows []statusDisplayRow) []statusDisplayRow {
 		if _, ok := hasVisibleParent[i]; ok {
 			continue
 		}
-		appendNode(i, "", "", "")
+		appendNode(i, "", "", "", 0)
 	}
 	for i := range rows {
-		appendNode(i, "", "", "")
+		appendNode(i, "", "", "", 0)
 	}
 	return ordered
 }
@@ -520,94 +516,213 @@ func statusKey(repoID string, taskID string) statusTaskKey {
 	return statusTaskKey{RepoID: repoID, TaskID: taskID}
 }
 
-func shortStatusDetail(entry status.Entry, detail string) string {
-	detail = strings.TrimSpace(detail)
-	if detail == "" {
-		return detail
+func statusRowLabel(row statusDisplayRow, symbol bool) string {
+	if symbol {
+		return statusSymbol(row.Status)
 	}
-	if entry.Kind == status.EntryRepoFailure {
-		if entry.Source != "" && entry.Operation != "" {
-			return entry.Source + "/" + entry.Operation + " failed"
-		}
-		return "repo diagnostic failed"
-	}
-	if shortPRDetail := shortPullRequestDetail(detail); shortPRDetail != "" {
-		return shortPRDetail
-	}
-	if shortReviewDetail := shortReviewDetail(detail); shortReviewDetail != "" {
-		return shortReviewDetail
-	}
-	if shortCompletionDetail := shortCompletionDetail(detail); shortCompletionDetail != "" {
-		return shortCompletionDetail
-	}
-	switch {
-	case detail == "no attached run recorded":
-		return "no run"
-	case strings.HasPrefix(detail, "backend status is open but local "):
-		return "open; " + shortRunDetail(strings.TrimPrefix(detail, "backend status is open but local "))
-	case strings.Contains(detail, "; agent exited without completion"):
-		return strings.Replace(shortRunDetail(strings.TrimSuffix(detail, "; agent exited without completion")), " succeeded", " succeeded; no completion", 1)
-	case strings.HasPrefix(detail, "run attempt "):
-		return shortRunDetail(detail)
-	case strings.HasPrefix(detail, "missing required external reference;"):
-		return "missing external ref"
-	case strings.HasPrefix(detail, "missing dependency "):
-		return detail
-	case strings.HasPrefix(detail, "blocked by "):
-		return shortBlockedDetail(detail)
-	case strings.HasPrefix(detail, "status ") && strings.HasSuffix(detail, " is not locally actionable"):
-		return strings.TrimSuffix(detail, " is not locally actionable")
+	return row.Status
+}
+
+func statusSymbol(label string) string {
+	switch label {
+	case "Needs attention":
+		return "!"
+	case "Reviewing":
+		return "◉"
+	case "Working":
+		return "▶"
+	case "Idle":
+		return "‖"
+	case "Ready":
+		return "○"
+	case "Blocked":
+		return "×"
+	case "Done / closed":
+		return "✓"
 	default:
-		return detail
+		return "!"
 	}
 }
 
-func shortReviewDetail(detail string) string {
-	switch {
-	case detail == "local review; run task review":
-		return "local review"
-	case strings.HasPrefix(detail, "local review; run task review (waiting for manual step ") && strings.HasSuffix(detail, ")"):
-		return "manual; task review"
-	case detail == "review running":
-		return "review running"
-	case strings.HasPrefix(detail, "review blocked after autonomous attempt budget"):
-		return "review budget exhausted"
-	case strings.HasPrefix(detail, "review blocked by "):
-		return "review blocked"
-	case detail == "review blocker decision required; run task review":
-		return "review decision required"
-	case detail == "review blockers targeted; run task review":
-		return "review follow-up ready"
-	case detail == "review aborted; run task review":
-		return "review aborted"
-	case detail == "review failed operationally; run task review":
-		return "review failed"
-	case detail == "review passed; publication failed; fix publication issue, then run task done":
-		return "publication failed"
-	case detail == "review passed; run task done":
-		return "review passed"
-	default:
+func statusRenderedDetail(row statusDisplayRow, layout statusRenderLayout) string {
+	if !row.ShowDetail {
 		return ""
 	}
+	detail := fullStatusDetail(row)
+	if layout.ShortDetail {
+		detail = compactStatusDetailForRow(row)
+	}
+	if layout.MaxDetailWidth > 0 {
+		detail = truncateCell(detail, layout.MaxDetailWidth)
+	}
+	return detail
 }
 
-func shortCompletionDetail(detail string) string {
-	switch detail {
-	case "finalization recorded but backend task is not closed":
-		return "finalized but open"
-	case "completion target is not the deterministic Orpheus worktree/team target":
+func fullStatusDetail(row statusDisplayRow) string {
+	detail := strings.TrimSpace(row.Detail)
+	progress := fullEpicProgressDetail(row.EpicProgress)
+	if progress == "" {
+		return detail
+	}
+	if detail == "" || detail == "-" || row.SemanticDetail.Kind == status.DetailClosed {
+		return progress
+	}
+	return detail + "; " + progress
+}
+
+func compactStatusDetailForRow(row statusDisplayRow) string {
+	if row.SemanticDetail.Kind != status.DetailNone && row.SemanticDetail.Kind != status.DetailClosed {
+		return compactStatusDetail(row.SemanticDetail, row.Detail)
+	}
+	progress := compactEpicProgressDetail(row.EpicProgress)
+	if progress != "" {
+		return progress
+	}
+	return compactStatusDetail(row.SemanticDetail, row.Detail)
+}
+
+func compactStatusDetail(detail status.Detail, fallback string) string {
+	fallback = strings.TrimSpace(fallback)
+	switch detail.Kind {
+	case status.DetailNone, status.DetailClosed:
+		return ""
+	case status.DetailPullRequest:
+		return compactPullRequestDetail(detail.URL)
+	case status.DetailEpicProgress:
+		return compactEpicProgressDetail(detail)
+	case status.DetailMissingExternalRef:
+		return "missing ext ref"
+	case status.DetailWrongPRTarget:
 		return "wrong PR target"
-	case "completion target is not the deterministic Orpheus main/solo target":
+	case status.DetailWrongLocalTarget:
 		return "wrong local target"
-	default:
+	case status.DetailFinalizedButOpen:
+		return "finalized but open"
+	case status.DetailUnknownTaskStatus:
+		return "status " + valueOrUnknown(detail.State)
+	case status.DetailRepoFailure:
+		return valueOrUnknown(detail.Source) + "/" + valueOrUnknown(detail.Operation) + " failed"
+	}
+	if compact, ok := compactReviewDetail(detail); ok {
+		return compact
+	}
+	if compact, ok := compactRunDetail(detail); ok {
+		return compact
+	}
+	if compact, ok := compactParentEpicDetail(detail); ok {
+		return compact
+	}
+	if compact, ok := compactDependencyDetail(detail); ok {
+		return compact
+	}
+	return fallback
+}
+
+func fullEpicProgressDetail(detail status.Detail) string {
+	progress := compactEpicProgressDetail(detail)
+	if progress == "" {
 		return ""
+	}
+	return progress + " done"
+}
+
+func compactEpicProgressDetail(detail status.Detail) string {
+	if detail.Kind != status.DetailEpicProgress {
+		return ""
+	}
+	return fmt.Sprintf("%d/%d", detail.Completed, detail.Total)
+}
+
+func compactReviewDetail(detail status.Detail) (string, bool) {
+	switch detail.Kind {
+	case status.DetailLocalReview:
+		return "local review", true
+	case status.DetailReviewRunning:
+		return "running", true
+	case status.DetailReviewManualStep:
+		return "manual " + valueOrUnknown(detail.Step), true
+	case status.DetailReviewDecisionLost:
+		return "decision lost", true
+	case status.DetailReviewDecisionRequired:
+		return "decision required", true
+	case status.DetailReviewFollowUpReady:
+		return "follow-up ready", true
+	case status.DetailReviewBudgetSpent:
+		return "budget spent", true
+	case status.DetailReviewFindings:
+		return countLabel(detail.Count, "finding"), true
+	case status.DetailReviewAborted:
+		return "aborted", true
+	case status.DetailReviewFailed:
+		return "failed", true
+	case status.DetailReviewPassed:
+		return "passed", true
+	case status.DetailReviewPublishFailed:
+		return "publish failed", true
+	case status.DetailReviewUnknownState:
+		return "review " + valueOrUnknown(detail.State), true
+	default:
+		return "", false
 	}
 }
 
-func shortPullRequestDetail(detail string) string {
-	parsed, err := url.Parse(detail)
+func compactRunDetail(detail status.Detail) (string, bool) {
+	switch detail.Kind {
+	case status.DetailNoRun:
+		return "no run", true
+	case status.DetailRunRunning:
+		return runAttemptCompact(detail.Attempt), true
+	case status.DetailRunFailed:
+		return runAttemptCompact(detail.Attempt) + " failed", true
+	case status.DetailRunIncomplete:
+		return runAttemptCompact(detail.Attempt) + " incomplete", true
+	case status.DetailRunUnknownState:
+		return runAttemptCompact(detail.Attempt) + " " + valueOrUnknown(detail.State), true
+	case status.DetailOpenTaskRunHistory:
+		return "open; " + runAttemptCompact(detail.Attempt), true
+	default:
+		return "", false
+	}
+}
+
+func compactParentEpicDetail(detail status.Detail) (string, bool) {
+	switch detail.Kind {
+	case status.DetailParentMissing:
+		return "parent " + valueOrUnknown(detail.ID) + " missing", true
+	case status.DetailParentNotEpic:
+		return "parent " + valueOrUnknown(detail.ID) + " not epic", true
+	case status.DetailParentNotReady:
+		return "parent " + valueOrUnknown(detail.ID) + " " + valueOrUnknown(detail.State), true
+	default:
+		return "", false
+	}
+}
+
+func compactDependencyDetail(detail status.Detail) (string, bool) {
+	switch detail.Kind {
+	case status.DetailMissingDependency:
+		return "missing " + valueOrUnknown(detail.ID), true
+	case status.DetailMissingDependencies:
+		return fmt.Sprintf("%d deps missing", normalizedCount(detail.Count, len(detail.IDs))), true
+	case status.DetailDependencyDetailsMissing:
+		return fmt.Sprintf("%d blockers unknown", detail.Count), true
+	case status.DetailBlockedDependency:
+		return "blocked " + valueOrUnknown(detail.ID), true
+	case status.DetailBlockedDependencies:
+		return fmt.Sprintf("blocked by %d deps", normalizedCount(detail.Count, len(detail.IDs))), true
+	default:
+		return "", false
+	}
+}
+
+func compactPullRequestDetail(detailURL string) string {
+	detailURL = strings.TrimSpace(detailURL)
+	if detailURL == "" {
+		return "PR"
+	}
+	parsed, err := url.Parse(detailURL)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return ""
+		return "PR"
 	}
 	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
 	for i := 0; i < len(parts)-1; i++ {
@@ -618,75 +733,352 @@ func shortPullRequestDetail(detail string) string {
 	return "PR"
 }
 
-func shortRunDetail(detail string) string {
-	parts := strings.Fields(detail)
-	if len(parts) < 3 || parts[0] != "run" || parts[1] != "attempt" {
-		return detail
+func runAttemptCompact(attempt int) string {
+	if attempt <= 0 {
+		return "run"
 	}
-	attempt := parts[2]
-	switch {
-	case strings.HasSuffix(detail, " is running"):
-		return "run " + attempt + " running"
-	case strings.HasSuffix(detail, " failed"):
-		return "run " + attempt + " failed"
-	case strings.HasSuffix(detail, " succeeded"):
-		return "run " + attempt + " succeeded"
-	case strings.Contains(detail, " has status "):
-		_, statusText, _ := strings.Cut(detail, " has status ")
-		return "run " + attempt + " " + statusText
-	default:
-		return detail
-	}
+	return fmt.Sprintf("run #%d", attempt)
 }
 
-func shortBlockedDetail(detail string) string {
-	dependencies := strings.Split(strings.TrimPrefix(detail, "blocked by "), ",")
-	count := 0
-	for _, dependency := range dependencies {
-		if strings.TrimSpace(dependency) != "" {
-			count++
+func countLabel(count int, singular string) string {
+	if count == 1 {
+		return "1 " + singular
+	}
+	return fmt.Sprintf("%d %ss", count, singular)
+}
+
+func normalizedCount(count int, fallback int) int {
+	if count > 0 {
+		return count
+	}
+	return fallback
+}
+
+func valueOrUnknown(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "unknown"
+	}
+	return value
+}
+
+func maxStatusTitleWidth(rows []statusDisplayRow) int {
+	maxWidth := 1
+	for _, row := range rows {
+		if row.Entry.Kind != status.EntryTask {
+			continue
 		}
+		maxWidth = max(maxWidth, displayWidth(statusDisplayTitle(row.Entry.Task)))
 	}
-	if count <= 1 {
-		return detail
-	}
-	return fmt.Sprintf("blocked by %d deps", count)
+	return maxWidth
 }
 
-func truncateStatusTitles(headers []string, rows [][]string, maxWidth int) [][]string {
-	titleIndex := -1
+func capStatusDetailWidth(
+	rows []statusDisplayRow,
+	layout statusRenderLayout,
+	titleTarget int,
+) statusRenderLayout {
+	detailWidth := statusDetailColumnWidth(rows, layout)
+	if detailWidth <= 0 {
+		return layout
+	}
+	currentBudget := statusTitleBudget(rows, layout)
+	if currentBudget >= titleTarget {
+		return layout
+	}
+
+	detailIndex := statusColumnIndex(rows, layout, "DETAIL")
+	if detailIndex < 0 {
+		return layout
+	}
+	headers, tableRows := statusEntryTable(rows, layout)
+	widths := tableColumnWidths(headers, tableRows)
+	titleIndex := statusHeaderIndex(headers, "TITLE")
+	maxDetailWidth := detailWidth
+	for i, row := range rows {
+		if !statusTitleBudgetRowEligible(row) || i >= len(tableRows) {
+			continue
+		}
+		fixedWithoutTitleAndDetail := statusTablePaddingWidth(len(headers))
+		for column, width := range widths {
+			if column == titleIndex || column == detailIndex {
+				continue
+			}
+			width = responsiveStatusColumnWidth(tableRows[i], column, width, layout)
+			fixedWithoutTitleAndDetail += width
+		}
+		allowed := layout.MaxWidth - fixedWithoutTitleAndDetail - titleTarget
+		maxDetailWidth = min(maxDetailWidth, allowed)
+	}
+	if maxDetailWidth < displayWidth(headers[detailIndex]) {
+		maxDetailWidth = displayWidth(headers[detailIndex])
+	}
+	if maxDetailWidth < detailWidth {
+		layout.MaxDetailWidth = maxDetailWidth
+	}
+	return layout
+}
+
+func statusDetailColumnWidth(rows []statusDisplayRow, layout statusRenderLayout) int {
+	detailIndex := statusColumnIndex(rows, layout, "DETAIL")
+	if detailIndex < 0 {
+		return 0
+	}
+	headers, tableRows := statusEntryTable(rows, layout)
+	widths := tableColumnWidths(headers, tableRows)
+	if detailIndex >= len(widths) {
+		return 0
+	}
+	return widths[detailIndex]
+}
+
+func alignResponsiveStatusColumn(rows []statusDisplayRow, layout statusRenderLayout) statusRenderLayout {
+	if !layout.TruncateTitles {
+		return layout
+	}
+	taskIDWidth := displayWidth("TASK_ID")
+	for _, row := range rows {
+		if !statusTitleBudgetRowEligible(row) {
+			continue
+		}
+		taskIDWidth = max(taskIDWidth, displayWidth(sanitizeTableCell(row.TaskID)))
+	}
+	layout.TaskIDWidth = taskIDWidth
+	return layout
+}
+
+func statusTitleBudget(rows []statusDisplayRow, layout statusRenderLayout) int {
+	if layout.MaxWidth <= 0 {
+		return maxStatusTitleWidth(rows)
+	}
+	headers, tableRows := statusEntryTable(rows, layout)
+	widths := tableColumnWidths(headers, tableRows)
+	titleIndex := statusHeaderIndex(headers, "TITLE")
+	if titleIndex < 0 {
+		return 0
+	}
+	budget := 0
+	foundEligible := false
+	for i, row := range rows {
+		if !statusTitleBudgetRowEligible(row) || i >= len(tableRows) {
+			continue
+		}
+		rowBudget := statusRowTitleBudget(widths, tableRows[i], titleIndex, layout)
+		if !foundEligible || rowBudget < budget {
+			budget = rowBudget
+		}
+		foundEligible = true
+	}
+	if foundEligible {
+		return budget
+	}
+	return statusHeaderTitleBudget(headers, widths, titleIndex, layout)
+}
+
+func statusColumnIndex(rows []statusDisplayRow, layout statusRenderLayout, name string) int {
+	headers, _ := statusEntryTable(rows, layout)
 	for i, header := range headers {
-		if header == "TITLE" {
-			titleIndex = i
-			break
+		if header == name {
+			return i
 		}
 	}
+	return -1
+}
+
+func statusSymbolLegendLines(maxWidth int) []string {
+	items := []string{
+		"! needs attention",
+		"◉ reviewing",
+		"▶ working",
+		"‖ idle",
+		"○ ready",
+		"× blocked",
+		"✓ done",
+	}
+	if maxWidth <= 0 {
+		return []string{"Legend: " + strings.Join(items, "  ")}
+	}
+
+	lines := make([]string, 0, 3)
+	line := truncateCell("Legend:", maxWidth)
+	for _, item := range items {
+		item = truncateCell(item, maxWidth)
+		candidate := line + "  " + item
+		if displayWidth(candidate) <= maxWidth {
+			line = candidate
+			continue
+		}
+		lines = append(lines, line)
+		line = item
+	}
+	lines = append(lines, line)
+	return lines
+}
+
+func truncateStatusTitles(headers []string, rows [][]string, layout statusRenderLayout) [][]string {
+	titleIndex := statusHeaderIndex(headers, "TITLE")
 	if titleIndex < 0 {
 		return rows
 	}
 	widths := tableColumnWidths(headers, rows)
-	fixedWidth := 0
-	for i, width := range widths {
-		if i == titleIndex {
-			continue
-		}
-		fixedWidth += width
-	}
-	fixedWidth += statusTablePaddingWidth(len(headers))
-	titleWidth := maxWidth - fixedWidth
-	if titleWidth < 1 {
-		titleWidth = 1
-	}
 
 	truncated := make([][]string, 0, len(rows))
 	for _, row := range rows {
 		next := append([]string(nil), row...)
 		if titleIndex < len(next) {
+			titleWidth := statusRowTitleBudget(widths, next, titleIndex, layout)
+			if titleWidth < 1 {
+				titleWidth = 1
+			}
 			next[titleIndex] = truncateCell(next[titleIndex], titleWidth)
 		}
 		truncated = append(truncated, next)
 	}
 	return truncated
+}
+
+func renderResponsiveStatusTable(output io.Writer, headers []string, rows [][]string, layout statusRenderLayout) error {
+	titleIndex := statusHeaderIndex(headers, "TITLE")
+	if titleIndex < 0 || layout.MaxWidth <= 0 {
+		return renderTable(output, headers, rows)
+	}
+	widths := tableColumnWidths(headers, rows)
+	if err := renderResponsiveStatusTableRow(output, headers, widths, titleIndex, layout); err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if err := renderResponsiveStatusTableRow(output, row, widths, titleIndex, layout); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func responsiveStatusTableWidth(headers []string, rows [][]string, layout statusRenderLayout) int {
+	titleIndex := statusHeaderIndex(headers, "TITLE")
+	if titleIndex < 0 || layout.MaxWidth <= 0 {
+		return tableWidth(headers, rows)
+	}
+	widths := tableColumnWidths(headers, rows)
+	renderedWidth := responsiveStatusTableRowWidth(headers, widths, titleIndex, layout)
+	for _, row := range rows {
+		renderedWidth = max(
+			renderedWidth,
+			responsiveStatusTableRowWidth(row, widths, titleIndex, layout),
+		)
+	}
+	return renderedWidth
+}
+
+func responsiveStatusTableRowWidth(cells []string, widths []int, titleIndex int, layout statusRenderLayout) int {
+	titleWidth := statusRowTitleBudget(widths, cells, titleIndex, layout)
+	if titleWidth < 1 {
+		titleWidth = 1
+	}
+	total := statusTablePaddingWidth(len(widths))
+	for i, width := range widths {
+		width = responsiveStatusColumnWidth(cells, i, width, layout)
+		if i == titleIndex {
+			cell := ""
+			if i < len(cells) {
+				cell = sanitizeTableCell(cells[i])
+			}
+			width = min(displayWidth(cell), titleWidth)
+			if i < len(widths)-1 {
+				width = titleWidth
+			}
+		}
+		total += width
+	}
+	return total
+}
+
+func renderResponsiveStatusTableRow(
+	output io.Writer,
+	cells []string,
+	widths []int,
+	titleIndex int,
+	layout statusRenderLayout,
+) error {
+	sanitized := make([]string, 0, len(cells))
+	for _, cell := range cells {
+		sanitized = append(sanitized, sanitizeTableCell(cell))
+	}
+	titleWidth := statusRowTitleBudget(widths, sanitized, titleIndex, layout)
+	if titleWidth < 1 {
+		titleWidth = 1
+	}
+	for i, width := range widths {
+		cell := ""
+		if i < len(sanitized) {
+			cell = sanitized[i]
+		}
+		cellWidth := responsiveStatusColumnWidth(sanitized, i, width, layout)
+		if i == titleIndex {
+			cellWidth = titleWidth
+			cell = truncateCell(cell, titleWidth)
+		}
+		if _, err := io.WriteString(output, cell); err != nil {
+			return err
+		}
+		if i == len(widths)-1 {
+			continue
+		}
+		padding := cellWidth - displayWidth(cell) + 2
+		if padding < 2 {
+			padding = 2
+		}
+		if _, err := io.WriteString(output, strings.Repeat(" ", padding)); err != nil {
+			return err
+		}
+	}
+	_, err := io.WriteString(output, "\n")
+	return err
+}
+
+func responsiveStatusColumnWidth(cells []string, column int, width int, layout statusRenderLayout) int {
+	if column != 0 || len(cells) == 0 {
+		return width
+	}
+	cellWidth := displayWidth(sanitizeTableCell(cells[0]))
+	if layout.TaskIDWidth > 0 {
+		return max(cellWidth, layout.TaskIDWidth)
+	}
+	return cellWidth
+}
+
+func statusRowTitleBudget(
+	widths []int,
+	row []string,
+	titleIndex int,
+	layout statusRenderLayout,
+) int {
+	fixedWidth := statusTablePaddingWidth(len(widths))
+	for i, width := range widths {
+		if i == titleIndex {
+			continue
+		}
+		width = responsiveStatusColumnWidth(row, i, width, layout)
+		fixedWidth += width
+	}
+	return layout.MaxWidth - fixedWidth
+}
+
+func statusHeaderTitleBudget(headers []string, widths []int, titleIndex int, layout statusRenderLayout) int {
+	return statusRowTitleBudget(widths, headers, titleIndex, layout)
+}
+
+func statusTitleBudgetRowEligible(row statusDisplayRow) bool {
+	return row.Entry.Kind != status.EntryTask || row.TreeDepth <= 1
+}
+
+func statusHeaderIndex(headers []string, name string) int {
+	for i, header := range headers {
+		if header == name {
+			return i
+		}
+	}
+	return -1
 }
 
 func tableWidth(headers []string, rows [][]string) int {
@@ -722,18 +1114,20 @@ func statusTablePaddingWidth(columnCount int) int {
 }
 
 func truncateCell(value string, width int) string {
-	if width <= 0 || displayWidth(value) <= width {
+	if width <= 0 {
+		return ""
+	}
+	if displayWidth(value) <= width {
 		return value
 	}
-	runes := []rune(value)
 	if width <= 3 {
-		return string(runes[:width])
+		return runewidth.Truncate(value, width, "")
 	}
-	return string(runes[:width-3]) + "..."
+	return runewidth.Truncate(value, width, "...")
 }
 
 func displayWidth(value string) int {
-	return len([]rune(value))
+	return runewidth.StringWidth(value)
 }
 
 func interactiveTerminalWidth(output io.Writer) (int, bool) {

@@ -53,13 +53,75 @@ const (
 
 // Entry is one row in a status group.
 type Entry struct {
-	Kind       EntryKind
-	Repository task.Repository
-	Task       task.Task
-	Failure    error
-	Source     string
-	Operation  string
-	Detail     string
+	Kind           EntryKind
+	Repository     task.Repository
+	Task           task.Task
+	Failure        error
+	Source         string
+	Operation      string
+	Detail         string
+	SemanticDetail Detail
+	EpicProgress   Detail
+}
+
+// DetailKind identifies the machine-readable reason behind an entry detail.
+type DetailKind string
+
+const (
+	DetailNone DetailKind = ""
+
+	DetailClosed                   DetailKind = "closed"
+	DetailPullRequest              DetailKind = "pull_request"
+	DetailLocalReview              DetailKind = "local_review"
+	DetailReviewRunning            DetailKind = "review_running"
+	DetailReviewManualStep         DetailKind = "review_manual_step"
+	DetailReviewDecisionLost       DetailKind = "review_decision_lost"
+	DetailReviewDecisionRequired   DetailKind = "review_decision_required"
+	DetailReviewFollowUpReady      DetailKind = "review_follow_up_ready"
+	DetailReviewBudgetSpent        DetailKind = "review_budget_spent"
+	DetailReviewFindings           DetailKind = "review_findings"
+	DetailReviewAborted            DetailKind = "review_aborted"
+	DetailReviewFailed             DetailKind = "review_failed"
+	DetailReviewPassed             DetailKind = "review_passed"
+	DetailReviewPublishFailed      DetailKind = "review_publish_failed"
+	DetailReviewUnknownState       DetailKind = "review_unknown_state"
+	DetailNoRun                    DetailKind = "no_run"
+	DetailRunRunning               DetailKind = "run_running"
+	DetailRunFailed                DetailKind = "run_failed"
+	DetailRunIncomplete            DetailKind = "run_incomplete"
+	DetailRunUnknownState          DetailKind = "run_unknown_state"
+	DetailOpenTaskRunHistory       DetailKind = "open_task_run_history"
+	DetailParentMissing            DetailKind = "parent_missing"
+	DetailParentNotEpic            DetailKind = "parent_not_epic"
+	DetailParentNotReady           DetailKind = "parent_not_ready"
+	DetailMissingExternalRef       DetailKind = "missing_external_ref"
+	DetailWrongPRTarget            DetailKind = "wrong_pr_target"
+	DetailWrongLocalTarget         DetailKind = "wrong_local_target"
+	DetailFinalizedButOpen         DetailKind = "finalized_but_open"
+	DetailMissingDependency        DetailKind = "missing_dependency"
+	DetailMissingDependencies      DetailKind = "missing_dependencies"
+	DetailDependencyDetailsMissing DetailKind = "dependency_details_missing"
+	DetailBlockedDependency        DetailKind = "blocked_dependency"
+	DetailBlockedDependencies      DetailKind = "blocked_dependencies"
+	DetailUnknownTaskStatus        DetailKind = "unknown_task_status"
+	DetailRepoFailure              DetailKind = "repo_failure"
+	DetailEpicProgress             DetailKind = "epic_progress"
+)
+
+// Detail carries compact-rendering inputs without requiring CLI prose parsing.
+type Detail struct {
+	Kind      DetailKind
+	URL       string
+	ID        string
+	IDs       []string
+	Attempt   int
+	State     string
+	Step      string
+	Count     int
+	Completed int
+	Total     int
+	Source    string
+	Operation string
 }
 
 // Group is an ordered collection of status entries.
@@ -103,8 +165,15 @@ const (
 )
 
 type policyResult struct {
-	state  readinessState
-	detail string
+	state          readinessState
+	detail         string
+	semanticDetail Detail
+}
+
+type epicChildProgress struct {
+	Completed     int
+	ObservedTotal int
+	DeclaredTotal int
 }
 
 // Project builds the local-only status projection from task aggregation snapshots.
@@ -174,6 +243,7 @@ func RunStateKey(repoID, taskID string) string {
 
 func projectRepository(projection *Projection, repoSnapshot task.RepositorySnapshot, localStates LocalTaskStateIndex) {
 	index := newRepositoryIndex(repoSnapshot.Tasks)
+	progressByEpic := epicChildProgressByParent(repoSnapshot.Tasks)
 	for _, taskItem := range repoSnapshot.Tasks {
 		result := classify(
 			repoSnapshot.Repository,
@@ -181,7 +251,11 @@ func projectRepository(projection *Projection, repoSnapshot task.RepositorySnaps
 			index,
 			localTaskStateFor(localStates, repoSnapshot.Repository.ID, taskItem.ID),
 		)
-		projection.add(groupForState(result.state), taskEntry(repoSnapshot.Repository, taskItem, result.detail))
+		epicProgress := Detail{}
+		if taskItem.IssueType == task.IssueTypeEpic {
+			epicProgress = epicProgressDetail(progressByEpic[strings.TrimSpace(taskItem.ID)])
+		}
+		projection.add(groupForState(result.state), taskEntry(repoSnapshot.Repository, taskItem, result, epicProgress))
 	}
 }
 
@@ -189,10 +263,14 @@ func classify(repository task.Repository, taskItem task.Task, index map[string]t
 	metadata := taskItem.OrpheusMetadata()
 	latestRun := latestRunFrom(localState)
 	if taskItem.Status == task.StatusClosed {
-		return policyResult{state: readinessDone, detail: "closed"}
+		return newPolicyResult(readinessDone, "closed", Detail{Kind: DetailClosed})
 	}
 	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
-		return policyResult{state: readinessReview, detail: metadata.PRURL}
+		return newPolicyResult(
+			readinessReview,
+			metadata.PRURL,
+			Detail{Kind: DetailPullRequest, URL: metadata.PRURL},
+		)
 	}
 	expectedTargets := expectedTargetsFrom(localState)
 	taskTarget := taskTargetFrom(localState)
@@ -206,7 +284,11 @@ func classify(repository task.Repository, taskItem task.Task, index map[string]t
 		return result
 	}
 	if publication.RequiresExternalRef(repository.TitleTemplate) && strings.TrimSpace(taskItem.ExternalRef) == "" {
-		return policyResult{state: readinessAttention, detail: missingExternalRefDetail(taskItem.ID)}
+		return newPolicyResult(
+			readinessAttention,
+			missingExternalRefDetail(taskItem.ID),
+			Detail{Kind: DetailMissingExternalRef, ID: taskItem.ID},
+		)
 	}
 
 	if result, ok := classifyUnexpectedCompletionTarget(repository, taskItem, taskTarget, latestRun); ok {
@@ -216,29 +298,44 @@ func classify(repository task.Repository, taskItem task.Task, index map[string]t
 	if taskItem.Status == task.StatusInProgress {
 		return classifyInProgress(latestRun)
 	}
+	return classifyOpenOrUnknownTask(taskItem, index, latestRun)
+}
+
+func classifyOpenOrUnknownTask(
+	taskItem task.Task,
+	index map[string]task.Task,
+	latestRun *taskstate.RunAttempt,
+) policyResult {
 	if taskItem.Status == task.StatusOpen && latestRun != nil {
-		return policyResult{
-			state:  readinessAttention,
-			detail: openTaskRunHistoryDetail(*latestRun),
-		}
+		return newPolicyResult(
+			readinessAttention,
+			openTaskRunHistoryDetail(*latestRun),
+			runHistoryDetail(*latestRun),
+		)
 	}
 	deps := dependencyIDs(taskItem)
-	missingDetail := missingDependencyDetail(taskItem, deps, index)
+	missingDetail, missingSemanticDetail := missingDependencyDetail(taskItem, deps, index)
 	if missingDetail != "" {
-		return policyResult{state: readinessAttention, detail: missingDetail}
+		return newPolicyResult(readinessAttention, missingDetail, missingSemanticDetail)
 	}
 	openDeps := openDependencyIDs(deps, index)
 	if len(openDeps) > 0 {
-		return policyResult{state: readinessBlocked, detail: "blocked by " + strings.Join(openDeps, ", ")}
+		return newPolicyResult(
+			readinessBlocked,
+			"blocked by "+strings.Join(openDeps, ", "),
+			blockedDependencyDetail(openDeps),
+		)
 	}
 
 	if taskItem.Status == task.StatusOpen {
-		return policyResult{state: readinessReady, detail: "-"}
+		return newPolicyResult(readinessReady, "-", Detail{})
 	}
-	return policyResult{
-		state:  readinessAttention,
-		detail: fmt.Sprintf("status %s is not locally actionable", formatStatus(taskItem.Status)),
-	}
+	statusText := formatStatus(taskItem.Status)
+	return newPolicyResult(
+		readinessAttention,
+		fmt.Sprintf("status %s is not locally actionable", statusText),
+		Detail{Kind: DetailUnknownTaskStatus, State: statusText},
+	)
 }
 
 func classifyUnexpectedCompletionTarget(
@@ -251,16 +348,18 @@ func classifyUnexpectedCompletionTarget(
 		return policyResult{}, false
 	}
 	if _, ok := workflow.ClassifyPRReviewReady(repository, taskItem, *taskTarget, latestRun); ok {
-		return policyResult{
-			state:  readinessAttention,
-			detail: "completion target is not the deterministic Orpheus worktree/team target",
-		}, true
+		return newPolicyResult(
+			readinessAttention,
+			"completion target is not the deterministic Orpheus worktree/team target",
+			Detail{Kind: DetailWrongPRTarget},
+		), true
 	}
 	if _, ok := workflow.ClassifyLocalReviewReady(repository, taskItem, *taskTarget, latestRun); ok {
-		return policyResult{
-			state:  readinessAttention,
-			detail: "completion target is not the deterministic Orpheus main/solo target",
-		}, true
+		return newPolicyResult(
+			readinessAttention,
+			"completion target is not the deterministic Orpheus main/solo target",
+			Detail{Kind: DetailWrongLocalTarget},
+		), true
 	}
 	return policyResult{}, false
 }
@@ -274,7 +373,7 @@ func classifyParentEpicGate(taskItem task.Task, index map[string]task.Task) (pol
 	if parentGate.State == readiness.ParentEpicGateBlocked {
 		state = readinessBlocked
 	}
-	return policyResult{state: state, detail: parentGate.Detail()}, true
+	return newPolicyResult(state, parentGate.Detail(), parentEpicDetail(parentGate)), true
 }
 
 func classifyExpectedReviewReady(
@@ -293,7 +392,7 @@ func classifyExpectedReviewReady(
 				return result, true
 			}
 		}
-		return policyResult{state: readinessReview, detail: "local review; run task review"}, true
+		return localReviewPolicyResult(), true
 	}
 	if _, ok := workflow.ClassifyExpectedLocalReviewReady(*expectedTargets, taskItem, *taskTarget, latestRun); !ok {
 		return policyResult{}, false
@@ -304,12 +403,13 @@ func classifyExpectedReviewReady(
 		}
 	}
 	if localState == nil || localState.Finalization.ClosedAt == nil {
-		return policyResult{state: readinessReview, detail: "local review; run task review"}, true
+		return localReviewPolicyResult(), true
 	}
-	return policyResult{
-		state:  readinessAttention,
-		detail: "finalization recorded but backend task is not closed",
-	}, true
+	return newPolicyResult(
+		readinessAttention,
+		"finalization recorded but backend task is not closed",
+		Detail{Kind: DetailFinalizedButOpen},
+	), true
 }
 
 func classifyLatestReview(
@@ -322,67 +422,93 @@ func classifyLatestReview(
 
 	switch latestReview.Status {
 	case taskstate.ReviewStatusRunning:
-		return policyResult{state: readinessReview, detail: "review running"}, true
+		return newPolicyResult(
+			readinessReview,
+			"review running",
+			Detail{Kind: DetailReviewRunning},
+		), true
 	case taskstate.ReviewStatusWaitingForManual:
-		return policyResult{
-			state:  readinessReview,
-			detail: fmt.Sprintf("local review; run task review (waiting for manual step %s)", valueOrUnknown(latestReview.Step)),
-		}, true
+		step := valueOrUnknown(latestReview.Step)
+		return newPolicyResult(
+			readinessReview,
+			fmt.Sprintf("local review; run task review (waiting for manual step %s)", step),
+			Detail{Kind: DetailReviewManualStep, Step: step},
+		), true
 	case taskstate.ReviewStatusBlocked:
 		return classifyBlockedReview(*latestReview), true
 	case taskstate.ReviewStatusAborted:
-		return policyResult{state: readinessReview, detail: "review aborted; run task review"}, true
+		return newPolicyResult(
+			readinessReview,
+			"review aborted; run task review",
+			Detail{Kind: DetailReviewAborted},
+		), true
 	case taskstate.ReviewStatusFailed:
-		return policyResult{state: readinessAttention, detail: "review failed operationally; run task review"}, true
+		return newPolicyResult(
+			readinessAttention,
+			"review failed operationally; run task review",
+			Detail{Kind: DetailReviewFailed},
+		), true
 	case taskstate.ReviewStatusPassed:
 		if latestFinalizationFailure != nil {
-			return policyResult{
-				state:  readinessAttention,
-				detail: "review passed; publication failed; fix publication issue, then run task done",
-			}, true
+			return newPolicyResult(
+				readinessAttention,
+				"review passed; publication failed; fix publication issue, then run task done",
+				Detail{Kind: DetailReviewPublishFailed},
+			), true
 		}
-		return policyResult{state: readinessReview, detail: "review passed; run task done"}, true
+		return newPolicyResult(
+			readinessReview,
+			"review passed; run task done",
+			Detail{Kind: DetailReviewPassed},
+		), true
 	default:
-		return policyResult{
-			state:  readinessAttention,
-			detail: fmt.Sprintf("review attempt %d has status %s", latestReview.Attempt, valueOrUnknown(string(latestReview.Status))),
-		}, true
+		state := valueOrUnknown(string(latestReview.Status))
+		return newPolicyResult(
+			readinessAttention,
+			fmt.Sprintf("review attempt %d has status %s", latestReview.Attempt, state),
+			Detail{Kind: DetailReviewUnknownState, Attempt: latestReview.Attempt, State: state},
+		), true
 	}
 }
 
 func classifyBlockedReview(review taskstate.ReviewAttempt) policyResult {
 	count := untargetedBlockingFindingCount(review)
 	if review.AutomatedBlockerDecisionInterrupted {
-		return policyResult{
-			state:  readinessReview,
-			detail: "review blocker decision interrupted; run task review",
-		}
+		return newPolicyResult(
+			readinessReview,
+			"review blocker decision interrupted; run task review",
+			Detail{Kind: DetailReviewDecisionLost},
+		)
 	}
 	if taskstate.HasUnkeptAutomatedBlockingFindings(review) {
-		return policyResult{
-			state:  readinessReview,
-			detail: "review blocker decision required; run task review",
-		}
+		return newPolicyResult(
+			readinessReview,
+			"review blocker decision required; run task review",
+			Detail{Kind: DetailReviewDecisionRequired},
+		)
 	}
 	if review.AutonomousBudgetExhausted {
-		return policyResult{
-			state: readinessIdle,
-			detail: fmt.Sprintf(
+		return newPolicyResult(
+			readinessIdle,
+			fmt.Sprintf(
 				"review blocked after autonomous attempt budget by %d finding(s); run task run to continue",
 				count,
 			),
-		}
+			Detail{Kind: DetailReviewBudgetSpent, Count: count},
+		)
 	}
 	if count == 0 {
-		return policyResult{
-			state:  readinessReview,
-			detail: "review blockers targeted; run task review",
-		}
+		return newPolicyResult(
+			readinessReview,
+			"review blockers targeted; run task review",
+			Detail{Kind: DetailReviewFollowUpReady},
+		)
 	}
-	return policyResult{
-		state:  readinessIdle,
-		detail: fmt.Sprintf("review blocked by %d finding(s); run task run", count),
-	}
+	return newPolicyResult(
+		readinessIdle,
+		fmt.Sprintf("review blocked by %d finding(s); run task run", count),
+		Detail{Kind: DetailReviewFindings, Count: count},
+	)
 }
 
 func untargetedBlockingFindingCount(review taskstate.ReviewAttempt) int {
@@ -391,21 +517,22 @@ func untargetedBlockingFindingCount(review taskstate.ReviewAttempt) int {
 
 func classifyInProgress(latestRun *taskstate.RunAttempt) policyResult {
 	if latestRun == nil {
-		return policyResult{state: readinessIdle, detail: "no attached run recorded"}
+		return newPolicyResult(readinessIdle, "no attached run recorded", Detail{Kind: DetailNoRun})
 	}
 
 	switch latestRun.Status {
 	case taskstate.RunStatusRunning:
-		return policyResult{state: readinessWorking, detail: runAttemptDetail(*latestRun)}
+		return newPolicyResult(readinessWorking, runAttemptDetail(*latestRun), runDetail(*latestRun))
 	case taskstate.RunStatusFailed:
-		return policyResult{state: readinessAttention, detail: runAttemptDetail(*latestRun)}
+		return newPolicyResult(readinessAttention, runAttemptDetail(*latestRun), runDetail(*latestRun))
 	case taskstate.RunStatusSucceeded:
-		return policyResult{
-			state:  readinessIdle,
-			detail: fmt.Sprintf("%s; agent exited without completion", runAttemptDetail(*latestRun)),
-		}
+		return newPolicyResult(
+			readinessIdle,
+			fmt.Sprintf("%s; agent exited without completion", runAttemptDetail(*latestRun)),
+			Detail{Kind: DetailRunIncomplete, Attempt: latestRun.Attempt},
+		)
 	default:
-		return policyResult{state: readinessAttention, detail: runAttemptDetail(*latestRun)}
+		return newPolicyResult(readinessAttention, runAttemptDetail(*latestRun), runDetail(*latestRun))
 	}
 }
 
@@ -413,11 +540,50 @@ func openTaskRunHistoryDetail(latestRun taskstate.RunAttempt) string {
 	return fmt.Sprintf("backend status is open but local %s", runAttemptDetail(latestRun))
 }
 
+func newPolicyResult(state readinessState, detail string, semanticDetail Detail) policyResult {
+	return policyResult{
+		state:          state,
+		detail:         detail,
+		semanticDetail: semanticDetail,
+	}
+}
+
+func localReviewPolicyResult() policyResult {
+	return newPolicyResult(
+		readinessReview,
+		"local review; run task review",
+		Detail{Kind: DetailLocalReview},
+	)
+}
+
 func missingExternalRefDetail(taskID string) string {
 	return fmt.Sprintf(
 		"missing required external reference; set it with `bd update %s --external-ref <reference>`",
 		taskID,
 	)
+}
+
+func runHistoryDetail(run taskstate.RunAttempt) Detail {
+	detail := runDetail(run)
+	detail.Kind = DetailOpenTaskRunHistory
+	return detail
+}
+
+func runDetail(run taskstate.RunAttempt) Detail {
+	switch run.Status {
+	case taskstate.RunStatusRunning:
+		return Detail{Kind: DetailRunRunning, Attempt: run.Attempt}
+	case taskstate.RunStatusFailed:
+		return Detail{Kind: DetailRunFailed, Attempt: run.Attempt}
+	case taskstate.RunStatusSucceeded:
+		return Detail{Kind: DetailRunIncomplete, Attempt: run.Attempt}
+	default:
+		return Detail{
+			Kind:    DetailRunUnknownState,
+			Attempt: run.Attempt,
+			State:   valueOrUnknown(string(run.Status)),
+		}
+	}
 }
 
 func runAttemptDetail(run taskstate.RunAttempt) string {
@@ -435,6 +601,42 @@ func runAttemptDetail(run taskstate.RunAttempt) string {
 		}
 		return fmt.Sprintf("run attempt %d has status %s", run.Attempt, statusText)
 	}
+}
+
+func parentEpicDetail(parentGate readiness.ParentEpicGate) Detail {
+	if parentGate.Parent == nil {
+		return Detail{Kind: DetailParentMissing, ID: parentGate.ParentID}
+	}
+	if parentGate.Parent.IssueType != task.IssueTypeEpic {
+		return Detail{
+			Kind:  DetailParentNotEpic,
+			ID:    parentGate.ParentID,
+			State: valueOrUnknown(string(parentGate.Parent.IssueType)),
+		}
+	}
+	return Detail{
+		Kind:  DetailParentNotReady,
+		ID:    parentGate.ParentID,
+		State: formatStatus(parentGate.Parent.Status),
+	}
+}
+
+func blockedDependencyDetail(ids []string) Detail {
+	detail := Detail{Kind: DetailBlockedDependencies, IDs: cloneStrings(ids), Count: len(ids)}
+	if len(ids) == 1 {
+		detail.Kind = DetailBlockedDependency
+		detail.ID = ids[0]
+	}
+	return detail
+}
+
+func cloneStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	clone := make([]string, len(values))
+	copy(clone, values)
+	return clone
 }
 
 func localTaskStatesFromRunStates(runStates RunStateIndex) LocalTaskStateIndex {
@@ -493,6 +695,47 @@ func newRepositoryIndex(tasks []task.Task) map[string]task.Task {
 	return index
 }
 
+func epicChildProgressByParent(tasks []task.Task) map[string]epicChildProgress {
+	progressByEpic := make(map[string]epicChildProgress)
+	for _, taskItem := range tasks {
+		if taskItem.IssueType == task.IssueTypeEpic {
+			id := strings.TrimSpace(taskItem.ID)
+			if id != "" {
+				progress := progressByEpic[id]
+				if taskItem.Relations.ChildCount > progress.DeclaredTotal {
+					progress.DeclaredTotal = taskItem.Relations.ChildCount
+				}
+				progressByEpic[id] = progress
+			}
+		}
+
+		parentID := strings.TrimSpace(taskItem.Relations.ParentID)
+		if parentID == "" {
+			continue
+		}
+		progress := progressByEpic[parentID]
+		progress.ObservedTotal++
+		if taskItem.Status == task.StatusClosed {
+			progress.Completed++
+		}
+		progressByEpic[parentID] = progress
+	}
+	return progressByEpic
+}
+
+func epicProgressDetail(progress epicChildProgress) Detail {
+	total := epicProgressTotal(progress)
+	return Detail{
+		Kind:      DetailEpicProgress,
+		Completed: progress.Completed,
+		Total:     total,
+	}
+}
+
+func epicProgressTotal(progress epicChildProgress) int {
+	return max(progress.ObservedTotal, progress.DeclaredTotal)
+}
+
 func dependencyIDs(taskItem task.Task) []string {
 	seen := make(map[string]struct{}, len(taskItem.Relations.DependencyIDs))
 	ids := make([]string, 0, len(taskItem.Relations.DependencyIDs))
@@ -511,7 +754,7 @@ func dependencyIDs(taskItem task.Task) []string {
 	return ids
 }
 
-func missingDependencyDetail(taskItem task.Task, deps []string, index map[string]task.Task) string {
+func missingDependencyDetail(taskItem task.Task, deps []string, index map[string]task.Task) (string, Detail) {
 	missing := make([]string, 0)
 	for _, id := range deps {
 		if _, ok := index[id]; !ok {
@@ -519,12 +762,21 @@ func missingDependencyDetail(taskItem task.Task, deps []string, index map[string
 		}
 	}
 	if len(missing) > 0 {
-		return "missing dependency " + strings.Join(missing, ", ")
+		detail := Detail{Kind: DetailMissingDependencies, IDs: cloneStrings(missing), Count: len(missing)}
+		if len(missing) == 1 {
+			detail.Kind = DetailMissingDependency
+			detail.ID = missing[0]
+		}
+		return "missing dependency " + strings.Join(missing, ", "), detail
 	}
 	if taskItem.Relations.BlockedByCount > len(deps) {
-		return fmt.Sprintf("dependency details missing for %d blocker(s)", taskItem.Relations.BlockedByCount-len(deps))
+		count := taskItem.Relations.BlockedByCount - len(deps)
+		return fmt.Sprintf("dependency details missing for %d blocker(s)", count), Detail{
+			Kind:  DetailDependencyDetailsMissing,
+			Count: count,
+		}
 	}
-	return ""
+	return "", Detail{}
 }
 
 func openDependencyIDs(deps []string, index map[string]task.Task) []string {
@@ -559,12 +811,14 @@ func groupForState(state readinessState) GroupID {
 	}
 }
 
-func taskEntry(repository task.Repository, taskItem task.Task, detail string) Entry {
+func taskEntry(repository task.Repository, taskItem task.Task, result policyResult, epicProgress Detail) Entry {
 	return Entry{
-		Kind:       EntryTask,
-		Repository: repository,
-		Task:       taskItem.Clone(),
-		Detail:     detailOrDash(detail),
+		Kind:           EntryTask,
+		Repository:     repository,
+		Task:           taskItem.Clone(),
+		Detail:         detailOrDash(result.detail),
+		SemanticDetail: result.semanticDetail,
+		EpicProgress:   epicProgress,
 	}
 }
 
@@ -577,6 +831,11 @@ func failureEntry(failure task.RepoFailure) Entry {
 		Source:     failure.Source,
 		Operation:  failure.Operation,
 		Detail:     detail,
+		SemanticDetail: Detail{
+			Kind:      DetailRepoFailure,
+			Source:    valueOrUnknown(failure.Source),
+			Operation: valueOrUnknown(failure.Operation),
+		},
 	}
 }
 
