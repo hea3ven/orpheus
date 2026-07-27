@@ -33,18 +33,19 @@ const (
 
 // Repo is a repository record stored in the Orpheus registry.
 type Repo struct {
-	ID                    string            `yaml:"id"`
-	Name                  string            `yaml:"name"`
-	Path                  string            `yaml:"path"`
-	Remote                string            `yaml:"remote,omitempty"`
-	DefaultBranch         string            `yaml:"default_branch,omitempty"`
-	BeadsMode             string            `yaml:"beads_mode,omitempty"`
-	BeadsPrefix           string            `yaml:"beads_prefix,omitempty"`
-	SummaryGuidance       string            `yaml:"summary_guidance,omitempty"`
-	SummaryGuidanceStyle  string            `yaml:"summary_guidance_style,omitempty"`
-	TitleTemplate         string            `yaml:"title_template,omitempty"`
-	ReviewPipeline        string            `yaml:"review_pipeline,omitempty"`
-	ReviewPipelineAliases map[string]string `yaml:"review_pipeline_aliases,omitempty"`
+	ID                     string            `yaml:"id"`
+	Name                   string            `yaml:"name"`
+	Path                   string            `yaml:"path"`
+	Remote                 string            `yaml:"remote,omitempty"`
+	DefaultBranch          string            `yaml:"default_branch,omitempty"`
+	BeadsMode              string            `yaml:"beads_mode,omitempty"`
+	BeadsPrefix            string            `yaml:"beads_prefix,omitempty"`
+	SummaryGuidance        string            `yaml:"summary_guidance,omitempty"`
+	SummaryGuidanceStyle   string            `yaml:"summary_guidance_style,omitempty"`
+	TitleTemplate          string            `yaml:"title_template,omitempty"`
+	IncludePRReviewProcess *bool             `yaml:"include_pr_review_process,omitempty"`
+	ReviewPipeline         string            `yaml:"review_pipeline,omitempty"`
+	ReviewPipelineAliases  map[string]string `yaml:"review_pipeline_aliases,omitempty"`
 }
 
 // PublicationPolicy is the resolved publication configuration for a repository.

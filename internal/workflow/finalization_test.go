@@ -921,6 +921,38 @@ func TestFinalizePublishesOriginalCompletionAfterReviewFollowUp(t *testing.T) {
 	}
 }
 
+func TestFinalizeFeatureBranchPRReviewProcessPublicationPolicy(t *testing.T) {
+	tests := []struct {
+		name         string
+		global       *bool
+		repoOverride *bool
+		wantReview   bool
+	}{
+		{
+			name:       "global omit",
+			global:     workflowTestBool(false),
+			wantReview: false,
+		},
+		{
+			name:         "repo include overrides global omit",
+			global:       workflowTestBool(false),
+			repoOverride: workflowTestBool(true),
+			wantReview:   true,
+		},
+		{
+			name:         "repo omit overrides default include",
+			repoOverride: workflowTestBool(false),
+			wantReview:   false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assertFeatureBranchPRReviewProcessPolicy(t, test.global, test.repoOverride, test.wantReview)
+		})
+	}
+}
+
 func TestFinalizeRefusesFeatureBranchPublicationWithoutReviewedChanges(t *testing.T) {
 	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
 	worktree := targets.WorktreeTeam.Worktree
@@ -984,6 +1016,78 @@ func assertFeatureBranchPublicationTitles(
 	if got := provider.createRequests[0]; got.Title != title || got.Body != "Detailed PR body." {
 		t.Fatalf("PR request = %#v, want title with unchanged body", got)
 	}
+}
+
+func assertFeatureBranchPRReviewProcessPolicy(t *testing.T, global, repoOverride *bool, wantReview bool) {
+	t.Helper()
+	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	if global != nil {
+		if err := paths.WriteConfigYAML("config.yaml", map[string]any{
+			"reviews": map[string]any{"include_pr_review_process": *global},
+		}); err != nil {
+			t.Fatalf("write review config: %v", err)
+		}
+	}
+	source.Repository.IncludePRReviewProcess = repoOverride
+	worktree := targets.WorktreeTeam.Worktree
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   targets.WorktreeTeam.Branch,
+			task.MetadataWorktree: worktree,
+		},
+	}
+	taskState := reviewProcessPolicyTaskState()
+	service, git, _, _ := newFinalizationTestServiceForSource(
+		t,
+		paths,
+		source,
+		[]task.Task{taskItem},
+		map[string]taskstate.TaskState{"alpha/op-1": taskState},
+	)
+	git.branch = targets.WorktreeTeam.Branch
+	provider := &fakePRProvider{created: pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/42"}}
+	service.PRProvider = provider
+
+	_, err := service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	if len(provider.createRequests) != 1 {
+		t.Fatalf("create requests = %#v, want one PR creation", provider.createRequests)
+	}
+	body := provider.createRequests[0].Body
+	if !strings.HasPrefix(body, "Original PR body.") {
+		t.Fatalf("PR body = %q, want original detailed description first", body)
+	}
+	hasReview := strings.Contains(body, "## Review process")
+	if hasReview != wantReview {
+		t.Fatalf("PR body = %q, review process present = %t, want %t", body, hasReview, wantReview)
+	}
+}
+
+func reviewProcessPolicyTaskState() taskstate.TaskState {
+	taskState := finalizationTaskState("op-1", taskstate.RunAttempt{
+		Attempt: 1,
+		Status:  taskstate.RunStatusSucceeded,
+		Completion: &taskstate.Completion{
+			Summary:              "Implement original feature",
+			Description:          "Commit the original implementation.",
+			DetailedDescription:  "Original PR body.",
+			TechnicalExplanation: "Technical explanation.",
+		},
+	})
+	taskState.Reviews = []taskstate.ReviewAttempt{{
+		Attempt: 1,
+		Status:  taskstate.ReviewStatusPassed,
+		Step:    "manual-review",
+		Steps: []taskstate.ReviewStep{{
+			Kind: "manual",
+			Name: "manual-review",
+		}},
+	}}
+	return taskState
 }
 
 func newFinalizationTestServiceForSource(
@@ -1067,6 +1171,10 @@ func mustFinalizationTestPaths(t *testing.T) state.Paths {
 		t.Fatalf("create paths: %v", err)
 	}
 	return paths
+}
+
+func workflowTestBool(value bool) *bool {
+	return &value
 }
 
 func finalizationMainTask(taskID string, repoPath string) task.Task {

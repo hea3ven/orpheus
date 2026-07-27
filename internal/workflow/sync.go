@@ -12,6 +12,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
+	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -904,6 +905,28 @@ type PullRequestContent struct {
 	Body  string
 }
 
+// PublicationOptions controls generated pull-request publication content.
+type PublicationOptions struct {
+	TitleTemplate        string
+	IncludeReviewProcess bool
+}
+
+// ResolvePublicationOptions applies global and repository publication policy.
+func ResolvePublicationOptions(paths state.Paths, repo task.Repository) (PublicationOptions, error) {
+	reviewConfig, err := review.LoadConfig(paths)
+	if err != nil {
+		return PublicationOptions{}, err
+	}
+	includeReviewProcess := reviewConfig.IncludePRReviewProcess
+	if repo.IncludePRReviewProcess != nil {
+		includeReviewProcess = *repo.IncludePRReviewProcess
+	}
+	return PublicationOptions{
+		TitleTemplate:        repo.TitleTemplate,
+		IncludeReviewProcess: includeReviewProcess,
+	}, nil
+}
+
 // BuildSyncPullRequestContent returns default PR text from the completion handoff.
 func BuildSyncPullRequestContent(taskItem task.Task, latest taskstate.RunAttempt) (PullRequestContent, error) {
 	return BuildPublicationPullRequestContent("", taskItem, latest)
@@ -942,15 +965,30 @@ func BuildPublicationPullRequestContentFromState(
 	taskItem task.Task,
 	state taskstate.TaskState,
 ) (PullRequestContent, error) {
+	return BuildPublicationPullRequestContentFromStateWithOptions(PublicationOptions{
+		TitleTemplate:        titleTemplate,
+		IncludeReviewProcess: true,
+	}, taskItem, state)
+}
+
+// BuildPublicationPullRequestContentFromStateWithOptions returns PR text from
+// the canonical implementation completion and optional review-process history.
+func BuildPublicationPullRequestContentFromStateWithOptions(
+	options PublicationOptions,
+	taskItem task.Task,
+	state taskstate.TaskState,
+) (PullRequestContent, error) {
 	run, err := publicationRun(state)
 	if err != nil {
 		return PullRequestContent{}, err
 	}
-	content, err := BuildPublicationPullRequestContent(titleTemplate, taskItem, run)
+	content, err := BuildPublicationPullRequestContent(options.TitleTemplate, taskItem, run)
 	if err != nil {
 		return PullRequestContent{}, err
 	}
-	content.Body = appendReviewProcess(content.Body, state)
+	if options.IncludeReviewProcess {
+		content.Body = appendReviewProcess(content.Body, state)
+	}
 	return content, nil
 }
 

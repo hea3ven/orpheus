@@ -20,6 +20,9 @@ const (
 	// DefaultMaxAutonomousReviewAttempts limits one command's automatic review/fix loop.
 	DefaultMaxAutonomousReviewAttempts = 4
 
+	// DefaultIncludePRReviewProcess preserves existing PR body publication behavior.
+	DefaultIncludePRReviewProcess = true
+
 	KindManual      = taskstate.ReviewStepKindManual
 	KindCheck       = taskstate.ReviewStepKindCheck
 	KindAgentReview = taskstate.ReviewStepKindAgentReview
@@ -29,8 +32,10 @@ const (
 type Config struct {
 	DefaultPipeline                string
 	MaxAutonomousReviewAttempts    int
+	IncludePRReviewProcess         bool
 	Pipelines                      map[string]Pipeline
 	maxAutonomousReviewAttemptsSet bool
+	includePRReviewProcessSet      bool
 }
 
 // Pipeline is a named ordered list of review steps.
@@ -68,6 +73,7 @@ func (c *Config) UnmarshalYAML(value *yaml.Node) error {
 	var nested struct {
 		DefaultPipeline             string              `yaml:"default_pipeline"`
 		MaxAutonomousReviewAttempts *int                `yaml:"max_autonomous_review_attempts"`
+		IncludePRReviewProcess      *bool               `yaml:"include_pr_review_process"`
 		Pipelines                   map[string]Pipeline `yaml:"pipelines"`
 	}
 	if err := raw.Reviews.Decode(&nested); err != nil {
@@ -77,6 +83,10 @@ func (c *Config) UnmarshalYAML(value *yaml.Node) error {
 	if nested.MaxAutonomousReviewAttempts != nil {
 		c.MaxAutonomousReviewAttempts = *nested.MaxAutonomousReviewAttempts
 		c.maxAutonomousReviewAttemptsSet = true
+	}
+	if nested.IncludePRReviewProcess != nil {
+		c.IncludePRReviewProcess = *nested.IncludePRReviewProcess
+		c.includePRReviewProcessSet = true
 	}
 	c.Pipelines = nested.Pipelines
 	return nil
@@ -89,7 +99,10 @@ func LoadConfig(paths state.Paths) (Config, error) {
 	var config Config
 	if err := paths.ReadConfigYAML(ConfigFile, &config); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return Config{MaxAutonomousReviewAttempts: DefaultMaxAutonomousReviewAttempts}, nil
+			return Config{
+				MaxAutonomousReviewAttempts: DefaultMaxAutonomousReviewAttempts,
+				IncludePRReviewProcess:      DefaultIncludePRReviewProcess,
+			}, nil
 		}
 		return Config{}, fmt.Errorf("load review pipelines from %s: %w", ConfigFile, err)
 	}
@@ -161,6 +174,10 @@ func (c Config) normalized() (Config, error) {
 	if !c.maxAutonomousReviewAttemptsSet && maxAutonomousReviewAttempts == 0 {
 		maxAutonomousReviewAttempts = DefaultMaxAutonomousReviewAttempts
 	}
+	includePRReviewProcess := c.IncludePRReviewProcess
+	if !c.includePRReviewProcessSet {
+		includePRReviewProcess = DefaultIncludePRReviewProcess
+	}
 	if maxAutonomousReviewAttempts <= 0 {
 		return Config{}, fmt.Errorf(
 			"reviews.max_autonomous_review_attempts must be positive, got %d",
@@ -196,8 +213,10 @@ func (c Config) normalized() (Config, error) {
 	return Config{
 		DefaultPipeline:                defaultPipeline,
 		MaxAutonomousReviewAttempts:    maxAutonomousReviewAttempts,
+		IncludePRReviewProcess:         includePRReviewProcess,
 		Pipelines:                      pipelines,
 		maxAutonomousReviewAttemptsSet: true,
+		includePRReviewProcessSet:      true,
 	}, nil
 }
 

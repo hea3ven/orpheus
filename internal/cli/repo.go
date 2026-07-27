@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/beads"
@@ -57,9 +58,10 @@ func newRepoConfigCommand(opts *rootOptions) *cobra.Command {
 }
 
 const (
-	repoConfigSummaryGuidance = "summary-guidance"
-	repoConfigSummaryStyle    = "summary-style"
-	repoConfigTitleTemplate   = "title-template"
+	repoConfigSummaryGuidance        = "summary-guidance"
+	repoConfigSummaryStyle           = "summary-style"
+	repoConfigTitleTemplate          = "title-template"
+	repoConfigIncludePRReviewProcess = "include-pr-review-process"
 
 	repoConfigReviewPipeline            = "review-pipeline"
 	repoConfigReviewPipelineAliasPrefix = "review-pipeline-alias."
@@ -71,7 +73,7 @@ func newRepoConfigGetCommand(opts *rootOptions) *cobra.Command {
 		Short: "Show repository configuration",
 		Long: "Show repository configuration.\n\n" +
 			"Supported config names are summary-guidance, summary-style, title-template, " +
-			"review-pipeline, and review-pipeline-alias.<alias>.",
+			"include-pr-review-process, review-pipeline, and review-pipeline-alias.<alias>.",
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(command *cobra.Command, args []string) error {
 			deps, err := opts.invocation(command)
@@ -108,6 +110,7 @@ func newRepoConfigSetCommand(opts *rootOptions) *cobra.Command {
 		Use:   "set <repo-id-name-or-prefix> <config-name> <config-value>",
 		Short: "Set or clear repository configuration",
 		Long: "Set one repository configuration value. Pass an empty config value to clear it.\n\n" +
+			"include-pr-review-process values must be true or false. " +
 			"review-pipeline and review-pipeline-alias.<alias> values must name a configured " +
 			"global reviews.pipelines entry. Setting an alias to an empty value deletes it.",
 		Args: cobra.ExactArgs(3),
@@ -146,11 +149,13 @@ func runRepoConfigSet(command *cobra.Command, opts *rootOptions, token string, c
 			return err
 		}
 		var reviewConfig review.Config
-		if isReviewPipelineConfigName(configName) {
+		if usesReviewConfig(configName) {
 			reviewConfig, err = review.LoadConfig(paths)
 			if err != nil {
 				return err
 			}
+		}
+		if isReviewPipelineConfigName(configName) {
 			if err := validateRepoReviewConfigValue(reviewConfig, configName, value); err != nil {
 				return err
 			}
@@ -177,6 +182,7 @@ func normalizeRepoConfigName(value string) (string, error) {
 	case repoConfigSummaryGuidance,
 		repoConfigSummaryStyle,
 		repoConfigTitleTemplate,
+		repoConfigIncludePRReviewProcess,
 		repoConfigReviewPipeline:
 		return name, nil
 	default:
@@ -187,11 +193,12 @@ func normalizeRepoConfigName(value string) (string, error) {
 			return repoConfigReviewPipelineAliasPrefix + alias, nil
 		}
 		return "", fmt.Errorf(
-			"unknown repo config %q; expected %q, %q, %q, %q, or %q<alias>",
+			"unknown repo config %q; expected %q, %q, %q, %q, %q, or %q<alias>",
 			value,
 			repoConfigSummaryGuidance,
 			repoConfigSummaryStyle,
 			repoConfigTitleTemplate,
+			repoConfigIncludePRReviewProcess,
 			repoConfigReviewPipeline,
 			repoConfigReviewPipelineAliasPrefix,
 		)
@@ -207,16 +214,36 @@ func validateRepoConfigValue(name string, value string) error {
 		return registry.ValidateSummaryGuidanceStyle(value)
 	case repoConfigTitleTemplate:
 		return publication.ValidateTitleTemplate(value)
+	case repoConfigIncludePRReviewProcess:
+		_, err := parseRepoBoolConfigValue(name, value)
+		return err
 	default:
 		return nil
 	}
 }
 
+func parseRepoBoolConfigValue(name string, value string) (bool, error) {
+	if value == "" {
+		return false, nil
+	}
+	if strings.EqualFold(value, "true") {
+		return true, nil
+	}
+	if strings.EqualFold(value, "false") {
+		return false, nil
+	}
+	return false, fmt.Errorf("repo config %s value %q is invalid; expected true or false", name, value)
+}
+
 func loadRepoConfigReviewConfig(paths state.Paths, name string) (review.Config, error) {
-	if name != "" && !isReviewPipelineConfigName(name) {
+	if name != "" && !usesReviewConfig(name) {
 		return review.Config{}, nil
 	}
 	return review.LoadConfig(paths)
+}
+
+func usesReviewConfig(name string) bool {
+	return name == repoConfigIncludePRReviewProcess || isReviewPipelineConfigName(name)
 }
 
 func isReviewPipelineConfigName(name string) bool {
@@ -253,6 +280,13 @@ func setRepoConfigValue(repo registry.Repo, name string, value string) registry.
 		repo.SummaryGuidanceStyle = value
 	case repoConfigTitleTemplate:
 		repo.TitleTemplate = value
+	case repoConfigIncludePRReviewProcess:
+		if value == "" {
+			repo.IncludePRReviewProcess = nil
+			return repo
+		}
+		parsed, _ := parseRepoBoolConfigValue(name, value)
+		repo.IncludePRReviewProcess = &parsed
 	case repoConfigReviewPipeline:
 		repo.ReviewPipeline = value
 	default:
@@ -302,6 +336,7 @@ func renderRepoConfig(command *cobra.Command, repo registry.Repo, configName str
 		{repoConfigSummaryGuidance, displayConfigValue(repo.SummaryGuidance), effectiveSummaryGuidance(policy)},
 		{repoConfigSummaryStyle, displayConfigValue(repo.SummaryGuidanceStyle), effectiveSummaryGuidanceStyle(policy)},
 		{repoConfigTitleTemplate, displayConfigValue(repo.TitleTemplate), effectiveTitleTemplate(policy.TitleTemplate)},
+		{repoConfigIncludePRReviewProcess, displayOptionalBool(repo.IncludePRReviewProcess), effectiveIncludePRReviewProcess(repo, reviewConfig)},
 		{repoConfigReviewPipeline, displayConfigValue(repo.ReviewPipeline), effectiveReviewPipeline(repo, reviewConfig)},
 	}
 	rows = append(rows, reviewPipelineAliasRows(repo)...)
@@ -312,8 +347,10 @@ func renderRepoConfig(command *cobra.Command, repo registry.Repo, configName str
 		rows = rows[1:2]
 	case repoConfigTitleTemplate:
 		rows = rows[2:3]
-	case repoConfigReviewPipeline:
+	case repoConfigIncludePRReviewProcess:
 		rows = rows[3:4]
+	case repoConfigReviewPipeline:
+		rows = rows[4:5]
 	default:
 		if alias, ok := repoConfigAliasName(configName); ok {
 			rows = [][]string{reviewPipelineAliasRow(alias, repo.ReviewPipelineAliases[alias])}
@@ -347,11 +384,26 @@ func displayConfigValue(value string) string {
 	return value
 }
 
+func displayOptionalBool(value *bool) string {
+	if value == nil {
+		return "(not set)"
+	}
+	return strconv.FormatBool(*value)
+}
+
 func effectiveTitleTemplate(template string) string {
 	if strings.TrimSpace(template) == "" {
 		return "completion summary"
 	}
 	return template
+}
+
+func effectiveIncludePRReviewProcess(repo registry.Repo, config review.Config) string {
+	include := config.IncludePRReviewProcess
+	if repo.IncludePRReviewProcess != nil {
+		include = *repo.IncludePRReviewProcess
+	}
+	return strconv.FormatBool(include)
 }
 
 func effectiveSummaryGuidance(policy registry.PublicationPolicy) string {

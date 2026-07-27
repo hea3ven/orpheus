@@ -2984,14 +2984,15 @@ func taskRepositorySources(store registry.Store, reg registry.Registry) ([]taskm
 		}
 		sources = append(sources, taskmodel.RepositorySource{
 			Repository: taskmodel.Repository{
-				ID:                    repo.ID,
-				Name:                  repo.Name,
-				TaskIDPrefix:          repo.BeadsPrefix,
-				Path:                  repo.Path,
-				DefaultBranch:         repo.DefaultBranch,
-				TitleTemplate:         repo.TitleTemplate,
-				ReviewPipeline:        repo.ReviewPipeline,
-				ReviewPipelineAliases: cloneStringMap(repo.ReviewPipelineAliases),
+				ID:                     repo.ID,
+				Name:                   repo.Name,
+				TaskIDPrefix:           repo.BeadsPrefix,
+				Path:                   repo.Path,
+				DefaultBranch:          repo.DefaultBranch,
+				TitleTemplate:          repo.TitleTemplate,
+				IncludePRReviewProcess: cloneBoolPtr(repo.IncludePRReviewProcess),
+				ReviewPipeline:         repo.ReviewPipeline,
+				ReviewPipelineAliases:  cloneStringMap(repo.ReviewPipelineAliases),
 			},
 			BackendDir: beadsDir,
 		})
@@ -3008,6 +3009,14 @@ func cloneStringMap(values map[string]string) map[string]string {
 		clone[key] = value
 	}
 	return clone
+}
+
+func cloneBoolPtr(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func renderTaskDetails(

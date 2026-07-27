@@ -2016,6 +2016,41 @@ func TestBuildPublicationPullRequestContentFromStateFormatsReviewProcess(t *test
 	}
 }
 
+func TestBuildPublicationPullRequestContentFromStateWithOptionsOmitsReviewProcess(t *testing.T) {
+	content, err := workflow.BuildPublicationPullRequestContentFromStateWithOptions(workflow.PublicationOptions{
+		IncludeReviewProcess: false,
+	}, task.Task{
+		ID: "op-1",
+	}, taskstate.TaskState{
+		Runs: []taskstate.RunAttempt{{
+			Attempt: 1,
+			Completion: &taskstate.Completion{
+				Summary:              "Original summary",
+				DetailedDescription:  "Original PR body.",
+				TechnicalExplanation: "Technical explanation.",
+			},
+		}},
+		Reviews: []taskstate.ReviewAttempt{{
+			Attempt: 1,
+			Status:  taskstate.ReviewStatusPassed,
+			Step:    "manual-review",
+			Steps: []taskstate.ReviewStep{{
+				Kind: "manual",
+				Name: "manual-review",
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("build content: %v", err)
+	}
+	if content.Title != "Original summary" {
+		t.Fatalf("title = %q, want original summary", content.Title)
+	}
+	if content.Body != "Original PR body." {
+		t.Fatalf("body = %q, want original body without review process", content.Body)
+	}
+}
+
 func TestBuildPublicationPullRequestContentRejectsMissingRequiredExternalReference(t *testing.T) {
 	_, err := workflow.BuildPublicationPullRequestContent("[{{external_ref}}] {{summary}}", task.Task{
 		ID: "op-1",
