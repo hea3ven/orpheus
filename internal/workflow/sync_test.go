@@ -312,7 +312,7 @@ func (p *fakePRProvider) StatusByURL(_ context.Context, req pullrequest.StatusBy
 }
 
 func TestSyncServiceSkipsPRCreationForEligibleWorktreeCompletion(t *testing.T) {
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	worktreePath := targets.WorktreeTeam.Worktree
 	taskItem := task.Task{
@@ -356,7 +356,7 @@ func TestSyncServiceSkipsPRCreationForEligibleWorktreeCompletion(t *testing.T) {
 }
 
 func TestSyncServiceDoesNotRecoverBranchPRWithoutRecordedPRURL(t *testing.T) {
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	worktreePath := targets.WorktreeTeam.Worktree
 	service, provider, backend := newSyncTestService(t, task.Task{
@@ -395,7 +395,7 @@ func TestSyncServiceDoesNotRecoverBranchPRWithoutRecordedPRURL(t *testing.T) {
 }
 
 func TestSyncServicePollsOpenPRWithoutLocalEligibility(t *testing.T) {
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	taskItem := task.Task{
 		ID:     "op-1",
@@ -435,7 +435,7 @@ func TestSyncServicePollsOpenPRWithoutLocalEligibility(t *testing.T) {
 }
 
 func TestSyncServiceUpdatesOpenPRBranchFromDefault(t *testing.T) {
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	taskItem := task.Task{
 		ID:     "op-1",
@@ -477,7 +477,7 @@ func TestSyncServiceUpdatesOpenPRBranchFromDefault(t *testing.T) {
 }
 
 func TestSyncServiceReportsOpenPRBranchAlreadyCurrent(t *testing.T) {
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	taskItem := task.Task{
 		ID:     "op-1",
@@ -510,7 +510,7 @@ func TestSyncServiceReportsOpenPRBranchAlreadyCurrent(t *testing.T) {
 
 //nolint:funlen // The successful conflict-repair workflow is clearer as one integrated fixture.
 func TestSyncServiceResolvesOpenPRBranchConflictWithAgent(t *testing.T) {
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	taskItem := task.Task{
 		ID:     "op-1",
@@ -658,7 +658,7 @@ func assertSyncConflictAuditEvent(
 }
 
 func TestSyncServiceReportsConflictAgentFailure(t *testing.T) {
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	taskItem := task.Task{
 		ID:     "op-1",
@@ -715,7 +715,7 @@ func TestSyncServiceReportsConflictAgentFailure(t *testing.T) {
 }
 
 func TestSyncServiceReportsUnresolvedConflictAfterAgent(t *testing.T) {
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	taskItem := task.Task{
 		ID:     "op-1",
@@ -754,7 +754,7 @@ func TestSyncServiceReportsUnresolvedConflictAfterAgent(t *testing.T) {
 }
 
 func TestSyncServiceSkipsOpenPRBranchUpdateWithoutManagedMetadata(t *testing.T) {
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	paths, source, _ := newSyncTestSource(t, repoPath, "op-1")
 	taskItem := task.Task{
 		ID:     "op-1",
@@ -784,7 +784,7 @@ func TestSyncServiceSkipsOpenPRBranchUpdateWithoutManagedMetadata(t *testing.T) 
 }
 
 func TestSyncServiceClosesTaskAndRecordsAuditForMergedPR(t *testing.T) {
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	paths, source, _ := newSyncTestSource(t, repoPath, "op-1")
 	taskItem := task.Task{
 		ID:     "op-1",
@@ -830,7 +830,7 @@ func TestSyncServiceClosesTaskAndRecordsAuditForMergedPR(t *testing.T) {
 }
 
 func TestSyncServiceMergedPRCloseAndAuditFailures(t *testing.T) {
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	paths, source, _ := newSyncTestSource(t, repoPath, "op-1")
 	taskItem := task.Task{
 		ID:     "op-1",
@@ -875,7 +875,7 @@ func TestSyncServiceMergedPRCloseAndAuditFailures(t *testing.T) {
 }
 
 func TestSyncServiceClosedTaskSkipsWithoutPRPolling(t *testing.T) {
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	paths, source, _ := newSyncTestSource(t, repoPath, "op-1")
 	taskItem := task.Task{
 		ID:     "op-1",
@@ -904,7 +904,7 @@ func TestSyncServiceClosedTaskSkipsWithoutPRPolling(t *testing.T) {
 }
 
 func TestSyncServiceExistingPRFailuresAreHardErrors(t *testing.T) {
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	paths, source, _ := newSyncTestSource(t, repoPath, "op-1")
 	taskItem := task.Task{
 		ID:       "op-1",
@@ -957,7 +957,7 @@ func TestSyncServiceExistingPRFailuresAreHardErrors(t *testing.T) {
 }
 
 func TestSyncServiceDiagnosticsCorrelateFailedPRPolling(t *testing.T) {
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	taskItem := task.Task{
 		ID:     "op-1",
@@ -1008,7 +1008,7 @@ func TestSyncServiceDiagnosticsCorrelateFailedPRPolling(t *testing.T) {
 }
 
 func TestSyncServiceDiagnosticsUseSyncStatusForDomainOutcome(t *testing.T) {
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	taskItem := task.Task{
 		ID:     "op-1",
@@ -1047,7 +1047,7 @@ func TestSyncServiceDiagnosticsUseSyncStatusForDomainOutcome(t *testing.T) {
 }
 
 func TestSyncServiceSkipsNonEligibleTasks(t *testing.T) {
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	worktreePath := targets.WorktreeTeam.Worktree
 	baseTask := task.Task{
@@ -1187,7 +1187,7 @@ func syncTaskForBranchWorktree(branch string, worktree string) task.Task {
 }
 
 func TestSyncServiceSkipsTasksWithoutPRURLDespiteMalformedMetadata(t *testing.T) {
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	worktreePath := targets.WorktreeTeam.Worktree
 	state := syncTaskState(taskstate.RunAttempt{
@@ -1238,7 +1238,7 @@ func TestSyncServiceSkipsTasksWithoutPRURLDespiteMalformedMetadata(t *testing.T)
 }
 
 func TestSyncServiceDoesNotCallPRProviderForPublicationCandidates(t *testing.T) {
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	worktreePath := targets.WorktreeTeam.Worktree
 	state := syncTaskState(taskstate.RunAttempt{
@@ -1361,7 +1361,7 @@ func assertSyncAllDiagnostics(t *testing.T, logs string) {
 
 //nolint:funlen // The batch continuation scenario is clearer as one integrated workflow fixture.
 func TestSyncServiceSyncAllContinuesAfterOpenPRBranchUpdateFailure(t *testing.T) {
-	paths, source, targets := newSyncTestSource(t, filepath.Join(t.TempDir(), "repo"), "op-fail")
+	paths, source, targets := newSyncTestSource(t, filepath.Join(canonicalTestPath(t, t.TempDir()), "repo"), "op-fail")
 	currentTargets := mustSyncExpectedTargets(t, source.Repository, "op-current", paths)
 	backend := &fakeSyncBackend{
 		tasks: []task.Task{
@@ -1440,7 +1440,7 @@ func TestSyncServiceSyncAllContinuesAfterOpenPRBranchUpdateFailure(t *testing.T)
 
 //nolint:funlen // The batch conflict-repair path needs repository, PR, Git, and telemetry fixtures together.
 func TestSyncServiceSyncAllRecordsConflictResolutionTelemetry(t *testing.T) {
-	paths, source, targets := newSyncTestSource(t, filepath.Join(t.TempDir(), "repo"), "op-conflict")
+	paths, source, targets := newSyncTestSource(t, filepath.Join(canonicalTestPath(t, t.TempDir()), "repo"), "op-conflict")
 	backend := &fakeSyncBackend{
 		tasks: []task.Task{{
 			ID:        "op-conflict",
@@ -1531,7 +1531,7 @@ func TestSyncServiceSyncAllRecordsConflictResolutionTelemetry(t *testing.T) {
 
 //nolint:funlen // The batch conflict-agent failure is clearer as one integrated fixture.
 func TestSyncServiceSyncAllContinuesAfterConflictAgentFailure(t *testing.T) {
-	paths, source, targets := newSyncTestSource(t, filepath.Join(t.TempDir(), "repo"), "op-conflict")
+	paths, source, targets := newSyncTestSource(t, filepath.Join(canonicalTestPath(t, t.TempDir()), "repo"), "op-conflict")
 	currentTargets := mustSyncExpectedTargets(t, source.Repository, "op-current", paths)
 	backend := &fakeSyncBackend{
 		tasks: []task.Task{
@@ -1710,7 +1710,7 @@ func newSyncAllScanPRProvider() *fakePRProvider {
 }
 
 func TestSyncServiceSyncAllIgnoresTasksWithoutPRURL(t *testing.T) {
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	worktreePath := targets.WorktreeTeam.Worktree
 	listTask := task.Task{
@@ -1749,7 +1749,7 @@ func TestSyncServiceSyncAllIgnoresTasksWithoutPRURL(t *testing.T) {
 }
 
 func TestSyncServiceSyncAllHoldsGlobalLockAcrossScanAndSync(t *testing.T) {
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	paths, source, _ := newSyncTestSource(t, repoPath, "op-1")
 	lockPath, err := paths.GlobalMutationLockPath()
 	if err != nil {

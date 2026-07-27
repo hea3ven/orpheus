@@ -16,7 +16,7 @@ import (
 //nolint:funlen // The fixture is intentionally explicit about blocked review state.
 func TestDispatchValidateStartInfersBlockedReviewFollowUpTarget(t *testing.T) {
 	paths := newDispatchTestPaths(t)
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	repo := task.Repository{
 		ID:            "alpha",
 		Name:          "Alpha",
@@ -80,7 +80,7 @@ func TestDispatchValidateStartInfersBlockedReviewFollowUpTarget(t *testing.T) {
 
 func TestDispatchValidateStartRefusesInterruptedAutomatedBlockerDecision(t *testing.T) {
 	paths := newDispatchTestPaths(t)
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	repo := task.Repository{
 		ID:            "alpha",
 		Name:          "Alpha",
@@ -223,7 +223,7 @@ func TestDispatchValidateStartAllowsKeptBudgetExhaustedAutomatedBlockers(t *test
 
 func TestDispatchValidateStartRefusesAlreadyTargetedBlockedReview(t *testing.T) {
 	paths := newDispatchTestPaths(t)
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	repo := task.Repository{
 		ID:            "alpha",
 		Name:          "Alpha",
@@ -283,7 +283,7 @@ func TestDispatchValidateStartRefusesAlreadyTargetedBlockedReview(t *testing.T) 
 
 func TestDispatchValidateStartRejectsMainModeAfterTargetLock(t *testing.T) {
 	paths := newDispatchTestPaths(t)
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	repo := task.Repository{
 		ID:            "alpha",
 		Name:          "Alpha",
@@ -334,7 +334,7 @@ func validateDispatchStartForReview(
 	t.Helper()
 
 	paths := newDispatchTestPaths(t)
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	repo := task.Repository{
 		ID:            "alpha",
 		Name:          "Alpha",

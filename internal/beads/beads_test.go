@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hea3ven/orpheus/internal/beads"
+	"github.com/hea3ven/orpheus/internal/pathutil"
 	"github.com/hea3ven/orpheus/internal/task"
 )
 
@@ -56,6 +57,24 @@ const listVisibleTasksStdout = `[
 	{"id":"op-3","title":"Bug","status":"open","priority":2,"issue_type":"bug"}
 ]`
 
+func canonicalFakePath(path string) string {
+	canonicalPath, err := pathutil.CanonicalAbs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return canonicalPath
+}
+
+func canonicalTestPath(t *testing.T, path string) string {
+	t.Helper()
+
+	canonicalPath, err := pathutil.CanonicalAbs(path)
+	if err != nil {
+		t.Fatalf("canonicalize test path %q: %v", path, err)
+	}
+	return canonicalPath
+}
+
 func (r *fakeRunner) Run(dir string, args ...string) (beads.Result, error) {
 	if len(r.calls) == 0 {
 		return beads.Result{}, errors.New("unexpected bd call")
@@ -66,7 +85,7 @@ func (r *fakeRunner) Run(dir string, args ...string) (beads.Result, error) {
 	if strings.TrimSpace(dir) == "" {
 		return beads.Result{}, errors.New("runner dir is empty")
 	}
-	if call.wantDir != "" && dir != call.wantDir {
+	if call.wantDir != "" && canonicalFakePath(dir) != canonicalFakePath(call.wantDir) {
 		return beads.Result{}, errors.New("unexpected dir: " + dir)
 	}
 	if strings.Join(args, "\x00") != strings.Join(call.wantArgs, "\x00") {
@@ -748,7 +767,7 @@ func TestTaskBackendReportsCommandFailureWithOutput(t *testing.T) {
 func newRootWithBeadsDir(t *testing.T) string {
 	t.Helper()
 
-	root := t.TempDir()
+	root := canonicalTestPath(t, t.TempDir())
 	if err := os.Mkdir(filepath.Join(root, ".beads"), 0o755); err != nil {
 		t.Fatalf("mkdir .beads: %v", err)
 	}

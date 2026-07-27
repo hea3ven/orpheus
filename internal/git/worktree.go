@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/logging"
+	"github.com/hea3ven/orpheus/internal/pathutil"
 	"github.com/hea3ven/orpheus/internal/state"
 )
 
@@ -909,7 +910,11 @@ func normalizeRegisteredRepoPath(repoPath string) (string, error) {
 	if !filepath.IsAbs(repoPath) {
 		return "", fmt.Errorf("registered repo path must be absolute, got %q", repoPath)
 	}
-	return filepath.Clean(repoPath), nil
+	canonicalRepoPath, err := pathutil.CanonicalAbs(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("normalize registered repo path %q: %w", repoPath, err)
+	}
+	return canonicalRepoPath, nil
 }
 
 func cleanPathComponent(label string, value string) (string, error) {
@@ -1791,11 +1796,11 @@ func worktreeRoot(ctx context.Context, inputPath string) (string, error) {
 	if !filepath.IsAbs(root) {
 		root = filepath.Join(inputPath, root)
 	}
-	absoluteRoot, err := filepath.Abs(root)
+	canonicalRoot, err := pathutil.CanonicalAbs(root)
 	if err != nil {
 		return "", fmt.Errorf("normalize Git worktree root %q: %w", root, err)
 	}
-	return filepath.Clean(absoluteRoot), nil
+	return canonicalRoot, nil
 }
 
 func gitCommonDir(ctx context.Context, dir string) (string, error) {
@@ -1811,11 +1816,11 @@ func gitCommonDir(ctx context.Context, dir string) (string, error) {
 	if !filepath.IsAbs(commonDir) {
 		commonDir = filepath.Join(dir, commonDir)
 	}
-	absoluteCommonDir, err := filepath.Abs(commonDir)
+	canonicalCommonDir, err := pathutil.CanonicalAbs(commonDir)
 	if err != nil {
 		return "", fmt.Errorf("normalize Git common dir %q: %w", commonDir, err)
 	}
-	return filepath.Clean(absoluteCommonDir), nil
+	return canonicalCommonDir, nil
 }
 
 func currentBranchAt(ctx context.Context, dir string) (string, error) {

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/cli"
+	"github.com/hea3ven/orpheus/internal/pathutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -74,7 +75,7 @@ func newTestRepoWithLocalOriginAt(t *testing.T, root string, relativePath string
 func newTestState(t *testing.T) string {
 	t.Helper()
 
-	root := t.TempDir()
+	root := canonicalTestPath(t, t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "xdg-config"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(root, "xdg-data"))
 	clearOrpheusAgentEnv(t)
@@ -121,6 +122,16 @@ func runGit(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v failed: %v\n%s", args, err, output)
 	}
 	return string(output)
+}
+
+func canonicalTestPath(t *testing.T, path string) string {
+	t.Helper()
+
+	canonicalPath, err := pathutil.CanonicalAbs(path)
+	if err != nil {
+		t.Fatalf("canonicalize test path %q: %v", path, err)
+	}
+	return canonicalPath
 }
 
 func executeCommand(t *testing.T, args []string) (stdout string, stderr string) {

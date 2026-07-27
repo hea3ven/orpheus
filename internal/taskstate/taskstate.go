@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/hea3ven/orpheus/internal/logging"
+	"github.com/hea3ven/orpheus/internal/pathutil"
 	orstate "github.com/hea3ven/orpheus/internal/state"
 	"gopkg.in/yaml.v3"
 )
@@ -3100,8 +3101,18 @@ func lockTaskTarget(state *TaskState, requested TaskTarget) error {
 func normalizeTaskTarget(target TaskTarget) TaskTarget {
 	return TaskTarget{
 		Branch:   strings.TrimSpace(target.Branch),
-		Worktree: strings.TrimSpace(target.Worktree),
+		Worktree: normalizeWorktreePath(target.Worktree),
 	}
+}
+
+func normalizeWorktreePath(worktree string) string {
+	worktree = strings.TrimSpace(worktree)
+	if filepath.IsAbs(worktree) {
+		if canonicalWorktree, err := pathutil.CanonicalAbs(worktree); err == nil {
+			return canonicalWorktree
+		}
+	}
+	return worktree
 }
 
 func validateTaskTarget(target TaskTarget) error {

@@ -11,6 +11,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/agent"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/logging"
+	"github.com/hea3ven/orpheus/internal/pathutil"
 	"github.com/hea3ven/orpheus/internal/readiness"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
@@ -909,6 +910,11 @@ func cleanDispatchPath(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return ""
+	}
+	if filepath.IsAbs(path) {
+		if canonicalPath, err := pathutil.CanonicalAbs(path); err == nil {
+			return canonicalPath
+		}
 	}
 	return filepath.Clean(path)
 }

@@ -2811,7 +2811,7 @@ JSON
     exit 64
     ;;
 esac
-`, shellQuote(repoPath), shellQuote(bdCountPath), shellQuote(bdCountPath), shellQuote(bdCountPath))
+`, shellQuote(canonicalTestPath(t, repoPath)), shellQuote(bdCountPath), shellQuote(bdCountPath), shellQuote(bdCountPath))
 	must.NoError(os.WriteFile(bdPath, []byte(script), 0o755))
 	t.Setenv("FAKE_BD_LOG", bdLogPath)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -7596,7 +7596,7 @@ func writeFakeBDTaskResponseCase(
 	if exitCode == 0 && response.stderr != "" && response.stdout == "" {
 		exitCode = 1
 	}
-	fmt.Fprintf(script, "  %s)\n", shellQuote(dir))
+	fmt.Fprintf(script, "  %s)\n", shellQuote(canonicalTestPath(t, dir)))
 	fmt.Fprintln(script, "    if [ \"$is_update\" = 1 ]; then")
 	fmt.Fprintln(script, "      printf '{}\\n'")
 	fmt.Fprintln(script, "      exit 0")

@@ -389,7 +389,7 @@ case "$PWD|$*" in
 		if exitCode == 0 && response.stderr != "" && response.stdout == "" {
 			exitCode = 1
 		}
-		fmt.Fprintf(&script, "  %s)\n", shellQuote(response.dir+"|"+response.args))
+		fmt.Fprintf(&script, "  %s)\n", shellQuote(canonicalTestPath(t, response.dir)+"|"+response.args))
 		fmt.Fprintf(&script, "    cat %s\n", shellQuote(stdoutPath))
 		fmt.Fprintf(&script, "    cat %s >&2\n", shellQuote(stderrPath))
 		fmt.Fprintf(&script, "    exit %d\n", exitCode)

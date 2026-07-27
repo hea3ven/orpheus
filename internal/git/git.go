@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/logging"
+	"github.com/hea3ven/orpheus/internal/pathutil"
 )
 
 type loggerContextKey struct{}
@@ -147,11 +147,11 @@ func discoverRootWithLogger(ctx context.Context, inputPath string, logger *slog.
 		return "", fmt.Errorf("inspect git repository at %q: %w: git returned an empty repository root", inputPath, ErrNotRepository)
 	}
 
-	absoluteRoot, err := filepath.Abs(root)
+	canonicalRoot, err := pathutil.CanonicalAbs(root)
 	if err != nil {
 		return "", fmt.Errorf("normalize git repository root %q: %w", root, err)
 	}
-	return filepath.Clean(absoluteRoot), nil
+	return canonicalRoot, nil
 }
 
 func listRemotesWithLogger(ctx context.Context, root string, logger *slog.Logger) ([]Remote, error) {

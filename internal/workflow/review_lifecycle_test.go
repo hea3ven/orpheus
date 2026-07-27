@@ -995,7 +995,7 @@ func testRepoWithLocalOriginAndCandidateChange(t *testing.T) string {
 
 func testRepoWithCandidateChangeOptions(t *testing.T, withOrigin bool) string {
 	t.Helper()
-	repoPath := filepath.Join(t.TempDir(), "repo")
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
 	if err := os.MkdirAll(repoPath, 0o755); err != nil {
 		t.Fatalf("create repo dir: %v", err)
 	}

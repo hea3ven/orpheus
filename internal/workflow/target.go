@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/hea3ven/orpheus/internal/pathutil"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/tasktarget"
@@ -198,13 +199,22 @@ func cleanAbsPath(label string, path string) (string, error) {
 	if !filepath.IsAbs(path) {
 		return "", fmt.Errorf("%s must be absolute, got %q", label, path)
 	}
-	return filepath.Clean(path), nil
+	canonicalPath, err := pathutil.CanonicalAbs(path)
+	if err != nil {
+		return "", fmt.Errorf("normalize %s %q: %w", label, path, err)
+	}
+	return canonicalPath, nil
 }
 
 func cleanPath(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return ""
+	}
+	if filepath.IsAbs(path) {
+		if canonicalPath, err := pathutil.CanonicalAbs(path); err == nil {
+			return canonicalPath
+		}
 	}
 	return filepath.Clean(path)
 }
