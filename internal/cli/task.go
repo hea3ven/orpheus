@@ -51,6 +51,8 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 
 	cmd.AddCommand(
 		newTaskCreateCommand(opts),
+		newTaskStartCommand(opts),
+		newTaskCloseCommand(opts),
 		newTaskListCommand(opts),
 		newTaskReadyCommand(opts),
 		newTaskShowCommand(opts),

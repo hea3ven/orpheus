@@ -7714,6 +7714,226 @@ func TestTaskDoneRetriesPushAndCloseFromRecordedFinalizationCommit(t *testing.T)
 	must.NotNil(facts.ClosedAt)
 }
 
+func TestTaskStartActivatesEligibleEpicAndRejectsOrdinaryTask(t *testing.T) {
+	is := assert.New(t)
+	newTestState(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+	logPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[
+			{"id":"op-epic","title":"Release","status":"open","issue_type":"epic","parent":"op-parent","dependencies":[{"id":"op-dependency","dependency_type":"blocks"}]},
+			{"id":"op-parent","title":"Portfolio","status":"in_progress","issue_type":"epic"},
+			{"id":"op-dependency","title":"Prerequisite","status":"closed","issue_type":"task"}
+		]`},
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "start", "op-epic"})
+
+	is.Empty(stderr)
+	is.Equal("Epic op-epic started.\n", stdout)
+	log := readFileString(t, logPath)
+	is.Equal(4, strings.Count(log, "--json --readonly --sandbox show --id"))
+	is.Contains(log, "--json --sandbox update op-epic --status in_progress")
+
+	newTestState(t)
+	repoDir = registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[{"id":"op-task","title":"Implementation","status":"open","issue_type":"task"}]`},
+	})
+	_, _, err := executeCommandWithError(t, []string{"task", "start", "op-task"})
+	is.Error(err)
+	is.ErrorContains(err, "item is not an epic")
+	is.ErrorContains(err, "use `orpheus task run op-task` for the normal task workflow")
+}
+
+func TestTaskStartHonorsParentDependencyAndIdempotency(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		output  string
+		wantOut string
+		wantErr string
+	}{
+		{
+			name: "parent not active",
+			output: `[
+				{"id":"op-epic","status":"open","issue_type":"epic","parent":"op-parent"},
+				{"id":"op-parent","status":"open","issue_type":"epic"}
+			]`,
+			wantErr: "parent epic op-parent must be in progress",
+		},
+		{
+			name: "dependency remains active",
+			output: `[
+				{"id":"op-epic","status":"open","issue_type":"epic","dependencies":[{"id":"op-dependency","dependency_type":"blocks"}]},
+				{"id":"op-dependency","status":"in_progress","issue_type":"task"}
+			]`,
+			wantErr: "blocking dependencies are not closed: op-dependency",
+		},
+		{
+			name:    "already in progress",
+			output:  `[{"id":"op-epic","status":"in_progress","issue_type":"epic"}]`,
+			wantOut: "Epic op-epic is already in progress.\n",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			newTestState(t)
+			repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+			logPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{repoDir: {stdout: tt.output}})
+
+			stdout, stderr, err := executeCommandWithError(t, []string{"task", "start", "op-epic"})
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("task start error = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("task start error = %v", err)
+			}
+			if stderr != "" || stdout != tt.wantOut {
+				t.Fatalf("task start output = (%q, %q), want (%q, empty)", stdout, stderr, tt.wantOut)
+			}
+			if strings.Contains(readFileString(t, logPath), "--json --sandbox update") {
+				t.Fatal("idempotent start unexpectedly updated the task source")
+			}
+		})
+	}
+}
+
+//nolint:funlen // The cases cover the CLI closure contract end to end.
+func TestTaskCloseRequiresVerifiedClosedChildrenAndIsIdempotent(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		output  string
+		wantOut string
+		wantErr string
+	}{
+		{
+			name: "closes fully completed epic",
+			output: `[
+				{"id":"op-epic","status":"in_progress","issue_type":"epic","child_count":2},
+				{"id":"op-child-a","status":"closed","issue_type":"task","parent":"op-epic"},
+				{"id":"op-child-b","status":"closed","issue_type":"epic","parent":"op-epic"}
+			]`,
+			wantOut: "Epic op-epic closed.\n",
+		},
+		{
+			name: "reports active child ids",
+			output: `[
+				{"id":"op-epic","status":"in_progress","issue_type":"epic","child_count":2},
+				{"id":"op-child-z","status":"open","issue_type":"task","parent":"op-epic"},
+				{"id":"op-child-a","status":"in_progress","issue_type":"task","parent":"op-epic"}
+			]`,
+			wantErr: "direct child items are still active: op-child-a, op-child-z",
+		},
+		{
+			name: "refuses incomplete child listing",
+			output: `[
+				{"id":"op-epic","status":"in_progress","issue_type":"epic","child_count":2},
+				{"id":"op-child","status":"closed","issue_type":"task","parent":"op-epic"}
+			]`,
+			wantErr: "source reports 2 child items but only 1 could be inspected",
+		},
+		{
+			name:    "already closed",
+			output:  `[{"id":"op-epic","status":"closed","issue_type":"epic"}]`,
+			wantOut: "Epic op-epic is already closed.\n",
+		},
+		{
+			name:    "ordinary task uses normal workflow guidance",
+			output:  `[{"id":"op-epic","status":"in_progress","issue_type":"task"}]`,
+			wantErr: "use `orpheus task run op-epic` for the normal task workflow",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			newTestState(t)
+			repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+			logPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{repoDir: {stdout: tt.output}})
+
+			stdout, stderr, err := executeCommandWithError(t, []string{"task", "close", "op-epic"})
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("task close error = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("task close error = %v", err)
+			}
+			if stderr != "" || stdout != tt.wantOut {
+				t.Fatalf("task close output = (%q, %q), want (%q, empty)", stdout, stderr, tt.wantOut)
+			}
+			log := readFileString(t, logPath)
+			if tt.name == "closes fully completed epic" && !strings.Contains(log, "--json --sandbox close op-epic") {
+				t.Fatalf("close command missing from bd log:\n%s", log)
+			}
+			if tt.name == "already closed" && strings.Contains(log, "--json --sandbox close") {
+				t.Fatal("idempotent close unexpectedly updated the task source")
+			}
+		})
+	}
+}
+
+func TestTaskEpicLifecycleAdapterFailuresAreSourceNeutral(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		command   string
+		status    string
+		wantError string
+	}{
+		{name: "start", command: "start", status: "open", wantError: "cannot start epic op-epic"},
+		{name: "close", command: "close", status: "in_progress", wantError: "cannot close epic op-epic"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			newTestState(t)
+			repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+			withFailingEpicLifecycleMutation(t, repoDir, tt.status)
+
+			stdout, stderr, err := executeCommandWithError(t, []string{"task", tt.command, "op-epic"})
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("task %s error = %v, want containing %q", tt.command, err, tt.wantError)
+			}
+			if stdout != "" || stderr != "" {
+				t.Fatalf("task %s output = (%q, %q), want empty", tt.command, stdout, stderr)
+			}
+			for _, forbidden := range []string{"Beads", repoDir, "bd update", "bd close"} {
+				if strings.Contains(err.Error(), forbidden) {
+					t.Errorf("task %s error = %q, must not expose %q", tt.command, err, forbidden)
+				}
+			}
+		})
+	}
+}
+
+func withFailingEpicLifecycleMutation(t *testing.T, repoDir string, status string) {
+	t.Helper()
+
+	binDir := t.TempDir()
+	bdPath := filepath.Join(binDir, "bd")
+	taskJSON := fmt.Sprintf(`[{"id":"op-epic","status":%q,"issue_type":"epic"}]`, status)
+	script := fmt.Sprintf(`#!/bin/sh
+case "$*" in
+  "--json --readonly --sandbox show --id "*)
+    printf '%%s\n' %s
+    ;;
+  "--json --readonly --sandbox list --all --limit 0")
+    printf '%%s\n' %s
+    ;;
+  "--json --sandbox update "*|"--json --sandbox close "*)
+    printf 'Beads mutation failed in %s while running bd %%s\n' "$*" >&2
+    exit 17
+    ;;
+  *)
+    printf 'unexpected bd command: %%s\n' "$*" >&2
+    exit 64
+    ;;
+esac
+`, shellQuote(taskJSON), shellQuote(taskJSON), shellQuote(filepath.Join(repoDir, "backend-data")))
+	if err := os.WriteFile(bdPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake bd: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 func withFakeBDTaskResponses(t *testing.T, responses map[string]fakeBDTaskResponse) string {
 	t.Helper()
 
@@ -7734,7 +7954,7 @@ is_update=0
 case "$*" in
   "--json --readonly --sandbox list --all --limit 0"|"--json --readonly --sandbox show --id "*)
     ;;
-  "--json --sandbox update "*)
+  "--json --sandbox update "*|"--json --sandbox close "*)
     is_update=1
     ;;
   *)
