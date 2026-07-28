@@ -132,6 +132,7 @@ func TestExecuteRunReportsUsageAndCostUnknownWhenSetupFailsBeforeExecution(t *te
 
 func TestExecuteRunReportsUsageAndCostUnknownWhenProvisioningFailsBeforeExecution(t *testing.T) {
 	is := assert.New(t)
+	fakeReviewEvalBD(t)
 	t.Setenv("CODEX_HOME", "relative-codex-home")
 
 	result := executeRun(
@@ -153,6 +154,7 @@ func TestExecuteRunReportsUsageAndCostUnknownWhenProvisioningFailsBeforeExecutio
 func TestPrepareRunInitializesRepoLocalBeadsWhenOperatorBeadsDirIsSet(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
+	fakeReviewEvalBD(t)
 	operatorBeadsDir := filepath.Join(t.TempDir(), "operator-beads")
 	must.NoError(os.MkdirAll(operatorBeadsDir, 0o755))
 	t.Setenv("BEADS_DIR", operatorBeadsDir)
@@ -175,6 +177,7 @@ func TestPrepareRunInitializesRepoLocalBeadsWhenOperatorBeadsDirIsSet(t *testing
 func TestRunPipelineRecordsCodexPromptArgWithEvaluationSessionName(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
+	fakeReviewEvalBD(t)
 	root := t.TempDir()
 	scenarioDef := architectureScenario()
 	spec := runSpec{Harness: HarnessCodex, Variant: VariantLegacy, Scenario: ScenarioArchitecture, Repetition: 1}
@@ -204,6 +207,36 @@ func TestRunPipelineRecordsCodexPromptArgWithEvaluationSessionName(t *testing.T)
 	promptArg := stateResult.execution.Args[len(stateResult.execution.Args)-1]
 	is.NotRegexp(`(?m)^ - `, promptArg)
 	is.Contains(promptArg, stateResult.execution.SessionName+" - ")
+}
+
+func fakeReviewEvalBD(t *testing.T) {
+	t.Helper()
+
+	binDir := t.TempDir()
+	path := filepath.Join(binDir, "bd")
+	const script = `#!/bin/sh
+case "$*" in
+  *" init "*|"init "*)
+    mkdir -p .beads
+    printf 'issue_prefix: op\n' > .beads/config.yaml
+    ;;
+  "--json --sandbox create "*)
+    printf '%s\n' '{"id":"op-eval","title":"Review evaluation task","status":"open","issue_type":"task"}'
+    ;;
+  "--json --readonly --sandbox show --id op-eval")
+    printf '%s\n' '[{"id":"op-eval","title":"Review evaluation task","status":"open","issue_type":"task"}]'
+    ;;
+  "--json --sandbox update op-eval "*)
+    ;;
+  *)
+    printf 'unexpected bd args: %s\n' "$*" >&2
+    exit 64
+    ;;
+esac
+`
+	must := require.New(t)
+	must.NoError(os.WriteFile(path, []byte(script), 0o755))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func TestAggregateResultsReportsUsageTotals(t *testing.T) {

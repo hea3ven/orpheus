@@ -1,4 +1,4 @@
-.PHONY: build test fmt lint check
+.PHONY: build test test-integration fmt lint check
 
 build: check
 	go build ./cmd/orpheus
@@ -6,10 +6,14 @@ build: check
 test:
 	go test ./...
 
+test-integration:
+	@command -v bd >/dev/null 2>&1 || { echo "Beads integration tests require bd; install Beads or ensure bd is on PATH." >&2; exit 1; }
+	go test -tags=integration ./...
+
 fmt:
 	go fmt ./...
 
 lint:
 	golangci-lint run ./...
 
-check: fmt test lint
+check: fmt test test-integration lint
