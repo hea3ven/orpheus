@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/status"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -76,56 +77,132 @@ func runStatus(command *cobra.Command, opts *rootOptions, full bool, noTruncate 
 	return nil
 }
 
+type taskStateReader interface {
+	TaskIDs(repoID string) ([]string, error)
+	Load(repoID, taskID string) (taskstate.TaskState, error)
+}
+
 func taskRunStateIndex(
 	deps *invocationDependencies,
 	snapshot taskmodel.SnapshotResult,
 ) (status.LocalTaskStateIndex, []taskmodel.RepoFailure) {
-	store := deps.taskStateStore
+	return taskRunStateIndexForStore(deps.paths, deps.taskStateStore, snapshot)
+}
+
+func taskRunStateIndexForStore(
+	paths state.Paths,
+	store taskStateReader,
+	snapshot taskmodel.SnapshotResult,
+) (status.LocalTaskStateIndex, []taskmodel.RepoFailure) {
 	index := status.LocalTaskStateIndex{}
 	failures := make([]taskmodel.RepoFailure, 0)
-
 	for _, repoSnapshot := range snapshot.Repositories {
-		for _, taskItem := range repoSnapshot.Tasks {
-			state, err := store.Load(repoSnapshot.Repository.ID, taskItem.ID)
-			if err != nil {
-				failures = append(failures, taskmodel.RepoFailure{
-					Repository: repoSnapshot.Repository,
-					Source:     "task_state",
-					Operation:  "load",
-					Err:        err,
-				})
-				continue
-			}
-			latest, ok := taskstate.LatestRun(state)
-			if !ok {
-				continue
-			}
-			latestCopy := latest
-			target, hasTarget := taskstate.Target(state)
-			expectedTargets, err := tasktarget.ExpectedTargetsForTask(repoSnapshot.Repository, taskItem.ID, deps.paths)
-			latestReview, hasReview := taskstate.LatestReview(state)
-			latestFinalizationFailure, hasFinalizationFailure := taskstate.LatestFinalizationFailure(state)
-			localState := status.LocalTaskState{
-				LatestRun:    &latestCopy,
-				Finalization: taskstate.FinalizationFacts(state),
-			}
-			if hasTarget {
-				targetCopy := target
-				localState.Target = &targetCopy
-			}
-			if hasReview {
-				localState.LatestReview = &latestReview
-			}
-			if hasFinalizationFailure {
-				localState.LatestFinalizationFailure = &latestFinalizationFailure
-			}
-			if err == nil {
-				localState.ExpectedTargets = &expectedTargets
-			}
+		repoIndex, repoFailures := taskRunStateIndexForRepository(paths, store, repoSnapshot)
+		for key, localState := range repoIndex {
+			index[key] = localState
+		}
+		failures = append(failures, repoFailures...)
+	}
+	return index, failures
+}
+
+func taskRunStateIndexForRepository(
+	paths state.Paths,
+	store taskStateReader,
+	repoSnapshot taskmodel.RepositorySnapshot,
+) (status.LocalTaskStateIndex, []taskmodel.RepoFailure) {
+	candidates := status.LocalTaskStateCandidates(repoSnapshot.Repository, repoSnapshot.Tasks)
+	persistedTaskIDs, err := store.TaskIDs(repoSnapshot.Repository.ID)
+	if err != nil {
+		return nil, taskStateInventoryFailure(repoSnapshot.Repository, candidates, err)
+	}
+
+	persisted := taskStateIDSet(persistedTaskIDs)
+	index := status.LocalTaskStateIndex{}
+	failures := make([]taskmodel.RepoFailure, 0)
+	for _, taskItem := range repoSnapshot.Tasks {
+		if !persisted[taskItem.ID] || !candidates[taskItem.ID] {
+			continue
+		}
+		localState, ok, err := loadLocalTaskState(paths, store, repoSnapshot.Repository, taskItem)
+		if err != nil {
+			failures = append(failures, taskStateLoadFailure(repoSnapshot.Repository, err))
+			continue
+		}
+		if ok {
 			index[status.RunStateKey(repoSnapshot.Repository.ID, taskItem.ID)] = localState
 		}
 	}
 	return index, failures
+}
+
+func taskStateInventoryFailure(
+	repository taskmodel.Repository,
+	candidates map[string]bool,
+	err error,
+) []taskmodel.RepoFailure {
+	if len(candidates) == 0 {
+		return nil
+	}
+	return []taskmodel.RepoFailure{{
+		Repository: repository,
+		Source:     "task_state",
+		Operation:  "list",
+		Err:        err,
+	}}
+}
+
+func taskStateIDSet(taskIDs []string) map[string]bool {
+	persisted := make(map[string]bool, len(taskIDs))
+	for _, taskID := range taskIDs {
+		persisted[taskID] = true
+	}
+	return persisted
+}
+
+func taskStateLoadFailure(repository taskmodel.Repository, err error) taskmodel.RepoFailure {
+	return taskmodel.RepoFailure{
+		Repository: repository,
+		Source:     "task_state",
+		Operation:  "load",
+		Err:        err,
+	}
+}
+
+func loadLocalTaskState(
+	paths state.Paths,
+	store taskStateReader,
+	repository taskmodel.Repository,
+	taskItem taskmodel.Task,
+) (status.LocalTaskState, bool, error) {
+	state, err := store.Load(repository.ID, taskItem.ID)
+	if err != nil {
+		return status.LocalTaskState{}, false, err
+	}
+	latest, ok := taskstate.LatestRun(state)
+	if !ok {
+		return status.LocalTaskState{}, false, nil
+	}
+
+	latestCopy := latest
+	localState := status.LocalTaskState{
+		LatestRun:    &latestCopy,
+		Runs:         append([]taskstate.RunAttempt(nil), state.Runs...),
+		Finalization: taskstate.FinalizationFacts(state),
+	}
+	if target, hasTarget := taskstate.Target(state); hasTarget {
+		localState.Target = &target
+	}
+	if latestReview, hasReview := taskstate.LatestReview(state); hasReview {
+		localState.LatestReview = &latestReview
+	}
+	if latestFinalizationFailure, hasFinalizationFailure := taskstate.LatestFinalizationFailure(state); hasFinalizationFailure {
+		localState.LatestFinalizationFailure = &latestFinalizationFailure
+	}
+	if expectedTargets, err := tasktarget.ExpectedTargetsForTask(repository, taskItem.ID, paths); err == nil {
+		localState.ExpectedTargets = &expectedTargets
+	}
+	return localState, true, nil
 }
 
 type statusRenderOptions struct {

@@ -128,6 +128,46 @@ func assertFullStatusGroupOutput(t *testing.T, fullStdout string) {
 	is.Less(strings.Index(header, "TITLE"), strings.Index(header, "DETAIL"))
 }
 
+func TestStatusFullIgnoresCorruptClosedAndPullRequestStates(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoDir := filepath.Join(t.TempDir(), "alpha")
+	must.NoError(os.MkdirAll(repoDir, 0o755))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:          "alpha",
+		Name:        "Alpha Repo",
+		Path:        repoDir,
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "ar",
+	}}}))
+
+	stateStore := taskstate.NewStore(paths)
+	for _, taskID := range []string{"ar-closed", "ar-pr"} {
+		statePath, err := stateStore.Path("alpha", taskID)
+		must.NoError(err)
+		must.NoError(os.MkdirAll(filepath.Dir(statePath), 0o755))
+		must.NoError(os.WriteFile(statePath, []byte("not: [valid"), 0o644))
+	}
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
+		dir:  repoDir,
+		args: "--json --readonly --sandbox list --all --limit 0",
+		stdout: `[
+			{"id":"ar-closed","title":"Closed task","status":"closed","issue_type":"task"},
+			{"id":"ar-pr","title":"PR task","status":"open","issue_type":"task","metadata":{"orpheus.pr_url":"https://example.test/pr/1"}}
+		]`,
+	}})
+
+	stdout, stderr := executeCommand(t, []string{"status", "--full"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "ar-closed")
+	is.Contains(stdout, "ar-pr")
+}
+
 func TestStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)

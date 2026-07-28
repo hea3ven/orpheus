@@ -91,16 +91,19 @@ func renderTaskReviewShow(
 		return err
 	}
 
-	if err := renderLatestReviewAttempt(output, latest); err != nil {
+	if err := renderLatestReviewAttempt(output, taskState, latest); err != nil {
+		return err
+	}
+	if err := renderReviewFollowUpRuns(output, taskState); err != nil {
 		return err
 	}
 	if err := renderCreatedReviewFollowUps(output, taskState); err != nil {
 		return err
 	}
-	return renderReviewNextStep(output, taskID, latest)
+	return renderReviewNextStep(output, taskID, taskState, latest)
 }
 
-func renderLatestReviewAttempt(output io.Writer, review taskstate.ReviewAttempt) error {
+func renderLatestReviewAttempt(output io.Writer, taskState taskstate.TaskState, review taskstate.ReviewAttempt) error {
 	if _, err := fmt.Fprintln(output, "\nLatest authoritative review attempt:"); err != nil {
 		return err
 	}
@@ -125,7 +128,7 @@ func renderLatestReviewAttempt(output io.Writer, review taskstate.ReviewAttempt)
 	if err := renderReviewSteps(output, review.Steps); err != nil {
 		return err
 	}
-	return renderReviewFindings(output, review)
+	return renderReviewFindings(output, taskState, review)
 }
 
 func renderReviewSteps(output io.Writer, steps []taskstate.ReviewStep) error {
@@ -151,7 +154,7 @@ func renderReviewSteps(output io.Writer, steps []taskstate.ReviewStep) error {
 	return nil
 }
 
-func renderReviewFindings(output io.Writer, review taskstate.ReviewAttempt) error {
+func renderReviewFindings(output io.Writer, taskState taskstate.TaskState, review taskstate.ReviewAttempt) error {
 	if _, err := fmt.Fprintln(output, "\nFindings by step:"); err != nil {
 		return err
 	}
@@ -165,7 +168,7 @@ func renderReviewFindings(output io.Writer, review taskstate.ReviewAttempt) erro
 			return err
 		}
 		for _, finding := range group.findings {
-			if err := renderReviewFinding(output, finding); err != nil {
+			if err := renderReviewFinding(output, taskState, finding); err != nil {
 				return err
 			}
 		}
@@ -205,14 +208,14 @@ func groupReviewFindingsByStep(findings []taskstate.ReviewFinding) []reviewFindi
 	return groups
 }
 
-func renderReviewFinding(output io.Writer, indexed indexedReviewFinding) error {
+func renderReviewFinding(output io.Writer, taskState taskstate.TaskState, indexed indexedReviewFinding) error {
 	finding := indexed.finding
 	lines := []string{
 		fmt.Sprintf("    Finding %d:", indexed.index+1),
 		fmt.Sprintf("      Type: %s", formatReviewValue(string(finding.Type))),
 		fmt.Sprintf("      Title: %s", formatReviewValue(finding.Title)),
 		fmt.Sprintf("      Description: %s", formatReviewValue(finding.Description)),
-		fmt.Sprintf("      Resolution: %s", reviewFindingResolution(finding)),
+		fmt.Sprintf("      Resolution: %s", reviewFindingResolution(taskState, finding)),
 	}
 	if strings.TrimSpace(finding.SuggestedAction) != "" {
 		lines = append(lines, fmt.Sprintf("      Suggested action: %s", finding.SuggestedAction))
@@ -225,8 +228,8 @@ func renderReviewFinding(output io.Writer, indexed indexedReviewFinding) error {
 	return nil
 }
 
-func reviewFindingResolution(finding taskstate.ReviewFinding) string {
-	switch taskstate.ResolveReviewFinding(finding) {
+func reviewFindingResolution(taskState taskstate.TaskState, finding taskstate.ReviewFinding) string {
+	switch taskstate.ResolveReviewFindingInState(taskState, finding) {
 	case taskstate.ReviewFindingResolutionAddressedManually:
 		return "addressed manually: " + strings.TrimSpace(finding.AddressedManually)
 	case taskstate.ReviewFindingResolutionWaived:
@@ -244,6 +247,45 @@ func reviewFindingResolution(finding taskstate.ReviewFinding) string {
 	default:
 		return "advisory/non-blocking"
 	}
+}
+
+func renderReviewFollowUpRuns(output io.Writer, taskState taskstate.TaskState) error {
+	if _, err := fmt.Fprintln(output, "\nFollow-up runs:"); err != nil {
+		return err
+	}
+	found := false
+	for _, run := range taskState.Runs {
+		if run.ReviewFollowUp == nil {
+			continue
+		}
+		found = true
+		if _, err := fmt.Fprintf(
+			output,
+			"  - Run attempt %d: %s (review attempt %d, findings %s)\n",
+			run.Attempt,
+			formatReviewValue(string(run.Status)),
+			run.ReviewFollowUp.ReviewAttempt,
+			formatReviewFindingIndexes(run.ReviewFollowUp.FindingIndexes),
+		); err != nil {
+			return err
+		}
+	}
+	if !found {
+		_, err := fmt.Fprintln(output, "  (none recorded)")
+		return err
+	}
+	return nil
+}
+
+func formatReviewFindingIndexes(indexes []int) string {
+	if len(indexes) == 0 {
+		return "-"
+	}
+	formatted := make([]string, 0, len(indexes))
+	for _, index := range indexes {
+		formatted = append(formatted, fmt.Sprintf("%d", index+1))
+	}
+	return strings.Join(formatted, ", ")
 }
 
 func renderCreatedReviewFollowUps(output io.Writer, taskState taskstate.TaskState) error {
@@ -309,7 +351,7 @@ func createdReviewFollowUps(taskState taskstate.TaskState) []createdReviewFollow
 	return followUps
 }
 
-func renderReviewNextStep(output io.Writer, taskID string, review taskstate.ReviewAttempt) error {
+func renderReviewNextStep(output io.Writer, taskID string, taskState taskstate.TaskState, review taskstate.ReviewAttempt) error {
 	switch review.Status {
 	case taskstate.ReviewStatusWaitingForManual:
 		_, err := fmt.Fprintf(
@@ -328,7 +370,7 @@ func renderReviewNextStep(output io.Writer, taskID string, review taskstate.Revi
 			)
 			return err
 		}
-		if taskstate.HasUnkeptAutomatedBlockingFindings(review) {
+		if taskstate.HasUnkeptAutomatedBlockingFindingsInState(taskState, review) {
 			_, err := fmt.Fprintf(
 				output,
 				"\nNext step: automated blockers need operator decisions; run `orpheus task review %s` to start a fresh review.\n",
@@ -344,7 +386,16 @@ func renderReviewNextStep(output io.Writer, taskID string, review taskstate.Revi
 			)
 			return err
 		}
-		if taskstate.ReviewHasOpenBlockers(review) {
+		if taskstate.ReviewHasOpenBlockersInState(taskState, review) {
+			if taskstate.HasFailedReviewFollowUpTargets(taskState, review) {
+				_, err := fmt.Fprintf(
+					output,
+					"\nNext step: retry `orpheus task run %s` to address open blocking findings, then rerun `orpheus task review %s`.\n",
+					taskID,
+					taskID,
+				)
+				return err
+			}
 			_, err := fmt.Fprintf(
 				output,
 				"\nNext step: run `orpheus task run %s` to address open blocking findings, then rerun `orpheus task review %s`.\n",

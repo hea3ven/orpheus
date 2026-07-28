@@ -142,6 +142,7 @@ type RunStateIndex map[string]taskstate.RunAttempt
 // LocalTaskState contains local Orpheus facts used by status projection.
 type LocalTaskState struct {
 	LatestRun                 *taskstate.RunAttempt
+	Runs                      []taskstate.RunAttempt
 	Target                    *taskstate.TaskTarget
 	LatestReview              *taskstate.ReviewAttempt
 	LatestFinalizationFailure *taskstate.Event
@@ -239,6 +240,53 @@ func ReadyRowsWithLocalTaskStates(snapshot task.SnapshotResult, localStates Loca
 // RunStateKey returns the stable lookup key for RunStateIndex.
 func RunStateKey(repoID, taskID string) string {
 	return repoID + "\x00" + taskID
+}
+
+// LocalTaskStateCandidates returns task IDs whose persisted local state can
+// affect their status projection. Callers should use this after inventorying
+// local state so tasks without persisted state never require an individual read.
+func LocalTaskStateCandidates(repository task.Repository, tasks []task.Task) map[string]bool {
+	index := newRepositoryIndex(tasks)
+	candidates := make(map[string]bool)
+	for _, taskItem := range tasks {
+		if localTaskStateCanAffectProjection(repository, taskItem, index) {
+			candidates[taskItem.ID] = true
+		}
+	}
+	return candidates
+}
+
+func localTaskStateCanAffectProjection(
+	repository task.Repository,
+	taskItem task.Task,
+	index map[string]task.Task,
+) bool {
+	metadata := taskItem.OrpheusMetadata()
+	if taskItem.Status == task.StatusClosed || (metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "") {
+		return false
+	}
+
+	if metadata.HasBranch && strings.TrimSpace(metadata.Branch) != "" &&
+		metadata.HasWorktree && strings.TrimSpace(metadata.Worktree) != "" {
+		return true
+	}
+
+	switch taskItem.Status {
+	case task.StatusInProgress:
+		return true
+	case task.StatusOpen:
+		if _, blocked := classifyParentEpicGate(taskItem, index); blocked {
+			return false
+		}
+		if publication.RequiresExternalRef(repository.TitleTemplate) && strings.TrimSpace(taskItem.ExternalRef) == "" {
+			return false
+		}
+		deps := dependencyIDs(taskItem)
+		missingDetail, _ := missingDependencyDetail(taskItem, deps, index)
+		return missingDetail == "" && len(openDependencyIDs(deps, index)) == 0
+	default:
+		return false
+	}
 }
 
 func projectRepository(projection *Projection, repoSnapshot task.RepositorySnapshot, localStates LocalTaskStateIndex) {
@@ -388,7 +436,7 @@ func classifyExpectedReviewReady(
 	}
 	if _, ok := workflow.ClassifyExpectedPRReviewReady(*expectedTargets, taskItem, *taskTarget, latestRun); ok {
 		if localState != nil {
-			if result, ok := classifyLatestReview(localState.LatestReview, localState.LatestFinalizationFailure); ok {
+			if result, ok := classifyLatestReview(localState.Runs, localState.LatestReview, localState.LatestFinalizationFailure); ok {
 				return result, true
 			}
 		}
@@ -398,7 +446,7 @@ func classifyExpectedReviewReady(
 		return policyResult{}, false
 	}
 	if localState != nil {
-		if result, ok := classifyLatestReview(localState.LatestReview, localState.LatestFinalizationFailure); ok {
+		if result, ok := classifyLatestReview(localState.Runs, localState.LatestReview, localState.LatestFinalizationFailure); ok {
 			return result, true
 		}
 	}
@@ -413,6 +461,7 @@ func classifyExpectedReviewReady(
 }
 
 func classifyLatestReview(
+	runs []taskstate.RunAttempt,
 	latestReview *taskstate.ReviewAttempt,
 	latestFinalizationFailure *taskstate.Event,
 ) (policyResult, bool) {
@@ -435,7 +484,7 @@ func classifyLatestReview(
 			Detail{Kind: DetailReviewManualStep, Step: step},
 		), true
 	case taskstate.ReviewStatusBlocked:
-		return classifyBlockedReview(*latestReview), true
+		return classifyBlockedReview(taskstate.TaskState{Runs: runs}, *latestReview), true
 	case taskstate.ReviewStatusAborted:
 		return newPolicyResult(
 			readinessReview,
@@ -471,8 +520,8 @@ func classifyLatestReview(
 	}
 }
 
-func classifyBlockedReview(review taskstate.ReviewAttempt) policyResult {
-	count := untargetedBlockingFindingCount(review)
+func classifyBlockedReview(state taskstate.TaskState, review taskstate.ReviewAttempt) policyResult {
+	count := untargetedBlockingFindingCount(state, review)
 	if review.AutomatedBlockerDecisionInterrupted {
 		return newPolicyResult(
 			readinessReview,
@@ -480,7 +529,7 @@ func classifyBlockedReview(review taskstate.ReviewAttempt) policyResult {
 			Detail{Kind: DetailReviewDecisionLost},
 		)
 	}
-	if taskstate.HasUnkeptAutomatedBlockingFindings(review) {
+	if taskstate.HasUnkeptAutomatedBlockingFindingsInState(state, review) {
 		return newPolicyResult(
 			readinessReview,
 			"review blocker decision required; run task review",
@@ -497,6 +546,13 @@ func classifyBlockedReview(review taskstate.ReviewAttempt) policyResult {
 			Detail{Kind: DetailReviewBudgetSpent, Count: count},
 		)
 	}
+	if taskstate.HasFailedReviewFollowUpTargets(state, review) {
+		return newPolicyResult(
+			readinessIdle,
+			"review follow-up failed; retry task run",
+			Detail{Kind: DetailReviewFindings, Count: count},
+		)
+	}
 	if count == 0 {
 		return newPolicyResult(
 			readinessReview,
@@ -511,8 +567,8 @@ func classifyBlockedReview(review taskstate.ReviewAttempt) policyResult {
 	)
 }
 
-func untargetedBlockingFindingCount(review taskstate.ReviewAttempt) int {
-	return len(taskstate.UntargetedBlockingFindingIndexes(review))
+func untargetedBlockingFindingCount(state taskstate.TaskState, review taskstate.ReviewAttempt) int {
+	return len(taskstate.UntargetedBlockingFindingIndexesInState(state, review))
 }
 
 func classifyInProgress(latestRun *taskstate.RunAttempt) policyResult {

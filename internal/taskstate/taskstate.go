@@ -905,7 +905,9 @@ func (s Store) TargetReviewFindings(
 			return ReviewAttempt{}, fmt.Errorf("target review findings for task %s/%s: finding index %d is out of range", repoID, taskID, findingIndex)
 		}
 		finding := state.Reviews[reviewIndex].Findings[findingIndex]
-		if finding.TargetedByRunAttempt != 0 && finding.TargetedByRunAttempt != runAttempt {
+		if finding.TargetedByRunAttempt != 0 &&
+			finding.TargetedByRunAttempt != runAttempt &&
+			!ReviewFindingTargetedByFailedRun(state, finding) {
 			return ReviewAttempt{}, fmt.Errorf(
 				"target review findings for task %s/%s: finding index %d is already targeted by run attempt %d",
 				repoID,
@@ -1784,6 +1786,37 @@ func IsOpenBlockingReviewFinding(finding ReviewFinding) bool {
 		ResolveReviewFinding(finding) == ReviewFindingResolutionOpen
 }
 
+// ResolveReviewFindingInState classifies a finding using the current run state.
+// A failed follow-up is an unsuccessful claim: its finding remains open for retry.
+func ResolveReviewFindingInState(state TaskState, finding ReviewFinding) ReviewFindingResolution {
+	if ReviewFindingTargetedByFailedRun(state, finding) {
+		finding.TargetedByRunAttempt = 0
+	}
+	return ResolveReviewFinding(finding)
+}
+
+// ReviewFindingTargetedByFailedRun reports whether a finding's recorded target
+// refers to a failed run. The run's ReviewFollowUp retains the audit association
+// even when a later retry replaces the finding's current target pointer.
+func ReviewFindingTargetedByFailedRun(state TaskState, finding ReviewFinding) bool {
+	if finding.TargetedByRunAttempt <= 0 {
+		return false
+	}
+	for _, run := range state.Runs {
+		if run.Attempt == finding.TargetedByRunAttempt {
+			return run.Status == RunStatusFailed
+		}
+	}
+	return false
+}
+
+// IsOpenBlockingReviewFindingInState reports whether a finding currently blocks
+// progress after accounting for failed follow-up claims.
+func IsOpenBlockingReviewFindingInState(state TaskState, finding ReviewFinding) bool {
+	return finding.Type == FindingTypeBlocking &&
+		ResolveReviewFindingInState(state, finding) == ReviewFindingResolutionOpen
+}
+
 // IsOpenAdvisoryReviewFinding reports whether an advisory can still be promoted or acted on.
 func IsOpenAdvisoryReviewFinding(finding ReviewFinding) bool {
 	return finding.Type == FindingTypeAdvisory &&
@@ -1809,6 +1842,35 @@ func UntargetedBlockingFindingIndexes(review ReviewAttempt) []int {
 		}
 	}
 	return indexes
+}
+
+// ReviewHasOpenBlockersInState reports whether an attempt has blockers after
+// failed follow-up claims are made retryable.
+func ReviewHasOpenBlockersInState(state TaskState, review ReviewAttempt) bool {
+	return len(UntargetedBlockingFindingIndexesInState(state, review)) > 0
+}
+
+// UntargetedBlockingFindingIndexesInState returns open blocker indexes after
+// failed follow-up claims are made retryable.
+func UntargetedBlockingFindingIndexesInState(state TaskState, review ReviewAttempt) []int {
+	indexes := make([]int, 0)
+	for index, finding := range review.Findings {
+		if IsOpenBlockingReviewFindingInState(state, finding) {
+			indexes = append(indexes, index)
+		}
+	}
+	return indexes
+}
+
+// HasFailedReviewFollowUpTargets reports whether any review finding is claimed
+// by a failed follow-up run and is therefore ready for retry.
+func HasFailedReviewFollowUpTargets(state TaskState, review ReviewAttempt) bool {
+	for _, finding := range review.Findings {
+		if ReviewFindingTargetedByFailedRun(state, finding) {
+			return true
+		}
+	}
+	return false
 }
 
 // UntargetedAutomatedBlockingFindingIndexes returns open blocker indexes that
@@ -1846,6 +1908,39 @@ func UntargetedBlockingFindingIndexesForFollowUp(review ReviewAttempt) ([]int, b
 		return nil, false
 	}
 	return UntargetedBlockingFindingIndexes(review), true
+}
+
+// UntargetedBlockingFindingIndexesForFollowUpInState returns follow-up eligible
+// blocker indexes after failed follow-up claims are made retryable.
+func UntargetedBlockingFindingIndexesForFollowUpInState(state TaskState, review ReviewAttempt) ([]int, bool) {
+	if HasUnkeptAutomatedBlockingFindingsInState(state, review) {
+		return nil, false
+	}
+	return UntargetedBlockingFindingIndexesInState(state, review), true
+}
+
+// HasUnkeptAutomatedBlockingFindingsInState reports whether open automated
+// blockers still need an operator decision after failed targets are retried.
+func HasUnkeptAutomatedBlockingFindingsInState(state TaskState, review ReviewAttempt) bool {
+	return !review.AutomatedBlockerDecisionKept &&
+		len(UntargetedAutomatedBlockingFindingIndexesInState(state, review)) > 0
+}
+
+// UntargetedAutomatedBlockingFindingIndexesInState returns automated blockers
+// that still require an operator decision, excluding failed follow-up claims.
+func UntargetedAutomatedBlockingFindingIndexesInState(state TaskState, review ReviewAttempt) []int {
+	if currentReviewStepKind(review) == ReviewStepKindManual {
+		return nil
+	}
+	automatedSteps := automatedReviewStepNames(review)
+	indexes := make([]int, 0)
+	for _, index := range UntargetedBlockingFindingIndexesInState(state, review) {
+		finding := review.Findings[index]
+		if automatedSteps[finding.Step] && !ReviewFindingTargetedByFailedRun(state, finding) {
+			indexes = append(indexes, index)
+		}
+	}
+	return indexes
 }
 
 func automatedReviewStepNames(review ReviewAttempt) map[string]bool {
