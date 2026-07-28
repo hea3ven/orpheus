@@ -36,8 +36,12 @@ type TaskRunRoute struct {
 // SelectTaskRunRoute maps the persisted implement-review-fix-finalize state to
 // exactly one safe next action. It deliberately does not perform any mutation.
 func SelectTaskRunRoute(taskItem task.Task, state taskstate.TaskState) (TaskRunRoute, error) {
+	if taskItem.Status == task.StatusClosed {
+		return TaskRunRoute{}, fmt.Errorf("task %s is closed", taskItem.ID)
+	}
+
 	finalization := taskstate.FinalizationFacts(state)
-	if taskItem.Status == task.StatusClosed || finalization.ClosedAt != nil {
+	if finalization.ClosedAt != nil {
 		return TaskRunRoute{Action: TaskRunActionCompleted}, nil
 	}
 
