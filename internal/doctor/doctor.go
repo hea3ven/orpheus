@@ -304,7 +304,9 @@ func hasRecoverableUsageDetails(execution taskstate.AgentExecution) bool {
 
 func taskExecutionDirs(repo registry.Repo, taskState taskstate.TaskState) []string {
 	dirs := make([]string, 0, 2)
-	dirs = appendTaskExecutionDir(dirs, taskState.Target.Worktree)
+	if facts, ok := taskstate.GitFactsFor(taskState); ok {
+		dirs = appendTaskExecutionDir(dirs, facts.Worktree)
+	}
 	if len(dirs) == 0 {
 		dirs = appendTaskExecutionDir(dirs, repo.Path)
 	}
@@ -318,7 +320,9 @@ func syncConflictExecutionDirGroups(
 ) [][]string {
 	primary := appendTaskExecutionDir(nil, event.Worktree)
 	fallbacks := make([]string, 0, 2)
-	fallbacks = appendTaskExecutionDir(fallbacks, taskState.Target.Worktree)
+	if facts, ok := taskstate.GitFactsFor(taskState); ok {
+		fallbacks = appendTaskExecutionDir(fallbacks, facts.Worktree)
+	}
 	fallbacks = appendTaskExecutionDir(fallbacks, repo.Path)
 	fallbacks = removeTaskExecutionDirs(fallbacks, primary)
 

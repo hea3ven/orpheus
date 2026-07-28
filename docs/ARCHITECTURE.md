@@ -11,7 +11,7 @@ The architecture uses a pragmatic layered structure:
 - `internal/task`, `internal/taskstate`, `internal/tasktarget`, `internal/readiness`, `internal/status`, and `internal/publication` define the core models, policies, state transitions, and operator-facing projections.
 - `internal/beads`, `internal/git`, and `internal/pullrequest` adapt external command-line tools. `internal/registry`, `internal/state`, and `internal/logging` provide local infrastructure.
 
-State ownership is intentionally split. The configured task backend, currently Beads, is authoritative for task lifecycle data such as task identity, status, relations, and Orpheus workflow pointers stored in task metadata. Orpheus owns the repository registry and per-task execution history, including targets, agent runs, completions, reviews, finalization facts, and audit events. Orpheus persists its state as human-readable YAML below the XDG config and data roots.
+State ownership is intentionally split. The configured task backend, currently Beads, is authoritative for task lifecycle data such as task identity, status, relations, and evolving Orpheus Git facts stored in task metadata. Orpheus owns the repository registry and per-task execution history, including the immutable work-directory selection, agent runs, completions, reviews, finalization facts, and audit events. Orpheus persists its state as human-readable YAML below the XDG config and data roots.
 
 The main runtime integrations are the `bd`, `git`, and `gh` executables, configured agent executables, and optional review tools such as Hunk. The primary Go dependencies are Cobra for the command tree and `yaml.v3` for configuration and state files.
 
@@ -19,10 +19,10 @@ The main runtime integrations are the `bd`, `git`, and `gh` executables, configu
 
 1. `internal/cli` resolves XDG paths and loads the registered repository catalog.
 2. A task ID is mapped to a repository and Beads workspace through `internal/task` and `internal/registry`; `internal/beads` supplies the task data.
-3. `internal/workflow` validates readiness, uses `internal/tasktarget` policy to reconcile the deterministic execution target, prepares that target through `internal/git`, updates backend metadata, and records a run in `internal/taskstate`.
+3. `internal/workflow` validates readiness, selects an immutable Work Directory, prepares it through `internal/git`, updates backend Git facts, and records a run in `internal/taskstate`. Worktree dispatch creates the deterministic Task Branch immediately; repository-root dispatch starts clean on the default branch and materializes that Task Branch only after review for pull-request publication.
 4. `internal/agent` resolves a configured profile and renders its validated context; `internal/agentexec` launches the attached process; `internal/agent` records completion and Codex usage facts.
 5. `internal/review` executes the selected read-only review pipeline, launches review-agent steps through `internal/agentexec`, and persists steps and findings in `internal/taskstate`.
-6. After a passed review, `internal/workflow` commits and publishes the reviewed changes. Default-branch work is pushed and closed directly; feature-branch work is pushed and opened as a pull request.
+6. After a passed review, `internal/workflow` commits and publishes reviewed changes on the deterministic Task Branch, then opens or recovers a pull request. Repository-root work materializes that branch at this boundary.
 7. Later sync commands poll recorded pull requests, update open task branches from the registered default branch, close merged backend tasks, and add local audit events. `internal/status` combines backend snapshots with Orpheus-owned state into the operator action queue.
 
 The independent `doctor` flow scans registered repositories and Orpheus-owned task state for recoverable local inconsistencies. Its first diagnostic correlates missing supported harness usage facts, currently Codex and Pi, for implementation, review-agent, and terminal sync-conflict resolution executions with local session logs and mutates task state only when the operator supplies `--fix` and the match is safe.
@@ -135,7 +135,7 @@ In dependency-direction terms, `internal/state`, `internal/task`, `internal/publ
 ### `internal/git`
 
 - Adapts local Git operations used by the application, including repository inspection, remote and default-branch discovery, branch and working-tree checks, staging, commits, and pushes.
-- Computes, creates, validates, reuses, or recovers the supported deterministic execution targets: dedicated task worktrees, repo-root task branches, and the repo-root default branch. It conservatively rejects dirty, divergent, or mismatched Git state before unsafe mutations.
+- Computes, creates, validates, reuses, or recovers deterministic worktrees and Task Branches. It prepares repository-root work on a clean default-branch checkout, then materializes the Task Branch while retaining reviewed changes immediately before pull-request publication. It conservatively rejects dirty, divergent, or mismatched Git state before unsafe mutations.
 
 ### `internal/logging`
 
@@ -182,7 +182,7 @@ In dependency-direction terms, `internal/state`, `internal/task`, `internal/publ
 
 ### `internal/taskstate`
 
-- Owns the versioned, per-task Orpheus execution aggregate stored at `repos/<repo-id>/tasks/<task-id>.yaml`, including the locked target, agent runs and usage, completion handoffs, review attempts and findings, finalization facts, and audit events.
+- Owns the versioned, per-task Orpheus execution aggregate stored at `repos/<repo-id>/tasks/<task-id>.yaml`, including the immutable Work Directory, reconciled legacy Git facts, agent runs and usage, completion handoffs, review attempts and findings, finalization facts, and audit events.
 - Provides validated and mostly idempotent state transitions for run, review, finding-resolution, publication, closure, and failure recording, together with query helpers for the latest or active lifecycle facts.
 
 ### `internal/tasktarget`
@@ -193,7 +193,7 @@ In dependency-direction terms, `internal/state`, `internal/task`, `internal/publ
 ### `internal/workflow`
 
 - Classifies review lifecycles and completion readiness while consuming `internal/tasktarget` for execution-target identity, expected-target calculation, and target-fact reconciliation.
-- Orchestrates the task lifecycle through narrow backend, Git, PR-provider, and run-store contracts: dispatch and retry setup, attached-run outcomes, review follow-up targeting, review-gated default-branch finalization, feature-branch publication, open-PR branch updates, PR polling, merged-task closure, and batch sync.
+- Orchestrates the task lifecycle through narrow backend, Git, PR-provider, and run-store contracts: dispatch and retry setup, attached-run outcomes, review follow-up targeting, review-gated Task Branch materialization and pull-request publication from either Work Directory, open-PR branch updates, PR polling, merged-task closure, and batch sync.
 - Builds publication handoffs from task data and persisted completion/review history, including repository title policy and configurable concise review-process details for pull requests.
 
 ## Evolution Decisions

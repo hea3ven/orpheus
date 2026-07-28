@@ -30,9 +30,8 @@ func TestAgentContextRendersValidatedWorktreeContext(t *testing.T) {
 		"- Name: Alpha Repo",
 		"- Registered root: " + repoPath,
 		"- Registered default branch: main",
-		"- Workflow: worktree/team",
-		"- Branch: orpheus/op-1",
-		"- Path: " + worktreePath,
+		"- Current branch: orpheus/op-1",
+		"- Work Directory: " + worktreePath,
 		"- Current directory: " + cwd,
 		"- Run attempt: 1",
 		"- Agent: recorder",
@@ -78,9 +77,8 @@ func TestAgentContextRendersRepoRootFeatureBranchContext(t *testing.T) {
 
 	is.Empty(stderr)
 	for _, want := range []string{
-		"- Workflow: repo-root/team",
-		"- Branch: orpheus/op-root",
-		"- Path: " + repoPath,
+		"- Current branch: orpheus/op-root",
+		"- Work Directory: " + repoPath,
 		"registered repository root on the task branch",
 		"orpheus agent done",
 		"PR-ready completion data for feature-branch publication",
@@ -127,7 +125,6 @@ func TestAgentContextRendersReviewContext(t *testing.T) {
 		"- ID: op-review",
 		"- Title: Ready for task done",
 		"- Registered root: " + repoPath,
-		"- Workflow: main/solo",
 		"- Review attempt: 1",
 		"- Review step: ai-review",
 		"Latest completion:",

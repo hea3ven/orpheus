@@ -190,8 +190,8 @@ func loadLocalTaskState(
 		Runs:         append([]taskstate.RunAttempt(nil), state.Runs...),
 		Finalization: taskstate.FinalizationFacts(state),
 	}
-	if target, hasTarget := taskstate.Target(state); hasTarget {
-		localState.Target = &target
+	if target, hasTarget := taskstate.GitFactsFor(state); hasTarget {
+		localState.GitFacts = &target
 	}
 	if latestReview, hasReview := taskstate.LatestReview(state); hasReview {
 		localState.LatestReview = &latestReview

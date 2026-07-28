@@ -251,9 +251,8 @@ func SetupRepoRoot(ctx context.Context, opts RepoRootOptions) (TaskWorktreeSetup
 
 // SetupRepoRootTaskBranch prepares the registered repo root on the deterministic task branch.
 //
-// It refuses to mutate the checkout until the repo root is clean, creates the
-// task branch from origin/default when needed, and switches the registered repo
-// root onto that branch. No deterministic task worktree is created for this mode.
+// This is retained to resume persisted repository-root task-branch runs
+// created before dispatch and publication were decoupled.
 func SetupRepoRootTaskBranch(ctx context.Context, opts TaskWorktreeOptions) (TaskWorktreeSetupResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -295,6 +294,114 @@ func SetupRepoRootTaskBranch(ctx context.Context, opts TaskWorktreeOptions) (Tas
 	}
 
 	return result, nil
+}
+
+// ValidateMaterializedRepoRootTaskBranchRetry validates the narrow recovery
+// window after repository-root branch materialization but before publication
+// records its commit. It refuses a stale or divergent deterministic branch.
+func ValidateMaterializedRepoRootTaskBranchRetry(ctx context.Context, opts TaskWorktreeOptions) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	plan, err := newTaskWorktreePlan(opts)
+	if err != nil {
+		return err
+	}
+	repoRoot, err := validateRepoRootTaskBranchRun(ctx, plan, true)
+	if err != nil {
+		return err
+	}
+	if err := requireCurrentBranch(ctx, repoRoot, plan.Branch, "task branch"); err != nil {
+		return fmt.Errorf("validate materialized repo-root task branch %s: %w", plan.TaskID, err)
+	}
+	if err := validateCurrentRepoRootTaskBranchRetry(ctx, repoRoot, plan); err != nil {
+		return fmt.Errorf("validate materialized repo-root task branch %s: %w", plan.TaskID, err)
+	}
+	return nil
+}
+
+// MaterializeRepoRootTaskBranch creates or checks out the deterministic task
+// branch from a repository-root implementation checkout. It deliberately keeps
+// uncommitted reviewed changes in place so publication can commit them on the
+// task branch. Initial dispatch must already have prepared the clean default
+// branch; this operation never fetches or fast-forwards it.
+func MaterializeRepoRootTaskBranch(ctx context.Context, opts TaskWorktreeOptions) (TaskWorktreeSetupResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	plan, err := newTaskWorktreePlan(opts)
+	if err != nil {
+		return TaskWorktreeSetupResult{}, err
+	}
+	repoRoot, err := validateRepoRootTaskBranchRun(ctx, plan, true)
+	if err != nil {
+		return TaskWorktreeSetupResult{}, err
+	}
+
+	current, err := currentBranchAt(ctx, repoRoot)
+	if err != nil {
+		return TaskWorktreeSetupResult{}, fmt.Errorf("materialize repo-root task branch %s: inspect current branch: %w", plan.TaskID, err)
+	}
+	if current == plan.Branch {
+		if err := validateCurrentRepoRootTaskBranchRetry(ctx, repoRoot, plan); err != nil {
+			return TaskWorktreeSetupResult{}, fmt.Errorf("materialize repo-root task branch %s: %w", plan.TaskID, err)
+		}
+		return TaskWorktreeSetupResult{Branch: plan.Branch, WorktreePath: plan.RepoPath, Lifecycle: TaskWorktreeLifecycleReused}, nil
+	}
+	if current != plan.DefaultBranch {
+		return TaskWorktreeSetupResult{}, fmt.Errorf(
+			"materialize repo-root task branch %s: repo root is on branch %q, expected default branch %q or task branch %q",
+			plan.TaskID,
+			current,
+			plan.DefaultBranch,
+			plan.Branch,
+		)
+	}
+
+	return materializeRepoRootTaskBranchFromDefault(ctx, repoRoot, plan)
+}
+
+func materializeRepoRootTaskBranchFromDefault(
+	ctx context.Context,
+	repoRoot string,
+	plan taskWorktreePlan,
+) (TaskWorktreeSetupResult, error) {
+	branchExists, err := localBranchExists(ctx, repoRoot, plan.Branch)
+	if err != nil {
+		return TaskWorktreeSetupResult{}, fmt.Errorf("materialize repo-root task branch %s: %w", plan.TaskID, err)
+	}
+	if branchExists {
+		if err := validateReusableRepoRootTaskBranch(ctx, repoRoot, plan.Branch); err != nil {
+			return TaskWorktreeSetupResult{}, fmt.Errorf("materialize repo-root task branch %s: %w", plan.TaskID, err)
+		}
+		if err := checkoutTaskBranch(ctx, repoRoot, plan.Branch); err != nil {
+			return TaskWorktreeSetupResult{}, fmt.Errorf("materialize repo-root task branch %s: %w", plan.TaskID, err)
+		}
+		return TaskWorktreeSetupResult{Branch: plan.Branch, WorktreePath: plan.RepoPath, Lifecycle: TaskWorktreeLifecycleReused}, nil
+	}
+
+	remoteExists, err := fetchTaskBranch(ctx, repoRoot, plan.Branch)
+	if err != nil {
+		return TaskWorktreeSetupResult{}, fmt.Errorf("materialize repo-root task branch %s: %w", plan.TaskID, err)
+	}
+	if remoteExists {
+		if err := validateRepoRootTaskBranchRefAtHEAD(ctx, repoRoot, "remote", "refs/remotes/origin/"+plan.Branch); err != nil {
+			return TaskWorktreeSetupResult{}, fmt.Errorf("materialize repo-root task branch %s: %w", plan.TaskID, err)
+		}
+		output, err := runGitContext(ctx, repoRoot, "checkout", "--track", "-b", plan.Branch, "origin/"+plan.Branch)
+		if err != nil {
+			return TaskWorktreeSetupResult{}, fmt.Errorf("materialize repo-root task branch %s: checkout existing origin task branch %q: %w%s", plan.TaskID, plan.Branch, err, gitOutputSuffix(output))
+		}
+		return TaskWorktreeSetupResult{Branch: plan.Branch, WorktreePath: plan.RepoPath, Lifecycle: TaskWorktreeLifecycleReused}, nil
+	}
+
+	output, err := runGitContext(ctx, repoRoot, "checkout", "-b", plan.Branch)
+	if err != nil {
+		return TaskWorktreeSetupResult{}, fmt.Errorf("materialize repo-root task branch %s: create task branch %q: %w%s", plan.TaskID, plan.Branch, err, gitOutputSuffix(output))
+	}
+	return TaskWorktreeSetupResult{Branch: plan.Branch, WorktreePath: plan.RepoPath, Lifecycle: TaskWorktreeLifecycleTaskBranchCreated}, nil
 }
 
 // SyncTaskBranchWithDefault fetches origin branches, merges default into a clean task branch, and pushes the branch.
@@ -1041,6 +1148,79 @@ func requireOriginRemoteFor(ctx context.Context, repoRoot string, purpose string
 	return nil
 }
 
+// validateReusableRepoRootTaskBranch permits reuse only of an unmodified task
+// branch. A first repository-root dispatch starts from the reviewed default
+// branch, so an existing deterministic branch must point at that exact HEAD.
+// A remote copy is checked as well; any divergence could publish unrelated
+// commits with the reviewed change and is rejected rather than reset.
+// validateCurrentRepoRootTaskBranchRetry accepts only the retry window after
+// materialization but before committing. The task ref and any remote ref must
+// still equal the local default ref that was reviewed at dispatch.
+func validateCurrentRepoRootTaskBranchRetry(ctx context.Context, repoRoot string, plan taskWorktreePlan) error {
+	if err := validateRepoRootTaskBranchRefMatches(ctx, repoRoot, "local", "refs/heads/"+plan.Branch, "refs/heads/"+plan.DefaultBranch); err != nil {
+		return err
+	}
+	remoteExists, err := fetchTaskBranch(ctx, repoRoot, plan.Branch)
+	if err != nil {
+		return err
+	}
+	if !remoteExists {
+		return nil
+	}
+	return validateRepoRootTaskBranchRefMatches(ctx, repoRoot, "remote", "refs/remotes/origin/"+plan.Branch, "refs/heads/"+plan.DefaultBranch)
+}
+
+func validateReusableRepoRootTaskBranch(ctx context.Context, repoRoot string, branch string) error {
+	if err := validateRepoRootTaskBranchRefAtHEAD(ctx, repoRoot, "local", "refs/heads/"+branch); err != nil {
+		return err
+	}
+	remoteExists, err := fetchTaskBranch(ctx, repoRoot, branch)
+	if err != nil {
+		return err
+	}
+	if !remoteExists {
+		return nil
+	}
+	return validateRepoRootTaskBranchRefAtHEAD(ctx, repoRoot, "remote", "refs/remotes/origin/"+branch)
+}
+
+func validateRepoRootTaskBranchRefAtHEAD(ctx context.Context, repoRoot string, scope string, ref string) error {
+	return validateRepoRootTaskBranchRefMatches(ctx, repoRoot, scope, ref, "HEAD")
+}
+
+func validateRepoRootTaskBranchRefMatches(ctx context.Context, repoRoot string, scope string, ref string, expectedRef string) error {
+	expectedHead, err := gitRefCommit(ctx, repoRoot, expectedRef)
+	if err != nil {
+		return fmt.Errorf("read reviewed default-branch ref %q: %w", expectedRef, err)
+	}
+	branchHead, err := gitRefCommit(ctx, repoRoot, ref)
+	if err != nil {
+		return fmt.Errorf("read %s task branch ref %q: %w", scope, ref, err)
+	}
+	if branchHead != expectedHead {
+		return fmt.Errorf(
+			"%s deterministic task branch %q is at %s, but reviewed default branch is %s; refusing to reuse divergent branch",
+			scope,
+			strings.TrimPrefix(strings.TrimPrefix(ref, "refs/heads/"), "refs/remotes/origin/"),
+			branchHead,
+			expectedHead,
+		)
+	}
+	return nil
+}
+
+func gitRefCommit(ctx context.Context, dir string, ref string) (string, error) {
+	output, err := runGitContext(ctx, dir, "rev-parse", "--verify", ref+"^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("resolve ref: %w%s", err, gitOutputSuffix(output))
+	}
+	commit := strings.TrimSpace(output)
+	if commit == "" {
+		return "", fmt.Errorf("resolve ref: ref has no commit")
+	}
+	return commit, nil
+}
+
 func localBranchExists(ctx context.Context, repoRoot string, branch string) (bool, error) {
 	output, err := runGitContext(ctx, repoRoot, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
 	if err == nil {
@@ -1131,7 +1311,7 @@ func fetchTaskBranch(ctx context.Context, repoRoot string, branch string) (bool,
 }
 
 func requireCleanRepoRoot(ctx context.Context, repoRoot string) error {
-	return requireCleanRepoRootFor(ctx, repoRoot, "with --main")
+	return requireCleanRepoRootFor(ctx, repoRoot, "repository-root work")
 }
 
 func requireCleanRepoRootFor(ctx context.Context, repoRoot string, usage string) error {
@@ -1664,6 +1844,34 @@ func Commit(ctx context.Context, dir string, message string) (string, error) {
 		return "", fmt.Errorf("read HEAD after commit: %w", err)
 	}
 	return commit, nil
+}
+
+// VerifyCommit verifies that commit has exactly the expected parent and message.
+func VerifyCommit(ctx context.Context, dir string, commit string, parent string, message string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	commit = strings.TrimSpace(commit)
+	parent = strings.TrimSpace(parent)
+	if commit == "" || parent == "" {
+		return errors.New("commit and parent are required")
+	}
+
+	output, err := runGitContext(ctx, dir, "show", "--no-patch", "--format=%P%x00%B", commit)
+	if err != nil {
+		return fmt.Errorf("inspect commit %s: %w%s", commit, err, gitOutputSuffix(output))
+	}
+	parts := strings.SplitN(output, "\x00", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("inspect commit %s: Git returned malformed metadata", commit)
+	}
+	if strings.TrimSpace(parts[0]) != parent {
+		return fmt.Errorf("commit %s parent does not match the recorded publication parent", commit)
+	}
+	if strings.TrimRight(parts[1], "\r\n") != strings.TrimRight(message, "\r\n") {
+		return fmt.Errorf("commit %s message does not match the recorded publication message", commit)
+	}
+	return nil
 }
 
 // HeadCommit returns the current HEAD commit SHA without mutating the repository.

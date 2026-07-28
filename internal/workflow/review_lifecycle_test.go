@@ -1257,6 +1257,14 @@ func (b *fakeReviewLifecycleBackend) List(context.Context) ([]task.Task, error) 
 func (b *fakeReviewLifecycleBackend) MarkInProgress(context.Context, string, string, string) error {
 	return nil
 }
+func (b *fakeReviewLifecycleBackend) UpdateGitFacts(_ context.Context, _ string, branch string, worktree string) error {
+	if b.task.Metadata == nil {
+		b.task.Metadata = task.Metadata{}
+	}
+	b.task.Metadata[task.MetadataBranch] = branch
+	b.task.Metadata[task.MetadataWorktree] = worktree
+	return nil
+}
 func (b *fakeReviewLifecycleBackend) SetPRURL(context.Context, string, string) error { return nil }
 func (b *fakeReviewLifecycleBackend) Close(context.Context, string) error {
 	b.closed = true

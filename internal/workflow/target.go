@@ -35,7 +35,7 @@ type CompletionClassification struct {
 func ClassifyCompletionTarget(
 	repo task.Repository,
 	taskItem task.Task,
-	taskTarget taskstate.TaskTarget,
+	taskTarget taskstate.GitFacts,
 	latestRun *taskstate.RunAttempt,
 ) (CompletionClassification, bool) {
 	if latestRun == nil || latestRun.Status != taskstate.RunStatusSucceeded || latestRun.Completion == nil {
@@ -98,7 +98,7 @@ func ClassifyCompletionTarget(
 func ClassifyExpectedCompletionTarget(
 	targets tasktarget.ExpectedTargets,
 	taskItem task.Task,
-	taskTarget taskstate.TaskTarget,
+	taskTarget taskstate.GitFacts,
 	latestRun *taskstate.RunAttempt,
 ) (CompletionClassification, bool) {
 	if latestRun == nil || latestRun.Status != taskstate.RunStatusSucceeded || latestRun.Completion == nil {
@@ -114,7 +114,7 @@ func ClassifyExpectedCompletionTarget(
 	if err != nil {
 		return CompletionClassification{}, false
 	}
-	target, err := tasktarget.ClassifyTaskStateTarget(taskTarget, targets)
+	target, err := tasktarget.ClassifyGitFacts(taskTarget, targets)
 	if err != nil {
 		return CompletionClassification{}, false
 	}
@@ -147,7 +147,7 @@ func ClassifyExpectedCompletionTarget(
 func ClassifyLocalReviewReady(
 	repo task.Repository,
 	taskItem task.Task,
-	taskTarget taskstate.TaskTarget,
+	taskTarget taskstate.GitFacts,
 	latestRun *taskstate.RunAttempt,
 ) (CompletionClassification, bool) {
 	classification, ok := ClassifyCompletionTarget(repo, taskItem, taskTarget, latestRun)
@@ -158,7 +158,7 @@ func ClassifyLocalReviewReady(
 func ClassifyPRReviewReady(
 	repo task.Repository,
 	taskItem task.Task,
-	taskTarget taskstate.TaskTarget,
+	taskTarget taskstate.GitFacts,
 	latestRun *taskstate.RunAttempt,
 ) (CompletionClassification, bool) {
 	classification, ok := ClassifyCompletionTarget(repo, taskItem, taskTarget, latestRun)
@@ -169,7 +169,7 @@ func ClassifyPRReviewReady(
 func ClassifyExpectedLocalReviewReady(
 	targets tasktarget.ExpectedTargets,
 	taskItem task.Task,
-	taskTarget taskstate.TaskTarget,
+	taskTarget taskstate.GitFacts,
 	latestRun *taskstate.RunAttempt,
 ) (CompletionClassification, bool) {
 	classification, ok := ClassifyExpectedCompletionTarget(targets, taskItem, taskTarget, latestRun)
@@ -180,7 +180,7 @@ func ClassifyExpectedLocalReviewReady(
 func ClassifyExpectedPRReviewReady(
 	targets tasktarget.ExpectedTargets,
 	taskItem task.Task,
-	taskTarget taskstate.TaskTarget,
+	taskTarget taskstate.GitFacts,
 	latestRun *taskstate.RunAttempt,
 ) (CompletionClassification, bool) {
 	classification, ok := ClassifyExpectedCompletionTarget(targets, taskItem, taskTarget, latestRun)

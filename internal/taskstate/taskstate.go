@@ -137,6 +137,17 @@ type TaskState struct {
 	RepoID  string `yaml:"repo_id"`
 	TaskID  string `yaml:"task_id"`
 
+	// WorkDirectory is the immutable filesystem location selected at first
+	// dispatch. Branch and other Git facts may evolve during publication.
+	WorkDirectory WorkDirectory `yaml:"work_directory,omitempty"`
+
+	// GitFacts are the current branch and checkout facts for the fixed work
+	// directory. Publication may update these facts without changing WorkDirectory.
+	GitFacts GitFacts `yaml:"git_facts,omitempty"`
+
+	// Target is retained only to reconcile state written before work-directory
+	// selection was separated from publication Git facts. New state must use
+	// GitFacts instead.
 	Target TaskTarget `yaml:"target,omitempty"`
 
 	Runs    []RunAttempt    `yaml:"runs,omitempty"`
@@ -155,20 +166,34 @@ func (s *TaskState) UnmarshalYAML(value *yaml.Node) error {
 	}
 	normalized := TaskState(decoded)
 	normalized.Target = normalizeTaskTarget(normalized.Target)
+	normalized.GitFacts = normalizeGitFacts(normalized.GitFacts)
+	normalized.WorkDirectory = normalizeWorkDirectory(normalized.WorkDirectory)
 	*s = normalized
 	return nil
 }
 
-// TaskTarget records the task-owned execution target selected by first dispatch.
-type TaskTarget struct {
+// WorkDirectory records the immutable task working directory selected by first dispatch.
+type WorkDirectory struct {
+	Path string `yaml:"path,omitempty"`
+}
+
+// IsZero reports whether no work directory has been selected.
+func (d WorkDirectory) IsZero() bool { return strings.TrimSpace(d.Path) == "" }
+
+// GitFacts records evolving branch and checkout facts for a task's fixed work directory.
+type GitFacts struct {
 	Branch   string `yaml:"branch,omitempty"`
 	Worktree string `yaml:"worktree,omitempty"`
 }
 
-// IsZero allows YAML omitempty to omit an unlocked target.
-func (t TaskTarget) IsZero() bool {
-	return strings.TrimSpace(t.Branch) == "" && strings.TrimSpace(t.Worktree) == ""
+// IsZero allows YAML omitempty to omit absent Git facts.
+func (f GitFacts) IsZero() bool {
+	return strings.TrimSpace(f.Branch) == "" && strings.TrimSpace(f.Worktree) == ""
 }
+
+// TaskTarget is the legacy persisted target representation. It is an alias so
+// callers decoding old state can be reconciled into GitFacts without conversion.
+type TaskTarget = GitFacts
 
 // RunAttempt records one attached execution attempt.
 type RunAttempt struct {
@@ -418,10 +443,18 @@ func (p *ReviewTaskProposal) UnmarshalYAML(value *yaml.Node) error {
 
 // Finalization records factual data from human-side main/solo finalization.
 type Finalization struct {
-	CommittedAt *time.Time `yaml:"committed_at,omitempty"`
-	Commit      string     `yaml:"commit,omitempty"`
-	PushedAt    *time.Time `yaml:"pushed_at,omitempty"`
-	ClosedAt    *time.Time `yaml:"closed_at,omitempty"`
+	CommittedAt   *time.Time                `yaml:"committed_at,omitempty"`
+	Commit        string                    `yaml:"commit,omitempty"`
+	PendingCommit *FinalizationCommitIntent `yaml:"pending_commit,omitempty"`
+	PushedAt      *time.Time                `yaml:"pushed_at,omitempty"`
+	ClosedAt      *time.Time                `yaml:"closed_at,omitempty"`
+}
+
+// FinalizationCommitIntent records the commit Orpheus is about to create so a
+// task-done retry can safely recover if Git succeeds before state persistence.
+type FinalizationCommitIntent struct {
+	Parent  string `yaml:"parent"`
+	Message string `yaml:"message"`
 }
 
 // Event records a small trace/audit event for a task.
@@ -514,10 +547,11 @@ type StartRunOptions struct {
 	Args        []string
 	SessionName string
 
-	// Branch and Worktree lock the task-level target on the first run. Later
-	// runs must pass the same values.
-	Branch   string
-	Worktree string
+	// WorkDirectory is immutable after the first run. Branch is an evolving Git
+	// fact and Worktree remains for compatibility with persisted legacy state.
+	WorkDirectory string
+	Branch        string
+	Worktree      string
 
 	ReviewFollowUp *ReviewFollowUp
 }
@@ -815,7 +849,12 @@ func (s Store) StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt
 		}),
 		ReviewFollowUp: normalizeReviewFollowUp(opts.ReviewFollowUp),
 	}
-	if err := lockTaskTarget(&state, TaskTarget{
+	if err := lockTaskWorkDirectory(&state, WorkDirectory{Path: opts.WorkDirectory}); err != nil {
+		err = fmt.Errorf("start run attempt for task %s/%s: %w", repoID, taskID, err)
+		span.FinishError(context.Background(), err, slog.Int("attempt", attempt.Attempt))
+		return RunAttempt{}, err
+	}
+	if err := lockTaskGitFacts(&state, GitFacts{
 		Branch:   opts.Branch,
 		Worktree: opts.Worktree,
 	}); err != nil {
@@ -2226,6 +2265,52 @@ func (s Store) MarkReviewAutonomousBudgetExhausted(repoID, taskID string, attemp
 	return state.Reviews[index], nil
 }
 
+// RecordFinalizationCommitIntent persists the expected parent and message before
+// task finalization creates its publication commit.
+func (s Store) RecordFinalizationCommitIntent(
+	repoID string,
+	taskID string,
+	parent string,
+	message string,
+) (Finalization, error) {
+	parent = strings.TrimSpace(parent)
+	message = strings.TrimSpace(message)
+	if parent == "" {
+		return Finalization{}, fmt.Errorf("record finalization commit intent for task %s/%s: parent is required", repoID, taskID)
+	}
+	if message == "" {
+		return Finalization{}, fmt.Errorf("record finalization commit intent for task %s/%s: message is required", repoID, taskID)
+	}
+
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return Finalization{}, err
+	}
+	finalization := ensureFinalization(state.Finalization)
+	if strings.TrimSpace(finalization.Commit) != "" {
+		return finalization, nil
+	}
+	intent := FinalizationCommitIntent{Parent: parent, Message: message}
+	if finalization.PendingCommit != nil {
+		if *finalization.PendingCommit != intent {
+			return Finalization{}, fmt.Errorf(
+				"record finalization commit intent for task %s/%s: %w",
+				repoID,
+				taskID,
+				ErrFinalizationConflict,
+			)
+		}
+		return finalization, nil
+	}
+
+	finalization.PendingCommit = &intent
+	state.Finalization = &finalization
+	if err := s.save(state); err != nil {
+		return Finalization{}, err
+	}
+	return finalization, nil
+}
+
 // RecordFinalizationCommit records the commit created by task finalization.
 func (s Store) RecordFinalizationCommit(repoID, taskID string, commit string) (Finalization, error) {
 	commit = strings.TrimSpace(commit)
@@ -2252,6 +2337,7 @@ func (s Store) RecordFinalizationCommit(repoID, taskID string, commit string) (F
 
 	now := s.nowUTC()
 	finalization.Commit = commit
+	finalization.PendingCommit = nil
 	finalization.CommittedAt = &now
 	state.Finalization = &finalization
 	if err := s.save(state); err != nil {
@@ -2684,10 +2770,46 @@ func FinalizationFacts(state TaskState) Finalization {
 	return ensureFinalization(state.Finalization)
 }
 
-// Target returns a task's locked execution target, if one has been recorded.
-func Target(state TaskState) (TaskTarget, bool) {
-	target := normalizeTaskTarget(state.Target)
-	return target, !target.IsZero()
+// GitFactsFor returns the current branch and checkout facts. Old persisted
+// Target values are reconciled only as a compatibility fallback.
+func GitFactsFor(state TaskState) (GitFacts, bool) {
+	facts := normalizeGitFacts(state.GitFacts)
+	if !facts.IsZero() {
+		return facts, true
+	}
+	legacy := normalizeTaskTarget(state.Target)
+	return legacy, !legacy.IsZero()
+}
+
+// WorkDirectoryFor returns the immutable task working directory.
+func WorkDirectoryFor(state TaskState) (WorkDirectory, bool) {
+	directory := normalizeWorkDirectory(state.WorkDirectory)
+	return directory, !directory.IsZero()
+}
+
+// RecordGitFacts updates the current branch after repository-root publication
+// materializes its deterministic task branch. The work directory remains fixed.
+func (s Store) RecordGitFacts(repoID, taskID, branch, worktree string) (TaskState, error) {
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return TaskState{}, err
+	}
+	directory, ok := WorkDirectoryFor(state)
+	if !ok {
+		return TaskState{}, fmt.Errorf("record Git facts for task %s/%s: work directory is missing", repoID, taskID)
+	}
+	facts := normalizeGitFacts(GitFacts{Branch: branch, Worktree: worktree})
+	if err := validateGitFacts(facts); err != nil {
+		return TaskState{}, fmt.Errorf("record Git facts for task %s/%s: %w", repoID, taskID, err)
+	}
+	if directory.Path != facts.Worktree {
+		return TaskState{}, fmt.Errorf("record Git facts for task %s/%s: work directory %q does not match %q", repoID, taskID, directory.Path, facts.Worktree)
+	}
+	state.GitFacts = facts
+	if err := s.save(state); err != nil {
+		return TaskState{}, err
+	}
+	return state, nil
 }
 
 func (s Store) appendEvent(repoID, taskID string, event Event) (Event, error) {
@@ -2940,8 +3062,14 @@ func validateLoadedState(taskState TaskState, repoID, taskID string) error {
 			return unsupportedTaskStateVersionError(taskState.Version)
 		}
 	}
-	if err := validateTaskTarget(taskState.Target); err != nil {
-		return fmt.Errorf("target is invalid: %w", err)
+	if err := validateWorkDirectory(taskState.WorkDirectory); err != nil {
+		return fmt.Errorf("work_directory is invalid: %w", err)
+	}
+	if err := validateGitFacts(taskState.GitFacts); err != nil {
+		return fmt.Errorf("git_facts is invalid: %w", err)
+	}
+	if err := validateLegacyTaskTarget(taskState.Target); err != nil {
+		return fmt.Errorf("legacy target is invalid: %w", err)
 	}
 	for _, run := range taskState.Runs {
 		if err := validateRun(run); err != nil {
@@ -2969,6 +3097,11 @@ func unsupportedTaskStateVersionError(version int) error {
 }
 
 func migrateLoadedState(taskState TaskState) TaskState {
+	// Target was the former immutable execution model. Reconcile it only when
+	// loading old state so all current callers consume explicit Git facts.
+	if taskState.GitFacts.IsZero() && !taskState.Target.IsZero() {
+		taskState.GitFacts = taskState.Target
+	}
 	switch taskState.Version {
 	case 3:
 		return migrateTaskStateV3(taskState)
@@ -3001,7 +3134,9 @@ func legacyTechnicalExplanation(completion Completion) string {
 }
 
 func taskStateContentIsEmpty(taskState TaskState) bool {
-	return taskState.Target.IsZero() &&
+	return taskState.WorkDirectory.IsZero() &&
+		taskState.GitFacts.IsZero() &&
+		taskState.Target.IsZero() &&
 		len(taskState.Runs) == 0 &&
 		len(taskState.Reviews) == 0 &&
 		len(taskState.Events) == 0 &&
@@ -3030,6 +3165,8 @@ func normalizeState(taskState TaskState, repoID, taskID string) TaskState {
 	taskState.RepoID = repoID
 	taskState.TaskID = taskID
 	taskState.Target = normalizeTaskTarget(taskState.Target)
+	taskState.GitFacts = normalizeGitFacts(taskState.GitFacts)
+	taskState.WorkDirectory = normalizeWorkDirectory(taskState.WorkDirectory)
 	if taskState.Finalization != nil {
 		finalization := ensureFinalization(taskState.Finalization)
 		taskState.Finalization = &finalization
@@ -3261,31 +3398,79 @@ func durationMillis(started time.Time, finished time.Time) int64 {
 	return finished.Sub(started).Milliseconds()
 }
 
-func lockTaskTarget(state *TaskState, requested TaskTarget) error {
-	requested = normalizeTaskTarget(requested)
+func lockTaskWorkDirectory(state *TaskState, requested WorkDirectory) error {
+	requested = normalizeWorkDirectory(requested)
 	if requested.IsZero() {
 		return nil
 	}
-	if err := validateTaskTarget(requested); err != nil {
+	// A persisted Target without a work directory is an active legacy task.
+	// Preserve its direct-publication classification on follow-up runs instead
+	// of silently converting it into modern repository-root PR publication.
+	if state.WorkDirectory.IsZero() && !state.Target.IsZero() {
+		return nil
+	}
+	if err := validateWorkDirectory(requested); err != nil {
+		return err
+	}
+	current := normalizeWorkDirectory(state.WorkDirectory)
+	if current.IsZero() {
+		state.WorkDirectory = requested
+		return nil
+	}
+	if current.Path != requested.Path {
+		return fmt.Errorf("work directory is already locked to %q; requested %q", current.Path, requested.Path)
+	}
+	state.WorkDirectory = current
+	return nil
+}
+
+func lockTaskGitFacts(state *TaskState, requested GitFacts) error {
+	requested = normalizeGitFacts(requested)
+	if requested.IsZero() {
+		return nil
+	}
+	if err := validateGitFacts(requested); err != nil {
 		return err
 	}
 
-	current, ok := Target(*state)
+	current, ok := GitFactsFor(*state)
 	if !ok {
-		state.Target = requested
+		state.GitFacts = requested
 		return nil
 	}
 	if current.Branch != requested.Branch || current.Worktree != requested.Worktree {
 		return fmt.Errorf(
-			"task target is already locked to branch %q and worktree %q; requested branch %q and worktree %q",
+			"git facts are already branch %q and worktree %q; requested branch %q and worktree %q",
 			current.Branch,
 			current.Worktree,
 			requested.Branch,
 			requested.Worktree,
 		)
 	}
-	state.Target = current
+	state.GitFacts = current
 	return nil
+}
+
+func normalizeWorkDirectory(directory WorkDirectory) WorkDirectory {
+	return WorkDirectory{Path: normalizeWorktreePath(directory.Path)}
+}
+
+func validateWorkDirectory(directory WorkDirectory) error {
+	directory = normalizeWorkDirectory(directory)
+	if directory.IsZero() {
+		return nil
+	}
+	if !filepath.IsAbs(directory.Path) {
+		return fmt.Errorf("work directory must be absolute, got %q", directory.Path)
+	}
+	return nil
+}
+
+func normalizeGitFacts(facts GitFacts) GitFacts {
+	return GitFacts{
+		Branch:   strings.TrimSpace(facts.Branch),
+		Worktree: normalizeWorktreePath(facts.Worktree),
+	}
 }
 
 func normalizeTaskTarget(target TaskTarget) TaskTarget {
@@ -3305,7 +3490,24 @@ func normalizeWorktreePath(worktree string) string {
 	return worktree
 }
 
-func validateTaskTarget(target TaskTarget) error {
+func validateGitFacts(facts GitFacts) error {
+	facts = normalizeGitFacts(facts)
+	if facts.IsZero() {
+		return nil
+	}
+	if facts.Branch == "" {
+		return errors.New("branch is required when worktree is set")
+	}
+	if facts.Worktree == "" {
+		return errors.New("worktree is required when branch is set")
+	}
+	if !filepath.IsAbs(facts.Worktree) {
+		return fmt.Errorf("worktree must be absolute, got %q", facts.Worktree)
+	}
+	return nil
+}
+
+func validateLegacyTaskTarget(target TaskTarget) error {
 	target = normalizeTaskTarget(target)
 	if target.IsZero() {
 		return nil
@@ -3548,6 +3750,21 @@ func validateFinalization(finalization *Finalization) error {
 	}
 
 	commit := strings.TrimSpace(finalization.Commit)
+	if finalization.PendingCommit != nil {
+		if commit != "" {
+			return errors.New("pending_commit cannot be recorded with commit")
+		}
+		if finalization.CommittedAt != nil || finalization.PushedAt != nil || finalization.ClosedAt != nil {
+			return errors.New("pending_commit cannot be recorded with finalization timestamps")
+		}
+		if strings.TrimSpace(finalization.PendingCommit.Parent) == "" {
+			return errors.New("pending_commit parent is required")
+		}
+		if strings.TrimSpace(finalization.PendingCommit.Message) == "" {
+			return errors.New("pending_commit message is required")
+		}
+		return nil
+	}
 	if commit == "" {
 		if finalization.CommittedAt != nil || finalization.PushedAt != nil || finalization.ClosedAt != nil {
 			return errors.New("commit is required when any finalization timestamp is recorded")
@@ -3575,6 +3792,12 @@ func ensureFinalization(finalization *Finalization) Finalization {
 	}
 	clone := *finalization
 	clone.Commit = strings.TrimSpace(clone.Commit)
+	if clone.PendingCommit != nil {
+		intent := *clone.PendingCommit
+		intent.Parent = strings.TrimSpace(intent.Parent)
+		intent.Message = strings.TrimSpace(intent.Message)
+		clone.PendingCommit = &intent
+	}
 	return clone
 }
 

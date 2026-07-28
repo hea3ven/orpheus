@@ -57,9 +57,8 @@ func TestRenderActiveContextIncludesWorktreeContract(t *testing.T) {
 		"- Name: Alpha Repo",
 		"- Registered root: /repo/alpha",
 		"- Registered default branch: main",
-		"- Workflow: worktree/team",
-		"- Branch: orpheus/op-1",
-		"- Path: /worktrees/op-1",
+		"- Current branch: orpheus/op-1",
+		"- Work Directory: /worktrees/op-1",
 		"- Current directory: /worktrees/op-1/internal",
 		"- Run attempt: 2",
 		"- Agent: recorder",
@@ -118,7 +117,7 @@ func TestRenderConflictResolutionContextConstrainsAgentScope(t *testing.T) {
 		"- ID: op-1",
 		"- Pull request: https://github.test/org/repo/pull/42",
 		"- Registered default branch: main",
-		"- Branch: orpheus/op-1",
+		"- Current branch: orpheus/op-1",
 		"Resolve only the merge conflicts",
 		"Do not implement unrelated task changes",
 		"  - conflict.txt",
@@ -274,7 +273,6 @@ func TestRenderActiveContextIncludesMainContract(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		"- Workflow: main/solo",
 		"registered repository root on the registered default branch",
 		"one-time completion handoff",
 		"one commit-style summary line, 80 characters or fewer",
@@ -285,7 +283,7 @@ func TestRenderActiveContextIncludesMainContract(t *testing.T) {
 		"one technical explanation source",
 		"run it at most once",
 		"do not run it again after it succeeds",
-		"Orpheus will record local-review-ready completion data",
+		"Orpheus will record PR-ready completion data for feature-branch publication",
 		"The human operator will later run `orpheus task run op-main`",
 		"do not run it yourself unless explicitly asked",
 	} {
@@ -359,9 +357,8 @@ func TestRenderActiveContextIncludesRepoRootTaskBranchContract(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		"- Workflow: repo-root/team",
-		"- Branch: orpheus/op-root",
-		"- Path: /repo/alpha",
+		"- Current branch: orpheus/op-root",
+		"- Work Directory: /repo/alpha",
 		"registered repository root on the task branch",
 		"orpheus agent done",
 		"PR-ready completion data for feature-branch publication",

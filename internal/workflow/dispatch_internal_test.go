@@ -37,7 +37,7 @@ func TestDispatchValidateStartInfersBlockedReviewFollowUpTarget(t *testing.T) {
 			Version: 2,
 			RepoID:  repo.ID,
 			TaskID:  taskItem.ID,
-			Target: taskstate.TaskTarget{
+			Target: taskstate.GitFacts{
 				Branch:   "main",
 				Worktree: repoPath,
 			},
@@ -101,7 +101,7 @@ func TestDispatchValidateStartRefusesInterruptedAutomatedBlockerDecision(t *test
 			Version: 2,
 			RepoID:  repo.ID,
 			TaskID:  taskItem.ID,
-			Target: taskstate.TaskTarget{
+			Target: taskstate.GitFacts{
 				Branch:   "main",
 				Worktree: repoPath,
 			},
@@ -331,7 +331,7 @@ func TestDispatchValidateStartRefusesAlreadyTargetedBlockedReview(t *testing.T) 
 			Version: 2,
 			RepoID:  repo.ID,
 			TaskID:  taskItem.ID,
-			Target: taskstate.TaskTarget{
+			Target: taskstate.GitFacts{
 				Branch:   "main",
 				Worktree: repoPath,
 			},
@@ -391,7 +391,7 @@ func TestDispatchValidateStartRejectsMainModeAfterTargetLock(t *testing.T) {
 			Version: 2,
 			RepoID:  repo.ID,
 			TaskID:  taskItem.ID,
-			Target: taskstate.TaskTarget{
+			Target: taskstate.GitFacts{
 				Branch:   taskItem.Metadata[task.MetadataBranch],
 				Worktree: taskItem.Metadata[task.MetadataWorktree],
 			},
@@ -409,8 +409,8 @@ func TestDispatchValidateStartRejectsMainModeAfterTargetLock(t *testing.T) {
 		MainMode: true,
 	})
 
-	if err == nil || !strings.Contains(err.Error(), "retry without --main") {
-		t.Fatalf("validate error = %v, want --main rejection after target lock", err)
+	if err == nil || !strings.Contains(err.Error(), "--main is no longer supported") {
+		t.Fatalf("validate error = %v, want --main migration guidance", err)
 	}
 }
 
@@ -451,7 +451,7 @@ func validateDispatchStartForReviewWithRuns(
 			Version: 2,
 			RepoID:  repo.ID,
 			TaskID:  taskItem.ID,
-			Target: taskstate.TaskTarget{
+			Target: taskstate.GitFacts{
 				Branch:   "main",
 				Worktree: repoPath,
 			},

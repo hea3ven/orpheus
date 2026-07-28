@@ -12,7 +12,7 @@ import (
 type classifyExpectedCompletionTargetCase struct {
 	name          string
 	taskItem      task.Task
-	taskTarget    taskstate.TaskTarget
+	taskTarget    taskstate.GitFacts
 	run           taskstate.RunAttempt
 	wantOK        bool
 	wantTarget    tasktarget.TargetKind
@@ -26,7 +26,7 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 			ID:       "op-1",
 			Metadata: task.Metadata{task.MetadataBranch: "main", task.MetadataWorktree: "/repo/alpha"},
 		},
-		taskTarget: taskstate.TaskTarget{Branch: "main", Worktree: "/repo/alpha"},
+		taskTarget: taskstate.GitFacts{Branch: "main", Worktree: "/repo/alpha"},
 		run: taskstate.RunAttempt{
 			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
@@ -49,7 +49,7 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 				task.MetadataWorktree: "/state/worktrees/alpha/op-1",
 			},
 		},
-		taskTarget: taskstate.TaskTarget{Branch: "orpheus/op-1", Worktree: "/state/worktrees/alpha/op-1"},
+		taskTarget: taskstate.GitFacts{Branch: "orpheus/op-1", Worktree: "/state/worktrees/alpha/op-1"},
 		run: taskstate.RunAttempt{
 			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
@@ -73,7 +73,7 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 				task.MetadataWorktree: "/repo/alpha",
 			},
 		},
-		taskTarget: taskstate.TaskTarget{Branch: "orpheus/op-1", Worktree: "/repo/alpha"},
+		taskTarget: taskstate.GitFacts{Branch: "orpheus/op-1", Worktree: "/repo/alpha"},
 		run: taskstate.RunAttempt{
 			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
@@ -97,7 +97,7 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 				task.MetadataWorktree: "/state/worktrees/alpha/op-1",
 			},
 		},
-		taskTarget: taskstate.TaskTarget{Branch: "manual/op-1", Worktree: "/state/worktrees/alpha/op-1"},
+		taskTarget: taskstate.GitFacts{Branch: "manual/op-1", Worktree: "/state/worktrees/alpha/op-1"},
 		run: taskstate.RunAttempt{
 			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
@@ -118,7 +118,7 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 				task.MetadataWorktree: "/tmp/manual-worktree",
 			},
 		},
-		taskTarget: taskstate.TaskTarget{Branch: "manual/op-1", Worktree: "/tmp/manual-worktree"},
+		taskTarget: taskstate.GitFacts{Branch: "manual/op-1", Worktree: "/tmp/manual-worktree"},
 		run: taskstate.RunAttempt{
 			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
@@ -140,7 +140,7 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 				task.MetadataPRURL:    "https://example.test/pr/1",
 			},
 		},
-		taskTarget: taskstate.TaskTarget{Branch: "orpheus/op-1", Worktree: "/state/worktrees/alpha/op-1"},
+		taskTarget: taskstate.GitFacts{Branch: "orpheus/op-1", Worktree: "/state/worktrees/alpha/op-1"},
 		run: taskstate.RunAttempt{
 			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
@@ -158,7 +158,7 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 			ID:       "op-1",
 			Metadata: task.Metadata{task.MetadataBranch: "main", task.MetadataWorktree: "/repo/alpha"},
 		},
-		taskTarget: taskstate.TaskTarget{Branch: "main", Worktree: "/repo/alpha"},
+		taskTarget: taskstate.GitFacts{Branch: "main", Worktree: "/repo/alpha"},
 		run: taskstate.RunAttempt{
 			Status: taskstate.RunStatusSucceeded,
 		},

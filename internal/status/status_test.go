@@ -297,7 +297,7 @@ func TestProjectWithRunStatesShowsSuccessfulMainCompletionInReview(t *testing.T)
 	localStates := status.LocalTaskStateIndex{
 		status.RunStateKey("alpha", "a-main"): {
 			LatestRun:       &latestRun,
-			Target:          testTaskTarget("main", "/tmp/alpha"),
+			GitFacts:        testTaskTarget("main", "/tmp/alpha"),
 			ExpectedTargets: testExpectedTargets("main", "/tmp/alpha", "orpheus/a-main", "/tmp/orpheus/worktrees/a-main"),
 		},
 	}
@@ -406,7 +406,7 @@ func TestProjectWithLocalTaskStatesDoesNotShowClosedFinalizationAsLocalReview(t 
 	localStates := status.LocalTaskStateIndex{
 		status.RunStateKey("alpha", "a-main"): {
 			LatestRun: &latestRun,
-			Target:    testTaskTarget("main", "/tmp/alpha"),
+			GitFacts:  testTaskTarget("main", "/tmp/alpha"),
 			Finalization: taskstate.Finalization{
 				Commit:   "abc123",
 				ClosedAt: &closedAt,
@@ -523,7 +523,7 @@ func TestProjectWithLocalTaskStatesClassifiesLatestReviewAttempts(t *testing.T) 
 				status.RunStateKey("alpha", "a-main"): {
 					LatestRun:                 &latestRun,
 					Runs:                      tt.runs,
-					Target:                    testTaskTarget("main", "/tmp/alpha"),
+					GitFacts:                  testTaskTarget("main", "/tmp/alpha"),
 					LatestReview:              &tt.review,
 					LatestFinalizationFailure: tt.failure,
 					ExpectedTargets:           testExpectedTargets("main", "/tmp/alpha", "orpheus/a-main", "/tmp/orpheus/worktrees/a-main"),
@@ -922,7 +922,7 @@ func projectWorktreeCompletion(completion taskstate.Completion) status.Projectio
 	localStates := status.LocalTaskStateIndex{
 		status.RunStateKey("alpha", "a-worktree"): {
 			LatestRun:       &latestRun,
-			Target:          testTaskTarget("orpheus/a-worktree", "/tmp/orpheus/worktrees/a-worktree"),
+			GitFacts:        testTaskTarget("orpheus/a-worktree", "/tmp/orpheus/worktrees/a-worktree"),
 			ExpectedTargets: testExpectedTargets("main", "/tmp/alpha", "orpheus/a-worktree", "/tmp/orpheus/worktrees/a-worktree"),
 		},
 	}

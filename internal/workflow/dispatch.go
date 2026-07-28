@@ -233,8 +233,8 @@ func (s DispatchService) startLocked(
 	ctx context.Context,
 	opts DispatchStartOptions,
 ) (DispatchStartResult, error) {
-	if opts.MainMode && opts.RepoRootMode {
-		return DispatchStartResult{}, errors.New("task dispatch cannot combine main mode and repo-root mode")
+	if opts.MainMode {
+		return DispatchStartResult{}, errors.New("--main is no longer supported; use --repo-root to work in the registered repository root and publish through a pull request")
 	}
 
 	span := s.startPhase(ctx, "dispatch setup", opts.Source.Repository.ID, opts.TaskID)
@@ -315,6 +315,9 @@ func (s DispatchService) validateStart(
 	ctx context.Context,
 	opts DispatchStartOptions,
 ) (dispatchStartPlan, error) {
+	if opts.MainMode {
+		return dispatchStartPlan{}, errors.New("--main is no longer supported; use --repo-root to work in the registered repository root and publish through a pull request")
+	}
 	if opts.Backend == nil {
 		return dispatchStartPlan{}, errors.New("task dispatch backend is required")
 	}
@@ -354,14 +357,6 @@ func (s DispatchService) validateStart(
 	if err != nil {
 		return dispatchStartPlan{}, err
 	}
-	if hasLockedTarget && opts.MainMode {
-		return dispatchStartPlan{}, fmt.Errorf(
-			"task %s already has target branch %q and worktree %q; retry without --main",
-			opts.TaskID,
-			lockedTarget.Branch,
-			lockedTarget.Worktree,
-		)
-	}
 	if hasLockedTarget && opts.RepoRootMode {
 		return dispatchStartPlan{}, fmt.Errorf(
 			"task %s already has target branch %q and worktree %q; retry without --repo-root",
@@ -380,7 +375,7 @@ func (s DispatchService) validateStart(
 	if err != nil {
 		return dispatchStartPlan{}, err
 	}
-	if err := ensureDispatchEligible(taskItem, expected, repo, opts.MainMode, opts.RepoRootMode, reviewPlan != nil); err != nil {
+	if err := ensureDispatchEligible(taskItem, expected, repo, opts.RepoRootMode, reviewPlan != nil); err != nil {
 		return dispatchStartPlan{}, err
 	}
 	if targetKind == tasktarget.TargetMainSolo || targetKind == tasktarget.TargetRepoRootTeam {
@@ -407,7 +402,7 @@ func ensureDispatchParentEpicGate(ctx context.Context, backend DispatchBackend, 
 }
 
 func dispatchLockedTarget(repo task.Repository, state taskstate.TaskState) (tasktarget.Target, bool, error) {
-	locked, ok := taskstate.Target(state)
+	locked, ok := taskstate.GitFactsFor(state)
 	if !ok {
 		return tasktarget.Target{}, false, nil
 	}
@@ -557,6 +552,7 @@ func (s DispatchService) recordStart(
 		Command:        command.Command,
 		Args:           command.Args,
 		SessionName:    commandContext.SessionName,
+		WorkDirectory:  setup.WorktreePath,
 		Branch:         setup.Branch,
 		Worktree:       setup.WorktreePath,
 		ReviewFollowUp: taskstateReviewFollowUp(followUp),
@@ -619,8 +615,10 @@ func (s DispatchService) expectedSetup(
 		return setup, tasktarget.TargetMainSolo, err
 	}
 	if opts.RepoRootMode {
-		setup, err := gitmeta.ExpectedRepoRootTaskBranch(dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, false))
-		return setup, tasktarget.TargetRepoRootTeam, err
+		// Repository-root work starts on the registered default branch. The
+		// deterministic task branch is materialized only during publication.
+		setup, err := gitmeta.ExpectedRepoRoot(dispatchRepoRootOptions(opts.Source.Repository, false))
+		return setup, tasktarget.TargetMainSolo, err
 	}
 	setup, err := gitmeta.ExpectedTaskWorktree(dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, false))
 	return setup, tasktarget.TargetWorktreeTeam, err
@@ -715,7 +713,6 @@ func ensureDispatchEligible(
 	taskItem task.Task,
 	expected gitmeta.TaskWorktreeSetupResult,
 	repo task.Repository,
-	mainMode bool,
 	repoRootMode bool,
 	preserveCurrentTarget bool,
 ) error {
@@ -726,8 +723,8 @@ func ensureDispatchEligible(
 
 	switch taskItem.Status {
 	case task.StatusOpen:
-		if !preserveCurrentTarget && !mainMode && !repoRootMode && dispatchMetadataMatchesRepoRoot(metadata, repo) {
-			return repoRootRetryRequiresMainError(taskItem.ID, metadata)
+		if !preserveCurrentTarget && !repoRootMode && dispatchMetadataMatchesRepoRoot(metadata, repo) {
+			return repoRootRetryRequiresRepoRootError(taskItem.ID, metadata)
 		}
 		if !preserveCurrentTarget && !repoRootMode && dispatchMetadataMatchesRepoRootTaskBranch(metadata, repo) {
 			return repoRootRetryRequiresRepoRootError(taskItem.ID, metadata)
@@ -737,18 +734,16 @@ func ensureDispatchEligible(
 		if dispatchMetadataMatches(metadata, expected) {
 			return nil
 		}
-		if !preserveCurrentTarget && !mainMode && !repoRootMode && dispatchMetadataMatchesRepoRoot(metadata, repo) {
-			return repoRootRetryRequiresMainError(taskItem.ID, metadata)
+		if !preserveCurrentTarget && !repoRootMode && dispatchMetadataMatchesRepoRoot(metadata, repo) {
+			return repoRootRetryRequiresRepoRootError(taskItem.ID, metadata)
 		}
 		if !preserveCurrentTarget && !repoRootMode && dispatchMetadataMatchesRepoRootTaskBranch(metadata, repo) {
 			return repoRootRetryRequiresRepoRootError(taskItem.ID, metadata)
 		}
 
 		target := "the deterministic Orpheus branch/worktree"
-		if mainMode {
+		if repoRootMode {
 			target = "the registered default branch/repo root"
-		} else if repoRootMode {
-			target = "the task branch/repo root"
 		}
 		return fmt.Errorf(
 			"task %s is in_progress but is not tied to %s: %s",
@@ -767,21 +762,9 @@ func ensureDispatchEligible(
 	}
 }
 
-func repoRootRetryRequiresMainError(taskID string, metadata task.OrpheusMetadata) error {
-	return fmt.Errorf(
-		"task %s is tied to repo-root/default-branch metadata (%s=%q, %s=%q); retry with `orpheus task run --main %s`",
-		taskID,
-		task.MetadataBranch,
-		metadata.Branch,
-		task.MetadataWorktree,
-		metadata.Worktree,
-		taskID,
-	)
-}
-
 func repoRootRetryRequiresRepoRootError(taskID string, metadata task.OrpheusMetadata) error {
 	return fmt.Errorf(
-		"task %s is tied to repo-root/task-branch metadata (%s=%q, %s=%q); retry with `orpheus task run --repo-root %s`",
+		"task %s is tied to repository-root metadata (%s=%q, %s=%q); retry with `orpheus task run --repo-root %s`",
 		taskID,
 		task.MetadataBranch,
 		metadata.Branch,

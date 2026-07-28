@@ -864,7 +864,7 @@ func projectedWrongTargetDetailCase(
 	run := projectedCompletedRun()
 	localState := status.LocalTaskState{
 		LatestRun: &run,
-		Target:    &taskstate.TaskTarget{Branch: branch, Worktree: worktree},
+		GitFacts:  &taskstate.TaskTarget{Branch: branch, Worktree: worktree},
 	}
 	return projectedStatusDetailCase{
 		name:        name,
@@ -1091,7 +1091,7 @@ func projectedStatusLocalStates(taskID string, localState status.LocalTaskState)
 
 func projectedReviewReadyLocalState(taskID string, branch string, worktree string) status.LocalTaskState {
 	return status.LocalTaskState{
-		Target:          &taskstate.TaskTarget{Branch: branch, Worktree: worktree},
+		GitFacts:        &taskstate.TaskTarget{Branch: branch, Worktree: worktree},
 		ExpectedTargets: projectedExpectedTargets(taskID),
 	}
 }

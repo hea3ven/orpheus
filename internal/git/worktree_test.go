@@ -11,6 +11,26 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 )
 
+func TestVerifyCommitMatchesRecordedParentAndMessage(t *testing.T) {
+	repoPath := newGitRepo(t)
+	parent, err := orpheusgit.HeadCommit(context.Background(), repoPath)
+	if err != nil {
+		t.Fatalf("read parent commit: %v", err)
+	}
+	commitFile(t, repoPath, "publication.txt", "reviewed work\n", "Publish reviewed work")
+	commit, err := orpheusgit.HeadCommit(context.Background(), repoPath)
+	if err != nil {
+		t.Fatalf("read publication commit: %v", err)
+	}
+
+	if err := orpheusgit.VerifyCommit(context.Background(), repoPath, commit, parent, "Publish reviewed work"); err != nil {
+		t.Fatalf("verify matching commit: %v", err)
+	}
+	if err := orpheusgit.VerifyCommit(context.Background(), repoPath, commit, parent, "Unexpected message"); err == nil {
+		t.Fatal("verify mismatched message succeeded")
+	}
+}
+
 func TestSetupTaskWorktreeCreatesAndReusesDeterministicWorktree(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	paths := newStatePaths(t)
@@ -228,6 +248,108 @@ func TestSetupRepoRootTaskBranchSwitchesToTaskBranch(t *testing.T) {
 	if reused.Lifecycle != orpheusgit.TaskWorktreeLifecycleReused {
 		t.Fatalf("reuse lifecycle = %q, want %q", reused.Lifecycle, orpheusgit.TaskWorktreeLifecycleReused)
 	}
+}
+
+func TestMaterializeRepoRootTaskBranchPreservesReviewedChanges(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	if err := os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644); err != nil {
+		t.Fatalf("write reviewed change: %v", err)
+	}
+
+	got, err := orpheusgit.MaterializeRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		TaskID:        "op-reviewed",
+		Paths:         paths,
+		AllowDirty:    true,
+	})
+	if err != nil {
+		t.Fatalf("materialize repo-root task branch: %v", err)
+	}
+	if got.Branch != "orpheus/op-reviewed" || got.WorktreePath != repoPath || got.Lifecycle != orpheusgit.TaskWorktreeLifecycleTaskBranchCreated {
+		t.Fatalf("materialization = %#v, want task branch/repo root/task branch created", got)
+	}
+	assertGitBranch(t, repoPath, "orpheus/op-reviewed")
+	if _, err := os.Stat(filepath.Join(repoPath, "reviewed.txt")); err != nil {
+		t.Fatalf("reviewed change was not preserved: %v", err)
+	}
+}
+
+func TestMaterializeRepoRootTaskBranchRefusesStaleExistingLocalBranch(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	runGit(t, repoPath, "branch", "orpheus/op-stale", "main")
+	pushRemoteCommit(t, repoPath, "default.txt", "new default\n")
+	runGit(t, repoPath, "pull", "--ff-only", "origin", "main")
+	if err := os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644); err != nil {
+		t.Fatalf("write reviewed change: %v", err)
+	}
+
+	_, err := orpheusgit.MaterializeRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID: "alpha", RepoName: "Alpha", RepoPath: repoPath, DefaultBranch: "main", TaskID: "op-stale", Paths: paths, AllowDirty: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "local deterministic task branch") || !strings.Contains(err.Error(), "refusing to reuse divergent branch") {
+		t.Fatalf("materialize error = %v, want stale local branch refusal", err)
+	}
+	assertGitBranch(t, repoPath, "main")
+}
+
+func TestMaterializeRepoRootTaskBranchRefusesDivergentExistingLocalBranch(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	runGit(t, repoPath, "checkout", "-b", "orpheus/op-divergent")
+	commitFile(t, repoPath, "stale.txt", "stale\n", "stale task work")
+	runGit(t, repoPath, "checkout", "main")
+	if err := os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644); err != nil {
+		t.Fatalf("write reviewed change: %v", err)
+	}
+
+	_, err := orpheusgit.MaterializeRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID: "alpha", RepoName: "Alpha", RepoPath: repoPath, DefaultBranch: "main", TaskID: "op-divergent", Paths: paths, AllowDirty: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "local deterministic task branch") || !strings.Contains(err.Error(), "refusing to reuse divergent branch") {
+		t.Fatalf("materialize error = %v, want divergent local branch refusal", err)
+	}
+	assertGitBranch(t, repoPath, "main")
+}
+
+func TestMaterializeRepoRootTaskBranchRefusesDivergentCurrentTaskBranch(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	runGit(t, repoPath, "checkout", "-b", "orpheus/op-current")
+	commitFile(t, repoPath, "stale.txt", "stale\n", "stale current task work")
+
+	_, err := orpheusgit.MaterializeRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID: "alpha", RepoName: "Alpha", RepoPath: repoPath, DefaultBranch: "main", TaskID: "op-current", Paths: paths, AllowDirty: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "local deterministic task branch") || !strings.Contains(err.Error(), "refusing to reuse divergent branch") {
+		t.Fatalf("materialize error = %v, want divergent current task branch refusal", err)
+	}
+	assertGitBranch(t, repoPath, "orpheus/op-current")
+}
+
+func TestMaterializeRepoRootTaskBranchRefusesDivergentExistingRemoteBranch(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	runGit(t, repoPath, "checkout", "-b", "orpheus/op-remote")
+	commitFile(t, repoPath, "stale.txt", "stale\n", "stale remote task work")
+	runGit(t, repoPath, "push", "--set-upstream", "origin", "orpheus/op-remote")
+	runGit(t, repoPath, "checkout", "main")
+	runGit(t, repoPath, "branch", "-D", "orpheus/op-remote")
+	if err := os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644); err != nil {
+		t.Fatalf("write reviewed change: %v", err)
+	}
+
+	_, err := orpheusgit.MaterializeRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID: "alpha", RepoName: "Alpha", RepoPath: repoPath, DefaultBranch: "main", TaskID: "op-remote", Paths: paths, AllowDirty: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "remote deterministic task branch") || !strings.Contains(err.Error(), "refusing to reuse divergent branch") {
+		t.Fatalf("materialize error = %v, want divergent remote branch refusal", err)
+	}
+	assertGitBranch(t, repoPath, "main")
 }
 
 func TestSetupRepoRootTaskBranchRefusesDirtyRepoBeforeSwitching(t *testing.T) {

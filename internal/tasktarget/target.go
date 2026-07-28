@@ -196,8 +196,8 @@ func ClassifyRunTarget(repo task.Repository, branch string, worktree string) Tar
 	return TargetUnknown
 }
 
-// ClassifyTaskStateTarget matches the canonical taskstate target against exact expected execution targets.
-func ClassifyTaskStateTarget(taskTarget taskstate.TaskTarget, targets ExpectedTargets) (Target, error) {
+// ClassifyGitFacts matches current taskstate Git facts against exact expected execution targets.
+func ClassifyGitFacts(taskTarget taskstate.GitFacts, targets ExpectedTargets) (Target, error) {
 	targets = cleanExpectedTargets(targets)
 	branch := strings.TrimSpace(taskTarget.Branch)
 	if branch == "" {

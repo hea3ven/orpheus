@@ -19,30 +19,30 @@ const (
 )
 
 var targetPolicySurface = map[string]bool{
-	"Target":                  true,
-	"TargetKind":              true,
-	"TargetUnknown":           true,
-	"TargetWorktreeTeam":      true,
-	"TargetRepoRootTeam":      true,
-	"TargetMainSolo":          true,
-	"ExpectedTargets":         true,
-	"ExpectedTargetsForTask":  true,
-	"ClassifyMetadataTarget":  true,
-	"ClassifyRunTarget":       true,
-	"ClassifyTaskStateTarget": true,
+	"Target":                 true,
+	"TargetKind":             true,
+	"TargetUnknown":          true,
+	"TargetWorktreeTeam":     true,
+	"TargetRepoRootTeam":     true,
+	"TargetMainSolo":         true,
+	"ExpectedTargets":        true,
+	"ExpectedTargetsForTask": true,
+	"ClassifyMetadataTarget": true,
+	"ClassifyRunTarget":      true,
+	"ClassifyGitFacts":       true,
 }
 
 var targetPolicyDeclarations = map[string]bool{
-	"TargetKind":              true,
-	"TargetUnknown":           true,
-	"TargetWorktreeTeam":      true,
-	"TargetRepoRootTeam":      true,
-	"TargetMainSolo":          true,
-	"ExpectedTargets":         true,
-	"ExpectedTargetsForTask":  true,
-	"ClassifyMetadataTarget":  true,
-	"ClassifyRunTarget":       true,
-	"ClassifyTaskStateTarget": true,
+	"TargetKind":             true,
+	"TargetUnknown":          true,
+	"TargetWorktreeTeam":     true,
+	"TargetRepoRootTeam":     true,
+	"TargetMainSolo":         true,
+	"ExpectedTargets":        true,
+	"ExpectedTargetsForTask": true,
+	"ClassifyMetadataTarget": true,
+	"ClassifyRunTarget":      true,
+	"ClassifyGitFacts":       true,
 }
 
 var targetPolicyTypeDeclarations = map[string]bool{

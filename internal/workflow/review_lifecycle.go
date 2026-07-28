@@ -1058,7 +1058,7 @@ func ReviewTarget(store ReviewLifecycleStore, paths state.Paths, ctx ReviewAttem
 	if err != nil {
 		return tasktarget.Target{}, fmt.Errorf("load task state: %w", err)
 	}
-	taskTarget, ok := taskstate.Target(taskState)
+	taskTarget, ok := taskstate.GitFactsFor(taskState)
 	if !ok {
 		return tasktarget.Target{}, fmt.Errorf("task has no Orpheus target; run `orpheus task run %s` first", taskID)
 	}
@@ -1066,7 +1066,7 @@ func ReviewTarget(store ReviewLifecycleStore, paths state.Paths, ctx ReviewAttem
 	if err != nil {
 		return tasktarget.Target{}, err
 	}
-	target, err := tasktarget.ClassifyTaskStateTarget(taskTarget, targets)
+	target, err := tasktarget.ClassifyGitFacts(taskTarget, targets)
 	if err != nil {
 		return tasktarget.Target{}, fmt.Errorf("task has inconsistent taskstate target: %w", err)
 	}
