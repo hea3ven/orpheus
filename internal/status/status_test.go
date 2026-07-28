@@ -430,6 +430,7 @@ func TestProjectWithLocalTaskStatesClassifiesLatestReviewAttempts(t *testing.T) 
 	tests := []struct {
 		name           string
 		review         taskstate.ReviewAttempt
+		runs           []taskstate.RunAttempt
 		failure        *taskstate.Event
 		wantGroup      status.GroupID
 		wantDetail     string
@@ -451,6 +452,19 @@ func TestProjectWithLocalTaskStatesClassifiesLatestReviewAttempts(t *testing.T) 
 			}),
 			wantGroup:  status.GroupInReview,
 			wantDetail: "review blockers targeted; run task review",
+		},
+		{
+			name: "failed follow-up target is ready to retry",
+			review: reviewAttempt(1, taskstate.ReviewStatusBlocked, []taskstate.ReviewFinding{
+				{Type: taskstate.FindingTypeBlocking, Title: "Bug", Description: "Fix it", TargetedByRunAttempt: 2},
+			}),
+			runs: []taskstate.RunAttempt{{
+				Attempt:        2,
+				Status:         taskstate.RunStatusFailed,
+				ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{0}},
+			}},
+			wantGroup:  status.GroupIdle,
+			wantDetail: "review follow-up failed; retry task run",
 		},
 		{
 			name: "interrupted automated blocker decision returns to review",
@@ -508,6 +522,7 @@ func TestProjectWithLocalTaskStatesClassifiesLatestReviewAttempts(t *testing.T) 
 			localStates := status.LocalTaskStateIndex{
 				status.RunStateKey("alpha", "a-main"): {
 					LatestRun:                 &latestRun,
+					Runs:                      tt.runs,
 					Target:                    testTaskTarget("main", "/tmp/alpha"),
 					LatestReview:              &tt.review,
 					LatestFinalizationFailure: tt.failure,

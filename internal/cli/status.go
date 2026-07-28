@@ -107,6 +107,7 @@ func taskRunStateIndex(
 			latestFinalizationFailure, hasFinalizationFailure := taskstate.LatestFinalizationFailure(state)
 			localState := status.LocalTaskState{
 				LatestRun:    &latestCopy,
+				Runs:         append([]taskstate.RunAttempt(nil), state.Runs...),
 				Finalization: taskstate.FinalizationFacts(state),
 			}
 			if hasTarget {
