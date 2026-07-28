@@ -720,6 +720,84 @@ func TestTaskBackendMarkInProgressReportsUpdateCommandFailure(t *testing.T) {
 	}
 }
 
+func TestTaskBackendStartEpicUpdatesOpenEpic(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-epic"},
+			result:   beads.Result{Stdout: `[{"id":"op-epic","title":"epic","status":"open","issue_type":"epic"}]`},
+		},
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--sandbox", "update", "op-epic", "--status", "in_progress"},
+		},
+	}}
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+
+	if err := backend.StartEpic(context.Background(), " op-epic "); err != nil {
+		t.Fatalf("start epic: %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
+func TestTaskBackendStartEpicTreatsInProgressAsSuccess(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{{
+		wantDir:  dir,
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-epic"},
+		result:   beads.Result{Stdout: `[{"id":"op-epic","title":"epic","status":"in_progress","issue_type":"epic"}]`},
+	}}}
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+
+	if err := backend.StartEpic(context.Background(), "op-epic"); err != nil {
+		t.Fatalf("start already in-progress epic: %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
+func TestTaskBackendStartEpicRejectsNonEpicAndClosedItems(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{"non epic", `[{"id":"op-epic","status":"open","issue_type":"task"}]`, "item is not an epic"},
+		{"closed", `[{"id":"op-epic","status":"closed","issue_type":"epic"}]`, "epic is closed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			runner := &fakeRunner{calls: []fakeCall{{
+				wantDir:  dir,
+				wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-epic"},
+				result:   beads.Result{Stdout: test.output},
+			}}}
+			backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+			if err != nil {
+				t.Fatalf("create backend: %v", err)
+			}
+
+			err = backend.StartEpic(context.Background(), "op-epic")
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("StartEpic() error = %v, want containing %q", err, test.want)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runner has %d unused calls", len(runner.calls))
+			}
+		})
+	}
+}
+
 func TestTaskBackendSetPRURLWritesMetadata(t *testing.T) {
 	dir := t.TempDir()
 	runner := &fakeRunner{calls: []fakeCall{{

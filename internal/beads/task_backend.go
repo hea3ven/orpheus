@@ -15,11 +15,12 @@ import (
 )
 
 var (
-	_ task.ReadBackend     = TaskBackend{}
-	_ task.DispatchMutator = TaskBackend{}
-	_ task.PRURLMutator    = TaskBackend{}
-	_ task.CloseMutator    = TaskBackend{}
-	_ task.CreateMutator   = TaskBackend{}
+	_ task.ReadBackend      = TaskBackend{}
+	_ task.DispatchMutator  = TaskBackend{}
+	_ task.PRURLMutator     = TaskBackend{}
+	_ task.EpicStartMutator = TaskBackend{}
+	_ task.CloseMutator     = TaskBackend{}
+	_ task.CreateMutator    = TaskBackend{}
 )
 
 // TaskBackend reads task items from one explicit Beads workspace.
@@ -198,6 +199,43 @@ func (b TaskBackend) MarkInProgress(ctx context.Context, id string, branch strin
 	return nil
 }
 
+// StartEpic marks an eligible Beads epic in progress. Existing in-progress
+// epics are treated as a successful no-op.
+func (b TaskBackend) StartEpic(ctx context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("start Beads epic in %q: task id is required", b.dir)
+	}
+
+	current, err := b.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("start Beads epic %q in %q: inspect item: %w", id, b.dir, err)
+	}
+	if err := validateStartEpicState(current); err != nil {
+		return fmt.Errorf("start Beads epic %q in %q: %w", id, b.dir, err)
+	}
+	if current.Status == task.StatusInProgress {
+		return nil
+	}
+
+	result, err := b.runWriteWithAttrs(
+		ctx,
+		"start epic",
+		[]slog.Attr{slog.String("task_id", id)},
+		"update",
+		id,
+		"--status",
+		string(task.StatusInProgress),
+	)
+	if err != nil {
+		if isNotFoundResult(result) {
+			return fmt.Errorf("start Beads epic %q in %q: %w%s", id, b.dir, task.ErrNotFound, formattedOutput(result))
+		}
+		return err
+	}
+	return nil
+}
+
 // SetPRURL stores the task pull request URL in Beads metadata.
 func (b TaskBackend) SetPRURL(ctx context.Context, id string, prURL string) error {
 	id = strings.TrimSpace(id)
@@ -251,6 +289,23 @@ func (b TaskBackend) Close(ctx context.Context, id string) error {
 		return err
 	}
 	return nil
+}
+
+func validateStartEpicState(taskItem task.Task) error {
+	if taskItem.IssueType != task.IssueTypeEpic {
+		return task.MutationConflictError{TaskID: taskItem.ID, Reason: "item is not an epic"}
+	}
+	switch taskItem.Status {
+	case task.StatusOpen, task.StatusInProgress:
+		return nil
+	case task.StatusClosed:
+		return task.MutationConflictError{TaskID: taskItem.ID, Reason: "epic is closed"}
+	default:
+		return task.MutationConflictError{
+			TaskID: taskItem.ID,
+			Reason: fmt.Sprintf("status %s is not eligible to start", formatTaskStatus(taskItem.Status)),
+		}
+	}
 }
 
 func validateMarkInProgressState(taskItem task.Task, branch string, worktree string) error {
