@@ -568,6 +568,54 @@ func TestRenderStatusEpicProgressFallbackDetail(t *testing.T) {
 	assertStatusLinesWithinWidth(t, got, 48)
 }
 
+func TestRenderStatusProjectedInProgressEpicUsesProgressInsteadOfNoRun(t *testing.T) {
+	epic := projectedStatusTask("op-epic", task.StatusInProgress)
+	epic.IssueType = task.IssueTypeEpic
+	epic.Relations.ChildCount = 32
+	tasks := []task.Task{epic}
+	for childNumber := 1; childNumber <= 27; childNumber++ {
+		child := projectedStatusTask(fmt.Sprintf("op-epic.%d", childNumber), task.StatusClosed)
+		child.Relations.ParentID = epic.ID
+		tasks = append(tasks, child)
+	}
+
+	projection := status.Project(projectedStatusSnapshot(tasks...))
+	entry := projectedStatusEntry(t, projection, status.GroupIdle, epic.ID)
+	assertProjectedStatusDetail(t, entry.SemanticDetail, status.Detail{Kind: status.DetailNoRun})
+	assertProjectedStatusDetail(t, entry.EpicProgress, status.Detail{
+		Kind: status.DetailEpicProgress, Completed: 27, Total: 32,
+	})
+
+	tests := []struct {
+		name    string
+		options statusRenderOptions
+		want    string
+	}{
+		{name: "compact", options: statusRenderOptions{MaxWidth: 88}, want: "27/32"},
+		{name: "wide", want: "27/32 done"},
+		{name: "no truncate", options: statusRenderOptions{MaxWidth: 48, NoTruncate: true}, want: "27/32 done"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := renderStatus(&output, projection, true, tt.options); err != nil {
+				t.Fatalf("render status: %v", err)
+			}
+
+			got := output.String()
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("output missing %q:\n%s", tt.want, got)
+			}
+			if strings.Contains(got, "no attached run recorded") {
+				t.Fatalf("output retained no-run detail:\n%s", got)
+			}
+			if tt.name == "compact" && strings.Contains(got, "27/32 done") {
+				t.Fatalf("compact output retained full progress wording:\n%s", got)
+			}
+		})
+	}
+}
+
 //nolint:funlen // The table documents the status -> projection -> render boundary.
 func TestRenderStatusProjectionSemanticDetailsAcrossBoundary(t *testing.T) {
 	tests := []projectedStatusDetailCase{
