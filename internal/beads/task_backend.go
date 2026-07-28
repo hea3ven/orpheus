@@ -110,23 +110,32 @@ func (b TaskBackend) List(ctx context.Context) ([]task.Task, error) {
 
 // Create creates a standalone Beads task.
 func (b TaskBackend) Create(ctx context.Context, opts task.CreateOptions) (task.Task, error) {
-	createOpts, err := normalizeCreateOptions(opts)
+	createOpts, err := task.NormalizeCreateOptions(opts)
 	if err != nil {
 		return task.Task{}, fmt.Errorf("create Beads task in %q: %w", b.dir, err)
 	}
 
-	result, err := b.runWrite(
-		ctx,
-		"create",
+	args := []string{
 		"create",
 		createOpts.Title,
-		"--description",
-		createOpts.Description,
-		"--acceptance",
-		createOpts.AcceptanceCriteria,
-		"--type",
-		string(createOpts.IssueType),
-	)
+		"--description", createOpts.Description,
+		"--acceptance", createOpts.AcceptanceCriteria,
+		"--type", string(createOpts.IssueType),
+	}
+	if createOpts.Design != "" {
+		args = append(args, "--design", createOpts.Design)
+	}
+	if createOpts.ExternalRef != "" {
+		args = append(args, "--external-ref", createOpts.ExternalRef)
+	}
+	if createOpts.ParentID != "" {
+		args = append(args, "--parent", createOpts.ParentID)
+	}
+	for _, dependencyID := range createOpts.BlockingIDs {
+		args = append(args, "--deps", dependencyID)
+	}
+
+	result, err := b.runWrite(ctx, "create", args...)
 	if err != nil {
 		return task.Task{}, err
 	}
@@ -242,31 +251,6 @@ func (b TaskBackend) Close(ctx context.Context, id string) error {
 		return err
 	}
 	return nil
-}
-
-func normalizeCreateOptions(opts task.CreateOptions) (task.CreateOptions, error) {
-	normalized := task.CreateOptions{
-		Title:              strings.TrimSpace(opts.Title),
-		Description:        strings.TrimSpace(opts.Description),
-		AcceptanceCriteria: strings.TrimSpace(opts.AcceptanceCriteria),
-		IssueType:          opts.IssueType,
-	}
-	if normalized.Title == "" {
-		return task.CreateOptions{}, errors.New("title is required")
-	}
-	if normalized.Description == "" {
-		return task.CreateOptions{}, errors.New("description is required")
-	}
-	if normalized.AcceptanceCriteria == "" {
-		return task.CreateOptions{}, errors.New("acceptance criteria is required")
-	}
-	if normalized.IssueType == task.IssueTypeUnknown {
-		normalized.IssueType = task.IssueTypeTask
-	}
-	if normalized.IssueType != task.IssueTypeTask {
-		return task.CreateOptions{}, fmt.Errorf("unsupported issue type %q", normalized.IssueType)
-	}
-	return normalized, nil
 }
 
 func validateMarkInProgressState(taskItem task.Task, branch string, worktree string) error {
