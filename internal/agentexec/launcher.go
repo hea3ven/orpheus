@@ -8,12 +8,16 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+
+	"github.com/hea3ven/orpheus/internal/testguard"
 )
 
 // Command is a resolved direct process invocation.
 type Command struct {
 	Name    string
+	Harness string
 	Command string
 	Args    []string
 }
@@ -74,6 +78,9 @@ func (l AttachedLauncher) Run(ctx context.Context, command Command, opts LaunchO
 	if err := ctx.Err(); err != nil {
 		return &StartError{Name: command.Name, Err: err}
 	}
+	if err := requireTestFakeAgent(command); err != nil {
+		return &StartError{Name: command.Name, Err: err}
+	}
 
 	process := exec.CommandContext(ctx, command.Command, command.Args...)
 	process.Dir = opts.Dir
@@ -96,4 +103,52 @@ func (l AttachedLauncher) Run(ctx context.Context, command Command, opts LaunchO
 		return fmt.Errorf("run agent %q: %w", command.Name, err)
 	}
 	return nil
+}
+
+func requireTestFakeAgent(command Command) error {
+	if !testguard.IsTestProcess() || !supportedHarnessCommand(command) {
+		return nil
+	}
+
+	expected := testguard.FakeAgentPath(command.Command)
+	if expected == "" {
+		return fmt.Errorf(
+			"test safety gate blocked supported agent executable %q; register an explicit fake",
+			command.Command,
+		)
+	}
+	resolved, err := exec.LookPath(command.Command)
+	if err != nil {
+		return fmt.Errorf("test safety gate resolve registered fake %q: %w", command.Command, err)
+	}
+	if !sameExecutable(expected, resolved) {
+		return fmt.Errorf(
+			"test safety gate blocked supported agent executable %q; resolved %q instead of registered fake %q",
+			command.Command,
+			resolved,
+			expected,
+		)
+	}
+	return nil
+}
+
+func supportedHarnessCommand(command Command) bool {
+	harness := strings.TrimSpace(command.Harness)
+	if harness == "codex" || harness == "pi" {
+		return true
+	}
+	base := filepath.Base(strings.TrimSpace(command.Command))
+	return base == "codex" || base == "pi"
+}
+
+func sameExecutable(first string, second string) bool {
+	first, err := filepath.EvalSymlinks(first)
+	if err != nil {
+		return false
+	}
+	second, err = filepath.EvalSymlinks(second)
+	if err != nil {
+		return false
+	}
+	return filepath.Clean(first) == filepath.Clean(second)
 }

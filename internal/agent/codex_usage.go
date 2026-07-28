@@ -14,6 +14,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/pathutil"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testguard"
 )
 
 const (
@@ -121,10 +122,14 @@ func codexRoot(env map[string]string) (string, error) {
 	}
 	home := strings.TrimSpace(env["HOME"])
 	if home == "" {
-		var err error
-		home, err = os.UserHomeDir()
-		if err != nil {
-			return "", err
+		if testguard.IsTestProcess() {
+			home = testguard.IsolatedUsageRoots().Home
+		} else {
+			var err error
+			home, err = os.UserHomeDir()
+			if err != nil {
+				return "", err
+			}
 		}
 	}
 	if !filepath.IsAbs(home) {
@@ -331,7 +336,7 @@ func usageFromCodexSession(session codexSessionCandidate) taskstate.RecordRunUsa
 func CodexUsageCaptureEnvironment() map[string]string {
 	env := map[string]string{}
 	for _, key := range []string{"CODEX_HOME", "HOME"} {
-		if value, ok := os.LookupEnv(key); ok {
+		if value, ok := usageCaptureEnvironmentValue(key); ok {
 			env[key] = value
 		}
 	}

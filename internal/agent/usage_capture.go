@@ -9,6 +9,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testguard"
 )
 
 // UsageCaptureOptions describes a launched harness-backed process.
@@ -35,11 +36,30 @@ func UsageCaptureEnvironment() map[string]string {
 		"PI_CODING_AGENT_DIR",
 		"PI_CODING_AGENT_SESSION_DIR",
 	} {
-		if value, ok := os.LookupEnv(key); ok {
+		if value, ok := usageCaptureEnvironmentValue(key); ok {
 			env[key] = value
 		}
 	}
 	return env
+}
+
+func usageCaptureEnvironmentValue(key string) (string, bool) {
+	if !testguard.IsTestProcess() || testguard.EnvironmentChanged(key) {
+		return os.LookupEnv(key)
+	}
+	roots := testguard.IsolatedUsageRoots()
+	switch key {
+	case "CODEX_HOME":
+		return roots.CodexHome, true
+	case "HOME":
+		return roots.Home, true
+	case "PI_CODING_AGENT_DIR":
+		return roots.PiDir, true
+	case "PI_CODING_AGENT_SESSION_DIR":
+		return roots.PiSessionDir, true
+	default:
+		return "", false
+	}
 }
 
 // CaptureUsage correlates an Orpheus execution with harness-specific usage logs.

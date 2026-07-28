@@ -20,6 +20,7 @@ import (
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/tasktarget"
+	"github.com/hea3ven/orpheus/internal/testguard"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -8359,6 +8360,7 @@ exit %d
 		t.Fatalf("write fake agent: %v", err)
 	}
 	t.Setenv("FAKE_AGENT_LOG", logPath)
+	t.Setenv(testguard.FakeAgentEnvKey(name), agentPath)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return logPath
 }
@@ -8375,6 +8377,7 @@ git add conflict.txt
 	if err := os.WriteFile(agentPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake codex: %v", err)
 	}
+	t.Setenv(testguard.FakeAgentEnvKey("codex"), agentPath)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 

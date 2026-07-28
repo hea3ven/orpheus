@@ -103,6 +103,7 @@ func (s CommandSnapshot) AgentSelection() taskstate.AgentSelection {
 func (s CommandSnapshot) ExecCommand() agentexec.Command {
 	return agentexec.Command{
 		Name:    s.AgentName,
+		Harness: s.Harness,
 		Command: s.Command,
 		Args:    append([]string{}, s.Args...),
 	}
