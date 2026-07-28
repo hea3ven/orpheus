@@ -902,12 +902,10 @@ func newGitRepoWithLocalOrigin(t *testing.T) string {
 		t.Fatalf("create repo: %v", err)
 	}
 	runGit(t, repoPath, "init")
+	runGit(t, repoPath, "config", "user.name", "Orpheus Test")
+	runGit(t, repoPath, "config", "user.email", "orpheus@example.com")
 	runGit(t, repoPath, "checkout", "-b", "main")
-	runGit(t, repoPath,
-		"-c", "user.name=Orpheus Test",
-		"-c", "user.email=orpheus@example.com",
-		"commit", "--allow-empty", "-m", "initial",
-	)
+	runGit(t, repoPath, "commit", "--allow-empty", "-m", "initial")
 	runGit(t, repoPath, "remote", "add", "origin", originPath)
 	runGit(t, repoPath, "push", "--set-upstream", "origin", "main")
 	return repoPath
