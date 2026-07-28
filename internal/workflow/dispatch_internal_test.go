@@ -165,6 +165,64 @@ func TestDispatchValidateStartRefusesUnkeptAutomatedBlockers(t *testing.T) {
 	}
 }
 
+func TestDispatchValidateStartAllowsFollowUpForNormalizedFailedReview(t *testing.T) {
+	paths := newDispatchTestPaths(t)
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
+	repo := task.Repository{
+		ID: "alpha", Name: "Alpha", Path: repoPath, DefaultBranch: "main", TaskIDPrefix: "op",
+	}
+	taskItem := task.Task{
+		ID:     "op-1",
+		Status: task.StatusInProgress,
+		Metadata: task.Metadata{
+			task.MetadataBranch: "main", task.MetadataWorktree: repoPath,
+		},
+	}
+	store := taskstate.NewStore(paths)
+	run, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Branch: "main", Worktree: repoPath})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	if _, err := store.FinishRun("alpha", "op-1", run.Attempt, taskstate.RunStatusSucceeded); err != nil {
+		t.Fatalf("finish run: %v", err)
+	}
+	reviewAttempt, err := store.StartReview("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("start review: %v", err)
+	}
+	if _, err := store.RecordReviewStep("alpha", "op-1", reviewAttempt.Attempt, taskstate.RecordReviewStepOptions{
+		Kind: taskstate.ReviewStepKindCheck,
+		Name: "local-review",
+	}); err != nil {
+		t.Fatalf("record review step: %v", err)
+	}
+	if _, err := store.RecordReviewFinding("alpha", "op-1", reviewAttempt.Attempt, taskstate.ReviewFinding{
+		Type: taskstate.FindingTypeBlocking, Step: "local-review", Title: "Failed review blocker", Description: "Fix it.",
+	}); err != nil {
+		t.Fatalf("record review finding: %v", err)
+	}
+	if _, err := store.FinishReview("alpha", "op-1", reviewAttempt.Attempt, taskstate.ReviewStatusFailed); err != nil {
+		t.Fatalf("finish failed review: %v", err)
+	}
+	if _, err := store.MarkReviewAutomatedBlockerDecisionKept("alpha", "op-1", reviewAttempt.Attempt); err != nil {
+		t.Fatalf("record keep decision: %v", err)
+	}
+	if _, err := store.PrepareReviewForTargetedFollowUp("alpha", "op-1", reviewAttempt.Attempt); err != nil {
+		t.Fatalf("normalize failed review for follow-up: %v", err)
+	}
+
+	service := DispatchService{Paths: paths, RunStore: store}
+	plan, err := service.validateStart(context.Background(), DispatchStartOptions{
+		TaskID: taskItem.ID, Source: task.RepositorySource{Repository: repo}, Backend: fakeDispatchBackend{taskItem: taskItem},
+	})
+	if err != nil {
+		t.Fatalf("validate start: %v", err)
+	}
+	if plan.followUp == nil || plan.followUp.reviewAttempt != reviewAttempt.Attempt || len(plan.followUp.findingIndexes) != 1 || plan.followUp.findingIndexes[0] != 0 {
+		t.Fatalf("follow-up plan = %#v, want normalized failed review finding 0", plan.followUp)
+	}
+}
+
 func TestDispatchValidateStartAllowsManualBlockersWithoutKeepDecision(t *testing.T) {
 	reviewAttempt := taskstate.ReviewAttempt{
 		Attempt:  1,

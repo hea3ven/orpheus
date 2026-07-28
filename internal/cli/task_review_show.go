@@ -227,6 +227,8 @@ func renderReviewFinding(output io.Writer, indexed indexedReviewFinding) error {
 
 func reviewFindingResolution(finding taskstate.ReviewFinding) string {
 	switch taskstate.ResolveReviewFinding(finding) {
+	case taskstate.ReviewFindingResolutionAddressedManually:
+		return "addressed manually: " + strings.TrimSpace(finding.AddressedManually)
 	case taskstate.ReviewFindingResolutionWaived:
 		return "waived: " + strings.TrimSpace(finding.Waiver)
 	case taskstate.ReviewFindingResolutionDowngraded:

@@ -866,6 +866,74 @@ func TestStoreWaivesReviewBlockingFinding(t *testing.T) {
 	)
 }
 
+func TestStoreRecordsManualAddressForBlockedReviewFinding(t *testing.T) {
+	store := newTestStore(t)
+	review, err := store.StartReview("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("start review: %v", err)
+	}
+	if _, err := store.RecordReviewFinding("alpha", "op-1", review.Attempt, taskstate.ReviewFinding{
+		Type:        taskstate.FindingTypeBlocking,
+		Title:       "Direct fix",
+		Description: "Requires an out-of-band repair.",
+	}); err != nil {
+		t.Fatalf("record finding: %v", err)
+	}
+	if _, err := store.FinishReview("alpha", "op-1", review.Attempt, taskstate.ReviewStatusBlocked); err != nil {
+		t.Fatalf("finish review: %v", err)
+	}
+
+	updated, err := store.AddressReviewBlockingFindingManually("alpha", "op-1", review.Attempt, 0, "Verified in the worktree.")
+	if err != nil {
+		t.Fatalf("address finding manually: %v", err)
+	}
+	finding := updated.Findings[0]
+	if finding.AddressedManually != "Verified in the worktree." {
+		t.Fatalf("manual address reason = %q", finding.AddressedManually)
+	}
+	if finding.Waiver != "" {
+		t.Fatalf("waiver = %q, want empty", finding.Waiver)
+	}
+	if taskstate.IsOpenBlockingReviewFinding(finding) {
+		t.Fatal("manually addressed finding remains open")
+	}
+
+	assertStoreYAMLContains(t, store, "alpha", "op-1", "addressed_manually: Verified in the worktree.")
+}
+
+func TestStoreAllowsFailedReviewBlockerDispositions(t *testing.T) {
+	store := newTestStore(t)
+	review, err := store.StartReview("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("start review: %v", err)
+	}
+	for _, title := range []string{"Manual fix", "Accepted risk", "Automated follow-up"} {
+		if _, err := store.RecordReviewFinding("alpha", "op-1", review.Attempt, taskstate.ReviewFinding{
+			Type:        taskstate.FindingTypeBlocking,
+			Title:       title,
+			Description: "Requires an explicit disposition.",
+		}); err != nil {
+			t.Fatalf("record finding %q: %v", title, err)
+		}
+	}
+	if _, err := store.FinishReview("alpha", "op-1", review.Attempt, taskstate.ReviewStatusFailed); err != nil {
+		t.Fatalf("finish failed review: %v", err)
+	}
+	if _, err := store.AddressReviewBlockingFindingManually("alpha", "op-1", review.Attempt, 0, "Fixed outside Orpheus."); err != nil {
+		t.Fatalf("address failed review finding manually: %v", err)
+	}
+	if _, err := store.WaiveReviewBlockingFinding("alpha", "op-1", review.Attempt, 1, "Accepted compatibility risk."); err != nil {
+		t.Fatalf("waive failed review finding: %v", err)
+	}
+	updated, err := store.MarkReviewAutomatedBlockerDecisionKept("alpha", "op-1", review.Attempt)
+	if err != nil {
+		t.Fatalf("keep automated blocker from failed review: %v", err)
+	}
+	if !updated.AutomatedBlockerDecisionKept {
+		t.Fatal("automated blocker keep decision was not retained")
+	}
+}
+
 func TestStoreRejectsReclassifyingResolvedOrNonBlockingFindings(t *testing.T) {
 	for _, test := range reviewBlockingReclassificationRejectionCases() {
 		t.Run(test.name, func(t *testing.T) {
@@ -924,6 +992,17 @@ var reviewFindingResolutionContractCases = []reviewFindingResolutionContractCase
 		},
 		resolution:   taskstate.ReviewFindingResolutionOpen,
 		openBlocking: true,
+	},
+	{
+		name: "manually addressed blocking",
+		finding: taskstate.ReviewFinding{
+			Type:              taskstate.FindingTypeBlocking,
+			Title:             "Manually addressed",
+			Description:       "Fixed outside Orpheus.",
+			AddressedManually: "Verified direct fix.",
+		},
+		resolution: taskstate.ReviewFindingResolutionAddressedManually,
+		resolved:   true,
 	},
 	{
 		name: "waived blocking",
@@ -1008,6 +1087,12 @@ func TestUntargetedBlockingFindingIndexes(t *testing.T) {
 				TargetedByRunAttempt: 2,
 			},
 			{
+				Type:              taskstate.FindingTypeBlocking,
+				Title:             "Manually addressed",
+				Description:       "Fixed directly.",
+				AddressedManually: "Verified outside Orpheus.",
+			},
+			{
 				Type:        taskstate.FindingTypeBlocking,
 				Title:       "Second open",
 				Description: "Also needs follow-up.",
@@ -1016,8 +1101,8 @@ func TestUntargetedBlockingFindingIndexes(t *testing.T) {
 	}
 
 	indexes := taskstate.UntargetedBlockingFindingIndexes(review)
-	if len(indexes) != 2 || indexes[0] != 0 || indexes[1] != 4 {
-		t.Fatalf("UntargetedBlockingFindingIndexes() = %#v, want []int{0, 4}", indexes)
+	if len(indexes) != 2 || indexes[0] != 0 || indexes[1] != 5 {
+		t.Fatalf("UntargetedBlockingFindingIndexes() = %#v, want []int{0, 5}", indexes)
 	}
 	if !taskstate.ReviewHasOpenBlockers(review) {
 		t.Fatal("ReviewHasOpenBlockers() = false, want true")

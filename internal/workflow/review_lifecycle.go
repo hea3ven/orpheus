@@ -43,6 +43,10 @@ type ReviewLifecycleStore interface {
 	MarkReviewAutonomousBudgetExhausted(repoID, taskID string, attempt int) (taskstate.ReviewAttempt, error)
 	PromoteReviewAdvisoryFinding(repoID, taskID string, attempt int, findingIndex int) (taskstate.ReviewAttempt, error)
 	RecordReviewFindingCreatedTask(repoID, taskID string, attempt int, findingIndex int, createdTaskID string) (taskstate.ReviewAttempt, error)
+	AddressReviewBlockingFindingManually(repoID, taskID string, attempt int, findingIndex int, reason string) (taskstate.ReviewAttempt, error)
+	WaiveReviewBlockingFinding(repoID, taskID string, attempt int, findingIndex int, reason string) (taskstate.ReviewAttempt, error)
+	MarkReviewAutomatedBlockerDecisionKept(repoID, taskID string, attempt int) (taskstate.ReviewAttempt, error)
+	PrepareReviewForTargetedFollowUp(repoID, taskID string, attempt int) (taskstate.ReviewAttempt, error)
 }
 
 // ReviewLifecycleAgentRun describes an attached implementation/fix run that the
@@ -100,6 +104,7 @@ type ReviewLifecycleFrontend interface {
 	SeparateTaskCreated(ReviewAttemptContext, SeparateTaskCandidate, task.Task) error
 	ContinueAfterFollowUpCreationFailure(ReviewAttemptContext, SeparateTaskCandidate, error) (bool, error)
 	ConfirmRunningCompletionFinalization(ReviewAttemptContext, RunningCompletionConfirmation) (bool, error)
+	PromptFreshReviewBlockerDispositions(ReviewAttemptContext, []FreshReviewBlocker) ([]FreshReviewBlockerDisposition, error)
 }
 
 // ReviewLifecycleService owns complete task-review lifecycle orchestration.
@@ -214,6 +219,33 @@ func (c ReviewAttemptContext) RepoID() string { return c.Source.Repository.ID }
 // TaskID returns the resolved backend task id.
 func (c ReviewAttemptContext) TaskID() string { return c.Task.ID }
 
+// FreshReviewBlocker identifies an unresolved finding that would otherwise be
+// superseded by a new authoritative review attempt.
+type FreshReviewBlocker struct {
+	Index   int
+	Finding taskstate.ReviewFinding
+}
+
+// FreshReviewBlockerAction is the explicit disposition for a prior blocker.
+type FreshReviewBlockerAction string
+
+const (
+	FreshReviewBlockerActionKeep              FreshReviewBlockerAction = "keep"
+	FreshReviewBlockerActionAddressedManually FreshReviewBlockerAction = "addressed_manually"
+	FreshReviewBlockerActionWaive             FreshReviewBlockerAction = "waive"
+)
+
+// FreshReviewBlockerDisposition applies an operator decision to a prior finding.
+type FreshReviewBlockerDisposition struct {
+	FindingIndex int
+	Action       FreshReviewBlockerAction
+	Reason       string
+}
+
+// ErrFreshReviewBlockerDispositionInterrupted means the operator did not
+// finish deciding how to preserve or resolve the prior blockers.
+var ErrFreshReviewBlockerDispositionInterrupted = errors.New("fresh review blocker disposition interrupted")
+
 // SeparateTaskCandidate describes a review finding that can become a standalone task.
 type SeparateTaskCandidate struct {
 	Index   int
@@ -299,9 +331,8 @@ func (s ReviewLifecycleService) Run(ctx context.Context, opts ReviewLifecycleOpt
 	}
 	start, err := s.startReview(ctx, opts.TaskID, opts.PipelineName)
 	if err != nil {
-		finalErr = err
-		finalOutcome = reviewLifecycleOperationalFailure(start, err)
-		return finalOutcome, err
+		finalOutcome, finalErr = reviewLifecycleStartOutcome(start, err)
+		return finalOutcome, finalErr
 	}
 	dispatchAgentName := opts.DispatchAgentName
 	if start.Resumed && strings.TrimSpace(dispatchAgentName) == "" {
@@ -356,6 +387,25 @@ func (s ReviewLifecycleService) RunAfterCompletedRun(
 
 func reviewLifecycleOperationalFailure(ctx ReviewAttemptContext, err error) ReviewLifecycleOutcome {
 	return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeOperationalFail, Context: ctx, Err: err}
+}
+
+func reviewLifecycleStartOutcome(ctx ReviewAttemptContext, err error) (ReviewLifecycleOutcome, error) {
+	if outcome, handled := freshReviewBlockerGuardOutcome(ctx, err); handled {
+		return outcome, nil
+	}
+	return reviewLifecycleOperationalFailure(ctx, err), err
+}
+
+func freshReviewBlockerGuardOutcome(ctx ReviewAttemptContext, err error) (ReviewLifecycleOutcome, bool) {
+	var guardErr freshReviewBlockerGuardError
+	if !errors.As(err, &guardErr) {
+		return ReviewLifecycleOutcome{}, false
+	}
+	kind := ReviewLifecycleOutcomeBlocked
+	if guardErr.interrupted {
+		kind = ReviewLifecycleOutcomeAborted
+	}
+	return ReviewLifecycleOutcome{Kind: kind, Context: ctx}, true
 }
 
 type autonomousReviewLoopOptions struct {
@@ -696,9 +746,23 @@ func fetchReviewTask(
 	return taskItem, nil
 }
 
+type freshReviewBlockerGuardError struct {
+	interrupted bool
+}
+
+func (e freshReviewBlockerGuardError) Error() string {
+	if e.interrupted {
+		return "fresh review blocker disposition interrupted"
+	}
+	return "fresh review blocked by preserved findings"
+}
+
 func (s ReviewLifecycleService) startFreshReview(base ReviewAttemptContext, pipeline review.Pipeline) (ReviewAttemptContext, error) {
 	base.Pipeline = pipeline
 	base.Resumed = false
+	if err := s.guardFreshReviewBlockers(base); err != nil {
+		return base, err
+	}
 	prepared, err := s.preparePipeline(base)
 	if err != nil {
 		return base, err
@@ -710,6 +774,104 @@ func (s ReviewLifecycleService) startFreshReview(base ReviewAttemptContext, pipe
 	}
 	base.Review = reviewAttempt
 	return base, nil
+}
+
+func (s ReviewLifecycleService) guardFreshReviewBlockers(base ReviewAttemptContext) error {
+	taskState, err := base.store.Load(base.RepoID(), base.TaskID())
+	if err != nil {
+		return fmt.Errorf("task review %s: load prior review blockers: %w", base.TaskID(), err)
+	}
+	latest, ok := taskstate.LatestReview(taskState)
+	if !ok {
+		return nil
+	}
+	indexes := taskstate.UntargetedBlockingFindingIndexes(latest)
+	if len(indexes) == 0 {
+		return nil
+	}
+
+	blockers, automated := freshReviewBlockers(latest, indexes)
+	dispositions, err := s.Frontend.PromptFreshReviewBlockerDispositions(base, blockers)
+	if err != nil {
+		if errors.Is(err, ErrFreshReviewBlockerDispositionInterrupted) {
+			return freshReviewBlockerGuardError{interrupted: true}
+		}
+		return fmt.Errorf("task review %s: prompt fresh review blocker dispositions: %w", base.TaskID(), err)
+	}
+	if err := validateFreshReviewBlockerDispositions(blockers, dispositions); err != nil {
+		return fmt.Errorf("task review %s: %w", base.TaskID(), err)
+	}
+
+	for _, disposition := range dispositions {
+		switch disposition.Action {
+		case FreshReviewBlockerActionKeep:
+			if automated[disposition.FindingIndex] {
+				if _, err := base.store.MarkReviewAutomatedBlockerDecisionKept(base.RepoID(), base.TaskID(), latest.Attempt); err != nil {
+					return fmt.Errorf("task review %s: record kept automated blocker finding %d: %w", base.TaskID(), disposition.FindingIndex+1, err)
+				}
+			}
+		case FreshReviewBlockerActionAddressedManually:
+			if _, err := base.store.AddressReviewBlockingFindingManually(base.RepoID(), base.TaskID(), latest.Attempt, disposition.FindingIndex, disposition.Reason); err != nil {
+				return fmt.Errorf("task review %s: record manually addressed blocker finding %d: %w", base.TaskID(), disposition.FindingIndex+1, err)
+			}
+		case FreshReviewBlockerActionWaive:
+			if _, err := base.store.WaiveReviewBlockingFinding(base.RepoID(), base.TaskID(), latest.Attempt, disposition.FindingIndex, disposition.Reason); err != nil {
+				return fmt.Errorf("task review %s: waive prior blocker finding %d: %w", base.TaskID(), disposition.FindingIndex+1, err)
+			}
+		}
+	}
+
+	updated, err := base.store.Load(base.RepoID(), base.TaskID())
+	if err != nil {
+		return fmt.Errorf("task review %s: reload prior review blockers: %w", base.TaskID(), err)
+	}
+	latest, _ = taskstate.LatestReview(updated)
+	if !taskstate.ReviewHasOpenBlockers(latest) {
+		return nil
+	}
+	if _, err := base.store.PrepareReviewForTargetedFollowUp(base.RepoID(), base.TaskID(), latest.Attempt); err != nil {
+		return fmt.Errorf("task review %s: preserve kept blockers for targeted follow-up: %w", base.TaskID(), err)
+	}
+	return freshReviewBlockerGuardError{}
+}
+
+func freshReviewBlockers(reviewAttempt taskstate.ReviewAttempt, indexes []int) ([]FreshReviewBlocker, map[int]bool) {
+	blockers := make([]FreshReviewBlocker, 0, len(indexes))
+	automated := make(map[int]bool, len(indexes))
+	for _, index := range taskstate.UntargetedAutomatedBlockingFindingIndexes(reviewAttempt) {
+		automated[index] = true
+	}
+	for _, index := range indexes {
+		blockers = append(blockers, FreshReviewBlocker{Index: index, Finding: reviewAttempt.Findings[index]})
+	}
+	return blockers, automated
+}
+
+func validateFreshReviewBlockerDispositions(blockers []FreshReviewBlocker, dispositions []FreshReviewBlockerDisposition) error {
+	if len(dispositions) != len(blockers) {
+		return fmt.Errorf("expected dispositions for %d blockers, got %d", len(blockers), len(dispositions))
+	}
+	allowed := make(map[int]bool, len(blockers))
+	for _, blocker := range blockers {
+		allowed[blocker.Index] = true
+	}
+	seen := make(map[int]bool, len(dispositions))
+	for _, disposition := range dispositions {
+		if !allowed[disposition.FindingIndex] || seen[disposition.FindingIndex] {
+			return fmt.Errorf("disposition for finding %d is invalid", disposition.FindingIndex+1)
+		}
+		seen[disposition.FindingIndex] = true
+		switch disposition.Action {
+		case FreshReviewBlockerActionKeep:
+		case FreshReviewBlockerActionAddressedManually, FreshReviewBlockerActionWaive:
+			if strings.TrimSpace(disposition.Reason) == "" {
+				return fmt.Errorf("disposition for finding %d requires a reason", disposition.FindingIndex+1)
+			}
+		default:
+			return fmt.Errorf("disposition for finding %d has unsupported action %q", disposition.FindingIndex+1, disposition.Action)
+		}
+	}
+	return nil
 }
 
 func (s ReviewLifecycleService) resumeReview(base ReviewAttemptContext, paused taskstate.ReviewAttempt, pipelineName string) (ReviewAttemptContext, error) {

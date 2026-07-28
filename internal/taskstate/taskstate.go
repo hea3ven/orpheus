@@ -369,13 +369,14 @@ type ReviewFinding struct {
 	Title       string      `yaml:"title"`
 	Description string      `yaml:"description"`
 
-	Step            string             `yaml:"step,omitempty"`
-	SuggestedAction string             `yaml:"suggested_action,omitempty"`
-	DowngradeReason string             `yaml:"downgrade_reason,omitempty"`
-	Waiver          string             `yaml:"waiver,omitempty"`
-	TaskProposal    ReviewTaskProposal `yaml:"task_proposal,omitempty"`
-	CreatedTaskID   string             `yaml:"created_task_id,omitempty"`
-	CreatedTaskAt   *time.Time         `yaml:"created_task_at,omitempty"`
+	Step              string             `yaml:"step,omitempty"`
+	SuggestedAction   string             `yaml:"suggested_action,omitempty"`
+	DowngradeReason   string             `yaml:"downgrade_reason,omitempty"`
+	AddressedManually string             `yaml:"addressed_manually,omitempty"`
+	Waiver            string             `yaml:"waiver,omitempty"`
+	TaskProposal      ReviewTaskProposal `yaml:"task_proposal,omitempty"`
+	CreatedTaskID     string             `yaml:"created_task_id,omitempty"`
+	CreatedTaskAt     *time.Time         `yaml:"created_task_at,omitempty"`
 
 	TargetedByRunAttempt int `yaml:"targeted_by_run_attempt,omitempty"`
 }
@@ -1532,6 +1533,25 @@ func reviewCanChangeManualFinding(review ReviewAttempt) bool {
 	return review.Status == ReviewStatusRunning || review.Status == ReviewStatusWaitingForManual
 }
 
+// AddressReviewBlockingFindingManually records that an operator fixed an
+// unresolved blocker outside an Orpheus follow-up run.
+func (s Store) AddressReviewBlockingFindingManually(
+	repoID,
+	taskID string,
+	attempt int,
+	findingIndex int,
+	reason string,
+) (ReviewAttempt, error) {
+	return s.reclassifyReviewBlockingFinding(
+		repoID,
+		taskID,
+		attempt,
+		findingIndex,
+		reason,
+		reviewBlockingReclassificationAddressedManually,
+	)
+}
+
 // WaiveReviewBlockingFinding records an operator waiver for an unresolved blocking finding.
 func (s Store) WaiveReviewBlockingFinding(
 	repoID,
@@ -1553,8 +1573,9 @@ func (s Store) WaiveReviewBlockingFinding(
 type reviewBlockingReclassification string
 
 const (
-	reviewBlockingReclassificationDowngrade reviewBlockingReclassification = "downgrade"
-	reviewBlockingReclassificationWaive     reviewBlockingReclassification = "waive"
+	reviewBlockingReclassificationDowngrade         reviewBlockingReclassification = "downgrade"
+	reviewBlockingReclassificationAddressedManually reviewBlockingReclassification = "address manually"
+	reviewBlockingReclassificationWaive             reviewBlockingReclassification = "waive"
 )
 
 func (s Store) reclassifyReviewBlockingFinding(
@@ -1604,7 +1625,7 @@ func (s Store) reviewBlockingReclassificationTarget(
 	if err != nil {
 		return TaskState{}, -1, err
 	}
-	reviewIndex, err := requireRunningReviewFinding(
+	reviewIndex, err := requireResolvableReviewFinding(
 		state,
 		repoID,
 		taskID,
@@ -1650,12 +1671,31 @@ func applyReviewBlockingReclassification(
 	case reviewBlockingReclassificationDowngrade:
 		state.Reviews[reviewIndex].Findings[findingIndex].Type = FindingTypeAdvisory
 		state.Reviews[reviewIndex].Findings[findingIndex].DowngradeReason = reason
+	case reviewBlockingReclassificationAddressedManually:
+		state.Reviews[reviewIndex].Findings[findingIndex].AddressedManually = reason
 	case reviewBlockingReclassificationWaive:
 		state.Reviews[reviewIndex].Findings[findingIndex].Waiver = reason
 	}
 }
 
-func requireRunningReviewFinding(
+// reviewCanResolveBlockingFindings reports whether an attempt can retain an
+// audit disposition for an existing blocker. A manual review remains owned by
+// its pipeline until it resumes, so it cannot be changed by a fresh-review
+// guard.
+func reviewCanResolveBlockingFindings(review ReviewAttempt) bool {
+	switch review.Status {
+	case ReviewStatusRunning,
+		ReviewStatusBlocked,
+		ReviewStatusFailed,
+		ReviewStatusPassed,
+		ReviewStatusAborted:
+		return true
+	default:
+		return false
+	}
+}
+
+func requireResolvableReviewFinding(
 	state TaskState,
 	repoID,
 	taskID string,
@@ -1667,15 +1707,14 @@ func requireRunningReviewFinding(
 	if reviewIndex < 0 {
 		return -1, fmt.Errorf("%s for task %s/%s: review attempt %d was not found", operation, repoID, taskID, attempt)
 	}
-	if state.Reviews[reviewIndex].Status != ReviewStatusRunning {
+	if !reviewCanResolveBlockingFindings(state.Reviews[reviewIndex]) {
 		return -1, fmt.Errorf(
-			"%s for task %s/%s: review attempt %d is %q, expected %q",
+			"%s for task %s/%s: review attempt %d is %q, expected running, blocked, failed, passed, or aborted",
 			operation,
 			repoID,
 			taskID,
 			attempt,
 			state.Reviews[reviewIndex].Status,
-			ReviewStatusRunning,
 		)
 	}
 	if findingIndex < 0 || findingIndex >= len(state.Reviews[reviewIndex].Findings) {
@@ -1688,19 +1727,23 @@ func requireRunningReviewFinding(
 type ReviewFindingResolution string
 
 const (
-	ReviewFindingResolutionOpen          ReviewFindingResolution = "open"
-	ReviewFindingResolutionWaived        ReviewFindingResolution = "waived"
-	ReviewFindingResolutionDowngraded    ReviewFindingResolution = "downgraded"
-	ReviewFindingResolutionCreatedTask   ReviewFindingResolution = "created_task"
-	ReviewFindingResolutionTargetedByRun ReviewFindingResolution = "targeted_by_run"
-	ReviewFindingResolutionNonBlocking   ReviewFindingResolution = "non_blocking"
-	ReviewFindingResolutionSeparateTask  ReviewFindingResolution = "separate_task"
+	ReviewFindingResolutionOpen              ReviewFindingResolution = "open"
+	ReviewFindingResolutionAddressedManually ReviewFindingResolution = "addressed_manually"
+	ReviewFindingResolutionWaived            ReviewFindingResolution = "waived"
+	ReviewFindingResolutionDowngraded        ReviewFindingResolution = "downgraded"
+	ReviewFindingResolutionCreatedTask       ReviewFindingResolution = "created_task"
+	ReviewFindingResolutionTargetedByRun     ReviewFindingResolution = "targeted_by_run"
+	ReviewFindingResolutionNonBlocking       ReviewFindingResolution = "non_blocking"
+	ReviewFindingResolutionSeparateTask      ReviewFindingResolution = "separate_task"
 )
 
 // ResolveReviewFinding classifies the finding lifecycle state used for blocking decisions.
 func ResolveReviewFinding(finding ReviewFinding) ReviewFindingResolution {
 	if strings.TrimSpace(finding.Waiver) != "" {
 		return ReviewFindingResolutionWaived
+	}
+	if strings.TrimSpace(finding.AddressedManually) != "" {
+		return ReviewFindingResolutionAddressedManually
 	}
 	if strings.TrimSpace(finding.DowngradeReason) != "" {
 		return ReviewFindingResolutionDowngraded
@@ -1724,7 +1767,8 @@ func ResolveReviewFinding(finding ReviewFinding) ReviewFindingResolution {
 // ReviewFindingResolved reports whether a finding has an explicit audit resolution.
 func ReviewFindingResolved(finding ReviewFinding) bool {
 	switch ResolveReviewFinding(finding) {
-	case ReviewFindingResolutionWaived,
+	case ReviewFindingResolutionAddressedManually,
+		ReviewFindingResolutionWaived,
 		ReviewFindingResolutionDowngraded,
 		ReviewFindingResolutionCreatedTask,
 		ReviewFindingResolutionTargetedByRun:
@@ -1950,6 +1994,41 @@ func (s Store) FinishReview(repoID, taskID string, attempt int, status ReviewSta
 	return state.Reviews[index], nil
 }
 
+// PrepareReviewForTargetedFollowUp makes a review attempt authoritative for a
+// targeted repair. A running review is terminally blocked at the time of this
+// decision; terminal reviews retain their original pipeline completion time.
+func (s Store) PrepareReviewForTargetedFollowUp(repoID, taskID string, attempt int) (ReviewAttempt, error) {
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+	index := reviewAttemptIndex(state, attempt)
+	if index < 0 {
+		return ReviewAttempt{}, fmt.Errorf("prepare review for targeted follow-up for task %s/%s: review attempt %d was not found", repoID, taskID, attempt)
+	}
+	if !reviewCanResolveBlockingFindings(state.Reviews[index]) {
+		return ReviewAttempt{}, fmt.Errorf(
+			"prepare review for targeted follow-up for task %s/%s: review attempt %d is %q, expected running, blocked, failed, passed, or aborted",
+			repoID,
+			taskID,
+			attempt,
+			state.Reviews[index].Status,
+		)
+	}
+
+	review := &state.Reviews[index]
+	if review.Status == ReviewStatusRunning {
+		now := s.nowUTC()
+		review.FinishedAt = &now
+	}
+	review.Status = ReviewStatusBlocked
+	review.AutomatedBlockerDecisionInterrupted = false
+	if err := s.save(state); err != nil {
+		return ReviewAttempt{}, err
+	}
+	return state.Reviews[index], nil
+}
+
 // MarkReviewAutomatedBlockerDecisionKept records that the operator explicitly
 // kept at least one automated blocker during classification.
 func (s Store) MarkReviewAutomatedBlockerDecisionKept(repoID, taskID string, attempt int) (ReviewAttempt, error) {
@@ -1961,18 +2040,18 @@ func (s Store) MarkReviewAutomatedBlockerDecisionKept(repoID, taskID string, att
 	if index < 0 {
 		return ReviewAttempt{}, fmt.Errorf("mark automated blocker decision kept for task %s/%s: review attempt %d was not found", repoID, taskID, attempt)
 	}
-	if state.Reviews[index].Status != ReviewStatusRunning {
+	if !reviewCanResolveBlockingFindings(state.Reviews[index]) {
 		return ReviewAttempt{}, fmt.Errorf(
-			"mark automated blocker decision kept for task %s/%s: review attempt %d is %q, expected %q",
+			"mark automated blocker decision kept for task %s/%s: review attempt %d is %q, expected running, blocked, failed, passed, or aborted",
 			repoID,
 			taskID,
 			attempt,
 			state.Reviews[index].Status,
-			ReviewStatusRunning,
 		)
 	}
 
 	state.Reviews[index].AutomatedBlockerDecisionKept = true
+	state.Reviews[index].AutomatedBlockerDecisionInterrupted = false
 	if err := s.save(state); err != nil {
 		return ReviewAttempt{}, err
 	}
