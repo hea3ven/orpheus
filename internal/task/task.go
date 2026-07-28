@@ -266,6 +266,13 @@ type PRURLMutator interface {
 	SetPRURL(ctx context.Context, taskID string, prURL string) error
 }
 
+// EpicStartMutator is the narrow backend-neutral mutation used to activate an
+// eligible epic. Callers are responsible for applying epic lifecycle policy
+// before invoking it.
+type EpicStartMutator interface {
+	StartEpic(ctx context.Context, taskID string) error
+}
+
 // SyncBackend is the backend capability set needed by task sync orchestration.
 type SyncBackend interface {
 	Getter
