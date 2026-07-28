@@ -641,13 +641,16 @@ func fullStatusDetail(row statusDisplayRow) string {
 	if progress == "" {
 		return detail
 	}
-	if detail == "" || detail == "-" || row.SemanticDetail.Kind == status.DetailClosed {
+	if detail == "" || detail == "-" || epicProgressIsPrimaryDetail(row) {
 		return progress
 	}
 	return detail + "; " + progress
 }
 
 func compactStatusDetailForRow(row statusDisplayRow) string {
+	if epicProgressIsPrimaryDetail(row) {
+		return compactEpicProgressDetail(row.EpicProgress)
+	}
 	if row.SemanticDetail.Kind != status.DetailNone && row.SemanticDetail.Kind != status.DetailClosed {
 		return compactStatusDetail(row.SemanticDetail, row.Detail)
 	}
@@ -656,6 +659,20 @@ func compactStatusDetailForRow(row statusDisplayRow) string {
 		return progress
 	}
 	return compactStatusDetail(row.SemanticDetail, row.Detail)
+}
+
+// epicProgressIsPrimaryDetail reports whether an epic's child progress should
+// replace its non-actionable workflow detail.
+func epicProgressIsPrimaryDetail(row statusDisplayRow) bool {
+	if compactEpicProgressDetail(row.EpicProgress) == "" {
+		return false
+	}
+	switch row.SemanticDetail.Kind {
+	case status.DetailNone, status.DetailClosed, status.DetailNoRun:
+		return true
+	default:
+		return false
+	}
 }
 
 func compactStatusDetail(detail status.Detail, fallback string) string {
