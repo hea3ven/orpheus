@@ -160,6 +160,13 @@ func (f taskReviewLifecycleFrontend) ConfirmRunningCompletionFinalization(
 	return confirmRunningCompletionFinalizationWithReader(f.command, confirmation, f.reader)
 }
 
+func (f taskReviewLifecycleFrontend) PromptFreshReviewBlockerDispositions(
+	ctx workflow.ReviewAttemptContext,
+	blockers []workflow.FreshReviewBlocker,
+) ([]workflow.FreshReviewBlockerDisposition, error) {
+	return promptFreshReviewBlockerDispositions(f.command, f.reader, ctx.TaskID(), blockers)
+}
+
 type taskReviewLifecycleAgentRunner struct {
 	command *cobra.Command
 	service workflow.DispatchService

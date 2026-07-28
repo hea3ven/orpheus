@@ -246,7 +246,8 @@ func newTaskReviewCommand(opts *rootOptions) *cobra.Command {
 			"require an explicit keep, downgrade, or waive/cancel decision. Kept blockers " +
 			"run bounded targeted fixes and restart the pipeline from step 1 so manual " +
 			"gates must pass again. If blocker-decision input disappears, the current " +
-			"attempt is blocked and recovery starts a fresh task review.\n\n" +
+			"attempt is blocked; before a fresh review, each preserved blocker needs a keep, " +
+			"manually addressed, or waive disposition.\n\n" +
 			"Operational review failures require fixing the review command, environment, " +
 			"or process and rerunning task review. Exhausted autonomous blockers stay " +
 			"blocked until the operator explicitly continues. Use task review show to " +
@@ -1738,6 +1739,116 @@ func promptManualReviewAction(
 		return "", manualInputReadError("read review action", err)
 	}
 	return strings.ToLower(strings.TrimSpace(line)), nil
+}
+
+func promptFreshReviewBlockerDispositions(
+	command *cobra.Command,
+	reader *bufio.Reader,
+	taskID string,
+	blockers []workflow.FreshReviewBlocker,
+) ([]workflow.FreshReviewBlockerDisposition, error) {
+	if len(blockers) == 0 {
+		return nil, nil
+	}
+	output := command.ErrOrStderr()
+	if _, err := fmt.Fprintln(output, "\nOpen blocking findings from the latest review must be explicitly preserved or resolved before a fresh review can start."); err != nil {
+		return nil, err
+	}
+
+	dispositions := make([]workflow.FreshReviewBlockerDisposition, 0, len(blockers))
+	for _, blocker := range blockers {
+		if err := renderFreshReviewBlocker(output, blocker); err != nil {
+			return nil, err
+		}
+		disposition, err := promptFreshReviewBlockerDisposition(command, reader, blocker)
+		if err != nil {
+			if errors.Is(err, workflow.ErrFreshReviewBlockerDispositionInterrupted) {
+				if _, writeErr := fmt.Fprintf(output, "Fresh review blocker dispositions for %s were interrupted; no fresh review was started.\n", taskID); writeErr != nil {
+					return nil, writeErr
+				}
+			}
+			return nil, err
+		}
+		dispositions = append(dispositions, disposition)
+	}
+	return dispositions, nil
+}
+
+func renderFreshReviewBlocker(output io.Writer, blocker workflow.FreshReviewBlocker) error {
+	finding := blocker.Finding
+	lines := []string{
+		fmt.Sprintf("  Finding %d from step %s:", blocker.Index+1, formatReviewValue(finding.Step)),
+		fmt.Sprintf("    Title: %s", formatReviewValue(finding.Title)),
+		fmt.Sprintf("    Description: %s", formatReviewValue(finding.Description)),
+	}
+	if strings.TrimSpace(finding.SuggestedAction) != "" {
+		lines = append(lines, fmt.Sprintf("    Suggested action: %s", finding.SuggestedAction))
+	}
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(output, line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func promptFreshReviewBlockerDisposition(
+	command *cobra.Command,
+	reader *bufio.Reader,
+	blocker workflow.FreshReviewBlocker,
+) (workflow.FreshReviewBlockerDisposition, error) {
+	for {
+		if _, err := fmt.Fprintf(
+			command.ErrOrStderr(),
+			"Decision for finding %d [k=keep, a=addressed manually, w=waive, q=cancel]: ",
+			blocker.Index+1,
+		); err != nil {
+			return workflow.FreshReviewBlockerDisposition{}, err
+		}
+		line, err := readReviewLineWithReadError(
+			reader,
+			"read fresh review blocker disposition",
+			func(operation string, cause error) error {
+				return fmt.Errorf("%s: %w", operation, workflow.ErrFreshReviewBlockerDispositionInterrupted)
+			},
+		)
+		if err != nil {
+			return workflow.FreshReviewBlockerDisposition{}, err
+		}
+
+		disposition := workflow.FreshReviewBlockerDisposition{FindingIndex: blocker.Index}
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "", "k", "keep":
+			disposition.Action = workflow.FreshReviewBlockerActionKeep
+			return disposition, nil
+		case "a", "addressed", "addressed manually", "manual":
+			reason, err := promptRequiredReviewReasonWithReadError(command, reader, "Manual address reason", func(operation string, cause error) error {
+				return fmt.Errorf("%s: %w", operation, workflow.ErrFreshReviewBlockerDispositionInterrupted)
+			})
+			if err != nil {
+				return workflow.FreshReviewBlockerDisposition{}, err
+			}
+			disposition.Action = workflow.FreshReviewBlockerActionAddressedManually
+			disposition.Reason = reason
+			return disposition, nil
+		case "w", "waive":
+			reason, err := promptRequiredReviewReasonWithReadError(command, reader, "Waiver reason", func(operation string, cause error) error {
+				return fmt.Errorf("%s: %w", operation, workflow.ErrFreshReviewBlockerDispositionInterrupted)
+			})
+			if err != nil {
+				return workflow.FreshReviewBlockerDisposition{}, err
+			}
+			disposition.Action = workflow.FreshReviewBlockerActionWaive
+			disposition.Reason = reason
+			return disposition, nil
+		case "q", "quit", "cancel":
+			return workflow.FreshReviewBlockerDisposition{}, workflow.ErrFreshReviewBlockerDispositionInterrupted
+		default:
+			if _, err := fmt.Fprintln(command.ErrOrStderr(), "Choose keep, addressed manually, waive, or cancel."); err != nil {
+				return workflow.FreshReviewBlockerDisposition{}, err
+			}
+		}
+	}
 }
 
 func promptAutomatedBlockerDecisions(

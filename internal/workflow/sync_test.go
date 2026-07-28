@@ -1910,6 +1910,12 @@ func TestBuildPublicationPullRequestContentFromStateFormatsReviewProcess(t *test
 						Waiver: "Accepted for this task.",
 					},
 					{
+						Type:              taskstate.FindingTypeBlocking,
+						Title:             "Manually addressed blocker",
+						Step:              "manual-review",
+						AddressedManually: "Verified direct repair.",
+					},
+					{
 						Type:  taskstate.FindingTypeBlocking,
 						Title: "Unfixed blocker",
 						Step:  "manual-review",
@@ -1984,6 +1990,8 @@ func TestBuildPublicationPullRequestContentFromStateFormatsReviewProcess(t *test
 		"    - Fixed by run attempt 2",
 		"  - **Blocking (waived):** Waived blocker",
 		"    - Waived.",
+		"  - **Blocking (addressed manually):** Manually addressed blocker",
+		"    - Addressed manually.",
 		"  - **Blocking:** Unfixed blocker",
 		"    - No targeted fix run recorded.",
 		"  - **Advisory:** Advisory note",

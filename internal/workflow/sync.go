@@ -1116,6 +1116,9 @@ func appendReviewFinding(builder *strings.Builder, finding taskstate.ReviewFindi
 	builder.WriteString("\n")
 
 	switch taskstate.ResolveReviewFinding(finding) {
+	case taskstate.ReviewFindingResolutionAddressedManually:
+		builder.WriteString("    - Addressed manually.\n")
+		return
 	case taskstate.ReviewFindingResolutionWaived:
 		builder.WriteString("    - Waived.\n")
 		return
@@ -1156,6 +1159,8 @@ func appendBlockingFindingResolution(builder *strings.Builder, finding taskstate
 
 func reviewFindingLabel(finding taskstate.ReviewFinding) string {
 	switch taskstate.ResolveReviewFinding(finding) {
+	case taskstate.ReviewFindingResolutionAddressedManually:
+		return "Blocking (addressed manually)"
 	case taskstate.ReviewFindingResolutionWaived:
 		return "Blocking (waived)"
 	case taskstate.ReviewFindingResolutionDowngraded:
