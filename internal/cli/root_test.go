@@ -46,8 +46,9 @@ var reviewWorkflowHelpCases = []reviewWorkflowHelpCase{
 		name: "task run",
 		args: []string{"task", "run", "--help"},
 		want: []string{
-			"automatically starts a review follow-up run",
-			"exhausts reviews.max_autonomous_review_attempts",
+			"selects the next safe transition",
+			"task review` and `task done` remain compatibility entry points",
+			"PR synchronization remains `task sync`",
 		},
 	},
 	{
