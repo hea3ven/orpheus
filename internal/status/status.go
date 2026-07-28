@@ -241,6 +241,53 @@ func RunStateKey(repoID, taskID string) string {
 	return repoID + "\x00" + taskID
 }
 
+// LocalTaskStateCandidates returns task IDs whose persisted local state can
+// affect their status projection. Callers should use this after inventorying
+// local state so tasks without persisted state never require an individual read.
+func LocalTaskStateCandidates(repository task.Repository, tasks []task.Task) map[string]bool {
+	index := newRepositoryIndex(tasks)
+	candidates := make(map[string]bool)
+	for _, taskItem := range tasks {
+		if localTaskStateCanAffectProjection(repository, taskItem, index) {
+			candidates[taskItem.ID] = true
+		}
+	}
+	return candidates
+}
+
+func localTaskStateCanAffectProjection(
+	repository task.Repository,
+	taskItem task.Task,
+	index map[string]task.Task,
+) bool {
+	metadata := taskItem.OrpheusMetadata()
+	if taskItem.Status == task.StatusClosed || (metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "") {
+		return false
+	}
+
+	if metadata.HasBranch && strings.TrimSpace(metadata.Branch) != "" &&
+		metadata.HasWorktree && strings.TrimSpace(metadata.Worktree) != "" {
+		return true
+	}
+
+	switch taskItem.Status {
+	case task.StatusInProgress:
+		return true
+	case task.StatusOpen:
+		if _, blocked := classifyParentEpicGate(taskItem, index); blocked {
+			return false
+		}
+		if publication.RequiresExternalRef(repository.TitleTemplate) && strings.TrimSpace(taskItem.ExternalRef) == "" {
+			return false
+		}
+		deps := dependencyIDs(taskItem)
+		missingDetail, _ := missingDependencyDetail(taskItem, deps, index)
+		return missingDetail == "" && len(openDependencyIDs(deps, index)) == 0
+	default:
+		return false
+	}
+}
+
 func projectRepository(projection *Projection, repoSnapshot task.RepositorySnapshot, localStates LocalTaskStateIndex) {
 	index := newRepositoryIndex(repoSnapshot.Tasks)
 	progressByEpic := epicChildProgressByParent(repoSnapshot.Tasks)
