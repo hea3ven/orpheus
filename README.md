@@ -23,6 +23,7 @@ Early MVP design and implementation planning.
 - [Review pipeline workflow](docs/2026-07-05_review_pipeline_workflow.md) explains the operator path from `task run` through `agent done`, `task review`, follow-up work, approval, and publication/finalization retry.
 - [Repository publication titles](docs/2026-06-23_repo_publication_titles.md) explains how to configure Jira-style commit and pull-request titles, preserve defaults, and recover from a missing task reference.
 - [Review pipelines](docs/review_pipelines.md) explains automatic review after `task run`, manual gate resumption, global pipeline configuration, repository defaults, repo-local aliases, clearing behavior, and selection precedence.
+- [Task stats and usage capture](docs/task_stats.md) explains Codex-aware profiles, session-correlation limits, report fields, estimates, and troubleshooting unknown telemetry.
 
 ## Agent profiles
 
@@ -141,7 +142,7 @@ Model comparison views use `--view implementation-model`, `--view reviewer-model
 
 `orpheus eval review-context` deliberately runs live review-agent evaluations and may incur Pi or Codex model costs. It is not part of `make test` or routine CI. Use `--harness pi|codex|all`, `--variant legacy|exhaustive|all`, `--scenario general|architecture|all`, and `--repetitions N` to select runs, or `--complete --repetitions 3` for the full Pi/Codex x legacy/exhaustive x general/architecture comparison. Each run uses an isolated temporary repository and Orpheus XDG state, provisions isolated Pi/Codex config homes from the operator's existing auth/config without copying prior session logs, and writes new Pi session logs to an isolated session directory. Unless `--keep-workdirs` is set, completed run directories are removed before the next run to bound disk usage. The report includes seeded findings found or missed, unexpected findings, token usage, cost source, unknown usage or cost, aggregate recall, and total evaluation cost as JSON.
 
-Use raw profiles for custom launch contracts. Use structured `harness: codex` or `harness: pi` profiles when task stats should attempt session and token capture.
+Use raw profiles for custom launch contracts. Use structured `harness: codex` or `harness: pi` profiles when task stats should attempt session and token capture. See [Task stats and usage capture](docs/task_stats.md) for capture reliability, report semantics, cost caveats, and troubleshooting.
 
 ## License
 

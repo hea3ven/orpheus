@@ -3,17 +3,151 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/status"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/tasktarget"
 )
+
+func TestTaskRunStateIndexLoadsOnlyPersistedProjectionCandidates(t *testing.T) {
+	const repoID = "alpha"
+
+	snapshot, store := taskStateLoadingFixture()
+
+	index, failures := taskRunStateIndexForStore(state.Paths{}, store, snapshot)
+
+	if got, want := store.taskIDCalls, []string{repoID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("state inventory calls = %#v, want %#v", got, want)
+	}
+	if got, want := store.loadCalls, []string{
+		stateReaderKey(repoID, "open-history"),
+		stateReaderKey(repoID, "corrupt-in-progress"),
+		stateReaderKey(repoID, "completion-candidate"),
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("state load calls = %#v, want %#v", got, want)
+	}
+	if len(failures) != 1 || failures[0].Source != "task_state" || failures[0].Operation != "load" ||
+		!strings.Contains(failures[0].Err.Error(), "invalid YAML") {
+		t.Fatalf("failures = %#v, want one relevant task-state load failure", failures)
+	}
+	if len(index) != 2 {
+		t.Fatalf("local state index = %#v, want two loaded states", index)
+	}
+}
+
+func taskStateLoadingFixture() (task.SnapshotResult, *countingTaskStateReader) {
+	const repoID = "alpha"
+
+	tasks := make([]task.Task, 0, 108)
+	persistedTaskIDs := make([]string, 0, 108)
+	for i := range 100 {
+		id := fmt.Sprintf("closed-%03d", i)
+		tasks = append(tasks, task.Task{ID: id, Status: task.StatusClosed})
+		persistedTaskIDs = append(persistedTaskIDs, id)
+	}
+	tasks = append(tasks,
+		task.Task{ID: "has-pr", Status: task.StatusOpen, Metadata: task.Metadata{task.MetadataPRURL: "https://example.test/pr/1"}},
+		task.Task{ID: "open-dependency", Status: task.StatusOpen},
+		task.Task{ID: "snapshot-blocked", Status: task.StatusOpen, Relations: task.RelationSummary{DependencyIDs: []string{"open-dependency"}}},
+		task.Task{ID: "no-persisted-state", Status: task.StatusOpen},
+		task.Task{ID: "open-history", Status: task.StatusOpen},
+		task.Task{ID: "corrupt-in-progress", Status: task.StatusInProgress},
+		task.Task{
+			ID:       "completion-candidate",
+			Status:   task.StatusOpen,
+			Metadata: task.Metadata{task.MetadataBranch: "main", task.MetadataWorktree: "/repo/alpha"},
+		},
+	)
+	persistedTaskIDs = append(persistedTaskIDs,
+		"has-pr", "snapshot-blocked", "open-history", "corrupt-in-progress", "completion-candidate",
+	)
+
+	store := &countingTaskStateReader{
+		taskIDs: map[string][]string{repoID: persistedTaskIDs},
+		states: map[string]taskstate.TaskState{
+			stateReaderKey(repoID, "open-history"): {
+				Runs: []taskstate.RunAttempt{{Attempt: 1, Status: taskstate.RunStatusFailed}},
+			},
+			stateReaderKey(repoID, "completion-candidate"): {
+				Runs: []taskstate.RunAttempt{{Attempt: 1, Status: taskstate.RunStatusSucceeded}},
+			},
+		},
+		loadErrors: map[string]error{
+			stateReaderKey(repoID, "corrupt-in-progress"): errors.New("invalid YAML"),
+			stateReaderKey(repoID, "closed-000"):          errors.New("irrelevant closed state"),
+			stateReaderKey(repoID, "has-pr"):              errors.New("irrelevant PR state"),
+			stateReaderKey(repoID, "snapshot-blocked"):    errors.New("irrelevant blocked state"),
+		},
+	}
+	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
+		Repository: task.Repository{ID: repoID, Path: "/repo/alpha", DefaultBranch: "main"},
+		Tasks:      tasks,
+	}}}
+	return snapshot, store
+}
+
+func TestTaskRunStateIndexIgnoresIrrelevantInventoryFailure(t *testing.T) {
+	store := &countingTaskStateReader{
+		taskIDErrors: map[string]error{"alpha": errors.New("read task-state directory")},
+	}
+	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
+		Repository: task.Repository{ID: "alpha"},
+		Tasks: []task.Task{
+			{ID: "closed", Status: task.StatusClosed},
+			{ID: "has-pr", Status: task.StatusOpen, Metadata: task.Metadata{task.MetadataPRURL: "https://example.test/pr/1"}},
+		},
+	}}}
+
+	index, failures := taskRunStateIndexForStore(state.Paths{}, store, snapshot)
+
+	if got, want := store.taskIDCalls, []string{"alpha"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("state inventory calls = %#v, want %#v", got, want)
+	}
+	if len(store.loadCalls) != 0 {
+		t.Fatalf("state load calls = %#v, want none", store.loadCalls)
+	}
+	if len(index) != 0 || len(failures) != 0 {
+		t.Fatalf("index = %#v, failures = %#v, want no local state result", index, failures)
+	}
+}
+
+type countingTaskStateReader struct {
+	taskIDs      map[string][]string
+	taskIDErrors map[string]error
+	taskIDCalls  []string
+	states       map[string]taskstate.TaskState
+	loadErrors   map[string]error
+	loadCalls    []string
+}
+
+func (s *countingTaskStateReader) TaskIDs(repoID string) ([]string, error) {
+	s.taskIDCalls = append(s.taskIDCalls, repoID)
+	if err := s.taskIDErrors[repoID]; err != nil {
+		return nil, err
+	}
+	return s.taskIDs[repoID], nil
+}
+
+func (s *countingTaskStateReader) Load(repoID string, taskID string) (taskstate.TaskState, error) {
+	key := stateReaderKey(repoID, taskID)
+	s.loadCalls = append(s.loadCalls, key)
+	if err := s.loadErrors[key]; err != nil {
+		return taskstate.TaskState{}, err
+	}
+	return s.states[key], nil
+}
+
+func stateReaderKey(repoID string, taskID string) string {
+	return repoID + "/" + taskID
+}
 
 func TestStatusRenderOptionsUseWatchWidthWhenStdoutIsNotTerminal(t *testing.T) {
 	options := statusRenderOptionsForOutput(
