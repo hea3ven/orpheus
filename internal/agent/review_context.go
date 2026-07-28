@@ -114,10 +114,10 @@ func reviewCompletionContext(history taskstate.CompletionRunHistory) reviewCompl
 func (r ActiveContextResolver) resolveReviewCompletionRuns(
 	repoID string,
 	taskID string,
-) (taskstate.CompletionRunHistory, taskstate.TaskTarget, error) {
+) (taskstate.CompletionRunHistory, taskstate.GitFacts, error) {
 	state, err := r.RunStore.Load(repoID, taskID)
 	if err != nil {
-		return taskstate.CompletionRunHistory{}, taskstate.TaskTarget{}, fmt.Errorf(
+		return taskstate.CompletionRunHistory{}, taskstate.GitFacts{}, fmt.Errorf(
 			"load latest Orpheus run for task %s/%s: %w",
 			repoID,
 			taskID,
@@ -126,16 +126,16 @@ func (r ActiveContextResolver) resolveReviewCompletionRuns(
 	}
 	history, historyErr := taskstate.CompletionRunsForReview(state)
 	if historyErr != nil {
-		return taskstate.CompletionRunHistory{}, taskstate.TaskTarget{}, fmt.Errorf(
+		return taskstate.CompletionRunHistory{}, taskstate.GitFacts{}, fmt.Errorf(
 			"resolve review completion history for task %s/%s: %w",
 			repoID,
 			taskID,
 			historyErr,
 		)
 	}
-	target, ok := taskstate.Target(state)
+	target, ok := taskstate.GitFactsFor(state)
 	if !ok {
-		return taskstate.CompletionRunHistory{}, taskstate.TaskTarget{}, fmt.Errorf(
+		return taskstate.CompletionRunHistory{}, taskstate.GitFacts{}, fmt.Errorf(
 			"task %s/%s has no taskstate target",
 			repoID,
 			taskID,

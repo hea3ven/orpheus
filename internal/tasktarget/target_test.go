@@ -46,11 +46,11 @@ func TestClassifyMetadataTargetMatchesExpectedTargets(t *testing.T) {
 	}
 }
 
-func TestClassifyTaskStateTargetMatchesExpectedTargets(t *testing.T) {
+func TestClassifyGitFactsMatchesExpectedTargets(t *testing.T) {
 	targets := testExpectedTargets()
 	taskTarget := taskstate.TaskTarget{Branch: "orpheus/op-1", Worktree: "/repo/alpha"}
 
-	got, err := tasktarget.ClassifyTaskStateTarget(taskTarget, targets)
+	got, err := tasktarget.ClassifyGitFacts(taskTarget, targets)
 	if err != nil {
 		t.Fatalf("classify taskstate target: %v", err)
 	}

@@ -177,19 +177,21 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 		Long: "Advance or resume a task's persisted implement-review-fix-finalize workflow.\n\n" +
 			"task run selects the next safe transition: implementation, review, a manual-review resume, targeted repair, or finalization retry. It reports active runs, open pull requests, and finalized tasks without starting inappropriate work. " +
 			"By default, implementation runs use a deterministic task branch and worktree. " +
-			"Use --main to run explicitly from the registered repo root on the " +
-			"registered default branch for local/manual review workflows. " +
-			"Use --repo-root to run from the registered repo root on the task branch.\n\n" +
+			"Use --repo-root to run from the registered repository root. Repository-root work starts on the registered default branch and is published through the same pull-request flow.\n\n" +
 			"Automated blockers require an explicit keep, downgrade, or waive/cancel decision before targeted fixes. Manual steps are persisted and resumed without rerunning completed review steps. `task review` and `task done` remain compatibility entry points; use `task review show` to inspect review findings. PR synchronization remains `task sync`.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
-			return runTaskRun(command, opts, args[0], agentName, pipelineName, mainMode, repoRootMode)
+			if mainMode {
+				return fmt.Errorf("task run %s: --main is no longer supported; use --repo-root for repository-root work, which now publishes through a pull request", args[0])
+			}
+			return runTaskRun(command, opts, args[0], agentName, pipelineName, repoRootMode)
 		},
 	}
 	cmd.Flags().StringVar(&agentName, "agent", "", "agent profile name to use instead of agents.defaults.implementer")
 	cmd.Flags().StringVar(&pipelineName, "pipeline", "", "review pipeline name to use after implementation instead of repo/global defaults")
-	cmd.Flags().BoolVar(&mainMode, "main", false, "run from the registered repo root on the registered default branch")
-	cmd.Flags().BoolVar(&repoRootMode, "repo-root", false, "run from the registered repo root on the task branch")
+	cmd.Flags().BoolVar(&mainMode, "main", false, "deprecated; use --repo-root")
+	_ = cmd.Flags().MarkDeprecated("main", "use --repo-root; repository-root work now publishes through a pull request")
+	cmd.Flags().BoolVar(&repoRootMode, "repo-root", false, "run from the registered repository root")
 	return cmd
 }
 
@@ -630,16 +632,12 @@ func runTaskRun(
 	taskID string,
 	agentName string,
 	pipelineName string,
-	mainMode bool,
 	repoRootMode bool,
 ) error {
 	logger := opts.log().With(
 		slog.String("component", "cli"),
 		slog.String("operation", "task_run"),
 	)
-	if mainMode && repoRootMode {
-		return fmt.Errorf("task run %s: --main cannot be combined with --repo-root", taskID)
-	}
 
 	deps, err := opts.invocation(command)
 	if err != nil {
@@ -678,7 +676,7 @@ func runTaskRun(
 	if err != nil {
 		return fmt.Errorf("task run %s: %w", resolved.TaskID, err)
 	}
-	if err := validateTaskRunRouteFlags(resolved.TaskID, route.Action, agentName, pipelineName, mainMode, repoRootMode); err != nil {
+	if err := validateTaskRunRouteFlags(resolved.TaskID, route.Action, agentName, pipelineName, repoRootMode); err != nil {
 		return err
 	}
 	return executeTaskRunRoute(command, opts, taskRunRouteExecution{
@@ -691,7 +689,6 @@ func runTaskRun(
 		route:        route,
 		agentName:    agentName,
 		pipelineName: pipelineName,
-		mainMode:     mainMode,
 		repoRootMode: repoRootMode,
 	})
 }
@@ -706,7 +703,6 @@ type taskRunRouteExecution struct {
 	route        workflow.TaskRunRoute
 	agentName    string
 	pipelineName string
-	mainMode     bool
 	repoRootMode bool
 }
 
@@ -721,7 +717,7 @@ func executeTaskRunRoute(command *cobra.Command, opts *rootOptions, execution ta
 		if err := validateTaskRunExternalRef(resolved, execution.task); err != nil {
 			return err
 		}
-		dispatch, err := startTaskRunDispatch(command, execution.logger, execution.deps.paths, resolved, taskBackend, execution.task, execution.agentName, execution.mainMode, execution.repoRootMode)
+		dispatch, err := startTaskRunDispatch(command, execution.logger, execution.deps.paths, resolved, taskBackend, execution.task, execution.agentName, false, execution.repoRootMode)
 		if err != nil {
 			return fmt.Errorf("task run %s: %w", resolved.TaskID, err)
 		}
@@ -793,14 +789,13 @@ func validateTaskRunRouteFlags(
 	action workflow.TaskRunAction,
 	agentName string,
 	pipelineName string,
-	mainMode bool,
 	repoRootMode bool,
 ) error {
 	if action == workflow.TaskRunActionStartImplementation || action == workflow.TaskRunActionTargetedRepair {
 		return nil
 	}
-	if mainMode || repoRootMode {
-		return fmt.Errorf("task run %s: --main and --repo-root only apply when launching implementation work", taskID)
+	if repoRootMode {
+		return fmt.Errorf("task run %s: --repo-root only applies when launching implementation work", taskID)
 	}
 	if action == workflow.TaskRunActionStartReview {
 		return nil

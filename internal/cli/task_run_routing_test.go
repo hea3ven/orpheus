@@ -14,22 +14,21 @@ func TestValidateTaskRunRouteFlags(t *testing.T) {
 		action workflow.TaskRunAction
 		agent  string
 		pipe   string
-		main   bool
 		root   bool
 		want   string
 	}{
-		{name: "dispatch accepts dispatch controls", action: workflow.TaskRunActionStartImplementation, agent: "implementer", pipe: "quality", main: true},
+		{name: "dispatch accepts dispatch controls", action: workflow.TaskRunActionStartImplementation, agent: "implementer", pipe: "quality", root: true},
 		{name: "fresh review accepts review controls", action: workflow.TaskRunActionStartReview, agent: "implementer", pipe: "quality"},
 		{name: "manual resume rejects pipeline", action: workflow.TaskRunActionResumeReview, pipe: "quality", want: "--pipeline cannot affect"},
 		{name: "manual resume rejects agent", action: workflow.TaskRunActionResumeReview, agent: "implementer", want: "--agent cannot affect"},
-		{name: "review rejects target mode", action: workflow.TaskRunActionStartReview, main: true, want: "--main and --repo-root only apply"},
+		{name: "review rejects target mode", action: workflow.TaskRunActionStartReview, root: true, want: "--repo-root only applies"},
 		{name: "finalization rejects review controls", action: workflow.TaskRunActionRetryFinalization, pipe: "quality", want: "--pipeline cannot affect"},
-		{name: "open pr rejects implementation controls", action: workflow.TaskRunActionOpenPR, root: true, want: "--main and --repo-root only apply"},
+		{name: "open pr rejects implementation controls", action: workflow.TaskRunActionOpenPR, root: true, want: "--repo-root only applies"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateTaskRunRouteFlags("op-1", tt.action, tt.agent, tt.pipe, tt.main, tt.root)
+			err := validateTaskRunRouteFlags("op-1", tt.action, tt.agent, tt.pipe, tt.root)
 			if tt.want == "" {
 				if err != nil {
 					t.Fatalf("validateTaskRunRouteFlags() error = %v", err)

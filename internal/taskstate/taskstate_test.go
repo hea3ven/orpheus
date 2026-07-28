@@ -64,7 +64,7 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 		"version: 4",
 		"repo_id: alpha",
 		"task_id: op-1",
-		"target:",
+		"git_facts:",
 		"branch: orpheus/op-1",
 		"worktree: /tmp/op-1",
 		"attempt: 1",
@@ -79,8 +79,72 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 		"run_finished",
 	)
 	assertStoreYAMLNotContains(t, store, "alpha", "op-1",
+		"target:",
 		"  branch: orpheus/op-1\n  worktree: /tmp/op-1\n  started_at",
 	)
+}
+
+func TestStoreReconcilesLegacyTargetIntoGitFactsOnLoad(t *testing.T) {
+	store := newTestStore(t)
+	path, err := store.Path("alpha", "op-legacy")
+	if err != nil {
+		t.Fatalf("state path: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create state directory: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("version: 4\nrepo_id: alpha\ntask_id: op-legacy\ntarget:\n  branch: main\n  worktree: /tmp/repo\n"), 0o644); err != nil {
+		t.Fatalf("write legacy state: %v", err)
+	}
+
+	loaded, err := store.Load("alpha", "op-legacy")
+	if err != nil {
+		t.Fatalf("load legacy state: %v", err)
+	}
+	facts, ok := taskstate.GitFactsFor(loaded)
+	if !ok || facts.Branch != "main" || facts.Worktree != "/tmp/repo" {
+		t.Fatalf("Git facts = %#v/%t, want migrated main repo root facts", facts, ok)
+	}
+}
+
+func TestStartRunPreservesLegacyTargetPublicationMode(t *testing.T) {
+	store := newTestStore(t)
+	path, err := store.Path("alpha", "op-legacy")
+	if err != nil {
+		t.Fatalf("state path: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create state directory: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("version: 4\nrepo_id: alpha\ntask_id: op-legacy\ntarget:\n  branch: main\n  worktree: /tmp/repo\n"), 0o644); err != nil {
+		t.Fatalf("write legacy state: %v", err)
+	}
+
+	first, err := store.StartRun("alpha", "op-legacy", taskstate.StartRunOptions{
+		Agent: "recorder", WorkDirectory: "/tmp/repo", Branch: "main", Worktree: "/tmp/repo",
+	})
+	if err != nil {
+		t.Fatalf("start first legacy run: %v", err)
+	}
+	if _, err := store.FinishRun("alpha", "op-legacy", first.Attempt, taskstate.RunStatusSucceeded); err != nil {
+		t.Fatalf("finish first legacy run: %v", err)
+	}
+	if _, err := store.StartRun("alpha", "op-legacy", taskstate.StartRunOptions{
+		Agent: "recorder", WorkDirectory: "/tmp/repo", Branch: "main", Worktree: "/tmp/repo",
+	}); err != nil {
+		t.Fatalf("start follow-up legacy run: %v", err)
+	}
+
+	loaded, err := store.Load("alpha", "op-legacy")
+	if err != nil {
+		t.Fatalf("load legacy state: %v", err)
+	}
+	if _, modern := taskstate.WorkDirectoryFor(loaded); modern {
+		t.Fatalf("work directory = %#v, want absent legacy publication classification", loaded.WorkDirectory)
+	}
+	if loaded.Target.Branch != "main" || loaded.Target.Worktree != "/tmp/repo" {
+		t.Fatalf("legacy target = %#v, want retained main/repo facts", loaded.Target)
+	}
 }
 
 func TestStoreRejectsOldRunLevelTargetSchema(t *testing.T) {
@@ -1437,6 +1501,38 @@ func TestStoreRejectsPromotingResolvedOrNonAdvisoryFindings(t *testing.T) {
 				t.Fatalf("promote advisory error = %v, want %q", err, test.wantErr)
 			}
 		})
+	}
+}
+
+func TestStoreRecordsFinalizationCommitIntent(t *testing.T) {
+	store := newTestStore(t, time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC))
+
+	facts, err := store.RecordFinalizationCommitIntent("alpha", "op-1", " parent123 ", " Publish work. ")
+	if err != nil {
+		t.Fatalf("record commit intent: %v", err)
+	}
+	if facts.PendingCommit == nil || facts.PendingCommit.Parent != "parent123" || facts.PendingCommit.Message != "Publish work." {
+		t.Fatalf("intent facts = %#v, want normalized pending commit", facts)
+	}
+
+	again, err := store.RecordFinalizationCommitIntent("alpha", "op-1", "parent123", "Publish work.")
+	if err != nil {
+		t.Fatalf("record same commit intent: %v", err)
+	}
+	if again.PendingCommit == nil || *again.PendingCommit != *facts.PendingCommit {
+		t.Fatalf("repeated intent = %#v, want original intent", again)
+	}
+	_, err = store.RecordFinalizationCommitIntent("alpha", "op-1", "different456", "Publish work.")
+	if !errors.Is(err, taskstate.ErrFinalizationConflict) {
+		t.Fatalf("conflicting intent error = %v, want ErrFinalizationConflict", err)
+	}
+
+	committed, err := store.RecordFinalizationCommit("alpha", "op-1", "commit789")
+	if err != nil {
+		t.Fatalf("record commit after intent: %v", err)
+	}
+	if committed.Commit != "commit789" || committed.PendingCommit != nil || committed.CommittedAt == nil {
+		t.Fatalf("committed facts = %#v, want recorded commit with cleared intent", committed)
 	}
 }
 
