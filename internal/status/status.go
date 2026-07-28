@@ -480,7 +480,7 @@ func classifyLatestReview(
 		step := valueOrUnknown(latestReview.Step)
 		return newPolicyResult(
 			readinessReview,
-			fmt.Sprintf("local review; run task review (waiting for manual step %s)", step),
+			fmt.Sprintf("local review; run task run (waiting for manual step %s)", step),
 			Detail{Kind: DetailReviewManualStep, Step: step},
 		), true
 	case taskstate.ReviewStatusBlocked:
@@ -488,26 +488,26 @@ func classifyLatestReview(
 	case taskstate.ReviewStatusAborted:
 		return newPolicyResult(
 			readinessReview,
-			"review aborted; run task review",
+			"review aborted; run task run",
 			Detail{Kind: DetailReviewAborted},
 		), true
 	case taskstate.ReviewStatusFailed:
 		return newPolicyResult(
 			readinessAttention,
-			"review failed operationally; run task review",
+			"review failed operationally; run task run",
 			Detail{Kind: DetailReviewFailed},
 		), true
 	case taskstate.ReviewStatusPassed:
 		if latestFinalizationFailure != nil {
 			return newPolicyResult(
 				readinessAttention,
-				"review passed; publication failed; fix publication issue, then run task done",
+				"review passed; publication failed; fix publication issue, then run task run",
 				Detail{Kind: DetailReviewPublishFailed},
 			), true
 		}
 		return newPolicyResult(
 			readinessReview,
-			"review passed; run task done",
+			"review passed; run task run",
 			Detail{Kind: DetailReviewPassed},
 		), true
 	default:
@@ -525,14 +525,14 @@ func classifyBlockedReview(state taskstate.TaskState, review taskstate.ReviewAtt
 	if review.AutomatedBlockerDecisionInterrupted {
 		return newPolicyResult(
 			readinessReview,
-			"review blocker decision interrupted; run task review",
+			"review blocker decision interrupted; run task run",
 			Detail{Kind: DetailReviewDecisionLost},
 		)
 	}
 	if taskstate.HasUnkeptAutomatedBlockingFindingsInState(state, review) {
 		return newPolicyResult(
 			readinessReview,
-			"review blocker decision required; run task review",
+			"review blocker decision required; run task run",
 			Detail{Kind: DetailReviewDecisionRequired},
 		)
 	}
@@ -556,7 +556,7 @@ func classifyBlockedReview(state taskstate.TaskState, review taskstate.ReviewAtt
 	if count == 0 {
 		return newPolicyResult(
 			readinessReview,
-			"review blockers targeted; run task review",
+			"review blockers targeted; run task run",
 			Detail{Kind: DetailReviewFollowUpReady},
 		)
 	}
@@ -607,7 +607,7 @@ func newPolicyResult(state readinessState, detail string, semanticDetail Detail)
 func localReviewPolicyResult() policyResult {
 	return newPolicyResult(
 		readinessReview,
-		"local review; run task review",
+		"local review; run task run",
 		Detail{Kind: DetailLocalReview},
 	)
 }

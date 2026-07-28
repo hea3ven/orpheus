@@ -2490,7 +2490,7 @@ func TestTaskReviewShowGuidesWhenTaskHasNoReviewAttempts(t *testing.T) {
 	is.Empty(stderr)
 	is.Contains(stdout, "Review state for op-empty (repo alpha)")
 	is.Contains(stdout, "No review attempts recorded for op-empty.")
-	is.Contains(stdout, "Next step: run `orpheus task review op-empty` after task work is ready.")
+	is.Contains(stdout, "Next step: run `orpheus task run op-empty` after task work is ready.")
 }
 
 func TestTaskReviewShowRendersManuallyAddressedFinding(t *testing.T) {
@@ -2546,7 +2546,7 @@ func TestTaskReviewShowGuidesInterruptedAutomatedBlockerDecision(t *testing.T) {
 
 	is.Empty(stderr)
 	is.Contains(stdout, "Automated blocker decisions: interrupted")
-	is.Contains(stdout, "Next step: automated blocker decisions were interrupted; run `orpheus task review op-interrupted` to start a fresh review.")
+	is.Contains(stdout, "Next step: automated blocker decisions were interrupted; run `orpheus task run op-interrupted` to start a fresh review.")
 }
 
 func TestTaskReviewShowDisplaysClosedTaskReviewState(t *testing.T) {
@@ -3156,11 +3156,9 @@ func TestTaskRunRefusesLatestRunningAttempt(t *testing.T) {
 
 	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "op-5"})
 
-	must.Error(err)
-	is.Empty(stdout)
+	must.NoError(err)
+	is.Contains(stdout, "implementation attempt 1 is active")
 	is.Empty(stderr)
-	is.ErrorContains(err, "latest run attempt 1 is still running")
-	is.ErrorContains(err, "M3 cannot reconcile stale attached runs automatically")
 	_, statErr := os.Stat(worktreePath)
 	is.ErrorIs(statErr, os.ErrNotExist)
 }
@@ -4751,14 +4749,10 @@ func TestTaskRunAfterInterruptedAutomatedBlockerDecisionRequiresFreshReview(t *t
 	)
 	is.Empty(reviewStdout)
 	is.Contains(reviewStderr, "Automated blocker decisions for op-main were interrupted")
-	writeTaskRunAgentConfig(t, paths, "followup", "followup-agent", nil)
-
 	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "op-main"})
-	must.Error(err)
-	is.Empty(stdout)
-	is.Contains(err.Error(), "interrupted automated blocker decisions")
-	is.Contains(err.Error(), "orpheus task review op-main")
-	is.Empty(stderr)
+	must.NoError(err)
+	is.Contains(stdout, "starting a fresh review")
+	is.Contains(stderr, "Fresh review blocker dispositions for op-main were interrupted")
 	_, statErr := os.Stat(agentLogPath)
 	is.ErrorIs(statErr, os.ErrNotExist)
 
@@ -4891,7 +4885,7 @@ func TestTaskRunAttachedManualReviewApprovalFinalizes(t *testing.T) {
 	is.Contains(stdout, "Finalized op-manual")
 	is.Contains(stderr, "== Review step: approval (manual) ==")
 	is.Contains(stderr, "Review action [a=approve, b=block, v=advisory, t=task, q=abort]")
-	is.NotContains(stderr, "Resume with `orpheus task review op-manual`")
+	is.NotContains(stderr, "Resume with `orpheus task run op-manual`")
 
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-manual.yaml"), &state))

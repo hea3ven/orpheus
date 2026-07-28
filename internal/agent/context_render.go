@@ -179,7 +179,7 @@ func appendConflictResolutionGuidance(builder *strings.Builder, ctx ConflictReso
 func appendConflictResolutionContract(builder *strings.Builder) {
 	builder.WriteString("\nExecution contract:\n")
 	builder.WriteString("- This is a non-interactive sync conflict-resolution session; do not ask the human operator for clarification or decisions.\n")
-	builder.WriteString("- Do not run `orpheus agent done`, `orpheus task review`, or `orpheus task done`.\n")
+	builder.WriteString("- Do not run `orpheus agent done`, `orpheus task run`, `orpheus task review`, or `orpheus task done`.\n")
 	builder.WriteString("- Do not create commits, push branches, merge pull requests, close tasks, or change task metadata.\n")
 	builder.WriteString("- Leave the merge in progress after staging the resolved conflict files; Orpheus sync will commit and push after you exit.\n")
 	builder.WriteString("- If the conflicts cannot be resolved safely, exit nonzero and explain the blocker in the visible terminal/session output.\n")
@@ -203,9 +203,9 @@ func appendExecutionContract(builder *strings.Builder, ctx ActiveContext) {
 		builder.WriteString("- Keep implementation work inside the execution target path.\n")
 		appendAgentDoneContract(builder, ctx.Repository.SummaryGuidance, ctx.Repository.SummaryGuidanceStyle)
 		builder.WriteString("- After `orpheus agent done`, Orpheus will record local-review-ready completion data.\n")
-		builder.WriteString("- The human operator will later run `orpheus task review ")
+		builder.WriteString("- The human operator will later run `orpheus task run ")
 		builder.WriteString(ctx.Task.ID)
-		builder.WriteString("` after review; do not run it yourself unless explicitly asked.\n")
+		builder.WriteString("` to advance the workflow; do not run it yourself unless explicitly asked.\n")
 	default:
 		builder.WriteString("- The execution target is unknown; stop and ask the human operator for help.\n")
 	}
@@ -220,7 +220,7 @@ func appendFeatureBranchExecutionContract(
 	builder.WriteString("- Keep implementation work inside the execution target path.\n")
 	appendAgentDoneContract(builder, summaryGuidance, summaryGuidanceStyle)
 	builder.WriteString("- After `orpheus agent done`, Orpheus will record PR-ready completion data for feature-branch publication.\n")
-	builder.WriteString("- The human operator will later run `orpheus task review ")
+	builder.WriteString("- The human operator will later run `orpheus task run ")
 	builder.WriteString(taskID)
 	builder.WriteString("` to review and publish the feature branch as a pull request; do not run it yourself unless explicitly asked.\n")
 }

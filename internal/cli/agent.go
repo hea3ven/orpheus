@@ -100,9 +100,8 @@ func newAgentReviewAddCommand(opts *rootOptions) *cobra.Command {
 			"stop approval and should include --suggested-action for the follow-up task run. " +
 			"Advisory findings are recorded without blocking. Separate-task findings propose " +
 			"standalone follow-up work that task review may create as Beads with provenance.\n\n" +
-			"After the review agent exits, task review records the step outcome. Operators " +
-			"inspect findings with task review show, run task run for open blockers, and " +
-			"rerun task review after follow-up completion.",
+			"After the review agent exits, Orpheus records the step outcome. Operators " +
+			"inspect findings with task review show and use task run for all workflow advancement.",
 		Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
 			return runAgentReviewAdd(command, opts, agentReviewAddOptions{
@@ -462,7 +461,7 @@ func renderAgentDoneResult(command *cobra.Command, completed agent.CompleteResul
 	if completed.Context.Target.Kind != agent.ExecutionTargetMain {
 		_, err := fmt.Fprintf(
 			command.OutOrStdout(),
-			"Recorded completion for %s; ready for feature-branch review with `orpheus task review %s`.\n",
+			"Recorded completion for %s; advance the workflow with `orpheus task run %s`.\n",
 			completed.Context.Task.ID,
 			completed.Context.Task.ID,
 		)

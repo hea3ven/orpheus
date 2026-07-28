@@ -76,7 +76,7 @@ func TestRenderActiveContextIncludesWorktreeContract(t *testing.T) {
 		"run it at most once",
 		"do not run it again after it succeeds",
 		"PR-ready completion data for feature-branch publication",
-		"The human operator will later run `orpheus task review op-1` to review and publish the feature branch as a pull request",
+		"The human operator will later run `orpheus task run op-1` to review and publish the feature branch as a pull request",
 	} {
 		is.Contains(output, want)
 	}
@@ -124,7 +124,7 @@ func TestRenderConflictResolutionContextConstrainsAgentScope(t *testing.T) {
 		"  - conflict.txt",
 		"  - pkg/service.go",
 		"non-interactive sync conflict-resolution session",
-		"Do not run `orpheus agent done`, `orpheus task review`, or `orpheus task done`",
+		"Do not run `orpheus agent done`, `orpheus task run`, `orpheus task review`, or `orpheus task done`",
 		"Do not create commits, push branches",
 		"Leave the merge in progress",
 		"Orpheus sync will commit and push after you exit",
@@ -286,7 +286,7 @@ func TestRenderActiveContextIncludesMainContract(t *testing.T) {
 		"run it at most once",
 		"do not run it again after it succeeds",
 		"Orpheus will record local-review-ready completion data",
-		"The human operator will later run `orpheus task review op-main`",
+		"The human operator will later run `orpheus task run op-main`",
 		"do not run it yourself unless explicitly asked",
 	} {
 		is.Contains(output, want)
@@ -365,7 +365,7 @@ func TestRenderActiveContextIncludesRepoRootTaskBranchContract(t *testing.T) {
 		"registered repository root on the task branch",
 		"orpheus agent done",
 		"PR-ready completion data for feature-branch publication",
-		"The human operator will later run `orpheus task review op-root` to review and publish the feature branch as a pull request",
+		"The human operator will later run `orpheus task run op-root` to review and publish the feature branch as a pull request",
 	} {
 		is.Contains(output, want)
 	}

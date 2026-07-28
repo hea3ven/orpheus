@@ -219,7 +219,7 @@ func TestStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t *testing.T) {
 	is.Contains(stdout, "Reviewing")
 	is.Contains(stdout, "ar-main")
 	is.Contains(stdout, "Local main review")
-	is.Contains(stdout, "local review; run task review")
+	is.Contains(stdout, "local review; run task run")
 }
 
 func TestStatusAndTaskReadyUseLocalRunHistoryOnOpenTaskAsNeedsAttention(t *testing.T) {

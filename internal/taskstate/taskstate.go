@@ -907,7 +907,7 @@ func (s Store) TargetReviewFindings(
 		finding := state.Reviews[reviewIndex].Findings[findingIndex]
 		if finding.TargetedByRunAttempt != 0 &&
 			finding.TargetedByRunAttempt != runAttempt &&
-			!ReviewFindingTargetedByFailedRun(state, finding) {
+			!ReviewFindingTargetedByRetryableRun(state, finding) {
 			return ReviewAttempt{}, fmt.Errorf(
 				"target review findings for task %s/%s: finding index %d is already targeted by run attempt %d",
 				repoID,
@@ -1787,12 +1787,28 @@ func IsOpenBlockingReviewFinding(finding ReviewFinding) bool {
 }
 
 // ResolveReviewFindingInState classifies a finding using the current run state.
-// A failed follow-up is an unsuccessful claim: its finding remains open for retry.
+// A failed or incomplete follow-up is an unsuccessful claim: its finding remains
+// open for a replacement implementation run.
 func ResolveReviewFindingInState(state TaskState, finding ReviewFinding) ReviewFindingResolution {
-	if ReviewFindingTargetedByFailedRun(state, finding) {
+	if ReviewFindingTargetedByRetryableRun(state, finding) {
 		finding.TargetedByRunAttempt = 0
 	}
 	return ResolveReviewFinding(finding)
+}
+
+// ReviewFindingTargetedByRetryableRun reports whether a finding's target refers
+// to a failed run or to a run that exited without recording completion.
+func ReviewFindingTargetedByRetryableRun(state TaskState, finding ReviewFinding) bool {
+	if finding.TargetedByRunAttempt <= 0 {
+		return false
+	}
+	for _, run := range state.Runs {
+		if run.Attempt == finding.TargetedByRunAttempt {
+			return run.Status == RunStatusFailed ||
+				(run.Status == RunStatusSucceeded && run.Completion == nil)
+		}
+	}
+	return false
 }
 
 // ReviewFindingTargetedByFailedRun reports whether a finding's recorded target
