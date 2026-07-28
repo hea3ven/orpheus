@@ -663,6 +663,9 @@ func runTaskRun(
 	if err != nil {
 		return err
 	}
+	if taskItem.Status == taskmodel.StatusClosed {
+		return fmt.Errorf("task run %s: task is closed", resolved.TaskID)
+	}
 	store := taskstate.NewStoreWithLogger(deps.paths, logger)
 	taskState, err := store.Load(resolved.Source.Repository.ID, resolved.TaskID)
 	if err != nil {

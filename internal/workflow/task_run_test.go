@@ -19,10 +19,11 @@ func TestSelectTaskRunRoute(t *testing.T) {
 	blocker := taskstate.ReviewFinding{Type: taskstate.FindingTypeBlocking, Title: "fix", Description: "fix it"}
 
 	tests := []struct {
-		name  string
-		task  task.Task
-		state taskstate.TaskState
-		want  TaskRunAction
+		name    string
+		task    task.Task
+		state   taskstate.TaskState
+		want    TaskRunAction
+		wantErr string
 	}{
 		{name: "initial implementation", task: task.Task{ID: "op-1"}, want: TaskRunActionStartImplementation},
 		{name: "failed implementation replacement", task: task.Task{ID: "op-1"}, state: taskstate.TaskState{Runs: []taskstate.RunAttempt{{Attempt: 1, Status: taskstate.RunStatusFailed}}}, want: TaskRunActionStartImplementation},
@@ -40,12 +41,19 @@ func TestSelectTaskRunRoute(t *testing.T) {
 		{name: "passed review retries finalization", task: task.Task{ID: "op-1"}, state: taskstate.TaskState{Runs: []taskstate.RunAttempt{completedRun}, Reviews: []taskstate.ReviewAttempt{{Attempt: 1, Status: taskstate.ReviewStatusPassed}}}, want: TaskRunActionRetryFinalization},
 		{name: "passed review retries finalization despite stale completed run", task: task.Task{ID: "op-1"}, state: taskstate.TaskState{Runs: []taskstate.RunAttempt{{Attempt: 1, Status: taskstate.RunStatusRunning, Completion: &taskstate.Completion{Summary: "done"}}}, Reviews: []taskstate.ReviewAttempt{{Attempt: 1, Status: taskstate.ReviewStatusPassed}}}, want: TaskRunActionRetryFinalization},
 		{name: "open pr is reported", task: task.Task{ID: "op-1", Metadata: task.Metadata{task.MetadataPRURL: "https://example.test/pr/1"}}, state: taskstate.TaskState{Runs: []taskstate.RunAttempt{completedRun}}, want: TaskRunActionOpenPR},
-		{name: "closed task is reported", task: task.Task{ID: "op-1", Status: task.StatusClosed}, want: TaskRunActionCompleted},
+		{name: "closed task is rejected", task: task.Task{ID: "op-1", Status: task.StatusClosed}, wantErr: "task op-1 is closed"},
+		{name: "closed task takes precedence over passed review", task: task.Task{ID: "op-1", Status: task.StatusClosed}, state: taskstate.TaskState{Runs: []taskstate.RunAttempt{completedRun}, Reviews: []taskstate.ReviewAttempt{{Attempt: 1, Status: taskstate.ReviewStatusPassed}}}, wantErr: "task op-1 is closed"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			route, err := SelectTaskRunRoute(tt.task, tt.state)
+			if tt.wantErr != "" {
+				if err == nil || err.Error() != tt.wantErr {
+					t.Fatalf("SelectTaskRunRoute() error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("SelectTaskRunRoute() error = %v", err)
 			}

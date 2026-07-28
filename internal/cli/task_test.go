@@ -1577,6 +1577,54 @@ func taskDirMetadataErrorCases() []taskDirMetadataErrorCase {
 	}
 }
 
+func TestTaskRunRejectsClosedTaskBeforeLocalWorkflowRouting(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	registryStore := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(registryStore.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+
+	recordMainCompletion(t, paths, "alpha", "op-closed", repoPath, "Closed task", "Do not finalize this stale run.")
+	recordPassedReview(t, paths, "alpha", "op-closed")
+	statePath, err := taskstate.NewStore(paths).Path("alpha", "op-closed")
+	must.NoError(err)
+	stateBefore, err := os.ReadFile(statePath)
+	must.NoError(err)
+	worktreesBefore := runGit(t, repoPath, "worktree", "list", "--porcelain")
+
+	bdLogPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[{"id":"op-closed","title":"Closed task","status":"closed","priority":1,"issue_type":"task"}]`},
+	})
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "op-closed"})
+
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "task run op-closed: task is closed")
+	is.NotContains(err.Error(), "task done")
+
+	stateAfter, err := os.ReadFile(statePath)
+	must.NoError(err)
+	is.Equal(string(stateBefore), string(stateAfter))
+	is.Equal(worktreesBefore, runGit(t, repoPath, "worktree", "list", "--porcelain"))
+
+	bdLog, err := os.ReadFile(bdLogPath)
+	must.NoError(err)
+	is.Equal(1, strings.Count(string(bdLog), "--json --readonly --sandbox show --id op-closed"))
+	is.NotContains(string(bdLog), "--json --sandbox")
+}
+
 //nolint:funlen // Workflow test is clearer when setup, command, and state assertions stay together.
 func TestTaskRunExecutesImplementerDefaultAttachedFromDeterministicWorktree(t *testing.T) {
 	is := assert.New(t)
