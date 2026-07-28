@@ -64,9 +64,8 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 		"# Orpheus Agent Context",
 		"- ID: " + taskID,
 		"- Title: Worktree completion flow",
-		"- Workflow: worktree/team",
-		"- Branch: orpheus/" + taskID,
-		"- Path: " + worktreePath,
+		"- Current branch: orpheus/" + taskID,
+		"- Work Directory: " + worktreePath,
 		"- Current directory: " + worktreePath,
 		"deterministic task worktree and task branch",
 		"PR-ready completion data for feature-branch publication",
@@ -150,7 +149,7 @@ func TestConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 	latest, ok := taskstate.LatestRun(state)
 	must.True(ok)
 	must.NotNil(latest.Completion)
-	target, ok := taskstate.Target(state)
+	target, ok := taskstate.GitFactsFor(state)
 	must.True(ok)
 	is.Equal("Replaced the config for abc", latest.Completion.Summary)
 	recordPassedReview(t, paths, "alpha", taskID)
@@ -221,7 +220,7 @@ func TestMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd
 	state := readCompletionTaskState(t, paths, "alpha", taskID)
 	_, ok := taskstate.LatestRun(state)
 	must.True(ok)
-	target, ok := taskstate.Target(state)
+	target, ok := taskstate.GitFactsFor(state)
 	must.True(ok)
 	beforePublication := strings.TrimSpace(runGit(t, target.Worktree, "rev-parse", "HEAD"))
 	recordPassedReview(t, paths, "alpha", taskID)
@@ -277,7 +276,7 @@ func TestWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	latest, ok := taskstate.LatestRun(state)
 	must.True(ok)
 	must.NotNil(latest.Completion)
-	target, ok := taskstate.Target(state)
+	target, ok := taskstate.GitFactsFor(state)
 	must.True(ok)
 	completionCommit := latest.Completion.Commit
 	is.Empty(completionCommit)
@@ -384,16 +383,16 @@ func TestRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 
 	is.Contains(runErr, "Review for "+taskID+" is waiting for manual step \"local-review\"")
 	is.Contains(runOut, "completion agent completed")
-	is.Equal(branch, strings.TrimSpace(runGit(t, repoPath, "branch", "--show-current")))
+	is.Equal("main", strings.TrimSpace(runGit(t, repoPath, "branch", "--show-current")))
 
 	agentLog := readFileString(t, agentLogPath)
 	contextOutput := agentLogBlock(t, agentLog, "AGENT_CONTEXT")
 	for _, want := range []string{
-		"- Workflow: repo-root/team",
-		"- Branch: " + branch,
-		"- Path: " + repoPath,
+		"- Current branch: main",
+		"- Work Directory: " + repoPath,
 		"- Current directory: " + repoPath,
-		"registered repository root on the task branch",
+		"registered repository root on the registered default branch",
+		"deterministic task branch is created only after review",
 	} {
 		is.Contains(contextOutput, want)
 	}
@@ -406,9 +405,9 @@ func TestRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	latest, ok := taskstate.LatestRun(state)
 	must.True(ok)
 	must.NotNil(latest.Completion)
-	target, ok := taskstate.Target(state)
+	target, ok := taskstate.GitFactsFor(state)
 	must.True(ok)
-	is.Equal(branch, target.Branch)
+	is.Equal("main", target.Branch)
 	is.Equal(repoPath, target.Worktree)
 	is.Empty(latest.Completion.Commit)
 	is.Contains(runGit(t, repoPath, "status", "--porcelain=v1"), "repo-root-sync-change.txt")
@@ -464,108 +463,18 @@ func TestRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	is.Equal("https://github.test/org/alpha/pull/56", mergedEvent.PRURL)
 }
 
-//nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
-func TestMainCompletionFlowEndToEnd(t *testing.T) {
+func TestTaskRunMainProvidesRepositoryRootMigrationGuidance(t *testing.T) {
 	is := assert.New(t)
-	must := require.New(t)
 	paths, repoPath := setupCompletionFlowRepo(t)
-
 	const taskID = "op-main-completion"
-	bd := withStatefulCompletionBD(t, completionBDTask{
-		RepoPath:           repoPath,
-		TaskID:             taskID,
-		Title:              "Main completion flow",
-		Description:        "Validate the solo main completion path.",
-		AcceptanceCriteria: "The agent leaves changes for local review and task done finalizes them.",
-	})
+	withStatefulCompletionBD(t, completionBDTask{RepoPath: repoPath, TaskID: taskID, Title: "Deprecated main mode"})
 	withOrpheusCLIHelper(t)
-	agentLogPath := withCompletionFlowAgent(t, completionFlowAgentOptions{
-		Command:              "main-completion-agent",
-		FileName:             "agent-main-change.txt",
-		Body:                 "main implementation",
-		Summary:              "Implement main completion flow",
-		Description:          "Created a main-mode validation change.",
-		DetailedDescription:  "## Main completion\n\nCreated a main-mode validation change.",
-		TechnicalExplanation: "Technical explanation.",
-	})
 	writeCompletionFlowAgentConfig(t, paths, "main-completion", "main-completion-agent")
 
-	stdout, stderr := executeCommand(t, []string{"task", "run", "--main", taskID})
-
-	is.Contains(stdout, "completion agent completed")
-	is.Contains(stderr, "Review for "+taskID+" is waiting for manual step \"local-review\"")
-	is.Contains(stderr, "Resume with `orpheus task run "+taskID+"`")
-
-	agentLog := readFileString(t, agentLogPath)
-	prompt := agentLogBlock(t, agentLog, "ORPHEUS_AGENT_PROMPT")
-	is.Equal(agent.RenderBootstrapPrompt(), prompt)
-	is.Equal(agent.RenderBootstrapPrompt(), agentLogBlock(t, agentLog, "ARG_2"))
-	is.NotContains(prompt, "Main completion flow")
-
-	contextOutput := agentLogBlock(t, agentLog, "AGENT_CONTEXT")
-	for _, want := range []string{
-		"# Orpheus Agent Context",
-		"- ID: " + taskID,
-		"- Title: Main completion flow",
-		"- Workflow: main/solo",
-		"- Branch: main",
-		"- Path: " + repoPath,
-		"registered repository root on the registered default branch",
-		"Orpheus will record local-review-ready completion data",
-		"The human operator will later run `orpheus task run " + taskID + "`",
-	} {
-		is.Contains(contextOutput, want)
-	}
-
-	state := readCompletionTaskState(t, paths, "alpha", taskID)
-	must.Len(state.Runs, 1)
-	latest := state.Runs[0]
-	is.Equal(taskstate.RunStatusSucceeded, latest.Status)
-	must.NotNil(latest.Execution.FinishedAt)
-	must.NotNil(latest.Completion)
-	is.Equal("Implement main completion flow", latest.Completion.Summary)
-	is.Equal("Created a main-mode validation change.", latest.Completion.Description)
-	is.Equal("## Main completion\n\nCreated a main-mode validation change.", latest.Completion.DetailedDescription)
-	is.False(latest.Completion.CompletedAt.IsZero())
-	is.Empty(latest.Completion.Commit)
-	is.Contains(runGit(t, repoPath, "status", "--porcelain=v1"), "agent-main-change.txt")
-	is.NotContains(runGit(t, repoPath, "log", "--oneline", "--max-count=1"), "Implement main completion flow")
-
-	statusOut, statusErr := executeCommand(t, []string{"status"})
-	is.Empty(statusErr)
-	is.Contains(statusOut, "Reviewing")
-	is.Contains(statusOut, taskID)
-	is.Contains(statusOut, "local review; run task run")
-
-	must.NoError(os.WriteFile(filepath.Join(repoPath, "human-review.txt"), []byte("human reviewed\n"), 0o644))
-	recordPassedReview(t, paths, "alpha", taskID)
-	doneOut, doneErr := executeCommand(t, []string{"task", "done", taskID})
-	is.Empty(doneErr)
-	is.Contains(doneOut, "Finalized "+taskID)
-
-	commit := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
-	is.Contains(doneOut, commit)
-	is.Equal(
-		"Implement main completion flow\n\nCreated a main-mode validation change.",
-		strings.TrimSpace(runGit(t, repoPath, "log", "-1", "--format=%B")),
-	)
-	is.Empty(strings.TrimSpace(runGit(t, repoPath, "status", "--porcelain=v1")))
-	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
-	is.Equal(commit, strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/main")))
-	is.Equal("closed", strings.TrimSpace(readFileString(t, bd.StatusPath)))
-
-	finalState := readCompletionTaskState(t, paths, "alpha", taskID)
-	facts := taskstate.FinalizationFacts(finalState)
-	is.Equal(commit, facts.Commit)
-	must.NotNil(facts.CommittedAt)
-	must.NotNil(facts.PushedAt)
-	must.NotNil(facts.ClosedAt)
-
-	fullStatusOut, fullStatusErr := executeCommand(t, []string{"status", "--full"})
-	is.Empty(fullStatusErr)
-	is.Contains(fullStatusOut, "Done / closed")
-	is.Contains(fullStatusOut, taskID)
-	is.Contains(fullStatusOut, "Main completion flow")
+	_, _, err := executeCommandWithError(t, []string{"task", "run", "--main", taskID})
+	is.Error(err)
+	is.ErrorContains(err, "--main is no longer supported")
+	is.ErrorContains(err, "use --repo-root")
 }
 
 func TestOrpheusCLIHelperProcess(t *testing.T) {

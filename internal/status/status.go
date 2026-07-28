@@ -143,7 +143,7 @@ type RunStateIndex map[string]taskstate.RunAttempt
 type LocalTaskState struct {
 	LatestRun                 *taskstate.RunAttempt
 	Runs                      []taskstate.RunAttempt
-	Target                    *taskstate.TaskTarget
+	GitFacts                  *taskstate.GitFacts
 	LatestReview              *taskstate.ReviewAttempt
 	LatestFinalizationFailure *taskstate.Event
 	Finalization              taskstate.Finalization
@@ -389,7 +389,7 @@ func classifyOpenOrUnknownTask(
 func classifyUnexpectedCompletionTarget(
 	repository task.Repository,
 	taskItem task.Task,
-	taskTarget *taskstate.TaskTarget,
+	taskTarget *taskstate.GitFacts,
 	latestRun *taskstate.RunAttempt,
 ) (policyResult, bool) {
 	if taskTarget == nil {
@@ -427,7 +427,7 @@ func classifyParentEpicGate(taskItem task.Task, index map[string]task.Task) (pol
 func classifyExpectedReviewReady(
 	expectedTargets *tasktarget.ExpectedTargets,
 	taskItem task.Task,
-	taskTarget *taskstate.TaskTarget,
+	taskTarget *taskstate.GitFacts,
 	latestRun *taskstate.RunAttempt,
 	localState *LocalTaskState,
 ) (policyResult, bool) {
@@ -725,11 +725,11 @@ func latestRunFrom(localState *LocalTaskState) *taskstate.RunAttempt {
 	return localState.LatestRun
 }
 
-func taskTargetFrom(localState *LocalTaskState) *taskstate.TaskTarget {
+func taskTargetFrom(localState *LocalTaskState) *taskstate.GitFacts {
 	if localState == nil {
 		return nil
 	}
-	return localState.Target
+	return localState.GitFacts
 }
 
 func expectedTargetsFrom(localState *LocalTaskState) *tasktarget.ExpectedTargets {

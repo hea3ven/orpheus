@@ -141,9 +141,8 @@ func appendRepositoryContext(builder *strings.Builder, repo ContextRepository) {
 
 func appendExecutionTargetContext(builder *strings.Builder, ctx ActiveContext) {
 	builder.WriteString("\nExecution target:\n")
-	appendPromptLine(builder, "- Workflow", ctx.Target.Kind.DisplayName())
-	appendPromptLine(builder, "- Branch", ctx.Target.Branch)
-	appendPromptLine(builder, "- Path", ctx.Target.Path)
+	appendPromptLine(builder, "- Work Directory", ctx.Target.Path)
+	appendPromptLine(builder, "- Current branch", ctx.Target.Branch)
 	appendPromptLine(builder, "- Current directory", ctx.Target.CurrentDirectory)
 	appendPromptLine(builder, "- Run attempt", fmt.Sprintf("%d", ctx.Run.Attempt))
 	if strings.TrimSpace(ctx.Run.Agent) != "" {
@@ -153,9 +152,8 @@ func appendExecutionTargetContext(builder *strings.Builder, ctx ActiveContext) {
 
 func appendConflictResolutionTargetContext(builder *strings.Builder, ctx ConflictResolutionContext) {
 	builder.WriteString("\nExecution target:\n")
-	appendPromptLine(builder, "- Workflow", ctx.Target.Kind.DisplayName())
-	appendPromptLine(builder, "- Branch", ctx.Target.Branch)
-	appendPromptLine(builder, "- Path", ctx.Target.Path)
+	appendPromptLine(builder, "- Work Directory", ctx.Target.Path)
+	appendPromptLine(builder, "- Current branch", ctx.Target.Branch)
 	appendPromptLine(builder, "- Current directory", ctx.Target.CurrentDirectory)
 }
 
@@ -200,12 +198,8 @@ func appendExecutionContract(builder *strings.Builder, ctx ActiveContext) {
 		appendFeatureBranchExecutionContract(builder, ctx.Task.ID, ctx.Repository.SummaryGuidance, ctx.Repository.SummaryGuidanceStyle)
 	case ExecutionTargetMain:
 		builder.WriteString("- You are running in the registered repository root on the registered default branch.\n")
-		builder.WriteString("- Keep implementation work inside the execution target path.\n")
-		appendAgentDoneContract(builder, ctx.Repository.SummaryGuidance, ctx.Repository.SummaryGuidanceStyle)
-		builder.WriteString("- After `orpheus agent done`, Orpheus will record local-review-ready completion data.\n")
-		builder.WriteString("- The human operator will later run `orpheus task run ")
-		builder.WriteString(ctx.Task.ID)
-		builder.WriteString("` to advance the workflow; do not run it yourself unless explicitly asked.\n")
+		builder.WriteString("- The deterministic task branch is created only after review, immediately before publication.\n")
+		appendFeatureBranchExecutionContract(builder, ctx.Task.ID, ctx.Repository.SummaryGuidance, ctx.Repository.SummaryGuidanceStyle)
 	default:
 		builder.WriteString("- The execution target is unknown; stop and ask the human operator for help.\n")
 	}

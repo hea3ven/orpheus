@@ -436,6 +436,10 @@ case "$PWD|$*" in
 		fmt.Fprintln(&script, "    ;;")
 	}
 	script.WriteString(`esac
+case "$*" in
+  --json\ --sandbox\ update\ *--set-metadata\ orpheus.branch=*) exit 0 ;;
+  --json\ --sandbox\ update\ *--set-metadata\ orpheus.pr_url=*) exit 0 ;;
+esac
 echo "unexpected fake bd call: $PWD|$*" >&2
 exit 65
 `)

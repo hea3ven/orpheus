@@ -1728,8 +1728,8 @@ func TestTaskRunExecutesImplementerDefaultAttachedFromDeterministicWorktree(t *t
 	is.NotContains(state.Runs[0].Execution.Args[3], "Implement attached run")
 	is.Equal("--literal", state.Runs[0].Execution.Args[4])
 	is.Equal("unchanged", state.Runs[0].Execution.Args[5])
-	is.Equal("orpheus/op-1", state.Target.Branch)
-	is.Equal(worktreePath, state.Target.Worktree)
+	is.Equal("orpheus/op-1", state.GitFacts.Branch)
+	is.Equal(worktreePath, state.GitFacts.Worktree)
 	must.NotNil(state.Runs[0].Execution.FinishedAt)
 	must.Len(state.Events, 3)
 	is.Equal(taskstate.EventWorktreeCreated, state.Events[0].Type)
@@ -2022,7 +2022,7 @@ func TestTaskRunMainExecutesAgentFromRegisteredRepoRoot(t *testing.T) {
 	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-main"))
 	must.NoError(err)
 
-	stdout, stderr := executeCommand(t, []string{"task", "run", "--main", "op-main"})
+	stdout, stderr := executeCommand(t, []string{"task", "run", "--repo-root", "op-main"})
 
 	is.Contains(stdout, "fake agent stdout")
 	is.Contains(stderr, "fake agent stderr")
@@ -2060,8 +2060,8 @@ func TestTaskRunMainExecutesAgentFromRegisteredRepoRoot(t *testing.T) {
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
 	must.Len(state.Runs, 1)
 	is.Equal(taskstate.RunStatusSucceeded, state.Runs[0].Status)
-	is.Equal("main", state.Target.Branch)
-	is.Equal(repoPath, state.Target.Worktree)
+	is.Equal("main", state.GitFacts.Branch)
+	is.Equal(repoPath, state.GitFacts.Worktree)
 	must.Len(state.Events, 3)
 	is.Equal(taskstate.EventWorktreeReused, state.Events[0].Type)
 	is.Equal(taskstate.EventRunStarted, state.Events[1].Type)
@@ -2108,7 +2108,7 @@ func TestTaskRunRepoRootExecutesAgentFromRegisteredRepoRootOnTaskBranch(t *testi
 
 	is.Contains(stdout, "fake agent stdout")
 	is.Contains(stderr, "fake agent stderr")
-	is.Equal("orpheus/op-root", strings.TrimSpace(runGit(t, repoPath, "symbolic-ref", "--quiet", "--short", "HEAD")))
+	is.Equal("main", strings.TrimSpace(runGit(t, repoPath, "symbolic-ref", "--quiet", "--short", "HEAD")))
 	_, statErr := os.Stat(worktreePath)
 	must.ErrorIs(statErr, os.ErrNotExist)
 
@@ -2116,7 +2116,7 @@ func TestTaskRunRepoRootExecutesAgentFromRegisteredRepoRootOnTaskBranch(t *testi
 	must.NoError(err)
 	is.Contains(string(bdLog), "--json --readonly --sandbox show --id op-root")
 	is.Contains(string(bdLog), "--json --readonly --sandbox list --all --limit 0")
-	is.Contains(string(bdLog), "--json --sandbox update op-root --status in_progress --set-metadata orpheus.branch=orpheus/op-root --set-metadata orpheus.worktree="+repoPath)
+	is.Contains(string(bdLog), "--json --sandbox update op-root --status in_progress --set-metadata orpheus.branch=main --set-metadata orpheus.worktree="+repoPath)
 
 	agentLog, err := os.ReadFile(agentLogPath)
 	must.NoError(err)
@@ -2126,7 +2126,7 @@ func TestTaskRunRepoRootExecutesAgentFromRegisteredRepoRootOnTaskBranch(t *testi
 		"ORPHEUS_REPO_ID=alpha",
 		"ORPHEUS_TASK_ID=op-root",
 		"ORPHEUS_WORKTREE=" + repoPath,
-		"ORPHEUS_BRANCH=orpheus/op-root",
+		"ORPHEUS_BRANCH=main",
 		"Run `orpheus agent context` now",
 		"task instructions and execution contract",
 	} {
@@ -2137,10 +2137,10 @@ func TestTaskRunRepoRootExecutesAgentFromRegisteredRepoRootOnTaskBranch(t *testi
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-root.yaml"), &state))
 	must.Len(state.Runs, 1)
 	is.Equal(taskstate.RunStatusSucceeded, state.Runs[0].Status)
-	is.Equal("orpheus/op-root", state.Target.Branch)
-	is.Equal(repoPath, state.Target.Worktree)
+	is.Equal("main", state.GitFacts.Branch)
+	is.Equal(repoPath, state.GitFacts.Worktree)
 	must.Len(state.Events, 3)
-	is.Equal(taskstate.EventTaskBranchCreated, state.Events[0].Type)
+	is.Equal(taskstate.EventWorktreeReused, state.Events[0].Type)
 	is.Equal(taskstate.EventRunStarted, state.Events[1].Type)
 	is.Equal(taskstate.EventRunFinished, state.Events[2].Type)
 
@@ -2151,7 +2151,7 @@ func TestTaskRunRepoRootExecutesAgentFromRegisteredRepoRootOnTaskBranch(t *testi
 	is.Contains(retryErr.Error(), "retry without --repo-root")
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-root.yaml"), &state))
 	must.Len(state.Events, 3)
-	is.Equal(taskstate.EventTaskBranchCreated, state.Events[0].Type)
+	is.Equal(taskstate.EventWorktreeReused, state.Events[0].Type)
 	is.Equal(taskstate.EventRunStarted, state.Events[1].Type)
 	is.Equal(taskstate.EventRunFinished, state.Events[2].Type)
 }
@@ -2193,8 +2193,8 @@ func TestTaskRunPlainRetryRequiresMainForRepoRootMetadata(t *testing.T) {
 	must.Error(err)
 	is.Empty(stdout)
 	is.Empty(stderr)
-	is.ErrorContains(err, "repo-root/default-branch metadata")
-	is.ErrorContains(err, "retry with `orpheus task run --main op-main`")
+	is.ErrorContains(err, "repository-root metadata")
+	is.ErrorContains(err, "retry with `orpheus task run --repo-root op-main`")
 	_, statErr := os.Stat(worktreePath)
 	is.ErrorIs(statErr, os.ErrNotExist)
 }
@@ -2270,7 +2270,7 @@ func TestTaskRunMainAllowsOwnedInProgressRepoRootTask(t *testing.T) {
 	withFakeAgent(t, "main-retry-agent", 0)
 	writeTaskRunAgentConfig(t, paths, "main-retry", "main-retry-agent", nil)
 
-	stdout, stderr := executeCommand(t, []string{"task", "run", "--main", "op-main"})
+	stdout, stderr := executeCommand(t, []string{"task", "run", "--repo-root", "op-main"})
 
 	is.Contains(stdout, "fake agent stdout")
 	is.Contains(stderr, "fake agent stderr")
@@ -2284,8 +2284,8 @@ func TestTaskRunMainAllowsOwnedInProgressRepoRootTask(t *testing.T) {
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
 	must.Len(state.Runs, 1)
 	is.Equal(taskstate.RunStatusSucceeded, state.Runs[0].Status)
-	is.Equal("main", state.Target.Branch)
-	is.Equal(repoPath, state.Target.Worktree)
+	is.Equal("main", state.GitFacts.Branch)
+	is.Equal(repoPath, state.GitFacts.Worktree)
 }
 
 func TestTaskRunMainBlocksOtherRepoRootOwnerButWorktreeRunStillWorks(t *testing.T) {
@@ -2321,7 +2321,7 @@ func TestTaskRunMainBlocksOtherRepoRootOwnerButWorktreeRunStillWorks(t *testing.
 	agentLogPath := withFakeAgent(t, "next-agent", 0)
 	writeTaskRunAgentConfig(t, paths, "next", "next-agent", nil)
 
-	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "--main", "op-next"})
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "--repo-root", "op-next"})
 
 	must.Error(err)
 	is.Empty(stdout)
@@ -2363,7 +2363,7 @@ func TestTaskRunMainFailsDirtyRepoRootBeforeLaunch(t *testing.T) {
 	agentLogPath := withFakeAgent(t, "dirty-agent", 0)
 	writeTaskRunAgentConfig(t, paths, "dirty", "dirty-agent", nil)
 
-	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "--main", "op-dirty"})
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "--repo-root", "op-dirty"})
 
 	must.Error(err)
 	is.Empty(stdout)
@@ -2446,8 +2446,8 @@ func TestTaskRunReviewFollowUpAllowsDirtyMainTarget(t *testing.T) {
 	must.Len(latestReview.Findings, 1)
 	is.Equal(2, latestReview.Findings[0].TargetedByRunAttempt)
 	must.Len(state.Runs, 2)
-	is.Equal("main", state.Target.Branch)
-	is.Equal(repoPath, state.Target.Worktree)
+	is.Equal("main", state.GitFacts.Branch)
+	is.Equal(repoPath, state.GitFacts.Worktree)
 	is.Equal("Resolving issues in op-followup Follow up dirty main", state.Runs[1].Execution.SessionName)
 	must.NotNil(state.Runs[1].ReviewFollowUp)
 	is.Equal([]int{0}, state.Runs[1].ReviewFollowUp.FindingIndexes)
@@ -2859,8 +2859,8 @@ func TestTaskRunAllowsOwnedInProgressTaskWithMatchingMetadata(t *testing.T) {
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-owned.yaml"), &state))
 	must.Len(state.Runs, 1)
 	is.Equal(taskstate.RunStatusSucceeded, state.Runs[0].Status)
-	is.Equal("orpheus/op-owned", state.Target.Branch)
-	is.Equal(worktreePath, state.Target.Worktree)
+	is.Equal("orpheus/op-owned", state.GitFacts.Branch)
+	is.Equal(worktreePath, state.GitFacts.Worktree)
 }
 
 //nolint:funlen // Failure workflow needs the fake command script and assertions in one scenario.
@@ -3884,9 +3884,10 @@ printf 'reviewed\n' > reviewed.txt
 		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
 	})
 
-	stdout, stderr := executeCommandWithScriptedInput(t, []string{"task", "run", "--main", "op-main"}, "", "n\n")
+	withFakeGHPRResponses(t, fakeGHPRResponses{listStdout: "[]", createStdout: "https://github.test/org/alpha/pull/1\n"})
+	stdout, stderr := executeCommandWithScriptedInput(t, []string{"task", "run", "--repo-root", "op-main"}, "", "n\n")
 
-	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stdout, "Published op-main")
 	is.Contains(stderr, "Separate-task review findings can be created as standalone Beads")
 	is.Contains(stderr, "Create follow-up Beads [numbers, a=all, n=none]")
 	is.NotContains(stderr, "Created follow-up Bead")
@@ -4857,9 +4858,10 @@ exit 7
 		{dir: repoPath, args: "--json --sandbox close op-auto", stdout: "{}"},
 	})
 
-	stdout, stderr := executeCommandWithScriptedInput(t, []string{"task", "run", "--main", "op-auto"}, "", "k\n", "")
+	withFakeGHPRResponses(t, fakeGHPRResponses{listStdout: "[]", createStdout: "https://github.test/org/alpha/pull/2\n"})
+	stdout, stderr := executeCommandWithScriptedInput(t, []string{"task", "run", "--repo-root", "op-auto"}, "", "k\n", "")
 
-	is.Contains(stdout, "Finalized op-auto")
+	is.Contains(stdout, "Published op-auto")
 	is.Contains(stderr, "Review blocked for op-auto by check \"status\".")
 	is.Contains(stderr, "Autonomous review follow-up for op-auto targets review attempt 1 finding(s) 1.")
 	is.NotContains(stderr, "Autonomous review attempt budget exhausted")
@@ -4868,7 +4870,7 @@ exit 7
 
 	bdLog, err := os.ReadFile(bdLogPath)
 	must.NoError(err)
-	is.Contains(string(bdLog), "--json --sandbox close op-auto")
+	is.Contains(string(bdLog), "--json --sandbox update op-auto --set-metadata orpheus.pr_url=")
 
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-auto.yaml"), &state))
@@ -4918,10 +4920,11 @@ func TestTaskRunAttachedManualReviewApprovalFinalizes(t *testing.T) {
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-manual", stdout: taskJSON},
 		{dir: repoPath, args: "--json --sandbox close op-manual", stdout: "{}"},
 	})
+	withFakeGHPRResponses(t, fakeGHPRResponses{listStdout: "[]", createStdout: "https://github.test/org/alpha/pull/3\n"})
 
 	stdout, stderr, err := executeCommandWithReaderAndError(
 		t,
-		[]string{"task", "run", "--main", "op-manual"},
+		[]string{"task", "run", "--repo-root", "op-manual"},
 		&delayedManualInput{
 			markerPath: agentDoneMarker,
 			input:      strings.NewReader("a\n"),
@@ -4930,7 +4933,7 @@ func TestTaskRunAttachedManualReviewApprovalFinalizes(t *testing.T) {
 
 	must.NoError(err)
 	is.Contains(stdout, "Recorded completion for op-manual")
-	is.Contains(stdout, "Finalized op-manual")
+	is.Contains(stdout, "Published op-manual")
 	is.Contains(stderr, "== Review step: approval (manual) ==")
 	is.Contains(stderr, "Review action [a=approve, b=block, v=advisory, t=task, q=abort]")
 	is.NotContains(stderr, "Resume with `orpheus task run op-manual`")
@@ -4996,7 +4999,7 @@ exit 7
 		repoPath: {stdout: taskJSON},
 	})
 
-	stdout, stderr := executeCommandWithScriptedInput(t, []string{"task", "run", "--main", "op-stubborn"}, "", "k\n", "", "k\n")
+	stdout, stderr := executeCommandWithScriptedInput(t, []string{"task", "run", "--repo-root", "op-stubborn"}, "", "k\n", "", "k\n")
 
 	is.Contains(stdout, "Recorded completion for op-stubborn")
 	is.NotContains(stdout, "Finalized op-stubborn")
@@ -5071,7 +5074,8 @@ exit 7
 		{dir: repoPath, args: "--json --sandbox close op-resume", stdout: "{}"},
 	})
 
-	runStdout, runStderr := executeCommand(t, []string{"task", "run", "--main", "--agent", "selected", "op-resume"})
+	withFakeGHPRResponses(t, fakeGHPRResponses{listStdout: "[]", createStdout: "https://github.test/org/alpha/pull/4\n"})
+	runStdout, runStderr := executeCommand(t, []string{"task", "run", "--repo-root", "--agent", "selected", "op-resume"})
 	is.Contains(runStdout, "Recorded completion for op-resume")
 	is.Contains(runStderr, "Review for op-resume is waiting for manual step \"approval\"")
 	is.Equal("fail\n", readFileString(t, filepath.Join(repoPath, "status.txt")))
@@ -5079,7 +5083,7 @@ exit 7
 	writeAutonomousReviewLoopConfigWithImplementers(t, paths, "selected", selectedAgentPath, "other", otherAgentPath, "other", 4, steps)
 
 	reviewStdout, reviewStderr := executeCommandWithScriptedInput(t, []string{"task", "review", "op-resume"}, "a\nk\n", "", "a\n")
-	is.Contains(reviewStdout, "Finalized op-resume")
+	is.Contains(reviewStdout, "Published op-resume")
 	is.Contains(reviewStderr, "Resuming review attempt 1 at manual step \"approval\".")
 	is.Contains(reviewStderr, "Review blocked for op-resume by check \"status\".")
 	is.Contains(reviewStderr, "Autonomous review follow-up for op-resume targets review attempt 1 finding(s) 1.")

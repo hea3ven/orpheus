@@ -236,6 +236,39 @@ func (b TaskBackend) StartEpic(ctx context.Context, id string) error {
 	return nil
 }
 
+// UpdateGitFacts records the current task branch after repository-root work
+// is reviewed and publication materializes the deterministic task branch.
+func (b TaskBackend) UpdateGitFacts(ctx context.Context, id string, branch string, worktree string) error {
+	id = strings.TrimSpace(id)
+	branch = strings.TrimSpace(branch)
+	worktree = strings.TrimSpace(worktree)
+	if id == "" || branch == "" || worktree == "" {
+		return fmt.Errorf("update Beads task Git facts in %q: task id, branch, and worktree are required", b.dir)
+	}
+	current, err := b.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("update Beads task %q Git facts in %q: inspect task: %w", id, b.dir, err)
+	}
+	if current.Status != task.StatusInProgress {
+		return task.MutationConflictError{TaskID: id, Reason: "task is not in progress"}
+	}
+	metadata := current.OrpheusMetadata()
+	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
+		return task.MutationConflictError{TaskID: id, Reason: fmt.Sprintf("%s is already set", task.MetadataPRURL)}
+	}
+	result, err := b.runWriteWithAttrs(ctx, "update Git facts", []slog.Attr{slog.String("task_id", id)}, "update", id,
+		"--set-metadata", task.MetadataBranch+"="+branch,
+		"--set-metadata", task.MetadataWorktree+"="+worktree,
+	)
+	if err != nil {
+		if isNotFoundResult(result) {
+			return fmt.Errorf("update Beads task %q Git facts in %q: %w%s", id, b.dir, task.ErrNotFound, formattedOutput(result))
+		}
+		return err
+	}
+	return nil
+}
+
 // SetPRURL stores the task pull request URL in Beads metadata.
 func (b TaskBackend) SetPRURL(ctx context.Context, id string, prURL string) error {
 	id = strings.TrimSpace(id)

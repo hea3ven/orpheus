@@ -261,6 +261,12 @@ type DispatchBackend interface {
 	DispatchMutator
 }
 
+// GitFactsMutator updates evolving Git facts after publication materializes a
+// task branch while retaining the task's fixed work directory.
+type GitFactsMutator interface {
+	UpdateGitFacts(ctx context.Context, taskID string, branch string, worktree string) error
+}
+
 // PRURLMutator is the narrow backend-neutral mutation used when a task enters PR review.
 type PRURLMutator interface {
 	SetPRURL(ctx context.Context, taskID string, prURL string) error

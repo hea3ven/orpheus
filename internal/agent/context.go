@@ -309,10 +309,10 @@ func (r ActiveContextResolver) resolveConflictResolutionTask(
 func (r ActiveContextResolver) resolveRunningRun(
 	repoID string,
 	taskID string,
-) (taskstate.RunAttempt, taskstate.TaskTarget, error) {
+) (taskstate.RunAttempt, taskstate.GitFacts, error) {
 	state, err := r.RunStore.Load(repoID, taskID)
 	if err != nil {
-		return taskstate.RunAttempt{}, taskstate.TaskTarget{}, fmt.Errorf(
+		return taskstate.RunAttempt{}, taskstate.GitFacts{}, fmt.Errorf(
 			"load latest Orpheus run for task %s/%s: %w",
 			repoID,
 			taskID,
@@ -321,14 +321,14 @@ func (r ActiveContextResolver) resolveRunningRun(
 	}
 	run, ok := taskstate.LatestRun(state)
 	if !ok {
-		return taskstate.RunAttempt{}, taskstate.TaskTarget{}, fmt.Errorf(
+		return taskstate.RunAttempt{}, taskstate.GitFacts{}, fmt.Errorf(
 			"task %s/%s has no Orpheus run attempts",
 			repoID,
 			taskID,
 		)
 	}
 	if run.Status != taskstate.RunStatusRunning {
-		return taskstate.RunAttempt{}, taskstate.TaskTarget{}, fmt.Errorf(
+		return taskstate.RunAttempt{}, taskstate.GitFacts{}, fmt.Errorf(
 			"latest Orpheus run attempt %d for task %s/%s is %q, expected %q",
 			run.Attempt,
 			repoID,
@@ -337,9 +337,9 @@ func (r ActiveContextResolver) resolveRunningRun(
 			taskstate.RunStatusRunning,
 		)
 	}
-	target, ok := taskstate.Target(state)
+	target, ok := taskstate.GitFactsFor(state)
 	if !ok {
-		return taskstate.RunAttempt{}, taskstate.TaskTarget{}, fmt.Errorf(
+		return taskstate.RunAttempt{}, taskstate.GitFacts{}, fmt.Errorf(
 			"task %s/%s has no taskstate target",
 			repoID,
 			taskID,
@@ -392,13 +392,13 @@ func (r ActiveContextResolver) resolveContextTarget(
 	source taskmodel.RepositorySource,
 	taskItem taskmodel.Task,
 	taskID string,
-	taskTarget taskstate.TaskTarget,
+	taskTarget taskstate.GitFacts,
 ) (tasktarget.ExpectedTargets, tasktarget.Target, error) {
 	targets, err := tasktarget.ExpectedTargetsForTask(source.Repository, taskID, r.Paths)
 	if err != nil {
 		return tasktarget.ExpectedTargets{}, tasktarget.Target{}, err
 	}
-	target, err := tasktarget.ClassifyTaskStateTarget(taskTarget, targets)
+	target, err := tasktarget.ClassifyGitFacts(taskTarget, targets)
 	if err != nil {
 		return tasktarget.ExpectedTargets{}, tasktarget.Target{}, fmt.Errorf(
 			"task %s has inconsistent taskstate target: %w",

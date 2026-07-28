@@ -37,9 +37,8 @@ func appendReviewTaskContext(builder *strings.Builder, ctx ReviewContext) {
 
 func appendReviewTargetContext(builder *strings.Builder, ctx ReviewContext) {
 	builder.WriteString("\nReview target:\n")
-	appendPromptLine(builder, "- Workflow", ctx.Target.Kind.DisplayName())
-	appendPromptLine(builder, "- Branch", ctx.Target.Branch)
-	appendPromptLine(builder, "- Path", ctx.Target.Path)
+	appendPromptLine(builder, "- Work Directory", ctx.Target.Path)
+	appendPromptLine(builder, "- Current branch", ctx.Target.Branch)
 	appendPromptLine(builder, "- Current directory", ctx.Target.CurrentDirectory)
 	appendPromptLine(builder, "- Review attempt", fmt.Sprintf("%d", ctx.Review.Attempt))
 	appendPromptLine(builder, "- Review step", ctx.Review.Step)
