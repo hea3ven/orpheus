@@ -187,6 +187,7 @@ func loadLocalTaskState(
 	latestCopy := latest
 	localState := status.LocalTaskState{
 		LatestRun:    &latestCopy,
+		Runs:         append([]taskstate.RunAttempt(nil), state.Runs...),
 		Finalization: taskstate.FinalizationFacts(state),
 	}
 	if target, hasTarget := taskstate.Target(state); hasTarget {
