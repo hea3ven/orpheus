@@ -2445,6 +2445,42 @@ func TestTaskReviewShowDisplaysLatestFindingsAndCreatedFollowUps(t *testing.T) {
 	}
 }
 
+func TestTaskReviewShowGuidesRetryAfterFailedFollowUp(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	paths, repoPath := setupTaskReviewShowRepo(t, "op-retry")
+	runStore := taskstate.NewStore(paths)
+
+	review, err := runStore.StartReview("alpha", "op-retry")
+	must.NoError(err)
+	_, err = runStore.RecordReviewFinding("alpha", "op-retry", review.Attempt, taskstate.ReviewFinding{
+		Type:        taskstate.FindingTypeBlocking,
+		Title:       "Retry me",
+		Description: "The first fix failed.",
+	})
+	must.NoError(err)
+	_, err = runStore.FinishReview("alpha", "op-retry", review.Attempt, taskstate.ReviewStatusBlocked)
+	must.NoError(err)
+	failed, err := runStore.StartRun("alpha", "op-retry", taskstate.StartRunOptions{
+		Agent:          "implementer",
+		Branch:         "main",
+		Worktree:       repoPath,
+		ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: review.Attempt, FindingIndexes: []int{0}},
+	})
+	must.NoError(err)
+	_, err = runStore.TargetReviewFindings("alpha", "op-retry", review.Attempt, []int{0}, failed.Attempt)
+	must.NoError(err)
+	_, err = runStore.FinishRun("alpha", "op-retry", failed.Attempt, taskstate.RunStatusFailed)
+	must.NoError(err)
+
+	stdout, stderr := executeCommand(t, []string{"task", "review", "show", "op-retry"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Resolution: open")
+	is.Contains(stdout, "Run attempt 1: failed (review attempt 1, findings 1)")
+	is.Contains(stdout, "Next step: retry `orpheus task run op-retry`")
+}
+
 func TestTaskReviewShowGuidesWhenTaskHasNoReviewAttempts(t *testing.T) {
 	is := assert.New(t)
 	setupTaskReviewShowRepo(t, "op-empty")

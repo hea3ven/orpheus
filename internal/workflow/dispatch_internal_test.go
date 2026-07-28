@@ -221,6 +221,35 @@ func TestDispatchValidateStartAllowsKeptBudgetExhaustedAutomatedBlockers(t *test
 	}
 }
 
+func TestDispatchValidateStartRetriesFailedFollowUpTargets(t *testing.T) {
+	reviewAttempt := taskstate.ReviewAttempt{
+		Attempt:  1,
+		Status:   taskstate.ReviewStatusBlocked,
+		Pipeline: "default",
+		Step:     "inspect",
+		Steps:    []taskstate.ReviewStep{{Kind: taskstate.ReviewStepKindManual, Name: "inspect"}},
+		Findings: []taskstate.ReviewFinding{{
+			Type:                 taskstate.FindingTypeBlocking,
+			Step:                 "inspect",
+			Title:                "Bug",
+			Description:          "Fix it.",
+			TargetedByRunAttempt: 2,
+		}},
+	}
+
+	plan, err := validateDispatchStartForReviewWithRuns(t, reviewAttempt, []taskstate.RunAttempt{{
+		Attempt:        2,
+		Status:         taskstate.RunStatusFailed,
+		ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{0}},
+	}})
+	if err != nil {
+		t.Fatalf("validate retry start: %v", err)
+	}
+	if plan.followUp == nil || len(plan.followUp.findingIndexes) != 1 || plan.followUp.findingIndexes[0] != 0 {
+		t.Fatalf("follow-up plan = %#v, want failed target finding", plan.followUp)
+	}
+}
+
 func TestDispatchValidateStartRefusesAlreadyTargetedBlockedReview(t *testing.T) {
 	paths := newDispatchTestPaths(t)
 	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
@@ -332,6 +361,15 @@ func validateDispatchStartForReview(
 	reviewAttempt taskstate.ReviewAttempt,
 ) (dispatchStartPlan, error) {
 	t.Helper()
+	return validateDispatchStartForReviewWithRuns(t, reviewAttempt, nil)
+}
+
+func validateDispatchStartForReviewWithRuns(
+	t *testing.T,
+	reviewAttempt taskstate.ReviewAttempt,
+	runs []taskstate.RunAttempt,
+) (dispatchStartPlan, error) {
+	t.Helper()
 
 	paths := newDispatchTestPaths(t)
 	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
@@ -359,6 +397,7 @@ func validateDispatchStartForReview(
 				Branch:   "main",
 				Worktree: repoPath,
 			},
+			Runs:    runs,
 			Reviews: []taskstate.ReviewAttempt{reviewAttempt},
 		},
 	}

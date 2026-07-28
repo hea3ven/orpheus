@@ -637,6 +637,7 @@ func TestStoreRejectsUnsafeReviewStepArgsAndPreservesState(t *testing.T) {
 	}
 }
 
+//nolint:funlen // The target lifecycle covers idempotence and successful-target protection.
 func TestStoreTargetsReviewFindingsByRunAttempt(t *testing.T) {
 	store := newTestStore(t,
 		time.Date(2026, 6, 26, 10, 0, 0, 0, time.UTC),
@@ -696,6 +697,107 @@ func TestStoreTargetsReviewFindingsByRunAttempt(t *testing.T) {
 		"- 0",
 		"targeted_by_run_attempt: 1",
 	)
+
+	if _, err := store.FinishRun("alpha", "op-1", run.Attempt, taskstate.RunStatusSucceeded); err != nil {
+		t.Fatalf("finish successful follow-up: %v", err)
+	}
+	second, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: review.Attempt, FindingIndexes: []int{0}},
+	})
+	if err != nil {
+		t.Fatalf("start second follow-up: %v", err)
+	}
+	if _, err := store.TargetReviewFindings("alpha", "op-1", review.Attempt, []int{0}, second.Attempt); err == nil {
+		t.Fatal("retarget succeeded after successful follow-up")
+	}
+}
+
+//nolint:funlen // The retry lifecycle preserves failed attempt audit history.
+func TestStoreRetriesFailedReviewFollowUpTargets(t *testing.T) {
+	store := newTestStore(t,
+		time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 7, 27, 10, 1, 0, 0, time.UTC),
+		time.Date(2026, 7, 27, 10, 2, 0, 0, time.UTC),
+		time.Date(2026, 7, 27, 10, 3, 0, 0, time.UTC),
+		time.Date(2026, 7, 27, 10, 4, 0, 0, time.UTC),
+		time.Date(2026, 7, 27, 10, 5, 0, 0, time.UTC),
+		time.Date(2026, 7, 27, 10, 6, 0, 0, time.UTC),
+	)
+
+	review, err := store.StartReview("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("start review: %v", err)
+	}
+	for _, title := range []string{"First", "Second"} {
+		if _, err := store.RecordReviewFinding("alpha", "op-1", review.Attempt, taskstate.ReviewFinding{
+			Type:        taskstate.FindingTypeBlocking,
+			Title:       title,
+			Description: "Fix it.",
+		}); err != nil {
+			t.Fatalf("record %s finding: %v", title, err)
+		}
+	}
+	if _, err := store.FinishReview("alpha", "op-1", review.Attempt, taskstate.ReviewStatusBlocked); err != nil {
+		t.Fatalf("finish review: %v", err)
+	}
+
+	first, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: review.Attempt, FindingIndexes: []int{0, 1}},
+	})
+	if err != nil {
+		t.Fatalf("start first follow-up: %v", err)
+	}
+	if _, err := store.TargetReviewFindings("alpha", "op-1", review.Attempt, []int{0, 1}, first.Attempt); err != nil {
+		t.Fatalf("target first follow-up: %v", err)
+	}
+	if _, err := store.FinishRun("alpha", "op-1", first.Attempt, taskstate.RunStatusFailed); err != nil {
+		t.Fatalf("fail first follow-up: %v", err)
+	}
+
+	persisted, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load persisted failed target: %v", err)
+	}
+	latestReview, ok := taskstate.LatestReview(persisted)
+	if !ok {
+		t.Fatal("latest review missing")
+	}
+	indexes, eligible := taskstate.UntargetedBlockingFindingIndexesForFollowUpInState(persisted, latestReview)
+	if !eligible || !reflect.DeepEqual(indexes, []int{0, 1}) {
+		t.Fatalf("retryable indexes = %#v, eligible %v", indexes, eligible)
+	}
+	if !taskstate.HasFailedReviewFollowUpTargets(persisted, latestReview) {
+		t.Fatal("failed follow-up target was not detected")
+	}
+	if persisted.Runs[0].ReviewFollowUp == nil || persisted.Runs[0].ReviewFollowUp.ReviewAttempt != review.Attempt {
+		t.Fatalf("failed follow-up audit association = %#v", persisted.Runs[0].ReviewFollowUp)
+	}
+
+	second, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: review.Attempt, FindingIndexes: []int{0, 1}},
+	})
+	if err != nil {
+		t.Fatalf("start retry follow-up: %v", err)
+	}
+	if _, err := store.TargetReviewFindings("alpha", "op-1", review.Attempt, []int{0, 1}, second.Attempt); err != nil {
+		t.Fatalf("target retry follow-up: %v", err)
+	}
+	if _, err := store.FailRunStart("alpha", "op-1", second.Attempt, errors.New("agent executable missing")); err != nil {
+		t.Fatalf("fail retry start: %v", err)
+	}
+
+	persisted, err = store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load failed-start target: %v", err)
+	}
+	latestReview, _ = taskstate.LatestReview(persisted)
+	indexes, eligible = taskstate.UntargetedBlockingFindingIndexesForFollowUpInState(persisted, latestReview)
+	if !eligible || !reflect.DeepEqual(indexes, []int{0, 1}) {
+		t.Fatalf("failed-start retryable indexes = %#v, eligible %v", indexes, eligible)
+	}
+	if persisted.Runs[1].ReviewFollowUp == nil || persisted.Runs[1].Status != taskstate.RunStatusFailed {
+		t.Fatalf("failed-start audit run = %#v", persisted.Runs[1])
+	}
 }
 
 func TestStoreRecordsReviewFindingCreatedTaskTimestamp(t *testing.T) {
@@ -1120,6 +1222,30 @@ func TestUntargetedBlockingFindingIndexesForFollowUp(t *testing.T) {
 				t.Fatalf("indexes = %#v, want %#v", indexes, tt.wantIndexes)
 			}
 		})
+	}
+}
+
+func TestFailedAutomatedFollowUpTargetsRemainEligible(t *testing.T) {
+	review := taskstate.ReviewAttempt{
+		Step:  "lint",
+		Steps: []taskstate.ReviewStep{{Kind: taskstate.ReviewStepKindCheck, Name: "lint"}},
+		Findings: []taskstate.ReviewFinding{{
+			Type:                 taskstate.FindingTypeBlocking,
+			Step:                 "lint",
+			Title:                "Lint failed",
+			Description:          "Fix it.",
+			TargetedByRunAttempt: 2,
+		}},
+	}
+	state := taskstate.TaskState{Runs: []taskstate.RunAttempt{{
+		Attempt:        2,
+		Status:         taskstate.RunStatusFailed,
+		ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{0}},
+	}}}
+
+	indexes, eligible := taskstate.UntargetedBlockingFindingIndexesForFollowUpInState(state, review)
+	if !eligible || !reflect.DeepEqual(indexes, []int{0}) {
+		t.Fatalf("indexes = %#v, eligible %v; want failed target eligible", indexes, eligible)
 	}
 }
 

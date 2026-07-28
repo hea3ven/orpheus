@@ -440,7 +440,7 @@ func (s DispatchService) resolveReviewFollowUpPlan(
 
 	switch latestReview.Status {
 	case taskstate.ReviewStatusBlocked:
-		return blockedReviewFollowUpPlan(taskID, latestReview, lockedTarget, hasLockedTarget)
+		return blockedReviewFollowUpPlan(taskID, state, latestReview, lockedTarget, hasLockedTarget)
 	case taskstate.ReviewStatusAborted:
 		return nil, fmt.Errorf("latest review attempt %d for task %s was aborted; rerun `orpheus task review %s`", latestReview.Attempt, taskID, taskID)
 	case taskstate.ReviewStatusFailed:
@@ -464,6 +464,7 @@ func (s DispatchService) resolveReviewFollowUpPlan(
 
 func blockedReviewFollowUpPlan(
 	taskID string,
+	state taskstate.TaskState,
 	latestReview taskstate.ReviewAttempt,
 	lockedTarget tasktarget.Target,
 	hasLockedTarget bool,
@@ -471,7 +472,7 @@ func blockedReviewFollowUpPlan(
 	if latestReview.AutomatedBlockerDecisionInterrupted {
 		return nil, interruptedAutomatedBlockerDecisionError(latestReview, taskID)
 	}
-	indexes, followUpEligible := taskstate.UntargetedBlockingFindingIndexesForFollowUp(latestReview)
+	indexes, followUpEligible := taskstate.UntargetedBlockingFindingIndexesForFollowUpInState(state, latestReview)
 	if !followUpEligible {
 		return nil, unkeptAutomatedBlockerDecisionError(latestReview, taskID)
 	}
