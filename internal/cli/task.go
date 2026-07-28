@@ -990,6 +990,7 @@ func launchTaskRunAgent(
 	)
 	err := attachedAgentLauncher.Run(command.Context(), agentexec.Command{
 		Name:    start.Command.AgentName,
+		Harness: start.Command.Harness,
 		Command: start.Command.Command,
 		Args:    append([]string{}, start.Command.Args...),
 	}, agentexec.LaunchOptions{

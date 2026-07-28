@@ -182,6 +182,7 @@ func (r taskReviewLifecycleAgentRunner) RunReviewLifecycleAgent(
 ) (workflow.ReviewLifecycleAgentRunResult, error) {
 	if err := attachedAgentLauncher.Run(ctx, agentexec.Command{
 		Name:    run.Start.Command.AgentName,
+		Harness: run.Start.Command.Harness,
 		Command: run.Start.Command.Command,
 		Args:    append([]string{}, run.Start.Command.Args...),
 	}, agentexec.LaunchOptions{

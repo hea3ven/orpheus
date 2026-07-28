@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testguard"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -182,7 +183,9 @@ func TestRunPipelineRecordsCodexPromptArgWithEvaluationSessionName(t *testing.T)
 
 	binDir := filepath.Join(root, "bin")
 	must.NoError(os.MkdirAll(binDir, 0o755))
-	must.NoError(os.WriteFile(filepath.Join(binDir, "codex"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	codexPath := filepath.Join(binDir, "codex")
+	must.NoError(os.WriteFile(codexPath, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	t.Setenv(testguard.FakeAgentEnvKey("codex"), codexPath)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	err = runPipeline(
