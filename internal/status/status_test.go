@@ -306,7 +306,7 @@ func TestProjectWithRunStatesShowsSuccessfulMainCompletionInReview(t *testing.T)
 
 	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-main"})
 	reviewEntry := groupEntries(t, got, status.GroupInReview)[0]
-	if reviewEntry.Detail != "local review; run task review" {
+	if reviewEntry.Detail != "local review; run task run" {
 		t.Fatalf("review detail = %q, want local review detail", reviewEntry.Detail)
 	}
 	assertGroupTaskIDs(t, got, status.GroupWorking, nil)
@@ -324,7 +324,7 @@ func TestProjectWithRunStatesShowsWorktreeCompletionReadyForTaskDone(t *testing.
 
 	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-worktree"})
 	entry := groupEntries(t, got, status.GroupInReview)[0]
-	if entry.Detail != "local review; run task review" {
+	if entry.Detail != "local review; run task run" {
 		t.Fatalf("review detail = %q, want task review detail", entry.Detail)
 	}
 }
@@ -341,7 +341,7 @@ func TestProjectWithRunStatesShowsWorktreeCompletionWithoutCommitReadyForTaskDon
 
 	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-worktree"})
 	entry := groupEntries(t, got, status.GroupInReview)[0]
-	if entry.Detail != "local review; run task review" {
+	if entry.Detail != "local review; run task run" {
 		t.Fatalf("review detail = %q, want task review detail", entry.Detail)
 	}
 }
@@ -451,7 +451,7 @@ func TestProjectWithLocalTaskStatesClassifiesLatestReviewAttempts(t *testing.T) 
 				{Type: taskstate.FindingTypeBlocking, Title: "Bug", Description: "Fix it", TargetedByRunAttempt: 2},
 			}),
 			wantGroup:  status.GroupInReview,
-			wantDetail: "review blockers targeted; run task review",
+			wantDetail: "review blockers targeted; run task run",
 		},
 		{
 			name: "failed follow-up target is ready to retry",
@@ -476,7 +476,7 @@ func TestProjectWithLocalTaskStatesClassifiesLatestReviewAttempts(t *testing.T) 
 				return review
 			}(),
 			wantGroup:  status.GroupInReview,
-			wantDetail: "review blocker decision interrupted; run task review",
+			wantDetail: "review blocker decision interrupted; run task run",
 		},
 		{
 			name: "unkept automated blocker decision returns to review",
@@ -488,19 +488,19 @@ func TestProjectWithLocalTaskStatesClassifiesLatestReviewAttempts(t *testing.T) 
 				return review
 			}(),
 			wantGroup:  status.GroupInReview,
-			wantDetail: "review blocker decision required; run task review",
+			wantDetail: "review blocker decision required; run task run",
 		},
 		{
 			name:       "aborted review is reviewing retry",
 			review:     reviewAttempt(1, taskstate.ReviewStatusAborted, nil),
 			wantGroup:  status.GroupInReview,
-			wantDetail: "review aborted; run task review",
+			wantDetail: "review aborted; run task run",
 		},
 		{
 			name:       "failed review needs operator attention",
 			review:     reviewAttempt(1, taskstate.ReviewStatusFailed, nil),
 			wantGroup:  status.GroupNeedsAttention,
-			wantDetail: "review failed operationally; run task review",
+			wantDetail: "review failed operationally; run task run",
 		},
 		{
 			name:   "passed review with publication failure needs task done retry",

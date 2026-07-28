@@ -101,6 +101,7 @@ type DispatchStartOptions struct {
 	TaskID                 string
 	Source                 task.RepositorySource
 	Backend                DispatchBackend
+	Task                   task.Task
 	Command                DispatchCommand
 	ResolveCommand         func(DispatchCommandContext) (DispatchCommand, error)
 	ResolveFollowUpCommand func(DispatchCommandContext) (DispatchCommand, error)
@@ -318,9 +319,16 @@ func (s DispatchService) validateStart(
 		return dispatchStartPlan{}, errors.New("task dispatch backend is required")
 	}
 
-	taskItem, err := queryDispatchTask(ctx, opts.Source, opts.TaskID, opts.Backend)
-	if err != nil {
-		return dispatchStartPlan{}, err
+	taskItem := opts.Task.Clone()
+	if taskItem.ID == "" {
+		var err error
+		taskItem, err = queryDispatchTask(ctx, opts.Source, opts.TaskID, opts.Backend)
+		if err != nil {
+			return dispatchStartPlan{}, err
+		}
+	}
+	if taskItem.ID != opts.TaskID {
+		return dispatchStartPlan{}, fmt.Errorf("task dispatch preloaded task id %q does not match requested task id %q", taskItem.ID, opts.TaskID)
 	}
 	if err := ensureDispatchParentEpicGate(ctx, opts.Backend, taskItem); err != nil {
 		return dispatchStartPlan{}, err

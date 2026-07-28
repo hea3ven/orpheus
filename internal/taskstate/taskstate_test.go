@@ -698,6 +698,14 @@ func TestStoreTargetsReviewFindingsByRunAttempt(t *testing.T) {
 		"targeted_by_run_attempt: 1",
 	)
 
+	if _, err := store.CompleteRun("alpha", "op-1", run.Attempt, taskstate.CompleteRunOptions{
+		Summary:              "Fix blocker",
+		Description:          "Address the review finding.",
+		DetailedDescription:  "Implemented the targeted repair.",
+		TechnicalExplanation: "The follow-up fixes the recorded blocker.",
+	}); err != nil {
+		t.Fatalf("complete successful follow-up: %v", err)
+	}
 	if _, err := store.FinishRun("alpha", "op-1", run.Attempt, taskstate.RunStatusSucceeded); err != nil {
 		t.Fatalf("finish successful follow-up: %v", err)
 	}

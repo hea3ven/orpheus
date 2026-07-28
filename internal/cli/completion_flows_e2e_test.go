@@ -48,7 +48,7 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 
 	is.Contains(stdout, "completion agent completed")
 	is.Contains(stderr, "Review for "+taskID+" is waiting for manual step \"local-review\"")
-	is.Contains(stderr, "Resume with `orpheus task review "+taskID+"`")
+	is.Contains(stderr, "Resume with `orpheus task run "+taskID+"`")
 
 	agentLog := readFileString(t, agentLogPath)
 	prompt := agentLogBlock(t, agentLog, "ORPHEUS_AGENT_PROMPT")
@@ -70,7 +70,7 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 		"- Current directory: " + worktreePath,
 		"deterministic task worktree and task branch",
 		"PR-ready completion data for feature-branch publication",
-		"The human operator will later run `orpheus task review " + taskID + "` to review and publish the feature branch as a pull request",
+		"The human operator will later run `orpheus task run " + taskID + "` to review and publish the feature branch as a pull request",
 	} {
 		is.Contains(contextOutput, want)
 	}
@@ -92,7 +92,7 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 	is.Empty(statusErr)
 	is.Contains(statusOut, "Reviewing")
 	is.Contains(statusOut, taskID)
-	is.Contains(statusOut, "local review; run task review")
+	is.Contains(statusOut, "local review; run task run")
 	is.NotContains(statusOut, "https://")
 
 	is.Equal("in_progress", strings.TrimSpace(readFileString(t, bd.StatusPath)))
@@ -494,7 +494,7 @@ func TestMainCompletionFlowEndToEnd(t *testing.T) {
 
 	is.Contains(stdout, "completion agent completed")
 	is.Contains(stderr, "Review for "+taskID+" is waiting for manual step \"local-review\"")
-	is.Contains(stderr, "Resume with `orpheus task review "+taskID+"`")
+	is.Contains(stderr, "Resume with `orpheus task run "+taskID+"`")
 
 	agentLog := readFileString(t, agentLogPath)
 	prompt := agentLogBlock(t, agentLog, "ORPHEUS_AGENT_PROMPT")
@@ -512,7 +512,7 @@ func TestMainCompletionFlowEndToEnd(t *testing.T) {
 		"- Path: " + repoPath,
 		"registered repository root on the registered default branch",
 		"Orpheus will record local-review-ready completion data",
-		"The human operator will later run `orpheus task review " + taskID + "`",
+		"The human operator will later run `orpheus task run " + taskID + "`",
 	} {
 		is.Contains(contextOutput, want)
 	}
@@ -535,7 +535,7 @@ func TestMainCompletionFlowEndToEnd(t *testing.T) {
 	is.Empty(statusErr)
 	is.Contains(statusOut, "Reviewing")
 	is.Contains(statusOut, taskID)
-	is.Contains(statusOut, "local review; run task review")
+	is.Contains(statusOut, "local review; run task run")
 
 	must.NoError(os.WriteFile(filepath.Join(repoPath, "human-review.txt"), []byte("human reviewed\n"), 0o644))
 	recordPassedReview(t, paths, "alpha", taskID)

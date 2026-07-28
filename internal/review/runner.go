@@ -342,7 +342,7 @@ func runCheckStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome
 		Title:           fmt.Sprintf("Check %q failed", step.Name),
 		Description:     fmt.Sprintf("%s exited with status %d.", commandLine(step), exitErr.ExitCode()),
 		Step:            step.Name,
-		SuggestedAction: "Inspect the check output, fix the issue, then rerun task review.",
+		SuggestedAction: "Inspect the check output, fix the issue, then rerun task run.",
 	}
 	reviewAttempt, err := opts.Store.RecordReviewFinding(opts.RepoID, opts.TaskID, opts.Attempt.Attempt, finding)
 	if err != nil {
@@ -410,7 +410,7 @@ func runManualStep(opts PipelineRunOptions, step Step, env []string) (stepOutcom
 func pauseManualStep(opts PipelineRunOptions, step Step) (stepOutcome, error) {
 	_, err := fmt.Fprintf(
 		opts.Stderr,
-		"Review for %s is waiting for manual step %q. Resume with `orpheus task review %s`.\n",
+		"Review for %s is waiting for manual step %q. Resume with `orpheus task run %s`.\n",
 		opts.TaskID,
 		step.Name,
 		opts.TaskID,
@@ -900,7 +900,7 @@ func interruptAutomatedBlockerDecision(opts PipelineRunOptions) (bool, error) {
 	}
 	if _, err := fmt.Fprintf(
 		opts.Stderr,
-		"Automated blocker decisions for %s were interrupted; run `orpheus task review %s` to start a fresh review.\n",
+		"Automated blocker decisions for %s were interrupted; run `orpheus task run %s` to start a fresh review.\n",
 		opts.TaskID,
 		opts.TaskID,
 	); err != nil {

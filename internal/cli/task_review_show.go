@@ -20,7 +20,7 @@ func newTaskReviewShowCommand(opts *rootOptions) *cobra.Command {
 			"authoritative review attempt, executed steps, blocking/advisory/separate-task " +
 			"findings, autonomous budget exhaustion, interrupted automated blocker " +
 			"decisions, created follow-up Beads, and the next command, such as task run " +
-			"for open blockers or task review after targeted follow-up work.",
+			"for any workflow advancement after inspection.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			return runTaskReviewShow(command, opts, args[0])
@@ -87,7 +87,7 @@ func renderTaskReviewShow(
 		if _, err := fmt.Fprintf(output, "\nNo review attempts recorded for %s.\n", taskID); err != nil {
 			return err
 		}
-		_, err := fmt.Fprintf(output, "Next step: run `orpheus task review %s` after task work is ready.\n", taskID)
+		_, err := fmt.Fprintf(output, "Next step: run `orpheus task run %s` after task work is ready.\n", taskID)
 		return err
 	}
 
@@ -356,7 +356,7 @@ func renderReviewNextStep(output io.Writer, taskID string, taskState taskstate.T
 	case taskstate.ReviewStatusWaitingForManual:
 		_, err := fmt.Fprintf(
 			output,
-			"\nNext step: run `orpheus task review %s` to resume manual step %s.\n",
+			"\nNext step: run `orpheus task run %s` to resume manual step %s.\n",
 			taskID,
 			formatReviewValue(review.Step),
 		)
@@ -365,7 +365,7 @@ func renderReviewNextStep(output io.Writer, taskID string, taskState taskstate.T
 		if review.AutomatedBlockerDecisionInterrupted {
 			_, err := fmt.Fprintf(
 				output,
-				"\nNext step: automated blocker decisions were interrupted; run `orpheus task review %s` to start a fresh review.\n",
+				"\nNext step: automated blocker decisions were interrupted; run `orpheus task run %s` to start a fresh review.\n",
 				taskID,
 			)
 			return err
@@ -373,7 +373,7 @@ func renderReviewNextStep(output io.Writer, taskID string, taskState taskstate.T
 		if taskstate.HasUnkeptAutomatedBlockingFindingsInState(taskState, review) {
 			_, err := fmt.Fprintf(
 				output,
-				"\nNext step: automated blockers need operator decisions; run `orpheus task review %s` to start a fresh review.\n",
+				"\nNext step: automated blockers need operator decisions; run `orpheus task run %s` to start a fresh review.\n",
 				taskID,
 			)
 			return err
@@ -390,24 +390,22 @@ func renderReviewNextStep(output io.Writer, taskID string, taskState taskstate.T
 			if taskstate.HasFailedReviewFollowUpTargets(taskState, review) {
 				_, err := fmt.Fprintf(
 					output,
-					"\nNext step: retry `orpheus task run %s` to address open blocking findings, then rerun `orpheus task review %s`.\n",
-					taskID,
+					"\nNext step: retry `orpheus task run %s` to address open blocking findings; it starts a fresh review after repair.\n",
 					taskID,
 				)
 				return err
 			}
 			_, err := fmt.Fprintf(
 				output,
-				"\nNext step: run `orpheus task run %s` to address open blocking findings, then rerun `orpheus task review %s`.\n",
-				taskID,
+				"\nNext step: run `orpheus task run %s` to address open blocking findings; it starts a fresh review after repair.\n",
 				taskID,
 			)
 			return err
 		}
-		_, err := fmt.Fprintf(output, "\nNext step: rerun `orpheus task review %s` after targeted follow-up work completes.\n", taskID)
+		_, err := fmt.Fprintf(output, "\nNext step: run `orpheus task run %s` after targeted follow-up work completes.\n", taskID)
 		return err
 	case taskstate.ReviewStatusFailed, taskstate.ReviewStatusAborted:
-		_, err := fmt.Fprintf(output, "\nNext step: rerun `orpheus task review %s` when ready.\n", taskID)
+		_, err := fmt.Fprintf(output, "\nNext step: run `orpheus task run %s` when ready.\n", taskID)
 		return err
 	default:
 		return nil

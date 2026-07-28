@@ -170,22 +170,14 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 	var repoRootMode bool
 	cmd := &cobra.Command{
 		Use:   "run <task-id>",
-		Short: "Run an attached agent for a task",
-		Long: "Run an attached agent for a task.\n\n" +
-			"By default, Orpheus prepares a deterministic task branch and worktree, " +
-			"records the attached run attempt, then runs the configured agent there. " +
+		Short: "Advance or resume a task's workflow",
+		Long: "Advance or resume a task's persisted implement-review-fix-finalize workflow.\n\n" +
+			"task run selects the next safe transition: implementation, review, a manual-review resume, targeted repair, or finalization retry. It reports active runs, open pull requests, and finalized tasks without starting inappropriate work. " +
+			"By default, implementation runs use a deterministic task branch and worktree. " +
 			"Use --main to run explicitly from the registered repo root on the " +
 			"registered default branch for local/manual review workflows. " +
 			"Use --repo-root to run from the registered repo root on the task branch.\n\n" +
-			"When the latest review is blocked by open current-task findings, task run " +
-			"automatically starts a review follow-up run and targets those findings. " +
-			"After the agent records completion with agent done, task run continues into " +
-			"the effective review pipeline. Automated blockers require an explicit " +
-			"keep, downgrade, or waive/cancel decision. Kept blockers run targeted " +
-			"fixes and start fresh review attempts until the review passes, fails " +
-			"operationally, exhausts reviews.max_autonomous_review_attempts, or needs " +
-			"operator input that is no longer available. Manual steps are persisted " +
-			"before prompting and can be resumed with task review.",
+			"Automated blockers require an explicit keep, downgrade, or waive/cancel decision before targeted fixes. Manual steps are persisted and resumed without rerunning completed review steps. `task review` and `task done` remain compatibility entry points; use `task review show` to inspect review findings. PR synchronization remains `task sync`.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			return runTaskRun(command, opts, args[0], agentName, pipelineName, mainMode, repoRootMode)
@@ -205,9 +197,7 @@ func newTaskDoneCommand(opts *rootOptions) *cobra.Command {
 		Use:   "done [<task-id>]",
 		Short: "Finalize a reviewed task",
 		Long: "Finalize a reviewed task.\n\n" +
-			"task done is not the normal approval command after agent done. It refuses " +
-			"publication until the latest local review attempt has passed; run task review " +
-			"first to record approval.\n\n" +
+			"task done is a compatibility entry point. Normal workflow advancement uses task run, which starts review after implementation and retries finalization after approval. task done refuses publication until the latest local review attempt has passed.\n\n" +
 			"On the registered default branch, commits reviewed repo-root changes, pushes the " +
 			"default branch, and closes the backend task. On a repo-root task branch, publishes " +
 			"the feature branch as a pull request. Without a task id, the command infers one " +
@@ -235,13 +225,14 @@ func newTaskReviewCommand(opts *rootOptions) *cobra.Command {
 		Use:   "review <task-id>",
 		Short: "Run the local review pipeline for completed task work",
 		Long: "Run the selected local review gate for completed task work.\n\n" +
+			"task review is a compatibility entry point; use task run for normal workflow advancement and task review show for inspection.\n\n" +
 			"Pipeline selection uses --pipeline, then the repo registry review_pipeline, " +
 			"then reviews.default_pipeline, then the built-in manual local-review step. " +
 			"--pipeline accepts configured global pipeline names and repo-local aliases " +
 			"from review-pipeline-alias.<alias>. Configured pipelines may include check, " +
 			"manual, and agent_review steps. Approval records a passed review attempt and " +
 			"then finalizes through the same path as task done. When task run has paused " +
-			"at a manual step, task review resumes that same attempt; --pipeline may only " +
+			"at a manual step, task run resumes that same attempt; --pipeline may only " +
 			"name the already selected pipeline and cannot replace it. Automated blockers " +
 			"require an explicit keep, downgrade, or waive/cancel decision. Kept blockers " +
 			"run bounded targeted fixes and restart the pipeline from step 1 so manual " +
@@ -249,7 +240,7 @@ func newTaskReviewCommand(opts *rootOptions) *cobra.Command {
 			"attempt is blocked; before a fresh review, each preserved blocker needs a keep, " +
 			"manually addressed, or waive disposition.\n\n" +
 			"Operational review failures require fixing the review command, environment, " +
-			"or process and rerunning task review. Exhausted autonomous blockers stay " +
+			"or process and rerunning task run. Exhausted autonomous blockers stay " +
 			"blocked until the operator explicitly continues. Use task review show to " +
 			"inspect persisted findings and created follow-up tasks.",
 		Args: cobra.ExactArgs(1),
@@ -629,6 +620,7 @@ func runTaskDir(command *cobra.Command, opts *rootOptions, taskID string) error 
 	return err
 }
 
+//nolint:funlen // Task-run routing keeps state selection and flag validation together.
 func runTaskRun(
 	command *cobra.Command,
 	opts *rootOptions,
@@ -650,15 +642,12 @@ func runTaskRun(
 	if err != nil {
 		return err
 	}
-
 	resolvedCtx, err := resolveTaskRunContextFromInvocation(deps, taskID)
 	if err != nil {
 		return err
 	}
-
 	resolved := resolvedCtx.Resolved
 	repo := resolvedCtx.RegisteredRepo
-	paths := deps.paths
 
 	readBackend, err := deps.taskBackendFactory(resolved.Source)
 	if err != nil {
@@ -670,26 +659,181 @@ func runTaskRun(
 			err,
 		)
 	}
-	taskBackend, ok := readBackend.(workflow.DispatchBackend)
-	if !ok {
-		return fmt.Errorf("task run %s: backend for repo %s does not support dispatch mutations", resolved.TaskID, resolved.Source.Repository.ID)
-	}
-	if err := validateTaskRunExternalRef(command, resolved, taskBackend); err != nil {
+	taskItem, err := queryTaskFromBackend(command.Context(), "task run", resolved, readBackend)
+	if err != nil {
 		return err
 	}
-
-	dispatch, err := startTaskRunDispatch(command, opts.log(), paths, resolved, taskBackend, agentName, mainMode, repoRootMode)
+	store := taskstate.NewStoreWithLogger(deps.paths, logger)
+	taskState, err := store.Load(resolved.Source.Repository.ID, resolved.TaskID)
+	if err != nil {
+		return fmt.Errorf("task run %s: load local task-state: %w", resolved.TaskID, err)
+	}
+	route, err := workflow.SelectTaskRunRoute(taskItem, taskState)
 	if err != nil {
 		return fmt.Errorf("task run %s: %w", resolved.TaskID, err)
 	}
-
-	logTaskRunLaunch(command, logger, repo.ID, resolved.TaskID, dispatch.start)
-
-	if err := launchTaskRunAgent(command, opts.log(), dispatch.service, repo.ID, resolved.TaskID, dispatch.start, dispatch.prompt); err != nil {
+	if err := validateTaskRunRouteFlags(resolved.TaskID, route.Action, agentName, pipelineName, mainMode, repoRootMode); err != nil {
 		return err
 	}
+	return executeTaskRunRoute(command, opts, taskRunRouteExecution{
+		deps:         deps,
+		logger:       logger,
+		resolved:     resolved,
+		repo:         repo,
+		backend:      readBackend,
+		task:         taskItem,
+		route:        route,
+		agentName:    agentName,
+		pipelineName: pipelineName,
+		mainMode:     mainMode,
+		repoRootMode: repoRootMode,
+	})
+}
 
-	return finishTaskRunAndReview(command, opts, dispatch, repo.ID, resolved.TaskID, agentName, pipelineName)
+type taskRunRouteExecution struct {
+	deps         *invocationDependencies
+	logger       *slog.Logger
+	resolved     taskmodel.ResolvedTaskSource
+	repo         registry.Repo
+	backend      taskmodel.ReadBackend
+	task         taskmodel.Task
+	route        workflow.TaskRunRoute
+	agentName    string
+	pipelineName string
+	mainMode     bool
+	repoRootMode bool
+}
+
+func executeTaskRunRoute(command *cobra.Command, opts *rootOptions, execution taskRunRouteExecution) error {
+	resolved := execution.resolved
+	switch execution.route.Action {
+	case workflow.TaskRunActionStartImplementation, workflow.TaskRunActionTargetedRepair:
+		taskBackend, ok := execution.backend.(workflow.DispatchBackend)
+		if !ok {
+			return fmt.Errorf("task run %s: backend for repo %s does not support dispatch mutations", resolved.TaskID, resolved.Source.Repository.ID)
+		}
+		if err := validateTaskRunExternalRef(resolved, execution.task); err != nil {
+			return err
+		}
+		dispatch, err := startTaskRunDispatch(command, execution.logger, execution.deps.paths, resolved, taskBackend, execution.task, execution.agentName, execution.mainMode, execution.repoRootMode)
+		if err != nil {
+			return fmt.Errorf("task run %s: %w", resolved.TaskID, err)
+		}
+		logTaskRunLaunch(command, execution.logger, execution.repo.ID, resolved.TaskID, dispatch.start)
+		if err := launchTaskRunAgent(command, execution.logger, dispatch.service, execution.repo.ID, resolved.TaskID, dispatch.start, dispatch.prompt); err != nil {
+			return err
+		}
+		if err := finishTaskRunAndReview(command, opts, dispatch, execution.repo.ID, resolved.TaskID, execution.agentName, execution.pipelineName); err != nil {
+			return err
+		}
+		return renderTaskRunRoute(command.OutOrStdout(), resolved.TaskID, execution.route)
+	case workflow.TaskRunActionStartReview, workflow.TaskRunActionResumeReview:
+		if err := runTaskRunReview(command, execution.deps, execution.logger, resolved.TaskID, execution.agentName, execution.pipelineName); err != nil {
+			return err
+		}
+		return renderTaskRunRoute(command.OutOrStdout(), resolved.TaskID, execution.route)
+	case workflow.TaskRunActionRetryFinalization:
+		taskCtx, err := loadTaskContextFromInvocation(execution.deps)
+		if err != nil {
+			return err
+		}
+		finalized, err := finalizeTaskWithConfirmation(command, newTaskFinalizationService(execution.deps.paths, taskCtx, execution.logger), workflow.FinalizeOptions{
+			TaskID:              resolved.TaskID,
+			RequirePassedReview: true,
+		})
+		if err != nil {
+			return err
+		}
+		if err := renderTaskRunRoute(command.OutOrStdout(), resolved.TaskID, execution.route); err != nil {
+			return err
+		}
+		return renderTaskDoneResult(command, finalized)
+	case workflow.TaskRunActionImplementationActive,
+		workflow.TaskRunActionReviewActive,
+		workflow.TaskRunActionOpenPR,
+		workflow.TaskRunActionCompleted:
+		return renderTaskRunRoute(command.OutOrStdout(), resolved.TaskID, execution.route)
+	default:
+		return fmt.Errorf("task run %s: unsupported workflow action %q", resolved.TaskID, execution.route.Action)
+	}
+}
+
+func runTaskRunReview(
+	command *cobra.Command,
+	deps *invocationDependencies,
+	logger *slog.Logger,
+	taskID string,
+	agentName string,
+	pipelineName string,
+) error {
+	taskCtx, err := loadTaskContextFromInvocation(deps)
+	if err != nil {
+		return err
+	}
+	service := newTaskReviewLifecycleService(command, deps.paths, taskCtx, logger, bufio.NewReader(command.InOrStdin()))
+	outcome, err := service.Run(command.Context(), workflow.ReviewLifecycleOptions{
+		TaskID:            taskID,
+		PipelineName:      pipelineName,
+		DispatchAgentName: agentName,
+	})
+	if err != nil {
+		return err
+	}
+	return renderTaskReviewLifecycleOutcome(command, logger, outcome)
+}
+
+func validateTaskRunRouteFlags(
+	taskID string,
+	action workflow.TaskRunAction,
+	agentName string,
+	pipelineName string,
+	mainMode bool,
+	repoRootMode bool,
+) error {
+	if action == workflow.TaskRunActionStartImplementation || action == workflow.TaskRunActionTargetedRepair {
+		return nil
+	}
+	if mainMode || repoRootMode {
+		return fmt.Errorf("task run %s: --main and --repo-root only apply when launching implementation work", taskID)
+	}
+	if action == workflow.TaskRunActionStartReview {
+		return nil
+	}
+	if strings.TrimSpace(agentName) != "" {
+		return fmt.Errorf("task run %s: --agent cannot affect the selected workflow path", taskID)
+	}
+	if strings.TrimSpace(pipelineName) != "" {
+		return fmt.Errorf("task run %s: --pipeline cannot affect the selected workflow path", taskID)
+	}
+	return nil
+}
+
+func renderTaskRunRoute(output io.Writer, taskID string, route workflow.TaskRunRoute) error {
+	var message string
+	switch route.Action {
+	case workflow.TaskRunActionStartImplementation:
+		message = fmt.Sprintf("Task %s: launching implementation work.\n", taskID)
+	case workflow.TaskRunActionTargetedRepair:
+		message = fmt.Sprintf("Task %s: launching targeted repair for review attempt %d.\n", taskID, route.Attempt)
+	case workflow.TaskRunActionStartReview:
+		message = fmt.Sprintf("Task %s: starting a fresh review.\n", taskID)
+	case workflow.TaskRunActionResumeReview:
+		message = fmt.Sprintf("Task %s: resuming review attempt %d at manual step %q.\n", taskID, route.Attempt, route.Step)
+	case workflow.TaskRunActionRetryFinalization:
+		message = fmt.Sprintf("Task %s: retrying finalization after passed review.\n", taskID)
+	case workflow.TaskRunActionImplementationActive:
+		message = fmt.Sprintf("Task %s: implementation attempt %d is active; wait for it to finish.\n", taskID, route.Attempt)
+	case workflow.TaskRunActionReviewActive:
+		message = fmt.Sprintf("Task %s: review attempt %d is active; inspect `orpheus task review show %s`.\n", taskID, route.Attempt, taskID)
+	case workflow.TaskRunActionOpenPR:
+		message = fmt.Sprintf("Task %s: pull request %s is open; run `orpheus task sync %s` to reconcile it.\n", taskID, route.PRURL, taskID)
+	case workflow.TaskRunActionCompleted:
+		message = fmt.Sprintf("Task %s is already finalized.\n", taskID)
+	default:
+		return fmt.Errorf("unsupported task run workflow action %q", route.Action)
+	}
+	_, err := fmt.Fprint(output, message)
+	return err
 }
 
 func finishTaskRunAndReview(
@@ -735,17 +879,9 @@ func finishTaskRunAndReview(
 	return renderTaskReviewLifecycleOutcome(command, logger, outcome)
 }
 
-func validateTaskRunExternalRef(
-	command *cobra.Command,
-	resolved taskmodel.ResolvedTaskSource,
-	backend taskmodel.Getter,
-) error {
+func validateTaskRunExternalRef(resolved taskmodel.ResolvedTaskSource, taskItem taskmodel.Task) error {
 	if !publication.RequiresExternalRef(resolved.Source.Repository.TitleTemplate) {
 		return nil
-	}
-	taskItem, err := queryTaskFromBackend(command.Context(), "task run", resolved, backend)
-	if err != nil {
-		return err
 	}
 	if taskItem.Status == taskmodel.StatusClosed || strings.TrimSpace(taskItem.ExternalRef) != "" {
 		return nil
@@ -769,6 +905,7 @@ func startTaskRunDispatch(
 	paths state.Paths,
 	resolved taskmodel.ResolvedTaskSource,
 	backend workflow.DispatchBackend,
+	taskItem taskmodel.Task,
 	agentName string,
 	mainMode bool,
 	repoRootMode bool,
@@ -784,6 +921,7 @@ func startTaskRunDispatch(
 		TaskID:  resolved.TaskID,
 		Source:  resolved.Source,
 		Backend: backend,
+		Task:    taskItem,
 		ResolveCommand: func(commandContext workflow.DispatchCommandContext) (workflow.DispatchCommand, error) {
 			prompt, commandSnapshot, err := resolveTaskRunAgentCommand(paths, agentName, commandContext.SessionName)
 			if err != nil {
@@ -2327,7 +2465,7 @@ func renderManualReviewHandoff(command *cobra.Command, taskID string, stepName s
 	_, err := fmt.Fprintf(
 		command.ErrOrStderr(),
 		"\nReview for %s is waiting for manual step %q because manual review input is unavailable. "+
-			"Resume with `orpheus task review %s`.\n",
+			"Resume with `orpheus task run %s`.\n",
 		taskID,
 		stepName,
 		taskID,

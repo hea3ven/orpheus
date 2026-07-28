@@ -384,7 +384,7 @@ printf 'checked\n'
 	if latest.Status != taskstate.ReviewStatusWaitingForManual || latest.Step != "inspect" || len(latest.Steps) != 1 {
 		t.Fatalf("latest review = %#v, want paused at inspect after one check", latest)
 	}
-	if !strings.Contains(stderr.String(), "Resume with `orpheus task review op-1`") {
+	if !strings.Contains(stderr.String(), "Resume with `orpheus task run op-1`") {
 		t.Fatalf("stderr = %q, want resume guidance", stderr.String())
 	}
 }
