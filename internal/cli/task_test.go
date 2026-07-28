@@ -2493,6 +2493,33 @@ func TestTaskReviewShowGuidesWhenTaskHasNoReviewAttempts(t *testing.T) {
 	is.Contains(stdout, "Next step: run `orpheus task review op-empty` after task work is ready.")
 }
 
+func TestTaskReviewShowRendersManuallyAddressedFinding(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	paths, _ := setupTaskReviewShowRepo(t, "op-addressed")
+	runStore := taskstate.NewStore(paths)
+	reviewAttempt, err := runStore.StartReviewWithOptions("alpha", "op-addressed", taskstate.StartReviewOptions{
+		Pipeline: "default",
+		Step:     "inspect",
+	})
+	must.NoError(err)
+	_, err = runStore.RecordReviewFinding("alpha", "op-addressed", reviewAttempt.Attempt, taskstate.ReviewFinding{
+		Type:        taskstate.FindingTypeBlocking,
+		Title:       "Direct repair",
+		Description: "Fixed outside the review loop.",
+		Step:        "inspect",
+	})
+	must.NoError(err)
+	_, err = runStore.FinishReview("alpha", "op-addressed", reviewAttempt.Attempt, taskstate.ReviewStatusBlocked)
+	must.NoError(err)
+	_, err = runStore.AddressReviewBlockingFindingManually("alpha", "op-addressed", reviewAttempt.Attempt, 0, "Verified in the worktree.")
+	must.NoError(err)
+
+	stdout, stderr := executeCommand(t, []string{"task", "review", "show", "op-addressed"})
+	is.Empty(stderr)
+	is.Contains(stdout, "Resolution: addressed manually: Verified in the worktree.")
+}
+
 func TestTaskReviewShowGuidesInterruptedAutomatedBlockerDecision(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -5923,12 +5950,15 @@ func TestTaskReviewInterruptedAutomatedBlockerRecoveryReusesRecordedPipeline(t *
 	recoveryStdout, recoveryStderr := executeCommandWithInput(
 		t,
 		[]string{"task", "review", "op-main"},
-		"d\nStrict failure accepted.",
+		"a\nFixed outside Orpheus.\nd\nStrict failure accepted.",
 	)
 
 	is.Contains(recoveryStdout, "strict pipeline")
 	is.NotContains(recoveryStdout, "default pipeline")
 	is.Contains(recoveryStdout, "Finalized op-main")
+	is.Contains(recoveryStderr, "Open blocking findings from the latest review")
+	is.Contains(recoveryStderr, "Finding 1 from step strict")
+	is.Contains(recoveryStderr, "Title: Check \"strict\" failed")
 	is.Contains(recoveryStderr, "== Review step: strict (check) ==")
 	is.NotContains(recoveryStderr, "== Review step: default (check) ==")
 

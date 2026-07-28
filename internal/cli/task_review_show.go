@@ -230,6 +230,8 @@ func renderReviewFinding(output io.Writer, taskState taskstate.TaskState, indexe
 
 func reviewFindingResolution(taskState taskstate.TaskState, finding taskstate.ReviewFinding) string {
 	switch taskstate.ResolveReviewFindingInState(taskState, finding) {
+	case taskstate.ReviewFindingResolutionAddressedManually:
+		return "addressed manually: " + strings.TrimSpace(finding.AddressedManually)
 	case taskstate.ReviewFindingResolutionWaived:
 		return "waived: " + strings.TrimSpace(finding.Waiver)
 	case taskstate.ReviewFindingResolutionDowngraded:

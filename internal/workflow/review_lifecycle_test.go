@@ -103,6 +103,307 @@ func TestReviewLifecycleRunRecordsBlockedOutcomeWithoutCobra(t *testing.T) {
 	}
 }
 
+func TestReviewLifecycleFreshReviewGuardPreservesKeptAutomatedBlocker(t *testing.T) {
+	service, store, frontend := freshReviewGuardFixture(t)
+	frontend.freshBlockerDispositions = func(blockers []workflow.FreshReviewBlocker) ([]workflow.FreshReviewBlockerDisposition, error) {
+		if len(blockers) != 1 || blockers[0].Finding.Step != "lint" {
+			t.Fatalf("blockers = %#v, want lint blocker", blockers)
+		}
+		return []workflow.FreshReviewBlockerDisposition{{
+			FindingIndex: blockers[0].Index,
+			Action:       workflow.FreshReviewBlockerActionKeep,
+		}}, nil
+	}
+
+	outcome, err := service.Run(context.Background(), workflow.ReviewLifecycleOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("run lifecycle: %v", err)
+	}
+	if outcome.Kind != workflow.ReviewLifecycleOutcomeBlocked {
+		t.Fatalf("outcome kind = %q, want %q", outcome.Kind, workflow.ReviewLifecycleOutcomeBlocked)
+	}
+	if frontend.pipelineCalls != 0 {
+		t.Fatalf("pipeline calls = %d, want 0", frontend.pipelineCalls)
+	}
+	state, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if len(state.Reviews) != 1 {
+		t.Fatalf("review count = %d, want 1", len(state.Reviews))
+	}
+	latest, _ := taskstate.LatestReview(state)
+	if !latest.AutomatedBlockerDecisionKept {
+		t.Fatal("kept automated blocker did not record follow-up eligibility")
+	}
+	indexes, eligible := taskstate.UntargetedBlockingFindingIndexesForFollowUp(latest)
+	if !eligible || len(indexes) != 1 || indexes[0] != 0 {
+		t.Fatalf("follow-up eligibility = %v, indexes = %#v; want true, []int{0}", eligible, indexes)
+	}
+}
+
+func TestReviewLifecycleFreshReviewGuardKeepsFailedBlockerForTargetedFollowUp(t *testing.T) {
+	service, store, frontend := freshReviewGuardFixtureWithOptions(t, freshReviewGuardFixtureOptions{
+		status: taskstate.ReviewStatusFailed,
+	})
+	state, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load failed review state: %v", err)
+	}
+	prior, _ := taskstate.LatestReview(state)
+	if prior.FinishedAt == nil {
+		t.Fatal("failed review is missing its completion time")
+	}
+	priorFinishedAt := *prior.FinishedAt
+	frontend.freshBlockerDispositions = func(blockers []workflow.FreshReviewBlocker) ([]workflow.FreshReviewBlockerDisposition, error) {
+		return []workflow.FreshReviewBlockerDisposition{{
+			FindingIndex: blockers[0].Index,
+			Action:       workflow.FreshReviewBlockerActionKeep,
+		}}, nil
+	}
+
+	outcome, err := service.Run(context.Background(), workflow.ReviewLifecycleOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("run lifecycle: %v", err)
+	}
+	if outcome.Kind != workflow.ReviewLifecycleOutcomeBlocked {
+		t.Fatalf("outcome kind = %q, want %q", outcome.Kind, workflow.ReviewLifecycleOutcomeBlocked)
+	}
+	state, err = store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	latest, _ := taskstate.LatestReview(state)
+	if latest.Status != taskstate.ReviewStatusBlocked {
+		t.Fatalf("kept failed review status = %q, want %q", latest.Status, taskstate.ReviewStatusBlocked)
+	}
+	if latest.FinishedAt == nil || !latest.FinishedAt.Equal(priorFinishedAt) {
+		t.Fatalf("kept failed review completion = %v, want %v", latest.FinishedAt, priorFinishedAt)
+	}
+	indexes, eligible := taskstate.UntargetedBlockingFindingIndexesForFollowUp(latest)
+	if !latest.AutomatedBlockerDecisionKept || !eligible || len(indexes) != 1 || indexes[0] != 0 {
+		t.Fatalf("kept failed review follow-up eligibility = %v, indexes = %#v", eligible, indexes)
+	}
+}
+
+func TestReviewLifecycleFreshReviewGuardAllowsFailedBlockerDisposition(t *testing.T) {
+	service, store, frontend := freshReviewGuardFixtureWithOptions(t, freshReviewGuardFixtureOptions{
+		status: taskstate.ReviewStatusFailed,
+	})
+	frontend.freshBlockerDispositions = func(blockers []workflow.FreshReviewBlocker) ([]workflow.FreshReviewBlockerDisposition, error) {
+		return []workflow.FreshReviewBlockerDisposition{{
+			FindingIndex: blockers[0].Index,
+			Action:       workflow.FreshReviewBlockerActionAddressedManually,
+			Reason:       "Verified direct repair.",
+		}}, nil
+	}
+	service.PipelineRunner = func(opts review.PipelineRunOptions) (review.PipelineOutcome, error) {
+		if opts.Attempt.Attempt != 2 {
+			t.Fatalf("fresh attempt = %d, want 2", opts.Attempt.Attempt)
+		}
+		return review.PipelineOutcome{Status: taskstate.ReviewStatusBlocked}, nil
+	}
+
+	outcome, err := service.Run(context.Background(), workflow.ReviewLifecycleOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("run lifecycle: %v", err)
+	}
+	if outcome.Kind != workflow.ReviewLifecycleOutcomeBlocked {
+		t.Fatalf("outcome kind = %q, want %q", outcome.Kind, workflow.ReviewLifecycleOutcomeBlocked)
+	}
+	state, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if len(state.Reviews) != 2 {
+		t.Fatalf("review count = %d, want 2", len(state.Reviews))
+	}
+	if got := state.Reviews[0].Findings[0].AddressedManually; got != "Verified direct repair." {
+		t.Fatalf("manual address = %q", got)
+	}
+}
+
+func TestReviewLifecycleFreshReviewGuardRecordsManualAddressAndWaiver(t *testing.T) {
+	service, store, frontend := freshReviewGuardFixture(t, true)
+	frontend.freshBlockerDispositions = func(blockers []workflow.FreshReviewBlocker) ([]workflow.FreshReviewBlockerDisposition, error) {
+		return []workflow.FreshReviewBlockerDisposition{
+			{FindingIndex: blockers[0].Index, Action: workflow.FreshReviewBlockerActionAddressedManually, Reason: "Verified direct repair."},
+			{FindingIndex: blockers[1].Index, Action: workflow.FreshReviewBlockerActionWaive, Reason: "Accepted compatibility risk."},
+		}, nil
+	}
+	service.PipelineRunner = func(opts review.PipelineRunOptions) (review.PipelineOutcome, error) {
+		if opts.Attempt.Attempt != 2 {
+			t.Fatalf("fresh attempt = %d, want 2", opts.Attempt.Attempt)
+		}
+		return review.PipelineOutcome{Status: taskstate.ReviewStatusBlocked}, nil
+	}
+
+	outcome, err := service.Run(context.Background(), workflow.ReviewLifecycleOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("run lifecycle: %v", err)
+	}
+	if outcome.Kind != workflow.ReviewLifecycleOutcomeBlocked {
+		t.Fatalf("outcome kind = %q, want %q", outcome.Kind, workflow.ReviewLifecycleOutcomeBlocked)
+	}
+	state, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if len(state.Reviews) != 2 {
+		t.Fatalf("review count = %d, want 2", len(state.Reviews))
+	}
+	prior := state.Reviews[0]
+	if prior.Findings[0].AddressedManually != "Verified direct repair." {
+		t.Fatalf("manual address = %q", prior.Findings[0].AddressedManually)
+	}
+	if prior.Findings[1].Waiver != "Accepted compatibility risk." {
+		t.Fatalf("waiver = %q", prior.Findings[1].Waiver)
+	}
+	if len(state.Reviews[1].Findings) != 0 {
+		t.Fatalf("fresh findings = %#v, want none copied", state.Reviews[1].Findings)
+	}
+}
+
+func TestReviewLifecycleFreshReviewGuardKeepsInterruptedAutomatedBlockerEligibleForFollowUp(t *testing.T) {
+	service, store, frontend := freshReviewGuardFixtureWithOptions(t, freshReviewGuardFixtureOptions{
+		interrupted: true,
+	})
+	frontend.freshBlockerDispositions = func(blockers []workflow.FreshReviewBlocker) ([]workflow.FreshReviewBlockerDisposition, error) {
+		return []workflow.FreshReviewBlockerDisposition{{
+			FindingIndex: blockers[0].Index,
+			Action:       workflow.FreshReviewBlockerActionKeep,
+		}}, nil
+	}
+
+	outcome, err := service.Run(context.Background(), workflow.ReviewLifecycleOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("run lifecycle: %v", err)
+	}
+	if outcome.Kind != workflow.ReviewLifecycleOutcomeBlocked {
+		t.Fatalf("outcome kind = %q, want %q", outcome.Kind, workflow.ReviewLifecycleOutcomeBlocked)
+	}
+	state, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	latest, _ := taskstate.LatestReview(state)
+	if latest.AutomatedBlockerDecisionInterrupted {
+		t.Fatal("keep disposition did not supersede interrupted input")
+	}
+	indexes, eligible := taskstate.UntargetedBlockingFindingIndexesForFollowUp(latest)
+	if !eligible || len(indexes) != 1 || indexes[0] != 0 {
+		t.Fatalf("follow-up eligibility = %v, indexes = %#v; want true, []int{0}", eligible, indexes)
+	}
+}
+
+func TestReviewLifecycleFreshReviewGuardInterruptionDoesNotMutateOrStart(t *testing.T) {
+	service, store, frontend := freshReviewGuardFixture(t, true)
+	frontend.freshBlockerDispositions = func([]workflow.FreshReviewBlocker) ([]workflow.FreshReviewBlockerDisposition, error) {
+		return nil, workflow.ErrFreshReviewBlockerDispositionInterrupted
+	}
+
+	outcome, err := service.Run(context.Background(), workflow.ReviewLifecycleOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("run lifecycle: %v", err)
+	}
+	if outcome.Kind != workflow.ReviewLifecycleOutcomeAborted {
+		t.Fatalf("outcome kind = %q, want %q", outcome.Kind, workflow.ReviewLifecycleOutcomeAborted)
+	}
+	state, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if len(state.Reviews) != 1 ||
+		!taskstate.IsOpenBlockingReviewFinding(state.Reviews[0].Findings[0]) ||
+		!taskstate.IsOpenBlockingReviewFinding(state.Reviews[0].Findings[1]) {
+		t.Fatalf("reviews = %#v, want unchanged authoritative blockers", state.Reviews)
+	}
+}
+
+type freshReviewGuardFixtureOptions struct {
+	status            taskstate.ReviewStatus
+	additionalBlocker bool
+	interrupted       bool
+}
+
+func freshReviewGuardFixture(t *testing.T, additionalBlocker ...bool) (workflow.ReviewLifecycleService, taskstate.Store, *recordingReviewFrontend) {
+	t.Helper()
+	return freshReviewGuardFixtureWithOptions(t, freshReviewGuardFixtureOptions{
+		status:            taskstate.ReviewStatusBlocked,
+		additionalBlocker: len(additionalBlocker) > 0 && additionalBlocker[0],
+	})
+}
+
+//nolint:funlen // Fixture builds review state and lifecycle dependencies.
+func freshReviewGuardFixtureWithOptions(t *testing.T, options freshReviewGuardFixtureOptions) (workflow.ReviewLifecycleService, taskstate.Store, *recordingReviewFrontend) {
+	t.Helper()
+	if options.status == "" {
+		options.status = taskstate.ReviewStatusBlocked
+	}
+	paths := testPaths(t)
+	if err := paths.WriteConfigYAML(review.ConfigFile, map[string]any{
+		"reviews": map[string]any{
+			"default_pipeline": "default",
+			"pipelines": map[string]any{
+				"default": map[string]any{
+					"steps": []map[string]any{{
+						"kind": "manual",
+						"name": "local-review",
+					}},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("write review config: %v", err)
+	}
+	repoPath := testRepoWithCandidateChange(t)
+	store := taskstate.NewStore(paths)
+	if _, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		Agent: "implementer", Profile: "implementer", Command: "agent", SessionName: "Implementing op-1", Branch: "main", Worktree: repoPath,
+	}); err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	reviewAttempt, err := store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{Pipeline: "default", Step: "lint"})
+	if err != nil {
+		t.Fatalf("start review: %v", err)
+	}
+	if _, err := store.RecordReviewStep("alpha", "op-1", reviewAttempt.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindCheck, Name: "lint"}); err != nil {
+		t.Fatalf("record step: %v", err)
+	}
+	if _, err := store.RecordReviewFinding("alpha", "op-1", reviewAttempt.Attempt, taskstate.ReviewFinding{Type: taskstate.FindingTypeBlocking, Step: "lint", Title: "Lint failure", Description: "Fix the lint failure."}); err != nil {
+		t.Fatalf("record blocker: %v", err)
+	}
+	if options.additionalBlocker {
+		if _, err := store.RecordReviewFinding("alpha", "op-1", reviewAttempt.Attempt, taskstate.ReviewFinding{Type: taskstate.FindingTypeBlocking, Step: "lint", Title: "Second blocker", Description: "Waive with an explicit reason."}); err != nil {
+			t.Fatalf("record second blocker: %v", err)
+		}
+	}
+	if options.interrupted {
+		if _, err := store.MarkReviewAutomatedBlockerDecisionInterrupted("alpha", "op-1", reviewAttempt.Attempt); err != nil {
+			t.Fatalf("mark interrupted blocker decision: %v", err)
+		}
+	}
+	if _, err := store.FinishReview("alpha", "op-1", reviewAttempt.Attempt, options.status); err != nil {
+		t.Fatalf("finish review: %v", err)
+	}
+
+	taskItem := task.Task{ID: "op-1", Title: "Lifecycle task", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: "main", task.MetadataWorktree: repoPath}}
+	frontend := &recordingReviewFrontend{}
+	service := workflow.ReviewLifecycleService{
+		Paths:    paths,
+		Sources:  []task.RepositorySource{{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op", Path: repoPath, DefaultBranch: "main"}}},
+		RunStore: store,
+		BackendFactory: func(task.RepositorySource) (workflow.ReviewLifecycleBackend, error) {
+			return &fakeReviewLifecycleBackend{task: taskItem}, nil
+		},
+		Frontend: frontend,
+		PipelineRunner: func(review.PipelineRunOptions) (review.PipelineOutcome, error) {
+			return review.PipelineOutcome{Status: taskstate.ReviewStatusBlocked}, nil
+		},
+	}
+	return service, store, frontend
+}
+
 //nolint:funlen // The test sets up a full lifecycle fixture without Cobra.
 func TestReviewLifecycleRunLogsGitDiagnosticsForGatingFailure(t *testing.T) {
 	t.Parallel()
@@ -860,6 +1161,7 @@ type recordingReviewFrontend struct {
 	runningConfirmations     int
 	manualRender             func(workflow.ReviewManualStepContext) error
 	manualPrompt             func(workflow.ReviewManualStepPrompt) (review.ManualResult, error)
+	freshBlockerDispositions func([]workflow.FreshReviewBlocker) ([]workflow.FreshReviewBlockerDisposition, error)
 }
 
 func (f *recordingReviewFrontend) PipelinePresentation(workflow.ReviewAttemptContext) (workflow.ReviewPipelinePresentation, error) {
@@ -898,6 +1200,16 @@ func (f *recordingReviewFrontend) ContinueAfterFollowUpCreationFailure(
 ) (bool, error) {
 	return false, nil
 }
+func (f *recordingReviewFrontend) PromptFreshReviewBlockerDispositions(
+	_ workflow.ReviewAttemptContext,
+	blockers []workflow.FreshReviewBlocker,
+) ([]workflow.FreshReviewBlockerDisposition, error) {
+	if f.freshBlockerDispositions != nil {
+		return f.freshBlockerDispositions(blockers)
+	}
+	return nil, nil
+}
+
 func (f *recordingReviewFrontend) ConfirmRunningCompletionFinalization(
 	workflow.ReviewAttemptContext,
 	workflow.RunningCompletionConfirmation,
