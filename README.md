@@ -18,6 +18,16 @@ Inspired by the mythic Orpheus charming wild forces into motion, this project fo
 
 Early MVP design and implementation planning.
 
+## Validation
+
+Orpheus has two test lanes:
+
+- `make test` runs the fast, hermetic suite. It needs Go and the usual local build tools, but does not require `bd`, Codex, Pi, credentials, network access, or operator configuration/data. Tests above the Beads adapter use injected or fake backends.
+- `make test-integration` runs the retained real-Beads compatibility scenarios, including local workspace detection, managed initialization, repository registration, and collision handling. It requires the `bd` executable on `PATH`; the target fails early with installation guidance when it is unavailable.
+- `make check` is the complete repository validation command. It runs formatting, the hermetic suite, real-Beads integration tests, and linting.
+
+`orpheus eval review-context` is separate from these validation lanes. It deliberately runs live Pi or Codex review agents and may incur costs; it is never invoked by routine test validation.
+
 ## Documentation
 
 - [Review pipeline workflow](docs/2026-07-05_review_pipeline_workflow.md) explains the operator path from `task run` through `agent done`, `task review`, follow-up work, approval, and publication/finalization retry.
