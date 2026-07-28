@@ -18,7 +18,7 @@ func loadTaskContext() (taskContext, error) {
 		return taskContext{}, err
 	}
 
-	sources, err := taskRepositorySources(registryCtx.Store, registryCtx.Registry)
+	sources, err := registryCtx.Store.TaskRepositorySources(registryCtx.Registry)
 	if err != nil {
 		return taskContext{}, err
 	}
@@ -47,7 +47,7 @@ func loadTaskContextFromInvocation(deps *invocationDependencies) (taskContext, e
 		return taskContext{}, err
 	}
 
-	sources, err := taskRepositorySources(registryCtx.Store, registryCtx.Registry)
+	sources, err := registryCtx.Store.TaskRepositorySources(registryCtx.Registry)
 	if err != nil {
 		return taskContext{}, err
 	}

@@ -50,6 +50,7 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 	}
 
 	cmd.AddCommand(
+		newTaskCreateCommand(opts),
 		newTaskListCommand(opts),
 		newTaskReadyCommand(opts),
 		newTaskShowCommand(opts),
@@ -3267,50 +3268,6 @@ type taskRowsOptions struct {
 	queriedLog   string
 	detailed     bool
 	query        func(context.Context, taskmodel.Aggregator) taskRowsResult
-}
-
-func taskRepositorySources(store registry.Store, reg registry.Registry) ([]taskmodel.RepositorySource, error) {
-	sources := make([]taskmodel.RepositorySource, 0, len(reg.Repos))
-	for _, repo := range reg.Repos {
-		beadsDir, err := store.BeadsDir(repo)
-		if err != nil {
-			return nil, err
-		}
-		sources = append(sources, taskmodel.RepositorySource{
-			Repository: taskmodel.Repository{
-				ID:                     repo.ID,
-				Name:                   repo.Name,
-				TaskIDPrefix:           repo.BeadsPrefix,
-				Path:                   repo.Path,
-				DefaultBranch:          repo.DefaultBranch,
-				TitleTemplate:          repo.TitleTemplate,
-				IncludePRReviewProcess: cloneBoolPtr(repo.IncludePRReviewProcess),
-				ReviewPipeline:         repo.ReviewPipeline,
-				ReviewPipelineAliases:  cloneStringMap(repo.ReviewPipelineAliases),
-			},
-			BackendDir: beadsDir,
-		})
-	}
-	return sources, nil
-}
-
-func cloneStringMap(values map[string]string) map[string]string {
-	if len(values) == 0 {
-		return nil
-	}
-	clone := make(map[string]string, len(values))
-	for key, value := range values {
-		clone[key] = value
-	}
-	return clone
-}
-
-func cloneBoolPtr(value *bool) *bool {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
 }
 
 func renderTaskDetails(
