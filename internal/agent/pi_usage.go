@@ -17,6 +17,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/pathutil"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testguard"
 )
 
 const (
@@ -131,10 +132,14 @@ func piSessionRoot(env map[string]string) (string, error) {
 	}
 	home := strings.TrimSpace(env["HOME"])
 	if home == "" {
-		var err error
-		home, err = os.UserHomeDir()
-		if err != nil {
-			return "", err
+		if testguard.IsTestProcess() {
+			home = testguard.IsolatedUsageRoots().Home
+		} else {
+			var err error
+			home, err = os.UserHomeDir()
+			if err != nil {
+				return "", err
+			}
 		}
 	}
 	if !filepath.IsAbs(home) {
