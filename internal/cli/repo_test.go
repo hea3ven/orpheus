@@ -219,6 +219,33 @@ func TestRepoConfigRejectsInvalidPolicyWithoutMutatingRegistry(t *testing.T) {
 	is.Equal("[OPS] {{summary}}", reg.Repos[0].TitleTemplate)
 }
 
+func TestRepoConfigSetInvalidGlobalPublicationFlowDoesNotMutateRegistry(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	withFakeBDInit(t)
+	repoPath := newTestRepoPath(t)
+	paths := currentTestPaths(t)
+
+	_, addErr := executeCommand(t, []string{"repo", "add", repoPath})
+	is.Empty(addErr)
+	registryPath, err := paths.DataPath("registry.yaml")
+	must.NoError(err)
+	before, err := os.ReadFile(registryPath)
+	must.NoError(err)
+	must.NoError(paths.WriteConfigYAML("config.yaml", map[string]any{
+		"publication": map[string]any{"integration_flow": "invalid-flow"},
+	}))
+
+	stdout, _, err := executeCommandWithError(t, []string{
+		"repo", "config", "set", "alpha", "summary-guidance", "would otherwise persist",
+	})
+	must.Error(err)
+	is.Empty(stdout)
+	after, readErr := os.ReadFile(registryPath)
+	must.NoError(readErr)
+	is.Equal(string(before), string(after))
+}
+
 func TestRepoConfigRejectsUnknownConfigName(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)

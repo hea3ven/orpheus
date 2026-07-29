@@ -343,6 +343,7 @@ type Repository struct {
 	Path                   string
 	DefaultBranch          string
 	TitleTemplate          string
+	IntegrationFlow        string
 	IncludePRReviewProcess *bool
 	ReviewPipeline         string
 	ReviewPipelineAliases  map[string]string

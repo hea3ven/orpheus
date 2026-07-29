@@ -5,8 +5,11 @@ import (
 	"bytes"
 	"io"
 	"log/slog"
+	"slices"
+	"strings"
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/review"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
@@ -14,6 +17,55 @@ import (
 	"github.com/hea3ven/orpheus/internal/tasktarget"
 	"github.com/spf13/cobra"
 )
+
+type fakeManualReviewRecorder struct {
+	latest taskstate.ReviewAttempt
+	flows  []publication.IntegrationFlow
+}
+
+func (r *fakeManualReviewRecorder) LatestReview() (taskstate.ReviewAttempt, error) {
+	return r.latest, nil
+}
+
+func (r *fakeManualReviewRecorder) SetIntegrationFlow(flow publication.IntegrationFlow) (taskstate.Finalization, error) {
+	r.flows = append(r.flows, flow)
+	return taskstate.Finalization{IntegrationFlow: flow}, nil
+}
+
+func (r *fakeManualReviewRecorder) RecordFinding(taskstate.ReviewFinding) (taskstate.ReviewAttempt, error) {
+	return r.latest, nil
+}
+
+func (r *fakeManualReviewRecorder) PromoteAdvisoryFinding(int) (taskstate.ReviewAttempt, error) {
+	return r.latest, nil
+}
+
+func TestManualReviewKeepsSelectedIntegrationFlowWithinPromptLoop(t *testing.T) {
+	stderr := new(bytes.Buffer)
+	command := &cobra.Command{}
+	command.SetErr(stderr)
+	recorder := &fakeManualReviewRecorder{latest: taskstate.ReviewAttempt{Attempt: 1}}
+	session := manualReviewSession{
+		command:         command,
+		recorder:        recorder,
+		taskID:          "op-1",
+		integrationFlow: publication.IntegrationFlowPullRequest,
+	}
+	reader := bufio.NewReader(bytes.NewBufferString("d\n\n"))
+
+	if _, done, err := session.handleManualReviewAction("integration", reader, manualReviewActions{}); err != nil || done {
+		t.Fatalf("select direct merge = done %t, error %v", done, err)
+	}
+	if _, done, err := session.handleManualReviewAction("integration", reader, manualReviewActions{}); err != nil || done {
+		t.Fatalf("keep selected flow = done %t, error %v", done, err)
+	}
+	if got, want := recorder.flows, []publication.IntegrationFlow{publication.IntegrationFlowDirectMerge, publication.IntegrationFlowDirectMerge}; !slices.Equal(got, want) {
+		t.Fatalf("recorded flows = %#v, want %#v", got, want)
+	}
+	if got := stderr.String(); !strings.Contains(got, "Effective publication integration flow: pull-request") || !strings.Contains(got, "Effective publication integration flow: direct-merge") {
+		t.Fatalf("prompt output = %q, want initial and selected flows", got)
+	}
+}
 
 func TestTaskReviewPipelinePresentationRequiresBothOutputStreamsTerminal(t *testing.T) {
 	stdout := new(bytes.Buffer)

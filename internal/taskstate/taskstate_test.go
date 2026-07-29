@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
@@ -1501,6 +1502,32 @@ func TestStoreRejectsPromotingResolvedOrNonAdvisoryFindings(t *testing.T) {
 				t.Fatalf("promote advisory error = %v, want %q", err, test.wantErr)
 			}
 		})
+	}
+}
+
+func TestStoreLocksIntegrationFlowWhenPublicationStarts(t *testing.T) {
+	start := time.Date(2026, 6, 4, 9, 0, 0, 0, time.UTC)
+	store := newTestStore(t, start)
+
+	if _, err := store.SetFinalizationIntegrationFlow("alpha", "op-1", publication.IntegrationFlowPullRequest); err != nil {
+		t.Fatalf("set integration flow: %v", err)
+	}
+	started, err := store.RecordFinalizationPublicationStart("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("record publication start: %v", err)
+	}
+	if started.PublicationStartedAt == nil || !started.PublicationStartedAt.Equal(start) {
+		t.Fatalf("publication start = %#v, want %s", started, start)
+	}
+	if _, err := store.SetFinalizationIntegrationFlow("alpha", "op-1", publication.IntegrationFlowDirectMerge); !errors.Is(err, taskstate.ErrFinalizationConflict) {
+		t.Fatalf("change locked integration flow error = %v, want ErrFinalizationConflict", err)
+	}
+	again, err := store.RecordFinalizationPublicationStart("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("record publication start again: %v", err)
+	}
+	if again.PublicationStartedAt == nil || !again.PublicationStartedAt.Equal(start) {
+		t.Fatalf("repeated publication start = %#v, want original timestamp", again)
 	}
 }
 

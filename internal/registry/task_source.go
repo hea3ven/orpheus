@@ -44,6 +44,7 @@ func (s Store) TaskRepositorySource(repo Repo) (task.RepositorySource, error) {
 			Path:                   normalizedRepo.Path,
 			DefaultBranch:          normalizedRepo.DefaultBranch,
 			TitleTemplate:          normalizedRepo.TitleTemplate,
+			IntegrationFlow:        string(normalizedRepo.IntegrationFlow),
 			IncludePRReviewProcess: cloneBoolPtr(normalizedRepo.IncludePRReviewProcess),
 			ReviewPipeline:         normalizedRepo.ReviewPipeline,
 			ReviewPipelineAliases:  cloneStringMap(normalizedRepo.ReviewPipelineAliases),
