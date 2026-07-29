@@ -12,7 +12,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/task"
 )
 
-func TestTaskBackendCreateRecordsBlockingDependencies(t *testing.T) {
+func TestIntegrationTaskBackendCreateRecordsBlockingDependencies(t *testing.T) {
 	binary, err := exec.LookPath("bd")
 	if err != nil {
 		t.Skip("bd executable is required for Beads integration test")

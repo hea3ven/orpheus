@@ -23,7 +23,7 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func TestRepoAddDetectsLocalBeadsEndToEnd(t *testing.T) {
+func TestIntegrationRepoAddDetectsLocalBeadsEndToEnd(t *testing.T) {
 	requireBD(t)
 	withoutBeadsEnv(t)
 
@@ -51,7 +51,7 @@ func TestRepoAddDetectsLocalBeadsEndToEnd(t *testing.T) {
 	}
 }
 
-func TestRepoAddInitializesManagedBeadsEndToEnd(t *testing.T) {
+func TestIntegrationRepoAddInitializesManagedBeadsEndToEnd(t *testing.T) {
 	requireBD(t)
 	withoutBeadsEnv(t)
 
@@ -82,7 +82,7 @@ func TestRepoAddInitializesManagedBeadsEndToEnd(t *testing.T) {
 	}
 }
 
-func TestRepoRegistrationFlowEndToEnd(t *testing.T) {
+func TestIntegrationRepoRegistrationFlowEndToEnd(t *testing.T) {
 	requireBD(t)
 	withoutBeadsEnv(t)
 
@@ -134,7 +134,7 @@ func TestRepoRegistrationFlowEndToEnd(t *testing.T) {
 	runBD(t, managedDir, "list")
 }
 
-func TestRepoAddRejectsDuplicateLocalBeadsPrefixEndToEnd(t *testing.T) {
+func TestIntegrationRepoAddRejectsDuplicateLocalBeadsPrefixEndToEnd(t *testing.T) {
 	requireBD(t)
 	withoutBeadsEnv(t)
 
