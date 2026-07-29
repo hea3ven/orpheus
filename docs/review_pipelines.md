@@ -25,6 +25,44 @@ review counts toward that limit, so the default permits at most three targeted
 fix runs before a fourth blocked review stops and preserves the open blockers
 for explicit continuation.
 
+## Resume implementation sessions for follow-ups
+
+Review-follow-up session resumption is a strict opt-in:
+
+```bash
+export ORPHEUS_RESUME_SESSIONS=1
+```
+
+With the flag set to exactly `1`, both autonomous targeted repairs and later
+operator-invoked `orpheus task run` repairs try to resume the latest usable
+successful, completed implementation session. The selected follow-up profile and
+structured harness must match the source run. Structured Pi and Codex profiles
+are supported in interactive and non-interactive modes; raw command profiles,
+review-agent executions, and sync-conflict-resolution executions always start a
+fresh session.
+
+Resumption is best effort. Missing or ambiguous telemetry, a changed profile or
+harness, a deleted or unreadable log, a Codex log outside the active `CODEX_HOME`,
+mismatched session identity or working directory, and other unsafe state all fall
+back to one fresh follow-up. Orpheus
+persists the launch mode, source run/session for a resume, or an actionable
+fallback reason. `orpheus task show` includes this provenance in history and
+`orpheus task stats <task-id>` includes it in the execution row. If the feature
+flag is absent or has any value other than `1`, follow-ups preserve the existing
+fresh-session behavior.
+
+Fresh and resumed agents receive the same standard bootstrap instruction to run
+`orpheus agent context`; current findings and execution constraints are not copied
+from the old conversation and remain authoritative in Orpheus state. If a resumed
+process starts and then fails, Orpheus records the normal failed run and does not
+launch a fresh replacement automatically, because the resumed process may already
+have changed the work directory. The usual explicit failed-follow-up retry remains
+available.
+
+Orpheus records provenance and per-execution usage for external analysis but does
+not assign experimental cohorts or calculate resumed-versus-fresh A/B results.
+Operators must make cohort assignments and comparisons outside Orpheus.
+
 When the next step is manual, Orpheus stops before running that step, records the
 latest review attempt as `waiting_for_manual`, and stores the pending step name.
 Resume it with:

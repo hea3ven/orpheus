@@ -1093,6 +1093,92 @@ func TestReviewLifecycleRunAfterCompletedRunStartsReviewAndPropagatesAgent(t *te
 	}
 }
 
+//nolint:funlen // The fixture proves autonomous repair uses shared resume dispatch.
+func TestReviewLifecycleAutonomousFollowUpResumesCompatibleSession(t *testing.T) {
+	paths := testPaths(t)
+	repoPath := testRepoWithLocalOriginAndCandidateChange(t)
+	sessionPath := filepath.Join(t.TempDir(), "pi-session.jsonl")
+	sessionContent := `{"type":"session","version":3,"id":"session-1","timestamp":"2026-07-07T10:00:00Z","cwd":"` + repoPath + `"}
+{"type":"message","id":"assistant","timestamp":"2026-07-07T10:00:01Z","message":{"role":"assistant","usage":{"input":10,"output":5,"totalTokens":15}}}
+`
+	if err := os.WriteFile(sessionPath, []byte(sessionContent), 0o644); err != nil {
+		t.Fatalf("write Pi session: %v", err)
+	}
+	store := taskstate.NewStore(paths)
+	run, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		Agent: "implementer", Profile: "implementer", Harness: "pi", Branch: "main", Worktree: repoPath,
+	})
+	if err != nil {
+		t.Fatalf("start implementation: %v", err)
+	}
+	if _, err := store.CompleteRun("alpha", "op-1", run.Attempt, taskstate.CompleteRunOptions{
+		Summary: "Implementation complete", Description: "Ready for review.", DetailedDescription: "Ready.", TechnicalExplanation: "Details.",
+	}); err != nil {
+		t.Fatalf("complete implementation: %v", err)
+	}
+	if _, err := store.RecordRunUsage("alpha", "op-1", run.Attempt, taskstate.RecordRunUsageOptions{
+		Session: &taskstate.AgentSession{ID: "session-1", LogPath: sessionPath},
+		Usage:   &taskstate.AgentUsage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
+	}); err != nil {
+		t.Fatalf("record source session: %v", err)
+	}
+	if _, err := store.FinishRun("alpha", "op-1", run.Attempt, taskstate.RunStatusSucceeded); err != nil {
+		t.Fatalf("finish implementation: %v", err)
+	}
+
+	taskItem := task.Task{ID: "op-1", Title: "Lifecycle task", Status: task.StatusInProgress, Metadata: task.Metadata{
+		task.MetadataBranch: "main", task.MetadataWorktree: repoPath,
+	}}
+	runner := &recordingReviewAgentRunner{store: store, complete: true}
+	pipelineCalls := 0
+	service := workflow.ReviewLifecycleService{
+		Paths: paths,
+		Sources: []task.RepositorySource{{Repository: task.Repository{
+			ID: "alpha", Name: "Alpha", TaskIDPrefix: "op", Path: repoPath, DefaultBranch: "main",
+		}}},
+		RunStore: store,
+		BackendFactory: func(task.RepositorySource) (workflow.ReviewLifecycleBackend, error) {
+			return &fakeReviewLifecycleBackend{task: taskItem}, nil
+		},
+		Frontend:    &recordingReviewFrontend{},
+		AgentRunner: runner,
+		ResolveFollowUpCommand: func(_ workflow.DispatchCommandContext, agentName string) (workflow.DispatchCommand, string, error) {
+			return workflow.DispatchCommand{
+				AgentName: agentName, Command: "pi", Harness: "pi",
+				Args: []string{"--model", "gpt-5", "--name", "Follow-up", "bootstrap prompt"},
+			}, "bootstrap prompt", nil
+		},
+		PipelineRunner: func(opts review.PipelineRunOptions) (review.PipelineOutcome, error) {
+			pipelineCalls++
+			if pipelineCalls == 1 {
+				recordAutonomousReviewBlocker(t, store, opts.Attempt.Attempt)
+				return review.PipelineOutcome{Status: taskstate.ReviewStatusBlocked}, nil
+			}
+			return review.PipelineOutcome{Status: taskstate.ReviewStatusWaitingForManual}, nil
+		},
+	}
+	t.Setenv("ORPHEUS_RESUME_SESSIONS", "1")
+	outcome, reviewed, err := service.RunAfterCompletedRun(context.Background(), workflow.ReviewAfterRunCompletionOptions{
+		RepoID: "alpha", TaskID: "op-1", RunAttempt: run.Attempt, SelectedDispatchAgentName: "implementer",
+	})
+	if err != nil {
+		t.Fatalf("run autonomous review follow-up: %v", err)
+	}
+	if !reviewed || outcome.Kind != workflow.ReviewLifecycleOutcomeWaitingForManual {
+		t.Fatalf("outcome = %#v, reviewed=%v", outcome, reviewed)
+	}
+	if len(runner.runs) != 1 {
+		t.Fatalf("runner calls = %d, want 1", len(runner.runs))
+	}
+	started := runner.runs[0].Start
+	if started.Attempt.Execution.Launch == nil || started.Attempt.Execution.Launch.Mode != taskstate.AgentLaunchResumed {
+		t.Fatalf("autonomous launch = %#v", started.Attempt.Execution.Launch)
+	}
+	if len(started.Command.Args) < 2 || started.Command.Args[0] != "--session" || started.Command.Args[1] != sessionPath {
+		t.Fatalf("autonomous command args = %#v", started.Command.Args)
+	}
+}
+
 func TestReviewLifecycleRunAfterCompletedRunSkipsReviewWithoutCompletion(t *testing.T) {
 	t.Parallel()
 
@@ -1222,12 +1308,14 @@ type recordingReviewAgentRunner struct {
 	store    taskstate.Store
 	usageErr error
 	complete bool
+	runs     []workflow.ReviewLifecycleAgentRun
 }
 
 func (r *recordingReviewAgentRunner) RunReviewLifecycleAgent(
 	_ context.Context,
 	run workflow.ReviewLifecycleAgentRun,
 ) (workflow.ReviewLifecycleAgentRunResult, error) {
+	r.runs = append(r.runs, run)
 	if r.complete {
 		if _, err := r.store.CompleteRun(run.RepoID, run.TaskID, run.Start.Attempt.Attempt, taskstate.CompleteRunOptions{
 			Summary:              "Follow-up complete",
