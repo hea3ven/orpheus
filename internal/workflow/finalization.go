@@ -36,8 +36,11 @@ type FinalizationBackendFactory func(task.RepositorySource) (FinalizationBackend
 // FinalizationRunStore persists and reads run/finalization facts.
 type FinalizationRunStore interface {
 	Load(repoID, taskID string) (taskstate.TaskState, error)
+	SetFinalizationIntegrationFlow(repoID, taskID string, flow publication.IntegrationFlow) (taskstate.Finalization, error)
+	RecordFinalizationPublicationStart(repoID, taskID string) (taskstate.Finalization, error)
 	RecordFinalizationCommitIntent(repoID, taskID string, parent string, message string) (taskstate.Finalization, error)
 	RecordFinalizationCommit(repoID, taskID string, commit string) (taskstate.Finalization, error)
+	RecordFinalizationMerge(repoID, taskID string, commit string) (taskstate.Finalization, error)
 	RecordFinalizationPush(repoID, taskID string, opts taskstate.FinalizationPushOptions) (taskstate.Finalization, error)
 	RecordFinalizationClose(repoID, taskID string, opts taskstate.FinalizationCloseOptions) (taskstate.Finalization, error)
 	RecordFinalizationFailure(repoID, taskID string, cause error) (taskstate.Event, error)
@@ -55,6 +58,8 @@ type FinalizationGit interface {
 	Commit(ctx context.Context, dir string, message string) (string, error)
 	PushDefaultBranch(ctx context.Context, dir string, branch string) error
 	PushTaskBranch(ctx context.Context, dir string, branch string) error
+	MergeTaskBranchIntoDefault(ctx context.Context, repo task.Repository, branch string) (string, error)
+	ValidateRecordedDirectMerge(ctx context.Context, repo task.Repository, mergeCommit string) (alreadyPushed bool, err error)
 	MaterializeTaskBranch(ctx context.Context, repo task.Repository, taskID string, paths state.Paths) (gitmeta.TaskWorktreeSetupResult, error)
 	ValidateMaterializedTaskBranchRetry(ctx context.Context, repo task.Repository, taskID string, paths state.Paths) error
 }
@@ -100,6 +105,21 @@ func (LocalFinalizationGit) PushDefaultBranch(ctx context.Context, dir string, b
 // PushTaskBranch pushes a feature branch.
 func (LocalFinalizationGit) PushTaskBranch(ctx context.Context, dir string, branch string) error {
 	return gitmeta.PushTaskBranch(ctx, dir, branch)
+}
+
+// MergeTaskBranchIntoDefault merges an approved task branch without pushing it.
+func (LocalFinalizationGit) MergeTaskBranchIntoDefault(ctx context.Context, repo task.Repository, branch string) (string, error) {
+	return gitmeta.MergeTaskBranchIntoDefault(ctx, repo, branch)
+}
+
+// ValidateRecordedDirectMerge confirms that the recorded merge is either the
+// local default-branch tip ready to push or is already on origin.
+func (LocalFinalizationGit) ValidateRecordedDirectMerge(
+	ctx context.Context,
+	repo task.Repository,
+	mergeCommit string,
+) (bool, error) {
+	return gitmeta.ValidateRecordedDirectMerge(ctx, repo, mergeCommit)
 }
 
 // MaterializeTaskBranch moves reviewed repository-root changes to the
@@ -328,6 +348,10 @@ func (s FinalizationService) finalizeLocked(
 			return FinalizationResult{}, err
 		}
 	}
+	finalizeCtx, err = s.lockIntegrationFlow(repo, target.task, finalizeCtx)
+	if err != nil {
+		return FinalizationResult{}, err
+	}
 	result, err := s.finalizeAfterReviewGate(ctx, opts, target, finalizeCtx, gitState, diagnosticTarget)
 	if err != nil && opts.RequirePassedReview {
 		recordErr := s.recordFinalizationFailure(repo.ID, target.task.ID, err)
@@ -336,6 +360,24 @@ func (s FinalizationService) finalizeLocked(
 		}
 	}
 	return result, err
+}
+
+func (s FinalizationService) lockIntegrationFlow(repo task.Repository, taskItem task.Task, ctx finalizationContext) (finalizationContext, error) {
+	flow := ctx.finalization.IntegrationFlow
+	if strings.TrimSpace(string(flow)) == "" {
+		config, err := publication.LoadConfig(s.Paths)
+		if err != nil {
+			return finalizationContext{}, err
+		}
+		flow = publication.ResolveIntegrationFlow("", publication.IntegrationFlow(repo.IntegrationFlow), config.IntegrationFlow)
+	}
+	finalization, err := s.RunStore.SetFinalizationIntegrationFlow(repo.ID, taskItem.ID, flow)
+	if err != nil {
+		return finalizationContext{}, fmt.Errorf("lock publication integration flow: %w", err)
+	}
+	ctx.finalization = finalization
+	ctx.state.Finalization = &finalization
+	return ctx, nil
 }
 
 func (s FinalizationService) finalizeAfterReviewGate(
@@ -380,7 +422,7 @@ func (s FinalizationService) finalizeAfterReviewGate(
 
 	diagnosticTarget.recordBranch(taskTarget.Branch)
 	if isFeatureBranchTarget(taskTarget.Kind) {
-		return s.publishFeatureBranch(ctx, target, finalizeCtx, taskTarget, gitState)
+		return s.publishApprovedTaskBranch(ctx, target, finalizeCtx, taskTarget, gitState)
 	}
 	if taskTarget.Kind == tasktarget.TargetMainSolo {
 		if _, modern := taskstate.WorkDirectoryFor(finalizeCtx.state); modern {
@@ -517,6 +559,13 @@ func (s FinalizationService) materializeAndPublishRepoRoot(
 	if err := validateDefaultBranchFinalizationReady(repo, target.task, finalizeCtx, false); err != nil {
 		return FinalizationResult{}, err
 	}
+	finalization, err := s.RunStore.RecordFinalizationPublicationStart(repo.ID, target.task.ID)
+	if err != nil {
+		return FinalizationResult{}, fmt.Errorf("record publication start before materializing task branch: %w", err)
+	}
+	finalizeCtx.finalization = finalization
+	finalizeCtx.state.Finalization = &finalization
+
 	setup, err := gitState.MaterializeTaskBranch(ctx, repo, target.task.ID, s.Paths)
 	if err != nil {
 		return FinalizationResult{}, fmt.Errorf("materialize repository-root task branch: %w", err)
@@ -541,7 +590,7 @@ func (s FinalizationService) materializeAndPublishRepoRoot(
 	publicationTask.Metadata[task.MetadataWorktree] = setup.WorktreePath
 	target.task = publicationTask
 	diagnosticTarget.recordBranch(publicationTarget.Branch)
-	return s.publishFeatureBranch(ctx, target, finalizeCtx, publicationTarget, gitState)
+	return s.publishApprovedTaskBranch(ctx, target, finalizeCtx, publicationTarget, gitState)
 }
 
 func (s FinalizationService) recordFinalizationFailure(repoID string, taskID string, cause error) error {
@@ -689,6 +738,38 @@ func (s FinalizationService) ensureDefaultBranchPushed(
 		return taskstate.Finalization{}, err
 	}
 	finalization, err := s.RunStore.RecordFinalizationPush(repo.ID, taskID, taskstate.FinalizationPushOptions{
+		Branch:     repo.DefaultBranch,
+		PushTarget: taskstate.PushTargetMain,
+	})
+	if err != nil {
+		return taskstate.Finalization{}, fmt.Errorf("record finalization push: %w", err)
+	}
+	return finalization, nil
+}
+
+// ensureDirectMergeDefaultBranchPushed verifies the durable merge checkpoint
+// before publishing. If origin already contains it, a prior push succeeded and
+// only recording that outcome remains.
+func (s FinalizationService) ensureDirectMergeDefaultBranchPushed(
+	ctx context.Context,
+	gitState FinalizationGit,
+	repo task.Repository,
+	taskID string,
+	finalization taskstate.Finalization,
+) (taskstate.Finalization, error) {
+	if finalization.PushedAt != nil {
+		return finalization, nil
+	}
+	alreadyPushed, err := gitState.ValidateRecordedDirectMerge(ctx, repo, finalization.MergeCommit)
+	if err != nil {
+		return taskstate.Finalization{}, err
+	}
+	if !alreadyPushed {
+		if err := gitState.PushDefaultBranch(ctx, repo.Path, repo.DefaultBranch); err != nil {
+			return taskstate.Finalization{}, err
+		}
+	}
+	finalization, err = s.RunStore.RecordFinalizationPush(repo.ID, taskID, taskstate.FinalizationPushOptions{
 		Branch:     repo.DefaultBranch,
 		PushTarget: taskstate.PushTargetMain,
 	})
@@ -891,6 +972,19 @@ func (s FinalizationService) createFeatureBranchFinalizationCommit(
 	return finalization, nil
 }
 
+func (s FinalizationService) publishApprovedTaskBranch(
+	ctx context.Context,
+	target finalizationTarget,
+	finalizeCtx finalizationContext,
+	taskTarget tasktarget.Target,
+	gitState FinalizationGit,
+) (FinalizationResult, error) {
+	if finalizeCtx.finalization.IntegrationFlow == publication.IntegrationFlowDirectMerge {
+		return s.directMergeFeatureBranch(ctx, target, finalizeCtx, taskTarget, gitState)
+	}
+	return s.publishFeatureBranch(ctx, target, finalizeCtx, taskTarget, gitState)
+}
+
 func (s FinalizationService) publishFeatureBranch(
 	ctx context.Context,
 	target finalizationTarget,
@@ -944,6 +1038,64 @@ func (s FinalizationService) publishFeatureBranch(
 	}
 
 	return featureBranchFinalizationResult(repo, target.task, finalization, taskTarget.Branch, prURL, prRecovered), nil
+}
+
+func (s FinalizationService) directMergeFeatureBranch(
+	ctx context.Context,
+	target finalizationTarget,
+	finalizeCtx finalizationContext,
+	taskTarget tasktarget.Target,
+	gitState FinalizationGit,
+) (FinalizationResult, error) {
+	repo := target.source.Repository
+	if err := validateFeatureBranchPublicationReady(repo, target.task, finalizeCtx, taskTarget); err != nil {
+		return FinalizationResult{}, err
+	}
+	// A repository-root direct merge leaves that fixed work directory on the
+	// default branch. If the task commit was already recorded, do not require it
+	// to switch back merely to retry recording/pushing the completed merge.
+	finalization := finalizeCtx.finalization
+	currentBranch, err := gitState.CurrentBranch(ctx, taskTarget.Worktree)
+	if err != nil {
+		return FinalizationResult{}, fmt.Errorf("inspect task branch for direct merge: %w", err)
+	}
+	mergedRepoRootRetry := taskTarget.Worktree == repo.Path && currentBranch == repo.DefaultBranch && finalization.Commit != ""
+	if !mergedRepoRootRetry {
+		if err := ensureFeatureBranchCheckout(ctx, gitState, taskTarget); err != nil {
+			return FinalizationResult{}, err
+		}
+		message, err := featureBranchPublicationMessage(repo, target.task, finalizeCtx.publication)
+		if err != nil {
+			return FinalizationResult{}, err
+		}
+		hasChanges, err := gitState.HasWorkingTreeChanges(ctx, taskTarget.Worktree)
+		if err != nil {
+			return FinalizationResult{}, fmt.Errorf("inspect task worktree changes: %w", err)
+		}
+		finalization, err = s.ensureFeatureBranchFinalizationCommit(ctx, gitState, repo.ID, target.task.ID, taskTarget.Worktree, message, hasChanges, finalization)
+		if err != nil {
+			return FinalizationResult{}, err
+		}
+	}
+	if finalization.MergeCommit == "" {
+		mergeCommit, err := gitState.MergeTaskBranchIntoDefault(ctx, repo, taskTarget.Branch)
+		if err != nil {
+			return FinalizationResult{}, err
+		}
+		finalization, err = s.RunStore.RecordFinalizationMerge(repo.ID, target.task.ID, mergeCommit)
+		if err != nil {
+			return FinalizationResult{}, fmt.Errorf("record direct merge: %w", err)
+		}
+	}
+	finalization, err = s.ensureDirectMergeDefaultBranchPushed(ctx, gitState, repo, target.task.ID, finalization)
+	if err != nil {
+		return FinalizationResult{}, err
+	}
+	finalization, err = s.ensureDefaultBranchClosed(ctx, target, finalization)
+	if err != nil {
+		return FinalizationResult{}, err
+	}
+	return FinalizationResult{Repository: repo, Task: target.task.Clone(), Finalization: finalization, Branch: repo.DefaultBranch}, nil
 }
 
 func (s FinalizationService) ensureFeatureBranchPRRecorded(
@@ -1536,7 +1688,7 @@ func validateFeatureBranchPublicationReady(
 	if err := validateFeatureBranchTarget(target, taskItem.ID); err != nil {
 		return err
 	}
-	if err := validateFeatureBranchTaskStatus(taskItem); err != nil {
+	if err := validateFeatureBranchTaskStatus(taskItem, ctx.finalization); err != nil {
 		return err
 	}
 	if err := validateFeatureBranchTaskMetadata(taskItem, ctx.state, target); err != nil {
@@ -1706,8 +1858,12 @@ func validateFeatureBranchTarget(target tasktarget.Target, taskID string) error 
 	return nil
 }
 
-func validateFeatureBranchTaskStatus(taskItem task.Task) error {
+func validateFeatureBranchTaskStatus(taskItem task.Task, finalization taskstate.Finalization) error {
 	if taskItem.Status == task.StatusClosed {
+		if finalization.IntegrationFlow == publication.IntegrationFlowDirectMerge &&
+			strings.TrimSpace(finalization.MergeCommit) != "" && finalization.PushedAt != nil {
+			return nil
+		}
 		return fmt.Errorf("task %s is closed; feature-branch publication requires an open backend task", taskItem.ID)
 	}
 	if taskItem.Status != task.StatusInProgress {

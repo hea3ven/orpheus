@@ -1214,6 +1214,9 @@ func attachInteractiveReviewHooks(
 		return false, err
 	}
 	presentation.PromptManualStep = func(prompt workflow.ReviewManualStepPrompt) (review.ManualResult, error) {
+		if _, err := fmt.Fprintf(command.ErrOrStderr(), "Publication integration flow: %s (enter i at the review action to change it).\n", prompt.IntegrationFlow); err != nil {
+			return review.ManualResult{}, err
+		}
 		outcome, err := runManualReviewPrompt(
 			command,
 			reviewInput,
@@ -1221,6 +1224,7 @@ func attachInteractiveReviewHooks(
 			prompt.TaskID(),
 			prompt.Step.Name,
 			prompt.HunkNotes,
+			prompt.IntegrationFlow,
 		)
 		if err != nil {
 			if errors.Is(err, review.ErrManualInputUnavailable) {
@@ -1447,12 +1451,14 @@ func runManualReviewPrompt(
 	taskID string,
 	stepName string,
 	hunkNotes []review.HunkNote,
+	integrationFlow publication.IntegrationFlow,
 ) (manualReviewOutcome, error) {
 	session := manualReviewSession{
-		command:  command,
-		recorder: recorder,
-		taskID:   taskID,
-		stepName: stepName,
+		command:         command,
+		recorder:        recorder,
+		taskID:          taskID,
+		stepName:        stepName,
+		integrationFlow: integrationFlow,
 	}
 	if err := session.importHunkNotes(reader, hunkNotes); err != nil {
 		return manualReviewOutcome{}, err
@@ -1475,10 +1481,11 @@ func runManualReviewPrompt(
 }
 
 type manualReviewSession struct {
-	command  *cobra.Command
-	recorder workflow.ReviewManualStepRecorder
-	taskID   string
-	stepName string
+	command         *cobra.Command
+	recorder        workflow.ReviewManualStepRecorder
+	taskID          string
+	stepName        string
+	integrationFlow publication.IntegrationFlow
 }
 
 func (s manualReviewSession) importHunkNotes(reader *bufio.Reader, notes []review.HunkNote) error {
@@ -1509,7 +1516,7 @@ func (s manualReviewSession) importHunkNotes(reader *bufio.Reader, notes []revie
 	return nil
 }
 
-func (s manualReviewSession) handleManualReviewAction(
+func (s *manualReviewSession) handleManualReviewAction(
 	action string,
 	reader *bufio.Reader,
 	actions manualReviewActions,
@@ -1529,6 +1536,8 @@ func (s manualReviewSession) handleManualReviewAction(
 		if actions.hasPromotableAdvisories {
 			return s.reviewPriorAdvisories(reader)
 		}
+	case "i", "integration", "integration-flow", "flow":
+		return s.selectIntegrationFlow(reader)
 	case "v", "advisory":
 		return s.recordFinding(reader, taskstate.FindingTypeAdvisory, "advisory")
 	case "t", "task":
@@ -1554,6 +1563,37 @@ func (s manualReviewSession) availableActions() (manualReviewActions, error) {
 type manualReviewActions struct {
 	hasOpenBlockers         bool
 	hasPromotableAdvisories bool
+}
+
+func (s *manualReviewSession) selectIntegrationFlow(reader *bufio.Reader) (manualReviewOutcome, bool, error) {
+	if _, err := fmt.Fprintf(s.command.ErrOrStderr(), "Effective publication integration flow: %s. Choose [p=pull-request, d=direct-merge, enter=keep]: ", s.integrationFlow); err != nil {
+		return manualReviewOutcome{}, true, err
+	}
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return manualReviewOutcome{}, true, manualInputReadError("read integration flow", err)
+	}
+	flow := s.integrationFlow
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "", "keep":
+	case "p", "pull-request":
+		flow = publication.IntegrationFlowPullRequest
+	case "d", "direct-merge":
+		flow = publication.IntegrationFlowDirectMerge
+	default:
+		if _, err := fmt.Fprintln(s.command.ErrOrStderr(), "Choose pull-request, direct-merge, or keep."); err != nil {
+			return manualReviewOutcome{}, true, err
+		}
+		return manualReviewOutcome{}, false, nil
+	}
+	if _, err := s.recorder.SetIntegrationFlow(flow); err != nil {
+		return manualReviewOutcome{}, true, fmt.Errorf("task review %s: set integration flow: %w", s.taskID, err)
+	}
+	s.integrationFlow = flow
+	if _, err := fmt.Fprintf(s.command.ErrOrStderr(), "Publication integration flow for %s: %s.\n", s.taskID, flow); err != nil {
+		return manualReviewOutcome{}, true, err
+	}
+	return manualReviewOutcome{}, false, nil
 }
 
 func (s manualReviewSession) approve() (manualReviewOutcome, bool, error) {
