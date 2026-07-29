@@ -29,6 +29,7 @@ type SyncScanBackendFactory func(task.RepositorySource) (task.ReadBackend, error
 
 // SyncRunStore records local audit events produced by sync reconciliation.
 type SyncRunStore interface {
+	Load(repoID, taskID string) (taskstate.TaskState, error)
 	RecordTaskClosed(repoID, taskID string, opts taskstate.TaskClosedOptions) (taskstate.Event, error)
 	RecordSyncConflictResolutionStarted(
 		repoID,
@@ -594,6 +595,10 @@ func (s SyncService) handleOpenPR(
 
 func (s SyncService) syncOpenPRBranch(ctx context.Context, target syncTarget, gitState SyncGit) (SyncResult, error) {
 	repo := target.source.Repository
+	destination, err := s.integrationDestinationForSync(repo, target.task)
+	if err != nil {
+		return SyncResult{}, err
+	}
 	targets, err := tasktarget.ExpectedTargetsForTask(repo, target.task.ID, s.Paths)
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("resolve sync targets for task %s: %w", target.task.ID, err)
@@ -620,14 +625,14 @@ func (s SyncService) syncOpenPRBranch(ctx context.Context, target syncTarget, gi
 	)
 	branchSync, err := gitState.SyncTaskBranchWithDefault(ctx, gitmeta.TaskBranchSyncOptions{
 		RepoPath:      repo.Path,
-		DefaultBranch: repo.DefaultBranch,
+		DefaultBranch: destination,
 		Branch:        taskTarget.Branch,
 		Worktree:      taskTarget.Worktree,
 	})
 	if err != nil {
 		if errors.Is(err, gitmeta.ErrMergeConflict) {
 			span.Finish(ctx, "merge_conflict")
-			return s.resolveOpenPRBranchConflict(ctx, target, gitState, taskTarget, prURLFromTask(target.task))
+			return s.resolveOpenPRBranchConflict(ctx, target, gitState, taskTarget, destination, prURLFromTask(target.task))
 		}
 		wrapped := fmt.Errorf("update open PR branch for task %s: %w", target.task.ID, err)
 		span.FinishError(ctx, wrapped)
@@ -635,7 +640,15 @@ func (s SyncService) syncOpenPRBranch(ctx context.Context, target syncTarget, gi
 	}
 	span.Finish(ctx, logging.StatusSuccess, slog.String("sync_status", string(branchSync.Status)))
 
-	return branchSyncResult(repo.DefaultBranch, taskTarget.Branch, target.task.ID, branchSync)
+	return branchSyncResult(destination, taskTarget.Branch, target.task.ID, branchSync)
+}
+
+func (s SyncService) integrationDestinationForSync(repo task.Repository, taskItem task.Task) (string, error) {
+	state, err := s.RunStore.Load(repo.ID, taskItem.ID)
+	if err != nil {
+		return "", fmt.Errorf("load integration destination for task %s: %w", taskItem.ID, err)
+	}
+	return integrationDestination(repo, taskstate.FinalizationFacts(state))
 }
 
 //nolint:funlen // The conflict-repair orchestration is clearer kept as one ordered workflow.
@@ -644,6 +657,7 @@ func (s SyncService) resolveOpenPRBranchConflict(
 	target syncTarget,
 	gitState SyncGit,
 	taskTarget tasktarget.Target,
+	destination string,
 	prURL string,
 ) (SyncResult, error) {
 	if s.ConflictResolver == nil {
@@ -656,7 +670,7 @@ func (s SyncService) resolveOpenPRBranchConflict(
 	repo := target.source.Repository
 	syncOpts := gitmeta.TaskBranchSyncOptions{
 		RepoPath:      repo.Path,
-		DefaultBranch: repo.DefaultBranch,
+		DefaultBranch: destination,
 		Branch:        taskTarget.Branch,
 		Worktree:      taskTarget.Worktree,
 	}
@@ -665,7 +679,7 @@ func (s SyncService) resolveOpenPRBranchConflict(
 		return SyncResult{}, fmt.Errorf("prepare conflict resolution for task %s: %w", target.task.ID, err)
 	}
 	if branchSync.Status != gitmeta.TaskBranchSyncConflicted {
-		return branchSyncResult(repo.DefaultBranch, taskTarget.Branch, target.task.ID, branchSync)
+		return branchSyncResult(destination, taskTarget.Branch, target.task.ID, branchSync)
 	}
 
 	conflictOpts := SyncConflictResolutionOptions{
@@ -673,7 +687,7 @@ func (s SyncService) resolveOpenPRBranchConflict(
 		Task:          target.task.Clone(),
 		Branch:        taskTarget.Branch,
 		Worktree:      taskTarget.Worktree,
-		DefaultBranch: repo.DefaultBranch,
+		DefaultBranch: destination,
 		PRURL:         prURL,
 		ConflictFiles: append([]string{}, branchSync.ConflictFiles...),
 	}
@@ -690,7 +704,7 @@ func (s SyncService) resolveOpenPRBranchConflict(
 		return SyncResult{}, fmt.Errorf("complete resolved merge for task %s: %w", target.task.ID, err)
 	}
 	if completed.Status != gitmeta.TaskBranchSyncUpdated {
-		result, resultErr := branchSyncResult(repo.DefaultBranch, taskTarget.Branch, target.task.ID, completed)
+		result, resultErr := branchSyncResult(destination, taskTarget.Branch, target.task.ID, completed)
 		if resultErr != nil {
 			if recordErr := s.recordSyncConflictResolutionFailure(repo.ID, target.task.ID, auditOpts, resultErr); recordErr != nil {
 				resultErr = errors.Join(resultErr, recordErr)
@@ -712,7 +726,7 @@ func (s SyncService) resolveOpenPRBranchConflict(
 		Status: SyncStatusBranchUpdated,
 		Reason: fmt.Sprintf(
 			"resolved merge conflicts with the configured agent, merged %s into %s, and pushed the branch",
-			repo.DefaultBranch,
+			destination,
 			taskTarget.Branch,
 		),
 	}, nil

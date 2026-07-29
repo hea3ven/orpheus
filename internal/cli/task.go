@@ -1349,7 +1349,7 @@ func attachInteractiveReviewHooks(
 		return false, err
 	}
 	presentation.PromptManualStep = func(prompt workflow.ReviewManualStepPrompt) (review.ManualResult, error) {
-		if _, err := fmt.Fprintf(command.ErrOrStderr(), "Publication integration flow: %s (enter i at the review action to change it).\n", prompt.IntegrationFlow); err != nil {
+		if _, err := fmt.Fprintf(command.ErrOrStderr(), "Publication integration flow: %s; destination: %s (enter i at the review action to change either).\n", prompt.IntegrationFlow, prompt.DestinationBranch); err != nil {
 			return review.ManualResult{}, err
 		}
 		outcome, err := runManualReviewPrompt(
@@ -1360,6 +1360,7 @@ func attachInteractiveReviewHooks(
 			prompt.Step.Name,
 			prompt.HunkNotes,
 			prompt.IntegrationFlow,
+			prompt.DestinationBranch,
 		)
 		if err != nil {
 			if errors.Is(err, review.ErrManualInputUnavailable) {
@@ -1587,13 +1588,15 @@ func runManualReviewPrompt(
 	stepName string,
 	hunkNotes []review.HunkNote,
 	integrationFlow publication.IntegrationFlow,
+	destinationBranch string,
 ) (manualReviewOutcome, error) {
 	session := manualReviewSession{
-		command:         command,
-		recorder:        recorder,
-		taskID:          taskID,
-		stepName:        stepName,
-		integrationFlow: integrationFlow,
+		command:           command,
+		recorder:          recorder,
+		taskID:            taskID,
+		stepName:          stepName,
+		integrationFlow:   integrationFlow,
+		destinationBranch: destinationBranch,
 	}
 	if err := session.importHunkNotes(reader, hunkNotes); err != nil {
 		return manualReviewOutcome{}, err
@@ -1616,11 +1619,12 @@ func runManualReviewPrompt(
 }
 
 type manualReviewSession struct {
-	command         *cobra.Command
-	recorder        workflow.ReviewManualStepRecorder
-	taskID          string
-	stepName        string
-	integrationFlow publication.IntegrationFlow
+	command           *cobra.Command
+	recorder          workflow.ReviewManualStepRecorder
+	taskID            string
+	stepName          string
+	integrationFlow   publication.IntegrationFlow
+	destinationBranch string
 }
 
 func (s manualReviewSession) importHunkNotes(reader *bufio.Reader, notes []review.HunkNote) error {
@@ -1725,7 +1729,21 @@ func (s *manualReviewSession) selectIntegrationFlow(reader *bufio.Reader) (manua
 		return manualReviewOutcome{}, true, fmt.Errorf("task review %s: set integration flow: %w", s.taskID, err)
 	}
 	s.integrationFlow = flow
-	if _, err := fmt.Fprintf(s.command.ErrOrStderr(), "Publication integration flow for %s: %s.\n", s.taskID, flow); err != nil {
+	if _, err := fmt.Fprintf(s.command.ErrOrStderr(), "Effective publication destination: %s. Enter an existing named branch or press enter to keep: ", s.destinationBranch); err != nil {
+		return manualReviewOutcome{}, true, err
+	}
+	destination, err := reader.ReadString('\n')
+	if err != nil {
+		return manualReviewOutcome{}, true, manualInputReadError("read integration destination", err)
+	}
+	destination = strings.TrimSpace(destination)
+	if destination != "" {
+		if _, err := s.recorder.SetIntegrationDestination(destination); err != nil {
+			return manualReviewOutcome{}, true, fmt.Errorf("task review %s: set integration destination: %w", s.taskID, err)
+		}
+		s.destinationBranch = destination
+	}
+	if _, err := fmt.Fprintf(s.command.ErrOrStderr(), "Publication integration flow for %s: %s; destination: %s.\n", s.taskID, flow, s.destinationBranch); err != nil {
 		return manualReviewOutcome{}, true, err
 	}
 	return manualReviewOutcome{}, false, nil
@@ -2762,7 +2780,7 @@ func renderTaskDoneResult(command *cobra.Command, finalized workflow.Finalizatio
 		"Finalized %s: committed %s, pushed %s, and closed the backend task.\n",
 		finalized.Task.ID,
 		finalized.Finalization.Commit,
-		finalized.Repository.DefaultBranch,
+		finalized.Branch,
 	)
 	return err
 }
