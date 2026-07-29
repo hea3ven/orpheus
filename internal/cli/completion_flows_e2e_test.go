@@ -204,7 +204,7 @@ func TestMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd
 	is.Empty(stdout)
 	is.Empty(stderr)
 	is.ErrorContains(runErr, "publication title template requires a task external reference")
-	is.ErrorContains(runErr, "bd update "+taskID+" --external-ref <reference>")
+	is.ErrorContains(runErr, "orpheus task edit "+taskID+" --external-ref <reference>")
 
 	worktreePath, pathErr := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", taskID))
 	must.NoError(pathErr)

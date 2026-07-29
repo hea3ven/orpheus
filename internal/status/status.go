@@ -614,7 +614,7 @@ func localReviewPolicyResult() policyResult {
 
 func missingExternalRefDetail(taskID string) string {
 	return fmt.Sprintf(
-		"missing required external reference; set it with `bd update %s --external-ref <reference>`",
+		"missing required external reference; set it with `orpheus task edit %s --external-ref <reference>`",
 		taskID,
 	)
 }

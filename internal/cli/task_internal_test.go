@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,6 +14,30 @@ import (
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/workflow"
 )
+
+func TestTaskEditRecognizesExplicitlyEmptyPlanningInput(t *testing.T) {
+	t.Run("flag", func(t *testing.T) {
+		opts := buildTaskEditUpdateOptions("op-1", taskEditOptions{titleSet: true})
+		if opts.Title == nil || *opts.Title != "" {
+			t.Fatalf("title option = %#v, want explicit empty value", opts.Title)
+		}
+	})
+
+	t.Run("file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "acceptance.md")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := loadTaskEditFileInputs(taskEditOptions{acceptanceFile: path}, "op-1")
+		if err != nil {
+			t.Fatalf("loadTaskEditFileInputs() error = %v", err)
+		}
+		opts := buildTaskEditUpdateOptions("op-1", loaded)
+		if opts.AcceptanceCriteria == nil || *opts.AcceptanceCriteria != "" {
+			t.Fatalf("acceptance option = %#v, want explicit empty value", opts.AcceptanceCriteria)
+		}
+	})
+}
 
 func TestSyncConflictAgentUsageOptionsUnsupportedHarnessUsesStableReason(t *testing.T) {
 	tests := []struct {

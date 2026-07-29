@@ -120,10 +120,10 @@ Custom summary guidance text overrides the named style.
 
 The Jira/task-tracker ID comes from Beads `external_ref`.
 
-Users set it through Beads, for example:
+Users set it through Orpheus, for example:
 
 ```bash
-bd update <task-id> --external-ref TREX-1234
+orpheus task edit <task-id> --external-ref TREX-1234
 ```
 
 Orpheus inserts the value verbatim after trimming and collapsing whitespace to a single line. It does not parse Jira URLs, strip prefixes, or enforce a Jira-key regex.
@@ -218,7 +218,7 @@ orpheus repo config my-work-repo \
 Set the task reference:
 
 ```bash
-bd update op-123 --external-ref TREX-1234
+orpheus task edit op-123 --external-ref TREX-1234
 ```
 
 Run and publish:
