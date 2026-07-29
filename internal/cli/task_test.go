@@ -1926,7 +1926,7 @@ func TestTaskRunRejectsMissingRequiredExternalReferenceBeforeSetup(t *testing.T)
 	is.Empty(stdout)
 	is.Empty(stderr)
 	is.ErrorContains(err, "publication title template requires a task external reference")
-	is.ErrorContains(err, "bd update gt-1 --external-ref <reference>")
+	is.ErrorContains(err, "orpheus task edit gt-1 --external-ref <reference>")
 
 	bdLog := readFileString(t, bdLogPath)
 	is.Contains(bdLog, "--json --readonly --sandbox show --id gt-1")
