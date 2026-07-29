@@ -60,16 +60,18 @@ type Row struct {
 }
 
 type executionRef struct {
-	repoID             string
-	taskID             string
-	activity           string
-	attempt            int
-	step               string
-	reviewAttempt      int
-	execution          taskstate.AgentExecution
-	executionDirs      []string
-	executionDirGroups [][]string
-	event              taskstate.Event
+	repoID                string
+	taskID                string
+	activity              string
+	attempt               int
+	step                  string
+	reviewAttempt         int
+	execution             taskstate.AgentExecution
+	executionDirs         []string
+	executionDirGroups    [][]string
+	resumeBoundary        *agent.ResumedUsageBoundary
+	resumeBoundaryFailure string
+	event                 taskstate.Event
 }
 
 // Run executes doctor diagnostics across registered repositories and local task state.
@@ -126,21 +128,72 @@ func diagnoseImplementationExecutions(
 	executionDirs []string,
 	fix bool,
 ) error {
-	for _, run := range taskState.Runs {
+	for index, run := range taskState.Runs {
+		boundary, boundaryFailure := nextResumedUsageBoundary(taskState.Runs, index)
 		ref := executionRef{
-			repoID:        repo.ID,
-			taskID:        taskState.TaskID,
-			activity:      "implementation",
-			attempt:       run.Attempt,
-			step:          "-",
-			execution:     run.Execution,
-			executionDirs: executionDirs,
+			repoID:                repo.ID,
+			taskID:                taskState.TaskID,
+			activity:              "implementation",
+			attempt:               run.Attempt,
+			step:                  "-",
+			execution:             run.Execution,
+			executionDirs:         executionDirs,
+			resumeBoundary:        boundary,
+			resumeBoundaryFailure: boundaryFailure,
 		}
 		if err := appendDiagnosticRow(result, store, env, ref, fix); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func nextResumedUsageBoundary(
+	runs []taskstate.RunAttempt,
+	index int,
+) (*agent.ResumedUsageBoundary, string) {
+	if index < 0 || index >= len(runs) {
+		return nil, ""
+	}
+	execution := runs[index].Execution
+	launch := execution.Launch
+	if launch == nil || launch.Mode != taskstate.AgentLaunchResumed || launch.SourceSession == nil {
+		return nil, ""
+	}
+
+	for laterIndex := index + 1; laterIndex < len(runs); laterIndex++ {
+		laterExecution := runs[laterIndex].Execution
+		laterLaunch := laterExecution.Launch
+		if laterLaunch == nil || laterLaunch.Mode != taskstate.AgentLaunchResumed || laterLaunch.SourceSession == nil {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(execution.Harness), strings.TrimSpace(laterExecution.Harness)) {
+			continue
+		}
+		matching, err := agent.SameCanonicalSession(launch.SourceSession, laterLaunch.SourceSession)
+		if err != nil {
+			return nil, fmt.Sprintf(
+				"resumed_session_reuse_boundary_unsafe_at_run_%d: %v",
+				runs[laterIndex].Attempt,
+				err,
+			)
+		}
+		if !matching {
+			continue
+		}
+		if laterLaunch.UsageBaseline == nil {
+			return nil, fmt.Sprintf(
+				"resumed_session_reused_at_run_%d_without_usage_upper_bound",
+				runs[laterIndex].Attempt,
+			)
+		}
+		return &agent.ResumedUsageBoundary{
+			Session:      laterLaunch.SourceSession,
+			Usage:        laterLaunch.UsageBaseline,
+			CostMicroUSD: laterLaunch.CostBaseline,
+		}, ""
+	}
+	return nil, ""
 }
 
 func diagnoseReviewExecutions(
@@ -233,6 +286,9 @@ func diagnoseExecution(
 	}
 	if ref.execution.StartedAt.IsZero() {
 		return unknownRow(ref, "missing_execution_started_at"), nil
+	}
+	if ref.resumeBoundaryFailure != "" {
+		return unknownRow(ref, ref.resumeBoundaryFailure), nil
 	}
 	usageOpts := captureUsageWithDirectoryPriority(env, ref)
 	if usageOpts.UsageCapture.Status != taskstate.UsageCaptureCaptured ||
@@ -396,11 +452,13 @@ func captureUsageWithDirectoryPriority(
 			continue
 		}
 		usageOpts := agent.CaptureUsage(agent.UsageCaptureOptions{
-			Harness:       ref.execution.Harness,
-			ExecutionDirs: dirs,
-			SessionName:   ref.execution.SessionName,
-			StartedAt:     ref.execution.StartedAt,
-			Env:           env,
+			Harness:        ref.execution.Harness,
+			ExecutionDirs:  dirs,
+			SessionName:    ref.execution.SessionName,
+			StartedAt:      ref.execution.StartedAt,
+			Env:            env,
+			Launch:         ref.execution.Launch,
+			ResumeBoundary: ref.resumeBoundary,
 		})
 		if usageCaptureHasCandidate(usageOpts) {
 			return usageOpts

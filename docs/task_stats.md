@@ -87,6 +87,15 @@ Pi correlation follows the same conservative shape. It searches
 `~/.pi/agent/sessions`, and matches directory, start time, and (when recorded) the
 native Pi session name.
 
+For an opted-in resumed follow-up, Orpheus already has an exact source session.
+When readable, it records that session's cumulative token and Pi-cost values
+immediately before launch, reads the same exact log after the process exits, and
+reports only the non-negative difference. Earlier turns in the reused session are
+therefore not counted again. If the pre-launch baseline is unavailable, the log
+disappears, counters regress, or a safe difference otherwise cannot be established,
+the resumed execution's affected measurement remains explicitly unknown rather
+than becoming zero or a cumulative value.
+
 ## Run reports
 
 Show one task's recorded executions:
@@ -102,6 +111,10 @@ or terminal sync-conflict-resolution run:
 - `PROFILE`, `HARNESS`, `MODEL`, and `COMMAND` are the launch facts recorded by
   Orpheus. The model may be updated from a matched harness session.
 - `STARTED`, `FINISHED`, `DURATION`, and `STATUS` describe the attached process.
+- `LAUNCH_MODE` is `fresh` or `resumed` for review follow-ups.
+  `RESUME_SOURCE` identifies the source run/session for a resume, while
+  `RESUME_FALLBACK` explains why an opted-in resume safely fell back to fresh.
+  Older and non-follow-up executions show `-` for these fields.
 - `SESSION` identifies the matched local session when there is one.
 - `USAGE` is either token fields or an `unknown`/`ambiguous` status and reason.
 - `ESTIMATED_COST` identifies either the API-equivalent estimate, Pi-reported

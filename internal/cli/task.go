@@ -1247,6 +1247,7 @@ func taskRunUsageOptions(
 		RepoID:       repoID,
 		TaskID:       taskID,
 		Attempt:      start.Attempt.Attempt,
+		Launch:       start.Attempt.Execution.Launch,
 	})
 }
 
@@ -3653,7 +3654,7 @@ func renderTaskHistory(output interface{ Write([]byte) (int, error) }, state tas
 		if event.Type != taskstate.EventWorktreeReused {
 			history = append(history, taskHistoryItem{
 				at:      event.At,
-				display: event.DisplayName(),
+				display: taskHistoryEventDisplay(event, state.Runs),
 			})
 		}
 	}
@@ -3677,6 +3678,32 @@ func renderTaskHistory(output interface{ Write([]byte) (int, error) }, state tas
 		}
 	}
 	return nil
+}
+
+func taskHistoryEventDisplay(event taskstate.Event, runs []taskstate.RunAttempt) string {
+	if event.Type != taskstate.EventRunStarted {
+		return event.DisplayName()
+	}
+	for _, run := range runs {
+		if run.Attempt != event.Attempt || run.Execution.Launch == nil {
+			continue
+		}
+		launch := run.Execution.Launch
+		display := fmt.Sprintf("Run attempt %d started (%s)", run.Attempt, launch.Mode)
+		if launch.Mode == taskstate.AgentLaunchResumed && launch.SourceSession != nil {
+			return fmt.Sprintf(
+				"%s from run attempt %d session %s",
+				display,
+				launch.SourceRunAttempt,
+				formatTaskStatsField(launch.SourceSession.ID),
+			)
+		}
+		if reason := strings.TrimSpace(launch.FallbackReason); reason != "" {
+			return display + "; resume fallback: " + reason
+		}
+		return display
+	}
+	return event.DisplayName()
 }
 
 func reviewHistoryItems(reviews []taskstate.ReviewAttempt) []taskHistoryItem {
@@ -3834,6 +3861,9 @@ func renderTaskStats(output interface{ Write([]byte) (int, error) }, state tasks
 			"FINISHED",
 			"DURATION",
 			"STATUS",
+			"LAUNCH_MODE",
+			"RESUME_SOURCE",
+			"RESUME_FALLBACK",
 			"SESSION",
 			"USAGE",
 			"ESTIMATED_COST",
@@ -4364,6 +4394,9 @@ func taskStatsRow(record taskStatsExecutionRecord) []string {
 		formatTaskStatsTimePointer(execution.FinishedAt),
 		formatTaskStatsDuration(execution),
 		formatTaskStatsField(record.status),
+		formatTaskStatsLaunchMode(execution.Launch),
+		formatTaskStatsResumeSource(execution.Launch),
+		formatTaskStatsResumeFallback(execution.Launch),
 		formatTaskStatsSession(execution.Session),
 		formatTaskStatsUsage(execution),
 		formatTaskStatsUsageCost(execution),
@@ -4491,6 +4524,27 @@ func commandLineForStats(command string, args []string) string {
 		parts = append(parts, strconv.Quote(arg))
 	}
 	return strings.Join(parts, " ")
+}
+
+func formatTaskStatsLaunchMode(launch *taskstate.AgentLaunch) string {
+	if launch == nil {
+		return "-"
+	}
+	return formatTaskStatsField(string(launch.Mode))
+}
+
+func formatTaskStatsResumeSource(launch *taskstate.AgentLaunch) string {
+	if launch == nil || launch.Mode != taskstate.AgentLaunchResumed || launch.SourceSession == nil {
+		return "-"
+	}
+	return fmt.Sprintf("run %d / session %s", launch.SourceRunAttempt, formatTaskStatsField(launch.SourceSession.ID))
+}
+
+func formatTaskStatsResumeFallback(launch *taskstate.AgentLaunch) string {
+	if launch == nil {
+		return "-"
+	}
+	return formatTaskStatsField(launch.FallbackReason)
 }
 
 func formatTaskStatsTime(value time.Time) string {
