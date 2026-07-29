@@ -210,6 +210,7 @@ func (r taskReviewLifecycleAgentRunner) RunReviewLifecycleAgent(
 			SessionName:  run.Start.Attempt.Execution.SessionName,
 			StartedAt:    run.Start.Attempt.Execution.StartedAt,
 			Env:          agent.UsageCaptureEnvironment(),
+			Launch:       run.Start.Attempt.Execution.Launch,
 		}),
 	)
 	return workflow.ReviewLifecycleAgentRunResult{UsageError: err}, nil

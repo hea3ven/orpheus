@@ -85,6 +85,82 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 	)
 }
 
+func TestStorePersistsResumedFollowUpLaunchProvenance(t *testing.T) {
+	store := newTestStore(t, time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC))
+	baselineCost := int64(1250)
+	attempt, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		Agent:         "implementer",
+		Profile:       "implementer",
+		Harness:       "pi",
+		WorkDirectory: "/tmp/op-1",
+		Branch:        "orpheus/op-1",
+		Worktree:      "/tmp/op-1",
+		ReviewFollowUp: &taskstate.ReviewFollowUp{
+			ReviewAttempt:  1,
+			FindingIndexes: []int{0},
+		},
+		Launch: &taskstate.AgentLaunch{
+			Mode:             taskstate.AgentLaunchResumed,
+			SourceRunAttempt: 1,
+			SourceSession:    &taskstate.AgentSession{ID: "session-1", LogPath: "/tmp/session-1.jsonl"},
+			UsageBaseline:    &taskstate.AgentUsage{TotalTokens: 200},
+			CostBaseline:     &baselineCost,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start resumed run: %v", err)
+	}
+	if attempt.Execution.Launch == nil || attempt.Execution.Launch.Mode != taskstate.AgentLaunchResumed {
+		t.Fatalf("launch = %#v, want resumed", attempt.Execution.Launch)
+	}
+
+	loaded, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load resumed run: %v", err)
+	}
+	launch := loaded.Runs[0].Execution.Launch
+	if launch == nil || launch.SourceRunAttempt != 1 || launch.SourceSession == nil || launch.SourceSession.ID != "session-1" {
+		t.Fatalf("persisted launch = %#v", launch)
+	}
+	assertStoreYAMLContains(t, store, "alpha", "op-1",
+		"launch:",
+		"mode: resumed",
+		"source_run_attempt: 1",
+		"id: session-1",
+		"usage_baseline:",
+		"total_tokens: 200",
+		"cost_baseline_micro_usd: 1250",
+	)
+}
+
+func TestStorePersistsResumedLaunchWithUnknownUsageBaseline(t *testing.T) {
+	store := newTestStore(t, time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC))
+	attempt, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		Agent: "implementer", Profile: "implementer", Harness: "codex",
+		WorkDirectory: "/tmp/op-1", Branch: "orpheus/op-1", Worktree: "/tmp/op-1",
+		Launch: &taskstate.AgentLaunch{
+			Mode:             taskstate.AgentLaunchResumed,
+			SourceRunAttempt: 1,
+			SourceSession:    &taskstate.AgentSession{ID: "session-1", LogPath: "/tmp/session-1.jsonl"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start resumed run with unknown baseline: %v", err)
+	}
+	if attempt.Execution.Launch == nil || attempt.Execution.Launch.UsageBaseline != nil {
+		t.Fatalf("launch = %#v, want resumed with unknown usage baseline", attempt.Execution.Launch)
+	}
+
+	loaded, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load resumed run: %v", err)
+	}
+	launch := loaded.Runs[0].Execution.Launch
+	if launch == nil || launch.Mode != taskstate.AgentLaunchResumed || launch.UsageBaseline != nil {
+		t.Fatalf("persisted launch = %#v, want resumed with unknown usage baseline", launch)
+	}
+}
+
 func TestStoreReconcilesLegacyTargetIntoGitFactsOnLoad(t *testing.T) {
 	store := newTestStore(t)
 	path, err := store.Path("alpha", "op-legacy")

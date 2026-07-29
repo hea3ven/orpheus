@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/stretchr/testify/assert"
@@ -260,6 +261,142 @@ func TestDoctorRecoversPiUsageAndReportedCost(t *testing.T) {
 	is.Equal(int64(1240), execution.UsageCost.AmountMicroUSD)
 	is.Equal("pi_reported_estimated", execution.UsageCost.Kind)
 	is.Equal(taskstate.UsageCaptureCaptured, execution.UsageCapture.Status)
+}
+
+func TestDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(t *testing.T) {
+	t.Run("with complete boundary", func(t *testing.T) {
+		costBaseline := int64(1561)
+		wantCost := int64(321)
+		testDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(t, &costBaseline, &wantCost)
+	})
+	t.Run("without cost boundary", func(t *testing.T) {
+		testDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(t, nil, nil)
+	})
+}
+
+//nolint:funlen // The three-run fixture verifies delayed per-execution accounting.
+func testDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(
+	t *testing.T,
+	costBaseline *int64,
+	wantCost *int64,
+) {
+	t.Helper()
+
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+	piSessionDir := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", piSessionDir)
+
+	startedAt := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
+	sessionID := "reused-pi-session"
+	sessionName := "(op-resumed) Pi task"
+	writeDoctorPiSessionLog(t, piSessionDir, sessionID, sessionName, repoDir, startedAt)
+	session := taskstate.AgentSession{
+		ID:      sessionID,
+		LogPath: doctorPiSessionLogPath(piSessionDir, repoDir, sessionID),
+	}
+
+	store := taskstate.NewStoreWithClock(paths, clockSequence(
+		startedAt,
+		startedAt.Add(time.Minute),
+		startedAt.Add(2*time.Minute),
+		startedAt.Add(3*time.Minute),
+		startedAt.Add(4*time.Minute),
+		startedAt.Add(5*time.Minute),
+		startedAt.Add(6*time.Minute),
+		startedAt.Add(7*time.Minute),
+	))
+	firstUsage := taskstate.AgentUsage{
+		InputTokens: 150, CachedInputTokens: 17, OutputTokens: 30,
+		ReasoningOutputTokens: 5, TotalTokens: 180,
+	}
+	firstCost := int64(1240)
+	first, err := store.StartRun("alpha", "op-resumed", doctorPiStartOptions(repoDir, sessionName))
+	must.NoError(err)
+	_, err = store.RecordRunUsage("alpha", "op-resumed", first.Attempt, taskstate.RecordRunUsageOptions{
+		Session: &session, Model: "gpt-5.5", Usage: &firstUsage,
+		UsageCost:    agentUsageCost(firstCost),
+		UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureCaptured, Reason: "matched_pi_session"},
+	})
+	must.NoError(err)
+	_, err = store.FinishRun("alpha", "op-resumed", first.Attempt, taskstate.RunStatusSucceeded)
+	must.NoError(err)
+
+	secondLaunch := &taskstate.AgentLaunch{
+		Mode: taskstate.AgentLaunchResumed, SourceRunAttempt: first.Attempt, SourceSession: &session,
+		UsageBaseline: &firstUsage, CostBaseline: &firstCost,
+	}
+	secondOpts := doctorPiStartOptions(repoDir, sessionName)
+	secondOpts.Launch = secondLaunch
+	second, err := store.StartRun("alpha", "op-resumed", secondOpts)
+	must.NoError(err)
+	_, err = store.RecordRunUsage("alpha", "op-resumed", second.Attempt, taskstate.RecordRunUsageOptions{
+		UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureUnknown, Reason: "read_resumed_session_failed"},
+	})
+	must.NoError(err)
+	_, err = store.FinishRun("alpha", "op-resumed", second.Attempt, taskstate.RunStatusSucceeded)
+	must.NoError(err)
+
+	thirdBaseline := taskstate.AgentUsage{
+		InputTokens: 161, CachedInputTokens: 20, OutputTokens: 37,
+		ReasoningOutputTokens: 7, TotalTokens: 198,
+	}
+	thirdLaunch := &taskstate.AgentLaunch{
+		Mode: taskstate.AgentLaunchResumed, SourceRunAttempt: second.Attempt, SourceSession: &session,
+		UsageBaseline: &thirdBaseline, CostBaseline: costBaseline,
+	}
+	thirdOpts := doctorPiStartOptions(repoDir, sessionName)
+	thirdOpts.Launch = thirdLaunch
+	third, err := store.StartRun("alpha", "op-resumed", thirdOpts)
+	must.NoError(err)
+	thirdUsage := taskstate.AgentUsage{
+		InputTokens: 20, CachedInputTokens: 4, OutputTokens: 10,
+		ReasoningOutputTokens: 3, TotalTokens: 30,
+	}
+	_, err = store.RecordRunUsage("alpha", "op-resumed", third.Attempt, taskstate.RecordRunUsageOptions{
+		Session: &session, Model: "gpt-5.5", Usage: &thirdUsage,
+		UsageCost:    agentUsageCost(500),
+		UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureCaptured, Reason: "matched_resumed_pi_session"},
+	})
+	must.NoError(err)
+	_, err = store.FinishRun("alpha", "op-resumed", third.Attempt, taskstate.RunStatusSucceeded)
+	must.NoError(err)
+
+	file, err := os.OpenFile(session.LogPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	must.NoError(err)
+	_, err = file.WriteString(strings.Join([]string{
+		`{"type":"message","id":"second","timestamp":"2026-07-07T10:03:00Z","message":{"role":"assistant","usage":{"input":11,"output":7,"cacheRead":3,"reasoning":2,"totalTokens":18,"cost":{"total":0.000321}}}}`,
+		`{"type":"message","id":"third","timestamp":"2026-07-07T10:05:00Z","message":{"role":"assistant","usage":{"input":20,"output":10,"cacheRead":4,"reasoning":3,"totalTokens":30,"cost":{"total":0.000500}}}}`,
+		"",
+	}, "\n"))
+	must.NoError(err)
+	must.NoError(file.Close())
+
+	stdout, stderr := executeCommand(t, []string{"doctor", "--fix"})
+	is.Empty(stderr)
+	is.Contains(stdout, "recovered")
+
+	loaded, err := store.Load("alpha", "op-resumed")
+	must.NoError(err)
+	must.NotNil(loaded.Runs[1].Execution.Usage)
+	is.Equal(18, loaded.Runs[1].Execution.Usage.TotalTokens)
+	is.Equal(taskstate.UsageCaptureCaptured, loaded.Runs[1].Execution.UsageCapture.Status)
+	if wantCost == nil {
+		is.Nil(loaded.Runs[1].Execution.UsageCost)
+	} else {
+		must.NotNil(loaded.Runs[1].Execution.UsageCost)
+		is.Equal(*wantCost, loaded.Runs[1].Execution.UsageCost.AmountMicroUSD)
+	}
+	is.Equal(30, loaded.Runs[2].Execution.Usage.TotalTokens)
+	is.Equal(int64(500), loaded.Runs[2].Execution.UsageCost.AmountMicroUSD)
+}
+
+func agentUsageCost(amount int64) *taskstate.AgentUsageCost {
+	cost := agent.PiReportedUsageCost(amount)
+	return &cost
 }
 
 func TestDoctorRecoversPiUsageWhenMatchedSessionHasNoReportedCost(t *testing.T) {

@@ -291,10 +291,33 @@ type AgentExecution struct {
 	FinishedAt     *time.Time `yaml:"finished_at,omitempty"`
 	DurationMillis int64      `yaml:"duration_millis,omitempty"`
 
+	Launch       *AgentLaunch      `yaml:"launch,omitempty"`
 	Session      *AgentSession     `yaml:"session,omitempty"`
 	Usage        *AgentUsage       `yaml:"usage,omitempty"`
 	UsageCost    *AgentUsageCost   `yaml:"usage_cost,omitempty"`
 	UsageCapture AgentUsageCapture `yaml:"usage_capture,omitempty"`
+}
+
+// AgentLaunchMode identifies whether an implementation process started a new
+// harness session or resumed an existing one.
+type AgentLaunchMode string
+
+const (
+	AgentLaunchFresh   AgentLaunchMode = "fresh"
+	AgentLaunchResumed AgentLaunchMode = "resumed"
+)
+
+// AgentLaunch records follow-up session provenance. When available, usage
+// baselines are the cumulative source-session values immediately before a
+// resumed process starts; a nil baseline records that incremental usage cannot
+// be measured safely.
+type AgentLaunch struct {
+	Mode             AgentLaunchMode `yaml:"mode"`
+	SourceRunAttempt int             `yaml:"source_run_attempt,omitempty"`
+	SourceSession    *AgentSession   `yaml:"source_session,omitempty"`
+	FallbackReason   string          `yaml:"fallback_reason,omitempty"`
+	UsageBaseline    *AgentUsage     `yaml:"usage_baseline,omitempty"`
+	CostBaseline     *int64          `yaml:"cost_baseline_micro_usd,omitempty"`
 }
 
 // AgentSession records harness-specific session correlation facts.
@@ -559,6 +582,7 @@ type StartRunOptions struct {
 	Worktree      string
 
 	ReviewFollowUp *ReviewFollowUp
+	Launch         *AgentLaunch
 }
 
 func (opts StartRunOptions) agentSelection() AgentSelection {
@@ -837,21 +861,9 @@ func (s Store) StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt
 	now := s.nowUTC()
 	selection := opts.agentSelection()
 	attempt := RunAttempt{
-		Attempt: nextAttemptNumber(state),
-		Status:  RunStatusRunning,
-		Execution: normalizeAgentExecution(AgentExecution{
-			Purpose:     AgentExecutionPurposeImplementation,
-			Status:      RunStatusRunning,
-			Agent:       opts.Agent,
-			Profile:     opts.Profile,
-			Harness:     selection.Harness,
-			Model:       selection.Model,
-			Thinking:    selection.Thinking,
-			Command:     opts.Command,
-			Args:        cloneStrings(opts.Args),
-			SessionName: opts.SessionName,
-			StartedAt:   now,
-		}),
+		Attempt:        nextAttemptNumber(state),
+		Status:         RunStatusRunning,
+		Execution:      startRunAgentExecution(opts, selection, now),
 		ReviewFollowUp: normalizeReviewFollowUp(opts.ReviewFollowUp),
 	}
 	if err := lockTaskWorkDirectory(&state, WorkDirectory{Path: opts.WorkDirectory}); err != nil {
@@ -882,6 +894,23 @@ func (s Store) StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt
 	}
 	span.Finish(context.Background(), logging.StatusSuccess, slog.Int("attempt", attempt.Attempt))
 	return attempt, nil
+}
+
+func startRunAgentExecution(opts StartRunOptions, selection AgentSelection, now time.Time) AgentExecution {
+	return normalizeAgentExecution(AgentExecution{
+		Purpose:     AgentExecutionPurposeImplementation,
+		Status:      RunStatusRunning,
+		Agent:       opts.Agent,
+		Profile:     opts.Profile,
+		Harness:     selection.Harness,
+		Model:       selection.Model,
+		Thinking:    selection.Thinking,
+		Command:     opts.Command,
+		Args:        cloneStrings(opts.Args),
+		SessionName: opts.SessionName,
+		StartedAt:   now,
+		Launch:      opts.Launch,
+	})
 }
 
 // RecordRunUsage records best-effort session and usage telemetry for a run.
@@ -3408,6 +3437,10 @@ func normalizeAgentExecution(execution AgentExecution) AgentExecution {
 			execution.UsageCost = &cost
 		}
 	}
+	if execution.Launch != nil {
+		launch := normalizeAgentLaunch(*execution.Launch)
+		execution.Launch = &launch
+	}
 	execution.UsageCapture = normalizeAgentUsageCapture(execution.UsageCapture, time.Time{})
 	return execution
 }
@@ -3439,6 +3472,11 @@ func validateAgentExecution(execution AgentExecution) error {
 	if execution.DurationMillis < 0 {
 		return errors.New("duration_millis cannot be negative")
 	}
+	if execution.Launch != nil {
+		if err := validateAgentLaunch(*execution.Launch); err != nil {
+			return fmt.Errorf("launch is invalid: %w", err)
+		}
+	}
 	if execution.Session != nil && agentSessionIsZero(normalizeAgentSession(*execution.Session)) {
 		return errors.New("session must include id or log_path")
 	}
@@ -3450,6 +3488,54 @@ func validateAgentExecution(execution AgentExecution) error {
 	}
 	if !execution.UsageCapture.IsZero() && !validUsageCaptureStatus(execution.UsageCapture.Status) {
 		return fmt.Errorf("unsupported usage_capture status %q", execution.UsageCapture.Status)
+	}
+	return nil
+}
+
+func normalizeAgentLaunch(launch AgentLaunch) AgentLaunch {
+	launch.Mode = AgentLaunchMode(strings.TrimSpace(string(launch.Mode)))
+	launch.FallbackReason = strings.TrimSpace(launch.FallbackReason)
+	if launch.SourceSession != nil {
+		session := normalizeAgentSession(*launch.SourceSession)
+		if agentSessionIsZero(session) {
+			launch.SourceSession = nil
+		} else {
+			launch.SourceSession = &session
+		}
+	}
+	if launch.UsageBaseline != nil {
+		usage := normalizeAgentUsage(*launch.UsageBaseline)
+		launch.UsageBaseline = &usage
+	}
+	if launch.CostBaseline != nil {
+		cost := *launch.CostBaseline
+		if cost < 0 {
+			cost = 0
+		}
+		launch.CostBaseline = &cost
+	}
+	return launch
+}
+
+func validateAgentLaunch(launch AgentLaunch) error {
+	launch = normalizeAgentLaunch(launch)
+	switch launch.Mode {
+	case AgentLaunchFresh:
+		if launch.SourceRunAttempt != 0 || launch.SourceSession != nil || launch.UsageBaseline != nil || launch.CostBaseline != nil {
+			return errors.New("fresh launch cannot include resumed-session provenance")
+		}
+	case AgentLaunchResumed:
+		if launch.SourceRunAttempt <= 0 {
+			return errors.New("resumed launch requires a positive source_run_attempt")
+		}
+		if launch.SourceSession == nil || strings.TrimSpace(launch.SourceSession.ID) == "" || strings.TrimSpace(launch.SourceSession.LogPath) == "" {
+			return errors.New("resumed launch requires source session id and log_path")
+		}
+		if launch.FallbackReason != "" {
+			return errors.New("resumed launch cannot include a fallback reason")
+		}
+	default:
+		return fmt.Errorf("unsupported mode %q", launch.Mode)
 	}
 	return nil
 }

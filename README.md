@@ -156,6 +156,23 @@ Model comparison views use `--view implementation-model`, `--view reviewer-model
 
 Use raw profiles for custom launch contracts. Use structured `harness: codex` or `harness: pi` profiles when task stats should attempt session and token capture. See [Task stats and usage capture](docs/task_stats.md) for capture reliability, report semantics, cost caveats, and troubleshooting.
 
+### Opt-in follow-up session resumption
+
+Set `ORPHEUS_RESUME_SESSIONS=1` to let review-follow-up implementation runs resume
+the latest usable successful, completed session from the same selected profile and
+structured Pi or Codex harness. This applies to autonomous repairs and later
+`orpheus task run` follow-ups, in both interactive and non-interactive modes. Raw
+profiles and all non-follow-up agent purposes remain fresh.
+
+Resumption is best effort: missing, ambiguous, incompatible, deleted, or unsafe
+session state falls back to a fresh follow-up and records the reason. A resumed
+process that starts and fails is recorded as failed and is not automatically
+relaunched fresh. Every launch still receives the standard `orpheus agent context`
+bootstrap instruction. Resumed token usage and Pi-reported cost include only the
+new execution's increment; unsafe measurements remain unknown. Task inspection and
+per-task stats show launch provenance. Orpheus does not assign A/B cohorts or infer
+causal resumed-versus-fresh comparisons. See [Review pipelines](docs/review_pipelines.md#resume-implementation-sessions-for-follow-ups).
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

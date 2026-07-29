@@ -258,10 +258,19 @@ func (s DispatchService) startLocked(
 		span.FinishError(ctx, err)
 		return DispatchStartResult{}, err
 	}
+	var launch *taskstate.AgentLaunch
+	if plan.followUp != nil {
+		command, launch, err = s.prepareFollowUpResume(opts, plan, command)
+		if err != nil {
+			span.FinishError(ctx, err)
+			return DispatchStartResult{}, err
+		}
+	}
 	span.Finish(ctx, logging.StatusSuccess,
 		slog.String("agent", command.AgentName),
 		slog.String("profile", command.AgentName),
 		slog.String("harness", command.Harness),
+		slog.String("launch_mode", dispatchLaunchMode(launch)),
 	)
 
 	span = s.startPhase(ctx, "git target preparation", opts.Source.Repository.ID, opts.TaskID,
@@ -286,7 +295,7 @@ func (s DispatchService) startLocked(
 	span.Finish(ctx, logging.StatusSuccess)
 
 	span = s.startPhase(ctx, "task run persistence", opts.Source.Repository.ID, opts.TaskID)
-	attempt, err := s.recordStart(opts, setup, command, commandContext, plan.followUp)
+	attempt, err := s.recordStart(opts, setup, command, commandContext, plan.followUp, launch)
 	if err != nil {
 		span.FinishError(ctx, err)
 		return DispatchStartResult{}, err
@@ -308,6 +317,42 @@ func dispatchSessionName(taskItem task.Task, followUp *dispatchFollowUpPlan) str
 		return taskItem.FollowUpSessionName()
 	}
 	return taskItem.SessionName()
+}
+
+func (s DispatchService) prepareFollowUpResume(
+	opts DispatchStartOptions,
+	plan dispatchStartPlan,
+	command DispatchCommand,
+) (DispatchCommand, *taskstate.AgentLaunch, error) {
+	state, err := s.RunStore.Load(opts.Source.Repository.ID, opts.TaskID)
+	if err != nil {
+		return DispatchCommand{}, nil, fmt.Errorf("inspect implementation sessions for follow-up: %w", err)
+	}
+	prepared, launch := agent.PrepareFollowUpResume(agent.FollowUpResumeOptions{
+		Command: agent.CommandSnapshot{
+			AgentName: command.AgentName,
+			Command:   command.Command,
+			Args:      append([]string{}, command.Args...),
+			Selection: command.AgentSelection(),
+			Harness:   command.Harness,
+			Model:     command.Model,
+			Thinking:  command.Thinking,
+		},
+		State:        state,
+		ExecutionDir: plan.expected.WorktreePath,
+		Env:          agent.UsageCaptureEnvironment(),
+		Enabled:      agent.ResumeSessionsEnabled(),
+	})
+	command.Command = prepared.Command
+	command.Args = append([]string{}, prepared.Args...)
+	return command, launch, nil
+}
+
+func dispatchLaunchMode(launch *taskstate.AgentLaunch) string {
+	if launch == nil {
+		return "fresh"
+	}
+	return string(launch.Mode)
 }
 
 //nolint:funlen // Dispatch eligibility is clearer when target-lock decisions stay together.
@@ -524,6 +569,7 @@ func (s DispatchService) recordStart(
 	command DispatchCommand,
 	commandContext DispatchCommandContext,
 	followUp *dispatchFollowUpPlan,
+	launch *taskstate.AgentLaunch,
 ) (taskstate.RunAttempt, error) {
 	setupEvent, hasSetupEvent, err := dispatchSetupEvent(setup.Lifecycle)
 	if err != nil {
@@ -556,6 +602,7 @@ func (s DispatchService) recordStart(
 		Branch:         setup.Branch,
 		Worktree:       setup.WorktreePath,
 		ReviewFollowUp: taskstateReviewFollowUp(followUp),
+		Launch:         launch,
 	})
 	if err != nil {
 		if errors.Is(err, taskstate.ErrActiveRun) {

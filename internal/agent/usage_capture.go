@@ -14,17 +14,28 @@ import (
 
 // UsageCaptureOptions describes a launched harness-backed process.
 type UsageCaptureOptions struct {
-	Harness       string
-	ExecutionDir  string
-	ExecutionDirs []string
-	SessionName   string
-	StartedAt     time.Time
-	Env           map[string]string
-	Logger        *slog.Logger
-	Context       context.Context
-	RepoID        string
-	TaskID        string
-	Attempt       int
+	Harness        string
+	ExecutionDir   string
+	ExecutionDirs  []string
+	SessionName    string
+	StartedAt      time.Time
+	Env            map[string]string
+	Logger         *slog.Logger
+	Context        context.Context
+	RepoID         string
+	TaskID         string
+	Attempt        int
+	Launch         *taskstate.AgentLaunch
+	ResumeBoundary *ResumedUsageBoundary
+}
+
+// ResumedUsageBoundary is a later launch's immutable pre-launch snapshot of
+// the same session. Delayed recovery uses it as the end of an earlier resumed
+// execution after that session has subsequently been reused.
+type ResumedUsageBoundary struct {
+	Session      *taskstate.AgentSession
+	Usage        *taskstate.AgentUsage
+	CostMicroUSD *int64
 }
 
 // UsageCaptureEnvironment returns environment values needed to find supported harness session logs.
@@ -73,6 +84,11 @@ func CaptureUsage(opts UsageCaptureOptions) taskstate.RecordRunUsageOptions {
 	)
 
 	var result taskstate.RecordRunUsageOptions
+	if opts.Launch != nil && opts.Launch.Mode == taskstate.AgentLaunchResumed {
+		result = captureResumedUsage(opts)
+		span.Finish(ctx, usageCaptureDiagnosticStatus(result), usageCaptureDiagnosticAttrs(result)...)
+		return result
+	}
 	switch strings.TrimSpace(opts.Harness) {
 	case codexHarness:
 		result = CaptureCodexUsage(CodexUsageCaptureOptions{

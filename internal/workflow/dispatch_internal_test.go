@@ -3,15 +3,131 @@ package workflow
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/agent"
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/tasktarget"
 )
+
+func TestDispatchPrepareFollowUpResumeHonorsStrictFeatureFlag(t *testing.T) {
+	workdir := canonicalTestPath(t, t.TempDir())
+	sessionPath := filepath.Join(t.TempDir(), "session.jsonl")
+	content := `{"type":"session","version":3,"id":"session-1","timestamp":"2026-07-07T10:00:00Z","cwd":"` + workdir + `"}
+{"type":"message","id":"assistant","timestamp":"2026-07-07T10:00:01Z","message":{"role":"assistant","usage":{"input":10,"output":5,"totalTokens":15}}}
+`
+	if err := os.WriteFile(sessionPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+	store := fakeDispatchRunStore{state: taskstate.TaskState{Runs: []taskstate.RunAttempt{{
+		Attempt: 1,
+		Status:  taskstate.RunStatusSucceeded,
+		Completion: &taskstate.Completion{
+			Summary: "implemented",
+		},
+		Execution: taskstate.AgentExecution{
+			Purpose: taskstate.AgentExecutionPurposeImplementation,
+			Profile: "implementer",
+			Harness: "pi",
+			Session: &taskstate.AgentSession{ID: "session-1", LogPath: sessionPath},
+		},
+	}}}}
+	service := DispatchService{RunStore: store}
+	plan := dispatchStartPlan{expected: gitmeta.TaskWorktreeSetupResult{WorktreePath: workdir}}
+	command := NewDispatchCommand(agent.CommandSnapshot{
+		AgentName: "implementer",
+		Command:   "pi",
+		Harness:   "pi",
+		Args:      []string{"--model", "gpt-5", "prompt"},
+	})
+	opts := DispatchStartOptions{TaskID: "op-1", Source: task.RepositorySource{Repository: task.Repository{ID: "alpha"}}}
+
+	t.Setenv("ORPHEUS_RESUME_SESSIONS", "0")
+	fresh, launch, err := service.prepareFollowUpResume(opts, plan, command)
+	if err != nil {
+		t.Fatalf("prepare disabled follow-up: %v", err)
+	}
+	if launch.Mode != taskstate.AgentLaunchFresh || !equalStrings(fresh.Args, command.Args) {
+		t.Fatalf("disabled result = %#v, %#v", fresh.Args, launch)
+	}
+
+	t.Setenv("ORPHEUS_RESUME_SESSIONS", "1")
+	resumed, launch, err := service.prepareFollowUpResume(opts, plan, command)
+	if err != nil {
+		t.Fatalf("prepare enabled follow-up: %v", err)
+	}
+	if launch.Mode != taskstate.AgentLaunchResumed || launch.SourceRunAttempt != 1 {
+		t.Fatalf("enabled launch = %#v", launch)
+	}
+	if len(resumed.Args) < 3 || resumed.Args[0] != "--session" || resumed.Args[1] != sessionPath {
+		t.Fatalf("resumed args = %#v", resumed.Args)
+	}
+}
+
+func TestDispatchPrepareFollowUpResumeUsesActiveCodexHome(t *testing.T) {
+	workdir := canonicalTestPath(t, t.TempDir())
+	sourceHome := t.TempDir()
+	sessionPath := filepath.Join(sourceHome, "sessions", "source.jsonl")
+	if err := os.MkdirAll(filepath.Dir(sessionPath), 0o755); err != nil {
+		t.Fatalf("create source sessions: %v", err)
+	}
+	content := `{"timestamp":"2026-07-07T10:00:00Z","type":"session_meta","payload":{"session_id":"session-1","id":"session-1","timestamp":"2026-07-07T10:00:00Z","cwd":"` + workdir + `","model":"gpt-5"}}
+{"timestamp":"2026-07-07T10:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}}
+`
+	if err := os.WriteFile(sessionPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write source session: %v", err)
+	}
+	store := fakeDispatchRunStore{state: taskstate.TaskState{Runs: []taskstate.RunAttempt{{
+		Attempt: 1, Status: taskstate.RunStatusSucceeded, Completion: &taskstate.Completion{Summary: "implemented"},
+		Execution: taskstate.AgentExecution{
+			Purpose: taskstate.AgentExecutionPurposeImplementation, Profile: "implementer", Harness: "codex",
+			Session: &taskstate.AgentSession{ID: "session-1", LogPath: sessionPath},
+		},
+	}}}}
+	service := DispatchService{RunStore: store}
+	plan := dispatchStartPlan{expected: gitmeta.TaskWorktreeSetupResult{WorktreePath: workdir}}
+	opts := DispatchStartOptions{TaskID: "op-1", Source: task.RepositorySource{Repository: task.Repository{ID: "alpha"}}}
+	activeHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(activeHome, "sessions"), 0o755); err != nil {
+		t.Fatalf("create active sessions: %v", err)
+	}
+	t.Setenv("CODEX_HOME", activeHome)
+	t.Setenv("ORPHEUS_RESUME_SESSIONS", "1")
+
+	for _, nonInteractive := range []bool{false, true} {
+		name := "interactive"
+		args := []string{"--model", "gpt-5", "prompt"}
+		if nonInteractive {
+			name = "exec"
+			args = append([]string{"exec"}, args...)
+		}
+		t.Run(name, func(t *testing.T) {
+			command := NewDispatchCommand(agent.CommandSnapshot{
+				AgentName: "implementer", Command: "codex", Harness: "codex", Args: args,
+			})
+			fresh, launch, err := service.prepareFollowUpResume(opts, plan, command)
+			if err != nil {
+				t.Fatalf("prepare Codex follow-up: %v", err)
+			}
+			if launch.Mode != taskstate.AgentLaunchFresh || !equalStrings(fresh.Args, command.Args) {
+				t.Fatalf("changed CODEX_HOME result = %#v, %#v", fresh.Args, launch)
+			}
+			if !strings.Contains(launch.FallbackReason, "active Codex sessions root") {
+				t.Fatalf("fallback reason = %q", launch.FallbackReason)
+			}
+		})
+	}
+}
+
+func equalStrings(left []string, right []string) bool {
+	return strings.Join(left, "\x00") == strings.Join(right, "\x00")
+}
 
 //nolint:funlen // The fixture is intentionally explicit about blocked review state.
 func TestDispatchValidateStartInfersBlockedReviewFollowUpTarget(t *testing.T) {
