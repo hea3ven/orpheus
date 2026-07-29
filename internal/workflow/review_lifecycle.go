@@ -14,6 +14,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/logging"
+	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
@@ -195,12 +196,13 @@ func (c ReviewManualStepContext) TaskID() string { return c.Task.ID }
 
 // ReviewManualStepPrompt contains frontend input facts for a manual review prompt.
 type ReviewManualStepPrompt struct {
-	Source    task.RepositorySource
-	Task      task.Task
-	Review    taskstate.ReviewAttempt
-	Step      review.Step
-	HunkNotes []review.HunkNote
-	Recorder  ReviewManualStepRecorder
+	Source          task.RepositorySource
+	Task            task.Task
+	Review          taskstate.ReviewAttempt
+	Step            review.Step
+	HunkNotes       []review.HunkNote
+	IntegrationFlow publication.IntegrationFlow
+	Recorder        ReviewManualStepRecorder
 }
 
 // TaskID returns the resolved backend task id.
@@ -209,6 +211,7 @@ func (p ReviewManualStepPrompt) TaskID() string { return p.Task.ID }
 // ReviewManualStepRecorder is the narrow workflow-owned persistence port for manual review input.
 type ReviewManualStepRecorder interface {
 	LatestReview() (taskstate.ReviewAttempt, error)
+	SetIntegrationFlow(publication.IntegrationFlow) (taskstate.Finalization, error)
 	RecordFinding(taskstate.ReviewFinding) (taskstate.ReviewAttempt, error)
 	PromoteAdvisoryFinding(index int) (taskstate.ReviewAttempt, error)
 }
@@ -495,25 +498,7 @@ func (s ReviewLifecycleService) pipelineRunOptions(runCtx context.Context, ctx R
 			return presentation.RenderManualStep(manualCtx)
 		}
 	}
-	var promptManualStep func(review.ManualStep) (review.ManualResult, error)
-	if presentation.PromptManualStep != nil {
-		promptManualStep = func(step review.ManualStep) (review.ManualResult, error) {
-			return presentation.PromptManualStep(ReviewManualStepPrompt{
-				Source:    ctx.Source,
-				Task:      ctx.Task,
-				Review:    ctx.Review,
-				Step:      step.Step,
-				HunkNotes: step.HunkNotes,
-				Recorder: reviewManualStepRecorder{
-					store:   ctx.store,
-					repoID:  ctx.RepoID(),
-					taskID:  ctx.TaskID(),
-					attempt: ctx.Review.Attempt,
-					step:    step.Step.Name,
-				},
-			})
-		}
-	}
+	promptManualStep := s.manualStepPrompt(ctx, presentation.PromptManualStep)
 	return review.PipelineRunOptions{
 		Context:                 runCtx,
 		Store:                   ctx.store,
@@ -540,6 +525,33 @@ func (s ReviewLifecycleService) pipelineRunOptions(runCtx context.Context, ctx R
 		PromptManualStep:        promptManualStep,
 		PromptAutomatedBlockers: presentation.PromptAutomatedBlockers,
 	}, nil
+}
+
+func (s ReviewLifecycleService) manualStepPrompt(
+	ctx ReviewAttemptContext,
+	prompt func(ReviewManualStepPrompt) (review.ManualResult, error),
+) func(review.ManualStep) (review.ManualResult, error) {
+	if prompt == nil {
+		return nil
+	}
+	return func(step review.ManualStep) (review.ManualResult, error) {
+		flow, err := s.effectiveIntegrationFlow(ctx)
+		if err != nil {
+			return review.ManualResult{}, err
+		}
+		return prompt(ReviewManualStepPrompt{
+			Source:          ctx.Source,
+			Task:            ctx.Task,
+			Review:          ctx.Review,
+			Step:            step.Step,
+			HunkNotes:       step.HunkNotes,
+			IntegrationFlow: flow,
+			Recorder: reviewManualStepRecorder{
+				store: ctx.store, repoID: ctx.RepoID(), taskID: ctx.TaskID(),
+				attempt: ctx.Review.Attempt, step: step.Step.Name,
+			},
+		})
+	}
 }
 
 func (s ReviewLifecycleService) manualStepContext(
@@ -581,6 +593,21 @@ type reviewManualStepRecorder struct {
 	step    string
 }
 
+func (s ReviewLifecycleService) effectiveIntegrationFlow(ctx ReviewAttemptContext) (publication.IntegrationFlow, error) {
+	state, err := s.RunStore.Load(ctx.RepoID(), ctx.TaskID())
+	if err != nil {
+		return "", fmt.Errorf("load task state for integration flow: %w", err)
+	}
+	if locked := taskstate.FinalizationFacts(state).IntegrationFlow; strings.TrimSpace(string(locked)) != "" {
+		return locked, nil
+	}
+	config, err := publication.LoadConfig(s.Paths)
+	if err != nil {
+		return "", err
+	}
+	return publication.ResolveIntegrationFlow("", publication.IntegrationFlow(ctx.Source.Repository.IntegrationFlow), config.IntegrationFlow), nil
+}
+
 func (r reviewManualStepRecorder) LatestReview() (taskstate.ReviewAttempt, error) {
 	taskState, err := r.store.Load(r.repoID, r.taskID)
 	if err != nil {
@@ -591,6 +618,10 @@ func (r reviewManualStepRecorder) LatestReview() (taskstate.ReviewAttempt, error
 		return taskstate.ReviewAttempt{}, fmt.Errorf("latest review attempt no longer matches attempt %d", r.attempt)
 	}
 	return latest, nil
+}
+
+func (r reviewManualStepRecorder) SetIntegrationFlow(flow publication.IntegrationFlow) (taskstate.Finalization, error) {
+	return r.store.SetFinalizationIntegrationFlow(r.repoID, r.taskID, flow)
 }
 
 func (r reviewManualStepRecorder) RecordFinding(finding taskstate.ReviewFinding) (taskstate.ReviewAttempt, error) {

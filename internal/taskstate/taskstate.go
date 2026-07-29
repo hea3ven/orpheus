@@ -15,6 +15,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/pathutil"
+	"github.com/hea3ven/orpheus/internal/publication"
 	orstate "github.com/hea3ven/orpheus/internal/state"
 	"gopkg.in/yaml.v3"
 )
@@ -443,11 +444,14 @@ func (p *ReviewTaskProposal) UnmarshalYAML(value *yaml.Node) error {
 
 // Finalization records factual data from human-side main/solo finalization.
 type Finalization struct {
-	CommittedAt   *time.Time                `yaml:"committed_at,omitempty"`
-	Commit        string                    `yaml:"commit,omitempty"`
-	PendingCommit *FinalizationCommitIntent `yaml:"pending_commit,omitempty"`
-	PushedAt      *time.Time                `yaml:"pushed_at,omitempty"`
-	ClosedAt      *time.Time                `yaml:"closed_at,omitempty"`
+	IntegrationFlow      publication.IntegrationFlow `yaml:"integration_flow,omitempty"`
+	PublicationStartedAt *time.Time                  `yaml:"publication_started_at,omitempty"`
+	CommittedAt          *time.Time                  `yaml:"committed_at,omitempty"`
+	Commit               string                      `yaml:"commit,omitempty"`
+	PendingCommit        *FinalizationCommitIntent   `yaml:"pending_commit,omitempty"`
+	MergeCommit          string                      `yaml:"merge_commit,omitempty"`
+	PushedAt             *time.Time                  `yaml:"pushed_at,omitempty"`
+	ClosedAt             *time.Time                  `yaml:"closed_at,omitempty"`
 }
 
 // FinalizationCommitIntent records the commit Orpheus is about to create so a
@@ -2265,6 +2269,103 @@ func (s Store) MarkReviewAutonomousBudgetExhausted(repoID, taskID string, attemp
 	return state.Reviews[index], nil
 }
 
+// SetFinalizationIntegrationFlow persists the selected integration flow before
+// publication mutates Git or backend state. It permits a manual review choice
+// to change until publication begins, but never after partial publication.
+func (s Store) SetFinalizationIntegrationFlow(repoID, taskID string, flow publication.IntegrationFlow) (Finalization, error) {
+	if err := publication.ValidateIntegrationFlow(flow); err != nil || strings.TrimSpace(string(flow)) == "" {
+		if err != nil {
+			return Finalization{}, fmt.Errorf("set finalization integration flow for task %s/%s: %w", repoID, taskID, err)
+		}
+		return Finalization{}, fmt.Errorf("set finalization integration flow for task %s/%s: integration flow is required", repoID, taskID)
+	}
+	flow = publication.IntegrationFlow(strings.TrimSpace(string(flow)))
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return Finalization{}, err
+	}
+	finalization := ensureFinalization(state.Finalization)
+	if finalization.IntegrationFlow == flow {
+		return finalization, nil
+	}
+	if finalizationHasPublicationMutation(finalization) {
+		// Historical finalizations have no flow field. They are always the
+		// compatible pull-request flow and can be annotated on retry.
+		if finalization.IntegrationFlow == "" && flow == publication.IntegrationFlowPullRequest {
+			finalization.IntegrationFlow = flow
+			state.Finalization = &finalization
+			if err := s.save(state); err != nil {
+				return Finalization{}, err
+			}
+			return finalization, nil
+		}
+		return Finalization{}, fmt.Errorf("set finalization integration flow for task %s/%s: %w; flow is locked as %q", repoID, taskID, ErrFinalizationConflict, finalization.IntegrationFlow)
+	}
+	finalization.IntegrationFlow = flow
+	state.Finalization = &finalization
+	if err := s.save(state); err != nil {
+		return Finalization{}, err
+	}
+	return finalization, nil
+}
+
+// RecordFinalizationMerge records the successful merge of a task branch into
+// the registered default branch before that default branch is pushed.
+func (s Store) RecordFinalizationMerge(repoID, taskID, commit string) (Finalization, error) {
+	commit = strings.TrimSpace(commit)
+	if commit == "" {
+		return Finalization{}, fmt.Errorf("record finalization merge for task %s/%s: merge commit is required", repoID, taskID)
+	}
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return Finalization{}, err
+	}
+	finalization := ensureFinalization(state.Finalization)
+	if finalization.MergeCommit != "" {
+		if finalization.MergeCommit != commit {
+			return Finalization{}, fmt.Errorf("record finalization merge for task %s/%s: %w", repoID, taskID, ErrFinalizationConflict)
+		}
+		return finalization, nil
+	}
+	finalization.MergeCommit = commit
+	state.Finalization = &finalization
+	if err := s.save(state); err != nil {
+		return Finalization{}, err
+	}
+	return finalization, nil
+}
+
+func finalizationHasPublicationMutation(finalization Finalization) bool {
+	return finalization.PublicationStartedAt != nil || finalization.CommittedAt != nil ||
+		strings.TrimSpace(finalization.Commit) != "" || finalization.PendingCommit != nil ||
+		strings.TrimSpace(finalization.MergeCommit) != "" || finalization.PushedAt != nil ||
+		finalization.ClosedAt != nil
+}
+
+// RecordFinalizationPublicationStart records the durable boundary after which
+// the selected integration flow cannot change, before publication mutates Git
+// or backend state.
+func (s Store) RecordFinalizationPublicationStart(repoID, taskID string) (Finalization, error) {
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return Finalization{}, err
+	}
+	finalization := ensureFinalization(state.Finalization)
+	if strings.TrimSpace(string(finalization.IntegrationFlow)) == "" {
+		return Finalization{}, fmt.Errorf("record finalization publication start for task %s/%s: integration flow is required", repoID, taskID)
+	}
+	if finalization.PublicationStartedAt != nil {
+		return finalization, nil
+	}
+	now := s.now().UTC()
+	finalization.PublicationStartedAt = &now
+	state.Finalization = &finalization
+	if err := s.save(state); err != nil {
+		return Finalization{}, err
+	}
+	return finalization, nil
+}
+
 // RecordFinalizationCommitIntent persists the expected parent and message before
 // task finalization creates its publication commit.
 func (s Store) RecordFinalizationCommitIntent(
@@ -3749,6 +3850,11 @@ func validateFinalization(finalization *Finalization) error {
 		return nil
 	}
 
+	finalization.IntegrationFlow = publication.IntegrationFlow(strings.TrimSpace(string(finalization.IntegrationFlow)))
+	if err := publication.ValidateIntegrationFlow(finalization.IntegrationFlow); err != nil {
+		return err
+	}
+	finalization.MergeCommit = strings.TrimSpace(finalization.MergeCommit)
 	commit := strings.TrimSpace(finalization.Commit)
 	if finalization.PendingCommit != nil {
 		if commit != "" {
@@ -3766,6 +3872,9 @@ func validateFinalization(finalization *Finalization) error {
 		return nil
 	}
 	if commit == "" {
+		if finalization.MergeCommit != "" {
+			return errors.New("commit is required when merge_commit is recorded")
+		}
 		if finalization.CommittedAt != nil || finalization.PushedAt != nil || finalization.ClosedAt != nil {
 			return errors.New("commit is required when any finalization timestamp is recorded")
 		}
@@ -3791,7 +3900,9 @@ func ensureFinalization(finalization *Finalization) Finalization {
 		return Finalization{}
 	}
 	clone := *finalization
+	clone.IntegrationFlow = publication.IntegrationFlow(strings.TrimSpace(string(clone.IntegrationFlow)))
 	clone.Commit = strings.TrimSpace(clone.Commit)
+	clone.MergeCommit = strings.TrimSpace(clone.MergeCommit)
 	if clone.PendingCommit != nil {
 		intent := *clone.PendingCommit
 		intent.Parent = strings.TrimSpace(intent.Parent)
