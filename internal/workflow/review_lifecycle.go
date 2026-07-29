@@ -196,13 +196,14 @@ func (c ReviewManualStepContext) TaskID() string { return c.Task.ID }
 
 // ReviewManualStepPrompt contains frontend input facts for a manual review prompt.
 type ReviewManualStepPrompt struct {
-	Source          task.RepositorySource
-	Task            task.Task
-	Review          taskstate.ReviewAttempt
-	Step            review.Step
-	HunkNotes       []review.HunkNote
-	IntegrationFlow publication.IntegrationFlow
-	Recorder        ReviewManualStepRecorder
+	Source            task.RepositorySource
+	Task              task.Task
+	Review            taskstate.ReviewAttempt
+	Step              review.Step
+	HunkNotes         []review.HunkNote
+	IntegrationFlow   publication.IntegrationFlow
+	DestinationBranch string
+	Recorder          ReviewManualStepRecorder
 }
 
 // TaskID returns the resolved backend task id.
@@ -212,6 +213,7 @@ func (p ReviewManualStepPrompt) TaskID() string { return p.Task.ID }
 type ReviewManualStepRecorder interface {
 	LatestReview() (taskstate.ReviewAttempt, error)
 	SetIntegrationFlow(publication.IntegrationFlow) (taskstate.Finalization, error)
+	SetIntegrationDestination(string) (taskstate.Finalization, error)
 	RecordFinding(taskstate.ReviewFinding) (taskstate.ReviewAttempt, error)
 	PromoteAdvisoryFinding(index int) (taskstate.ReviewAttempt, error)
 }
@@ -539,13 +541,18 @@ func (s ReviewLifecycleService) manualStepPrompt(
 		if err != nil {
 			return review.ManualResult{}, err
 		}
+		destination, err := s.effectiveIntegrationDestination(ctx)
+		if err != nil {
+			return review.ManualResult{}, err
+		}
 		return prompt(ReviewManualStepPrompt{
-			Source:          ctx.Source,
-			Task:            ctx.Task,
-			Review:          ctx.Review,
-			Step:            step.Step,
-			HunkNotes:       step.HunkNotes,
-			IntegrationFlow: flow,
+			Source:            ctx.Source,
+			Task:              ctx.Task,
+			Review:            ctx.Review,
+			Step:              step.Step,
+			HunkNotes:         step.HunkNotes,
+			IntegrationFlow:   flow,
+			DestinationBranch: destination,
 			Recorder: reviewManualStepRecorder{
 				store: ctx.store, repoID: ctx.RepoID(), taskID: ctx.TaskID(),
 				attempt: ctx.Review.Attempt, step: step.Step.Name,
@@ -593,6 +600,21 @@ type reviewManualStepRecorder struct {
 	step    string
 }
 
+func (s ReviewLifecycleService) effectiveIntegrationDestination(ctx ReviewAttemptContext) (string, error) {
+	state, err := s.RunStore.Load(ctx.RepoID(), ctx.TaskID())
+	if err != nil {
+		return "", fmt.Errorf("load task state for integration destination: %w", err)
+	}
+	if destination := strings.TrimSpace(taskstate.FinalizationFacts(state).DestinationBranch); destination != "" {
+		return destination, nil
+	}
+	destination := strings.TrimSpace(ctx.Source.Repository.DefaultBranch)
+	if destination == "" {
+		return "", fmt.Errorf("repository %s has no registered default branch", ctx.RepoID())
+	}
+	return destination, nil
+}
+
 func (s ReviewLifecycleService) effectiveIntegrationFlow(ctx ReviewAttemptContext) (publication.IntegrationFlow, error) {
 	state, err := s.RunStore.Load(ctx.RepoID(), ctx.TaskID())
 	if err != nil {
@@ -622,6 +644,10 @@ func (r reviewManualStepRecorder) LatestReview() (taskstate.ReviewAttempt, error
 
 func (r reviewManualStepRecorder) SetIntegrationFlow(flow publication.IntegrationFlow) (taskstate.Finalization, error) {
 	return r.store.SetFinalizationIntegrationFlow(r.repoID, r.taskID, flow)
+}
+
+func (r reviewManualStepRecorder) SetIntegrationDestination(destination string) (taskstate.Finalization, error) {
+	return r.store.SetFinalizationDestination(r.repoID, r.taskID, destination)
 }
 
 func (r reviewManualStepRecorder) RecordFinding(finding taskstate.ReviewFinding) (taskstate.ReviewAttempt, error) {

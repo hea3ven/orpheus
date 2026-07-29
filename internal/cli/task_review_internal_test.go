@@ -19,8 +19,9 @@ import (
 )
 
 type fakeManualReviewRecorder struct {
-	latest taskstate.ReviewAttempt
-	flows  []publication.IntegrationFlow
+	latest       taskstate.ReviewAttempt
+	flows        []publication.IntegrationFlow
+	destinations []string
 }
 
 func (r *fakeManualReviewRecorder) LatestReview() (taskstate.ReviewAttempt, error) {
@@ -30,6 +31,11 @@ func (r *fakeManualReviewRecorder) LatestReview() (taskstate.ReviewAttempt, erro
 func (r *fakeManualReviewRecorder) SetIntegrationFlow(flow publication.IntegrationFlow) (taskstate.Finalization, error) {
 	r.flows = append(r.flows, flow)
 	return taskstate.Finalization{IntegrationFlow: flow}, nil
+}
+
+func (r *fakeManualReviewRecorder) SetIntegrationDestination(destination string) (taskstate.Finalization, error) {
+	r.destinations = append(r.destinations, destination)
+	return taskstate.Finalization{DestinationBranch: destination}, nil
 }
 
 func (r *fakeManualReviewRecorder) RecordFinding(taskstate.ReviewFinding) (taskstate.ReviewAttempt, error) {
@@ -46,12 +52,13 @@ func TestManualReviewKeepsSelectedIntegrationFlowWithinPromptLoop(t *testing.T) 
 	command.SetErr(stderr)
 	recorder := &fakeManualReviewRecorder{latest: taskstate.ReviewAttempt{Attempt: 1}}
 	session := manualReviewSession{
-		command:         command,
-		recorder:        recorder,
-		taskID:          "op-1",
-		integrationFlow: publication.IntegrationFlowPullRequest,
+		command:           command,
+		recorder:          recorder,
+		taskID:            "op-1",
+		integrationFlow:   publication.IntegrationFlowPullRequest,
+		destinationBranch: "main",
 	}
-	reader := bufio.NewReader(bytes.NewBufferString("d\n\n"))
+	reader := bufio.NewReader(bytes.NewBufferString("d\nrelease/next\n\n\n"))
 
 	if _, done, err := session.handleManualReviewAction("integration", reader, manualReviewActions{}); err != nil || done {
 		t.Fatalf("select direct merge = done %t, error %v", done, err)
@@ -62,8 +69,14 @@ func TestManualReviewKeepsSelectedIntegrationFlowWithinPromptLoop(t *testing.T) 
 	if got, want := recorder.flows, []publication.IntegrationFlow{publication.IntegrationFlowDirectMerge, publication.IntegrationFlowDirectMerge}; !slices.Equal(got, want) {
 		t.Fatalf("recorded flows = %#v, want %#v", got, want)
 	}
+	if got, want := recorder.destinations, []string{"release/next"}; !slices.Equal(got, want) {
+		t.Fatalf("recorded destinations = %#v, want %#v", got, want)
+	}
 	if got := stderr.String(); !strings.Contains(got, "Effective publication integration flow: pull-request") || !strings.Contains(got, "Effective publication integration flow: direct-merge") {
 		t.Fatalf("prompt output = %q, want initial and selected flows", got)
+	}
+	if !strings.Contains(stderr.String(), "Effective publication destination: main") || !strings.Contains(stderr.String(), "Effective publication destination: release/next") {
+		t.Fatalf("prompt output = %q, want initial and selected destinations", stderr.String())
 	}
 }
 

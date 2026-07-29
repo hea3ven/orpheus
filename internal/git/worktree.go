@@ -1116,8 +1116,8 @@ func validateBranchRef(ctx context.Context, dir string, label string, branch str
 	if branch == "" {
 		return fmt.Errorf("%s is required", label)
 	}
-	if strings.HasPrefix(branch, "-") {
-		return fmt.Errorf("%s %q is not a valid Git branch name", label, branch)
+	if strings.HasPrefix(branch, "-") || isPseudoRevision(branch) {
+		return fmt.Errorf("%s %q is not a safe Git branch name", label, branch)
 	}
 
 	ref := "refs/heads/" + branch
@@ -1126,6 +1126,15 @@ func validateBranchRef(ctx context.Context, dir string, label string, branch str
 		return fmt.Errorf("%s %q is not a valid Git branch name: %w%s", label, branch, err, gitOutputSuffix(output))
 	}
 	return nil
+}
+
+func isPseudoRevision(branch string) bool {
+	switch branch {
+	case "@", "HEAD", "ORIG_HEAD", "FETCH_HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "AUTO_MERGE":
+		return true
+	default:
+		return false
+	}
 }
 
 func requireOriginRemote(ctx context.Context, repoRoot string) error {
@@ -1336,7 +1345,7 @@ func checkoutDefaultBranch(ctx context.Context, repoRoot string, defaultBranch s
 	}
 
 	if branchExists {
-		output, err := runGitContext(ctx, repoRoot, "checkout", defaultBranch)
+		output, err := runGitContext(ctx, repoRoot, "checkout", "--no-guess", defaultBranch)
 		if err != nil {
 			return fmt.Errorf("checkout default branch %q: %w%s", defaultBranch, err, gitOutputSuffix(output))
 		}
@@ -1901,7 +1910,11 @@ func PushDefaultBranch(ctx context.Context, dir string, branch string) error {
 		return errors.New("default branch is required")
 	}
 
-	output, err := runGitContext(ctx, dir, "push", "origin", branch)
+	if err := validateBranchRef(ctx, dir, "default branch", branch); err != nil {
+		return err
+	}
+	refspec := "refs/heads/" + branch + ":refs/heads/" + branch
+	output, err := runGitContext(ctx, dir, "push", "origin", refspec)
 	if err != nil {
 		return fmt.Errorf("push default branch %q to origin: %w%s", branch, err, gitOutputSuffix(output))
 	}
@@ -1917,8 +1930,12 @@ func PushTaskBranch(ctx context.Context, dir string, branch string) error {
 	if branch == "" {
 		return errors.New("task branch is required")
 	}
+	if err := validateBranchRef(ctx, dir, "task branch", branch); err != nil {
+		return err
+	}
 
-	output, err := runGitContext(ctx, dir, "push", "-u", "origin", branch)
+	refspec := "refs/heads/" + branch + ":refs/heads/" + branch
+	output, err := runGitContext(ctx, dir, "push", "-u", "origin", refspec)
 	if err != nil {
 		return fmt.Errorf("push task branch %q to origin: %w%s", branch, err, gitOutputSuffix(output))
 	}
