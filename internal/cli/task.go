@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -42,6 +43,21 @@ const taskStatsCostEstimateDisclaimer = "Estimated cost uses harness-reported es
 	"otherwise Orpheus may calculate API-equivalent estimates from recorded token usage and public pricing metadata. " +
 	"Costs may not match subscription billing or vendor invoices."
 
+func readFileOrStdin(path string) (string, error) {
+	if path == "-" {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
 func newTaskCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "task",
@@ -62,6 +78,7 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 		newTaskReviewCommand(opts),
 		newTaskDoneCommand(opts),
 		newTaskSyncCommand(opts),
+		newTaskEditCommand(opts),
 	)
 	return cmd
 }
@@ -284,6 +301,124 @@ func newTaskSyncCommand(opts *rootOptions) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "sync all registered repositories at PR boundaries")
 	return cmd
+}
+
+func newTaskEditCommand(opts *rootOptions) *cobra.Command {
+	var (
+		title              string
+		description        string
+		design             string
+		acceptanceCriteria string
+		externalRef        string
+		parentID           string
+		addBlockingIDs     []string
+		removeBlockingIDs  []string
+		titleFile          string
+		descriptionFile    string
+		designFile         string
+		acceptanceFile     string
+		externalRefFile    string
+		parentIDFile       string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "edit <task-id>",
+		Short: "Edit an active task or epic plan",
+		Long:  taskEditLongHelp(),
+		Args:  cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			return runTaskEdit(command, opts, args[0], taskEditOptions{
+				title:              title,
+				description:        description,
+				design:             design,
+				acceptanceCriteria: acceptanceCriteria,
+				externalRef:        externalRef,
+				parentID:           parentID,
+				addBlockingIDs:     addBlockingIDs,
+				removeBlockingIDs:  removeBlockingIDs,
+				titleFile:          titleFile,
+				descriptionFile:    descriptionFile,
+				designFile:         designFile,
+				acceptanceFile:     acceptanceFile,
+				externalRefFile:    externalRefFile,
+				parentIDFile:       parentIDFile,
+			})
+		},
+	}
+
+	addTaskEditFlags(cmd, &title, &description, &design, &acceptanceCriteria,
+		&externalRef, &parentID, &addBlockingIDs, &removeBlockingIDs,
+		&titleFile, &descriptionFile, &designFile, &acceptanceFile,
+		&externalRefFile, &parentIDFile)
+
+	return cmd
+}
+
+func taskEditLongHelp() string {
+	return "Edit an active task or epic plan through Orpheus.\n\n" +
+		"Fields not specified remain unchanged. Title, description, and acceptance criteria\n" +
+		"must remain non-empty after the edit.\n\n" +
+		"Relationship operations:\n" +
+		"  --parent <id>          Set parent epic (empty string clears parent)\n" +
+		"  --add-block <id>       Add a blocking dependency (repeatable)\n" +
+		"  --remove-block <id>    Remove a blocking dependency (repeatable)\n\n" +
+		"Long-form fields support file input via --<field>-file (- for stdin).\n" +
+		"If both a flag and a file flag are provided for the same field, the file takes precedence.\n\n" +
+		"Orpheus rejects edits when:\n" +
+		"  - The target item is closed\n" +
+		"  - A parent is not an active epic in the same repository\n" +
+		"  - A dependency is outside the repository\n" +
+		"  - A dependency is not a task or epic\n" +
+		"  - The resulting graph contains a cycle\n" +
+		"  - The same dependency is requested for both addition and removal\n\n" +
+		"Retry-safe no-ops such as adding an existing dependency, removing an absent\n" +
+		"dependency, or setting the existing parent succeed without duplicating relationships."
+}
+
+func addTaskEditFlags(cmd *cobra.Command,
+	title, description, design, acceptanceCriteria, externalRef, parentID *string,
+	addBlockingIDs, removeBlockingIDs *[]string,
+	titleFile, descriptionFile, designFile, acceptanceFile, externalRefFile, parentIDFile *string,
+) {
+	cmd.Flags().StringVar(title, "title", "", "new title")
+	cmd.Flags().StringVar(description, "description", "", "new description")
+	cmd.Flags().StringVar(design, "design", "", "new design notes")
+	cmd.Flags().StringVar(acceptanceCriteria, "acceptance", "", "new acceptance criteria")
+	cmd.Flags().StringVar(externalRef, "external-ref", "", "new external reference")
+	cmd.Flags().StringVar(parentID, "parent", "", "new parent epic ID (empty to clear)")
+	cmd.Flags().StringArrayVar(addBlockingIDs, "add-block", nil, "add blocking dependency (repeatable)")
+	cmd.Flags().StringArrayVar(removeBlockingIDs, "remove-block", nil, "remove blocking dependency (repeatable)")
+
+	cmd.Flags().StringVar(titleFile, "title-file", "", "read title from file (use - for stdin)")
+	cmd.Flags().StringVar(descriptionFile, "description-file", "", "read description from file (use - for stdin)")
+	cmd.Flags().StringVar(designFile, "design-file", "", "read design from file (use - for stdin)")
+	cmd.Flags().StringVar(acceptanceFile, "acceptance-file", "", "read acceptance criteria from file (use - for stdin)")
+	cmd.Flags().StringVar(externalRefFile, "external-ref-file", "", "read external reference from file (use - for stdin)")
+	cmd.Flags().StringVar(parentIDFile, "parent-file", "", "read parent epic ID from file (use - for stdin)")
+}
+
+type taskEditOptions struct {
+	title              string
+	description        string
+	design             string
+	acceptanceCriteria string
+	externalRef        string
+	parentID           string
+	addBlockingIDs     []string
+	removeBlockingIDs  []string
+	titleFile          string
+	descriptionFile    string
+	designFile         string
+	acceptanceFile     string
+	externalRefFile    string
+	parentIDFile       string
+
+	titleSet              bool
+	descriptionSet        bool
+	designSet             bool
+	acceptanceCriteriaSet bool
+	externalRefSet        bool
+	parentIDSet           bool
 }
 
 func addTaskDetailFlags(cmd *cobra.Command, detailed *bool) {
@@ -888,7 +1023,7 @@ func validateTaskRunExternalRef(resolved taskmodel.ResolvedTaskSource, taskItem 
 		return nil
 	}
 	return fmt.Errorf(
-		"task run %s: publication title template requires a task external reference; set it with `bd update %s --external-ref <reference>`",
+		"task run %s: publication title template requires a task external reference; set it with `orpheus task edit %s --external-ref <reference>`",
 		resolved.TaskID,
 		resolved.TaskID,
 	)
@@ -2632,6 +2767,16 @@ func renderTaskDoneResult(command *cobra.Command, finalized workflow.Finalizatio
 	return err
 }
 
+func renderTaskEditResult(output io.Writer, updated taskmodel.Task, repo registry.Repo) error {
+	_, err := fmt.Fprintf(
+		output,
+		"Updated %s: %s\n",
+		updated.ID,
+		updated.Title,
+	)
+	return err
+}
+
 func confirmRunningCompletionFinalization(
 	command *cobra.Command,
 	confirmation workflow.RunningCompletionConfirmation,
@@ -2785,6 +2930,166 @@ func runTaskSyncAll(command *cobra.Command, opts *rootOptions) error {
 		return taskSyncAllFailureError{failures: result.Failures}
 	}
 	return nil
+}
+
+func runTaskEdit(command *cobra.Command, opts *rootOptions, taskID string, editOpts taskEditOptions) error {
+	logger := taskEditLogger(opts)
+	logger.DebugContext(command.Context(), "loading registered repos for task edit")
+
+	deps, err := opts.invocation(command)
+	if err != nil {
+		return err
+	}
+	resolvedCtx, err := resolveTaskContextWithScope(command, deps, "task edit", taskID, false)
+	if err != nil {
+		return err
+	}
+	resolved := resolvedCtx.Resolved
+	repo := resolvedCtx.RegisteredRepo
+
+	// Track which flags were explicitly provided
+	editOpts.titleSet = command.Flags().Changed("title")
+	editOpts.descriptionSet = command.Flags().Changed("description")
+	editOpts.designSet = command.Flags().Changed("design")
+	editOpts.acceptanceCriteriaSet = command.Flags().Changed("acceptance")
+	editOpts.externalRefSet = command.Flags().Changed("external-ref")
+	editOpts.parentIDSet = command.Flags().Changed("parent")
+
+	editOpts, err = loadTaskEditFileInputs(editOpts, taskID)
+	if err != nil {
+		return err
+	}
+
+	updateOpts := buildTaskEditUpdateOptions(resolved.TaskID, editOpts)
+
+	taskCtx, err := loadTaskContextFromInvocation(deps)
+	if err != nil {
+		return err
+	}
+
+	service := taskEditUpdateService(taskCtx, logger)
+
+	updated, err := service.Update(command.Context(), resolved.Source, updateOpts)
+	if err != nil {
+		return fmt.Errorf("task edit %s: %w", taskID, err)
+	}
+
+	logger.DebugContext(
+		command.Context(),
+		"updated task",
+		slog.String("repo_id", resolved.Source.Repository.ID),
+		slog.String("task_id", updated.ID),
+		slog.String("title", updated.Title),
+	)
+
+	return renderTaskEditResult(command.OutOrStdout(), updated, repo)
+}
+
+func taskEditLogger(opts *rootOptions) *slog.Logger {
+	return opts.log().With(
+		slog.String("component", "cli"),
+		slog.String("operation", "task_edit"),
+	)
+}
+
+func loadTaskEditFileInputs(editOpts taskEditOptions, taskID string) (taskEditOptions, error) {
+	if editOpts.titleFile != "" {
+		content, err := readFileOrStdin(editOpts.titleFile)
+		if err != nil {
+			return editOpts, fmt.Errorf("task edit %s: read title file: %w", taskID, err)
+		}
+		editOpts.title = strings.TrimSpace(content)
+		editOpts.titleSet = true
+	}
+	if editOpts.descriptionFile != "" {
+		content, err := readFileOrStdin(editOpts.descriptionFile)
+		if err != nil {
+			return editOpts, fmt.Errorf("task edit %s: read description file: %w", taskID, err)
+		}
+		editOpts.description = content
+		editOpts.descriptionSet = true
+	}
+	if editOpts.designFile != "" {
+		content, err := readFileOrStdin(editOpts.designFile)
+		if err != nil {
+			return editOpts, fmt.Errorf("task edit %s: read design file: %w", taskID, err)
+		}
+		editOpts.design = content
+		editOpts.designSet = true
+	}
+	if editOpts.acceptanceFile != "" {
+		content, err := readFileOrStdin(editOpts.acceptanceFile)
+		if err != nil {
+			return editOpts, fmt.Errorf("task edit %s: read acceptance file: %w", taskID, err)
+		}
+		editOpts.acceptanceCriteria = content
+		editOpts.acceptanceCriteriaSet = true
+	}
+	if editOpts.externalRefFile != "" {
+		content, err := readFileOrStdin(editOpts.externalRefFile)
+		if err != nil {
+			return editOpts, fmt.Errorf("task edit %s: read external ref file: %w", taskID, err)
+		}
+		editOpts.externalRef = strings.TrimSpace(content)
+		editOpts.externalRefSet = true
+	}
+	if editOpts.parentIDFile != "" {
+		content, err := readFileOrStdin(editOpts.parentIDFile)
+		if err != nil {
+			return editOpts, fmt.Errorf("task edit %s: read parent file: %w", taskID, err)
+		}
+		editOpts.parentID = strings.TrimSpace(content)
+		editOpts.parentIDSet = true
+	}
+	return editOpts, nil
+}
+
+func buildTaskEditUpdateOptions(taskID string, editOpts taskEditOptions) taskmodel.UpdateOptions {
+	var titlePtr *string
+	if editOpts.title != "" || editOpts.titleSet {
+		titlePtr = &editOpts.title
+	}
+	var descriptionPtr *string
+	if editOpts.description != "" || editOpts.descriptionSet {
+		descriptionPtr = &editOpts.description
+	}
+	var designPtr *string
+	if editOpts.design != "" || editOpts.designSet {
+		designPtr = &editOpts.design
+	}
+	var acceptancePtr *string
+	if editOpts.acceptanceCriteria != "" || editOpts.acceptanceCriteriaSet {
+		acceptancePtr = &editOpts.acceptanceCriteria
+	}
+	var externalRefPtr *string
+	if editOpts.externalRef != "" || editOpts.externalRefSet {
+		externalRefPtr = &editOpts.externalRef
+	}
+	var parentIDPtr *string
+	if editOpts.parentID != "" || editOpts.parentIDSet {
+		parentIDPtr = &editOpts.parentID
+	}
+
+	return taskmodel.UpdateOptions{
+		ID:                 taskID,
+		Title:              titlePtr,
+		Description:        descriptionPtr,
+		Design:             designPtr,
+		AcceptanceCriteria: acceptancePtr,
+		ExternalRef:        externalRefPtr,
+		ParentID:           parentIDPtr,
+		AddBlockingIDs:     editOpts.addBlockingIDs,
+		RemoveBlockingIDs:  editOpts.removeBlockingIDs,
+	}
+}
+
+func taskEditUpdateService(taskCtx taskContext, logger *slog.Logger) taskmodel.UpdateService {
+	return taskmodel.UpdateService{
+		Sources: taskCtx.Sources,
+		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.UpdateBackend, error) {
+			return newDiagnosticBeadsTaskBackend(source, logger)
+		},
+	}
 }
 
 func resolveTaskRunAgentCommand(paths state.Paths, agentName string, sessionName string) (string, agent.CommandSnapshot, error) {

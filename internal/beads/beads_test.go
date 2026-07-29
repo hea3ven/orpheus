@@ -487,6 +487,108 @@ func TestTaskBackendGetParsesShowJSON(t *testing.T) {
 	}
 }
 
+func TestTaskBackendUpdateDoesNotRemoveNonBlockingDependency(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-current"},
+			result:   beads.Result{Stdout: `[{"id":"op-current","title":"Current","description":"Description","acceptance_criteria":"Acceptance","status":"open","issue_type":"task","dependencies":[{"id":"op-related","dependency_type":"related"}]}]`},
+		},
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-current"},
+			result:   beads.Result{Stdout: `[{"id":"op-current","title":"Current","description":"Description","acceptance_criteria":"Acceptance","status":"open","issue_type":"task","dependencies":[{"id":"op-related","dependency_type":"related"}]}]`},
+		},
+	}}
+
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+	updated, err := backend.Update(context.Background(), task.UpdateOptions{
+		ID: "op-current", RemoveBlockingIDs: []string{"op-related"},
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if updated.ID != "op-current" {
+		t.Fatalf("updated task = %#v, want op-current", updated)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls; expected no dep remove command", len(runner.calls))
+	}
+}
+
+func TestTaskBackendUpdateRejectsNonBlockingDependencyBeforeContentMutation(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{{
+		wantDir:  dir,
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-current"},
+		result:   beads.Result{Stdout: `[{"id":"op-current","title":"Current","description":"Description","acceptance_criteria":"Acceptance","status":"open","issue_type":"task","dependencies":[{"id":"op-related","dependency_type":"related"}]}]`},
+	}}}
+
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+	title := "Updated title"
+	_, err = backend.Update(context.Background(), task.UpdateOptions{
+		ID:             "op-current",
+		Title:          &title,
+		AddBlockingIDs: []string{"op-related"},
+	})
+	if err == nil || !strings.Contains(err.Error(), `non-blocking type "related"`) {
+		t.Fatalf("Update() error = %v, want non-blocking relationship rejection", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls; content update must not run", len(runner.calls))
+	}
+}
+
+func TestTaskBackendUpdateUsesOrpheusBlockingEdgeAcrossTypes(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-task"},
+			result:   beads.Result{Stdout: `[{"id":"op-task","title":"Task","description":"Description","acceptance_criteria":"Acceptance","status":"open","issue_type":"task"}]`},
+		},
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-epic"},
+			result:   beads.Result{Stdout: `[{"id":"op-epic","title":"Epic","description":"Description","acceptance_criteria":"Acceptance","status":"open","issue_type":"epic"}]`},
+		},
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--sandbox", "dep", "add", "op-task", "op-epic", "--type", "orpheus-blocks"},
+			result:   beads.Result{Stdout: `{}`},
+		},
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-task"},
+			result:   beads.Result{Stdout: `[{"id":"op-task","title":"Task","description":"Description","acceptance_criteria":"Acceptance","status":"open","issue_type":"task","dependencies":[{"id":"op-epic","dependency_type":"orpheus-blocks"}]}]`},
+		},
+	}}
+
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+	updated, err := backend.Update(context.Background(), task.UpdateOptions{
+		ID: "op-task", AddBlockingIDs: []string{"op-epic"},
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if want := []string{"op-epic"}; !reflect.DeepEqual(updated.Relations.DependencyIDs, want) {
+		t.Fatalf("dependencies = %#v, want %#v", updated.Relations.DependencyIDs, want)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
 func TestTaskBackendGetReturnsClosedOrNonTaskItemsForShowScope(t *testing.T) {
 	dir := t.TempDir()
 	runner := &fakeRunner{calls: []fakeCall{

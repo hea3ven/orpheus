@@ -10,7 +10,7 @@ Inspect the current policy first:
 orpheus repo config get my-work-repo
 ```
 
-For Jira-style titles, set capitalized summary guidance and a title template that includes the task's Beads `external_ref`:
+For Jira-style titles, set capitalized summary guidance and a title template that includes the task's external reference:
 
 ```bash
 orpheus repo config set my-work-repo summary-style capitalized
@@ -23,12 +23,12 @@ orpheus repo config set my-work-repo title-template '[{{external_ref}}] {{summar
 orpheus repo config set my-work-repo summary-guidance 'Write a capitalized release-note summary, 80 characters or fewer.'
 ```
 
-The title template supports `{{summary}}` and `{{external_ref}}` only. `{{external_ref}}` is inserted from Beads verbatim after whitespace normalization; Orpheus does not contact Jira or validate a Jira-key format.
+The title template supports `{{summary}}` and `{{external_ref}}` only. `{{external_ref}}` is inserted verbatim after whitespace normalization; Orpheus does not contact Jira or validate a Jira-key format.
 
-Set the Beads reference before dispatching the task. Run `bd` in the repository's configured Beads directory (shown by `orpheus repo beads-dir my-work-repo`):
+Set the task reference before dispatching:
 
 ```bash
-bd update op-123 --external-ref TREX-1234
+orpheus task edit op-123 --external-ref TREX-1234
 ```
 
 Then run and publish normally:
@@ -68,10 +68,10 @@ orpheus repo config set my-work-repo title-template ''
 If the configured title template contains `{{external_ref}}`, Orpheus excludes an open task with no usable external reference from `task ready` and rejects `task run` before it creates a worktree or starts an agent. The error provides the recovery command:
 
 ```text
-bd update op-123 --external-ref <reference>
+orpheus task edit op-123 --external-ref <reference>
 ```
 
-If the reference is removed after an agent has completed work, `task done` also fails before it creates a commit, pushes, or calls the pull-request provider. Restore the task's reference with the same `bd update` command, then rerun `task done`; the reviewed changes and completion handoff remain in place.
+If the reference is removed after an agent has completed work, `task done` also fails before it creates a commit, pushes, or calls the pull-request provider. Restore the task's reference with the same `orpheus task edit` command, then rerun `task done`; the reviewed changes and completion handoff remain in place.
 
 ## Validation coverage
 

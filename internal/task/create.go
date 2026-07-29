@@ -255,6 +255,58 @@ func normalizeIDs(raw []string) []string {
 	return ids
 }
 
+// trimStringPointer preserves nil while normalizing identifier and single-line
+// fields supplied by the command line.
+func trimStringPointer(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*s)
+	return &trimmed
+}
+
+// copyStringPointer preserves long-form planning content verbatim, including
+// meaningful Markdown indentation and trailing newlines.
+func copyStringPointer(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	value := *s
+	return &value
+}
+
+// NormalizeUpdateOptions applies the backend-neutral update validation policy.
+func NormalizeUpdateOptions(opts UpdateOptions) (UpdateOptions, error) {
+	normalized := UpdateOptions{
+		ID:                 strings.TrimSpace(opts.ID),
+		Title:              trimStringPointer(opts.Title),
+		Description:        copyStringPointer(opts.Description),
+		Design:             copyStringPointer(opts.Design),
+		AcceptanceCriteria: copyStringPointer(opts.AcceptanceCriteria),
+		ExternalRef:        trimStringPointer(opts.ExternalRef),
+		ParentID:           trimStringPointer(opts.ParentID),
+		AddBlockingIDs:     normalizeIDs(opts.AddBlockingIDs),
+		RemoveBlockingIDs:  normalizeIDs(opts.RemoveBlockingIDs),
+	}
+
+	if normalized.ID == "" {
+		return UpdateOptions{}, errors.New("task id is required")
+	}
+
+	// Check for conflicting add/remove of the same dependency
+	addSet := make(map[string]struct{}, len(normalized.AddBlockingIDs))
+	for _, id := range normalized.AddBlockingIDs {
+		addSet[id] = struct{}{}
+	}
+	for _, id := range normalized.RemoveBlockingIDs {
+		if _, exists := addSet[id]; exists {
+			return UpdateOptions{}, fmt.Errorf("dependency %q requested for both addition and removal", id)
+		}
+	}
+
+	return normalized, nil
+}
+
 func pathIsInside(path string, root string) (bool, error) {
 	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
 	if err != nil {

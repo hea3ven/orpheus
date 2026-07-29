@@ -14,6 +14,8 @@ import (
 	"github.com/hea3ven/orpheus/internal/task"
 )
 
+const crossTypeBlockingDependencyType = "orpheus-blocks"
+
 var (
 	_ task.ReadBackend      = TaskBackend{}
 	_ task.DispatchMutator  = TaskBackend{}
@@ -21,6 +23,7 @@ var (
 	_ task.EpicStartMutator = TaskBackend{}
 	_ task.CloseMutator     = TaskBackend{}
 	_ task.CreateMutator    = TaskBackend{}
+	_ task.UpdateMutator    = TaskBackend{}
 )
 
 // TaskBackend reads task items from one explicit Beads workspace.
@@ -64,35 +67,45 @@ func NewTaskBackendWithRunner(dir string, runner Runner) (TaskBackend, error) {
 
 // Get fetches one Beads item by id.
 func (b TaskBackend) Get(ctx context.Context, id string) (task.Task, error) {
+	rawTask, err := b.getRawTask(ctx, id)
+	if err != nil {
+		return task.Task{}, err
+	}
+
+	taskItem, err := rawTask.toTask()
+	if err != nil {
+		return task.Task{}, fmt.Errorf("get Beads task %q in %q: parse bd show JSON: %w", rawTask.ID, b.dir, err)
+	}
+	return taskItem, nil
+}
+
+// getRawTask reads one Beads item while retaining concrete relationship types
+// that are intentionally not exposed by task.Task.
+func (b TaskBackend) getRawTask(ctx context.Context, id string) (bdTask, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return task.Task{}, fmt.Errorf("get Beads task in %q: task id is required", b.dir)
+		return bdTask{}, fmt.Errorf("get Beads task in %q: task id is required", b.dir)
 	}
 
 	result, err := b.runWithAttrs(ctx, "get", []slog.Attr{slog.String("task_id", id)}, "show", "--id", id)
 	if err != nil {
 		if isNotFoundResult(result) {
-			return task.Task{}, fmt.Errorf("get Beads task %q in %q: %w%s", id, b.dir, task.ErrNotFound, formattedOutput(result))
+			return bdTask{}, fmt.Errorf("get Beads task %q in %q: %w%s", id, b.dir, task.ErrNotFound, formattedOutput(result))
 		}
-		return task.Task{}, err
+		return bdTask{}, err
 	}
 
-	tasks, err := parseTaskArray(result.Stdout)
+	rawTasks, err := parseRawTaskArray(result.Stdout)
 	if err != nil {
-		return task.Task{}, fmt.Errorf("get Beads task %q in %q: parse bd show JSON: %w%s", id, b.dir, err, formattedOutput(result))
+		return bdTask{}, fmt.Errorf("get Beads task %q in %q: parse bd show JSON: %w%s", id, b.dir, err, formattedOutput(result))
 	}
-	if len(tasks) == 0 {
-		return task.Task{}, fmt.Errorf("get Beads task %q in %q: %w", id, b.dir, task.ErrNotFound)
-	}
-
-	for _, taskItem := range tasks {
-		if taskItem.ID != id {
-			continue
+	for _, rawTask := range rawTasks {
+		if rawTask.ID == id {
+			return rawTask, nil
 		}
-		return taskItem, nil
 	}
 
-	return task.Task{}, fmt.Errorf("get Beads task %q in %q: %w", id, b.dir, task.ErrNotFound)
+	return bdTask{}, fmt.Errorf("get Beads task %q in %q: %w", id, b.dir, task.ErrNotFound)
 }
 
 // List lists visible Beads items, including closed items and non-task issue types.
@@ -324,6 +337,215 @@ func (b TaskBackend) Close(ctx context.Context, id string) error {
 	return nil
 }
 
+// Update updates a Beads task or epic with new content and relationships.
+func (b TaskBackend) Update(ctx context.Context, opts task.UpdateOptions) (task.Task, error) {
+	updateOpts, err := task.NormalizeUpdateOptions(opts)
+	if err != nil {
+		return task.Task{}, fmt.Errorf("update Beads task in %q: %w", b.dir, err)
+	}
+
+	id := updateOpts.ID
+	rawCurrent, err := b.getRawTask(ctx, id)
+	if err != nil {
+		return task.Task{}, fmt.Errorf("update Beads task %q in %q: inspect task: %w", id, b.dir, err)
+	}
+	current, err := rawCurrent.toTask()
+	if err != nil {
+		return task.Task{}, fmt.Errorf("update Beads task %q in %q: parse current task: %w", id, b.dir, err)
+	}
+	if current.Status == task.StatusClosed {
+		return task.Task{}, task.MutationConflictError{TaskID: id, Reason: "task is closed"}
+	}
+	if err := preflightBlockingDependencyAdditions(rawCurrent, updateOpts.AddBlockingIDs); err != nil {
+		return task.Task{}, fmt.Errorf("update Beads task %q in %q: %w", id, b.dir, err)
+	}
+
+	if err := b.updateContentFields(ctx, id, updateOpts); err != nil {
+		return task.Task{}, err
+	}
+
+	if err := b.updateParent(ctx, id, updateOpts); err != nil {
+		return task.Task{}, err
+	}
+
+	if err := b.addBlockingDependencies(ctx, current, updateOpts.AddBlockingIDs); err != nil {
+		return task.Task{}, err
+	}
+
+	// bd dep remove removes a relationship by pair without a type selector.
+	// Limit it to blocking edges that were present when this update began so a
+	// retry-safe absent removal cannot delete an unrelated relationship.
+	removeIDs := existingBlockingDependencyIDs(current, updateOpts.RemoveBlockingIDs)
+	if err := b.removeBlockingDependencies(ctx, id, removeIDs); err != nil {
+		return task.Task{}, err
+	}
+
+	updated, err := b.Get(ctx, id)
+	if err != nil {
+		return task.Task{}, fmt.Errorf("update Beads task %q in %q: fetch updated task: %w", id, b.dir, err)
+	}
+
+	return updated, nil
+}
+
+func (b TaskBackend) updateContentFields(ctx context.Context, id string, opts task.UpdateOptions) error {
+	// Skip content update when no content fields are specified
+	hasContentFields := opts.Title != nil || opts.Description != nil || opts.Design != nil ||
+		opts.AcceptanceCriteria != nil || opts.ExternalRef != nil
+	if !hasContentFields {
+		return nil
+	}
+
+	args := []string{"update", id}
+
+	if opts.Title != nil {
+		args = append(args, "--title", *opts.Title)
+	}
+	if opts.Description != nil {
+		args = append(args, "--description", *opts.Description)
+	}
+	if opts.Design != nil {
+		args = append(args, "--design", *opts.Design)
+	}
+	if opts.AcceptanceCriteria != nil {
+		args = append(args, "--acceptance", *opts.AcceptanceCriteria)
+	}
+	if opts.ExternalRef != nil {
+		args = append(args, "--external-ref", *opts.ExternalRef)
+	}
+
+	result, err := b.runWriteWithAttrs(
+		ctx,
+		"update content",
+		[]slog.Attr{slog.String("task_id", id)},
+		args...,
+	)
+	if err != nil {
+		if isNotFoundResult(result) {
+			return fmt.Errorf("update Beads task %q in %q: %w%s", id, b.dir, task.ErrNotFound, formattedOutput(result))
+		}
+		return err
+	}
+	return nil
+}
+
+func (b TaskBackend) updateParent(ctx context.Context, id string, opts task.UpdateOptions) error {
+	if opts.ParentID == nil {
+		return nil
+	}
+	parentID := strings.TrimSpace(*opts.ParentID)
+	var args []string
+	if parentID == "" {
+		// Clear parent
+		args = []string{"update", id, "--parent", ""}
+	} else {
+		args = []string{"update", id, "--parent", parentID}
+	}
+
+	result, err := b.runWriteWithAttrs(
+		ctx,
+		"update parent",
+		[]slog.Attr{slog.String("task_id", id)},
+		args...,
+	)
+	if err != nil {
+		if isNotFoundResult(result) {
+			return fmt.Errorf("update Beads task %q in %q: %w%s", id, b.dir, task.ErrNotFound, formattedOutput(result))
+		}
+		return err
+	}
+	return nil
+}
+
+// preflightBlockingDependencyAdditions rejects additions that Beads cannot
+// perform because the item pair is already occupied by a different relation
+// type. This must run before any write, since Beads has no atomic multi-field
+// update operation and task.Task intentionally hides non-blocking relations.
+func preflightBlockingDependencyAdditions(current bdTask, depIDs []string) error {
+	for _, depID := range depIDs {
+		for _, relation := range current.Dependencies {
+			if relation.dependencyID() != depID || isBlockingDependencyType(relation.relationType()) {
+				continue
+			}
+			return fmt.Errorf("cannot add blocking dependency %q: an existing relationship has non-blocking type %q", depID, relation.relationType())
+		}
+	}
+	return nil
+}
+
+func (b TaskBackend) addBlockingDependencies(ctx context.Context, current task.Task, depIDs []string) error {
+	for _, depID := range depIDs {
+		dependency, err := b.Get(ctx, depID)
+		if err != nil {
+			return fmt.Errorf("add blocking dependency %q to task %q in %q: inspect dependency: %w", depID, current.ID, b.dir, err)
+		}
+
+		args := []string{"dep", "add", current.ID, depID}
+		if current.IssueType != dependency.IssueType {
+			// Beads rejects blocks edges between tasks and epics. Retain the
+			// Orpheus blocking relationship with a dedicated non-conflicting
+			// edge type, which is parsed alongside native blocks edges below.
+			args = append(args, "--type", crossTypeBlockingDependencyType)
+		}
+		result, err := b.runWriteWithAttrs(
+			ctx,
+			"add blocking dependency",
+			[]slog.Attr{slog.String("task_id", current.ID), slog.String("dependency", depID)},
+			args...,
+		)
+		if err != nil {
+			if isNotFoundResult(result) {
+				return fmt.Errorf("add blocking dependency %q to task %q in %q: %w%s", depID, current.ID, b.dir, task.ErrNotFound, formattedOutput(result))
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func existingBlockingDependencyIDs(current task.Task, requested []string) []string {
+	if len(requested) == 0 {
+		return nil
+	}
+
+	existing := make(map[string]struct{}, len(current.Relations.DependencyIDs))
+	for _, id := range current.Relations.DependencyIDs {
+		existing[id] = struct{}{}
+	}
+
+	filtered := make([]string, 0, len(requested))
+	for _, id := range requested {
+		if _, ok := existing[id]; ok {
+			filtered = append(filtered, id)
+		}
+	}
+	return filtered
+}
+
+func (b TaskBackend) removeBlockingDependencies(ctx context.Context, id string, depIDs []string) error {
+	for _, depID := range depIDs {
+		result, err := b.runWriteWithAttrs(
+			ctx,
+			"remove blocking dependency",
+			[]slog.Attr{slog.String("task_id", id), slog.String("dependency", depID)},
+			"dep", "remove", id, depID,
+		)
+		if err != nil {
+			if isNotFoundResult(result) {
+				return fmt.Errorf("remove blocking dependency %q from task %q in %q: %w%s", depID, id, b.dir, task.ErrNotFound, formattedOutput(result))
+			}
+			// Check if error is because dependency doesn't exist (retry-safe no-op)
+			if strings.Contains(strings.ToLower(result.Stderr), "no such dependency") ||
+				strings.Contains(strings.ToLower(result.Stdout), "no such dependency") {
+				// Dependency was already absent, treat as success
+				continue
+			}
+			return err
+		}
+	}
+	return nil
+}
+
 func validateStartEpicState(taskItem task.Task) error {
 	if taskItem.IssueType != task.IssueTypeEpic {
 		return task.MutationConflictError{TaskID: taskItem.ID, Reason: "item is not an epic"}
@@ -496,9 +718,17 @@ type bdErrorResponse struct {
 	Hint    string `json:"hint"`
 }
 
-func parseTaskArray(output string) ([]task.Task, error) {
+func parseRawTaskArray(output string) ([]bdTask, error) {
 	var rawTasks []bdTask
 	if err := json.Unmarshal([]byte(output), &rawTasks); err != nil {
+		return nil, err
+	}
+	return rawTasks, nil
+}
+
+func parseTaskArray(output string) ([]task.Task, error) {
+	rawTasks, err := parseRawTaskArray(output)
+	if err != nil {
 		return nil, err
 	}
 
@@ -603,7 +833,7 @@ func (t bdTask) relations() task.RelationSummary {
 			relations.ParentID = dependency.dependencyID()
 			continue
 		}
-		if relationType == "blocks" {
+		if isBlockingDependencyType(relationType) {
 			relations.DependencyIDs = appendID(relations.DependencyIDs, dependency.dependencyID())
 		}
 	}
@@ -619,6 +849,10 @@ func (t bdTask) relations() task.RelationSummary {
 		relations.DependentCount = len(relations.DependentIDs)
 	}
 	return relations
+}
+
+func isBlockingDependencyType(relationType string) bool {
+	return relationType == "blocks" || relationType == crossTypeBlockingDependencyType
 }
 
 func (r bdRelation) relationType() string {

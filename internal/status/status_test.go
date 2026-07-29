@@ -137,7 +137,7 @@ func TestProjectCarriesEpicProgressWithoutReplacingStatusDetail(t *testing.T) {
 }
 
 func TestProjectRequiresExternalReferenceBeforePrePRWorkflowStates(t *testing.T) {
-	const missingRefDetail = "missing required external reference; set it with `bd update gated-open --external-ref <reference>`"
+	const missingRefDetail = "missing required external reference; set it with `orpheus task edit gated-open --external-ref <reference>`"
 
 	snapshot, runStates := externalRefGateFixture()
 	projection := status.ProjectWithRunStates(snapshot, runStates)
@@ -146,7 +146,7 @@ func TestProjectRequiresExternalReferenceBeforePrePRWorkflowStates(t *testing.T)
 		t.Fatalf("needs-attention entries = %#v, want three missing-reference tasks", attention)
 	}
 	for _, entry := range attention {
-		if !strings.HasPrefix(entry.Detail, "missing required external reference; set it with `bd update ") {
+		if !strings.HasPrefix(entry.Detail, "missing required external reference; set it with `orpheus task edit ") {
 			t.Fatalf("needs-attention detail = %q, want external-reference guidance", entry.Detail)
 		}
 	}
