@@ -22,9 +22,10 @@ Early MVP design and implementation planning.
 
 Orpheus has two test lanes:
 
-- `make test` runs the fast, hermetic suite. It needs Go and the usual local build tools, but does not require `bd`, Codex, Pi, credentials, network access, or operator configuration/data. Tests above the Beads adapter use injected or fake backends.
-- `make test-integration` runs the retained real-Beads compatibility scenarios, including local workspace detection, managed initialization, repository registration, and collision handling. It requires the `bd` executable on `PATH`; the target fails early with installation guidance when it is unavailable.
-- `make check` is the complete repository validation command. It runs formatting, the hermetic suite, real-Beads integration tests, and linting.
+- `make test` runs only the fast, hermetic suite. It needs Go and the usual local build tools, but does not require `bd`, Codex, Pi, credentials, network access, or operator configuration/data. Tests above the Beads adapter use injected or fake backends.
+- `make test-integration` runs only the retained real-Beads compatibility scenarios, including local workspace detection, managed initialization, repository registration, and collision handling. It requires the `bd` executable on `PATH`; the target fails early with installation guidance when it is unavailable.
+- A real-Beads scenario belongs to the integration lane when its source has `//go:build integration` and its test function begins with `TestIntegration`. The target discovers every such test with Go's tag and name selection, so new scenarios need no Makefile update.
+- `make check` is the complete repository validation command. It runs formatting, the hermetic suite once, real-Beads integration tests once, and linting.
 
 `orpheus eval review-context` is separate from these validation lanes. It deliberately runs live Pi or Codex review agents and may incur costs; it is never invoked by routine test validation.
 
