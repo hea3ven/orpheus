@@ -4,7 +4,7 @@
 
 Run `make check` for complete validation at the end of a change. It runs formatting, the hermetic suite, real-Beads integration tests, and linting.
 
-`make test` is the fast hermetic lane for routine work and does not require `bd`, Codex, Pi, credentials, network access, or operator data. `make test-integration` requires the real `bd` executable for Beads compatibility coverage. Live evaluations such as `orpheus eval review-context` are not routine test validation and must never be invoked implicitly.
+`make test` is the fast hermetic-only lane for routine work and does not require `bd`, Codex, Pi, credentials, network access, or operator data. `make test-integration` executes only real-Beads scenarios and requires the `bd` executable. Integration test sources use `//go:build integration`, and their test functions begin with `TestIntegration`; Go discovers all conforming scenarios automatically. Live evaluations such as `orpheus eval review-context` are not routine test validation and must never be invoked implicitly.
 
 ## Task Tracking and Follow-Up
 
