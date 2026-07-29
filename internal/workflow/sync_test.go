@@ -22,6 +22,7 @@ import (
 )
 
 type fakeSyncRunStore struct {
+	states           map[string]taskstate.TaskState
 	events           []fakeTaskClosedEvent
 	conflictEvents   []fakeConflictEvent
 	recordErr        error
@@ -205,6 +206,13 @@ func (b *fakeSyncBackend) Close(_ context.Context, taskID string) error {
 		return b.closeErr
 	}
 	return nil
+}
+
+func (s *fakeSyncRunStore) Load(repoID, taskID string) (taskstate.TaskState, error) {
+	if state, ok := s.states[repoID+"/"+taskID]; ok {
+		return state, nil
+	}
+	return taskstate.TaskState{RepoID: repoID, TaskID: taskID}, nil
 }
 
 func (s *fakeSyncRunStore) RecordTaskClosed(repoID, taskID string, opts taskstate.TaskClosedOptions) (taskstate.Event, error) {
@@ -2140,4 +2148,32 @@ func syncAllStatusesByTask(results []workflow.SyncResult) map[string]workflow.Sy
 func withSyncStatus(taskItem task.Task, status task.Status) task.Task {
 	taskItem.Status = status
 	return taskItem
+}
+
+func TestSyncServiceUpdatesOpenPRBranchFromRecordedDestination(t *testing.T) {
+	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
+	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
+	taskItem := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{
+		task.MetadataBranch: targets.WorktreeTeam.Branch, task.MetadataWorktree: targets.WorktreeTeam.Worktree,
+		task.MetadataPRURL: "https://github.test/org/repo/pull/42",
+	}}
+	service, provider, _ := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
+	runStore := service.RunStore.(*fakeSyncRunStore)
+	runStore.states = map[string]taskstate.TaskState{
+		"alpha/op-1": {RepoID: "alpha", TaskID: "op-1", Finalization: &taskstate.Finalization{DestinationBranch: "release/next"}},
+	}
+	gitState := &fakeSyncGit{result: gitmeta.TaskBranchSyncResult{Status: gitmeta.TaskBranchSyncUpdated}}
+	service.Git = gitState
+	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateOpen}
+
+	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Status != workflow.SyncStatusBranchUpdated || !strings.Contains(result.Reason, "merged release/next into") {
+		t.Fatalf("result = %#v, want named destination synchronization", result)
+	}
+	if len(gitState.requests) != 1 || gitState.requests[0].DefaultBranch != "release/next" {
+		t.Fatalf("sync request = %#v, want release/next", gitState.requests)
+	}
 }

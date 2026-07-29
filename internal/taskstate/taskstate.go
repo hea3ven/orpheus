@@ -445,6 +445,7 @@ func (p *ReviewTaskProposal) UnmarshalYAML(value *yaml.Node) error {
 // Finalization records factual data from human-side main/solo finalization.
 type Finalization struct {
 	IntegrationFlow      publication.IntegrationFlow `yaml:"integration_flow,omitempty"`
+	DestinationBranch    string                      `yaml:"destination_branch,omitempty"`
 	PublicationStartedAt *time.Time                  `yaml:"publication_started_at,omitempty"`
 	CommittedAt          *time.Time                  `yaml:"committed_at,omitempty"`
 	Commit               string                      `yaml:"commit,omitempty"`
@@ -2309,6 +2310,33 @@ func (s Store) SetFinalizationIntegrationFlow(repoID, taskID string, flow public
 	return finalization, nil
 }
 
+// SetFinalizationDestination persists the integration destination selected in
+// manual review. The choice remains adjustable until publication begins, then
+// becomes immutable so retries cannot target a different branch.
+func (s Store) SetFinalizationDestination(repoID, taskID, destination string) (Finalization, error) {
+	destination = strings.TrimSpace(destination)
+	if destination == "" {
+		return Finalization{}, fmt.Errorf("set finalization destination for task %s/%s: destination branch is required", repoID, taskID)
+	}
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return Finalization{}, err
+	}
+	finalization := ensureFinalization(state.Finalization)
+	if finalization.DestinationBranch == destination {
+		return finalization, nil
+	}
+	if finalizationHasPublicationMutation(finalization) {
+		return Finalization{}, fmt.Errorf("set finalization destination for task %s/%s: %w; destination is locked as %q; retry publication with that branch", repoID, taskID, ErrFinalizationConflict, finalization.DestinationBranch)
+	}
+	finalization.DestinationBranch = destination
+	state.Finalization = &finalization
+	if err := s.save(state); err != nil {
+		return Finalization{}, err
+	}
+	return finalization, nil
+}
+
 // RecordFinalizationMerge records the successful merge of a task branch into
 // the registered default branch before that default branch is pushed.
 func (s Store) RecordFinalizationMerge(repoID, taskID, commit string) (Finalization, error) {
@@ -2351,11 +2379,14 @@ func (s Store) RecordFinalizationPublicationStart(repoID, taskID string) (Finali
 		return Finalization{}, err
 	}
 	finalization := ensureFinalization(state.Finalization)
+	if finalization.PublicationStartedAt != nil {
+		return finalization, nil
+	}
 	if strings.TrimSpace(string(finalization.IntegrationFlow)) == "" {
 		return Finalization{}, fmt.Errorf("record finalization publication start for task %s/%s: integration flow is required", repoID, taskID)
 	}
-	if finalization.PublicationStartedAt != nil {
-		return finalization, nil
+	if strings.TrimSpace(finalization.DestinationBranch) == "" {
+		return Finalization{}, fmt.Errorf("record finalization publication start for task %s/%s: integration destination is required", repoID, taskID)
 	}
 	now := s.now().UTC()
 	finalization.PublicationStartedAt = &now
@@ -3851,6 +3882,7 @@ func validateFinalization(finalization *Finalization) error {
 	}
 
 	finalization.IntegrationFlow = publication.IntegrationFlow(strings.TrimSpace(string(finalization.IntegrationFlow)))
+	finalization.DestinationBranch = strings.TrimSpace(finalization.DestinationBranch)
 	if err := publication.ValidateIntegrationFlow(finalization.IntegrationFlow); err != nil {
 		return err
 	}
@@ -3901,6 +3933,7 @@ func ensureFinalization(finalization *Finalization) Finalization {
 	}
 	clone := *finalization
 	clone.IntegrationFlow = publication.IntegrationFlow(strings.TrimSpace(string(clone.IntegrationFlow)))
+	clone.DestinationBranch = strings.TrimSpace(clone.DestinationBranch)
 	clone.Commit = strings.TrimSpace(clone.Commit)
 	clone.MergeCommit = strings.TrimSpace(clone.MergeCommit)
 	if clone.PendingCommit != nil {

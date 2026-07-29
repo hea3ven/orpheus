@@ -123,3 +123,94 @@ func TestValidateRecordedDirectMergeRejectsResetLocalDefault(t *testing.T) {
 		t.Fatalf("validation error = %v, want reset local default rejection", err)
 	}
 }
+
+func TestMergeTaskBranchIntoNamedDestinationAndVerifyRemoteBranch(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	runGit(t, repoPath, "checkout", "-b", "release/next")
+	runGit(t, repoPath, "push", "origin", "release/next")
+	runGit(t, repoPath, "checkout", "-b", "orpheus/op-1")
+	commitFile(t, repoPath, "reviewed.txt", "reviewed\n", "Reviewed work")
+	runGit(t, repoPath, "checkout", "main")
+
+	if err := orpheusgit.VerifyRemoteBranch(context.Background(), repoPath, "release/next"); err != nil {
+		t.Fatalf("verify named destination: %v", err)
+	}
+	merge, err := orpheusgit.MergeTaskBranchIntoDestination(context.Background(), task.Repository{
+		ID: "alpha", Path: repoPath, DefaultBranch: "main",
+	}, "release/next", "orpheus/op-1")
+	if err != nil {
+		t.Fatalf("direct merge into named destination: %v", err)
+	}
+	if got := strings.TrimSpace(runGit(t, repoPath, "branch", "--show-current")); got != "release/next" {
+		t.Fatalf("current branch = %q, want release/next", got)
+	}
+	if got := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")); got != merge {
+		t.Fatalf("HEAD = %s, want merge %s", got, merge)
+	}
+	if got := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "origin/release/next")); got == merge {
+		t.Fatal("origin/release/next advanced before caller pushed it")
+	}
+	if err := orpheusgit.VerifyRemoteBranch(context.Background(), repoPath, "release/missing"); err == nil || !strings.Contains(err.Error(), "does not exist on origin") {
+		t.Fatalf("missing branch error = %v, want remote absence", err)
+	}
+	if err := orpheusgit.VerifyRemoteBranch(context.Background(), repoPath, "-unsafe"); err == nil || !strings.Contains(err.Error(), "safe Git branch name") {
+		t.Fatalf("unsafe branch error = %v, want branch validation", err)
+	}
+}
+
+func TestDirectMergeRejectsPseudoRevisionDestinationsBeforeMutation(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	runGit(t, repoPath, "checkout", "-b", "orpheus/op-1")
+	commitFile(t, repoPath, "reviewed.txt", "reviewed\n", "Reviewed work")
+	runGit(t, repoPath, "checkout", "main")
+	mainBefore := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "refs/heads/main"))
+
+	for _, destination := range []string{"@", "HEAD"} {
+		t.Run(destination, func(t *testing.T) {
+			runGit(t, repoPath, "update-ref", "refs/heads/"+destination, "refs/heads/main")
+			runGit(t, repoPath, "push", "origin", "refs/heads/"+destination+":refs/heads/"+destination)
+			if got := strings.TrimSpace(runGit(t, repoPath, "ls-remote", "--heads", "origin", "refs/heads/"+destination)); got == "" {
+				t.Fatalf("origin destination %q was not created", destination)
+			}
+
+			if err := orpheusgit.VerifyRemoteBranch(context.Background(), repoPath, destination); err == nil || !strings.Contains(err.Error(), "safe Git branch name") {
+				t.Fatalf("verify destination error = %v, want unsafe-name rejection", err)
+			}
+			if _, err := orpheusgit.MergeTaskBranchIntoDestination(context.Background(), task.Repository{
+				ID: "alpha", Path: repoPath, DefaultBranch: "main",
+			}, destination, "orpheus/op-1"); err == nil || !strings.Contains(err.Error(), "safe Git branch name") {
+				t.Fatalf("direct merge error = %v, want unsafe-name rejection", err)
+			}
+			if got := strings.TrimSpace(runGit(t, repoPath, "branch", "--show-current")); got != "main" {
+				t.Fatalf("current branch = %q, want main; destination must be rejected before checkout", got)
+			}
+			if got := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "refs/heads/main")); got != mainBefore {
+				t.Fatalf("main = %s, want unchanged %s; destination must be rejected before merge or push", got, mainBefore)
+			}
+		})
+	}
+}
+
+func TestDirectMergeRejectsRemoteTaskBranchAsDestinationBeforeMutation(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	runGit(t, repoPath, "checkout", "-b", "orpheus/op-1")
+	commitFile(t, repoPath, "reviewed.txt", "reviewed\n", "Reviewed work")
+	runGit(t, repoPath, "push", "origin", "refs/heads/orpheus/op-1:refs/heads/orpheus/op-1")
+	runGit(t, repoPath, "checkout", "main")
+	mainBefore := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "refs/heads/main"))
+
+	if err := orpheusgit.VerifyRemoteBranch(context.Background(), repoPath, "orpheus/op-1"); err != nil {
+		t.Fatalf("verify existing task branch destination: %v", err)
+	}
+	if _, err := orpheusgit.MergeTaskBranchIntoDestination(context.Background(), task.Repository{
+		ID: "alpha", Path: repoPath, DefaultBranch: "main",
+	}, "orpheus/op-1", "orpheus/op-1"); err == nil || !strings.Contains(err.Error(), "is the task branch") {
+		t.Fatalf("direct merge error = %v, want task-branch destination rejection", err)
+	}
+	if got := strings.TrimSpace(runGit(t, repoPath, "branch", "--show-current")); got != "main" {
+		t.Fatalf("current branch = %q, want main; task destination must be rejected before checkout", got)
+	}
+	if got := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "refs/heads/main")); got != mainBefore {
+		t.Fatalf("main = %s, want unchanged %s; task destination must be rejected before merge or push", got, mainBefore)
+	}
+}

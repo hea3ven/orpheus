@@ -42,6 +42,19 @@ A pipeline with no manual step uses the repository/global effective default.
 Automated pipelines do not have a task-specific integration-flow override in
 the MVP.
 
+## Integration destinations
+
+The registered default branch is the displayed and compatible destination. A
+manual reviewer can enter `i`, keep the flow, and then enter an existing named
+remote branch as the destination. Orpheus verifies named destinations on
+`origin`; it never creates them.
+
+The resolved destination is stored with the task before publication begins and
+is immutable once publication starts. Pull-request creation and recovery use it
+as the PR base, open-PR sync merges it into the task branch, and direct merge
+refreshes and pushes that destination. Automated pipelines always use the
+registered default branch.
+
 ## Pull requests
 
 `pull-request` keeps the existing lifecycle: Orpheus commits the reviewed task
@@ -51,9 +64,9 @@ branch, pushes it, creates or recovers a pull request, and records the URL.
 
 `direct-merge` commits the reviewed task branch but does **not** push that
 branch, call `gh`, create a pull request, or write pull-request metadata.
-Orpheus refreshes the registered default branch from `origin`, creates a
-no-fast-forward merge commit for the task branch, records it, pushes the default
-branch, and only then closes the backend task.
+Orpheus refreshes the recorded integration destination from `origin`, creates
+a no-fast-forward merge commit for the task branch, records it, pushes that
+destination, and only then closes the backend task.
 
 This works for both deterministic-worktree and repository-root work. A merge
 conflict is aborted without pushing the default branch or closing the task. The
@@ -62,7 +75,8 @@ outside Orpheus before retrying.
 
 ## Retries
 
-Retries keep the locked flow. The recorded task commit, merge commit, default
-push, and backend closure make the stages idempotent. A request to change the
-flow after any publication mutation is rejected; repair the recorded flow
-rather than attempting to switch a partially published task.
+Retries keep the locked flow and destination. The recorded task commit, merge
+commit, destination push, and backend closure make the stages idempotent. A
+request to change either decision after publication starts is rejected; repair
+the recorded publication rather than attempting to switch a partially
+published task.

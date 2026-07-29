@@ -1512,6 +1512,9 @@ func TestStoreLocksIntegrationFlowWhenPublicationStarts(t *testing.T) {
 	if _, err := store.SetFinalizationIntegrationFlow("alpha", "op-1", publication.IntegrationFlowPullRequest); err != nil {
 		t.Fatalf("set integration flow: %v", err)
 	}
+	if _, err := store.SetFinalizationDestination("alpha", "op-1", "main"); err != nil {
+		t.Fatalf("set destination: %v", err)
+	}
 	started, err := store.RecordFinalizationPublicationStart("alpha", "op-1")
 	if err != nil {
 		t.Fatalf("record publication start: %v", err)
@@ -2072,5 +2075,21 @@ func assertStoreYAMLNotContains(t *testing.T, store taskstate.Store, repoID, tas
 		if strings.Contains(text, value) {
 			t.Fatalf("YAML contains %q:\n%s", value, text)
 		}
+	}
+}
+
+func TestStoreLocksIntegrationDestinationWhenPublicationStarts(t *testing.T) {
+	store := newTestStore(t, time.Date(2026, 6, 4, 9, 0, 0, 0, time.UTC))
+	if _, err := store.SetFinalizationIntegrationFlow("alpha", "op-1", publication.IntegrationFlowPullRequest); err != nil {
+		t.Fatalf("set flow: %v", err)
+	}
+	if _, err := store.SetFinalizationDestination("alpha", "op-1", "release/next"); err != nil {
+		t.Fatalf("set destination: %v", err)
+	}
+	if _, err := store.RecordFinalizationPublicationStart("alpha", "op-1"); err != nil {
+		t.Fatalf("record publication start: %v", err)
+	}
+	if _, err := store.SetFinalizationDestination("alpha", "op-1", "main"); !errors.Is(err, taskstate.ErrFinalizationConflict) || !strings.Contains(err.Error(), "locked as \"release/next\"") {
+		t.Fatalf("change locked destination error = %v, want actionable ErrFinalizationConflict", err)
 	}
 }
