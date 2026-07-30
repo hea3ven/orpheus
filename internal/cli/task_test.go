@@ -3392,7 +3392,6 @@ func TestTaskDoneCommitsPushesClosesAndRecordsFinalization(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -3447,7 +3446,6 @@ func TestTaskDoneRequiresPassedReview(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -3484,7 +3482,6 @@ func TestTaskReviewApproveFinalizesAndRecordsPassedAttempt(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -3537,7 +3534,6 @@ func TestTaskReviewManualContextShowsOriginalAndLatestFollowUpCompletion(t *test
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -3582,7 +3578,6 @@ func TestTaskReviewRejectsStaleMetadataMirror(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -3697,7 +3692,6 @@ func TestTaskReviewRestoresCandidateChangesMutatedDuringManualStep(t *testing.T)
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(os.WriteFile(filepath.Join(repoPath, "tracked.txt"), []byte("base\n"), 0o644))
 	runGit(t, repoPath, "add", "tracked.txt")
 	runGit(t, repoPath, "commit", "-m", "add tracked file")
@@ -3785,7 +3779,6 @@ func TestTaskReviewBlockingFindingBlocksWithoutFinalizing(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -3849,7 +3842,6 @@ func TestTaskReviewAdvisoryAndSeparateTaskFindingsDoNotBlockApproval(t *testing.
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -3908,7 +3900,6 @@ func TestTaskReviewCreatesSelectedSeparateTaskFollowUp(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -3971,7 +3962,6 @@ func TestTaskRunUsesSeparateTaskProposalSelection(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -4050,7 +4040,6 @@ func TestTaskReviewCanAbortWhenSeparateTaskCreationFails(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -4109,7 +4098,6 @@ func TestTaskReviewAbortDoesNotFinalize(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -4148,7 +4136,6 @@ func TestTaskReviewPassingCheckContinuesToManualStep(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -4211,7 +4198,6 @@ func TestTaskReviewConfirmedManualCommandRunsAndRecordsStep(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -4274,7 +4260,6 @@ func TestTaskReviewImportsHunkBlockingNoteAndBlocksApproval(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -4332,7 +4317,6 @@ func TestTaskReviewImportsHunkAdvisoryNoteAndAllowsApproval(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -4382,7 +4366,6 @@ func TestTaskReviewImportsHunkSeparateTaskNoteAndCreatesFollowUp(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -4448,7 +4431,6 @@ func TestTaskReviewHunkManualCommandWithNoCapturedNotesContinuesPrompt(t *testin
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -4496,7 +4478,6 @@ func TestTaskReviewDeclinedManualCommandAbortsWithoutRunningCommand(t *testing.T
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -4579,7 +4560,6 @@ func TestTaskReviewManualCommandEOFConfirmationHandlesUnavailableInput(t *testin
 			store := registry.NewStore(paths)
 
 			repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-			configureTestGitUser(t, repoPath)
 			must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 				ID:            "alpha",
 				Name:          "Alpha Repo",
@@ -4639,7 +4619,6 @@ func TestTaskReviewNonZeroCheckRecordsBlockingFindingAndStops(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:             "alpha",
 		Name:           "Alpha Repo",
@@ -4714,7 +4693,6 @@ func TestTaskReviewCheckBlockerReasonEOFRecordsInterrupted(t *testing.T) {
 			store := registry.NewStore(paths)
 
 			repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-			configureTestGitUser(t, repoPath)
 			must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 				ID:            "alpha",
 				Name:          "Alpha Repo",
@@ -4771,7 +4749,6 @@ func TestTaskReviewCheckBlockerKeepAcceptsEOFAnswer(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -4854,7 +4831,6 @@ func TestTaskReviewCheckBlockerReasonAcceptsEOFAnswer(t *testing.T) {
 			store := registry.NewStore(paths)
 
 			repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-			configureTestGitUser(t, repoPath)
 			must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 				ID:            "alpha",
 				Name:          "Alpha Repo",
@@ -4910,7 +4886,6 @@ func TestTaskRunAfterInterruptedAutomatedBlockerDecisionRequiresFreshReview(t *t
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -4971,7 +4946,6 @@ func TestTaskRunAutonomousReviewFollowUpRepairsCheckAndPublishes(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -5040,7 +5014,6 @@ func TestTaskRunAttachedManualBlockerRepairsAndApprovalFinalizes(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -5253,7 +5226,6 @@ func TestTaskRunAutonomousReviewLoopExhaustsPersistentCheckBlockers(t *testing.T
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -5320,7 +5292,6 @@ func TestTaskReviewResumedAutonomousFollowUpPreservesSelectedImplementer(t *test
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -5390,7 +5361,6 @@ func TestTaskReviewCheckBlockerDowngradeContinuesPipeline(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -5447,7 +5417,6 @@ func TestTaskReviewCheckBlockerWaiverContinuesPipeline(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -5650,7 +5619,6 @@ func TestTaskReviewAgentReviewStepLaunchesReviewerAndPassesWithoutFindings(t *te
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -5709,7 +5677,6 @@ func TestTaskReviewAgentReviewStepLaunchesReviewerAndPassesWithoutFindings(t *te
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
 }
 
-//nolint:funlen // The Codex review-agent usage fixture is clearer as one end-to-end scenario.
 func TestTaskReviewAgentReviewStepCapturesCodexUsage(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -5718,7 +5685,6 @@ func TestTaskReviewAgentReviewStepCapturesCodexUsage(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -5772,7 +5738,6 @@ func TestTaskReviewAgentReviewStepCapturesCodexUsage(t *testing.T) {
 	is.Equal(1, execution.UsageCapture.CandidateCount)
 }
 
-//nolint:funlen // The Pi review-agent usage fixture is clearer as one end-to-end scenario.
 func TestTaskReviewAgentReviewStepCapturesPiUsage(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -5781,7 +5746,6 @@ func TestTaskReviewAgentReviewStepCapturesPiUsage(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -5846,7 +5810,6 @@ func TestTaskReviewAgentReviewBlockingFindingStopsPipeline(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -5909,7 +5872,6 @@ func TestTaskReviewAgentReviewMixedAutomatedBlockerDecisions(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -6031,7 +5993,6 @@ func TestTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -6237,7 +6198,6 @@ func TestTaskReviewInterruptedAutomatedBlockerRecoveryReusesRecordedPipeline(t *
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:             "alpha",
 		Name:           "Alpha Repo",
@@ -6310,7 +6270,6 @@ func TestTaskReviewPipelineOverridePrecedence(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:             "alpha",
 		Name:           "Alpha Repo",
@@ -6360,7 +6319,6 @@ func TestTaskReviewPipelineAliasResolvesToGlobalPipeline(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:                    "alpha",
 		Name:                  "Alpha Repo",
@@ -6412,7 +6370,6 @@ func TestTaskReviewManualInputLossReplaysRecordedFindings(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -6484,7 +6441,6 @@ func TestTaskReviewResumesManualWaitingAttempt(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:             "alpha",
 		Name:           "Alpha Repo",
@@ -6630,7 +6586,6 @@ func TestTaskDoneRefusesRunningCompletionWithoutInteractiveConfirmation(t *testi
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -6681,7 +6636,6 @@ func TestTaskDonePublishesPRReadyTaskBranch(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -6750,7 +6704,6 @@ func TestTaskDoneRecoversExistingBranchPR(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -6872,7 +6825,6 @@ func TestTaskSyncRecordsConflictResolutionUsageTelemetry(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -7270,7 +7222,6 @@ func TestTaskSyncSkipsTaskWithoutPRURLAtRepoRoot(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -7341,7 +7292,6 @@ func TestTaskDoneFeatureBranchPushFailureIsNonZero(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -7385,7 +7335,6 @@ func TestTaskSyncAllPollsPRBoundaryTasks(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -7527,7 +7476,6 @@ func TestTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAfterFailures(t *test
 	betaPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "beta"))
 	gammaPath := filepath.Join(root, "repos", "gamma")
 	must.NoError(os.MkdirAll(gammaPath, 0o755))
-	configureTestGitUser(t, alphaPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{
 		{
 			ID:            "alpha",
@@ -7724,7 +7672,6 @@ func TestTaskDoneInfersSingleMainReadyTaskFromRepoRootAndUsesOverrides(t *testin
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -7768,7 +7715,6 @@ func TestTaskDoneInfersRepoRootFeatureBranchTask(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -7823,7 +7769,6 @@ func TestTaskDoneInfersWorktreeTask(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -7961,7 +7906,6 @@ func TestTaskDoneRetriesPushAndCloseFromRecordedFinalizationCommit(t *testing.T)
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -8415,12 +8359,6 @@ func writeTestFile(t *testing.T, path string, content string, label string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", label, err)
 	}
-}
-
-func configureTestGitUser(t *testing.T, repoPath string) {
-	t.Helper()
-	runGit(t, repoPath, "config", "user.name", "Orpheus Test")
-	runGit(t, repoPath, "config", "user.email", "orpheus@example.com")
 }
 
 func clockSequence(times ...time.Time) func() time.Time {
