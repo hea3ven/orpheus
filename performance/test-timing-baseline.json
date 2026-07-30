@@ -8,7 +8,7 @@
   },
   "lanes": {
     "fast": {
-      "recorded_at": "2026-07-30T06:46:57.311963514Z",
+      "recorded_at": "2026-07-30T14:18:26.208371751Z",
       "environment": {
         "go_version": "go1.26.5-X:nodwarf5",
         "goos": "linux",
@@ -22,8 +22,8 @@
         "packages": [
           {
             "name": "github.com/hea3ven/orpheus/internal/cli",
-            "seconds": 21.346,
-            "samples": 5
+            "seconds": 14.337,
+            "samples": 3
           },
           {
             "name": "github.com/hea3ven/orpheus/internal/git",
@@ -136,8 +136,8 @@
       "package_budgets": [
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "seconds": 32.019,
-          "samples": 5
+          "seconds": 21.505499999999998,
+          "samples": 3
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/git",
