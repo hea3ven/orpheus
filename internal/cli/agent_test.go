@@ -546,7 +546,7 @@ func setupAgentDoneMainRun(t *testing.T, taskID string) (string, string) {
 	t.Helper()
 
 	root := newTestState(t)
-	repoPath := newTestRepoAt(t, root, filepath.Join("repos", "alpha"), testRepoConfig{withRemote: true})
+	repoPath := newSeededTestRepoAt(t, root, filepath.Join("repos", "alpha"), testRepoConfig{withRemote: true})
 	registerAgentTestRepo(t, repoPath)
 	t.Chdir(repoPath)
 	bdLogPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
@@ -831,8 +831,7 @@ func setupAgentDoneWorktreeRun(t *testing.T) string {
 	must := require.New(t)
 	root := newTestState(t)
 	paths := currentTestPaths(t)
-	repoPath := newTestRepoAt(t, root, filepath.Join("repos", "alpha"), testRepoConfig{withRemote: true})
-	configureTestGitUser(t, repoPath)
+	repoPath := newSeededTestRepoAt(t, root, filepath.Join("repos", "alpha"), testRepoConfig{withRemote: true})
 	registerAgentTestRepo(t, repoPath)
 	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-1"))
 	must.NoError(err)

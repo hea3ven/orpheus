@@ -527,7 +527,6 @@ func setupCompletionFlowRepo(t *testing.T) (state.Paths, string) {
 	root := newTestState(t)
 	paths := currentTestPaths(t)
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	require.NoError(t, registry.NewStore(paths).Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
 		Name:          "Alpha Repo",
@@ -769,22 +768,11 @@ printf 'completion agent completed\n'
 
 func withOrpheusCLIHelper(t *testing.T) string {
 	t.Helper()
-
-	binDir := t.TempDir()
-	testBinary, err := filepath.Abs(os.Args[0])
-	if err != nil {
-		t.Fatalf("resolve test binary: %v", err)
+	if orpheusCLIHelperPath == "" {
+		t.Fatal("CLI helper fixture is not initialized")
 	}
-	script := fmt.Sprintf(`#!/bin/sh
-GO_WANT_ORPHEUS_CLI_HELPER=1 exec %s -test.run=TestOrpheusCLIHelperProcess -- "$@"
-`, shellQuote(testBinary))
-
-	orpheusPath := filepath.Join(binDir, "orpheus")
-	if err := os.WriteFile(orpheusPath, []byte(script), 0o755); err != nil {
-		t.Fatalf("write orpheus helper: %v", err)
-	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	return orpheusPath
+	t.Setenv("PATH", filepath.Dir(orpheusCLIHelperPath)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return orpheusCLIHelperPath
 }
 
 func readCompletionTaskState(t *testing.T, paths state.Paths, repoID string, taskID string) taskstate.TaskState {
