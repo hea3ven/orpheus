@@ -62,7 +62,7 @@ Review steps are read-only. If a review step mutates the candidate changes, Orph
 
 Review findings describe product or code feedback:
 
-- Blocking findings stop approval. Check and agent-review blockers prompt for an explicit keep, downgrade, or waive/cancel decision from both `task run` and `task review`. Keeping an automated blocker triggers bounded targeted fixes and fresh review attempts. Manual blockers stop for the operator.
+- Blocking findings stop approval. Check and agent-review blockers prompt for an explicit keep, downgrade, or waive/cancel decision from both `task run` and `task review`. Keeping an automated blocker triggers bounded targeted fixes and fresh review attempts. A manual reviewer who records blockers and chooses `finish/block` implicitly keeps every eligible recorded blocker; no second confirmation is needed before the same bounded repair loop begins.
 - Advisory findings are recorded but do not block approval.
 - Separate-task findings do not block approval by themselves. During review, Orpheus can create standalone Beads for selected candidates.
 
@@ -72,11 +72,13 @@ Operational review failures are different from code or product blockers. Example
 
 When the latest review is blocked by open current-task findings, `task run` enters follow-up mode automatically. There is no `--follow-up` flag. The new run targets the open blocking findings, records that targeting in task state, and keeps the task on the same implementation target.
 
-Within one `task run` or `task review` invocation, Orpheus asks the operator to classify automated blockers. `keep` preserves a blocker, dispatches the selected implementer for targeted fixes, and starts a fresh review from step 1 after each completed fix. `downgrade` converts the finding to advisory with a required reason. `waive`/`cancel` records a required waiver reason. The global `reviews.max_autonomous_review_attempts` setting bounds the keep/fix loop and defaults to `4`; the initial review counts, so the default allows at most three fix runs before the fourth blocked review stops.
+Within one `task run` or `task review` invocation, Orpheus asks the operator to classify automated blockers. `keep` preserves a blocker, while manual `finish/block` implicitly preserves the blockers recorded at that manual gate. Either decision dispatches one selected implementer follow-up for every eligible blocker from the blocked attempt, then starts a fresh review from step 1 after the fix completes. `downgrade` converts an automated finding to advisory with a required reason. `waive`/`cancel` records a required waiver reason. The global `reviews.max_autonomous_review_attempts` setting bounds the keep/fix loop and defaults to `4`; the initial review counts, so the default allows at most three fix runs before the fourth blocked review stops.
 
 If blocker-decision input disappears, Orpheus marks the current attempt blocked with an interrupted automated-decision flag, performs no publication/finalization, and launches no targeted fix. Before any fresh authoritative attempt, Orpheus presents each open, untargeted blocker from the latest attempt for an explicit keep, addressed-manually, or waive decision. A keep preserves the old review for targeted repair; addressed-manually and waive both require distinct reasons. Interrupted disposition leaves the remaining blockers authoritative and starts no fresh review.
 
-If the budget is exhausted, Orpheus preserves the latest blockers and audit history, marks the blocked review as autonomous-budget-exhausted, and tells the operator to explicitly continue with a fresh command. A new `task run` or `task review` invocation receives a fresh configured budget. Older review attempts remain audit history; the latest attempt controls status and follow-up behavior.
+If the budget is exhausted, Orpheus preserves the latest blockers and audit history, marks the blocked review as autonomous-budget-exhausted, and tells the operator to explicitly continue with a fresh command. A new `task run` or `task review` invocation receives a fresh configured budget and continues eligible preserved blockers without re-confirming a manual `finish/block`; automated blockers still require their recorded explicit keep decision. Older review attempts remain audit history; the latest attempt controls status and follow-up behavior.
+
+When an agent process actually begins, Orpheus prints a delimited header. Initial implementation runs identify their run attempt, for example `== Agent run: implementation (run attempt 1) ==`. Targeted repairs additionally identify the source review and findings, for example `== Agent run: review follow-up (run attempt 2; review attempt 1; findings 1, 2) ==`. Review step headers and publication/finalization output remain the authoritative lifecycle messages.
 
 ## Inspecting Review State
 

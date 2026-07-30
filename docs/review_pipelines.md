@@ -15,7 +15,10 @@ the code-change rationale without changing PR title or body selection.
 
 Keeping a check or agent-review blocker preserves it, dispatches a targeted
 implementer follow-up, records which findings the run targets, and starts a
-fresh review attempt after the fix records completion. Downgrades and waivers
+fresh review attempt after the fix records completion. A manual reviewer who
+records blockers and chooses `finish/block` implicitly keeps all eligible
+blockers from that gate; it launches the same one-follow-up-per-blocked-attempt
+repair loop without another confirmation. Automated downgrades and waivers
 require reasons and keep their persisted semantics. If blocker-decision input is
 unavailable, the current attempt is marked blocked with an interrupted decision
 flag; Orpheus launches no fix and recovery starts with a fresh
@@ -23,7 +26,9 @@ flag; Orpheus launches no fix and recovery starts with a fresh
 `reviews.max_autonomous_review_attempts` setting defaults to `4`. The initial
 review counts toward that limit, so the default permits at most three targeted
 fix runs before a fourth blocked review stops and preserves the open blockers
-for explicit continuation.
+for explicit continuation. A new `task run` or `task review` grants a fresh
+budget; preserved manual blockers need no second confirmation, while automated
+blockers still require an explicit recorded keep decision.
 
 ## Resume implementation sessions for follow-ups
 
@@ -53,7 +58,12 @@ fresh-session behavior.
 
 Fresh and resumed agents receive the same standard bootstrap instruction to run
 `orpheus agent context`; current findings and execution constraints are not copied
-from the old conversation and remain authoritative in Orpheus state. If a resumed
+from the old conversation and remain authoritative in Orpheus state. Orpheus
+prints `== Agent run: implementation (run attempt N) ==` immediately before an
+initial process begins. A targeted repair prints
+`== Agent run: review follow-up (run attempt N; review attempt M; findings …) ==`
+before its process begins; the identifiers describe the persisted repair
+provenance. If a resumed
 process starts and then fails, Orpheus records the normal failed run and does not
 launch a fresh replacement automatically, because the resumed process may already
 have changed the work directory. The usual explicit failed-follow-up retry remains

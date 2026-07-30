@@ -844,7 +844,7 @@ type taskRunRouteExecution struct {
 func executeTaskRunRoute(command *cobra.Command, opts *rootOptions, execution taskRunRouteExecution) error {
 	resolved := execution.resolved
 	switch execution.route.Action {
-	case workflow.TaskRunActionStartImplementation, workflow.TaskRunActionTargetedRepair:
+	case workflow.TaskRunActionStartImplementation:
 		taskBackend, ok := execution.backend.(workflow.DispatchBackend)
 		if !ok {
 			return fmt.Errorf("task run %s: backend for repo %s does not support dispatch mutations", resolved.TaskID, resolved.Source.Repository.ID)
@@ -860,15 +860,9 @@ func executeTaskRunRoute(command *cobra.Command, opts *rootOptions, execution ta
 		if err := launchTaskRunAgent(command, execution.logger, dispatch.service, execution.repo.ID, resolved.TaskID, dispatch.start, dispatch.prompt); err != nil {
 			return err
 		}
-		if err := finishTaskRunAndReview(command, opts, dispatch, execution.repo.ID, resolved.TaskID, execution.agentName, execution.pipelineName); err != nil {
-			return err
-		}
-		return renderTaskRunRoute(command.OutOrStdout(), resolved.TaskID, execution.route)
-	case workflow.TaskRunActionStartReview, workflow.TaskRunActionResumeReview:
-		if err := runTaskRunReview(command, execution.deps, execution.logger, resolved.TaskID, execution.agentName, execution.pipelineName); err != nil {
-			return err
-		}
-		return renderTaskRunRoute(command.OutOrStdout(), resolved.TaskID, execution.route)
+		return finishTaskRunAndReview(command, opts, dispatch, execution.repo.ID, resolved.TaskID, execution.agentName, execution.pipelineName)
+	case workflow.TaskRunActionTargetedRepair, workflow.TaskRunActionStartReview, workflow.TaskRunActionResumeReview:
+		return runTaskRunReview(command, execution.deps, execution.logger, resolved.TaskID, execution.agentName, execution.pipelineName)
 	case workflow.TaskRunActionRetryFinalization:
 		taskCtx, err := loadTaskContextFromInvocation(execution.deps)
 		if err != nil {
@@ -879,9 +873,6 @@ func executeTaskRunRoute(command *cobra.Command, opts *rootOptions, execution ta
 			RequirePassedReview: true,
 		})
 		if err != nil {
-			return err
-		}
-		if err := renderTaskRunRoute(command.OutOrStdout(), resolved.TaskID, execution.route); err != nil {
 			return err
 		}
 		return renderTaskDoneResult(command, finalized)
@@ -1115,6 +1106,9 @@ func launchTaskRunAgent(
 	start workflow.DispatchStartResult,
 	prompt string,
 ) error {
+	if err := renderTaskRunAgentHeader(command.ErrOrStderr(), start.Attempt); err != nil {
+		return recordTaskRunAgentHeaderFailure(service, repoID, taskID, start.Attempt.Attempt, err)
+	}
 	span := logging.Start(command.Context(), logger, "attached agent process",
 		taskRunProcessAttrs(repoID, taskID, start)...,
 	)
@@ -1156,6 +1150,41 @@ func launchTaskRunAgent(
 		return fmt.Errorf("task run %s: %w; additionally failed to record run failure: %w", taskID, err, recordErr)
 	}
 	return fmt.Errorf("task run %s: %w", taskID, err)
+}
+
+func recordTaskRunAgentHeaderFailure(
+	service workflow.DispatchService,
+	repoID string,
+	taskID string,
+	attempt int,
+	cause error,
+) error {
+	recordErr := service.Fail(workflow.DispatchFailureOptions{
+		RepoID:      repoID,
+		TaskID:      taskID,
+		Attempt:     attempt,
+		Cause:       cause,
+		StartFailed: true,
+	})
+	if recordErr != nil {
+		return fmt.Errorf("task run %s: render agent run header: %w; additionally failed to record run failure: %w", taskID, cause, recordErr)
+	}
+	return fmt.Errorf("task run %s: render agent run header: %w", taskID, cause)
+}
+
+func renderTaskRunAgentHeader(output io.Writer, attempt taskstate.RunAttempt) error {
+	if attempt.ReviewFollowUp == nil {
+		_, err := fmt.Fprintf(output, "== Agent run: implementation (run attempt %d) ==\n", attempt.Attempt)
+		return err
+	}
+	_, err := fmt.Fprintf(
+		output,
+		"== Agent run: review follow-up (run attempt %d; review attempt %d; findings %s) ==\n",
+		attempt.Attempt,
+		attempt.ReviewFollowUp.ReviewAttempt,
+		workflow.FormatReviewFindingIndexes(attempt.ReviewFollowUp.FindingIndexes),
+	)
+	return err
 }
 
 func taskRunProcessAttrs(repoID string, taskID string, start workflow.DispatchStartResult) []slog.Attr {

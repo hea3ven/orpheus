@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -172,14 +173,30 @@ type taskReviewLifecycleAgentRunner struct {
 	service workflow.DispatchService
 }
 
+type reviewLifecycleAgentHeaderWriteError struct {
+	cause error
+}
+
+func (e reviewLifecycleAgentHeaderWriteError) Error() string {
+	return fmt.Sprintf("render agent run header: %v", e.cause)
+}
+
+func (e reviewLifecycleAgentHeaderWriteError) Unwrap() error {
+	return e.cause
+}
+
 func (r taskReviewLifecycleAgentRunner) IsStartError(err error) bool {
-	return agentexec.IsStartError(err)
+	var headerErr reviewLifecycleAgentHeaderWriteError
+	return errors.As(err, &headerErr) || agentexec.IsStartError(err)
 }
 
 func (r taskReviewLifecycleAgentRunner) RunReviewLifecycleAgent(
 	ctx context.Context,
 	run workflow.ReviewLifecycleAgentRun,
 ) (workflow.ReviewLifecycleAgentRunResult, error) {
+	if err := renderTaskRunAgentHeader(r.command.ErrOrStderr(), run.Start.Attempt); err != nil {
+		return workflow.ReviewLifecycleAgentRunResult{}, reviewLifecycleAgentHeaderWriteError{cause: err}
+	}
 	if err := attachedAgentLauncher.Run(ctx, agentexec.Command{
 		Name:    run.Start.Command.AgentName,
 		Harness: run.Start.Command.Harness,

@@ -510,6 +510,17 @@ func TestReviewLifecycleManualPromptPersistsFindingsThroughWorkflowRecorder(t *t
 			task.MetadataWorktree: repoPath,
 		},
 	}
+	if err := paths.WriteConfigYAML(review.ConfigFile, map[string]any{
+		"reviews": map[string]any{
+			"default_pipeline":               "default",
+			"max_autonomous_review_attempts": 1,
+			"pipelines": map[string]any{
+				"default": map[string]any{"steps": []map[string]any{{"kind": "manual", "name": "local-review"}}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("write review config: %v", err)
+	}
 	frontend := &recordingReviewFrontend{
 		manualRender: func(workflow.ReviewManualStepContext) error { return nil },
 		manualPrompt: func(prompt workflow.ReviewManualStepPrompt) (review.ManualResult, error) {
@@ -547,8 +558,8 @@ func TestReviewLifecycleManualPromptPersistsFindingsThroughWorkflowRecorder(t *t
 	if err != nil {
 		t.Fatalf("run lifecycle: %v", err)
 	}
-	if outcome.Kind != workflow.ReviewLifecycleOutcomeBlocked {
-		t.Fatalf("outcome kind = %q, want %q", outcome.Kind, workflow.ReviewLifecycleOutcomeBlocked)
+	if outcome.Kind != workflow.ReviewLifecycleOutcomeExhausted {
+		t.Fatalf("outcome kind = %q, want %q", outcome.Kind, workflow.ReviewLifecycleOutcomeExhausted)
 	}
 	taskState, err := store.Load("alpha", "op-1")
 	if err != nil {
