@@ -418,6 +418,8 @@ type autonomousReviewLoopOptions struct {
 	dispatchAgentName string
 }
 
+var errReviewFollowUpIncomplete = errors.New("autonomous review follow-up completed without agent completion")
+
 //nolint:funlen // The lifecycle loop keeps terminal outcomes and retry transitions together.
 func (s ReviewLifecycleService) executeAutonomousReviewLoop(
 	ctx context.Context,
@@ -432,10 +434,20 @@ func (s ReviewLifecycleService) executeAutonomousReviewLoop(
 	attemptsUsed := 0
 	current := start
 	for {
-		attemptsUsed++
-		result, err := s.executeReviewAttempt(ctx, current)
-		if err != nil {
-			return reviewLifecycleOperationalFailure(current, err), err
+		var result taskstate.ReviewStatus
+		if current.Review.Status == taskstate.ReviewStatusBlocked {
+			// A fresh invocation can continue an eligible blocked review without
+			// asking the manual reviewer to keep the same findings again. That
+			// blocked review is the first attempt in its fresh repair budget.
+			attemptsUsed++
+			result = taskstate.ReviewStatusBlocked
+		} else {
+			attemptsUsed++
+			var err error
+			result, err = s.executeReviewAttempt(ctx, current)
+			if err != nil {
+				return reviewLifecycleOperationalFailure(current, err), err
+			}
 		}
 
 		switch result {
@@ -475,7 +487,7 @@ func (s ReviewLifecycleService) executeAutonomousReviewLoop(
 		}
 
 		if err := s.runAutonomousReviewFollowUp(ctx, current, opts.dispatchAgentName, latest.Attempt, indexes); err != nil {
-			return reviewLifecycleOperationalFailure(current, err), err
+			return autonomousFollowUpFailure(current, err)
 		}
 		next, err := s.startFreshAutonomousReview(ctx, current)
 		if err != nil {
@@ -483,6 +495,13 @@ func (s ReviewLifecycleService) executeAutonomousReviewLoop(
 		}
 		current = next
 	}
+}
+
+func autonomousFollowUpFailure(current ReviewAttemptContext, err error) (ReviewLifecycleOutcome, error) {
+	if errors.Is(err, errReviewFollowUpIncomplete) {
+		return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeBlocked, Context: current}, nil
+	}
+	return reviewLifecycleOperationalFailure(current, err), err
 }
 
 func (s ReviewLifecycleService) pipelineRunOptions(runCtx context.Context, ctx ReviewAttemptContext) (review.PipelineRunOptions, error) {
@@ -745,6 +764,11 @@ func (s ReviewLifecycleService) startReview(ctx context.Context, taskID string, 
 		return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", resolved.TaskID, err)
 	} else if ok {
 		return s.resumeReview(base, paused, pipelineName)
+	}
+	if blocked, ok, err := latestEligibleBlockedReview(s.RunStore, base); err != nil {
+		return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", resolved.TaskID, err)
+	} else if ok {
+		return s.continueBlockedReview(base, blocked, pipelineName)
 	}
 
 	if requestedPipeline != nil {
@@ -1018,6 +1042,33 @@ func latestManualWaitingReview(store ReviewLifecycleStore, ctx ReviewAttemptCont
 	return latest, true, nil
 }
 
+func latestEligibleBlockedReview(store ReviewLifecycleStore, ctx ReviewAttemptContext) (taskstate.ReviewAttempt, bool, error) {
+	taskState, err := store.Load(ctx.RepoID(), ctx.TaskID())
+	if err != nil {
+		return taskstate.ReviewAttempt{}, false, fmt.Errorf("load task state: %w", err)
+	}
+	latest, ok := taskstate.LatestReview(taskState)
+	if !ok || latest.Status != taskstate.ReviewStatusBlocked || latest.AutomatedBlockerDecisionInterrupted {
+		return taskstate.ReviewAttempt{}, false, nil
+	}
+	indexes, eligible := taskstate.UntargetedBlockingFindingIndexesForFollowUpInState(taskState, latest)
+	return latest, eligible && len(indexes) > 0, nil
+}
+
+func (s ReviewLifecycleService) continueBlockedReview(base ReviewAttemptContext, blocked taskstate.ReviewAttempt, pipelineName string) (ReviewAttemptContext, error) {
+	pipeline, err := ResolvePausedTaskReviewPipeline(base.paths, base.Source.Repository, blocked, pipelineName)
+	if err != nil {
+		return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", base.TaskID(), err)
+	}
+	base.Pipeline = pipeline
+	prepared, err := s.preparePipeline(base)
+	if err != nil {
+		return base, err
+	}
+	prepared.Review = blocked
+	return prepared, nil
+}
+
 func latestInterruptedAutomatedBlockerReview(store ReviewLifecycleStore, ctx ReviewAttemptContext) (taskstate.ReviewAttempt, bool, error) {
 	taskState, err := store.Load(ctx.RepoID(), ctx.TaskID())
 	if err != nil {
@@ -1189,20 +1240,11 @@ func latestAutonomousReviewBlockers(store ReviewLifecycleStore, repoID string, t
 		return taskstate.ReviewAttempt{}, nil, false, fmt.Errorf("task review %s: load review blockers: %w", taskID, err)
 	}
 	latest, ok := taskstate.LatestReview(taskState)
-	if !ok || latest.Status != taskstate.ReviewStatusBlocked {
+	if !ok || latest.Status != taskstate.ReviewStatusBlocked || latest.AutomatedBlockerDecisionInterrupted {
 		return taskstate.ReviewAttempt{}, nil, false, nil
 	}
-	if latest.AutomatedBlockerDecisionInterrupted || taskstate.HasUnkeptAutomatedBlockingFindings(latest) {
-		return latest, nil, false, nil
-	}
-	indexes := taskstate.UntargetedAutomatedBlockingFindingIndexes(latest)
-	if len(indexes) == 0 {
-		return latest, nil, false, nil
-	}
-	if len(indexes) != len(taskstate.UntargetedBlockingFindingIndexes(latest)) {
-		return latest, nil, false, nil
-	}
-	return latest, indexes, true, nil
+	indexes, eligible := taskstate.UntargetedBlockingFindingIndexesForFollowUpInState(taskState, latest)
+	return latest, indexes, eligible && len(indexes) > 0, nil
 }
 
 //nolint:funlen // Dispatch, execution, and completion checks are one lifecycle transaction.
@@ -1274,7 +1316,10 @@ func (s ReviewLifecycleService) runAutonomousReviewFollowUp(ctx context.Context,
 		return fmt.Errorf("task review %s: inspect autonomous follow-up completion: %w", current.TaskID(), err)
 	}
 	if !ready {
-		return s.Frontend.FollowUpRunIncomplete(current, start.Attempt.Attempt)
+		if err := s.Frontend.FollowUpRunIncomplete(current, start.Attempt.Attempt); err != nil {
+			return err
+		}
+		return errReviewFollowUpIncomplete
 	}
 	return nil
 }

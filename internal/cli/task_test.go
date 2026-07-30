@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/hea3ven/orpheus/internal/agent"
+	"github.com/hea3ven/orpheus/internal/cli"
 	"github.com/hea3ven/orpheus/internal/registry"
 	reviewconfig "github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
@@ -29,6 +31,21 @@ type fakeBDTaskResponse struct {
 	stdout   string
 	stderr   string
 	exitCode int
+}
+
+type failingTaskRunHeaderWriter struct{}
+
+func (failingTaskRunHeaderWriter) Write([]byte) (int, error) {
+	return 0, errors.New("agent header output unavailable")
+}
+
+type failingAgentHeaderWriter struct{}
+
+func (failingAgentHeaderWriter) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), "== Agent run:") {
+		return 0, errors.New("agent header output unavailable")
+	}
+	return len(p), nil
 }
 
 func registerLocalTaskTestRepo(t *testing.T, id string, name string, prefix string) string {
@@ -3031,7 +3048,7 @@ printf 'agent stdout\n'
 
 	must.Error(err)
 	is.Contains(stdout, "agent stdout")
-	is.Empty(stderr)
+	is.Contains(stderr, "== Agent run: implementation (run attempt 1) ==")
 	is.ErrorContains(err, "record run finish")
 	is.ErrorContains(err, "failed to acquire lock for task run finalization: "+lockPath)
 	agentLog, err := os.ReadFile(agentLogPath)
@@ -3161,7 +3178,7 @@ func TestTaskRunRecordsStartFailureWhenAgentProcessDoesNotStart(t *testing.T) {
 
 	must.Error(err)
 	is.Empty(stdout)
-	is.Empty(stderr)
+	is.Contains(stderr, "== Agent run: implementation (run attempt 1) ==")
 	is.ErrorContains(err, "start process")
 	is.ErrorContains(err, "definitely-missing-orpheus-agent")
 
@@ -3176,6 +3193,127 @@ func TestTaskRunRecordsStartFailureWhenAgentProcessDoesNotStart(t *testing.T) {
 	is.Equal(taskstate.EventRunStartFailed, state.Events[2].Type)
 	is.Equal(taskstate.RunStatusFailed, state.Events[2].Status)
 	is.Contains(state.Events[2].Error, "definitely-missing-orpheus-agent")
+}
+
+func TestTaskRunHeaderWriteFailureRecordsStartFailure(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[{"id":"op-header","title":"Header failure","status":"open","priority":1,"issue_type":"task"}]`},
+	})
+	agentLogPath := withFakeAgent(t, "header-agent", 0)
+	writeTaskRunAgentConfig(t, paths, "header", "header-agent", nil)
+
+	command := cli.NewRootCommand()
+	command.SetIn(bytes.NewBuffer(nil))
+	command.SetOut(new(bytes.Buffer))
+	command.SetErr(failingTaskRunHeaderWriter{})
+	command.SetArgs([]string{"task", "run", "op-header"})
+	err := command.Execute()
+
+	must.Error(err)
+	is.ErrorContains(err, "render agent run header")
+	is.ErrorContains(err, "agent header output unavailable")
+	_, statErr := os.Stat(agentLogPath)
+	is.ErrorIs(statErr, os.ErrNotExist)
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-header.yaml"), &state))
+	must.Len(state.Runs, 1)
+	is.Equal(taskstate.RunStatusFailed, state.Runs[0].Status)
+	must.NotNil(state.Runs[0].Execution.FinishedAt)
+	must.Len(state.Events, 3)
+	is.Equal(taskstate.EventRunStartFailed, state.Events[2].Type)
+	is.Equal(taskstate.RunStatusFailed, state.Events[2].Status)
+	is.Contains(state.Events[2].Error, "agent header output unavailable")
+}
+
+//nolint:funlen // The fixture prepares a persisted blocker before exercising the follow-up start failure.
+func TestTaskReviewFollowUpHeaderWriteFailureRecordsStartFailure(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	registryStore := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(registryStore.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:             "alpha",
+		Name:           "Alpha Repo",
+		Path:           repoPath,
+		DefaultBranch:  "main",
+		BeadsMode:      registry.BeadsModeLocal,
+		BeadsPrefix:    "op",
+		ReviewPipeline: "standard",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-followup-header", repoPath, "Follow-up header", "Repair the blocker.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+	runStore := taskstate.NewStore(paths)
+	reviewAttempt, err := runStore.StartReviewWithOptions("alpha", "op-followup-header", taskstate.StartReviewOptions{
+		Pipeline: "standard", Step: "approval",
+	})
+	must.NoError(err)
+	_, err = runStore.RecordReviewFinding("alpha", "op-followup-header", reviewAttempt.Attempt, taskstate.ReviewFinding{
+		Type: taskstate.FindingTypeBlocking, Title: "Manual blocker", Description: "Repair before approval.", Step: "approval",
+	})
+	must.NoError(err)
+	_, err = runStore.FinishReview("alpha", "op-followup-header", reviewAttempt.Attempt, taskstate.ReviewStatusBlocked)
+	must.NoError(err)
+
+	agentLogPath := withFakeAgent(t, "followup-header-agent", 0)
+	writeAutonomousReviewLoopConfig(t, paths, "followup-header", "followup-header-agent", 2, []map[string]any{
+		{"kind": "manual", "name": "approval"},
+	})
+	taskJSON := mainReadyTaskJSON("op-followup-header", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-followup-header", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-followup-header", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox list --all --limit 0", stdout: taskJSON},
+	})
+
+	command := cli.NewRootCommand()
+	command.SetIn(bytes.NewBuffer(nil))
+	command.SetOut(new(bytes.Buffer))
+	command.SetErr(failingAgentHeaderWriter{})
+	command.SetArgs([]string{"task", "review", "op-followup-header"})
+	err = command.Execute()
+
+	must.Error(err)
+	is.ErrorContains(err, "render agent run header")
+	is.ErrorContains(err, "agent header output unavailable")
+	_, statErr := os.Stat(agentLogPath)
+	is.ErrorIs(statErr, os.ErrNotExist)
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-followup-header.yaml"), &state))
+	must.Len(state.Runs, 2)
+	latestRun, ok := taskstate.LatestRun(state)
+	must.True(ok)
+	is.Equal(taskstate.RunStatusFailed, latestRun.Status)
+	must.NotNil(latestRun.ReviewFollowUp)
+	must.NotEmpty(state.Events)
+	lastEvent := state.Events[len(state.Events)-1]
+	is.Equal(taskstate.EventRunStartFailed, lastEvent.Type)
+	is.Contains(lastEvent.Error, "agent header output unavailable")
+	latestReview, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	indexes, eligible := taskstate.UntargetedBlockingFindingIndexesForFollowUpInState(state, latestReview)
+	is.True(eligible)
+	is.Equal([]int{0}, indexes)
 }
 
 func TestTaskRunRefusesLatestRunningAttempt(t *testing.T) {
@@ -3638,6 +3776,7 @@ func (r *mutatingReviewInput) Read(p []byte) (int, error) {
 	return r.input.Read(p)
 }
 
+//nolint:funlen // The fixture records every manual finding category before blocking.
 func TestTaskReviewBlockingFindingBlocksWithoutFinalizing(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -3659,6 +3798,7 @@ func TestTaskReviewBlockingFindingBlocksWithoutFinalizing(t *testing.T) {
 	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
 	headBefore := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
 
+	setReviewMaxAutonomousAttempts(t, paths, 1)
 	taskJSON := mainReadyTaskJSON("op-main", repoPath)
 	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
@@ -4154,6 +4294,7 @@ func TestTaskReviewImportsHunkBlockingNoteAndBlocksApproval(t *testing.T) {
 		},
 	})
 
+	setReviewMaxAutonomousAttempts(t, paths, 1)
 	taskJSON := mainReadyTaskJSON("op-main", repoPath)
 	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
@@ -4801,7 +4942,7 @@ func TestTaskRunAfterInterruptedAutomatedBlockerDecisionRequiresFreshReview(t *t
 	is.Contains(reviewStderr, "Automated blocker decisions for op-main were interrupted")
 	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "op-main"})
 	must.NoError(err)
-	is.Contains(stdout, "starting a fresh review")
+	is.Empty(stdout)
 	is.Contains(stderr, "Fresh review blocker dispositions for op-main were interrupted")
 	_, statErr := os.Stat(agentLogPath)
 	is.ErrorIs(statErr, os.ErrNotExist)
@@ -4887,7 +5028,8 @@ exit 7
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestTaskRunAttachedManualReviewApprovalFinalizes(t *testing.T) {
+//nolint:funlen // The end-to-end fixture spans implementation, repair, review, and publication.
+func TestTaskRunAttachedManualBlockerRepairsAndApprovalFinalizes(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
@@ -4928,25 +5070,160 @@ func TestTaskRunAttachedManualReviewApprovalFinalizes(t *testing.T) {
 		[]string{"task", "run", "--repo-root", "op-manual"},
 		&delayedManualInput{
 			markerPath: agentDoneMarker,
-			input:      strings.NewReader("a\n"),
+			input: strings.NewReader(strings.Join([]string{
+				"b",
+				"Manual blocker",
+				"Repair the implementation before approval.",
+				"Apply the fix.",
+				"f",
+				"a",
+				"",
+			}, "\n")),
 		},
 	)
 
 	must.NoError(err)
 	is.Contains(stdout, "Recorded completion for op-manual")
 	is.Contains(stdout, "Published op-manual")
+	is.Contains(stderr, "== Agent run: implementation (run attempt 1) ==")
+	is.Contains(stderr, "== Agent run: review follow-up (run attempt 2; review attempt 1; findings 1) ==")
 	is.Contains(stderr, "== Review step: approval (manual) ==")
-	is.Contains(stderr, "Review action [a=approve, b=block, v=advisory, t=task, q=abort]")
+	is.Contains(stderr, "Review blocked for op-manual.")
+	is.Contains(stderr, "Autonomous review follow-up for op-manual targets review attempt 1 finding(s) 1.")
+	is.NotContains(stdout, "starting a fresh review")
+	is.NotContains(stdout, "launching targeted repair")
 	is.NotContains(stderr, "Resume with `orpheus task run op-manual`")
 
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-manual.yaml"), &state))
-	must.Len(state.Runs, 1)
-	must.Len(state.Reviews, 1)
+	must.Len(state.Runs, 2)
+	must.Len(state.Reviews, 2)
+	must.NotNil(state.Runs[1].ReviewFollowUp)
+	is.Equal(1, state.Runs[1].ReviewFollowUp.ReviewAttempt)
+	is.Equal([]int{0}, state.Runs[1].ReviewFollowUp.FindingIndexes)
+	is.Equal(2, state.Reviews[0].Findings[0].TargetedByRunAttempt)
 	latest, ok := taskstate.LatestReview(state)
 	must.True(ok)
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
+}
+
+func TestTaskReviewManualBlockerExhaustsBudgetWithoutExtraLaunch(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	must.NoError(err)
+	orpheusBin := buildOrpheusTestBinary(t, sourceRoot)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	configureTestGitUser(t, repoPath)
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:             "alpha",
+		Name:           "Alpha Repo",
+		Path:           repoPath,
+		DefaultBranch:  "main",
+		BeadsMode:      registry.BeadsModeLocal,
+		BeadsPrefix:    "op",
+		ReviewPipeline: "standard",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-manual-loop", repoPath, "Manual loop", "Repair manual blockers.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+	agentPath := writeAutonomousReviewFixAgent(t, "manual-loop-agent", orpheusBin, false)
+	writeAutonomousReviewLoopConfig(t, paths, "manual-loop", agentPath, 2, []map[string]any{
+		{"kind": "manual", "name": "approval"},
+	})
+	taskJSON := mainReadyTaskJSON("op-manual-loop", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-manual-loop", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox list --all --limit 0", stdout: taskJSON},
+	})
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-manual-loop"}, strings.Join([]string{
+		"b", "First blocker", "Fix the first issue.", "Repair it.", "f",
+		"b", "Second blocker", "Fix the second issue.", "Repair it.", "f", "",
+	}, "\n"))
+
+	is.Contains(stdout, "Recorded completion for op-manual-loop")
+	is.Equal(2, strings.Count(stderr, "Review blocked for op-manual-loop."))
+	is.Contains(stderr, "== Agent run: review follow-up (run attempt 2; review attempt 1; findings 1) ==")
+	is.Contains(stderr, "Autonomous review attempt budget exhausted for op-manual-loop after 2 review attempt(s).")
+	is.NotContains(stderr, "run attempt 3")
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-manual-loop.yaml"), &state))
+	must.Len(state.Runs, 2)
+	must.Len(state.Reviews, 2)
+	must.NotNil(state.Runs[1].ReviewFollowUp)
+	is.Equal(1, state.Runs[1].ReviewFollowUp.ReviewAttempt)
+	is.Equal([]int{0}, state.Runs[1].ReviewFollowUp.FindingIndexes)
+	is.Equal(2, state.Reviews[0].Findings[0].TargetedByRunAttempt)
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
+	is.True(latest.AutonomousBudgetExhausted)
+	is.Zero(latest.Findings[0].TargetedByRunAttempt)
+}
+
+func TestTaskRunPreservedManualBlockerExhaustsFreshBudget(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	registryStore := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(registryStore.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:             "alpha",
+		Name:           "Alpha Repo",
+		Path:           repoPath,
+		DefaultBranch:  "main",
+		BeadsMode:      registry.BeadsModeLocal,
+		BeadsPrefix:    "op",
+		ReviewPipeline: "standard",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-manual-budget", repoPath, "Manual budget", "Keep the manual blocker.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+	runStore := taskstate.NewStore(paths)
+	reviewAttempt, err := runStore.StartReviewWithOptions("alpha", "op-manual-budget", taskstate.StartReviewOptions{
+		Pipeline: "standard", Step: "approval",
+	})
+	must.NoError(err)
+	_, err = runStore.RecordReviewFinding("alpha", "op-manual-budget", reviewAttempt.Attempt, taskstate.ReviewFinding{
+		Type: taskstate.FindingTypeBlocking, Title: "Manual blocker", Description: "Repair before approval.", Step: "approval",
+	})
+	must.NoError(err)
+	_, err = runStore.FinishReview("alpha", "op-manual-budget", reviewAttempt.Attempt, taskstate.ReviewStatusBlocked)
+	must.NoError(err)
+
+	agentLogPath := withFakeAgent(t, "budget-agent", 0)
+	writeAutonomousReviewLoopConfig(t, paths, "budget", "budget-agent", 1, []map[string]any{
+		{"kind": "manual", "name": "approval"},
+	})
+	taskJSON := mainReadyTaskJSON("op-manual-budget", repoPath)
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-manual-budget", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-manual-budget", stdout: taskJSON},
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "run", "op-manual-budget"})
+
+	is.Empty(stdout)
+	is.Contains(stderr, "Autonomous review attempt budget exhausted for op-manual-budget after 1 review attempt(s).")
+	_, statErr := os.Stat(agentLogPath)
+	is.ErrorIs(statErr, os.ErrNotExist)
+
+	var state taskstate.TaskState
+	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-manual-budget.yaml"), &state))
+	must.Len(state.Runs, 1)
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.True(latest.AutonomousBudgetExhausted)
+	is.Zero(latest.Findings[0].TargetedByRunAttempt)
 }
 
 type delayedManualInput struct {
@@ -5723,6 +6000,7 @@ func TestTaskReviewAgentReviewMixedAutomatedBlockerDecisions(t *testing.T) {
 	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
 		repoPath: {stdout: taskJSON},
 	})
+	setReviewMaxAutonomousAttempts(t, paths, 2)
 	withFakeAgent(t, "followup-agent", 0)
 	writeTaskRunAgentConfig(t, paths, "followup", "followup-agent", nil)
 
@@ -5782,6 +6060,7 @@ func TestTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
 			{"kind": "manual", "name": "approval"},
 		},
 	})
+	setReviewMaxAutonomousAttempts(t, paths, 1)
 	taskJSON := mainReadyTaskJSON("op-main", repoPath)
 	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
 		repoPath: {stdout: taskJSON},
@@ -5877,8 +6156,9 @@ func TestTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
 	is.Contains(showStdout, "Type: blocking")
 	is.Contains(showStdout, "Title: Generated advisory")
 	is.Contains(showStdout, "Resolution: open")
-	is.Contains(showStdout, "Next step: run `orpheus task run op-main` to address open blocking findings")
+	is.Contains(showStdout, "Next step: autonomous review attempts are exhausted")
 
+	setReviewMaxAutonomousAttempts(t, paths, 2)
 	withFakeAgent(t, "followup-agent", 0)
 	writeTaskRunAgentConfig(t, paths, "followup", "followup-agent", nil)
 	runStdout, runStderr := executeCommand(t, []string{"task", "run", "op-main"})
@@ -6144,6 +6424,7 @@ func TestTaskReviewManualInputLossReplaysRecordedFindings(t *testing.T) {
 	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review replay", "Replay manual findings.")
 	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
 
+	setReviewMaxAutonomousAttempts(t, paths, 1)
 	taskJSON := mainReadyTaskJSON("op-main", repoPath)
 	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
@@ -8422,14 +8703,28 @@ func writeTaskRunAgentConfig(t *testing.T, paths state.Paths, name string, comma
 	if args != nil {
 		profile["args"] = args
 	}
-	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
-		"agents": map[string]any{
-			"defaults": map[string]any{"implementer": name},
-			"profiles": map[string]any{
-				name: profile,
-			},
-		},
-	}))
+	config := map[string]any{}
+	if err := paths.ReadConfigYAML(agent.ConfigFile, &config); err != nil && !strings.Contains(err.Error(), "file does not exist") {
+		require.NoError(t, err)
+	}
+	agentsConfig, _ := config["agents"].(map[string]any)
+	if agentsConfig == nil {
+		agentsConfig = map[string]any{}
+	}
+	defaults, _ := agentsConfig["defaults"].(map[string]any)
+	if defaults == nil {
+		defaults = map[string]any{}
+	}
+	defaults["implementer"] = name
+	profiles, _ := agentsConfig["profiles"].(map[string]any)
+	if profiles == nil {
+		profiles = map[string]any{}
+	}
+	profiles[name] = profile
+	agentsConfig["defaults"] = defaults
+	agentsConfig["profiles"] = profiles
+	config["agents"] = agentsConfig
+	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, config))
 }
 
 func writeStructuredCodexTaskRunAgentConfig(
@@ -8500,6 +8795,31 @@ func writeReviewPipelineConfig(
 			"pipelines":        configPipelines,
 		},
 	}))
+}
+
+func setReviewMaxAutonomousAttempts(t *testing.T, paths state.Paths, maxAttempts int) {
+	t.Helper()
+
+	var config map[string]any
+	err := paths.ReadConfigYAML(reviewconfig.ConfigFile, &config)
+	if err != nil && strings.Contains(err.Error(), "file does not exist") {
+		config = map[string]any{
+			"reviews": map[string]any{
+				"default_pipeline":               "default",
+				"max_autonomous_review_attempts": maxAttempts,
+				"pipelines": map[string]any{
+					"default": map[string]any{"steps": []map[string]any{{"kind": "manual", "name": "local-review"}}},
+				},
+			},
+		}
+		require.NoError(t, paths.WriteConfigYAML(reviewconfig.ConfigFile, config))
+		return
+	}
+	require.NoError(t, err)
+	reviews, ok := config["reviews"].(map[string]any)
+	require.True(t, ok, "reviews config is missing")
+	reviews["max_autonomous_review_attempts"] = maxAttempts
+	require.NoError(t, paths.WriteConfigYAML(reviewconfig.ConfigFile, config))
 }
 
 func writeReviewAgentPipelineConfig(
