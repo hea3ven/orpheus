@@ -45,6 +45,56 @@ func TestTaskCreateReadsPlanningFilesAndRendersCreatedTypeAndID(t *testing.T) {
 	}
 }
 
+func TestTaskCreateRequiresExternalReferenceForGatedRepository(t *testing.T) {
+	is := assert.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	repoPath := filepath.Join(root, "repo")
+	require.NoError(t, os.MkdirAll(repoPath, 0o755))
+	store := registry.NewStore(paths)
+	require.NoError(t, store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID: "alpha", Name: "Alpha", Path: repoPath, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "op",
+		TitleTemplate: "[{{external_ref}}] {{summary}}",
+	}}}))
+	logPath := fakeTaskCreateBD(t)
+
+	_, _, err := executeCommandWithError(t, []string{
+		"task", "create", "--repo", "alpha", "--title", "Implement work", "--description", "Description", "--acceptance", "Acceptance",
+	})
+	require.Error(t, err)
+	is.Contains(err.Error(), "--external-ref <reference>")
+
+	stdout, stderr := executeCommand(t, []string{
+		"task", "create", "--repo", "alpha", "--title", "Implement work", "--description", "Description", "--acceptance", "Acceptance", "--external-ref", "PLAN-7",
+	})
+	is.Empty(stderr)
+	is.Equal("Created task op-9.\n", stdout)
+	is.Contains(readFileString(t, logPath), "--json --sandbox create Implement work")
+}
+
+func TestTaskEditRequiresExternalReferenceForGatedRepository(t *testing.T) {
+	is := assert.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	repoPath := filepath.Join(root, "repo")
+	require.NoError(t, os.MkdirAll(repoPath, 0o755))
+	store := registry.NewStore(paths)
+	require.NoError(t, store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID: "alpha", Name: "Alpha", Path: repoPath, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "op",
+		TitleTemplate: "[{{external_ref}}] {{summary}}",
+	}}}))
+	taskJSON := `[{"id":"op-1","title":"Existing task","description":"Description","acceptance_criteria":"Acceptance","status":"open","issue_type":"task"}]`
+	logPath := withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-1", stdout: taskJSON},
+		{dir: repoPath, args: "--json --sandbox show --id op-1", stdout: taskJSON},
+	})
+
+	_, _, err := executeCommandWithError(t, []string{"task", "edit", "op-1", "--title", "Updated task"})
+	require.Error(t, err)
+	is.Contains(err.Error(), "--external-ref <reference>")
+	is.NotContains(readFileString(t, logPath), "update")
+}
+
 func TestTaskCreateFailsWithoutRepositoryGuidance(t *testing.T) {
 	newTestState(t)
 	_, _, err := executeCommandWithError(t, []string{
@@ -63,7 +113,14 @@ func fakeTaskCreateBD(t *testing.T) string {
 printf '%s\n' "$*" >> "$FAKE_BD_LOG"
 case "$*" in
   "--json --sandbox create "*)
-    printf '%s\n' '{"id":"op-9","title":"Plan work","status":"open","issue_type":"epic"}'
+    case "$*" in
+      *"--type epic"*)
+        printf '%s\n' '{"id":"op-9","title":"Plan work","status":"open","issue_type":"epic"}'
+        ;;
+      *)
+        printf '%s\n' '{"id":"op-9","title":"Implement work","status":"open","issue_type":"task"}'
+        ;;
+    esac
     ;;
   *)
     echo "unexpected args: $*" >&2

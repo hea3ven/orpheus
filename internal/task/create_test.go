@@ -70,6 +70,72 @@ func TestCreateServiceCreatesValidatedTaskGraphItem(t *testing.T) {
 	}
 }
 
+//nolint:funlen // The table documents repository policy for task and epic creation.
+func TestCreateServiceEnforcesRequiredExternalReferenceBeforeCreation(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		titleTemplate string
+		issueType     task.IssueType
+		externalRef   string
+		wantCreated   bool
+	}{
+		{
+			name:          "gated task without reference",
+			titleTemplate: "[{{external_ref}}] {{summary}}",
+			externalRef:   " \t\n ",
+		},
+		{
+			name:          "gated task with reference",
+			titleTemplate: "[{{external_ref}}] {{summary}}",
+			externalRef:   " PLAN-7 ",
+			wantCreated:   true,
+		},
+		{
+			name:          "gated epic without reference",
+			titleTemplate: "[{{external_ref}}] {{summary}}",
+			issueType:     task.IssueTypeEpic,
+			wantCreated:   true,
+		},
+		{
+			name:        "ungated task without reference",
+			wantCreated: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := createTestSource("alpha", "op", t.TempDir())
+			source.Repository.TitleTemplate = test.titleTemplate
+			backend := &fakeCreateBackend{}
+			service := task.CreateService{
+				Sources:        []task.RepositorySource{source},
+				BackendFactory: func(task.RepositorySource) (task.CreateBackend, error) { return backend, nil },
+			}
+
+			_, err := service.Create(context.Background(), source, task.CreateRequest{
+				Title:              "title",
+				Description:        "description",
+				AcceptanceCriteria: "acceptance",
+				ExternalRef:        test.externalRef,
+				IssueType:          test.issueType,
+			})
+			if test.wantCreated {
+				if err != nil {
+					t.Fatalf("Create() error = %v", err)
+				}
+				if backend.created.Title == "" {
+					t.Fatal("Create mutator was not called")
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "--external-ref <reference>") {
+				t.Fatalf("Create() error = %v, want external-reference guidance", err)
+			}
+			if backend.created.Title != "" {
+				t.Fatalf("Create mutator was called with %#v", backend.created)
+			}
+		})
+	}
+}
+
 func TestCreateServiceRejectsInvalidRelationsBeforeCreate(t *testing.T) {
 	source := createTestSource("alpha", "op", t.TempDir())
 	other := createTestSource("beta", "be", t.TempDir())
