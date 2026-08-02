@@ -37,19 +37,20 @@ func runDoctor(command *cobra.Command, opts *rootOptions, fix bool) error {
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for doctor")
 
-	registryStore, paths, err := newRegistryStoreWithPathsFromEnvironment()
+	deps, err := opts.invocation(command)
 	if err != nil {
 		return err
 	}
-	reg, err := registryStore.Load()
+	reg, err := deps.registryStore.Load()
 	if err != nil {
 		return err
 	}
 
 	result, err := doctor.Run(doctor.Options{
-		Paths:    paths,
+		Paths:    deps.paths,
 		Registry: reg,
 		Fix:      fix,
+		Env:      deps.usageCaptureEnvironment(),
 	})
 	if err != nil {
 		return err

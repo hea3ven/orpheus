@@ -33,10 +33,8 @@ import (
 )
 
 var (
-	newBeadsTaskBackend                           = beads.NewTaskBackend
-	attachedAgentLauncher      agentexec.Launcher = agentexec.AttachedLauncher{}
-	taskDoneInputIsTerminal                       = readerIsTerminal
-	taskReviewOutputIsTerminal                    = writerIsTerminal
+	taskDoneInputIsTerminal    = readerIsTerminal
+	taskReviewOutputIsTerminal = writerIsTerminal
 )
 
 const taskStatsCostEstimateDisclaimer = "Estimated cost uses harness-reported estimates when available; " +
@@ -852,12 +850,12 @@ func executeTaskRunRoute(command *cobra.Command, opts *rootOptions, execution ta
 		if err := validateTaskRunExternalRef(resolved, execution.task); err != nil {
 			return err
 		}
-		dispatch, err := startTaskRunDispatch(command, execution.logger, execution.deps.paths, resolved, taskBackend, execution.task, execution.agentName, false, execution.repoRootMode)
+		dispatch, err := startTaskRunDispatch(command, execution.deps, execution.logger, resolved, taskBackend, execution.task, execution.agentName, false, execution.repoRootMode)
 		if err != nil {
 			return fmt.Errorf("task run %s: %w", resolved.TaskID, err)
 		}
 		logTaskRunLaunch(command, execution.logger, execution.repo.ID, resolved.TaskID, dispatch.start)
-		if err := launchTaskRunAgent(command, execution.logger, dispatch.service, execution.repo.ID, resolved.TaskID, dispatch.start, dispatch.prompt); err != nil {
+		if err := launchTaskRunAgent(command, execution.deps, execution.logger, dispatch.service, execution.repo.ID, resolved.TaskID, dispatch.start, dispatch.prompt); err != nil {
 			return err
 		}
 		return finishTaskRunAndReview(command, opts, dispatch, execution.repo.ID, resolved.TaskID, execution.agentName, execution.pipelineName)
@@ -868,7 +866,7 @@ func executeTaskRunRoute(command *cobra.Command, opts *rootOptions, execution ta
 		if err != nil {
 			return err
 		}
-		finalized, err := finalizeTaskWithConfirmation(command, newTaskFinalizationService(execution.deps.paths, taskCtx, execution.logger), workflow.FinalizeOptions{
+		finalized, err := finalizeTaskWithConfirmation(command, newTaskFinalizationService(execution.deps, taskCtx, execution.logger), workflow.FinalizeOptions{
 			TaskID:              resolved.TaskID,
 			RequirePassedReview: true,
 		})
@@ -898,7 +896,7 @@ func runTaskRunReview(
 	if err != nil {
 		return err
 	}
-	service := newTaskReviewLifecycleService(command, deps.paths, taskCtx, logger, bufio.NewReader(command.InOrStdin()))
+	service := newTaskReviewLifecycleService(command, deps, taskCtx, logger, bufio.NewReader(command.InOrStdin()))
 	outcome, err := service.Run(command.Context(), workflow.ReviewLifecycleOptions{
 		TaskID:            taskID,
 		PipelineName:      pipelineName,
@@ -972,7 +970,11 @@ func finishTaskRunAndReview(
 	agentName string,
 	pipelineName string,
 ) error {
-	if err := finishTaskRun(command, dispatch.service, repoID, taskID, dispatch.start); err != nil {
+	deps, err := opts.invocation(command)
+	if err != nil {
+		return err
+	}
+	if err := finishTaskRun(command, deps, dispatch.service, repoID, taskID, dispatch.start); err != nil {
 		return err
 	}
 
@@ -980,15 +982,11 @@ func finishTaskRunAndReview(
 		slog.String("component", "cli"),
 		slog.String("operation", "task_run_review"),
 	)
-	deps, err := opts.invocation(command)
-	if err != nil {
-		return err
-	}
 	taskCtx, err := loadTaskContextFromInvocation(deps)
 	if err != nil {
 		return err
 	}
-	service := newTaskReviewLifecycleService(command, deps.paths, taskCtx, logger, bufio.NewReader(command.InOrStdin()))
+	service := newTaskReviewLifecycleService(command, deps, taskCtx, logger, bufio.NewReader(command.InOrStdin()))
 	outcome, reviewed, err := service.RunAfterCompletedRun(command.Context(), workflow.ReviewAfterRunCompletionOptions{
 		RepoID:                    repoID,
 		TaskID:                    taskID,
@@ -1026,10 +1024,14 @@ type taskRunDispatch struct {
 	prompt  string
 }
 
+func boolPtr(value bool) *bool {
+	return &value
+}
+
 func startTaskRunDispatch(
 	command *cobra.Command,
+	deps *invocationDependencies,
 	logger *slog.Logger,
-	paths state.Paths,
 	resolved taskmodel.ResolvedTaskSource,
 	backend workflow.DispatchBackend,
 	taskItem taskmodel.Task,
@@ -1039,9 +1041,11 @@ func startTaskRunDispatch(
 ) (taskRunDispatch, error) {
 	dispatch := taskRunDispatch{
 		service: workflow.DispatchService{
-			Paths:    paths,
-			RunStore: taskstate.NewStoreWithLogger(paths, logger),
-			Logger:   logger,
+			Paths:                 deps.paths,
+			RunStore:              taskstate.NewStoreWithLogger(deps.paths, logger),
+			Logger:                logger,
+			UsageCaptureEnv:       deps.usageCaptureEnvironment(),
+			ResumeSessionsEnabled: boolPtr(deps.resumeSessionsEnabled()),
 		},
 	}
 	start, err := dispatch.service.Start(command.Context(), workflow.DispatchStartOptions{
@@ -1050,7 +1054,7 @@ func startTaskRunDispatch(
 		Backend: backend,
 		Task:    taskItem,
 		ResolveCommand: func(commandContext workflow.DispatchCommandContext) (workflow.DispatchCommand, error) {
-			prompt, commandSnapshot, err := resolveTaskRunAgentCommand(paths, agentName, commandContext.SessionName)
+			prompt, commandSnapshot, err := resolveTaskRunAgentCommand(deps.paths, agentName, commandContext.SessionName)
 			if err != nil {
 				return workflow.DispatchCommand{}, err
 			}
@@ -1058,7 +1062,7 @@ func startTaskRunDispatch(
 			return workflow.NewDispatchCommand(commandSnapshot), nil
 		},
 		ResolveFollowUpCommand: func(commandContext workflow.DispatchCommandContext) (workflow.DispatchCommand, error) {
-			prompt, commandSnapshot, err := resolveTaskRunFollowUpAgentCommand(paths, agentName, commandContext.SessionName)
+			prompt, commandSnapshot, err := resolveTaskRunFollowUpAgentCommand(deps.paths, agentName, commandContext.SessionName)
 			if err != nil {
 				return workflow.DispatchCommand{}, err
 			}
@@ -1099,6 +1103,7 @@ func logTaskRunLaunch(
 
 func launchTaskRunAgent(
 	command *cobra.Command,
+	deps *invocationDependencies,
 	logger *slog.Logger,
 	service workflow.DispatchService,
 	repoID string,
@@ -1112,20 +1117,20 @@ func launchTaskRunAgent(
 	span := logging.Start(command.Context(), logger, "attached agent process",
 		taskRunProcessAttrs(repoID, taskID, start)...,
 	)
-	err := attachedAgentLauncher.Run(command.Context(), agentexec.Command{
+	err := deps.agentLauncher.Run(command.Context(), agentexec.Command{
 		Name:    start.Command.AgentName,
 		Harness: start.Command.Harness,
 		Command: start.Command.Command,
 		Args:    append([]string{}, start.Command.Args...),
 	}, agentexec.LaunchOptions{
 		Dir: start.ExecutionDir,
-		Env: taskRunEnvironment(
+		Env: deps.invocationEnvironment(taskRunEnvironment(
 			repoID,
 			start.Task.ID,
 			start.Setup.WorktreePath,
 			start.Setup.Branch,
 			prompt,
-		),
+		)),
 		Stdin:  command.InOrStdin(),
 		Stdout: command.OutOrStdout(),
 		Stderr: command.ErrOrStderr(),
@@ -1231,24 +1236,26 @@ func taskRunProcessCanceled(ctx context.Context, err error) bool {
 
 func recordTaskRunUsage(
 	command *cobra.Command,
+	deps *invocationDependencies,
 	service workflow.DispatchService,
 	repoID string,
 	taskID string,
 	start workflow.DispatchStartResult,
 ) error {
-	usageOpts := taskRunUsageOptions(command, repoID, taskID, start, service.Logger)
+	usageOpts := taskRunUsageOptions(command, deps, repoID, taskID, start, service.Logger)
 	_, err := service.RunStore.RecordRunUsage(repoID, taskID, start.Attempt.Attempt, usageOpts)
 	return err
 }
 
 func finishTaskRun(
 	command *cobra.Command,
+	deps *invocationDependencies,
 	service workflow.DispatchService,
 	repoID string,
 	taskID string,
 	start workflow.DispatchStartResult,
 ) error {
-	usageErr := recordTaskRunUsage(command, service, repoID, taskID, start)
+	usageErr := recordTaskRunUsage(command, deps, service, repoID, taskID, start)
 	if err := service.Finish(repoID, taskID, start.Attempt.Attempt); err != nil {
 		return fmt.Errorf("task run %s: record run finish: %w", taskID, err)
 	}
@@ -1260,6 +1267,7 @@ func finishTaskRun(
 
 func taskRunUsageOptions(
 	command *cobra.Command,
+	deps *invocationDependencies,
 	repoID string,
 	taskID string,
 	start workflow.DispatchStartResult,
@@ -1270,7 +1278,7 @@ func taskRunUsageOptions(
 		ExecutionDir: start.ExecutionDir,
 		SessionName:  start.Attempt.Execution.SessionName,
 		StartedAt:    start.Attempt.Execution.StartedAt,
-		Env:          agent.UsageCaptureEnvironment(),
+		Env:          deps.usageCaptureEnvironment(),
 		Logger:       logger,
 		Context:      command.Context(),
 		RepoID:       repoID,
@@ -1295,7 +1303,7 @@ func runTaskReview(command *cobra.Command, opts *rootOptions, taskID string, pip
 	if err != nil {
 		return err
 	}
-	service := newTaskReviewLifecycleService(command, deps.paths, taskCtx, logger, bufio.NewReader(command.InOrStdin()))
+	service := newTaskReviewLifecycleService(command, deps, taskCtx, logger, bufio.NewReader(command.InOrStdin()))
 	outcome, err := service.Run(command.Context(), workflow.ReviewLifecycleOptions{
 		TaskID:       taskID,
 		PipelineName: pipelineName,
@@ -2707,16 +2715,16 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summa
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for task finalization")
 
-	paths, err := state.ResolveFromEnvironment()
+	deps, err := opts.invocation(command)
 	if err != nil {
 		return err
 	}
-	taskCtx, err := loadTaskContext()
+	taskCtx, err := loadTaskContextFromInvocation(deps)
 	if err != nil {
 		return err
 	}
 
-	service := newTaskFinalizationService(paths, taskCtx, logger)
+	service := newTaskFinalizationService(deps, taskCtx, logger)
 	finalized, err := finalizeTaskWithConfirmation(command, service, workflow.FinalizeOptions{
 		TaskID:              taskID,
 		Summary:             summary,
@@ -2737,26 +2745,37 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summa
 	return renderTaskDoneResult(command, finalized)
 }
 
-func newTaskFinalizationService(paths state.Paths, taskCtx taskContext, logger *slog.Logger) workflow.FinalizationService {
+func newTaskFinalizationService(deps *invocationDependencies, taskCtx taskContext, logger *slog.Logger) workflow.FinalizationService {
 	return workflow.FinalizationService{
-		Paths:   paths,
+		Paths:   deps.paths,
 		Sources: taskCtx.Sources,
 		BackendFactory: func(source taskmodel.RepositorySource) (workflow.FinalizationBackend, error) {
-			return newDiagnosticBeadsTaskBackend(source, logger)
+			return invocationTaskBackend(deps, source)
 		},
-		RunStore:   taskstate.NewStoreWithLogger(paths, logger),
-		PRProvider: pullrequest.GHProvider{Logger: logger},
+		RunStore:   taskstate.NewStoreWithLogger(deps.paths, logger),
+		PRProvider: newInvocationGHProvider(deps, logger),
 		Logger:     logger,
 	}
 }
 
-func newDiagnosticBeadsTaskBackend(source taskmodel.RepositorySource, logger *slog.Logger) (beads.TaskBackend, error) {
-	return beads.NewTaskBackendWithRunner(source.BackendDir, beads.CommandRunner{
-		Logger: logger,
-		DiagnosticAttrs: []slog.Attr{
-			slog.String("repo_id", source.Repository.ID),
-		},
-	})
+func newInvocationGHProvider(deps *invocationDependencies, logger *slog.Logger) pullrequest.GHProvider {
+	return pullrequest.GHProvider{
+		Logger:      logger,
+		Binary:      deps.executable("gh"),
+		Environment: environmentEntries(deps.environment),
+	}
+}
+
+func invocationTaskBackend(deps *invocationDependencies, source taskmodel.RepositorySource) (beads.TaskBackend, error) {
+	backend, err := deps.taskBackendFactory(source)
+	if err != nil {
+		return beads.TaskBackend{}, err
+	}
+	taskBackend, ok := backend.(beads.TaskBackend)
+	if !ok {
+		return beads.TaskBackend{}, fmt.Errorf("backend for repository %s does not support Beads task operations", source.Repository.ID)
+	}
+	return taskBackend, nil
 }
 
 func finalizeTaskWithConfirmation(
@@ -2884,29 +2903,30 @@ func runTaskSync(command *cobra.Command, opts *rootOptions, taskID string) error
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for task sync")
 
-	paths, err := state.ResolveFromEnvironment()
+	deps, err := opts.invocation(command)
 	if err != nil {
 		return err
 	}
-	taskCtx, err := loadTaskContext()
+	taskCtx, err := loadTaskContextFromInvocation(deps)
 	if err != nil {
 		return err
 	}
 
 	service := workflow.SyncService{
-		Paths:   paths,
+		Paths:   deps.paths,
 		Sources: taskCtx.Sources,
 		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.SyncBackend, error) {
-			return newDiagnosticBeadsTaskBackend(source, logger)
+			return invocationTaskBackend(deps, source)
 		},
-		RunStore: taskstate.NewStoreWithLogger(paths, logger),
+		RunStore: taskstate.NewStoreWithLogger(deps.paths, logger),
 		ConflictResolver: syncConflictAgentResolver{
-			paths:    paths,
-			stdout:   command.OutOrStdout(),
-			stderr:   command.ErrOrStderr(),
-			launcher: attachedAgentLauncher,
+			paths:            deps.paths,
+			stdout:           command.OutOrStdout(),
+			stderr:           command.ErrOrStderr(),
+			launcher:         deps.agentLauncher,
+			usageEnvironment: deps.usageCaptureEnvironment(),
 		},
-		PRProvider: pullrequest.GHProvider{Logger: logger},
+		PRProvider: newInvocationGHProvider(deps, logger),
 		Logger:     logger,
 	}
 	result, err := service.Sync(command.Context(), workflow.SyncOptions{TaskID: taskID})
@@ -2932,32 +2952,33 @@ func runTaskSyncAll(command *cobra.Command, opts *rootOptions) error {
 	)
 	logger.DebugContext(command.Context(), "loading registered repos for task sync all")
 
-	paths, err := state.ResolveFromEnvironment()
+	deps, err := opts.invocation(command)
 	if err != nil {
 		return err
 	}
-	taskCtx, err := loadTaskContext()
+	taskCtx, err := loadTaskContextFromInvocation(deps)
 	if err != nil {
 		return err
 	}
 
 	service := workflow.SyncService{
-		Paths:   paths,
+		Paths:   deps.paths,
 		Sources: taskCtx.Sources,
 		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.SyncBackend, error) {
-			return newDiagnosticBeadsTaskBackend(source, logger)
+			return invocationTaskBackend(deps, source)
 		},
 		ScanFactory: func(source taskmodel.RepositorySource) (taskmodel.ReadBackend, error) {
-			return newDiagnosticBeadsTaskBackend(source, logger)
+			return invocationTaskBackend(deps, source)
 		},
-		RunStore: taskstate.NewStoreWithLogger(paths, logger),
+		RunStore: taskstate.NewStoreWithLogger(deps.paths, logger),
 		ConflictResolver: syncConflictAgentResolver{
-			paths:    paths,
-			stdout:   command.OutOrStdout(),
-			stderr:   command.ErrOrStderr(),
-			launcher: attachedAgentLauncher,
+			paths:            deps.paths,
+			stdout:           command.OutOrStdout(),
+			stderr:           command.ErrOrStderr(),
+			launcher:         deps.agentLauncher,
+			usageEnvironment: deps.usageCaptureEnvironment(),
 		},
-		PRProvider: pullrequest.GHProvider{Logger: logger},
+		PRProvider: newInvocationGHProvider(deps, logger),
 		Logger:     logger,
 	}
 	result, err := service.SyncAll(command.Context())
@@ -3015,7 +3036,7 @@ func runTaskEdit(command *cobra.Command, opts *rootOptions, taskID string, editO
 		return err
 	}
 
-	service := taskEditUpdateService(taskCtx, logger)
+	service := taskEditUpdateService(deps, taskCtx)
 
 	updated, err := service.Update(command.Context(), resolved.Source, updateOpts)
 	if err != nil {
@@ -3131,11 +3152,11 @@ func buildTaskEditUpdateOptions(taskID string, editOpts taskEditOptions) taskmod
 	}
 }
 
-func taskEditUpdateService(taskCtx taskContext, logger *slog.Logger) taskmodel.UpdateService {
+func taskEditUpdateService(deps *invocationDependencies, taskCtx taskContext) taskmodel.UpdateService {
 	return taskmodel.UpdateService{
 		Sources: taskCtx.Sources,
 		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.UpdateBackend, error) {
-			return newDiagnosticBeadsTaskBackend(source, logger)
+			return invocationTaskBackend(deps, source)
 		},
 	}
 }
@@ -3169,10 +3190,11 @@ func resolveTaskRunFollowUpAgentCommand(paths state.Paths, agentName string, ses
 }
 
 type syncConflictAgentResolver struct {
-	paths    state.Paths
-	stdout   io.Writer
-	stderr   io.Writer
-	launcher agentexec.Launcher
+	paths            state.Paths
+	stdout           io.Writer
+	stderr           io.Writer
+	launcher         agentexec.Launcher
+	usageEnvironment map[string]string
 }
 
 func (r syncConflictAgentResolver) PrepareSyncConflictResolution(
@@ -3212,7 +3234,7 @@ func (r syncConflictAgentResolver) PrepareSyncConflictResolution(
 		Resolve: func(ctx context.Context) error {
 			return launcher.Run(ctx, commandSnapshot.ExecCommand(), agentexec.LaunchOptions{
 				Dir: opts.Worktree,
-				Env: syncConflictAgentEnvironment(
+				Env: append(syncConflictAgentEnvironment(
 					opts.Repository.ID,
 					opts.Task.ID,
 					opts.Worktree,
@@ -3220,19 +3242,27 @@ func (r syncConflictAgentResolver) PrepareSyncConflictResolution(
 					commandSnapshot.Prompt,
 					opts.ConflictFiles,
 				),
+					"XDG_CONFIG_HOME="+filepath.Dir(r.paths.ConfigRoot),
+					"XDG_DATA_HOME="+filepath.Dir(r.paths.DataRoot),
+				),
 				Stdin:  strings.NewReader(""),
 				Stdout: r.stdout,
 				Stderr: r.stderr,
 			})
 		},
-		CaptureUsage: syncConflictAgentUsageOptions(commandSnapshot, opts.Worktree),
+		CaptureUsage: syncConflictAgentUsageOptions(commandSnapshot, opts.Worktree, r.usageEnvironment),
 	}, nil
 }
 
 func syncConflictAgentUsageOptions(
 	command agent.CommandSnapshot,
 	worktree string,
+	environments ...map[string]string,
 ) func(taskstate.AgentExecution, error) taskstate.RecordRunUsageOptions {
+	var environment map[string]string
+	if len(environments) > 0 {
+		environment = environments[0]
+	}
 	return func(execution taskstate.AgentExecution, runErr error) taskstate.RecordRunUsageOptions {
 		if agentexec.IsStartError(runErr) {
 			return taskstate.RecordRunUsageOptions{
@@ -3247,7 +3277,7 @@ func syncConflictAgentUsageOptions(
 			ExecutionDir: worktree,
 			SessionName:  execution.SessionName,
 			StartedAt:    execution.StartedAt,
-			Env:          agent.UsageCaptureEnvironment(),
+			Env:          environment,
 		})
 	}
 }

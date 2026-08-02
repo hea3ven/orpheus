@@ -1,4 +1,5 @@
-package cli_test
+//nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
+package cli
 
 import (
 	"errors"
@@ -13,6 +14,7 @@ import (
 )
 
 func TestRepoAddAndListFlow(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	withFakeBDInit(t)
 
@@ -32,6 +34,7 @@ func TestRepoAddAndListFlow(t *testing.T) {
 }
 
 func TestRepoConfigInspectsEffectivePublicationPolicy(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	withFakeBDInit(t)
 	repoPath := newTestRepoPath(t)
@@ -52,6 +55,7 @@ func TestRepoConfigInspectsEffectivePublicationPolicy(t *testing.T) {
 }
 
 func TestRepoConfigUpdatesPublicationPolicyForExistingRepo(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	withFakeBDInit(t)
@@ -88,6 +92,7 @@ func TestRepoConfigUpdatesPublicationPolicyForExistingRepo(t *testing.T) {
 }
 
 func TestRepoConfigSetsAndClearsIncludePRReviewProcess(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	withFakeBDInit(t)
@@ -148,6 +153,7 @@ func TestRepoConfigSetsAndClearsIncludePRReviewProcess(t *testing.T) {
 }
 
 func TestRepoConfigClearsPublicationPolicy(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	withFakeBDInit(t)
@@ -192,6 +198,7 @@ func TestRepoConfigClearsPublicationPolicy(t *testing.T) {
 }
 
 func TestRepoConfigRejectsInvalidPolicyWithoutMutatingRegistry(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	withFakeBDInit(t)
@@ -220,6 +227,7 @@ func TestRepoConfigRejectsInvalidPolicyWithoutMutatingRegistry(t *testing.T) {
 }
 
 func TestRepoConfigSetInvalidGlobalPublicationFlowDoesNotMutateRegistry(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	withFakeBDInit(t)
@@ -247,6 +255,7 @@ func TestRepoConfigSetInvalidGlobalPublicationFlowDoesNotMutateRegistry(t *testi
 }
 
 func TestRepoConfigRejectsUnknownConfigName(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	withFakeBDInit(t)
@@ -263,6 +272,7 @@ func TestRepoConfigRejectsUnknownConfigName(t *testing.T) {
 }
 
 func TestRepoConfigGetOnePolicyValue(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	withFakeBDInit(t)
 	repoPath := newTestRepoPath(t)
@@ -282,6 +292,7 @@ func TestRepoConfigGetOnePolicyValue(t *testing.T) {
 }
 
 func TestRepoConfigSetsAndClearsReviewPipelineDefault(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	withFakeBDInit(t)
@@ -324,6 +335,7 @@ func TestRepoConfigSetsAndClearsReviewPipelineDefault(t *testing.T) {
 }
 
 func TestRepoConfigSetsAndClearsReviewPipelineAlias(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	withFakeBDInit(t)
@@ -369,6 +381,7 @@ func TestRepoConfigSetsAndClearsReviewPipelineAlias(t *testing.T) {
 }
 
 func TestRepoConfigRejectsUnknownReviewPipelineWithoutMutatingRegistry(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	withFakeBDInit(t)
@@ -401,6 +414,7 @@ func TestRepoConfigRejectsUnknownReviewPipelineWithoutMutatingRegistry(t *testin
 }
 
 func TestRepoAddStoresGitRootWhenPathIsNested(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	withFakeBDInit(t)
@@ -421,6 +435,7 @@ func TestRepoAddStoresGitRootWhenPathIsNested(t *testing.T) {
 }
 
 func TestRepoAddWarnsWhenRemoteIsMissing(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	withFakeBDInit(t)
 
@@ -439,6 +454,7 @@ func TestRepoAddWarnsWhenRemoteIsMissing(t *testing.T) {
 }
 
 func TestRepoAddRejectsNonGitPath(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 
@@ -453,6 +469,7 @@ func TestRepoAddRejectsNonGitPath(t *testing.T) {
 }
 
 func TestRepoAddRejectsDuplicatePath(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	withFakeBDInit(t)
@@ -469,6 +486,7 @@ func TestRepoAddRejectsDuplicatePath(t *testing.T) {
 }
 
 func TestRepoAddRejectsDuplicateDerivedIDAndName(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	withFakeBDInit(t)
@@ -488,6 +506,7 @@ func TestRepoAddRejectsDuplicateDerivedIDAndName(t *testing.T) {
 }
 
 func TestRepoAddVerboseEmitsDiagnosticsToStderr(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	withFakeBDInit(t)
 
@@ -504,6 +523,7 @@ func TestRepoAddVerboseEmitsDiagnosticsToStderr(t *testing.T) {
 }
 
 func TestRepoAddInitializesManagedBeadsAfterValidation(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	logPath := withFakeBDInit(t)
@@ -539,6 +559,7 @@ func TestRepoAddInitializesManagedBeadsAfterValidation(t *testing.T) {
 }
 
 func TestRepoAddHoldsGlobalMutationLockDuringManagedInitialization(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	withFakeBDInit(t)
@@ -546,7 +567,7 @@ func TestRepoAddHoldsGlobalMutationLockDuringManagedInitialization(t *testing.T)
 	paths := currentTestPaths(t)
 	lockPath, err := paths.GlobalMutationLockPath()
 	must.NoError(err)
-	t.Setenv("FAKE_BD_LOCK_PATH", lockPath)
+	setTestEnvironment(t, "FAKE_BD_LOCK_PATH", lockPath)
 
 	stdout, stderr, err := executeCommandWithError(t, []string{"repo", "add", repoPath})
 
@@ -559,6 +580,7 @@ func TestRepoAddHoldsGlobalMutationLockDuringManagedInitialization(t *testing.T)
 }
 
 func TestRepoAddFailsFastWhenGlobalMutationLockIsHeld(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	logPath := withFakeBDInit(t)
@@ -587,6 +609,7 @@ func TestRepoAddFailsFastWhenGlobalMutationLockIsHeld(t *testing.T) {
 }
 
 func TestRepoAddValidatesManagedRegistryConflictsBeforeInitialization(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	logPath := withFakeBDInit(t)
@@ -611,6 +634,7 @@ func TestRepoAddValidatesManagedRegistryConflictsBeforeInitialization(t *testing
 }
 
 func TestRepoAddRejectsExistingManagedStateWithoutSavingRegistry(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	logPath := withFakeBDInit(t)
@@ -636,6 +660,7 @@ func TestRepoAddRejectsExistingManagedStateWithoutSavingRegistry(t *testing.T) {
 }
 
 func TestRepoBeadsDirResolvesLocalRepoByID(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -657,6 +682,7 @@ func TestRepoBeadsDirResolvesLocalRepoByID(t *testing.T) {
 }
 
 func TestRepoBeadsDirResolvesManagedRepoByName(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -679,6 +705,7 @@ func TestRepoBeadsDirResolvesManagedRepoByName(t *testing.T) {
 }
 
 func TestRepoBeadsDirResolvesLocalRepoByBeadsPrefix(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -700,6 +727,7 @@ func TestRepoBeadsDirResolvesLocalRepoByBeadsPrefix(t *testing.T) {
 }
 
 func TestRepoBeadsDirResolvesManagedRepoByBeadsPrefix(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -722,6 +750,7 @@ func TestRepoBeadsDirResolvesManagedRepoByBeadsPrefix(t *testing.T) {
 }
 
 func TestRepoBeadsDirVerboseEmitsDiagnosticsToStderr(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -748,6 +777,7 @@ func TestRepoBeadsDirVerboseEmitsDiagnosticsToStderr(t *testing.T) {
 }
 
 func TestRepoBeadsDirRejectsUnknownRepo(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -773,9 +803,5 @@ func TestRepoBeadsDirRejectsUnknownRepo(t *testing.T) {
 func currentTestPaths(t *testing.T) state.Paths {
 	t.Helper()
 
-	paths, err := state.ResolveFromEnvironment()
-	if err != nil {
-		t.Fatalf("resolve state: %v", err)
-	}
-	return paths
+	return testInvocationFor(t).paths
 }
