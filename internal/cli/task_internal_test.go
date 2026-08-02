@@ -16,6 +16,8 @@ import (
 )
 
 func TestTaskEditRecognizesExplicitlyEmptyPlanningInput(t *testing.T) {
+	t.Parallel()
+
 	t.Run("flag", func(t *testing.T) {
 		opts := buildTaskEditUpdateOptions("op-1", taskEditOptions{titleSet: true})
 		if opts.Title == nil || *opts.Title != "" {
@@ -67,6 +69,8 @@ func TestSyncConflictAgentUsageOptionsUnsupportedHarnessUsesStableReason(t *test
 }
 
 func TestSyncConflictAgentResolverUsesEffectivePromptInCommandAndEnvironment(t *testing.T) {
+	t.Parallel()
+
 	promptAppend := "Resolve only conflict markers.\nKeep unrelated task work unchanged."
 	wantPrompt := agent.RenderEffectivePrompt(promptAppend)
 	paths := syncConflictPromptTestPaths(t, promptAppend)

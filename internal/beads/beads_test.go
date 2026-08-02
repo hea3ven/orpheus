@@ -95,13 +95,16 @@ func (r *fakeRunner) Run(dir string, args ...string) (beads.Result, error) {
 }
 
 func TestCommandRunnerSanitizesBeadsEnvironment(t *testing.T) {
-	bin := filepath.Join(t.TempDir(), "bd-fake")
+	t.Parallel()
+
+	binDir := t.TempDir()
+	bin := filepath.Join(binDir, "bd")
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf 'BEADS_DIR=%s\\n' \"${BEADS_DIR-unset}\"\nprintf 'BD_NON_INTERACTIVE=%s\\n' \"${BD_NON_INTERACTIVE-unset}\"\n"), 0o755); err != nil {
 		t.Fatalf("write fake bd: %v", err)
 	}
-	t.Setenv("BEADS_DIR", "/tmp/wrong")
-
-	result, err := beads.CommandRunner{Binary: bin}.Run(t.TempDir(), "context")
+	result, err := beads.CommandRunner{
+		Environment: []string{"BEADS_DIR=/tmp/wrong", "PATH=" + binDir},
+	}.Run(t.TempDir(), "context")
 	if err != nil {
 		t.Fatalf("run fake bd: %v", err)
 	}

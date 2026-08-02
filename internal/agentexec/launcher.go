@@ -65,7 +65,11 @@ func IsStartError(err error) bool {
 }
 
 // AttachedLauncher runs an agent as a direct child process attached to the supplied stdio.
-type AttachedLauncher struct{}
+type AttachedLauncher struct {
+	// Environment is the complete inherited environment for launched agents.
+	// Empty uses the current process environment.
+	Environment []string
+}
 
 // Run executes command directly with no implicit shell parsing.
 func (l AttachedLauncher) Run(ctx context.Context, command Command, opts LaunchOptions) error {
@@ -78,13 +82,17 @@ func (l AttachedLauncher) Run(ctx context.Context, command Command, opts LaunchO
 	if err := ctx.Err(); err != nil {
 		return &StartError{Name: command.Name, Err: err}
 	}
-	if err := requireTestFakeAgent(command); err != nil {
+	environment := l.Environment
+	if environment == nil {
+		environment = os.Environ()
+	}
+	if err := requireTestFakeAgent(command, environment); err != nil {
 		return &StartError{Name: command.Name, Err: err}
 	}
 
-	process := exec.CommandContext(ctx, command.Command, command.Args...)
+	process := exec.CommandContext(ctx, resolveExecutable(environment, command.Command), command.Args...)
 	process.Dir = opts.Dir
-	process.Env = append(os.Environ(), opts.Env...)
+	process.Env = mergeEnvironment(environment, opts.Env)
 	process.Stdin = opts.Stdin
 	process.Stdout = opts.Stdout
 	process.Stderr = opts.Stderr
@@ -105,20 +113,70 @@ func (l AttachedLauncher) Run(ctx context.Context, command Command, opts LaunchO
 	return nil
 }
 
-func requireTestFakeAgent(command Command) error {
+func mergeEnvironment(base []string, overrides []string) []string {
+	merged := append([]string{}, base...)
+	indexes := make(map[string]int, len(merged))
+	for index, entry := range merged {
+		if key, _, ok := strings.Cut(entry, "="); ok {
+			indexes[key] = index
+		}
+	}
+	for _, entry := range overrides {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			merged = append(merged, entry)
+			continue
+		}
+		if index, ok := indexes[key]; ok {
+			merged[index] = entry
+			continue
+		}
+		indexes[key] = len(merged)
+		merged = append(merged, entry)
+	}
+	return merged
+}
+
+func resolveExecutable(environment []string, name string) string {
+	if filepath.IsAbs(name) || strings.ContainsRune(name, os.PathSeparator) {
+		return name
+	}
+	for _, entry := range environment {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || key != "PATH" {
+			continue
+		}
+		for _, directory := range filepath.SplitList(value) {
+			candidate := filepath.Join(directory, name)
+			info, err := os.Stat(candidate)
+			if err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+				absolute, absErr := filepath.Abs(candidate)
+				if absErr == nil {
+					return absolute
+				}
+			}
+		}
+	}
+	return filepath.Join(os.TempDir(), "orpheus-missing-executable", filepath.Base(name))
+}
+
+func requireTestFakeAgent(command Command, environment []string) error {
 	if !testguard.IsTestProcess() || !supportedHarnessCommand(command) {
 		return nil
 	}
 
-	expected := testguard.FakeAgentPath(command.Command)
+	expected := environmentValue(environment, testguard.FakeAgentEnvKey(command.Command))
+	if expected == "" {
+		expected = testguard.FakeAgentPath(command.Command)
+	}
 	if expected == "" {
 		return fmt.Errorf(
 			"test safety gate blocked supported agent executable %q; register an explicit fake",
 			command.Command,
 		)
 	}
-	resolved, err := exec.LookPath(command.Command)
-	if err != nil {
+	resolved := resolveExecutable(environment, command.Command)
+	if _, err := os.Stat(resolved); err != nil {
 		return fmt.Errorf("test safety gate resolve registered fake %q: %w", command.Command, err)
 	}
 	if !sameExecutable(expected, resolved) {
@@ -130,6 +188,16 @@ func requireTestFakeAgent(command Command) error {
 		)
 	}
 	return nil
+}
+
+func environmentValue(environment []string, name string) string {
+	for _, entry := range environment {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok && key == name {
+			return value
+		}
+	}
+	return ""
 }
 
 func supportedHarnessCommand(command Command) bool {

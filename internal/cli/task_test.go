@@ -1,4 +1,5 @@
-package cli_test
+//nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
+package cli
 
 import (
 	"bytes"
@@ -15,7 +16,6 @@ import (
 	"time"
 
 	"github.com/hea3ven/orpheus/internal/agent"
-	"github.com/hea3ven/orpheus/internal/cli"
 	"github.com/hea3ven/orpheus/internal/registry"
 	reviewconfig "github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
@@ -91,6 +91,8 @@ func registerLocalManagedTaskTestRepos(t *testing.T) localManagedTaskRepos {
 }
 
 func TestTaskListListsActiveTasksAcrossRegisteredReposWithDefaultAndDetailedTables(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	newTestState(t)
 	repos := registerLocalManagedTaskTestRepos(t)
@@ -159,6 +161,8 @@ func assertTaskListBDLog(t *testing.T, logPath string, repos localManagedTaskRep
 }
 
 func TestTaskReadyListsReadyTasksAcrossRegisteredRepos(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -207,6 +211,8 @@ func TestTaskReadyListsReadyTasksAcrossRegisteredRepos(t *testing.T) {
 }
 
 func TestTaskReadyExcludesTasksMissingRequiredExternalReference(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	newTestState(t)
 	paths := currentTestPaths(t)
@@ -239,6 +245,8 @@ func TestTaskReadyExcludesTasksMissingRequiredExternalReference(t *testing.T) {
 }
 
 func TestTaskListReportsPartialRepoFailures(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -291,6 +299,8 @@ func TestTaskListReportsPartialRepoFailures(t *testing.T) {
 }
 
 func TestTaskReadyReportsPartialRepoFailures(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -342,6 +352,8 @@ func TestTaskReadyReportsPartialRepoFailures(t *testing.T) {
 }
 
 func TestTaskShowResolvesPrefixQueriesOnlyResolvedRepoAndRendersDetails(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	newTestState(t)
 	repos := registerLocalManagedTaskTestRepos(t)
@@ -414,6 +426,8 @@ func assertTaskShowBDLog(t *testing.T, logPath string, repos localManagedTaskRep
 }
 
 func TestTaskShowReportsMalformedAndUnknownPrefixes(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -437,6 +451,8 @@ func TestTaskShowReportsMalformedAndUnknownPrefixes(t *testing.T) {
 
 //nolint:funlen // The stats fixture is clearer with implementation, review, and totals assertions together.
 func TestTaskStatsRendersImplementationExecutionUsage(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -553,6 +569,8 @@ func TestTaskStatsRendersImplementationExecutionUsage(t *testing.T) {
 
 //nolint:funlen // The stats fixture documents the persisted conflict-repair telemetry.
 func TestTaskStatsRendersSyncConflictResolutionExecutionUsage(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -629,6 +647,8 @@ func TestTaskStatsRendersSyncConflictResolutionExecutionUsage(t *testing.T) {
 }
 
 func TestTaskStatsKeepsTokenUsageWhenCostPricingIsUnknown(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -688,6 +708,8 @@ func TestTaskStatsKeepsTokenUsageWhenCostPricingIsUnknown(t *testing.T) {
 
 //nolint:funlen // The Pi stats fixture keeps persisted usage, cost, and rendered totals together.
 func TestTaskStatsUsesPiReportedEstimatedCost(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -761,6 +783,8 @@ func TestTaskStatsUsesPiReportedEstimatedCost(t *testing.T) {
 }
 
 func TestTaskStatsCountsMissingPiUsageCostAsUnknown(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -816,6 +840,8 @@ func TestTaskStatsCountsMissingPiUsageCostAsUnknown(t *testing.T) {
 
 //nolint:funlen // The aggregate fixture setup documents the period metrics under test.
 func TestTaskStatsAggregateGroupsResolvedTasksByDay(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	newTestState(t)
 	paths := currentTestPaths(t)
@@ -894,6 +920,8 @@ func TestTaskStatsAggregateGroupsResolvedTasksByDay(t *testing.T) {
 }
 
 func TestTaskStatsAggregateGroupsResolvedTasksByMonth(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	newTestState(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
@@ -916,6 +944,8 @@ func TestTaskStatsAggregateGroupsResolvedTasksByMonth(t *testing.T) {
 }
 
 func TestTaskStatsAggregateRepoFilterSkipsUnselectedRepoFailures(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -950,6 +980,8 @@ func TestTaskStatsAggregateRepoFilterSkipsUnselectedRepoFailures(t *testing.T) {
 }
 
 func TestTaskStatsAggregateExcludesEpicsAndKeepsMixedExecutableTypes(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -981,6 +1013,8 @@ func TestTaskStatsAggregateExcludesEpicsAndKeepsMixedExecutableTypes(t *testing.
 }
 
 func TestTaskStatsDirectEpicStatsRemainAvailable(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	newTestState(t)
 	paths := currentTestPaths(t)
@@ -1080,6 +1114,8 @@ func recordTaskStatsAggregateRun(
 }
 
 func TestTaskShowRendersClosedItemsAndHistory(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -1120,6 +1156,8 @@ func TestTaskShowRendersClosedItemsAndHistory(t *testing.T) {
 
 //nolint:funlen // The history sequence is the behavior under test.
 func TestTaskShowRendersChronologicalHistoryForClosedEpic(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -1204,6 +1242,8 @@ func TestTaskShowRendersChronologicalHistoryForClosedEpic(t *testing.T) {
 }
 
 func TestTaskShowProjectsReviewAttemptMilestonesIntoHistory(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -1257,6 +1297,8 @@ func TestTaskShowProjectsReviewAttemptMilestonesIntoHistory(t *testing.T) {
 }
 
 func TestTaskShowProjectsReviewFollowUpCreationIntoHistory(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -1338,6 +1380,8 @@ func recordTaskShowReviewAttempt(
 }
 
 func TestTaskShowFailsWhenLocalTaskStateCannotBeLoaded(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -1373,6 +1417,8 @@ func TestTaskShowFailsWhenLocalTaskStateCannotBeLoaded(t *testing.T) {
 }
 
 func TestTaskShowRendersActiveNonTaskItems(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -1402,6 +1448,8 @@ func TestTaskShowRendersActiveNonTaskItems(t *testing.T) {
 }
 
 func TestTaskDirPrintsWorktreeDirectory(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -1462,6 +1510,8 @@ func TestTaskDirPrintsWorktreeDirectory(t *testing.T) {
 }
 
 func TestTaskDirPrintsRepoRootForMainTask(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -1500,6 +1550,8 @@ func TestTaskDirPrintsRepoRootForMainTask(t *testing.T) {
 }
 
 func TestTaskDirReportsMalformedAndUnknownPrefixes(t *testing.T) {
+	t.Parallel()
+
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -1522,6 +1574,8 @@ func TestTaskDirReportsMalformedAndUnknownPrefixes(t *testing.T) {
 }
 
 func TestTaskDirReportsMissingAndInconsistentMetadata(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range taskDirMetadataErrorCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			is := assert.New(t)
@@ -1596,6 +1650,7 @@ func taskDirMetadataErrorCases() []taskDirMetadataErrorCase {
 }
 
 func TestTaskRunRejectsClosedTaskBeforeLocalWorkflowRouting(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -1645,6 +1700,7 @@ func TestTaskRunRejectsClosedTaskBeforeLocalWorkflowRouting(t *testing.T) {
 
 //nolint:funlen // Workflow test is clearer when setup, command, and state assertions stay together.
 func TestTaskRunExecutesImplementerDefaultAttachedFromDeterministicWorktree(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -1773,6 +1829,7 @@ func TestTaskRunExecutesImplementerDefaultAttachedFromDeterministicWorktree(t *t
 
 //nolint:funlen // The generated Codex launch contract is best asserted end to end.
 func TestTaskRunStructuredCodexProfileBuildsAttachedCommand(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -1848,6 +1905,7 @@ func TestTaskRunStructuredCodexProfileBuildsAttachedCommand(t *testing.T) {
 
 //nolint:funlen // The Pi usage fixture is clearer as one end-to-end run scenario.
 func TestTaskRunStructuredPiProfileCapturesUsage(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -1879,7 +1937,7 @@ func TestTaskRunStructuredPiProfileCapturesUsage(t *testing.T) {
 	withFakeAgent(t, "pi", 0)
 	writeStructuredPiTaskRunAgentConfig(t, paths, "pi-medium", "openai-codex/gpt-5.5", "high", false)
 	piSessionDir := t.TempDir()
-	t.Setenv("PI_CODING_AGENT_SESSION_DIR", piSessionDir)
+	setTestEnvironment(t, "PI_CODING_AGENT_SESSION_DIR", piSessionDir)
 	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-pi"))
 	must.NoError(err)
 	sessionPath := filepath.Join(piSessionDir, "task-run-session.jsonl")
@@ -1914,6 +1972,7 @@ func TestTaskRunStructuredPiProfileCapturesUsage(t *testing.T) {
 }
 
 func TestTaskRunRejectsMissingRequiredExternalReferenceBeforeSetup(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -1961,6 +2020,7 @@ func TestTaskRunRejectsMissingRequiredExternalReferenceBeforeSetup(t *testing.T)
 }
 
 func TestTaskRunRejectsChildWhenImmediateParentEpicIsNotInProgress(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -2005,6 +2065,7 @@ func TestTaskRunRejectsChildWhenImmediateParentEpicIsNotInProgress(t *testing.T)
 
 //nolint:funlen // Workflow test is clearer when setup, command, and state assertions stay together.
 func TestTaskRunMainExecutesAgentFromRegisteredRepoRoot(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -2088,6 +2149,7 @@ func TestTaskRunMainExecutesAgentFromRegisteredRepoRoot(t *testing.T) {
 
 //nolint:funlen // Workflow test is clearer when setup, command, and state assertions stay together.
 func TestTaskRunRepoRootExecutesAgentFromRegisteredRepoRootOnTaskBranch(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -2175,6 +2237,7 @@ func TestTaskRunRepoRootExecutesAgentFromRegisteredRepoRootOnTaskBranch(t *testi
 }
 
 func TestTaskRunPlainRetryRequiresMainForRepoRootMetadata(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -2218,6 +2281,7 @@ func TestTaskRunPlainRetryRequiresMainForRepoRootMetadata(t *testing.T) {
 }
 
 func TestTaskRunRepoRootFailsDirtyRepoRootBeforeLaunch(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -2257,6 +2321,7 @@ func TestTaskRunRepoRootFailsDirtyRepoRootBeforeLaunch(t *testing.T) {
 }
 
 func TestTaskRunMainAllowsOwnedInProgressRepoRootTask(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -2307,6 +2372,7 @@ func TestTaskRunMainAllowsOwnedInProgressRepoRootTask(t *testing.T) {
 }
 
 func TestTaskRunMainBlocksOtherRepoRootOwnerButWorktreeRunStillWorks(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -2358,6 +2424,7 @@ func TestTaskRunMainBlocksOtherRepoRootOwnerButWorktreeRunStillWorks(t *testing.
 }
 
 func TestTaskRunMainFailsDirtyRepoRootBeforeLaunch(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -2397,6 +2464,7 @@ func TestTaskRunMainFailsDirtyRepoRootBeforeLaunch(t *testing.T) {
 
 //nolint:funlen // The dirty follow-up dispatch path is clearer as one linear CLI workflow.
 func TestTaskRunReviewFollowUpAllowsDirtyMainTarget(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -2472,6 +2540,7 @@ func TestTaskRunReviewFollowUpAllowsDirtyMainTarget(t *testing.T) {
 }
 
 func TestTaskReviewShowDisplaysLatestFindingsAndCreatedFollowUps(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	paths, repoPath := setupTaskReviewShowRepo(t, "op-main")
 	seedTaskReviewShowState(t, paths, repoPath)
@@ -2512,6 +2581,7 @@ func TestTaskReviewShowDisplaysLatestFindingsAndCreatedFollowUps(t *testing.T) {
 }
 
 func TestTaskReviewShowGuidesRetryAfterFailedFollowUp(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	paths, repoPath := setupTaskReviewShowRepo(t, "op-retry")
@@ -2548,6 +2618,7 @@ func TestTaskReviewShowGuidesRetryAfterFailedFollowUp(t *testing.T) {
 }
 
 func TestTaskReviewShowGuidesWhenTaskHasNoReviewAttempts(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	setupTaskReviewShowRepo(t, "op-empty")
 
@@ -2560,6 +2631,7 @@ func TestTaskReviewShowGuidesWhenTaskHasNoReviewAttempts(t *testing.T) {
 }
 
 func TestTaskReviewShowRendersManuallyAddressedFinding(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	paths, _ := setupTaskReviewShowRepo(t, "op-addressed")
@@ -2587,6 +2659,7 @@ func TestTaskReviewShowRendersManuallyAddressedFinding(t *testing.T) {
 }
 
 func TestTaskReviewShowGuidesInterruptedAutomatedBlockerDecision(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	paths, _ := setupTaskReviewShowRepo(t, "op-interrupted")
@@ -2616,6 +2689,7 @@ func TestTaskReviewShowGuidesInterruptedAutomatedBlockerDecision(t *testing.T) {
 }
 
 func TestTaskReviewShowDisplaysClosedTaskReviewState(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	paths, repoPath := setupTaskReviewShowRepoWithStatus(t, "op-main", "closed")
 	seedTaskReviewShowState(t, paths, repoPath)
@@ -2797,6 +2871,7 @@ func mixedReviewFindings() []taskstate.ReviewFinding {
 }
 
 func TestTaskRunWorktreeModeDoesNotCareAboutDirtyRepoRoot(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -2831,6 +2906,7 @@ func TestTaskRunWorktreeModeDoesNotCareAboutDirtyRepoRoot(t *testing.T) {
 }
 
 func TestTaskRunAllowsOwnedInProgressTaskWithMatchingMetadata(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -2883,6 +2959,7 @@ func TestTaskRunAllowsOwnedInProgressTaskWithMatchingMetadata(t *testing.T) {
 
 //nolint:funlen // Failure workflow needs the fake command script and assertions in one scenario.
 func TestTaskRunDoesNotLaunchOrRecordAttemptWhenMarkInProgressFails(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -2942,8 +3019,8 @@ JSON
 esac
 `, shellQuote(canonicalTestPath(t, repoPath)), shellQuote(bdCountPath), shellQuote(bdCountPath), shellQuote(bdCountPath))
 	must.NoError(os.WriteFile(bdPath, []byte(script), 0o755))
-	t.Setenv("FAKE_BD_LOG", bdLogPath)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	setTestEnvironment(t, "FAKE_BD_LOG", bdLogPath)
+	prependTestPath(t, binDir)
 
 	agentLogPath := withFakeAgent(t, "race-agent", 0)
 	writeTaskRunAgentConfig(t, paths, "race", "race-agent", nil)
@@ -2970,6 +3047,7 @@ esac
 }
 
 func TestTaskRunFailsFastWhenGlobalMutationLockHeldBeforeSetup(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -3007,6 +3085,7 @@ func TestTaskRunFailsFastWhenGlobalMutationLockHeldBeforeSetup(t *testing.T) {
 }
 
 func TestTaskRunReleasesGlobalMutationLockWhileAgentRunsAndReacquiresForFinish(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -3041,7 +3120,7 @@ printf 'lock absent during agent\n' >> %s
 printf 'agent stdout\n'
 `, shellQuote(lockPath), shellQuote(agentLogPath), shellQuote(lockPath))
 	must.NoError(os.WriteFile(agentPath, []byte(script), 0o755))
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	prependTestPath(t, binDir)
 	writeTaskRunAgentConfig(t, paths, "lock-check", "lock-agent", nil)
 
 	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "op-finalize"})
@@ -3065,6 +3144,7 @@ printf 'agent stdout\n'
 }
 
 func TestTaskRunAgentFlagSelectsNamedProfile(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -3111,6 +3191,7 @@ func TestTaskRunAgentFlagSelectsNamedProfile(t *testing.T) {
 }
 
 func TestTaskRunRecordsFailedAttemptWhenAgentExitsNonZero(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -3153,6 +3234,7 @@ func TestTaskRunRecordsFailedAttemptWhenAgentExitsNonZero(t *testing.T) {
 }
 
 func TestTaskRunRecordsStartFailureWhenAgentProcessDoesNotStart(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -3196,6 +3278,7 @@ func TestTaskRunRecordsStartFailureWhenAgentProcessDoesNotStart(t *testing.T) {
 }
 
 func TestTaskRunHeaderWriteFailureRecordsStartFailure(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -3217,7 +3300,7 @@ func TestTaskRunHeaderWriteFailureRecordsStartFailure(t *testing.T) {
 	agentLogPath := withFakeAgent(t, "header-agent", 0)
 	writeTaskRunAgentConfig(t, paths, "header", "header-agent", nil)
 
-	command := cli.NewRootCommand()
+	command := newTestRootCommand(t, []string{"task", "run", "op-header"}, io.Discard)
 	command.SetIn(bytes.NewBuffer(nil))
 	command.SetOut(new(bytes.Buffer))
 	command.SetErr(failingTaskRunHeaderWriter{})
@@ -3243,6 +3326,7 @@ func TestTaskRunHeaderWriteFailureRecordsStartFailure(t *testing.T) {
 
 //nolint:funlen // The fixture prepares a persisted blocker before exercising the follow-up start failure.
 func TestTaskReviewFollowUpHeaderWriteFailureRecordsStartFailure(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -3285,7 +3369,7 @@ func TestTaskReviewFollowUpHeaderWriteFailureRecordsStartFailure(t *testing.T) {
 		{dir: repoPath, args: "--json --readonly --sandbox list --all --limit 0", stdout: taskJSON},
 	})
 
-	command := cli.NewRootCommand()
+	command := newTestRootCommand(t, []string{"task", "review", "op-followup-header"}, io.Discard)
 	command.SetIn(bytes.NewBuffer(nil))
 	command.SetOut(new(bytes.Buffer))
 	command.SetErr(failingAgentHeaderWriter{})
@@ -3317,6 +3401,7 @@ func TestTaskReviewFollowUpHeaderWriteFailureRecordsStartFailure(t *testing.T) {
 }
 
 func TestTaskRunRefusesLatestRunningAttempt(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -3351,6 +3436,7 @@ func TestTaskRunRefusesLatestRunningAttempt(t *testing.T) {
 }
 
 func TestTaskRunReportsUnknownAgentProfileBeforeLaunching(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -3385,6 +3471,7 @@ func TestTaskRunReportsUnknownAgentProfileBeforeLaunching(t *testing.T) {
 }
 
 func TestTaskDoneCommitsPushesClosesAndRecordsFinalization(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -3439,6 +3526,7 @@ func TestTaskDoneCommitsPushesClosesAndRecordsFinalization(t *testing.T) {
 }
 
 func TestTaskDoneRequiresPassedReview(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -3475,6 +3563,7 @@ func TestTaskDoneRequiresPassedReview(t *testing.T) {
 }
 
 func TestTaskReviewApproveFinalizesAndRecordsPassedAttempt(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -3527,6 +3616,7 @@ func TestTaskReviewApproveFinalizesAndRecordsPassedAttempt(t *testing.T) {
 }
 
 func TestTaskReviewManualContextShowsOriginalAndLatestFollowUpCompletion(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -3571,6 +3661,7 @@ func TestTaskReviewManualContextShowsOriginalAndLatestFollowUpCompletion(t *test
 }
 
 func TestTaskReviewRejectsStaleMetadataMirror(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -3609,6 +3700,7 @@ func TestTaskReviewRejectsStaleMetadataMirror(t *testing.T) {
 }
 
 func TestTaskReviewRejectsStagedCandidateChanges(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -3648,6 +3740,7 @@ func TestTaskReviewRejectsStagedCandidateChanges(t *testing.T) {
 }
 
 func TestTaskReviewRejectsMissingCandidateChangesWithoutFinalizationCommit(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -3685,6 +3778,7 @@ func TestTaskReviewRejectsMissingCandidateChangesWithoutFinalizationCommit(t *te
 
 //nolint:funlen // The setup and restoration assertions are clearer in one workflow test.
 func TestTaskReviewRestoresCandidateChangesMutatedDuringManualStep(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -3772,6 +3866,7 @@ func (r *mutatingReviewInput) Read(p []byte) (int, error) {
 
 //nolint:funlen // The fixture records every manual finding category before blocking.
 func TestTaskReviewBlockingFindingBlocksWithoutFinalizing(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -3835,6 +3930,7 @@ func TestTaskReviewBlockingFindingBlocksWithoutFinalizing(t *testing.T) {
 }
 
 func TestTaskReviewAdvisoryAndSeparateTaskFindingsDoNotBlockApproval(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -3893,6 +3989,7 @@ func TestTaskReviewAdvisoryAndSeparateTaskFindingsDoNotBlockApproval(t *testing.
 }
 
 func TestTaskReviewCreatesSelectedSeparateTaskFollowUp(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -3952,6 +4049,7 @@ func TestTaskReviewCreatesSelectedSeparateTaskFollowUp(t *testing.T) {
 
 //nolint:funlen // The task-run proposal selection flow spans implementation, review, and publication.
 func TestTaskRunUsesSeparateTaskProposalSelection(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
@@ -4033,6 +4131,7 @@ printf 'reviewed\n' > reviewed.txt
 }
 
 func TestTaskReviewCanAbortWhenSeparateTaskCreationFails(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -4091,6 +4190,7 @@ func TestTaskReviewCanAbortWhenSeparateTaskCreationFails(t *testing.T) {
 }
 
 func TestTaskReviewAbortDoesNotFinalize(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -4129,6 +4229,7 @@ func TestTaskReviewAbortDoesNotFinalize(t *testing.T) {
 }
 
 func TestTaskReviewPassingCheckContinuesToManualStep(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -4191,6 +4292,7 @@ exit 0
 }
 
 func TestTaskReviewConfirmedManualCommandRunsAndRecordsStep(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -4253,6 +4355,7 @@ printf 'manual command ran %s\n' "$ORPHEUS_REVIEW_STEP"
 }
 
 func TestTaskReviewImportsHunkBlockingNoteAndBlocksApproval(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -4310,6 +4413,7 @@ func TestTaskReviewImportsHunkBlockingNoteAndBlocksApproval(t *testing.T) {
 }
 
 func TestTaskReviewImportsHunkAdvisoryNoteAndAllowsApproval(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -4359,6 +4463,7 @@ func TestTaskReviewImportsHunkAdvisoryNoteAndAllowsApproval(t *testing.T) {
 
 //nolint:funlen // The workflow spans Hunk import, approval, and Beads follow-up creation.
 func TestTaskReviewImportsHunkSeparateTaskNoteAndCreatesFollowUp(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -4424,6 +4529,7 @@ func TestTaskReviewImportsHunkSeparateTaskNoteAndCreatesFollowUp(t *testing.T) {
 }
 
 func TestTaskReviewHunkManualCommandWithNoCapturedNotesContinuesPrompt(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -4471,6 +4577,7 @@ func TestTaskReviewHunkManualCommandWithNoCapturedNotesContinuesPrompt(t *testin
 }
 
 func TestTaskReviewDeclinedManualCommandAbortsWithoutRunningCommand(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -4531,6 +4638,7 @@ printf 'ran\n' > %s
 
 //nolint:funlen // The EOF confirmation fixture is clearer inline with its assertions.
 func TestTaskReviewManualCommandEOFConfirmationHandlesUnavailableInput(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		input       []byte
@@ -4612,6 +4720,7 @@ printf 'ran\n' > %s
 }
 
 func TestTaskReviewNonZeroCheckRecordsBlockingFindingAndStops(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -4675,6 +4784,7 @@ exit 7
 
 //nolint:funlen // Each case needs an end-to-end review fixture to exercise EOF handling.
 func TestTaskReviewCheckBlockerReasonEOFRecordsInterrupted(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		input string
@@ -4742,6 +4852,7 @@ func TestTaskReviewCheckBlockerReasonEOFRecordsInterrupted(t *testing.T) {
 }
 
 func TestTaskReviewCheckBlockerKeepAcceptsEOFAnswer(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -4798,6 +4909,7 @@ func TestTaskReviewCheckBlockerKeepAcceptsEOFAnswer(t *testing.T) {
 
 //nolint:funlen // Each case needs an end-to-end review fixture to exercise final EOF handling.
 func TestTaskReviewCheckBlockerReasonAcceptsEOFAnswer(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		input         string
@@ -4879,6 +4991,7 @@ func TestTaskReviewCheckBlockerReasonAcceptsEOFAnswer(t *testing.T) {
 }
 
 func TestTaskRunAfterInterruptedAutomatedBlockerDecisionRequiresFreshReview(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -4936,6 +5049,7 @@ func TestTaskRunAfterInterruptedAutomatedBlockerDecisionRequiresFreshReview(t *t
 
 //nolint:funlen // The autonomous loop spans dispatch, review, follow-up, and publication.
 func TestTaskRunAutonomousReviewFollowUpRepairsCheckAndPublishes(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
@@ -5004,6 +5118,7 @@ exit 7
 
 //nolint:funlen // The end-to-end fixture spans implementation, repair, review, and publication.
 func TestTaskRunAttachedManualBlockerRepairsAndApprovalFinalizes(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
@@ -5082,6 +5197,7 @@ func TestTaskRunAttachedManualBlockerRepairsAndApprovalFinalizes(t *testing.T) {
 }
 
 func TestTaskReviewManualBlockerExhaustsBudgetWithoutExtraLaunch(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
@@ -5142,6 +5258,7 @@ func TestTaskReviewManualBlockerExhaustsBudgetWithoutExtraLaunch(t *testing.T) {
 }
 
 func TestTaskRunPreservedManualBlockerExhaustsFreshBudget(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -5216,6 +5333,7 @@ func (r *delayedManualInput) Read(p []byte) (int, error) {
 
 //nolint:funlen // The exhaustion workflow needs two complete review/fix attempts.
 func TestTaskRunAutonomousReviewLoopExhaustsPersistentCheckBlockers(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
@@ -5282,6 +5400,7 @@ exit 7
 
 //nolint:funlen // The resumed review regression spans two commands and a nested follow-up dispatch.
 func TestTaskReviewResumedAutonomousFollowUpPreservesSelectedImplementer(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
@@ -5354,6 +5473,7 @@ exit 7
 }
 
 func TestTaskReviewCheckBlockerDowngradeContinuesPipeline(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -5410,6 +5530,7 @@ func TestTaskReviewCheckBlockerDowngradeContinuesPipeline(t *testing.T) {
 }
 
 func TestTaskReviewCheckBlockerWaiverContinuesPipeline(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -5464,6 +5585,7 @@ func TestTaskReviewCheckBlockerWaiverContinuesPipeline(t *testing.T) {
 }
 
 func TestTaskReviewCheckStartFailureMarksOperationalFailure(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -5514,6 +5636,7 @@ func TestTaskReviewCheckStartFailureMarksOperationalFailure(t *testing.T) {
 }
 
 func TestTaskReviewInvalidReviewAgentConfigDoesNotStartFreshAttempt(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -5553,6 +5676,7 @@ func TestTaskReviewInvalidReviewAgentConfigDoesNotStartFreshAttempt(t *testing.T
 }
 
 func TestTaskReviewInvalidReviewAgentConfigDoesNotResumeManualAttempt(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -5612,6 +5736,7 @@ func TestTaskReviewInvalidReviewAgentConfigDoesNotResumeManualAttempt(t *testing
 
 //nolint:funlen // The review-agent CLI fixture is clearer as one end-to-end scenario.
 func TestTaskReviewAgentReviewStepLaunchesReviewerAndPassesWithoutFindings(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -5677,7 +5802,9 @@ func TestTaskReviewAgentReviewStepLaunchesReviewerAndPassesWithoutFindings(t *te
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
 }
 
+//nolint:funlen // The workflow fixture records the complete agent usage contract.
 func TestTaskReviewAgentReviewStepCapturesCodexUsage(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -5698,7 +5825,7 @@ func TestTaskReviewAgentReviewStepCapturesCodexUsage(t *testing.T) {
 
 	withFakeAgent(t, "codex", 0)
 	codexHome := t.TempDir()
-	t.Setenv("CODEX_HOME", codexHome)
+	setTestEnvironment(t, "CODEX_HOME", codexHome)
 	sessionDir := filepath.Join(codexHome, "sessions", "2026", "07", "07")
 	must.NoError(os.MkdirAll(sessionDir, 0o755))
 	sessionPath := filepath.Join(sessionDir, "review-session.jsonl")
@@ -5738,7 +5865,9 @@ func TestTaskReviewAgentReviewStepCapturesCodexUsage(t *testing.T) {
 	is.Equal(1, execution.UsageCapture.CandidateCount)
 }
 
+//nolint:funlen // The workflow fixture records the complete agent usage contract.
 func TestTaskReviewAgentReviewStepCapturesPiUsage(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -5759,7 +5888,7 @@ func TestTaskReviewAgentReviewStepCapturesPiUsage(t *testing.T) {
 
 	withFakeAgent(t, "pi", 0)
 	piSessionDir := t.TempDir()
-	t.Setenv("PI_CODING_AGENT_SESSION_DIR", piSessionDir)
+	setTestEnvironment(t, "PI_CODING_AGENT_SESSION_DIR", piSessionDir)
 	sessionPath := filepath.Join(piSessionDir, "review-pi-session.jsonl")
 	writePiSessionLogForCLI(t, sessionPath, repoPath, "review-pi-session", time.Now().UTC())
 	writeStructuredPiReviewAgentPipelineConfig(t, paths, "pi", "openai-codex/gpt-5.5", false, "standard", map[string][]map[string]any{
@@ -5800,6 +5929,7 @@ func TestTaskReviewAgentReviewStepCapturesPiUsage(t *testing.T) {
 }
 
 func TestTaskReviewAgentReviewBlockingFindingStopsPipeline(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
@@ -5862,6 +5992,7 @@ func TestTaskReviewAgentReviewBlockingFindingStopsPipeline(t *testing.T) {
 
 //nolint:funlen // The mixed automated-blocker workflow spans review, show, and follow-up targeting.
 func TestTaskReviewAgentReviewMixedAutomatedBlockerDecisions(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
@@ -5983,6 +6114,7 @@ func TestTaskReviewAgentReviewMixedAutomatedBlockerDecisions(t *testing.T) {
 
 //nolint:funlen // The promotion workflow spans review, inspection, and follow-up dispatch.
 func TestTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
@@ -6140,6 +6272,7 @@ func TestTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
 }
 
 func TestTaskReviewAgentReviewNonZeroExitMarksOperationalFailure(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -6191,6 +6324,7 @@ func TestTaskReviewAgentReviewNonZeroExitMarksOperationalFailure(t *testing.T) {
 
 //nolint:funlen // The interrupted recovery path spans two review commands and finalization.
 func TestTaskReviewInterruptedAutomatedBlockerRecoveryReusesRecordedPipeline(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -6263,6 +6397,7 @@ func TestTaskReviewInterruptedAutomatedBlockerRecoveryReusesRecordedPipeline(t *
 }
 
 func TestTaskReviewPipelineOverridePrecedence(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -6312,6 +6447,7 @@ func TestTaskReviewPipelineOverridePrecedence(t *testing.T) {
 }
 
 func TestTaskReviewPipelineAliasResolvesToGlobalPipeline(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -6363,6 +6499,7 @@ func TestTaskReviewPipelineAliasResolvesToGlobalPipeline(t *testing.T) {
 
 //nolint:funlen // The interrupted recovery path verifies persisted mixed findings.
 func TestTaskReviewManualInputLossReplaysRecordedFindings(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -6434,6 +6571,7 @@ func TestTaskReviewManualInputLossReplaysRecordedFindings(t *testing.T) {
 }
 
 func TestTaskReviewResumesManualWaitingAttempt(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -6495,6 +6633,7 @@ func TestTaskReviewResumesManualWaitingAttempt(t *testing.T) {
 }
 
 func TestTaskReviewRejectsConflictingPipelineForManualWaitingAttempt(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -6545,6 +6684,7 @@ func TestTaskReviewRejectsConflictingPipelineForManualWaitingAttempt(t *testing.
 }
 
 func TestTaskReviewUnknownPipelineIncludesRepoAliases(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -6579,6 +6719,7 @@ func TestTaskReviewUnknownPipelineIncludesRepoAliases(t *testing.T) {
 }
 
 func TestTaskDoneRefusesRunningCompletionWithoutInteractiveConfirmation(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -6629,6 +6770,7 @@ func TestTaskDoneRefusesRunningCompletionWithoutInteractiveConfirmation(t *testi
 
 //nolint:funlen // PR publication scenario is clearer as one linear workflow.
 func TestTaskDonePublishesPRReadyTaskBranch(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -6697,6 +6839,7 @@ func TestTaskDonePublishesPRReadyTaskBranch(t *testing.T) {
 }
 
 func TestTaskDoneRecoversExistingBranchPR(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -6757,6 +6900,7 @@ func TestTaskDoneRecoversExistingBranchPR(t *testing.T) {
 }
 
 func TestTaskSyncPollsExistingPRURLWithoutPushOrMutation(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -6818,6 +6962,7 @@ func TestTaskSyncPollsExistingPRURLWithoutPushOrMutation(t *testing.T) {
 
 //nolint:funlen // The conflict-repair sync path needs Git, PR, agent, and state assertions together.
 func TestTaskSyncRecordsConflictResolutionUsageTelemetry(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -6875,7 +7020,7 @@ func TestTaskSyncRecordsConflictResolutionUsageTelemetry(t *testing.T) {
 	runGit(t, repoPath, "push", "origin", "main")
 
 	codexHome := filepath.Join(root, "codex-home")
-	t.Setenv("CODEX_HOME", codexHome)
+	setTestEnvironment(t, "CODEX_HOME", codexHome)
 	writeCodexSessionLogForCLI(
 		t,
 		filepath.Join(codexHome, "sessions", "sync-conflict.jsonl"),
@@ -6946,6 +7091,7 @@ func TestTaskSyncRecordsConflictResolutionUsageTelemetry(t *testing.T) {
 
 //nolint:funlen // Sync scenario is clearer when provider, backend, and audit checks stay together.
 func TestTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -7021,6 +7167,7 @@ func TestTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR(t *testing.T) {
 
 //nolint:funlen // Table-driven sync error scenarios share setup that is best kept adjacent.
 func TestTaskSyncExistingPRErrorsDoNotMutateBackendOrAudit(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		taskPRURL    string
@@ -7153,6 +7300,7 @@ func TestTaskSyncExistingPRErrorsDoNotMutateBackendOrAudit(t *testing.T) {
 }
 
 func TestTaskSyncSkipsClosedTaskWithoutPRPolling(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -7215,6 +7363,7 @@ func TestTaskSyncSkipsClosedTaskWithoutPRPolling(t *testing.T) {
 }
 
 func TestTaskSyncSkipsTaskWithoutPRURLAtRepoRoot(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -7253,6 +7402,7 @@ func TestTaskSyncSkipsTaskWithoutPRURLAtRepoRoot(t *testing.T) {
 }
 
 func TestTaskSyncSkipsMainSoloLocalReadyTaskWithoutPRURL(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -7285,6 +7435,7 @@ func TestTaskSyncSkipsMainSoloLocalReadyTaskWithoutPRURL(t *testing.T) {
 }
 
 func TestTaskDoneFeatureBranchPushFailureIsNonZero(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -7328,6 +7479,7 @@ func TestTaskDoneFeatureBranchPushFailureIsNonZero(t *testing.T) {
 
 //nolint:funlen // Sync-all boundary scenario is clearer as a single workflow.
 func TestTaskSyncAllPollsPRBoundaryTasks(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -7420,6 +7572,7 @@ func TestTaskSyncAllPollsPRBoundaryTasks(t *testing.T) {
 }
 
 func TestTaskSyncAllReturnsNonZeroAfterCandidateError(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -7466,6 +7619,7 @@ func TestTaskSyncAllReturnsNonZeroAfterCandidateError(t *testing.T) {
 
 //nolint:funlen // Cross-repo sync-all scenario is clearer as one integrated workflow.
 func TestTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAfterFailures(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -7819,6 +7973,7 @@ func TestTaskDoneInfersWorktreeTask(t *testing.T) {
 }
 
 func TestTaskDoneRejectsRemovedDetailsOverride(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 
@@ -7866,6 +8021,7 @@ func TestTaskDoneWithoutTaskIDRequiresExactRegisteredRepoRoot(t *testing.T) {
 }
 
 func TestTaskDoneRefusesNoChangesWithoutRecordedFinalizationCommit(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -7899,6 +8055,7 @@ func TestTaskDoneRefusesNoChangesWithoutRecordedFinalizationCommit(t *testing.T)
 }
 
 func TestTaskDoneRetriesPushAndCloseFromRecordedFinalizationCommit(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -7945,6 +8102,7 @@ func TestTaskDoneRetriesPushAndCloseFromRecordedFinalizationCommit(t *testing.T)
 }
 
 func TestTaskStartActivatesEligibleEpicAndRejectsOrdinaryTask(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	newTestState(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
@@ -7976,6 +8134,7 @@ func TestTaskStartActivatesEligibleEpicAndRejectsOrdinaryTask(t *testing.T) {
 }
 
 func TestTaskStartHonorsParentDependencyAndIdempotency(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name    string
 		output  string
@@ -8031,6 +8190,7 @@ func TestTaskStartHonorsParentDependencyAndIdempotency(t *testing.T) {
 
 //nolint:funlen // The cases cover the CLI closure contract end to end.
 func TestTaskCloseRequiresVerifiedClosedChildrenAndIsIdempotent(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name    string
 		output  string
@@ -8104,6 +8264,7 @@ func TestTaskCloseRequiresVerifiedClosedChildrenAndIsIdempotent(t *testing.T) {
 }
 
 func TestTaskEpicLifecycleAdapterFailuresAreSourceNeutral(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name      string
 		command   string
@@ -8161,7 +8322,7 @@ esac
 	if err := os.WriteFile(bdPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake bd: %v", err)
 	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	prependTestPath(t, binDir)
 }
 
 func withFakeBDTaskResponses(t *testing.T, responses map[string]fakeBDTaskResponse) string {
@@ -8209,8 +8370,8 @@ exit 65
 	if err := os.WriteFile(bdPath, []byte(script.String()), 0o755); err != nil {
 		t.Fatalf("write fake bd: %v", err)
 	}
-	t.Setenv("FAKE_BD_LOG", logPath)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	setTestEnvironment(t, "FAKE_BD_LOG", logPath)
+	prependTestPath(t, binDir)
 	return logPath
 }
 
@@ -8336,8 +8497,8 @@ func withFakeGHPRResponses(t *testing.T, responses fakeGHPRResponses) string {
 	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake gh: %v", err)
 	}
-	t.Setenv("FAKE_GH_LOG", logPath)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	setTestEnvironment(t, "FAKE_GH_LOG", logPath)
+	prependTestPath(t, binDir)
 	return logPath
 }
 
@@ -8582,9 +8743,9 @@ exit %d
 	if err := os.WriteFile(agentPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake agent: %v", err)
 	}
-	t.Setenv("FAKE_AGENT_LOG", logPath)
-	t.Setenv(testguard.FakeAgentEnvKey(name), agentPath)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	setTestEnvironment(t, "FAKE_AGENT_LOG", logPath)
+	setTestEnvironment(t, testguard.FakeAgentEnvKey(name), agentPath)
+	prependTestPath(t, binDir)
 	return logPath
 }
 
@@ -8600,8 +8761,8 @@ git add conflict.txt
 	if err := os.WriteFile(agentPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake codex: %v", err)
 	}
-	t.Setenv(testguard.FakeAgentEnvKey("codex"), agentPath)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	setTestEnvironment(t, testguard.FakeAgentEnvKey("codex"), agentPath)
+	prependTestPath(t, binDir)
 }
 
 func writeCodexSessionLogForCLI(t *testing.T, path string, cwd string, sessionID string, startedAt time.Time) {
@@ -9031,7 +9192,7 @@ printf 'unexpected fake hunk call: %%s\n' "$*" >&2
 exit 65
 `, shellQuote(response))
 	require.NoError(t, os.WriteFile(hunkPath, []byte(script), 0o755))
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	prependTestPath(t, binDir)
 }
 
 func shellQuote(value string) string {

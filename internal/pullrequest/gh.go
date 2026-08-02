@@ -16,7 +16,9 @@ import (
 
 // GHProvider implements Provider with the GitHub CLI.
 type GHProvider struct {
-	Logger *slog.Logger
+	Logger      *slog.Logger
+	Binary      string
+	Environment []string
 }
 
 // FindOpenByBranch returns the first open PR matching head/base, when any exists.
@@ -24,7 +26,7 @@ func (p GHProvider) FindOpenByBranch(ctx context.Context, req FindOpenByBranchRe
 	if err := validateFindRequest(req); err != nil {
 		return PullRequest{}, false, err
 	}
-	output, err := runGH(ctx, p.Logger, req.RepositoryPath, "find_open_pr", "", diagnosticAttrs(req.Diagnostics), "pr", "list",
+	output, err := runGH(ctx, p, req.RepositoryPath, "find_open_pr", "", diagnosticAttrs(req.Diagnostics), "pr", "list",
 		"--state", "open",
 		"--head", req.HeadBranch,
 		"--base", req.BaseBranch,
@@ -57,7 +59,7 @@ func (p GHProvider) StatusByURL(ctx context.Context, req StatusByURLRequest) (Pu
 		return PullRequestStatus{}, err
 	}
 	prURL := strings.TrimSpace(req.URL)
-	output, err := runGH(ctx, p.Logger, "", "poll_pr", "", diagnosticAttrs(req.Diagnostics), "pr", "view", prURL, "--json", "url,state,mergedAt")
+	output, err := runGH(ctx, p, "", "poll_pr", "", diagnosticAttrs(req.Diagnostics), "pr", "view", prURL, "--json", "url,state,mergedAt")
 	if err != nil {
 		return PullRequestStatus{}, fmt.Errorf("poll GitHub PR %s: %w", prURL, err)
 	}
@@ -73,7 +75,7 @@ func (p GHProvider) Create(ctx context.Context, req CreateRequest) (PullRequest,
 	if err := validateCreateRequest(req); err != nil {
 		return PullRequest{}, err
 	}
-	output, err := runGH(ctx, p.Logger, req.RepositoryPath, "create_pr", req.Body, diagnosticAttrs(req.Diagnostics), "pr", "create",
+	output, err := runGH(ctx, p, req.RepositoryPath, "create_pr", req.Body, diagnosticAttrs(req.Diagnostics), "pr", "create",
 		"--base", req.BaseBranch,
 		"--head", req.HeadBranch,
 		"--title", req.Title,
@@ -169,7 +171,7 @@ func decodeGHPRStatus(output string) (PullRequestStatus, error) {
 
 func runGH(
 	ctx context.Context,
-	logger *slog.Logger,
+	provider GHProvider,
 	dir string,
 	operation string,
 	stdin string,
@@ -185,9 +187,16 @@ func runGH(
 		slog.String("cwd", dir),
 	}
 	startAttrs = append(startAttrs, attrs...)
-	span := logging.Start(ctx, logger, "github cli command", startAttrs...)
-	command := exec.CommandContext(ctx, "gh", args...)
+	span := logging.Start(ctx, provider.Logger, "github cli command", startAttrs...)
+	binary := provider.Binary
+	if binary == "" {
+		binary = "gh"
+	}
+	command := exec.CommandContext(ctx, binary, args...)
 	command.Dir = dir
+	if provider.Environment != nil {
+		command.Env = append([]string{}, provider.Environment...)
+	}
 	if stdin != "" {
 		command.Stdin = strings.NewReader(stdin)
 	}

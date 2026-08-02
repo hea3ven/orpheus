@@ -1,4 +1,5 @@
-package cli_test
+//nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
+package cli
 
 import (
 	"testing"
@@ -7,6 +8,7 @@ import (
 )
 
 func TestNewRootCommandHelp(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 
 	output, _ := executeCommand(t, []string{"--help"})
@@ -17,6 +19,7 @@ func TestNewRootCommandHelp(t *testing.T) {
 }
 
 func TestRootCommandDoesNotEmitDebugByDefault(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 
 	stdout, stderr := executeCommand(t, []string{})
@@ -26,6 +29,7 @@ func TestRootCommandDoesNotEmitDebugByDefault(t *testing.T) {
 }
 
 func TestRootCommandVerboseEmitsDebugToStderr(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 
 	stdout, stderr := executeCommand(t, []string{"--verbose"})
@@ -91,6 +95,7 @@ var reviewWorkflowHelpCases = []reviewWorkflowHelpCase{
 }
 
 func TestReviewWorkflowCommandHelpExplainsResponsibilitiesAndNextCommands(t *testing.T) {
+	t.Parallel()
 	for _, test := range reviewWorkflowHelpCases {
 		t.Run(test.name, func(t *testing.T) {
 			is := assert.New(t)

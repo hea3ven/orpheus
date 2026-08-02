@@ -42,7 +42,10 @@ type CommandRunner struct {
 	// Logger receives safe command diagnostics. Raw argv, output, and environment are not logged.
 	Logger *slog.Logger
 	// DiagnosticAttrs are safe semantic fields included on every command diagnostic.
-	DiagnosticAttrs  []slog.Attr
+	DiagnosticAttrs []slog.Attr
+	// Environment is the complete environment supplied to bd. Empty uses the
+	// process environment after Beads-specific values are sanitized.
+	Environment      []string
 	diagnosticStatus diagnosticStatusClassifier
 }
 
@@ -77,9 +80,9 @@ func (r CommandRunner) Run(dir string, args ...string) (Result, error) {
 	}
 	attrs = append(attrs, r.DiagnosticAttrs...)
 	span := logging.Start(context.Background(), r.Logger, "beads command", attrs...)
-	command := exec.Command(binary, args...)
+	command := exec.Command(resolveExecutable(r.environment(), binary), args...)
 	command.Dir = dir
-	command.Env = sanitizedEnvironment()
+	command.Env = r.environment()
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -397,9 +400,40 @@ func inspectIssuePrefix(root string, runner Runner) (string, error) {
 	return prefix, nil
 }
 
-func sanitizedEnvironment() []string {
-	env := make([]string, 0, len(os.Environ())+1)
-	for _, entry := range os.Environ() {
+func resolveExecutable(environment []string, name string) string {
+	if filepath.IsAbs(name) || strings.ContainsRune(name, os.PathSeparator) {
+		return name
+	}
+	for _, entry := range environment {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || key != "PATH" {
+			continue
+		}
+		for _, directory := range filepath.SplitList(value) {
+			candidate := filepath.Join(directory, name)
+			info, err := os.Stat(candidate)
+			if err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+				absolute, absErr := filepath.Abs(candidate)
+				if absErr == nil {
+					return absolute
+				}
+			}
+		}
+	}
+	return filepath.Join(os.TempDir(), "orpheus-missing-executable", filepath.Base(name))
+}
+
+func (r CommandRunner) environment() []string {
+	environment := r.Environment
+	if environment == nil {
+		environment = os.Environ()
+	}
+	return sanitizedEnvironment(environment)
+}
+
+func sanitizedEnvironment(environment []string) []string {
+	env := make([]string, 0, len(environment)+1)
+	for _, entry := range environment {
 		key, _, ok := strings.Cut(entry, "=")
 		if ok && (strings.HasPrefix(key, "BEADS_") || key == "BD_NON_INTERACTIVE") {
 			continue

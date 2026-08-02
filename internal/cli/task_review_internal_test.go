@@ -47,6 +47,8 @@ func (r *fakeManualReviewRecorder) PromoteAdvisoryFinding(int) (taskstate.Review
 }
 
 func TestManualReviewKeepsSelectedIntegrationFlowWithinPromptLoop(t *testing.T) {
+	t.Parallel()
+
 	stderr := new(bytes.Buffer)
 	command := &cobra.Command{}
 	command.SetErr(stderr)

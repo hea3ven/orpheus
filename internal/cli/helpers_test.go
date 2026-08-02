@@ -1,4 +1,5 @@
-package cli_test
+//nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
+package cli
 
 import (
 	"bytes"
@@ -9,10 +10,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
-	"github.com/hea3ven/orpheus/internal/cli"
+	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/pathutil"
+	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 )
 
@@ -274,32 +278,77 @@ func setSeededLocalOrigin(t *testing.T, repoPath string, originPath string) {
 	}
 }
 
+type testInvocation struct {
+	root        string
+	paths       state.Paths
+	environment map[string]string
+}
+
+var testInvocations sync.Map // map[string]*testInvocation
+
 func newTestState(t *testing.T) string {
 	t.Helper()
 
-	root := canonicalTestPath(t, t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "xdg-config"))
-	t.Setenv("XDG_DATA_HOME", filepath.Join(root, "xdg-data"))
-	clearOrpheusAgentEnv(t)
-	return root
+	return testInvocationFor(t).root
 }
 
-func clearOrpheusAgentEnv(t *testing.T) {
+func testInvocationFor(t *testing.T) *testInvocation {
 	t.Helper()
 
-	for _, name := range []string{
-		"ORPHEUS_REPO_ID",
-		"ORPHEUS_TASK_ID",
-		"ORPHEUS_WORKTREE",
-		"ORPHEUS_BRANCH",
-		"ORPHEUS_AGENT_PROMPT",
-		"ORPHEUS_AGENT_PURPOSE",
-		"ORPHEUS_CONFLICT_FILES",
-		"ORPHEUS_REVIEW_ATTEMPT",
-		"ORPHEUS_REVIEW_STEP",
-	} {
-		t.Setenv(name, "")
+	key := t.Name()
+	if existing, ok := testInvocations.Load(key); ok {
+		return existing.(*testInvocation)
 	}
+
+	root := canonicalTestPath(t, t.TempDir())
+	paths, err := state.NewPaths(
+		filepath.Join(root, "xdg-config", state.AppName),
+		filepath.Join(root, "xdg-data", state.AppName),
+	)
+	if err != nil {
+		t.Fatalf("create test state paths: %v", err)
+	}
+	environment := invocationEnvironmentSnapshot()
+	for _, name := range orpheusAgentEnvironmentNames {
+		environment[name] = ""
+	}
+	fixture := &testInvocation{
+		root:        root,
+		paths:       paths,
+		environment: environment,
+	}
+	actual, loaded := testInvocations.LoadOrStore(key, fixture)
+	if loaded {
+		return actual.(*testInvocation)
+	}
+	t.Cleanup(func() { testInvocations.Delete(key) })
+	return fixture
+}
+
+var orpheusAgentEnvironmentNames = []string{
+	"ORPHEUS_REPO_ID", "ORPHEUS_TASK_ID", "ORPHEUS_WORKTREE", "ORPHEUS_BRANCH",
+	"ORPHEUS_AGENT_PROMPT", "ORPHEUS_AGENT_PURPOSE", "ORPHEUS_CONFLICT_FILES",
+	"ORPHEUS_REVIEW_ATTEMPT", "ORPHEUS_REVIEW_STEP",
+}
+
+func setTestEnvironment(t *testing.T, name string, value string) {
+	t.Helper()
+
+	testInvocationFor(t).environment[name] = value
+}
+
+func prependTestPath(t *testing.T, directory string) {
+	t.Helper()
+
+	fixture := testInvocationFor(t)
+	fixture.environment["PATH"] = directory + string(os.PathListSeparator) + fixture.environment["PATH"]
+}
+
+func configureTestGitUser(t *testing.T, repoPath string) {
+	t.Helper()
+
+	runGit(t, repoPath, "config", "user.name", "Orpheus Test")
+	runGit(t, repoPath, "config", "user.email", "orpheus@example.com")
 }
 
 func initGitRepo(t *testing.T, repoPath string) {
@@ -307,11 +356,8 @@ func initGitRepo(t *testing.T, repoPath string) {
 
 	runGit(t, repoPath, "init")
 	runGit(t, repoPath, "checkout", "-b", "main")
-	runGit(t, repoPath,
-		"-c", "user.name=Orpheus Test",
-		"-c", "user.email=orpheus@example.com",
-		"commit", "--allow-empty", "-m", "initial",
-	)
+	configureTestGitUser(t, repoPath)
+	runGit(t, repoPath, "commit", "--allow-empty", "-m", "initial")
 }
 
 func runGit(t *testing.T, dir string, args ...string) string {
@@ -401,15 +447,36 @@ func (r *scriptedInput) Read(p []byte) (int, error) {
 func executeCommandWithReaderAndError(t *testing.T, args []string, input io.Reader) (stdout string, stderr string, err error) {
 	t.Helper()
 
-	cmd := cli.NewRootCommand()
 	out := new(bytes.Buffer)
 	errOut := new(bytes.Buffer)
+	cmd := newTestRootCommand(t, args, errOut)
 	cmd.SetIn(input)
 	cmd.SetOut(out)
 	cmd.SetErr(errOut)
 	cmd.SetArgs(args)
 	err = cmd.Execute()
 	return out.String(), errOut.String(), err
+}
+
+func newTestRootCommand(t *testing.T, args []string, errOut io.Writer) *cobra.Command {
+	t.Helper()
+
+	fixture := testInvocationFor(t)
+	logger := logging.Discard()
+	if containsArgument(args, "--verbose") || containsArgument(args, "-v") {
+		logger = logging.New(errOut, logging.Config{Verbose: true})
+	}
+	deps := newInvocationDependenciesWithPaths(fixture.paths, logger, fixture.environment)
+	return newRootCommand(&rootOptions{logger: logger, invocationDeps: deps})
+}
+
+func containsArgument(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestOrpheusCLIHelperIsSharedAndImmutable(t *testing.T) {
@@ -468,7 +535,7 @@ fi
 	if err := os.WriteFile(bdPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake bd: %v", err)
 	}
-	t.Setenv("FAKE_BD_LOG", logPath)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	setTestEnvironment(t, "FAKE_BD_LOG", logPath)
+	prependTestPath(t, binDir)
 	return logPath
 }

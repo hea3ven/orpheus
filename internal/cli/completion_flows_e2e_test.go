@@ -1,4 +1,5 @@
-package cli_test
+//nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
+package cli
 
 import (
 	"fmt"
@@ -8,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agent"
-	"github.com/hea3ven/orpheus/internal/cli"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -18,6 +18,7 @@ import (
 
 //nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	paths, repoPath := setupCompletionFlowRepo(t)
@@ -102,6 +103,7 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 
 //nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestConfiguredPublicationPolicyEndToEnd(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	paths, repoPath := setupCompletionFlowRepo(t)
@@ -170,6 +172,7 @@ func TestConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 
 //nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	paths, repoPath := setupCompletionFlowRepo(t)
@@ -244,6 +247,7 @@ func TestMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd
 
 //nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	paths, repoPath := setupCompletionFlowRepo(t)
@@ -353,6 +357,7 @@ func TestWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 
 //nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	paths, repoPath := setupCompletionFlowRepo(t)
@@ -464,6 +469,7 @@ func TestRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 }
 
 func TestTaskRunMainProvidesRepositoryRootMigrationGuidance(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	paths, repoPath := setupCompletionFlowRepo(t)
 	const taskID = "op-main-completion"
@@ -478,6 +484,7 @@ func TestTaskRunMainProvidesRepositoryRootMigrationGuidance(t *testing.T) {
 }
 
 func TestOrpheusCLIHelperProcess(t *testing.T) {
+	t.Parallel()
 	if os.Getenv("GO_WANT_ORPHEUS_CLI_HELPER") != "1" {
 		return
 	}
@@ -494,7 +501,7 @@ func TestOrpheusCLIHelperProcess(t *testing.T) {
 		os.Exit(2)
 	}
 
-	command := cli.NewRootCommand()
+	command := NewRootCommand()
 	command.SetIn(os.Stdin)
 	command.SetOut(os.Stdout)
 	command.SetErr(os.Stderr)
@@ -688,8 +695,8 @@ func withStatefulCompletionBD(t *testing.T, task completionBDTask) statefulCompl
 
 	bdPath := filepath.Join(binDir, "bd")
 	must.NoError(os.WriteFile(bdPath, []byte(script), 0o755))
-	t.Setenv("FAKE_BD_LOG", logPath)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	setTestEnvironment(t, "FAKE_BD_LOG", logPath)
+	prependTestPath(t, binDir)
 	return statefulCompletionBD{LogPath: logPath, StatusPath: statusPath}
 }
 
@@ -761,8 +768,8 @@ printf 'completion agent completed\n'
 	if err := os.WriteFile(agentPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake completion agent: %v", err)
 	}
-	t.Setenv("FAKE_COMPLETION_AGENT_LOG", logPath)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	setTestEnvironment(t, "FAKE_COMPLETION_AGENT_LOG", logPath)
+	prependTestPath(t, binDir)
 	return logPath
 }
 
@@ -771,7 +778,7 @@ func withOrpheusCLIHelper(t *testing.T) string {
 	if orpheusCLIHelperPath == "" {
 		t.Fatal("CLI helper fixture is not initialized")
 	}
-	t.Setenv("PATH", filepath.Dir(orpheusCLIHelperPath)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	prependTestPath(t, filepath.Dir(orpheusCLIHelperPath))
 	return orpheusCLIHelperPath
 }
 

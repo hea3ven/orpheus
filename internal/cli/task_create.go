@@ -74,7 +74,7 @@ func runTaskCreate(command *cobra.Command, root *rootOptions, input taskCreateIn
 	}
 	source, err := taskmodel.ResolveCreationSource(sources, taskmodel.CreationSourceOptions{
 		Repository:         input.repository,
-		ActiveRepositoryID: os.Getenv("ORPHEUS_REPO_ID"),
+		ActiveRepositoryID: deps.environmentValue("ORPHEUS_REPO_ID"),
 		CurrentDirectory:   cwd,
 	})
 	if err != nil {

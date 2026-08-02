@@ -1,4 +1,5 @@
-package cli_test
+//nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
+package cli
 
 import (
 	"testing"

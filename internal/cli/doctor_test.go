@@ -1,4 +1,5 @@
-package cli_test
+//nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
+package cli
 
 import (
 	"os"
@@ -17,6 +18,7 @@ import (
 
 //nolint:funlen // The end-to-end recovery fixture covers implementation, review, and stats together.
 func TestDoctorRecoversCodexUsageForImplementationAndReviewAgent(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -26,7 +28,7 @@ func TestDoctorRecoversCodexUsageForImplementationAndReviewAgent(t *testing.T) {
 		repoDir: {stdout: `[{"id":"op-1","title":"Doctor","status":"in_progress","priority":1,"issue_type":"task"}]`},
 	})
 	codexHome := t.TempDir()
-	t.Setenv("CODEX_HOME", codexHome)
+	setTestEnvironment(t, "CODEX_HOME", codexHome)
 
 	store := taskstate.NewStoreWithClock(paths, clockSequence(
 		time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
@@ -154,13 +156,14 @@ func TestDoctorRecoversCodexUsageForImplementationAndReviewAgent(t *testing.T) {
 }
 
 func TestDoctorFallsBackToRegisteredRepoRootWhenTaskTargetIsMissing(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
 	paths := currentTestPaths(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
 	codexHome := t.TempDir()
-	t.Setenv("CODEX_HOME", codexHome)
+	setTestEnvironment(t, "CODEX_HOME", codexHome)
 
 	store := taskstate.NewStoreWithClock(paths, clockSequence(
 		time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
@@ -200,14 +203,16 @@ func TestDoctorFallsBackToRegisteredRepoRootWhenTaskTargetIsMissing(t *testing.T
 	is.NotContains(stdout, "wrong-repo-session")
 }
 
+//nolint:funlen // The fixture records all recovery inputs and assertions.
 func TestDoctorRecoversPiUsageAndReportedCost(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
 	paths := currentTestPaths(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
 	piSessionDir := t.TempDir()
-	t.Setenv("PI_CODING_AGENT_SESSION_DIR", piSessionDir)
+	setTestEnvironment(t, "PI_CODING_AGENT_SESSION_DIR", piSessionDir)
 
 	store := taskstate.NewStoreWithClock(paths, clockSequence(
 		time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
@@ -264,6 +269,7 @@ func TestDoctorRecoversPiUsageAndReportedCost(t *testing.T) {
 }
 
 func TestDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(t *testing.T) {
+	t.Parallel()
 	t.Run("with complete boundary", func(t *testing.T) {
 		costBaseline := int64(1561)
 		wantCost := int64(321)
@@ -288,7 +294,7 @@ func testDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(
 	paths := currentTestPaths(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
 	piSessionDir := t.TempDir()
-	t.Setenv("PI_CODING_AGENT_SESSION_DIR", piSessionDir)
+	setTestEnvironment(t, "PI_CODING_AGENT_SESSION_DIR", piSessionDir)
 
 	startedAt := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	sessionID := "reused-pi-session"
@@ -400,13 +406,14 @@ func agentUsageCost(amount int64) *taskstate.AgentUsageCost {
 }
 
 func TestDoctorRecoversPiUsageWhenMatchedSessionHasNoReportedCost(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
 	paths := currentTestPaths(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
 	piSessionDir := t.TempDir()
-	t.Setenv("PI_CODING_AGENT_SESSION_DIR", piSessionDir)
+	setTestEnvironment(t, "PI_CODING_AGENT_SESSION_DIR", piSessionDir)
 
 	store := taskstate.NewStoreWithClock(paths, clockSequence(
 		time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
@@ -448,13 +455,14 @@ func TestDoctorRecoversPiUsageWhenMatchedSessionHasNoReportedCost(t *testing.T) 
 }
 
 func TestDoctorDoesNotRecoverPiCostWhenMatchedSessionHasNoReportedCost(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
 	paths := currentTestPaths(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
 	piSessionDir := t.TempDir()
-	t.Setenv("PI_CODING_AGENT_SESSION_DIR", piSessionDir)
+	setTestEnvironment(t, "PI_CODING_AGENT_SESSION_DIR", piSessionDir)
 
 	store := taskstate.NewStoreWithClock(paths, clockSequence(
 		time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
@@ -506,13 +514,14 @@ func TestDoctorDoesNotRecoverPiCostWhenMatchedSessionHasNoReportedCost(t *testin
 }
 
 func TestDoctorRecoversUsageForUnfinishedExecution(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
 	paths := currentTestPaths(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
 	codexHome := t.TempDir()
-	t.Setenv("CODEX_HOME", codexHome)
+	setTestEnvironment(t, "CODEX_HOME", codexHome)
 
 	store := taskstate.NewStoreWithClock(paths, clockSequence(
 		time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
@@ -544,13 +553,14 @@ func TestDoctorRecoversUsageForUnfinishedExecution(t *testing.T) {
 }
 
 func TestDoctorReportsAmbiguousAndNoMatchWithoutMutating(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
 	paths := currentTestPaths(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
 	codexHome := t.TempDir()
-	t.Setenv("CODEX_HOME", codexHome)
+	setTestEnvironment(t, "CODEX_HOME", codexHome)
 
 	store := taskstate.NewStoreWithClock(paths, clockSequence(
 		time.Date(2026, 7, 7, 11, 0, 0, 0, time.UTC),
@@ -600,13 +610,14 @@ func TestDoctorReportsAmbiguousAndNoMatchWithoutMutating(t *testing.T) {
 }
 
 func TestDoctorReportsAmbiguousPiMatchesWithoutMutating(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
 	paths := currentTestPaths(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
 	piSessionDir := t.TempDir()
-	t.Setenv("PI_CODING_AGENT_SESSION_DIR", piSessionDir)
+	setTestEnvironment(t, "PI_CODING_AGENT_SESSION_DIR", piSessionDir)
 
 	store := taskstate.NewStoreWithClock(paths, clockSequence(
 		time.Date(2026, 7, 7, 11, 0, 0, 0, time.UTC),
@@ -652,6 +663,7 @@ func TestDoctorReportsAmbiguousPiMatchesWithoutMutating(t *testing.T) {
 
 //nolint:funlen // The sync-conflict recovery fixture covers terminal event repair and stats integration.
 func TestDoctorRecoversSyncConflictTerminalUsage(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -662,8 +674,8 @@ func TestDoctorRecoversSyncConflictTerminalUsage(t *testing.T) {
 	})
 	codexHome := t.TempDir()
 	piSessionDir := t.TempDir()
-	t.Setenv("CODEX_HOME", codexHome)
-	t.Setenv("PI_CODING_AGENT_SESSION_DIR", piSessionDir)
+	setTestEnvironment(t, "CODEX_HOME", codexHome)
+	setTestEnvironment(t, "PI_CODING_AGENT_SESSION_DIR", piSessionDir)
 
 	store := taskstate.NewStoreWithClock(paths, clockSequence(
 		time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
@@ -779,14 +791,16 @@ func TestDoctorRecoversSyncConflictTerminalUsage(t *testing.T) {
 	is.Regexp(`(?m)^sync-conflict-resolution\s+2\s+10m0s\s+345\s+151\s+22\s+33\s+9\s+\$[0-9.]+\s+0\s+0$`, statsOut)
 }
 
+//nolint:funlen // The fixture records all recovery inputs and assertions.
 func TestDoctorPrefersRecordedSyncConflictWorktreeBeforeFallbackDirs(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
 	paths := currentTestPaths(t)
 	registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
 	codexHome := t.TempDir()
-	t.Setenv("CODEX_HOME", codexHome)
+	setTestEnvironment(t, "CODEX_HOME", codexHome)
 	targetWorktree := filepath.Join(t.TempDir(), "target-worktree")
 	eventWorktree := filepath.Join(t.TempDir(), "event-worktree")
 
@@ -843,6 +857,7 @@ func TestDoctorPrefersRecordedSyncConflictWorktreeBeforeFallbackDirs(t *testing.
 }
 
 func TestDoctorTraversesAllRegisteredRepos(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -857,7 +872,7 @@ func TestDoctorTraversesAllRegisteredRepos(t *testing.T) {
 		{ID: "beta", Name: "Beta", Path: betaDir, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "bt"},
 	}}))
 	codexHome := t.TempDir()
-	t.Setenv("CODEX_HOME", codexHome)
+	setTestEnvironment(t, "CODEX_HOME", codexHome)
 
 	store := taskstate.NewStoreWithClock(paths, clockSequence(
 		time.Date(2026, 7, 7, 13, 0, 0, 0, time.UTC),

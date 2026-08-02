@@ -1,4 +1,5 @@
-package cli_test
+//nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
+package cli
 
 import (
 	"os"
@@ -186,7 +187,7 @@ func TestAgentContextRendersReviewFollowUpCompletionHistory(t *testing.T) {
 		Name: "ai-review",
 	})
 	must.NoError(err)
-	t.Setenv("ORPHEUS_REVIEW_ATTEMPT", "2")
+	setTestEnvironment(t, "ORPHEUS_REVIEW_ATTEMPT", "2")
 
 	stdout, stderr := executeCommand(t, []string{"agent", "context"})
 
@@ -409,10 +410,10 @@ func startAgentTestRun(t *testing.T, taskID string, branch string, worktreePath 
 func setAgentRunEnv(t *testing.T, taskID string, branch string, worktreePath string) {
 	t.Helper()
 
-	t.Setenv("ORPHEUS_REPO_ID", "alpha")
-	t.Setenv("ORPHEUS_TASK_ID", taskID)
-	t.Setenv("ORPHEUS_WORKTREE", worktreePath)
-	t.Setenv("ORPHEUS_BRANCH", branch)
+	setTestEnvironment(t, "ORPHEUS_REPO_ID", "alpha")
+	setTestEnvironment(t, "ORPHEUS_TASK_ID", taskID)
+	setTestEnvironment(t, "ORPHEUS_WORKTREE", worktreePath)
+	setTestEnvironment(t, "ORPHEUS_BRANCH", branch)
 }
 
 func setupActiveAgentReview(t *testing.T, taskID string) (string, taskstate.ReviewAttempt) {
@@ -440,9 +441,9 @@ func setupActiveAgentReview(t *testing.T, taskID string) (string, taskstate.Revi
 	})
 	must.NoError(err)
 	setAgentRunEnv(t, taskID, "main", repoPath)
-	t.Setenv("ORPHEUS_AGENT_PURPOSE", "review")
-	t.Setenv("ORPHEUS_REVIEW_ATTEMPT", "1")
-	t.Setenv("ORPHEUS_REVIEW_STEP", "ai-review")
+	setTestEnvironment(t, "ORPHEUS_AGENT_PURPOSE", "review")
+	setTestEnvironment(t, "ORPHEUS_REVIEW_ATTEMPT", "1")
+	setTestEnvironment(t, "ORPHEUS_REVIEW_STEP", "ai-review")
 	return repoPath, review
 }
 
@@ -486,10 +487,10 @@ func TestAgentContextFailsBeforeRenderingWhenRunIsStale(t *testing.T) {
 	must.NoError(err)
 	_, err = runStore.FinishRun("alpha", "op-1", 1, taskstate.RunStatusSucceeded)
 	must.NoError(err)
-	t.Setenv("ORPHEUS_REPO_ID", "alpha")
-	t.Setenv("ORPHEUS_TASK_ID", "op-1")
-	t.Setenv("ORPHEUS_WORKTREE", worktreePath)
-	t.Setenv("ORPHEUS_BRANCH", "orpheus/op-1")
+	setTestEnvironment(t, "ORPHEUS_REPO_ID", "alpha")
+	setTestEnvironment(t, "ORPHEUS_TASK_ID", "op-1")
+	setTestEnvironment(t, "ORPHEUS_WORKTREE", worktreePath)
+	setTestEnvironment(t, "ORPHEUS_BRANCH", "orpheus/op-1")
 
 	stdout, stderr, err := executeCommandWithError(t, []string{"agent", "context"})
 
