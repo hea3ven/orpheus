@@ -34,6 +34,87 @@ func (b *fakeUpdateBackend) Update(_ context.Context, opts task.UpdateOptions) (
 	return b.tasks[opts.ID], nil
 }
 
+//nolint:funlen // The table documents resulting-state policy for every edit case.
+func TestUpdateServiceEnforcesRequiredExternalReferenceBeforeMutation(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		titleTemplate string
+		currentType   task.IssueType
+		currentRef    string
+		externalRef   *string
+		wantUpdated   bool
+	}{
+		{
+			name:          "rejects unrelated edit of legacy task without reference",
+			titleTemplate: "[{{external_ref}}] {{summary}}",
+			currentType:   task.IssueTypeTask,
+		},
+		{
+			name:          "allows unrelated edit with existing reference",
+			titleTemplate: "[{{external_ref}}] {{summary}}",
+			currentType:   task.IssueTypeTask,
+			currentRef:    "PLAN-7",
+			wantUpdated:   true,
+		},
+		{
+			name:          "allows repair of legacy task reference",
+			titleTemplate: "[{{external_ref}}] {{summary}}",
+			currentType:   task.IssueTypeTask,
+			externalRef:   stringPtr(" PLAN-7 "),
+			wantUpdated:   true,
+		},
+		{
+			name:          "rejects clearing required reference",
+			titleTemplate: "[{{external_ref}}] {{summary}}",
+			currentType:   task.IssueTypeTask,
+			currentRef:    "PLAN-7",
+			externalRef:   stringPtr(" \t\n "),
+		},
+		{
+			name:          "allows epic without reference",
+			titleTemplate: "[{{external_ref}}] {{summary}}",
+			currentType:   task.IssueTypeEpic,
+			wantUpdated:   true,
+		},
+		{
+			name:        "allows ungated task without reference",
+			currentType: task.IssueTypeTask,
+			wantUpdated: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := createTestSource("alpha", "op", t.TempDir())
+			source.Repository.TitleTemplate = test.titleTemplate
+			backend := updateBackendWithCurrent()
+			current := backend.tasks["op-current"]
+			current.IssueType = test.currentType
+			current.ExternalRef = test.currentRef
+			backend.tasks["op-current"] = current
+
+			_, err := updateService(source, backend).Update(context.Background(), source, task.UpdateOptions{
+				ID:          "op-current",
+				Title:       stringPtr("Updated title"),
+				ExternalRef: test.externalRef,
+			})
+			if test.wantUpdated {
+				if err != nil {
+					t.Fatalf("Update() error = %v", err)
+				}
+				if !backend.updated {
+					t.Fatal("Update mutator was not called")
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "--external-ref <reference>") {
+				t.Fatalf("Update() error = %v, want external-reference guidance", err)
+			}
+			if backend.updated {
+				t.Fatalf("Update mutator was called with %#v", backend.opts)
+			}
+		})
+	}
+}
+
 func TestUpdateServiceRejectsEmptyRequiredPlanningFieldsBeforeMutation(t *testing.T) {
 	for _, request := range []struct {
 		name string

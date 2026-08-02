@@ -3864,7 +3864,6 @@ func (r *mutatingReviewInput) Read(p []byte) (int, error) {
 	return r.input.Read(p)
 }
 
-//nolint:funlen // The fixture records every manual finding category before blocking.
 func TestTaskReviewBlockingFindingBlocksWithoutFinalizing(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -5208,7 +5207,6 @@ func TestTaskReviewManualBlockerExhaustsBudgetWithoutExtraLaunch(t *testing.T) {
 	store := registry.NewStore(paths)
 
 	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	configureTestGitUser(t, repoPath)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:             "alpha",
 		Name:           "Alpha Repo",

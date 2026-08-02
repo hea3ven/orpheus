@@ -358,6 +358,13 @@ func (s UpdateService) Update(ctx context.Context, source RepositorySource, requ
 	if current.IssueType != IssueTypeTask && current.IssueType != IssueTypeEpic {
 		return Task{}, fmt.Errorf("task %q in repository %s has unsupported item type %q; expected task or epic", opts.ID, source.Repository.ID, current.IssueType)
 	}
+	resultingExternalRef := current.ExternalRef
+	if opts.ExternalRef != nil {
+		resultingExternalRef = *opts.ExternalRef
+	}
+	if err := validateRequiredExternalRef(source.Repository.TitleTemplate, current.IssueType, resultingExternalRef); err != nil {
+		return Task{}, err
+	}
 	if err := validateRequiredUpdateContent(opts, current); err != nil {
 		return Task{}, err
 	}

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/hea3ven/orpheus/internal/publication"
 )
 
 // CreateBackend is the backend-neutral capability required to validate graph
@@ -101,6 +103,9 @@ func (s CreateService) Create(ctx context.Context, source RepositorySource, requ
 	if err != nil {
 		return Task{}, err
 	}
+	if err := validateRequiredExternalRef(source.Repository.TitleTemplate, opts.IssueType, opts.ExternalRef); err != nil {
+		return Task{}, err
+	}
 	backend, err := s.BackendFactory(source)
 	if err != nil {
 		return Task{}, creationFailure{message: fmt.Sprintf("cannot prepare task creation in repository %s", source.Repository.ID), cause: err}
@@ -146,6 +151,16 @@ func NormalizeCreateOptions(opts CreateOptions) (CreateOptions, error) {
 		return CreateOptions{}, fmt.Errorf("unsupported item type %q; expected task or epic", normalized.IssueType)
 	}
 	return normalized, nil
+}
+
+// validateRequiredExternalRef applies the repository publication policy to
+// ordinary tasks. Epics are planning items and are not published through the
+// ordinary task workflow.
+func validateRequiredExternalRef(template string, issueType IssueType, externalRef string) error {
+	if issueType != IssueTypeTask || !publication.RequiresExternalRef(template) || strings.TrimSpace(externalRef) != "" {
+		return nil
+	}
+	return errors.New("publication title template requires a task external reference; provide --external-ref <reference>")
 }
 
 func (s CreateService) validateRelations(ctx context.Context, source RepositorySource, backend CreateBackend, opts CreateOptions) error {
