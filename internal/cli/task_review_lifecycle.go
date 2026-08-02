@@ -10,9 +10,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
-	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/registry"
-	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/workflow"
@@ -170,6 +168,7 @@ func (f taskReviewLifecycleFrontend) PromptFreshReviewBlockerDispositions(
 
 type taskReviewLifecycleAgentRunner struct {
 	command *cobra.Command
+	deps    *invocationDependencies
 	service workflow.DispatchService
 }
 
@@ -197,20 +196,20 @@ func (r taskReviewLifecycleAgentRunner) RunReviewLifecycleAgent(
 	if err := renderTaskRunAgentHeader(r.command.ErrOrStderr(), run.Start.Attempt); err != nil {
 		return workflow.ReviewLifecycleAgentRunResult{}, reviewLifecycleAgentHeaderWriteError{cause: err}
 	}
-	if err := attachedAgentLauncher.Run(ctx, agentexec.Command{
+	if err := r.deps.agentLauncher.Run(ctx, agentexec.Command{
 		Name:    run.Start.Command.AgentName,
 		Harness: run.Start.Command.Harness,
 		Command: run.Start.Command.Command,
 		Args:    append([]string{}, run.Start.Command.Args...),
 	}, agentexec.LaunchOptions{
 		Dir: run.Start.ExecutionDir,
-		Env: taskRunEnvironment(
+		Env: r.deps.invocationEnvironment(taskRunEnvironment(
 			run.RepoID,
 			run.Start.Task.ID,
 			run.Start.Setup.WorktreePath,
 			run.Start.Setup.Branch,
 			run.Prompt,
-		),
+		)),
 		Stdin:  r.command.InOrStdin(),
 		Stdout: r.command.OutOrStdout(),
 		Stderr: r.command.ErrOrStderr(),
@@ -226,7 +225,7 @@ func (r taskReviewLifecycleAgentRunner) RunReviewLifecycleAgent(
 			ExecutionDir: run.Start.ExecutionDir,
 			SessionName:  run.Start.Attempt.Execution.SessionName,
 			StartedAt:    run.Start.Attempt.Execution.StartedAt,
-			Env:          agent.UsageCaptureEnvironment(),
+			Env:          r.deps.usageCaptureEnvironment(),
 			Launch:       run.Start.Attempt.Execution.Launch,
 		}),
 	)
@@ -253,29 +252,38 @@ func taskReviewStartFromWorkflow(ctx workflow.ReviewAttemptContext) taskReviewSt
 
 func newTaskReviewLifecycleService(
 	command *cobra.Command,
-	paths state.Paths,
+	deps *invocationDependencies,
 	taskCtx taskContext,
 	logger *slog.Logger,
 	reader *bufio.Reader,
 ) workflow.ReviewLifecycleService {
+	paths := deps.paths
 	store := taskstate.NewStoreWithLogger(paths, logger)
 	service := workflow.ReviewLifecycleService{
 		Paths:    paths,
 		Sources:  taskCtx.Sources,
 		RunStore: store,
 		BackendFactory: func(source taskmodel.RepositorySource) (workflow.ReviewLifecycleBackend, error) {
-			return newDiagnosticBeadsTaskBackend(source, logger)
+			return invocationTaskBackend(deps, source)
 		},
-		PRProvider:    pullrequest.GHProvider{Logger: logger},
-		AgentLauncher: attachedAgentLauncher,
-		Logger:        logger,
+		PRProvider:            newInvocationGHProvider(deps, logger),
+		AgentLauncher:         deps.agentLauncher,
+		Environment:           environmentEntries(deps.environment),
+		UsageCaptureEnv:       deps.usageCaptureEnvironment(),
+		ResumeSessionsEnabled: boolPtr(deps.resumeSessionsEnabled()),
+		Logger:                logger,
 		Frontend: &taskReviewLifecycleFrontend{
 			command: command,
 			logger:  logger,
 			reader:  reader,
 		},
 	}
-	service.AgentRunner = taskReviewLifecycleAgentRunner{command: command, service: workflow.DispatchService{Paths: paths, RunStore: store}}
+	service.AgentRunner = taskReviewLifecycleAgentRunner{command: command, deps: deps, service: workflow.DispatchService{
+		Paths:                 paths,
+		RunStore:              store,
+		UsageCaptureEnv:       deps.usageCaptureEnvironment(),
+		ResumeSessionsEnabled: boolPtr(deps.resumeSessionsEnabled()),
+	}}
 	service.ResolveCommand = func(commandContext workflow.DispatchCommandContext, agentName string) (workflow.DispatchCommand, string, error) {
 		prompt, commandSnapshot, err := resolveTaskRunAgentCommand(paths, agentName, commandContext.SessionName)
 		if err != nil {

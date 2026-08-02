@@ -91,9 +91,11 @@ type DispatchCommandContext struct {
 
 // DispatchService prepares task run targets and records dispatch state.
 type DispatchService struct {
-	Paths    state.Paths
-	RunStore DispatchRunStore
-	Logger   *slog.Logger
+	Paths                 state.Paths
+	RunStore              DispatchRunStore
+	Logger                *slog.Logger
+	UsageCaptureEnv       map[string]string
+	ResumeSessionsEnabled *bool
 }
 
 // DispatchStartOptions describes the task run to start.
@@ -340,12 +342,26 @@ func (s DispatchService) prepareFollowUpResume(
 		},
 		State:        state,
 		ExecutionDir: plan.expected.WorktreePath,
-		Env:          agent.UsageCaptureEnvironment(),
-		Enabled:      agent.ResumeSessionsEnabled(),
+		Env:          s.usageCaptureEnvironment(),
+		Enabled:      s.resumeSessionsEnabled(),
 	})
 	command.Command = prepared.Command
 	command.Args = append([]string{}, prepared.Args...)
 	return command, launch, nil
+}
+
+func (s DispatchService) usageCaptureEnvironment() map[string]string {
+	if s.UsageCaptureEnv != nil {
+		return s.UsageCaptureEnv
+	}
+	return agent.UsageCaptureEnvironment()
+}
+
+func (s DispatchService) resumeSessionsEnabled() bool {
+	if s.ResumeSessionsEnabled != nil {
+		return *s.ResumeSessionsEnabled
+	}
+	return agent.ResumeSessionsEnabled()
 }
 
 func dispatchLaunchMode(launch *taskstate.AgentLaunch) string {

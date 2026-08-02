@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -56,8 +57,10 @@ type PipelineRunOptions struct {
 	OutputWidth       int
 	OutputWidthFunc   func() (int, bool)
 
-	AgentConfig   agent.Config
-	AgentLauncher agentexec.Launcher
+	AgentConfig     agent.Config
+	AgentLauncher   agentexec.Launcher
+	Environment     []string
+	UsageCaptureEnv map[string]string
 
 	ResumeFromStep          bool
 	PauseBeforeManual       bool
@@ -503,9 +506,9 @@ func runHunkBackedManualCommand(opts PipelineRunOptions, step Step, env []string
 	span := logging.Start(opts.Context, opts.Logger, "review command",
 		reviewCommandAttrs(opts, step)...,
 	)
-	process := exec.CommandContext(opts.Context, step.Command, step.Args...)
+	process := exec.CommandContext(opts.Context, executable(opts.Environment, step.Command), step.Args...)
 	process.Dir = opts.Workdir
-	process.Env = append(os.Environ(), env...)
+	process.Env = mergeEnvironment(opts.Environment, env)
 	process.Stdout = opts.Stdout
 	process.Stderr = opts.Stderr
 
@@ -515,7 +518,7 @@ func runHunkBackedManualCommand(opts PipelineRunOptions, step Step, env []string
 	}
 
 	var latest []HunkNote
-	if notes, err := captureHunkUserNotes(opts.Context, opts.Workdir, opts.Logger, reviewStepAttrs(opts, step)...); err == nil {
+	if notes, err := captureHunkUserNotes(opts.Context, opts.Workdir, opts.Logger, opts.Environment, reviewStepAttrs(opts, step)...); err == nil {
 		latest = notes
 	}
 
@@ -529,18 +532,18 @@ func runHunkBackedManualCommand(opts PipelineRunOptions, step Step, env []string
 	for {
 		select {
 		case err := <-done:
-			latest = captureFinalHunkUserNotes(opts.Context, opts.Workdir, opts.Logger, latest, reviewStepAttrs(opts, step)...)
+			latest = captureFinalHunkUserNotes(opts.Context, opts.Workdir, opts.Logger, opts.Environment, latest, reviewStepAttrs(opts, step)...)
 			exitCode := process.ProcessState.ExitCode()
 			span.Finish(opts.Context, reviewCommandStatus(opts.Context, process, err), reviewCommandExitAttrs(process, err)...)
 			return &exitCode, latest, err
 		case <-ticker.C:
-			notes, err := captureHunkUserNotes(opts.Context, opts.Workdir, opts.Logger, reviewStepAttrs(opts, step)...)
+			notes, err := captureHunkUserNotes(opts.Context, opts.Workdir, opts.Logger, opts.Environment, reviewStepAttrs(opts, step)...)
 			if err == nil {
 				latest = notes
 			}
 		case <-opts.Context.Done():
 			err := <-done
-			latest = captureFinalHunkUserNotes(opts.Context, opts.Workdir, opts.Logger, latest, reviewStepAttrs(opts, step)...)
+			latest = captureFinalHunkUserNotes(opts.Context, opts.Workdir, opts.Logger, opts.Environment, latest, reviewStepAttrs(opts, step)...)
 			exitCode := process.ProcessState.ExitCode()
 			span.Finish(opts.Context, "canceled", reviewCommandExitAttrs(process, err)...)
 			return &exitCode, latest, err
@@ -552,17 +555,18 @@ func captureFinalHunkUserNotes(
 	ctx context.Context,
 	workdir string,
 	logger *slog.Logger,
+	environment []string,
 	fallback []HunkNote,
 	attrs ...slog.Attr,
 ) []HunkNote {
-	notes, err := captureHunkUserNotes(ctx, workdir, logger, attrs...)
+	notes, err := captureHunkUserNotes(ctx, workdir, logger, environment, attrs...)
 	if err != nil {
 		return fallback
 	}
 	return notes
 }
 
-func captureHunkUserNotes(ctx context.Context, workdir string, logger *slog.Logger, attrs ...slog.Attr) ([]HunkNote, error) {
+func captureHunkUserNotes(ctx context.Context, workdir string, logger *slog.Logger, environment []string, attrs ...slog.Attr) ([]HunkNote, error) {
 	spanAttrs := []slog.Attr{
 		slog.String("component", "review"),
 		slog.String("operation", "hunk_notes_poll"),
@@ -570,8 +574,9 @@ func captureHunkUserNotes(ctx context.Context, workdir string, logger *slog.Logg
 	}
 	spanAttrs = append(spanAttrs, attrs...)
 	span := logging.Start(ctx, logger, "hunk notes poll", spanAttrs...)
-	command := exec.CommandContext(ctx, "hunk", "session", "comment", "list", "--repo", workdir, "--type", "user", "--json")
+	command := exec.CommandContext(ctx, executable(environment, "hunk"), "session", "comment", "list", "--repo", workdir, "--type", "user", "--json")
 	command.Dir = workdir
+	command.Env = mergeEnvironment(environment, nil)
 	output, err := command.Output()
 	if err != nil {
 		span.Finish(ctx, reviewCommandStatus(ctx, command, err), reviewCommandExitAttrs(command, err)...)
@@ -739,7 +744,7 @@ func finishAgentReviewExecution(
 	finishedAt time.Time,
 	runErr error,
 ) error {
-	usageOpts := agentReviewUsageOptions(command, opts.Workdir, execution, runErr)
+	usageOpts := agentReviewUsageOptions(command, opts.Workdir, execution, runErr, usageCaptureEnvironment(opts))
 	_, err := opts.Store.FinishReviewStepExecution(
 		opts.RepoID,
 		opts.TaskID,
@@ -766,6 +771,7 @@ func agentReviewUsageOptions(
 	workdir string,
 	execution taskstate.AgentExecution,
 	runErr error,
+	environment map[string]string,
 ) taskstate.RecordRunUsageOptions {
 	if agentexec.IsStartError(runErr) {
 		return taskstate.RecordRunUsageOptions{
@@ -789,8 +795,15 @@ func agentReviewUsageOptions(
 		ExecutionDir: workdir,
 		SessionName:  execution.SessionName,
 		StartedAt:    execution.StartedAt,
-		Env:          agent.UsageCaptureEnvironment(),
+		Env:          environment,
 	})
+}
+
+func usageCaptureEnvironment(opts PipelineRunOptions) map[string]string {
+	if opts.UsageCaptureEnv != nil {
+		return opts.UsageCaptureEnv
+	}
+	return agent.UsageCaptureEnvironment()
 }
 
 func formatUsageHarness(harness string) string {
@@ -1022,9 +1035,9 @@ func runStepCommandWithOutput(
 	span := logging.Start(opts.Context, opts.Logger, "review command",
 		reviewCommandAttrs(opts, step)...,
 	)
-	process := exec.CommandContext(opts.Context, step.Command, step.Args...)
+	process := exec.CommandContext(opts.Context, executable(opts.Environment, step.Command), step.Args...)
 	process.Dir = opts.Workdir
-	process.Env = append(os.Environ(), env...)
+	process.Env = mergeEnvironment(opts.Environment, env)
 	process.Stdout = stdout
 	process.Stderr = stderr
 
@@ -1095,6 +1108,59 @@ func recordStep(opts PipelineRunOptions, step Step, execution *taskstate.AgentEx
 		return fmt.Errorf("task review %s: record review step %q: %w", opts.TaskID, step.Name, err)
 	}
 	return nil
+}
+
+func executable(environment []string, name string) string {
+	if filepath.IsAbs(name) || strings.ContainsRune(name, os.PathSeparator) {
+		return name
+	}
+	if environment == nil {
+		environment = os.Environ()
+	}
+	for _, entry := range environment {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || key != "PATH" {
+			continue
+		}
+		for _, directory := range filepath.SplitList(value) {
+			candidate := filepath.Join(directory, name)
+			info, err := os.Stat(candidate)
+			if err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+				absolute, absErr := filepath.Abs(candidate)
+				if absErr == nil {
+					return absolute
+				}
+			}
+		}
+	}
+	return filepath.Join(os.TempDir(), "orpheus-missing-executable", filepath.Base(name))
+}
+
+func mergeEnvironment(base []string, overrides []string) []string {
+	if base == nil {
+		base = os.Environ()
+	}
+	merged := append([]string{}, base...)
+	indexes := make(map[string]int, len(merged))
+	for index, entry := range merged {
+		if key, _, ok := strings.Cut(entry, "="); ok {
+			indexes[key] = index
+		}
+	}
+	for _, entry := range overrides {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			merged = append(merged, entry)
+			continue
+		}
+		if index, ok := indexes[key]; ok {
+			merged[index] = entry
+			continue
+		}
+		indexes[key] = len(merged)
+		merged = append(merged, entry)
+	}
+	return merged
 }
 
 func stepEnvironment(opts PipelineRunOptions, stepName string, prompt string) []string {

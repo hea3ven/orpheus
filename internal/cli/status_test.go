@@ -1,4 +1,5 @@
-package cli_test
+//nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
+package cli
 
 import (
 	"fmt"
@@ -22,6 +23,7 @@ type fakeBDCommandResponse struct {
 }
 
 func TestStatusGroupsLocalTaskSnapshots(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	logPath := setupStatusGroupsLocalTaskSnapshots(t)
@@ -129,6 +131,7 @@ func assertFullStatusGroupOutput(t *testing.T, fullStdout string) {
 }
 
 func TestStatusFullIgnoresCorruptClosedAndPullRequestStates(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -169,6 +172,7 @@ func TestStatusFullIgnoresCorruptClosedAndPullRequestStates(t *testing.T) {
 }
 
 func TestStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -223,6 +227,7 @@ func TestStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t *testing.T) {
 }
 
 func TestStatusAndTaskReadyUseLocalRunHistoryOnOpenTaskAsNeedsAttention(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -267,6 +272,7 @@ func TestStatusAndTaskReadyUseLocalRunHistoryOnOpenTaskAsNeedsAttention(t *testi
 }
 
 func TestStatusRendersEpicChildrenAsIntegratedTreeRows(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -324,6 +330,7 @@ func TestStatusRendersEpicChildrenAsIntegratedTreeRows(t *testing.T) {
 }
 
 func TestStatusReportsRepoFailuresInUnknownGroupAndReturnsError(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
 	newTestState(t)
@@ -448,7 +455,7 @@ exit 65
 	if err := os.WriteFile(bdPath, []byte(script.String()), 0o755); err != nil {
 		t.Fatalf("write fake bd: %v", err)
 	}
-	t.Setenv("FAKE_BD_LOG", logPath)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	setTestEnvironment(t, "FAKE_BD_LOG", logPath)
+	prependTestPath(t, binDir)
 	return logPath
 }

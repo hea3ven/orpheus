@@ -151,7 +151,7 @@ func runAgentContext(command *cobra.Command, opts *rootOptions) error {
 	paths := deps.paths
 
 	resolver := activeAgentContextResolver(deps, taskCtx, deps.taskStateStore)
-	switch strings.TrimSpace(os.Getenv("ORPHEUS_AGENT_PURPOSE")) {
+	switch strings.TrimSpace(deps.environmentValue("ORPHEUS_AGENT_PURPOSE")) {
 	case "", "implementation":
 	case "review":
 		reviewContext, err := resolver.ResolveReview(command.Context())
@@ -168,7 +168,7 @@ func runAgentContext(command *cobra.Command, opts *rootOptions) error {
 		_, err = fmt.Fprint(command.OutOrStdout(), agent.RenderConflictResolutionContext(conflictContext))
 		return err
 	default:
-		return fmt.Errorf("agent context: unsupported ORPHEUS_AGENT_PURPOSE %q", os.Getenv("ORPHEUS_AGENT_PURPOSE"))
+		return fmt.Errorf("agent context: unsupported ORPHEUS_AGENT_PURPOSE %q", deps.environmentValue("ORPHEUS_AGENT_PURPOSE"))
 	}
 	activeContext, err := resolver.Resolve(command.Context())
 	if err != nil {
@@ -546,5 +546,6 @@ func activeAgentContextResolver(
 			return contextBackend, nil
 		},
 		RunStore: runStore,
+		Env:      deps.environment,
 	}
 }

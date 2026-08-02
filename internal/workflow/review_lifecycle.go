@@ -117,6 +117,9 @@ type ReviewLifecycleService struct {
 	PRProvider             pullrequest.Provider
 	AgentRunner            ReviewLifecycleAgentRunner
 	AgentLauncher          agentexec.Launcher
+	Environment            []string
+	UsageCaptureEnv        map[string]string
+	ResumeSessionsEnabled  *bool
 	Frontend               ReviewLifecycleFrontend
 	PipelineRunner         func(review.PipelineRunOptions) (review.PipelineOutcome, error)
 	ResolveCommand         func(DispatchCommandContext, string) (DispatchCommand, string, error)
@@ -539,6 +542,8 @@ func (s ReviewLifecycleService) pipelineRunOptions(runCtx context.Context, ctx R
 		OutputWidthFunc:         presentation.OutputWidthFunc,
 		AgentConfig:             ctx.AgentConfig,
 		AgentLauncher:           s.AgentLauncher,
+		Environment:             s.Environment,
+		UsageCaptureEnv:         s.UsageCaptureEnv,
 		ResumeFromStep:          ctx.Resumed,
 		PauseBeforeManual:       presentation.PauseBeforeManual,
 		RenderManualStep:        renderManualStep,
@@ -1260,7 +1265,13 @@ func (s ReviewLifecycleService) runAutonomousReviewFollowUp(ctx context.Context,
 		return fmt.Errorf("task review %s: create backend for autonomous follow-up: %w", current.TaskID(), err)
 	}
 	promptCapture := ""
-	dispatch := DispatchService{Paths: current.paths, RunStore: current.store}
+	dispatch := DispatchService{
+		Paths:                 current.paths,
+		RunStore:              current.store,
+		Logger:                s.Logger,
+		UsageCaptureEnv:       s.UsageCaptureEnv,
+		ResumeSessionsEnabled: s.ResumeSessionsEnabled,
+	}
 	start, err := dispatch.Start(ctx, DispatchStartOptions{
 		TaskID:  current.TaskID(),
 		Source:  current.Source,

@@ -32,8 +32,10 @@ func (o *rootOptions) log() *slog.Logger {
 
 // NewRootCommand constructs the root Orpheus CLI command.
 func NewRootCommand() *cobra.Command {
-	opts := &rootOptions{logger: logging.Discard()}
+	return newRootCommand(&rootOptions{logger: logging.Discard()})
+}
 
+func newRootCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "orpheus",
 		Short: "Coordinate AI coding-agent work across repositories",

@@ -1,4 +1,5 @@
-package cli_test
+//nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
+package cli
 
 import (
 	"os"
@@ -12,6 +13,7 @@ import (
 )
 
 func TestTaskCreateReadsPlanningFilesAndRendersCreatedTypeAndID(t *testing.T) {
+	t.Parallel()
 	is := assert.New(t)
 	root := newTestState(t)
 	paths := currentTestPaths(t)
@@ -46,6 +48,7 @@ func TestTaskCreateReadsPlanningFilesAndRendersCreatedTypeAndID(t *testing.T) {
 }
 
 func TestTaskCreateFailsWithoutRepositoryGuidance(t *testing.T) {
+	t.Parallel()
 	newTestState(t)
 	_, _, err := executeCommandWithError(t, []string{
 		"task", "create", "--title", "Plan", "--description", "Description", "--acceptance", "Acceptance",
@@ -73,7 +76,7 @@ esac
 `
 	path := filepath.Join(binDir, "bd")
 	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
-	t.Setenv("FAKE_BD_LOG", logPath)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	setTestEnvironment(t, "FAKE_BD_LOG", logPath)
+	prependTestPath(t, binDir)
 	return logPath
 }
