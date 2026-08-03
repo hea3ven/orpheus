@@ -281,6 +281,9 @@ func diagnoseExecution(
 	if !needsUsageDiagnostic(ref.execution) {
 		return nil, nil
 	}
+	if row, handled, err := diagnoseStoredCodexCostEstimate(store, ref, fix); handled || err != nil {
+		return row, err
+	}
 	if len(executionDirGroups(ref)) == 0 {
 		return unknownRow(ref, "missing_task_execution_directory"), nil
 	}
@@ -291,6 +294,7 @@ func diagnoseExecution(
 		return unknownRow(ref, ref.resumeBoundaryFailure), nil
 	}
 	usageOpts := captureUsageWithDirectoryPriority(env, ref)
+	usageOpts = preserveStoredUsageCost(ref.execution, usageOpts)
 	if usageOpts.UsageCapture.Status != taskstate.UsageCaptureCaptured ||
 		usageOpts.Session == nil ||
 		usageOpts.Usage == nil {
@@ -329,10 +333,67 @@ func needsUsageDiagnostic(execution taskstate.AgentExecution) bool {
 	if strings.TrimSpace(execution.Model) == "" {
 		return true
 	}
-	if strings.TrimSpace(execution.Harness) == "pi" && execution.UsageCost == nil {
+	if execution.UsageCost == nil && strings.TrimSpace(execution.Harness) == "pi" {
+		return true
+	}
+	if missingCodexCostEstimate(execution) {
 		return true
 	}
 	return execution.UsageCapture.Status != taskstate.UsageCaptureCaptured
+}
+
+func missingCodexCostEstimate(execution taskstate.AgentExecution) bool {
+	return strings.TrimSpace(execution.Harness) == "codex" &&
+		execution.Usage != nil &&
+		strings.TrimSpace(execution.Model) != "" &&
+		execution.UsageCost == nil
+}
+
+// diagnoseStoredCodexCostEstimate repairs a missing Codex estimate directly
+// from already persisted final model and execution-attributed usage. It must
+// not re-correlate session logs because historical logs may no longer exist.
+func diagnoseStoredCodexCostEstimate(
+	store taskstate.Store,
+	ref executionRef,
+	fix bool,
+) (*Row, bool, error) {
+	if !missingCodexCostEstimate(ref.execution) {
+		return nil, false, nil
+	}
+	if !agent.HasBillableUsage(*ref.execution.Usage) {
+		return unknownRow(ref, agent.UsageCostUnknownBillableUsageMissing), true, nil
+	}
+	cost, ok := agent.EstimateCodexUsageCost(ref.execution.Model, *ref.execution.Usage)
+	if !ok {
+		return unknownRow(ref, agent.UsageCostUnknownPricingMetadataMissing), true, nil
+	}
+	usageOpts := taskstate.RecordRunUsageOptions{
+		Session:      ref.execution.Session,
+		Usage:        ref.execution.Usage,
+		UsageCost:    cost,
+		UsageCapture: ref.execution.UsageCapture,
+		Model:        ref.execution.Model,
+	}
+	row := recoveredRow(ref, usageOpts, fix)
+	if !fix {
+		return &row, true, nil
+	}
+	if err := persistRecovery(store, ref, usageOpts); err != nil {
+		return nil, true, err
+	}
+	return &row, true, nil
+}
+
+func preserveStoredUsageCost(
+	execution taskstate.AgentExecution,
+	usageOpts taskstate.RecordRunUsageOptions,
+) taskstate.RecordRunUsageOptions {
+	if strings.TrimSpace(execution.Harness) == "codex" &&
+		execution.UsageCost != nil &&
+		strings.TrimSpace(execution.UsageCost.Kind) == agent.UsageCostKindEstimatedAPIEquivalent {
+		usageOpts.UsageCost = execution.UsageCost
+	}
+	return usageOpts
 }
 
 func missingRequiredPiUsageCost(

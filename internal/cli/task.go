@@ -4759,6 +4759,8 @@ func formatTaskStatsUsageCostUnknown(execution taskstate.AgentExecution, reason 
 		return "unknown: stored usage_cost is incomplete"
 	case agent.UsageCostUnknownNoUsage:
 		return "unknown: usage was not recorded"
+	case agent.UsageCostUnknownBillableUsageMissing:
+		return "unknown: billable token classes were not captured"
 	default:
 		return fmt.Sprintf("unknown: no public pricing metadata for model %s", formatTaskStatsField(execution.Model))
 	}

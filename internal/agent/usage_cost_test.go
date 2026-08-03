@@ -53,6 +53,26 @@ func TestEstimateUsageCostUsesReasoningOutputWhenOutputIsMissing(t *testing.T) {
 	}
 }
 
+func TestEstimateUsageCostPricesCapturedCachedInputWithoutInputTotal(t *testing.T) {
+	cost, ok := agent.EstimateUsageCost("gpt-5", taskstate.AgentUsage{CachedInputTokens: 1_000_000})
+	if !ok || cost.AmountMicroUSD != 125_000 {
+		t.Fatalf("cached-only cost = %#v, ok = %t; want $0.125000", cost, ok)
+	}
+}
+
+func TestEstimateUsageCostLeavesTotalOnlyUsageUnpriced(t *testing.T) {
+	_, ok := agent.EstimateUsageCost("gpt-5", taskstate.AgentUsage{TotalTokens: 100})
+	if ok {
+		t.Fatal("estimate total-only usage ok = true, want false")
+	}
+	resolved := agent.ResolveExecutionUsageCost(taskstate.AgentExecution{
+		Harness: "codex", Model: "gpt-5", Usage: &taskstate.AgentUsage{TotalTokens: 100},
+	})
+	if resolved.Known || resolved.UnknownReason != agent.UsageCostUnknownBillableUsageMissing {
+		t.Fatalf("resolved = %#v, want unknown billable usage", resolved)
+	}
+}
+
 func TestEstimateUsageCostLeavesUnknownModelUnpriced(t *testing.T) {
 	_, ok := agent.EstimateUsageCost("vendor/unknown-model", taskstate.AgentUsage{
 		InputTokens:  100,
@@ -118,6 +138,67 @@ func TestResolveExecutionUsageCostFallsBackToPricingForNonPi(t *testing.T) {
 	}
 	if resolved.Cost.Kind != agent.UsageCostKindEstimatedAPIEquivalent {
 		t.Fatalf("cost kind = %q, want estimated API-equivalent", resolved.Cost.Kind)
+	}
+}
+
+func TestEstimateCodexUsageCostPersistsCompletePricingSnapshot(t *testing.T) {
+	stored, ok := agent.EstimateCodexUsageCost("gpt-5", taskstate.AgentUsage{
+		InputTokens: 1,
+	})
+	if !ok {
+		t.Fatal("estimate stored Codex cost ok = false, want true")
+	}
+	if stored.AmountMicroUSD != 1 || stored.Pricing == nil {
+		t.Fatalf("stored cost = %#v, want amount and pricing snapshot", stored)
+	}
+	if stored.Pricing.Provider != "openai" ||
+		stored.Pricing.Model != "gpt-5" ||
+		stored.Pricing.ServiceTier != "standard" ||
+		stored.Pricing.InputUSDPerMillionTokens != "1.25" ||
+		stored.Pricing.CachedUSDPerMillionTokens != "0.125" ||
+		stored.Pricing.OutputUSDPerMillionTokens != "10" ||
+		stored.Pricing.ReasoningOutputTreatment == "" ||
+		stored.Pricing.Source == "" ||
+		stored.Pricing.SourcePublished == "" {
+		t.Fatalf("pricing snapshot = %#v, want complete persisted metadata", stored.Pricing)
+	}
+}
+
+func TestResolveExecutionUsageCostKeepsStoredEstimateWhenUsageFactsChange(t *testing.T) {
+	stored, ok := agent.EstimateCodexUsageCost("gpt-5", taskstate.AgentUsage{InputTokens: 100, OutputTokens: 50})
+	if !ok {
+		t.Fatal("estimate stored cost ok = false, want true")
+	}
+	resolved := agent.ResolveExecutionUsageCost(taskstate.AgentExecution{
+		Harness:   "codex",
+		Model:     "gpt-5-nano",
+		Usage:     &taskstate.AgentUsage{InputTokens: 1},
+		UsageCost: stored,
+	})
+	if !resolved.Known || resolved.Cost.AmountMicroUSD != stored.AmountMicroUSD {
+		t.Fatalf("resolved = %#v, want stored amount %d", resolved, stored.AmountMicroUSD)
+	}
+	if resolved.Cost.Pricing.Model != "gpt-5" {
+		t.Fatalf("resolved pricing = %#v, want stored gpt-5 snapshot", resolved.Cost.Pricing)
+	}
+}
+
+func TestResolveExecutionUsageCostUsesStoredZeroEstimate(t *testing.T) {
+	stored, ok := agent.EstimateCodexUsageCost("gpt-5-nano", taskstate.AgentUsage{InputTokens: 1})
+	if !ok || stored.AmountMicroUSD != 0 {
+		t.Fatalf("stored zero cost = %#v, ok = %t; want known zero", stored, ok)
+	}
+	resolved := agent.ResolveExecutionUsageCost(taskstate.AgentExecution{
+		Harness:   "codex",
+		Model:     "unknown-model-that-must-not-be-priced",
+		Usage:     &taskstate.AgentUsage{InputTokens: 999},
+		UsageCost: stored,
+	})
+	if !resolved.Known || resolved.Cost.AmountMicroUSD != 0 {
+		t.Fatalf("resolved = %#v, want known stored zero", resolved)
+	}
+	if resolved.Cost.Pricing.Model != "gpt-5-nano" {
+		t.Fatalf("stored pricing = %#v, want gpt-5-nano snapshot", resolved.Cost.Pricing)
 	}
 }
 

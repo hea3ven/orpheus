@@ -86,6 +86,7 @@ func CaptureUsage(opts UsageCaptureOptions) taskstate.RecordRunUsageOptions {
 	var result taskstate.RecordRunUsageOptions
 	if opts.Launch != nil && opts.Launch.Mode == taskstate.AgentLaunchResumed {
 		result = captureResumedUsage(opts)
+		result = withCodexUsageCost(opts.Harness, result)
 		span.Finish(ctx, usageCaptureDiagnosticStatus(result), usageCaptureDiagnosticAttrs(result)...)
 		return result
 	}
@@ -114,7 +115,18 @@ func CaptureUsage(opts UsageCaptureOptions) taskstate.RecordRunUsageOptions {
 		}
 	}
 
+	result = withCodexUsageCost(opts.Harness, result)
 	span.Finish(ctx, usageCaptureDiagnosticStatus(result), usageCaptureDiagnosticAttrs(result)...)
+	return result
+}
+
+func withCodexUsageCost(harness string, result taskstate.RecordRunUsageOptions) taskstate.RecordRunUsageOptions {
+	if strings.TrimSpace(harness) != codexHarness || result.Usage == nil || strings.TrimSpace(result.Model) == "" {
+		return result
+	}
+	if cost, ok := EstimateCodexUsageCost(result.Model, *result.Usage); ok {
+		result.UsageCost = cost
+	}
 	return result
 }
 
