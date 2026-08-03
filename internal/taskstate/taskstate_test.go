@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -1785,6 +1786,36 @@ func TestStoreRecordsPRMergedTaskClosedEventIdempotently(t *testing.T) {
 		"pr_url: https://github.test/org/repo/pull/42",
 		"observed_pr_state: merged",
 	)
+}
+
+func TestStorePersistsKnownZeroCostEstimate(t *testing.T) {
+	store := newTestStore(t, time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC))
+	run, err := store.StartRun("alpha", "op-zero-cost", taskstate.StartRunOptions{
+		Harness: "codex", Command: "codex", Branch: "main", Worktree: "/tmp/op-zero-cost",
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	cost, ok := agent.EstimateCodexUsageCost("gpt-5-nano", taskstate.AgentUsage{InputTokens: 1})
+	if !ok || cost.AmountMicroUSD != 0 {
+		t.Fatalf("cost = %#v, ok = %t; want known zero estimate", cost, ok)
+	}
+	_, err = store.RecordRunUsage("alpha", "op-zero-cost", run.Attempt, taskstate.RecordRunUsageOptions{
+		Model: "gpt-5-nano", Usage: &taskstate.AgentUsage{InputTokens: 1}, UsageCost: cost,
+	})
+	if err != nil {
+		t.Fatalf("record zero cost: %v", err)
+	}
+	loaded, err := store.Load("alpha", "op-zero-cost")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if loaded.Runs[0].Execution.UsageCost == nil ||
+		loaded.Runs[0].Execution.UsageCost.AmountMicroUSD != 0 ||
+		loaded.Runs[0].Execution.UsageCost.Pricing == nil {
+		t.Fatalf("stored zero usage cost = %#v, want persisted pricing snapshot", loaded.Runs[0].Execution.UsageCost)
+	}
+	assertStoreYAMLContains(t, store, "alpha", "op-zero-cost", "amount_micro_usd: 0", "pricing:")
 }
 
 //nolint:funlen // The persisted conflict-repair YAML shape is the behavior under test.

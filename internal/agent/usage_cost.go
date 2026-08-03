@@ -25,6 +25,9 @@ const (
 	// UsageCostUnknownPricingMetadataMissing means Orpheus has no pricing row.
 	UsageCostUnknownPricingMetadataMissing = "pricing_metadata_missing"
 
+	// UsageCostUnknownBillableUsageMissing means token classes needed to price usage were not captured.
+	UsageCostUnknownBillableUsageMissing = "billable_usage_not_recorded"
+
 	usageCostCurrencyUSD = "USD"
 	usageCostUnit        = "usd_per_1m_tokens"
 
@@ -126,7 +129,7 @@ func PiReportedUsageCost(amountMicroUSD int64) taskstate.AgentUsageCost {
 
 // UsageCostFromStored converts a persisted usage cost into report metadata.
 func UsageCostFromStored(stored taskstate.AgentUsageCost) (UsageCost, bool) {
-	if stored.AmountMicroUSD <= 0 {
+	if stored.AmountMicroUSD < 0 || (stored.AmountMicroUSD == 0 && !storedUsageCostIsKnownZero(stored)) {
 		return UsageCost{}, false
 	}
 	kind := strings.TrimSpace(stored.Kind)
@@ -137,15 +140,82 @@ func UsageCostFromStored(stored taskstate.AgentUsageCost) (UsageCost, bool) {
 	if currency == "" {
 		currency = usageCostCurrencyUSD
 	}
+	pricing := UsagePricingMetadata{
+		Source: strings.TrimSpace(stored.Source),
+		Notes:  strings.TrimSpace(stored.Notes),
+	}
+	if stored.Pricing != nil {
+		pricing = usagePricingFromStored(*stored.Pricing)
+	}
 	return UsageCost{
 		Kind:           kind,
 		Currency:       currency,
 		AmountMicroUSD: stored.AmountMicroUSD,
-		Pricing: UsagePricingMetadata{
-			Source: strings.TrimSpace(stored.Source),
-			Notes:  strings.TrimSpace(stored.Notes),
-		},
+		Pricing:        pricing,
 	}, true
+}
+
+func storedUsageCostIsKnownZero(stored taskstate.AgentUsageCost) bool {
+	return stored.Pricing != nil &&
+		strings.TrimSpace(stored.Kind) != "" &&
+		strings.TrimSpace(stored.Currency) != "" &&
+		storedUsagePricingIsPresent(*stored.Pricing)
+}
+
+func storedUsagePricingIsPresent(pricing taskstate.AgentUsagePricing) bool {
+	return strings.TrimSpace(pricing.Provider) != "" ||
+		strings.TrimSpace(pricing.Model) != "" ||
+		strings.TrimSpace(pricing.Source) != ""
+}
+
+func usagePricingFromStored(stored taskstate.AgentUsagePricing) UsagePricingMetadata {
+	return UsagePricingMetadata{
+		Provider:                  strings.TrimSpace(stored.Provider),
+		Model:                     strings.TrimSpace(stored.Model),
+		ServiceTier:               strings.TrimSpace(stored.ServiceTier),
+		Unit:                      strings.TrimSpace(stored.Unit),
+		InputUSDPerMillionTokens:  strings.TrimSpace(stored.InputUSDPerMillionTokens),
+		CachedUSDPerMillionTokens: strings.TrimSpace(stored.CachedUSDPerMillionTokens),
+		OutputUSDPerMillionTokens: strings.TrimSpace(stored.OutputUSDPerMillionTokens),
+		ReasoningOutputTreatment:  strings.TrimSpace(stored.ReasoningOutputTreatment),
+		Source:                    strings.TrimSpace(stored.Source),
+		SourceURL:                 strings.TrimSpace(stored.SourceURL),
+		SourceAccessed:            strings.TrimSpace(stored.SourceAccessed),
+		SourcePublished:           strings.TrimSpace(stored.SourcePublished),
+		Notes:                     strings.TrimSpace(stored.Notes),
+	}
+}
+
+// EstimateCodexUsageCost converts a recognized Codex model and captured usage
+// into the immutable persisted estimate and pricing snapshot.
+func EstimateCodexUsageCost(model string, usage taskstate.AgentUsage) (*taskstate.AgentUsageCost, bool) {
+	cost, ok := EstimateUsageCost(model, usage)
+	if !ok {
+		return nil, false
+	}
+	stored := taskstate.AgentUsageCost{
+		Kind:           cost.Kind,
+		Currency:       cost.Currency,
+		AmountMicroUSD: cost.AmountMicroUSD,
+		Pricing: &taskstate.AgentUsagePricing{
+			Provider:                  cost.Pricing.Provider,
+			Model:                     cost.Pricing.Model,
+			ServiceTier:               cost.Pricing.ServiceTier,
+			Unit:                      cost.Pricing.Unit,
+			InputUSDPerMillionTokens:  cost.Pricing.InputUSDPerMillionTokens,
+			CachedUSDPerMillionTokens: cost.Pricing.CachedUSDPerMillionTokens,
+			OutputUSDPerMillionTokens: cost.Pricing.OutputUSDPerMillionTokens,
+			ReasoningOutputTreatment:  cost.Pricing.ReasoningOutputTreatment,
+			Source:                    cost.Pricing.Source,
+			SourceURL:                 cost.Pricing.SourceURL,
+			SourceAccessed:            cost.Pricing.SourceAccessed,
+			SourcePublished:           cost.Pricing.SourcePublished,
+			Notes:                     cost.Pricing.Notes,
+		},
+		Source: cost.Pricing.Source,
+		Notes:  cost.Pricing.Notes,
+	}
+	return &stored, true
 }
 
 // ResolveExecutionUsageCost applies the cost policy for one recorded execution.
@@ -163,6 +233,9 @@ func ResolveExecutionUsageCost(execution taskstate.AgentExecution) ResolvedUsage
 	if strings.TrimSpace(execution.Harness) == piHarness {
 		return ResolvedUsageCost{UnknownReason: UsageCostUnknownPiReportedCostMissing}
 	}
+	if !HasBillableUsage(*execution.Usage) {
+		return ResolvedUsageCost{UnknownReason: UsageCostUnknownBillableUsageMissing}
+	}
 	cost, ok := EstimateUsageCost(execution.Model, *execution.Usage)
 	if !ok {
 		return ResolvedUsageCost{UnknownReason: UsageCostUnknownPricingMetadataMissing}
@@ -178,8 +251,11 @@ func EstimateUsageCost(model string, usage taskstate.AgentUsage) (UsageCost, boo
 	}
 
 	usage = normalizeUsage(usage)
-	cachedInputTokens := minNonNegative(usage.CachedInputTokens, usage.InputTokens)
-	uncachedInputTokens := usage.InputTokens - cachedInputTokens
+	if !HasBillableUsage(usage) {
+		return UsageCost{}, false
+	}
+	cachedInputTokens := maxNonNegative(usage.CachedInputTokens)
+	uncachedInputTokens := maxNonNegative(usage.InputTokens - cachedInputTokens)
 	outputTokens := usage.OutputTokens
 	if usage.ReasoningOutputTokens > outputTokens {
 		outputTokens = usage.ReasoningOutputTokens
@@ -278,6 +354,13 @@ func openAIAPIPrice(
 	}
 }
 
+// HasBillableUsage reports whether token classes sufficient for an API-equivalent estimate are available.
+func HasBillableUsage(usage taskstate.AgentUsage) bool {
+	usage = normalizeUsage(usage)
+	return usage.InputTokens > 0 || usage.CachedInputTokens > 0 ||
+		usage.OutputTokens > 0 || usage.ReasoningOutputTokens > 0
+}
+
 func normalizeUsage(usage taskstate.AgentUsage) taskstate.AgentUsage {
 	if usage.InputTokens < 0 {
 		usage.InputTokens = 0
@@ -313,17 +396,11 @@ func roundedTokenCostMicroUSD(tokenRates ...int64) int64 {
 	return (numerator + tokensPerPricingUnit/2) / tokensPerPricingUnit
 }
 
-func minNonNegative(a int, b int) int {
-	if a < 0 {
-		a = 0
+func maxNonNegative(value int) int {
+	if value < 0 {
+		return 0
 	}
-	if b < 0 {
-		b = 0
-	}
-	if a < b {
-		return a
-	}
-	return b
+	return value
 }
 
 func formatMicroUSDAsPrice(amount int64) string {

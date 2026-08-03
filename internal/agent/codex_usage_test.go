@@ -40,6 +40,18 @@ func TestCaptureCodexUsageCorrelatesSessionAndTokenCount(t *testing.T) {
 	is.Equal(67, got.Usage.OutputTokens)
 	is.Equal(8, got.Usage.ReasoningOutputTokens)
 	is.Equal(190, got.Usage.TotalTokens)
+	must.NotNil(got.UsageCost)
+	is.Equal(agent.UsageCostKindEstimatedAPIEquivalent, got.UsageCost.Kind)
+	is.Equal(int64(773), got.UsageCost.AmountMicroUSD)
+	must.NotNil(got.UsageCost.Pricing)
+	is.Equal("gpt-5", got.UsageCost.Pricing.Model)
+	is.Equal("standard", got.UsageCost.Pricing.ServiceTier)
+	is.Equal("1.25", got.UsageCost.Pricing.InputUSDPerMillionTokens)
+	is.Equal("0.125", got.UsageCost.Pricing.CachedUSDPerMillionTokens)
+	is.Equal("10", got.UsageCost.Pricing.OutputUSDPerMillionTokens)
+	is.NotEmpty(got.UsageCost.Pricing.ReasoningOutputTreatment)
+	is.NotEmpty(got.UsageCost.Pricing.Source)
+	is.NotEmpty(got.UsageCost.Pricing.SourcePublished)
 }
 
 func TestCaptureCodexUsageReportsAmbiguousMatches(t *testing.T) {
