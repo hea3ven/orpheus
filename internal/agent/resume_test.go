@@ -353,7 +353,10 @@ func TestCaptureUsageReportsOnlyIncrementalResumedCodexUsage(t *testing.T) {
 	got := agent.CaptureUsage(agent.UsageCaptureOptions{Harness: "codex", ExecutionDir: workdir, Env: env, Launch: launch})
 	require.NotNil(t, got.Usage)
 	assert.Equal(t, taskstate.AgentUsage{InputTokens: 17, CachedInputTokens: 5, OutputTokens: 13, ReasoningOutputTokens: 2, TotalTokens: 30}, *got.Usage)
-	assert.Nil(t, got.UsageCost)
+	require.NotNil(t, got.UsageCost)
+	assert.Equal(t, int64(146), got.UsageCost.AmountMicroUSD)
+	require.NotNil(t, got.UsageCost.Pricing)
+	assert.Equal(t, "gpt-5", got.UsageCost.Pricing.Model)
 	assert.Equal(t, taskstate.UsageCaptureCaptured, got.UsageCapture.Status)
 }
 

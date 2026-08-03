@@ -337,11 +337,30 @@ type AgentUsage struct {
 
 // AgentUsageCost records a harness-reported or Orpheus-estimated usage cost.
 type AgentUsageCost struct {
-	Kind           string `yaml:"kind,omitempty"`
-	Currency       string `yaml:"currency,omitempty"`
-	AmountMicroUSD int64  `yaml:"amount_micro_usd,omitempty"`
-	Source         string `yaml:"source,omitempty"`
-	Notes          string `yaml:"notes,omitempty"`
+	Kind           string             `yaml:"kind,omitempty"`
+	Currency       string             `yaml:"currency,omitempty"`
+	AmountMicroUSD int64              `yaml:"amount_micro_usd"`
+	Pricing        *AgentUsagePricing `yaml:"pricing,omitempty"`
+	Source         string             `yaml:"source,omitempty"`
+	Notes          string             `yaml:"notes,omitempty"`
+}
+
+// AgentUsagePricing is the immutable public pricing snapshot used for an
+// API-equivalent usage-cost estimate.
+type AgentUsagePricing struct {
+	Provider                  string `yaml:"provider,omitempty"`
+	Model                     string `yaml:"model,omitempty"`
+	ServiceTier               string `yaml:"service_tier,omitempty"`
+	Unit                      string `yaml:"unit,omitempty"`
+	InputUSDPerMillionTokens  string `yaml:"input_usd_per_million_tokens,omitempty"`
+	CachedUSDPerMillionTokens string `yaml:"cached_usd_per_million_tokens,omitempty"`
+	OutputUSDPerMillionTokens string `yaml:"output_usd_per_million_tokens,omitempty"`
+	ReasoningOutputTreatment  string `yaml:"reasoning_output_treatment,omitempty"`
+	Source                    string `yaml:"source,omitempty"`
+	SourceURL                 string `yaml:"source_url,omitempty"`
+	SourceAccessed            string `yaml:"source_accessed,omitempty"`
+	SourcePublished           string `yaml:"source_published,omitempty"`
+	Notes                     string `yaml:"notes,omitempty"`
 }
 
 // AgentUsageCapture records diagnostics from a usage-capture attempt.
@@ -2078,7 +2097,7 @@ func applyRunUsageOptions(execution AgentExecution, opts RecordRunUsageOptions, 
 			execution.Usage = &usage
 		}
 	}
-	if opts.UsageCost != nil {
+	if opts.UsageCost != nil && !hasImmutableCodexUsageCost(execution) {
 		cost := normalizeAgentUsageCost(*opts.UsageCost)
 		if !agentUsageCostIsZero(cost) {
 			execution.UsageCost = &cost
@@ -3484,7 +3503,7 @@ func validateAgentExecution(execution AgentExecution) error {
 		return errors.New("usage must include at least one token field")
 	}
 	if execution.UsageCost != nil && agentUsageCostIsZero(normalizeAgentUsageCost(*execution.UsageCost)) {
-		return errors.New("usage_cost must include a positive amount")
+		return errors.New("usage_cost must include a positive amount or a known zero-cost estimate")
 	}
 	if !execution.UsageCapture.IsZero() && !validUsageCaptureStatus(execution.UsageCapture.Status) {
 		return fmt.Errorf("unsupported usage_capture status %q", execution.UsageCapture.Status)
@@ -3578,19 +3597,61 @@ func agentUsageIsZero(usage AgentUsage) bool {
 		usage.TotalTokens == 0
 }
 
+func hasImmutableCodexUsageCost(execution AgentExecution) bool {
+	return strings.TrimSpace(execution.Harness) == "codex" &&
+		execution.UsageCost != nil &&
+		strings.TrimSpace(execution.UsageCost.Kind) == "estimated_api_equivalent"
+}
+
 func normalizeAgentUsageCost(cost AgentUsageCost) AgentUsageCost {
 	cost.Kind = strings.TrimSpace(cost.Kind)
 	cost.Currency = strings.TrimSpace(cost.Currency)
 	if cost.AmountMicroUSD < 0 {
 		cost.AmountMicroUSD = 0
 	}
+	if cost.Pricing != nil {
+		pricing := normalizeAgentUsagePricing(*cost.Pricing)
+		if agentUsagePricingIsZero(pricing) {
+			cost.Pricing = nil
+		} else {
+			cost.Pricing = &pricing
+		}
+	}
 	cost.Source = strings.TrimSpace(cost.Source)
 	cost.Notes = strings.TrimSpace(cost.Notes)
 	return cost
 }
 
+func normalizeAgentUsagePricing(pricing AgentUsagePricing) AgentUsagePricing {
+	pricing.Provider = strings.TrimSpace(pricing.Provider)
+	pricing.Model = strings.TrimSpace(pricing.Model)
+	pricing.ServiceTier = strings.TrimSpace(pricing.ServiceTier)
+	pricing.Unit = strings.TrimSpace(pricing.Unit)
+	pricing.InputUSDPerMillionTokens = strings.TrimSpace(pricing.InputUSDPerMillionTokens)
+	pricing.CachedUSDPerMillionTokens = strings.TrimSpace(pricing.CachedUSDPerMillionTokens)
+	pricing.OutputUSDPerMillionTokens = strings.TrimSpace(pricing.OutputUSDPerMillionTokens)
+	pricing.ReasoningOutputTreatment = strings.TrimSpace(pricing.ReasoningOutputTreatment)
+	pricing.Source = strings.TrimSpace(pricing.Source)
+	pricing.SourceURL = strings.TrimSpace(pricing.SourceURL)
+	pricing.SourceAccessed = strings.TrimSpace(pricing.SourceAccessed)
+	pricing.SourcePublished = strings.TrimSpace(pricing.SourcePublished)
+	pricing.Notes = strings.TrimSpace(pricing.Notes)
+	return pricing
+}
+
+func agentUsagePricingIsZero(pricing AgentUsagePricing) bool {
+	return pricing == (AgentUsagePricing{})
+}
+
 func agentUsageCostIsZero(cost AgentUsageCost) bool {
-	return cost.AmountMicroUSD == 0
+	return cost.AmountMicroUSD == 0 && !agentUsageCostIsKnownZero(cost)
+}
+
+func agentUsageCostIsKnownZero(cost AgentUsageCost) bool {
+	return cost.Pricing != nil &&
+		cost.Kind != "" &&
+		cost.Currency != "" &&
+		!agentUsagePricingIsZero(*cost.Pricing)
 }
 
 func normalizeAgentUsageCapture(capture AgentUsageCapture, capturedAt time.Time) AgentUsageCapture {

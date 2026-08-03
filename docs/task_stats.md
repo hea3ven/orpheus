@@ -226,10 +226,13 @@ cohorts, not evidence that a model, harness, or reasoning setting caused an outc
 ## Estimated cost limits
 
 For a non-Pi execution with known tokens and a recognized model, Orpheus calculates an
-**API-equivalent** USD estimate from stored public pricing metadata. It charges
-uncached input at the input rate, cached input at the cached rate, and
-`max(output, reasoning_output)` at the output rate. This avoids charging overlapping
-reasoning/output tokens twice.
+**API-equivalent** USD estimate from public pricing metadata. When it captures the
+execution usage, it also stores the amount and the complete pricing snapshot: model,
+tier, rates, reasoning-token treatment, pricing source, and source date. That snapshot
+is immutable, so later changes to Orpheus' hardcoded pricing table do not reprice a
+historical execution. It charges uncached input at the input rate, cached input at the
+cached rate, and `max(output, reasoning_output)` at the output rate. This avoids
+charging overlapping reasoning/output tokens twice.
 
 This estimate can differ from subscription charges, invoices, negotiated discounts,
 service tiers, batch pricing, taxes, or a harness/vendor's own accounting. It is not

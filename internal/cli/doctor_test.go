@@ -155,6 +155,155 @@ func TestDoctorRecoversCodexUsageForImplementationAndReviewAgent(t *testing.T) {
 	is.Contains(statsOut, "combined")
 }
 
+func TestDoctorDoesNotOverwriteExistingCodexCostWhenRecoveringSession(t *testing.T) {
+	t.Parallel()
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+	codexHome := t.TempDir()
+	setTestEnvironment(t, "CODEX_HOME", codexHome)
+	startedAt := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
+	store := taskstate.NewStoreWithClock(paths, func() time.Time { return startedAt })
+	run, err := store.StartRun("alpha", "op-immutable-cost", taskstate.StartRunOptions{
+		Harness: "codex", Model: "gpt-5", Command: "codex", Branch: "main", Worktree: repoDir,
+	})
+	must.NoError(err)
+	oldCost := taskstate.AgentUsageCost{
+		Kind:           agent.UsageCostKindEstimatedAPIEquivalent,
+		Currency:       "USD",
+		AmountMicroUSD: 42,
+		Pricing: &taskstate.AgentUsagePricing{
+			Provider: "openai", Model: "gpt-5", ServiceTier: "standard", Source: "old pricing snapshot",
+		},
+	}
+	_, err = store.RecordRunUsage("alpha", "op-immutable-cost", run.Attempt, taskstate.RecordRunUsageOptions{
+		Model: "gpt-5", Usage: &taskstate.AgentUsage{InputTokens: 100, OutputTokens: 50}, UsageCost: &oldCost,
+	})
+	must.NoError(err)
+	writeDoctorCodexSessionLog(t, codexHome, "replacement-session", repoDir, startedAt, 100)
+
+	stdout, stderr := executeCommand(t, []string{"doctor", "--fix"})
+	is.Empty(stderr)
+	is.Contains(stdout, "recovered")
+	is.Contains(stdout, "$0.000042")
+	loaded, err := store.Load("alpha", "op-immutable-cost")
+	must.NoError(err)
+	must.NotNil(loaded.Runs[0].Execution.Session)
+	must.NotNil(loaded.Runs[0].Execution.UsageCost)
+	is.Equal(int64(42), loaded.Runs[0].Execution.UsageCost.AmountMicroUSD)
+	must.NotNil(loaded.Runs[0].Execution.UsageCost.Pricing)
+	is.Equal("old pricing snapshot", loaded.Runs[0].Execution.UsageCost.Pricing.Source)
+}
+
+func TestDoctorLeavesTotalOnlyCodexUsageCostUnknown(t *testing.T) {
+	t.Parallel()
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+	setTestEnvironment(t, "CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex-home"))
+	store := taskstate.NewStoreWithClock(paths, func() time.Time {
+		return time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
+	})
+	run, err := store.StartRun("alpha", "op-total-only-cost", taskstate.StartRunOptions{
+		Harness: "codex", Model: "gpt-5", Command: "codex", Branch: "main", Worktree: repoDir,
+	})
+	must.NoError(err)
+	_, err = store.RecordRunUsage("alpha", "op-total-only-cost", run.Attempt, taskstate.RecordRunUsageOptions{
+		Model: "gpt-5", Usage: &taskstate.AgentUsage{TotalTokens: 100},
+	})
+	must.NoError(err)
+
+	stdout, stderr := executeCommand(t, []string{"doctor", "--fix"})
+	is.Empty(stderr)
+	is.Contains(stdout, agent.UsageCostUnknownBillableUsageMissing)
+	loaded, err := store.Load("alpha", "op-total-only-cost")
+	must.NoError(err)
+	is.Nil(loaded.Runs[0].Execution.UsageCost)
+}
+
+//nolint:funlen // The fixture exercises all persisted execution locations without session logs.
+func TestDoctorStampsStoredCodexCostsWithoutSessionLogRecorrelation(t *testing.T) {
+	t.Parallel()
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+	setTestEnvironment(t, "CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex-home"))
+	store := taskstate.NewStoreWithClock(paths, func() time.Time {
+		return time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
+	})
+	usage := taskstate.AgentUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150}
+
+	run, err := store.StartRun("alpha", "op-stored-cost", taskstate.StartRunOptions{
+		Harness: "codex", Model: "gpt-5", Command: "codex", Branch: "main", Worktree: repoDir,
+	})
+	must.NoError(err)
+	_, err = store.RecordRunUsage("alpha", "op-stored-cost", run.Attempt, taskstate.RecordRunUsageOptions{
+		Model: "gpt-5", Usage: &usage,
+	})
+	must.NoError(err)
+
+	review, err := store.StartReviewWithOptions("alpha", "op-stored-cost", taskstate.StartReviewOptions{
+		Pipeline: "standard", Step: "ai-review",
+	})
+	must.NoError(err)
+	_, err = store.RecordReviewStep("alpha", "op-stored-cost", review.Attempt, taskstate.RecordReviewStepOptions{
+		Kind: "agent_review", Name: "ai-review", Execution: &taskstate.AgentExecution{
+			Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning,
+			Harness: "codex", Model: "gpt-5", Command: "codex", StartedAt: time.Date(2026, 7, 7, 10, 1, 0, 0, time.UTC),
+		},
+	})
+	must.NoError(err)
+	_, err = store.FinishReviewStepExecution("alpha", "op-stored-cost", review.Attempt, "ai-review", taskstate.FinishReviewStepExecutionOptions{
+		Status: taskstate.RunStatusSucceeded, FinishedAt: time.Date(2026, 7, 7, 10, 2, 0, 0, time.UTC), Model: "gpt-5", Usage: &usage,
+	})
+	must.NoError(err)
+
+	syncOpts := taskstate.SyncConflictResolutionEventOptions{
+		Execution:     taskstate.AgentExecution{Harness: "codex", Model: "gpt-5", Command: "codex"},
+		Branch:        "main",
+		DefaultBranch: "main",
+		Worktree:      repoDir,
+	}
+	_, err = store.RecordSyncConflictResolutionStarted("alpha", "op-stored-cost", syncOpts)
+	must.NoError(err)
+	syncOpts.Usage = taskstate.RecordRunUsageOptions{Model: "gpt-5", Usage: &usage}
+	_, err = store.RecordSyncConflictResolutionFinished("alpha", "op-stored-cost", syncOpts)
+	must.NoError(err)
+
+	stdout, stderr := executeCommand(t, []string{"doctor", "--fix"})
+	is.Empty(stderr)
+	is.Contains(stdout, "recovered")
+	is.NotContains(stdout, "codex_home_unavailable")
+	loaded, err := store.Load("alpha", "op-stored-cost")
+	must.NoError(err)
+	assertDoctorCodexCostSnapshot(t, loaded.Runs[0].Execution.UsageCost)
+	assertDoctorCodexCostSnapshot(t, loaded.Reviews[0].Steps[0].Execution.UsageCost)
+	for _, event := range loaded.Events {
+		if event.Type == taskstate.EventSyncConflictFinished {
+			must.NotNil(event.Execution)
+			assertDoctorCodexCostSnapshot(t, event.Execution.UsageCost)
+			return
+		}
+	}
+	t.Fatal("missing finished sync-conflict execution")
+}
+
+func assertDoctorCodexCostSnapshot(t *testing.T, cost *taskstate.AgentUsageCost) {
+	t.Helper()
+	must := require.New(t)
+	must.NotNil(cost)
+	must.NotNil(cost.Pricing)
+	must.Equal(agent.UsageCostKindEstimatedAPIEquivalent, cost.Kind)
+	must.Equal("gpt-5", cost.Pricing.Model)
+	must.NotEmpty(cost.Pricing.Source)
+}
+
 func TestDoctorFallsBackToRegisteredRepoRootWhenTaskTargetIsMissing(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -266,6 +415,39 @@ func TestDoctorRecoversPiUsageAndReportedCost(t *testing.T) {
 	is.Equal(int64(1240), execution.UsageCost.AmountMicroUSD)
 	is.Equal("pi_reported_estimated", execution.UsageCost.Kind)
 	is.Equal(taskstate.UsageCaptureCaptured, execution.UsageCapture.Status)
+}
+
+func TestDoctorRefreshesStoredPiReportedCost(t *testing.T) {
+	t.Parallel()
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+	piSessionDir := t.TempDir()
+	setTestEnvironment(t, "PI_CODING_AGENT_SESSION_DIR", piSessionDir)
+	startedAt := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
+	store := taskstate.NewStoreWithClock(paths, func() time.Time { return startedAt })
+	sessionName := "(op-pi-refresh) Pi task"
+	run, err := store.StartRun("alpha", "op-pi-refresh", doctorPiStartOptions(repoDir, sessionName))
+	must.NoError(err)
+	oldCost := agent.PiReportedUsageCost(1)
+	_, err = store.RecordRunUsage("alpha", "op-pi-refresh", run.Attempt, taskstate.RecordRunUsageOptions{
+		Model: "openai-codex/gpt-5.5", Usage: &taskstate.AgentUsage{InputTokens: 1, TotalTokens: 1}, UsageCost: &oldCost,
+	})
+	must.NoError(err)
+	writeDoctorPiSessionLog(t, piSessionDir, "pi-refresh-session", sessionName, repoDir, startedAt.Add(time.Minute))
+
+	stdout, stderr := executeCommand(t, []string{"doctor", "--fix"})
+	is.Empty(stderr)
+	is.Contains(stdout, "recovered")
+	is.Contains(stdout, "$0.001240")
+	loaded, err := store.Load("alpha", "op-pi-refresh")
+	must.NoError(err)
+	must.NotNil(loaded.Runs[0].Execution.Session)
+	must.NotNil(loaded.Runs[0].Execution.UsageCost)
+	is.Equal(int64(1240), loaded.Runs[0].Execution.UsageCost.AmountMicroUSD)
+	is.Equal(agent.UsageCostKindPiReportedEstimated, loaded.Runs[0].Execution.UsageCost.Kind)
 }
 
 func TestDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(t *testing.T) {
