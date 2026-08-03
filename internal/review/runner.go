@@ -184,8 +184,10 @@ func RunPipeline(opts PipelineRunOptions) (PipelineOutcome, error) {
 	}
 	for _, step := range opts.Pipeline.Steps[startIndex:] {
 		outcome, err := runReadOnlyStep(opts, step, func() (stepOutcome, error) {
-			if err := writeStepHeader(opts.Stderr, step); err != nil {
-				return stepOutcome{}, err
+			if step.Kind != KindManual {
+				if err := writeStepHeader(opts.Stderr, step); err != nil {
+					return stepOutcome{}, err
+				}
 			}
 			return runStep(opts, step)
 		})
