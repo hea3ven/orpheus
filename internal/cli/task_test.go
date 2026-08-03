@@ -3591,16 +3591,16 @@ func TestTaskReviewApproveFinalizesAndRecordsPassedAttempt(t *testing.T) {
 
 	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "x\na\n")
 
-	is.Contains(stderr, "Task: op-main - Ready for task done")
-	is.Contains(stderr, "Latest completion: Review approval")
-	is.Contains(stderr, "Completion description: Finalize after approval.")
-	is.Contains(stderr, "Completion technical explanation:\nTechnical explanation.")
+	is.Contains(stderr, "TASK  op-main — Ready for task done")
+	is.Contains(stderr, "● LATEST COMPLETION\nReview approval")
+	is.Contains(stderr, "DESCRIPTION\nFinalize after approval.")
+	is.Contains(stderr, "TECHNICAL EXPLANATION\nTechnical explanation.")
 	is.NotContains(stderr, "Original completion:")
 	is.NotContains(stderr, "Latest fix completion:")
-	is.Contains(stderr, "git status --short:")
+	is.Contains(stderr, "≡ GIT STATUS --SHORT")
 	is.Contains(stderr, "reviewed.txt")
 	is.NotContains(stderr, "git diff --stat:")
-	is.Contains(stderr, "== Review step: local-review (manual) ==")
+	is.Contains(stderr, "◆ REVIEW STEP · local-review (manual)")
 	is.Contains(stderr, "Review action [a=approve, b=block, v=advisory, t=task, q=abort]")
 	is.NotContains(stderr, "p=promote advisory")
 	is.Contains(stderr, "Choose approve, block, advisory, task, or abort.")
@@ -3646,12 +3646,12 @@ func TestTaskReviewManualContextShowsOriginalAndLatestFollowUpCompletion(t *test
 
 	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "a\n")
 
-	is.Contains(stderr, "Original completion: Original implementation")
-	is.Contains(stderr, "Original completion description: Implemented the main task.")
-	is.Contains(stderr, "Original completion technical explanation:\nTechnical explanation.")
-	is.Contains(stderr, "Latest fix completion: Latest fix")
-	is.Contains(stderr, "Latest fix completion description: Addressed the most recent review blocker.")
-	is.Contains(stderr, "Latest fix completion technical explanation:\nTechnical explanation.")
+	is.Contains(stderr, "○ ORIGINAL COMPLETION\nOriginal implementation")
+	is.Contains(stderr, "DESCRIPTION\nImplemented the main task.")
+	is.Contains(stderr, "TECHNICAL EXPLANATION\nTechnical explanation.")
+	is.Contains(stderr, "● LATEST FIX COMPLETION\nLatest fix")
+	is.Contains(stderr, "DESCRIPTION\nAddressed the most recent review blocker.")
+	is.Contains(stderr, "TECHNICAL EXPLANATION\nTechnical explanation.")
 	is.NotContains(stderr, "Latest completion: Latest fix")
 	is.NotContains(stderr, "Latest fix completion: First fix")
 	is.Contains(stdout, "Finalized op-main")
@@ -3864,6 +3864,7 @@ func (r *mutatingReviewInput) Read(p []byte) (int, error) {
 	return r.input.Read(p)
 }
 
+//nolint:funlen // Exercises a complete manual finding lifecycle without splitting its input sequence.
 func TestTaskReviewBlockingFindingBlocksWithoutFinalizing(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -4271,7 +4272,7 @@ exit 0
 	is.Contains(stdout, "check stdout 1 unit")
 	is.Contains(stdout, "Finalized op-main")
 	is.Contains(stderr, "== Review step: unit (check) ==")
-	is.Contains(stderr, "== Review step: approval (manual) ==")
+	is.Contains(stderr, "◆ REVIEW STEP · approval (manual)")
 	is.Contains(stderr, "check stderr review")
 	is.Contains(stderr, "Review action")
 
@@ -4330,11 +4331,11 @@ printf 'manual command ran %s\n' "$ORPHEUS_REVIEW_STEP"
 
 	is.Contains(stdout, "manual command ran inspect")
 	is.Contains(stdout, "Finalized op-main")
-	is.Contains(stderr, "== Review step: inspect (manual) ==")
-	is.Contains(stderr, "Task: op-main - Ready for task done")
-	is.Contains(stderr, "Completion description: Confirm before command.")
-	is.Contains(stderr, "Completion technical explanation:\nTechnical explanation.")
-	is.Contains(stderr, "git status --short:")
+	is.Contains(stderr, "◆ REVIEW STEP · inspect (manual)")
+	is.Contains(stderr, "TASK  op-main — Ready for task done")
+	is.Contains(stderr, "DESCRIPTION\nConfirm before command.")
+	is.Contains(stderr, "TECHNICAL EXPLANATION\nTechnical explanation.")
+	is.Contains(stderr, "≡ GIT STATUS --SHORT")
 	is.NotContains(stderr, "git diff --stat:")
 	is.Contains(stderr, "Run manual command for step \"inspect\"")
 	is.Contains(stderr, "[Y/n]")
@@ -4615,10 +4616,10 @@ printf 'ran\n' > %s
 	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "standard", "op-main"}, "n\n")
 
 	is.Empty(stdout)
-	is.Contains(stderr, "== Review step: inspect (manual) ==")
-	is.Contains(stderr, "Task: op-main - Ready for task done")
-	is.Contains(stderr, "Completion description: Decline command.")
-	is.Contains(stderr, "Completion technical explanation:\nTechnical explanation.")
+	is.Contains(stderr, "◆ REVIEW STEP · inspect (manual)")
+	is.Contains(stderr, "TASK  op-main — Ready for task done")
+	is.Contains(stderr, "DESCRIPTION\nDecline command.")
+	is.Contains(stderr, "TECHNICAL EXPLANATION\nTechnical explanation.")
 	is.Contains(stderr, "Run manual command for step \"inspect\"")
 	is.Contains(stderr, "Review aborted for op-main.")
 	is.NotContains(stderr, "Review action")
@@ -5174,7 +5175,7 @@ func TestTaskRunAttachedManualBlockerRepairsAndApprovalFinalizes(t *testing.T) {
 	is.Contains(stdout, "Published op-manual")
 	is.Contains(stderr, "== Agent run: implementation (run attempt 1) ==")
 	is.Contains(stderr, "== Agent run: review follow-up (run attempt 2; review attempt 1; findings 1) ==")
-	is.Contains(stderr, "== Review step: approval (manual) ==")
+	is.Contains(stderr, "◆ REVIEW STEP · approval (manual)")
 	is.Contains(stderr, "Review blocked for op-manual.")
 	is.Contains(stderr, "Autonomous review follow-up for op-manual targets review attempt 1 finding(s) 1.")
 	is.NotContains(stdout, "starting a fresh review")
@@ -5514,7 +5515,7 @@ func TestTaskReviewCheckBlockerDowngradeContinuesPipeline(t *testing.T) {
 	is.Contains(stdout, "Finalized op-main")
 	is.Contains(stderr, "Automated blocking findings from step \"unit\"")
 	is.Contains(stderr, "Decision for finding 1")
-	is.Contains(stderr, "== Review step: approval (manual) ==")
+	is.Contains(stderr, "◆ REVIEW STEP · approval (manual)")
 
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
@@ -6061,7 +6062,7 @@ func TestTaskReviewAgentReviewMixedAutomatedBlockerDecisions(t *testing.T) {
 	is.Contains(stdout, "Recorded blocking review finding 3 for op-main.")
 	is.Contains(stderr, "Automated blocking findings from step \"ai-review\"")
 	is.Contains(stderr, "Review blocked for op-main by agent_review \"ai-review\".")
-	is.NotContains(stderr, "== Review step: approval (manual) ==")
+	is.NotContains(stderr, "◆ REVIEW STEP · approval (manual)")
 
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
@@ -6195,15 +6196,15 @@ func TestTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
 	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, input)
 
 	is.Empty(stdout)
-	priorStart := strings.Index(firstStderr, "Prior unresolved advisories:")
+	priorStart := strings.Index(firstStderr, "▲ PRIOR UNRESOLVED ADVISORIES")
 	must.NotEqual(-1, priorStart)
 	menuStart := strings.Index(firstStderr[priorStart:], "Review action [")
 	must.NotEqual(-1, menuStart)
 	priorSummary := firstStderr[priorStart : priorStart+menuStart]
-	is.Contains(priorSummary, "Finding 1 (ai-review): Generated advisory")
-	is.Contains(priorSummary, "Finding 2 (ai-review): Second generated advisory")
-	is.NotContains(priorSummary, "Description:")
-	is.NotContains(priorSummary, "Suggested action:")
+	is.Contains(priorSummary, "Finding 1 · ai-review · advisory\nGenerated advisory")
+	is.Contains(priorSummary, "Finding 2 · ai-review · advisory\nSecond generated advisory")
+	is.Contains(priorSummary, "DESCRIPTION\nThe review agent found a risky edge case.")
+	is.Contains(priorSummary, "SUGGESTED ACTION\nHandle the edge case before publishing.")
 	is.Contains(firstStderr, "Review action [a=approve, b=block, p=review advisories")
 	is.Contains(firstStderr, "Advisory finding 1 (ai-review): Generated advisory")
 	is.Contains(firstStderr, "Description: The review agent found a risky edge case.")
@@ -6213,12 +6214,12 @@ func TestTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
 	is.Contains(firstStderr, "Description: The review agent found an issue that needs attention.")
 	is.Contains(firstStderr, "Suggested action: Address it before publishing.")
 	is.Contains(stderr, "Resuming review attempt 1 at manual step \"approval\".")
-	is.Contains(stderr, "Open blockers from earlier review steps:")
-	is.Contains(stderr, "Finding 2 (blocking): Second generated advisory")
-	is.Contains(stderr, "Description: The review agent found an issue that needs attention.")
-	is.Contains(stderr, "Suggested action: Address it before publishing.")
+	is.Contains(stderr, "▲ OPEN BLOCKERS FROM EARLIER STEPS")
+	is.Contains(stderr, "Finding 2 · ai-review · blocking\nSecond generated advisory")
+	is.Contains(stderr, "DESCRIPTION\nThe review agent found an issue that needs attention.")
+	is.Contains(stderr, "SUGGESTED ACTION\nAddress it before publishing.")
 	is.Contains(stderr, "Review action [f=finish/block, b=block, p=review advisories, v=advisory, t=task, q=abort]")
-	is.NotContains(stderr, "Finding 2 (approval): Manual advisory")
+	is.NotContains(stderr, "Finding 3 · approval · advisory\nManual advisory")
 	is.Contains(stderr, "Review blocked for op-main.")
 	is.Equal(headBefore, strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")))
 
@@ -6552,9 +6553,9 @@ func TestTaskReviewManualInputLossReplaysRecordedFindings(t *testing.T) {
 
 	is.Empty(stdout)
 	is.Contains(stderr, "Resuming review attempt 1 at manual step \"local-review\".")
-	is.Contains(stderr, "Recorded findings for this manual step:")
-	is.Contains(stderr, "Finding 1 (advisory): Existing note")
-	is.Contains(stderr, "Finding 2 (blocking): Existing blocker")
+	is.Contains(stderr, "▲ RECORDED FINDINGS FOR THIS STEP")
+	is.Contains(stderr, "Finding 1 · local-review · advisory\nExisting note")
+	is.Contains(stderr, "Finding 2 · local-review · blocking\nExisting blocker")
 	is.Contains(stderr, "Review action [f=finish/block, b=block, v=advisory, t=task, q=abort]")
 	is.Contains(stderr, "Review blocked for op-main.")
 	var state taskstate.TaskState
@@ -6620,7 +6621,7 @@ func TestTaskReviewResumesManualWaitingAttempt(t *testing.T) {
 
 	is.Contains(stdout, "Finalized op-main")
 	is.Contains(stderr, "Resuming review attempt 1 at manual step \"inspect\".")
-	is.Contains(stderr, "== Review step: inspect (manual) ==")
+	is.Contains(stderr, "◆ REVIEW STEP · inspect (manual)")
 	is.NotContains(stdout, "check reran")
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))

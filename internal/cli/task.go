@@ -33,8 +33,12 @@ import (
 )
 
 var (
-	taskDoneInputIsTerminal    = readerIsTerminal
-	taskReviewOutputIsTerminal = writerIsTerminal
+	taskDoneInputIsTerminal     = readerIsTerminal
+	taskReviewOutputIsTerminal  = writerIsTerminal
+	manualReviewColorIsDisabled = func() bool {
+		_, disabled := os.LookupEnv("NO_COLOR")
+		return disabled
+	}
 )
 
 const taskStatsCostEstimateDisclaimer = "Estimated cost uses harness-reported estimates when available; " +
@@ -1524,42 +1528,80 @@ const (
 
 func renderManualReviewContext(command *cobra.Command, ctx workflow.ReviewManualStepContext) error {
 	output := command.ErrOrStderr()
-	taskItem := ctx.Task
-	taskState := ctx.TaskState
-	completions, err := manualReviewCompletions(taskState)
+	style := newManualReviewStyle(command)
+	completions, err := manualReviewCompletions(ctx.TaskState)
 	if err != nil {
 		return err
 	}
 
-	status := ctx.GitStatus
-
-	if _, err := fmt.Fprintf(output, "Task: %s - %s\n", taskItem.ID, taskItem.Title); err != nil {
+	if _, err := fmt.Fprintf(output, "\n%s\n%s  %s\n\n",
+		style.blue("◆ REVIEW STEP · "+ctx.Step.Name+" ("+ctx.Step.Kind+")"),
+		style.blue("TASK"),
+		style.bold(ctx.Task.ID+" — "+ctx.Task.Title),
+	); err != nil {
 		return err
 	}
-	if err := renderManualReviewCompletions(output, completions); err != nil {
+	if err := renderManualReviewCompletions(output, style, completions); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(output, "git status --short:"); err != nil {
+	if _, err := fmt.Fprintln(output, style.blue("≡ GIT STATUS --SHORT")); err != nil {
 		return err
 	}
-	if strings.TrimSpace(status) == "" {
-		if _, err := fmt.Fprintln(output, "(clean)"); err != nil {
-			return err
-		}
-	} else if _, err := fmt.Fprint(output, status); err != nil {
+	if err := renderManualReviewGitStatus(output, ctx.GitStatus); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintln(output); err != nil {
 		return err
 	}
+	if err := renderCurrentManualStepFindings(output, style, ctx.TaskState, ctx.Review.Attempt, ctx.Step.Name); err != nil {
+		return err
+	}
+	if err := renderPriorReviewBlockers(output, style, ctx.TaskState, ctx.Review.Attempt, ctx.Step.Name); err != nil {
+		return err
+	}
+	return renderPriorReviewAdvisories(output, style, ctx.TaskState, ctx.Review.Attempt, ctx.Step.Name)
+}
 
-	if err := renderCurrentManualStepFindings(output, taskState, ctx.Review.Attempt, ctx.Step.Name); err != nil {
+type manualReviewStyle struct {
+	enabled bool
+}
+
+func newManualReviewStyle(command *cobra.Command) manualReviewStyle {
+	if manualReviewColorIsDisabled() {
+		return manualReviewStyle{}
+	}
+	return manualReviewStyle{
+		enabled: taskReviewOutputIsTerminal(command.OutOrStdout()) && taskReviewOutputIsTerminal(command.ErrOrStderr()),
+	}
+}
+
+func (s manualReviewStyle) blue(value string) string  { return s.color("34", value) }
+func (s manualReviewStyle) green(value string) string { return s.color("32", value) }
+func (s manualReviewStyle) amber(value string) string { return s.color("33", value) }
+func (s manualReviewStyle) cyan(value string) string  { return s.color("36", value) }
+func (s manualReviewStyle) bold(value string) string  { return s.color("1", value) }
+func (s manualReviewStyle) dim(value string) string   { return s.color("2", value) }
+
+func (s manualReviewStyle) color(code string, value string) string {
+	if !s.enabled || value == "" {
+		return value
+	}
+	return "\x1b[" + code + "m" + value + "\x1b[0m"
+}
+
+func renderManualReviewGitStatus(output io.Writer, status string) error {
+	if strings.TrimSpace(status) == "" {
+		_, err := fmt.Fprintln(output, "(clean)")
 		return err
 	}
-	if err := renderPriorReviewBlockers(output, taskState, ctx.Review.Attempt, ctx.Step.Name); err != nil {
+	if _, err := fmt.Fprint(output, status); err != nil {
 		return err
 	}
-	return renderPriorReviewAdvisories(output, taskState, ctx.Review.Attempt, ctx.Step.Name)
+	if strings.HasSuffix(status, "\n") {
+		return nil
+	}
+	_, err := fmt.Fprintln(output)
+	return err
 }
 
 type manualReviewCompletionContext = taskstate.CompletionRunHistory
@@ -1568,51 +1610,33 @@ func manualReviewCompletions(taskState taskstate.TaskState) (manualReviewComplet
 	return taskstate.CompletionRunsForReview(taskState)
 }
 
-func renderManualReviewCompletions(output io.Writer, ctx manualReviewCompletionContext) error {
+func renderManualReviewCompletions(output io.Writer, style manualReviewStyle, ctx manualReviewCompletionContext) error {
 	if ctx.Latest.ReviewFollowUp == nil {
-		return renderManualReviewCompletion(
-			output,
-			"Latest completion",
-			"Completion description",
-			"Completion technical explanation",
-			ctx.Latest.Completion,
-		)
+		return renderManualReviewCompletion(output, style, style.green("● LATEST COMPLETION"), ctx.Latest.Completion)
 	}
-	if err := renderManualReviewCompletion(
-		output,
-		"Original completion",
-		"Original completion description",
-		"Original completion technical explanation",
-		ctx.Original.Completion,
-	); err != nil {
+	if err := renderManualReviewCompletion(output, style, style.blue("○ ORIGINAL COMPLETION"), ctx.Original.Completion); err != nil {
 		return err
 	}
-	return renderManualReviewCompletion(
-		output,
-		"Latest fix completion",
-		"Latest fix completion description",
-		"Latest fix completion technical explanation",
-		ctx.Latest.Completion,
-	)
+	return renderManualReviewCompletion(output, style, style.green("● LATEST FIX COMPLETION"), ctx.Latest.Completion)
 }
 
 func renderManualReviewCompletion(
 	output io.Writer,
+	style manualReviewStyle,
 	summaryLabel string,
-	descriptionLabel string,
-	technicalExplanationLabel string,
 	completion *taskstate.Completion,
 ) error {
 	if completion == nil {
 		return errors.New("completion is required")
 	}
-	if _, err := fmt.Fprintf(output, "%s: %s\n", summaryLabel, strings.TrimSpace(completion.Summary)); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(output, "%s: %s\n", descriptionLabel, strings.TrimSpace(completion.Description)); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(output, "%s:\n%s\n\n", technicalExplanationLabel, strings.TrimSpace(completion.TechnicalExplanation)); err != nil {
+	if _, err := fmt.Fprintf(output, "%s\n%s\n\n%s\n%s\n\n%s\n%s\n\n",
+		summaryLabel,
+		style.bold(strings.TrimSpace(completion.Summary)),
+		style.dim("DESCRIPTION"),
+		strings.TrimSpace(completion.Description),
+		style.dim("TECHNICAL EXPLANATION"),
+		strings.TrimSpace(completion.TechnicalExplanation),
+	); err != nil {
 		return err
 	}
 	return nil
@@ -2362,6 +2386,7 @@ type priorReviewAdvisory struct {
 
 func renderPriorReviewBlockers(
 	output io.Writer,
+	style manualReviewStyle,
 	taskState taskstate.TaskState,
 	reviewAttempt int,
 	currentStep string,
@@ -2374,11 +2399,11 @@ func renderPriorReviewBlockers(
 	if len(blockers) == 0 {
 		return nil
 	}
-	if _, err := fmt.Fprintln(output, "Open blockers from earlier review steps:"); err != nil {
+	if _, err := fmt.Fprintln(output, style.amber("▲ OPEN BLOCKERS FROM EARLIER STEPS")); err != nil {
 		return err
 	}
 	for _, blocker := range blockers {
-		if err := renderManualStepFinding(output, blocker); err != nil {
+		if err := renderManualStepFinding(output, style, blocker); err != nil {
 			return err
 		}
 	}
@@ -2387,6 +2412,7 @@ func renderPriorReviewBlockers(
 
 func renderPriorReviewAdvisories(
 	output io.Writer,
+	style manualReviewStyle,
 	taskState taskstate.TaskState,
 	reviewAttempt int,
 	currentStep string,
@@ -2399,20 +2425,11 @@ func renderPriorReviewAdvisories(
 	if len(advisories) == 0 {
 		return nil
 	}
-	if _, err := fmt.Fprintln(output, "Prior unresolved advisories:"); err != nil {
+	if _, err := fmt.Fprintln(output, style.amber("▲ PRIOR UNRESOLVED ADVISORIES")); err != nil {
 		return err
 	}
-	return renderPriorReviewAdvisorySummary(output, advisories)
-}
-
-func renderPriorReviewAdvisorySummary(output io.Writer, advisories []priorReviewAdvisory) error {
 	for _, advisory := range advisories {
-		finding := advisory.finding
-		step := strings.TrimSpace(finding.Step)
-		if step == "" {
-			step = "(unspecified)"
-		}
-		if _, err := fmt.Fprintf(output, "  Finding %d (%s): %s\n", advisory.index+1, step, finding.Title); err != nil {
+		if err := renderManualStepFinding(output, style, indexedReviewFinding(advisory)); err != nil {
 			return err
 		}
 	}
@@ -2441,6 +2458,7 @@ func renderPriorReviewAdvisory(output io.Writer, advisory priorReviewAdvisory) e
 
 func renderCurrentManualStepFindings(
 	output io.Writer,
+	style manualReviewStyle,
 	taskState taskstate.TaskState,
 	reviewAttempt int,
 	currentStep string,
@@ -2453,11 +2471,11 @@ func renderCurrentManualStepFindings(
 	if len(findings) == 0 {
 		return nil
 	}
-	if _, err := fmt.Fprintln(output, "Recorded findings for this manual step:"); err != nil {
+	if _, err := fmt.Fprintln(output, style.amber("▲ RECORDED FINDINGS FOR THIS STEP")); err != nil {
 		return err
 	}
 	for _, finding := range findings {
-		if err := renderManualStepFinding(output, finding); err != nil {
+		if err := renderManualStepFinding(output, style, finding); err != nil {
 			return err
 		}
 	}
@@ -2479,26 +2497,29 @@ func currentManualStepFindings(
 	return findings
 }
 
-func renderManualStepFinding(output io.Writer, indexed indexedReviewFinding) error {
+func renderManualStepFinding(output io.Writer, style manualReviewStyle, indexed indexedReviewFinding) error {
 	finding := indexed.finding
-	if _, err := fmt.Fprintf(
-		output,
-		"  Finding %d (%s): %s\n",
+	step := strings.TrimSpace(finding.Step)
+	if step == "" {
+		step = "(unspecified)"
+	}
+	if _, err := fmt.Fprintf(output, "Finding %d · %s · %s\n%s\n\n%s\n%s\n",
 		indexed.index+1,
+		step,
 		formatReviewValue(string(finding.Type)),
 		formatReviewValue(finding.Title),
+		style.dim("DESCRIPTION"),
+		formatReviewValue(finding.Description),
 	); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(output, "    Description: %s\n", formatReviewValue(finding.Description)); err != nil {
-		return err
-	}
 	if strings.TrimSpace(finding.SuggestedAction) != "" {
-		if _, err := fmt.Fprintf(output, "    Suggested action: %s\n", finding.SuggestedAction); err != nil {
+		if _, err := fmt.Fprintf(output, "\n%s\n%s\n", style.dim("SUGGESTED ACTION"), finding.SuggestedAction); err != nil {
 			return err
 		}
 	}
-	return nil
+	_, err := fmt.Fprintln(output)
+	return err
 }
 
 func unresolvedPriorReviewBlockers(review taskstate.ReviewAttempt, currentStep string) []indexedReviewFinding {
@@ -2576,9 +2597,11 @@ func promptManualCommandConfirmation(
 	reader *bufio.Reader,
 	step review.Step,
 ) (bool, error) {
+	style := newManualReviewStyle(command)
 	if _, err := fmt.Fprintf(
 		command.ErrOrStderr(),
-		"\nRun manual command for step %q (%s)? [Y/n]: ",
+		"\n%s  Run manual command for step %q (%s)? [Y/n]: ",
+		style.cyan("↳ NEXT"),
 		step.Name,
 		commandLineForReviewStep(step),
 	); err != nil {
