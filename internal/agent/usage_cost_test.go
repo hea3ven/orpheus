@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -35,6 +36,89 @@ func TestEstimateUsageCostUsesKnownModelPricing(t *testing.T) {
 	}
 	if cost.Pricing.Source == "" || cost.Pricing.SourceURL == "" {
 		t.Fatalf("pricing source metadata = %#v, want source context", cost.Pricing)
+	}
+}
+
+func TestEstimateUsageCostAtSelectsEffectiveDatedPricingInUTC(t *testing.T) {
+	tests := []struct {
+		name          string
+		model         string
+		startedAt     time.Time
+		amount        int64
+		effectiveDate string
+		inputRate     string
+		cachedRate    string
+		outputRate    string
+	}{
+		{
+			name: "Terra launch rate", model: "gpt-5.6-terra",
+			startedAt: time.Date(2026, 7, 30, 0, 30, 0, 0, time.FixedZone("UTC+1", 3600)),
+			amount:    17_750_000, effectiveDate: "2026-07-09", inputRate: "2.5", cachedRate: "0.25", outputRate: "15",
+		},
+		{
+			name: "Terra reduced rate", model: "gpt-5.6-terra",
+			startedAt: time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC),
+			amount:    14_200_000, effectiveDate: "2026-07-30", inputRate: "2", cachedRate: "0.2", outputRate: "12",
+		},
+		{
+			name: "Luna launch rate", model: "gpt-5.6-luna",
+			startedAt: time.Date(2026, 7, 29, 23, 59, 59, 0, time.UTC),
+			amount:    7_100_000, effectiveDate: "2026-07-09", inputRate: "1", cachedRate: "0.1", outputRate: "6",
+		},
+		{
+			name: "Luna reduced rate", model: "gpt-5.6-luna",
+			startedAt: time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC),
+			amount:    1_420_000, effectiveDate: "2026-07-30", inputRate: "0.2", cachedRate: "0.02", outputRate: "1.2",
+		},
+	}
+
+	usage := taskstate.AgentUsage{InputTokens: 2_000_000, CachedInputTokens: 1_000_000, OutputTokens: 1_000_000}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cost, ok := agent.EstimateUsageCostAt(test.model, usage, test.startedAt)
+			if !ok {
+				t.Fatal("estimate cost ok = false, want true")
+			}
+			if cost.AmountMicroUSD != test.amount ||
+				cost.Pricing.EffectiveDate != test.effectiveDate ||
+				cost.Pricing.InputUSDPerMillionTokens != test.inputRate ||
+				cost.Pricing.CachedUSDPerMillionTokens != test.cachedRate ||
+				cost.Pricing.OutputUSDPerMillionTokens != test.outputRate {
+				t.Fatalf("cost = %#v, want selected effective price", cost)
+			}
+			if cost.Pricing.Source == "" || cost.Pricing.SourceURL == "" || cost.Pricing.SourceAccessed == "" {
+				t.Fatalf("pricing provenance = %#v, want source provenance", cost.Pricing)
+			}
+		})
+	}
+}
+
+func TestEstimateUsageCostAtLeavesEffectiveDatedHistoryWithoutAPriceUnknown(t *testing.T) {
+	usage := taskstate.AgentUsage{InputTokens: 1}
+	for _, startedAt := range []time.Time{
+		time.Time{},
+		time.Date(2026, 7, 8, 23, 59, 59, 0, time.UTC),
+	} {
+		if _, ok := agent.EstimateUsageCostAt("gpt-5.6-terra", usage, startedAt); ok {
+			t.Fatalf("estimate at %s ok = true, want unknown", startedAt)
+		}
+	}
+}
+
+func TestEstimateCodexUsageCostAtPersistsEffectivePricingSnapshot(t *testing.T) {
+	stored, ok := agent.EstimateCodexUsageCostAt(
+		"gpt-5.6-luna",
+		taskstate.AgentUsage{InputTokens: 1_000_000},
+		time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC),
+	)
+	if !ok || stored.Pricing == nil {
+		t.Fatalf("stored cost = %#v, ok = %t; want pricing snapshot", stored, ok)
+	}
+	if stored.Pricing.EffectiveDate != "2026-07-30" ||
+		stored.Pricing.InputUSDPerMillionTokens != "0.2" ||
+		stored.Pricing.Source == "" ||
+		stored.Pricing.SourceAccessed == "" {
+		t.Fatalf("pricing snapshot = %#v, want selected effective version and provenance", stored.Pricing)
 	}
 }
 

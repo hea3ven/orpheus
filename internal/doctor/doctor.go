@@ -363,7 +363,7 @@ func diagnoseStoredCodexCostEstimate(
 	if !agent.HasBillableUsage(*ref.execution.Usage) {
 		return unknownRow(ref, agent.UsageCostUnknownBillableUsageMissing), true, nil
 	}
-	cost, ok := agent.EstimateCodexUsageCost(ref.execution.Model, *ref.execution.Usage)
+	cost, ok := agent.EstimateCodexUsageCostAt(ref.execution.Model, *ref.execution.Usage, ref.execution.StartedAt)
 	if !ok {
 		return unknownRow(ref, agent.UsageCostUnknownPricingMetadataMissing), true, nil
 	}

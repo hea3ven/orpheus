@@ -47,7 +47,7 @@ func CaptureCodexUsage(opts CodexUsageCaptureOptions) taskstate.RecordRunUsageOp
 	case 0:
 		return unknownUsage("no_matching_codex_session", 0)
 	case 1:
-		return withCodexUsageCost(codexHarness, usageFromCodexSession(candidates[0]))
+		return withCodexUsageCost(codexHarness, opts.StartedAt, usageFromCodexSession(candidates[0]))
 	default:
 		descriptors := codexUsageCaptureCandidates(candidates, opts.StartedAt)
 		if candidate, ok := closestCodexSession(candidates, opts.StartedAt); ok {
@@ -55,7 +55,7 @@ func CaptureCodexUsage(opts CodexUsageCaptureOptions) taskstate.RecordRunUsageOp
 			result.UsageCapture.Reason = "matched_closest_codex_session"
 			result.UsageCapture.CandidateCount = len(candidates)
 			result.Candidates = descriptors
-			return withCodexUsageCost(codexHarness, result)
+			return withCodexUsageCost(codexHarness, opts.StartedAt, result)
 		}
 		return taskstate.RecordRunUsageOptions{
 			Candidates: descriptors,
