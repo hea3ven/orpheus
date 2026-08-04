@@ -3,7 +3,11 @@ package task_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
+	"sync/atomic"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/task"
@@ -178,3 +182,296 @@ func (b failingReadBackend) Get(context.Context, string) (task.Task, error) {
 func (b failingReadBackend) List(context.Context) ([]task.Task, error) {
 	return nil, b.err
 }
+
+func TestAggregatorSnapshotOverlapsDistinctWorkspacesAndPreservesOrder(t *testing.T) {
+	repos := []task.RepositorySource{
+		{Repository: task.Repository{ID: "alpha"}, BackendDir: t.TempDir()},
+		{Repository: task.Repository{ID: "beta"}, BackendDir: t.TempDir()},
+		{Repository: task.Repository{ID: "gamma"}, BackendDir: t.TempDir()},
+	}
+	started := make(chan string, 2)
+	release := make(chan struct{})
+
+	aggregator, err := task.NewAggregator(repos, func(source task.RepositorySource) (task.ReadBackend, error) {
+		return signalReadBackend{
+			id:      source.Repository.ID,
+			started: started,
+			release: release,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("create aggregator: %v", err)
+	}
+
+	result := make(chan task.SnapshotResult, 1)
+	go func() {
+		result <- aggregator.Snapshot(context.Background())
+	}()
+
+	first, second := <-started, <-started
+	if first == second {
+		t.Fatalf("concurrent starts = %q, %q; want distinct workspaces", first, second)
+	}
+	close(release)
+	got := <-result
+
+	if got.HasFailures() {
+		t.Fatalf("failures = %#v, want none", got.Failures)
+	}
+	gotIDs := make([]string, 0, len(got.Repositories))
+	for _, repository := range got.Repositories {
+		gotIDs = append(gotIDs, repository.Repository.ID)
+	}
+	wantIDs := []string{"alpha", "beta", "gamma"}
+	if !reflect.DeepEqual(gotIDs, wantIDs) {
+		t.Fatalf("repository order = %v, want %v", gotIDs, wantIDs)
+	}
+}
+
+func TestAggregatorSnapshotPreservesFailureOrderAcrossConcurrentReads(t *testing.T) {
+	createErr := errors.New("create alpha backend")
+	listErr := errors.New("list beta backend")
+	repos := []task.RepositorySource{
+		{Repository: task.Repository{ID: "alpha"}, BackendDir: t.TempDir()},
+		{Repository: task.Repository{ID: "beta"}, BackendDir: t.TempDir()},
+		{Repository: task.Repository{ID: "gamma"}, BackendDir: t.TempDir()},
+	}
+
+	aggregator, err := task.NewAggregator(repos, func(source task.RepositorySource) (task.ReadBackend, error) {
+		switch source.Repository.ID {
+		case "alpha":
+			return nil, createErr
+		case "beta":
+			return failingReadBackend{err: listErr}, nil
+		default:
+			return fakeReadBackend{tasks: []task.Task{{ID: "gamma-1"}}}, nil
+		}
+	})
+	if err != nil {
+		t.Fatalf("create aggregator: %v", err)
+	}
+
+	got := aggregator.Snapshot(context.Background())
+
+	if len(got.Failures) != 2 {
+		t.Fatalf("failures = %#v, want two", got.Failures)
+	}
+	if failure := got.Failures[0]; failure.Repository.ID != "alpha" || failure.Operation != "create_backend" || !errors.Is(failure.Err, createErr) {
+		t.Fatalf("first failure = %#v, want alpha backend creation error", failure)
+	}
+	if failure := got.Failures[1]; failure.Repository.ID != "beta" || failure.Operation != "snapshot" || !errors.Is(failure.Err, listErr) {
+		t.Fatalf("second failure = %#v, want beta snapshot error", failure)
+	}
+	if len(got.Repositories) != 1 || got.Repositories[0].Repository.ID != "gamma" || got.Repositories[0].Tasks[0].ID != "gamma-1" {
+		t.Fatalf("repositories = %#v, want successful gamma snapshot", got.Repositories)
+	}
+}
+
+func TestAggregatorSnapshotBoundsDistinctWorkspaceReads(t *testing.T) {
+	repos := make([]task.RepositorySource, 5)
+	for i := range repos {
+		repos[i] = task.RepositorySource{
+			Repository: task.Repository{ID: fmt.Sprintf("repo-%d", i)},
+			BackendDir: t.TempDir(),
+		}
+	}
+	tracker := &boundedReadTracker{
+		started: make(chan struct{}, 4),
+		release: make(chan struct{}),
+	}
+	aggregator, err := task.NewAggregator(repos, func(source task.RepositorySource) (task.ReadBackend, error) {
+		return trackedReadBackend{id: source.Repository.ID, tracker: &tracker.concurrentReadTracker, started: tracker.started, release: tracker.release}, nil
+	})
+	if err != nil {
+		t.Fatalf("create aggregator: %v", err)
+	}
+
+	result := make(chan task.SnapshotResult, 1)
+	go func() {
+		result <- aggregator.Snapshot(context.Background())
+	}()
+	for range cap(tracker.started) {
+		<-tracker.started
+	}
+	close(tracker.release)
+	got := <-result
+
+	if got.HasFailures() {
+		t.Fatalf("failures = %#v, want none", got.Failures)
+	}
+	if maximum := tracker.max.Load(); maximum != 4 {
+		t.Fatalf("maximum simultaneous reads = %d, want bounded maximum of 4", maximum)
+	}
+}
+
+func TestAggregatorSnapshotSerializesNormalizedDuplicateWorkspaces(t *testing.T) {
+	workspace := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "workspace-alias")
+	if err := os.Symlink(workspace, alias); err != nil {
+		t.Fatalf("create workspace symlink: %v", err)
+	}
+	repos := []task.RepositorySource{
+		{Repository: task.Repository{ID: "alpha"}, BackendDir: workspace},
+		{Repository: task.Repository{ID: "beta"}, BackendDir: alias},
+	}
+	tracker := &boundedReadTracker{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+
+	aggregator, err := task.NewAggregator(repos, func(source task.RepositorySource) (task.ReadBackend, error) {
+		return trackedReadBackend{
+			id:      source.Repository.ID,
+			tracker: &tracker.concurrentReadTracker,
+			started: tracker.started,
+			release: tracker.release,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("create aggregator: %v", err)
+	}
+
+	result := make(chan task.SnapshotResult, 1)
+	go func() {
+		result <- aggregator.Snapshot(context.Background())
+	}()
+	<-tracker.started
+	close(tracker.release)
+	got := <-result
+
+	if got.HasFailures() {
+		t.Fatalf("failures = %#v, want none", got.Failures)
+	}
+	if maximum := tracker.max.Load(); maximum != 1 {
+		t.Fatalf("maximum simultaneous reads = %d, want 1 for one normalized workspace", maximum)
+	}
+}
+
+func TestAggregatorSnapshotCancellationWaitsForWorkers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	started := make(chan struct{}, 4)
+	tracker := &cancellationReadTracker{started: started}
+	repos := make([]task.RepositorySource, 6)
+	for i := range repos {
+		repos[i] = task.RepositorySource{
+			Repository: task.Repository{ID: fmt.Sprintf("repo-%d", i)},
+			BackendDir: t.TempDir(),
+		}
+	}
+	aggregator, err := task.NewAggregator(repos, func(task.RepositorySource) (task.ReadBackend, error) {
+		return tracker, nil
+	})
+	if err != nil {
+		t.Fatalf("create aggregator: %v", err)
+	}
+
+	result := make(chan task.SnapshotResult, 1)
+	go func() {
+		result <- aggregator.Snapshot(ctx)
+	}()
+	for range cap(started) {
+		<-started
+	}
+	cancel()
+	got := <-result
+
+	if active := tracker.active.Load(); active != 0 {
+		t.Fatalf("active reads after Snapshot returns = %d, want no workers", active)
+	}
+	if calls := tracker.calls.Load(); calls != int32(len(repos)) {
+		t.Fatalf("List calls = %d, want %d to preserve partial-result behavior", calls, len(repos))
+	}
+	if len(got.Failures) != len(repos) {
+		t.Fatalf("failures = %#v, want one canceled snapshot failure per repository", got.Failures)
+	}
+	for i, failure := range got.Failures {
+		if failure.Repository.ID != repos[i].Repository.ID || failure.Operation != "snapshot" || !errors.Is(failure.Err, context.Canceled) {
+			t.Fatalf("failure[%d] = %#v, want canceled snapshot failure for %q", i, failure, repos[i].Repository.ID)
+		}
+	}
+}
+
+type signalReadBackend struct {
+	id      string
+	started chan<- string
+	release <-chan struct{}
+}
+
+func (b signalReadBackend) Get(context.Context, string) (task.Task, error) {
+	return task.Task{}, task.ErrNotFound
+}
+
+func (b signalReadBackend) List(context.Context) ([]task.Task, error) {
+	b.started <- b.id
+	<-b.release
+	return []task.Task{{ID: b.id + "-1"}}, nil
+}
+
+type concurrentReadTracker struct {
+	active atomic.Int32
+	max    atomic.Int32
+}
+
+type boundedReadTracker struct {
+	concurrentReadTracker
+	started chan struct{}
+	release chan struct{}
+}
+
+type trackedReadBackend struct {
+	id      string
+	tracker *concurrentReadTracker
+	started chan<- struct{}
+	release <-chan struct{}
+}
+
+func (b trackedReadBackend) Get(context.Context, string) (task.Task, error) {
+	return task.Task{}, task.ErrNotFound
+}
+
+func (b trackedReadBackend) List(context.Context) ([]task.Task, error) {
+	active := b.tracker.active.Add(1)
+	defer b.tracker.active.Add(-1)
+	for {
+		maximum := b.tracker.max.Load()
+		if active <= maximum || b.tracker.max.CompareAndSwap(maximum, active) {
+			break
+		}
+	}
+	if b.started != nil {
+		b.started <- struct{}{}
+	}
+	if b.release != nil {
+		<-b.release
+	}
+	return []task.Task{{ID: b.id + "-1"}}, nil
+}
+
+type cancellationReadTracker struct {
+	started chan<- struct{}
+	active  atomic.Int32
+	calls   atomic.Int32
+}
+
+func (b *cancellationReadTracker) Get(context.Context, string) (task.Task, error) {
+	return task.Task{}, task.ErrNotFound
+}
+
+func (b *cancellationReadTracker) List(ctx context.Context) ([]task.Task, error) {
+	b.calls.Add(1)
+	b.active.Add(1)
+	defer b.active.Add(-1)
+	select {
+	case b.started <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+var _ task.ReadBackend = signalReadBackend{}
+var _ task.ReadBackend = trackedReadBackend{}
+var _ task.ReadBackend = (*cancellationReadTracker)(nil)

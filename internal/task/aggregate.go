@@ -4,9 +4,14 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 
 	"github.com/hea3ven/orpheus/internal/logging"
+	"github.com/hea3ven/orpheus/internal/pathutil"
 )
+
+// maxConcurrentSnapshotWorkspaces caps default parallel Beads workspace reads.
+const maxConcurrentSnapshotWorkspaces = 4
 
 // RepositorySource connects a registered repository identity to its task backend workspace.
 type RepositorySource struct {
@@ -48,31 +53,31 @@ func (a Aggregator) List(ctx context.Context) QueryResult {
 }
 
 // Snapshot reads visible task-backend snapshots for local status projection.
+//
+// Reads from distinct backend workspaces run concurrently. Sources that resolve
+// to the same workspace stay in one worker's sequence because each Beads read
+// starts a short-lived embedded engine for that workspace.
 func (a Aggregator) Snapshot(ctx context.Context) SnapshotResult {
 	span := logging.Start(ctx, a.logger, "multi-repository task snapshot",
 		slog.String("component", "task"),
 		slog.String("operation", "snapshot"),
 		slog.Int("repo_count", len(a.sources)),
 	)
+
+	outcomes := make([]snapshotOutcome, len(a.sources))
+	a.readSnapshotWorkspaces(ctx, outcomes)
+
 	var result SnapshotResult
-	for _, source := range a.sources {
-		backend, err := a.factory(source)
-		if err != nil {
-			result.Failures = append(result.Failures, repoFailure(source.Repository, "task_backend", "create_backend", err))
-			logRepoFailure(ctx, a.logger, source.Repository, "create_backend", err)
+	for index, source := range a.sources {
+		outcome := outcomes[index]
+		if outcome.err != nil {
+			result.Failures = append(result.Failures, repoFailure(source.Repository, "task_backend", outcome.operation, outcome.err))
+			logRepoFailure(ctx, a.logger, source.Repository, outcome.operation, outcome.err)
 			continue
 		}
-
-		listed, err := backend.List(ctx)
-		if err != nil {
-			result.Failures = append(result.Failures, repoFailure(source.Repository, "task_backend", "snapshot", err))
-			logRepoFailure(ctx, a.logger, source.Repository, "snapshot", err)
-			continue
-		}
-
 		result.Repositories = append(result.Repositories, RepositorySnapshot{
 			Repository: source.Repository,
-			Tasks:      cloneTasks(listed),
+			Tasks:      outcome.tasks,
 		})
 	}
 	span.Finish(ctx, aggregationStatus(result.Failures),
@@ -80,6 +85,75 @@ func (a Aggregator) Snapshot(ctx context.Context) SnapshotResult {
 		slog.Int("failure_count", len(result.Failures)),
 	)
 	return result
+}
+
+type snapshotOutcome struct {
+	tasks     []Task
+	operation string
+	err       error
+}
+
+func (a Aggregator) readSnapshotWorkspaces(ctx context.Context, outcomes []snapshotOutcome) {
+	workspaces := a.snapshotWorkspaceSources()
+	workers := min(maxConcurrentSnapshotWorkspaces, len(workspaces))
+	if workers == 0 {
+		return
+	}
+
+	jobs := make(chan []int)
+	var group sync.WaitGroup
+	group.Add(workers)
+	for range workers {
+		go func() {
+			defer group.Done()
+			for indexes := range jobs {
+				for _, index := range indexes {
+					outcomes[index] = a.readSnapshotSource(ctx, a.sources[index])
+				}
+			}
+		}()
+	}
+	for _, indexes := range workspaces {
+		jobs <- indexes
+	}
+	close(jobs)
+	group.Wait()
+}
+
+func (a Aggregator) snapshotWorkspaceSources() [][]int {
+	workspaceIndexes := make(map[string]int, len(a.sources))
+	workspaces := make([][]int, 0, len(a.sources))
+	for index, source := range a.sources {
+		workspace := normalizedWorkspace(source.BackendDir)
+		workspaceIndex, ok := workspaceIndexes[workspace]
+		if !ok {
+			workspaceIndex = len(workspaces)
+			workspaceIndexes[workspace] = workspaceIndex
+			workspaces = append(workspaces, nil)
+		}
+		workspaces[workspaceIndex] = append(workspaces[workspaceIndex], index)
+	}
+	return workspaces
+}
+
+func normalizedWorkspace(dir string) string {
+	normalized, err := pathutil.CanonicalAbs(dir)
+	if err != nil {
+		return dir
+	}
+	return normalized
+}
+
+func (a Aggregator) readSnapshotSource(ctx context.Context, source RepositorySource) snapshotOutcome {
+	backend, err := a.factory(source)
+	if err != nil {
+		return snapshotOutcome{operation: "create_backend", err: err}
+	}
+	listed, err := backend.List(ctx)
+	if err != nil {
+		return snapshotOutcome{operation: "snapshot", err: err}
+	}
+	return snapshotOutcome{tasks: cloneTasks(listed)}
 }
 
 func (a Aggregator) query(ctx context.Context, operation string, query func(ReadBackend) ([]Task, error)) QueryResult {
