@@ -2,6 +2,7 @@ package agent
 
 import (
 	"strings"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
@@ -59,6 +60,7 @@ type UsagePricingMetadata struct {
 	Provider                  string
 	Model                     string
 	ServiceTier               string
+	EffectiveDate             string
 	Unit                      string
 	InputUSDPerMillionTokens  string
 	CachedUSDPerMillionTokens string
@@ -81,6 +83,7 @@ type ResolvedUsageCost struct {
 type usagePrice struct {
 	model                    string
 	serviceTier              string
+	effectiveDate            string
 	inputMicroUSDPerMillion  int64
 	cachedMicroUSDPerMillion int64
 	outputMicroUSDPerMillion int64
@@ -107,10 +110,19 @@ var usagePrices = map[string]usagePrice{
 	"gpt-5.4-nano":  openAIAPIPrice("gpt-5.4-nano", 200_000, 20_000, 1_250_000),
 	"gpt-5.5":       openAIAPIPrice("gpt-5.5", 5_000_000, 500_000, 30_000_000),
 	"gpt-5.6-sol":   openAIAPIPrice("gpt-5.6-sol", 5_000_000, 500_000, 30_000_000),
-	"gpt-5.6-terra": openAIAPIPrice("gpt-5.6-terra", 2_500_000, 250_000, 15_000_000),
-	"gpt-5.6-luna":  openAIAPIPrice("gpt-5.6-luna", 1_000_000, 100_000, 6_000_000),
 	"gpt-5.3-codex": openAIAPIPrice("gpt-5.3-codex", 1_750_000, 175_000, 14_000_000),
 	"chat-latest":   openAIAPIPrice("chat-latest", 5_000_000, 500_000, 30_000_000),
+}
+
+var effectiveUsagePrices = map[string][]usagePrice{
+	"gpt-5.6-terra": {
+		effectiveOpenAIAPIPrice("gpt-5.6-terra", "2026-07-09", 2_500_000, 250_000, 15_000_000, "2026-07-10"),
+		effectiveOpenAIAPIPrice("gpt-5.6-terra", "2026-07-30", 2_000_000, 200_000, 12_000_000, "2026-07-30"),
+	},
+	"gpt-5.6-luna": {
+		effectiveOpenAIAPIPrice("gpt-5.6-luna", "2026-07-09", 1_000_000, 100_000, 6_000_000, "2026-07-10"),
+		effectiveOpenAIAPIPrice("gpt-5.6-luna", "2026-07-30", 200_000, 20_000, 1_200_000, "2026-07-30"),
+	},
 }
 
 // PiReportedUsageCost records a Pi-reported estimated cost in micro-USD.
@@ -173,6 +185,7 @@ func usagePricingFromStored(stored taskstate.AgentUsagePricing) UsagePricingMeta
 		Provider:                  strings.TrimSpace(stored.Provider),
 		Model:                     strings.TrimSpace(stored.Model),
 		ServiceTier:               strings.TrimSpace(stored.ServiceTier),
+		EffectiveDate:             strings.TrimSpace(stored.EffectiveDate),
 		Unit:                      strings.TrimSpace(stored.Unit),
 		InputUSDPerMillionTokens:  strings.TrimSpace(stored.InputUSDPerMillionTokens),
 		CachedUSDPerMillionTokens: strings.TrimSpace(stored.CachedUSDPerMillionTokens),
@@ -186,14 +199,32 @@ func usagePricingFromStored(stored taskstate.AgentUsagePricing) UsagePricingMeta
 	}
 }
 
-// EstimateCodexUsageCost converts a recognized Codex model and captured usage
-// into the immutable persisted estimate and pricing snapshot.
+// EstimateCodexUsageCost converts a recognized non-effective-dated Codex model
+// and captured usage into the immutable persisted estimate and pricing snapshot.
 func EstimateCodexUsageCost(model string, usage taskstate.AgentUsage) (*taskstate.AgentUsageCost, bool) {
 	cost, ok := EstimateUsageCost(model, usage)
 	if !ok {
 		return nil, false
 	}
-	stored := taskstate.AgentUsageCost{
+	return storedUsageCost(cost), true
+}
+
+// EstimateCodexUsageCostAt selects pricing by the execution's recorded start
+// time before persisting the resulting immutable pricing snapshot.
+func EstimateCodexUsageCostAt(
+	model string,
+	usage taskstate.AgentUsage,
+	startedAt time.Time,
+) (*taskstate.AgentUsageCost, bool) {
+	cost, ok := EstimateUsageCostAt(model, usage, startedAt)
+	if !ok {
+		return nil, false
+	}
+	return storedUsageCost(cost), true
+}
+
+func storedUsageCost(cost UsageCost) *taskstate.AgentUsageCost {
+	return &taskstate.AgentUsageCost{
 		Kind:           cost.Kind,
 		Currency:       cost.Currency,
 		AmountMicroUSD: cost.AmountMicroUSD,
@@ -201,6 +232,7 @@ func EstimateCodexUsageCost(model string, usage taskstate.AgentUsage) (*taskstat
 			Provider:                  cost.Pricing.Provider,
 			Model:                     cost.Pricing.Model,
 			ServiceTier:               cost.Pricing.ServiceTier,
+			EffectiveDate:             cost.Pricing.EffectiveDate,
 			Unit:                      cost.Pricing.Unit,
 			InputUSDPerMillionTokens:  cost.Pricing.InputUSDPerMillionTokens,
 			CachedUSDPerMillionTokens: cost.Pricing.CachedUSDPerMillionTokens,
@@ -215,7 +247,6 @@ func EstimateCodexUsageCost(model string, usage taskstate.AgentUsage) (*taskstat
 		Source: cost.Pricing.Source,
 		Notes:  cost.Pricing.Notes,
 	}
-	return &stored, true
 }
 
 // ResolveExecutionUsageCost applies the cost policy for one recorded execution.
@@ -236,20 +267,34 @@ func ResolveExecutionUsageCost(execution taskstate.AgentExecution) ResolvedUsage
 	if !HasBillableUsage(*execution.Usage) {
 		return ResolvedUsageCost{UnknownReason: UsageCostUnknownBillableUsageMissing}
 	}
-	cost, ok := EstimateUsageCost(execution.Model, *execution.Usage)
+	cost, ok := EstimateUsageCostAt(execution.Model, *execution.Usage, execution.StartedAt)
 	if !ok {
 		return ResolvedUsageCost{UnknownReason: UsageCostUnknownPricingMetadataMissing}
 	}
 	return ResolvedUsageCost{Cost: cost, Known: true}
 }
 
-// EstimateUsageCost estimates the API-equivalent cost for recorded token usage.
+// EstimateUsageCost estimates the API-equivalent cost for a model without
+// effective-dated pricing. Call EstimateUsageCostAt for recorded executions.
 func EstimateUsageCost(model string, usage taskstate.AgentUsage) (UsageCost, bool) {
 	price, ok := usagePriceForModel(model)
 	if !ok {
 		return UsageCost{}, false
 	}
+	return estimateUsageCost(price, usage)
+}
 
+// EstimateUsageCostAt estimates API-equivalent cost after selecting the newest
+// known price effective on or before the recorded execution start date in UTC.
+func EstimateUsageCostAt(model string, usage taskstate.AgentUsage, startedAt time.Time) (UsageCost, bool) {
+	price, ok := usagePriceForModelAt(model, startedAt)
+	if !ok {
+		return UsageCost{}, false
+	}
+	return estimateUsageCost(price, usage)
+}
+
+func estimateUsageCost(price usagePrice, usage taskstate.AgentUsage) (UsageCost, bool) {
 	usage = normalizeUsage(usage)
 	if !HasBillableUsage(usage) {
 		return UsageCost{}, false
@@ -278,6 +323,7 @@ func EstimateUsageCost(model string, usage taskstate.AgentUsage) (UsageCost, boo
 			Provider:                  "openai",
 			Model:                     price.model,
 			ServiceTier:               price.serviceTier,
+			EffectiveDate:             price.effectiveDate,
 			Unit:                      usageCostUnit,
 			InputUSDPerMillionTokens:  formatMicroUSDAsPrice(price.inputMicroUSDPerMillion),
 			CachedUSDPerMillionTokens: formatMicroUSDAsPrice(price.cachedMicroUSDPerMillion),
@@ -303,8 +349,37 @@ func FormatUsageCostUSD(amountMicroUSD int64) string {
 }
 
 func usagePriceForModel(model string) (usagePrice, bool) {
-	price, ok := usagePrices[canonicalUsageModel(model)]
+	canonicalModel := canonicalUsageModel(model)
+	if _, effectiveDated := effectiveUsagePrices[canonicalModel]; effectiveDated {
+		return usagePrice{}, false
+	}
+	price, ok := usagePrices[canonicalModel]
 	return price, ok
+}
+
+func usagePriceForModelAt(model string, startedAt time.Time) (usagePrice, bool) {
+	canonicalModel := canonicalUsageModel(model)
+	versions, effectiveDated := effectiveUsagePrices[canonicalModel]
+	if !effectiveDated {
+		price, ok := usagePrices[canonicalModel]
+		return price, ok
+	}
+	if startedAt.IsZero() {
+		return usagePrice{}, false
+	}
+
+	startedDate := startedAt.UTC().Format("2006-01-02")
+	var selected usagePrice
+	for _, version := range versions {
+		if version.effectiveDate > startedDate {
+			break
+		}
+		selected = version
+	}
+	if selected.effectiveDate == "" {
+		return usagePrice{}, false
+	}
+	return selected, true
 }
 
 func canonicalUsageModel(model string) string {
@@ -342,15 +417,34 @@ func openAIAPIPrice(
 	cachedMicroUSDPerMillion int64,
 	outputMicroUSDPerMillion int64,
 ) usagePrice {
+	return effectiveOpenAIAPIPrice(
+		model,
+		"",
+		inputMicroUSDPerMillion,
+		cachedMicroUSDPerMillion,
+		outputMicroUSDPerMillion,
+		openAIAPIPricingAccessed,
+	)
+}
+
+func effectiveOpenAIAPIPrice(
+	model string,
+	effectiveDate string,
+	inputMicroUSDPerMillion int64,
+	cachedMicroUSDPerMillion int64,
+	outputMicroUSDPerMillion int64,
+	sourceAccessed string,
+) usagePrice {
 	return usagePrice{
 		model:                    model,
 		serviceTier:              "standard",
+		effectiveDate:            effectiveDate,
 		inputMicroUSDPerMillion:  inputMicroUSDPerMillion,
 		cachedMicroUSDPerMillion: cachedMicroUSDPerMillion,
 		outputMicroUSDPerMillion: outputMicroUSDPerMillion,
 		source:                   openAIAPIPricingSource,
 		sourceURL:                openAIAPIPricingSourceURL,
-		sourceAccessed:           openAIAPIPricingAccessed,
+		sourceAccessed:           sourceAccessed,
 	}
 }
 

@@ -226,18 +226,26 @@ cohorts, not evidence that a model, harness, or reasoning setting caused an outc
 ## Estimated cost limits
 
 For a non-Pi execution with known tokens and a recognized model, Orpheus calculates an
-**API-equivalent** USD estimate from public pricing metadata. When it captures the
-execution usage, it also stores the amount and the complete pricing snapshot: model,
-tier, rates, reasoning-token treatment, pricing source, and source date. That snapshot
-is immutable, so later changes to Orpheus' hardcoded pricing table do not reprice a
-historical execution. It charges uncached input at the input rate, cached input at the
-cached rate, and `max(output, reasoning_output)` at the output rate. This avoids
-charging overlapping reasoning/output tokens twice.
+**API-equivalent** USD estimate from public pricing metadata. For models with
+multiple known price versions, it selects the newest version effective on or before
+the execution's recorded `started_at` date in UTC. This is an execution-start
+approximation: usage that spans a pricing boundary is not split across rates. Missing
+start dates and dates before the earliest known version leave those historical
+estimates unknown rather than falling back to the current rate.
+
+When it captures the execution usage, it also stores the amount and the complete
+pricing snapshot: model, tier, selected effective date, rates, reasoning-token
+treatment, and pricing source provenance. That snapshot is immutable, so later
+changes to Orpheus' hardcoded pricing catalog do not reprice a historical execution.
+It charges uncached input at the input rate, cached input at the cached rate, and
+`max(output, reasoning_output)` at the output rate. This avoids charging overlapping
+reasoning/output tokens twice.
 
 This estimate can differ from subscription charges, invoices, negotiated discounts,
-service tiers, batch pricing, taxes, or a harness/vendor's own accounting. It is not
-billing reconciliation. A model without a supported pricing row still has usable token
-statistics, but its cost is unknown.
+service tiers, batch pricing, taxes, or a harness/vendor's own accounting. It excludes
+long-context premiums above 272K input tokens, Batch, Flex, Fast mode, regional,
+and cache-write pricing. It is not billing reconciliation. A model without a supported
+pricing row still has usable token statistics, but its cost is unknown.
 
 For Pi, Orpheus stores `usage.cost.total` when Pi reports it and labels it
 `pi_reported_estimated`. That is still an estimate, not an invoice. Orpheus does not

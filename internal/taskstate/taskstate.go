@@ -351,6 +351,7 @@ type AgentUsagePricing struct {
 	Provider                  string `yaml:"provider,omitempty"`
 	Model                     string `yaml:"model,omitempty"`
 	ServiceTier               string `yaml:"service_tier,omitempty"`
+	EffectiveDate             string `yaml:"effective_date,omitempty"`
 	Unit                      string `yaml:"unit,omitempty"`
 	InputUSDPerMillionTokens  string `yaml:"input_usd_per_million_tokens,omitempty"`
 	CachedUSDPerMillionTokens string `yaml:"cached_usd_per_million_tokens,omitempty"`
@@ -3626,6 +3627,7 @@ func normalizeAgentUsagePricing(pricing AgentUsagePricing) AgentUsagePricing {
 	pricing.Provider = strings.TrimSpace(pricing.Provider)
 	pricing.Model = strings.TrimSpace(pricing.Model)
 	pricing.ServiceTier = strings.TrimSpace(pricing.ServiceTier)
+	pricing.EffectiveDate = strings.TrimSpace(pricing.EffectiveDate)
 	pricing.Unit = strings.TrimSpace(pricing.Unit)
 	pricing.InputUSDPerMillionTokens = strings.TrimSpace(pricing.InputUSDPerMillionTokens)
 	pricing.CachedUSDPerMillionTokens = strings.TrimSpace(pricing.CachedUSDPerMillionTokens)
