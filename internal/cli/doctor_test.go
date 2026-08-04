@@ -294,6 +294,39 @@ func TestDoctorStampsStoredCodexCostsWithoutSessionLogRecorrelation(t *testing.T
 	t.Fatal("missing finished sync-conflict execution")
 }
 
+func TestDoctorBackfillSelectsPricingByExecutionStart(t *testing.T) {
+	t.Parallel()
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+	setTestEnvironment(t, "CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex-home"))
+	startedAt := time.Date(2026, 7, 29, 23, 59, 59, 0, time.UTC)
+	store := taskstate.NewStoreWithClock(paths, func() time.Time { return startedAt })
+	run, err := store.StartRun("alpha", "op-effective-price", taskstate.StartRunOptions{
+		Harness: "codex", Model: "gpt-5.6-luna", Command: "codex", Branch: "main", Worktree: repoDir,
+	})
+	must.NoError(err)
+	_, err = store.RecordRunUsage("alpha", "op-effective-price", run.Attempt, taskstate.RecordRunUsageOptions{
+		Model: "gpt-5.6-luna", Usage: &taskstate.AgentUsage{InputTokens: 1_000_000},
+	})
+	must.NoError(err)
+
+	stdout, stderr := executeCommand(t, []string{"doctor", "--fix"})
+	is.Empty(stderr)
+	is.Contains(stdout, "recovered")
+	loaded, err := store.Load("alpha", "op-effective-price")
+	must.NoError(err)
+	cost := loaded.Runs[0].Execution.UsageCost
+	must.NotNil(cost)
+	must.NotNil(cost.Pricing)
+	is.Equal(int64(1_000_000), cost.AmountMicroUSD)
+	is.Equal("2026-07-09", cost.Pricing.EffectiveDate)
+	is.Equal("1", cost.Pricing.InputUSDPerMillionTokens)
+	is.NotEmpty(cost.Pricing.Source)
+}
+
 func assertDoctorCodexCostSnapshot(t *testing.T, cost *taskstate.AgentUsageCost) {
 	t.Helper()
 	must := require.New(t)

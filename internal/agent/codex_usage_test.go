@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,6 +53,32 @@ func TestCaptureCodexUsageCorrelatesSessionAndTokenCount(t *testing.T) {
 	is.NotEmpty(got.UsageCost.Pricing.ReasoningOutputTreatment)
 	is.NotEmpty(got.UsageCost.Pricing.Source)
 	is.NotEmpty(got.UsageCost.Pricing.SourcePublished)
+}
+
+func TestCaptureUsageUsesExecutionStartForEffectiveDatedPricing(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	root := t.TempDir()
+	workdir := filepath.Join(t.TempDir(), "worktree")
+	must.NoError(os.MkdirAll(workdir, 0o755))
+	startedAt := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
+	sessionPath := filepath.Join(root, "sessions", "2026", "07", "30", "session.jsonl")
+	must.NoError(os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	writeCodexSessionLogAt(t, sessionPath, workdir, "session", startedAt)
+	content, err := os.ReadFile(sessionPath)
+	must.NoError(err)
+	must.NoError(os.WriteFile(sessionPath, []byte(strings.ReplaceAll(string(content), `"gpt-5"`, `"gpt-5.6-terra"`)), 0o644))
+
+	got := agent.CaptureUsage(agent.UsageCaptureOptions{
+		Harness: "codex", ExecutionDir: workdir, StartedAt: startedAt, Env: map[string]string{"CODEX_HOME": root},
+	})
+	must.NotNil(got.UsageCost)
+	must.NotNil(got.UsageCost.Pricing)
+	is.Equal("2026-07-30", got.UsageCost.Pricing.EffectiveDate)
+	is.Equal("2", got.UsageCost.Pricing.InputUSDPerMillionTokens)
+	is.Equal("0.2", got.UsageCost.Pricing.CachedUSDPerMillionTokens)
+	is.Equal("12", got.UsageCost.Pricing.OutputUSDPerMillionTokens)
+	is.NotEmpty(got.UsageCost.Pricing.Source)
 }
 
 func TestCaptureCodexUsageReportsAmbiguousMatches(t *testing.T) {
