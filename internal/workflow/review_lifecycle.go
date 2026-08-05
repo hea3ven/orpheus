@@ -90,6 +90,7 @@ type ReviewPipelinePresentation struct {
 	ConfirmManualCommand    func(step review.Step) (bool, error)
 	PromptManualStep        func(ReviewManualStepPrompt) (review.ManualResult, error)
 	PromptAutomatedBlockers func(review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error)
+	PromptAlternateFindings func(review.AlternateReviewComparison) ([]review.AlternateFindingDecision, error)
 }
 
 // ReviewLifecycleFrontend contains all operator-facing review interactions.
@@ -550,6 +551,7 @@ func (s ReviewLifecycleService) pipelineRunOptions(runCtx context.Context, ctx R
 		ConfirmManualCommand:    presentation.ConfirmManualCommand,
 		PromptManualStep:        promptManualStep,
 		PromptAutomatedBlockers: presentation.PromptAutomatedBlockers,
+		PromptAlternateFindings: presentation.PromptAlternateFindings,
 	}, nil
 }
 
@@ -732,6 +734,7 @@ func (s ReviewLifecycleService) executeReviewAttempt(runCtx context.Context, ctx
 	return outcome.Status, nil
 }
 
+//nolint:funlen // Review-start recovery branches must remain ordered with target validation.
 func (s ReviewLifecycleService) startReview(ctx context.Context, taskID string, pipelineName string) (ReviewAttemptContext, error) {
 	taskID = strings.TrimSpace(taskID)
 	resolved, err := task.ResolveTaskSource(s.Sources, taskID)
@@ -776,6 +779,15 @@ func (s ReviewLifecycleService) startReview(ctx context.Context, taskID string, 
 		return s.continueBlockedReview(base, blocked, pipelineName)
 	}
 
+	if interrupted, ok, err := latestInterruptedReviewComparison(s.RunStore, base); err != nil {
+		return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", resolved.TaskID, err)
+	} else if ok {
+		pipeline, err := resolveStoredTaskReviewPipeline(s.Paths, interrupted.Pipeline)
+		if err != nil {
+			return ReviewAttemptContext{}, fmt.Errorf("task review %s: resolve interrupted comparison pipeline %q: %w", resolved.TaskID, interrupted.Pipeline, err)
+		}
+		return s.startFreshReviewAfterInterruptedComparison(base, pipeline)
+	}
 	if requestedPipeline != nil {
 		return s.startFreshReview(base, *requestedPipeline)
 	}
@@ -849,6 +861,24 @@ func (s ReviewLifecycleService) startFreshReview(base ReviewAttemptContext, pipe
 	if err := s.guardFreshReviewBlockers(base); err != nil {
 		return base, err
 	}
+	prepared, err := s.preparePipeline(base)
+	if err != nil {
+		return base, err
+	}
+	base = prepared
+	reviewAttempt, err := base.store.StartReviewWithOptions(base.RepoID(), base.TaskID(), taskstate.StartReviewOptions{Pipeline: pipeline.Name, Step: pipeline.Steps[0].Name})
+	if err != nil {
+		return base, fmt.Errorf("task review %s: start review attempt: %w", base.TaskID(), err)
+	}
+	base.Review = reviewAttempt
+	return base, nil
+}
+
+// startFreshReviewAfterInterruptedComparison starts the recorded pipeline without treating
+// incomplete-comparison findings as candidates for disposition or follow-up.
+func (s ReviewLifecycleService) startFreshReviewAfterInterruptedComparison(base ReviewAttemptContext, pipeline review.Pipeline) (ReviewAttemptContext, error) {
+	base.Pipeline = pipeline
+	base.Resumed = false
 	prepared, err := s.preparePipeline(base)
 	if err != nil {
 		return base, err
@@ -1053,7 +1083,7 @@ func latestEligibleBlockedReview(store ReviewLifecycleStore, ctx ReviewAttemptCo
 		return taskstate.ReviewAttempt{}, false, fmt.Errorf("load task state: %w", err)
 	}
 	latest, ok := taskstate.LatestReview(taskState)
-	if !ok || latest.Status != taskstate.ReviewStatusBlocked || latest.AutomatedBlockerDecisionInterrupted {
+	if !ok || latest.Status != taskstate.ReviewStatusBlocked || latest.AutomatedBlockerDecisionInterrupted || taskstate.ReviewComparisonInputInterrupted(latest) {
 		return taskstate.ReviewAttempt{}, false, nil
 	}
 	indexes, eligible := taskstate.UntargetedBlockingFindingIndexesForFollowUpInState(taskState, latest)
@@ -1072,6 +1102,18 @@ func (s ReviewLifecycleService) continueBlockedReview(base ReviewAttemptContext,
 	}
 	prepared.Review = blocked
 	return prepared, nil
+}
+
+func latestInterruptedReviewComparison(store ReviewLifecycleStore, ctx ReviewAttemptContext) (taskstate.ReviewAttempt, bool, error) {
+	taskState, err := store.Load(ctx.RepoID(), ctx.TaskID())
+	if err != nil {
+		return taskstate.ReviewAttempt{}, false, fmt.Errorf("load task state: %w", err)
+	}
+	latest, ok := taskstate.LatestReview(taskState)
+	if !ok || latest.Status != taskstate.ReviewStatusBlocked || !taskstate.ReviewComparisonInputInterrupted(latest) || strings.TrimSpace(latest.Pipeline) == "" {
+		return taskstate.ReviewAttempt{}, false, nil
+	}
+	return latest, true, nil
 }
 
 func latestInterruptedAutomatedBlockerReview(store ReviewLifecycleStore, ctx ReviewAttemptContext) (taskstate.ReviewAttempt, bool, error) {
@@ -1245,7 +1287,7 @@ func latestAutonomousReviewBlockers(store ReviewLifecycleStore, repoID string, t
 		return taskstate.ReviewAttempt{}, nil, false, fmt.Errorf("task review %s: load review blockers: %w", taskID, err)
 	}
 	latest, ok := taskstate.LatestReview(taskState)
-	if !ok || latest.Status != taskstate.ReviewStatusBlocked || latest.AutomatedBlockerDecisionInterrupted {
+	if !ok || latest.Status != taskstate.ReviewStatusBlocked || latest.AutomatedBlockerDecisionInterrupted || taskstate.ReviewComparisonInputInterrupted(latest) {
 		return taskstate.ReviewAttempt{}, nil, false, nil
 	}
 	indexes, eligible := taskstate.UntargetedBlockingFindingIndexesForFollowUpInState(taskState, latest)
