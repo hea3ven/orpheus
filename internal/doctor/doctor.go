@@ -2,6 +2,7 @@
 package doctor
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
 const (
@@ -24,12 +26,23 @@ type Options struct {
 	Registry registry.Registry
 	Fix      bool
 	Env      map[string]string
+	Probe    workflow.ProcessProbe
 }
 
 // Result summarizes one doctor diagnostics run.
 type Result struct {
-	Rows    []Row
-	Summary Summary
+	Rows               []Row
+	ImplementationRows []ImplementationRunRow
+	Summary            Summary
+}
+
+// ImplementationRunRow describes stale attached-process recovery diagnostics.
+type ImplementationRunRow struct {
+	RepoID  string
+	TaskID  string
+	Attempt int
+	Outcome string
+	Reason  string
 }
 
 // Summary contains operator/script-friendly diagnostic counts.
@@ -93,7 +106,7 @@ func Run(opts Options) (Result, error) {
 			if err != nil {
 				return Result{}, fmt.Errorf("doctor repo %s task %s: %w", repo.ID, taskID, err)
 			}
-			if err := diagnoseTask(&result, store, env, repo, taskState, opts.Fix); err != nil {
+			if err := diagnoseTask(&result, opts.Paths, store, env, repo, taskState, opts.Fix, opts.Probe); err != nil {
 				return Result{}, err
 			}
 		}
@@ -103,12 +116,17 @@ func Run(opts Options) (Result, error) {
 
 func diagnoseTask(
 	result *Result,
+	paths state.Paths,
 	store taskstate.Store,
 	env map[string]string,
 	repo registry.Repo,
 	taskState taskstate.TaskState,
 	fix bool,
+	probe workflow.ProcessProbe,
 ) error {
+	if err := diagnoseImplementationRunRecovery(result, paths, store, repo, taskState, fix, probe); err != nil {
+		return err
+	}
 	executionDirs := taskExecutionDirs(repo, taskState)
 	if err := diagnoseImplementationExecutions(result, store, env, repo, taskState, executionDirs, fix); err != nil {
 		return err
@@ -117,6 +135,43 @@ func diagnoseTask(
 		return err
 	}
 	return diagnoseSyncConflictExecutions(result, store, env, repo, taskState, fix)
+}
+
+func diagnoseImplementationRunRecovery(
+	result *Result,
+	paths state.Paths,
+	store taskstate.Store,
+	repo registry.Repo,
+	taskState taskstate.TaskState,
+	fix bool,
+	probe workflow.ProcessProbe,
+) error {
+	run, ok := taskstate.ActiveRun(taskState)
+	if !ok {
+		return nil
+	}
+	inspection := workflow.InspectImplementationRun(run, probe)
+	if inspection.Condition == workflow.ImplementationRunNotRunning {
+		return nil
+	}
+	outcome := string(inspection.Condition)
+	if fix && inspection.Condition == workflow.ImplementationRunRecoverable {
+		reconciled, err := workflow.ReconcileImplementationRun(context.Background(), paths, store, repo.ID, taskState.TaskID, run.Attempt, "doctor_fix", probe)
+		switch {
+		case err != nil:
+			outcome = "interruption_failed"
+			inspection.Reason = "interruption_record_failed: " + err.Error()
+		case reconciled.Condition == workflow.ImplementationRunRecoverable:
+			outcome = "interrupted"
+		default:
+			outcome = string(reconciled.Condition)
+			inspection.Reason = "diagnosed_attempt_no_longer_active"
+		}
+	}
+	result.ImplementationRows = append(result.ImplementationRows, ImplementationRunRow{
+		RepoID: repo.ID, TaskID: taskState.TaskID, Attempt: run.Attempt, Outcome: outcome, Reason: inspection.Reason,
+	})
+	return nil
 }
 
 func diagnoseImplementationExecutions(

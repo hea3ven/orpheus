@@ -632,6 +632,10 @@ func (s fakeDispatchRunStore) StartRun(string, string, taskstate.StartRunOptions
 	return taskstate.RunAttempt{}, errors.New("not implemented")
 }
 
+func (s fakeDispatchRunStore) RecordRunChildPID(string, string, int, int) (taskstate.RunAttempt, error) {
+	return taskstate.RunAttempt{}, errors.New("not implemented")
+}
+
 func (s fakeDispatchRunStore) RecordRunUsage(string, string, int, taskstate.RecordRunUsageOptions) (taskstate.RunAttempt, error) {
 	return taskstate.RunAttempt{}, errors.New("not implemented")
 }

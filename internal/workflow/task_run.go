@@ -1,9 +1,12 @@
 package workflow
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
@@ -31,6 +34,54 @@ type TaskRunRoute struct {
 	Attempt int
 	Step    string
 	PRURL   string
+}
+
+// PrepareTaskRunOptions supplies the workflow-owned state and process facts
+// needed to reconcile an active implementation run before selecting its route.
+type PrepareTaskRunOptions struct {
+	Paths   state.Paths
+	Store   ImplementationRunRecoveryStore
+	RepoID  string
+	TaskID  string
+	Task    task.Task
+	Probe   ProcessProbe
+	Trigger string
+}
+
+// PreparedTaskRun is the reloaded task state, recovery inspection, and route
+// selected after workflow reconciliation.
+type PreparedTaskRun struct {
+	State      taskstate.TaskState
+	Inspection ImplementationRunInspection
+	Route      TaskRunRoute
+}
+
+// PrepareTaskRun reconciles an active implementation run under mutation
+// protection, reloads state after that decision, and selects the next route.
+func PrepareTaskRun(ctx context.Context, opts PrepareTaskRunOptions) (PreparedTaskRun, error) {
+	if opts.Store == nil {
+		return PreparedTaskRun{}, errors.New("task run preparation store is required")
+	}
+	taskState, err := opts.Store.Load(opts.RepoID, opts.TaskID)
+	if err != nil {
+		return PreparedTaskRun{}, err
+	}
+	var inspection ImplementationRunInspection
+	if active, ok := taskstate.ActiveRun(taskState); ok {
+		inspection, err = ReconcileImplementationRun(ctx, opts.Paths, opts.Store, opts.RepoID, opts.TaskID, active.Attempt, opts.Trigger, opts.Probe)
+		if err != nil {
+			return PreparedTaskRun{}, err
+		}
+		taskState, err = opts.Store.Load(opts.RepoID, opts.TaskID)
+		if err != nil {
+			return PreparedTaskRun{}, fmt.Errorf("reload reconciled local task-state: %w", err)
+		}
+	}
+	route, err := SelectTaskRunRoute(opts.Task, taskState)
+	if err != nil {
+		return PreparedTaskRun{}, err
+	}
+	return PreparedTaskRun{State: taskState, Inspection: inspection, Route: route}, nil
 }
 
 // SelectTaskRunRoute maps the persisted implement-review-fix-finalize state to
@@ -95,7 +146,7 @@ func selectReviewTaskRunRoute(
 	case taskstate.ReviewStatusBlocked:
 		if latestRun.ReviewFollowUp != nil &&
 			latestRun.ReviewFollowUp.ReviewAttempt == latestReview.Attempt &&
-			latestRun.Status == taskstate.RunStatusSucceeded &&
+			completedHandoffStatus(latestRun.Status) &&
 			latestRun.Completion != nil {
 			return TaskRunRoute{Action: TaskRunActionStartReview, Attempt: latestReview.Attempt}, nil
 		}

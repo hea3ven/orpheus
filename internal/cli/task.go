@@ -804,15 +804,24 @@ func runTaskRun(
 	if taskItem.Status == taskmodel.StatusClosed {
 		return fmt.Errorf("task run %s: task is closed", resolved.TaskID)
 	}
-	store := taskstate.NewStoreWithLogger(deps.paths, logger)
-	taskState, err := store.Load(resolved.Source.Repository.ID, resolved.TaskID)
+	prepared, err := workflow.PrepareTaskRun(command.Context(), workflow.PrepareTaskRunOptions{
+		Paths:   deps.paths,
+		Store:   taskstate.NewStoreWithLogger(deps.paths, logger),
+		RepoID:  resolved.Source.Repository.ID,
+		TaskID:  resolved.TaskID,
+		Task:    taskItem,
+		Probe:   agentexec.ProbePID,
+		Trigger: "task_run",
+	})
 	if err != nil {
-		return fmt.Errorf("task run %s: load local task-state: %w", resolved.TaskID, err)
+		return fmt.Errorf("task run %s: prepare workflow route: %w", resolved.TaskID, err)
 	}
-	route, err := workflow.SelectTaskRunRoute(taskItem, taskState)
-	if err != nil {
-		return fmt.Errorf("task run %s: %w", resolved.TaskID, err)
+	if prepared.Inspection.Condition == workflow.ImplementationRunRecoverable {
+		if _, err := fmt.Fprintf(command.ErrOrStderr(), "Task %s: reconciled interrupted implementation attempt (%s).\n", resolved.TaskID, prepared.Inspection.Reason); err != nil {
+			return err
+		}
 	}
+	route := prepared.Route
 	if err := validateTaskRunRouteFlags(resolved.TaskID, route.Action, agentName, pipelineName, repoRootMode); err != nil {
 		return err
 	}
@@ -1138,6 +1147,9 @@ func launchTaskRunAgent(
 		Stdin:  command.InOrStdin(),
 		Stdout: command.OutOrStdout(),
 		Stderr: command.ErrOrStderr(),
+		OnStart: func(pid int) error {
+			return service.RecordChildPID(repoID, taskID, start.Attempt.Attempt, pid)
+		},
 	})
 	if err == nil {
 		span.Finish(command.Context(), logging.StatusSuccess,
@@ -3872,6 +3884,9 @@ func renderTaskHistory(output interface{ Write([]byte) (int, error) }, state tas
 }
 
 func taskHistoryEventDisplay(event taskstate.Event, runs []taskstate.RunAttempt) string {
+	if event.Type == taskstate.EventRunInterrupted {
+		return fmt.Sprintf("Run attempt %d interrupted (%s via %s)", event.Attempt, event.InterruptionReason, event.InterruptionTrigger)
+	}
 	if event.Type != taskstate.EventRunStarted {
 		return event.DisplayName()
 	}

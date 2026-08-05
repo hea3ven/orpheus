@@ -768,6 +768,8 @@ func compactRunDetail(detail status.Detail) (string, bool) {
 		return runAttemptCompact(detail.Attempt), true
 	case status.DetailRunFailed:
 		return runAttemptCompact(detail.Attempt) + " failed", true
+	case status.DetailRunInterrupted:
+		return runAttemptCompact(detail.Attempt) + " interrupted", true
 	case status.DetailRunIncomplete:
 		return runAttemptCompact(detail.Attempt) + " incomplete", true
 	case status.DetailRunUnknownState:

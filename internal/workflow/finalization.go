@@ -1693,7 +1693,7 @@ func isInferableDefaultBranchFinalizationReady(
 	if ctx.latest.Completion == nil {
 		return false
 	}
-	return ctx.latest.Status == taskstate.RunStatusSucceeded || ctx.latest.Status == taskstate.RunStatusRunning
+	return completedHandoffStatus(ctx.latest.Status) || ctx.latest.Status == taskstate.RunStatusRunning
 }
 
 func isInferableFeatureBranchPublicationReady(
@@ -1718,7 +1718,7 @@ func isInferableFeatureBranchPublicationReady(
 	if ctx.latest.Completion == nil {
 		return false
 	}
-	return ctx.latest.Status == taskstate.RunStatusSucceeded
+	return completedHandoffStatus(ctx.latest.Status)
 }
 
 func (s FinalizationService) loadFinalizationContext(repo task.Repository, taskItem task.Task) (finalizationContext, error) {
@@ -1902,7 +1902,7 @@ func validateDefaultBranchLatestRun(
 	}
 
 	classificationRun := latest
-	if latest.Status != taskstate.RunStatusSucceeded {
+	if !completedHandoffStatus(latest.Status) {
 		classificationRun.Status = taskstate.RunStatusSucceeded
 	}
 	localTarget := tasktarget.Target{Kind: tasktarget.TargetMainSolo, Branch: defaultBranch, Worktree: repoRoot}
@@ -1944,7 +1944,7 @@ func validateDefaultBranchLatestStatus(
 	latest taskstate.RunAttempt,
 	allowRunningCompleted bool,
 ) error {
-	if latest.Status == taskstate.RunStatusSucceeded {
+	if completedHandoffStatus(latest.Status) {
 		return nil
 	}
 	if latest.Status == taskstate.RunStatusRunning {
@@ -2027,7 +2027,7 @@ func validateFeatureBranchLatestRun(
 	if latest.Completion == nil {
 		return fmt.Errorf("latest run attempt %d for task %s has no completion block; run `orpheus agent done` first", latest.Attempt, taskItem.ID)
 	}
-	if latest.Status != taskstate.RunStatusSucceeded {
+	if !completedHandoffStatus(latest.Status) {
 		return fmt.Errorf(
 			"latest run attempt %d for task %s is %q, expected %q with a completion block",
 			latest.Attempt,

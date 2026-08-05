@@ -34,6 +34,10 @@ const (
 
 	// RunStatusFailed means the attached agent attempt failed or could not start.
 	RunStatusFailed RunStatus = "failed"
+
+	// RunStatusInterrupted means Orpheus proved attached supervision ended
+	// without observing a process exit result.
+	RunStatusInterrupted RunStatus = "interrupted"
 )
 
 // AgentExecutionPurpose identifies why an agent process was launched.
@@ -88,6 +92,7 @@ const (
 	EventRunStarted           EventType = "run_started"
 	EventRunFinished          EventType = "run_finished"
 	EventRunStartFailed       EventType = "run_start_failed"
+	EventRunInterrupted       EventType = "run_interrupted"
 	EventCompletionRecorded   EventType = "completion_recorded"
 	EventCompletionRepeated   EventType = "completion_repeated"
 	EventChangesPushed        EventType = "changes_pushed"
@@ -290,6 +295,11 @@ type AgentExecution struct {
 	StartedAt      time.Time  `yaml:"started_at"`
 	FinishedAt     *time.Time `yaml:"finished_at,omitempty"`
 	DurationMillis int64      `yaml:"duration_millis,omitempty"`
+
+	// SupervisorPID is the Orpheus process that created this implementation run.
+	// ChildPID is the direct attached command started by that supervisor.
+	SupervisorPID int `yaml:"supervisor_pid,omitempty"`
+	ChildPID      int `yaml:"child_pid,omitempty"`
 
 	Launch       *AgentLaunch      `yaml:"launch,omitempty"`
 	Session      *AgentSession     `yaml:"session,omitempty"`
@@ -548,6 +558,9 @@ type Event struct {
 	Commit        string   `yaml:"commit,omitempty"`
 	Error         string   `yaml:"error,omitempty"`
 
+	InterruptionReason  string `yaml:"interruption_reason,omitempty"`
+	InterruptionTrigger string `yaml:"interruption_trigger,omitempty"`
+
 	Message                       string `yaml:"message,omitempty"`
 	RequestedSummary              string `yaml:"requested_summary,omitempty"`
 	RequestedDescription          string `yaml:"requested_description,omitempty"`
@@ -577,6 +590,8 @@ func (e Event) DisplayName() string {
 		return "Run finished"
 	case EventRunStartFailed:
 		return "Run start failed"
+	case EventRunInterrupted:
+		return "Run interrupted"
 	case EventCompletionRecorded:
 		return "Completion recorded"
 	case EventCompletionRepeated:
@@ -629,6 +644,14 @@ type StartRunOptions struct {
 
 	ReviewFollowUp *ReviewFollowUp
 	Launch         *AgentLaunch
+	SupervisorPID  int
+}
+
+// InterruptRunOptions records why an attached implementation run was safely
+// reconciled after its supervision disappeared.
+type InterruptRunOptions struct {
+	Reason  string
+	Trigger string
 }
 
 func (opts StartRunOptions) agentSelection() AgentSelection {
@@ -951,18 +974,19 @@ func (s Store) StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt
 
 func startRunAgentExecution(opts StartRunOptions, selection AgentSelection, now time.Time) AgentExecution {
 	return normalizeAgentExecution(AgentExecution{
-		Purpose:     AgentExecutionPurposeImplementation,
-		Status:      RunStatusRunning,
-		Agent:       opts.Agent,
-		Profile:     opts.Profile,
-		Harness:     selection.Harness,
-		Model:       selection.Model,
-		Thinking:    selection.Thinking,
-		Command:     opts.Command,
-		Args:        cloneStrings(opts.Args),
-		SessionName: opts.SessionName,
-		StartedAt:   now,
-		Launch:      opts.Launch,
+		Purpose:       AgentExecutionPurposeImplementation,
+		Status:        RunStatusRunning,
+		Agent:         opts.Agent,
+		Profile:       opts.Profile,
+		Harness:       selection.Harness,
+		Model:         selection.Model,
+		Thinking:      selection.Thinking,
+		Command:       opts.Command,
+		Args:          cloneStrings(opts.Args),
+		SessionName:   opts.SessionName,
+		StartedAt:     now,
+		Launch:        opts.Launch,
+		SupervisorPID: opts.SupervisorPID,
 	})
 }
 
@@ -1057,6 +1081,61 @@ func (s Store) FinishRun(repoID, taskID string, attempt int, status RunStatus) (
 		return RunAttempt{}, fmt.Errorf("finish run attempt for task %s/%s: status must be %q or %q, got %q", repoID, taskID, RunStatusSucceeded, RunStatusFailed, status)
 	}
 	return s.completeRun(repoID, taskID, attempt, status, EventRunFinished, "")
+}
+
+// RecordRunChildPID records the direct child PID observed immediately after launch.
+func (s Store) RecordRunChildPID(repoID, taskID string, attempt int, pid int) (RunAttempt, error) {
+	if pid <= 0 {
+		return RunAttempt{}, fmt.Errorf("record child PID for task %s/%s: PID must be positive", repoID, taskID)
+	}
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return RunAttempt{}, err
+	}
+	index := runAttemptIndex(state, attempt)
+	if index < 0 {
+		return RunAttempt{}, fmt.Errorf("record child PID for task %s/%s: attempt %d was not found", repoID, taskID, attempt)
+	}
+	if state.Runs[index].Status != RunStatusRunning {
+		return RunAttempt{}, fmt.Errorf("record child PID for task %s/%s: attempt %d is %q, expected %q", repoID, taskID, attempt, state.Runs[index].Status, RunStatusRunning)
+	}
+	state.Runs[index].Execution.ChildPID = pid
+	if err := s.save(state); err != nil {
+		return RunAttempt{}, err
+	}
+	return state.Runs[index], nil
+}
+
+// InterruptRun records a reconciled interrupted terminal state without claiming
+// a successful or failed process exit.
+func (s Store) InterruptRun(repoID, taskID string, attempt int, opts InterruptRunOptions) (RunAttempt, error) {
+	reason := strings.TrimSpace(opts.Reason)
+	trigger := strings.TrimSpace(opts.Trigger)
+	if reason == "" || trigger == "" {
+		return RunAttempt{}, fmt.Errorf("interrupt run attempt for task %s/%s: reason and trigger are required", repoID, taskID)
+	}
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return RunAttempt{}, err
+	}
+	index := runAttemptIndex(state, attempt)
+	if index < 0 {
+		return RunAttempt{}, fmt.Errorf("interrupt run attempt for task %s/%s: attempt %d was not found", repoID, taskID, attempt)
+	}
+	if state.Runs[index].Status != RunStatusRunning {
+		return RunAttempt{}, fmt.Errorf("interrupt run attempt for task %s/%s: attempt %d is %q, expected %q", repoID, taskID, attempt, state.Runs[index].Status, RunStatusRunning)
+	}
+	now := s.nowUTC()
+	state.Runs[index].Status = RunStatusInterrupted
+	state.Runs[index].Execution.Status = RunStatusInterrupted
+	state.Runs[index].Execution.FinishedAt = &now
+	state.Runs[index].Execution.DurationMillis = durationMillis(state.Runs[index].Execution.StartedAt, now)
+	updated := state.Runs[index]
+	state.Events = append(state.Events, Event{Type: EventRunInterrupted, At: now, Attempt: attempt, Status: RunStatusInterrupted, Agent: updated.Execution.Agent, InterruptionReason: reason, InterruptionTrigger: trigger})
+	if err := s.save(state); err != nil {
+		return RunAttempt{}, err
+	}
+	return updated, nil
 }
 
 // CompleteRun records agent-authored completion facts without finishing the attached run.
@@ -2143,7 +2222,7 @@ func ReviewFindingTargetedByRetryableRun(state TaskState, finding ReviewFinding)
 	for _, run := range state.Runs {
 		if run.Attempt == finding.TargetedByRunAttempt {
 			return run.Status == RunStatusFailed ||
-				(run.Status == RunStatusSucceeded && run.Completion == nil)
+				((run.Status == RunStatusSucceeded || run.Status == RunStatusInterrupted) && run.Completion == nil)
 		}
 	}
 	return false
@@ -3651,6 +3730,8 @@ func normalizeEvent(event Event) Event {
 	event.ConflictFiles = cloneStrings(event.ConflictFiles)
 	event.Commit = strings.TrimSpace(event.Commit)
 	event.Error = strings.TrimSpace(event.Error)
+	event.InterruptionReason = strings.TrimSpace(event.InterruptionReason)
+	event.InterruptionTrigger = strings.TrimSpace(event.InterruptionTrigger)
 	event.Message = strings.TrimSpace(event.Message)
 	event.RequestedSummary = strings.TrimSpace(event.RequestedSummary)
 	event.RequestedDescription = strings.TrimSpace(event.RequestedDescription)
@@ -3678,6 +3759,7 @@ func normalizeAgentExecution(execution AgentExecution) AgentExecution {
 	execution.Command = strings.TrimSpace(execution.Command)
 	execution.Args = cloneStrings(execution.Args)
 	execution.SessionName = strings.TrimSpace(execution.SessionName)
+	execution.SupervisorPID, execution.ChildPID = normalizeProcessPIDs(execution.SupervisorPID, execution.ChildPID)
 	if !execution.StartedAt.IsZero() {
 		execution.StartedAt = execution.StartedAt.UTC()
 	}
@@ -3720,6 +3802,16 @@ func normalizeAgentExecution(execution AgentExecution) AgentExecution {
 	return execution
 }
 
+func normalizeProcessPIDs(supervisorPID int, childPID int) (int, int) {
+	if supervisorPID < 0 {
+		supervisorPID = 0
+	}
+	if childPID < 0 {
+		childPID = 0
+	}
+	return supervisorPID, childPID
+}
+
 func normalizeOptionalAgentExecution(execution *AgentExecution) *AgentExecution {
 	if execution == nil {
 		return nil
@@ -3737,6 +3829,9 @@ func validateAgentExecution(execution AgentExecution) error {
 	}
 	if execution.StartedAt.IsZero() {
 		return errors.New("started_at is required")
+	}
+	if execution.SupervisorPID < 0 || execution.ChildPID < 0 {
+		return errors.New("process PIDs cannot be negative")
 	}
 	if execution.Status == RunStatusRunning && execution.FinishedAt != nil {
 		return errors.New("finished_at cannot be recorded while running")
@@ -4415,6 +4510,9 @@ func validateEvent(event Event) error {
 	if event.Type == EventFinalizationFailed && strings.TrimSpace(event.Error) == "" {
 		return fmt.Errorf("event %q requires an error", event.Type)
 	}
+	if event.Type == EventRunInterrupted && (strings.TrimSpace(event.InterruptionReason) == "" || strings.TrimSpace(event.InterruptionTrigger) == "") {
+		return fmt.Errorf("event %q requires interruption reason and trigger", event.Type)
+	}
 	switch event.Type {
 	case EventSyncConflictStarted, EventSyncConflictFinished, EventSyncConflictFailed:
 		if event.Execution == nil {
@@ -4443,7 +4541,7 @@ func validateEvent(event Event) error {
 
 func validRunStatus(status RunStatus) bool {
 	switch status {
-	case RunStatusRunning, RunStatusSucceeded, RunStatusFailed:
+	case RunStatusRunning, RunStatusSucceeded, RunStatusFailed, RunStatusInterrupted:
 		return true
 	default:
 		return false
@@ -4502,6 +4600,7 @@ func validEventType(eventType EventType) bool {
 		EventRunStarted,
 		EventRunFinished,
 		EventRunStartFailed,
+		EventRunInterrupted,
 		EventCompletionRecorded,
 		EventCompletionRepeated,
 		EventChangesPushed,

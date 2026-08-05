@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
@@ -22,6 +24,9 @@ import (
 const (
 	dispatchSetupLockOperation        = "task run setup"
 	dispatchFinalizationLockOperation = "task run finalization"
+	dispatchChildPIDLockOperation     = "task run child PID persistence"
+	childPIDLockRetryDelay            = 10 * time.Millisecond
+	childPIDLockRetryCount            = 100
 )
 
 // DispatchBackend is the backend capability set needed to dispatch a task run.
@@ -43,6 +48,7 @@ type DispatchRunStore interface {
 		opts taskstate.SetupEventOptions,
 	) (taskstate.Event, error)
 	StartRun(repoID, taskID string, opts taskstate.StartRunOptions) (taskstate.RunAttempt, error)
+	RecordRunChildPID(repoID, taskID string, attempt int, pid int) (taskstate.RunAttempt, error)
 	RecordRunUsage(repoID, taskID string, attempt int, opts taskstate.RecordRunUsageOptions) (taskstate.RunAttempt, error)
 	TargetReviewFindings(repoID, taskID string, reviewAttempt int, findingIndexes []int, runAttempt int) (taskstate.ReviewAttempt, error)
 	FinishRun(repoID, taskID string, attempt int, status taskstate.RunStatus) (taskstate.RunAttempt, error)
@@ -166,6 +172,27 @@ func (s DispatchService) Start(ctx context.Context, opts DispatchStartOptions) (
 		return DispatchStartResult{}, err
 	}
 	return result, nil
+}
+
+// RecordChildPID persists the direct child PID while the launch is paused at
+// the shared attached-process boundary. It retries brief lock contention from
+// an immediately-started agent completion so both state updates are preserved.
+func (s DispatchService) RecordChildPID(repoID string, taskID string, attempt int, pid int) error {
+	if err := s.validate(); err != nil {
+		return err
+	}
+	var err error
+	for retry := 0; retry < childPIDLockRetryCount; retry++ {
+		err = state.WithGlobalMutationLockLogger(context.Background(), s.Paths, dispatchChildPIDLockOperation, s.Logger, func() error {
+			_, recordErr := s.RunStore.RecordRunChildPID(repoID, taskID, attempt, pid)
+			return recordErr
+		}, dispatchAttemptAttrs(repoID, taskID, attempt)...)
+		if err == nil || !errors.Is(err, os.ErrExist) {
+			return err
+		}
+		time.Sleep(childPIDLockRetryDelay)
+	}
+	return err
 }
 
 // Finish records a successful attached run while holding the global mutation lock.
@@ -619,10 +646,11 @@ func (s DispatchService) recordStart(
 		Worktree:       setup.WorktreePath,
 		ReviewFollowUp: taskstateReviewFollowUp(followUp),
 		Launch:         launch,
+		SupervisorPID:  os.Getpid(),
 	})
 	if err != nil {
 		if errors.Is(err, taskstate.ErrActiveRun) {
-			return taskstate.RunAttempt{}, fmt.Errorf("%w; M3 cannot reconcile stale attached runs automatically", err)
+			return taskstate.RunAttempt{}, fmt.Errorf("%w; inspect the implementation run for active supervision", err)
 		}
 		return taskstate.RunAttempt{}, fmt.Errorf("record run start: %w", err)
 	}
