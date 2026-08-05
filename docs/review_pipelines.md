@@ -15,7 +15,35 @@ the code-change rationale without changing PR title or body selection.
 
 Keeping a check or agent-review blocker preserves it, dispatches a targeted
 implementer follow-up, records which findings the run targets, and starts a
-fresh review attempt after the fix records completion. A manual reviewer who
+fresh review attempt after the fix records completion.
+
+## Paired AI reviewer comparison (opt-in)
+
+Set `ORPHEUS_ALTERNATE_REVIEWER_PROFILE` to the name of a configured agent
+profile to run an alternate reviewer after every `agent_review` execution:
+
+```bash
+export ORPHEUS_ALTERNATE_REVIEWER_PROFILE=reviewer-alt
+```
+
+The primary reviewer always runs first and remains authoritative. The alternate
+then reviews the same restored read-only candidate and review context. Orpheus
+shows the two finding sets separately and requires an operator classification
+for every alternate finding: admit it to the authoritative flow, mark it a
+duplicate of a numbered primary finding, or exclude it. Only admitted findings
+participate in blocker handling, targeted fixes, separate-task proposals,
+approval, and publication. Duplicates and exclusions remain inspectable with
+raw findings and reviewer execution provenance in `orpheus task review show`.
+
+The experiment is sequential and is repeated for every new review attempt,
+including reviews after targeted fixes. It can therefore approximately double
+AI reviewer time and cost. If the primary fails, Orpheus records the operational
+review failure and does not launch the alternate. Alternate profile-resolution,
+launch, or process failures are persisted and displayed but do not invalidate a
+successful primary review. If comparison input is interrupted, Orpheus records
+no implicit classifications or admissions and directs the operator to start a
+fresh review with `orpheus task run <task-id>`. Leave the variable unset or
+blank to retain the normal single-reviewer workflow. A manual reviewer who
 records blockers and chooses `finish/block` implicitly keeps all eligible
 blockers from that gate; it launches the same one-follow-up-per-blocked-attempt
 repair loop without another confirmation. Automated downgrades and waivers
