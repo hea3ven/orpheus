@@ -1354,7 +1354,7 @@ func CompletedTaskRunReadyForReview(store DispatchRunStore, repoID string, taskI
 	if err != nil || !ok {
 		return false, err
 	}
-	return latest.Attempt == attempt && latest.Status == taskstate.RunStatusSucceeded && latest.Completion != nil, nil
+	return latest.Attempt == attempt && completedHandoffStatus(latest.Status) && latest.Completion != nil, nil
 }
 
 func resumedReviewImplementerName(ctx ReviewAttemptContext) (string, error) {

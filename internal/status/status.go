@@ -88,6 +88,7 @@ const (
 	DetailNoRun                    DetailKind = "no_run"
 	DetailRunRunning               DetailKind = "run_running"
 	DetailRunFailed                DetailKind = "run_failed"
+	DetailRunInterrupted           DetailKind = "run_interrupted"
 	DetailRunIncomplete            DetailKind = "run_incomplete"
 	DetailRunUnknownState          DetailKind = "run_unknown_state"
 	DetailOpenTaskRunHistory       DetailKind = "open_task_run_history"
@@ -581,6 +582,11 @@ func classifyInProgress(latestRun *taskstate.RunAttempt) policyResult {
 		return newPolicyResult(readinessWorking, runAttemptDetail(*latestRun), runDetail(*latestRun))
 	case taskstate.RunStatusFailed:
 		return newPolicyResult(readinessAttention, runAttemptDetail(*latestRun), runDetail(*latestRun))
+	case taskstate.RunStatusInterrupted:
+		if latestRun.Completion != nil {
+			return newPolicyResult(readinessReview, "implementation handoff interrupted; run task run to continue review", runDetail(*latestRun))
+		}
+		return newPolicyResult(readinessIdle, "implementation interrupted; retry task run", runDetail(*latestRun))
 	case taskstate.RunStatusSucceeded:
 		return newPolicyResult(
 			readinessIdle,
@@ -631,6 +637,8 @@ func runDetail(run taskstate.RunAttempt) Detail {
 		return Detail{Kind: DetailRunRunning, Attempt: run.Attempt}
 	case taskstate.RunStatusFailed:
 		return Detail{Kind: DetailRunFailed, Attempt: run.Attempt}
+	case taskstate.RunStatusInterrupted:
+		return Detail{Kind: DetailRunInterrupted, Attempt: run.Attempt}
 	case taskstate.RunStatusSucceeded:
 		return Detail{Kind: DetailRunIncomplete, Attempt: run.Attempt}
 	default:
@@ -648,6 +656,8 @@ func runAttemptDetail(run taskstate.RunAttempt) string {
 		return fmt.Sprintf("run attempt %d is running", run.Attempt)
 	case taskstate.RunStatusFailed:
 		return fmt.Sprintf("run attempt %d failed", run.Attempt)
+	case taskstate.RunStatusInterrupted:
+		return fmt.Sprintf("run attempt %d was interrupted", run.Attempt)
 	case taskstate.RunStatusSucceeded:
 		return fmt.Sprintf("run attempt %d succeeded", run.Attempt)
 	default:

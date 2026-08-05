@@ -3,11 +3,13 @@ package agent_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -49,6 +51,56 @@ func (g *fakeGitState) Commit(ctx context.Context, dir string, message string) (
 		return "", g.commitErr
 	}
 	return g.commit, nil
+}
+
+func TestChildPIDPersistenceAndImmediateCompletionPreserveBothFacts(t *testing.T) {
+	must := require.New(t)
+	fixture := newActiveContextFixture(t, "op-main")
+	taskItem := mainTask("op-main", fixture.repoPath)
+	run, err := fixture.store.StartRun("alpha", "op-main", taskstate.StartRunOptions{
+		Agent: "recorder", Branch: "main", Worktree: fixture.repoPath, SupervisorPID: 123,
+	})
+	must.NoError(err)
+	completion := agent.CompletionService{
+		Paths:    fixture.paths,
+		Resolver: fixture.resolver(taskItem, mainEnv("op-main", fixture.repoPath), fixture.repoPath),
+		RunStore: fixture.store,
+		Git:      &fakeGitState{branch: "main", hasChanges: true},
+	}
+	dispatch := workflow.DispatchService{Paths: fixture.paths, RunStore: fixture.store}
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wait sync.WaitGroup
+	wait.Add(2)
+	go func() {
+		defer wait.Done()
+		<-start
+		errs <- dispatch.RecordChildPID("alpha", "op-main", run.Attempt, 456)
+	}()
+	go func() {
+		defer wait.Done()
+		<-start
+		_, completeErr := completion.Complete(context.Background(), agent.CompleteOptions{
+			Summary:              "Implemented main completion",
+			Description:          "Recorded local review completion data.",
+			DetailedDescription:  "Detailed PR body.",
+			TechnicalExplanation: "Technical explanation.",
+		})
+		errs <- completeErr
+	}()
+	close(start)
+	wait.Wait()
+	close(errs)
+	for concurrentErr := range errs {
+		must.NoError(concurrentErr)
+	}
+
+	latest, ok, err := fixture.store.LatestRun("alpha", "op-main")
+	must.NoError(err)
+	must.True(ok)
+	must.Equal(456, latest.Execution.ChildPID)
+	must.NotNil(latest.Completion)
 }
 
 func TestCompletionServiceCompletesMainRun(t *testing.T) {

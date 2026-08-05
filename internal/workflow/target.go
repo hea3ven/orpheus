@@ -31,6 +31,10 @@ type CompletionClassification struct {
 	Lifecycle ReviewLifecycle
 }
 
+func completedHandoffStatus(status taskstate.RunStatus) bool {
+	return status == taskstate.RunStatusSucceeded || status == taskstate.RunStatusInterrupted
+}
+
 // ClassifyCompletionTarget classifies a successful Orpheus completion into its review lifecycle.
 func ClassifyCompletionTarget(
 	repo task.Repository,
@@ -38,7 +42,7 @@ func ClassifyCompletionTarget(
 	taskTarget taskstate.GitFacts,
 	latestRun *taskstate.RunAttempt,
 ) (CompletionClassification, bool) {
-	if latestRun == nil || latestRun.Status != taskstate.RunStatusSucceeded || latestRun.Completion == nil {
+	if latestRun == nil || !completedHandoffStatus(latestRun.Status) || latestRun.Completion == nil {
 		return CompletionClassification{}, false
 	}
 
@@ -101,7 +105,7 @@ func ClassifyExpectedCompletionTarget(
 	taskTarget taskstate.GitFacts,
 	latestRun *taskstate.RunAttempt,
 ) (CompletionClassification, bool) {
-	if latestRun == nil || latestRun.Status != taskstate.RunStatusSucceeded || latestRun.Completion == nil {
+	if latestRun == nil || !completedHandoffStatus(latestRun.Status) || latestRun.Completion == nil {
 		return CompletionClassification{}, false
 	}
 
