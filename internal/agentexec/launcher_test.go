@@ -72,6 +72,28 @@ func assertSupportedAgentBlockedBeforePATHLookup(t *testing.T) {
 	}
 }
 
+func TestAttachedLauncherReportsDirectChildPIDBeforeWait(t *testing.T) {
+	binDir := t.TempDir()
+	fake := filepath.Join(binDir, "agent")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nsleep 0.01\n"), 0o755); err != nil {
+		t.Fatalf("write fake: %v", err)
+	}
+	var observed int
+	err := (agentexec.AttachedLauncher{}).Run(context.Background(), agentexec.Command{Name: "agent", Command: fake}, agentexec.LaunchOptions{
+		Dir: t.TempDir(),
+		OnStart: func(pid int) error {
+			observed = pid
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if observed <= 0 {
+		t.Fatalf("observed PID = %d, want positive direct child PID", observed)
+	}
+}
+
 func TestAttachedLauncherRunsExplicitlyRegisteredFake(t *testing.T) {
 	binDir := t.TempDir()
 	marker := filepath.Join(t.TempDir(), "fake-ran")

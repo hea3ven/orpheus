@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
+	"time"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/logging"
@@ -13,7 +15,11 @@ import (
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
-const completionLockOperation = "agent completion"
+const (
+	completionLockOperation  = "agent completion"
+	completionLockRetryDelay = 10 * time.Millisecond
+	completionLockRetryCount = 100
+)
 
 // CompleteOptions describes the agent-authored completion payload.
 type CompleteOptions struct {
@@ -94,14 +100,25 @@ func (s CompletionService) Complete(ctx context.Context, opts CompleteOptions) (
 
 	lockAttrs := s.completionLockAttrs()
 	var result CompleteResult
-	err := state.WithGlobalMutationLockLogger(ctx, s.Paths, completionLockOperation, s.Logger, func() error {
-		completed, err := s.completeLocked(ctx, opts, gitState)
-		if err != nil {
-			return err
+	var err error
+	for retry := 0; retry < completionLockRetryCount; retry++ {
+		err = state.WithGlobalMutationLockLogger(ctx, s.Paths, completionLockOperation, s.Logger, func() error {
+			completed, completeErr := s.completeLocked(ctx, opts, gitState)
+			if completeErr != nil {
+				return completeErr
+			}
+			result = completed
+			return nil
+		}, lockAttrs...)
+		if err == nil || !errors.Is(err, os.ErrExist) {
+			break
 		}
-		result = completed
-		return nil
-	}, lockAttrs...)
+		select {
+		case <-ctx.Done():
+			return CompleteResult{}, ctx.Err()
+		case <-time.After(completionLockRetryDelay):
+		}
+	}
 	if err != nil {
 		return CompleteResult{}, err
 	}

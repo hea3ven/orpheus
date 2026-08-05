@@ -59,7 +59,17 @@ func runDoctor(command *cobra.Command, opts *rootOptions, fix bool) error {
 }
 
 func renderDoctorResult(output interface{ Write([]byte) (int, error) }, result doctor.Result) error {
-	if _, err := fmt.Fprintln(output, "Agent usage telemetry"); err != nil {
+	if _, err := fmt.Fprintln(output, "Implementation run recovery"); err != nil {
+		return err
+	}
+	if len(result.ImplementationRows) == 0 {
+		if _, err := fmt.Fprintln(output, "No running implementation runs found."); err != nil {
+			return err
+		}
+	} else if err := renderTable(output, []string{"REPO", "TASK", "ATTEMPT", "OUTCOME", "REASON"}, implementationRunRows(result.ImplementationRows)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(output, "\nAgent usage telemetry"); err != nil {
 		return err
 	}
 	if len(result.Rows) == 0 {
@@ -109,6 +119,20 @@ func renderDoctorResult(output interface{ Write([]byte) (int, error) }, result d
 			strconv.Itoa(result.Summary.Ambiguous),
 		}},
 	)
+}
+
+func implementationRunRows(rows []doctor.ImplementationRunRow) [][]string {
+	rendered := make([][]string, 0, len(rows))
+	for _, row := range rows {
+		rendered = append(rendered, []string{
+			formatTaskStatsField(row.RepoID),
+			formatTaskStatsField(row.TaskID),
+			formatDoctorAttempt(row.Attempt),
+			formatTaskStatsField(row.Outcome),
+			formatTaskStatsField(row.Reason),
+		})
+	}
+	return rendered
 }
 
 func doctorRows(rows []doctor.Row) [][]string {

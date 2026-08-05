@@ -29,6 +29,11 @@ type LaunchOptions struct {
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
+
+	// OnStart receives the direct child PID immediately after it starts. Returning
+	// an error stops the child before Run returns, so callers never knowingly
+	// continue an untracked attached execution.
+	OnStart func(pid int) error
 }
 
 // Launcher runs a resolved agent command.
@@ -106,6 +111,13 @@ func (l AttachedLauncher) Run(ctx context.Context, command Command, opts LaunchO
 			)}
 		}
 		return &StartError{Name: command.Name, Err: err}
+	}
+	if opts.OnStart != nil {
+		if err := opts.OnStart(process.Process.Pid); err != nil {
+			_ = process.Process.Kill()
+			_ = process.Wait()
+			return fmt.Errorf("record started agent %q: %w", command.Name, err)
+		}
 	}
 	if err := process.Wait(); err != nil {
 		return fmt.Errorf("run agent %q: %w", command.Name, err)

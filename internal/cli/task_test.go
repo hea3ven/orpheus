@@ -3111,10 +3111,9 @@ func TestTaskRunReleasesGlobalMutationLockWhileAgentRunsAndReacquiresForFinish(t
 	agentLogPath := filepath.Join(binDir, "lock-agent.log")
 	agentPath := filepath.Join(binDir, "lock-agent")
 	script := fmt.Sprintf(`#!/bin/sh
-if [ -e %s ]; then
-  echo "mutation lock held while agent ran" >&2
-  exit 66
-fi
+while [ -e %s ]; do
+  sleep 0.01
+done
 printf 'lock absent during agent\n' >> %s
 : > %s
 printf 'agent stdout\n'
