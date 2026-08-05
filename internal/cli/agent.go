@@ -242,12 +242,21 @@ func runAgentReviewAdd(command *cobra.Command, opts *rootOptions, addOpts agentR
 	if err != nil {
 		return fmt.Errorf("agent review add: %w", err)
 	}
-	reviewAttempt, err := store.RecordReviewFinding(
-		reviewContext.Repository.ID,
-		reviewContext.Task.ID,
-		reviewContext.Review.Attempt,
-		finding,
-	)
+	role := strings.TrimSpace(os.Getenv("ORPHEUS_REVIEWER_ROLE"))
+	var reviewAttempt taskstate.ReviewAttempt
+	if role == "alternate" {
+		reviewAttempt, err = store.RecordAlternateReviewFinding(
+			reviewContext.Repository.ID, reviewContext.Task.ID, reviewContext.Review.Attempt,
+			reviewContext.Review.EnvStep, finding,
+		)
+	} else {
+		if role == "primary" {
+			finding.Reviewer = "primary"
+		}
+		reviewAttempt, err = store.RecordReviewFinding(
+			reviewContext.Repository.ID, reviewContext.Task.ID, reviewContext.Review.Attempt, finding,
+		)
+	}
 	if err != nil {
 		return fmt.Errorf("agent review add: %w", err)
 	}

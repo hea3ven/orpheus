@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/spf13/cobra"
@@ -150,8 +151,114 @@ func renderReviewSteps(output io.Writer, steps []taskstate.ReviewStep) error {
 		if _, err := fmt.Fprintln(output, line); err != nil {
 			return err
 		}
+		if step.Comparison != nil {
+			if err := renderReviewExecution(output, "Primary", step.Execution); err != nil {
+				return err
+			}
+			if err := renderReviewComparison(output, step.Comparison); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+func renderReviewComparison(output io.Writer, comparison *taskstate.ReviewComparison) error {
+	if comparison == nil {
+		return nil
+	}
+	if err := renderReviewExecution(output, "Alternate", comparison.AlternateExecution); err != nil {
+		return err
+	}
+	if strings.TrimSpace(comparison.Failure) != "" {
+		if _, err := fmt.Fprintf(output, "    Alternate failure: %s\n", comparison.Failure); err != nil {
+			return err
+		}
+	}
+	if comparison.InputInterrupted {
+		if _, err := fmt.Fprintln(output, "    Alternate comparison: input interrupted (fresh review required)"); err != nil {
+			return err
+		}
+	}
+	if len(comparison.AlternateFindings) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintln(output, "    Raw alternate findings:"); err != nil {
+		return err
+	}
+	for index, alternate := range comparison.AlternateFindings {
+		if err := renderRawAlternateFinding(output, index, alternate); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func renderReviewExecution(output io.Writer, label string, execution *taskstate.AgentExecution) error {
+	if execution == nil {
+		return nil
+	}
+	if _, err := fmt.Fprintf(output, "    %s execution:\n      Profile: %s\n      Model: %s\n      Harness: %s\n      Thinking: %s\n      Status: %s\n      Agent: %s\n      Session name: %s\n      Command: %s\n      Args: %s\n      Started: %s\n      Finished: %s\n      Duration: %dms\n", label, formatReviewValue(execution.Profile), formatReviewValue(execution.Model), formatReviewValue(execution.Harness), formatReviewValue(execution.Thinking), execution.Status, formatReviewValue(execution.Agent), formatReviewValue(execution.SessionName), formatReviewValue(execution.Command), formatReviewValue(strings.Join(execution.Args, " ")), execution.StartedAt.UTC().Format(time.RFC3339), formatExecutionFinishedAt(execution), execution.DurationMillis); err != nil {
+		return err
+	}
+	if execution.Session != nil {
+		if _, err := fmt.Fprintf(output, "      Session: id=%s log=%s\n", formatReviewValue(execution.Session.ID), formatReviewValue(execution.Session.LogPath)); err != nil {
+			return err
+		}
+	}
+	if execution.Usage != nil {
+		if _, err := fmt.Fprintf(output, "      Usage: input=%d cached_input=%d output=%d reasoning_output=%d total=%d\n", execution.Usage.InputTokens, execution.Usage.CachedInputTokens, execution.Usage.OutputTokens, execution.Usage.ReasoningOutputTokens, execution.Usage.TotalTokens); err != nil {
+			return err
+		}
+	}
+	if execution.UsageCost != nil {
+		if _, err := fmt.Fprintf(output, "      Usage cost: %d micro-USD (%s; %s; %s)\n", execution.UsageCost.AmountMicroUSD, formatReviewValue(execution.UsageCost.Kind), formatReviewValue(execution.UsageCost.Currency), formatReviewValue(execution.UsageCost.Source)); err != nil {
+			return err
+		}
+	}
+	if !execution.UsageCapture.IsZero() {
+		if _, err := fmt.Fprintf(output, "      Usage capture: %s (%s; candidates=%d)\n", execution.UsageCapture.Status, formatReviewValue(execution.UsageCapture.Reason), execution.UsageCapture.CandidateCount); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func formatExecutionFinishedAt(execution *taskstate.AgentExecution) string {
+	if execution.FinishedAt == nil {
+		return "-"
+	}
+	return execution.FinishedAt.UTC().Format(time.RFC3339)
+}
+
+func renderRawAlternateFinding(output io.Writer, index int, alternate taskstate.AlternateReviewFinding) error {
+	finding := alternate.Finding
+	lines := []string{
+		fmt.Sprintf("      Alternate finding %d [%s]:", index+1, formatAlternateClassification(alternate)),
+		fmt.Sprintf("        Type: %s", formatReviewValue(string(finding.Type))),
+		fmt.Sprintf("        Title: %s", formatReviewValue(finding.Title)),
+		fmt.Sprintf("        Description: %s", formatReviewValue(finding.Description)),
+	}
+	if finding.SuggestedAction != "" {
+		lines = append(lines, "        Suggested action: "+finding.SuggestedAction)
+	}
+	if !finding.TaskProposal.IsZero() {
+		lines = append(lines, "        Task title: "+finding.TaskProposal.Title, "        Task description: "+finding.TaskProposal.Description, "        Task acceptance criteria: "+finding.TaskProposal.AcceptanceCriteria)
+	}
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(output, line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func formatAlternateClassification(alternate taskstate.AlternateReviewFinding) string {
+	classification := formatReviewValue(string(alternate.Classification))
+	if alternate.Classification == taskstate.AlternateFindingDuplicate {
+		return classification + fmt.Sprintf(" of primary finding %d", alternate.DuplicateOf+1)
+	}
+	return classification
 }
 
 func renderReviewFindings(output io.Writer, taskState taskstate.TaskState, review taskstate.ReviewAttempt) error {
@@ -216,6 +323,9 @@ func renderReviewFinding(output io.Writer, taskState taskstate.TaskState, indexe
 		fmt.Sprintf("      Title: %s", formatReviewValue(finding.Title)),
 		fmt.Sprintf("      Description: %s", formatReviewValue(finding.Description)),
 		fmt.Sprintf("      Resolution: %s", reviewFindingResolution(taskState, finding)),
+	}
+	if strings.TrimSpace(finding.Reviewer) != "" {
+		lines = append(lines, fmt.Sprintf("      Reviewer: %s", finding.Reviewer))
 	}
 	if strings.TrimSpace(finding.SuggestedAction) != "" {
 		lines = append(lines, fmt.Sprintf("      Suggested action: %s", finding.SuggestedAction))
@@ -351,6 +461,7 @@ func createdReviewFollowUps(taskState taskstate.TaskState) []createdReviewFollow
 	return followUps
 }
 
+//nolint:funlen // Review lifecycle guidance reads clearest as a single status switch.
 func renderReviewNextStep(output io.Writer, taskID string, taskState taskstate.TaskState, review taskstate.ReviewAttempt) error {
 	switch review.Status {
 	case taskstate.ReviewStatusWaitingForManual:
@@ -362,6 +473,10 @@ func renderReviewNextStep(output io.Writer, taskID string, taskState taskstate.T
 		)
 		return err
 	case taskstate.ReviewStatusBlocked:
+		if taskstate.ReviewComparisonInputInterrupted(review) {
+			_, err := fmt.Fprintf(output, "\nNext step: alternate comparison input was interrupted; run `orpheus task run %s` to start a fresh review.\n", taskID)
+			return err
+		}
 		if review.AutomatedBlockerDecisionInterrupted {
 			_, err := fmt.Fprintf(
 				output,

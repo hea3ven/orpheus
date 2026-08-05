@@ -1419,6 +1419,7 @@ func attachInteractiveReviewHooks(
 		}, nil
 	}
 	presentation.PromptAutomatedBlockers = taskReviewAutomatedBlockerPrompt(command, reviewInput)
+	presentation.PromptAlternateFindings = taskReviewAlternateFindingPrompt(command, reviewInput)
 	return presentation
 }
 
@@ -2346,6 +2347,96 @@ func promptAutomatedBlockerDecision(
 			}
 		}
 	}
+}
+
+//nolint:gocognit,funlen // The complete prompt keeps each alternate classification and its validation adjacent.
+func taskReviewAlternateFindingPrompt(command *cobra.Command, reader *bufio.Reader) func(review.AlternateReviewComparison) ([]review.AlternateFindingDecision, error) {
+	return func(comparison review.AlternateReviewComparison) ([]review.AlternateFindingDecision, error) {
+		output := command.ErrOrStderr()
+		if _, err := fmt.Fprintf(output, "\nPaired reviewer comparison for step %q. Primary findings are authoritative; classify every alternate finding.\n", comparison.Step.Name); err != nil {
+			return nil, err
+		}
+		if err := renderComparisonReviewerProvenance(output, "Primary", comparison.PrimaryExecution); err != nil {
+			return nil, err
+		}
+		if err := renderComparisonReviewerProvenance(output, "Alternate", comparison.AlternateExecution); err != nil {
+			return nil, err
+		}
+		if len(comparison.Primary) == 0 {
+			if _, err := fmt.Fprintln(output, "  Primary findings: (none)"); err != nil {
+				return nil, err
+			}
+		} else {
+			if _, err := fmt.Fprintln(output, "  Primary findings:"); err != nil {
+				return nil, err
+			}
+			for _, primary := range comparison.Primary {
+				if err := renderAutomatedBlocker(output, primary); err != nil {
+					return nil, err
+				}
+			}
+		}
+		decisions := make([]review.AlternateFindingDecision, 0, len(comparison.Alternate))
+		for _, alternate := range comparison.Alternate {
+			if _, err := fmt.Fprintf(output, "  Alternate finding %d:\n    Title: %s\n    Description: %s\n", alternate.Index+1, formatReviewValue(alternate.Finding.Title), formatReviewValue(alternate.Finding.Description)); err != nil {
+				return nil, err
+			}
+			for {
+				if _, err := fmt.Fprintf(output, "Classification [a=admit, d=duplicate primary, e=exclude, q=cancel]: "); err != nil {
+					return nil, err
+				}
+				line, err := readReviewLineWithReadError(reader, "read alternate finding classification", automatedBlockerInputReadError)
+				if err != nil {
+					return nil, err
+				}
+				switch strings.ToLower(strings.TrimSpace(line)) {
+				case "a", "admit", "":
+					decisions = append(decisions, review.AlternateFindingDecision{FindingIndex: alternate.Index, Classification: taskstate.AlternateFindingAdmitted})
+				case "e", "exclude":
+					decisions = append(decisions, review.AlternateFindingDecision{FindingIndex: alternate.Index, Classification: taskstate.AlternateFindingExcluded})
+				case "d", "duplicate":
+					if len(comparison.Primary) == 0 {
+						if _, err := fmt.Fprintln(output, "No primary findings are available as duplicate targets."); err != nil {
+							return nil, err
+						}
+						continue
+					}
+					if _, err := fmt.Fprint(output, "Duplicate of primary finding number: "); err != nil {
+						return nil, err
+					}
+					target, err := readReviewLineWithReadError(reader, "read primary duplicate target", automatedBlockerInputReadError)
+					if err != nil {
+						return nil, err
+					}
+					number, parseErr := strconv.Atoi(strings.TrimSpace(target))
+					if parseErr != nil || number <= 0 {
+						if _, err := fmt.Fprintln(output, "Enter a valid primary finding number."); err != nil {
+							return nil, err
+						}
+						continue
+					}
+					decisions = append(decisions, review.AlternateFindingDecision{FindingIndex: alternate.Index, Classification: taskstate.AlternateFindingDuplicate, DuplicateOf: number - 1})
+				case "q", "quit", "cancel":
+					return nil, review.ErrAutomatedBlockerInputUnavailable
+				default:
+					if _, err := fmt.Fprintln(output, "Choose admit, duplicate, exclude, or cancel."); err != nil {
+						return nil, err
+					}
+					continue
+				}
+				break
+			}
+		}
+		return decisions, nil
+	}
+}
+
+func renderComparisonReviewerProvenance(output io.Writer, label string, execution *taskstate.AgentExecution) error {
+	if execution == nil {
+		return nil
+	}
+	_, err := fmt.Fprintf(output, "  %s reviewer: profile=%s model=%s harness=%s status=%s agent=%s session=%s command=%s started=%s duration=%dms\n", label, formatReviewValue(execution.Profile), formatReviewValue(execution.Model), formatReviewValue(execution.Harness), execution.Status, formatReviewValue(execution.Agent), formatReviewValue(execution.SessionName), formatReviewValue(execution.Command), execution.StartedAt.UTC().Format(time.RFC3339), execution.DurationMillis)
+	return err
 }
 
 func keepAutomatedBlockerDecision(blocker review.AutomatedBlocker) review.AutomatedBlockerDecision {
