@@ -80,6 +80,8 @@ If the budget is exhausted, Orpheus preserves the latest blockers and audit hist
 
 When an agent process actually begins, Orpheus prints a delimited header. Initial implementation runs identify their run attempt, for example `== Agent run: implementation (run attempt 1) ==`. Targeted repairs additionally identify the source review and findings, for example `== Agent run: review follow-up (run attempt 2; review attempt 1; findings 1, 2) ==`. Review step headers and publication/finalization output remain the authoritative lifecycle messages.
 
+Each follow-up is a new Orpheus run attempt and therefore a new `agent done` completion boundary. If session resumption reuses an earlier harness conversation, a successful `agent done` already visible in that history belongs to the earlier attempt and does not satisfy the current one. After the repair, the agent must record exactly one fresh handoff for the current attempt; same-attempt repeats stay no-ops, and exiting without that handoff keeps the incomplete-follow-up retry path.
+
 ## Inspecting Review State
 
 Use:
