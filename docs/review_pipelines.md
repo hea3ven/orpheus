@@ -91,7 +91,20 @@ prints `== Agent run: implementation (run attempt N) ==` immediately before an
 initial process begins. A targeted repair prints
 `== Agent run: review follow-up (run attempt N; review attempt M; findings …) ==`
 before its process begins; the identifiers describe the persisted repair
-provenance. If a resumed
+provenance.
+
+Completion is once per Orpheus run attempt, not once per reusable harness session.
+A resumed follow-up inherits earlier conversation history, which may include a
+successful `orpheus agent done` from the source run. That earlier handoff belongs
+to the previous attempt and does not complete the current one. The shared agent
+context therefore identifies the current run attempt as a new completion boundary
+and requires exactly one fresh `orpheus agent done` after the targeted repair,
+whether the process is fresh or resumed. After the current attempt records
+completion, repeated same-attempt `agent done` calls remain no-ops and keep the
+first handoff authoritative. Exiting without a current-attempt completion keeps
+the existing incomplete-follow-up reporting and explicit retry path.
+
+If a resumed
 process starts and then fails, Orpheus records the normal failed run and does not
 launch a fresh replacement automatically, because the resumed process may already
 have changed the work directory. The usual explicit failed-follow-up retry remains

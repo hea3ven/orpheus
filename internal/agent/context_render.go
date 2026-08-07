@@ -100,6 +100,8 @@ func appendFollowUpContext(builder *strings.Builder, followUp *ContextFollowUp) 
 	builder.WriteString("- Do not reimplement the original task.\n")
 	builder.WriteString("- Address only the listed review findings.\n")
 	builder.WriteString("- Preserve the current task branch and worktree target.\n")
+	builder.WriteString("- This Orpheus run attempt is a new completion boundary; after the repair, call `orpheus agent done` exactly once for the current attempt.\n")
+	builder.WriteString("- A successful `orpheus agent done` visible in resumed session history belongs to an earlier attempt and does not complete this follow-up.\n")
 	builder.WriteString("\nBlocking findings:\n")
 	for _, finding := range followUp.Findings {
 		appendPromptLine(builder, fmt.Sprintf("- Finding %d title", finding.Index+1), finding.Title)
@@ -232,9 +234,14 @@ func appendAgentDoneContract(builder *strings.Builder, summaryGuidance string, s
 	builder.WriteString("or `--detailed-description-file`; markdown is allowed.\n")
 	builder.WriteString("- Use exactly one technical explanation source: inline `--technical-explanation` ")
 	builder.WriteString("or `--technical-explanation-file`; markdown is allowed. Explain implementation rationale and notable code changes without replacing the PR body.\n")
-	builder.WriteString("- `orpheus agent done` is a one-time completion handoff for this Orpheus run: ")
-	builder.WriteString("run it at most once, and do not run it again after it succeeds ")
-	builder.WriteString("even if this interactive session continues.\n")
+	builder.WriteString("- `orpheus agent done` is a one-time completion handoff for this Orpheus run attempt ")
+	builder.WriteString("(see Run attempt above), not once per reusable harness session: call it exactly once after ")
+	builder.WriteString("finishing the current attempt's work, whether this harness session is fresh or resumed.\n")
+	builder.WriteString("- A successful `orpheus agent done` visible in resumed session history belongs to an earlier ")
+	builder.WriteString("Orpheus run attempt and does not satisfy the current attempt.\n")
+	builder.WriteString("- After this attempt successfully records completion, do not run `orpheus agent done` again ")
+	builder.WriteString("even if this interactive session continues; repeated same-attempt calls are no-ops and the ")
+	builder.WriteString("first handoff remains authoritative.\n")
 }
 
 func appendSummaryGuidanceContract(builder *strings.Builder, summaryGuidance string, summaryGuidanceStyle string) {
