@@ -8,14 +8,22 @@ The standard path is:
 
 ```text
 orpheus task run <task-id>
-# implementation agent inspects context, edits files, then runs:
-orpheus agent done --summary ... --description ... --detailed-description ...
+# implementation agent inspects context, edits files, then records the completion:
+orpheus agent done --summary 'fix: concise summary' --description 'Concise plain description' \
+  --detailed-description-file /tmp/pr-body.md \
+  --technical-explanation-file /tmp/technical-explanation.md
 
 orpheus task review <task-id>
 # if the review passes, Orpheus publishes or finalizes through the same internal path used by task done
 ```
 
 `task run` prepares the task target, records an attached run attempt, and launches the configured implementer. `agent done` records the completion summary, commit description, and pull-request body source. After that, the task is ready for local review, not direct publication.
+
+## Safe Agent Reporting Text
+
+Generated text is data, not shell source. Agents must never put generated prose in a double-quoted shell argument: JSON escaping is not Bash quoting, and Bash still expands backticks, `$()`, and variables inside double quotes. Use the existing file flags for multiline or Markdown fields: `--detailed-description-file`, `--technical-explanation-file`, `--description-file`, `--task-description-file`, and `--task-acceptance-criteria-file`.
+
+Do not put arbitrary raw text in a fixed-delimiter heredoc: a generated line equal to the delimiter (such as `EOF`) ends it and turns later lines into shell input. Instead, base64-encode generated file contents and decode each payload from a single-quoted literal, such as `printf '%s' '<base64-data>' | base64 --decode >"$file"`; standard base64 data contains no apostrophes. For unavoidable non-base64 inline fields, use single-quoted shell literals; an embedded apostrophe is written by closing and reopening the literal, for example `'O'\''Brien'`. Review agents must write temporary report files outside the candidate worktree, such as a directory created by `mktemp -d /tmp/orpheus-review.XXXXXX`. After every `agent done` or `agent review add` reporting command, verify success before exiting or retrying; do not blindly retry a finding that might already be persisted.
 
 `task done` requires the latest review attempt to have passed. Direct `task done` after `agent done` is refused because publication must have a durable local approval record. Once review has passed, `task done` remains useful as the retry command if publication or finalization failed after approval.
 

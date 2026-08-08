@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agent"
@@ -558,6 +559,75 @@ func TestRenderReviewContextUsesStagedExhaustiveReviewWhenToggleEnabled(t *testi
 		is.Contains(got, want)
 	}
 	is.NotContains(got, "Review the complete change set before exiting, even if you find an issue early.")
+}
+
+func TestRenderReviewContextsSafelyTransportFindingText(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		exhaustive string
+	}{
+		{name: "legacy", exhaustive: ""},
+		{name: "exhaustive", exhaustive: "1"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ORPHEUS_EXHAUSTIVE_REVIEW_CONTEXT", tt.exhaustive)
+			output := agent.RenderReviewContext(reviewContextRenderFixture())
+
+			for _, want := range []string{
+				"Never place generated prose inside a double-quoted shell argument.",
+				"JSON string escaping is not Bash quoting",
+				"backticks and `$()` command substitutions",
+				"Always use `--description-file` for a generated finding description.",
+				"`--task-description-file` and `--task-acceptance-criteria-file`",
+				"outside the candidate worktree",
+				"Do not place arbitrary raw text in a fixed-delimiter heredoc",
+				"base64-encode generated file contents",
+				"`'O'\\''Brien'`",
+				"printf '%s' '",
+				"| base64 --decode >\"$report_dir/finding.md\"",
+				"--title 'Missing validation for O'\\''Brien IDs'",
+				"--suggested-action 'Validate O'\\''Brien IDs before saving'",
+				"--task-title 'Extract O'\\''Brien validation helper'",
+				"Verify every reporting command succeeded before exiting or retrying it.",
+				"do not blindly retry a finding",
+			} {
+				assert.Contains(t, output, want)
+			}
+			for _, unsafe := range []string{
+				"--title \"",
+				"--suggested-action \"",
+				"--task-title \"",
+			} {
+				assert.NotContains(t, output, unsafe)
+			}
+
+			separateTaskExample := renderedSeparateTaskExample(t, output)
+			for _, want := range []string{
+				"report_dir=$(mktemp -d /tmp/orpheus-review.XXXXXX)",
+				"printf '%s' '",
+				"| base64 --decode >\"$report_dir/finding.md\"",
+				"| base64 --decode >\"$report_dir/task-description.md\"",
+				"| base64 --decode >\"$report_dir/acceptance.md\"",
+				"--description-file \"$report_dir/finding.md\"",
+			} {
+				assert.Contains(t, separateTaskExample, want)
+			}
+			assertBase64PayloadCarriesStandaloneDelimiterLine(t, separateTaskExample, "VGhlIHZhbGlkYXRpb24gaGVscGVyIGR1cGxpY2F0ZXMgYGV4aXN0aW5nIGJlaGF2aW9yYCBmb3IgTydCcmllbiB2YWx1ZXMuCkVPRgpUaGUgcmVwb3J0IHN0aWxsIHJlbWFpbnMgbGl0ZXJhbC4K")
+		})
+	}
+}
+
+func renderedSeparateTaskExample(t *testing.T, output string) string {
+	t.Helper()
+
+	findingOffset := strings.Index(output, "  --type separate-task \\\n")
+	require.GreaterOrEqual(t, findingOffset, 0)
+	startOffset := strings.LastIndex(output[:findingOffset], "```bash\n")
+	require.GreaterOrEqual(t, startOffset, 0)
+	endOffset := strings.Index(output[findingOffset:], "```\n")
+	require.GreaterOrEqual(t, endOffset, 0)
+
+	return output[startOffset : findingOffset+endOffset+len("```\n")]
 }
 
 func reviewContextRenderFixture() agent.ReviewContext {

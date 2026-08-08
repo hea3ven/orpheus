@@ -106,24 +106,51 @@ func appendExhaustiveReviewContract(builder *strings.Builder) {
 }
 
 func appendReviewFindingInstructions(builder *strings.Builder) {
+	appendReviewTextTransportGuidance(builder)
 	builder.WriteString("\nFinding examples:\n")
+	appendBlockingFindingExample(builder)
+	appendSeparateTaskFindingExample(builder)
+	appendReviewFindingValidationRules(builder)
+}
+
+func appendReviewTextTransportGuidance(builder *strings.Builder) {
+	builder.WriteString("\nSafe reporting text:\n")
+	builder.WriteString("- Never place generated prose inside a double-quoted shell argument. JSON string escaping is not Bash quoting; apply shell quoting when running a shell command.\n")
+	builder.WriteString("- In Bash, double quotes still expand backticks and `$()` command substitutions (and `$variable` expansions), so generated Markdown can execute commands or be changed before Orpheus receives it.\n")
+	builder.WriteString("- Always use `--description-file` for a generated finding description. Use `--task-description-file` and `--task-acceptance-criteria-file` for generated separate-task Markdown.\n")
+	builder.WriteString("- Keep temporary review-report files outside the candidate worktree. Do not place arbitrary raw text in a fixed-delimiter heredoc: a line equal to its delimiter ends it. Instead, base64-encode generated file contents and decode each payload from a single-quoted shell literal; standard base64 data contains no apostrophes.\n")
+	builder.WriteString("- For unavoidable inline fields such as titles and suggested actions, use a single-quoted shell literal. To embed an apostrophe, close the quote, write `\\'`, and reopen it: `'O'\\''Brien'`.\n")
+}
+
+func appendBlockingFindingExample(builder *strings.Builder) {
 	builder.WriteString("```bash\n")
+	builder.WriteString("report_dir=$(mktemp -d /tmp/orpheus-review.XXXXXX)\n")
+	appendBase64ReportFile(builder, "$report_dir/finding.md", "VGhlIHBhcnNlciBkcm9wcyBgbGl0ZXJhbCB0ZXh0YCwgJChjb21tYW5kcyksIGFuZCBPJ0JyaWVuIHZhbHVlcy4K")
 	builder.WriteString("orpheus agent review add \\\n")
 	builder.WriteString("  --type blocking \\\n")
-	builder.WriteString("  --title \"Missing validation for empty ID\" \\\n")
-	builder.WriteString("  --description-file finding.md \\\n")
-	builder.WriteString("  --suggested-action \"Add validation and tests\"\n")
+	builder.WriteString("  --title 'Missing validation for O'\\''Brien IDs' \\\n")
+	builder.WriteString("  --description-file \"$report_dir/finding.md\" \\\n")
+	builder.WriteString("  --suggested-action 'Validate O'\\''Brien IDs before saving'\n")
 	builder.WriteString("```\n\n")
+}
+
+func appendSeparateTaskFindingExample(builder *strings.Builder) {
 	builder.WriteString("```bash\n")
+	builder.WriteString("report_dir=$(mktemp -d /tmp/orpheus-review.XXXXXX)\n")
+	appendBase64ReportFile(builder, "$report_dir/finding.md", "VGhlIHZhbGlkYXRpb24gaGVscGVyIGR1cGxpY2F0ZXMgYGV4aXN0aW5nIGJlaGF2aW9yYCBmb3IgTydCcmllbiB2YWx1ZXMuCkVPRgpUaGUgcmVwb3J0IHN0aWxsIHJlbWFpbnMgbGl0ZXJhbC4K")
+	appendBase64ReportFile(builder, "$report_dir/task-description.md", "RXh0cmFjdCB0aGUgaGVscGVyIHdpdGhvdXQgY2hhbmdpbmcgYGV4aXN0aW5nIGNhbGxlcnNgLgo=")
+	appendBase64ReportFile(builder, "$report_dir/acceptance.md", "LSBUaGUgaGVscGVyIHByZXNlcnZlcyAkKGV4aXN0aW5nIGJlaGF2aW9yKS4K")
 	builder.WriteString("orpheus agent review add \\\n")
 	builder.WriteString("  --type separate-task \\\n")
-	builder.WriteString("  --title \"Duplicate validation helper\" \\\n")
-	builder.WriteString("  --description-file finding.md \\\n")
-	builder.WriteString("  --task-title \"Extract shared validation helper\" \\\n")
-	builder.WriteString("  --task-description-file task.md \\\n")
-	builder.WriteString("  --task-acceptance-criteria-file acceptance.md\n")
+	builder.WriteString("  --title 'Duplicate validation helper' \\\n")
+	builder.WriteString("  --description-file \"$report_dir/finding.md\" \\\n")
+	builder.WriteString("  --task-title 'Extract O'\\''Brien validation helper' \\\n")
+	builder.WriteString("  --task-description-file \"$report_dir/task-description.md\" \\\n")
+	builder.WriteString("  --task-acceptance-criteria-file \"$report_dir/acceptance.md\"\n")
 	builder.WriteString("```\n")
+}
 
+func appendReviewFindingValidationRules(builder *strings.Builder) {
 	builder.WriteString("\nFinding validation rules:\n")
 	builder.WriteString("- `--type` must be exactly one of `blocking`, `advisory`, or `separate-task`.\n")
 	builder.WriteString("- `--title` is required.\n")
@@ -131,6 +158,7 @@ func appendReviewFindingInstructions(builder *strings.Builder) {
 	builder.WriteString("- Blocking findings require `--suggested-action`.\n")
 	builder.WriteString("- Separate-task findings require `--task-title`, exactly one task description source, and exactly one task acceptance criteria source.\n")
 	builder.WriteString("- Invalid or stale calls fail without writing task state.\n")
+	builder.WriteString("- Verify every reporting command succeeded before exiting or retrying it. If its result is ambiguous, inspect recorded state; do not blindly retry a finding that may already be recorded.\n")
 	builder.WriteString("- Blocking findings from a successful review-agent process stop the pipeline.\n")
 	builder.WriteString("- Advisory and separate-task findings do not stop the pipeline.\n")
 	builder.WriteString("- Do not call `orpheus agent done`; implementation completion has already been recorded.\n")
