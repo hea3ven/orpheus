@@ -222,18 +222,12 @@ func appendFeatureBranchExecutionContract(
 }
 
 func appendAgentDoneContract(builder *strings.Builder, summaryGuidance string, summaryGuidanceStyle string) {
-	builder.WriteString("- When implementation and checks are complete, finish with ")
-	builder.WriteString("`orpheus agent done --summary \"<summary>\" --description \"<description>\" ")
-	builder.WriteString("--detailed-description \"<markdown-pr-body>\" ")
-	builder.WriteString("--technical-explanation \"<markdown-technical-explanation>\"` ")
-	builder.WriteString("or file-based sources such as `--detailed-description-file <path> ")
-	builder.WriteString("--technical-explanation-file <path>`.\n")
+	builder.WriteString("- When implementation and checks are complete, write the Markdown fields to files and finish with `orpheus agent done --summary '<summary>' --description '<description>' --detailed-description-file <path> --technical-explanation-file <path>`.\n")
 	appendSummaryGuidanceContract(builder, summaryGuidance, summaryGuidanceStyle)
 	builder.WriteString("- Use `--description` for a concise, plain one-paragraph commit body.\n")
-	builder.WriteString("- Use exactly one detailed PR body source: inline `--detailed-description` ")
-	builder.WriteString("or `--detailed-description-file`; markdown is allowed.\n")
-	builder.WriteString("- Use exactly one technical explanation source: inline `--technical-explanation` ")
-	builder.WriteString("or `--technical-explanation-file`; markdown is allowed. Explain implementation rationale and notable code changes without replacing the PR body.\n")
+	builder.WriteString("- Use exactly one detailed PR body source. Prefer `--detailed-description-file` for Markdown; `--detailed-description` is only for a safely quoted inline value.\n")
+	builder.WriteString("- Use exactly one technical explanation source. Prefer `--technical-explanation-file` for Markdown; `--technical-explanation` is only for a safely quoted inline value. Explain implementation rationale and notable code changes without replacing the PR body.\n")
+	appendCompletionTextTransportGuidance(builder)
 	builder.WriteString("- `orpheus agent done` is a one-time completion handoff for this Orpheus run attempt ")
 	builder.WriteString("(see Run attempt above), not once per reusable harness session: call it exactly once after ")
 	builder.WriteString("finishing the current attempt's work, whether this harness session is fresh or resumed.\n")
@@ -242,6 +236,33 @@ func appendAgentDoneContract(builder *strings.Builder, summaryGuidance string, s
 	builder.WriteString("- After this attempt successfully records completion, do not run `orpheus agent done` again ")
 	builder.WriteString("even if this interactive session continues; repeated same-attempt calls are no-ops and the ")
 	builder.WriteString("first handoff remains authoritative.\n")
+}
+
+func appendCompletionTextTransportGuidance(builder *strings.Builder) {
+	builder.WriteString("\nSafe reporting text:\n")
+	builder.WriteString("- Never place generated prose inside a double-quoted shell argument. JSON string escaping is not Bash quoting; apply shell quoting when running a shell command.\n")
+	builder.WriteString("- In Bash, double quotes still expand backticks and `$()` command substitutions (and `$variable` expansions), so generated Markdown can execute commands or be changed before Orpheus receives it.\n")
+	builder.WriteString("- Prefer the existing file flags for multiline or Markdown content. Do not place arbitrary raw text in a fixed-delimiter heredoc: a line equal to its delimiter ends it. Instead, base64-encode generated file contents and decode each payload from a single-quoted shell literal; standard base64 data contains no apostrophes.\n")
+	builder.WriteString("- For unavoidable inline plain-text fields, use a single-quoted shell literal. To embed an apostrophe, close the quote, write `\\'`, and reopen it: `'O'\\''Brien'`.\n")
+	builder.WriteString("\nExample:\n```bash\n")
+	builder.WriteString("report_dir=$(mktemp -d /tmp/orpheus-completion.XXXXXX)\n")
+	appendBase64ReportFile(builder, "$report_dir/pr-body.md", "IyMgUHJlc2VydmUgbGl0ZXJhbCBNYXJrZG93bgoKS2VlcCBgYmFja3RpY2tzYCwgJChjb21tYW5kcyksIGEgc3RhbmRhbG9uZSBkZWxpbWl0ZXI6CkVPRgphbmQgTydCcmllbiBhcyB3cml0dGVuLgo=")
+	appendBase64ReportFile(builder, "$report_dir/technical-explanation.md", "VGhlIGZpbGUgdHJhbnNwb3J0IHByZXNlcnZlcyBnZW5lcmF0ZWQgTWFya2Rvd24gdmVyYmF0aW0uCg==")
+	builder.WriteString("orpheus agent done \\\n")
+	builder.WriteString("  --summary 'fix: preserve O'\\''Brien reporting' \\\n")
+	builder.WriteString("  --description 'Preserve O'\\''Brien reporting text.' \\\n")
+	builder.WriteString("  --detailed-description-file \"$report_dir/pr-body.md\" \\\n")
+	builder.WriteString("  --technical-explanation-file \"$report_dir/technical-explanation.md\"\n")
+	builder.WriteString("```\n")
+	builder.WriteString("- Verify every reporting command succeeded before exiting or retrying it. If its result is ambiguous, inspect recorded state; do not blindly retry a command that may already have recorded completion.\n")
+}
+
+func appendBase64ReportFile(builder *strings.Builder, path string, payload string) {
+	builder.WriteString("printf '%s' '")
+	builder.WriteString(payload)
+	builder.WriteString("' | base64 --decode >\"")
+	builder.WriteString(path)
+	builder.WriteString("\"\n")
 }
 
 func appendSummaryGuidanceContract(builder *strings.Builder, summaryGuidance string, summaryGuidanceStyle string) {
