@@ -9,6 +9,20 @@ waive/cancel decision from both `task run` and `task review`.
 `orpheus agent done` requires the usual summary, commit description, and detailed
 PR body source plus exactly one technical explanation source:
 `--technical-explanation <markdown>` or `--technical-explanation-file <path>`.
+Generated Markdown should use the existing file flags, including
+`--detailed-description-file` and `--technical-explanation-file`, rather than
+being placed in a double-quoted shell argument. JSON escaping is not Bash quoting:
+double quotes still expand backticks, `$()`, and variables. Do not put arbitrary
+raw text in a fixed-delimiter heredoc: a generated delimiter line ends it and
+turns later lines into shell input. Base64-encode generated file contents and
+decode each payload from a single-quoted literal; standard base64 data contains
+no apostrophes. Use single-quoted literals for unavoidable inline fields (write
+an apostrophe as `'O'\''Brien'`), and verify a reporting command succeeded before
+retrying it. Review agents likewise use
+`--description-file`, `--task-description-file`, and
+`--task-acceptance-criteria-file` for generated Markdown, keeping temporary
+report files outside the candidate worktree.
+
 The technical explanation is stored with the implementation or targeted follow-up
 completion and is rendered into review-agent context so reviewers can understand
 the code-change rationale without changing PR title or body selection.

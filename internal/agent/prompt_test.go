@@ -1,6 +1,7 @@
 package agent_test
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -92,6 +93,65 @@ func TestRenderActiveContextIncludesWorktreeContract(t *testing.T) {
 		ctx,
 		agent.ActiveContextRenderOptions{InteractionMode: agent.AgentInteractionModeUnspecified},
 	))
+}
+
+func TestRenderActiveContextsSafelyTransportCompletionText(t *testing.T) {
+	contexts := map[string]agent.ActiveContext{
+		"implementation": sampleWorktreeActiveContext(),
+		"follow-up": {
+			Task:   agent.ContextTask{ID: "op-1"},
+			Run:    agent.ContextRun{Attempt: 2},
+			Target: agent.ContextTarget{Kind: agent.ExecutionTargetMain},
+			FollowUp: &agent.ContextFollowUp{
+				ReviewAttempt: 1,
+			},
+		},
+	}
+
+	for name, ctx := range contexts {
+		t.Run(name, func(t *testing.T) {
+			output := agent.RenderActiveContext(ctx)
+
+			for _, want := range []string{
+				"Never place generated prose inside a double-quoted shell argument.",
+				"JSON string escaping is not Bash quoting",
+				"backticks and `$()` command substitutions",
+				"Prefer the existing file flags for multiline or Markdown content.",
+				"Do not place arbitrary raw text in a fixed-delimiter heredoc",
+				"base64-encode generated file contents",
+				"`'O'\\''Brien'`",
+				"printf '%s' '",
+				"| base64 --decode >\"$report_dir/pr-body.md\"",
+				"--summary 'fix: preserve O'\\''Brien reporting'",
+				"--description 'Preserve O'\\''Brien reporting text.'",
+				"--detailed-description-file \"$report_dir/pr-body.md\"",
+				"--technical-explanation-file \"$report_dir/technical-explanation.md\"",
+				"Verify every reporting command succeeded before exiting or retrying it.",
+			} {
+				assert.Contains(t, output, want)
+			}
+			assertBase64PayloadCarriesStandaloneDelimiterLine(t, output, "IyMgUHJlc2VydmUgbGl0ZXJhbCBNYXJrZG93bgoKS2VlcCBgYmFja3RpY2tzYCwgJChjb21tYW5kcyksIGEgc3RhbmRhbG9uZSBkZWxpbWl0ZXI6CkVPRgphbmQgTydCcmllbiBhcyB3cml0dGVuLgo=")
+			for _, unsafe := range []string{
+				"--summary \"",
+				"--description \"",
+				"--detailed-description \"",
+				"--technical-explanation \"",
+			} {
+				assert.NotContains(t, output, unsafe)
+			}
+		})
+	}
+}
+
+func assertBase64PayloadCarriesStandaloneDelimiterLine(t *testing.T, output string, payload string) {
+	t.Helper()
+
+	assert.Contains(t, output, payload)
+	assert.NotContains(t, payload, "'")
+	decoded, err := base64.StdEncoding.DecodeString(payload)
+	assert.NoError(t, err)
+	assert.Contains(t, string(decoded), "\nEOF\n")
+	assert.NotContains(t, output, "<<'EOF'")
 }
 
 func TestRenderConflictResolutionContextConstrainsAgentScope(t *testing.T) {
