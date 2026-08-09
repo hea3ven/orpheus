@@ -80,6 +80,7 @@ control.`,
 		newEvalCommand(opts),
 		newDoctorCommand(opts),
 	)
+	configureCompletions(cmd, opts)
 
 	return cmd
 }
