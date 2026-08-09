@@ -29,6 +29,57 @@ Orpheus has two test lanes:
 
 `orpheus eval review-context` is separate from these validation lanes. It deliberately runs live Pi or Codex review agents and may incur costs; it is never invoked by routine test validation.
 
+## Shell completion
+
+Orpheus generates completion scripts but never changes your shell configuration.
+Completion is read-only and best-effort: unavailable repositories or configuration
+simply yield fewer suggestions.
+
+Temporary activation:
+
+```sh
+# Bash
+source <(orpheus completion bash)
+# Zsh
+source <(orpheus completion zsh)
+# Fish
+orpheus completion fish | source
+```
+
+```powershell
+# PowerShell
+orpheus completion powershell | Out-String | Invoke-Expression
+```
+
+Persistent activation:
+
+```sh
+# Bash (bash-completion user directory)
+mkdir -p "${BASH_COMPLETION_USER_DIR:-$HOME/.local/share/bash-completion/completions}"
+orpheus completion bash > "${BASH_COMPLETION_USER_DIR:-$HOME/.local/share/bash-completion/completions}/orpheus"
+
+# Zsh (add the fpath and compinit lines to ~/.zshrc if not already present)
+mkdir -p ~/.zfunc
+orpheus completion zsh > ~/.zfunc/_orpheus
+printf '%s\n' 'fpath=(~/.zfunc $fpath)' 'autoload -Uz compinit && compinit' >> ~/.zshrc
+
+# Fish
+mkdir -p ~/.config/fish/completions
+orpheus completion fish > ~/.config/fish/completions/orpheus.fish
+```
+
+```powershell
+# PowerShell: create the profile directory and file only if missing, then append the startup command.
+$profileDirectory = Split-Path -Parent $PROFILE
+if (-not (Test-Path -LiteralPath $profileDirectory)) {
+  New-Item -ItemType Directory -Path $profileDirectory -Force | Out-Null
+}
+if (-not (Test-Path -LiteralPath $PROFILE)) {
+  New-Item -ItemType File -Path $PROFILE | Out-Null
+}
+Add-Content -LiteralPath $PROFILE 'orpheus completion powershell | Out-String | Invoke-Expression'
+```
+
 ## Test timing and regression budgets
 
 `make test-perf` is the repeatable fast-lane performance workflow. It runs five
