@@ -58,6 +58,7 @@ func runDoctor(command *cobra.Command, opts *rootOptions, fix bool) error {
 	return renderDoctorResult(command.OutOrStdout(), result)
 }
 
+//nolint:funlen // The doctor sections deliberately mirror distinct recovery domains.
 func renderDoctorResult(output interface{ Write([]byte) (int, error) }, result doctor.Result) error {
 	if _, err := fmt.Fprintln(output, "Implementation run recovery"); err != nil {
 		return err
@@ -67,6 +68,16 @@ func renderDoctorResult(output interface{ Write([]byte) (int, error) }, result d
 			return err
 		}
 	} else if err := renderTable(output, []string{"REPO", "TASK", "ATTEMPT", "OUTCOME", "REASON"}, implementationRunRows(result.ImplementationRows)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(output, "\nPrimary reviewer recovery"); err != nil {
+		return err
+	}
+	if len(result.PrimaryReviewRows) == 0 {
+		if _, err := fmt.Fprintln(output, "No running primary reviewer executions found."); err != nil {
+			return err
+		}
+	} else if err := renderTable(output, []string{"REPO", "TASK", "ATTEMPT", "STEP", "OUTCOME", "REASON"}, primaryReviewRows(result.PrimaryReviewRows)); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintln(output, "\nAgent usage telemetry"); err != nil {
@@ -128,6 +139,21 @@ func implementationRunRows(rows []doctor.ImplementationRunRow) [][]string {
 			formatTaskStatsField(row.RepoID),
 			formatTaskStatsField(row.TaskID),
 			formatDoctorAttempt(row.Attempt),
+			formatTaskStatsField(row.Outcome),
+			formatTaskStatsField(row.Reason),
+		})
+	}
+	return rendered
+}
+
+func primaryReviewRows(rows []doctor.PrimaryReviewRow) [][]string {
+	rendered := make([][]string, 0, len(rows))
+	for _, row := range rows {
+		rendered = append(rendered, []string{
+			formatTaskStatsField(row.RepoID),
+			formatTaskStatsField(row.TaskID),
+			formatDoctorAttempt(row.Attempt),
+			formatTaskStatsField(row.Step),
 			formatTaskStatsField(row.Outcome),
 			formatTaskStatsField(row.Reason),
 		})

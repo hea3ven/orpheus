@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/state"
@@ -188,6 +189,18 @@ func runAgentContext(command *cobra.Command, opts *rootOptions) error {
 	return err
 }
 
+func withAgentReviewMutationLock(command *cobra.Command, paths state.Paths, logger *slog.Logger, mutate func() error) error {
+	var err error
+	for retry := 0; retry < 100; retry++ {
+		err = state.WithGlobalMutationLockLogger(command.Context(), paths, "agent review finding", logger, mutate)
+		if err == nil || !errors.Is(err, os.ErrExist) {
+			return err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return err
+}
+
 func activeAgentInteractionMode(paths state.Paths, agentName string) (agent.AgentInteractionMode, error) {
 	config, err := agent.LoadConfig(paths)
 	if err != nil {
@@ -216,6 +229,7 @@ type agentReviewAddOptions struct {
 	taskAcceptanceCriteriaFile string
 }
 
+//nolint:funlen // Command setup and the mutation-protected finding handoff stay adjacent.
 func runAgentReviewAdd(command *cobra.Command, opts *rootOptions, addOpts agentReviewAddOptions) error {
 	logger := opts.log().With(
 		slog.String("component", "cli"),
@@ -244,19 +258,24 @@ func runAgentReviewAdd(command *cobra.Command, opts *rootOptions, addOpts agentR
 	}
 	role := strings.TrimSpace(os.Getenv("ORPHEUS_REVIEWER_ROLE"))
 	var reviewAttempt taskstate.ReviewAttempt
-	if role == "alternate" {
-		reviewAttempt, err = store.RecordAlternateReviewFinding(
-			reviewContext.Repository.ID, reviewContext.Task.ID, reviewContext.Review.Attempt,
-			reviewContext.Review.EnvStep, finding,
-		)
-	} else {
+	err = withAgentReviewMutationLock(command, deps.paths, logger, func() error {
+		if role == "alternate" {
+			var recordErr error
+			reviewAttempt, recordErr = store.RecordAlternateReviewFinding(
+				reviewContext.Repository.ID, reviewContext.Task.ID, reviewContext.Review.Attempt,
+				reviewContext.Review.EnvStep, finding,
+			)
+			return recordErr
+		}
 		if role == "primary" {
 			finding.Reviewer = "primary"
 		}
-		reviewAttempt, err = store.RecordReviewFinding(
+		var recordErr error
+		reviewAttempt, recordErr = store.RecordReviewFinding(
 			reviewContext.Repository.ID, reviewContext.Task.ID, reviewContext.Review.Attempt, finding,
 		)
-	}
+		return recordErr
+	})
 	if err != nil {
 		return fmt.Errorf("agent review add: %w", err)
 	}

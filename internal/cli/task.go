@@ -821,6 +821,14 @@ func runTaskRun(
 			return err
 		}
 	}
+	switch prepared.ReviewInspection.Condition {
+	case workflow.AttachedExecutionRecoverable, workflow.AttachedExecutionAlreadyRecovered:
+		return renderPrimaryReviewRecoveryGuidance(command.ErrOrStderr(), resolved.TaskID, prepared.ReviewInspection.Reason)
+	case workflow.AttachedExecutionLive:
+		return renderPrimaryReviewActiveGuidance(command.OutOrStdout(), resolved.TaskID, prepared.ReviewInspection.Reason)
+	case workflow.AttachedExecutionUnverifiable:
+		return renderPrimaryReviewUnverifiableGuidance(command.ErrOrStderr(), resolved.TaskID, prepared.ReviewInspection.Reason)
+	}
 	route := prepared.Route
 	if err := validateTaskRunRouteFlags(resolved.TaskID, route.Action, agentName, pipelineName, repoRootMode); err != nil {
 		return err
@@ -944,6 +952,21 @@ func validateTaskRunRouteFlags(
 		return fmt.Errorf("task run %s: --pipeline cannot affect the selected workflow path", taskID)
 	}
 	return nil
+}
+
+func renderPrimaryReviewRecoveryGuidance(output io.Writer, taskID string, reason string) error {
+	_, err := fmt.Fprintf(output, "Task %s: recovered interrupted primary reviewer (%s). The candidate may contain reviewer mutations; inspect the worktree with `cd \"$(orpheus task dir %s)\" && git status --short && git diff`, then inspect audit history with `orpheus task review show %s`, before running a fresh `orpheus task run %s` or `orpheus task review %s`.\n", taskID, reason, taskID, taskID, taskID, taskID)
+	return err
+}
+
+func renderPrimaryReviewActiveGuidance(output io.Writer, taskID string, reason string) error {
+	_, err := fmt.Fprintf(output, "Task %s: primary reviewer is still active (%s); wait for it to finish, then inspect `orpheus task review show %s`.\n", taskID, reason, taskID)
+	return err
+}
+
+func renderPrimaryReviewUnverifiableGuidance(output io.Writer, taskID string, reason string) error {
+	_, err := fmt.Fprintf(output, "Task %s: cannot automatically recover the primary reviewer (%s); inspect `orpheus doctor` and `orpheus task review show %s`.\n", taskID, reason, taskID)
+	return err
 }
 
 func renderTaskRunRoute(output io.Writer, taskID string, route workflow.TaskRunRoute) error {
@@ -1335,6 +1358,14 @@ func renderTaskReviewLifecycleOutcome(
 	logger *slog.Logger,
 	outcome workflow.ReviewLifecycleOutcome,
 ) error {
+	switch outcome.Kind {
+	case workflow.ReviewLifecycleOutcomePrimaryRecovered:
+		return renderPrimaryReviewRecoveryGuidance(command.ErrOrStderr(), outcome.Context.TaskID(), outcome.RecoveryInspection.Reason)
+	case workflow.ReviewLifecycleOutcomePrimaryLive:
+		return renderPrimaryReviewActiveGuidance(command.OutOrStdout(), outcome.Context.TaskID(), outcome.RecoveryInspection.Reason)
+	case workflow.ReviewLifecycleOutcomePrimaryUnknown:
+		return renderPrimaryReviewUnverifiableGuidance(command.ErrOrStderr(), outcome.Context.TaskID(), outcome.RecoveryInspection.Reason)
+	}
 	if outcome.Kind != workflow.ReviewLifecycleOutcomePassed {
 		return nil
 	}

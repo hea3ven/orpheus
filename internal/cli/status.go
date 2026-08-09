@@ -749,6 +749,8 @@ func compactReviewDetail(detail status.Detail) (string, bool) {
 		return "aborted", true
 	case status.DetailReviewFailed:
 		return "failed", true
+	case status.DetailPrimaryReviewInterrupted:
+		return "reviewer interrupted", true
 	case status.DetailReviewPassed:
 		return "passed", true
 	case status.DetailReviewPublishFailed:

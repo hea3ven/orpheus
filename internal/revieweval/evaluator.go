@@ -22,6 +22,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
 const (
@@ -789,19 +790,22 @@ func restoreEnv(old map[string]previousEnv) {
 
 func runPipeline(ctx context.Context, opts Options, spec runSpec, scenarioDef scenario, setup runSetup) error {
 	outcome, err := review.RunPipeline(review.PipelineRunOptions{
-		Context:       ctx,
-		Store:         setup.store,
-		RepoID:        "review-eval",
-		TaskID:        setup.taskID,
-		Branch:        "main",
-		Workdir:       setup.repoPath,
-		Attempt:       setup.attempt,
-		Pipeline:      evaluationPipeline(),
-		SessionName:   evaluationSessionName(setup.taskID, scenarioDef),
-		Stdin:         nil,
-		Stdout:        io.Discard,
-		Stderr:        io.Discard,
-		AgentConfig:   agentConfig(opts, spec.Harness, scenarioDef.promptAppend),
+		Context:     ctx,
+		Store:       setup.store,
+		RepoID:      "review-eval",
+		TaskID:      setup.taskID,
+		Branch:      "main",
+		Workdir:     setup.repoPath,
+		Attempt:     setup.attempt,
+		Pipeline:    evaluationPipeline(),
+		SessionName: evaluationSessionName(setup.taskID, scenarioDef),
+		Stdin:       nil,
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+		AgentConfig: agentConfig(opts, spec.Harness, scenarioDef.promptAppend),
+		RecordPrimaryChildPID: func(stepName string, pid int) error {
+			return recordEvaluatorPrimaryChildPID(setup, stepName, pid)
+		},
 		AgentLauncher: agentexec.AttachedLauncher{},
 		PromptAutomatedBlockers: func(review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
 			return nil, nil
@@ -818,6 +822,10 @@ func runPipeline(ctx context.Context, opts Options, spec runSpec, scenarioDef sc
 		}
 	}
 	return err
+}
+
+func recordEvaluatorPrimaryChildPID(setup runSetup, stepName string, pid int) error {
+	return workflow.RecordPrimaryReviewChildPID(setup.paths, nil, setup.store, "review-eval", setup.taskID, setup.attempt.Attempt, stepName, pid)
 }
 
 func evaluationSessionName(taskID string, scenarioDef scenario) string {

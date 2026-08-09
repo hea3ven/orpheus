@@ -27,6 +27,7 @@ type PipelineStore interface {
 	PauseReviewForManual(repoID, taskID string, attempt int, step string) (taskstate.ReviewAttempt, error)
 	ResumeReview(repoID, taskID string, attempt int) (taskstate.ReviewAttempt, error)
 	FinishReviewStepExecution(repoID, taskID string, attempt int, stepName string, opts taskstate.FinishReviewStepExecutionOptions) (taskstate.ReviewAttempt, error)
+	RecordReviewStepChildPID(repoID, taskID string, attempt int, stepName string, pid int) (taskstate.ReviewAttempt, error)
 	MarkReviewAutomatedBlockerDecisionInterrupted(repoID, taskID string, attempt int) (taskstate.ReviewAttempt, error)
 	MarkReviewAutomatedBlockerDecisionKept(repoID, taskID string, attempt int) (taskstate.ReviewAttempt, error)
 	DowngradeReviewBlockingFinding(repoID, taskID string, attempt int, findingIndex int, reason string) (taskstate.ReviewAttempt, error)
@@ -63,10 +64,11 @@ type PipelineRunOptions struct {
 	OutputWidth       int
 	OutputWidthFunc   func() (int, bool)
 
-	AgentConfig     agent.Config
-	AgentLauncher   agentexec.Launcher
-	Environment     []string
-	UsageCaptureEnv map[string]string
+	AgentConfig           agent.Config
+	AgentLauncher         agentexec.Launcher
+	Environment           []string
+	UsageCaptureEnv       map[string]string
+	RecordPrimaryChildPID func(stepName string, pid int) error
 
 	ResumeFromStep          bool
 	PauseBeforeManual       bool
@@ -662,7 +664,7 @@ func runAgentReviewStep(opts PipelineRunOptions, step Step) (stepOutcome, error)
 	if alternate != "" {
 		primaryEnvironment = reviewerEnvironment(opts, step.Name, command.Prompt, "primary")
 	}
-	primaryErr := runReviewerExecution(opts, step, profile, command, primaryEnvironment, output)
+	primaryErr := runReviewerExecution(opts, step, profile, command, primaryEnvironment, output, true)
 	if err := finishAgentReviewExecution(opts, step, command, execution, statusForError(primaryErr), time.Now().UTC(), primaryErr); err != nil {
 		output.finishExpanded()
 		return stepOutcome{}, err
@@ -688,9 +690,9 @@ func statusForError(err error) taskstate.RunStatus {
 	return taskstate.RunStatusSucceeded
 }
 
-func runReviewerExecution(opts PipelineRunOptions, step Step, profile agent.Profile, command agent.CommandSnapshot, env []string, output stepOutput) error {
+func runReviewerExecution(opts PipelineRunOptions, step Step, profile agent.Profile, command agent.CommandSnapshot, env []string, output stepOutput, trackPrimaryPID bool) error {
 	_, err := runReadOnlyStep(opts, step, func() (stepOutcome, error) {
-		return stepOutcome{}, launchAgentReview(opts, step, profile, command, env, output)
+		return stepOutcome{}, launchAgentReview(opts, step, profile, command, env, output, trackPrimaryPID)
 	})
 	return err
 }
@@ -721,7 +723,7 @@ func runAlternateReviewerComparison(opts PipelineRunOptions, step Step, alternat
 		return false, writeErr
 	}
 	alternateOutput := newStepOutput(opts, !profile.Interactive)
-	runErr := runReviewerExecution(opts, step, profile, command, reviewerEnvironment(opts, step.Name, command.Prompt, "alternate"), alternateOutput)
+	runErr := runReviewerExecution(opts, step, profile, command, reviewerEnvironment(opts, step.Name, command.Prompt, "alternate"), alternateOutput, false)
 	if err := finishAlternateReviewExecution(opts, step, command, execution, statusForError(runErr), runErr); err != nil {
 		return false, err
 	}
@@ -819,6 +821,7 @@ func launchAgentReview(
 	command agent.CommandSnapshot,
 	env []string,
 	output stepOutput,
+	trackPrimaryPID bool,
 ) error {
 	attrs := append(reviewCommandAttrs(opts, step),
 		slog.String("agent", command.AgentName),
@@ -829,13 +832,16 @@ func launchAgentReview(
 	if !profile.Interactive {
 		reviewerStdin = nil
 	}
-	err := opts.AgentLauncher.Run(opts.Context, command.ExecCommand(), agentexec.LaunchOptions{
-		Dir:    opts.Workdir,
-		Env:    env,
-		Stdin:  reviewerStdin,
-		Stdout: output.stdout(),
-		Stderr: output.stderr(),
-	})
+	launchOpts := agentexec.LaunchOptions{Dir: opts.Workdir, Env: env, Stdin: reviewerStdin, Stdout: output.stdout(), Stderr: output.stderr()}
+	if trackPrimaryPID {
+		launchOpts.OnStart = func(pid int) error {
+			if opts.RecordPrimaryChildPID == nil {
+				return fmt.Errorf("task review %s: primary reviewer child PID recorder is required", opts.TaskID)
+			}
+			return opts.RecordPrimaryChildPID(step.Name, pid)
+		}
+	}
+	err := opts.AgentLauncher.Run(opts.Context, command.ExecCommand(), launchOpts)
 	span.Finish(opts.Context, agentReviewCommandStatus(opts.Context, err), agentReviewCommandExitAttrs(err)...)
 	return err
 }
@@ -869,17 +875,18 @@ func agentReviewCommandExitAttrs(err error) []slog.Attr {
 func recordAgentReviewStep(opts PipelineRunOptions, step Step, command agent.CommandSnapshot) (taskstate.AgentExecution, error) {
 	selection := command.AgentSelection()
 	execution := taskstate.AgentExecution{
-		Purpose:     taskstate.AgentExecutionPurposeReview,
-		Status:      taskstate.RunStatusRunning,
-		Agent:       command.AgentName,
-		Profile:     command.AgentName,
-		Harness:     selection.Harness,
-		Model:       selection.Model,
-		Thinking:    selection.Thinking,
-		Command:     command.Command,
-		Args:        command.Args,
-		SessionName: opts.SessionName,
-		StartedAt:   time.Now().UTC(),
+		Purpose:       taskstate.AgentExecutionPurposeReview,
+		Status:        taskstate.RunStatusRunning,
+		Agent:         command.AgentName,
+		Profile:       command.AgentName,
+		Harness:       selection.Harness,
+		Model:         selection.Model,
+		Thinking:      selection.Thinking,
+		Command:       command.Command,
+		Args:          command.Args,
+		SessionName:   opts.SessionName,
+		StartedAt:     time.Now().UTC(),
+		SupervisorPID: os.Getpid(),
 	}
 	return execution, recordStep(opts, step, &execution, nil)
 }

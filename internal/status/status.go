@@ -82,6 +82,7 @@ const (
 	DetailReviewFindings           DetailKind = "review_findings"
 	DetailReviewAborted            DetailKind = "review_aborted"
 	DetailReviewFailed             DetailKind = "review_failed"
+	DetailPrimaryReviewInterrupted DetailKind = "primary_review_interrupted"
 	DetailReviewPassed             DetailKind = "review_passed"
 	DetailReviewPublishFailed      DetailKind = "review_publish_failed"
 	DetailReviewUnknownState       DetailKind = "review_unknown_state"
@@ -461,6 +462,7 @@ func classifyExpectedReviewReady(
 	), true
 }
 
+//nolint:funlen // Review statuses form one exhaustive operator-facing policy table.
 func classifyLatestReview(
 	runs []taskstate.RunAttempt,
 	latestReview *taskstate.ReviewAttempt,
@@ -493,6 +495,13 @@ func classifyLatestReview(
 			Detail{Kind: DetailReviewAborted},
 		), true
 	case taskstate.ReviewStatusFailed:
+		if taskstate.PrimaryReviewExecutionInterrupted(*latestReview) {
+			return newPolicyResult(
+				readinessAttention,
+				"primary reviewer interrupted; candidate may contain reviewer mutations; inspect it before running task run",
+				Detail{Kind: DetailPrimaryReviewInterrupted},
+			), true
+		}
 		return newPolicyResult(
 			readinessAttention,
 			"review failed operationally; run task run",

@@ -48,6 +48,7 @@ type ReviewLifecycleStore interface {
 	WaiveReviewBlockingFinding(repoID, taskID string, attempt int, findingIndex int, reason string) (taskstate.ReviewAttempt, error)
 	MarkReviewAutomatedBlockerDecisionKept(repoID, taskID string, attempt int) (taskstate.ReviewAttempt, error)
 	PrepareReviewForTargetedFollowUp(repoID, taskID string, attempt int) (taskstate.ReviewAttempt, error)
+	InterruptPrimaryReviewExecution(repoID, taskID string, attempt int, stepName string, opts taskstate.InterruptPrimaryReviewExecutionOptions) (taskstate.ReviewAttempt, error)
 }
 
 // ReviewLifecycleAgentRun describes an attached implementation/fix run that the
@@ -126,6 +127,7 @@ type ReviewLifecycleService struct {
 	ResolveCommand         func(DispatchCommandContext, string) (DispatchCommand, string, error)
 	ResolveFollowUpCommand func(DispatchCommandContext, string) (DispatchCommand, string, error)
 	Logger                 *slog.Logger
+	ProcessProbe           ProcessProbe
 }
 
 // ReviewLifecycleOptions describes a task review invocation.
@@ -157,14 +159,18 @@ const (
 	ReviewLifecycleOutcomePassed           ReviewLifecycleOutcomeKind = "passed"
 	ReviewLifecycleOutcomePublicationRetry ReviewLifecycleOutcomeKind = "publication_retry"
 	ReviewLifecycleOutcomeAborted          ReviewLifecycleOutcomeKind = "aborted"
+	ReviewLifecycleOutcomePrimaryRecovered ReviewLifecycleOutcomeKind = "primary_review_recovered"
+	ReviewLifecycleOutcomePrimaryLive      ReviewLifecycleOutcomeKind = "primary_review_live"
+	ReviewLifecycleOutcomePrimaryUnknown   ReviewLifecycleOutcomeKind = "primary_review_unverifiable"
 )
 
 // ReviewLifecycleOutcome is the typed result returned to frontends.
 type ReviewLifecycleOutcome struct {
-	Kind         ReviewLifecycleOutcomeKind
-	Context      ReviewAttemptContext
-	Finalization FinalizationResult
-	Err          error
+	Kind               ReviewLifecycleOutcomeKind
+	Context            ReviewAttemptContext
+	Finalization       FinalizationResult
+	RecoveryInspection AttachedExecutionInspection
+	Err                error
 }
 
 // ReviewAttemptContext carries non-CLI facts for one review attempt.
@@ -302,6 +308,8 @@ func (s ReviewLifecycleService) validate() error {
 
 // Run executes or resumes a task review, including autonomous follow-up loops
 // and finalization after approval.
+//
+//nolint:funlen // Lifecycle setup keeps terminal outcome tracing in one place.
 func (s ReviewLifecycleService) Run(ctx context.Context, opts ReviewLifecycleOptions) (ReviewLifecycleOutcome, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -331,15 +339,39 @@ func (s ReviewLifecycleService) Run(ctx context.Context, opts ReviewLifecycleOpt
 		finalOutcome = reviewLifecycleOperationalFailure(ReviewAttemptContext{}, err)
 		return finalOutcome, err
 	}
+	preflight, inspection, handled, err := s.recoverPrimaryReviewBeforeRouting(ctx, opts.TaskID)
+	if err != nil {
+		finalErr = err
+		finalOutcome = reviewLifecycleOperationalFailure(preflight, err)
+		return finalOutcome, err
+	}
+	if handled {
+		finalOutcome = primaryReviewLifecycleOutcome(preflight, inspection)
+		return finalOutcome, nil
+	}
 	maxAttempts, err := reviewMaxAutonomousReviewAttempts(s.Paths)
 	if err != nil {
 		err = fmt.Errorf("task review %s: %w", opts.TaskID, err)
 		finalErr = err
-		finalOutcome = reviewLifecycleOperationalFailure(ReviewAttemptContext{}, err)
+		finalOutcome = reviewLifecycleOperationalFailure(preflight, err)
 		return finalOutcome, err
 	}
 	start, err := s.startReview(ctx, opts.TaskID, opts.PipelineName)
 	if err != nil {
+		var recovered primaryReviewRecoveredError
+		if errors.As(err, &recovered) {
+			finalOutcome = ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomePrimaryRecovered, Context: start, RecoveryInspection: recovered.inspection}
+			return finalOutcome, nil
+		}
+		var notRecoverable primaryReviewNotRecoverableError
+		if errors.As(err, &notRecoverable) {
+			kind := ReviewLifecycleOutcomePrimaryUnknown
+			if notRecoverable.inspection.Condition == AttachedExecutionLive {
+				kind = ReviewLifecycleOutcomePrimaryLive
+			}
+			finalOutcome = ReviewLifecycleOutcome{Kind: kind, Context: start, RecoveryInspection: notRecoverable.inspection}
+			return finalOutcome, nil
+		}
 		finalOutcome, finalErr = reviewLifecycleStartOutcome(start, err)
 		return finalOutcome, finalErr
 	}
@@ -396,6 +428,50 @@ func (s ReviewLifecycleService) RunAfterCompletedRun(
 
 func reviewLifecycleOperationalFailure(ctx ReviewAttemptContext, err error) ReviewLifecycleOutcome {
 	return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeOperationalFail, Context: ctx, Err: err}
+}
+
+func primaryReviewLifecycleOutcome(ctx ReviewAttemptContext, inspection AttachedExecutionInspection) ReviewLifecycleOutcome {
+	switch inspection.Condition {
+	case AttachedExecutionRecoverable, AttachedExecutionAlreadyRecovered:
+		return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomePrimaryRecovered, Context: ctx, RecoveryInspection: inspection}
+	case AttachedExecutionLive:
+		return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomePrimaryLive, Context: ctx, RecoveryInspection: inspection}
+	default:
+		return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomePrimaryUnknown, Context: ctx, RecoveryInspection: inspection}
+	}
+}
+
+// recoverPrimaryReviewBeforeRouting performs task resolution and stale-primary
+// reconciliation before loading replacement-review configuration.
+func (s ReviewLifecycleService) recoverPrimaryReviewBeforeRouting(ctx context.Context, taskID string) (ReviewAttemptContext, AttachedExecutionInspection, bool, error) {
+	taskID = strings.TrimSpace(taskID)
+	resolved, err := task.ResolveTaskSource(s.Sources, taskID)
+	if err != nil {
+		return ReviewAttemptContext{}, AttachedExecutionInspection{}, false, err
+	}
+	backend, err := s.BackendFactory(resolved.Source)
+	if err != nil {
+		return ReviewAttemptContext{}, AttachedExecutionInspection{}, false, fmt.Errorf("task review %s: create backend for repo %s (%s; prefix %s): %w", resolved.TaskID, resolved.Source.Repository.ID, resolved.Source.Repository.Name, resolved.Source.Repository.TaskIDPrefix, err)
+	}
+	taskItem, err := fetchReviewTask(ctx, backend, resolved)
+	if err != nil {
+		return ReviewAttemptContext{}, AttachedExecutionInspection{}, false, err
+	}
+	base := ReviewAttemptContext{paths: s.Paths, store: s.RunStore, Source: resolved.Source, Task: taskItem}
+	primary, ok, err := latestPrimaryReviewExecution(s.RunStore, base)
+	if err != nil || !ok {
+		return base, AttachedExecutionInspection{}, false, err
+	}
+	inspection, err := ReconcilePrimaryReviewExecution(ctx, s.Paths, s.RunStore, base.RepoID(), base.TaskID(), primary.Attempt, "task_review", s.ProcessProbe)
+	if err != nil {
+		return base, inspection, false, fmt.Errorf("task review %s: recover primary reviewer: %w", resolved.TaskID, err)
+	}
+	switch inspection.Condition {
+	case AttachedExecutionRecoverable, AttachedExecutionAlreadyRecovered, AttachedExecutionLive, AttachedExecutionUnverifiable:
+		return base, inspection, true, nil
+	default:
+		return base, inspection, false, nil
+	}
 }
 
 func reviewLifecycleStartOutcome(ctx ReviewAttemptContext, err error) (ReviewLifecycleOutcome, error) {
@@ -525,26 +601,29 @@ func (s ReviewLifecycleService) pipelineRunOptions(runCtx context.Context, ctx R
 	}
 	promptManualStep := s.manualStepPrompt(ctx, presentation.PromptManualStep)
 	return review.PipelineRunOptions{
-		Context:                 runCtx,
-		Store:                   ctx.store,
-		Logger:                  s.Logger,
-		RepoID:                  ctx.RepoID(),
-		TaskID:                  ctx.TaskID(),
-		Branch:                  ctx.Target.Branch,
-		Workdir:                 ctx.Workdir,
-		Attempt:                 ctx.Review,
-		Pipeline:                ctx.Pipeline,
-		SessionName:             ctx.Task.ReviewSessionName(),
-		Stdout:                  presentation.Stdout,
-		Stderr:                  presentation.Stderr,
-		Stdin:                   presentation.Stdin,
-		InteractiveOutput:       presentation.InteractiveOutput,
-		OutputWidth:             presentation.OutputWidth,
-		OutputWidthFunc:         presentation.OutputWidthFunc,
-		AgentConfig:             ctx.AgentConfig,
-		AgentLauncher:           s.AgentLauncher,
-		Environment:             s.Environment,
-		UsageCaptureEnv:         s.UsageCaptureEnv,
+		Context:           runCtx,
+		Store:             ctx.store,
+		Logger:            s.Logger,
+		RepoID:            ctx.RepoID(),
+		TaskID:            ctx.TaskID(),
+		Branch:            ctx.Target.Branch,
+		Workdir:           ctx.Workdir,
+		Attempt:           ctx.Review,
+		Pipeline:          ctx.Pipeline,
+		SessionName:       ctx.Task.ReviewSessionName(),
+		Stdout:            presentation.Stdout,
+		Stderr:            presentation.Stderr,
+		Stdin:             presentation.Stdin,
+		InteractiveOutput: presentation.InteractiveOutput,
+		OutputWidth:       presentation.OutputWidth,
+		OutputWidthFunc:   presentation.OutputWidthFunc,
+		AgentConfig:       ctx.AgentConfig,
+		AgentLauncher:     s.AgentLauncher,
+		Environment:       s.Environment,
+		UsageCaptureEnv:   s.UsageCaptureEnv,
+		RecordPrimaryChildPID: func(stepName string, pid int) error {
+			return s.RecordPrimaryReviewChildPID(ctx.RepoID(), ctx.TaskID(), ctx.Review.Attempt, stepName, pid)
+		},
 		ResumeFromStep:          ctx.Resumed,
 		PauseBeforeManual:       presentation.PauseBeforeManual,
 		RenderManualStep:        renderManualStep,
@@ -553,6 +632,12 @@ func (s ReviewLifecycleService) pipelineRunOptions(runCtx context.Context, ctx R
 		PromptAutomatedBlockers: presentation.PromptAutomatedBlockers,
 		PromptAlternateFindings: presentation.PromptAlternateFindings,
 	}, nil
+}
+
+// RecordPrimaryReviewChildPID persists a newly started primary reviewer's
+// direct PID under the same mutation protection used for implementation runs.
+func (s ReviewLifecycleService) RecordPrimaryReviewChildPID(repoID string, taskID string, attempt int, stepName string, pid int) error {
+	return RecordPrimaryReviewChildPID(s.Paths, s.Logger, s.RunStore, repoID, taskID, attempt, stepName, pid)
 }
 
 func (s ReviewLifecycleService) manualStepPrompt(
@@ -734,7 +819,7 @@ func (s ReviewLifecycleService) executeReviewAttempt(runCtx context.Context, ctx
 	return outcome.Status, nil
 }
 
-//nolint:funlen // Review-start recovery branches must remain ordered with target validation.
+//nolint:funlen,gocognit // Review-start recovery branches must remain ordered with target validation.
 func (s ReviewLifecycleService) startReview(ctx context.Context, taskID string, pipelineName string) (ReviewAttemptContext, error) {
 	taskID = strings.TrimSpace(taskID)
 	resolved, err := task.ResolveTaskSource(s.Sources, taskID)
@@ -749,6 +834,21 @@ func (s ReviewLifecycleService) startReview(ctx context.Context, taskID string, 
 	if err != nil {
 		return ReviewAttemptContext{}, err
 	}
+	base := ReviewAttemptContext{paths: s.Paths, store: s.RunStore, Source: resolved.Source, Task: taskItem}
+	if primary, ok, loadErr := latestPrimaryReviewExecution(s.RunStore, base); loadErr != nil {
+		return base, fmt.Errorf("task review %s: inspect primary reviewer: %w", resolved.TaskID, loadErr)
+	} else if ok {
+		inspection, reconcileErr := ReconcilePrimaryReviewExecution(ctx, s.Paths, s.RunStore, base.RepoID(), base.TaskID(), primary.Attempt, "task_review", s.ProcessProbe)
+		if reconcileErr != nil {
+			return base, fmt.Errorf("task review %s: recover primary reviewer: %w", resolved.TaskID, reconcileErr)
+		}
+		if inspection.Condition == AttachedExecutionRecoverable || inspection.Condition == AttachedExecutionAlreadyRecovered {
+			return base, primaryReviewRecoveredError{inspection: inspection}
+		}
+		if inspection.Condition == AttachedExecutionLive || inspection.Condition == AttachedExecutionUnverifiable {
+			return base, primaryReviewNotRecoverableError{inspection: inspection}
+		}
+	}
 	var requestedPipeline *review.Pipeline
 	if strings.TrimSpace(pipelineName) != "" {
 		pipeline, err := ResolveTaskReviewPipeline(s.Paths, resolved.Source.Repository, pipelineName)
@@ -757,7 +857,6 @@ func (s ReviewLifecycleService) startReview(ctx context.Context, taskID string, 
 		}
 		requestedPipeline = &pipeline
 	}
-	base := ReviewAttemptContext{paths: s.Paths, store: s.RunStore, Source: resolved.Source, Task: taskItem}
 	target, err := ReviewTarget(s.RunStore, s.Paths, base)
 	if err != nil {
 		return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", resolved.TaskID, err)
@@ -842,6 +941,22 @@ func fetchReviewTask(
 		)
 	}
 	return taskItem, nil
+}
+
+type primaryReviewRecoveredError struct {
+	inspection AttachedExecutionInspection
+}
+
+func (e primaryReviewRecoveredError) Error() string {
+	return "primary reviewer execution recovered"
+}
+
+type primaryReviewNotRecoverableError struct {
+	inspection AttachedExecutionInspection
+}
+
+func (e primaryReviewNotRecoverableError) Error() string {
+	return "primary reviewer execution remains " + string(e.inspection.Condition) + " (" + e.inspection.Reason + ")"
 }
 
 type freshReviewBlockerGuardError struct {
@@ -1063,6 +1178,15 @@ func reviewMaxAutonomousReviewAttempts(paths state.Paths) (int, error) {
 		return 0, err
 	}
 	return config.MaxAutonomousReviewAttempts, nil
+}
+
+func latestPrimaryReviewExecution(store ReviewLifecycleStore, ctx ReviewAttemptContext) (PrimaryReviewExecution, bool, error) {
+	taskState, err := store.Load(ctx.RepoID(), ctx.TaskID())
+	if err != nil {
+		return PrimaryReviewExecution{}, false, err
+	}
+	primary, ok := ActivePrimaryReviewExecution(taskState)
+	return primary, ok, nil
 }
 
 func latestManualWaitingReview(store ReviewLifecycleStore, ctx ReviewAttemptContext) (taskstate.ReviewAttempt, bool, error) {
