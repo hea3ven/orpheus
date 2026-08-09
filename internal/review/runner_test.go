@@ -884,6 +884,38 @@ func promptAssertingReviewLauncher(wantPrompt string) fakeReviewLauncherFunc {
 	}
 }
 
+func TestRunPipelinePersistsPrimaryReviewerProcessFacts(t *testing.T) {
+	harness := newAgentReviewPipelineHarness(t)
+	var stdout, stderr bytes.Buffer
+	outcome, err := review.RunPipeline(review.PipelineRunOptions{
+		Context: context.Background(), Store: harness.store, RepoID: "alpha", TaskID: "op-1", Branch: "main", Workdir: harness.workdir,
+		Attempt: harness.attempt, Pipeline: agentReviewPipeline(), Stdout: &stdout, Stderr: &stderr,
+		AgentConfig: reviewAgentConfig(false),
+		RecordPrimaryChildPID: func(stepName string, pid int) error {
+			_, err := harness.store.RecordReviewStepChildPID("alpha", "op-1", harness.attempt.Attempt, stepName, pid)
+			return err
+		},
+		AgentLauncher: fakeReviewLauncherFunc(func(_ context.Context, _ agentexec.Command, opts agentexec.LaunchOptions) error {
+			if opts.OnStart == nil {
+				t.Fatal("primary reviewer launch did not receive OnStart PID callback")
+			}
+			return opts.OnStart(4242)
+		}),
+	})
+	if err != nil || outcome.Status != taskstate.ReviewStatusPassed {
+		t.Fatalf("run pipeline outcome=%#v err=%v, want passed", outcome, err)
+	}
+	state, err := harness.store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	latest, _ := taskstate.LatestReview(state)
+	execution := latest.Steps[0].Execution
+	if execution == nil || execution.SupervisorPID <= 0 || execution.ChildPID != 4242 {
+		t.Fatalf("primary execution = %#v, want supervisor and child PID", execution)
+	}
+}
+
 func assertLatestReviewExecutionModel(t *testing.T, store taskstate.Store, harnessName string, model string) {
 	t.Helper()
 

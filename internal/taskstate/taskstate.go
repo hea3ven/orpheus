@@ -93,6 +93,7 @@ const (
 	EventRunFinished          EventType = "run_finished"
 	EventRunStartFailed       EventType = "run_start_failed"
 	EventRunInterrupted       EventType = "run_interrupted"
+	EventReviewInterrupted    EventType = "review_interrupted"
 	EventCompletionRecorded   EventType = "completion_recorded"
 	EventCompletionRepeated   EventType = "completion_repeated"
 	EventChangesPushed        EventType = "changes_pushed"
@@ -296,10 +297,15 @@ type AgentExecution struct {
 	FinishedAt     *time.Time `yaml:"finished_at,omitempty"`
 	DurationMillis int64      `yaml:"duration_millis,omitempty"`
 
-	// SupervisorPID is the Orpheus process that created this implementation run.
+	// SupervisorPID is the Orpheus process that created this attached execution.
 	// ChildPID is the direct attached command started by that supervisor.
 	SupervisorPID int `yaml:"supervisor_pid,omitempty"`
 	ChildPID      int `yaml:"child_pid,omitempty"`
+
+	// Interruption facts are set only when local recovery proves supervision
+	// disappeared before a terminal result was persisted.
+	InterruptionReason  string `yaml:"interruption_reason,omitempty"`
+	InterruptionTrigger string `yaml:"interruption_trigger,omitempty"`
 
 	Launch       *AgentLaunch      `yaml:"launch,omitempty"`
 	Session      *AgentSession     `yaml:"session,omitempty"`
@@ -574,6 +580,8 @@ type Event struct {
 }
 
 // DisplayName returns the concise human-readable name for an audit event.
+//
+//nolint:funlen // One switch intentionally lists every persisted audit event.
 func (e Event) DisplayName() string {
 	switch e.Type {
 	case EventWorktreeCreated:
@@ -592,6 +600,8 @@ func (e Event) DisplayName() string {
 		return "Run start failed"
 	case EventRunInterrupted:
 		return "Run interrupted"
+	case EventReviewInterrupted:
+		return "Primary review interrupted"
 	case EventCompletionRecorded:
 		return "Completion recorded"
 	case EventCompletionRepeated:
@@ -650,6 +660,13 @@ type StartRunOptions struct {
 // InterruptRunOptions records why an attached implementation run was safely
 // reconciled after its supervision disappeared.
 type InterruptRunOptions struct {
+	Reason  string
+	Trigger string
+}
+
+// InterruptPrimaryReviewExecutionOptions records a safely recovered primary
+// reviewer execution and the recovery source.
+type InterruptPrimaryReviewExecutionOptions struct {
 	Reason  string
 	Trigger string
 }
@@ -1464,6 +1481,75 @@ func (s Store) RecordReviewStep(
 	return state.Reviews[index], nil
 }
 
+// RecordReviewStepChildPID records the direct child PID observed immediately after
+// a primary reviewer launches. The launcher stops the child when this fails.
+func (s Store) RecordReviewStepChildPID(repoID, taskID string, attempt int, stepName string, pid int) (ReviewAttempt, error) {
+	stepName = strings.TrimSpace(stepName)
+	if stepName == "" || pid <= 0 {
+		return ReviewAttempt{}, fmt.Errorf("record review child PID for task %s/%s: step name and positive PID are required", repoID, taskID)
+	}
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+	reviewIndex, stepIndex, err := finishReviewStepExecutionIndexes(state, repoID, taskID, attempt, stepName)
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+	execution := state.Reviews[reviewIndex].Steps[stepIndex].Execution
+	if execution == nil || execution.Purpose != AgentExecutionPurposeReview || execution.Status != RunStatusRunning {
+		return ReviewAttempt{}, fmt.Errorf("record review child PID for task %s/%s: review attempt %d step %q has no running primary reviewer", repoID, taskID, attempt, stepName)
+	}
+	execution.ChildPID = pid
+	if err := s.save(state); err != nil {
+		return ReviewAttempt{}, err
+	}
+	return state.Reviews[reviewIndex], nil
+}
+
+// InterruptPrimaryReviewExecution atomically records a recovered interrupted
+// primary reviewer and its containing failed review attempt.
+func (s Store) InterruptPrimaryReviewExecution(repoID, taskID string, attempt int, stepName string, opts InterruptPrimaryReviewExecutionOptions) (ReviewAttempt, error) {
+	reason, trigger, stepName := strings.TrimSpace(opts.Reason), strings.TrimSpace(opts.Trigger), strings.TrimSpace(stepName)
+	if reason == "" || trigger == "" || stepName == "" {
+		return ReviewAttempt{}, fmt.Errorf("interrupt primary review execution for task %s/%s: reason, trigger, and step name are required", repoID, taskID)
+	}
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+	if len(state.Reviews) == 0 || state.Reviews[len(state.Reviews)-1].Attempt != attempt {
+		return ReviewAttempt{}, fmt.Errorf("interrupt primary review execution for task %s/%s: review attempt %d is not latest", repoID, taskID, attempt)
+	}
+	reviewIndex := len(state.Reviews) - 1
+	review := &state.Reviews[reviewIndex]
+	if review.Status != ReviewStatusRunning {
+		return ReviewAttempt{}, fmt.Errorf("interrupt primary review execution for task %s/%s: review attempt %d is %q, expected %q", repoID, taskID, attempt, review.Status, ReviewStatusRunning)
+	}
+	stepIndex := latestReviewStepExecutionIndex(*review, stepName)
+	if stepIndex < 0 {
+		return ReviewAttempt{}, fmt.Errorf("interrupt primary review execution for task %s/%s: review attempt %d step %q was not found", repoID, taskID, attempt, stepName)
+	}
+	execution := review.Steps[stepIndex].Execution
+	if execution == nil || execution.Purpose != AgentExecutionPurposeReview || execution.Status != RunStatusRunning {
+		return ReviewAttempt{}, fmt.Errorf("interrupt primary review execution for task %s/%s: review attempt %d step %q has no running primary reviewer", repoID, taskID, attempt, stepName)
+	}
+	now := s.nowUTC()
+	execution.Status = RunStatusInterrupted
+	execution.FinishedAt = &now
+	execution.DurationMillis = durationMillis(execution.StartedAt, now)
+	execution.InterruptionReason = reason
+	execution.InterruptionTrigger = trigger
+	review.Status = ReviewStatusFailed
+	review.FinishedAt = &now
+	updated := *review
+	state.Events = append(state.Events, Event{Type: EventReviewInterrupted, At: now, Attempt: attempt, Status: RunStatusInterrupted, Agent: execution.Agent, InterruptionReason: reason, InterruptionTrigger: trigger})
+	if err := s.save(state); err != nil {
+		return ReviewAttempt{}, err
+	}
+	return updated, nil
+}
+
 // FinishReviewStepExecution records terminal state and best-effort usage telemetry for a review agent step.
 func (s Store) FinishReviewStepExecution(
 	repoID,
@@ -2258,19 +2344,14 @@ func IsOpenAdvisoryReviewFinding(finding ReviewFinding) bool {
 
 // ReviewHasOpenBlockers reports whether an attempt still has unresolved blocking findings.
 func ReviewHasOpenBlockers(review ReviewAttempt) bool {
-	for _, finding := range review.Findings {
-		if IsOpenBlockingReviewFinding(finding) {
-			return true
-		}
-	}
-	return false
+	return len(UntargetedBlockingFindingIndexes(review)) > 0
 }
 
 // UntargetedBlockingFindingIndexes returns open blocker indexes.
 func UntargetedBlockingFindingIndexes(review ReviewAttempt) []int {
 	indexes := make([]int, 0)
 	for index, finding := range review.Findings {
-		if IsOpenBlockingReviewFinding(finding) {
+		if IsOpenBlockingReviewFinding(finding) && !InterruptedPrimaryReviewFinding(review, finding) {
 			indexes = append(indexes, index)
 		}
 	}
@@ -2288,7 +2369,7 @@ func ReviewHasOpenBlockersInState(state TaskState, review ReviewAttempt) bool {
 func UntargetedBlockingFindingIndexesInState(state TaskState, review ReviewAttempt) []int {
 	indexes := make([]int, 0)
 	for index, finding := range review.Findings {
-		if IsOpenBlockingReviewFindingInState(state, finding) {
+		if IsOpenBlockingReviewFindingInState(state, finding) && !InterruptedPrimaryReviewFinding(review, finding) {
 			indexes = append(indexes, index)
 		}
 	}
@@ -2385,6 +2466,32 @@ func automatedReviewStepNames(review ReviewAttempt) map[string]bool {
 		}
 	}
 	return automatedSteps
+}
+
+// InterruptedPrimaryReviewFinding reports whether a finding belongs to a
+// primary reviewer execution recovered as interrupted. Such findings are
+// retained for audit but never drive blocker routing.
+func InterruptedPrimaryReviewFinding(review ReviewAttempt, finding ReviewFinding) bool {
+	return InterruptedPrimaryReviewStepNames(review)[strings.TrimSpace(finding.Step)]
+}
+
+// PrimaryReviewExecutionInterrupted reports whether primary-reviewer recovery
+// interrupted any execution in this attempt.
+func PrimaryReviewExecutionInterrupted(review ReviewAttempt) bool {
+	return len(InterruptedPrimaryReviewStepNames(review)) > 0
+}
+
+func InterruptedPrimaryReviewStepNames(review ReviewAttempt) map[string]bool {
+	steps := make(map[string]bool)
+	for _, step := range review.Steps {
+		if step.Kind == ReviewStepKindAgentReview && step.Execution != nil &&
+			step.Execution.Purpose == AgentExecutionPurposeReview &&
+			step.Execution.Status == RunStatusInterrupted &&
+			strings.TrimSpace(step.Execution.InterruptionReason) != "" {
+			steps[step.Name] = true
+		}
+	}
+	return steps
 }
 
 // ReviewComparisonInputInterrupted reports whether an alternate comparison lost operator input.
@@ -3760,6 +3867,8 @@ func normalizeAgentExecution(execution AgentExecution) AgentExecution {
 	execution.Args = cloneStrings(execution.Args)
 	execution.SessionName = strings.TrimSpace(execution.SessionName)
 	execution.SupervisorPID, execution.ChildPID = normalizeProcessPIDs(execution.SupervisorPID, execution.ChildPID)
+	execution.InterruptionReason = strings.TrimSpace(execution.InterruptionReason)
+	execution.InterruptionTrigger = strings.TrimSpace(execution.InterruptionTrigger)
 	if !execution.StartedAt.IsZero() {
 		execution.StartedAt = execution.StartedAt.UTC()
 	}
@@ -4510,7 +4619,7 @@ func validateEvent(event Event) error {
 	if event.Type == EventFinalizationFailed && strings.TrimSpace(event.Error) == "" {
 		return fmt.Errorf("event %q requires an error", event.Type)
 	}
-	if event.Type == EventRunInterrupted && (strings.TrimSpace(event.InterruptionReason) == "" || strings.TrimSpace(event.InterruptionTrigger) == "") {
+	if (event.Type == EventRunInterrupted || event.Type == EventReviewInterrupted) && (strings.TrimSpace(event.InterruptionReason) == "" || strings.TrimSpace(event.InterruptionTrigger) == "") {
 		return fmt.Errorf("event %q requires interruption reason and trigger", event.Type)
 	}
 	switch event.Type {
@@ -4601,6 +4710,7 @@ func validEventType(eventType EventType) bool {
 		EventRunFinished,
 		EventRunStartFailed,
 		EventRunInterrupted,
+		EventReviewInterrupted,
 		EventCompletionRecorded,
 		EventCompletionRepeated,
 		EventChangesPushed,

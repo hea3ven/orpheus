@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
@@ -802,6 +803,137 @@ func TestReviewLifecyclePreparesPipelineBeforeResumeReviewTransition(t *testing.
 	}
 	if latest.Attempt != attempt.Attempt {
 		t.Fatalf("latest attempt = %d, want %d", latest.Attempt, attempt.Attempt)
+	}
+}
+
+func TestReviewLifecycleRecoversBeforeReplacementConfiguration(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name         string
+		config       map[string]any
+		pipelineName string
+	}{
+		{name: "invalid max attempts", config: map[string]any{"reviews": map[string]any{"max_autonomous_review_attempts": 0}}},
+		{name: "unknown requested pipeline", config: map[string]any{"reviews": map[string]any{}}, pipelineName: "missing"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			paths := testPaths(t)
+			if err := paths.WriteConfigYAML(review.ConfigFile, test.config); err != nil {
+				t.Fatalf("write invalid replacement config: %v", err)
+			}
+			store := taskstate.NewStore(paths)
+			reviewAttempt, err := store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{Pipeline: "agent-review", Step: "automated-review"})
+			if err != nil {
+				t.Fatalf("start review: %v", err)
+			}
+			execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, Agent: "reviewer", StartedAt: reviewAttempt.StartedAt, SupervisorPID: 10}
+			if _, err := store.RecordReviewStep("alpha", "op-1", reviewAttempt.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "automated-review", Execution: &execution}); err != nil {
+				t.Fatalf("record primary review: %v", err)
+			}
+			taskItem := task.Task{ID: "op-1", Title: "Lifecycle task", Status: task.StatusInProgress}
+			service := workflow.ReviewLifecycleService{
+				Paths: paths, RunStore: store, ProcessProbe: func(int) (agentexec.ProcessLiveness, error) { return agentexec.ProcessAbsent, nil }, Frontend: &recordingReviewFrontend{},
+				Sources: []task.RepositorySource{{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op", Path: t.TempDir(), DefaultBranch: "main"}}},
+				BackendFactory: func(task.RepositorySource) (workflow.ReviewLifecycleBackend, error) {
+					return &fakeReviewLifecycleBackend{task: taskItem}, nil
+				},
+			}
+			outcome, err := service.Run(context.Background(), workflow.ReviewLifecycleOptions{TaskID: "op-1", PipelineName: test.pipelineName})
+			if err != nil {
+				t.Fatalf("run lifecycle: %v", err)
+			}
+			if outcome.Kind != workflow.ReviewLifecycleOutcomePrimaryRecovered {
+				t.Fatalf("outcome = %#v, want recovery guidance", outcome)
+			}
+			state, err := store.Load("alpha", "op-1")
+			if err != nil {
+				t.Fatalf("load review: %v", err)
+			}
+			latest, _ := taskstate.LatestReview(state)
+			if latest.Status != taskstate.ReviewStatusFailed || !taskstate.PrimaryReviewExecutionInterrupted(latest) {
+				t.Fatalf("latest review = %#v, want persisted interruption", latest)
+			}
+		})
+	}
+}
+
+func TestReviewLifecycleReturnsTypedPrimaryReviewLivenessOutcomes(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name       string
+		probe      workflow.ProcessProbe
+		wantKind   workflow.ReviewLifecycleOutcomeKind
+		wantReason string
+	}{
+		{name: "live", probe: func(int) (agentexec.ProcessLiveness, error) { return agentexec.ProcessLive, nil }, wantKind: workflow.ReviewLifecycleOutcomePrimaryLive, wantReason: "supervisor_pid_live"},
+		{name: "unverifiable", probe: func(int) (agentexec.ProcessLiveness, error) {
+			return agentexec.ProcessUnknown, errors.New("unsupported")
+		}, wantKind: workflow.ReviewLifecycleOutcomePrimaryUnknown, wantReason: "supervisor_pid_probe_failed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			paths := testPaths(t)
+			store := taskstate.NewStore(paths)
+			reviewAttempt, err := store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{Pipeline: "agent-review", Step: "automated-review"})
+			if err != nil {
+				t.Fatalf("start review: %v", err)
+			}
+			execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, Agent: "reviewer", StartedAt: reviewAttempt.StartedAt, SupervisorPID: 10}
+			if _, err := store.RecordReviewStep("alpha", "op-1", reviewAttempt.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "automated-review", Execution: &execution}); err != nil {
+				t.Fatalf("record primary review: %v", err)
+			}
+			taskItem := task.Task{ID: "op-1", Title: "Lifecycle task", Status: task.StatusInProgress}
+			service := workflow.ReviewLifecycleService{
+				Paths: paths, RunStore: store, ProcessProbe: test.probe, Frontend: &recordingReviewFrontend{},
+				Sources: []task.RepositorySource{{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op", Path: t.TempDir(), DefaultBranch: "main"}}},
+				BackendFactory: func(task.RepositorySource) (workflow.ReviewLifecycleBackend, error) {
+					return &fakeReviewLifecycleBackend{task: taskItem}, nil
+				},
+			}
+			outcome, err := service.Run(context.Background(), workflow.ReviewLifecycleOptions{TaskID: "op-1"})
+			if err != nil {
+				t.Fatalf("run lifecycle: %v", err)
+			}
+			if outcome.Kind != test.wantKind || outcome.RecoveryInspection.Reason != test.wantReason {
+				t.Fatalf("outcome = %#v, want kind=%q reason=%q", outcome, test.wantKind, test.wantReason)
+			}
+		})
+	}
+}
+
+func TestReviewLifecycleStopsWhenPrimaryWasConcurrentlyRecovered(t *testing.T) {
+	paths := testPaths(t)
+	store := taskstate.NewStore(paths)
+	reviewAttempt, err := store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{Pipeline: "agent-review", Step: "automated-review"})
+	if err != nil {
+		t.Fatalf("start review: %v", err)
+	}
+	execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, Agent: "reviewer", StartedAt: reviewAttempt.StartedAt, SupervisorPID: 10}
+	if _, err := store.RecordReviewStep("alpha", "op-1", reviewAttempt.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "automated-review", Execution: &execution}); err != nil {
+		t.Fatalf("record primary review: %v", err)
+	}
+	stale, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load stale review: %v", err)
+	}
+	if _, err := store.InterruptPrimaryReviewExecution("alpha", "op-1", reviewAttempt.Attempt, "automated-review", taskstate.InterruptPrimaryReviewExecutionOptions{Reason: "supervisor_absent_child_pid_not_recorded_assume_not_started", Trigger: "task_run"}); err != nil {
+		t.Fatalf("interrupt review: %v", err)
+	}
+	taskItem := task.Task{ID: "op-1", Title: "Lifecycle task", Status: task.StatusInProgress}
+	service := workflow.ReviewLifecycleService{
+		Paths: paths, RunStore: &staleThenRecoveredStore{Store: store, stale: stale}, Frontend: &recordingReviewFrontend{},
+		Sources: []task.RepositorySource{{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op", Path: t.TempDir(), DefaultBranch: "main"}}},
+		BackendFactory: func(task.RepositorySource) (workflow.ReviewLifecycleBackend, error) {
+			return &fakeReviewLifecycleBackend{task: taskItem}, nil
+		},
+	}
+	outcome, err := service.Run(context.Background(), workflow.ReviewLifecycleOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("run lifecycle: %v", err)
+	}
+	if outcome.Kind != workflow.ReviewLifecycleOutcomePrimaryRecovered || outcome.RecoveryInspection.Condition != workflow.AttachedExecutionAlreadyRecovered {
+		t.Fatalf("outcome = %#v, want concurrent-recovery inspection stop", outcome)
 	}
 }
 
