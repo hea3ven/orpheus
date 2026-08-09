@@ -36,11 +36,18 @@ type TaskRunRoute struct {
 	PRURL   string
 }
 
+// TaskRunRecoveryStore supplies both attached-process recovery transitions
+// required before task-run routing.
+type TaskRunRecoveryStore interface {
+	ImplementationRunRecoveryStore
+	PrimaryReviewRecoveryStore
+}
+
 // PrepareTaskRunOptions supplies the workflow-owned state and process facts
-// needed to reconcile an active implementation run before selecting its route.
+// needed to reconcile stale attached work before selecting its route.
 type PrepareTaskRunOptions struct {
 	Paths   state.Paths
-	Store   ImplementationRunRecoveryStore
+	Store   TaskRunRecoveryStore
 	RepoID  string
 	TaskID  string
 	Task    task.Task
@@ -51,9 +58,10 @@ type PrepareTaskRunOptions struct {
 // PreparedTaskRun is the reloaded task state, recovery inspection, and route
 // selected after workflow reconciliation.
 type PreparedTaskRun struct {
-	State      taskstate.TaskState
-	Inspection ImplementationRunInspection
-	Route      TaskRunRoute
+	State            taskstate.TaskState
+	Inspection       ImplementationRunInspection
+	ReviewInspection AttachedExecutionInspection
+	Route            TaskRunRoute
 }
 
 // PrepareTaskRun reconciles an active implementation run under mutation
@@ -77,11 +85,22 @@ func PrepareTaskRun(ctx context.Context, opts PrepareTaskRunOptions) (PreparedTa
 			return PreparedTaskRun{}, fmt.Errorf("reload reconciled local task-state: %w", err)
 		}
 	}
+	var reviewInspection AttachedExecutionInspection
+	if primary, ok := ActivePrimaryReviewExecution(taskState); ok {
+		reviewInspection, err = ReconcilePrimaryReviewExecution(ctx, opts.Paths, opts.Store, opts.RepoID, opts.TaskID, primary.Attempt, opts.Trigger, opts.Probe)
+		if err != nil {
+			return PreparedTaskRun{}, err
+		}
+		taskState, err = opts.Store.Load(opts.RepoID, opts.TaskID)
+		if err != nil {
+			return PreparedTaskRun{}, fmt.Errorf("reload reconciled primary review state: %w", err)
+		}
+	}
 	route, err := SelectTaskRunRoute(opts.Task, taskState)
 	if err != nil {
 		return PreparedTaskRun{}, err
 	}
-	return PreparedTaskRun{State: taskState, Inspection: inspection, Route: route}, nil
+	return PreparedTaskRun{State: taskState, Inspection: inspection, ReviewInspection: reviewInspection, Route: route}, nil
 }
 
 // SelectTaskRunRoute maps the persisted implement-review-fix-finalize state to

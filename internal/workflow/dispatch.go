@@ -25,6 +25,7 @@ const (
 	dispatchSetupLockOperation        = "task run setup"
 	dispatchFinalizationLockOperation = "task run finalization"
 	dispatchChildPIDLockOperation     = "task run child PID persistence"
+	reviewChildPIDLockOperation       = "primary review child PID persistence"
 	childPIDLockRetryDelay            = 10 * time.Millisecond
 	childPIDLockRetryCount            = 100
 )
@@ -181,12 +182,45 @@ func (s DispatchService) RecordChildPID(repoID string, taskID string, attempt in
 	if err := s.validate(); err != nil {
 		return err
 	}
+	return recordChildPIDWithMutationLock(
+		s.Paths,
+		dispatchChildPIDLockOperation,
+		s.Logger,
+		dispatchAttemptAttrs(repoID, taskID, attempt),
+		func() error {
+			_, err := s.RunStore.RecordRunChildPID(repoID, taskID, attempt, pid)
+			return err
+		},
+	)
+}
+
+// ReviewChildPIDStore persists the direct process PID for a primary review step.
+type ReviewChildPIDStore interface {
+	RecordReviewStepChildPID(repoID, taskID string, attempt int, stepName string, pid int) (taskstate.ReviewAttempt, error)
+}
+
+// RecordPrimaryReviewChildPID persists a primary reviewer's direct child PID
+// under the shared lock/retry policy for attached processes.
+func RecordPrimaryReviewChildPID(paths state.Paths, logger *slog.Logger, store ReviewChildPIDStore, repoID string, taskID string, attempt int, stepName string, pid int) error {
+	if store == nil {
+		return errors.New("primary review child PID store is required")
+	}
+	return recordChildPIDWithMutationLock(
+		paths,
+		reviewChildPIDLockOperation,
+		logger,
+		dispatchAttemptAttrs(repoID, taskID, attempt),
+		func() error {
+			_, err := store.RecordReviewStepChildPID(repoID, taskID, attempt, stepName, pid)
+			return err
+		},
+	)
+}
+
+func recordChildPIDWithMutationLock(paths state.Paths, operation string, logger *slog.Logger, attrs []slog.Attr, record func() error) error {
 	var err error
 	for retry := 0; retry < childPIDLockRetryCount; retry++ {
-		err = state.WithGlobalMutationLockLogger(context.Background(), s.Paths, dispatchChildPIDLockOperation, s.Logger, func() error {
-			_, recordErr := s.RunStore.RecordRunChildPID(repoID, taskID, attempt, pid)
-			return recordErr
-		}, dispatchAttemptAttrs(repoID, taskID, attempt)...)
+		err = state.WithGlobalMutationLockLogger(context.Background(), paths, operation, logger, record, attrs...)
 		if err == nil || !errors.Is(err, os.ErrExist) {
 			return err
 		}

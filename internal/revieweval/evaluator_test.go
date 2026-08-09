@@ -5,10 +5,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testguard"
 	"github.com/stretchr/testify/assert"
@@ -172,6 +176,60 @@ func TestPrepareRunInitializesRepoLocalBeadsWhenOperatorBeadsDirIsSet(t *testing
 	is.FileExists(filepath.Join(setup.repoPath, ".beads", "config.yaml"))
 	is.NoFileExists(filepath.Join(operatorBeadsDir, "config.yaml"))
 	is.NoDirExists(filepath.Join(operatorBeadsDir, ".beads"))
+}
+
+func TestEvaluatorPrimaryChildPIDPreservesConcurrentFinding(t *testing.T) {
+	paths, err := state.NewPaths(filepath.Join(t.TempDir(), "config"), filepath.Join(t.TempDir(), "data"))
+	require.NoError(t, err)
+	store := taskstate.NewStore(paths)
+	attempt, err := store.StartReviewWithOptions("review-eval", "eval-1", taskstate.StartReviewOptions{Pipeline: "evaluation", Step: "ai-review"})
+	require.NoError(t, err)
+	execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, Agent: "reviewer", StartedAt: attempt.StartedAt, SupervisorPID: 10}
+	_, err = store.RecordReviewStep("review-eval", "eval-1", attempt.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution})
+	require.NoError(t, err)
+	setup := runSetup{paths: paths, taskID: "eval-1", attempt: attempt, store: store}
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wait sync.WaitGroup
+	wait.Add(2)
+	go func() {
+		defer wait.Done()
+		<-start
+		errs <- recordEvaluatorPrimaryChildPID(setup, "ai-review", 4242)
+	}()
+	go func() {
+		defer wait.Done()
+		<-start
+		errs <- retryEvaluatorMutationLock(paths, "test evaluator finding", func() error {
+			_, err := store.RecordReviewFinding("review-eval", "eval-1", attempt.Attempt, taskstate.ReviewFinding{Type: taskstate.FindingTypeAdvisory, Step: "ai-review", Title: "immediate", Description: "finding"})
+			return err
+		})
+	}()
+	close(start)
+	wait.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	loaded, err := store.Load("review-eval", "eval-1")
+	require.NoError(t, err)
+	latest, ok := taskstate.LatestReview(loaded)
+	require.True(t, ok)
+	assert.Equal(t, 4242, latest.Steps[0].Execution.ChildPID)
+	assert.Len(t, latest.Findings, 1)
+}
+
+func retryEvaluatorMutationLock(paths state.Paths, operation string, mutate func() error) error {
+	var err error
+	for retry := 0; retry < 100; retry++ {
+		err = state.WithGlobalMutationLock(paths, operation, mutate)
+		if err == nil || !errors.Is(err, os.ErrExist) {
+			return err
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return err
 }
 
 func TestRunPipelineRecordsCodexPromptArgWithEvaluationSessionName(t *testing.T) {

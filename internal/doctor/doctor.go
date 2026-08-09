@@ -33,6 +33,7 @@ type Options struct {
 type Result struct {
 	Rows               []Row
 	ImplementationRows []ImplementationRunRow
+	PrimaryReviewRows  []PrimaryReviewRow
 	Summary            Summary
 }
 
@@ -41,6 +42,16 @@ type ImplementationRunRow struct {
 	RepoID  string
 	TaskID  string
 	Attempt int
+	Outcome string
+	Reason  string
+}
+
+// PrimaryReviewRow describes stale primary-reviewer recovery diagnostics.
+type PrimaryReviewRow struct {
+	RepoID  string
+	TaskID  string
+	Attempt int
+	Step    string
 	Outcome string
 	Reason  string
 }
@@ -127,6 +138,17 @@ func diagnoseTask(
 	if err := diagnoseImplementationRunRecovery(result, paths, store, repo, taskState, fix, probe); err != nil {
 		return err
 	}
+	if err := diagnosePrimaryReviewRecovery(result, paths, store, repo, taskState, fix, probe); err != nil {
+		return err
+	}
+	// Recovery mutates lifecycle facts. Reload before telemetry diagnostics so
+	// they cannot overwrite stale running-review state or persist against an
+	// execution that just became interrupted.
+	var err error
+	taskState, err = store.Load(repo.ID, taskState.TaskID)
+	if err != nil {
+		return fmt.Errorf("reload task state after recovery diagnostics: %w", err)
+	}
 	executionDirs := taskExecutionDirs(repo, taskState)
 	if err := diagnoseImplementationExecutions(result, store, env, repo, taskState, executionDirs, fix); err != nil {
 		return err
@@ -170,6 +192,40 @@ func diagnoseImplementationRunRecovery(
 	}
 	result.ImplementationRows = append(result.ImplementationRows, ImplementationRunRow{
 		RepoID: repo.ID, TaskID: taskState.TaskID, Attempt: run.Attempt, Outcome: outcome, Reason: inspection.Reason,
+	})
+	return nil
+}
+
+func diagnosePrimaryReviewRecovery(
+	result *Result,
+	paths state.Paths,
+	store taskstate.Store,
+	repo registry.Repo,
+	taskState taskstate.TaskState,
+	fix bool,
+	probe workflow.ProcessProbe,
+) error {
+	primary, ok := workflow.ActivePrimaryReviewExecution(taskState)
+	if !ok {
+		return nil
+	}
+	inspection := workflow.InspectAttachedExecution(primary.Execution, probe)
+	outcome := string(inspection.Condition)
+	if fix && inspection.Condition == workflow.AttachedExecutionRecoverable {
+		reconciled, err := workflow.ReconcilePrimaryReviewExecution(context.Background(), paths, store, repo.ID, taskState.TaskID, primary.Attempt, "doctor_fix", probe)
+		switch {
+		case err != nil:
+			outcome = "interruption_failed"
+			inspection.Reason = "interruption_record_failed: " + err.Error()
+		case reconciled.Condition == workflow.AttachedExecutionRecoverable:
+			outcome = "interrupted"
+		default:
+			outcome = string(reconciled.Condition)
+			inspection.Reason = "diagnosed_attempt_no_longer_active"
+		}
+	}
+	result.PrimaryReviewRows = append(result.PrimaryReviewRows, PrimaryReviewRow{
+		RepoID: repo.ID, TaskID: taskState.TaskID, Attempt: primary.Attempt, Step: primary.StepName, Outcome: outcome, Reason: inspection.Reason,
 	})
 	return nil
 }

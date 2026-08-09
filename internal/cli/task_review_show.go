@@ -151,10 +151,10 @@ func renderReviewSteps(output io.Writer, steps []taskstate.ReviewStep) error {
 		if _, err := fmt.Fprintln(output, line); err != nil {
 			return err
 		}
+		if err := renderReviewExecution(output, "Primary", step.Execution); err != nil {
+			return err
+		}
 		if step.Comparison != nil {
-			if err := renderReviewExecution(output, "Primary", step.Execution); err != nil {
-				return err
-			}
 			if err := renderReviewComparison(output, step.Comparison); err != nil {
 				return err
 			}
@@ -198,8 +198,13 @@ func renderReviewExecution(output io.Writer, label string, execution *taskstate.
 	if execution == nil {
 		return nil
 	}
-	if _, err := fmt.Fprintf(output, "    %s execution:\n      Profile: %s\n      Model: %s\n      Harness: %s\n      Thinking: %s\n      Status: %s\n      Agent: %s\n      Session name: %s\n      Command: %s\n      Args: %s\n      Started: %s\n      Finished: %s\n      Duration: %dms\n", label, formatReviewValue(execution.Profile), formatReviewValue(execution.Model), formatReviewValue(execution.Harness), formatReviewValue(execution.Thinking), execution.Status, formatReviewValue(execution.Agent), formatReviewValue(execution.SessionName), formatReviewValue(execution.Command), formatReviewValue(strings.Join(execution.Args, " ")), execution.StartedAt.UTC().Format(time.RFC3339), formatExecutionFinishedAt(execution), execution.DurationMillis); err != nil {
+	if _, err := fmt.Fprintf(output, "    %s execution:\n      Profile: %s\n      Model: %s\n      Harness: %s\n      Thinking: %s\n      Status: %s\n      Agent: %s\n      Session name: %s\n      Command: %s\n      Args: %s\n      Supervisor PID: %s\n      Child PID: %s\n      Started: %s\n      Finished: %s\n      Duration: %dms\n", label, formatReviewValue(execution.Profile), formatReviewValue(execution.Model), formatReviewValue(execution.Harness), formatReviewValue(execution.Thinking), execution.Status, formatReviewValue(execution.Agent), formatReviewValue(execution.SessionName), formatReviewValue(execution.Command), formatReviewValue(strings.Join(execution.Args, " ")), formatExecutionPID(execution.SupervisorPID), formatExecutionPID(execution.ChildPID), execution.StartedAt.UTC().Format(time.RFC3339), formatExecutionFinishedAt(execution), execution.DurationMillis); err != nil {
 		return err
+	}
+	if execution.InterruptionReason != "" {
+		if _, err := fmt.Fprintf(output, "      Interrupted: %s (trigger: %s)\n", execution.InterruptionReason, formatReviewValue(execution.InterruptionTrigger)); err != nil {
+			return err
+		}
 	}
 	if execution.Session != nil {
 		if _, err := fmt.Fprintf(output, "      Session: id=%s log=%s\n", formatReviewValue(execution.Session.ID), formatReviewValue(execution.Session.LogPath)); err != nil {
@@ -222,6 +227,13 @@ func renderReviewExecution(output io.Writer, label string, execution *taskstate.
 		}
 	}
 	return nil
+}
+
+func formatExecutionPID(pid int) string {
+	if pid <= 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d", pid)
 }
 
 func formatExecutionFinishedAt(execution *taskstate.AgentExecution) string {
@@ -269,13 +281,19 @@ func renderReviewFindings(output io.Writer, taskState taskstate.TaskState, revie
 		_, err := fmt.Fprintln(output, "  (none recorded)")
 		return err
 	}
+	auditOnly := taskstate.PrimaryReviewExecutionInterrupted(review)
+	if auditOnly {
+		if _, err := fmt.Fprintln(output, "  Findings from the interrupted primary reviewer are retained for audit only and do not drive follow-up work."); err != nil {
+			return err
+		}
+	}
 
 	for _, group := range groupReviewFindingsByStep(review.Findings) {
 		if _, err := fmt.Fprintf(output, "  Step: %s\n", group.step); err != nil {
 			return err
 		}
 		for _, finding := range group.findings {
-			if err := renderReviewFinding(output, taskState, finding); err != nil {
+			if err := renderReviewFinding(output, taskState, finding, taskstate.InterruptedPrimaryReviewFinding(review, finding.finding)); err != nil {
 				return err
 			}
 		}
@@ -315,14 +333,18 @@ func groupReviewFindingsByStep(findings []taskstate.ReviewFinding) []reviewFindi
 	return groups
 }
 
-func renderReviewFinding(output io.Writer, taskState taskstate.TaskState, indexed indexedReviewFinding) error {
+func renderReviewFinding(output io.Writer, taskState taskstate.TaskState, indexed indexedReviewFinding, auditOnly bool) error {
 	finding := indexed.finding
+	resolution := reviewFindingResolution(taskState, finding)
+	if auditOnly {
+		resolution = "audit-only (interrupted primary reviewer)"
+	}
 	lines := []string{
 		fmt.Sprintf("    Finding %d:", indexed.index+1),
 		fmt.Sprintf("      Type: %s", formatReviewValue(string(finding.Type))),
 		fmt.Sprintf("      Title: %s", formatReviewValue(finding.Title)),
 		fmt.Sprintf("      Description: %s", formatReviewValue(finding.Description)),
-		fmt.Sprintf("      Resolution: %s", reviewFindingResolution(taskState, finding)),
+		fmt.Sprintf("      Resolution: %s", resolution),
 	}
 	if strings.TrimSpace(finding.Reviewer) != "" {
 		lines = append(lines, fmt.Sprintf("      Reviewer: %s", finding.Reviewer))
