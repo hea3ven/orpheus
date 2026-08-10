@@ -179,16 +179,19 @@ func loadLocalTaskState(
 	if err != nil {
 		return status.LocalTaskState{}, false, err
 	}
-	latest, ok := taskstate.LatestRun(state)
-	if !ok {
+	latest, hasLatestRun := taskstate.LatestRun(state)
+	if !hasLatestRun && state.ActiveSyncConflict == nil {
 		return status.LocalTaskState{}, false, nil
 	}
 
-	latestCopy := latest
 	localState := status.LocalTaskState{
-		LatestRun:    &latestCopy,
-		Runs:         append([]taskstate.RunAttempt(nil), state.Runs...),
-		Finalization: taskstate.FinalizationFacts(state),
+		Runs:               append([]taskstate.RunAttempt(nil), state.Runs...),
+		Finalization:       taskstate.FinalizationFacts(state),
+		ActiveSyncConflict: state.ActiveSyncConflict,
+	}
+	if hasLatestRun {
+		latestCopy := latest
+		localState.LatestRun = &latestCopy
 	}
 	if target, hasTarget := taskstate.GitFactsFor(state); hasTarget {
 		localState.GitFacts = &target

@@ -80,6 +80,16 @@ func renderDoctorResult(output interface{ Write([]byte) (int, error) }, result d
 	} else if err := renderTable(output, []string{"REPO", "TASK", "ATTEMPT", "STEP", "OUTCOME", "REASON"}, primaryReviewRows(result.PrimaryReviewRows)); err != nil {
 		return err
 	}
+	if _, err := fmt.Fprintln(output, "\nSync conflict recovery"); err != nil {
+		return err
+	}
+	if len(result.SyncConflictRows) == 0 {
+		if _, err := fmt.Fprintln(output, "No active sync conflict operations found."); err != nil {
+			return err
+		}
+	} else if err := renderTable(output, []string{"REPO", "TASK", "OUTCOME", "REASON"}, syncConflictRows(result.SyncConflictRows)); err != nil {
+		return err
+	}
 	if _, err := fmt.Fprintln(output, "\nAgent usage telemetry"); err != nil {
 		return err
 	}
@@ -142,6 +152,14 @@ func implementationRunRows(rows []doctor.ImplementationRunRow) [][]string {
 			formatTaskStatsField(row.Outcome),
 			formatTaskStatsField(row.Reason),
 		})
+	}
+	return rendered
+}
+
+func syncConflictRows(rows []doctor.SyncConflictRow) [][]string {
+	rendered := make([][]string, 0, len(rows))
+	for _, row := range rows {
+		rendered = append(rendered, []string{formatTaskStatsField(row.RepoID), formatTaskStatsField(row.TaskID), formatTaskStatsField(row.Outcome), formatTaskStatsField(row.Reason)})
 	}
 	return rendered
 }

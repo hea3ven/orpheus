@@ -3402,9 +3402,10 @@ func (r syncConflictAgentResolver) PrepareSyncConflictResolution(
 					"XDG_CONFIG_HOME="+filepath.Dir(r.paths.ConfigRoot),
 					"XDG_DATA_HOME="+filepath.Dir(r.paths.DataRoot),
 				),
-				Stdin:  strings.NewReader(""),
-				Stdout: r.stdout,
-				Stderr: r.stderr,
+				Stdin:   strings.NewReader(""),
+				Stdout:  r.stdout,
+				Stderr:  r.stderr,
+				OnStart: opts.RecordChildPID,
 			})
 		},
 		CaptureUsage: syncConflictAgentUsageOptions(commandSnapshot, opts.Worktree, r.usageEnvironment),
