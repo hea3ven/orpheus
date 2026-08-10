@@ -26,9 +26,22 @@ type ContextReview struct {
 	Completion          taskstate.Completion
 	OriginalCompletion  *taskstate.Completion
 	LatestFixCompletion *taskstate.Completion
+	PriorFindings       []ContextPriorReviewFinding
+}
+
+// ContextPriorReviewFinding is a compact authoritative finding from an earlier review attempt.
+type ContextPriorReviewFinding struct {
+	Attempt     int
+	Number      int
+	Step        string
+	Type        taskstate.FindingType
+	Disposition string
+	Title       string
 }
 
 // ResolveReview validates the active Orpheus review-agent context.
+//
+//nolint:funlen // Validation order mirrors the active review lifecycle.
 func (r ActiveContextResolver) ResolveReview(ctx context.Context) (ReviewContext, error) {
 	if err := r.validateDependencies(); err != nil {
 		return ReviewContext{}, err
@@ -69,6 +82,10 @@ func (r ActiveContextResolver) ResolveReview(ctx context.Context) (ReviewContext
 	if err != nil {
 		return ReviewContext{}, err
 	}
+	state, err := r.RunStore.Load(repo.ID, env.TaskID)
+	if err != nil {
+		return ReviewContext{}, fmt.Errorf("load review history for task %s/%s: %w", repo.ID, env.TaskID, err)
+	}
 	activeContext, err := newActiveContext(repo, targets, taskItem, completions.Latest, candidate, cwd)
 	if err != nil {
 		return ReviewContext{}, err
@@ -87,8 +104,70 @@ func (r ActiveContextResolver) ResolveReview(ctx context.Context) (ReviewContext
 			Completion:          completion.latest,
 			OriginalCompletion:  completion.original,
 			LatestFixCompletion: completion.latestFix,
+			PriorFindings:       priorReviewFindings(state, review.Attempt),
 		},
 	}, nil
+}
+
+func priorReviewFindings(state taskstate.TaskState, activeAttempt int) []ContextPriorReviewFinding {
+	prior := make([]ContextPriorReviewFinding, 0)
+	for _, review := range state.Reviews {
+		if review.Attempt >= activeAttempt {
+			continue
+		}
+		for index, finding := range review.Findings {
+			if taskstate.InterruptedPrimaryReviewFinding(review, finding) {
+				continue
+			}
+			prior = append(prior, ContextPriorReviewFinding{
+				Attempt:     review.Attempt,
+				Number:      index + 1,
+				Step:        compactReviewText(finding.Step),
+				Type:        finding.Type,
+				Disposition: compactReviewText(priorFindingDisposition(state, finding)),
+				Title:       compactReviewText(finding.Title),
+			})
+		}
+	}
+	return prior
+}
+
+func compactReviewText(value string) string {
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func priorFindingDisposition(state taskstate.TaskState, finding taskstate.ReviewFinding) string {
+	resolution := taskstate.ResolveReviewFindingInState(state, finding)
+	switch resolution {
+	case taskstate.ReviewFindingResolutionAddressedManually:
+		return "addressed manually"
+	case taskstate.ReviewFindingResolutionWaived:
+		return "waived"
+	case taskstate.ReviewFindingResolutionDowngraded:
+		return "downgraded to advisory"
+	case taskstate.ReviewFindingResolutionCreatedTask:
+		return "created task " + strings.TrimSpace(finding.CreatedTaskID)
+	case taskstate.ReviewFindingResolutionTargetedByRun:
+		return followUpRunDisposition(state, finding.TargetedByRunAttempt)
+	case taskstate.ReviewFindingResolutionOpen:
+		if finding.TargetedByRunAttempt > 0 {
+			return followUpRunDisposition(state, finding.TargetedByRunAttempt)
+		}
+		return "open"
+	case taskstate.ReviewFindingResolutionSeparateTask:
+		return "separate-task proposal"
+	default:
+		return "advisory"
+	}
+}
+
+func followUpRunDisposition(state taskstate.TaskState, attempt int) string {
+	for _, run := range state.Runs {
+		if run.Attempt == attempt {
+			return fmt.Sprintf("follow-up run %d %s", attempt, run.Status)
+		}
+	}
+	return fmt.Sprintf("follow-up run %d", attempt)
 }
 
 type reviewCompletionSelection struct {

@@ -25,7 +25,14 @@ report files outside the candidate worktree.
 
 The technical explanation is stored with the implementation or targeted follow-up
 completion and is rendered into review-agent context so reviewers can understand
-the code-change rationale without changing PR title or body selection.
+the code-change rationale without changing PR title or body selection. Fresh review
+attempts also receive a compact list of authoritative findings from earlier attempts.
+Each uses the scoped `<review-attempt>/<finding-number>` reference and can be
+inspected with `orpheus task review show <task-id> <review-attempt> <finding-number>`.
+Prior waivers and other dispositions provide decision context: reviewers should not
+repeat unchanged accepted findings, but must report a defect that is newly applicable
+or materially changed. Current-attempt and raw excluded/duplicate alternate findings
+are not injected into this history.
 
 Keeping a check or agent-review blocker preserves it, dispatches a targeted
 implementer follow-up, records which findings the run targets, and starts a

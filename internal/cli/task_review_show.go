@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,23 +15,68 @@ import (
 
 func newTaskReviewShowCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "show <task-id>",
-		Short: "Show persisted review findings and follow-up tasks for a task",
-		Long: "Show persisted review findings and follow-up tasks for a task.\n\n" +
-			"This is the inspection surface for review state. It shows the latest " +
-			"authoritative review attempt, executed steps, blocking/advisory/separate-task " +
-			"findings, autonomous budget exhaustion, interrupted automated blocker " +
-			"decisions, created follow-up Beads, and the next command, such as task run " +
-			"for any workflow advancement after inspection.",
-		Args: cobra.ExactArgs(1),
+		Use:   "show <task-id> [review-attempt] [finding-number]",
+		Short: "Inspect persisted review history, an attempt, or an authoritative finding",
+		Long: "This is the inspection surface for review state, including blocking/advisory/separate-task findings, " +
+			"autonomous budget exhaustion, and interrupted automated blocker decisions. It never advances workflow state. " +
+			"With only a task ID, show provides concise cross-attempt history. Add a review attempt number for its detailed view, " +
+			"then a finding number for one authoritative finding.",
+		Args: reviewShowArgs,
 		RunE: func(command *cobra.Command, args []string) error {
-			return runTaskReviewShow(command, opts, args[0])
+			return runTaskReviewShow(command, opts, args)
 		},
 	}
 	return cmd
 }
 
-func runTaskReviewShow(command *cobra.Command, opts *rootOptions, taskID string) error {
+type reviewShowScope struct {
+	reviewAttempt int
+	findingNumber int
+}
+
+func reviewShowArgs(_ *cobra.Command, args []string) error {
+	_, err := parseReviewShowScope(args)
+	return err
+}
+
+func parseReviewShowScope(args []string) (reviewShowScope, error) {
+	if len(args) < 1 || len(args) > 3 {
+		return reviewShowScope{}, fmt.Errorf("accepts a task ID, optional positive review attempt, and optional positive finding number")
+	}
+	scope := reviewShowScope{}
+	if len(args) == 1 {
+		return scope, nil
+	}
+	attempt, err := positiveReviewShowNumber("review attempt", args[1])
+	if err != nil {
+		return reviewShowScope{}, err
+	}
+	scope.reviewAttempt = attempt
+	if len(args) == 2 {
+		return scope, nil
+	}
+	finding, err := positiveReviewShowNumber("finding number", args[2])
+	if err != nil {
+		return reviewShowScope{}, err
+	}
+	scope.findingNumber = finding
+	return scope, nil
+}
+
+func positiveReviewShowNumber(label string, raw string) (int, error) {
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer, got %q", label, raw)
+	}
+	return value, nil
+}
+
+func runTaskReviewShow(command *cobra.Command, opts *rootOptions, args []string) error {
+	taskID := args[0]
+	scope, err := parseReviewShowScope(args)
+	if err != nil {
+		return err
+	}
 	logger := opts.log().With(
 		slog.String("component", "cli"),
 		slog.String("operation", "task_review_show"),
@@ -70,6 +116,7 @@ func runTaskReviewShow(command *cobra.Command, opts *rootOptions, taskID string)
 		resolvedCtx.Resolved.Source.Repository.ID,
 		resolvedCtx.Resolved.TaskID,
 		taskState,
+		scope,
 	)
 }
 
@@ -78,6 +125,7 @@ func renderTaskReviewShow(
 	repoID string,
 	taskID string,
 	taskState taskstate.TaskState,
+	scope reviewShowScope,
 ) error {
 	if _, err := fmt.Fprintf(output, "Review state for %s (repo %s)\n", taskID, repoID); err != nil {
 		return err
@@ -85,6 +133,9 @@ func renderTaskReviewShow(
 
 	latest, ok := taskstate.LatestReview(taskState)
 	if !ok {
+		if scope.reviewAttempt > 0 {
+			return fmt.Errorf("review attempt %d was not found for task %s: no review attempts are recorded", scope.reviewAttempt, taskID)
+		}
 		if _, err := fmt.Fprintf(output, "\nNo review attempts recorded for %s.\n", taskID); err != nil {
 			return err
 		}
@@ -92,20 +143,79 @@ func renderTaskReviewShow(
 		return err
 	}
 
-	if err := renderLatestReviewAttempt(output, taskState, latest); err != nil {
-		return err
+	if scope.reviewAttempt == 0 {
+		if err := renderReviewHistory(output, taskState); err != nil {
+			return err
+		}
+		return renderReviewNextStep(output, taskID, taskState, latest)
 	}
-	if err := renderReviewFollowUpRuns(output, taskState); err != nil {
-		return err
+
+	review, ok := reviewAttemptByNumber(taskState, scope.reviewAttempt)
+	if !ok {
+		return fmt.Errorf("review attempt %d was not found for task %s", scope.reviewAttempt, taskID)
 	}
-	if err := renderCreatedReviewFollowUps(output, taskState); err != nil {
-		return err
+	if scope.findingNumber == 0 {
+		if err := renderReviewAttemptDetail(output, taskState, review); err != nil {
+			return err
+		}
+		if review.Attempt == latest.Attempt {
+			return renderReviewNextStep(output, taskID, taskState, latest)
+		}
+		return nil
 	}
-	return renderReviewNextStep(output, taskID, taskState, latest)
+	return renderAuthoritativeFinding(output, taskState, review, scope.findingNumber)
 }
 
-func renderLatestReviewAttempt(output io.Writer, taskState taskstate.TaskState, review taskstate.ReviewAttempt) error {
-	if _, err := fmt.Fprintln(output, "\nLatest authoritative review attempt:"); err != nil {
+func renderReviewHistory(output io.Writer, taskState taskstate.TaskState) error {
+	if _, err := fmt.Fprintln(output, "\nAuthoritative review history:"); err != nil {
+		return err
+	}
+	for _, review := range taskState.Reviews {
+		if _, err := fmt.Fprintf(output, "  Attempt %d: %s (%d authoritative finding(s))\n", review.Attempt, formatReviewValue(string(review.Status)), authoritativeFindingCount(review)); err != nil {
+			return err
+		}
+		for index, finding := range review.Findings {
+			if taskstate.InterruptedPrimaryReviewFinding(review, finding) {
+				continue
+			}
+			step := compactReviewText(finding.Step)
+			if step == "" {
+				step = "-"
+			}
+			if _, err := fmt.Fprintf(output, "    - %d/%d · %s · %s · %s · %s\n", review.Attempt, index+1, step, compactReviewText(string(finding.Type)), compactReviewText(compactReviewFindingDisposition(taskState, finding)), compactReviewText(finding.Title)); err != nil {
+				return err
+			}
+		}
+	}
+	_, err := fmt.Fprintln(output, "\nInspect an attempt with `orpheus task review show <task-id> <review-attempt>` or an authoritative finding with `orpheus task review show <task-id> <review-attempt> <finding-number>`.")
+	return err
+}
+
+func authoritativeFindingCount(review taskstate.ReviewAttempt) int {
+	count := 0
+	for _, finding := range review.Findings {
+		if !taskstate.InterruptedPrimaryReviewFinding(review, finding) {
+			count++
+		}
+	}
+	return count
+}
+
+func compactReviewText(value string) string {
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func reviewAttemptByNumber(taskState taskstate.TaskState, attempt int) (taskstate.ReviewAttempt, bool) {
+	for _, review := range taskState.Reviews {
+		if review.Attempt == attempt {
+			return review, true
+		}
+	}
+	return taskstate.ReviewAttempt{}, false
+}
+
+func renderReviewAttemptDetail(output io.Writer, taskState taskstate.TaskState, review taskstate.ReviewAttempt) error {
+	if _, err := fmt.Fprintf(output, "\nAuthoritative review attempt %d:\n", review.Attempt); err != nil {
 		return err
 	}
 	rows := []string{
@@ -129,7 +239,13 @@ func renderLatestReviewAttempt(output io.Writer, taskState taskstate.TaskState, 
 	if err := renderReviewSteps(output, review.Steps); err != nil {
 		return err
 	}
-	return renderReviewFindings(output, taskState, review)
+	if err := renderReviewFindings(output, taskState, review); err != nil {
+		return err
+	}
+	if err := renderReviewFollowUpRunsForAttempt(output, taskState, review.Attempt); err != nil {
+		return err
+	}
+	return renderCreatedReviewFollowUpsForAttempt(output, taskState, review.Attempt)
 }
 
 func renderReviewSteps(output io.Writer, steps []taskstate.ReviewStep) error {
@@ -381,24 +497,105 @@ func reviewFindingResolution(taskState taskstate.TaskState, finding taskstate.Re
 	}
 }
 
-func renderReviewFollowUpRuns(output io.Writer, taskState taskstate.TaskState) error {
+func compactReviewFindingDisposition(taskState taskstate.TaskState, finding taskstate.ReviewFinding) string {
+	switch taskstate.ResolveReviewFindingInState(taskState, finding) {
+	case taskstate.ReviewFindingResolutionAddressedManually:
+		return "addressed manually"
+	case taskstate.ReviewFindingResolutionWaived:
+		return "waived"
+	case taskstate.ReviewFindingResolutionDowngraded:
+		return "downgraded to advisory"
+	case taskstate.ReviewFindingResolutionCreatedTask:
+		return "created task " + formatReviewValue(finding.CreatedTaskID)
+	case taskstate.ReviewFindingResolutionTargetedByRun:
+		return followUpRunDisposition(taskState, finding.TargetedByRunAttempt)
+	case taskstate.ReviewFindingResolutionOpen:
+		if finding.TargetedByRunAttempt > 0 {
+			return followUpRunDisposition(taskState, finding.TargetedByRunAttempt)
+		}
+		return "open"
+	case taskstate.ReviewFindingResolutionSeparateTask:
+		return "separate-task proposal"
+	default:
+		return "advisory"
+	}
+}
+
+func followUpRunDisposition(taskState taskstate.TaskState, attempt int) string {
+	for _, run := range taskState.Runs {
+		if run.Attempt == attempt {
+			return fmt.Sprintf("follow-up run %d %s", attempt, run.Status)
+		}
+	}
+	return fmt.Sprintf("follow-up run %d", attempt)
+}
+
+func renderAuthoritativeFinding(output io.Writer, taskState taskstate.TaskState, review taskstate.ReviewAttempt, number int) error {
+	if number <= 0 || number > len(review.Findings) {
+		return fmt.Errorf("finding number %d is out of range for review attempt %d (has %d persisted finding(s))", number, review.Attempt, len(review.Findings))
+	}
+	finding := review.Findings[number-1]
+	auditOnly := taskstate.InterruptedPrimaryReviewFinding(review, finding)
+	label := "Authoritative"
+	disposition := reviewFindingResolution(taskState, finding)
+	if auditOnly {
+		label = "Audit-only"
+		disposition = "audit-only (interrupted primary reviewer)"
+	}
+	if _, err := fmt.Fprintf(output, "\n%s finding %d/%d:\n", label, review.Attempt, number); err != nil {
+		return err
+	}
+	lines := []string{
+		"  Step: " + formatReviewValue(finding.Step),
+		"  Type: " + formatReviewValue(string(finding.Type)),
+		"  Title: " + formatReviewValue(finding.Title),
+		"  Description: " + formatReviewValue(finding.Description),
+		"  Disposition: " + disposition,
+	}
+	if auditOnly {
+		lines = append(lines, "  Audit-only: interrupted primary reviewer")
+	}
+	if strings.TrimSpace(finding.Reviewer) != "" {
+		lines = append(lines, "  Reviewer: "+finding.Reviewer)
+	}
+	if strings.TrimSpace(finding.SuggestedAction) != "" {
+		lines = append(lines, "  Suggested action: "+finding.SuggestedAction)
+	}
+	if !finding.TaskProposal.IsZero() {
+		lines = append(lines,
+			"  Proposed task title: "+finding.TaskProposal.Title,
+			"  Proposed task description: "+finding.TaskProposal.Description,
+			"  Proposed task acceptance criteria: "+finding.TaskProposal.AcceptanceCriteria,
+		)
+	}
+	if strings.TrimSpace(finding.CreatedTaskID) != "" {
+		lines = append(lines, "  Created follow-up task: "+finding.CreatedTaskID)
+	}
+	if finding.CreatedTaskAt != nil {
+		lines = append(lines, "  Created follow-up task at: "+finding.CreatedTaskAt.UTC().Format(time.RFC3339))
+	}
+	if finding.TargetedByRunAttempt > 0 {
+		lines = append(lines, fmt.Sprintf("  Targeted by follow-up run attempt: %d", finding.TargetedByRunAttempt))
+	}
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(output, line); err != nil {
+			return err
+		}
+	}
+	return renderReviewFollowUpRunsForFinding(output, taskState, review.Attempt, number-1)
+}
+
+func renderReviewFollowUpRunsForAttempt(output io.Writer, taskState taskstate.TaskState, reviewAttempt int) error {
 	if _, err := fmt.Fprintln(output, "\nFollow-up runs:"); err != nil {
 		return err
 	}
 	found := false
 	for _, run := range taskState.Runs {
-		if run.ReviewFollowUp == nil {
+		if run.ReviewFollowUp == nil || run.ReviewFollowUp.ReviewAttempt != reviewAttempt {
 			continue
 		}
 		found = true
-		if _, err := fmt.Fprintf(
-			output,
-			"  - Run attempt %d: %s (review attempt %d, findings %s)\n",
-			run.Attempt,
-			formatReviewValue(string(run.Status)),
-			run.ReviewFollowUp.ReviewAttempt,
-			formatReviewFindingIndexes(run.ReviewFollowUp.FindingIndexes),
-		); err != nil {
+		if _, err := fmt.Fprintf(output, "  - Run attempt %d: %s (findings %s)\n", run.Attempt, formatReviewValue(string(run.Status)), formatReviewFindingIndexes(run.ReviewFollowUp.FindingIndexes)); err != nil {
 			return err
 		}
 	}
@@ -407,6 +604,40 @@ func renderReviewFollowUpRuns(output io.Writer, taskState taskstate.TaskState) e
 		return err
 	}
 	return nil
+}
+
+func renderReviewFollowUpRunsForFinding(output io.Writer, taskState taskstate.TaskState, reviewAttempt, findingIndex int) error {
+	if _, err := fmt.Fprintln(output, "\nAssociated follow-up runs:"); err != nil {
+		return err
+	}
+	found := false
+	for _, run := range taskState.Runs {
+		if run.ReviewFollowUp == nil || run.ReviewFollowUp.ReviewAttempt != reviewAttempt || !containsFindingIndex(run.ReviewFollowUp.FindingIndexes, findingIndex) {
+			continue
+		}
+		found = true
+		completion := "no completion"
+		if run.Completion != nil {
+			completion = "completion recorded"
+		}
+		if _, err := fmt.Fprintf(output, "  - Run attempt %d: %s (%s)\n", run.Attempt, formatReviewValue(string(run.Status)), completion); err != nil {
+			return err
+		}
+	}
+	if !found {
+		_, err := fmt.Fprintln(output, "  (none recorded)")
+		return err
+	}
+	return nil
+}
+
+func containsFindingIndex(indexes []int, target int) bool {
+	for _, index := range indexes {
+		if index == target {
+			return true
+		}
+	}
+	return false
 }
 
 func formatReviewFindingIndexes(indexes []int) string {
@@ -420,32 +651,39 @@ func formatReviewFindingIndexes(indexes []int) string {
 	return strings.Join(formatted, ", ")
 }
 
-func renderCreatedReviewFollowUps(output io.Writer, taskState taskstate.TaskState) error {
-	followUps := createdReviewFollowUps(taskState)
+func renderCreatedReviewFollowUpsForAttempt(output io.Writer, taskState taskstate.TaskState, reviewAttempt int) error {
 	if _, err := fmt.Fprintln(output, "\nCreated follow-up Beads:"); err != nil {
 		return err
 	}
-	if len(followUps) == 0 {
-		_, err := fmt.Fprintln(output, "  (none recorded)")
-		return err
-	}
-	for _, followUp := range followUps {
-		line := fmt.Sprintf(
-			"  - %s (review attempt %d, finding %d",
-			followUp.createdTaskID,
-			followUp.reviewAttempt,
-			followUp.findingIndex+1,
-		)
-		if strings.TrimSpace(followUp.step) != "" {
-			line += ", step " + followUp.step
+	found := false
+	for _, followUp := range createdReviewFollowUps(taskState) {
+		if followUp.reviewAttempt != reviewAttempt {
+			continue
 		}
-		line += ")"
-		if strings.TrimSpace(followUp.title) != "" {
-			line += ": " + followUp.title
-		}
-		if _, err := fmt.Fprintln(output, line); err != nil {
+		found = true
+		if _, err := fmt.Fprintf(output, "  - %s (finding %d", followUp.createdTaskID, followUp.findingIndex+1); err != nil {
 			return err
 		}
+		if strings.TrimSpace(followUp.step) != "" {
+			if _, err := fmt.Fprintf(output, ", step %s", followUp.step); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprint(output, ")"); err != nil {
+			return err
+		}
+		if strings.TrimSpace(followUp.title) != "" {
+			if _, err := fmt.Fprintf(output, ": %s", followUp.title); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprintln(output); err != nil {
+			return err
+		}
+	}
+	if !found {
+		_, err := fmt.Fprintln(output, "  (none recorded)")
+		return err
 	}
 	return nil
 }
