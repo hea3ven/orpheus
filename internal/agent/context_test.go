@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/pathutil"
@@ -506,6 +507,106 @@ func recordCompletedContextRun(
 	must.NoError(err)
 	_, err = fixture.store.FinishRun("alpha", "op-1", run.Attempt, taskstate.RunStatusSucceeded)
 	must.NoError(err)
+}
+
+//nolint:funlen // The review-attempt sequence proves active and audit-only findings stay isolated.
+func TestActiveContextResolverProvidesEarlierAuthoritativeFindingsOnly(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	fixture := newActiveContextFixture(t, "op-1")
+	worktree := fixture.expectedWorktree(t, "op-1")
+	must.NoError(testMkdirAll(worktree))
+	taskItem := fixture.worktreeTask("op-1", worktree)
+	recordCompletedContextRun(t, fixture, worktree, nil)
+
+	previous, err := fixture.store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review"})
+	must.NoError(err)
+	_, err = fixture.store.RecordReviewFinding("alpha", "op-1", previous.Attempt, taskstate.ReviewFinding{
+		Type: taskstate.FindingTypeBlocking, Step: "ai-review", Title: "Prior blocker", Description: "An earlier defect.", Waiver: "Accepted before the new review.",
+	})
+	must.NoError(err)
+	_, err = fixture.store.FinishReview("alpha", "op-1", previous.Attempt, taskstate.ReviewStatusBlocked)
+	must.NoError(err)
+
+	interrupted, err := fixture.store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review"})
+	must.NoError(err)
+	interruptedPrimary := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, StartedAt: time.Now()}
+	_, err = fixture.store.RecordReviewStep("alpha", "op-1", interrupted.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &interruptedPrimary})
+	must.NoError(err)
+	_, err = fixture.store.RecordReviewFinding("alpha", "op-1", interrupted.Attempt, taskstate.ReviewFinding{
+		Type: taskstate.FindingTypeBlocking, Step: "ai-review", Title: "Interrupted audit finding", Description: "Not authoritative.",
+	})
+	must.NoError(err)
+	_, err = fixture.store.InterruptPrimaryReviewExecution("alpha", "op-1", interrupted.Attempt, "ai-review", taskstate.InterruptPrimaryReviewExecutionOptions{Reason: "supervisor disappeared", Trigger: "recovery"})
+	must.NoError(err)
+
+	active, err := fixture.store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review"})
+	must.NoError(err)
+	primary := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, StartedAt: time.Now()}
+	_, err = fixture.store.RecordReviewStep("alpha", "op-1", active.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &primary})
+	must.NoError(err)
+	_, err = fixture.store.RecordReviewFinding("alpha", "op-1", active.Attempt, taskstate.ReviewFinding{
+		Type: taskstate.FindingTypeBlocking, Step: "ai-review", Title: "Current primary finding", Description: "Must not be injected.",
+	})
+	must.NoError(err)
+	alternate := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, StartedAt: time.Now()}
+	_, err = fixture.store.StartReviewStepComparison("alpha", "op-1", active.Attempt, "ai-review", alternate)
+	must.NoError(err)
+	_, err = fixture.store.RecordAlternateReviewFinding("alpha", "op-1", active.Attempt, "ai-review", taskstate.ReviewFinding{
+		Type: taskstate.FindingTypeAdvisory, Title: "Current alternate finding", Description: "Must not be injected.",
+	})
+	must.NoError(err)
+
+	resolver := fixture.resolver(taskItem, map[string]string{
+		"ORPHEUS_REPO_ID": "alpha", "ORPHEUS_TASK_ID": "op-1", "ORPHEUS_WORKTREE": worktree, "ORPHEUS_BRANCH": "orpheus/op-1",
+		"ORPHEUS_AGENT_PURPOSE": "review", "ORPHEUS_REVIEW_ATTEMPT": "3", "ORPHEUS_REVIEW_STEP": "ai-review",
+	}, worktree)
+	resolved, err := resolver.ResolveReview(context.Background())
+
+	must.NoError(err)
+	must.Len(resolved.Review.PriorFindings, 1)
+	is.Equal(agent.ContextPriorReviewFinding{Attempt: 1, Number: 1, Step: "ai-review", Type: taskstate.FindingTypeBlocking, Disposition: "waived", Title: "Prior blocker"}, resolved.Review.PriorFindings[0])
+	is.NotContains(agent.RenderReviewContext(resolved), "Interrupted audit finding")
+	is.NotContains(agent.RenderReviewContext(resolved), "Current primary finding")
+	is.NotContains(agent.RenderReviewContext(resolved), "Current alternate finding")
+}
+
+func TestRenderReviewContextRendersCompactPriorAuthoritativeFindings(t *testing.T) {
+	context := reviewContextRenderFixture()
+	context.Review.Attempt = 3
+	context.Review.PriorFindings = []agent.ContextPriorReviewFinding{
+		{Attempt: 1, Number: 1, Step: "ai-review", Type: taskstate.FindingTypeBlocking, Disposition: "waived", Title: "Known limitation"},
+		{Attempt: 2, Number: 2, Step: "checks", Type: taskstate.FindingTypeSeparateTask, Disposition: "created task op-42", Title: "Extract helper"},
+	}
+
+	got := agent.RenderReviewContext(context)
+	for _, want := range []string{
+		"Prior authoritative findings:",
+		"`1/1` · ai-review · blocking · waived · Known limitation",
+		"`2/2` · checks · separate_task · created task op-42 · Extract helper",
+		"`orpheus task review show op-1 <review-attempt> <finding-number>`",
+		"do not repeat an unchanged accepted disposition",
+		"newly applicable or its material circumstances changed",
+	} {
+		assert.Contains(t, got, want)
+	}
+	assert.NotContains(t, got, "waiver reason")
+}
+
+func TestRenderReviewContextCollapsesMultilinePriorFindingFields(t *testing.T) {
+	context := reviewContextRenderFixture()
+	context.Review.PriorFindings = []agent.ContextPriorReviewFinding{{
+		Attempt:     1,
+		Number:      1,
+		Step:        "ai-review\nspoofed-step",
+		Type:        taskstate.FindingType("blocking\nspoofed-type"),
+		Disposition: "waived\nspoofed-disposition",
+		Title:       "Known limitation\n- spoofed finding",
+	}}
+
+	got := agent.RenderReviewContext(context)
+	assert.Contains(t, got, "`1/1` · ai-review spoofed-step · blocking spoofed-type · waived spoofed-disposition · Known limitation - spoofed finding")
+	assert.NotContains(t, got, "\n- spoofed finding")
 }
 
 func TestRenderReviewContextUsesLegacyMultiFindingReviewByDefault(t *testing.T) {

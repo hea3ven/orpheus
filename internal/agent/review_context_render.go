@@ -17,6 +17,7 @@ func RenderReviewContext(ctx ReviewContext) string {
 	appendRepositoryContext(&builder, ctx.Repository)
 	appendReviewTargetContext(&builder, ctx)
 	appendReviewCompletionContext(&builder, ctx.Review)
+	appendPriorReviewFindings(&builder, ctx.Task.ID, ctx.Review.PriorFindings)
 	if exhaustiveReviewContextEnabled() {
 		appendExhaustiveReviewContract(&builder)
 	} else {
@@ -54,6 +55,32 @@ func appendReviewCompletionContext(builder *strings.Builder, review ContextRevie
 		return
 	}
 	appendReviewCompletionBlock(builder, "Latest completion", review.Completion)
+}
+
+func appendPriorReviewFindings(builder *strings.Builder, taskID string, findings []ContextPriorReviewFinding) {
+	if len(findings) == 0 {
+		return
+	}
+
+	builder.WriteString("\nPrior authoritative findings:\n")
+	for _, finding := range findings {
+		step := compactReviewText(finding.Step)
+		if step == "" {
+			step = "(unspecified)"
+		}
+		fmt.Fprintf(
+			builder,
+			"- `%d/%d` · %s · %s · %s · %s\n",
+			finding.Attempt,
+			finding.Number,
+			step,
+			compactReviewText(string(finding.Type)),
+			compactReviewText(finding.Disposition),
+			compactReviewText(finding.Title),
+		)
+	}
+	fmt.Fprintf(builder, "Inspect a finding with `orpheus task review show %s <review-attempt> <finding-number>`; for example, `orpheus task review show %s %d %d`.\n", taskID, taskID, findings[0].Attempt, findings[0].Number)
+	builder.WriteString("Prior decisions are context, not a prohibition: do not repeat an unchanged accepted disposition, but report a defect if it is newly applicable or its material circumstances changed.\n")
 }
 
 func appendReviewCompletionBlock(builder *strings.Builder, label string, completion taskstate.Completion) {
