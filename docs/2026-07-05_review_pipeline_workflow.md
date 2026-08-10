@@ -92,13 +92,15 @@ Each follow-up is a new Orpheus run attempt and therefore a new `agent done` com
 
 ## Inspecting Review State
 
-Use:
+Use hierarchical positional arguments:
 
 ```text
 orpheus task review show <task-id>
+orpheus task review show <task-id> <review-attempt>
+orpheus task review show <task-id> <review-attempt> <finding-number>
 ```
 
-This is the inspection surface for persisted review state. It shows the latest authoritative review attempt, executed steps, findings, resolution state, autonomous budget exhaustion, interrupted automated blocker decisions, created follow-up Beads, and the next command.
+The task-level command is a concise cross-attempt authoritative-finding history. An attempt number opens that persisted attempt in detail. A finding number opens exactly one authoritative finding, referenced as `<review-attempt>/<finding-number>`, including its full description, disposition reason, suggested action, task proposal or created task, and associated follow-up runs. Inspection never changes review or task state.
 
 Separate-task findings can be converted into Beads during `task review`. Created tasks include provenance in their description identifying the source task, repository, review attempt, and finding index. `task review show` lists those created follow-up tasks.
 

@@ -2539,7 +2539,7 @@ func TestTaskRunReviewFollowUpAllowsDirtyMainTarget(t *testing.T) {
 	is.Equal([]int{0}, state.Runs[1].ReviewFollowUp.FindingIndexes)
 }
 
-func TestTaskReviewShowDisplaysLatestFindingsAndCreatedFollowUps(t *testing.T) {
+func TestTaskReviewShowDisplaysCrossAttemptFindingHistory(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	paths, repoPath := setupTaskReviewShowRepo(t, "op-main")
@@ -2550,30 +2550,15 @@ func TestTaskReviewShowDisplaysLatestFindingsAndCreatedFollowUps(t *testing.T) {
 	is.Empty(stderr)
 	for _, want := range []string{
 		"Review state for op-main (repo alpha)",
-		"Latest authoritative review attempt:",
-		"Attempt: 2",
-		"Status: blocked",
-		"Pipeline: quality",
-		"Current step: ai-review",
-		"- unit-tests (check), exit code 1",
-		"- ai-review (agent_review)",
-		"Step: unit-tests",
-		"Finding 1:",
-		"Type: blocking",
-		"Title: Tests fail",
-		"Description: make test fails.",
-		"Resolution: open",
-		"Suggested action: Fix failing tests.",
-		"Step: ai-review",
-		"Title: Race condition",
-		"Resolution: targeted by follow-up run attempt 1",
-		"Title: Known limitation",
-		"Resolution: waived: Accepted risk for now.",
-		"Title: Extract helper",
-		"Resolution: converted/created task op-42",
-		"Created follow-up Beads:",
-		"op-41 (review attempt 1, finding 1, step manual): Older cleanup",
-		"op-42 (review attempt 2, finding 4, step ai-review): Extract helper",
+		"Authoritative review history:",
+		"Attempt 1: passed (1 authoritative finding(s))",
+		"1/1 · manual · separate_task · created task op-41 · Older cleanup",
+		"Attempt 2: blocked (4 authoritative finding(s))",
+		"2/1 · unit-tests · blocking · open · Tests fail",
+		"2/2 · ai-review · blocking · follow-up run 1 running · Race condition",
+		"2/3 · ai-review · blocking · waived · Known limitation",
+		"2/4 · ai-review · separate_task · created task op-42 · Extract helper",
+		"orpheus task review show <task-id> <review-attempt> <finding-number>",
 		"Next step: run `orpheus task run op-main` to address open blocking findings",
 	} {
 		is.Contains(stdout, want)
@@ -2612,8 +2597,7 @@ func TestTaskReviewShowGuidesRetryAfterFailedFollowUp(t *testing.T) {
 	stdout, stderr := executeCommand(t, []string{"task", "review", "show", "op-retry"})
 
 	is.Empty(stderr)
-	is.Contains(stdout, "Resolution: open")
-	is.Contains(stdout, "Run attempt 1: failed (review attempt 1, findings 1)")
+	is.Contains(stdout, "follow-up run 1 failed · Retry me")
 	is.Contains(stdout, "Next step: retry `orpheus task run op-retry`")
 }
 
@@ -2653,9 +2637,10 @@ func TestTaskReviewShowRendersManuallyAddressedFinding(t *testing.T) {
 	_, err = runStore.AddressReviewBlockingFindingManually("alpha", "op-addressed", reviewAttempt.Attempt, 0, "Verified in the worktree.")
 	must.NoError(err)
 
-	stdout, stderr := executeCommand(t, []string{"task", "review", "show", "op-addressed"})
+	stdout, stderr := executeCommand(t, []string{"task", "review", "show", "op-addressed", "1", "1"})
 	is.Empty(stderr)
-	is.Contains(stdout, "Resolution: addressed manually: Verified in the worktree.")
+	is.Contains(stdout, "Authoritative finding 1/1:")
+	is.Contains(stdout, "Disposition: addressed manually: Verified in the worktree.")
 }
 
 func TestTaskReviewShowGuidesInterruptedAutomatedBlockerDecision(t *testing.T) {
@@ -2681,7 +2666,7 @@ func TestTaskReviewShowGuidesInterruptedAutomatedBlockerDecision(t *testing.T) {
 	_, err = runStore.FinishReview("alpha", "op-interrupted", reviewAttempt.Attempt, taskstate.ReviewStatusBlocked)
 	must.NoError(err)
 
-	stdout, stderr := executeCommand(t, []string{"task", "review", "show", "op-interrupted"})
+	stdout, stderr := executeCommand(t, []string{"task", "review", "show", "op-interrupted", "1"})
 
 	is.Empty(stderr)
 	is.Contains(stdout, "Automated blocker decisions: interrupted")
@@ -2698,11 +2683,10 @@ func TestTaskReviewShowDisplaysClosedTaskReviewState(t *testing.T) {
 
 	is.Empty(stderr)
 	is.Contains(stdout, "Review state for op-main (repo alpha)")
-	is.Contains(stdout, "Latest authoritative review attempt:")
-	is.Contains(stdout, "Status: blocked")
-	is.Contains(stdout, "Title: Tests fail")
-	is.Contains(stdout, "Created follow-up Beads:")
-	is.Contains(stdout, "op-42 (review attempt 2, finding 4, step ai-review): Extract helper")
+	is.Contains(stdout, "Authoritative review history:")
+	is.Contains(stdout, "Attempt 2: blocked")
+	is.Contains(stdout, "2/1 · unit-tests · blocking · open · Tests fail")
+	is.Contains(stdout, "2/4 · ai-review · separate_task · created task op-42 · Extract helper")
 }
 
 func setupTaskReviewShowRepo(t *testing.T, taskID string) (state.Paths, string) {
@@ -5386,7 +5370,7 @@ exit 7
 	is.Zero(latest.Findings[0].TargetedByRunAttempt)
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 
-	showStdout, showStderr := executeCommand(t, []string{"task", "review", "show", "op-stubborn"})
+	showStdout, showStderr := executeCommand(t, []string{"task", "review", "show", "op-stubborn", "2"})
 	is.Empty(showStderr)
 	is.Contains(showStdout, "Autonomous review: attempt budget exhausted")
 	is.Contains(showStdout, "Next step: autonomous review attempts are exhausted")
@@ -6079,7 +6063,7 @@ func TestTaskReviewAgentReviewMixedAutomatedBlockerDecisions(t *testing.T) {
 	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
 	})
-	showStdout, showStderr := executeCommand(t, []string{"task", "review", "show", "op-main"})
+	showStdout, showStderr := executeCommand(t, []string{"task", "review", "show", "op-main", "1"})
 	is.Empty(showStderr)
 	is.Contains(showStdout, "Title: Keep blocker")
 	is.Contains(showStdout, "Resolution: open")
@@ -6241,7 +6225,7 @@ func TestTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
 	is.Equal("approval", latest.Findings[2].Step)
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 
-	showStdout, showStderr := executeCommand(t, []string{"task", "review", "show", "op-main"})
+	showStdout, showStderr := executeCommand(t, []string{"task", "review", "show", "op-main", "1"})
 	is.Empty(showStderr)
 	is.Contains(showStdout, "Status: blocked")
 	is.Contains(showStdout, "Type: blocking")
