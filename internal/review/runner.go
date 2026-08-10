@@ -638,6 +638,22 @@ func writeStepHeader(output io.Writer, step Step) error {
 	return err
 }
 
+func writeReviewerHeader(output io.Writer, role, profile, model string) error {
+	if output == nil {
+		return nil
+	}
+	_, err := fmt.Fprintf(output, "\n== Reviewer: %s (profile: %s; model: %s) ==\n", role, reviewerOutputValue(profile), reviewerOutputValue(model))
+	return err
+}
+
+func reviewerOutputValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "-"
+	}
+	return value
+}
+
 func runAgentReviewStep(opts PipelineRunOptions, step Step) (stepOutcome, error) {
 	if opts.AgentLauncher == nil {
 		return stepOutcome{}, fmt.Errorf("task review %s: agent_review step %q requires an agent launcher", opts.TaskID, step.Name)
@@ -646,7 +662,7 @@ func runAgentReviewStep(opts PipelineRunOptions, step Step) (stepOutcome, error)
 	if err != nil {
 		return stepOutcome{}, fmt.Errorf("task review %s: resolve agent_review step %q: %w", opts.TaskID, step.Name, err)
 	}
-	_, profile, err := opts.AgentConfig.ResolveReviewerProfile(step.Agent)
+	primaryProfile, profile, err := opts.AgentConfig.ResolveReviewerProfile(step.Agent)
 	if err != nil {
 		return stepOutcome{}, fmt.Errorf("task review %s: resolve agent_review step %q: %w", opts.TaskID, step.Name, err)
 	}
@@ -654,16 +670,19 @@ func runAgentReviewStep(opts PipelineRunOptions, step Step) (stepOutcome, error)
 	if err != nil {
 		return stepOutcome{}, err
 	}
+	alternate := strings.TrimSpace(os.Getenv("ORPHEUS_ALTERNATE_REVIEWER_PROFILE"))
+	primaryEnvironment := stepEnvironment(opts, step.Name, command.Prompt)
+	if alternate != "" {
+		if err := writeReviewerHeader(opts.Stderr, "primary", primaryProfile, command.Model); err != nil {
+			return stepOutcome{}, err
+		}
+		primaryEnvironment = reviewerEnvironment(opts, step.Name, command.Prompt, "primary")
+	}
 	execution, err := recordAgentReviewStep(opts, step, command)
 	if err != nil {
 		return stepOutcome{}, err
 	}
 	output := newStepOutput(opts, !profile.Interactive)
-	alternate := strings.TrimSpace(os.Getenv("ORPHEUS_ALTERNATE_REVIEWER_PROFILE"))
-	primaryEnvironment := stepEnvironment(opts, step.Name, command.Prompt)
-	if alternate != "" {
-		primaryEnvironment = reviewerEnvironment(opts, step.Name, command.Prompt, "primary")
-	}
 	primaryErr := runReviewerExecution(opts, step, profile, command, primaryEnvironment, output, true)
 	if err := finishAgentReviewExecution(opts, step, command, execution, statusForError(primaryErr), time.Now().UTC(), primaryErr); err != nil {
 		output.finishExpanded()
@@ -674,13 +693,17 @@ func runAgentReviewStep(opts PipelineRunOptions, step Step) (stepOutcome, error)
 		return stepOutcome{}, fmt.Errorf("task review %s: run agent_review step %q: %w", opts.TaskID, step.Name, primaryErr)
 	}
 	if alternate != "" {
-		if interrupted, err := runAlternateReviewerComparison(opts, step, alternate, output); err != nil {
+		if err := finishPrimaryReviewerOutput(opts, step, output, initialFindingCount); err != nil {
+			return stepOutcome{}, err
+		}
+		if interrupted, err := runAlternateReviewerComparison(opts, step, alternate); err != nil {
 			return stepOutcome{}, err
 		} else if interrupted {
 			return stepOutcome{status: taskstate.ReviewStatusBlocked, stop: true}, nil
 		}
+		return finishAgentReviewStep(opts, step, nil, initialFindingCount)
 	}
-	return finishAgentReviewStep(opts, step, output, initialFindingCount)
+	return finishAgentReviewStep(opts, step, &output, initialFindingCount)
 }
 
 func statusForError(err error) taskstate.RunStatus {
@@ -697,9 +720,45 @@ func runReviewerExecution(opts PipelineRunOptions, step Step, profile agent.Prof
 	return err
 }
 
-func runAlternateReviewerComparison(opts PipelineRunOptions, step Step, alternate string, output stepOutput) (bool, error) {
+func finishPrimaryReviewerOutput(opts PipelineRunOptions, step Step, output stepOutput, initialFindingCount int) error {
+	state, err := opts.Store.Load(opts.RepoID, opts.TaskID)
+	if err != nil {
+		output.finishExpanded()
+		return fmt.Errorf("task review %s: load primary agent_review findings: %w", opts.TaskID, err)
+	}
+	latest, ok := taskstate.LatestReview(state)
+	if !ok || latest.Attempt != opts.Attempt.Attempt {
+		output.finishExpanded()
+		return fmt.Errorf("task review %s: latest review attempt no longer matches attempt %d", opts.TaskID, opts.Attempt.Attempt)
+	}
+	hasStepFinding := false
+	for index, finding := range latest.Findings {
+		if finding.Step != step.Name {
+			continue
+		}
+		hasStepFinding = true
+		if index >= initialFindingCount && taskstate.IsOpenBlockingReviewFinding(finding) {
+			output.finishExpanded()
+			return nil
+		}
+	}
+	if hasStepFinding {
+		output.finishTail()
+	} else {
+		output.finishClear()
+	}
+	return nil
+}
+
+func runAlternateReviewerComparison(opts PipelineRunOptions, step Step, alternate string) (bool, error) {
 	command, commandErr := opts.AgentConfig.ResolveReviewerCommandWithValues(alternate, agent.InterpolationValues{SessionName: opts.SessionName})
-	_, profile, profileErr := opts.AgentConfig.ResolveReviewerProfile(alternate)
+	alternateProfile, profile, profileErr := opts.AgentConfig.ResolveReviewerProfile(alternate)
+	if profileErr != nil {
+		alternateProfile = alternate
+	}
+	if err := writeReviewerHeader(opts.Stderr, "alternate", alternateProfile, command.Model); err != nil {
+		return false, err
+	}
 	execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, Agent: alternate, Profile: alternate, SessionName: opts.SessionName, StartedAt: time.Now().UTC()}
 	if commandErr == nil {
 		selection := command.AgentSelection()
@@ -973,7 +1032,7 @@ func formatUsageHarness(harness string) string {
 func finishAgentReviewStep(
 	opts PipelineRunOptions,
 	step Step,
-	output stepOutput,
+	output *stepOutput,
 	initialFindingCount int,
 ) (stepOutcome, error) {
 	reviewAttempt, err := opts.Store.Load(opts.RepoID, opts.TaskID)

@@ -41,8 +41,11 @@ export ORPHEUS_ALTERNATE_REVIEWER_PROFILE=reviewer-alt
 ```
 
 The primary reviewer always runs first and remains authoritative. The alternate
-then reviews the same restored read-only candidate and review context. Orpheus
-shows the two finding sets separately and requires an operator classification
+then reviews the same restored read-only candidate and review context. Paired
+stream output is separated by primary and alternate headings that identify each
+reviewer's role, resolved profile, and model (or `-` when no model is available);
+the primary stream is finalized before the alternate begins. Orpheus shows the
+two finding sets separately and requires an operator classification
 for every alternate finding: admit it to the authoritative flow, mark it a
 duplicate of a numbered primary finding, or exclude it. Only admitted findings
 participate in blocker handling, targeted fixes, separate-task proposals,
