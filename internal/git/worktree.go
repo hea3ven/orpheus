@@ -90,6 +90,179 @@ type TaskBranchSyncResult struct {
 	ConflictFiles []string
 }
 
+// TaskBranchConflictCheckpoint identifies the exact local and remote state
+// before a merge that may leave a conflicted worktree.
+type TaskBranchConflictCheckpoint struct {
+	LocalHead   string
+	RemoteHead  string
+	MergeSource string
+}
+
+// InspectTaskBranchConflictCheckpoint fetches and observes the heads required
+// for a durable conflict-recovery checkpoint without starting a merge.
+func InspectTaskBranchConflictCheckpoint(ctx context.Context, opts TaskBranchSyncOptions) (TaskBranchConflictCheckpoint, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	plan, err := newTaskBranchSyncPlan(opts)
+	if err != nil {
+		return TaskBranchConflictCheckpoint{}, err
+	}
+	if err := prepareTaskBranchSync(ctx, plan); err != nil {
+		return TaskBranchConflictCheckpoint{}, err
+	}
+	if _, err := prepareDefaultBranchRef(ctx, plan.Worktree, plan.DefaultBranch); err != nil {
+		return TaskBranchConflictCheckpoint{}, err
+	}
+	local, err := HeadCommit(ctx, plan.Worktree)
+	if err != nil {
+		return TaskBranchConflictCheckpoint{}, err
+	}
+	remote, err := revParse(ctx, plan.Worktree, "refs/remotes/origin/"+plan.Branch)
+	if err != nil {
+		return TaskBranchConflictCheckpoint{}, fmt.Errorf("inspect remote task branch: %w", err)
+	}
+	mergeSource, err := revParse(ctx, plan.Worktree, "refs/remotes/origin/"+plan.DefaultBranch)
+	if err != nil {
+		return TaskBranchConflictCheckpoint{}, fmt.Errorf("inspect default merge source: %w", err)
+	}
+	return TaskBranchConflictCheckpoint{LocalHead: local, RemoteHead: remote, MergeSource: mergeSource}, nil
+}
+
+// InspectRemoteTaskBranchHead fetches and returns the current remote task
+// branch head without changing the local checkout.
+func InspectRemoteTaskBranchHead(ctx context.Context, opts TaskBranchSyncOptions) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	plan, err := newTaskBranchSyncPlan(opts)
+	if err != nil {
+		return "", err
+	}
+	output, err := runGitContext(ctx, plan.Worktree, "ls-remote", "--heads", "origin", "refs/heads/"+plan.Branch)
+	if err != nil {
+		return "", fmt.Errorf("inspect remote task branch: %w", err)
+	}
+	fields := strings.Fields(output)
+	if len(fields) == 0 {
+		return "", fmt.Errorf("inspect remote task branch: remote branch %q was not found", plan.Branch)
+	}
+	return fields[0], nil
+}
+
+// InspectTaskBranchConflictRollbackEligibility proves the current checkout is
+// the recorded merge operation before any destructive rollback.
+func InspectTaskBranchConflictRollbackEligibility(ctx context.Context, opts TaskBranchSyncOptions, checkpoint TaskBranchConflictCheckpoint, localCompletedHead string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	plan, err := newTaskBranchSyncPlan(opts)
+	if err != nil {
+		return err
+	}
+	if err := validateTaskBranchSyncCheckout(ctx, plan); err != nil {
+		return err
+	}
+	head, err := HeadCommit(ctx, plan.Worktree)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(localCompletedHead) != "" {
+		if head != strings.TrimSpace(localCompletedHead) {
+			return fmt.Errorf("local completed head is %s, got %s", localCompletedHead, head)
+		}
+		return requireCleanRepoRootFor(ctx, plan.Worktree, "inspect sync conflict recovery")
+	}
+	if head != strings.TrimSpace(checkpoint.LocalHead) {
+		return fmt.Errorf("merge head parent is %s, got %s", checkpoint.LocalHead, head)
+	}
+	mergeHead, err := revParse(ctx, plan.Worktree, "MERGE_HEAD")
+	if err != nil {
+		return errors.New("recorded merge state is not in progress")
+	}
+	if mergeHead != strings.TrimSpace(checkpoint.MergeSource) {
+		return fmt.Errorf("merge source is %s, expected recorded source %s", mergeHead, checkpoint.MergeSource)
+	}
+	return nil
+}
+
+// RollbackTaskBranchConflictResolution restores a clean pre-resolution
+// checkout. Callers must prove ownership and unchanged remote state first.
+func RollbackTaskBranchConflictResolution(ctx context.Context, opts TaskBranchSyncOptions, checkpoint TaskBranchConflictCheckpoint) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	plan, err := newTaskBranchSyncPlan(opts)
+	if err != nil {
+		return err
+	}
+	if err := validateTaskBranchSyncCheckout(ctx, plan); err != nil {
+		return err
+	}
+	if strings.TrimSpace(checkpoint.LocalHead) == "" {
+		return errors.New("rollback checkpoint local head is required")
+	}
+	if _, err := runGitContext(ctx, plan.Worktree, "merge", "--abort"); err != nil {
+		// A resolver can have completed the merge locally. Resetting is still
+		// safe only because the workflow verified the recorded operation first.
+		if _, resetErr := runGitContext(ctx, plan.Worktree, "reset", "--hard", checkpoint.LocalHead); resetErr != nil {
+			return fmt.Errorf("abort merge and reset checkpoint: %w", errors.Join(err, resetErr))
+		}
+	} else if _, err := runGitContext(ctx, plan.Worktree, "reset", "--hard", checkpoint.LocalHead); err != nil {
+		return fmt.Errorf("reset checkpoint: %w", err)
+	}
+	if _, err := runGitContext(ctx, plan.Worktree, "clean", "-fd"); err != nil {
+		return fmt.Errorf("clean checkpoint worktree: %w", err)
+	}
+	return VerifyTaskBranchConflictRollback(ctx, opts, checkpoint)
+}
+
+// VerifyTaskBranchConflictRollback checks the exact safe rollback postcondition.
+func VerifyTaskBranchConflictRollback(ctx context.Context, opts TaskBranchSyncOptions, checkpoint TaskBranchConflictCheckpoint) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	plan, err := newTaskBranchSyncPlan(opts)
+	if err != nil {
+		return err
+	}
+	if err := validateTaskBranchSyncCheckout(ctx, plan); err != nil {
+		return err
+	}
+	if _, err := runGitContext(ctx, plan.Worktree, "fetch", "origin", plan.Branch); err != nil {
+		return fmt.Errorf("inspect remote task branch: %w", err)
+	}
+	head, err := HeadCommit(ctx, plan.Worktree)
+	if err != nil {
+		return err
+	}
+	if head != strings.TrimSpace(checkpoint.LocalHead) {
+		return fmt.Errorf("checkpoint head is %s, got %s", checkpoint.LocalHead, head)
+	}
+	if _, err := runGitContext(ctx, plan.Worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD"); err == nil {
+		return errors.New("merge state remains after rollback")
+	}
+	if err := requireCleanRepoRootFor(ctx, plan.Worktree, "verify sync conflict rollback"); err != nil {
+		return err
+	}
+	remote, err := revParse(ctx, plan.Worktree, "refs/remotes/origin/"+plan.Branch)
+	if err != nil {
+		return fmt.Errorf("verify remote task branch: %w", err)
+	}
+	if remote != strings.TrimSpace(checkpoint.RemoteHead) {
+		return fmt.Errorf("remote task branch changed from checkpoint %s to %s", checkpoint.RemoteHead, remote)
+	}
+	return nil
+}
+
+func revParse(ctx context.Context, dir, ref string) (string, error) {
+	output, err := runGitContext(ctx, dir, "rev-parse", "--verify", ref)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(output), nil
+}
+
 type taskWorktreePlan struct {
 	RepoID        string
 	RepoName      string
@@ -452,6 +625,84 @@ func BeginTaskBranchConflictResolution(
 	return beginFetchedTaskBranchConflictResolution(ctx, plan, result)
 }
 
+// CommitTaskBranchConflictResolution verifies and commits a resolved merge
+// without a remote side effect. It is the durable boundary before push intent.
+func CommitTaskBranchConflictResolution(ctx context.Context, opts TaskBranchSyncOptions, conflictFiles []string) (TaskBranchSyncResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	plan, err := newTaskBranchSyncPlan(opts)
+	if err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	result := newTaskBranchSyncResult(plan)
+	if err := validateTaskBranchSyncCheckout(ctx, plan); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if err := requireMergeInProgress(ctx, plan.Worktree); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	resolutionState, err := mergeResolutionState(ctx, plan.Worktree, conflictFiles)
+	if err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	unresolved, err := unmergedFiles(ctx, plan.Worktree)
+	if err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if len(unresolved) > 0 {
+		result.Status = TaskBranchSyncConflicted
+		result.ConflictFiles = unresolved
+		return result, fmt.Errorf("complete conflict resolution for task branch %q: unresolved merge conflicts remain: %s", plan.Branch, strings.Join(unresolved, ", "))
+	}
+	if err := stageResolvedConflictFiles(ctx, plan.Worktree, conflictFiles); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if err := requireExpectedConflictResolutionChanges(ctx, plan.Worktree, resolutionState); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if err := rejectConflictMarkers(plan.Worktree, conflictFiles); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if err := commitResolvedMerge(ctx, plan.Worktree); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	head, err := HeadCommit(ctx, plan.Worktree)
+	if err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	result.Status, result.Head = TaskBranchSyncUpdated, head
+	return result, nil
+}
+
+// PushCommittedTaskBranchConflictResolution pushes a previously committed
+// resolved merge and records the post-push local head for workflow verification.
+func PushCommittedTaskBranchConflictResolution(ctx context.Context, opts TaskBranchSyncOptions) (TaskBranchSyncResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	plan, err := newTaskBranchSyncPlan(opts)
+	if err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if err := validateTaskBranchSyncCheckout(ctx, plan); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if err := requireCleanRepoRootFor(ctx, plan.Worktree, "resolved task branch merge push"); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if err := PushTaskBranch(ctx, plan.Worktree, plan.Branch); err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	head, err := HeadCommit(ctx, plan.Worktree)
+	if err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	result := newTaskBranchSyncResult(plan)
+	result.Status, result.Head = TaskBranchSyncUpdated, head
+	return result, nil
+}
+
 // CompleteTaskBranchConflictResolution verifies an in-progress conflicted merge
 // is resolved, creates the merge commit, and pushes the task branch.
 func CompleteTaskBranchConflictResolution(
@@ -606,14 +857,7 @@ func beginFetchedTaskBranchConflictResolution(
 		return TaskBranchSyncResult{}, err
 	}
 	if containsDefault {
-		pushed, err := pushTaskBranchIfRemoteBehind(ctx, plan.Worktree, plan.Branch, previousHead)
-		if err != nil {
-			return TaskBranchSyncResult{}, err
-		}
 		result.Status = TaskBranchSyncAlreadyCurrent
-		if pushed {
-			result.Status = TaskBranchSyncPushed
-		}
 		result.Head = previousHead
 		return result, nil
 	}
@@ -634,10 +878,6 @@ func beginFetchedTaskBranchConflictResolution(
 	if err := requireCleanRepoRootFor(ctx, plan.Worktree, "task sync branch update"); err != nil {
 		return TaskBranchSyncResult{}, err
 	}
-	if err := PushTaskBranch(ctx, plan.Worktree, plan.Branch); err != nil {
-		return TaskBranchSyncResult{}, err
-	}
-
 	head, err := HeadCommit(ctx, plan.Worktree)
 	if err != nil {
 		return TaskBranchSyncResult{}, err

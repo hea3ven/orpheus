@@ -150,6 +150,7 @@ type LocalTaskState struct {
 	LatestFinalizationFailure *taskstate.Event
 	Finalization              taskstate.Finalization
 	ExpectedTargets           *tasktarget.ExpectedTargets
+	ActiveSyncConflict        *taskstate.SyncConflictOperation
 }
 
 // LocalTaskStateIndex contains local Orpheus facts by repository/task key.
@@ -264,8 +265,11 @@ func localTaskStateCanAffectProjection(
 	index map[string]task.Task,
 ) bool {
 	metadata := taskItem.OrpheusMetadata()
-	if taskItem.Status == task.StatusClosed || (metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "") {
+	if taskItem.Status == task.StatusClosed {
 		return false
+	}
+	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
+		return metadata.HasBranch && strings.TrimSpace(metadata.Branch) != "" && metadata.HasWorktree && strings.TrimSpace(metadata.Worktree) != ""
 	}
 
 	if metadata.HasBranch && strings.TrimSpace(metadata.Branch) != "" &&
@@ -314,6 +318,9 @@ func classify(repository task.Repository, taskItem task.Task, index map[string]t
 	latestRun := latestRunFrom(localState)
 	if taskItem.Status == task.StatusClosed {
 		return newPolicyResult(readinessDone, "closed", Detail{Kind: DetailClosed})
+	}
+	if localState != nil && localState.ActiveSyncConflict != nil && localState.ActiveSyncConflict.Phase == taskstate.SyncConflictPhaseUnresolved {
+		return newPolicyResult(readinessAttention, "unresolved sync conflict recovery: "+localState.ActiveSyncConflict.Reason, Detail{Kind: DetailUnknownTaskStatus, State: "sync_conflict_recovery"})
 	}
 	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
 		return newPolicyResult(

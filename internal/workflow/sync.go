@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/logging"
@@ -47,6 +49,33 @@ type SyncRunStore interface {
 		opts taskstate.SyncConflictResolutionEventOptions,
 		cause error,
 	) (taskstate.Event, error)
+}
+
+// SyncConflictCompletionGit separates local merge completion from remote push.
+type SyncConflictCompletionGit interface {
+	CommitTaskBranchConflictResolution(context.Context, gitmeta.TaskBranchSyncOptions, []string) (gitmeta.TaskBranchSyncResult, error)
+	PushCommittedTaskBranchConflictResolution(context.Context, gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchSyncResult, error)
+}
+
+// SyncConflictRecoveryGit is the narrow optional Git boundary used by the
+// durable conflict-recovery workflow. SyncGit fakes and older adapters remain
+// compatible with normal sync.
+type SyncConflictRecoveryGit interface {
+	InspectTaskBranchConflictCheckpoint(context.Context, gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchConflictCheckpoint, error)
+	InspectRemoteTaskBranchHead(context.Context, gitmeta.TaskBranchSyncOptions) (string, error)
+	InspectTaskBranchConflictRollbackEligibility(context.Context, gitmeta.TaskBranchSyncOptions, gitmeta.TaskBranchConflictCheckpoint, string) error
+	RollbackTaskBranchConflictResolution(context.Context, gitmeta.TaskBranchSyncOptions, gitmeta.TaskBranchConflictCheckpoint) error
+	VerifyTaskBranchConflictRollback(context.Context, gitmeta.TaskBranchSyncOptions, gitmeta.TaskBranchConflictCheckpoint) error
+}
+
+// SyncConflictRecoveryStore owns authoritative active-operation state.
+type SyncConflictRecoveryStore interface {
+	Load(repoID, taskID string) (taskstate.TaskState, error)
+	BeginSyncConflictOperation(repoID, taskID string, operation taskstate.SyncConflictOperation) (taskstate.SyncConflictOperation, error)
+	UpdateSyncConflictOperation(repoID, taskID, operationID string, update func(*taskstate.SyncConflictOperation) error) (taskstate.SyncConflictOperation, error)
+	ResolveSyncConflictOperation(repoID, taskID, operationID, outcome, reason string) error
+	ClearSyncConflictOperation(repoID, taskID, operationID string) error
+	MarkSyncConflictOperationUnresolved(repoID, taskID, operationID, reason string) error
 }
 
 // SyncGit performs the Git operations used by task sync branch updates.
@@ -94,6 +123,29 @@ func (LocalSyncGit) CompleteTaskBranchConflictResolution(
 	return gitmeta.CompleteTaskBranchConflictResolution(ctx, opts, conflictFiles)
 }
 
+func (LocalSyncGit) CommitTaskBranchConflictResolution(ctx context.Context, opts gitmeta.TaskBranchSyncOptions, conflictFiles []string) (gitmeta.TaskBranchSyncResult, error) {
+	return gitmeta.CommitTaskBranchConflictResolution(ctx, opts, conflictFiles)
+}
+func (LocalSyncGit) PushCommittedTaskBranchConflictResolution(ctx context.Context, opts gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchSyncResult, error) {
+	return gitmeta.PushCommittedTaskBranchConflictResolution(ctx, opts)
+}
+
+func (LocalSyncGit) InspectTaskBranchConflictCheckpoint(ctx context.Context, opts gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchConflictCheckpoint, error) {
+	return gitmeta.InspectTaskBranchConflictCheckpoint(ctx, opts)
+}
+func (LocalSyncGit) InspectRemoteTaskBranchHead(ctx context.Context, opts gitmeta.TaskBranchSyncOptions) (string, error) {
+	return gitmeta.InspectRemoteTaskBranchHead(ctx, opts)
+}
+func (LocalSyncGit) InspectTaskBranchConflictRollbackEligibility(ctx context.Context, opts gitmeta.TaskBranchSyncOptions, checkpoint gitmeta.TaskBranchConflictCheckpoint, localHead string) error {
+	return gitmeta.InspectTaskBranchConflictRollbackEligibility(ctx, opts, checkpoint, localHead)
+}
+func (LocalSyncGit) RollbackTaskBranchConflictResolution(ctx context.Context, opts gitmeta.TaskBranchSyncOptions, checkpoint gitmeta.TaskBranchConflictCheckpoint) error {
+	return gitmeta.RollbackTaskBranchConflictResolution(ctx, opts, checkpoint)
+}
+func (LocalSyncGit) VerifyTaskBranchConflictRollback(ctx context.Context, opts gitmeta.TaskBranchSyncOptions, checkpoint gitmeta.TaskBranchConflictCheckpoint) error {
+	return gitmeta.VerifyTaskBranchConflictRollback(ctx, opts, checkpoint)
+}
+
 // SyncConflictResolver resolves merge conflicts left in a PR branch worktree.
 type SyncConflictResolver interface {
 	PrepareSyncConflictResolution(
@@ -118,6 +170,8 @@ type SyncConflictResolutionOptions struct {
 	DefaultBranch string
 	PRURL         string
 	ConflictFiles []string
+	// RecordChildPID persists the direct resolver PID at the launcher boundary.
+	RecordChildPID func(int) error
 }
 
 // SyncService reconciles backend task state from recorded pull request state.
@@ -473,6 +527,10 @@ func (s SyncService) syncLocked(
 	}
 	diagnosticTarget.recordTarget(target)
 
+	if err := s.recoverActiveSyncConflict(ctx, target, gitState); err != nil {
+		return SyncResult{}, err
+	}
+
 	if target.task.Status == task.StatusClosed {
 		return s.skip(target, taskstate.RunAttempt{}, "task is closed"), nil
 	}
@@ -485,6 +543,109 @@ func (s SyncService) syncLocked(
 	}
 
 	return s.skip(target, taskstate.RunAttempt{}, task.MetadataPRURL+" is not set"), nil
+}
+
+// recoverActiveSyncConflict rolls back only an conclusively stale, locally
+// owned operation. Missing recovery-capable dependencies preserve legacy sync
+// behavior for non-production adapters.
+func (s SyncService) recoverActiveSyncConflict(ctx context.Context, target syncTarget, gitState SyncGit) error {
+	store, ok := s.RunStore.(SyncConflictRecoveryStore)
+	if !ok {
+		return nil
+	}
+	state, err := store.Load(target.source.Repository.ID, target.task.ID)
+	if err != nil {
+		return fmt.Errorf("load sync recovery state for task %s: %w", target.task.ID, err)
+	}
+	operation := state.ActiveSyncConflict
+	if operation == nil {
+		return nil
+	}
+	metadata := target.task.OrpheusMetadata()
+	if strings.TrimSpace(metadata.Branch) != operation.Branch || strings.TrimSpace(metadata.Worktree) != operation.Worktree {
+		return s.unresolvedSyncConflict(store, target, operation, "task target no longer matches the recorded conflict operation")
+	}
+	if operation.Phase == taskstate.SyncConflictPhaseUnresolved {
+		return fmt.Errorf("task %s has unresolved sync conflict recovery: %s", target.task.ID, operation.Reason)
+	}
+	inspection := workflowSyncConflictExecutionInspection(operation.Execution)
+	if inspection.Condition == AttachedExecutionLive {
+		return fmt.Errorf("task %s sync conflict resolver is still live: %s", target.task.ID, inspection.Reason)
+	}
+	if inspection.Condition == AttachedExecutionUnverifiable {
+		return s.unresolvedSyncConflict(store, target, operation, inspection.Reason)
+	}
+	gitRecovery, ok := gitState.(SyncConflictRecoveryGit)
+	if !ok {
+		return s.unresolvedSyncConflict(store, target, operation, "sync Git adapter cannot verify recovery")
+	}
+	checkpoint := gitmeta.TaskBranchConflictCheckpoint{LocalHead: operation.Checkpoint.LocalHead, RemoteHead: operation.Checkpoint.RemoteHead, MergeSource: operation.Checkpoint.MergeSource}
+	syncOpts := gitmeta.TaskBranchSyncOptions{RepoPath: target.source.Repository.Path, DefaultBranch: operation.DefaultBranch, Branch: operation.Branch, Worktree: operation.Worktree}
+	remoteHead, remoteErr := gitRecovery.InspectRemoteTaskBranchHead(ctx, syncOpts)
+	if remoteErr != nil {
+		return s.unresolvedSyncConflict(store, target, operation, "remote inspection failed: "+remoteErr.Error())
+	}
+	if operation.LocalHead != "" && remoteHead == operation.LocalHead && (operation.Phase == taskstate.SyncConflictPhasePushIntent || operation.Phase == taskstate.SyncConflictPhasePushed) {
+		return s.finishRecoveredSyncConflictPush(store, target, operation, remoteHead)
+	}
+	if remoteHead != operation.Checkpoint.RemoteHead {
+		return s.unresolvedSyncConflict(store, target, operation, "remote task branch changed from the recorded checkpoint")
+	}
+	if err := gitRecovery.VerifyTaskBranchConflictRollback(ctx, syncOpts, checkpoint); err == nil {
+		// A previous rollback completed but crashed before state persistence.
+		return store.ResolveSyncConflictOperation(target.source.Repository.ID, target.task.ID, operation.ID, "rollback_verified", inspection.Reason)
+	}
+	if err := gitRecovery.InspectTaskBranchConflictRollbackEligibility(ctx, syncOpts, checkpoint, operation.LocalHead); err != nil {
+		return s.unresolvedSyncConflict(store, target, operation, "local recovery state is incompatible: "+err.Error())
+	}
+	if err := gitRecovery.RollbackTaskBranchConflictResolution(ctx, syncOpts, checkpoint); err != nil {
+		return s.unresolvedSyncConflict(store, target, operation, "safe rollback failed: "+err.Error())
+	}
+	return store.ResolveSyncConflictOperation(target.source.Repository.ID, target.task.ID, operation.ID, "rolled_back", inspection.Reason)
+}
+
+func workflowSyncConflictExecutionInspection(execution *taskstate.AgentExecution) AttachedExecutionInspection {
+	if execution == nil {
+		return AttachedExecutionInspection{Condition: AttachedExecutionRecoverable, Reason: "resolver_not_started"}
+	}
+	return InspectAttachedExecution(*execution, nil)
+}
+
+func (s SyncService) unresolvedSyncConflict(store SyncConflictRecoveryStore, target syncTarget, operation *taskstate.SyncConflictOperation, reason string) error {
+	if err := store.MarkSyncConflictOperationUnresolved(target.source.Repository.ID, target.task.ID, operation.ID, reason); err != nil {
+		return fmt.Errorf("mark sync conflict recovery unresolved for task %s: %w", target.task.ID, err)
+	}
+	return fmt.Errorf("task %s has unresolved sync conflict recovery: %s", target.task.ID, reason)
+}
+
+func (s SyncService) finishRecoveredSyncConflictPush(store SyncConflictRecoveryStore, target syncTarget, operation *taskstate.SyncConflictOperation, remoteHead string) error {
+	updated, err := store.UpdateSyncConflictOperation(target.source.Repository.ID, target.task.ID, operation.ID, func(active *taskstate.SyncConflictOperation) error {
+		active.Phase = taskstate.SyncConflictPhasePushed
+		active.ObservedRemoteHead = remoteHead
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	execution := taskstate.AgentExecution{}
+	if updated.Execution != nil {
+		execution = *updated.Execution
+	}
+	if _, err := s.RunStore.RecordSyncConflictResolutionFinished(target.source.Repository.ID, target.task.ID, taskstate.SyncConflictResolutionEventOptions{Execution: execution, Branch: updated.Branch, DefaultBranch: updated.DefaultBranch, Worktree: updated.Worktree, ConflictFiles: updated.ConflictFiles, Commit: updated.LocalHead}); err != nil {
+		return err
+	}
+	return store.ClearSyncConflictOperation(target.source.Repository.ID, target.task.ID, updated.ID)
+}
+
+func (s SyncService) recoverObservedSyncConflictFailure(ctx context.Context, target syncTarget, gitState SyncGit, operation *taskstate.SyncConflictOperation) error {
+	store, ok := s.RunStore.(SyncConflictRecoveryStore)
+	if !ok {
+		return nil
+	}
+	if _, err := store.UpdateSyncConflictOperation(target.source.Repository.ID, target.task.ID, operation.ID, func(active *taskstate.SyncConflictOperation) error { active.Execution = nil; return nil }); err != nil {
+		return err
+	}
+	return s.recoverActiveSyncConflict(ctx, target, gitState)
 }
 
 func (s SyncService) pollExistingPR(ctx context.Context, target syncTarget, gitState SyncGit) (SyncResult, bool, error) {
@@ -651,7 +812,7 @@ func (s SyncService) integrationDestinationForSync(repo task.Repository, taskIte
 	return integrationDestination(repo, taskstate.FinalizationFacts(state))
 }
 
-//nolint:funlen // The conflict-repair orchestration is clearer kept as one ordered workflow.
+//nolint:funlen,gocognit,nestif // The conflict-repair orchestration is clearer kept as one ordered workflow.
 func (s SyncService) resolveOpenPRBranchConflict(
 	ctx context.Context,
 	target syncTarget,
@@ -674,12 +835,97 @@ func (s SyncService) resolveOpenPRBranchConflict(
 		Branch:        taskTarget.Branch,
 		Worktree:      taskTarget.Worktree,
 	}
+	var operation *taskstate.SyncConflictOperation
+	if store, ok := s.RunStore.(SyncConflictRecoveryStore); ok {
+		if recoveryGit, ok := gitState.(SyncConflictRecoveryGit); ok {
+			checkpoint, checkpointErr := recoveryGit.InspectTaskBranchConflictCheckpoint(ctx, syncOpts)
+			if checkpointErr != nil {
+				return SyncResult{}, fmt.Errorf("checkpoint conflict resolution for task %s: %w", target.task.ID, checkpointErr)
+			}
+			started, startErr := store.BeginSyncConflictOperation(repo.ID, target.task.ID, taskstate.SyncConflictOperation{
+				ID: fmt.Sprintf("sync-%d-%d", os.Getpid(), time.Now().UnixNano()), Branch: taskTarget.Branch, Worktree: taskTarget.Worktree, DefaultBranch: destination,
+				Checkpoint: taskstate.SyncConflictCheckpoint{LocalHead: checkpoint.LocalHead, RemoteHead: checkpoint.RemoteHead, MergeSource: checkpoint.MergeSource}, Phase: taskstate.SyncConflictPhasePrepared,
+			})
+			if startErr != nil {
+				return SyncResult{}, fmt.Errorf("persist conflict resolution checkpoint for task %s: %w", target.task.ID, startErr)
+			}
+			operation = &started
+		}
+	}
 	branchSync, err := gitState.BeginTaskBranchConflictResolution(ctx, syncOpts)
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("prepare conflict resolution for task %s: %w", target.task.ID, err)
 	}
 	if branchSync.Status != gitmeta.TaskBranchSyncConflicted {
+		needsPush := branchSync.Status == gitmeta.TaskBranchSyncUpdated
+		if operation != nil && branchSync.Status == gitmeta.TaskBranchSyncAlreadyCurrent {
+			remoteHead, inspectErr := gitState.(SyncConflictRecoveryGit).InspectRemoteTaskBranchHead(ctx, syncOpts)
+			if inspectErr != nil {
+				return SyncResult{}, fmt.Errorf("inspect already-current sync branch for task %s: %w", target.task.ID, inspectErr)
+			}
+			needsPush = remoteHead != branchSync.Head
+		}
+		if operation != nil && needsPush {
+			completionGit, ok := gitState.(SyncConflictCompletionGit)
+			if !ok {
+				return SyncResult{}, fmt.Errorf("record non-conflict sync completion for task %s: Git adapter cannot push through durable boundary", target.task.ID)
+			}
+			store := s.RunStore.(SyncConflictRecoveryStore)
+			updated, updateErr := store.UpdateSyncConflictOperation(repo.ID, target.task.ID, operation.ID, func(active *taskstate.SyncConflictOperation) error {
+				active.Phase = taskstate.SyncConflictPhaseLocalCompleted
+				active.LocalHead = branchSync.Head
+				return nil
+			})
+			if updateErr != nil {
+				return SyncResult{}, updateErr
+			}
+			operation = &updated
+			updated, updateErr = store.UpdateSyncConflictOperation(repo.ID, target.task.ID, operation.ID, func(active *taskstate.SyncConflictOperation) error {
+				active.Phase = taskstate.SyncConflictPhasePushIntent
+				return nil
+			})
+			if updateErr != nil {
+				return SyncResult{}, updateErr
+			}
+			operation = &updated
+			if _, err := completionGit.PushCommittedTaskBranchConflictResolution(ctx, syncOpts); err != nil {
+				return SyncResult{}, err
+			}
+			remoteHead, err := gitState.(SyncConflictRecoveryGit).InspectRemoteTaskBranchHead(ctx, syncOpts)
+			if err != nil {
+				return SyncResult{}, fmt.Errorf("inspect non-conflict sync push for task %s: %w", target.task.ID, err)
+			}
+			if remoteHead != branchSync.Head {
+				return SyncResult{}, fmt.Errorf("verify non-conflict sync push for task %s: remote head %s does not match local head %s", target.task.ID, remoteHead, branchSync.Head)
+			}
+			if _, err := store.UpdateSyncConflictOperation(repo.ID, target.task.ID, operation.ID, func(active *taskstate.SyncConflictOperation) error {
+				active.Phase = taskstate.SyncConflictPhasePushed
+				active.ObservedRemoteHead = remoteHead
+				return nil
+			}); err != nil {
+				return SyncResult{}, err
+			}
+		}
+		if operation != nil {
+			if store, ok := s.RunStore.(SyncConflictRecoveryStore); ok {
+				if err := store.ClearSyncConflictOperation(repo.ID, target.task.ID, operation.ID); err != nil {
+					return SyncResult{}, fmt.Errorf("clear non-conflict recovery checkpoint for task %s: %w", target.task.ID, err)
+				}
+			}
+		}
 		return branchSyncResult(destination, taskTarget.Branch, target.task.ID, branchSync)
+	}
+	if operation != nil {
+		store := s.RunStore.(SyncConflictRecoveryStore)
+		updated, updateErr := store.UpdateSyncConflictOperation(repo.ID, target.task.ID, operation.ID, func(active *taskstate.SyncConflictOperation) error {
+			active.Phase = taskstate.SyncConflictPhaseConflicted
+			active.ConflictFiles = append([]string{}, branchSync.ConflictFiles...)
+			return nil
+		})
+		if updateErr != nil {
+			return SyncResult{}, fmt.Errorf("record conflict files for task %s: %w", target.task.ID, updateErr)
+		}
+		operation = &updated
 	}
 
 	conflictOpts := SyncConflictResolutionOptions{
@@ -691,15 +937,77 @@ func (s SyncService) resolveOpenPRBranchConflict(
 		PRURL:         prURL,
 		ConflictFiles: append([]string{}, branchSync.ConflictFiles...),
 	}
-	auditOpts, err := s.runSyncConflictResolver(ctx, repo.ID, target.task.ID, conflictOpts)
+	if operation != nil {
+		operationID := operation.ID
+		conflictOpts.RecordChildPID = func(pid int) error {
+			_, err := s.RunStore.(SyncConflictRecoveryStore).UpdateSyncConflictOperation(repo.ID, target.task.ID, operationID, func(active *taskstate.SyncConflictOperation) error {
+				if active.Execution == nil {
+					return errors.New("resolver execution is not recorded")
+				}
+				active.Execution.ChildPID = pid
+				return nil
+			})
+			return err
+		}
+	}
+	auditOpts, err := s.runSyncConflictResolver(ctx, repo.ID, target.task.ID, conflictOpts, operation)
 	if err != nil {
+		if operation != nil {
+			err = errors.Join(err, s.recoverObservedSyncConflictFailure(ctx, target, gitState, operation))
+		}
 		return SyncResult{}, err
 	}
 
-	completed, err := gitState.CompleteTaskBranchConflictResolution(ctx, syncOpts, branchSync.ConflictFiles)
+	var completed gitmeta.TaskBranchSyncResult
+	if completionGit, ok := gitState.(SyncConflictCompletionGit); ok && operation != nil {
+		completed, err = completionGit.CommitTaskBranchConflictResolution(ctx, syncOpts, branchSync.ConflictFiles)
+		if err == nil {
+			updated, updateErr := s.RunStore.(SyncConflictRecoveryStore).UpdateSyncConflictOperation(repo.ID, target.task.ID, operation.ID, func(active *taskstate.SyncConflictOperation) error {
+				active.Phase = taskstate.SyncConflictPhaseLocalCompleted
+				active.LocalHead = completed.Head
+				return nil
+			})
+			if updateErr != nil {
+				return SyncResult{}, fmt.Errorf("record local conflict merge completion for task %s: %w", target.task.ID, updateErr)
+			}
+			operation = &updated
+			updated, updateErr = s.RunStore.(SyncConflictRecoveryStore).UpdateSyncConflictOperation(repo.ID, target.task.ID, operation.ID, func(active *taskstate.SyncConflictOperation) error {
+				active.Phase = taskstate.SyncConflictPhasePushIntent
+				return nil
+			})
+			if updateErr != nil {
+				return SyncResult{}, fmt.Errorf("record conflict push intent for task %s: %w", target.task.ID, updateErr)
+			}
+			operation = &updated
+			completed, err = completionGit.PushCommittedTaskBranchConflictResolution(ctx, syncOpts)
+			if err == nil {
+				remoteHead, inspectErr := gitState.(SyncConflictRecoveryGit).InspectRemoteTaskBranchHead(ctx, syncOpts)
+				if inspectErr != nil {
+					return SyncResult{}, fmt.Errorf("inspect pushed conflict branch for task %s: %w", target.task.ID, inspectErr)
+				}
+				if remoteHead != completed.Head {
+					return SyncResult{}, fmt.Errorf("verify pushed conflict branch for task %s: remote head %s does not match local head %s", target.task.ID, remoteHead, completed.Head)
+				}
+				updated, updateErr = s.RunStore.(SyncConflictRecoveryStore).UpdateSyncConflictOperation(repo.ID, target.task.ID, operation.ID, func(active *taskstate.SyncConflictOperation) error {
+					active.Phase = taskstate.SyncConflictPhasePushed
+					active.ObservedRemoteHead = remoteHead
+					return nil
+				})
+				if updateErr != nil {
+					return SyncResult{}, fmt.Errorf("record pushed conflict branch for task %s: %w", target.task.ID, updateErr)
+				}
+				operation = &updated
+			}
+		}
+	} else {
+		completed, err = gitState.CompleteTaskBranchConflictResolution(ctx, syncOpts, branchSync.ConflictFiles)
+	}
 	if err != nil {
 		if recordErr := s.recordSyncConflictResolutionFailure(repo.ID, target.task.ID, auditOpts, err); recordErr != nil {
 			err = errors.Join(err, recordErr)
+		}
+		if operation != nil {
+			err = errors.Join(err, s.recoverObservedSyncConflictFailure(ctx, target, gitState, operation))
 		}
 		return SyncResult{}, fmt.Errorf("complete resolved merge for task %s: %w", target.task.ID, err)
 	}
@@ -722,6 +1030,13 @@ func (s SyncService) resolveOpenPRBranchConflict(
 	if _, err := s.RunStore.RecordSyncConflictResolutionFinished(repo.ID, target.task.ID, finishedAuditOpts); err != nil {
 		return SyncResult{}, fmt.Errorf("record conflict resolution finish for task %s: %w", target.task.ID, err)
 	}
+	if operation != nil {
+		if store, ok := s.RunStore.(SyncConflictRecoveryStore); ok {
+			if err := store.ClearSyncConflictOperation(repo.ID, target.task.ID, operation.ID); err != nil {
+				return SyncResult{}, fmt.Errorf("clear successful conflict recovery state for task %s: %w", target.task.ID, err)
+			}
+		}
+	}
 	return SyncResult{
 		Status: SyncStatusBranchUpdated,
 		Reason: fmt.Sprintf(
@@ -732,11 +1047,13 @@ func (s SyncService) resolveOpenPRBranchConflict(
 	}, nil
 }
 
+//nolint:nestif // Persisting the execution immediately before its launch is deliberately ordered.
 func (s SyncService) runSyncConflictResolver(
 	ctx context.Context,
 	repoID string,
 	taskID string,
 	conflictOpts SyncConflictResolutionOptions,
+	operation *taskstate.SyncConflictOperation,
 ) (taskstate.SyncConflictResolutionEventOptions, error) {
 	prepared, err := s.ConflictResolver.PrepareSyncConflictResolution(ctx, conflictOpts)
 	if err != nil {
@@ -746,7 +1063,24 @@ func (s SyncService) runSyncConflictResolver(
 			err,
 		)
 	}
+	prepared.Execution.SupervisorPID = os.Getpid()
 	auditOpts := syncConflictResolutionEventOptions(conflictOpts, prepared.Execution, "")
+	if operation != nil {
+		if store, ok := s.RunStore.(SyncConflictRecoveryStore); ok {
+			_, updateErr := store.UpdateSyncConflictOperation(repoID, taskID, operation.ID, func(active *taskstate.SyncConflictOperation) error {
+				active.Phase = taskstate.SyncConflictPhaseResolving
+				execution := prepared.Execution
+				if execution.StartedAt.IsZero() {
+					execution.StartedAt = time.Now().UTC()
+				}
+				active.Execution = &execution
+				return nil
+			})
+			if updateErr != nil {
+				return taskstate.SyncConflictResolutionEventOptions{}, fmt.Errorf("record conflict resolver execution for task %s: %w", taskID, updateErr)
+			}
+		}
+	}
 	startedEvent, err := s.RunStore.RecordSyncConflictResolutionStarted(repoID, taskID, auditOpts)
 	if err != nil {
 		return taskstate.SyncConflictResolutionEventOptions{}, fmt.Errorf(
