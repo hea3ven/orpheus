@@ -43,31 +43,31 @@ func newStepOutput(opts PipelineRunOptions, rolling bool) stepOutput {
 	}
 }
 
-func (o stepOutput) finishClear() {
-	if o.tail == nil {
+func (o *stepOutput) finishClear() {
+	if o == nil || o.tail == nil {
 		return
 	}
 	o.flush()
 	o.tail.finish(tailFinishClear)
 }
 
-func (o stepOutput) finishTail() {
-	if o.tail == nil {
+func (o *stepOutput) finishTail() {
+	if o == nil || o.tail == nil {
 		return
 	}
 	o.flush()
 	o.tail.finish(tailFinishLive)
 }
 
-func (o stepOutput) finishExpanded() {
-	if o.tail == nil {
+func (o *stepOutput) finishExpanded() {
+	if o == nil || o.tail == nil {
 		return
 	}
 	o.flush()
 	o.tail.finish(tailFinishExpanded)
 }
 
-func (o stepOutput) flush() {
+func (o *stepOutput) flush() {
 	o.tailStdout.flush()
 	o.tailStderr.flush()
 }
