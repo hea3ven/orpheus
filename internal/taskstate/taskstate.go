@@ -85,25 +85,27 @@ const (
 type EventType string
 
 const (
-	EventWorktreeCreated      EventType = "worktree_created"
-	EventTaskBranchCreated    EventType = "task_branch_created"
-	EventWorktreeReused       EventType = "worktree_reused"
-	EventWorktreeRecreated    EventType = "worktree_recreated"
-	EventRunStarted           EventType = "run_started"
-	EventRunFinished          EventType = "run_finished"
-	EventRunStartFailed       EventType = "run_start_failed"
-	EventRunInterrupted       EventType = "run_interrupted"
-	EventReviewInterrupted    EventType = "review_interrupted"
-	EventCompletionRecorded   EventType = "completion_recorded"
-	EventCompletionRepeated   EventType = "completion_repeated"
-	EventChangesPushed        EventType = "changes_pushed"
-	EventPRCreated            EventType = "pr_created"
-	EventPRRecovered          EventType = "pr_recovered"
-	EventFinalizationFailed   EventType = "finalization_failed"
-	EventTaskClosed           EventType = "task_closed"
-	EventSyncConflictStarted  EventType = "sync_conflict_started"
-	EventSyncConflictFinished EventType = "sync_conflict_finished"
-	EventSyncConflictFailed   EventType = "sync_conflict_failed"
+	EventWorktreeCreated        EventType = "worktree_created"
+	EventTaskBranchCreated      EventType = "task_branch_created"
+	EventWorktreeReused         EventType = "worktree_reused"
+	EventWorktreeRecreated      EventType = "worktree_recreated"
+	EventRunStarted             EventType = "run_started"
+	EventRunFinished            EventType = "run_finished"
+	EventRunStartFailed         EventType = "run_start_failed"
+	EventRunInterrupted         EventType = "run_interrupted"
+	EventReviewInterrupted      EventType = "review_interrupted"
+	EventCompletionRecorded     EventType = "completion_recorded"
+	EventCompletionRepeated     EventType = "completion_repeated"
+	EventChangesPushed          EventType = "changes_pushed"
+	EventPRCreated              EventType = "pr_created"
+	EventPRRecovered            EventType = "pr_recovered"
+	EventFinalizationFailed     EventType = "finalization_failed"
+	EventTaskClosed             EventType = "task_closed"
+	EventSyncConflictStarted    EventType = "sync_conflict_started"
+	EventSyncConflictFinished   EventType = "sync_conflict_finished"
+	EventSyncConflictFailed     EventType = "sync_conflict_failed"
+	EventSyncConflictRolledBack EventType = "sync_conflict_rolled_back"
+	EventSyncConflictUnresolved EventType = "sync_conflict_unresolved"
 )
 
 const (
@@ -162,6 +164,10 @@ type TaskState struct {
 	Events  []Event         `yaml:"events,omitempty"`
 
 	Finalization *Finalization `yaml:"finalization,omitempty"`
+
+	// ActiveSyncConflict is authoritative recovery state, never inferred from
+	// the append-only sync-conflict audit events.
+	ActiveSyncConflict *SyncConflictOperation `yaml:"active_sync_conflict,omitempty"`
 }
 
 // UnmarshalYAML normalizes task-level state after direct YAML decodes.
@@ -547,6 +553,46 @@ type FinalizationCommitIntent struct {
 	Message string `yaml:"message"`
 }
 
+// SyncConflictPhase records the ordered side-effect boundary of a conflicted sync.
+type SyncConflictPhase string
+
+const (
+	SyncConflictPhasePrepared       SyncConflictPhase = "prepared"
+	SyncConflictPhaseConflicted     SyncConflictPhase = "conflicted"
+	SyncConflictPhaseResolving      SyncConflictPhase = "resolving"
+	SyncConflictPhaseLocalCompleted SyncConflictPhase = "local_completed"
+	SyncConflictPhasePushIntent     SyncConflictPhase = "push_intent"
+	SyncConflictPhasePushed         SyncConflictPhase = "pushed"
+	SyncConflictPhaseUnresolved     SyncConflictPhase = "unresolved"
+)
+
+// SyncConflictCheckpoint is the clean local and remote state recorded before
+// Git begins a merge that can leave conflicts.
+type SyncConflictCheckpoint struct {
+	LocalHead   string `yaml:"local_head"`
+	RemoteHead  string `yaml:"remote_head"`
+	MergeSource string `yaml:"merge_source"`
+}
+
+// SyncConflictOperation is the first-class recovery authority for one local
+// sync conflict resolver. It remains present when recovery is unresolved.
+type SyncConflictOperation struct {
+	ID                 string                 `yaml:"id"`
+	Branch             string                 `yaml:"branch"`
+	Worktree           string                 `yaml:"worktree"`
+	DefaultBranch      string                 `yaml:"default_branch"`
+	Checkpoint         SyncConflictCheckpoint `yaml:"checkpoint"`
+	Phase              SyncConflictPhase      `yaml:"phase"`
+	ConflictFiles      []string               `yaml:"conflict_files,omitempty"`
+	Execution          *AgentExecution        `yaml:"execution,omitempty"`
+	CreatedAt          time.Time              `yaml:"created_at"`
+	UpdatedAt          time.Time              `yaml:"updated_at"`
+	LocalHead          string                 `yaml:"local_head,omitempty"`
+	ObservedRemoteHead string                 `yaml:"observed_remote_head,omitempty"`
+	Outcome            string                 `yaml:"outcome,omitempty"`
+	Reason             string                 `yaml:"reason,omitempty"`
+}
+
 // Event records a small trace/audit event for a task.
 type Event struct {
 	Type EventType `yaml:"type"`
@@ -622,6 +668,10 @@ func (e Event) DisplayName() string {
 		return "Sync conflict resolution finished"
 	case EventSyncConflictFailed:
 		return "Sync conflict resolution failed"
+	case EventSyncConflictRolledBack:
+		return "Sync conflict resolution rolled back"
+	case EventSyncConflictUnresolved:
+		return "Sync conflict resolution unresolved"
 	default:
 		return string(e.Type)
 	}
@@ -3099,6 +3149,129 @@ func (s Store) RecordFinalizationFailure(repoID, taskID string, cause error) (Ev
 	})
 }
 
+// BeginSyncConflictOperation persists the rollback checkpoint before Git enters
+// the conflict-producing merge. A task may own only one active operation.
+func (s Store) BeginSyncConflictOperation(repoID, taskID string, operation SyncConflictOperation) (SyncConflictOperation, error) {
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return SyncConflictOperation{}, err
+	}
+	if state.ActiveSyncConflict != nil {
+		return SyncConflictOperation{}, fmt.Errorf("begin sync conflict operation for task %s/%s: an active operation already exists", repoID, taskID)
+	}
+	operation = normalizeSyncConflictOperation(operation)
+	now := s.nowUTC()
+	if operation.CreatedAt.IsZero() {
+		operation.CreatedAt = now
+	}
+	operation.UpdatedAt = now
+	if err := validateSyncConflictOperation(operation); err != nil {
+		return SyncConflictOperation{}, fmt.Errorf("begin sync conflict operation for task %s/%s: %w", repoID, taskID, err)
+	}
+	state.ActiveSyncConflict = &operation
+	if err := s.save(state); err != nil {
+		return SyncConflictOperation{}, err
+	}
+	return *state.ActiveSyncConflict, nil
+}
+
+// UpdateSyncConflictOperation records additional observed recovery facts.
+func (s Store) UpdateSyncConflictOperation(repoID, taskID, operationID string, update func(*SyncConflictOperation) error) (SyncConflictOperation, error) {
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return SyncConflictOperation{}, err
+	}
+	operation := state.ActiveSyncConflict
+	if operation == nil || operation.ID != strings.TrimSpace(operationID) {
+		return SyncConflictOperation{}, fmt.Errorf("update sync conflict operation for task %s/%s: active operation was not found", repoID, taskID)
+	}
+	if update != nil {
+		if err := update(operation); err != nil {
+			return SyncConflictOperation{}, err
+		}
+	}
+	operation.UpdatedAt = s.nowUTC()
+	*operation = normalizeSyncConflictOperation(*operation)
+	if err := validateSyncConflictOperation(*operation); err != nil {
+		return SyncConflictOperation{}, err
+	}
+	if err := s.save(state); err != nil {
+		return SyncConflictOperation{}, err
+	}
+	return *state.ActiveSyncConflict, nil
+}
+
+// ClearSyncConflictOperation clears an active operation after a separately
+// durable successful terminal audit event has been recorded.
+func (s Store) ClearSyncConflictOperation(repoID, taskID, operationID string) error {
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return err
+	}
+	if state.ActiveSyncConflict == nil || state.ActiveSyncConflict.ID != strings.TrimSpace(operationID) {
+		return fmt.Errorf("clear sync conflict operation for task %s/%s: active operation was not found", repoID, taskID)
+	}
+	state.ActiveSyncConflict = nil
+	return s.save(state)
+}
+
+// ResolveSyncConflictOperation clears an active operation only after the
+// caller has completed and verified its durable terminal transition.
+func (s Store) ResolveSyncConflictOperation(repoID, taskID, operationID, outcome, reason string) error {
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return err
+	}
+	operation := state.ActiveSyncConflict
+	if operation == nil || operation.ID != strings.TrimSpace(operationID) {
+		return fmt.Errorf("resolve sync conflict operation for task %s/%s: active operation was not found", repoID, taskID)
+	}
+	outcome, reason = strings.TrimSpace(outcome), strings.TrimSpace(reason)
+	if outcome == "" {
+		return fmt.Errorf("resolve sync conflict operation for task %s/%s: outcome is required", repoID, taskID)
+	}
+	now := s.nowUTC()
+	var execution *AgentExecution
+	agentName := ""
+	if operation.Execution != nil {
+		interrupted := *operation.Execution
+		agentName = interrupted.Agent
+		interrupted.Status = RunStatusInterrupted
+		interrupted.FinishedAt = &now
+		interrupted.DurationMillis = durationMillis(interrupted.StartedAt, now)
+		interrupted.InterruptionReason = reason
+		interrupted.InterruptionTrigger = "sync_recovery"
+		execution = &interrupted
+	}
+	state.Events = append(state.Events, Event{Type: EventSyncConflictRolledBack, At: now, Status: RunStatusInterrupted, Agent: agentName, Execution: execution, Branch: operation.Branch, DefaultBranch: operation.DefaultBranch, Worktree: operation.Worktree, ConflictFiles: cloneStrings(operation.ConflictFiles), Message: outcome, Error: reason})
+	state.ActiveSyncConflict = nil
+	return s.save(state)
+}
+
+// MarkSyncConflictOperationUnresolved keeps the active operation as a guard
+// and records a durable operator-facing diagnostic.
+func (s Store) MarkSyncConflictOperationUnresolved(repoID, taskID, operationID, reason string) error {
+	_, err := s.UpdateSyncConflictOperation(repoID, taskID, operationID, func(operation *SyncConflictOperation) error {
+		operation.Phase = SyncConflictPhaseUnresolved
+		operation.Outcome = "unresolved"
+		operation.Reason = strings.TrimSpace(reason)
+		if operation.Reason == "" {
+			return errors.New("unresolved reason is required")
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return err
+	}
+	operation := state.ActiveSyncConflict
+	state.Events = append(state.Events, Event{Type: EventSyncConflictUnresolved, At: s.nowUTC(), Branch: operation.Branch, DefaultBranch: operation.DefaultBranch, Worktree: operation.Worktree, Error: operation.Reason})
+	return s.save(state)
+}
+
 // RecordSyncConflictResolutionStarted records the launch of a sync conflict-repair agent.
 func (s Store) RecordSyncConflictResolutionStarted(
 	repoID,
@@ -3672,6 +3845,53 @@ func cleanPathComponent(label string, value string) (string, error) {
 	return value, nil
 }
 
+func validateSyncConflictOperation(operation SyncConflictOperation) error {
+	if strings.TrimSpace(operation.ID) == "" || strings.TrimSpace(operation.Branch) == "" || strings.TrimSpace(operation.Worktree) == "" || strings.TrimSpace(operation.DefaultBranch) == "" {
+		return errors.New("id, branch, worktree, and default branch are required")
+	}
+	if strings.TrimSpace(operation.Checkpoint.LocalHead) == "" || strings.TrimSpace(operation.Checkpoint.RemoteHead) == "" || strings.TrimSpace(operation.Checkpoint.MergeSource) == "" {
+		return errors.New("checkpoint local head, remote head, and merge source are required")
+	}
+	switch operation.Phase {
+	case SyncConflictPhasePrepared, SyncConflictPhaseConflicted, SyncConflictPhaseResolving, SyncConflictPhaseLocalCompleted, SyncConflictPhasePushIntent, SyncConflictPhasePushed, SyncConflictPhaseUnresolved:
+	default:
+		return fmt.Errorf("unsupported phase %q", operation.Phase)
+	}
+	if operation.CreatedAt.IsZero() || operation.UpdatedAt.IsZero() {
+		return errors.New("created and updated timestamps are required")
+	}
+	if operation.Execution != nil {
+		if err := validateAgentExecution(*operation.Execution); err != nil {
+			return fmt.Errorf("execution is invalid: %w", err)
+		}
+	}
+	return nil
+}
+
+func normalizeSyncConflictOperation(operation SyncConflictOperation) SyncConflictOperation {
+	operation.ID = strings.TrimSpace(operation.ID)
+	operation.Branch = strings.TrimSpace(operation.Branch)
+	operation.Worktree = strings.TrimSpace(operation.Worktree)
+	operation.DefaultBranch = strings.TrimSpace(operation.DefaultBranch)
+	operation.Checkpoint.LocalHead = strings.TrimSpace(operation.Checkpoint.LocalHead)
+	operation.Checkpoint.RemoteHead = strings.TrimSpace(operation.Checkpoint.RemoteHead)
+	operation.Checkpoint.MergeSource = strings.TrimSpace(operation.Checkpoint.MergeSource)
+	operation.Phase = SyncConflictPhase(strings.TrimSpace(string(operation.Phase)))
+	operation.ConflictFiles = cloneStrings(operation.ConflictFiles)
+	operation.Execution = normalizeOptionalAgentExecution(operation.Execution)
+	operation.LocalHead = strings.TrimSpace(operation.LocalHead)
+	operation.ObservedRemoteHead = strings.TrimSpace(operation.ObservedRemoteHead)
+	operation.Outcome = strings.TrimSpace(operation.Outcome)
+	operation.Reason = strings.TrimSpace(operation.Reason)
+	if !operation.CreatedAt.IsZero() {
+		operation.CreatedAt = operation.CreatedAt.UTC()
+	}
+	if !operation.UpdatedAt.IsZero() {
+		operation.UpdatedAt = operation.UpdatedAt.UTC()
+	}
+	return operation
+}
+
 func validateLoadedState(taskState TaskState, repoID, taskID string) error {
 	if strings.TrimSpace(taskState.RepoID) != repoID {
 		return fmt.Errorf("repo_id is %q, expected %q", taskState.RepoID, repoID)
@@ -3710,6 +3930,11 @@ func validateLoadedState(taskState TaskState, repoID, taskID string) error {
 	}
 	if err := validateFinalization(taskState.Finalization); err != nil {
 		return fmt.Errorf("finalization is invalid: %w", err)
+	}
+	if taskState.ActiveSyncConflict != nil {
+		if err := validateSyncConflictOperation(*taskState.ActiveSyncConflict); err != nil {
+			return fmt.Errorf("active sync conflict is invalid: %w", err)
+		}
 	}
 	return nil
 }
@@ -3762,7 +3987,8 @@ func taskStateContentIsEmpty(taskState TaskState) bool {
 		len(taskState.Runs) == 0 &&
 		len(taskState.Reviews) == 0 &&
 		len(taskState.Events) == 0 &&
-		taskState.Finalization == nil
+		taskState.Finalization == nil &&
+		taskState.ActiveSyncConflict == nil
 }
 
 func normalizeStateForSave(taskState TaskState) (TaskState, error) {
@@ -3792,6 +4018,10 @@ func normalizeState(taskState TaskState, repoID, taskID string) TaskState {
 	if taskState.Finalization != nil {
 		finalization := ensureFinalization(taskState.Finalization)
 		taskState.Finalization = &finalization
+	}
+	if taskState.ActiveSyncConflict != nil {
+		operation := normalizeSyncConflictOperation(*taskState.ActiveSyncConflict)
+		taskState.ActiveSyncConflict = &operation
 	}
 	for i := range taskState.Runs {
 		taskState.Runs[i] = normalizeRunAttempt(taskState.Runs[i])
@@ -4720,7 +4950,9 @@ func validEventType(eventType EventType) bool {
 		EventTaskClosed,
 		EventSyncConflictStarted,
 		EventSyncConflictFinished,
-		EventSyncConflictFailed:
+		EventSyncConflictFailed,
+		EventSyncConflictRolledBack,
+		EventSyncConflictUnresolved:
 		return true
 	default:
 		return false

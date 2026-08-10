@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/agent"
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -34,6 +35,7 @@ type Result struct {
 	Rows               []Row
 	ImplementationRows []ImplementationRunRow
 	PrimaryReviewRows  []PrimaryReviewRow
+	SyncConflictRows   []SyncConflictRow
 	Summary            Summary
 }
 
@@ -42,6 +44,14 @@ type ImplementationRunRow struct {
 	RepoID  string
 	TaskID  string
 	Attempt int
+	Outcome string
+	Reason  string
+}
+
+// SyncConflictRow describes one persisted sync-conflict recovery operation.
+type SyncConflictRow struct {
+	RepoID  string
+	TaskID  string
 	Outcome string
 	Reason  string
 }
@@ -141,6 +151,19 @@ func diagnoseTask(
 	if err := diagnosePrimaryReviewRecovery(result, paths, store, repo, taskState, fix, probe); err != nil {
 		return err
 	}
+	if fix {
+		if err := state.WithGlobalMutationLock(paths, "doctor sync recovery", func() error {
+			current, err := store.Load(repo.ID, taskState.TaskID)
+			if err != nil {
+				return fmt.Errorf("reload task state for locked sync recovery: %w", err)
+			}
+			return diagnoseSyncConflictRecovery(result, store, repo, current, fix, probe)
+		}); err != nil {
+			return err
+		}
+	} else if err := diagnoseSyncConflictRecovery(result, store, repo, taskState, fix, probe); err != nil {
+		return err
+	}
 	// Recovery mutates lifecycle facts. Reload before telemetry diagnostics so
 	// they cannot overwrite stale running-review state or persist against an
 	// execution that just became interrupted.
@@ -228,6 +251,102 @@ func diagnosePrimaryReviewRecovery(
 		RepoID: repo.ID, TaskID: taskState.TaskID, Attempt: primary.Attempt, Step: primary.StepName, Outcome: outcome, Reason: inspection.Reason,
 	})
 	return nil
+}
+
+//nolint:gocognit,nestif,funlen // Doctor renders the explicit recovery classification table.
+func diagnoseSyncConflictRecovery(result *Result, store taskstate.Store, repo registry.Repo, taskState taskstate.TaskState, fix bool, probe workflow.ProcessProbe) error {
+	operation := taskState.ActiveSyncConflict
+	if operation == nil {
+		return nil
+	}
+	outcome, reason := "unresolved", strings.TrimSpace(operation.Reason)
+	if strings.TrimSpace(taskState.GitFacts.Branch) == "" || strings.TrimSpace(taskState.GitFacts.Worktree) == "" || taskState.GitFacts.Branch != operation.Branch || taskState.GitFacts.Worktree != operation.Worktree || taskState.WorkDirectory.Path != operation.Worktree {
+		outcome, reason = "ownership_mismatch", "current persisted task ownership does not match the recovery operation"
+	} else {
+		switch operation.Phase {
+		case taskstate.SyncConflictPhaseUnresolved:
+			if reason == "" {
+				reason = "operation was previously marked unresolved"
+			}
+		default:
+			inspection := syncConflictExecutionInspection(operation.Execution, probe)
+			switch inspection.Condition {
+			case workflow.AttachedExecutionLive:
+				outcome, reason = "live", inspection.Reason
+			case workflow.AttachedExecutionUnverifiable:
+				outcome, reason = "unverifiable", inspection.Reason
+			default:
+				syncOpts := gitmeta.TaskBranchSyncOptions{RepoPath: repo.Path, DefaultBranch: operation.DefaultBranch, Branch: operation.Branch, Worktree: operation.Worktree}
+				remoteHead, err := gitmeta.InspectRemoteTaskBranchHead(context.Background(), syncOpts)
+				switch {
+				case err != nil:
+					outcome, reason = "unverifiable", "remote inspection failed: "+err.Error()
+				case operation.LocalHead != "" && remoteHead == operation.LocalHead && (operation.Phase == taskstate.SyncConflictPhasePushIntent || operation.Phase == taskstate.SyncConflictPhasePushed):
+					outcome, reason = "pushed", "remote task branch matches the recorded local completion"
+				case remoteHead != operation.Checkpoint.RemoteHead:
+					outcome, reason = "remote_ambiguous", "remote task branch changed from the recorded checkpoint"
+				default:
+					checkpoint := gitmeta.TaskBranchConflictCheckpoint{LocalHead: operation.Checkpoint.LocalHead, RemoteHead: operation.Checkpoint.RemoteHead, MergeSource: operation.Checkpoint.MergeSource}
+					if eligibilityErr := gitmeta.InspectTaskBranchConflictRollbackEligibility(context.Background(), syncOpts, checkpoint, operation.LocalHead); eligibilityErr != nil {
+						outcome, reason = "locally_incompatible", eligibilityErr.Error()
+					} else {
+						outcome, reason = "rollbackable", inspection.Reason
+					}
+				}
+				if fix && outcome == "pushed" {
+					updated, updateErr := store.UpdateSyncConflictOperation(repo.ID, taskState.TaskID, operation.ID, func(active *taskstate.SyncConflictOperation) error {
+						active.Phase = taskstate.SyncConflictPhasePushed
+						active.ObservedRemoteHead = remoteHead
+						return nil
+					})
+					if updateErr != nil {
+						outcome, reason = "state_transition_failed", updateErr.Error()
+					} else {
+						execution := taskstate.AgentExecution{}
+						if updated.Execution != nil {
+							execution = *updated.Execution
+						}
+						_, finishErr := store.RecordSyncConflictResolutionFinished(repo.ID, taskState.TaskID, taskstate.SyncConflictResolutionEventOptions{Execution: execution, Branch: updated.Branch, DefaultBranch: updated.DefaultBranch, Worktree: updated.Worktree, ConflictFiles: updated.ConflictFiles, Commit: updated.LocalHead})
+						if finishErr != nil {
+							outcome, reason = "state_transition_failed", finishErr.Error()
+						} else if clearErr := store.ClearSyncConflictOperation(repo.ID, taskState.TaskID, updated.ID); clearErr != nil {
+							outcome, reason = "state_transition_failed", clearErr.Error()
+						}
+					}
+				}
+				if fix && outcome == "rollbackable" {
+					checkpoint := gitmeta.TaskBranchConflictCheckpoint{LocalHead: operation.Checkpoint.LocalHead, RemoteHead: operation.Checkpoint.RemoteHead, MergeSource: operation.Checkpoint.MergeSource}
+					if eligibilityErr := gitmeta.InspectTaskBranchConflictRollbackEligibility(context.Background(), syncOpts, checkpoint, operation.LocalHead); eligibilityErr != nil {
+						outcome, reason = "locally_incompatible", eligibilityErr.Error()
+					} else {
+						switch err := gitmeta.RollbackTaskBranchConflictResolution(context.Background(), syncOpts, checkpoint); {
+						case err != nil:
+							outcome, reason = "rollback_failed", err.Error()
+							if markErr := store.MarkSyncConflictOperationUnresolved(repo.ID, taskState.TaskID, operation.ID, "doctor rollback failed: "+reason); markErr != nil {
+								reason += "; failed to persist unresolved state: " + markErr.Error()
+							}
+						case store.ResolveSyncConflictOperation(repo.ID, taskState.TaskID, operation.ID, "rolled_back", inspection.Reason) != nil:
+							outcome, reason = "rollback_failed", "rollback succeeded but state recording failed"
+							if markErr := store.MarkSyncConflictOperationUnresolved(repo.ID, taskState.TaskID, operation.ID, "doctor state transition failed: "+reason); markErr != nil {
+								reason += "; failed to persist unresolved state: " + markErr.Error()
+							}
+						default:
+							outcome = "rolled_back"
+						}
+					}
+				}
+			}
+		}
+	}
+	result.SyncConflictRows = append(result.SyncConflictRows, SyncConflictRow{RepoID: repo.ID, TaskID: taskState.TaskID, Outcome: outcome, Reason: reason})
+	return nil
+}
+
+func syncConflictExecutionInspection(execution *taskstate.AgentExecution, probe workflow.ProcessProbe) workflow.AttachedExecutionInspection {
+	if execution == nil {
+		return workflow.AttachedExecutionInspection{Condition: workflow.AttachedExecutionRecoverable, Reason: "resolver_not_started"}
+	}
+	return workflow.InspectAttachedExecution(*execution, probe)
 }
 
 func diagnoseImplementationExecutions(
