@@ -1647,6 +1647,9 @@ func formatLifecycleTaskField(value string) string {
 
 // FormatReviewFindingIndexes formats zero-based finding indexes for display.
 func FormatReviewFindingIndexes(indexes []int) string {
+	if len(indexes) == 0 {
+		return "-"
+	}
 	labels := make([]string, 0, len(indexes))
 	for _, index := range indexes {
 		labels = append(labels, strconv.Itoa(index+1))

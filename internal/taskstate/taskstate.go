@@ -402,10 +402,17 @@ func (c AgentUsageCapture) IsZero() bool {
 		c.CapturedAt == nil
 }
 
-// ReviewFollowUp records which review attempt caused a follow-up run.
+// ReviewFollowUp records the scoped findings shown to a blocker-triggered follow-up run.
 type ReviewFollowUp struct {
-	ReviewAttempt  int   `yaml:"review_attempt"`
+	ReviewAttempt int `yaml:"review_attempt"`
+
+	// FindingIndexes are required blocking findings. The field name is retained
+	// for compatibility with persisted follow-up provenance.
 	FindingIndexes []int `yaml:"finding_indexes,omitempty"`
+
+	// AdvisoryFindingIndexes are best-effort advisory opportunities shown with
+	// the required blockers. They are not claimed or resolved by this run.
+	AdvisoryFindingIndexes []int `yaml:"advisory_finding_indexes,omitempty"`
 }
 
 // Completion records agent-authored completion facts for a run attempt.
@@ -2390,6 +2397,24 @@ func IsOpenBlockingReviewFindingInState(state TaskState, finding ReviewFinding) 
 func IsOpenAdvisoryReviewFinding(finding ReviewFinding) bool {
 	return finding.Type == FindingTypeAdvisory &&
 		ResolveReviewFinding(finding) == ReviewFindingResolutionNonBlocking
+}
+
+// EligibleAdvisoryFindingIndexes returns advisory findings that can be shown as
+// best-effort opportunities alongside a blocker-triggered follow-up. Ordinary
+// advisories and downgraded blockers are both advisory findings; audit-only
+// interrupted-review, waived, and manually addressed findings are excluded.
+func EligibleAdvisoryFindingIndexes(review ReviewAttempt) []int {
+	indexes := make([]int, 0)
+	for index, finding := range review.Findings {
+		if finding.Type != FindingTypeAdvisory ||
+			InterruptedPrimaryReviewFinding(review, finding) ||
+			strings.TrimSpace(finding.Waiver) != "" ||
+			strings.TrimSpace(finding.AddressedManually) != "" {
+			continue
+		}
+		indexes = append(indexes, index)
+	}
+	return indexes
 }
 
 // ReviewHasOpenBlockers reports whether an attempt still has unresolved blocking findings.
@@ -4738,8 +4763,9 @@ func normalizeReviewFollowUp(followUp *ReviewFollowUp) *ReviewFollowUp {
 		return nil
 	}
 	clone := ReviewFollowUp{
-		ReviewAttempt:  followUp.ReviewAttempt,
-		FindingIndexes: cloneInts(followUp.FindingIndexes),
+		ReviewAttempt:          followUp.ReviewAttempt,
+		FindingIndexes:         cloneInts(followUp.FindingIndexes),
+		AdvisoryFindingIndexes: cloneInts(followUp.AdvisoryFindingIndexes),
 	}
 	return &clone
 }
@@ -4751,7 +4777,7 @@ func validateReviewFollowUp(followUp ReviewFollowUp) error {
 	if len(followUp.FindingIndexes) == 0 {
 		return errors.New("finding_indexes is required")
 	}
-	for _, index := range followUp.FindingIndexes {
+	for _, index := range append(cloneInts(followUp.FindingIndexes), followUp.AdvisoryFindingIndexes...) {
 		if index < 0 {
 			return errors.New("finding index cannot be negative")
 		}

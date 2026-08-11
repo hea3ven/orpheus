@@ -136,9 +136,10 @@ type dispatchStartPlan struct {
 }
 
 type dispatchFollowUpPlan struct {
-	reviewAttempt  int
-	findingIndexes []int
-	targetKind     tasktarget.TargetKind
+	reviewAttempt          int
+	findingIndexes         []int
+	advisoryFindingIndexes []int
+	targetKind             tasktarget.TargetKind
 }
 
 // DispatchFailureOptions describes how a failed dispatch attempt ended.
@@ -614,9 +615,10 @@ func blockedReviewFollowUpPlan(
 		return nil, fmt.Errorf("task %s follow-up cannot preserve target: taskstate target is missing", taskID)
 	}
 	return &dispatchFollowUpPlan{
-		reviewAttempt:  latestReview.Attempt,
-		findingIndexes: indexes,
-		targetKind:     lockedTarget.Kind,
+		reviewAttempt:          latestReview.Attempt,
+		findingIndexes:         indexes,
+		advisoryFindingIndexes: taskstate.EligibleAdvisoryFindingIndexes(latestReview),
+		targetKind:             lockedTarget.Kind,
 	}, nil
 }
 
@@ -701,8 +703,9 @@ func taskstateReviewFollowUp(followUp *dispatchFollowUpPlan) *taskstate.ReviewFo
 		return nil
 	}
 	return &taskstate.ReviewFollowUp{
-		ReviewAttempt:  followUp.reviewAttempt,
-		FindingIndexes: cloneInts(followUp.findingIndexes),
+		ReviewAttempt:          followUp.reviewAttempt,
+		FindingIndexes:         cloneInts(followUp.findingIndexes),
+		AdvisoryFindingIndexes: cloneInts(followUp.advisoryFindingIndexes),
 	}
 }
 

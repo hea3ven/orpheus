@@ -98,12 +98,25 @@ func appendFollowUpContext(builder *strings.Builder, followUp *ContextFollowUp) 
 	appendPromptLine(builder, "- Review attempt", fmt.Sprintf("%d", followUp.ReviewAttempt))
 	builder.WriteString("- This is a continuation of completed work.\n")
 	builder.WriteString("- Do not reimplement the original task.\n")
-	builder.WriteString("- Address only the listed review findings.\n")
+	builder.WriteString("- Fix every required blocking finding before completing this run.\n")
+	builder.WriteString("- Consider advisory opportunities only when they remain applicable, task-scoped, and safe.\n")
+	builder.WriteString("- Advisory work is best-effort: leaving an advisory unresolved does not fail this run or block publication.\n")
 	builder.WriteString("- Preserve the current task branch and worktree target.\n")
 	builder.WriteString("- This Orpheus run attempt is a new completion boundary; after the repair, call `orpheus agent done` exactly once for the current attempt.\n")
 	builder.WriteString("- A successful `orpheus agent done` visible in resumed session history belongs to an earlier attempt and does not complete this follow-up.\n")
-	builder.WriteString("\nBlocking findings:\n")
-	for _, finding := range followUp.Findings {
+	appendFollowUpFindings(builder, "Required blocking findings", followUp.RequiredFindings)
+	appendFollowUpFindings(builder, "Advisory opportunities", followUp.AdvisoryFindings)
+}
+
+func appendFollowUpFindings(builder *strings.Builder, heading string, findings []ContextReviewFinding) {
+	builder.WriteString("\n")
+	builder.WriteString(heading)
+	builder.WriteString(":\n")
+	if len(findings) == 0 {
+		builder.WriteString("- (none)\n")
+		return
+	}
+	for _, finding := range findings {
 		appendPromptLine(builder, fmt.Sprintf("- Finding %d title", finding.Index+1), finding.Title)
 		appendPromptBlock(builder, "  Description", finding.Description)
 		appendPromptBlock(builder, "  Suggested action", finding.SuggestedAction)
@@ -188,7 +201,7 @@ func appendConflictResolutionContract(builder *strings.Builder) {
 func appendExecutionContract(builder *strings.Builder, ctx ActiveContext) {
 	builder.WriteString("\nExecution contract:\n")
 	if ctx.FollowUp != nil {
-		builder.WriteString("- This run must address only the listed review findings; do not reimplement the original task.\n")
+		builder.WriteString("- Fix the required blocking findings; advisories are best-effort and must be addressed only when still applicable, task-scoped, and safe. Do not reimplement the original task.\n")
 		builder.WriteString("- Preserve the current task branch/worktree target.\n")
 	}
 	switch ctx.Target.Kind {

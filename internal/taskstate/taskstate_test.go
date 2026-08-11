@@ -1312,6 +1312,29 @@ var reviewFindingResolutionContractCases = []reviewFindingResolutionContractCase
 	},
 }
 
+func TestEligibleAdvisoryFindingIndexes(t *testing.T) {
+	review := taskstate.ReviewAttempt{
+		Steps: []taskstate.ReviewStep{
+			{Kind: taskstate.ReviewStepKindAgentReview, Name: "completed", Execution: &taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusSucceeded}},
+			{Kind: taskstate.ReviewStepKindAgentReview, Name: "interrupted", Execution: &taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusInterrupted, InterruptionReason: "supervisor disappeared"}},
+		},
+		Findings: []taskstate.ReviewFinding{
+			{Type: taskstate.FindingTypeBlocking, Step: "completed", Title: "Blocker", Description: "Must fix."},
+			{Type: taskstate.FindingTypeAdvisory, Step: "completed", Title: "Ordinary", Description: "Could improve."},
+			{Type: taskstate.FindingTypeAdvisory, Step: "completed", Title: "Downgraded", Description: "No longer required.", DowngradeReason: "Safe to defer."},
+			{Type: taskstate.FindingTypeAdvisory, Step: "completed", Title: "Waived", Description: "Do not reopen.", Waiver: "Accepted risk."},
+			{Type: taskstate.FindingTypeAdvisory, Step: "completed", Title: "Manual", Description: "Already fixed.", AddressedManually: "Verified."},
+			{Type: taskstate.FindingTypeSeparateTask, Step: "completed", Title: "Separate", Description: "Track later."},
+			{Type: taskstate.FindingTypeAdvisory, Step: "interrupted", Title: "Audit-only", Description: "Must not be actionable."},
+		},
+	}
+
+	indexes := taskstate.EligibleAdvisoryFindingIndexes(review)
+	if !reflect.DeepEqual(indexes, []int{1, 2}) {
+		t.Fatalf("eligible advisory indexes = %#v, want []int{1, 2}", indexes)
+	}
+}
+
 func TestUntargetedBlockingFindingIndexes(t *testing.T) {
 	review := taskstate.ReviewAttempt{
 		Findings: []taskstate.ReviewFinding{
