@@ -5157,7 +5157,7 @@ func TestTaskRunAttachedManualBlockerRepairsAndApprovalFinalizes(t *testing.T) {
 	is.Contains(stdout, "Recorded completion for op-manual")
 	is.Contains(stdout, "Published op-manual")
 	is.Contains(stderr, "== Agent run: implementation (run attempt 1) ==")
-	is.Contains(stderr, "== Agent run: review follow-up (run attempt 2; review attempt 1; findings 1) ==")
+	is.Contains(stderr, "== Agent run: review follow-up (run attempt 2; review attempt 1; required blocking findings 1; advisory opportunities -) ==")
 	is.Contains(stderr, "◆ REVIEW STEP · approval (manual)")
 	is.Contains(stderr, "Review blocked for op-manual.")
 	is.Contains(stderr, "Autonomous review follow-up for op-manual targets review attempt 1 finding(s) 1.")
@@ -5220,7 +5220,7 @@ func TestTaskReviewManualBlockerExhaustsBudgetWithoutExtraLaunch(t *testing.T) {
 
 	is.Contains(stdout, "Recorded completion for op-manual-loop")
 	is.Equal(2, strings.Count(stderr, "Review blocked for op-manual-loop."))
-	is.Contains(stderr, "== Agent run: review follow-up (run attempt 2; review attempt 1; findings 1) ==")
+	is.Contains(stderr, "== Agent run: review follow-up (run attempt 2; review attempt 1; required blocking findings 1; advisory opportunities -) ==")
 	is.Contains(stderr, "Autonomous review attempt budget exhausted for op-manual-loop after 2 review attempt(s).")
 	is.NotContains(stderr, "run attempt 3")
 

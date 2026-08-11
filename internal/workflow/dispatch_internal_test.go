@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -339,6 +340,49 @@ func TestDispatchValidateStartAllowsFollowUpForNormalizedFailedReview(t *testing
 	}
 }
 
+func TestDispatchValidateStartScopesEligibleAdvisoriesWithBlockers(t *testing.T) {
+	reviewAttempt := taskstate.ReviewAttempt{
+		Attempt:  1,
+		Status:   taskstate.ReviewStatusBlocked,
+		Pipeline: "default",
+		Step:     "inspect",
+		Steps: []taskstate.ReviewStep{
+			{Kind: taskstate.ReviewStepKindManual, Name: "inspect"},
+			{Kind: taskstate.ReviewStepKindAgentReview, Name: "interrupted", Execution: &taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusInterrupted, InterruptionReason: "supervisor disappeared"}},
+		},
+		Findings: []taskstate.ReviewFinding{
+			{Type: taskstate.FindingTypeBlocking, Step: "inspect", Title: "Must fix", Description: "Required repair."},
+			{Type: taskstate.FindingTypeAdvisory, Step: "inspect", Title: "Ordinary advisory", Description: "Could improve."},
+			{Type: taskstate.FindingTypeAdvisory, Step: "inspect", Title: "Downgraded advisory", Description: "Safe to defer.", DowngradeReason: "Not required."},
+			{Type: taskstate.FindingTypeAdvisory, Step: "inspect", Title: "Waived advisory", Description: "Excluded.", Waiver: "Accepted."},
+			{Type: taskstate.FindingTypeAdvisory, Step: "inspect", Title: "Manual advisory", Description: "Excluded.", AddressedManually: "Done."},
+			{Type: taskstate.FindingTypeSeparateTask, Step: "inspect", Title: "Separate work", Description: "Excluded."},
+			{Type: taskstate.FindingTypeAdvisory, Step: "interrupted", Title: "Audit-only advisory", Description: "Excluded."},
+		},
+	}
+
+	plan, err := validateDispatchStartForReview(t, reviewAttempt)
+	if err != nil {
+		t.Fatalf("validate start: %v", err)
+	}
+	if plan.followUp == nil || !slices.Equal(plan.followUp.findingIndexes, []int{0}) || !slices.Equal(plan.followUp.advisoryFindingIndexes, []int{1, 2}) {
+		t.Fatalf("follow-up plan = %#v, want required [0] and advisory [1 2]", plan.followUp)
+	}
+}
+
+func TestDispatchValidateStartDoesNotStartForAdvisoriesOnly(t *testing.T) {
+	reviewAttempt := taskstate.ReviewAttempt{
+		Attempt: 1, Status: taskstate.ReviewStatusBlocked, Pipeline: "default", Step: "inspect",
+		Steps:    []taskstate.ReviewStep{{Kind: taskstate.ReviewStepKindManual, Name: "inspect"}},
+		Findings: []taskstate.ReviewFinding{{Type: taskstate.FindingTypeAdvisory, Step: "inspect", Title: "Only advisory", Description: "No implementation run."}},
+	}
+
+	_, err := validateDispatchStartForReview(t, reviewAttempt)
+	if err == nil || !strings.Contains(err.Error(), "no untargeted blocking findings") {
+		t.Fatalf("validate error = %v, want advisory-only review rejection", err)
+	}
+}
+
 func TestDispatchValidateStartAllowsManualBlockersWithoutKeepDecision(t *testing.T) {
 	reviewAttempt := taskstate.ReviewAttempt{
 		Attempt:  1,
@@ -402,25 +446,28 @@ func TestDispatchValidateStartRetriesFailedFollowUpTargets(t *testing.T) {
 		Pipeline: "default",
 		Step:     "inspect",
 		Steps:    []taskstate.ReviewStep{{Kind: taskstate.ReviewStepKindManual, Name: "inspect"}},
-		Findings: []taskstate.ReviewFinding{{
-			Type:                 taskstate.FindingTypeBlocking,
-			Step:                 "inspect",
-			Title:                "Bug",
-			Description:          "Fix it.",
-			TargetedByRunAttempt: 2,
-		}},
+		Findings: []taskstate.ReviewFinding{
+			{
+				Type:                 taskstate.FindingTypeBlocking,
+				Step:                 "inspect",
+				Title:                "Bug",
+				Description:          "Fix it.",
+				TargetedByRunAttempt: 2,
+			},
+			{Type: taskstate.FindingTypeAdvisory, Step: "inspect", Title: "Keep considering", Description: "Best effort."},
+		},
 	}
 
 	plan, err := validateDispatchStartForReviewWithRuns(t, reviewAttempt, []taskstate.RunAttempt{{
 		Attempt:        2,
 		Status:         taskstate.RunStatusFailed,
-		ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{0}},
+		ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{0}, AdvisoryFindingIndexes: []int{1}},
 	}})
 	if err != nil {
 		t.Fatalf("validate retry start: %v", err)
 	}
-	if plan.followUp == nil || len(plan.followUp.findingIndexes) != 1 || plan.followUp.findingIndexes[0] != 0 {
-		t.Fatalf("follow-up plan = %#v, want failed target finding", plan.followUp)
+	if plan.followUp == nil || len(plan.followUp.findingIndexes) != 1 || plan.followUp.findingIndexes[0] != 0 || !slices.Equal(plan.followUp.advisoryFindingIndexes, []int{1}) {
+		t.Fatalf("follow-up plan = %#v, want failed target and preserved advisory scope", plan.followUp)
 	}
 }
 

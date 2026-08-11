@@ -431,6 +431,54 @@ func TestActiveContextResolverWrapsBackendErrors(t *testing.T) {
 	is.Contains(err.Error(), "backend unavailable")
 }
 
+func TestActiveContextResolverSeparatesRequiredAndAdvisoryFollowUpFindings(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	fixture := newActiveContextFixture(t, "op-1")
+	worktree := fixture.expectedWorktree(t, "op-1")
+	must.NoError(testMkdirAll(worktree))
+	taskItem := fixture.worktreeTask("op-1", worktree)
+	recordCompletedContextRun(t, fixture, worktree, nil)
+
+	review, err := fixture.store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{Pipeline: "standard", Step: "inspect"})
+	must.NoError(err)
+	for _, finding := range []taskstate.ReviewFinding{
+		{Type: taskstate.FindingTypeBlocking, Title: "Required repair", Description: "Fix the regression.", SuggestedAction: "Add the guard."},
+		{Type: taskstate.FindingTypeAdvisory, Title: "Optional cleanup", Description: "Simplify the path.", SuggestedAction: "Extract a helper."},
+		{Type: taskstate.FindingTypeAdvisory, Title: "Downgraded opportunity", Description: "Still worth considering.", DowngradeReason: "Not required for this task."},
+	} {
+		_, err = fixture.store.RecordReviewFinding("alpha", "op-1", review.Attempt, finding)
+		must.NoError(err)
+	}
+	_, err = fixture.store.FinishReview("alpha", "op-1", review.Attempt, taskstate.ReviewStatusBlocked)
+	must.NoError(err)
+	followUp, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+		Agent: "implementer", Branch: "orpheus/op-1", Worktree: worktree,
+		ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: review.Attempt, FindingIndexes: []int{0}, AdvisoryFindingIndexes: []int{1, 2}},
+	})
+	must.NoError(err)
+	_, err = fixture.store.TargetReviewFindings("alpha", "op-1", review.Attempt, []int{0}, followUp.Attempt)
+	must.NoError(err)
+
+	resolver := fixture.resolver(taskItem, map[string]string{
+		"ORPHEUS_REPO_ID": "alpha", "ORPHEUS_TASK_ID": "op-1", "ORPHEUS_WORKTREE": worktree, "ORPHEUS_BRANCH": "orpheus/op-1",
+	}, worktree)
+	resolved, err := resolver.Resolve(context.Background())
+	must.NoError(err)
+	must.NotNil(resolved.FollowUp)
+	is.Equal([]agent.ContextReviewFinding{{Index: 0, Title: "Required repair", Description: "Fix the regression.", SuggestedAction: "Add the guard."}}, resolved.FollowUp.RequiredFindings)
+	is.Equal([]agent.ContextReviewFinding{
+		{Index: 1, Title: "Optional cleanup", Description: "Simplify the path.", SuggestedAction: "Extract a helper."},
+		{Index: 2, Title: "Downgraded opportunity", Description: "Still worth considering."},
+	}, resolved.FollowUp.AdvisoryFindings)
+
+	rendered := agent.RenderActiveContext(resolved)
+	is.Contains(rendered, "Required blocking findings:")
+	is.Contains(rendered, "Advisory opportunities:")
+	is.Contains(rendered, "Optional cleanup")
+	is.Contains(rendered, "Consider advisory opportunities only when they remain applicable, task-scoped, and safe.")
+}
+
 func TestActiveContextResolverRejectsReviewContextWhenLatestRunHasNoCompletion(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)

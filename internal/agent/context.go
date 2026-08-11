@@ -113,10 +113,12 @@ type ContextRun struct {
 	Completion *taskstate.Completion
 }
 
-// ContextFollowUp describes targeted review blockers for a continuation run.
+// ContextFollowUp describes required blockers and best-effort advisory work
+// shown to a blocker-triggered continuation run.
 type ContextFollowUp struct {
-	ReviewAttempt int
-	Findings      []ContextReviewFinding
+	ReviewAttempt    int
+	RequiredFindings []ContextReviewFinding
+	AdvisoryFindings []ContextReviewFinding
 }
 
 // ContextReviewFinding describes one review finding targeted by this run.
@@ -366,14 +368,38 @@ func (r ActiveContextResolver) resolveFollowUpContext(
 		return nil, fmt.Errorf("latest review attempt for task %s/%s no longer matches follow-up run attempt %d", repoID, taskID, run.Attempt)
 	}
 
-	findings := make([]ContextReviewFinding, 0, len(run.ReviewFollowUp.FindingIndexes))
-	for _, index := range run.ReviewFollowUp.FindingIndexes {
-		if index < 0 || index >= len(latestReview.Findings) {
-			return nil, fmt.Errorf("review follow-up finding index %d is out of range for task %s/%s", index, repoID, taskID)
+	required, err := contextReviewFindings(latestReview, run.ReviewFollowUp.FindingIndexes, func(finding taskstate.ReviewFinding) bool {
+		return finding.TargetedByRunAttempt == run.Attempt
+	})
+	if err != nil {
+		return nil, fmt.Errorf("resolve required review follow-up findings for task %s/%s: %w", repoID, taskID, err)
+	}
+	advisories, err := contextReviewFindings(latestReview, run.ReviewFollowUp.AdvisoryFindingIndexes, func(finding taskstate.ReviewFinding) bool {
+		return finding.Type == taskstate.FindingTypeAdvisory
+	})
+	if err != nil {
+		return nil, fmt.Errorf("resolve advisory review follow-up findings for task %s/%s: %w", repoID, taskID, err)
+	}
+	return &ContextFollowUp{
+		ReviewAttempt:    latestReview.Attempt,
+		RequiredFindings: required,
+		AdvisoryFindings: advisories,
+	}, nil
+}
+
+func contextReviewFindings(
+	review taskstate.ReviewAttempt,
+	indexes []int,
+	eligible func(taskstate.ReviewFinding) bool,
+) ([]ContextReviewFinding, error) {
+	findings := make([]ContextReviewFinding, 0, len(indexes))
+	for _, index := range indexes {
+		if index < 0 || index >= len(review.Findings) {
+			return nil, fmt.Errorf("finding index %d is out of range", index)
 		}
-		finding := latestReview.Findings[index]
-		if finding.TargetedByRunAttempt != run.Attempt {
-			return nil, fmt.Errorf("review finding %d for task %s/%s is not targeted by run attempt %d", index, repoID, taskID, run.Attempt)
+		finding := review.Findings[index]
+		if !eligible(finding) {
+			return nil, fmt.Errorf("finding index %d is not eligible for this follow-up scope", index)
 		}
 		findings = append(findings, ContextReviewFinding{
 			Index:           index,
@@ -382,10 +408,7 @@ func (r ActiveContextResolver) resolveFollowUpContext(
 			SuggestedAction: finding.SuggestedAction,
 		})
 	}
-	return &ContextFollowUp{
-		ReviewAttempt: latestReview.Attempt,
-		Findings:      findings,
-	}, nil
+	return findings, nil
 }
 
 func (r ActiveContextResolver) resolveContextTarget(

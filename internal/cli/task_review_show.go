@@ -595,7 +595,14 @@ func renderReviewFollowUpRunsForAttempt(output io.Writer, taskState taskstate.Ta
 			continue
 		}
 		found = true
-		if _, err := fmt.Fprintf(output, "  - Run attempt %d: %s (findings %s)\n", run.Attempt, formatReviewValue(string(run.Status)), formatReviewFindingIndexes(run.ReviewFollowUp.FindingIndexes)); err != nil {
+		if _, err := fmt.Fprintf(
+			output,
+			"  - Run attempt %d: %s (required blocking findings %s; advisory opportunities %s)\n",
+			run.Attempt,
+			formatReviewValue(string(run.Status)),
+			formatReviewFindingIndexes(run.ReviewFollowUp.FindingIndexes),
+			formatReviewFindingIndexes(run.ReviewFollowUp.AdvisoryFindingIndexes),
+		); err != nil {
 			return err
 		}
 	}
@@ -612,7 +619,9 @@ func renderReviewFollowUpRunsForFinding(output io.Writer, taskState taskstate.Ta
 	}
 	found := false
 	for _, run := range taskState.Runs {
-		if run.ReviewFollowUp == nil || run.ReviewFollowUp.ReviewAttempt != reviewAttempt || !containsFindingIndex(run.ReviewFollowUp.FindingIndexes, findingIndex) {
+		if run.ReviewFollowUp == nil || run.ReviewFollowUp.ReviewAttempt != reviewAttempt ||
+			(!containsFindingIndex(run.ReviewFollowUp.FindingIndexes, findingIndex) &&
+				!containsFindingIndex(run.ReviewFollowUp.AdvisoryFindingIndexes, findingIndex)) {
 			continue
 		}
 		found = true

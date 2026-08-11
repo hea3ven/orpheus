@@ -1223,10 +1223,11 @@ func renderTaskRunAgentHeader(output io.Writer, attempt taskstate.RunAttempt) er
 	}
 	_, err := fmt.Fprintf(
 		output,
-		"== Agent run: review follow-up (run attempt %d; review attempt %d; findings %s) ==\n",
+		"== Agent run: review follow-up (run attempt %d; review attempt %d; required blocking findings %s; advisory opportunities %s) ==\n",
 		attempt.Attempt,
 		attempt.ReviewFollowUp.ReviewAttempt,
 		workflow.FormatReviewFindingIndexes(attempt.ReviewFollowUp.FindingIndexes),
+		workflow.FormatReviewFindingIndexes(attempt.ReviewFollowUp.AdvisoryFindingIndexes),
 	)
 	return err
 }
