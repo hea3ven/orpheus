@@ -531,18 +531,72 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 			err,
 		)
 	}
+	children, err := queryTaskShowChildren(command.Context(), deps, resolvedCtx)
+	if err != nil {
+		return err
+	}
 
 	logger.DebugContext(
 		command.Context(),
 		"queried task from resolved repo",
 		slog.String("repo_id", resolvedCtx.Resolved.Source.Repository.ID),
 		slog.String("task_id", resolvedCtx.Resolved.TaskID),
+		slog.Int("child_count", len(children)),
 		slog.Int("history_event_count", len(taskState.Events)),
 	)
 	return renderTaskDetails(command.OutOrStdout(), taskmodel.RepoTask{
 		Repository: resolvedCtx.Resolved.Source.Repository,
 		Task:       resolvedCtx.Task,
-	}, taskState)
+	}, children, taskState)
+}
+
+func queryTaskShowChildren(
+	ctx context.Context,
+	deps *invocationDependencies,
+	resolvedCtx resolvedTaskContext,
+) ([]taskmodel.Task, error) {
+	parent := resolvedCtx.Task
+	if parent.IssueType != taskmodel.IssueTypeEpic {
+		return nil, nil
+	}
+
+	resolved := resolvedCtx.Resolved
+	backend, err := deps.taskBackendFactory(resolved.Source)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"task show %s: prepare direct-child query for parent task %s in repo %s (%s; prefix %s): %w",
+			resolved.TaskID,
+			parent.ID,
+			resolved.Source.Repository.ID,
+			resolved.Source.Repository.Name,
+			resolved.Source.Repository.TaskIDPrefix,
+			err,
+		)
+	}
+	tasks, err := backend.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"task show %s: query direct children for parent task %s in repo %s (%s; prefix %s): %w",
+			resolved.TaskID,
+			parent.ID,
+			resolved.Source.Repository.ID,
+			resolved.Source.Repository.Name,
+			resolved.Source.Repository.TaskIDPrefix,
+			err,
+		)
+	}
+
+	children := make([]taskmodel.Task, 0)
+	parentID := strings.TrimSpace(parent.ID)
+	for _, candidate := range tasks {
+		if strings.TrimSpace(candidate.Relations.ParentID) == parentID {
+			children = append(children, candidate)
+		}
+	}
+	sort.SliceStable(children, func(i, j int) bool {
+		return children[i].ID < children[j].ID
+	})
+	return children, nil
 }
 
 type taskStatsOptions struct {
@@ -3853,6 +3907,7 @@ type taskRowsOptions struct {
 func renderTaskDetails(
 	output interface{ Write([]byte) (int, error) },
 	row taskmodel.RepoTask,
+	children []taskmodel.Task,
 	state taskstate.TaskState,
 ) error {
 	if err := renderTaskRepositoryDetails(output, row.Repository); err != nil {
@@ -3863,6 +3918,14 @@ func renderTaskDetails(
 	}
 	if err := renderTaskBodyDetails(output, row.Task); err != nil {
 		return err
+	}
+	if row.Task.IssueType == taskmodel.IssueTypeEpic {
+		if _, err := fmt.Fprintln(output); err != nil {
+			return err
+		}
+		if err := renderTaskChildren(output, children); err != nil {
+			return err
+		}
 	}
 	if _, err := fmt.Fprintln(output); err != nil {
 		return err
@@ -4036,6 +4099,29 @@ func renderTaskBodyDetails(output interface{ Write([]byte) (int, error) }, task 
 		}
 	}
 	return renderTaskBlockDetails(output, task)
+}
+
+func renderTaskChildren(output interface{ Write([]byte) (int, error) }, children []taskmodel.Task) error {
+	if _, err := fmt.Fprintln(output, "Children:"); err != nil {
+		return err
+	}
+	if len(children) == 0 {
+		_, err := fmt.Fprintln(output, "  - No direct children.")
+		return err
+	}
+	for _, child := range children {
+		if _, err := fmt.Fprintf(
+			output,
+			"  - ID: %s, Status: %s, Type: %s, Title: %s\n",
+			formatTaskField(sanitizeTableCell(child.ID)),
+			formatTaskField(sanitizeTableCell(string(child.Status))),
+			formatTaskField(sanitizeTableCell(string(child.IssueType))),
+			formatTaskField(sanitizeTableCell(child.Title)),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func renderTaskBlockDetails(output interface{ Write([]byte) (int, error) }, task taskmodel.Task) error {
