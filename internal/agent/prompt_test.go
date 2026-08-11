@@ -289,7 +289,7 @@ func TestRenderActiveContextIncludesReviewFollowUpContract(t *testing.T) {
 		},
 		FollowUp: &agent.ContextFollowUp{
 			ReviewAttempt: 1,
-			Findings: []agent.ContextReviewFinding{
+			RequiredFindings: []agent.ContextReviewFinding{
 				{
 					Index:           0,
 					Title:           "Fix panic",
@@ -305,17 +305,20 @@ func TestRenderActiveContextIncludesReviewFollowUpContract(t *testing.T) {
 		"- Review attempt: 1",
 		"This is a continuation of completed work.",
 		"Do not reimplement the original task.",
-		"Address only the listed review findings.",
+		"Fix every required blocking finding before completing this run.",
+		"Consider advisory opportunities only when they remain applicable, task-scoped, and safe.",
+		"Advisory work is best-effort",
 		"Preserve the current task branch and worktree target.",
 		"This Orpheus run attempt is a new completion boundary",
 		"call `orpheus agent done` exactly once for the current attempt",
 		"successful `orpheus agent done` visible in resumed session history belongs to an earlier attempt",
 		"does not complete this follow-up",
-		"Blocking findings:",
+		"Required blocking findings:",
+		"Advisory opportunities:",
 		"- Finding 1 title: Fix panic",
 		"Description: The command panics on empty input.",
 		"Suggested action: Add input validation.",
-		"This run must address only the listed review findings",
+		"Fix the required blocking findings; advisories are best-effort",
 		"one-time completion handoff for this Orpheus run attempt",
 		"not once per reusable harness session",
 		"whether this harness session is fresh or resumed",

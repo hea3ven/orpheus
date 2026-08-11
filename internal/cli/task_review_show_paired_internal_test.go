@@ -54,8 +54,8 @@ func TestTaskReviewShowScopesHistoryAttemptAndFinding(t *testing.T) {
 			{Attempt: 2, Status: taskstate.ReviewStatusRunning, Findings: []taskstate.ReviewFinding{{Type: taskstate.FindingTypeBlocking, Title: "Current finding", Description: "Must not enter prior history."}}},
 		},
 		Runs: []taskstate.RunAttempt{
-			{Attempt: 1, Status: taskstate.RunStatusSucceeded, Completion: &taskstate.Completion{Summary: "Repair completed"}, ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{1}}},
-			{Attempt: 2, Status: taskstate.RunStatusFailed, ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{1}}},
+			{Attempt: 1, Status: taskstate.RunStatusSucceeded, Completion: &taskstate.Completion{Summary: "Repair completed"}, ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{1}, AdvisoryFindingIndexes: []int{2}}},
+			{Attempt: 2, Status: taskstate.RunStatusFailed, ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{1}, AdvisoryFindingIndexes: []int{2}}},
 		},
 	}
 
@@ -84,7 +84,7 @@ func TestTaskReviewShowScopesHistoryAttemptAndFinding(t *testing.T) {
 	if err := renderTaskReviewShow(&attempt, "alpha", "op-history", state, reviewShowScope{reviewAttempt: 1}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Authoritative review attempt 1:", "Findings by step:", "Follow-up runs:", "Run attempt 1: succeeded (findings 2)", "Created follow-up Beads:", "op-42 (finding 4, step ai-review): Extract helper"} {
+	for _, want := range []string{"Authoritative review attempt 1:", "Findings by step:", "Follow-up runs:", "Run attempt 1: succeeded (required blocking findings 2; advisory opportunities 3)", "Created follow-up Beads:", "op-42 (finding 4, step ai-review): Extract helper"} {
 		if !strings.Contains(attempt.String(), want) {
 			t.Fatalf("attempt detail missing %q:\n%s", want, attempt.String())
 		}
@@ -108,6 +108,14 @@ func TestTaskReviewShowScopesHistoryAttemptAndFinding(t *testing.T) {
 		if !strings.Contains(finding.String(), want) {
 			t.Fatalf("finding follow-up detail missing %q:\n%s", want, finding.String())
 		}
+	}
+
+	finding.Reset()
+	if err := renderTaskReviewShow(&finding, "alpha", "op-history", state, reviewShowScope{reviewAttempt: 1, findingNumber: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(finding.String(), "Run attempt 1: succeeded (completion recorded)") || !strings.Contains(finding.String(), "Run attempt 2: failed (no completion)") {
+		t.Fatalf("advisory follow-up audit missing:\n%s", finding.String())
 	}
 }
 
