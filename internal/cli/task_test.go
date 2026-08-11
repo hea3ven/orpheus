@@ -409,8 +409,84 @@ func TestTaskShowResolvesPrefixQueriesOnlyResolvedRepoAndRendersDetails(t *testi
 	}
 	is.NotContains(stdout, "orpheus.branch")
 	is.NotContains(stdout, "managed-beta")
+	is.NotContains(stdout, "Children:")
 
 	assertTaskShowBDLog(t, logPath, repos)
+}
+
+func TestTaskShowEpicRendersSortedDirectChildrenFromResolvedRepo(t *testing.T) {
+	t.Parallel()
+
+	is := assert.New(t)
+	newTestState(t)
+	repos := registerLocalManagedTaskTestRepos(t)
+
+	logPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repos.localDir: {stdout: `[
+			{"id":"la-epic","title":"Plan release","status":"in_progress","issue_type":"epic"},
+			{"id":"la-child-z","title":"Closed task","status":"closed","issue_type":"task","parent":"la-epic"},
+			{"id":"la-child-a","title":"Open task","status":"open","issue_type":"bug","parent":"la-epic"},
+			{"id":"la-child-b","title":"Nested epic","status":"in_progress","issue_type":"epic","parent":"la-epic"},
+			{"id":"la-grandchild","title":"Must not appear","status":"open","issue_type":"task","parent":"la-child-a"}
+		]`},
+		repos.managedDir: {stderr: "managed repo should not be queried", exitCode: 70},
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "show", "la-epic"})
+
+	is.Empty(stderr)
+	for _, want := range []string{
+		"Children:",
+		"ID: la-child-a, Status: open, Type: bug, Title: Open task",
+		"ID: la-child-b, Status: in_progress, Type: epic, Title: Nested epic",
+		"ID: la-child-z, Status: closed, Type: task, Title: Closed task",
+		"Orpheus metadata:",
+		"History:",
+	} {
+		is.Contains(stdout, want)
+	}
+	is.NotContains(stdout, "la-grandchild")
+	is.Less(strings.Index(stdout, "la-child-a"), strings.Index(stdout, "la-child-b"))
+	is.Less(strings.Index(stdout, "la-child-b"), strings.Index(stdout, "la-child-z"))
+
+	log := readFileString(t, logPath)
+	is.Contains(log, repos.localDir)
+	is.Contains(log, "--json --readonly --sandbox show --id la-epic")
+	is.Contains(log, "--json --readonly --sandbox list --all --limit 0")
+	is.NotContains(log, repos.managedDir)
+}
+
+func TestTaskShowEpicRendersEmptyChildrenState(t *testing.T) {
+	t.Parallel()
+
+	is := assert.New(t)
+	newTestState(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoDir: {stdout: `[{"id":"op-epic","title":"Empty epic","status":"open","issue_type":"epic"}]`},
+	})
+
+	stdout, stderr := executeCommand(t, []string{"task", "show", "op-epic"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Children:\n  - No direct children.\n")
+}
+
+func TestTaskShowEpicReportsChildQueryFailureWithRepositoryAndParent(t *testing.T) {
+	t.Parallel()
+
+	must := require.New(t)
+	newTestState(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
+	withFailingTaskShowChildren(t, repoDir)
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "show", "op-epic"})
+
+	must.Error(err)
+	must.Empty(stdout)
+	must.Empty(stderr)
+	must.ErrorContains(err, "task show op-epic: query direct children for parent task op-epic in repo alpha")
+	must.ErrorContains(err, "backend unavailable")
 }
 
 func assertTaskShowBDLog(t *testing.T, logPath string, repos localManagedTaskRepos) {
@@ -8301,6 +8377,32 @@ case "$*" in
     ;;
 esac
 `, shellQuote(taskJSON), shellQuote(taskJSON), shellQuote(filepath.Join(repoDir, "backend-data")))
+	if err := os.WriteFile(bdPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake bd: %v", err)
+	}
+	prependTestPath(t, binDir)
+}
+
+func withFailingTaskShowChildren(t *testing.T, repoDir string) {
+	t.Helper()
+
+	binDir := t.TempDir()
+	bdPath := filepath.Join(binDir, "bd")
+	script := fmt.Sprintf(`#!/bin/sh
+case "$*" in
+  "--json --readonly --sandbox show --id op-epic")
+    printf '%%s\n' %s
+    ;;
+  "--json --readonly --sandbox list --all --limit 0")
+    printf 'backend unavailable\n' >&2
+    exit 17
+    ;;
+  *)
+    printf 'unexpected bd command: %%s\n' "$*" >&2
+    exit 64
+    ;;
+esac
+`, shellQuote(`[{"id":"op-epic","title":"Epic","status":"open","issue_type":"epic"}]`))
 	if err := os.WriteFile(bdPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake bd: %v", err)
 	}
