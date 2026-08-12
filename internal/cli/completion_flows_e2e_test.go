@@ -609,8 +609,12 @@ emit_task() {
   printf '}}]\n'
 }
 
-if [ "${1-}" = "--json" ] && [ "${2-}" = "--readonly" ] && [ "${3-}" = "--sandbox" ] && [ "${4-}" = "list" ] && [ "${5-}" = "--all" ] && [ "${6-}" = "--limit" ] && [ "${7-}" = "0" ] && [ "$#" -eq 7 ]; then
-  emit_task
+if [ "${1-}" = "--json" ] && [ "${2-}" = "--readonly" ] && [ "${3-}" = "--sandbox" ] && [ "${4-}" = "list" ] && [ "${5-}" = "--all" ] && [ "${6-}" = "--limit" ] && [ "${7-}" = "0" ] && [ "${8-}" = "--type" ] && [ "$#" -eq 9 ]; then
+  if [ "${9-}" = "epic" ]; then
+    printf '[]\n'
+  else
+    emit_task
+  fi
   exit 0
 fi
 

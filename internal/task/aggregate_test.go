@@ -50,12 +50,11 @@ func TestAggregatorListQueriesReposAndPreservesContext(t *testing.T) {
 	}
 }
 
-func TestAggregatorListFiltersToActiveItemsAcrossIssueTypes(t *testing.T) {
+func TestAggregatorListFiltersClosedTaskSourceItems(t *testing.T) {
 	repos := []task.RepositorySource{{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}, BackendDir: "/tmp/alpha"}}
 	backend := fakeReadBackend{tasks: []task.Task{
 		{ID: "a-1", Title: "active task", IssueType: task.IssueTypeTask, Status: task.StatusOpen},
 		{ID: "a-2", Title: "closed task", IssueType: task.IssueTypeTask, Status: task.StatusClosed},
-		{ID: "a-3", Title: "bug", IssueType: task.IssueTypeBug, Status: task.StatusOpen},
 		{ID: "a-4", Title: "epic", IssueType: task.IssueTypeEpic, Status: task.StatusInProgress},
 	}}
 
@@ -72,13 +71,13 @@ func TestAggregatorListFiltersToActiveItemsAcrossIssueTypes(t *testing.T) {
 	for _, row := range got.Rows {
 		gotIDs = append(gotIDs, row.Task.ID)
 	}
-	expectedIDs := []string{"a-1", "a-3", "a-4"}
+	expectedIDs := []string{"a-1", "a-4"}
 	if !reflect.DeepEqual(gotIDs, expectedIDs) {
-		t.Fatalf("rows = %#v, want active items %v", got.Rows, expectedIDs)
+		t.Fatalf("rows = %#v, want active task-source items %v", got.Rows, expectedIDs)
 	}
 }
 
-func TestAggregatorSnapshotPreservesAllVisibleBackendItems(t *testing.T) {
+func TestAggregatorSnapshotPreservesTaskSourceItems(t *testing.T) {
 	repos := []task.RepositorySource{
 		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}, BackendDir: "/tmp/alpha"},
 		{Repository: task.Repository{ID: "beta", Name: "Beta", TaskIDPrefix: "b"}, BackendDir: "/tmp/beta"},
@@ -87,7 +86,6 @@ func TestAggregatorSnapshotPreservesAllVisibleBackendItems(t *testing.T) {
 		"/tmp/alpha": {tasks: []task.Task{
 			{ID: "a-1", Title: "alpha active", IssueType: task.IssueTypeTask, Status: task.StatusOpen},
 			{ID: "a-closed", Title: "alpha closed", IssueType: task.IssueTypeTask, Status: task.StatusClosed},
-			{ID: "a-bug", Title: "alpha bug", IssueType: task.IssueTypeBug, Status: task.StatusOpen},
 		}},
 		"/tmp/beta": {tasks: []task.Task{{ID: "b-epic", Title: "beta epic", IssueType: task.IssueTypeEpic, Status: task.StatusOpen}}},
 	}
@@ -111,8 +109,11 @@ func TestAggregatorSnapshotPreservesAllVisibleBackendItems(t *testing.T) {
 	if len(got.Repositories) != 2 {
 		t.Fatalf("repositories = %#v, want two snapshots", got.Repositories)
 	}
-	if len(got.Repositories[0].Tasks) != 3 {
-		t.Fatalf("alpha tasks = %#v, want active, closed, and bug items", got.Repositories[0].Tasks)
+	if len(got.Repositories[0].Tasks) != 2 {
+		t.Fatalf("alpha tasks = %#v, want active and closed task items", got.Repositories[0].Tasks)
+	}
+	if got.Repositories[0].Tasks[1].ID != "a-closed" || got.Repositories[0].Tasks[1].Status != task.StatusClosed {
+		t.Fatalf("alpha tasks = %#v, want closed task retained", got.Repositories[0].Tasks)
 	}
 	if got.Repositories[1].Tasks[0].ID != "b-epic" {
 		t.Fatalf("beta tasks = %#v, want epic preserved", got.Repositories[1].Tasks)
@@ -244,7 +245,7 @@ func TestAggregatorSnapshotPreservesFailureOrderAcrossConcurrentReads(t *testing
 		case "beta":
 			return failingReadBackend{err: listErr}, nil
 		default:
-			return fakeReadBackend{tasks: []task.Task{{ID: "gamma-1"}}}, nil
+			return fakeReadBackend{tasks: []task.Task{{ID: "gamma-1", IssueType: task.IssueTypeTask}}}, nil
 		}
 	})
 	if err != nil {
@@ -406,7 +407,7 @@ func (b signalReadBackend) Get(context.Context, string) (task.Task, error) {
 func (b signalReadBackend) List(context.Context) ([]task.Task, error) {
 	b.started <- b.id
 	<-b.release
-	return []task.Task{{ID: b.id + "-1"}}, nil
+	return []task.Task{{ID: b.id + "-1", IssueType: task.IssueTypeTask}}, nil
 }
 
 type concurrentReadTracker struct {
@@ -446,7 +447,7 @@ func (b trackedReadBackend) List(context.Context) ([]task.Task, error) {
 	if b.release != nil {
 		<-b.release
 	}
-	return []task.Task{{ID: b.id + "-1"}}, nil
+	return []task.Task{{ID: b.id + "-1", IssueType: task.IssueTypeTask}}, nil
 }
 
 type cancellationReadTracker struct {

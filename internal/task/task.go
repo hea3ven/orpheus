@@ -10,8 +10,11 @@ import (
 )
 
 var (
-	// ErrNotFound indicates a task backend could not find a matching active task.
+	// ErrNotFound indicates a task backend could not find a matching task.
 	ErrNotFound = errors.New("task not found")
+
+	// ErrUnsupportedTaskSourceItem indicates an item is outside the task-source boundary.
+	ErrUnsupportedTaskSourceItem = errors.New("unsupported task source item")
 
 	// ErrMutationConflict indicates a backend mutation found task state that needs operator attention.
 	ErrMutationConflict = errors.New("task mutation conflict")
@@ -50,8 +53,8 @@ const (
 
 // IssueType identifies the kind of task-tracker item.
 //
-// M2 task views keep the field explicit so adapters and diagnostics can preserve
-// backend data across all Beads issue types.
+// Task sources retain this field for task and epic semantics. They must not
+// expose other backend-specific item types through their read contracts.
 type IssueType string
 
 const (
@@ -224,20 +227,24 @@ func (t Task) OrpheusMetadata() OrpheusMetadata {
 	return ProjectOrpheusMetadata(t.Metadata)
 }
 
-// Getter fetches one task-tracker item by id for task show/get commands.
+// Getter fetches one task-source item by id.
 //
-// Callers that implement M2 task views should use IsM2TaskViewItem to reject
-// closed items with a clear out-of-scope message.
+// A conforming source returns only task and epic items. Looking up another
+// backend item type returns an error that wraps ErrUnsupportedTaskSourceItem
+// and no Task value.
 type Getter interface {
 	Get(ctx context.Context, id string) (Task, error)
 }
 
-// Lister lists visible task-backend items for local read models.
+// Lister lists task-source items for local read models.
+//
+// A conforming source returns only task and epic items, including both active
+// and closed items.
 type Lister interface {
 	List(ctx context.Context) ([]Task, error)
 }
 
-// ReadBackend is the complete read-only M2 task backend contract.
+// ReadBackend is the complete read-only task-source contract.
 //
 // It intentionally excludes mutating operations such as claim, metadata writes,
 // and close; later milestones should introduce separate, narrower mutating
@@ -801,12 +808,42 @@ func (r QueryResult) Clone() QueryResult {
 	return clone
 }
 
-// IsM2TaskViewItem reports whether taskItem is in scope for M2 task views.
+// IsTaskSourceItem reports whether taskItem belongs inside the task-source
+// boundary. Only implementation tasks and epics are task-source items.
+func IsTaskSourceItem(taskItem Task) bool {
+	return taskItem.IssueType == IssueTypeTask || taskItem.IssueType == IssueTypeEpic
+}
+
+// ValidateTaskSourceItem reports whether taskItem belongs inside the
+// task-source boundary.
+func ValidateTaskSourceItem(taskItem Task) error {
+	if IsTaskSourceItem(taskItem) {
+		return nil
+	}
+	return fmt.Errorf("%w: issue type %q is not task or epic", ErrUnsupportedTaskSourceItem, taskItem.IssueType)
+}
+
+// FilterTaskSourceItems returns copies of the task and epic items in tasks.
+// It preserves their statuses and relationships exactly as returned by the
+// backend, including references to items that are outside this boundary.
+func FilterTaskSourceItems(tasks []Task) []Task {
+	if tasks == nil {
+		return nil
+	}
+	filtered := make([]Task, 0, len(tasks))
+	for _, taskItem := range tasks {
+		if IsTaskSourceItem(taskItem) {
+			filtered = append(filtered, taskItem.Clone())
+		}
+	}
+	return filtered
+}
+
+// IsM2TaskViewItem reports whether taskItem is active for task commands.
 //
-// Milestone 2 views are intentionally read-only and scoped to active backend
-// items. Closed tasks may be visible to backends for status projection, but
-// task-list and task-show views should report them as out of scope rather than
-// acting on them.
+// Callers receive task-source items from a conforming backend. Closed tasks and
+// epics remain available to task sources for status and snapshot projections,
+// but active task commands must not act on them.
 func IsM2TaskViewItem(taskItem Task) bool {
 	return taskItem.Status != StatusClosed
 }

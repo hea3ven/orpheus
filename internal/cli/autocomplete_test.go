@@ -97,7 +97,7 @@ func TestCompletionProtocolUsesOneSnapshotAndToleratesRepositoryFailure(t *testi
 
 	log, err := os.ReadFile(testInvocationFor(t).environment["FAKE_BD_LOG"])
 	require.NoError(t, err)
-	assert.Equal(t, 2, strings.Count(string(log), "--json --readonly --sandbox list --all --limit 0"))
+	assert.Equal(t, 3, strings.Count(string(log), "--json --readonly --sandbox list --all --limit 0"))
 	assert.Contains(t, string(log), alpha)
 }
 

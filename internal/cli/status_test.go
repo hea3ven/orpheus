@@ -32,17 +32,17 @@ func TestStatusGroupsLocalTaskSnapshots(t *testing.T) {
 
 	is.Empty(stderr)
 	for _, want := range []string{
-		"TASK_ID", "STATUS", "Ready", "Alpha Repo", "ar-ready", "Ready task", "ar-dep", "Open dependency", "ar-bug", "Bug item",
+		"TASK_ID", "STATUS", "Ready", "Alpha Repo", "ar-ready", "Ready task", "ar-dep", "Open dependency",
 		"Needs attention", "ar-failed", "Failed attached agent", "run attempt 1 failed",
 		"Working", "ar-running", "Running attached agent", "run attempt 1 is running",
 		"Idle", "ar-idle", "Idle without run", "no attached run recorded",
 		"ar-succeeded", "Succeeded attached agent", "agent exited without completion",
 		"Reviewing", "ar-review", "Review task", "https://example.test/pr/3",
-		"ar-missing", "Needs inspection", "missing dependency ar-gone",
+		"ar-missing", "Needs inspection", "missing dependency ar-bug",
 	} {
 		is.Contains(stdout, want)
 	}
-	for _, hidden := range []string{"Blocked", "ar-blocked", "Done / closed", "ar-closed"} {
+	for _, hidden := range []string{"Blocked", "ar-blocked", "Done / closed", "ar-closed", "Bug item"} {
 		is.NotContains(stdout, hidden)
 	}
 
@@ -70,7 +70,7 @@ const statusGroupsLocalTasksJSON = `[
 	{"id":"ar-succeeded","title":"Succeeded attached agent","status":"in_progress","priority":3,"issue_type":"task"},
 	{"id":"ar-blocked","title":"Blocked task","status":"open","priority":2,"issue_type":"task","dependencies":[{"id":"ar-dep","dependency_type":"blocks"}]},
 	{"id":"ar-review","title":"Review task","status":"open","priority":3,"issue_type":"task","metadata":{"orpheus.pr_url":"https://example.test/pr/3"}},
-	{"id":"ar-missing","title":"Needs inspection","status":"open","priority":4,"issue_type":"task","dependencies":[{"id":"ar-gone","dependency_type":"blocks"}]},
+	{"id":"ar-missing","title":"Needs inspection","status":"open","priority":4,"issue_type":"task","dependencies":[{"id":"ar-bug","dependency_type":"blocks"}]},
 	{"id":"ar-closed","title":"Closed task","status":"closed","priority":1,"issue_type":"task"},
 	{"id":"ar-bug","title":"Bug item","status":"open","priority":1,"issue_type":"bug"}
 ]`
@@ -436,7 +436,11 @@ case "$PWD|$*" in
 		if exitCode == 0 && response.stderr != "" && response.stdout == "" {
 			exitCode = 1
 		}
-		fmt.Fprintf(&script, "  %s)\n", shellQuote(canonicalTestPath(t, response.dir)+"|"+response.args))
+		args := response.args
+		if args == "--json --readonly --sandbox list --all --limit 0" {
+			args += " --type task"
+		}
+		fmt.Fprintf(&script, "  %s)\n", shellQuote(canonicalTestPath(t, response.dir)+"|"+args))
 		fmt.Fprintf(&script, "    cat %s\n", shellQuote(stdoutPath))
 		fmt.Fprintf(&script, "    cat %s >&2\n", shellQuote(stderrPath))
 		fmt.Fprintf(&script, "    exit %d\n", exitCode)
@@ -444,6 +448,7 @@ case "$PWD|$*" in
 	}
 	script.WriteString(`esac
 case "$*" in
+  "--json --readonly --sandbox list --all --limit 0 --type epic") printf '[]\n'; exit 0 ;;
   --json\ --sandbox\ update\ *--set-metadata\ orpheus.branch=*) exit 0 ;;
   --json\ --sandbox\ update\ *--set-metadata\ orpheus.pr_url=*) exit 0 ;;
 esac

@@ -8,7 +8,7 @@ This note records the validation flow for Milestone 2: presenting task items acr
 - `git`, `go`, and the real `bd` binary are on `PATH`.
 - The commands use temporary repositories and isolated XDG roots; they must not read or mutate the operator's real Orpheus or Beads state.
 - The snippets pipe empty stdin into `repo add` so Orpheus accepts detected Git values and the default managed Beads prefix non-interactively.
-- M2 global task views show active items from all Beads issue types. Closed items remain visible to `status --full` in the `Done / closed` group, but are omitted from `task list` and rejected by `task show` as not active.
+- Task sources expose only Beads `task` and `epic` items. They retain closed items for snapshots and `status --full`; `task list` omits closed items, while direct lookup of bugs, chores, custom types, or items without a recognized type fails at the source boundary.
 - `task ready` is Orpheus' M2 readiness projection over Beads snapshots, not a call to `bd ready`. It uses Beads status/dependency/metadata data plus Orpheus' local `orpheus.pr_url` rule.
 
 ## Setup
@@ -80,7 +80,7 @@ Expected outcome:
 
 ## Create representative Beads items
 
-Create local items that cover all active issue types, Orpheus metadata projection, and blocked/ready dependency states:
+Create local task-source items plus excluded Beads types to verify metadata projection, blocked/ready dependency states, and source filtering:
 
 ```bash
 LOCAL_READY="$(
@@ -127,11 +127,11 @@ run_bd "$MANAGED_BEADS_DIR" update "$MANAGED_WORKING" --status in_progress >/dev
 
 Expected outcome:
 
-- The local Beads database contains active `task`, `bug`, and `epic` items.
+- The local Beads database contains active `task`, `bug`, and `epic` items; the bug remains in Beads but is excluded from the Orpheus task source.
 - `$LOCAL_BLOCKED` has an active blocking dependency, so Orpheus classifies it as `Blocked`.
 - `$MANAGED_READY_AFTER_CLOSED` has a closed blocking dependency, so Orpheus classifies it as ready.
 - `$MANAGED_REVIEW` contains `orpheus.pr_url`, so Orpheus classifies it as `In review` instead of ready.
-- `$MANAGED_WORKING` is in progress and appears in the `Working` group.
+- `$MANAGED_WORKING` remains in Beads but is excluded from Orpheus task-source projections.
 
 ## Validate `task list`
 
@@ -143,7 +143,7 @@ Expected outcome:
 Expected outcome:
 
 - Rows from both `localm2` and `managedm2` appear in one table.
-- Active items from all issue types appear, including `$LOCAL_READY`, `$LOCAL_BUG`, `$LOCAL_EPIC`, `$LOCAL_BLOCKED`, `$LOCAL_BLOCKER`, `$MANAGED_READY_AFTER_CLOSED`, `$MANAGED_REVIEW`, and `$MANAGED_WORKING`.
+- Active task-source items appear, including `$LOCAL_READY`, `$LOCAL_EPIC`, `$LOCAL_BLOCKED`, `$LOCAL_BLOCKER`, `$MANAGED_READY_AFTER_CLOSED`, and `$MANAGED_REVIEW`. `$LOCAL_BUG` and `$MANAGED_WORKING` do not cross the task-source boundary.
 - Closed `$MANAGED_CLOSED_BLOCKER` does not appear in `task list`.
 - The detailed table includes `REPO_ID`, `TASK_PREFIX`, `BRANCH`, `WORKTREE`, and `PR` columns.
 - The `$LOCAL_READY` row projects `orpheus.branch` and `orpheus.worktree` as `task/vl-ready` and `/tmp/orpheus/vl-ready`.
@@ -159,17 +159,17 @@ Expected outcome:
 Expected outcome:
 
 - Ready rows from both repositories appear.
-- `$LOCAL_READY`, `$LOCAL_BUG`, `$LOCAL_EPIC`, `$LOCAL_BLOCKER`, and `$MANAGED_READY_AFTER_CLOSED` appear as ready.
+- `$LOCAL_READY`, `$LOCAL_EPIC`, `$LOCAL_BLOCKER`, and `$MANAGED_READY_AFTER_CLOSED` appear as ready.
 - `$LOCAL_BLOCKED` does not appear because its blocker is still open.
 - `$MANAGED_REVIEW` does not appear because `orpheus.pr_url` is non-empty.
-- `$MANAGED_WORKING` does not appear because it is `in_progress`.
-- The command reads snapshots with `bd list --all --limit 0`; it does not delegate selection to backend-native `bd ready`.
+- `$MANAGED_WORKING` does not appear because chores are outside the task-source boundary.
+- The command reads snapshots through type-scoped `bd list --all --limit 0 --type task` and `--type epic` calls; it does not delegate readiness selection to backend-native `bd ready`.
 
 ## Validate `task show` prefix resolution
 
 ```bash
 "$ORPHEUS" task show "$LOCAL_READY"
-"$ORPHEUS" task show "$LOCAL_BUG"
+"$ORPHEUS" task show "$LOCAL_BUG"  # expected failure
 ```
 
 Expected outcome:
@@ -178,7 +178,7 @@ Expected outcome:
 - Output is backend-neutral, not raw `bd show` JSON.
 - Output includes repository ID/name/prefix, task ID/title/status/priority/type/labels, description/design/acceptance criteria when present, and an Orpheus metadata summary.
 - The `$LOCAL_READY` detail view shows branch `task/vl-ready`, worktree `/tmp/orpheus/vl-ready`, and PR `-`.
-- The `$LOCAL_BUG` detail view demonstrates active non-task issue types are visible in M2.
+- A direct lookup of `$LOCAL_BUG` fails because bugs are outside the task-source boundary; it does not return a task value.
 
 Validate malformed and unknown prefixes:
 

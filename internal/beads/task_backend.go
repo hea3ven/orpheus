@@ -26,11 +26,11 @@ var (
 	_ task.UpdateMutator    = TaskBackend{}
 )
 
-// TaskBackend reads task items from one explicit Beads workspace.
+// TaskBackend reads task-source items from one explicit Beads workspace.
 //
-// List returns visible backend items. Get returns the backend item so callers can
-// report closed items as out of scope when needed. Use NewTaskBackend or
-// NewTaskBackendWithRunner to construct a valid value.
+// List returns only task and epic items, including closed items. Get returns
+// only those types and rejects other Beads items at the source boundary. Use
+// NewTaskBackend or NewTaskBackendWithRunner to construct a valid value.
 type TaskBackend struct {
 	dir    string
 	runner Runner
@@ -76,6 +76,9 @@ func (b TaskBackend) Get(ctx context.Context, id string) (task.Task, error) {
 	if err != nil {
 		return task.Task{}, fmt.Errorf("get Beads task %q in %q: parse bd show JSON: %w", rawTask.ID, b.dir, err)
 	}
+	if err := task.ValidateTaskSourceItem(taskItem); err != nil {
+		return task.Task{}, fmt.Errorf("get Beads task %q in %q: %w", taskItem.ID, b.dir, err)
+	}
 	return taskItem, nil
 }
 
@@ -108,16 +111,28 @@ func (b TaskBackend) getRawTask(ctx context.Context, id string) (bdTask, error) 
 	return bdTask{}, fmt.Errorf("get Beads task %q in %q: %w", id, b.dir, task.ErrNotFound)
 }
 
-// List lists visible Beads items, including closed items and non-task issue types.
+// List lists task and epic Beads items, including closed items.
 func (b TaskBackend) List(ctx context.Context) ([]task.Task, error) {
-	result, err := b.run(ctx, "list", "list", "--all", "--limit", "0")
+	tasks := make([]task.Task, 0)
+	for _, issueType := range []task.IssueType{task.IssueTypeTask, task.IssueTypeEpic} {
+		listed, err := b.listIssueType(ctx, issueType)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, listed...)
+	}
+	return task.FilterTaskSourceItems(tasks), nil
+}
+
+func (b TaskBackend) listIssueType(ctx context.Context, issueType task.IssueType) ([]task.Task, error) {
+	result, err := b.run(ctx, "list", "list", "--all", "--limit", "0", "--type", string(issueType))
 	if err != nil {
 		return nil, err
 	}
 
 	tasks, err := parseTaskArray(result.Stdout)
 	if err != nil {
-		return nil, fmt.Errorf("list Beads tasks in %q: parse bd list JSON: %w%s", b.dir, err, formattedOutput(result))
+		return nil, fmt.Errorf("list Beads %s items in %q: parse bd list JSON: %w%s", issueType, b.dir, err, formattedOutput(result))
 	}
 	return tasks, nil
 }
