@@ -114,14 +114,13 @@ func TestTaskListListsActiveTasksAcrossRegisteredReposWithDefaultAndDetailedTabl
 	for _, want := range []string{
 		"REPO", "TASK_ID", "STATUS", "P", "TITLE",
 		"Local Alpha", "la-1", "open", "2", "Local active",
-		"Local Alpha", "la-bug", "open", "1", "Local bug",
 		"Managed Beta", "mb-1", "in_progress", "3", "Managed active",
 	} {
 		is.Contains(stdout, want)
 	}
 	for _, hidden := range []string{
 		"REPO_ID", "TASK_PREFIX", "ORPHEUS", "local-alpha", "managed-beta", "branch=task/la-1", "worktree=/tmp/la-1", "pr=https://example.test/pr/1",
-		"la-closed", "orpheus.branch",
+		"la-closed", "la-bug", "Local bug", "orpheus.branch",
 	} {
 		is.NotContains(stdout, hidden)
 	}
@@ -132,7 +131,6 @@ func TestTaskListListsActiveTasksAcrossRegisteredReposWithDefaultAndDetailedTabl
 	for _, want := range []string{
 		"REPO_ID", "REPO", "TASK_PREFIX", "TASK_ID", "STATUS", "P", "BRANCH", "WORKTREE", "PR", "EXTERNAL_REF", "TITLE",
 		"local-alpha", "Local Alpha", "la", "la-1", "open", "2", "task/la-1", "/tmp/la-1", "TREX-1234", "Local active",
-		"local-alpha", "Local Alpha", "la", "la-bug", "open", "1", "Local bug",
 		"managed-beta", "Managed Beta", "mb", "mb-1", "in_progress", "3", "https://example.test/pr/1", "Managed active",
 	} {
 		is.Contains(detailedStdout, want)
@@ -145,6 +143,8 @@ func TestTaskListListsActiveTasksAcrossRegisteredReposWithDefaultAndDetailedTabl
 	is.NotContains(detailedStdout, "worktree=/tmp/la-1")
 	is.NotContains(detailedStdout, "pr=https://example.test/pr/1")
 	is.NotContains(detailedStdout, "la-closed")
+	is.NotContains(detailedStdout, "la-bug")
+	is.NotContains(detailedStdout, "Local bug")
 	is.NotContains(detailedStdout, "orpheus.branch")
 
 	assertTaskListBDLog(t, logPath, repos)
@@ -157,7 +157,7 @@ func assertTaskListBDLog(t *testing.T, logPath string, repos localManagedTaskRep
 	log := readFileString(t, logPath)
 	is.Contains(log, repos.localDir)
 	is.Contains(log, repos.managedDir)
-	is.Equal(4, strings.Count(log, "--json --readonly --sandbox list --all --limit 0"))
+	is.Equal(8, strings.Count(log, "--json --readonly --sandbox list --all --limit 0"))
 }
 
 func TestTaskReadyListsReadyTasksAcrossRegisteredRepos(t *testing.T) {
@@ -188,8 +188,6 @@ func TestTaskReadyListsReadyTasksAcrossRegisteredRepos(t *testing.T) {
 	for _, want := range []string{
 		"REPO", "TASK_ID", "STATUS", "P", "TITLE",
 		"Local Alpha", "la-1", "open", "2", "Local ready",
-		"Local Alpha", "la-bug", "open", "1", "Local bug ready",
-		"Local Alpha", "la-chore", "open", "3", "Local chore ready",
 		"Local Alpha", "la-epic", "open", "1", "Local epic ready",
 		"Managed Beta", "mb-1", "open", "3", "Managed ready",
 	} {
@@ -199,6 +197,8 @@ func TestTaskReadyListsReadyTasksAcrossRegisteredRepos(t *testing.T) {
 		is.NotContains(stdout, hidden)
 	}
 	is.NotContains(stdout, "la-closed")
+	is.NotContains(stdout, "la-bug")
+	is.NotContains(stdout, "la-chore")
 	is.NotContains(stdout, "mb-review")
 
 	logData, err := os.ReadFile(logPath)
@@ -206,7 +206,7 @@ func TestTaskReadyListsReadyTasksAcrossRegisteredRepos(t *testing.T) {
 	log := string(logData)
 	is.Contains(log, repos.localDir)
 	is.Contains(log, repos.managedDir)
-	is.Equal(2, strings.Count(log, "--json --readonly --sandbox list --all --limit 0"))
+	is.Equal(4, strings.Count(log, "--json --readonly --sandbox list --all --limit 0"))
 	is.NotContains(log, "--json --readonly --sandbox ready")
 }
 
@@ -979,7 +979,7 @@ func TestTaskStatsAggregateRepoFilterSkipsUnselectedRepoFailures(t *testing.T) {
 	is.NotContains(string(bdLog), betaDir)
 }
 
-func TestTaskStatsAggregateExcludesEpicsAndKeepsMixedExecutableTypes(t *testing.T) {
+func TestTaskStatsAggregateReceivesOnlyTaskSourceItems(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -1009,7 +1009,7 @@ func TestTaskStatsAggregateExcludesEpicsAndKeepsMixedExecutableTypes(t *testing.
 	is.Empty(stderr)
 	is.Contains(stdout, "Task stats throughput view grouped by day")
 	is.Contains(stdout, "Tasks without resolved timestamp: 0")
-	is.Regexp(`(?m)^2026-07-02\s+4\s+-\s+-\s+0/4$`, stdout)
+	is.Regexp(`(?m)^2026-07-02\s+1\s+-\s+-\s+0/1$`, stdout)
 }
 
 func TestTaskStatsDirectEpicStatsRemainAvailable(t *testing.T) {
@@ -1416,7 +1416,7 @@ func TestTaskShowFailsWhenLocalTaskStateCannotBeLoaded(t *testing.T) {
 	is.ErrorContains(err, `repo_id is "wrong", expected "alpha"`)
 }
 
-func TestTaskShowRendersActiveNonTaskItems(t *testing.T) {
+func TestTaskShowRejectsUnsupportedItemsAtTaskSourceBoundary(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -1439,12 +1439,13 @@ func TestTaskShowRendersActiveNonTaskItems(t *testing.T) {
 		repoDir: {stdout: `[{"id":"op-bug","title":"bug","status":"open","priority":2,"issue_type":"bug"}]`},
 	})
 
-	stdout, stderr := executeCommand(t, []string{"task", "show", "op-bug"})
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "show", "op-bug"})
 
+	is.Empty(stdout)
 	is.Empty(stderr)
-	for _, want := range []string{"Repository:", "ID: alpha", "Task:", "ID: op-bug", "Title: bug", "Status: open", "Priority: 2", "Type: bug"} {
-		is.Contains(stdout, want)
-	}
+	must.Error(err)
+	is.ErrorContains(err, "unsupported task source item")
+	is.ErrorContains(err, "issue type \"bug\" is not task or epic")
 }
 
 func TestTaskDirPrintsWorktreeDirectory(t *testing.T) {
@@ -2420,7 +2421,7 @@ func TestTaskRunMainBlocksOtherRepoRootOwnerButWorktreeRunStillWorks(t *testing.
 	is.Contains(worktreeStderr, "fake agent stderr")
 	bdLog, err := os.ReadFile(bdLogPath)
 	must.NoError(err)
-	is.Equal(1, strings.Count(string(bdLog), "--json --readonly --sandbox list --all --limit 0"))
+	is.Equal(2, strings.Count(string(bdLog), "--json --readonly --sandbox list --all --limit 0"))
 }
 
 func TestTaskRunMainFailsDirtyRepoRootBeforeLaunch(t *testing.T) {
@@ -8288,8 +8289,11 @@ case "$*" in
   "--json --readonly --sandbox show --id "*)
     printf '%%s\n' %s
     ;;
-  "--json --readonly --sandbox list --all --limit 0")
+  "--json --readonly --sandbox list --all --limit 0 --type task")
     printf '%%s\n' %s
+    ;;
+  "--json --readonly --sandbox list --all --limit 0 --type epic")
+    printf '[]\n'
     ;;
   "--json --sandbox update "*|"--json --sandbox close "*)
     printf 'Beads mutation failed in %s while running bd %%s\n' "$*" >&2
@@ -8325,7 +8329,7 @@ func withFakeBDTaskResponses(t *testing.T, responses map[string]fakeBDTaskRespon
 } >> "$FAKE_BD_LOG"
 is_update=0
 case "$*" in
-  "--json --readonly --sandbox list --all --limit 0"|"--json --readonly --sandbox show --id "*)
+  "--json --readonly --sandbox list --all --limit 0 --type task"|"--json --readonly --sandbox list --all --limit 0 --type epic"|"--json --readonly --sandbox show --id "*)
     ;;
   "--json --sandbox update "*|"--json --sandbox close "*)
     is_update=1
@@ -8335,6 +8339,10 @@ case "$*" in
     exit 64
     ;;
 esac
+if [ "$*" = "--json --readonly --sandbox list --all --limit 0 --type epic" ]; then
+  printf '[]\n'
+  exit 0
+fi
 case "$PWD" in
 `)
 
