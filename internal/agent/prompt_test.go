@@ -65,6 +65,7 @@ func TestRenderActiveContextIncludesWorktreeContract(t *testing.T) {
 		"- Agent: recorder",
 		"deterministic task worktree and task branch",
 		"orpheus agent done",
+		"Do not create Git commits yourself. Leave completed changes uncommitted; Orpheus owns commit creation at the appropriate workflow stage.",
 		"one commit-style summary line, 80 characters or fewer",
 		"<type(fix,feat,test,chore,conf,etc)>: <description>",
 		"do not include the task/bead ID",
@@ -319,6 +320,7 @@ func TestRenderActiveContextIncludesReviewFollowUpContract(t *testing.T) {
 		"Description: The command panics on empty input.",
 		"Suggested action: Add input validation.",
 		"Fix the required blocking findings; advisories are best-effort",
+		"Do not create Git commits yourself. Leave completed changes uncommitted; Orpheus owns commit creation at the appropriate workflow stage.",
 		"one-time completion handoff for this Orpheus run attempt",
 		"not once per reusable harness session",
 		"whether this harness session is fresh or resumed",
@@ -351,6 +353,7 @@ func TestRenderActiveContextIncludesMainContract(t *testing.T) {
 
 	for _, want := range []string{
 		"registered repository root on the registered default branch",
+		"Do not create Git commits yourself. Leave completed changes uncommitted; Orpheus owns commit creation at the appropriate workflow stage.",
 		"one-time completion handoff for this Orpheus run attempt",
 		"not once per reusable harness session",
 		"one commit-style summary line, 80 characters or fewer",
@@ -441,6 +444,7 @@ func TestRenderActiveContextIncludesRepoRootTaskBranchContract(t *testing.T) {
 		"- Work Directory: /repo/alpha",
 		"registered repository root on the task branch",
 		"orpheus agent done",
+		"Do not create Git commits yourself. Leave completed changes uncommitted; Orpheus owns commit creation at the appropriate workflow stage.",
 		"PR-ready completion data for feature-branch publication",
 		"The human operator will later run `orpheus task run op-root` to review and publish the feature branch as a pull request",
 	} {

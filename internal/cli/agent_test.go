@@ -37,6 +37,7 @@ func TestAgentContextRendersValidatedWorktreeContext(t *testing.T) {
 		"- Run attempt: 1",
 		"- Agent: recorder",
 		"orpheus agent done",
+		"Do not create Git commits yourself. Leave completed changes uncommitted; Orpheus owns commit creation at the appropriate workflow stage.",
 		"one-time completion handoff for this Orpheus run attempt",
 		"not once per reusable harness session",
 		"call it exactly once after finishing the current attempt's work",
@@ -87,6 +88,7 @@ func TestAgentContextRendersRepoRootFeatureBranchContext(t *testing.T) {
 		"- Work Directory: " + repoPath,
 		"registered repository root on the task branch",
 		"orpheus agent done",
+		"Do not create Git commits yourself. Leave completed changes uncommitted; Orpheus owns commit creation at the appropriate workflow stage.",
 		"PR-ready completion data for feature-branch publication",
 		"The human operator will later run `orpheus task run op-root` to review and publish the feature branch as a pull request",
 	} {

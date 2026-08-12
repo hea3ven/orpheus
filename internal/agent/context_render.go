@@ -235,6 +235,7 @@ func appendFeatureBranchExecutionContract(
 }
 
 func appendAgentDoneContract(builder *strings.Builder, summaryGuidance string, summaryGuidanceStyle string) {
+	builder.WriteString("- Do not create Git commits yourself. Leave completed changes uncommitted; Orpheus owns commit creation at the appropriate workflow stage.\n")
 	builder.WriteString("- When implementation and checks are complete, write the Markdown fields to files and finish with `orpheus agent done --summary '<summary>' --description '<description>' --detailed-description-file <path> --technical-explanation-file <path>`.\n")
 	appendSummaryGuidanceContract(builder, summaryGuidance, summaryGuidanceStyle)
 	builder.WriteString("- Use `--description` for a concise, plain one-paragraph commit body.\n")
