@@ -93,6 +93,37 @@ func TestRecordPrimaryReviewChildPIDPreservesConcurrentFinding(t *testing.T) {
 	}
 }
 
+func TestPrepareTaskRunPreservesLivePrimaryReviewExecution(t *testing.T) {
+	paths, err := state.NewPaths(filepath.Join(t.TempDir(), "config"), filepath.Join(t.TempDir(), "data"))
+	if err != nil {
+		t.Fatalf("new paths: %v", err)
+	}
+	store := taskstate.NewStore(paths)
+	review, err := store.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{Pipeline: "ai", Step: "ai-review"})
+	if err != nil {
+		t.Fatalf("start review: %v", err)
+	}
+	execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, Agent: "reviewer", StartedAt: review.StartedAt, SupervisorPID: 10}
+	if _, err := store.RecordReviewStep("alpha", "op-review", review.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution}); err != nil {
+		t.Fatalf("record review step: %v", err)
+	}
+
+	prepared, err := workflow.PrepareTaskRun(context.Background(), workflow.PrepareTaskRunOptions{
+		Paths: paths, Store: store, RepoID: "alpha", TaskID: "op-review", Task: task.Task{ID: "op-review"}, Trigger: "task_run",
+		Probe: recoveryProbe(map[int]agentexec.ProcessLiveness{10: agentexec.ProcessLive}),
+	})
+	if err != nil {
+		t.Fatalf("prepare task run: %v", err)
+	}
+	if prepared.ReviewInspection.Condition != workflow.AttachedExecutionLive || prepared.ReviewInspection.Reason != "supervisor_pid_live" {
+		t.Fatalf("review inspection = %#v, want live primary reviewer", prepared.ReviewInspection)
+	}
+	latest, ok := taskstate.LatestReview(prepared.State)
+	if !ok || latest.Status != taskstate.ReviewStatusRunning || latest.Steps[0].Execution.Status != taskstate.RunStatusRunning {
+		t.Fatalf("review state = %#v, want unchanged running primary reviewer", latest)
+	}
+}
+
 func TestReconcilePrimaryReviewExecutionRecordsFailedReview(t *testing.T) {
 	paths, err := state.NewPaths(filepath.Join(t.TempDir(), "config"), filepath.Join(t.TempDir(), "data"))
 	if err != nil {

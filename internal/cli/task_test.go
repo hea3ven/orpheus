@@ -3616,7 +3616,7 @@ func TestTaskDoneRequiresPassedReview(t *testing.T) {
 	is.Empty(stdout)
 	is.Empty(stderr)
 	is.ErrorContains(err, "has no local review attempt")
-	is.ErrorContains(err, "orpheus task review op-main")
+	is.ErrorContains(err, "orpheus task run op-main")
 	is.Equal(headBefore, strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")))
 	is.Contains(runGit(t, repoPath, "status", "--short"), "reviewed.txt")
 }
@@ -5104,6 +5104,66 @@ func TestTaskRunAfterInterruptedAutomatedBlockerDecisionRequiresFreshReview(t *t
 	must.Len(latest.Findings, 1)
 	is.Zero(latest.Findings[0].TargetedByRunAttempt)
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
+}
+
+func TestTaskRunRecoversHardStoppedAutomatedBlockerDecision(t *testing.T) {
+	t.Parallel()
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	registryStore := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(registryStore.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Hard-stopped review", "Recover persisted blocker decision.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+		"standard": {{"kind": "check", "name": "unit", "command": writeReviewScript(t, "#!/bin/sh\\nexit 0\\n")}},
+	})
+
+	stateStore := taskstate.NewStore(paths)
+	reviewAttempt, err := stateStore.StartReviewWithOptions("alpha", "op-main", taskstate.StartReviewOptions{Pipeline: "standard", Step: "unit"})
+	must.NoError(err)
+	_, err = stateStore.RecordReviewStep("alpha", "op-main", reviewAttempt.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindCheck, Name: "unit"})
+	must.NoError(err)
+	_, err = stateStore.RecordReviewFinding("alpha", "op-main", reviewAttempt.Attempt, taskstate.ReviewFinding{Type: taskstate.FindingTypeBlocking, Step: "unit", Title: "Check \"unit\" failed", Description: "Fix the failing check."})
+	must.NoError(err)
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: taskJSON},
+	})
+	agentLogPath := withFakeAgent(t, "hard-stop-agent", 0)
+
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, "k\n")
+
+	is.Empty(stdout)
+	is.Contains(stderr, "Open blocking findings from the latest review")
+	is.Contains(stderr, "Finding 1 from step unit")
+	is.NotContains(stderr, "== Agent run: implementation")
+	_, statErr := os.Stat(agentLogPath)
+	is.ErrorIs(statErr, os.ErrNotExist)
+
+	state, err := stateStore.Load("alpha", "op-main")
+	must.NoError(err)
+	must.Len(state.Runs, 1)
+	must.Len(state.Reviews, 1)
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
+	is.True(latest.AutomatedBlockerDecisionKept)
+	is.False(latest.AutomatedBlockerDecisionInterrupted)
+	must.Len(latest.Findings, 1)
+	is.Equal(taskstate.FindingTypeBlocking, latest.Findings[0].Type)
+	is.Zero(latest.Findings[0].TargetedByRunAttempt)
 }
 
 //nolint:funlen // The autonomous loop spans dispatch, review, follow-up, and publication.

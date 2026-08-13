@@ -1752,11 +1752,11 @@ func (s FinalizationService) loadFinalizationContext(repo task.Repository, taskI
 
 func validateLatestReviewPassed(taskID string, ctx finalizationContext) error {
 	if !ctx.hasReview {
-		return fmt.Errorf("task %s has no local review attempt; run `orpheus task review %s` before `orpheus task done %s`", taskID, taskID, taskID)
+		return fmt.Errorf("task %s has no local review attempt; run `orpheus task run %s` before `orpheus task done %s`", taskID, taskID, taskID)
 	}
 	if ctx.latestReview.Status != taskstate.ReviewStatusPassed {
 		return fmt.Errorf(
-			"latest review attempt %d for task %s is %q, expected %q; run `orpheus task review %s`",
+			"latest review attempt %d for task %s is %q, expected %q; run `orpheus task run %s`",
 			ctx.latestReview.Attempt,
 			taskID,
 			ctx.latestReview.Status,

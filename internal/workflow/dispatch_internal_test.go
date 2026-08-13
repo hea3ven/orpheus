@@ -249,8 +249,8 @@ func TestDispatchValidateStartRefusesInterruptedAutomatedBlockerDecision(t *test
 	if err == nil || !strings.Contains(err.Error(), "interrupted automated blocker decisions") {
 		t.Fatalf("validate error = %v, want interrupted blocker guidance", err)
 	}
-	if !strings.Contains(err.Error(), "run `orpheus task review op-1`") {
-		t.Fatalf("validate error = %v, want task review guidance", err)
+	if !strings.Contains(err.Error(), "run `orpheus task run op-1`") {
+		t.Fatalf("validate error = %v, want task run guidance", err)
 	}
 }
 
@@ -277,8 +277,8 @@ func TestDispatchValidateStartRefusesUnkeptAutomatedBlockers(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "automated blockers without an explicit keep decision") {
 		t.Fatalf("validate error = %v, want explicit-keep guidance", err)
 	}
-	if !strings.Contains(err.Error(), "run `orpheus task review op-1`") {
-		t.Fatalf("validate error = %v, want task review guidance", err)
+	if !strings.Contains(err.Error(), "run `orpheus task run op-1`") {
+		t.Fatalf("validate error = %v, want task run guidance", err)
 	}
 }
 
@@ -526,8 +526,8 @@ func TestDispatchValidateStartRefusesAlreadyTargetedBlockedReview(t *testing.T) 
 		Backend: fakeDispatchBackend{taskItem: taskItem},
 	})
 
-	if err == nil || !strings.Contains(err.Error(), "run `orpheus task review op-1`") {
-		t.Fatalf("validate error = %v, want task review guidance", err)
+	if err == nil || !strings.Contains(err.Error(), "rerun `orpheus task run op-1`") {
+		t.Fatalf("validate error = %v, want task run guidance", err)
 	}
 }
 
