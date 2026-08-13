@@ -173,7 +173,7 @@ func restoreCandidateIfMutated(
 		return fmt.Errorf(
 			"review step mutated candidate changes and automatic restore failed: %w; "+
 				"manual repair required in %q: inspect `git status --short`, restore the intended "+
-				"candidate changes, then rerun `orpheus task review`",
+				"candidate changes, then rerun `orpheus task run`",
 			restoreErr,
 			snapshot.workdir,
 		)
@@ -206,7 +206,7 @@ func verifyRestoredCandidateSnapshot(
 	return fmt.Errorf(
 		"review step mutated candidate changes and automatic restore did not return the worktree to the pre-step snapshot; "+
 			"manual repair required in %q: inspect `git status --short`, restore the intended "+
-			"candidate changes, then rerun `orpheus task review`",
+			"candidate changes, then rerun `orpheus task run`",
 		snapshot.workdir,
 	)
 }

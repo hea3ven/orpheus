@@ -155,6 +155,13 @@ func selectReviewTaskRunRoute(
 ) (TaskRunRoute, error) {
 	switch latestReview.Status {
 	case taskstate.ReviewStatusRunning:
+		// A hard stop while prompting for an automated blocker leaves the
+		// persisted review running even though no review execution remains.
+		// Route through the review lifecycle so its existing disposition guard
+		// preserves the finding and requires an explicit operator decision.
+		if taskstate.HasUnkeptAutomatedBlockingFindingsInState(state, latestReview) {
+			return TaskRunRoute{Action: TaskRunActionStartReview, Attempt: latestReview.Attempt}, nil
+		}
 		return TaskRunRoute{Action: TaskRunActionReviewActive, Attempt: latestReview.Attempt}, nil
 	case taskstate.ReviewStatusWaitingForManual:
 		return TaskRunRoute{
