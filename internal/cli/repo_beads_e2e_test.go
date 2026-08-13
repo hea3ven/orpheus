@@ -92,6 +92,46 @@ func TestIntegrationRepoAddInitializesManagedBeadsEndToEnd(t *testing.T) {
 	}
 }
 
+func TestIntegrationStatusRepairsManagedBeadsSchemaDrift(t *testing.T) {
+	requireBD(t)
+	withoutBeadsEnv(t)
+	dolt, err := exec.LookPath("dolt")
+	if err != nil {
+		t.Skip("dolt executable is required to prepare stale Beads schema")
+	}
+
+	repoPath := newTestRepoPath(t)
+	if _, stderr := executeCommand(t, []string{"repo", "add", repoPath}); stderr != "" {
+		t.Fatalf("repo add stderr = %q, want empty", stderr)
+	}
+	managedDir, err := registry.ManagedBeadsDir(currentTestPaths(t), "alpha")
+	if err != nil {
+		t.Fatalf("managed Beads dir: %v", err)
+	}
+	runBD(t, managedDir, "create", "Visible after schema repair", "--type", "task")
+
+	databaseDir := filepath.Join(managedDir, ".beads", "embeddeddolt", "alpha")
+	for _, args := range [][]string{
+		{"sql", "-q", "DELETE FROM schema_migrations WHERE version = (SELECT MAX(version) FROM schema_migrations)"},
+		{"add", "schema_migrations"},
+		{"commit", "-m", "test: stale schema"},
+	} {
+		command := exec.Command(dolt, args...)
+		command.Dir = databaseDir
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("prepare stale schema with dolt %v: %v\n%s", args, err, output)
+		}
+	}
+
+	stdout, stderr := executeCommand(t, []string{"status"})
+	if stderr != "" {
+		t.Fatalf("status stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, "Visible after schema repair") {
+		t.Fatalf("status output = %q, want task from repaired managed source", stdout)
+	}
+}
+
 func TestIntegrationRepoRegistrationFlowEndToEnd(t *testing.T) {
 	requireBD(t)
 	withoutBeadsEnv(t)

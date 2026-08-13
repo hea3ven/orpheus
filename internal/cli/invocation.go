@@ -68,13 +68,13 @@ func newInvocationDependenciesWithPaths(paths state.Paths, logger *slog.Logger, 
 		agentLauncher: agentexec.AttachedLauncher{Environment: environmentEntries(environment)},
 	}
 	deps.taskBackendFactory = func(source taskmodel.RepositorySource) (taskmodel.ReadBackend, error) {
-		return beads.NewTaskBackendWithRunner(source.BackendDir, beads.CommandRunner{
+		return beads.NewTaskBackendForSourceWithRunner(source, beads.CommandRunner{
 			Logger:      logger,
 			Environment: environmentEntries(deps.environment),
 			DiagnosticAttrs: []slog.Attr{
 				slog.String("repo_id", source.Repository.ID),
 			},
-		})
+		}, logger)
 	}
 	deps.inspectGit = func(ctx context.Context, path string) (gitmeta.Inspection, error) {
 		return gitmeta.InspectWithLogger(ctx, path, logger)

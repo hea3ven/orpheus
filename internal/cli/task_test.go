@@ -437,7 +437,6 @@ func TestTaskShowEpicRendersSortedDirectChildrenFromResolvedRepo(t *testing.T) {
 	is.Empty(stderr)
 	for _, want := range []string{
 		"Children:",
-		"ID: la-child-a, Status: open, Type: bug, Title: Open task",
 		"ID: la-child-b, Status: in_progress, Type: epic, Title: Nested epic",
 		"ID: la-child-z, Status: closed, Type: task, Title: Closed task",
 		"Orpheus metadata:",
@@ -445,8 +444,8 @@ func TestTaskShowEpicRendersSortedDirectChildrenFromResolvedRepo(t *testing.T) {
 	} {
 		is.Contains(stdout, want)
 	}
+	is.NotContains(stdout, "la-child-a")
 	is.NotContains(stdout, "la-grandchild")
-	is.Less(strings.Index(stdout, "la-child-a"), strings.Index(stdout, "la-child-b"))
 	is.Less(strings.Index(stdout, "la-child-b"), strings.Index(stdout, "la-child-z"))
 
 	log := readFileString(t, logPath)
@@ -8397,7 +8396,7 @@ case "$*" in
   "--json --readonly --sandbox show --id op-epic")
     printf '%%s\n' %s
     ;;
-  "--json --readonly --sandbox list --all --limit 0")
+  "--json --readonly --sandbox list --all --limit 0 --type task")
     printf 'backend unavailable\n' >&2
     exit 17
     ;;

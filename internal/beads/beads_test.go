@@ -1,8 +1,10 @@
 package beads_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -338,6 +340,195 @@ func TestTaskBackendListParsesVisibleTasksAndMetadata(t *testing.T) {
 	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
+func TestManagedTaskBackendRepairsBehindSchemaAndRetriesRead(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
+			result:   beads.Result{Stderr: "schema version mismatch: database is at v12, binary expects v14, and the read-only open cannot migrate it"},
+			err:      errors.New("exit status 1"),
+		},
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--sandbox", "migrate", "schema"},
+			result:   beads.Result{Stdout: `{"migrations_applied":2}`},
+		},
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
+			result:   beads.Result{Stdout: `[]`},
+		},
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "epic"},
+			result:   beads.Result{Stdout: `[]`},
+		},
+	}}
+
+	backend, err := beads.NewTaskBackendForSourceWithRunner(task.RepositorySource{
+		BackendDir:       dir,
+		MaintenanceOwned: true,
+	}, runner, nil)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+	got, err := backend.List(context.Background())
+	if err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("tasks = %#v, want no tasks", got)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
+func TestManagedTaskBackendLogsSchemaRecoveryWithoutCommandOutput(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
+			result:   beads.Result{Stderr: "schema version mismatch: database is at v12, binary expects v14, and the read-only open cannot migrate it"},
+			err:      errors.New("exit status 1"),
+		},
+		{wantDir: dir, wantArgs: []string{"--json", "--sandbox", "migrate", "schema"}},
+		{wantDir: dir, wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"}, result: beads.Result{Stdout: `[]`}},
+		{wantDir: dir, wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "epic"}, result: beads.Result{Stdout: `[]`}},
+	}}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	backend, err := beads.NewTaskBackendForSourceWithRunner(task.RepositorySource{BackendDir: dir, MaintenanceOwned: true}, runner, logger)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+	if _, err := backend.List(context.Background()); err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+	output := logs.String()
+	for _, want := range []string{`"operation":"schema_recovery"`, `"recovery_event":"detected"`, `"recovery_event":"retrying"`, `"recovery_event":"recovered"`} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("diagnostics = %s, want %s", output, want)
+		}
+	}
+	if strings.Contains(output, "schema version mismatch") {
+		t.Fatalf("diagnostics include command output: %s", output)
+	}
+}
+
+func TestLocalTaskBackendDoesNotRepairBehindSchema(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{{
+		wantDir:  dir,
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
+		result:   beads.Result{Stderr: "schema version mismatch: database is at v12, binary expects v14, and the read-only open cannot migrate it"},
+		err:      errors.New("exit status 1"),
+	}}}
+	backend, err := beads.NewTaskBackendForSourceWithRunner(task.RepositorySource{BackendDir: dir}, runner, nil)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+	_, err = backend.List(context.Background())
+	if err == nil {
+		t.Fatal("list succeeded, want schema mismatch")
+	}
+	if strings.Contains(err.Error(), "schema recovery") {
+		t.Fatalf("error = %v, local source must not attempt recovery", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
+func TestManagedTaskBackendDoesNotRepairForwardOrUnrelatedFailures(t *testing.T) {
+	t.Parallel()
+
+	for name, message := range map[string]string{
+		"forward schema": "schema version mismatch: database is at v14, binary knows up to v12 (2 migrations ahead)",
+		"unrelated":      "database temporarily unavailable",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			runner := &fakeRunner{calls: []fakeCall{{
+				wantDir:  dir,
+				wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
+				result:   beads.Result{Stderr: message},
+				err:      errors.New("exit status 1"),
+			}}}
+			backend, err := beads.NewTaskBackendForSourceWithRunner(task.RepositorySource{BackendDir: dir, MaintenanceOwned: true}, runner, nil)
+			if err != nil {
+				t.Fatalf("create backend: %v", err)
+			}
+			_, err = backend.List(context.Background())
+			if err == nil {
+				t.Fatal("list succeeded, want failure")
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runner has %d unused calls", len(runner.calls))
+			}
+		})
+	}
+}
+
+func TestManagedTaskBackendReportsMigrationAndRetryFailures(t *testing.T) {
+	t.Parallel()
+
+	for name, calls := range map[string][]fakeCall{
+		"migration": {
+			{
+				wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
+				result:   beads.Result{Stderr: "schema version mismatch: database is at v12, binary expects v14, and the read-only open cannot migrate it"},
+				err:      errors.New("exit status 1"),
+			},
+			{
+				wantArgs: []string{"--json", "--sandbox", "migrate", "schema"},
+				result:   beads.Result{Stderr: "remote-backed database requires designated migrator"},
+				err:      errors.New("exit status 1"),
+			},
+		},
+		"retry": {
+			{
+				wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
+				result:   beads.Result{Stderr: "schema version mismatch: database is at v12, binary expects v14, and the read-only open cannot migrate it"},
+				err:      errors.New("exit status 1"),
+			},
+			{wantArgs: []string{"--json", "--sandbox", "migrate", "schema"}},
+			{
+				wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
+				result:   beads.Result{Stderr: "still unavailable"},
+				err:      errors.New("exit status 1"),
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			for index := range calls {
+				calls[index].wantDir = dir
+			}
+			runner := &fakeRunner{calls: calls}
+			backend, err := beads.NewTaskBackendForSourceWithRunner(task.RepositorySource{BackendDir: dir, MaintenanceOwned: true}, runner, nil)
+			if err != nil {
+				t.Fatalf("create backend: %v", err)
+			}
+			_, err = backend.List(context.Background())
+			if err == nil {
+				t.Fatal("list succeeded, want recovery failure")
+			}
+			if !strings.Contains(err.Error(), "original") {
+				t.Fatalf("error = %v, want original operation context", err)
+			}
+			if name == "migration" && !strings.Contains(err.Error(), "remote-backed database") {
+				t.Fatalf("error = %v, want migration failure context", err)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runner has %d unused calls", len(runner.calls))
+			}
+		})
 	}
 }
 
