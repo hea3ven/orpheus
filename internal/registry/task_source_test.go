@@ -34,6 +34,9 @@ func TestTaskRepositorySourcesProjectsNormalizedRegistryValues(t *testing.T) {
 	if source.BackendDir != filepath.Join(paths.DataRoot, "repos", "alpha", "beads") {
 		t.Fatalf("backend dir = %q", source.BackendDir)
 	}
+	if !source.MaintenanceOwned {
+		t.Fatal("managed source did not retain maintenance ownership")
+	}
 	source.Repository.ReviewPipelineAliases["local"] = "changed"
 	if source.Repository.IncludePRReviewProcess != nil {
 		*source.Repository.IncludePRReviewProcess = false

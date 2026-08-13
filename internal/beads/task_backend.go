@@ -32,8 +32,10 @@ var (
 // only those types and rejects other Beads items at the source boundary. Use
 // NewTaskBackend or NewTaskBackendWithRunner to construct a valid value.
 type TaskBackend struct {
-	dir    string
-	runner Runner
+	dir              string
+	runner           Runner
+	maintenanceOwned bool
+	logger           *slog.Logger
 }
 
 type diagnosticRunner interface {
@@ -48,11 +50,23 @@ func NewTaskBackend(dir string) (TaskBackend, error) {
 
 // NewTaskBackendWithLogger returns a Beads-backed task reader with diagnostics.
 func NewTaskBackendWithLogger(dir string, logger *slog.Logger) (TaskBackend, error) {
-	return NewTaskBackendWithRunner(dir, CommandRunner{Logger: logger})
+	return newTaskBackendWithRunner(dir, false, CommandRunner{Logger: logger}, logger)
 }
 
 // NewTaskBackendWithRunner returns a Beads-backed task reader using runner.
+// It does not grant maintenance ownership; callers constructing a backend for
+// a registered source should use NewTaskBackendForSourceWithRunner.
 func NewTaskBackendWithRunner(dir string, runner Runner) (TaskBackend, error) {
+	return newTaskBackendWithRunner(dir, false, runner, nil)
+}
+
+// NewTaskBackendForSourceWithRunner returns a Beads backend for source.
+// Maintenance ownership comes only from source, never from its backend path.
+func NewTaskBackendForSourceWithRunner(source task.RepositorySource, runner Runner, logger *slog.Logger) (TaskBackend, error) {
+	return newTaskBackendWithRunner(source.BackendDir, source.MaintenanceOwned, runner, logger)
+}
+
+func newTaskBackendWithRunner(dir string, maintenanceOwned bool, runner Runner, logger *slog.Logger) (TaskBackend, error) {
 	if runner == nil {
 		return TaskBackend{}, errors.New("create Beads task backend: runner is required")
 	}
@@ -62,7 +76,12 @@ func NewTaskBackendWithRunner(dir string, runner Runner) (TaskBackend, error) {
 		return TaskBackend{}, err
 	}
 
-	return TaskBackend{dir: normalizedDir, runner: runner}, nil
+	return TaskBackend{
+		dir:              normalizedDir,
+		runner:           runner,
+		maintenanceOwned: maintenanceOwned,
+		logger:           logger,
+	}, nil
 }
 
 // Get fetches one Beads item by id.
@@ -680,13 +699,84 @@ func (b TaskBackend) runBD(ctx context.Context, operation string, globalArgs []s
 		runner = diagnostics.WithDiagnosticAttrs(attrs...)
 	}
 	result, err := runner.Run(b.dir, allArgs...)
+	if err == nil {
+		return result, nil
+	}
+
+	originalErr := b.commandError(operation, allArgs, result, err)
+	if !b.maintenanceOwned || !isReadOnlyCommand(globalArgs) || !isBehindSchemaReadOnlyError(result) {
+		return result, originalErr
+	}
+
+	b.logSchemaRecovery(ctx, "detected", operation)
+	_, migrationErr := b.runSchemaMigration(ctx)
+	if migrationErr != nil {
+		b.logSchemaRecovery(ctx, "migration_failed", operation)
+		return result, fmt.Errorf(
+			"%s Beads tasks in %q: schema recovery failed after original read-only operation: %w; run bd migrate schema: %w",
+			operation, b.dir, originalErr, migrationErr,
+		)
+	}
+
+	b.logSchemaRecovery(ctx, "retrying", operation)
+	result, err = runner.Run(b.dir, allArgs...)
 	if err != nil {
-		if errors.Is(err, exec.ErrNotFound) {
-			return result, fmt.Errorf("%s Beads tasks in %q: bd executable not found; install Beads or ensure bd is on PATH: %w", operation, b.dir, err)
-		}
-		return result, fmt.Errorf("%s Beads tasks in %q: run bd %s: %w%s", operation, b.dir, strings.Join(allArgs, " "), err, formattedOutput(result))
+		b.logSchemaRecovery(ctx, "retry_failed", operation)
+		return result, fmt.Errorf(
+			"%s Beads tasks in %q: schema recovery completed but retry of original operation failed: %w",
+			operation, b.dir, b.commandError(operation, allArgs, result, err),
+		)
+	}
+	b.logSchemaRecovery(ctx, "recovered", operation)
+	return result, nil
+}
+
+func (b TaskBackend) runSchemaMigration(ctx context.Context) (Result, error) {
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
+	result, err := b.runner.Run(b.dir, "--json", "--sandbox", "migrate", "schema")
+	if err != nil {
+		return result, b.commandError("migrate schema", []string{"--json", "--sandbox", "migrate", "schema"}, result, err)
 	}
 	return result, nil
+}
+
+func (b TaskBackend) commandError(operation string, args []string, result Result, err error) error {
+	if errors.Is(err, exec.ErrNotFound) {
+		return fmt.Errorf("%s Beads tasks in %q: bd executable not found; install Beads or ensure bd is on PATH: %w", operation, b.dir, err)
+	}
+	return fmt.Errorf("%s Beads tasks in %q: run bd %s: %w%s", operation, b.dir, strings.Join(args, " "), err, formattedOutput(result))
+}
+
+func isReadOnlyCommand(globalArgs []string) bool {
+	for _, arg := range globalArgs {
+		if arg == "--readonly" {
+			return true
+		}
+	}
+	return false
+}
+
+func isBehindSchemaReadOnlyError(result Result) bool {
+	message := strings.ToLower(strings.Join([]string{result.Stdout, result.Stderr}, "\n"))
+	return strings.Contains(message, "schema version mismatch:") &&
+		strings.Contains(message, "database is at v") &&
+		strings.Contains(message, "binary expects v") &&
+		strings.Contains(message, "read-only open cannot migrate")
+}
+
+func (b TaskBackend) logSchemaRecovery(ctx context.Context, event string, operation string) {
+	if b.logger == nil || !b.logger.Enabled(ctx, slog.LevelDebug) {
+		return
+	}
+	b.logger.DebugContext(ctx, "Beads task schema recovery",
+		slog.String("component", "beads"),
+		slog.String("operation", "schema_recovery"),
+		slog.String("recovery_event", event),
+		slog.String("original_operation", operation),
+		slog.String("cwd", b.dir),
+	)
 }
 
 type bdTask struct {

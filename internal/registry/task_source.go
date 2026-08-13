@@ -49,7 +49,8 @@ func (s Store) TaskRepositorySource(repo Repo) (task.RepositorySource, error) {
 			ReviewPipeline:         normalizedRepo.ReviewPipeline,
 			ReviewPipelineAliases:  cloneStringMap(normalizedRepo.ReviewPipelineAliases),
 		},
-		BackendDir: beadsDir,
+		BackendDir:       beadsDir,
+		MaintenanceOwned: normalizedRepo.BeadsMode == BeadsModeManaged,
 	}, nil
 }
 

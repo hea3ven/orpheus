@@ -17,6 +17,11 @@ const maxConcurrentSnapshotWorkspaces = 4
 type RepositorySource struct {
 	Repository Repository
 	BackendDir string
+
+	// MaintenanceOwned authorizes Orpheus to perform narrowly scoped backend
+	// maintenance for this source. It is projected from the registry rather than
+	// inferred from BackendDir, because filesystem location is not ownership.
+	MaintenanceOwned bool
 }
 
 // BackendFactory creates a read backend for one repository source.

@@ -291,3 +291,63 @@ func TestTaskBackendCreateRecordsBlockingDependencies(t *testing.T) {
 		t.Fatalf("created dependencies = %#v, want %#v", got.Relations.DependencyIDs, []string{blocker.ID})
 	}
 }
+
+func TestIntegrationManagedTaskBackendRepairsRealBeadsSchemaDrift(t *testing.T) {
+	binary, err := exec.LookPath("bd")
+	if err != nil {
+		t.Skip("bd executable is required for Beads integration test")
+	}
+	dolt, err := exec.LookPath("dolt")
+	if err != nil {
+		t.Skip("dolt executable is required to prepare stale Beads schema")
+	}
+
+	dir := t.TempDir()
+	t.Setenv("BEADS_DIR", "")
+	initCommand := exec.Command(binary, "init", "--prefix", "it", "--non-interactive", "--skip-agents", "--skip-hooks", "--quiet")
+	initCommand.Dir = dir
+	if output, err := initCommand.CombinedOutput(); err != nil {
+		t.Fatalf("initialize Beads workspace: %v\n%s", err, output)
+	}
+
+	writer, err := beads.NewTaskBackendWithRunner(dir, beads.CommandRunner{Binary: binary})
+	if err != nil {
+		t.Fatalf("create task writer: %v", err)
+	}
+	created, err := writer.Create(context.Background(), task.CreateOptions{
+		Title: "Retained across schema repair", Description: "Schema migration must not alter task content.",
+		AcceptanceCriteria: "Task remains readable.", IssueType: task.IssueTypeTask,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	databaseDir := dir + "/.beads/embeddeddolt/it"
+	for _, args := range [][]string{
+		{"sql", "-q", "DELETE FROM schema_migrations WHERE version = (SELECT MAX(version) FROM schema_migrations)"},
+		{"add", "schema_migrations"},
+		{"commit", "-m", "test: stale schema"},
+	} {
+		command := exec.Command(dolt, args...)
+		command.Dir = databaseDir
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("prepare stale schema with dolt %v: %v\n%s", args, err, output)
+		}
+	}
+
+	backend, err := beads.NewTaskBackendForSourceWithRunner(task.RepositorySource{
+		Repository:       task.Repository{ID: "integration", TaskIDPrefix: "it", Path: dir},
+		BackendDir:       dir,
+		MaintenanceOwned: true,
+	}, beads.CommandRunner{Binary: binary}, nil)
+	if err != nil {
+		t.Fatalf("create managed backend: %v", err)
+	}
+	tasks, err := backend.List(context.Background())
+	if err != nil {
+		t.Fatalf("list repaired tasks: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != created.ID || tasks[0].Title != created.Title {
+		t.Fatalf("tasks after schema repair = %#v, want retained task %q", tasks, created.ID)
+	}
+}
