@@ -481,6 +481,13 @@ func classifyLatestReview(
 
 	switch latestReview.Status {
 	case taskstate.ReviewStatusRunning:
+		if taskstate.HasUnkeptAutomatedBlockingFindingsInState(taskstate.TaskState{Runs: runs}, *latestReview) {
+			return newPolicyResult(
+				readinessReview,
+				"review blocker decision required; run task run",
+				Detail{Kind: DetailReviewDecisionRequired},
+			), true
+		}
 		return newPolicyResult(
 			readinessReview,
 			"review running",

@@ -568,16 +568,16 @@ func (s DispatchService) resolveReviewFollowUpPlan(
 	case taskstate.ReviewStatusBlocked:
 		return blockedReviewFollowUpPlan(taskID, state, latestReview, lockedTarget, hasLockedTarget)
 	case taskstate.ReviewStatusAborted:
-		return nil, fmt.Errorf("latest review attempt %d for task %s was aborted; rerun `orpheus task review %s`", latestReview.Attempt, taskID, taskID)
+		return nil, fmt.Errorf("latest review attempt %d for task %s was aborted; rerun `orpheus task run %s`", latestReview.Attempt, taskID, taskID)
 	case taskstate.ReviewStatusFailed:
-		return nil, fmt.Errorf("latest review attempt %d for task %s failed operationally; rerun `orpheus task review %s`", latestReview.Attempt, taskID, taskID)
+		return nil, fmt.Errorf("latest review attempt %d for task %s failed operationally; rerun `orpheus task run %s`", latestReview.Attempt, taskID, taskID)
 	case taskstate.ReviewStatusPassed:
 		return nil, fmt.Errorf("latest review attempt %d for task %s passed; run `orpheus task done %s`", latestReview.Attempt, taskID, taskID)
 	case taskstate.ReviewStatusRunning:
-		return nil, fmt.Errorf("latest review attempt %d for task %s is still running; wait for it to finish or rerun `orpheus task review %s` after repairing state", latestReview.Attempt, taskID, taskID)
+		return nil, fmt.Errorf("latest review attempt %d for task %s is still running; wait for it to finish or rerun `orpheus task run %s` after repairing state", latestReview.Attempt, taskID, taskID)
 	case taskstate.ReviewStatusWaitingForManual:
 		return nil, fmt.Errorf(
-			"latest review attempt %d for task %s is waiting for manual step %q; run `orpheus task review %s` to resume it",
+			"latest review attempt %d for task %s is waiting for manual step %q; run `orpheus task run %s` to resume it",
 			latestReview.Attempt,
 			taskID,
 			latestReview.Step,
@@ -604,9 +604,8 @@ func blockedReviewFollowUpPlan(
 	}
 	if len(indexes) == 0 {
 		return nil, fmt.Errorf(
-			"latest review attempt %d for task %s has no untargeted blocking findings; run `orpheus task review %s` before another `orpheus task run %s`",
+			"latest review attempt %d for task %s has no untargeted blocking findings; rerun `orpheus task run %s` after repairing state",
 			latestReview.Attempt,
-			taskID,
 			taskID,
 			taskID,
 		)
@@ -624,9 +623,8 @@ func blockedReviewFollowUpPlan(
 
 func interruptedAutomatedBlockerDecisionError(latestReview taskstate.ReviewAttempt, taskID string) error {
 	return fmt.Errorf(
-		"latest review attempt %d for task %s has interrupted automated blocker decisions; run `orpheus task review %s` to start a fresh review before another `orpheus task run %s`",
+		"latest review attempt %d for task %s has interrupted automated blocker decisions; run `orpheus task run %s` to recover the persisted findings and record explicit dispositions",
 		latestReview.Attempt,
-		taskID,
 		taskID,
 		taskID,
 	)
@@ -634,9 +632,8 @@ func interruptedAutomatedBlockerDecisionError(latestReview taskstate.ReviewAttem
 
 func unkeptAutomatedBlockerDecisionError(latestReview taskstate.ReviewAttempt, taskID string) error {
 	return fmt.Errorf(
-		"latest review attempt %d for task %s has automated blockers without an explicit keep decision; run `orpheus task review %s` to start a fresh review before another `orpheus task run %s`",
+		"latest review attempt %d for task %s has automated blockers without an explicit keep decision; run `orpheus task run %s` to recover the persisted findings and record explicit dispositions",
 		latestReview.Attempt,
-		taskID,
 		taskID,
 		taskID,
 	)
