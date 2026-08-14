@@ -69,6 +69,81 @@ func TestRunPipelinePairedReviewerAdmitsAlternateFindingAfterPrimary(t *testing.
 	}
 }
 
+//nolint:funlen // The end-to-end restart regression needs both executions and state assertions together.
+func TestRunPipelineRestartedPairedReviewDiscardsPriorExecution(t *testing.T) {
+	t.Setenv("ORPHEUS_ALTERNATE_REVIEWER_PROFILE", "alternate")
+	h := newAgentReviewPipelineHarness(t)
+	primaryRuns := 0
+	alternateRuns := 0
+	comparisonPrompts := 0
+
+	outcome, err := review.RunPipeline(review.PipelineRunOptions{
+		Context: context.Background(), Store: h.store, RepoID: "alpha", TaskID: "op-1", Branch: "main", Workdir: h.workdir,
+		Attempt: h.attempt, Pipeline: agentReviewPipeline(), Stdout: io.Discard, Stderr: io.Discard, AgentConfig: pairedReviewAgentConfig(),
+		AgentLauncher: fakeReviewLauncherFunc(func(_ context.Context, command agentexec.Command, _ agentexec.LaunchOptions) error {
+			switch command.Name {
+			case "reviewer":
+				primaryRuns++
+				if primaryRuns == 1 {
+					_, err := h.store.RecordReviewFinding("alpha", "op-1", h.attempt.Attempt, taskstate.ReviewFinding{Type: taskstate.FindingTypeBlocking, Title: "restarted blocker", Description: "restart after fixing the environment", Step: "ai-review", Reviewer: "primary"})
+					return err
+				}
+				return nil
+			case "alternate":
+				alternateRuns++
+				title := "discarded alternate finding"
+				if alternateRuns == 2 {
+					title = "new alternate finding"
+				}
+				_, err := h.store.RecordAlternateReviewFinding("alpha", "op-1", h.attempt.Attempt, "ai-review", taskstate.ReviewFinding{Type: taskstate.FindingTypeAdvisory, Title: title, Description: "paired result", Step: "ai-review"})
+				return err
+			default:
+				return fmt.Errorf("unexpected reviewer %q", command.Name)
+			}
+		}),
+		PromptAutomatedBlockers: func(blockers review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
+			if len(blockers.Blockers) != 1 || blockers.Blockers[0].Finding.Title != "restarted blocker" {
+				return nil, fmt.Errorf("blockers = %#v", blockers.Blockers)
+			}
+			return []review.AutomatedBlockerDecision{{FindingIndex: blockers.Blockers[0].Index, Action: review.AutomatedBlockerActionRestart}}, nil
+		},
+		PromptAlternateFindings: func(comparison review.AlternateReviewComparison) ([]review.AlternateFindingDecision, error) {
+			comparisonPrompts++
+			if len(comparison.Alternate) != 1 {
+				t.Fatalf("comparison = %#v, want one alternate finding", comparison)
+			}
+			if comparison.Alternate[0].Finding.Title == "discarded alternate finding" {
+				return []review.AlternateFindingDecision{{FindingIndex: comparison.Alternate[0].Index, Classification: taskstate.AlternateFindingExcluded}}, nil
+			}
+			if len(comparison.Primary) != 0 || comparison.Alternate[0].Finding.Title != "new alternate finding" {
+				t.Fatalf("comparison = %#v, want only the rerun alternate finding", comparison)
+			}
+			return []review.AlternateFindingDecision{{FindingIndex: comparison.Alternate[0].Index, Classification: taskstate.AlternateFindingAdmitted}}, nil
+		},
+	})
+	if err != nil || outcome.Status != taskstate.ReviewStatusPassed {
+		t.Fatalf("outcome=%#v err=%v", outcome, err)
+	}
+	if primaryRuns != 2 || alternateRuns != 2 || comparisonPrompts != 2 {
+		t.Fatalf("runs primary=%d alternate=%d prompts=%d, want 2/2/2", primaryRuns, alternateRuns, comparisonPrompts)
+	}
+
+	state, err := h.store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, _ := taskstate.LatestReview(state)
+	if len(latest.Steps) != 1 || latest.Steps[0].Comparison == nil {
+		t.Fatalf("steps = %#v, want only the rerun paired execution", latest.Steps)
+	}
+	if len(latest.Findings) != 1 || latest.Findings[0].Reviewer != "alternate" {
+		t.Fatalf("findings = %#v, want only the rerun alternate finding", latest.Findings)
+	}
+	if len(latest.Steps[0].Comparison.AlternateFindings) != 1 || latest.Steps[0].Comparison.AlternateFindings[0].Finding.Title != "new alternate finding" {
+		t.Fatalf("comparison = %#v, want only the rerun alternate result", latest.Steps[0].Comparison)
+	}
+}
+
 func TestRunPipelinePairedReviewerKeepsDuplicateAndExcludedFindingsNonAuthoritative(t *testing.T) {
 	t.Setenv("ORPHEUS_ALTERNATE_REVIEWER_PROFILE", "alternate")
 	h := newAgentReviewPipelineHarness(t)

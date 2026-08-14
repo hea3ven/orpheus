@@ -30,6 +30,8 @@ type PipelineStore interface {
 	RecordReviewStepChildPID(repoID, taskID string, attempt int, stepName string, pid int) (taskstate.ReviewAttempt, error)
 	MarkReviewAutomatedBlockerDecisionInterrupted(repoID, taskID string, attempt int) (taskstate.ReviewAttempt, error)
 	MarkReviewAutomatedBlockerDecisionKept(repoID, taskID string, attempt int) (taskstate.ReviewAttempt, error)
+	PauseReviewForAutomatedBlockerDecision(repoID, taskID string, attempt int, step string) (taskstate.ReviewAttempt, error)
+	RestartReviewAutomatedStep(repoID, taskID string, attempt int, stepName string) (taskstate.ReviewAttempt, error)
 	DowngradeReviewBlockingFinding(repoID, taskID string, attempt int, findingIndex int, reason string) (taskstate.ReviewAttempt, error)
 	WaiveReviewBlockingFinding(repoID, taskID string, attempt int, findingIndex int, reason string) (taskstate.ReviewAttempt, error)
 	RecordReviewStep(repoID, taskID string, attempt int, opts taskstate.RecordReviewStepOptions) (taskstate.ReviewAttempt, error)
@@ -70,13 +72,14 @@ type PipelineRunOptions struct {
 	UsageCaptureEnv       map[string]string
 	RecordPrimaryChildPID func(stepName string, pid int) error
 
-	ResumeFromStep          bool
-	PauseBeforeManual       bool
-	RenderManualStep        func(step Step) error
-	ConfirmManualCommand    func(step Step) (bool, error)
-	PromptManualStep        func(step ManualStep) (ManualResult, error)
-	PromptAutomatedBlockers func(review AutomatedBlockerReview) ([]AutomatedBlockerDecision, error)
-	PromptAlternateFindings func(AlternateReviewComparison) ([]AlternateFindingDecision, error)
+	ResumeFromStep                 bool
+	ResumeAutomatedBlockerDecision bool
+	PauseBeforeManual              bool
+	RenderManualStep               func(step Step) error
+	ConfirmManualCommand           func(step Step) (bool, error)
+	PromptManualStep               func(step ManualStep) (ManualResult, error)
+	PromptAutomatedBlockers        func(review AutomatedBlockerReview) ([]AutomatedBlockerDecision, error)
+	PromptAlternateFindings        func(AlternateReviewComparison) ([]AlternateFindingDecision, error)
 }
 
 // PipelineOutcome records the terminal status from a pipeline execution.
@@ -103,9 +106,11 @@ type AutomatedBlockerReview struct {
 	Blockers []AutomatedBlocker
 }
 
-// AutomatedBlocker identifies one persisted review finding by index.
+// AutomatedBlocker identifies one persisted review finding and its
+// authoritative display number.
 type AutomatedBlocker struct {
 	Index   int
+	Number  int
 	Finding taskstate.ReviewFinding
 }
 
@@ -116,6 +121,8 @@ const (
 	AutomatedBlockerActionKeep      AutomatedBlockerAction = "keep"
 	AutomatedBlockerActionDowngrade AutomatedBlockerAction = "downgrade"
 	AutomatedBlockerActionWaive     AutomatedBlockerAction = "waive"
+	AutomatedBlockerActionRestart   AutomatedBlockerAction = "restart"
+	AutomatedBlockerActionPause     AutomatedBlockerAction = "pause"
 )
 
 // AutomatedBlockerDecision applies one operator decision to a persisted finding.
@@ -163,8 +170,9 @@ type HunkNote struct {
 }
 
 type stepOutcome struct {
-	status taskstate.ReviewStatus
-	stop   bool
+	status  taskstate.ReviewStatus
+	stop    bool
+	restart bool
 }
 
 var hunkNotePollInterval = 250 * time.Millisecond
@@ -180,7 +188,15 @@ var ErrManualInputUnavailable = errors.New("manual review input unavailable")
 var ErrAutomatedBlockerInputUnavailable = errors.New("automated blocker decision input unavailable")
 
 // RunPipeline executes a configured review pipeline.
+//
+//nolint:funlen // Pipeline resumption and restart transitions must remain in execution order.
 func RunPipeline(opts PipelineRunOptions) (PipelineOutcome, error) {
+	if opts.Stdout == nil {
+		opts.Stdout = io.Discard
+	}
+	if opts.Stderr == nil {
+		opts.Stderr = io.Discard
+	}
 	if opts.Context == nil {
 		opts.Context = context.Background()
 	}
@@ -213,23 +229,37 @@ func RunPipeline(opts PipelineRunOptions) (PipelineOutcome, error) {
 			return PipelineOutcome{}, err
 		}
 	}
-	for _, step := range opts.Pipeline.Steps[startIndex:] {
-		outcome, err := runReadOnlyStep(opts, step, func() (stepOutcome, error) {
-			if step.Kind != KindManual {
-				if err := writeStepHeader(opts.Stderr, step); err != nil {
-					return stepOutcome{}, err
+	for stepIndex := startIndex; stepIndex < len(opts.Pipeline.Steps); {
+		step := opts.Pipeline.Steps[stepIndex]
+		var outcome stepOutcome
+		var err error
+		if opts.ResumeAutomatedBlockerDecision && stepIndex == startIndex {
+			// A paused decision resumes its existing findings before the step is rerun.
+			// Only an explicit restart executes the step again.
+			opts.ResumeAutomatedBlockerDecision = false
+			outcome, err = resumeAutomatedBlockerDecision(opts, step)
+		} else {
+			outcome, err = runReadOnlyStep(opts, step, func() (stepOutcome, error) {
+				if step.Kind != KindManual {
+					if err := writeStepHeader(opts.Stderr, step); err != nil {
+						return stepOutcome{}, err
+					}
 				}
-			}
-			return runStep(opts, step)
-		})
+				return runStep(opts, step)
+			})
+		}
 		if err != nil {
 			finalErr = err
 			return PipelineOutcome{}, err
+		}
+		if outcome.restart {
+			continue
 		}
 		if outcome.stop {
 			finalOutcome = PipelineOutcome{Status: outcome.status}
 			return finalOutcome, nil
 		}
+		stepIndex++
 	}
 	finalOutcome = PipelineOutcome{Status: taskstate.ReviewStatusPassed}
 	return finalOutcome, nil
@@ -387,14 +417,15 @@ func runCheckStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome
 	}
 	output.finishExpanded()
 	findingIndex := len(reviewAttempt.Findings) - 1
-	blocked, err := reviewAutomatedBlockers(opts, step, []AutomatedBlocker{{
-		Index:   findingIndex,
-		Finding: reviewAttempt.Findings[findingIndex],
-	}})
+	blockers := automatedBlockersForStepSince(reviewAttempt, step.Name, findingIndex)
+	blockerOutcome, err := reviewAutomatedBlockers(opts, step, blockers)
 	if err != nil {
 		return stepOutcome{}, err
 	}
-	if !blocked {
+	if blockerOutcome.restart || blockerOutcome.pause {
+		return blockerOutcome.stepOutcome(), nil
+	}
+	if !blockerOutcome.blocked {
 		return stepOutcome{}, nil
 	}
 	_, writeErr := fmt.Fprintf(opts.Stderr, "Review blocked for %s by check %q.\n", opts.TaskID, step.Name)
@@ -1045,25 +1076,24 @@ func finishAgentReviewStep(
 		output.finishExpanded()
 		return stepOutcome{}, fmt.Errorf("task review %s: latest review attempt no longer matches attempt %d", opts.TaskID, opts.Attempt.Attempt)
 	}
-	blockers := make([]AutomatedBlocker, 0)
+	blockers := automatedBlockersForStepSince(latest, step.Name, initialFindingCount)
 	hasStepFinding := false
-	for index, finding := range latest.Findings {
-		if finding.Step != step.Name {
-			continue
+	for _, finding := range latest.Findings {
+		if finding.Step == step.Name {
+			hasStepFinding = true
+			break
 		}
-		hasStepFinding = true
-		if index < initialFindingCount || !taskstate.IsOpenBlockingReviewFinding(finding) {
-			continue
-		}
-		blockers = append(blockers, AutomatedBlocker{Index: index, Finding: finding})
 	}
 	if len(blockers) > 0 {
 		output.finishExpanded()
-		blocked, err := reviewAutomatedBlockers(opts, step, blockers)
+		blockerOutcome, err := reviewAutomatedBlockers(opts, step, blockers)
 		if err != nil {
 			return stepOutcome{}, err
 		}
-		if blocked {
+		if blockerOutcome.restart || blockerOutcome.pause {
+			return blockerOutcome.stepOutcome(), nil
+		}
+		if blockerOutcome.blocked {
 			_, writeErr := fmt.Fprintf(opts.Stderr, "Review blocked for %s by agent_review %q.\n", opts.TaskID, step.Name)
 			return stepOutcome{status: taskstate.ReviewStatusBlocked, stop: true}, writeErr
 		}
@@ -1089,16 +1119,84 @@ func currentReviewFindingCount(opts PipelineRunOptions) (int, error) {
 	return len(latest.Findings), nil
 }
 
+type automatedBlockerOutcome struct {
+	blocked bool
+	restart bool
+	pause   bool
+}
+
+func (o automatedBlockerOutcome) stepOutcome() stepOutcome {
+	if o.restart {
+		return stepOutcome{restart: true}
+	}
+	if o.pause {
+		return stepOutcome{status: taskstate.ReviewStatusWaitingForAutomatedDecision, stop: true}
+	}
+	return stepOutcome{}
+}
+
+func resumeAutomatedBlockerDecision(opts PipelineRunOptions, step Step) (stepOutcome, error) {
+	state, err := opts.Store.Load(opts.RepoID, opts.TaskID)
+	if err != nil {
+		return stepOutcome{}, fmt.Errorf("task review %s: load paused automated blockers: %w", opts.TaskID, err)
+	}
+	latest, ok := taskstate.LatestReview(state)
+	if !ok || latest.Attempt != opts.Attempt.Attempt {
+		return stepOutcome{}, fmt.Errorf("task review %s: latest review attempt no longer matches attempt %d", opts.TaskID, opts.Attempt.Attempt)
+	}
+	blockers := automatedBlockersForStep(latest, step.Name)
+	if len(blockers) == 0 {
+		return stepOutcome{}, fmt.Errorf("task review %s: paused automated blocker decision for step %q has no active blockers", opts.TaskID, step.Name)
+	}
+	outcome, err := reviewAutomatedBlockers(opts, step, blockers)
+	if err != nil {
+		return stepOutcome{}, err
+	}
+	if outcome.restart || outcome.pause {
+		return outcome.stepOutcome(), nil
+	}
+	if outcome.blocked {
+		return stepOutcome{status: taskstate.ReviewStatusBlocked, stop: true}, nil
+	}
+	return stepOutcome{}, nil
+}
+
+func automatedBlockersForStep(reviewAttempt taskstate.ReviewAttempt, stepName string) []AutomatedBlocker {
+	return automatedBlockersForStepSince(reviewAttempt, stepName, 0)
+}
+
+func automatedBlockersForStepSince(reviewAttempt taskstate.ReviewAttempt, stepName string, firstIndex int) []AutomatedBlocker {
+	blockers := make([]AutomatedBlocker, 0)
+	authoritativeNumber := 0
+	for index, finding := range reviewAttempt.Findings {
+		if taskstate.InterruptedPrimaryReviewFinding(reviewAttempt, finding) {
+			continue
+		}
+		authoritativeNumber++
+		if index < firstIndex || finding.Step != stepName || !taskstate.IsOpenBlockingReviewFinding(finding) {
+			continue
+		}
+		blockers = append(blockers, AutomatedBlocker{
+			Index:   index,
+			Number:  authoritativeNumber,
+			Finding: finding,
+		})
+	}
+	return blockers
+}
+
 func reviewAutomatedBlockers(
 	opts PipelineRunOptions,
 	step Step,
 	blockers []AutomatedBlocker,
-) (bool, error) {
+) (automatedBlockerOutcome, error) {
 	if len(blockers) == 0 {
-		return currentReviewHasOpenBlockers(opts)
+		blocked, err := currentReviewHasOpenBlockers(opts)
+		return automatedBlockerOutcome{blocked: blocked}, err
 	}
 	if opts.PromptAutomatedBlockers == nil {
-		return interruptAutomatedBlockerDecision(opts)
+		blocked, err := interruptAutomatedBlockerDecision(opts)
+		return automatedBlockerOutcome{blocked: blocked}, err
 	}
 	decisions := keepAutomatedBlockerDecisions(blockers)
 	prompted, err := opts.PromptAutomatedBlockers(AutomatedBlockerReview{
@@ -1107,15 +1205,50 @@ func reviewAutomatedBlockers(
 	})
 	if err != nil {
 		if errors.Is(err, ErrAutomatedBlockerInputUnavailable) {
-			return interruptAutomatedBlockerDecision(opts)
+			blocked, interruptErr := interruptAutomatedBlockerDecision(opts)
+			return automatedBlockerOutcome{blocked: blocked}, interruptErr
 		}
-		return false, fmt.Errorf("task review %s: review automated blockers: %w", opts.TaskID, err)
+		return automatedBlockerOutcome{}, fmt.Errorf("task review %s: review automated blockers: %w", opts.TaskID, err)
+	}
+	if action, ok, err := automatedBlockerControlAction(prompted); err != nil {
+		return automatedBlockerOutcome{}, fmt.Errorf("task review %s: review automated blockers: %w", opts.TaskID, err)
+	} else if ok {
+		switch action {
+		case AutomatedBlockerActionRestart:
+			if _, err := opts.Store.RestartReviewAutomatedStep(opts.RepoID, opts.TaskID, opts.Attempt.Attempt, step.Name); err != nil {
+				return automatedBlockerOutcome{}, fmt.Errorf("task review %s: restart automated step %q: %w", opts.TaskID, step.Name, err)
+			}
+			return automatedBlockerOutcome{restart: true}, nil
+		case AutomatedBlockerActionPause:
+			if _, err := opts.Store.PauseReviewForAutomatedBlockerDecision(opts.RepoID, opts.TaskID, opts.Attempt.Attempt, step.Name); err != nil {
+				return automatedBlockerOutcome{}, fmt.Errorf("task review %s: pause automated blocker decision for step %q: %w", opts.TaskID, step.Name, err)
+			}
+			if _, err := fmt.Fprintf(opts.Stderr, "Automated blocker decisions for %s are paused; resume with `orpheus task review %s`.\n", opts.TaskID, opts.TaskID); err != nil {
+				return automatedBlockerOutcome{}, err
+			}
+			return automatedBlockerOutcome{pause: true}, nil
+		}
 	}
 	decisions = mergeAutomatedBlockerDecisions(decisions, prompted)
 	if err := applyAutomatedBlockerDecisions(opts, decisions); err != nil {
-		return false, err
+		return automatedBlockerOutcome{}, err
 	}
-	return currentReviewHasOpenBlockers(opts)
+	blocked, err := currentReviewHasOpenBlockers(opts)
+	return automatedBlockerOutcome{blocked: blocked}, err
+}
+
+func automatedBlockerControlAction(decisions []AutomatedBlockerDecision) (AutomatedBlockerAction, bool, error) {
+	var action AutomatedBlockerAction
+	for _, decision := range decisions {
+		if decision.Action != AutomatedBlockerActionRestart && decision.Action != AutomatedBlockerActionPause {
+			continue
+		}
+		if action != "" && action != decision.Action {
+			return "", false, errors.New("restart and pause cannot be selected together")
+		}
+		action = decision.Action
+	}
+	return action, action != "", nil
 }
 
 func interruptAutomatedBlockerDecision(opts PipelineRunOptions) (bool, error) {
