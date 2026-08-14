@@ -77,6 +77,7 @@ const (
 	DetailReviewManualStep         DetailKind = "review_manual_step"
 	DetailReviewDecisionLost       DetailKind = "review_decision_lost"
 	DetailReviewDecisionRequired   DetailKind = "review_decision_required"
+	DetailReviewDecisionPaused     DetailKind = "review_decision_paused"
 	DetailReviewFollowUpReady      DetailKind = "review_follow_up_ready"
 	DetailReviewBudgetSpent        DetailKind = "review_budget_spent"
 	DetailReviewFindings           DetailKind = "review_findings"
@@ -499,6 +500,13 @@ func classifyLatestReview(
 			readinessReview,
 			fmt.Sprintf("local review; run task run (waiting for manual step %s)", step),
 			Detail{Kind: DetailReviewManualStep, Step: step},
+		), true
+	case taskstate.ReviewStatusWaitingForAutomatedDecision:
+		step := valueOrUnknown(latestReview.Step)
+		return newPolicyResult(
+			readinessReview,
+			fmt.Sprintf("review blocker decision paused at %s; run task review", step),
+			Detail{Kind: DetailReviewDecisionPaused, Step: step},
 		), true
 	case taskstate.ReviewStatusBlocked:
 		return classifyBlockedReview(taskstate.TaskState{Runs: runs}, *latestReview), true

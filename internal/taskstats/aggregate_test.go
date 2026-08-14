@@ -615,6 +615,7 @@ func TestAggregateReviewViewSeparatesRepairCyclesAndOperationalOutcomes(t *testi
 				},
 				{Attempt: 3, Status: taskstate.ReviewStatusAborted, StartedAt: passedStartedAt, FinishedAt: &passedFinishedAt},
 				{Attempt: 4, Status: taskstate.ReviewStatusWaitingForManual, StartedAt: passedStartedAt},
+				{Attempt: 5, Status: taskstate.ReviewStatusWaitingForAutomatedDecision, StartedAt: passedStartedAt},
 			},
 		},
 	}}
@@ -634,7 +635,7 @@ func TestAggregateReviewViewSeparatesRepairCyclesAndOperationalOutcomes(t *testi
 	is.Equal(1, period.BlockingFindings)
 	is.Equal(1, period.OperationalFailures)
 	is.Equal(1, period.AbortedReviews)
-	is.Equal(1, period.PausedReviews)
+	is.Equal(2, period.PausedReviews)
 	is.Equal(0, period.ReviewTime.Known)
 	is.Equal(1, period.ReviewTime.Samples)
 }

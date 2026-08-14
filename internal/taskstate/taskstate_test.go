@@ -738,6 +738,45 @@ func TestStorePausesAndResumesReviewForManualStep(t *testing.T) {
 	)
 }
 
+func TestStoreRestartAutomatedStepDiscardsItsFindings(t *testing.T) {
+	store := newTestStore(t)
+	review, err := store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{Pipeline: "standard", Step: "lint"})
+	if err != nil {
+		t.Fatalf("start review: %v", err)
+	}
+	if _, err := store.RecordReviewStep("alpha", "op-1", review.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindCheck, Name: "lint"}); err != nil {
+		t.Fatalf("record step: %v", err)
+	}
+	findings := []taskstate.ReviewFinding{
+		{Type: taskstate.FindingTypeBlocking, Step: "lint", Title: "Blocking", Description: "Fix this first."},
+		{Type: taskstate.FindingTypeAdvisory, Step: "lint", Title: "Advisory", Description: "Consider this later."},
+		{
+			Type:        taskstate.FindingTypeSeparateTask,
+			Step:        "lint",
+			Title:       "Follow-up",
+			Description: "Track this separately.",
+			TaskProposal: taskstate.ReviewTaskProposal{
+				Title:              "Follow-up task",
+				Description:        "Track this later.",
+				AcceptanceCriteria: "The work is complete.",
+			},
+		},
+	}
+	for _, finding := range findings {
+		if _, err := store.RecordReviewFinding("alpha", "op-1", review.Attempt, finding); err != nil {
+			t.Fatalf("record finding: %v", err)
+		}
+	}
+
+	restarted, err := store.RestartReviewAutomatedStep("alpha", "op-1", review.Attempt, "lint")
+	if err != nil {
+		t.Fatalf("restart automated step: %v", err)
+	}
+	if restarted.Step != "lint" || len(restarted.Steps) != 0 || len(restarted.Findings) != 0 {
+		t.Fatalf("restarted review = %#v, want only pending lint step", restarted)
+	}
+}
+
 func TestStoreRejectsUnsafeReviewStepArgsAndPreservesState(t *testing.T) {
 	store := newTestStore(t)
 	review, err := store.StartReview("alpha", "op-1")
