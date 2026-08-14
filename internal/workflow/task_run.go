@@ -24,6 +24,7 @@ const (
 	TaskRunActionRetryFinalization    TaskRunAction = "retry_finalization"
 	TaskRunActionImplementationActive TaskRunAction = "implementation_active"
 	TaskRunActionReviewActive         TaskRunAction = "review_active"
+	TaskRunActionReviewPaused         TaskRunAction = "review_paused"
 	TaskRunActionOpenPR               TaskRunAction = "open_pr"
 	TaskRunActionCompleted            TaskRunAction = "completed"
 )
@@ -166,6 +167,12 @@ func selectReviewTaskRunRoute(
 	case taskstate.ReviewStatusWaitingForManual:
 		return TaskRunRoute{
 			Action:  TaskRunActionResumeReview,
+			Attempt: latestReview.Attempt,
+			Step:    latestReview.Step,
+		}, nil
+	case taskstate.ReviewStatusWaitingForAutomatedDecision:
+		return TaskRunRoute{
+			Action:  TaskRunActionReviewPaused,
 			Attempt: latestReview.Attempt,
 			Step:    latestReview.Step,
 		}, nil

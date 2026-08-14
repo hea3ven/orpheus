@@ -115,13 +115,15 @@ func priorReviewFindings(state taskstate.TaskState, activeAttempt int) []Context
 		if review.Attempt >= activeAttempt {
 			continue
 		}
-		for index, finding := range review.Findings {
+		authoritativeNumber := 0
+		for _, finding := range review.Findings {
 			if taskstate.InterruptedPrimaryReviewFinding(review, finding) {
 				continue
 			}
+			authoritativeNumber++
 			prior = append(prior, ContextPriorReviewFinding{
 				Attempt:     review.Attempt,
-				Number:      index + 1,
+				Number:      authoritativeNumber,
 				Step:        compactReviewText(finding.Step),
 				Type:        finding.Type,
 				Disposition: compactReviewText(priorFindingDisposition(state, finding)),

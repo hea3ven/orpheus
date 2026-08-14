@@ -1278,3 +1278,107 @@ func (t *visualTerminal) ensureRow() {
 		t.lines = append(t.lines, "")
 	}
 }
+
+func TestRunPipelineRestartsBlockedCheckInSameAttempt(t *testing.T) {
+	workdir := t.TempDir()
+	initReviewTestGitRepo(t, workdir)
+	marker := filepath.Join(t.TempDir(), "ready")
+	check := writeReviewTestScript(t, workdir, "retry-check", fmt.Sprintf(`#!/bin/sh
+if [ ! -f %q ]; then exit 7; fi
+`, marker))
+	store, attempt := startReviewTestAttempt(t)
+	var stderr bytes.Buffer
+	prompts := 0
+	outcome, err := review.RunPipeline(review.PipelineRunOptions{
+		Context: context.Background(), Store: store, RepoID: "alpha", TaskID: "op-1", Branch: "main", Workdir: workdir,
+		Attempt: attempt, Pipeline: singleStepPipeline(review.KindCheck, "unit", check), Stderr: &stderr,
+		PromptAutomatedBlockers: func(blockers review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
+			prompts++
+			if err := os.WriteFile(marker, []byte("ready"), 0o644); err != nil {
+				return nil, err
+			}
+			return []review.AutomatedBlockerDecision{{FindingIndex: blockers.Blockers[0].Index, Action: review.AutomatedBlockerActionRestart}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunPipeline error = %v", err)
+	}
+	if outcome.Status != taskstate.ReviewStatusPassed || prompts != 1 {
+		t.Fatalf("outcome=%q prompts=%d, want passed/1", outcome.Status, prompts)
+	}
+	state, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, _ := taskstate.LatestReview(state)
+	if len(latest.Steps) != 1 || len(latest.Findings) != 0 {
+		t.Fatalf("restart state = %#v, want only the successful rerun", latest)
+	}
+}
+
+func TestRunPipelineRestartedBlockerRetainsAuthoritativeNumber(t *testing.T) {
+	workdir := t.TempDir()
+	initReviewTestGitRepo(t, workdir)
+	check := writeReviewTestScript(t, workdir, "blocked-check", "#!/bin/sh\nexit 7\n")
+	store, attempt := startReviewTestAttempt(t)
+	prompts := 0
+	outcome, err := review.RunPipeline(review.PipelineRunOptions{
+		Context: context.Background(), Store: store, RepoID: "alpha", TaskID: "op-1", Branch: "main", Workdir: workdir,
+		Attempt: attempt, Pipeline: singleStepPipeline(review.KindCheck, "unit", check),
+		PromptAutomatedBlockers: func(blockers review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
+			if len(blockers.Blockers) != 1 || blockers.Blockers[0].Number != 1 {
+				return nil, fmt.Errorf("blockers = %#v, want authoritative finding number 1", blockers.Blockers)
+			}
+			prompts++
+			action := review.AutomatedBlockerActionRestart
+			if prompts == 2 {
+				action = review.AutomatedBlockerActionPause
+			}
+			return []review.AutomatedBlockerDecision{{FindingIndex: blockers.Blockers[0].Index, Action: action}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunPipeline error = %v", err)
+	}
+	if outcome.Status != taskstate.ReviewStatusWaitingForAutomatedDecision || prompts != 2 {
+		t.Fatalf("outcome=%q prompts=%d, want waiting_for_automated_decision/2", outcome.Status, prompts)
+	}
+	state, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, _ := taskstate.LatestReview(state)
+	if len(latest.Findings) != 1 {
+		t.Fatalf("findings = %#v, want only the restarted execution's blocker", latest.Findings)
+	}
+}
+
+func TestRunPipelinePausesAndResumesAutomatedBlockerDecision(t *testing.T) {
+	workdir := t.TempDir()
+	initReviewTestGitRepo(t, workdir)
+	check := writeReviewTestScript(t, workdir, "blocked-check", "#!/bin/sh\nexit 7\n")
+	store, attempt := startReviewTestAttempt(t)
+	paused, err := review.RunPipeline(review.PipelineRunOptions{
+		Context: context.Background(), Store: store, RepoID: "alpha", TaskID: "op-1", Branch: "main", Workdir: workdir,
+		Attempt: attempt, Pipeline: singleStepPipeline(review.KindCheck, "unit", check),
+		PromptAutomatedBlockers: func(blockers review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
+			return []review.AutomatedBlockerDecision{{FindingIndex: blockers.Blockers[0].Index, Action: review.AutomatedBlockerActionPause}}, nil
+		},
+	})
+	if err != nil || paused.Status != taskstate.ReviewStatusWaitingForAutomatedDecision {
+		t.Fatalf("pause outcome=%#v err=%v", paused, err)
+	}
+	if _, err := store.ResumeReview("alpha", "op-1", attempt.Attempt); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := review.RunPipeline(review.PipelineRunOptions{
+		Context: context.Background(), Store: store, RepoID: "alpha", TaskID: "op-1", Branch: "main", Workdir: workdir,
+		Attempt: attempt, Pipeline: singleStepPipeline(review.KindCheck, "unit", check), ResumeFromStep: true, ResumeAutomatedBlockerDecision: true,
+		PromptAutomatedBlockers: func(blockers review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
+			return []review.AutomatedBlockerDecision{{FindingIndex: blockers.Blockers[0].Index, Action: review.AutomatedBlockerActionWaive, Reason: "environment unavailable"}}, nil
+		},
+	})
+	if err != nil || resumed.Status != taskstate.ReviewStatusPassed {
+		t.Fatalf("resume outcome=%#v err=%v", resumed, err)
+	}
+}

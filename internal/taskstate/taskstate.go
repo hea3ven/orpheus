@@ -70,6 +70,8 @@ const (
 
 	// ReviewStatusWaitingForManual means automated review paused before the named manual step.
 	ReviewStatusWaitingForManual ReviewStatus = "waiting_for_manual"
+	// ReviewStatusWaitingForAutomatedDecision means a check or agent-review blocker is awaiting an operator disposition.
+	ReviewStatusWaitingForAutomatedDecision ReviewStatus = "waiting_for_automated_decision"
 )
 
 // FindingType classifies a human-recorded review finding.
@@ -1465,7 +1467,83 @@ func (s Store) PauseReviewForManual(repoID, taskID string, attempt int, step str
 	return state.Reviews[index], nil
 }
 
-// ResumeReview marks a manual-waiting review attempt as running again.
+// PauseReviewForAutomatedBlockerDecision preserves a check or agent-review blocker disposition for a later task review invocation.
+func (s Store) PauseReviewForAutomatedBlockerDecision(repoID, taskID string, attempt int, step string) (ReviewAttempt, error) {
+	step = strings.TrimSpace(step)
+	if step == "" {
+		return ReviewAttempt{}, fmt.Errorf("pause automated blocker decision for task %s/%s: step is required", repoID, taskID)
+	}
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+	index := reviewAttemptIndex(state, attempt)
+	if index < 0 {
+		return ReviewAttempt{}, fmt.Errorf("pause automated blocker decision for task %s/%s: review attempt %d was not found", repoID, taskID, attempt)
+	}
+	review := &state.Reviews[index]
+	if review.Status != ReviewStatusRunning {
+		return ReviewAttempt{}, fmt.Errorf("pause automated blocker decision for task %s/%s: review attempt %d is %q, expected %q", repoID, taskID, attempt, review.Status, ReviewStatusRunning)
+	}
+	review.Status = ReviewStatusWaitingForAutomatedDecision
+	review.Step = step
+	review.FinishedAt = nil
+	if err := s.save(state); err != nil {
+		return ReviewAttempt{}, err
+	}
+	return *review, nil
+}
+
+// RestartReviewAutomatedStep discards the latest automated step execution and its findings, then leaves the attempt running for the same step to execute again.
+func (s Store) RestartReviewAutomatedStep(repoID, taskID string, attempt int, stepName string) (ReviewAttempt, error) {
+	stepName = strings.TrimSpace(stepName)
+	if stepName == "" {
+		return ReviewAttempt{}, fmt.Errorf("restart automated review step for task %s/%s: step is required", repoID, taskID)
+	}
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+	index := reviewAttemptIndex(state, attempt)
+	if index < 0 {
+		return ReviewAttempt{}, fmt.Errorf("restart automated review step for task %s/%s: review attempt %d was not found", repoID, taskID, attempt)
+	}
+	review := &state.Reviews[index]
+	if review.Status != ReviewStatusRunning {
+		return ReviewAttempt{}, fmt.Errorf("restart automated review step for task %s/%s: review attempt %d is %q, expected %q", repoID, taskID, attempt, review.Status, ReviewStatusRunning)
+	}
+	stepIndex := -1
+	for i := len(review.Steps) - 1; i >= 0; i-- {
+		if review.Steps[i].Name == stepName {
+			stepIndex = i
+			break
+		}
+	}
+	if stepIndex < 0 {
+		return ReviewAttempt{}, fmt.Errorf("restart automated review step for task %s/%s: review attempt %d step %q was not found", repoID, taskID, attempt, stepName)
+	}
+	step := review.Steps[stepIndex]
+	if step.Kind != ReviewStepKindCheck && step.Kind != ReviewStepKindAgentReview {
+		return ReviewAttempt{}, fmt.Errorf("restart automated review step for task %s/%s: step %q is %q, expected check or agent_review", repoID, taskID, stepName, step.Kind)
+	}
+	review.Steps = append(review.Steps[:stepIndex], review.Steps[stepIndex+1:]...)
+	findings := review.Findings[:0]
+	for _, finding := range review.Findings {
+		if finding.Step != stepName {
+			findings = append(findings, finding)
+		}
+	}
+	review.Findings = findings
+	review.Step = stepName
+	review.AutomatedBlockerDecisionKept = false
+	review.AutomatedBlockerDecisionInterrupted = false
+	if err := s.save(state); err != nil {
+		return ReviewAttempt{}, err
+	}
+	return *review, nil
+}
+
+// ResumeReview marks a waiting review attempt as running again.
 func (s Store) ResumeReview(repoID, taskID string, attempt int) (ReviewAttempt, error) {
 	state, err := s.Load(repoID, taskID)
 	if err != nil {
@@ -1475,14 +1553,13 @@ func (s Store) ResumeReview(repoID, taskID string, attempt int) (ReviewAttempt, 
 	if index < 0 {
 		return ReviewAttempt{}, fmt.Errorf("resume review attempt for task %s/%s: review attempt %d was not found", repoID, taskID, attempt)
 	}
-	if state.Reviews[index].Status != ReviewStatusWaitingForManual {
+	if state.Reviews[index].Status != ReviewStatusWaitingForManual && state.Reviews[index].Status != ReviewStatusWaitingForAutomatedDecision {
 		return ReviewAttempt{}, fmt.Errorf(
-			"resume review attempt for task %s/%s: review attempt %d is %q, expected %q",
+			"resume review attempt for task %s/%s: review attempt %d is %q, expected a waiting review",
 			repoID,
 			taskID,
 			attempt,
 			state.Reviews[index].Status,
-			ReviewStatusWaitingForManual,
 		)
 	}
 
@@ -2401,8 +2478,8 @@ func IsOpenAdvisoryReviewFinding(finding ReviewFinding) bool {
 
 // EligibleAdvisoryFindingIndexes returns advisory findings that can be shown as
 // best-effort opportunities alongside a blocker-triggered follow-up. Ordinary
-// advisories and downgraded blockers are both advisory findings; audit-only
-// interrupted-review, waived, and manually addressed findings are excluded.
+// Advisories and downgraded blockers are both advisory findings; interrupted-review,
+// waived, and manually addressed findings are excluded.
 func EligibleAdvisoryFindingIndexes(review ReviewAttempt) []int {
 	indexes := make([]int, 0)
 	for index, finding := range review.Findings {
@@ -2682,7 +2759,7 @@ func (s Store) RecordReviewFindingCreatedTask(
 
 // FinishReview records the terminal status for a running review attempt.
 func (s Store) FinishReview(repoID, taskID string, attempt int, status ReviewStatus) (ReviewAttempt, error) {
-	if status == ReviewStatusRunning || status == ReviewStatusWaitingForManual || !validReviewStatus(status) {
+	if status == ReviewStatusRunning || status == ReviewStatusWaitingForManual || status == ReviewStatusWaitingForAutomatedDecision || !validReviewStatus(status) {
 		return ReviewAttempt{}, fmt.Errorf("finish review attempt for task %s/%s: unsupported terminal status %q", repoID, taskID, status)
 	}
 	state, err := s.Load(repoID, taskID)
@@ -4587,7 +4664,7 @@ func validateReview(review ReviewAttempt) error {
 		return fmt.Errorf("review attempt %d requires started_at", review.Attempt)
 	}
 	switch review.Status {
-	case ReviewStatusRunning, ReviewStatusWaitingForManual:
+	case ReviewStatusRunning, ReviewStatusWaitingForManual, ReviewStatusWaitingForAutomatedDecision:
 		if review.FinishedAt != nil {
 			return fmt.Errorf("review attempt %d cannot have finished_at while %s", review.Attempt, review.Status)
 		}
@@ -4940,7 +5017,8 @@ func validReviewStatus(status ReviewStatus) bool {
 		ReviewStatusFailed,
 		ReviewStatusPassed,
 		ReviewStatusAborted,
-		ReviewStatusWaitingForManual:
+		ReviewStatusWaitingForManual,
+		ReviewStatusWaitingForAutomatedDecision:
 		return true
 	default:
 		return false

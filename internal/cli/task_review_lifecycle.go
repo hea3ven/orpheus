@@ -33,12 +33,11 @@ func (f *taskReviewLifecycleFrontend) PipelinePresentation(ctx workflow.ReviewAt
 }
 
 func (f taskReviewLifecycleFrontend) ReviewResumed(ctx workflow.ReviewAttemptContext) error {
-	_, err := fmt.Fprintf(
-		f.command.ErrOrStderr(),
-		"Resuming review attempt %d at manual step %q.\n",
-		ctx.Review.Attempt,
-		ctx.Review.Step,
-	)
+	message := "Resuming review attempt %d at manual step %q.\n"
+	if ctx.ResumeAutomatedBlockerDecision {
+		message = "Resuming review attempt %d at automated blocker decision for step %q.\n"
+	}
+	_, err := fmt.Fprintf(f.command.ErrOrStderr(), message, ctx.Review.Attempt, ctx.Review.Step)
 	return err
 }
 

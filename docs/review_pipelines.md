@@ -3,8 +3,8 @@
 `orpheus task run` continues into review automatically after the attached agent
 records a successful completion with `orpheus agent done`. Automated pipeline
 steps run unattended only while they pass or produce no operator decisions; a
-check or agent-review blocker prompts for an explicit keep, downgrade, or
-waive/cancel decision from both `task run` and `task review`.
+check or agent-review blocker prompts for an explicit keep, downgrade,
+waive/cancel, restart, or pause decision from both `task run` and `task review`.
 
 `orpheus agent done` requires the usual summary, commit description, and detailed
 PR body source plus exactly one technical explanation source:
@@ -37,6 +37,21 @@ are not injected into this history.
 Keeping a check or agent-review blocker preserves it, dispatches a targeted
 implementer follow-up, records which findings the run targets, and starts a
 fresh review attempt after the fix records completion.
+
+`restart` is for a temporarily incomplete operator environment. It discards the
+current execution of that check or agent-review step and every finding it
+produced, then reruns that same step in the same review attempt without rerunning
+earlier passed steps. Discarded results cannot block approval, trigger repairs,
+become follow-up tasks, or affect finding numbering. Restarting does not consume
+the autonomous review budget. With paired reviewers, the primary and alternate
+result are discarded together.
+
+`pause` exits without a repair, pipeline advance, approval, or finalization. It
+persists the pending decision and resumes it with the environment of a later
+`orpheus task review <task-id>` invocation. The resumed command presents the
+same blockers again; choose restart or any normal disposition. `orpheus status`
+and `orpheus task review show <task-id>` identify a paused decision and direct
+the operator to `task review`.
 
 ## Paired AI reviewer comparison (opt-in)
 

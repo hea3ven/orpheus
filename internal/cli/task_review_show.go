@@ -174,15 +174,17 @@ func renderReviewHistory(output io.Writer, taskState taskstate.TaskState) error 
 		if _, err := fmt.Fprintf(output, "  Attempt %d: %s (%d authoritative finding(s))\n", review.Attempt, formatReviewValue(string(review.Status)), authoritativeFindingCount(review)); err != nil {
 			return err
 		}
-		for index, finding := range review.Findings {
+		authoritativeNumber := 0
+		for _, finding := range review.Findings {
 			if taskstate.InterruptedPrimaryReviewFinding(review, finding) {
 				continue
 			}
+			authoritativeNumber++
 			step := compactReviewText(finding.Step)
 			if step == "" {
 				step = "-"
 			}
-			if _, err := fmt.Fprintf(output, "    - %d/%d · %s · %s · %s · %s\n", review.Attempt, index+1, step, compactReviewText(string(finding.Type)), compactReviewText(compactReviewFindingDisposition(taskState, finding)), compactReviewText(finding.Title)); err != nil {
+			if _, err := fmt.Fprintf(output, "    - %d/%d · %s · %s · %s · %s\n", review.Attempt, authoritativeNumber, step, compactReviewText(string(finding.Type)), compactReviewText(compactReviewFindingDisposition(taskState, finding)), compactReviewText(finding.Title)); err != nil {
 				return err
 			}
 		}
@@ -229,6 +231,9 @@ func renderReviewAttemptDetail(output io.Writer, taskState taskstate.TaskState, 
 	}
 	if review.AutomatedBlockerDecisionInterrupted {
 		rows = append(rows, "  Automated blocker decisions: interrupted")
+	}
+	if review.Status == taskstate.ReviewStatusWaitingForAutomatedDecision {
+		rows = append(rows, "  Automated blocker decisions: paused")
 	}
 	for _, row := range rows {
 		if _, err := fmt.Fprintln(output, row); err != nil {
@@ -397,19 +402,28 @@ func renderReviewFindings(output io.Writer, taskState taskstate.TaskState, revie
 		_, err := fmt.Fprintln(output, "  (none recorded)")
 		return err
 	}
-	auditOnly := taskstate.PrimaryReviewExecutionInterrupted(review)
-	if auditOnly {
+	if taskstate.PrimaryReviewExecutionInterrupted(review) {
 		if _, err := fmt.Fprintln(output, "  Findings from the interrupted primary reviewer are retained for audit only and do not drive follow-up work."); err != nil {
 			return err
 		}
 	}
 
+	authoritativeNumbers := make(map[int]int)
+	authoritativeNumber := 0
+	for index, finding := range review.Findings {
+		if taskstate.InterruptedPrimaryReviewFinding(review, finding) {
+			continue
+		}
+		authoritativeNumber++
+		authoritativeNumbers[index] = authoritativeNumber
+	}
 	for _, group := range groupReviewFindingsByStep(review.Findings) {
 		if _, err := fmt.Fprintf(output, "  Step: %s\n", group.step); err != nil {
 			return err
 		}
 		for _, finding := range group.findings {
-			if err := renderReviewFinding(output, taskState, finding, taskstate.InterruptedPrimaryReviewFinding(review, finding.finding)); err != nil {
+			auditOnly := taskstate.InterruptedPrimaryReviewFinding(review, finding.finding)
+			if err := renderReviewFinding(output, taskState, review, finding, authoritativeNumbers[finding.index], auditOnly); err != nil {
 				return err
 			}
 		}
@@ -449,14 +463,18 @@ func groupReviewFindingsByStep(findings []taskstate.ReviewFinding) []reviewFindi
 	return groups
 }
 
-func renderReviewFinding(output io.Writer, taskState taskstate.TaskState, indexed indexedReviewFinding, auditOnly bool) error {
+func renderReviewFinding(output io.Writer, taskState taskstate.TaskState, review taskstate.ReviewAttempt, indexed indexedReviewFinding, number int, interrupted bool) error {
 	finding := indexed.finding
 	resolution := reviewFindingResolution(taskState, finding)
-	if auditOnly {
+	if interrupted {
 		resolution = "audit-only (interrupted primary reviewer)"
 	}
+	label := fmt.Sprintf("    Finding %d:", number)
+	if interrupted {
+		label = fmt.Sprintf("    Audit finding %d:", indexed.index+1)
+	}
 	lines := []string{
-		fmt.Sprintf("    Finding %d:", indexed.index+1),
+		label,
 		fmt.Sprintf("      Type: %s", formatReviewValue(string(finding.Type))),
 		fmt.Sprintf("      Title: %s", formatReviewValue(finding.Title)),
 		fmt.Sprintf("      Description: %s", formatReviewValue(finding.Description)),
@@ -530,15 +548,36 @@ func followUpRunDisposition(taskState taskstate.TaskState, attempt int) string {
 	return fmt.Sprintf("follow-up run %d", attempt)
 }
 
+//nolint:funlen // The scoped finding inspection output is clearest as one ordered rendering path.
 func renderAuthoritativeFinding(output io.Writer, taskState taskstate.TaskState, review taskstate.ReviewAttempt, number int) error {
-	if number <= 0 || number > len(review.Findings) {
-		return fmt.Errorf("finding number %d is out of range for review attempt %d (has %d persisted finding(s))", number, review.Attempt, len(review.Findings))
+	if number <= 0 {
+		return fmt.Errorf("finding number must be positive")
 	}
-	finding := review.Findings[number-1]
-	auditOnly := taskstate.InterruptedPrimaryReviewFinding(review, finding)
+	authoritativeNumber := 0
+	findingIndex := -1
+	finding := taskstate.ReviewFinding{}
+	for index, candidate := range review.Findings {
+		if taskstate.InterruptedPrimaryReviewFinding(review, candidate) {
+			continue
+		}
+		authoritativeNumber++
+		if authoritativeNumber == number {
+			findingIndex, finding = index, candidate
+			break
+		}
+	}
+	if findingIndex < 0 && number <= len(review.Findings) && taskstate.InterruptedPrimaryReviewFinding(review, review.Findings[number-1]) {
+		// Interrupted primary findings retain their legacy persisted inspection reference.
+		findingIndex, finding = number-1, review.Findings[number-1]
+	}
+	found := findingIndex >= 0
+	if !found {
+		return fmt.Errorf("authoritative finding number %d is out of range for review attempt %d (has %d authoritative finding(s))", number, review.Attempt, authoritativeNumber)
+	}
+	interrupted := taskstate.InterruptedPrimaryReviewFinding(review, finding)
 	label := "Authoritative"
 	disposition := reviewFindingResolution(taskState, finding)
-	if auditOnly {
+	if interrupted {
 		label = "Audit-only"
 		disposition = "audit-only (interrupted primary reviewer)"
 	}
@@ -552,7 +591,7 @@ func renderAuthoritativeFinding(output io.Writer, taskState taskstate.TaskState,
 		"  Description: " + formatReviewValue(finding.Description),
 		"  Disposition: " + disposition,
 	}
-	if auditOnly {
+	if interrupted {
 		lines = append(lines, "  Audit-only: interrupted primary reviewer")
 	}
 	if strings.TrimSpace(finding.Reviewer) != "" {
@@ -582,7 +621,7 @@ func renderAuthoritativeFinding(output io.Writer, taskState taskstate.TaskState,
 			return err
 		}
 	}
-	return renderReviewFollowUpRunsForFinding(output, taskState, review.Attempt, number-1)
+	return renderReviewFollowUpRunsForFinding(output, taskState, review.Attempt, findingIndex)
 }
 
 func renderReviewFollowUpRunsForAttempt(output io.Writer, taskState taskstate.TaskState, reviewAttempt int) error {
@@ -733,6 +772,14 @@ func createdReviewFollowUps(taskState taskstate.TaskState) []createdReviewFollow
 //nolint:funlen // Review lifecycle guidance reads clearest as a single status switch.
 func renderReviewNextStep(output io.Writer, taskID string, taskState taskstate.TaskState, review taskstate.ReviewAttempt) error {
 	switch review.Status {
+	case taskstate.ReviewStatusWaitingForAutomatedDecision:
+		_, err := fmt.Fprintf(
+			output,
+			"\nNext step: automated blocker decision is paused; run `orpheus task review %s` to resume step %s.\n",
+			taskID,
+			formatReviewValue(review.Step),
+		)
+		return err
 	case taskstate.ReviewStatusWaitingForManual:
 		_, err := fmt.Fprintf(
 			output,

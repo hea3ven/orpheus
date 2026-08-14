@@ -721,6 +721,7 @@ func (p *AggregatePeriod) addReviewTask(state taskstate.TaskState) {
 	p.OperationalFailures += reviewStatusCount(state, taskstate.ReviewStatusFailed)
 	p.AbortedReviews += reviewStatusCount(state, taskstate.ReviewStatusAborted)
 	p.PausedReviews += reviewStatusCount(state, taskstate.ReviewStatusWaitingForManual)
+	p.PausedReviews += reviewStatusCount(state, taskstate.ReviewStatusWaitingForAutomatedDecision)
 	p.BlockingFindings += blockingFindingCount(state)
 }
 
