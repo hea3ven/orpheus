@@ -1,3 +1,5 @@
+//go:build integration
+
 package review_test
 
 import (
@@ -19,7 +21,7 @@ import (
 )
 
 //nolint:funlen // The redirected-output regression is clearer as one end-to-end runner test.
-func TestRunPipelineRestoresHeaderWrittenToWorktreeStderr(t *testing.T) {
+func TestIntegrationRunPipelineRestoresHeaderWrittenToWorktreeStderr(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepo(t, workdir)
 	candidatePath := filepath.Join(workdir, "candidate.txt")
@@ -97,7 +99,7 @@ func TestRunPipelineRestoresHeaderWrittenToWorktreeStderr(t *testing.T) {
 	}
 }
 
-func TestRunPipelineVerboseDiagnosticsDistinguishCheckExitAndRestoration(t *testing.T) {
+func TestIntegrationRunPipelineVerboseDiagnosticsDistinguishCheckExitAndRestoration(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepoWithCandidateChange(t, workdir)
 
@@ -147,7 +149,7 @@ exit 7
 	}
 }
 
-func TestRunPipelineVerboseDiagnosticsCaptureAndRestoreCandidateMutation(t *testing.T) {
+func TestIntegrationRunPipelineVerboseDiagnosticsCaptureAndRestoreCandidateMutation(t *testing.T) {
 	workdir := t.TempDir()
 	candidatePath := initReviewTestGitRepoWithCandidateChange(t, workdir)
 
@@ -237,7 +239,7 @@ func mustReadFile(t *testing.T, path string) []byte {
 	return data
 }
 
-func TestRunPipelineInteractivePassingCheckClearsRollingTail(t *testing.T) {
+func TestIntegrationRunPipelineInteractivePassingCheckClearsRollingTail(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepo(t, workdir)
 	check := writeReviewTestScript(t, workdir, "passing-check", `#!/bin/sh
@@ -287,7 +289,7 @@ done
 	}
 }
 
-func TestRunPipelineInteractiveBlockedCheckLeavesExpandedRollingTail(t *testing.T) {
+func TestIntegrationRunPipelineInteractiveBlockedCheckLeavesExpandedRollingTail(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepo(t, workdir)
 	check := writeReviewTestScript(t, workdir, "blocked-check", `#!/bin/sh
@@ -336,7 +338,7 @@ exit 7
 	}
 }
 
-func TestRunPipelinePausesBeforeManualStep(t *testing.T) {
+func TestIntegrationRunPipelinePausesBeforeManualStep(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepo(t, workdir)
 	check := writeReviewTestScript(t, workdir, "passing-check", `#!/bin/sh
@@ -389,7 +391,7 @@ printf 'checked\n'
 	}
 }
 
-func TestRunPipelineHunkManualCommandCapturesNotesAfterCommandExit(t *testing.T) {
+func TestIntegrationRunPipelineHunkManualCommandCapturesNotesAfterCommandExit(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepo(t, workdir)
 
@@ -449,7 +451,7 @@ done
 	}
 }
 
-func TestRunPipelineHunkManualCommandContinuesWhenSessionMissing(t *testing.T) {
+func TestIntegrationRunPipelineHunkManualCommandContinuesWhenSessionMissing(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepo(t, workdir)
 
@@ -512,7 +514,7 @@ exit 65
 	}
 }
 
-func TestRunPipelineGenericManualCommandDoesNotPollHunkNotes(t *testing.T) {
+func TestIntegrationRunPipelineGenericManualCommandDoesNotPollHunkNotes(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepo(t, workdir)
 
@@ -564,7 +566,7 @@ printf '{"comments":[{"noteId":"unexpected","source":"user","body":"unexpected"}
 	}
 }
 
-func TestRunPipelineHunkManualCommandFailureRemainsOperationalError(t *testing.T) {
+func TestIntegrationRunPipelineHunkManualCommandFailureRemainsOperationalError(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepo(t, workdir)
 
@@ -615,7 +617,7 @@ exit 42
 	}
 }
 
-func TestRunPipelineInteractiveAgentReviewOutputDependsOnProfileMode(t *testing.T) {
+func TestIntegrationRunPipelineInteractiveAgentReviewOutputDependsOnProfileMode(t *testing.T) {
 	tests := []struct {
 		name           string
 		interactive    bool
@@ -660,7 +662,7 @@ func TestRunPipelineInteractiveAgentReviewOutputDependsOnProfileMode(t *testing.
 	}
 }
 
-func TestRunPipelineInteractiveAgentReviewNonBlockingFindingLeavesLiveTail(t *testing.T) {
+func TestIntegrationRunPipelineInteractiveAgentReviewNonBlockingFindingLeavesLiveTail(t *testing.T) {
 	harness := newAgentReviewPipelineHarness(t)
 	result := harness.run(t, false, fakeReviewLauncherFunc(func(
 		ctx context.Context,
@@ -689,7 +691,7 @@ func TestRunPipelineInteractiveAgentReviewNonBlockingFindingLeavesLiveTail(t *te
 	}
 }
 
-func TestRunPipelineAgentReviewUsesEffectivePromptInCommandAndEnvironment(t *testing.T) {
+func TestIntegrationRunPipelineAgentReviewUsesEffectivePromptInCommandAndEnvironment(t *testing.T) {
 	harness := newAgentReviewPipelineHarness(t)
 	promptAppend := "Review architecture boundaries.\nCall out dependency direction risks."
 	wantPrompt := agent.RenderEffectivePrompt(promptAppend)
@@ -721,7 +723,7 @@ func TestRunPipelineAgentReviewUsesEffectivePromptInCommandAndEnvironment(t *tes
 	assertLatestReviewExecutionModel(t, harness.store, "pi", "openai-codex/gpt-5.4-mini")
 }
 
-func TestRunPipelineVerboseDiagnosticsCorrelateAgentReviewCommand(t *testing.T) {
+func TestIntegrationRunPipelineVerboseDiagnosticsCorrelateAgentReviewCommand(t *testing.T) {
 	tests := []struct {
 		name      string
 		launcher  agentexec.Launcher
@@ -884,7 +886,7 @@ func promptAssertingReviewLauncher(wantPrompt string) fakeReviewLauncherFunc {
 	}
 }
 
-func TestRunPipelinePersistsPrimaryReviewerProcessFacts(t *testing.T) {
+func TestIntegrationRunPipelinePersistsPrimaryReviewerProcessFacts(t *testing.T) {
 	harness := newAgentReviewPipelineHarness(t)
 	var stdout, stderr bytes.Buffer
 	outcome, err := review.RunPipeline(review.PipelineRunOptions{
@@ -933,7 +935,7 @@ func assertLatestReviewExecutionModel(t *testing.T, store taskstate.Store, harne
 	}
 }
 
-func TestRunPipelineInteractivePassingAgentReviewClearsWrappedRollingTail(t *testing.T) {
+func TestIntegrationRunPipelineInteractivePassingAgentReviewClearsWrappedRollingTail(t *testing.T) {
 	harness := newAgentReviewPipelineHarness(t)
 	var stdout bytes.Buffer
 	terminal := newVisualTerminalWithWidth(20)
@@ -1276,5 +1278,109 @@ func (t *visualTerminal) Visible() string {
 func (t *visualTerminal) ensureRow() {
 	for t.row >= len(t.lines) {
 		t.lines = append(t.lines, "")
+	}
+}
+
+func TestIntegrationRunPipelineRestartsBlockedCheckInSameAttempt(t *testing.T) {
+	workdir := t.TempDir()
+	initReviewTestGitRepo(t, workdir)
+	marker := filepath.Join(t.TempDir(), "ready")
+	check := writeReviewTestScript(t, workdir, "retry-check", fmt.Sprintf(`#!/bin/sh
+if [ ! -f %q ]; then exit 7; fi
+`, marker))
+	store, attempt := startReviewTestAttempt(t)
+	var stderr bytes.Buffer
+	prompts := 0
+	outcome, err := review.RunPipeline(review.PipelineRunOptions{
+		Context: context.Background(), Store: store, RepoID: "alpha", TaskID: "op-1", Branch: "main", Workdir: workdir,
+		Attempt: attempt, Pipeline: singleStepPipeline(review.KindCheck, "unit", check), Stderr: &stderr,
+		PromptAutomatedBlockers: func(blockers review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
+			prompts++
+			if err := os.WriteFile(marker, []byte("ready"), 0o644); err != nil {
+				return nil, err
+			}
+			return []review.AutomatedBlockerDecision{{FindingIndex: blockers.Blockers[0].Index, Action: review.AutomatedBlockerActionRestart}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunPipeline error = %v", err)
+	}
+	if outcome.Status != taskstate.ReviewStatusPassed || prompts != 1 {
+		t.Fatalf("outcome=%q prompts=%d, want passed/1", outcome.Status, prompts)
+	}
+	state, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, _ := taskstate.LatestReview(state)
+	if len(latest.Steps) != 1 || len(latest.Findings) != 0 {
+		t.Fatalf("restart state = %#v, want only the successful rerun", latest)
+	}
+}
+
+func TestIntegrationRunPipelineRestartedBlockerRetainsAuthoritativeNumber(t *testing.T) {
+	workdir := t.TempDir()
+	initReviewTestGitRepo(t, workdir)
+	check := writeReviewTestScript(t, workdir, "blocked-check", "#!/bin/sh\nexit 7\n")
+	store, attempt := startReviewTestAttempt(t)
+	prompts := 0
+	outcome, err := review.RunPipeline(review.PipelineRunOptions{
+		Context: context.Background(), Store: store, RepoID: "alpha", TaskID: "op-1", Branch: "main", Workdir: workdir,
+		Attempt: attempt, Pipeline: singleStepPipeline(review.KindCheck, "unit", check),
+		PromptAutomatedBlockers: func(blockers review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
+			if len(blockers.Blockers) != 1 || blockers.Blockers[0].Number != 1 {
+				return nil, fmt.Errorf("blockers = %#v, want authoritative finding number 1", blockers.Blockers)
+			}
+			prompts++
+			action := review.AutomatedBlockerActionRestart
+			if prompts == 2 {
+				action = review.AutomatedBlockerActionPause
+			}
+			return []review.AutomatedBlockerDecision{{FindingIndex: blockers.Blockers[0].Index, Action: action}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunPipeline error = %v", err)
+	}
+	if outcome.Status != taskstate.ReviewStatusWaitingForAutomatedDecision || prompts != 2 {
+		t.Fatalf("outcome=%q prompts=%d, want waiting_for_automated_decision/2", outcome.Status, prompts)
+	}
+	state, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, _ := taskstate.LatestReview(state)
+	if len(latest.Findings) != 1 {
+		t.Fatalf("findings = %#v, want only the restarted execution's blocker", latest.Findings)
+	}
+}
+
+func TestIntegrationRunPipelinePausesAndResumesAutomatedBlockerDecision(t *testing.T) {
+	workdir := t.TempDir()
+	initReviewTestGitRepo(t, workdir)
+	check := writeReviewTestScript(t, workdir, "blocked-check", "#!/bin/sh\nexit 7\n")
+	store, attempt := startReviewTestAttempt(t)
+	paused, err := review.RunPipeline(review.PipelineRunOptions{
+		Context: context.Background(), Store: store, RepoID: "alpha", TaskID: "op-1", Branch: "main", Workdir: workdir,
+		Attempt: attempt, Pipeline: singleStepPipeline(review.KindCheck, "unit", check),
+		PromptAutomatedBlockers: func(blockers review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
+			return []review.AutomatedBlockerDecision{{FindingIndex: blockers.Blockers[0].Index, Action: review.AutomatedBlockerActionPause}}, nil
+		},
+	})
+	if err != nil || paused.Status != taskstate.ReviewStatusWaitingForAutomatedDecision {
+		t.Fatalf("pause outcome=%#v err=%v", paused, err)
+	}
+	if _, err := store.ResumeReview("alpha", "op-1", attempt.Attempt); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := review.RunPipeline(review.PipelineRunOptions{
+		Context: context.Background(), Store: store, RepoID: "alpha", TaskID: "op-1", Branch: "main", Workdir: workdir,
+		Attempt: attempt, Pipeline: singleStepPipeline(review.KindCheck, "unit", check), ResumeFromStep: true, ResumeAutomatedBlockerDecision: true,
+		PromptAutomatedBlockers: func(blockers review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
+			return []review.AutomatedBlockerDecision{{FindingIndex: blockers.Blockers[0].Index, Action: review.AutomatedBlockerActionWaive, Reason: "environment unavailable"}}, nil
+		},
+	})
+	if err != nil || resumed.Status != taskstate.ReviewStatusPassed {
+		t.Fatalf("resume outcome=%#v err=%v", resumed, err)
 	}
 }

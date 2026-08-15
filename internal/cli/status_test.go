@@ -1,3 +1,5 @@
+//go:build integration
+
 //nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
 package cli
 
@@ -22,7 +24,7 @@ type fakeBDCommandResponse struct {
 	exitCode int
 }
 
-func TestStatusGroupsLocalTaskSnapshots(t *testing.T) {
+func TestIntegrationStatusGroupsLocalTaskSnapshots(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -32,17 +34,17 @@ func TestStatusGroupsLocalTaskSnapshots(t *testing.T) {
 
 	is.Empty(stderr)
 	for _, want := range []string{
-		"TASK_ID", "STATUS", "Ready", "Alpha Repo", "ar-ready", "Ready task", "ar-dep", "Open dependency", "ar-bug", "Bug item",
+		"TASK_ID", "STATUS", "Ready", "Alpha Repo", "ar-ready", "Ready task", "ar-dep", "Open dependency",
 		"Needs attention", "ar-failed", "Failed attached agent", "run attempt 1 failed",
 		"Working", "ar-running", "Running attached agent", "run attempt 1 is running",
 		"Idle", "ar-idle", "Idle without run", "no attached run recorded",
 		"ar-succeeded", "Succeeded attached agent", "agent exited without completion",
 		"Reviewing", "ar-review", "Review task", "https://example.test/pr/3",
-		"ar-missing", "Needs inspection", "missing dependency ar-gone",
+		"ar-missing", "Needs inspection", "missing dependency ar-bug",
 	} {
 		is.Contains(stdout, want)
 	}
-	for _, hidden := range []string{"Blocked", "ar-blocked", "Done / closed", "ar-closed"} {
+	for _, hidden := range []string{"Blocked", "ar-blocked", "Done / closed", "ar-closed", "Bug item"} {
 		is.NotContains(stdout, hidden)
 	}
 
@@ -70,7 +72,7 @@ const statusGroupsLocalTasksJSON = `[
 	{"id":"ar-succeeded","title":"Succeeded attached agent","status":"in_progress","priority":3,"issue_type":"task"},
 	{"id":"ar-blocked","title":"Blocked task","status":"open","priority":2,"issue_type":"task","dependencies":[{"id":"ar-dep","dependency_type":"blocks"}]},
 	{"id":"ar-review","title":"Review task","status":"open","priority":3,"issue_type":"task","metadata":{"orpheus.pr_url":"https://example.test/pr/3"}},
-	{"id":"ar-missing","title":"Needs inspection","status":"open","priority":4,"issue_type":"task","dependencies":[{"id":"ar-gone","dependency_type":"blocks"}]},
+	{"id":"ar-missing","title":"Needs inspection","status":"open","priority":4,"issue_type":"task","dependencies":[{"id":"ar-bug","dependency_type":"blocks"}]},
 	{"id":"ar-closed","title":"Closed task","status":"closed","priority":1,"issue_type":"task"},
 	{"id":"ar-bug","title":"Bug item","status":"open","priority":1,"issue_type":"bug"}
 ]`
@@ -130,7 +132,7 @@ func assertFullStatusGroupOutput(t *testing.T, fullStdout string) {
 	is.Less(strings.Index(header, "TITLE"), strings.Index(header, "DETAIL"))
 }
 
-func TestStatusFullIgnoresCorruptClosedAndPullRequestStates(t *testing.T) {
+func TestIntegrationStatusFullIgnoresCorruptClosedAndPullRequestStates(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -171,7 +173,7 @@ func TestStatusFullIgnoresCorruptClosedAndPullRequestStates(t *testing.T) {
 	is.Contains(stdout, "ar-pr")
 }
 
-func TestStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t *testing.T) {
+func TestIntegrationStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -226,7 +228,7 @@ func TestStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t *testing.T) {
 	is.Contains(stdout, "local review; run task run")
 }
 
-func TestStatusAndTaskReadyUseLocalRunHistoryOnOpenTaskAsNeedsAttention(t *testing.T) {
+func TestIntegrationStatusAndTaskListUseLocalRunHistoryOnOpenTaskAsNeedsAttention(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -264,14 +266,41 @@ func TestStatusAndTaskReadyUseLocalRunHistoryOnOpenTaskAsNeedsAttention(t *testi
 	is.Contains(stdout, "Ready")
 	is.Contains(stdout, "ar-ready")
 
-	readyStdout, readyStderr := executeCommand(t, []string{"task", "ready"})
+	listStdout, listStderr := executeCommand(t, []string{"task", "list"})
 
-	is.Empty(readyStderr)
-	is.Contains(readyStdout, "ar-ready")
-	is.NotContains(readyStdout, "ar-running")
+	is.Empty(listStderr)
+	is.Contains(listStdout, "ar-ready")
+	is.Contains(listStdout, "ar-running")
 }
 
-func TestStatusRendersEpicChildrenAsIntegratedTreeRows(t *testing.T) {
+func TestIntegrationStatusAndTaskListRenderEquivalentRowsIdentically(t *testing.T) {
+	t.Parallel()
+
+	setupStatusGroupsLocalTaskSnapshots(t)
+
+	statusOutput, statusStderr := executeCommand(t, []string{"status"})
+	listOutput, listStderr := executeCommand(t, []string{"task", "list"})
+
+	require.Empty(t, statusStderr)
+	require.Empty(t, listStderr)
+	for _, taskID := range []string{"ar-ready", "ar-review", "ar-running"} {
+		assert.Equal(t, tableRowForTask(statusOutput, taskID), tableRowForTask(listOutput, taskID))
+	}
+	assert.NotContains(t, statusOutput, "ar-blocked")
+	assert.Contains(t, listOutput, "ar-blocked")
+	assert.NotContains(t, listOutput, "ar-closed")
+}
+
+func tableRowForTask(output string, taskID string) string {
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, taskID) {
+			return line
+		}
+	}
+	return ""
+}
+
+func TestIntegrationStatusRendersEpicChildrenAsIntegratedTreeRows(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -327,9 +356,22 @@ func TestStatusRendersEpicChildrenAsIntegratedTreeRows(t *testing.T) {
 		"├─ ar-blocked",
 		"└─ ar-done",
 	})
+
+	assertTaskListRendersActiveEpicTree(t)
 }
 
-func TestStatusReportsRepoFailuresInUnknownGroupAndReturnsError(t *testing.T) {
+func assertTaskListRendersActiveEpicTree(t *testing.T) {
+	t.Helper()
+
+	listStdout, listStderr := executeCommand(t, []string{"task", "list"})
+	require.Empty(t, listStderr)
+	assert.Contains(t, listStdout, "1/4 done")
+	assert.Contains(t, listStdout, "├─ ar-nested")
+	assert.Contains(t, listStdout, "└─ ar-blocked")
+	assert.NotContains(t, listStdout, "ar-done")
+}
+
+func TestIntegrationStatusReportsRepoFailuresInUnknownGroupAndReturnsError(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -436,7 +478,11 @@ case "$PWD|$*" in
 		if exitCode == 0 && response.stderr != "" && response.stdout == "" {
 			exitCode = 1
 		}
-		fmt.Fprintf(&script, "  %s)\n", shellQuote(canonicalTestPath(t, response.dir)+"|"+response.args))
+		args := response.args
+		if args == "--json --readonly --sandbox list --all --limit 0" {
+			args += " --type task"
+		}
+		fmt.Fprintf(&script, "  %s)\n", shellQuote(canonicalTestPath(t, response.dir)+"|"+args))
 		fmt.Fprintf(&script, "    cat %s\n", shellQuote(stdoutPath))
 		fmt.Fprintf(&script, "    cat %s >&2\n", shellQuote(stderrPath))
 		fmt.Fprintf(&script, "    exit %d\n", exitCode)
@@ -444,6 +490,7 @@ case "$PWD|$*" in
 	}
 	script.WriteString(`esac
 case "$*" in
+  "--json --readonly --sandbox list --all --limit 0 --type epic") printf '[]\n'; exit 0 ;;
   --json\ --sandbox\ update\ *--set-metadata\ orpheus.branch=*) exit 0 ;;
   --json\ --sandbox\ update\ *--set-metadata\ orpheus.pr_url=*) exit 0 ;;
 esac

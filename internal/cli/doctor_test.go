@@ -1,3 +1,5 @@
+//go:build integration
+
 //nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
 package cli
 
@@ -17,7 +19,7 @@ import (
 )
 
 //nolint:funlen // The end-to-end recovery fixture covers implementation, review, and stats together.
-func TestDoctorRecoversCodexUsageForImplementationAndReviewAgent(t *testing.T) {
+func TestIntegrationDoctorRecoversCodexUsageForImplementationAndReviewAgent(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -155,7 +157,7 @@ func TestDoctorRecoversCodexUsageForImplementationAndReviewAgent(t *testing.T) {
 	is.Contains(statsOut, "combined")
 }
 
-func TestDoctorDoesNotOverwriteExistingCodexCostWhenRecoveringSession(t *testing.T) {
+func TestIntegrationDoctorDoesNotOverwriteExistingCodexCostWhenRecoveringSession(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -197,7 +199,7 @@ func TestDoctorDoesNotOverwriteExistingCodexCostWhenRecoveringSession(t *testing
 	is.Equal("old pricing snapshot", loaded.Runs[0].Execution.UsageCost.Pricing.Source)
 }
 
-func TestDoctorLeavesTotalOnlyCodexUsageCostUnknown(t *testing.T) {
+func TestIntegrationDoctorLeavesTotalOnlyCodexUsageCostUnknown(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -226,7 +228,7 @@ func TestDoctorLeavesTotalOnlyCodexUsageCostUnknown(t *testing.T) {
 }
 
 //nolint:funlen // The fixture exercises all persisted execution locations without session logs.
-func TestDoctorStampsStoredCodexCostsWithoutSessionLogRecorrelation(t *testing.T) {
+func TestIntegrationDoctorStampsStoredCodexCostsWithoutSessionLogRecorrelation(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -294,7 +296,7 @@ func TestDoctorStampsStoredCodexCostsWithoutSessionLogRecorrelation(t *testing.T
 	t.Fatal("missing finished sync-conflict execution")
 }
 
-func TestDoctorBackfillSelectsPricingByExecutionStart(t *testing.T) {
+func TestIntegrationDoctorBackfillSelectsPricingByExecutionStart(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -337,7 +339,7 @@ func assertDoctorCodexCostSnapshot(t *testing.T, cost *taskstate.AgentUsageCost)
 	must.NotEmpty(cost.Pricing.Source)
 }
 
-func TestDoctorFallsBackToRegisteredRepoRootWhenTaskTargetIsMissing(t *testing.T) {
+func TestIntegrationDoctorFallsBackToRegisteredRepoRootWhenTaskTargetIsMissing(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -386,7 +388,7 @@ func TestDoctorFallsBackToRegisteredRepoRootWhenTaskTargetIsMissing(t *testing.T
 }
 
 //nolint:funlen // The fixture records all recovery inputs and assertions.
-func TestDoctorRecoversPiUsageAndReportedCost(t *testing.T) {
+func TestIntegrationDoctorRecoversPiUsageAndReportedCost(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -450,7 +452,7 @@ func TestDoctorRecoversPiUsageAndReportedCost(t *testing.T) {
 	is.Equal(taskstate.UsageCaptureCaptured, execution.UsageCapture.Status)
 }
 
-func TestDoctorRefreshesStoredPiReportedCost(t *testing.T) {
+func TestIntegrationDoctorRefreshesStoredPiReportedCost(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -483,7 +485,7 @@ func TestDoctorRefreshesStoredPiReportedCost(t *testing.T) {
 	is.Equal(agent.UsageCostKindPiReportedEstimated, loaded.Runs[0].Execution.UsageCost.Kind)
 }
 
-func TestDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(t *testing.T) {
+func TestIntegrationDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(t *testing.T) {
 	t.Parallel()
 	t.Run("with complete boundary", func(t *testing.T) {
 		costBaseline := int64(1561)
@@ -620,7 +622,7 @@ func agentUsageCost(amount int64) *taskstate.AgentUsageCost {
 	return &cost
 }
 
-func TestDoctorRecoversPiUsageWhenMatchedSessionHasNoReportedCost(t *testing.T) {
+func TestIntegrationDoctorRecoversPiUsageWhenMatchedSessionHasNoReportedCost(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -669,7 +671,7 @@ func TestDoctorRecoversPiUsageWhenMatchedSessionHasNoReportedCost(t *testing.T) 
 	is.Equal(taskstate.UsageCaptureCaptured, execution.UsageCapture.Status)
 }
 
-func TestDoctorDoesNotRecoverPiCostWhenMatchedSessionHasNoReportedCost(t *testing.T) {
+func TestIntegrationDoctorDoesNotRecoverPiCostWhenMatchedSessionHasNoReportedCost(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -728,7 +730,7 @@ func TestDoctorDoesNotRecoverPiCostWhenMatchedSessionHasNoReportedCost(t *testin
 	is.Equal(180, execution.Usage.TotalTokens)
 }
 
-func TestDoctorRecoversUsageForUnfinishedExecution(t *testing.T) {
+func TestIntegrationDoctorRecoversUsageForUnfinishedExecution(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -767,7 +769,7 @@ func TestDoctorRecoversUsageForUnfinishedExecution(t *testing.T) {
 	is.Equal(taskstate.UsageCaptureCaptured, loaded.Runs[0].Execution.UsageCapture.Status)
 }
 
-func TestDoctorReportsAmbiguousAndNoMatchWithoutMutating(t *testing.T) {
+func TestIntegrationDoctorReportsAmbiguousAndNoMatchWithoutMutating(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -824,7 +826,7 @@ func TestDoctorReportsAmbiguousAndNoMatchWithoutMutating(t *testing.T) {
 	is.Nil(missingState.Runs[0].Execution.Usage)
 }
 
-func TestDoctorReportsAmbiguousPiMatchesWithoutMutating(t *testing.T) {
+func TestIntegrationDoctorReportsAmbiguousPiMatchesWithoutMutating(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -877,7 +879,7 @@ func TestDoctorReportsAmbiguousPiMatchesWithoutMutating(t *testing.T) {
 }
 
 //nolint:funlen // The sync-conflict recovery fixture covers terminal event repair and stats integration.
-func TestDoctorRecoversSyncConflictTerminalUsage(t *testing.T) {
+func TestIntegrationDoctorRecoversSyncConflictTerminalUsage(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -1007,7 +1009,7 @@ func TestDoctorRecoversSyncConflictTerminalUsage(t *testing.T) {
 }
 
 //nolint:funlen // The fixture records all recovery inputs and assertions.
-func TestDoctorPrefersRecordedSyncConflictWorktreeBeforeFallbackDirs(t *testing.T) {
+func TestIntegrationDoctorPrefersRecordedSyncConflictWorktreeBeforeFallbackDirs(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -1071,7 +1073,7 @@ func TestDoctorPrefersRecordedSyncConflictWorktreeBeforeFallbackDirs(t *testing.
 	is.Equal(eventWorktree, syncEvent.Worktree)
 }
 
-func TestDoctorTraversesAllRegisteredRepos(t *testing.T) {
+func TestIntegrationDoctorTraversesAllRegisteredRepos(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)

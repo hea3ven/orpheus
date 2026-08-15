@@ -415,7 +415,7 @@ get_metadata(task_id, key)
 close_task(task_id)
 ```
 
-`snapshot_tasks()` returns the current visible task-backend state for configured repositories. For the MVP, snapshots include all visible issue types and statuses from the backend, including closed items. The task snapshot is not a status projection and does not include a separate backend-specific "ready" collection.
+`snapshot_tasks()` returns the current task-source state for configured repositories. Task sources expose only `task` and `epic` items, while retaining both active and closed statuses. Backend-specific types such as bugs, chores, custom types, and items without a recognized type remain outside the boundary. The task snapshot is not a status projection and does not include a separate backend-specific "ready" collection.
 
 Repository read failures should carry small structured diagnostics so operator-facing projections can explain degraded data without parsing error strings:
 
@@ -898,7 +898,7 @@ orpheus task sync --all
 - cheap local process state if available
 - structured diagnostics from each local data source
 
-Task backend snapshots are backend-state read models. For the MVP they include all visible issue types and statuses, including closed items. The status projection owns Orpheus' interpretation of that state.
+Task backend snapshots are task-source read models. They include task and epic items in all statuses, including closed items; other backend issue types are excluded before the snapshot reaches Orpheus. The status projection owns Orpheus' interpretation of that state.
 
 Recommended groups:
 
@@ -938,8 +938,8 @@ task has dependency ids and at least one dependency is missing from the same rep
 task status is closed
 => Done / closed
 
-All issue types are visible to the MVP readiness projection. Later milestones may
-add command-specific filters when dispatch eligibility becomes stricter.
+Only task and epic items are visible to the readiness projection. Source-level
+filtering enforces that invariant before downstream workflow policies run.
 ```
 
 Examples of later run-state projection rules:

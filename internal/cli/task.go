@@ -72,7 +72,6 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 		newTaskStartCommand(opts),
 		newTaskCloseCommand(opts),
 		newTaskListCommand(opts),
-		newTaskReadyCommand(opts),
 		newTaskShowCommand(opts),
 		newTaskStatsCommand(opts),
 		newTaskDirCommand(opts),
@@ -86,45 +85,14 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 }
 
 func newTaskListCommand(opts *rootOptions) *cobra.Command {
-	var detailed bool
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "list",
-		Short: "List active items across registered repositories",
+		Short: "List all active tasks and epics across registered repositories",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
-			return runTaskRows(command, opts, taskRowsOptions{
-				operation:    "task list",
-				logOperation: "task_list",
-				loadingLog:   "loading registered repos for task query",
-				queryingLog:  "querying active tasks",
-				queriedLog:   "queried active tasks",
-				detailed:     detailed,
-				query: func(ctx context.Context, aggregator taskmodel.Aggregator) taskRowsResult {
-					result := aggregator.List(ctx)
-					return taskRowsResult{
-						Rows:     result.Rows,
-						Failures: result.Failures,
-					}
-				},
-			})
+			return runTaskList(command, opts)
 		},
 	}
-	addTaskDetailFlags(cmd, &detailed)
-	return cmd
-}
-
-func newTaskReadyCommand(opts *rootOptions) *cobra.Command {
-	var detailed bool
-	cmd := &cobra.Command{
-		Use:   "ready",
-		Short: "List tasks ready under Orpheus' local readiness policy",
-		Args:  cobra.NoArgs,
-		RunE: func(command *cobra.Command, args []string) error {
-			return runTaskReady(command, opts, detailed)
-		},
-	}
-	addTaskDetailFlags(cmd, &detailed)
-	return cmd
 }
 
 func newTaskShowCommand(opts *rootOptions) *cobra.Command {
@@ -197,7 +165,7 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 			"task run selects the next safe transition: implementation, review, a manual-review resume, targeted repair, or finalization retry. It reports active runs, open pull requests, and finalized tasks without starting inappropriate work. " +
 			"By default, implementation runs use a deterministic task branch and worktree. " +
 			"Use --repo-root to run from the registered repository root. Repository-root work starts on the registered default branch and is published through the same pull-request flow.\n\n" +
-			"Automated blockers require an explicit keep, downgrade, or waive/cancel decision before targeted fixes. Manual steps are persisted and resumed without rerunning completed review steps. `task review` and `task done` remain compatibility entry points; use `task review show` to inspect review findings. PR synchronization remains `task sync`.",
+			"Automated blockers require an explicit keep, downgrade, or waive/cancel decision. They also offer restart and pause before targeted fixes: restart reruns only the blocked automated step, while pause resumes through task review. Manual steps are persisted and resumed without rerunning completed review steps. `task review` and `task done` remain compatibility entry points; use `task review show` to inspect review findings. PR synchronization remains `task sync`.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			if mainMode {
@@ -258,7 +226,7 @@ func newTaskReviewCommand(opts *rootOptions) *cobra.Command {
 			"then finalizes through the same path as task done. When task run has paused " +
 			"at a manual step, task run resumes that same attempt; --pipeline may only " +
 			"name the already selected pipeline and cannot replace it. Automated blockers " +
-			"require an explicit keep, downgrade, or waive/cancel decision. Kept blockers " +
+			"require an explicit keep, downgrade, or waive/cancel decision. They also offer restart and pause: restart reruns only the blocked automated step, while pause resumes through task review. Kept blockers " +
 			"run bounded targeted fixes and restart the pipeline from step 1 so manual " +
 			"gates must pass again. If blocker-decision input disappears, the current " +
 			"attempt is blocked; before a fresh review, each preserved blocker needs a keep, " +
@@ -423,17 +391,12 @@ type taskEditOptions struct {
 	parentIDSet           bool
 }
 
-func addTaskDetailFlags(cmd *cobra.Command, detailed *bool) {
-	cmd.Flags().BoolVar(detailed, "details", false, "show detailed table with repo ids, task prefixes, and Orpheus metadata")
-	cmd.Flags().BoolVarP(detailed, "long", "l", false, "show detailed table with repo ids, task prefixes, and Orpheus metadata")
-}
-
-func runTaskReady(command *cobra.Command, opts *rootOptions, detailed bool) error {
+func runTaskList(command *cobra.Command, opts *rootOptions) error {
 	logger := opts.log().With(
 		slog.String("component", "cli"),
-		slog.String("operation", "task_ready"),
+		slog.String("operation", "task_list"),
 	)
-	logger.DebugContext(command.Context(), "loading registered repos for task ready")
+	logger.DebugContext(command.Context(), "loading registered repos for task inventory")
 
 	deps, err := opts.invocation(command)
 	if err != nil {
@@ -450,58 +413,36 @@ func runTaskReady(command *cobra.Command, opts *rootOptions, detailed bool) erro
 	if len(runStateFailures) > 0 {
 		snapshot.Failures = append(snapshot.Failures, runStateFailures...)
 	}
-	rows := status.ReadyRowsWithLocalTaskStates(snapshot, runStates)
+	projection := activeTaskInventory(status.ProjectWithLocalTaskStates(snapshot, runStates))
 	logger.DebugContext(
 		command.Context(),
-		"projected ready tasks",
-		slog.Int("row_count", len(rows)),
+		"projected task inventory",
 		slog.Int("failure_count", len(snapshot.Failures)),
 		slog.Int("run_state_count", len(runStates)),
 	)
 
-	if err := renderTaskRows(command.OutOrStdout(), rows, detailed); err != nil {
+	renderOptions := statusRenderOptionsForOutput(command.OutOrStdout(), false, defaultStatusWidthDetector)
+	if err := renderStatus(command.OutOrStdout(), projection, true, renderOptions); err != nil {
 		return err
 	}
 	if snapshot.HasFailures() {
-		writeRepoFailures(command.ErrOrStderr(), "task ready", snapshot.Failures)
-		return partialRepoFailureError{operation: "task ready", failures: snapshot.Failures}
+		writeRepoFailures(command.ErrOrStderr(), "task list", snapshot.Failures)
+		return partialRepoFailureError{operation: "task list", failures: snapshot.Failures}
 	}
 	return nil
 }
 
-func runTaskRows(command *cobra.Command, opts *rootOptions, rowOpts taskRowsOptions) error {
-	logger := opts.log().With(
-		slog.String("component", "cli"),
-		slog.String("operation", rowOpts.logOperation),
-	)
-	logger.DebugContext(command.Context(), rowOpts.loadingLog)
-
-	deps, err := opts.invocation(command)
-	if err != nil {
-		return err
+// activeTaskInventory retains every task-source item that has not closed while
+// preserving the status projection's classification, details, and diagnostics.
+func activeTaskInventory(projection status.Projection) status.Projection {
+	inventory := status.Projection{Groups: make([]status.Group, 0, len(projection.Groups))}
+	for _, group := range projection.Groups {
+		if group.ID == status.GroupDoneClosed {
+			continue
+		}
+		inventory.Groups = append(inventory.Groups, group)
 	}
-	taskCtx, err := loadTaskContextFromInvocation(deps)
-	if err != nil {
-		return err
-	}
-	logger.DebugContext(command.Context(), rowOpts.queryingLog, slog.Int("repo_count", len(taskCtx.Sources)))
-
-	result := rowOpts.query(command.Context(), taskCtx.Aggregator)
-	logger.DebugContext(
-		command.Context(),
-		rowOpts.queriedLog,
-		slog.Int("row_count", len(result.Rows)),
-		slog.Int("failure_count", len(result.Failures)),
-	)
-
-	if err := renderTaskRows(command.OutOrStdout(), result.Rows, rowOpts.detailed); err != nil {
-		return err
-	}
-	if result.HasFailures() {
-		writeRepoFailures(command.ErrOrStderr(), rowOpts.operation, result.Failures)
-		return partialRepoFailureError{operation: rowOpts.operation, failures: result.Failures}
-	}
-	return nil
+	return inventory
 }
 
 func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error {
@@ -951,6 +892,7 @@ func executeTaskRunRoute(command *cobra.Command, opts *rootOptions, execution ta
 		return renderTaskDoneResult(command, finalized)
 	case workflow.TaskRunActionImplementationActive,
 		workflow.TaskRunActionReviewActive,
+		workflow.TaskRunActionReviewPaused,
 		workflow.TaskRunActionOpenPR,
 		workflow.TaskRunActionCompleted:
 		return renderTaskRunRoute(command.OutOrStdout(), resolved.TaskID, execution.route)
@@ -1040,6 +982,8 @@ func renderTaskRunRoute(output io.Writer, taskID string, route workflow.TaskRunR
 		message = fmt.Sprintf("Task %s: implementation attempt %d is active; wait for it to finish.\n", taskID, route.Attempt)
 	case workflow.TaskRunActionReviewActive:
 		message = fmt.Sprintf("Task %s: review attempt %d is active; inspect `orpheus task review show %s`.\n", taskID, route.Attempt, taskID)
+	case workflow.TaskRunActionReviewPaused:
+		message = fmt.Sprintf("Task %s: automated blocker decision is paused at step %q; run `orpheus task review %s` to resume it.\n", taskID, route.Step, taskID)
 	case workflow.TaskRunActionOpenPR:
 		message = fmt.Sprintf("Task %s: pull request %s is open; run `orpheus task sync %s` to reconcile it.\n", taskID, route.PRURL, taskID)
 	case workflow.TaskRunActionCompleted:
@@ -2356,7 +2300,7 @@ func promptAutomatedBlockerDecisions(
 	output := command.ErrOrStderr()
 	if _, err := fmt.Fprintf(
 		output,
-		"\nAutomated blocking findings from step %q can be kept, downgraded, or waived/canceled.\n",
+		"\nAutomated blocking findings from step %q can be kept, downgraded, waived/canceled, restarted, or paused.\n",
 		blockerReview.Step.Name,
 	); err != nil {
 		return nil, err
@@ -2372,6 +2316,9 @@ func promptAutomatedBlockerDecisions(
 			return nil, err
 		}
 		decisions = append(decisions, decision)
+		if decision.Action == review.AutomatedBlockerActionRestart || decision.Action == review.AutomatedBlockerActionPause {
+			return decisions, nil
+		}
 	}
 	return decisions, nil
 }
@@ -2379,7 +2326,7 @@ func promptAutomatedBlockerDecisions(
 func renderAutomatedBlocker(output io.Writer, blocker review.AutomatedBlocker) error {
 	finding := blocker.Finding
 	lines := []string{
-		fmt.Sprintf("  Finding %d:", blocker.Index+1),
+		fmt.Sprintf("  Finding %d:", automatedBlockerDisplayNumber(blocker)),
 		fmt.Sprintf("    Title: %s", formatReviewValue(finding.Title)),
 		fmt.Sprintf("    Description: %s", formatReviewValue(finding.Description)),
 	}
@@ -2394,6 +2341,13 @@ func renderAutomatedBlocker(output io.Writer, blocker review.AutomatedBlocker) e
 	return nil
 }
 
+func automatedBlockerDisplayNumber(blocker review.AutomatedBlocker) int {
+	if blocker.Number > 0 {
+		return blocker.Number
+	}
+	return blocker.Index + 1
+}
+
 func promptAutomatedBlockerDecision(
 	command *cobra.Command,
 	reader *bufio.Reader,
@@ -2402,8 +2356,8 @@ func promptAutomatedBlockerDecision(
 	for {
 		if _, err := fmt.Fprintf(
 			command.ErrOrStderr(),
-			"Decision for finding %d [k=keep, d=downgrade advisory, w=waive/cancel]: ",
-			blocker.Index+1,
+			"Decision for finding %d [k=keep, d=downgrade advisory, w=waive/cancel, r=restart step, p=pause]: ",
+			automatedBlockerDisplayNumber(blocker),
 		); err != nil {
 			return review.AutomatedBlockerDecision{}, err
 		}
@@ -2439,8 +2393,12 @@ func promptAutomatedBlockerDecision(
 				Action:       review.AutomatedBlockerActionWaive,
 				Reason:       reason,
 			}, nil
+		case "r", "restart":
+			return review.AutomatedBlockerDecision{FindingIndex: blocker.Index, Action: review.AutomatedBlockerActionRestart}, nil
+		case "p", "pause":
+			return review.AutomatedBlockerDecision{FindingIndex: blocker.Index, Action: review.AutomatedBlockerActionPause}, nil
 		default:
-			if _, err := fmt.Fprintln(command.ErrOrStderr(), "Choose keep, downgrade, waive, or cancel."); err != nil {
+			if _, err := fmt.Fprintln(command.ErrOrStderr(), "Choose keep, downgrade, waive, cancel, restart, or pause."); err != nil {
 				return review.AutomatedBlockerDecision{}, err
 			}
 		}
@@ -3885,25 +3843,6 @@ func taskRunEnvironment(repoID string, taskID string, worktree string, branch st
 	}
 }
 
-type taskRowsResult struct {
-	Rows     []taskmodel.RepoTask
-	Failures []taskmodel.RepoFailure
-}
-
-func (r taskRowsResult) HasFailures() bool {
-	return len(r.Failures) > 0
-}
-
-type taskRowsOptions struct {
-	operation    string
-	logOperation string
-	loadingLog   string
-	queryingLog  string
-	queriedLog   string
-	detailed     bool
-	query        func(context.Context, taskmodel.Aggregator) taskRowsResult
-}
-
 func renderTaskDetails(
 	output interface{ Write([]byte) (int, error) },
 	row taskmodel.RepoTask,
@@ -5048,57 +4987,6 @@ func formatLabels(labels []string) string {
 		return "-"
 	}
 	return strings.Join(labels, ", ")
-}
-
-func renderTaskRows(output interface{ Write([]byte) (int, error) }, rows []taskmodel.RepoTask, detailed bool) error {
-	if detailed {
-		return renderDetailedTaskRows(output, rows)
-	}
-
-	tableRows := make([][]string, 0, len(rows))
-	for _, row := range rows {
-		tableRows = append(tableRows, taskTableRow(row))
-	}
-	return renderTable(output, []string{"REPO", "TASK_ID", "STATUS", "P", "TITLE"}, tableRows)
-}
-
-func renderDetailedTaskRows(output interface{ Write([]byte) (int, error) }, rows []taskmodel.RepoTask) error {
-	tableRows := make([][]string, 0, len(rows))
-	for _, row := range rows {
-		tableRows = append(tableRows, detailedTaskTableRow(row))
-	}
-	return renderTable(
-		output,
-		[]string{"REPO_ID", "REPO", "TASK_PREFIX", "TASK_ID", "STATUS", "P", "BRANCH", "WORKTREE", "PR", "EXTERNAL_REF", "TITLE"},
-		tableRows,
-	)
-}
-
-func taskTableRow(row taskmodel.RepoTask) []string {
-	return []string{
-		row.Repository.Name,
-		row.Task.ID,
-		string(row.Task.Status),
-		strconv.Itoa(row.Task.Priority),
-		row.Task.Title,
-	}
-}
-
-func detailedTaskTableRow(row taskmodel.RepoTask) []string {
-	metadata := row.Task.OrpheusMetadata()
-	return []string{
-		row.Repository.ID,
-		row.Repository.Name,
-		row.Repository.TaskIDPrefix,
-		row.Task.ID,
-		string(row.Task.Status),
-		strconv.Itoa(row.Task.Priority),
-		formatMetadataTableCell(metadata.Branch, metadata.HasBranch),
-		formatMetadataTableCell(metadata.Worktree, metadata.HasWorktree),
-		formatMetadataTableCell(metadata.PRURL, metadata.HasPRURL),
-		formatTaskField(row.Task.ExternalRef),
-		row.Task.Title,
-	}
 }
 
 func formatMetadataTableCell(value string, present bool) string {

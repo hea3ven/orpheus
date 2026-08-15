@@ -77,6 +77,7 @@ const (
 	DetailReviewManualStep         DetailKind = "review_manual_step"
 	DetailReviewDecisionLost       DetailKind = "review_decision_lost"
 	DetailReviewDecisionRequired   DetailKind = "review_decision_required"
+	DetailReviewDecisionPaused     DetailKind = "review_decision_paused"
 	DetailReviewFollowUpReady      DetailKind = "review_follow_up_ready"
 	DetailReviewBudgetSpent        DetailKind = "review_budget_spent"
 	DetailReviewFindings           DetailKind = "review_findings"
@@ -209,35 +210,6 @@ func ProjectWithLocalTaskStates(snapshot task.SnapshotResult, localStates LocalT
 		projection.add(GroupNeedsAttention, failureEntry(failure))
 	}
 	return projection
-}
-
-// ReadyRows returns rows selected by the canonical Orpheus MVP readiness policy.
-func ReadyRows(snapshot task.SnapshotResult) []task.RepoTask {
-	return ReadyRowsWithRunStates(snapshot, nil)
-}
-
-// ReadyRowsWithRunStates returns ready rows while respecting local run history.
-func ReadyRowsWithRunStates(snapshot task.SnapshotResult, runStates RunStateIndex) []task.RepoTask {
-	return ReadyRowsWithLocalTaskStates(snapshot, localTaskStatesFromRunStates(runStates))
-}
-
-// ReadyRowsWithLocalTaskStates returns ready rows while respecting local Orpheus task state.
-func ReadyRowsWithLocalTaskStates(snapshot task.SnapshotResult, localStates LocalTaskStateIndex) []task.RepoTask {
-	rows := make([]task.RepoTask, 0)
-	for _, repoSnapshot := range snapshot.Repositories {
-		index := newRepositoryIndex(repoSnapshot.Tasks)
-		for _, taskItem := range repoSnapshot.Tasks {
-			localState := localTaskStateFor(localStates, repoSnapshot.Repository.ID, taskItem.ID)
-			if classify(repoSnapshot.Repository, taskItem, index, localState).state != readinessReady {
-				continue
-			}
-			rows = append(rows, task.RepoTask{
-				Repository: repoSnapshot.Repository,
-				Task:       taskItem.Clone(),
-			})
-		}
-	}
-	return rows
 }
 
 // RunStateKey returns the stable lookup key for RunStateIndex.
@@ -481,6 +453,13 @@ func classifyLatestReview(
 
 	switch latestReview.Status {
 	case taskstate.ReviewStatusRunning:
+		if taskstate.HasUnkeptAutomatedBlockingFindingsInState(taskstate.TaskState{Runs: runs}, *latestReview) {
+			return newPolicyResult(
+				readinessReview,
+				"review blocker decision required; run task run",
+				Detail{Kind: DetailReviewDecisionRequired},
+			), true
+		}
 		return newPolicyResult(
 			readinessReview,
 			"review running",
@@ -492,6 +471,13 @@ func classifyLatestReview(
 			readinessReview,
 			fmt.Sprintf("local review; run task run (waiting for manual step %s)", step),
 			Detail{Kind: DetailReviewManualStep, Step: step},
+		), true
+	case taskstate.ReviewStatusWaitingForAutomatedDecision:
+		step := valueOrUnknown(latestReview.Step)
+		return newPolicyResult(
+			readinessReview,
+			fmt.Sprintf("review blocker decision paused at %s; run task review", step),
+			Detail{Kind: DetailReviewDecisionPaused, Step: step},
 		), true
 	case taskstate.ReviewStatusBlocked:
 		return classifyBlockedReview(taskstate.TaskState{Runs: runs}, *latestReview), true

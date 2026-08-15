@@ -16,6 +16,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/hea3ven/orpheus/internal/testlane"
 )
 
 const (
@@ -47,6 +49,7 @@ type run struct {
 
 type summary struct {
 	WallSeconds float64    `json:"wall_seconds"`
+	TestCount   int        `json:"test_count"`
 	Packages    []duration `json:"packages"`
 	Tests       []duration `json:"tests,omitempty"`
 }
@@ -116,7 +119,7 @@ func parseOptions(args []string) (options, error) {
 	opts := options{}
 	flags := flag.NewFlagSet("testtiming", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	flags.StringVar(&opts.lane, "lane", "fast", "test lane to measure: fast or integration")
+	flags.StringVar(&opts.lane, "lane", "unit", "test lane to measure: unit or integration")
 	flags.IntVar(&opts.samples, "samples", defaultSamples, "number of uncached samples")
 	flags.StringVar(&opts.output, "output", os.Getenv("TEST_TIMING_OUTPUT"), "JSON report path")
 	flags.StringVar(&opts.baseline, "baseline", "performance/test-timing-baseline.json", "tracked JSON budget baseline")
@@ -128,8 +131,8 @@ func parseOptions(args []string) (options, error) {
 	if flags.NArg() != 0 {
 		return options{}, errors.New("testtiming does not accept positional arguments")
 	}
-	if opts.lane != "fast" && opts.lane != "integration" {
-		return options{}, fmt.Errorf("unknown lane %q (want fast or integration)", opts.lane)
+	if opts.lane != "unit" && opts.lane != "integration" {
+		return options{}, fmt.Errorf("unknown lane %q (want unit or integration)", opts.lane)
 	}
 	if opts.samples < 1 {
 		return options{}, errors.New("samples must be at least 1")
@@ -240,7 +243,7 @@ func measure(opts options) (report, error) {
 func testCommand(lane string) []string {
 	command := []string{"go", "test", "-json", "-count=1"}
 	if lane == "integration" {
-		command = append(command, "-tags=integration", "-run", "^TestIntegration")
+		command = append(command, "-tags="+testlane.IntegrationBuildTag, "-run", testlane.IntegrationTestPattern)
 	}
 	return append(command, "./...")
 }
@@ -309,8 +312,13 @@ func appendTail(current, next string, limit int) string {
 }
 
 func summarize(runs []run) summary {
-	result := summary{WallSeconds: median(wallTimes(runs)), Packages: summarizeDurations(runs, func(r run) map[string]float64 { return r.Packages }), Tests: summarizeDurations(runs, func(r run) map[string]float64 { return r.Tests })}
-	return result
+	tests := summarizeDurations(runs, func(r run) map[string]float64 { return r.Tests })
+	return summary{
+		WallSeconds: median(wallTimes(runs)),
+		TestCount:   len(tests),
+		Packages:    summarizeDurations(runs, func(r run) map[string]float64 { return r.Packages }),
+		Tests:       tests,
+	}
 }
 
 func wallTimes(runs []run) []float64 {
@@ -433,6 +441,7 @@ func baselineLane(report report, policy budgetPolicy) laneBaseline {
 		Environment: report.Environment,
 		Median: summary{
 			WallSeconds: report.Median.WallSeconds,
+			TestCount:   report.Median.TestCount,
 			Packages:    report.Median.Packages,
 		},
 		SuiteBudget: budget(report.Median.WallSeconds, policy.SuiteRelativeTolerance, policy.SuiteAbsoluteSeconds),
@@ -464,6 +473,10 @@ func (b *baseline) update(report report) bool {
 	if report.Median.WallSeconds < existing.Median.WallSeconds {
 		existing.Median.WallSeconds = report.Median.WallSeconds
 		existing.SuiteBudget = budget(report.Median.WallSeconds, b.Policy.SuiteRelativeTolerance, b.Policy.SuiteAbsoluteSeconds)
+		changed = true
+	}
+	if existing.Median.TestCount != report.Median.TestCount {
+		existing.Median.TestCount = report.Median.TestCount
 		changed = true
 	}
 	existing.Median.Packages, existing.Budgets, changed = updatePackageBaselines(existing.Median.Packages, existing.Budgets, report.Median.Packages, b.Policy, changed)
@@ -531,7 +544,7 @@ func (b baseline) check(report report) []string {
 }
 
 func printReport(report report, output string) {
-	fmt.Printf("Median wall time: %.2fs\n", report.Median.WallSeconds)
+	fmt.Printf("Median wall time: %.2fs (%d test events)\n", report.Median.WallSeconds, report.Median.TestCount)
 	printDurations("Slow packages", report.Median.Packages)
 	printDurations("Slow tests and subtests", report.Median.Tests)
 	fmt.Printf("JSON report: %s\n", output)

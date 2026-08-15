@@ -1,3 +1,5 @@
+//go:build integration
+
 package git_test
 
 import (
@@ -11,7 +13,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 )
 
-func TestVerifyCommitMatchesRecordedParentAndMessage(t *testing.T) {
+func TestIntegrationVerifyCommitMatchesRecordedParentAndMessage(t *testing.T) {
 	repoPath := newGitRepo(t)
 	parent, err := orpheusgit.HeadCommit(context.Background(), repoPath)
 	if err != nil {
@@ -31,7 +33,7 @@ func TestVerifyCommitMatchesRecordedParentAndMessage(t *testing.T) {
 	}
 }
 
-func TestSetupTaskWorktreeCreatesAndReusesDeterministicWorktree(t *testing.T) {
+func TestIntegrationSetupTaskWorktreeCreatesAndReusesDeterministicWorktree(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	paths := newStatePaths(t)
 
@@ -80,7 +82,7 @@ func TestSetupTaskWorktreeCreatesAndReusesDeterministicWorktree(t *testing.T) {
 	}
 }
 
-func TestSetupTaskWorktreeRecreatesMissingWorktreeForExistingBranch(t *testing.T) {
+func TestIntegrationSetupTaskWorktreeRecreatesMissingWorktreeForExistingBranch(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	paths := newStatePaths(t)
 	runGit(t, repoPath, "branch", "orpheus/op-2", "main")
@@ -102,7 +104,7 @@ func TestSetupTaskWorktreeRecreatesMissingWorktreeForExistingBranch(t *testing.T
 	assertGitBranch(t, got.WorktreePath, "orpheus/op-2")
 }
 
-func TestSetupTaskWorktreeRefusesExistingPathOnDifferentBranch(t *testing.T) {
+func TestIntegrationSetupTaskWorktreeRefusesExistingPathOnDifferentBranch(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	paths := newStatePaths(t)
 	expectedPath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-3"))
@@ -131,7 +133,7 @@ func TestSetupTaskWorktreeRefusesExistingPathOnDifferentBranch(t *testing.T) {
 	}
 }
 
-func TestSetupTaskWorktreeRequiresOriginRemote(t *testing.T) {
+func TestIntegrationSetupTaskWorktreeRequiresOriginRemote(t *testing.T) {
 	repoPath := newGitRepo(t)
 	paths := newStatePaths(t)
 
@@ -151,7 +153,7 @@ func TestSetupTaskWorktreeRequiresOriginRemote(t *testing.T) {
 	}
 }
 
-func TestSetupTaskWorktreeRefusesWorktreeFromUnexpectedRepository(t *testing.T) {
+func TestIntegrationSetupTaskWorktreeRefusesWorktreeFromUnexpectedRepository(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	otherRepoPath := newGitRepoWithLocalOrigin(t)
 	paths := newStatePaths(t)
@@ -181,7 +183,7 @@ func TestSetupTaskWorktreeRefusesWorktreeFromUnexpectedRepository(t *testing.T) 
 	}
 }
 
-func TestSetupRepoRootSwitchesToDefaultBranchAndFastForwards(t *testing.T) {
+func TestIntegrationSetupRepoRootSwitchesToDefaultBranchAndFastForwards(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	pushRemoteCommit(t, repoPath, "origin.txt", "from origin")
 	runGit(t, repoPath, "checkout", "-b", "feature/local")
@@ -205,7 +207,7 @@ func TestSetupRepoRootSwitchesToDefaultBranchAndFastForwards(t *testing.T) {
 	}
 }
 
-func TestSetupRepoRootTaskBranchSwitchesToTaskBranch(t *testing.T) {
+func TestIntegrationSetupRepoRootTaskBranchSwitchesToTaskBranch(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	paths := newStatePaths(t)
 
@@ -250,7 +252,7 @@ func TestSetupRepoRootTaskBranchSwitchesToTaskBranch(t *testing.T) {
 	}
 }
 
-func TestMaterializeRepoRootTaskBranchPreservesReviewedChanges(t *testing.T) {
+func TestIntegrationMaterializeRepoRootTaskBranchPreservesReviewedChanges(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	paths := newStatePaths(t)
 	if err := os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644); err != nil {
@@ -278,7 +280,7 @@ func TestMaterializeRepoRootTaskBranchPreservesReviewedChanges(t *testing.T) {
 	}
 }
 
-func TestMaterializeRepoRootTaskBranchRefusesStaleExistingLocalBranch(t *testing.T) {
+func TestIntegrationMaterializeRepoRootTaskBranchRefusesStaleExistingLocalBranch(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	paths := newStatePaths(t)
 	runGit(t, repoPath, "branch", "orpheus/op-stale", "main")
@@ -297,7 +299,7 @@ func TestMaterializeRepoRootTaskBranchRefusesStaleExistingLocalBranch(t *testing
 	assertGitBranch(t, repoPath, "main")
 }
 
-func TestMaterializeRepoRootTaskBranchRefusesDivergentExistingLocalBranch(t *testing.T) {
+func TestIntegrationMaterializeRepoRootTaskBranchRefusesDivergentExistingLocalBranch(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	paths := newStatePaths(t)
 	runGit(t, repoPath, "checkout", "-b", "orpheus/op-divergent")
@@ -316,7 +318,7 @@ func TestMaterializeRepoRootTaskBranchRefusesDivergentExistingLocalBranch(t *tes
 	assertGitBranch(t, repoPath, "main")
 }
 
-func TestMaterializeRepoRootTaskBranchRefusesDivergentCurrentTaskBranch(t *testing.T) {
+func TestIntegrationMaterializeRepoRootTaskBranchRefusesDivergentCurrentTaskBranch(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	paths := newStatePaths(t)
 	runGit(t, repoPath, "checkout", "-b", "orpheus/op-current")
@@ -331,7 +333,7 @@ func TestMaterializeRepoRootTaskBranchRefusesDivergentCurrentTaskBranch(t *testi
 	assertGitBranch(t, repoPath, "orpheus/op-current")
 }
 
-func TestMaterializeRepoRootTaskBranchRefusesDivergentExistingRemoteBranch(t *testing.T) {
+func TestIntegrationMaterializeRepoRootTaskBranchRefusesDivergentExistingRemoteBranch(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	paths := newStatePaths(t)
 	runGit(t, repoPath, "checkout", "-b", "orpheus/op-remote")
@@ -352,7 +354,7 @@ func TestMaterializeRepoRootTaskBranchRefusesDivergentExistingRemoteBranch(t *te
 	assertGitBranch(t, repoPath, "main")
 }
 
-func TestSetupRepoRootTaskBranchRefusesDirtyRepoBeforeSwitching(t *testing.T) {
+func TestIntegrationSetupRepoRootTaskBranchRefusesDirtyRepoBeforeSwitching(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	paths := newStatePaths(t)
 	if err := os.WriteFile(filepath.Join(repoPath, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
@@ -376,7 +378,7 @@ func TestSetupRepoRootTaskBranchRefusesDirtyRepoBeforeSwitching(t *testing.T) {
 	assertGitBranch(t, repoPath, "main")
 }
 
-func TestSetupRepoRootTaskBranchAllowsDirtyWhenAlreadyOnTarget(t *testing.T) {
+func TestIntegrationSetupRepoRootTaskBranchAllowsDirtyWhenAlreadyOnTarget(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	paths := newStatePaths(t)
 	runGit(t, repoPath, "checkout", "-b", "orpheus/op-dirty")
@@ -402,7 +404,7 @@ func TestSetupRepoRootTaskBranchAllowsDirtyWhenAlreadyOnTarget(t *testing.T) {
 	assertGitBranch(t, repoPath, "orpheus/op-dirty")
 }
 
-func TestSetupRepoRootRefusesDirtyRepoBeforeSwitching(t *testing.T) {
+func TestIntegrationSetupRepoRootRefusesDirtyRepoBeforeSwitching(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	runGit(t, repoPath, "checkout", "-b", "feature/local")
 	if err := os.WriteFile(filepath.Join(repoPath, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
@@ -424,7 +426,7 @@ func TestSetupRepoRootRefusesDirtyRepoBeforeSwitching(t *testing.T) {
 	assertGitBranch(t, repoPath, "feature/local")
 }
 
-func TestSetupRepoRootAllowsDirtyWhenAlreadyOnDefaultBranch(t *testing.T) {
+func TestIntegrationSetupRepoRootAllowsDirtyWhenAlreadyOnDefaultBranch(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	if err := os.WriteFile(filepath.Join(repoPath, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
 		t.Fatalf("write dirty file: %v", err)
@@ -446,7 +448,7 @@ func TestSetupRepoRootAllowsDirtyWhenAlreadyOnDefaultBranch(t *testing.T) {
 	assertGitBranch(t, repoPath, "main")
 }
 
-func TestSetupRepoRootRefusesDivergentDefaultBranch(t *testing.T) {
+func TestIntegrationSetupRepoRootRefusesDivergentDefaultBranch(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	pushRemoteCommit(t, repoPath, "origin.txt", "from origin")
 	if err := os.WriteFile(filepath.Join(repoPath, "local.txt"), []byte("local"), 0o644); err != nil {
@@ -474,7 +476,7 @@ func TestSetupRepoRootRefusesDivergentDefaultBranch(t *testing.T) {
 	assertGitBranch(t, repoPath, "main")
 }
 
-func TestSyncTaskBranchWithDefaultMergesAndPushesCleanDefaultChanges(t *testing.T) {
+func TestIntegrationSyncTaskBranchWithDefaultMergesAndPushesCleanDefaultChanges(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	worktreePath := addTaskBranchWorktree(t, repoPath, "orpheus/op-sync")
 	commitFile(t, worktreePath, "task.txt", "task\n", "task work")
@@ -511,7 +513,7 @@ func TestSyncTaskBranchWithDefaultMergesAndPushesCleanDefaultChanges(t *testing.
 	}
 }
 
-func TestSyncTaskBranchWithDefaultFastForwardsStaleLocalBranchBeforeMergingDefault(t *testing.T) {
+func TestIntegrationSyncTaskBranchWithDefaultFastForwardsStaleLocalBranchBeforeMergingDefault(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	worktreePath := addTaskBranchWorktree(t, repoPath, "orpheus/op-stale")
 	commitFile(t, worktreePath, "task.txt", "task\n", "task work")
@@ -556,7 +558,7 @@ func TestSyncTaskBranchWithDefaultFastForwardsStaleLocalBranchBeforeMergingDefau
 	}
 }
 
-func TestSyncTaskBranchWithDefaultReportsAlreadyCurrent(t *testing.T) {
+func TestIntegrationSyncTaskBranchWithDefaultReportsAlreadyCurrent(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	worktreePath := addTaskBranchWorktree(t, repoPath, "orpheus/op-current")
 	commitFile(t, worktreePath, "task.txt", "task\n", "task work")
@@ -579,7 +581,7 @@ func TestSyncTaskBranchWithDefaultReportsAlreadyCurrent(t *testing.T) {
 	}
 }
 
-func TestSyncTaskBranchWithDefaultPushesCurrentLocalBranchWhenOriginBehind(t *testing.T) {
+func TestIntegrationSyncTaskBranchWithDefaultPushesCurrentLocalBranchWhenOriginBehind(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	worktreePath := addTaskBranchWorktree(t, repoPath, "orpheus/op-push")
 	commitFile(t, worktreePath, "task.txt", "task\n", "task work")
@@ -607,7 +609,7 @@ func TestSyncTaskBranchWithDefaultPushesCurrentLocalBranchWhenOriginBehind(t *te
 	}
 }
 
-func TestSyncTaskBranchWithDefaultDetectsConflictWithoutPushing(t *testing.T) {
+func TestIntegrationSyncTaskBranchWithDefaultDetectsConflictWithoutPushing(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	worktreePath := addTaskBranchWorktree(t, repoPath, "orpheus/op-conflict")
 	commitFile(t, worktreePath, "conflict.txt", "task\n", "task conflict")
@@ -648,7 +650,7 @@ func TestSyncTaskBranchWithDefaultDetectsConflictWithoutPushing(t *testing.T) {
 	}
 }
 
-func TestTaskBranchConflictResolutionCompletesMergeAndPushes(t *testing.T) {
+func TestIntegrationTaskBranchConflictResolutionCompletesMergeAndPushes(t *testing.T) {
 	fixture := newConflictResolutionFixture(t, "orpheus/op-resolve", nil, func(t *testing.T, repoPath string) {
 		t.Helper()
 		pushRemoteCommit(t, repoPath, "clean.txt", "clean merge\n")
@@ -707,7 +709,7 @@ func TestTaskBranchConflictResolutionCompletesMergeAndPushes(t *testing.T) {
 	}
 }
 
-func TestTaskBranchConflictResolutionCompletesMergeWithCleanDefaultRename(t *testing.T) {
+func TestIntegrationTaskBranchConflictResolutionCompletesMergeWithCleanDefaultRename(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	commitFile(t, repoPath, "old.txt", "base\n", "add old file")
 	runGit(t, repoPath, "push", "origin", "main")
@@ -769,7 +771,7 @@ func TestTaskBranchConflictResolutionCompletesMergeWithCleanDefaultRename(t *tes
 	}
 }
 
-func TestCompleteTaskBranchConflictResolutionRejectsStagedConflictMarkers(t *testing.T) {
+func TestIntegrationCompleteTaskBranchConflictResolutionRejectsStagedConflictMarkers(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	worktreePath := addTaskBranchWorktree(t, repoPath, "orpheus/op-markers")
 	commitFile(t, worktreePath, "conflict.txt", "task\n", "task conflict")
@@ -806,7 +808,7 @@ func TestCompleteTaskBranchConflictResolutionRejectsStagedConflictMarkers(t *tes
 	}
 }
 
-func TestCompleteTaskBranchConflictResolutionRejectsUnresolvedModifyDeleteConflict(t *testing.T) {
+func TestIntegrationCompleteTaskBranchConflictResolutionRejectsUnresolvedModifyDeleteConflict(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	commitFile(t, repoPath, "deleted.txt", "base\n", "add deleted file")
 	runGit(t, repoPath, "push", "origin", "main")
@@ -869,7 +871,7 @@ func TestCompleteTaskBranchConflictResolutionRejectsUnresolvedModifyDeleteConfli
 }
 
 //nolint:funlen // The dirty-state table is clearer as one conflict completion boundary test.
-func TestCompleteTaskBranchConflictResolutionRejectsUnexpectedChanges(t *testing.T) {
+func TestIntegrationCompleteTaskBranchConflictResolutionRejectsUnexpectedChanges(t *testing.T) {
 	tests := []struct {
 		name        string
 		branch      string

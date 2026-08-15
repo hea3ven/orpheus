@@ -141,6 +141,8 @@ func bdSemanticOperation(args []string) string {
 			return "config"
 		case "init":
 			return "init"
+		case "migrate":
+			return "migrate"
 		case "list":
 			return "list"
 		case "show":

@@ -152,16 +152,17 @@ type ReviewAfterRunCompletionOptions struct {
 type ReviewLifecycleOutcomeKind string
 
 const (
-	ReviewLifecycleOutcomeWaitingForManual ReviewLifecycleOutcomeKind = "waiting_for_manual"
-	ReviewLifecycleOutcomeBlocked          ReviewLifecycleOutcomeKind = "blocked"
-	ReviewLifecycleOutcomeExhausted        ReviewLifecycleOutcomeKind = "exhausted"
-	ReviewLifecycleOutcomeOperationalFail  ReviewLifecycleOutcomeKind = "operational_failure"
-	ReviewLifecycleOutcomePassed           ReviewLifecycleOutcomeKind = "passed"
-	ReviewLifecycleOutcomePublicationRetry ReviewLifecycleOutcomeKind = "publication_retry"
-	ReviewLifecycleOutcomeAborted          ReviewLifecycleOutcomeKind = "aborted"
-	ReviewLifecycleOutcomePrimaryRecovered ReviewLifecycleOutcomeKind = "primary_review_recovered"
-	ReviewLifecycleOutcomePrimaryLive      ReviewLifecycleOutcomeKind = "primary_review_live"
-	ReviewLifecycleOutcomePrimaryUnknown   ReviewLifecycleOutcomeKind = "primary_review_unverifiable"
+	ReviewLifecycleOutcomeWaitingForManual            ReviewLifecycleOutcomeKind = "waiting_for_manual"
+	ReviewLifecycleOutcomeWaitingForAutomatedDecision ReviewLifecycleOutcomeKind = "waiting_for_automated_decision"
+	ReviewLifecycleOutcomeBlocked                     ReviewLifecycleOutcomeKind = "blocked"
+	ReviewLifecycleOutcomeExhausted                   ReviewLifecycleOutcomeKind = "exhausted"
+	ReviewLifecycleOutcomeOperationalFail             ReviewLifecycleOutcomeKind = "operational_failure"
+	ReviewLifecycleOutcomePassed                      ReviewLifecycleOutcomeKind = "passed"
+	ReviewLifecycleOutcomePublicationRetry            ReviewLifecycleOutcomeKind = "publication_retry"
+	ReviewLifecycleOutcomeAborted                     ReviewLifecycleOutcomeKind = "aborted"
+	ReviewLifecycleOutcomePrimaryRecovered            ReviewLifecycleOutcomeKind = "primary_review_recovered"
+	ReviewLifecycleOutcomePrimaryLive                 ReviewLifecycleOutcomeKind = "primary_review_live"
+	ReviewLifecycleOutcomePrimaryUnknown              ReviewLifecycleOutcomeKind = "primary_review_unverifiable"
 )
 
 // ReviewLifecycleOutcome is the typed result returned to frontends.
@@ -175,16 +176,17 @@ type ReviewLifecycleOutcome struct {
 
 // ReviewAttemptContext carries non-CLI facts for one review attempt.
 type ReviewAttemptContext struct {
-	paths       state.Paths
-	store       ReviewLifecycleStore
-	Source      task.RepositorySource
-	Task        task.Task
-	Workdir     string
-	Target      tasktarget.Target
-	Review      taskstate.ReviewAttempt
-	Pipeline    review.Pipeline
-	AgentConfig agent.Config
-	Resumed     bool
+	paths                          state.Paths
+	store                          ReviewLifecycleStore
+	Source                         task.RepositorySource
+	Task                           task.Task
+	Workdir                        string
+	Target                         tasktarget.Target
+	Review                         taskstate.ReviewAttempt
+	Pipeline                       review.Pipeline
+	AgentConfig                    agent.Config
+	Resumed                        bool
+	ResumeAutomatedBlockerDecision bool
 }
 
 // ReviewManualStepContext contains read-only facts needed to render a manual review step.
@@ -540,6 +542,8 @@ func (s ReviewLifecycleService) executeAutonomousReviewLoop(
 		case taskstate.ReviewStatusBlocked:
 		case taskstate.ReviewStatusWaitingForManual:
 			return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeWaitingForManual, Context: current}, nil
+		case taskstate.ReviewStatusWaitingForAutomatedDecision:
+			return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeWaitingForAutomatedDecision, Context: current}, nil
 		case taskstate.ReviewStatusAborted:
 			return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeAborted, Context: current}, nil
 		case taskstate.ReviewStatusFailed:
@@ -624,13 +628,14 @@ func (s ReviewLifecycleService) pipelineRunOptions(runCtx context.Context, ctx R
 		RecordPrimaryChildPID: func(stepName string, pid int) error {
 			return s.RecordPrimaryReviewChildPID(ctx.RepoID(), ctx.TaskID(), ctx.Review.Attempt, stepName, pid)
 		},
-		ResumeFromStep:          ctx.Resumed,
-		PauseBeforeManual:       presentation.PauseBeforeManual,
-		RenderManualStep:        renderManualStep,
-		ConfirmManualCommand:    presentation.ConfirmManualCommand,
-		PromptManualStep:        promptManualStep,
-		PromptAutomatedBlockers: presentation.PromptAutomatedBlockers,
-		PromptAlternateFindings: presentation.PromptAlternateFindings,
+		ResumeFromStep:                 ctx.Resumed,
+		ResumeAutomatedBlockerDecision: ctx.ResumeAutomatedBlockerDecision,
+		PauseBeforeManual:              presentation.PauseBeforeManual,
+		RenderManualStep:               renderManualStep,
+		ConfirmManualCommand:           presentation.ConfirmManualCommand,
+		PromptManualStep:               promptManualStep,
+		PromptAutomatedBlockers:        presentation.PromptAutomatedBlockers,
+		PromptAlternateFindings:        presentation.PromptAlternateFindings,
 	}, nil
 }
 
@@ -795,7 +800,7 @@ func (s ReviewLifecycleService) executeReviewAttempt(runCtx context.Context, ctx
 		return "", err
 	}
 	span.Finish(runCtx, logging.StatusSuccess, slog.String("review_status", string(outcome.Status)))
-	if outcome.Status == taskstate.ReviewStatusWaitingForManual {
+	if outcome.Status == taskstate.ReviewStatusWaitingForManual || outcome.Status == taskstate.ReviewStatusWaitingForAutomatedDecision {
 		return outcome.Status, nil
 	}
 	if outcome.Status == taskstate.ReviewStatusPassed {
@@ -867,6 +872,11 @@ func (s ReviewLifecycleService) startReview(ctx context.Context, taskID string, 
 		return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", resolved.TaskID, err)
 	}
 
+	if paused, ok, err := latestAutomatedDecisionWaitingReview(s.RunStore, base); err != nil {
+		return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", resolved.TaskID, err)
+	} else if ok {
+		return s.resumeReview(base, paused, pipelineName)
+	}
 	if paused, ok, err := latestManualWaitingReview(s.RunStore, base); err != nil {
 		return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", resolved.TaskID, err)
 	} else if ok {
@@ -1112,6 +1122,7 @@ func (s ReviewLifecycleService) resumeReview(base ReviewAttemptContext, paused t
 	}
 	base.Pipeline = pipeline
 	base.Resumed = true
+	base.ResumeAutomatedBlockerDecision = paused.Status == taskstate.ReviewStatusWaitingForAutomatedDecision
 	prepared, err := s.preparePipeline(base)
 	if err != nil {
 		return base, err
@@ -1187,6 +1198,18 @@ func latestPrimaryReviewExecution(store ReviewLifecycleStore, ctx ReviewAttemptC
 	}
 	primary, ok := ActivePrimaryReviewExecution(taskState)
 	return primary, ok, nil
+}
+
+func latestAutomatedDecisionWaitingReview(store ReviewLifecycleStore, ctx ReviewAttemptContext) (taskstate.ReviewAttempt, bool, error) {
+	taskState, err := store.Load(ctx.RepoID(), ctx.TaskID())
+	if err != nil {
+		return taskstate.ReviewAttempt{}, false, fmt.Errorf("load task state: %w", err)
+	}
+	latest, ok := taskstate.LatestReview(taskState)
+	if !ok || latest.Status != taskstate.ReviewStatusWaitingForAutomatedDecision {
+		return taskstate.ReviewAttempt{}, false, nil
+	}
+	return latest, true, nil
 }
 
 func latestManualWaitingReview(store ReviewLifecycleStore, ctx ReviewAttemptContext) (taskstate.ReviewAttempt, bool, error) {
@@ -1282,7 +1305,7 @@ func ResolveTaskReviewPipeline(paths state.Paths, repo task.Repository, pipeline
 func ResolvePausedTaskReviewPipeline(paths state.Paths, repo task.Repository, paused taskstate.ReviewAttempt, pipelineName string) (review.Pipeline, error) {
 	storedPipeline := strings.TrimSpace(paused.Pipeline)
 	if storedPipeline == "" {
-		return review.Pipeline{}, fmt.Errorf("paused review attempt %d has no recorded pipeline", paused.Attempt)
+		return review.Pipeline{}, fmt.Errorf("waiting review attempt %d has no recorded pipeline", paused.Attempt)
 	}
 	pipeline, err := resolveStoredTaskReviewPipeline(paths, storedPipeline)
 	if err != nil {
@@ -1296,7 +1319,7 @@ func ResolvePausedTaskReviewPipeline(paths state.Paths, repo task.Repository, pa
 		return review.Pipeline{}, err
 	}
 	if requested.Name != pipeline.Name {
-		return review.Pipeline{}, fmt.Errorf("review attempt %d is waiting for manual step %q in pipeline %q; --pipeline %q resolves to %q and cannot replace a paused review", paused.Attempt, paused.Step, pipeline.Name, strings.TrimSpace(pipelineName), requested.Name)
+		return review.Pipeline{}, fmt.Errorf("review attempt %d is waiting at step %q in pipeline %q; --pipeline %q resolves to %q and cannot replace a paused review", paused.Attempt, paused.Step, pipeline.Name, strings.TrimSpace(pipelineName), requested.Name)
 	}
 	return pipeline, nil
 }

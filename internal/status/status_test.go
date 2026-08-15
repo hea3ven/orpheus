@@ -156,10 +156,6 @@ func TestProjectRequiresExternalReferenceBeforePrePRWorkflowStates(t *testing.T)
 	assertGroupTaskIDs(t, projection, status.GroupInReview, []string{"gated-pr"})
 	assertGroupTaskIDs(t, projection, status.GroupReadyToRun, []string{"gated-fixed", "default-open"})
 
-	rows := status.ReadyRowsWithRunStates(snapshot, runStates)
-	if len(rows) != 2 || rows[0].Task.ID != "gated-fixed" || rows[1].Task.ID != "default-open" {
-		t.Fatalf("ready rows = %#v, want fixed-reference and default-repo tasks", rows)
-	}
 }
 
 func TestProjectGatesChildReadinessOnImmediateParentEpic(t *testing.T) {
@@ -207,10 +203,6 @@ func TestProjectGatesChildReadinessOnImmediateParentEpic(t *testing.T) {
 		}
 	}
 
-	rows := status.ReadyRowsWithRunStates(snapshot, runStates)
-	if len(rows) != 3 || rows[0].Task.ID != "a-paused" || rows[1].Task.ID != "a-child-task" || rows[2].Task.ID != "a-child-epic" {
-		t.Fatalf("ready rows = %#v, want only children of the active immediate epic", rows)
-	}
 }
 
 func externalRefGateFixture() (task.SnapshotResult, status.RunStateIndex) {
@@ -491,6 +483,18 @@ func TestProjectWithLocalTaskStatesClassifiesLatestReviewAttempts(t *testing.T) 
 			wantDetail: "review blocker decision required; run task run",
 		},
 		{
+			name: "running review with unkept automated blocker recovers through task run",
+			review: func() taskstate.ReviewAttempt {
+				review := reviewAttempt(1, taskstate.ReviewStatusRunning, []taskstate.ReviewFinding{
+					{Type: taskstate.FindingTypeBlocking, Step: "lint", Title: "Bug", Description: "Fix it"},
+				})
+				review.Steps = []taskstate.ReviewStep{{Kind: taskstate.ReviewStepKindCheck, Name: "lint"}}
+				return review
+			}(),
+			wantGroup:  status.GroupInReview,
+			wantDetail: "review blocker decision required; run task run",
+		},
+		{
 			name:       "aborted review is reviewing retry",
 			review:     reviewAttempt(1, taskstate.ReviewStatusAborted, nil),
 			wantGroup:  status.GroupInReview,
@@ -567,10 +571,6 @@ func TestProjectWithRunStatesClassifiesLatestAttachedAttempts(t *testing.T) {
 	assertLatestAttachedAttemptProjection(t, got)
 	assertGroupTaskIDs(t, got, status.GroupReadyToRun, []string{"a-ready"})
 
-	readyRows := status.ReadyRowsWithRunStates(snapshot, runStates)
-	if len(readyRows) != 1 || readyRows[0].Task.ID != "a-ready" {
-		t.Fatalf("ready rows = %#v, want only a-ready", readyRows)
-	}
 }
 
 func localReviewSnapshot(taskID string, repoPath string) task.SnapshotResult {
@@ -702,117 +702,6 @@ func TestProjectTreatsMissingDependenciesAsUnknown(t *testing.T) {
 		t.Fatalf("unknown entries = %#v, want missing dependency detail", entries)
 	}
 	assertGroupTaskIDs(t, got, status.GroupReadyToRun, nil)
-}
-
-func TestReadyRowsUsesCanonicalReadinessPolicyForEligibleIssueTypes(t *testing.T) {
-	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
-		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"},
-		Tasks: []task.Task{
-			{ID: "a-task", Title: "task", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
-			{ID: "a-bug", Title: "bug", Status: task.StatusOpen, IssueType: task.IssueTypeBug},
-			{ID: "a-chore", Title: "chore", Status: task.StatusOpen, IssueType: task.IssueTypeChore},
-			{ID: "a-unknown-type", Title: "unknown type", Status: task.StatusOpen, IssueType: task.IssueTypeUnknown},
-			{ID: "a-epic", Title: "epic", Status: task.StatusOpen, IssueType: task.IssueTypeEpic},
-			{ID: "a-epic-idle", Title: "epic idle", Status: task.StatusInProgress, IssueType: task.IssueTypeEpic},
-			{ID: "a-epic-done", Title: "epic done", Status: task.StatusClosed, IssueType: task.IssueTypeEpic},
-			{
-				ID:        "a-review",
-				Title:     "review",
-				Status:    task.StatusOpen,
-				IssueType: task.IssueTypeTask,
-				Metadata:  task.Metadata{task.MetadataPRURL: "https://example.test/pr/2"},
-			},
-			{ID: "a-started", Title: "started", Status: task.StatusInProgress, IssueType: task.IssueTypeTask},
-			{ID: "a-closed", Title: "closed", Status: task.StatusClosed, IssueType: task.IssueTypeTask},
-		},
-	}}}
-
-	got := status.ReadyRows(snapshot)
-	ids := make([]string, 0, len(got))
-	for _, row := range got {
-		ids = append(ids, row.Task.ID)
-	}
-
-	expected := []string{"a-task", "a-bug", "a-chore", "a-unknown-type", "a-epic"}
-	if len(ids) != len(expected) {
-		t.Fatalf("ready ids = %v, want %v", ids, expected)
-	}
-	for i := range ids {
-		if ids[i] != expected[i] {
-			t.Fatalf("ready ids = %v, want %v", ids, expected)
-		}
-	}
-}
-
-func TestReadyRowsWithRunStatesExcludesCompletionAndAttentionStates(t *testing.T) {
-	snapshot, runStates := readyRowsCompletionAndAttentionFixture()
-
-	got := status.ReadyRowsWithRunStates(snapshot, runStates)
-
-	if len(got) != 1 || got[0].Task.ID != "a-ready" {
-		t.Fatalf("ready rows = %#v, want only a-ready", got)
-	}
-}
-
-func readyRowsCompletionAndAttentionFixture() (task.SnapshotResult, status.RunStateIndex) {
-	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
-		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/tmp/alpha", DefaultBranch: "main"},
-		Tasks: []task.Task{
-			{ID: "a-ready", Title: "ready", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
-			reviewTask("a-main", "main local review", "main", "/tmp/alpha"),
-			reviewTask(
-				"a-worktree",
-				"worktree needs PR",
-				"orpheus/a-worktree",
-				"/tmp/orpheus/worktrees/a-worktree",
-			),
-			{ID: "a-failed", Title: "failed", Status: task.StatusInProgress, IssueType: task.IssueTypeTask},
-			{ID: "a-open-history", Title: "open history", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
-		},
-	}}}
-	runStates := status.RunStateIndex{
-		status.RunStateKey("alpha", "a-main"): completedRun("main", "/tmp/alpha", ""),
-		status.RunStateKey("alpha", "a-worktree"): completedRun(
-			"orpheus/a-worktree",
-			"/tmp/orpheus/worktrees/a-worktree",
-			"abc123",
-		),
-		status.RunStateKey("alpha", "a-failed"):       {Attempt: 1, Status: taskstate.RunStatusFailed},
-		status.RunStateKey("alpha", "a-open-history"): {Attempt: 1, Status: taskstate.RunStatusSucceeded},
-	}
-	return snapshot, runStates
-}
-
-func reviewTask(id string, title string, branch string, worktree string) task.Task {
-	return task.Task{
-		ID:        id,
-		Title:     title,
-		Status:    task.StatusInProgress,
-		IssueType: task.IssueTypeTask,
-		Metadata: task.Metadata{
-			task.MetadataBranch:   branch,
-			task.MetadataWorktree: worktree,
-		},
-	}
-}
-
-func completedRun(branch string, worktree string, commit string) taskstate.RunAttempt {
-	description := "Ready for local review."
-	if commit != "" {
-		description = "Ready for PR."
-	}
-	return taskstate.RunAttempt{
-		Attempt: 1,
-		Status:  taskstate.RunStatusSucceeded,
-		Completion: &taskstate.Completion{
-			Summary:              "Done",
-			Description:          description,
-			DetailedDescription:  "Detailed PR body.",
-			TechnicalExplanation: "Technical explanation.",
-			CompletedAt:          time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
-			Commit:               commit,
-		},
-	}
 }
 
 func TestProjectAddsStructuredRepoFailuresToNeedsAttention(t *testing.T) {

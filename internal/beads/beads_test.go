@@ -1,8 +1,10 @@
 package beads_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -92,28 +94,6 @@ func (r *fakeRunner) Run(dir string, args ...string) (beads.Result, error) {
 		return beads.Result{}, errors.New("unexpected args: " + strings.Join(args, " "))
 	}
 	return call.result, call.err
-}
-
-func TestCommandRunnerSanitizesBeadsEnvironment(t *testing.T) {
-	t.Parallel()
-
-	binDir := t.TempDir()
-	bin := filepath.Join(binDir, "bd")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf 'BEADS_DIR=%s\\n' \"${BEADS_DIR-unset}\"\nprintf 'BD_NON_INTERACTIVE=%s\\n' \"${BD_NON_INTERACTIVE-unset}\"\n"), 0o755); err != nil {
-		t.Fatalf("write fake bd: %v", err)
-	}
-	result, err := beads.CommandRunner{
-		Environment: []string{"BEADS_DIR=/tmp/wrong", "PATH=" + binDir},
-	}.Run(t.TempDir(), "context")
-	if err != nil {
-		t.Fatalf("run fake bd: %v", err)
-	}
-	if strings.Contains(result.Stdout, "BEADS_DIR=/tmp/wrong") || !strings.Contains(result.Stdout, "BEADS_DIR=unset") {
-		t.Fatalf("stdout = %q, want sanitized BEADS_DIR", result.Stdout)
-	}
-	if !strings.Contains(result.Stdout, "BD_NON_INTERACTIVE=1") {
-		t.Fatalf("stdout = %q, want BD_NON_INTERACTIVE=1", result.Stdout)
-	}
 }
 
 func TestInspectLocalWithRunnerDetectsPrefix(t *testing.T) {
@@ -306,11 +286,18 @@ func TestInitializeManagedWithRunnerReportsCommandFailure(t *testing.T) {
 
 func TestTaskBackendListParsesVisibleTasksAndMetadata(t *testing.T) {
 	dir := t.TempDir()
-	runner := &fakeRunner{calls: []fakeCall{{
-		wantDir:  dir,
-		wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0"},
-		result:   beads.Result{Stdout: listVisibleTasksStdout},
-	}}}
+	runner := &fakeRunner{calls: []fakeCall{
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
+			result:   beads.Result{Stdout: listVisibleTasksStdout},
+		},
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "epic"},
+			result:   beads.Result{Stdout: `[]`},
+		},
+	}}
 
 	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
 	if err != nil {
@@ -321,13 +308,250 @@ func TestTaskBackendListParsesVisibleTasksAndMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tasks: %v", err)
 	}
-	if len(got) != 3 {
-		t.Fatalf("tasks = %#v, want active, closed, and non-task items", got)
+	if len(got) != 2 {
+		t.Fatalf("tasks = %#v, want active and closed task items", got)
 	}
 
 	assertParsedVisibleTask(t, got[0])
+	if got[1].ID != "op-2" || got[1].Status != task.StatusClosed || got[1].IssueType != task.IssueTypeTask {
+		t.Fatalf("closed task = %#v, want op-2 closed task", got[1])
+	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
+func TestManagedTaskBackendRepairsBehindSchemaAndRetriesRead(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
+			result:   beads.Result{Stderr: "schema version mismatch: database is at v12, binary expects v14, and the read-only open cannot migrate it"},
+			err:      errors.New("exit status 1"),
+		},
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--sandbox", "migrate", "schema"},
+			result:   beads.Result{Stdout: `{"migrations_applied":2}`},
+		},
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
+			result:   beads.Result{Stdout: `[]`},
+		},
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "epic"},
+			result:   beads.Result{Stdout: `[]`},
+		},
+	}}
+
+	backend, err := beads.NewTaskBackendForSourceWithRunner(task.RepositorySource{
+		BackendDir:       dir,
+		MaintenanceOwned: true,
+	}, runner, nil)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+	got, err := backend.List(context.Background())
+	if err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("tasks = %#v, want no tasks", got)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
+func TestManagedTaskBackendLogsSchemaRecoveryWithoutCommandOutput(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
+			result:   beads.Result{Stderr: "schema version mismatch: database is at v12, binary expects v14, and the read-only open cannot migrate it"},
+			err:      errors.New("exit status 1"),
+		},
+		{wantDir: dir, wantArgs: []string{"--json", "--sandbox", "migrate", "schema"}},
+		{wantDir: dir, wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"}, result: beads.Result{Stdout: `[]`}},
+		{wantDir: dir, wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "epic"}, result: beads.Result{Stdout: `[]`}},
+	}}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	backend, err := beads.NewTaskBackendForSourceWithRunner(task.RepositorySource{BackendDir: dir, MaintenanceOwned: true}, runner, logger)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+	if _, err := backend.List(context.Background()); err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+	output := logs.String()
+	for _, want := range []string{`"operation":"schema_recovery"`, `"recovery_event":"detected"`, `"recovery_event":"retrying"`, `"recovery_event":"recovered"`} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("diagnostics = %s, want %s", output, want)
+		}
+	}
+	if strings.Contains(output, "schema version mismatch") {
+		t.Fatalf("diagnostics include command output: %s", output)
+	}
+}
+
+func TestLocalTaskBackendDoesNotRepairBehindSchema(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{{
+		wantDir:  dir,
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
+		result:   beads.Result{Stderr: "schema version mismatch: database is at v12, binary expects v14, and the read-only open cannot migrate it"},
+		err:      errors.New("exit status 1"),
+	}}}
+	backend, err := beads.NewTaskBackendForSourceWithRunner(task.RepositorySource{BackendDir: dir}, runner, nil)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+	_, err = backend.List(context.Background())
+	if err == nil {
+		t.Fatal("list succeeded, want schema mismatch")
+	}
+	if strings.Contains(err.Error(), "schema recovery") {
+		t.Fatalf("error = %v, local source must not attempt recovery", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
+func TestManagedTaskBackendDoesNotRepairForwardOrUnrelatedFailures(t *testing.T) {
+	t.Parallel()
+
+	for name, message := range map[string]string{
+		"forward schema": "schema version mismatch: database is at v14, binary knows up to v12 (2 migrations ahead)",
+		"unrelated":      "database temporarily unavailable",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			runner := &fakeRunner{calls: []fakeCall{{
+				wantDir:  dir,
+				wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
+				result:   beads.Result{Stderr: message},
+				err:      errors.New("exit status 1"),
+			}}}
+			backend, err := beads.NewTaskBackendForSourceWithRunner(task.RepositorySource{BackendDir: dir, MaintenanceOwned: true}, runner, nil)
+			if err != nil {
+				t.Fatalf("create backend: %v", err)
+			}
+			_, err = backend.List(context.Background())
+			if err == nil {
+				t.Fatal("list succeeded, want failure")
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runner has %d unused calls", len(runner.calls))
+			}
+		})
+	}
+}
+
+func TestManagedTaskBackendReportsMigrationAndRetryFailures(t *testing.T) {
+	t.Parallel()
+
+	for name, calls := range map[string][]fakeCall{
+		"migration": {
+			{
+				wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
+				result:   beads.Result{Stderr: "schema version mismatch: database is at v12, binary expects v14, and the read-only open cannot migrate it"},
+				err:      errors.New("exit status 1"),
+			},
+			{
+				wantArgs: []string{"--json", "--sandbox", "migrate", "schema"},
+				result:   beads.Result{Stderr: "remote-backed database requires designated migrator"},
+				err:      errors.New("exit status 1"),
+			},
+		},
+		"retry": {
+			{
+				wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
+				result:   beads.Result{Stderr: "schema version mismatch: database is at v12, binary expects v14, and the read-only open cannot migrate it"},
+				err:      errors.New("exit status 1"),
+			},
+			{wantArgs: []string{"--json", "--sandbox", "migrate", "schema"}},
+			{
+				wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
+				result:   beads.Result{Stderr: "still unavailable"},
+				err:      errors.New("exit status 1"),
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			for index := range calls {
+				calls[index].wantDir = dir
+			}
+			runner := &fakeRunner{calls: calls}
+			backend, err := beads.NewTaskBackendForSourceWithRunner(task.RepositorySource{BackendDir: dir, MaintenanceOwned: true}, runner, nil)
+			if err != nil {
+				t.Fatalf("create backend: %v", err)
+			}
+			_, err = backend.List(context.Background())
+			if err == nil {
+				t.Fatal("list succeeded, want recovery failure")
+			}
+			if !strings.Contains(err.Error(), "original") {
+				t.Fatalf("error = %v, want original operation context", err)
+			}
+			if name == "migration" && !strings.Contains(err.Error(), "remote-backed database") {
+				t.Fatalf("error = %v, want migration failure context", err)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runner has %d unused calls", len(runner.calls))
+			}
+		})
+	}
+}
+
+func TestTaskBackendListExcludesUnsupportedTypesAndPreservesRelations(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
+			result: beads.Result{Stdout: `[
+				{"id":"op-task","status":"open","issue_type":"task","dependencies":[{"id":"op-bug","dependency_type":"blocks"}]},
+				{"id":"op-bug","status":"open","issue_type":"bug"},
+				{"id":"op-chore","status":"closed","issue_type":"chore"}
+			]`},
+		},
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "epic"},
+			result: beads.Result{Stdout: `[
+				{"id":"op-epic","status":"closed","issue_type":"epic"},
+				{"id":"op-custom","status":"open","issue_type":"custom"},
+				{"id":"op-unknown","status":"open"}
+			]`},
+		},
+	}}
+
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+	got, err := backend.List(context.Background())
+	if err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("task count = %d, want task and epic only", len(got))
+	}
+	if gotIDs := []string{got[0].ID, got[1].ID}; !reflect.DeepEqual(gotIDs, []string{"op-task", "op-epic"}) {
+		t.Fatalf("task ids = %v, want task and epic only", gotIDs)
+	}
+	if got[1].Status != task.StatusClosed {
+		t.Fatalf("epic status = %q, want closed retained", got[1].Status)
+	}
+	if dependencies := got[0].Relations.DependencyIDs; !reflect.DeepEqual(dependencies, []string{"op-bug"}) {
+		t.Fatalf("task dependencies = %v, want excluded reference preserved", dependencies)
 	}
 }
 
@@ -549,7 +773,7 @@ func TestTaskBackendUpdateRejectsNonBlockingDependencyBeforeContentMutation(t *t
 	}
 }
 
-func TestTaskBackendUpdateUsesOrpheusBlockingEdgeAcrossTypes(t *testing.T) {
+func TestTaskBackendUpdateUsesNativeBlockingEdgeAcrossTypes(t *testing.T) {
 	dir := t.TempDir()
 	runner := &fakeRunner{calls: []fakeCall{
 		{
@@ -564,13 +788,13 @@ func TestTaskBackendUpdateUsesOrpheusBlockingEdgeAcrossTypes(t *testing.T) {
 		},
 		{
 			wantDir:  dir,
-			wantArgs: []string{"--json", "--sandbox", "dep", "add", "op-task", "op-epic", "--type", "orpheus-blocks"},
+			wantArgs: []string{"--json", "--sandbox", "dep", "add", "op-task", "op-epic"},
 			result:   beads.Result{Stdout: `{}`},
 		},
 		{
 			wantDir:  dir,
 			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-task"},
-			result:   beads.Result{Stdout: `[{"id":"op-task","title":"Task","description":"Description","acceptance_criteria":"Acceptance","status":"open","issue_type":"task","dependencies":[{"id":"op-epic","dependency_type":"orpheus-blocks"}]}]`},
+			result:   beads.Result{Stdout: `[{"id":"op-task","title":"Task","description":"Description","acceptance_criteria":"Acceptance","status":"open","issue_type":"task","dependencies":[{"id":"op-epic","dependency_type":"blocks"}]}]`},
 		},
 	}}
 
@@ -592,7 +816,31 @@ func TestTaskBackendUpdateUsesOrpheusBlockingEdgeAcrossTypes(t *testing.T) {
 	}
 }
 
-func TestTaskBackendGetReturnsClosedOrNonTaskItemsForShowScope(t *testing.T) {
+func TestTaskBackendGetRetainsLegacyCrossTypeBlockingEdge(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{{
+		wantDir:  dir,
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-task"},
+		result:   beads.Result{Stdout: `[{"id":"op-task","status":"open","issue_type":"task","dependencies":[{"id":"op-epic","dependency_type":"orpheus-blocks"}]}]`},
+	}}}
+
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+	got, err := backend.Get(context.Background(), "op-task")
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if want := []string{"op-epic"}; !reflect.DeepEqual(got.Relations.DependencyIDs, want) {
+		t.Fatalf("dependencies = %#v, want %#v", got.Relations.DependencyIDs, want)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
+func TestTaskBackendGetReturnsClosedItemsAndRejectsUnsupportedTypes(t *testing.T) {
 	dir := t.TempDir()
 	runner := &fakeRunner{calls: []fakeCall{
 		{
@@ -604,6 +852,21 @@ func TestTaskBackendGetReturnsClosedOrNonTaskItemsForShowScope(t *testing.T) {
 			wantDir:  dir,
 			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-bug"},
 			result:   beads.Result{Stdout: `[{"id":"op-bug","title":"bug","status":"open","priority":2,"issue_type":"bug"}]`},
+		},
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-chore"},
+			result:   beads.Result{Stdout: `[{"id":"op-chore","title":"chore","status":"open","priority":2,"issue_type":"chore"}]`},
+		},
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-custom"},
+			result:   beads.Result{Stdout: `[{"id":"op-custom","title":"custom","status":"open","priority":2,"issue_type":"custom"}]`},
+		},
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-unknown"},
+			result:   beads.Result{Stdout: `[{"id":"op-unknown","title":"unknown","status":"open","priority":2}]`},
 		},
 	}}
 
@@ -620,12 +883,17 @@ func TestTaskBackendGetReturnsClosedOrNonTaskItemsForShowScope(t *testing.T) {
 		t.Fatalf("closed item = %#v, want closed task returned", closed)
 	}
 
-	bug, err := backend.Get(context.Background(), "op-bug")
-	if err != nil {
-		t.Fatalf("get bug item: %v", err)
+	for _, id := range []string{"op-bug", "op-chore", "op-custom", "op-unknown"} {
+		item, err := backend.Get(context.Background(), id)
+		if !errors.Is(err, task.ErrUnsupportedTaskSourceItem) {
+			t.Fatalf("get %s error = %v, want unsupported task-source item", id, err)
+		}
+		if !reflect.DeepEqual(item, task.Task{}) {
+			t.Fatalf("%s item = %#v, want zero task on unsupported lookup", id, item)
+		}
 	}
-	if bug.Status != task.StatusOpen || bug.IssueType != task.IssueTypeBug {
-		t.Fatalf("bug item = %#v, want open bug returned", bug)
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
 	}
 }
 
@@ -954,7 +1222,7 @@ func TestTaskBackendReportsCommandFailureWithOutput(t *testing.T) {
 	dir := t.TempDir()
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir:  dir,
-		wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0"},
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
 		result:   beads.Result{Stdout: `{"error":"query_failed"}`, Stderr: "database locked"},
 		err:      errors.New("exit status 1"),
 	}}}

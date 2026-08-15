@@ -742,6 +742,8 @@ func compactReviewDetail(detail status.Detail) (string, bool) {
 		return "decision lost", true
 	case status.DetailReviewDecisionRequired:
 		return "decision required", true
+	case status.DetailReviewDecisionPaused:
+		return "decision paused", true
 	case status.DetailReviewFollowUpReady:
 		return "follow-up ready", true
 	case status.DetailReviewBudgetSpent:
