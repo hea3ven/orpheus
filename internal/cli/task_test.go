@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -90,7 +89,7 @@ func registerLocalManagedTaskTestRepos(t *testing.T) localManagedTaskRepos {
 	return localManagedTaskRepos{localDir: localDir, managedDir: managedDir}
 }
 
-func TestTaskListListsActiveTasksAcrossRegisteredReposWithDefaultAndDetailedTables(t *testing.T) {
+func TestTaskListListsAllActiveItemsWithStatusProjectionPresentation(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -99,7 +98,7 @@ func TestTaskListListsActiveTasksAcrossRegisteredReposWithDefaultAndDetailedTabl
 
 	logPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
 		repos.localDir: {stdout: `[
-			{"id":"la-1","title":"Local active","external_ref":"TREX-1234","status":"open","priority":2,"issue_type":"task","metadata":{"orpheus.branch":"task/la-1","orpheus.worktree":"/tmp/la-1"}},
+			{"id":"la-1","title":"Local active","status":"open","priority":2,"issue_type":"task","metadata":{"orpheus.branch":"task/la-1","orpheus.worktree":"/tmp/la-1"}},
 			{"id":"la-closed","title":"Closed local task","status":"closed","priority":1,"issue_type":"task"},
 			{"id":"la-bug","title":"Local bug","status":"open","priority":1,"issue_type":"bug"}
 		]`},
@@ -112,9 +111,9 @@ func TestTaskListListsActiveTasksAcrossRegisteredReposWithDefaultAndDetailedTabl
 
 	is.Empty(stderr)
 	for _, want := range []string{
-		"REPO", "TASK_ID", "STATUS", "P", "TITLE",
-		"Local Alpha", "la-1", "open", "2", "Local active",
-		"Managed Beta", "mb-1", "in_progress", "3", "Managed active",
+		"TASK_ID", "STATUS", "P", "TITLE", "REPO", "DETAIL",
+		"Local Alpha", "la-1", "Ready", "2", "Local active",
+		"Managed Beta", "mb-1", "Reviewing", "3", "Managed active", "https://example.test/pr/1",
 	} {
 		is.Contains(stdout, want)
 	}
@@ -124,28 +123,6 @@ func TestTaskListListsActiveTasksAcrossRegisteredReposWithDefaultAndDetailedTabl
 	} {
 		is.NotContains(stdout, hidden)
 	}
-
-	detailedStdout, detailedStderr := executeCommand(t, []string{"task", "list", "--details"})
-
-	is.Empty(detailedStderr)
-	for _, want := range []string{
-		"REPO_ID", "REPO", "TASK_PREFIX", "TASK_ID", "STATUS", "P", "BRANCH", "WORKTREE", "PR", "EXTERNAL_REF", "TITLE",
-		"local-alpha", "Local Alpha", "la", "la-1", "open", "2", "task/la-1", "/tmp/la-1", "TREX-1234", "Local active",
-		"managed-beta", "Managed Beta", "mb", "mb-1", "in_progress", "3", "https://example.test/pr/1", "Managed active",
-	} {
-		is.Contains(detailedStdout, want)
-	}
-	localDetail := regexp.MustCompile(`(?m)^local-alpha\s+Local Alpha\s+la\s+la-1\s+open\s+2\s+task/la-1\s+/tmp/la-1\s+-\s+TREX-1234\s+Local active$`)
-	managedDetail := regexp.MustCompile(`(?m)^managed-beta\s+Managed Beta\s+mb\s+mb-1\s+in_progress\s+3\s+-\s+-\s+https://example\.test/pr/1\s+-\s+Managed active$`)
-	is.True(localDetail.MatchString(detailedStdout), "local detail row should show absent PR metadata as -")
-	is.True(managedDetail.MatchString(detailedStdout), "managed detail row should show absent branch/worktree metadata as -")
-	is.NotContains(detailedStdout, "branch=task/la-1")
-	is.NotContains(detailedStdout, "worktree=/tmp/la-1")
-	is.NotContains(detailedStdout, "pr=https://example.test/pr/1")
-	is.NotContains(detailedStdout, "la-closed")
-	is.NotContains(detailedStdout, "la-bug")
-	is.NotContains(detailedStdout, "Local bug")
-	is.NotContains(detailedStdout, "orpheus.branch")
 
 	assertTaskListBDLog(t, logPath, repos)
 }
@@ -157,91 +134,33 @@ func assertTaskListBDLog(t *testing.T, logPath string, repos localManagedTaskRep
 	log := readFileString(t, logPath)
 	is.Contains(log, repos.localDir)
 	is.Contains(log, repos.managedDir)
-	is.Equal(8, strings.Count(log, "--json --readonly --sandbox list --all --limit 0"))
-}
-
-func TestTaskReadyListsReadyTasksAcrossRegisteredRepos(t *testing.T) {
-	t.Parallel()
-
-	is := assert.New(t)
-	must := require.New(t)
-	newTestState(t)
-	repos := registerLocalManagedTaskTestRepos(t)
-
-	logPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
-		repos.localDir: {stdout: `[
-			{"id":"la-1","title":"Local ready","status":"open","priority":2,"issue_type":"task"},
-			{"id":"la-bug","title":"Local bug ready","status":"open","priority":1,"issue_type":"bug"},
-			{"id":"la-chore","title":"Local chore ready","status":"open","priority":3,"issue_type":"chore"},
-			{"id":"la-epic","title":"Local epic ready","status":"open","priority":1,"issue_type":"epic"},
-			{"id":"la-closed","title":"Closed local task","status":"closed","priority":1,"issue_type":"task"}
-		]`},
-		repos.managedDir: {stdout: `[
-			{"id":"mb-1","title":"Managed ready","status":"open","priority":3,"issue_type":"task"},
-			{"id":"mb-review","title":"Managed in review","status":"open","priority":2,"issue_type":"task","metadata":{"orpheus.pr_url":"https://example.test/pr/7"}}
-		]`},
-	})
-
-	stdout, stderr := executeCommand(t, []string{"task", "ready"})
-
-	is.Empty(stderr)
-	for _, want := range []string{
-		"REPO", "TASK_ID", "STATUS", "P", "TITLE",
-		"Local Alpha", "la-1", "open", "2", "Local ready",
-		"Local Alpha", "la-epic", "open", "1", "Local epic ready",
-		"Managed Beta", "mb-1", "open", "3", "Managed ready",
-	} {
-		is.Contains(stdout, want)
-	}
-	for _, hidden := range []string{"REPO_ID", "TASK_PREFIX", "local-alpha", "managed-beta"} {
-		is.NotContains(stdout, hidden)
-	}
-	is.NotContains(stdout, "la-closed")
-	is.NotContains(stdout, "la-bug")
-	is.NotContains(stdout, "la-chore")
-	is.NotContains(stdout, "mb-review")
-
-	logData, err := os.ReadFile(logPath)
-	must.NoError(err)
-	log := string(logData)
-	is.Contains(log, repos.localDir)
-	is.Contains(log, repos.managedDir)
 	is.Equal(4, strings.Count(log, "--json --readonly --sandbox list --all --limit 0"))
-	is.NotContains(log, "--json --readonly --sandbox ready")
 }
 
-func TestTaskReadyExcludesTasksMissingRequiredExternalReference(t *testing.T) {
+func TestTaskReadyIsNotACommand(t *testing.T) {
 	t.Parallel()
 
-	is := assert.New(t)
-	newTestState(t)
-	paths := currentTestPaths(t)
-	store := registry.NewStore(paths)
-	repoDir := filepath.Join(t.TempDir(), "gated")
-	require.NoError(t, os.MkdirAll(repoDir, 0o755))
-	require.NoError(t, store.Save(registry.Registry{Repos: []registry.Repo{{
-		ID:            "gated",
-		Name:          "Gated",
-		Path:          repoDir,
-		BeadsMode:     registry.BeadsModeLocal,
-		BeadsPrefix:   "gt",
-		TitleTemplate: "[{{external_ref}}] {{summary}}",
-	}}}))
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "ready"})
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "Available Commands:")
+	assert.NotContains(t, stdout, "ready")
+	assert.Empty(t, stderr)
 
-	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
-		repoDir: {stdout: `[
-			{"id":"gt-missing","title":"Missing external reference","status":"open","priority":1,"issue_type":"task"},
-			{"id":"gt-set","title":"External reference set","external_ref":"TREX-1234","status":"open","priority":1,"issue_type":"task"}
-		]`},
-	})
+	completion, completionStderr, err := executeCommandWithError(t, []string{"__complete", "task", "r"})
+	require.NoError(t, err)
+	assert.NotContains(t, completion, "ready")
+	assert.Contains(t, completion, "review")
+	assert.Contains(t, completion, "run")
+	assert.Contains(t, completionStderr, "Completion ended with directive")
+}
 
-	stdout, stderr := executeCommand(t, []string{"task", "ready"})
+func TestTaskListRetiresDetailsAndLongFlags(t *testing.T) {
+	t.Parallel()
 
-	is.Empty(stderr)
-	is.Contains(stdout, "gt-set")
-	is.Contains(stdout, "External reference set")
-	is.NotContains(stdout, "gt-missing")
-	is.NotContains(stdout, "Missing external reference")
+	for _, flag := range []string{"--details", "--long"} {
+		_, _, err := executeCommandWithError(t, []string{"task", "list", flag})
+		require.ErrorContains(t, err, "unknown flag: "+flag)
+	}
 }
 
 func TestTaskListReportsPartialRepoFailures(t *testing.T) {
@@ -259,20 +178,8 @@ func TestTaskListReportsPartialRepoFailures(t *testing.T) {
 	must.NoError(os.MkdirAll(okDir, 0o755))
 
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{
-		{
-			ID:          "broken",
-			Name:        "Broken Repo",
-			Path:        brokenDir,
-			BeadsMode:   registry.BeadsModeLocal,
-			BeadsPrefix: "br",
-		},
-		{
-			ID:          "ok",
-			Name:        "OK Repo",
-			Path:        okDir,
-			BeadsMode:   registry.BeadsModeLocal,
-			BeadsPrefix: "ok",
-		},
+		{ID: "broken", Name: "Broken Repo", Path: brokenDir, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "br"},
+		{ID: "ok", Name: "OK Repo", Path: okDir, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "ok"},
 	}}))
 
 	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
@@ -286,66 +193,13 @@ func TestTaskListReportsPartialRepoFailures(t *testing.T) {
 
 	must.Error(err)
 	is.ErrorContains(err, "task list completed with 1 repo failure")
-	is.Contains(stdout, "REPO")
+	is.Contains(stdout, "TASK_ID")
 	is.Contains(stdout, "OK Repo")
 	is.Contains(stdout, "ok-1")
 	is.Contains(stdout, "Listed despite another repo failure")
-	is.NotContains(stdout, "Broken Repo")
+	is.Contains(stdout, "Broken Repo")
 	is.Contains(stderr, "task list: repo broken")
 	is.Contains(stderr, "needs attention")
-	is.Contains(stderr, "Broken Repo")
-	is.Contains(stderr, "prefix br")
-	is.Contains(stderr, "bd exploded")
-}
-
-func TestTaskReadyReportsPartialRepoFailures(t *testing.T) {
-	t.Parallel()
-
-	is := assert.New(t)
-	must := require.New(t)
-	newTestState(t)
-	paths := currentTestPaths(t)
-	store := registry.NewStore(paths)
-
-	brokenDir := filepath.Join(t.TempDir(), "broken")
-	okDir := filepath.Join(t.TempDir(), "ok")
-	must.NoError(os.MkdirAll(brokenDir, 0o755))
-	must.NoError(os.MkdirAll(okDir, 0o755))
-
-	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{
-		{
-			ID:          "broken",
-			Name:        "Broken Repo",
-			Path:        brokenDir,
-			BeadsMode:   registry.BeadsModeLocal,
-			BeadsPrefix: "br",
-		},
-		{
-			ID:          "ok",
-			Name:        "OK Repo",
-			Path:        okDir,
-			BeadsMode:   registry.BeadsModeLocal,
-			BeadsPrefix: "ok",
-		},
-	}}))
-
-	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
-		brokenDir: {stderr: "bd exploded", exitCode: 7},
-		okDir: {stdout: `[
-			{"id":"ok-1","title":"Ready despite another repo failure","status":"open","priority":1,"issue_type":"task"}
-		]`},
-	})
-
-	stdout, stderr, err := executeCommandWithError(t, []string{"task", "ready"})
-
-	must.Error(err)
-	is.ErrorContains(err, "task ready completed with 1 repo failure")
-	is.Contains(stdout, "REPO")
-	is.Contains(stdout, "OK Repo")
-	is.Contains(stdout, "ok-1")
-	is.Contains(stdout, "Ready despite another repo failure")
-	is.NotContains(stdout, "Broken Repo")
-	is.Contains(stderr, "task ready: repo broken")
 	is.Contains(stderr, "Broken Repo")
 	is.Contains(stderr, "prefix br")
 	is.Contains(stderr, "bd exploded")

@@ -173,7 +173,7 @@ In dependency-direction terms, `internal/state`, `internal/task`, `internal/publ
 ### `internal/status`
 
 - Projects cross-repository backend snapshots and local Orpheus task-state facts into the ordered operator action queue: needs attention, reviewing, working, idle, ready, blocked, and done.
-- Applies the canonical local readiness and next-action policy, including dependency state, parent-epic gating, publication requirements, run/review/finalization state, execution-target consistency, and partial repository failures. It also supplies the ready-task view used by the CLI.
+- Applies the canonical local readiness and next-action policy, including dependency state, parent-epic gating, publication requirements, run/review/finalization state, execution-target consistency, and partial repository failures. Its entries are the shared task-view model rendered by the CLI action queue and inventory.
 
 ### `internal/task`
 

@@ -226,7 +226,7 @@ func TestStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t *testing.T) {
 	is.Contains(stdout, "local review; run task run")
 }
 
-func TestStatusAndTaskReadyUseLocalRunHistoryOnOpenTaskAsNeedsAttention(t *testing.T) {
+func TestStatusAndTaskListUseLocalRunHistoryOnOpenTaskAsNeedsAttention(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -264,11 +264,38 @@ func TestStatusAndTaskReadyUseLocalRunHistoryOnOpenTaskAsNeedsAttention(t *testi
 	is.Contains(stdout, "Ready")
 	is.Contains(stdout, "ar-ready")
 
-	readyStdout, readyStderr := executeCommand(t, []string{"task", "ready"})
+	listStdout, listStderr := executeCommand(t, []string{"task", "list"})
 
-	is.Empty(readyStderr)
-	is.Contains(readyStdout, "ar-ready")
-	is.NotContains(readyStdout, "ar-running")
+	is.Empty(listStderr)
+	is.Contains(listStdout, "ar-ready")
+	is.Contains(listStdout, "ar-running")
+}
+
+func TestStatusAndTaskListRenderEquivalentRowsIdentically(t *testing.T) {
+	t.Parallel()
+
+	setupStatusGroupsLocalTaskSnapshots(t)
+
+	statusOutput, statusStderr := executeCommand(t, []string{"status"})
+	listOutput, listStderr := executeCommand(t, []string{"task", "list"})
+
+	require.Empty(t, statusStderr)
+	require.Empty(t, listStderr)
+	for _, taskID := range []string{"ar-ready", "ar-review", "ar-running"} {
+		assert.Equal(t, tableRowForTask(statusOutput, taskID), tableRowForTask(listOutput, taskID))
+	}
+	assert.NotContains(t, statusOutput, "ar-blocked")
+	assert.Contains(t, listOutput, "ar-blocked")
+	assert.NotContains(t, listOutput, "ar-closed")
+}
+
+func tableRowForTask(output string, taskID string) string {
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, taskID) {
+			return line
+		}
+	}
+	return ""
 }
 
 func TestStatusRendersEpicChildrenAsIntegratedTreeRows(t *testing.T) {
@@ -327,6 +354,19 @@ func TestStatusRendersEpicChildrenAsIntegratedTreeRows(t *testing.T) {
 		"├─ ar-blocked",
 		"└─ ar-done",
 	})
+
+	assertTaskListRendersActiveEpicTree(t)
+}
+
+func assertTaskListRendersActiveEpicTree(t *testing.T) {
+	t.Helper()
+
+	listStdout, listStderr := executeCommand(t, []string{"task", "list"})
+	require.Empty(t, listStderr)
+	assert.Contains(t, listStdout, "1/4 done")
+	assert.Contains(t, listStdout, "├─ ar-nested")
+	assert.Contains(t, listStdout, "└─ ar-blocked")
+	assert.NotContains(t, listStdout, "ar-done")
 }
 
 func TestStatusReportsRepoFailuresInUnknownGroupAndReturnsError(t *testing.T) {
