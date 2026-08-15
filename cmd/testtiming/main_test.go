@@ -6,6 +6,15 @@ import (
 	"time"
 )
 
+func TestTestCommandUsesIntegrationLaneConvention(t *testing.T) {
+	t.Parallel()
+
+	want := []string{"go", "test", "-json", "-count=1", "-tags=integration", "-run", "^TestIntegration", "./..."}
+	if got := testCommand("integration"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("integration command = %#v, want %#v", got, want)
+	}
+}
+
 func TestMedian(t *testing.T) {
 	t.Parallel()
 

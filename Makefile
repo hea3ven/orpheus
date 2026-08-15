@@ -4,6 +4,8 @@
 
 PERF_SAMPLES ?= 5
 TEST_TIMING_BASELINE ?= performance/test-timing-baseline.json
+INTEGRATION_TEST_PATTERN := ^TestIntegration
+INTEGRATION_TEST_ARGS := -tags=integration -run '$(INTEGRATION_TEST_PATTERN)'
 
 build: check
 	go build ./cmd/orpheus
@@ -13,7 +15,7 @@ test:
 
 test-integration:
 	@command -v bd >/dev/null 2>&1 || { echo "Beads integration tests require bd; install Beads or ensure bd is on PATH." >&2; exit 1; }
-	go test -tags=integration -run '^TestIntegration' ./...
+	go test $(INTEGRATION_TEST_ARGS) ./...
 
 # TEST_TIMING_OUTPUT can override the default artifacts/test-timing report path.
 test-perf:
