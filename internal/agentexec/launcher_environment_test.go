@@ -1,3 +1,5 @@
+//go:build integration
+
 package agentexec_test
 
 import (
@@ -9,7 +11,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/agentexec"
 )
 
-func TestAttachedLauncherUsesConfiguredEnvironment(t *testing.T) {
+func TestIntegrationAttachedLauncherUsesConfiguredEnvironment(t *testing.T) {
 	t.Parallel()
 
 	output := filepath.Join(t.TempDir(), "environment")

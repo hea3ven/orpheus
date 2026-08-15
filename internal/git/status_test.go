@@ -1,3 +1,5 @@
+//go:build integration
+
 package git_test
 
 import (
@@ -10,7 +12,7 @@ import (
 	orpheusgit "github.com/hea3ven/orpheus/internal/git"
 )
 
-func TestHasStagedChangesDistinguishesChangesFromGitFailure(t *testing.T) {
+func TestIntegrationHasStagedChangesDistinguishesChangesFromGitFailure(t *testing.T) {
 	repoPath := newGitRepo(t)
 	trackedPath := filepath.Join(repoPath, "tracked.txt")
 	commitTrackedFile(t, repoPath, "tracked.txt", "base\n")
@@ -48,7 +50,7 @@ func TestHasStagedChangesDistinguishesChangesFromGitFailure(t *testing.T) {
 	}
 }
 
-func TestCandidateGitOperationsCaptureAndRestoreTrackedDiff(t *testing.T) {
+func TestIntegrationCandidateGitOperationsCaptureAndRestoreTrackedDiff(t *testing.T) {
 	repoPath := newGitRepo(t)
 	trackedPath := filepath.Join(repoPath, "tracked.txt")
 	commitTrackedFile(t, repoPath, "tracked.txt", "base\n")

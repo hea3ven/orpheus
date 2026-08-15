@@ -1,3 +1,5 @@
+//go:build integration
+
 package pullrequest_test
 
 import (
@@ -9,7 +11,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 )
 
-func TestGHProviderUsesScopedBinaryAndEnvironment(t *testing.T) {
+func TestIntegrationGHProviderUsesScopedBinaryAndEnvironment(t *testing.T) {
 	t.Parallel()
 
 	binary := filepath.Join(t.TempDir(), "gh")

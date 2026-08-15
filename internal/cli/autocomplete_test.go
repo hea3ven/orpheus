@@ -1,3 +1,5 @@
+//go:build integration
+
 //nolint:testpackage // Completion protocol tests configure invocation dependencies.
 package cli
 
@@ -15,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCompletionProtocolSuggestsContextAwareValues(t *testing.T) {
+func TestIntegrationCompletionProtocolSuggestsContextAwareValues(t *testing.T) {
 	t.Parallel()
 	paths, alpha, beta := setupCompletionFixture(t, false)
 	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
@@ -67,7 +69,7 @@ func TestCompletionProtocolSuggestsContextAwareValues(t *testing.T) {
 	assertCompletionChoices(t, []string{"repo", "config", "set", "alpha", "integration-flow", ""}, []string{"direct-merge", "pull-request"})
 }
 
-func TestCompletionProtocolExcludesEditedEpicFromParentCandidates(t *testing.T) {
+func TestIntegrationCompletionProtocolExcludesEditedEpicFromParentCandidates(t *testing.T) {
 	t.Parallel()
 	_, alpha, beta := setupCompletionFixture(t, false)
 	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
@@ -85,7 +87,7 @@ func TestCompletionProtocolExcludesEditedEpicFromParentCandidates(t *testing.T) 
 	})
 }
 
-func TestCompletionProtocolUsesOneSnapshotAndToleratesRepositoryFailure(t *testing.T) {
+func TestIntegrationCompletionProtocolUsesOneSnapshotAndToleratesRepositoryFailure(t *testing.T) {
 	t.Parallel()
 	_, alpha, _ := setupCompletionFixture(t, true)
 
@@ -101,7 +103,7 @@ func TestCompletionProtocolUsesOneSnapshotAndToleratesRepositoryFailure(t *testi
 	assert.Contains(t, string(log), alpha)
 }
 
-func TestCompletionProtocolSkipsUnprojectableRepositorySource(t *testing.T) {
+func TestIntegrationCompletionProtocolSkipsUnprojectableRepositorySource(t *testing.T) {
 	t.Parallel()
 	paths, _, _ := setupCompletionFixture(t, false)
 	store := registry.NewStore(paths)
@@ -121,7 +123,7 @@ func TestCompletionProtocolSkipsUnprojectableRepositorySource(t *testing.T) {
 	})
 }
 
-func TestCompletionProtocolScopesCreateRelationsToCurrentDirectory(t *testing.T) {
+func TestIntegrationCompletionProtocolScopesCreateRelationsToCurrentDirectory(t *testing.T) {
 	paths, alpha, _ := setupCompletionFixture(t, false)
 	nested := filepath.Join(alpha, "nested")
 	require.NoError(t, os.MkdirAll(nested, 0o755))
@@ -150,7 +152,7 @@ func TestCompletionProtocolScopesCreateRelationsToCurrentDirectory(t *testing.T)
 	assertCompletionChoices(t, []string{"task", "create", "--blocked-by", ""}, []string{})
 }
 
-func TestCompletionProtocolFiniteValuesAndFilesystemFallback(t *testing.T) {
+func TestIntegrationCompletionProtocolFiniteValuesAndFilesystemFallback(t *testing.T) {
 	t.Parallel()
 	assertCompletionChoices(t, []string{"task", "create", "--type", ""}, []string{"epic", "task"})
 	assertCompletionChoices(t, []string{"task", "stats", "--group", ""}, []string{"day", "month", "week"})
@@ -163,7 +165,7 @@ func TestCompletionProtocolFiniteValuesAndFilesystemFallback(t *testing.T) {
 	assert.Equal(t, ":0\n", stdout, "directory arguments retain normal filesystem completion")
 }
 
-func TestCompletionProtocolCompletesCommaSeparatedEvalSelections(t *testing.T) {
+func TestIntegrationCompletionProtocolCompletesCommaSeparatedEvalSelections(t *testing.T) {
 	t.Parallel()
 	assertCompletionChoices(t, []string{"eval", "review-context", "--harness", "pi,"}, []string{"pi,all", "pi,codex", "pi,pi"})
 	assertCompletionChoices(t, []string{"eval", "review-context", "--harness", "pi,c"}, []string{"pi,codex"})
@@ -172,7 +174,7 @@ func TestCompletionProtocolCompletesCommaSeparatedEvalSelections(t *testing.T) {
 	assertCompletionChoices(t, []string{"eval", "review-context", "--scenario", "general,a"}, []string{"general,all", "general,architecture"})
 }
 
-func TestCompletionProtocolTruncatesUnicodeDescriptionsOnRuneBoundaries(t *testing.T) {
+func TestIntegrationCompletionProtocolTruncatesUnicodeDescriptionsOnRuneBoundaries(t *testing.T) {
 	t.Parallel()
 	_, alpha, beta := setupCompletionFixture(t, false)
 	longTitle := strings.Repeat("猫", 100)
@@ -191,7 +193,7 @@ func TestCompletionProtocolTruncatesUnicodeDescriptionsOnRuneBoundaries(t *testi
 	assert.Equal(t, "ar-open\t"+strings.Repeat("猫", 93)+"...\n:4\n", stdout)
 }
 
-func TestCompletionGeneratorsRemainCleanForAllSupportedShells(t *testing.T) {
+func TestIntegrationCompletionGeneratorsRemainCleanForAllSupportedShells(t *testing.T) {
 	t.Parallel()
 	for _, shell := range []string{"bash", "zsh", "fish", "powershell"} {
 		t.Run(shell, func(t *testing.T) {
@@ -203,7 +205,7 @@ func TestCompletionGeneratorsRemainCleanForAllSupportedShells(t *testing.T) {
 	}
 }
 
-func TestCompletionDocumentationPreservesExistingPowerShellProfile(t *testing.T) {
+func TestIntegrationCompletionDocumentationPreservesExistingPowerShellProfile(t *testing.T) {
 	t.Parallel()
 
 	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
