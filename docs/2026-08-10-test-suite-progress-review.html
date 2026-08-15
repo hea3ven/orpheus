@@ -1,0 +1,1073 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Test Suite Progress Review — op-ejt</title>
+  <style>
+    :root {
+      --paper: #f3efe5;
+      --paper-deep: #e7dfcf;
+      --ink: #17201e;
+      --muted: #68706b;
+      --line: #b9b4a8;
+      --teal: #116466;
+      --teal-soft: #dcebea;
+      --red: #a83a2f;
+      --red-soft: #f2ddd6;
+      --amber: #9a631c;
+      --amber-soft: #eee1c7;
+      --green: #2e6b4f;
+      --green-soft: #dce8dd;
+      --white: #fffdf8;
+      --shadow: 0 14px 32px rgba(42, 37, 29, 0.10);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: "Aptos", "Segoe UI", system-ui, sans-serif;
+      line-height: 1.55;
+    }
+
+    a { color: var(--teal); text-underline-offset: 3px; }
+    code, .mono {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.92em;
+    }
+    code {
+      background: rgba(23, 32, 30, 0.07);
+      padding: 0.12rem 0.3rem;
+      border-radius: 3px;
+    }
+
+    .page {
+      width: min(1280px, calc(100% - 40px));
+      margin: 24px auto 64px;
+      display: grid;
+      grid-template-columns: 224px minmax(0, 1fr);
+      gap: 30px;
+    }
+
+    .rail {
+      position: sticky;
+      top: 24px;
+      align-self: start;
+      border-top: 7px solid var(--ink);
+      padding-top: 18px;
+    }
+    .rail .kicker {
+      color: var(--red);
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      font-size: 0.72rem;
+    }
+    .rail h2 {
+      margin: 6px 0 4px;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 1.45rem;
+      line-height: 1.08;
+    }
+    .rail .date { color: var(--muted); font-size: 0.86rem; }
+    .rail nav { margin-top: 28px; }
+    .rail nav a {
+      display: block;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--line);
+      color: var(--ink);
+      text-decoration: none;
+      font-size: 0.9rem;
+    }
+    .rail nav a:hover { color: var(--teal); }
+    .rail-note {
+      margin-top: 24px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      background: var(--white);
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+
+    main { min-width: 0; }
+    .masthead {
+      background: var(--ink);
+      color: var(--white);
+      padding: clamp(30px, 6vw, 74px);
+      box-shadow: var(--shadow);
+      position: relative;
+      overflow: hidden;
+    }
+    .masthead::after {
+      content: "OP–EJT";
+      position: absolute;
+      right: -10px;
+      bottom: -38px;
+      color: rgba(255, 255, 255, 0.055);
+      font: 900 clamp(5rem, 14vw, 11rem)/1 "Arial Narrow", sans-serif;
+      letter-spacing: -0.06em;
+    }
+    .eyebrow {
+      color: #89ccca;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      font-size: 0.76rem;
+      font-weight: 800;
+    }
+    h1 {
+      max-width: 850px;
+      margin: 12px 0 16px;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(2.7rem, 7vw, 6.3rem);
+      line-height: 0.94;
+      letter-spacing: -0.055em;
+      font-weight: 700;
+    }
+    .dek {
+      max-width: 730px;
+      margin: 0;
+      color: #ccd3ce;
+      font-size: clamp(1rem, 2vw, 1.2rem);
+    }
+
+    .verdict-strip {
+      display: grid;
+      grid-template-columns: 1.2fr repeat(3, minmax(120px, 0.65fr));
+      border: 1px solid var(--line);
+      border-top: 0;
+      background: var(--white);
+    }
+    .verdict-strip > div { padding: 18px 20px; border-right: 1px solid var(--line); }
+    .verdict-strip > div:last-child { border-right: 0; }
+    .verdict-label {
+      display: block;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.11em;
+      font-size: 0.68rem;
+      font-weight: 800;
+    }
+    .verdict-value {
+      display: block;
+      margin-top: 4px;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 1.55rem;
+      line-height: 1.1;
+    }
+    .verdict-value.conditional { color: var(--red); }
+
+    section { margin-top: 54px; scroll-margin-top: 22px; }
+    .section-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: end;
+      gap: 20px;
+      border-bottom: 2px solid var(--ink);
+      padding-bottom: 12px;
+      margin-bottom: 22px;
+    }
+    .section-head h2 {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(1.8rem, 4vw, 3rem);
+      letter-spacing: -0.035em;
+      line-height: 1;
+    }
+    .section-no {
+      color: var(--muted);
+      font: 700 0.76rem/1 "SFMono-Regular", Consolas, monospace;
+      letter-spacing: 0.12em;
+    }
+    .lede { max-width: 820px; font-size: 1.08rem; }
+
+    .callout {
+      display: grid;
+      grid-template-columns: 8px minmax(0, 1fr);
+      background: var(--white);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+    }
+    .callout::before { content: ""; background: var(--red); }
+    .callout-content { padding: 24px 26px; }
+    .callout h3 {
+      margin: 0 0 7px;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 1.45rem;
+    }
+    .callout p { margin: 0; }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1px;
+      background: var(--line);
+      border: 1px solid var(--line);
+      margin-top: 24px;
+    }
+    .metric {
+      background: var(--white);
+      padding: 22px;
+      min-height: 150px;
+    }
+    .metric .number {
+      display: block;
+      font: 700 clamp(2rem, 4vw, 3.2rem)/1 Georgia, serif;
+      color: var(--teal);
+    }
+    .metric .label { display: block; margin-top: 10px; font-weight: 800; }
+    .metric .context { display: block; margin-top: 5px; color: var(--muted); font-size: 0.82rem; }
+    .metric.danger .number { color: var(--red); }
+
+    .finding {
+      display: grid;
+      grid-template-columns: 150px minmax(0, 1fr);
+      border-top: 1px solid var(--line);
+      padding: 25px 0;
+      gap: 24px;
+    }
+    .finding:last-child { border-bottom: 1px solid var(--line); }
+    .severity {
+      align-self: start;
+      width: fit-content;
+      padding: 6px 9px;
+      color: var(--white);
+      background: var(--red);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      font-size: 0.68rem;
+      font-weight: 900;
+    }
+    .severity.should { background: var(--amber); }
+    .finding h3 { margin: 0 0 8px; font-size: 1.22rem; }
+    .finding p { margin: 6px 0; }
+    .evidence {
+      margin-top: 12px;
+      padding: 12px 14px;
+      background: var(--paper-deep);
+      border-left: 3px solid var(--ink);
+      font-size: 0.9rem;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: 1fr 52px 1fr 52px 1fr;
+      align-items: stretch;
+      margin: 26px 0;
+    }
+    .flow-node { border: 1px solid var(--line); background: var(--white); padding: 18px; }
+    .flow-node strong { display: block; font-size: 1.05rem; }
+    .flow-node span { color: var(--muted); font-size: 0.86rem; }
+    .flow-node.bad { border-color: var(--red); background: var(--red-soft); }
+    .arrow { display: grid; place-items: center; color: var(--muted); font-size: 1.4rem; }
+
+    table { width: 100%; border-collapse: collapse; background: var(--white); }
+    th, td { text-align: left; padding: 13px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th {
+      background: var(--ink);
+      color: var(--white);
+      font-size: 0.74rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+    tbody tr:hover { background: #f9f6ee; }
+    .status {
+      display: inline-block;
+      white-space: nowrap;
+      padding: 4px 7px;
+      font-size: 0.68rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
+    .status.good { background: var(--green-soft); color: var(--green); }
+    .status.partial { background: var(--amber-soft); color: #72450e; }
+    .status.blocked { background: var(--red-soft); color: var(--red); }
+
+    .timeline { border-left: 2px solid var(--ink); margin: 4px 0 0 9px; }
+    .event { position: relative; padding: 0 0 24px 30px; }
+    .event::before {
+      content: "";
+      position: absolute;
+      left: -8px;
+      top: 4px;
+      width: 14px;
+      height: 14px;
+      background: var(--paper);
+      border: 3px solid var(--teal);
+      border-radius: 50%;
+    }
+    .event time { color: var(--muted); font: 700 0.75rem/1 monospace; }
+    .event h3 { margin: 4px 0 3px; font-size: 1rem; }
+    .event p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+
+    .bars { margin-top: 24px; }
+    .bar-row {
+      display: grid;
+      grid-template-columns: 128px minmax(0, 1fr) 80px;
+      align-items: center;
+      gap: 12px;
+      margin: 12px 0;
+    }
+    .bar-track { height: 16px; background: var(--paper-deep); border: 1px solid var(--line); }
+    .bar-fill { height: 100%; background: var(--teal); }
+    .bar-fill.current { background: var(--amber); }
+    .bar-fill.target { background: var(--ink); }
+    .bar-value { text-align: right; font: 700 0.85rem monospace; }
+    .caption { margin: 8px 0 0; color: var(--muted); font-size: 0.82rem; }
+
+    .subsection-title {
+      margin: 34px 0 12px;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 1.55rem;
+      line-height: 1.15;
+    }
+    .anatomy-grid {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 16px;
+      margin-top: 24px;
+    }
+    .anatomy-panel { padding: 20px; background: var(--white); border: 1px solid var(--line); }
+    .anatomy-panel h3 { margin: 0 0 5px; font-size: 1.05rem; }
+    .anatomy-panel > p { margin: 0 0 16px; color: var(--muted); font-size: 0.86rem; }
+    .stack-bar { display: flex; height: 34px; overflow: hidden; border: 1px solid var(--ink); }
+    .stack-segment { min-width: 2px; }
+    .stack-segment.git { background: var(--ink); }
+    .stack-segment.cli { background: var(--teal); }
+    .stack-segment.review { background: var(--amber); }
+    .stack-segment.workflow { background: #79a8a4; }
+    .stack-segment.rest { background: var(--paper-deep); }
+    .legend { display: flex; flex-wrap: wrap; gap: 8px 15px; margin-top: 13px; font-size: 0.78rem; }
+    .legend span::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 6px; background: var(--legend-color); }
+    .insight-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin-top: 16px; background: var(--line); border: 1px solid var(--line); }
+    .insight { padding: 17px; background: var(--white); }
+    .insight strong { display: block; color: var(--teal); font: 700 1.75rem/1 Georgia, serif; }
+    .insight span { display: block; margin-top: 7px; color: var(--muted); font-size: 0.82rem; }
+    .cache-note { margin: 24px 0; padding: 18px 20px; border-left: 6px solid var(--red); background: var(--red-soft); }
+    .cache-note h3 { margin: 0 0 6px; font-size: 1.05rem; }
+    .cache-note p { margin: 0; }
+    .cause-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 18px 0; }
+    .cause-card { padding: 19px 20px; border: 1px solid var(--line); background: var(--white); }
+    .cause-card .cause-number { display: block; color: var(--red); font: 700 2rem/1 Georgia, serif; }
+    .cause-card h4 { margin: 8px 0 6px; font-size: 1rem; }
+    .cause-card p { margin: 0; color: var(--muted); font-size: 0.86rem; }
+    .process-chain { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 20px 0; border: 1px solid var(--line); }
+    .process-step { position: relative; padding: 16px; background: var(--white); border-right: 1px solid var(--line); font-size: 0.82rem; }
+    .process-step:last-child { border-right: 0; }
+    .process-step strong { display: block; margin-bottom: 5px; font-size: 0.9rem; }
+    .process-step:not(:last-child)::after { content: "→"; position: absolute; z-index: 1; right: -10px; top: 50%; width: 19px; height: 19px; display: grid; place-items: center; transform: translateY(-50%); color: var(--white); background: var(--teal); border-radius: 50%; }
+    .classification-note { margin: 22px 0; padding: 20px; color: var(--white); background: var(--ink); }
+    .classification-note h3 { margin: 0 0 7px; color: #89ccca; font-family: Georgia, "Times New Roman", serif; }
+    .classification-note p { margin: 0; }
+    .axis-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 18px 0; }
+    .axis-card { padding: 18px; border: 1px solid var(--line); border-top: 5px solid var(--teal); background: var(--white); }
+    .axis-card:nth-child(2) { border-top-color: var(--amber); }
+    .axis-card:nth-child(3) { border-top-color: var(--red); }
+    .axis-card .axis-label { display: block; color: var(--muted); font: 800 0.7rem/1 monospace; letter-spacing: 0.1em; text-transform: uppercase; }
+    .axis-card h4 { margin: 8px 0 6px; font-size: 1rem; }
+    .axis-card p { margin: 0; font-size: 0.86rem; }
+    .scope-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; margin: 18px 0; border: 1px solid var(--line); background: var(--line); }
+    .scope-card { padding: 20px; background: var(--white); }
+    .scope-card h4 { margin: 0 0 7px; font-family: Georgia, "Times New Roman", serif; font-size: 1.15rem; }
+    .scope-card p { margin: 0; font-size: 0.9rem; }
+    .scope-card.unit h4 { color: var(--teal); }
+    .scope-card.integration h4 { color: var(--red); }
+    .mode-badge { display: inline-block; margin: 2px 3px 2px 0; padding: 3px 6px; background: var(--paper-deep); font: 700 0.67rem/1.2 monospace; text-transform: uppercase; }
+    .mode-badge.process { color: var(--red); background: var(--red-soft); }
+    .mode-badge.disk { color: #72450e; background: var(--amber-soft); }
+    .mode-badge.memory { color: var(--green); background: var(--green-soft); }
+    .table-scroll { max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
+
+    .recommendations { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .recommendation { background: var(--white); border-top: 5px solid var(--teal); padding: 20px; }
+    .recommendation:nth-child(2) { border-top-color: var(--amber); }
+    .recommendation:nth-child(3) { border-top-color: var(--ink); }
+    .recommendation .order { color: var(--muted); font: 800 0.72rem monospace; }
+    .recommendation h3 { margin: 7px 0 9px; font-size: 1.08rem; }
+    .recommendation p { margin: 0; font-size: 0.9rem; }
+
+    .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); border: 1px solid var(--line); }
+    .check { background: var(--white); padding: 16px 18px; display: grid; grid-template-columns: 22px 1fr; gap: 10px; }
+    .check-mark { font-weight: 900; color: var(--green); }
+    .check-mark.warn { color: var(--amber); }
+    .check-mark.fail { color: var(--red); }
+    .check strong { display: block; }
+    .check small { color: var(--muted); }
+
+    footer {
+      margin-top: 54px;
+      padding: 20px 0;
+      border-top: 2px solid var(--ink);
+      color: var(--muted);
+      font-size: 0.82rem;
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+    }
+
+    @media (max-width: 980px) {
+      .page { grid-template-columns: 1fr; width: min(100% - 24px, 900px); }
+      .rail { position: static; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .rail nav, .rail-note { display: none; }
+      .verdict-strip { grid-template-columns: 1fr 1fr; }
+      .verdict-strip > div:nth-child(2) { border-right: 0; }
+      .verdict-strip > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+      .metric-grid { grid-template-columns: 1fr 1fr; }
+      .recommendations { grid-template-columns: 1fr; }
+      .anatomy-grid { grid-template-columns: 1fr; }
+      .axis-grid { grid-template-columns: 1fr; }
+      .scope-grid { grid-template-columns: 1fr; }
+      .process-chain { grid-template-columns: 1fr; }
+      .process-step { border-right: 0; border-bottom: 1px solid var(--line); }
+      .process-step:last-child { border-bottom: 0; }
+      .process-step:not(:last-child)::after { right: auto; left: 50%; top: auto; bottom: -10px; transform: translateX(-50%) rotate(90deg); }
+    }
+    @media (max-width: 640px) {
+      .page { margin-top: 10px; }
+      .masthead { padding: 28px 22px 42px; }
+      .verdict-strip { grid-template-columns: 1fr; }
+      .verdict-strip > div { border-right: 0; border-bottom: 1px solid var(--line); }
+      .metric-grid { grid-template-columns: 1fr; }
+      .finding { grid-template-columns: 1fr; gap: 10px; }
+      .flow { grid-template-columns: 1fr; }
+      .arrow { min-height: 42px; transform: rotate(90deg); }
+      .checks { grid-template-columns: 1fr; }
+      .insight-grid { grid-template-columns: 1fr; }
+      .cause-grid { grid-template-columns: 1fr; }
+      .bar-row { grid-template-columns: 92px minmax(0, 1fr) 60px; }
+      th:nth-child(3), td:nth-child(3) { display: none; }
+      #fast-lane table { table-layout: fixed; font-size: 0.78rem; }
+      #fast-lane th, #fast-lane td { padding: 10px 8px; overflow-wrap: anywhere; }
+      #fast-lane th:nth-child(3), #fast-lane td:nth-child(3) { display: table-cell; }
+      #fast-lane th:nth-child(2), #fast-lane td:nth-child(2) { width: 28%; }
+      #fast-lane th:nth-child(3), #fast-lane td:nth-child(3) { width: 48%; }
+      #fast-lane .table-scroll table { min-width: 720px; table-layout: auto; font-size: 0.82rem; }
+      #fast-lane .table-scroll th:nth-child(2), #fast-lane .table-scroll td:nth-child(2),
+      #fast-lane .table-scroll th:nth-child(3), #fast-lane .table-scroll td:nth-child(3) { width: auto; }
+      footer { flex-direction: column; }
+    }
+    @media print {
+      body { background: white; }
+      .page { width: 100%; display: block; margin: 0; }
+      .rail { display: none; }
+      .masthead, .callout { box-shadow: none; }
+      section { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <aside class="rail" aria-label="Report navigation">
+      <div>
+        <div class="kicker">Engineering audit</div>
+        <h2>Test suite progress review</h2>
+        <div class="date">10–14 August 2026 · Europe/Madrid</div>
+      </div>
+      <nav>
+        <a href="#verdict">01 · Verdict</a>
+        <a href="#findings">02 · Findings</a>
+        <a href="#progress">03 · Bead progress</a>
+        <a href="#performance">04 · Performance</a>
+        <a href="#fast-lane">04a · Fast-lane anatomy</a>
+        <a href="#test-classification">04b · Classification audit</a>
+        <a href="#coverage-economics">04c · Coverage economics</a>
+        <a href="#changes">05 · Change ledger</a>
+        <a href="#validation">06 · Validation</a>
+        <a href="#next">07 · Next actions</a>
+      </nav>
+      <div class="rail-note">
+        Review target: epic <strong>op-ejt</strong> and children <strong>.1–.6</strong>.<br>
+        Repository state: <span class="mono">main @ a56e569</span>.<br>
+        Tracked tree clean; pre-existing untracked <span class="mono">plans/</span> preserved.
+      </div>
+    </aside>
+
+    <main>
+      <header class="masthead">
+        <div class="eyebrow">Post-implementation review / test safety &amp; speed</div>
+        <h1>Fast, safer — not fully sealed.</h1>
+        <p class="dek">The approved architecture landed and the historical speed target was beaten. One integration-selection regression and one current stability problem prevent a clean completion verdict.</p>
+      </header>
+
+      <div class="verdict-strip" aria-label="Review summary">
+        <div>
+          <span class="verdict-label">Review verdict</span>
+          <span class="verdict-value conditional">Conditional</span>
+        </div>
+        <div>
+          <span class="verdict-label">Bead records</span>
+          <span class="verdict-value">7 / 7 closed</span>
+        </div>
+        <div>
+          <span class="verdict-label">Must fix</span>
+          <span class="verdict-value">1</span>
+        </div>
+        <div>
+          <span class="verdict-label">Should fix</span>
+          <span class="verdict-value">5</span>
+        </div>
+      </div>
+
+      <section id="verdict">
+        <div class="section-head"><h2>Verdict</h2><span class="section-no">01 / 07</span></div>
+        <p class="lede">The work substantially delivered the intended design: routine tests now fail closed around real agents, usage roots are isolated, real Beads has a separate build-tagged lane, test timing has a repeatable JSON surface, CLI helpers and Git seeds are reused, and invocation dependencies enabled broad parallelism.</p>
+
+        <div class="callout">
+          <div class="callout-content">
+            <h3>Why the epic should not yet be treated as cleanly complete</h3>
+            <p><code>make test-integration</code> reports success while <code>internal/beads</code> says “no tests to run.” Five tests are tagged as integration tests but do not begin with <code>TestIntegration</code>, so the Makefile filter skips them; direct coverage execution now exposes a cross-type dependency failure against Beads 1.2.1. Separately, three fast performance attempts failed because of a parallel CLI flake; the latest reached sample 3.</p>
+          </div>
+        </div>
+
+        <div class="metric-grid">
+          <div class="metric">
+            <span class="number">67.1%</span>
+            <span class="label">historical fast-lane reduction</span>
+            <span class="context">42.95s reference → 14.13s stabilized median</span>
+          </div>
+          <div class="metric">
+            <span class="number">224</span>
+            <span class="label">CLI parallel markers</span>
+            <span class="context">Current static count of <code>t.Parallel()</code></span>
+          </div>
+          <div class="metric danger">
+            <span class="number">5</span>
+            <span class="label">real-Beads tests omitted</span>
+            <span class="context">One now fails directly against Beads 1.2.1</span>
+          </div>
+          <div class="metric danger">
+            <span class="number">3×</span>
+            <span class="label">timing workflow aborted</span>
+            <span class="context">Newest three-sample attempt reached sample 3</span>
+          </div>
+        </div>
+      </section>
+
+      <section id="findings">
+        <div class="section-head"><h2>Code review findings</h2><span class="section-no">02 / 07</span></div>
+
+        <div class="finding">
+          <div><span class="severity">Must fix · P1</span></div>
+          <div>
+            <h3>The integration selector silently drops every real-Beads adapter test</h3>
+            <p><code>Makefile:16</code> and <code>cmd/testtiming/main.go:243</code> select only names matching <code>^TestIntegration</code>. The five top-level functions at <code>internal/beads/beads_integration_test.go:16, 66, 126, 194, 254</code> lack that prefix.</p>
+            <p>Impact: <code>make check</code> can be green without validating parent-cycle rejection, cross-type blocking dependencies, related-edge preservation, pre-mutation rejection, or dependency creation against real Beads. The tracked integration timing baseline is also incomplete.</p>
+            <div class="evidence"><strong>Observed:</strong> documented lane — <code>internal/beads [no tests to run]</code>. A coverage-instrumented direct run against <code>bd 1.2.1</code> passed four scenarios and failed <code>TestUpdateServiceSupportsCrossTypeBlockingDependencies</code> in both task→epic and epic→task cases.</div>
+          </div>
+        </div>
+
+        <div class="finding">
+          <div><span class="severity should">Should fix · P1</span></div>
+          <div>
+            <h3>The parallel fast lane is not stable enough for the performance gate</h3>
+            <p>Three independent <code>PERF_SAMPLES=3 make test-perf</code> attempts aborted with a failing <code>internal/cli</code> package. The newest attempt completed samples 1 and 2 in 21.65s and 22.22s before failing sample 3. A repeated CLI run observed <code>TestTaskReviewImportsHunkBlockingNoteAndBlocksApproval</code> fail once; ten focused repetitions passed, pointing to order, resource, or cross-test interaction rather than a deterministic assertion failure.</p>
+            <p>Impact: the stabilized median cannot be refreshed or trusted on demand, and the epic’s “repeated shuffled runs” guarantee is weakened by current repository behavior.</p>
+            <div class="evidence"><strong>Nuance:</strong> a separate uncached <code>go test -count=1 ./...</code> passed in 18.14s, and a later <code>make check</code> fast lane also passed. This is intermittent, not a permanent suite failure.</div>
+          </div>
+        </div>
+
+        <div class="finding">
+          <div><span class="severity should">Should fix · P2</span></div>
+          <div>
+            <h3>Timing failures are not actionable because the retained output can omit the failing assertion</h3>
+            <p><code>cmd/testtiming/main.go:280</code> retains only the final 4,096 bytes of aggregate test output. With parallel packages, later passing output displaced the earlier CLI assertion; both failed timing runs ended with <code>FAIL internal/cli</code> but no useful cause.</p>
+            <p>Impact: the performance command satisfies detection, but not its intended diagnostic value. Retain structured failure events per test/package or save the full test JSON beside the timing artifact.</p>
+          </div>
+        </div>
+
+        <div class="finding">
+          <div><span class="severity should">Should fix · P1</span></div>
+          <div>
+            <h3>The critical packages cannot reuse Go’s test-result cache</h3>
+            <p>Consecutive routine runs took 27.24s and 27.07s because <code>internal/cli</code> and <code>internal/git</code> executed again instead of returning <code>(cached)</code>. Cache diagnostics produced different input IDs on every run; the fingerprints include random temporary working directories and broad repository scans. The CLI tests still contain 13 <code>t.Chdir</code> calls, while CLI and Git boundary tests walk the repository and exclude only <code>.git</code> and <code>vendor</code>.</p>
+            <p>Impact: the fastest developer feedback loop repeatedly pays the full subprocess and filesystem cost. A no-test-body control completes in 2.35s, so restoring cacheability could move unchanged repeat runs much closer to that floor; the exact gain needs validation after the inputs are narrowed.</p>
+            <div class="evidence"><strong>Observed:</strong> a warm repeat used 30.64s user CPU and 38.74s system CPU over 27.07s wall time. System time is 56% of total CPU time, consistent with process- and filesystem-heavy tests rather than pure Go computation.</div>
+          </div>
+        </div>
+
+        <div class="finding">
+          <div><span class="severity should">Should fix · P1</span></div>
+          <div>
+            <h3>The lane names classify safety and one dependency, not test scope</h3>
+            <p><code>make test</code> runs every untagged test and is called “hermetic,” while <code>make test-integration</code> selects only real-Beads scenarios. The fast lane therefore includes 45 real-Git contract tests, five explicitly named CLI end-to-end completion flows, and broad cross-package workflow tests alongside package-local units.</p>
+            <p>Impact: developers cannot select a genuinely unit-scoped feedback loop, and “integration” is incorrectly read as permission to use credentials, networks, operator data, or real model agents. Those are safety prohibitions for every automated lane, not classification criteria.</p>
+            <div class="evidence"><strong>Current inventory:</strong> 862 top-level tests across 90 files; 853 are untagged and only 9 are tagged integration tests. Forty-three test files make direct filesystem calls, 50 allocate temporary directories, and 9 call <code>os/exec</code> directly; indirect helper and production calls widen all three footprints.</div>
+          </div>
+        </div>
+
+        <div class="finding">
+          <div><span class="severity should">Should fix · P2</span></div>
+          <div>
+            <h3>Test cost has a baseline; coverage value does not</h3>
+            <p>The repository tracks timing budgets and JSON timing artifacts, but has no coverage target, normalized profile, baseline, or merge-base comparison. That makes it impossible to see whether a costly new scenario reaches new production statements, merely repeats an existing path under a different adapter, or loses coverage elsewhere.</p>
+            <p>Impact: test additions can increase wall time without making their marginal value visible. Add a coverage companion to <code>cmd/testtiming</code>, but treat overlap as a review signal—not proof that a scenario is redundant—because Go statement coverage cannot observe assertion strength, input partitions, external-tool semantics, branches, or failure behavior.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="progress">
+        <div class="section-head"><h2>Bead-by-bead progress</h2><span class="section-no">03 / 07</span></div>
+        <table>
+          <thead><tr><th>Bead</th><th>Review status</th><th>Evidence and caveat</th></tr></thead>
+          <tbody>
+            <tr><td><strong>op-ejt.1</strong><br>Agent &amp; usage guard</td><td><span class="status good">Delivered</span></td><td>Shared launcher blocks Codex/Pi in tests unless an explicit fake resolves to the registered executable. Usage discovery defaults to isolated temporary roots. Production and live evaluation behavior remain available.</td></tr>
+            <tr><td><strong>op-ejt.2</strong><br>Hermetic / integration split</td><td><span class="status partial">Partial</span></td><td>Fast lane, build tags, early <code>bd</code> guidance, README, and AGENTS instructions landed. Real-Beads adapter coverage is presently omitted by naming drift.</td></tr>
+            <tr><td><strong>op-ejt.6</strong><br>Exclusive lanes</td><td><span class="status partial">Partial</span></td><td>The lanes are exclusive and automatically select conforming tests, but no enforcement prevents tagged tests with nonconforming names. That exact drift occurred.</td></tr>
+            <tr><td><strong>op-ejt.3</strong><br>Timing &amp; budgets</td><td><span class="status partial">At risk</span></td><td>JSON reports, medians, ranked tests, environment metadata, and ratcheting budgets exist. Current three-sample measurement is blocked by a flaky fast lane; integration baseline excludes five tests.</td></tr>
+            <tr><td><strong>op-ejt.4</strong><br>Reusable fixtures</td><td><span class="status good">Delivered</span></td><td>One immutable CLI helper per package run and copied seeded Git repositories landed. Recorded CLI package median improved 32.8%, from 21.346s to 14.337s.</td></tr>
+            <tr><td><strong>op-ejt.5</strong><br>Invocation isolation</td><td><span class="status partial">At risk</span></td><td>Explicit invocation-scoped paths, environment, runners, and launcher landed; recorded serial-to-parallel CLI improvement was 46.9%. A current parallel-only flake needs resolution.</td></tr>
+            <tr><td><strong>op-ejt</strong><br>Epic outcome</td><td><span class="status blocked">Conditional</span></td><td>Safety and historical speed objectives are met. Complete-validation and retained-real-Beads claims are not fully supported by the current lane behavior.</td></tr>
+          </tbody>
+        </table>
+
+        <div class="flow" aria-label="Integration selection flow">
+          <div class="flow-node"><strong>Tagged source</strong><span><code>//go:build integration</code></span></div>
+          <div class="arrow">→</div>
+          <div class="flow-node bad"><strong>Name filter</strong><span><code>^TestIntegration</code><br>5 functions do not match</span></div>
+          <div class="arrow">→</div>
+          <div class="flow-node"><strong>Executed lane</strong><span>4 CLI scenarios<br>0 Beads adapter scenarios</span></div>
+        </div>
+      </section>
+
+      <section id="performance">
+        <div class="section-head"><h2>Performance record</h2><span class="section-no">04 / 07</span></div>
+        <p class="lede">The accepted implementation beat the epic’s ≤21.5s target decisively. Current complete and partial samples span 18.36–22.22s before the intermittent failure interrupts collection. The representative 18.36s run exceeds the ratcheted 17.66s budget, and no current stabilized median is available.</p>
+
+        <div class="bars" aria-label="Fast lane timing comparison">
+          <div class="bar-row"><span>Original</span><div class="bar-track"><div class="bar-fill target" style="width:100%"></div></div><span class="bar-value">42.95s</span></div>
+          <div class="bar-row"><span>Epic target</span><div class="bar-track"><div class="bar-fill target" style="width:50.1%"></div></div><span class="bar-value">21.50s</span></div>
+          <div class="bar-row"><span>Final baseline</span><div class="bar-track"><div class="bar-fill" style="width:32.9%"></div></div><span class="bar-value">14.13s</span></div>
+          <div class="bar-row"><span>Current sample*</span><div class="bar-track"><div class="bar-fill current" style="width:42.7%"></div></div><span class="bar-value">18.36s</span></div>
+        </div>
+        <p class="caption">* Representative complete uncached sample on the same recorded 4-CPU host. Three attempts at the documented three-sample workflow failed; the newest reached sample 3 after recording 21.65s and 22.22s.</p>
+
+        <table style="margin-top: 28px">
+          <thead><tr><th>Measure</th><th>Recorded result</th><th>Interpretation</th></tr></thead>
+          <tbody>
+            <tr><td>Fixture reuse</td><td>21.346s → 14.337s</td><td>32.8% CLI package improvement; exceeds the bead’s 10% goal.</td></tr>
+            <tr><td>CLI parallelization</td><td>15.783s → 8.377s</td><td>46.9% wall-time improvement versus <code>-parallel=1</code> control.</td></tr>
+            <tr><td>Final fast lane</td><td>14.129s median</td><td>67.1% below the original 42.95s reference.</td></tr>
+            <tr><td>Current fast sample</td><td>18.355s</td><td>Still 57.3% below original, but 0.69s over the ratcheted suite budget; not statistically stabilized.</td></tr>
+            <tr><td>Omitted Beads tests</td><td>48.220s coverage-instrumented group</td><td>Four passed and one failed; integration timing, coverage, and correctness are all understated by the current selector.</td></tr>
+          </tbody>
+        </table>
+
+        <div id="fast-lane">
+          <h3 class="subsection-title">Where the fast lane spends its time</h3>
+          <p class="lede">One representative successful run consumed 18.36s of wall time but accumulated 46.07 package-seconds. Go compressed that work by 2.51× through package concurrency. CLI and Git still finished only 0.15s apart, which makes them a joint critical path: improving only the smaller packages will not materially shorten the lane.</p>
+
+          <div class="anatomy-grid">
+            <article class="anatomy-panel">
+              <h3>Aggregate package work</h3>
+              <p>46.07 package-seconds, including work that overlaps in wall time.</p>
+              <div class="stack-bar" role="img" aria-label="Git 36.9 percent, CLI 35.2 percent, Review 14.4 percent, Workflow 5.2 percent, remaining packages 8.3 percent">
+                <span class="stack-segment git" style="width:36.9%"></span>
+                <span class="stack-segment cli" style="width:35.2%"></span>
+                <span class="stack-segment review" style="width:14.4%"></span>
+                <span class="stack-segment workflow" style="width:5.2%"></span>
+                <span class="stack-segment rest" style="width:8.3%"></span>
+              </div>
+              <div class="legend">
+                <span style="--legend-color:var(--ink)">Git · 16.99s</span>
+                <span style="--legend-color:var(--teal)">CLI · 16.23s</span>
+                <span style="--legend-color:var(--amber)">Review · 6.63s</span>
+                <span style="--legend-color:#79a8a4">Workflow · 2.38s</span>
+                <span style="--legend-color:var(--paper-deep)">Rest · 3.84s</span>
+              </div>
+            </article>
+            <article class="anatomy-panel">
+              <h3>Elapsed package critical path</h3>
+              <p>Timeline sample from package start to completion; packages overlap.</p>
+              <div class="bars">
+                <div class="bar-row"><span>CLI</span><div class="bar-track"><div class="bar-fill" style="width:100%"></div></div><span class="bar-value">17.92s</span></div>
+                <div class="bar-row"><span>Git</span><div class="bar-track"><div class="bar-fill target" style="width:99.6%"></div></div><span class="bar-value">17.84s</span></div>
+                <div class="bar-row"><span>Review</span><div class="bar-track"><div class="bar-fill current" style="width:38.3%"></div></div><span class="bar-value">6.87s</span></div>
+                <div class="bar-row"><span>Workflow</span><div class="bar-track"><div class="bar-fill current" style="width:15.3%"></div></div><span class="bar-value">2.75s</span></div>
+              </div>
+            </article>
+          </div>
+
+          <div class="insight-grid" aria-label="Fast lane summary metrics">
+            <div class="insight"><strong>72%</strong><span>of aggregate package work is split between CLI and Git.</span></div>
+            <div class="insight"><strong>86%</strong><span>is covered by CLI, Git, and Review together.</span></div>
+            <div class="insight"><strong>2.35s</strong><span>is the measured compile and package-setup floor with no test bodies.</span></div>
+          </div>
+
+          <h3 class="subsection-title">Why it is slow: process fan-out, not Go computation</h3>
+          <p>The expensive scenarios build temporary repository worlds and drive them through the operating system. A diagnostic <code>git</code> wrapper counted commands without replacing Git’s behavior. The counts include fixture setup and, in CLI, VCS stamping performed by nested <code>go build</code> calls.</p>
+          <div class="cause-grid">
+            <article class="cause-card">
+              <span class="cause-number">1,391</span>
+              <h4>real Git invocations in <code>internal/git</code></h4>
+              <p>Across 46 tests: 84 <code>init</code>, 76 pushes, 39 fetches, 15 clones, 16 worktree operations, and hundreds of ref/status probes. An uninstrumented run used 5.53s system CPU versus 2.02s user CPU.</p>
+            </article>
+            <article class="cause-card">
+              <span class="cause-number">2,050</span>
+              <h4>real Git invocations in <code>internal/cli</code></h4>
+              <p>Across 302 tests: 435 status checks, 218 diffs, and 146 untracked-file scans dominate the count. One representative autonomous-review test alone issued 71 Git commands—8 for package setup and 63 for its scenario.</p>
+            </article>
+            <article class="cause-card">
+              <span class="cause-number">9 × build</span>
+              <h4>fresh Orpheus binaries inside CLI tests</h4>
+              <p>The nine slowest workflow tests each run <code>go build -o … ./cmd/orpheus</code>. A warm standalone build measured 0.73–0.83s; those tests then launch the binary from fake agent or reviewer scripts.</p>
+            </article>
+            <article class="cause-card">
+              <span class="cause-number">97 / 280</span>
+              <h4>temporary-root / direct file-operation sites</h4>
+              <p>CLI test source contains 97 <code>t.TempDir()</code> call sites and 280 explicit read, write, mkdir, stat, remove, or rename sites. Repository copying and Git’s own object/ref/lock I/O add substantially more work below those Go calls.</p>
+            </article>
+          </div>
+
+          <div class="process-chain" aria-label="Typical slow CLI test execution chain">
+            <div class="process-step"><strong>1 · Arrange</strong>Create isolated config, data, fixtures, and repository copies.</div>
+            <div class="process-step"><strong>2 · Build</strong>Nine scenarios compile and link a new Orpheus executable.</div>
+            <div class="process-step"><strong>3 · Execute</strong>Run Cobra in-process, but call real <code>git</code> underneath.</div>
+            <div class="process-step"><strong>4 · Simulate</strong>Spawn fake <code>bd</code>, <code>gh</code>, agent, and review shell scripts.</div>
+            <div class="process-step"><strong>5 · Re-enter</strong>Agent scripts invoke nested <code>orpheus agent done/review</code> commands and mutate state.</div>
+          </div>
+
+          <div class="classification-note">
+            <h3>Hermetic does not mean unit</h3>
+            <p><code>make test</code> runs every non-integration-tagged test. The lane mixes genuine unit tests with filesystem-backed component tests, real-Git adapter contract tests, and named end-to-end completion scenarios. Network access, credentials, operator data, and model-provider calls must be forbidden in every automated test lane; they are safety invariants, not the line between unit and integration.</p>
+          </div>
+
+          <div id="test-classification">
+            <h3 class="subsection-title">Classification audit: use three independent axes</h3>
+            <p>A useful name must answer what is under test without hiding how it runs. The current “hermetic versus real Beads” split combines unrelated concerns and leaves most integration tests in the fast lane.</p>
+
+            <div class="axis-grid">
+              <article class="axis-card">
+                <span class="axis-label">Axis 1 · scope</span>
+                <h4>Unit or integration</h4>
+                <p>Does the test target one package’s behavior behind collaborator seams, or verify collaboration across packages / an adapter contract?</p>
+              </article>
+              <article class="axis-card">
+                <span class="axis-label">Axis 2 · medium</span>
+                <h4>Memory, disk, or process</h4>
+                <p>A unit can legitimately use disk when filesystem semantics are its subject. Record the medium separately because it predicts cost.</p>
+              </article>
+              <article class="axis-card">
+                <span class="axis-label">Axis 3 · safety</span>
+                <h4>Isolated or live</h4>
+                <p>All automated tests are isolated: no external network, credentials, operator data, or Codex/Pi provider calls. Live evaluations remain outside test validation.</p>
+              </article>
+            </div>
+
+            <div class="scope-grid">
+              <article class="scope-card unit">
+                <h4>Unit test</h4>
+                <p>Targets behavior owned by one package. Other Orpheus services are values, fakes, or injected interfaces; no child process is required. It may be <span class="mode-badge memory">memory</span> or <span class="mode-badge disk">disk</span> when testing paths, encoding, atomic replacement, locks, or permissions.</p>
+              </article>
+              <article class="scope-card integration">
+                <h4>Integration test</h4>
+                <p>Verifies a collaboration across Orpheus packages or a contract with an actual local adapter such as Git, Beads, <code>gh</code>, the OS process environment, or the compiled CLI. It is usually <span class="mode-badge disk">disk</span> <span class="mode-badge process">process</span> but remains fully isolated.</p>
+              </article>
+            </div>
+
+            <h3 class="subsection-title">What the current tests actually are</h3>
+            <div class="table-scroll" role="region" aria-label="Current test classification inventory" tabindex="0">
+              <table>
+              <thead><tr><th>Package / group</th><th>Top-level tests</th><th>Observed medium and recommended classification</th></tr></thead>
+              <tbody>
+                <tr><td><strong>CLI</strong></td><td>304 fast + 4 tagged</td><td><span class="mode-badge disk">disk</span> <span class="mode-badge process">process</span> Most command, task, review, publication, and five named completion E2E scenarios are integration tests. Internal formatting, routing, and argument helpers remain units.</td></tr>
+                <tr><td><strong>Git</strong></td><td>46</td><td><span class="mode-badge disk">disk</span> <span class="mode-badge process">process</span> Forty-five exercise the real local Git executable and repositories: adapter integration/contract tests. One repository-wide AST boundary check is architectural conformance.</td></tr>
+                <tr><td><strong>Workflow</strong></td><td>110</td><td><span class="mode-badge memory">memory</span> <span class="mode-badge disk">disk</span> Cross-package lifecycle orchestration is integration scope even when dependencies are faked. Small policy/selection helpers can stay package units.</td></tr>
+                <tr><td><strong>Review</strong></td><td>42</td><td><span class="mode-badge memory">memory</span> <span class="mode-badge disk">disk</span> <span class="mode-badge process">process</span> Config parsing and pure decision logic are units; runner, paired-review, check-script, and Hunk collaborations are integration tests.</td></tr>
+                <tr><td><strong>Agent</strong></td><td>98</td><td><span class="mode-badge memory">memory</span> <span class="mode-badge disk">disk</span> Prompt/profile/usage-cost functions are units. Session discovery, context assembly, resume validation, registry/state collaboration, and log walking are disk-backed component or integration tests.</td></tr>
+                <tr><td><strong>State</strong></td><td>17</td><td><span class="mode-badge disk">disk unit</span> One-package tests intentionally validate YAML, path traversal, atomic replacement, locking, permissions, and error behavior against the OS filesystem.</td></tr>
+                <tr><td><strong>Registry + task state</strong></td><td>24 + 48</td><td><span class="mode-badge disk">disk</span> Pure validation/reducer cases are units; YAML-backed store contracts are component integrations with <code>internal/state</code>.</td></tr>
+                <tr><td><strong>Task, status, stats, target, logging, readiness, titles</strong></td><td>90</td><td><span class="mode-badge memory">mostly memory</span> Predominantly package-focused unit tests. Several task tests allocate temporary paths as opaque values without performing meaningful I/O.</td></tr>
+                <tr><td><strong>Beads</strong></td><td>31 fast + 5 tagged</td><td><span class="mode-badge memory">fake runner</span> <span class="mode-badge process">real bd</span> Fake-runner adapter logic is unit/component scope; the five real-Beads contracts are integration tests, although the current name filter omits them.</td></tr>
+                <tr><td><strong>Agent execution + pull requests</strong></td><td>6 + 8</td><td><span class="mode-badge disk">disk</span> <span class="mode-badge process">process</span> Launcher identity/environment and fake-<code>gh</code> executable behavior are local process integration contracts.</td></tr>
+                <tr><td><strong>Doctor, publication flows, evaluation harness, guards, timing</strong></td><td>29</td><td>Mixed: pure formatting/config units, disk-backed component tests, process-safety contracts, and evaluation-harness tests with fake stores. Classify by individual file when splitting.</td></tr>
+              </tbody>
+              </table>
+            </div>
+            <p class="caption">Static inventory at <code>a56e569</code>: 862 top-level tests in 90 files. File-level I/O signals are conservative—43 files call filesystem APIs directly, 50 use <code>t.TempDir()</code>, and 9 call <code>os/exec</code>; helpers and production adapters cause additional runtime I/O. Importing another package’s data type alone does not make a test integration scope.</p>
+
+            <h3 class="subsection-title">Can the same test run against memory and disk?</h3>
+            <p>Yes for persistence contracts, but not honestly for every workflow. A virtual filesystem cannot be seen by the real <code>git</code>, <code>bd</code>, <code>gh</code>, shell, or compiled-Orpheus processes, and it does not reproduce OS locks, symlinks, permissions, or atomic rename behavior unless those semantics are reimplemented.</p>
+            <div class="table-scroll" role="region" aria-label="Filesystem strategy comparison" tabindex="0">
+              <table>
+              <thead><tr><th>Option</th><th>Evidence / benefit</th><th>Cost and recommendation</th></tr></thead>
+              <tbody>
+                <tr><td>Repository-wide virtual filesystem</td><td>Could run YAML/config/session discovery without disk and allow a mode toggle.</td><td><strong>Do not adopt broadly.</strong> <code>state.Paths</code> appears 56 times across 22 production files and exposes real absolute paths. The abstraction would spread into unrelated code yet still fail at process boundaries.</td></tr>
+                <tr><td>Narrow in-memory stores + shared contract suites</td><td>Business/orchestration tests use memory implementations; the same store contract runs against memory and the YAML-backed disk adapter.</td><td><strong>Preferred design.</strong> Extend existing store/backend interfaces at ownership boundaries. It adds a second implementation and contract suite, but avoids pretending Git or OS semantics are virtualizable.</td></tr>
+                <tr><td>OS tmpfs integration mode</td><td>Preserves real paths and executables. A successful paired full-suite sample improved 26.32s → 20.87s; Git package median improved 7.37s → 6.72s.</td><td><strong>Pilot as an opt-in accelerator.</strong> Availability is platform-specific and one initial full run hit the existing intermittent CLI lock failure before the focused test passed 10/10. Require repeated measurements.</td></tr>
+                <tr><td>Real disk contracts in CI</td><td>Validates encoding, atomic replacement, locks, permissions, Git, Beads, and process behavior against production-like semantics.</td><td><strong>Keep mandatory.</strong> Run after fast package units; never add network, credentials, operator data, or model-provider agents.</td></tr>
+              </tbody>
+              </table>
+            </div>
+
+            <h3 class="subsection-title">Recommended lane contract</h3>
+            <div class="table-scroll" role="region" aria-label="Recommended test lanes" tabindex="0">
+              <table>
+              <thead><tr><th>Lane</th><th>Contents</th><th>Expected use</th></tr></thead>
+              <tbody>
+                <tr><td><code>test-unit</code></td><td>One-package behavior, injected collaborators, no subprocesses. Memory by default; cheap disk units only where filesystem behavior is the subject.</td><td>Every edit and local watch loop. Target sub-second to low-single-digit feedback.</td></tr>
+                <tr><td><code>test-integration</code></td><td>Cross-package workflows plus real local filesystem/process adapters: Git, Beads, fake-<code>gh</code> process contracts, compiled CLI smoke flows.</td><td>CI and deliberate local validation. Tool prerequisites explicit; still isolated and credential-free.</td></tr>
+                <tr><td><code>check</code></td><td>Formatting + unit + integration + lint. Live evaluation remains excluded.</td><td>Required complete validation before publication.</td></tr>
+              </tbody>
+              </table>
+            </div>
+            <p class="caption">Use build tags on integration-only files, not test-name filters as the primary classifier. Mixed files such as <code>internal/cli/task_test.go</code> should be split by scope before tagging; filenames and tags then state the contract directly.</p>
+          </div>
+
+          <div id="coverage-economics">
+            <h3 class="subsection-title">Coverage economics: measure reach and marginal reach</h3>
+            <p>Coverage was measured at <code>a56e569</code> with Go statement instrumentation and <code>-coverpkg=./...</code>, then normalized by source block. Cross-package instrumentation is essential for workflow tests; normal package-local coverage would credit only the package containing the test. The raw fast profile repeated blocks for each test binary—281,900 data rows collapsed to 12,813 unique source blocks—so a comparison tool must merge counts before calculating overlap.</p>
+
+            <div class="classification-note">
+              <h3>Publish two primary coverage values</h3>
+              <p>The stable interface should report <strong>unit coverage</strong> and <strong>integration coverage</strong> separately, each against the same complete production-statement denominator. Combined coverage and integration-marginal coverage are useful derived diagnostics, but they must not replace the two lane values. The present 77.7% result is labeled <em>fast</em>, not unit, because classification has not yet moved the many Git, CLI, and workflow integrations out of that lane.</p>
+            </div>
+
+            <div class="metric-grid" aria-label="Coverage audit summary">
+              <div class="metric">
+                <span class="number">—</span>
+                <span class="label">unit coverage</span>
+                <span class="context">Unavailable until the scope classification is implemented</span>
+              </div>
+              <div class="metric">
+                <span class="number">5.3%</span>
+                <span class="label">current integration coverage</span>
+                <span class="context">931 / 17,643 statements from the four selected CLI scenarios</span>
+              </div>
+              <div class="metric">
+                <span class="number">77.7%</span>
+                <span class="label">current fast coverage</span>
+                <span class="context">Historical mixed-scope value; do not present it as unit coverage</span>
+              </div>
+              <div class="metric danger">
+                <span class="number">0.00pp</span>
+                <span class="label">current integration marginal</span>
+                <span class="context">All 931 integration-reached statements are also fast-covered</span>
+              </div>
+            </div>
+
+            <div class="table-scroll" role="region" aria-label="Coverage value definitions" tabindex="0">
+              <table>
+                <thead><tr><th>Value</th><th>Numerator</th><th>Denominator and command contract</th><th>Repository role</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>Unit coverage</strong></td><td>Statements reached by unit-scoped tests only.</td><td>All instrumented production statements via <code>-coverpkg=./...</code>; run the untagged, post-classification unit lane.</td><td>Primary tracked value and PR delta.</td></tr>
+                  <tr><td><strong>Integration coverage</strong></td><td>Statements reached by integration-scoped tests only.</td><td>The same production denominator via <code>-coverpkg=./...</code>; run integration-tagged, <code>TestIntegration…</code> scenarios.</td><td>Primary tracked value and PR delta.</td></tr>
+                  <tr><td>Combined coverage</td><td>Union of statements reached by either lane.</td><td>Same denominator; merge normalized source-block identities, never add percentages.</td><td>Derived overall safety-net signal.</td></tr>
+                  <tr><td>Integration marginal</td><td>Integration-reached statements not reached by units.</td><td>Same denominator; set difference after normalized merging.</td><td>Derived cost/value diagnostic, never a deletion gate.</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3 class="subsection-title">Cross-package integration coverage is verified</h3>
+            <p>A standalone profile for <code>TestIntegrationRepoRegistrationFlowEndToEnd</code>, executed from <code>internal/cli</code>, recorded non-zero statements in ten other production packages. This directly verifies that <code>-coverpkg=./...</code> avoids the package-local limitation.</p>
+            <div class="table-scroll" role="region" aria-label="Cross-package integration coverage proof" tabindex="0">
+              <table>
+                <thead><tr><th>Production package reached</th><th>Statements reached by the single CLI integration</th><th>Example profile evidence</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>Registry</strong></td><td>124</td><td><code>internal/registry/registry.go</code> contains covered blocks.</td></tr>
+                  <tr><td><strong>Beads</strong></td><td>116</td><td><code>internal/beads/beads.go</code> contains covered blocks.</td></tr>
+                  <tr><td><strong>State</strong></td><td>86</td><td>Persistence and path behavior is credited outside the CLI package.</td></tr>
+                  <tr><td><strong>Git</strong></td><td>82</td><td><code>internal/git/git.go</code> contains covered blocks.</td></tr>
+                  <tr><td><strong>Other packages</strong></td><td>72</td><td>Agent, logging, path utilities, publication, task state, and test guard.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="caption">The coverage tool should retain an automated regression fixture proving that an integration test in one package produces non-zero coverage for a known collaborator package. A successful command with only package-local blocks must fail validation.</p>
+
+            <div class="classification-note">
+              <h3>High overlap is a question, not a deletion verdict</h3>
+              <p>The integration tests’ primary value is validating real process and Beads contracts, not increasing statement coverage. Two tests may execute identical Orpheus statements while proving different input partitions, output assertions, persistence effects, or external-tool compatibility. Use marginal coverage to identify scenarios for semantic review; consolidate only after comparing their contract and failure-detection value.</p>
+            </div>
+
+            <h3 class="subsection-title">Where the uncovered statements are</h3>
+            <div class="table-scroll" role="region" aria-label="Fast-lane package statement coverage" tabindex="0">
+              <table>
+                <thead><tr><th>Package</th><th>Fast coverage</th><th>Covered / total</th><th>Uncovered</th><th>Interpretation</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>CLI</strong></td><td>78.7%</td><td>3,443 / 4,374</td><td>931</td><td>Largest absolute gap; <code>task.go</code> alone has 478 uncovered statements.</td></tr>
+                  <tr><td><strong>Workflow</strong></td><td>75.3%</td><td>2,168 / 2,879</td><td>711</td><td>Review lifecycle, finalization, and sync contain 558 uncovered statements together.</td></tr>
+                  <tr><td><strong>Task state</strong></td><td>76.3%</td><td>1,604 / 2,102</td><td>498</td><td>The single large state implementation owns the entire package gap.</td></tr>
+                  <tr><td><strong>Git</strong></td><td>68.1%</td><td>973 / 1,429</td><td>456</td><td><code>worktree.go</code> contributes 379 uncovered statements despite the expensive real-Git matrix.</td></tr>
+                  <tr><td><strong>Agent</strong></td><td>84.1%</td><td>1,539 / 1,830</td><td>291</td><td>Relatively strong coverage; remaining gaps are spread across context and usage paths.</td></tr>
+                  <tr><td><strong>Beads</strong></td><td>72.3%</td><td>439 / 607</td><td>168</td><td>The five real-Beads scenarios add only nine statements beyond fake-runner coverage.</td></tr>
+                  <tr><td><strong>Timing tool</strong></td><td>33.1%</td><td>85 / 257</td><td>172</td><td>Lowest percentage; command execution, file handling, and reporting paths are lightly covered.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="caption">Statement coverage is not branch coverage. Absolute uncovered counts are included because a small package at 33% may represent less untested code than a large package at 79%.</p>
+
+            <h3 class="subsection-title">Marginal coverage of the four selected CLI integrations</h3>
+            <div class="table-scroll" role="region" aria-label="CLI integration marginal coverage" tabindex="0">
+              <table>
+                <thead><tr><th>Scenario</th><th>Instrumented standalone time</th><th>Statements reached</th><th>Exclusive within group</th><th>Distinct contract</th></tr></thead>
+                <tbody>
+                  <tr><td>Detect existing local Beads</td><td>6.50s</td><td>844</td><td>0</td><td>Detection plus exact local-mode, remote, branch, prefix, and list output.</td></tr>
+                  <tr><td>Initialize managed Beads</td><td>6.59s</td><td>800</td><td>0</td><td>Creation of managed <code>.beads</code> and persisted prefix configuration.</td></tr>
+                  <tr><td>Registration flow</td><td>13.83s</td><td>925</td><td>26</td><td>Local and managed registration together, token routing, directories, and real <code>bd list</code>.</td></tr>
+                  <tr><td>Reject duplicate local prefix</td><td>7.16s</td><td>802</td><td>6</td><td>Negative-path rejection and absence of successful output.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="caption">Pairwise statement-set similarity is 82.9–93.6% (Jaccard); all 931 statements in the group are already covered by the fast lane. The first two scenarios are statement-wise subsets, but their stronger adapter-specific assertions mean consolidation requires a contract-by-contract review.</p>
+
+            <h3 class="subsection-title">Marginal coverage of the five omitted Beads integrations</h3>
+            <div class="table-scroll" role="region" aria-label="Beads integration marginal coverage" tabindex="0">
+              <table>
+                <thead><tr><th>Scenario</th><th>Instrumented time</th><th>Statements reached</th><th>Exclusive within group</th><th>Result on bd 1.2.1</th></tr></thead>
+                <tbody>
+                  <tr><td>Reject parent-descendant cycle</td><td>8.29s</td><td>235</td><td>23</td><td><span class="status good">Pass</span></td></tr>
+                  <tr><td>Cross-type blocking dependencies</td><td>12.15s</td><td>294</td><td>26</td><td><span class="status blocked">Fail</span> task→epic and epic→task</td></tr>
+                  <tr><td>Preserve related dependency</td><td>10.58s</td><td>272</td><td>24</td><td><span class="status good">Pass</span></td></tr>
+                  <tr><td>Reject before content mutation</td><td>9.99s</td><td>273</td><td>4</td><td><span class="status good">Pass</span></td></tr>
+                  <tr><td>Create blocking dependency</td><td>7.85s</td><td>173</td><td>5</td><td><span class="status good">Pass</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="caption">Pairwise similarity is lower than the CLI group at 51.6–83.5%, consistent with more distinct contracts. Their union reaches 361 statements; 352 are already fast-covered and nine are marginal. The failing cross-type profile records only the path reached before failure, so it is diagnostic evidence rather than a valid baseline.</p>
+
+            <h3 class="subsection-title">Recommended coverage tooling</h3>
+            <div class="table-scroll" role="region" aria-label="Coverage tooling proposal" tabindex="0">
+              <table>
+                <thead><tr><th>Capability</th><th>Repository contract</th><th>Arguments for and against</th></tr></thead>
+                <tbody>
+                  <tr><td><code>cmd/testcoverage</code> + <code>make test-coverage</code></td><td>Run classified unit and integration profiles once each with <code>-coverpkg=./...</code>; normalize duplicate blocks; emit the two primary lane values plus package, file, combined, overlap, and marginal statement metrics.</td><td><strong>For:</strong> mirrors the successful timing interface and avoids misleading package-local or raw multi-package profiles. <strong>Against:</strong> coverage instrumentation makes process-heavy tests slower and cannot measure behavior quality.</td></tr>
+                  <tr><td>Tracked baseline</td><td>Commit <code>performance/test-coverage-baseline.json</code> with schema, Go version, lane commands/signatures, test counts, unit and integration covered/total statements per package, combined coverage, and integration marginal coverage. Keep detailed profiles under ignored <code>artifacts/test-coverage/</code>.</td><td><strong>For:</strong> reviewable history and stale-lane detection. <strong>Against:</strong> source edits change block identities; updates must be generated, never hand-tuned.</td></tr>
+                  <tr><td>PR / main comparison</td><td>CI reads the baseline from the merge base, verifies the PR’s regenerated baseline matches its measured result, and reports total, package, changed-file, newly-covered, and newly-uncovered deltas.</td><td><strong>For:</strong> answers “what changed?” without trusting a PR-modified reference. <strong>Against:</strong> the repository currently contains no CI workflow, so the hosting system and base-artifact mechanism remain an implementation decision.</td></tr>
+                  <tr><td>Slow-scenario overlap audit</td><td>On demand or scheduled—not every PR—profile each costly integration scenario, then report Jaccard similarity, containment, leave-one-out exclusive statements, runtime, and test outcome.</td><td><strong>For:</strong> exposes expensive near-duplicates. <strong>Against:</strong> per-test profiling requires one test-binary run per scenario and scales poorly.</td></tr>
+                  <tr><td>Coverage policy</td><td>Gate missing lane execution and unexpected covered-statement loss; report package and changed-code coverage. Do not fail merely because an integration has low marginal statement coverage.</td><td><strong>For:</strong> prevents silent erosion without rewarding shallow tests. <strong>Against:</strong> a numerical ratchet still needs human review for generated code, deleted code, refactors, and intentionally unreachable error paths.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="caption">Keep timing and coverage as linked but separate evidence: timing uses uninstrumented repeated medians; coverage uses one instrumented run per lane. Before deleting an overlapping integration, inspect its assertions and consider mutation/fault-injection evidence to determine whether it catches a failure the other scenario misses.</p>
+          </div>
+
+          <h3 class="subsection-title">CLI: parallel, but workflow-heavy</h3>
+          <p>The CLI package accumulated 58.68 top-level test-seconds inside 16.23s of package time, a 3.62× effective parallel speedup. Default in-package parallelism is already useful: forcing <code>-parallel=2</code> slowed it to 18.98s, while <code>-parallel=8</code> was effectively flat at 17.08s.</p>
+          <table>
+            <thead><tr><th>CLI test family</th><th>Top-level tests</th><th>Test-seconds / share</th></tr></thead>
+            <tbody>
+              <tr><td>Review &amp; agent workflows</td><td>106</td><td>38.11s · 65%</td></tr>
+              <tr><td>Task lifecycle outside review</td><td>52</td><td>13.89s · 24%</td></tr>
+              <tr><td>Repository commands</td><td>64</td><td>3.05s · 5%</td></tr>
+              <tr><td>Completion, doctor, status &amp; other</td><td>74</td><td>3.63s · 6%</td></tr>
+            </tbody>
+          </table>
+          <p class="caption">The nine slowest standalone CLI tests all exercise end-to-end task review or repair workflows. Each takes 2.02–3.43 test-seconds and repeatedly crosses repository, helper-process, and state-transition boundaries.</p>
+
+          <h3 class="subsection-title">Git: mostly serial subprocess and filesystem work</h3>
+          <p>The Git package’s 16.98 top-level test-seconds almost exactly match its 16.99s package time, so there is little internal concurrency to compress. Its standalone command completed in 7.19s, yet the package took 17.84s in the representative full suite and as much as 23.88s with aggressive package concurrency. That gap is strong evidence of cross-package process and filesystem contention.</p>
+          <table>
+            <thead><tr><th>Git test family</th><th>Top-level tests</th><th>Test-seconds / share</th></tr></thead>
+            <tbody>
+              <tr><td>Merge &amp; conflict workflows</td><td>18</td><td>9.55s · 56%</td></tr>
+              <tr><td>Worktree &amp; branch workflows</td><td>20</td><td>6.38s · 38%</td></tr>
+              <tr><td>Status, inspection &amp; other</td><td>8</td><td>1.05s · 6%</td></tr>
+            </tbody>
+          </table>
+
+          <div class="cache-note">
+            <h3>The nominally warm lane is not warm</h3>
+            <p><code>make test</code> does not force <code>-count=1</code>, but repeat runs still execute CLI and Git. <code>GODEBUG=gocachetest=1</code> shows changing input IDs and “test output not found.” Random temporary working directories and repository-wide boundary scans are present in the cache fingerprints. This is the clearest reason an unchanged repeat costs 27s instead of approaching the 2.35s setup floor.</p>
+          </div>
+
+          <h3 class="subsection-title">Optimization order</h3>
+          <table>
+            <thead><tr><th>Priority</th><th>Proposal</th><th>Arguments for and against</th></tr></thead>
+            <tbody>
+              <tr><td><strong>1</strong></td><td>Reuse the existing CLI helper in the nine binary-building tests</td><td><strong>For:</strong> removes repeated compiler/linker and VCS-stamping work with an existing package-scoped mechanism. Keep one real-built-binary smoke scenario. <strong>Against:</strong> the Go test-binary helper is not byte-for-byte the installed executable, so replacing every executable-level test would lose packaging coverage.</td></tr>
+              <tr><td><strong>2</strong></td><td>Restore result-cache stability</td><td><strong>For:</strong> highest unchanged-rerun payoff; narrow the 13 CLI <code>t.Chdir</code> inputs and make boundary tests scan a stable, explicit source set. <strong>Against:</strong> this accelerates repeat runs, not clean CI runs, and the estimated 2–3s warm floor must be validated.</td></tr>
+              <tr><td><strong>3</strong></td><td>Test Git orchestration below the process boundary</td><td><strong>For:</strong> a recording command runner can cover branch/error decision matrices without launching thousands of identical probes. Preserve a smaller real-Git contract matrix. <strong>Against:</strong> Git semantics are subtle; replacing all real Git coverage with mocks would create false confidence.</td></tr>
+              <tr><td><strong>4</strong></td><td>Reuse seeded Git repository states</td><td><strong>For:</strong> removes repeated <code>init</code>, config, initial commit, origin, and push setup while keeping real Git for mutations. <strong>Against:</strong> copied repositories contain path-sensitive config and mutable refs; fixtures must remain isolated and verified.</td></tr>
+              <tr><td><strong>5</strong></td><td>Expose a genuinely unit-only developer lane</td><td><strong>For:</strong> gives sub-second feedback while retaining <code>make test</code> as the comprehensive hermetic lane. <strong>Against:</strong> adds lane taxonomy and creates a risk that developers run only the narrow lane.</td></tr>
+              <tr><td><strong>6</strong></td><td>Keep package concurrency near the current default</td><td><strong>For:</strong> four-package concurrency produced the best observed complete run. <strong>Against:</strong> scheduling alone is not a fix—<code>-p=8</code> took 26.85s and amplified contention; lower concurrency also slowed the critical packages.</td></tr>
+            </tbody>
+          </table>
+          <p class="caption">The recommendation is to preserve Git’s behavior coverage, not move it wholesale to integration. Optimize fixture construction and process work first; move only scenarios that truly depend on external tools or operator state.</p>
+        </div>
+      </section>
+
+      <section id="changes">
+        <div class="section-head"><h2>Change ledger</h2><span class="section-no">05 / 07</span></div>
+        <p class="lede">Six focused merge commits implemented the epic. Across those commits: 3,328 additions, 530 deletions, and 80 file-touch events. The count is intentionally scoped to the six delivery commits, excluding unrelated work merged between them.</p>
+        <div class="timeline">
+          <div class="event"><time>2026-07-28 · 1bd2492 · PR #62</time><h3>Fail closed around live agents</h3><p>Introduced <code>internal/testguard</code>, fake-agent registration, executable identity checks, and isolated usage roots.</p></div>
+          <div class="event"><time>2026-07-28 · 717be1d · PR #63</time><h3>Split hermetic and real-Beads lanes</h3><p>Moved real-Beads coverage behind the integration tag; documented <code>make test</code>, <code>make test-integration</code>, and <code>make check</code>.</p></div>
+          <div class="event"><time>2026-07-29 · c380f1e · PR #65</time><h3>Make lanes mutually exclusive</h3><p>Added the <code>TestIntegration</code> name selector and removed duplicate execution from the integration lane.</p></div>
+          <div class="event"><time>2026-07-30 · 4bb80fc · PR #70</time><h3>Add stabilized timing reports</h3><p>Added <code>cmd/testtiming</code>, JSON artifacts, repeated medians, ranked durations, and ratcheting budgets.</p></div>
+          <div class="event"><time>2026-07-30 · e02f104 · PR #72</time><h3>Reuse process and repository fixtures</h3><p>Built one immutable CLI helper and copied seeded Git repositories into independent mutable fixtures.</p></div>
+          <div class="event"><time>2026-08-02 · e563b5d · PR #74</time><h3>Scope CLI dependencies per invocation</h3><p>Replaced process-global test coupling with explicit paths, environment, backends, runners, and launchers; parallelized broad workflow coverage.</p></div>
+        </div>
+      </section>
+
+      <section id="validation">
+        <div class="section-head"><h2>Validation record</h2><span class="section-no">06 / 07</span></div>
+        <div class="checks">
+          <div class="check"><span class="check-mark">✓</span><div><strong><code>gofmt</code></strong><small>No formatting diff.</small></div></div>
+          <div class="check"><span class="check-mark">✓</span><div><strong><code>go vet ./...</code></strong><small>Passed.</small></div></div>
+          <div class="check"><span class="check-mark">✓</span><div><strong><code>go test -count=1 ./...</code></strong><small>Passed; 18.14s wall time.</small></div></div>
+          <div class="check"><span class="check-mark warn">!</span><div><strong><code>go test -count=3 ./internal/cli</code></strong><small>One observed parallel failure; focused test passed 10×.</small></div></div>
+          <div class="check"><span class="check-mark warn">!</span><div><strong><code>make test-integration</code></strong><small>Command passed, but skipped all five tagged Beads tests.</small></div></div>
+          <div class="check"><span class="check-mark fail">×</span><div><strong>Omitted Beads tests, direct</strong><small>Coverage run on bd 1.2.1: four passed; the cross-type blocking scenario failed both subcases.</small></div></div>
+          <div class="check"><span class="check-mark fail">×</span><div><strong><code>PERF_SAMPLES=3 make test-perf</code></strong><small>Three attempts aborted due to CLI failures; the latest reached sample 3.</small></div></div>
+          <div class="check"><span class="check-mark">✓</span><div><strong><code>make check</code></strong><small>Latest complete run passed formatting, both currently selected test lanes, and lint with 0 issues; read-only cache writes produced warnings only.</small></div></div>
+          <div class="check"><span class="check-mark">✓</span><div><strong>Coverage audit</strong><small>Fast profile, current integration profile, and nine per-scenario profiles collected with cross-package instrumentation.</small></div></div>
+          <div class="check"><span class="check-mark">✓</span><div><strong><code>golangci-lint run ./...</code></strong><small>Passed with 0 issues.</small></div></div>
+          <div class="check"><span class="check-mark">✓</span><div><strong>Agent safety boundary</strong><small>Guard, launcher, usage-root tests pass; no live evaluation was invoked.</small></div></div>
+        </div>
+        <p class="caption">Review activity was read-only except for this report and ignored timing artifacts. Tests launched local fake-agent shell processes, but no real model-backed agent ran, no model tokens were consumed, and no operator session logs were read.</p>
+      </section>
+
+      <section id="next">
+        <div class="section-head"><h2>Recommended next actions</h2><span class="section-no">07 / 07</span></div>
+        <div class="recommendations">
+          <article class="recommendation">
+            <span class="order">01 · Restore execution</span>
+            <h3>Rename and enforce</h3>
+            <p>Rename all five Beads functions to <code>TestIntegration…</code>. Add a repository test or lint check that fails whenever an integration-tagged file exposes an unprefixed top-level test. Diagnose the cross-type failure on Beads 1.2.1 before regenerating baselines.</p>
+          </article>
+          <article class="recommendation">
+            <span class="order">02 · Classify by scope</span>
+            <h3>Split units from integrations</h3>
+            <p>Define unit and integration by behavioral scope, with memory/disk/process as separate labels. Split mixed CLI and review files, tag integration files, and make all automated lanes isolated and credential-free.</p>
+          </article>
+          <article class="recommendation">
+            <span class="order">03 · Record coverage value</span>
+            <h3>Add coverage comparison tooling</h3>
+            <p>Add a normalized cross-package coverage command, a tracked generated baseline, ignored detailed artifacts, and merge-base deltas. Run per-scenario overlap analysis only for costly integration groups.</p>
+          </article>
+          <article class="recommendation">
+            <span class="order">04 · Pilot dual media</span>
+            <h3>Memory for logic, disk for contracts</h3>
+            <p>Add narrow in-memory stores with shared disk/memory contract suites, and benchmark an opt-in tmpfs integration lane. Then remove repeated CLI builds, reduce Git process matrices, restore cacheability, and stabilize the lock-sensitive tests.</p>
+          </article>
+        </div>
+
+        <h3 class="subsection-title">Draft follow-up epic: trustworthy, cost-aware test feedback</h3>
+        <p>This is a planning draft only; no Beads have been created. The closed <code>op-ejt</code> epic remains historical evidence. The proposed follow-up keeps safety invariant across every lane and delivers developer-visible outcomes in seven slices.</p>
+        <div class="table-scroll" role="region" aria-label="Draft follow-up task plan" tabindex="0">
+          <table>
+            <thead><tr><th>Slice</th><th>Vertical outcome</th><th>End-to-end validation signal</th><th>Depends on</th></tr></thead>
+            <tbody>
+              <tr><td><strong>T1 · Restore real-Beads validation</strong></td><td>The complete check cannot silently omit tagged scenarios, and supported Beads versions satisfy the cross-type relationship contract.</td><td>All nine intended integrations are discovered; a deliberately nonconforming tagged test is rejected; the current cross-type failure is resolved or converted into an explicit supported-version contract.</td><td>None</td></tr>
+              <tr><td><strong>T2 · Classify tests by scope</strong></td><td>Developers can choose a genuinely package-unit lane or the isolated integration lane without confusing safety with scope.</td><td>Every test file/function is classified; units stay within one package boundary, integrations cover cross-package or real-adapter contracts; README and AGENTS describe both lanes and their shared no-network/no-credential/no-agent rules.</td><td>T1</td></tr>
+              <tr><td><strong>T3 · Publish unit and integration coverage</strong></td><td>Local runs and pull requests show separate unit and integration coverage values, plus combined and marginal diagnostics versus main.</td><td>Both lanes use the same <code>-coverpkg=./...</code> denominator; an automated fixture proves cross-package credit; a generated tracked baseline and PR comparison report changed, newly covered, and newly uncovered code.</td><td>T2</td></tr>
+              <tr><td><strong>T4 · Make performance evidence reliable</strong></td><td>Repeated performance runs complete reliably and preserve the actual failing assertion when they do not.</td><td>The intermittent parallel CLI failures are resolved; full structured failure output is retained; unit and integration timing baselines are regenerated only after stable repeated samples.</td><td>T1, T2</td></tr>
+              <tr><td><strong>T5 · Restore warm-result cacheability</strong></td><td>An unchanged developer rerun avoids paying the complete filesystem and subprocess cost again.</td><td>Representative consecutive unit and comprehensive runs demonstrate expected Go test-cache hits without weakening isolation or repository-boundary checks.</td><td>T2, T4</td></tr>
+              <tr><td><strong>T6 · Make process-heavy coverage cost-proportional</strong></td><td>CLI and Git integration contracts retain their meaningful variants with materially less compiler, process, and repository setup work.</td><td>Reuse the existing CLI helper where packaging is not under test; move Git decision matrices behind a recording runner; retain focused compiled-binary and real-Git contracts; timing improves without unit, integration, combined, or contract coverage loss.</td><td>T3, T4</td></tr>
+              <tr><td><strong>T7 · Add dual-media persistence testing</strong></td><td>Developers run workflow logic against fast in-memory stores while CI validates the same store contracts and production workflows against real disk; tmpfs is an optional accelerator.</td><td>Shared contracts pass for memory and YAML/disk implementations; real locks, permissions, atomic replacement, Git, and Beads remain mandatory disk/process checks; a repeated tmpfs benchmark decides whether to retain the option.</td><td>T2, T3, T4</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="caption"><strong>Sequencing:</strong> dependency arrows point from each later slice to its prerequisite. T3 and T4 establish trustworthy value/cost evidence before T6 or T7 claim optimization. Parent-child links would express epic structure only. <strong>Open planning decision:</strong> the repository is hosted on GitHub but has no checked-in CI workflow; confirm whether T3 should add GitHub Actions or stop at provider-neutral repository commands and artifacts.</p>
+      </section>
+
+      <footer>
+        <span>Prepared from repository history at <span class="mono">7a0500f</span>; classification and coverage inventory refreshed at <span class="mono">a56e569</span> on 2026-08-14.</span>
+        <span>Review methods: architecture review · Go coverage audit · frontend report design</span>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>
