@@ -48,7 +48,7 @@ func assertSupportedAgentBlockedBeforePATHLookup(t *testing.T) {
 	binDir := t.TempDir()
 	marker := filepath.Join(t.TempDir(), "sentinel-ran")
 	sentinel := filepath.Join(binDir, "codex")
-	if err := os.WriteFile(sentinel, []byte("#!/bin/sh\nprintf invoked > "+marker+"\n"), 0o755); err != nil {
+	if err := testguard.WriteExecutable(sentinel, []byte("#!/bin/sh\nprintf invoked > "+marker+"\n")); err != nil {
 		t.Fatalf("write sentinel: %v", err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -77,7 +77,7 @@ func assertSupportedAgentBlockedBeforePATHLookup(t *testing.T) {
 func TestIntegrationAttachedLauncherReportsDirectChildPIDBeforeWait(t *testing.T) {
 	binDir := t.TempDir()
 	fake := filepath.Join(binDir, "agent")
-	if err := os.WriteFile(fake, []byte("#!/bin/sh\nsleep 0.01\n"), 0o755); err != nil {
+	if err := testguard.WriteExecutable(fake, []byte("#!/bin/sh\nsleep 0.01\n")); err != nil {
 		t.Fatalf("write fake: %v", err)
 	}
 	var observed int
@@ -100,7 +100,7 @@ func TestIntegrationAttachedLauncherRunsExplicitlyRegisteredFake(t *testing.T) {
 	binDir := t.TempDir()
 	marker := filepath.Join(t.TempDir(), "fake-ran")
 	fake := filepath.Join(binDir, "pi")
-	if err := os.WriteFile(fake, []byte("#!/bin/sh\nprintf invoked > "+marker+"\n"), 0o755); err != nil {
+	if err := testguard.WriteExecutable(fake, []byte("#!/bin/sh\nprintf invoked > "+marker+"\n")); err != nil {
 		t.Fatalf("write fake: %v", err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))

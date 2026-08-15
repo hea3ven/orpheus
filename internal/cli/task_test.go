@@ -2934,7 +2934,7 @@ JSON
     ;;
 esac
 `, shellQuote(canonicalTestPath(t, repoPath)), shellQuote(bdCountPath), shellQuote(bdCountPath), shellQuote(bdCountPath))
-	must.NoError(os.WriteFile(bdPath, []byte(script), 0o755))
+	must.NoError(writeTestExecutable(bdPath, []byte(script)))
 	setTestEnvironment(t, "FAKE_BD_LOG", bdLogPath)
 	prependTestPath(t, binDir)
 
@@ -3023,18 +3023,26 @@ func TestIntegrationTaskRunReleasesGlobalMutationLockWhileAgentRunsAndReacquires
 	})
 	lockPath, err := paths.GlobalMutationLockPath()
 	must.NoError(err)
+	statePath, err := paths.DataPath(filepath.Join("repos", "alpha", "tasks", "op-finalize.yaml"))
+	must.NoError(err)
 	binDir := t.TempDir()
 	agentLogPath := filepath.Join(binDir, "lock-agent.log")
 	agentPath := filepath.Join(binDir, "lock-agent")
 	script := fmt.Sprintf(`#!/bin/sh
-while [ -e %s ]; do
+attempts=0
+while ! grep -q 'child_pid:' %s || [ -e %s ]; do
+  attempts=$((attempts + 1))
+  if [ "$attempts" -gt 500 ]; then
+    printf 'child PID was not recorded or initial lock was not released\n' >&2
+    exit 44
+  fi
   sleep 0.01
 done
 printf 'lock absent during agent\n' >> %s
 : > %s
 printf 'agent stdout\n'
-`, shellQuote(lockPath), shellQuote(agentLogPath), shellQuote(lockPath))
-	must.NoError(os.WriteFile(agentPath, []byte(script), 0o755))
+`, shellQuote(statePath), shellQuote(lockPath), shellQuote(agentLogPath), shellQuote(lockPath))
+	must.NoError(writeTestExecutable(agentPath, []byte(script)))
 	prependTestPath(t, binDir)
 	writeTaskRunAgentConfig(t, paths, "lock-check", "lock-agent", nil)
 
@@ -4270,7 +4278,8 @@ printf 'manual command ran %s\n' "$ORPHEUS_REVIEW_STEP"
 }
 
 func TestIntegrationTaskReviewImportsHunkBlockingNoteAndBlocksApproval(t *testing.T) {
-	t.Parallel()
+	// Hunk import drives a multi-step review and finalization lock lifecycle.
+	// Keep it serial to prevent another CLI scenario from interleaving that state.
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -8296,7 +8305,7 @@ case "$*" in
     ;;
 esac
 `, shellQuote(taskJSON), shellQuote(taskJSON), shellQuote(filepath.Join(repoDir, "backend-data")))
-	if err := os.WriteFile(bdPath, []byte(script), 0o755); err != nil {
+	if err := writeTestExecutable(bdPath, []byte(script)); err != nil {
 		t.Fatalf("write fake bd: %v", err)
 	}
 	prependTestPath(t, binDir)
@@ -8322,7 +8331,7 @@ case "$*" in
     ;;
 esac
 `, shellQuote(`[{"id":"op-epic","title":"Epic","status":"open","issue_type":"epic"}]`))
-	if err := os.WriteFile(bdPath, []byte(script), 0o755); err != nil {
+	if err := writeTestExecutable(bdPath, []byte(script)); err != nil {
 		t.Fatalf("write fake bd: %v", err)
 	}
 	prependTestPath(t, binDir)
@@ -8374,7 +8383,7 @@ exit 65
 `)
 
 	bdPath := filepath.Join(binDir, "bd")
-	if err := os.WriteFile(bdPath, []byte(script.String()), 0o755); err != nil {
+	if err := writeTestExecutable(bdPath, []byte(script.String())); err != nil {
 		t.Fatalf("write fake bd: %v", err)
 	}
 	setTestEnvironment(t, "FAKE_BD_LOG", logPath)
@@ -8501,7 +8510,7 @@ func withFakeGHPRResponses(t *testing.T, responses fakeGHPRResponses) string {
 	script += fmt.Sprintf(fakeGHPRScriptFooter, shellQuote(statusStdoutPath), responses.statusExit)
 
 	ghPath := filepath.Join(binDir, "gh")
-	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+	if err := writeTestExecutable(ghPath, []byte(script)); err != nil {
 		t.Fatalf("write fake gh: %v", err)
 	}
 	setTestEnvironment(t, "FAKE_GH_LOG", logPath)
@@ -8747,7 +8756,7 @@ exit %d
 `, exitCode)
 
 	agentPath := filepath.Join(binDir, name)
-	if err := os.WriteFile(agentPath, []byte(script), 0o755); err != nil {
+	if err := writeTestExecutable(agentPath, []byte(script)); err != nil {
 		t.Fatalf("write fake agent: %v", err)
 	}
 	setTestEnvironment(t, "FAKE_AGENT_LOG", logPath)
@@ -8765,7 +8774,7 @@ printf 'resolved\n' > conflict.txt
 git add conflict.txt
 `
 	agentPath := filepath.Join(binDir, "codex")
-	if err := os.WriteFile(agentPath, []byte(script), 0o755); err != nil {
+	if err := writeTestExecutable(agentPath, []byte(script)); err != nil {
 		t.Fatalf("write fake codex: %v", err)
 	}
 	setTestEnvironment(t, testguard.FakeAgentEnvKey("codex"), agentPath)
@@ -9127,7 +9136,7 @@ printf '%%s\n' "$count" > run-count.txt
   --detailed-description "Detailed autonomous run $count." \
   --technical-explanation "Technical autonomous run $count."
 `, passWrite, shellQuote(orpheusBin))
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	if err := writeTestExecutable(path, []byte(script)); err != nil {
 		t.Fatalf("write autonomous review fix agent: %v", err)
 	}
 	return path
@@ -9148,7 +9157,7 @@ printf 'pass\n' > status.txt
   --technical-explanation "Technical manual approval run."
 touch %s
 `, shellQuote(orpheusBin), shellQuote(markerPath))
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	if err := writeTestExecutable(path, []byte(script)); err != nil {
 		t.Fatalf("write manual approval agent: %v", err)
 	}
 	return path
@@ -9158,7 +9167,7 @@ func writeReviewScript(t *testing.T, content string) string {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "review-step")
-	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+	if err := writeTestExecutable(path, []byte(content)); err != nil {
 		t.Fatalf("write review script: %v", err)
 	}
 	return path
@@ -9198,7 +9207,7 @@ fi
 printf 'unexpected fake hunk call: %%s\n' "$*" >&2
 exit 65
 `, shellQuote(response))
-	require.NoError(t, os.WriteFile(hunkPath, []byte(script), 0o755))
+	require.NoError(t, writeTestExecutable(hunkPath, []byte(script)))
 	prependTestPath(t, binDir)
 }
 

@@ -1,7 +1,10 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -125,5 +128,135 @@ func TestBaselineCheck(t *testing.T) {
 	failing := report{Lane: "unit", Median: summary{WallSeconds: 5.1, Packages: []duration{{Name: "package", Seconds: 1.6}, {Name: "new-package", Seconds: 0.1}}}}
 	if failures := base.check(failing); len(failures) != 3 {
 		t.Fatalf("failures = %v, want suite, package, and missing package budget failures", failures)
+	}
+}
+
+func TestFailuresFromEventsPreservesFailingTestOutput(t *testing.T) {
+	t.Parallel()
+
+	measurement := run{Packages: make(map[string]float64), Tests: make(map[string]float64)}
+	outputs := make(map[testID]string)
+	failed := make(map[testID]bool)
+	for _, event := range []testEvent{
+		{Action: "output", Package: "example/cli", Test: "TestReview", Output: "    review_test.go:42: assertion failed\n"},
+		{Action: "fail", Package: "example/cli", Test: "TestReview"},
+		{Action: "output", Package: "example/cli", Output: "FAIL\texample/cli\t0.123s\n"},
+		{Action: "fail", Package: "example/cli"},
+	} {
+		recordTestEvent(measurement, outputs, failed, event)
+	}
+
+	got := failuresFromEvents(outputs, failed)
+	want := []testFailure{
+		{Package: "example/cli", Output: "FAIL\texample/cli\t0.123s\n"},
+		{Package: "example/cli", Test: "TestReview", Output: "    review_test.go:42: assertion failed\n"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("failures = %#v, want %#v", got, want)
+	}
+}
+
+func TestHandleBaselineRejectsIncompleteSampleSetWithoutWriting(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "baseline.json")
+	original := initialBaseline(report{Lane: "unit", Complete: true, Samples: 1, Runs: []run{{}}, Median: summary{TestCount: 1}})
+	if err := writeJSON(path, original); err != nil {
+		t.Fatalf("write baseline: %v", err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read baseline before update: %v", err)
+	}
+
+	err = handleBaseline(options{baseline: path, updateBaseline: true}, report{
+		Lane:     "unit",
+		Samples:  5,
+		Runs:     []run{{}},
+		Complete: false,
+		Failure:  &sampleFailure{Sample: 2, Error: "exit status 1"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "incomplete or failed sample set") {
+		t.Fatalf("handle incomplete report error = %v, want rejected sample set", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read baseline after update: %v", err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatal("incomplete sample set modified baseline")
+	}
+}
+
+func TestBaselineCheckRejectsChangedTestCount(t *testing.T) {
+	t.Parallel()
+
+	base := initialBaseline(report{Lane: "unit", Median: summary{TestCount: 4}})
+	failures := base.check(report{Lane: "unit", Median: summary{TestCount: 3}})
+	if len(failures) != 1 || failures[0] != "test event count 3 differs from baseline 4" {
+		t.Fatalf("failures = %#v, want test count mismatch", failures)
+	}
+}
+
+func TestParseOptionsRejectsMultipleBaselineActions(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseOptions([]string{"--init-baseline", "--replace-baseline"})
+	if err == nil || !strings.Contains(err.Error(), "only one of init-baseline, replace-baseline, and update-baseline") {
+		t.Fatalf("parse options error = %v, want mutually exclusive baseline actions", err)
+	}
+}
+
+func TestHandleBaselineReplacesCompleteLane(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "baseline.json")
+	original := initialBaseline(report{Lane: "unit", Complete: true, Samples: 1, Runs: []run{{}}, Median: summary{WallSeconds: 10, TestCount: 1}})
+	if err := writeJSON(path, original); err != nil {
+		t.Fatalf("write baseline: %v", err)
+	}
+	updated := report{Lane: "unit", CreatedAt: time.Date(2026, time.August, 16, 12, 0, 0, 0, time.UTC), Complete: true, Samples: 2, Runs: []run{{}, {}}, Median: summary{WallSeconds: 20, TestCount: 2}}
+	if err := handleBaseline(options{lane: "unit", baseline: path, replaceBaseline: true}, updated); err != nil {
+		t.Fatalf("replace baseline: %v", err)
+	}
+	loaded, err := loadBaseline(path)
+	if err != nil {
+		t.Fatalf("load replaced baseline: %v", err)
+	}
+	lane := loaded.Lanes["unit"]
+	if lane.Median.WallSeconds != 20 || lane.Median.TestCount != 2 || !lane.RecordedAt.Equal(updated.CreatedAt) {
+		t.Fatalf("replaced lane = %#v, want complete report baseline", lane)
+	}
+}
+
+func TestHandleBaselineUpdateRejectsChangedTestCount(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "baseline.json")
+	original := initialBaseline(report{Lane: "unit", Complete: true, Samples: 1, Runs: []run{{}}, Median: summary{TestCount: 4}})
+	if err := writeJSON(path, original); err != nil {
+		t.Fatalf("write baseline: %v", err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read baseline before update: %v", err)
+	}
+
+	err = handleBaseline(options{baseline: path, updateBaseline: true}, report{
+		Lane:     "unit",
+		Samples:  1,
+		Runs:     []run{{}},
+		Complete: true,
+		Median:   summary{TestCount: 5},
+	})
+	if err == nil || !strings.Contains(err.Error(), "regenerate it from the complete current suite") {
+		t.Fatalf("handle changed test count error = %v, want regeneration guidance", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read baseline after update: %v", err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatal("changed test count modified baseline")
 	}
 }

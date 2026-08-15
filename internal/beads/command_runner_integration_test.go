@@ -3,12 +3,12 @@
 package beads_test
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/beads"
+	"github.com/hea3ven/orpheus/internal/testguard"
 )
 
 func TestIntegrationCommandRunnerSanitizesBeadsEnvironment(t *testing.T) {
@@ -16,7 +16,7 @@ func TestIntegrationCommandRunnerSanitizesBeadsEnvironment(t *testing.T) {
 
 	binDir := t.TempDir()
 	bin := filepath.Join(binDir, "bd")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf 'BEADS_DIR=%s\\n' \"${BEADS_DIR-unset}\"\nprintf 'BD_NON_INTERACTIVE=%s\\n' \"${BD_NON_INTERACTIVE-unset}\"\n"), 0o755); err != nil {
+	if err := testguard.WriteExecutable(bin, []byte("#!/bin/sh\nprintf 'BEADS_DIR=%s\\n' \"${BEADS_DIR-unset}\"\nprintf 'BD_NON_INTERACTIVE=%s\\n' \"${BD_NON_INTERACTIVE-unset}\"\n")); err != nil {
 		t.Fatalf("write fake bd: %v", err)
 	}
 	result, err := beads.CommandRunner{
