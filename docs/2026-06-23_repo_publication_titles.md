@@ -65,7 +65,7 @@ orpheus repo config set my-work-repo title-template ''
 
 ## Missing external reference recovery
 
-If the configured title template contains `{{external_ref}}`, Orpheus excludes an open task with no usable external reference from `task ready` and rejects `task run` before it creates a worktree or starts an agent. The error provides the recovery command:
+If the configured title template contains `{{external_ref}}`, the Status Projection marks an open task with no usable external reference as needing attention. It appears in the `orpheus status` action queue and in the `orpheus task list` inventory. `task run` rejects the task before it creates a worktree or starts an agent. The status detail and error provide the recovery command:
 
 ```text
 orpheus task edit op-123 --external-ref <reference>
