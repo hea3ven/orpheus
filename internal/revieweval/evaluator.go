@@ -22,6 +22,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testguard"
 	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
@@ -566,7 +567,7 @@ func withRunEnvironment(setup runSetup, spec runSpec, run func() error) error {
 		return fmt.Errorf("create shim bin dir: %w", err)
 	}
 	shimPath := filepath.Join(binDir, "orpheus")
-	if err := os.WriteFile(shimPath, []byte(shimScript(executable)), 0o755); err != nil {
+	if err := testguard.WriteExecutable(shimPath, []byte(shimScript(executable))); err != nil {
 		return fmt.Errorf("write orpheus shim: %w", err)
 	}
 

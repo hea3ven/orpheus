@@ -4,18 +4,18 @@ package pullrequest_test
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/pullrequest"
+	"github.com/hea3ven/orpheus/internal/testguard"
 )
 
 func TestIntegrationGHProviderUsesScopedBinaryAndEnvironment(t *testing.T) {
 	t.Parallel()
 
 	binary := filepath.Join(t.TempDir(), "gh")
-	if err := os.WriteFile(binary, []byte("#!/bin/sh\n[ \"$GH_SCOPE\" = isolated ] || exit 17\nprintf '[{\"url\":\"https://github.test/org/repo/pull/1\"}]'\n"), 0o755); err != nil {
+	if err := testguard.WriteExecutable(binary, []byte("#!/bin/sh\n[ \"$GH_SCOPE\" = isolated ] || exit 17\nprintf '[{\"url\":\"https://github.test/org/repo/pull/1\"}]'\n")); err != nil {
 		t.Fatalf("write fake gh: %v", err)
 	}
 	provider := pullrequest.GHProvider{Binary: binary, Environment: []string{"GH_SCOPE=isolated"}}

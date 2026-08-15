@@ -25,4 +25,6 @@ Integration source files use `//go:build integration`, and their top-level test 
 
 ## Timing baseline
 
-`make test-perf` and `make test-perf-integration` collect five uncached samples by default and compare median timings against `performance/test-timing-baseline.json`. The baseline records each lane's test-event count and package timings. Use `make test-perf-baseline` or `make test-perf-integration-baseline` only to create a new baseline; the corresponding `*-update` target only ratchets budgets down after an optimization.
+`make test-perf` and `make test-perf-integration` collect five uncached samples by default and compare median timings against `performance/test-timing-baseline.json`. A report includes lane-specific environment metadata, test-event counts, package timings, and the full JSON output plus assertion output for a failed sample. Failed or incomplete reports are retained but never checked against or used to update a baseline. A changed test-event count fails the comparison so an obsolete baseline cannot look comparable.
+
+Use `make test-perf-baseline` or `make test-perf-integration-baseline` only after a complete, stable set of samples to regenerate that lane's baseline. The corresponding `*-update` target only ratchets budgets down after an optimization; a changed test-event count requires regeneration instead.

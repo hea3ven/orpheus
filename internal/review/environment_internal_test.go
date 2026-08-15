@@ -6,9 +6,10 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/hea3ven/orpheus/internal/testguard"
 )
 
 func TestIntegrationHunkNotesUseScopedEnvironment(t *testing.T) {
@@ -16,7 +17,7 @@ func TestIntegrationHunkNotesUseScopedEnvironment(t *testing.T) {
 
 	binDir := t.TempDir()
 	binary := filepath.Join(binDir, "hunk")
-	if err := os.WriteFile(binary, []byte("#!/bin/sh\n[ \"$HUNK_SCOPE\" = isolated ] || exit 17\nprintf '{\"comments\":[]}'\n"), 0o755); err != nil {
+	if err := testguard.WriteExecutable(binary, []byte("#!/bin/sh\n[ \"$HUNK_SCOPE\" = isolated ] || exit 17\nprintf '{\"comments\":[]}'\n")); err != nil {
 		t.Fatalf("write hunk: %v", err)
 	}
 	comments, err := captureHunkUserNotes(context.Background(), t.TempDir(), nil, []string{"PATH=" + binDir, "HUNK_SCOPE=isolated"})
@@ -33,7 +34,7 @@ func TestIntegrationReviewCommandUsesScopedEnvironment(t *testing.T) {
 
 	binDir := t.TempDir()
 	binary := filepath.Join(binDir, "review-check")
-	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s/%s' \"$INVOCATION_SCOPE\" \"$STEP_SCOPE\"\n"), 0o755); err != nil {
+	if err := testguard.WriteExecutable(binary, []byte("#!/bin/sh\nprintf '%s/%s' \"$INVOCATION_SCOPE\" \"$STEP_SCOPE\"\n")); err != nil {
 		t.Fatalf("write review check: %v", err)
 	}
 	var output bytes.Buffer

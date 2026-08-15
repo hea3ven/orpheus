@@ -134,7 +134,7 @@ case "$*" in
 esac
 `
 	path := filepath.Join(binDir, "bd")
-	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
+	require.NoError(t, writeTestExecutable(path, []byte(script)))
 	setTestEnvironment(t, "FAKE_BD_LOG", logPath)
 	prependTestPath(t, binDir)
 	return logPath

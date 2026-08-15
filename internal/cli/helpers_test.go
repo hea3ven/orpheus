@@ -18,6 +18,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/pathutil"
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/testguard"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 )
@@ -29,6 +30,13 @@ type testRepoConfig struct {
 }
 
 const immutableCLIHelperMode = 0o555
+
+// writeTestExecutable makes a fixture visible only after its complete content and
+// executable mode are in place. This prevents an overlapping command from trying
+// to execute a script while it is being replaced.
+func writeTestExecutable(path string, content []byte) error {
+	return testguard.WriteExecutable(path, content)
+}
 
 var (
 	cliHelperFixtureRoot          string
@@ -57,7 +65,7 @@ func setupCLIHelperFixture() error {
 	script := fmt.Sprintf(`#!/bin/sh
 GO_WANT_ORPHEUS_CLI_HELPER=1 exec %s -test.run=TestIntegrationOrpheusCLIHelperProcess -- "$@"
 `, shellQuote(testBinary))
-	if err := os.WriteFile(helperPath, []byte(script), 0o755); err != nil {
+	if err := writeTestExecutable(helperPath, []byte(script)); err != nil {
 		_ = os.RemoveAll(root)
 		return fmt.Errorf("write orpheus helper: %w", err)
 	}
@@ -450,7 +458,7 @@ func executeCommandWithReaderAndError(t *testing.T, args []string, input io.Read
 	t.Helper()
 
 	out := new(bytes.Buffer)
-	errOut := new(bytes.Buffer)
+	errOut := new(synchronizedBuffer)
 	cmd := newTestRootCommand(t, args, errOut)
 	cmd.SetIn(input)
 	cmd.SetOut(out)
@@ -458,6 +466,23 @@ func executeCommandWithReaderAndError(t *testing.T, args []string, input io.Read
 	cmd.SetArgs(args)
 	err = cmd.Execute()
 	return out.String(), errOut.String(), err
+}
+
+type synchronizedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(p)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
 }
 
 func newTestRootCommand(t *testing.T, args []string, errOut io.Writer) *cobra.Command {
@@ -534,7 +559,7 @@ fi
 } >> "$FAKE_BD_LOG"
 `
 	bdPath := filepath.Join(binDir, "bd")
-	if err := os.WriteFile(bdPath, []byte(script), 0o755); err != nil {
+	if err := writeTestExecutable(bdPath, []byte(script)); err != nil {
 		t.Fatalf("write fake bd: %v", err)
 	}
 	setTestEnvironment(t, "FAKE_BD_LOG", logPath)

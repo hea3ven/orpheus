@@ -29,12 +29,12 @@ test-perf:
 test-perf-integration:
 	go run ./cmd/testtiming --lane integration --samples $(PERF_SAMPLES) --baseline $(TEST_TIMING_BASELINE)
 
-# Create a baseline only when bringing timing checks to a new repository copy.
+# Regenerate a lane baseline only from a complete set of stable samples.
 test-perf-baseline:
-	go run ./cmd/testtiming --lane unit --samples $(PERF_SAMPLES) --baseline $(TEST_TIMING_BASELINE) --init-baseline
+	go run ./cmd/testtiming --lane unit --samples $(PERF_SAMPLES) --baseline $(TEST_TIMING_BASELINE) --replace-baseline
 
 test-perf-integration-baseline:
-	go run ./cmd/testtiming --lane integration --samples $(PERF_SAMPLES) --baseline $(TEST_TIMING_BASELINE) --init-baseline
+	go run ./cmd/testtiming --lane integration --samples $(PERF_SAMPLES) --baseline $(TEST_TIMING_BASELINE) --replace-baseline
 
 # Optimization work may update the recorded median only when it lowers a budget.
 test-perf-baseline-update:

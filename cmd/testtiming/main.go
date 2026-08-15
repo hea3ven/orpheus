@@ -21,18 +21,19 @@ import (
 )
 
 const (
-	reportSchemaVersion   = 1
+	reportSchemaVersion   = 2
 	baselineSchemaVersion = 1
 	defaultSamples        = 5
 )
 
 type options struct {
-	lane           string
-	samples        int
-	output         string
-	baseline       string
-	initBaseline   bool
-	updateBaseline bool
+	lane            string
+	samples         int
+	output          string
+	baseline        string
+	initBaseline    bool
+	replaceBaseline bool
+	updateBaseline  bool
 }
 
 type duration struct {
@@ -45,6 +46,21 @@ type run struct {
 	WallSeconds float64            `json:"wall_seconds"`
 	Packages    map[string]float64 `json:"packages"`
 	Tests       map[string]float64 `json:"tests"`
+}
+
+type testFailure struct {
+	Package string `json:"package"`
+	Test    string `json:"test,omitempty"`
+	Output  string `json:"output,omitempty"`
+}
+
+type sampleFailure struct {
+	Sample     int           `json:"sample"`
+	Command    []string      `json:"command"`
+	Error      string        `json:"error"`
+	Failures   []testFailure `json:"failures,omitempty"`
+	Stderr     string        `json:"stderr,omitempty"`
+	TestOutput string        `json:"test_output,omitempty"`
 }
 
 type summary struct {
@@ -64,14 +80,16 @@ type environment struct {
 }
 
 type report struct {
-	SchemaVersion int         `json:"schema_version"`
-	CreatedAt     time.Time   `json:"created_at"`
-	Lane          string      `json:"lane"`
-	Samples       int         `json:"samples"`
-	Command       []string    `json:"command"`
-	Environment   environment `json:"environment"`
-	Runs          []run       `json:"runs"`
-	Median        summary     `json:"median"`
+	SchemaVersion int            `json:"schema_version"`
+	CreatedAt     time.Time      `json:"created_at"`
+	Lane          string         `json:"lane"`
+	Samples       int            `json:"samples"`
+	Command       []string       `json:"command"`
+	Environment   environment    `json:"environment"`
+	Runs          []run          `json:"runs"`
+	Median        summary        `json:"median"`
+	Complete      bool           `json:"complete"`
+	Failure       *sampleFailure `json:"failure,omitempty"`
 }
 
 type budgetPolicy struct {
@@ -124,6 +142,7 @@ func parseOptions(args []string) (options, error) {
 	flags.StringVar(&opts.output, "output", os.Getenv("TEST_TIMING_OUTPUT"), "JSON report path")
 	flags.StringVar(&opts.baseline, "baseline", "performance/test-timing-baseline.json", "tracked JSON budget baseline")
 	flags.BoolVar(&opts.initBaseline, "init-baseline", false, "create a missing lane baseline")
+	flags.BoolVar(&opts.replaceBaseline, "replace-baseline", false, "replace a lane baseline from a complete sample set")
 	flags.BoolVar(&opts.updateBaseline, "update-baseline", false, "record lower measurements and ratchet budgets down")
 	if err := flags.Parse(args); err != nil {
 		return options{}, err
@@ -137,8 +156,14 @@ func parseOptions(args []string) (options, error) {
 	if opts.samples < 1 {
 		return options{}, errors.New("samples must be at least 1")
 	}
-	if opts.initBaseline && opts.updateBaseline {
-		return options{}, errors.New("init-baseline and update-baseline cannot be used together")
+	baselineActions := 0
+	for _, enabled := range []bool{opts.initBaseline, opts.replaceBaseline, opts.updateBaseline} {
+		if enabled {
+			baselineActions++
+		}
+	}
+	if baselineActions > 1 {
+		return options{}, errors.New("only one of init-baseline, replace-baseline, and update-baseline may be used")
 	}
 	if opts.output == "" {
 		opts.output = filepath.Join("artifacts", "test-timing", fmt.Sprintf("%s-%s.json", opts.lane, time.Now().UTC().Format("20060102T150405Z")))
@@ -153,24 +178,29 @@ func execute(opts options) error {
 		}
 	}
 
-	report, err := measure(opts)
-	if err != nil {
-		return err
-	}
+	report, measureErr := measure(opts)
 	if err := writeJSON(opts.output, report); err != nil {
 		return fmt.Errorf("write report: %w", err)
 	}
 	printReport(report, opts.output)
+	if measureErr != nil {
+		return fmt.Errorf("%w; incomplete report: %s", measureErr, opts.output)
+	}
 
 	return handleBaseline(opts, report)
 }
 
 func handleBaseline(opts options, report report) error {
+	if err := validateCompleteReport(report); err != nil {
+		return err
+	}
 	loaded, err := loadBaseline(opts.baseline)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("read baseline: %w", err)
 	}
 	switch {
+	case opts.replaceBaseline:
+		return replaceBaseline(opts, report, loaded, err)
 	case opts.initBaseline:
 		if err == nil {
 			if _, exists := loaded.Lanes[report.Lane]; exists {
@@ -188,6 +218,9 @@ func handleBaseline(opts options, report report) error {
 	case opts.updateBaseline:
 		if errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("baseline %s does not exist; use -init-baseline first", opts.baseline)
+		}
+		if existing, exists := loaded.Lanes[report.Lane]; exists && existing.Median.TestCount != report.Median.TestCount {
+			return fmt.Errorf("baseline %s has %d test events for %s; regenerate it from the complete current suite", opts.baseline, existing.Median.TestCount, report.Lane)
 		}
 		changed := loaded.update(report)
 		if err := writeJSON(opts.baseline, loaded); err != nil {
@@ -214,6 +247,19 @@ func handleBaseline(opts options, report report) error {
 	return fmt.Errorf("%d timing budget(s) exceeded", len(failures))
 }
 
+func replaceBaseline(opts options, report report, loaded baseline, loadErr error) error {
+	if errors.Is(loadErr, os.ErrNotExist) {
+		loaded = initialBaseline(report)
+	} else {
+		loaded.Lanes[report.Lane] = baselineLane(report, loaded.Policy)
+	}
+	if err := writeJSON(opts.baseline, loaded); err != nil {
+		return fmt.Errorf("write baseline: %w", err)
+	}
+	fmt.Printf("Replaced %s lane baseline in %s.\n", opts.lane, opts.baseline)
+	return nil
+}
+
 func measure(opts options) (report, error) {
 	command := testCommand(opts.lane)
 	result := report{
@@ -228,15 +274,20 @@ func measure(opts options) (report, error) {
 	fmt.Printf("Measuring %s tests with %d uncached samples.\n", opts.lane, opts.samples)
 	for i := 0; i < opts.samples; i++ {
 		fmt.Printf("  sample %d/%d... ", i+1, opts.samples)
-		measurement, err := runTests(command)
+		measurement, failure, err := runTests(command)
 		if err != nil {
 			fmt.Println("failed")
-			return report{}, fmt.Errorf("sample %d: %w", i+1, err)
+			if failure != nil {
+				failure.Sample = i + 1
+				result.Failure = failure
+			}
+			return result, fmt.Errorf("sample %d: %w", i+1, err)
 		}
 		fmt.Printf("%.2fs\n", measurement.WallSeconds)
 		result.Runs = append(result.Runs, measurement)
 	}
 	result.Median = summarize(result.Runs)
+	result.Complete = true
 	return result, nil
 }
 
@@ -248,67 +299,98 @@ func testCommand(lane string) []string {
 	return append(command, "./...")
 }
 
-func runTests(command []string) (run, error) {
+func runTests(command []string) (run, *sampleFailure, error) {
 	started := time.Now()
 	cmd := exec.Command(command[0], command[1:]...)
 	var stderr bytes.Buffer
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return run{}, err
+		return run{}, nil, err
 	}
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
-		return run{}, err
+		return run{}, nil, err
 	}
 
 	measurement := run{Packages: make(map[string]float64), Tests: make(map[string]float64)}
-	var testOutput string
-	decoder := json.NewDecoder(stdout)
+	outputs := make(map[testID]string)
+	failed := make(map[testID]bool)
+	var testOutput bytes.Buffer
+	decoder := json.NewDecoder(io.TeeReader(stdout, &testOutput))
+	var decodeErr error
 	for {
 		var event testEvent
 		err := decoder.Decode(&event)
-		if errors.Is(err, os.ErrClosed) {
+		if errors.Is(err, os.ErrClosed) || errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			if waitErr := cmd.Wait(); waitErr != nil {
-				return run{}, fmt.Errorf("decode go test JSON: %w (test command: %w)", err, waitErr)
-			}
-			return run{}, fmt.Errorf("decode go test JSON: %w", err)
+			decodeErr = err
+			break
 		}
-		if event.Action == "output" {
-			testOutput = appendTail(testOutput, event.Output, 4096)
-			continue
+		recordTestEvent(measurement, outputs, failed, event)
+	}
+	if decodeErr != nil {
+		_, _ = io.Copy(&testOutput, stdout)
+	}
+	waitErr := cmd.Wait()
+	if decodeErr != nil || waitErr != nil {
+		failure := &sampleFailure{
+			Command:    append([]string(nil), command...),
+			Error:      testCommandError(decodeErr, waitErr),
+			Failures:   failuresFromEvents(outputs, failed),
+			Stderr:     stderr.String(),
+			TestOutput: testOutput.String(),
 		}
-		if event.Action != "pass" {
-			continue
-		}
+		return run{}, failure, errors.New(failure.Error)
+	}
+	measurement.WallSeconds = time.Since(started).Seconds()
+	return measurement, nil, nil
+}
+
+type testID struct {
+	Package string
+	Test    string
+}
+
+func recordTestEvent(measurement run, outputs map[testID]string, failed map[testID]bool, event testEvent) {
+	id := testID{Package: event.Package, Test: event.Test}
+	switch event.Action {
+	case "output":
+		outputs[id] += event.Output
+	case "fail":
+		failed[id] = true
+	case "pass":
 		if event.Test == "" {
 			measurement.Packages[event.Package] = event.Elapsed
-			continue
+			return
 		}
 		measurement.Tests[event.Package+"."+event.Test] = event.Elapsed
 	}
-	if err := cmd.Wait(); err != nil {
-		diagnostics := strings.TrimSpace(stderr.String() + testOutput)
-		if diagnostics != "" {
-			return run{}, fmt.Errorf("%w: %s", err, diagnostics)
-		}
-		return run{}, err
-	}
-	measurement.WallSeconds = time.Since(started).Seconds()
-	return measurement, nil
 }
 
-func appendTail(current, next string, limit int) string {
-	combined := current + next
-	if len(combined) <= limit {
-		return combined
+func failuresFromEvents(outputs map[testID]string, failed map[testID]bool) []testFailure {
+	failures := make([]testFailure, 0, len(failed))
+	for id := range failed {
+		failures = append(failures, testFailure{Package: id.Package, Test: id.Test, Output: outputs[id]})
 	}
-	return combined[len(combined)-limit:]
+	sort.Slice(failures, func(i, j int) bool {
+		if failures[i].Package == failures[j].Package {
+			return failures[i].Test < failures[j].Test
+		}
+		return failures[i].Package < failures[j].Package
+	})
+	return failures
+}
+
+func testCommandError(decodeErr, waitErr error) string {
+	if decodeErr != nil && waitErr != nil {
+		return fmt.Sprintf("decode go test JSON: %v (test command: %v)", decodeErr, waitErr)
+	}
+	if decodeErr != nil {
+		return fmt.Sprintf("decode go test JSON: %v", decodeErr)
+	}
+	return waitErr.Error()
 }
 
 func summarize(runs []run) summary {
@@ -420,6 +502,13 @@ func loadBaseline(path string) (baseline, error) {
 	return loaded, nil
 }
 
+func validateCompleteReport(report report) error {
+	if !report.Complete || report.Failure != nil || len(report.Runs) != report.Samples {
+		return errors.New("cannot update or check a baseline from an incomplete or failed sample set")
+	}
+	return nil
+}
+
 func initialBaseline(report report) baseline {
 	policy := defaultPolicy()
 	lane := baselineLane(report, policy)
@@ -475,10 +564,6 @@ func (b *baseline) update(report report) bool {
 		existing.SuiteBudget = budget(report.Median.WallSeconds, b.Policy.SuiteRelativeTolerance, b.Policy.SuiteAbsoluteSeconds)
 		changed = true
 	}
-	if existing.Median.TestCount != report.Median.TestCount {
-		existing.Median.TestCount = report.Median.TestCount
-		changed = true
-	}
 	existing.Median.Packages, existing.Budgets, changed = updatePackageBaselines(existing.Median.Packages, existing.Budgets, report.Median.Packages, b.Policy, changed)
 	if changed {
 		existing.RecordedAt = report.CreatedAt
@@ -523,6 +608,9 @@ func (b baseline) check(report report) []string {
 		return []string{fmt.Sprintf("baseline has no %s lane", report.Lane)}
 	}
 	var failures []string
+	if report.Median.TestCount != lane.Median.TestCount {
+		failures = append(failures, fmt.Sprintf("test event count %d differs from baseline %d", report.Median.TestCount, lane.Median.TestCount))
+	}
 	if report.Median.WallSeconds > lane.SuiteBudget {
 		failures = append(failures, fmt.Sprintf("suite median %.2fs exceeds %.2fs", report.Median.WallSeconds, lane.SuiteBudget))
 	}
@@ -544,7 +632,27 @@ func (b baseline) check(report report) []string {
 }
 
 func printReport(report report, output string) {
-	fmt.Printf("Median wall time: %.2fs (%d test events)\n", report.Median.WallSeconds, report.Median.TestCount)
+	fmt.Printf("Environment: %s %s/%s, %d CPUs, GOMAXPROCS=%d", report.Environment.GoVersion, report.Environment.GOOS, report.Environment.GOARCH, report.Environment.CPUCount, report.Environment.GOMAXPROCS)
+	if report.Environment.CPUModel != "" {
+		fmt.Printf(", %s", report.Environment.CPUModel)
+	}
+	fmt.Println()
+	if !report.Complete {
+		fmt.Printf("Incomplete sample set: %d/%d samples completed.\n", len(report.Runs), report.Samples)
+		if report.Failure != nil {
+			fmt.Printf("Failed sample %d: %s\n", report.Failure.Sample, report.Failure.Error)
+			for _, failure := range report.Failure.Failures {
+				name := failure.Package
+				if failure.Test != "" {
+					name += "." + failure.Test
+				}
+				fmt.Printf("  failed: %s\n", name)
+			}
+		}
+		fmt.Printf("JSON report: %s\n", output)
+		return
+	}
+	fmt.Printf("Median wall time: %.2fs (%d test events across %d samples)\n", report.Median.WallSeconds, report.Median.TestCount, report.Samples)
 	printDurations("Slow packages", report.Median.Packages)
 	printDurations("Slow tests and subtests", report.Median.Tests)
 	fmt.Printf("JSON report: %s\n", output)

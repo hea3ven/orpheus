@@ -499,7 +499,7 @@ exit 65
 `)
 
 	bdPath := filepath.Join(binDir, "bd")
-	if err := os.WriteFile(bdPath, []byte(script.String()), 0o755); err != nil {
+	if err := writeTestExecutable(bdPath, []byte(script.String())); err != nil {
 		t.Fatalf("write fake bd: %v", err)
 	}
 	setTestEnvironment(t, "FAKE_BD_LOG", logPath)

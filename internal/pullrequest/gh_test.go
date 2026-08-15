@@ -13,6 +13,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
+	"github.com/hea3ven/orpheus/internal/testguard"
 )
 
 type ghStatusByURLCase struct {
@@ -270,7 +271,7 @@ func installFakeGH(t *testing.T, stdout string, exitCode int) string {
 		"cat " + shellQuote(stdoutPath) + "\n" +
 		"exit " + strconv.Itoa(exitCode) + "\n"
 	ghPath := filepath.Join(binDir, "gh")
-	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+	if err := testguard.WriteExecutable(ghPath, []byte(script)); err != nil {
 		t.Fatalf("write fake gh: %v", err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))

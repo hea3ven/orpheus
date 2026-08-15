@@ -18,6 +18,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testguard"
 )
 
 //nolint:funlen // The redirected-output regression is clearer as one end-to-end runner test.
@@ -1142,7 +1143,7 @@ func writeReviewTestScript(t *testing.T, dir string, name string, content string
 	t.Helper()
 
 	path := filepath.Join(dir, name+".sh")
-	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+	if err := testguard.WriteExecutable(path, []byte(content)); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
 	return path
@@ -1177,7 +1178,7 @@ func installReviewTestHunkCommandScript(t *testing.T, script string) {
 
 	binDir := t.TempDir()
 	hunkPath := filepath.Join(binDir, "hunk")
-	if err := os.WriteFile(hunkPath, []byte(script), 0o755); err != nil {
+	if err := testguard.WriteExecutable(hunkPath, []byte(script)); err != nil {
 		t.Fatalf("write fake hunk command: %v", err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))

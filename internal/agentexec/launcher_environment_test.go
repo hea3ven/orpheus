@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agentexec"
+	"github.com/hea3ven/orpheus/internal/testguard"
 )
 
 func TestIntegrationAttachedLauncherUsesConfiguredEnvironment(t *testing.T) {
@@ -17,7 +18,7 @@ func TestIntegrationAttachedLauncherUsesConfiguredEnvironment(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "environment")
 	binDir := t.TempDir()
 	probe := filepath.Join(binDir, "probe")
-	if err := os.WriteFile(probe, []byte("#!/bin/sh\nprintf '%s/%s' \"$INVOCATION_SCOPE\" \"$COMMAND_SCOPE\" > \"$1\"\n"), 0o755); err != nil {
+	if err := testguard.WriteExecutable(probe, []byte("#!/bin/sh\nprintf '%s/%s' \"$INVOCATION_SCOPE\" \"$COMMAND_SCOPE\" > \"$1\"\n")); err != nil {
 		t.Fatalf("write probe: %v", err)
 	}
 
