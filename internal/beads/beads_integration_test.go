@@ -13,7 +13,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/task"
 )
 
-func TestUpdateServiceRejectsRealBeadsParentDescendantCycle(t *testing.T) {
+func TestIntegrationUpdateServiceRejectsRealBeadsParentDescendantCycle(t *testing.T) {
 	binary, err := exec.LookPath("bd")
 	if err != nil {
 		t.Skip("bd executable is required for Beads integration test")
@@ -63,7 +63,7 @@ func TestUpdateServiceRejectsRealBeadsParentDescendantCycle(t *testing.T) {
 	}
 }
 
-func TestUpdateServiceSupportsCrossTypeBlockingDependencies(t *testing.T) {
+func TestIntegrationUpdateServiceSupportsCrossTypeBlockingDependencies(t *testing.T) {
 	binary, err := exec.LookPath("bd")
 	if err != nil {
 		t.Skip("bd executable is required for Beads integration test")
@@ -123,7 +123,7 @@ func TestUpdateServiceSupportsCrossTypeBlockingDependencies(t *testing.T) {
 	}
 }
 
-func TestUpdateServiceDoesNotRemoveRelatedDependency(t *testing.T) {
+func TestIntegrationUpdateServiceDoesNotRemoveRelatedDependency(t *testing.T) {
 	binary, err := exec.LookPath("bd")
 	if err != nil {
 		t.Skip("bd executable is required for Beads integration test")
@@ -191,7 +191,7 @@ func TestUpdateServiceDoesNotRemoveRelatedDependency(t *testing.T) {
 	}
 }
 
-func TestUpdateServiceRejectsNonBlockingDependencyBeforeContentMutation(t *testing.T) {
+func TestIntegrationUpdateServiceRejectsNonBlockingDependencyBeforeContentMutation(t *testing.T) {
 	binary, err := exec.LookPath("bd")
 	if err != nil {
 		t.Skip("bd executable is required for Beads integration test")
@@ -251,7 +251,7 @@ func TestUpdateServiceRejectsNonBlockingDependencyBeforeContentMutation(t *testi
 	}
 }
 
-func TestTaskBackendCreateRecordsBlockingDependencies(t *testing.T) {
+func TestIntegrationTaskBackendCreateRecordsBlockingDependencies(t *testing.T) {
 	binary, err := exec.LookPath("bd")
 	if err != nil {
 		t.Skip("bd executable is required for Beads integration test")

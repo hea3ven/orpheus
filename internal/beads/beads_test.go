@@ -795,7 +795,7 @@ func TestTaskBackendUpdateRejectsNonBlockingDependencyBeforeContentMutation(t *t
 	}
 }
 
-func TestTaskBackendUpdateUsesOrpheusBlockingEdgeAcrossTypes(t *testing.T) {
+func TestTaskBackendUpdateUsesNativeBlockingEdgeAcrossTypes(t *testing.T) {
 	dir := t.TempDir()
 	runner := &fakeRunner{calls: []fakeCall{
 		{
@@ -810,13 +810,13 @@ func TestTaskBackendUpdateUsesOrpheusBlockingEdgeAcrossTypes(t *testing.T) {
 		},
 		{
 			wantDir:  dir,
-			wantArgs: []string{"--json", "--sandbox", "dep", "add", "op-task", "op-epic", "--type", "orpheus-blocks"},
+			wantArgs: []string{"--json", "--sandbox", "dep", "add", "op-task", "op-epic"},
 			result:   beads.Result{Stdout: `{}`},
 		},
 		{
 			wantDir:  dir,
 			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-task"},
-			result:   beads.Result{Stdout: `[{"id":"op-task","title":"Task","description":"Description","acceptance_criteria":"Acceptance","status":"open","issue_type":"task","dependencies":[{"id":"op-epic","dependency_type":"orpheus-blocks"}]}]`},
+			result:   beads.Result{Stdout: `[{"id":"op-task","title":"Task","description":"Description","acceptance_criteria":"Acceptance","status":"open","issue_type":"task","dependencies":[{"id":"op-epic","dependency_type":"blocks"}]}]`},
 		},
 	}}
 
@@ -832,6 +832,30 @@ func TestTaskBackendUpdateUsesOrpheusBlockingEdgeAcrossTypes(t *testing.T) {
 	}
 	if want := []string{"op-epic"}; !reflect.DeepEqual(updated.Relations.DependencyIDs, want) {
 		t.Fatalf("dependencies = %#v, want %#v", updated.Relations.DependencyIDs, want)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
+func TestTaskBackendGetRetainsLegacyCrossTypeBlockingEdge(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{calls: []fakeCall{{
+		wantDir:  dir,
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-task"},
+		result:   beads.Result{Stdout: `[{"id":"op-task","status":"open","issue_type":"task","dependencies":[{"id":"op-epic","dependency_type":"orpheus-blocks"}]}]`},
+	}}}
+
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+	got, err := backend.Get(context.Background(), "op-task")
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if want := []string{"op-epic"}; !reflect.DeepEqual(got.Relations.DependencyIDs, want) {
+		t.Fatalf("dependencies = %#v, want %#v", got.Relations.DependencyIDs, want)
 	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("runner has %d unused calls", len(runner.calls))
