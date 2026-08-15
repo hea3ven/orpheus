@@ -71,7 +71,7 @@ func TestIntegrationRunPipelineRecordsCodexPromptArgWithEvaluationSessionName(t 
 	binDir := filepath.Join(root, "bin")
 	must.NoError(os.MkdirAll(binDir, 0o755))
 	codexPath := filepath.Join(binDir, "codex")
-	must.NoError(os.WriteFile(codexPath, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	must.NoError(testguard.WriteExecutable(codexPath, []byte("#!/bin/sh\nexit 0\n")))
 	t.Setenv(testguard.FakeAgentEnvKey("codex"), codexPath)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
@@ -119,6 +119,6 @@ case "$*" in
 esac
 `
 	must := require.New(t)
-	must.NoError(os.WriteFile(path, []byte(script), 0o755))
+	must.NoError(testguard.WriteExecutable(path, []byte(script)))
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
