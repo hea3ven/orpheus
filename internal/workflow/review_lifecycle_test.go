@@ -1,3 +1,5 @@
+//go:build integration
+
 package workflow_test
 
 import (
@@ -20,7 +22,7 @@ import (
 )
 
 //nolint:funlen // The test sets up a full lifecycle fixture without Cobra.
-func TestReviewLifecycleRunRecordsBlockedOutcomeWithoutCobra(t *testing.T) {
+func TestIntegrationReviewLifecycleRunRecordsBlockedOutcomeWithoutCobra(t *testing.T) {
 	t.Parallel()
 
 	paths := testPaths(t)
@@ -104,7 +106,7 @@ func TestReviewLifecycleRunRecordsBlockedOutcomeWithoutCobra(t *testing.T) {
 	}
 }
 
-func TestReviewLifecycleFreshReviewGuardPreservesKeptAutomatedBlocker(t *testing.T) {
+func TestIntegrationReviewLifecycleFreshReviewGuardPreservesKeptAutomatedBlocker(t *testing.T) {
 	service, store, frontend := freshReviewGuardFixture(t)
 	frontend.freshBlockerDispositions = func(blockers []workflow.FreshReviewBlocker) ([]workflow.FreshReviewBlockerDisposition, error) {
 		if len(blockers) != 1 || blockers[0].Finding.Step != "lint" {
@@ -143,7 +145,7 @@ func TestReviewLifecycleFreshReviewGuardPreservesKeptAutomatedBlocker(t *testing
 	}
 }
 
-func TestReviewLifecycleFreshReviewGuardKeepsFailedBlockerForTargetedFollowUp(t *testing.T) {
+func TestIntegrationReviewLifecycleFreshReviewGuardKeepsFailedBlockerForTargetedFollowUp(t *testing.T) {
 	service, store, frontend := freshReviewGuardFixtureWithOptions(t, freshReviewGuardFixtureOptions{
 		status: taskstate.ReviewStatusFailed,
 	})
@@ -187,7 +189,7 @@ func TestReviewLifecycleFreshReviewGuardKeepsFailedBlockerForTargetedFollowUp(t 
 	}
 }
 
-func TestReviewLifecycleFreshReviewGuardAllowsFailedBlockerDisposition(t *testing.T) {
+func TestIntegrationReviewLifecycleFreshReviewGuardAllowsFailedBlockerDisposition(t *testing.T) {
 	service, store, frontend := freshReviewGuardFixtureWithOptions(t, freshReviewGuardFixtureOptions{
 		status: taskstate.ReviewStatusFailed,
 	})
@@ -224,7 +226,7 @@ func TestReviewLifecycleFreshReviewGuardAllowsFailedBlockerDisposition(t *testin
 	}
 }
 
-func TestReviewLifecycleFreshReviewGuardRecordsManualAddressAndWaiver(t *testing.T) {
+func TestIntegrationReviewLifecycleFreshReviewGuardRecordsManualAddressAndWaiver(t *testing.T) {
 	service, store, frontend := freshReviewGuardFixture(t, true)
 	frontend.freshBlockerDispositions = func(blockers []workflow.FreshReviewBlocker) ([]workflow.FreshReviewBlockerDisposition, error) {
 		return []workflow.FreshReviewBlockerDisposition{
@@ -265,7 +267,7 @@ func TestReviewLifecycleFreshReviewGuardRecordsManualAddressAndWaiver(t *testing
 	}
 }
 
-func TestReviewLifecycleFreshReviewGuardKeepsInterruptedAutomatedBlockerEligibleForFollowUp(t *testing.T) {
+func TestIntegrationReviewLifecycleFreshReviewGuardKeepsInterruptedAutomatedBlockerEligibleForFollowUp(t *testing.T) {
 	service, store, frontend := freshReviewGuardFixtureWithOptions(t, freshReviewGuardFixtureOptions{
 		interrupted: true,
 	})
@@ -297,7 +299,7 @@ func TestReviewLifecycleFreshReviewGuardKeepsInterruptedAutomatedBlockerEligible
 	}
 }
 
-func TestReviewLifecycleFreshReviewGuardInterruptionDoesNotMutateOrStart(t *testing.T) {
+func TestIntegrationReviewLifecycleFreshReviewGuardInterruptionDoesNotMutateOrStart(t *testing.T) {
 	service, store, frontend := freshReviewGuardFixture(t, true)
 	frontend.freshBlockerDispositions = func([]workflow.FreshReviewBlocker) ([]workflow.FreshReviewBlockerDisposition, error) {
 		return nil, workflow.ErrFreshReviewBlockerDispositionInterrupted
@@ -406,7 +408,7 @@ func freshReviewGuardFixtureWithOptions(t *testing.T, options freshReviewGuardFi
 }
 
 //nolint:funlen // The test sets up a full lifecycle fixture without Cobra.
-func TestReviewLifecycleRunLogsGitDiagnosticsForGatingFailure(t *testing.T) {
+func TestIntegrationReviewLifecycleRunLogsGitDiagnosticsForGatingFailure(t *testing.T) {
 	t.Parallel()
 
 	paths := testPaths(t)
@@ -476,7 +478,7 @@ func TestReviewLifecycleRunLogsGitDiagnosticsForGatingFailure(t *testing.T) {
 }
 
 //nolint:funlen // The test sets up a full lifecycle fixture without Cobra.
-func TestReviewLifecycleManualPromptPersistsFindingsThroughWorkflowRecorder(t *testing.T) {
+func TestIntegrationReviewLifecycleManualPromptPersistsFindingsThroughWorkflowRecorder(t *testing.T) {
 	t.Parallel()
 
 	paths := testPaths(t)
@@ -586,7 +588,7 @@ func TestReviewLifecycleManualPromptPersistsFindingsThroughWorkflowRecorder(t *t
 }
 
 //nolint:funlen // The test drives the full passed review/finalization path.
-func TestReviewLifecycleConfirmsRunningCompletionBeforeFinalizing(t *testing.T) {
+func TestIntegrationReviewLifecycleConfirmsRunningCompletionBeforeFinalizing(t *testing.T) {
 	t.Parallel()
 
 	paths := testPaths(t)
@@ -666,7 +668,7 @@ func TestReviewLifecycleConfirmsRunningCompletionBeforeFinalizing(t *testing.T) 
 }
 
 //nolint:funlen // The test asserts preflight outcome and persisted review state.
-func TestReviewLifecyclePreparesPipelineBeforeFreshReviewTransition(t *testing.T) {
+func TestIntegrationReviewLifecyclePreparesPipelineBeforeFreshReviewTransition(t *testing.T) {
 	t.Parallel()
 
 	paths := testPaths(t)
@@ -734,7 +736,7 @@ func TestReviewLifecyclePreparesPipelineBeforeFreshReviewTransition(t *testing.T
 }
 
 //nolint:funlen // The test needs a paused review fixture to assert no resume mutation.
-func TestReviewLifecyclePreparesPipelineBeforeResumeReviewTransition(t *testing.T) {
+func TestIntegrationReviewLifecyclePreparesPipelineBeforeResumeReviewTransition(t *testing.T) {
 	t.Parallel()
 
 	paths := testPaths(t)
@@ -806,7 +808,7 @@ func TestReviewLifecyclePreparesPipelineBeforeResumeReviewTransition(t *testing.
 	}
 }
 
-func TestReviewLifecycleRecoversBeforeReplacementConfiguration(t *testing.T) {
+func TestIntegrationReviewLifecycleRecoversBeforeReplacementConfiguration(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
@@ -858,7 +860,7 @@ func TestReviewLifecycleRecoversBeforeReplacementConfiguration(t *testing.T) {
 	}
 }
 
-func TestReviewLifecycleReturnsTypedPrimaryReviewLivenessOutcomes(t *testing.T) {
+func TestIntegrationReviewLifecycleReturnsTypedPrimaryReviewLivenessOutcomes(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
@@ -902,7 +904,7 @@ func TestReviewLifecycleReturnsTypedPrimaryReviewLivenessOutcomes(t *testing.T) 
 	}
 }
 
-func TestReviewLifecycleStopsWhenPrimaryWasConcurrentlyRecovered(t *testing.T) {
+func TestIntegrationReviewLifecycleStopsWhenPrimaryWasConcurrentlyRecovered(t *testing.T) {
 	paths := testPaths(t)
 	store := taskstate.NewStore(paths)
 	reviewAttempt, err := store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{Pipeline: "agent-review", Step: "automated-review"})
@@ -937,7 +939,7 @@ func TestReviewLifecycleStopsWhenPrimaryWasConcurrentlyRecovered(t *testing.T) {
 	}
 }
 
-func TestReviewLifecycleRejectsClosedTaskBeforeStartingReview(t *testing.T) {
+func TestIntegrationReviewLifecycleRejectsClosedTaskBeforeStartingReview(t *testing.T) {
 	t.Parallel()
 
 	paths := testPaths(t)
@@ -980,7 +982,7 @@ func TestReviewLifecycleRejectsClosedTaskBeforeStartingReview(t *testing.T) {
 }
 
 //nolint:funlen // The test exercises the autonomous follow-up transition guard.
-func TestReviewLifecycleMissingAgentRunnerDoesNotStartFollowUpRun(t *testing.T) {
+func TestIntegrationReviewLifecycleMissingAgentRunnerDoesNotStartFollowUpRun(t *testing.T) {
 	t.Parallel()
 
 	paths := testPaths(t)
@@ -1067,7 +1069,7 @@ func TestReviewLifecycleMissingAgentRunnerDoesNotStartFollowUpRun(t *testing.T) 
 }
 
 //nolint:funlen // The fixture drives the blocked-review follow-up transition.
-func TestReviewLifecycleUsageErrorDoesNotFailSuccessfulAutonomousFollowUp(t *testing.T) {
+func TestIntegrationReviewLifecycleUsageErrorDoesNotFailSuccessfulAutonomousFollowUp(t *testing.T) {
 	t.Parallel()
 
 	paths := testPaths(t)
@@ -1142,7 +1144,7 @@ func TestReviewLifecycleUsageErrorDoesNotFailSuccessfulAutonomousFollowUp(t *tes
 }
 
 //nolint:funlen // The fixture proves task-run continuation is reusable without Cobra.
-func TestReviewLifecycleRunAfterCompletedRunStartsReviewAndPropagatesAgent(t *testing.T) {
+func TestIntegrationReviewLifecycleRunAfterCompletedRunStartsReviewAndPropagatesAgent(t *testing.T) {
 	t.Parallel()
 
 	paths := testPaths(t)
@@ -1237,7 +1239,7 @@ func TestReviewLifecycleRunAfterCompletedRunStartsReviewAndPropagatesAgent(t *te
 }
 
 //nolint:funlen // The fixture proves autonomous repair uses shared resume dispatch.
-func TestReviewLifecycleAutonomousFollowUpResumesCompatibleSession(t *testing.T) {
+func TestIntegrationReviewLifecycleAutonomousFollowUpResumesCompatibleSession(t *testing.T) {
 	paths := testPaths(t)
 	repoPath := testRepoWithLocalOriginAndCandidateChange(t)
 	sessionPath := filepath.Join(t.TempDir(), "pi-session.jsonl")
@@ -1322,7 +1324,7 @@ func TestReviewLifecycleAutonomousFollowUpResumesCompatibleSession(t *testing.T)
 	}
 }
 
-func TestReviewLifecycleRunAfterCompletedRunSkipsReviewWithoutCompletion(t *testing.T) {
+func TestIntegrationReviewLifecycleRunAfterCompletedRunSkipsReviewWithoutCompletion(t *testing.T) {
 	t.Parallel()
 
 	paths := testPaths(t)
@@ -1367,19 +1369,6 @@ func recordAutonomousReviewBlocker(t *testing.T, store taskstate.Store, attempt 
 	}
 	if _, err := store.MarkReviewAutomatedBlockerDecisionKept("alpha", "op-1", attempt); err != nil {
 		t.Fatalf("mark automated blocker kept: %v", err)
-	}
-}
-
-func TestSelectSeparateTaskCandidatesParsesSelection(t *testing.T) {
-	t.Parallel()
-
-	candidates := []workflow.SeparateTaskCandidate{{Index: 2}, {Index: 4}, {Index: 8}}
-	selected, err := workflow.SelectSeparateTaskCandidates(candidates, "3, 1, 3")
-	if err != nil {
-		t.Fatalf("select candidates: %v", err)
-	}
-	if len(selected) != 2 || selected[0].Index != 8 || selected[1].Index != 2 {
-		t.Fatalf("selected = %#v, want candidate indexes 8 and 2", selected)
 	}
 }
 

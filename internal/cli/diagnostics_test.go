@@ -1,3 +1,5 @@
+//go:build integration
+
 //nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
 package cli
 
@@ -13,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestVerboseRepoListDiagnosticsDistinguishMissingRegistry(t *testing.T) {
+func TestIntegrationVerboseRepoListDiagnosticsDistinguishMissingRegistry(t *testing.T) {
 	t.Parallel()
 	newTestState(t)
 
@@ -27,7 +29,7 @@ func TestVerboseRepoListDiagnosticsDistinguishMissingRegistry(t *testing.T) {
 	require.NotContains(t, stdout, "level=DEBUG")
 }
 
-func TestVerboseTaskRunSetupFailureUsesInvocationDiagnostics(t *testing.T) {
+func TestIntegrationVerboseTaskRunSetupFailureUsesInvocationDiagnostics(t *testing.T) {
 	t.Parallel()
 	newTestState(t)
 
@@ -44,7 +46,7 @@ func TestVerboseTaskRunSetupFailureUsesInvocationDiagnostics(t *testing.T) {
 	}
 }
 
-func TestVerboseRepoAddDiagnosticsCoverDiscoveryLockAndPersistence(t *testing.T) {
+func TestIntegrationVerboseRepoAddDiagnosticsCoverDiscoveryLockAndPersistence(t *testing.T) {
 	t.Parallel()
 	withFakeBDInit(t)
 	repoPath := newTestRepoPath(t)
@@ -78,7 +80,7 @@ func TestVerboseRepoAddDiagnosticsCoverDiscoveryLockAndPersistence(t *testing.T)
 	}
 }
 
-func TestVerboseRepoAddLocalBeadsSubprocessDiagnosticsIncludeRepo(t *testing.T) {
+func TestIntegrationVerboseRepoAddLocalBeadsSubprocessDiagnosticsIncludeRepo(t *testing.T) {
 	t.Parallel()
 	repoPath := newTestRepoPath(t)
 	beadsDir := filepath.Join(repoPath, ".beads")
@@ -110,7 +112,7 @@ func TestVerboseRepoAddLocalBeadsSubprocessDiagnosticsIncludeRepo(t *testing.T) 
 	}
 }
 
-func TestVerboseRepoAddClassifiesBDNoWorkspaceAsExpectedAbsence(t *testing.T) {
+func TestIntegrationVerboseRepoAddClassifiesBDNoWorkspaceAsExpectedAbsence(t *testing.T) {
 	t.Parallel()
 	repoPath := newTestRepoPath(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(repoPath, ".beads"), 0o755))
@@ -142,7 +144,7 @@ func TestVerboseRepoAddClassifiesBDNoWorkspaceAsExpectedAbsence(t *testing.T) {
 	require.NotContains(t, contextFinishLine, `status=failure`)
 }
 
-func TestVerboseBeadsSubprocessFailureLogsExitCodeWithoutOutput(t *testing.T) {
+func TestIntegrationVerboseBeadsSubprocessFailureLogsExitCodeWithoutOutput(t *testing.T) {
 	t.Parallel()
 	withFailingBDInit(t, 7, "SECRET_PROCESS_OUTPUT")
 	repoPath := newTestRepoPath(t)
@@ -157,7 +159,7 @@ func TestVerboseBeadsSubprocessFailureLogsExitCodeWithoutOutput(t *testing.T) {
 	require.NotContains(t, stderr, "SECRET_PROCESS_OUTPUT")
 }
 
-func TestVerboseTaskShowDiagnosticsIncludeTaskStateAndBackendBoundaries(t *testing.T) {
+func TestIntegrationVerboseTaskShowDiagnosticsIncludeTaskStateAndBackendBoundaries(t *testing.T) {
 	t.Parallel()
 	_, backendDir := setupVerboseTaskShowDiagnostics(t)
 	withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
@@ -178,7 +180,7 @@ func TestVerboseTaskShowDiagnosticsIncludeTaskStateAndBackendBoundaries(t *testi
 	require.NotContains(t, stderr, "Inspect diagnostics")
 }
 
-func TestVerboseTaskShowBeadsFailureDiagnosticsIncludeRepoAndTask(t *testing.T) {
+func TestIntegrationVerboseTaskShowBeadsFailureDiagnosticsIncludeRepoAndTask(t *testing.T) {
 	t.Parallel()
 	_, backendDir := setupVerboseTaskShowDiagnostics(t)
 	withFakeBDCommandResponses(t, []fakeBDCommandResponse{{
@@ -209,7 +211,7 @@ func TestVerboseTaskShowBeadsFailureDiagnosticsIncludeRepoAndTask(t *testing.T) 
 	}
 }
 
-func TestVerboseTaskSyncCLIDiagnosticsUsesSyncStatusKey(t *testing.T) {
+func TestIntegrationVerboseTaskSyncCLIDiagnosticsUsesSyncStatusKey(t *testing.T) {
 	t.Parallel()
 	root := newTestState(t)
 	paths := currentTestPaths(t)
@@ -258,7 +260,7 @@ func TestVerboseTaskSyncCLIDiagnosticsUsesSyncStatusKey(t *testing.T) {
 	require.NotContains(t, stderr, "https://github.test/org/alpha/pull/42")
 }
 
-func TestVerboseTaskRunDiagnosticsCoverDispatchProcessUsageAndPersistence(t *testing.T) {
+func TestIntegrationVerboseTaskRunDiagnosticsCoverDispatchProcessUsageAndPersistence(t *testing.T) {
 	t.Parallel()
 	paths, repoPath := setupVerboseTaskRunDiagnostics(t, "op-diag", "Inspect dispatch diagnostics", "fake-agent", 0)
 	writeTaskRunAgentConfig(t, paths, "recorder", "fake-agent", nil)
@@ -313,7 +315,7 @@ func TestVerboseTaskRunDiagnosticsCoverDispatchProcessUsageAndPersistence(t *tes
 	_ = repoPath
 }
 
-func TestVerboseAgentDoneDiagnosticsCoverContextAndCompletionPersistence(t *testing.T) {
+func TestIntegrationVerboseAgentDoneDiagnosticsCoverContextAndCompletionPersistence(t *testing.T) {
 	setupAgentDoneWorktreeRun(t)
 
 	stdout, stderr := executeCommand(t, []string{
@@ -357,7 +359,7 @@ func TestVerboseAgentDoneDiagnosticsCoverContextAndCompletionPersistence(t *test
 	require.NotContains(t, stderr, "## Details")
 }
 
-func TestVerboseTaskRunDiagnosticsDistinguishAgentStartAndRuntimeFailures(t *testing.T) {
+func TestIntegrationVerboseTaskRunDiagnosticsDistinguishAgentStartAndRuntimeFailures(t *testing.T) {
 	t.Parallel()
 	paths, _ := setupVerboseTaskRunDiagnostics(t, "op-runtime", "Runtime diagnostics", "failing-agent", 7)
 	writeTaskRunAgentConfig(t, paths, "failing", "failing-agent", nil)

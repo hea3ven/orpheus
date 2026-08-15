@@ -47,6 +47,9 @@ func TestSummarizeRanksMedianDurations(t *testing.T) {
 	if got.WallSeconds != 6 {
 		t.Fatalf("wall median = %v, want 6", got.WallSeconds)
 	}
+	if got.TestCount != 2 {
+		t.Fatalf("test count = %d, want 2", got.TestCount)
+	}
 	wantPackages := []duration{{Name: "first", Seconds: 4, Samples: 3}, {Name: "second", Seconds: 2, Samples: 3}}
 	if !reflect.DeepEqual(got.Packages, wantPackages) {
 		t.Fatalf("package medians = %#v, want %#v", got.Packages, wantPackages)
@@ -70,10 +73,11 @@ func TestBudgetUsesLargestTolerance(t *testing.T) {
 func TestBaselineUpdateOnlyRatchetsDown(t *testing.T) {
 	t.Parallel()
 	created := time.Date(2026, time.July, 31, 12, 0, 0, 0, time.UTC)
-	baseReport := report{Lane: "fast", CreatedAt: created, Environment: environment{GoVersion: "go test"}, Median: summary{
+	baseReport := report{Lane: "unit", CreatedAt: created, Environment: environment{GoVersion: "go test"}, Median: summary{
 		WallSeconds: 10,
 		Packages:    []duration{{Name: "slow", Seconds: 4, Samples: 5}, {Name: "steady", Seconds: 2, Samples: 5}},
 		Tests:       []duration{{Name: "slow.Test", Seconds: 4, Samples: 5}},
+		TestCount:   1,
 	}}
 	baseline := initialBaseline(baseReport)
 
@@ -84,7 +88,7 @@ func TestBaselineUpdateOnlyRatchetsDown(t *testing.T) {
 	if baseline.update(slower) {
 		t.Fatal("slower report unexpectedly updated baseline")
 	}
-	lane := baseline.Lanes["fast"]
+	lane := baseline.Lanes["unit"]
 	if lane.Median.WallSeconds != 10 || lane.Median.Packages[0].Seconds != 4 {
 		t.Fatalf("slower report changed baseline: %#v", lane)
 	}
@@ -96,7 +100,7 @@ func TestBaselineUpdateOnlyRatchetsDown(t *testing.T) {
 	if !baseline.update(faster) {
 		t.Fatal("faster report did not update baseline")
 	}
-	lane = baseline.Lanes["fast"]
+	lane = baseline.Lanes["unit"]
 	if lane.Median.WallSeconds != 8 {
 		t.Fatalf("wall baseline = %v, want 8", lane.Median.WallSeconds)
 	}
@@ -112,13 +116,13 @@ func TestBaselineUpdateOnlyRatchetsDown(t *testing.T) {
 
 func TestBaselineCheck(t *testing.T) {
 	t.Parallel()
-	base := initialBaseline(report{Lane: "fast", Median: summary{WallSeconds: 4, Packages: []duration{{Name: "package", Seconds: 1}}}})
+	base := initialBaseline(report{Lane: "unit", Median: summary{WallSeconds: 4, Packages: []duration{{Name: "package", Seconds: 1}}}})
 
-	passing := report{Lane: "fast", Median: summary{WallSeconds: 4.9, Packages: []duration{{Name: "package", Seconds: 1.4}}}}
+	passing := report{Lane: "unit", Median: summary{WallSeconds: 4.9, Packages: []duration{{Name: "package", Seconds: 1.4}}}}
 	if failures := base.check(passing); len(failures) != 0 {
 		t.Fatalf("passing report failed budgets: %v", failures)
 	}
-	failing := report{Lane: "fast", Median: summary{WallSeconds: 5.1, Packages: []duration{{Name: "package", Seconds: 1.6}, {Name: "new-package", Seconds: 0.1}}}}
+	failing := report{Lane: "unit", Median: summary{WallSeconds: 5.1, Packages: []duration{{Name: "package", Seconds: 1.6}, {Name: "new-package", Seconds: 0.1}}}}
 	if failures := base.check(failing); len(failures) != 3 {
 		t.Fatalf("failures = %v, want suite, package, and missing package budget failures", failures)
 	}

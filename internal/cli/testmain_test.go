@@ -1,4 +1,4 @@
-//go:build !integration
+//go:build integration
 
 //nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
 package cli
@@ -18,6 +18,7 @@ func TestMain(m *testing.M) {
 		os.Exit(2)
 	}
 	code := m.Run()
+	cleanupLocalBeadsFixture()
 	cleanupCLIHelperFixture()
 	os.Exit(code)
 }

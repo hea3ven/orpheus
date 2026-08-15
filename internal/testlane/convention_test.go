@@ -37,6 +37,23 @@ func TestValidateIntegrationSourcesRejectsNonconformingTopLevelTest(t *testing.T
 	}
 }
 
+func TestValidateIntegrationSourcesRejectsIntegrationNameWithoutTag(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "adapter_test.go")
+	contents := "package adapter\n\nfunc TestIntegrationAdapterContract(t *testing.T) {}\n"
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatalf("write unit fixture: %v", err)
+	}
+
+	violations, err := testlane.ValidateIntegrationSources(root)
+	if err != nil {
+		t.Fatalf("validate unit fixture: %v", err)
+	}
+	if len(violations) != 1 || !strings.Contains(violations[0], "TestIntegrationAdapterContract") {
+		t.Fatalf("violations = %v, want integration-name placement violation", violations)
+	}
+}
+
 func TestLaneCommandsUseSharedConvention(t *testing.T) {
 	contents, err := os.ReadFile(filepath.Join(repositoryRoot(t), "Makefile"))
 	if err != nil {
@@ -44,12 +61,15 @@ func TestLaneCommandsUseSharedConvention(t *testing.T) {
 	}
 
 	for _, want := range []string{
+		"test-unit:\n\tgo test ./...",
+		"test: test-unit",
 		"INTEGRATION_TEST_PATTERN := " + testlane.IntegrationTestPattern,
 		"INTEGRATION_TEST_ARGS := -tags=" + testlane.IntegrationBuildTag + " -run '$(INTEGRATION_TEST_PATTERN)'",
 		"go test $(INTEGRATION_TEST_ARGS) ./...",
+		"check: fmt test-unit test-integration lint",
 	} {
 		if !strings.Contains(string(contents), want) {
-			t.Fatalf("Makefile does not use the integration lane convention %q", want)
+			t.Fatalf("Makefile does not use the lane convention %q", want)
 		}
 	}
 }

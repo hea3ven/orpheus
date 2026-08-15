@@ -1,3 +1,5 @@
+//go:build integration
+
 //nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
 package cli
 
@@ -17,7 +19,7 @@ import (
 )
 
 //nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
-func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
+func TestIntegrationWorktreeCompletionFlowEndToEnd(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -102,7 +104,7 @@ func TestWorktreeCompletionFlowEndToEnd(t *testing.T) {
 }
 
 //nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
-func TestConfiguredPublicationPolicyEndToEnd(t *testing.T) {
+func TestIntegrationConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -171,7 +173,7 @@ func TestConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 }
 
 //nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
-func TestMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd(t *testing.T) {
+func TestIntegrationMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -246,7 +248,7 @@ func TestMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd
 }
 
 //nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
-func TestWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
+func TestIntegrationWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -356,7 +358,7 @@ func TestWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 }
 
 //nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
-func TestRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
+func TestIntegrationRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -468,7 +470,7 @@ func TestRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	is.Equal("https://github.test/org/alpha/pull/56", mergedEvent.PRURL)
 }
 
-func TestTaskRunMainProvidesRepositoryRootMigrationGuidance(t *testing.T) {
+func TestIntegrationTaskRunMainProvidesRepositoryRootMigrationGuidance(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	paths, repoPath := setupCompletionFlowRepo(t)
@@ -483,7 +485,7 @@ func TestTaskRunMainProvidesRepositoryRootMigrationGuidance(t *testing.T) {
 	is.ErrorContains(err, "use --repo-root")
 }
 
-func TestOrpheusCLIHelperProcess(t *testing.T) {
+func TestIntegrationOrpheusCLIHelperProcess(t *testing.T) {
 	t.Parallel()
 	if os.Getenv("GO_WANT_ORPHEUS_CLI_HELPER") != "1" {
 		return

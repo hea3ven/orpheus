@@ -1,4 +1,4 @@
-// Package testlane defines selection conventions shared by test tooling.
+// Package testlane defines structural test-lane conventions shared by test tooling.
 package testlane
 
 import (
@@ -15,14 +15,17 @@ import (
 )
 
 const (
-	// IntegrationBuildTag selects real-Beads integration test sources.
+	// IntegrationBuildTag selects integration test sources.
 	IntegrationBuildTag = "integration"
 	// IntegrationTestPattern selects integration test scenarios by name.
 	IntegrationTestPattern = "^TestIntegration"
 )
 
-// ValidateIntegrationSources reports integration test sources that would not
-// be selected exclusively by the integration test lane.
+// ValidateIntegrationSources reports test bodies that would be omitted from, or
+// selected by both, the unit and integration lanes. Untagged test bodies belong
+// to the unit lane; integration-tagged bodies belong only to the integration
+// lane. The name convention makes the integration target's Go name filter agree
+// with that structural membership.
 func ValidateIntegrationSources(root string) ([]string, error) {
 	var violations []string
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {

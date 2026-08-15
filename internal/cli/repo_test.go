@@ -1,3 +1,5 @@
+//go:build integration
+
 //nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
 package cli
 
@@ -13,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRepoAddAndListFlow(t *testing.T) {
+func TestIntegrationRepoAddAndListFlow(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	withFakeBDInit(t)
@@ -33,7 +35,7 @@ func TestRepoAddAndListFlow(t *testing.T) {
 	}
 }
 
-func TestRepoConfigInspectsEffectivePublicationPolicy(t *testing.T) {
+func TestIntegrationRepoConfigInspectsEffectivePublicationPolicy(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	withFakeBDInit(t)
@@ -54,7 +56,7 @@ func TestRepoConfigInspectsEffectivePublicationPolicy(t *testing.T) {
 	is.Contains(stdout, "default")
 }
 
-func TestRepoConfigUpdatesPublicationPolicyForExistingRepo(t *testing.T) {
+func TestIntegrationRepoConfigUpdatesPublicationPolicyForExistingRepo(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -91,7 +93,7 @@ func TestRepoConfigUpdatesPublicationPolicyForExistingRepo(t *testing.T) {
 	is.Equal(template, reg.Repos[0].TitleTemplate)
 }
 
-func TestRepoConfigSetsAndClearsIncludePRReviewProcess(t *testing.T) {
+func TestIntegrationRepoConfigSetsAndClearsIncludePRReviewProcess(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -152,7 +154,7 @@ func TestRepoConfigSetsAndClearsIncludePRReviewProcess(t *testing.T) {
 	is.Nil(reg.Repos[0].IncludePRReviewProcess)
 }
 
-func TestRepoConfigClearsPublicationPolicy(t *testing.T) {
+func TestIntegrationRepoConfigClearsPublicationPolicy(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -197,7 +199,7 @@ func TestRepoConfigClearsPublicationPolicy(t *testing.T) {
 	is.Empty(reg.Repos[0].TitleTemplate)
 }
 
-func TestRepoConfigRejectsInvalidPolicyWithoutMutatingRegistry(t *testing.T) {
+func TestIntegrationRepoConfigRejectsInvalidPolicyWithoutMutatingRegistry(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -226,7 +228,7 @@ func TestRepoConfigRejectsInvalidPolicyWithoutMutatingRegistry(t *testing.T) {
 	is.Equal("[OPS] {{summary}}", reg.Repos[0].TitleTemplate)
 }
 
-func TestRepoConfigSetInvalidGlobalPublicationFlowDoesNotMutateRegistry(t *testing.T) {
+func TestIntegrationRepoConfigSetInvalidGlobalPublicationFlowDoesNotMutateRegistry(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -254,7 +256,7 @@ func TestRepoConfigSetInvalidGlobalPublicationFlowDoesNotMutateRegistry(t *testi
 	is.Equal(string(before), string(after))
 }
 
-func TestRepoConfigRejectsUnknownConfigName(t *testing.T) {
+func TestIntegrationRepoConfigRejectsUnknownConfigName(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -271,7 +273,7 @@ func TestRepoConfigRejectsUnknownConfigName(t *testing.T) {
 	is.Empty(stdout)
 }
 
-func TestRepoConfigGetOnePolicyValue(t *testing.T) {
+func TestIntegrationRepoConfigGetOnePolicyValue(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	withFakeBDInit(t)
@@ -291,7 +293,7 @@ func TestRepoConfigGetOnePolicyValue(t *testing.T) {
 	is.NotContains(stdout, "summary-style")
 }
 
-func TestRepoConfigSetsAndClearsReviewPipelineDefault(t *testing.T) {
+func TestIntegrationRepoConfigSetsAndClearsReviewPipelineDefault(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -334,7 +336,7 @@ func TestRepoConfigSetsAndClearsReviewPipelineDefault(t *testing.T) {
 	is.Empty(reg.Repos[0].ReviewPipeline)
 }
 
-func TestRepoConfigSetsAndClearsReviewPipelineAlias(t *testing.T) {
+func TestIntegrationRepoConfigSetsAndClearsReviewPipelineAlias(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -380,7 +382,7 @@ func TestRepoConfigSetsAndClearsReviewPipelineAlias(t *testing.T) {
 	is.Empty(reg.Repos[0].ReviewPipelineAliases)
 }
 
-func TestRepoConfigRejectsUnknownReviewPipelineWithoutMutatingRegistry(t *testing.T) {
+func TestIntegrationRepoConfigRejectsUnknownReviewPipelineWithoutMutatingRegistry(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -413,7 +415,7 @@ func TestRepoConfigRejectsUnknownReviewPipelineWithoutMutatingRegistry(t *testin
 	is.Empty(reg.Repos[0].ReviewPipelineAliases)
 }
 
-func TestRepoAddStoresGitRootWhenPathIsNested(t *testing.T) {
+func TestIntegrationRepoAddStoresGitRootWhenPathIsNested(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -434,7 +436,7 @@ func TestRepoAddStoresGitRootWhenPathIsNested(t *testing.T) {
 	is.NotContains(listOut, nestedPath)
 }
 
-func TestRepoAddWarnsWhenRemoteIsMissing(t *testing.T) {
+func TestIntegrationRepoAddWarnsWhenRemoteIsMissing(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	withFakeBDInit(t)
@@ -453,7 +455,7 @@ func TestRepoAddWarnsWhenRemoteIsMissing(t *testing.T) {
 	is.Contains(listOut, "main")
 }
 
-func TestRepoAddRejectsNonGitPath(t *testing.T) {
+func TestIntegrationRepoAddRejectsNonGitPath(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -468,7 +470,7 @@ func TestRepoAddRejectsNonGitPath(t *testing.T) {
 	is.Empty(stdout)
 }
 
-func TestRepoAddRejectsDuplicatePath(t *testing.T) {
+func TestIntegrationRepoAddRejectsDuplicatePath(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -485,7 +487,7 @@ func TestRepoAddRejectsDuplicatePath(t *testing.T) {
 	is.Empty(stdout)
 }
 
-func TestRepoAddRejectsDuplicateDerivedIDAndName(t *testing.T) {
+func TestIntegrationRepoAddRejectsDuplicateDerivedIDAndName(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -505,7 +507,7 @@ func TestRepoAddRejectsDuplicateDerivedIDAndName(t *testing.T) {
 	is.Empty(stdout)
 }
 
-func TestRepoAddVerboseEmitsDiagnosticsToStderr(t *testing.T) {
+func TestIntegrationRepoAddVerboseEmitsDiagnosticsToStderr(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	withFakeBDInit(t)
@@ -522,7 +524,7 @@ func TestRepoAddVerboseEmitsDiagnosticsToStderr(t *testing.T) {
 	is.Contains(stderr, "msg=\"saved repo registration\"")
 }
 
-func TestRepoAddInitializesManagedBeadsAfterValidation(t *testing.T) {
+func TestIntegrationRepoAddInitializesManagedBeadsAfterValidation(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -558,7 +560,7 @@ func TestRepoAddInitializesManagedBeadsAfterValidation(t *testing.T) {
 	}
 }
 
-func TestRepoAddHoldsGlobalMutationLockDuringManagedInitialization(t *testing.T) {
+func TestIntegrationRepoAddHoldsGlobalMutationLockDuringManagedInitialization(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -579,7 +581,7 @@ func TestRepoAddHoldsGlobalMutationLockDuringManagedInitialization(t *testing.T)
 	}
 }
 
-func TestRepoAddFailsFastWhenGlobalMutationLockIsHeld(t *testing.T) {
+func TestIntegrationRepoAddFailsFastWhenGlobalMutationLockIsHeld(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -608,7 +610,7 @@ func TestRepoAddFailsFastWhenGlobalMutationLockIsHeld(t *testing.T) {
 	is.Empty(reg.Repos)
 }
 
-func TestRepoAddValidatesManagedRegistryConflictsBeforeInitialization(t *testing.T) {
+func TestIntegrationRepoAddValidatesManagedRegistryConflictsBeforeInitialization(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -633,7 +635,7 @@ func TestRepoAddValidatesManagedRegistryConflictsBeforeInitialization(t *testing
 	is.ErrorIs(logErr, os.ErrNotExist)
 }
 
-func TestRepoAddRejectsExistingManagedStateWithoutSavingRegistry(t *testing.T) {
+func TestIntegrationRepoAddRejectsExistingManagedStateWithoutSavingRegistry(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -659,7 +661,7 @@ func TestRepoAddRejectsExistingManagedStateWithoutSavingRegistry(t *testing.T) {
 	is.Empty(reg.Repos)
 }
 
-func TestRepoBeadsDirResolvesLocalRepoByID(t *testing.T) {
+func TestIntegrationRepoBeadsDirResolvesLocalRepoByID(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -681,7 +683,7 @@ func TestRepoBeadsDirResolvesLocalRepoByID(t *testing.T) {
 	is.Empty(stderr)
 }
 
-func TestRepoBeadsDirResolvesManagedRepoByName(t *testing.T) {
+func TestIntegrationRepoBeadsDirResolvesManagedRepoByName(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -704,7 +706,7 @@ func TestRepoBeadsDirResolvesManagedRepoByName(t *testing.T) {
 	is.Empty(stderr)
 }
 
-func TestRepoBeadsDirResolvesLocalRepoByBeadsPrefix(t *testing.T) {
+func TestIntegrationRepoBeadsDirResolvesLocalRepoByBeadsPrefix(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -726,7 +728,7 @@ func TestRepoBeadsDirResolvesLocalRepoByBeadsPrefix(t *testing.T) {
 	is.Empty(stderr)
 }
 
-func TestRepoBeadsDirResolvesManagedRepoByBeadsPrefix(t *testing.T) {
+func TestIntegrationRepoBeadsDirResolvesManagedRepoByBeadsPrefix(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -749,7 +751,7 @@ func TestRepoBeadsDirResolvesManagedRepoByBeadsPrefix(t *testing.T) {
 	is.Empty(stderr)
 }
 
-func TestRepoBeadsDirVerboseEmitsDiagnosticsToStderr(t *testing.T) {
+func TestIntegrationRepoBeadsDirVerboseEmitsDiagnosticsToStderr(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -776,7 +778,7 @@ func TestRepoBeadsDirVerboseEmitsDiagnosticsToStderr(t *testing.T) {
 	is.Contains(stderr, "beads_dir="+localPath)
 }
 
-func TestRepoBeadsDirRejectsUnknownRepo(t *testing.T) {
+func TestIntegrationRepoBeadsDirRejectsUnknownRepo(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
