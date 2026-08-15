@@ -16,6 +16,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/hea3ven/orpheus/internal/testlane"
 )
 
 const (
@@ -240,7 +242,7 @@ func measure(opts options) (report, error) {
 func testCommand(lane string) []string {
 	command := []string{"go", "test", "-json", "-count=1"}
 	if lane == "integration" {
-		command = append(command, "-tags=integration", "-run", "^TestIntegration")
+		command = append(command, "-tags="+testlane.IntegrationBuildTag, "-run", testlane.IntegrationTestPattern)
 	}
 	return append(command, "./...")
 }

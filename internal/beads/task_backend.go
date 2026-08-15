@@ -14,7 +14,8 @@ import (
 	"github.com/hea3ven/orpheus/internal/task"
 )
 
-const crossTypeBlockingDependencyType = "orpheus-blocks"
+// legacyCrossTypeBlockingDependencyType preserves historic extension edges when reading Beads data.
+const legacyCrossTypeBlockingDependencyType = "orpheus-blocks"
 
 var (
 	_ task.ReadBackend      = TaskBackend{}
@@ -509,23 +510,15 @@ func preflightBlockingDependencyAdditions(current bdTask, depIDs []string) error
 
 func (b TaskBackend) addBlockingDependencies(ctx context.Context, current task.Task, depIDs []string) error {
 	for _, depID := range depIDs {
-		dependency, err := b.Get(ctx, depID)
-		if err != nil {
+		if _, err := b.Get(ctx, depID); err != nil {
 			return fmt.Errorf("add blocking dependency %q to task %q in %q: inspect dependency: %w", depID, current.ID, b.dir, err)
 		}
 
-		args := []string{"dep", "add", current.ID, depID}
-		if current.IssueType != dependency.IssueType {
-			// Beads rejects blocks edges between tasks and epics. Retain the
-			// Orpheus blocking relationship with a dedicated non-conflicting
-			// edge type, which is parsed alongside native blocks edges below.
-			args = append(args, "--type", crossTypeBlockingDependencyType)
-		}
 		result, err := b.runWriteWithAttrs(
 			ctx,
 			"add blocking dependency",
 			[]slog.Attr{slog.String("task_id", current.ID), slog.String("dependency", depID)},
-			args...,
+			"dep", "add", current.ID, depID,
 		)
 		if err != nil {
 			if isNotFoundResult(result) {
@@ -957,7 +950,7 @@ func (t bdTask) relations() task.RelationSummary {
 }
 
 func isBlockingDependencyType(relationType string) bool {
-	return relationType == "blocks" || relationType == crossTypeBlockingDependencyType
+	return relationType == "blocks" || relationType == legacyCrossTypeBlockingDependencyType
 }
 
 func (r bdRelation) relationType() string {
