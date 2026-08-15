@@ -1,3 +1,5 @@
+//go:build integration
+
 package git_test
 
 import (
@@ -9,7 +11,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/task"
 )
 
-func TestMergeTaskBranchIntoDefaultCreatesMergeWithoutPush(t *testing.T) {
+func TestIntegrationMergeTaskBranchIntoDefaultCreatesMergeWithoutPush(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	runGit(t, repoPath, "checkout", "-b", "orpheus/op-1")
 	commitFile(t, repoPath, "reviewed.txt", "reviewed\n", "Reviewed work")
@@ -39,7 +41,7 @@ func TestMergeTaskBranchIntoDefaultCreatesMergeWithoutPush(t *testing.T) {
 	}
 }
 
-func TestMergeTaskBranchIntoDefaultRejectsLocallyAheadDefaultContainingTask(t *testing.T) {
+func TestIntegrationMergeTaskBranchIntoDefaultRejectsLocallyAheadDefaultContainingTask(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	runGit(t, repoPath, "checkout", "-b", "orpheus/op-1")
 	commitFile(t, repoPath, "reviewed.txt", "reviewed\n", "Reviewed work")
@@ -54,7 +56,7 @@ func TestMergeTaskBranchIntoDefaultRejectsLocallyAheadDefaultContainingTask(t *t
 	}
 }
 
-func TestMergeTaskBranchIntoDefaultRejectsUnrelatedCommitAfterMerge(t *testing.T) {
+func TestIntegrationMergeTaskBranchIntoDefaultRejectsUnrelatedCommitAfterMerge(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	runGit(t, repoPath, "checkout", "-b", "orpheus/op-1")
 	commitFile(t, repoPath, "reviewed.txt", "reviewed\n", "Reviewed work")
@@ -78,7 +80,7 @@ func TestMergeTaskBranchIntoDefaultRejectsUnrelatedCommitAfterMerge(t *testing.T
 	}
 }
 
-func TestValidateRecordedDirectMergeRecoversMergeAlreadyOnOrigin(t *testing.T) {
+func TestIntegrationValidateRecordedDirectMergeRecoversMergeAlreadyOnOrigin(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	runGit(t, repoPath, "checkout", "-b", "orpheus/op-1")
 	commitFile(t, repoPath, "reviewed.txt", "reviewed\n", "Reviewed work")
@@ -103,7 +105,7 @@ func TestValidateRecordedDirectMergeRecoversMergeAlreadyOnOrigin(t *testing.T) {
 	}
 }
 
-func TestValidateRecordedDirectMergeRejectsResetLocalDefault(t *testing.T) {
+func TestIntegrationValidateRecordedDirectMergeRejectsResetLocalDefault(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	runGit(t, repoPath, "checkout", "-b", "orpheus/op-1")
 	commitFile(t, repoPath, "reviewed.txt", "reviewed\n", "Reviewed work")
@@ -124,7 +126,7 @@ func TestValidateRecordedDirectMergeRejectsResetLocalDefault(t *testing.T) {
 	}
 }
 
-func TestMergeTaskBranchIntoNamedDestinationAndVerifyRemoteBranch(t *testing.T) {
+func TestIntegrationMergeTaskBranchIntoNamedDestinationAndVerifyRemoteBranch(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	runGit(t, repoPath, "checkout", "-b", "release/next")
 	runGit(t, repoPath, "push", "origin", "release/next")
@@ -158,7 +160,7 @@ func TestMergeTaskBranchIntoNamedDestinationAndVerifyRemoteBranch(t *testing.T) 
 	}
 }
 
-func TestDirectMergeRejectsPseudoRevisionDestinationsBeforeMutation(t *testing.T) {
+func TestIntegrationDirectMergeRejectsPseudoRevisionDestinationsBeforeMutation(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	runGit(t, repoPath, "checkout", "-b", "orpheus/op-1")
 	commitFile(t, repoPath, "reviewed.txt", "reviewed\n", "Reviewed work")
@@ -191,7 +193,7 @@ func TestDirectMergeRejectsPseudoRevisionDestinationsBeforeMutation(t *testing.T
 	}
 }
 
-func TestDirectMergeRejectsRemoteTaskBranchAsDestinationBeforeMutation(t *testing.T) {
+func TestIntegrationDirectMergeRejectsRemoteTaskBranchAsDestinationBeforeMutation(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	runGit(t, repoPath, "checkout", "-b", "orpheus/op-1")
 	commitFile(t, repoPath, "reviewed.txt", "reviewed\n", "Reviewed work")

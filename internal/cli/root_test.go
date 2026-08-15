@@ -1,3 +1,5 @@
+//go:build integration
+
 //nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
 package cli
 
@@ -7,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestNewRootCommandHelp(t *testing.T) {
+func TestIntegrationNewRootCommandHelp(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 
@@ -18,7 +20,7 @@ func TestNewRootCommandHelp(t *testing.T) {
 	is.Contains(output, "--verbose")
 }
 
-func TestRootCommandDoesNotEmitDebugByDefault(t *testing.T) {
+func TestIntegrationRootCommandDoesNotEmitDebugByDefault(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 
@@ -28,7 +30,7 @@ func TestRootCommandDoesNotEmitDebugByDefault(t *testing.T) {
 	is.NotContains(stderr, "level=DEBUG")
 }
 
-func TestRootCommandVerboseEmitsDebugToStderr(t *testing.T) {
+func TestIntegrationRootCommandVerboseEmitsDebugToStderr(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 
@@ -94,7 +96,7 @@ var reviewWorkflowHelpCases = []reviewWorkflowHelpCase{
 	},
 }
 
-func TestReviewWorkflowCommandHelpExplainsResponsibilitiesAndNextCommands(t *testing.T) {
+func TestIntegrationReviewWorkflowCommandHelpExplainsResponsibilitiesAndNextCommands(t *testing.T) {
 	t.Parallel()
 	for _, test := range reviewWorkflowHelpCases {
 		t.Run(test.name, func(t *testing.T) {

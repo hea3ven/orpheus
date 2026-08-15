@@ -1,3 +1,5 @@
+//go:build integration
+
 //nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
 package cli
 
@@ -89,7 +91,7 @@ func registerLocalManagedTaskTestRepos(t *testing.T) localManagedTaskRepos {
 	return localManagedTaskRepos{localDir: localDir, managedDir: managedDir}
 }
 
-func TestTaskListListsAllActiveItemsWithStatusProjectionPresentation(t *testing.T) {
+func TestIntegrationTaskListListsAllActiveItemsWithStatusProjectionPresentation(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -137,7 +139,7 @@ func assertTaskListBDLog(t *testing.T, logPath string, repos localManagedTaskRep
 	is.Equal(4, strings.Count(log, "--json --readonly --sandbox list --all --limit 0"))
 }
 
-func TestTaskReadyIsNotACommand(t *testing.T) {
+func TestIntegrationTaskReadyIsNotACommand(t *testing.T) {
 	t.Parallel()
 
 	stdout, stderr, err := executeCommandWithError(t, []string{"task", "ready"})
@@ -154,7 +156,7 @@ func TestTaskReadyIsNotACommand(t *testing.T) {
 	assert.Contains(t, completionStderr, "Completion ended with directive")
 }
 
-func TestTaskListRetiresDetailsAndLongFlags(t *testing.T) {
+func TestIntegrationTaskListRetiresDetailsAndLongFlags(t *testing.T) {
 	t.Parallel()
 
 	for _, flag := range []string{"--details", "--long"} {
@@ -163,7 +165,7 @@ func TestTaskListRetiresDetailsAndLongFlags(t *testing.T) {
 	}
 }
 
-func TestTaskListReportsPartialRepoFailures(t *testing.T) {
+func TestIntegrationTaskListReportsPartialRepoFailures(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -205,7 +207,7 @@ func TestTaskListReportsPartialRepoFailures(t *testing.T) {
 	is.Contains(stderr, "bd exploded")
 }
 
-func TestTaskShowResolvesPrefixQueriesOnlyResolvedRepoAndRendersDetails(t *testing.T) {
+func TestIntegrationTaskShowResolvesPrefixQueriesOnlyResolvedRepoAndRendersDetails(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -268,7 +270,7 @@ func TestTaskShowResolvesPrefixQueriesOnlyResolvedRepoAndRendersDetails(t *testi
 	assertTaskShowBDLog(t, logPath, repos)
 }
 
-func TestTaskShowEpicRendersSortedDirectChildrenFromResolvedRepo(t *testing.T) {
+func TestIntegrationTaskShowEpicRendersSortedDirectChildrenFromResolvedRepo(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -309,7 +311,7 @@ func TestTaskShowEpicRendersSortedDirectChildrenFromResolvedRepo(t *testing.T) {
 	is.NotContains(log, repos.managedDir)
 }
 
-func TestTaskShowEpicRendersEmptyChildrenState(t *testing.T) {
+func TestIntegrationTaskShowEpicRendersEmptyChildrenState(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -325,7 +327,7 @@ func TestTaskShowEpicRendersEmptyChildrenState(t *testing.T) {
 	is.Contains(stdout, "Children:\n  - No direct children.\n")
 }
 
-func TestTaskShowEpicReportsChildQueryFailureWithRepositoryAndParent(t *testing.T) {
+func TestIntegrationTaskShowEpicReportsChildQueryFailureWithRepositoryAndParent(t *testing.T) {
 	t.Parallel()
 
 	must := require.New(t)
@@ -354,7 +356,7 @@ func assertTaskShowBDLog(t *testing.T, logPath string, repos localManagedTaskRep
 	is.NotContains(log, "--json --readonly --sandbox ready")
 }
 
-func TestTaskShowReportsMalformedAndUnknownPrefixes(t *testing.T) {
+func TestIntegrationTaskShowReportsMalformedAndUnknownPrefixes(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -379,7 +381,7 @@ func TestTaskShowReportsMalformedAndUnknownPrefixes(t *testing.T) {
 }
 
 //nolint:funlen // The stats fixture is clearer with implementation, review, and totals assertions together.
-func TestTaskStatsRendersImplementationExecutionUsage(t *testing.T) {
+func TestIntegrationTaskStatsRendersImplementationExecutionUsage(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -497,7 +499,7 @@ func TestTaskStatsRendersImplementationExecutionUsage(t *testing.T) {
 }
 
 //nolint:funlen // The stats fixture documents the persisted conflict-repair telemetry.
-func TestTaskStatsRendersSyncConflictResolutionExecutionUsage(t *testing.T) {
+func TestIntegrationTaskStatsRendersSyncConflictResolutionExecutionUsage(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -575,7 +577,7 @@ func TestTaskStatsRendersSyncConflictResolutionExecutionUsage(t *testing.T) {
 	)
 }
 
-func TestTaskStatsKeepsTokenUsageWhenCostPricingIsUnknown(t *testing.T) {
+func TestIntegrationTaskStatsKeepsTokenUsageWhenCostPricingIsUnknown(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -636,7 +638,7 @@ func TestTaskStatsKeepsTokenUsageWhenCostPricingIsUnknown(t *testing.T) {
 }
 
 //nolint:funlen // The Pi stats fixture keeps persisted usage, cost, and rendered totals together.
-func TestTaskStatsUsesPiReportedEstimatedCost(t *testing.T) {
+func TestIntegrationTaskStatsUsesPiReportedEstimatedCost(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -711,7 +713,7 @@ func TestTaskStatsUsesPiReportedEstimatedCost(t *testing.T) {
 	}
 }
 
-func TestTaskStatsCountsMissingPiUsageCostAsUnknown(t *testing.T) {
+func TestIntegrationTaskStatsCountsMissingPiUsageCostAsUnknown(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -768,7 +770,7 @@ func TestTaskStatsCountsMissingPiUsageCostAsUnknown(t *testing.T) {
 }
 
 //nolint:funlen // The aggregate fixture setup documents the period metrics under test.
-func TestTaskStatsAggregateGroupsResolvedTasksByDay(t *testing.T) {
+func TestIntegrationTaskStatsAggregateGroupsResolvedTasksByDay(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -848,7 +850,7 @@ func TestTaskStatsAggregateGroupsResolvedTasksByDay(t *testing.T) {
 	is.Regexp(`(?m)^2026-07-02\s+2\s+2\s+3K\s+1\.5K\s+2/2\s+\$0\.000773\s+\$0\.000773\s+1/2$`, stdout)
 }
 
-func TestTaskStatsAggregateGroupsResolvedTasksByMonth(t *testing.T) {
+func TestIntegrationTaskStatsAggregateGroupsResolvedTasksByMonth(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -872,7 +874,7 @@ func TestTaskStatsAggregateGroupsResolvedTasksByMonth(t *testing.T) {
 	assertTaskStatsAggregateTableLinesWithinWidth(t, stdout, 100)
 }
 
-func TestTaskStatsAggregateRepoFilterSkipsUnselectedRepoFailures(t *testing.T) {
+func TestIntegrationTaskStatsAggregateRepoFilterSkipsUnselectedRepoFailures(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -908,7 +910,7 @@ func TestTaskStatsAggregateRepoFilterSkipsUnselectedRepoFailures(t *testing.T) {
 	is.NotContains(string(bdLog), betaDir)
 }
 
-func TestTaskStatsAggregateReceivesOnlyTaskSourceItems(t *testing.T) {
+func TestIntegrationTaskStatsAggregateReceivesOnlyTaskSourceItems(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -941,7 +943,7 @@ func TestTaskStatsAggregateReceivesOnlyTaskSourceItems(t *testing.T) {
 	is.Regexp(`(?m)^2026-07-02\s+1\s+-\s+-\s+0/1$`, stdout)
 }
 
-func TestTaskStatsDirectEpicStatsRemainAvailable(t *testing.T) {
+func TestIntegrationTaskStatsDirectEpicStatsRemainAvailable(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -1042,7 +1044,7 @@ func recordTaskStatsAggregateRun(
 	must.NoError(err)
 }
 
-func TestTaskShowRendersClosedItemsAndHistory(t *testing.T) {
+func TestIntegrationTaskShowRendersClosedItemsAndHistory(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -1084,7 +1086,7 @@ func TestTaskShowRendersClosedItemsAndHistory(t *testing.T) {
 }
 
 //nolint:funlen // The history sequence is the behavior under test.
-func TestTaskShowRendersChronologicalHistoryForClosedEpic(t *testing.T) {
+func TestIntegrationTaskShowRendersChronologicalHistoryForClosedEpic(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -1170,7 +1172,7 @@ func TestTaskShowRendersChronologicalHistoryForClosedEpic(t *testing.T) {
 	is.NotContains(stdout, "succeeded")
 }
 
-func TestTaskShowProjectsReviewAttemptMilestonesIntoHistory(t *testing.T) {
+func TestIntegrationTaskShowProjectsReviewAttemptMilestonesIntoHistory(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -1225,7 +1227,7 @@ func TestTaskShowProjectsReviewAttemptMilestonesIntoHistory(t *testing.T) {
 	}
 }
 
-func TestTaskShowProjectsReviewFollowUpCreationIntoHistory(t *testing.T) {
+func TestIntegrationTaskShowProjectsReviewFollowUpCreationIntoHistory(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -1308,7 +1310,7 @@ func recordTaskShowReviewAttempt(
 	*now = now.Add(time.Minute)
 }
 
-func TestTaskShowFailsWhenLocalTaskStateCannotBeLoaded(t *testing.T) {
+func TestIntegrationTaskShowFailsWhenLocalTaskStateCannotBeLoaded(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -1345,7 +1347,7 @@ func TestTaskShowFailsWhenLocalTaskStateCannotBeLoaded(t *testing.T) {
 	is.ErrorContains(err, `repo_id is "wrong", expected "alpha"`)
 }
 
-func TestTaskShowRejectsUnsupportedItemsAtTaskSourceBoundary(t *testing.T) {
+func TestIntegrationTaskShowRejectsUnsupportedItemsAtTaskSourceBoundary(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -1377,7 +1379,7 @@ func TestTaskShowRejectsUnsupportedItemsAtTaskSourceBoundary(t *testing.T) {
 	is.ErrorContains(err, "issue type \"bug\" is not task or epic")
 }
 
-func TestTaskDirPrintsWorktreeDirectory(t *testing.T) {
+func TestIntegrationTaskDirPrintsWorktreeDirectory(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -1439,7 +1441,7 @@ func TestTaskDirPrintsWorktreeDirectory(t *testing.T) {
 	is.NotContains(log, "--json --readonly --sandbox list")
 }
 
-func TestTaskDirPrintsRepoRootForMainTask(t *testing.T) {
+func TestIntegrationTaskDirPrintsRepoRootForMainTask(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -1479,7 +1481,7 @@ func TestTaskDirPrintsRepoRootForMainTask(t *testing.T) {
 	is.Equal(filepath.Clean(repoDir)+"\n", stdout)
 }
 
-func TestTaskDirReportsMalformedAndUnknownPrefixes(t *testing.T) {
+func TestIntegrationTaskDirReportsMalformedAndUnknownPrefixes(t *testing.T) {
 	t.Parallel()
 
 	is := assert.New(t)
@@ -1503,7 +1505,7 @@ func TestTaskDirReportsMalformedAndUnknownPrefixes(t *testing.T) {
 	is.ErrorContains(err, "register the repo")
 }
 
-func TestTaskDirReportsMissingAndInconsistentMetadata(t *testing.T) {
+func TestIntegrationTaskDirReportsMissingAndInconsistentMetadata(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range taskDirMetadataErrorCases() {
@@ -1579,7 +1581,7 @@ func taskDirMetadataErrorCases() []taskDirMetadataErrorCase {
 	}
 }
 
-func TestTaskRunRejectsClosedTaskBeforeLocalWorkflowRouting(t *testing.T) {
+func TestIntegrationTaskRunRejectsClosedTaskBeforeLocalWorkflowRouting(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -1629,7 +1631,7 @@ func TestTaskRunRejectsClosedTaskBeforeLocalWorkflowRouting(t *testing.T) {
 }
 
 //nolint:funlen // Workflow test is clearer when setup, command, and state assertions stay together.
-func TestTaskRunExecutesImplementerDefaultAttachedFromDeterministicWorktree(t *testing.T) {
+func TestIntegrationTaskRunExecutesImplementerDefaultAttachedFromDeterministicWorktree(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -1758,7 +1760,7 @@ func TestTaskRunExecutesImplementerDefaultAttachedFromDeterministicWorktree(t *t
 }
 
 //nolint:funlen // The generated Codex launch contract is best asserted end to end.
-func TestTaskRunStructuredCodexProfileBuildsAttachedCommand(t *testing.T) {
+func TestIntegrationTaskRunStructuredCodexProfileBuildsAttachedCommand(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -1834,7 +1836,7 @@ func TestTaskRunStructuredCodexProfileBuildsAttachedCommand(t *testing.T) {
 }
 
 //nolint:funlen // The Pi usage fixture is clearer as one end-to-end run scenario.
-func TestTaskRunStructuredPiProfileCapturesUsage(t *testing.T) {
+func TestIntegrationTaskRunStructuredPiProfileCapturesUsage(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -1901,7 +1903,7 @@ func TestTaskRunStructuredPiProfileCapturesUsage(t *testing.T) {
 	is.Equal("matched_pi_session", execution.UsageCapture.Reason)
 }
 
-func TestTaskRunRejectsMissingRequiredExternalReferenceBeforeSetup(t *testing.T) {
+func TestIntegrationTaskRunRejectsMissingRequiredExternalReferenceBeforeSetup(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -1949,7 +1951,7 @@ func TestTaskRunRejectsMissingRequiredExternalReferenceBeforeSetup(t *testing.T)
 	is.ErrorIs(statErr, os.ErrNotExist)
 }
 
-func TestTaskRunRejectsChildWhenImmediateParentEpicIsNotInProgress(t *testing.T) {
+func TestIntegrationTaskRunRejectsChildWhenImmediateParentEpicIsNotInProgress(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -1994,7 +1996,7 @@ func TestTaskRunRejectsChildWhenImmediateParentEpicIsNotInProgress(t *testing.T)
 }
 
 //nolint:funlen // Workflow test is clearer when setup, command, and state assertions stay together.
-func TestTaskRunMainExecutesAgentFromRegisteredRepoRoot(t *testing.T) {
+func TestIntegrationTaskRunMainExecutesAgentFromRegisteredRepoRoot(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -2078,7 +2080,7 @@ func TestTaskRunMainExecutesAgentFromRegisteredRepoRoot(t *testing.T) {
 }
 
 //nolint:funlen // Workflow test is clearer when setup, command, and state assertions stay together.
-func TestTaskRunRepoRootExecutesAgentFromRegisteredRepoRootOnTaskBranch(t *testing.T) {
+func TestIntegrationTaskRunRepoRootExecutesAgentFromRegisteredRepoRootOnTaskBranch(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -2166,7 +2168,7 @@ func TestTaskRunRepoRootExecutesAgentFromRegisteredRepoRootOnTaskBranch(t *testi
 	is.Equal(taskstate.EventRunFinished, state.Events[2].Type)
 }
 
-func TestTaskRunPlainRetryRequiresMainForRepoRootMetadata(t *testing.T) {
+func TestIntegrationTaskRunPlainRetryRequiresMainForRepoRootMetadata(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -2210,7 +2212,7 @@ func TestTaskRunPlainRetryRequiresMainForRepoRootMetadata(t *testing.T) {
 	is.ErrorIs(statErr, os.ErrNotExist)
 }
 
-func TestTaskRunRepoRootFailsDirtyRepoRootBeforeLaunch(t *testing.T) {
+func TestIntegrationTaskRunRepoRootFailsDirtyRepoRootBeforeLaunch(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -2250,7 +2252,7 @@ func TestTaskRunRepoRootFailsDirtyRepoRootBeforeLaunch(t *testing.T) {
 	is.ErrorIs(stateErr, os.ErrNotExist)
 }
 
-func TestTaskRunMainAllowsOwnedInProgressRepoRootTask(t *testing.T) {
+func TestIntegrationTaskRunMainAllowsOwnedInProgressRepoRootTask(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -2301,7 +2303,7 @@ func TestTaskRunMainAllowsOwnedInProgressRepoRootTask(t *testing.T) {
 	is.Equal(repoPath, state.GitFacts.Worktree)
 }
 
-func TestTaskRunMainBlocksOtherRepoRootOwnerButWorktreeRunStillWorks(t *testing.T) {
+func TestIntegrationTaskRunMainBlocksOtherRepoRootOwnerButWorktreeRunStillWorks(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -2353,7 +2355,7 @@ func TestTaskRunMainBlocksOtherRepoRootOwnerButWorktreeRunStillWorks(t *testing.
 	is.Equal(2, strings.Count(string(bdLog), "--json --readonly --sandbox list --all --limit 0"))
 }
 
-func TestTaskRunMainFailsDirtyRepoRootBeforeLaunch(t *testing.T) {
+func TestIntegrationTaskRunMainFailsDirtyRepoRootBeforeLaunch(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -2393,7 +2395,7 @@ func TestTaskRunMainFailsDirtyRepoRootBeforeLaunch(t *testing.T) {
 }
 
 //nolint:funlen // The dirty follow-up dispatch path is clearer as one linear CLI workflow.
-func TestTaskRunReviewFollowUpAllowsDirtyMainTarget(t *testing.T) {
+func TestIntegrationTaskRunReviewFollowUpAllowsDirtyMainTarget(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -2469,7 +2471,7 @@ func TestTaskRunReviewFollowUpAllowsDirtyMainTarget(t *testing.T) {
 	is.Equal([]int{0}, state.Runs[1].ReviewFollowUp.FindingIndexes)
 }
 
-func TestTaskReviewShowDisplaysCrossAttemptFindingHistory(t *testing.T) {
+func TestIntegrationTaskReviewShowDisplaysCrossAttemptFindingHistory(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	paths, repoPath := setupTaskReviewShowRepo(t, "op-main")
@@ -2495,7 +2497,7 @@ func TestTaskReviewShowDisplaysCrossAttemptFindingHistory(t *testing.T) {
 	}
 }
 
-func TestTaskReviewShowGuidesRetryAfterFailedFollowUp(t *testing.T) {
+func TestIntegrationTaskReviewShowGuidesRetryAfterFailedFollowUp(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -2531,7 +2533,7 @@ func TestTaskReviewShowGuidesRetryAfterFailedFollowUp(t *testing.T) {
 	is.Contains(stdout, "Next step: retry `orpheus task run op-retry`")
 }
 
-func TestTaskReviewShowGuidesWhenTaskHasNoReviewAttempts(t *testing.T) {
+func TestIntegrationTaskReviewShowGuidesWhenTaskHasNoReviewAttempts(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	setupTaskReviewShowRepo(t, "op-empty")
@@ -2544,7 +2546,7 @@ func TestTaskReviewShowGuidesWhenTaskHasNoReviewAttempts(t *testing.T) {
 	is.Contains(stdout, "Next step: run `orpheus task run op-empty` after task work is ready.")
 }
 
-func TestTaskReviewShowRendersManuallyAddressedFinding(t *testing.T) {
+func TestIntegrationTaskReviewShowRendersManuallyAddressedFinding(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -2573,7 +2575,7 @@ func TestTaskReviewShowRendersManuallyAddressedFinding(t *testing.T) {
 	is.Contains(stdout, "Disposition: addressed manually: Verified in the worktree.")
 }
 
-func TestTaskReviewShowGuidesInterruptedAutomatedBlockerDecision(t *testing.T) {
+func TestIntegrationTaskReviewShowGuidesInterruptedAutomatedBlockerDecision(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -2603,7 +2605,7 @@ func TestTaskReviewShowGuidesInterruptedAutomatedBlockerDecision(t *testing.T) {
 	is.Contains(stdout, "Next step: automated blocker decisions were interrupted; run `orpheus task run op-interrupted` to start a fresh review.")
 }
 
-func TestTaskReviewShowDisplaysClosedTaskReviewState(t *testing.T) {
+func TestIntegrationTaskReviewShowDisplaysClosedTaskReviewState(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	paths, repoPath := setupTaskReviewShowRepoWithStatus(t, "op-main", "closed")
@@ -2784,7 +2786,7 @@ func mixedReviewFindings() []taskstate.ReviewFinding {
 	}
 }
 
-func TestTaskRunWorktreeModeDoesNotCareAboutDirtyRepoRoot(t *testing.T) {
+func TestIntegrationTaskRunWorktreeModeDoesNotCareAboutDirtyRepoRoot(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -2819,7 +2821,7 @@ func TestTaskRunWorktreeModeDoesNotCareAboutDirtyRepoRoot(t *testing.T) {
 	is.NoError(statErr)
 }
 
-func TestTaskRunAllowsOwnedInProgressTaskWithMatchingMetadata(t *testing.T) {
+func TestIntegrationTaskRunAllowsOwnedInProgressTaskWithMatchingMetadata(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -2872,7 +2874,7 @@ func TestTaskRunAllowsOwnedInProgressTaskWithMatchingMetadata(t *testing.T) {
 }
 
 //nolint:funlen // Failure workflow needs the fake command script and assertions in one scenario.
-func TestTaskRunDoesNotLaunchOrRecordAttemptWhenMarkInProgressFails(t *testing.T) {
+func TestIntegrationTaskRunDoesNotLaunchOrRecordAttemptWhenMarkInProgressFails(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -2960,7 +2962,7 @@ esac
 	is.NotContains(string(bdLog), "--json --sandbox update")
 }
 
-func TestTaskRunFailsFastWhenGlobalMutationLockHeldBeforeSetup(t *testing.T) {
+func TestIntegrationTaskRunFailsFastWhenGlobalMutationLockHeldBeforeSetup(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -2998,7 +3000,7 @@ func TestTaskRunFailsFastWhenGlobalMutationLockHeldBeforeSetup(t *testing.T) {
 	is.ErrorIs(statErr, os.ErrNotExist)
 }
 
-func TestTaskRunReleasesGlobalMutationLockWhileAgentRunsAndReacquiresForFinish(t *testing.T) {
+func TestIntegrationTaskRunReleasesGlobalMutationLockWhileAgentRunsAndReacquiresForFinish(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -3056,7 +3058,7 @@ printf 'agent stdout\n'
 	is.Equal(taskstate.EventRunStarted, state.Events[1].Type)
 }
 
-func TestTaskRunAgentFlagSelectsNamedProfile(t *testing.T) {
+func TestIntegrationTaskRunAgentFlagSelectsNamedProfile(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -3103,7 +3105,7 @@ func TestTaskRunAgentFlagSelectsNamedProfile(t *testing.T) {
 	is.NotContains(log, "- Title: Use selected agent")
 }
 
-func TestTaskRunRecordsFailedAttemptWhenAgentExitsNonZero(t *testing.T) {
+func TestIntegrationTaskRunRecordsFailedAttemptWhenAgentExitsNonZero(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -3146,7 +3148,7 @@ func TestTaskRunRecordsFailedAttemptWhenAgentExitsNonZero(t *testing.T) {
 	is.Equal(taskstate.RunStatusFailed, state.Events[2].Status)
 }
 
-func TestTaskRunRecordsStartFailureWhenAgentProcessDoesNotStart(t *testing.T) {
+func TestIntegrationTaskRunRecordsStartFailureWhenAgentProcessDoesNotStart(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -3190,7 +3192,7 @@ func TestTaskRunRecordsStartFailureWhenAgentProcessDoesNotStart(t *testing.T) {
 	is.Contains(state.Events[2].Error, "definitely-missing-orpheus-agent")
 }
 
-func TestTaskRunHeaderWriteFailureRecordsStartFailure(t *testing.T) {
+func TestIntegrationTaskRunHeaderWriteFailureRecordsStartFailure(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -3238,7 +3240,7 @@ func TestTaskRunHeaderWriteFailureRecordsStartFailure(t *testing.T) {
 }
 
 //nolint:funlen // The fixture prepares a persisted blocker before exercising the follow-up start failure.
-func TestTaskReviewFollowUpHeaderWriteFailureRecordsStartFailure(t *testing.T) {
+func TestIntegrationTaskReviewFollowUpHeaderWriteFailureRecordsStartFailure(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -3313,7 +3315,7 @@ func TestTaskReviewFollowUpHeaderWriteFailureRecordsStartFailure(t *testing.T) {
 	is.Equal([]int{0}, indexes)
 }
 
-func TestTaskRunRefusesLatestRunningAttempt(t *testing.T) {
+func TestIntegrationTaskRunRefusesLatestRunningAttempt(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -3348,7 +3350,7 @@ func TestTaskRunRefusesLatestRunningAttempt(t *testing.T) {
 	is.ErrorIs(statErr, os.ErrNotExist)
 }
 
-func TestTaskRunReportsUnknownAgentProfileBeforeLaunching(t *testing.T) {
+func TestIntegrationTaskRunReportsUnknownAgentProfileBeforeLaunching(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -3383,7 +3385,7 @@ func TestTaskRunReportsUnknownAgentProfileBeforeLaunching(t *testing.T) {
 	is.ErrorIs(logErr, os.ErrNotExist)
 }
 
-func TestTaskDoneCommitsPushesClosesAndRecordsFinalization(t *testing.T) {
+func TestIntegrationTaskDoneCommitsPushesClosesAndRecordsFinalization(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -3438,7 +3440,7 @@ func TestTaskDoneCommitsPushesClosesAndRecordsFinalization(t *testing.T) {
 	must.NotNil(facts.ClosedAt)
 }
 
-func TestTaskDoneRequiresPassedReview(t *testing.T) {
+func TestIntegrationTaskDoneRequiresPassedReview(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -3475,7 +3477,7 @@ func TestTaskDoneRequiresPassedReview(t *testing.T) {
 	is.Contains(runGit(t, repoPath, "status", "--short"), "reviewed.txt")
 }
 
-func TestTaskReviewApproveFinalizesAndRecordsPassedAttempt(t *testing.T) {
+func TestIntegrationTaskReviewApproveFinalizesAndRecordsPassedAttempt(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -3528,7 +3530,7 @@ func TestTaskReviewApproveFinalizesAndRecordsPassedAttempt(t *testing.T) {
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestTaskReviewManualContextShowsOriginalAndLatestFollowUpCompletion(t *testing.T) {
+func TestIntegrationTaskReviewManualContextShowsOriginalAndLatestFollowUpCompletion(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -3573,7 +3575,7 @@ func TestTaskReviewManualContextShowsOriginalAndLatestFollowUpCompletion(t *test
 	is.Equal("Original implementation\n\nImplemented the main task.", message)
 }
 
-func TestTaskReviewRejectsStaleMetadataMirror(t *testing.T) {
+func TestIntegrationTaskReviewRejectsStaleMetadataMirror(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -3612,7 +3614,7 @@ func TestTaskReviewRejectsStaleMetadataMirror(t *testing.T) {
 	is.False(ok)
 }
 
-func TestTaskReviewRejectsStagedCandidateChanges(t *testing.T) {
+func TestIntegrationTaskReviewRejectsStagedCandidateChanges(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -3652,7 +3654,7 @@ func TestTaskReviewRejectsStagedCandidateChanges(t *testing.T) {
 	is.False(ok)
 }
 
-func TestTaskReviewRejectsMissingCandidateChangesWithoutFinalizationCommit(t *testing.T) {
+func TestIntegrationTaskReviewRejectsMissingCandidateChangesWithoutFinalizationCommit(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -3690,7 +3692,7 @@ func TestTaskReviewRejectsMissingCandidateChangesWithoutFinalizationCommit(t *te
 }
 
 //nolint:funlen // The setup and restoration assertions are clearer in one workflow test.
-func TestTaskReviewRestoresCandidateChangesMutatedDuringManualStep(t *testing.T) {
+func TestIntegrationTaskReviewRestoresCandidateChangesMutatedDuringManualStep(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -3778,7 +3780,7 @@ func (r *mutatingReviewInput) Read(p []byte) (int, error) {
 }
 
 //nolint:funlen // Exercises a complete manual finding lifecycle without splitting its input sequence.
-func TestTaskReviewBlockingFindingBlocksWithoutFinalizing(t *testing.T) {
+func TestIntegrationTaskReviewBlockingFindingBlocksWithoutFinalizing(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -3842,7 +3844,7 @@ func TestTaskReviewBlockingFindingBlocksWithoutFinalizing(t *testing.T) {
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestTaskReviewAdvisoryAndSeparateTaskFindingsDoNotBlockApproval(t *testing.T) {
+func TestIntegrationTaskReviewAdvisoryAndSeparateTaskFindingsDoNotBlockApproval(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -3901,7 +3903,7 @@ func TestTaskReviewAdvisoryAndSeparateTaskFindingsDoNotBlockApproval(t *testing.
 	is.Nil(latest.Findings[1].CreatedTaskAt)
 }
 
-func TestTaskReviewCreatesSelectedSeparateTaskFollowUp(t *testing.T) {
+func TestIntegrationTaskReviewCreatesSelectedSeparateTaskFollowUp(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -3961,7 +3963,7 @@ func TestTaskReviewCreatesSelectedSeparateTaskFollowUp(t *testing.T) {
 }
 
 //nolint:funlen // The task-run proposal selection flow spans implementation, review, and publication.
-func TestTaskRunUsesSeparateTaskProposalSelection(t *testing.T) {
+func TestIntegrationTaskRunUsesSeparateTaskProposalSelection(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -4043,7 +4045,7 @@ printf 'reviewed\n' > reviewed.txt
 	is.Empty(latest.Findings[0].CreatedTaskID)
 }
 
-func TestTaskReviewCanAbortWhenSeparateTaskCreationFails(t *testing.T) {
+func TestIntegrationTaskReviewCanAbortWhenSeparateTaskCreationFails(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -4102,7 +4104,7 @@ func TestTaskReviewCanAbortWhenSeparateTaskCreationFails(t *testing.T) {
 	is.Nil(latest.Findings[0].CreatedTaskAt)
 }
 
-func TestTaskReviewAbortDoesNotFinalize(t *testing.T) {
+func TestIntegrationTaskReviewAbortDoesNotFinalize(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -4141,7 +4143,7 @@ func TestTaskReviewAbortDoesNotFinalize(t *testing.T) {
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestTaskReviewPassingCheckContinuesToManualStep(t *testing.T) {
+func TestIntegrationTaskReviewPassingCheckContinuesToManualStep(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -4204,7 +4206,7 @@ exit 0
 	is.Empty(latest.Findings)
 }
 
-func TestTaskReviewConfirmedManualCommandRunsAndRecordsStep(t *testing.T) {
+func TestIntegrationTaskReviewConfirmedManualCommandRunsAndRecordsStep(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -4267,7 +4269,7 @@ printf 'manual command ran %s\n' "$ORPHEUS_REVIEW_STEP"
 	is.Equal(0, *latest.Steps[0].ExitCode)
 }
 
-func TestTaskReviewImportsHunkBlockingNoteAndBlocksApproval(t *testing.T) {
+func TestIntegrationTaskReviewImportsHunkBlockingNoteAndBlocksApproval(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -4325,7 +4327,7 @@ func TestTaskReviewImportsHunkBlockingNoteAndBlocksApproval(t *testing.T) {
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestTaskReviewImportsHunkAdvisoryNoteAndAllowsApproval(t *testing.T) {
+func TestIntegrationTaskReviewImportsHunkAdvisoryNoteAndAllowsApproval(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -4375,7 +4377,7 @@ func TestTaskReviewImportsHunkAdvisoryNoteAndAllowsApproval(t *testing.T) {
 }
 
 //nolint:funlen // The workflow spans Hunk import, approval, and Beads follow-up creation.
-func TestTaskReviewImportsHunkSeparateTaskNoteAndCreatesFollowUp(t *testing.T) {
+func TestIntegrationTaskReviewImportsHunkSeparateTaskNoteAndCreatesFollowUp(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -4441,7 +4443,7 @@ func TestTaskReviewImportsHunkSeparateTaskNoteAndCreatesFollowUp(t *testing.T) {
 	is.NotNil(latest.Findings[0].CreatedTaskAt)
 }
 
-func TestTaskReviewHunkManualCommandWithNoCapturedNotesContinuesPrompt(t *testing.T) {
+func TestIntegrationTaskReviewHunkManualCommandWithNoCapturedNotesContinuesPrompt(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -4489,7 +4491,7 @@ func TestTaskReviewHunkManualCommandWithNoCapturedNotesContinuesPrompt(t *testin
 	is.Empty(latest.Findings)
 }
 
-func TestTaskReviewDeclinedManualCommandAbortsWithoutRunningCommand(t *testing.T) {
+func TestIntegrationTaskReviewDeclinedManualCommandAbortsWithoutRunningCommand(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -4550,7 +4552,7 @@ printf 'ran\n' > %s
 }
 
 //nolint:funlen // The EOF confirmation fixture is clearer inline with its assertions.
-func TestTaskReviewManualCommandEOFConfirmationHandlesUnavailableInput(t *testing.T) {
+func TestIntegrationTaskReviewManualCommandEOFConfirmationHandlesUnavailableInput(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name        string
@@ -4632,7 +4634,7 @@ printf 'ran\n' > %s
 	}
 }
 
-func TestTaskReviewNonZeroCheckRecordsBlockingFindingAndStops(t *testing.T) {
+func TestIntegrationTaskReviewNonZeroCheckRecordsBlockingFindingAndStops(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -4696,7 +4698,7 @@ exit 7
 }
 
 //nolint:funlen // Each case needs an end-to-end review fixture to exercise EOF handling.
-func TestTaskReviewCheckBlockerReasonEOFRecordsInterrupted(t *testing.T) {
+func TestIntegrationTaskReviewCheckBlockerReasonEOFRecordsInterrupted(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name  string
@@ -4764,7 +4766,7 @@ func TestTaskReviewCheckBlockerReasonEOFRecordsInterrupted(t *testing.T) {
 	}
 }
 
-func TestTaskReviewCheckBlockerKeepAcceptsEOFAnswer(t *testing.T) {
+func TestIntegrationTaskReviewCheckBlockerKeepAcceptsEOFAnswer(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -4821,7 +4823,7 @@ func TestTaskReviewCheckBlockerKeepAcceptsEOFAnswer(t *testing.T) {
 }
 
 //nolint:funlen // Each case needs an end-to-end review fixture to exercise final EOF handling.
-func TestTaskReviewCheckBlockerReasonAcceptsEOFAnswer(t *testing.T) {
+func TestIntegrationTaskReviewCheckBlockerReasonAcceptsEOFAnswer(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name          string
@@ -4903,7 +4905,7 @@ func TestTaskReviewCheckBlockerReasonAcceptsEOFAnswer(t *testing.T) {
 	}
 }
 
-func TestTaskRunAfterInterruptedAutomatedBlockerDecisionRequiresFreshReview(t *testing.T) {
+func TestIntegrationTaskRunAfterInterruptedAutomatedBlockerDecisionRequiresFreshReview(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -4960,7 +4962,7 @@ func TestTaskRunAfterInterruptedAutomatedBlockerDecisionRequiresFreshReview(t *t
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestTaskRunRecoversHardStoppedAutomatedBlockerDecision(t *testing.T) {
+func TestIntegrationTaskRunRecoversHardStoppedAutomatedBlockerDecision(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -5021,7 +5023,7 @@ func TestTaskRunRecoversHardStoppedAutomatedBlockerDecision(t *testing.T) {
 }
 
 //nolint:funlen // The autonomous loop spans dispatch, review, follow-up, and publication.
-func TestTaskRunAutonomousReviewFollowUpRepairsCheckAndPublishes(t *testing.T) {
+func TestIntegrationTaskRunAutonomousReviewFollowUpRepairsCheckAndPublishes(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -5090,7 +5092,7 @@ exit 7
 }
 
 //nolint:funlen // The end-to-end fixture spans implementation, repair, review, and publication.
-func TestTaskRunAttachedManualBlockerRepairsAndApprovalFinalizes(t *testing.T) {
+func TestIntegrationTaskRunAttachedManualBlockerRepairsAndApprovalFinalizes(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -5169,7 +5171,7 @@ func TestTaskRunAttachedManualBlockerRepairsAndApprovalFinalizes(t *testing.T) {
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestTaskReviewManualBlockerExhaustsBudgetWithoutExtraLaunch(t *testing.T) {
+func TestIntegrationTaskReviewManualBlockerExhaustsBudgetWithoutExtraLaunch(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -5229,7 +5231,7 @@ func TestTaskReviewManualBlockerExhaustsBudgetWithoutExtraLaunch(t *testing.T) {
 	is.Zero(latest.Findings[0].TargetedByRunAttempt)
 }
 
-func TestTaskRunPreservedManualBlockerExhaustsFreshBudget(t *testing.T) {
+func TestIntegrationTaskRunPreservedManualBlockerExhaustsFreshBudget(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -5304,7 +5306,7 @@ func (r *delayedManualInput) Read(p []byte) (int, error) {
 }
 
 //nolint:funlen // The exhaustion workflow needs two complete review/fix attempts.
-func TestTaskRunAutonomousReviewLoopExhaustsPersistentCheckBlockers(t *testing.T) {
+func TestIntegrationTaskRunAutonomousReviewLoopExhaustsPersistentCheckBlockers(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -5371,7 +5373,7 @@ exit 7
 }
 
 //nolint:funlen // The resumed review regression spans two commands and a nested follow-up dispatch.
-func TestTaskReviewResumedAutonomousFollowUpPreservesSelectedImplementer(t *testing.T) {
+func TestIntegrationTaskReviewResumedAutonomousFollowUpPreservesSelectedImplementer(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -5444,7 +5446,7 @@ exit 7
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestTaskReviewCheckBlockerDowngradeContinuesPipeline(t *testing.T) {
+func TestIntegrationTaskReviewCheckBlockerDowngradeContinuesPipeline(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -5501,7 +5503,7 @@ func TestTaskReviewCheckBlockerDowngradeContinuesPipeline(t *testing.T) {
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestTaskReviewCheckBlockerWaiverContinuesPipeline(t *testing.T) {
+func TestIntegrationTaskReviewCheckBlockerWaiverContinuesPipeline(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -5556,7 +5558,7 @@ func TestTaskReviewCheckBlockerWaiverContinuesPipeline(t *testing.T) {
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestTaskReviewCheckStartFailureMarksOperationalFailure(t *testing.T) {
+func TestIntegrationTaskReviewCheckStartFailureMarksOperationalFailure(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -5607,7 +5609,7 @@ func TestTaskReviewCheckStartFailureMarksOperationalFailure(t *testing.T) {
 	is.Empty(latest.Findings)
 }
 
-func TestTaskReviewInvalidReviewAgentConfigDoesNotStartFreshAttempt(t *testing.T) {
+func TestIntegrationTaskReviewInvalidReviewAgentConfigDoesNotStartFreshAttempt(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -5647,7 +5649,7 @@ func TestTaskReviewInvalidReviewAgentConfigDoesNotStartFreshAttempt(t *testing.T
 	is.False(ok, "fresh invalid agent config must not persist a review attempt")
 }
 
-func TestTaskReviewInvalidReviewAgentConfigDoesNotResumeManualAttempt(t *testing.T) {
+func TestIntegrationTaskReviewInvalidReviewAgentConfigDoesNotResumeManualAttempt(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -5707,7 +5709,7 @@ func TestTaskReviewInvalidReviewAgentConfigDoesNotResumeManualAttempt(t *testing
 }
 
 //nolint:funlen // The review-agent CLI fixture is clearer as one end-to-end scenario.
-func TestTaskReviewAgentReviewStepLaunchesReviewerAndPassesWithoutFindings(t *testing.T) {
+func TestIntegrationTaskReviewAgentReviewStepLaunchesReviewerAndPassesWithoutFindings(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -5775,7 +5777,7 @@ func TestTaskReviewAgentReviewStepLaunchesReviewerAndPassesWithoutFindings(t *te
 }
 
 //nolint:funlen // The workflow fixture records the complete agent usage contract.
-func TestTaskReviewAgentReviewStepCapturesCodexUsage(t *testing.T) {
+func TestIntegrationTaskReviewAgentReviewStepCapturesCodexUsage(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -5838,7 +5840,7 @@ func TestTaskReviewAgentReviewStepCapturesCodexUsage(t *testing.T) {
 }
 
 //nolint:funlen // The workflow fixture records the complete agent usage contract.
-func TestTaskReviewAgentReviewStepCapturesPiUsage(t *testing.T) {
+func TestIntegrationTaskReviewAgentReviewStepCapturesPiUsage(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -5900,7 +5902,7 @@ func TestTaskReviewAgentReviewStepCapturesPiUsage(t *testing.T) {
 	is.Equal(1, execution.UsageCapture.CandidateCount)
 }
 
-func TestTaskReviewAgentReviewBlockingFindingStopsPipeline(t *testing.T) {
+func TestIntegrationTaskReviewAgentReviewBlockingFindingStopsPipeline(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -5963,7 +5965,7 @@ func TestTaskReviewAgentReviewBlockingFindingStopsPipeline(t *testing.T) {
 }
 
 //nolint:funlen // The mixed automated-blocker workflow spans review, show, and follow-up targeting.
-func TestTaskReviewAgentReviewMixedAutomatedBlockerDecisions(t *testing.T) {
+func TestIntegrationTaskReviewAgentReviewMixedAutomatedBlockerDecisions(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -6085,7 +6087,7 @@ func TestTaskReviewAgentReviewMixedAutomatedBlockerDecisions(t *testing.T) {
 }
 
 //nolint:funlen // The promotion workflow spans review, inspection, and follow-up dispatch.
-func TestTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
+func TestIntegrationTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -6243,7 +6245,7 @@ func TestTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
 	is.Equal([]int{1}, state.Runs[1].ReviewFollowUp.FindingIndexes)
 }
 
-func TestTaskReviewAgentReviewNonZeroExitMarksOperationalFailure(t *testing.T) {
+func TestIntegrationTaskReviewAgentReviewNonZeroExitMarksOperationalFailure(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -6295,7 +6297,7 @@ func TestTaskReviewAgentReviewNonZeroExitMarksOperationalFailure(t *testing.T) {
 }
 
 //nolint:funlen // The interrupted recovery path spans two review commands and finalization.
-func TestTaskReviewInterruptedAutomatedBlockerRecoveryReusesRecordedPipeline(t *testing.T) {
+func TestIntegrationTaskReviewInterruptedAutomatedBlockerRecoveryReusesRecordedPipeline(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -6368,7 +6370,7 @@ func TestTaskReviewInterruptedAutomatedBlockerRecoveryReusesRecordedPipeline(t *
 	is.Equal("Strict failure accepted.", latest.Findings[0].DowngradeReason)
 }
 
-func TestTaskReviewPipelineOverridePrecedence(t *testing.T) {
+func TestIntegrationTaskReviewPipelineOverridePrecedence(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -6418,7 +6420,7 @@ func TestTaskReviewPipelineOverridePrecedence(t *testing.T) {
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
 }
 
-func TestTaskReviewPipelineAliasResolvesToGlobalPipeline(t *testing.T) {
+func TestIntegrationTaskReviewPipelineAliasResolvesToGlobalPipeline(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -6470,7 +6472,7 @@ func TestTaskReviewPipelineAliasResolvesToGlobalPipeline(t *testing.T) {
 }
 
 //nolint:funlen // The interrupted recovery path verifies persisted mixed findings.
-func TestTaskReviewManualInputLossReplaysRecordedFindings(t *testing.T) {
+func TestIntegrationTaskReviewManualInputLossReplaysRecordedFindings(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -6542,7 +6544,7 @@ func TestTaskReviewManualInputLossReplaysRecordedFindings(t *testing.T) {
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestTaskReviewResumesManualWaitingAttempt(t *testing.T) {
+func TestIntegrationTaskReviewResumesManualWaitingAttempt(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -6604,7 +6606,7 @@ func TestTaskReviewResumesManualWaitingAttempt(t *testing.T) {
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
 }
 
-func TestTaskReviewRejectsConflictingPipelineForManualWaitingAttempt(t *testing.T) {
+func TestIntegrationTaskReviewRejectsConflictingPipelineForManualWaitingAttempt(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -6655,7 +6657,7 @@ func TestTaskReviewRejectsConflictingPipelineForManualWaitingAttempt(t *testing.
 	is.Equal("inspect", latest.Step)
 }
 
-func TestTaskReviewUnknownPipelineIncludesRepoAliases(t *testing.T) {
+func TestIntegrationTaskReviewUnknownPipelineIncludesRepoAliases(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -6690,7 +6692,7 @@ func TestTaskReviewUnknownPipelineIncludesRepoAliases(t *testing.T) {
 	is.ErrorContains(err, "configured repo aliases: quick=standard")
 }
 
-func TestTaskDoneRefusesRunningCompletionWithoutInteractiveConfirmation(t *testing.T) {
+func TestIntegrationTaskDoneRefusesRunningCompletionWithoutInteractiveConfirmation(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -6741,7 +6743,7 @@ func TestTaskDoneRefusesRunningCompletionWithoutInteractiveConfirmation(t *testi
 }
 
 //nolint:funlen // PR publication scenario is clearer as one linear workflow.
-func TestTaskDonePublishesPRReadyTaskBranch(t *testing.T) {
+func TestIntegrationTaskDonePublishesPRReadyTaskBranch(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -6810,7 +6812,7 @@ func TestTaskDonePublishesPRReadyTaskBranch(t *testing.T) {
 	is.Equal(commit, originCommit)
 }
 
-func TestTaskDoneRecoversExistingBranchPR(t *testing.T) {
+func TestIntegrationTaskDoneRecoversExistingBranchPR(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -6871,7 +6873,7 @@ func TestTaskDoneRecoversExistingBranchPR(t *testing.T) {
 	is.Equal(commit, originCommit)
 }
 
-func TestTaskSyncPollsExistingPRURLWithoutPushOrMutation(t *testing.T) {
+func TestIntegrationTaskSyncPollsExistingPRURLWithoutPushOrMutation(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -6933,7 +6935,7 @@ func TestTaskSyncPollsExistingPRURLWithoutPushOrMutation(t *testing.T) {
 }
 
 //nolint:funlen // The conflict-repair sync path needs Git, PR, agent, and state assertions together.
-func TestTaskSyncRecordsConflictResolutionUsageTelemetry(t *testing.T) {
+func TestIntegrationTaskSyncRecordsConflictResolutionUsageTelemetry(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -7062,7 +7064,7 @@ func TestTaskSyncRecordsConflictResolutionUsageTelemetry(t *testing.T) {
 }
 
 //nolint:funlen // Sync scenario is clearer when provider, backend, and audit checks stay together.
-func TestTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR(t *testing.T) {
+func TestIntegrationTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -7138,7 +7140,7 @@ func TestTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR(t *testing.T) {
 }
 
 //nolint:funlen // Table-driven sync error scenarios share setup that is best kept adjacent.
-func TestTaskSyncExistingPRErrorsDoNotMutateBackendOrAudit(t *testing.T) {
+func TestIntegrationTaskSyncExistingPRErrorsDoNotMutateBackendOrAudit(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name         string
@@ -7271,7 +7273,7 @@ func TestTaskSyncExistingPRErrorsDoNotMutateBackendOrAudit(t *testing.T) {
 	}
 }
 
-func TestTaskSyncSkipsClosedTaskWithoutPRPolling(t *testing.T) {
+func TestIntegrationTaskSyncSkipsClosedTaskWithoutPRPolling(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -7334,7 +7336,7 @@ func TestTaskSyncSkipsClosedTaskWithoutPRPolling(t *testing.T) {
 	}
 }
 
-func TestTaskSyncSkipsTaskWithoutPRURLAtRepoRoot(t *testing.T) {
+func TestIntegrationTaskSyncSkipsTaskWithoutPRURLAtRepoRoot(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -7373,7 +7375,7 @@ func TestTaskSyncSkipsTaskWithoutPRURLAtRepoRoot(t *testing.T) {
 	is.Contains(stdout, "No backend changes were made")
 }
 
-func TestTaskSyncSkipsMainSoloLocalReadyTaskWithoutPRURL(t *testing.T) {
+func TestIntegrationTaskSyncSkipsMainSoloLocalReadyTaskWithoutPRURL(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -7406,7 +7408,7 @@ func TestTaskSyncSkipsMainSoloLocalReadyTaskWithoutPRURL(t *testing.T) {
 	is.Contains(stdout, "No backend changes were made")
 }
 
-func TestTaskDoneFeatureBranchPushFailureIsNonZero(t *testing.T) {
+func TestIntegrationTaskDoneFeatureBranchPushFailureIsNonZero(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -7450,7 +7452,7 @@ func TestTaskDoneFeatureBranchPushFailureIsNonZero(t *testing.T) {
 }
 
 //nolint:funlen // Sync-all boundary scenario is clearer as a single workflow.
-func TestTaskSyncAllPollsPRBoundaryTasks(t *testing.T) {
+func TestIntegrationTaskSyncAllPollsPRBoundaryTasks(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -7543,7 +7545,7 @@ func TestTaskSyncAllPollsPRBoundaryTasks(t *testing.T) {
 	is.Contains(string(ghLog), "ARG_2<<END\nview\nEND")
 }
 
-func TestTaskSyncAllReturnsNonZeroAfterCandidateError(t *testing.T) {
+func TestIntegrationTaskSyncAllReturnsNonZeroAfterCandidateError(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -7590,7 +7592,7 @@ func TestTaskSyncAllReturnsNonZeroAfterCandidateError(t *testing.T) {
 }
 
 //nolint:funlen // Cross-repo sync-all scenario is clearer as one integrated workflow.
-func TestTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAfterFailures(t *testing.T) {
+func TestIntegrationTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAfterFailures(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -7790,7 +7792,7 @@ func TestTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAfterFailures(t *test
 	is.Equal("merged", event.ObservedPRState)
 }
 
-func TestTaskDoneInfersSingleMainReadyTaskFromRepoRootAndUsesOverrides(t *testing.T) {
+func TestIntegrationTaskDoneInfersSingleMainReadyTaskFromRepoRootAndUsesOverrides(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -7833,7 +7835,7 @@ func TestTaskDoneInfersSingleMainReadyTaskFromRepoRootAndUsesOverrides(t *testin
 	is.Equal("Human reviewed summary\n\nHuman adjusted details.", message)
 }
 
-func TestTaskDoneInfersRepoRootFeatureBranchTask(t *testing.T) {
+func TestIntegrationTaskDoneInfersRepoRootFeatureBranchTask(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -7887,7 +7889,7 @@ func TestTaskDoneInfersRepoRootFeatureBranchTask(t *testing.T) {
 	)
 }
 
-func TestTaskDoneInfersWorktreeTask(t *testing.T) {
+func TestIntegrationTaskDoneInfersWorktreeTask(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -7944,7 +7946,7 @@ func TestTaskDoneInfersWorktreeTask(t *testing.T) {
 	)
 }
 
-func TestTaskDoneRejectsRemovedDetailsOverride(t *testing.T) {
+func TestIntegrationTaskDoneRejectsRemovedDetailsOverride(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -7963,7 +7965,7 @@ func TestTaskDoneRejectsRemovedDetailsOverride(t *testing.T) {
 	is.Contains(err.Error(), "unknown flag: --details")
 }
 
-func TestTaskDoneWithoutTaskIDRequiresExactRegisteredRepoRoot(t *testing.T) {
+func TestIntegrationTaskDoneWithoutTaskIDRequiresExactRegisteredRepoRoot(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -7992,7 +7994,7 @@ func TestTaskDoneWithoutTaskIDRequiresExactRegisteredRepoRoot(t *testing.T) {
 	is.ErrorContains(err, "pass <task-id>")
 }
 
-func TestTaskDoneRefusesNoChangesWithoutRecordedFinalizationCommit(t *testing.T) {
+func TestIntegrationTaskDoneRefusesNoChangesWithoutRecordedFinalizationCommit(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -8026,7 +8028,7 @@ func TestTaskDoneRefusesNoChangesWithoutRecordedFinalizationCommit(t *testing.T)
 	is.ErrorContains(err, "has no recorded finalization commit")
 }
 
-func TestTaskDoneRetriesPushAndCloseFromRecordedFinalizationCommit(t *testing.T) {
+func TestIntegrationTaskDoneRetriesPushAndCloseFromRecordedFinalizationCommit(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -8073,7 +8075,7 @@ func TestTaskDoneRetriesPushAndCloseFromRecordedFinalizationCommit(t *testing.T)
 	must.NotNil(facts.ClosedAt)
 }
 
-func TestTaskStartActivatesEligibleEpicAndRejectsOrdinaryTask(t *testing.T) {
+func TestIntegrationTaskStartActivatesEligibleEpicAndRejectsOrdinaryTask(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	newTestState(t)
@@ -8105,7 +8107,7 @@ func TestTaskStartActivatesEligibleEpicAndRejectsOrdinaryTask(t *testing.T) {
 	is.ErrorContains(err, "use `orpheus task run op-task` for the normal task workflow")
 }
 
-func TestTaskStartHonorsParentDependencyAndIdempotency(t *testing.T) {
+func TestIntegrationTaskStartHonorsParentDependencyAndIdempotency(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct {
 		name    string
@@ -8161,7 +8163,7 @@ func TestTaskStartHonorsParentDependencyAndIdempotency(t *testing.T) {
 }
 
 //nolint:funlen // The cases cover the CLI closure contract end to end.
-func TestTaskCloseRequiresVerifiedClosedChildrenAndIsIdempotent(t *testing.T) {
+func TestIntegrationTaskCloseRequiresVerifiedClosedChildrenAndIsIdempotent(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct {
 		name    string
@@ -8235,7 +8237,7 @@ func TestTaskCloseRequiresVerifiedClosedChildrenAndIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestTaskEpicLifecycleAdapterFailuresAreSourceNeutral(t *testing.T) {
+func TestIntegrationTaskEpicLifecycleAdapterFailuresAreSourceNeutral(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct {
 		name      string

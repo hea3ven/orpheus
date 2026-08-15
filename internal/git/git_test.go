@@ -1,3 +1,5 @@
+//go:build integration
+
 package git_test
 
 import (
@@ -16,7 +18,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/pathutil"
 )
 
-func TestInspectDetectsRootRemoteAndOriginHEAD(t *testing.T) {
+func TestIntegrationInspectDetectsRootRemoteAndOriginHEAD(t *testing.T) {
 	repoPath := newGitRepo(t)
 	runGit(t, repoPath, "remote", "add", "upstream", "https://example.com/upstream.git")
 	runGit(t, repoPath, "remote", "add", "origin", "git@example.com:org/repo.git")
@@ -51,7 +53,7 @@ func TestInspectDetectsRootRemoteAndOriginHEAD(t *testing.T) {
 	}
 }
 
-func TestInspectMissingRemoteKeepsDefaultBranchCandidate(t *testing.T) {
+func TestIntegrationInspectMissingRemoteKeepsDefaultBranchCandidate(t *testing.T) {
 	repoPath := newGitRepo(t)
 
 	got, err := orpheusgit.Inspect(repoPath)
@@ -70,7 +72,7 @@ func TestInspectMissingRemoteKeepsDefaultBranchCandidate(t *testing.T) {
 	}
 }
 
-func TestInspectFallsBackToCurrentBranchWhenOriginHEADIsMissing(t *testing.T) {
+func TestIntegrationInspectFallsBackToCurrentBranchWhenOriginHEADIsMissing(t *testing.T) {
 	repoPath := newGitRepo(t)
 	runGit(t, repoPath, "remote", "add", "origin", "https://example.com/repo.git")
 	runGit(t, repoPath, "checkout", "-b", "feature")
@@ -88,7 +90,7 @@ func TestInspectFallsBackToCurrentBranchWhenOriginHEADIsMissing(t *testing.T) {
 	}
 }
 
-func TestInspectRejectsNonGitPath(t *testing.T) {
+func TestIntegrationInspectRejectsNonGitPath(t *testing.T) {
 	_, err := orpheusgit.Inspect(t.TempDir())
 	if err == nil {
 		t.Fatal("inspect non-git path succeeded, want error")
@@ -98,7 +100,7 @@ func TestInspectRejectsNonGitPath(t *testing.T) {
 	}
 }
 
-func TestInspectDiagnosticsMarkMissingOriginHEADAsExpectedAbsence(t *testing.T) {
+func TestIntegrationInspectDiagnosticsMarkMissingOriginHEADAsExpectedAbsence(t *testing.T) {
 	repoPath := newGitRepo(t)
 	runGit(t, repoPath, "remote", "add", "origin", "https://example.com/repo.git")
 	runGit(t, repoPath, "checkout", "-b", "feature")
@@ -120,7 +122,7 @@ func TestInspectDiagnosticsMarkMissingOriginHEADAsExpectedAbsence(t *testing.T) 
 	}
 }
 
-func TestInspectDiagnosticsMarkDetachedHEADAsExpectedAbsence(t *testing.T) {
+func TestIntegrationInspectDiagnosticsMarkDetachedHEADAsExpectedAbsence(t *testing.T) {
 	repoPath := newGitRepo(t)
 	runGit(t, repoPath, "remote", "add", "origin", "https://example.com/repo.git")
 	runGit(t, repoPath, "update-ref", "refs/remotes/origin/main", "HEAD")
@@ -148,7 +150,7 @@ func TestInspectDiagnosticsMarkDetachedHEADAsExpectedAbsence(t *testing.T) {
 	rejectGitDiagnostic(t, logs.String(), "current_branch", "failure")
 }
 
-func TestInspectDiagnosticsMarkFatalOriginHEADErrorAsFailure(t *testing.T) {
+func TestIntegrationInspectDiagnosticsMarkFatalOriginHEADErrorAsFailure(t *testing.T) {
 	repoPath := newGitRepo(t)
 	runGit(t, repoPath, "remote", "add", "origin", "https://example.com/repo.git")
 	originDir := filepath.Join(repoPath, ".git", "refs", "remotes", "origin")

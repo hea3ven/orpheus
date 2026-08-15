@@ -5,7 +5,6 @@ package cli
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -18,20 +17,6 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/registry"
 )
-
-func TestMain(m *testing.M) {
-	if isOrpheusCLIHelperProcess() {
-		os.Exit(m.Run())
-	}
-	if err := setupCLIHelperFixture(); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "setup CLI helper fixture: %v\n", err)
-		os.Exit(2)
-	}
-	code := m.Run()
-	cleanupLocalBeadsFixture()
-	cleanupCLIHelperFixture()
-	os.Exit(code)
-}
 
 func TestIntegrationRepoAddDetectsLocalBeadsEndToEnd(t *testing.T) {
 	requireBD(t)

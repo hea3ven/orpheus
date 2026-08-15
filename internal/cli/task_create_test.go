@@ -1,3 +1,5 @@
+//go:build integration
+
 //nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
 package cli
 
@@ -12,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTaskCreateReadsPlanningFilesAndRendersCreatedTypeAndID(t *testing.T) {
+func TestIntegrationTaskCreateReadsPlanningFilesAndRendersCreatedTypeAndID(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	root := newTestState(t)
@@ -47,7 +49,7 @@ func TestTaskCreateReadsPlanningFilesAndRendersCreatedTypeAndID(t *testing.T) {
 	}
 }
 
-func TestTaskCreateRequiresExternalReferenceForGatedRepository(t *testing.T) {
+func TestIntegrationTaskCreateRequiresExternalReferenceForGatedRepository(t *testing.T) {
 	is := assert.New(t)
 	root := newTestState(t)
 	paths := currentTestPaths(t)
@@ -74,7 +76,7 @@ func TestTaskCreateRequiresExternalReferenceForGatedRepository(t *testing.T) {
 	is.Contains(readFileString(t, logPath), "--json --sandbox create Implement work")
 }
 
-func TestTaskEditRequiresExternalReferenceForGatedRepository(t *testing.T) {
+func TestIntegrationTaskEditRequiresExternalReferenceForGatedRepository(t *testing.T) {
 	is := assert.New(t)
 	root := newTestState(t)
 	paths := currentTestPaths(t)
@@ -97,7 +99,7 @@ func TestTaskEditRequiresExternalReferenceForGatedRepository(t *testing.T) {
 	is.NotContains(readFileString(t, logPath), "update")
 }
 
-func TestTaskCreateFailsWithoutRepositoryGuidance(t *testing.T) {
+func TestIntegrationTaskCreateFailsWithoutRepositoryGuidance(t *testing.T) {
 	t.Parallel()
 	newTestState(t)
 	_, _, err := executeCommandWithError(t, []string{

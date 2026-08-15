@@ -1,3 +1,5 @@
+//go:build integration
+
 //nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
 package cli
 
@@ -53,7 +55,7 @@ func setupCLIHelperFixture() error {
 	}
 	helperPath := filepath.Join(root, "orpheus")
 	script := fmt.Sprintf(`#!/bin/sh
-GO_WANT_ORPHEUS_CLI_HELPER=1 exec %s -test.run=TestOrpheusCLIHelperProcess -- "$@"
+GO_WANT_ORPHEUS_CLI_HELPER=1 exec %s -test.run=TestIntegrationOrpheusCLIHelperProcess -- "$@"
 `, shellQuote(testBinary))
 	if err := os.WriteFile(helperPath, []byte(script), 0o755); err != nil {
 		_ = os.RemoveAll(root)
@@ -479,7 +481,7 @@ func containsArgument(args []string, want string) bool {
 	return false
 }
 
-func TestOrpheusCLIHelperIsSharedAndImmutable(t *testing.T) {
+func TestIntegrationOrpheusCLIHelperIsSharedAndImmutable(t *testing.T) {
 	firstPath := withOrpheusCLIHelper(t)
 	before, err := os.ReadFile(firstPath)
 	require.NoError(t, err)
@@ -495,7 +497,7 @@ func TestOrpheusCLIHelperIsSharedAndImmutable(t *testing.T) {
 	require.Equal(t, before, after)
 }
 
-func TestSeededLocalOriginRepositoriesAreIndependent(t *testing.T) {
+func TestIntegrationSeededLocalOriginRepositoriesAreIndependent(t *testing.T) {
 	root := newTestState(t)
 	firstRepo := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "first"))
 	secondRepo := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "second"))

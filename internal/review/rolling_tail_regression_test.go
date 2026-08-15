@@ -1,3 +1,5 @@
+//go:build integration
+
 package review_test
 
 import (
@@ -14,7 +16,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
-func TestRunPipelineInteractivePassingAgentReviewClearsTabbedAndWideRollingTail(t *testing.T) {
+func TestIntegrationRunPipelineInteractivePassingAgentReviewClearsTabbedAndWideRollingTail(t *testing.T) {
 	tests := []struct {
 		name      string
 		line      string
@@ -52,7 +54,7 @@ func TestRunPipelineInteractivePassingAgentReviewClearsTabbedAndWideRollingTail(
 	}
 }
 
-func TestRunPipelineInteractiveAgentReviewSanitizesRollingTailOutput(t *testing.T) {
+func TestIntegrationRunPipelineInteractiveAgentReviewSanitizesRollingTailOutput(t *testing.T) {
 	result := runAgentReviewPipelineWithRollingOutput(t, 40, "safe\x1b[2J\ttext\x07")
 
 	if result.err != nil {
@@ -69,7 +71,7 @@ func TestRunPipelineInteractiveAgentReviewSanitizesRollingTailOutput(t *testing.
 	}
 }
 
-func TestRunPipelineInteractivePassingAgentReviewClearsRollingTailAfterResize(t *testing.T) {
+func TestIntegrationRunPipelineInteractivePassingAgentReviewClearsRollingTailAfterResize(t *testing.T) {
 	harness := newAgentReviewPipelineHarness(t)
 	var stdout bytes.Buffer
 	terminal := newCellVisualTerminal(21)

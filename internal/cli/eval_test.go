@@ -1,3 +1,5 @@
+//go:build integration
+
 //nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
 package cli
 
@@ -7,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestEvalReviewContextSkipsNormalInvocationState(t *testing.T) {
+func TestIntegrationEvalReviewContextSkipsNormalInvocationState(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "relative")
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 

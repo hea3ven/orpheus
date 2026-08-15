@@ -1,3 +1,5 @@
+//go:build integration
+
 package review_test
 
 import (
@@ -26,7 +28,7 @@ func (w *failingReviewerHeaderWriter) Write(p []byte) (int, error) {
 	return w.output.Write(p)
 }
 
-func TestRunPipelinePairedReviewerAdmitsAlternateFindingAfterPrimary(t *testing.T) {
+func TestIntegrationRunPipelinePairedReviewerAdmitsAlternateFindingAfterPrimary(t *testing.T) {
 	t.Setenv("ORPHEUS_ALTERNATE_REVIEWER_PROFILE", "alternate")
 	h := newAgentReviewPipelineHarness(t)
 	calls := []string{}
@@ -70,7 +72,7 @@ func TestRunPipelinePairedReviewerAdmitsAlternateFindingAfterPrimary(t *testing.
 }
 
 //nolint:funlen // The end-to-end restart regression needs both executions and state assertions together.
-func TestRunPipelineRestartedPairedReviewDiscardsPriorExecution(t *testing.T) {
+func TestIntegrationRunPipelineRestartedPairedReviewDiscardsPriorExecution(t *testing.T) {
 	t.Setenv("ORPHEUS_ALTERNATE_REVIEWER_PROFILE", "alternate")
 	h := newAgentReviewPipelineHarness(t)
 	primaryRuns := 0
@@ -144,7 +146,7 @@ func TestRunPipelineRestartedPairedReviewDiscardsPriorExecution(t *testing.T) {
 	}
 }
 
-func TestRunPipelinePairedReviewerKeepsDuplicateAndExcludedFindingsNonAuthoritative(t *testing.T) {
+func TestIntegrationRunPipelinePairedReviewerKeepsDuplicateAndExcludedFindingsNonAuthoritative(t *testing.T) {
 	t.Setenv("ORPHEUS_ALTERNATE_REVIEWER_PROFILE", "alternate")
 	h := newAgentReviewPipelineHarness(t)
 	launcher := fakeReviewLauncherFunc(func(_ context.Context, command agentexec.Command, _ agentexec.LaunchOptions) error {
@@ -186,7 +188,7 @@ func TestRunPipelinePairedReviewerKeepsDuplicateAndExcludedFindingsNonAuthoritat
 	}
 }
 
-func TestRunPipelinePairedReviewerLabelsAndIsolatesRollingOutput(t *testing.T) {
+func TestIntegrationRunPipelinePairedReviewerLabelsAndIsolatesRollingOutput(t *testing.T) {
 	t.Setenv("ORPHEUS_ALTERNATE_REVIEWER_PROFILE", "alternate")
 	h := newAgentReviewPipelineHarness(t)
 	var stdout bytes.Buffer
@@ -261,7 +263,7 @@ func assertPairedRollingOutput(t *testing.T, terminal *visualTerminal) {
 	}
 }
 
-func TestRunPipelinePairedReviewerKeepsExpandedPrimaryBlockerTailBeforeAlternate(t *testing.T) {
+func TestIntegrationRunPipelinePairedReviewerKeepsExpandedPrimaryBlockerTailBeforeAlternate(t *testing.T) {
 	t.Setenv("ORPHEUS_ALTERNATE_REVIEWER_PROFILE", "alternate")
 	h := newAgentReviewPipelineHarness(t)
 	terminal := newVisualTerminal()
@@ -304,7 +306,7 @@ func TestRunPipelinePairedReviewerKeepsExpandedPrimaryBlockerTailBeforeAlternate
 	}
 }
 
-func TestRunPipelinePairedReviewerLabelsAttachedOutput(t *testing.T) {
+func TestIntegrationRunPipelinePairedReviewerLabelsAttachedOutput(t *testing.T) {
 	t.Setenv("ORPHEUS_ALTERNATE_REVIEWER_PROFILE", "alternate")
 	h := newAgentReviewPipelineHarness(t)
 	config := pairedReviewAgentConfig()
@@ -338,7 +340,7 @@ func TestRunPipelinePairedReviewerLabelsAttachedOutput(t *testing.T) {
 	}
 }
 
-func TestRunPipelinePairedReviewerHeaderWriteFailureDoesNotRecordPrimaryExecution(t *testing.T) {
+func TestIntegrationRunPipelinePairedReviewerHeaderWriteFailureDoesNotRecordPrimaryExecution(t *testing.T) {
 	t.Setenv("ORPHEUS_ALTERNATE_REVIEWER_PROFILE", "alternate")
 	h := newAgentReviewPipelineHarness(t)
 	stderr := new(failingReviewerHeaderWriter)
@@ -375,7 +377,7 @@ func TestRunPipelinePairedReviewerHeaderWriteFailureDoesNotRecordPrimaryExecutio
 	}
 }
 
-func TestRunPipelinePairedReviewerResolutionFailureIsPersisted(t *testing.T) {
+func TestIntegrationRunPipelinePairedReviewerResolutionFailureIsPersisted(t *testing.T) {
 	t.Setenv("ORPHEUS_ALTERNATE_REVIEWER_PROFILE", "missing")
 	h := newAgentReviewPipelineHarness(t)
 	var output bytes.Buffer
@@ -394,7 +396,7 @@ func TestRunPipelinePairedReviewerResolutionFailureIsPersisted(t *testing.T) {
 	}
 }
 
-func TestRunPipelinePairedReviewerAlternateFailureDoesNotFailPrimary(t *testing.T) {
+func TestIntegrationRunPipelinePairedReviewerAlternateFailureDoesNotFailPrimary(t *testing.T) {
 	t.Setenv("ORPHEUS_ALTERNATE_REVIEWER_PROFILE", "alternate")
 	h := newAgentReviewPipelineHarness(t)
 	launcher := fakeReviewLauncherFunc(func(_ context.Context, command agentexec.Command, _ agentexec.LaunchOptions) error {
@@ -417,7 +419,7 @@ func TestRunPipelinePairedReviewerAlternateFailureDoesNotFailPrimary(t *testing.
 	}
 }
 
-func TestRunPipelinePairedReviewerInterruptedInputBlocksWithoutAdmission(t *testing.T) {
+func TestIntegrationRunPipelinePairedReviewerInterruptedInputBlocksWithoutAdmission(t *testing.T) {
 	t.Setenv("ORPHEUS_ALTERNATE_REVIEWER_PROFILE", "alternate")
 	h := newAgentReviewPipelineHarness(t)
 	launcher := fakeReviewLauncherFunc(func(_ context.Context, command agentexec.Command, _ agentexec.LaunchOptions) error {
@@ -440,7 +442,7 @@ func TestRunPipelinePairedReviewerInterruptedInputBlocksWithoutAdmission(t *test
 	}
 }
 
-func TestRunPipelinePairedReviewerPrimaryFailureSkipsAlternate(t *testing.T) {
+func TestIntegrationRunPipelinePairedReviewerPrimaryFailureSkipsAlternate(t *testing.T) {
 	t.Setenv("ORPHEUS_ALTERNATE_REVIEWER_PROFILE", "alternate")
 	h := newAgentReviewPipelineHarness(t)
 	calls := 0
@@ -476,7 +478,7 @@ func pairedReviewAgentConfig() agent.Config {
 	}}
 }
 
-func TestRunPipelineWithoutAlternatePreservesLegacyReviewerEnvironment(t *testing.T) {
+func TestIntegrationRunPipelineWithoutAlternatePreservesLegacyReviewerEnvironment(t *testing.T) {
 	t.Setenv("ORPHEUS_ALTERNATE_REVIEWER_PROFILE", "")
 	h := newAgentReviewPipelineHarness(t)
 	launcher := fakeReviewLauncherFunc(func(_ context.Context, _ agentexec.Command, opts agentexec.LaunchOptions) error {

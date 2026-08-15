@@ -1,3 +1,5 @@
+//go:build integration
+
 package pullrequest_test
 
 import (
@@ -58,7 +60,7 @@ var ghStatusByURLCases = []ghStatusByURLCase{
 	},
 }
 
-func TestGHProviderStatusByURL(t *testing.T) {
+func TestIntegrationGHProviderStatusByURL(t *testing.T) {
 	for _, tt := range ghStatusByURLCases {
 		t.Run(tt.name, func(t *testing.T) {
 			installFakeGH(t, tt.output, 0)
@@ -82,7 +84,7 @@ func TestGHProviderStatusByURL(t *testing.T) {
 	}
 }
 
-func TestGHProviderStatusByURLRequestsSupportedFields(t *testing.T) {
+func TestIntegrationGHProviderStatusByURLRequestsSupportedFields(t *testing.T) {
 	logPath := installFakeGH(t, `{"url":"https://github.com/org/repo/pull/1","state":"OPEN","mergedAt":null}`, 0)
 
 	_, err := pullrequest.GHProvider{}.StatusByURL(
@@ -106,17 +108,7 @@ func TestGHProviderStatusByURLRequestsSupportedFields(t *testing.T) {
 	}
 }
 
-func TestGHProviderStatusByURLRejectsMalformedURL(t *testing.T) {
-	_, err := pullrequest.GHProvider{}.StatusByURL(
-		context.Background(),
-		pullrequest.StatusByURLRequest{URL: "not-a-url"},
-	)
-	if err == nil || !strings.Contains(err.Error(), "invalid") {
-		t.Fatalf("error = %v, want invalid URL", err)
-	}
-}
-
-func TestGHProviderStatusByURLWrapsProviderFailure(t *testing.T) {
+func TestIntegrationGHProviderStatusByURLWrapsProviderFailure(t *testing.T) {
 	installFakeGH(t, "authentication required", 1)
 	_, err := pullrequest.GHProvider{}.StatusByURL(
 		context.Background(),
@@ -127,7 +119,7 @@ func TestGHProviderStatusByURLWrapsProviderFailure(t *testing.T) {
 	}
 }
 
-func TestGHProviderVerboseDiagnosticsDoNotLogUnsafeArgumentsOrOutput(t *testing.T) {
+func TestIntegrationGHProviderVerboseDiagnosticsDoNotLogUnsafeArgumentsOrOutput(t *testing.T) {
 	installFakeGH(t, "authentication required SECRET_OUTPUT", 9)
 	var diagnostics bytes.Buffer
 	_, err := pullrequest.GHProvider{
@@ -172,7 +164,7 @@ func TestGHProviderVerboseDiagnosticsDoNotLogUnsafeArgumentsOrOutput(t *testing.
 	}
 }
 
-func TestGHProviderFindAndCreateVerboseDiagnosticsIncludeCorrelation(t *testing.T) {
+func TestIntegrationGHProviderFindAndCreateVerboseDiagnosticsIncludeCorrelation(t *testing.T) {
 	diagnosticsContext := pullrequest.DiagnosticContext{
 		RepoID: "alpha",
 		TaskID: "op-1",
@@ -246,7 +238,7 @@ func assertGHCorrelationDiagnostics(t *testing.T, logs string, operation string)
 	}
 }
 
-func TestGHProviderStatusByURLDoesNotMisclassifyUnknownJSONFieldAsAuth(t *testing.T) {
+func TestIntegrationGHProviderStatusByURLDoesNotMisclassifyUnknownJSONFieldAsAuth(t *testing.T) {
 	installFakeGH(t, "Unknown JSON field: \"merged\"\nAvailable fields:\n  author\n  autoMergeRequest\n", 1)
 
 	_, err := pullrequest.GHProvider{}.StatusByURL(

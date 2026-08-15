@@ -1,3 +1,5 @@
+//go:build integration
+
 //nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
 package cli
 
@@ -22,7 +24,7 @@ type fakeBDCommandResponse struct {
 	exitCode int
 }
 
-func TestStatusGroupsLocalTaskSnapshots(t *testing.T) {
+func TestIntegrationStatusGroupsLocalTaskSnapshots(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -130,7 +132,7 @@ func assertFullStatusGroupOutput(t *testing.T, fullStdout string) {
 	is.Less(strings.Index(header, "TITLE"), strings.Index(header, "DETAIL"))
 }
 
-func TestStatusFullIgnoresCorruptClosedAndPullRequestStates(t *testing.T) {
+func TestIntegrationStatusFullIgnoresCorruptClosedAndPullRequestStates(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -171,7 +173,7 @@ func TestStatusFullIgnoresCorruptClosedAndPullRequestStates(t *testing.T) {
 	is.Contains(stdout, "ar-pr")
 }
 
-func TestStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t *testing.T) {
+func TestIntegrationStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -226,7 +228,7 @@ func TestStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t *testing.T) {
 	is.Contains(stdout, "local review; run task run")
 }
 
-func TestStatusAndTaskListUseLocalRunHistoryOnOpenTaskAsNeedsAttention(t *testing.T) {
+func TestIntegrationStatusAndTaskListUseLocalRunHistoryOnOpenTaskAsNeedsAttention(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -271,7 +273,7 @@ func TestStatusAndTaskListUseLocalRunHistoryOnOpenTaskAsNeedsAttention(t *testin
 	is.Contains(listStdout, "ar-running")
 }
 
-func TestStatusAndTaskListRenderEquivalentRowsIdentically(t *testing.T) {
+func TestIntegrationStatusAndTaskListRenderEquivalentRowsIdentically(t *testing.T) {
 	t.Parallel()
 
 	setupStatusGroupsLocalTaskSnapshots(t)
@@ -298,7 +300,7 @@ func tableRowForTask(output string, taskID string) string {
 	return ""
 }
 
-func TestStatusRendersEpicChildrenAsIntegratedTreeRows(t *testing.T) {
+func TestIntegrationStatusRendersEpicChildrenAsIntegratedTreeRows(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
@@ -369,7 +371,7 @@ func assertTaskListRendersActiveEpicTree(t *testing.T) {
 	assert.NotContains(t, listStdout, "ar-done")
 }
 
-func TestStatusReportsRepoFailuresInUnknownGroupAndReturnsError(t *testing.T) {
+func TestIntegrationStatusReportsRepoFailuresInUnknownGroupAndReturnsError(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)

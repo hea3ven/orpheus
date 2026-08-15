@@ -1,3 +1,5 @@
+//go:build integration
+
 //nolint:testpackage // Invocation-scoped fixture requires internal composition wiring.
 package cli
 
@@ -13,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAgentContextRendersValidatedWorktreeContext(t *testing.T) {
+func TestIntegrationAgentContextRendersValidatedWorktreeContext(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	repoPath, worktreePath, cwd, bdLogPath := setupAgentContextWorktree(t)
@@ -67,7 +69,7 @@ func TestAgentContextRendersValidatedWorktreeContext(t *testing.T) {
 	is.NotContains(string(bdLog), "--json --readonly --sandbox list")
 }
 
-func TestAgentContextRendersRepoRootFeatureBranchContext(t *testing.T) {
+func TestIntegrationAgentContextRendersRepoRootFeatureBranchContext(t *testing.T) {
 	is := assert.New(t)
 	root := newTestState(t)
 	repoPath := filepath.Join(root, "repos", "alpha")
@@ -97,7 +99,7 @@ func TestAgentContextRendersRepoRootFeatureBranchContext(t *testing.T) {
 	is.NotEmpty(stdout)
 }
 
-func TestAgentContextRendersNonInteractiveProfileGuidance(t *testing.T) {
+func TestIntegrationAgentContextRendersNonInteractiveProfileGuidance(t *testing.T) {
 	is := assert.New(t)
 	setupAgentContextWorktree(t)
 	writeAgentContextProfileConfig(t, "recorder", false)
@@ -119,7 +121,7 @@ func TestAgentContextRendersNonInteractiveProfileGuidance(t *testing.T) {
 	is.NotContains(stdout, "attached interactive implementation session")
 }
 
-func TestAgentContextRendersReviewContext(t *testing.T) {
+func TestIntegrationAgentContextRendersReviewContext(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	repoPath, review := setupActiveAgentReview(t, "op-review")
@@ -154,7 +156,7 @@ func TestAgentContextRendersReviewContext(t *testing.T) {
 	must.NotEmpty(stdout)
 }
 
-func TestAgentContextRendersReviewFollowUpCompletionHistory(t *testing.T) {
+func TestIntegrationAgentContextRendersReviewFollowUpCompletionHistory(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	const taskID = "op-review-followup"
@@ -215,7 +217,7 @@ func TestAgentContextRendersReviewFollowUpCompletionHistory(t *testing.T) {
 }
 
 //nolint:funlen // The three finding types and stale-write assertion share one active review setup.
-func TestAgentReviewAddRecordsFindingTypesAndRejectsStaleAttempt(t *testing.T) {
+func TestIntegrationAgentReviewAddRecordsFindingTypesAndRejectsStaleAttempt(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	_, review := setupActiveAgentReview(t, "op-review")
@@ -294,7 +296,7 @@ func TestAgentReviewAddRecordsFindingTypesAndRejectsStaleAttempt(t *testing.T) {
 	is.Len(latest.Findings, 3)
 }
 
-func TestAgentReviewAddRejectsInvalidFindingWithoutWriting(t *testing.T) {
+func TestIntegrationAgentReviewAddRejectsInvalidFindingWithoutWriting(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	setupActiveAgentReview(t, "op-review")
@@ -454,7 +456,7 @@ func setupActiveAgentReview(t *testing.T, taskID string) (string, taskstate.Revi
 	return repoPath, review
 }
 
-func TestAgentContextFailsBeforeRenderingWhenRunIsStale(t *testing.T) {
+func TestIntegrationAgentContextFailsBeforeRenderingWhenRunIsStale(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	root := newTestState(t)
@@ -509,7 +511,7 @@ func TestAgentContextFailsBeforeRenderingWhenRunIsStale(t *testing.T) {
 	is.NotContains(err.Error(), "# Orpheus Agent Context")
 }
 
-func TestAgentDoneRecordsMainCompletionForLocalReview(t *testing.T) {
+func TestIntegrationAgentDoneRecordsMainCompletionForLocalReview(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	repoPath, bdLogPath := setupAgentDoneMainRun(t, "op-main")
@@ -578,7 +580,7 @@ func agentDoneMainTaskJSON(taskID string, repoPath string) string {
 	]`
 }
 
-func TestAgentDoneRejectsMissingDescription(t *testing.T) {
+func TestIntegrationAgentDoneRejectsMissingDescription(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 
@@ -599,7 +601,7 @@ func TestAgentDoneRejectsMissingDescription(t *testing.T) {
 	is.Contains(err.Error(), `required flag(s) "description" not set`)
 }
 
-func TestAgentDoneRejectsMissingDetailedDescription(t *testing.T) {
+func TestIntegrationAgentDoneRejectsMissingDetailedDescription(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 
@@ -620,7 +622,7 @@ func TestAgentDoneRejectsMissingDetailedDescription(t *testing.T) {
 	is.Contains(err.Error(), "detailed description is required")
 }
 
-func TestAgentDoneRejectsMultipleDetailedDescriptionSources(t *testing.T) {
+func TestIntegrationAgentDoneRejectsMultipleDetailedDescriptionSources(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	root := t.TempDir()
@@ -648,7 +650,7 @@ func TestAgentDoneRejectsMultipleDetailedDescriptionSources(t *testing.T) {
 	is.Contains(err.Error(), "use exactly one of --detailed-description or --detailed-description-file")
 }
 
-func TestAgentDoneRejectsRemovedDetailsFlag(t *testing.T) {
+func TestIntegrationAgentDoneRejectsRemovedDetailsFlag(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 
@@ -673,7 +675,7 @@ func TestAgentDoneRejectsRemovedDetailsFlag(t *testing.T) {
 	is.Contains(err.Error(), "unknown flag: --details")
 }
 
-func TestAgentDoneRejectsMissingTechnicalExplanation(t *testing.T) {
+func TestIntegrationAgentDoneRejectsMissingTechnicalExplanation(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 
@@ -694,7 +696,7 @@ func TestAgentDoneRejectsMissingTechnicalExplanation(t *testing.T) {
 	is.Contains(err.Error(), "technical explanation is required")
 }
 
-func TestAgentDoneRejectsMultipleTechnicalExplanationSources(t *testing.T) {
+func TestIntegrationAgentDoneRejectsMultipleTechnicalExplanationSources(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	root := t.TempDir()
@@ -722,7 +724,7 @@ func TestAgentDoneRejectsMultipleTechnicalExplanationSources(t *testing.T) {
 	is.Contains(err.Error(), "use exactly one of --technical-explanation or --technical-explanation-file")
 }
 
-func TestAgentDoneRepeatedMainCompletionIsNoopWithGuidance(t *testing.T) {
+func TestIntegrationAgentDoneRepeatedMainCompletionIsNoopWithGuidance(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	setupAgentDoneMainRun(t, "op-main")
@@ -799,7 +801,7 @@ func assertRepeatedAgentCompletion(t *testing.T, runStore taskstate.Store, attem
 	is.Equal("Second technical explanation.", last.RequestedTechnicalExplanation)
 }
 
-func TestAgentDoneCommitsWorktreeCompletion(t *testing.T) {
+func TestIntegrationAgentDoneCommitsWorktreeCompletion(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	worktreePath := setupAgentDoneWorktreeRun(t)
@@ -867,7 +869,7 @@ func agentDoneWorktreeTaskJSON(worktreePath string) string {
 	]`
 }
 
-func TestAgentDoneRequiresMainWorkingTreeChangesBeforeWriting(t *testing.T) {
+func TestIntegrationAgentDoneRequiresMainWorkingTreeChangesBeforeWriting(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	setupAgentDoneMainRun(t, "op-main")

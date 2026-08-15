@@ -1,3 +1,5 @@
+//go:build integration
+
 package agentexec_test
 
 import (
@@ -13,11 +15,11 @@ import (
 	"github.com/hea3ven/orpheus/internal/testguard"
 )
 
-func TestAttachedLauncherBlocksSupportedAgentBeforePATHLookup(t *testing.T) {
+func TestIntegrationAttachedLauncherBlocksSupportedAgentBeforePATHLookup(t *testing.T) {
 	assertSupportedAgentBlockedBeforePATHLookup(t)
 }
 
-func TestCustomNamedTestBinaryRetainsSafetyGate(t *testing.T) {
+func TestIntegrationCustomNamedTestBinaryRetainsSafetyGate(t *testing.T) {
 	if os.Getenv("ORPHEUS_TESTGUARD_CUSTOM_BINARY") == "1" {
 		assertSupportedAgentBlockedBeforePATHLookup(t)
 		return
@@ -30,7 +32,7 @@ func TestCustomNamedTestBinaryRetainsSafetyGate(t *testing.T) {
 		t.Fatalf("compile custom-named test binary: %v\n%s", err, output)
 	}
 
-	run := exec.Command(binary, "-test.run", "^TestCustomNamedTestBinaryRetainsSafetyGate$")
+	run := exec.Command(binary, "-test.run", "^TestIntegrationCustomNamedTestBinaryRetainsSafetyGate$")
 	run.Env = append(os.Environ(), "ORPHEUS_TESTGUARD_CUSTOM_BINARY=1")
 	if output, err := run.CombinedOutput(); err != nil {
 		t.Fatalf("run custom-named test binary: %v\n%s", err, output)
@@ -72,7 +74,7 @@ func assertSupportedAgentBlockedBeforePATHLookup(t *testing.T) {
 	}
 }
 
-func TestAttachedLauncherReportsDirectChildPIDBeforeWait(t *testing.T) {
+func TestIntegrationAttachedLauncherReportsDirectChildPIDBeforeWait(t *testing.T) {
 	binDir := t.TempDir()
 	fake := filepath.Join(binDir, "agent")
 	if err := os.WriteFile(fake, []byte("#!/bin/sh\nsleep 0.01\n"), 0o755); err != nil {
@@ -94,7 +96,7 @@ func TestAttachedLauncherReportsDirectChildPIDBeforeWait(t *testing.T) {
 	}
 }
 
-func TestAttachedLauncherRunsExplicitlyRegisteredFake(t *testing.T) {
+func TestIntegrationAttachedLauncherRunsExplicitlyRegisteredFake(t *testing.T) {
 	binDir := t.TempDir()
 	marker := filepath.Join(t.TempDir(), "fake-ran")
 	fake := filepath.Join(binDir, "pi")

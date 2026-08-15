@@ -2,9 +2,11 @@
 
 ## Validation
 
-Run `make check` for complete validation at the end of a change. It runs formatting, the hermetic suite, real-Beads integration tests, and linting.
+Run `make check` for complete validation at the end of a change. It runs formatting, the unit lane once, the integration lane once, and linting.
 
-`make test` is the fast hermetic-only lane for routine work and does not require `bd`, Codex, Pi, credentials, network access, or operator data. `make test-integration` executes only real-Beads scenarios and requires the `bd` executable. Integration test sources use `//go:build integration`, and their test functions begin with `TestIntegration`; Go discovers all conforming scenarios automatically. Live evaluations such as `orpheus eval review-context` are not routine test validation and must never be invoked implicitly.
+`make test-unit` is the explicit package-owned unit lane; `make test` remains its compatibility alias. Unit tests use injected collaborators and require only Go: they do not invoke Git, Beads, gh, Codex, or Pi executables. `make test-integration` executes only cross-package workflows and isolated local Git, Beads, compiled-CLI, or child-process contracts. It requires `git` and `bd` on `PATH` (some schema tests also skip unless `dolt` is available).
+
+Integration test sources use `//go:build integration`, and their top-level test functions begin with `TestIntegration`; untagged non-prefixed tests are units. The convention validator rejects any top-level body that would be omitted from or selected by both lanes. Build constraints, not the `-run` filter alone, assign lane membership. Both lanes are network-free, credential-free, isolated from operator data, and prevent real model agents; using temporary disk alone does not make a test an integration. Live evaluations such as `orpheus eval review-context` are not routine test validation and must never be invoked implicitly. See `docs/testing.md` for the full guide.
 
 ## Task Tracking and Follow-Up
 

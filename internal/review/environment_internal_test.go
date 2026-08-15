@@ -1,3 +1,5 @@
+//go:build integration
+
 package review
 
 import (
@@ -9,7 +11,7 @@ import (
 	"testing"
 )
 
-func TestHunkNotesUseScopedEnvironment(t *testing.T) {
+func TestIntegrationHunkNotesUseScopedEnvironment(t *testing.T) {
 	t.Parallel()
 
 	binDir := t.TempDir()
@@ -26,7 +28,7 @@ func TestHunkNotesUseScopedEnvironment(t *testing.T) {
 	}
 }
 
-func TestReviewCommandUsesScopedEnvironment(t *testing.T) {
+func TestIntegrationReviewCommandUsesScopedEnvironment(t *testing.T) {
 	t.Parallel()
 
 	binDir := t.TempDir()

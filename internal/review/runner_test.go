@@ -1,3 +1,5 @@
+//go:build integration
+
 package review_test
 
 import (
@@ -19,7 +21,7 @@ import (
 )
 
 //nolint:funlen // The redirected-output regression is clearer as one end-to-end runner test.
-func TestRunPipelineRestoresHeaderWrittenToWorktreeStderr(t *testing.T) {
+func TestIntegrationRunPipelineRestoresHeaderWrittenToWorktreeStderr(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepo(t, workdir)
 	candidatePath := filepath.Join(workdir, "candidate.txt")
@@ -97,7 +99,7 @@ func TestRunPipelineRestoresHeaderWrittenToWorktreeStderr(t *testing.T) {
 	}
 }
 
-func TestRunPipelineVerboseDiagnosticsDistinguishCheckExitAndRestoration(t *testing.T) {
+func TestIntegrationRunPipelineVerboseDiagnosticsDistinguishCheckExitAndRestoration(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepoWithCandidateChange(t, workdir)
 
@@ -147,7 +149,7 @@ exit 7
 	}
 }
 
-func TestRunPipelineVerboseDiagnosticsCaptureAndRestoreCandidateMutation(t *testing.T) {
+func TestIntegrationRunPipelineVerboseDiagnosticsCaptureAndRestoreCandidateMutation(t *testing.T) {
 	workdir := t.TempDir()
 	candidatePath := initReviewTestGitRepoWithCandidateChange(t, workdir)
 
@@ -237,7 +239,7 @@ func mustReadFile(t *testing.T, path string) []byte {
 	return data
 }
 
-func TestRunPipelineInteractivePassingCheckClearsRollingTail(t *testing.T) {
+func TestIntegrationRunPipelineInteractivePassingCheckClearsRollingTail(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepo(t, workdir)
 	check := writeReviewTestScript(t, workdir, "passing-check", `#!/bin/sh
@@ -287,7 +289,7 @@ done
 	}
 }
 
-func TestRunPipelineInteractiveBlockedCheckLeavesExpandedRollingTail(t *testing.T) {
+func TestIntegrationRunPipelineInteractiveBlockedCheckLeavesExpandedRollingTail(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepo(t, workdir)
 	check := writeReviewTestScript(t, workdir, "blocked-check", `#!/bin/sh
@@ -336,7 +338,7 @@ exit 7
 	}
 }
 
-func TestRunPipelinePausesBeforeManualStep(t *testing.T) {
+func TestIntegrationRunPipelinePausesBeforeManualStep(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepo(t, workdir)
 	check := writeReviewTestScript(t, workdir, "passing-check", `#!/bin/sh
@@ -389,7 +391,7 @@ printf 'checked\n'
 	}
 }
 
-func TestRunPipelineHunkManualCommandCapturesNotesAfterCommandExit(t *testing.T) {
+func TestIntegrationRunPipelineHunkManualCommandCapturesNotesAfterCommandExit(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepo(t, workdir)
 
@@ -449,7 +451,7 @@ done
 	}
 }
 
-func TestRunPipelineHunkManualCommandContinuesWhenSessionMissing(t *testing.T) {
+func TestIntegrationRunPipelineHunkManualCommandContinuesWhenSessionMissing(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepo(t, workdir)
 
@@ -512,7 +514,7 @@ exit 65
 	}
 }
 
-func TestRunPipelineGenericManualCommandDoesNotPollHunkNotes(t *testing.T) {
+func TestIntegrationRunPipelineGenericManualCommandDoesNotPollHunkNotes(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepo(t, workdir)
 
@@ -564,7 +566,7 @@ printf '{"comments":[{"noteId":"unexpected","source":"user","body":"unexpected"}
 	}
 }
 
-func TestRunPipelineHunkManualCommandFailureRemainsOperationalError(t *testing.T) {
+func TestIntegrationRunPipelineHunkManualCommandFailureRemainsOperationalError(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepo(t, workdir)
 
@@ -615,7 +617,7 @@ exit 42
 	}
 }
 
-func TestRunPipelineInteractiveAgentReviewOutputDependsOnProfileMode(t *testing.T) {
+func TestIntegrationRunPipelineInteractiveAgentReviewOutputDependsOnProfileMode(t *testing.T) {
 	tests := []struct {
 		name           string
 		interactive    bool
@@ -660,7 +662,7 @@ func TestRunPipelineInteractiveAgentReviewOutputDependsOnProfileMode(t *testing.
 	}
 }
 
-func TestRunPipelineInteractiveAgentReviewNonBlockingFindingLeavesLiveTail(t *testing.T) {
+func TestIntegrationRunPipelineInteractiveAgentReviewNonBlockingFindingLeavesLiveTail(t *testing.T) {
 	harness := newAgentReviewPipelineHarness(t)
 	result := harness.run(t, false, fakeReviewLauncherFunc(func(
 		ctx context.Context,
@@ -689,7 +691,7 @@ func TestRunPipelineInteractiveAgentReviewNonBlockingFindingLeavesLiveTail(t *te
 	}
 }
 
-func TestRunPipelineAgentReviewUsesEffectivePromptInCommandAndEnvironment(t *testing.T) {
+func TestIntegrationRunPipelineAgentReviewUsesEffectivePromptInCommandAndEnvironment(t *testing.T) {
 	harness := newAgentReviewPipelineHarness(t)
 	promptAppend := "Review architecture boundaries.\nCall out dependency direction risks."
 	wantPrompt := agent.RenderEffectivePrompt(promptAppend)
@@ -721,7 +723,7 @@ func TestRunPipelineAgentReviewUsesEffectivePromptInCommandAndEnvironment(t *tes
 	assertLatestReviewExecutionModel(t, harness.store, "pi", "openai-codex/gpt-5.4-mini")
 }
 
-func TestRunPipelineVerboseDiagnosticsCorrelateAgentReviewCommand(t *testing.T) {
+func TestIntegrationRunPipelineVerboseDiagnosticsCorrelateAgentReviewCommand(t *testing.T) {
 	tests := []struct {
 		name      string
 		launcher  agentexec.Launcher
@@ -884,7 +886,7 @@ func promptAssertingReviewLauncher(wantPrompt string) fakeReviewLauncherFunc {
 	}
 }
 
-func TestRunPipelinePersistsPrimaryReviewerProcessFacts(t *testing.T) {
+func TestIntegrationRunPipelinePersistsPrimaryReviewerProcessFacts(t *testing.T) {
 	harness := newAgentReviewPipelineHarness(t)
 	var stdout, stderr bytes.Buffer
 	outcome, err := review.RunPipeline(review.PipelineRunOptions{
@@ -933,7 +935,7 @@ func assertLatestReviewExecutionModel(t *testing.T, store taskstate.Store, harne
 	}
 }
 
-func TestRunPipelineInteractivePassingAgentReviewClearsWrappedRollingTail(t *testing.T) {
+func TestIntegrationRunPipelineInteractivePassingAgentReviewClearsWrappedRollingTail(t *testing.T) {
 	harness := newAgentReviewPipelineHarness(t)
 	var stdout bytes.Buffer
 	terminal := newVisualTerminalWithWidth(20)
@@ -1279,7 +1281,7 @@ func (t *visualTerminal) ensureRow() {
 	}
 }
 
-func TestRunPipelineRestartsBlockedCheckInSameAttempt(t *testing.T) {
+func TestIntegrationRunPipelineRestartsBlockedCheckInSameAttempt(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepo(t, workdir)
 	marker := filepath.Join(t.TempDir(), "ready")
@@ -1316,7 +1318,7 @@ if [ ! -f %q ]; then exit 7; fi
 	}
 }
 
-func TestRunPipelineRestartedBlockerRetainsAuthoritativeNumber(t *testing.T) {
+func TestIntegrationRunPipelineRestartedBlockerRetainsAuthoritativeNumber(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepo(t, workdir)
 	check := writeReviewTestScript(t, workdir, "blocked-check", "#!/bin/sh\nexit 7\n")
@@ -1353,7 +1355,7 @@ func TestRunPipelineRestartedBlockerRetainsAuthoritativeNumber(t *testing.T) {
 	}
 }
 
-func TestRunPipelinePausesAndResumesAutomatedBlockerDecision(t *testing.T) {
+func TestIntegrationRunPipelinePausesAndResumesAutomatedBlockerDecision(t *testing.T) {
 	workdir := t.TempDir()
 	initReviewTestGitRepo(t, workdir)
 	check := writeReviewTestScript(t, workdir, "blocked-check", "#!/bin/sh\nexit 7\n")
