@@ -7,5 +7,6 @@
 /orpheus
 .agent/*.md
 
-# Locally retained uncached test timing reports.
+# Locally retained uncached test timing and coverage reports.
 /artifacts/test-timing/
+/artifacts/test-coverage/

@@ -9,8 +9,18 @@ import (
 	"strings"
 )
 
+const coverageRunEnvironment = "ORPHEUS_COVERAGE_RUN"
+
+var watchAncestryContains = processAncestryContains
+
 func runningUnderWatch() bool {
-	return processAncestryContains(os.Getppid(), "watch", 8)
+	// Coverage runs execute tests through process launchers whose ancestry is
+	// unrelated to the application behavior under test. Do not let that
+	// incidental ancestry change the tracked coverage baseline.
+	if os.Getenv(coverageRunEnvironment) != "" {
+		return false
+	}
+	return watchAncestryContains(os.Getppid(), "watch", 8)
 }
 
 func processAncestryContains(pid int, want string, maxDepth int) bool {
