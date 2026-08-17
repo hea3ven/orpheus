@@ -1,6 +1,6 @@
 # Invocation-scoped CLI timing evidence
 
-The final three uncached fast-lane samples were collected with:
+The final three uncached historical mixed-lane samples were collected with:
 
 ```sh
 PERF_SAMPLES=3 make test-perf-baseline-update
@@ -35,7 +35,7 @@ go test ./internal/cli -count=1 -parallel=1
 | Serial control (`-parallel=1`) | 15.769s, 15.783s, 16.053s | 15.783s |
 | Invocation-scoped parallel | 8.367s, 8.377s, 8.491s | 8.377s |
 
-This is a 46.9% reduction for the CLI workflow suite. The fast-lane timing
+This is a 46.9% reduction for the CLI workflow suite. The historical mixed-lane timing
 report records an `internal/cli` median of 11.781s (previously 14.337s) while
 including concurrent packages. The remaining serial CLI tests are documented
 in `internal/cli/TESTING.md`. Five shuffled repetitions and race validation of

@@ -1,5 +1,5 @@
-.PHONY: build test test-unit test-integration test-perf test-perf-integration \
-	test-perf-baseline test-perf-integration-baseline \
+.PHONY: build test test-unit test-integration coverage coverage-baseline coverage-audit \
+	test-perf test-perf-integration test-perf-baseline test-perf-integration-baseline \
 	test-perf-baseline-update test-perf-integration-baseline-update fmt lint check
 
 PERF_SAMPLES ?= 5
@@ -22,6 +22,19 @@ test-integration:
 	@command -v bd >/dev/null 2>&1 || { echo "Beads integration tests require bd; install Beads or ensure bd is on PATH." >&2; exit 1; }
 	go test $(INTEGRATION_TEST_ARGS) ./...
 
+# coverage verifies that the checked-in normalized baseline describes both lanes.
+# Profiles and JSON reports are short-lived artifacts under artifacts/test-coverage/.
+coverage:
+	go run ./cmd/testcoverage
+
+coverage-baseline:
+	go run ./cmd/testcoverage -write-baseline
+
+# This intentionally profiles every integration scenario separately; do not use it
+# on routine pull requests.
+coverage-audit:
+	go run ./cmd/testcoverage -audit-scenarios
+
 # TEST_TIMING_OUTPUT can override the default artifacts/test-timing report path.
 test-perf:
 	go run ./cmd/testtiming --lane unit --samples $(PERF_SAMPLES) --baseline $(TEST_TIMING_BASELINE)
@@ -29,12 +42,12 @@ test-perf:
 test-perf-integration:
 	go run ./cmd/testtiming --lane integration --samples $(PERF_SAMPLES) --baseline $(TEST_TIMING_BASELINE)
 
-# Create a baseline only when bringing timing checks to a new repository copy.
+# Regenerate a lane baseline only from a complete set of stable samples.
 test-perf-baseline:
-	go run ./cmd/testtiming --lane unit --samples $(PERF_SAMPLES) --baseline $(TEST_TIMING_BASELINE) --init-baseline
+	go run ./cmd/testtiming --lane unit --samples $(PERF_SAMPLES) --baseline $(TEST_TIMING_BASELINE) --replace-baseline
 
 test-perf-integration-baseline:
-	go run ./cmd/testtiming --lane integration --samples $(PERF_SAMPLES) --baseline $(TEST_TIMING_BASELINE) --init-baseline
+	go run ./cmd/testtiming --lane integration --samples $(PERF_SAMPLES) --baseline $(TEST_TIMING_BASELINE) --replace-baseline
 
 # Optimization work may update the recorded median only when it lowers a budget.
 test-perf-baseline-update:

@@ -15,7 +15,7 @@ done
 | Final implementation | 14.335, 14.337, 14.374 | 14.337 |
 
 The final median is 32.8% below the tracked baseline,
-exceeding the required 10% reduction (19.211 seconds). The fast-lane CLI package
+exceeding the required 10% reduction (19.211 seconds). The historical mixed-lane CLI package
 median and its 50% tolerance budget were ratcheted in
 `performance/test-timing-baseline.json` to 14.337 seconds and
 21.505 seconds, respectively.

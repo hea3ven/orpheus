@@ -360,7 +360,9 @@ func TestIntegrationVerboseAgentDoneDiagnosticsCoverContextAndCompletionPersiste
 }
 
 func TestIntegrationVerboseTaskRunDiagnosticsDistinguishAgentStartAndRuntimeFailures(t *testing.T) {
-	t.Parallel()
+	// This scenario reconfigures the invocation-local command fixture midway through
+	// the run. Keep it serial so the start and runtime failure diagnostics exercise
+	// one lock lifecycle at a time.
 	paths, _ := setupVerboseTaskRunDiagnostics(t, "op-runtime", "Runtime diagnostics", "failing-agent", 7)
 	writeTaskRunAgentConfig(t, paths, "failing", "failing-agent", nil)
 
@@ -474,7 +476,7 @@ printf '%%s\n' %s >&2
 exit %d
 `, diagShellQuote(stderrText), exitCode)
 	bdPath := filepath.Join(binDir, "bd")
-	require.NoError(t, os.WriteFile(bdPath, []byte(script), 0o755))
+	require.NoError(t, writeTestExecutable(bdPath, []byte(script)))
 	prependTestPath(t, binDir)
 }
 

@@ -700,7 +700,7 @@ func withStatefulCompletionBD(t *testing.T, task completionBDTask) statefulCompl
 	)
 
 	bdPath := filepath.Join(binDir, "bd")
-	must.NoError(os.WriteFile(bdPath, []byte(script), 0o755))
+	must.NoError(writeTestExecutable(bdPath, []byte(script)))
 	setTestEnvironment(t, "FAKE_BD_LOG", logPath)
 	prependTestPath(t, binDir)
 	return statefulCompletionBD{LogPath: logPath, StatusPath: statusPath}
@@ -771,7 +771,7 @@ printf 'completion agent completed\n'
 	)
 
 	agentPath := filepath.Join(binDir, opts.Command)
-	if err := os.WriteFile(agentPath, []byte(script), 0o755); err != nil {
+	if err := writeTestExecutable(agentPath, []byte(script)); err != nil {
 		t.Fatalf("write fake completion agent: %v", err)
 	}
 	setTestEnvironment(t, "FAKE_COMPLETION_AGENT_LOG", logPath)
