@@ -1,25 +1,14 @@
 name: Test coverage
 
-# Keep this manually dispatchable until the initial tracked baseline is on main
-# and server-8ls has enabled the Terraform-managed Actions budget. At that point,
-# replace this trigger with the documented pull_request paths below.
-#
-# pull_request:
-#   paths:
-#     - '**.go'
-#     - 'go.mod'
-#     - 'go.sum'
-#     - 'coverage/**'
-#     - 'cmd/testcoverage/**'
-#     - 'Makefile'
 on:
-  workflow_dispatch:
-    inputs:
-      base_ref:
-        description: Base branch containing the tracked coverage baseline
-        required: false
-        default: main
-        type: string
+  pull_request:
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'coverage/**'
+      - 'cmd/testcoverage/**'
+      - 'Makefile'
 
 permissions:
   contents: read
