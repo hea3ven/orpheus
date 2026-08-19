@@ -71,6 +71,62 @@ func TestReadBackendCanGetAndList(t *testing.T) {
 
 }
 
+func TestListFilterComposesQueryTypeAndTimeConstraints(t *testing.T) {
+	created := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
+	updated := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	createdAfter := time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC)
+	createdBefore := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)
+	updatedAfter := time.Date(2026, 6, 3, 0, 0, 0, 0, time.UTC)
+	updatedBefore := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)
+	filter, err := (task.ListFilter{
+		Query:         "MATCH",
+		IssueTypes:    []task.IssueType{task.IssueTypeTask, task.IssueTypeTask},
+		CreatedAfter:  &createdAfter,
+		CreatedBefore: &createdBefore,
+		UpdatedAfter:  &updatedAfter,
+		UpdatedBefore: &updatedBefore,
+	}).Normalized()
+	if err != nil {
+		t.Fatalf("normalize filter: %v", err)
+	}
+	if !reflect.DeepEqual(filter.IssueTypes, []task.IssueType{task.IssueTypeTask}) {
+		t.Fatalf("normalized issue types = %#v, want duplicate removed", filter.IssueTypes)
+	}
+
+	for _, matching := range []task.Task{
+		{ID: "op-match", Title: "other", IssueType: task.IssueTypeTask, CreatedAt: &created, UpdatedAt: &updated},
+		{ID: "op-other", Title: "title has match", IssueType: task.IssueTypeTask, CreatedAt: &created, UpdatedAt: &updated},
+	} {
+		if !filter.Matches(matching) {
+			t.Fatalf("filter did not match %#v", matching)
+		}
+	}
+	updatedOutsideRange := updated.AddDate(0, 0, 2)
+	for _, nonmatching := range []task.Task{
+		{ID: "op-match", IssueType: task.IssueTypeEpic, CreatedAt: &created, UpdatedAt: &updated},
+		{ID: "op-match", IssueType: task.IssueTypeTask, UpdatedAt: &updated},
+		{ID: "op-match", IssueType: task.IssueTypeTask, CreatedAt: &created, UpdatedAt: &updatedOutsideRange},
+	} {
+		if filter.Matches(nonmatching) {
+			t.Fatalf("filter matched %#v, want no match", nonmatching)
+		}
+	}
+}
+
+func TestListFilterRejectsUnsupportedTypeAndInvalidRanges(t *testing.T) {
+	after := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 6, 4, 0, 0, 0, 0, time.UTC)
+	for _, filter := range []task.ListFilter{
+		{IssueTypes: []task.IssueType{task.IssueTypeBug}},
+		{CreatedAfter: &after, CreatedBefore: &before},
+		{UpdatedAfter: &after, UpdatedBefore: &before},
+	} {
+		if _, err := filter.Normalized(); err == nil {
+			t.Fatalf("normalized %#v successfully, want validation error", filter)
+		}
+	}
+}
+
 func TestTaskCloneCopiesMutableFields(t *testing.T) {
 	createdAt := time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)
 	updatedAt := time.Date(2026, 5, 24, 11, 0, 0, 0, time.UTC)
