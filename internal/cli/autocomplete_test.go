@@ -155,6 +155,8 @@ func TestIntegrationCompletionProtocolScopesCreateRelationsToCurrentDirectory(t 
 func TestIntegrationCompletionProtocolFiniteValuesAndFilesystemFallback(t *testing.T) {
 	t.Parallel()
 	assertCompletionChoices(t, []string{"task", "create", "--type", ""}, []string{"epic", "task"})
+	assertCompletionChoices(t, []string{"status", "--sort", ""}, []string{"created", "status", "updated"})
+	assertCompletionChoices(t, []string{"task", "list", "--sort", ""}, []string{"created", "status", "updated"})
 	assertCompletionChoices(t, []string{"task", "stats", "--group", ""}, []string{"day", "month", "week"})
 	assertCompletionChoices(t, []string{"task", "stats", "--view", ""}, []string{"consumption", "implementation", "implementation-model", "model-pair", "review", "reviewer-model", "throughput"})
 	assertCompletionChoices(t, []string{"agent", "review", "add", "--type", ""}, []string{"advisory", "blocking", "separate-task"})

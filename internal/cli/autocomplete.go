@@ -22,6 +22,8 @@ func configureCompletions(root *cobra.Command, opts *rootOptions) {
 	complete := newCompletionProvider(opts)
 	configureRepoCompletions(commandAt(root, "repo"), complete)
 	configureTaskCompletions(commandAt(root, "task"), complete)
+	registerCompletion(commandAt(root, "status"), "sort", fixedCompletion(taskViewSortValues()...))
+	registerCompletion(commandAt(commandAt(root, "task"), "list"), "sort", fixedCompletion(taskViewSortValues()...))
 
 	agentReviewAdd := commandAt(commandAt(commandAt(root, "agent"), "review"), "add")
 	registerCompletion(agentReviewAdd, "type", fixedCompletion("blocking", "advisory", "separate-task"))
