@@ -6,8 +6,10 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/status"
@@ -21,20 +23,27 @@ import (
 func newStatusCommand(opts *rootOptions) *cobra.Command {
 	var full bool
 	var noTruncate bool
+	var sortValue string
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show the local cross-repository action queue",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
-			return runStatus(command, opts, full, noTruncate)
+			return runStatus(command, opts, full, noTruncate, sortValue)
 		},
 	}
 	cmd.Flags().BoolVar(&full, "full", false, "show lower-priority groups such as blocked and done/closed")
 	cmd.Flags().BoolVar(&noTruncate, "no-truncate", false, "preserve unbounded status table output")
+	cmd.Flags().StringVar(&sortValue, "sort", string(taskViewSortStatus), "order by status, created, or updated")
 	return cmd
 }
 
-func runStatus(command *cobra.Command, opts *rootOptions, full bool, noTruncate bool) error {
+func runStatus(command *cobra.Command, opts *rootOptions, full bool, noTruncate bool, sortValue string) error {
+	sortMode, err := normalizeTaskViewSort(sortValue, taskViewSortStatus)
+	if err != nil {
+		return err
+	}
+
 	logger := opts.log().With(
 		slog.String("component", "cli"),
 		slog.String("operation", "status"),
@@ -67,7 +76,7 @@ func runStatus(command *cobra.Command, opts *rootOptions, full bool, noTruncate 
 
 	output := command.OutOrStdout()
 	renderOptions := statusRenderOptionsForOutput(output, noTruncate, defaultStatusWidthDetector)
-	if err := renderStatus(output, projection, full, renderOptions); err != nil {
+	if err := renderStatusWithSort(output, projection, full, renderOptions, sortMode); err != nil {
 		return err
 	}
 	if snapshot.HasFailures() {
@@ -282,6 +291,7 @@ type statusRenderLayout struct {
 
 type statusDisplayRow struct {
 	Entry          status.Entry
+	StatusOrder    int
 	Status         string
 	TaskID         string
 	TreeDepth      int
@@ -325,8 +335,18 @@ func renderStatus(
 	full bool,
 	options statusRenderOptions,
 ) error {
+	return renderStatusWithSort(output, projection, full, options, taskViewSortStatus)
+}
+
+func renderStatusWithSort(
+	output interface{ Write([]byte) (int, error) },
+	projection status.Projection,
+	full bool,
+	options statusRenderOptions,
+	sortMode taskViewSort,
+) error {
 	visibleGroups := visibleStatusGroups(projection.Groups, full)
-	rows := statusDisplayRows(visibleGroups)
+	rows := statusDisplayRowsForSort(visibleGroups, sortMode)
 	layout := statusLayoutFor(rows, options)
 	return renderStatusRows(output, rows, layout)
 }
@@ -494,11 +514,16 @@ func statusDisplayTitleForLayout(taskItem taskmodel.Task, layout statusRenderLay
 }
 
 func statusDisplayRows(visibleGroups []status.Group) []statusDisplayRow {
+	return statusDisplayRowsForSort(visibleGroups, taskViewSortStatus)
+}
+
+func statusDisplayRowsForSort(visibleGroups []status.Group, sortMode taskViewSort) []statusDisplayRow {
 	rows := make([]statusDisplayRow, 0)
-	for _, group := range visibleGroups {
+	for statusOrder, group := range visibleGroups {
 		for _, entry := range group.Entries {
 			row := statusDisplayRow{
 				Entry:          entry,
+				StatusOrder:    statusOrder,
 				Status:         statusDisplayLabel(group),
 				Detail:         entry.Detail,
 				SemanticDetail: entry.SemanticDetail,
@@ -517,7 +542,100 @@ func statusDisplayRows(visibleGroups []status.Group) []statusDisplayRow {
 			rows = append(rows, row)
 		}
 	}
+	sortStatusDisplayRows(rows, sortMode)
 	return statusTreeRows(rows)
+}
+
+func sortStatusDisplayRows(rows []statusDisplayRow, sortMode taskViewSort) {
+	sort.Slice(rows, func(i, j int) bool {
+		return statusDisplayRowLess(rows[i], rows[j], sortMode)
+	})
+}
+
+func statusDisplayRowLess(left statusDisplayRow, right statusDisplayRow, sortMode taskViewSort) bool {
+	switch sortMode {
+	case taskViewSortStatus:
+		if left.StatusOrder != right.StatusOrder {
+			return left.StatusOrder < right.StatusOrder
+		}
+		if comparison := compareStatusDisplayRowPriority(left, right); comparison != 0 {
+			return comparison < 0
+		}
+		if comparison := compareDescendingTimestamps(left.Entry.Task.CreatedAt, right.Entry.Task.CreatedAt); comparison != 0 {
+			return comparison < 0
+		}
+	case taskViewSortCreated:
+		if comparison := compareDescendingTimestamps(left.Entry.Task.CreatedAt, right.Entry.Task.CreatedAt); comparison != 0 {
+			return comparison < 0
+		}
+	case taskViewSortUpdated:
+		if comparison := compareDescendingTimestamps(left.Entry.Task.UpdatedAt, right.Entry.Task.UpdatedAt); comparison != 0 {
+			return comparison < 0
+		}
+	}
+	return statusDisplayRowIdentityLess(left, right)
+}
+
+func compareStatusDisplayRowPriority(left statusDisplayRow, right statusDisplayRow) int {
+	leftPriority, leftOK := statusDisplayRowPriority(left)
+	rightPriority, rightOK := statusDisplayRowPriority(right)
+	switch {
+	case leftOK && !rightOK:
+		return -1
+	case !leftOK && rightOK:
+		return 1
+	case !leftOK && !rightOK:
+		return 0
+	case leftPriority < rightPriority:
+		return -1
+	case leftPriority > rightPriority:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func statusDisplayRowPriority(row statusDisplayRow) (int, bool) {
+	if row.Entry.Kind != status.EntryTask {
+		return 0, false
+	}
+	return row.Entry.Task.Priority, true
+}
+
+func compareDescendingTimestamps(left *time.Time, right *time.Time) int {
+	switch {
+	case left == nil && right != nil:
+		return 1
+	case left != nil && right == nil:
+		return -1
+	case left == nil && right == nil:
+		return 0
+	case left.After(*right):
+		return -1
+	case right.After(*left):
+		return 1
+	default:
+		return 0
+	}
+}
+
+func statusDisplayRowIdentityLess(left statusDisplayRow, right statusDisplayRow) bool {
+	if left.Entry.Repository.ID != right.Entry.Repository.ID {
+		return left.Entry.Repository.ID < right.Entry.Repository.ID
+	}
+	if left.Entry.Task.ID != right.Entry.Task.ID {
+		return left.Entry.Task.ID < right.Entry.Task.ID
+	}
+	if left.Entry.Kind != right.Entry.Kind {
+		return left.Entry.Kind < right.Entry.Kind
+	}
+	if left.Entry.Source != right.Entry.Source {
+		return left.Entry.Source < right.Entry.Source
+	}
+	if left.Entry.Operation != right.Entry.Operation {
+		return left.Entry.Operation < right.Entry.Operation
+	}
+	return left.Entry.Detail < right.Entry.Detail
 }
 
 func statusDisplayLabel(group status.Group) string {

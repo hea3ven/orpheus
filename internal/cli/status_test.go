@@ -366,8 +366,9 @@ func assertTaskListRendersActiveEpicTree(t *testing.T) {
 	listStdout, listStderr := executeCommand(t, []string{"task", "list"})
 	require.Empty(t, listStderr)
 	assert.Contains(t, listStdout, "1/4 done")
+	assert.Contains(t, listStdout, "├─ ar-blocked")
 	assert.Contains(t, listStdout, "├─ ar-nested")
-	assert.Contains(t, listStdout, "└─ ar-blocked")
+	assert.Contains(t, listStdout, "└─ ar-ready")
 	assert.NotContains(t, listStdout, "ar-done")
 }
 
@@ -428,6 +429,82 @@ func TestIntegrationStatusReportsRepoFailuresInUnknownGroupAndReturnsError(t *te
 	is.Contains(stderr, "Broken Repo")
 	is.Contains(stderr, "prefix br")
 	is.Contains(stderr, "bd exploded")
+}
+
+func TestIntegrationTaskViewsApplySharedSortModesAcrossRepositories(t *testing.T) {
+	t.Parallel()
+
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+	betaDir := filepath.Join(t.TempDir(), "beta")
+	alphaDir := filepath.Join(t.TempDir(), "alpha")
+	must.NoError(os.MkdirAll(betaDir, 0o755))
+	must.NoError(os.MkdirAll(alphaDir, 0o755))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{
+		{ID: "beta", Name: "Beta", Path: betaDir, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "b"},
+		{ID: "alpha", Name: "Alpha", Path: alphaDir, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "a"},
+	}}))
+
+	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
+		{
+			dir:  betaDir,
+			args: "--json --readonly --sandbox list --all --limit 0",
+			stdout: `[
+				{"id":"b-review","title":"Review","status":"open","priority":4,"issue_type":"task","created_at":"2026-01-04T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","metadata":{"orpheus.pr_url":"https://example.test/pr/1"}},
+				{"id":"b-ready","title":"Ready","status":"open","priority":1,"issue_type":"task","created_at":"2026-01-03T00:00:00Z","updated_at":"2026-01-05T00:00:00Z"}
+			]`,
+		},
+		{
+			dir:  alphaDir,
+			args: "--json --readonly --sandbox list --all --limit 0",
+			stdout: `[
+				{"id":"a-ready-p2","title":"Lowest priority","status":"open","priority":2,"issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-03T00:00:00Z"},
+				{"id":"a-ready-p0","title":"Highest priority","status":"open","priority":0,"issue_type":"task","created_at":"2026-01-02T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"}
+			]`,
+		},
+	})
+
+	statusOrder := []string{"b-review", "a-ready-p0", "b-ready", "a-ready-p2"}
+	createdOrder := []string{"b-review", "b-ready", "a-ready-p0", "a-ready-p2"}
+	updatedOrder := []string{"b-ready", "a-ready-p2", "a-ready-p0", "b-review"}
+
+	for _, test := range []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{name: "status default", args: []string{"status"}, want: statusOrder},
+		{name: "status created", args: []string{"status", "--sort", "created"}, want: createdOrder},
+		{name: "status updated", args: []string{"status", "--sort", "updated"}, want: updatedOrder},
+		{name: "task list default", args: []string{"task", "list"}, want: createdOrder},
+		{name: "task list status", args: []string{"task", "list", "--sort", "status"}, want: statusOrder},
+		{name: "task list updated", args: []string{"task", "list", "--sort", "updated"}, want: updatedOrder},
+	} {
+		stdout, stderr := executeCommand(t, test.args)
+		if stderr != "" {
+			t.Errorf("%s stderr = %q, want empty", test.name, stderr)
+			continue
+		}
+		assertTaskViewOutputOrder(t, stdout, test.want)
+	}
+}
+
+func assertTaskViewOutputOrder(t *testing.T, output string, taskIDs []string) {
+	t.Helper()
+
+	previous := -1
+	for _, taskID := range taskIDs {
+		index := strings.Index(output, taskID)
+		if index < 0 {
+			t.Fatalf("output missing task %q:\n%s", taskID, output)
+		}
+		if index <= previous {
+			t.Fatalf("task %q appeared out of order:\n%s", taskID, output)
+		}
+		previous = index
+	}
 }
 
 func assertStatusGroupOrder(t *testing.T, output string, groups []string) {
