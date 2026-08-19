@@ -6,12 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 
-	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/pathutil"
 	"github.com/hea3ven/orpheus/internal/state"
 )
@@ -2194,30 +2192,7 @@ func runGitContextWithInputLogger(
 	input string,
 	args ...string,
 ) (string, error) {
-	span := logging.Start(ctx, logger, "git command",
-		slog.String("component", "git"),
-		slog.String("operation", operation),
-		slog.String("cwd", dir),
-	)
-	command := exec.CommandContext(ctx, "git", args...)
-	command.Dir = dir
-	command.Stdin = strings.NewReader(input)
-
-	var stdout strings.Builder
-	var stderr strings.Builder
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-
-	err := command.Run()
-	span.FinishError(ctx, err, gitExitAttrs(command, err)...)
-	output := stdout.String()
-	if stderr.Len() > 0 {
-		if output != "" && !strings.HasSuffix(output, "\n") {
-			output += "\n"
-		}
-		output += stderr.String()
-	}
-	return output, err
+	return runGitCommand(ctx, logger, dir, operation, input, args...)
 }
 
 func verifyRef(ctx context.Context, repoRoot string, ref string) error {
@@ -2310,7 +2285,7 @@ func gitOutputSuffix(output string) string {
 }
 
 func gitExitCode(err error) int {
-	var exitErr *exec.ExitError
+	var exitErr interface{ ExitCode() int }
 	if errors.As(err, &exitErr) {
 		return exitErr.ExitCode()
 	}

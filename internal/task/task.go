@@ -244,6 +244,128 @@ type Lister interface {
 	List(ctx context.Context) ([]Task, error)
 }
 
+// ListFilter constrains task-source inventory candidates. It deliberately
+// contains only authoritative backend fields; projected workflow status is
+// evaluated after Orpheus has assembled relationship context.
+//
+// ParentID is reserved for relationship-context completion. It is not exposed
+// as an operator-facing task-list filter.
+type ListFilter struct {
+	Query         string
+	IssueTypes    []IssueType
+	CreatedAfter  *time.Time
+	CreatedBefore *time.Time
+	UpdatedAfter  *time.Time
+	UpdatedBefore *time.Time
+	ParentID      string
+}
+
+// Normalized validates a list filter and returns a copy with normalized text,
+// issue types, and timestamp locations. Only task and epic are valid source
+// types because task sources do not expose other backend item types.
+func (f ListFilter) Normalized() (ListFilter, error) {
+	f.Query = strings.TrimSpace(f.Query)
+	f.ParentID = strings.TrimSpace(f.ParentID)
+
+	seenTypes := make(map[IssueType]struct{}, len(f.IssueTypes))
+	types := make([]IssueType, 0, len(f.IssueTypes))
+	for _, issueType := range f.IssueTypes {
+		issueType = IssueType(strings.TrimSpace(string(issueType)))
+		if issueType != IssueTypeTask && issueType != IssueTypeEpic {
+			return ListFilter{}, fmt.Errorf("invalid task source type %q; expected task or epic", issueType)
+		}
+		if _, seen := seenTypes[issueType]; seen {
+			continue
+		}
+		seenTypes[issueType] = struct{}{}
+		types = append(types, issueType)
+	}
+	f.IssueTypes = types
+
+	f.CreatedAfter = normalizedFilterTime(f.CreatedAfter)
+	f.CreatedBefore = normalizedFilterTime(f.CreatedBefore)
+	f.UpdatedAfter = normalizedFilterTime(f.UpdatedAfter)
+	f.UpdatedBefore = normalizedFilterTime(f.UpdatedBefore)
+	if f.CreatedAfter != nil && f.CreatedBefore != nil && !f.CreatedAfter.Before(*f.CreatedBefore) {
+		return ListFilter{}, errors.New("created-after must be before created-before")
+	}
+	if f.UpdatedAfter != nil && f.UpdatedBefore != nil && !f.UpdatedAfter.Before(*f.UpdatedBefore) {
+		return ListFilter{}, errors.New("updated-after must be before updated-before")
+	}
+	return f, nil
+}
+
+// HasConstraints reports whether this filter requires a constrained source
+// query rather than a complete task-source snapshot.
+func (f ListFilter) HasConstraints() bool {
+	return f.Query != "" || len(f.IssueTypes) > 0 ||
+		f.CreatedAfter != nil || f.CreatedBefore != nil ||
+		f.UpdatedAfter != nil || f.UpdatedBefore != nil || f.ParentID != ""
+}
+
+// Matches reports whether a task satisfies all configured source-field
+// constraints. Repeated issue types are ORed; distinct fields are ANDed.
+func (f ListFilter) Matches(taskItem Task) bool {
+	if f.Query != "" {
+		query := strings.ToLower(f.Query)
+		if !strings.Contains(strings.ToLower(taskItem.ID), query) &&
+			!strings.Contains(strings.ToLower(taskItem.Title), query) {
+			return false
+		}
+	}
+	if len(f.IssueTypes) > 0 {
+		matchedType := false
+		for _, issueType := range f.IssueTypes {
+			if taskItem.IssueType == issueType {
+				matchedType = true
+				break
+			}
+		}
+		if !matchedType {
+			return false
+		}
+	}
+	if f.ParentID != "" && strings.TrimSpace(taskItem.Relations.ParentID) != f.ParentID {
+		return false
+	}
+	if !matchesTimeRange(taskItem.CreatedAt, f.CreatedAfter, f.CreatedBefore) ||
+		!matchesTimeRange(taskItem.UpdatedAt, f.UpdatedAfter, f.UpdatedBefore) {
+		return false
+	}
+	return true
+}
+
+func normalizedFilterTime(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	normalized := value.UTC()
+	return &normalized
+}
+
+func matchesTimeRange(value, after, before *time.Time) bool {
+	if after == nil && before == nil {
+		return true
+	}
+	if value == nil {
+		return false
+	}
+	if after != nil && !value.After(*after) {
+		return false
+	}
+	if before != nil && !value.Before(*before) {
+		return false
+	}
+	return true
+}
+
+// FilteredLister is an optional read capability for sources that can receive
+// authoritative task-field constraints. It remains separate from ReadBackend
+// so existing lifecycle readers retain their intentionally small contract.
+type FilteredLister interface {
+	ListFiltered(ctx context.Context, filter ListFilter) ([]Task, error)
+}
+
 // ReadBackend is the complete read-only task-source contract.
 //
 // It intentionally excludes mutating operations such as claim, metadata writes,
@@ -756,15 +878,28 @@ type RepoFailure struct {
 	Err        error
 }
 
+// RelationshipContextFailure records a relationship lookup that could not be
+// completed after a task was selected for a filtered inventory. It is distinct
+// from an absent reference, which task sources confirm with ErrNotFound. When
+// ReferenceRepository is set, it identifies the registered source that owns
+// the unavailable reference, including unsupported cross-repository context.
+type RelationshipContextFailure struct {
+	TaskID              string
+	ReferenceID         string
+	ReferenceRepository Repository
+}
+
 // RepositorySnapshot is the local read state for one repository used by status projections.
 type RepositorySnapshot struct {
-	Repository Repository
-	Tasks      []Task
+	Repository                  Repository
+	Tasks                       []Task
+	RelationshipContextFailures []RelationshipContextFailure
 }
 
 // Clone returns a copy of the repository snapshot and mutable task fields.
 func (s RepositorySnapshot) Clone() RepositorySnapshot {
 	s.Tasks = cloneTasks(s.Tasks)
+	s.RelationshipContextFailures = cloneRelationshipContextFailures(s.RelationshipContextFailures)
 	return s
 }
 
@@ -878,6 +1013,15 @@ func cloneFailures(failures []RepoFailure) []RepoFailure {
 	}
 
 	clone := make([]RepoFailure, len(failures))
+	copy(clone, failures)
+	return clone
+}
+
+func cloneRelationshipContextFailures(failures []RelationshipContextFailure) []RelationshipContextFailure {
+	if failures == nil {
+		return nil
+	}
+	clone := make([]RelationshipContextFailure, len(failures))
 	copy(clone, failures)
 	return clone
 }

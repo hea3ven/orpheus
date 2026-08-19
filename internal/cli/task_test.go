@@ -129,6 +129,39 @@ func TestIntegrationTaskListListsAllActiveItemsWithStatusProjectionPresentation(
 	assertTaskListBDLog(t, logPath, repos)
 }
 
+func TestIntegrationTaskListComposesSourceAndProjectedStatusFilters(t *testing.T) {
+	t.Parallel()
+
+	is := assert.New(t)
+	newTestState(t)
+	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "a")
+	logPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{repoDir: {stdout: `[
+		{"id":"a-closed","title":"MATCH closed task","status":"closed","priority":1,"issue_type":"task","created_at":"2026-06-03T00:00:00Z","updated_at":"2026-06-03T00:00:00Z"},
+		{"id":"a-open","title":"match open task","status":"open","priority":1,"issue_type":"task","created_at":"2026-06-03T00:00:00Z","updated_at":"2026-06-03T00:00:00Z"},
+		{"id":"a-late","title":"match updated too late","status":"closed","priority":1,"issue_type":"task","created_at":"2026-06-03T00:00:00Z","updated_at":"2026-06-06T00:00:00Z"},
+		{"id":"a-other","title":"unrelated","status":"closed","priority":1,"issue_type":"task","created_at":"2026-06-03T00:00:00Z","updated_at":"2026-06-03T00:00:00Z"}
+	]`}})
+
+	stdout, stderr := executeCommand(t, []string{
+		"task", "list",
+		"--query", "match",
+		"--type", "task",
+		"--created-after", "2026-06-01",
+		"--created-before", "2026-06-05",
+		"--updated-after", "2026-06-02",
+		"--updated-before", "2026-06-05",
+		"--status", "closed",
+	})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "a-closed")
+	for _, hidden := range []string{"a-open", "a-late", "a-other"} {
+		is.NotContains(stdout, hidden)
+	}
+	log := readFileString(t, logPath)
+	is.Contains(log, "--json --readonly --sandbox list --all --limit 0 --type task --created-after 2026-06-01 --created-before 2026-06-05 --updated-after 2026-06-02 --updated-before 2026-06-05")
+}
+
 func assertTaskListBDLog(t *testing.T, logPath string, repos localManagedTaskRepos) {
 	t.Helper()
 
@@ -5036,9 +5069,7 @@ func TestIntegrationTaskRunAutonomousReviewFollowUpRepairsCheckAndPublishes(t *t
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
-	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	must.NoError(err)
-	orpheusBin := buildOrpheusTestBinary(t, sourceRoot)
+	orpheusBin := withOrpheusCLIHelper(t)
 	root := newTestState(t)
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
@@ -5105,9 +5136,7 @@ func TestIntegrationTaskRunAttachedManualBlockerRepairsAndApprovalFinalizes(t *t
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
-	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	must.NoError(err)
-	orpheusBin := buildOrpheusTestBinary(t, sourceRoot)
+	orpheusBin := withOrpheusCLIHelper(t)
 	root := newTestState(t)
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
@@ -5184,9 +5213,7 @@ func TestIntegrationTaskReviewManualBlockerExhaustsBudgetWithoutExtraLaunch(t *t
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
-	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	must.NoError(err)
-	orpheusBin := buildOrpheusTestBinary(t, sourceRoot)
+	orpheusBin := withOrpheusCLIHelper(t)
 	root := newTestState(t)
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
@@ -5319,9 +5346,7 @@ func TestIntegrationTaskRunAutonomousReviewLoopExhaustsPersistentCheckBlockers(t
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
-	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	must.NoError(err)
-	orpheusBin := buildOrpheusTestBinary(t, sourceRoot)
+	orpheusBin := withOrpheusCLIHelper(t)
 	root := newTestState(t)
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
@@ -5386,9 +5411,7 @@ func TestIntegrationTaskReviewResumedAutonomousFollowUpPreservesSelectedImplemen
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
-	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	must.NoError(err)
-	orpheusBin := buildOrpheusTestBinary(t, sourceRoot)
+	orpheusBin := withOrpheusCLIHelper(t)
 	root := newTestState(t)
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
@@ -5915,9 +5938,7 @@ func TestIntegrationTaskReviewAgentReviewBlockingFindingStopsPipeline(t *testing
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
-	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	must.NoError(err)
-	orpheusBin := buildOrpheusTestBinary(t, sourceRoot)
+	orpheusBin := withOrpheusCLIHelper(t)
 	root := newTestState(t)
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
@@ -5978,9 +5999,7 @@ func TestIntegrationTaskReviewAgentReviewMixedAutomatedBlockerDecisions(t *testi
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
-	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	must.NoError(err)
-	orpheusBin := buildOrpheusTestBinary(t, sourceRoot)
+	orpheusBin := withOrpheusCLIHelper(t)
 	root := newTestState(t)
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
@@ -6100,9 +6119,7 @@ func TestIntegrationTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *t
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
-	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	must.NoError(err)
-	orpheusBin := buildOrpheusTestBinary(t, sourceRoot)
+	orpheusBin := withOrpheusCLIHelper(t)
 	root := newTestState(t)
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
@@ -8355,7 +8372,13 @@ func withFakeBDTaskResponses(t *testing.T, responses map[string]fakeBDTaskRespon
 } >> "$FAKE_BD_LOG"
 is_update=0
 case "$*" in
-  "--json --readonly --sandbox list --all --limit 0 --type task"|"--json --readonly --sandbox list --all --limit 0 --type epic"|"--json --readonly --sandbox show --id "*)
+  "--json --readonly --sandbox list --all --limit 0 --type task"*)
+    ;;
+  "--json --readonly --sandbox list --all --limit 0 --type epic"*)
+    printf '[]\n'
+    exit 0
+    ;;
+  "--json --readonly --sandbox show --id "*)
     ;;
   "--json --sandbox update "*|"--json --sandbox close "*)
     is_update=1
@@ -8365,10 +8388,6 @@ case "$*" in
     exit 64
     ;;
 esac
-if [ "$*" = "--json --readonly --sandbox list --all --limit 0 --type epic" ]; then
-  printf '[]\n'
-  exit 0
-fi
 case "$PWD" in
 `)
 

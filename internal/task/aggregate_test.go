@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -120,6 +122,196 @@ func TestAggregatorSnapshotPreservesTaskSourceItems(t *testing.T) {
 	}
 }
 
+func TestAggregatorFilteredSnapshotSeparatesCandidatesFromParentAndDependencyContext(t *testing.T) {
+	repo := task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}
+	backend := &recordingFilteredReadBackend{tasks: []task.Task{
+		{ID: "a-child", Title: "matching child", IssueType: task.IssueTypeTask, Status: task.StatusOpen, Relations: task.RelationSummary{ParentID: "a-epic", DependencyIDs: []string{"a-dependency"}}},
+		{ID: "a-epic", Title: "excluded parent", IssueType: task.IssueTypeEpic, Status: task.StatusInProgress},
+		{ID: "a-dependency", Title: "excluded dependency", IssueType: task.IssueTypeTask, Status: task.StatusClosed},
+	}}
+	aggregator, err := task.NewAggregator([]task.RepositorySource{{Repository: repo, BackendDir: t.TempDir()}}, func(task.RepositorySource) (task.ReadBackend, error) {
+		return backend, nil
+	})
+	if err != nil {
+		t.Fatalf("create aggregator: %v", err)
+	}
+
+	got, err := aggregator.FilteredSnapshot(context.Background(), task.ListFilter{Query: "matching"})
+	if err != nil {
+		t.Fatalf("filtered snapshot: %v", err)
+	}
+	if got.Snapshot.HasFailures() {
+		t.Fatalf("failures = %#v, want none", got.Snapshot.Failures)
+	}
+	if gotIDs := repoTaskIDs(got.Candidates); !reflect.DeepEqual(gotIDs, []string{"a-child"}) {
+		t.Fatalf("candidates = %v, want selected child only", gotIDs)
+	}
+	if gotIDs := snapshotTaskIDsForRepository(t, got.Snapshot, "alpha"); !reflect.DeepEqual(gotIDs, []string{"a-child", "a-dependency", "a-epic"}) {
+		t.Fatalf("snapshot tasks = %v, want selected child with parent and dependency context", gotIDs)
+	}
+	if len(backend.filters) != 1 || backend.filters[0].Query != "matching" {
+		t.Fatalf("source filters = %#v, want one pushed candidate query", backend.filters)
+	}
+}
+
+func TestAggregatorFilteredSnapshotAddsNonmatchingEpicChildrenAsContext(t *testing.T) {
+	repo := task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}
+	backend := &recordingFilteredReadBackend{tasks: []task.Task{
+		{ID: "a-epic", Title: "matching epic", IssueType: task.IssueTypeEpic, Status: task.StatusOpen, Relations: task.RelationSummary{ChildCount: 1}},
+		{ID: "a-child", Title: "excluded child", IssueType: task.IssueTypeTask, Status: task.StatusClosed, Relations: task.RelationSummary{ParentID: "a-epic"}},
+	}}
+	aggregator, err := task.NewAggregator([]task.RepositorySource{{Repository: repo, BackendDir: t.TempDir()}}, func(task.RepositorySource) (task.ReadBackend, error) {
+		return backend, nil
+	})
+	if err != nil {
+		t.Fatalf("create aggregator: %v", err)
+	}
+
+	got, err := aggregator.FilteredSnapshot(context.Background(), task.ListFilter{Query: "matching"})
+	if err != nil {
+		t.Fatalf("filtered snapshot: %v", err)
+	}
+	if gotIDs := repoTaskIDs(got.Candidates); !reflect.DeepEqual(gotIDs, []string{"a-epic"}) {
+		t.Fatalf("candidates = %v, want selected epic only", gotIDs)
+	}
+	if gotIDs := snapshotTaskIDsForRepository(t, got.Snapshot, "alpha"); !reflect.DeepEqual(gotIDs, []string{"a-child", "a-epic"}) {
+		t.Fatalf("snapshot tasks = %v, want selected epic with child context", gotIDs)
+	}
+	if len(backend.filters) != 2 || backend.filters[1].ParentID != "a-epic" || backend.filters[1].Query != "" {
+		t.Fatalf("source filters = %#v, want an unfiltered child-context query", backend.filters)
+	}
+}
+
+func TestAggregatorFilteredSnapshotPreservesCrossRepositoryRelationshipOwner(t *testing.T) {
+	alpha := task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}
+	beta := task.Repository{ID: "beta", Name: "Beta", TaskIDPrefix: "b"}
+	alphaBackend := &recordingFilteredReadBackend{tasks: []task.Task{{
+		ID:        "a-selected",
+		Title:     "matching task",
+		IssueType: task.IssueTypeTask,
+		Status:    task.StatusOpen,
+		Relations: task.RelationSummary{DependencyIDs: []string{"b-dependency"}},
+	}}}
+	betaBackend := &recordingFilteredReadBackend{tasks: []task.Task{{
+		ID:        "b-dependency",
+		Title:     "other dependency",
+		IssueType: task.IssueTypeTask,
+		Status:    task.StatusClosed,
+	}}}
+	alphaSource := task.RepositorySource{Repository: alpha, BackendDir: t.TempDir()}
+	betaSource := task.RepositorySource{Repository: beta, BackendDir: t.TempDir()}
+	aggregator, err := task.NewAggregator([]task.RepositorySource{alphaSource, betaSource}, func(source task.RepositorySource) (task.ReadBackend, error) {
+		switch source.Repository.ID {
+		case alpha.ID:
+			return alphaBackend, nil
+		case beta.ID:
+			return betaBackend, nil
+		default:
+			return nil, fmt.Errorf("unexpected repository %q", source.Repository.ID)
+		}
+	})
+	if err != nil {
+		t.Fatalf("create aggregator: %v", err)
+	}
+
+	got, err := aggregator.FilteredSnapshot(context.Background(), task.ListFilter{Query: "matching"})
+	if err != nil {
+		t.Fatalf("filtered snapshot: %v", err)
+	}
+	if got.Snapshot.HasFailures() {
+		t.Fatalf("failures = %#v, want none", got.Snapshot.Failures)
+	}
+	if gotIDs := repoTaskIDs(got.Candidates); !reflect.DeepEqual(gotIDs, []string{"a-selected"}) {
+		t.Fatalf("candidates = %v, want selected task only", gotIDs)
+	}
+
+	var alphaSnapshot task.RepositorySnapshot
+	for _, repository := range got.Snapshot.Repositories {
+		if repository.Repository.ID == alpha.ID {
+			alphaSnapshot = repository
+			break
+		}
+	}
+	wantFailures := []task.RelationshipContextFailure{{
+		TaskID:              "a-selected",
+		ReferenceID:         "b-dependency",
+		ReferenceRepository: beta,
+	}}
+	if !reflect.DeepEqual(alphaSnapshot.RelationshipContextFailures, wantFailures) {
+		t.Fatalf("relationship context failures = %#v, want %#v", alphaSnapshot.RelationshipContextFailures, wantFailures)
+	}
+}
+
+func TestAggregatorFilteredSnapshotDistinguishesRelationshipQueryFailure(t *testing.T) {
+	repo := task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}
+	backend := &recordingFilteredReadBackend{
+		tasks:  []task.Task{{ID: "a-child", Title: "matching", IssueType: task.IssueTypeTask, Relations: task.RelationSummary{DependencyIDs: []string{"a-dependency"}}}},
+		getErr: map[string]error{"a-dependency": errors.New("backend unavailable")},
+	}
+	aggregator, err := task.NewAggregator([]task.RepositorySource{{Repository: repo, BackendDir: t.TempDir()}}, func(task.RepositorySource) (task.ReadBackend, error) {
+		return backend, nil
+	})
+	if err != nil {
+		t.Fatalf("create aggregator: %v", err)
+	}
+
+	got, err := aggregator.FilteredSnapshot(context.Background(), task.ListFilter{Query: "matching"})
+	if err != nil {
+		t.Fatalf("filtered snapshot: %v", err)
+	}
+	if len(got.Snapshot.Failures) != 1 || got.Snapshot.Failures[0].Operation != "relationship_context" || !strings.Contains(got.Snapshot.Failures[0].Err.Error(), "backend unavailable") {
+		t.Fatalf("failures = %#v, want relationship-context query failure", got.Snapshot.Failures)
+	}
+	failures := got.Snapshot.Repositories[0].RelationshipContextFailures
+	if !reflect.DeepEqual(failures, []task.RelationshipContextFailure{{
+		TaskID:              "a-child",
+		ReferenceID:         "a-dependency",
+		ReferenceRepository: repo,
+	}}) {
+		t.Fatalf("relationship context failures = %#v, want selected dependency lookup failure", failures)
+	}
+}
+
+func TestAggregatorFilteredSnapshotRecordsParentFailureAfterEarlierDependencyFailure(t *testing.T) {
+	repo := task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}
+	backend := &recordingFilteredReadBackend{
+		tasks: []task.Task{{
+			ID:        "a-child",
+			Title:     "matching",
+			IssueType: task.IssueTypeTask,
+			Relations: task.RelationSummary{
+				ParentID:      "a-parent",
+				DependencyIDs: []string{"a-dependency"},
+			},
+		}},
+		getErr: map[string]error{
+			"a-dependency": errors.New("dependency backend unavailable"),
+			"a-parent":     errors.New("parent backend unavailable"),
+		},
+	}
+	aggregator, err := task.NewAggregator([]task.RepositorySource{{Repository: repo, BackendDir: t.TempDir()}}, func(task.RepositorySource) (task.ReadBackend, error) {
+		return backend, nil
+	})
+	if err != nil {
+		t.Fatalf("create aggregator: %v", err)
+	}
+
+	got, err := aggregator.FilteredSnapshot(context.Background(), task.ListFilter{Query: "matching"})
+	if err != nil {
+		t.Fatalf("filtered snapshot: %v", err)
+	}
+	if len(got.Snapshot.Failures) != 2 {
+		t.Fatalf("failures = %#v, want dependency and parent lookup failures", got.Snapshot.Failures)
+	}
+	wantFailures := []task.RelationshipContextFailure{
+		{TaskID: "a-child", ReferenceID: "a-dependency", ReferenceRepository: repo},
+		{TaskID: "a-child", ReferenceID: "a-parent", ReferenceRepository: repo},
+	}
+	if failures := got.Snapshot.Repositories[0].RelationshipContextFailures; !reflect.DeepEqual(failures, wantFailures) {
+		t.Fatalf("relationship context failures = %#v, want %#v", failures, wantFailures)
+	}
+}
+
 func TestAggregatorSnapshotContinuesAfterRepoFailure(t *testing.T) {
 	queryErr := errors.New("bd list failed")
 	repos := []task.RepositorySource{
@@ -171,6 +363,67 @@ func TestAggregatorReportsBackendCreationFailure(t *testing.T) {
 		t.Fatalf("failures = %#v, want structured backend creation failure", got.Failures)
 	}
 }
+
+func repoTaskIDs(rows []task.RepoTask) []string {
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.Task.ID)
+	}
+	return ids
+}
+
+func snapshotTaskIDsForRepository(t *testing.T, snapshot task.SnapshotResult, repositoryID string) []string {
+	t.Helper()
+	for _, repository := range snapshot.Repositories {
+		if repository.Repository.ID != repositoryID {
+			continue
+		}
+		ids := make([]string, 0, len(repository.Tasks))
+		for _, taskItem := range repository.Tasks {
+			ids = append(ids, taskItem.ID)
+		}
+		sort.Strings(ids)
+		return ids
+	}
+	t.Fatalf("repository %q not found in %#v", repositoryID, snapshot.Repositories)
+	return nil
+}
+
+type recordingFilteredReadBackend struct {
+	tasks   []task.Task
+	filters []task.ListFilter
+	getErr  map[string]error
+}
+
+func (b *recordingFilteredReadBackend) Get(_ context.Context, id string) (task.Task, error) {
+	if err := b.getErr[id]; err != nil {
+		return task.Task{}, err
+	}
+	for _, candidate := range b.tasks {
+		if candidate.ID == id {
+			return candidate.Clone(), nil
+		}
+	}
+	return task.Task{}, task.ErrNotFound
+}
+
+func (b *recordingFilteredReadBackend) List(context.Context) ([]task.Task, error) {
+	return cloneTasks(b.tasks), nil
+}
+
+func (b *recordingFilteredReadBackend) ListFiltered(_ context.Context, filter task.ListFilter) ([]task.Task, error) {
+	b.filters = append(b.filters, filter)
+	filtered := make([]task.Task, 0, len(b.tasks))
+	for _, candidate := range b.tasks {
+		if filter.Matches(candidate) {
+			filtered = append(filtered, candidate.Clone())
+		}
+	}
+	return filtered, nil
+}
+
+var _ task.ReadBackend = (*recordingFilteredReadBackend)(nil)
+var _ task.FilteredLister = (*recordingFilteredReadBackend)(nil)
 
 type failingReadBackend struct {
 	err error
