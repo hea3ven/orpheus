@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"os/exec"
 	"time"
 )
 
@@ -70,7 +69,7 @@ func (s Span) FinishExpectedAbsence(ctx context.Context, err error, attrs ...slo
 
 // ExitCode returns a subprocess exit code when err carries one.
 func ExitCode(err error) (int, bool) {
-	var exitErr *exec.ExitError
+	var exitErr interface{ ExitCode() int }
 	if errors.As(err, &exitErr) {
 		return exitErr.ExitCode(), true
 	}
