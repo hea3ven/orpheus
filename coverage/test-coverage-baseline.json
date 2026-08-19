@@ -122413,8 +122413,8 @@
         "-coverprofile=\u003ctemporary-profile\u003e",
         "./..."
       ],
-      "statement_total": 18637,
-      "covered_statements": 9145,
+      "statement_total": 18643,
+      "covered_statements": 9504,
       "packages": [
         {
           "name": "github.com/hea3ven/orpheus/cmd/orpheus",
@@ -224986,12 +224986,12 @@
         {
           "name": "github.com/hea3ven/orpheus/internal/testlane",
           "statement_total": 58,
-          "covered_statements": 47,
+          "covered_statements": 46,
           "files": [
             {
               "name": "github.com/hea3ven/orpheus/internal/testlane/convention.go",
               "statement_total": 58,
-              "covered_statements": 47,
+              "covered_statements": 46,
               "blocks": [
                 {
                   "start_line": 100,
@@ -225152,7 +225152,7 @@
                   "end_line": 38,
                   "end_column": 5,
                   "statements": 1,
-                  "covered": true,
+                  "covered": false,
                   "source_hash": "b7835b967e17c0b41bdd417f5dc5c739da5d5405d2c25e8c6f452bbdfd471169"
                 },
                 {
