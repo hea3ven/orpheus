@@ -101,6 +101,7 @@ func newTaskListCommand(opts *rootOptions) *cobra.Command {
 	cmd.Flags().StringVar(&listOpts.updatedAfter, "updated-after", "", "include items updated after YYYY-MM-DD")
 	cmd.Flags().StringVar(&listOpts.updatedBefore, "updated-before", "", "include items updated before YYYY-MM-DD")
 	cmd.Flags().StringArrayVar(&listOpts.statuses, "status", nil, "limit to projected status: needs-attention, reviewing, working, idle, blocked, or closed (repeatable)")
+	cmd.Flags().StringVar(&listOpts.sort, "sort", string(taskViewSortCreated), "order by status, created, or updated")
 	return cmd
 }
 
@@ -408,14 +409,21 @@ type taskListOptions struct {
 	updatedAfter  string
 	updatedBefore string
 	statuses      []string
+	sort          string
 }
 
 type taskListFilter struct {
 	sourceFilter taskmodel.ListFilter
 	statusGroups map[status.GroupID]struct{}
+	sortMode     taskViewSort
 }
 
 func (o taskListOptions) normalized() (taskListFilter, error) {
+	sortMode, err := normalizeTaskViewSort(o.sort, taskViewSortCreated)
+	if err != nil {
+		return taskListFilter{}, err
+	}
+
 	issueTypes := make([]taskmodel.IssueType, 0, len(o.types))
 	for _, value := range o.types {
 		issueType := taskmodel.IssueType(strings.ToLower(strings.TrimSpace(value)))
@@ -462,7 +470,7 @@ func (o taskListOptions) normalized() (taskListFilter, error) {
 		}
 		statusGroups[group] = struct{}{}
 	}
-	return taskListFilter{sourceFilter: sourceFilter, statusGroups: statusGroups}, nil
+	return taskListFilter{sourceFilter: sourceFilter, statusGroups: statusGroups, sortMode: sortMode}, nil
 }
 
 func parseTaskListDate(flag string, value string) (*time.Time, error) {
@@ -548,7 +556,7 @@ func runTaskList(command *cobra.Command, opts *rootOptions, listOpts taskListOpt
 	)
 
 	renderOptions := statusRenderOptionsForOutput(command.OutOrStdout(), false, defaultStatusWidthDetector)
-	if err := renderStatus(command.OutOrStdout(), projection, true, renderOptions); err != nil {
+	if err := renderStatusWithSort(command.OutOrStdout(), projection, true, renderOptions, filter.sortMode); err != nil {
 		return err
 	}
 	if snapshot.HasFailures() {
