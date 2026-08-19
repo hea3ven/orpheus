@@ -94,10 +94,46 @@ func taskRunStateIndexForStore(
 	store taskStateReader,
 	snapshot taskmodel.SnapshotResult,
 ) (status.LocalTaskStateIndex, []taskmodel.RepoFailure) {
+	return taskRunStateIndexForStoreCandidates(paths, store, snapshot, nil)
+}
+
+// taskRunStateIndexForCandidates loads persisted local state only for output
+// candidates while retaining full relationship context for eligibility policy.
+func taskRunStateIndexForCandidates(
+	deps *invocationDependencies,
+	snapshot taskmodel.SnapshotResult,
+	candidates []taskmodel.RepoTask,
+) (status.LocalTaskStateIndex, []taskmodel.RepoFailure) {
+	candidateIDs := make(map[string]map[string]bool, len(snapshot.Repositories))
+	for _, repository := range snapshot.Repositories {
+		candidateIDs[repository.Repository.ID] = make(map[string]bool)
+	}
+	for _, candidate := range candidates {
+		ids := candidateIDs[candidate.Repository.ID]
+		if ids == nil {
+			ids = make(map[string]bool)
+			candidateIDs[candidate.Repository.ID] = ids
+		}
+		ids[candidate.Task.ID] = true
+	}
+	return taskRunStateIndexForStoreCandidates(deps.paths, deps.taskStateStore, snapshot, candidateIDs)
+}
+
+func taskRunStateIndexForStoreCandidates(
+	paths state.Paths,
+	store taskStateReader,
+	snapshot taskmodel.SnapshotResult,
+	candidateIDs map[string]map[string]bool,
+) (status.LocalTaskStateIndex, []taskmodel.RepoFailure) {
 	index := status.LocalTaskStateIndex{}
 	failures := make([]taskmodel.RepoFailure, 0)
 	for _, repoSnapshot := range snapshot.Repositories {
-		repoIndex, repoFailures := taskRunStateIndexForRepository(paths, store, repoSnapshot)
+		repoIndex, repoFailures := taskRunStateIndexForRepositoryCandidates(
+			paths,
+			store,
+			repoSnapshot,
+			candidateIDs[repoSnapshot.Repository.ID],
+		)
 		for key, localState := range repoIndex {
 			index[key] = localState
 		}
@@ -106,12 +142,16 @@ func taskRunStateIndexForStore(
 	return index, failures
 }
 
-func taskRunStateIndexForRepository(
+func taskRunStateIndexForRepositoryCandidates(
 	paths state.Paths,
 	store taskStateReader,
 	repoSnapshot taskmodel.RepositorySnapshot,
+	selectedTaskIDs map[string]bool,
 ) (status.LocalTaskStateIndex, []taskmodel.RepoFailure) {
 	candidates := status.LocalTaskStateCandidates(repoSnapshot.Repository, repoSnapshot.Tasks)
+	if selectedTaskIDs != nil && len(selectedTaskIDs) == 0 {
+		return status.LocalTaskStateIndex{}, nil
+	}
 	persistedTaskIDs, err := store.TaskIDs(repoSnapshot.Repository.ID)
 	if err != nil {
 		return nil, taskStateInventoryFailure(repoSnapshot.Repository, candidates, err)
@@ -121,6 +161,9 @@ func taskRunStateIndexForRepository(
 	index := status.LocalTaskStateIndex{}
 	failures := make([]taskmodel.RepoFailure, 0)
 	for _, taskItem := range repoSnapshot.Tasks {
+		if selectedTaskIDs != nil && !selectedTaskIDs[taskItem.ID] {
+			continue
+		}
 		if !persisted[taskItem.ID] || !candidates[taskItem.ID] {
 			continue
 		}

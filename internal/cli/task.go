@@ -85,14 +85,23 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 }
 
 func newTaskListCommand(opts *rootOptions) *cobra.Command {
-	return &cobra.Command{
+	var listOpts taskListOptions
+	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List all active tasks and epics across registered repositories",
+		Short: "List tasks and epics across registered repositories",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
-			return runTaskList(command, opts)
+			return runTaskList(command, opts, listOpts)
 		},
 	}
+	cmd.Flags().StringVar(&listOpts.query, "query", "", "match task ID or title (case-insensitive partial match)")
+	cmd.Flags().StringArrayVar(&listOpts.types, "type", nil, "limit to task or epic (repeatable)")
+	cmd.Flags().StringVar(&listOpts.createdAfter, "created-after", "", "include items created after YYYY-MM-DD")
+	cmd.Flags().StringVar(&listOpts.createdBefore, "created-before", "", "include items created before YYYY-MM-DD")
+	cmd.Flags().StringVar(&listOpts.updatedAfter, "updated-after", "", "include items updated after YYYY-MM-DD")
+	cmd.Flags().StringVar(&listOpts.updatedBefore, "updated-before", "", "include items updated before YYYY-MM-DD")
+	cmd.Flags().StringArrayVar(&listOpts.statuses, "status", nil, "limit to projected status: needs-attention, reviewing, working, idle, blocked, or closed (repeatable)")
+	return cmd
 }
 
 func newTaskShowCommand(opts *rootOptions) *cobra.Command {
@@ -391,7 +400,108 @@ type taskEditOptions struct {
 	parentIDSet           bool
 }
 
-func runTaskList(command *cobra.Command, opts *rootOptions) error {
+type taskListOptions struct {
+	query         string
+	types         []string
+	createdAfter  string
+	createdBefore string
+	updatedAfter  string
+	updatedBefore string
+	statuses      []string
+}
+
+type taskListFilter struct {
+	sourceFilter taskmodel.ListFilter
+	statusGroups map[status.GroupID]struct{}
+}
+
+func (o taskListOptions) normalized() (taskListFilter, error) {
+	issueTypes := make([]taskmodel.IssueType, 0, len(o.types))
+	for _, value := range o.types {
+		issueType := taskmodel.IssueType(strings.ToLower(strings.TrimSpace(value)))
+		if issueType != taskmodel.IssueTypeTask && issueType != taskmodel.IssueTypeEpic {
+			return taskListFilter{}, fmt.Errorf("invalid --type %q; expected task or epic", value)
+		}
+		issueTypes = append(issueTypes, issueType)
+	}
+
+	createdAfter, err := parseTaskListDate("created-after", o.createdAfter)
+	if err != nil {
+		return taskListFilter{}, err
+	}
+	createdBefore, err := parseTaskListDate("created-before", o.createdBefore)
+	if err != nil {
+		return taskListFilter{}, err
+	}
+	updatedAfter, err := parseTaskListDate("updated-after", o.updatedAfter)
+	if err != nil {
+		return taskListFilter{}, err
+	}
+	updatedBefore, err := parseTaskListDate("updated-before", o.updatedBefore)
+	if err != nil {
+		return taskListFilter{}, err
+	}
+
+	sourceFilter, err := (taskmodel.ListFilter{
+		Query:         o.query,
+		IssueTypes:    issueTypes,
+		CreatedAfter:  createdAfter,
+		CreatedBefore: createdBefore,
+		UpdatedAfter:  updatedAfter,
+		UpdatedBefore: updatedBefore,
+	}).Normalized()
+	if err != nil {
+		return taskListFilter{}, fmt.Errorf("invalid task-list date range: %w", err)
+	}
+
+	statusGroups := make(map[status.GroupID]struct{}, len(o.statuses))
+	for _, value := range o.statuses {
+		group, ok := taskListStatusGroup(strings.ToLower(strings.TrimSpace(value)))
+		if !ok {
+			return taskListFilter{}, fmt.Errorf("invalid --status %q; expected needs-attention, reviewing, working, idle, blocked, or closed (ready is not a task-list filter)", value)
+		}
+		statusGroups[group] = struct{}{}
+	}
+	return taskListFilter{sourceFilter: sourceFilter, statusGroups: statusGroups}, nil
+}
+
+func parseTaskListDate(flag string, value string) (*time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := time.ParseInLocation(time.DateOnly, value, time.UTC)
+	if err != nil {
+		return nil, fmt.Errorf("invalid --%s date %q; expected YYYY-MM-DD", flag, value)
+	}
+	return &parsed, nil
+}
+
+func taskListStatusGroup(value string) (status.GroupID, bool) {
+	switch value {
+	case "needs-attention":
+		return status.GroupNeedsAttention, true
+	case "reviewing":
+		return status.GroupInReview, true
+	case "working":
+		return status.GroupWorking, true
+	case "idle":
+		return status.GroupIdle, true
+	case "blocked":
+		return status.GroupBlocked, true
+	case "closed":
+		return status.GroupDoneClosed, true
+	default:
+		return "", false
+	}
+}
+
+func runTaskList(command *cobra.Command, opts *rootOptions, listOpts taskListOptions) error {
+	filter, err := listOpts.normalized()
+	if err != nil {
+		return err
+	}
+
 	logger := opts.log().With(
 		slog.String("component", "cli"),
 		slog.String("operation", "task_list"),
@@ -406,14 +516,30 @@ func runTaskList(command *cobra.Command, opts *rootOptions) error {
 	if err != nil {
 		return err
 	}
-	logger.DebugContext(command.Context(), "querying task snapshots", slog.Int("repo_count", len(taskCtx.Sources)))
+	logger.DebugContext(command.Context(), "querying task inventory", slog.Int("repo_count", len(taskCtx.Sources)))
 
-	snapshot := taskCtx.Aggregator.Snapshot(command.Context())
-	runStates, runStateFailures := taskRunStateIndex(deps, snapshot)
+	var snapshot taskmodel.SnapshotResult
+	var candidates []taskmodel.RepoTask
+	if filter.sourceFilter.HasConstraints() {
+		filteredSnapshot, err := taskCtx.Aggregator.FilteredSnapshot(command.Context(), filter.sourceFilter)
+		if err != nil {
+			return fmt.Errorf("task list: normalize source filter: %w", err)
+		}
+		snapshot = filteredSnapshot.Snapshot
+		candidates = filteredSnapshot.Candidates
+	} else {
+		snapshot = taskCtx.Aggregator.Snapshot(command.Context())
+		candidates = snapshotCandidates(snapshot)
+	}
+	runStates, runStateFailures := taskRunStateIndexForCandidates(deps, snapshot, candidates)
 	if len(runStateFailures) > 0 {
 		snapshot.Failures = append(snapshot.Failures, runStateFailures...)
 	}
-	projection := activeTaskInventory(status.ProjectWithLocalTaskStates(snapshot, runStates))
+	projection := filteredTaskInventory(
+		status.ProjectWithLocalTaskStates(snapshot, runStates),
+		candidates,
+		filter.statusGroups,
+	)
 	logger.DebugContext(
 		command.Context(),
 		"projected task inventory",
@@ -432,17 +558,61 @@ func runTaskList(command *cobra.Command, opts *rootOptions) error {
 	return nil
 }
 
-// activeTaskInventory retains every task-source item that has not closed while
-// preserving the status projection's classification, details, and diagnostics.
-func activeTaskInventory(projection status.Projection) status.Projection {
+// filteredTaskInventory applies output and projected-status constraints only
+// after status classification. Relationship context rows shape that
+// classification but are excluded because they are not output candidates.
+func filteredTaskInventory(
+	projection status.Projection,
+	candidates []taskmodel.RepoTask,
+	statusGroups map[status.GroupID]struct{},
+) status.Projection {
+	candidateKeys := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		candidateKeys[taskListCandidateKey(candidate.Repository.ID, candidate.Task.ID)] = struct{}{}
+	}
+
 	inventory := status.Projection{Groups: make([]status.Group, 0, len(projection.Groups))}
 	for _, group := range projection.Groups {
-		if group.ID == status.GroupDoneClosed {
-			continue
+		filteredGroup := status.Group{ID: group.ID, Title: group.Title}
+		for _, entry := range group.Entries {
+			if entry.Kind != status.EntryTask {
+				// Repository failures are operation diagnostics, not task-list
+				// rows. Keep them visible even if a projected-status filter is set.
+				filteredGroup.Entries = append(filteredGroup.Entries, entry)
+				continue
+			}
+			if _, selected := candidateKeys[taskListCandidateKey(entry.Repository.ID, entry.Task.ID)]; !selected {
+				continue
+			}
+			if len(statusGroups) == 0 {
+				if group.ID == status.GroupDoneClosed {
+					continue
+				}
+			} else if _, selected := statusGroups[group.ID]; !selected {
+				continue
+			}
+			filteredGroup.Entries = append(filteredGroup.Entries, entry)
 		}
-		inventory.Groups = append(inventory.Groups, group)
+		inventory.Groups = append(inventory.Groups, filteredGroup)
 	}
 	return inventory
+}
+
+func snapshotCandidates(snapshot taskmodel.SnapshotResult) []taskmodel.RepoTask {
+	candidates := make([]taskmodel.RepoTask, 0)
+	for _, repository := range snapshot.Repositories {
+		for _, taskItem := range repository.Tasks {
+			candidates = append(candidates, taskmodel.RepoTask{
+				Repository: repository.Repository,
+				Task:       taskItem.Clone(),
+			})
+		}
+	}
+	return candidates
+}
+
+func taskListCandidateKey(repositoryID, taskID string) string {
+	return repositoryID + "\x00" + taskID
 }
 
 func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error {
