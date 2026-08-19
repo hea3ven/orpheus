@@ -15,6 +15,59 @@ import (
 )
 
 type loggerContextKey struct{}
+type commandRunnerContextKey struct{}
+
+// Command describes one Git subprocess invocation.
+type Command struct {
+	Directory string
+	Args      []string
+	Input     string
+}
+
+// CommandResult contains the captured output from one Git command.
+type CommandResult struct {
+	Stdout string
+	Stderr string
+}
+
+// CommandRunner executes Git commands. Production uses the local Git binary;
+// tests can inject a recording runner to exercise orchestration decisions.
+type CommandRunner interface {
+	Run(context.Context, Command) (CommandResult, error)
+}
+
+// CommandExitError supplies a Git command exit code to injected runners.
+type CommandExitError struct {
+	Code int
+	Err  error
+}
+
+func (err CommandExitError) Error() string {
+	if err.Err != nil {
+		return err.Err.Error()
+	}
+	return fmt.Sprintf("git command exited with status %d", err.Code)
+}
+
+func (err CommandExitError) Unwrap() error {
+	return err.Err
+}
+
+// ExitCode returns the command exit code.
+func (err CommandExitError) ExitCode() int {
+	return err.Code
+}
+
+// ContextWithRunner returns a child context that runs Git commands through runner.
+func ContextWithRunner(ctx context.Context, runner CommandRunner) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if runner == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, commandRunnerContextKey{}, runner)
+}
 
 // ContextWithLogger returns a child context that enables safe Git command diagnostics.
 func ContextWithLogger(ctx context.Context, logger *slog.Logger) context.Context {
@@ -33,6 +86,14 @@ func loggerFromContext(ctx context.Context) *slog.Logger {
 	}
 	logger, _ := ctx.Value(loggerContextKey{}).(*slog.Logger)
 	return logger
+}
+
+func runnerFromContext(ctx context.Context) CommandRunner {
+	if ctx == nil {
+		return nil
+	}
+	runner, _ := ctx.Value(commandRunnerContextKey{}).(CommandRunner)
+	return runner
 }
 
 var (
@@ -275,34 +336,54 @@ func runGitContext(ctx context.Context, dir string, args ...string) (string, err
 }
 
 func runGitContextLogger(ctx context.Context, logger *slog.Logger, dir string, operation string, args ...string) (string, error) {
+	return runGitCommand(ctx, logger, dir, operation, "", args...)
+}
+
+func runGitCommand(ctx context.Context, logger *slog.Logger, dir string, operation string, input string, args ...string) (string, error) {
 	span := logging.Start(ctx, logger, "git command",
 		slog.String("component", "git"),
 		slog.String("operation", operation),
 		slog.String("cwd", dir),
 	)
-	command := exec.CommandContext(ctx, "git", args...)
-	command.Dir = dir
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-
-	err := command.Run()
-	output := stdout.String()
-	if stderr.Len() > 0 {
-		if output != "" && !strings.HasSuffix(output, "\n") {
-			output += "\n"
-		}
-		output += stderr.String()
+	runner := runnerFromContext(ctx)
+	if runner == nil {
+		runner = systemCommandRunner{}
 	}
-	finishAttrs := gitExitAttrs(command, err)
+	result, err := runner.Run(ctx, Command{Directory: dir, Args: append([]string(nil), args...), Input: input})
+	output := combineCommandOutput(result)
+	finishAttrs := gitExitAttrs(err)
 	if err != nil && expectedGitAbsence(operation, output, err) {
 		span.Finish(ctx, logging.StatusExpectedAbsence, finishAttrs...)
 	} else {
 		span.FinishError(ctx, err, finishAttrs...)
 	}
 	return output, err
+}
+
+type systemCommandRunner struct{}
+
+func (systemCommandRunner) Run(ctx context.Context, command Command) (CommandResult, error) {
+	process := exec.CommandContext(ctx, "git", command.Args...)
+	process.Dir = command.Directory
+	process.Stdin = strings.NewReader(command.Input)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	process.Stdout = &stdout
+	process.Stderr = &stderr
+	err := process.Run()
+	return CommandResult{Stdout: stdout.String(), Stderr: stderr.String()}, err
+}
+
+func combineCommandOutput(result CommandResult) string {
+	output := result.Stdout
+	if result.Stderr != "" {
+		if output != "" && !strings.HasSuffix(output, "\n") {
+			output += "\n"
+		}
+		output += result.Stderr
+	}
+	return output
 }
 
 var gitOperationNames = map[string]string{
@@ -359,10 +440,7 @@ func gitMergeOperationName(args []string) string {
 	return "merge"
 }
 
-func gitExitAttrs(command *exec.Cmd, err error) []slog.Attr {
-	if command != nil && command.ProcessState != nil {
-		return []slog.Attr{slog.Int("exit_code", command.ProcessState.ExitCode())}
-	}
+func gitExitAttrs(err error) []slog.Attr {
 	if exitCode, ok := logging.ExitCode(err); ok {
 		return []slog.Attr{slog.Int("exit_code", exitCode)}
 	}
