@@ -70,45 +70,46 @@ type DetailKind string
 const (
 	DetailNone DetailKind = ""
 
-	DetailClosed                   DetailKind = "closed"
-	DetailPullRequest              DetailKind = "pull_request"
-	DetailLocalReview              DetailKind = "local_review"
-	DetailReviewRunning            DetailKind = "review_running"
-	DetailReviewManualStep         DetailKind = "review_manual_step"
-	DetailReviewDecisionLost       DetailKind = "review_decision_lost"
-	DetailReviewDecisionRequired   DetailKind = "review_decision_required"
-	DetailReviewDecisionPaused     DetailKind = "review_decision_paused"
-	DetailReviewFollowUpReady      DetailKind = "review_follow_up_ready"
-	DetailReviewBudgetSpent        DetailKind = "review_budget_spent"
-	DetailReviewFindings           DetailKind = "review_findings"
-	DetailReviewAborted            DetailKind = "review_aborted"
-	DetailReviewFailed             DetailKind = "review_failed"
-	DetailPrimaryReviewInterrupted DetailKind = "primary_review_interrupted"
-	DetailReviewPassed             DetailKind = "review_passed"
-	DetailReviewPublishFailed      DetailKind = "review_publish_failed"
-	DetailReviewUnknownState       DetailKind = "review_unknown_state"
-	DetailNoRun                    DetailKind = "no_run"
-	DetailRunRunning               DetailKind = "run_running"
-	DetailRunFailed                DetailKind = "run_failed"
-	DetailRunInterrupted           DetailKind = "run_interrupted"
-	DetailRunIncomplete            DetailKind = "run_incomplete"
-	DetailRunUnknownState          DetailKind = "run_unknown_state"
-	DetailOpenTaskRunHistory       DetailKind = "open_task_run_history"
-	DetailParentMissing            DetailKind = "parent_missing"
-	DetailParentNotEpic            DetailKind = "parent_not_epic"
-	DetailParentNotReady           DetailKind = "parent_not_ready"
-	DetailMissingExternalRef       DetailKind = "missing_external_ref"
-	DetailWrongPRTarget            DetailKind = "wrong_pr_target"
-	DetailWrongLocalTarget         DetailKind = "wrong_local_target"
-	DetailFinalizedButOpen         DetailKind = "finalized_but_open"
-	DetailMissingDependency        DetailKind = "missing_dependency"
-	DetailMissingDependencies      DetailKind = "missing_dependencies"
-	DetailDependencyDetailsMissing DetailKind = "dependency_details_missing"
-	DetailBlockedDependency        DetailKind = "blocked_dependency"
-	DetailBlockedDependencies      DetailKind = "blocked_dependencies"
-	DetailUnknownTaskStatus        DetailKind = "unknown_task_status"
-	DetailRepoFailure              DetailKind = "repo_failure"
-	DetailEpicProgress             DetailKind = "epic_progress"
+	DetailClosed                         DetailKind = "closed"
+	DetailPullRequest                    DetailKind = "pull_request"
+	DetailLocalReview                    DetailKind = "local_review"
+	DetailReviewRunning                  DetailKind = "review_running"
+	DetailReviewManualStep               DetailKind = "review_manual_step"
+	DetailReviewDecisionLost             DetailKind = "review_decision_lost"
+	DetailReviewDecisionRequired         DetailKind = "review_decision_required"
+	DetailReviewDecisionPaused           DetailKind = "review_decision_paused"
+	DetailReviewFollowUpReady            DetailKind = "review_follow_up_ready"
+	DetailReviewBudgetSpent              DetailKind = "review_budget_spent"
+	DetailReviewFindings                 DetailKind = "review_findings"
+	DetailReviewAborted                  DetailKind = "review_aborted"
+	DetailReviewFailed                   DetailKind = "review_failed"
+	DetailPrimaryReviewInterrupted       DetailKind = "primary_review_interrupted"
+	DetailReviewPassed                   DetailKind = "review_passed"
+	DetailReviewPublishFailed            DetailKind = "review_publish_failed"
+	DetailReviewUnknownState             DetailKind = "review_unknown_state"
+	DetailNoRun                          DetailKind = "no_run"
+	DetailRunRunning                     DetailKind = "run_running"
+	DetailRunFailed                      DetailKind = "run_failed"
+	DetailRunInterrupted                 DetailKind = "run_interrupted"
+	DetailRunIncomplete                  DetailKind = "run_incomplete"
+	DetailRunUnknownState                DetailKind = "run_unknown_state"
+	DetailOpenTaskRunHistory             DetailKind = "open_task_run_history"
+	DetailParentMissing                  DetailKind = "parent_missing"
+	DetailParentNotEpic                  DetailKind = "parent_not_epic"
+	DetailParentNotReady                 DetailKind = "parent_not_ready"
+	DetailMissingExternalRef             DetailKind = "missing_external_ref"
+	DetailWrongPRTarget                  DetailKind = "wrong_pr_target"
+	DetailWrongLocalTarget               DetailKind = "wrong_local_target"
+	DetailFinalizedButOpen               DetailKind = "finalized_but_open"
+	DetailMissingDependency              DetailKind = "missing_dependency"
+	DetailMissingDependencies            DetailKind = "missing_dependencies"
+	DetailDependencyDetailsMissing       DetailKind = "dependency_details_missing"
+	DetailRelationshipContextUnavailable DetailKind = "relationship_context_unavailable"
+	DetailBlockedDependency              DetailKind = "blocked_dependency"
+	DetailBlockedDependencies            DetailKind = "blocked_dependencies"
+	DetailUnknownTaskStatus              DetailKind = "unknown_task_status"
+	DetailRepoFailure                    DetailKind = "repo_failure"
+	DetailEpicProgress                   DetailKind = "epic_progress"
 )
 
 // Detail carries compact-rendering inputs without requiring CLI prose parsing.
@@ -270,12 +271,14 @@ func localTaskStateCanAffectProjection(
 func projectRepository(projection *Projection, repoSnapshot task.RepositorySnapshot, localStates LocalTaskStateIndex) {
 	index := newRepositoryIndex(repoSnapshot.Tasks)
 	progressByEpic := epicChildProgressByParent(repoSnapshot.Tasks)
+	relationshipFailures := relationshipContextFailureIndex(repoSnapshot.RelationshipContextFailures)
 	for _, taskItem := range repoSnapshot.Tasks {
 		result := classify(
 			repoSnapshot.Repository,
 			taskItem,
 			index,
 			localTaskStateFor(localStates, repoSnapshot.Repository.ID, taskItem.ID),
+			relationshipFailures[strings.TrimSpace(taskItem.ID)],
 		)
 		epicProgress := Detail{}
 		if taskItem.IssueType == task.IssueTypeEpic {
@@ -285,7 +288,13 @@ func projectRepository(projection *Projection, repoSnapshot task.RepositorySnaps
 	}
 }
 
-func classify(repository task.Repository, taskItem task.Task, index map[string]task.Task, localState *LocalTaskState) policyResult {
+func classify(
+	repository task.Repository,
+	taskItem task.Task,
+	index map[string]task.Task,
+	localState *LocalTaskState,
+	relationshipFailures []task.RelationshipContextFailure,
+) policyResult {
 	metadata := taskItem.OrpheusMetadata()
 	latestRun := latestRunFrom(localState)
 	if taskItem.Status == task.StatusClosed {
@@ -309,6 +318,9 @@ func classify(repository task.Repository, taskItem task.Task, index map[string]t
 	if taskItem.Status == task.StatusInProgress && latestRun != nil && latestRun.Status == taskstate.RunStatusRunning {
 		return classifyInProgress(latestRun)
 	}
+	if relationshipFailure, unavailable := relationshipFailureAffectsParentGate(taskItem, relationshipFailures); unavailable {
+		return unavailableRelationshipContext(relationshipFailure)
+	}
 	if result, ok := classifyParentEpicGate(taskItem, index); ok {
 		return result
 	}
@@ -327,13 +339,76 @@ func classify(repository task.Repository, taskItem task.Task, index map[string]t
 	if taskItem.Status == task.StatusInProgress {
 		return classifyInProgress(latestRun)
 	}
-	return classifyOpenOrUnknownTask(taskItem, index, latestRun)
+	return classifyOpenOrUnknownTask(taskItem, index, latestRun, relationshipFailures)
+}
+
+func relationshipContextFailureIndex(
+	failures []task.RelationshipContextFailure,
+) map[string][]task.RelationshipContextFailure {
+	index := make(map[string][]task.RelationshipContextFailure, len(failures))
+	for _, failure := range failures {
+		failure.TaskID = strings.TrimSpace(failure.TaskID)
+		if failure.TaskID == "" {
+			continue
+		}
+		failure.ReferenceID = strings.TrimSpace(failure.ReferenceID)
+		index[failure.TaskID] = append(index[failure.TaskID], failure)
+	}
+	return index
+}
+
+func relationshipFailureAffectsParentGate(
+	taskItem task.Task,
+	failures []task.RelationshipContextFailure,
+) (task.RelationshipContextFailure, bool) {
+	parentID := strings.TrimSpace(taskItem.Relations.ParentID)
+	for _, failure := range failures {
+		if failure.ReferenceID == "" || (parentID != "" && failure.ReferenceID == parentID) {
+			return failure, true
+		}
+	}
+	return task.RelationshipContextFailure{}, false
+}
+
+func relationshipFailureAffectsDependencyCheck(
+	taskItem task.Task,
+	failures []task.RelationshipContextFailure,
+) (task.RelationshipContextFailure, bool) {
+	dependencies := make(map[string]struct{}, len(taskItem.Relations.DependencyIDs))
+	for _, dependencyID := range taskItem.Relations.DependencyIDs {
+		if dependencyID = strings.TrimSpace(dependencyID); dependencyID != "" {
+			dependencies[dependencyID] = struct{}{}
+		}
+	}
+	for _, failure := range failures {
+		if failure.ReferenceID == "" {
+			return failure, true
+		}
+		if _, exists := dependencies[failure.ReferenceID]; exists {
+			return failure, true
+		}
+	}
+	return task.RelationshipContextFailure{}, false
+}
+
+func unavailableRelationshipContext(failure task.RelationshipContextFailure) policyResult {
+	referenceID := valueOrUnknown(failure.ReferenceID)
+	detail := "relationship context unavailable for " + referenceID
+	if repositoryID := strings.TrimSpace(failure.ReferenceRepository.ID); repositoryID != "" {
+		detail += " in repository " + repositoryID
+	}
+	return newPolicyResult(
+		readinessAttention,
+		detail,
+		Detail{Kind: DetailRelationshipContextUnavailable, ID: failure.ReferenceID},
+	)
 }
 
 func classifyOpenOrUnknownTask(
 	taskItem task.Task,
 	index map[string]task.Task,
 	latestRun *taskstate.RunAttempt,
+	relationshipFailures []task.RelationshipContextFailure,
 ) policyResult {
 	if taskItem.Status == task.StatusOpen && latestRun != nil {
 		return newPolicyResult(
@@ -343,6 +418,9 @@ func classifyOpenOrUnknownTask(
 		)
 	}
 	deps := dependencyIDs(taskItem)
+	if relationshipFailure, unavailable := relationshipFailureAffectsDependencyCheck(taskItem, relationshipFailures); unavailable {
+		return unavailableRelationshipContext(relationshipFailure)
+	}
 	missingDetail, missingSemanticDetail := missingDependencyDetail(taskItem, deps, index)
 	if missingDetail != "" {
 		return newPolicyResult(readinessAttention, missingDetail, missingSemanticDetail)

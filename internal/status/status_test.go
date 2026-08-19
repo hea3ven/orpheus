@@ -704,6 +704,60 @@ func TestProjectTreatsMissingDependenciesAsUnknown(t *testing.T) {
 	assertGroupTaskIDs(t, got, status.GroupReadyToRun, nil)
 }
 
+func TestProjectTreatsCrossRepositoryContextAsUnavailableRatherThanMissing(t *testing.T) {
+	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
+		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"},
+		Tasks: []task.Task{{
+			ID:        "a-task",
+			Title:     "cross-repository dependency",
+			Status:    task.StatusOpen,
+			IssueType: task.IssueTypeTask,
+			Relations: task.RelationSummary{DependencyIDs: []string{"b-dependency"}},
+		}},
+		RelationshipContextFailures: []task.RelationshipContextFailure{{
+			TaskID:              "a-task",
+			ReferenceID:         "b-dependency",
+			ReferenceRepository: task.Repository{ID: "beta", Name: "Beta", TaskIDPrefix: "b"},
+		}},
+	}}}
+
+	entry := projectionEntryByTaskID(t, status.Project(snapshot), "a-task")
+	if entry.SemanticDetail.Kind != status.DetailRelationshipContextUnavailable || entry.SemanticDetail.ID != "b-dependency" {
+		t.Fatalf("semantic detail = %#v, want unavailable cross-repository dependency", entry.SemanticDetail)
+	}
+	if !strings.Contains(entry.Detail, "b-dependency in repository beta") || strings.Contains(entry.Detail, "missing dependency") {
+		t.Fatalf("detail = %q, want named unavailable dependency without missing diagnostic", entry.Detail)
+	}
+}
+
+func TestProjectRetainsParentFailureAfterEarlierDependencyFailure(t *testing.T) {
+	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
+		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"},
+		Tasks: []task.Task{{
+			ID:        "a-task",
+			Title:     "failed parent and dependency lookups",
+			Status:    task.StatusOpen,
+			IssueType: task.IssueTypeTask,
+			Relations: task.RelationSummary{
+				ParentID:      "a-parent",
+				DependencyIDs: []string{"a-dependency"},
+			},
+		}},
+		RelationshipContextFailures: []task.RelationshipContextFailure{
+			{TaskID: "a-task", ReferenceID: "a-dependency"},
+			{TaskID: "a-task", ReferenceID: "a-parent"},
+		},
+	}}}
+
+	entry := projectionEntryByTaskID(t, status.Project(snapshot), "a-task")
+	if entry.SemanticDetail.Kind != status.DetailRelationshipContextUnavailable || entry.SemanticDetail.ID != "a-parent" {
+		t.Fatalf("semantic detail = %#v, want unavailable parent context", entry.SemanticDetail)
+	}
+	if strings.Contains(entry.Detail, "missing parent") {
+		t.Fatalf("detail = %q, must not report failed parent lookup as missing", entry.Detail)
+	}
+}
+
 func TestProjectAddsStructuredRepoFailuresToNeedsAttention(t *testing.T) {
 	failureErr := errors.New("bd list failed")
 	snapshot := task.SnapshotResult{Failures: []task.RepoFailure{{
