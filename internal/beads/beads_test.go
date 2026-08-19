@@ -321,6 +321,49 @@ func TestTaskBackendListParsesVisibleTasksAndMetadata(t *testing.T) {
 	}
 }
 
+func TestTaskBackendListFilteredPushesSupportedFieldsAndMatchesQueryAtSource(t *testing.T) {
+	dir := t.TempDir()
+	createdAfter := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	createdBefore := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)
+	updatedAfter := time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC)
+	updatedBefore := time.Date(2026, 6, 6, 0, 0, 0, 0, time.UTC)
+	runner := &fakeRunner{calls: []fakeCall{{
+		wantDir: dir,
+		wantArgs: []string{
+			"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task",
+			"--created-after", "2026-06-01", "--created-before", "2026-06-05",
+			"--updated-after", "2026-06-02", "--updated-before", "2026-06-06",
+		},
+		result: beads.Result{Stdout: `[
+			{"id":"op-match-id","title":"other","status":"open","issue_type":"task","created_at":"2026-06-03T00:00:00Z","updated_at":"2026-06-03T00:00:00Z"},
+			{"id":"op-other","title":"A MATCHING title","status":"open","issue_type":"task","created_at":"2026-06-03T00:00:00Z","updated_at":"2026-06-03T00:00:00Z"},
+			{"id":"op-other","title":"other","status":"open","issue_type":"task","created_at":"2026-06-03T00:00:00Z","updated_at":"2026-06-03T00:00:00Z"}
+		]`},
+	}}}
+
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+	got, err := backend.ListFiltered(context.Background(), task.ListFilter{
+		Query:         "match",
+		IssueTypes:    []task.IssueType{task.IssueTypeTask},
+		CreatedAfter:  &createdAfter,
+		CreatedBefore: &createdBefore,
+		UpdatedAfter:  &updatedAfter,
+		UpdatedBefore: &updatedBefore,
+	})
+	if err != nil {
+		t.Fatalf("list filtered tasks: %v", err)
+	}
+	if gotIDs := []string{got[0].ID, got[1].ID}; !reflect.DeepEqual(gotIDs, []string{"op-match-id", "op-other"}) {
+		t.Fatalf("filtered task IDs = %v, want ID and title query matches", gotIDs)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
 func TestManagedTaskBackendRepairsBehindSchemaAndRetriesRead(t *testing.T) {
 	dir := t.TempDir()
 	runner := &fakeRunner{calls: []fakeCall{

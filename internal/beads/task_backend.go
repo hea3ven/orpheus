@@ -19,6 +19,7 @@ const legacyCrossTypeBlockingDependencyType = "orpheus-blocks"
 
 var (
 	_ task.ReadBackend      = TaskBackend{}
+	_ task.FilteredLister   = TaskBackend{}
 	_ task.DispatchMutator  = TaskBackend{}
 	_ task.PRURLMutator     = TaskBackend{}
 	_ task.EpicStartMutator = TaskBackend{}
@@ -133,19 +134,43 @@ func (b TaskBackend) getRawTask(ctx context.Context, id string) (bdTask, error) 
 
 // List lists task and epic Beads items, including closed items.
 func (b TaskBackend) List(ctx context.Context) ([]task.Task, error) {
+	return b.ListFiltered(ctx, task.ListFilter{})
+}
+
+// ListFiltered lists task-source candidates using supported Beads field
+// constraints. Query matching includes partial IDs, which Beads cannot express
+// as a list predicate, so it remains at this source boundary rather than in
+// Orpheus. Type and date constraints are pushed to each Beads query.
+func (b TaskBackend) ListFiltered(ctx context.Context, filter task.ListFilter) ([]task.Task, error) {
+	filter, err := filter.Normalized()
+	if err != nil {
+		return nil, fmt.Errorf("list Beads tasks in %q: %w", b.dir, err)
+	}
+
+	issueTypes := filter.IssueTypes
+	if len(issueTypes) == 0 {
+		issueTypes = []task.IssueType{task.IssueTypeTask, task.IssueTypeEpic}
+	}
+
 	tasks := make([]task.Task, 0)
-	for _, issueType := range []task.IssueType{task.IssueTypeTask, task.IssueTypeEpic} {
-		listed, err := b.listIssueType(ctx, issueType)
+	for _, issueType := range issueTypes {
+		listed, err := b.listIssueType(ctx, issueType, filter)
 		if err != nil {
 			return nil, err
 		}
-		tasks = append(tasks, listed...)
+		for _, taskItem := range listed {
+			if filter.Matches(taskItem) {
+				tasks = append(tasks, taskItem)
+			}
+		}
 	}
 	return task.FilterTaskSourceItems(tasks), nil
 }
 
-func (b TaskBackend) listIssueType(ctx context.Context, issueType task.IssueType) ([]task.Task, error) {
-	result, err := b.run(ctx, "list", "list", "--all", "--limit", "0", "--type", string(issueType))
+func (b TaskBackend) listIssueType(ctx context.Context, issueType task.IssueType, filter task.ListFilter) ([]task.Task, error) {
+	args := []string{"list", "--all", "--limit", "0", "--type", string(issueType)}
+	args = append(args, listFilterArgs(filter)...)
+	result, err := b.run(ctx, "list", args...)
 	if err != nil {
 		return nil, err
 	}
@@ -155,6 +180,31 @@ func (b TaskBackend) listIssueType(ctx context.Context, issueType task.IssueType
 		return nil, fmt.Errorf("list Beads %s items in %q: parse bd list JSON: %w%s", issueType, b.dir, err, formattedOutput(result))
 	}
 	return tasks, nil
+}
+
+func listFilterArgs(filter task.ListFilter) []string {
+	args := make([]string, 0, 10)
+	appendTime := func(flag string, value *time.Time) {
+		if value != nil {
+			args = append(args, flag, formatListFilterTime(*value))
+		}
+	}
+	appendTime("--created-after", filter.CreatedAfter)
+	appendTime("--created-before", filter.CreatedBefore)
+	appendTime("--updated-after", filter.UpdatedAfter)
+	appendTime("--updated-before", filter.UpdatedBefore)
+	if filter.ParentID != "" {
+		args = append(args, "--parent", filter.ParentID)
+	}
+	return args
+}
+
+func formatListFilterTime(value time.Time) string {
+	value = value.UTC()
+	if value.Hour() == 0 && value.Minute() == 0 && value.Second() == 0 && value.Nanosecond() == 0 {
+		return value.Format(time.DateOnly)
+	}
+	return value.Format(time.RFC3339Nano)
 }
 
 // Create creates a standalone Beads task.

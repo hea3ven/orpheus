@@ -10,10 +10,154 @@ import (
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/status"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/workflow"
 )
+
+func TestTaskListOptionsRejectUnsupportedStatusAndDate(t *testing.T) {
+	for _, options := range []taskListOptions{
+		{statuses: []string{"ready"}},
+		{types: []string{"bug"}},
+		{createdAfter: "not-a-date"},
+		{createdAfter: "2026-06-05", createdBefore: "2026-06-04"},
+	} {
+		if _, err := options.normalized(); err == nil {
+			t.Fatalf("normalized %#v successfully, want validation error", options)
+		}
+	}
+}
+
+func TestFilteredTaskInventoryAppliesProjectedStatusAfterHidingContext(t *testing.T) {
+	repository := taskmodel.Repository{ID: "alpha"}
+	projection := status.Projection{Groups: []status.Group{
+		{
+			ID: status.GroupReadyToRun,
+			Entries: []status.Entry{
+				{Kind: status.EntryTask, Repository: repository, Task: taskmodel.Task{ID: "a-selected"}},
+				{Kind: status.EntryTask, Repository: repository, Task: taskmodel.Task{ID: "a-context"}},
+			},
+		},
+		{
+			ID: status.GroupDoneClosed,
+			Entries: []status.Entry{
+				{Kind: status.EntryTask, Repository: repository, Task: taskmodel.Task{ID: "a-closed", Status: taskmodel.StatusClosed}},
+			},
+		},
+	}}
+	candidates := []taskmodel.RepoTask{
+		{Repository: repository, Task: taskmodel.Task{ID: "a-selected"}},
+		{Repository: repository, Task: taskmodel.Task{ID: "a-closed", Status: taskmodel.StatusClosed}},
+	}
+
+	defaultInventory := filteredTaskInventory(projection, candidates, nil)
+	if got := taskIDsInInventory(defaultInventory); !equalStrings(got, []string{"a-selected"}) {
+		t.Fatalf("default task-list rows = %v, want selected non-closed row only", got)
+	}
+	closedInventory := filteredTaskInventory(projection, candidates, map[status.GroupID]struct{}{status.GroupDoneClosed: {}})
+	if got := taskIDsInInventory(closedInventory); !equalStrings(got, []string{"a-closed"}) {
+		t.Fatalf("closed task-list rows = %v, want selected closed row only", got)
+	}
+}
+
+func TestFilteredTaskInventoryProjectsExcludedRelationshipContext(t *testing.T) {
+	repository := taskmodel.Repository{ID: "alpha"}
+	snapshot := taskmodel.SnapshotResult{Repositories: []taskmodel.RepositorySnapshot{{
+		Repository: repository,
+		Tasks: []taskmodel.Task{
+			{ID: "a-epic", Title: "selected epic", IssueType: taskmodel.IssueTypeEpic, Status: taskmodel.StatusOpen, Relations: taskmodel.RelationSummary{ChildCount: 1}},
+			{ID: "a-child", Title: "excluded completed child", IssueType: taskmodel.IssueTypeTask, Status: taskmodel.StatusClosed, Relations: taskmodel.RelationSummary{ParentID: "a-epic"}},
+			{ID: "a-selected-child", Title: "selected child", IssueType: taskmodel.IssueTypeTask, Status: taskmodel.StatusOpen, Relations: taskmodel.RelationSummary{ParentID: "a-parent"}},
+			{ID: "a-parent", Title: "excluded parent", IssueType: taskmodel.IssueTypeEpic, Status: taskmodel.StatusOpen},
+			{ID: "a-selected-dependent", Title: "selected dependent", IssueType: taskmodel.IssueTypeTask, Status: taskmodel.StatusOpen, Relations: taskmodel.RelationSummary{DependencyIDs: []string{"a-dependency"}}},
+			{ID: "a-dependency", Title: "excluded dependency", IssueType: taskmodel.IssueTypeTask, Status: taskmodel.StatusOpen},
+		},
+	}}}
+	candidates := []taskmodel.RepoTask{
+		{Repository: repository, Task: taskmodel.Task{ID: "a-epic"}},
+		{Repository: repository, Task: taskmodel.Task{ID: "a-selected-child"}},
+		{Repository: repository, Task: taskmodel.Task{ID: "a-selected-dependent"}},
+	}
+	inventory := filteredTaskInventory(status.Project(snapshot), candidates, nil)
+	if got := taskIDsInInventory(inventory); !equalStrings(got, []string{"a-epic", "a-selected-child", "a-selected-dependent"}) {
+		t.Fatalf("task-list rows = %v, want selected rows without context", got)
+	}
+
+	entries := inventoryEntries(inventory)
+	if epic := entries["a-epic"]; epic.EpicProgress.Completed != 1 || epic.EpicProgress.Total != 1 {
+		t.Fatalf("epic progress = %#v, want completed excluded child counted", epic.EpicProgress)
+	}
+	if child := entries["a-selected-child"]; child.SemanticDetail.Kind != status.DetailParentNotReady {
+		t.Fatalf("child detail = %#v, want excluded parent gate", child.SemanticDetail)
+	}
+	if dependent := entries["a-selected-dependent"]; dependent.SemanticDetail.Kind != status.DetailBlockedDependency {
+		t.Fatalf("dependent detail = %#v, want excluded dependency block", dependent.SemanticDetail)
+	}
+}
+
+func TestFilteredTaskInventoryDistinguishesFailedRelationLookupFromMissingRelation(t *testing.T) {
+	repository := taskmodel.Repository{ID: "alpha"}
+	selected := taskmodel.Task{
+		ID:        "a-selected",
+		IssueType: taskmodel.IssueTypeTask,
+		Status:    taskmodel.StatusOpen,
+		Relations: taskmodel.RelationSummary{DependencyIDs: []string{"a-dependency"}},
+	}
+	snapshot := taskmodel.SnapshotResult{Repositories: []taskmodel.RepositorySnapshot{{
+		Repository:                  repository,
+		Tasks:                       []taskmodel.Task{selected},
+		RelationshipContextFailures: []taskmodel.RelationshipContextFailure{{TaskID: selected.ID, ReferenceID: "a-dependency"}},
+	}}}
+	inventory := filteredTaskInventory(
+		status.Project(snapshot),
+		[]taskmodel.RepoTask{{Repository: repository, Task: selected}},
+		nil,
+	)
+	entry := inventoryEntries(inventory)[selected.ID]
+	if entry.SemanticDetail.Kind != status.DetailRelationshipContextUnavailable {
+		t.Fatalf("detail = %#v, want unavailable relationship context", entry.SemanticDetail)
+	}
+	if strings.Contains(entry.Detail, "missing dependency") {
+		t.Fatalf("detail = %q, must not report failed lookup as missing", entry.Detail)
+	}
+}
+
+func inventoryEntries(projection status.Projection) map[string]status.Entry {
+	entries := make(map[string]status.Entry)
+	for _, group := range projection.Groups {
+		for _, entry := range group.Entries {
+			if entry.Kind == status.EntryTask {
+				entries[entry.Task.ID] = entry
+			}
+		}
+	}
+	return entries
+}
+
+func taskIDsInInventory(projection status.Projection) []string {
+	var ids []string
+	for _, group := range projection.Groups {
+		for _, entry := range group.Entries {
+			if entry.Kind == status.EntryTask {
+				ids = append(ids, entry.Task.ID)
+			}
+		}
+	}
+	return ids
+}
+
+func equalStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for index := range got {
+		if got[index] != want[index] {
+			return false
+		}
+	}
+	return true
+}
 
 func TestTaskEditRecognizesExplicitlyEmptyPlanningInput(t *testing.T) {
 	t.Parallel()

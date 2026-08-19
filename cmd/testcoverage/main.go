@@ -199,6 +199,9 @@ func execute(opts options) error {
 		}
 		fmt.Printf("Wrote normalized coverage baseline to %s.\n", opts.baseline)
 	} else if err := checkBaseline(opts.baseline, current); err != nil {
+		if reportErr := writeJSON(opts.output, result); reportErr != nil {
+			return errors.Join(err, fmt.Errorf("write stale coverage report: %w", reportErr))
+		}
 		return err
 	}
 	if opts.compareTo != "" {
