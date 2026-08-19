@@ -41,6 +41,7 @@ jobs:
           git show "origin/$BASE_REF:coverage/test-coverage-baseline.json" >"$base_baseline"
           go run ./cmd/testcoverage -compare-to "$base_baseline" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Upload short-lived coverage report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-coverage-report
