@@ -20,6 +20,26 @@ func TestRepositoryIntegrationTestsConformToLaneConvention(t *testing.T) {
 	}
 }
 
+func TestValidateIntegrationSourcesSkipsGitDirectory(t *testing.T) {
+	root := t.TempDir()
+	gitDir := filepath.Join(root, ".git")
+	if err := os.Mkdir(gitDir, 0o755); err != nil {
+		t.Fatalf("create .git fixture: %v", err)
+	}
+	contents := "package ignored\n\nfunc TestIntegrationIgnored(t *testing.T) {}\n"
+	if err := os.WriteFile(filepath.Join(gitDir, "ignored_test.go"), []byte(contents), 0o644); err != nil {
+		t.Fatalf("write ignored test fixture: %v", err)
+	}
+
+	violations, err := testlane.ValidateIntegrationSources(root)
+	if err != nil {
+		t.Fatalf("validate fixture with .git directory: %v", err)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("violations = %v, want .git contents ignored", violations)
+	}
+}
+
 func TestValidateIntegrationSourcesRejectsNonconformingTopLevelTest(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "adapter_integration_test.go")
