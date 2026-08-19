@@ -97,6 +97,8 @@ func TestIntegrationStatusRepairsManagedBeadsSchemaDrift(t *testing.T) {
 
 	databaseDir := filepath.Join(managedDir, ".beads", "embeddeddolt", "alpha")
 	for _, args := range [][]string{
+		{"config", "--local", "--add", "user.name", "Orpheus Tests"},
+		{"config", "--local", "--add", "user.email", "tests@orpheus.invalid"},
 		{"sql", "-q", "DELETE FROM schema_migrations WHERE version = (SELECT MAX(version) FROM schema_migrations)"},
 		{"add", "schema_migrations"},
 		{"commit", "-m", "test: stale schema"},
