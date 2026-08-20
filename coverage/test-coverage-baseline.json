@@ -20,8 +20,8 @@
     "integration": {
       "test_count": 428,
       "coverage": {
-        "statement_total": 18991,
-        "covered_statements": 11989
+        "statement_total": 19042,
+        "covered_statements": 12036
       },
       "packages": [
         {
@@ -56,8 +56,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 4547,
-          "covered_statements": 3048
+          "statement_total": 4598,
+          "covered_statements": 3095
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/doctor",
@@ -264,10 +264,10 @@
       ]
     },
     "unit": {
-      "test_count": 941,
+      "test_count": 945,
       "coverage": {
-        "statement_total": 18991,
-        "covered_statements": 9840
+        "statement_total": 19042,
+        "covered_statements": 9879
       },
       "packages": [
         {
@@ -302,8 +302,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 4547,
-          "covered_statements": 1640
+          "statement_total": 4598,
+          "covered_statements": 1679
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/doctor",
