@@ -101,6 +101,7 @@ func newTaskListCommand(opts *rootOptions) *cobra.Command {
 	cmd.Flags().StringVar(&listOpts.updatedAfter, "updated-after", "", "include items updated after YYYY-MM-DD")
 	cmd.Flags().StringVar(&listOpts.updatedBefore, "updated-before", "", "include items updated before YYYY-MM-DD")
 	cmd.Flags().StringArrayVar(&listOpts.statuses, "status", nil, "limit to projected status: needs-attention, reviewing, working, idle, blocked, or closed (repeatable)")
+	cmd.Flags().BoolVar(&listOpts.jsonOutput, "json", false, "write selected task entries as JSON")
 	cmd.Flags().StringVar(&listOpts.sort, "sort", string(taskViewSortCreated), "order by status, created, or updated")
 	return cmd
 }
@@ -409,6 +410,7 @@ type taskListOptions struct {
 	updatedAfter  string
 	updatedBefore string
 	statuses      []string
+	jsonOutput    bool
 	sort          string
 }
 
@@ -555,8 +557,7 @@ func runTaskList(command *cobra.Command, opts *rootOptions, listOpts taskListOpt
 		slog.Int("run_state_count", len(runStates)),
 	)
 
-	renderOptions := statusRenderOptionsForOutput(command.OutOrStdout(), false, defaultStatusWidthDetector)
-	if err := renderStatusWithSort(command.OutOrStdout(), projection, true, renderOptions, filter.sortMode); err != nil {
+	if err := renderTaskListProjection(command, projection, filter.sortMode, listOpts.jsonOutput); err != nil {
 		return err
 	}
 	if snapshot.HasFailures() {
@@ -564,6 +565,20 @@ func runTaskList(command *cobra.Command, opts *rootOptions, listOpts taskListOpt
 		return partialRepoFailureError{operation: "task list", failures: snapshot.Failures}
 	}
 	return nil
+}
+
+func renderTaskListProjection(
+	command *cobra.Command,
+	projection status.Projection,
+	sortMode taskViewSort,
+	jsonOutput bool,
+) error {
+	output := command.OutOrStdout()
+	if jsonOutput {
+		return renderTaskViewJSON(output, projection, true, sortMode, true)
+	}
+	renderOptions := statusRenderOptionsForOutput(output, false, defaultStatusWidthDetector)
+	return renderStatusWithSort(output, projection, true, renderOptions, sortMode)
 }
 
 // filteredTaskInventory applies output and projected-status constraints only

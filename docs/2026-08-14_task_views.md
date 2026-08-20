@@ -9,6 +9,20 @@ Both views use the same Status Projection entries and table presentation. Status
 
 Readiness remains an internal classification that populates the `Ready` status entries.
 
+## JSON for agents and scripts
+
+Use `--json` when an agent or script needs the selected task-view entries without parsing a terminal table:
+
+```sh
+orpheus status --json
+orpheus status --full --json
+orpheus task list --json --type task --status reviewing
+```
+
+Each command writes one deterministic JSON array to standard output. JSON uses the same final selection and ordering as its table view, but contains semantic values rather than table labels, tree prefixes, truncation, or placeholders. Task entries have `kind: "task"`, repository identity, task identity and fields, the projected Orpheus `status`, semantic `detail`, optional epic progress, and creation/update timestamps. It never exposes the task source lifecycle status. `ready` is valid in JSON output, even though it is not a `task list --status` filter.
+
+`status --json` has the same default visibility as `status`; add `--full` for blocked and closed entries. Status output can also contain `kind: "repo_failure"` diagnostics. `task list --json` contains only selected task and epic entries. On partial repository failures, standard output remains a valid JSON array, diagnostics go to standard error, and the command exits nonzero. Empty results are `[]`.
+
 ## Inventory filters
 
 `orpheus task list` can narrow the inventory with composable filters:
