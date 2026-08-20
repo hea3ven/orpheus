@@ -86,7 +86,8 @@ func TestLaneCommandsUseSharedConvention(t *testing.T) {
 		"INTEGRATION_TEST_PATTERN := " + testlane.IntegrationTestPattern,
 		"INTEGRATION_TEST_ARGS := -tags=" + testlane.IntegrationBuildTag + " -run '$(INTEGRATION_TEST_PATTERN)'",
 		"go test $(INTEGRATION_TEST_ARGS) ./...",
-		"check: fmt test-unit test-integration lint",
+		"quality:\n\tgo run ./cmd/testcoverage",
+		"check: fmt quality lint",
 	} {
 		if !strings.Contains(string(contents), want) {
 			t.Fatalf("Makefile does not use the lane convention %q", want)
