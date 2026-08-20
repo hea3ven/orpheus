@@ -1,9 +1,10 @@
-.PHONY: build test test-unit test-integration coverage coverage-baseline coverage-audit \
+.PHONY: build test test-unit test-integration quality quality-baseline coverage coverage-baseline coverage-audit \
 	test-perf test-perf-integration test-perf-baseline test-perf-integration-baseline \
 	test-perf-baseline-update test-perf-integration-baseline-update fmt lint check
 
 PERF_SAMPLES ?= 5
 TEST_TIMING_BASELINE ?= performance/test-timing-baseline.json
+QUALITY_COMPARE_TO ?=
 INTEGRATION_TEST_PATTERN := ^TestIntegration
 INTEGRATION_TEST_ARGS := -tags=integration -run '$(INTEGRATION_TEST_PATTERN)'
 
@@ -22,13 +23,18 @@ test-integration:
 	@command -v bd >/dev/null 2>&1 || { echo "Beads integration tests require bd; install Beads or ensure bd is on PATH." >&2; exit 1; }
 	go test $(INTEGRATION_TEST_ARGS) ./...
 
-# coverage verifies that the checked-in normalized baseline describes both lanes.
-# Profiles and JSON reports are short-lived artifacts under artifacts/test-coverage/.
-coverage:
-	go run ./cmd/testcoverage
+# quality runs each lane exactly once and derives tests, aggregate coverage, and
+# CI timing decisions from those coverage-instrumented executions.
+quality:
+	go run ./cmd/testcoverage $(if $(QUALITY_COMPARE_TO),-compare-to $(QUALITY_COMPARE_TO),)
 
-coverage-baseline:
+quality-baseline:
 	go run ./cmd/testcoverage -write-baseline
+
+# Compatibility aliases for the original coverage workflow.
+coverage: quality
+
+coverage-baseline: quality-baseline
 
 # This intentionally profiles every integration scenario separately; do not use it
 # on routine pull requests.
@@ -62,4 +68,4 @@ fmt:
 lint:
 	golangci-lint run ./...
 
-check: fmt test-unit test-integration lint
+check: fmt quality lint
