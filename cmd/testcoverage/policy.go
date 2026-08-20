@@ -47,16 +47,18 @@ type baselinePackage struct {
 }
 
 type timingBudget struct {
-	Name    string  `json:"name"`
-	Seconds float64 `json:"seconds"`
+	Name            string  `json:"name"`
+	BaselineSeconds float64 `json:"baseline_seconds"`
+	Seconds         float64 `json:"seconds"`
 }
 
 type laneBaseline struct {
-	TestCount          int               `json:"test_count"`
-	Coverage           coverageMetric    `json:"coverage"`
-	Packages           []baselinePackage `json:"packages"`
-	SuiteBudgetSeconds float64           `json:"suite_budget_seconds"`
-	PackageBudgets     []timingBudget    `json:"package_budgets"`
+	TestCount            int               `json:"test_count"`
+	Coverage             coverageMetric    `json:"coverage"`
+	Packages             []baselinePackage `json:"packages"`
+	SuiteBaselineSeconds float64           `json:"suite_baseline_seconds"`
+	SuiteBudgetSeconds   float64           `json:"suite_budget_seconds"`
+	PackageBudgets       []timingBudget    `json:"package_budgets"`
 }
 
 type baseline struct {
@@ -72,6 +74,7 @@ type finding struct {
 	Scope     string  `json:"scope,omitempty"`
 	Name      string  `json:"name,omitempty"`
 	Prior     float64 `json:"prior,omitempty"`
+	Baseline  float64 `json:"baseline,omitempty"`
 	Current   float64 `json:"current,omitempty"`
 	Threshold float64 `json:"threshold,omitempty"`
 	Message   string  `json:"message"`
@@ -127,18 +130,26 @@ func generatedBaseline(report qualityReport, prior baseline, policy qualityPolic
 			item.Packages = append(item.Packages, baselinePackage(pkg))
 		}
 		if hasPrior {
+			item.SuiteBaselineSeconds = priorLane.SuiteBaselineSeconds
 			item.SuiteBudgetSeconds = priorLane.SuiteBudgetSeconds
-		} else {
+		}
+		if item.SuiteBaselineSeconds <= 0 {
+			item.SuiteBaselineSeconds = lane.WallSeconds
+		}
+		if item.SuiteBudgetSeconds <= 0 {
 			item.SuiteBudgetSeconds = timingAllowance(lane.WallSeconds, policy.Timing.SuiteRelativeTolerance, policy.Timing.SuiteAbsoluteSeconds)
 		}
-		priorBudgets := budgetMap(priorLane.PackageBudgets)
+		priorBudgets := timingBudgetMap(priorLane.PackageBudgets)
 		item.PackageBudgets = make([]timingBudget, 0, len(lane.Timings))
 		for _, timing := range lane.Timings {
 			budget, found := priorBudgets[timing.Name]
 			if !found {
-				budget = timingAllowance(timing.Seconds, policy.Timing.PackageRelativeTolerance, policy.Timing.PackageAbsoluteSeconds)
+				budget = timingBudget{Name: timing.Name, Seconds: timingAllowance(timing.Seconds, policy.Timing.PackageRelativeTolerance, policy.Timing.PackageAbsoluteSeconds)}
 			}
-			item.PackageBudgets = append(item.PackageBudgets, timingBudget{Name: timing.Name, Seconds: budget})
+			if budget.BaselineSeconds <= 0 {
+				budget.BaselineSeconds = timing.Seconds
+			}
+			item.PackageBudgets = append(item.PackageBudgets, budget)
 		}
 		result.Lanes[name] = item
 	}
@@ -217,7 +228,7 @@ func validateBaseline(value baseline) error {
 		if !found {
 			return fmt.Errorf("baseline has no %s lane", name)
 		}
-		if lane.TestCount < 0 || !validMetric(lane.Coverage) || lane.SuiteBudgetSeconds <= 0 {
+		if lane.TestCount < 0 || !validMetric(lane.Coverage) || !validOptionalTiming(lane.SuiteBaselineSeconds) || !validTiming(lane.SuiteBudgetSeconds) {
 			return fmt.Errorf("invalid %s lane aggregates", name)
 		}
 		if err := validatePackages(lane.Packages, lane.Coverage); err != nil {
@@ -276,12 +287,20 @@ func validatePackages(packages []baselinePackage, total coverageMetric) error {
 func validateBudgets(budgets []timingBudget) error {
 	priorName := ""
 	for _, budget := range budgets {
-		if budget.Name == "" || budget.Name <= priorName || budget.Seconds <= 0 || math.IsNaN(budget.Seconds) || math.IsInf(budget.Seconds, 0) {
+		if budget.Name == "" || budget.Name <= priorName || !validOptionalTiming(budget.BaselineSeconds) || !validTiming(budget.Seconds) {
 			return errors.New("budgets must be positive, unique, and sorted by name")
 		}
 		priorName = budget.Name
 	}
 	return nil
+}
+
+func validOptionalTiming(seconds float64) bool {
+	return seconds >= 0 && !math.IsNaN(seconds) && !math.IsInf(seconds, 0)
+}
+
+func validTiming(seconds float64) bool {
+	return seconds > 0 && !math.IsNaN(seconds) && !math.IsInf(seconds, 0)
 }
 
 func assess(prior baseline, report qualityReport) decision {
@@ -307,9 +326,9 @@ func assess(prior baseline, report qualityReport) decision {
 		}
 
 		if current.WallSeconds > baselineLane.SuiteBudgetSeconds {
-			timings = append(timings, finding{Kind: "timing", Lane: name, Scope: "suite", Prior: baselineLane.SuiteBudgetSeconds, Current: current.WallSeconds, Message: "suite timing budget exceeded"})
+			timings = append(timings, finding{Kind: "timing", Lane: name, Scope: "suite", Prior: baselineLane.SuiteBudgetSeconds, Baseline: baselineLane.SuiteBaselineSeconds, Current: current.WallSeconds, Message: "suite timing budget exceeded"})
 		}
-		priorTiming := budgetMap(baselineLane.PackageBudgets)
+		priorTiming := timingBudgetMap(baselineLane.PackageBudgets)
 		currentTiming := timingMap(current.Timings)
 		for _, packageName := range sortedUnionKeys(priorTiming, currentTiming) {
 			budget, hadBudget := priorTiming[packageName]
@@ -318,8 +337,8 @@ func assess(prior baseline, report qualityReport) decision {
 				refresh = append(refresh, finding{Kind: "timing_structure", Lane: name, Scope: "package", Name: packageName, Message: "timed package was added or removed"})
 				continue
 			}
-			if seconds > budget {
-				timings = append(timings, finding{Kind: "timing", Lane: name, Scope: "package", Name: packageName, Prior: budget, Current: seconds, Message: "package timing budget exceeded"})
+			if seconds > budget.Seconds {
+				timings = append(timings, finding{Kind: "timing", Lane: name, Scope: "package", Name: packageName, Prior: budget.Seconds, Baseline: budget.BaselineSeconds, Current: seconds, Message: "package timing budget exceeded"})
 			}
 		}
 	}
@@ -386,6 +405,7 @@ func legacyBaselineWithTiming(legacy, generated baseline) baseline {
 	for _, name := range laneNames {
 		lane := legacy.Lanes[name]
 		generatedLane := generated.Lanes[name]
+		lane.SuiteBaselineSeconds = generatedLane.SuiteBaselineSeconds
 		lane.SuiteBudgetSeconds = generatedLane.SuiteBudgetSeconds
 		lane.PackageBudgets = append([]timingBudget(nil), generatedLane.PackageBudgets...)
 		legacy.Lanes[name] = lane
@@ -409,10 +429,10 @@ func reportPackageMap(items []packageMetric) map[string]coverageMetric {
 	return result
 }
 
-func budgetMap(items []timingBudget) map[string]float64 {
-	result := make(map[string]float64, len(items))
+func timingBudgetMap(items []timingBudget) map[string]timingBudget {
+	result := make(map[string]timingBudget, len(items))
 	for _, item := range items {
-		result[item.Name] = item.Seconds
+		result[item.Name] = item
 	}
 	return result
 }

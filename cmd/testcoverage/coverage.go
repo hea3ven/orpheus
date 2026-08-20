@@ -191,19 +191,21 @@ func runGoTest(lane string, command []string) (laneReport, error) {
 }
 
 type decodedTestEvents struct {
-	testCount int
-	packages  map[string]float64
-	outputs   map[testID]string
-	failed    map[testID]bool
-	raw       bytes.Buffer
-	decodeErr error
+	testCount    int
+	packages     map[string]float64
+	testPackages map[string]bool
+	outputs      map[testID]string
+	failed       map[testID]bool
+	raw          bytes.Buffer
+	decodeErr    error
 }
 
 func decodeTestEvents(input io.Reader) decodedTestEvents {
 	result := decodedTestEvents{
-		packages: make(map[string]float64),
-		outputs:  make(map[testID]string),
-		failed:   make(map[testID]bool),
+		packages:     make(map[string]float64),
+		testPackages: make(map[string]bool),
+		outputs:      make(map[testID]string),
+		failed:       make(map[testID]bool),
 	}
 	decoder := json.NewDecoder(io.TeeReader(input, &result.raw))
 	for {
@@ -221,17 +223,22 @@ func decodeTestEvents(input io.Reader) decodedTestEvents {
 
 func recordTestEvent(result *decodedTestEvents, event testEvent) {
 	id := testID{Package: event.Package, Test: event.Test}
+	if event.Test != "" && (event.Action == "run" || event.Action == "pass" || event.Action == "fail") {
+		result.testPackages[event.Package] = true
+	}
 	switch event.Action {
 	case "output":
 		result.outputs[id] += event.Output
 	case "fail":
 		result.failed[id] = true
-		if event.Test == "" {
+		if event.Test == "" && result.testPackages[event.Package] {
 			result.packages[event.Package] = event.Elapsed
 		}
 	case "pass":
 		if event.Test == "" {
-			result.packages[event.Package] = event.Elapsed
+			if result.testPackages[event.Package] {
+				result.packages[event.Package] = event.Elapsed
+			}
 		} else {
 			result.testCount++
 		}

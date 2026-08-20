@@ -29,14 +29,20 @@ Integration source files use `//go:build integration`, and their top-level test 
 `make quality` is the routine local and CI quality command. It runs the unit and
 integration lanes serially exactly once with `-coverpkg=./...`; the same decoded
 `go test -json` streams supply test outcomes, failure evidence, test-event
-counts, suite and package timings, and coverage profiles. The complete report is
-written to `artifacts/test-coverage/report.json`. If a lane fails, the command
+counts, suite timings, timings for packages that actually run selected tests,
+and coverage profiles. Packages with no selected tests are excluded because
+their process startup timing is too noisy to be a useful performance signal.
+Timing failures show the current measurement, baseline measurement, absolute
+and percentage differences from that baseline, the budget, and the amount over
+budget. The complete report is written to
+`artifacts/test-coverage/report.json`. If a lane fails, the command
 still runs the other lane and writes a partial report containing stderr, raw
 JSON output, and decoded failing-test output before returning failure. `make
 coverage` remains a compatibility alias.
 
 The compact `coverage/test-coverage-baseline.json` contains only repository and
-package coverage aggregates, test-event counts, timing budgets, and policy. It
+package coverage aggregates, test-event counts, baseline timings and their
+budgets, and policy. It
 does not track source blocks, coordinates, files, or hit inventories. Coverage
 is evaluated independently for each lane at repository and package scope.
 Changes inside the configured significance and denominator-drift bands pass

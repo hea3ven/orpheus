@@ -56,6 +56,36 @@ func TestFinishReportWritesPartialFailureReport(t *testing.T) {
 	}
 }
 
+func TestDecodeTestEventsExcludesPackagesWithoutSelectedTestsFromTimings(t *testing.T) {
+	events := strings.NewReader(strings.Join([]string{
+		`{"Action":"start","Package":"example.test/no-tests"}`,
+		`{"Action":"pass","Package":"example.test/no-tests","Elapsed":0.472}`,
+		`{"Action":"run","Package":"example.test/with-tests","Test":"TestFeature"}`,
+		`{"Action":"pass","Package":"example.test/with-tests","Test":"TestFeature","Elapsed":0.01}`,
+		`{"Action":"pass","Package":"example.test/with-tests","Elapsed":0.02}`,
+	}, "\n"))
+
+	got := decodeTestEvents(events)
+	if got.decodeErr != nil {
+		t.Fatal(got.decodeErr)
+	}
+	if got.testCount != 1 {
+		t.Fatalf("test count = %d, want 1", got.testCount)
+	}
+	if !reflect.DeepEqual(got.packages, map[string]float64{"example.test/with-tests": 0.02}) {
+		t.Fatalf("package timings = %#v, want only package with selected tests", got.packages)
+	}
+}
+
+func TestTimingFindingMessageShowsCurrentBaselineBudgetAndDifferences(t *testing.T) {
+	got := findingMessage(finding{Kind: "timing", Baseline: 0.165, Prior: 0.415, Current: 0.472, Message: "package timing budget exceeded"})
+	for _, want := range []string{"current 0.472s", "baseline 0.165s", "difference +0.307s", "+186.1%", "budget 0.415s", "over budget +0.057s"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("finding message %q does not contain %q", got, want)
+		}
+	}
+}
+
 func TestWriteBaselineCreatesGeneratedFiles(t *testing.T) {
 	dir := t.TempDir()
 	opts := options{baseline: filepath.Join(dir, "baseline.json"), output: filepath.Join(dir, "report.json")}

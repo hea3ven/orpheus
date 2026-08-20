@@ -19,10 +19,25 @@ func printReport(result qualityReport, output string) {
 		if location != "" {
 			location += ": "
 		}
-		fmt.Printf("  - %s%s\n", location, item.Message)
+		fmt.Printf("  - %s%s\n", location, findingMessage(item))
 	}
 	for _, scenario := range result.Scenarios {
 		fmt.Printf("scenario %s: %.2fs, containment %.2f%%, similarity %.2f%%, %d exclusive statements\n", scenario.Name, scenario.RuntimeSeconds, scenario.ContainmentPercentage, scenario.SimilarityPercentage, scenario.ExclusiveStatements)
 	}
 	fmt.Printf("Quality report: %s\n", output)
+}
+
+func findingMessage(item finding) string {
+	if item.Kind != "timing" || item.Prior <= 0 {
+		return item.Message
+	}
+	baseline := item.Baseline
+	if baseline <= 0 {
+		baseline = item.Prior
+	}
+	difference := item.Current - baseline
+	percentageDifference := difference * 100 / baseline
+	overBudget := item.Current - item.Prior
+	return fmt.Sprintf("%s (current %.3fs, baseline %.3fs, difference %+.3fs / %+.1f%%, budget %.3fs, over budget %+.3fs)",
+		item.Message, item.Current, baseline, difference, percentageDifference, item.Prior, overBudget)
 }
