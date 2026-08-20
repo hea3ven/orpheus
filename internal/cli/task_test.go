@@ -5,6 +5,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -126,6 +127,23 @@ func TestIntegrationTaskListListsAllActiveItemsWithStatusProjectionPresentation(
 		is.NotContains(stdout, hidden)
 	}
 
+	jsonStdout, jsonStderr := executeCommand(t, []string{"task", "list", "--json"})
+	is.Empty(jsonStderr)
+	var jsonEntries []taskViewJSONTaskEntry
+	require.NoError(t, json.Unmarshal([]byte(jsonStdout), &jsonEntries))
+	jsonIDs := make([]string, 0, len(jsonEntries))
+	for _, entry := range jsonEntries {
+		jsonIDs = append(jsonIDs, entry.ID)
+	}
+	assert.Equal(t, []string{"la-1", "mb-1"}, jsonIDs)
+	entriesByID := make(map[string]taskViewJSONTaskEntry, len(jsonEntries))
+	for _, entry := range jsonEntries {
+		entriesByID[entry.ID] = entry
+	}
+	assert.Equal(t, "ready", entriesByID["la-1"].Status)
+	assert.Equal(t, "reviewing", entriesByID["mb-1"].Status)
+	assert.Equal(t, "task", entriesByID["la-1"].Kind)
+
 	assertTaskListBDLog(t, logPath, repos)
 }
 
@@ -158,6 +176,27 @@ func TestIntegrationTaskListComposesSourceAndProjectedStatusFilters(t *testing.T
 	for _, hidden := range []string{"a-open", "a-late", "a-other"} {
 		is.NotContains(stdout, hidden)
 	}
+
+	jsonStdout, jsonStderr := executeCommand(t, []string{
+		"task", "list", "--json",
+		"--query", "match",
+		"--type", "task",
+		"--created-after", "2026-06-01",
+		"--created-before", "2026-06-05",
+		"--updated-after", "2026-06-02",
+		"--updated-before", "2026-06-05",
+		"--status", "closed",
+	})
+	is.Empty(jsonStderr)
+	var jsonEntries []taskViewJSONTaskEntry
+	if !is.NoError(json.Unmarshal([]byte(jsonStdout), &jsonEntries)) {
+		return
+	}
+	if !is.Len(jsonEntries, 1) {
+		return
+	}
+	is.Equal("a-closed", jsonEntries[0].ID)
+	is.Equal("closed", jsonEntries[0].Status)
 	log := readFileString(t, logPath)
 	is.Contains(log, "--json --readonly --sandbox list --all --limit 0 --type task --created-after 2026-06-01 --created-before 2026-06-05 --updated-after 2026-06-02 --updated-before 2026-06-05")
 }
@@ -169,7 +208,7 @@ func assertTaskListBDLog(t *testing.T, logPath string, repos localManagedTaskRep
 	log := readFileString(t, logPath)
 	is.Contains(log, repos.localDir)
 	is.Contains(log, repos.managedDir)
-	is.Equal(4, strings.Count(log, "--json --readonly --sandbox list --all --limit 0"))
+	is.Equal(8, strings.Count(log, "--json --readonly --sandbox list --all --limit 0"))
 }
 
 func TestIntegrationTaskReadyIsNotACommand(t *testing.T) {
@@ -238,6 +277,15 @@ func TestIntegrationTaskListReportsPartialRepoFailures(t *testing.T) {
 	is.Contains(stderr, "Broken Repo")
 	is.Contains(stderr, "prefix br")
 	is.Contains(stderr, "bd exploded")
+
+	jsonStdout, jsonStderr, jsonErr := executeCommandWithError(t, []string{"task", "list", "--json"})
+	must.Error(jsonErr)
+	is.Contains(jsonStderr, "task list: repo broken")
+	var jsonEntries []taskViewJSONTaskEntry
+	must.NoError(json.Unmarshal([]byte(jsonStdout), &jsonEntries))
+	is.Len(jsonEntries, 1)
+	is.Equal("task", jsonEntries[0].Kind)
+	is.Equal("ok-1", jsonEntries[0].ID)
 }
 
 func TestIntegrationTaskShowResolvesPrefixQueriesOnlyResolvedRepoAndRendersDetails(t *testing.T) {
