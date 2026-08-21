@@ -11,6 +11,7 @@ import (
 
 	orpheusgit "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 func TestIntegrationVerifyCommitMatchesRecordedParentAndMessage(t *testing.T) {
@@ -749,7 +750,7 @@ func newConflictResolutionFixture(
 func newStatePaths(t *testing.T) state.Paths {
 	t.Helper()
 
-	root := canonicalTestPath(t, t.TempDir())
+	root := testutil.CanonicalTempDir(t)
 	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
 	if err != nil {
 		t.Fatalf("create state paths: %v", err)
@@ -760,7 +761,7 @@ func newStatePaths(t *testing.T) state.Paths {
 func newGitRepoWithLocalOrigin(t *testing.T) string {
 	t.Helper()
 
-	root := canonicalTestPath(t, t.TempDir())
+	root := testutil.CanonicalTempDir(t)
 	originPath := filepath.Join(root, "origin.git")
 	if err := os.MkdirAll(originPath, 0o755); err != nil {
 		t.Fatalf("create origin: %v", err)
@@ -785,7 +786,7 @@ func newGitRepoWithLocalOrigin(t *testing.T) string {
 func addTaskBranchWorktree(t *testing.T, repoPath string, branch string) string {
 	t.Helper()
 
-	worktreePath := filepath.Join(canonicalTestPath(t, t.TempDir()), "task-worktree")
+	worktreePath := filepath.Join(testutil.CanonicalTempDir(t), "task-worktree")
 	runGit(t, repoPath, "branch", branch, "main")
 	runGit(t, repoPath, "worktree", "add", worktreePath, branch)
 	return worktreePath
@@ -815,7 +816,7 @@ func pushRemoteRenameAndConflict(t *testing.T, repoPath string) {
 	t.Helper()
 
 	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
-	cloneParent := canonicalTestPath(t, t.TempDir())
+	cloneParent := testutil.CanonicalTempDir(t)
 	clonePath := filepath.Join(cloneParent, "origin-work")
 	runGit(t, cloneParent, "clone", originPath, clonePath)
 	runGit(t, clonePath, "checkout", "main")
@@ -843,7 +844,7 @@ func pushRemoteBranchCommit(
 	t.Helper()
 
 	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
-	cloneParent := canonicalTestPath(t, t.TempDir())
+	cloneParent := testutil.CanonicalTempDir(t)
 	clonePath := filepath.Join(cloneParent, "origin-work")
 	runGit(t, cloneParent, "clone", originPath, clonePath)
 	runGit(t, clonePath, "checkout", branch)

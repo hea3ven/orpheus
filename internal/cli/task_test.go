@@ -5,6 +5,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +25,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/tasktarget"
 	"github.com/hea3ven/orpheus/internal/testguard"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -54,7 +56,7 @@ func registerLocalTaskTestRepo(t *testing.T, id string, name string, prefix stri
 
 	must := require.New(t)
 	store := registry.NewStore(currentTestPaths(t))
-	repoDir := filepath.Join(t.TempDir(), id)
+	repoDir := filepath.Join(testutil.CanonicalTempDir(t), id)
 	must.NoError(os.MkdirAll(repoDir, 0o755))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:          id,
@@ -77,8 +79,8 @@ func registerLocalManagedTaskTestRepos(t *testing.T) localManagedTaskRepos {
 	must := require.New(t)
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
-	localDir := filepath.Join(t.TempDir(), "local-alpha")
-	managedRepoPath := filepath.Join(t.TempDir(), "managed-beta")
+	localDir := filepath.Join(testutil.CanonicalTempDir(t), "local-alpha")
+	managedRepoPath := filepath.Join(testutil.CanonicalTempDir(t), "managed-beta")
 	managedDir, err := store.ManagedBeadsDir("managed-beta")
 	must.NoError(err)
 	must.NoError(os.MkdirAll(localDir, 0o755))
@@ -100,7 +102,7 @@ func TestIntegrationTaskListListsAllActiveItemsWithStatusProjectionPresentation(
 
 	logPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
 		repos.localDir: {stdout: `[
-			{"id":"la-1","title":"Local active","status":"open","priority":2,"issue_type":"task","metadata":{"orpheus.branch":"task/la-1","orpheus.worktree":"/tmp/la-1"}},
+			{"id":"la-1","title":"Local active","status":"open","priority":2,"issue_type":"task","metadata":{"orpheus.branch":"task/la-1","orpheus.worktree":"/fixture/la-1"}},
 			{"id":"la-closed","title":"Closed local task","status":"closed","priority":1,"issue_type":"task"},
 			{"id":"la-bug","title":"Local bug","status":"open","priority":1,"issue_type":"bug"}
 		]`},
@@ -120,11 +122,28 @@ func TestIntegrationTaskListListsAllActiveItemsWithStatusProjectionPresentation(
 		is.Contains(stdout, want)
 	}
 	for _, hidden := range []string{
-		"REPO_ID", "TASK_PREFIX", "ORPHEUS", "local-alpha", "managed-beta", "branch=task/la-1", "worktree=/tmp/la-1", "pr=https://example.test/pr/1",
+		"REPO_ID", "TASK_PREFIX", "ORPHEUS", "local-alpha", "managed-beta", "branch=task/la-1", "worktree=/fixture/la-1", "pr=https://example.test/pr/1",
 		"la-closed", "la-bug", "Local bug", "orpheus.branch",
 	} {
 		is.NotContains(stdout, hidden)
 	}
+
+	jsonStdout, jsonStderr := executeCommand(t, []string{"task", "list", "--json"})
+	is.Empty(jsonStderr)
+	var jsonEntries []taskViewJSONTaskEntry
+	require.NoError(t, json.Unmarshal([]byte(jsonStdout), &jsonEntries))
+	jsonIDs := make([]string, 0, len(jsonEntries))
+	for _, entry := range jsonEntries {
+		jsonIDs = append(jsonIDs, entry.ID)
+	}
+	assert.Equal(t, []string{"la-1", "mb-1"}, jsonIDs)
+	entriesByID := make(map[string]taskViewJSONTaskEntry, len(jsonEntries))
+	for _, entry := range jsonEntries {
+		entriesByID[entry.ID] = entry
+	}
+	assert.Equal(t, "ready", entriesByID["la-1"].Status)
+	assert.Equal(t, "reviewing", entriesByID["mb-1"].Status)
+	assert.Equal(t, "task", entriesByID["la-1"].Kind)
 
 	assertTaskListBDLog(t, logPath, repos)
 }
@@ -158,6 +177,27 @@ func TestIntegrationTaskListComposesSourceAndProjectedStatusFilters(t *testing.T
 	for _, hidden := range []string{"a-open", "a-late", "a-other"} {
 		is.NotContains(stdout, hidden)
 	}
+
+	jsonStdout, jsonStderr := executeCommand(t, []string{
+		"task", "list", "--json",
+		"--query", "match",
+		"--type", "task",
+		"--created-after", "2026-06-01",
+		"--created-before", "2026-06-05",
+		"--updated-after", "2026-06-02",
+		"--updated-before", "2026-06-05",
+		"--status", "closed",
+	})
+	is.Empty(jsonStderr)
+	var jsonEntries []taskViewJSONTaskEntry
+	if !is.NoError(json.Unmarshal([]byte(jsonStdout), &jsonEntries)) {
+		return
+	}
+	if !is.Len(jsonEntries, 1) {
+		return
+	}
+	is.Equal("a-closed", jsonEntries[0].ID)
+	is.Equal("closed", jsonEntries[0].Status)
 	log := readFileString(t, logPath)
 	is.Contains(log, "--json --readonly --sandbox list --all --limit 0 --type task --created-after 2026-06-01 --created-before 2026-06-05 --updated-after 2026-06-02 --updated-before 2026-06-05")
 }
@@ -169,7 +209,7 @@ func assertTaskListBDLog(t *testing.T, logPath string, repos localManagedTaskRep
 	log := readFileString(t, logPath)
 	is.Contains(log, repos.localDir)
 	is.Contains(log, repos.managedDir)
-	is.Equal(4, strings.Count(log, "--json --readonly --sandbox list --all --limit 0"))
+	is.Equal(8, strings.Count(log, "--json --readonly --sandbox list --all --limit 0"))
 }
 
 func TestIntegrationTaskReadyIsNotACommand(t *testing.T) {
@@ -207,8 +247,8 @@ func TestIntegrationTaskListReportsPartialRepoFailures(t *testing.T) {
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	brokenDir := filepath.Join(t.TempDir(), "broken")
-	okDir := filepath.Join(t.TempDir(), "ok")
+	brokenDir := filepath.Join(testutil.CanonicalTempDir(t), "broken")
+	okDir := filepath.Join(testutil.CanonicalTempDir(t), "ok")
 	must.NoError(os.MkdirAll(brokenDir, 0o755))
 	must.NoError(os.MkdirAll(okDir, 0o755))
 
@@ -238,6 +278,15 @@ func TestIntegrationTaskListReportsPartialRepoFailures(t *testing.T) {
 	is.Contains(stderr, "Broken Repo")
 	is.Contains(stderr, "prefix br")
 	is.Contains(stderr, "bd exploded")
+
+	jsonStdout, jsonStderr, jsonErr := executeCommandWithError(t, []string{"task", "list", "--json"})
+	must.Error(jsonErr)
+	is.Contains(jsonStderr, "task list: repo broken")
+	var jsonEntries []taskViewJSONTaskEntry
+	must.NoError(json.Unmarshal([]byte(jsonStdout), &jsonEntries))
+	is.Len(jsonEntries, 1)
+	is.Equal("task", jsonEntries[0].Kind)
+	is.Equal("ok-1", jsonEntries[0].ID)
 }
 
 func TestIntegrationTaskShowResolvesPrefixQueriesOnlyResolvedRepoAndRendersDetails(t *testing.T) {
@@ -260,7 +309,7 @@ func TestIntegrationTaskShowResolvesPrefixQueriesOnlyResolvedRepoAndRendersDetai
 				"priority":2,
 				"issue_type":"task",
 				"labels":["m2","task-show"],
-				"metadata":{"orpheus.branch":"task/la-42","orpheus.worktree":"/tmp/la-42","orpheus.pr_url":"https://example.test/pr/42"}
+				"metadata":{"orpheus.branch":"task/la-42","orpheus.worktree":"/fixture/la-42","orpheus.pr_url":"https://example.test/pr/42"}
 			}
 		]`},
 		repos.managedDir: {stderr: "managed repo should not be queried", exitCode: 70},
@@ -289,7 +338,7 @@ func TestIntegrationTaskShowResolvesPrefixQueriesOnlyResolvedRepoAndRendersDetai
 		"Acceptance criteria: Only the resolved repo is queried.",
 		"Orpheus metadata:",
 		"Branch: task/la-42",
-		"Worktree: /tmp/la-42",
+		"Worktree: /fixture/la-42",
 		"PR: https://example.test/pr/42",
 		"History:",
 		"  -",
@@ -450,7 +499,7 @@ func TestIntegrationTaskStatsRendersImplementationExecutionUsage(t *testing.T) {
 	})
 	must.NoError(err)
 	_, err = stateStore.RecordRunUsage("alpha", "op-1", run.Attempt, taskstate.RecordRunUsageOptions{
-		Session: &taskstate.AgentSession{ID: "session-123", LogPath: "/tmp/codex.jsonl"},
+		Session: &taskstate.AgentSession{ID: "session-123", LogPath: "/fixture/codex.jsonl"},
 		Usage: &taskstate.AgentUsage{
 			InputTokens:           123,
 			CachedInputTokens:     45,
@@ -490,7 +539,7 @@ func TestIntegrationTaskStatsRendersImplementationExecutionUsage(t *testing.T) {
 	must.NoError(err)
 	_, err = stateStore.FinishReviewStepExecution("alpha", "op-1", reviewAttempt.Attempt, "ai-review", taskstate.FinishReviewStepExecutionOptions{
 		Status:  taskstate.RunStatusSucceeded,
-		Session: &taskstate.AgentSession{ID: "review-session-123", LogPath: "/tmp/codex-review.jsonl"},
+		Session: &taskstate.AgentSession{ID: "review-session-123", LogPath: "/fixture/codex-review.jsonl"},
 		Usage: &taskstate.AgentUsage{
 			InputTokens:           20,
 			CachedInputTokens:     5,
@@ -571,7 +620,7 @@ func TestIntegrationTaskStatsRendersSyncConflictResolutionExecutionUsage(t *test
 	finishedOpts := opts
 	finishedOpts.Commit = "merge123"
 	finishedOpts.Usage = taskstate.RecordRunUsageOptions{
-		Session: &taskstate.AgentSession{ID: "sync-session-123", LogPath: "/tmp/codex-sync.jsonl"},
+		Session: &taskstate.AgentSession{ID: "sync-session-123", LogPath: "/fixture/codex-sync.jsonl"},
 		Usage: &taskstate.AgentUsage{
 			InputTokens:           120,
 			CachedInputTokens:     10,
@@ -704,7 +753,7 @@ func TestIntegrationTaskStatsUsesPiReportedEstimatedCost(t *testing.T) {
 	})
 	must.NoError(err)
 	_, err = stateStore.RecordRunUsage("alpha", "op-1", run.Attempt, taskstate.RecordRunUsageOptions{
-		Session: &taskstate.AgentSession{ID: "pi-session", LogPath: "/tmp/pi.jsonl"},
+		Session: &taskstate.AgentSession{ID: "pi-session", LogPath: "/fixture/pi.jsonl"},
 		Usage: &taskstate.AgentUsage{
 			InputTokens:           100,
 			CachedInputTokens:     20,
@@ -915,8 +964,8 @@ func TestIntegrationTaskStatsAggregateRepoFilterSkipsUnselectedRepoFailures(t *t
 	newTestState(t)
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
-	alphaDir := filepath.Join(t.TempDir(), "alpha")
-	betaDir := filepath.Join(t.TempDir(), "beta")
+	alphaDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
+	betaDir := filepath.Join(testutil.CanonicalTempDir(t), "beta")
 	must.NoError(os.MkdirAll(alphaDir, 0o755))
 	must.NoError(os.MkdirAll(betaDir, 0o755))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{
@@ -1086,7 +1135,7 @@ func TestIntegrationTaskShowRendersClosedItemsAndHistory(t *testing.T) {
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	repoDir := filepath.Join(t.TempDir(), "alpha")
+	repoDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
 	must.NoError(os.MkdirAll(repoDir, 0o755))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:          "alpha",
@@ -1128,7 +1177,7 @@ func TestIntegrationTaskShowRendersChronologicalHistoryForClosedEpic(t *testing.
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	repoDir := filepath.Join(t.TempDir(), "alpha")
+	repoDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
 	must.NoError(os.MkdirAll(repoDir, 0o755))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:          "alpha",
@@ -1352,7 +1401,7 @@ func TestIntegrationTaskShowFailsWhenLocalTaskStateCannotBeLoaded(t *testing.T) 
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	repoDir := filepath.Join(t.TempDir(), "alpha")
+	repoDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
 	must.NoError(os.MkdirAll(repoDir, 0o755))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:          "alpha",
@@ -1389,7 +1438,7 @@ func TestIntegrationTaskShowRejectsUnsupportedItemsAtTaskSourceBoundary(t *testi
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	repoDir := filepath.Join(t.TempDir(), "alpha")
+	repoDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
 	must.NoError(os.MkdirAll(repoDir, 0o755))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:          "alpha",
@@ -1421,9 +1470,9 @@ func TestIntegrationTaskDirPrintsWorktreeDirectory(t *testing.T) {
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	repoDir := filepath.Join(t.TempDir(), "alpha")
-	otherRepoDir := filepath.Join(t.TempDir(), "beta")
-	worktreeDir := filepath.Join(t.TempDir(), "op-1-worktree")
+	repoDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
+	otherRepoDir := filepath.Join(testutil.CanonicalTempDir(t), "beta")
+	worktreeDir := filepath.Join(testutil.CanonicalTempDir(t), "op-1-worktree")
 	must.NoError(os.MkdirAll(repoDir, 0o755))
 	must.NoError(os.MkdirAll(otherRepoDir, 0o755))
 	must.NoError(os.MkdirAll(worktreeDir, 0o755))
@@ -1483,7 +1532,7 @@ func TestIntegrationTaskDirPrintsRepoRootForMainTask(t *testing.T) {
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	repoDir := filepath.Join(t.TempDir(), "alpha")
+	repoDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
 	metadataRepoDir := filepath.Join(repoDir, ".")
 	must.NoError(os.MkdirAll(repoDir, 0o755))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
@@ -1549,7 +1598,7 @@ func TestIntegrationTaskDirReportsMissingAndInconsistentMetadata(t *testing.T) {
 			paths := currentTestPaths(t)
 			store := registry.NewStore(paths)
 
-			repoDir := filepath.Join(t.TempDir(), "alpha")
+			repoDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
 			must.NoError(os.MkdirAll(repoDir, 0o755))
 			must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 				ID:            "alpha",
@@ -1602,13 +1651,13 @@ func taskDirMetadataErrorCases() []taskDirMetadataErrorCase {
 		{
 			name:        "missing branch",
 			taskID:      "op-incomplete",
-			metadata:    `{"orpheus.worktree":"/tmp/op-incomplete"}`,
+			metadata:    `{"orpheus.worktree":"/fixture/op-incomplete"}`,
 			wantMessage: "orpheus.branch is missing",
 		},
 		{
 			name:        "inconsistent target",
 			taskID:      "op-inconsistent",
-			metadata:    `{"orpheus.branch":"main","orpheus.worktree":"/tmp/op-inconsistent"}`,
+			metadata:    `{"orpheus.branch":"main","orpheus.worktree":"/fixture/op-inconsistent"}`,
 			wantMessage: "task Orpheus target metadata is inconsistent",
 		},
 	}
@@ -1901,7 +1950,7 @@ func TestIntegrationTaskRunStructuredPiProfileCapturesUsage(t *testing.T) {
 	})
 	withFakeAgent(t, "pi", 0)
 	writeStructuredPiTaskRunAgentConfig(t, paths, "pi-medium", "openai-codex/gpt-5.5", "high", false)
-	piSessionDir := t.TempDir()
+	piSessionDir := testutil.CanonicalTempDir(t)
 	setTestEnvironment(t, "PI_CODING_AGENT_SESSION_DIR", piSessionDir)
 	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-pi"))
 	must.NoError(err)
@@ -2927,7 +2976,7 @@ func TestIntegrationTaskRunDoesNotLaunchOrRecordAttemptWhenMarkInProgressFails(t
 		BeadsPrefix:   "op",
 	}}}))
 
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	bdLogPath := filepath.Join(binDir, "bd.log")
 	bdCountPath := filepath.Join(binDir, "bd-show-count")
 	bdPath := filepath.Join(binDir, "bd")
@@ -2978,7 +3027,7 @@ JSON
     exit 64
     ;;
 esac
-`, shellQuote(canonicalTestPath(t, repoPath)), shellQuote(bdCountPath), shellQuote(bdCountPath), shellQuote(bdCountPath))
+`, shellQuote(canonicalFixturePath(t, repoPath)), shellQuote(bdCountPath), shellQuote(bdCountPath), shellQuote(bdCountPath))
 	must.NoError(writeTestExecutable(bdPath, []byte(script)))
 	setTestEnvironment(t, "FAKE_BD_LOG", bdLogPath)
 	prependTestPath(t, binDir)
@@ -3070,7 +3119,7 @@ func TestIntegrationTaskRunReleasesGlobalMutationLockWhileAgentRunsAndReacquires
 	must.NoError(err)
 	statePath, err := paths.DataPath(filepath.Join("repos", "alpha", "tasks", "op-finalize.yaml"))
 	must.NoError(err)
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	agentLogPath := filepath.Join(binDir, "lock-agent.log")
 	agentPath := filepath.Join(binDir, "lock-agent")
 	script := fmt.Sprintf(`#!/bin/sh
@@ -5842,7 +5891,7 @@ func TestIntegrationTaskReviewAgentReviewStepCapturesCodexUsage(t *testing.T) {
 	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
 
 	withFakeAgent(t, "codex", 0)
-	codexHome := t.TempDir()
+	codexHome := testutil.CanonicalTempDir(t)
 	setTestEnvironment(t, "CODEX_HOME", codexHome)
 	sessionDir := filepath.Join(codexHome, "sessions", "2026", "07", "07")
 	must.NoError(os.MkdirAll(sessionDir, 0o755))
@@ -5905,7 +5954,7 @@ func TestIntegrationTaskReviewAgentReviewStepCapturesPiUsage(t *testing.T) {
 	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
 
 	withFakeAgent(t, "pi", 0)
-	piSessionDir := t.TempDir()
+	piSessionDir := testutil.CanonicalTempDir(t)
 	setTestEnvironment(t, "PI_CODING_AGENT_SESSION_DIR", piSessionDir)
 	sessionPath := filepath.Join(piSessionDir, "review-pi-session.jsonl")
 	writePiSessionLogForCLI(t, sessionPath, repoPath, "review-pi-session", time.Now().UTC())
@@ -6178,7 +6227,7 @@ func TestIntegrationTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *t
 		"p",
 		"",
 	}, "\n")
-	inputPath := filepath.Join(t.TempDir(), "review-input.txt")
+	inputPath := filepath.Join(testutil.CanonicalTempDir(t), "review-input.txt")
 	must.NoError(os.WriteFile(inputPath, []byte(firstInput), 0o644))
 	inputFile, err := os.Open(inputPath)
 	must.NoError(err)
@@ -8310,7 +8359,7 @@ func TestIntegrationTaskEpicLifecycleAdapterFailuresAreSourceNeutral(t *testing.
 func withFailingEpicLifecycleMutation(t *testing.T, repoDir string, status string) {
 	t.Helper()
 
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	bdPath := filepath.Join(binDir, "bd")
 	taskJSON := fmt.Sprintf(`[{"id":"op-epic","status":%q,"issue_type":"epic"}]`, status)
 	script := fmt.Sprintf(`#!/bin/sh
@@ -8343,7 +8392,7 @@ esac
 func withFailingTaskShowChildren(t *testing.T, repoDir string) {
 	t.Helper()
 
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	bdPath := filepath.Join(binDir, "bd")
 	script := fmt.Sprintf(`#!/bin/sh
 case "$*" in
@@ -8369,7 +8418,7 @@ esac
 func withFakeBDTaskResponses(t *testing.T, responses map[string]fakeBDTaskResponse) string {
 	t.Helper()
 
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	fixtureDir := filepath.Join(binDir, "fixtures")
 	if err := os.MkdirAll(fixtureDir, 0o755); err != nil {
 		t.Fatalf("create fake bd fixtures: %v", err)
@@ -8440,7 +8489,7 @@ func writeFakeBDTaskResponseCase(
 	if exitCode == 0 && response.stderr != "" && response.stdout == "" {
 		exitCode = 1
 	}
-	fmt.Fprintf(script, "  %s)\n", shellQuote(canonicalTestPath(t, dir)))
+	fmt.Fprintf(script, "  %s)\n", shellQuote(canonicalFixturePath(t, dir)))
 	fmt.Fprintln(script, "    if [ \"$is_update\" = 1 ]; then")
 	fmt.Fprintln(script, "      printf '{}\\n'")
 	fmt.Fprintln(script, "      exit 0")
@@ -8505,7 +8554,7 @@ exit 65
 func withFakeGHPRResponses(t *testing.T, responses fakeGHPRResponses) string {
 	t.Helper()
 
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	fixtureDir := filepath.Join(binDir, "fixtures")
 	if err := os.MkdirAll(fixtureDir, 0o755); err != nil {
 		t.Fatalf("create fake gh fixtures: %v", err)
@@ -8761,7 +8810,7 @@ func syncReadyTaskJSON(taskID string, branch string, worktree string) string {
 func withFakeAgent(t *testing.T, name string, exitCode int) string {
 	t.Helper()
 
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	logPath := filepath.Join(binDir, name+".log")
 	script := fmt.Sprintf(`#!/bin/sh
 {
@@ -8799,7 +8848,7 @@ exit %d
 func writeResolvingCodexCommand(t *testing.T) {
 	t.Helper()
 
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	script := `#!/bin/sh
 printf 'resolved\n' > conflict.txt
 git add conflict.txt
@@ -9144,7 +9193,7 @@ func writeAutonomousReviewLoopConfigWithImplementers(
 func writeAutonomousReviewFixAgent(t *testing.T, name string, orpheusBin string, repair bool) string {
 	t.Helper()
 
-	path := filepath.Join(t.TempDir(), name)
+	path := filepath.Join(testutil.CanonicalTempDir(t), name)
 	passWrite := "printf 'still failing %s\\n' \"$count\" > status.txt"
 	if repair {
 		passWrite = `if [ "$count" -gt 1 ]; then
@@ -9176,7 +9225,7 @@ printf '%%s\n' "$count" > run-count.txt
 func writeManualApprovalAgent(t *testing.T, name string, orpheusBin string, markerPath string) string {
 	t.Helper()
 
-	path := filepath.Join(t.TempDir(), name)
+	path := filepath.Join(testutil.CanonicalTempDir(t), name)
 	script := fmt.Sprintf(`#!/bin/sh
 set -eu
 printf '1\n' > run-count.txt
@@ -9197,7 +9246,7 @@ touch %s
 func writeReviewScript(t *testing.T, content string) string {
 	t.Helper()
 
-	path := filepath.Join(t.TempDir(), "review-step")
+	path := filepath.Join(testutil.CanonicalTempDir(t), "review-step")
 	if err := writeTestExecutable(path, []byte(content)); err != nil {
 		t.Fatalf("write review script: %v", err)
 	}
@@ -9207,7 +9256,7 @@ func writeReviewScript(t *testing.T, content string) string {
 func buildOrpheusTestBinary(t *testing.T, sourceRoot string) string {
 	t.Helper()
 
-	binPath := filepath.Join(t.TempDir(), "orpheus")
+	binPath := filepath.Join(testutil.CanonicalTempDir(t), "orpheus")
 	command := exec.Command("go", "build", "-o", binPath, "./cmd/orpheus")
 	command.Dir = sourceRoot
 	output, err := command.CombinedOutput()
@@ -9228,7 +9277,7 @@ func readTestFileString(t *testing.T, path string) string {
 func installFakeHunkNotes(t *testing.T, response string) {
 	t.Helper()
 
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	hunkPath := filepath.Join(binDir, "hunk")
 	script := fmt.Sprintf(`#!/bin/sh
 if [ "$1" = "session" ] && [ "$2" = "comment" ] && [ "$3" = "list" ]; then

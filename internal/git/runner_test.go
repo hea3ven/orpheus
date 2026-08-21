@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/task"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 type recordedGitCommand struct {
@@ -322,7 +323,7 @@ func TestCompleteTaskBranchConflictResolutionRejectsConflictMarkers(t *testing.T
 func newRecordingSyncPaths(t *testing.T) (string, string) {
 	t.Helper()
 
-	root := t.TempDir()
+	root := testutil.CanonicalTempDir(t)
 	repoPath := filepath.Join(root, "repo")
 	worktreePath := filepath.Join(root, "worktree")
 	for _, path := range []string{repoPath, worktreePath, filepath.Join(repoPath, ".git")} {

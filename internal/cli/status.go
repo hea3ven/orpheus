@@ -22,6 +22,7 @@ import (
 
 func newStatusCommand(opts *rootOptions) *cobra.Command {
 	var full bool
+	var jsonOutput bool
 	var noTruncate bool
 	var sortValue string
 	cmd := &cobra.Command{
@@ -29,16 +30,17 @@ func newStatusCommand(opts *rootOptions) *cobra.Command {
 		Short: "Show the local cross-repository action queue",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
-			return runStatus(command, opts, full, noTruncate, sortValue)
+			return runStatus(command, opts, full, jsonOutput, noTruncate, sortValue)
 		},
 	}
 	cmd.Flags().BoolVar(&full, "full", false, "show lower-priority groups such as blocked and done/closed")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "write selected status entries as JSON")
 	cmd.Flags().BoolVar(&noTruncate, "no-truncate", false, "preserve unbounded status table output")
 	cmd.Flags().StringVar(&sortValue, "sort", string(taskViewSortStatus), "order by status, created, or updated")
 	return cmd
 }
 
-func runStatus(command *cobra.Command, opts *rootOptions, full bool, noTruncate bool, sortValue string) error {
+func runStatus(command *cobra.Command, opts *rootOptions, full bool, jsonOutput bool, noTruncate bool, sortValue string) error {
 	sortMode, err := normalizeTaskViewSort(sortValue, taskViewSortStatus)
 	if err != nil {
 		return err
@@ -75,9 +77,15 @@ func runStatus(command *cobra.Command, opts *rootOptions, full bool, noTruncate 
 	)
 
 	output := command.OutOrStdout()
-	renderOptions := statusRenderOptionsForOutput(output, noTruncate, defaultStatusWidthDetector)
-	if err := renderStatusWithSort(output, projection, full, renderOptions, sortMode); err != nil {
-		return err
+	if jsonOutput {
+		if err := renderTaskViewJSON(output, projection, full, sortMode, false); err != nil {
+			return err
+		}
+	} else {
+		renderOptions := statusRenderOptionsForOutput(output, noTruncate, defaultStatusWidthDetector)
+		if err := renderStatusWithSort(output, projection, full, renderOptions, sortMode); err != nil {
+			return err
+		}
 	}
 	if snapshot.HasFailures() {
 		writeRepoFailures(command.ErrOrStderr(), "status", snapshot.Failures)
@@ -295,6 +303,7 @@ type statusRenderLayout struct {
 
 type statusDisplayRow struct {
 	Entry          status.Entry
+	GroupID        status.GroupID
 	StatusOrder    int
 	Status         string
 	TaskID         string
@@ -527,6 +536,7 @@ func statusDisplayRowsForSort(visibleGroups []status.Group, sortMode taskViewSor
 		for _, entry := range group.Entries {
 			row := statusDisplayRow{
 				Entry:          entry,
+				GroupID:        group.ID,
 				StatusOrder:    statusOrder,
 				Status:         statusDisplayLabel(group),
 				Detail:         entry.Detail,

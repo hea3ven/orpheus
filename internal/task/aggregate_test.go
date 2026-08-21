@@ -13,16 +13,17 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/task"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 func TestAggregatorListQueriesReposAndPreservesContext(t *testing.T) {
 	repos := []task.RepositorySource{
-		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}, BackendDir: "/tmp/alpha"},
-		{Repository: task.Repository{ID: "beta", Name: "Beta", TaskIDPrefix: "b"}, BackendDir: "/tmp/beta"},
+		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}, BackendDir: "/fixture/alpha"},
+		{Repository: task.Repository{ID: "beta", Name: "Beta", TaskIDPrefix: "b"}, BackendDir: "/fixture/beta"},
 	}
 	backends := map[string]fakeReadBackend{
-		"/tmp/alpha": {tasks: []task.Task{{ID: "a-1", Title: "alpha task", IssueType: task.IssueTypeTask, Status: task.StatusOpen}}},
-		"/tmp/beta":  {tasks: []task.Task{{ID: "b-1", Title: "beta task", IssueType: task.IssueTypeTask, Status: task.StatusInProgress}}},
+		"/fixture/alpha": {tasks: []task.Task{{ID: "a-1", Title: "alpha task", IssueType: task.IssueTypeTask, Status: task.StatusOpen}}},
+		"/fixture/beta":  {tasks: []task.Task{{ID: "b-1", Title: "beta task", IssueType: task.IssueTypeTask, Status: task.StatusInProgress}}},
 	}
 
 	aggregator, err := task.NewAggregator(repos, func(source task.RepositorySource) (task.ReadBackend, error) {
@@ -53,7 +54,7 @@ func TestAggregatorListQueriesReposAndPreservesContext(t *testing.T) {
 }
 
 func TestAggregatorListFiltersClosedTaskSourceItems(t *testing.T) {
-	repos := []task.RepositorySource{{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}, BackendDir: "/tmp/alpha"}}
+	repos := []task.RepositorySource{{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}, BackendDir: "/fixture/alpha"}}
 	backend := fakeReadBackend{tasks: []task.Task{
 		{ID: "a-1", Title: "active task", IssueType: task.IssueTypeTask, Status: task.StatusOpen},
 		{ID: "a-2", Title: "closed task", IssueType: task.IssueTypeTask, Status: task.StatusClosed},
@@ -81,15 +82,15 @@ func TestAggregatorListFiltersClosedTaskSourceItems(t *testing.T) {
 
 func TestAggregatorSnapshotPreservesTaskSourceItems(t *testing.T) {
 	repos := []task.RepositorySource{
-		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}, BackendDir: "/tmp/alpha"},
-		{Repository: task.Repository{ID: "beta", Name: "Beta", TaskIDPrefix: "b"}, BackendDir: "/tmp/beta"},
+		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}, BackendDir: "/fixture/alpha"},
+		{Repository: task.Repository{ID: "beta", Name: "Beta", TaskIDPrefix: "b"}, BackendDir: "/fixture/beta"},
 	}
 	backends := map[string]fakeReadBackend{
-		"/tmp/alpha": {tasks: []task.Task{
+		"/fixture/alpha": {tasks: []task.Task{
 			{ID: "a-1", Title: "alpha active", IssueType: task.IssueTypeTask, Status: task.StatusOpen},
 			{ID: "a-closed", Title: "alpha closed", IssueType: task.IssueTypeTask, Status: task.StatusClosed},
 		}},
-		"/tmp/beta": {tasks: []task.Task{{ID: "b-epic", Title: "beta epic", IssueType: task.IssueTypeEpic, Status: task.StatusOpen}}},
+		"/fixture/beta": {tasks: []task.Task{{ID: "b-epic", Title: "beta epic", IssueType: task.IssueTypeEpic, Status: task.StatusOpen}}},
 	}
 
 	aggregator, err := task.NewAggregator(repos, func(source task.RepositorySource) (task.ReadBackend, error) {
@@ -129,7 +130,7 @@ func TestAggregatorFilteredSnapshotSeparatesCandidatesFromParentAndDependencyCon
 		{ID: "a-epic", Title: "excluded parent", IssueType: task.IssueTypeEpic, Status: task.StatusInProgress},
 		{ID: "a-dependency", Title: "excluded dependency", IssueType: task.IssueTypeTask, Status: task.StatusClosed},
 	}}
-	aggregator, err := task.NewAggregator([]task.RepositorySource{{Repository: repo, BackendDir: t.TempDir()}}, func(task.RepositorySource) (task.ReadBackend, error) {
+	aggregator, err := task.NewAggregator([]task.RepositorySource{{Repository: repo, BackendDir: testutil.CanonicalTempDir(t)}}, func(task.RepositorySource) (task.ReadBackend, error) {
 		return backend, nil
 	})
 	if err != nil {
@@ -160,7 +161,7 @@ func TestAggregatorFilteredSnapshotAddsNonmatchingEpicChildrenAsContext(t *testi
 		{ID: "a-epic", Title: "matching epic", IssueType: task.IssueTypeEpic, Status: task.StatusOpen, Relations: task.RelationSummary{ChildCount: 1}},
 		{ID: "a-child", Title: "excluded child", IssueType: task.IssueTypeTask, Status: task.StatusClosed, Relations: task.RelationSummary{ParentID: "a-epic"}},
 	}}
-	aggregator, err := task.NewAggregator([]task.RepositorySource{{Repository: repo, BackendDir: t.TempDir()}}, func(task.RepositorySource) (task.ReadBackend, error) {
+	aggregator, err := task.NewAggregator([]task.RepositorySource{{Repository: repo, BackendDir: testutil.CanonicalTempDir(t)}}, func(task.RepositorySource) (task.ReadBackend, error) {
 		return backend, nil
 	})
 	if err != nil {
@@ -198,8 +199,8 @@ func TestAggregatorFilteredSnapshotPreservesCrossRepositoryRelationshipOwner(t *
 		IssueType: task.IssueTypeTask,
 		Status:    task.StatusClosed,
 	}}}
-	alphaSource := task.RepositorySource{Repository: alpha, BackendDir: t.TempDir()}
-	betaSource := task.RepositorySource{Repository: beta, BackendDir: t.TempDir()}
+	alphaSource := task.RepositorySource{Repository: alpha, BackendDir: testutil.CanonicalTempDir(t)}
+	betaSource := task.RepositorySource{Repository: beta, BackendDir: testutil.CanonicalTempDir(t)}
 	aggregator, err := task.NewAggregator([]task.RepositorySource{alphaSource, betaSource}, func(source task.RepositorySource) (task.ReadBackend, error) {
 		switch source.Repository.ID {
 		case alpha.ID:
@@ -248,7 +249,7 @@ func TestAggregatorFilteredSnapshotDistinguishesRelationshipQueryFailure(t *test
 		tasks:  []task.Task{{ID: "a-child", Title: "matching", IssueType: task.IssueTypeTask, Relations: task.RelationSummary{DependencyIDs: []string{"a-dependency"}}}},
 		getErr: map[string]error{"a-dependency": errors.New("backend unavailable")},
 	}
-	aggregator, err := task.NewAggregator([]task.RepositorySource{{Repository: repo, BackendDir: t.TempDir()}}, func(task.RepositorySource) (task.ReadBackend, error) {
+	aggregator, err := task.NewAggregator([]task.RepositorySource{{Repository: repo, BackendDir: testutil.CanonicalTempDir(t)}}, func(task.RepositorySource) (task.ReadBackend, error) {
 		return backend, nil
 	})
 	if err != nil {
@@ -289,7 +290,7 @@ func TestAggregatorFilteredSnapshotRecordsParentFailureAfterEarlierDependencyFai
 			"a-parent":     errors.New("parent backend unavailable"),
 		},
 	}
-	aggregator, err := task.NewAggregator([]task.RepositorySource{{Repository: repo, BackendDir: t.TempDir()}}, func(task.RepositorySource) (task.ReadBackend, error) {
+	aggregator, err := task.NewAggregator([]task.RepositorySource{{Repository: repo, BackendDir: testutil.CanonicalTempDir(t)}}, func(task.RepositorySource) (task.ReadBackend, error) {
 		return backend, nil
 	})
 	if err != nil {
@@ -315,8 +316,8 @@ func TestAggregatorFilteredSnapshotRecordsParentFailureAfterEarlierDependencyFai
 func TestAggregatorSnapshotContinuesAfterRepoFailure(t *testing.T) {
 	queryErr := errors.New("bd list failed")
 	repos := []task.RepositorySource{
-		{Repository: task.Repository{ID: "broken", Name: "Broken", TaskIDPrefix: "br"}, BackendDir: "/tmp/broken"},
-		{Repository: task.Repository{ID: "ok", Name: "OK", TaskIDPrefix: "ok"}, BackendDir: "/tmp/ok"},
+		{Repository: task.Repository{ID: "broken", Name: "Broken", TaskIDPrefix: "br"}, BackendDir: "/fixture/broken"},
+		{Repository: task.Repository{ID: "ok", Name: "OK", TaskIDPrefix: "ok"}, BackendDir: "/fixture/ok"},
 	}
 
 	aggregator, err := task.NewAggregator(repos, func(source task.RepositorySource) (task.ReadBackend, error) {
@@ -345,7 +346,7 @@ func TestAggregatorSnapshotContinuesAfterRepoFailure(t *testing.T) {
 
 func TestAggregatorReportsBackendCreationFailure(t *testing.T) {
 	factoryErr := errors.New("backend unavailable")
-	repos := []task.RepositorySource{{Repository: task.Repository{ID: "broken", Name: "Broken", TaskIDPrefix: "br"}, BackendDir: "/tmp/broken"}}
+	repos := []task.RepositorySource{{Repository: task.Repository{ID: "broken", Name: "Broken", TaskIDPrefix: "br"}, BackendDir: "/fixture/broken"}}
 
 	aggregator, err := task.NewAggregator(repos, func(task.RepositorySource) (task.ReadBackend, error) {
 		return nil, factoryErr
@@ -439,9 +440,9 @@ func (b failingReadBackend) List(context.Context) ([]task.Task, error) {
 
 func TestAggregatorSnapshotOverlapsDistinctWorkspacesAndPreservesOrder(t *testing.T) {
 	repos := []task.RepositorySource{
-		{Repository: task.Repository{ID: "alpha"}, BackendDir: t.TempDir()},
-		{Repository: task.Repository{ID: "beta"}, BackendDir: t.TempDir()},
-		{Repository: task.Repository{ID: "gamma"}, BackendDir: t.TempDir()},
+		{Repository: task.Repository{ID: "alpha"}, BackendDir: testutil.CanonicalTempDir(t)},
+		{Repository: task.Repository{ID: "beta"}, BackendDir: testutil.CanonicalTempDir(t)},
+		{Repository: task.Repository{ID: "gamma"}, BackendDir: testutil.CanonicalTempDir(t)},
 	}
 	started := make(chan string, 2)
 	release := make(chan struct{})
@@ -486,9 +487,9 @@ func TestAggregatorSnapshotPreservesFailureOrderAcrossConcurrentReads(t *testing
 	createErr := errors.New("create alpha backend")
 	listErr := errors.New("list beta backend")
 	repos := []task.RepositorySource{
-		{Repository: task.Repository{ID: "alpha"}, BackendDir: t.TempDir()},
-		{Repository: task.Repository{ID: "beta"}, BackendDir: t.TempDir()},
-		{Repository: task.Repository{ID: "gamma"}, BackendDir: t.TempDir()},
+		{Repository: task.Repository{ID: "alpha"}, BackendDir: testutil.CanonicalTempDir(t)},
+		{Repository: task.Repository{ID: "beta"}, BackendDir: testutil.CanonicalTempDir(t)},
+		{Repository: task.Repository{ID: "gamma"}, BackendDir: testutil.CanonicalTempDir(t)},
 	}
 
 	aggregator, err := task.NewAggregator(repos, func(source task.RepositorySource) (task.ReadBackend, error) {
@@ -526,7 +527,7 @@ func TestAggregatorSnapshotBoundsDistinctWorkspaceReads(t *testing.T) {
 	for i := range repos {
 		repos[i] = task.RepositorySource{
 			Repository: task.Repository{ID: fmt.Sprintf("repo-%d", i)},
-			BackendDir: t.TempDir(),
+			BackendDir: testutil.CanonicalTempDir(t),
 		}
 	}
 	tracker := &boundedReadTracker{
@@ -559,8 +560,8 @@ func TestAggregatorSnapshotBoundsDistinctWorkspaceReads(t *testing.T) {
 }
 
 func TestAggregatorSnapshotSerializesNormalizedDuplicateWorkspaces(t *testing.T) {
-	workspace := t.TempDir()
-	alias := filepath.Join(t.TempDir(), "workspace-alias")
+	workspace := testutil.CanonicalTempDir(t)
+	alias := filepath.Join(testutil.CanonicalTempDir(t), "workspace-alias")
 	if err := os.Symlink(workspace, alias); err != nil {
 		t.Fatalf("create workspace symlink: %v", err)
 	}
@@ -611,7 +612,7 @@ func TestAggregatorSnapshotCancellationWaitsForWorkers(t *testing.T) {
 	for i := range repos {
 		repos[i] = task.RepositorySource{
 			Repository: task.Repository{ID: fmt.Sprintf("repo-%d", i)},
-			BackendDir: t.TempDir(),
+			BackendDir: testutil.CanonicalTempDir(t),
 		}
 	}
 	aggregator, err := task.NewAggregator(repos, func(task.RepositorySource) (task.ReadBackend, error) {

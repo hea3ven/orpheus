@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -54,6 +56,39 @@ func TestIntegrationStatusGroupsLocalTaskSnapshots(t *testing.T) {
 	is.Empty(fullStderr)
 	assertFullStatusGroupOutput(t, fullStdout)
 
+	jsonStdout, jsonStderr := executeCommand(t, []string{"status", "--json"})
+	is.Empty(jsonStderr)
+	var jsonEntries []taskViewJSONTaskEntry
+	must.NoError(json.Unmarshal([]byte(jsonStdout), &jsonEntries))
+	jsonEntriesByID := make(map[string]taskViewJSONTaskEntry, len(jsonEntries))
+	for _, entry := range jsonEntries {
+		jsonEntriesByID[entry.ID] = entry
+	}
+	for _, taskID := range []string{"ar-ready", "ar-dep", "ar-idle", "ar-running", "ar-failed", "ar-succeeded", "ar-review", "ar-missing"} {
+		_, ok := jsonEntriesByID[taskID]
+		is.True(ok, "JSON output must contain visible task %s", taskID)
+	}
+	for _, hiddenID := range []string{"ar-blocked", "ar-closed"} {
+		_, ok := jsonEntriesByID[hiddenID]
+		is.False(ok, "JSON output must hide default status task %s", hiddenID)
+	}
+	is.Equal("ready", jsonEntriesByID["ar-ready"].Status)
+	is.Equal("task", jsonEntriesByID["ar-ready"].Kind)
+	is.Empty(jsonEntriesByID["ar-ready"].EpicProgress)
+
+	fullJSONStdout, fullJSONStderr := executeCommand(t, []string{"status", "--full", "--json"})
+	is.Empty(fullJSONStderr)
+	var fullJSONEntries []taskViewJSONTaskEntry
+	must.NoError(json.Unmarshal([]byte(fullJSONStdout), &fullJSONEntries))
+	fullJSONEntriesByID := make(map[string]taskViewJSONTaskEntry, len(fullJSONEntries))
+	for _, entry := range fullJSONEntries {
+		fullJSONEntriesByID[entry.ID] = entry
+	}
+	_, hasBlocked := fullJSONEntriesByID["ar-blocked"]
+	_, hasClosed := fullJSONEntriesByID["ar-closed"]
+	is.True(hasBlocked)
+	is.True(hasClosed)
+
 	logData, err := os.ReadFile(logPath)
 	must.NoError(err)
 	log := string(logData)
@@ -85,7 +120,7 @@ func setupStatusGroupsLocalTaskSnapshots(t *testing.T) string {
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	repoDir := filepath.Join(t.TempDir(), "alpha")
+	repoDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
 	must.NoError(os.MkdirAll(repoDir, 0o755))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:          "alpha",
@@ -140,7 +175,7 @@ func TestIntegrationStatusFullIgnoresCorruptClosedAndPullRequestStates(t *testin
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	repoDir := filepath.Join(t.TempDir(), "alpha")
+	repoDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
 	must.NoError(os.MkdirAll(repoDir, 0o755))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:          "alpha",
@@ -181,7 +216,7 @@ func TestIntegrationStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t *testing
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	repoDir := filepath.Join(t.TempDir(), "alpha")
+	repoDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
 	must.NoError(os.MkdirAll(repoDir, 0o755))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
@@ -236,7 +271,7 @@ func TestIntegrationStatusAndTaskListUseLocalRunHistoryOnOpenTaskAsNeedsAttentio
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	repoDir := filepath.Join(t.TempDir(), "alpha")
+	repoDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
 	must.NoError(os.MkdirAll(repoDir, 0o755))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:          "alpha",
@@ -308,7 +343,7 @@ func TestIntegrationStatusRendersEpicChildrenAsIntegratedTreeRows(t *testing.T) 
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	repoDir := filepath.Join(t.TempDir(), "alpha")
+	repoDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
 	must.NoError(os.MkdirAll(repoDir, 0o755))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:          "alpha",
@@ -380,8 +415,8 @@ func TestIntegrationStatusReportsRepoFailuresInUnknownGroupAndReturnsError(t *te
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	brokenDir := filepath.Join(t.TempDir(), "broken")
-	okDir := filepath.Join(t.TempDir(), "ok")
+	brokenDir := filepath.Join(testutil.CanonicalTempDir(t), "broken")
+	okDir := filepath.Join(testutil.CanonicalTempDir(t), "ok")
 	must.NoError(os.MkdirAll(brokenDir, 0o755))
 	must.NoError(os.MkdirAll(okDir, 0o755))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{
@@ -429,6 +464,22 @@ func TestIntegrationStatusReportsRepoFailuresInUnknownGroupAndReturnsError(t *te
 	is.Contains(stderr, "Broken Repo")
 	is.Contains(stderr, "prefix br")
 	is.Contains(stderr, "bd exploded")
+
+	jsonStdout, jsonStderr, jsonErr := executeCommandWithError(t, []string{"status", "--json"})
+	must.Error(jsonErr)
+	is.Contains(jsonStderr, "status: repo broken")
+	var jsonEntries []json.RawMessage
+	must.NoError(json.Unmarshal([]byte(jsonStdout), &jsonEntries))
+	is.Len(jsonEntries, 2)
+	var failure taskViewJSONRepoFailureEntry
+	must.NoError(json.Unmarshal(jsonEntries[0], &failure))
+	is.Equal("repo_failure", failure.Kind)
+	is.Equal("needs_attention", failure.Status)
+	is.Contains(failure.Detail.Message, "bd exploded")
+	var taskEntry taskViewJSONTaskEntry
+	must.NoError(json.Unmarshal(jsonEntries[1], &taskEntry))
+	is.Equal("task", taskEntry.Kind)
+	is.Equal("ok-1", taskEntry.ID)
 }
 
 func TestIntegrationTaskViewsApplySharedSortModesAcrossRepositories(t *testing.T) {
@@ -438,8 +489,8 @@ func TestIntegrationTaskViewsApplySharedSortModesAcrossRepositories(t *testing.T
 	newTestState(t)
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
-	betaDir := filepath.Join(t.TempDir(), "beta")
-	alphaDir := filepath.Join(t.TempDir(), "alpha")
+	betaDir := filepath.Join(testutil.CanonicalTempDir(t), "beta")
+	alphaDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
 	must.NoError(os.MkdirAll(betaDir, 0o755))
 	must.NoError(os.MkdirAll(alphaDir, 0o755))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{
@@ -488,6 +539,25 @@ func TestIntegrationTaskViewsApplySharedSortModesAcrossRepositories(t *testing.T
 			continue
 		}
 		assertTaskViewOutputOrder(t, stdout, test.want)
+
+		jsonArgs := append(append([]string{}, test.args...), "--json")
+		jsonStdout, jsonStderr := executeCommand(t, jsonArgs)
+		if jsonStderr != "" {
+			t.Errorf("%s JSON stderr = %q, want empty", test.name, jsonStderr)
+			continue
+		}
+		var jsonEntries []taskViewJSONTaskEntry
+		if err := json.Unmarshal([]byte(jsonStdout), &jsonEntries); err != nil {
+			t.Errorf("%s JSON output does not parse: %v\n%s", test.name, err, jsonStdout)
+			continue
+		}
+		jsonIDs := make([]string, 0, len(jsonEntries))
+		for _, entry := range jsonEntries {
+			jsonIDs = append(jsonIDs, entry.ID)
+		}
+		if !assert.Equal(t, test.want, jsonIDs, "%s JSON entry order", test.name) {
+			continue
+		}
 	}
 }
 
@@ -526,7 +596,7 @@ func assertStatusGroupOrder(t *testing.T, output string, groups []string) {
 func withFakeBDCommandResponses(t *testing.T, responses []fakeBDCommandResponse) string {
 	t.Helper()
 
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	fixtureDir := filepath.Join(binDir, "fixtures")
 	if err := os.MkdirAll(fixtureDir, 0o755); err != nil {
 		t.Fatalf("create fake bd fixtures: %v", err)
@@ -559,7 +629,7 @@ case "$PWD|$*" in
 		if args == "--json --readonly --sandbox list --all --limit 0" {
 			args += " --type task"
 		}
-		fmt.Fprintf(&script, "  %s)\n", shellQuote(canonicalTestPath(t, response.dir)+"|"+args))
+		fmt.Fprintf(&script, "  %s)\n", shellQuote(canonicalFixturePath(t, response.dir)+"|"+args))
 		fmt.Fprintf(&script, "    cat %s\n", shellQuote(stdoutPath))
 		fmt.Fprintf(&script, "    cat %s >&2\n", shellQuote(stderrPath))
 		fmt.Fprintf(&script, "    exit %d\n", exitCode)

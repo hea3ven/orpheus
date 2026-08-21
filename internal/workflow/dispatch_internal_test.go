@@ -15,11 +15,12 @@ import (
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/tasktarget"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 func TestDispatchPrepareFollowUpResumeHonorsStrictFeatureFlag(t *testing.T) {
-	workdir := canonicalTestPath(t, t.TempDir())
-	sessionPath := filepath.Join(t.TempDir(), "session.jsonl")
+	workdir := testutil.CanonicalTempDir(t)
+	sessionPath := filepath.Join(testutil.CanonicalTempDir(t), "session.jsonl")
 	content := `{"type":"session","version":3,"id":"session-1","timestamp":"2026-07-07T10:00:00Z","cwd":"` + workdir + `"}
 {"type":"message","id":"assistant","timestamp":"2026-07-07T10:00:01Z","message":{"role":"assistant","usage":{"input":10,"output":5,"totalTokens":15}}}
 `
@@ -72,8 +73,8 @@ func TestDispatchPrepareFollowUpResumeHonorsStrictFeatureFlag(t *testing.T) {
 }
 
 func TestDispatchPrepareFollowUpResumeUsesActiveCodexHome(t *testing.T) {
-	workdir := canonicalTestPath(t, t.TempDir())
-	sourceHome := t.TempDir()
+	workdir := testutil.CanonicalTempDir(t)
+	sourceHome := testutil.CanonicalTempDir(t)
 	sessionPath := filepath.Join(sourceHome, "sessions", "source.jsonl")
 	if err := os.MkdirAll(filepath.Dir(sessionPath), 0o755); err != nil {
 		t.Fatalf("create source sessions: %v", err)
@@ -94,7 +95,7 @@ func TestDispatchPrepareFollowUpResumeUsesActiveCodexHome(t *testing.T) {
 	service := DispatchService{RunStore: store}
 	plan := dispatchStartPlan{expected: gitmeta.TaskWorktreeSetupResult{WorktreePath: workdir}}
 	opts := DispatchStartOptions{TaskID: "op-1", Source: task.RepositorySource{Repository: task.Repository{ID: "alpha"}}}
-	activeHome := t.TempDir()
+	activeHome := testutil.CanonicalTempDir(t)
 	if err := os.MkdirAll(filepath.Join(activeHome, "sessions"), 0o755); err != nil {
 		t.Fatalf("create active sessions: %v", err)
 	}
@@ -133,7 +134,7 @@ func equalStrings(left []string, right []string) bool {
 //nolint:funlen // The fixture is intentionally explicit about blocked review state.
 func TestDispatchValidateStartInfersBlockedReviewFollowUpTarget(t *testing.T) {
 	paths := newDispatchTestPaths(t)
-	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
+	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
 	repo := task.Repository{
 		ID:            "alpha",
 		Name:          "Alpha",
@@ -197,7 +198,7 @@ func TestDispatchValidateStartInfersBlockedReviewFollowUpTarget(t *testing.T) {
 
 func TestDispatchValidateStartRefusesInterruptedAutomatedBlockerDecision(t *testing.T) {
 	paths := newDispatchTestPaths(t)
-	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
+	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
 	repo := task.Repository{
 		ID:            "alpha",
 		Name:          "Alpha",
@@ -284,7 +285,7 @@ func TestDispatchValidateStartRefusesUnkeptAutomatedBlockers(t *testing.T) {
 
 func TestDispatchValidateStartAllowsFollowUpForNormalizedFailedReview(t *testing.T) {
 	paths := newDispatchTestPaths(t)
-	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
+	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
 	repo := task.Repository{
 		ID: "alpha", Name: "Alpha", Path: repoPath, DefaultBranch: "main", TaskIDPrefix: "op",
 	}
@@ -473,7 +474,7 @@ func TestDispatchValidateStartRetriesFailedFollowUpTargets(t *testing.T) {
 
 func TestDispatchValidateStartRefusesAlreadyTargetedBlockedReview(t *testing.T) {
 	paths := newDispatchTestPaths(t)
-	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
+	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
 	repo := task.Repository{
 		ID:            "alpha",
 		Name:          "Alpha",
@@ -533,7 +534,7 @@ func TestDispatchValidateStartRefusesAlreadyTargetedBlockedReview(t *testing.T) 
 
 func TestDispatchValidateStartRejectsMainModeAfterTargetLock(t *testing.T) {
 	paths := newDispatchTestPaths(t)
-	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
+	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
 	repo := task.Repository{
 		ID:            "alpha",
 		Name:          "Alpha",
@@ -593,7 +594,7 @@ func validateDispatchStartForReviewWithRuns(
 	t.Helper()
 
 	paths := newDispatchTestPaths(t)
-	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
+	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
 	repo := task.Repository{
 		ID:            "alpha",
 		Name:          "Alpha",
@@ -846,7 +847,7 @@ func (s fakeDispatchRunStore) FailRunStart(string, string, int, error) (taskstat
 func newDispatchTestPaths(t *testing.T) state.Paths {
 	t.Helper()
 
-	root := t.TempDir()
+	root := testutil.CanonicalTempDir(t)
 	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)

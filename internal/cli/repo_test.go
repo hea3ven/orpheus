@@ -11,6 +11,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -706,7 +707,7 @@ func TestIntegrationRepoBeadsDirResolvesLocalRepoByID(t *testing.T) {
 	must := require.New(t)
 	newTestState(t)
 	paths := currentTestPaths(t)
-	localPath := filepath.Join(t.TempDir(), "local-alpha")
+	localPath := filepath.Join(testutil.CanonicalTempDir(t), "local-alpha")
 	store := registry.NewStore(paths)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:          "alpha-id",
@@ -732,7 +733,7 @@ func TestIntegrationRepoBeadsDirResolvesManagedRepoByName(t *testing.T) {
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:          "managed-id",
 		Name:        "Managed Repo",
-		Path:        filepath.Join(t.TempDir(), "managed"),
+		Path:        filepath.Join(testutil.CanonicalTempDir(t), "managed"),
 		BeadsMode:   registry.BeadsModeManaged,
 		BeadsPrefix: "managed-prefix",
 	}}}))
@@ -751,7 +752,7 @@ func TestIntegrationRepoBeadsDirResolvesLocalRepoByBeadsPrefix(t *testing.T) {
 	must := require.New(t)
 	newTestState(t)
 	paths := currentTestPaths(t)
-	localPath := filepath.Join(t.TempDir(), "prefix-alpha")
+	localPath := filepath.Join(testutil.CanonicalTempDir(t), "prefix-alpha")
 	store := registry.NewStore(paths)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:          "alpha-id",
@@ -777,7 +778,7 @@ func TestIntegrationRepoBeadsDirResolvesManagedRepoByBeadsPrefix(t *testing.T) {
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:          "managed-id",
 		Name:        "Managed Repo",
-		Path:        filepath.Join(t.TempDir(), "managed"),
+		Path:        filepath.Join(testutil.CanonicalTempDir(t), "managed"),
 		BeadsMode:   registry.BeadsModeManaged,
 		BeadsPrefix: "managed-prefix",
 	}}}))
@@ -796,7 +797,7 @@ func TestIntegrationRepoBeadsDirVerboseEmitsDiagnosticsToStderr(t *testing.T) {
 	must := require.New(t)
 	newTestState(t)
 	paths := currentTestPaths(t)
-	localPath := filepath.Join(t.TempDir(), "verbose-alpha")
+	localPath := filepath.Join(testutil.CanonicalTempDir(t), "verbose-alpha")
 	store := registry.NewStore(paths)
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:          "alpha-id",
@@ -827,7 +828,7 @@ func TestIntegrationRepoBeadsDirRejectsUnknownRepo(t *testing.T) {
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:          "alpha-id",
 		Name:        "Alpha Repo",
-		Path:        filepath.Join(t.TempDir(), "alpha"),
+		Path:        filepath.Join(testutil.CanonicalTempDir(t), "alpha"),
 		BeadsMode:   registry.BeadsModeLocal,
 		BeadsPrefix: "alpha-prefix",
 	}}}))

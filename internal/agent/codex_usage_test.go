@@ -10,6 +10,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,8 +18,8 @@ import (
 func TestCaptureCodexUsageCorrelatesSessionAndTokenCount(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	root := t.TempDir()
-	workdir := filepath.Join(t.TempDir(), "worktree")
+	root := testutil.CanonicalTempDir(t)
+	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 	must.NoError(os.MkdirAll(workdir, 0o755))
 	sessionDir := filepath.Join(root, "sessions", "2026", "07", "07")
 	must.NoError(os.MkdirAll(sessionDir, 0o755))
@@ -58,8 +59,8 @@ func TestCaptureCodexUsageCorrelatesSessionAndTokenCount(t *testing.T) {
 func TestCaptureUsageUsesExecutionStartForEffectiveDatedPricing(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	root := t.TempDir()
-	workdir := filepath.Join(t.TempDir(), "worktree")
+	root := testutil.CanonicalTempDir(t)
+	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 	must.NoError(os.MkdirAll(workdir, 0o755))
 	startedAt := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
 	sessionPath := filepath.Join(root, "sessions", "2026", "07", "30", "session.jsonl")
@@ -84,8 +85,8 @@ func TestCaptureUsageUsesExecutionStartForEffectiveDatedPricing(t *testing.T) {
 func TestCaptureCodexUsageReportsAmbiguousMatches(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	root := t.TempDir()
-	workdir := filepath.Join(t.TempDir(), "worktree")
+	root := testutil.CanonicalTempDir(t)
+	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 	sessionDir := filepath.Join(root, "sessions", "2026", "07", "07")
 	must.NoError(os.MkdirAll(sessionDir, 0o755))
 	writeCodexSessionLog(t, filepath.Join(sessionDir, "one.jsonl"), workdir, "one")
@@ -107,8 +108,8 @@ func TestCaptureCodexUsageReportsAmbiguousMatches(t *testing.T) {
 func TestCaptureCodexUsageSelectsClearlyClosestSession(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	root := t.TempDir()
-	workdir := filepath.Join(t.TempDir(), "worktree")
+	root := testutil.CanonicalTempDir(t)
+	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 	sessionDir := filepath.Join(root, "sessions", "2026", "07", "07")
 	must.NoError(os.MkdirAll(sessionDir, 0o755))
 	startedAt := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
@@ -140,8 +141,8 @@ func TestCaptureCodexUsageKeepsUnsafeClosestMatchesAmbiguous(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			is := assert.New(t)
 			must := require.New(t)
-			root := t.TempDir()
-			workdir := filepath.Join(t.TempDir(), "worktree")
+			root := testutil.CanonicalTempDir(t)
+			workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 			sessionDir := filepath.Join(root, "sessions", "2026", "07", "07")
 			must.NoError(os.MkdirAll(sessionDir, 0o755))
 			startedAt := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
@@ -172,8 +173,8 @@ func TestCaptureCodexUsageKeepsUnsafeClosestMatchesAmbiguous(t *testing.T) {
 func TestCaptureCodexUsageIgnoresSessionsNearExecutionFinish(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	root := t.TempDir()
-	workdir := filepath.Join(t.TempDir(), "worktree")
+	root := testutil.CanonicalTempDir(t)
+	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 	sessionDir := filepath.Join(root, "sessions", "2026", "07", "07")
 	must.NoError(os.MkdirAll(sessionDir, 0o755))
 	writeCodexSessionLogAt(
@@ -205,9 +206,9 @@ func TestCaptureCodexUsageIgnoresSessionsNearExecutionFinish(t *testing.T) {
 func TestCaptureCodexUsageRequiresMatchingSessionCWD(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	root := t.TempDir()
-	workdir := filepath.Join(t.TempDir(), "worktree")
-	otherDir := filepath.Join(t.TempDir(), "other-worktree")
+	root := testutil.CanonicalTempDir(t)
+	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
+	otherDir := filepath.Join(testutil.CanonicalTempDir(t), "other-worktree")
 	sessionDir := filepath.Join(root, "sessions", "2026", "07", "07")
 	must.NoError(os.MkdirAll(sessionDir, 0o755))
 	writeCodexSessionLog(t, filepath.Join(sessionDir, "matching.jsonl"), workdir, "matching")

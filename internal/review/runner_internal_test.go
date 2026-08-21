@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/logging"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 func TestRunHunkBackedManualCommandCanceledBeforeStartLogsCanceled(t *testing.T) {
@@ -22,7 +23,7 @@ func TestRunHunkBackedManualCommandCanceledBeforeStartLogsCanceled(t *testing.T)
 		RepoID:  "alpha",
 		TaskID:  "op-1",
 		Branch:  "main",
-		Workdir: t.TempDir(),
+		Workdir: testutil.CanonicalTempDir(t),
 		Pipeline: Pipeline{
 			Name: "standard",
 		},
