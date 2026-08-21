@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/hea3ven/orpheus/internal/task"
+	"github.com/hea3ven/orpheus/internal/taskbranch"
 )
 
 // TaskRepositorySources projects registered repositories into validated task sources.
@@ -36,6 +37,10 @@ func (s Store) TaskRepositorySource(repo Repo) (task.RepositorySource, error) {
 	if err != nil {
 		return task.RepositorySource{}, err
 	}
+	branchConfig, err := taskbranch.LoadConfig(s.paths)
+	if err != nil {
+		return task.RepositorySource{}, err
+	}
 	return task.RepositorySource{
 		Repository: task.Repository{
 			ID:                     normalizedRepo.ID,
@@ -44,6 +49,7 @@ func (s Store) TaskRepositorySource(repo Repo) (task.RepositorySource, error) {
 			Path:                   normalizedRepo.Path,
 			DefaultBranch:          normalizedRepo.DefaultBranch,
 			TitleTemplate:          normalizedRepo.TitleTemplate,
+			BranchTemplate:         taskbranch.ResolveTemplate(normalizedRepo.BranchTemplate, branchConfig.Template),
 			IntegrationFlow:        string(normalizedRepo.IntegrationFlow),
 			IncludePRReviewProcess: cloneBoolPtr(normalizedRepo.IncludePRReviewProcess),
 			ReviewPipeline:         normalizedRepo.ReviewPipeline,

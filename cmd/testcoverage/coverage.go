@@ -67,6 +67,14 @@ type packageTiming struct {
 	Seconds float64 `json:"seconds"`
 }
 
+func selectedTestSeconds(timings []packageTiming) float64 {
+	var total float64
+	for _, timing := range timings {
+		total += timing.Seconds
+	}
+	return total
+}
+
 type testFailure struct {
 	Package string `json:"package"`
 	Test    string `json:"test,omitempty"`

@@ -107,7 +107,7 @@ func TestTimingFindingMessageShowsCurrentBaselineBudgetAndDifferences(t *testing
 	printReportTo(&output, report, "report.json")
 	contents := output.String()
 	for _, want := range []string{
-		"unit: 10/15 statements (66.67%), 10 test events, 1.00s",
+		"unit: 10/15 statements (66.67%), 10 test events, 0.25s selected tests (1.00s wall)",
 		"example.test/timed: 8/10 statements (80.00%), 0.25s",
 		"example.test/not-timed: 2/5 statements (40.00%), no selected-test timing",
 	} {
@@ -342,6 +342,22 @@ func TestRepositoryDenominatorBoundaryIsInclusive(t *testing.T) {
 	}
 }
 
+func TestSuiteTimingUsesSelectedPackageTestsInsteadOfCommandWallTime(t *testing.T) {
+	report := testQualityReport()
+	prior := baselineFromReport(report, defaultPolicy())
+	if got := prior.Lanes["unit"].SuiteBaselineSeconds; got != 0.5 {
+		t.Fatalf("suite baseline = %v, want selected package total 0.5", got)
+	}
+
+	coldBuild := cloneReport(t, report)
+	lane := coldBuild.Lanes["unit"]
+	lane.WallSeconds = 100
+	coldBuild.Lanes["unit"] = lane
+	if got := assess(prior, coldBuild); got.Status != statusPass {
+		t.Fatalf("cold-build timing decision = %#v, want pass", got)
+	}
+}
+
 func TestTimingBudgetsFailOnlyAboveBoundary(t *testing.T) {
 	report := testQualityReport()
 	prior := baselineFromReport(report, defaultPolicy())
@@ -349,7 +365,6 @@ func TestTimingBudgetsFailOnlyAboveBoundary(t *testing.T) {
 
 	atBoundary := cloneReport(t, report)
 	current := atBoundary.Lanes["unit"]
-	current.WallSeconds = lane.SuiteBudgetSeconds
 	current.Timings[0].Seconds = lane.PackageBudgets[0].Seconds
 	atBoundary.Lanes["unit"] = current
 	if got := assess(prior, atBoundary); got.Status != statusPass {
@@ -403,6 +418,11 @@ func TestGeneratedRefreshPassesAgainstTrustedPrior(t *testing.T) {
 func TestPolicyEditCannotLoosenNewPackageBudgetBeforeItIsTrusted(t *testing.T) {
 	report := testQualityReport()
 	trusted := baselineFromReport(report, defaultPolicy())
+	for _, laneName := range laneNames {
+		lane := trusted.Lanes[laneName]
+		lane.SuiteBudgetSeconds = 2
+		trusted.Lanes[laneName] = lane
+	}
 	changed := cloneReport(t, report)
 	for _, laneName := range laneNames {
 		lane := changed.Lanes[laneName]
@@ -422,6 +442,49 @@ func TestPolicyEditCannotLoosenNewPackageBudgetBeforeItIsTrusted(t *testing.T) {
 	loose.Policy = loosePolicy
 	if got := verifyTrackedBaseline(trusted, loose, changed, trustedDecision); got.Status != statusRefreshRequired {
 		t.Fatalf("policy edit loosened new budget before trust: %#v", got)
+	}
+}
+
+func TestGeneratedRefreshAcceptsNewPackageTimingVariance(t *testing.T) {
+	report := testQualityReport()
+	trusted := baselineFromReport(report, defaultPolicy())
+	for _, laneName := range laneNames {
+		lane := trusted.Lanes[laneName]
+		lane.SuiteBudgetSeconds = 2
+		trusted.Lanes[laneName] = lane
+	}
+
+	generatedReport := cloneReport(t, report)
+	verifiedReport := cloneReport(t, report)
+	for _, laneName := range laneNames {
+		generatedLane := generatedReport.Lanes[laneName]
+		generatedLane.Timings = append(generatedLane.Timings, packageTiming{Name: "example.test/new", Seconds: 1})
+		generatedReport.Lanes[laneName] = generatedLane
+
+		verifiedLane := verifiedReport.Lanes[laneName]
+		verifiedLane.Timings = append(verifiedLane.Timings, packageTiming{Name: "example.test/new", Seconds: 0.9})
+		verifiedReport.Lanes[laneName] = verifiedLane
+	}
+	tracked := generatedBaseline(generatedReport, trusted, trusted.Policy)
+	trustedDecision := assess(trusted, verifiedReport)
+	if got := verifyTrackedBaseline(trusted, tracked, verifiedReport, trustedDecision); got.Status != statusPass {
+		t.Fatalf("generated refresh with timing variance = %#v, want pass", got)
+	}
+
+	for _, laneName := range laneNames {
+		lane := tracked.Lanes[laneName]
+		budget := timingBudgetMap(lane.PackageBudgets)["example.test/new"]
+		budget.BaselineSeconds = 100
+		budget.Seconds = timingAllowance(100, trusted.Policy.Timing.PackageRelativeTolerance, trusted.Policy.Timing.PackageAbsoluteSeconds)
+		for index := range lane.PackageBudgets {
+			if lane.PackageBudgets[index].Name == budget.Name {
+				lane.PackageBudgets[index] = budget
+			}
+		}
+		tracked.Lanes[laneName] = lane
+	}
+	if got := verifyTrackedBaseline(trusted, tracked, verifiedReport, trustedDecision); got.Status != statusRefreshRequired {
+		t.Fatalf("inflated new-package budget decision = %#v, want refresh", got)
 	}
 }
 

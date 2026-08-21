@@ -18,6 +18,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/taskbranch"
 	"github.com/spf13/cobra"
 )
 
@@ -61,6 +62,7 @@ const (
 	repoConfigSummaryGuidance        = "summary-guidance"
 	repoConfigSummaryStyle           = "summary-style"
 	repoConfigTitleTemplate          = "title-template"
+	repoConfigBranchTemplate         = "branch-template"
 	repoConfigIntegrationFlow        = "integration-flow"
 	repoConfigIncludePRReviewProcess = "include-pr-review-process"
 
@@ -73,7 +75,7 @@ func newRepoConfigGetCommand(opts *rootOptions) *cobra.Command {
 		Use:   "get <repo-id-name-or-prefix> [config-name]",
 		Short: "Show repository configuration",
 		Long: "Show repository configuration.\n\n" +
-			"Supported config names are summary-guidance, summary-style, title-template, " +
+			"Supported config names are summary-guidance, summary-style, title-template, branch-template, " +
 			"include-pr-review-process, review-pipeline, and review-pipeline-alias.<alias>.",
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(command *cobra.Command, args []string) error {
@@ -101,11 +103,11 @@ func newRepoConfigGetCommand(opts *rootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			publicationConfig, err := publication.LoadConfig(paths)
+			publicationConfig, branchConfig, err := loadRepoConfigPublicationAndBranchConfig(paths)
 			if err != nil {
 				return err
 			}
-			return renderRepoConfig(command, repo, configName, reviewConfig, publicationConfig)
+			return renderRepoConfig(command, repo, configName, reviewConfig, publicationConfig, branchConfig)
 		},
 	}
 }
@@ -165,7 +167,7 @@ func runRepoConfigSet(command *cobra.Command, opts *rootOptions, token string, c
 				return err
 			}
 		}
-		publicationConfig, err := publication.LoadConfig(paths)
+		publicationConfig, branchConfig, err := loadRepoConfigPublicationAndBranchConfig(paths)
 		if err != nil {
 			return err
 		}
@@ -181,8 +183,20 @@ func runRepoConfigSet(command *cobra.Command, opts *rootOptions, token string, c
 			return err
 		}
 		logger.DebugContext(command.Context(), "saved repository configuration", slog.String("repo_id", updatedRepo.ID))
-		return renderRepoConfig(command, updatedRepo, configName, reviewConfig, publicationConfig)
+		return renderRepoConfig(command, updatedRepo, configName, reviewConfig, publicationConfig, branchConfig)
 	})
+}
+
+func loadRepoConfigPublicationAndBranchConfig(paths state.Paths) (publication.Config, taskbranch.Config, error) {
+	publicationConfig, err := publication.LoadConfig(paths)
+	if err != nil {
+		return publication.Config{}, taskbranch.Config{}, err
+	}
+	branchConfig, err := taskbranch.LoadConfig(paths)
+	if err != nil {
+		return publication.Config{}, taskbranch.Config{}, err
+	}
+	return publicationConfig, branchConfig, nil
 }
 
 func normalizeRepoConfigName(value string) (string, error) {
@@ -191,6 +205,7 @@ func normalizeRepoConfigName(value string) (string, error) {
 	case repoConfigSummaryGuidance,
 		repoConfigSummaryStyle,
 		repoConfigTitleTemplate,
+		repoConfigBranchTemplate,
 		repoConfigIntegrationFlow,
 		repoConfigIncludePRReviewProcess,
 		repoConfigReviewPipeline:
@@ -203,11 +218,12 @@ func normalizeRepoConfigName(value string) (string, error) {
 			return repoConfigReviewPipelineAliasPrefix + alias, nil
 		}
 		return "", fmt.Errorf(
-			"unknown repo config %q; expected %q, %q, %q, %q, %q, %q, or %q<alias>",
+			"unknown repo config %q; expected %q, %q, %q, %q, %q, %q, %q, or %q<alias>",
 			value,
 			repoConfigSummaryGuidance,
 			repoConfigSummaryStyle,
 			repoConfigTitleTemplate,
+			repoConfigBranchTemplate,
 			repoConfigIntegrationFlow,
 			repoConfigIncludePRReviewProcess,
 			repoConfigReviewPipeline,
@@ -225,6 +241,8 @@ func validateRepoConfigValue(name string, value string) error {
 		return registry.ValidateSummaryGuidanceStyle(value)
 	case repoConfigTitleTemplate:
 		return publication.ValidateTitleTemplate(value)
+	case repoConfigBranchTemplate:
+		return taskbranch.ValidateTemplate(value)
 	case repoConfigIntegrationFlow:
 		return publication.ValidateIntegrationFlow(publication.IntegrationFlow(value))
 	case repoConfigIncludePRReviewProcess:
@@ -293,6 +311,8 @@ func setRepoConfigValue(repo registry.Repo, name string, value string) registry.
 		repo.SummaryGuidanceStyle = value
 	case repoConfigTitleTemplate:
 		repo.TitleTemplate = value
+	case repoConfigBranchTemplate:
+		repo.BranchTemplate = value
 	case repoConfigIntegrationFlow:
 		repo.IntegrationFlow = publication.IntegrationFlow(value)
 	case repoConfigIncludePRReviewProcess:
@@ -345,12 +365,13 @@ func replaceRepo(reg *registry.Registry, updated registry.Repo) error {
 	return fmt.Errorf("repo %q is not registered", updated.ID)
 }
 
-func renderRepoConfig(command *cobra.Command, repo registry.Repo, configName string, reviewConfig review.Config, publicationConfig publication.Config) error {
+func renderRepoConfig(command *cobra.Command, repo registry.Repo, configName string, reviewConfig review.Config, publicationConfig publication.Config, branchConfig taskbranch.Config) error {
 	policy := repo.EffectivePublicationPolicy()
 	rows := [][]string{
 		{repoConfigSummaryGuidance, displayConfigValue(repo.SummaryGuidance), effectiveSummaryGuidance(policy)},
 		{repoConfigSummaryStyle, displayConfigValue(repo.SummaryGuidanceStyle), effectiveSummaryGuidanceStyle(policy)},
 		{repoConfigTitleTemplate, displayConfigValue(repo.TitleTemplate), effectiveTitleTemplate(policy.TitleTemplate)},
+		{repoConfigBranchTemplate, displayConfigValue(repo.BranchTemplate), taskbranch.ResolveTemplate(repo.BranchTemplate, branchConfig.Template)},
 		{repoConfigIntegrationFlow, displayConfigValue(string(repo.IntegrationFlow)), string(publication.ResolveIntegrationFlow("", repo.IntegrationFlow, publicationConfig.IntegrationFlow))},
 		{repoConfigIncludePRReviewProcess, displayOptionalBool(repo.IncludePRReviewProcess), effectiveIncludePRReviewProcess(repo, reviewConfig)},
 		{repoConfigReviewPipeline, displayConfigValue(repo.ReviewPipeline), effectiveReviewPipeline(repo, reviewConfig)},
@@ -363,12 +384,14 @@ func renderRepoConfig(command *cobra.Command, repo registry.Repo, configName str
 		rows = rows[1:2]
 	case repoConfigTitleTemplate:
 		rows = rows[2:3]
-	case repoConfigIntegrationFlow:
+	case repoConfigBranchTemplate:
 		rows = rows[3:4]
-	case repoConfigIncludePRReviewProcess:
+	case repoConfigIntegrationFlow:
 		rows = rows[4:5]
-	case repoConfigReviewPipeline:
+	case repoConfigIncludePRReviewProcess:
 		rows = rows[5:6]
+	case repoConfigReviewPipeline:
+		rows = rows[6:7]
 	default:
 		if alias, ok := repoConfigAliasName(configName); ok {
 			rows = [][]string{reviewPipelineAliasRow(alias, repo.ReviewPipelineAliases[alias])}

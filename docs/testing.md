@@ -57,8 +57,11 @@ Integration source files use `//go:build integration`, and their top-level test 
 integration lanes serially exactly once with `-coverpkg=./...`; the same decoded
 `go test -json` streams supply test outcomes, failure evidence, test-event
 counts, suite timings, timings for packages that actually run selected tests,
-and coverage profiles. Packages with no selected tests are excluded because
-their process startup timing is too noisy to be a useful performance signal.
+and coverage profiles. Suite timing is the sum of those decoded package test
+elapsed times; command wall time is retained as a diagnostic but does not affect
+the timing gate, so cold compilation cannot masquerade as a test regression.
+Packages with no selected tests are excluded because their process startup
+timing is too noisy to be a useful performance signal.
 Timing failures show the current measurement, baseline measurement, absolute
 and percentage differences from that baseline, the budget, and the amount over
 budget. The complete report is written to

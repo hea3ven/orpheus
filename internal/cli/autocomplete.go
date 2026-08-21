@@ -171,6 +171,7 @@ func repoConfigNames(reg registry.Registry, repository string) []string {
 		repoConfigSummaryGuidance,
 		repoConfigSummaryStyle,
 		repoConfigTitleTemplate,
+		repoConfigBranchTemplate,
 		repoConfigIntegrationFlow,
 		repoConfigIncludePRReviewProcess,
 		repoConfigReviewPipeline,

@@ -1364,7 +1364,7 @@ func ReviewTarget(store ReviewLifecycleStore, paths state.Paths, ctx ReviewAttem
 	if !ok {
 		return tasktarget.Target{}, fmt.Errorf("task has no Orpheus target; run `orpheus task run %s` first", taskID)
 	}
-	targets, err := tasktarget.ExpectedTargetsForTask(repo, taskID, paths)
+	targets, err := tasktarget.ExpectedTargetsForTaskOrRecordedBranch(repo, ctx.Task, taskTarget.Branch, paths)
 	if err != nil {
 		return tasktarget.Target{}, err
 	}

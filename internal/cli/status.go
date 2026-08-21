@@ -262,7 +262,11 @@ func loadLocalTaskState(
 	if latestFinalizationFailure, hasFinalizationFailure := taskstate.LatestFinalizationFailure(state); hasFinalizationFailure {
 		localState.LatestFinalizationFailure = &latestFinalizationFailure
 	}
-	if expectedTargets, err := tasktarget.ExpectedTargetsForTask(repository, taskItem.ID, paths); err == nil {
+	recordedBranch := ""
+	if localState.GitFacts != nil {
+		recordedBranch = localState.GitFacts.Branch
+	}
+	if expectedTargets, err := tasktarget.ExpectedTargetsForTaskOrRecordedBranch(repository, taskItem, recordedBranch, paths); err == nil {
 		localState.ExpectedTargets = &expectedTargets
 	}
 	return localState, true, nil
