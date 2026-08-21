@@ -157,7 +157,7 @@ func TestWriteBaselineCreatesGeneratedFiles(t *testing.T) {
 }
 
 func TestForcedBaselineRegeneratesUsingTrackedPolicy(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	report := testQualityReport()
 	tracked := baselineFromReport(report, defaultPolicy())
 	tracked.Policy.Coverage.PackageSignificancePP = 3
