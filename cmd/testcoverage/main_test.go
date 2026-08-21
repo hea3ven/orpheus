@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -29,6 +30,13 @@ func TestParseOptionsSupportsQualityModes(t *testing.T) {
 				t.Fatalf("parseOptions(%v) error = %v, wantErr %t", test.args, err, test.wantErr)
 			}
 		})
+	}
+	forced, err := parseOptions([]string{"-write-baseline", "-force-baseline"})
+	if err != nil || !forced.writeBaseline || !forced.forceBaseline {
+		t.Fatalf("parse forced baseline options = %#v, %v", forced, err)
+	}
+	if _, err := parseOptions([]string{"-force-baseline"}); err == nil {
+		t.Fatal("parse force-baseline without write-baseline succeeded")
 	}
 }
 
@@ -84,6 +92,31 @@ func TestTimingFindingMessageShowsCurrentBaselineBudgetAndDifferences(t *testing
 			t.Fatalf("finding message %q does not contain %q", got, want)
 		}
 	}
+
+	report := testQualityReportWithPackages(
+		packageMetric{Name: "example.test/timed", coverageMetric: coverageMetric{StatementTotal: 10, CoveredStatements: 8}},
+		packageMetric{Name: "example.test/not-timed", coverageMetric: coverageMetric{StatementTotal: 5, CoveredStatements: 2}},
+	)
+	for _, name := range laneNames {
+		lane := report.Lanes[name]
+		lane.Timings = []packageTiming{{Name: "example.test/timed", Seconds: 0.25}}
+		report.Lanes[name] = lane
+	}
+	var output bytes.Buffer
+	printReportTo(&output, report, "report.json")
+	contents := output.String()
+	for _, want := range []string{
+		"unit: 10/15 statements (66.67%), 10 test events, 1.00s",
+		"example.test/timed: 8/10 statements (80.00%), 0.25s",
+		"example.test/not-timed: 2/5 statements (40.00%), no selected-test timing",
+	} {
+		if !strings.Contains(contents, want) {
+			t.Fatalf("report does not contain %q:\n%s", want, contents)
+		}
+	}
+	if strings.Contains(contents, "start_line") || strings.Contains(contents, "blocks") {
+		t.Fatalf("report includes source-level coverage detail:\n%s", contents)
+	}
 }
 
 func TestWriteBaselineCreatesGeneratedFiles(t *testing.T) {
@@ -99,6 +132,62 @@ func TestWriteBaselineCreatesGeneratedFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(opts.output); err != nil {
 		t.Fatalf("stat written report: %v", err)
+	}
+
+	prior := baselineFromReport(report, defaultPolicy())
+	regressed := cloneReport(t, report)
+	setLaneCoverage(regressed, "unit", 1000, 490)
+	forceOpts := options{
+		baseline:      opts.baseline,
+		output:        filepath.Join(dir, "forced-report.json"),
+		writeBaseline: true,
+		forceBaseline: true,
+	}
+	if err := writeBaseline(forceOpts, regressed, baselineFromReport(regressed, defaultPolicy()), prior, nil); err != nil {
+		t.Fatalf("force baseline: %v", err)
+	}
+	written, err := loadBaseline(opts.baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := written.Lanes["unit"].Coverage.CoveredStatements; got != 490 {
+		t.Fatalf("forced unit covered statements = %d, want 490", got)
+	}
+}
+
+func TestForcedBaselineRegeneratesUsingTrackedPolicy(t *testing.T) {
+	dir := t.TempDir()
+	report := testQualityReport()
+	tracked := baselineFromReport(report, defaultPolicy())
+	tracked.Policy.Coverage.PackageSignificancePP = 3
+	tracked.Policy.Timing.SuiteRelativeTolerance = 1.5
+	tracked.Policy.Timing.SuiteAbsoluteSeconds = 2
+	tracked.Policy.Timing.PackageRelativeTolerance = 0.1
+	tracked.Policy.Timing.PackageAbsoluteSeconds = 0.01
+
+	current := cloneReport(t, report)
+	for _, name := range laneNames {
+		lane := current.Lanes[name]
+		lane.WallSeconds = 2
+		lane.Timings[0].Seconds = 1
+		current.Lanes[name] = lane
+	}
+	opts := options{
+		baseline:      filepath.Join(dir, "baseline.json"),
+		output:        filepath.Join(dir, "report.json"),
+		writeBaseline: true,
+		forceBaseline: true,
+	}
+	if err := writeBaseline(opts, current, baselineFromReport(current, defaultPolicy()), tracked, nil); err != nil {
+		t.Fatalf("force baseline: %v", err)
+	}
+	written, err := loadBaseline(opts.baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := baselineFromReport(current, tracked.Policy)
+	if !reflect.DeepEqual(written, want) {
+		t.Fatalf("forced baseline = %#v, want %#v", written, want)
 	}
 }
 
