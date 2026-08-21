@@ -15,7 +15,6 @@ jobs:
     name: Pull-request quality gate
     runs-on: ubuntu-latest
     env:
-      QUALITY_TOOLS: ${{ runner.temp }}/orpheus-quality-tools
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
     steps:
       # This runs before every setup action so failures still leave an artifact
@@ -26,6 +25,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts/test-coverage
+          printf 'QUALITY_TOOLS=%s/orpheus-quality-tools\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
           printf 'Quality gate setup started.\n' > artifacts/test-coverage/setup.log
 
       - name: Check out synthetic pull-request merge
