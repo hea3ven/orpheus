@@ -852,6 +852,7 @@ type Repository struct {
 	Path                   string
 	DefaultBranch          string
 	TitleTemplate          string
+	BranchTemplate         string
 	IntegrationFlow        string
 	IncludePRReviewProcess *bool
 	ReviewPipeline         string

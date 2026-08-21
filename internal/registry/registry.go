@@ -14,6 +14,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/pathutil"
 	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/taskbranch"
 )
 
 const (
@@ -44,6 +45,7 @@ type Repo struct {
 	SummaryGuidance        string                      `yaml:"summary_guidance,omitempty"`
 	SummaryGuidanceStyle   string                      `yaml:"summary_guidance_style,omitempty"`
 	TitleTemplate          string                      `yaml:"title_template,omitempty"`
+	BranchTemplate         string                      `yaml:"branch_template,omitempty"`
 	IntegrationFlow        publication.IntegrationFlow `yaml:"integration_flow,omitempty"`
 	IncludePRReviewProcess *bool                       `yaml:"include_pr_review_process,omitempty"`
 	ReviewPipeline         string                      `yaml:"review_pipeline,omitempty"`
@@ -387,25 +389,9 @@ func normalizeRepo(repo Repo) (Repo, error) {
 	repo.DefaultBranch = strings.TrimSpace(repo.DefaultBranch)
 	repo.BeadsMode = strings.TrimSpace(repo.BeadsMode)
 	repo.BeadsPrefix = strings.TrimSpace(repo.BeadsPrefix)
-	repo.SummaryGuidance = strings.TrimSpace(repo.SummaryGuidance)
-	repo.SummaryGuidanceStyle = strings.TrimSpace(repo.SummaryGuidanceStyle)
-	if err := ValidateSummaryGuidanceStyle(repo.SummaryGuidanceStyle); err != nil {
+	if err := normalizeRepoConfiguration(&repo); err != nil {
 		return Repo{}, err
 	}
-	repo.TitleTemplate = strings.TrimSpace(repo.TitleTemplate)
-	if err := publication.ValidateTitleTemplate(repo.TitleTemplate); err != nil {
-		return Repo{}, fmt.Errorf("repo title_template is invalid: %w", err)
-	}
-	repo.IntegrationFlow = publication.IntegrationFlow(strings.TrimSpace(string(repo.IntegrationFlow)))
-	if err := publication.ValidateIntegrationFlow(repo.IntegrationFlow); err != nil {
-		return Repo{}, fmt.Errorf("repo integration_flow is invalid: %w", err)
-	}
-	repo.ReviewPipeline = strings.TrimSpace(repo.ReviewPipeline)
-	aliases, err := normalizeReviewPipelineAliases(repo.ReviewPipelineAliases)
-	if err != nil {
-		return Repo{}, err
-	}
-	repo.ReviewPipelineAliases = aliases
 	if repo.ID == "" {
 		return Repo{}, errors.New("repo id is required")
 	}
@@ -431,6 +417,51 @@ func normalizeRepo(repo Repo) (Repo, error) {
 	}
 	repo.Path = filepath.Clean(repo.Path)
 	return repo, nil
+}
+
+func normalizeRepoConfiguration(repo *Repo) error {
+	repo.SummaryGuidance = strings.TrimSpace(repo.SummaryGuidance)
+	repo.SummaryGuidanceStyle = strings.TrimSpace(repo.SummaryGuidanceStyle)
+	if err := ValidateSummaryGuidanceStyle(repo.SummaryGuidanceStyle); err != nil {
+		return err
+	}
+	titleTemplate, err := normalizeTitleTemplate(repo.TitleTemplate)
+	if err != nil {
+		return err
+	}
+	repo.TitleTemplate = titleTemplate
+	branchTemplate, err := normalizeBranchTemplate(repo.BranchTemplate)
+	if err != nil {
+		return err
+	}
+	repo.BranchTemplate = branchTemplate
+	repo.IntegrationFlow = publication.IntegrationFlow(strings.TrimSpace(string(repo.IntegrationFlow)))
+	if err := publication.ValidateIntegrationFlow(repo.IntegrationFlow); err != nil {
+		return fmt.Errorf("repo integration_flow is invalid: %w", err)
+	}
+	repo.ReviewPipeline = strings.TrimSpace(repo.ReviewPipeline)
+	aliases, err := normalizeReviewPipelineAliases(repo.ReviewPipelineAliases)
+	if err != nil {
+		return err
+	}
+	repo.ReviewPipelineAliases = aliases
+	return nil
+}
+
+func normalizeTitleTemplate(template string) (string, error) {
+	template = strings.TrimSpace(template)
+	if err := publication.ValidateTitleTemplate(template); err != nil {
+		return "", fmt.Errorf("repo title_template is invalid: %w", err)
+	}
+	return template, nil
+}
+
+func normalizeBranchTemplate(template string) (string, error) {
+	template = strings.TrimSpace(template)
+	if err := taskbranch.ValidateTemplate(template); err != nil {
+		return "", fmt.Errorf("repo branch_template is invalid: %w", err)
+	}
+	return template, nil
 }
 
 func normalizeReviewPipelineAliases(raw map[string]string) (map[string]string, error) {

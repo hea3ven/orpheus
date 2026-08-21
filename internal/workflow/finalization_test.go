@@ -385,14 +385,16 @@ func (g *fakeFinalizationGit) ValidateRecordedDirectMerge(_ context.Context, _ t
 	return false, nil
 }
 
-func (g *fakeFinalizationGit) MaterializeTaskBranch(_ context.Context, repo task.Repository, taskID string, paths state.Paths) (gitmeta.TaskWorktreeSetupResult, error) {
+func (g *fakeFinalizationGit) MaterializeTaskBranch(_ context.Context, repo task.Repository, taskID string, branch string, paths state.Paths) (gitmeta.TaskWorktreeSetupResult, error) {
 	g.materializeCalls++
-	branch := "orpheus/" + taskID
+	if branch == "" {
+		branch = "orpheus/" + taskID
+	}
 	g.branch = branch
 	return gitmeta.TaskWorktreeSetupResult{Branch: branch, WorktreePath: repo.Path, Lifecycle: gitmeta.TaskWorktreeLifecycleTaskBranchCreated}, nil
 }
 
-func (g *fakeFinalizationGit) ValidateMaterializedTaskBranchRetry(context.Context, task.Repository, string, state.Paths) error {
+func (g *fakeFinalizationGit) ValidateMaterializedTaskBranchRetry(context.Context, task.Repository, string, string, state.Paths) error {
 	g.validateMaterializedTaskBranchCalls++
 	return g.validateMaterializedTaskBranchRetryErr
 }
@@ -596,6 +598,39 @@ func TestFinalizeInfersSingleRunningCompletionCandidate(t *testing.T) {
 	}
 	if result.Task.ID != "op-1" {
 		t.Fatalf("result task = %q, want op-1", result.Task.ID)
+	}
+}
+
+func TestFinalizeInferenceSkipsIrrelevantTasksBeforeRenderingBranchTemplates(t *testing.T) {
+	tests := []struct {
+		name          string
+		status        task.Status
+		currentBranch string
+	}{
+		{name: "closed", status: task.StatusClosed, currentBranch: "main"},
+		{name: "different current branch", status: task.StatusInProgress, currentBranch: "other"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			paths, source, _ := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+			source.Repository.BranchTemplate = "feature/{{external_ref}}"
+			taskItem := finalizationMainTask("op-1", source.Repository.Path)
+			taskItem.Status = tt.status
+			state := taskstate.TaskState{
+				RepoID: source.Repository.ID, TaskID: taskItem.ID,
+				Target: taskstate.GitFacts{Branch: "main", Worktree: source.Repository.Path},
+			}
+			service, git, _, _ := newFinalizationTestServiceForSource(t, paths, source, []task.Task{taskItem}, map[string]taskstate.TaskState{"alpha/op-1": state})
+			git.branch = tt.currentBranch
+
+			_, err := service.Finalize(context.Background(), workflow.FinalizeOptions{CWD: source.Repository.Path})
+			if err == nil || !strings.Contains(err.Error(), "no non-closed ready task owns the current branch") {
+				t.Fatalf("inferred finalize error = %v, want no candidate", err)
+			}
+			if strings.Contains(err.Error(), "external reference") {
+				t.Fatalf("inferred finalize error = %v, want irrelevant task skipped before template rendering", err)
+			}
+		})
 	}
 }
 
@@ -899,10 +934,86 @@ func TestFinalizeRepoRootRetriesAfterCheckoutBeforeGitFactPersistence(t *testing
 	assertMaterializedRepoRootFacts(t, store, backend, source.Repository.Path, "orpheus/op-1")
 }
 
-func TestFinalizeRepoRootRetriesAfterBackendGitFactsPersistence(t *testing.T) {
+func TestFinalizeRepoRootRejectsDefaultBranchTemplateBeforePublication(t *testing.T) {
 	paths, source, _ := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	source.Repository.BranchTemplate = "main"
+	taskItem := finalizationMainTask("op-1", source.Repository.Path)
 	state := modernRepoRootFinalizationState("op-1", source.Repository.Path)
-	service, git, store, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{finalizationMainTask("op-1", source.Repository.Path)}, map[string]taskstate.TaskState{"alpha/op-1": state})
+	service, git, store, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{taskItem}, map[string]taskstate.TaskState{"alpha/op-1": state})
+
+	_, err := service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: taskItem.ID})
+	if err == nil || !strings.Contains(err.Error(), "matches registered default branch") {
+		t.Fatalf("finalize error = %v, want default branch rejection", err)
+	}
+	if git.materializeCalls != 0 || backend.updateGitFactsCalls != 0 || store.recordGitFactsCalls != 0 {
+		t.Fatalf("publication mutation calls = git %d backend %d state %d, want none", git.materializeCalls, backend.updateGitFactsCalls, store.recordGitFactsCalls)
+	}
+	if facts := taskstate.FinalizationFacts(store.states["alpha/op-1"]); facts.IntegrationFlow != "" || facts.DestinationBranch != "" || facts.PublicationStartedAt != nil {
+		t.Fatalf("finalization facts = %#v, want no durable publication state", facts)
+	}
+}
+
+func TestFinalizeRepoRootMaterializesConfiguredBranchAndRejectsRecordedCollision(t *testing.T) {
+	paths, source, _ := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	source.Repository.BranchTemplate = "feature/{{external_ref}}/{{task_title}}"
+	taskItem := finalizationMainTask("op-1", source.Repository.Path)
+	taskItem.ExternalRef = "OPS 1"
+	taskItem.Title = "Add branches"
+	other := task.Task{ID: "op-2", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: "feature/OPS-1/Add-branches"}}
+	state := modernRepoRootFinalizationState("op-1", source.Repository.Path)
+	service, git, store, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{taskItem, other}, map[string]taskstate.TaskState{"alpha/op-1": state})
+	service.PRProvider = &fakePRProvider{created: pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/42"}}
+
+	_, err := service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
+	if err == nil || !strings.Contains(err.Error(), "already recorded for task op-2") {
+		t.Fatalf("finalize collision error = %v", err)
+	}
+	if git.materializeCalls != 0 || backend.updateGitFactsCalls != 0 || store.recordGitFactsCalls != 0 {
+		t.Fatalf("collision mutation calls = git %d backend %d state %d, want none", git.materializeCalls, backend.updateGitFactsCalls, store.recordGitFactsCalls)
+	}
+	if facts := taskstate.FinalizationFacts(store.states["alpha/op-1"]); facts.PublicationStartedAt != nil {
+		t.Fatalf("finalization facts = %#v, want no publication start", facts)
+	}
+
+	backend.tasks = []task.Task{taskItem}
+	result, err := service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("finalize configured branch: %v", err)
+	}
+	want := "feature/OPS-1/Add-branches"
+	if result.Branch != want || git.branch != want || git.materializeCalls != 1 {
+		t.Fatalf("result/git = %#v/%#v, want materialized %q", result, git, want)
+	}
+	assertMaterializedRepoRootFacts(t, store, backend, source.Repository.Path, want)
+}
+
+func TestFinalizeRepoRootRejectsCompatibilityBranchCollision(t *testing.T) {
+	paths, source, _ := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	taskItem := finalizationMainTask("op-1", source.Repository.Path)
+	other := task.Task{ID: "op-2", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-1"}}
+	state := modernRepoRootFinalizationState("op-1", source.Repository.Path)
+	service, git, store, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{taskItem, other}, map[string]taskstate.TaskState{"alpha/op-1": state})
+	service.PRProvider = &fakePRProvider{created: pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/42"}}
+
+	_, err := service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: taskItem.ID})
+	if err == nil || !strings.Contains(err.Error(), "already recorded for task op-2") {
+		t.Fatalf("finalize collision error = %v, want compatibility branch collision", err)
+	}
+	if git.materializeCalls != 0 || backend.updateGitFactsCalls != 0 || store.recordGitFactsCalls != 0 {
+		t.Fatalf("collision mutation calls = git %d backend %d state %d, want none", git.materializeCalls, backend.updateGitFactsCalls, store.recordGitFactsCalls)
+	}
+	if facts := taskstate.FinalizationFacts(store.states["alpha/op-1"]); facts.PublicationStartedAt != nil {
+		t.Fatalf("finalization facts = %#v, want no publication start", facts)
+	}
+}
+
+func TestFinalizeRepoRootRetriesAfterBackendGitFactsPersistenceAndTemplateChange(t *testing.T) {
+	paths, source, _ := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	source.Repository.BranchTemplate = "feature/{{task_title}}"
+	taskItem := finalizationMainTask("op-1", source.Repository.Path)
+	taskItem.Title = "Original branch"
+	state := modernRepoRootFinalizationState("op-1", source.Repository.Path)
+	service, git, store, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{taskItem}, map[string]taskstate.TaskState{"alpha/op-1": state})
 	store.recordGitFactsErr = errors.New("local state unavailable")
 	service.PRProvider = &fakePRProvider{created: pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/42"}}
 
@@ -910,22 +1021,24 @@ func TestFinalizeRepoRootRetriesAfterBackendGitFactsPersistence(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "record materialized task branch") {
 		t.Fatalf("first finalize error = %v, want local persistence failure", err)
 	}
-	if metadata := backend.tasks[0].OrpheusMetadata(); metadata.Branch != "orpheus/op-1" {
+	const recordedBranch = "feature/Original-branch"
+	if metadata := backend.tasks[0].OrpheusMetadata(); metadata.Branch != recordedBranch {
 		t.Fatalf("backend metadata = %#v, want materialized branch persisted", metadata)
 	}
 	if _, err := store.SetFinalizationIntegrationFlow("alpha", "op-1", publication.IntegrationFlowDirectMerge); !errors.Is(err, taskstate.ErrFinalizationConflict) {
 		t.Fatalf("change flow after backend Git facts error = %v, want ErrFinalizationConflict", err)
 	}
 
+	service.Sources[0].Repository.BranchTemplate = "changed/{{task_title}}"
 	store.recordGitFactsErr = nil
 	result, err := service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
 	if err != nil {
 		t.Fatalf("retry finalize: %v", err)
 	}
-	if result.Branch != "orpheus/op-1" || git.materializeCalls != 1 || len(git.taskPushes) != 1 {
-		t.Fatalf("retry result/git = %#v/%#v, want publish without rematerializing", result, git)
+	if result.Branch != recordedBranch || git.branch != recordedBranch || git.materializeCalls != 1 || len(git.taskPushes) != 1 || git.taskPushes[0] != recordedBranch {
+		t.Fatalf("retry result/git = %#v/%#v, want publish recorded branch without rematerializing", result, git)
 	}
-	assertMaterializedRepoRootFacts(t, store, backend, source.Repository.Path, "orpheus/op-1")
+	assertMaterializedRepoRootFacts(t, store, backend, source.Repository.Path, recordedBranch)
 }
 
 func TestFinalizeRepoRootLocksFlowAfterGitFactsPersistence(t *testing.T) {
@@ -1090,8 +1203,9 @@ func TestFinalizeRepoRootRetriesAfterPRRecordFailure(t *testing.T) {
 	}
 }
 
-func TestFinalizeLegacyMainTargetRetainsDirectPublicationAfterFollowUp(t *testing.T) {
+func TestFinalizeLegacyMainTargetRetainsDirectPublicationAfterTemplateChange(t *testing.T) {
 	paths, source, _ := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	source.Repository.BranchTemplate = "feature/{{external_ref}}"
 	state := finalizationTaskState("op-1", taskstate.RunAttempt{
 		Attempt: 1,
 		Status:  taskstate.RunStatusSucceeded,

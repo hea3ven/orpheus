@@ -82,6 +82,35 @@ func TestIntegrationSetupTaskWorktreeCreatesAndReusesDeterministicWorktree(t *te
 	}
 }
 
+func TestIntegrationSetupTaskWorktreeAndRepoRootUseResolvedCustomBranch(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	branch := "feature/PROJ-7/Ship-the-thing"
+
+	worktree, err := orpheusgit.SetupTaskWorktree(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID: "alpha", RepoName: "Alpha", RepoPath: repoPath, DefaultBranch: "main", TaskID: "op-7", Branch: branch, Paths: paths,
+	})
+	if err != nil {
+		t.Fatalf("setup custom worktree: %v", err)
+	}
+	if worktree.Branch != branch {
+		t.Fatalf("worktree branch = %q, want %q", worktree.Branch, branch)
+	}
+	assertGitBranch(t, worktree.WorktreePath, branch)
+
+	runGit(t, repoPath, "worktree", "remove", "--force", worktree.WorktreePath)
+	root, err := orpheusgit.SetupRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID: "alpha", RepoName: "Alpha", RepoPath: repoPath, DefaultBranch: "main", TaskID: "op-7", Branch: branch, Paths: paths,
+	})
+	if err != nil {
+		t.Fatalf("setup custom repo-root branch: %v", err)
+	}
+	if root.Branch != branch {
+		t.Fatalf("repo-root branch = %q, want %q", root.Branch, branch)
+	}
+	assertGitBranch(t, repoPath, branch)
+}
+
 func TestIntegrationSetupTaskWorktreeRecreatesMissingWorktreeForExistingBranch(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	paths := newStatePaths(t)

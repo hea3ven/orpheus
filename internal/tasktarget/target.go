@@ -10,6 +10,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/pathutil"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
+	"github.com/hea3ven/orpheus/internal/taskbranch"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
@@ -58,8 +59,72 @@ type ExpectedTargets struct {
 	RepoRootTeam Target
 }
 
-// ExpectedTargetsForTask returns the strict execution targets used when dispatching or validating an active run.
+// ExpectedTargetsForTask returns compatibility targets for a task. New
+// workflows should call ExpectedTargetsForTaskItem to render the configured
+// template, or ExpectedTargetsForTaskBranch when replaying recorded targets.
 func ExpectedTargetsForTask(repo task.Repository, taskID string, paths state.Paths) (ExpectedTargets, error) {
+	return ExpectedTargetsForTaskBranch(repo, taskID, "", paths)
+}
+
+// ExpectedTargetsForLegacyMainSolo returns the sole target supported by an
+// older main/solo task state that predates work-directory selection.
+func ExpectedTargetsForLegacyMainSolo(repo task.Repository) (ExpectedTargets, error) {
+	repoTarget, err := gitmeta.ExpectedRepoRoot(gitmeta.RepoRootOptions{
+		RepoID:        repo.ID,
+		RepoName:      repo.Name,
+		RepoPath:      repo.Path,
+		DefaultBranch: repo.DefaultBranch,
+	})
+	if err != nil {
+		return ExpectedTargets{}, fmt.Errorf("resolve registered repo-root target: %w", err)
+	}
+	return ExpectedTargets{MainSolo: Target{
+		Kind:     TargetMainSolo,
+		Branch:   repoTarget.Branch,
+		Worktree: cleanPath(repoTarget.WorktreePath),
+	}}, nil
+}
+
+// ExpectedTargetsForTaskItem renders the effective repository branch template
+// using task data before building strict execution targets.
+func ExpectedTargetsForTaskItem(repo task.Repository, taskItem task.Task, paths state.Paths) (ExpectedTargets, error) {
+	branch, err := taskbranch.Render(repo.BranchTemplate, taskbranch.Values{
+		TaskID:      taskItem.ID,
+		ExternalRef: taskItem.ExternalRef,
+		TaskTitle:   taskItem.Title,
+	})
+	if err != nil {
+		return ExpectedTargets{}, err
+	}
+	if branch == strings.TrimSpace(repo.DefaultBranch) {
+		return ExpectedTargets{}, fmt.Errorf("rendered task branch %q matches registered default branch", branch)
+	}
+	return ExpectedTargetsForTaskBranch(repo, taskItem.ID, branch, paths)
+}
+
+// ExpectedTargetsForTaskOrRecordedBranch uses a materialized non-default
+// branch from local Git facts or backend task metadata when present. Otherwise
+// it renders the current configured template for a new task branch.
+func ExpectedTargetsForTaskOrRecordedBranch(repo task.Repository, taskItem task.Task, recordedBranch string, paths state.Paths) (ExpectedTargets, error) {
+	metadata := taskItem.OrpheusMetadata()
+	for _, candidate := range []string{recordedBranch, metadata.Branch} {
+		if branch := strings.TrimSpace(candidate); branch != "" && branch != strings.TrimSpace(repo.DefaultBranch) {
+			return ExpectedTargetsForTaskBranch(repo, taskItem.ID, branch, paths)
+		}
+	}
+	return ExpectedTargetsForTaskItem(repo, taskItem, paths)
+}
+
+// ExpectedTargetsForTaskBranch uses a recorded task branch when one exists.
+// An empty branch preserves the historical orpheus/<task-id> convention.
+func ExpectedTargetsForTaskBranch(repo task.Repository, taskID string, branch string, paths state.Paths) (ExpectedTargets, error) {
+	branch = strings.TrimSpace(branch)
+	if branch != "" {
+		if err := taskbranch.ValidateBranch(branch); err != nil {
+			return ExpectedTargets{}, fmt.Errorf("validate task branch: %w", err)
+		}
+	}
+
 	repoTarget, err := gitmeta.ExpectedRepoRoot(gitmeta.RepoRootOptions{
 		RepoID:        repo.ID,
 		RepoName:      repo.Name,
@@ -75,6 +140,7 @@ func ExpectedTargetsForTask(repo task.Repository, taskID string, paths state.Pat
 		RepoPath:      repo.Path,
 		DefaultBranch: repo.DefaultBranch,
 		TaskID:        taskID,
+		Branch:        branch,
 		Paths:         paths,
 	})
 	if err != nil {
@@ -86,6 +152,7 @@ func ExpectedTargetsForTask(repo task.Repository, taskID string, paths state.Pat
 		RepoPath:      repo.Path,
 		DefaultBranch: repo.DefaultBranch,
 		TaskID:        taskID,
+		Branch:        branch,
 		Paths:         paths,
 	})
 	if err != nil {

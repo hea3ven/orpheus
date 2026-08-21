@@ -25,6 +25,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/status"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
+	"github.com/hea3ven/orpheus/internal/taskbranch"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/taskstats"
 	"github.com/hea3ven/orpheus/internal/tasktarget"
@@ -1217,15 +1218,24 @@ func finishTaskRunAndReview(
 }
 
 func validateTaskRunExternalRef(resolved taskmodel.ResolvedTaskSource, taskItem taskmodel.Task) error {
-	if !publication.RequiresExternalRef(resolved.Source.Repository.TitleTemplate) {
+	requiresTitleRef := publication.RequiresExternalRef(resolved.Source.Repository.TitleTemplate)
+	requiresBranchRef := taskbranch.RequiresExternalRef(resolved.Source.Repository.BranchTemplate)
+	if !requiresTitleRef && !requiresBranchRef {
 		return nil
 	}
 	if taskItem.Status == taskmodel.StatusClosed || strings.TrimSpace(taskItem.ExternalRef) != "" {
 		return nil
 	}
+	requirement := "publication title template"
+	if requiresBranchRef && requiresTitleRef {
+		requirement = "publication title and task branch templates"
+	} else if requiresBranchRef {
+		requirement = "task branch template"
+	}
 	return fmt.Errorf(
-		"task run %s: publication title template requires a task external reference; set it with `orpheus task edit %s --external-ref <reference>`",
+		"task run %s: %s requires a task external reference; set it with `orpheus task edit %s --external-ref <reference>`",
 		resolved.TaskID,
+		requirement,
 		resolved.TaskID,
 	)
 }

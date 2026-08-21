@@ -32,8 +32,11 @@ type TaskWorktreeOptions struct {
 	RepoPath      string
 	DefaultBranch string
 	TaskID        string
-	Paths         state.Paths
-	AllowDirty    bool
+	// Branch is the already-resolved task branch. An empty value preserves the
+	// historical orpheus/<task-id> convention for direct package callers.
+	Branch     string
+	Paths      state.Paths
+	AllowDirty bool
 }
 
 // RepoRootOptions describes a repo-root/default-branch task run target.
@@ -1194,13 +1197,18 @@ func newTaskWorktreePlan(opts TaskWorktreeOptions) (taskWorktreePlan, error) {
 		return taskWorktreePlan{}, fmt.Errorf("resolve deterministic task worktree path: %w", err)
 	}
 
+	branch := strings.TrimSpace(opts.Branch)
+	if branch == "" {
+		branch = taskWorktreeBranchPrefix + taskID
+	}
+
 	return taskWorktreePlan{
 		RepoID:        repoID,
 		RepoName:      strings.TrimSpace(opts.RepoName),
 		RepoPath:      repoPath,
 		DefaultBranch: defaultBranch,
 		TaskID:        taskID,
-		Branch:        taskWorktreeBranchPrefix + taskID,
+		Branch:        branch,
 		WorktreePath:  worktreePath,
 	}, nil
 }
