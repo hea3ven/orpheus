@@ -31,7 +31,7 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
-          "statement_total": 612,
+          "statement_total": 629,
           "covered_statements": 0
         },
         {
@@ -229,8 +229,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
-          "statement_total": 612,
-          "covered_statements": 349
+          "statement_total": 629,
+          "covered_statements": 366
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testtiming",

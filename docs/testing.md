@@ -8,7 +8,7 @@ Orpheus separates tests by behavioral scope, not by speed or whether a test writ
 - `make test` is a compatibility alias for `make test-unit`.
 - `make test-integration` runs the integration lane only.
 - `make quality` runs both lanes once with coverage and timing policy.
-- `make check` formats code, runs the single-pass quality report, then lints.
+- `make check` formats code, runs the single-pass quality report, lints, and builds the CLI. Each test lane still runs only once.
 
 ## Unit lane
 
@@ -84,11 +84,68 @@ or timing failure, and preserves every existing timing budget. New timed
 packages receive a budget from their first coverage-instrumented measurement.
 Faster measurements neither require refresh nor ratchet a budget down.
 
-Pull-request CI reads the baseline from the base branch as the trusted prior.
-A coverage regression against that prior fails even if the pull request edits
-its tracked baseline. When the trusted comparison requires refresh, CI accepts
-only the generated current aggregates while retaining trusted timing budgets.
-This uses only `contents: read` and the job summary.
+## Pull-request quality gate
+
+[`.github/workflows/quality-gate.yml`](../.github/workflows/quality-gate.yml)
+runs for every pull request, including documentation-only changes, and its
+`Pull-request quality gate` job is the required branch-protection check. It
+checks out GitHub's pull-request merge SHA (the synthetic merge result), reads
+`coverage/test-coverage-baseline.json` from the pull request event's exact base
+commit, and passes that file as the trusted comparison baseline. It therefore
+never treats a pull request's edit to its own baseline as the prior state.
+Superseded runs for the same pull request are cancelled.
+
+The job runs `make quality` once, then runs `make lint` and `make build`
+separately. `build` is intentionally a compilation-only target, so neither
+lint nor build starts another test run. The report's decoded test executions
+supply the unit and integration test results, independent coverage, and timing
+checks. Its job summary contains a repository line and a line for each package
+with aggregate statement coverage and selected-test timing only; it never
+includes source files, coverage blocks, or hit inventories. Complete and
+partial reports, plus raw setup/provisioning, quality, lint, and build logs,
+are uploaded for every job outcome. Setup diagnostics are initialized before
+checkout so failed downloads, checksum checks, and extraction remain available.
+
+The gate writes a clear final result in its summary:
+
+- `pass` succeeds.
+- `refresh_required` fails until the tracked baseline is regenerated from the
+  pull request's result.
+- `coverage_regression`, `timing_budget_exceeded`, and `test_failed` fail with
+  their recorded diagnostics.
+- A missing report, failed setup, unreadable base baseline, or inconsistent
+  command result is labelled `execution_failure` and fails.
+- A lint or build failure also fails the same required job without rerunning
+  either test lane.
+
+GitHub branch protection must require only this job name after the workflow is
+introduced; remove the old `Single-pass test quality` / coverage-only required
+check rather than requiring both. The detailed multi-sample timing commands
+below remain separate and are not part of this routine pull-request gate.
+
+### Baseline refresh and exceptions
+
+For ordinary eligible coverage, package, test-structure, or denominator drift,
+run `make quality-baseline` in the pull request and include the generated
+compact `coverage/test-coverage-baseline.json`. CI compares the synthetic merge
+result to the trusted base first, then accepts that file only when it exactly
+matches the generated current aggregates while preserving trusted timing
+budgets. This avoids routine exact-coverage refresh churn while still allowing
+significant intentional drift.
+
+A significant coverage regression is strict: the base-branch comparison fails
+even when a pull request changes its baseline. Fix the regression rather than
+editing the baseline. A maintainer may use GitHub's force-merge or
+administrative branch-protection override only as an explicit human exception;
+the workflow has no automatic bypass and never creates commits.
+
+After such an override, immediately check out the resulting `main` commit and
+run `make quality-baseline-force`. This deliberately creates a new compact
+baseline from the already force-merged mainline state, so it is unavailable as
+a way to evade the pull-request comparison. Inspect the report and make a
+separate human-authored baseline commit. The next pull request then uses that
+post-merge baseline as its trusted prior. Do not use this target for ordinary
+refreshes or to conceal a regression before merge.
 
 `make coverage-audit` is deliberately on-demand. It profiles each integration
 top-level scenario separately and reports runtime, containment in the full
