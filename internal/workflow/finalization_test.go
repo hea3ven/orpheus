@@ -613,7 +613,7 @@ func TestFinalizeInferenceSkipsIrrelevantTasksBeforeRenderingBranchTemplates(t *
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			paths, source, _ := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+			paths, source, _ := newFinalizationTestSource(t, filepath.Join(testutil.CanonicalTempDir(t), "repo"), "op-1")
 			source.Repository.BranchTemplate = "feature/{{external_ref}}"
 			taskItem := finalizationMainTask("op-1", source.Repository.Path)
 			taskItem.Status = tt.status
@@ -936,7 +936,7 @@ func TestFinalizeRepoRootRetriesAfterCheckoutBeforeGitFactPersistence(t *testing
 }
 
 func TestFinalizeRepoRootRejectsDefaultBranchTemplateBeforePublication(t *testing.T) {
-	paths, source, _ := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, _ := newFinalizationTestSource(t, filepath.Join(testutil.CanonicalTempDir(t), "repo"), "op-1")
 	source.Repository.BranchTemplate = "main"
 	taskItem := finalizationMainTask("op-1", source.Repository.Path)
 	state := modernRepoRootFinalizationState("op-1", source.Repository.Path)
@@ -984,7 +984,7 @@ func TestFinalizeRepoRootRetriesAfterBackendGitFactsPersistence(t *testing.T) {
 }
 
 func TestFinalizeRepoRootMaterializesConfiguredBranchAndRejectsRecordedCollision(t *testing.T) {
-	paths, source, _ := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, _ := newFinalizationTestSource(t, filepath.Join(testutil.CanonicalTempDir(t), "repo"), "op-1")
 	source.Repository.BranchTemplate = "feature/{{external_ref}}/{{task_title}}"
 	taskItem := finalizationMainTask("op-1", source.Repository.Path)
 	taskItem.ExternalRef = "OPS 1"
@@ -1018,7 +1018,7 @@ func TestFinalizeRepoRootMaterializesConfiguredBranchAndRejectsRecordedCollision
 }
 
 func TestFinalizeRepoRootRejectsCompatibilityBranchCollision(t *testing.T) {
-	paths, source, _ := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, _ := newFinalizationTestSource(t, filepath.Join(testutil.CanonicalTempDir(t), "repo"), "op-1")
 	taskItem := finalizationMainTask("op-1", source.Repository.Path)
 	other := task.Task{ID: "op-2", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-1"}}
 	state := modernRepoRootFinalizationState("op-1", source.Repository.Path)
@@ -1038,7 +1038,7 @@ func TestFinalizeRepoRootRejectsCompatibilityBranchCollision(t *testing.T) {
 }
 
 func TestFinalizeRepoRootRetriesAfterBackendGitFactsPersistenceAndTemplateChange(t *testing.T) {
-	paths, source, _ := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, _ := newFinalizationTestSource(t, filepath.Join(testutil.CanonicalTempDir(t), "repo"), "op-1")
 	source.Repository.BranchTemplate = "feature/{{task_title}}"
 	taskItem := finalizationMainTask("op-1", source.Repository.Path)
 	taskItem.Title = "Original branch"
@@ -1234,7 +1234,7 @@ func TestFinalizeRepoRootRetriesAfterPRRecordFailure(t *testing.T) {
 }
 
 func TestFinalizeLegacyMainTargetRetainsDirectPublicationAfterTemplateChange(t *testing.T) {
-	paths, source, _ := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, _ := newFinalizationTestSource(t, filepath.Join(testutil.CanonicalTempDir(t), "repo"), "op-1")
 	source.Repository.BranchTemplate = "feature/{{external_ref}}"
 	state := finalizationTaskState("op-1", taskstate.RunAttempt{
 		Attempt: 1,

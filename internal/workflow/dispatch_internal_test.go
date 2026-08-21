@@ -636,7 +636,7 @@ func validateDispatchStartForReviewWithRuns(
 
 func TestDispatchValidateStartRejectsMissingTemplateValueBeforeSetup(t *testing.T) {
 	paths := newDispatchTestPaths(t)
-	repo := task.Repository{ID: "alpha", Name: "Alpha", Path: filepath.Join(t.TempDir(), "repo"), DefaultBranch: "main", BranchTemplate: "feature/{{external_ref}}"}
+	repo := task.Repository{ID: "alpha", Name: "Alpha", Path: filepath.Join(testutil.CanonicalTempDir(t), "repo"), DefaultBranch: "main", BranchTemplate: "feature/{{external_ref}}"}
 	taskItem := task.Task{ID: "op-1", Title: "Missing reference", Status: task.StatusOpen}
 	service := DispatchService{Paths: paths, RunStore: fakeDispatchRunStore{}}
 
@@ -651,7 +651,7 @@ func TestDispatchValidateStartRejectsMissingTemplateValueBeforeSetup(t *testing.
 func TestDispatchValidateStartRejectsReservedBranchTemplateBeforeSetup(t *testing.T) {
 	paths := newDispatchTestPaths(t)
 	repo := task.Repository{
-		ID: "alpha", Name: "Alpha", Path: filepath.Join(t.TempDir(), "repo"), DefaultBranch: "main",
+		ID: "alpha", Name: "Alpha", Path: filepath.Join(testutil.CanonicalTempDir(t), "repo"), DefaultBranch: "main",
 		BranchTemplate: "HEAD",
 	}
 	taskItem := task.Task{ID: "op-1", Status: task.StatusOpen}
@@ -688,7 +688,7 @@ func TestDispatchValidateStartRejectsDefaultBranchTemplateForAllDispatchModes(t 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := task.Repository{
-				ID: "alpha", Name: "Alpha", Path: filepath.Join(t.TempDir(), "repo"), DefaultBranch: "main",
+				ID: "alpha", Name: "Alpha", Path: filepath.Join(testutil.CanonicalTempDir(t), "repo"), DefaultBranch: "main",
 				BranchTemplate: tt.template,
 			}
 			service := DispatchService{Paths: paths, RunStore: fakeDispatchRunStore{}}
@@ -705,7 +705,7 @@ func TestDispatchValidateStartRejectsDefaultBranchTemplateForAllDispatchModes(t 
 
 func TestDispatchValidateStartRejectsTaskBranchOwnedByAnotherTask(t *testing.T) {
 	paths := newDispatchTestPaths(t)
-	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
+	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
 	repo := task.Repository{ID: "alpha", Name: "Alpha", Path: repoPath, DefaultBranch: "main", BranchTemplate: "feature/{{task_title}}"}
 	taskItem := task.Task{ID: "op-1", Title: "Same title", Status: task.StatusOpen}
 	other := task.Task{ID: "op-2", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: "feature/Same-title"}}
@@ -721,7 +721,7 @@ func TestDispatchValidateStartRejectsTaskBranchOwnedByAnotherTask(t *testing.T) 
 
 func TestDispatchValidateStartRejectsCompatibilityBranchCollisionAfterNormalization(t *testing.T) {
 	paths := newDispatchTestPaths(t)
-	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
+	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
 	repo := task.Repository{ID: "alpha", Name: "Alpha", Path: repoPath, DefaultBranch: "main"}
 	taskItem := task.Task{ID: "op.1", Status: task.StatusOpen}
 	other := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-1"}}
@@ -737,7 +737,7 @@ func TestDispatchValidateStartRejectsCompatibilityBranchCollisionAfterNormalizat
 
 func TestDispatchValidateStartPreservesRecordedBranchAfterTemplateChange(t *testing.T) {
 	paths := newDispatchTestPaths(t)
-	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
+	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
 	worktree := filepath.Join(paths.DataRoot, "repos", "alpha", "worktrees", "op-1")
 	repo := task.Repository{ID: "alpha", Name: "Alpha", Path: repoPath, DefaultBranch: "main", BranchTemplate: "changed/{{task_title}}"}
 	taskItem := task.Task{ID: "op-1", Title: "New template", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: "recorded/branch", task.MetadataWorktree: worktree}}
@@ -757,7 +757,7 @@ func TestDispatchValidateStartPreservesRecordedBranchAfterTemplateChange(t *test
 
 func TestDispatchValidateStartRecoversBackendRecordedBranchWithoutLocalGitFacts(t *testing.T) {
 	paths := newDispatchTestPaths(t)
-	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
+	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
 	worktree := filepath.Join(paths.DataRoot, "repos", "alpha", "worktrees", "op-1")
 	repo := task.Repository{ID: "alpha", Name: "Alpha", Path: repoPath, DefaultBranch: "main", BranchTemplate: "changed/{{external_ref}}"}
 	taskItem := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: "recorded/branch", task.MetadataWorktree: worktree}}

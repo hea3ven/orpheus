@@ -48,7 +48,7 @@ func TestTaskRepositorySourcesProjectsNormalizedRegistryValues(t *testing.T) {
 }
 
 func TestTaskRepositorySourcesResolveRepositoryThenGlobalBranchTemplate(t *testing.T) {
-	paths, err := state.NewPaths(t.TempDir(), t.TempDir())
+	paths, err := state.NewPaths(testutil.CanonicalTempDir(t), testutil.CanonicalTempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestTaskRepositorySourcesResolveRepositoryThenGlobalBranchTemplate(t *testi
 		t.Fatal(err)
 	}
 	store := registry.NewStore(paths)
-	base := registry.Repo{ID: "alpha", Name: "Alpha", Path: t.TempDir(), BeadsMode: registry.BeadsModeManaged, BeadsPrefix: "op"}
+	base := registry.Repo{ID: "alpha", Name: "Alpha", Path: testutil.CanonicalTempDir(t), BeadsMode: registry.BeadsModeManaged, BeadsPrefix: "op"}
 
 	source, err := store.TaskRepositorySource(base)
 	if err != nil {

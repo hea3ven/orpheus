@@ -6,6 +6,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskbranch"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 func TestResolveTemplatePrecedence(t *testing.T) {
@@ -117,7 +118,7 @@ func TestValidateBranchRejectsGitRefSyntax(t *testing.T) {
 }
 
 func TestLoadConfigReadsAndValidatesGlobalTemplate(t *testing.T) {
-	paths, err := state.NewPaths(t.TempDir(), t.TempDir())
+	paths, err := state.NewPaths(testutil.CanonicalTempDir(t), testutil.CanonicalTempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}

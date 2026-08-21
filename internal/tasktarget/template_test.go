@@ -8,15 +8,16 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/tasktarget"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 func TestExpectedTargetsForTaskItemRendersConfiguredTemplate(t *testing.T) {
-	paths, err := state.NewPaths(t.TempDir(), t.TempDir())
+	paths, err := state.NewPaths(testutil.CanonicalTempDir(t), testutil.CanonicalTempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	repo := task.Repository{
-		ID: "alpha", Name: "Alpha", Path: filepath.Join(t.TempDir(), "repo"), DefaultBranch: "main",
+		ID: "alpha", Name: "Alpha", Path: filepath.Join(testutil.CanonicalTempDir(t), "repo"), DefaultBranch: "main",
 		BranchTemplate: "feature/{{external_ref}}/{{task_title}}",
 	}
 	taskItem := task.Task{ID: "op-7", ExternalRef: "PROJ 7", Title: "Ship the thing"}
@@ -31,7 +32,7 @@ func TestExpectedTargetsForTaskItemRendersConfiguredTemplate(t *testing.T) {
 }
 
 func TestExpectedTargetsForTaskItemRejectsRenderedDefaultBranch(t *testing.T) {
-	paths, err := state.NewPaths(t.TempDir(), t.TempDir())
+	paths, err := state.NewPaths(testutil.CanonicalTempDir(t), testutil.CanonicalTempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +55,7 @@ func TestExpectedTargetsForTaskItemRejectsRenderedDefaultBranch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := task.Repository{
-				ID: "alpha", Name: "Alpha", Path: filepath.Join(t.TempDir(), "repo"), DefaultBranch: "main",
+				ID: "alpha", Name: "Alpha", Path: filepath.Join(testutil.CanonicalTempDir(t), "repo"), DefaultBranch: "main",
 				BranchTemplate: tt.template,
 			}
 			_, err := tasktarget.ExpectedTargetsForTaskItem(repo, tt.taskItem, paths)
@@ -66,12 +67,12 @@ func TestExpectedTargetsForTaskItemRejectsRenderedDefaultBranch(t *testing.T) {
 }
 
 func TestExpectedTargetsForTaskOrRecordedBranchUsesBackendMetadataAfterLocalDefault(t *testing.T) {
-	paths, err := state.NewPaths(t.TempDir(), t.TempDir())
+	paths, err := state.NewPaths(testutil.CanonicalTempDir(t), testutil.CanonicalTempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	repo := task.Repository{
-		ID: "alpha", Name: "Alpha", Path: filepath.Join(t.TempDir(), "repo"), DefaultBranch: "main",
+		ID: "alpha", Name: "Alpha", Path: filepath.Join(testutil.CanonicalTempDir(t), "repo"), DefaultBranch: "main",
 		BranchTemplate: "changed/{{task_title}}",
 	}
 	taskItem := task.Task{
@@ -88,12 +89,12 @@ func TestExpectedTargetsForTaskOrRecordedBranchUsesBackendMetadataAfterLocalDefa
 }
 
 func TestExpectedTargetsForTaskBranchPreservesRecordedBranch(t *testing.T) {
-	paths, err := state.NewPaths(t.TempDir(), t.TempDir())
+	paths, err := state.NewPaths(testutil.CanonicalTempDir(t), testutil.CanonicalTempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	repo := task.Repository{
-		ID: "alpha", Name: "Alpha", Path: filepath.Join(t.TempDir(), "repo"), DefaultBranch: "main",
+		ID: "alpha", Name: "Alpha", Path: filepath.Join(testutil.CanonicalTempDir(t), "repo"), DefaultBranch: "main",
 		BranchTemplate: "changed/{{task_title}}",
 	}
 	targets, err := tasktarget.ExpectedTargetsForTaskBranch(repo, "op-7", "recorded/branch", paths)
