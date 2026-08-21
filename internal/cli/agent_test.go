@@ -11,6 +11,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -222,9 +223,9 @@ func TestIntegrationAgentReviewAddRecordsFindingTypesAndRejectsStaleAttempt(t *t
 	must := require.New(t)
 	_, review := setupActiveAgentReview(t, "op-review")
 	paths := currentTestPaths(t)
-	descriptionFile := filepath.Join(t.TempDir(), "finding.md")
-	taskDescriptionFile := filepath.Join(t.TempDir(), "task.md")
-	taskAcceptanceFile := filepath.Join(t.TempDir(), "acceptance.md")
+	descriptionFile := filepath.Join(testutil.CanonicalTempDir(t), "finding.md")
+	taskDescriptionFile := filepath.Join(testutil.CanonicalTempDir(t), "task.md")
+	taskAcceptanceFile := filepath.Join(testutil.CanonicalTempDir(t), "acceptance.md")
 	must.NoError(os.WriteFile(descriptionFile, []byte("Extracting validation would reduce duplication.\n"), 0o644))
 	must.NoError(os.WriteFile(taskDescriptionFile, []byte("Create a shared helper for validation.\n"), 0o644))
 	must.NoError(os.WriteFile(taskAcceptanceFile, []byte("Callers use the shared helper.\n"), 0o644))
@@ -625,7 +626,7 @@ func TestIntegrationAgentDoneRejectsMissingDetailedDescription(t *testing.T) {
 func TestIntegrationAgentDoneRejectsMultipleDetailedDescriptionSources(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	root := t.TempDir()
+	root := testutil.CanonicalTempDir(t)
 	detailedPath := filepath.Join(root, "body.md")
 	must.NoError(os.WriteFile(detailedPath, []byte("File PR body."), 0o644))
 
@@ -699,7 +700,7 @@ func TestIntegrationAgentDoneRejectsMissingTechnicalExplanation(t *testing.T) {
 func TestIntegrationAgentDoneRejectsMultipleTechnicalExplanationSources(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	root := t.TempDir()
+	root := testutil.CanonicalTempDir(t)
 	technicalPath := filepath.Join(root, "technical.md")
 	must.NoError(os.WriteFile(technicalPath, []byte("File technical explanation."), 0o644))
 

@@ -14,6 +14,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/testguard"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 type ghStatusByURLCase struct {
@@ -180,7 +181,7 @@ func TestIntegrationGHProviderFindAndCreateVerboseDiagnosticsIncludeCorrelation(
 		}.FindOpenByBranch(
 			context.Background(),
 			pullrequest.FindOpenByBranchRequest{
-				RepositoryPath: t.TempDir(),
+				RepositoryPath: testutil.CanonicalTempDir(t),
 				HeadBranch:     "orpheus/op-1",
 				BaseBranch:     "main",
 				Diagnostics:    diagnosticsContext,
@@ -200,7 +201,7 @@ func TestIntegrationGHProviderFindAndCreateVerboseDiagnosticsIncludeCorrelation(
 		}.Create(
 			context.Background(),
 			pullrequest.CreateRequest{
-				RepositoryPath: t.TempDir(),
+				RepositoryPath: testutil.CanonicalTempDir(t),
 				HeadBranch:     "orpheus/op-1",
 				BaseBranch:     "main",
 				Title:          "SECRET_TITLE",
@@ -260,7 +261,7 @@ func TestIntegrationGHProviderStatusByURLDoesNotMisclassifyUnknownJSONFieldAsAut
 func installFakeGH(t *testing.T, stdout string, exitCode int) string {
 	t.Helper()
 
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	logPath := filepath.Join(binDir, "gh.log")
 	stdoutPath := filepath.Join(binDir, "stdout.txt")
 	if err := os.WriteFile(stdoutPath, []byte(stdout), 0o644); err != nil {

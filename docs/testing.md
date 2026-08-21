@@ -14,6 +14,33 @@ Orpheus separates tests by behavioral scope, not by speed or whether a test writ
 
 A unit test exercises package-owned logic with injected collaborators or fakes. It requires only Go and may use isolated temporary files. It must not require or start Git, Beads, gh, Codex, Pi, or any other child executable.
 
+## Canonical temporary directories
+
+All per-test temporary directories must come from
+`testutil.CanonicalTempDir(t)`. It returns a clean absolute path after resolving
+all existing symlink components, so a path created through macOS `/tmp` compares
+consistently with paths reported through `/private/tmp`.
+
+Do not call `t.TempDir()` directly. GolangCI-Lint and the repository AST
+validator enforce this invariant during `make check`. The helper is the sole
+boundary permitted to call `testing.TB.TempDir`.
+
+Use stable non-temporary fixture roots such as `/fixture/...` for fake paths.
+An absolute `/tmp/...` path token anywhere in a test fixture string needs a
+same-line, specific explanation because its path identity must be intentionally
+irrelevant:
+
+```go
+const fixturePath = "/tmp/example" // orpheus:allow-absolute-tmp-path -- Path identity is intentionally irrelevant to this isolated fixture.
+```
+
+A direct `t.TempDir()` call is only permitted when path identity is intentionally
+irrelevant and must be suppressed on the same line for both enforcement layers:
+
+```go
+_ = t.TempDir() //nolint:forbidigo // Path identity is intentionally irrelevant to this isolated fixture.
+```
+
 ## Integration lane
 
 An integration test verifies a cross-package workflow or an isolated local process contract. This includes real Git and Beads behavior, compiled CLI behavior, and child-process contracts. It may use temporary directories, local bare Git remotes, and fake executables, but it remains network-free and credential-free.

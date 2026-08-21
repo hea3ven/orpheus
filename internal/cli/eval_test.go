@@ -6,12 +6,13 @@ package cli
 import (
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/require"
 )
 
 func TestIntegrationEvalReviewContextSkipsNormalInvocationState(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "relative")
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", testutil.CanonicalTempDir(t))
 
 	stdout, stderr, err := executeCommandWithError(t, []string{"eval", "review-context", "--repetitions", "0"})
 

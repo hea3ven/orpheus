@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,7 +9,7 @@ import (
 
 func TestResolveDetailedDescriptionReadsFileExactly(t *testing.T) {
 	body := "## Summary\n\nPreserve trailing newline.\n"
-	path := filepath.Join(t.TempDir(), "body.md")
+	path := filepath.Join(testutil.CanonicalTempDir(t), "body.md")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("write detailed description: %v", err)
 	}
@@ -24,7 +25,7 @@ func TestResolveDetailedDescriptionReadsFileExactly(t *testing.T) {
 
 func TestResolveTechnicalExplanationReadsFileExactly(t *testing.T) {
 	body := "## Technical pitch\n\nPreserve trailing newline.\n"
-	path := filepath.Join(t.TempDir(), "technical.md")
+	path := filepath.Join(testutil.CanonicalTempDir(t), "technical.md")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("write technical explanation: %v", err)
 	}

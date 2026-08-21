@@ -7,6 +7,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 func TestLoadConfigValidatesAndResolvesPipelines(t *testing.T) {
@@ -325,7 +326,7 @@ func TestResolvePipelinePrecedenceAndBuiltinFallback(t *testing.T) {
 func newTestPaths(t *testing.T) state.Paths {
 	t.Helper()
 
-	root := t.TempDir()
+	root := testutil.CanonicalTempDir(t)
 	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)

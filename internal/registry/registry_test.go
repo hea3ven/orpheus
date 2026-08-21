@@ -9,6 +9,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 func TestStoreLoadMissingRegistryIsEmpty(t *testing.T) {
@@ -103,7 +104,7 @@ func TestStoreLoadRejectsInvalidReviewPipelineAliases(t *testing.T) {
 	writeDataFile(t, paths, "registry.yaml", `repos:
   - id: alpha
     name: alpha
-    path: /tmp/alpha
+    path: /fixture/alpha
     review_pipeline_aliases:
       " ": standard
 `)
@@ -124,7 +125,7 @@ func TestStoreLoadRejectsInvalidSummaryGuidanceStyle(t *testing.T) {
 	writeDataFile(t, paths, "registry.yaml", `repos:
   - id: alpha
     name: alpha
-    path: /tmp/alpha
+    path: /fixture/alpha
     summary_guidance_style: informal
 `)
 	store := registry.NewStore(paths)
@@ -159,7 +160,7 @@ func TestStoreLoadAcceptsExternalReferenceTitleTemplate(t *testing.T) {
 	writeDataFile(t, paths, "registry.yaml", `repos:
   - id: alpha
     name: alpha
-    path: /tmp/alpha
+    path: /fixture/alpha
     title_template: "[{{external_ref}}] {{summary}}"
 `)
 	store := registry.NewStore(paths)
@@ -224,7 +225,7 @@ func TestStoreLoadRejectsUnknownRegistryFields(t *testing.T) {
 }
 
 func TestRegistryAddRejectsDuplicateIDNameAndPath(t *testing.T) {
-	basePath := filepath.Join(t.TempDir(), "alpha")
+	basePath := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
 	existing := registry.Registry{Repos: []registry.Repo{{
 		ID:   "alpha",
 		Name: "Alpha",
@@ -238,12 +239,12 @@ func TestRegistryAddRejectsDuplicateIDNameAndPath(t *testing.T) {
 	}{
 		{
 			name: "id",
-			repo: registry.Repo{ID: "alpha", Name: "Other", Path: filepath.Join(t.TempDir(), "other")},
+			repo: registry.Repo{ID: "alpha", Name: "Other", Path: filepath.Join(testutil.CanonicalTempDir(t), "other")},
 			want: "duplicate repo id \"alpha\"",
 		},
 		{
 			name: "name",
-			repo: registry.Repo{ID: "other", Name: "Alpha", Path: filepath.Join(t.TempDir(), "other")},
+			repo: registry.Repo{ID: "other", Name: "Alpha", Path: filepath.Join(testutil.CanonicalTempDir(t), "other")},
 			want: "duplicate repo name \"Alpha\"",
 		},
 		{
@@ -272,7 +273,7 @@ func TestRegistryAddRejectsDuplicateBeadsPrefix(t *testing.T) {
 	existing := registry.Registry{Repos: []registry.Repo{{
 		ID:          "alpha",
 		Name:        "Alpha",
-		Path:        filepath.Join(t.TempDir(), "alpha"),
+		Path:        filepath.Join(testutil.CanonicalTempDir(t), "alpha"),
 		BeadsMode:   registry.BeadsModeLocal,
 		BeadsPrefix: "op",
 	}}}
@@ -280,7 +281,7 @@ func TestRegistryAddRejectsDuplicateBeadsPrefix(t *testing.T) {
 	repo := registry.Repo{
 		ID:          "beta",
 		Name:        "Beta",
-		Path:        filepath.Join(t.TempDir(), "beta"),
+		Path:        filepath.Join(testutil.CanonicalTempDir(t), "beta"),
 		BeadsMode:   registry.BeadsModeLocal,
 		BeadsPrefix: "op",
 	}
@@ -300,7 +301,7 @@ func TestRegistryAddRejectsIDNamePrefixCrossCollision(t *testing.T) {
 	existing := registry.Registry{Repos: []registry.Repo{{
 		ID:          "alpha-id",
 		Name:        "Alpha Name",
-		Path:        filepath.Join(t.TempDir(), "alpha"),
+		Path:        filepath.Join(testutil.CanonicalTempDir(t), "alpha"),
 		BeadsMode:   registry.BeadsModeLocal,
 		BeadsPrefix: "alpha-prefix",
 	}}}
@@ -312,12 +313,12 @@ func TestRegistryAddRejectsIDNamePrefixCrossCollision(t *testing.T) {
 	}{
 		{
 			name: "name collides with existing prefix",
-			repo: registry.Repo{ID: "beta-id", Name: "alpha-prefix", Path: filepath.Join(t.TempDir(), "beta")},
+			repo: registry.Repo{ID: "beta-id", Name: "alpha-prefix", Path: filepath.Join(testutil.CanonicalTempDir(t), "beta")},
 			want: "repo name \"alpha-prefix\" collides with repo[0] beads_prefix",
 		},
 		{
 			name: "prefix collides with existing id",
-			repo: registry.Repo{ID: "beta-id", Name: "Beta", Path: filepath.Join(t.TempDir(), "beta"), BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "alpha-id"},
+			repo: registry.Repo{ID: "beta-id", Name: "Beta", Path: filepath.Join(testutil.CanonicalTempDir(t), "beta"), BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "alpha-id"},
 			want: "repo beads_prefix \"alpha-id\" collides with repo[0] id",
 		},
 	}
@@ -345,17 +346,17 @@ func TestRegistryAddValidatesBeadsModeAndPrefixTogether(t *testing.T) {
 	}{
 		{
 			name: "local mode requires prefix",
-			repo: registry.Repo{ID: "alpha", Name: "alpha", Path: filepath.Join(t.TempDir(), "alpha"), BeadsMode: registry.BeadsModeLocal},
+			repo: registry.Repo{ID: "alpha", Name: "alpha", Path: filepath.Join(testutil.CanonicalTempDir(t), "alpha"), BeadsMode: registry.BeadsModeLocal},
 			want: "repo beads_prefix is required",
 		},
 		{
 			name: "prefix requires mode",
-			repo: registry.Repo{ID: "alpha", Name: "alpha", Path: filepath.Join(t.TempDir(), "alpha"), BeadsPrefix: "op"},
+			repo: registry.Repo{ID: "alpha", Name: "alpha", Path: filepath.Join(testutil.CanonicalTempDir(t), "alpha"), BeadsPrefix: "op"},
 			want: "repo beads_mode is required",
 		},
 		{
 			name: "invalid mode",
-			repo: registry.Repo{ID: "alpha", Name: "alpha", Path: filepath.Join(t.TempDir(), "alpha"), BeadsMode: "nearby", BeadsPrefix: "op"},
+			repo: registry.Repo{ID: "alpha", Name: "alpha", Path: filepath.Join(testutil.CanonicalTempDir(t), "alpha"), BeadsMode: "nearby", BeadsPrefix: "op"},
 			want: "repo beads_mode \"nearby\" is invalid",
 		},
 	}
@@ -375,7 +376,7 @@ func TestRegistryAddValidatesBeadsModeAndPrefixTogether(t *testing.T) {
 }
 
 func TestNewRepoFromPathDerivesIdentityAndNormalizesPath(t *testing.T) {
-	root := t.TempDir()
+	root := testutil.CanonicalTempDir(t)
 	input := filepath.Join(root, "..", filepath.Base(root), "my-repo", ".")
 
 	got, err := registry.NewRepoFromPath(input)
@@ -420,14 +421,14 @@ func TestRegistryResolveByIDNameAndBeadsPrefix(t *testing.T) {
 	alpha := registry.Repo{
 		ID:          "alpha-id",
 		Name:        "Alpha Repo",
-		Path:        filepath.Join(t.TempDir(), "alpha"),
+		Path:        filepath.Join(testutil.CanonicalTempDir(t), "alpha"),
 		BeadsMode:   registry.BeadsModeLocal,
 		BeadsPrefix: "alpha-prefix",
 	}
 	beta := registry.Repo{
 		ID:          "beta-id",
 		Name:        "Beta Repo",
-		Path:        filepath.Join(t.TempDir(), "beta"),
+		Path:        filepath.Join(testutil.CanonicalTempDir(t), "beta"),
 		BeadsMode:   registry.BeadsModeManaged,
 		BeadsPrefix: "beta-prefix",
 	}
@@ -460,7 +461,7 @@ func TestRegistryResolveUnknownIsActionable(t *testing.T) {
 	reg := registry.Registry{Repos: []registry.Repo{{
 		ID:          "alpha-id",
 		Name:        "Alpha Repo",
-		Path:        filepath.Join(t.TempDir(), "alpha"),
+		Path:        filepath.Join(testutil.CanonicalTempDir(t), "alpha"),
 		BeadsMode:   registry.BeadsModeLocal,
 		BeadsPrefix: "alpha-prefix",
 	}}}
@@ -503,7 +504,7 @@ func TestManagedBeadsDirRejectsUnsafeRepoIDs(t *testing.T) {
 func TestStoreBeadsDirUsesRepoMode(t *testing.T) {
 	paths := newTestPaths(t)
 	store := registry.NewStore(paths)
-	localPath := filepath.Join(t.TempDir(), "local")
+	localPath := filepath.Join(testutil.CanonicalTempDir(t), "local")
 
 	tests := []struct {
 		name string
@@ -517,7 +518,7 @@ func TestStoreBeadsDirUsesRepoMode(t *testing.T) {
 		},
 		{
 			name: "managed mode uses data root",
-			repo: registry.Repo{ID: "managed", Name: "Managed", Path: filepath.Join(t.TempDir(), "managed"), BeadsMode: registry.BeadsModeManaged, BeadsPrefix: "mp"},
+			repo: registry.Repo{ID: "managed", Name: "Managed", Path: filepath.Join(testutil.CanonicalTempDir(t), "managed"), BeadsMode: registry.BeadsModeManaged, BeadsPrefix: "mp"},
 			want: filepath.Join(paths.DataRoot, "repos", "managed", "beads"),
 		},
 	}
@@ -537,7 +538,7 @@ func TestStoreBeadsDirUsesRepoMode(t *testing.T) {
 
 func TestStoreBeadsDirRejectsRepoWithoutBeadsMode(t *testing.T) {
 	store := registry.NewStore(newTestPaths(t))
-	repo := registry.Repo{ID: "alpha", Name: "alpha", Path: filepath.Join(t.TempDir(), "alpha")}
+	repo := registry.Repo{ID: "alpha", Name: "alpha", Path: filepath.Join(testutil.CanonicalTempDir(t), "alpha")}
 
 	_, err := store.BeadsDir(repo)
 	if err == nil {
@@ -551,7 +552,7 @@ func TestStoreBeadsDirRejectsRepoWithoutBeadsMode(t *testing.T) {
 func newTestPaths(t *testing.T) state.Paths {
 	t.Helper()
 
-	root := t.TempDir()
+	root := testutil.CanonicalTempDir(t)
 	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)

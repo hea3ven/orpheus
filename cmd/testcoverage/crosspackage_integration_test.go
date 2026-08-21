@@ -3,6 +3,7 @@
 package main
 
 import (
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,7 +15,7 @@ import (
 // credit executable statements in its collaborating package through -coverpkg.
 func TestIntegrationCrossPackageCoverageCreditsCollaborator(t *testing.T) {
 	fixture := filepath.Join("testdata", "crosspackage")
-	profile := filepath.Join(t.TempDir(), "crosspackage.cover")
+	profile := filepath.Join(testutil.CanonicalTempDir(t), "crosspackage.cover")
 	command := exec.Command("go", "test", "-count=1", "-tags=integration", "-run", "^TestIntegrationConsumerCreditsCollaborator$", "-covermode=set", "-coverpkg=./...", "-coverprofile="+profile, "./...")
 	command.Dir = fixture
 	if output, err := command.CombinedOutput(); err != nil {

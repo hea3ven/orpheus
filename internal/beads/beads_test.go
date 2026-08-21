@@ -16,6 +16,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/beads"
 	"github.com/hea3ven/orpheus/internal/pathutil"
 	"github.com/hea3ven/orpheus/internal/task"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 type fakeRunner struct {
@@ -67,16 +68,6 @@ func canonicalFakePath(path string) string {
 	return canonicalPath
 }
 
-func canonicalTestPath(t *testing.T, path string) string {
-	t.Helper()
-
-	canonicalPath, err := pathutil.CanonicalAbs(path)
-	if err != nil {
-		t.Fatalf("canonicalize test path %q: %v", path, err)
-	}
-	return canonicalPath
-}
-
 func (r *fakeRunner) Run(dir string, args ...string) (beads.Result, error) {
 	if len(r.calls) == 0 {
 		return beads.Result{}, errors.New("unexpected bd call")
@@ -122,7 +113,7 @@ func TestInspectLocalWithRunnerDetectsPrefix(t *testing.T) {
 }
 
 func TestInspectLocalWithRunnerReportsNoLocalWithoutRunningBD(t *testing.T) {
-	root := t.TempDir()
+	root := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{}
 
 	_, err := beads.InspectLocalWithRunner(root, runner)
@@ -217,7 +208,7 @@ func TestInspectLocalWithRunnerRequiresPrefix(t *testing.T) {
 }
 
 func TestInitializeManagedWithRunnerInitializesEmptyDirectory(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "managed", "beads")
+	dir := filepath.Join(testutil.CanonicalTempDir(t), "managed", "beads")
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir: dir,
 		wantArgs: []string{
@@ -243,7 +234,7 @@ func TestInitializeManagedWithRunnerInitializesEmptyDirectory(t *testing.T) {
 }
 
 func TestInitializeManagedWithRunnerRejectsExistingStateBeforeRunningBD(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	if err := os.WriteFile(filepath.Join(dir, "leftover"), []byte("state"), 0o644); err != nil {
 		t.Fatalf("write leftover: %v", err)
 	}
@@ -259,7 +250,7 @@ func TestInitializeManagedWithRunnerRejectsExistingStateBeforeRunningBD(t *testi
 }
 
 func TestInitializeManagedWithRunnerReportsCommandFailure(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "beads")
+	dir := filepath.Join(testutil.CanonicalTempDir(t), "beads")
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir: dir,
 		wantArgs: []string{
@@ -285,7 +276,7 @@ func TestInitializeManagedWithRunnerReportsCommandFailure(t *testing.T) {
 }
 
 func TestTaskBackendListParsesVisibleTasksAndMetadata(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{
 		{
 			wantDir:  dir,
@@ -322,7 +313,7 @@ func TestTaskBackendListParsesVisibleTasksAndMetadata(t *testing.T) {
 }
 
 func TestTaskBackendListFilteredPushesSupportedFieldsAndMatchesQueryAtSource(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	createdAfter := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	createdBefore := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)
 	updatedAfter := time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC)
@@ -365,7 +356,7 @@ func TestTaskBackendListFilteredPushesSupportedFieldsAndMatchesQueryAtSource(t *
 }
 
 func TestManagedTaskBackendRepairsBehindSchemaAndRetriesRead(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{
 		{
 			wantDir:  dir,
@@ -410,7 +401,7 @@ func TestManagedTaskBackendRepairsBehindSchemaAndRetriesRead(t *testing.T) {
 }
 
 func TestManagedTaskBackendLogsSchemaRecoveryWithoutCommandOutput(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{
 		{
 			wantDir:  dir,
@@ -443,7 +434,7 @@ func TestManagedTaskBackendLogsSchemaRecoveryWithoutCommandOutput(t *testing.T) 
 }
 
 func TestLocalTaskBackendDoesNotRepairBehindSchema(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir:  dir,
 		wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
@@ -474,7 +465,7 @@ func TestManagedTaskBackendDoesNotRepairForwardOrUnrelatedFailures(t *testing.T)
 		"unrelated":      "database temporarily unavailable",
 	} {
 		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := testutil.CanonicalTempDir(t)
 			runner := &fakeRunner{calls: []fakeCall{{
 				wantDir:  dir,
 				wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
@@ -527,7 +518,7 @@ func TestManagedTaskBackendReportsMigrationAndRetryFailures(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := testutil.CanonicalTempDir(t)
 			for index := range calls {
 				calls[index].wantDir = dir
 			}
@@ -554,7 +545,7 @@ func TestManagedTaskBackendReportsMigrationAndRetryFailures(t *testing.T) {
 }
 
 func TestTaskBackendListExcludesUnsupportedTypesAndPreservesRelations(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{
 		{
 			wantDir:  dir,
@@ -599,7 +590,7 @@ func TestTaskBackendListExcludesUnsupportedTypesAndPreservesRelations(t *testing
 }
 
 func TestTaskBackendCreateCreatesStandaloneTask(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir: dir,
 		wantArgs: []string{
@@ -640,7 +631,7 @@ func TestTaskBackendCreateCreatesStandaloneTask(t *testing.T) {
 }
 
 func TestTaskBackendCreatePassesGraphAndOptionalFields(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir: dir,
 		wantArgs: []string{
@@ -697,7 +688,7 @@ func assertParsedVisibleTask(t *testing.T, taskItem task.Task) {
 }
 
 func TestTaskBackendGetParsesShowJSON(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir:  dir,
 		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-9wh.2"},
@@ -718,7 +709,7 @@ func TestTaskBackendGetParsesShowJSON(t *testing.T) {
 				"updated_at":"2026-05-24T06:27:34Z",
 				"started_at":"2026-05-24T06:27:34Z",
 				"labels":["m2","m2-task"],
-				"metadata":{"orpheus.worktree":"/tmp/worktree"},
+				"metadata":{"orpheus.worktree":"/fixture/worktree"},
 				"dependencies":[
 					{"id":"op-9wh","dependency_type":"parent-child"},
 					{"id":"op-9wh.1","dependency_type":"blocks"}
@@ -743,7 +734,7 @@ func TestTaskBackendGetParsesShowJSON(t *testing.T) {
 	if got.Design != "Reuse the runner pattern." || got.AcceptanceCriteria != "Adapter implements read interfaces." {
 		t.Fatalf("task detail = %#v, want design and acceptance", got)
 	}
-	if got.Metadata[task.MetadataWorktree] != "/tmp/worktree" {
+	if got.Metadata[task.MetadataWorktree] != "/fixture/worktree" {
 		t.Fatalf("metadata = %#v, want worktree", got.Metadata)
 	}
 	if got.Relations.ParentID != "op-9wh" || !reflect.DeepEqual(got.Relations.DependencyIDs, []string{"op-9wh.1"}) {
@@ -758,7 +749,7 @@ func TestTaskBackendGetParsesShowJSON(t *testing.T) {
 }
 
 func TestTaskBackendUpdateDoesNotRemoveNonBlockingDependency(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{
 		{
 			wantDir:  dir,
@@ -791,7 +782,7 @@ func TestTaskBackendUpdateDoesNotRemoveNonBlockingDependency(t *testing.T) {
 }
 
 func TestTaskBackendUpdateRejectsNonBlockingDependencyBeforeContentMutation(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir:  dir,
 		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-current"},
@@ -817,7 +808,7 @@ func TestTaskBackendUpdateRejectsNonBlockingDependencyBeforeContentMutation(t *t
 }
 
 func TestTaskBackendUpdateUsesOrpheusBlockingEdgeAcrossTypes(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{
 		{
 			wantDir:  dir,
@@ -860,7 +851,7 @@ func TestTaskBackendUpdateUsesOrpheusBlockingEdgeAcrossTypes(t *testing.T) {
 }
 
 func TestTaskBackendGetRecognizesOrpheusCrossTypeBlockingEdge(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir:  dir,
 		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-task"},
@@ -884,7 +875,7 @@ func TestTaskBackendGetRecognizesOrpheusCrossTypeBlockingEdge(t *testing.T) {
 }
 
 func TestTaskBackendGetReturnsClosedItemsAndRejectsUnsupportedTypes(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{
 		{
 			wantDir:  dir,
@@ -941,7 +932,7 @@ func TestTaskBackendGetReturnsClosedItemsAndRejectsUnsupportedTypes(t *testing.T
 }
 
 func TestTaskBackendMarkInProgressUpdatesOpenTaskStatusAndMetadata(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{
 		{
 			wantDir:  dir,
@@ -960,7 +951,7 @@ func TestTaskBackendMarkInProgressUpdatesOpenTaskStatusAndMetadata(t *testing.T)
 				"--set-metadata",
 				"orpheus.branch=orpheus/op-1",
 				"--set-metadata",
-				"orpheus.worktree=/tmp/op-1",
+				"orpheus.worktree=/fixture/op-1",
 			},
 		},
 	}}
@@ -970,7 +961,7 @@ func TestTaskBackendMarkInProgressUpdatesOpenTaskStatusAndMetadata(t *testing.T)
 		t.Fatalf("create backend: %v", err)
 	}
 
-	if err := backend.MarkInProgress(context.Background(), "op-1", "orpheus/op-1", "/tmp/op-1"); err != nil {
+	if err := backend.MarkInProgress(context.Background(), "op-1", "orpheus/op-1", "/fixture/op-1"); err != nil {
 		t.Fatalf("mark in progress: %v", err)
 	}
 	if len(runner.calls) != 0 {
@@ -979,12 +970,12 @@ func TestTaskBackendMarkInProgressUpdatesOpenTaskStatusAndMetadata(t *testing.T)
 }
 
 func TestTaskBackendMarkInProgressTreatsMatchingInProgressTaskAsSuccess(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir:  dir,
 		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-2"},
 		result: beads.Result{Stdout: `[{"id":"op-2","title":"task","status":"in_progress","priority":2,"issue_type":"task","metadata":{` +
-			`"orpheus.branch":"orpheus/op-2","orpheus.worktree":"/tmp/op-2"}}]`},
+			`"orpheus.branch":"orpheus/op-2","orpheus.worktree":"/fixture/op-2"}}]`},
 	}}}
 
 	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
@@ -992,7 +983,7 @@ func TestTaskBackendMarkInProgressTreatsMatchingInProgressTaskAsSuccess(t *testi
 		t.Fatalf("create backend: %v", err)
 	}
 
-	if err := backend.MarkInProgress(context.Background(), "op-2", "orpheus/op-2", "/tmp/op-2"); err != nil {
+	if err := backend.MarkInProgress(context.Background(), "op-2", "orpheus/op-2", "/fixture/op-2"); err != nil {
 		t.Fatalf("mark in progress: %v", err)
 	}
 	if len(runner.calls) != 0 {
@@ -1013,7 +1004,7 @@ func TestTaskBackendMarkInProgressReportsMutationConflicts(t *testing.T) {
 		},
 		{
 			name:    "in-progress different branch",
-			stdout:  `[{"id":"op-3","title":"task","status":"in_progress","priority":2,"issue_type":"task","metadata":{"orpheus.branch":"other","orpheus.worktree":"/tmp/op-3"}}]`,
+			stdout:  `[{"id":"op-3","title":"task","status":"in_progress","priority":2,"issue_type":"task","metadata":{"orpheus.branch":"other","orpheus.worktree":"/fixture/op-3"}}]`,
 			wantErr: `orpheus.branch is "other", expected "orpheus/op-3"`,
 		},
 		{
@@ -1030,7 +1021,7 @@ func TestTaskBackendMarkInProgressReportsMutationConflicts(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := testutil.CanonicalTempDir(t)
 			runner := &fakeRunner{calls: []fakeCall{{
 				wantDir:  dir,
 				wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-3"},
@@ -1041,7 +1032,7 @@ func TestTaskBackendMarkInProgressReportsMutationConflicts(t *testing.T) {
 				t.Fatalf("create backend: %v", err)
 			}
 
-			err = backend.MarkInProgress(context.Background(), "op-3", "orpheus/op-3", "/tmp/op-3")
+			err = backend.MarkInProgress(context.Background(), "op-3", "orpheus/op-3", "/fixture/op-3")
 			if !errors.Is(err, task.ErrMutationConflict) {
 				t.Fatalf("error = %v, want ErrMutationConflict", err)
 			}
@@ -1056,7 +1047,7 @@ func TestTaskBackendMarkInProgressReportsMutationConflicts(t *testing.T) {
 }
 
 func TestTaskBackendMarkInProgressReportsUpdateCommandFailure(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{
 		{
 			wantDir:  dir,
@@ -1075,7 +1066,7 @@ func TestTaskBackendMarkInProgressReportsUpdateCommandFailure(t *testing.T) {
 				"--set-metadata",
 				"orpheus.branch=orpheus/op-4",
 				"--set-metadata",
-				"orpheus.worktree=/tmp/op-4",
+				"orpheus.worktree=/fixture/op-4",
 			},
 			result: beads.Result{Stderr: "database locked"},
 			err:    errors.New("exit status 1"),
@@ -1086,7 +1077,7 @@ func TestTaskBackendMarkInProgressReportsUpdateCommandFailure(t *testing.T) {
 		t.Fatalf("create backend: %v", err)
 	}
 
-	err = backend.MarkInProgress(context.Background(), "op-4", "orpheus/op-4", "/tmp/op-4")
+	err = backend.MarkInProgress(context.Background(), "op-4", "orpheus/op-4", "/fixture/op-4")
 	if err == nil {
 		t.Fatal("mark in progress succeeded, want update failure")
 	}
@@ -1096,7 +1087,7 @@ func TestTaskBackendMarkInProgressReportsUpdateCommandFailure(t *testing.T) {
 }
 
 func TestTaskBackendStartEpicUpdatesOpenEpic(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{
 		{
 			wantDir:  dir,
@@ -1122,7 +1113,7 @@ func TestTaskBackendStartEpicUpdatesOpenEpic(t *testing.T) {
 }
 
 func TestTaskBackendStartEpicTreatsInProgressAsSuccess(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir:  dir,
 		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-epic"},
@@ -1151,7 +1142,7 @@ func TestTaskBackendStartEpicRejectsNonEpicAndClosedItems(t *testing.T) {
 		{"closed", `[{"id":"op-epic","status":"closed","issue_type":"epic"}]`, "epic is closed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := testutil.CanonicalTempDir(t)
 			runner := &fakeRunner{calls: []fakeCall{{
 				wantDir:  dir,
 				wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-epic"},
@@ -1174,7 +1165,7 @@ func TestTaskBackendStartEpicRejectsNonEpicAndClosedItems(t *testing.T) {
 }
 
 func TestTaskBackendSetPRURLWritesMetadata(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir: dir,
 		wantArgs: []string{
@@ -1200,7 +1191,7 @@ func TestTaskBackendSetPRURLWritesMetadata(t *testing.T) {
 }
 
 func TestTaskBackendSetPRURLValidatesRequiredInputs(t *testing.T) {
-	backend, err := beads.NewTaskBackendWithRunner(t.TempDir(), &fakeRunner{})
+	backend, err := beads.NewTaskBackendWithRunner(testutil.CanonicalTempDir(t), &fakeRunner{})
 	if err != nil {
 		t.Fatalf("create backend: %v", err)
 	}
@@ -1216,7 +1207,7 @@ func TestTaskBackendSetPRURLValidatesRequiredInputs(t *testing.T) {
 }
 
 func TestTaskBackendCloseClosesOpenTask(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{
 		{
 			wantDir:  dir,
@@ -1242,7 +1233,7 @@ func TestTaskBackendCloseClosesOpenTask(t *testing.T) {
 }
 
 func TestTaskBackendCloseTreatsAlreadyClosedTaskAsSuccess(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir:  dir,
 		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-2"},
@@ -1262,7 +1253,7 @@ func TestTaskBackendCloseTreatsAlreadyClosedTaskAsSuccess(t *testing.T) {
 }
 
 func TestTaskBackendReportsCommandFailureWithOutput(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir:  dir,
 		wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
@@ -1289,7 +1280,7 @@ func TestTaskBackendReportsCommandFailureWithOutput(t *testing.T) {
 func newRootWithBeadsDir(t *testing.T) string {
 	t.Helper()
 
-	root := canonicalTestPath(t, t.TempDir())
+	root := testutil.CanonicalTempDir(t)
 	if err := os.Mkdir(filepath.Join(root, ".beads"), 0o755); err != nil {
 		t.Fatalf("mkdir .beads: %v", err)
 	}

@@ -19,6 +19,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/pathutil"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/testguard"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 )
@@ -310,7 +311,7 @@ func testInvocationFor(t *testing.T) *testInvocation {
 		return existing.(*testInvocation)
 	}
 
-	root := canonicalTestPath(t, t.TempDir())
+	root := testutil.CanonicalTempDir(t)
 	paths, err := state.NewPaths(
 		filepath.Join(root, "xdg-config", state.AppName),
 		filepath.Join(root, "xdg-data", state.AppName),
@@ -382,7 +383,7 @@ func runGit(t *testing.T, dir string, args ...string) string {
 	return string(output)
 }
 
-func canonicalTestPath(t *testing.T, path string) string {
+func canonicalFixturePath(t *testing.T, path string) string {
 	t.Helper()
 
 	canonicalPath, err := pathutil.CanonicalAbs(path)
@@ -544,7 +545,7 @@ func TestIntegrationSeededLocalOriginRepositoriesAreIndependent(t *testing.T) {
 func withFakeBDInit(t *testing.T) string {
 	t.Helper()
 
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	logPath := filepath.Join(binDir, "bd.log")
 	script := `#!/bin/sh
 if [ -n "${FAKE_BD_LOCK_PATH-}" ] && [ ! -f "$FAKE_BD_LOCK_PATH" ]; then

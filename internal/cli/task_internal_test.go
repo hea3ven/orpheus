@@ -13,6 +13,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/status"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
@@ -170,7 +171,7 @@ func TestTaskEditRecognizesExplicitlyEmptyPlanningInput(t *testing.T) {
 	})
 
 	t.Run("file", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "acceptance.md")
+		path := filepath.Join(testutil.CanonicalTempDir(t), "acceptance.md")
 		if err := os.WriteFile(path, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -199,7 +200,7 @@ func TestSyncConflictAgentUsageOptionsUnsupportedHarnessUsesStableReason(t *test
 		t.Run(tt.name, func(t *testing.T) {
 			options := syncConflictAgentUsageOptions(
 				agent.CommandSnapshot{Harness: tt.harness},
-				t.TempDir(),
+				testutil.CanonicalTempDir(t),
 			)(taskstate.AgentExecution{}, nil)
 
 			if options.UsageCapture.Status != taskstate.UsageCaptureUnknown {
@@ -226,7 +227,7 @@ func TestSyncConflictAgentResolverUsesEffectivePromptInCommandAndEnvironment(t *
 		Repository:    taskmodel.Repository{ID: "alpha"},
 		Task:          taskmodel.Task{ID: "op-1"},
 		Branch:        "orpheus/op-1",
-		Worktree:      t.TempDir(),
+		Worktree:      testutil.CanonicalTempDir(t),
 		ConflictFiles: []string{"conflict.go"},
 	})
 	if err != nil {
@@ -254,7 +255,7 @@ func TestSyncConflictAgentResolverUsesEffectivePromptInCommandAndEnvironment(t *
 func syncConflictPromptTestPaths(t *testing.T, promptAppend string) state.Paths {
 	t.Helper()
 
-	paths, err := state.NewPaths(t.TempDir(), t.TempDir())
+	paths, err := state.NewPaths(testutil.CanonicalTempDir(t), testutil.CanonicalTempDir(t))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}
