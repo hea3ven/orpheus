@@ -18,6 +18,7 @@ type options struct {
 	baseline       string
 	output         string
 	writeBaseline  bool
+	forceBaseline  bool
 	compareTo      string
 	auditScenarios bool
 }
@@ -41,6 +42,7 @@ func parseOptions(args []string) (options, error) {
 	flags.StringVar(&opts.baseline, "baseline", "coverage/test-coverage-baseline.json", "tracked aggregate quality baseline")
 	flags.StringVar(&opts.output, "output", "artifacts/test-coverage/report.json", "machine-readable quality report path")
 	flags.BoolVar(&opts.writeBaseline, "write-baseline", false, "generate eligible aggregate baseline updates")
+	flags.BoolVar(&opts.forceBaseline, "force-baseline", false, "generate a replacement baseline after an explicit maintainer override")
 	flags.StringVar(&opts.compareTo, "compare-to", "", "trusted prior baseline (normally the base branch baseline)")
 	flags.BoolVar(&opts.auditScenarios, "audit-scenarios", false, "profile every integration scenario separately (expensive)")
 	if err := flags.Parse(args); err != nil {
@@ -51,6 +53,9 @@ func parseOptions(args []string) (options, error) {
 	}
 	if opts.writeBaseline && opts.compareTo != "" {
 		return options{}, errors.New("write-baseline and compare-to cannot be combined")
+	}
+	if opts.forceBaseline && !opts.writeBaseline {
+		return options{}, errors.New("force-baseline requires write-baseline")
 	}
 	return opts, nil
 }
@@ -134,6 +139,12 @@ func evaluateQuality(opts options, result qualityReport) error {
 }
 
 func writeBaseline(opts options, result qualityReport, current, tracked baseline, trackedErr error) error {
+	if opts.forceBaseline {
+		if trackedErr == nil {
+			current = baselineFromReport(result, tracked.Policy)
+		}
+		return writeGeneratedBaseline(opts, result, current, "generated aggregate baseline after explicit maintainer override")
+	}
 	if trackedErr != nil && !errors.Is(trackedErr, os.ErrNotExist) && !errors.Is(trackedErr, errUnsupportedBaseline) {
 		result.Decision = decision{Status: statusRefreshRequired, Findings: []finding{{Kind: "baseline", Message: trackedErr.Error()}}}
 		return finishReport(opts.output, result, fmt.Errorf("read tracked baseline: %w", trackedErr))
@@ -151,10 +162,14 @@ func writeBaseline(opts options, result qualityReport, current, tracked baseline
 		}
 		candidate = generatedBaseline(result, reference, tracked.Policy)
 	}
+	return writeGeneratedBaseline(opts, result, candidate, "generated aggregate baseline")
+}
+
+func writeGeneratedBaseline(opts options, result qualityReport, candidate baseline, message string) error {
 	if err := writeJSON(opts.baseline, candidate); err != nil {
 		return fmt.Errorf("write baseline: %w", err)
 	}
-	result.Decision = decision{Status: statusPass, Findings: []finding{{Kind: "baseline", Message: "generated aggregate baseline"}}}
+	result.Decision = decision{Status: statusPass, Findings: []finding{{Kind: "baseline", Message: message}}}
 	if err := writeJSON(opts.output, result); err != nil {
 		return fmt.Errorf("write report: %w", err)
 	}

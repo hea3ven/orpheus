@@ -20,7 +20,7 @@
     "integration": {
       "test_count": 428,
       "coverage": {
-        "statement_total": 19063,
+        "statement_total": 19080,
         "covered_statements": 12036
       },
       "packages": [
@@ -31,7 +31,7 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
-          "statement_total": 612,
+          "statement_total": 629,
           "covered_statements": 0
         },
         {
@@ -211,10 +211,10 @@
       ]
     },
     "unit": {
-      "test_count": 947,
+      "test_count": 948,
       "coverage": {
-        "statement_total": 19063,
-        "covered_statements": 9912
+        "statement_total": 19080,
+        "covered_statements": 9929
       },
       "packages": [
         {
@@ -224,8 +224,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
-          "statement_total": 612,
-          "covered_statements": 349
+          "statement_total": 629,
+          "covered_statements": 366
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testtiming",
