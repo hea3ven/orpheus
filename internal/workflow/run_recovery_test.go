@@ -13,6 +13,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
@@ -44,7 +45,7 @@ func TestInspectImplementationRun(t *testing.T) {
 }
 
 func TestRecordPrimaryReviewChildPIDPreservesConcurrentFinding(t *testing.T) {
-	paths, err := state.NewPaths(filepath.Join(t.TempDir(), "config"), filepath.Join(t.TempDir(), "data"))
+	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}
@@ -94,7 +95,7 @@ func TestRecordPrimaryReviewChildPIDPreservesConcurrentFinding(t *testing.T) {
 }
 
 func TestPrepareTaskRunPreservesLivePrimaryReviewExecution(t *testing.T) {
-	paths, err := state.NewPaths(filepath.Join(t.TempDir(), "config"), filepath.Join(t.TempDir(), "data"))
+	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}
@@ -125,7 +126,7 @@ func TestPrepareTaskRunPreservesLivePrimaryReviewExecution(t *testing.T) {
 }
 
 func TestReconcilePrimaryReviewExecutionRecordsFailedReview(t *testing.T) {
-	paths, err := state.NewPaths(filepath.Join(t.TempDir(), "config"), filepath.Join(t.TempDir(), "data"))
+	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}
@@ -160,7 +161,7 @@ func TestReconcilePrimaryReviewExecutionRecordsFailedReview(t *testing.T) {
 }
 
 func TestReconcilePrimaryReviewExecutionRecognizesConcurrentRecovery(t *testing.T) {
-	paths, err := state.NewPaths(filepath.Join(t.TempDir(), "config"), filepath.Join(t.TempDir(), "data"))
+	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}
@@ -186,7 +187,7 @@ func TestReconcilePrimaryReviewExecutionRecognizesConcurrentRecovery(t *testing.
 }
 
 func TestPrepareTaskRunMarksConcurrentlyRecoveredPrimaryForInspectionStop(t *testing.T) {
-	paths, err := state.NewPaths(filepath.Join(t.TempDir(), "config"), filepath.Join(t.TempDir(), "data"))
+	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}
@@ -219,7 +220,7 @@ func TestPrepareTaskRunMarksConcurrentlyRecoveredPrimaryForInspectionStop(t *tes
 }
 
 func TestPrepareTaskRunReconcilesAndRoutesRecoveredAttempt(t *testing.T) {
-	paths, err := state.NewPaths(filepath.Join(t.TempDir(), "config"), filepath.Join(t.TempDir(), "data"))
+	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}
@@ -248,7 +249,7 @@ func TestPrepareTaskRunReconcilesAndRoutesRecoveredAttempt(t *testing.T) {
 }
 
 func TestReconcileImplementationRunRequiresExpectedActiveAttempt(t *testing.T) {
-	paths, err := state.NewPaths(filepath.Join(t.TempDir(), "config"), filepath.Join(t.TempDir(), "data"))
+	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}

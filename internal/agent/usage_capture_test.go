@@ -9,6 +9,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/logging"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,8 +33,8 @@ func TestCaptureUsageDiagnosticsSanitizeDiscoveryErrors(t *testing.T) {
 }
 
 func TestUsageCaptureDoesNotReadOperatorHomeWithoutExplicitFixture(t *testing.T) {
-	operatorHome := t.TempDir()
-	workdir := filepath.Join(t.TempDir(), "worktree")
+	operatorHome := testutil.CanonicalTempDir(t)
+	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 	require.NoError(t, os.MkdirAll(workdir, 0o755))
 	startedAt := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 
@@ -92,7 +93,7 @@ func TestUsageCaptureEnvironmentUsesIsolatedRootsUnlessTestProvidesFixtures(t *t
 		t.Fatalf("test roots do not share an isolated parent: %#v", env)
 	}
 
-	fixture := t.TempDir()
+	fixture := testutil.CanonicalTempDir(t)
 	t.Setenv("CODEX_HOME", fixture)
 	if got := agent.UsageCaptureEnvironment()["CODEX_HOME"]; got != fixture {
 		t.Fatalf("CODEX_HOME = %q, want explicit fixture %q", got, fixture)
@@ -101,7 +102,7 @@ func TestUsageCaptureEnvironmentUsesIsolatedRootsUnlessTestProvidesFixtures(t *t
 
 func TestCaptureUsageDiagnosticsSanitizeSessionReadErrors(t *testing.T) {
 	var diagnostics bytes.Buffer
-	secretRoot := filepath.Join(t.TempDir(), "secret-session-root") + "\x00"
+	secretRoot := filepath.Join(testutil.CanonicalTempDir(t), "secret-session-root") + "\x00"
 
 	result := agent.CaptureUsage(agent.UsageCaptureOptions{
 		Harness: "codex",

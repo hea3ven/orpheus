@@ -14,6 +14,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -112,7 +113,7 @@ func TestRunKeepsCompletedRunRootWhenRequested(t *testing.T) {
 func TestExecuteRunReportsUsageAndCostUnknownWhenSetupFailsBeforeExecution(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	rootFile := filepath.Join(t.TempDir(), "root-file")
+	rootFile := filepath.Join(testutil.CanonicalTempDir(t), "root-file")
 	must.NoError(os.WriteFile(rootFile, []byte("not a directory"), 0o600))
 
 	result := executeRun(
@@ -134,7 +135,7 @@ func TestExecuteRunReportsUsageAndCostUnknownWhenSetupFailsBeforeExecution(t *te
 }
 
 func TestEvaluatorPrimaryChildPIDPreservesConcurrentFinding(t *testing.T) {
-	paths, err := state.NewPaths(filepath.Join(t.TempDir(), "config"), filepath.Join(t.TempDir(), "data"))
+	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	require.NoError(t, err)
 	store := taskstate.NewStore(paths)
 	attempt, err := store.StartReviewWithOptions("review-eval", "eval-1", taskstate.StartReviewOptions{Pipeline: "evaluation", Step: "ai-review"})
@@ -426,7 +427,7 @@ func aggregateCompletionRun(
 func TestWithRunEnvironmentProvisionsCodexConfigAndIsolatesSessions(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	sourceCodex := t.TempDir()
+	sourceCodex := testutil.CanonicalTempDir(t)
 	must.NoError(os.WriteFile(filepath.Join(sourceCodex, "auth.json"), []byte(`{"token":"codex"}`), 0o600))
 	must.NoError(os.WriteFile(filepath.Join(sourceCodex, "config.toml"), []byte("model = \"test\"\n"), 0o600))
 	must.NoError(os.MkdirAll(filepath.Join(sourceCodex, "sessions"), 0o755))
@@ -456,9 +457,9 @@ func TestWithRunEnvironmentProvisionsCodexConfigAndIsolatesSessions(t *testing.T
 func TestCopyHarnessConfigDereferencesSymlinkedRegularFiles(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	source := t.TempDir()
-	targetRoot := t.TempDir()
-	operatorRepo := t.TempDir()
+	source := testutil.CanonicalTempDir(t)
+	targetRoot := testutil.CanonicalTempDir(t)
+	operatorRepo := testutil.CanonicalTempDir(t)
 	operatorAuth := filepath.Join(operatorRepo, "operator-auth.json")
 	must.NoError(os.WriteFile(operatorAuth, []byte(`{"token":"operator"}`), 0o600))
 	must.NoError(os.Symlink(operatorAuth, filepath.Join(source, "auth.json")))
@@ -485,9 +486,9 @@ func TestCopyHarnessConfigDereferencesSymlinkedRegularFiles(t *testing.T) {
 func TestCopyHarnessConfigRejectsSymlinkedDirectories(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	source := t.TempDir()
-	targetRoot := t.TempDir()
-	operatorConfigDir := filepath.Join(t.TempDir(), "operator-config")
+	source := testutil.CanonicalTempDir(t)
+	targetRoot := testutil.CanonicalTempDir(t)
+	operatorConfigDir := filepath.Join(testutil.CanonicalTempDir(t), "operator-config")
 	must.NoError(os.MkdirAll(operatorConfigDir, 0o755))
 	must.NoError(os.WriteFile(filepath.Join(operatorConfigDir, "settings.json"), []byte("{}\n"), 0o600))
 	must.NoError(os.Symlink(operatorConfigDir, filepath.Join(source, "linked-config")))
@@ -511,12 +512,12 @@ func assertNoExecutionUsageAndCost(t *testing.T, result RunResult) {
 func TestWithRunEnvironmentProvisionsPiConfigAndIsolatesSessions(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	sourcePi := t.TempDir()
+	sourcePi := testutil.CanonicalTempDir(t)
 	must.NoError(os.WriteFile(filepath.Join(sourcePi, "auth.json"), []byte(`{"token":"pi"}`), 0o600))
 	must.NoError(os.WriteFile(filepath.Join(sourcePi, "settings.json"), []byte("{}\n"), 0o600))
 	must.NoError(os.MkdirAll(filepath.Join(sourcePi, "sessions"), 0o755))
 	must.NoError(os.WriteFile(filepath.Join(sourcePi, "sessions", "old.jsonl"), []byte("{}\n"), 0o600))
-	oldPiSessionDir := filepath.Join(t.TempDir(), "operator-pi-sessions")
+	oldPiSessionDir := filepath.Join(testutil.CanonicalTempDir(t), "operator-pi-sessions")
 
 	t.Setenv("CODEX_HOME", "relative-codex-home")
 	t.Setenv("PI_CODING_AGENT_DIR", sourcePi)
@@ -544,7 +545,7 @@ func TestWithRunEnvironmentProvisionsPiConfigAndIsolatesSessions(t *testing.T) {
 
 func TestWithRunEnvironmentAllowsMissingHarnessConfigDirs(t *testing.T) {
 	must := require.New(t)
-	missing := filepath.Join(t.TempDir(), "missing")
+	missing := filepath.Join(testutil.CanonicalTempDir(t), "missing")
 	t.Setenv("CODEX_HOME", filepath.Join(missing, "codex"))
 	t.Setenv("PI_CODING_AGENT_DIR", filepath.Join(missing, "pi"))
 
@@ -560,7 +561,7 @@ func TestWithRunEnvironmentAllowsMissingHarnessConfigDirs(t *testing.T) {
 
 func testRunSetup(t *testing.T) runSetup {
 	t.Helper()
-	root := t.TempDir()
+	root := testutil.CanonicalTempDir(t)
 	return runSetup{
 		root:       root,
 		configBase: filepath.Join(root, "xdg-config"),

@@ -14,6 +14,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,7 +30,7 @@ func TestIntegrationDoctorRecoversCodexUsageForImplementationAndReviewAgent(t *t
 	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
 		repoDir: {stdout: `[{"id":"op-1","title":"Doctor","status":"in_progress","priority":1,"issue_type":"task"}]`},
 	})
-	codexHome := t.TempDir()
+	codexHome := testutil.CanonicalTempDir(t)
 	setTestEnvironment(t, "CODEX_HOME", codexHome)
 
 	store := taskstate.NewStoreWithClock(paths, clockSequence(
@@ -101,7 +102,7 @@ func TestIntegrationDoctorRecoversCodexUsageForImplementationAndReviewAgent(t *t
 		t,
 		codexHome,
 		"wrong-cwd-session",
-		filepath.Join(t.TempDir(), "other-repo"),
+		filepath.Join(testutil.CanonicalTempDir(t), "other-repo"),
 		time.Date(2026, 7, 7, 10, 1, 30, 0, time.UTC),
 		999,
 	)
@@ -164,7 +165,7 @@ func TestIntegrationDoctorDoesNotOverwriteExistingCodexCostWhenRecoveringSession
 	newTestState(t)
 	paths := currentTestPaths(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
-	codexHome := t.TempDir()
+	codexHome := testutil.CanonicalTempDir(t)
 	setTestEnvironment(t, "CODEX_HOME", codexHome)
 	startedAt := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	store := taskstate.NewStoreWithClock(paths, func() time.Time { return startedAt })
@@ -206,7 +207,7 @@ func TestIntegrationDoctorLeavesTotalOnlyCodexUsageCostUnknown(t *testing.T) {
 	newTestState(t)
 	paths := currentTestPaths(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
-	setTestEnvironment(t, "CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex-home"))
+	setTestEnvironment(t, "CODEX_HOME", filepath.Join(testutil.CanonicalTempDir(t), "missing-codex-home"))
 	store := taskstate.NewStoreWithClock(paths, func() time.Time {
 		return time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	})
@@ -235,7 +236,7 @@ func TestIntegrationDoctorStampsStoredCodexCostsWithoutSessionLogRecorrelation(t
 	newTestState(t)
 	paths := currentTestPaths(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
-	setTestEnvironment(t, "CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex-home"))
+	setTestEnvironment(t, "CODEX_HOME", filepath.Join(testutil.CanonicalTempDir(t), "missing-codex-home"))
 	store := taskstate.NewStoreWithClock(paths, func() time.Time {
 		return time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	})
@@ -303,7 +304,7 @@ func TestIntegrationDoctorBackfillSelectsPricingByExecutionStart(t *testing.T) {
 	newTestState(t)
 	paths := currentTestPaths(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
-	setTestEnvironment(t, "CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex-home"))
+	setTestEnvironment(t, "CODEX_HOME", filepath.Join(testutil.CanonicalTempDir(t), "missing-codex-home"))
 	startedAt := time.Date(2026, 7, 29, 23, 59, 59, 0, time.UTC)
 	store := taskstate.NewStoreWithClock(paths, func() time.Time { return startedAt })
 	run, err := store.StartRun("alpha", "op-effective-price", taskstate.StartRunOptions{
@@ -346,7 +347,7 @@ func TestIntegrationDoctorFallsBackToRegisteredRepoRootWhenTaskTargetIsMissing(t
 	newTestState(t)
 	paths := currentTestPaths(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
-	codexHome := t.TempDir()
+	codexHome := testutil.CanonicalTempDir(t)
 	setTestEnvironment(t, "CODEX_HOME", codexHome)
 
 	store := taskstate.NewStoreWithClock(paths, clockSequence(
@@ -375,7 +376,7 @@ func TestIntegrationDoctorFallsBackToRegisteredRepoRootWhenTaskTargetIsMissing(t
 		t,
 		codexHome,
 		"wrong-repo-session",
-		filepath.Join(t.TempDir(), "wrong-repo"),
+		filepath.Join(testutil.CanonicalTempDir(t), "wrong-repo"),
 		time.Date(2026, 7, 7, 10, 1, 30, 0, time.UTC),
 		99,
 	)
@@ -395,7 +396,7 @@ func TestIntegrationDoctorRecoversPiUsageAndReportedCost(t *testing.T) {
 	newTestState(t)
 	paths := currentTestPaths(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
-	piSessionDir := t.TempDir()
+	piSessionDir := testutil.CanonicalTempDir(t)
 	setTestEnvironment(t, "PI_CODING_AGENT_SESSION_DIR", piSessionDir)
 
 	store := taskstate.NewStoreWithClock(paths, clockSequence(
@@ -459,7 +460,7 @@ func TestIntegrationDoctorRefreshesStoredPiReportedCost(t *testing.T) {
 	newTestState(t)
 	paths := currentTestPaths(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
-	piSessionDir := t.TempDir()
+	piSessionDir := testutil.CanonicalTempDir(t)
 	setTestEnvironment(t, "PI_CODING_AGENT_SESSION_DIR", piSessionDir)
 	startedAt := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	store := taskstate.NewStoreWithClock(paths, func() time.Time { return startedAt })
@@ -510,7 +511,7 @@ func testDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(
 	newTestState(t)
 	paths := currentTestPaths(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
-	piSessionDir := t.TempDir()
+	piSessionDir := testutil.CanonicalTempDir(t)
 	setTestEnvironment(t, "PI_CODING_AGENT_SESSION_DIR", piSessionDir)
 
 	startedAt := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
@@ -629,7 +630,7 @@ func TestIntegrationDoctorRecoversPiUsageWhenMatchedSessionHasNoReportedCost(t *
 	newTestState(t)
 	paths := currentTestPaths(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
-	piSessionDir := t.TempDir()
+	piSessionDir := testutil.CanonicalTempDir(t)
 	setTestEnvironment(t, "PI_CODING_AGENT_SESSION_DIR", piSessionDir)
 
 	store := taskstate.NewStoreWithClock(paths, clockSequence(
@@ -678,7 +679,7 @@ func TestIntegrationDoctorDoesNotRecoverPiCostWhenMatchedSessionHasNoReportedCos
 	newTestState(t)
 	paths := currentTestPaths(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
-	piSessionDir := t.TempDir()
+	piSessionDir := testutil.CanonicalTempDir(t)
 	setTestEnvironment(t, "PI_CODING_AGENT_SESSION_DIR", piSessionDir)
 
 	store := taskstate.NewStoreWithClock(paths, clockSequence(
@@ -737,7 +738,7 @@ func TestIntegrationDoctorRecoversUsageForUnfinishedExecution(t *testing.T) {
 	newTestState(t)
 	paths := currentTestPaths(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
-	codexHome := t.TempDir()
+	codexHome := testutil.CanonicalTempDir(t)
 	setTestEnvironment(t, "CODEX_HOME", codexHome)
 
 	store := taskstate.NewStoreWithClock(paths, clockSequence(
@@ -776,7 +777,7 @@ func TestIntegrationDoctorReportsAmbiguousAndNoMatchWithoutMutating(t *testing.T
 	newTestState(t)
 	paths := currentTestPaths(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
-	codexHome := t.TempDir()
+	codexHome := testutil.CanonicalTempDir(t)
 	setTestEnvironment(t, "CODEX_HOME", codexHome)
 
 	store := taskstate.NewStoreWithClock(paths, clockSequence(
@@ -833,7 +834,7 @@ func TestIntegrationDoctorReportsAmbiguousPiMatchesWithoutMutating(t *testing.T)
 	newTestState(t)
 	paths := currentTestPaths(t)
 	repoDir := registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
-	piSessionDir := t.TempDir()
+	piSessionDir := testutil.CanonicalTempDir(t)
 	setTestEnvironment(t, "PI_CODING_AGENT_SESSION_DIR", piSessionDir)
 
 	store := taskstate.NewStoreWithClock(paths, clockSequence(
@@ -889,8 +890,8 @@ func TestIntegrationDoctorRecoversSyncConflictTerminalUsage(t *testing.T) {
 	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
 		repoDir: {stdout: `[{"id":"op-sync","title":"Sync conflict","status":"in_progress","priority":1,"issue_type":"task"}]`},
 	})
-	codexHome := t.TempDir()
-	piSessionDir := t.TempDir()
+	codexHome := testutil.CanonicalTempDir(t)
+	piSessionDir := testutil.CanonicalTempDir(t)
 	setTestEnvironment(t, "CODEX_HOME", codexHome)
 	setTestEnvironment(t, "PI_CODING_AGENT_SESSION_DIR", piSessionDir)
 
@@ -1016,10 +1017,10 @@ func TestIntegrationDoctorPrefersRecordedSyncConflictWorktreeBeforeFallbackDirs(
 	newTestState(t)
 	paths := currentTestPaths(t)
 	registerLocalTaskTestRepo(t, "alpha", "Alpha", "op")
-	codexHome := t.TempDir()
+	codexHome := testutil.CanonicalTempDir(t)
 	setTestEnvironment(t, "CODEX_HOME", codexHome)
-	targetWorktree := filepath.Join(t.TempDir(), "target-worktree")
-	eventWorktree := filepath.Join(t.TempDir(), "event-worktree")
+	targetWorktree := filepath.Join(testutil.CanonicalTempDir(t), "target-worktree")
+	eventWorktree := filepath.Join(testutil.CanonicalTempDir(t), "event-worktree")
 
 	startedAt := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	store := taskstate.NewStoreWithClock(paths, clockSequence(
@@ -1079,7 +1080,7 @@ func TestIntegrationDoctorTraversesAllRegisteredRepos(t *testing.T) {
 	must := require.New(t)
 	newTestState(t)
 	paths := currentTestPaths(t)
-	root := t.TempDir()
+	root := testutil.CanonicalTempDir(t)
 	alphaDir := filepath.Join(root, "alpha")
 	betaDir := filepath.Join(root, "beta")
 	must.NoError(os.MkdirAll(alphaDir, 0o755))
@@ -1088,7 +1089,7 @@ func TestIntegrationDoctorTraversesAllRegisteredRepos(t *testing.T) {
 		{ID: "alpha", Name: "Alpha", Path: alphaDir, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "op"},
 		{ID: "beta", Name: "Beta", Path: betaDir, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "bt"},
 	}}))
-	codexHome := t.TempDir()
+	codexHome := testutil.CanonicalTempDir(t)
 	setTestEnvironment(t, "CODEX_HOME", codexHome)
 
 	store := taskstate.NewStoreWithClock(paths, clockSequence(

@@ -11,6 +11,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/beads"
 	"github.com/hea3ven/orpheus/internal/task"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 func TestIntegrationUpdateServiceRejectsRealBeadsParentDescendantCycle(t *testing.T) {
@@ -19,7 +20,7 @@ func TestIntegrationUpdateServiceRejectsRealBeadsParentDescendantCycle(t *testin
 		t.Skip("bd executable is required for Beads integration test")
 	}
 
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	t.Setenv("BEADS_DIR", "")
 	initCommand := exec.Command(binary, "init", "--prefix", "it", "--non-interactive", "--skip-agents", "--skip-hooks", "--quiet")
 	initCommand.Dir = dir
@@ -69,7 +70,7 @@ func TestIntegrationUpdateServiceSupportsCrossTypeBlockingDependencies(t *testin
 		t.Skip("bd executable is required for Beads integration test")
 	}
 
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	t.Setenv("BEADS_DIR", "")
 	initCommand := exec.Command(binary, "init", "--prefix", "it", "--non-interactive", "--skip-agents", "--skip-hooks", "--quiet")
 	initCommand.Dir = dir
@@ -129,7 +130,7 @@ func TestIntegrationUpdateServiceDoesNotRemoveRelatedDependency(t *testing.T) {
 		t.Skip("bd executable is required for Beads integration test")
 	}
 
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	t.Setenv("BEADS_DIR", "")
 	initCommand := exec.Command(binary, "init", "--prefix", "it", "--non-interactive", "--skip-agents", "--skip-hooks", "--quiet")
 	initCommand.Dir = dir
@@ -197,7 +198,7 @@ func TestIntegrationUpdateServiceRejectsNonBlockingDependencyBeforeContentMutati
 		t.Skip("bd executable is required for Beads integration test")
 	}
 
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	t.Setenv("BEADS_DIR", "")
 	initCommand := exec.Command(binary, "init", "--prefix", "it", "--non-interactive", "--skip-agents", "--skip-hooks", "--quiet")
 	initCommand.Dir = dir
@@ -257,7 +258,7 @@ func TestIntegrationTaskBackendCreateRecordsBlockingDependencies(t *testing.T) {
 		t.Skip("bd executable is required for Beads integration test")
 	}
 
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	t.Setenv("BEADS_DIR", "")
 	initCommand := exec.Command(binary, "init", "--prefix", "it", "--non-interactive", "--skip-agents", "--skip-hooks", "--quiet")
 	initCommand.Dir = dir
@@ -302,7 +303,7 @@ func TestIntegrationManagedTaskBackendRepairsRealBeadsSchemaDrift(t *testing.T) 
 		t.Skip("dolt executable is required to prepare stale Beads schema")
 	}
 
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	t.Setenv("BEADS_DIR", "")
 	initCommand := exec.Command(binary, "init", "--prefix", "it", "--non-interactive", "--skip-agents", "--skip-hooks", "--quiet")
 	initCommand.Dir = dir

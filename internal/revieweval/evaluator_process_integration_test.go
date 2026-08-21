@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/testguard"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,7 +22,7 @@ func TestIntegrationExecuteRunReportsUsageAndCostUnknownWhenProvisioningFailsBef
 
 	result := executeRun(
 		context.Background(),
-		t.TempDir(),
+		testutil.CanonicalTempDir(t),
 		Options{CodexModel: "test-codex", PiModel: "test-pi"},
 		runSpec{Harness: HarnessCodex, Variant: VariantExhaustive, Scenario: ScenarioGeneral, Repetition: 1},
 	)
@@ -39,14 +40,14 @@ func TestIntegrationPrepareRunInitializesRepoLocalBeadsWhenOperatorBeadsDirIsSet
 	is := assert.New(t)
 	must := require.New(t)
 	fakeReviewEvalBD(t)
-	operatorBeadsDir := filepath.Join(t.TempDir(), "operator-beads")
+	operatorBeadsDir := filepath.Join(testutil.CanonicalTempDir(t), "operator-beads")
 	must.NoError(os.MkdirAll(operatorBeadsDir, 0o755))
 	t.Setenv("BEADS_DIR", operatorBeadsDir)
 	t.Setenv("BD_NON_INTERACTIVE", "0")
 
 	setup, err := prepareRun(
 		context.Background(),
-		t.TempDir(),
+		testutil.CanonicalTempDir(t),
 		scenarioByName(ScenarioGeneral),
 		runSpec{Harness: HarnessCodex, Variant: VariantLegacy, Scenario: ScenarioGeneral, Repetition: 1},
 	)
@@ -62,7 +63,7 @@ func TestIntegrationRunPipelineRecordsCodexPromptArgWithEvaluationSessionName(t 
 	is := assert.New(t)
 	must := require.New(t)
 	fakeReviewEvalBD(t)
-	root := t.TempDir()
+	root := testutil.CanonicalTempDir(t)
 	scenarioDef := architectureScenario()
 	spec := runSpec{Harness: HarnessCodex, Variant: VariantLegacy, Scenario: ScenarioArchitecture, Repetition: 1}
 	setup, err := prepareRun(context.Background(), root, scenarioDef, spec)
@@ -96,7 +97,7 @@ func TestIntegrationRunPipelineRecordsCodexPromptArgWithEvaluationSessionName(t 
 func fakeReviewEvalBD(t *testing.T) {
 	t.Helper()
 
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	path := filepath.Join(binDir, "bd")
 	const script = `#!/bin/sh
 case "$*" in

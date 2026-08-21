@@ -221,7 +221,7 @@ func TestTaskPurposeSessionNames(t *testing.T) {
 func TestTaskOrpheusMetadataProjectsKnownKeys(t *testing.T) {
 	taskItem := task.Task{Metadata: task.Metadata{
 		task.MetadataBranch:   "task/op-1-model",
-		task.MetadataWorktree: "/tmp/orpheus/op-1",
+		task.MetadataWorktree: "/fixture/orpheus/op-1",
 		task.MetadataPRURL:    "https://github.com/example/repo/pull/1",
 		"backend.custom":      "preserved but not projected",
 	}}
@@ -230,7 +230,7 @@ func TestTaskOrpheusMetadataProjectsKnownKeys(t *testing.T) {
 	expected := task.OrpheusMetadata{
 		Branch:      "task/op-1-model",
 		HasBranch:   true,
-		Worktree:    "/tmp/orpheus/op-1",
+		Worktree:    "/fixture/orpheus/op-1",
 		HasWorktree: true,
 		PRURL:       "https://github.com/example/repo/pull/1",
 		HasPRURL:    true,
@@ -271,10 +271,10 @@ func TestTaskOrpheusMetadataRepresentsAbsentFields(t *testing.T) {
 		{
 			name: "partial metadata",
 			metadata: task.Metadata{
-				task.MetadataWorktree: "/tmp/orpheus/op-1",
+				task.MetadataWorktree: "/fixture/orpheus/op-1",
 			},
 			expected: task.OrpheusMetadata{
-				Worktree:    "/tmp/orpheus/op-1",
+				Worktree:    "/fixture/orpheus/op-1",
 				HasWorktree: true,
 			},
 		},
@@ -299,7 +299,7 @@ func TestQueryResultRepresentsRowsAndRepoFailures(t *testing.T) {
 				ID:       "ra-1",
 				Title:    "ready task",
 				Labels:   []string{"m2"},
-				Metadata: task.Metadata{task.MetadataWorktree: "/tmp/worktree"},
+				Metadata: task.Metadata{task.MetadataWorktree: "/fixture/worktree"},
 			},
 		}},
 		Failures: []task.RepoFailure{{
@@ -325,7 +325,7 @@ func TestQueryResultRepresentsRowsAndRepoFailures(t *testing.T) {
 	if result.Rows[0].Task.Labels[0] != "m2" {
 		t.Fatalf("original row label changed to %q", result.Rows[0].Task.Labels[0])
 	}
-	if result.Rows[0].Task.Metadata[task.MetadataWorktree] != "/tmp/worktree" {
+	if result.Rows[0].Task.Metadata[task.MetadataWorktree] != "/fixture/worktree" {
 		t.Fatalf("original row metadata changed to %q", result.Rows[0].Task.Metadata[task.MetadataWorktree])
 	}
 }

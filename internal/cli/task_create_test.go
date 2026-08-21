@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/registry"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -112,7 +113,7 @@ func TestIntegrationTaskCreateFailsWithoutRepositoryGuidance(t *testing.T) {
 
 func fakeTaskCreateBD(t *testing.T) string {
 	t.Helper()
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	logPath := filepath.Join(binDir, "bd.log")
 	script := `#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_BD_LOG"

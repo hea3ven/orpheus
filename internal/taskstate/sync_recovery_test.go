@@ -11,7 +11,7 @@ import (
 func TestStorePersistsAndClearsSyncConflictRecoveryOperation(t *testing.T) {
 	store := newTestStore(t, time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC))
 	operation, err := store.BeginSyncConflictOperation("alpha", "op-1", taskstate.SyncConflictOperation{
-		ID: "sync-1", Branch: "orpheus/op-1", Worktree: "/tmp/op-1", DefaultBranch: "main",
+		ID: "sync-1", Branch: "orpheus/op-1", Worktree: "/fixture/op-1", DefaultBranch: "main",
 		Checkpoint: taskstate.SyncConflictCheckpoint{LocalHead: "local", RemoteHead: "remote", MergeSource: "refs/remotes/origin/main"},
 		Phase:      taskstate.SyncConflictPhasePrepared,
 	})
@@ -57,7 +57,7 @@ func TestStorePersistsAndClearsSyncConflictRecoveryOperation(t *testing.T) {
 func TestStoreKeepsUnresolvedSyncConflictOperationAsGuard(t *testing.T) {
 	store := newTestStore(t, time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC))
 	operation, err := store.BeginSyncConflictOperation("alpha", "op-1", taskstate.SyncConflictOperation{
-		ID: "sync-1", Branch: "orpheus/op-1", Worktree: "/tmp/op-1", DefaultBranch: "main",
+		ID: "sync-1", Branch: "orpheus/op-1", Worktree: "/fixture/op-1", DefaultBranch: "main",
 		Checkpoint: taskstate.SyncConflictCheckpoint{LocalHead: "local", RemoteHead: "remote", MergeSource: "refs/remotes/origin/main"}, Phase: taskstate.SyncConflictPhasePrepared,
 	})
 	if err != nil {

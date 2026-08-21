@@ -19,11 +19,12 @@ import (
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testguard"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 //nolint:funlen // The redirected-output regression is clearer as one end-to-end runner test.
 func TestIntegrationRunPipelineRestoresHeaderWrittenToWorktreeStderr(t *testing.T) {
-	workdir := t.TempDir()
+	workdir := testutil.CanonicalTempDir(t)
 	initReviewTestGitRepo(t, workdir)
 	candidatePath := filepath.Join(workdir, "candidate.txt")
 	if err := os.WriteFile(candidatePath, []byte("base\n"), 0o644); err != nil {
@@ -101,7 +102,7 @@ func TestIntegrationRunPipelineRestoresHeaderWrittenToWorktreeStderr(t *testing.
 }
 
 func TestIntegrationRunPipelineVerboseDiagnosticsDistinguishCheckExitAndRestoration(t *testing.T) {
-	workdir := t.TempDir()
+	workdir := testutil.CanonicalTempDir(t)
 	initReviewTestGitRepoWithCandidateChange(t, workdir)
 
 	check := writeReviewTestScript(t, workdir, "failing-check", `#!/bin/sh
@@ -151,7 +152,7 @@ exit 7
 }
 
 func TestIntegrationRunPipelineVerboseDiagnosticsCaptureAndRestoreCandidateMutation(t *testing.T) {
-	workdir := t.TempDir()
+	workdir := testutil.CanonicalTempDir(t)
 	candidatePath := initReviewTestGitRepoWithCandidateChange(t, workdir)
 
 	mutator := writeReviewTestScript(t, workdir, "mutating-check", `#!/bin/sh
@@ -241,7 +242,7 @@ func mustReadFile(t *testing.T, path string) []byte {
 }
 
 func TestIntegrationRunPipelineInteractivePassingCheckClearsRollingTail(t *testing.T) {
-	workdir := t.TempDir()
+	workdir := testutil.CanonicalTempDir(t)
 	initReviewTestGitRepo(t, workdir)
 	check := writeReviewTestScript(t, workdir, "passing-check", `#!/bin/sh
 i=1
@@ -291,7 +292,7 @@ done
 }
 
 func TestIntegrationRunPipelineInteractiveBlockedCheckLeavesExpandedRollingTail(t *testing.T) {
-	workdir := t.TempDir()
+	workdir := testutil.CanonicalTempDir(t)
 	initReviewTestGitRepo(t, workdir)
 	check := writeReviewTestScript(t, workdir, "blocked-check", `#!/bin/sh
 i=1
@@ -340,7 +341,7 @@ exit 7
 }
 
 func TestIntegrationRunPipelinePausesBeforeManualStep(t *testing.T) {
-	workdir := t.TempDir()
+	workdir := testutil.CanonicalTempDir(t)
 	initReviewTestGitRepo(t, workdir)
 	check := writeReviewTestScript(t, workdir, "passing-check", `#!/bin/sh
 printf 'checked\n'
@@ -393,10 +394,10 @@ printf 'checked\n'
 }
 
 func TestIntegrationRunPipelineHunkManualCommandCapturesNotesAfterCommandExit(t *testing.T) {
-	workdir := t.TempDir()
+	workdir := testutil.CanonicalTempDir(t)
 	initReviewTestGitRepo(t, workdir)
 
-	controlDir := t.TempDir()
+	controlDir := testutil.CanonicalTempDir(t)
 	initialCapturePath := filepath.Join(controlDir, "initial-capture")
 	commandCompletePath := filepath.Join(controlDir, "command-complete")
 	installReviewTestHunkCommand(t, initialCapturePath, commandCompletePath)
@@ -453,10 +454,10 @@ done
 }
 
 func TestIntegrationRunPipelineHunkManualCommandContinuesWhenSessionMissing(t *testing.T) {
-	workdir := t.TempDir()
+	workdir := testutil.CanonicalTempDir(t)
 	initReviewTestGitRepo(t, workdir)
 
-	controlDir := t.TempDir()
+	controlDir := testutil.CanonicalTempDir(t)
 	hunkCallPath := filepath.Join(controlDir, "hunk-called")
 	installReviewTestHunkCommandScript(t, fmt.Sprintf(`#!/bin/sh
 if [ "$1" = "session" ] && [ "$2" = "comment" ] && [ "$3" = "list" ]; then
@@ -516,10 +517,10 @@ exit 65
 }
 
 func TestIntegrationRunPipelineGenericManualCommandDoesNotPollHunkNotes(t *testing.T) {
-	workdir := t.TempDir()
+	workdir := testutil.CanonicalTempDir(t)
 	initReviewTestGitRepo(t, workdir)
 
-	controlDir := t.TempDir()
+	controlDir := testutil.CanonicalTempDir(t)
 	hunkCallPath := filepath.Join(controlDir, "hunk-called")
 	installReviewTestHunkCommandScript(t, fmt.Sprintf(`#!/bin/sh
 : > %s
@@ -568,7 +569,7 @@ printf '{"comments":[{"noteId":"unexpected","source":"user","body":"unexpected"}
 }
 
 func TestIntegrationRunPipelineHunkManualCommandFailureRemainsOperationalError(t *testing.T) {
-	workdir := t.TempDir()
+	workdir := testutil.CanonicalTempDir(t)
 	initReviewTestGitRepo(t, workdir)
 
 	installReviewTestHunkCommandScript(t, `#!/bin/sh
@@ -1047,7 +1048,7 @@ type agentReviewPipelineResult struct {
 func newAgentReviewPipelineHarness(t *testing.T) agentReviewPipelineHarness {
 	t.Helper()
 
-	workdir := t.TempDir()
+	workdir := testutil.CanonicalTempDir(t)
 	initReviewTestGitRepo(t, workdir)
 	store, attempt := startReviewTestAttempt(t)
 	return agentReviewPipelineHarness{store: store, attempt: attempt, workdir: workdir}
@@ -1176,7 +1177,7 @@ exit 65
 func installReviewTestHunkCommandScript(t *testing.T, script string) {
 	t.Helper()
 
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	hunkPath := filepath.Join(binDir, "hunk")
 	if err := testguard.WriteExecutable(hunkPath, []byte(script)); err != nil {
 		t.Fatalf("write fake hunk command: %v", err)
@@ -1283,9 +1284,9 @@ func (t *visualTerminal) ensureRow() {
 }
 
 func TestIntegrationRunPipelineRestartsBlockedCheckInSameAttempt(t *testing.T) {
-	workdir := t.TempDir()
+	workdir := testutil.CanonicalTempDir(t)
 	initReviewTestGitRepo(t, workdir)
-	marker := filepath.Join(t.TempDir(), "ready")
+	marker := filepath.Join(testutil.CanonicalTempDir(t), "ready")
 	check := writeReviewTestScript(t, workdir, "retry-check", fmt.Sprintf(`#!/bin/sh
 if [ ! -f %q ]; then exit 7; fi
 `, marker))
@@ -1320,7 +1321,7 @@ if [ ! -f %q ]; then exit 7; fi
 }
 
 func TestIntegrationRunPipelineRestartedBlockerRetainsAuthoritativeNumber(t *testing.T) {
-	workdir := t.TempDir()
+	workdir := testutil.CanonicalTempDir(t)
 	initReviewTestGitRepo(t, workdir)
 	check := writeReviewTestScript(t, workdir, "blocked-check", "#!/bin/sh\nexit 7\n")
 	store, attempt := startReviewTestAttempt(t)
@@ -1357,7 +1358,7 @@ func TestIntegrationRunPipelineRestartedBlockerRetainsAuthoritativeNumber(t *tes
 }
 
 func TestIntegrationRunPipelinePausesAndResumesAutomatedBlockerDecision(t *testing.T) {
-	workdir := t.TempDir()
+	workdir := testutil.CanonicalTempDir(t)
 	initReviewTestGitRepo(t, workdir)
 	check := writeReviewTestScript(t, workdir, "blocked-check", "#!/bin/sh\nexit 7\n")
 	store, attempt := startReviewTestAttempt(t)

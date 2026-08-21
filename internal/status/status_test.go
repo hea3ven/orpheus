@@ -226,7 +226,7 @@ func externalRefGateFixture() (task.SnapshotResult, status.RunStateIndex) {
 					IssueType: task.IssueTypeTask,
 					Metadata: task.Metadata{
 						task.MetadataBranch:   "main",
-						task.MetadataWorktree: "/tmp/gated",
+						task.MetadataWorktree: "/fixture/gated",
 					},
 				},
 				{ID: "gated-fixed", Title: "external ref set", ExternalRef: "TREX-1234", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
@@ -263,7 +263,7 @@ func externalRefGateFixture() (task.SnapshotResult, status.RunStateIndex) {
 
 func TestProjectWithRunStatesShowsSuccessfulMainCompletionInReview(t *testing.T) {
 	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
-		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/tmp/alpha", DefaultBranch: "main"},
+		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/fixture/alpha", DefaultBranch: "main"},
 		Tasks: []task.Task{{
 			ID:        "a-main",
 			Title:     "local main review",
@@ -271,7 +271,7 @@ func TestProjectWithRunStatesShowsSuccessfulMainCompletionInReview(t *testing.T)
 			IssueType: task.IssueTypeTask,
 			Metadata: task.Metadata{
 				task.MetadataBranch:   "main",
-				task.MetadataWorktree: "/tmp/alpha",
+				task.MetadataWorktree: "/fixture/alpha",
 			},
 		}},
 	}}}
@@ -289,8 +289,8 @@ func TestProjectWithRunStatesShowsSuccessfulMainCompletionInReview(t *testing.T)
 	localStates := status.LocalTaskStateIndex{
 		status.RunStateKey("alpha", "a-main"): {
 			LatestRun:       &latestRun,
-			GitFacts:        testTaskTarget("main", "/tmp/alpha"),
-			ExpectedTargets: testExpectedTargets("main", "/tmp/alpha", "orpheus/a-main", "/tmp/orpheus/worktrees/a-main"),
+			GitFacts:        testTaskTarget("main", "/fixture/alpha"),
+			ExpectedTargets: testExpectedTargets("main", "/fixture/alpha", "orpheus/a-main", "/fixture/orpheus/worktrees/a-main"),
 		},
 	}
 
@@ -340,7 +340,7 @@ func TestProjectWithRunStatesShowsWorktreeCompletionWithoutCommitReadyForTaskDon
 
 func TestProjectWithRunStatesDoesNotInferRepoRootReviewWithoutCompletion(t *testing.T) {
 	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
-		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/tmp/alpha", DefaultBranch: "main"},
+		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/fixture/alpha", DefaultBranch: "main"},
 		Tasks: []task.Task{{
 			ID:        "a-main",
 			Title:     "local main review",
@@ -348,7 +348,7 @@ func TestProjectWithRunStatesDoesNotInferRepoRootReviewWithoutCompletion(t *test
 			IssueType: task.IssueTypeTask,
 			Metadata: task.Metadata{
 				task.MetadataBranch:   "main",
-				task.MetadataWorktree: "/tmp/alpha",
+				task.MetadataWorktree: "/fixture/alpha",
 			},
 		}},
 	}}}
@@ -372,7 +372,7 @@ func TestProjectWithRunStatesDoesNotInferRepoRootReviewWithoutCompletion(t *test
 func TestProjectWithLocalTaskStatesDoesNotShowClosedFinalizationAsLocalReview(t *testing.T) {
 	closedAt := time.Date(2026, 6, 3, 11, 1, 0, 0, time.UTC)
 	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
-		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/tmp/alpha", DefaultBranch: "main"},
+		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/fixture/alpha", DefaultBranch: "main"},
 		Tasks: []task.Task{{
 			ID:        "a-main",
 			Title:     "local main finalized",
@@ -380,7 +380,7 @@ func TestProjectWithLocalTaskStatesDoesNotShowClosedFinalizationAsLocalReview(t 
 			IssueType: task.IssueTypeTask,
 			Metadata: task.Metadata{
 				task.MetadataBranch:   "main",
-				task.MetadataWorktree: "/tmp/alpha",
+				task.MetadataWorktree: "/fixture/alpha",
 			},
 		}},
 	}}}
@@ -398,12 +398,12 @@ func TestProjectWithLocalTaskStatesDoesNotShowClosedFinalizationAsLocalReview(t 
 	localStates := status.LocalTaskStateIndex{
 		status.RunStateKey("alpha", "a-main"): {
 			LatestRun: &latestRun,
-			GitFacts:  testTaskTarget("main", "/tmp/alpha"),
+			GitFacts:  testTaskTarget("main", "/fixture/alpha"),
 			Finalization: taskstate.Finalization{
 				Commit:   "abc123",
 				ClosedAt: &closedAt,
 			},
-			ExpectedTargets: testExpectedTargets("main", "/tmp/alpha", "orpheus/a-main", "/tmp/orpheus/worktrees/a-main"),
+			ExpectedTargets: testExpectedTargets("main", "/fixture/alpha", "orpheus/a-main", "/fixture/orpheus/worktrees/a-main"),
 		},
 	}
 
@@ -521,16 +521,16 @@ func TestProjectWithLocalTaskStatesClassifiesLatestReviewAttempts(t *testing.T) 
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			snapshot := localReviewSnapshot("a-main", "/tmp/alpha")
-			latestRun := localReviewRun("/tmp/alpha")
+			snapshot := localReviewSnapshot("a-main", "/fixture/alpha")
+			latestRun := localReviewRun("/fixture/alpha")
 			localStates := status.LocalTaskStateIndex{
 				status.RunStateKey("alpha", "a-main"): {
 					LatestRun:                 &latestRun,
 					Runs:                      tt.runs,
-					GitFacts:                  testTaskTarget("main", "/tmp/alpha"),
+					GitFacts:                  testTaskTarget("main", "/fixture/alpha"),
 					LatestReview:              &tt.review,
 					LatestFinalizationFailure: tt.failure,
-					ExpectedTargets:           testExpectedTargets("main", "/tmp/alpha", "orpheus/a-main", "/tmp/orpheus/worktrees/a-main"),
+					ExpectedTargets:           testExpectedTargets("main", "/fixture/alpha", "orpheus/a-main", "/fixture/orpheus/worktrees/a-main"),
 				},
 			}
 
@@ -845,7 +845,7 @@ func projectionEntryByTaskID(t *testing.T, projection status.Projection, taskID 
 
 func projectWorktreeCompletion(completion taskstate.Completion) status.Projection {
 	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
-		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/tmp/alpha", DefaultBranch: "main"},
+		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/fixture/alpha", DefaultBranch: "main"},
 		Tasks: []task.Task{{
 			ID:        "a-worktree",
 			Title:     "worktree review",
@@ -853,7 +853,7 @@ func projectWorktreeCompletion(completion taskstate.Completion) status.Projectio
 			IssueType: task.IssueTypeTask,
 			Metadata: task.Metadata{
 				task.MetadataBranch:   "orpheus/a-worktree",
-				task.MetadataWorktree: "/tmp/orpheus/worktrees/a-worktree",
+				task.MetadataWorktree: "/fixture/orpheus/worktrees/a-worktree",
 			},
 		}},
 	}}}
@@ -865,8 +865,8 @@ func projectWorktreeCompletion(completion taskstate.Completion) status.Projectio
 	localStates := status.LocalTaskStateIndex{
 		status.RunStateKey("alpha", "a-worktree"): {
 			LatestRun:       &latestRun,
-			GitFacts:        testTaskTarget("orpheus/a-worktree", "/tmp/orpheus/worktrees/a-worktree"),
-			ExpectedTargets: testExpectedTargets("main", "/tmp/alpha", "orpheus/a-worktree", "/tmp/orpheus/worktrees/a-worktree"),
+			GitFacts:        testTaskTarget("orpheus/a-worktree", "/fixture/orpheus/worktrees/a-worktree"),
+			ExpectedTargets: testExpectedTargets("main", "/fixture/alpha", "orpheus/a-worktree", "/fixture/orpheus/worktrees/a-worktree"),
 		},
 	}
 	return status.ProjectWithLocalTaskStates(snapshot, localStates)

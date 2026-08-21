@@ -12,6 +12,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -470,7 +471,7 @@ func diagnosticLineContaining(t *testing.T, diagnostics string, contains ...stri
 func withFailingBDInit(t *testing.T, exitCode int, stderrText string) {
 	t.Helper()
 
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	script := fmt.Sprintf(`#!/bin/sh
 printf '%%s\n' %s >&2
 exit %d

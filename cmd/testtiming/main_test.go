@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -159,7 +160,7 @@ func TestFailuresFromEventsPreservesFailingTestOutput(t *testing.T) {
 func TestHandleBaselineRejectsIncompleteSampleSetWithoutWriting(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "baseline.json")
+	path := filepath.Join(testutil.CanonicalTempDir(t), "baseline.json")
 	original := initialBaseline(report{Lane: "unit", Complete: true, Samples: 1, Runs: []run{{}}, Median: summary{TestCount: 1}})
 	if err := writeJSON(path, original); err != nil {
 		t.Fatalf("write baseline: %v", err)
@@ -210,7 +211,7 @@ func TestParseOptionsRejectsMultipleBaselineActions(t *testing.T) {
 func TestHandleBaselineReplacesCompleteLane(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "baseline.json")
+	path := filepath.Join(testutil.CanonicalTempDir(t), "baseline.json")
 	original := initialBaseline(report{Lane: "unit", Complete: true, Samples: 1, Runs: []run{{}}, Median: summary{WallSeconds: 10, TestCount: 1}})
 	if err := writeJSON(path, original); err != nil {
 		t.Fatalf("write baseline: %v", err)
@@ -232,7 +233,7 @@ func TestHandleBaselineReplacesCompleteLane(t *testing.T) {
 func TestHandleBaselineUpdateRejectsChangedTestCount(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "baseline.json")
+	path := filepath.Join(testutil.CanonicalTempDir(t), "baseline.json")
 	original := initialBaseline(report{Lane: "unit", Complete: true, Samples: 1, Runs: []run{{}}, Median: summary{TestCount: 4}})
 	if err := writeJSON(path, original); err != nil {
 		t.Fatalf("write baseline: %v", err)

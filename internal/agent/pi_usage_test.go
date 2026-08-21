@@ -8,6 +8,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,8 +16,8 @@ import (
 func TestCapturePiUsageCorrelatesSessionAssistantMessageUsageAndReportedCost(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	root := t.TempDir()
-	workdir := filepath.Join(t.TempDir(), "worktree")
+	root := testutil.CanonicalTempDir(t)
+	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 	must.NoError(os.MkdirAll(workdir, 0o755))
 	sessionPath := filepath.Join(root, "project", "2026-07-07T10-00-00-000Z_pi-session.jsonl")
 	writePiSessionLog(t, sessionPath, piSessionLogFixture{
@@ -53,8 +54,8 @@ func TestCapturePiUsageCorrelatesSessionAssistantMessageUsageAndReportedCost(t *
 func TestCapturePiUsageRejectsMismatchedRecordedSessionName(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	root := t.TempDir()
-	workdir := filepath.Join(t.TempDir(), "worktree")
+	root := testutil.CanonicalTempDir(t)
+	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 	must.NoError(os.MkdirAll(workdir, 0o755))
 	writePiSessionLog(t, filepath.Join(root, "one.jsonl"), piSessionLogFixture{
 		cwd:         workdir,
@@ -79,8 +80,8 @@ func TestCapturePiUsageRejectsMismatchedRecordedSessionName(t *testing.T) {
 func TestCapturePiUsageReportsAmbiguousMatches(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	root := t.TempDir()
-	workdir := filepath.Join(t.TempDir(), "worktree")
+	root := testutil.CanonicalTempDir(t)
+	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 	must.NoError(os.MkdirAll(workdir, 0o755))
 	startedAt := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	onePath := filepath.Join(root, "one.jsonl")
@@ -133,8 +134,8 @@ func TestCapturePiUsageReportsAmbiguousMatches(t *testing.T) {
 func TestCapturePiUsageIgnoresNonAssistantUsageFreeAndTopLevelUsageMessages(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	root := t.TempDir()
-	workdir := filepath.Join(t.TempDir(), "worktree")
+	root := testutil.CanonicalTempDir(t)
+	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 	must.NoError(os.MkdirAll(workdir, 0o755))
 	startedAt := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	sessionPath := filepath.Join(root, "only-unsupported-usage.jsonl")
@@ -162,8 +163,8 @@ func TestCapturePiUsageIgnoresNonAssistantUsageFreeAndTopLevelUsageMessages(t *t
 func TestCapturePiUsagePreservesNoAssistantUsageReasonForClosestSession(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
-	root := t.TempDir()
-	workdir := filepath.Join(t.TempDir(), "worktree")
+	root := testutil.CanonicalTempDir(t)
+	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 	must.NoError(os.MkdirAll(workdir, 0o755))
 	startedAt := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	writePiSessionLog(t, filepath.Join(root, "closest.jsonl"), piSessionLogFixture{

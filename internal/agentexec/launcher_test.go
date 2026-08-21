@@ -13,6 +13,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/testguard"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 func TestIntegrationAttachedLauncherBlocksSupportedAgentBeforePATHLookup(t *testing.T) {
@@ -25,7 +26,7 @@ func TestIntegrationCustomNamedTestBinaryRetainsSafetyGate(t *testing.T) {
 		return
 	}
 
-	binary := filepath.Join(t.TempDir(), "op-ejt-agentexec-testbin")
+	binary := filepath.Join(testutil.CanonicalTempDir(t), "op-ejt-agentexec-testbin")
 	build := exec.Command("go", "test", "-c", "-o", binary, ".")
 	build.Dir = "."
 	if output, err := build.CombinedOutput(); err != nil {
@@ -45,8 +46,8 @@ func assertSupportedAgentBlockedBeforePATHLookup(t *testing.T) {
 		t.Fatal("test safety guard is not active in this test binary")
 	}
 
-	binDir := t.TempDir()
-	marker := filepath.Join(t.TempDir(), "sentinel-ran")
+	binDir := testutil.CanonicalTempDir(t)
+	marker := filepath.Join(testutil.CanonicalTempDir(t), "sentinel-ran")
 	sentinel := filepath.Join(binDir, "codex")
 	if err := testguard.WriteExecutable(sentinel, []byte("#!/bin/sh\nprintf invoked > "+marker+"\n")); err != nil {
 		t.Fatalf("write sentinel: %v", err)
@@ -58,7 +59,7 @@ func assertSupportedAgentBlockedBeforePATHLookup(t *testing.T) {
 		Name:    "codex",
 		Harness: "codex",
 		Command: "codex",
-	}, agentexec.LaunchOptions{Dir: t.TempDir()})
+	}, agentexec.LaunchOptions{Dir: testutil.CanonicalTempDir(t)})
 
 	if err == nil {
 		t.Fatal("Run() error = nil, want test safety gate error")
@@ -75,14 +76,14 @@ func assertSupportedAgentBlockedBeforePATHLookup(t *testing.T) {
 }
 
 func TestIntegrationAttachedLauncherReportsDirectChildPIDBeforeWait(t *testing.T) {
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	fake := filepath.Join(binDir, "agent")
 	if err := testguard.WriteExecutable(fake, []byte("#!/bin/sh\nsleep 0.01\n")); err != nil {
 		t.Fatalf("write fake: %v", err)
 	}
 	var observed int
 	err := (agentexec.AttachedLauncher{}).Run(context.Background(), agentexec.Command{Name: "agent", Command: fake}, agentexec.LaunchOptions{
-		Dir: t.TempDir(),
+		Dir: testutil.CanonicalTempDir(t),
 		OnStart: func(pid int) error {
 			observed = pid
 			return nil
@@ -97,8 +98,8 @@ func TestIntegrationAttachedLauncherReportsDirectChildPIDBeforeWait(t *testing.T
 }
 
 func TestIntegrationAttachedLauncherRunsExplicitlyRegisteredFake(t *testing.T) {
-	binDir := t.TempDir()
-	marker := filepath.Join(t.TempDir(), "fake-ran")
+	binDir := testutil.CanonicalTempDir(t)
+	marker := filepath.Join(testutil.CanonicalTempDir(t), "fake-ran")
 	fake := filepath.Join(binDir, "pi")
 	if err := testguard.WriteExecutable(fake, []byte("#!/bin/sh\nprintf invoked > "+marker+"\n")); err != nil {
 		t.Fatalf("write fake: %v", err)
@@ -110,7 +111,7 @@ func TestIntegrationAttachedLauncherRunsExplicitlyRegisteredFake(t *testing.T) {
 		Name:    "pi",
 		Harness: "pi",
 		Command: "pi",
-	}, agentexec.LaunchOptions{Dir: t.TempDir()})
+	}, agentexec.LaunchOptions{Dir: testutil.CanonicalTempDir(t)})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}

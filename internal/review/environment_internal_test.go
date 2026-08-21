@@ -10,17 +10,18 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/testguard"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 func TestIntegrationHunkNotesUseScopedEnvironment(t *testing.T) {
 	t.Parallel()
 
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	binary := filepath.Join(binDir, "hunk")
 	if err := testguard.WriteExecutable(binary, []byte("#!/bin/sh\n[ \"$HUNK_SCOPE\" = isolated ] || exit 17\nprintf '{\"comments\":[]}'\n")); err != nil {
 		t.Fatalf("write hunk: %v", err)
 	}
-	comments, err := captureHunkUserNotes(context.Background(), t.TempDir(), nil, []string{"PATH=" + binDir, "HUNK_SCOPE=isolated"})
+	comments, err := captureHunkUserNotes(context.Background(), testutil.CanonicalTempDir(t), nil, []string{"PATH=" + binDir, "HUNK_SCOPE=isolated"})
 	if err != nil {
 		t.Fatalf("capture hunk notes: %v", err)
 	}
@@ -32,7 +33,7 @@ func TestIntegrationHunkNotesUseScopedEnvironment(t *testing.T) {
 func TestIntegrationReviewCommandUsesScopedEnvironment(t *testing.T) {
 	t.Parallel()
 
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	binary := filepath.Join(binDir, "review-check")
 	if err := testguard.WriteExecutable(binary, []byte("#!/bin/sh\nprintf '%s/%s' \"$INVOCATION_SCOPE\" \"$STEP_SCOPE\"\n")); err != nil {
 		t.Fatalf("write review check: %v", err)
@@ -40,7 +41,7 @@ func TestIntegrationReviewCommandUsesScopedEnvironment(t *testing.T) {
 	var output bytes.Buffer
 	exitCode, err := runStepCommandWithOutput(PipelineRunOptions{
 		Context:     context.Background(),
-		Workdir:     t.TempDir(),
+		Workdir:     testutil.CanonicalTempDir(t),
 		Environment: []string{"PATH=" + binDir, "INVOCATION_SCOPE=isolated", "STEP_SCOPE=stale"},
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,

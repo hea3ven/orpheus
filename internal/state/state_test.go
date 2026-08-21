@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 type sampleState struct {
@@ -20,16 +21,16 @@ func TestResolveUsesXDGRoots(t *testing.T) {
 	paths, err := state.Resolve(state.ResolveOptions{
 		HomeDir: "/home/tester",
 		Env: map[string]string{
-			"XDG_CONFIG_HOME": "/tmp/xdg-config",
-			"XDG_DATA_HOME":   "/tmp/xdg-data",
+			"XDG_CONFIG_HOME": "/fixture/xdg-config",
+			"XDG_DATA_HOME":   "/fixture/xdg-data",
 		},
 	})
 	if err != nil {
 		t.Fatalf("resolve paths: %v", err)
 	}
 
-	wantConfig := filepath.Join("/tmp/xdg-config", state.AppName)
-	wantData := filepath.Join("/tmp/xdg-data", state.AppName)
+	wantConfig := filepath.Join("/fixture/xdg-config", state.AppName)
+	wantData := filepath.Join("/fixture/xdg-data", state.AppName)
 	if paths.ConfigRoot != wantConfig {
 		t.Fatalf("config root = %q, want %q", paths.ConfigRoot, wantConfig)
 	}
@@ -57,14 +58,14 @@ func TestResolveFallsBackToHome(t *testing.T) {
 func TestResolveAllowsXDGWithoutHome(t *testing.T) {
 	paths, err := state.Resolve(state.ResolveOptions{
 		Env: map[string]string{
-			"XDG_CONFIG_HOME": "/tmp/xdg-config",
-			"XDG_DATA_HOME":   "/tmp/xdg-data",
+			"XDG_CONFIG_HOME": "/fixture/xdg-config",
+			"XDG_DATA_HOME":   "/fixture/xdg-data",
 		},
 	})
 	if err != nil {
 		t.Fatalf("resolve paths without home: %v", err)
 	}
-	if paths.ConfigRoot != filepath.Join("/tmp/xdg-config", state.AppName) {
+	if paths.ConfigRoot != filepath.Join("/fixture/xdg-config", state.AppName) {
 		t.Fatalf("config root = %q", paths.ConfigRoot)
 	}
 }
@@ -106,10 +107,10 @@ func TestResolveRejectsRelativeInputs(t *testing.T) {
 }
 
 func TestNewPathsRejectsRelativeRoots(t *testing.T) {
-	if _, err := state.NewPaths("relative-config", "/tmp/data"); err == nil {
+	if _, err := state.NewPaths("relative-config", "/fixture/data"); err == nil {
 		t.Fatal("NewPaths accepted relative config root, want error")
 	}
-	if _, err := state.NewPaths("/tmp/config", "relative-data"); err == nil {
+	if _, err := state.NewPaths("/fixture/config", "relative-data"); err == nil {
 		t.Fatal("NewPaths accepted relative data root, want error")
 	}
 }
@@ -367,7 +368,7 @@ func TestWithGlobalMutationLockFailsFastOnContention(t *testing.T) {
 
 func TestWithGlobalMutationLockPathResolutionFailureIncludesLockPath(t *testing.T) {
 	paths := state.Paths{
-		ConfigRoot: "/tmp/orpheus-config",
+		ConfigRoot: "/fixture/orpheus-config",
 		DataRoot:   "relative-data",
 	}
 	lockPath := filepath.Join(paths.DataRoot, "locks", "mutation.lock")
@@ -387,7 +388,7 @@ func TestWithGlobalMutationLockPathResolutionFailureIncludesLockPath(t *testing.
 func newTestPaths(t *testing.T) state.Paths {
 	t.Helper()
 
-	root := t.TempDir()
+	root := testutil.CanonicalTempDir(t)
 	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)

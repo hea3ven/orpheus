@@ -13,6 +13,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -110,7 +111,7 @@ func TestIntegrationCompletionProtocolSkipsUnprojectableRepositorySource(t *test
 	registered, err := store.Load()
 	require.NoError(t, err)
 	registered.Repos = append(registered.Repos, registry.Repo{
-		ID: "legacy", Name: "Legacy Repo", Path: t.TempDir(),
+		ID: "legacy", Name: "Legacy Repo", Path: testutil.CanonicalTempDir(t),
 	})
 	require.NoError(t, store.Save(registered))
 
@@ -135,7 +136,7 @@ func TestIntegrationCompletionProtocolScopesCreateRelationsToCurrentDirectory(t 
 		"ar-open\tOpen task (alpha)",
 	})
 
-	t.Chdir(t.TempDir())
+	t.Chdir(testutil.CanonicalTempDir(t))
 	assertCompletionChoices(t, []string{"task", "create", "--parent", ""}, []string{})
 	assertCompletionChoices(t, []string{"task", "create", "--blocked-by", ""}, []string{})
 
@@ -225,8 +226,8 @@ func setupCompletionFixture(t *testing.T, brokenBeta bool) (paths state.Paths, a
 	t.Helper()
 	newTestState(t)
 	statePaths := currentTestPaths(t)
-	alpha = filepath.Join(t.TempDir(), "alpha")
-	beta = filepath.Join(t.TempDir(), "beta")
+	alpha = filepath.Join(testutil.CanonicalTempDir(t), "alpha")
+	beta = filepath.Join(testutil.CanonicalTempDir(t), "beta")
 	require.NoError(t, os.MkdirAll(alpha, 0o755))
 	require.NoError(t, os.MkdirAll(beta, 0o755))
 	require.NoError(t, registry.NewStore(statePaths).Save(registry.Registry{Repos: []registry.Repo{

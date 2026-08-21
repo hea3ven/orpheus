@@ -19,7 +19,7 @@ func TestTaskStatsRowDisplaysResumeProvenance(t *testing.T) {
 			Launch: &taskstate.AgentLaunch{
 				Mode:             taskstate.AgentLaunchResumed,
 				SourceRunAttempt: 1,
-				SourceSession:    &taskstate.AgentSession{ID: "session-1", LogPath: "/tmp/session.jsonl"},
+				SourceSession:    &taskstate.AgentSession{ID: "session-1", LogPath: "/fixture/session.jsonl"},
 			},
 		},
 	}

@@ -115,10 +115,10 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 			ID: "op-1",
 			Metadata: task.Metadata{
 				task.MetadataBranch:   "manual/op-1",
-				task.MetadataWorktree: "/tmp/manual-worktree",
+				task.MetadataWorktree: "/fixture/manual-worktree",
 			},
 		},
-		taskTarget: taskstate.GitFacts{Branch: "manual/op-1", Worktree: "/tmp/manual-worktree"},
+		taskTarget: taskstate.GitFacts{Branch: "manual/op-1", Worktree: "/fixture/manual-worktree"},
 		run: taskstate.RunAttempt{
 			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{

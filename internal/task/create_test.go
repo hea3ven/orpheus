@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/task"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 type fakeCreateBackend struct {
@@ -39,7 +40,7 @@ func TestCreateServiceCreatesValidatedTaskGraphItem(t *testing.T) {
 		"op-parent": {ID: "op-parent", IssueType: task.IssueTypeEpic, Status: task.StatusOpen},
 		"op-dep":    {ID: "op-dep", IssueType: task.IssueTypeTask, Status: task.StatusClosed},
 	}}
-	source := createTestSource("alpha", "op", t.TempDir())
+	source := createTestSource("alpha", "op", testutil.CanonicalTempDir(t))
 	service := task.CreateService{
 		Sources:        []task.RepositorySource{source},
 		BackendFactory: func(task.RepositorySource) (task.CreateBackend, error) { return backend, nil },
@@ -102,7 +103,7 @@ func TestCreateServiceEnforcesRequiredExternalReferenceBeforeCreation(t *testing
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			source := createTestSource("alpha", "op", t.TempDir())
+			source := createTestSource("alpha", "op", testutil.CanonicalTempDir(t))
 			source.Repository.TitleTemplate = test.titleTemplate
 			backend := &fakeCreateBackend{}
 			service := task.CreateService{
@@ -137,8 +138,8 @@ func TestCreateServiceEnforcesRequiredExternalReferenceBeforeCreation(t *testing
 }
 
 func TestCreateServiceRejectsInvalidRelationsBeforeCreate(t *testing.T) {
-	source := createTestSource("alpha", "op", t.TempDir())
-	other := createTestSource("beta", "be", t.TempDir())
+	source := createTestSource("alpha", "op", testutil.CanonicalTempDir(t))
+	other := createTestSource("beta", "be", testutil.CanonicalTempDir(t))
 	cases := []struct {
 		name    string
 		tasks   map[string]task.Task
@@ -191,8 +192,8 @@ func TestCreateServiceAcceptsOverlappingPrefixRelationsRegardlessOfSourceOrder(t
 	} {
 		for _, sourcesReversed := range []bool{false, true} {
 			t.Run(relation.name+"/sources reversed="+fmt.Sprint(sourcesReversed), func(t *testing.T) {
-				short := createTestSource("short", "op", t.TempDir())
-				long := createTestSource("long", "op-long", t.TempDir())
+				short := createTestSource("short", "op", testutil.CanonicalTempDir(t))
+				long := createTestSource("long", "op-long", testutil.CanonicalTempDir(t))
 				sources := []task.RepositorySource{short, long}
 				if sourcesReversed {
 					sources = []task.RepositorySource{long, short}
@@ -231,7 +232,7 @@ func TestNormalizeCreateOptionsRequiresTaskCreationFields(t *testing.T) {
 }
 
 func TestResolveCreationSourcePrecedence(t *testing.T) {
-	root := t.TempDir()
+	root := testutil.CanonicalTempDir(t)
 	alpha := createTestSource("alpha", "op", filepath.Join(root, "alpha"))
 	beta := createTestSource("beta", "be", filepath.Join(root, "beta"))
 	sources := []task.RepositorySource{alpha, beta}
@@ -255,7 +256,7 @@ func TestResolveCreationSourcePrecedence(t *testing.T) {
 }
 
 func TestCreateServiceBackendErrorIsPreserved(t *testing.T) {
-	source := createTestSource("alpha", "op", t.TempDir())
+	source := createTestSource("alpha", "op", testutil.CanonicalTempDir(t))
 	backendErr := errors.New("Beads backend unavailable")
 	service := task.CreateService{Sources: []task.RepositorySource{source}, BackendFactory: func(task.RepositorySource) (task.CreateBackend, error) { return nil, backendErr }}
 	_, err := service.Create(context.Background(), source, task.CreateRequest{Title: "title", Description: "description", AcceptanceCriteria: "acceptance"})

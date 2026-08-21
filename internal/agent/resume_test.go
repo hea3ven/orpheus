@@ -8,6 +8,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,7 +40,7 @@ func TestPrepareFollowUpResumeBuildsStructuredCommandsInBothLaunchModes(t *testi
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			workdir := filepath.Join(t.TempDir(), "worktree")
+			workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 			require.NoError(t, os.MkdirAll(workdir, 0o755))
 			session := writeResumeTestSession(t, tt.harness, workdir, "session-1")
 			state := resumeTestState(1, "implementer", tt.harness, session)
@@ -71,7 +72,7 @@ func TestPrepareFollowUpResumeBuildsStructuredCommandsInBothLaunchModes(t *testi
 }
 
 func TestPrepareFollowUpResumeSelectsLatestUsableCompatibleRun(t *testing.T) {
-	workdir := filepath.Join(t.TempDir(), "worktree")
+	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 	require.NoError(t, os.MkdirAll(workdir, 0o755))
 	older := writeResumeTestSession(t, "pi", workdir, "older")
 	latest := writeResumeTestSession(t, "pi", workdir, "latest")
@@ -95,7 +96,7 @@ func TestPrepareFollowUpResumeSelectsLatestUsableCompatibleRun(t *testing.T) {
 }
 
 func TestPrepareFollowUpResumeSelectsSuccessfulResumedRunAfterCaptureReadFailure(t *testing.T) {
-	workdir := filepath.Join(t.TempDir(), "worktree")
+	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 	require.NoError(t, os.MkdirAll(workdir, 0o755))
 	session := writeResumeTestSession(t, "pi", workdir, "session-1")
 	state := resumeTestState(1, "implementer", "pi", session)
@@ -151,9 +152,9 @@ func TestPrepareFollowUpResumeSelectsSuccessfulResumedRunAfterCaptureReadFailure
 }
 
 func TestPrepareFollowUpResumeFallsBackForRawIncompatibleAndUnsafeState(t *testing.T) {
-	workdir := filepath.Join(t.TempDir(), "worktree")
+	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 	require.NoError(t, os.MkdirAll(workdir, 0o755))
-	deleted := taskstate.AgentSession{ID: "gone", LogPath: filepath.Join(t.TempDir(), "gone.jsonl")}
+	deleted := taskstate.AgentSession{ID: "gone", LogPath: filepath.Join(testutil.CanonicalTempDir(t), "gone.jsonl")}
 	tests := []struct {
 		name    string
 		command agent.CommandSnapshot
@@ -205,11 +206,11 @@ func TestPrepareFollowUpResumeFallsBackForRawIncompatibleAndUnsafeState(t *testi
 }
 
 func TestPrepareFollowUpResumeFallsBackWhenCodexHomeChanged(t *testing.T) {
-	workdir := filepath.Join(t.TempDir(), "worktree")
+	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 	require.NoError(t, os.MkdirAll(workdir, 0o755))
 	session := writeResumeTestSession(t, "codex", workdir, "codex-session")
 	state := resumeTestState(1, "implementer", "codex", session)
-	activeHome := t.TempDir()
+	activeHome := testutil.CanonicalTempDir(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(activeHome, "sessions"), 0o755))
 
 	for _, nonInteractive := range []bool{false, true} {
@@ -233,7 +234,7 @@ func TestPrepareFollowUpResumeFallsBackWhenCodexHomeChanged(t *testing.T) {
 }
 
 func TestPrepareFollowUpResumeRejectsDuplicateCodexSessionIDs(t *testing.T) {
-	workdir := filepath.Join(t.TempDir(), "worktree")
+	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 	require.NoError(t, os.MkdirAll(workdir, 0o755))
 	session := writeResumeTestSession(t, "codex", workdir, "codex-session")
 	duplicatePath := filepath.Join(filepath.Dir(session.LogPath), "restored-session.jsonl")
@@ -281,7 +282,7 @@ func TestCaptureUsageReportsUnknownWhenResumedBaselineIsUnavailable(t *testing.T
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			workdir := filepath.Join(t.TempDir(), "worktree")
+			workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 			require.NoError(t, os.MkdirAll(workdir, 0o755))
 			session := writeResumeTestSessionWithoutUsage(t, tt.harness, workdir, tt.harness+"-session")
 			env := resumeTestEnvironment(tt.harness, session)
@@ -310,7 +311,7 @@ func TestCaptureUsageReportsUnknownWhenResumedBaselineIsUnavailable(t *testing.T
 }
 
 func TestCaptureUsageReportsOnlyIncrementalResumedPiUsageAndCost(t *testing.T) {
-	workdir := filepath.Join(t.TempDir(), "worktree")
+	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 	require.NoError(t, os.MkdirAll(workdir, 0o755))
 	session := writeResumeTestSession(t, "pi", workdir, "pi-session")
 	state := resumeTestState(1, "implementer", "pi", session)
@@ -334,7 +335,7 @@ func TestCaptureUsageReportsOnlyIncrementalResumedPiUsageAndCost(t *testing.T) {
 }
 
 func TestCaptureUsageReportsOnlyIncrementalResumedCodexUsage(t *testing.T) {
-	workdir := filepath.Join(t.TempDir(), "worktree")
+	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 	require.NoError(t, os.MkdirAll(workdir, 0o755))
 	session := writeResumeTestSession(t, "codex", workdir, "codex-session")
 	state := resumeTestState(1, "implementer", "codex", session)
@@ -397,7 +398,7 @@ func resumeTestRun(attempt int, profile string, harness string, session taskstat
 
 func writeResumeTestSession(t *testing.T, harness string, workdir string, sessionID string) taskstate.AgentSession {
 	t.Helper()
-	root := t.TempDir()
+	root := testutil.CanonicalTempDir(t)
 	path := filepath.Join(root, harness+"-session.jsonl")
 	if harness == "pi" {
 		writePiSessionLog(t, path, piSessionLogFixture{

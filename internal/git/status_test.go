@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	orpheusgit "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 func TestIntegrationHasStagedChangesDistinguishesChangesFromGitFailure(t *testing.T) {
@@ -38,7 +39,7 @@ func TestIntegrationHasStagedChangesDistinguishesChangesFromGitFailure(t *testin
 		t.Fatal("has staged changes after edit = false, want true")
 	}
 
-	got, err = orpheusgit.HasStagedChanges(context.Background(), t.TempDir())
+	got, err = orpheusgit.HasStagedChanges(context.Background(), testutil.CanonicalTempDir(t))
 	if err == nil {
 		t.Fatal("has staged changes outside repository succeeded, want error")
 	}

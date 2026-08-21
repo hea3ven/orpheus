@@ -6,17 +6,18 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 func TestTaskRepositorySourcesProjectsNormalizedRegistryValues(t *testing.T) {
-	paths, err := state.NewPaths(t.TempDir(), t.TempDir())
+	paths, err := state.NewPaths(testutil.CanonicalTempDir(t), testutil.CanonicalTempDir(t))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}
 	store := registry.NewStore(paths)
 	includeReview := true
 	registered := registry.Registry{Repos: []registry.Repo{{
-		ID: " alpha ", Name: " Alpha ", Path: filepath.Join(t.TempDir(), "repo"),
+		ID: " alpha ", Name: " Alpha ", Path: filepath.Join(testutil.CanonicalTempDir(t), "repo"),
 		BeadsMode: registry.BeadsModeManaged, BeadsPrefix: " op ", DefaultBranch: " main ",
 		IncludePRReviewProcess: &includeReview, ReviewPipelineAliases: map[string]string{" local ": " default "},
 	}}}

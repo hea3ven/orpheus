@@ -9,6 +9,7 @@ linters:
   enable:
     - dupl
     - errorlint
+    - forbidigo
     - funlen
     - gocognit
     - gocritic
@@ -24,6 +25,12 @@ linters:
     - unconvert
 
   settings:
+    forbidigo:
+      # testing.TB.TempDir can retain a platform-specific symlink such as
+      # macOS /tmp -> /private/tmp. Tests must use the canonical shared helper.
+      forbid:
+        - pattern: 't[b]?\.TempDir'
+          msg: use testutil.CanonicalTempDir(t) so test path identity is canonical
     funlen:
       # Keep functions compact by default. Intentionally long workflow tests
       # must use targeted //nolint:funlen comments with a justification.

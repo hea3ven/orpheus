@@ -644,8 +644,8 @@ func TestRenderStatusProjectionSemanticDetailsAcrossBoundary(t *testing.T) {
 		projectedParentNotEpicDetailCase(),
 		projectedParentNotReadyDetailCase(),
 		projectedMissingExternalRefDetailCase(),
-		projectedWrongTargetDetailCase("wrong PR target", "op-wrong-pr", "orpheus/op-wrong-pr", "/tmp/orpheus/worktrees/op-wrong-pr", status.Detail{Kind: status.DetailWrongPRTarget}, "completion target is not the deterministic Orpheus worktree/team target", "wrong PR target"),
-		projectedWrongTargetDetailCase("wrong local target", "op-wrong-local", "main", "/tmp/alpha", status.Detail{Kind: status.DetailWrongLocalTarget}, "completion target is not the deterministic Orpheus main/solo target", "wrong local target"),
+		projectedWrongTargetDetailCase("wrong PR target", "op-wrong-pr", "orpheus/op-wrong-pr", "/fixture/orpheus/worktrees/op-wrong-pr", status.Detail{Kind: status.DetailWrongPRTarget}, "completion target is not the deterministic Orpheus worktree/team target", "wrong PR target"),
+		projectedWrongTargetDetailCase("wrong local target", "op-wrong-local", "main", "/fixture/alpha", status.Detail{Kind: status.DetailWrongLocalTarget}, "completion target is not the deterministic Orpheus main/solo target", "wrong local target"),
 		projectedFinalizedButOpenDetailCase(),
 		projectedMissingDependencyDetailCase(),
 		projectedMissingDependenciesDetailCase(),
@@ -773,7 +773,7 @@ func projectedLocalReviewDetailCase(
 ) projectedStatusDetailCase {
 	taskItem := projectedReviewReadyTask("op-review")
 	run := projectedCompletedRun()
-	localState := projectedReviewReadyLocalState(taskItem.ID, "main", "/tmp/alpha")
+	localState := projectedReviewReadyLocalState(taskItem.ID, "main", "/fixture/alpha")
 	localState.LatestRun = &run
 	localState.LatestReview = review
 	localState.LatestFinalizationFailure = failure
@@ -882,7 +882,7 @@ func projectedFinalizedButOpenDetailCase() projectedStatusDetailCase {
 	taskItem := projectedReviewReadyTask("op-finalized-open")
 	run := projectedCompletedRun()
 	closedAt := time.Date(2026, 6, 3, 11, 0, 0, 0, time.UTC)
-	localState := projectedReviewReadyLocalState(taskItem.ID, "main", "/tmp/alpha")
+	localState := projectedReviewReadyLocalState(taskItem.ID, "main", "/fixture/alpha")
 	localState.LatestRun = &run
 	localState.Finalization = taskstate.Finalization{ClosedAt: &closedAt}
 	return projectedStatusDetailCase{
@@ -1059,7 +1059,7 @@ func projectedStatusRepository() task.Repository {
 		ID:            "alpha",
 		Name:          "Alpha",
 		TaskIDPrefix:  "op",
-		Path:          "/tmp/alpha",
+		Path:          "/fixture/alpha",
 		DefaultBranch: "main",
 	}
 }
@@ -1078,7 +1078,7 @@ func projectedReviewReadyTask(id string) task.Task {
 	taskItem := projectedStatusTask(id, task.StatusInProgress)
 	taskItem.Metadata = task.Metadata{
 		task.MetadataBranch:   "main",
-		task.MetadataWorktree: "/tmp/alpha",
+		task.MetadataWorktree: "/fixture/alpha",
 	}
 	return taskItem
 }
@@ -1101,17 +1101,17 @@ func projectedExpectedTargets(taskID string) *tasktarget.ExpectedTargets {
 		MainSolo: tasktarget.Target{
 			Kind:     tasktarget.TargetMainSolo,
 			Branch:   "main",
-			Worktree: "/tmp/alpha",
+			Worktree: "/fixture/alpha",
 		},
 		WorktreeTeam: tasktarget.Target{
 			Kind:     tasktarget.TargetWorktreeTeam,
 			Branch:   "orpheus/" + taskID,
-			Worktree: "/tmp/orpheus/worktrees/" + taskID,
+			Worktree: "/fixture/orpheus/worktrees/" + taskID,
 		},
 		RepoRootTeam: tasktarget.Target{
 			Kind:     tasktarget.TargetRepoRootTeam,
 			Branch:   "orpheus/" + taskID,
-			Worktree: "/tmp/alpha",
+			Worktree: "/fixture/alpha",
 		},
 	}
 }

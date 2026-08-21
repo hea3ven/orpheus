@@ -10,8 +10,8 @@ import (
 
 func TestResolveTaskSourceKnownPrefix(t *testing.T) {
 	sources := []task.RepositorySource{
-		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op"}, BackendDir: "/tmp/alpha"},
-		{Repository: task.Repository{ID: "beta", Name: "Beta", TaskIDPrefix: "bt"}, BackendDir: "/tmp/beta"},
+		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op"}, BackendDir: "/fixture/alpha"},
+		{Repository: task.Repository{ID: "beta", Name: "Beta", TaskIDPrefix: "bt"}, BackendDir: "/fixture/beta"},
 	}
 
 	got, err := task.ResolveTaskSource(sources, " op-9wh.3 ")
@@ -26,14 +26,14 @@ func TestResolveTaskSourceKnownPrefix(t *testing.T) {
 	}
 	if got.Source.Repository.ID != "alpha" ||
 		got.Source.Repository.Name != "Alpha" ||
-		got.Source.BackendDir != "/tmp/alpha" {
+		got.Source.BackendDir != "/fixture/alpha" {
 		t.Fatalf("source = %#v, want alpha repo context", got.Source)
 	}
 }
 
 func TestResolveTaskSourceSupportsHyphenatedRegisteredPrefix(t *testing.T) {
 	sources := []task.RepositorySource{
-		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "my-admin"}, BackendDir: "/tmp/alpha"},
+		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "my-admin"}, BackendDir: "/fixture/alpha"},
 	}
 
 	got, err := task.ResolveTaskSource(sources, "my-admin-123")
@@ -56,7 +56,7 @@ func TestResolveTaskSourceSupportsHyphenatedRegisteredPrefix(t *testing.T) {
 
 func TestResolveTaskSourceUnknownPrefixIsActionable(t *testing.T) {
 	sources := []task.RepositorySource{
-		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op"}, BackendDir: "/tmp/alpha"},
+		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op"}, BackendDir: "/fixture/alpha"},
 	}
 
 	_, err := task.ResolveTaskSource(sources, "zz-1")
@@ -75,7 +75,7 @@ func TestResolveTaskSourceUnknownPrefixIsActionable(t *testing.T) {
 
 func TestResolveTaskSourceMalformedTaskIDsAreActionable(t *testing.T) {
 	sources := []task.RepositorySource{
-		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op"}, BackendDir: "/tmp/alpha"},
+		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op"}, BackendDir: "/fixture/alpha"},
 	}
 
 	tests := []struct {
@@ -108,7 +108,7 @@ func TestResolveTaskSourceMalformedTaskIDsAreActionable(t *testing.T) {
 
 func TestResolveTaskSourceMissingRegisteredPrefixes(t *testing.T) {
 	sources := []task.RepositorySource{
-		{Repository: task.Repository{ID: "legacy", Name: "Legacy"}, BackendDir: "/tmp/legacy"},
+		{Repository: task.Repository{ID: "legacy", Name: "Legacy"}, BackendDir: "/fixture/legacy"},
 	}
 
 	_, err := task.ResolveTaskSource(sources, "op-1")
@@ -131,8 +131,8 @@ func TestResolveTaskSourceMissingRegisteredPrefixes(t *testing.T) {
 
 func TestResolveTaskSourceRejectsCollisionPreventedPrefixes(t *testing.T) {
 	sources := []task.RepositorySource{
-		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op"}, BackendDir: "/tmp/alpha"},
-		{Repository: task.Repository{ID: "beta", Name: "Beta", TaskIDPrefix: "op"}, BackendDir: "/tmp/beta"},
+		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op"}, BackendDir: "/fixture/alpha"},
+		{Repository: task.Repository{ID: "beta", Name: "Beta", TaskIDPrefix: "op"}, BackendDir: "/fixture/beta"},
 	}
 
 	_, err := task.ResolveTaskSource(sources, "op-1")

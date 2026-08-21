@@ -18,6 +18,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
@@ -836,7 +837,7 @@ func TestIntegrationReviewLifecycleRecoversBeforeReplacementConfiguration(t *tes
 			taskItem := task.Task{ID: "op-1", Title: "Lifecycle task", Status: task.StatusInProgress}
 			service := workflow.ReviewLifecycleService{
 				Paths: paths, RunStore: store, ProcessProbe: func(int) (agentexec.ProcessLiveness, error) { return agentexec.ProcessAbsent, nil }, Frontend: &recordingReviewFrontend{},
-				Sources: []task.RepositorySource{{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op", Path: t.TempDir(), DefaultBranch: "main"}}},
+				Sources: []task.RepositorySource{{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op", Path: testutil.CanonicalTempDir(t), DefaultBranch: "main"}}},
 				BackendFactory: func(task.RepositorySource) (workflow.ReviewLifecycleBackend, error) {
 					return &fakeReviewLifecycleBackend{task: taskItem}, nil
 				},
@@ -888,7 +889,7 @@ func TestIntegrationReviewLifecycleReturnsTypedPrimaryReviewLivenessOutcomes(t *
 			taskItem := task.Task{ID: "op-1", Title: "Lifecycle task", Status: task.StatusInProgress}
 			service := workflow.ReviewLifecycleService{
 				Paths: paths, RunStore: store, ProcessProbe: test.probe, Frontend: &recordingReviewFrontend{},
-				Sources: []task.RepositorySource{{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op", Path: t.TempDir(), DefaultBranch: "main"}}},
+				Sources: []task.RepositorySource{{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op", Path: testutil.CanonicalTempDir(t), DefaultBranch: "main"}}},
 				BackendFactory: func(task.RepositorySource) (workflow.ReviewLifecycleBackend, error) {
 					return &fakeReviewLifecycleBackend{task: taskItem}, nil
 				},
@@ -925,7 +926,7 @@ func TestIntegrationReviewLifecycleStopsWhenPrimaryWasConcurrentlyRecovered(t *t
 	taskItem := task.Task{ID: "op-1", Title: "Lifecycle task", Status: task.StatusInProgress}
 	service := workflow.ReviewLifecycleService{
 		Paths: paths, RunStore: &staleThenRecoveredStore{Store: store, stale: stale}, Frontend: &recordingReviewFrontend{},
-		Sources: []task.RepositorySource{{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op", Path: t.TempDir(), DefaultBranch: "main"}}},
+		Sources: []task.RepositorySource{{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op", Path: testutil.CanonicalTempDir(t), DefaultBranch: "main"}}},
 		BackendFactory: func(task.RepositorySource) (workflow.ReviewLifecycleBackend, error) {
 			return &fakeReviewLifecycleBackend{task: taskItem}, nil
 		},
@@ -953,7 +954,7 @@ func TestIntegrationReviewLifecycleRejectsClosedTaskBeforeStartingReview(t *test
 	service := workflow.ReviewLifecycleService{
 		Paths: paths,
 		Sources: []task.RepositorySource{{Repository: task.Repository{
-			ID: "alpha", Name: "Alpha", TaskIDPrefix: "op", Path: t.TempDir(), DefaultBranch: "main",
+			ID: "alpha", Name: "Alpha", TaskIDPrefix: "op", Path: testutil.CanonicalTempDir(t), DefaultBranch: "main",
 		}}},
 		RunStore: taskstate.NewStore(paths),
 		BackendFactory: func(task.RepositorySource) (workflow.ReviewLifecycleBackend, error) {
@@ -1242,7 +1243,7 @@ func TestIntegrationReviewLifecycleRunAfterCompletedRunStartsReviewAndPropagates
 func TestIntegrationReviewLifecycleAutonomousFollowUpResumesCompatibleSession(t *testing.T) {
 	paths := testPaths(t)
 	repoPath := testRepoWithLocalOriginAndCandidateChange(t)
-	sessionPath := filepath.Join(t.TempDir(), "pi-session.jsonl")
+	sessionPath := filepath.Join(testutil.CanonicalTempDir(t), "pi-session.jsonl")
 	sessionContent := `{"type":"session","version":3,"id":"session-1","timestamp":"2026-07-07T10:00:00Z","cwd":"` + repoPath + `"}
 {"type":"message","id":"assistant","timestamp":"2026-07-07T10:00:01Z","message":{"role":"assistant","usage":{"input":10,"output":5,"totalTokens":15}}}
 `
@@ -1515,7 +1516,7 @@ func writeAgentReviewPipelineConfig(t *testing.T, paths state.Paths) {
 
 func testPaths(t *testing.T) state.Paths {
 	t.Helper()
-	root := t.TempDir()
+	root := testutil.CanonicalTempDir(t)
 	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
@@ -1535,7 +1536,7 @@ func testRepoWithLocalOriginAndCandidateChange(t *testing.T) string {
 
 func testRepoWithCandidateChangeOptions(t *testing.T, withOrigin bool) string {
 	t.Helper()
-	repoPath := filepath.Join(canonicalTestPath(t, t.TempDir()), "repo")
+	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
 	if err := os.MkdirAll(repoPath, 0o755); err != nil {
 		t.Fatalf("create repo dir: %v", err)
 	}
@@ -1548,7 +1549,7 @@ func testRepoWithCandidateChangeOptions(t *testing.T, withOrigin bool) string {
 	runGit(t, repoPath, "add", ".")
 	runGit(t, repoPath, "commit", "-m", "initial")
 	if withOrigin {
-		originPath := filepath.Join(t.TempDir(), "origin.git")
+		originPath := filepath.Join(testutil.CanonicalTempDir(t), "origin.git")
 		runGit(t, "", "init", "--bare", originPath)
 		runGit(t, repoPath, "remote", "add", "origin", originPath)
 		runGit(t, repoPath, "push", "-u", "origin", "main")

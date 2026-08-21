@@ -21,7 +21,7 @@ func TestClassifyRunTargetRecognizesRepoRootTaskBranch(t *testing.T) {
 func TestClassifyRunTargetRemainsShapeOnlyForDiagnostics(t *testing.T) {
 	repo := task.Repository{Path: "/repo/alpha", DefaultBranch: "main"}
 
-	got := tasktarget.ClassifyRunTarget(repo, "manual/op-1", "/tmp/manual-worktree")
+	got := tasktarget.ClassifyRunTarget(repo, "manual/op-1", "/fixture/manual-worktree")
 
 	if got != tasktarget.TargetWorktreeTeam {
 		t.Fatalf("shape target = %q, want %q", got, tasktarget.TargetWorktreeTeam)

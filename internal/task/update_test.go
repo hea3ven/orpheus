@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/task"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 type fakeUpdateBackend struct {
@@ -83,7 +84,7 @@ func TestUpdateServiceEnforcesRequiredExternalReferenceBeforeMutation(t *testing
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			source := createTestSource("alpha", "op", t.TempDir())
+			source := createTestSource("alpha", "op", testutil.CanonicalTempDir(t))
 			source.Repository.TitleTemplate = test.titleTemplate
 			backend := updateBackendWithCurrent()
 			current := backend.tasks["op-current"]
@@ -126,7 +127,7 @@ func TestUpdateServiceRejectsEmptyRequiredPlanningFieldsBeforeMutation(t *testin
 		{"acceptance flag", task.UpdateOptions{AcceptanceCriteria: stringPtr("")}, "acceptance criteria is required"},
 	} {
 		t.Run(request.name, func(t *testing.T) {
-			source := createTestSource("alpha", "op", t.TempDir())
+			source := createTestSource("alpha", "op", testutil.CanonicalTempDir(t))
 			backend := updateBackendWithCurrent()
 			service := updateService(source, backend)
 			request.opts.ID = "op-current"
@@ -143,7 +144,7 @@ func TestUpdateServiceRejectsEmptyRequiredPlanningFieldsBeforeMutation(t *testin
 }
 
 func TestUpdateServiceRejectsUnsupportedTargetTypeBeforeMutation(t *testing.T) {
-	source := createTestSource("alpha", "op", t.TempDir())
+	source := createTestSource("alpha", "op", testutil.CanonicalTempDir(t))
 	backend := updateBackendWithCurrent()
 	backend.tasks["op-current"] = task.Task{ID: "op-current", IssueType: task.IssueTypeBug, Status: task.StatusOpen}
 
@@ -178,7 +179,7 @@ func TestUpdateServiceRejectsParentDescendantCyclesBeforeMutation(t *testing.T) 
 		},
 	} {
 		t.Run(relation.name, func(t *testing.T) {
-			source := createTestSource("alpha", "op", t.TempDir())
+			source := createTestSource("alpha", "op", testutil.CanonicalTempDir(t))
 			backend := &fakeUpdateBackend{tasks: relation.tasks}
 			_, err := updateService(source, backend).Update(context.Background(), source, task.UpdateOptions{ID: "op-current", ParentID: stringPtr("op-child")})
 			if err == nil || !strings.Contains(err.Error(), "parent-child cycle") {
@@ -192,8 +193,8 @@ func TestUpdateServiceRejectsParentDescendantCyclesBeforeMutation(t *testing.T) 
 }
 
 func TestUpdateServiceRejectsForeignRelationshipReferencesBeforeMutation(t *testing.T) {
-	source := createTestSource("alpha", "op", t.TempDir())
-	other := createTestSource("beta", "be", t.TempDir())
+	source := createTestSource("alpha", "op", testutil.CanonicalTempDir(t))
+	other := createTestSource("beta", "be", testutil.CanonicalTempDir(t))
 	for _, request := range []struct {
 		name string
 		opts task.UpdateOptions
@@ -221,7 +222,7 @@ func TestUpdateServiceRejectsForeignRelationshipReferencesBeforeMutation(t *test
 }
 
 func TestUpdateServiceFiltersAbsentBlockingRemovalsBeforeMutation(t *testing.T) {
-	source := createTestSource("alpha", "op", t.TempDir())
+	source := createTestSource("alpha", "op", testutil.CanonicalTempDir(t))
 	backend := updateBackendWithCurrent()
 	backend.tasks["op-current"] = task.Task{
 		ID: "op-current", Title: "Current plan", Description: "Current description", AcceptanceCriteria: "Current acceptance",
@@ -246,7 +247,7 @@ func TestUpdateServiceFiltersAbsentBlockingRemovalsBeforeMutation(t *testing.T) 
 }
 
 func TestUpdateServiceRejectsRemovalOfUnsupportedBlockingDependencyBeforeMutation(t *testing.T) {
-	source := createTestSource("alpha", "op", t.TempDir())
+	source := createTestSource("alpha", "op", testutil.CanonicalTempDir(t))
 	backend := updateBackendWithCurrent()
 	backend.tasks["op-current"] = task.Task{
 		ID: "op-current", Title: "Current plan", Description: "Current description", AcceptanceCriteria: "Current acceptance",
@@ -268,7 +269,7 @@ func TestUpdateServiceRejectsRemovalOfUnsupportedBlockingDependencyBeforeMutatio
 }
 
 func TestUpdateServicePreservesLongFormPlanningContent(t *testing.T) {
-	source := createTestSource("alpha", "op", t.TempDir())
+	source := createTestSource("alpha", "op", testutil.CanonicalTempDir(t))
 	backend := updateBackendWithCurrent()
 	description := "  indented description\n"
 	design := "\tcode block\n\n"
@@ -298,7 +299,7 @@ func TestUpdateServicePreservesLongFormPlanningContent(t *testing.T) {
 }
 
 func TestUpdateServiceFailsClosedWhenDependencyGraphCannotBeRead(t *testing.T) {
-	source := createTestSource("alpha", "op", t.TempDir())
+	source := createTestSource("alpha", "op", testutil.CanonicalTempDir(t))
 	backend := updateBackendWithCurrent()
 	backend.tasks["op-dependency"] = task.Task{
 		ID: "op-dependency", IssueType: task.IssueTypeTask, Status: task.StatusOpen,

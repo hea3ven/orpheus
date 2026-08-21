@@ -6,12 +6,13 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNextResumedUsageBoundaryFailsClosedWithoutLaterUsageBaseline(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "session.jsonl")
+	path := filepath.Join(testutil.CanonicalTempDir(t), "session.jsonl")
 	require.NoError(t, os.WriteFile(path, []byte("session\n"), 0o644))
 	session := &taskstate.AgentSession{ID: "session-1", LogPath: path}
 	initialUsage := &taskstate.AgentUsage{TotalTokens: 10}
@@ -26,7 +27,7 @@ func TestNextResumedUsageBoundaryFailsClosedWithoutLaterUsageBaseline(t *testing
 }
 
 func TestNextResumedUsageBoundaryAllowsMissingLaterCostBaseline(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "session.jsonl")
+	path := filepath.Join(testutil.CanonicalTempDir(t), "session.jsonl")
 	require.NoError(t, os.WriteFile(path, []byte("session\n"), 0o644))
 	session := &taskstate.AgentSession{ID: "session-1", LogPath: path}
 	initialUsage := &taskstate.AgentUsage{TotalTokens: 10}

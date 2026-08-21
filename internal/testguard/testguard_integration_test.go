@@ -3,6 +3,7 @@
 package testguard_test
 
 import (
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -10,7 +11,7 @@ import (
 )
 
 func TestIntegrationProductionBinaryNamedTestDoesNotEnableTestMode(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "orpheus.test")
+	binary := filepath.Join(testutil.CanonicalTempDir(t), "orpheus.test")
 	build := exec.Command("go", "build", "-o", binary, "./testdata/testprobe")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build production probe: %v\n%s", err, output)

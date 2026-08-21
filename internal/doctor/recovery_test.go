@@ -9,11 +9,12 @@ import (
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
 func TestRunReportsAndRepairsRecoverablePrimaryReviewer(t *testing.T) {
-	paths, err := state.NewPaths(filepath.Join(t.TempDir(), "config"), filepath.Join(t.TempDir(), "data"))
+	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}
@@ -35,7 +36,7 @@ func TestRunReportsAndRepairsRecoverablePrimaryReviewer(t *testing.T) {
 		t.Fatalf("record child PID: %v", err)
 	}
 	opts := doctor.Options{
-		Paths: paths, Registry: registry.Registry{Repos: []registry.Repo{{ID: "alpha", Path: t.TempDir()}}},
+		Paths: paths, Registry: registry.Registry{Repos: []registry.Repo{{ID: "alpha", Path: testutil.CanonicalTempDir(t)}}},
 		Probe: workflow.ProcessProbe(func(int) (agentexec.ProcessLiveness, error) { return agentexec.ProcessAbsent, nil }),
 	}
 	result, err := doctor.Run(opts)
@@ -70,7 +71,7 @@ func TestRunReportsAndRepairsRecoverablePrimaryReviewer(t *testing.T) {
 }
 
 func TestRunReportsAndRepairsRecoverableImplementationRun(t *testing.T) {
-	paths, err := state.NewPaths(filepath.Join(t.TempDir(), "config"), filepath.Join(t.TempDir(), "data"))
+	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}
@@ -84,7 +85,7 @@ func TestRunReportsAndRepairsRecoverableImplementationRun(t *testing.T) {
 	}
 	opts := doctor.Options{
 		Paths:    paths,
-		Registry: registry.Registry{Repos: []registry.Repo{{ID: "alpha", Path: t.TempDir()}}},
+		Registry: registry.Registry{Repos: []registry.Repo{{ID: "alpha", Path: testutil.CanonicalTempDir(t)}}},
 		Probe: workflow.ProcessProbe(func(int) (agentexec.ProcessLiveness, error) {
 			return agentexec.ProcessAbsent, nil
 		}),

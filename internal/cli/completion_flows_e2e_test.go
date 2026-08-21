@@ -14,6 +14,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -673,7 +674,7 @@ exit 65
 func withStatefulCompletionBD(t *testing.T, task completionBDTask) statefulCompletionBD {
 	t.Helper()
 
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	stateDir := filepath.Join(binDir, "state")
 	must := require.New(t)
 	must.NoError(os.MkdirAll(stateDir, 0o755))
@@ -726,7 +727,7 @@ type completionFlowAgentOptions struct {
 func withCompletionFlowAgent(t *testing.T, opts completionFlowAgentOptions) string {
 	t.Helper()
 
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	logPath := filepath.Join(binDir, opts.Command+".log")
 	script := fmt.Sprintf(`#!/bin/sh
 set -eu

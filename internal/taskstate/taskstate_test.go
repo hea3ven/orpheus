@@ -13,6 +13,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 //nolint:funlen // The persisted YAML shape is the behavior under test.
@@ -25,7 +26,7 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 
 	if _, err := store.RecordSetupEvent("alpha", "op-1", taskstate.EventWorktreeCreated, taskstate.SetupEventOptions{
 		Branch:   "orpheus/op-1",
-		Worktree: "/tmp/op-1",
+		Worktree: "/fixture/op-1",
 	}); err != nil {
 		t.Fatalf("record worktree event: %v", err)
 	}
@@ -34,7 +35,7 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 		Agent:       "recorder",
 		SessionName: "(op-1) Implement task",
 		Branch:      "orpheus/op-1",
-		Worktree:    "/tmp/op-1",
+		Worktree:    "/fixture/op-1",
 	})
 	if err != nil {
 		t.Fatalf("start run: %v", err)
@@ -68,7 +69,7 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 		"task_id: op-1",
 		"git_facts:",
 		"branch: orpheus/op-1",
-		"worktree: /tmp/op-1",
+		"worktree: /fixture/op-1",
 		"attempt: 1",
 		"status: succeeded",
 		"execution:",
@@ -82,7 +83,7 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 	)
 	assertStoreYAMLNotContains(t, store, "alpha", "op-1",
 		"target:",
-		"  branch: orpheus/op-1\n  worktree: /tmp/op-1\n  started_at",
+		"  branch: orpheus/op-1\n  worktree: /fixture/op-1\n  started_at",
 	)
 }
 
@@ -93,9 +94,9 @@ func TestStorePersistsResumedFollowUpLaunchProvenance(t *testing.T) {
 		Agent:         "implementer",
 		Profile:       "implementer",
 		Harness:       "pi",
-		WorkDirectory: "/tmp/op-1",
+		WorkDirectory: "/fixture/op-1",
 		Branch:        "orpheus/op-1",
-		Worktree:      "/tmp/op-1",
+		Worktree:      "/fixture/op-1",
 		ReviewFollowUp: &taskstate.ReviewFollowUp{
 			ReviewAttempt:  1,
 			FindingIndexes: []int{0},
@@ -103,7 +104,7 @@ func TestStorePersistsResumedFollowUpLaunchProvenance(t *testing.T) {
 		Launch: &taskstate.AgentLaunch{
 			Mode:             taskstate.AgentLaunchResumed,
 			SourceRunAttempt: 1,
-			SourceSession:    &taskstate.AgentSession{ID: "session-1", LogPath: "/tmp/session-1.jsonl"},
+			SourceSession:    &taskstate.AgentSession{ID: "session-1", LogPath: "/fixture/session-1.jsonl"},
 			UsageBaseline:    &taskstate.AgentUsage{TotalTokens: 200},
 			CostBaseline:     &baselineCost,
 		},
@@ -138,11 +139,11 @@ func TestStorePersistsResumedLaunchWithUnknownUsageBaseline(t *testing.T) {
 	store := newTestStore(t, time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC))
 	attempt, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
 		Agent: "implementer", Profile: "implementer", Harness: "codex",
-		WorkDirectory: "/tmp/op-1", Branch: "orpheus/op-1", Worktree: "/tmp/op-1",
+		WorkDirectory: "/fixture/op-1", Branch: "orpheus/op-1", Worktree: "/fixture/op-1",
 		Launch: &taskstate.AgentLaunch{
 			Mode:             taskstate.AgentLaunchResumed,
 			SourceRunAttempt: 1,
-			SourceSession:    &taskstate.AgentSession{ID: "session-1", LogPath: "/tmp/session-1.jsonl"},
+			SourceSession:    &taskstate.AgentSession{ID: "session-1", LogPath: "/fixture/session-1.jsonl"},
 		},
 	})
 	if err != nil {
@@ -171,7 +172,7 @@ func TestStoreReconcilesLegacyTargetIntoGitFactsOnLoad(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("create state directory: %v", err)
 	}
-	if err := os.WriteFile(path, []byte("version: 4\nrepo_id: alpha\ntask_id: op-legacy\ntarget:\n  branch: main\n  worktree: /tmp/repo\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("version: 4\nrepo_id: alpha\ntask_id: op-legacy\ntarget:\n  branch: main\n  worktree: /fixture/repo\n"), 0o644); err != nil {
 		t.Fatalf("write legacy state: %v", err)
 	}
 
@@ -180,7 +181,7 @@ func TestStoreReconcilesLegacyTargetIntoGitFactsOnLoad(t *testing.T) {
 		t.Fatalf("load legacy state: %v", err)
 	}
 	facts, ok := taskstate.GitFactsFor(loaded)
-	if !ok || facts.Branch != "main" || facts.Worktree != "/tmp/repo" {
+	if !ok || facts.Branch != "main" || facts.Worktree != "/fixture/repo" {
 		t.Fatalf("Git facts = %#v/%t, want migrated main repo root facts", facts, ok)
 	}
 }
@@ -194,12 +195,12 @@ func TestStartRunPreservesLegacyTargetPublicationMode(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("create state directory: %v", err)
 	}
-	if err := os.WriteFile(path, []byte("version: 4\nrepo_id: alpha\ntask_id: op-legacy\ntarget:\n  branch: main\n  worktree: /tmp/repo\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("version: 4\nrepo_id: alpha\ntask_id: op-legacy\ntarget:\n  branch: main\n  worktree: /fixture/repo\n"), 0o644); err != nil {
 		t.Fatalf("write legacy state: %v", err)
 	}
 
 	first, err := store.StartRun("alpha", "op-legacy", taskstate.StartRunOptions{
-		Agent: "recorder", WorkDirectory: "/tmp/repo", Branch: "main", Worktree: "/tmp/repo",
+		Agent: "recorder", WorkDirectory: "/fixture/repo", Branch: "main", Worktree: "/fixture/repo",
 	})
 	if err != nil {
 		t.Fatalf("start first legacy run: %v", err)
@@ -208,7 +209,7 @@ func TestStartRunPreservesLegacyTargetPublicationMode(t *testing.T) {
 		t.Fatalf("finish first legacy run: %v", err)
 	}
 	if _, err := store.StartRun("alpha", "op-legacy", taskstate.StartRunOptions{
-		Agent: "recorder", WorkDirectory: "/tmp/repo", Branch: "main", Worktree: "/tmp/repo",
+		Agent: "recorder", WorkDirectory: "/fixture/repo", Branch: "main", Worktree: "/fixture/repo",
 	}); err != nil {
 		t.Fatalf("start follow-up legacy run: %v", err)
 	}
@@ -220,7 +221,7 @@ func TestStartRunPreservesLegacyTargetPublicationMode(t *testing.T) {
 	if _, modern := taskstate.WorkDirectoryFor(loaded); modern {
 		t.Fatalf("work directory = %#v, want absent legacy publication classification", loaded.WorkDirectory)
 	}
-	if loaded.Target.Branch != "main" || loaded.Target.Worktree != "/tmp/repo" {
+	if loaded.Target.Branch != "main" || loaded.Target.Worktree != "/fixture/repo" {
 		t.Fatalf("legacy target = %#v, want retained main/repo facts", loaded.Target)
 	}
 }
@@ -242,7 +243,7 @@ func TestStoreRejectsOldRunLevelTargetSchema(t *testing.T) {
 		"- attempt: 1",
 		"  status: succeeded",
 		"  branch: orpheus/op-1",
-		"  worktree: /tmp/op-1",
+		"  worktree: /fixture/op-1",
 		"  started_at: 2026-06-03T10:00:00Z",
 		"",
 	}, "\n")
@@ -505,7 +506,7 @@ func TestStoreCompleteRunRecordsCompletionFacts(t *testing.T) {
 	attempt := startAlphaRun(t, store, taskstate.StartRunOptions{
 		Agent:    "recorder",
 		Branch:   "main",
-		Worktree: "/tmp/alpha",
+		Worktree: "/fixture/alpha",
 	})
 
 	completed := completeAlphaRun(t, store, attempt.Attempt, "complete run", taskstate.CompleteRunOptions{
@@ -563,7 +564,7 @@ func TestStoreRecordsRepeatedCompletionDiagnostic(t *testing.T) {
 	attempt := startAlphaRun(t, store, taskstate.StartRunOptions{
 		Agent:    "recorder",
 		Branch:   "main",
-		Worktree: "/tmp/alpha",
+		Worktree: "/fixture/alpha",
 	})
 	completeAlphaRun(t, store, attempt.Attempt, "complete run", taskstate.CompleteRunOptions{
 		Summary:              "First summary",
@@ -846,7 +847,7 @@ func TestStoreTargetsReviewFindingsByRunAttempt(t *testing.T) {
 	run, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
 		Agent:    "recorder",
 		Branch:   "main",
-		Worktree: "/tmp/alpha",
+		Worktree: "/fixture/alpha",
 		ReviewFollowUp: &taskstate.ReviewFollowUp{
 			ReviewAttempt:  review.Attempt,
 			FindingIndexes: []int{0},
@@ -1853,7 +1854,7 @@ func TestStoreRecordsPRMergedTaskClosedEventIdempotently(t *testing.T) {
 func TestStorePersistsKnownZeroCostEstimate(t *testing.T) {
 	store := newTestStore(t, time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC))
 	run, err := store.StartRun("alpha", "op-zero-cost", taskstate.StartRunOptions{
-		Harness: "codex", Command: "codex", Branch: "main", Worktree: "/tmp/op-zero-cost",
+		Harness: "codex", Command: "codex", Branch: "main", Worktree: "/fixture/op-zero-cost",
 	})
 	if err != nil {
 		t.Fatalf("start run: %v", err)
@@ -1899,7 +1900,7 @@ func TestStoreRecordsSyncConflictResolutionEvents(t *testing.T) {
 		},
 		Branch:        "orpheus/op-1",
 		DefaultBranch: "main",
-		Worktree:      "/tmp/op-1",
+		Worktree:      "/fixture/op-1",
 		PRURL:         "https://github.test/org/repo/pull/42",
 		ConflictFiles: []string{"conflict.txt", "pkg/service.go"},
 	}
@@ -1921,7 +1922,7 @@ func TestStoreRecordsSyncConflictResolutionEvents(t *testing.T) {
 	finishedOpts.Usage = taskstate.RecordRunUsageOptions{
 		Session: &taskstate.AgentSession{
 			ID:      "session-123",
-			LogPath: "/tmp/codex/session.jsonl",
+			LogPath: "/fixture/codex/session.jsonl",
 		},
 		Usage: &taskstate.AgentUsage{
 			InputTokens:           100,
@@ -1982,7 +1983,7 @@ func TestStoreRecordsSyncConflictResolutionEvents(t *testing.T) {
 		"profile: codex",
 		"session_name: sync-conflict-op-1",
 		"id: session-123",
-		"log_path: /tmp/codex/session.jsonl",
+		"log_path: /fixture/codex/session.jsonl",
 		"input_tokens: 100",
 		"cached_input_tokens: 25",
 		"output_tokens: 50",
@@ -1994,7 +1995,7 @@ func TestStoreRecordsSyncConflictResolutionEvents(t *testing.T) {
 		"candidate_count: 1",
 		"branch: orpheus/op-1",
 		"default_branch: main",
-		"worktree: /tmp/op-1",
+		"worktree: /fixture/op-1",
 		"pr_url: https://github.test/org/repo/pull/42",
 		"conflict_files:",
 		"- conflict.txt",
@@ -2107,7 +2108,7 @@ func TestStoreValidatesTaskStatePathComponents(t *testing.T) {
 func newTestStore(t *testing.T, times ...time.Time) taskstate.Store {
 	t.Helper()
 
-	root := t.TempDir()
+	root := testutil.CanonicalTempDir(t)
 	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)

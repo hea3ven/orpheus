@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/hea3ven/orpheus/internal/agent"
-	"github.com/hea3ven/orpheus/internal/pathutil"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -235,7 +235,7 @@ func TestActiveContextResolverRejectsNonCanonicalTaskstateTarget(t *testing.T) {
 	must := require.New(t)
 	fixture := newActiveContextFixture(t, "op-1")
 	expectedWorktree := fixture.expectedWorktree(t, "op-1")
-	manualWorktree := filepath.Join(t.TempDir(), "manual-worktree")
+	manualWorktree := filepath.Join(testutil.CanonicalTempDir(t), "manual-worktree")
 	must.NoError(testMkdirAll(manualWorktree))
 	taskItem := fixture.worktreeTask("op-1", expectedWorktree)
 	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
@@ -752,7 +752,7 @@ func TestRenderReviewContextsSafelyTransportFindingText(t *testing.T) {
 
 			separateTaskExample := renderedSeparateTaskExample(t, output)
 			for _, want := range []string{
-				"report_dir=$(mktemp -d /tmp/orpheus-review.XXXXXX)",
+				"report_dir=$(mktemp -d /tmp/orpheus-review.XXXXXX)", // orpheus:allow-absolute-tmp-path -- verifies the operator-visible completion command, not a fixture path.
 				"printf '%s' '",
 				"| base64 --decode >\"$report_dir/finding.md\"",
 				"| base64 --decode >\"$report_dir/task-description.md\"",
@@ -822,7 +822,7 @@ func newActiveContextFixture(t *testing.T, taskID string) *activeContextFixture 
 	t.Helper()
 	must := require.New(t)
 
-	root := canonicalTestPath(t, t.TempDir())
+	root := testutil.CanonicalTempDir(t)
 	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
 	must.NoError(err)
 	repoPath := filepath.Join(root, "repo")
@@ -900,14 +900,4 @@ func (f *activeContextFixture) resolverWithBackend(
 
 func testMkdirAll(path string) error {
 	return os.MkdirAll(path, 0o755)
-}
-
-func canonicalTestPath(t *testing.T, path string) string {
-	t.Helper()
-
-	canonicalPath, err := pathutil.CanonicalAbs(path)
-	if err != nil {
-		t.Fatalf("canonicalize test path %q: %v", path, err)
-	}
-	return canonicalPath
 }
