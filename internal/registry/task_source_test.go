@@ -29,7 +29,7 @@ func TestTaskRepositorySourcesProjectsNormalizedRegistryValues(t *testing.T) {
 		t.Fatalf("sources = %#v", sources)
 	}
 	source := sources[0]
-	if source.Repository.ID != "alpha" || source.Repository.Name != "Alpha" || source.Repository.TaskIDPrefix != "op" || source.Repository.DefaultBranch != "main" {
+	if source.Repository.ID != "alpha" || source.Repository.Name != "Alpha" || source.Repository.TaskIDPrefix != "op" || source.Repository.DefaultBranch != "main" || source.Repository.BranchTemplate != "orpheus/{{task_id}}" {
 		t.Fatalf("repository = %#v", source.Repository)
 	}
 	if source.BackendDir != filepath.Join(paths.DataRoot, "repos", "alpha", "beads") {
@@ -44,5 +44,36 @@ func TestTaskRepositorySourcesProjectsNormalizedRegistryValues(t *testing.T) {
 	}
 	if registered.Repos[0].ReviewPipelineAliases[" local "] != " default " || !*registered.Repos[0].IncludePRReviewProcess {
 		t.Fatalf("task source aliases or bool pointer were not independently cloned")
+	}
+}
+
+func TestTaskRepositorySourcesResolveRepositoryThenGlobalBranchTemplate(t *testing.T) {
+	paths, err := state.NewPaths(testutil.CanonicalTempDir(t), testutil.CanonicalTempDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := paths.WriteConfigYAML("config.yaml", map[string]any{
+		"tasks": map[string]any{"branch_template": "global/{{task_id}}"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store := registry.NewStore(paths)
+	base := registry.Repo{ID: "alpha", Name: "Alpha", Path: testutil.CanonicalTempDir(t), BeadsMode: registry.BeadsModeManaged, BeadsPrefix: "op"}
+
+	source, err := store.TaskRepositorySource(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Repository.BranchTemplate != "global/{{task_id}}" {
+		t.Fatalf("global template = %q", source.Repository.BranchTemplate)
+	}
+
+	base.BranchTemplate = "repo/{{task_title}}"
+	source, err = store.TaskRepositorySource(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Repository.BranchTemplate != "repo/{{task_title}}" {
+		t.Fatalf("repository template = %q", source.Repository.BranchTemplate)
 	}
 }

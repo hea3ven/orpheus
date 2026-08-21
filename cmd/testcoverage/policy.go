@@ -133,11 +133,12 @@ func generatedBaseline(report qualityReport, prior baseline, policy qualityPolic
 			item.SuiteBaselineSeconds = priorLane.SuiteBaselineSeconds
 			item.SuiteBudgetSeconds = priorLane.SuiteBudgetSeconds
 		}
+		testSeconds := selectedTestSeconds(lane.Timings)
 		if item.SuiteBaselineSeconds <= 0 {
-			item.SuiteBaselineSeconds = lane.WallSeconds
+			item.SuiteBaselineSeconds = testSeconds
 		}
 		if item.SuiteBudgetSeconds <= 0 {
-			item.SuiteBudgetSeconds = timingAllowance(lane.WallSeconds, policy.Timing.SuiteRelativeTolerance, policy.Timing.SuiteAbsoluteSeconds)
+			item.SuiteBudgetSeconds = timingAllowance(testSeconds, policy.Timing.SuiteRelativeTolerance, policy.Timing.SuiteAbsoluteSeconds)
 		}
 		priorBudgets := timingBudgetMap(priorLane.PackageBudgets)
 		item.PackageBudgets = make([]timingBudget, 0, len(lane.Timings))
@@ -325,8 +326,9 @@ func assess(prior baseline, report qualityReport) decision {
 			regressions, refresh = assessMetric(regressions, refresh, name, "package", packageName, before, after, prior.Policy.Coverage.PackageSignificancePP, prior.Policy.Coverage.PackageDenominatorRelative, prior.Policy.Coverage.PackageDenominatorAbsolute)
 		}
 
-		if current.WallSeconds > baselineLane.SuiteBudgetSeconds {
-			timings = append(timings, finding{Kind: "timing", Lane: name, Scope: "suite", Prior: baselineLane.SuiteBudgetSeconds, Baseline: baselineLane.SuiteBaselineSeconds, Current: current.WallSeconds, Message: "suite timing budget exceeded"})
+		currentTestSeconds := selectedTestSeconds(current.Timings)
+		if currentTestSeconds > baselineLane.SuiteBudgetSeconds {
+			timings = append(timings, finding{Kind: "timing", Lane: name, Scope: "suite", Prior: baselineLane.SuiteBudgetSeconds, Baseline: baselineLane.SuiteBaselineSeconds, Current: currentTestSeconds, Message: "suite timing budget exceeded"})
 		}
 		priorTiming := timingBudgetMap(baselineLane.PackageBudgets)
 		currentTiming := timingMap(current.Timings)
@@ -390,7 +392,7 @@ func verifyTrackedBaseline(trusted, tracked baseline, report qualityReport, trus
 	// the base branch.
 	expected := generatedBaseline(report, trusted, trusted.Policy)
 	expected.Policy = tracked.Policy
-	if !reflect.DeepEqual(tracked, expected) {
+	if !adoptValidNewPackageBudgets(trusted, tracked, report, &expected) || !reflect.DeepEqual(tracked, expected) {
 		return decision{Status: statusRefreshRequired, Findings: []finding{{Kind: "baseline", Message: "tracked baseline is neither the trusted baseline nor the generated current baseline"}}}
 	}
 	if trustedDecision.Status == statusRefreshRequired {
@@ -399,6 +401,43 @@ func verifyTrackedBaseline(trusted, tracked baseline, report qualityReport, trus
 		return trustedDecision
 	}
 	return decision{Status: statusPass, Findings: []finding{{Kind: "baseline", Message: "generated baseline update matches current aggregates and preserves trusted timing budgets"}}}
+}
+
+// adoptValidNewPackageBudgets permits normal timing variance between baseline
+// generation and CI verification for packages absent from the trusted baseline.
+// Existing trusted budgets remain exact, while new budgets must be derived from
+// a plausible measurement under the trusted policy and still cover the current
+// selected-test timing.
+func adoptValidNewPackageBudgets(trusted, tracked baseline, report qualityReport, expected *baseline) bool {
+	for _, laneName := range laneNames {
+		trustedBudgets := timingBudgetMap(trusted.Lanes[laneName].PackageBudgets)
+		trackedBudgets := timingBudgetMap(tracked.Lanes[laneName].PackageBudgets)
+		currentTimings := timingMap(report.Lanes[laneName].Timings)
+		expectedLane := expected.Lanes[laneName]
+		for index, budget := range expectedLane.PackageBudgets {
+			if _, trustedPackage := trustedBudgets[budget.Name]; trustedPackage {
+				continue
+			}
+			trackedBudget, ok := trackedBudgets[budget.Name]
+			if !ok || !validNewPackageBudget(trackedBudget, currentTimings[budget.Name], trusted.Policy.Timing) {
+				return false
+			}
+			expectedLane.PackageBudgets[index] = trackedBudget
+		}
+		expected.Lanes[laneName] = expectedLane
+	}
+	return true
+}
+
+func validNewPackageBudget(budget timingBudget, currentSeconds float64, policy timingPolicy) bool {
+	if budget.BaselineSeconds <= 0 || currentSeconds <= 0 {
+		return false
+	}
+	if budget.Seconds != timingAllowance(budget.BaselineSeconds, policy.PackageRelativeTolerance, policy.PackageAbsoluteSeconds) {
+		return false
+	}
+	return currentSeconds <= budget.Seconds &&
+		budget.BaselineSeconds <= timingAllowance(currentSeconds, policy.PackageRelativeTolerance, policy.PackageAbsoluteSeconds)
 }
 
 func legacyBaselineWithTiming(legacy, generated baseline) baseline {

@@ -62,8 +62,8 @@ type FinalizationGit interface {
 	VerifyRemoteDestination(ctx context.Context, repo task.Repository, destination string) error
 	MergeTaskBranchIntoDestination(ctx context.Context, repo task.Repository, destination string, branch string) (string, error)
 	ValidateRecordedDirectMerge(ctx context.Context, repo task.Repository, destination string, mergeCommit string) (alreadyPushed bool, err error)
-	MaterializeTaskBranch(ctx context.Context, repo task.Repository, taskID string, paths state.Paths) (gitmeta.TaskWorktreeSetupResult, error)
-	ValidateMaterializedTaskBranchRetry(ctx context.Context, repo task.Repository, taskID string, paths state.Paths) error
+	MaterializeTaskBranch(ctx context.Context, repo task.Repository, taskID string, branch string, paths state.Paths) (gitmeta.TaskWorktreeSetupResult, error)
+	ValidateMaterializedTaskBranchRetry(ctx context.Context, repo task.Repository, taskID string, branch string, paths state.Paths) error
 }
 
 // LocalFinalizationGit delegates finalization Git operations to the local git binary.
@@ -132,19 +132,19 @@ func (LocalFinalizationGit) ValidateRecordedDirectMerge(
 
 // MaterializeTaskBranch moves reviewed repository-root changes to the
 // deterministic task branch immediately before feature-branch publication.
-func (LocalFinalizationGit) MaterializeTaskBranch(ctx context.Context, repo task.Repository, taskID string, paths state.Paths) (gitmeta.TaskWorktreeSetupResult, error) {
+func (LocalFinalizationGit) MaterializeTaskBranch(ctx context.Context, repo task.Repository, taskID string, branch string, paths state.Paths) (gitmeta.TaskWorktreeSetupResult, error) {
 	return gitmeta.MaterializeRepoRootTaskBranch(ctx, gitmeta.TaskWorktreeOptions{
 		RepoID: repo.ID, RepoName: repo.Name, RepoPath: repo.Path,
-		DefaultBranch: repo.DefaultBranch, TaskID: taskID, Paths: paths, AllowDirty: true,
+		DefaultBranch: repo.DefaultBranch, TaskID: taskID, Branch: branch, Paths: paths, AllowDirty: true,
 	})
 }
 
 // ValidateMaterializedTaskBranchRetry validates an interrupted repository-root
 // materialization before finalization repairs its persisted Git facts.
-func (LocalFinalizationGit) ValidateMaterializedTaskBranchRetry(ctx context.Context, repo task.Repository, taskID string, paths state.Paths) error {
+func (LocalFinalizationGit) ValidateMaterializedTaskBranchRetry(ctx context.Context, repo task.Repository, taskID string, branch string, paths state.Paths) error {
 	return gitmeta.ValidateMaterializedRepoRootTaskBranchRetry(ctx, gitmeta.TaskWorktreeOptions{
 		RepoID: repo.ID, RepoName: repo.Name, RepoPath: repo.Path,
-		DefaultBranch: repo.DefaultBranch, TaskID: taskID, Paths: paths, AllowDirty: true,
+		DefaultBranch: repo.DefaultBranch, TaskID: taskID, Branch: branch, Paths: paths, AllowDirty: true,
 	})
 }
 
@@ -255,6 +255,25 @@ type finalizationContext struct {
 	finalization taskstate.Finalization
 }
 
+func expectedFinalizationTargets(
+	repo task.Repository,
+	taskItem task.Task,
+	finalizeCtx finalizationContext,
+	paths state.Paths,
+) (tasktarget.ExpectedTargets, error) {
+	if isLegacyMainSoloFinalizationTarget(repo, finalizeCtx) {
+		return tasktarget.ExpectedTargetsForLegacyMainSolo(repo)
+	}
+	return tasktarget.ExpectedTargetsForTaskOrRecordedBranch(repo, taskItem, finalizeCtx.target.Branch, paths)
+}
+
+func isLegacyMainSoloFinalizationTarget(repo task.Repository, finalizeCtx finalizationContext) bool {
+	if _, modern := taskstate.WorkDirectoryFor(finalizeCtx.state); modern {
+		return false
+	}
+	return tasktarget.ClassifyRunTarget(repo, finalizeCtx.target.Branch, finalizeCtx.target.Worktree) == tasktarget.TargetMainSolo
+}
+
 // Finalize commits reviewed repo-root changes, pushes the default branch, and
 // closes the backend task after the push has succeeded.
 func (s FinalizationService) Finalize(ctx context.Context, opts FinalizeOptions) (FinalizationResult, error) {
@@ -349,6 +368,13 @@ func (s FinalizationService) finalizeLocked(
 
 	finalizeCtx, err := s.loadFinalizationContext(repo, target.task)
 	if err != nil {
+		return FinalizationResult{}, err
+	}
+	// Resolve the branch before finalization writes any durable publication
+	// facts. Recorded feature branches bypass current configuration so retries
+	// remain recoverable after a template change. Legacy main/solo state has no
+	// task branch to resolve and retains its recorded direct-finalization flow.
+	if _, err := expectedFinalizationTargets(repo, target.task, finalizeCtx, s.Paths); err != nil {
 		return FinalizationResult{}, err
 	}
 	if opts.RequirePassedReview {
@@ -468,7 +494,7 @@ func (s FinalizationService) finalizeAfterReviewGate(
 	diagnosticTarget *finalizationDiagnosticTarget,
 ) (FinalizationResult, error) {
 	repo := target.source.Repository
-	targets, err := tasktarget.ExpectedTargetsForTask(repo, target.task.ID, s.Paths)
+	targets, err := expectedFinalizationTargets(repo, target.task, finalizeCtx, s.Paths)
 	if err != nil {
 		return FinalizationResult{}, err
 	}
@@ -543,6 +569,7 @@ func (s FinalizationService) reconcileMaterializedRepoRootTaskBranch(
 		gitState,
 		repo,
 		target.task.ID,
+		targets.RepoRootTeam.Branch,
 		directory.Path,
 		finalizeCtx.finalization,
 	)
@@ -587,6 +614,7 @@ func (s FinalizationService) validateMaterializedRepoRootTaskBranch(
 	gitState FinalizationGit,
 	repo task.Repository,
 	taskID string,
+	branch string,
 	worktree string,
 	finalization taskstate.Finalization,
 ) (taskstate.Finalization, error) {
@@ -621,7 +649,7 @@ func (s FinalizationService) validateMaterializedRepoRootTaskBranch(
 			return finalization, nil
 		}
 	}
-	if err := gitState.ValidateMaterializedTaskBranchRetry(ctx, repo, taskID, s.Paths); err != nil {
+	if err := gitState.ValidateMaterializedTaskBranchRetry(ctx, repo, taskID, branch, s.Paths); err != nil {
 		return taskstate.Finalization{}, fmt.Errorf("validate materialized task branch recovery: %w", err)
 	}
 	return finalization, nil
@@ -642,6 +670,9 @@ func (s FinalizationService) materializeAndPublishRepoRoot(
 	if _, err := validateFeatureBranchIntegrationDestination(repo, finalizeCtx.finalization, publicationBranch); err != nil {
 		return FinalizationResult{}, err
 	}
+	if err := ensureTaskBranchUnowned(ctx, target.backend, target.task.ID, publicationBranch); err != nil {
+		return FinalizationResult{}, err
+	}
 	finalization, err := s.RunStore.RecordFinalizationPublicationStart(repo.ID, target.task.ID)
 	if err != nil {
 		return FinalizationResult{}, fmt.Errorf("record publication start before materializing task branch: %w", err)
@@ -649,7 +680,7 @@ func (s FinalizationService) materializeAndPublishRepoRoot(
 	finalizeCtx.finalization = finalization
 	finalizeCtx.state.Finalization = &finalization
 
-	setup, err := gitState.MaterializeTaskBranch(ctx, repo, target.task.ID, s.Paths)
+	setup, err := gitState.MaterializeTaskBranch(ctx, repo, target.task.ID, publicationBranch, s.Paths)
 	if err != nil {
 		return FinalizationResult{}, fmt.Errorf("materialize repository-root task branch: %w", err)
 	}
@@ -1598,17 +1629,25 @@ func (s FinalizationService) inferableCurrentBranchReadyTasks(
 ) ([]task.Task, error) {
 	candidates := make([]task.Task, 0, 1)
 	for _, taskItem := range tasks {
-		targets, err := tasktarget.ExpectedTargetsForTask(repo, taskItem.ID, s.Paths)
-		if err != nil {
-			return nil, err
+		if taskItem.Status == task.StatusClosed {
+			continue
 		}
 		state, err := s.RunStore.Load(repo.ID, taskItem.ID)
 		if err != nil {
 			return nil, fmt.Errorf("load task state for %s/%s: %w", repo.ID, taskItem.ID, err)
 		}
 		taskTarget, ok := taskstate.GitFactsFor(state)
-		if !ok {
+		if !ok || strings.TrimSpace(taskTarget.Branch) != currentBranch {
 			continue
+		}
+		taskWorktree, err := cleanAbsPath("taskstate target worktree", taskTarget.Worktree)
+		if err != nil || taskWorktree != workingDirectory {
+			continue
+		}
+		finalizeCtx := finalizationContext{state: state, target: taskTarget}
+		targets, err := expectedFinalizationTargets(repo, taskItem, finalizeCtx, s.Paths)
+		if err != nil {
+			return nil, err
 		}
 		target, err := tasktarget.ClassifyGitFacts(taskTarget, targets)
 		if err != nil {

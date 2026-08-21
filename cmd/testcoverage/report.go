@@ -13,7 +13,17 @@ func printReport(result qualityReport, output string) {
 func printReportTo(outputWriter io.Writer, result qualityReport, output string) {
 	for _, name := range laneNames {
 		lane := result.Lanes[name]
-		_, _ = fmt.Fprintf(outputWriter, "%s: %d/%d statements (%.2f%%), %d test events, %.2fs\n", name, lane.Coverage.CoveredStatements, lane.Coverage.StatementTotal, percentage(lane.Coverage), lane.TestCount, lane.WallSeconds)
+		_, _ = fmt.Fprintf(
+			outputWriter,
+			"%s: %d/%d statements (%.2f%%), %d test events, %.2fs selected tests (%.2fs wall)\n",
+			name,
+			lane.Coverage.CoveredStatements,
+			lane.Coverage.StatementTotal,
+			percentage(lane.Coverage),
+			lane.TestCount,
+			selectedTestSeconds(lane.Timings),
+			lane.WallSeconds,
+		)
 		printPackageSummary(outputWriter, lane)
 		if lane.Failure != nil {
 			_, _ = fmt.Fprintf(outputWriter, "  failed: %s (%d decoded failures)\n", lane.Failure.Error, len(lane.Failure.Failures))

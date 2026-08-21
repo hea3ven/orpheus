@@ -94,6 +94,44 @@ func TestIntegrationRepoConfigUpdatesPublicationPolicyForExistingRepo(t *testing
 	is.Equal(template, reg.Repos[0].TitleTemplate)
 }
 
+func TestIntegrationRepoConfigSetsAndClearsBranchTemplateWithGlobalFallback(t *testing.T) {
+	t.Parallel()
+	is := assert.New(t)
+	must := require.New(t)
+	withFakeBDInit(t)
+	repoPath := newTestRepoPath(t)
+	paths := currentTestPaths(t)
+
+	_, addErr := executeCommand(t, []string{"repo", "add", repoPath})
+	is.Empty(addErr)
+	must.NoError(paths.WriteConfigYAML("config.yaml", map[string]any{
+		"tasks": map[string]any{"branch_template": "global/{{task_title}}"},
+	}))
+
+	stdout, stderr := executeCommand(t, []string{"repo", "config", "get", "alpha", "branch-template"})
+	is.Empty(stderr)
+	is.Contains(stdout, "branch-template")
+	is.Contains(stdout, "(not set)")
+	is.Contains(stdout, "global/{{task_title}}")
+
+	stdout, stderr = executeCommand(t, []string{"repo", "config", "set", "alpha", "branch-template", "repo/{{external_ref}}/{{task_id}}"})
+	is.Empty(stderr)
+	is.Contains(stdout, "repo/{{external_ref}}/{{task_id}}")
+
+	store := registry.NewStore(paths)
+	reg, err := store.Load()
+	must.NoError(err)
+	must.Len(reg.Repos, 1)
+	is.Equal("repo/{{external_ref}}/{{task_id}}", reg.Repos[0].BranchTemplate)
+
+	stdout, stderr = executeCommand(t, []string{"repo", "config", "set", "alpha", "branch-template", ""})
+	is.Empty(stderr)
+	is.Contains(stdout, "global/{{task_title}}")
+	reg, err = store.Load()
+	must.NoError(err)
+	is.Empty(reg.Repos[0].BranchTemplate)
+}
+
 func TestIntegrationRepoConfigSetsAndClearsIncludePRReviewProcess(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -215,6 +253,7 @@ func TestIntegrationRepoConfigRejectsInvalidPolicyWithoutMutatingRegistry(t *tes
 	for _, args := range [][]string{
 		{"repo", "config", "set", "alpha", "summary-style", "informal"},
 		{"repo", "config", "set", "alpha", "title-template", "{{task_id}}: {{summary}}"},
+		{"repo", "config", "set", "alpha", "branch-template", "{{summary}}"},
 	} {
 		stdout, _, err := executeCommandWithError(t, args)
 		must.Error(err)

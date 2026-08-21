@@ -417,7 +417,7 @@ func (r ActiveContextResolver) resolveContextTarget(
 	taskID string,
 	taskTarget taskstate.GitFacts,
 ) (tasktarget.ExpectedTargets, tasktarget.Target, error) {
-	targets, err := tasktarget.ExpectedTargetsForTask(source.Repository, taskID, r.Paths)
+	targets, err := tasktarget.ExpectedTargetsForTaskOrRecordedBranch(source.Repository, taskItem, taskTarget.Branch, r.Paths)
 	if err != nil {
 		return tasktarget.ExpectedTargets{}, tasktarget.Target{}, err
 	}
@@ -455,11 +455,12 @@ func (r ActiveContextResolver) resolveConflictResolutionTarget(
 	taskItem taskmodel.Task,
 	taskID string,
 ) (tasktarget.ExpectedTargets, tasktarget.Target, error) {
-	targets, err := tasktarget.ExpectedTargetsForTask(source.Repository, taskID, r.Paths)
+	metadata := taskItem.OrpheusMetadata()
+	targets, err := tasktarget.ExpectedTargetsForTaskOrRecordedBranch(source.Repository, taskItem, metadata.Branch, r.Paths)
 	if err != nil {
 		return tasktarget.ExpectedTargets{}, tasktarget.Target{}, err
 	}
-	candidate, err := tasktarget.ClassifyMetadataTarget(taskItem.OrpheusMetadata(), targets)
+	candidate, err := tasktarget.ClassifyMetadataTarget(metadata, targets)
 	if err != nil {
 		return tasktarget.ExpectedTargets{}, tasktarget.Target{}, fmt.Errorf(
 			"task %s has inconsistent Orpheus metadata: %w",

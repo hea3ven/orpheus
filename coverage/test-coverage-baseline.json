@@ -18,10 +18,10 @@
   },
   "lanes": {
     "integration": {
-      "test_count": 428,
+      "test_count": 437,
       "coverage": {
-        "statement_total": 19143,
-        "covered_statements": 12041
+        "statement_total": 19387,
+        "covered_statements": 12218
       },
       "packages": [
         {
@@ -31,7 +31,7 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
-          "statement_total": 629,
+          "statement_total": 654,
           "covered_statements": 0
         },
         {
@@ -41,7 +41,7 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/agent",
-          "statement_total": 1832,
+          "statement_total": 1833,
           "covered_statements": 1215
         },
         {
@@ -56,8 +56,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 4598,
-          "covered_statements": 3095
+          "statement_total": 4618,
+          "covered_statements": 3112
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/doctor",
@@ -66,8 +66,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/git",
-          "statement_total": 1435,
-          "covered_statements": 929
+          "statement_total": 1438,
+          "covered_statements": 932
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/logging",
@@ -96,8 +96,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/registry",
-          "statement_total": 221,
-          "covered_statements": 168
+          "statement_total": 240,
+          "covered_statements": 182
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/review",
@@ -125,6 +125,11 @@
           "covered_statements": 460
         },
         {
+          "name": "github.com/hea3ven/orpheus/internal/taskbranch",
+          "statement_total": 96,
+          "covered_statements": 77
+        },
+        {
           "name": "github.com/hea3ven/orpheus/internal/taskstate",
           "statement_total": 2154,
           "covered_statements": 1501
@@ -136,8 +141,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/tasktarget",
-          "statement_total": 82,
-          "covered_statements": 63
+          "statement_total": 102,
+          "covered_statements": 80
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/testguard",
@@ -156,8 +161,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/workflow",
-          "statement_total": 2895,
-          "covered_statements": 1937
+          "statement_total": 2955,
+          "covered_statements": 1986
         }
       ],
       "suite_baseline_seconds": 73.960955796,
@@ -204,6 +209,11 @@
           "seconds": 0.475
         },
         {
+          "name": "github.com/hea3ven/orpheus/internal/taskbranch",
+          "baseline_seconds": 0.053,
+          "seconds": 0.303
+        },
+        {
           "name": "github.com/hea3ven/orpheus/internal/testguard",
           "baseline_seconds": 0.266,
           "seconds": 0.516
@@ -216,10 +226,10 @@
       ]
     },
     "unit": {
-      "test_count": 956,
+      "test_count": 1013,
       "coverage": {
-        "statement_total": 19143,
-        "covered_statements": 9988
+        "statement_total": 19387,
+        "covered_statements": 10220
       },
       "packages": [
         {
@@ -229,8 +239,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
-          "statement_total": 629,
-          "covered_statements": 366
+          "statement_total": 654,
+          "covered_statements": 390
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testtiming",
@@ -239,8 +249,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/agent",
-          "statement_total": 1832,
-          "covered_statements": 1498
+          "statement_total": 1833,
+          "covered_statements": 1499
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/agentexec",
@@ -254,8 +264,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 4598,
-          "covered_statements": 1679
+          "statement_total": 4618,
+          "covered_statements": 1681
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/doctor",
@@ -264,8 +274,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/git",
-          "statement_total": 1435,
-          "covered_statements": 402
+          "statement_total": 1438,
+          "covered_statements": 405
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/logging",
@@ -294,8 +304,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/registry",
-          "statement_total": 221,
-          "covered_statements": 192
+          "statement_total": 240,
+          "covered_statements": 209
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/review",
@@ -323,6 +333,11 @@
           "covered_statements": 621
         },
         {
+          "name": "github.com/hea3ven/orpheus/internal/taskbranch",
+          "statement_total": 96,
+          "covered_statements": 89
+        },
+        {
           "name": "github.com/hea3ven/orpheus/internal/taskstate",
           "statement_total": 2154,
           "covered_statements": 1466
@@ -334,8 +349,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/tasktarget",
-          "statement_total": 82,
-          "covered_statements": 66
+          "statement_total": 102,
+          "covered_statements": 84
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/testguard",
@@ -354,8 +369,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/workflow",
-          "statement_total": 2895,
-          "covered_statements": 1368
+          "statement_total": 2955,
+          "covered_statements": 1446
         }
       ],
       "suite_baseline_seconds": 7.895625235,
@@ -450,6 +465,11 @@
           "name": "github.com/hea3ven/orpheus/internal/task",
           "baseline_seconds": 0.055,
           "seconds": 0.305
+        },
+        {
+          "name": "github.com/hea3ven/orpheus/internal/taskbranch",
+          "baseline_seconds": 0.052,
+          "seconds": 0.302
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstate",

@@ -760,11 +760,12 @@ func (s SyncService) syncOpenPRBranch(ctx context.Context, target syncTarget, gi
 	if err != nil {
 		return SyncResult{}, err
 	}
-	targets, err := tasktarget.ExpectedTargetsForTask(repo, target.task.ID, s.Paths)
+	metadata := target.task.OrpheusMetadata()
+	targets, err := tasktarget.ExpectedTargetsForTaskOrRecordedBranch(repo, target.task, metadata.Branch, s.Paths)
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("resolve sync targets for task %s: %w", target.task.ID, err)
 	}
-	taskTarget, err := tasktarget.ClassifyMetadataTarget(target.task.OrpheusMetadata(), targets)
+	taskTarget, err := tasktarget.ClassifyMetadataTarget(metadata, targets)
 	if err != nil {
 		return SyncResult{
 			Reason: fmt.Sprintf("task metadata target is incomplete or unsupported: %v", err),

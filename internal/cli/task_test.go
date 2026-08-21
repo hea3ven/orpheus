@@ -1769,7 +1769,7 @@ func TestIntegrationTaskRunExecutesImplementerDefaultAttachedFromDeterministicWo
 	is.Contains(string(bdLog), repoPath)
 	is.Contains(string(bdLog), "--json --readonly --sandbox show --id op-1")
 	is.Contains(string(bdLog), "--json --sandbox update op-1 --status in_progress --set-metadata orpheus.branch=orpheus/op-1 --set-metadata orpheus.worktree="+worktreePath)
-	is.NotContains(string(bdLog), "--json --readonly --sandbox list")
+	is.Contains(string(bdLog), "--json --readonly --sandbox list --all --limit 0 --type task")
 
 	log := readTestFileString(t, agentLogPath)
 	for _, want := range []string{
@@ -2434,7 +2434,9 @@ func TestIntegrationTaskRunMainBlocksOtherRepoRootOwnerButWorktreeRunStillWorks(
 	is.Contains(worktreeStderr, "fake agent stderr")
 	bdLog, err := os.ReadFile(bdLogPath)
 	must.NoError(err)
-	is.Equal(2, strings.Count(string(bdLog), "--json --readonly --sandbox list --all --limit 0"))
+	// Each run lists task and epic records: repo-root ownership and task-branch
+	// collision checks both inspect the complete task source.
+	is.Equal(4, strings.Count(string(bdLog), "--json --readonly --sandbox list --all --limit 0"))
 }
 
 func TestIntegrationTaskRunMainFailsDirtyRepoRootBeforeLaunch(t *testing.T) {
@@ -2988,6 +2990,16 @@ if [ "$PWD" != %s ]; then
   exit 65
 fi
 case "$*" in
+  "--json --readonly --sandbox list --all --limit 0 --type task")
+    cat <<'JSON'
+[{"id":"op-race","title":"Race task","status":"open","priority":1,"issue_type":"task"}]
+JSON
+    exit 0
+    ;;
+  "--json --readonly --sandbox list --all --limit 0 --type epic")
+    printf '[]\n'
+    exit 0
+    ;;
   "--json --readonly --sandbox show --id op-race")
     count=0
     if [ -f %s ]; then

@@ -634,8 +634,149 @@ func validateDispatchStartForReviewWithRuns(
 	})
 }
 
+func TestDispatchValidateStartRejectsMissingTemplateValueBeforeSetup(t *testing.T) {
+	paths := newDispatchTestPaths(t)
+	repo := task.Repository{ID: "alpha", Name: "Alpha", Path: filepath.Join(testutil.CanonicalTempDir(t), "repo"), DefaultBranch: "main", BranchTemplate: "feature/{{external_ref}}"}
+	taskItem := task.Task{ID: "op-1", Title: "Missing reference", Status: task.StatusOpen}
+	service := DispatchService{Paths: paths, RunStore: fakeDispatchRunStore{}}
+
+	_, err := service.validateStart(context.Background(), DispatchStartOptions{
+		TaskID: taskItem.ID, Source: task.RepositorySource{Repository: repo}, Backend: fakeDispatchBackend{taskItem: taskItem},
+	})
+	if err == nil || !strings.Contains(err.Error(), "external reference") {
+		t.Fatalf("validate start error = %v, want missing external reference", err)
+	}
+}
+
+func TestDispatchValidateStartRejectsReservedBranchTemplateBeforeSetup(t *testing.T) {
+	paths := newDispatchTestPaths(t)
+	repo := task.Repository{
+		ID: "alpha", Name: "Alpha", Path: filepath.Join(testutil.CanonicalTempDir(t), "repo"), DefaultBranch: "main",
+		BranchTemplate: "HEAD",
+	}
+	taskItem := task.Task{ID: "op-1", Status: task.StatusOpen}
+	service := DispatchService{Paths: paths, RunStore: fakeDispatchRunStore{}}
+
+	_, err := service.validateStart(context.Background(), DispatchStartOptions{
+		TaskID: taskItem.ID, Source: task.RepositorySource{Repository: repo}, Backend: fakeDispatchBackend{taskItem: taskItem},
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid Git ref syntax") {
+		t.Fatalf("validate start error = %v, want reserved branch rejection", err)
+	}
+}
+
+func TestDispatchValidateStartRejectsDefaultBranchTemplateForAllDispatchModes(t *testing.T) {
+	paths := newDispatchTestPaths(t)
+	tests := []struct {
+		name         string
+		template     string
+		taskItem     task.Task
+		repoRootMode bool
+	}{
+		{
+			name:     "worktree literal",
+			template: "main",
+			taskItem: task.Task{ID: "op-1", Status: task.StatusOpen},
+		},
+		{
+			name:         "repo root task title",
+			template:     "{{task_title}}",
+			taskItem:     task.Task{ID: "op-1", Title: "main", Status: task.StatusOpen},
+			repoRootMode: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := task.Repository{
+				ID: "alpha", Name: "Alpha", Path: filepath.Join(testutil.CanonicalTempDir(t), "repo"), DefaultBranch: "main",
+				BranchTemplate: tt.template,
+			}
+			service := DispatchService{Paths: paths, RunStore: fakeDispatchRunStore{}}
+			_, err := service.validateStart(context.Background(), DispatchStartOptions{
+				TaskID: tt.taskItem.ID, Source: task.RepositorySource{Repository: repo},
+				Backend: fakeDispatchBackend{taskItem: tt.taskItem}, RepoRootMode: tt.repoRootMode,
+			})
+			if err == nil || !strings.Contains(err.Error(), "matches registered default branch") {
+				t.Fatalf("validate start error = %v, want default branch rejection", err)
+			}
+		})
+	}
+}
+
+func TestDispatchValidateStartRejectsTaskBranchOwnedByAnotherTask(t *testing.T) {
+	paths := newDispatchTestPaths(t)
+	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
+	repo := task.Repository{ID: "alpha", Name: "Alpha", Path: repoPath, DefaultBranch: "main", BranchTemplate: "feature/{{task_title}}"}
+	taskItem := task.Task{ID: "op-1", Title: "Same title", Status: task.StatusOpen}
+	other := task.Task{ID: "op-2", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: "feature/Same-title"}}
+	service := DispatchService{Paths: paths, RunStore: fakeDispatchRunStore{}}
+
+	_, err := service.validateStart(context.Background(), DispatchStartOptions{
+		TaskID: taskItem.ID, Source: task.RepositorySource{Repository: repo}, Backend: fakeDispatchBackend{taskItem: taskItem, tasks: []task.Task{taskItem, other}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "already recorded for task op-2") {
+		t.Fatalf("validate start error = %v, want collision", err)
+	}
+}
+
+func TestDispatchValidateStartRejectsCompatibilityBranchCollisionAfterNormalization(t *testing.T) {
+	paths := newDispatchTestPaths(t)
+	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
+	repo := task.Repository{ID: "alpha", Name: "Alpha", Path: repoPath, DefaultBranch: "main"}
+	taskItem := task.Task{ID: "op.1", Status: task.StatusOpen}
+	other := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-1"}}
+	service := DispatchService{Paths: paths, RunStore: fakeDispatchRunStore{}}
+
+	_, err := service.validateStart(context.Background(), DispatchStartOptions{
+		TaskID: taskItem.ID, Source: task.RepositorySource{Repository: repo}, Backend: fakeDispatchBackend{taskItem: taskItem, tasks: []task.Task{taskItem, other}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "already recorded for task op-1") {
+		t.Fatalf("validate start error = %v, want compatibility branch collision", err)
+	}
+}
+
+func TestDispatchValidateStartPreservesRecordedBranchAfterTemplateChange(t *testing.T) {
+	paths := newDispatchTestPaths(t)
+	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
+	worktree := filepath.Join(paths.DataRoot, "repos", "alpha", "worktrees", "op-1")
+	repo := task.Repository{ID: "alpha", Name: "Alpha", Path: repoPath, DefaultBranch: "main", BranchTemplate: "changed/{{task_title}}"}
+	taskItem := task.Task{ID: "op-1", Title: "New template", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: "recorded/branch", task.MetadataWorktree: worktree}}
+	store := fakeDispatchRunStore{state: taskstate.TaskState{Target: taskstate.GitFacts{Branch: "recorded/branch", Worktree: worktree}}}
+	service := DispatchService{Paths: paths, RunStore: store}
+
+	plan, err := service.validateStart(context.Background(), DispatchStartOptions{
+		TaskID: taskItem.ID, Source: task.RepositorySource{Repository: repo}, Backend: fakeDispatchBackend{taskItem: taskItem},
+	})
+	if err != nil {
+		t.Fatalf("validate start error = %v", err)
+	}
+	if plan.expected.Branch != "recorded/branch" {
+		t.Fatalf("expected branch = %q, want recorded branch", plan.expected.Branch)
+	}
+}
+
+func TestDispatchValidateStartRecoversBackendRecordedBranchWithoutLocalGitFacts(t *testing.T) {
+	paths := newDispatchTestPaths(t)
+	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
+	worktree := filepath.Join(paths.DataRoot, "repos", "alpha", "worktrees", "op-1")
+	repo := task.Repository{ID: "alpha", Name: "Alpha", Path: repoPath, DefaultBranch: "main", BranchTemplate: "changed/{{external_ref}}"}
+	taskItem := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: "recorded/branch", task.MetadataWorktree: worktree}}
+	service := DispatchService{Paths: paths, RunStore: fakeDispatchRunStore{}}
+
+	plan, err := service.validateStart(context.Background(), DispatchStartOptions{
+		TaskID: taskItem.ID, Source: task.RepositorySource{Repository: repo}, Backend: fakeDispatchBackend{taskItem: taskItem},
+	})
+	if err != nil {
+		t.Fatalf("validate start error = %v", err)
+	}
+	if plan.expected.Branch != "recorded/branch" || plan.expected.WorktreePath != worktree {
+		t.Fatalf("expected target = %#v, want recorded backend target", plan.expected)
+	}
+}
+
 type fakeDispatchBackend struct {
 	taskItem task.Task
+	tasks    []task.Task
 }
 
 func (b fakeDispatchBackend) Get(context.Context, string) (task.Task, error) {
@@ -643,6 +784,9 @@ func (b fakeDispatchBackend) Get(context.Context, string) (task.Task, error) {
 }
 
 func (b fakeDispatchBackend) List(context.Context) ([]task.Task, error) {
+	if b.tasks != nil {
+		return b.tasks, nil
+	}
 	return []task.Task{b.taskItem}, nil
 }
 
