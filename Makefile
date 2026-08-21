@@ -1,4 +1,4 @@
-.PHONY: build test test-unit test-integration quality quality-baseline coverage coverage-baseline coverage-audit \
+.PHONY: build test test-unit test-integration quality quality-baseline quality-baseline-force coverage coverage-baseline coverage-audit \
 	test-perf test-perf-integration test-perf-baseline test-perf-integration-baseline \
 	test-perf-baseline-update test-perf-integration-baseline-update fmt lint check
 
@@ -8,7 +8,7 @@ QUALITY_COMPARE_TO ?=
 INTEGRATION_TEST_PATTERN := ^TestIntegration
 INTEGRATION_TEST_ARGS := -tags=integration -run '$(INTEGRATION_TEST_PATTERN)'
 
-build: check
+build:
 	go build ./cmd/orpheus
 
 # Unit tests are package-owned and hermetic: no installed Git, Beads, gh,
@@ -30,6 +30,11 @@ quality:
 
 quality-baseline:
 	go run ./cmd/testcoverage -write-baseline
+
+# This is only for a maintainer's documented post-force-merge recovery.
+# It deliberately generates no commits or hooks.
+quality-baseline-force:
+	go run ./cmd/testcoverage -write-baseline -force-baseline
 
 # Compatibility aliases for the original coverage workflow.
 coverage: quality
@@ -68,4 +73,4 @@ fmt:
 lint:
 	golangci-lint run ./...
 
-check: fmt quality lint
+check: fmt quality lint build

@@ -26,7 +26,7 @@ Orpheus has two structurally selected test lanes:
 - `make test-integration` runs cross-package workflows and isolated local contracts, including real Git, real Beads, compiled CLI, and child-process scenarios. It requires `git` and `bd` on `PATH` (some schema scenarios also skip unless `dolt` is available); the target fails early when `bd` is unavailable.
 - Integration sources have `//go:build integration` and integration test bodies begin `TestIntegration`; untagged, non-prefixed test bodies are units. The repository convention test rejects an omitted or multiply selected top-level test body. Lane membership comes from the build constraint, not the name filter alone.
 - Both lanes use only temporary, isolated filesystem state. They are network-free, credential-free, isolated from operator data, and block real model agents. Disk use by itself does not make a test an integration.
-- `make quality` runs each test lane once and derives test, coverage, and timing decisions from those executions. `make check` adds formatting and linting around that single-pass report.
+- `make quality` runs each test lane once and derives test, coverage, and timing decisions from those executions. `make check` adds formatting, linting, and a CLI build around that single-pass report without repeating either lane. Pull requests use the same single-pass result as the required `Pull-request quality gate`; see [testing guidance](docs/testing.md#pull-request-quality-gate) for baseline refresh and force-merge recovery.
 
 See [testing guidance](docs/testing.md) for scope, prerequisites, and timing baselines.
 
