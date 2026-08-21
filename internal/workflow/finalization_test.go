@@ -18,6 +18,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/tasktarget"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
@@ -399,7 +400,7 @@ func (g *fakeFinalizationGit) ValidateMaterializedTaskBranchRetry(context.Contex
 
 func TestFinalizeRequiresConfirmationForRunningCompletion(t *testing.T) {
 	service, _, store, backend := newFinalizationTestService(t, []task.Task{
-		finalizationMainTask("op-1", "/tmp/repo"),
+		finalizationMainTask("op-1", "/fixture/repo"),
 	}, map[string]taskstate.TaskState{
 		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
 			Attempt: 1,
@@ -432,7 +433,7 @@ func TestFinalizeRequiresConfirmationForRunningCompletion(t *testing.T) {
 
 func TestFinalizeAllowsConfirmedRunningCompletionWithoutMutatingRunStatus(t *testing.T) {
 	service, git, store, backend := newFinalizationTestService(t, []task.Task{
-		finalizationMainTask("op-1", "/tmp/repo"),
+		finalizationMainTask("op-1", "/fixture/repo"),
 	}, map[string]taskstate.TaskState{
 		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
 			Attempt: 1,
@@ -493,7 +494,7 @@ func TestFinalizeRecordsPublicationFailureAndRetriesWithPassedReview(t *testing.
 		FinishedAt: &finishedAt,
 	}}
 	service, git, store, backend := newFinalizationTestService(t, []task.Task{
-		finalizationMainTask("op-1", "/tmp/repo"),
+		finalizationMainTask("op-1", "/fixture/repo"),
 	}, map[string]taskstate.TaskState{
 		"alpha/op-1": taskState,
 	})
@@ -539,7 +540,7 @@ func TestFinalizeRecordsPublicationFailureAndRetriesWithPassedReview(t *testing.
 
 func TestFinalizeDoesNotRequestRunningConfirmationWhenOtherChecksFail(t *testing.T) {
 	service, git, _, _ := newFinalizationTestService(t, []task.Task{
-		finalizationMainTask("op-1", "/tmp/repo"),
+		finalizationMainTask("op-1", "/fixture/repo"),
 	}, map[string]taskstate.TaskState{
 		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
 			Attempt: 1,
@@ -566,7 +567,7 @@ func TestFinalizeDoesNotRequestRunningConfirmationWhenOtherChecksFail(t *testing
 
 func TestFinalizeInfersSingleRunningCompletionCandidate(t *testing.T) {
 	service, _, _, _ := newFinalizationTestService(t, []task.Task{
-		finalizationMainTask("op-1", "/tmp/repo"),
+		finalizationMainTask("op-1", "/fixture/repo"),
 	}, map[string]taskstate.TaskState{
 		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
 			Attempt: 2,
@@ -580,7 +581,7 @@ func TestFinalizeInfersSingleRunningCompletionCandidate(t *testing.T) {
 		}),
 	})
 
-	_, err := service.Finalize(context.Background(), workflow.FinalizeOptions{CWD: "/tmp/repo"})
+	_, err := service.Finalize(context.Background(), workflow.FinalizeOptions{CWD: "/fixture/repo"})
 
 	var confirmationErr *workflow.RunningCompletionConfirmationError
 	if !errors.As(err, &confirmationErr) || confirmationErr.Confirmation.TaskID != "op-1" {
@@ -588,7 +589,7 @@ func TestFinalizeInfersSingleRunningCompletionCandidate(t *testing.T) {
 	}
 
 	result, err := service.Finalize(context.Background(), workflow.FinalizeOptions{
-		CWD:                   "/tmp/repo",
+		CWD:                   "/fixture/repo",
 		AllowRunningCompleted: true,
 	})
 	if err != nil {
@@ -606,7 +607,7 @@ func TestFinalizeInfersFromTaskStateTargetBeforeMetadataMirrorValidation(t *test
 			Status: task.StatusInProgress,
 			Metadata: task.Metadata{
 				task.MetadataBranch:   "main",
-				task.MetadataWorktree: "/tmp/stale-worktree",
+				task.MetadataWorktree: "/fixture/stale-worktree",
 			},
 		},
 	}, map[string]taskstate.TaskState{
@@ -615,7 +616,7 @@ func TestFinalizeInfersFromTaskStateTargetBeforeMetadataMirrorValidation(t *test
 			TaskID: "op-1",
 			Target: taskstate.GitFacts{
 				Branch:   "main",
-				Worktree: "/tmp/repo",
+				Worktree: "/fixture/repo",
 			},
 			Runs: []taskstate.RunAttempt{
 				{
@@ -632,7 +633,7 @@ func TestFinalizeInfersFromTaskStateTargetBeforeMetadataMirrorValidation(t *test
 		},
 	})
 
-	_, err := service.Finalize(context.Background(), workflow.FinalizeOptions{CWD: "/tmp/repo"})
+	_, err := service.Finalize(context.Background(), workflow.FinalizeOptions{CWD: "/fixture/repo"})
 
 	if err == nil {
 		t.Fatal("error = nil, want stale metadata mirror error")
@@ -646,7 +647,7 @@ func TestFinalizeInfersFromTaskStateTargetBeforeMetadataMirrorValidation(t *test
 }
 
 func TestFinalizeDoesNotOfferRunningEscapeHatchForInvalidTargets(t *testing.T) {
-	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	service, _, _, _ := newFinalizationTestServiceForSource(t, paths, source, []task.Task{
 		{
 			ID:     "op-1",
@@ -682,7 +683,7 @@ func TestFinalizeDoesNotOfferRunningEscapeHatchForInvalidTargets(t *testing.T) {
 
 //nolint:funlen // This end-to-end workflow is clearer as a linear scenario.
 func TestFinalizePublishesFeatureBranchPRWithoutClosingTask(t *testing.T) {
-	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	source.Repository.TitleTemplate = "[{{external_ref}}] {{summary}}"
 	worktree := targets.WorktreeTeam.Worktree
 	taskItem := task.Task{
@@ -775,7 +776,7 @@ func TestFinalizePublishesFeatureBranchPRWithoutClosingTask(t *testing.T) {
 }
 
 func TestFinalizeDiagnosticsCorrelateFailedFeatureBranchPRCreation(t *testing.T) {
-	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	taskItem := task.Task{
 		ID:     "op-1",
 		Status: task.StatusInProgress,
@@ -827,7 +828,7 @@ func TestFinalizeDiagnosticsCorrelateFailedFeatureBranchPRCreation(t *testing.T)
 }
 
 func TestFinalizeRejectsMissingExternalReferenceBeforeFeatureBranchPublication(t *testing.T) {
-	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	source.Repository.TitleTemplate = "[{{external_ref}}] {{summary}}"
 	worktree := targets.WorktreeTeam.Worktree
 	taskItem := task.Task{
@@ -871,7 +872,7 @@ func TestFinalizeRejectsMissingExternalReferenceBeforeFeatureBranchPublication(t
 }
 
 func TestFinalizeRepoRootRetriesAfterCheckoutBeforeGitFactPersistence(t *testing.T) {
-	paths, source, _ := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, _ := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	state := modernRepoRootFinalizationState("op-1", source.Repository.Path)
 	service, git, store, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{finalizationMainTask("op-1", source.Repository.Path)}, map[string]taskstate.TaskState{"alpha/op-1": state})
 	backend.updateGitFactsErr = errors.New("backend unavailable")
@@ -900,7 +901,7 @@ func TestFinalizeRepoRootRetriesAfterCheckoutBeforeGitFactPersistence(t *testing
 }
 
 func TestFinalizeRepoRootRetriesAfterBackendGitFactsPersistence(t *testing.T) {
-	paths, source, _ := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, _ := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	state := modernRepoRootFinalizationState("op-1", source.Repository.Path)
 	service, git, store, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{finalizationMainTask("op-1", source.Repository.Path)}, map[string]taskstate.TaskState{"alpha/op-1": state})
 	store.recordGitFactsErr = errors.New("local state unavailable")
@@ -929,7 +930,7 @@ func TestFinalizeRepoRootRetriesAfterBackendGitFactsPersistence(t *testing.T) {
 }
 
 func TestFinalizeRepoRootLocksFlowAfterGitFactsPersistence(t *testing.T) {
-	paths, source, _ := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, _ := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	state := modernRepoRootFinalizationState("op-1", source.Repository.Path)
 	service, git, store, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{finalizationMainTask("op-1", source.Repository.Path)}, map[string]taskstate.TaskState{"alpha/op-1": state})
 
@@ -954,7 +955,7 @@ func TestFinalizeRepoRootLocksFlowAfterGitFactsPersistence(t *testing.T) {
 }
 
 func TestFinalizeRepoRootReconcilesBackendAfterLocalGitFactsPersistence(t *testing.T) {
-	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	state := modernRepoRootFinalizationState("op-1", source.Repository.Path)
 	state.GitFacts = taskstate.GitFacts{Branch: targets.RepoRootTeam.Branch, Worktree: source.Repository.Path}
 	service, git, store, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{finalizationMainTask("op-1", source.Repository.Path)}, map[string]taskstate.TaskState{"alpha/op-1": state})
@@ -972,7 +973,7 @@ func TestFinalizeRepoRootReconcilesBackendAfterLocalGitFactsPersistence(t *testi
 }
 
 func TestFinalizeRefusesDivergentMaterializedRepoRootTaskBranch(t *testing.T) {
-	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	state := modernRepoRootFinalizationState("op-1", source.Repository.Path)
 	service, git, store, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{finalizationMainTask("op-1", source.Repository.Path)}, map[string]taskstate.TaskState{"alpha/op-1": state})
 	git.branch = targets.RepoRootTeam.Branch
@@ -993,7 +994,7 @@ func TestFinalizeRefusesDivergentMaterializedRepoRootTaskBranch(t *testing.T) {
 }
 
 func TestFinalizeRefusesMaterializedRepoRootTaskBranchWithUnexpectedPublicationCommit(t *testing.T) {
-	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	state := modernRepoRootFinalizationState("op-1", source.Repository.Path)
 	state.Finalization = &taskstate.Finalization{Commit: "recorded123"}
 	service, git, store, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{finalizationMainTask("op-1", source.Repository.Path)}, map[string]taskstate.TaskState{"alpha/op-1": state})
@@ -1011,7 +1012,7 @@ func TestFinalizeRefusesMaterializedRepoRootTaskBranchWithUnexpectedPublicationC
 }
 
 func TestFinalizeRepoRootRetriesAfterPublicationCommitRecordFailure(t *testing.T) {
-	paths, source, _ := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, _ := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	state := modernRepoRootFinalizationState("op-1", source.Repository.Path)
 	service, git, store, _ := newFinalizationTestServiceForSource(
 		t,
@@ -1056,7 +1057,7 @@ func TestFinalizeRepoRootRetriesAfterPublicationCommitRecordFailure(t *testing.T
 }
 
 func TestFinalizeRepoRootRetriesAfterPRRecordFailure(t *testing.T) {
-	paths, source, _ := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, _ := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	state := modernRepoRootFinalizationState("op-1", source.Repository.Path)
 	service, git, store, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{finalizationMainTask("op-1", source.Repository.Path)}, map[string]taskstate.TaskState{"alpha/op-1": state})
 	provider := &fakePRProvider{created: pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/42"}}
@@ -1091,7 +1092,7 @@ func TestFinalizeRepoRootRetriesAfterPRRecordFailure(t *testing.T) {
 }
 
 func TestFinalizeLegacyMainTargetRetainsDirectPublicationAfterFollowUp(t *testing.T) {
-	paths, source, _ := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, _ := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	state := finalizationTaskState("op-1", taskstate.RunAttempt{
 		Attempt: 1,
 		Status:  taskstate.RunStatusSucceeded,
@@ -1147,7 +1148,7 @@ func assertMaterializedRepoRootFacts(t *testing.T, store *fakeFinalizationRunSto
 }
 
 func TestFinalizePublishesRepoRootFeatureBranchPRWithoutClosingTask(t *testing.T) {
-	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	target := targets.RepoRootTeam
 	taskItem := task.Task{
 		ID:     "op-1",
@@ -1207,7 +1208,7 @@ func TestFinalizePublishesRepoRootFeatureBranchPRWithoutClosingTask(t *testing.T
 }
 
 func TestFinalizeRecoversExistingFeatureBranchPR(t *testing.T) {
-	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	worktree := targets.WorktreeTeam.Worktree
 	taskItem := task.Task{
 		ID:     "op-1",
@@ -1257,7 +1258,7 @@ func TestFinalizeRecoversExistingFeatureBranchPR(t *testing.T) {
 
 //nolint:funlen // The review follow-up scenario is easier to verify as one fixture.
 func TestFinalizePublishesOriginalCompletionAfterReviewFollowUp(t *testing.T) {
-	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	source.Repository.TitleTemplate = "[{{external_ref}}] {{summary}}"
 	worktree := targets.WorktreeTeam.Worktree
 	taskItem := task.Task{
@@ -1426,7 +1427,7 @@ func TestFinalizeFeatureBranchPRReviewProcessPublicationPolicy(t *testing.T) {
 }
 
 func TestFinalizeRefusesFeatureBranchPublicationWithoutReviewedChanges(t *testing.T) {
-	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	worktree := targets.WorktreeTeam.Worktree
 	taskItem := task.Task{
 		ID:     "op-1",
@@ -1466,7 +1467,7 @@ func TestFinalizeRefusesFeatureBranchPublicationWithoutReviewedChanges(t *testin
 }
 
 func TestFinalizeDirectMergeDoesNotPublishTaskBranchOrCreatePR(t *testing.T) {
-	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	source.Repository.IntegrationFlow = string(publication.IntegrationFlowDirectMerge)
 	worktree := targets.WorktreeTeam.Worktree
 	taskItem := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{
@@ -1497,7 +1498,7 @@ func TestFinalizeDirectMergeDoesNotPublishTaskBranchOrCreatePR(t *testing.T) {
 }
 
 func TestFinalizeDirectMergeRetryRefusesChangedLocalDefaultBeforePush(t *testing.T) {
-	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	source.Repository.IntegrationFlow = string(publication.IntegrationFlowDirectMerge)
 	worktree := targets.WorktreeTeam.Worktree
 	taskItem := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{
@@ -1537,7 +1538,7 @@ func TestFinalizeDirectMergeRetryRefusesChangedLocalDefaultBeforePush(t *testing
 }
 
 func TestFinalizeDirectMergeRetriesAfterBackendCloseBeforeCloseFactPersistence(t *testing.T) {
-	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	source.Repository.IntegrationFlow = string(publication.IntegrationFlowDirectMerge)
 	worktree := targets.WorktreeTeam.Worktree
 	taskItem := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{
@@ -1581,7 +1582,7 @@ func newFinalizationTestService(
 	states map[string]taskstate.TaskState,
 ) (workflow.FinalizationService, *fakeFinalizationGit, *fakeFinalizationRunStore, *fakeFinalizationBackend) {
 	t.Helper()
-	paths, source, _ := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, _ := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	return newFinalizationTestServiceForSource(t, paths, source, tasks, states)
 }
 
@@ -1602,7 +1603,7 @@ func assertFeatureBranchPublicationTitles(
 
 func assertFeatureBranchPRReviewProcessPolicy(t *testing.T, global, repoOverride *bool, wantReview bool) {
 	t.Helper()
-	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	if global != nil {
 		if err := paths.WriteConfigYAML("config.yaml", map[string]any{
 			"reviews": map[string]any{"include_pr_review_process": *global},
@@ -1748,7 +1749,7 @@ func newFinalizationTestSource(
 
 func mustFinalizationTestPaths(t *testing.T) state.Paths {
 	t.Helper()
-	paths, err := state.NewPaths(filepath.Join(t.TempDir(), "config"), filepath.Join(t.TempDir(), "data"))
+	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
 		t.Fatalf("create paths: %v", err)
 	}
@@ -1775,7 +1776,7 @@ func finalizationTaskState(taskID string, runs ...taskstate.RunAttempt) taskstat
 }
 
 func TestFinalizeNamedDestinationUsesItForPullRequest(t *testing.T) {
-	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	taskItem := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{
 		task.MetadataBranch: targets.WorktreeTeam.Branch, task.MetadataWorktree: targets.WorktreeTeam.Worktree,
 	}}
@@ -1805,7 +1806,7 @@ func TestFinalizeNamedDestinationUsesItForPullRequest(t *testing.T) {
 }
 
 func TestFinalizeRejectsMissingNamedDestinationBeforePublication(t *testing.T) {
-	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	taskItem := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{
 		task.MetadataBranch: targets.WorktreeTeam.Branch, task.MetadataWorktree: targets.WorktreeTeam.Worktree,
 	}}
@@ -1829,7 +1830,7 @@ func TestFinalizeRejectsMissingNamedDestinationBeforePublication(t *testing.T) {
 }
 
 func TestFinalizeRepoRootRejectsItsMaterializedTaskBranchAsDestination(t *testing.T) {
-	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	state := modernRepoRootFinalizationState("op-1", source.Repository.Path)
 	state.Finalization = &taskstate.Finalization{DestinationBranch: targets.RepoRootTeam.Branch}
 	service, git, store, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{finalizationMainTask("op-1", source.Repository.Path)}, map[string]taskstate.TaskState{"alpha/op-1": state})
@@ -1846,7 +1847,7 @@ func TestFinalizeRepoRootRejectsItsMaterializedTaskBranchAsDestination(t *testin
 }
 
 func TestFinalizeRejectsTaskBranchDestinationBeforePullRequestPublication(t *testing.T) {
-	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	taskItem := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{
 		task.MetadataBranch: targets.WorktreeTeam.Branch, task.MetadataWorktree: targets.WorktreeTeam.Worktree,
 	}}
@@ -1870,7 +1871,7 @@ func TestFinalizeRejectsTaskBranchDestinationBeforePullRequestPublication(t *tes
 }
 
 func TestFinalizeRejectsTaskBranchDestinationBeforeDirectMergePublication(t *testing.T) {
-	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	source.Repository.IntegrationFlow = string(publication.IntegrationFlowDirectMerge)
 	taskItem := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{
 		task.MetadataBranch: targets.WorktreeTeam.Branch, task.MetadataWorktree: targets.WorktreeTeam.Worktree,
@@ -1893,7 +1894,7 @@ func TestFinalizeRejectsTaskBranchDestinationBeforeDirectMergePublication(t *tes
 }
 
 func TestFinalizeDirectMergePushesNamedDestination(t *testing.T) {
-	paths, source, targets := newFinalizationTestSource(t, "/tmp/repo", "op-1")
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	source.Repository.IntegrationFlow = string(publication.IntegrationFlowDirectMerge)
 	taskItem := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{
 		task.MetadataBranch: targets.WorktreeTeam.Branch, task.MetadataWorktree: targets.WorktreeTeam.Worktree,

@@ -13,6 +13,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -119,7 +120,7 @@ func setupStatusGroupsLocalTaskSnapshots(t *testing.T) string {
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	repoDir := filepath.Join(t.TempDir(), "alpha")
+	repoDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
 	must.NoError(os.MkdirAll(repoDir, 0o755))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:          "alpha",
@@ -174,7 +175,7 @@ func TestIntegrationStatusFullIgnoresCorruptClosedAndPullRequestStates(t *testin
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	repoDir := filepath.Join(t.TempDir(), "alpha")
+	repoDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
 	must.NoError(os.MkdirAll(repoDir, 0o755))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:          "alpha",
@@ -215,7 +216,7 @@ func TestIntegrationStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t *testing
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	repoDir := filepath.Join(t.TempDir(), "alpha")
+	repoDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
 	must.NoError(os.MkdirAll(repoDir, 0o755))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:            "alpha",
@@ -270,7 +271,7 @@ func TestIntegrationStatusAndTaskListUseLocalRunHistoryOnOpenTaskAsNeedsAttentio
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	repoDir := filepath.Join(t.TempDir(), "alpha")
+	repoDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
 	must.NoError(os.MkdirAll(repoDir, 0o755))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:          "alpha",
@@ -342,7 +343,7 @@ func TestIntegrationStatusRendersEpicChildrenAsIntegratedTreeRows(t *testing.T) 
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	repoDir := filepath.Join(t.TempDir(), "alpha")
+	repoDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
 	must.NoError(os.MkdirAll(repoDir, 0o755))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
 		ID:          "alpha",
@@ -414,8 +415,8 @@ func TestIntegrationStatusReportsRepoFailuresInUnknownGroupAndReturnsError(t *te
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
 
-	brokenDir := filepath.Join(t.TempDir(), "broken")
-	okDir := filepath.Join(t.TempDir(), "ok")
+	brokenDir := filepath.Join(testutil.CanonicalTempDir(t), "broken")
+	okDir := filepath.Join(testutil.CanonicalTempDir(t), "ok")
 	must.NoError(os.MkdirAll(brokenDir, 0o755))
 	must.NoError(os.MkdirAll(okDir, 0o755))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{
@@ -488,8 +489,8 @@ func TestIntegrationTaskViewsApplySharedSortModesAcrossRepositories(t *testing.T
 	newTestState(t)
 	paths := currentTestPaths(t)
 	store := registry.NewStore(paths)
-	betaDir := filepath.Join(t.TempDir(), "beta")
-	alphaDir := filepath.Join(t.TempDir(), "alpha")
+	betaDir := filepath.Join(testutil.CanonicalTempDir(t), "beta")
+	alphaDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
 	must.NoError(os.MkdirAll(betaDir, 0o755))
 	must.NoError(os.MkdirAll(alphaDir, 0o755))
 	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{
@@ -595,7 +596,7 @@ func assertStatusGroupOrder(t *testing.T, output string, groups []string) {
 func withFakeBDCommandResponses(t *testing.T, responses []fakeBDCommandResponse) string {
 	t.Helper()
 
-	binDir := t.TempDir()
+	binDir := testutil.CanonicalTempDir(t)
 	fixtureDir := filepath.Join(binDir, "fixtures")
 	if err := os.MkdirAll(fixtureDir, 0o755); err != nil {
 		t.Fatalf("create fake bd fixtures: %v", err)
@@ -628,7 +629,7 @@ case "$PWD|$*" in
 		if args == "--json --readonly --sandbox list --all --limit 0" {
 			args += " --type task"
 		}
-		fmt.Fprintf(&script, "  %s)\n", shellQuote(canonicalTestPath(t, response.dir)+"|"+args))
+		fmt.Fprintf(&script, "  %s)\n", shellQuote(canonicalFixturePath(t, response.dir)+"|"+args))
 		fmt.Fprintf(&script, "    cat %s\n", shellQuote(stdoutPath))
 		fmt.Fprintf(&script, "    cat %s >&2\n", shellQuote(stderrPath))
 		fmt.Fprintf(&script, "    exit %d\n", exitCode)

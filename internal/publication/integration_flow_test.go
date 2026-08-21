@@ -5,6 +5,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 func TestResolveIntegrationFlowPrecedence(t *testing.T) {
@@ -20,7 +21,7 @@ func TestResolveIntegrationFlowPrecedence(t *testing.T) {
 }
 
 func TestLoadIntegrationFlowConfig(t *testing.T) {
-	paths, err := state.NewPaths(t.TempDir(), t.TempDir())
+	paths, err := state.NewPaths(testutil.CanonicalTempDir(t), testutil.CanonicalTempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}

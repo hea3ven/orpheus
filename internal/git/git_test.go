@@ -15,7 +15,7 @@ import (
 	"testing"
 
 	orpheusgit "github.com/hea3ven/orpheus/internal/git"
-	"github.com/hea3ven/orpheus/internal/pathutil"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 func TestIntegrationInspectDetectsRootRemoteAndOriginHEAD(t *testing.T) {
@@ -91,7 +91,7 @@ func TestIntegrationInspectFallsBackToCurrentBranchWhenOriginHEADIsMissing(t *te
 }
 
 func TestIntegrationInspectRejectsNonGitPath(t *testing.T) {
-	_, err := orpheusgit.Inspect(t.TempDir())
+	_, err := orpheusgit.Inspect(testutil.CanonicalTempDir(t))
 	if err == nil {
 		t.Fatal("inspect non-git path succeeded, want error")
 	}
@@ -221,7 +221,7 @@ func gitDiagnostic(t *testing.T, logs string, operation string, status string) (
 func newGitRepo(t *testing.T) string {
 	t.Helper()
 
-	repoPath := canonicalTestPath(t, t.TempDir())
+	repoPath := testutil.CanonicalTempDir(t)
 	runGit(t, repoPath, "init")
 	runGit(t, repoPath, "checkout", "-b", "main")
 	runGit(t, repoPath,
@@ -242,14 +242,4 @@ func runGit(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v failed: %v\n%s", args, err, output)
 	}
 	return string(output)
-}
-
-func canonicalTestPath(t *testing.T, path string) string {
-	t.Helper()
-
-	canonicalPath, err := pathutil.CanonicalAbs(path)
-	if err != nil {
-		t.Fatalf("canonicalize test path %q: %v", path, err)
-	}
-	return canonicalPath
 }

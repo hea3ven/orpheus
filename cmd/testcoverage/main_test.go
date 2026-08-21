@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -33,7 +34,7 @@ func TestParseOptionsSupportsQualityModes(t *testing.T) {
 }
 
 func TestFinishReportWritesPartialFailureReport(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "partial.json")
+	path := filepath.Join(testutil.CanonicalTempDir(t), "partial.json")
 	report := testQualityReport()
 	report.Complete = false
 	report.Decision = decision{Status: statusTestFailed}
@@ -87,7 +88,7 @@ func TestTimingFindingMessageShowsCurrentBaselineBudgetAndDifferences(t *testing
 }
 
 func TestWriteBaselineCreatesGeneratedFiles(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	opts := options{baseline: filepath.Join(dir, "baseline.json"), output: filepath.Join(dir, "report.json")}
 	report := testQualityReport()
 	current := baselineFromReport(report, defaultPolicy())
@@ -106,7 +107,7 @@ func TestWriteBaselineMigratesSchemaTwoAndRefusesRegression(t *testing.T) {
 	contents := `{"schema_version":2,"lanes":{` +
 		`"unit":{"test_count":3,"statement_total":10,"covered_statements":5,"packages":[{"name":"example.test/pkg","statement_total":10,"covered_statements":5,"files":[]}]},` +
 		`"integration":{"test_count":2,"statement_total":10,"covered_statements":6,"packages":[{"name":"example.test/pkg","statement_total":10,"covered_statements":6,"files":[]}]}}}`
-	dir := t.TempDir()
+	dir := testutil.CanonicalTempDir(t)
 	migrationPath := filepath.Join(dir, "legacy-migrate.json")
 	regressionPath := filepath.Join(dir, "legacy-regression.json")
 	for _, path := range []string{migrationPath, regressionPath} {
@@ -154,7 +155,7 @@ func TestWriteBaselineMigratesSchemaTwoAndRefusesRegression(t *testing.T) {
 }
 
 func TestNormalizeProfileDeduplicatesAndUnionsCoverage(t *testing.T) {
-	profile := filepath.Join(t.TempDir(), "coverage.out")
+	profile := filepath.Join(testutil.CanonicalTempDir(t), "coverage.out")
 	contents := "mode: set\n" +
 		"example.test/collaborator/work.go:10.2,12.3 2 0\n" +
 		"example.test/collaborator/work.go:10.2,12.3 2 1\n" +
@@ -362,7 +363,7 @@ func TestGeneratedBaselineIsCompactAndValid(t *testing.T) {
 			t.Fatalf("compact baseline contains %q: %s", forbidden, contents)
 		}
 	}
-	path := filepath.Join(t.TempDir(), "baseline.json")
+	path := filepath.Join(testutil.CanonicalTempDir(t), "baseline.json")
 	if err := writeJSON(path, generated); err != nil {
 		t.Fatal(err)
 	}

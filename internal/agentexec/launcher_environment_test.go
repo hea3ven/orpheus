@@ -10,13 +10,14 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/testguard"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 func TestIntegrationAttachedLauncherUsesConfiguredEnvironment(t *testing.T) {
 	t.Parallel()
 
-	output := filepath.Join(t.TempDir(), "environment")
-	binDir := t.TempDir()
+	output := filepath.Join(testutil.CanonicalTempDir(t), "environment")
+	binDir := testutil.CanonicalTempDir(t)
 	probe := filepath.Join(binDir, "probe")
 	if err := testguard.WriteExecutable(probe, []byte("#!/bin/sh\nprintf '%s/%s' \"$INVOCATION_SCOPE\" \"$COMMAND_SCOPE\" > \"$1\"\n")); err != nil {
 		t.Fatalf("write probe: %v", err)
@@ -24,7 +25,7 @@ func TestIntegrationAttachedLauncherUsesConfiguredEnvironment(t *testing.T) {
 
 	launcher := agentexec.AttachedLauncher{Environment: []string{"PATH=" + binDir, "INVOCATION_SCOPE=isolated", "COMMAND_SCOPE=stale"}}
 	err := launcher.Run(context.Background(), agentexec.Command{Name: "probe", Command: "probe", Args: []string{output}}, agentexec.LaunchOptions{
-		Dir: t.TempDir(),
+		Dir: testutil.CanonicalTempDir(t),
 		Env: []string{"COMMAND_SCOPE=command"},
 	})
 	if err != nil {

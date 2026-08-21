@@ -10,12 +10,13 @@ import (
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
 func TestInvocationDependenciesKeepEnvironmentScopedToInvocation(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
+	root := testutil.CanonicalTempDir(t)
 	paths, err := state.NewPaths(filepath.Join(root, "config", state.AppName), filepath.Join(root, "data", state.AppName))
 	if err != nil {
 		t.Fatalf("create paths: %v", err)
@@ -58,7 +59,7 @@ func TestInvocationScopedRepoListWorkflowsRunInParallel(t *testing.T) {
 		t.Run(repoID, func(t *testing.T) {
 			t.Parallel()
 
-			root := t.TempDir()
+			root := testutil.CanonicalTempDir(t)
 			paths, err := state.NewPaths(filepath.Join(root, "config", state.AppName), filepath.Join(root, "data", state.AppName))
 			if err != nil {
 				t.Fatalf("create paths: %v", err)
