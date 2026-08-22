@@ -6,6 +6,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
@@ -47,33 +48,65 @@ func TestTaskRepositorySourcesProjectsNormalizedRegistryValues(t *testing.T) {
 	}
 }
 
-func TestTaskRepositorySourcesResolveRepositoryThenGlobalBranchTemplate(t *testing.T) {
-	paths, err := state.NewPaths(testutil.CanonicalTempDir(t), testutil.CanonicalTempDir(t))
-	if err != nil {
-		t.Fatal(err)
+func TestTaskRepositorySourcesResolveRepositoryThenGlobalTemplates(t *testing.T) {
+	tests := []struct {
+		name            string
+		globalConfig    map[string]any
+		setRepository   func(*registry.Repo)
+		resolvedSource  func(task.Repository) string
+		globalValue     string
+		repositoryValue string
+	}{
+		{
+			name:         "publication title",
+			globalConfig: map[string]any{"publication": map[string]any{"title_template": "[{{external_ref}}] {{summary}}"}},
+			setRepository: func(repo *registry.Repo) {
+				repo.TitleTemplate = "[REPO] {{summary}}"
+			},
+			resolvedSource:  func(repo task.Repository) string { return repo.TitleTemplate },
+			globalValue:     "[{{external_ref}}] {{summary}}",
+			repositoryValue: "[REPO] {{summary}}",
+		},
+		{
+			name:         "task branch",
+			globalConfig: map[string]any{"tasks": map[string]any{"branch_template": "global/{{task_id}}"}},
+			setRepository: func(repo *registry.Repo) {
+				repo.BranchTemplate = "repo/{{task_title}}"
+			},
+			resolvedSource:  func(repo task.Repository) string { return repo.BranchTemplate },
+			globalValue:     "global/{{task_id}}",
+			repositoryValue: "repo/{{task_title}}",
+		},
 	}
-	if err := paths.WriteConfigYAML("config.yaml", map[string]any{
-		"tasks": map[string]any{"branch_template": "global/{{task_id}}"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	store := registry.NewStore(paths)
-	base := registry.Repo{ID: "alpha", Name: "Alpha", Path: testutil.CanonicalTempDir(t), BeadsMode: registry.BeadsModeManaged, BeadsPrefix: "op"}
 
-	source, err := store.TaskRepositorySource(base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if source.Repository.BranchTemplate != "global/{{task_id}}" {
-		t.Fatalf("global template = %q", source.Repository.BranchTemplate)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			paths, err := state.NewPaths(testutil.CanonicalTempDir(t), testutil.CanonicalTempDir(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := paths.WriteConfigYAML("config.yaml", tt.globalConfig); err != nil {
+				t.Fatal(err)
+			}
+			store := registry.NewStore(paths)
+			repo := registry.Repo{ID: "alpha", Name: "Alpha", Path: testutil.CanonicalTempDir(t), BeadsMode: registry.BeadsModeManaged, BeadsPrefix: "op"}
 
-	base.BranchTemplate = "repo/{{task_title}}"
-	source, err = store.TaskRepositorySource(base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if source.Repository.BranchTemplate != "repo/{{task_title}}" {
-		t.Fatalf("repository template = %q", source.Repository.BranchTemplate)
+			source, err := store.TaskRepositorySource(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := tt.resolvedSource(source.Repository); got != tt.globalValue {
+				t.Fatalf("global value = %q, want %q", got, tt.globalValue)
+			}
+
+			tt.setRepository(&repo)
+			source, err = store.TaskRepositorySource(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := tt.resolvedSource(source.Repository); got != tt.repositoryValue {
+				t.Fatalf("repository value = %q, want %q", got, tt.repositoryValue)
+			}
+		})
 	}
 }
