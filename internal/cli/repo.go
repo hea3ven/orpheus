@@ -366,7 +366,7 @@ func replaceRepo(reg *registry.Registry, updated registry.Repo) error {
 }
 
 func renderRepoConfig(command *cobra.Command, repo registry.Repo, configName string, reviewConfig review.Config, publicationConfig publication.Config, branchConfig taskbranch.Config) error {
-	policy := repo.EffectivePublicationPolicy()
+	policy := repo.ResolvePublicationPolicy(publicationConfig)
 	rows := [][]string{
 		{repoConfigSummaryGuidance, displayConfigValue(repo.SummaryGuidance), effectiveSummaryGuidance(policy)},
 		{repoConfigSummaryStyle, displayConfigValue(repo.SummaryGuidanceStyle), effectiveSummaryGuidanceStyle(policy)},
@@ -672,7 +672,6 @@ func configureRepoBeads(
 func configureRepoSummaryGuidance(command *cobra.Command, repo *registry.Repo, logger *slog.Logger) error {
 	input := command.InOrStdin()
 	if !isTerminal(input) {
-		repo.SummaryGuidanceStyle = registry.SummaryGuidanceStyleTyped
 		return nil
 	}
 
@@ -680,13 +679,14 @@ func configureRepoSummaryGuidance(command *cobra.Command, repo *registry.Repo, l
 		reader: bufio.NewReader(input),
 		output: command.ErrOrStderr(),
 	}
-	style, err := wizard.promptValue(summaryGuidanceStylePrompt, registry.SummaryGuidanceStyleTyped, true)
+	style, err := wizard.promptOverrideValue(summaryGuidanceStylePrompt, registry.SummaryGuidanceStyleTyped)
 	if err != nil {
 		return err
 	}
-	style = strings.TrimSpace(style)
+	if style == "" {
+		return nil
+	}
 	if style == summaryGuidanceStyleCustom {
-		repo.SummaryGuidanceStyle = registry.SummaryGuidanceStyleTyped
 		guidance, err := wizard.promptValue("Custom summary guidance", "", true)
 		if err != nil {
 			return err
@@ -995,6 +995,22 @@ func (w repoAddWizard) presentRemoteInspection(inspection gitmeta.Inspection) er
 	}
 	_, err := fmt.Fprintf(w.output, "  git remote: not detected (%v)\n", inspection.RemoteErr)
 	return err
+}
+
+// promptOverrideValue reads an optional value while displaying the compatibility
+// default as guidance. An omitted value remains unset so it can inherit a
+// machine-wide setting.
+func (w repoAddWizard) promptOverrideValue(label string, defaultValue string) (string, error) {
+	defaultValue = strings.TrimSpace(defaultValue)
+	if err := w.promptLabel(label, defaultValue, false); err != nil {
+		return "", err
+	}
+
+	line, err := w.reader.ReadString('\n')
+	if err != nil && (!errors.Is(err, io.EOF) || line == "") {
+		return "", fmt.Errorf("read %s prompt: %w", strings.ToLower(label), err)
+	}
+	return strings.TrimSpace(line), nil
 }
 
 func (w repoAddWizard) promptValue(label string, defaultValue string, required bool) (string, error) {

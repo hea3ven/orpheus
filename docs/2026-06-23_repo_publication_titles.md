@@ -1,10 +1,30 @@
 # Repository Publication Titles
 
-Use a repository publication policy when a repository requires a particular commit subject and pull-request title. The policy is local to the registered repository; it does not change the behavior of other repositories.
+Use publication policies when repositories require particular commit subjects and pull-request titles. Configure machine-wide defaults in the shared Orpheus configuration file (`$XDG_CONFIG_HOME/orpheus/config.yaml`), then add repository values only where they differ:
+
+```yaml
+publication:
+  summary_guidance: "Write a capitalized release-note summary, 80 characters or fewer."
+  summary_guidance_style: capitalized
+  title_template: "[{{external_ref}}] {{summary}}"
+```
+
+All three values are optional. Orpheus resolves each independently in this order:
+
+1. The repository value in the registry.
+2. The global `publication` value in `config.yaml`.
+3. The compatibility default: typed summaries and an unchanged summary title.
+
+New registrations leave these repository values unset unless an operator explicitly chooses an override, so configured global defaults apply immediately.
+
+A custom `summary_guidance` takes precedence over the resolved named
+`summary_guidance_style` when Orpheus instructs an agent to write its completion
+summary. This does not prevent the style setting from being inherited or
+inspected.
 
 ## Configure a Jira-style work repository
 
-Inspect the current policy first:
+Inspect the stored repository values and their effective policy first:
 
 ```bash
 orpheus repo config get my-work-repo
@@ -46,16 +66,16 @@ orpheus task done op-123
 [TREX-1234] Replaced the config for abc
 ```
 
-For a main/solo run, `task done` commits and pushes the registered default branch. For a worktree or task-branch run, it commits, pushes the task branch, and creates or recovers the pull request. The same repository policy applies in both cases.
+For a main/solo run, `task done` commits and pushes the registered default branch. For a worktree or task-branch run, it commits, pushes the task branch, and creates or recovers the pull request. The same resolved publication policy applies in both cases.
 
-## Default repositories
+## Default repositories and clearing overrides
 
-An unconfigured repository retains the existing defaults:
+An unconfigured repository with no global publication settings retains the existing defaults:
 
 - agents are asked for a typed commit-style summary, such as `feat: replace config for abc`;
 - `task done` uses that summary unchanged as the commit subject and pull-request title.
 
-Clear any policy fields to return to the defaults:
+Clear a repository field to inherit the corresponding global value. If no global value is configured, clearing returns that field to its compatibility default:
 
 ```bash
 orpheus repo config set my-work-repo summary-guidance ''
@@ -77,6 +97,9 @@ If the reference is removed after an agent has completed work, `task done` also 
 
 `internal/cli/completion_flows_e2e_test.go` validates the full command flow with local Git repositories and a fake GitHub CLI:
 
-- `TestConfiguredPublicationPolicyEndToEnd` configures a repository after registration, verifies later agent context contains the capitalized-summary instruction, and verifies the commit and PR title are `[TREX-1234] Replaced the config for abc`.
-- `TestMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd` verifies the missing-reference error before dispatch and again before publication after a policy change; it verifies neither path creates a publication commit or PR.
+- `TestConfiguredPublicationPolicyEndToEnd` validates repository-level policy values.
+- `TestIntegrationGlobalPublicationPolicyEndToEnd` validates global guidance/style and title-template rendering through agent context, commit creation, and pull-request publication.
+- `TestIntegrationRepoAddInheritsGlobalSummaryStyleInAgentContext` verifies a non-interactive repository registration keeps its summary style unset and inherits a global capitalized-style instruction.
+- `TestIntegrationGlobalTitleTemplateRequiresExternalReferenceInStatusAndDispatch` verifies global title templates gate both status and dispatch when a task reference is missing.
+- `TestMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd` verifies the missing-reference error before dispatch and again before publication after a repository policy change; it verifies neither path creates a publication commit or PR.
 - `TestMainCompletionFlowEndToEnd` and `TestWorktreeLocalReviewTaskDonePRFlowEndToEnd` retain the default publication lifecycle coverage for repositories without a title policy.

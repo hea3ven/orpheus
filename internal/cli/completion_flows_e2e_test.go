@@ -174,6 +174,148 @@ func TestIntegrationConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 }
 
 //nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
+func TestIntegrationGlobalPublicationPolicyEndToEnd(t *testing.T) {
+	t.Parallel()
+	is := assert.New(t)
+	must := require.New(t)
+	paths, repoPath := setupCompletionFlowRepo(t)
+
+	const taskID = "op-global-title"
+	withStatefulCompletionBD(t, completionBDTask{
+		RepoPath:           repoPath,
+		TaskID:             taskID,
+		Title:              "Global publication policy",
+		Description:        "Validate the configured machine-wide title workflow.",
+		AcceptanceCriteria: "Global publication settings render the task external reference and summary.",
+		ExternalRef:        "TREX-4321",
+	})
+	withOrpheusCLIHelper(t)
+	agentLogPath := withCompletionFlowAgent(t, completionFlowAgentOptions{
+		Command:              "global-title-agent",
+		FileName:             "global-title-change.txt",
+		Body:                 "global publication implementation",
+		Summary:              "Replaced the global config for abc",
+		Description:          "Replaced the global config used for publication validation.",
+		DetailedDescription:  "## Global publication\n\nReplaced the global config used for publication validation.",
+		TechnicalExplanation: "Technical explanation.",
+	})
+	writeCompletionFlowAgentConfigWithPublication(t, paths, "global-title", "global-title-agent", map[string]any{
+		"summary_guidance":       "Write a concise global release note.",
+		"summary_guidance_style": registry.SummaryGuidanceStyleCapitalized,
+		"title_template":         "[{{external_ref}}] {{summary}}",
+	})
+
+	runOut, runErr := executeCommand(t, []string{"task", "run", taskID})
+	is.Contains(runErr, "Review for "+taskID+" is waiting for manual step \"local-review\"")
+	is.Contains(runOut, "completion agent completed")
+
+	contextOutput := agentLogBlock(t, readFileString(t, agentLogPath), "AGENT_CONTEXT")
+	is.Contains(contextOutput, "Write a concise global release note.")
+	is.NotContains(contextOutput, "Use one capitalized plain-English summary line")
+
+	state := readCompletionTaskState(t, paths, "alpha", taskID)
+	latest, ok := taskstate.LatestRun(state)
+	must.True(ok)
+	must.NotNil(latest.Completion)
+	is.Equal("Replaced the global config for abc", latest.Completion.Summary)
+	target, ok := taskstate.GitFactsFor(state)
+	must.True(ok)
+	recordPassedReview(t, paths, "alpha", taskID)
+	ghLogPath := withFakeGHPRResponses(t, fakeGHPRResponses{
+		listStdout:   "[]",
+		createStdout: "https://github.test/org/alpha/pull/58\n",
+	})
+
+	doneOut, doneErr := executeCommand(t, []string{"task", "done", taskID})
+	is.Empty(doneErr)
+	is.Contains(doneOut, "created PR https://github.test/org/alpha/pull/58")
+	is.Equal(
+		"[TREX-4321] Replaced the global config for abc\n\nReplaced the global config used for publication validation.",
+		strings.TrimSpace(runGit(t, target.Worktree, "log", "-1", "--format=%B")),
+	)
+	is.Contains(readFileString(t, ghLogPath), "[TREX-4321] Replaced the global config for abc")
+}
+
+func TestIntegrationRepoAddInheritsGlobalSummaryStyleInAgentContext(t *testing.T) {
+	t.Parallel()
+	is := assert.New(t)
+	must := require.New(t)
+	withFakeBDInit(t)
+
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	const taskID = "alpha-repo-add-global-style"
+	withOrpheusCLIHelper(t)
+	agentLogPath := withCompletionFlowAgent(t, completionFlowAgentOptions{
+		Command:              "repo-add-global-style-agent",
+		FileName:             "repo-add-global-style-change.txt",
+		Body:                 "repo add global style implementation",
+		Summary:              "Replaced the config for abc",
+		Description:          "Created a change for global style inheritance.",
+		DetailedDescription:  "## Repo add global style\n\nCreated a change for global style inheritance.",
+		TechnicalExplanation: "Technical explanation.",
+	})
+	writeCompletionFlowAgentConfigWithPublication(t, paths, "repo-add-global-style", "repo-add-global-style-agent", map[string]any{
+		"summary_guidance_style": registry.SummaryGuidanceStyleCapitalized,
+	})
+
+	addOut, addErr := executeCommand(t, []string{"repo", "add", repoPath})
+	is.Empty(addErr)
+	is.Contains(addOut, "Added repo alpha")
+	store := registry.NewStore(paths)
+	reg, err := store.Load()
+	must.NoError(err)
+	must.Len(reg.Repos, 1)
+	is.Empty(reg.Repos[0].SummaryGuidanceStyle)
+
+	withStatefulCompletionBD(t, completionBDTask{
+		RepoPath:           repoPath,
+		TaskID:             taskID,
+		Title:              "Repo add inherits global summary style",
+		Description:        "Verify a registered repository inherits the global style.",
+		AcceptanceCriteria: "Agent context uses global capitalized summary guidance.",
+	})
+	runOut, runErr := executeCommand(t, []string{"task", "run", taskID})
+	is.Contains(runErr, "Review for "+taskID+" is waiting for manual step \"local-review\"")
+	is.Contains(runOut, "completion agent completed")
+
+	contextOutput := agentLogBlock(t, readFileString(t, agentLogPath), "AGENT_CONTEXT")
+	is.Contains(contextOutput, "Use one capitalized plain-English summary line")
+}
+
+func TestIntegrationGlobalTitleTemplateRequiresExternalReferenceInStatusAndDispatch(t *testing.T) {
+	t.Parallel()
+	is := assert.New(t)
+	must := require.New(t)
+	paths, repoPath := setupCompletionFlowRepo(t)
+
+	const taskID = "op-global-missing-title-ref"
+	withStatefulCompletionBD(t, completionBDTask{
+		RepoPath:           repoPath,
+		TaskID:             taskID,
+		Title:              "Global title reference required",
+		Description:        "Validate global external-reference checks.",
+		AcceptanceCriteria: "Status and dispatch use the global title template.",
+	})
+	withOrpheusCLIHelper(t)
+	writeCompletionFlowAgentConfigWithPublication(t, paths, "global-missing-reference", "unused-global-agent", map[string]any{
+		"title_template": "[{{external_ref}}] {{summary}}",
+	})
+
+	statusOut, statusErr := executeCommand(t, []string{"status"})
+	is.Empty(statusErr)
+	is.Contains(statusOut, taskID)
+	is.Contains(statusOut, "missing required external reference")
+
+	stdout, stderr, runErr := executeCommandWithError(t, []string{"task", "run", taskID})
+	must.Error(runErr)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(runErr, "publication title template requires a task external reference")
+}
+
+//nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestIntegrationMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -549,9 +691,19 @@ func setupCompletionFlowRepo(t *testing.T) (state.Paths, string) {
 }
 
 func writeCompletionFlowAgentConfig(t *testing.T, paths state.Paths, name string, command string) {
+	writeCompletionFlowAgentConfigWithPublication(t, paths, name, command, nil)
+}
+
+func writeCompletionFlowAgentConfigWithPublication(
+	t *testing.T,
+	paths state.Paths,
+	name string,
+	command string,
+	publicationConfig map[string]any,
+) {
 	t.Helper()
 
-	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+	config := map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{"implementer": name},
 			"profiles": map[string]any{
@@ -561,7 +713,11 @@ func writeCompletionFlowAgentConfig(t *testing.T, paths state.Paths, name string
 				},
 			},
 		},
-	}))
+	}
+	if publicationConfig != nil {
+		config["publication"] = publicationConfig
+	}
+	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, config))
 }
 
 const statefulCompletionBDScript = `#!/bin/sh

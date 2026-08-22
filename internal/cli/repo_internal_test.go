@@ -24,7 +24,24 @@ func TestTerminalDetectionRejectsNonTTYCharacterDevice(t *testing.T) {
 	require.False(t, writerIsTerminal(devNull))
 }
 
-func TestConfigureRepoSummaryGuidanceInteractiveDefaultsToTyped(t *testing.T) {
+func TestConfigureRepoSummaryGuidanceNonInteractiveLeavesStyleUnset(t *testing.T) {
+	originalIsTerminal := isTerminal
+	isTerminal = func(io.Reader) bool { return false }
+	t.Cleanup(func() { isTerminal = originalIsTerminal })
+
+	command := &cobra.Command{}
+	command.SetIn(strings.NewReader(""))
+	repo := registry.Repo{}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	err := configureRepoSummaryGuidance(command, &repo, logger)
+
+	require.NoError(t, err)
+	require.Empty(t, repo.SummaryGuidanceStyle)
+	require.Empty(t, repo.SummaryGuidance)
+}
+
+func TestConfigureRepoSummaryGuidanceInteractiveDefaultLeavesStyleUnset(t *testing.T) {
 	originalIsTerminal := isTerminal
 	isTerminal = func(io.Reader) bool { return true }
 	t.Cleanup(func() { isTerminal = originalIsTerminal })
@@ -39,7 +56,7 @@ func TestConfigureRepoSummaryGuidanceInteractiveDefaultsToTyped(t *testing.T) {
 	err := configureRepoSummaryGuidance(command, &repo, logger)
 
 	require.NoError(t, err)
-	require.Equal(t, registry.SummaryGuidanceStyleTyped, repo.SummaryGuidanceStyle)
+	require.Empty(t, repo.SummaryGuidanceStyle)
 	require.Empty(t, repo.SummaryGuidance)
 	require.Contains(t, stderr.String(), "Summary guidance style (typed, capitalized, custom) [typed]:")
 	require.NotContains(t, stderr.String(), "Custom summary guidance")
@@ -80,7 +97,7 @@ func TestConfigureRepoSummaryGuidanceInteractiveAcceptsCustomGuidance(t *testing
 	err := configureRepoSummaryGuidance(command, &repo, logger)
 
 	require.NoError(t, err)
-	require.Equal(t, registry.SummaryGuidanceStyleTyped, repo.SummaryGuidanceStyle)
+	require.Empty(t, repo.SummaryGuidanceStyle)
 	require.Equal(t, "Use sentence-case summaries without a type prefix.", repo.SummaryGuidance)
 	require.Contains(t, stderr.String(), "Custom summary guidance:")
 }

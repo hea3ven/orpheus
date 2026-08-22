@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/pathutil"
+	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
@@ -180,7 +181,11 @@ func (r ActiveContextResolver) Resolve(ctx context.Context) (ActiveContext, erro
 		return ActiveContext{}, err
 	}
 
-	activeContext, err := newActiveContext(repo, targets, taskItem, run, candidate, cwd)
+	publicationPolicy, err := r.resolvePublicationPolicy(repo)
+	if err != nil {
+		return ActiveContext{}, err
+	}
+	activeContext, err := newActiveContext(repo, publicationPolicy, targets, taskItem, run, candidate, cwd)
 	if err != nil {
 		return ActiveContext{}, err
 	}
@@ -498,15 +503,24 @@ func (r ActiveContextResolver) resolveTargetCWD(candidate tasktarget.Target) (st
 	return cwd, nil
 }
 
+func (r ActiveContextResolver) resolvePublicationPolicy(repo registry.Repo) (registry.PublicationPolicy, error) {
+	config, err := publication.LoadConfig(r.Paths)
+	if err != nil {
+		return registry.PublicationPolicy{}, err
+	}
+	return repo.ResolvePublicationPolicy(config), nil
+}
+
 func newActiveContext(
 	repo registry.Repo,
+	publicationPolicy registry.PublicationPolicy,
 	targets tasktarget.ExpectedTargets,
 	taskItem taskmodel.Task,
 	run taskstate.RunAttempt,
 	candidate tasktarget.Target,
 	cwd string,
 ) (ActiveContext, error) {
-	if err := registry.ValidateSummaryGuidanceStyle(repo.SummaryGuidanceStyle); err != nil {
+	if err := registry.ValidateSummaryGuidanceStyle(publicationPolicy.SummaryGuidanceStyle); err != nil {
 		return ActiveContext{}, err
 	}
 
@@ -516,8 +530,8 @@ func newActiveContext(
 			Name:                 repo.Name,
 			Root:                 targets.MainSolo.Worktree,
 			DefaultBranch:        targets.MainSolo.Branch,
-			SummaryGuidance:      repo.SummaryGuidance,
-			SummaryGuidanceStyle: strings.TrimSpace(repo.SummaryGuidanceStyle),
+			SummaryGuidance:      publicationPolicy.SummaryGuidance,
+			SummaryGuidanceStyle: publicationPolicy.SummaryGuidanceStyle,
 		},
 		Task: ContextTask{
 			ID:                 taskItem.ID,

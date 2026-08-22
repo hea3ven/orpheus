@@ -57,6 +57,66 @@ func TestIntegrationRepoConfigInspectsEffectivePublicationPolicy(t *testing.T) {
 	is.Contains(stdout, "default")
 }
 
+func TestIntegrationRepoConfigUsesGlobalPublicationPolicyFallbacks(t *testing.T) {
+	t.Parallel()
+	is := assert.New(t)
+	must := require.New(t)
+	withFakeBDInit(t)
+	repoPath := newTestRepoPath(t)
+	paths := currentTestPaths(t)
+
+	_, addErr := executeCommand(t, []string{"repo", "add", repoPath})
+	is.Empty(addErr)
+	must.NoError(paths.WriteConfigYAML("config.yaml", map[string]any{
+		"publication": map[string]any{
+			"summary_guidance":       "Write a concise global release note.",
+			"summary_guidance_style": registry.SummaryGuidanceStyleCapitalized,
+			"title_template":         "[GLOBAL] {{summary}}",
+		},
+	}))
+
+	stdout, stderr := executeCommand(t, []string{"repo", "config", "get", "alpha"})
+	is.Empty(stderr)
+	is.Contains(stdout, "Write a concise global release note.")
+	is.Contains(stdout, "overridden by custom guidance")
+	is.Contains(stdout, "[GLOBAL] {{summary}}")
+
+	for _, args := range [][]string{
+		{"repo", "config", "set", "alpha", "summary-guidance", "Write a repository release note."},
+		{"repo", "config", "set", "alpha", "summary-style", registry.SummaryGuidanceStyleTyped},
+		{"repo", "config", "set", "alpha", "title-template", "[REPO] {{summary}}"},
+	} {
+		_, configErr := executeCommand(t, args)
+		is.Empty(configErr)
+	}
+	stdout, stderr = executeCommand(t, []string{"repo", "config", "get", "alpha"})
+	is.Empty(stderr)
+	is.Contains(stdout, "Write a repository release note.")
+	is.Contains(stdout, "[REPO] {{summary}}")
+	is.Contains(stdout, "overridden by custom guidance")
+
+	for _, args := range [][]string{
+		{"repo", "config", "set", "alpha", "summary-guidance", ""},
+		{"repo", "config", "set", "alpha", "summary-style", ""},
+		{"repo", "config", "set", "alpha", "title-template", ""},
+	} {
+		_, configErr := executeCommand(t, args)
+		is.Empty(configErr)
+	}
+	stdout, stderr = executeCommand(t, []string{"repo", "config", "get", "alpha"})
+	is.Empty(stderr)
+	is.Contains(stdout, "Write a concise global release note.")
+	is.Contains(stdout, "[GLOBAL] {{summary}}")
+
+	store := registry.NewStore(paths)
+	reg, err := store.Load()
+	must.NoError(err)
+	must.Len(reg.Repos, 1)
+	is.Empty(reg.Repos[0].SummaryGuidance)
+	is.Empty(reg.Repos[0].SummaryGuidanceStyle)
+	is.Empty(reg.Repos[0].TitleTemplate)
+}
+
 func TestIntegrationRepoConfigUpdatesPublicationPolicyForExistingRepo(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -264,7 +324,7 @@ func TestIntegrationRepoConfigRejectsInvalidPolicyWithoutMutatingRegistry(t *tes
 	reg, err := store.Load()
 	must.NoError(err)
 	must.Len(reg.Repos, 1)
-	is.Equal(registry.SummaryGuidanceStyleTyped, reg.Repos[0].SummaryGuidanceStyle)
+	is.Empty(reg.Repos[0].SummaryGuidanceStyle)
 	is.Equal("[OPS] {{summary}}", reg.Repos[0].TitleTemplate)
 }
 
@@ -596,7 +656,7 @@ func TestIntegrationRepoAddInitializesManagedBeadsAfterValidation(t *testing.T) 
 		repo := reg.Repos[0]
 		is.Equal(registry.BeadsModeManaged, repo.BeadsMode)
 		is.Equal("alpha", repo.BeadsPrefix)
-		is.Equal(registry.SummaryGuidanceStyleTyped, repo.SummaryGuidanceStyle)
+		is.Empty(repo.SummaryGuidanceStyle)
 	}
 }
 
