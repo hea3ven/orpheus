@@ -82,7 +82,7 @@ func TestActiveContextResolverResolvesWorktreeTarget(t *testing.T) {
 	is.Equal(fixture.repoPath, got.Repository.Root)
 	is.Equal("main", got.Repository.DefaultBranch)
 	is.Equal(fixture.repo.SummaryGuidance, got.Repository.SummaryGuidance)
-	is.Equal(fixture.repo.SummaryGuidanceStyle, got.Repository.SummaryGuidanceStyle)
+	is.Equal(registry.SummaryGuidanceStyleTyped, got.Repository.SummaryGuidanceStyle)
 	is.Equal("op-1", got.Task.ID)
 	is.Equal("Resolve context", got.Task.Title)
 	is.Equal("TREX-1234", got.Task.ExternalRef)
@@ -92,6 +92,42 @@ func TestActiveContextResolverResolvesWorktreeTarget(t *testing.T) {
 	is.Equal("orpheus/op-1", got.Target.Branch)
 	is.Equal(worktree, got.Target.Path)
 	is.Equal(cwd, got.Target.CurrentDirectory)
+}
+
+func TestActiveContextResolverUsesGlobalPublicationPolicy(t *testing.T) {
+	must := require.New(t)
+	fixture := newActiveContextFixture(t, "op-global-policy")
+	must.NoError(fixture.paths.WriteConfigYAML("config.yaml", map[string]any{
+		"publication": map[string]any{
+			"summary_guidance":       "Write a concise release note.",
+			"summary_guidance_style": registry.SummaryGuidanceStyleCapitalized,
+			"title_template":         "[GLOBAL] {{summary}}",
+		},
+	}))
+	worktree := fixture.expectedWorktree(t, "op-global-policy")
+	must.NoError(testMkdirAll(worktree))
+	_, err := fixture.store.StartRun("alpha", "op-global-policy", taskstate.StartRunOptions{
+		Agent:    "recorder",
+		Branch:   "orpheus/op-global-policy",
+		Worktree: worktree,
+	})
+	must.NoError(err)
+
+	resolver := fixture.resolver(fixture.worktreeTask("op-global-policy", worktree), map[string]string{
+		"ORPHEUS_REPO_ID":  "alpha",
+		"ORPHEUS_TASK_ID":  "op-global-policy",
+		"ORPHEUS_WORKTREE": worktree,
+		"ORPHEUS_BRANCH":   "orpheus/op-global-policy",
+	}, worktree)
+	got, err := resolver.Resolve(context.Background())
+
+	must.NoError(err)
+	must.Equal("Write a concise release note.", got.Repository.SummaryGuidance)
+	must.Equal(registry.SummaryGuidanceStyleCapitalized, got.Repository.SummaryGuidanceStyle)
+	prompt := agent.RenderActiveContext(got)
+	must.Contains(prompt, "Write `--summary` following this repository guidance")
+	must.Contains(prompt, "Write a concise release note.")
+	must.NotContains(prompt, "Use one capitalized plain-English summary line")
 }
 
 func TestActiveContextResolverResolvesRepoRootTargets(t *testing.T) {

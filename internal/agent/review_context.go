@@ -86,7 +86,11 @@ func (r ActiveContextResolver) ResolveReview(ctx context.Context) (ReviewContext
 	if err != nil {
 		return ReviewContext{}, fmt.Errorf("load review history for task %s/%s: %w", repo.ID, env.TaskID, err)
 	}
-	activeContext, err := newActiveContext(repo, targets, taskItem, completions.Latest, candidate, cwd)
+	publicationPolicy, err := r.resolvePublicationPolicy(repo)
+	if err != nil {
+		return ReviewContext{}, err
+	}
+	activeContext, err := newActiveContext(repo, publicationPolicy, targets, taskItem, completions.Latest, candidate, cwd)
 	if err != nil {
 		return ReviewContext{}, err
 	}

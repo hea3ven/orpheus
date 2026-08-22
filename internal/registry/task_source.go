@@ -3,6 +3,7 @@ package registry
 import (
 	"fmt"
 
+	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskbranch"
 )
@@ -37,10 +38,15 @@ func (s Store) TaskRepositorySource(repo Repo) (task.RepositorySource, error) {
 	if err != nil {
 		return task.RepositorySource{}, err
 	}
+	publicationConfig, err := publication.LoadConfig(s.paths)
+	if err != nil {
+		return task.RepositorySource{}, err
+	}
 	branchConfig, err := taskbranch.LoadConfig(s.paths)
 	if err != nil {
 		return task.RepositorySource{}, err
 	}
+	publicationPolicy := normalizedRepo.ResolvePublicationPolicy(publicationConfig)
 	return task.RepositorySource{
 		Repository: task.Repository{
 			ID:                     normalizedRepo.ID,
@@ -48,7 +54,7 @@ func (s Store) TaskRepositorySource(repo Repo) (task.RepositorySource, error) {
 			TaskIDPrefix:           normalizedRepo.BeadsPrefix,
 			Path:                   normalizedRepo.Path,
 			DefaultBranch:          normalizedRepo.DefaultBranch,
-			TitleTemplate:          normalizedRepo.TitleTemplate,
+			TitleTemplate:          publicationPolicy.TitleTemplate,
 			BranchTemplate:         taskbranch.ResolveTemplate(normalizedRepo.BranchTemplate, branchConfig.Template),
 			IntegrationFlow:        string(normalizedRepo.IntegrationFlow),
 			IncludePRReviewProcess: cloneBoolPtr(normalizedRepo.IncludePRReviewProcess),

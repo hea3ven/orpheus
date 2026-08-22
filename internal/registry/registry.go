@@ -27,10 +27,10 @@ const (
 	BeadsModeManaged = "managed"
 
 	// SummaryGuidanceStyleTyped guides agents to write conventional typed summaries.
-	SummaryGuidanceStyleTyped = "typed"
+	SummaryGuidanceStyleTyped = publication.SummaryGuidanceStyleTyped
 
 	// SummaryGuidanceStyleCapitalized guides agents to write capitalized plain-English summaries.
-	SummaryGuidanceStyleCapitalized = "capitalized"
+	SummaryGuidanceStyleCapitalized = publication.SummaryGuidanceStyleCapitalized
 )
 
 // Repo is a repository record stored in the Orpheus registry.
@@ -55,26 +55,24 @@ type Repo struct {
 // PublicationPolicy is the resolved publication configuration for a repository.
 // Its values are safe for consumers to use without applying compatibility
 // defaults for older registry entries themselves.
-type PublicationPolicy struct {
-	SummaryGuidance      string
-	SummaryGuidanceStyle string
-	TitleTemplate        string
+type PublicationPolicy = publication.Policy
+
+// ResolvePublicationPolicy applies repository, global, and compatibility
+// publication defaults. A custom guidance string overrides the named style when
+// consumers instruct agents how to write completion summaries.
+func (r Repo) ResolvePublicationPolicy(global publication.Config) PublicationPolicy {
+	return publication.ResolvePolicy(publication.Policy{
+		SummaryGuidance:      r.SummaryGuidance,
+		SummaryGuidanceStyle: r.SummaryGuidanceStyle,
+		TitleTemplate:        r.TitleTemplate,
+	}, global.Policy())
 }
 
 // EffectivePublicationPolicy returns a repository's publication policy with
-// compatibility defaults applied. A custom guidance string overrides the named
-// style when agents are instructed how to write completion summaries.
+// compatibility defaults applied. It preserves the former repository-only API
+// for callers that do not have a global publication configuration.
 func (r Repo) EffectivePublicationPolicy() PublicationPolicy {
-	style := strings.TrimSpace(r.SummaryGuidanceStyle)
-	if style != SummaryGuidanceStyleCapitalized {
-		style = SummaryGuidanceStyleTyped
-	}
-
-	return PublicationPolicy{
-		SummaryGuidance:      strings.TrimSpace(r.SummaryGuidance),
-		SummaryGuidanceStyle: style,
-		TitleTemplate:        strings.TrimSpace(r.TitleTemplate),
-	}
+	return r.ResolvePublicationPolicy(publication.Config{})
 }
 
 // Registry is the human-editable YAML schema for registered repositories.
@@ -174,17 +172,10 @@ func NormalizePath(inputPath string) (string, error) {
 // ValidateSummaryGuidanceStyle checks whether style is one of the supported named styles.
 // An empty style preserves compatibility with registry entries created before named styles.
 func ValidateSummaryGuidanceStyle(style string) error {
-	switch strings.TrimSpace(style) {
-	case "", SummaryGuidanceStyleTyped, SummaryGuidanceStyleCapitalized:
-		return nil
-	default:
-		return fmt.Errorf(
-			"repo summary_guidance_style %q is invalid; expected %q or %q",
-			style,
-			SummaryGuidanceStyleTyped,
-			SummaryGuidanceStyleCapitalized,
-		)
+	if err := publication.ValidateSummaryGuidanceStyle(style); err != nil {
+		return fmt.Errorf("repo %w", err)
 	}
+	return nil
 }
 
 // Load reads and validates the registry. Missing or empty registry state loads as empty.
