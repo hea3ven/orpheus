@@ -17,6 +17,16 @@ import (
 	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
+func TestTaskListDocumentsRepositoryFilter(t *testing.T) {
+	flag := newTaskListCommand(&rootOptions{}).Flags().Lookup("repo")
+	if flag == nil {
+		t.Fatal("task list --repo flag is not registered")
+	}
+	if flag.Usage != "limit to registered repository id, name, or Beads prefix" {
+		t.Fatalf("task list --repo help = %q", flag.Usage)
+	}
+}
+
 func TestTaskListOptionsRejectUnsupportedStatusAndDate(t *testing.T) {
 	for _, options := range []taskListOptions{
 		{statuses: []string{"ready"}},

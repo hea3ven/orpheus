@@ -18,10 +18,10 @@
   },
   "lanes": {
     "integration": {
-      "test_count": 441,
+      "test_count": 443,
       "coverage": {
-        "statement_total": 19431,
-        "covered_statements": 12253
+        "statement_total": 19450,
+        "covered_statements": 12278
       },
       "packages": [
         {
@@ -56,8 +56,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 4624,
-          "covered_statements": 3111
+          "statement_total": 4643,
+          "covered_statements": 3136
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/doctor",
@@ -226,10 +226,10 @@
       ]
     },
     "unit": {
-      "test_count": 1025,
+      "test_count": 1030,
       "coverage": {
-        "statement_total": 19431,
-        "covered_statements": 10260
+        "statement_total": 19450,
+        "covered_statements": 10276
       },
       "packages": [
         {
@@ -264,8 +264,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 4624,
-          "covered_statements": 1686
+          "statement_total": 4643,
+          "covered_statements": 1701
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/doctor",
@@ -330,7 +330,7 @@
         {
           "name": "github.com/hea3ven/orpheus/internal/task",
           "statement_total": 738,
-          "covered_statements": 621
+          "covered_statements": 622
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskbranch",
