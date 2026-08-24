@@ -22,7 +22,41 @@ func loadTaskContextFromInvocation(deps *invocationDependencies) (taskContext, e
 	if err != nil {
 		return taskContext{}, err
 	}
+	return newTaskContext(deps, registryCtx, sources)
+}
 
+// loadTaskListContextFromInvocation resolves an optional repository filter
+// before projecting task sources, so excluded repositories never reach the
+// aggregator or its backend factory.
+func loadTaskListContextFromInvocation(deps *invocationDependencies, repository string) (taskContext, error) {
+	registryCtx, err := loadRegistryContextFromInvocation(deps)
+	if err != nil {
+		return taskContext{}, err
+	}
+	if repository == "" {
+		sources, err := registryCtx.Store.TaskRepositorySources(registryCtx.Registry)
+		if err != nil {
+			return taskContext{}, err
+		}
+		return newTaskContext(deps, registryCtx, sources)
+	}
+
+	repo, err := registryCtx.Registry.Resolve(repository)
+	if err != nil {
+		return taskContext{}, err
+	}
+	source, err := registryCtx.Store.TaskRepositorySource(repo)
+	if err != nil {
+		return taskContext{}, err
+	}
+	return newTaskContext(deps, registryCtx, []taskmodel.RepositorySource{source})
+}
+
+func newTaskContext(
+	deps *invocationDependencies,
+	registryCtx registryContext,
+	sources []taskmodel.RepositorySource,
+) (taskContext, error) {
 	aggregator, err := taskmodel.NewAggregatorWithLogger(sources, deps.taskBackendFactory, deps.logger)
 	if err != nil {
 		return taskContext{}, err

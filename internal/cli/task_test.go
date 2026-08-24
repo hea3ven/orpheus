@@ -148,6 +148,133 @@ func TestIntegrationTaskListListsAllActiveItemsWithStatusProjectionPresentation(
 	assertTaskListBDLog(t, logPath, repos)
 }
 
+func TestIntegrationTaskListScopesOneRegisteredRepository(t *testing.T) {
+	t.Parallel()
+
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+	alphaDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
+	betaDir := filepath.Join(testutil.CanonicalTempDir(t), "beta")
+	for _, dir := range []string{alphaDir, betaDir} {
+		must.NoError(os.MkdirAll(dir, 0o755))
+	}
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{
+		{ID: "alpha", Name: "Alpha Repo", Path: alphaDir, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "a"},
+		{ID: "beta", Name: "Beta Repo", Path: betaDir, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "b"},
+	}}))
+
+	logPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		alphaDir: {stdout: `[
+			{"id":"a-closed","title":"MATCH closed task","status":"closed","priority":1,"issue_type":"task","created_at":"2026-06-03T00:00:00Z","updated_at":"2026-06-03T00:00:00Z"},
+			{"id":"a-open","title":"match open task","status":"open","priority":1,"issue_type":"task","created_at":"2026-06-03T00:00:00Z","updated_at":"2026-06-03T00:00:00Z"},
+			{"id":"a-late","title":"match updated too late","status":"closed","priority":1,"issue_type":"task","created_at":"2026-06-03T00:00:00Z","updated_at":"2026-06-06T00:00:00Z"},
+			{"id":"a-epic","title":"Selected epic","status":"open","priority":1,"issue_type":"epic"},
+			{"id":"a-other","title":"unrelated","status":"closed","priority":1,"issue_type":"task","created_at":"2026-06-03T00:00:00Z","updated_at":"2026-06-03T00:00:00Z"}
+		]`},
+		betaDir: {stderr: "excluded backend should not be queried", exitCode: 7},
+	})
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "list", "--repo", "alpha"})
+	must.NoError(err)
+	is.Empty(stderr)
+	for _, want := range []string{"a-open", "a-epic", "Alpha Repo"} {
+		is.Contains(stdout, want)
+	}
+	for _, hidden := range []string{"a-closed", "a-late", "a-other", "Beta Repo", "excluded backend should not be queried"} {
+		is.NotContains(stdout, hidden)
+	}
+
+	jsonStdout, jsonStderr, jsonErr := executeCommandWithError(t, []string{"task", "list", "--repo", "a", "--json"})
+	must.NoError(jsonErr)
+	is.Empty(jsonStderr)
+	var jsonEntries []taskViewJSONTaskEntry
+	must.NoError(json.Unmarshal([]byte(jsonStdout), &jsonEntries))
+	jsonIDs := make([]string, 0, len(jsonEntries))
+	for _, entry := range jsonEntries {
+		jsonIDs = append(jsonIDs, entry.ID)
+		is.Equal("alpha", entry.Repository.ID)
+	}
+	is.ElementsMatch([]string{"a-epic", "a-open"}, jsonIDs)
+
+	filteredArgs := []string{
+		"task", "list", "--repo", "Alpha Repo",
+		"--query", "match",
+		"--type", "task",
+		"--created-after", "2026-06-01",
+		"--created-before", "2026-06-05",
+		"--updated-after", "2026-06-02",
+		"--updated-before", "2026-06-05",
+		"--status", "closed",
+	}
+	for _, sortMode := range []string{"created", "status"} {
+		filteredStdout, filteredStderr, filteredErr := executeCommandWithError(t, append(append([]string{}, filteredArgs...), "--sort", sortMode))
+		must.NoError(filteredErr)
+		is.Empty(filteredStderr)
+		is.Contains(filteredStdout, "a-closed")
+		for _, hidden := range []string{"a-open", "a-late", "a-epic", "a-other", "Beta Repo"} {
+			is.NotContains(filteredStdout, hidden)
+		}
+	}
+
+	filteredJSON, filteredJSONStderr, filteredJSONErr := executeCommandWithError(t, append(append([]string{}, filteredArgs...), "--sort", "updated", "--json"))
+	must.NoError(filteredJSONErr)
+	is.Empty(filteredJSONStderr)
+	var filteredEntries []taskViewJSONTaskEntry
+	must.NoError(json.Unmarshal([]byte(filteredJSON), &filteredEntries))
+	must.Len(filteredEntries, 1)
+	is.Equal("a-closed", filteredEntries[0].ID)
+
+	_, _, unknownErr := executeCommandWithError(t, []string{"task", "list", "--repo", "missing"})
+	must.Error(unknownErr)
+	is.ErrorContains(unknownErr, `repo "missing" is not registered`)
+	is.ErrorContains(unknownErr, "orpheus repo list")
+
+	log := readFileString(t, logPath)
+	is.Contains(log, alphaDir)
+	is.NotContains(log, betaDir)
+	is.Equal(7, strings.Count(log, "--json --readonly --sandbox list --all --limit 0"))
+}
+
+func TestIntegrationTaskListReportsSelectedRepositoryFailure(t *testing.T) {
+	t.Parallel()
+
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+	alphaDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
+	betaDir := filepath.Join(testutil.CanonicalTempDir(t), "beta")
+	for _, dir := range []string{alphaDir, betaDir} {
+		must.NoError(os.MkdirAll(dir, 0o755))
+	}
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{
+		{ID: "alpha", Name: "Broken Repo", Path: alphaDir, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "a"},
+		{ID: "beta", Name: "Healthy Repo", Path: betaDir, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "b"},
+	}}))
+	logPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		alphaDir: {stderr: "selected backend failed", exitCode: 7},
+		betaDir:  {stdout: `[{"id":"b-1","title":"Excluded healthy task","status":"open","issue_type":"task"}]`},
+	})
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "list", "--repo", "a"})
+
+	must.Error(err)
+	is.ErrorContains(err, "task list completed with 1 repo failure")
+	is.Contains(stdout, "Broken Repo")
+	is.Contains(stderr, "task list: repo alpha")
+	is.Contains(stderr, "selected backend failed")
+	is.NotContains(stdout, "Healthy Repo")
+	is.NotContains(stderr, "Healthy Repo")
+
+	log := readFileString(t, logPath)
+	is.Contains(log, alphaDir)
+	is.NotContains(log, betaDir)
+}
+
 func TestIntegrationTaskListComposesSourceAndProjectedStatusFilters(t *testing.T) {
 	t.Parallel()
 

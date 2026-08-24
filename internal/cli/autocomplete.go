@@ -44,6 +44,7 @@ func configureRepoCompletions(repo *cobra.Command, complete completionProvider) 
 }
 
 func configureTaskCompletions(task *cobra.Command, complete completionProvider) {
+	taskList := commandAt(task, "list")
 	taskCreate := commandAt(task, "create")
 	taskShow := commandAt(task, "show")
 	taskStats := commandAt(task, "stats")
@@ -69,6 +70,7 @@ func configureTaskCompletions(task *cobra.Command, complete completionProvider) 
 	taskStart.ValidArgsFunction = complete.openEpics
 	taskClose.ValidArgsFunction = complete.inProgressEpics
 
+	registerCompletion(taskList, "repo", complete.repositories)
 	registerCompletion(taskCreate, "repo", complete.repositories)
 	registerCompletion(taskCreate, "type", fixedCompletion("task", "epic"))
 	registerCompletion(taskCreate, "parent", complete.activeEpicsForRepository)

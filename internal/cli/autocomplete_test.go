@@ -63,6 +63,10 @@ func TestIntegrationCompletionProtocolSuggestsContextAwareValues(t *testing.T) {
 	})
 	assertCompletionChoices(t, []string{"task", "start", ""}, []string{"ar-epic-open\tOpen epic (alpha)"})
 	assertCompletionChoices(t, []string{"task", "close", ""}, []string{"br-epic-running\tRunning epic (beta)"})
+	assertCompletionChoices(t, []string{"task", "list", "--repo", ""}, []string{
+		completionWithDescription("alpha", "Alpha Repo ("+alpha+")"),
+		completionWithDescription("beta", "Beta Repo ("+beta+")"),
+	})
 	assertCompletionChoices(t, []string{"task", "create", "--repo", "alpha", "--parent", ""}, []string{"ar-epic-open\tOpen epic (alpha)"})
 	assertCompletionChoices(t, []string{"task", "edit", "ar-open", "--add-block", ""}, []string{"ar-epic-open\tOpen epic (alpha)"})
 	assertCompletionChoices(t, []string{"task", "run", "ar-open", "--agent", ""}, []string{"builder", "fast"})
