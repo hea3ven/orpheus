@@ -775,7 +775,7 @@ func renderReviewNextStep(output io.Writer, taskID string, taskState taskstate.T
 	case taskstate.ReviewStatusWaitingForAutomatedDecision:
 		_, err := fmt.Fprintf(
 			output,
-			"\nNext step: automated blocker decision is paused; run `orpheus task review %s` to resume step %s.\n",
+			"\nNext step: automated blocker decision is paused; run `orpheus task run %s` to resume step %s.\n",
 			taskID,
 			formatReviewValue(review.Step),
 		)
