@@ -95,6 +95,7 @@ func newTaskListCommand(opts *rootOptions) *cobra.Command {
 			return runTaskList(command, opts, listOpts)
 		},
 	}
+	cmd.Flags().StringVar(&listOpts.repo, "repo", "", "limit to registered repository id, name, or Beads prefix")
 	cmd.Flags().StringVar(&listOpts.query, "query", "", "match task ID or title (case-insensitive partial match)")
 	cmd.Flags().StringArrayVar(&listOpts.types, "type", nil, "limit to task or epic (repeatable)")
 	cmd.Flags().StringVar(&listOpts.createdAfter, "created-after", "", "include items created after YYYY-MM-DD")
@@ -174,10 +175,10 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 		Use:   "run <task-id>",
 		Short: "Advance or resume a task's workflow",
 		Long: "Advance or resume a task's persisted implement-review-fix-finalize workflow.\n\n" +
-			"task run selects the next safe transition: implementation, review, a manual-review resume, targeted repair, or finalization retry. It reports active runs, open pull requests, and finalized tasks without starting inappropriate work. " +
+			"task run selects the next safe transition: implementation, review, a paused review resume, targeted repair, or finalization retry. It reports active runs, open pull requests, and finalized tasks without starting inappropriate work. " +
 			"By default, implementation runs use a deterministic task branch and worktree. " +
 			"Use --repo-root to run from the registered repository root. Repository-root work starts on the registered default branch and is published through the same pull-request flow.\n\n" +
-			"Automated blockers require an explicit keep, downgrade, or waive/cancel decision. They also offer restart and pause before targeted fixes: restart reruns only the blocked automated step, while pause resumes through task review. Manual steps are persisted and resumed without rerunning completed review steps. `task review` and `task done` remain compatibility entry points; use `task review show` to inspect review findings. PR synchronization remains `task sync`.",
+			"Automated blockers require an explicit keep, downgrade, or waive/cancel decision. They also offer restart and pause before targeted fixes: restart reruns only the blocked automated step, while pause resumes through task run. Manual steps are persisted and resumed without rerunning completed review steps. `task review` and `task done` remain compatibility entry points; use `task review show` to inspect review findings. PR synchronization remains `task sync`.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			if mainMode {
@@ -238,7 +239,7 @@ func newTaskReviewCommand(opts *rootOptions) *cobra.Command {
 			"then finalizes through the same path as task done. When task run has paused " +
 			"at a manual step, task run resumes that same attempt; --pipeline may only " +
 			"name the already selected pipeline and cannot replace it. Automated blockers " +
-			"require an explicit keep, downgrade, or waive/cancel decision. They also offer restart and pause: restart reruns only the blocked automated step, while pause resumes through task review. Kept blockers " +
+			"require an explicit keep, downgrade, or waive/cancel decision. They also offer restart and pause: restart reruns only the blocked automated step, while pause resumes through task run. Kept blockers " +
 			"run bounded targeted fixes and restart the pipeline from step 1 so manual " +
 			"gates must pass again. If blocker-decision input disappears, the current " +
 			"attempt is blocked; before a fresh review, each preserved blocker needs a keep, " +
@@ -404,6 +405,7 @@ type taskEditOptions struct {
 }
 
 type taskListOptions struct {
+	repo          string
 	query         string
 	types         []string
 	createdAfter  string
@@ -523,7 +525,7 @@ func runTaskList(command *cobra.Command, opts *rootOptions, listOpts taskListOpt
 	if err != nil {
 		return err
 	}
-	taskCtx, err := loadTaskContextFromInvocation(deps)
+	taskCtx, err := loadTaskListContextFromInvocation(deps, listOpts.repo)
 	if err != nil {
 		return err
 	}
@@ -1086,7 +1088,6 @@ func executeTaskRunRoute(command *cobra.Command, opts *rootOptions, execution ta
 		return renderTaskDoneResult(command, finalized)
 	case workflow.TaskRunActionImplementationActive,
 		workflow.TaskRunActionReviewActive,
-		workflow.TaskRunActionReviewPaused,
 		workflow.TaskRunActionOpenPR,
 		workflow.TaskRunActionCompleted:
 		return renderTaskRunRoute(command.OutOrStdout(), resolved.TaskID, execution.route)
@@ -1169,15 +1170,13 @@ func renderTaskRunRoute(output io.Writer, taskID string, route workflow.TaskRunR
 	case workflow.TaskRunActionStartReview:
 		message = fmt.Sprintf("Task %s: starting a fresh review.\n", taskID)
 	case workflow.TaskRunActionResumeReview:
-		message = fmt.Sprintf("Task %s: resuming review attempt %d at manual step %q.\n", taskID, route.Attempt, route.Step)
+		message = fmt.Sprintf("Task %s: resuming review attempt %d at step %q.\n", taskID, route.Attempt, route.Step)
 	case workflow.TaskRunActionRetryFinalization:
 		message = fmt.Sprintf("Task %s: retrying finalization after passed review.\n", taskID)
 	case workflow.TaskRunActionImplementationActive:
 		message = fmt.Sprintf("Task %s: implementation attempt %d is active; wait for it to finish.\n", taskID, route.Attempt)
 	case workflow.TaskRunActionReviewActive:
 		message = fmt.Sprintf("Task %s: review attempt %d is active; inspect `orpheus task review show %s`.\n", taskID, route.Attempt, taskID)
-	case workflow.TaskRunActionReviewPaused:
-		message = fmt.Sprintf("Task %s: automated blocker decision is paused at step %q; run `orpheus task review %s` to resume it.\n", taskID, route.Step, taskID)
 	case workflow.TaskRunActionOpenPR:
 		message = fmt.Sprintf("Task %s: pull request %s is open; run `orpheus task sync %s` to reconcile it.\n", taskID, route.PRURL, taskID)
 	case workflow.TaskRunActionCompleted:

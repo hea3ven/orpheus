@@ -217,7 +217,6 @@ func TestIntegrationAgentContextRendersReviewFollowUpCompletionHistory(t *testin
 	is.NotContains(stdout, "Latest completion:")
 }
 
-//nolint:funlen // The three finding types and stale-write assertion share one active review setup.
 func TestIntegrationAgentReviewAddRecordsFindingTypesAndRejectsStaleAttempt(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)

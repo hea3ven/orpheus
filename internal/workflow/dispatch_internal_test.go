@@ -131,7 +131,6 @@ func equalStrings(left []string, right []string) bool {
 	return strings.Join(left, "\x00") == strings.Join(right, "\x00")
 }
 
-//nolint:funlen // The fixture is intentionally explicit about blocked review state.
 func TestDispatchValidateStartInfersBlockedReviewFollowUpTarget(t *testing.T) {
 	paths := newDispatchTestPaths(t)
 	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")

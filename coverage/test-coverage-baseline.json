@@ -102,7 +102,7 @@
         {
           "name": "github.com/hea3ven/orpheus/internal/review",
           "statement_total": 1090,
-          "covered_statements": 894
+          "covered_statements": 895
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/revieweval",
@@ -325,12 +325,12 @@
         {
           "name": "github.com/hea3ven/orpheus/internal/status",
           "statement_total": 327,
-          "covered_statements": 301
+          "covered_statements": 303
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/task",
           "statement_total": 738,
-          "covered_statements": 621
+          "covered_statements": 622
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskbranch",

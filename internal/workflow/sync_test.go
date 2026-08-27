@@ -535,7 +535,6 @@ func TestSyncServiceReportsOpenPRBranchAlreadyCurrent(t *testing.T) {
 	}
 }
 
-//nolint:funlen // The successful conflict-repair workflow is clearer as one integrated fixture.
 func TestSyncServiceResolvesOpenPRBranchConflictWithAgent(t *testing.T) {
 	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
@@ -1445,7 +1444,6 @@ func assertSyncAllDiagnostics(t *testing.T, logs string) {
 	}
 }
 
-//nolint:funlen // The batch continuation scenario is clearer as one integrated workflow fixture.
 func TestSyncServiceSyncAllContinuesAfterOpenPRBranchUpdateFailure(t *testing.T) {
 	paths, source, targets := newSyncTestSource(t, filepath.Join(testutil.CanonicalTempDir(t), "repo"), "op-fail")
 	currentTargets := mustSyncExpectedTargets(t, source.Repository, "op-current", paths)
@@ -1524,7 +1522,6 @@ func TestSyncServiceSyncAllContinuesAfterOpenPRBranchUpdateFailure(t *testing.T)
 	}
 }
 
-//nolint:funlen // The batch conflict-repair path needs repository, PR, Git, and telemetry fixtures together.
 func TestSyncServiceSyncAllRecordsConflictResolutionTelemetry(t *testing.T) {
 	paths, source, targets := newSyncTestSource(t, filepath.Join(testutil.CanonicalTempDir(t), "repo"), "op-conflict")
 	backend := &fakeSyncBackend{
@@ -1615,7 +1612,6 @@ func TestSyncServiceSyncAllRecordsConflictResolutionTelemetry(t *testing.T) {
 	}
 }
 
-//nolint:funlen // The batch conflict-agent failure is clearer as one integrated fixture.
 func TestSyncServiceSyncAllContinuesAfterConflictAgentFailure(t *testing.T) {
 	paths, source, targets := newSyncTestSource(t, filepath.Join(testutil.CanonicalTempDir(t), "repo"), "op-conflict")
 	currentTargets := mustSyncExpectedTargets(t, source.Repository, "op-current", paths)
@@ -1944,7 +1940,6 @@ func TestBuildPublicationPullRequestContentUsesTitleTemplate(t *testing.T) {
 	}
 }
 
-//nolint:funlen // The review process fixture is easier to verify as one content example.
 func TestBuildPublicationPullRequestContentFromStateFormatsReviewProcess(t *testing.T) {
 	finishedAt := time.Date(2026, 6, 10, 11, 0, 0, 0, time.UTC)
 	content, err := workflow.BuildPublicationPullRequestContentFromState("", task.Task{

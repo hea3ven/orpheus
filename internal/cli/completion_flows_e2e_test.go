@@ -19,7 +19,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-//nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestIntegrationWorktreeCompletionFlowEndToEnd(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -104,7 +103,6 @@ func TestIntegrationWorktreeCompletionFlowEndToEnd(t *testing.T) {
 	is.NotContains(bdLog, "orpheus.pr_url")
 }
 
-//nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestIntegrationConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -173,7 +171,6 @@ func TestIntegrationConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 	is.Contains(readFileString(t, ghLogPath), "[TREX-1234] Replaced the config for abc")
 }
 
-//nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestIntegrationGlobalPublicationPolicyEndToEnd(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -315,7 +312,6 @@ func TestIntegrationGlobalTitleTemplateRequiresExternalReferenceInStatusAndDispa
 	is.ErrorContains(runErr, "publication title template requires a task external reference")
 }
 
-//nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestIntegrationMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -390,7 +386,6 @@ func TestIntegrationMissingPublicationExternalReferenceBlocksDispatchAndPublicat
 	is.ErrorIs(statErr, os.ErrNotExist)
 }
 
-//nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestIntegrationWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -506,7 +501,6 @@ func TestIntegrationWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	is.Contains(fullStatusOut, taskID)
 }
 
-//nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestIntegrationRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)

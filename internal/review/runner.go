@@ -179,7 +179,7 @@ var hunkNotePollInterval = 250 * time.Millisecond
 
 // ErrManualInputUnavailable reports that an attached manual step could not
 // continue because operator input disappeared. The review attempt should remain
-// paused for task review resumption instead of being marked failed.
+// paused for task run resumption instead of being marked failed.
 var ErrManualInputUnavailable = errors.New("manual review input unavailable")
 
 // ErrAutomatedBlockerInputUnavailable reports that automated blocker
@@ -1223,7 +1223,7 @@ func reviewAutomatedBlockers(
 			if _, err := opts.Store.PauseReviewForAutomatedBlockerDecision(opts.RepoID, opts.TaskID, opts.Attempt.Attempt, step.Name); err != nil {
 				return automatedBlockerOutcome{}, fmt.Errorf("task review %s: pause automated blocker decision for step %q: %w", opts.TaskID, step.Name, err)
 			}
-			if _, err := fmt.Fprintf(opts.Stderr, "Automated blocker decisions for %s are paused; resume with `orpheus task review %s`.\n", opts.TaskID, opts.TaskID); err != nil {
+			if _, err := fmt.Fprintf(opts.Stderr, "Automated blocker decisions for %s are paused; resume with `orpheus task run %s`.\n", opts.TaskID, opts.TaskID); err != nil {
 				return automatedBlockerOutcome{}, err
 			}
 			return automatedBlockerOutcome{pause: true}, nil
