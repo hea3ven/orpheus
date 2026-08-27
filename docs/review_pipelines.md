@@ -48,10 +48,11 @@ result are discarded together.
 
 `pause` exits without a repair, pipeline advance, approval, or finalization. It
 persists the pending decision and resumes it with the environment of a later
-`orpheus task review <task-id>` invocation. The resumed command presents the
-same blockers again; choose restart or any normal disposition. `orpheus status`
-and `orpheus task review show <task-id>` identify a paused decision and direct
-the operator to `task review`.
+`orpheus task run <task-id>` invocation. The resumed command presents the same
+blockers again; choose restart or any normal disposition. `task review` remains
+a compatibility command for resumption. `orpheus status` and `orpheus task
+review show <task-id>` identify a paused decision and direct the operator to
+`task run`.
 
 ## Paired AI reviewer comparison (opt-in)
 

@@ -554,7 +554,7 @@ func classifyLatestReview(
 		step := valueOrUnknown(latestReview.Step)
 		return newPolicyResult(
 			readinessReview,
-			fmt.Sprintf("review blocker decision paused at %s; run task review", step),
+			fmt.Sprintf("review blocker decision paused at %s; run task run", step),
 			Detail{Kind: DetailReviewDecisionPaused, Step: step},
 		), true
 	case taskstate.ReviewStatusBlocked:

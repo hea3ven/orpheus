@@ -495,6 +495,19 @@ func TestProjectWithLocalTaskStatesClassifiesLatestReviewAttempts(t *testing.T) 
 			wantDetail: "review blocker decision required; run task run",
 		},
 		{
+			name: "paused automated blocker decision resumes through task run",
+			review: func() taskstate.ReviewAttempt {
+				review := reviewAttempt(1, taskstate.ReviewStatusWaitingForAutomatedDecision, []taskstate.ReviewFinding{
+					{Type: taskstate.FindingTypeBlocking, Step: "lint", Title: "Bug", Description: "Fix it"},
+				})
+				review.Step = "lint"
+				review.Steps = []taskstate.ReviewStep{{Kind: taskstate.ReviewStepKindCheck, Name: "lint"}}
+				return review
+			}(),
+			wantGroup:  status.GroupInReview,
+			wantDetail: "review blocker decision paused at lint; run task run",
+		},
+		{
 			name:       "aborted review is reviewing retry",
 			review:     reviewAttempt(1, taskstate.ReviewStatusAborted, nil),
 			wantGroup:  status.GroupInReview,

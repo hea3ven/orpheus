@@ -1467,7 +1467,7 @@ func (s Store) PauseReviewForManual(repoID, taskID string, attempt int, step str
 	return state.Reviews[index], nil
 }
 
-// PauseReviewForAutomatedBlockerDecision preserves a check or agent-review blocker disposition for a later task review invocation.
+// PauseReviewForAutomatedBlockerDecision preserves a check or agent-review blocker disposition for a later task run invocation.
 func (s Store) PauseReviewForAutomatedBlockerDecision(repoID, taskID string, attempt int, step string) (ReviewAttempt, error) {
 	step = strings.TrimSpace(step)
 	if step == "" {
@@ -2568,7 +2568,7 @@ func HasUnkeptAutomatedBlockingFindings(review ReviewAttempt) bool {
 
 // UntargetedBlockingFindingIndexesForFollowUp returns open blocker indexes that
 // task-run follow-up may target. ok is false when automated blockers still need
-// an explicit keep, downgrade, or waive decision from a fresh task review.
+// an explicit keep, downgrade, or waive decision from a fresh task run.
 func UntargetedBlockingFindingIndexesForFollowUp(review ReviewAttempt) ([]int, bool) {
 	if HasUnkeptAutomatedBlockingFindings(review) {
 		return nil, false
