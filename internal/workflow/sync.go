@@ -33,6 +33,7 @@ type SyncScanBackendFactory func(task.RepositorySource) (task.ReadBackend, error
 type SyncRunStore interface {
 	Load(repoID, taskID string) (taskstate.TaskState, error)
 	RecordTaskClosed(repoID, taskID string, opts taskstate.TaskClosedOptions) (taskstate.Event, error)
+	RecordWorktreeCleanup(repoID, taskID string, opts taskstate.WorktreeCleanupOptions) (taskstate.Event, error)
 	RecordSyncConflictResolutionStarted(
 		repoID,
 		taskID string,
@@ -182,6 +183,7 @@ type SyncService struct {
 	ScanFactory      SyncScanBackendFactory
 	RunStore         SyncRunStore
 	Git              SyncGit
+	CleanupGit       ClosedTaskWorktreeGit
 	ConflictResolver SyncConflictResolver
 	PRProvider       pullrequest.Provider
 	Logger           *slog.Logger
@@ -211,14 +213,15 @@ const (
 
 // SyncResult reports the resolved task and sync outcome.
 type SyncResult struct {
-	Repository task.Repository
-	Task       task.Task
-	LatestRun  taskstate.RunAttempt
-	Status     SyncStatus
-	Reason     string
-	Branch     string
-	Worktree   string
-	PRURL      string
+	Repository      task.Repository
+	Task            task.Task
+	LatestRun       taskstate.RunAttempt
+	Status          SyncStatus
+	Reason          string
+	Branch          string
+	Worktree        string
+	PRURL           string
+	WorktreeCleanup *WorktreeCleanupResult
 }
 
 // SyncAllFailure is a per-repository or per-task batch sync failure.
@@ -725,6 +728,7 @@ func (s SyncService) handleExistingPRStatus(
 			)
 		}
 		result.Task.Status = task.StatusClosed
+		result.WorktreeCleanup = cleanClosedTaskWorktreeAfterClosure(ctx, s.Paths, target.source.Repository, target.task, target.backend, s.RunStore, s.CleanupGit)
 		return result, true, nil
 	case pullrequest.StateClosed:
 		return SyncResult{}, true, fmt.Errorf("task %s PR %s is closed without merge; no backend state was changed", target.task.ID, observedURL)

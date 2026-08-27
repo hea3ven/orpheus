@@ -44,6 +44,7 @@ type FinalizationRunStore interface {
 	RecordFinalizationMerge(repoID, taskID string, commit string) (taskstate.Finalization, error)
 	RecordFinalizationPush(repoID, taskID string, opts taskstate.FinalizationPushOptions) (taskstate.Finalization, error)
 	RecordFinalizationClose(repoID, taskID string, opts taskstate.FinalizationCloseOptions) (taskstate.Finalization, error)
+	RecordWorktreeCleanup(repoID, taskID string, opts taskstate.WorktreeCleanupOptions) (taskstate.Event, error)
 	RecordFinalizationFailure(repoID, taskID string, cause error) (taskstate.Event, error)
 	RecordFeatureBranchPR(repoID, taskID string, opts taskstate.FeatureBranchPROptions) (taskstate.Event, error)
 	RecordGitFacts(repoID, taskID, branch, worktree string) (taskstate.TaskState, error)
@@ -155,6 +156,7 @@ type FinalizationService struct {
 	BackendFactory FinalizationBackendFactory
 	RunStore       FinalizationRunStore
 	Git            FinalizationGit
+	CleanupGit     ClosedTaskWorktreeGit
 	PRProvider     pullrequest.Provider
 	Logger         *slog.Logger
 }
@@ -171,12 +173,13 @@ type FinalizeOptions struct {
 
 // FinalizationResult reports the finalized task and recorded facts.
 type FinalizationResult struct {
-	Repository   task.Repository
-	Task         task.Task
-	Finalization taskstate.Finalization
-	Branch       string
-	PRURL        string
-	PRRecovered  bool
+	Repository      task.Repository
+	Task            task.Task
+	Finalization    taskstate.Finalization
+	Branch          string
+	PRURL           string
+	PRRecovered     bool
+	WorktreeCleanup *WorktreeCleanupResult
 }
 
 // RunningCompletionConfirmation describes a stale running run that can be
@@ -763,10 +766,11 @@ func (s FinalizationService) finalizeDefaultBranch(
 	}
 
 	return FinalizationResult{
-		Repository:   repo,
-		Task:         target.task.Clone(),
-		Finalization: finalization,
-		Branch:       repo.DefaultBranch,
+		Repository:      repo,
+		Task:            target.task.Clone(),
+		Finalization:    finalization,
+		Branch:          repo.DefaultBranch,
+		WorktreeCleanup: cleanClosedTaskWorktreeAfterClosure(ctx, s.Paths, target.source.Repository, target.task, target.backend, s.RunStore, s.CleanupGit),
 	}, nil
 }
 
@@ -1178,6 +1182,7 @@ func (s FinalizationService) recordFeatureBranchPublicationStart(
 	return started, nil
 }
 
+//nolint:funlen // Direct merge persists each durable publication boundary before cleanup.
 func (s FinalizationService) directMergeFeatureBranch(
 	ctx context.Context,
 	target finalizationTarget,
@@ -1240,7 +1245,19 @@ func (s FinalizationService) directMergeFeatureBranch(
 	if err != nil {
 		return FinalizationResult{}, err
 	}
-	return FinalizationResult{Repository: repo, Task: target.task.Clone(), Finalization: finalization, Branch: destination}, nil
+	cleanup := cleanClosedTaskWorktreeAfterClosure(
+		ctx,
+		s.Paths,
+		target.source.Repository,
+		target.task,
+		target.backend,
+		s.RunStore,
+		s.CleanupGit,
+	)
+	return FinalizationResult{
+		Repository: repo, Task: target.task.Clone(), Finalization: finalization, Branch: destination,
+		WorktreeCleanup: cleanup,
+	}, nil
 }
 
 func (s FinalizationService) ensureFeatureBranchPRRecorded(

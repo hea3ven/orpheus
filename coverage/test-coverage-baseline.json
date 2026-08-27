@@ -18,10 +18,10 @@
   },
   "lanes": {
     "integration": {
-      "test_count": 441,
+      "test_count": 445,
       "coverage": {
-        "statement_total": 19431,
-        "covered_statements": 12253
+        "statement_total": 19724,
+        "covered_statements": 12468
       },
       "packages": [
         {
@@ -56,18 +56,18 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 4624,
-          "covered_statements": 3111
+          "statement_total": 4649,
+          "covered_statements": 3127
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/doctor",
-          "statement_total": 330,
-          "covered_statements": 213
+          "statement_total": 407,
+          "covered_statements": 277
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/git",
-          "statement_total": 1438,
-          "covered_statements": 932
+          "statement_total": 1533,
+          "covered_statements": 1006
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/logging",
@@ -131,8 +131,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstate",
-          "statement_total": 2154,
-          "covered_statements": 1501
+          "statement_total": 2171,
+          "covered_statements": 1512
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstats",
@@ -161,8 +161,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/workflow",
-          "statement_total": 2955,
-          "covered_statements": 1986
+          "statement_total": 3034,
+          "covered_statements": 2036
         }
       ],
       "suite_baseline_seconds": 73.960955796,
@@ -226,10 +226,10 @@
       ]
     },
     "unit": {
-      "test_count": 1025,
+      "test_count": 1049,
       "coverage": {
-        "statement_total": 19431,
-        "covered_statements": 10260
+        "statement_total": 19724,
+        "covered_statements": 10485
       },
       "packages": [
         {
@@ -264,18 +264,18 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 4624,
-          "covered_statements": 1686
+          "statement_total": 4649,
+          "covered_statements": 1699
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/doctor",
-          "statement_total": 330,
-          "covered_statements": 145
+          "statement_total": 407,
+          "covered_statements": 206
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/git",
-          "statement_total": 1438,
-          "covered_statements": 405
+          "statement_total": 1533,
+          "covered_statements": 481
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/logging",
@@ -339,8 +339,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstate",
-          "statement_total": 2154,
-          "covered_statements": 1466
+          "statement_total": 2171,
+          "covered_statements": 1477
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstats",
@@ -369,8 +369,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/workflow",
-          "statement_total": 2955,
-          "covered_statements": 1446
+          "statement_total": 3034,
+          "covered_statements": 1510
         }
       ],
       "suite_baseline_seconds": 7.895625235,

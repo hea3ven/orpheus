@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/spf13/cobra"
 )
 
 func TestTaskListOptionsRejectUnsupportedStatusAndDate(t *testing.T) {
@@ -28,6 +30,86 @@ func TestTaskListOptionsRejectUnsupportedStatusAndDate(t *testing.T) {
 			t.Fatalf("normalized %#v successfully, want validation error", options)
 		}
 	}
+}
+
+func TestTaskClosureOutputReportsAuditFailureAfterWorktreeRemoval(t *testing.T) {
+	cleanup := &workflow.WorktreeCleanupResult{
+		Outcome:  workflow.WorktreeCleanupRemoved,
+		Worktree: "/worktrees/op-1",
+		Reason:   "removed, but could not record local cleanup history: disk full",
+	}
+
+	t.Run("done", func(t *testing.T) {
+		var output bytes.Buffer
+		command := &cobra.Command{}
+		command.SetOut(&output)
+		if err := renderTaskDoneResult(command, workflow.FinalizationResult{
+			Task:            taskmodel.Task{ID: "op-1"},
+			Finalization:    taskstate.Finalization{Commit: "abc123"},
+			Branch:          "main",
+			WorktreeCleanup: cleanup,
+		}); err != nil {
+			t.Fatalf("render task done result: %v", err)
+		}
+		if !strings.Contains(output.String(), cleanup.Reason) {
+			t.Fatalf("task done output = %q, want audit failure %q", output.String(), cleanup.Reason)
+		}
+	})
+
+	t.Run("sync", func(t *testing.T) {
+		var output bytes.Buffer
+		if err := renderTaskSyncResult(&output, workflow.SyncResult{
+			Status:          workflow.SyncStatusPRMerged,
+			Task:            taskmodel.Task{ID: "op-1"},
+			PRURL:           "https://github.test/org/repo/pull/1",
+			WorktreeCleanup: cleanup,
+		}); err != nil {
+			t.Fatalf("render task sync result: %v", err)
+		}
+		if !strings.Contains(output.String(), cleanup.Reason) {
+			t.Fatalf("task sync output = %q, want audit failure %q", output.String(), cleanup.Reason)
+		}
+	})
+}
+
+func TestTaskClosureOutputReportsUnsafeWorktreePath(t *testing.T) {
+	cleanup := &workflow.WorktreeCleanupResult{
+		Outcome:  workflow.WorktreeCleanupUnsafe,
+		Worktree: "/worktrees/op-1",
+		Reason:   "reload local task state after closure: state storage unavailable",
+	}
+
+	t.Run("done", func(t *testing.T) {
+		var output bytes.Buffer
+		command := &cobra.Command{}
+		command.SetOut(&output)
+		if err := renderTaskDoneResult(command, workflow.FinalizationResult{
+			Task:            taskmodel.Task{ID: "op-1"},
+			Finalization:    taskstate.Finalization{Commit: "abc123"},
+			Branch:          "main",
+			WorktreeCleanup: cleanup,
+		}); err != nil {
+			t.Fatalf("render task done result: %v", err)
+		}
+		if !strings.Contains(output.String(), cleanup.Worktree) || !strings.Contains(output.String(), cleanup.Reason) {
+			t.Fatalf("task done output = %q, want worktree and reload failure", output.String())
+		}
+	})
+
+	t.Run("sync", func(t *testing.T) {
+		var output bytes.Buffer
+		if err := renderTaskSyncResult(&output, workflow.SyncResult{
+			Status:          workflow.SyncStatusPRMerged,
+			Task:            taskmodel.Task{ID: "op-1"},
+			PRURL:           "https://github.test/org/repo/pull/1",
+			WorktreeCleanup: cleanup,
+		}); err != nil {
+			t.Fatalf("render task sync result: %v", err)
+		}
+		if !strings.Contains(output.String(), cleanup.Worktree) || !strings.Contains(output.String(), cleanup.Reason) {
+			t.Fatalf("task sync output = %q, want worktree and reload failure", output.String())
+		}
+	})
 }
 
 func TestFilteredTaskInventoryAppliesProjectedStatusAfterHidingContext(t *testing.T) {
