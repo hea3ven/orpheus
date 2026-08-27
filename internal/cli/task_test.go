@@ -2786,6 +2786,39 @@ func TestIntegrationTaskReviewShowRendersManuallyAddressedFinding(t *testing.T) 
 	is.Contains(stdout, "Disposition: addressed manually: Verified in the worktree.")
 }
 
+func TestIntegrationTaskReviewShowGuidesPausedAutomatedBlockerDecision(t *testing.T) {
+	t.Parallel()
+	is := assert.New(t)
+	must := require.New(t)
+	paths, _ := setupTaskReviewShowRepo(t, "op-paused")
+	runStore := taskstate.NewStore(paths)
+	reviewAttempt, err := runStore.StartReviewWithOptions("alpha", "op-paused", taskstate.StartReviewOptions{
+		Pipeline: "quality",
+		Step:     "unit",
+	})
+	must.NoError(err)
+	_, err = runStore.RecordReviewStep("alpha", "op-paused", reviewAttempt.Attempt, taskstate.RecordReviewStepOptions{
+		Kind: taskstate.ReviewStepKindCheck,
+		Name: "unit",
+	})
+	must.NoError(err)
+	_, err = runStore.RecordReviewFinding("alpha", "op-paused", reviewAttempt.Attempt, taskstate.ReviewFinding{
+		Type:        taskstate.FindingTypeBlocking,
+		Title:       "Check failed",
+		Description: "make test failed.",
+		Step:        "unit",
+	})
+	must.NoError(err)
+	_, err = runStore.PauseReviewForAutomatedBlockerDecision("alpha", "op-paused", reviewAttempt.Attempt, "unit")
+	must.NoError(err)
+
+	stdout, stderr := executeCommand(t, []string{"task", "review", "show", "op-paused", "1"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Automated blocker decisions: paused")
+	is.Contains(stdout, "Next step: automated blocker decision is paused; run `orpheus task run op-paused` to resume step unit.")
+}
+
 func TestIntegrationTaskReviewShowGuidesInterruptedAutomatedBlockerDecision(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -6818,6 +6851,95 @@ func TestIntegrationTaskReviewResumesManualWaitingAttempt(t *testing.T) {
 	must.True(ok)
 	is.Equal(reviewAttempt.Attempt, latest.Attempt)
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+}
+
+//nolint:funlen // The paused automated-decision workflow spans three CLI invocations.
+func TestIntegrationTaskRunResumesPausedAutomatedBlockerDecision(t *testing.T) {
+	t.Parallel()
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review pause", "Resume the blocker decision.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+	firstRuns := filepath.Join(testutil.CanonicalTempDir(t), "first-runs")
+	blockedRuns := filepath.Join(testutil.CanonicalTempDir(t), "blocked-runs")
+	first := writeReviewScript(t, fmt.Sprintf("#!/bin/sh\nprintf 'first\\n' >> %s\n", shellQuote(firstRuns)))
+	blocked := writeReviewScript(t, fmt.Sprintf("#!/bin/sh\nprintf 'blocked\\n' >> %s\nexit 7\n", shellQuote(blockedRuns)))
+	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+		"standard": {
+			{"kind": "check", "name": "first", "command": first},
+			{"kind": "check", "name": "blocked", "command": blocked},
+		},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: taskJSON},
+	})
+
+	firstStdout, firstStderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "p\n")
+	is.Empty(firstStdout)
+	is.Contains(firstStderr, "Automated blocker decisions for op-main are paused; resume with `orpheus task run op-main`.")
+
+	stateStore := taskstate.NewStore(paths)
+	state, err := stateStore.Load("alpha", "op-main")
+	must.NoError(err)
+	paused, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusWaitingForAutomatedDecision, paused.Status)
+	must.Len(paused.Steps, 2)
+	must.Len(paused.Findings, 1)
+
+	secondStdout, secondStderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, "r\np\n")
+	is.Empty(secondStdout)
+	is.Contains(secondStderr, "Resuming review attempt 1 at automated blocker decision for step \"blocked\".")
+	is.Contains(secondStderr, "Finding 1:")
+	is.Contains(secondStderr, "Decision for finding 1 [k=keep, d=downgrade advisory, w=waive/cancel, r=restart step, p=pause]:")
+	is.Contains(secondStderr, "Automated blocker decisions for op-main are paused; resume with `orpheus task run op-main`.")
+
+	state, err = stateStore.Load("alpha", "op-main")
+	must.NoError(err)
+	pausedAgain, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(paused.Attempt, pausedAgain.Attempt)
+	is.Equal(taskstate.ReviewStatusWaitingForAutomatedDecision, pausedAgain.Status)
+	must.Len(pausedAgain.Steps, 2)
+	must.Len(pausedAgain.Findings, 1)
+
+	finalStdout, finalStderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, "w\nAccepted for this task.\n")
+	is.Contains(finalStdout, "Finalized op-main")
+	is.Contains(finalStderr, "Resuming review attempt 1 at automated blocker decision for step \"blocked\".")
+	is.Contains(finalStderr, "Finding 1:")
+
+	state, err = stateStore.Load("alpha", "op-main")
+	must.NoError(err)
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(paused.Attempt, latest.Attempt)
+	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+	must.Len(latest.Steps, 2)
+	must.Len(latest.Findings, 1)
+	is.Equal("Accepted for this task.", latest.Findings[0].Waiver)
+
+	firstRunOutput, err := os.ReadFile(firstRuns)
+	must.NoError(err)
+	is.Equal("first\n", string(firstRunOutput))
+	blockedRunOutput, err := os.ReadFile(blockedRuns)
+	must.NoError(err)
+	is.Equal("blocked\nblocked\n", string(blockedRunOutput))
 }
 
 func TestIntegrationTaskReviewRejectsConflictingPipelineForManualWaitingAttempt(t *testing.T) {

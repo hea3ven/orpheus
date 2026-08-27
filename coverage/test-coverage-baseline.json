@@ -18,10 +18,10 @@
   },
   "lanes": {
     "integration": {
-      "test_count": 443,
+      "test_count": 445,
       "coverage": {
-        "statement_total": 19450,
-        "covered_statements": 12278
+        "statement_total": 19449,
+        "covered_statements": 12290
       },
       "packages": [
         {
@@ -56,8 +56,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 4643,
-          "covered_statements": 3136
+          "statement_total": 4642,
+          "covered_statements": 3143
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/doctor",
@@ -102,7 +102,7 @@
         {
           "name": "github.com/hea3ven/orpheus/internal/review",
           "statement_total": 1090,
-          "covered_statements": 894
+          "covered_statements": 895
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/revieweval",
@@ -162,7 +162,7 @@
         {
           "name": "github.com/hea3ven/orpheus/internal/workflow",
           "statement_total": 2955,
-          "covered_statements": 1986
+          "covered_statements": 1990
         }
       ],
       "suite_baseline_seconds": 73.960955796,
@@ -226,10 +226,10 @@
       ]
     },
     "unit": {
-      "test_count": 1030,
+      "test_count": 1031,
       "coverage": {
-        "statement_total": 19450,
-        "covered_statements": 10276
+        "statement_total": 19449,
+        "covered_statements": 10278
       },
       "packages": [
         {
@@ -264,7 +264,7 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 4643,
+          "statement_total": 4642,
           "covered_statements": 1701
         },
         {
@@ -325,7 +325,7 @@
         {
           "name": "github.com/hea3ven/orpheus/internal/status",
           "statement_total": 327,
-          "covered_statements": 301
+          "covered_statements": 303
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/task",
