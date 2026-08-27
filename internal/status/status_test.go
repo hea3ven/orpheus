@@ -417,7 +417,6 @@ func TestProjectWithLocalTaskStatesDoesNotShowClosedFinalizationAsLocalReview(t 
 	}
 }
 
-//nolint:funlen // The review-state table is clearer kept together.
 func TestProjectWithLocalTaskStatesClassifiesLatestReviewAttempts(t *testing.T) {
 	tests := []struct {
 		name           string

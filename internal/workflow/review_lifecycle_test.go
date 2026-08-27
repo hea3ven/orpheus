@@ -22,7 +22,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
-//nolint:funlen // The test sets up a full lifecycle fixture without Cobra.
 func TestIntegrationReviewLifecycleRunRecordsBlockedOutcomeWithoutCobra(t *testing.T) {
 	t.Parallel()
 
@@ -338,7 +337,6 @@ func freshReviewGuardFixture(t *testing.T, additionalBlocker ...bool) (workflow.
 	})
 }
 
-//nolint:funlen // Fixture builds review state and lifecycle dependencies.
 func freshReviewGuardFixtureWithOptions(t *testing.T, options freshReviewGuardFixtureOptions) (workflow.ReviewLifecycleService, taskstate.Store, *recordingReviewFrontend) {
 	t.Helper()
 	if options.status == "" {
@@ -408,7 +406,6 @@ func freshReviewGuardFixtureWithOptions(t *testing.T, options freshReviewGuardFi
 	return service, store, frontend
 }
 
-//nolint:funlen // The test sets up a full lifecycle fixture without Cobra.
 func TestIntegrationReviewLifecycleRunLogsGitDiagnosticsForGatingFailure(t *testing.T) {
 	t.Parallel()
 
@@ -478,7 +475,6 @@ func TestIntegrationReviewLifecycleRunLogsGitDiagnosticsForGatingFailure(t *test
 	}
 }
 
-//nolint:funlen // The test sets up a full lifecycle fixture without Cobra.
 func TestIntegrationReviewLifecycleManualPromptPersistsFindingsThroughWorkflowRecorder(t *testing.T) {
 	t.Parallel()
 
@@ -588,7 +584,6 @@ func TestIntegrationReviewLifecycleManualPromptPersistsFindingsThroughWorkflowRe
 	}
 }
 
-//nolint:funlen // The test drives the full passed review/finalization path.
 func TestIntegrationReviewLifecycleConfirmsRunningCompletionBeforeFinalizing(t *testing.T) {
 	t.Parallel()
 
@@ -668,7 +663,6 @@ func TestIntegrationReviewLifecycleConfirmsRunningCompletionBeforeFinalizing(t *
 	}
 }
 
-//nolint:funlen // The test asserts preflight outcome and persisted review state.
 func TestIntegrationReviewLifecyclePreparesPipelineBeforeFreshReviewTransition(t *testing.T) {
 	t.Parallel()
 
@@ -736,7 +730,6 @@ func TestIntegrationReviewLifecyclePreparesPipelineBeforeFreshReviewTransition(t
 	}
 }
 
-//nolint:funlen // The test needs a paused review fixture to assert no resume mutation.
 func TestIntegrationReviewLifecyclePreparesPipelineBeforeResumeReviewTransition(t *testing.T) {
 	t.Parallel()
 
@@ -982,7 +975,6 @@ func TestIntegrationReviewLifecycleRejectsClosedTaskBeforeStartingReview(t *test
 	}
 }
 
-//nolint:funlen // The test exercises the autonomous follow-up transition guard.
 func TestIntegrationReviewLifecycleMissingAgentRunnerDoesNotStartFollowUpRun(t *testing.T) {
 	t.Parallel()
 
@@ -1069,7 +1061,6 @@ func TestIntegrationReviewLifecycleMissingAgentRunnerDoesNotStartFollowUpRun(t *
 	}
 }
 
-//nolint:funlen // The fixture drives the blocked-review follow-up transition.
 func TestIntegrationReviewLifecycleUsageErrorDoesNotFailSuccessfulAutonomousFollowUp(t *testing.T) {
 	t.Parallel()
 
@@ -1144,7 +1135,6 @@ func TestIntegrationReviewLifecycleUsageErrorDoesNotFailSuccessfulAutonomousFoll
 	}
 }
 
-//nolint:funlen // The fixture proves task-run continuation is reusable without Cobra.
 func TestIntegrationReviewLifecycleRunAfterCompletedRunStartsReviewAndPropagatesAgent(t *testing.T) {
 	t.Parallel()
 
@@ -1239,7 +1229,6 @@ func TestIntegrationReviewLifecycleRunAfterCompletedRunStartsReviewAndPropagates
 	}
 }
 
-//nolint:funlen // The fixture proves autonomous repair uses shared resume dispatch.
 func TestIntegrationReviewLifecycleAutonomousFollowUpResumesCompatibleSession(t *testing.T) {
 	paths := testPaths(t)
 	repoPath := testRepoWithLocalOriginAndCandidateChange(t)

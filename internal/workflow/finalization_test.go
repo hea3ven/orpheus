@@ -474,7 +474,6 @@ func TestFinalizeAllowsConfirmedRunningCompletionWithoutMutatingRunStatus(t *tes
 	}
 }
 
-//nolint:funlen // The retry workflow is clearer as one linear scenario.
 func TestFinalizeRecordsPublicationFailureAndRetriesWithPassedReview(t *testing.T) {
 	taskState := finalizationTaskState("op-1", taskstate.RunAttempt{
 		Attempt: 1,
@@ -716,7 +715,6 @@ func TestFinalizeDoesNotOfferRunningEscapeHatchForInvalidTargets(t *testing.T) {
 	}
 }
 
-//nolint:funlen // This end-to-end workflow is clearer as a linear scenario.
 func TestFinalizePublishesFeatureBranchPRWithoutClosingTask(t *testing.T) {
 	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	source.Repository.TitleTemplate = "[{{external_ref}}] {{summary}}"
@@ -1399,7 +1397,6 @@ func TestFinalizeRecoversExistingFeatureBranchPR(t *testing.T) {
 	}
 }
 
-//nolint:funlen // The review follow-up scenario is easier to verify as one fixture.
 func TestFinalizePublishesOriginalCompletionAfterReviewFollowUp(t *testing.T) {
 	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	source.Repository.TitleTemplate = "[{{external_ref}}] {{summary}}"

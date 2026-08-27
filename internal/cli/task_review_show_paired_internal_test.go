@@ -35,7 +35,6 @@ func TestRenderTaskReviewShowRendersPairedReviewerComparison(t *testing.T) {
 	}
 }
 
-//nolint:funlen // The fixture and scoped assertions document the inspection hierarchy together.
 func TestTaskReviewShowScopesHistoryAttemptAndFinding(t *testing.T) {
 	state := taskstate.TaskState{
 		Reviews: []taskstate.ReviewAttempt{

@@ -22,7 +22,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
-//nolint:funlen // The redirected-output regression is clearer as one end-to-end runner test.
 func TestIntegrationRunPipelineRestoresHeaderWrittenToWorktreeStderr(t *testing.T) {
 	workdir := testutil.CanonicalTempDir(t)
 	initReviewTestGitRepo(t, workdir)

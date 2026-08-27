@@ -16,7 +16,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
-//nolint:funlen // The persisted YAML shape is the behavior under test.
 func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 	store := newTestStore(t,
 		time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC),
@@ -819,7 +818,6 @@ func TestStoreRejectsUnsafeReviewStepArgsAndPreservesState(t *testing.T) {
 	}
 }
 
-//nolint:funlen // The target lifecycle covers idempotence and successful-target protection.
 func TestStoreTargetsReviewFindingsByRunAttempt(t *testing.T) {
 	store := newTestStore(t,
 		time.Date(2026, 6, 26, 10, 0, 0, 0, time.UTC),
@@ -902,7 +900,6 @@ func TestStoreTargetsReviewFindingsByRunAttempt(t *testing.T) {
 	}
 }
 
-//nolint:funlen // The retry lifecycle preserves failed attempt audit history.
 func TestStoreRetriesFailedReviewFollowUpTargets(t *testing.T) {
 	store := newTestStore(t,
 		time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC),
@@ -1424,7 +1421,6 @@ func TestUntargetedBlockingFindingIndexes(t *testing.T) {
 	}
 }
 
-//nolint:funlen // The table documents each follow-up eligibility branch.
 func TestUntargetedBlockingFindingIndexesForFollowUp(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1706,7 +1702,6 @@ func TestStoreRecordsFinalizationCommitIntent(t *testing.T) {
 	}
 }
 
-//nolint:funlen // The durable boundary sequence is the behavior under test.
 func TestStoreRecordsFinalizationFactsIdempotently(t *testing.T) {
 	store := newTestStore(t,
 		time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC),
@@ -1881,7 +1876,6 @@ func TestStorePersistsKnownZeroCostEstimate(t *testing.T) {
 	assertStoreYAMLContains(t, store, "alpha", "op-zero-cost", "amount_micro_usd: 0", "pricing:")
 }
 
-//nolint:funlen // The persisted conflict-repair YAML shape is the behavior under test.
 func TestStoreRecordsSyncConflictResolutionEvents(t *testing.T) {
 	store := newTestStore(t,
 		time.Date(2026, 6, 10, 10, 0, 0, 0, time.UTC),
