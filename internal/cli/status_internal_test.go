@@ -616,7 +616,6 @@ func TestRenderStatusProjectedInProgressEpicUsesProgressInsteadOfNoRun(t *testin
 	}
 }
 
-//nolint:funlen // The table documents the status -> projection -> render boundary.
 func TestRenderStatusProjectionSemanticDetailsAcrossBoundary(t *testing.T) {
 	tests := []projectedStatusDetailCase{
 		projectedPRDetailCase(),

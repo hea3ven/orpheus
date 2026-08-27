@@ -593,7 +593,6 @@ func recordCompletedContextRun(
 	must.NoError(err)
 }
 
-//nolint:funlen // The review-attempt sequence proves active and audit-only findings stay isolated.
 func TestActiveContextResolverProvidesEarlierAuthoritativeFindingsOnly(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
