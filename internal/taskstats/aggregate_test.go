@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-//nolint:funlen // The fixture keeps resolved timestamp, lifecycle, and usage assertions together.
 func TestAggregateReportFromSnapshotProjectsResolvedTaskMetrics(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -147,7 +146,6 @@ func TestAggregateReportFromSnapshotExcludesEpicsBeforeStateLoading(t *testing.T
 	}
 }
 
-//nolint:funlen // The fixture captures mixed and all-unknown average semantics together.
 func TestAggregateReportFromSnapshotAveragesKnownUsageAndCostOnly(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -302,7 +300,6 @@ func TestAggregateReportUsesStoredPiReportedCost(t *testing.T) {
 	assertInt64Value(t, averageCostMicroUSD, ok, 1240)
 }
 
-//nolint:funlen // The fixture keeps combined and per-purpose aggregate assertions together.
 func TestAggregateReportIncludesTerminalSyncConflictResolutionExecutions(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -392,7 +389,6 @@ func TestAggregateReportIncludesTerminalSyncConflictResolutionExecutions(t *test
 	is.Zero(conflictTotals.UnknownUsage)
 }
 
-//nolint:funlen // The fixture documents completed, follow-up, incomplete, and filtered runs together.
 func TestAggregateImplementationViewUsesAgentDoneDurationAndKeepsKnownUsage(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -703,7 +699,6 @@ func TestAggregateReportFromSnapshotExcludesPartialUnknownTaskFromAverages(t *te
 	is.False(ok)
 }
 
-//nolint:funlen // The fixture documents model outcome and execution-usage attribution together.
 func TestAggregateImplementationModelViewSeparatesOutcomesAndUsageAttribution(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -806,7 +801,6 @@ func TestAggregateImplementationModelViewSeparatesOutcomesAndUsageAttribution(t 
 	is.Equal(25, unknown.Tokens.Total)
 }
 
-//nolint:funlen // The fixture documents harness/thinking cohort selection and sparse usage rows.
 func TestAggregateImplementationModelViewIncludesHarnessAndThinkingInCohorts(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -908,7 +902,6 @@ func TestAggregateImplementationModelViewIncludesHarnessAndThinkingInCohorts(t *
 	is.Zero(mixed.Tokens.Samples)
 }
 
-//nolint:funlen // The fixture keeps manual-only, mixed reviewer, and usage attribution assertions together.
 func TestAggregateReviewerModelViewKeepsManualOnlyAndMixedCohortsVisible(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -1118,7 +1111,6 @@ func TestAggregateModelPairViewCombinesSamePairUsagePerTask(t *testing.T) {
 	is.Equal(1, pair.Cost.Samples)
 }
 
-//nolint:funlen // The fixture verifies slash-containing model IDs do not collapse pair cohorts.
 func TestAggregateModelPairViewKeepsSlashContainingModelIDsDistinct(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -1184,7 +1176,6 @@ func TestAggregateModelPairViewKeepsSlashContainingModelIDsDistinct(t *testing.T
 	is.Equal(220, slashReviewer.Tokens.Total)
 }
 
-//nolint:funlen // The fixture verifies pair rows and sparse actual-execution attribution rows together.
 func TestAggregateModelPairViewComparesImplementationReviewerPairings(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)

@@ -71,7 +71,6 @@ func TestIntegrationRunPipelinePairedReviewerAdmitsAlternateFindingAfterPrimary(
 	}
 }
 
-//nolint:funlen // The end-to-end restart regression needs both executions and state assertions together.
 func TestIntegrationRunPipelineRestartedPairedReviewDiscardsPriorExecution(t *testing.T) {
 	t.Setenv("ORPHEUS_ALTERNATE_REVIEWER_PROFILE", "alternate")
 	h := newAgentReviewPipelineHarness(t)

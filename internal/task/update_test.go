@@ -35,7 +35,6 @@ func (b *fakeUpdateBackend) Update(_ context.Context, opts task.UpdateOptions) (
 	return b.tasks[opts.ID], nil
 }
 
-//nolint:funlen // The table documents resulting-state policy for every edit case.
 func TestUpdateServiceEnforcesRequiredExternalReferenceBeforeMutation(t *testing.T) {
 	for _, test := range []struct {
 		name          string
