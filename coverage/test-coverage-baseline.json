@@ -56,8 +56,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 4667,
-          "covered_statements": 3159
+        "statement_total": 4660,
+        "covered_statements": 3154
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/doctor",
@@ -116,8 +116,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/status",
-          "statement_total": 327,
-          "covered_statements": 223
+          "statement_total": 334,
+          "covered_statements": 224
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/task",
@@ -226,7 +226,7 @@
       ]
     },
     "unit": {
-      "test_count": 1055,
+      "test_count": 1069,
       "coverage": {
         "statement_total": 19742,
         "covered_statements": 10503
@@ -264,8 +264,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 4667,
-          "covered_statements": 1714
+          "statement_total": 4660,
+          "covered_statements": 1732
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/doctor",
@@ -324,8 +324,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/status",
-          "statement_total": 327,
-          "covered_statements": 303
+          "statement_total": 334,
+          "covered_statements": 310
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/task",
