@@ -69,20 +69,23 @@ type baseline struct {
 }
 
 type finding struct {
-	Kind      string  `json:"kind"`
-	Lane      string  `json:"lane,omitempty"`
-	Scope     string  `json:"scope,omitempty"`
-	Name      string  `json:"name,omitempty"`
-	Prior     float64 `json:"prior,omitempty"`
-	Baseline  float64 `json:"baseline,omitempty"`
-	Current   float64 `json:"current,omitempty"`
-	Threshold float64 `json:"threshold,omitempty"`
-	Message   string  `json:"message"`
+	Kind           string  `json:"kind"`
+	Lane           string  `json:"lane,omitempty"`
+	Scope          string  `json:"scope,omitempty"`
+	Name           string  `json:"name,omitempty"`
+	Prior          float64 `json:"prior,omitempty"`
+	Baseline       float64 `json:"baseline,omitempty"`
+	Current        float64 `json:"current,omitempty"`
+	Threshold      float64 `json:"threshold,omitempty"`
+	BudgetSeconds  float64 `json:"budget_seconds,omitempty"`
+	OverageSeconds float64 `json:"overage_seconds,omitempty"`
+	Message        string  `json:"message"`
 }
 
 type decision struct {
 	Status   string    `json:"status"`
 	Findings []finding `json:"findings,omitempty"`
+	Warnings []finding `json:"warnings,omitempty"`
 }
 
 type qualityReport struct {
@@ -305,7 +308,7 @@ func validTiming(seconds float64) bool {
 }
 
 func assess(prior baseline, report qualityReport) decision {
-	var regressions, timings, refresh []finding
+	var regressions, suiteTimingFailures, packageTimingWarnings, refresh []finding
 	for _, name := range laneNames {
 		baselineLane := prior.Lanes[name]
 		current := report.Lanes[name]
@@ -328,7 +331,7 @@ func assess(prior baseline, report qualityReport) decision {
 
 		currentTestSeconds := selectedTestSeconds(current.Timings)
 		if currentTestSeconds > baselineLane.SuiteBudgetSeconds {
-			timings = append(timings, finding{Kind: "timing", Lane: name, Scope: "suite", Prior: baselineLane.SuiteBudgetSeconds, Baseline: baselineLane.SuiteBaselineSeconds, Current: currentTestSeconds, Message: "suite timing budget exceeded"})
+			suiteTimingFailures = append(suiteTimingFailures, timingFinding(name, "suite", "", baselineLane.SuiteBudgetSeconds, baselineLane.SuiteBaselineSeconds, currentTestSeconds, "suite timing budget exceeded"))
 		}
 		priorTiming := timingBudgetMap(baselineLane.PackageBudgets)
 		currentTiming := timingMap(current.Timings)
@@ -340,19 +343,34 @@ func assess(prior baseline, report qualityReport) decision {
 				continue
 			}
 			if seconds > budget.Seconds {
-				timings = append(timings, finding{Kind: "timing", Lane: name, Scope: "package", Name: packageName, Prior: budget.Seconds, Baseline: budget.BaselineSeconds, Current: seconds, Message: "package timing budget exceeded"})
+				packageTimingWarnings = append(packageTimingWarnings, timingFinding(name, "package", packageName, budget.Seconds, budget.BaselineSeconds, seconds, "non-blocking package timing budget exceeded"))
 			}
 		}
 	}
 	switch {
 	case len(regressions) > 0:
-		return decision{Status: statusRegression, Findings: append(regressions, timings...)}
-	case len(timings) > 0:
-		return decision{Status: statusTimingFailed, Findings: timings}
+		return decision{Status: statusRegression, Findings: append(regressions, suiteTimingFailures...), Warnings: packageTimingWarnings}
+	case len(suiteTimingFailures) > 0:
+		return decision{Status: statusTimingFailed, Findings: suiteTimingFailures, Warnings: packageTimingWarnings}
 	case len(refresh) > 0:
-		return decision{Status: statusRefreshRequired, Findings: refresh}
+		return decision{Status: statusRefreshRequired, Findings: refresh, Warnings: packageTimingWarnings}
 	default:
-		return decision{Status: statusPass}
+		return decision{Status: statusPass, Warnings: packageTimingWarnings}
+	}
+}
+
+func timingFinding(lane, scope, name string, budget, baseline, current float64, message string) finding {
+	return finding{
+		Kind:           "timing",
+		Lane:           lane,
+		Scope:          scope,
+		Name:           name,
+		Prior:          budget,
+		Baseline:       baseline,
+		Current:        current,
+		BudgetSeconds:  budget,
+		OverageSeconds: current - budget,
+		Message:        message,
 	}
 }
 
@@ -393,14 +411,18 @@ func verifyTrackedBaseline(trusted, tracked baseline, report qualityReport, trus
 	expected := generatedBaseline(report, trusted, trusted.Policy)
 	expected.Policy = tracked.Policy
 	if !adoptValidNewPackageBudgets(trusted, tracked, report, &expected) || !reflect.DeepEqual(tracked, expected) {
-		return decision{Status: statusRefreshRequired, Findings: []finding{{Kind: "baseline", Message: "tracked baseline is neither the trusted baseline nor the generated current baseline"}}}
+		return decision{
+			Status:   statusRefreshRequired,
+			Findings: []finding{{Kind: "baseline", Message: "tracked baseline is neither the trusted baseline nor the generated current baseline"}},
+			Warnings: trustedDecision.Warnings,
+		}
 	}
 	if trustedDecision.Status == statusRefreshRequired {
 		trustedDecision.Status = statusPass
 		trustedDecision.Findings = append(trustedDecision.Findings, finding{Kind: "baseline", Message: "generated refresh matches current aggregates and preserves trusted timing budgets"})
 		return trustedDecision
 	}
-	return decision{Status: statusPass, Findings: []finding{{Kind: "baseline", Message: "generated baseline update matches current aggregates and preserves trusted timing budgets"}}}
+	return decision{Status: statusPass, Findings: []finding{{Kind: "baseline", Message: "generated baseline update matches current aggregates and preserves trusted timing budgets"}}, Warnings: trustedDecision.Warnings}
 }
 
 // adoptValidNewPackageBudgets permits normal timing variance between baseline
