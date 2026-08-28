@@ -122,7 +122,6 @@ func TestRunReportsAndRepairsRecoverablePrimaryReviewer(t *testing.T) {
 	}
 }
 
-//nolint:funlen // The full dry-run, repair, and idempotency scenario is clearer as one flow.
 func TestRunReportsAndFixesClosedTaskWorktree(t *testing.T) {
 	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
@@ -291,7 +290,6 @@ func TestRunReportsAbsentRegisteredClosedTaskWorktree(t *testing.T) {
 	}
 }
 
-//nolint:funlen // The dry-run and repair checks keep lock handling together.
 func TestRunReportsLockedClosedTaskWorktreeWithoutRemovingIt(t *testing.T) {
 	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {

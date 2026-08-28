@@ -57,7 +57,6 @@ func (r *fakeWorktreeCleanupRecorder) RecordWorktreeCleanup(
 	return taskstate.Event{Type: taskstate.EventWorktreeRemoved}, nil
 }
 
-//nolint:funlen // The table keeps every cleanup outcome visible at the public workflow boundary.
 func TestClosedTaskWorktreeCleanupClassifiesAndRepairsOnlyCleanDedicatedWorktrees(t *testing.T) {
 	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
