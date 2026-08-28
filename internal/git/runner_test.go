@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/testutil"
 )
@@ -49,6 +50,21 @@ func (r *recordingGitRunner) assertComplete() {
 	}
 }
 
+type partialWorktreeRemovalRunner struct {
+	*recordingGitRunner
+	worktree string
+}
+
+func (r *partialWorktreeRemovalRunner) Run(ctx context.Context, command Command) (CommandResult, error) {
+	result, err := r.recordingGitRunner.Run(ctx, command)
+	if len(command.Args) >= 2 && command.Args[0] == "worktree" && command.Args[1] == "remove" {
+		if removeErr := os.RemoveAll(r.worktree); removeErr != nil {
+			r.t.Fatalf("remove worktree during simulated partial cleanup: %v", removeErr)
+		}
+	}
+	return result, err
+}
+
 func TestCommandRunnerContextAndExitError(t *testing.T) {
 	inner := errors.New("runner failure")
 	wrapped := CommandExitError{Code: 17, Err: inner}
@@ -71,6 +87,58 @@ func TestCommandRunnerContextAndExitError(t *testing.T) {
 	if got := ContextWithRunner(ctx, nil); got != ctx {
 		t.Fatal("nil runner did not preserve context")
 	}
+}
+
+func TestRemoveClosedTaskWorktreeReportsPartialRemovalFailure(t *testing.T) {
+	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
+	if err != nil {
+		t.Fatalf("new paths: %v", err)
+	}
+	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatalf("create repo path: %v", err)
+	}
+	opts := ClosedTaskWorktreeOptions{
+		RepoID: "alpha", RepoName: "Alpha", RepoPath: repoPath, DefaultBranch: "main", TaskID: "op-partial", Paths: paths,
+	}
+	worktree, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-partial"))
+	if err != nil {
+		t.Fatalf("resolve worktree path: %v", err)
+	}
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatalf("create worktree path: %v", err)
+	}
+	commonDir := filepath.Join(repoPath, ".git")
+	runner := &partialWorktreeRemovalRunner{
+		recordingGitRunner: &recordingGitRunner{t: t, commands: []recordedGitCommand{
+			gitCommand(repoPath, "rev-parse", "--show-toplevel").withStdout(repoPath + "\n"),
+			gitCommand(repoPath, "rev-parse", "--git-common-dir").withStdout(commonDir + "\n"),
+			gitCommand(worktree, "rev-parse", "--show-toplevel").withStdout(worktree + "\n"),
+			gitCommand(worktree, "symbolic-ref", "--quiet", "--short", "HEAD").withStdout("orpheus/op-partial\n"),
+			gitCommand(worktree, "rev-parse", "--git-common-dir").withStdout(commonDir + "\n"),
+			gitCommand(repoPath, "worktree", "list", "--porcelain", "-z").withStdout("worktree " + worktree + "\x00\x00"),
+			gitCommand(worktree, "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching"),
+			gitCommand(worktree, "worktree", "remove", worktree).withError(CommandExitError{Code: 1, Err: errors.New("administrative cleanup failed")}),
+			gitCommand(repoPath, "rev-parse", "--show-toplevel").withStdout(repoPath + "\n"),
+			gitCommand(repoPath, "rev-parse", "--git-common-dir").withStdout(commonDir + "\n"),
+			gitCommand(repoPath, "worktree", "list", "--porcelain", "-z").withStdout("worktree " + worktree + "\x00prunable stale registration\x00\x00"),
+		}},
+
+		worktree: worktree,
+	}
+
+	result := RemoveClosedTaskWorktree(ContextWithRunner(context.Background(), runner), opts)
+	if result.Outcome != ClosedTaskWorktreeFailed || !strings.Contains(result.Reason, "administrative cleanup failed") {
+		t.Fatalf("partial removal = %#v, want failed result with Git error", result)
+	}
+	if _, err := os.Stat(worktree); !os.IsNotExist(err) {
+		t.Fatalf("partial removal worktree stat error = %v, want absent", err)
+	}
+	inspection := InspectClosedTaskWorktree(ContextWithRunner(context.Background(), runner), opts)
+	if inspection.Outcome != ClosedTaskWorktreeFailed || !strings.Contains(inspection.Reason, "still registers") {
+		t.Fatalf("inspection after partial removal = %#v, want unresolved registration", inspection)
+	}
+	runner.assertComplete()
 }
 
 func TestValidateRecordedDirectMergeDecisions(t *testing.T) {

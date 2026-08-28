@@ -26,6 +26,7 @@ type fakeFinalizationBackend struct {
 	tasks               []task.Task
 	closed              []string
 	setPRURLs           []fakeFinalizationSetPRURL
+	getWhenClosedErr    error
 	updateGitFactsErr   error
 	updateGitFactsCalls int
 }
@@ -38,6 +39,9 @@ type fakeFinalizationSetPRURL struct {
 func (b *fakeFinalizationBackend) Get(_ context.Context, id string) (task.Task, error) {
 	for _, candidate := range b.tasks {
 		if candidate.ID == id {
+			if candidate.Status == task.StatusClosed && b.getWhenClosedErr != nil {
+				return task.Task{}, b.getWhenClosedErr
+			}
 			return candidate.Clone(), nil
 		}
 	}
@@ -105,12 +109,17 @@ type fakeFinalizationRunStore struct {
 	recordGitFactsErr                     error
 	recordGitFactsCalls                   int
 	recordFeatureBranchPRErr              error
+	cleanupLoadErr                        error
+	worktreeCleanups                      []taskstate.WorktreeCleanupOptions
 }
 
 func (s *fakeFinalizationRunStore) Load(repoID, taskID string) (taskstate.TaskState, error) {
 	state, ok := s.states[repoID+"/"+taskID]
 	if !ok {
 		return taskstate.TaskState{RepoID: repoID, TaskID: taskID}, nil
+	}
+	if s.cleanupLoadErr != nil && taskstate.FinalizationFacts(state).ClosedAt != nil {
+		return taskstate.TaskState{}, s.cleanupLoadErr
 	}
 	return state, nil
 }
@@ -208,6 +217,11 @@ func (s *fakeFinalizationRunStore) RecordFinalizationPush(
 	})
 	s.states[repoID+"/"+taskID] = state
 	return finalization, nil
+}
+
+func (s *fakeFinalizationRunStore) RecordWorktreeCleanup(repoID, taskID string, opts taskstate.WorktreeCleanupOptions) (taskstate.Event, error) {
+	s.worktreeCleanups = append(s.worktreeCleanups, opts)
+	return taskstate.Event{Type: taskstate.EventWorktreeRemoved, Worktree: opts.Worktree}, nil
 }
 
 func (s *fakeFinalizationRunStore) RecordFinalizationClose(
@@ -1617,6 +1631,11 @@ func TestFinalizeDirectMergeDoesNotPublishTaskBranchOrCreatePR(t *testing.T) {
 		Summary: "Direct merge", Description: "Merge directly.", DetailedDescription: "PR body.", TechnicalExplanation: "Rationale.",
 	}})
 	service, git, store, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{taskItem}, map[string]taskstate.TaskState{"alpha/op-1": state})
+	cleanupGit := &fakeClosedTaskWorktreeGit{
+		inspection: gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeClean, Worktree: worktree},
+		removal:    gitmeta.ClosedTaskWorktreeRemoval{Outcome: gitmeta.ClosedTaskWorktreeRemoved, Worktree: worktree},
+	}
+	service.CleanupGit = cleanupGit
 	git.branch = targets.WorktreeTeam.Branch
 	result, err := service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
 	if err != nil {
@@ -1631,9 +1650,87 @@ func TestFinalizeDirectMergeDoesNotPublishTaskBranchOrCreatePR(t *testing.T) {
 	if len(backend.closed) != 1 || backend.closed[0] != "op-1" {
 		t.Fatalf("closed = %#v, want op-1", backend.closed)
 	}
+	if result.WorktreeCleanup == nil || result.WorktreeCleanup.Outcome != workflow.WorktreeCleanupRemoved || cleanupGit.removes != 1 || len(store.worktreeCleanups) != 1 {
+		t.Fatalf("worktree cleanup = %#v, Git removes = %d, audits = %#v; want removed and audited", result.WorktreeCleanup, cleanupGit.removes, store.worktreeCleanups)
+	}
 	facts := taskstate.FinalizationFacts(store.states["alpha/op-1"])
 	if facts.IntegrationFlow != publication.IntegrationFlowDirectMerge || facts.MergeCommit == "" {
 		t.Fatalf("finalization = %#v, want locked direct merge", facts)
+	}
+}
+
+func TestFinalizeDirectMergeReportsWorktreeWhenCleanupStateReloadFails(t *testing.T) {
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
+	source.Repository.IntegrationFlow = string(publication.IntegrationFlowDirectMerge)
+	worktree := targets.WorktreeTeam.Worktree
+	taskItem := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{
+		task.MetadataBranch: targets.WorktreeTeam.Branch, task.MetadataWorktree: worktree,
+	}}
+	state := finalizationTaskState("op-1", taskstate.RunAttempt{Attempt: 1, Status: taskstate.RunStatusSucceeded, Completion: &taskstate.Completion{
+		Summary: "Direct merge", Description: "Merge directly.", DetailedDescription: "PR body.", TechnicalExplanation: "Rationale.",
+	}})
+	service, git, store, _ := newFinalizationTestServiceForSource(t, paths, source, []task.Task{taskItem}, map[string]taskstate.TaskState{"alpha/op-1": state})
+	git.branch = targets.WorktreeTeam.Branch
+	store.cleanupLoadErr = errors.New("state storage unavailable")
+
+	result, err := service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("finalize direct merge: %v", err)
+	}
+	if result.WorktreeCleanup == nil || result.WorktreeCleanup.Outcome != workflow.WorktreeCleanupUnsafe || result.WorktreeCleanup.Worktree != worktree || !strings.Contains(result.WorktreeCleanup.Reason, "state storage unavailable") {
+		t.Fatalf("worktree cleanup = %#v, want unsafe result with worktree path", result.WorktreeCleanup)
+	}
+}
+
+func TestFinalizeSkipsRepositoryRootCleanupWhenPostCloseLookupFails(t *testing.T) {
+	service, _, store, backend := newFinalizationTestService(t, []task.Task{
+		finalizationMainTask("op-1", "/fixture/repo"),
+	}, map[string]taskstate.TaskState{
+		"alpha/op-1": finalizationTaskState("op-1", taskstate.RunAttempt{
+			Attempt: 1,
+			Status:  taskstate.RunStatusSucceeded,
+			Completion: &taskstate.Completion{
+				Summary: "Publish root work", Description: "Commit reviewed root changes.", DetailedDescription: "PR body.", TechnicalExplanation: "Rationale.",
+			},
+		}),
+	})
+	backend.getWhenClosedErr = errors.New("task source unavailable after close")
+
+	result, err := service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("finalize repository-root task: %v", err)
+	}
+	if result.WorktreeCleanup != nil {
+		t.Fatalf("repository-root cleanup = %#v, want no cleanup result", result.WorktreeCleanup)
+	}
+	if len(backend.closed) != 1 || backend.closed[0] != "op-1" || taskstate.FinalizationFacts(store.states["alpha/op-1"]).ClosedAt == nil {
+		t.Fatalf("closed/finalization = %#v/%#v, want durable closure", backend.closed, store.states["alpha/op-1"].Finalization)
+	}
+}
+
+func TestFinalizeDirectMergeSkipsRepositoryRootCleanupWhenPostCloseLookupFails(t *testing.T) {
+	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
+	source.Repository.IntegrationFlow = string(publication.IntegrationFlowDirectMerge)
+	target := targets.RepoRootTeam
+	taskItem := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{
+		task.MetadataBranch: target.Branch, task.MetadataWorktree: target.Worktree,
+	}}
+	state := finalizationTaskState("op-1", taskstate.RunAttempt{Attempt: 1, Status: taskstate.RunStatusSucceeded, Completion: &taskstate.Completion{
+		Summary: "Direct merge root work", Description: "Merge reviewed root changes.", DetailedDescription: "PR body.", TechnicalExplanation: "Rationale.",
+	}})
+	service, git, store, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{taskItem}, map[string]taskstate.TaskState{"alpha/op-1": state})
+	git.branch = target.Branch
+	backend.getWhenClosedErr = errors.New("task source unavailable after close")
+
+	result, err := service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("finalize direct repository-root merge: %v", err)
+	}
+	if result.WorktreeCleanup != nil {
+		t.Fatalf("repository-root cleanup = %#v, want no cleanup result", result.WorktreeCleanup)
+	}
+	if len(backend.closed) != 1 || backend.closed[0] != "op-1" || taskstate.FinalizationFacts(store.states["alpha/op-1"]).ClosedAt == nil {
+		t.Fatalf("closed/finalization = %#v/%#v, want durable closure", backend.closed, store.states["alpha/op-1"].Finalization)
 	}
 }
 
@@ -1848,8 +1945,9 @@ func newFinalizationTestServiceForSource(
 		BackendFactory: func(task.RepositorySource) (workflow.FinalizationBackend, error) {
 			return backend, nil
 		},
-		RunStore: store,
-		Git:      git,
+		RunStore:   store,
+		Git:        git,
+		CleanupGit: &fakeClosedTaskWorktreeGit{inspection: gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeAbsent}},
 	}
 	return service, git, store, backend
 }
