@@ -3198,10 +3198,11 @@ func renderTaskDoneResult(command *cobra.Command, finalized workflow.Finalizatio
 	}
 	_, err := fmt.Fprintf(
 		command.OutOrStdout(),
-		"Finalized %s: committed %s, pushed %s, and closed the backend task.\n",
+		"Finalized %s: committed %s, pushed %s, and closed the backend task.%s\n",
 		finalized.Task.ID,
 		finalized.Finalization.Commit,
 		finalized.Branch,
+		formatWorktreeCleanup(finalized.WorktreeCleanup),
 	)
 	return err
 }
@@ -3727,6 +3728,27 @@ func cleanTaskRunPath(path string) string {
 	return filepath.Clean(path)
 }
 
+func formatWorktreeCleanup(cleanup *workflow.WorktreeCleanupResult) string {
+	if cleanup == nil {
+		return ""
+	}
+	worktree := formatTaskStatsField(cleanup.Worktree)
+	switch cleanup.Outcome {
+	case workflow.WorktreeCleanupRemoved:
+		if reason := strings.TrimSpace(cleanup.Reason); reason != "" {
+			return fmt.Sprintf(" Worktree %s was removed. Cleanup issue: %s.", worktree, reason)
+		}
+		return fmt.Sprintf(" Worktree %s was removed.", worktree)
+	case workflow.WorktreeCleanupAlreadyAbsent:
+		return fmt.Sprintf(" Worktree %s was already absent.", worktree)
+	case workflow.WorktreeCleanupDirty, workflow.WorktreeCleanupUnsafe, workflow.WorktreeCleanupFailed:
+		reason := formatTaskStatsField(cleanup.Reason)
+		return fmt.Sprintf(" Worktree %s was left untouched and needs manual repair: %s.", worktree, reason)
+	default:
+		return ""
+	}
+}
+
 func renderTaskSyncResult(output interface{ Write([]byte) (int, error) }, result workflow.SyncResult) error {
 	switch result.Status {
 	case workflow.SyncStatusAlreadyInReview:
@@ -3750,9 +3772,10 @@ func renderTaskSyncResult(output interface{ Write([]byte) (int, error) }, result
 	case workflow.SyncStatusPRMerged:
 		_, err := fmt.Fprintf(
 			output,
-			"Synced %s: PR %s is merged. Backend task was closed.\n",
+			"Synced %s: PR %s is merged. Backend task was closed.%s\n",
 			result.Task.ID,
 			result.PRURL,
+			formatWorktreeCleanup(result.WorktreeCleanup),
 		)
 		return err
 	case workflow.SyncStatusSkipped:
@@ -3834,7 +3857,7 @@ func renderTaskSyncAllResultLine(output interface{ Write([]byte) (int, error) },
 		_, err := fmt.Fprintf(output, "%sPR %s branch updated; %s\n", prefix, result.PRURL, result.Reason)
 		return err
 	case workflow.SyncStatusPRMerged:
-		_, err := fmt.Fprintf(output, "%sPR %s is merged; backend task was closed\n", prefix, result.PRURL)
+		_, err := fmt.Fprintf(output, "%sPR %s is merged; backend task was closed.%s\n", prefix, result.PRURL, formatWorktreeCleanup(result.WorktreeCleanup))
 		return err
 	case workflow.SyncStatusSkipped:
 		_, err := fmt.Fprintf(output, "%s%s\n", prefix, result.Reason)

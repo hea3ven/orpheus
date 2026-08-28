@@ -4,13 +4,17 @@ package doctor
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/tasktarget"
 	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
@@ -23,11 +27,14 @@ const (
 
 // Options describes one doctor diagnostics run.
 type Options struct {
-	Paths    state.Paths
-	Registry registry.Registry
-	Fix      bool
-	Env      map[string]string
-	Probe    workflow.ProcessProbe
+	Paths          state.Paths
+	Registry       registry.Registry
+	Sources        []task.RepositorySource
+	BackendFactory task.BackendFactory
+	Fix            bool
+	Env            map[string]string
+	Probe          workflow.ProcessProbe
+	CleanupGit     workflow.ClosedTaskWorktreeGit
 }
 
 // Result summarizes one doctor diagnostics run.
@@ -36,6 +43,7 @@ type Result struct {
 	ImplementationRows []ImplementationRunRow
 	PrimaryReviewRows  []PrimaryReviewRow
 	SyncConflictRows   []SyncConflictRow
+	WorktreeRows       []WorktreeRow
 	Summary            Summary
 }
 
@@ -54,6 +62,15 @@ type SyncConflictRow struct {
 	TaskID  string
 	Outcome string
 	Reason  string
+}
+
+// WorktreeRow describes a closed-task worktree cleanup decision.
+type WorktreeRow struct {
+	RepoID   string
+	TaskID   string
+	Outcome  workflow.WorktreeCleanupOutcome
+	Worktree string
+	Reason   string
 }
 
 // PrimaryReviewRow describes stale primary-reviewer recovery diagnostics.
@@ -117,15 +134,29 @@ func Run(opts Options) (Result, error) {
 	}
 
 	var result Result
+	sources := doctorSourcesByRepoID(opts.Sources)
 	for _, repo := range opts.Registry.Repos {
 		taskIDs, err := store.TaskIDs(repo.ID)
 		if err != nil {
 			return Result{}, fmt.Errorf("doctor repo %s: %w", repo.ID, err)
 		}
+		source, sourceOK := sources[repo.ID]
+		var backend task.Getter
+		var backendErr error
+		if sourceOK && opts.BackendFactory != nil {
+			var readBackend task.ReadBackend
+			readBackend, backendErr = opts.BackendFactory(source)
+			if backendErr == nil {
+				backend = readBackend
+			}
+		}
 		for _, taskID := range taskIDs {
 			taskState, err := store.Load(repo.ID, taskID)
 			if err != nil {
 				return Result{}, fmt.Errorf("doctor repo %s task %s: %w", repo.ID, taskID, err)
+			}
+			if err := diagnoseClosedTaskWorktree(&result, opts, store, source, sourceOK, backend, backendErr, taskState); err != nil {
+				return Result{}, fmt.Errorf("doctor repo %s task %s worktree cleanup: %w", repo.ID, taskID, err)
 			}
 			if err := diagnoseTask(&result, opts.Paths, store, env, repo, taskState, opts.Fix, opts.Probe); err != nil {
 				return Result{}, err
@@ -133,6 +164,134 @@ func Run(opts Options) (Result, error) {
 		}
 	}
 	return result, nil
+}
+
+func doctorSourcesByRepoID(sources []task.RepositorySource) map[string]task.RepositorySource {
+	byID := make(map[string]task.RepositorySource, len(sources))
+	for _, source := range sources {
+		byID[source.Repository.ID] = source
+	}
+	return byID
+}
+
+func diagnoseClosedTaskWorktree(
+	result *Result,
+	opts Options,
+	store taskstate.Store,
+	source task.RepositorySource,
+	sourceOK bool,
+	backend task.Getter,
+	backendErr error,
+	taskState taskstate.TaskState,
+) error {
+	worktree := recordedWorktree(taskState)
+	if worktree == "" || recordedWorktreeIsRepositoryRoot(source.Repository, worktree) {
+		return nil
+	}
+	if !sourceOK || opts.BackendFactory == nil {
+		return nil
+	}
+	if recordedDedicatedWorktreeIsAbsent(context.Background(), opts.Paths, source.Repository, taskState, opts.CleanupGit) {
+		return nil
+	}
+	taskItem, lookupReason := closedTaskWorktreeSourceTask(context.Background(), backend, backendErr, taskState.TaskID)
+	if lookupReason != "" {
+		result.WorktreeRows = append(result.WorktreeRows, WorktreeRow{RepoID: source.Repository.ID, TaskID: taskState.TaskID, Outcome: workflow.WorktreeCleanupUnsafe, Worktree: worktree, Reason: lookupReason})
+		return nil
+	}
+	if taskItem.Status != task.StatusClosed {
+		return nil
+	}
+
+	cleanupOpts := workflow.ClosedTaskWorktreeCleanupOptions{
+		Paths: opts.Paths, Repository: source.Repository, Task: taskItem, TaskState: taskState, Fix: opts.Fix, Git: opts.CleanupGit, Recorder: store,
+	}
+	var cleanup workflow.WorktreeCleanupResult
+	if opts.Fix {
+		err := state.WithGlobalMutationLock(opts.Paths, "doctor closed-task worktree cleanup", func() error {
+			confirmed, err := backend.Get(context.Background(), taskState.TaskID)
+			if err != nil {
+				return fmt.Errorf("confirm task source closure before cleanup: %w", err)
+			}
+			if confirmed.Status != task.StatusClosed {
+				cleanup = workflow.WorktreeCleanupResult{Outcome: workflow.WorktreeCleanupNotApplicable}
+				return nil
+			}
+			cleanupOpts.Task = confirmed
+			cleanup = workflow.CleanClosedTaskWorktree(context.Background(), cleanupOpts)
+			return nil
+		})
+		if err != nil {
+			cleanup = workflow.WorktreeCleanupResult{Outcome: workflow.WorktreeCleanupUnsafe, Worktree: worktree, Reason: "acquire cleanup mutation lock: " + err.Error()}
+		}
+	} else {
+		cleanup = workflow.CleanClosedTaskWorktree(context.Background(), cleanupOpts)
+	}
+	if cleanup.Outcome == workflow.WorktreeCleanupNotApplicable || cleanup.Outcome == workflow.WorktreeCleanupAlreadyAbsent {
+		return nil
+	}
+	result.WorktreeRows = append(result.WorktreeRows, WorktreeRow{RepoID: source.Repository.ID, TaskID: taskState.TaskID, Outcome: cleanup.Outcome, Worktree: cleanup.Worktree, Reason: cleanup.Reason})
+	return nil
+}
+
+func closedTaskWorktreeSourceTask(ctx context.Context, backend task.Getter, backendErr error, taskID string) (task.Task, string) {
+	if backendErr != nil {
+		return task.Task{}, "query task source before cleanup: " + backendErr.Error()
+	}
+	taskItem, err := backend.Get(ctx, taskID)
+	if err != nil {
+		return task.Task{}, "query task source before cleanup: " + err.Error()
+	}
+	return taskItem, ""
+}
+
+func recordedWorktreeIsRepositoryRoot(repo task.Repository, worktree string) bool {
+	return filepath.Clean(worktree) == filepath.Clean(repo.Path)
+}
+
+func recordedDedicatedWorktreeIsAbsent(
+	ctx context.Context,
+	paths state.Paths,
+	repo task.Repository,
+	taskState taskstate.TaskState,
+	gitState workflow.ClosedTaskWorktreeGit,
+) bool {
+	facts, ok := taskstate.GitFactsFor(taskState)
+	if !ok {
+		return false
+	}
+	targets, err := tasktarget.ExpectedTargetsForTaskOrRecordedBranch(repo, task.Task{ID: taskState.TaskID}, facts.Branch, paths)
+	if err != nil {
+		return false
+	}
+	target, err := tasktarget.ClassifyGitFacts(facts, targets)
+	if err != nil || target.Kind != tasktarget.TargetWorktreeTeam {
+		return false
+	}
+	if directory, recorded := taskstate.WorkDirectoryFor(taskState); recorded && filepath.Clean(directory.Path) != target.Worktree {
+		return false
+	}
+	if _, err := os.Lstat(target.Worktree); !os.IsNotExist(err) {
+		return false
+	}
+	if gitState == nil {
+		gitState = gitmeta.LocalClosedTaskWorktreeGit{}
+	}
+	inspection := gitState.InspectClosedTaskWorktree(ctx, gitmeta.ClosedTaskWorktreeOptions{
+		RepoID: repo.ID, RepoName: repo.Name, RepoPath: repo.Path, DefaultBranch: repo.DefaultBranch,
+		TaskID: taskState.TaskID, Branch: target.Branch, Paths: paths,
+	})
+	return inspection.Outcome == gitmeta.ClosedTaskWorktreeAbsent
+}
+
+func recordedWorktree(taskState taskstate.TaskState) string {
+	if facts, ok := taskstate.GitFactsFor(taskState); ok && strings.TrimSpace(facts.Worktree) != "" {
+		return facts.Worktree
+	}
+	if directory, ok := taskstate.WorkDirectoryFor(taskState); ok {
+		return directory.Path
+	}
+	return ""
 }
 
 func diagnoseTask(

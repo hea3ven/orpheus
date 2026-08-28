@@ -91,6 +91,7 @@ const (
 	EventTaskBranchCreated      EventType = "task_branch_created"
 	EventWorktreeReused         EventType = "worktree_reused"
 	EventWorktreeRecreated      EventType = "worktree_recreated"
+	EventWorktreeRemoved        EventType = "worktree_removed"
 	EventRunStarted             EventType = "run_started"
 	EventRunFinished            EventType = "run_finished"
 	EventRunStartFailed         EventType = "run_start_failed"
@@ -647,6 +648,8 @@ func (e Event) DisplayName() string {
 		return "Worktree reused"
 	case EventWorktreeRecreated:
 		return "Worktree recreated"
+	case EventWorktreeRemoved:
+		return "Worktree removed"
 	case EventRunStarted:
 		return "Run started"
 	case EventRunFinished:
@@ -828,6 +831,11 @@ type AlternateReviewFindingDecision struct {
 	FindingIndex   int
 	Classification AlternateFindingClassification
 	DuplicateOf    int
+}
+
+// WorktreeCleanupOptions describes a successful deterministic worktree cleanup.
+type WorktreeCleanupOptions struct {
+	Worktree string
 }
 
 // TaskClosedOptions describes the facts recorded when a task is closed.
@@ -3481,6 +3489,33 @@ func (s Store) RecordSyncConflictResolutionUsage(
 	return state.Events[matchIndex], nil
 }
 
+// RecordWorktreeCleanup appends an idempotent audit event after Orpheus removes
+// a deterministic closed-task worktree.
+func (s Store) RecordWorktreeCleanup(repoID, taskID string, opts WorktreeCleanupOptions) (Event, error) {
+	worktree := strings.TrimSpace(opts.Worktree)
+	if worktree == "" {
+		return Event{}, fmt.Errorf("record worktree cleanup for task %s/%s: worktree is required", repoID, taskID)
+	}
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return Event{}, err
+	}
+	for _, event := range state.Events {
+		if event.Type == EventWorktreeRemoved && strings.TrimSpace(event.Worktree) == worktree {
+			return event, nil
+		}
+	}
+	event := Event{Type: EventWorktreeRemoved, At: s.nowUTC(), Worktree: worktree}
+	if err := validateEvent(event); err != nil {
+		return Event{}, fmt.Errorf("record worktree cleanup for task %s/%s: %w", repoID, taskID, err)
+	}
+	state.Events = append(state.Events, event)
+	if err := s.save(state); err != nil {
+		return Event{}, err
+	}
+	return event, nil
+}
+
 // RecordTaskClosed appends an idempotent local audit event after a backend task
 // is closed. PR facts are recorded when the closure followed a merged PR.
 func (s Store) RecordTaskClosed(repoID, taskID string, opts TaskClosedOptions) (Event, error) {
@@ -5040,6 +5075,7 @@ func validEventType(eventType EventType) bool {
 		EventTaskBranchCreated,
 		EventWorktreeReused,
 		EventWorktreeRecreated,
+		EventWorktreeRemoved,
 		EventRunStarted,
 		EventRunFinished,
 		EventRunStartFailed,

@@ -45,12 +45,18 @@ func runDoctor(command *cobra.Command, opts *rootOptions, fix bool) error {
 	if err != nil {
 		return err
 	}
+	sources, err := deps.registryStore.TaskRepositorySources(reg)
+	if err != nil {
+		return err
+	}
 
 	result, err := doctor.Run(doctor.Options{
-		Paths:    deps.paths,
-		Registry: reg,
-		Fix:      fix,
-		Env:      deps.usageCaptureEnvironment(),
+		Paths:          deps.paths,
+		Registry:       reg,
+		Sources:        sources,
+		BackendFactory: deps.taskBackendFactory,
+		Fix:            fix,
+		Env:            deps.usageCaptureEnvironment(),
 	})
 	if err != nil {
 		return err
@@ -88,6 +94,16 @@ func renderDoctorResult(output interface{ Write([]byte) (int, error) }, result d
 			return err
 		}
 	} else if err := renderTable(output, []string{"REPO", "TASK", "OUTCOME", "REASON"}, syncConflictRows(result.SyncConflictRows)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(output, "\nClosed-task worktree cleanup"); err != nil {
+		return err
+	}
+	if len(result.WorktreeRows) == 0 {
+		if _, err := fmt.Fprintln(output, "No lingering closed-task worktrees found."); err != nil {
+			return err
+		}
+	} else if err := renderTable(output, []string{"REPO", "TASK", "OUTCOME", "WORKTREE", "ACTION"}, worktreeCleanupRows(result.WorktreeRows)); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintln(output, "\nAgent usage telemetry"); err != nil {
@@ -160,6 +176,20 @@ func syncConflictRows(rows []doctor.SyncConflictRow) [][]string {
 	rendered := make([][]string, 0, len(rows))
 	for _, row := range rows {
 		rendered = append(rendered, []string{formatTaskStatsField(row.RepoID), formatTaskStatsField(row.TaskID), formatTaskStatsField(row.Outcome), formatTaskStatsField(row.Reason)})
+	}
+	return rendered
+}
+
+func worktreeCleanupRows(rows []doctor.WorktreeRow) [][]string {
+	rendered := make([][]string, 0, len(rows))
+	for _, row := range rows {
+		rendered = append(rendered, []string{
+			formatTaskStatsField(row.RepoID),
+			formatTaskStatsField(row.TaskID),
+			formatTaskStatsField(string(row.Outcome)),
+			formatTaskStatsField(row.Worktree),
+			formatTaskStatsField(row.Reason),
+		})
 	}
 	return rendered
 }
