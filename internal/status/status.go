@@ -519,7 +519,6 @@ func classifyExpectedReviewReady(
 	), true
 }
 
-//nolint:funlen // Review statuses form one exhaustive operator-facing policy table.
 func classifyLatestReview(
 	runs []taskstate.RunAttempt,
 	latestReview *taskstate.ReviewAttempt,
@@ -531,74 +530,102 @@ func classifyLatestReview(
 
 	switch latestReview.Status {
 	case taskstate.ReviewStatusRunning:
-		if taskstate.HasUnkeptAutomatedBlockingFindingsInState(taskstate.TaskState{Runs: runs}, *latestReview) {
-			return newPolicyResult(
-				readinessReview,
-				"review blocker decision required; run task run",
-				Detail{Kind: DetailReviewDecisionRequired},
-			), true
-		}
-		return newPolicyResult(
-			readinessReview,
-			"review running",
-			Detail{Kind: DetailReviewRunning},
-		), true
+		return classifyRunningReview(runs, *latestReview), true
 	case taskstate.ReviewStatusWaitingForManual:
-		step := valueOrUnknown(latestReview.Step)
-		return newPolicyResult(
-			readinessReview,
-			fmt.Sprintf("local review; run task run (waiting for manual step %s)", step),
-			Detail{Kind: DetailReviewManualStep, Step: step},
-		), true
+		return classifyManualReview(*latestReview), true
 	case taskstate.ReviewStatusWaitingForAutomatedDecision:
-		step := valueOrUnknown(latestReview.Step)
-		return newPolicyResult(
-			readinessReview,
-			fmt.Sprintf("review blocker decision paused at %s; run task run", step),
-			Detail{Kind: DetailReviewDecisionPaused, Step: step},
-		), true
+		return classifyPausedAutomatedDecisionReview(*latestReview), true
 	case taskstate.ReviewStatusBlocked:
 		return classifyBlockedReview(taskstate.TaskState{Runs: runs}, *latestReview), true
 	case taskstate.ReviewStatusAborted:
-		return newPolicyResult(
-			readinessReview,
-			"review aborted; run task run",
-			Detail{Kind: DetailReviewAborted},
-		), true
+		return classifyAbortedReview(), true
 	case taskstate.ReviewStatusFailed:
-		if taskstate.PrimaryReviewExecutionInterrupted(*latestReview) {
-			return newPolicyResult(
-				readinessAttention,
-				"primary reviewer interrupted; candidate may contain reviewer mutations; inspect it before running task run",
-				Detail{Kind: DetailPrimaryReviewInterrupted},
-			), true
-		}
-		return newPolicyResult(
-			readinessAttention,
-			"review failed operationally; run task run",
-			Detail{Kind: DetailReviewFailed},
-		), true
+		return classifyFailedReview(*latestReview), true
 	case taskstate.ReviewStatusPassed:
-		if latestFinalizationFailure != nil {
-			return newPolicyResult(
-				readinessAttention,
-				"review passed; publication failed; fix publication issue, then run task run",
-				Detail{Kind: DetailReviewPublishFailed},
-			), true
-		}
+		return classifyPassedReview(latestFinalizationFailure), true
+	default:
+		return classifyUnknownReview(*latestReview), true
+	}
+}
+
+func classifyRunningReview(runs []taskstate.RunAttempt, review taskstate.ReviewAttempt) policyResult {
+	if taskstate.HasUnkeptAutomatedBlockingFindingsInState(taskstate.TaskState{Runs: runs}, review) {
 		return newPolicyResult(
 			readinessReview,
-			"review passed; run task run",
-			Detail{Kind: DetailReviewPassed},
-		), true
-	default:
-		state := valueOrUnknown(string(latestReview.Status))
+			"review blocker decision required; run task run",
+			Detail{Kind: DetailReviewDecisionRequired},
+		)
+	}
+	return newPolicyResult(
+		readinessReview,
+		"review running",
+		Detail{Kind: DetailReviewRunning},
+	)
+}
+
+func classifyManualReview(review taskstate.ReviewAttempt) policyResult {
+	step := valueOrUnknown(review.Step)
+	return newPolicyResult(
+		readinessReview,
+		fmt.Sprintf("local review; run task run (waiting for manual step %s)", step),
+		Detail{Kind: DetailReviewManualStep, Step: step},
+	)
+}
+
+func classifyPausedAutomatedDecisionReview(review taskstate.ReviewAttempt) policyResult {
+	step := valueOrUnknown(review.Step)
+	return newPolicyResult(
+		readinessReview,
+		fmt.Sprintf("review blocker decision paused at %s; run task run", step),
+		Detail{Kind: DetailReviewDecisionPaused, Step: step},
+	)
+}
+
+func classifyAbortedReview() policyResult {
+	return newPolicyResult(
+		readinessReview,
+		"review aborted; run task run",
+		Detail{Kind: DetailReviewAborted},
+	)
+}
+
+func classifyFailedReview(review taskstate.ReviewAttempt) policyResult {
+	if taskstate.PrimaryReviewExecutionInterrupted(review) {
 		return newPolicyResult(
 			readinessAttention,
-			fmt.Sprintf("review attempt %d has status %s", latestReview.Attempt, state),
-			Detail{Kind: DetailReviewUnknownState, Attempt: latestReview.Attempt, State: state},
-		), true
+			"primary reviewer interrupted; candidate may contain reviewer mutations; inspect it before running task run",
+			Detail{Kind: DetailPrimaryReviewInterrupted},
+		)
 	}
+	return newPolicyResult(
+		readinessAttention,
+		"review failed operationally; run task run",
+		Detail{Kind: DetailReviewFailed},
+	)
+}
+
+func classifyPassedReview(latestFinalizationFailure *taskstate.Event) policyResult {
+	if latestFinalizationFailure != nil {
+		return newPolicyResult(
+			readinessAttention,
+			"review passed; publication failed; fix publication issue, then run task run",
+			Detail{Kind: DetailReviewPublishFailed},
+		)
+	}
+	return newPolicyResult(
+		readinessReview,
+		"review passed; run task run",
+		Detail{Kind: DetailReviewPassed},
+	)
+}
+
+func classifyUnknownReview(review taskstate.ReviewAttempt) policyResult {
+	state := valueOrUnknown(string(review.Status))
+	return newPolicyResult(
+		readinessAttention,
+		fmt.Sprintf("review attempt %d has status %s", review.Attempt, state),
+		Detail{Kind: DetailReviewUnknownState, Attempt: review.Attempt, State: state},
+	)
 }
 
 func classifyBlockedReview(state taskstate.TaskState, review taskstate.ReviewAttempt) policyResult {
