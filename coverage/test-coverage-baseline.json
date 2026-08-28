@@ -21,7 +21,7 @@
       "test_count": 445,
       "coverage": {
         "statement_total": 19449,
-        "covered_statements": 12290
+        "covered_statements": 12286
       },
       "packages": [
         {
@@ -56,8 +56,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 4642,
-          "covered_statements": 3143
+          "statement_total": 4635,
+          "covered_statements": 3138
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/doctor",
@@ -116,8 +116,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/status",
-          "statement_total": 327,
-          "covered_statements": 223
+          "statement_total": 334,
+          "covered_statements": 224
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/task",
@@ -226,10 +226,10 @@
       ]
     },
     "unit": {
-      "test_count": 1031,
+      "test_count": 1045,
       "coverage": {
         "statement_total": 19449,
-        "covered_statements": 10278
+        "covered_statements": 10308
       },
       "packages": [
         {
@@ -264,8 +264,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 4642,
-          "covered_statements": 1701
+          "statement_total": 4635,
+          "covered_statements": 1719
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/doctor",
@@ -324,8 +324,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/status",
-          "statement_total": 327,
-          "covered_statements": 303
+          "statement_total": 334,
+          "covered_statements": 310
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/task",
@@ -340,7 +340,7 @@
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstate",
           "statement_total": 2154,
-          "covered_statements": 1466
+          "covered_statements": 1471
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstats",
