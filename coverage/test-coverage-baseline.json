@@ -20,8 +20,8 @@
     "integration": {
       "test_count": 449,
       "coverage": {
-        "statement_total": 19742,
-        "covered_statements": 12505
+        "statement_total": 19755,
+        "covered_statements": 12502
       },
       "packages": [
         {
@@ -31,7 +31,7 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
-          "statement_total": 654,
+          "statement_total": 665,
           "covered_statements": 0
         },
         {
@@ -56,8 +56,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-        "statement_total": 4660,
-        "covered_statements": 3154
+          "statement_total": 4660,
+          "covered_statements": 3154
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/doctor",
@@ -101,8 +101,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/review",
-          "statement_total": 1090,
-          "covered_statements": 895
+          "statement_total": 1092,
+          "covered_statements": 896
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/revieweval",
@@ -226,10 +226,10 @@
       ]
     },
     "unit": {
-      "test_count": 1069,
+      "test_count": 1078,
       "coverage": {
-        "statement_total": 19742,
-        "covered_statements": 10503
+        "statement_total": 19755,
+        "covered_statements": 10559
       },
       "packages": [
         {
@@ -239,8 +239,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
-          "statement_total": 654,
-          "covered_statements": 390
+          "statement_total": 665,
+          "covered_statements": 402
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testtiming",
@@ -260,7 +260,7 @@
         {
           "name": "github.com/hea3ven/orpheus/internal/beads",
           "statement_total": 675,
-          "covered_statements": 402
+          "covered_statements": 416
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
@@ -309,7 +309,7 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/review",
-          "statement_total": 1090,
+          "statement_total": 1092,
           "covered_statements": 128
         },
         {
@@ -340,7 +340,7 @@
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstate",
           "statement_total": 2171,
-          "covered_statements": 1477
+          "covered_statements": 1482
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstats",

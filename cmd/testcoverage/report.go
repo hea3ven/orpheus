@@ -31,14 +31,10 @@ func printReportTo(outputWriter io.Writer, result qualityReport, output string) 
 	}
 	_, _ = fmt.Fprintf(outputWriter, "quality decision: %s\n", result.Decision.Status)
 	for _, item := range result.Decision.Findings {
-		location := item.Lane
-		if item.Name != "" {
-			location += "/" + item.Name
-		}
-		if location != "" {
-			location += ": "
-		}
-		_, _ = fmt.Fprintf(outputWriter, "  - %s%s\n", location, findingMessage(item))
+		_, _ = fmt.Fprintf(outputWriter, "  - %s%s\n", findingLocation(item), findingMessage(item))
+	}
+	for _, warning := range result.Decision.Warnings {
+		_, _ = fmt.Fprintf(outputWriter, "  - warning (non-blocking): %s%s\n", findingLocation(warning), findingMessage(warning))
 	}
 	for _, scenario := range result.Scenarios {
 		_, _ = fmt.Fprintf(outputWriter, "scenario %s: %.2fs, containment %.2f%%, similarity %.2f%%, %d exclusive statements\n", scenario.Name, scenario.RuntimeSeconds, scenario.ContainmentPercentage, scenario.SimilarityPercentage, scenario.ExclusiveStatements)
@@ -58,6 +54,17 @@ func printPackageSummary(output io.Writer, lane laneReport) {
 	}
 }
 
+func findingLocation(item finding) string {
+	location := item.Lane
+	if item.Name != "" {
+		location += "/" + item.Name
+	}
+	if location != "" {
+		return location + ": "
+	}
+	return ""
+}
+
 func findingMessage(item finding) string {
 	if item.Kind != "timing" || item.Prior <= 0 {
 		return item.Message
@@ -68,7 +75,14 @@ func findingMessage(item finding) string {
 	}
 	difference := item.Current - baseline
 	percentageDifference := difference * 100 / baseline
-	overBudget := item.Current - item.Prior
+	budget := item.BudgetSeconds
+	if budget <= 0 {
+		budget = item.Prior
+	}
+	overBudget := item.OverageSeconds
+	if overBudget <= 0 {
+		overBudget = item.Current - budget
+	}
 	return fmt.Sprintf("%s (current %.3fs, baseline %.3fs, difference %+.3fs / %+.1f%%, budget %.3fs, over budget %+.3fs)",
-		item.Message, item.Current, baseline, difference, percentageDifference, item.Prior, overBudget)
+		item.Message, item.Current, baseline, difference, percentageDifference, budget, overBudget)
 }
