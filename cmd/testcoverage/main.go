@@ -143,13 +143,14 @@ func writeBaseline(opts options, result qualityReport, current, tracked baseline
 		if trackedErr == nil {
 			current = baselineFromReport(result, tracked.Policy)
 		}
-		return writeGeneratedBaseline(opts, result, current, "generated aggregate baseline after explicit maintainer override")
+		return writeGeneratedBaseline(opts, result, current, "generated aggregate baseline after explicit maintainer override", nil)
 	}
 	if trackedErr != nil && !errors.Is(trackedErr, os.ErrNotExist) && !errors.Is(trackedErr, errUnsupportedBaseline) {
 		result.Decision = decision{Status: statusRefreshRequired, Findings: []finding{{Kind: "baseline", Message: trackedErr.Error()}}}
 		return finishReport(opts.output, result, fmt.Errorf("read tracked baseline: %w", trackedErr))
 	}
 	candidate := current
+	var warnings []finding
 	if trackedErr == nil {
 		reference := tracked
 		if tracked.Legacy {
@@ -160,16 +161,17 @@ func writeBaseline(opts options, result qualityReport, current, tracked baseline
 			result.Decision = assessment
 			return finishReport(opts.output, result, errors.New("baseline generation refused a coverage regression or timing budget failure"))
 		}
+		warnings = assessment.Warnings
 		candidate = generatedBaseline(result, reference, tracked.Policy)
 	}
-	return writeGeneratedBaseline(opts, result, candidate, "generated aggregate baseline")
+	return writeGeneratedBaseline(opts, result, candidate, "generated aggregate baseline", warnings)
 }
 
-func writeGeneratedBaseline(opts options, result qualityReport, candidate baseline, message string) error {
+func writeGeneratedBaseline(opts options, result qualityReport, candidate baseline, message string, warnings []finding) error {
 	if err := writeJSON(opts.baseline, candidate); err != nil {
 		return fmt.Errorf("write baseline: %w", err)
 	}
-	result.Decision = decision{Status: statusPass, Findings: []finding{{Kind: "baseline", Message: message}}}
+	result.Decision = decision{Status: statusPass, Findings: []finding{{Kind: "baseline", Message: message}}, Warnings: warnings}
 	if err := writeJSON(opts.output, result); err != nil {
 		return fmt.Errorf("write report: %w", err)
 	}

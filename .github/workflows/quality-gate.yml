@@ -150,6 +150,18 @@ jobs:
             fi
           fi
 
+          if [[ -f "$report" ]]; then
+            jq --raw-output '
+              .decision.warnings[]?
+              | select(.kind == "timing" and .scope == "package")
+              | "- Warning (non-blocking): \(.lane)/\(.name): current \(.current)s, baseline \(.baseline)s, budget \(.budget_seconds // .prior)s, over budget \(.overage_seconds // (.current - (.budget_seconds // .prior)))s"
+            ' "$report" | tee -a "$log" | tee -a "$GITHUB_STEP_SUMMARY"
+            statuses=("${PIPESTATUS[@]}")
+            if [[ "${statuses[0]}" -ne 0 || "${statuses[1]}" -ne 0 || "${statuses[2]}" -ne 0 ]]; then
+              quality_exit=1
+            fi
+          fi
+
           decision=execution_failure
           if [[ -f "$report" ]]; then
             decision="$(jq --raw-output '.decision.status // "execution_failure"' "$report" 2>>"$log")" || decision=execution_failure
