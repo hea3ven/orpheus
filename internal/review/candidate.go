@@ -295,5 +295,8 @@ func restoreSnapshotFile(workdir string, file snapshotFile) error {
 	if err := os.WriteFile(fullPath, file.data, file.mode.Perm()); err != nil {
 		return fmt.Errorf("restore untracked file %q: %w", file.path, err)
 	}
+	if err := os.Chmod(fullPath, file.mode.Perm()); err != nil {
+		return fmt.Errorf("restore untracked file mode %q: %w", file.path, err)
+	}
 	return nil
 }

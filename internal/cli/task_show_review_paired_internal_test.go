@@ -12,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func TestRenderTaskReviewShowRendersPairedReviewerComparison(t *testing.T) {
+func TestRenderTaskShowReviewRendersPairedReviewerComparison(t *testing.T) {
 	started := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 	finished := started.Add(time.Minute)
 	var output bytes.Buffer
@@ -24,7 +24,7 @@ func TestRenderTaskReviewShowRendersPairedReviewerComparison(t *testing.T) {
 		}}},
 		Findings: []taskstate.ReviewFinding{{Type: taskstate.FindingTypeAdvisory, Title: "primary raw", Description: "authoritative", Step: "ai-review", Reviewer: "primary"}},
 	}}}
-	err := renderTaskReviewShow(&output, "alpha", "op-paired", state, reviewShowScope{reviewAttempt: 1})
+	err := renderTaskShowReview(&output, "alpha", "op-paired", state, reviewShowScope{reviewAttempt: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestRenderTaskReviewShowRendersPairedReviewerComparison(t *testing.T) {
 	}
 }
 
-func TestTaskReviewShowScopesHistoryAttemptAndFinding(t *testing.T) {
+func TestTaskShowReviewScopesHistoryAttemptAndFinding(t *testing.T) {
 	state := taskstate.TaskState{
 		Reviews: []taskstate.ReviewAttempt{
 			{
@@ -59,7 +59,7 @@ func TestTaskReviewShowScopesHistoryAttemptAndFinding(t *testing.T) {
 	}
 
 	var history bytes.Buffer
-	if err := renderTaskReviewShow(&history, "alpha", "op-history", state, reviewShowScope{}); err != nil {
+	if err := renderTaskShowReview(&history, "alpha", "op-history", state, reviewShowScope{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
@@ -69,7 +69,7 @@ func TestTaskReviewShowScopesHistoryAttemptAndFinding(t *testing.T) {
 		"1/4 · ai-review · separate_task · created task op-42 · Extract helper",
 		"Attempt 2: running (1 authoritative finding(s))",
 		"2/1 · - · blocking · open · Current finding",
-		"orpheus task review show <task-id> <review-attempt> <finding-number>",
+		"orpheus task show review <task-id> <review-attempt> <finding-number>",
 	} {
 		if !strings.Contains(history.String(), want) {
 			t.Fatalf("history missing %q:\n%s", want, history.String())
@@ -80,7 +80,7 @@ func TestTaskReviewShowScopesHistoryAttemptAndFinding(t *testing.T) {
 	}
 
 	var attempt bytes.Buffer
-	if err := renderTaskReviewShow(&attempt, "alpha", "op-history", state, reviewShowScope{reviewAttempt: 1}); err != nil {
+	if err := renderTaskShowReview(&attempt, "alpha", "op-history", state, reviewShowScope{reviewAttempt: 1}); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"Authoritative review attempt 1:", "Findings by step:", "Follow-up runs:", "Run attempt 1: succeeded (required blocking findings 2; advisory opportunities 3)", "Created follow-up Beads:", "op-42 (finding 4, step ai-review): Extract helper"} {
@@ -90,7 +90,7 @@ func TestTaskReviewShowScopesHistoryAttemptAndFinding(t *testing.T) {
 	}
 
 	var finding bytes.Buffer
-	if err := renderTaskReviewShow(&finding, "alpha", "op-history", state, reviewShowScope{reviewAttempt: 1, findingNumber: 4}); err != nil {
+	if err := renderTaskShowReview(&finding, "alpha", "op-history", state, reviewShowScope{reviewAttempt: 1, findingNumber: 4}); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"Authoritative finding 1/4:", "Description: Track cleanup separately.", "Disposition: converted/created task op-42", "Proposed task title: Extract helper", "Proposed task description: Extract the duplicated helper.", "Proposed task acceptance criteria: The helper has focused tests.", "Created follow-up task: op-42", "Associated follow-up runs:\n  (none recorded)"} {
@@ -100,7 +100,7 @@ func TestTaskReviewShowScopesHistoryAttemptAndFinding(t *testing.T) {
 	}
 
 	finding.Reset()
-	if err := renderTaskReviewShow(&finding, "alpha", "op-history", state, reviewShowScope{reviewAttempt: 1, findingNumber: 2}); err != nil {
+	if err := renderTaskShowReview(&finding, "alpha", "op-history", state, reviewShowScope{reviewAttempt: 1, findingNumber: 2}); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"Suggested action: Repair the race.", "Associated follow-up runs:", "Run attempt 1: succeeded (completion recorded)", "Run attempt 2: failed (no completion)"} {
@@ -110,7 +110,7 @@ func TestTaskReviewShowScopesHistoryAttemptAndFinding(t *testing.T) {
 	}
 
 	finding.Reset()
-	if err := renderTaskReviewShow(&finding, "alpha", "op-history", state, reviewShowScope{reviewAttempt: 1, findingNumber: 3}); err != nil {
+	if err := renderTaskShowReview(&finding, "alpha", "op-history", state, reviewShowScope{reviewAttempt: 1, findingNumber: 3}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(finding.String(), "Run attempt 1: succeeded (completion recorded)") || !strings.Contains(finding.String(), "Run attempt 2: failed (no completion)") {
@@ -119,26 +119,54 @@ func TestTaskReviewShowScopesHistoryAttemptAndFinding(t *testing.T) {
 }
 
 func TestReviewShowRejectsInvalidScopes(t *testing.T) {
-	for _, args := range [][]string{
-		{},
-		{"op-1", "0"},
-		{"op-1", "one"},
-		{"op-1", "1", "0"},
-		{"op-1", "1", "two"},
-		{"op-1", "1", "1", "extra"},
-	} {
-		if _, err := parseReviewShowScope(args); err == nil {
-			t.Fatalf("parseReviewShowScope(%q) succeeded", args)
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{args: []string{}, want: "accepts a task ID, optional positive review attempt, and optional positive finding number"},
+		{args: []string{"op-1", "0"}, want: `review attempt must be a positive integer, got "0"`},
+		{args: []string{"op-1", "one"}, want: `review attempt must be a positive integer, got "one"`},
+		{args: []string{"op-1", "1", "0"}, want: `finding number must be a positive integer, got "0"`},
+		{args: []string{"op-1", "1", "two"}, want: `finding number must be a positive integer, got "two"`},
+		{args: []string{"op-1", "1", "1", "extra"}, want: "accepts a task ID, optional positive review attempt, and optional positive finding number"},
+	}
+	for _, test := range tests {
+		if _, err := parseReviewShowScope(test.args); err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Errorf("parseReviewShowScope(%q) error = %v, want %q", test.args, err, test.want)
 		}
 	}
 }
 
-func TestTaskReviewShowRejectsScopesWhenNoReviewsExist(t *testing.T) {
+func TestTaskShowReviewRejectsUnknownAttemptAndFinding(t *testing.T) {
+	state := taskstate.TaskState{Reviews: []taskstate.ReviewAttempt{{
+		Attempt: 2,
+		Findings: []taskstate.ReviewFinding{{
+			Type:  taskstate.FindingTypeBlocking,
+			Title: "Only finding",
+		}},
+	}}}
+	tests := []struct {
+		scope reviewShowScope
+		want  string
+	}{
+		{scope: reviewShowScope{reviewAttempt: 1}, want: "review attempt 1 was not found for task op-1"},
+		{scope: reviewShowScope{reviewAttempt: 2, findingNumber: 2}, want: "authoritative finding number 2 is out of range for review attempt 2 (has 1 authoritative finding(s))"},
+	}
+	for _, test := range tests {
+		var output bytes.Buffer
+		err := renderTaskShowReview(&output, "alpha", "op-1", state, test.scope)
+		if err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Errorf("renderTaskShowReview(scope=%+v) error = %v, want %q", test.scope, err, test.want)
+		}
+	}
+}
+
+func TestTaskShowReviewRejectsScopesWhenNoReviewsExist(t *testing.T) {
 	for _, scope := range []reviewShowScope{{reviewAttempt: 1}, {reviewAttempt: 1, findingNumber: 1}} {
 		var output bytes.Buffer
-		err := renderTaskReviewShow(&output, "alpha", "op-empty", taskstate.TaskState{}, scope)
+		err := renderTaskShowReview(&output, "alpha", "op-empty", taskstate.TaskState{}, scope)
 		if err == nil || !strings.Contains(err.Error(), "review attempt 1 was not found for task op-empty: no review attempts are recorded") {
-			t.Fatalf("renderTaskReviewShow(scope=%+v) error = %v, want missing-attempt error", scope, err)
+			t.Fatalf("renderTaskShowReview(scope=%+v) error = %v, want missing-attempt error", scope, err)
 		}
 		if strings.Contains(output.String(), "No review attempts recorded") {
 			t.Fatalf("scoped no-history output must not succeed:\n%s", output.String())
@@ -158,7 +186,7 @@ func TestTaskReviewHistoryExcludesInterruptedPrimaryAuditFindings(t *testing.T) 
 	}}
 
 	var history bytes.Buffer
-	if err := renderTaskReviewShow(&history, "alpha", "op-audit", state, reviewShowScope{}); err != nil {
+	if err := renderTaskShowReview(&history, "alpha", "op-audit", state, reviewShowScope{}); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(history.String(), "Interrupted audit finding") {
@@ -171,7 +199,7 @@ func TestTaskReviewHistoryExcludesInterruptedPrimaryAuditFindings(t *testing.T) 
 	}
 
 	var finding bytes.Buffer
-	if err := renderTaskReviewShow(&finding, "alpha", "op-audit", state, reviewShowScope{reviewAttempt: 1, findingNumber: 1}); err != nil {
+	if err := renderTaskShowReview(&finding, "alpha", "op-audit", state, reviewShowScope{reviewAttempt: 1, findingNumber: 1}); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"Audit-only finding 1/1:", "Interrupted audit finding", "Disposition: audit-only (interrupted primary reviewer)", "Audit-only: interrupted primary reviewer"} {
@@ -189,7 +217,7 @@ func TestTaskReviewHistoryCollapsesMultilineFindingFields(t *testing.T) {
 		}},
 	}}}
 	var output bytes.Buffer
-	if err := renderTaskReviewShow(&output, "alpha", "op-multiline", state, reviewShowScope{}); err != nil {
+	if err := renderTaskShowReview(&output, "alpha", "op-multiline", state, reviewShowScope{}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(output.String(), "1/1 · ai-review spoofed-step · blocking · waived · Multiline title - spoofed finding") {
