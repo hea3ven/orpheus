@@ -53,23 +53,14 @@ var reviewWorkflowHelpCases = []reviewWorkflowHelpCase{
 		args: []string{"task", "run", "--help"},
 		want: []string{
 			"selects the next safe transition",
-			"task review` and `task done` remain compatibility entry points",
+			"Configured pipelines may include check, manual, and agent_review steps.",
+			"Use `task show review` to inspect review findings",
 			"PR synchronization remains `task sync`",
 		},
 	},
 	{
-		name: "task review",
-		args: []string{"task", "review", "--help"},
-		want: []string{
-			"Configured pipelines may include check, manual, and agent_review steps.",
-			"Automated blockers require an explicit keep, downgrade, or waive/cancel decision.",
-			"If blocker-decision input disappears",
-			"Use task review show to inspect persisted findings",
-		},
-	},
-	{
-		name: "task review show",
-		args: []string{"task", "review", "show", "--help"},
+		name: "task show review",
+		args: []string{"task", "show", "review", "--help"},
 		want: []string{
 			"inspection surface for review state",
 			"blocking/advisory/separate-task findings",
@@ -91,7 +82,7 @@ var reviewWorkflowHelpCases = []reviewWorkflowHelpCase{
 		want: []string{
 			"Use this only from an attached agent_review pipeline step.",
 			"Separate-task findings propose standalone follow-up work",
-			"Operators inspect findings with task review show",
+			"Operators inspect findings with task show review",
 		},
 	},
 }
@@ -110,4 +101,13 @@ func TestIntegrationReviewWorkflowCommandHelpExplainsResponsibilitiesAndNextComm
 			}
 		})
 	}
+}
+
+func TestIntegrationTaskReviewCommandIsAbsent(t *testing.T) {
+	t.Parallel()
+	is := assert.New(t)
+
+	stdout, stderr := executeCommand(t, []string{"task", "--help"})
+	is.Empty(stderr)
+	is.NotContains(stdout, "  review")
 }

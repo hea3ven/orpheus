@@ -4,7 +4,7 @@
 records a successful completion with `orpheus agent done`. Automated pipeline
 steps run unattended only while they pass or produce no operator decisions; a
 check or agent-review blocker prompts for an explicit keep, downgrade,
-waive/cancel, restart, or pause decision from both `task run` and `task review`.
+waive/cancel, restart, or pause decision during `task run`.
 
 `orpheus agent done` requires the usual summary, commit description, and detailed
 PR body source plus exactly one technical explanation source:
@@ -28,7 +28,7 @@ completion and is rendered into review-agent context so reviewers can understand
 the code-change rationale without changing PR title or body selection. Fresh review
 attempts also receive a compact list of authoritative findings from earlier attempts.
 Each uses the scoped `<review-attempt>/<finding-number>` reference and can be
-inspected with `orpheus task review show <task-id> <review-attempt> <finding-number>`.
+inspected with `orpheus task show review <task-id> <review-attempt> <finding-number>`.
 Prior waivers and other dispositions provide decision context: reviewers should not
 repeat unchanged accepted findings, but must report a defect that is newly applicable
 or materially changed. Current-attempt and raw excluded/duplicate alternate findings
@@ -49,10 +49,9 @@ result are discarded together.
 `pause` exits without a repair, pipeline advance, approval, or finalization. It
 persists the pending decision and resumes it with the environment of a later
 `orpheus task run <task-id>` invocation. The resumed command presents the same
-blockers again; choose restart or any normal disposition. `task review` remains
-a compatibility command for resumption. `orpheus status` and `orpheus task
-review show <task-id>` identify a paused decision and direct the operator to
-`task run`.
+blockers again; choose restart or any normal disposition. `orpheus status` and
+`orpheus task show review <task-id>` identify a paused decision and direct the
+operator to `task run`.
 
 ## Paired AI reviewer comparison (opt-in)
 
@@ -73,7 +72,7 @@ for every alternate finding: admit it to the authoritative flow, mark it a
 duplicate of a numbered primary finding, or exclude it. Only admitted findings
 participate in blocker handling, targeted fixes, separate-task proposals,
 approval, and publication. Duplicates and exclusions remain inspectable with
-raw findings and reviewer execution provenance in `orpheus task review show`.
+raw findings and reviewer execution provenance in `orpheus task show review`.
 
 The experiment is sequential and is repeated for every new review attempt,
 including reviews after targeted fixes. It can therefore approximately double
@@ -94,9 +93,9 @@ flag; Orpheus launches no fix and recovery starts with
 `reviews.max_autonomous_review_attempts` setting defaults to `4`. The initial
 review counts toward that limit, so the default permits at most three targeted
 fix runs before a fourth blocked review stops and preserves the open blockers
-for explicit continuation. A new `task run` or `task review` grants a fresh
-budget; preserved manual blockers need no second confirmation, while automated
-blockers still require an explicit recorded keep decision.
+for explicit continuation. A new `task run` grants a fresh budget; preserved
+manual blockers need no second confirmation, while automated blockers still
+require an explicit recorded keep decision.
 
 ## Resume implementation sessions for follow-ups
 
@@ -163,10 +162,8 @@ orpheus task run <task-id>
 ```
 
 The resumed review continues the same authoritative attempt at the pending
-manual step. It does not rerun completed steps. `task review` remains a
-compatibility entry point; if a paused attempt exists, `task review --pipeline`
-may only resolve to the stored pipeline, and a different override is rejected
-without replacing the paused state.
+manual step. It does not rerun completed steps. A pipeline override cannot
+replace the pipeline stored on a paused attempt.
 
 If a resumed review later launches an autonomous fix after a manual approval,
 the next review starts again from step 1. Any earlier manual gate must pass
@@ -174,8 +171,7 @@ again before publication.
 
 Orpheus selects a task review pipeline in this order:
 
-1. `orpheus task run --pipeline <name-or-alias> <task-id>` or
-   `orpheus task review --pipeline <name-or-alias> <task-id>`
+1. `orpheus task run --pipeline <name-or-alias> <task-id>`
 2. the repository `review-pipeline` config value
 3. global `reviews.default_pipeline` in Orpheus `config.yaml`
 4. the built-in `default` manual local-review pipeline
@@ -269,12 +265,6 @@ Create or replace an alias:
 orpheus repo config set my-repo review-pipeline-alias.quick go
 ```
 
-Use the alias when reviewing a task in that repository:
-
-```bash
-orpheus task review --pipeline quick my-task
-```
-
 Use the alias for a one-off implementation-and-review run:
 
 ```bash
@@ -297,9 +287,9 @@ orpheus repo config get my-repo
 
 ## Separate-task proposals
 
-When a passing review attempt contains separate-task proposals, Orpheus uses the
-same operator selection flow from both `task run` and `task review`: choose
-numbered proposals, `a=all`, or `n=none`. Selected proposals become Beads before
+When a passing review attempt contains separate-task proposals, `task run` asks
+the operator to choose numbered proposals, `a=all`, or `n=none`. Selected
+proposals become Beads before
 publication/finalization. If any selected follow-up task cannot be created, the
 operator can continue without that task or stop publication, fix the backend
 issue, and rerun `task run`.
