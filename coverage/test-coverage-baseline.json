@@ -20,8 +20,8 @@
     "integration": {
       "test_count": 449,
       "coverage": {
-        "statement_total": 19755,
-        "covered_statements": 12502
+        "statement_total": 19760,
+        "covered_statements": 12507
       },
       "packages": [
         {
@@ -136,8 +136,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstats",
-          "statement_total": 592,
-          "covered_statements": 277
+          "statement_total": 597,
+          "covered_statements": 282
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/tasktarget",
@@ -228,8 +228,8 @@
     "unit": {
       "test_count": 1078,
       "coverage": {
-        "statement_total": 19755,
-        "covered_statements": 10559
+        "statement_total": 19760,
+        "covered_statements": 10564
       },
       "packages": [
         {
@@ -344,8 +344,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstats",
-          "statement_total": 592,
-          "covered_statements": 513
+          "statement_total": 597,
+          "covered_statements": 518
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/tasktarget",
