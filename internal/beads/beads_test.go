@@ -1164,6 +1164,83 @@ func TestTaskBackendStartEpicRejectsNonEpicAndClosedItems(t *testing.T) {
 	}
 }
 
+func TestTaskBackendUpdateGitFactsWritesBranchAndWorktree(t *testing.T) {
+	dir := testutil.CanonicalTempDir(t)
+	runner := &fakeRunner{calls: []fakeCall{
+		{
+			wantDir:  dir,
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1"},
+			result:   beads.Result{Stdout: `[{"id":"op-1","title":"task","status":"in_progress","priority":2,"issue_type":"task"}]`},
+		},
+		{
+			wantDir: dir,
+			wantArgs: []string{
+				"--json",
+				"--sandbox",
+				"update",
+				"op-1",
+				"--set-metadata",
+				"orpheus.branch=orpheus/op-1",
+				"--set-metadata",
+				"orpheus.worktree=/fixture/op-1",
+			},
+		},
+	}}
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+
+	if err := backend.UpdateGitFacts(context.Background(), " op-1 ", " orpheus/op-1 ", " /fixture/op-1 "); err != nil {
+		t.Fatalf("update Git facts: %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
+func TestTaskBackendUpdateGitFactsRejectsTaskNotInProgress(t *testing.T) {
+	dir := testutil.CanonicalTempDir(t)
+	runner := &fakeRunner{calls: []fakeCall{{
+		wantDir:  dir,
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1"},
+		result:   beads.Result{Stdout: `[{"id":"op-1","title":"task","status":"open","priority":2,"issue_type":"task"}]`},
+	}}}
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+
+	err = backend.UpdateGitFacts(context.Background(), "op-1", "orpheus/op-1", "/fixture/op-1")
+	if err == nil || !strings.Contains(err.Error(), "task is not in progress") {
+		t.Fatalf("update Git facts error = %v, want task not in progress", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
+func TestTaskBackendUpdateGitFactsRejectsTaskWithPRURL(t *testing.T) {
+	dir := testutil.CanonicalTempDir(t)
+	runner := &fakeRunner{calls: []fakeCall{{
+		wantDir:  dir,
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1"},
+		result:   beads.Result{Stdout: `[{"id":"op-1","title":"task","status":"in_progress","priority":2,"issue_type":"task","metadata":{"orpheus.pr_url":"https://github.test/org/repo/pull/1"}}]`},
+	}}}
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+
+	err = backend.UpdateGitFacts(context.Background(), "op-1", "orpheus/op-1", "/fixture/op-1")
+	if err == nil || !strings.Contains(err.Error(), "orpheus.pr_url is already set") {
+		t.Fatalf("update Git facts error = %v, want existing PR URL", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner has %d unused calls", len(runner.calls))
+	}
+}
+
 func TestTaskBackendSetPRURLWritesMetadata(t *testing.T) {
 	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{{

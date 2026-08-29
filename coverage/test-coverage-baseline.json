@@ -20,7 +20,7 @@
     "integration": {
       "test_count": 449,
       "coverage": {
-        "statement_total": 20821,
+        "statement_total": 20832,
         "covered_statements": 13443
       },
       "packages": [
@@ -31,7 +31,7 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
-          "statement_total": 681,
+          "statement_total": 692,
           "covered_statements": 0
         },
         {
@@ -226,10 +226,10 @@
       ]
     },
     "unit": {
-      "test_count": 1070,
+      "test_count": 1079,
       "coverage": {
-        "statement_total": 20821,
-        "covered_statements": 11248
+        "statement_total": 20832,
+        "covered_statements": 11274
       },
       "packages": [
         {
@@ -239,8 +239,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
-          "statement_total": 681,
-          "covered_statements": 414
+          "statement_total": 692,
+          "covered_statements": 426
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testtiming",
@@ -260,7 +260,7 @@
         {
           "name": "github.com/hea3ven/orpheus/internal/beads",
           "statement_total": 729,
-          "covered_statements": 406
+          "covered_statements": 420
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
