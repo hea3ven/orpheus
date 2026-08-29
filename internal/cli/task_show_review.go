@@ -13,9 +13,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newTaskReviewShowCommand(opts *rootOptions) *cobra.Command {
+func newTaskShowReviewCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "show <task-id> [review-attempt] [finding-number]",
+		Use:   "review <task-id> [review-attempt] [finding-number]",
 		Short: "Inspect persisted review history, an attempt, or an authoritative finding",
 		Long: "This is the inspection surface for review state, including blocking/advisory/separate-task findings, " +
 			"autonomous budget exhaustion, and interrupted automated blocker decisions. It never advances workflow state. " +
@@ -23,7 +23,7 @@ func newTaskReviewShowCommand(opts *rootOptions) *cobra.Command {
 			"then a finding number for one authoritative finding.",
 		Args: reviewShowArgs,
 		RunE: func(command *cobra.Command, args []string) error {
-			return runTaskReviewShow(command, opts, args)
+			return runTaskShowReview(command, opts, args)
 		},
 	}
 	return cmd
@@ -71,7 +71,7 @@ func positiveReviewShowNumber(label string, raw string) (int, error) {
 	return value, nil
 }
 
-func runTaskReviewShow(command *cobra.Command, opts *rootOptions, args []string) error {
+func runTaskShowReview(command *cobra.Command, opts *rootOptions, args []string) error {
 	taskID := args[0]
 	scope, err := parseReviewShowScope(args)
 	if err != nil {
@@ -79,15 +79,15 @@ func runTaskReviewShow(command *cobra.Command, opts *rootOptions, args []string)
 	}
 	logger := opts.log().With(
 		slog.String("component", "cli"),
-		slog.String("operation", "task_review_show"),
+		slog.String("operation", "task_show_review"),
 	)
-	logger.DebugContext(command.Context(), "loading registered repos for task review show")
+	logger.DebugContext(command.Context(), "loading registered repos for task show review")
 
 	deps, err := opts.invocation(command)
 	if err != nil {
 		return err
 	}
-	resolvedCtx, err := resolveTaskContextWithScope(command, deps, "task review show", taskID, false)
+	resolvedCtx, err := resolveTaskContextWithScope(command, deps, "task show review", taskID, false)
 	if err != nil {
 		return err
 	}
@@ -97,7 +97,7 @@ func runTaskReviewShow(command *cobra.Command, opts *rootOptions, args []string)
 	)
 	if err != nil {
 		return fmt.Errorf(
-			"task review show %s: load local task-state for repo %s: %w",
+			"task show review %s: load local task-state for repo %s: %w",
 			resolvedCtx.Resolved.TaskID,
 			resolvedCtx.Resolved.Source.Repository.ID,
 			err,
@@ -111,7 +111,7 @@ func runTaskReviewShow(command *cobra.Command, opts *rootOptions, args []string)
 		slog.String("task_id", resolvedCtx.Resolved.TaskID),
 		slog.Int("review_count", len(taskState.Reviews)),
 	)
-	return renderTaskReviewShow(
+	return renderTaskShowReview(
 		command.OutOrStdout(),
 		resolvedCtx.Resolved.Source.Repository.ID,
 		resolvedCtx.Resolved.TaskID,
@@ -120,7 +120,7 @@ func runTaskReviewShow(command *cobra.Command, opts *rootOptions, args []string)
 	)
 }
 
-func renderTaskReviewShow(
+func renderTaskShowReview(
 	output io.Writer,
 	repoID string,
 	taskID string,
@@ -189,7 +189,7 @@ func renderReviewHistory(output io.Writer, taskState taskstate.TaskState) error 
 			}
 		}
 	}
-	_, err := fmt.Fprintln(output, "\nInspect an attempt with `orpheus task review show <task-id> <review-attempt>` or an authoritative finding with `orpheus task review show <task-id> <review-attempt> <finding-number>`.")
+	_, err := fmt.Fprintln(output, "\nInspect an attempt with `orpheus task show review <task-id> <review-attempt>` or an authoritative finding with `orpheus task show review <task-id> <review-attempt> <finding-number>`.")
 	return err
 }
 

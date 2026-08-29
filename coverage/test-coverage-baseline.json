@@ -20,8 +20,8 @@
     "integration": {
       "test_count": 449,
       "coverage": {
-        "statement_total": 19760,
-        "covered_statements": 12507
+        "statement_total": 20821,
+        "covered_statements": 13434
       },
       "packages": [
         {
@@ -31,43 +31,43 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
-          "statement_total": 665,
+          "statement_total": 692,
           "covered_statements": 0
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testtiming",
-          "statement_total": 308,
+          "statement_total": 314,
           "covered_statements": 0
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/agent",
-          "statement_total": 1843,
-          "covered_statements": 1224
+          "statement_total": 1987,
+          "covered_statements": 1326
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/agentexec",
-          "statement_total": 107,
-          "covered_statements": 81
+          "statement_total": 114,
+          "covered_statements": 88
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/beads",
-          "statement_total": 675,
-          "covered_statements": 449
+          "statement_total": 729,
+          "covered_statements": 501
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 4660,
-          "covered_statements": 3154
+          "statement_total": 5031,
+          "covered_statements": 3499
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/doctor",
-          "statement_total": 407,
-          "covered_statements": 277
+          "statement_total": 426,
+          "covered_statements": 296
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/git",
-          "statement_total": 1533,
-          "covered_statements": 1006
+          "statement_total": 1575,
+          "covered_statements": 1048
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/logging",
@@ -81,13 +81,13 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/publication",
-          "statement_total": 76,
-          "covered_statements": 68
+          "statement_total": 82,
+          "covered_statements": 74
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/pullrequest",
-          "statement_total": 130,
-          "covered_statements": 107
+          "statement_total": 147,
+          "covered_statements": 124
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/readiness",
@@ -96,43 +96,43 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/registry",
-          "statement_total": 242,
-          "covered_statements": 182
+          "statement_total": 260,
+          "covered_statements": 200
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/review",
-          "statement_total": 1092,
-          "covered_statements": 896
+          "statement_total": 1161,
+          "covered_statements": 965
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/revieweval",
-          "statement_total": 482,
-          "covered_statements": 152
+          "statement_total": 504,
+          "covered_statements": 158
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/state",
-          "statement_total": 200,
-          "covered_statements": 122
+          "statement_total": 213,
+          "covered_statements": 135
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/status",
-          "statement_total": 334,
-          "covered_statements": 224
+          "statement_total": 336,
+          "covered_statements": 226
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/task",
-          "statement_total": 738,
-          "covered_statements": 460
+          "statement_total": 796,
+          "covered_statements": 514
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskbranch",
-          "statement_total": 96,
-          "covered_statements": 77
+          "statement_total": 100,
+          "covered_statements": 81
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstate",
-          "statement_total": 2171,
-          "covered_statements": 1512
+          "statement_total": 2254,
+          "covered_statements": 1592
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstats",
@@ -141,95 +141,95 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/tasktarget",
-          "statement_total": 102,
-          "covered_statements": 80
+          "statement_total": 113,
+          "covered_statements": 91
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/testguard",
-          "statement_total": 51,
-          "covered_statements": 40
+          "statement_total": 53,
+          "covered_statements": 42
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/testlane",
-          "statement_total": 115,
+          "statement_total": 117,
           "covered_statements": 0
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/testutil",
-          "statement_total": 6,
-          "covered_statements": 5
+          "statement_total": 10,
+          "covered_statements": 9
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/workflow",
-          "statement_total": 3034,
-          "covered_statements": 2040
+          "statement_total": 3114,
+          "covered_statements": 2114
         }
       ],
-      "suite_baseline_seconds": 74.58300000000001,
-      "suite_budget_seconds": 93.229,
+      "suite_baseline_seconds": 67.371,
+      "suite_budget_seconds": 84.214,
       "package_budgets": [
         {
           "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
-          "baseline_seconds": 0.435,
-          "seconds": 0.685
+          "baseline_seconds": 0.339,
+          "seconds": 0.589
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/agentexec",
-          "baseline_seconds": 0.408,
-          "seconds": 0.658
+          "baseline_seconds": 0.394,
+          "seconds": 0.644
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/beads",
-          "baseline_seconds": 33.042,
-          "seconds": 49.563
+          "baseline_seconds": 28.301,
+          "seconds": 42.452
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "baseline_seconds": 32.811,
-          "seconds": 49.217
+          "baseline_seconds": 31.563,
+          "seconds": 47.345
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/git",
-          "baseline_seconds": 4.14,
-          "seconds": 6.21
+          "baseline_seconds": 3.452,
+          "seconds": 5.178
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/pullrequest",
-          "baseline_seconds": 0.171,
-          "seconds": 0.422
+          "baseline_seconds": 0.181,
+          "seconds": 0.431
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/review",
-          "baseline_seconds": 2.153,
-          "seconds": 3.23
+          "baseline_seconds": 1.925,
+          "seconds": 2.888
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/revieweval",
-          "baseline_seconds": 0.247,
-          "seconds": 0.497
+          "baseline_seconds": 0.229,
+          "seconds": 0.479
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskbranch",
-          "baseline_seconds": 0.055,
-          "seconds": 0.305
+          "baseline_seconds": 0.046,
+          "seconds": 0.296
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/testguard",
-          "baseline_seconds": 0.294,
-          "seconds": 0.544
+          "baseline_seconds": 0.239,
+          "seconds": 0.489
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/workflow",
-          "baseline_seconds": 0.827,
-          "seconds": 1.241
+          "baseline_seconds": 0.702,
+          "seconds": 1.053
         }
       ]
     },
     "unit": {
-      "test_count": 1078,
+      "test_count": 1079,
       "coverage": {
-        "statement_total": 19760,
-        "covered_statements": 10564
+        "statement_total": 20821,
+        "covered_statements": 11262
       },
       "packages": [
         {
@@ -239,43 +239,43 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
-          "statement_total": 665,
-          "covered_statements": 402
+          "statement_total": 692,
+          "covered_statements": 426
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testtiming",
-          "statement_total": 308,
+          "statement_total": 314,
           "covered_statements": 150
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/agent",
-          "statement_total": 1843,
-          "covered_statements": 1506
+          "statement_total": 1987,
+          "covered_statements": 1645
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/agentexec",
-          "statement_total": 107,
+          "statement_total": 114,
           "covered_statements": 2
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/beads",
-          "statement_total": 675,
-          "covered_statements": 416
+          "statement_total": 729,
+          "covered_statements": 420
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 4660,
-          "covered_statements": 1732
+          "statement_total": 5031,
+          "covered_statements": 1950
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/doctor",
-          "statement_total": 407,
-          "covered_statements": 206
+          "statement_total": 426,
+          "covered_statements": 219
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/git",
-          "statement_total": 1533,
-          "covered_statements": 481
+          "statement_total": 1575,
+          "covered_statements": 494
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/logging",
@@ -289,12 +289,12 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/publication",
-          "statement_total": 76,
-          "covered_statements": 70
+          "statement_total": 82,
+          "covered_statements": 76
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/pullrequest",
-          "statement_total": 130,
+          "statement_total": 147,
           "covered_statements": 9
         },
         {
@@ -304,43 +304,43 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/registry",
-          "statement_total": 242,
-          "covered_statements": 210
+          "statement_total": 260,
+          "covered_statements": 228
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/review",
-          "statement_total": 1092,
-          "covered_statements": 128
+          "statement_total": 1161,
+          "covered_statements": 150
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/revieweval",
-          "statement_total": 482,
-          "covered_statements": 279
+          "statement_total": 504,
+          "covered_statements": 292
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/state",
-          "statement_total": 200,
-          "covered_statements": 143
+          "statement_total": 213,
+          "covered_statements": 156
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/status",
-          "statement_total": 334,
-          "covered_statements": 310
+          "statement_total": 336,
+          "covered_statements": 312
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/task",
-          "statement_total": 738,
-          "covered_statements": 622
+          "statement_total": 796,
+          "covered_statements": 678
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskbranch",
-          "statement_total": 96,
-          "covered_statements": 90
+          "statement_total": 100,
+          "covered_statements": 94
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstate",
-          "statement_total": 2171,
-          "covered_statements": 1482
+          "statement_total": 2254,
+          "covered_statements": 1562
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstats",
@@ -349,162 +349,162 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/tasktarget",
-          "statement_total": 102,
-          "covered_statements": 84
+          "statement_total": 113,
+          "covered_statements": 95
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/testguard",
-          "statement_total": 51,
-          "covered_statements": 29
+          "statement_total": 53,
+          "covered_statements": 31
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/testlane",
-          "statement_total": 115,
-          "covered_statements": 101
+          "statement_total": 117,
+          "covered_statements": 103
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/testutil",
-          "statement_total": 6,
-          "covered_statements": 5
+          "statement_total": 10,
+          "covered_statements": 9
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/workflow",
-          "statement_total": 3034,
-          "covered_statements": 1510
+          "statement_total": 3114,
+          "covered_statements": 1564
         }
       ],
-      "suite_baseline_seconds": 2.2860000000000005,
-      "suite_budget_seconds": 2.858,
+      "suite_baseline_seconds": 1.9109999999999996,
+      "suite_budget_seconds": 2.411,
       "package_budgets": [
         {
           "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
-          "baseline_seconds": 0.068,
-          "seconds": 0.318
+          "baseline_seconds": 0.045,
+          "seconds": 0.295
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testtiming",
-          "baseline_seconds": 0.068,
-          "seconds": 0.318
-        },
-        {
-          "name": "github.com/hea3ven/orpheus/internal/agent",
-          "baseline_seconds": 0.291,
-          "seconds": 0.541
-        },
-        {
-          "name": "github.com/hea3ven/orpheus/internal/agentexec",
           "baseline_seconds": 0.043,
           "seconds": 0.293
         },
         {
+          "name": "github.com/hea3ven/orpheus/internal/agent",
+          "baseline_seconds": 0.16,
+          "seconds": 0.411
+        },
+        {
+          "name": "github.com/hea3ven/orpheus/internal/agentexec",
+          "baseline_seconds": 0.039,
+          "seconds": 0.289
+        },
+        {
           "name": "github.com/hea3ven/orpheus/internal/beads",
-          "baseline_seconds": 0.055,
-          "seconds": 0.305
+          "baseline_seconds": 0.057,
+          "seconds": 0.307
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "baseline_seconds": 0.116,
-          "seconds": 0.366
+          "baseline_seconds": 0.11,
+          "seconds": 0.36
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/doctor",
-          "baseline_seconds": 0.07,
-          "seconds": 0.32
+          "baseline_seconds": 0.063,
+          "seconds": 0.313
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/git",
-          "baseline_seconds": 0.163,
-          "seconds": 0.414
+          "baseline_seconds": 0.122,
+          "seconds": 0.372
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/logging",
+          "baseline_seconds": 0.039,
+          "seconds": 0.289
+        },
+        {
+          "name": "github.com/hea3ven/orpheus/internal/publication",
+          "baseline_seconds": 0.043,
+          "seconds": 0.293
+        },
+        {
+          "name": "github.com/hea3ven/orpheus/internal/pullrequest",
+          "baseline_seconds": 0.056,
+          "seconds": 0.306
+        },
+        {
+          "name": "github.com/hea3ven/orpheus/internal/readiness",
+          "baseline_seconds": 0.04,
+          "seconds": 0.29
+        },
+        {
+          "name": "github.com/hea3ven/orpheus/internal/registry",
           "baseline_seconds": 0.047,
           "seconds": 0.297
         },
         {
-          "name": "github.com/hea3ven/orpheus/internal/publication",
-          "baseline_seconds": 0.046,
-          "seconds": 0.296
-        },
-        {
-          "name": "github.com/hea3ven/orpheus/internal/pullrequest",
-          "baseline_seconds": 0.041,
-          "seconds": 0.291
-        },
-        {
-          "name": "github.com/hea3ven/orpheus/internal/readiness",
-          "baseline_seconds": 0.046,
-          "seconds": 0.296
-        },
-        {
-          "name": "github.com/hea3ven/orpheus/internal/registry",
-          "baseline_seconds": 0.06,
-          "seconds": 0.31
-        },
-        {
           "name": "github.com/hea3ven/orpheus/internal/review",
+          "baseline_seconds": 0.043,
+          "seconds": 0.293
+        },
+        {
+          "name": "github.com/hea3ven/orpheus/internal/revieweval",
           "baseline_seconds": 0.082,
           "seconds": 0.332
         },
         {
-          "name": "github.com/hea3ven/orpheus/internal/revieweval",
-          "baseline_seconds": 0.087,
-          "seconds": 0.337
-        },
-        {
           "name": "github.com/hea3ven/orpheus/internal/state",
-          "baseline_seconds": 0.045,
-          "seconds": 0.295
+          "baseline_seconds": 0.043,
+          "seconds": 0.293
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/status",
-          "baseline_seconds": 0.048,
-          "seconds": 0.298
+          "baseline_seconds": 0.041,
+          "seconds": 0.291
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/task",
-          "baseline_seconds": 0.064,
-          "seconds": 0.314
+          "baseline_seconds": 0.051,
+          "seconds": 0.301
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskbranch",
-          "baseline_seconds": 0.052,
-          "seconds": 0.302
+          "baseline_seconds": 0.04,
+          "seconds": 0.29
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstate",
-          "baseline_seconds": 0.105,
-          "seconds": 0.355
+          "baseline_seconds": 0.095,
+          "seconds": 0.345
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstats",
-          "baseline_seconds": 0.052,
-          "seconds": 0.302
+          "baseline_seconds": 0.043,
+          "seconds": 0.293
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/tasktarget",
-          "baseline_seconds": 0.186,
-          "seconds": 0.436
+          "baseline_seconds": 0.197,
+          "seconds": 0.447
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/testguard",
-          "baseline_seconds": 0.044,
-          "seconds": 0.294
+          "baseline_seconds": 0.055,
+          "seconds": 0.305
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/testlane",
-          "baseline_seconds": 0.17,
-          "seconds": 0.421
+          "baseline_seconds": 0.164,
+          "seconds": 0.415
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/testutil",
-          "baseline_seconds": 0.045,
-          "seconds": 0.295
+          "baseline_seconds": 0.039,
+          "seconds": 0.289
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/workflow",
-          "baseline_seconds": 0.192,
-          "seconds": 0.442
+          "baseline_seconds": 0.154,
+          "seconds": 0.404
         }
       ]
     }

@@ -18,21 +18,21 @@ func TestPrimaryReviewLivenessGuidanceIsActionable(t *testing.T) {
 			render: func(output *bytes.Buffer) error {
 				return renderPrimaryReviewRecoveryGuidance(output, "op-1", "supervisor_and_child_pids_absent")
 			},
-			want: []string{"candidate may contain reviewer mutations", "orpheus task dir op-1", "git status --short", "git diff", "task review show op-1"},
+			want: []string{"candidate may contain reviewer mutations", "orpheus task dir op-1", "git status --short", "git diff", "task show review op-1"},
 		},
 		{
 			name: "live",
 			render: func(output *bytes.Buffer) error {
 				return renderPrimaryReviewActiveGuidance(output, "op-1", "supervisor_pid_live")
 			},
-			want: []string{"still active", "wait for it to finish", "task review show op-1"},
+			want: []string{"still active", "wait for it to finish", "task show review op-1"},
 		},
 		{
 			name: "unverifiable",
 			render: func(output *bytes.Buffer) error {
 				return renderPrimaryReviewUnverifiableGuidance(output, "op-1", "missing_supervisor_pid_legacy_run")
 			},
-			want: []string{"cannot automatically recover", "orpheus doctor", "task review show op-1"},
+			want: []string{"cannot automatically recover", "orpheus doctor", "task show review op-1"},
 		},
 	}
 	for _, test := range tests {

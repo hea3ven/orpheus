@@ -77,7 +77,6 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 		newTaskStatsCommand(opts),
 		newTaskDirCommand(opts),
 		newTaskRunCommand(opts),
-		newTaskReviewCommand(opts),
 		newTaskDoneCommand(opts),
 		newTaskSyncCommand(opts),
 		newTaskEditCommand(opts),
@@ -117,6 +116,7 @@ func newTaskShowCommand(opts *rootOptions) *cobra.Command {
 			return runTaskShow(command, opts, args[0])
 		},
 	}
+	cmd.AddCommand(newTaskShowReviewCommand(opts))
 	return cmd
 }
 
@@ -178,7 +178,9 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 			"task run selects the next safe transition: implementation, review, a paused review resume, targeted repair, or finalization retry. It reports active runs, open pull requests, and finalized tasks without starting inappropriate work. " +
 			"By default, implementation runs use a deterministic task branch and worktree. " +
 			"Use --repo-root to run from the registered repository root. Repository-root work starts on the registered default branch and is published through the same pull-request flow.\n\n" +
-			"Automated blockers require an explicit keep, downgrade, or waive/cancel decision. They also offer restart and pause before targeted fixes: restart reruns only the blocked automated step, while pause resumes through task run. Manual steps are persisted and resumed without rerunning completed review steps. `task review` and `task done` remain compatibility entry points; use `task review show` to inspect review findings. PR synchronization remains `task sync`.",
+			"Review pipeline selection uses --pipeline, then the repo registry review_pipeline, reviews.default_pipeline, and finally the built-in manual local-review step. --pipeline accepts configured global pipeline names and repo-local aliases. Configured pipelines may include check, manual, and agent_review steps. A pipeline override cannot replace the pipeline stored on a paused attempt. Approval records a passed review attempt and continues into finalization.\n\n" +
+			"Automated blockers require an explicit keep, downgrade, or waive/cancel decision. They also offer restart and pause before targeted fixes: restart reruns only the blocked automated step, while pause resumes through task run. Kept blockers run bounded targeted fixes and restart the pipeline from step 1. Manual steps are persisted and resumed without rerunning completed review steps. If blocker-decision input disappears, the attempt is blocked and each preserved blocker needs an explicit disposition before a fresh review.\n\n" +
+			"Fix operational review failures, then rerun task run. Exhausted autonomous blockers remain blocked until the operator explicitly continues with task run. Use `task show review` to inspect review findings and created follow-up tasks. `task done` remains available for finalization retries, and PR synchronization remains `task sync`.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			if mainMode {
@@ -221,40 +223,6 @@ func newTaskDoneCommand(opts *rootOptions) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&summary, "summary", "", "override the final commit summary")
 	cmd.Flags().StringVar(&description, "description", "", "override the final commit description")
-	return cmd
-}
-
-func newTaskReviewCommand(opts *rootOptions) *cobra.Command {
-	var pipelineName string
-	cmd := &cobra.Command{
-		Use:   "review <task-id>",
-		Short: "Run the local review pipeline for completed task work",
-		Long: "Run the selected local review gate for completed task work.\n\n" +
-			"task review is a compatibility entry point; use task run for normal workflow advancement and task review show for inspection.\n\n" +
-			"Pipeline selection uses --pipeline, then the repo registry review_pipeline, " +
-			"then reviews.default_pipeline, then the built-in manual local-review step. " +
-			"--pipeline accepts configured global pipeline names and repo-local aliases " +
-			"from review-pipeline-alias.<alias>. Configured pipelines may include check, " +
-			"manual, and agent_review steps. Approval records a passed review attempt and " +
-			"then finalizes through the same path as task done. When task run has paused " +
-			"at a manual step, task run resumes that same attempt; --pipeline may only " +
-			"name the already selected pipeline and cannot replace it. Automated blockers " +
-			"require an explicit keep, downgrade, or waive/cancel decision. They also offer restart and pause: restart reruns only the blocked automated step, while pause resumes through task run. Kept blockers " +
-			"run bounded targeted fixes and restart the pipeline from step 1 so manual " +
-			"gates must pass again. If blocker-decision input disappears, the current " +
-			"attempt is blocked; before a fresh review, each preserved blocker needs a keep, " +
-			"manually addressed, or waive disposition.\n\n" +
-			"Operational review failures require fixing the review command, environment, " +
-			"or process and rerunning task run. Exhausted autonomous blockers stay " +
-			"blocked until the operator explicitly continues. Use task review show to " +
-			"inspect persisted findings and created follow-up tasks.",
-		Args: cobra.ExactArgs(1),
-		RunE: func(command *cobra.Command, args []string) error {
-			return runTaskReview(command, opts, args[0], pipelineName)
-		},
-	}
-	cmd.Flags().StringVar(&pipelineName, "pipeline", "", "review pipeline name to use instead of repo/global defaults")
-	cmd.AddCommand(newTaskReviewShowCommand(opts))
 	return cmd
 }
 
@@ -1146,17 +1114,17 @@ func validateTaskRunRouteFlags(
 }
 
 func renderPrimaryReviewRecoveryGuidance(output io.Writer, taskID string, reason string) error {
-	_, err := fmt.Fprintf(output, "Task %s: recovered interrupted primary reviewer (%s). The candidate may contain reviewer mutations; inspect the worktree with `cd \"$(orpheus task dir %s)\" && git status --short && git diff`, then inspect audit history with `orpheus task review show %s`, before running a fresh `orpheus task run %s` or `orpheus task review %s`.\n", taskID, reason, taskID, taskID, taskID, taskID)
+	_, err := fmt.Fprintf(output, "Task %s: recovered interrupted primary reviewer (%s). The candidate may contain reviewer mutations; inspect the worktree with `cd \"$(orpheus task dir %s)\" && git status --short && git diff`, then inspect audit history with `orpheus task show review %s`, before running a fresh `orpheus task run %s`.\n", taskID, reason, taskID, taskID, taskID)
 	return err
 }
 
 func renderPrimaryReviewActiveGuidance(output io.Writer, taskID string, reason string) error {
-	_, err := fmt.Fprintf(output, "Task %s: primary reviewer is still active (%s); wait for it to finish, then inspect `orpheus task review show %s`.\n", taskID, reason, taskID)
+	_, err := fmt.Fprintf(output, "Task %s: primary reviewer is still active (%s); wait for it to finish, then inspect `orpheus task show review %s`.\n", taskID, reason, taskID)
 	return err
 }
 
 func renderPrimaryReviewUnverifiableGuidance(output io.Writer, taskID string, reason string) error {
-	_, err := fmt.Fprintf(output, "Task %s: cannot automatically recover the primary reviewer (%s); inspect `orpheus doctor` and `orpheus task review show %s`.\n", taskID, reason, taskID)
+	_, err := fmt.Fprintf(output, "Task %s: cannot automatically recover the primary reviewer (%s); inspect `orpheus doctor` and `orpheus task show review %s`.\n", taskID, reason, taskID)
 	return err
 }
 
@@ -1176,7 +1144,7 @@ func renderTaskRunRoute(output io.Writer, taskID string, route workflow.TaskRunR
 	case workflow.TaskRunActionImplementationActive:
 		message = fmt.Sprintf("Task %s: implementation attempt %d is active; wait for it to finish.\n", taskID, route.Attempt)
 	case workflow.TaskRunActionReviewActive:
-		message = fmt.Sprintf("Task %s: review attempt %d is active; inspect `orpheus task review show %s`.\n", taskID, route.Attempt, taskID)
+		message = fmt.Sprintf("Task %s: review attempt %d is active; inspect `orpheus task show review %s`.\n", taskID, route.Attempt, taskID)
 	case workflow.TaskRunActionOpenPR:
 		message = fmt.Sprintf("Task %s: pull request %s is open; run `orpheus task sync %s` to reconcile it.\n", taskID, route.PRURL, taskID)
 	case workflow.TaskRunActionCompleted:
@@ -1528,32 +1496,6 @@ func taskRunUsageOptions(
 	})
 }
 
-func runTaskReview(command *cobra.Command, opts *rootOptions, taskID string, pipelineName string) error {
-	logger := opts.log().With(
-		slog.String("component", "cli"),
-		slog.String("operation", "task_review"),
-	)
-	logger.DebugContext(command.Context(), "loading registered repos for task review")
-
-	deps, err := opts.invocation(command)
-	if err != nil {
-		return err
-	}
-	taskCtx, err := loadTaskContextFromInvocation(deps)
-	if err != nil {
-		return err
-	}
-	service := newTaskReviewLifecycleService(command, deps, taskCtx, logger, bufio.NewReader(command.InOrStdin()))
-	outcome, err := service.Run(command.Context(), workflow.ReviewLifecycleOptions{
-		TaskID:       taskID,
-		PipelineName: pipelineName,
-	})
-	if err != nil {
-		return err
-	}
-	return renderTaskReviewLifecycleOutcome(command, logger, outcome)
-}
-
 func renderTaskReviewLifecycleOutcome(
 	command *cobra.Command,
 	logger *slog.Logger,
@@ -1626,7 +1568,7 @@ func attachInteractiveReviewHooks(
 			if errors.Is(err, review.ErrManualInputUnavailable) {
 				return false, renderManualReviewHandoff(command, start.taskID(), step.Name)
 			}
-			return false, fmt.Errorf("task review %s: %w", start.taskID(), err)
+			return false, fmt.Errorf("task run %s: %w", start.taskID(), err)
 		}
 		if confirmed {
 			return true, nil
@@ -1915,7 +1857,7 @@ func runManualReviewPrompt(
 		}
 		action, err := promptManualReviewAction(command, reader, actions)
 		if err != nil {
-			return manualReviewOutcome{}, fmt.Errorf("task review %s: %w", taskID, err)
+			return manualReviewOutcome{}, fmt.Errorf("task run %s: %w", taskID, err)
 		}
 
 		result, done, err := session.handleManualReviewAction(action, reader, actions)
@@ -1947,13 +1889,13 @@ func (s manualReviewSession) importHunkNotes(reader *bufio.Reader, notes []revie
 		}
 		finding, importNote, err := promptHunkNoteFinding(s.command, reader, note)
 		if err != nil {
-			return fmt.Errorf("task review %s: import Hunk note %s: %w", s.taskID, hunkNoteID(note), err)
+			return fmt.Errorf("task run %s: import Hunk note %s: %w", s.taskID, hunkNoteID(note), err)
 		}
 		if !importNote {
 			continue
 		}
 		if _, err := s.recorder.RecordFinding(finding); err != nil {
-			return fmt.Errorf("task review %s: record Hunk note finding: %w", s.taskID, err)
+			return fmt.Errorf("task run %s: record Hunk note finding: %w", s.taskID, err)
 		}
 		if _, err := fmt.Fprintf(s.command.ErrOrStderr(), "Imported Hunk note %s as %s finding.\n", hunkNoteID(note), hunkNoteFindingTypeLabel(finding.Type)); err != nil {
 			return err
@@ -2033,7 +1975,7 @@ func (s *manualReviewSession) selectIntegrationFlow(reader *bufio.Reader) (manua
 		return manualReviewOutcome{}, false, nil
 	}
 	if _, err := s.recorder.SetIntegrationFlow(flow); err != nil {
-		return manualReviewOutcome{}, true, fmt.Errorf("task review %s: set integration flow: %w", s.taskID, err)
+		return manualReviewOutcome{}, true, fmt.Errorf("task run %s: set integration flow: %w", s.taskID, err)
 	}
 	s.integrationFlow = flow
 	if _, err := fmt.Fprintf(s.command.ErrOrStderr(), "Effective publication destination: %s. Enter an existing named branch or press enter to keep: ", s.destinationBranch); err != nil {
@@ -2046,7 +1988,7 @@ func (s *manualReviewSession) selectIntegrationFlow(reader *bufio.Reader) (manua
 	destination = strings.TrimSpace(destination)
 	if destination != "" {
 		if _, err := s.recorder.SetIntegrationDestination(destination); err != nil {
-			return manualReviewOutcome{}, true, fmt.Errorf("task review %s: set integration destination: %w", s.taskID, err)
+			return manualReviewOutcome{}, true, fmt.Errorf("task run %s: set integration destination: %w", s.taskID, err)
 		}
 		s.destinationBranch = destination
 	}
@@ -2085,10 +2027,10 @@ func (s manualReviewSession) recordFinding(
 ) (manualReviewOutcome, bool, error) {
 	finding, err := promptReviewFinding(s.command, reader, findingType)
 	if err != nil {
-		return manualReviewOutcome{}, true, fmt.Errorf("task review %s: %w", s.taskID, err)
+		return manualReviewOutcome{}, true, fmt.Errorf("task run %s: %w", s.taskID, err)
 	}
 	if _, err := s.recorder.RecordFinding(finding); err != nil {
-		return manualReviewOutcome{}, true, fmt.Errorf("task review %s: record %s finding: %w", s.taskID, label, err)
+		return manualReviewOutcome{}, true, fmt.Errorf("task run %s: record %s finding: %w", s.taskID, label, err)
 	}
 	return manualReviewOutcome{}, false, nil
 }
@@ -2110,7 +2052,7 @@ func (s manualReviewSession) reviewPriorAdvisories(reader *bufio.Reader) (manual
 		}
 		decision, err := promptReviewAdvisoryDecision(s.command, reader, advisory.index)
 		if err != nil {
-			return manualReviewOutcome{}, true, fmt.Errorf("task review %s: %w", s.taskID, err)
+			return manualReviewOutcome{}, true, fmt.Errorf("task run %s: %w", s.taskID, err)
 		}
 		switch decision {
 		case reviewAdvisoryDecisionKeep:
@@ -2119,7 +2061,7 @@ func (s manualReviewSession) reviewPriorAdvisories(reader *bufio.Reader) (manual
 			return manualReviewOutcome{}, false, nil
 		case reviewAdvisoryDecisionPromote:
 			if _, err := s.recorder.PromoteAdvisoryFinding(advisory.index); err != nil {
-				return manualReviewOutcome{}, true, fmt.Errorf("task review %s: promote advisory finding %d: %w", s.taskID, advisory.index+1, err)
+				return manualReviewOutcome{}, true, fmt.Errorf("task run %s: promote advisory finding %d: %w", s.taskID, advisory.index+1, err)
 			}
 			if _, err := fmt.Fprintf(s.command.ErrOrStderr(), "Promoted advisory finding %d to blocking.\n", advisory.index+1); err != nil {
 				return manualReviewOutcome{}, true, err
@@ -2132,7 +2074,7 @@ func (s manualReviewSession) reviewPriorAdvisories(reader *bufio.Reader) (manual
 func (s manualReviewSession) loadLatestReview() (taskstate.ReviewAttempt, error) {
 	latest, err := s.recorder.LatestReview()
 	if err != nil {
-		return taskstate.ReviewAttempt{}, fmt.Errorf("task review %s: %w", s.taskID, err)
+		return taskstate.ReviewAttempt{}, fmt.Errorf("task run %s: %w", s.taskID, err)
 	}
 	return latest, nil
 }

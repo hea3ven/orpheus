@@ -79,7 +79,7 @@ func appendPriorReviewFindings(builder *strings.Builder, taskID string, findings
 			compactReviewText(finding.Title),
 		)
 	}
-	fmt.Fprintf(builder, "Inspect a finding with `orpheus task review show %s <review-attempt> <finding-number>`; for example, `orpheus task review show %s %d %d`.\n", taskID, taskID, findings[0].Attempt, findings[0].Number)
+	fmt.Fprintf(builder, "Inspect a finding with `orpheus task show review %s <review-attempt> <finding-number>`; for example, `orpheus task show review %s %d %d`.\n", taskID, taskID, findings[0].Attempt, findings[0].Number)
 	builder.WriteString("Prior decisions are context, not a prohibition: do not repeat an unchanged accepted disposition, but report a defect if it is newly applicable or its material circumstances changed.\n")
 }
 

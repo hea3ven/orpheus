@@ -100,9 +100,9 @@ func newAgentReviewAddCommand(opts *rootOptions) *cobra.Command {
 			"Use this only from an attached agent_review pipeline step. Blocking findings " +
 			"stop approval and should include --suggested-action for the follow-up task run. " +
 			"Advisory findings are recorded without blocking. Separate-task findings propose " +
-			"standalone follow-up work that task review may create as Beads with provenance.\n\n" +
+			"standalone follow-up work that task run may create as Beads with provenance.\n\n" +
 			"After the review agent exits, Orpheus records the step outcome. Operators " +
-			"inspect findings with task review show and use task run for all workflow advancement.",
+			"inspect findings with task show review and use task run for all workflow advancement.",
 		Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
 			return runAgentReviewAdd(command, opts, agentReviewAddOptions{
