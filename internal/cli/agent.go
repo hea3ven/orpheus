@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -229,7 +230,28 @@ type agentReviewAddOptions struct {
 	taskAcceptanceCriteriaFile string
 }
 
-//nolint:funlen // Command setup and the mutation-protected finding handoff stay adjacent.
+type agentReviewAddContext struct {
+	paths  state.Paths
+	store  taskstate.Store
+	review agent.ReviewContext
+}
+
+type agentReviewFindingStore interface {
+	RecordReviewFinding(
+		repoID string,
+		taskID string,
+		attempt int,
+		finding taskstate.ReviewFinding,
+	) (taskstate.ReviewAttempt, error)
+	RecordAlternateReviewFinding(
+		repoID string,
+		taskID string,
+		attempt int,
+		stepName string,
+		finding taskstate.ReviewFinding,
+	) (taskstate.ReviewAttempt, error)
+}
+
 func runAgentReviewAdd(command *cobra.Command, opts *rootOptions, addOpts agentReviewAddOptions) error {
 	logger := opts.log().With(
 		slog.String("component", "cli"),
@@ -237,62 +259,104 @@ func runAgentReviewAdd(command *cobra.Command, opts *rootOptions, addOpts agentR
 	)
 	logger.DebugContext(command.Context(), "resolving active review agent context")
 
-	deps, err := opts.invocation(command)
+	addContext, err := resolveAgentReviewAddContext(command, opts)
 	if err != nil {
 		return err
 	}
-	taskCtx, err := loadTaskContextFromInvocation(deps)
-	if err != nil {
-		return err
-	}
-	store := deps.taskStateStore
-	resolver := activeAgentContextResolver(deps, taskCtx, store)
-	reviewContext, err := resolver.ResolveReview(command.Context())
+	finding, err := buildAgentReviewFinding(addContext.review, addOpts)
 	if err != nil {
 		return fmt.Errorf("agent review add: %w", err)
 	}
-
-	finding, err := buildAgentReviewFinding(reviewContext, addOpts)
-	if err != nil {
-		return fmt.Errorf("agent review add: %w", err)
-	}
-	role := strings.TrimSpace(os.Getenv("ORPHEUS_REVIEWER_ROLE"))
-	var reviewAttempt taskstate.ReviewAttempt
-	err = withAgentReviewMutationLock(command, deps.paths, logger, func() error {
-		if role == "alternate" {
-			var recordErr error
-			reviewAttempt, recordErr = store.RecordAlternateReviewFinding(
-				reviewContext.Repository.ID, reviewContext.Task.ID, reviewContext.Review.Attempt,
-				reviewContext.Review.EnvStep, finding,
-			)
-			return recordErr
-		}
-		if role == "primary" {
-			finding.Reviewer = "primary"
-		}
-		var recordErr error
-		reviewAttempt, recordErr = store.RecordReviewFinding(
-			reviewContext.Repository.ID, reviewContext.Task.ID, reviewContext.Review.Attempt, finding,
-		)
-		return recordErr
-	})
+	reviewAttempt, err := recordAgentReviewFinding(
+		command,
+		addContext,
+		logger,
+		strings.TrimSpace(os.Getenv("ORPHEUS_REVIEWER_ROLE")),
+		finding,
+	)
 	if err != nil {
 		return fmt.Errorf("agent review add: %w", err)
 	}
 	logger.DebugContext(
 		command.Context(),
 		"recorded review finding",
-		slog.String("repo_id", reviewContext.Repository.ID),
-		slog.String("task_id", reviewContext.Task.ID),
-		slog.Int("review_attempt", reviewContext.Review.Attempt),
+		slog.String("repo_id", addContext.review.Repository.ID),
+		slog.String("task_id", addContext.review.Task.ID),
+		slog.Int("review_attempt", addContext.review.Review.Attempt),
 		slog.String("finding_type", string(finding.Type)),
 	)
-	_, err = fmt.Fprintf(
-		command.OutOrStdout(),
+	return renderAgentReviewAddResult(command.OutOrStdout(), addOpts.findingType, reviewAttempt, addContext.review.Task.ID)
+}
+
+func resolveAgentReviewAddContext(command *cobra.Command, opts *rootOptions) (agentReviewAddContext, error) {
+	deps, err := opts.invocation(command)
+	if err != nil {
+		return agentReviewAddContext{}, err
+	}
+	taskCtx, err := loadTaskContextFromInvocation(deps)
+	if err != nil {
+		return agentReviewAddContext{}, err
+	}
+	reviewContext, err := activeAgentContextResolver(deps, taskCtx, deps.taskStateStore).ResolveReview(command.Context())
+	if err != nil {
+		return agentReviewAddContext{}, fmt.Errorf("agent review add: %w", err)
+	}
+	return agentReviewAddContext{
+		paths:  deps.paths,
+		store:  deps.taskStateStore,
+		review: reviewContext,
+	}, nil
+}
+
+func recordAgentReviewFinding(
+	command *cobra.Command,
+	ctx agentReviewAddContext,
+	logger *slog.Logger,
+	role string,
+	finding taskstate.ReviewFinding,
+) (taskstate.ReviewAttempt, error) {
+	var reviewAttempt taskstate.ReviewAttempt
+	err := withAgentReviewMutationLock(command, ctx.paths, logger, func() error {
+		var err error
+		reviewAttempt, err = persistAgentReviewFinding(ctx.store, ctx.review, role, finding)
+		return err
+	})
+	return reviewAttempt, err
+}
+
+func persistAgentReviewFinding(
+	store agentReviewFindingStore,
+	ctx agent.ReviewContext,
+	role string,
+	finding taskstate.ReviewFinding,
+) (taskstate.ReviewAttempt, error) {
+	if role == "alternate" {
+		return store.RecordAlternateReviewFinding(
+			ctx.Repository.ID,
+			ctx.Task.ID,
+			ctx.Review.Attempt,
+			ctx.Review.EnvStep,
+			finding,
+		)
+	}
+	if role == "primary" {
+		finding.Reviewer = "primary"
+	}
+	return store.RecordReviewFinding(ctx.Repository.ID, ctx.Task.ID, ctx.Review.Attempt, finding)
+}
+
+func renderAgentReviewAddResult(
+	output io.Writer,
+	findingType string,
+	reviewAttempt taskstate.ReviewAttempt,
+	taskID string,
+) error {
+	_, err := fmt.Fprintf(
+		output,
 		"Recorded %s review finding %d for %s.\n",
-		addOpts.findingType,
+		findingType,
 		len(reviewAttempt.Findings),
-		reviewContext.Task.ID,
+		taskID,
 	)
 	return err
 }

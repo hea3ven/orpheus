@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -246,5 +247,140 @@ func TestAlternateFindingPromptRendersReviewerProvenance(t *testing.T) {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("output missing %q:\n%s", want, output.String())
 		}
+	}
+}
+
+func TestRenderAlternateReviewComparisonShowsAuthoritativeFindings(t *testing.T) {
+	var output bytes.Buffer
+	comparison := review.AlternateReviewComparison{
+		Step: review.Step{Name: "ai-review"},
+		Primary: []review.AutomatedBlocker{{
+			Index:  0,
+			Number: 2,
+			Finding: taskstate.ReviewFinding{
+				Title:           "Primary finding",
+				Description:     "Authoritative description.",
+				SuggestedAction: "Fix it.",
+			},
+		}},
+	}
+
+	if err := renderAlternateReviewComparison(&output, comparison); err != nil {
+		t.Fatalf("render comparison: %v", err)
+	}
+	for _, want := range []string{
+		`Paired reviewer comparison for step "ai-review"`,
+		"Primary findings:",
+		"Finding 2:",
+		"Title: Primary finding",
+		"Suggested action: Fix it.",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, output.String())
+		}
+	}
+}
+
+func TestRenderAlternateReviewFinding(t *testing.T) {
+	var output bytes.Buffer
+	alternate := review.AlternateFinding{
+		Index: 2,
+		Finding: taskstate.ReviewFinding{
+			Title:       "Alternate title",
+			Description: "Alternate description.",
+		},
+	}
+
+	if err := renderAlternateReviewFinding(&output, alternate); err != nil {
+		t.Fatalf("render alternate finding: %v", err)
+	}
+	for _, want := range []string{"Alternate finding 3:", "Title: Alternate title", "Description: Alternate description."} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, output.String())
+		}
+	}
+}
+
+func TestPromptAlternateReviewFindingDecisionClassifiesInput(t *testing.T) {
+	tests := []struct {
+		name                string
+		input               string
+		primaryFindingCount int
+		want                review.AlternateFindingDecision
+		wantOutput          string
+	}{
+		{
+			name:  "empty admits",
+			input: "\n",
+			want:  review.AlternateFindingDecision{FindingIndex: 4, Classification: taskstate.AlternateFindingAdmitted},
+		},
+		{
+			name:  "admit",
+			input: "admit\n",
+			want:  review.AlternateFindingDecision{FindingIndex: 4, Classification: taskstate.AlternateFindingAdmitted},
+		},
+		{
+			name:  "exclude",
+			input: "e\n",
+			want:  review.AlternateFindingDecision{FindingIndex: 4, Classification: taskstate.AlternateFindingExcluded},
+		},
+		{
+			name:                "duplicate",
+			input:               "d\n2\n",
+			primaryFindingCount: 2,
+			want:                review.AlternateFindingDecision{FindingIndex: 4, Classification: taskstate.AlternateFindingDuplicate, DuplicateOf: 1},
+		},
+		{
+			name:       "invalid classification retries",
+			input:      "invalid\na\n",
+			want:       review.AlternateFindingDecision{FindingIndex: 4, Classification: taskstate.AlternateFindingAdmitted},
+			wantOutput: "Choose admit, duplicate, exclude, or cancel.",
+		},
+		{
+			name:       "duplicate without primary retries",
+			input:      "d\na\n",
+			want:       review.AlternateFindingDecision{FindingIndex: 4, Classification: taskstate.AlternateFindingAdmitted},
+			wantOutput: "No primary findings are available as duplicate targets.",
+		},
+		{
+			name:                "invalid duplicate target retries classification",
+			input:               "d\nzero\ne\n",
+			primaryFindingCount: 1,
+			want:                review.AlternateFindingDecision{FindingIndex: 4, Classification: taskstate.AlternateFindingExcluded},
+			wantOutput:          "Enter a valid primary finding number.",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			got, err := promptAlternateReviewFindingDecision(
+				&output,
+				bufio.NewReader(strings.NewReader(test.input)),
+				4,
+				test.primaryFindingCount,
+			)
+			if err != nil {
+				t.Fatalf("prompt decision: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("decision = %#v, want %#v", got, test.want)
+			}
+			if !strings.Contains(output.String(), test.wantOutput) {
+				t.Fatalf("output missing %q:\n%s", test.wantOutput, output.String())
+			}
+		})
+	}
+}
+
+func TestPromptAlternateReviewFindingDecisionCancels(t *testing.T) {
+	var output bytes.Buffer
+	_, err := promptAlternateReviewFindingDecision(
+		&output,
+		bufio.NewReader(strings.NewReader("cancel\n")),
+		0,
+		1,
+	)
+	if !errors.Is(err, review.ErrAutomatedBlockerInputUnavailable) {
+		t.Fatalf("error = %v, want input unavailable", err)
 	}
 }
