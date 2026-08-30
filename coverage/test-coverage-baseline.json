@@ -20,8 +20,8 @@
     "integration": {
       "test_count": 457,
       "coverage": {
-        "statement_total": 20933,
-        "covered_statements": 13439
+        "statement_total": 20963,
+        "covered_statements": 13512
       },
       "packages": [
         {
@@ -228,8 +228,8 @@
     "unit": {
       "test_count": 1100,
       "coverage": {
-        "statement_total": 20933,
-        "covered_statements": 11385
+        "statement_total": 20963,
+        "covered_statements": 11400
       },
       "packages": [
         {
@@ -250,7 +250,7 @@
         {
           "name": "github.com/hea3ven/orpheus/internal/agent",
           "statement_total": 1987,
-          "covered_statements": 1646
+          "covered_statements": 1645
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/agentexec",
