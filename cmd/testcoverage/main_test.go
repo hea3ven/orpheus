@@ -63,6 +63,15 @@ func TestFinishReportWritesPartialFailureReport(t *testing.T) {
 			t.Fatalf("partial report does not contain %q: %s", want, contents)
 		}
 	}
+	markdown, err := os.ReadFile(reportSummaryPath(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"## Test quality", "**Tests failed.**", "| unit | **Fail** |"} {
+		if !strings.Contains(string(markdown), want) {
+			t.Fatalf("partial Markdown report does not contain %q:\n%s", want, markdown)
+		}
+	}
 }
 
 func TestDecodeTestEventsExcludesPackagesWithoutSelectedTestsFromTimings(t *testing.T) {
@@ -83,6 +92,21 @@ func TestDecodeTestEventsExcludesPackagesWithoutSelectedTestsFromTimings(t *test
 	}
 	if !reflect.DeepEqual(got.packages, map[string]float64{"example.test/with-tests": 0.02}) {
 		t.Fatalf("package timings = %#v, want only package with selected tests", got.packages)
+	}
+}
+
+func TestCoverageFindingMessageShowsRegressionSize(t *testing.T) {
+	got := findingMessage(finding{
+		Kind:      "coverage",
+		Prior:     75.25,
+		Current:   73.5,
+		Threshold: 0.5,
+		Message:   "coverage regressed beyond the significance policy",
+	})
+	for _, want := range []string{"baseline 75.25%", "current 73.50%", "down 1.75 percentage points", "significance threshold 0.50 percentage points"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("finding message %q does not contain %q", got, want)
+		}
 	}
 }
 
@@ -117,6 +141,56 @@ func TestTimingFindingMessageShowsCurrentBaselineBudgetAndDifferences(t *testing
 	}
 	if strings.Contains(contents, "start_line") || strings.Contains(contents, "blocks") {
 		t.Fatalf("report includes source-level coverage detail:\n%s", contents)
+	}
+}
+
+func TestReportSummaryPathDoesNotOverwriteNonJSONReport(t *testing.T) {
+	if got, want := reportSummaryPath("report.md"), "report.summary.md"; got != want {
+		t.Fatalf("reportSummaryPath(report.md) = %q, want %q", got, want)
+	}
+}
+
+func TestReportSummaryUsesTablesAndCollapsesPackageDetails(t *testing.T) {
+	report := testQualityReportWithPackages(
+		packageMetric{Name: "example.test/first", coverageMetric: coverageMetric{StatementTotal: 10, CoveredStatements: 8}},
+		packageMetric{Name: "example.test/second", coverageMetric: coverageMetric{StatementTotal: 5, CoveredStatements: 2}},
+	)
+	report.Decision = decision{
+		Status: statusRegression,
+		Findings: []finding{{
+			Kind: "coverage", Lane: "unit", Scope: "repository", Prior: 70, Current: 66.67, Threshold: 0.5,
+			Message: "coverage regressed beyond the significance policy",
+		}},
+		Warnings: []finding{{
+			Kind: "timing", Lane: "unit", Scope: "package", Name: "example.test/first",
+			Prior: 0.75, Baseline: 0.5, Current: 0.8, BudgetSeconds: 0.75, OverageSeconds: 0.05,
+			Message: "non-blocking package timing budget exceeded",
+		}},
+	}
+
+	var output bytes.Buffer
+	renderReportSummary(&output, report, "artifacts/test-coverage/report.json")
+	contents := output.String()
+	for _, want := range []string{
+		"> [!CAUTION]",
+		"**Coverage regression.**",
+		"| Lane | Result | Coverage | Test events | Selected-test time | Wall time |",
+		"| unit | **Pass** | 10/15 (66.67%) | 10 | 0.50s | 1.00s |",
+		"### Blocking issues",
+		"unit/repository",
+		"down 3.33 percentage points",
+		"### Warnings",
+		"over budget +0.050s",
+		"<details>",
+		"<summary>Package coverage and timing</summary>",
+		"Machine-readable report: `artifacts/test-coverage/report.json`",
+	} {
+		if !strings.Contains(contents, want) {
+			t.Fatalf("Markdown report does not contain %q:\n%s", want, contents)
+		}
+	}
+	if strings.Index(contents, "### Blocking issues") > strings.Index(contents, "<summary>Package coverage and timing</summary>") {
+		t.Fatalf("blocking issues appear after package details:\n%s", contents)
 	}
 }
 

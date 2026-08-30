@@ -68,9 +68,12 @@ continue to be compared with their retained package budgets. A package overrun
 is a non-blocking warning that identifies its lane, package, current measurement,
 baseline, budget, and amount over budget. The JSON report stores those entries
 under `decision.warnings`, command output labels them `warning (non-blocking)`,
-and the pull-request summary repeats them. Suite failures and coverage decisions
-retain relevant package warnings for diagnosis. The complete report is written to
-`artifacts/test-coverage/report.json`. If a lane fails, the command still runs
+and the pull-request summary repeats them. Coverage findings show the trusted
+baseline percentage, current percentage, change in percentage points, and the
+significance threshold. Suite failures and coverage decisions retain relevant
+package warnings for diagnosis. The complete report is written to
+`artifacts/test-coverage/report.json`, with a Markdown summary beside it at
+`artifacts/test-coverage/report.md`. If a lane fails, the command still runs
 the other lane and writes a partial report containing stderr, raw JSON output,
 and decoded failing-test output before returning failure. `make
 coverage` remains a compatibility alias.
@@ -109,13 +112,16 @@ The job runs `make quality` once, then runs `make lint` and `make build`
 separately. `build` is intentionally a compilation-only target, so neither
 lint nor build starts another test run. The report's decoded test executions
 supply the unit and integration test results, independent coverage, and timing
-checks. Its job summary contains a repository line and a line for each package
-with aggregate statement coverage and selected-test timing. It also repeats
-non-blocking package timing warnings with their measurements and budgets. It
-never includes source files, coverage blocks, or hit inventories. Complete and
-partial reports, plus raw setup/provisioning, quality, lint, and build logs, are
-uploaded for every job outcome. Setup diagnostics are initialized before
-checkout so failed downloads, checksum checks, and extraction remain available.
+checks. Its job summary starts with a table for the quality, lint, and build
+results, followed by a lane coverage and timing table. Blocking issues and
+warnings have separate tables. The per-package coverage and selected-test timing
+table is collapsed by default, as are command logs for failed checks. Coverage
+regressions include the size of the drop and the configured significance
+threshold. The summary never includes source files, coverage blocks, or hit
+inventories. Complete and partial reports, plus raw setup/provisioning, quality,
+lint, and build logs, are uploaded for every job outcome. Setup diagnostics are
+initialized before checkout so failed downloads, checksum checks, and extraction
+remain available.
 
 The gate writes a clear final result in its summary:
 
