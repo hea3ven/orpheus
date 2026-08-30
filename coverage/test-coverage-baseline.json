@@ -18,10 +18,10 @@
   },
   "lanes": {
     "integration": {
-      "test_count": 457,
+      "test_count": 460,
       "coverage": {
-        "statement_total": 20963,
-        "covered_statements": 13512
+        "statement_total": 20974,
+        "covered_statements": 13605
       },
       "packages": [
         {
@@ -56,18 +56,18 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 5044,
-          "covered_statements": 3504
+          "statement_total": 5027,
+          "covered_statements": 3508
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/doctor",
-          "statement_total": 426,
-          "covered_statements": 296
+          "statement_total": 454,
+          "covered_statements": 349
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/git",
           "statement_total": 1575,
-          "covered_statements": 1048
+          "covered_statements": 1084
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/logging",
@@ -189,6 +189,11 @@
           "seconds": 47.345
         },
         {
+          "name": "github.com/hea3ven/orpheus/internal/doctor",
+          "baseline_seconds": 0.408,
+          "seconds": 0.658
+        },
+        {
           "name": "github.com/hea3ven/orpheus/internal/git",
           "baseline_seconds": 3.452,
           "seconds": 5.178
@@ -226,10 +231,10 @@
       ]
     },
     "unit": {
-      "test_count": 1100,
+      "test_count": 1103,
       "coverage": {
-        "statement_total": 20963,
-        "covered_statements": 11401
+        "statement_total": 20974,
+        "covered_statements": 11429
       },
       "packages": [
         {
@@ -264,13 +269,13 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 5044,
+          "statement_total": 5027,
           "covered_statements": 1987
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/doctor",
-          "statement_total": 426,
-          "covered_statements": 219
+          "statement_total": 454,
+          "covered_statements": 241
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/git",
@@ -340,7 +345,7 @@
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstate",
           "statement_total": 2254,
-          "covered_statements": 1562
+          "covered_statements": 1568
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstats",
