@@ -42,7 +42,9 @@ jobs:
         id: setup-go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.x'
+          # Coverage statement accounting changed in Go 1.27. Keep this exact
+          # version aligned with the tracked coverage baseline.
+          go-version: '1.27.0'
 
       - name: Restore pinned quality tools
         id: quality-tools
