@@ -229,7 +229,7 @@
       "test_count": 1100,
       "coverage": {
         "statement_total": 20963,
-        "covered_statements": 11400
+        "covered_statements": 11401
       },
       "packages": [
         {
@@ -250,7 +250,7 @@
         {
           "name": "github.com/hea3ven/orpheus/internal/agent",
           "statement_total": 1987,
-          "covered_statements": 1645
+          "covered_statements": 1646
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/agentexec",
