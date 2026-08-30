@@ -18,7 +18,7 @@
   },
   "lanes": {
     "integration": {
-      "test_count": 449,
+      "test_count": 457,
       "coverage": {
         "statement_total": 20933,
         "covered_statements": 13439
@@ -132,7 +132,7 @@
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstate",
           "statement_total": 2254,
-          "covered_statements": 1592
+          "covered_statements": 1605
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstats",
@@ -161,8 +161,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/workflow",
-          "statement_total": 3114,
-          "covered_statements": 2114
+          "statement_total": 3144,
+          "covered_statements": 2174
         }
       ],
       "suite_baseline_seconds": 67.371,
@@ -369,8 +369,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/workflow",
-          "statement_total": 3114,
-          "covered_statements": 1564
+          "statement_total": 3144,
+          "covered_statements": 1580
         }
       ],
       "suite_baseline_seconds": 1.9109999999999996,
