@@ -20,8 +20,8 @@
     "integration": {
       "test_count": 449,
       "coverage": {
-        "statement_total": 20832,
-        "covered_statements": 13443
+        "statement_total": 20920,
+        "covered_statements": 13434
       },
       "packages": [
         {
@@ -31,7 +31,7 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
-          "statement_total": 692,
+          "statement_total": 789,
           "covered_statements": 0
         },
         {
@@ -136,8 +136,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstats",
-          "statement_total": 608,
-          "covered_statements": 291
+          "statement_total": 599,
+          "covered_statements": 282
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/tasktarget",
@@ -226,10 +226,10 @@
       ]
     },
     "unit": {
-      "test_count": 1079,
+      "test_count": 1082,
       "coverage": {
-        "statement_total": 20832,
-        "covered_statements": 11273
+        "statement_total": 20920,
+        "covered_statements": 11348
       },
       "packages": [
         {
@@ -239,8 +239,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
-          "statement_total": 692,
-          "covered_statements": 426
+          "statement_total": 789,
+          "covered_statements": 509
         },
         {
           "name": "github.com/hea3ven/orpheus/cmd/testtiming",
@@ -250,7 +250,7 @@
         {
           "name": "github.com/hea3ven/orpheus/internal/agent",
           "statement_total": 1987,
-          "covered_statements": 1645
+          "covered_statements": 1646
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/agentexec",
@@ -344,8 +344,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/taskstats",
-          "statement_total": 608,
-          "covered_statements": 529
+          "statement_total": 599,
+          "covered_statements": 520
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/tasktarget",

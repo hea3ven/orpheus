@@ -270,163 +270,186 @@ func AggregateReportFromSnapshot(
 }
 
 // AggregateReportFromSnapshotWithOptions projects focused time-based analytical stats.
-//
-//nolint:funlen // The projection loop keeps loading, filtering, and view dispatch together.
 func AggregateReportFromSnapshotWithOptions(
 	snapshot taskmodel.SnapshotResult,
 	stateLoader StateLoader,
 	opts AggregateReportOptions,
 ) (AggregateReport, []taskmodel.RepoFailure) {
-	group := opts.Group
-	if group == "" {
-		group = GroupDay
-	}
-	view := opts.View
-	if view == "" {
-		view = ViewThroughput
-	}
-
-	report := AggregateReport{
-		Group: group,
-		View:  view,
-		From:  cloneTime(opts.From),
-		To:    cloneTime(opts.To),
-		Repos: append([]string(nil), opts.Repositories...),
-	}
-	periods := map[string]*AggregatePeriod{}
-	cohorts := map[modelCohortKey]*AggregateModelCohort{}
-	failures := make([]taskmodel.RepoFailure, 0)
-	repoFilter := newRepositoryFilter(opts.Repositories)
-	consumptionBuckets := map[string]map[string][]executionRecord{}
-
-	for _, repoSnapshot := range snapshot.Repositories {
-		if !repoFilter.matches(repoSnapshot.Repository) {
-			continue
-		}
-		for _, taskItem := range repoSnapshot.Tasks {
-			if taskItem.IssueType == taskmodel.IssueTypeEpic {
-				continue
-			}
-
-			taskState, err := stateLoader.Load(repoSnapshot.Repository.ID, taskItem.ID)
-			if err != nil {
-				failures = append(failures, taskmodel.RepoFailure{
-					Repository: repoSnapshot.Repository,
-					Source:     "task_state",
-					Operation:  "load",
-					Err:        err,
-				})
-				continue
-			}
-
-			switch view {
-			case ViewImplementation:
-				addImplementationTask(&report, periods, group, opts, repoSnapshot.Repository, taskItem, taskState)
-			case ViewReview:
-				addReviewTask(&report, periods, group, opts, repoSnapshot.Repository, taskItem, taskState)
-			case ViewConsumption:
-				collectConsumptionTask(&report, consumptionBuckets, group, opts, repoSnapshot.Repository, taskItem, taskState)
-			case ViewImplementationModel, ViewReviewerModel, ViewModelPair:
-				addModelComparisonTask(&report, cohorts, opts, taskItem, taskState)
-			default:
-				addThroughputTask(&report, periods, group, opts, taskItem, taskState)
-			}
-		}
-	}
-
-	if view == ViewConsumption {
-		for key, taskRecords := range consumptionBuckets {
-			period := ensurePeriod(periods, key)
-			for _, records := range taskRecords {
-				period.addConsumptionRecords(records)
-			}
-		}
-	}
-
-	report.Periods = sortedPeriods(periods)
-	for i := range report.Periods {
-		report.Periods[i].finish()
-	}
-	report.Cohorts = sortedModelCohorts(cohorts)
-	for i := range report.Cohorts {
-		report.Cohorts[i].finish()
-	}
-	return report, failures
+	projection := newAggregateReportProjection(opts)
+	projection.projectSnapshot(snapshot, stateLoader)
+	projection.reduceConsumption()
+	return projection.finalizeReport()
 }
 
-func addThroughputTask(
-	report *AggregateReport,
-	periods map[string]*AggregatePeriod,
-	group Group,
-	opts AggregateReportOptions,
+type aggregateReportProjection struct {
+	opts               AggregateReportOptions
+	report             AggregateReport
+	periods            map[string]*AggregatePeriod
+	cohorts            map[modelCohortKey]*AggregateModelCohort
+	failures           []taskmodel.RepoFailure
+	repositoryFilter   repositoryFilter
+	consumptionBuckets map[string]map[string][]executionRecord
+}
+
+func normalizeAggregateReportOptions(opts AggregateReportOptions) AggregateReportOptions {
+	if opts.Group == "" {
+		opts.Group = GroupDay
+	}
+	if opts.View == "" {
+		opts.View = ViewThroughput
+	}
+	opts.From = cloneTime(opts.From)
+	opts.To = cloneTime(opts.To)
+	opts.Repositories = append([]string(nil), opts.Repositories...)
+	return opts
+}
+
+func newAggregateReportProjection(opts AggregateReportOptions) *aggregateReportProjection {
+	opts = normalizeAggregateReportOptions(opts)
+	return &aggregateReportProjection{
+		opts: opts,
+		report: AggregateReport{
+			Group: opts.Group,
+			View:  opts.View,
+			From:  opts.From,
+			To:    opts.To,
+			Repos: opts.Repositories,
+		},
+		periods:            make(map[string]*AggregatePeriod),
+		cohorts:            make(map[modelCohortKey]*AggregateModelCohort),
+		failures:           make([]taskmodel.RepoFailure, 0),
+		repositoryFilter:   newRepositoryFilter(opts.Repositories),
+		consumptionBuckets: make(map[string]map[string][]executionRecord),
+	}
+}
+
+func (p *aggregateReportProjection) projectSnapshot(
+	snapshot taskmodel.SnapshotResult,
+	stateLoader StateLoader,
+) {
+	for _, repoSnapshot := range snapshot.Repositories {
+		if !p.repositoryFilter.matches(repoSnapshot.Repository) {
+			continue
+		}
+		p.projectRepository(repoSnapshot, stateLoader)
+	}
+}
+
+func (p *aggregateReportProjection) projectRepository(
+	repoSnapshot taskmodel.RepositorySnapshot,
+	stateLoader StateLoader,
+) {
+	for _, taskItem := range repoSnapshot.Tasks {
+		if taskItem.IssueType == taskmodel.IssueTypeEpic {
+			continue
+		}
+
+		state, err := stateLoader.Load(repoSnapshot.Repository.ID, taskItem.ID)
+		if err != nil {
+			p.failures = append(p.failures, taskmodel.RepoFailure{
+				Repository: repoSnapshot.Repository,
+				Source:     "task_state",
+				Operation:  "load",
+				Err:        err,
+			})
+			continue
+		}
+		p.projectTask(repoSnapshot.Repository, taskItem, state)
+	}
+}
+
+func (p *aggregateReportProjection) projectTask(
+	repository taskmodel.Repository,
+	taskItem taskmodel.Task,
+	state taskstate.TaskState,
+) {
+	switch p.opts.View {
+	case ViewImplementation:
+		p.addImplementationTask(state)
+	case ViewReview:
+		p.addReviewTask(state)
+	case ViewConsumption:
+		p.collectConsumptionTask(repository, taskItem, state)
+	case ViewImplementationModel, ViewReviewerModel, ViewModelPair:
+		p.addModelComparisonTask(taskItem, state)
+	default:
+		p.addThroughputTask(taskItem, state)
+	}
+}
+
+func (p *aggregateReportProjection) reduceConsumption() {
+	if p.opts.View != ViewConsumption {
+		return
+	}
+	for key, taskRecords := range p.consumptionBuckets {
+		period := ensurePeriod(p.periods, key)
+		for _, records := range taskRecords {
+			period.addConsumptionRecords(records)
+		}
+	}
+}
+
+func (p *aggregateReportProjection) finalizeReport() (AggregateReport, []taskmodel.RepoFailure) {
+	p.report.Periods = sortedPeriods(p.periods)
+	for i := range p.report.Periods {
+		p.report.Periods[i].finish()
+	}
+	p.report.Cohorts = sortedModelCohorts(p.cohorts)
+	for i := range p.report.Cohorts {
+		p.report.Cohorts[i].finish()
+	}
+	return p.report, p.failures
+}
+
+func (p *aggregateReportProjection) addThroughputTask(
 	taskItem taskmodel.Task,
 	state taskstate.TaskState,
 ) {
 	resolvedAt, ok := resolvedAt(taskItem, state)
 	if !ok {
-		report.TasksWithoutAnchor++
-		report.TasksWithoutResolvedTimestamp++
+		p.report.TasksWithoutAnchor++
+		p.report.TasksWithoutResolvedTimestamp++
 		return
 	}
-	if !inDateRange(resolvedAt, opts) {
+	if !inDateRange(resolvedAt, p.opts) {
 		return
 	}
 
-	period := ensurePeriod(periods, periodKey(resolvedAt, group))
+	period := ensurePeriod(p.periods, periodKey(resolvedAt, p.opts.Group))
 	period.addThroughputTask(taskItem, state, resolvedAt)
 }
 
-func addImplementationTask(
-	report *AggregateReport,
-	periods map[string]*AggregatePeriod,
-	group Group,
-	opts AggregateReportOptions,
-	_ taskmodel.Repository,
-	_ taskmodel.Task,
-	state taskstate.TaskState,
-) {
+func (p *aggregateReportProjection) addImplementationTask(state taskstate.TaskState) {
 	anchor, ok := firstImplementationDispatchAt(state)
 	if !ok {
-		report.TasksWithoutAnchor++
-		report.TasksWithoutImplementation++
+		p.report.TasksWithoutAnchor++
+		p.report.TasksWithoutImplementation++
 		return
 	}
-	if !inDateRange(anchor, opts) {
+	if !inDateRange(anchor, p.opts) {
 		return
 	}
 
-	period := ensurePeriod(periods, periodKey(anchor, group))
+	period := ensurePeriod(p.periods, periodKey(anchor, p.opts.Group))
 	period.addImplementationTask(state)
 }
 
-func addReviewTask(
-	report *AggregateReport,
-	periods map[string]*AggregatePeriod,
-	group Group,
-	opts AggregateReportOptions,
-	_ taskmodel.Repository,
-	_ taskmodel.Task,
-	state taskstate.TaskState,
-) {
+func (p *aggregateReportProjection) addReviewTask(state taskstate.TaskState) {
 	anchor, ok := firstReviewActivityAt(state)
 	if !ok {
-		report.TasksWithoutAnchor++
-		report.TasksWithoutReviewActivity++
+		p.report.TasksWithoutAnchor++
+		p.report.TasksWithoutReviewActivity++
 		return
 	}
-	if !inDateRange(anchor, opts) {
+	if !inDateRange(anchor, p.opts) {
 		return
 	}
 
-	period := ensurePeriod(periods, periodKey(anchor, group))
+	period := ensurePeriod(p.periods, periodKey(anchor, p.opts.Group))
 	period.addReviewTask(state)
 }
 
-func collectConsumptionTask(
-	report *AggregateReport,
-	buckets map[string]map[string][]executionRecord,
-	group Group,
-	opts AggregateReportOptions,
+func (p *aggregateReportProjection) collectConsumptionTask(
 	repository taskmodel.Repository,
 	taskItem taskmodel.Task,
 	state taskstate.TaskState,
@@ -435,42 +458,39 @@ func collectConsumptionTask(
 	for _, record := range executionRecords(state) {
 		anchor := record.execution.StartedAt
 		if anchor.IsZero() {
-			report.ExecutionsWithoutStartedAt++
+			p.report.ExecutionsWithoutStartedAt++
 			continue
 		}
-		if !inDateRange(anchor, opts) {
+		if !inDateRange(anchor, p.opts) {
 			continue
 		}
-		key := periodKey(anchor, group)
-		if buckets[key] == nil {
-			buckets[key] = map[string][]executionRecord{}
+		key := periodKey(anchor, p.opts.Group)
+		if p.consumptionBuckets[key] == nil {
+			p.consumptionBuckets[key] = map[string][]executionRecord{}
 		}
-		buckets[key][taskKey] = append(buckets[key][taskKey], record)
+		p.consumptionBuckets[key][taskKey] = append(p.consumptionBuckets[key][taskKey], record)
 	}
 }
 
-func addModelComparisonTask(
-	report *AggregateReport,
-	cohorts map[modelCohortKey]*AggregateModelCohort,
-	opts AggregateReportOptions,
+func (p *aggregateReportProjection) addModelComparisonTask(
 	taskItem taskmodel.Task,
 	state taskstate.TaskState,
 ) {
-	anchor, ok := modelComparisonAnchor(report.View, state)
+	anchor, ok := modelComparisonAnchor(p.opts.View, state)
 	if !ok {
-		report.TasksWithoutAnchor++
-		report.addMissingModelComparisonAnchor()
+		p.report.TasksWithoutAnchor++
+		p.report.addMissingModelComparisonAnchor()
 		return
 	}
-	if !inDateRange(anchor, opts) {
+	if !inDateRange(anchor, p.opts) {
 		return
 	}
 
 	implementationCohort := implementationModelCohort(state)
 	reviewerCohort := reviewerModelCohort(state)
-	outcomeCohort := ensureModelCohort(cohorts, modelOutcomeKey(report.View, implementationCohort, reviewerCohort))
-	outcomeCohort.addModelOutcomeTask(taskItem, state)
-	addModelComparisonUsage(cohorts, report.View, implementationCohort, reviewerCohort, state)
+	outcomeKey := modelOutcomeKey(p.opts.View, implementationCohort, reviewerCohort)
+	ensureModelCohort(p.cohorts, outcomeKey).addModelOutcomeTask(taskItem, state)
+	addModelComparisonUsage(p.cohorts, p.opts.View, implementationCohort, reviewerCohort, state)
 }
 
 func modelComparisonAnchor(view View, state taskstate.TaskState) (time.Time, bool) {

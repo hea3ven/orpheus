@@ -172,8 +172,8 @@ func writeGeneratedBaseline(opts options, result qualityReport, candidate baseli
 		return fmt.Errorf("write baseline: %w", err)
 	}
 	result.Decision = decision{Status: statusPass, Findings: []finding{{Kind: "baseline", Message: message}}, Warnings: warnings}
-	if err := writeJSON(opts.output, result); err != nil {
-		return fmt.Errorf("write report: %w", err)
+	if err := writeQualityReport(opts.output, result); err != nil {
+		return err
 	}
 	printReport(result, opts.output)
 	fmt.Printf("Wrote aggregate quality baseline to %s.\n", opts.baseline)
@@ -181,14 +181,24 @@ func writeGeneratedBaseline(opts options, result qualityReport, candidate baseli
 }
 
 func finishReport(path string, result qualityReport, resultErr error) error {
-	if err := writeJSON(path, result); err != nil {
+	if err := writeQualityReport(path, result); err != nil {
 		if resultErr != nil {
-			return errors.Join(resultErr, fmt.Errorf("write report: %w", err))
+			return errors.Join(resultErr, err)
 		}
-		return fmt.Errorf("write report: %w", err)
+		return err
 	}
 	printReport(result, path)
 	return resultErr
+}
+
+func writeQualityReport(path string, result qualityReport) error {
+	if err := writeJSON(path, result); err != nil {
+		return fmt.Errorf("write report: %w", err)
+	}
+	if err := writeReportSummary(path, result); err != nil {
+		return fmt.Errorf("write report summary: %w", err)
+	}
+	return nil
 }
 
 func errorFindings(errs []error) []finding {

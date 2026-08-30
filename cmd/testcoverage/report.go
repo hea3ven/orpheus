@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"math"
 	"os"
 )
 
@@ -55,34 +56,57 @@ func printPackageSummary(output io.Writer, lane laneReport) {
 }
 
 func findingLocation(item finding) string {
-	location := item.Lane
-	if item.Name != "" {
-		location += "/" + item.Name
-	}
+	location := findingLocationLabel(item)
 	if location != "" {
 		return location + ": "
 	}
 	return ""
 }
 
+func findingLocationLabel(item finding) string {
+	location := item.Lane
+	if item.Name != "" {
+		if location != "" {
+			location += "/"
+		}
+		location += item.Name
+	} else if item.Scope != "" {
+		if location != "" {
+			location += "/"
+		}
+		location += item.Scope
+	}
+	return location
+}
+
 func findingMessage(item finding) string {
-	if item.Kind != "timing" || item.Prior <= 0 {
+	switch {
+	case item.Kind == "coverage":
+		change := item.Current - item.Prior
+		direction := "up"
+		if change < 0 {
+			direction = "down"
+		}
+		return fmt.Sprintf("%s (baseline %.2f%%, current %.2f%%, %s %.2f percentage points; significance threshold %.2f percentage points)",
+			item.Message, item.Prior, item.Current, direction, math.Abs(change), item.Threshold)
+	case item.Kind == "timing" && item.Prior > 0:
+		baseline := item.Baseline
+		if baseline <= 0 {
+			baseline = item.Prior
+		}
+		difference := item.Current - baseline
+		percentageDifference := difference * 100 / baseline
+		budget := item.BudgetSeconds
+		if budget <= 0 {
+			budget = item.Prior
+		}
+		overBudget := item.OverageSeconds
+		if overBudget <= 0 {
+			overBudget = item.Current - budget
+		}
+		return fmt.Sprintf("%s (current %.3fs, baseline %.3fs, difference %+.3fs / %+.1f%%, budget %.3fs, over budget %+.3fs)",
+			item.Message, item.Current, baseline, difference, percentageDifference, budget, overBudget)
+	default:
 		return item.Message
 	}
-	baseline := item.Baseline
-	if baseline <= 0 {
-		baseline = item.Prior
-	}
-	difference := item.Current - baseline
-	percentageDifference := difference * 100 / baseline
-	budget := item.BudgetSeconds
-	if budget <= 0 {
-		budget = item.Prior
-	}
-	overBudget := item.OverageSeconds
-	if overBudget <= 0 {
-		overBudget = item.Current - budget
-	}
-	return fmt.Sprintf("%s (current %.3fs, baseline %.3fs, difference %+.3fs / %+.1f%%, budget %.3fs, over budget %+.3fs)",
-		item.Message, item.Current, baseline, difference, percentageDifference, budget, overBudget)
 }
