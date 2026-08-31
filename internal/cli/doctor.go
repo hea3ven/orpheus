@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -64,57 +65,68 @@ func runDoctor(command *cobra.Command, opts *rootOptions, fix bool) error {
 	return renderDoctorResult(command.OutOrStdout(), result)
 }
 
-//nolint:funlen // The doctor sections deliberately mirror distinct recovery domains.
-func renderDoctorResult(output interface{ Write([]byte) (int, error) }, result doctor.Result) error {
-	if _, err := fmt.Fprintln(output, "Implementation run recovery"); err != nil {
-		return err
+func renderDoctorResult(output io.Writer, result doctor.Result) error {
+	sections := []func(io.Writer, doctor.Result) error{
+		renderImplementationRunRecovery,
+		renderPrimaryReviewerRecovery,
+		renderSyncConflictRecovery,
+		renderClosedTaskWorktreeCleanup,
+		renderAgentUsageTelemetry,
+		renderDoctorSummary,
 	}
-	if len(result.ImplementationRows) == 0 {
-		if _, err := fmt.Fprintln(output, "No running implementation runs found."); err != nil {
+	for _, renderSection := range sections {
+		if err := renderSection(output, result); err != nil {
 			return err
 		}
-	} else if err := renderTable(output, []string{"REPO", "TASK", "ATTEMPT", "OUTCOME", "REASON"}, implementationRunRows(result.ImplementationRows)); err != nil {
-		return err
 	}
-	if _, err := fmt.Fprintln(output, "\nPrimary reviewer recovery"); err != nil {
-		return err
-	}
-	if len(result.PrimaryReviewRows) == 0 {
-		if _, err := fmt.Fprintln(output, "No running primary reviewer executions found."); err != nil {
-			return err
-		}
-	} else if err := renderTable(output, []string{"REPO", "TASK", "ATTEMPT", "STEP", "OUTCOME", "REASON"}, primaryReviewRows(result.PrimaryReviewRows)); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintln(output, "\nSync conflict recovery"); err != nil {
-		return err
-	}
-	if len(result.SyncConflictRows) == 0 {
-		if _, err := fmt.Fprintln(output, "No active sync conflict operations found."); err != nil {
-			return err
-		}
-	} else if err := renderTable(output, []string{"REPO", "TASK", "OUTCOME", "REASON"}, syncConflictRows(result.SyncConflictRows)); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintln(output, "\nClosed-task worktree cleanup"); err != nil {
-		return err
-	}
-	if len(result.WorktreeRows) == 0 {
-		if _, err := fmt.Fprintln(output, "No lingering closed-task worktrees found."); err != nil {
-			return err
-		}
-	} else if err := renderTable(output, []string{"REPO", "TASK", "OUTCOME", "WORKTREE", "ACTION"}, worktreeCleanupRows(result.WorktreeRows)); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintln(output, "\nAgent usage telemetry"); err != nil {
-		return err
-	}
-	if len(result.Rows) == 0 {
-		if _, err := fmt.Fprintln(output, "No supported agent usage telemetry issues found."); err != nil {
-			return err
-		}
-	} else if err := renderTable(
+	return nil
+}
+
+func renderImplementationRunRecovery(output io.Writer, result doctor.Result) error {
+	return renderDoctorRowsSection(
 		output,
+		"Implementation run recovery",
+		"No running implementation runs found.",
+		[]string{"REPO", "TASK", "ATTEMPT", "OUTCOME", "REASON"},
+		implementationRunRows(result.ImplementationRows),
+	)
+}
+
+func renderPrimaryReviewerRecovery(output io.Writer, result doctor.Result) error {
+	return renderDoctorRowsSection(
+		output,
+		"\nPrimary reviewer recovery",
+		"No running primary reviewer executions found.",
+		[]string{"REPO", "TASK", "ATTEMPT", "STEP", "OUTCOME", "REASON"},
+		primaryReviewRows(result.PrimaryReviewRows),
+	)
+}
+
+func renderSyncConflictRecovery(output io.Writer, result doctor.Result) error {
+	return renderDoctorRowsSection(
+		output,
+		"\nSync conflict recovery",
+		"No active sync conflict operations found.",
+		[]string{"REPO", "TASK", "OUTCOME", "REASON"},
+		syncConflictRows(result.SyncConflictRows),
+	)
+}
+
+func renderClosedTaskWorktreeCleanup(output io.Writer, result doctor.Result) error {
+	return renderDoctorRowsSection(
+		output,
+		"\nClosed-task worktree cleanup",
+		"No lingering closed-task worktrees found.",
+		[]string{"REPO", "TASK", "OUTCOME", "WORKTREE", "ACTION"},
+		worktreeCleanupRows(result.WorktreeRows),
+	)
+}
+
+func renderAgentUsageTelemetry(output io.Writer, result doctor.Result) error {
+	return renderDoctorRowsSection(
+		output,
+		"\nAgent usage telemetry",
+		"No supported agent usage telemetry issues found.",
 		[]string{
 			"REPO",
 			"TASK",
@@ -132,22 +144,27 @@ func renderDoctorResult(output interface{ Write([]byte) (int, error) }, result d
 			"LOG",
 		},
 		doctorRows(result.Rows),
-	); err != nil {
+	)
+}
+
+func renderDoctorRowsSection(output io.Writer, heading, emptyMessage string, headers []string, rows [][]string) error {
+	if _, err := fmt.Fprintln(output, heading); err != nil {
 		return err
 	}
+	if len(rows) == 0 {
+		_, err := fmt.Fprintln(output, emptyMessage)
+		return err
+	}
+	return renderTable(output, headers, rows)
+}
 
+func renderDoctorSummary(output io.Writer, result doctor.Result) error {
 	if _, err := fmt.Fprintln(output, "\nSummary"); err != nil {
 		return err
 	}
 	return renderTable(
 		output,
-		[]string{
-			"CHECKED",
-			"RECOVERABLE",
-			"RECOVERED",
-			"UNRESOLVED_UNKNOWNS",
-			"AMBIGUOUS",
-		},
+		[]string{"CHECKED", "RECOVERABLE", "RECOVERED", "UNRESOLVED_UNKNOWNS", "AMBIGUOUS"},
 		[][]string{{
 			strconv.Itoa(result.Summary.Checked),
 			strconv.Itoa(result.Summary.Recoverable),
