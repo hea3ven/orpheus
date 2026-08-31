@@ -142,6 +142,12 @@ type dispatchFollowUpPlan struct {
 	targetKind             tasktarget.TargetKind
 }
 
+type resolvedDispatchCommand struct {
+	commandContext DispatchCommandContext
+	command        DispatchCommand
+	launch         *taskstate.AgentLaunch
+}
+
 // DispatchFailureOptions describes how a failed dispatch attempt ended.
 type DispatchFailureOptions struct {
 	RepoID      string
@@ -292,42 +298,77 @@ func dispatchAttemptAttrs(repoID string, taskID string, attempt int) []slog.Attr
 	return attrs
 }
 
-//nolint:funlen // Dispatch phase diagnostics are kept inline with ordered setup mutations.
 func (s DispatchService) startLocked(
 	ctx context.Context,
 	opts DispatchStartOptions,
 ) (DispatchStartResult, error) {
-	if opts.MainMode {
-		return DispatchStartResult{}, errors.New("--main is no longer supported; use --repo-root to work in the registered repository root and publish through a pull request")
+	if err := validateDispatchTargetMode(opts); err != nil {
+		return DispatchStartResult{}, err
 	}
+	plan, err := s.validateStartPhase(ctx, opts)
+	if err != nil {
+		return DispatchStartResult{}, err
+	}
+	resolvedCommand, err := s.resolveCommandPhase(ctx, opts, plan)
+	if err != nil {
+		return DispatchStartResult{}, err
+	}
+	setup, err := s.setupTargetPhase(ctx, opts, plan)
+	if err != nil {
+		return DispatchStartResult{}, err
+	}
+	if err := s.mutateBackendPhase(ctx, opts, setup); err != nil {
+		return DispatchStartResult{}, err
+	}
+	attempt, err := s.persistRunPhase(ctx, opts, setup, plan, resolvedCommand)
+	if err != nil {
+		return DispatchStartResult{}, err
+	}
+	return DispatchStartResult{
+		Repository:   opts.Source.Repository,
+		Task:         plan.taskItem,
+		Setup:        setup,
+		Command:      resolvedCommand.command,
+		Attempt:      attempt,
+		ExecutionDir: plan.expected.WorktreePath,
+	}, nil
+}
 
+func (s DispatchService) validateStartPhase(ctx context.Context, opts DispatchStartOptions) (dispatchStartPlan, error) {
 	span := s.startPhase(ctx, "dispatch setup", opts.Source.Repository.ID, opts.TaskID)
 	plan, err := s.validateStart(ctx, opts)
 	if err != nil {
 		span.FinishError(ctx, err)
-		return DispatchStartResult{}, err
+		return dispatchStartPlan{}, err
 	}
 	span.Finish(ctx, logging.StatusSuccess,
 		slog.String("target_kind", string(plan.targetKind)),
 		slog.Bool("review_follow_up", plan.followUp != nil),
 	)
+	return plan, nil
+}
 
+func (s DispatchService) resolveCommandPhase(
+	ctx context.Context,
+	opts DispatchStartOptions,
+	plan dispatchStartPlan,
+) (resolvedDispatchCommand, error) {
 	commandContext := DispatchCommandContext{
 		Task:        plan.taskItem.Clone(),
 		SessionName: dispatchSessionName(plan.taskItem, plan.followUp),
 	}
-	span = s.startPhase(ctx, "agent command resolution", opts.Source.Repository.ID, opts.TaskID)
+	span := s.startPhase(ctx, "agent command resolution", opts.Source.Repository.ID, opts.TaskID)
 	command, err := resolveDispatchCommand(opts, plan.followUp != nil, commandContext)
 	if err != nil {
 		span.FinishError(ctx, err)
-		return DispatchStartResult{}, err
+		return resolvedDispatchCommand{}, err
 	}
 	var launch *taskstate.AgentLaunch
 	if plan.followUp != nil {
 		command, launch, err = s.prepareFollowUpResume(opts, plan, command)
 		if err != nil {
 			span.FinishError(ctx, err)
-			return DispatchStartResult{}, err
+			return resolvedDispatchCommand{}, err
 		}
 	}
 	span.Finish(ctx, logging.StatusSuccess,
@@ -336,44 +377,59 @@ func (s DispatchService) startLocked(
 		slog.String("harness", command.Harness),
 		slog.String("launch_mode", dispatchLaunchMode(launch)),
 	)
+	return resolvedDispatchCommand{commandContext: commandContext, command: command, launch: launch}, nil
+}
 
-	span = s.startPhase(ctx, "git target preparation", opts.Source.Repository.ID, opts.TaskID,
+func (s DispatchService) setupTargetPhase(
+	ctx context.Context,
+	opts DispatchStartOptions,
+	plan dispatchStartPlan,
+) (gitmeta.TaskWorktreeSetupResult, error) {
+	span := s.startPhase(ctx, "git target preparation", opts.Source.Repository.ID, opts.TaskID,
 		slog.String("target_kind", string(plan.targetKind)),
 	)
 	setup, err := s.setupTarget(ctx, opts, plan.targetKind, plan.expected.Branch, plan.followUp != nil)
 	if err != nil {
 		span.FinishError(ctx, err)
-		return DispatchStartResult{}, err
+		return gitmeta.TaskWorktreeSetupResult{}, err
 	}
 	span.Finish(ctx, logging.StatusSuccess,
 		slog.String("branch", setup.Branch),
 		slog.String("worktree", setup.WorktreePath),
 		slog.String("worktree_lifecycle", string(setup.Lifecycle)),
 	)
+	return setup, nil
+}
 
-	span = s.startPhase(ctx, "backend task mutation", opts.Source.Repository.ID, opts.TaskID)
+func (s DispatchService) mutateBackendPhase(
+	ctx context.Context,
+	opts DispatchStartOptions,
+	setup gitmeta.TaskWorktreeSetupResult,
+) error {
+	span := s.startPhase(ctx, "backend task mutation", opts.Source.Repository.ID, opts.TaskID)
 	if err := opts.Backend.MarkInProgress(ctx, opts.TaskID, setup.Branch, setup.WorktreePath); err != nil {
 		span.FinishError(ctx, err)
-		return DispatchStartResult{}, fmt.Errorf("mark task in progress: %w", err)
+		return fmt.Errorf("mark task in progress: %w", err)
 	}
 	span.Finish(ctx, logging.StatusSuccess)
+	return nil
+}
 
-	span = s.startPhase(ctx, "task run persistence", opts.Source.Repository.ID, opts.TaskID)
-	attempt, err := s.recordStart(opts, setup, command, commandContext, plan.followUp, launch)
+func (s DispatchService) persistRunPhase(
+	ctx context.Context,
+	opts DispatchStartOptions,
+	setup gitmeta.TaskWorktreeSetupResult,
+	plan dispatchStartPlan,
+	resolved resolvedDispatchCommand,
+) (taskstate.RunAttempt, error) {
+	span := s.startPhase(ctx, "task run persistence", opts.Source.Repository.ID, opts.TaskID)
+	attempt, err := s.recordStart(opts, setup, resolved.command, resolved.commandContext, plan.followUp, resolved.launch)
 	if err != nil {
 		span.FinishError(ctx, err)
-		return DispatchStartResult{}, err
+		return taskstate.RunAttempt{}, err
 	}
 	span.Finish(ctx, logging.StatusSuccess, slog.Int("attempt", attempt.Attempt))
-
-	return DispatchStartResult{
-		Repository:   opts.Source.Repository,
-		Task:         plan.taskItem,
-		Setup:        setup,
-		Command:      command,
-		Attempt:      attempt,
-		ExecutionDir: plan.expected.WorktreePath,
-	}, nil
+	return attempt, nil
 }
 
 func dispatchSessionName(taskItem task.Task, followUp *dispatchFollowUpPlan) string {
@@ -433,67 +489,100 @@ func dispatchLaunchMode(launch *taskstate.AgentLaunch) string {
 	return string(launch.Mode)
 }
 
-//nolint:funlen // Dispatch eligibility is clearer when target-lock decisions stay together.
 func (s DispatchService) validateStart(
 	ctx context.Context,
 	opts DispatchStartOptions,
 ) (dispatchStartPlan, error) {
-	if opts.MainMode {
-		return dispatchStartPlan{}, errors.New("--main is no longer supported; use --repo-root to work in the registered repository root and publish through a pull request")
+	if err := validateDispatchStartOptions(opts); err != nil {
+		return dispatchStartPlan{}, err
+	}
+	taskItem, err := resolveDispatchStartTask(ctx, opts)
+	if err != nil {
+		return dispatchStartPlan{}, err
+	}
+	lockedTarget, hasLockedTarget, err := s.resolveDispatchStartTargetLock(opts, taskItem)
+	if err != nil {
+		return dispatchStartPlan{}, err
+	}
+	return s.validateDispatchStartTarget(ctx, opts, taskItem, lockedTarget, hasLockedTarget)
+}
+
+func validateDispatchStartOptions(opts DispatchStartOptions) error {
+	if err := validateDispatchTargetMode(opts); err != nil {
+		return err
 	}
 	if opts.Backend == nil {
-		return dispatchStartPlan{}, errors.New("task dispatch backend is required")
+		return errors.New("task dispatch backend is required")
 	}
+	return nil
+}
 
+func validateDispatchTargetMode(opts DispatchStartOptions) error {
+	if opts.MainMode {
+		return errors.New("--main is no longer supported; use --repo-root to work in the registered repository root and publish through a pull request")
+	}
+	return nil
+}
+
+func resolveDispatchStartTask(ctx context.Context, opts DispatchStartOptions) (task.Task, error) {
 	taskItem := opts.Task.Clone()
 	if taskItem.ID == "" {
 		var err error
 		taskItem, err = queryDispatchTask(ctx, opts.Source, opts.TaskID, opts.Backend)
 		if err != nil {
-			return dispatchStartPlan{}, err
+			return task.Task{}, err
 		}
 	}
 	if taskItem.ID != opts.TaskID {
-		return dispatchStartPlan{}, fmt.Errorf("task dispatch preloaded task id %q does not match requested task id %q", taskItem.ID, opts.TaskID)
+		return task.Task{}, fmt.Errorf("task dispatch preloaded task id %q does not match requested task id %q", taskItem.ID, opts.TaskID)
 	}
 	if err := ensureDispatchParentEpicGate(ctx, opts.Backend, taskItem); err != nil {
-		return dispatchStartPlan{}, err
+		return task.Task{}, err
 	}
+	return taskItem, nil
+}
 
+func (s DispatchService) resolveDispatchStartTargetLock(
+	opts DispatchStartOptions,
+	taskItem task.Task,
+) (tasktarget.Target, bool, error) {
 	repo := opts.Source.Repository
 	if active, ok, err := s.RunStore.ActiveRun(repo.ID, opts.TaskID); err != nil {
-		return dispatchStartPlan{}, fmt.Errorf("inspect task state: %w", err)
+		return tasktarget.Target{}, false, fmt.Errorf("inspect task state: %w", err)
 	} else if ok {
-		return dispatchStartPlan{}, activeDispatchRunError(
-			s.RunStore,
-			repo.ID,
-			opts.TaskID,
-			active,
-		)
+		return tasktarget.Target{}, false, activeDispatchRunError(s.RunStore, repo.ID, opts.TaskID, active)
 	}
-
 	state, err := s.RunStore.Load(repo.ID, opts.TaskID)
 	if err != nil {
-		return dispatchStartPlan{}, fmt.Errorf("inspect task target state: %w", err)
+		return tasktarget.Target{}, false, fmt.Errorf("inspect task target state: %w", err)
 	}
 	lockedTarget, hasLockedTarget, permitRepoRootRetry, err := resolveDispatchLockedTarget(repo, taskItem, state, s.Paths, opts.RepoRootMode)
 	if err != nil {
-		return dispatchStartPlan{}, err
+		return tasktarget.Target{}, false, err
 	}
 	if hasLockedTarget && opts.RepoRootMode && !permitRepoRootRetry {
-		return dispatchStartPlan{}, fmt.Errorf(
+		return tasktarget.Target{}, false, fmt.Errorf(
 			"task %s already has target branch %q and worktree %q; retry without --repo-root",
 			opts.TaskID,
 			lockedTarget.Branch,
 			lockedTarget.Worktree,
 		)
 	}
+	return lockedTarget, hasLockedTarget, nil
+}
 
+func (s DispatchService) validateDispatchStartTarget(
+	ctx context.Context,
+	opts DispatchStartOptions,
+	taskItem task.Task,
+	lockedTarget tasktarget.Target,
+	hasLockedTarget bool,
+) (dispatchStartPlan, error) {
+	repo := opts.Source.Repository
 	reviewPlan, err := s.resolveReviewFollowUpPlan(repo.ID, opts.TaskID, repo, taskItem, lockedTarget, hasLockedTarget)
 	if err != nil {
 		return dispatchStartPlan{}, err
 	}
-
 	expected, targetKind, err := s.expectedSetup(opts, taskItem, lockedTarget, hasLockedTarget, reviewPlan)
 	if err != nil {
 		return dispatchStartPlan{}, err

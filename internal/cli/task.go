@@ -921,7 +921,6 @@ func runTaskDir(command *cobra.Command, opts *rootOptions, taskID string) error 
 	return err
 }
 
-//nolint:funlen // Task-run routing keeps state selection and flag validation together.
 func runTaskRun(
 	command *cobra.Command,
 	opts *rootOptions,
@@ -934,21 +933,42 @@ func runTaskRun(
 		slog.String("component", "cli"),
 		slog.String("operation", "task_run"),
 	)
-
-	deps, err := opts.invocation(command)
+	execution, err := resolveTaskRunTaskAndBackend(command, opts, logger, taskID)
 	if err != nil {
 		return err
+	}
+	route, recoveryHandled, err := routeTaskRunRecovery(command, execution)
+	if err != nil || recoveryHandled {
+		return err
+	}
+	if err := validateTaskRunRouteFlags(execution.resolved.TaskID, route.Action, agentName, pipelineName, repoRootMode); err != nil {
+		return err
+	}
+	execution.route = route
+	execution.agentName = agentName
+	execution.pipelineName = pipelineName
+	execution.repoRootMode = repoRootMode
+	return executeTaskRunRoute(command, opts, execution)
+}
+
+func resolveTaskRunTaskAndBackend(
+	command *cobra.Command,
+	opts *rootOptions,
+	logger *slog.Logger,
+	taskID string,
+) (taskRunRouteExecution, error) {
+	deps, err := opts.invocation(command)
+	if err != nil {
+		return taskRunRouteExecution{}, err
 	}
 	resolvedCtx, err := resolveTaskRunContextFromInvocation(deps, taskID)
 	if err != nil {
-		return err
+		return taskRunRouteExecution{}, err
 	}
 	resolved := resolvedCtx.Resolved
-	repo := resolvedCtx.RegisteredRepo
-
-	readBackend, err := deps.taskBackendFactory(resolved.Source)
+	backend, err := deps.taskBackendFactory(resolved.Source)
 	if err != nil {
-		return fmt.Errorf("task run %s: create backend for repo %s (%s; prefix %s): %w",
+		return taskRunRouteExecution{}, fmt.Errorf("task run %s: create backend for repo %s (%s; prefix %s): %w",
 			resolved.TaskID,
 			resolved.Source.Repository.ID,
 			resolved.Source.Repository.Name,
@@ -956,54 +976,55 @@ func runTaskRun(
 			err,
 		)
 	}
-	taskItem, err := queryTaskFromBackend(command.Context(), "task run", resolved, readBackend)
+	taskItem, err := queryTaskFromBackend(command.Context(), "task run", resolved, backend)
 	if err != nil {
-		return err
+		return taskRunRouteExecution{}, err
 	}
 	if taskItem.Status == taskmodel.StatusClosed {
-		return fmt.Errorf("task run %s: task is closed", resolved.TaskID)
+		return taskRunRouteExecution{}, fmt.Errorf("task run %s: task is closed", resolved.TaskID)
 	}
+	return taskRunRouteExecution{
+		deps:     deps,
+		logger:   logger,
+		resolved: resolved,
+		repo:     resolvedCtx.RegisteredRepo,
+		backend:  backend,
+		task:     taskItem,
+	}, nil
+}
+
+func routeTaskRunRecovery(
+	command *cobra.Command,
+	execution taskRunRouteExecution,
+) (workflow.TaskRunRoute, bool, error) {
+	resolved := execution.resolved
 	prepared, err := workflow.PrepareTaskRun(command.Context(), workflow.PrepareTaskRunOptions{
-		Paths:   deps.paths,
-		Store:   taskstate.NewStoreWithLogger(deps.paths, logger),
+		Paths:   execution.deps.paths,
+		Store:   taskstate.NewStoreWithLogger(execution.deps.paths, execution.logger),
 		RepoID:  resolved.Source.Repository.ID,
 		TaskID:  resolved.TaskID,
-		Task:    taskItem,
+		Task:    execution.task,
 		Probe:   agentexec.ProbePID,
 		Trigger: "task_run",
 	})
 	if err != nil {
-		return fmt.Errorf("task run %s: prepare workflow route: %w", resolved.TaskID, err)
+		return workflow.TaskRunRoute{}, false, fmt.Errorf("task run %s: prepare workflow route: %w", resolved.TaskID, err)
 	}
 	if prepared.Inspection.Condition == workflow.ImplementationRunRecoverable {
 		if _, err := fmt.Fprintf(command.ErrOrStderr(), "Task %s: reconciled interrupted implementation attempt (%s).\n", resolved.TaskID, prepared.Inspection.Reason); err != nil {
-			return err
+			return workflow.TaskRunRoute{}, false, err
 		}
 	}
 	switch prepared.ReviewInspection.Condition {
 	case workflow.AttachedExecutionRecoverable, workflow.AttachedExecutionAlreadyRecovered:
-		return renderPrimaryReviewRecoveryGuidance(command.ErrOrStderr(), resolved.TaskID, prepared.ReviewInspection.Reason)
+		return workflow.TaskRunRoute{}, true, renderPrimaryReviewRecoveryGuidance(command.ErrOrStderr(), resolved.TaskID, prepared.ReviewInspection.Reason)
 	case workflow.AttachedExecutionLive:
-		return renderPrimaryReviewActiveGuidance(command.OutOrStdout(), resolved.TaskID, prepared.ReviewInspection.Reason)
+		return workflow.TaskRunRoute{}, true, renderPrimaryReviewActiveGuidance(command.OutOrStdout(), resolved.TaskID, prepared.ReviewInspection.Reason)
 	case workflow.AttachedExecutionUnverifiable:
-		return renderPrimaryReviewUnverifiableGuidance(command.ErrOrStderr(), resolved.TaskID, prepared.ReviewInspection.Reason)
+		return workflow.TaskRunRoute{}, true, renderPrimaryReviewUnverifiableGuidance(command.ErrOrStderr(), resolved.TaskID, prepared.ReviewInspection.Reason)
+	default:
+		return prepared.Route, false, nil
 	}
-	route := prepared.Route
-	if err := validateTaskRunRouteFlags(resolved.TaskID, route.Action, agentName, pipelineName, repoRootMode); err != nil {
-		return err
-	}
-	return executeTaskRunRoute(command, opts, taskRunRouteExecution{
-		deps:         deps,
-		logger:       logger,
-		resolved:     resolved,
-		repo:         repo,
-		backend:      readBackend,
-		task:         taskItem,
-		route:        route,
-		agentName:    agentName,
-		pipelineName: pipelineName,
-		repoRootMode: repoRootMode,
-	})
 }
 
 type taskRunRouteExecution struct {

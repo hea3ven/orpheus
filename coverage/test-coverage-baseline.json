@@ -20,8 +20,8 @@
     "integration": {
       "test_count": 460,
       "coverage": {
-        "statement_total": 20974,
-        "covered_statements": 13605
+        "statement_total": 20994,
+        "covered_statements": 13621
       },
       "packages": [
         {
@@ -56,8 +56,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 5027,
-          "covered_statements": 3508
+          "statement_total": 5031,
+          "covered_statements": 3511
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/doctor",
@@ -161,8 +161,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/workflow",
-          "statement_total": 3144,
-          "covered_statements": 2174
+          "statement_total": 3160,
+          "covered_statements": 2187
         }
       ],
       "suite_baseline_seconds": 67.371,
@@ -233,8 +233,8 @@
     "unit": {
       "test_count": 1103,
       "coverage": {
-        "statement_total": 20974,
-        "covered_statements": 11429
+        "statement_total": 20994,
+        "covered_statements": 11442
       },
       "packages": [
         {
@@ -255,7 +255,7 @@
         {
           "name": "github.com/hea3ven/orpheus/internal/agent",
           "statement_total": 1987,
-          "covered_statements": 1646
+          "covered_statements": 1645
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/agentexec",
@@ -269,7 +269,7 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 5027,
+          "statement_total": 5031,
           "covered_statements": 1987
         },
         {
@@ -374,8 +374,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/workflow",
-          "statement_total": 3144,
-          "covered_statements": 1580
+          "statement_total": 3160,
+          "covered_statements": 1594
         }
       ],
       "suite_baseline_seconds": 1.9109999999999996,
