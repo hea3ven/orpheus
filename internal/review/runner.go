@@ -188,18 +188,8 @@ var ErrManualInputUnavailable = errors.New("manual review input unavailable")
 var ErrAutomatedBlockerInputUnavailable = errors.New("automated blocker decision input unavailable")
 
 // RunPipeline executes a configured review pipeline.
-//
-//nolint:funlen // Pipeline resumption and restart transitions must remain in execution order.
-func RunPipeline(opts PipelineRunOptions) (PipelineOutcome, error) {
-	if opts.Stdout == nil {
-		opts.Stdout = io.Discard
-	}
-	if opts.Stderr == nil {
-		opts.Stderr = io.Discard
-	}
-	if opts.Context == nil {
-		opts.Context = context.Background()
-	}
+func RunPipeline(opts PipelineRunOptions) (outcome PipelineOutcome, err error) {
+	opts = normalizePipelineRunOptions(opts)
 	span := logging.Start(opts.Context, opts.Logger, "review pipeline",
 		slog.String("component", "review"),
 		slog.String("operation", "pipeline"),
@@ -210,59 +200,74 @@ func RunPipeline(opts PipelineRunOptions) (PipelineOutcome, error) {
 		slog.String("branch", opts.Branch),
 		slog.String("cwd", opts.Workdir),
 	)
-	var finalOutcome PipelineOutcome
-	var finalErr error
 	defer func() {
 		attrs := []slog.Attr{}
-		if finalOutcome.Status != "" {
-			attrs = append(attrs, slog.String("review_status", string(finalOutcome.Status)))
+		if outcome.Status != "" {
+			attrs = append(attrs, slog.String("review_status", string(outcome.Status)))
 		}
-		span.Finish(opts.Context, reviewPipelineDiagnosticStatus(opts.Context, finalOutcome, finalErr), attrs...)
+		span.Finish(opts.Context, reviewPipelineDiagnosticStatus(opts.Context, outcome, err), attrs...)
 	}()
 
+	return executePipeline(opts)
+}
+
+func normalizePipelineRunOptions(opts PipelineRunOptions) PipelineRunOptions {
+	if opts.Stdout == nil {
+		opts.Stdout = io.Discard
+	}
+	if opts.Stderr == nil {
+		opts.Stderr = io.Discard
+	}
+	if opts.Context == nil {
+		opts.Context = context.Background()
+	}
+	return opts
+}
+
+func executePipeline(opts PipelineRunOptions) (PipelineOutcome, error) {
 	startIndex := 0
 	if opts.ResumeFromStep {
 		var err error
 		startIndex, err = pipelineStartIndex(opts.Pipeline, opts.Attempt.Step)
 		if err != nil {
-			finalErr = err
 			return PipelineOutcome{}, err
 		}
 	}
 	for stepIndex := startIndex; stepIndex < len(opts.Pipeline.Steps); {
 		step := opts.Pipeline.Steps[stepIndex]
-		var outcome stepOutcome
-		var err error
-		if opts.ResumeAutomatedBlockerDecision && stepIndex == startIndex {
-			// A paused decision resumes its existing findings before the step is rerun.
-			// Only an explicit restart executes the step again.
+		resumeDecision := opts.ResumeAutomatedBlockerDecision && stepIndex == startIndex
+		if resumeDecision {
 			opts.ResumeAutomatedBlockerDecision = false
-			outcome, err = resumeAutomatedBlockerDecision(opts, step)
-		} else {
-			outcome, err = runReadOnlyStep(opts, step, func() (stepOutcome, error) {
-				if step.Kind != KindManual {
-					if err := writeStepHeader(opts.Stderr, step); err != nil {
-						return stepOutcome{}, err
-					}
-				}
-				return runStep(opts, step)
-			})
 		}
+		outcome, err := executePipelineStep(opts, step, resumeDecision)
 		if err != nil {
-			finalErr = err
 			return PipelineOutcome{}, err
 		}
 		if outcome.restart {
 			continue
 		}
 		if outcome.stop {
-			finalOutcome = PipelineOutcome{Status: outcome.status}
-			return finalOutcome, nil
+			return PipelineOutcome{Status: outcome.status}, nil
 		}
 		stepIndex++
 	}
-	finalOutcome = PipelineOutcome{Status: taskstate.ReviewStatusPassed}
-	return finalOutcome, nil
+	return PipelineOutcome{Status: taskstate.ReviewStatusPassed}, nil
+}
+
+func executePipelineStep(opts PipelineRunOptions, step Step, resumeDecision bool) (stepOutcome, error) {
+	if resumeDecision {
+		// A paused decision resumes its existing findings before the step is rerun.
+		// Only an explicit restart executes the step again.
+		return resumeAutomatedBlockerDecision(opts, step)
+	}
+	return runReadOnlyStep(opts, step, func() (stepOutcome, error) {
+		if step.Kind != KindManual {
+			if err := writeStepHeader(opts.Stderr, step); err != nil {
+				return stepOutcome{}, err
+			}
+		}
+		return runStep(opts, step)
+	})
 }
 
 func reviewPipelineDiagnosticStatus(ctx context.Context, outcome PipelineOutcome, err error) string {

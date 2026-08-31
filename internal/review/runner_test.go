@@ -1385,3 +1385,48 @@ func TestIntegrationRunPipelinePausesAndResumesAutomatedBlockerDecision(t *testi
 		t.Fatalf("resume outcome=%#v err=%v", resumed, err)
 	}
 }
+
+func TestIntegrationRunPipelineRestartFromResumedAutomatedDecisionRerunsStep(t *testing.T) {
+	workdir := testutil.CanonicalTempDir(t)
+	initReviewTestGitRepo(t, workdir)
+	marker := filepath.Join(testutil.CanonicalTempDir(t), "ready")
+	check := writeReviewTestScript(t, workdir, "retry-check", fmt.Sprintf(`#!/bin/sh
+if [ ! -f %q ]; then exit 7; fi
+`, marker))
+	store, attempt := startReviewTestAttempt(t)
+	paused, err := review.RunPipeline(review.PipelineRunOptions{
+		Context: context.Background(), Store: store, RepoID: "alpha", TaskID: "op-1", Branch: "main", Workdir: workdir,
+		Attempt: attempt, Pipeline: singleStepPipeline(review.KindCheck, "unit", check),
+		PromptAutomatedBlockers: func(blockers review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
+			return []review.AutomatedBlockerDecision{{FindingIndex: blockers.Blockers[0].Index, Action: review.AutomatedBlockerActionPause}}, nil
+		},
+	})
+	if err != nil || paused.Status != taskstate.ReviewStatusWaitingForAutomatedDecision {
+		t.Fatalf("pause outcome=%#v err=%v", paused, err)
+	}
+	if _, err := store.ResumeReview("alpha", "op-1", attempt.Attempt); err != nil {
+		t.Fatal(err)
+	}
+
+	resumed, err := review.RunPipeline(review.PipelineRunOptions{
+		Context: context.Background(), Store: store, RepoID: "alpha", TaskID: "op-1", Branch: "main", Workdir: workdir,
+		Attempt: attempt, Pipeline: singleStepPipeline(review.KindCheck, "unit", check), ResumeFromStep: true, ResumeAutomatedBlockerDecision: true,
+		PromptAutomatedBlockers: func(blockers review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
+			if err := os.WriteFile(marker, []byte("ready"), 0o644); err != nil {
+				return nil, err
+			}
+			return []review.AutomatedBlockerDecision{{FindingIndex: blockers.Blockers[0].Index, Action: review.AutomatedBlockerActionRestart}}, nil
+		},
+	})
+	if err != nil || resumed.Status != taskstate.ReviewStatusPassed {
+		t.Fatalf("resume outcome=%#v err=%v", resumed, err)
+	}
+	state, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, _ := taskstate.LatestReview(state)
+	if len(latest.Steps) != 1 || len(latest.Findings) != 0 {
+		t.Fatalf("restart state = %#v, want only the successful rerun", latest)
+	}
+}
