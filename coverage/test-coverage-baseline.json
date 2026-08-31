@@ -18,10 +18,10 @@
   },
   "lanes": {
     "integration": {
-      "test_count": 460,
+      "test_count": 461,
       "coverage": {
-        "statement_total": 20974,
-        "covered_statements": 13605
+        "statement_total": 20969,
+        "covered_statements": 13617
       },
       "packages": [
         {
@@ -101,8 +101,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/review",
-          "statement_total": 1161,
-          "covered_statements": 965
+          "statement_total": 1159,
+          "covered_statements": 964
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/revieweval",
@@ -161,8 +161,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/workflow",
-          "statement_total": 3144,
-          "covered_statements": 2174
+          "statement_total": 3141,
+          "covered_statements": 2187
         }
       ],
       "suite_baseline_seconds": 67.371,
@@ -233,7 +233,7 @@
     "unit": {
       "test_count": 1103,
       "coverage": {
-        "statement_total": 20974,
+        "statement_total": 20969,
         "covered_statements": 11429
       },
       "packages": [
@@ -314,7 +314,7 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/review",
-          "statement_total": 1161,
+          "statement_total": 1159,
           "covered_statements": 150
         },
         {
@@ -374,7 +374,7 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/workflow",
-          "statement_total": 3144,
+          "statement_total": 3141,
           "covered_statements": 1580
         }
       ],
