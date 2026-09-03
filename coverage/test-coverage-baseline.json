@@ -20,8 +20,8 @@
     "integration": {
       "test_count": 461,
       "coverage": {
-        "statement_total": 20989,
-        "covered_statements": 13633
+        "statement_total": 21002,
+        "covered_statements": 13645
       },
       "packages": [
         {
@@ -161,8 +161,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/workflow",
-          "statement_total": 3157,
-          "covered_statements": 2200
+          "statement_total": 3170,
+          "covered_statements": 2212
         }
       ],
       "suite_baseline_seconds": 67.371,
@@ -233,7 +233,7 @@
     "unit": {
       "test_count": 1103,
       "coverage": {
-        "statement_total": 20989,
+        "statement_total": 21002,
         "covered_statements": 11443
       },
       "packages": [
@@ -374,7 +374,7 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/workflow",
-          "statement_total": 3157,
+          "statement_total": 3170,
           "covered_statements": 1594
         }
       ],

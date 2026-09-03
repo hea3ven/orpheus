@@ -536,7 +536,6 @@ type autonomousReviewLoopOptions struct {
 
 var errReviewFollowUpIncomplete = errors.New("autonomous review follow-up completed without agent completion")
 
-//nolint:funlen // The lifecycle loop keeps terminal outcomes and retry transitions together.
 func (s ReviewLifecycleService) executeAutonomousReviewLoop(
 	ctx context.Context,
 	start ReviewAttemptContext,
@@ -547,43 +546,14 @@ func (s ReviewLifecycleService) executeAutonomousReviewLoop(
 		return reviewLifecycleOperationalFailure(start, err), err
 	}
 
-	attemptsUsed := 0
 	current := start
-	for {
-		var result taskstate.ReviewStatus
-		if current.Review.Status == taskstate.ReviewStatusBlocked {
-			// A fresh invocation can continue an eligible blocked review without
-			// asking the manual reviewer to keep the same findings again. That
-			// blocked review is the first attempt in its fresh repair budget.
-			attemptsUsed++
-			result = taskstate.ReviewStatusBlocked
-		} else {
-			attemptsUsed++
-			var err error
-			result, err = s.executeReviewAttempt(ctx, current)
-			if err != nil {
-				return reviewLifecycleOperationalFailure(current, err), err
-			}
+	for attemptsUsed := 1; ; attemptsUsed++ {
+		result, err := s.executeAutonomousReviewAttempt(ctx, current)
+		if err != nil {
+			return reviewLifecycleOperationalFailure(current, err), err
 		}
-
-		switch result {
-		case taskstate.ReviewStatusPassed:
-			finalized, err := s.finalizeApprovedReview(ctx, current)
-			if err != nil {
-				return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomePublicationRetry, Context: current, Err: err}, err
-			}
-			return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomePassed, Context: current, Finalization: finalized}, nil
-		case taskstate.ReviewStatusBlocked:
-		case taskstate.ReviewStatusWaitingForManual:
-			return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeWaitingForManual, Context: current}, nil
-		case taskstate.ReviewStatusWaitingForAutomatedDecision:
-			return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeWaitingForAutomatedDecision, Context: current}, nil
-		case taskstate.ReviewStatusAborted:
-			return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeAborted, Context: current}, nil
-		case taskstate.ReviewStatusFailed:
-			return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeOperationalFail, Context: current}, nil
-		default:
-			return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeBlocked, Context: current}, nil
+		if outcome, terminal, err := s.handleAutonomousReviewResult(ctx, current, result); terminal {
+			return outcome, err
 		}
 
 		latest, indexes, ok, err := latestAutonomousReviewBlockers(current.store, current.RepoID(), current.TaskID())
@@ -593,14 +563,11 @@ func (s ReviewLifecycleService) executeAutonomousReviewLoop(
 		if !ok {
 			return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeBlocked, Context: current}, nil
 		}
-		if attemptsUsed >= opts.maxAttempts {
-			if _, err := current.store.MarkReviewAutonomousBudgetExhausted(current.RepoID(), current.TaskID(), latest.Attempt); err != nil {
-				err = fmt.Errorf("task run %s: mark autonomous review budget exhausted: %w", current.TaskID(), err)
-				return reviewLifecycleOperationalFailure(current, err), err
-			}
-			if err := s.Frontend.AutonomousBudgetExhausted(current, latest.Attempt, attemptsUsed); err != nil {
-				return reviewLifecycleOperationalFailure(current, err), err
-			}
+		exhausted, err := s.enforceAutonomousReviewBudget(current, latest.Attempt, attemptsUsed, opts.maxAttempts)
+		if err != nil {
+			return reviewLifecycleOperationalFailure(current, err), err
+		}
+		if exhausted {
 			return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeExhausted, Context: current}, nil
 		}
 
@@ -613,6 +580,70 @@ func (s ReviewLifecycleService) executeAutonomousReviewLoop(
 		}
 		current = next
 	}
+}
+
+func (s ReviewLifecycleService) executeAutonomousReviewAttempt(
+	ctx context.Context,
+	current ReviewAttemptContext,
+) (taskstate.ReviewStatus, error) {
+	if current.Review.Status != taskstate.ReviewStatusBlocked {
+		return s.executeReviewAttempt(ctx, current)
+	}
+	// A fresh invocation can continue an eligible blocked review without asking
+	// the manual reviewer to keep the same findings again. It still consumes the
+	// first attempt in the fresh repair budget.
+	return taskstate.ReviewStatusBlocked, nil
+}
+
+func (s ReviewLifecycleService) handleAutonomousReviewResult(
+	ctx context.Context,
+	current ReviewAttemptContext,
+	result taskstate.ReviewStatus,
+) (ReviewLifecycleOutcome, bool, error) {
+	switch result {
+	case taskstate.ReviewStatusPassed:
+		finalized, err := s.finalizeApprovedReview(ctx, current)
+		if err != nil {
+			return ReviewLifecycleOutcome{
+				Kind: ReviewLifecycleOutcomePublicationRetry, Context: current, Err: err,
+			}, true, err
+		}
+		return ReviewLifecycleOutcome{
+			Kind: ReviewLifecycleOutcomePassed, Context: current, Finalization: finalized,
+		}, true, nil
+	case taskstate.ReviewStatusBlocked:
+		return ReviewLifecycleOutcome{}, false, nil
+	case taskstate.ReviewStatusWaitingForManual:
+		return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeWaitingForManual, Context: current}, true, nil
+	case taskstate.ReviewStatusWaitingForAutomatedDecision:
+		return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeWaitingForAutomatedDecision, Context: current}, true, nil
+	case taskstate.ReviewStatusAborted:
+		return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeAborted, Context: current}, true, nil
+	case taskstate.ReviewStatusFailed:
+		return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeOperationalFail, Context: current}, true, nil
+	default:
+		return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeBlocked, Context: current}, true, nil
+	}
+}
+
+func (s ReviewLifecycleService) enforceAutonomousReviewBudget(
+	current ReviewAttemptContext,
+	reviewAttempt int,
+	attemptsUsed int,
+	maxAttempts int,
+) (bool, error) {
+	if attemptsUsed < maxAttempts {
+		return false, nil
+	}
+	if _, err := current.store.MarkReviewAutonomousBudgetExhausted(
+		current.RepoID(), current.TaskID(), reviewAttempt,
+	); err != nil {
+		return false, fmt.Errorf("task run %s: mark autonomous review budget exhausted: %w", current.TaskID(), err)
+	}
+	if err := s.Frontend.AutonomousBudgetExhausted(current, reviewAttempt, attemptsUsed); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func autonomousFollowUpFailure(current ReviewAttemptContext, err error) (ReviewLifecycleOutcome, error) {
@@ -1519,17 +1550,46 @@ func latestAutonomousReviewBlockers(store ReviewLifecycleStore, repoID string, t
 	return latest, indexes, eligible && len(indexes) > 0, nil
 }
 
-//nolint:funlen // Dispatch, execution, and completion checks are one lifecycle transaction.
-func (s ReviewLifecycleService) runAutonomousReviewFollowUp(ctx context.Context, current ReviewAttemptContext, agentName string, reviewAttempt int, findingIndexes []int) error {
+type autonomousReviewFollowUpRun struct {
+	dispatch DispatchService
+	start    DispatchStartResult
+	prompt   string
+}
+
+func (s ReviewLifecycleService) runAutonomousReviewFollowUp(
+	ctx context.Context,
+	current ReviewAttemptContext,
+	agentName string,
+	reviewAttempt int,
+	findingIndexes []int,
+) error {
 	if s.AgentRunner == nil {
 		return errors.New("review lifecycle agent runner is required for autonomous follow-up")
 	}
 	if err := s.Frontend.AutonomousFollowUp(current, reviewAttempt, findingIndexes); err != nil {
 		return err
 	}
+	followUp, err := s.dispatchAutonomousReviewFollowUp(ctx, current, agentName)
+	if err != nil {
+		return err
+	}
+	result, runErr := s.executeAutonomousReviewFollowUpAgent(ctx, current, followUp)
+	if err := s.finalizeAutonomousReviewFollowUp(current, followUp, result, runErr); err != nil {
+		return err
+	}
+	return s.validateAutonomousReviewFollowUpCompletion(current, followUp.start.Attempt.Attempt)
+}
+
+func (s ReviewLifecycleService) dispatchAutonomousReviewFollowUp(
+	ctx context.Context,
+	current ReviewAttemptContext,
+	agentName string,
+) (autonomousReviewFollowUpRun, error) {
 	backend, err := s.BackendFactory(current.Source)
 	if err != nil {
-		return fmt.Errorf("task run %s: create backend for autonomous follow-up: %w", current.TaskID(), err)
+		return autonomousReviewFollowUpRun{}, fmt.Errorf(
+			"task run %s: create backend for autonomous follow-up: %w", current.TaskID(), err,
+		)
 	}
 	promptCapture := ""
 	dispatch := DispatchService{
@@ -1561,45 +1621,77 @@ func (s ReviewLifecycleService) runAutonomousReviewFollowUp(ctx context.Context,
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("task run %s: start autonomous follow-up: %w", current.TaskID(), err)
+		return autonomousReviewFollowUpRun{}, fmt.Errorf(
+			"task run %s: start autonomous follow-up: %w", current.TaskID(), err,
+		)
 	}
-	result, err := s.AgentRunner.RunReviewLifecycleAgent(ctx, ReviewLifecycleAgentRun{
+	return autonomousReviewFollowUpRun{dispatch: dispatch, start: start, prompt: promptCapture}, nil
+}
+
+func (s ReviewLifecycleService) executeAutonomousReviewFollowUpAgent(
+	ctx context.Context,
+	current ReviewAttemptContext,
+	followUp autonomousReviewFollowUpRun,
+) (ReviewLifecycleAgentRunResult, error) {
+	return s.AgentRunner.RunReviewLifecycleAgent(ctx, ReviewLifecycleAgentRun{
 		RepoID:       current.RepoID(),
 		TaskID:       current.TaskID(),
-		Start:        start,
-		Prompt:       promptCapture,
-		ExecutionDir: start.ExecutionDir,
+		Start:        followUp.start,
+		Prompt:       followUp.prompt,
+		ExecutionDir: followUp.start.ExecutionDir,
 	})
-	if err != nil {
-		recordErr := dispatch.Fail(DispatchFailureOptions{
+}
+
+func (s ReviewLifecycleService) finalizeAutonomousReviewFollowUp(
+	current ReviewAttemptContext,
+	followUp autonomousReviewFollowUpRun,
+	result ReviewLifecycleAgentRunResult,
+	runErr error,
+) error {
+	if runErr != nil {
+		recordErr := followUp.dispatch.Fail(DispatchFailureOptions{
 			RepoID:      current.RepoID(),
 			TaskID:      current.TaskID(),
-			Attempt:     start.Attempt.Attempt,
-			Cause:       err,
-			StartFailed: s.AgentRunner.IsStartError(err),
+			Attempt:     followUp.start.Attempt.Attempt,
+			Cause:       runErr,
+			StartFailed: s.AgentRunner.IsStartError(runErr),
 		})
 		if recordErr != nil {
-			return fmt.Errorf("task run %s: %w; additionally failed to record run failure: %w", current.TaskID(), err, recordErr)
+			return fmt.Errorf(
+				"task run %s: %w; additionally failed to record run failure: %w",
+				current.TaskID(), runErr, recordErr,
+			)
 		}
-		return fmt.Errorf("task run %s: %w", current.TaskID(), err)
+		return fmt.Errorf("task run %s: %w", current.TaskID(), runErr)
 	}
-	if err := dispatch.Finish(current.RepoID(), current.TaskID(), start.Attempt.Attempt); err != nil {
+	if err := followUp.dispatch.Finish(
+		current.RepoID(), current.TaskID(), followUp.start.Attempt.Attempt,
+	); err != nil {
 		return fmt.Errorf("task run %s: record run finish: %w", current.TaskID(), err)
 	}
 	if result.UsageError != nil {
 		return fmt.Errorf("task run %s: record run usage: %w", current.TaskID(), result.UsageError)
 	}
-	ready, err := CompletedTaskRunReadyForReview(current.store, current.RepoID(), current.TaskID(), start.Attempt.Attempt)
+	return nil
+}
+
+func (s ReviewLifecycleService) validateAutonomousReviewFollowUpCompletion(
+	current ReviewAttemptContext,
+	runAttempt int,
+) error {
+	ready, err := CompletedTaskRunReadyForReview(
+		current.store, current.RepoID(), current.TaskID(), runAttempt,
+	)
 	if err != nil {
 		return fmt.Errorf("task run %s: inspect autonomous follow-up completion: %w", current.TaskID(), err)
 	}
-	if !ready {
-		if err := s.Frontend.FollowUpRunIncomplete(current, start.Attempt.Attempt); err != nil {
-			return err
-		}
-		return errReviewFollowUpIncomplete
+	if ready {
+		return nil
 	}
-	return nil
+	if err := s.Frontend.FollowUpRunIncomplete(current, runAttempt); err != nil {
+		return err
+	}
+	return errReviewFollowUpIncomplete
 }
 
 func (s ReviewLifecycleService) startFreshAutonomousReview(ctx context.Context, previous ReviewAttemptContext) (ReviewAttemptContext, error) {
