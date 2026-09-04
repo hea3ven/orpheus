@@ -1,0 +1,125 @@
+version: 1
+coverage:
+  repository:
+    significance_percentage_points: 0.5
+    headroom_percentage_points: 0.5
+  package:
+    significance_percentage_points: 2
+    headroom_percentage_points: 2
+timing:
+  update_samples: 5
+  suite:
+    relative_headroom: 0.25
+    absolute_headroom_seconds: 0.5
+  package:
+    relative_headroom: 0.5
+    absolute_headroom_seconds: 0.25
+lanes:
+  integration:
+    coverage:
+      floor_percent: 63.34
+      packages:
+        github.com/hea3ven/orpheus/cmd/orpheus: 0
+        github.com/hea3ven/orpheus/cmd/testcoverage: 0
+        github.com/hea3ven/orpheus/cmd/testtiming: 0
+        github.com/hea3ven/orpheus/internal/agent: 64.381
+        github.com/hea3ven/orpheus/internal/agentexec: 75.193
+        github.com/hea3ven/orpheus/internal/beads: 66.724
+        github.com/hea3ven/orpheus/internal/cli: 67.769
+        github.com/hea3ven/orpheus/internal/doctor: 74.872
+        github.com/hea3ven/orpheus/internal/git: 67.028
+        github.com/hea3ven/orpheus/internal/logging: 73
+        github.com/hea3ven/orpheus/internal/pathutil: 87.474
+        github.com/hea3ven/orpheus/internal/publication: 88.244
+        github.com/hea3ven/orpheus/internal/pullrequest: 82.354
+        github.com/hea3ven/orpheus/internal/readiness: 65.568
+        github.com/hea3ven/orpheus/internal/registry: 74.923
+        github.com/hea3ven/orpheus/internal/review: 81.175
+        github.com/hea3ven/orpheus/internal/revieweval: 29.349
+        github.com/hea3ven/orpheus/internal/state: 61.38
+        github.com/hea3ven/orpheus/internal/status: 65.262
+        github.com/hea3ven/orpheus/internal/task: 62.573
+        github.com/hea3ven/orpheus/internal/taskbranch: 79
+        github.com/hea3ven/orpheus/internal/taskstate: 69.207
+        github.com/hea3ven/orpheus/internal/taskstats: 45.078
+        github.com/hea3ven/orpheus/internal/tasktarget: 78.531
+        github.com/hea3ven/orpheus/internal/testguard: 77.245
+        github.com/hea3ven/orpheus/internal/testlane: 0
+        github.com/hea3ven/orpheus/internal/testutil: 88
+        github.com/hea3ven/orpheus/internal/workflow: 68.191
+    timing:
+      ceiling_seconds: 84.214
+      packages:
+        github.com/hea3ven/orpheus/cmd/testcoverage: 0.589
+        github.com/hea3ven/orpheus/internal/agentexec: 0.644
+        github.com/hea3ven/orpheus/internal/beads: 42.452
+        github.com/hea3ven/orpheus/internal/cli: 47.345
+        github.com/hea3ven/orpheus/internal/doctor: 0.658
+        github.com/hea3ven/orpheus/internal/git: 5.178
+        github.com/hea3ven/orpheus/internal/pullrequest: 0.431
+        github.com/hea3ven/orpheus/internal/review: 2.888
+        github.com/hea3ven/orpheus/internal/revieweval: 0.479
+        github.com/hea3ven/orpheus/internal/taskbranch: 0.296
+        github.com/hea3ven/orpheus/internal/testguard: 0.489
+        github.com/hea3ven/orpheus/internal/workflow: 1.053
+  unit:
+    coverage:
+      floor_percent: 53.999
+      packages:
+        github.com/hea3ven/orpheus/cmd/orpheus: 0
+        github.com/hea3ven/orpheus/cmd/testcoverage: 65.511
+        github.com/hea3ven/orpheus/cmd/testtiming: 45.771
+        github.com/hea3ven/orpheus/internal/agent: 80.838
+        github.com/hea3ven/orpheus/internal/agentexec: 0
+        github.com/hea3ven/orpheus/internal/beads: 55.613
+        github.com/hea3ven/orpheus/internal/cli: 37.597
+        github.com/hea3ven/orpheus/internal/doctor: 51.084
+        github.com/hea3ven/orpheus/internal/git: 29.348
+        github.com/hea3ven/orpheus/internal/logging: 75.778
+        github.com/hea3ven/orpheus/internal/pathutil: 87.474
+        github.com/hea3ven/orpheus/internal/publication: 90.683
+        github.com/hea3ven/orpheus/internal/pullrequest: 4.122
+        github.com/hea3ven/orpheus/internal/readiness: 89.892
+        github.com/hea3ven/orpheus/internal/registry: 85.692
+        github.com/hea3ven/orpheus/internal/review: 10.942
+        github.com/hea3ven/orpheus/internal/revieweval: 55.937
+        github.com/hea3ven/orpheus/internal/state: 71.239
+        github.com/hea3ven/orpheus/internal/status: 90.857
+        github.com/hea3ven/orpheus/internal/task: 83.176
+        github.com/hea3ven/orpheus/internal/taskbranch: 92
+        github.com/hea3ven/orpheus/internal/taskstate: 67.565
+        github.com/hea3ven/orpheus/internal/taskstats: 84.811
+        github.com/hea3ven/orpheus/internal/tasktarget: 82.071
+        github.com/hea3ven/orpheus/internal/testguard: 56.491
+        github.com/hea3ven/orpheus/internal/testlane: 86.034
+        github.com/hea3ven/orpheus/internal/testutil: 88
+        github.com/hea3ven/orpheus/internal/workflow: 48.329
+    timing:
+      ceiling_seconds: 2.411
+      packages:
+        github.com/hea3ven/orpheus/cmd/testcoverage: 0.295
+        github.com/hea3ven/orpheus/cmd/testtiming: 0.293
+        github.com/hea3ven/orpheus/internal/agent: 0.411
+        github.com/hea3ven/orpheus/internal/agentexec: 0.289
+        github.com/hea3ven/orpheus/internal/beads: 0.307
+        github.com/hea3ven/orpheus/internal/cli: 0.36
+        github.com/hea3ven/orpheus/internal/doctor: 0.313
+        github.com/hea3ven/orpheus/internal/git: 0.372
+        github.com/hea3ven/orpheus/internal/logging: 0.289
+        github.com/hea3ven/orpheus/internal/publication: 0.293
+        github.com/hea3ven/orpheus/internal/pullrequest: 0.306
+        github.com/hea3ven/orpheus/internal/readiness: 0.29
+        github.com/hea3ven/orpheus/internal/registry: 0.297
+        github.com/hea3ven/orpheus/internal/review: 0.293
+        github.com/hea3ven/orpheus/internal/revieweval: 0.332
+        github.com/hea3ven/orpheus/internal/state: 0.293
+        github.com/hea3ven/orpheus/internal/status: 0.291
+        github.com/hea3ven/orpheus/internal/task: 0.301
+        github.com/hea3ven/orpheus/internal/taskbranch: 0.29
+        github.com/hea3ven/orpheus/internal/taskstate: 0.345
+        github.com/hea3ven/orpheus/internal/taskstats: 0.293
+        github.com/hea3ven/orpheus/internal/tasktarget: 0.447
+        github.com/hea3ven/orpheus/internal/testguard: 0.305
+        github.com/hea3ven/orpheus/internal/testlane: 0.415
+        github.com/hea3ven/orpheus/internal/testutil: 0.289
+        github.com/hea3ven/orpheus/internal/workflow: 0.404
