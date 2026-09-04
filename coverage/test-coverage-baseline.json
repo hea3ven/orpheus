@@ -18,10 +18,10 @@
   },
   "lanes": {
     "integration": {
-      "test_count": 464,
+      "test_count": 465,
       "coverage": {
-        "statement_total": 21039,
-        "covered_statements": 13687
+        "statement_total": 21026,
+        "covered_statements": 13670
       },
       "packages": [
         {
@@ -231,9 +231,9 @@
       ]
     },
     "unit": {
-      "test_count": 1105,
+      "test_count": 1109,
       "coverage": {
-        "statement_total": 21039,
+        "statement_total": 21026,
         "covered_statements": 11459
       },
       "packages": [
