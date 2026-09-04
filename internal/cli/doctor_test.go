@@ -19,7 +19,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-//nolint:funlen // The end-to-end recovery fixture covers implementation, review, and stats together.
 func TestIntegrationDoctorRecoversCodexUsageForImplementationAndReviewAgent(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -228,7 +227,6 @@ func TestIntegrationDoctorLeavesTotalOnlyCodexUsageCostUnknown(t *testing.T) {
 	is.Nil(loaded.Runs[0].Execution.UsageCost)
 }
 
-//nolint:funlen // The fixture exercises all persisted execution locations without session logs.
 func TestIntegrationDoctorStampsStoredCodexCostsWithoutSessionLogRecorrelation(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -388,7 +386,6 @@ func TestIntegrationDoctorFallsBackToRegisteredRepoRootWhenTaskTargetIsMissing(t
 	is.NotContains(stdout, "wrong-repo-session")
 }
 
-//nolint:funlen // The fixture records all recovery inputs and assertions.
 func TestIntegrationDoctorRecoversPiUsageAndReportedCost(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -498,7 +495,6 @@ func TestIntegrationDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(t *testing.
 	})
 }
 
-//nolint:funlen // The three-run fixture verifies delayed per-execution accounting.
 func testDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(
 	t *testing.T,
 	costBaseline *int64,
@@ -879,7 +875,6 @@ func TestIntegrationDoctorReportsAmbiguousPiMatchesWithoutMutating(t *testing.T)
 	is.Nil(loaded.Runs[0].Execution.UsageCost)
 }
 
-//nolint:funlen // The sync-conflict recovery fixture covers terminal event repair and stats integration.
 func TestIntegrationDoctorRecoversSyncConflictTerminalUsage(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -1009,7 +1004,6 @@ func TestIntegrationDoctorRecoversSyncConflictTerminalUsage(t *testing.T) {
 	is.Regexp(`(?m)^sync-conflict-resolution\s+2\s+10m0s\s+345\s+151\s+22\s+33\s+9\s+\$[0-9.]+\s+0\s+0$`, statsOut)
 }
 
-//nolint:funlen // The fixture records all recovery inputs and assertions.
 func TestIntegrationDoctorPrefersRecordedSyncConflictWorktreeBeforeFallbackDirs(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)

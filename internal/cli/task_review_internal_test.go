@@ -120,7 +120,6 @@ func TestTaskReviewPipelinePresentationRequiresBothOutputStreamsTerminal(t *test
 	}
 }
 
-//nolint:funlen // Covers the related plain, interactive, and NO_COLOR render modes together.
 func TestRenderManualReviewContextUsesStructuredPlainAndInteractiveOutput(t *testing.T) {
 	originalTerminal := taskReviewOutputIsTerminal
 	originalColorDisabled := manualReviewColorIsDisabled

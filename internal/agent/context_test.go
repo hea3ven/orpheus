@@ -593,7 +593,6 @@ func recordCompletedContextRun(
 	must.NoError(err)
 }
 
-//nolint:funlen // The review-attempt sequence proves active and audit-only findings stay isolated.
 func TestActiveContextResolverProvidesEarlierAuthoritativeFindingsOnly(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -668,7 +667,7 @@ func TestRenderReviewContextRendersCompactPriorAuthoritativeFindings(t *testing.
 		"Prior authoritative findings:",
 		"`1/1` · ai-review · blocking · waived · Known limitation",
 		"`2/2` · checks · separate_task · created task op-42 · Extract helper",
-		"`orpheus task review show op-1 <review-attempt> <finding-number>`",
+		"`orpheus task show review op-1 <review-attempt> <finding-number>`",
 		"do not repeat an unchanged accepted disposition",
 		"newly applicable or its material circumstances changed",
 	} {

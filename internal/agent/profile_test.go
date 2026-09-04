@@ -141,7 +141,6 @@ func TestLoadConfigBuildsStructuredCodexCommands(t *testing.T) {
 	}, reviewer.Args)
 }
 
-//nolint:funlen // The structured Pi profile fixture is clearer with implementer and reviewer assertions together.
 func TestLoadConfigBuildsStructuredPiCommands(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -473,7 +472,6 @@ func TestLoadConfigReportsMissingFileWithSetupGuidance(t *testing.T) {
 	}
 }
 
-//nolint:funlen // The validation matrix is clearer as one table of config failures.
 func TestConfigValidationErrorsAreActionable(t *testing.T) {
 	tests := []struct {
 		name string

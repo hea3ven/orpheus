@@ -71,7 +71,6 @@ func TestCreateServiceCreatesValidatedTaskGraphItem(t *testing.T) {
 	}
 }
 
-//nolint:funlen // The table documents repository policy for task and epic creation.
 func TestCreateServiceEnforcesRequiredExternalReferenceBeforeCreation(t *testing.T) {
 	for _, test := range []struct {
 		name          string

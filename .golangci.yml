@@ -32,8 +32,8 @@ linters:
         - pattern: 't[b]?\.TempDir'
           msg: use testutil.CanonicalTempDir(t) so test path identity is canonical
     funlen:
-      # Keep functions compact by default. Intentionally long workflow tests
-      # must use targeted //nolint:funlen comments with a justification.
+      # Keep production functions compact. Test files are excluded below, so
+      # long fixtures do not need local //nolint:funlen directives.
       lines: 60
       statements: 40
       ignore-comments: true
@@ -79,3 +79,10 @@ linters:
       # test churn. Keep the correctness-oriented testify checks enabled.
       disable:
         - require-error
+
+  exclusions:
+    rules:
+      # Test fixtures may exceed the production function-length limit.
+      - path: '.*_test\.go$'
+        linters:
+          - funlen

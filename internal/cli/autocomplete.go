@@ -44,14 +44,14 @@ func configureRepoCompletions(repo *cobra.Command, complete completionProvider) 
 }
 
 func configureTaskCompletions(task *cobra.Command, complete completionProvider) {
+	taskList := commandAt(task, "list")
 	taskCreate := commandAt(task, "create")
 	taskShow := commandAt(task, "show")
 	taskStats := commandAt(task, "stats")
 	taskDir := commandAt(task, "dir")
 	taskRun := commandAt(task, "run")
 	taskDone := commandAt(task, "done")
-	taskReview := commandAt(task, "review")
-	taskReviewShow := commandAt(taskReview, "show")
+	taskShowReview := commandAt(taskShow, "review")
 	taskSync := commandAt(task, "sync")
 	taskEdit := commandAt(task, "edit")
 	taskStart := commandAt(task, "start")
@@ -62,13 +62,13 @@ func configureTaskCompletions(task *cobra.Command, complete completionProvider) 
 	taskDir.ValidArgsFunction = complete.activeTasks
 	taskRun.ValidArgsFunction = complete.activeTasks
 	taskDone.ValidArgsFunction = complete.activeTasks
-	taskReview.ValidArgsFunction = complete.activeTasks
-	taskReviewShow.ValidArgsFunction = complete.inspectItems
+	taskShowReview.ValidArgsFunction = complete.inspectItems
 	taskSync.ValidArgsFunction = complete.activeTasks
 	taskEdit.ValidArgsFunction = complete.activeItems
 	taskStart.ValidArgsFunction = complete.openEpics
 	taskClose.ValidArgsFunction = complete.inProgressEpics
 
+	registerCompletion(taskList, "repo", complete.repositories)
 	registerCompletion(taskCreate, "repo", complete.repositories)
 	registerCompletion(taskCreate, "type", fixedCompletion("task", "epic"))
 	registerCompletion(taskCreate, "parent", complete.activeEpicsForRepository)
@@ -80,7 +80,6 @@ func configureTaskCompletions(task *cobra.Command, complete completionProvider) 
 	))
 	registerCompletion(taskRun, "agent", complete.agentProfiles)
 	registerCompletion(taskRun, "pipeline", complete.pipelinesForTask)
-	registerCompletion(taskReview, "pipeline", complete.pipelinesForTask)
 	registerCompletion(taskEdit, "parent", complete.activeEpicsForTask)
 	registerCompletion(taskEdit, "add-block", complete.dependenciesForTask)
 	registerCompletion(taskEdit, "remove-block", complete.dependenciesForTask)

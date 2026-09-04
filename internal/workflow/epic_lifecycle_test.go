@@ -55,7 +55,6 @@ func (b *fakeEpicLifecycleBackend) Close(_ context.Context, id string) error {
 	return nil
 }
 
-//nolint:funlen // Table cases define the lifecycle policy compactly.
 func TestEpicLifecycleStart(t *testing.T) {
 	service := EpicLifecycleService{}
 	for _, tt := range []struct {
@@ -135,7 +134,6 @@ func TestEpicLifecycleStart(t *testing.T) {
 	}
 }
 
-//nolint:funlen // Table cases define the lifecycle policy compactly.
 func TestEpicLifecycleClose(t *testing.T) {
 	service := EpicLifecycleService{}
 	for _, tt := range []struct {

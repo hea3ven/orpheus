@@ -19,8 +19,8 @@ func TestValidateTaskRunRouteFlags(t *testing.T) {
 	}{
 		{name: "dispatch accepts dispatch controls", action: workflow.TaskRunActionStartImplementation, agent: "implementer", pipe: "quality", root: true},
 		{name: "fresh review accepts review controls", action: workflow.TaskRunActionStartReview, agent: "implementer", pipe: "quality"},
-		{name: "manual resume rejects pipeline", action: workflow.TaskRunActionResumeReview, pipe: "quality", want: "--pipeline cannot affect"},
-		{name: "manual resume rejects agent", action: workflow.TaskRunActionResumeReview, agent: "implementer", want: "--agent cannot affect"},
+		{name: "resumed review rejects pipeline", action: workflow.TaskRunActionResumeReview, pipe: "quality", want: "--pipeline cannot affect"},
+		{name: "resumed review rejects agent", action: workflow.TaskRunActionResumeReview, agent: "implementer", want: "--agent cannot affect"},
 		{name: "review rejects target mode", action: workflow.TaskRunActionStartReview, root: true, want: "--repo-root only applies"},
 		{name: "finalization rejects review controls", action: workflow.TaskRunActionRetryFinalization, pipe: "quality", want: "--pipeline cannot affect"},
 		{name: "open pr rejects implementation controls", action: workflow.TaskRunActionOpenPR, root: true, want: "--repo-root only applies"},

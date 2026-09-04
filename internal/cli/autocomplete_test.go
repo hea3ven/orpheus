@@ -34,6 +34,7 @@ func TestIntegrationCompletionProtocolSuggestsContextAwareValues(t *testing.T) {
 	_ = beta
 
 	assertCompletionChoices(t, []string{"task", "show", ""}, []string{
+		"review\tInspect persisted review history, an attempt, or an authoritative finding",
 		"ar-closed\tClosed task (alpha)",
 		"ar-epic-open\tOpen epic (alpha)",
 		"ar-open\tOpen task (alpha)",
@@ -47,7 +48,7 @@ func TestIntegrationCompletionProtocolSuggestsContextAwareValues(t *testing.T) {
 		"br-epic-running\tRunning epic (beta)",
 		"br-open\tBeta task (beta)",
 	})
-	assertCompletionChoices(t, []string{"task", "review", "show", ""}, []string{
+	assertCompletionChoices(t, []string{"task", "show", "review", ""}, []string{
 		"ar-closed\tClosed task (alpha)",
 		"ar-epic-open\tOpen epic (alpha)",
 		"ar-open\tOpen task (alpha)",
@@ -63,10 +64,14 @@ func TestIntegrationCompletionProtocolSuggestsContextAwareValues(t *testing.T) {
 	})
 	assertCompletionChoices(t, []string{"task", "start", ""}, []string{"ar-epic-open\tOpen epic (alpha)"})
 	assertCompletionChoices(t, []string{"task", "close", ""}, []string{"br-epic-running\tRunning epic (beta)"})
+	assertCompletionChoices(t, []string{"task", "list", "--repo", ""}, []string{
+		completionWithDescription("alpha", "Alpha Repo ("+alpha+")"),
+		completionWithDescription("beta", "Beta Repo ("+beta+")"),
+	})
 	assertCompletionChoices(t, []string{"task", "create", "--repo", "alpha", "--parent", ""}, []string{"ar-epic-open\tOpen epic (alpha)"})
 	assertCompletionChoices(t, []string{"task", "edit", "ar-open", "--add-block", ""}, []string{"ar-epic-open\tOpen epic (alpha)"})
 	assertCompletionChoices(t, []string{"task", "run", "ar-open", "--agent", ""}, []string{"builder", "fast"})
-	assertCompletionChoices(t, []string{"task", "review", "ar-open", "--pipeline", ""}, []string{"local", "standard"})
+	assertCompletionChoices(t, []string{"task", "run", "ar-open", "--pipeline", ""}, []string{"local", "standard"})
 	assertCompletionChoices(t, []string{"repo", "config", "set", "alpha", "integration-flow", ""}, []string{"direct-merge", "pull-request"})
 }
 
@@ -116,6 +121,7 @@ func TestIntegrationCompletionProtocolSkipsUnprojectableRepositorySource(t *test
 	require.NoError(t, store.Save(registered))
 
 	assertCompletionChoices(t, []string{"task", "show", ""}, []string{
+		"review\tInspect persisted review history, an attempt, or an authoritative finding",
 		"ar-closed\tClosed task (alpha)",
 		"ar-epic-open\tOpen epic (alpha)",
 		"ar-open\tOpen task (alpha)",
