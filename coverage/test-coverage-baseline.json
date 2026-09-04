@@ -18,10 +18,10 @@
   },
   "lanes": {
     "integration": {
-      "test_count": 461,
+      "test_count": 464,
       "coverage": {
-        "statement_total": 21002,
-        "covered_statements": 13645
+        "statement_total": 21039,
+        "covered_statements": 13687
       },
       "packages": [
         {
@@ -66,8 +66,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/git",
-          "statement_total": 1575,
-          "covered_statements": 1084
+          "statement_total": 1595,
+          "covered_statements": 1101
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/logging",
@@ -161,8 +161,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/workflow",
-          "statement_total": 3170,
-          "covered_statements": 2212
+          "statement_total": 3187,
+          "covered_statements": 2237
         }
       ],
       "suite_baseline_seconds": 67.371,
@@ -231,10 +231,10 @@
       ]
     },
     "unit": {
-      "test_count": 1103,
+      "test_count": 1105,
       "coverage": {
-        "statement_total": 21002,
-        "covered_statements": 11443
+        "statement_total": 21039,
+        "covered_statements": 11459
       },
       "packages": [
         {
@@ -279,8 +279,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/git",
-          "statement_total": 1575,
-          "covered_statements": 494
+          "statement_total": 1595,
+          "covered_statements": 500
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/logging",
@@ -374,8 +374,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/workflow",
-          "statement_total": 3170,
-          "covered_statements": 1594
+          "statement_total": 3187,
+          "covered_statements": 1604
         }
       ],
       "suite_baseline_seconds": 1.9109999999999996,
