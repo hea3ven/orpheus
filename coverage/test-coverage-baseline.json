@@ -18,10 +18,10 @@
   },
   "lanes": {
     "integration": {
-      "test_count": 464,
+      "test_count": 465,
       "coverage": {
-        "statement_total": 21039,
-        "covered_statements": 13687
+        "statement_total": 21026,
+        "covered_statements": 13670
       },
       "packages": [
         {
@@ -42,7 +42,7 @@
         {
           "name": "github.com/hea3ven/orpheus/internal/agent",
           "statement_total": 1987,
-          "covered_statements": 1326
+          "covered_statements": 1319
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/agentexec",
@@ -56,8 +56,8 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 5031,
-          "covered_statements": 3511
+          "statement_total": 5018,
+          "covered_statements": 3501
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/doctor",
@@ -231,9 +231,9 @@
       ]
     },
     "unit": {
-      "test_count": 1105,
+      "test_count": 1109,
       "coverage": {
-        "statement_total": 21039,
+        "statement_total": 21026,
         "covered_statements": 11459
       },
       "packages": [
@@ -269,7 +269,7 @@
         },
         {
           "name": "github.com/hea3ven/orpheus/internal/cli",
-          "statement_total": 5031,
+          "statement_total": 5018,
           "covered_statements": 1987
         },
         {

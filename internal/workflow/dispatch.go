@@ -58,26 +58,28 @@ type DispatchRunStore interface {
 
 // DispatchCommand records the agent command selected by the caller.
 type DispatchCommand struct {
-	AgentName string
-	Command   string
-	Args      []string
-	Selection taskstate.AgentSelection
-	Harness   string
-	Model     string
-	Thinking  string
+	AgentName   string
+	Command     string
+	Args        []string
+	Selection   taskstate.AgentSelection
+	Harness     string
+	Model       string
+	Thinking    string
+	Interactive bool
 }
 
 // NewDispatchCommand converts a resolved agent command into workflow dispatch metadata.
 func NewDispatchCommand(command agent.CommandSnapshot) DispatchCommand {
 	selection := command.AgentSelection()
 	return DispatchCommand{
-		AgentName: command.AgentName,
-		Command:   command.Command,
-		Args:      append([]string{}, command.Args...),
-		Selection: selection,
-		Harness:   selection.Harness,
-		Model:     selection.Model,
-		Thinking:  selection.Thinking,
+		AgentName:   command.AgentName,
+		Command:     command.Command,
+		Args:        append([]string{}, command.Args...),
+		Selection:   selection,
+		Harness:     selection.Harness,
+		Model:       selection.Model,
+		Thinking:    selection.Thinking,
+		Interactive: command.Interactive,
 	}
 }
 
@@ -450,13 +452,14 @@ func (s DispatchService) prepareFollowUpResume(
 	}
 	prepared, launch := agent.PrepareFollowUpResume(agent.FollowUpResumeOptions{
 		Command: agent.CommandSnapshot{
-			AgentName: command.AgentName,
-			Command:   command.Command,
-			Args:      append([]string{}, command.Args...),
-			Selection: command.AgentSelection(),
-			Harness:   command.Harness,
-			Model:     command.Model,
-			Thinking:  command.Thinking,
+			AgentName:   command.AgentName,
+			Command:     command.Command,
+			Args:        append([]string{}, command.Args...),
+			Selection:   command.AgentSelection(),
+			Harness:     command.Harness,
+			Model:       command.Model,
+			Thinking:    command.Thinking,
+			Interactive: command.Interactive,
 		},
 		State:        state,
 		ExecutionDir: plan.expected.WorktreePath,
@@ -822,6 +825,7 @@ func (s DispatchService) recordStart(
 		Agent:          command.AgentName,
 		Profile:        command.AgentName,
 		Selection:      command.AgentSelection(),
+		Interactive:    command.Interactive,
 		Command:        command.Command,
 		Args:           command.Args,
 		SessionName:    commandContext.SessionName,

@@ -81,14 +81,15 @@ type Profile struct {
 
 // CommandSnapshot is the resolved command line for one dispatch.
 type CommandSnapshot struct {
-	AgentName string
-	Command   string
-	Args      []string
-	Selection taskstate.AgentSelection
-	Harness   string
-	Model     string
-	Thinking  string
-	Prompt    string
+	AgentName   string
+	Command     string
+	Args        []string
+	Selection   taskstate.AgentSelection
+	Harness     string
+	Model       string
+	Thinking    string
+	Interactive bool
+	Prompt      string
 }
 
 // AgentSelection returns the normalized model-cohort selection for this command.
@@ -294,14 +295,15 @@ func (c Config) resolveAgentProfile(agentName string, values InterpolationValues
 
 	selection := taskstate.NewAgentSelection(profile.Harness, profile.Model, profile.Thinking)
 	return CommandSnapshot{
-		AgentName: agentName,
-		Command:   interpolateProfileValue(profile.Command, values),
-		Args:      args,
-		Selection: selection,
-		Harness:   selection.Harness,
-		Model:     selection.Model,
-		Thinking:  selection.Thinking,
-		Prompt:    RenderBootstrapPrompt(),
+		AgentName:   agentName,
+		Command:     interpolateProfileValue(profile.Command, values),
+		Args:        args,
+		Selection:   selection,
+		Harness:     selection.Harness,
+		Model:       selection.Model,
+		Thinking:    selection.Thinking,
+		Interactive: profile.Interactive,
+		Prompt:      RenderBootstrapPrompt(),
 	}, nil
 }
 
@@ -539,14 +541,15 @@ func resolvePiProfile(agentName string, profile Profile, values InterpolationVal
 func newCommandSnapshot(agentName string, command string, args []string, profile Profile, prompt string) CommandSnapshot {
 	selection := taskstate.NewAgentSelection(profile.Harness, profile.Model, profile.Thinking)
 	return CommandSnapshot{
-		AgentName: agentName,
-		Command:   command,
-		Args:      args,
-		Selection: selection,
-		Harness:   selection.Harness,
-		Model:     selection.Model,
-		Thinking:  selection.Thinking,
-		Prompt:    prompt,
+		AgentName:   agentName,
+		Command:     command,
+		Args:        args,
+		Selection:   selection,
+		Harness:     selection.Harness,
+		Model:       selection.Model,
+		Thinking:    selection.Thinking,
+		Interactive: profile.Interactive,
+		Prompt:      prompt,
 	}
 }
 

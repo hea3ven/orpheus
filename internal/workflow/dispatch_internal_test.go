@@ -43,10 +43,11 @@ func TestDispatchPrepareFollowUpResumeHonorsStrictFeatureFlag(t *testing.T) {
 	service := DispatchService{RunStore: store}
 	plan := dispatchStartPlan{expected: gitmeta.TaskWorktreeSetupResult{WorktreePath: workdir}}
 	command := NewDispatchCommand(agent.CommandSnapshot{
-		AgentName: "implementer",
-		Command:   "pi",
-		Harness:   "pi",
-		Args:      []string{"--model", "gpt-5", "prompt"},
+		AgentName:   "implementer",
+		Command:     "pi",
+		Harness:     "pi",
+		Args:        []string{"--model", "gpt-5", "prompt"},
+		Interactive: true,
 	})
 	opts := DispatchStartOptions{TaskID: "op-1", Source: task.RepositorySource{Repository: task.Repository{ID: "alpha"}}}
 
@@ -57,6 +58,9 @@ func TestDispatchPrepareFollowUpResumeHonorsStrictFeatureFlag(t *testing.T) {
 	}
 	if launch.Mode != taskstate.AgentLaunchFresh || !equalStrings(fresh.Args, command.Args) {
 		t.Fatalf("disabled result = %#v, %#v", fresh.Args, launch)
+	}
+	if !fresh.Interactive {
+		t.Fatal("disabled follow-up lost interactive launch behavior")
 	}
 
 	t.Setenv("ORPHEUS_RESUME_SESSIONS", "1")
@@ -69,6 +73,9 @@ func TestDispatchPrepareFollowUpResumeHonorsStrictFeatureFlag(t *testing.T) {
 	}
 	if len(resumed.Args) < 3 || resumed.Args[0] != "--session" || resumed.Args[1] != sessionPath {
 		t.Fatalf("resumed args = %#v", resumed.Args)
+	}
+	if !resumed.Interactive {
+		t.Fatal("resumed follow-up lost interactive launch behavior")
 	}
 }
 
