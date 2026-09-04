@@ -15,8 +15,10 @@ const (
 )
 
 type options struct {
+	policy         string
 	baseline       string
 	output         string
+	updatePolicy   bool
 	writeBaseline  bool
 	forceBaseline  bool
 	compareTo      string
@@ -39,9 +41,11 @@ func parseOptions(args []string) (options, error) {
 	opts := options{}
 	flags := flag.NewFlagSet("testcoverage", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	flags.StringVar(&opts.baseline, "baseline", "coverage/test-coverage-baseline.json", "tracked aggregate quality baseline")
+	flags.StringVar(&opts.policy, "policy", ".quality.yml", "reviewed local quality policy")
+	flags.StringVar(&opts.baseline, "baseline", "coverage/test-coverage-baseline.json", "legacy tracked aggregate quality baseline")
 	flags.StringVar(&opts.output, "output", "artifacts/test-coverage/report.json", "machine-readable quality report path")
-	flags.BoolVar(&opts.writeBaseline, "write-baseline", false, "generate eligible aggregate baseline updates")
+	flags.BoolVar(&opts.updatePolicy, "update-policy", false, "update materially stale policy bounds from repeated measurements")
+	flags.BoolVar(&opts.writeBaseline, "write-baseline", false, "generate eligible legacy aggregate baseline updates")
 	flags.BoolVar(&opts.forceBaseline, "force-baseline", false, "generate a replacement baseline after an explicit maintainer override")
 	flags.StringVar(&opts.compareTo, "compare-to", "", "trusted prior baseline (normally the base branch baseline)")
 	flags.BoolVar(&opts.auditScenarios, "audit-scenarios", false, "profile every integration scenario separately (expensive)")
@@ -50,6 +54,9 @@ func parseOptions(args []string) (options, error) {
 	}
 	if flags.NArg() != 0 {
 		return options{}, errors.New("testcoverage does not accept positional arguments")
+	}
+	if opts.updatePolicy && (opts.writeBaseline || opts.forceBaseline || opts.compareTo != "" || opts.auditScenarios) {
+		return options{}, errors.New("update-policy cannot be combined with legacy baseline or scenario-audit modes")
 	}
 	if opts.writeBaseline && opts.compareTo != "" {
 		return options{}, errors.New("write-baseline and compare-to cannot be combined")
@@ -61,7 +68,71 @@ func parseOptions(args []string) (options, error) {
 }
 
 func execute(opts options) error {
+	if opts.writeBaseline || opts.forceBaseline || opts.compareTo != "" {
+		return executeLegacy(opts)
+	}
+	policy, err := loadQualityPolicy(opts.policy)
+	if err != nil {
+		return fmt.Errorf("read quality policy %s: %w", opts.policy, err)
+	}
 	work, err := os.MkdirTemp("", "orpheus-quality-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(work) }()
+
+	if opts.updatePolicy {
+		return executePolicyUpdate(opts, policy, work)
+	}
+	result, laneErrors := collectQuality(work, opts.auditScenarios)
+	result.MeasurementSamples = 1
+	if len(laneErrors) > 0 {
+		result.Decision = decision{Status: statusTestFailed, Findings: errorFindings(laneErrors)}
+		return finishReport(opts.output, result, errors.Join(laneErrors...))
+	}
+	result.Decision = assessQualityPolicy(policy, result)
+	if result.Decision.Status == statusPass {
+		return finishReport(opts.output, result, nil)
+	}
+	return finishReport(opts.output, result, fmt.Errorf("%s against %s", result.Decision.Status, opts.policy))
+}
+
+func executePolicyUpdate(opts options, policy localQualityPolicy, work string) error {
+	samples := make([]qualityReport, 0, policy.Timing.UpdateSamples)
+	for index := 0; index < policy.Timing.UpdateSamples; index++ {
+		fmt.Printf("Collecting quality policy sample %d/%d.\n", index+1, policy.Timing.UpdateSamples)
+		result, laneErrors := collectQuality(filepath.Join(work, fmt.Sprintf("sample-%d", index+1)), false)
+		result.MeasurementSamples = index + 1
+		if len(laneErrors) > 0 {
+			result.Decision = decision{Status: statusTestFailed, Findings: errorFindings(laneErrors)}
+			return finishReport(opts.output, result, fmt.Errorf("quality policy sample %d failed: %w", index+1, errors.Join(laneErrors...)))
+		}
+		samples = append(samples, result)
+	}
+	representative, changes, err := applyQualityPolicyUpdate(opts.policy, policy, samples)
+	if err != nil {
+		if len(representative.Lanes) == 0 {
+			representative = samples[len(samples)-1]
+			representative.Complete = false
+		}
+		representative.Decision = decision{Status: statusTestFailed, Findings: []finding{{Kind: "measurement", Message: err.Error()}}}
+		return finishReport(opts.output, representative, fmt.Errorf("update quality policy: %w", err))
+	}
+	representative.Decision = decision{Status: statusPass, Findings: changes}
+	if err := writeQualityReport(opts.output, representative); err != nil {
+		return err
+	}
+	printReport(representative, opts.output)
+	if len(changes) == 0 {
+		fmt.Printf("Quality policy is current; left %s unchanged.\n", opts.policy)
+		return nil
+	}
+	fmt.Printf("Updated %d quality policy bound(s) in %s.\n", len(changes), opts.policy)
+	return nil
+}
+
+func executeLegacy(opts options) error {
+	work, err := os.MkdirTemp("", "orpheus-quality-legacy-*")
 	if err != nil {
 		return err
 	}
@@ -77,6 +148,9 @@ func execute(opts options) error {
 
 func collectQuality(work string, auditScenarios bool) (qualityReport, []error) {
 	result := qualityReport{SchemaVersion: reportSchemaVersion, Lanes: make(map[string]laneReport, 2)}
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		return result, []error{fmt.Errorf("create measurement directory: %w", err)}
+	}
 	var laneErrors []error
 	detailed := make(map[string]laneCoverage, 2)
 	for _, name := range laneNames {

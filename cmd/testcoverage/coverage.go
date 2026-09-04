@@ -89,15 +89,16 @@ type laneFailure struct {
 }
 
 type laneReport struct {
-	Lane        string          `json:"lane"`
-	Command     []string        `json:"command"`
-	Passed      bool            `json:"passed"`
-	WallSeconds float64         `json:"wall_seconds"`
-	TestCount   int             `json:"test_count"`
-	Coverage    coverageMetric  `json:"coverage"`
-	Packages    []packageMetric `json:"packages,omitempty"`
-	Timings     []packageTiming `json:"package_timings,omitempty"`
-	Failure     *laneFailure    `json:"failure,omitempty"`
+	Lane                string          `json:"lane"`
+	Command             []string        `json:"command"`
+	Passed              bool            `json:"passed"`
+	WallSeconds         float64         `json:"wall_seconds"`
+	SelectedTestSeconds float64         `json:"selected_test_seconds"`
+	TestCount           int             `json:"test_count"`
+	Coverage            coverageMetric  `json:"coverage"`
+	Packages            []packageMetric `json:"packages,omitempty"`
+	Timings             []packageTiming `json:"package_timings,omitempty"`
+	Failure             *laneFailure    `json:"failure,omitempty"`
 }
 
 type testEvent struct {
@@ -184,6 +185,7 @@ func runGoTest(lane string, command []string) (laneReport, error) {
 	result.WallSeconds = time.Since(started).Seconds()
 	result.TestCount = events.testCount
 	result.Timings = sortedTimings(events.packages)
+	result.SelectedTestSeconds = selectedTestSeconds(result.Timings)
 	if events.decodeErr == nil && waitErr == nil {
 		result.Passed = true
 		return result, nil

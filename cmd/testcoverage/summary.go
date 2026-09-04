@@ -49,7 +49,7 @@ func renderReportSummary(output io.Writer, result qualityReport, reportPath stri
 			lane.Coverage.StatementTotal,
 			percentage(lane.Coverage),
 			lane.TestCount,
-			selectedTestSeconds(lane.Timings),
+			laneSelectedTestSeconds(lane),
 			lane.WallSeconds,
 		)
 	}
@@ -76,12 +76,14 @@ func decisionPresentation(status string) (alert, title, description string) {
 	switch status {
 	case statusPass:
 		return "TIP", "Quality checks passed", "No blocking test, coverage, or timing issues were found."
+	case statusPolicyUpdateRequired:
+		return "WARNING", "Quality policy update required", "Run `make quality-policy-update` and review the `.quality.yml` diff."
 	case statusRefreshRequired:
 		return "WARNING", "Baseline refresh required", "Regenerate the tracked quality baseline and include it in this pull request."
 	case statusRegression:
-		return "CAUTION", "Coverage regression", "Coverage fell beyond the configured significance policy."
+		return "CAUTION", "Coverage floor violated", "A lane or package fell below its accepted coverage floor."
 	case statusTimingFailed:
-		return "CAUTION", "Timing budget exceeded", "A test suite ran past its blocking timing budget."
+		return "CAUTION", "Timing ceiling exceeded", "A lane or package ran past its accepted timing ceiling."
 	case statusTestFailed:
 		return "CAUTION", "Tests failed", "At least one test lane did not complete successfully."
 	default:
