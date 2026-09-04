@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
@@ -20,6 +21,9 @@ func TestIntegrationAgentContextRendersValidatedWorktreeContext(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	repoPath, worktreePath, cwd, bdLogPath := setupAgentContextWorktree(t)
+	configPath, err := currentTestPaths(t).ConfigPath(agent.ConfigFile)
+	must.NoError(err)
+	must.NoError(os.Remove(configPath))
 
 	stdout, stderr := executeCommand(t, []string{"agent", "context"})
 
@@ -80,7 +84,7 @@ func TestIntegrationAgentContextRendersRepoRootFeatureBranchContext(t *testing.T
 	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
 		repoPath: {stdout: agentContextRepoRootTaskJSON(repoPath)},
 	})
-	startAgentTestRun(t, "op-root", "orpheus/op-root", repoPath)
+	startAgentTestRun(t, "op-root", "orpheus/op-root", repoPath, true)
 	setAgentRunEnv(t, "op-root", "orpheus/op-root", repoPath)
 
 	stdout, stderr := executeCommand(t, []string{"agent", "context"})
@@ -100,10 +104,10 @@ func TestIntegrationAgentContextRendersRepoRootFeatureBranchContext(t *testing.T
 	is.NotEmpty(stdout)
 }
 
-func TestIntegrationAgentContextRendersNonInteractiveProfileGuidance(t *testing.T) {
+func TestIntegrationAgentContextRendersNonInteractiveRunGuidanceAfterProfileChanges(t *testing.T) {
 	is := assert.New(t)
-	setupAgentContextWorktree(t)
-	writeAgentContextProfileConfig(t, "recorder", false)
+	setupAgentContextWorktreeWithInteractivity(t, false)
+	writeAgentContextProfileConfig(t, "recorder", true)
 
 	stdout, stderr := executeCommand(t, []string{"agent", "context"})
 
@@ -119,6 +123,28 @@ func TestIntegrationAgentContextRendersNonInteractiveProfileGuidance(t *testing.
 	} {
 		is.Contains(stdout, want)
 	}
+	is.NotContains(stdout, "attached interactive implementation session")
+}
+
+func TestIntegrationAgentContextTreatsMissingRunInteractivityAsNonInteractive(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	setupAgentContextWorktreeWithInteractivity(t, false)
+	paths := currentTestPaths(t)
+	statePath, err := paths.DataPath(filepath.Join("repos", "alpha", "tasks", "op-1.yaml"))
+	must.NoError(err)
+	stateYAML := readFileString(t, statePath)
+	must.Contains(stateYAML, "        interactive: false\n")
+	legacyStateYAML := strings.Replace(stateYAML, "        interactive: false\n", "", 1)
+	must.NoError(os.WriteFile(statePath, []byte(legacyStateYAML), 0o644))
+	configPath, err := paths.ConfigPath(agent.ConfigFile)
+	must.NoError(err)
+	must.NoError(os.WriteFile(configPath, []byte("agents:\n  defaults: {}\n  profiles: {}\n"), 0o644))
+
+	stdout, stderr := executeCommand(t, []string{"agent", "context"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "non-interactive implementation session")
 	is.NotContains(stdout, "attached interactive implementation session")
 }
 
@@ -322,6 +348,11 @@ func TestIntegrationAgentReviewAddRejectsInvalidFindingWithoutWriting(t *testing
 
 func setupAgentContextWorktree(t *testing.T) (string, string, string, string) {
 	t.Helper()
+	return setupAgentContextWorktreeWithInteractivity(t, true)
+}
+
+func setupAgentContextWorktreeWithInteractivity(t *testing.T, interactive bool) (string, string, string, string) {
+	t.Helper()
 
 	must := require.New(t)
 	root := newTestState(t)
@@ -337,7 +368,7 @@ func setupAgentContextWorktree(t *testing.T) (string, string, string, string) {
 	bdLogPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
 		repoPath: {stdout: agentContextTaskJSON(worktreePath)},
 	})
-	startAgentTestRun(t, "op-1", "orpheus/op-1", worktreePath)
+	startAgentTestRun(t, "op-1", "orpheus/op-1", worktreePath, interactive)
 	setAgentRunEnv(t, "op-1", "orpheus/op-1", worktreePath)
 	return repoPath, worktreePath, cwd, bdLogPath
 }
@@ -404,13 +435,14 @@ func writeAgentContextProfileConfig(t *testing.T, name string, interactive bool)
 	}))
 }
 
-func startAgentTestRun(t *testing.T, taskID string, branch string, worktreePath string) taskstate.RunAttempt {
+func startAgentTestRun(t *testing.T, taskID string, branch string, worktreePath string, interactive bool) taskstate.RunAttempt {
 	t.Helper()
 
 	attempt, err := taskstate.NewStore(currentTestPaths(t)).StartRun("alpha", taskID, taskstate.StartRunOptions{
-		Agent:    "recorder",
-		Branch:   branch,
-		Worktree: worktreePath,
+		Agent:       "recorder",
+		Interactive: interactive,
+		Branch:      branch,
+		Worktree:    worktreePath,
 	})
 	require.NoError(t, err)
 	return attempt
@@ -562,7 +594,7 @@ func setupAgentDoneMainRun(t *testing.T, taskID string) (string, string) {
 	bdLogPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
 		repoPath: {stdout: agentDoneMainTaskJSON(taskID, repoPath)},
 	})
-	startAgentTestRun(t, taskID, "main", repoPath)
+	startAgentTestRun(t, taskID, "main", repoPath, true)
 	setAgentRunEnv(t, taskID, "main", repoPath)
 	return repoPath, bdLogPath
 }
@@ -851,7 +883,7 @@ func setupAgentDoneWorktreeRun(t *testing.T) string {
 	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
 		repoPath: {stdout: agentDoneWorktreeTaskJSON(worktreePath)},
 	})
-	startAgentTestRun(t, "op-1", "orpheus/op-1", worktreePath)
+	startAgentTestRun(t, "op-1", "orpheus/op-1", worktreePath, true)
 	setAgentRunEnv(t, "op-1", "orpheus/op-1", worktreePath)
 	return worktreePath
 }

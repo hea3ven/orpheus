@@ -45,6 +45,7 @@ func TestLoadConfigResolvesImplementerDefaultAndInterpolatesBootstrapPrompt(t *t
 	is.Equal("pi", snapshot.AgentName)
 	is.Equal("pi", snapshot.Command)
 	is.Equal([]string{"--model", "test-model", agent.RenderBootstrapPrompt(), "literal"}, snapshot.Args)
+	is.True(snapshot.Interactive)
 
 	_, profile, err := config.ResolveImplementerProfile("")
 	must.NoError(err)
@@ -77,6 +78,10 @@ func TestLoadConfigPreservesExplicitNonInteractiveProfile(t *testing.T) {
 	must.NoError(err)
 	is.Equal("autonomous", name)
 	is.False(profile.Interactive)
+
+	snapshot, err := config.ResolveCommand("")
+	must.NoError(err)
+	is.False(snapshot.Interactive)
 }
 
 func TestLoadConfigBuildsStructuredCodexCommands(t *testing.T) {
@@ -114,6 +119,7 @@ func TestLoadConfigBuildsStructuredCodexCommands(t *testing.T) {
 	is.Equal("codex", impl.Command)
 	is.Equal("codex", impl.Harness)
 	is.Equal("gpt-5.4", impl.Model)
+	is.True(impl.Interactive)
 	is.Equal([]string{
 		"--model",
 		"gpt-5.4",
@@ -132,6 +138,7 @@ func TestLoadConfigBuildsStructuredCodexCommands(t *testing.T) {
 	is.Equal("codex", reviewer.Command)
 	is.Equal("codex", reviewer.Harness)
 	is.Equal("gpt-5.4-mini", reviewer.Model)
+	is.False(reviewer.Interactive)
 	is.Equal([]string{
 		"exec",
 		"--model",
@@ -176,6 +183,7 @@ func TestLoadConfigBuildsStructuredPiCommands(t *testing.T) {
 	is.Equal("pi", impl.Command)
 	is.Equal("pi", impl.Harness)
 	is.Equal("openai-codex/gpt-5.5", impl.Model)
+	is.True(impl.Interactive)
 	is.Equal([]string{
 		"--model",
 		"openai-codex/gpt-5.5",
@@ -195,6 +203,7 @@ func TestLoadConfigBuildsStructuredPiCommands(t *testing.T) {
 	is.Equal("pi", reviewer.Command)
 	is.Equal("pi", reviewer.Harness)
 	is.Equal("openai-codex/gpt-5.4-mini", reviewer.Model)
+	is.False(reviewer.Interactive)
 	is.Equal([]string{
 		"--print",
 		"--model",
