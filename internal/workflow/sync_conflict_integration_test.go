@@ -84,6 +84,7 @@ type integrationSyncConflictGit struct {
 	rollback    int
 	remoteHead  string
 	localHead   string
+	beginStatus gitmeta.TaskBranchSyncStatus
 }
 
 func (g *integrationSyncConflictGit) SyncTaskBranchWithDefault(
@@ -105,8 +106,12 @@ func (g *integrationSyncConflictGit) BeginTaskBranchConflictResolution(
 		return gitmeta.TaskBranchSyncResult{}, err
 	}
 	g.beginCalls++
+	status := g.beginStatus
+	if status == "" {
+		status = gitmeta.TaskBranchSyncConflicted
+	}
 	return gitmeta.TaskBranchSyncResult{
-		Status:        gitmeta.TaskBranchSyncConflicted,
+		Status:        status,
 		Branch:        opts.Branch,
 		DefaultBranch: opts.DefaultBranch,
 		Head:          "local-before",
@@ -283,6 +288,29 @@ func TestIntegrationSyncConflictStopsExternalMutationsWhenPhasePersistenceFails(
 				)
 			}
 		})
+	}
+}
+
+func TestIntegrationSyncAllDoesNotPushWhenConflictDisappearsAfterPreflight(t *testing.T) {
+	service, store, gitState, resolver := newIntegrationSyncConflictService(t, "")
+	gitState.beginStatus = gitmeta.TaskBranchSyncAlreadyCurrent
+
+	result, err := service.SyncAll(context.Background())
+	if err != nil {
+		t.Fatalf("sync all: %v", err)
+	}
+	if len(result.Results) != 1 || result.Results[0].Status != workflow.SyncStatusAlreadyInReview {
+		t.Fatalf("result = %#v, want unchanged open PR", result)
+	}
+	if gitState.pushCalls != 0 || resolver.resolveCalls != 0 {
+		t.Fatalf("pushes = %d, resolver calls = %d, want neither", gitState.pushCalls, resolver.resolveCalls)
+	}
+	state, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatalf("load sync state: %v", err)
+	}
+	if state.ActiveSyncConflict != nil {
+		t.Fatalf("active conflict = %#v, want cleared preflight checkpoint", state.ActiveSyncConflict)
 	}
 }
 

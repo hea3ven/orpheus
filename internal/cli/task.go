@@ -233,7 +233,10 @@ func newTaskSyncCommand(opts *rootOptions) *cobra.Command {
 		Short: "Reconcile tasks from recorded pull request state",
 		Long: "Reconcile tasks from recorded pull request state.\n\n" +
 			"Tasks with a recorded PR URL are polled from the PR provider. Merged PRs close " +
-			"the backend task and record a local audit event. Tasks without a PR URL are skipped.",
+			"the backend task and record a local audit event. Tasks without a PR URL are skipped. " +
+			"task sync <task-id> incorporates the integration branch into an open PR branch, even " +
+			"when Git can merge it cleanly. task sync --all leaves conflict-free branches unchanged " +
+			"and updates only branches that need the configured conflict resolver.",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if all {
 				if len(args) != 0 {
@@ -3316,7 +3319,10 @@ func runTaskSync(command *cobra.Command, opts *rootOptions, taskID string) error
 		PRProvider: newInvocationGHProvider(deps, logger),
 		Logger:     logger,
 	}
-	result, err := service.Sync(command.Context(), workflow.SyncOptions{TaskID: taskID})
+	result, err := service.Sync(command.Context(), workflow.SyncOptions{
+		TaskID:             taskID,
+		BranchUpdatePolicy: workflow.SyncBranchUpdateAlways,
+	})
 	if err != nil {
 		return fmt.Errorf("task sync: %w", err)
 	}

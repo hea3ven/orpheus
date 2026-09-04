@@ -39,12 +39,13 @@ func (s SyncService) resolveOpenPRBranchConflict(
 	taskTarget tasktarget.Target,
 	destination string,
 	prURL string,
+	updatePolicy SyncBranchUpdatePolicy,
 ) (SyncResult, error) {
 	if err := s.requireSyncConflictResolver(target.task.ID); err != nil {
 		return SyncResult{}, err
 	}
 	repo := target.source.Repository
-	syncOpts := syncConflictOptions(repo, taskTarget, destination)
+	syncOpts := syncConflictOptions(repo, taskTarget, destination, updatePolicy)
 	operation, err := s.prepareSyncConflictCheckpoint(ctx, target, gitState, syncOpts)
 	if err != nil {
 		return SyncResult{}, err
@@ -85,14 +86,18 @@ func (s SyncService) resolveOpenPRBranchConflict(
 		return SyncResult{}, err
 	}
 
+	return resolvedConflictSyncResult(destination, taskTarget.Branch), nil
+}
+
+func resolvedConflictSyncResult(destination string, branch string) SyncResult {
 	return SyncResult{
 		Status: SyncStatusBranchUpdated,
 		Reason: fmt.Sprintf(
 			"resolved merge conflicts with the configured agent, merged %s into %s, and pushed the branch",
 			destination,
-			taskTarget.Branch,
+			branch,
 		),
-	}, nil
+	}
 }
 
 func (s SyncService) requireSyncConflictResolver(taskID string) error {
@@ -109,12 +114,14 @@ func syncConflictOptions(
 	repo task.Repository,
 	taskTarget tasktarget.Target,
 	destination string,
+	updatePolicy SyncBranchUpdatePolicy,
 ) gitmeta.TaskBranchSyncOptions {
 	return gitmeta.TaskBranchSyncOptions{
 		RepoPath:      repo.Path,
 		DefaultBranch: destination,
 		Branch:        taskTarget.Branch,
 		Worktree:      taskTarget.Worktree,
+		UpdatePolicy:  gitBranchUpdatePolicy(updatePolicy),
 	}
 }
 
@@ -186,6 +193,9 @@ func nonConflictSyncNeedsPush(
 	branchSync gitmeta.TaskBranchSyncResult,
 	operation *durableSyncConflictOperation,
 ) (bool, error) {
+	if syncOpts.UpdatePolicy == gitmeta.TaskBranchUpdateConflictsOnly {
+		return false, nil
+	}
 	if branchSync.Status == gitmeta.TaskBranchSyncUpdated {
 		return true, nil
 	}

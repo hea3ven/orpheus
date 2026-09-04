@@ -495,7 +495,8 @@ func TestSyncServiceUpdatesOpenPRBranchFromDefault(t *testing.T) {
 	if req.RepoPath != repoPath ||
 		req.DefaultBranch != "main" ||
 		req.Branch != targets.WorktreeTeam.Branch ||
-		req.Worktree != targets.WorktreeTeam.Worktree {
+		req.Worktree != targets.WorktreeTeam.Worktree ||
+		req.UpdatePolicy != gitmeta.TaskBranchUpdateAlways {
 		t.Fatalf("git request = %#v, want repo/default/task branch metadata", req)
 	}
 	if len(backend.closed) != 0 || len(backend.setPRURLs) != 0 {
@@ -596,6 +597,10 @@ func TestSyncServiceResolvesOpenPRBranchConflictWithAgent(t *testing.T) {
 			gitState.beginRequests,
 			gitState.completeRequests,
 		)
+	}
+	if gitState.requests[0].UpdatePolicy != gitmeta.TaskBranchUpdateAlways ||
+		gitState.beginRequests[0].UpdatePolicy != gitmeta.TaskBranchUpdateAlways {
+		t.Fatalf("git policies sync=%q begin=%q, want always-update", gitState.requests[0].UpdatePolicy, gitState.beginRequests[0].UpdatePolicy)
 	}
 	if len(gitState.completeFiles) != 1 ||
 		len(gitState.completeFiles[0]) != 1 ||
@@ -1522,6 +1527,56 @@ func TestSyncServiceSyncAllContinuesAfterOpenPRBranchUpdateFailure(t *testing.T)
 	}
 }
 
+func TestSyncServiceSyncAllLeavesConflictFreeOpenPRBranchUnchanged(t *testing.T) {
+	paths, source, targets := newSyncTestSource(t, filepath.Join(testutil.CanonicalTempDir(t), "repo"), "op-clean")
+	backend := &fakeSyncBackend{tasks: []task.Task{{
+		ID:        "op-clean",
+		Status:    task.StatusInProgress,
+		IssueType: task.IssueTypeTask,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   targets.WorktreeTeam.Branch,
+			task.MetadataWorktree: targets.WorktreeTeam.Worktree,
+			task.MetadataPRURL:    "https://github.test/org/repo/pull/1",
+		},
+	}}}
+	provider := &fakePRProvider{status: pullrequest.PullRequestStatus{
+		URL:   "https://github.test/org/repo/pull/1",
+		State: pullrequest.StateOpen,
+	}}
+	gitState := &fakeSyncGit{result: gitmeta.TaskBranchSyncResult{
+		Status: gitmeta.TaskBranchSyncConflictFree,
+		Head:   "local-head",
+	}}
+	service := workflow.SyncService{
+		Paths:   paths,
+		Sources: []task.RepositorySource{source},
+		BackendFactory: func(task.RepositorySource) (task.SyncBackend, error) {
+			return backend, nil
+		},
+		RunStore:   &fakeSyncRunStore{},
+		Git:        gitState,
+		PRProvider: provider,
+	}
+
+	result, err := service.SyncAll(context.Background())
+	if err != nil {
+		t.Fatalf("sync all: %v", err)
+	}
+	if len(result.Results) != 1 || result.Results[0].Status != workflow.SyncStatusAlreadyInReview {
+		t.Fatalf("results = %#v, want unchanged open PR", result.Results)
+	}
+	if !strings.Contains(result.Results[0].Reason, "would merge main without conflicts") ||
+		!strings.Contains(result.Results[0].Reason, "left it unchanged") {
+		t.Fatalf("reason = %q, want clear conflict-only explanation", result.Results[0].Reason)
+	}
+	if len(gitState.requests) != 1 || gitState.requests[0].UpdatePolicy != gitmeta.TaskBranchUpdateConflictsOnly {
+		t.Fatalf("git requests = %#v, want one conflicts-only preflight", gitState.requests)
+	}
+	if len(gitState.beginRequests) != 0 || len(gitState.completeRequests) != 0 {
+		t.Fatalf("conflict calls begin=%#v complete=%#v, want none", gitState.beginRequests, gitState.completeRequests)
+	}
+}
+
 func TestSyncServiceSyncAllRecordsConflictResolutionTelemetry(t *testing.T) {
 	paths, source, targets := newSyncTestSource(t, filepath.Join(testutil.CanonicalTempDir(t), "repo"), "op-conflict")
 	backend := &fakeSyncBackend{
@@ -1595,6 +1650,12 @@ func TestSyncServiceSyncAllRecordsConflictResolutionTelemetry(t *testing.T) {
 	}
 	if len(result.Failures) != 0 {
 		t.Fatalf("failures = %#v, want none", result.Failures)
+	}
+	if len(gitState.requests) != 1 || gitState.requests[0].UpdatePolicy != gitmeta.TaskBranchUpdateConflictsOnly {
+		t.Fatalf("git requests = %#v, want one conflicts-only preflight", gitState.requests)
+	}
+	if len(gitState.beginRequests) != 1 || gitState.beginRequests[0].UpdatePolicy != gitmeta.TaskBranchUpdateConflictsOnly {
+		t.Fatalf("conflict begin requests = %#v, want conflicts-only policy", gitState.beginRequests)
 	}
 	if len(runStore.conflictEvents) != 2 ||
 		runStore.conflictEvents[0].eventType != taskstate.EventSyncConflictStarted ||

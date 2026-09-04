@@ -19,6 +19,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func TestTaskSyncHelpExplainsBranchUpdatePolicies(t *testing.T) {
+	command := newTaskSyncCommand(&rootOptions{})
+	for _, want := range []string{
+		"task sync <task-id> incorporates the integration branch",
+		"task sync --all leaves conflict-free branches unchanged",
+	} {
+		if !strings.Contains(command.Long, want) {
+			t.Fatalf("task sync help = %q, want %q", command.Long, want)
+		}
+	}
+}
+
 func TestTaskListDocumentsRepositoryFilter(t *testing.T) {
 	flag := newTaskListCommand(&rootOptions{}).Flags().Lookup("repo")
 	if flag == nil {

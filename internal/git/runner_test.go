@@ -287,7 +287,12 @@ func TestSyncFetchedTaskBranchWithDefaultReportsCurrentOrPush(t *testing.T) {
 				)
 			}
 			runner := &recordingGitRunner{t: t, commands: commands}
-			plan := taskBranchSyncPlan{DefaultBranch: "main", Branch: "orpheus/op-1", Worktree: worktree}
+			plan := taskBranchSyncPlan{
+				DefaultBranch: "main",
+				Branch:        "orpheus/op-1",
+				Worktree:      worktree,
+				UpdatePolicy:  TaskBranchUpdateAlways,
+			}
 
 			result, err := syncFetchedTaskBranchWithDefault(ContextWithRunner(context.Background(), runner), plan, newTaskBranchSyncResult(plan))
 			if err != nil {
