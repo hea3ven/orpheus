@@ -81,6 +81,7 @@ func TestIntegrationWorktreeCompletionFlowEndToEnd(t *testing.T) {
 	must.Len(state.Runs, 1)
 	latest := state.Runs[0]
 	is.Equal(taskstate.RunStatusSucceeded, latest.Status)
+	is.True(latest.Execution.Interactive)
 	must.NotNil(latest.Execution.FinishedAt)
 	must.NotNil(latest.Completion)
 	is.Equal("Implement worktree completion flow", latest.Completion.Summary)

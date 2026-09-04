@@ -150,8 +150,6 @@ func runAgentContext(command *cobra.Command, opts *rootOptions) error {
 	if err != nil {
 		return err
 	}
-	paths := deps.paths
-
 	resolver := activeAgentContextResolver(deps, taskCtx, deps.taskStateStore)
 	switch strings.TrimSpace(deps.environmentValue("ORPHEUS_AGENT_PURPOSE")) {
 	case "", "implementation":
@@ -176,16 +174,14 @@ func runAgentContext(command *cobra.Command, opts *rootOptions) error {
 	if err != nil {
 		return fmt.Errorf("agent context: %w", err)
 	}
-	interactionMode, err := activeAgentInteractionMode(paths, activeContext.Run.Agent)
-	if err != nil {
-		return fmt.Errorf("agent context: %w", err)
+	interactionMode := agent.AgentInteractionModeNonInteractive
+	if activeContext.Run.Execution.Interactive {
+		interactionMode = agent.AgentInteractionModeInteractive
 	}
 
 	_, err = fmt.Fprint(command.OutOrStdout(), agent.RenderActiveContextWithOptions(
 		activeContext,
-		agent.ActiveContextRenderOptions{
-			InteractionMode: interactionMode,
-		},
+		agent.ActiveContextRenderOptions{InteractionMode: interactionMode},
 	))
 	return err
 }
@@ -200,21 +196,6 @@ func withAgentReviewMutationLock(command *cobra.Command, paths state.Paths, logg
 		time.Sleep(10 * time.Millisecond)
 	}
 	return err
-}
-
-func activeAgentInteractionMode(paths state.Paths, agentName string) (agent.AgentInteractionMode, error) {
-	config, err := agent.LoadConfig(paths)
-	if err != nil {
-		return agent.AgentInteractionModeUnspecified, err
-	}
-	_, profile, err := config.ResolveImplementerProfile(agentName)
-	if err != nil {
-		return agent.AgentInteractionModeUnspecified, fmt.Errorf("resolve agent profile: %w", err)
-	}
-	if profile.Interactive {
-		return agent.AgentInteractionModeInteractive, nil
-	}
-	return agent.AgentInteractionModeNonInteractive, nil
 }
 
 type agentReviewAddOptions struct {

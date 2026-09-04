@@ -292,11 +292,12 @@ type AgentExecution struct {
 	Purpose AgentExecutionPurpose `yaml:"purpose"`
 	Status  RunStatus             `yaml:"status"`
 
-	Agent    string `yaml:"agent,omitempty"`
-	Profile  string `yaml:"profile,omitempty"`
-	Harness  string `yaml:"harness,omitempty"`
-	Model    string `yaml:"model,omitempty"`
-	Thinking string `yaml:"thinking,omitempty"`
+	Agent       string `yaml:"agent,omitempty"`
+	Profile     string `yaml:"profile,omitempty"`
+	Harness     string `yaml:"harness,omitempty"`
+	Model       string `yaml:"model,omitempty"`
+	Thinking    string `yaml:"thinking,omitempty"`
+	Interactive bool   `yaml:"interactive"`
 
 	Command     string   `yaml:"command,omitempty"`
 	Args        []string `yaml:"args,omitempty"`
@@ -697,12 +698,13 @@ type SetupEventOptions struct {
 
 // StartRunOptions describes the run attempt being started.
 type StartRunOptions struct {
-	Agent     string
-	Profile   string
-	Selection AgentSelection
-	Harness   string
-	Model     string
-	Thinking  string
+	Agent       string
+	Profile     string
+	Selection   AgentSelection
+	Harness     string
+	Model       string
+	Thinking    string
+	Interactive bool
 
 	Command     string
 	Args        []string
@@ -1065,6 +1067,7 @@ func startRunAgentExecution(opts StartRunOptions, selection AgentSelection, now 
 		Harness:       selection.Harness,
 		Model:         selection.Model,
 		Thinking:      selection.Thinking,
+		Interactive:   opts.Interactive,
 		Command:       opts.Command,
 		Args:          cloneStrings(opts.Args),
 		SessionName:   opts.SessionName,

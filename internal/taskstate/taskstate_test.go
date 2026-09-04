@@ -2,6 +2,7 @@ package taskstate_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -84,6 +85,86 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 		"target:",
 		"  branch: orpheus/op-1\n  worktree: /fixture/op-1\n  started_at",
 	)
+}
+
+func TestStorePersistsImplementationInteractivity(t *testing.T) {
+	tests := []struct {
+		name        string
+		interactive bool
+	}{
+		{name: "interactive", interactive: true},
+		{name: "non-interactive", interactive: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newTestStore(t, time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC))
+			attempt, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+				Agent:       "implementer",
+				Interactive: tt.interactive,
+			})
+			if err != nil {
+				t.Fatalf("start run: %v", err)
+			}
+			if attempt.Execution.Interactive != tt.interactive {
+				t.Fatalf("started interactivity = %t, want %t", attempt.Execution.Interactive, tt.interactive)
+			}
+
+			loaded, err := store.Load("alpha", "op-1")
+			if err != nil {
+				t.Fatalf("load run: %v", err)
+			}
+			if loaded.Runs[0].Execution.Interactive != tt.interactive {
+				t.Fatalf("loaded interactivity = %t, want %t", loaded.Runs[0].Execution.Interactive, tt.interactive)
+			}
+			assertStoreYAMLContains(t, store, "alpha", "op-1", "interactive: "+fmt.Sprint(tt.interactive))
+		})
+	}
+}
+
+func TestStoreTreatsMissingImplementationInteractivityAsNonInteractive(t *testing.T) {
+	store := newTestStore(t)
+	path, err := store.Path("alpha", "op-legacy")
+	if err != nil {
+		t.Fatalf("state path: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create state directory: %v", err)
+	}
+	legacyYAML := strings.Join([]string{
+		"version: 4",
+		"repo_id: alpha",
+		"task_id: op-legacy",
+		"git_facts:",
+		"  branch: main",
+		"  worktree: /fixture/repo",
+		"runs:",
+		"- attempt: 1",
+		"  status: running",
+		"  execution:",
+		"    purpose: implementation",
+		"    status: running",
+		"    started_at: 2026-06-03T10:00:00Z",
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(legacyYAML), 0o644); err != nil {
+		t.Fatalf("write legacy state: %v", err)
+	}
+
+	loaded, err := store.Load("alpha", "op-legacy")
+	if err != nil {
+		t.Fatalf("load legacy state: %v", err)
+	}
+	if loaded.Runs[0].Execution.Interactive {
+		t.Fatal("missing interactivity loaded as true, want false")
+	}
+	persisted, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read legacy state: %v", err)
+	}
+	if strings.Contains(string(persisted), "interactive:") {
+		t.Fatalf("load rewrote legacy state with interactivity: %s", persisted)
+	}
 }
 
 func TestStorePersistsResumedFollowUpLaunchProvenance(t *testing.T) {
