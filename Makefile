@@ -1,10 +1,9 @@
-.PHONY: build test test-unit test-integration quality quality-baseline quality-baseline-force coverage coverage-baseline coverage-audit \
+.PHONY: build test test-unit test-integration quality quality-policy-update quality-baseline quality-baseline-force coverage coverage-baseline coverage-audit \
 	test-perf test-perf-integration test-perf-baseline test-perf-integration-baseline \
 	test-perf-baseline-update test-perf-integration-baseline-update fmt lint check
 
 PERF_SAMPLES ?= 5
 TEST_TIMING_BASELINE ?= performance/test-timing-baseline.json
-QUALITY_COMPARE_TO ?=
 INTEGRATION_TEST_PATTERN := ^TestIntegration
 INTEGRATION_TEST_ARGS := -tags=integration -run '$(INTEGRATION_TEST_PATTERN)'
 
@@ -26,8 +25,14 @@ test-integration:
 # quality runs each lane exactly once and derives tests, aggregate coverage, and
 # CI timing decisions from those coverage-instrumented executions.
 quality:
-	go run ./cmd/testcoverage $(if $(QUALITY_COMPARE_TO),-compare-to $(QUALITY_COMPARE_TO),)
+	go run ./cmd/testcoverage
 
+# Collect five complete coverage-instrumented samples, update materially stale
+# bounds, and leave the .quality.yml diff for review.
+quality-policy-update:
+	go run ./cmd/testcoverage -update-policy
+
+# Temporary compatibility targets for the hosted gate's legacy baseline.
 quality-baseline:
 	go run ./cmd/testcoverage -write-baseline
 

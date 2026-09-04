@@ -8,8 +8,8 @@ Run `make check` for complete validation at the end of a change. It runs formatt
 
 Integration test sources use `//go:build integration`, and their top-level test functions begin with `TestIntegration`; untagged non-prefixed tests are units. The convention validator rejects any top-level body that would be omitted from or selected by both lanes. Build constraints, not the `-run` filter alone, assign lane membership. Both lanes are network-free, credential-free, isolated from operator data, and prevent real model agents; using temporary disk alone does not make a test an integration. Live evaluations such as `orpheus eval review-context` are not routine test validation and must never be invoked implicitly. See `docs/testing.md` for the full guide.
 
-After making changes, update the coverage baseline with `make coverage-baseline`.
-When merging, resolve conflicts in `coverage/test-coverage-baseline.json` by keeping the trusted base branch's complete version instead of combining generated values, then always run `make quality-baseline` after the merge.
+After making changes, run `make quality`. If it reports `policy_update_required` or an intentional bound violation, run `make quality-policy-update` and review the `.quality.yml` diff.
+When merging, resolve `.quality.yml` from the reviewed policy changes rather than combining measured values. Run `make quality-policy-update` only when the merged result requires it.
 
 ## Task Tracking and Follow-Up
 

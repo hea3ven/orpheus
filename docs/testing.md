@@ -53,134 +53,80 @@ Integration source files use `//go:build integration`, and their top-level test 
 
 ## Single-pass quality report
 
-`make quality` is the routine local and CI quality command. It runs the unit and
-integration lanes serially exactly once with `-coverpkg=./...`; the same decoded
-`go test -json` streams supply test outcomes, failure evidence, test-event
-counts, suite timings, timings for packages that actually run selected tests,
-and coverage profiles. Suite timing is the sum of those decoded package test
-elapsed times; command wall time is retained as a diagnostic but does not affect
-the timing gate, so cold compilation cannot masquerade as a test regression.
-Packages with no selected tests are excluded because their process startup
-timing is too noisy to be a useful performance signal.
-Only suite timing failures block the quality gate. A suite is over budget only
-when its selected-test total is strictly above the suite budget. Package timings
-continue to be compared with their retained package budgets. A package overrun
-is a non-blocking warning that identifies its lane, package, current measurement,
-baseline, budget, and amount over budget. The JSON report stores those entries
-under `decision.warnings`, command output labels them `warning (non-blocking)`,
-and the pull-request summary repeats them. Coverage findings show the trusted
-baseline percentage, current percentage, change in percentage points, and the
-significance threshold. Suite failures and coverage decisions retain relevant
-package warnings for diagnosis. The complete report is written to
-`artifacts/test-coverage/report.json`, with a Markdown summary beside it at
-`artifacts/test-coverage/report.md`. If a lane fails, the command still runs
-the other lane and writes a partial report containing stderr, raw JSON output,
-and decoded failing-test output before returning failure. `make
-coverage` remains a compatibility alias.
+`make quality` is the routine local and CI command. It reads `.quality.yml` and
+never writes it. The command runs the unit and integration lanes serially once
+with `-coverpkg=./...`. The decoded `go test -json` streams provide test
+outcomes, failure evidence, test-event counts, package timings, and coverage
+profiles. Suite timing is the sum of package elapsed times for packages that ran
+selected tests. Command wall time remains diagnostic only, so compilation time
+does not count against the test ceiling.
 
-The compact `coverage/test-coverage-baseline.json` contains only repository and
-package coverage aggregates, test-event counts, baseline timings and their
-budgets, and policy. It
-does not track source blocks, coordinates, files, or hit inventories. Coverage
-is evaluated independently for each lane at repository and package scope.
-Changes inside the configured significance and denominator-drift bands pass
-without baseline churn. Significant improvements, package/test structure
-changes, and significant denominator drift require a generated refresh;
-significant regressions fail.
+The policy has a coverage floor and suite timing ceiling for each lane. It also
+has a coverage floor for every production package and a timing ceiling for every
+package that runs selected tests. A value below a coverage floor or above a
+timing ceiling fails. Movement inside the configured refresh bands passes.
+Movement that crosses a refresh threshold without violating a bound returns
+`policy_update_required`. Package additions and removals require the same
+explicit update.
 
-Use `make quality-baseline` (or the compatibility alias `make
-coverage-baseline`) for an eligible refresh. Generation is sorted and
-repeatable, refuses to replace a baseline after a prohibited coverage regression
-or suite timing failure, and preserves every existing timing budget. A
-package-only timing warning does not block an eligible coverage or structure
-refresh. New timed packages receive a budget from their first
-coverage-instrumented measurement. Faster measurements neither require refresh
-nor ratchet a budget down.
+The complete JSON report is written to
+`artifacts/test-coverage/report.json`, with a Markdown summary beside it. If a
+lane fails, the command still runs the other lane and writes a partial report
+with stderr, raw JSON output, and decoded failing-test output. `make coverage`
+remains a compatibility alias.
+
+## Updating the policy
+
+Run `make quality-policy-update` when routine quality reports stale bounds or
+when a reviewed regression needs new bounds. The command runs five complete,
+coverage-instrumented samples of each lane. It requires matching test counts,
+coverage package structure, and selected-test package structure across all five
+samples. Any failed, incomplete, or inconsistent sample stops the update before
+`.quality.yml` is written.
+
+The updater uses median suite and package timings. It changes only bounds whose
+refresh threshold was crossed, plus package additions and removals. Coverage
+floors retain 0.5 percentage points of lane headroom and 2 percentage points of
+package headroom. Timing ceilings retain the greater of 25 percent or 0.5
+seconds for suites, and the greater of 50 percent or 0.25 seconds for packages.
+Bounds may move up or down. Review the resulting `.quality.yml` diff before
+committing it.
+
+`coverage/test-coverage-baseline.json`,
+`performance/test-timing-baseline.json`, and their old Make targets remain only
+for temporary hosted-gate compatibility. The hosted wrapper still retrieves the
+legacy coverage file, but `make quality` and `make quality-policy-update` do not
+read it.
 
 ## Pull-request quality gate
 
 [`.github/workflows/quality-gate.yml`](../.github/workflows/quality-gate.yml)
-runs for every pull request, including documentation-only changes, and its
-`Pull-request quality gate` job is the required branch-protection check. It
-checks out GitHub's pull-request merge SHA (the synthetic merge result), reads
-`coverage/test-coverage-baseline.json` from the pull request event's exact base
-commit, and passes that file as the trusted comparison baseline. It therefore
-never treats a pull request's edit to its own baseline as the prior state.
-Superseded runs for the same pull request are cancelled.
+runs for every pull request against GitHub's synthetic merge commit. The job
+runs `make quality` once, then runs lint and build without rerunning tests. The
+checked-in `.quality.yml` from that merge commit is the only quality policy.
+There is no base-branch policy comparison or automatic policy edit.
 
-The job runs `make quality` once, then runs `make lint` and `make build`
-separately. `build` is intentionally a compilation-only target, so neither
-lint nor build starts another test run. The report's decoded test executions
-supply the unit and integration test results, independent coverage, and timing
-checks. Its job summary starts with a table for the quality, lint, and build
-results, followed by a lane coverage and timing table. Blocking issues and
-warnings have separate tables. The per-package coverage and selected-test timing
-table is collapsed by default, as are command logs for failed checks. Coverage
-regressions include the size of the drop and the configured significance
-threshold. The summary never includes source files, coverage blocks, or hit
-inventories. Complete and partial reports, plus raw setup/provisioning, quality,
-lint, and build logs, are uploaded for every job outcome. Setup diagnostics are
-initialized before checkout so failed downloads, checksum checks, and extraction
-remain available.
+The report status is one of:
 
-The gate writes a clear final result in its summary:
+- `pass` when tests and bounds pass and no bound needs refreshing;
+- `policy_update_required` when measurements or package structure crossed a
+  refresh threshold;
+- `coverage_regression` when a lane or package is below its coverage floor;
+- `timing_budget_exceeded` when a suite or package is above its timing ceiling;
+- `test_failed` when a lane or policy-update sample did not complete.
 
-- `pass` succeeds.
-- `refresh_required` fails until the tracked baseline is regenerated from the
-  pull request's result.
-- `coverage_regression`, `timing_budget_exceeded`, and `test_failed` fail with
-  their recorded diagnostics. `timing_budget_exceeded` is reserved for a unit
-  or integration suite total strictly above its suite budget. Package overruns
-  are non-blocking warnings.
-- A missing report, failed setup, unreadable base baseline, or inconsistent
-  command result is labelled `execution_failure` and fails.
-- A lint or build failure also fails the same required job without rerunning
-  either test lane.
+A missing report, malformed policy, failed setup, or inconsistent command result
+is an execution failure. Lint and build failures also fail the required job.
+The workflow publishes the current report and command diagnostics as short-lived
+artifacts, but no report becomes input to a later run.
 
-GitHub branch protection must require only this job name after the workflow is
-introduced; remove the old `Single-pass test quality` / coverage-only required
-check rather than requiring both. The detailed multi-sample timing commands
-below remain separate and are not part of this routine pull-request gate.
-
-### Baseline refresh and exceptions
-
-For ordinary eligible coverage, package, test-structure, or denominator drift,
-run `make quality-baseline` in the pull request and include the generated
-compact `coverage/test-coverage-baseline.json`. CI compares the synthetic merge
-result to the trusted base first, then accepts that file only when it exactly
-matches the generated current aggregates while preserving trusted timing
-budgets. This avoids routine exact-coverage refresh churn while still allowing
-significant intentional drift.
-
-A significant coverage regression is strict: the base-branch comparison fails
-even when a pull request changes its baseline. Fix the regression rather than
-editing the baseline. A maintainer may use GitHub's force-merge or
-administrative branch-protection override only as an explicit human exception;
-the workflow has no automatic bypass and never creates commits.
-
-After such an override, immediately check out the resulting `main` commit and
-run `make quality-baseline-force`. This deliberately creates a new compact
-baseline from the already force-merged mainline state, so it is unavailable as
-a way to evade the pull-request comparison. Inspect the report and make a
-separate human-authored baseline commit. The next pull request then uses that
-post-merge baseline as its trusted prior. Do not use this target for ordinary
-refreshes or to conceal a regression before merge.
-
-`make coverage-audit` is deliberately on-demand. It profiles each integration
+`make coverage-audit` remains an on-demand command. It profiles each integration
 top-level scenario separately and reports runtime, containment in the full
-integration profile, Jaccard similarity with the other scenarios, and exclusive
-statements. It is too expensive for routine pull requests.
+integration profile, similarity to other scenarios, and exclusive statements.
+It is too expensive for routine pull requests.
 
-## Detailed timing baseline
+## Legacy detailed timing commands
 
-The single-pass quality baseline enforces routine CI timing budgets. Separately,
-`make test-perf` and `make test-perf-integration` preserve the detailed
-multi-sample workflow: they collect five uncached samples by default and compare
-median timings against `performance/test-timing-baseline.json`. A report includes
-lane-specific environment metadata, test-event counts, package timings, and the
-full JSON output plus assertion output for a failed sample. Failed or incomplete
-reports are retained but never checked against or used to update a baseline. A
-changed test-event count fails the comparison so an obsolete baseline cannot
-look comparable.
-
-Use `make test-perf-baseline` or `make test-perf-integration-baseline` only after a complete, stable set of samples to regenerate that lane's baseline. The corresponding `*-update` target only ratchets budgets down after an optimization; a changed test-event count requires regeneration instead.
+The `test-perf*` targets remain temporarily for hosted compatibility. New policy
+updates use `make quality-policy-update`; do not update
+`performance/test-timing-baseline.json` for the local quality contract.

@@ -13,11 +13,12 @@ import (
 var errUnsupportedBaseline = errors.New("unsupported baseline schema")
 
 const (
-	statusPass            = "pass"
-	statusRefreshRequired = "refresh_required"
-	statusRegression      = "coverage_regression"
-	statusTimingFailed    = "timing_budget_exceeded"
-	statusTestFailed      = "test_failed"
+	statusPass                 = "pass"
+	statusPolicyUpdateRequired = "policy_update_required"
+	statusRefreshRequired      = "refresh_required"
+	statusRegression           = "coverage_regression"
+	statusTimingFailed         = "timing_budget_exceeded"
+	statusTestFailed           = "test_failed"
 )
 
 type coveragePolicy struct {
@@ -79,6 +80,7 @@ type finding struct {
 	Threshold      float64 `json:"threshold,omitempty"`
 	BudgetSeconds  float64 `json:"budget_seconds,omitempty"`
 	OverageSeconds float64 `json:"overage_seconds,omitempty"`
+	Proposed       float64 `json:"proposed,omitempty"`
 	Message        string  `json:"message"`
 }
 
@@ -89,11 +91,12 @@ type decision struct {
 }
 
 type qualityReport struct {
-	SchemaVersion int                   `json:"schema_version"`
-	Complete      bool                  `json:"complete"`
-	Lanes         map[string]laneReport `json:"lanes"`
-	Decision      decision              `json:"decision"`
-	Scenarios     []scenarioResult      `json:"scenarios,omitempty"`
+	SchemaVersion      int                   `json:"schema_version"`
+	Complete           bool                  `json:"complete"`
+	MeasurementSamples int                   `json:"measurement_samples,omitempty"`
+	Lanes              map[string]laneReport `json:"lanes"`
+	Decision           decision              `json:"decision"`
+	Scenarios          []scenarioResult      `json:"scenarios,omitempty"`
 }
 
 func defaultPolicy() qualityPolicy {

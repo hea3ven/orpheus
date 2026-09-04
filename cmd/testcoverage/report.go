@@ -22,7 +22,7 @@ func printReportTo(outputWriter io.Writer, result qualityReport, output string) 
 			lane.Coverage.StatementTotal,
 			percentage(lane.Coverage),
 			lane.TestCount,
-			selectedTestSeconds(lane.Timings),
+			laneSelectedTestSeconds(lane),
 			lane.WallSeconds,
 		)
 		printPackageSummary(outputWriter, lane)
@@ -81,6 +81,20 @@ func findingLocationLabel(item finding) string {
 
 func findingMessage(item finding) string {
 	switch {
+	case item.Kind == "coverage_policy":
+		if item.Message == "removed obsolete bound" {
+			return fmt.Sprintf("%s (floor %.3f%%)", item.Message, item.Prior)
+		}
+		if item.Threshold > 0 {
+			return fmt.Sprintf("%s (floor %.3f%%, measured %.3f%%, proposed floor %.3f%%; refresh threshold %.3f percentage points)",
+				item.Message, item.Prior, item.Current, item.Proposed, item.Threshold)
+		}
+		return fmt.Sprintf("%s (floor %.3f%%, measured %.3f%%, proposed floor %.3f%%)", item.Message, item.Prior, item.Current, item.Proposed)
+	case item.Kind == "timing_policy":
+		if item.Message == "removed obsolete bound" {
+			return fmt.Sprintf("%s (ceiling %.3fs)", item.Message, item.Prior)
+		}
+		return fmt.Sprintf("%s (ceiling %.3fs, measured %.3fs, proposed ceiling %.3fs)", item.Message, item.Prior, item.Current, item.Proposed)
 	case item.Kind == "coverage":
 		change := item.Current - item.Prior
 		direction := "up"

@@ -19,9 +19,11 @@ func TestParseOptionsSupportsQualityModes(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "defaults"},
+		{name: "quality policy update", args: []string{"-update-policy"}},
 		{name: "trusted comparison", args: []string{"-compare-to", "base.json"}},
 		{name: "generated baseline", args: []string{"-write-baseline"}},
-		{name: "reject combined modes", args: []string{"-write-baseline", "-compare-to", "base.json"}, wantErr: true},
+		{name: "reject combined legacy modes", args: []string{"-write-baseline", "-compare-to", "base.json"}, wantErr: true},
+		{name: "reject policy update with legacy mode", args: []string{"-update-policy", "-write-baseline"}, wantErr: true},
 		{name: "reject positional argument", args: []string{"extra"}, wantErr: true},
 	}
 	for _, test := range tests {
@@ -173,7 +175,7 @@ func TestReportSummaryUsesTablesAndCollapsesPackageDetails(t *testing.T) {
 	contents := output.String()
 	for _, want := range []string{
 		"> [!CAUTION]",
-		"**Coverage regression.**",
+		"**Coverage floor violated.**",
 		"| Lane | Result | Coverage | Test events | Selected-test time | Wall time |",
 		"| unit | **Pass** | 10/15 (66.67%) | 10 | 0.50s | 1.00s |",
 		"### Blocking issues",

@@ -157,7 +157,7 @@ jobs:
             decision="$(jq --raw-output '.decision.status // "execution_failure"' "$report" 2>>"$log")" || decision=execution_failure
           fi
           case "$decision" in
-            pass|refresh_required|coverage_regression|timing_budget_exceeded|test_failed) ;;
+            pass|policy_update_required|refresh_required|coverage_regression|timing_budget_exceeded|test_failed) ;;
             *) decision=execution_failure; quality_exit=1 ;;
           esac
           if [[ "$quality_exit" -eq 0 && "$decision" != pass ]]; then
@@ -219,6 +219,10 @@ jobs:
                 quality_result='**Execution failed**'
                 failed=1
               fi
+              ;;
+            policy_update_required)
+              quality_result='**Failed:** Quality policy update required'
+              failed=1
               ;;
             refresh_required)
               quality_result='**Failed:** Baseline refresh required'
