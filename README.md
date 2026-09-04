@@ -187,7 +187,7 @@ agents:
         Focus on module boundaries, dependency direction, data ownership, and long-term maintainability.
 ```
 
-`agents.defaults.sync_conflict_resolver` is optional. When set, `orpheus task sync <task-id>` and `orpheus task sync --all` use that profile for merge-conflict repair while syncing open PR branches. When it is unset, sync conflict repair falls back to `agents.defaults.implementer`, preserving existing configs.
+`agents.defaults.sync_conflict_resolver` is optional. When set, `orpheus task sync <task-id>` and `orpheus task sync --all` use that profile for merge-conflict repair while syncing open PR branches. When it is unset, sync conflict repair falls back to `agents.defaults.implementer`, preserving existing configs. A task-ID sync always incorporates the integration branch. Batch sync leaves a branch unchanged when the integration branch would merge cleanly and updates it only when conflict repair is required.
 
 Pi-style native naming:
 
