@@ -55,6 +55,17 @@ type TaskWorktreeSetupResult struct {
 	Lifecycle    TaskWorktreeLifecycle
 }
 
+// TaskBranchUpdatePolicy controls whether a clean integration-branch merge is applied.
+type TaskBranchUpdatePolicy string
+
+const (
+	// TaskBranchUpdateAlways applies and pushes clean integration-branch merges.
+	TaskBranchUpdateAlways TaskBranchUpdatePolicy = "always"
+
+	// TaskBranchUpdateConflictsOnly leaves conflict-free task branches unchanged.
+	TaskBranchUpdateConflictsOnly TaskBranchUpdatePolicy = "conflicts_only"
+)
+
 // TaskBranchSyncStatus describes whether a PR branch changed during sync.
 type TaskBranchSyncStatus string
 
@@ -71,6 +82,10 @@ const (
 	// TaskBranchSyncConflicted means origin/default was merged into the task branch
 	// and left conflicts for an agent to resolve.
 	TaskBranchSyncConflicted TaskBranchSyncStatus = "conflicted"
+
+	// TaskBranchSyncConflictFree means origin/default would merge without conflicts,
+	// so the conflicts-only policy left the task branch unchanged.
+	TaskBranchSyncConflictFree TaskBranchSyncStatus = "conflict_free"
 )
 
 // TaskBranchSyncOptions describes a PR branch update from the registered default branch.
@@ -79,6 +94,7 @@ type TaskBranchSyncOptions struct {
 	DefaultBranch string
 	Branch        string
 	Worktree      string
+	UpdatePolicy  TaskBranchUpdatePolicy
 }
 
 // TaskBranchSyncResult reports the local branch state after sync.
@@ -286,6 +302,7 @@ type taskBranchSyncPlan struct {
 	DefaultBranch string
 	Branch        string
 	Worktree      string
+	UpdatePolicy  TaskBranchUpdatePolicy
 }
 
 // ExpectedTaskWorktree returns the deterministic branch and worktree path for a task without mutating Git.
@@ -578,7 +595,7 @@ func materializeRepoRootTaskBranchFromDefault(
 	return TaskWorktreeSetupResult{Branch: plan.Branch, WorktreePath: plan.RepoPath, Lifecycle: TaskWorktreeLifecycleTaskBranchCreated}, nil
 }
 
-// SyncTaskBranchWithDefault fetches origin branches, merges default into a clean task branch, and pushes the branch.
+// SyncTaskBranchWithDefault fetches origin branches and applies the requested update policy.
 func SyncTaskBranchWithDefault(ctx context.Context, opts TaskBranchSyncOptions) (TaskBranchSyncResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -807,20 +824,16 @@ func syncFetchedTaskBranchWithDefault(
 		return TaskBranchSyncResult{}, err
 	}
 	if containsDefault {
-		pushed, err := pushTaskBranchIfRemoteBehind(ctx, plan.Worktree, plan.Branch, previousHead)
-		if err != nil {
-			return TaskBranchSyncResult{}, err
-		}
-		result.Status = TaskBranchSyncAlreadyCurrent
-		if pushed {
-			result.Status = TaskBranchSyncPushed
-		}
-		result.Head = previousHead
-		return result, nil
+		return finishCurrentTaskBranchSync(ctx, plan, result, previousHead)
 	}
 
 	if err := verifyMergeWouldBeClean(ctx, plan.Worktree, remoteRef); err != nil {
 		return TaskBranchSyncResult{}, err
+	}
+	if plan.UpdatePolicy == TaskBranchUpdateConflictsOnly {
+		result.Status = TaskBranchSyncConflictFree
+		result.Head = previousHead
+		return result, nil
 	}
 	if err := mergeDefaultIntoTaskBranch(ctx, plan.Worktree, plan.DefaultBranch, remoteRef); err != nil {
 		return TaskBranchSyncResult{}, err
@@ -838,6 +851,27 @@ func syncFetchedTaskBranchWithDefault(
 	}
 	result.Status = TaskBranchSyncUpdated
 	result.Head = head
+	return result, nil
+}
+
+func finishCurrentTaskBranchSync(
+	ctx context.Context,
+	plan taskBranchSyncPlan,
+	result TaskBranchSyncResult,
+	head string,
+) (TaskBranchSyncResult, error) {
+	result.Status = TaskBranchSyncAlreadyCurrent
+	result.Head = head
+	if plan.UpdatePolicy != TaskBranchUpdateAlways {
+		return result, nil
+	}
+	pushed, err := pushTaskBranchIfRemoteBehind(ctx, plan.Worktree, plan.Branch, head)
+	if err != nil {
+		return TaskBranchSyncResult{}, err
+	}
+	if pushed {
+		result.Status = TaskBranchSyncPushed
+	}
 	return result, nil
 }
 
@@ -863,6 +897,17 @@ func beginFetchedTaskBranchConflictResolution(
 		return result, nil
 	}
 
+	if plan.UpdatePolicy == TaskBranchUpdateConflictsOnly {
+		err := verifyMergeWouldBeClean(ctx, plan.Worktree, remoteRef)
+		if err == nil {
+			result.Status = TaskBranchSyncConflictFree
+			result.Head = previousHead
+			return result, nil
+		}
+		if !errors.Is(err, ErrMergeConflict) {
+			return TaskBranchSyncResult{}, err
+		}
+	}
 	if err := mergeDefaultIntoTaskBranchForResolution(ctx, plan.Worktree, plan.DefaultBranch, remoteRef); err != nil {
 		if errors.Is(err, ErrMergeConflict) {
 			conflictFiles, filesErr := unmergedFiles(ctx, plan.Worktree)
@@ -1214,6 +1259,14 @@ func newTaskWorktreePlan(opts TaskWorktreeOptions) (taskWorktreePlan, error) {
 }
 
 func newTaskBranchSyncPlan(opts TaskBranchSyncOptions) (taskBranchSyncPlan, error) {
+	policy := opts.UpdatePolicy
+	if policy == "" {
+		policy = TaskBranchUpdateAlways
+	}
+	if policy != TaskBranchUpdateAlways && policy != TaskBranchUpdateConflictsOnly {
+		return taskBranchSyncPlan{}, fmt.Errorf("unsupported task branch update policy %q", policy)
+	}
+
 	repoPath, err := normalizeRegisteredRepoPath(opts.RepoPath)
 	if err != nil {
 		return taskBranchSyncPlan{}, err
@@ -1228,6 +1281,7 @@ func newTaskBranchSyncPlan(opts TaskBranchSyncOptions) (taskBranchSyncPlan, erro
 		DefaultBranch: strings.TrimSpace(opts.DefaultBranch),
 		Branch:        strings.TrimSpace(opts.Branch),
 		Worktree:      worktree,
+		UpdatePolicy:  policy,
 	}, nil
 }
 

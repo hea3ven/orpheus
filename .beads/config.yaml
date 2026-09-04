@@ -1,4 +1,4 @@
-sync.remote: git+ssh://git@github.com/hea3ven/orpheus.git
+sync.remote: "git+ssh://git@github.com/hea3ven/orpheus.git"
 export.git-add: false
 export.auto: false
 version: 3
