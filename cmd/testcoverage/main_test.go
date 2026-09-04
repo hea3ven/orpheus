@@ -63,6 +63,15 @@ func TestFinishReportWritesPartialFailureReport(t *testing.T) {
 			t.Fatalf("partial report does not contain %q: %s", want, contents)
 		}
 	}
+	markdown, err := os.ReadFile(reportSummaryPath(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"## Test quality", "**Tests failed.**", "| unit | **Fail** |"} {
+		if !strings.Contains(string(markdown), want) {
+			t.Fatalf("partial Markdown report does not contain %q:\n%s", want, markdown)
+		}
+	}
 }
 
 func TestDecodeTestEventsExcludesPackagesWithoutSelectedTestsFromTimings(t *testing.T) {
@@ -83,6 +92,21 @@ func TestDecodeTestEventsExcludesPackagesWithoutSelectedTestsFromTimings(t *test
 	}
 	if !reflect.DeepEqual(got.packages, map[string]float64{"example.test/with-tests": 0.02}) {
 		t.Fatalf("package timings = %#v, want only package with selected tests", got.packages)
+	}
+}
+
+func TestCoverageFindingMessageShowsRegressionSize(t *testing.T) {
+	got := findingMessage(finding{
+		Kind:      "coverage",
+		Prior:     75.25,
+		Current:   73.5,
+		Threshold: 0.5,
+		Message:   "coverage regressed beyond the significance policy",
+	})
+	for _, want := range []string{"baseline 75.25%", "current 73.50%", "down 1.75 percentage points", "significance threshold 0.50 percentage points"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("finding message %q does not contain %q", got, want)
+		}
 	}
 }
 
@@ -117,6 +141,56 @@ func TestTimingFindingMessageShowsCurrentBaselineBudgetAndDifferences(t *testing
 	}
 	if strings.Contains(contents, "start_line") || strings.Contains(contents, "blocks") {
 		t.Fatalf("report includes source-level coverage detail:\n%s", contents)
+	}
+}
+
+func TestReportSummaryPathDoesNotOverwriteNonJSONReport(t *testing.T) {
+	if got, want := reportSummaryPath("report.md"), "report.summary.md"; got != want {
+		t.Fatalf("reportSummaryPath(report.md) = %q, want %q", got, want)
+	}
+}
+
+func TestReportSummaryUsesTablesAndCollapsesPackageDetails(t *testing.T) {
+	report := testQualityReportWithPackages(
+		packageMetric{Name: "example.test/first", coverageMetric: coverageMetric{StatementTotal: 10, CoveredStatements: 8}},
+		packageMetric{Name: "example.test/second", coverageMetric: coverageMetric{StatementTotal: 5, CoveredStatements: 2}},
+	)
+	report.Decision = decision{
+		Status: statusRegression,
+		Findings: []finding{{
+			Kind: "coverage", Lane: "unit", Scope: "repository", Prior: 70, Current: 66.67, Threshold: 0.5,
+			Message: "coverage regressed beyond the significance policy",
+		}},
+		Warnings: []finding{{
+			Kind: "timing", Lane: "unit", Scope: "package", Name: "example.test/first",
+			Prior: 0.75, Baseline: 0.5, Current: 0.8, BudgetSeconds: 0.75, OverageSeconds: 0.05,
+			Message: "non-blocking package timing budget exceeded",
+		}},
+	}
+
+	var output bytes.Buffer
+	renderReportSummary(&output, report, "artifacts/test-coverage/report.json")
+	contents := output.String()
+	for _, want := range []string{
+		"> [!CAUTION]",
+		"**Coverage regression.**",
+		"| Lane | Result | Coverage | Test events | Selected-test time | Wall time |",
+		"| unit | **Pass** | 10/15 (66.67%) | 10 | 0.50s | 1.00s |",
+		"### Blocking issues",
+		"unit/repository",
+		"down 3.33 percentage points",
+		"### Warnings",
+		"over budget +0.050s",
+		"<details>",
+		"<summary>Package coverage and timing</summary>",
+		"Machine-readable report: `artifacts/test-coverage/report.json`",
+	} {
+		if !strings.Contains(contents, want) {
+			t.Fatalf("Markdown report does not contain %q:\n%s", want, contents)
+		}
+	}
+	if strings.Index(contents, "### Blocking issues") > strings.Index(contents, "<summary>Package coverage and timing</summary>") {
+		t.Fatalf("blocking issues appear after package details:\n%s", contents)
 	}
 }
 
@@ -358,25 +432,97 @@ func TestSuiteTimingUsesSelectedPackageTestsInsteadOfCommandWallTime(t *testing.
 	}
 }
 
-func TestTimingBudgetsFailOnlyAboveBoundary(t *testing.T) {
+func TestPackageTimingOverrunIsNonBlockingWarning(t *testing.T) {
+	report := testQualityReport()
+	prior := baselineFromReport(report, defaultPolicy())
+	budget := prior.Lanes["unit"].PackageBudgets[0]
+	current := cloneReport(t, report)
+	lane := current.Lanes["unit"]
+	lane.Timings[0].Seconds = budget.Seconds + 0.001
+	current.Lanes["unit"] = lane
+
+	got := assess(prior, current)
+	if got.Status != statusPass {
+		t.Fatalf("package-only timing decision = %#v, want pass", got)
+	}
+	if len(got.Warnings) != 1 {
+		t.Fatalf("package timing warnings = %#v, want one warning", got.Warnings)
+	}
+	warning := got.Warnings[0]
+	if warning.Lane != "unit" || warning.Scope != "package" || warning.Name != "example.test/pkg" || warning.Current != lane.Timings[0].Seconds || warning.Baseline != budget.BaselineSeconds || warning.BudgetSeconds != budget.Seconds || warning.OverageSeconds <= 0 {
+		t.Fatalf("package timing warning = %#v", warning)
+	}
+
+	contents, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"\"warnings\"", "non-blocking package timing budget exceeded", "\"budget_seconds\"", "\"overage_seconds\""} {
+		if !strings.Contains(string(contents), want) {
+			t.Fatalf("warning JSON does not contain %q: %s", want, contents)
+		}
+	}
+
+	current.Decision = got
+	var output bytes.Buffer
+	printReportTo(&output, current, "report.json")
+	for _, want := range []string{"quality decision: pass", "warning (non-blocking): unit/example.test/pkg", "current 0.751s", "baseline 0.500s", "budget 0.750s", "over budget +0.001s"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("command output does not contain %q:\n%s", want, output.String())
+		}
+	}
+}
+
+func TestTimingBudgetsFailOnlyAboveTheirBoundaries(t *testing.T) {
 	report := testQualityReport()
 	prior := baselineFromReport(report, defaultPolicy())
 	lane := prior.Lanes["unit"]
 
-	atBoundary := cloneReport(t, report)
-	current := atBoundary.Lanes["unit"]
+	atPackageBoundary := cloneReport(t, report)
+	current := atPackageBoundary.Lanes["unit"]
 	current.Timings[0].Seconds = lane.PackageBudgets[0].Seconds
-	atBoundary.Lanes["unit"] = current
-	if got := assess(prior, atBoundary); got.Status != statusPass {
-		t.Fatalf("timing at budget = %#v, want pass", got)
+	atPackageBoundary.Lanes["unit"] = current
+	if got := assess(prior, atPackageBoundary); got.Status != statusPass || len(got.Warnings) != 0 {
+		t.Fatalf("package timing at budget = %#v, want pass without warnings", got)
 	}
 
-	over := cloneReport(t, atBoundary)
-	current = over.Lanes["unit"]
-	current.Timings[0].Seconds += 0.001
-	over.Lanes["unit"] = current
-	if got := assess(prior, over); got.Status != statusTimingFailed || !hasFinding(got, "timing", "package") {
-		t.Fatalf("timing over budget = %#v, want failure", got)
+	atSuiteBoundary := cloneReport(t, report)
+	lane.PackageBudgets[0].Seconds = lane.SuiteBudgetSeconds + 1
+	prior.Lanes["unit"] = lane
+	current = atSuiteBoundary.Lanes["unit"]
+	current.Timings[0].Seconds = lane.SuiteBudgetSeconds
+	atSuiteBoundary.Lanes["unit"] = current
+	if got := assess(prior, atSuiteBoundary); got.Status != statusPass || len(got.Warnings) != 0 {
+		t.Fatalf("suite timing at budget = %#v, want pass without warnings", got)
+	}
+}
+
+func TestSuiteTimingOverrunFailsAndKeepsPackageWarning(t *testing.T) {
+	report := testQualityReport()
+	prior := baselineFromReport(report, defaultPolicy())
+	current := cloneReport(t, report)
+	lane := current.Lanes["unit"]
+	lane.Timings[0].Seconds = prior.Lanes["unit"].SuiteBudgetSeconds + 0.001
+	current.Lanes["unit"] = lane
+
+	got := assess(prior, current)
+	if got.Status != statusTimingFailed || !hasFinding(got, "timing", "suite") || !hasWarning(got, "timing", "package") {
+		t.Fatalf("suite timing overrun = %#v, want suite failure with package warning", got)
+	}
+}
+
+func TestCoverageRegressionKeepsPackageTimingWarning(t *testing.T) {
+	report := testQualityReport()
+	prior := baselineFromReport(report, defaultPolicy())
+	current := cloneReport(t, report)
+	setLaneCoverage(current, "unit", 1000, 490)
+	lane := current.Lanes["unit"]
+	lane.Timings[0].Seconds = prior.Lanes["unit"].PackageBudgets[0].Seconds + 0.001
+	current.Lanes["unit"] = lane
+
+	got := assess(prior, current)
+	if got.Status != statusRegression || !hasFinding(got, "coverage", "repository") || !hasWarning(got, "timing", "package") {
+		t.Fatalf("mixed coverage and timing decision = %#v, want coverage regression with package warning", got)
 	}
 }
 
@@ -396,6 +542,65 @@ func TestGeneratedRefreshPreservesExistingTimingBudgets(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, generatedBaseline(changed, prior, prior.Policy)) {
 		t.Fatal("generated baseline is nondeterministic")
+	}
+}
+
+func TestWriteBaselineAllowsPackageTimingWarnings(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		refresh func(qualityReport)
+	}{
+		{
+			name: "coverage",
+			refresh: func(report qualityReport) {
+				setLaneCoverage(report, "unit", 1000, 510)
+			},
+		},
+		{
+			name: "test structure",
+			refresh: func(report qualityReport) {
+				lane := report.Lanes["unit"]
+				lane.TestCount++
+				report.Lanes["unit"] = lane
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := testutil.CanonicalTempDir(t)
+			base := testQualityReport()
+			trusted := baselineFromReport(base, defaultPolicy())
+			current := cloneReport(t, base)
+			test.refresh(current)
+			lane := current.Lanes["unit"]
+			lane.Timings[0].Seconds = trusted.Lanes["unit"].PackageBudgets[0].Seconds + 0.001
+			current.Lanes["unit"] = lane
+
+			assessment := assess(trusted, current)
+			if assessment.Status != statusRefreshRequired || !hasWarning(assessment, "timing", "package") {
+				t.Fatalf("refresh assessment = %#v, want refresh with package warning", assessment)
+			}
+			opts := options{baseline: filepath.Join(dir, "baseline.json"), output: filepath.Join(dir, "report.json"), writeBaseline: true}
+			if err := writeBaseline(opts, current, baselineFromReport(current, defaultPolicy()), trusted, nil); err != nil {
+				t.Fatalf("write baseline with package warning: %v", err)
+			}
+			written, err := loadBaseline(opts.baseline)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(written.Lanes["unit"].PackageBudgets, trusted.Lanes["unit"].PackageBudgets) || written.Lanes["unit"].SuiteBudgetSeconds != trusted.Lanes["unit"].SuiteBudgetSeconds {
+				t.Fatalf("baseline refresh changed trusted timing budgets:\ntrusted %#v\nwritten %#v", trusted.Lanes["unit"], written.Lanes["unit"])
+			}
+			if got := verifyTrackedBaseline(trusted, written, current, assessment); got.Status != statusPass || !hasWarning(got, "timing", "package") {
+				t.Fatalf("verified baseline refresh = %#v, want pass with package warning", got)
+			}
+			contents, err := os.ReadFile(opts.output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(contents), "non-blocking package timing budget exceeded") {
+				t.Fatalf("baseline report omitted package warning: %s", contents)
+			}
+		})
 	}
 }
 
@@ -626,6 +831,15 @@ func resizePackage(report qualityReport, laneName, packageName string, total, co
 func hasFinding(value decision, kind, scope string) bool {
 	for _, item := range value.Findings {
 		if item.Kind == kind && item.Scope == scope {
+			return true
+		}
+	}
+	return false
+}
+
+func hasWarning(value decision, kind, scope string) bool {
+	for _, warning := range value.Warnings {
+		if warning.Kind == kind && warning.Scope == scope {
 			return true
 		}
 	}

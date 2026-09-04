@@ -19,7 +19,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-//nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestIntegrationWorktreeCompletionFlowEndToEnd(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -104,7 +103,6 @@ func TestIntegrationWorktreeCompletionFlowEndToEnd(t *testing.T) {
 	is.NotContains(bdLog, "orpheus.pr_url")
 }
 
-//nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestIntegrationConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -173,7 +171,6 @@ func TestIntegrationConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 	is.Contains(readFileString(t, ghLogPath), "[TREX-1234] Replaced the config for abc")
 }
 
-//nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestIntegrationGlobalPublicationPolicyEndToEnd(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -315,7 +312,6 @@ func TestIntegrationGlobalTitleTemplateRequiresExternalReferenceInStatusAndDispa
 	is.ErrorContains(runErr, "publication title template requires a task external reference")
 }
 
-//nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestIntegrationMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -390,7 +386,6 @@ func TestIntegrationMissingPublicationExternalReferenceBlocksDispatchAndPublicat
 	is.ErrorIs(statErr, os.ErrNotExist)
 }
 
-//nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestIntegrationWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -484,15 +479,21 @@ func TestIntegrationWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	is.Empty(mergedErr)
 	is.Contains(mergedOut, "PR https://github.test/org/alpha/pull/55 is merged")
 	is.Contains(mergedOut, "Backend task was closed")
+	is.Contains(mergedOut, "Worktree "+target.Worktree+" was removed")
 	is.Equal("closed", strings.TrimSpace(readFileString(t, bd.StatusPath)))
+	_, statErr := os.Stat(target.Worktree)
+	is.ErrorIs(statErr, os.ErrNotExist)
 
 	var mergedState taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", taskID+".yaml"), &mergedState))
-	must.NotEmpty(mergedState.Events)
-	mergedEvent := mergedState.Events[len(mergedState.Events)-1]
+	must.GreaterOrEqual(len(mergedState.Events), 2)
+	mergedEvent := mergedState.Events[len(mergedState.Events)-2]
 	is.Equal(taskstate.EventTaskClosed, mergedEvent.Type)
 	is.Equal(taskstate.CloseReasonPRMerged, mergedEvent.CloseReason)
 	is.Equal("https://github.test/org/alpha/pull/55", mergedEvent.PRURL)
+	cleanupEvent := mergedState.Events[len(mergedState.Events)-1]
+	is.Equal(taskstate.EventWorktreeRemoved, cleanupEvent.Type)
+	is.Equal(target.Worktree, cleanupEvent.Worktree)
 
 	fullStatusOut, fullStatusErr := executeCommand(t, []string{"status", "--full"})
 	is.Empty(fullStatusErr)
@@ -500,7 +501,6 @@ func TestIntegrationWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	is.Contains(fullStatusOut, taskID)
 }
 
-//nolint:funlen // End-to-end scenario is clearer when the workflow remains linear.
 func TestIntegrationRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -611,6 +611,86 @@ func TestIntegrationRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	is.Equal(taskstate.EventTaskClosed, mergedEvent.Type)
 	is.Equal(taskstate.CloseReasonPRMerged, mergedEvent.CloseReason)
 	is.Equal("https://github.test/org/alpha/pull/56", mergedEvent.PRURL)
+}
+
+func TestIntegrationDoctorRepairsCleanClosedTaskWorktreeAndPreservesDirtyAndLockedWorktrees(t *testing.T) {
+	t.Parallel()
+	is := assert.New(t)
+	must := require.New(t)
+	paths, repoPath := setupCompletionFlowRepo(t)
+	const taskID = "op-doctor-worktree"
+	worktree, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", taskID))
+	must.NoError(err)
+	runGit(t, repoPath, "branch", "orpheus/"+taskID, "main")
+	runGit(t, repoPath, "worktree", "add", worktree, "orpheus/"+taskID)
+
+	store := taskstate.NewStore(paths)
+	_, err = store.StartRun("alpha", taskID, taskstate.StartRunOptions{
+		Agent: "implementer", WorkDirectory: worktree, Branch: "orpheus/" + taskID, Worktree: worktree,
+	})
+	must.NoError(err)
+	const lockedTaskID = "op-doctor-locked"
+	lockedWorktree, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", lockedTaskID))
+	must.NoError(err)
+	runGit(t, repoPath, "branch", "orpheus/"+lockedTaskID, "main")
+	runGit(t, repoPath, "worktree", "add", lockedWorktree, "orpheus/"+lockedTaskID)
+	runGit(t, repoPath, "worktree", "lock", "--reason", "operator repair", lockedWorktree)
+	_, err = store.StartRun("alpha", lockedTaskID, taskstate.StartRunOptions{
+		Agent: "implementer", WorkDirectory: lockedWorktree, Branch: "orpheus/" + lockedTaskID, Worktree: lockedWorktree,
+	})
+	must.NoError(err)
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: `[{"id":"op-doctor-worktree","title":"Doctor cleanup","status":"closed","priority":1,"issue_type":"task","metadata":{"orpheus.branch":"orpheus/op-doctor-worktree","orpheus.worktree":"` + worktree + `"}},{"id":"op-doctor-locked","title":"Doctor locked cleanup","status":"closed","priority":1,"issue_type":"task","metadata":{"orpheus.branch":"orpheus/op-doctor-locked","orpheus.worktree":"` + lockedWorktree + `"}}]`},
+	})
+
+	marker := filepath.Join(worktree, "preserve-me.txt")
+	must.NoError(os.WriteFile(marker, []byte("operator change"), 0o644))
+	plainOut, plainErr := executeCommand(t, []string{"doctor"})
+	is.Empty(plainErr)
+	is.Contains(plainOut, "Closed-task worktree cleanup")
+	is.Contains(plainOut, "dirty")
+	is.Contains(plainOut, worktree)
+	is.Contains(plainOut, "unsafe")
+	is.Contains(plainOut, lockedWorktree)
+	is.Contains(plainOut, "locked")
+	_, statErr := os.Stat(marker)
+	is.NoError(statErr)
+	_, statErr = os.Stat(lockedWorktree)
+	is.NoError(statErr)
+
+	fixOut, fixErr := executeCommand(t, []string{"doctor", "--fix"})
+	is.Empty(fixErr)
+	is.Contains(fixOut, "dirty")
+	is.Contains(fixOut, "unsafe")
+	is.Contains(fixOut, "locked")
+	_, statErr = os.Stat(marker)
+	is.NoError(statErr)
+	_, statErr = os.Stat(lockedWorktree)
+	is.NoError(statErr)
+
+	must.NoError(os.Remove(marker))
+	fixedOut, fixedErr := executeCommand(t, []string{"doctor", "--fix"})
+	is.Empty(fixedErr)
+	is.Contains(fixedOut, "removed")
+	_, statErr = os.Stat(worktree)
+	is.ErrorIs(statErr, os.ErrNotExist)
+	_, statErr = os.Stat(lockedWorktree)
+	is.NoError(statErr)
+
+	runGit(t, repoPath, "worktree", "unlock", lockedWorktree)
+	unlockedOut, unlockedErr := executeCommand(t, []string{"doctor", "--fix"})
+	is.Empty(unlockedErr)
+	is.Contains(unlockedOut, "removed")
+	_, statErr = os.Stat(lockedWorktree)
+	is.ErrorIs(statErr, os.ErrNotExist)
+
+	emptyOut, emptyErr := executeCommand(t, []string{"doctor"})
+	is.Empty(emptyErr)
+	is.Contains(emptyOut, "No lingering closed-task worktrees found.")
+	is.NotContains(emptyOut, "already_absent")
+	loaded, err := store.Load("alpha", taskID)
+	must.NoError(err)
+	is.Equal(taskstate.EventWorktreeRemoved, loaded.Events[len(loaded.Events)-1].Type)
 }
 
 func TestIntegrationTaskRunMainProvidesRepositoryRootMigrationGuidance(t *testing.T) {

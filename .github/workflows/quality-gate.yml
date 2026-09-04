@@ -42,7 +42,9 @@ jobs:
         id: setup-go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.x'
+          # Coverage statement accounting changed in Go 1.27. Keep this exact
+          # version aligned with the tracked coverage baseline.
+          go-version: '1.27.0'
 
       - name: Restore pinned quality tools
         id: quality-tools
@@ -138,14 +140,14 @@ jobs:
           quality_exit=0
 
           if ! git show "$BASE_SHA:coverage/test-coverage-baseline.json" >"$BASELINE" 2>"$base_error"; then
-            cat "$base_error" | tee -a "$log" | tee -a "$GITHUB_STEP_SUMMARY"
+            cat "$base_error" | tee -a "$log"
             quality_exit=1
           else
             cp "$BASELINE" artifacts/test-coverage/base-test-coverage-baseline.json
-            make quality QUALITY_COMPARE_TO="$BASELINE" 2>&1 | tee "$log" | tee -a "$GITHUB_STEP_SUMMARY"
+            make quality QUALITY_COMPARE_TO="$BASELINE" 2>&1 | tee "$log"
             statuses=("${PIPESTATUS[@]}")
             quality_exit="${statuses[0]}"
-            if [[ "${statuses[1]}" -ne 0 || "${statuses[2]}" -ne 0 ]]; then
+            if [[ "${statuses[1]}" -ne 0 ]]; then
               quality_exit=1
             fi
           fi
@@ -173,9 +175,9 @@ jobs:
           set -uo pipefail
           set +e
           mkdir -p artifacts/test-coverage
-          make lint 2>&1 | tee artifacts/test-coverage/lint.log | tee -a "$GITHUB_STEP_SUMMARY"
+          make lint 2>&1 | tee artifacts/test-coverage/lint.log
           statuses=("${PIPESTATUS[@]}")
-          if [[ "${statuses[1]}" -ne 0 || "${statuses[2]}" -ne 0 ]]; then
+          if [[ "${statuses[1]}" -ne 0 ]]; then
             exit 1
           fi
           exit "${statuses[0]}"
@@ -189,9 +191,9 @@ jobs:
           set -uo pipefail
           set +e
           mkdir -p artifacts/test-coverage
-          make build 2>&1 | tee artifacts/test-coverage/build.log | tee -a "$GITHUB_STEP_SUMMARY"
+          make build 2>&1 | tee artifacts/test-coverage/build.log
           statuses=("${PIPESTATUS[@]}")
-          if [[ "${statuses[1]}" -ne 0 || "${statuses[2]}" -ne 0 ]]; then
+          if [[ "${statuses[1]}" -ne 0 ]]; then
             exit 1
           fi
           exit "${statuses[0]}"
@@ -208,40 +210,106 @@ jobs:
         run: |
           set -euo pipefail
           failed=0
+
+          case "$QUALITY_DECISION" in
+            pass)
+              if [[ "$QUALITY_OUTCOME" == success ]]; then
+                quality_result='**Pass**'
+              else
+                quality_result='**Execution failed**'
+                failed=1
+              fi
+              ;;
+            refresh_required)
+              quality_result='**Failed:** Baseline refresh required'
+              failed=1
+              ;;
+            coverage_regression)
+              quality_result='**Failed:** Coverage regression'
+              failed=1
+              ;;
+            timing_budget_exceeded)
+              quality_result='**Failed:** Timing budget exceeded'
+              failed=1
+              ;;
+            test_failed)
+              quality_result='**Failed:** Tests failed'
+              failed=1
+              ;;
+            *)
+              quality_result='**Execution failed**'
+              failed=1
+              ;;
+          esac
+
+          case "$LINT_OUTCOME" in
+            success) lint_result='**Pass**' ;;
+            failure) lint_result='**Failed**'; failed=1 ;;
+            *) lint_result='**Not run**'; failed=1 ;;
+          esac
+          case "$BUILD_OUTCOME" in
+            success) build_result='**Pass**' ;;
+            failure) build_result='**Failed**'; failed=1 ;;
+            *) build_result='**Not run**'; failed=1 ;;
+          esac
+
+          if [[ "$failed" -eq 0 ]]; then
+            gate_alert='TIP'
+            gate_result='Gate passed'
+          else
+            gate_alert='CAUTION'
+            gate_result='Gate failed'
+          fi
+
+          append_log() {
+            local title="$1"
+            local path="$2"
+            [[ -s "$path" ]] || return 0
+            printf '\n<details>\n<summary>%s</summary>\n\n' "$title"
+            printf '%s\n' '```text'
+            cat "$path"
+            printf '%s\n' '```' '</details>'
+          }
+
           {
-            echo '## Pull-request quality gate'
-            case "$QUALITY_DECISION" in
-              pass)
-                if [[ "$QUALITY_OUTCOME" == success ]]; then
-                  echo '- Quality: **pass**'
-                else
-                  echo '- Quality: **execution_failure** (report command did not complete)'
-                  failed=1
-                fi
-                ;;
-              coverage_regression|refresh_required|timing_budget_exceeded|test_failed)
-                echo "- Quality: **$QUALITY_DECISION**"
-                failed=1
-                ;;
-              *)
-                echo '- Quality: **execution_failure**'
-                failed=1
-                ;;
-            esac
-            echo "- Quality command exit code: \`${QUALITY_EXIT_CODE:-unavailable}\`"
-            if [[ "$LINT_OUTCOME" == success ]]; then
-              echo '- Lint: **pass**'
+            echo '# Pull-request quality gate'
+            echo
+            echo "> [!$gate_alert]"
+            echo "> **$gate_result.** See the check results and test details below."
+            echo
+            echo '| Check | Result |'
+            echo '| --- | --- |'
+            echo "| Test quality | $quality_result |"
+            echo "| Lint | $lint_result |"
+            echo "| Build | $build_result |"
+            echo
+            echo "Quality command exit code: \`${QUALITY_EXIT_CODE:-unavailable}\`"
+
+            if [[ -f artifacts/test-coverage/report.md ]]; then
+              echo
+              cat artifacts/test-coverage/report.md
             else
-              echo '- Lint: **failed**'
-              failed=1
+              echo
+              echo '## Test quality'
+              echo
+              echo '> [!CAUTION]'
+              echo '> **Quality report unavailable.** Inspect the setup and command diagnostics below.'
             fi
-            if [[ "$BUILD_OUTCOME" == success ]]; then
-              echo '- Build: **pass**'
-            else
-              echo '- Build: **failed**'
-              failed=1
+
+            if [[ "$QUALITY_OUTCOME" != success ]]; then
+              append_log 'Quality command output' artifacts/test-coverage/quality.log
+            fi
+            if [[ ! -f artifacts/test-coverage/report.md ]]; then
+              append_log 'Setup diagnostics' artifacts/test-coverage/setup.log
+            fi
+            if [[ "$LINT_OUTCOME" != success ]]; then
+              append_log 'Lint output' artifacts/test-coverage/lint.log
+            fi
+            if [[ "$BUILD_OUTCOME" != success ]]; then
+              append_log 'Build output' artifacts/test-coverage/build.log
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
           if [[ "$failed" -ne 0 ]]; then
             echo "::error::Pull-request quality gate failed: ${QUALITY_DECISION:-execution_failure}"
             exit 1

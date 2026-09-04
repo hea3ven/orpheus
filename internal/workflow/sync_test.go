@@ -28,7 +28,10 @@ type fakeSyncRunStore struct {
 	conflictEvents   []fakeConflictEvent
 	recordErr        error
 	conflictEventErr error
+	cleanupLoadErr   error
+	taskClosed       bool
 	recordedAt       time.Time
+	worktreeCleanups []taskstate.WorktreeCleanupOptions
 }
 
 type fakeSyncGit struct {
@@ -206,14 +209,28 @@ func (b *fakeSyncBackend) Close(_ context.Context, taskID string) error {
 	if b.closeErr != nil {
 		return b.closeErr
 	}
-	return nil
+	for i := range b.tasks {
+		if b.tasks[i].ID == taskID {
+			b.tasks[i].Status = task.StatusClosed
+			return nil
+		}
+	}
+	return task.ErrNotFound
 }
 
 func (s *fakeSyncRunStore) Load(repoID, taskID string) (taskstate.TaskState, error) {
+	if s.taskClosed && s.cleanupLoadErr != nil {
+		return taskstate.TaskState{}, s.cleanupLoadErr
+	}
 	if state, ok := s.states[repoID+"/"+taskID]; ok {
 		return state, nil
 	}
 	return taskstate.TaskState{RepoID: repoID, TaskID: taskID}, nil
+}
+
+func (s *fakeSyncRunStore) RecordWorktreeCleanup(repoID, taskID string, opts taskstate.WorktreeCleanupOptions) (taskstate.Event, error) {
+	s.worktreeCleanups = append(s.worktreeCleanups, opts)
+	return taskstate.Event{Type: taskstate.EventWorktreeRemoved, Worktree: opts.Worktree}, nil
 }
 
 func (s *fakeSyncRunStore) RecordTaskClosed(repoID, taskID string, opts taskstate.TaskClosedOptions) (taskstate.Event, error) {
@@ -221,6 +238,7 @@ func (s *fakeSyncRunStore) RecordTaskClosed(repoID, taskID string, opts taskstat
 	if s.recordErr != nil {
 		return taskstate.Event{}, s.recordErr
 	}
+	s.taskClosed = true
 	at := s.recordedAt
 	if at.IsZero() {
 		at = time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC)
@@ -477,7 +495,8 @@ func TestSyncServiceUpdatesOpenPRBranchFromDefault(t *testing.T) {
 	if req.RepoPath != repoPath ||
 		req.DefaultBranch != "main" ||
 		req.Branch != targets.WorktreeTeam.Branch ||
-		req.Worktree != targets.WorktreeTeam.Worktree {
+		req.Worktree != targets.WorktreeTeam.Worktree ||
+		req.UpdatePolicy != gitmeta.TaskBranchUpdateAlways {
 		t.Fatalf("git request = %#v, want repo/default/task branch metadata", req)
 	}
 	if len(backend.closed) != 0 || len(backend.setPRURLs) != 0 {
@@ -517,7 +536,6 @@ func TestSyncServiceReportsOpenPRBranchAlreadyCurrent(t *testing.T) {
 	}
 }
 
-//nolint:funlen // The successful conflict-repair workflow is clearer as one integrated fixture.
 func TestSyncServiceResolvesOpenPRBranchConflictWithAgent(t *testing.T) {
 	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
@@ -579,6 +597,10 @@ func TestSyncServiceResolvesOpenPRBranchConflictWithAgent(t *testing.T) {
 			gitState.beginRequests,
 			gitState.completeRequests,
 		)
+	}
+	if gitState.requests[0].UpdatePolicy != gitmeta.TaskBranchUpdateAlways ||
+		gitState.beginRequests[0].UpdatePolicy != gitmeta.TaskBranchUpdateAlways {
+		t.Fatalf("git policies sync=%q begin=%q, want always-update", gitState.requests[0].UpdatePolicy, gitState.beginRequests[0].UpdatePolicy)
 	}
 	if len(gitState.completeFiles) != 1 ||
 		len(gitState.completeFiles[0]) != 1 ||
@@ -835,6 +857,65 @@ func TestSyncServiceClosesTaskAndRecordsAuditForMergedPR(t *testing.T) {
 		event.opts.PRURL != "https://github.test/org/repo/pull/42" ||
 		event.opts.ObservedPRState != "merged" {
 		t.Fatalf("audit event = %#v, want repo/task/merged PR facts", event)
+	}
+}
+
+func TestSyncServiceMergedPRCleansDedicatedWorktreeAfterRecordingClosure(t *testing.T) {
+	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
+	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
+	worktree := targets.WorktreeTeam.Worktree
+	taskItem := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{
+		task.MetadataBranch: targets.WorktreeTeam.Branch, task.MetadataWorktree: worktree,
+		task.MetadataPRURL: "https://github.test/org/repo/pull/42",
+	}}
+	state := taskstate.TaskState{
+		RepoID: "alpha", TaskID: "op-1", WorkDirectory: taskstate.WorkDirectory{Path: worktree},
+		GitFacts: taskstate.GitFacts{Branch: targets.WorktreeTeam.Branch, Worktree: worktree},
+	}
+	service, provider, _ := newSyncTestService(t, taskItem, state, paths, source)
+	runStore := &fakeSyncRunStore{states: map[string]taskstate.TaskState{"alpha/op-1": state}}
+	service.RunStore = runStore
+	cleanupGit := &fakeClosedTaskWorktreeGit{
+		inspection: gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeClean, Worktree: worktree},
+		removal:    gitmeta.ClosedTaskWorktreeRemoval{Outcome: gitmeta.ClosedTaskWorktreeRemoved, Worktree: worktree},
+	}
+	service.CleanupGit = cleanupGit
+	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateMerged}
+
+	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.WorktreeCleanup == nil || result.WorktreeCleanup.Outcome != workflow.WorktreeCleanupRemoved || cleanupGit.removes != 1 || len(runStore.worktreeCleanups) != 1 {
+		t.Fatalf("worktree cleanup = %#v, Git removes = %d, audits = %#v; want removed and audited", result.WorktreeCleanup, cleanupGit.removes, runStore.worktreeCleanups)
+	}
+}
+
+func TestSyncServiceMergedPRReportsWorktreeWhenCleanupStateReloadFails(t *testing.T) {
+	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
+	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
+	worktree := targets.WorktreeTeam.Worktree
+	taskItem := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{
+		task.MetadataBranch: targets.WorktreeTeam.Branch, task.MetadataWorktree: worktree,
+		task.MetadataPRURL: "https://github.test/org/repo/pull/42",
+	}}
+	state := taskstate.TaskState{
+		RepoID: "alpha", TaskID: "op-1", WorkDirectory: taskstate.WorkDirectory{Path: worktree},
+		GitFacts: taskstate.GitFacts{Branch: targets.WorktreeTeam.Branch, Worktree: worktree},
+	}
+	service, provider, _ := newSyncTestService(t, taskItem, state, paths, source)
+	service.RunStore = &fakeSyncRunStore{
+		states:         map[string]taskstate.TaskState{"alpha/op-1": state},
+		cleanupLoadErr: errors.New("state storage unavailable"),
+	}
+	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateMerged}
+
+	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.WorktreeCleanup == nil || result.WorktreeCleanup.Outcome != workflow.WorktreeCleanupUnsafe || result.WorktreeCleanup.Worktree != worktree || !strings.Contains(result.WorktreeCleanup.Reason, "state storage unavailable") {
+		t.Fatalf("worktree cleanup = %#v, want unsafe result with worktree path", result.WorktreeCleanup)
 	}
 }
 
@@ -1368,7 +1449,6 @@ func assertSyncAllDiagnostics(t *testing.T, logs string) {
 	}
 }
 
-//nolint:funlen // The batch continuation scenario is clearer as one integrated workflow fixture.
 func TestSyncServiceSyncAllContinuesAfterOpenPRBranchUpdateFailure(t *testing.T) {
 	paths, source, targets := newSyncTestSource(t, filepath.Join(testutil.CanonicalTempDir(t), "repo"), "op-fail")
 	currentTargets := mustSyncExpectedTargets(t, source.Repository, "op-current", paths)
@@ -1447,7 +1527,56 @@ func TestSyncServiceSyncAllContinuesAfterOpenPRBranchUpdateFailure(t *testing.T)
 	}
 }
 
-//nolint:funlen // The batch conflict-repair path needs repository, PR, Git, and telemetry fixtures together.
+func TestSyncServiceSyncAllLeavesConflictFreeOpenPRBranchUnchanged(t *testing.T) {
+	paths, source, targets := newSyncTestSource(t, filepath.Join(testutil.CanonicalTempDir(t), "repo"), "op-clean")
+	backend := &fakeSyncBackend{tasks: []task.Task{{
+		ID:        "op-clean",
+		Status:    task.StatusInProgress,
+		IssueType: task.IssueTypeTask,
+		Metadata: task.Metadata{
+			task.MetadataBranch:   targets.WorktreeTeam.Branch,
+			task.MetadataWorktree: targets.WorktreeTeam.Worktree,
+			task.MetadataPRURL:    "https://github.test/org/repo/pull/1",
+		},
+	}}}
+	provider := &fakePRProvider{status: pullrequest.PullRequestStatus{
+		URL:   "https://github.test/org/repo/pull/1",
+		State: pullrequest.StateOpen,
+	}}
+	gitState := &fakeSyncGit{result: gitmeta.TaskBranchSyncResult{
+		Status: gitmeta.TaskBranchSyncConflictFree,
+		Head:   "local-head",
+	}}
+	service := workflow.SyncService{
+		Paths:   paths,
+		Sources: []task.RepositorySource{source},
+		BackendFactory: func(task.RepositorySource) (task.SyncBackend, error) {
+			return backend, nil
+		},
+		RunStore:   &fakeSyncRunStore{},
+		Git:        gitState,
+		PRProvider: provider,
+	}
+
+	result, err := service.SyncAll(context.Background())
+	if err != nil {
+		t.Fatalf("sync all: %v", err)
+	}
+	if len(result.Results) != 1 || result.Results[0].Status != workflow.SyncStatusAlreadyInReview {
+		t.Fatalf("results = %#v, want unchanged open PR", result.Results)
+	}
+	if !strings.Contains(result.Results[0].Reason, "would merge main without conflicts") ||
+		!strings.Contains(result.Results[0].Reason, "left it unchanged") {
+		t.Fatalf("reason = %q, want clear conflict-only explanation", result.Results[0].Reason)
+	}
+	if len(gitState.requests) != 1 || gitState.requests[0].UpdatePolicy != gitmeta.TaskBranchUpdateConflictsOnly {
+		t.Fatalf("git requests = %#v, want one conflicts-only preflight", gitState.requests)
+	}
+	if len(gitState.beginRequests) != 0 || len(gitState.completeRequests) != 0 {
+		t.Fatalf("conflict calls begin=%#v complete=%#v, want none", gitState.beginRequests, gitState.completeRequests)
+	}
+}
+
 func TestSyncServiceSyncAllRecordsConflictResolutionTelemetry(t *testing.T) {
 	paths, source, targets := newSyncTestSource(t, filepath.Join(testutil.CanonicalTempDir(t), "repo"), "op-conflict")
 	backend := &fakeSyncBackend{
@@ -1522,6 +1651,12 @@ func TestSyncServiceSyncAllRecordsConflictResolutionTelemetry(t *testing.T) {
 	if len(result.Failures) != 0 {
 		t.Fatalf("failures = %#v, want none", result.Failures)
 	}
+	if len(gitState.requests) != 1 || gitState.requests[0].UpdatePolicy != gitmeta.TaskBranchUpdateConflictsOnly {
+		t.Fatalf("git requests = %#v, want one conflicts-only preflight", gitState.requests)
+	}
+	if len(gitState.beginRequests) != 1 || gitState.beginRequests[0].UpdatePolicy != gitmeta.TaskBranchUpdateConflictsOnly {
+		t.Fatalf("conflict begin requests = %#v, want conflicts-only policy", gitState.beginRequests)
+	}
 	if len(runStore.conflictEvents) != 2 ||
 		runStore.conflictEvents[0].eventType != taskstate.EventSyncConflictStarted ||
 		runStore.conflictEvents[1].eventType != taskstate.EventSyncConflictFinished {
@@ -1538,7 +1673,6 @@ func TestSyncServiceSyncAllRecordsConflictResolutionTelemetry(t *testing.T) {
 	}
 }
 
-//nolint:funlen // The batch conflict-agent failure is clearer as one integrated fixture.
 func TestSyncServiceSyncAllContinuesAfterConflictAgentFailure(t *testing.T) {
 	paths, source, targets := newSyncTestSource(t, filepath.Join(testutil.CanonicalTempDir(t), "repo"), "op-conflict")
 	currentTargets := mustSyncExpectedTargets(t, source.Repository, "op-current", paths)
@@ -1867,7 +2001,6 @@ func TestBuildPublicationPullRequestContentUsesTitleTemplate(t *testing.T) {
 	}
 }
 
-//nolint:funlen // The review process fixture is easier to verify as one content example.
 func TestBuildPublicationPullRequestContentFromStateFormatsReviewProcess(t *testing.T) {
 	finishedAt := time.Date(2026, 6, 10, 11, 0, 0, 0, time.UTC)
 	content, err := workflow.BuildPublicationPullRequestContentFromState("", task.Task{
@@ -2102,6 +2235,7 @@ func newSyncTestService(
 		},
 		RunStore:   &fakeSyncRunStore{},
 		Git:        &fakeSyncGit{},
+		CleanupGit: &fakeClosedTaskWorktreeGit{inspection: gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeAbsent}},
 		PRProvider: provider,
 	}
 	return service, provider, backend

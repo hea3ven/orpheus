@@ -13,9 +13,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newTaskReviewShowCommand(opts *rootOptions) *cobra.Command {
+func newTaskShowReviewCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "show <task-id> [review-attempt] [finding-number]",
+		Use:   "review <task-id> [review-attempt] [finding-number]",
 		Short: "Inspect persisted review history, an attempt, or an authoritative finding",
 		Long: "This is the inspection surface for review state, including blocking/advisory/separate-task findings, " +
 			"autonomous budget exhaustion, and interrupted automated blocker decisions. It never advances workflow state. " +
@@ -23,7 +23,7 @@ func newTaskReviewShowCommand(opts *rootOptions) *cobra.Command {
 			"then a finding number for one authoritative finding.",
 		Args: reviewShowArgs,
 		RunE: func(command *cobra.Command, args []string) error {
-			return runTaskReviewShow(command, opts, args)
+			return runTaskShowReview(command, opts, args)
 		},
 	}
 	return cmd
@@ -71,7 +71,7 @@ func positiveReviewShowNumber(label string, raw string) (int, error) {
 	return value, nil
 }
 
-func runTaskReviewShow(command *cobra.Command, opts *rootOptions, args []string) error {
+func runTaskShowReview(command *cobra.Command, opts *rootOptions, args []string) error {
 	taskID := args[0]
 	scope, err := parseReviewShowScope(args)
 	if err != nil {
@@ -79,15 +79,15 @@ func runTaskReviewShow(command *cobra.Command, opts *rootOptions, args []string)
 	}
 	logger := opts.log().With(
 		slog.String("component", "cli"),
-		slog.String("operation", "task_review_show"),
+		slog.String("operation", "task_show_review"),
 	)
-	logger.DebugContext(command.Context(), "loading registered repos for task review show")
+	logger.DebugContext(command.Context(), "loading registered repos for task show review")
 
 	deps, err := opts.invocation(command)
 	if err != nil {
 		return err
 	}
-	resolvedCtx, err := resolveTaskContextWithScope(command, deps, "task review show", taskID, false)
+	resolvedCtx, err := resolveTaskContextWithScope(command, deps, "task show review", taskID, false)
 	if err != nil {
 		return err
 	}
@@ -97,7 +97,7 @@ func runTaskReviewShow(command *cobra.Command, opts *rootOptions, args []string)
 	)
 	if err != nil {
 		return fmt.Errorf(
-			"task review show %s: load local task-state for repo %s: %w",
+			"task show review %s: load local task-state for repo %s: %w",
 			resolvedCtx.Resolved.TaskID,
 			resolvedCtx.Resolved.Source.Repository.ID,
 			err,
@@ -111,7 +111,7 @@ func runTaskReviewShow(command *cobra.Command, opts *rootOptions, args []string)
 		slog.String("task_id", resolvedCtx.Resolved.TaskID),
 		slog.Int("review_count", len(taskState.Reviews)),
 	)
-	return renderTaskReviewShow(
+	return renderTaskShowReview(
 		command.OutOrStdout(),
 		resolvedCtx.Resolved.Source.Repository.ID,
 		resolvedCtx.Resolved.TaskID,
@@ -120,7 +120,7 @@ func runTaskReviewShow(command *cobra.Command, opts *rootOptions, args []string)
 	)
 }
 
-func renderTaskReviewShow(
+func renderTaskShowReview(
 	output io.Writer,
 	repoID string,
 	taskID string,
@@ -189,7 +189,7 @@ func renderReviewHistory(output io.Writer, taskState taskstate.TaskState) error 
 			}
 		}
 	}
-	_, err := fmt.Fprintln(output, "\nInspect an attempt with `orpheus task review show <task-id> <review-attempt>` or an authoritative finding with `orpheus task review show <task-id> <review-attempt> <finding-number>`.")
+	_, err := fmt.Fprintln(output, "\nInspect an attempt with `orpheus task show review <task-id> <review-attempt>` or an authoritative finding with `orpheus task show review <task-id> <review-attempt> <finding-number>`.")
 	return err
 }
 
@@ -548,42 +548,68 @@ func followUpRunDisposition(taskState taskstate.TaskState, attempt int) string {
 	return fmt.Sprintf("follow-up run %d", attempt)
 }
 
-//nolint:funlen // The scoped finding inspection output is clearest as one ordered rendering path.
+type reviewFindingReference struct {
+	index       int
+	finding     taskstate.ReviewFinding
+	interrupted bool
+}
+
 func renderAuthoritativeFinding(output io.Writer, taskState taskstate.TaskState, review taskstate.ReviewAttempt, number int) error {
 	if number <= 0 {
 		return fmt.Errorf("finding number must be positive")
 	}
-	authoritativeNumber := 0
-	findingIndex := -1
-	finding := taskstate.ReviewFinding{}
-	for index, candidate := range review.Findings {
-		if taskstate.InterruptedPrimaryReviewFinding(review, candidate) {
+	reference, findingCount, ok := reviewFindingByAuthoritativeNumber(review, number)
+	if !ok {
+		return fmt.Errorf("authoritative finding number %d is out of range for review attempt %d (has %d authoritative finding(s))", number, review.Attempt, findingCount)
+	}
+	return renderScopedReviewFinding(output, taskState, review.Attempt, number, reference)
+}
+
+func reviewFindingByAuthoritativeNumber(review taskstate.ReviewAttempt, number int) (reviewFindingReference, int, bool) {
+	findingCount := 0
+	for index, finding := range review.Findings {
+		if taskstate.InterruptedPrimaryReviewFinding(review, finding) {
 			continue
 		}
-		authoritativeNumber++
-		if authoritativeNumber == number {
-			findingIndex, finding = index, candidate
-			break
+		findingCount++
+		if findingCount == number {
+			return reviewFindingReference{index: index, finding: finding}, findingCount, true
 		}
 	}
-	if findingIndex < 0 && number <= len(review.Findings) && taskstate.InterruptedPrimaryReviewFinding(review, review.Findings[number-1]) {
+	if number <= len(review.Findings) && taskstate.InterruptedPrimaryReviewFinding(review, review.Findings[number-1]) {
 		// Interrupted primary findings retain their legacy persisted inspection reference.
-		findingIndex, finding = number-1, review.Findings[number-1]
+		finding := review.Findings[number-1]
+		return reviewFindingReference{index: number - 1, finding: finding, interrupted: true}, findingCount, true
 	}
-	found := findingIndex >= 0
-	if !found {
-		return fmt.Errorf("authoritative finding number %d is out of range for review attempt %d (has %d authoritative finding(s))", number, review.Attempt, authoritativeNumber)
-	}
-	interrupted := taskstate.InterruptedPrimaryReviewFinding(review, finding)
-	label := "Authoritative"
-	disposition := reviewFindingResolution(taskState, finding)
-	if interrupted {
-		label = "Audit-only"
-		disposition = "audit-only (interrupted primary reviewer)"
-	}
-	if _, err := fmt.Fprintf(output, "\n%s finding %d/%d:\n", label, review.Attempt, number); err != nil {
+	return reviewFindingReference{}, findingCount, false
+}
+
+func renderScopedReviewFinding(
+	output io.Writer,
+	taskState taskstate.TaskState,
+	reviewAttempt, number int,
+	reference reviewFindingReference,
+) error {
+	label, disposition := reviewFindingPresentation(taskState, reference)
+	if _, err := fmt.Fprintf(output, "\n%s finding %d/%d:\n", label, reviewAttempt, number); err != nil {
 		return err
 	}
+	for _, line := range reviewFindingDetailLines(reference.finding, disposition, reference.interrupted) {
+		if _, err := fmt.Fprintln(output, line); err != nil {
+			return err
+		}
+	}
+	return renderReviewFollowUpRunsForFinding(output, taskState, reviewAttempt, reference.index)
+}
+
+func reviewFindingPresentation(taskState taskstate.TaskState, reference reviewFindingReference) (string, string) {
+	if reference.interrupted {
+		return "Audit-only", "audit-only (interrupted primary reviewer)"
+	}
+	return "Authoritative", reviewFindingResolution(taskState, reference.finding)
+}
+
+func reviewFindingDetailLines(finding taskstate.ReviewFinding, disposition string, interrupted bool) []string {
 	lines := []string{
 		"  Step: " + formatReviewValue(finding.Step),
 		"  Type: " + formatReviewValue(string(finding.Type)),
@@ -616,12 +642,7 @@ func renderAuthoritativeFinding(output io.Writer, taskState taskstate.TaskState,
 	if finding.TargetedByRunAttempt > 0 {
 		lines = append(lines, fmt.Sprintf("  Targeted by follow-up run attempt: %d", finding.TargetedByRunAttempt))
 	}
-	for _, line := range lines {
-		if _, err := fmt.Fprintln(output, line); err != nil {
-			return err
-		}
-	}
-	return renderReviewFollowUpRunsForFinding(output, taskState, review.Attempt, findingIndex)
+	return lines
 }
 
 func renderReviewFollowUpRunsForAttempt(output io.Writer, taskState taskstate.TaskState, reviewAttempt int) error {
@@ -769,78 +790,68 @@ func createdReviewFollowUps(taskState taskstate.TaskState) []createdReviewFollow
 	return followUps
 }
 
-//nolint:funlen // Review lifecycle guidance reads clearest as a single status switch.
 func renderReviewNextStep(output io.Writer, taskID string, taskState taskstate.TaskState, review taskstate.ReviewAttempt) error {
 	switch review.Status {
 	case taskstate.ReviewStatusWaitingForAutomatedDecision:
-		_, err := fmt.Fprintf(
-			output,
-			"\nNext step: automated blocker decision is paused; run `orpheus task review %s` to resume step %s.\n",
-			taskID,
-			formatReviewValue(review.Step),
-		)
-		return err
+		return renderReviewNextStepMessage(output, pausedAutomatedDecisionNextStep(taskID, review))
 	case taskstate.ReviewStatusWaitingForManual:
-		_, err := fmt.Fprintf(
-			output,
-			"\nNext step: run `orpheus task run %s` to resume manual step %s.\n",
-			taskID,
-			formatReviewValue(review.Step),
-		)
-		return err
+		return renderReviewNextStepMessage(output, manualReviewNextStep(taskID, review))
 	case taskstate.ReviewStatusBlocked:
-		if taskstate.ReviewComparisonInputInterrupted(review) {
-			_, err := fmt.Fprintf(output, "\nNext step: alternate comparison input was interrupted; run `orpheus task run %s` to start a fresh review.\n", taskID)
-			return err
-		}
-		if review.AutomatedBlockerDecisionInterrupted {
-			_, err := fmt.Fprintf(
-				output,
-				"\nNext step: automated blocker decisions were interrupted; run `orpheus task run %s` to start a fresh review.\n",
-				taskID,
-			)
-			return err
-		}
-		if taskstate.HasUnkeptAutomatedBlockingFindingsInState(taskState, review) {
-			_, err := fmt.Fprintf(
-				output,
-				"\nNext step: automated blockers need operator decisions; run `orpheus task run %s` to start a fresh review.\n",
-				taskID,
-			)
-			return err
-		}
-		if review.AutonomousBudgetExhausted {
-			_, err := fmt.Fprintf(
-				output,
-				"\nNext step: autonomous review attempts are exhausted; run `orpheus task run %s` to continue with a fresh budget.\n",
-				taskID,
-			)
-			return err
-		}
-		if taskstate.ReviewHasOpenBlockersInState(taskState, review) {
-			if taskstate.HasFailedReviewFollowUpTargets(taskState, review) {
-				_, err := fmt.Fprintf(
-					output,
-					"\nNext step: retry `orpheus task run %s` to address open blocking findings; it starts a fresh review after repair.\n",
-					taskID,
-				)
-				return err
-			}
-			_, err := fmt.Fprintf(
-				output,
-				"\nNext step: run `orpheus task run %s` to address open blocking findings; it starts a fresh review after repair.\n",
-				taskID,
-			)
-			return err
-		}
-		_, err := fmt.Fprintf(output, "\nNext step: run `orpheus task run %s` after targeted follow-up work completes.\n", taskID)
-		return err
+		return renderReviewNextStepMessage(output, blockedReviewNextStep(taskID, taskState, review))
 	case taskstate.ReviewStatusFailed, taskstate.ReviewStatusAborted:
-		_, err := fmt.Fprintf(output, "\nNext step: run `orpheus task run %s` when ready.\n", taskID)
-		return err
+		return renderReviewNextStepMessage(output, fmt.Sprintf("run `orpheus task run %s` when ready.", taskID))
 	default:
 		return nil
 	}
+}
+
+func pausedAutomatedDecisionNextStep(taskID string, review taskstate.ReviewAttempt) string {
+	return fmt.Sprintf(
+		"automated blocker decision is paused; run `orpheus task run %s` to resume step %s.",
+		taskID,
+		formatReviewValue(review.Step),
+	)
+}
+
+func manualReviewNextStep(taskID string, review taskstate.ReviewAttempt) string {
+	return fmt.Sprintf("run `orpheus task run %s` to resume manual step %s.", taskID, formatReviewValue(review.Step))
+}
+
+func blockedReviewNextStep(taskID string, taskState taskstate.TaskState, review taskstate.ReviewAttempt) string {
+	switch {
+	case taskstate.ReviewComparisonInputInterrupted(review):
+		return freshReviewNextStep(taskID, "alternate comparison input was interrupted")
+	case review.AutomatedBlockerDecisionInterrupted:
+		return freshReviewNextStep(taskID, "automated blocker decisions were interrupted")
+	case taskstate.HasUnkeptAutomatedBlockingFindingsInState(taskState, review):
+		return freshReviewNextStep(taskID, "automated blockers need operator decisions")
+	case review.AutonomousBudgetExhausted:
+		return freshBudgetNextStep(taskID)
+	case taskstate.ReviewHasOpenBlockersInState(taskState, review):
+		return openBlockingFindingsNextStep(taskID, taskstate.HasFailedReviewFollowUpTargets(taskState, review))
+	default:
+		return fmt.Sprintf("run `orpheus task run %s` after targeted follow-up work completes.", taskID)
+	}
+}
+
+func freshReviewNextStep(taskID, reason string) string {
+	return fmt.Sprintf("%s; run `orpheus task run %s` to start a fresh review.", reason, taskID)
+}
+
+func freshBudgetNextStep(taskID string) string {
+	return fmt.Sprintf("autonomous review attempts are exhausted; run `orpheus task run %s` to continue with a fresh budget.", taskID)
+}
+
+func openBlockingFindingsNextStep(taskID string, retry bool) string {
+	if retry {
+		return fmt.Sprintf("retry `orpheus task run %s` to address open blocking findings; it starts a fresh review after repair.", taskID)
+	}
+	return fmt.Sprintf("run `orpheus task run %s` to address open blocking findings; it starts a fresh review after repair.", taskID)
+}
+
+func renderReviewNextStepMessage(output io.Writer, message string) error {
+	_, err := fmt.Fprintf(output, "\nNext step: %s\n", message)
+	return err
 }
 
 func formatReviewValue(value string) string {

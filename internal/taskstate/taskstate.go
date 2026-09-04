@@ -91,6 +91,7 @@ const (
 	EventTaskBranchCreated      EventType = "task_branch_created"
 	EventWorktreeReused         EventType = "worktree_reused"
 	EventWorktreeRecreated      EventType = "worktree_recreated"
+	EventWorktreeRemoved        EventType = "worktree_removed"
 	EventRunStarted             EventType = "run_started"
 	EventRunFinished            EventType = "run_finished"
 	EventRunStartFailed         EventType = "run_start_failed"
@@ -647,6 +648,8 @@ func (e Event) DisplayName() string {
 		return "Worktree reused"
 	case EventWorktreeRecreated:
 		return "Worktree recreated"
+	case EventWorktreeRemoved:
+		return "Worktree removed"
 	case EventRunStarted:
 		return "Run started"
 	case EventRunFinished:
@@ -828,6 +831,11 @@ type AlternateReviewFindingDecision struct {
 	FindingIndex   int
 	Classification AlternateFindingClassification
 	DuplicateOf    int
+}
+
+// WorktreeCleanupOptions describes a successful deterministic worktree cleanup.
+type WorktreeCleanupOptions struct {
+	Worktree string
 }
 
 // TaskClosedOptions describes the facts recorded when a task is closed.
@@ -1467,7 +1475,7 @@ func (s Store) PauseReviewForManual(repoID, taskID string, attempt int, step str
 	return state.Reviews[index], nil
 }
 
-// PauseReviewForAutomatedBlockerDecision preserves a check or agent-review blocker disposition for a later task review invocation.
+// PauseReviewForAutomatedBlockerDecision preserves a check or agent-review blocker disposition for a later task run invocation.
 func (s Store) PauseReviewForAutomatedBlockerDecision(repoID, taskID string, attempt int, step string) (ReviewAttempt, error) {
 	step = strings.TrimSpace(step)
 	if step == "" {
@@ -2568,7 +2576,7 @@ func HasUnkeptAutomatedBlockingFindings(review ReviewAttempt) bool {
 
 // UntargetedBlockingFindingIndexesForFollowUp returns open blocker indexes that
 // task-run follow-up may target. ok is false when automated blockers still need
-// an explicit keep, downgrade, or waive decision from a fresh task review.
+// an explicit keep, downgrade, or waive decision from a fresh task run.
 func UntargetedBlockingFindingIndexesForFollowUp(review ReviewAttempt) ([]int, bool) {
 	if HasUnkeptAutomatedBlockingFindings(review) {
 		return nil, false
@@ -3479,6 +3487,33 @@ func (s Store) RecordSyncConflictResolutionUsage(
 		return Event{}, err
 	}
 	return state.Events[matchIndex], nil
+}
+
+// RecordWorktreeCleanup appends an idempotent audit event after Orpheus removes
+// a deterministic closed-task worktree.
+func (s Store) RecordWorktreeCleanup(repoID, taskID string, opts WorktreeCleanupOptions) (Event, error) {
+	worktree := strings.TrimSpace(opts.Worktree)
+	if worktree == "" {
+		return Event{}, fmt.Errorf("record worktree cleanup for task %s/%s: worktree is required", repoID, taskID)
+	}
+	state, err := s.Load(repoID, taskID)
+	if err != nil {
+		return Event{}, err
+	}
+	for _, event := range state.Events {
+		if event.Type == EventWorktreeRemoved && strings.TrimSpace(event.Worktree) == worktree {
+			return event, nil
+		}
+	}
+	event := Event{Type: EventWorktreeRemoved, At: s.nowUTC(), Worktree: worktree}
+	if err := validateEvent(event); err != nil {
+		return Event{}, fmt.Errorf("record worktree cleanup for task %s/%s: %w", repoID, taskID, err)
+	}
+	state.Events = append(state.Events, event)
+	if err := s.save(state); err != nil {
+		return Event{}, err
+	}
+	return event, nil
 }
 
 // RecordTaskClosed appends an idempotent local audit event after a backend task
@@ -5040,6 +5075,7 @@ func validEventType(eventType EventType) bool {
 		EventTaskBranchCreated,
 		EventWorktreeReused,
 		EventWorktreeRecreated,
+		EventWorktreeRemoved,
 		EventRunStarted,
 		EventRunFinished,
 		EventRunStartFailed,

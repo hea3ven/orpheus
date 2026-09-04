@@ -4,6 +4,7 @@ package git_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,6 +81,116 @@ func TestIntegrationSetupTaskWorktreeCreatesAndReusesDeterministicWorktree(t *te
 	}
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatalf("marker was not preserved on reuse: %v", err)
+	}
+}
+
+func TestIntegrationClosedTaskWorktreeCleanupRemovesOnlyCleanDeterministicWorktrees(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	opts := orpheusgit.ClosedTaskWorktreeOptions{
+		RepoID: "alpha", RepoName: "Alpha", RepoPath: repoPath, DefaultBranch: "main", TaskID: "op-clean", Paths: paths,
+	}
+	setup, err := orpheusgit.SetupTaskWorktree(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("setup clean worktree: %v", err)
+	}
+	inspection := orpheusgit.InspectClosedTaskWorktree(context.Background(), opts)
+	if inspection.Outcome != orpheusgit.ClosedTaskWorktreeClean || inspection.Worktree != setup.WorktreePath {
+		t.Fatalf("clean inspection = %#v, want clean %q", inspection, setup.WorktreePath)
+	}
+	removed := orpheusgit.RemoveClosedTaskWorktree(context.Background(), opts)
+	if removed.Outcome != orpheusgit.ClosedTaskWorktreeRemoved {
+		t.Fatalf("clean removal = %#v, want removed", removed)
+	}
+	if _, err := os.Stat(setup.WorktreePath); !os.IsNotExist(err) {
+		t.Fatalf("removed worktree stat error = %v, want absent", err)
+	}
+	if repeated := orpheusgit.RemoveClosedTaskWorktree(context.Background(), opts); repeated.Outcome != orpheusgit.ClosedTaskWorktreeAbsent {
+		t.Fatalf("repeated removal = %#v, want already absent", repeated)
+	}
+
+	dirtyOpts := opts
+	dirtyOpts.TaskID = "op-dirty-cleanup"
+	dirtySetup, err := orpheusgit.SetupTaskWorktree(context.Background(), dirtyOpts)
+	if err != nil {
+		t.Fatalf("setup dirty worktree: %v", err)
+	}
+	marker := filepath.Join(dirtySetup.WorktreePath, "preserve-me.txt")
+	if err := os.WriteFile(marker, []byte("uncommitted"), 0o644); err != nil {
+		t.Fatalf("write dirty marker: %v", err)
+	}
+	if dirty := orpheusgit.InspectClosedTaskWorktree(context.Background(), dirtyOpts); dirty.Outcome != orpheusgit.ClosedTaskWorktreeDirty {
+		t.Fatalf("dirty inspection = %#v, want dirty", dirty)
+	}
+	if dirty := orpheusgit.RemoveClosedTaskWorktree(context.Background(), dirtyOpts); dirty.Outcome != orpheusgit.ClosedTaskWorktreeDirty {
+		t.Fatalf("dirty removal = %#v, want dirty", dirty)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("dirty marker was not preserved: %v", err)
+	}
+	if err := os.Remove(marker); err != nil {
+		t.Fatalf("remove untracked marker: %v", err)
+	}
+	ignoreFile := filepath.Join(dirtySetup.WorktreePath, ".gitignore")
+	if err := os.WriteFile(ignoreFile, []byte("ignored-marker.txt\n"), 0o644); err != nil {
+		t.Fatalf("write gitignore: %v", err)
+	}
+	runGit(t, dirtySetup.WorktreePath, "add", ".gitignore")
+	runGit(t, dirtySetup.WorktreePath, "commit", "-m", "ignore cleanup marker")
+	ignoredMarker := filepath.Join(dirtySetup.WorktreePath, "ignored-marker.txt")
+	if err := os.WriteFile(ignoredMarker, []byte("preserve ignored file"), 0o644); err != nil {
+		t.Fatalf("write ignored marker: %v", err)
+	}
+	if ignored := orpheusgit.RemoveClosedTaskWorktree(context.Background(), dirtyOpts); ignored.Outcome != orpheusgit.ClosedTaskWorktreeDirty {
+		t.Fatalf("ignored-file removal = %#v, want dirty", ignored)
+	}
+	if _, err := os.Stat(ignoredMarker); err != nil {
+		t.Fatalf("ignored marker was not preserved: %v", err)
+	}
+}
+
+func TestIntegrationClosedTaskWorktreeCleanupReportsAbsentRegisteredWorktree(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	opts := orpheusgit.ClosedTaskWorktreeOptions{
+		RepoID: "alpha", RepoName: "Alpha", RepoPath: repoPath, DefaultBranch: "main", TaskID: "op-partial", Paths: paths,
+	}
+	setup, err := orpheusgit.SetupTaskWorktree(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("setup worktree: %v", err)
+	}
+	if err := os.RemoveAll(setup.WorktreePath); err != nil {
+		t.Fatalf("remove worktree directory: %v", err)
+	}
+
+	inspection := orpheusgit.InspectClosedTaskWorktree(context.Background(), opts)
+	if inspection.Outcome != orpheusgit.ClosedTaskWorktreeFailed || !strings.Contains(inspection.Reason, "still registers") {
+		t.Fatalf("absent registered inspection = %#v, want failed unresolved registration", inspection)
+	}
+}
+
+func TestIntegrationClosedTaskWorktreeCleanupPreservesLockedWorktrees(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	opts := orpheusgit.ClosedTaskWorktreeOptions{
+		RepoID: "alpha", RepoName: "Alpha", RepoPath: repoPath, DefaultBranch: "main", TaskID: "op-locked", Paths: paths,
+	}
+	setup, err := orpheusgit.SetupTaskWorktree(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("setup locked worktree: %v", err)
+	}
+	runGit(t, repoPath, "worktree", "lock", "--reason", "operator repair", setup.WorktreePath)
+
+	inspection := orpheusgit.InspectClosedTaskWorktree(context.Background(), opts)
+	if inspection.Outcome != orpheusgit.ClosedTaskWorktreeUnsafe || !strings.Contains(inspection.Reason, "locked") || !strings.Contains(inspection.Reason, "operator repair") {
+		t.Fatalf("locked inspection = %#v, want unsafe lock reason", inspection)
+	}
+	removal := orpheusgit.RemoveClosedTaskWorktree(context.Background(), opts)
+	if removal.Outcome != orpheusgit.ClosedTaskWorktreeUnsafe || !strings.Contains(removal.Reason, "locked") {
+		t.Fatalf("locked removal = %#v, want unsafe", removal)
+	}
+	if _, err := os.Stat(setup.WorktreePath); err != nil {
+		t.Fatalf("locked worktree was removed: %v", err)
 	}
 }
 
@@ -518,6 +629,7 @@ func TestIntegrationSyncTaskBranchWithDefaultMergesAndPushesCleanDefaultChanges(
 		DefaultBranch: "main",
 		Branch:        "orpheus/op-sync",
 		Worktree:      worktreePath,
+		UpdatePolicy:  orpheusgit.TaskBranchUpdateAlways,
 	})
 	if err != nil {
 		t.Fatalf("sync task branch: %v", err)
@@ -543,6 +655,79 @@ func TestIntegrationSyncTaskBranchWithDefaultMergesAndPushesCleanDefaultChanges(
 	}
 }
 
+func TestIntegrationSyncTaskBranchWithDefaultConflictOnlyLeavesCleanBranchUnchanged(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	const branch = "orpheus/op-clean-batch"
+	worktreePath := addTaskBranchWorktree(t, repoPath, branch)
+	commitFile(t, worktreePath, "task.txt", "task\n", "task work")
+	runGit(t, worktreePath, "push", "--set-upstream", "origin", branch)
+	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
+	originTaskHeadBefore := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/"+branch))
+
+	commitFile(t, worktreePath, "local.txt", "local only\n", "local task work")
+	localHeadBefore := strings.TrimSpace(runGit(t, worktreePath, "rev-parse", "HEAD"))
+	pushRemoteCommit(t, repoPath, "default.txt", "clean default change\n")
+
+	result, err := orpheusgit.SyncTaskBranchWithDefault(context.Background(), orpheusgit.TaskBranchSyncOptions{
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		Branch:        branch,
+		Worktree:      worktreePath,
+		UpdatePolicy:  orpheusgit.TaskBranchUpdateConflictsOnly,
+	})
+	if err != nil {
+		t.Fatalf("sync task branch: %v", err)
+	}
+	if result.Status != orpheusgit.TaskBranchSyncConflictFree || result.Head != localHeadBefore {
+		t.Fatalf("result = %#v, want conflict-free branch at unchanged local head %s", result, localHeadBefore)
+	}
+	localHeadAfter := strings.TrimSpace(runGit(t, worktreePath, "rev-parse", "HEAD"))
+	if localHeadAfter != localHeadBefore {
+		t.Fatalf("local HEAD = %s, want unchanged %s", localHeadAfter, localHeadBefore)
+	}
+	originTaskHeadAfter := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/"+branch))
+	if originTaskHeadAfter != originTaskHeadBefore {
+		t.Fatalf("origin task branch = %s, want unchanged %s", originTaskHeadAfter, originTaskHeadBefore)
+	}
+	if _, err := os.Stat(filepath.Join(worktreePath, "default.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("default branch change was merged into task branch, stat error = %v", err)
+	}
+}
+
+func TestIntegrationSyncTaskBranchWithDefaultConflictOnlyRetainsRemoteFastForward(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	const branch = "orpheus/op-remote-ahead"
+	worktreePath := addTaskBranchWorktree(t, repoPath, branch)
+	commitFile(t, worktreePath, "task.txt", "task\n", "task work")
+	runGit(t, worktreePath, "push", "--set-upstream", "origin", branch)
+	remoteTaskHead := pushRemoteBranchCommit(t, repoPath, branch, "remote-task.txt", "remote task\n", "remote task work")
+	pushRemoteCommit(t, repoPath, "default.txt", "clean default change\n")
+
+	result, err := orpheusgit.SyncTaskBranchWithDefault(context.Background(), orpheusgit.TaskBranchSyncOptions{
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		Branch:        branch,
+		Worktree:      worktreePath,
+		UpdatePolicy:  orpheusgit.TaskBranchUpdateConflictsOnly,
+	})
+	if err != nil {
+		t.Fatalf("sync task branch: %v", err)
+	}
+	if result.Status != orpheusgit.TaskBranchSyncConflictFree || result.Head != remoteTaskHead {
+		t.Fatalf("result = %#v, want conflict-free branch fast-forwarded to %s", result, remoteTaskHead)
+	}
+	localHead := strings.TrimSpace(runGit(t, worktreePath, "rev-parse", "HEAD"))
+	if localHead != remoteTaskHead {
+		t.Fatalf("local HEAD = %s, want fetched remote task head %s", localHead, remoteTaskHead)
+	}
+	if _, err := os.Stat(filepath.Join(worktreePath, "remote-task.txt")); err != nil {
+		t.Fatalf("remote task change was not fast-forwarded: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(worktreePath, "default.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("default branch change was merged into task branch, stat error = %v", err)
+	}
+}
+
 func TestIntegrationSyncTaskBranchWithDefaultDetectsConflictWithoutPushing(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	worktreePath := addTaskBranchWorktree(t, repoPath, "orpheus/op-conflict")
@@ -558,6 +743,7 @@ func TestIntegrationSyncTaskBranchWithDefaultDetectsConflictWithoutPushing(t *te
 		DefaultBranch: "main",
 		Branch:        "orpheus/op-conflict",
 		Worktree:      worktreePath,
+		UpdatePolicy:  orpheusgit.TaskBranchUpdateConflictsOnly,
 	})
 	if err == nil || !strings.Contains(err.Error(), "would conflict") {
 		t.Fatalf("error = %v, want conflict preflight", err)

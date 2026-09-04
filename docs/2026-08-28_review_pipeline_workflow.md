@@ -12,12 +12,10 @@ orpheus task run <task-id>
 orpheus agent done --summary 'fix: concise summary' --description 'Concise plain description' \
   --detailed-description-file /tmp/pr-body.md \
   --technical-explanation-file /tmp/technical-explanation.md
-
-orpheus task review <task-id>
-# if the review passes, Orpheus publishes or finalizes through the same internal path used by task done
+# task run continues into review, then publishes or finalizes after approval
 ```
 
-`task run` prepares the task target, records an attached run attempt, and launches the configured implementer. `agent done` records the completion summary, commit description, and pull-request body source. After that, the task is ready for local review, not direct publication.
+`task run` prepares the task target, records an attached run attempt, and launches the configured implementer. `agent done` records the completion summary, commit description, and pull-request body source. The same `task run` invocation then enters local review. Later `task run` invocations resume paused review, dispatch targeted fixes, or retry finalization as required.
 
 ## Safe Agent Reporting Text
 
@@ -29,7 +27,7 @@ Do not put arbitrary raw text in a fixed-delimiter heredoc: a generated line equ
 
 ## Default Manual Review
 
-If no review pipeline is configured, `task review` uses the built-in manual pipeline:
+If no review pipeline is configured, `task run` uses the built-in manual pipeline:
 
 ```yaml
 steps:
@@ -49,9 +47,9 @@ Manual review commands, when configured, run inside the review step after confir
 
 ## Configured Pipelines
 
-`task review` selects a pipeline in this order:
+`task run` selects a pipeline in this order:
 
-1. `orpheus task review --pipeline <name>`
+1. `orpheus task run --pipeline <name> <task-id>`
 2. the repository `review_pipeline` registry setting
 3. `reviews.default_pipeline` in Orpheus config
 4. the built-in manual `local-review` step
@@ -70,7 +68,7 @@ Review steps are read-only. If a review step mutates the candidate changes, Orph
 
 Review findings describe product or code feedback:
 
-- Blocking findings stop approval. Check and agent-review blockers prompt for an explicit keep, downgrade, waive/cancel, restart, or pause decision from both `task run` and `task review`. Keeping an automated blocker triggers bounded targeted fixes and fresh review attempts. A manual reviewer who records blockers and chooses `finish/block` implicitly keeps every eligible recorded blocker; no second confirmation is needed before the same bounded repair loop begins.
+- Blocking findings stop approval. Check and agent-review blockers prompt for an explicit keep, downgrade, waive/cancel, restart, or pause decision during `task run`. Keeping an automated blocker triggers bounded targeted fixes and fresh review attempts. A manual reviewer who records blockers and chooses `finish/block` implicitly keeps every eligible recorded blocker; no second confirmation is needed before the same bounded repair loop begins.
 - Advisory findings are recorded but do not block approval.
 - Separate-task findings do not block approval by themselves. During review, Orpheus can create standalone Beads for selected candidates.
 
@@ -80,11 +78,11 @@ Operational review failures are different from code or product blockers. Example
 
 When the latest review is blocked by open current-task findings, `task run` enters follow-up mode automatically. There is no `--follow-up` flag. The new run targets the open blocking findings, records that targeting in task state, and keeps the task on the same implementation target.
 
-Within one `task run` or `task review` invocation, Orpheus asks the operator to classify automated blockers. `restart` discards the failed check or agent-review execution and all of its findings, then reruns only that step in the same attempt; it never consumes autonomous repair budget. With paired reviewers, it discards the primary and alternate result together. `pause` preserves the exact pending decision and exits; resume it with `orpheus task run <task-id>` after correcting the operator environment. `task review` remains a compatibility command for resumption. Status and review inspection identify a paused decision. `keep` preserves a blocker, while manual `finish/block` implicitly preserves the blockers recorded at that manual gate. Either decision dispatches one selected implementer follow-up for every eligible blocker from the blocked attempt, then starts a fresh review from step 1 after the fix completes. `downgrade` converts an automated finding to advisory with a required reason. `waive`/`cancel` records a required waiver reason. The global `reviews.max_autonomous_review_attempts` setting bounds the keep/fix loop and defaults to `4`; the initial review counts, so the default allows at most three fix runs before the fourth blocked review stops.
+Within one `task run` invocation, Orpheus asks the operator to classify automated blockers. `restart` discards the failed check or agent-review execution and all of its findings, then reruns only that step in the same attempt; it never consumes autonomous repair budget. With paired reviewers, it discards the primary and alternate result together. `pause` preserves the exact pending decision and exits; resume it with `orpheus task run <task-id>` after correcting the operator environment. Status and review inspection identify a paused decision. `keep` preserves a blocker, while manual `finish/block` implicitly preserves the blockers recorded at that manual gate. Either decision dispatches one selected implementer follow-up for every eligible blocker from the blocked attempt, then starts a fresh review from step 1 after the fix completes. `downgrade` converts an automated finding to advisory with a required reason. `waive`/`cancel` records a required waiver reason. The global `reviews.max_autonomous_review_attempts` setting bounds the keep/fix loop and defaults to `4`; the initial review counts, so the default allows at most three fix runs before the fourth blocked review stops.
 
 If blocker-decision input disappears, Orpheus marks the current attempt blocked with an interrupted automated-decision flag, performs no publication/finalization, and launches no targeted fix. Before any fresh authoritative attempt, Orpheus presents each open, untargeted blocker from the latest attempt for an explicit keep, addressed-manually, or waive decision. A keep preserves the old review for targeted repair; addressed-manually and waive both require distinct reasons. Interrupted disposition leaves the remaining blockers authoritative and starts no fresh review.
 
-If the budget is exhausted, Orpheus preserves the latest blockers and audit history, marks the blocked review as autonomous-budget-exhausted, and tells the operator to explicitly continue with a fresh command. A new `task run` or `task review` invocation receives a fresh configured budget and continues eligible preserved blockers without re-confirming a manual `finish/block`; automated blockers still require their recorded explicit keep decision. Older review attempts remain audit history; the latest attempt controls status and follow-up behavior.
+If the budget is exhausted, Orpheus preserves the latest blockers and audit history, marks the blocked review as autonomous-budget-exhausted, and tells the operator to explicitly continue with a fresh command. A new `task run` invocation receives a fresh configured budget and continues eligible preserved blockers without re-confirming a manual `finish/block`; automated blockers still require their recorded explicit keep decision. Older review attempts remain audit history; the latest attempt controls status and follow-up behavior.
 
 When an agent process actually begins, Orpheus prints a delimited header. Initial implementation runs identify their run attempt, for example `== Agent run: implementation (run attempt 1) ==`. Targeted repairs additionally identify the source review and findings, for example `== Agent run: review follow-up (run attempt 2; review attempt 1; findings 1, 2) ==`. Review step headers and publication/finalization output remain the authoritative lifecycle messages.
 
@@ -95,18 +93,18 @@ Each follow-up is a new Orpheus run attempt and therefore a new `agent done` com
 Use hierarchical positional arguments:
 
 ```text
-orpheus task review show <task-id>
-orpheus task review show <task-id> <review-attempt>
-orpheus task review show <task-id> <review-attempt> <finding-number>
+orpheus task show review <task-id>
+orpheus task show review <task-id> <review-attempt>
+orpheus task show review <task-id> <review-attempt> <finding-number>
 ```
 
 The task-level command is a concise cross-attempt authoritative-finding history. An attempt number opens that persisted attempt in detail. A finding number opens exactly one authoritative finding, referenced as `<review-attempt>/<finding-number>`, including its full description, disposition reason, suggested action, task proposal or created task, and associated follow-up runs. Inspection never changes review or task state.
 
-Separate-task findings can be converted into Beads during `task review`. Created tasks include provenance in their description identifying the source task, repository, review attempt, and finding index. `task review show` lists those created follow-up tasks.
+Separate-task findings can be converted into Beads during `task run`. Created tasks include provenance in their description identifying the source task, repository, review attempt, and finding index. `task show review` lists those created follow-up tasks.
 
 ## Publication and Retry
 
-When review passes, `task review` records a passed review and invokes the same internal finalization path as `task done`:
+When review passes, `task run` records a passed review and invokes the same internal finalization path as `task done`:
 
 - repo-root default-branch work is committed, pushed, closed in the backend, and recorded locally;
 - task-branch work is committed, pushed, published as a pull request, and recorded locally.

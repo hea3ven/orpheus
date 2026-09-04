@@ -310,9 +310,10 @@ func (s ReviewLifecycleService) validate() error {
 
 // Run executes or resumes a task review, including autonomous follow-up loops
 // and finalization after approval.
-//
-//nolint:funlen // Lifecycle setup keeps terminal outcome tracing in one place.
-func (s ReviewLifecycleService) Run(ctx context.Context, opts ReviewLifecycleOptions) (ReviewLifecycleOutcome, error) {
+func (s ReviewLifecycleService) Run(
+	ctx context.Context,
+	opts ReviewLifecycleOptions,
+) (outcome ReviewLifecycleOutcome, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -323,75 +324,69 @@ func (s ReviewLifecycleService) Run(ctx context.Context, opts ReviewLifecycleOpt
 		slog.String("task_id", opts.TaskID),
 		slog.String("pipeline", strings.TrimSpace(opts.PipelineName)),
 	)
-	var finalOutcome ReviewLifecycleOutcome
-	var finalErr error
 	defer func() {
 		attrs := []slog.Attr{}
-		if finalOutcome.Kind != "" {
-			attrs = append(attrs, slog.String("outcome", string(finalOutcome.Kind)))
+		if outcome.Kind != "" {
+			attrs = append(attrs, slog.String("outcome", string(outcome.Kind)))
 		}
-		if finalOutcome.Context.Source.Repository.ID != "" {
-			attrs = append(attrs, slog.String("repo_id", finalOutcome.Context.RepoID()))
+		if outcome.Context.Source.Repository.ID != "" {
+			attrs = append(attrs, slog.String("repo_id", outcome.Context.RepoID()))
 		}
-		span.FinishError(ctx, finalErr, attrs...)
+		span.FinishError(ctx, err, attrs...)
 	}()
 
+	return s.runReviewLifecycle(ctx, opts)
+}
+
+func (s ReviewLifecycleService) runReviewLifecycle(
+	ctx context.Context,
+	opts ReviewLifecycleOptions,
+) (ReviewLifecycleOutcome, error) {
 	if err := s.validate(); err != nil {
-		finalErr = err
-		finalOutcome = reviewLifecycleOperationalFailure(ReviewAttemptContext{}, err)
-		return finalOutcome, err
+		return reviewLifecycleOperationalFailure(ReviewAttemptContext{}, err), err
 	}
 	preflight, inspection, handled, err := s.recoverPrimaryReviewBeforeRouting(ctx, opts.TaskID)
 	if err != nil {
-		finalErr = err
-		finalOutcome = reviewLifecycleOperationalFailure(preflight, err)
-		return finalOutcome, err
+		return reviewLifecycleOperationalFailure(preflight, err), err
 	}
 	if handled {
-		finalOutcome = primaryReviewLifecycleOutcome(preflight, inspection)
-		return finalOutcome, nil
+		return primaryReviewLifecycleOutcome(preflight, inspection), nil
 	}
 	maxAttempts, err := reviewMaxAutonomousReviewAttempts(s.Paths)
 	if err != nil {
-		err = fmt.Errorf("task review %s: %w", opts.TaskID, err)
-		finalErr = err
-		finalOutcome = reviewLifecycleOperationalFailure(preflight, err)
-		return finalOutcome, err
+		err = fmt.Errorf("task run %s: %w", opts.TaskID, err)
+		return reviewLifecycleOperationalFailure(preflight, err), err
 	}
 	start, err := s.startReview(ctx, opts.TaskID, opts.PipelineName)
 	if err != nil {
-		var recovered primaryReviewRecoveredError
-		if errors.As(err, &recovered) {
-			finalOutcome = ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomePrimaryRecovered, Context: start, RecoveryInspection: recovered.inspection}
-			return finalOutcome, nil
-		}
-		var notRecoverable primaryReviewNotRecoverableError
-		if errors.As(err, &notRecoverable) {
-			kind := ReviewLifecycleOutcomePrimaryUnknown
-			if notRecoverable.inspection.Condition == AttachedExecutionLive {
-				kind = ReviewLifecycleOutcomePrimaryLive
-			}
-			finalOutcome = ReviewLifecycleOutcome{Kind: kind, Context: start, RecoveryInspection: notRecoverable.inspection}
-			return finalOutcome, nil
-		}
-		finalOutcome, finalErr = reviewLifecycleStartOutcome(start, err)
-		return finalOutcome, finalErr
+		return reviewLifecycleStartError(start, err)
 	}
 	dispatchAgentName := opts.DispatchAgentName
 	if start.Resumed && strings.TrimSpace(dispatchAgentName) == "" {
 		dispatchAgentName, err = resumedReviewImplementerName(start)
 		if err != nil {
-			err = fmt.Errorf("task review %s: %w", start.TaskID(), err)
-			finalErr = err
-			finalOutcome = reviewLifecycleOperationalFailure(start, err)
-			return finalOutcome, err
+			err = fmt.Errorf("task run %s: %w", start.TaskID(), err)
+			return reviewLifecycleOperationalFailure(start, err), err
 		}
 	}
-	finalOutcome, finalErr = s.executeAutonomousReviewLoop(ctx, start, autonomousReviewLoopOptions{
+	return s.executeAutonomousReviewLoop(ctx, start, autonomousReviewLoopOptions{
 		maxAttempts:       maxAttempts,
 		dispatchAgentName: dispatchAgentName,
 	})
-	return finalOutcome, finalErr
+}
+
+func reviewLifecycleStartError(start ReviewAttemptContext, err error) (ReviewLifecycleOutcome, error) {
+	var recovered primaryReviewRecoveredError
+	if errors.As(err, &recovered) {
+		return ReviewLifecycleOutcome{
+			Kind: ReviewLifecycleOutcomePrimaryRecovered, Context: start, RecoveryInspection: recovered.inspection,
+		}, nil
+	}
+	var notRecoverable primaryReviewNotRecoverableError
+	if errors.As(err, &notRecoverable) {
+		return primaryReviewLifecycleOutcome(start, notRecoverable.inspection), nil
+	}
+	return reviewLifecycleStartOutcome(start, err)
 }
 
 // RunAfterCompletedRun inspects a completed task run and starts review when the
@@ -445,34 +440,73 @@ func primaryReviewLifecycleOutcome(ctx ReviewAttemptContext, inspection Attached
 
 // recoverPrimaryReviewBeforeRouting performs task resolution and stale-primary
 // reconciliation before loading replacement-review configuration.
-func (s ReviewLifecycleService) recoverPrimaryReviewBeforeRouting(ctx context.Context, taskID string) (ReviewAttemptContext, AttachedExecutionInspection, bool, error) {
-	taskID = strings.TrimSpace(taskID)
-	resolved, err := task.ResolveTaskSource(s.Sources, taskID)
+func (s ReviewLifecycleService) recoverPrimaryReviewBeforeRouting(
+	ctx context.Context,
+	taskID string,
+) (ReviewAttemptContext, AttachedExecutionInspection, bool, error) {
+	base, err := s.resolveReviewTask(ctx, taskID)
 	if err != nil {
 		return ReviewAttemptContext{}, AttachedExecutionInspection{}, false, err
+	}
+	inspection, handled, err := s.reconcileActiveReviewExecution(ctx, base)
+	return base, inspection, handled, err
+}
+
+func (s ReviewLifecycleService) resolveReviewTask(ctx context.Context, taskID string) (ReviewAttemptContext, error) {
+	resolved, err := task.ResolveTaskSource(s.Sources, strings.TrimSpace(taskID))
+	if err != nil {
+		return ReviewAttemptContext{}, err
 	}
 	backend, err := s.BackendFactory(resolved.Source)
 	if err != nil {
-		return ReviewAttemptContext{}, AttachedExecutionInspection{}, false, fmt.Errorf("task review %s: create backend for repo %s (%s; prefix %s): %w", resolved.TaskID, resolved.Source.Repository.ID, resolved.Source.Repository.Name, resolved.Source.Repository.TaskIDPrefix, err)
+		return ReviewAttemptContext{}, fmt.Errorf(
+			"task run %s: create backend for repo %s (%s; prefix %s): %w",
+			resolved.TaskID,
+			resolved.Source.Repository.ID,
+			resolved.Source.Repository.Name,
+			resolved.Source.Repository.TaskIDPrefix,
+			err,
+		)
 	}
 	taskItem, err := fetchReviewTask(ctx, backend, resolved)
 	if err != nil {
-		return ReviewAttemptContext{}, AttachedExecutionInspection{}, false, err
+		return ReviewAttemptContext{}, err
 	}
-	base := ReviewAttemptContext{paths: s.Paths, store: s.RunStore, Source: resolved.Source, Task: taskItem}
+	return ReviewAttemptContext{
+		paths: s.Paths, store: s.RunStore, Source: resolved.Source, Task: taskItem,
+	}, nil
+}
+
+func (s ReviewLifecycleService) reconcileActiveReviewExecution(
+	ctx context.Context,
+	base ReviewAttemptContext,
+) (AttachedExecutionInspection, bool, error) {
 	primary, ok, err := latestPrimaryReviewExecution(s.RunStore, base)
-	if err != nil || !ok {
-		return base, AttachedExecutionInspection{}, false, err
-	}
-	inspection, err := ReconcilePrimaryReviewExecution(ctx, s.Paths, s.RunStore, base.RepoID(), base.TaskID(), primary.Attempt, "task_review", s.ProcessProbe)
 	if err != nil {
-		return base, inspection, false, fmt.Errorf("task review %s: recover primary reviewer: %w", resolved.TaskID, err)
+		return AttachedExecutionInspection{}, false, fmt.Errorf(
+			"task run %s: inspect primary reviewer: %w", base.TaskID(), err,
+		)
 	}
+	if !ok {
+		return AttachedExecutionInspection{}, false, nil
+	}
+	inspection, err := ReconcilePrimaryReviewExecution(
+		ctx, s.Paths, s.RunStore, base.RepoID(), base.TaskID(),
+		primary.Attempt, "task_review", s.ProcessProbe,
+	)
+	if err != nil {
+		return inspection, false, fmt.Errorf("task run %s: recover primary reviewer: %w", base.TaskID(), err)
+	}
+	return inspection, reviewStartupStopsForInspection(inspection), nil
+}
+
+func reviewStartupStopsForInspection(inspection AttachedExecutionInspection) bool {
 	switch inspection.Condition {
-	case AttachedExecutionRecoverable, AttachedExecutionAlreadyRecovered, AttachedExecutionLive, AttachedExecutionUnverifiable:
-		return base, inspection, true, nil
+	case AttachedExecutionRecoverable, AttachedExecutionAlreadyRecovered,
+		AttachedExecutionLive, AttachedExecutionUnverifiable:
+		return true
 	default:
-		return base, inspection, false, nil
+		return false
 	}
 }
 
@@ -502,54 +536,24 @@ type autonomousReviewLoopOptions struct {
 
 var errReviewFollowUpIncomplete = errors.New("autonomous review follow-up completed without agent completion")
 
-//nolint:funlen // The lifecycle loop keeps terminal outcomes and retry transitions together.
 func (s ReviewLifecycleService) executeAutonomousReviewLoop(
 	ctx context.Context,
 	start ReviewAttemptContext,
 	opts autonomousReviewLoopOptions,
 ) (ReviewLifecycleOutcome, error) {
 	if opts.maxAttempts <= 0 {
-		err := fmt.Errorf("task review %s: autonomous review attempt budget must be positive", start.TaskID())
+		err := fmt.Errorf("task run %s: autonomous review attempt budget must be positive", start.TaskID())
 		return reviewLifecycleOperationalFailure(start, err), err
 	}
 
-	attemptsUsed := 0
 	current := start
-	for {
-		var result taskstate.ReviewStatus
-		if current.Review.Status == taskstate.ReviewStatusBlocked {
-			// A fresh invocation can continue an eligible blocked review without
-			// asking the manual reviewer to keep the same findings again. That
-			// blocked review is the first attempt in its fresh repair budget.
-			attemptsUsed++
-			result = taskstate.ReviewStatusBlocked
-		} else {
-			attemptsUsed++
-			var err error
-			result, err = s.executeReviewAttempt(ctx, current)
-			if err != nil {
-				return reviewLifecycleOperationalFailure(current, err), err
-			}
+	for attemptsUsed := 1; ; attemptsUsed++ {
+		result, err := s.executeAutonomousReviewAttempt(ctx, current)
+		if err != nil {
+			return reviewLifecycleOperationalFailure(current, err), err
 		}
-
-		switch result {
-		case taskstate.ReviewStatusPassed:
-			finalized, err := s.finalizeApprovedReview(ctx, current)
-			if err != nil {
-				return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomePublicationRetry, Context: current, Err: err}, err
-			}
-			return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomePassed, Context: current, Finalization: finalized}, nil
-		case taskstate.ReviewStatusBlocked:
-		case taskstate.ReviewStatusWaitingForManual:
-			return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeWaitingForManual, Context: current}, nil
-		case taskstate.ReviewStatusWaitingForAutomatedDecision:
-			return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeWaitingForAutomatedDecision, Context: current}, nil
-		case taskstate.ReviewStatusAborted:
-			return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeAborted, Context: current}, nil
-		case taskstate.ReviewStatusFailed:
-			return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeOperationalFail, Context: current}, nil
-		default:
-			return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeBlocked, Context: current}, nil
+		if outcome, terminal, err := s.handleAutonomousReviewResult(ctx, current, result); terminal {
+			return outcome, err
 		}
 
 		latest, indexes, ok, err := latestAutonomousReviewBlockers(current.store, current.RepoID(), current.TaskID())
@@ -559,14 +563,11 @@ func (s ReviewLifecycleService) executeAutonomousReviewLoop(
 		if !ok {
 			return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeBlocked, Context: current}, nil
 		}
-		if attemptsUsed >= opts.maxAttempts {
-			if _, err := current.store.MarkReviewAutonomousBudgetExhausted(current.RepoID(), current.TaskID(), latest.Attempt); err != nil {
-				err = fmt.Errorf("task review %s: mark autonomous review budget exhausted: %w", current.TaskID(), err)
-				return reviewLifecycleOperationalFailure(current, err), err
-			}
-			if err := s.Frontend.AutonomousBudgetExhausted(current, latest.Attempt, attemptsUsed); err != nil {
-				return reviewLifecycleOperationalFailure(current, err), err
-			}
+		exhausted, err := s.enforceAutonomousReviewBudget(current, latest.Attempt, attemptsUsed, opts.maxAttempts)
+		if err != nil {
+			return reviewLifecycleOperationalFailure(current, err), err
+		}
+		if exhausted {
 			return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeExhausted, Context: current}, nil
 		}
 
@@ -581,6 +582,70 @@ func (s ReviewLifecycleService) executeAutonomousReviewLoop(
 	}
 }
 
+func (s ReviewLifecycleService) executeAutonomousReviewAttempt(
+	ctx context.Context,
+	current ReviewAttemptContext,
+) (taskstate.ReviewStatus, error) {
+	if current.Review.Status != taskstate.ReviewStatusBlocked {
+		return s.executeReviewAttempt(ctx, current)
+	}
+	// A fresh invocation can continue an eligible blocked review without asking
+	// the manual reviewer to keep the same findings again. It still consumes the
+	// first attempt in the fresh repair budget.
+	return taskstate.ReviewStatusBlocked, nil
+}
+
+func (s ReviewLifecycleService) handleAutonomousReviewResult(
+	ctx context.Context,
+	current ReviewAttemptContext,
+	result taskstate.ReviewStatus,
+) (ReviewLifecycleOutcome, bool, error) {
+	switch result {
+	case taskstate.ReviewStatusPassed:
+		finalized, err := s.finalizeApprovedReview(ctx, current)
+		if err != nil {
+			return ReviewLifecycleOutcome{
+				Kind: ReviewLifecycleOutcomePublicationRetry, Context: current, Err: err,
+			}, true, err
+		}
+		return ReviewLifecycleOutcome{
+			Kind: ReviewLifecycleOutcomePassed, Context: current, Finalization: finalized,
+		}, true, nil
+	case taskstate.ReviewStatusBlocked:
+		return ReviewLifecycleOutcome{}, false, nil
+	case taskstate.ReviewStatusWaitingForManual:
+		return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeWaitingForManual, Context: current}, true, nil
+	case taskstate.ReviewStatusWaitingForAutomatedDecision:
+		return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeWaitingForAutomatedDecision, Context: current}, true, nil
+	case taskstate.ReviewStatusAborted:
+		return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeAborted, Context: current}, true, nil
+	case taskstate.ReviewStatusFailed:
+		return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeOperationalFail, Context: current}, true, nil
+	default:
+		return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeBlocked, Context: current}, true, nil
+	}
+}
+
+func (s ReviewLifecycleService) enforceAutonomousReviewBudget(
+	current ReviewAttemptContext,
+	reviewAttempt int,
+	attemptsUsed int,
+	maxAttempts int,
+) (bool, error) {
+	if attemptsUsed < maxAttempts {
+		return false, nil
+	}
+	if _, err := current.store.MarkReviewAutonomousBudgetExhausted(
+		current.RepoID(), current.TaskID(), reviewAttempt,
+	); err != nil {
+		return false, fmt.Errorf("task run %s: mark autonomous review budget exhausted: %w", current.TaskID(), err)
+	}
+	if err := s.Frontend.AutonomousBudgetExhausted(current, reviewAttempt, attemptsUsed); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func autonomousFollowUpFailure(current ReviewAttemptContext, err error) (ReviewLifecycleOutcome, error) {
 	if errors.Is(err, errReviewFollowUpIncomplete) {
 		return ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeBlocked, Context: current}, nil
@@ -591,7 +656,7 @@ func autonomousFollowUpFailure(current ReviewAttemptContext, err error) (ReviewL
 func (s ReviewLifecycleService) pipelineRunOptions(runCtx context.Context, ctx ReviewAttemptContext) (review.PipelineRunOptions, error) {
 	presentation, err := s.Frontend.PipelinePresentation(ctx)
 	if err != nil {
-		return review.PipelineRunOptions{}, fmt.Errorf("task review %s: %w", ctx.TaskID(), err)
+		return review.PipelineRunOptions{}, fmt.Errorf("task run %s: %w", ctx.TaskID(), err)
 	}
 	var renderManualStep func(review.Step) error
 	if presentation.RenderManualStep != nil {
@@ -812,106 +877,150 @@ func (s ReviewLifecycleService) executeReviewAttempt(runCtx context.Context, ctx
 		if !shouldPublish {
 			if _, err := ctx.store.FinishReview(ctx.RepoID(), ctx.TaskID(), ctx.Review.Attempt, taskstate.ReviewStatusAborted); err != nil {
 				_, _ = ctx.store.FinishReview(ctx.RepoID(), ctx.TaskID(), ctx.Review.Attempt, taskstate.ReviewStatusFailed)
-				return "", fmt.Errorf("task review %s: record aborted review: %w", ctx.TaskID(), err)
+				return "", fmt.Errorf("task run %s: record aborted review: %w", ctx.TaskID(), err)
 			}
 			return taskstate.ReviewStatusAborted, nil
 		}
 	}
 	if _, err := ctx.store.FinishReview(ctx.RepoID(), ctx.TaskID(), ctx.Review.Attempt, outcome.Status); err != nil {
 		_, _ = ctx.store.FinishReview(ctx.RepoID(), ctx.TaskID(), ctx.Review.Attempt, taskstate.ReviewStatusFailed)
-		return "", fmt.Errorf("task review %s: record %s review: %w", ctx.TaskID(), outcome.Status, err)
+		return "", fmt.Errorf("task run %s: record %s review: %w", ctx.TaskID(), outcome.Status, err)
 	}
 	return outcome.Status, nil
 }
 
-//nolint:funlen,gocognit // Review-start recovery branches must remain ordered with target validation.
-func (s ReviewLifecycleService) startReview(ctx context.Context, taskID string, pipelineName string) (ReviewAttemptContext, error) {
-	taskID = strings.TrimSpace(taskID)
-	resolved, err := task.ResolveTaskSource(s.Sources, taskID)
+func (s ReviewLifecycleService) startReview(
+	ctx context.Context,
+	taskID string,
+	pipelineName string,
+) (ReviewAttemptContext, error) {
+	base, err := s.resolveReviewTask(ctx, taskID)
 	if err != nil {
 		return ReviewAttemptContext{}, err
 	}
-	backend, err := s.BackendFactory(resolved.Source)
+	inspection, handled, err := s.reconcileActiveReviewExecution(ctx, base)
 	if err != nil {
-		return ReviewAttemptContext{}, fmt.Errorf("task review %s: create backend for repo %s (%s; prefix %s): %w", resolved.TaskID, resolved.Source.Repository.ID, resolved.Source.Repository.Name, resolved.Source.Repository.TaskIDPrefix, err)
+		return base, err
 	}
-	taskItem, err := fetchReviewTask(ctx, backend, resolved)
+	if handled {
+		return base, reviewStartupInspectionError(inspection)
+	}
+	requestedPipeline, err := s.resolveRequestedReviewPipeline(base, pipelineName)
 	if err != nil {
 		return ReviewAttemptContext{}, err
 	}
-	base := ReviewAttemptContext{paths: s.Paths, store: s.RunStore, Source: resolved.Source, Task: taskItem}
-	if primary, ok, loadErr := latestPrimaryReviewExecution(s.RunStore, base); loadErr != nil {
-		return base, fmt.Errorf("task review %s: inspect primary reviewer: %w", resolved.TaskID, loadErr)
-	} else if ok {
-		inspection, reconcileErr := ReconcilePrimaryReviewExecution(ctx, s.Paths, s.RunStore, base.RepoID(), base.TaskID(), primary.Attempt, "task_review", s.ProcessProbe)
-		if reconcileErr != nil {
-			return base, fmt.Errorf("task review %s: recover primary reviewer: %w", resolved.TaskID, reconcileErr)
-		}
-		if inspection.Condition == AttachedExecutionRecoverable || inspection.Condition == AttachedExecutionAlreadyRecovered {
-			return base, primaryReviewRecoveredError{inspection: inspection}
-		}
-		if inspection.Condition == AttachedExecutionLive || inspection.Condition == AttachedExecutionUnverifiable {
-			return base, primaryReviewNotRecoverableError{inspection: inspection}
-		}
+	base, err = s.validateReviewCandidate(ctx, base)
+	if err != nil {
+		return ReviewAttemptContext{}, err
 	}
-	var requestedPipeline *review.Pipeline
-	if strings.TrimSpace(pipelineName) != "" {
-		pipeline, err := ResolveTaskReviewPipeline(s.Paths, resolved.Source.Repository, pipelineName)
-		if err != nil {
-			return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", resolved.TaskID, err)
-		}
-		requestedPipeline = &pipeline
+	if resumed, ok, err := s.routeReviewResumption(base, pipelineName); err != nil || ok {
+		return resumed, err
 	}
+	return s.selectFreshReview(base, requestedPipeline, pipelineName)
+}
+
+func reviewStartupInspectionError(inspection AttachedExecutionInspection) error {
+	switch inspection.Condition {
+	case AttachedExecutionRecoverable, AttachedExecutionAlreadyRecovered:
+		return primaryReviewRecoveredError{inspection: inspection}
+	default:
+		return primaryReviewNotRecoverableError{inspection: inspection}
+	}
+}
+
+func (s ReviewLifecycleService) resolveRequestedReviewPipeline(
+	base ReviewAttemptContext,
+	pipelineName string,
+) (*review.Pipeline, error) {
+	if strings.TrimSpace(pipelineName) == "" {
+		return nil, nil
+	}
+	pipeline, err := ResolveTaskReviewPipeline(s.Paths, base.Source.Repository, pipelineName)
+	if err != nil {
+		return nil, fmt.Errorf("task run %s: %w", base.TaskID(), err)
+	}
+	return &pipeline, nil
+}
+
+func (s ReviewLifecycleService) validateReviewCandidate(
+	ctx context.Context,
+	base ReviewAttemptContext,
+) (ReviewAttemptContext, error) {
 	target, err := ReviewTarget(s.RunStore, s.Paths, base)
 	if err != nil {
-		return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", resolved.TaskID, err)
+		return ReviewAttemptContext{}, fmt.Errorf("task run %s: %w", base.TaskID(), err)
 	}
 	base.Target = target
 	base.Workdir = target.Worktree
 	if err := ValidateReviewCandidateReady(ctx, s.RunStore, base, target.Worktree); err != nil {
-		return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", resolved.TaskID, err)
+		return ReviewAttemptContext{}, fmt.Errorf("task run %s: %w", base.TaskID(), err)
 	}
+	return base, nil
+}
 
-	if paused, ok, err := latestAutomatedDecisionWaitingReview(s.RunStore, base); err != nil {
-		return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", resolved.TaskID, err)
-	} else if ok {
-		return s.resumeReview(base, paused, pipelineName)
+func (s ReviewLifecycleService) routeReviewResumption(
+	base ReviewAttemptContext,
+	pipelineName string,
+) (ReviewAttemptContext, bool, error) {
+	paused, ok, err := latestAutomatedDecisionWaitingReview(s.RunStore, base)
+	if err != nil {
+		return ReviewAttemptContext{}, false, fmt.Errorf("task run %s: %w", base.TaskID(), err)
 	}
-	if paused, ok, err := latestManualWaitingReview(s.RunStore, base); err != nil {
-		return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", resolved.TaskID, err)
-	} else if ok {
-		return s.resumeReview(base, paused, pipelineName)
+	if ok {
+		resumed, err := s.resumeReview(base, paused, pipelineName)
+		return resumed, true, err
 	}
-	if blocked, ok, err := latestEligibleBlockedReview(s.RunStore, base); err != nil {
-		return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", resolved.TaskID, err)
-	} else if ok {
-		return s.continueBlockedReview(base, blocked, pipelineName)
+	paused, ok, err = latestManualWaitingReview(s.RunStore, base)
+	if err != nil {
+		return ReviewAttemptContext{}, false, fmt.Errorf("task run %s: %w", base.TaskID(), err)
 	}
+	if ok {
+		resumed, err := s.resumeReview(base, paused, pipelineName)
+		return resumed, true, err
+	}
+	blocked, ok, err := latestEligibleBlockedReview(s.RunStore, base)
+	if err != nil {
+		return ReviewAttemptContext{}, false, fmt.Errorf("task run %s: %w", base.TaskID(), err)
+	}
+	if !ok {
+		return ReviewAttemptContext{}, false, nil
+	}
+	resumed, err := s.continueBlockedReview(base, blocked, pipelineName)
+	return resumed, true, err
+}
 
-	if interrupted, ok, err := latestInterruptedReviewComparison(s.RunStore, base); err != nil {
-		return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", resolved.TaskID, err)
-	} else if ok {
+func (s ReviewLifecycleService) selectFreshReview(
+	base ReviewAttemptContext,
+	requestedPipeline *review.Pipeline,
+	pipelineName string,
+) (ReviewAttemptContext, error) {
+	interrupted, ok, err := latestInterruptedReviewComparison(s.RunStore, base)
+	if err != nil {
+		return ReviewAttemptContext{}, fmt.Errorf("task run %s: %w", base.TaskID(), err)
+	}
+	if ok {
 		pipeline, err := resolveStoredTaskReviewPipeline(s.Paths, interrupted.Pipeline)
 		if err != nil {
-			return ReviewAttemptContext{}, fmt.Errorf("task review %s: resolve interrupted comparison pipeline %q: %w", resolved.TaskID, interrupted.Pipeline, err)
+			return ReviewAttemptContext{}, fmt.Errorf(
+				"task run %s: resolve interrupted comparison pipeline %q: %w",
+				base.TaskID(), interrupted.Pipeline, err,
+			)
 		}
 		return s.startFreshReviewAfterInterruptedComparison(base, pipeline)
 	}
 	if requestedPipeline != nil {
 		return s.startFreshReview(base, *requestedPipeline)
 	}
-	if interrupted, ok, err := latestInterruptedAutomatedBlockerReview(s.RunStore, base); err != nil {
-		return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", resolved.TaskID, err)
-	} else if ok {
-		pipeline, err := ResolveTaskReviewPipeline(s.Paths, resolved.Source.Repository, interrupted.Pipeline)
-		if err != nil {
-			return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", resolved.TaskID, err)
-		}
-		return s.startFreshReview(base, pipeline)
-	}
-	pipeline, err := ResolveTaskReviewPipeline(s.Paths, resolved.Source.Repository, pipelineName)
+	interrupted, ok, err = latestInterruptedAutomatedBlockerReview(s.RunStore, base)
 	if err != nil {
-		return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", resolved.TaskID, err)
+		return ReviewAttemptContext{}, fmt.Errorf("task run %s: %w", base.TaskID(), err)
+	}
+	if ok {
+		pipelineName = interrupted.Pipeline
+	}
+	pipeline, err := ResolveTaskReviewPipeline(s.Paths, base.Source.Repository, pipelineName)
+	if err != nil {
+		return ReviewAttemptContext{}, fmt.Errorf("task run %s: %w", base.TaskID(), err)
 	}
 	return s.startFreshReview(base, pipeline)
 }
@@ -925,7 +1034,7 @@ func fetchReviewTask(
 	if err != nil {
 		if errors.Is(err, task.ErrNotFound) {
 			return task.Task{}, fmt.Errorf(
-				"task review %s: task was not found in repo %s (%s; prefix %s): %w",
+				"task run %s: task was not found in repo %s (%s; prefix %s): %w",
 				resolved.TaskID,
 				resolved.Source.Repository.ID,
 				resolved.Source.Repository.Name,
@@ -934,7 +1043,7 @@ func fetchReviewTask(
 			)
 		}
 		return task.Task{}, fmt.Errorf(
-			"task review %s: query repo %s (%s; prefix %s): %w",
+			"task run %s: query repo %s (%s; prefix %s): %w",
 			resolved.TaskID,
 			resolved.Source.Repository.ID,
 			resolved.Source.Repository.Name,
@@ -944,7 +1053,7 @@ func fetchReviewTask(
 	}
 	if !task.IsM2TaskViewItem(taskItem) {
 		return task.Task{}, fmt.Errorf(
-			"task review %s: item is out of scope for M2 task views; expected an active item, got issue_type=%s status=%s",
+			"task run %s: item is out of scope for M2 task views; expected an active item, got issue_type=%s status=%s",
 			resolved.TaskID,
 			formatLifecycleTaskField(string(taskItem.IssueType)),
 			formatLifecycleTaskField(string(taskItem.Status)),
@@ -993,7 +1102,7 @@ func (s ReviewLifecycleService) startFreshReview(base ReviewAttemptContext, pipe
 	base = prepared
 	reviewAttempt, err := base.store.StartReviewWithOptions(base.RepoID(), base.TaskID(), taskstate.StartReviewOptions{Pipeline: pipeline.Name, Step: pipeline.Steps[0].Name})
 	if err != nil {
-		return base, fmt.Errorf("task review %s: start review attempt: %w", base.TaskID(), err)
+		return base, fmt.Errorf("task run %s: start review attempt: %w", base.TaskID(), err)
 	}
 	base.Review = reviewAttempt
 	return base, nil
@@ -1011,7 +1120,7 @@ func (s ReviewLifecycleService) startFreshReviewAfterInterruptedComparison(base 
 	base = prepared
 	reviewAttempt, err := base.store.StartReviewWithOptions(base.RepoID(), base.TaskID(), taskstate.StartReviewOptions{Pipeline: pipeline.Name, Step: pipeline.Steps[0].Name})
 	if err != nil {
-		return base, fmt.Errorf("task review %s: start review attempt: %w", base.TaskID(), err)
+		return base, fmt.Errorf("task run %s: start review attempt: %w", base.TaskID(), err)
 	}
 	base.Review = reviewAttempt
 	return base, nil
@@ -1020,7 +1129,7 @@ func (s ReviewLifecycleService) startFreshReviewAfterInterruptedComparison(base 
 func (s ReviewLifecycleService) guardFreshReviewBlockers(base ReviewAttemptContext) error {
 	taskState, err := base.store.Load(base.RepoID(), base.TaskID())
 	if err != nil {
-		return fmt.Errorf("task review %s: load prior review blockers: %w", base.TaskID(), err)
+		return fmt.Errorf("task run %s: load prior review blockers: %w", base.TaskID(), err)
 	}
 	latest, ok := taskstate.LatestReview(taskState)
 	if !ok {
@@ -1037,10 +1146,10 @@ func (s ReviewLifecycleService) guardFreshReviewBlockers(base ReviewAttemptConte
 		if errors.Is(err, ErrFreshReviewBlockerDispositionInterrupted) {
 			return freshReviewBlockerGuardError{interrupted: true}
 		}
-		return fmt.Errorf("task review %s: prompt fresh review blocker dispositions: %w", base.TaskID(), err)
+		return fmt.Errorf("task run %s: prompt fresh review blocker dispositions: %w", base.TaskID(), err)
 	}
 	if err := validateFreshReviewBlockerDispositions(blockers, dispositions); err != nil {
-		return fmt.Errorf("task review %s: %w", base.TaskID(), err)
+		return fmt.Errorf("task run %s: %w", base.TaskID(), err)
 	}
 
 	for _, disposition := range dispositions {
@@ -1048,30 +1157,30 @@ func (s ReviewLifecycleService) guardFreshReviewBlockers(base ReviewAttemptConte
 		case FreshReviewBlockerActionKeep:
 			if automated[disposition.FindingIndex] {
 				if _, err := base.store.MarkReviewAutomatedBlockerDecisionKept(base.RepoID(), base.TaskID(), latest.Attempt); err != nil {
-					return fmt.Errorf("task review %s: record kept automated blocker finding %d: %w", base.TaskID(), disposition.FindingIndex+1, err)
+					return fmt.Errorf("task run %s: record kept automated blocker finding %d: %w", base.TaskID(), disposition.FindingIndex+1, err)
 				}
 			}
 		case FreshReviewBlockerActionAddressedManually:
 			if _, err := base.store.AddressReviewBlockingFindingManually(base.RepoID(), base.TaskID(), latest.Attempt, disposition.FindingIndex, disposition.Reason); err != nil {
-				return fmt.Errorf("task review %s: record manually addressed blocker finding %d: %w", base.TaskID(), disposition.FindingIndex+1, err)
+				return fmt.Errorf("task run %s: record manually addressed blocker finding %d: %w", base.TaskID(), disposition.FindingIndex+1, err)
 			}
 		case FreshReviewBlockerActionWaive:
 			if _, err := base.store.WaiveReviewBlockingFinding(base.RepoID(), base.TaskID(), latest.Attempt, disposition.FindingIndex, disposition.Reason); err != nil {
-				return fmt.Errorf("task review %s: waive prior blocker finding %d: %w", base.TaskID(), disposition.FindingIndex+1, err)
+				return fmt.Errorf("task run %s: waive prior blocker finding %d: %w", base.TaskID(), disposition.FindingIndex+1, err)
 			}
 		}
 	}
 
 	updated, err := base.store.Load(base.RepoID(), base.TaskID())
 	if err != nil {
-		return fmt.Errorf("task review %s: reload prior review blockers: %w", base.TaskID(), err)
+		return fmt.Errorf("task run %s: reload prior review blockers: %w", base.TaskID(), err)
 	}
 	latest, _ = taskstate.LatestReview(updated)
 	if !taskstate.ReviewHasOpenBlockers(latest) {
 		return nil
 	}
 	if _, err := base.store.PrepareReviewForTargetedFollowUp(base.RepoID(), base.TaskID(), latest.Attempt); err != nil {
-		return fmt.Errorf("task review %s: preserve kept blockers for targeted follow-up: %w", base.TaskID(), err)
+		return fmt.Errorf("task run %s: preserve kept blockers for targeted follow-up: %w", base.TaskID(), err)
 	}
 	return freshReviewBlockerGuardError{}
 }
@@ -1118,7 +1227,7 @@ func validateFreshReviewBlockerDispositions(blockers []FreshReviewBlocker, dispo
 func (s ReviewLifecycleService) resumeReview(base ReviewAttemptContext, paused taskstate.ReviewAttempt, pipelineName string) (ReviewAttemptContext, error) {
 	pipeline, err := ResolvePausedTaskReviewPipeline(base.paths, base.Source.Repository, paused, pipelineName)
 	if err != nil {
-		return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", base.TaskID(), err)
+		return ReviewAttemptContext{}, fmt.Errorf("task run %s: %w", base.TaskID(), err)
 	}
 	base.Pipeline = pipeline
 	base.Resumed = true
@@ -1130,7 +1239,7 @@ func (s ReviewLifecycleService) resumeReview(base ReviewAttemptContext, paused t
 	base = prepared
 	reviewAttempt, err := base.store.ResumeReview(base.RepoID(), base.TaskID(), paused.Attempt)
 	if err != nil {
-		return base, fmt.Errorf("task review %s: resume review attempt: %w", base.TaskID(), err)
+		return base, fmt.Errorf("task run %s: resume review attempt: %w", base.TaskID(), err)
 	}
 	base.Review = reviewAttempt
 	if err := s.Frontend.ReviewResumed(base); err != nil {
@@ -1142,10 +1251,10 @@ func (s ReviewLifecycleService) resumeReview(base ReviewAttemptContext, paused t
 func (s ReviewLifecycleService) preparePipeline(ctx ReviewAttemptContext) (ReviewAttemptContext, error) {
 	agentConfig, err := ResolveReviewAgentConfig(ctx.paths, ctx.Pipeline)
 	if err != nil {
-		return ctx, fmt.Errorf("task review %s: %w", ctx.TaskID(), err)
+		return ctx, fmt.Errorf("task run %s: %w", ctx.TaskID(), err)
 	}
 	if pipelineUsesAgentReview(ctx.Pipeline) && s.AgentLauncher == nil {
-		return ctx, fmt.Errorf("task review %s: review agent launcher is required", ctx.TaskID())
+		return ctx, fmt.Errorf("task run %s: review agent launcher is required", ctx.TaskID())
 	}
 	ctx.AgentConfig = agentConfig
 	return ctx, nil
@@ -1240,7 +1349,7 @@ func latestEligibleBlockedReview(store ReviewLifecycleStore, ctx ReviewAttemptCo
 func (s ReviewLifecycleService) continueBlockedReview(base ReviewAttemptContext, blocked taskstate.ReviewAttempt, pipelineName string) (ReviewAttemptContext, error) {
 	pipeline, err := ResolvePausedTaskReviewPipeline(base.paths, base.Source.Repository, blocked, pipelineName)
 	if err != nil {
-		return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", base.TaskID(), err)
+		return ReviewAttemptContext{}, fmt.Errorf("task run %s: %w", base.TaskID(), err)
 	}
 	base.Pipeline = pipeline
 	prepared, err := s.preparePipeline(base)
@@ -1425,13 +1534,13 @@ func RequireCleanReviewIndex(ctx context.Context, workdir string) error {
 	if statusErr != nil {
 		status = "unable to read git status: " + statusErr.Error()
 	}
-	return fmt.Errorf("review requires a clean Git index, but staged changes are present in %q; unstage them before running task review\n%s", workdir, strings.TrimSpace(status))
+	return fmt.Errorf("review requires a clean Git index, but staged changes are present in %q; unstage them, then rerun `orpheus task run <task-id>`\n%s", workdir, strings.TrimSpace(status))
 }
 
 func latestAutonomousReviewBlockers(store ReviewLifecycleStore, repoID string, taskID string) (taskstate.ReviewAttempt, []int, bool, error) {
 	taskState, err := store.Load(repoID, taskID)
 	if err != nil {
-		return taskstate.ReviewAttempt{}, nil, false, fmt.Errorf("task review %s: load review blockers: %w", taskID, err)
+		return taskstate.ReviewAttempt{}, nil, false, fmt.Errorf("task run %s: load review blockers: %w", taskID, err)
 	}
 	latest, ok := taskstate.LatestReview(taskState)
 	if !ok || latest.Status != taskstate.ReviewStatusBlocked || latest.AutomatedBlockerDecisionInterrupted || taskstate.ReviewComparisonInputInterrupted(latest) {
@@ -1441,17 +1550,46 @@ func latestAutonomousReviewBlockers(store ReviewLifecycleStore, repoID string, t
 	return latest, indexes, eligible && len(indexes) > 0, nil
 }
 
-//nolint:funlen // Dispatch, execution, and completion checks are one lifecycle transaction.
-func (s ReviewLifecycleService) runAutonomousReviewFollowUp(ctx context.Context, current ReviewAttemptContext, agentName string, reviewAttempt int, findingIndexes []int) error {
+type autonomousReviewFollowUpRun struct {
+	dispatch DispatchService
+	start    DispatchStartResult
+	prompt   string
+}
+
+func (s ReviewLifecycleService) runAutonomousReviewFollowUp(
+	ctx context.Context,
+	current ReviewAttemptContext,
+	agentName string,
+	reviewAttempt int,
+	findingIndexes []int,
+) error {
 	if s.AgentRunner == nil {
 		return errors.New("review lifecycle agent runner is required for autonomous follow-up")
 	}
 	if err := s.Frontend.AutonomousFollowUp(current, reviewAttempt, findingIndexes); err != nil {
 		return err
 	}
+	followUp, err := s.dispatchAutonomousReviewFollowUp(ctx, current, agentName)
+	if err != nil {
+		return err
+	}
+	result, runErr := s.executeAutonomousReviewFollowUpAgent(ctx, current, followUp)
+	if err := s.finalizeAutonomousReviewFollowUp(current, followUp, result, runErr); err != nil {
+		return err
+	}
+	return s.validateAutonomousReviewFollowUpCompletion(current, followUp.start.Attempt.Attempt)
+}
+
+func (s ReviewLifecycleService) dispatchAutonomousReviewFollowUp(
+	ctx context.Context,
+	current ReviewAttemptContext,
+	agentName string,
+) (autonomousReviewFollowUpRun, error) {
 	backend, err := s.BackendFactory(current.Source)
 	if err != nil {
-		return fmt.Errorf("task review %s: create backend for autonomous follow-up: %w", current.TaskID(), err)
+		return autonomousReviewFollowUpRun{}, fmt.Errorf(
+			"task run %s: create backend for autonomous follow-up: %w", current.TaskID(), err,
+		)
 	}
 	promptCapture := ""
 	dispatch := DispatchService{
@@ -1483,56 +1621,88 @@ func (s ReviewLifecycleService) runAutonomousReviewFollowUp(ctx context.Context,
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("task review %s: start autonomous follow-up: %w", current.TaskID(), err)
+		return autonomousReviewFollowUpRun{}, fmt.Errorf(
+			"task run %s: start autonomous follow-up: %w", current.TaskID(), err,
+		)
 	}
-	result, err := s.AgentRunner.RunReviewLifecycleAgent(ctx, ReviewLifecycleAgentRun{
+	return autonomousReviewFollowUpRun{dispatch: dispatch, start: start, prompt: promptCapture}, nil
+}
+
+func (s ReviewLifecycleService) executeAutonomousReviewFollowUpAgent(
+	ctx context.Context,
+	current ReviewAttemptContext,
+	followUp autonomousReviewFollowUpRun,
+) (ReviewLifecycleAgentRunResult, error) {
+	return s.AgentRunner.RunReviewLifecycleAgent(ctx, ReviewLifecycleAgentRun{
 		RepoID:       current.RepoID(),
 		TaskID:       current.TaskID(),
-		Start:        start,
-		Prompt:       promptCapture,
-		ExecutionDir: start.ExecutionDir,
+		Start:        followUp.start,
+		Prompt:       followUp.prompt,
+		ExecutionDir: followUp.start.ExecutionDir,
 	})
-	if err != nil {
-		recordErr := dispatch.Fail(DispatchFailureOptions{
+}
+
+func (s ReviewLifecycleService) finalizeAutonomousReviewFollowUp(
+	current ReviewAttemptContext,
+	followUp autonomousReviewFollowUpRun,
+	result ReviewLifecycleAgentRunResult,
+	runErr error,
+) error {
+	if runErr != nil {
+		recordErr := followUp.dispatch.Fail(DispatchFailureOptions{
 			RepoID:      current.RepoID(),
 			TaskID:      current.TaskID(),
-			Attempt:     start.Attempt.Attempt,
-			Cause:       err,
-			StartFailed: s.AgentRunner.IsStartError(err),
+			Attempt:     followUp.start.Attempt.Attempt,
+			Cause:       runErr,
+			StartFailed: s.AgentRunner.IsStartError(runErr),
 		})
 		if recordErr != nil {
-			return fmt.Errorf("task run %s: %w; additionally failed to record run failure: %w", current.TaskID(), err, recordErr)
+			return fmt.Errorf(
+				"task run %s: %w; additionally failed to record run failure: %w",
+				current.TaskID(), runErr, recordErr,
+			)
 		}
-		return fmt.Errorf("task run %s: %w", current.TaskID(), err)
+		return fmt.Errorf("task run %s: %w", current.TaskID(), runErr)
 	}
-	if err := dispatch.Finish(current.RepoID(), current.TaskID(), start.Attempt.Attempt); err != nil {
+	if err := followUp.dispatch.Finish(
+		current.RepoID(), current.TaskID(), followUp.start.Attempt.Attempt,
+	); err != nil {
 		return fmt.Errorf("task run %s: record run finish: %w", current.TaskID(), err)
 	}
 	if result.UsageError != nil {
 		return fmt.Errorf("task run %s: record run usage: %w", current.TaskID(), result.UsageError)
 	}
-	ready, err := CompletedTaskRunReadyForReview(current.store, current.RepoID(), current.TaskID(), start.Attempt.Attempt)
-	if err != nil {
-		return fmt.Errorf("task review %s: inspect autonomous follow-up completion: %w", current.TaskID(), err)
-	}
-	if !ready {
-		if err := s.Frontend.FollowUpRunIncomplete(current, start.Attempt.Attempt); err != nil {
-			return err
-		}
-		return errReviewFollowUpIncomplete
-	}
 	return nil
+}
+
+func (s ReviewLifecycleService) validateAutonomousReviewFollowUpCompletion(
+	current ReviewAttemptContext,
+	runAttempt int,
+) error {
+	ready, err := CompletedTaskRunReadyForReview(
+		current.store, current.RepoID(), current.TaskID(), runAttempt,
+	)
+	if err != nil {
+		return fmt.Errorf("task run %s: inspect autonomous follow-up completion: %w", current.TaskID(), err)
+	}
+	if ready {
+		return nil
+	}
+	if err := s.Frontend.FollowUpRunIncomplete(current, runAttempt); err != nil {
+		return err
+	}
+	return errReviewFollowUpIncomplete
 }
 
 func (s ReviewLifecycleService) startFreshAutonomousReview(ctx context.Context, previous ReviewAttemptContext) (ReviewAttemptContext, error) {
 	target, err := ReviewTarget(previous.store, previous.paths, previous)
 	if err != nil {
-		return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", previous.TaskID(), err)
+		return ReviewAttemptContext{}, fmt.Errorf("task run %s: %w", previous.TaskID(), err)
 	}
 	previous.Target = target
 	previous.Workdir = target.Worktree
 	if err := ValidateReviewCandidateReady(ctx, previous.store, previous, target.Worktree); err != nil {
-		return ReviewAttemptContext{}, fmt.Errorf("task review %s: %w", previous.TaskID(), err)
+		return ReviewAttemptContext{}, fmt.Errorf("task run %s: %w", previous.TaskID(), err)
 	}
 	return s.startFreshReview(previous, previous.Pipeline)
 }
@@ -1574,14 +1744,14 @@ func manualReviewCompletions(taskState taskstate.TaskState) (manualReviewComplet
 func (s ReviewLifecycleService) processSeparateTaskReviewCandidates(runCtx context.Context, ctx ReviewAttemptContext) (bool, error) {
 	candidates, err := PendingSeparateTaskCandidates(ctx.store, ctx.RepoID(), ctx.TaskID(), ctx.Review.Attempt)
 	if err != nil {
-		return false, fmt.Errorf("task review %s: load separate-task candidates: %w", ctx.TaskID(), err)
+		return false, fmt.Errorf("task run %s: load separate-task candidates: %w", ctx.TaskID(), err)
 	}
 	if len(candidates) == 0 {
 		return true, nil
 	}
 	selected, err := s.Frontend.SelectSeparateTaskCandidates(ctx, candidates)
 	if err != nil {
-		return false, fmt.Errorf("task review %s: %w", ctx.TaskID(), err)
+		return false, fmt.Errorf("task run %s: %w", ctx.TaskID(), err)
 	}
 	if len(selected) == 0 {
 		return true, nil
@@ -1592,7 +1762,7 @@ func (s ReviewLifecycleService) processSeparateTaskReviewCandidates(runCtx conte
 func (s ReviewLifecycleService) createSelectedSeparateTaskCandidates(ctx context.Context, reviewCtx ReviewAttemptContext, selected []SeparateTaskCandidate) (bool, error) {
 	backend, err := s.BackendFactory(reviewCtx.Source)
 	if err != nil {
-		return false, fmt.Errorf("task review %s: create follow-up task backend: %w", reviewCtx.TaskID(), err)
+		return false, fmt.Errorf("task run %s: create follow-up task backend: %w", reviewCtx.TaskID(), err)
 	}
 	for _, candidate := range selected {
 		created, err := backend.Create(ctx, candidate.CreateOptions(reviewCtx))
@@ -1600,7 +1770,7 @@ func (s ReviewLifecycleService) createSelectedSeparateTaskCandidates(ctx context
 			return s.Frontend.ContinueAfterFollowUpCreationFailure(reviewCtx, candidate, err)
 		}
 		if _, err := reviewCtx.store.RecordReviewFindingCreatedTask(reviewCtx.RepoID(), reviewCtx.TaskID(), reviewCtx.Review.Attempt, candidate.Index, created.ID); err != nil {
-			return false, fmt.Errorf("task review %s: record created follow-up task %s: %w", reviewCtx.TaskID(), created.ID, err)
+			return false, fmt.Errorf("task run %s: record created follow-up task %s: %w", reviewCtx.TaskID(), created.ID, err)
 		}
 		if err := s.Frontend.SeparateTaskCreated(reviewCtx, candidate, created); err != nil {
 			return false, err

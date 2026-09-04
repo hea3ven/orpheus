@@ -192,7 +192,7 @@ func appendConflictResolutionGuidance(builder *strings.Builder, ctx ConflictReso
 func appendConflictResolutionContract(builder *strings.Builder) {
 	builder.WriteString("\nExecution contract:\n")
 	builder.WriteString("- This is a non-interactive sync conflict-resolution session; do not ask the human operator for clarification or decisions.\n")
-	builder.WriteString("- Do not run `orpheus agent done`, `orpheus task run`, `orpheus task review`, or `orpheus task done`.\n")
+	builder.WriteString("- Do not run `orpheus agent done`, `orpheus task run`, or `orpheus task done`.\n")
 	builder.WriteString("- Do not create commits, push branches, merge pull requests, close tasks, or change task metadata.\n")
 	builder.WriteString("- Leave the merge in progress after staging the resolved conflict files; Orpheus sync will commit and push after you exit.\n")
 	builder.WriteString("- If the conflicts cannot be resolved safely, exit nonzero and explain the blocker in the visible terminal/session output.\n")

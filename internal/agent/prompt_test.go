@@ -189,7 +189,7 @@ func TestRenderConflictResolutionContextConstrainsAgentScope(t *testing.T) {
 		"  - conflict.txt",
 		"  - pkg/service.go",
 		"non-interactive sync conflict-resolution session",
-		"Do not run `orpheus agent done`, `orpheus task run`, `orpheus task review`, or `orpheus task done`",
+		"Do not run `orpheus agent done`, `orpheus task run`, or `orpheus task done`",
 		"Do not create commits, push branches",
 		"Leave the merge in progress",
 		"Orpheus sync will commit and push after you exit",

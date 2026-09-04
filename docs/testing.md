@@ -62,12 +62,20 @@ elapsed times; command wall time is retained as a diagnostic but does not affect
 the timing gate, so cold compilation cannot masquerade as a test regression.
 Packages with no selected tests are excluded because their process startup
 timing is too noisy to be a useful performance signal.
-Timing failures show the current measurement, baseline measurement, absolute
-and percentage differences from that baseline, the budget, and the amount over
-budget. The complete report is written to
-`artifacts/test-coverage/report.json`. If a lane fails, the command
-still runs the other lane and writes a partial report containing stderr, raw
-JSON output, and decoded failing-test output before returning failure. `make
+Only suite timing failures block the quality gate. A suite is over budget only
+when its selected-test total is strictly above the suite budget. Package timings
+continue to be compared with their retained package budgets. A package overrun
+is a non-blocking warning that identifies its lane, package, current measurement,
+baseline, budget, and amount over budget. The JSON report stores those entries
+under `decision.warnings`, command output labels them `warning (non-blocking)`,
+and the pull-request summary repeats them. Coverage findings show the trusted
+baseline percentage, current percentage, change in percentage points, and the
+significance threshold. Suite failures and coverage decisions retain relevant
+package warnings for diagnosis. The complete report is written to
+`artifacts/test-coverage/report.json`, with a Markdown summary beside it at
+`artifacts/test-coverage/report.md`. If a lane fails, the command still runs
+the other lane and writes a partial report containing stderr, raw JSON output,
+and decoded failing-test output before returning failure. `make
 coverage` remains a compatibility alias.
 
 The compact `coverage/test-coverage-baseline.json` contains only repository and
@@ -83,9 +91,11 @@ significant regressions fail.
 Use `make quality-baseline` (or the compatibility alias `make
 coverage-baseline`) for an eligible refresh. Generation is sorted and
 repeatable, refuses to replace a baseline after a prohibited coverage regression
-or timing failure, and preserves every existing timing budget. New timed
-packages receive a budget from their first coverage-instrumented measurement.
-Faster measurements neither require refresh nor ratchet a budget down.
+or suite timing failure, and preserves every existing timing budget. A
+package-only timing warning does not block an eligible coverage or structure
+refresh. New timed packages receive a budget from their first
+coverage-instrumented measurement. Faster measurements neither require refresh
+nor ratchet a budget down.
 
 ## Pull-request quality gate
 
@@ -102,12 +112,16 @@ The job runs `make quality` once, then runs `make lint` and `make build`
 separately. `build` is intentionally a compilation-only target, so neither
 lint nor build starts another test run. The report's decoded test executions
 supply the unit and integration test results, independent coverage, and timing
-checks. Its job summary contains a repository line and a line for each package
-with aggregate statement coverage and selected-test timing only; it never
-includes source files, coverage blocks, or hit inventories. Complete and
-partial reports, plus raw setup/provisioning, quality, lint, and build logs,
-are uploaded for every job outcome. Setup diagnostics are initialized before
-checkout so failed downloads, checksum checks, and extraction remain available.
+checks. Its job summary starts with a table for the quality, lint, and build
+results, followed by a lane coverage and timing table. Blocking issues and
+warnings have separate tables. The per-package coverage and selected-test timing
+table is collapsed by default, as are command logs for failed checks. Coverage
+regressions include the size of the drop and the configured significance
+threshold. The summary never includes source files, coverage blocks, or hit
+inventories. Complete and partial reports, plus raw setup/provisioning, quality,
+lint, and build logs, are uploaded for every job outcome. Setup diagnostics are
+initialized before checkout so failed downloads, checksum checks, and extraction
+remain available.
 
 The gate writes a clear final result in its summary:
 
@@ -115,7 +129,9 @@ The gate writes a clear final result in its summary:
 - `refresh_required` fails until the tracked baseline is regenerated from the
   pull request's result.
 - `coverage_regression`, `timing_budget_exceeded`, and `test_failed` fail with
-  their recorded diagnostics.
+  their recorded diagnostics. `timing_budget_exceeded` is reserved for a unit
+  or integration suite total strictly above its suite budget. Package overruns
+  are non-blocking warnings.
 - A missing report, failed setup, unreadable base baseline, or inconsistent
   command result is labelled `execution_failure` and fails.
 - A lint or build failure also fails the same required job without rerunning

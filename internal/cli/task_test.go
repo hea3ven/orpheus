@@ -148,6 +148,133 @@ func TestIntegrationTaskListListsAllActiveItemsWithStatusProjectionPresentation(
 	assertTaskListBDLog(t, logPath, repos)
 }
 
+func TestIntegrationTaskListScopesOneRegisteredRepository(t *testing.T) {
+	t.Parallel()
+
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+	alphaDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
+	betaDir := filepath.Join(testutil.CanonicalTempDir(t), "beta")
+	for _, dir := range []string{alphaDir, betaDir} {
+		must.NoError(os.MkdirAll(dir, 0o755))
+	}
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{
+		{ID: "alpha", Name: "Alpha Repo", Path: alphaDir, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "a"},
+		{ID: "beta", Name: "Beta Repo", Path: betaDir, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "b"},
+	}}))
+
+	logPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		alphaDir: {stdout: `[
+			{"id":"a-closed","title":"MATCH closed task","status":"closed","priority":1,"issue_type":"task","created_at":"2026-06-03T00:00:00Z","updated_at":"2026-06-03T00:00:00Z"},
+			{"id":"a-open","title":"match open task","status":"open","priority":1,"issue_type":"task","created_at":"2026-06-03T00:00:00Z","updated_at":"2026-06-03T00:00:00Z"},
+			{"id":"a-late","title":"match updated too late","status":"closed","priority":1,"issue_type":"task","created_at":"2026-06-03T00:00:00Z","updated_at":"2026-06-06T00:00:00Z"},
+			{"id":"a-epic","title":"Selected epic","status":"open","priority":1,"issue_type":"epic"},
+			{"id":"a-other","title":"unrelated","status":"closed","priority":1,"issue_type":"task","created_at":"2026-06-03T00:00:00Z","updated_at":"2026-06-03T00:00:00Z"}
+		]`},
+		betaDir: {stderr: "excluded backend should not be queried", exitCode: 7},
+	})
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "list", "--repo", "alpha"})
+	must.NoError(err)
+	is.Empty(stderr)
+	for _, want := range []string{"a-open", "a-epic", "Alpha Repo"} {
+		is.Contains(stdout, want)
+	}
+	for _, hidden := range []string{"a-closed", "a-late", "a-other", "Beta Repo", "excluded backend should not be queried"} {
+		is.NotContains(stdout, hidden)
+	}
+
+	jsonStdout, jsonStderr, jsonErr := executeCommandWithError(t, []string{"task", "list", "--repo", "a", "--json"})
+	must.NoError(jsonErr)
+	is.Empty(jsonStderr)
+	var jsonEntries []taskViewJSONTaskEntry
+	must.NoError(json.Unmarshal([]byte(jsonStdout), &jsonEntries))
+	jsonIDs := make([]string, 0, len(jsonEntries))
+	for _, entry := range jsonEntries {
+		jsonIDs = append(jsonIDs, entry.ID)
+		is.Equal("alpha", entry.Repository.ID)
+	}
+	is.ElementsMatch([]string{"a-epic", "a-open"}, jsonIDs)
+
+	filteredArgs := []string{
+		"task", "list", "--repo", "Alpha Repo",
+		"--query", "match",
+		"--type", "task",
+		"--created-after", "2026-06-01",
+		"--created-before", "2026-06-05",
+		"--updated-after", "2026-06-02",
+		"--updated-before", "2026-06-05",
+		"--status", "closed",
+	}
+	for _, sortMode := range []string{"created", "status"} {
+		filteredStdout, filteredStderr, filteredErr := executeCommandWithError(t, append(append([]string{}, filteredArgs...), "--sort", sortMode))
+		must.NoError(filteredErr)
+		is.Empty(filteredStderr)
+		is.Contains(filteredStdout, "a-closed")
+		for _, hidden := range []string{"a-open", "a-late", "a-epic", "a-other", "Beta Repo"} {
+			is.NotContains(filteredStdout, hidden)
+		}
+	}
+
+	filteredJSON, filteredJSONStderr, filteredJSONErr := executeCommandWithError(t, append(append([]string{}, filteredArgs...), "--sort", "updated", "--json"))
+	must.NoError(filteredJSONErr)
+	is.Empty(filteredJSONStderr)
+	var filteredEntries []taskViewJSONTaskEntry
+	must.NoError(json.Unmarshal([]byte(filteredJSON), &filteredEntries))
+	must.Len(filteredEntries, 1)
+	is.Equal("a-closed", filteredEntries[0].ID)
+
+	_, _, unknownErr := executeCommandWithError(t, []string{"task", "list", "--repo", "missing"})
+	must.Error(unknownErr)
+	is.ErrorContains(unknownErr, `repo "missing" is not registered`)
+	is.ErrorContains(unknownErr, "orpheus repo list")
+
+	log := readFileString(t, logPath)
+	is.Contains(log, alphaDir)
+	is.NotContains(log, betaDir)
+	is.Equal(7, strings.Count(log, "--json --readonly --sandbox list --all --limit 0"))
+}
+
+func TestIntegrationTaskListReportsSelectedRepositoryFailure(t *testing.T) {
+	t.Parallel()
+
+	is := assert.New(t)
+	must := require.New(t)
+	newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+	alphaDir := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
+	betaDir := filepath.Join(testutil.CanonicalTempDir(t), "beta")
+	for _, dir := range []string{alphaDir, betaDir} {
+		must.NoError(os.MkdirAll(dir, 0o755))
+	}
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{
+		{ID: "alpha", Name: "Broken Repo", Path: alphaDir, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "a"},
+		{ID: "beta", Name: "Healthy Repo", Path: betaDir, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "b"},
+	}}))
+	logPath := withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		alphaDir: {stderr: "selected backend failed", exitCode: 7},
+		betaDir:  {stdout: `[{"id":"b-1","title":"Excluded healthy task","status":"open","issue_type":"task"}]`},
+	})
+
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "list", "--repo", "a"})
+
+	must.Error(err)
+	is.ErrorContains(err, "task list completed with 1 repo failure")
+	is.Contains(stdout, "Broken Repo")
+	is.Contains(stderr, "task list: repo alpha")
+	is.Contains(stderr, "selected backend failed")
+	is.NotContains(stdout, "Healthy Repo")
+	is.NotContains(stderr, "Healthy Repo")
+
+	log := readFileString(t, logPath)
+	is.Contains(log, alphaDir)
+	is.NotContains(log, betaDir)
+}
+
 func TestIntegrationTaskListComposesSourceAndProjectedStatusFilters(t *testing.T) {
 	t.Parallel()
 
@@ -224,7 +351,7 @@ func TestIntegrationTaskReadyIsNotACommand(t *testing.T) {
 	completion, completionStderr, err := executeCommandWithError(t, []string{"__complete", "task", "r"})
 	require.NoError(t, err)
 	assert.NotContains(t, completion, "ready")
-	assert.Contains(t, completion, "review")
+	assert.NotContains(t, completion, "review")
 	assert.Contains(t, completion, "run")
 	assert.Contains(t, completionStderr, "Completion ended with directive")
 }
@@ -462,7 +589,6 @@ func TestIntegrationTaskShowReportsMalformedAndUnknownPrefixes(t *testing.T) {
 	is.ErrorContains(err, "register the repo")
 }
 
-//nolint:funlen // The stats fixture is clearer with implementation, review, and totals assertions together.
 func TestIntegrationTaskStatsRendersImplementationExecutionUsage(t *testing.T) {
 	t.Parallel()
 
@@ -580,7 +706,6 @@ func TestIntegrationTaskStatsRendersImplementationExecutionUsage(t *testing.T) {
 	}
 }
 
-//nolint:funlen // The stats fixture documents the persisted conflict-repair telemetry.
 func TestIntegrationTaskStatsRendersSyncConflictResolutionExecutionUsage(t *testing.T) {
 	t.Parallel()
 
@@ -719,7 +844,6 @@ func TestIntegrationTaskStatsKeepsTokenUsageWhenCostPricingIsUnknown(t *testing.
 	}
 }
 
-//nolint:funlen // The Pi stats fixture keeps persisted usage, cost, and rendered totals together.
 func TestIntegrationTaskStatsUsesPiReportedEstimatedCost(t *testing.T) {
 	t.Parallel()
 
@@ -851,7 +975,6 @@ func TestIntegrationTaskStatsCountsMissingPiUsageCostAsUnknown(t *testing.T) {
 	}
 }
 
-//nolint:funlen // The aggregate fixture setup documents the period metrics under test.
 func TestIntegrationTaskStatsAggregateGroupsResolvedTasksByDay(t *testing.T) {
 	t.Parallel()
 
@@ -1167,7 +1290,6 @@ func TestIntegrationTaskShowRendersClosedItemsAndHistory(t *testing.T) {
 	is.Contains(stdout, "History:\n  2026-01-02T03:04:05Z Task closed\n")
 }
 
-//nolint:funlen // The history sequence is the behavior under test.
 func TestIntegrationTaskShowRendersChronologicalHistoryForClosedEpic(t *testing.T) {
 	t.Parallel()
 
@@ -1712,7 +1834,6 @@ func TestIntegrationTaskRunRejectsClosedTaskBeforeLocalWorkflowRouting(t *testin
 	is.NotContains(string(bdLog), "--json --sandbox")
 }
 
-//nolint:funlen // Workflow test is clearer when setup, command, and state assertions stay together.
 func TestIntegrationTaskRunExecutesImplementerDefaultAttachedFromDeterministicWorktree(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -1841,7 +1962,6 @@ func TestIntegrationTaskRunExecutesImplementerDefaultAttachedFromDeterministicWo
 	is.Equal(taskstate.EventRunFinished, retriedState.Events[5].Type)
 }
 
-//nolint:funlen // The generated Codex launch contract is best asserted end to end.
 func TestIntegrationTaskRunStructuredCodexProfileBuildsAttachedCommand(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -1917,7 +2037,6 @@ func TestIntegrationTaskRunStructuredCodexProfileBuildsAttachedCommand(t *testin
 	}, execution.Args)
 }
 
-//nolint:funlen // The Pi usage fixture is clearer as one end-to-end run scenario.
 func TestIntegrationTaskRunStructuredPiProfileCapturesUsage(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -2077,7 +2196,6 @@ func TestIntegrationTaskRunRejectsChildWhenImmediateParentEpicIsNotInProgress(t 
 	is.ErrorIs(statErr, os.ErrNotExist)
 }
 
-//nolint:funlen // Workflow test is clearer when setup, command, and state assertions stay together.
 func TestIntegrationTaskRunMainExecutesAgentFromRegisteredRepoRoot(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -2161,7 +2279,6 @@ func TestIntegrationTaskRunMainExecutesAgentFromRegisteredRepoRoot(t *testing.T)
 	is.Equal(taskstate.EventRunFinished, state.Events[2].Type)
 }
 
-//nolint:funlen // Workflow test is clearer when setup, command, and state assertions stay together.
 func TestIntegrationTaskRunRepoRootExecutesAgentFromRegisteredRepoRootOnTaskBranch(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -2478,7 +2595,6 @@ func TestIntegrationTaskRunMainFailsDirtyRepoRootBeforeLaunch(t *testing.T) {
 	is.ErrorIs(stateErr, os.ErrNotExist)
 }
 
-//nolint:funlen // The dirty follow-up dispatch path is clearer as one linear CLI workflow.
 func TestIntegrationTaskRunReviewFollowUpAllowsDirtyMainTarget(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -2555,13 +2671,13 @@ func TestIntegrationTaskRunReviewFollowUpAllowsDirtyMainTarget(t *testing.T) {
 	is.Equal([]int{0}, state.Runs[1].ReviewFollowUp.FindingIndexes)
 }
 
-func TestIntegrationTaskReviewShowDisplaysCrossAttemptFindingHistory(t *testing.T) {
+func TestIntegrationTaskShowReviewDisplaysCrossAttemptFindingHistory(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
-	paths, repoPath := setupTaskReviewShowRepo(t, "op-main")
-	seedTaskReviewShowState(t, paths, repoPath)
+	paths, repoPath := setupTaskShowReviewRepo(t, "op-main")
+	seedTaskShowReviewState(t, paths, repoPath)
 
-	stdout, stderr := executeCommand(t, []string{"task", "review", "show", "op-main"})
+	stdout, stderr := executeCommand(t, []string{"task", "show", "review", "op-main"})
 
 	is.Empty(stderr)
 	for _, want := range []string{
@@ -2574,18 +2690,18 @@ func TestIntegrationTaskReviewShowDisplaysCrossAttemptFindingHistory(t *testing.
 		"2/2 · ai-review · blocking · follow-up run 1 running · Race condition",
 		"2/3 · ai-review · blocking · waived · Known limitation",
 		"2/4 · ai-review · separate_task · created task op-42 · Extract helper",
-		"orpheus task review show <task-id> <review-attempt> <finding-number>",
+		"orpheus task show review <task-id> <review-attempt> <finding-number>",
 		"Next step: run `orpheus task run op-main` to address open blocking findings",
 	} {
 		is.Contains(stdout, want)
 	}
 }
 
-func TestIntegrationTaskReviewShowGuidesRetryAfterFailedFollowUp(t *testing.T) {
+func TestIntegrationTaskShowReviewGuidesRetryAfterFailedFollowUp(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
-	paths, repoPath := setupTaskReviewShowRepo(t, "op-retry")
+	paths, repoPath := setupTaskShowReviewRepo(t, "op-retry")
 	runStore := taskstate.NewStore(paths)
 
 	review, err := runStore.StartReview("alpha", "op-retry")
@@ -2610,19 +2726,19 @@ func TestIntegrationTaskReviewShowGuidesRetryAfterFailedFollowUp(t *testing.T) {
 	_, err = runStore.FinishRun("alpha", "op-retry", failed.Attempt, taskstate.RunStatusFailed)
 	must.NoError(err)
 
-	stdout, stderr := executeCommand(t, []string{"task", "review", "show", "op-retry"})
+	stdout, stderr := executeCommand(t, []string{"task", "show", "review", "op-retry"})
 
 	is.Empty(stderr)
 	is.Contains(stdout, "follow-up run 1 failed · Retry me")
 	is.Contains(stdout, "Next step: retry `orpheus task run op-retry`")
 }
 
-func TestIntegrationTaskReviewShowGuidesWhenTaskHasNoReviewAttempts(t *testing.T) {
+func TestIntegrationTaskShowReviewGuidesWhenTaskHasNoReviewAttempts(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
-	setupTaskReviewShowRepo(t, "op-empty")
+	setupTaskShowReviewRepo(t, "op-empty")
 
-	stdout, stderr := executeCommand(t, []string{"task", "review", "show", "op-empty"})
+	stdout, stderr := executeCommand(t, []string{"task", "show", "review", "op-empty"})
 
 	is.Empty(stderr)
 	is.Contains(stdout, "Review state for op-empty (repo alpha)")
@@ -2630,11 +2746,11 @@ func TestIntegrationTaskReviewShowGuidesWhenTaskHasNoReviewAttempts(t *testing.T
 	is.Contains(stdout, "Next step: run `orpheus task run op-empty` after task work is ready.")
 }
 
-func TestIntegrationTaskReviewShowRendersManuallyAddressedFinding(t *testing.T) {
+func TestIntegrationTaskShowReviewRendersManuallyAddressedFinding(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
-	paths, _ := setupTaskReviewShowRepo(t, "op-addressed")
+	paths, _ := setupTaskShowReviewRepo(t, "op-addressed")
 	runStore := taskstate.NewStore(paths)
 	reviewAttempt, err := runStore.StartReviewWithOptions("alpha", "op-addressed", taskstate.StartReviewOptions{
 		Pipeline: "default",
@@ -2653,17 +2769,50 @@ func TestIntegrationTaskReviewShowRendersManuallyAddressedFinding(t *testing.T) 
 	_, err = runStore.AddressReviewBlockingFindingManually("alpha", "op-addressed", reviewAttempt.Attempt, 0, "Verified in the worktree.")
 	must.NoError(err)
 
-	stdout, stderr := executeCommand(t, []string{"task", "review", "show", "op-addressed", "1", "1"})
+	stdout, stderr := executeCommand(t, []string{"task", "show", "review", "op-addressed", "1", "1"})
 	is.Empty(stderr)
 	is.Contains(stdout, "Authoritative finding 1/1:")
 	is.Contains(stdout, "Disposition: addressed manually: Verified in the worktree.")
 }
 
-func TestIntegrationTaskReviewShowGuidesInterruptedAutomatedBlockerDecision(t *testing.T) {
+func TestIntegrationTaskShowReviewGuidesPausedAutomatedBlockerDecision(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
 	must := require.New(t)
-	paths, _ := setupTaskReviewShowRepo(t, "op-interrupted")
+	paths, _ := setupTaskShowReviewRepo(t, "op-paused")
+	runStore := taskstate.NewStore(paths)
+	reviewAttempt, err := runStore.StartReviewWithOptions("alpha", "op-paused", taskstate.StartReviewOptions{
+		Pipeline: "quality",
+		Step:     "unit",
+	})
+	must.NoError(err)
+	_, err = runStore.RecordReviewStep("alpha", "op-paused", reviewAttempt.Attempt, taskstate.RecordReviewStepOptions{
+		Kind: taskstate.ReviewStepKindCheck,
+		Name: "unit",
+	})
+	must.NoError(err)
+	_, err = runStore.RecordReviewFinding("alpha", "op-paused", reviewAttempt.Attempt, taskstate.ReviewFinding{
+		Type:        taskstate.FindingTypeBlocking,
+		Title:       "Check failed",
+		Description: "make test failed.",
+		Step:        "unit",
+	})
+	must.NoError(err)
+	_, err = runStore.PauseReviewForAutomatedBlockerDecision("alpha", "op-paused", reviewAttempt.Attempt, "unit")
+	must.NoError(err)
+
+	stdout, stderr := executeCommand(t, []string{"task", "show", "review", "op-paused", "1"})
+
+	is.Empty(stderr)
+	is.Contains(stdout, "Automated blocker decisions: paused")
+	is.Contains(stdout, "Next step: automated blocker decision is paused; run `orpheus task run op-paused` to resume step unit.")
+}
+
+func TestIntegrationTaskShowReviewGuidesInterruptedAutomatedBlockerDecision(t *testing.T) {
+	t.Parallel()
+	is := assert.New(t)
+	must := require.New(t)
+	paths, _ := setupTaskShowReviewRepo(t, "op-interrupted")
 	runStore := taskstate.NewStore(paths)
 	reviewAttempt, err := runStore.StartReviewWithOptions("alpha", "op-interrupted", taskstate.StartReviewOptions{
 		Pipeline: "quality",
@@ -2682,20 +2831,20 @@ func TestIntegrationTaskReviewShowGuidesInterruptedAutomatedBlockerDecision(t *t
 	_, err = runStore.FinishReview("alpha", "op-interrupted", reviewAttempt.Attempt, taskstate.ReviewStatusBlocked)
 	must.NoError(err)
 
-	stdout, stderr := executeCommand(t, []string{"task", "review", "show", "op-interrupted", "1"})
+	stdout, stderr := executeCommand(t, []string{"task", "show", "review", "op-interrupted", "1"})
 
 	is.Empty(stderr)
 	is.Contains(stdout, "Automated blocker decisions: interrupted")
 	is.Contains(stdout, "Next step: automated blocker decisions were interrupted; run `orpheus task run op-interrupted` to start a fresh review.")
 }
 
-func TestIntegrationTaskReviewShowDisplaysClosedTaskReviewState(t *testing.T) {
+func TestIntegrationTaskShowReviewDisplaysClosedTaskReviewState(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
-	paths, repoPath := setupTaskReviewShowRepoWithStatus(t, "op-main", "closed")
-	seedTaskReviewShowState(t, paths, repoPath)
+	paths, repoPath := setupTaskShowReviewRepoWithStatus(t, "op-main", "closed")
+	seedTaskShowReviewState(t, paths, repoPath)
 
-	stdout, stderr := executeCommand(t, []string{"task", "review", "show", "op-main"})
+	stdout, stderr := executeCommand(t, []string{"task", "show", "review", "op-main"})
 
 	is.Empty(stderr)
 	is.Contains(stdout, "Review state for op-main (repo alpha)")
@@ -2705,13 +2854,13 @@ func TestIntegrationTaskReviewShowDisplaysClosedTaskReviewState(t *testing.T) {
 	is.Contains(stdout, "2/4 · ai-review · separate_task · created task op-42 · Extract helper")
 }
 
-func setupTaskReviewShowRepo(t *testing.T, taskID string) (state.Paths, string) {
+func setupTaskShowReviewRepo(t *testing.T, taskID string) (state.Paths, string) {
 	t.Helper()
 
-	return setupTaskReviewShowRepoWithStatus(t, taskID, "in_progress")
+	return setupTaskShowReviewRepoWithStatus(t, taskID, "in_progress")
 }
 
-func setupTaskReviewShowRepoWithStatus(t *testing.T, taskID string, status string) (state.Paths, string) {
+func setupTaskShowReviewRepoWithStatus(t *testing.T, taskID string, status string) (state.Paths, string) {
 	t.Helper()
 
 	must := require.New(t)
@@ -2729,12 +2878,12 @@ func setupTaskReviewShowRepoWithStatus(t *testing.T, taskID string, status strin
 		BeadsPrefix:   "op",
 	}}}))
 	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
-		repoPath: {stdout: taskReviewShowTaskJSON(taskID, repoPath, status)},
+		repoPath: {stdout: taskShowReviewTaskJSON(taskID, repoPath, status)},
 	})
 	return paths, repoPath
 }
 
-func taskReviewShowTaskJSON(taskID string, repoPath string, status string) string {
+func taskShowReviewTaskJSON(taskID string, repoPath string, status string) string {
 	return `[
 		{
 			"id":"` + taskID + `",
@@ -2747,7 +2896,7 @@ func taskReviewShowTaskJSON(taskID string, repoPath string, status string) strin
 	]`
 }
 
-func seedTaskReviewShowState(t *testing.T, paths state.Paths, repoPath string) {
+func seedTaskShowReviewState(t *testing.T, paths state.Paths, repoPath string) {
 	t.Helper()
 
 	must := require.New(t)
@@ -2957,7 +3106,6 @@ func TestIntegrationTaskRunAllowsOwnedInProgressTaskWithMatchingMetadata(t *test
 	is.Equal(worktreePath, state.GitFacts.Worktree)
 }
 
-//nolint:funlen // Failure workflow needs the fake command script and assertions in one scenario.
 func TestIntegrationTaskRunDoesNotLaunchOrRecordAttemptWhenMarkInProgressFails(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -3341,7 +3489,6 @@ func TestIntegrationTaskRunHeaderWriteFailureRecordsStartFailure(t *testing.T) {
 	is.Contains(state.Events[2].Error, "agent header output unavailable")
 }
 
-//nolint:funlen // The fixture prepares a persisted blocker before exercising the follow-up start failure.
 func TestIntegrationTaskReviewFollowUpHeaderWriteFailureRecordsStartFailure(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -3386,11 +3533,11 @@ func TestIntegrationTaskReviewFollowUpHeaderWriteFailureRecordsStartFailure(t *t
 		{dir: repoPath, args: "--json --readonly --sandbox list --all --limit 0", stdout: taskJSON},
 	})
 
-	command := newTestRootCommand(t, []string{"task", "review", "op-followup-header"}, io.Discard)
+	command := newTestRootCommand(t, []string{"task", "run", "op-followup-header"}, io.Discard)
 	command.SetIn(bytes.NewBuffer(nil))
 	command.SetOut(new(bytes.Buffer))
 	command.SetErr(failingAgentHeaderWriter{})
-	command.SetArgs([]string{"task", "review", "op-followup-header"})
+	command.SetArgs([]string{"task", "run", "op-followup-header"})
 	err = command.Execute()
 
 	must.Error(err)
@@ -3606,7 +3753,7 @@ func TestIntegrationTaskReviewApproveFinalizesAndRecordsPassedAttempt(t *testing
 		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "x\na\n")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, "x\na\n")
 
 	is.Contains(stderr, "TASK  op-main — Ready for task done")
 	is.Contains(stderr, "● LATEST COMPLETION\nReview approval")
@@ -3661,7 +3808,7 @@ func TestIntegrationTaskReviewManualContextShowsOriginalAndLatestFollowUpComplet
 		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "a\n")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, "a\n")
 
 	is.Contains(stderr, "○ ORIGINAL COMPLETION\nOriginal implementation")
 	is.Contains(stderr, "DESCRIPTION\nImplemented the main task.")
@@ -3702,12 +3849,12 @@ func TestIntegrationTaskReviewRejectsStaleMetadataMirror(t *testing.T) {
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
 	})
 
-	stdout, stderr, err := executeCommandWithInputAndError(t, []string{"task", "review", "op-main"}, []byte("a\n"))
+	stdout, stderr, err := executeCommandWithInputAndError(t, []string{"task", "run", "op-main"}, []byte("a\n"))
 
 	must.Error(err)
 	is.Empty(stdout)
 	is.Empty(stderr)
-	is.ErrorContains(err, "task review op-main: task op-main metadata target is invalid")
+	is.ErrorContains(err, "task run op-main: task op-main metadata target is invalid")
 	is.ErrorContains(err, taskmodel.MetadataWorktree+"="+strconv.Quote(staleWorktree))
 
 	var state taskstate.TaskState
@@ -3742,12 +3889,14 @@ func TestIntegrationTaskReviewRejectsStagedCandidateChanges(t *testing.T) {
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
 	})
 
-	stdout, stderr, err := executeCommandWithInputAndError(t, []string{"task", "review", "op-main"}, []byte("a\n"))
+	stdout, stderr, err := executeCommandWithInputAndError(t, []string{"task", "run", "op-main"}, []byte("a\n"))
 
 	must.Error(err)
 	is.Empty(stdout)
 	is.Empty(stderr)
 	is.ErrorContains(err, "review requires a clean Git index")
+	is.ErrorContains(err, "orpheus task run <task-id>")
+	is.NotContains(err.Error(), "orpheus task review")
 	is.Contains(runGit(t, repoPath, "status", "--short"), "A  reviewed.txt")
 
 	var state taskstate.TaskState
@@ -3780,7 +3929,7 @@ func TestIntegrationTaskReviewRejectsMissingCandidateChangesWithoutFinalizationC
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
 	})
 
-	stdout, stderr, err := executeCommandWithInputAndError(t, []string{"task", "review", "op-main"}, []byte("a\n"))
+	stdout, stderr, err := executeCommandWithInputAndError(t, []string{"task", "run", "op-main"}, []byte("a\n"))
 
 	must.Error(err)
 	is.Empty(stdout)
@@ -3793,7 +3942,6 @@ func TestIntegrationTaskReviewRejectsMissingCandidateChangesWithoutFinalizationC
 	is.False(ok)
 }
 
-//nolint:funlen // The setup and restoration assertions are clearer in one workflow test.
 func TestIntegrationTaskReviewRestoresCandidateChangesMutatedDuringManualStep(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -3836,7 +3984,7 @@ func TestIntegrationTaskReviewRestoresCandidateChangesMutatedDuringManualStep(t 
 		},
 	}
 
-	stdout, stderr, err := executeCommandWithReaderAndError(t, []string{"task", "review", "op-main"}, input)
+	stdout, stderr, err := executeCommandWithReaderAndError(t, []string{"task", "run", "op-main"}, input)
 
 	must.Error(err)
 	is.Empty(stdout)
@@ -3881,7 +4029,6 @@ func (r *mutatingReviewInput) Read(p []byte) (int, error) {
 	return r.input.Read(p)
 }
 
-//nolint:funlen // Exercises a complete manual finding lifecycle without splitting its input sequence.
 func TestIntegrationTaskReviewBlockingFindingBlocksWithoutFinalizing(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -3928,7 +4075,7 @@ func TestIntegrationTaskReviewBlockingFindingBlocksWithoutFinalizing(t *testing.
 		"f",
 		"",
 	}, "\n")
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, input)
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, input)
 
 	is.Empty(stdout)
 	is.Contains(stderr, "Review action [f=finish/block, b=block, v=advisory, t=task, q=abort]")
@@ -3989,7 +4136,7 @@ func TestIntegrationTaskReviewAdvisoryAndSeparateTaskFindingsDoNotBlockApproval(
 		"n",
 		"",
 	}, "\n")
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, input)
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, input)
 
 	is.Contains(stdout, "Finalized op-main")
 	is.Contains(stderr, "Finding title:")
@@ -4049,7 +4196,7 @@ func TestIntegrationTaskReviewCreatesSelectedSeparateTaskFollowUp(t *testing.T) 
 		"1",
 		"",
 	}, "\n")
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, input)
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, input)
 
 	is.Contains(stdout, "Finalized op-main")
 	is.Contains(stderr, "Created follow-up Bead op-41 for review finding 1.")
@@ -4064,7 +4211,6 @@ func TestIntegrationTaskReviewCreatesSelectedSeparateTaskFollowUp(t *testing.T) 
 	is.NotNil(latest.Findings[0].CreatedTaskAt)
 }
 
-//nolint:funlen // The task-run proposal selection flow spans implementation, review, and publication.
 func TestIntegrationTaskRunUsesSeparateTaskProposalSelection(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -4191,7 +4337,7 @@ func TestIntegrationTaskReviewCanAbortWhenSeparateTaskCreationFails(t *testing.T
 		"1",
 		"n",
 	}, "\n")
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, input)
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, input)
 
 	is.Empty(stdout)
 	is.Contains(stderr, "Failed to create follow-up Bead for review finding 1")
@@ -4232,7 +4378,7 @@ func TestIntegrationTaskReviewAbortDoesNotFinalize(t *testing.T) {
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "q\n")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, "q\n")
 
 	is.Empty(stdout)
 	is.Contains(stderr, "Review aborted for op-main.")
@@ -4284,7 +4430,7 @@ exit 0
 		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "standard", "op-main"}, "a\n")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "--pipeline", "standard", "op-main"}, "a\n")
 
 	is.Contains(stdout, "check stdout 1 unit")
 	is.Contains(stdout, "Finalized op-main")
@@ -4344,7 +4490,7 @@ printf 'manual command ran %s\n' "$ORPHEUS_REVIEW_STEP"
 		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "standard", "op-main"}, "\na\n")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "--pipeline", "standard", "op-main"}, "\na\n")
 
 	is.Contains(stdout, "manual command ran inspect")
 	is.Contains(stdout, "Finalized op-main")
@@ -4406,7 +4552,7 @@ func TestIntegrationTaskReviewImportsHunkBlockingNoteAndBlocksApproval(t *testin
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "standard", "op-main"}, "\nb\nf\n")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "--pipeline", "standard", "op-main"}, "\nb\nf\n")
 
 	is.Contains(stdout, "hunk command ran")
 	is.Contains(stderr, "Captured 1 Hunk note(s)")
@@ -4465,7 +4611,7 @@ func TestIntegrationTaskReviewImportsHunkAdvisoryNoteAndAllowsApproval(t *testin
 		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "standard", "op-main"}, "\nv\na\n")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "--pipeline", "standard", "op-main"}, "\nv\na\n")
 
 	is.Contains(stdout, "Finalized op-main")
 	is.Contains(stderr, "Imported Hunk note user:2 as advisory finding.")
@@ -4479,7 +4625,6 @@ func TestIntegrationTaskReviewImportsHunkAdvisoryNoteAndAllowsApproval(t *testin
 	is.Contains(latest.Findings[0].Description, "Location: old lines 4-5")
 }
 
-//nolint:funlen // The workflow spans Hunk import, approval, and Beads follow-up creation.
 func TestIntegrationTaskReviewImportsHunkSeparateTaskNoteAndCreatesFollowUp(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -4530,7 +4675,7 @@ func TestIntegrationTaskReviewImportsHunkSeparateTaskNoteAndCreatesFollowUp(t *t
 		"a",
 		"",
 	}, "\n")
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "standard", "op-main"}, input)
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "--pipeline", "standard", "op-main"}, input)
 
 	is.Contains(stdout, "Finalized op-main")
 	is.Contains(stderr, "Imported Hunk note user:3 as separate-task finding.")
@@ -4581,7 +4726,7 @@ func TestIntegrationTaskReviewHunkManualCommandWithNoCapturedNotesContinuesPromp
 		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "standard", "op-main"}, "\na\n")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "--pipeline", "standard", "op-main"}, "\na\n")
 
 	is.Contains(stdout, "Finalized op-main")
 	is.Contains(stderr, "Review action")
@@ -4631,7 +4776,7 @@ printf 'ran\n' > %s
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "standard", "op-main"}, "n\n")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "--pipeline", "standard", "op-main"}, "n\n")
 
 	is.Empty(stdout)
 	is.Contains(stderr, "◆ REVIEW STEP · inspect (manual)")
@@ -4654,7 +4799,6 @@ printf 'ran\n' > %s
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
-//nolint:funlen // The EOF confirmation fixture is clearer inline with its assertions.
 func TestIntegrationTaskReviewManualCommandEOFConfirmationHandlesUnavailableInput(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -4715,7 +4859,7 @@ printf 'ran\n' > %s
 
 			stdout, stderr, err := executeCommandWithInputAndError(
 				t,
-				[]string{"task", "review", "--pipeline", "standard", "op-main"},
+				[]string{"task", "run", "--pipeline", "standard", "op-main"},
 				test.input,
 			)
 
@@ -4775,7 +4919,7 @@ exit 7
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, "")
 
 	is.Contains(stdout, "failing check output")
 	is.Contains(stderr, "== Review step: unit (check) ==")
@@ -4800,7 +4944,6 @@ exit 7
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
-//nolint:funlen // Each case needs an end-to-end review fixture to exercise EOF handling.
 func TestIntegrationTaskReviewCheckBlockerReasonEOFRecordsInterrupted(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -4844,7 +4987,7 @@ func TestIntegrationTaskReviewCheckBlockerReasonEOFRecordsInterrupted(t *testing
 
 			stdout, stderr := executeCommandWithInput(
 				t,
-				[]string{"task", "review", "--pipeline", "standard", "op-main"},
+				[]string{"task", "run", "--pipeline", "standard", "op-main"},
 				test.input,
 			)
 
@@ -4905,7 +5048,7 @@ func TestIntegrationTaskReviewCheckBlockerKeepAcceptsEOFAnswer(t *testing.T) {
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "standard", "op-main"}, "k")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "--pipeline", "standard", "op-main"}, "k")
 
 	is.Empty(stdout)
 	is.Contains(stderr, "Decision for finding 1")
@@ -4925,7 +5068,6 @@ func TestIntegrationTaskReviewCheckBlockerKeepAcceptsEOFAnswer(t *testing.T) {
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
-//nolint:funlen // Each case needs an end-to-end review fixture to exercise final EOF handling.
 func TestIntegrationTaskReviewCheckBlockerReasonAcceptsEOFAnswer(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -4986,7 +5128,7 @@ func TestIntegrationTaskReviewCheckBlockerReasonAcceptsEOFAnswer(t *testing.T) {
 
 			stdout, stderr := executeCommandWithInput(
 				t,
-				[]string{"task", "review", "--pipeline", "standard", "op-main"},
+				[]string{"task", "run", "--pipeline", "standard", "op-main"},
 				test.input,
 			)
 
@@ -5041,7 +5183,7 @@ func TestIntegrationTaskRunAfterInterruptedAutomatedBlockerDecisionRequiresFresh
 
 	reviewStdout, reviewStderr := executeCommandWithInput(
 		t,
-		[]string{"task", "review", "--pipeline", "standard", "op-main"},
+		[]string{"task", "run", "--pipeline", "standard", "op-main"},
 		"",
 	)
 	is.Empty(reviewStdout)
@@ -5125,7 +5267,6 @@ func TestIntegrationTaskRunRecoversHardStoppedAutomatedBlockerDecision(t *testin
 	is.Zero(latest.Findings[0].TargetedByRunAttempt)
 }
 
-//nolint:funlen // The autonomous loop spans dispatch, review, follow-up, and publication.
 func TestIntegrationTaskRunAutonomousReviewFollowUpRepairsCheckAndPublishes(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -5192,7 +5333,6 @@ exit 7
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
 }
 
-//nolint:funlen // The end-to-end fixture spans implementation, repair, review, and publication.
 func TestIntegrationTaskRunAttachedManualBlockerRepairsAndApprovalFinalizes(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -5302,7 +5442,7 @@ func TestIntegrationTaskReviewManualBlockerExhaustsBudgetWithoutExtraLaunch(t *t
 		{dir: repoPath, args: "--json --readonly --sandbox list --all --limit 0", stdout: taskJSON},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-manual-loop"}, strings.Join([]string{
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "op-manual-loop"}, strings.Join([]string{
 		"b", "First blocker", "Fix the first issue.", "Repair it.", "f",
 		"b", "Second blocker", "Fix the second issue.", "Repair it.", "f", "",
 	}, "\n"))
@@ -5402,7 +5542,6 @@ func (r *delayedManualInput) Read(p []byte) (int, error) {
 	return r.input.Read(p)
 }
 
-//nolint:funlen // The exhaustion workflow needs two complete review/fix attempts.
 func TestIntegrationTaskRunAutonomousReviewLoopExhaustsPersistentCheckBlockers(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -5457,7 +5596,7 @@ exit 7
 	is.Zero(latest.Findings[0].TargetedByRunAttempt)
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 
-	showStdout, showStderr := executeCommand(t, []string{"task", "review", "show", "op-stubborn", "2"})
+	showStdout, showStderr := executeCommand(t, []string{"task", "show", "review", "op-stubborn", "2"})
 	is.Empty(showStderr)
 	is.Contains(showStdout, "Autonomous review: attempt budget exhausted")
 	is.Contains(showStdout, "Next step: autonomous review attempts are exhausted")
@@ -5467,7 +5606,6 @@ exit 7
 	is.Contains(taskStdout, "Review attempt 2 blocked (autonomous review budget exhausted)")
 }
 
-//nolint:funlen // The resumed review regression spans two commands and a nested follow-up dispatch.
 func TestIntegrationTaskReviewResumedAutonomousFollowUpPreservesSelectedImplementer(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -5517,7 +5655,7 @@ exit 7
 
 	writeAutonomousReviewLoopConfigWithImplementers(t, paths, "selected", selectedAgentPath, "other", otherAgentPath, "other", 4, steps)
 
-	reviewStdout, reviewStderr := executeCommandWithScriptedInput(t, []string{"task", "review", "op-resume"}, "a\nk\n", "", "a\n")
+	reviewStdout, reviewStderr := executeCommandWithScriptedInput(t, []string{"task", "run", "op-resume"}, "a\nk\n", "", "a\n")
 	is.Contains(reviewStdout, "Published op-resume")
 	is.Contains(reviewStderr, "Resuming review attempt 1 at manual step \"approval\".")
 	is.Contains(reviewStderr, "Review blocked for op-resume by check \"status\".")
@@ -5576,7 +5714,7 @@ func TestIntegrationTaskReviewCheckBlockerDowngradeContinuesPipeline(t *testing.
 
 	stdout, stderr := executeCommandWithInput(
 		t,
-		[]string{"task", "review", "--pipeline", "standard", "op-main"},
+		[]string{"task", "run", "--pipeline", "standard", "op-main"},
 		"d\nFalse positive for this task.\na\n",
 	)
 
@@ -5633,7 +5771,7 @@ func TestIntegrationTaskReviewCheckBlockerWaiverContinuesPipeline(t *testing.T) 
 
 	stdout, stderr := executeCommandWithInput(
 		t,
-		[]string{"task", "review", "--pipeline", "standard", "op-main"},
+		[]string{"task", "run", "--pipeline", "standard", "op-main"},
 		"c\nKnown flaky check.\na\n",
 	)
 
@@ -5683,7 +5821,7 @@ func TestIntegrationTaskReviewCheckStartFailureMarksOperationalFailure(t *testin
 
 	stdout, stderr, err := executeCommandWithInputAndError(
 		t,
-		[]string{"task", "review", "--pipeline", "standard", "op-main"},
+		[]string{"task", "run", "--pipeline", "standard", "op-main"},
 		nil,
 	)
 
@@ -5730,7 +5868,7 @@ func TestIntegrationTaskReviewInvalidReviewAgentConfigDoesNotStartFreshAttempt(t
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
 	})
 
-	stdout, stderr, err := executeCommandWithError(t, []string{"task", "review", "op-main"})
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "op-main"})
 
 	must.Error(err)
 	is.Empty(stdout)
@@ -5786,7 +5924,7 @@ func TestIntegrationTaskReviewInvalidReviewAgentConfigDoesNotResumeManualAttempt
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
 	})
 
-	stdout, stderr, err := executeCommandWithError(t, []string{"task", "review", "op-main"})
+	stdout, stderr, err := executeCommandWithError(t, []string{"task", "run", "op-main"})
 
 	must.Error(err)
 	is.Empty(stdout)
@@ -5801,7 +5939,6 @@ func TestIntegrationTaskReviewInvalidReviewAgentConfigDoesNotResumeManualAttempt
 	is.Equal("inspect", latest.Step)
 }
 
-//nolint:funlen // The review-agent CLI fixture is clearer as one end-to-end scenario.
 func TestIntegrationTaskReviewAgentReviewStepLaunchesReviewerAndPassesWithoutFindings(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -5832,7 +5969,7 @@ func TestIntegrationTaskReviewAgentReviewStepLaunchesReviewerAndPassesWithoutFin
 		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, "")
 
 	is.Contains(stdout, "Finalized op-main")
 	is.Contains(stderr, "fake agent stderr")
@@ -5869,7 +6006,6 @@ func TestIntegrationTaskReviewAgentReviewStepLaunchesReviewerAndPassesWithoutFin
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
 }
 
-//nolint:funlen // The workflow fixture records the complete agent usage contract.
 func TestIntegrationTaskReviewAgentReviewStepCapturesCodexUsage(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -5907,7 +6043,7 @@ func TestIntegrationTaskReviewAgentReviewStepCapturesCodexUsage(t *testing.T) {
 		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, "")
 
 	is.Contains(stdout, "Finalized op-main")
 	is.Contains(stderr, "fake agent stderr")
@@ -5932,7 +6068,6 @@ func TestIntegrationTaskReviewAgentReviewStepCapturesCodexUsage(t *testing.T) {
 	is.Equal(1, execution.UsageCapture.CandidateCount)
 }
 
-//nolint:funlen // The workflow fixture records the complete agent usage contract.
 func TestIntegrationTaskReviewAgentReviewStepCapturesPiUsage(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -5968,7 +6103,7 @@ func TestIntegrationTaskReviewAgentReviewStepCapturesPiUsage(t *testing.T) {
 		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, "")
 
 	is.Contains(stdout, "Finalized op-main")
 	is.Contains(stderr, "fake agent stderr")
@@ -6036,7 +6171,7 @@ func TestIntegrationTaskReviewAgentReviewBlockingFindingStopsPipeline(t *testing
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, "")
 
 	is.Contains(stdout, "Recorded blocking review finding 1 for op-main.")
 	is.Contains(stderr, "== Review step: ai-review (agent_review) ==")
@@ -6055,7 +6190,6 @@ func TestIntegrationTaskReviewAgentReviewBlockingFindingStopsPipeline(t *testing
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
-//nolint:funlen // The mixed automated-blocker workflow spans review, show, and follow-up targeting.
 func TestIntegrationTaskReviewAgentReviewMixedAutomatedBlockerDecisions(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -6117,7 +6251,7 @@ func TestIntegrationTaskReviewAgentReviewMixedAutomatedBlockerDecisions(t *testi
 
 	stdout, stderr := executeCommandWithInput(
 		t,
-		[]string{"task", "review", "--pipeline", "standard", "op-main"},
+		[]string{"task", "run", "--pipeline", "standard", "op-main"},
 		"k\nd\nNot required for this task.\nw\nFalse positive from reviewer.\n",
 	)
 
@@ -6144,7 +6278,7 @@ func TestIntegrationTaskReviewAgentReviewMixedAutomatedBlockerDecisions(t *testi
 	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
 	})
-	showStdout, showStderr := executeCommand(t, []string{"task", "review", "show", "op-main", "1"})
+	showStdout, showStderr := executeCommand(t, []string{"task", "show", "review", "op-main", "1"})
 	is.Empty(showStderr)
 	is.Contains(showStdout, "Title: Keep blocker")
 	is.Contains(showStdout, "Resolution: open")
@@ -6175,7 +6309,6 @@ func TestIntegrationTaskReviewAgentReviewMixedAutomatedBlockerDecisions(t *testi
 	is.Zero(latest.Findings[2].TargetedByRunAttempt)
 }
 
-//nolint:funlen // The promotion workflow spans review, inspection, and follow-up dispatch.
 func TestIntegrationTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -6232,8 +6365,8 @@ func TestIntegrationTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *t
 	inputFile, err := os.Open(inputPath)
 	must.NoError(err)
 	t.Cleanup(func() { _ = inputFile.Close() })
-	firstStdout, firstStderr, err := executeCommandWithReaderAndError(t, []string{"task", "review", "op-main"}, inputFile)
-	must.NoError(err, "execute task review\nstderr: %s", firstStderr)
+	firstStdout, firstStderr, err := executeCommandWithReaderAndError(t, []string{"task", "run", "op-main"}, inputFile)
+	must.NoError(err, "execute task run\nstderr: %s", firstStderr)
 
 	is.Contains(firstStdout, "Recorded advisory review finding 1 for op-main.")
 	is.Contains(firstStdout, "Recorded advisory review finding 2 for op-main.")
@@ -6255,7 +6388,7 @@ func TestIntegrationTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *t
 		"f",
 		"",
 	}, "\n")
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, input)
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, input)
 
 	is.Empty(stdout)
 	priorStart := strings.Index(firstStderr, "▲ PRIOR UNRESOLVED ADVISORIES")
@@ -6304,7 +6437,7 @@ func TestIntegrationTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *t
 	is.Equal("approval", latest.Findings[2].Step)
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 
-	showStdout, showStderr := executeCommand(t, []string{"task", "review", "show", "op-main", "1"})
+	showStdout, showStderr := executeCommand(t, []string{"task", "show", "review", "op-main", "1"})
 	is.Empty(showStderr)
 	is.Contains(showStdout, "Status: blocked")
 	is.Contains(showStdout, "Type: blocking")
@@ -6363,7 +6496,7 @@ func TestIntegrationTaskReviewAgentReviewNonZeroExitMarksOperationalFailure(t *t
 
 	stdout, stderr, err := executeCommandWithInputAndError(
 		t,
-		[]string{"task", "review", "op-main"},
+		[]string{"task", "run", "op-main"},
 		nil,
 	)
 
@@ -6383,7 +6516,6 @@ func TestIntegrationTaskReviewAgentReviewNonZeroExitMarksOperationalFailure(t *t
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
-//nolint:funlen // The interrupted recovery path spans two review commands and finalization.
 func TestIntegrationTaskReviewInterruptedAutomatedBlockerRecoveryReusesRecordedPipeline(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -6422,7 +6554,7 @@ func TestIntegrationTaskReviewInterruptedAutomatedBlockerRecoveryReusesRecordedP
 
 	firstStdout, firstStderr := executeCommandWithInput(
 		t,
-		[]string{"task", "review", "--pipeline", "strict", "op-main"},
+		[]string{"task", "run", "--pipeline", "strict", "op-main"},
 		"",
 	)
 	is.Contains(firstStdout, "strict pipeline")
@@ -6431,7 +6563,7 @@ func TestIntegrationTaskReviewInterruptedAutomatedBlockerRecoveryReusesRecordedP
 
 	recoveryStdout, recoveryStderr := executeCommandWithInput(
 		t,
-		[]string{"task", "review", "op-main"},
+		[]string{"task", "run", "op-main"},
 		"a\nFixed outside Orpheus.\nd\nStrict failure accepted.",
 	)
 
@@ -6492,7 +6624,7 @@ func TestIntegrationTaskReviewPipelineOverridePrecedence(t *testing.T) {
 		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "cli", "op-main"}, "")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "--pipeline", "cli", "op-main"}, "")
 
 	is.Contains(stdout, "cli pipeline")
 	is.NotContains(stdout, "wrong pipeline")
@@ -6543,7 +6675,7 @@ func TestIntegrationTaskReviewPipelineAliasResolvesToGlobalPipeline(t *testing.T
 		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "--pipeline", "quick", "op-main"}, "")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "--pipeline", "quick", "op-main"}, "")
 
 	is.Contains(stdout, "alias pipeline")
 	is.NotContains(stdout, "wrong pipeline")
@@ -6558,7 +6690,6 @@ func TestIntegrationTaskReviewPipelineAliasResolvesToGlobalPipeline(t *testing.T
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
 }
 
-//nolint:funlen // The interrupted recovery path verifies persisted mixed findings.
 func TestIntegrationTaskReviewManualInputLossReplaysRecordedFindings(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -6598,7 +6729,7 @@ func TestIntegrationTaskReviewManualInputLossReplaysRecordedFindings(t *testing.
 		"Address the blocking issue",
 		"",
 	}, "\n")
-	firstStdout, firstStderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, firstInput)
+	firstStdout, firstStderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, firstInput)
 
 	is.Empty(firstStdout)
 	is.Contains(firstStderr, "Review for op-main is waiting for manual step \"local-review\" because manual review input is unavailable.")
@@ -6611,7 +6742,7 @@ func TestIntegrationTaskReviewManualInputLossReplaysRecordedFindings(t *testing.
 	is.Equal("Existing note", paused.Findings[0].Title)
 	is.Equal("Existing blocker", paused.Findings[1].Title)
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "f\n")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, "f\n")
 
 	is.Empty(stdout)
 	is.Contains(stderr, "Resuming review attempt 1 at manual step \"local-review\".")
@@ -6679,7 +6810,7 @@ func TestIntegrationTaskReviewResumesManualWaitingAttempt(t *testing.T) {
 		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
 	})
 
-	stdout, stderr := executeCommandWithInput(t, []string{"task", "review", "op-main"}, "a\n")
+	stdout, stderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, "a\n")
 
 	is.Contains(stdout, "Finalized op-main")
 	is.Contains(stderr, "Resuming review attempt 1 at manual step \"inspect\".")
@@ -6691,6 +6822,95 @@ func TestIntegrationTaskReviewResumesManualWaitingAttempt(t *testing.T) {
 	must.True(ok)
 	is.Equal(reviewAttempt.Attempt, latest.Attempt)
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+}
+
+//nolint:funlen // The paused automated-decision workflow spans three CLI invocations.
+func TestIntegrationTaskRunResumesPausedAutomatedBlockerDecision(t *testing.T) {
+	t.Parallel()
+	is := assert.New(t)
+	must := require.New(t)
+	root := newTestState(t)
+	paths := currentTestPaths(t)
+	store := registry.NewStore(paths)
+
+	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
+	must.NoError(store.Save(registry.Registry{Repos: []registry.Repo{{
+		ID:            "alpha",
+		Name:          "Alpha Repo",
+		Path:          repoPath,
+		DefaultBranch: "main",
+		BeadsMode:     registry.BeadsModeLocal,
+		BeadsPrefix:   "op",
+	}}}))
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review pause", "Resume the blocker decision.")
+	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
+
+	firstRuns := filepath.Join(testutil.CanonicalTempDir(t), "first-runs")
+	blockedRuns := filepath.Join(testutil.CanonicalTempDir(t), "blocked-runs")
+	first := writeReviewScript(t, fmt.Sprintf("#!/bin/sh\nprintf 'first\\n' >> %s\n", shellQuote(firstRuns)))
+	blocked := writeReviewScript(t, fmt.Sprintf("#!/bin/sh\nprintf 'blocked\\n' >> %s\nexit 7\n", shellQuote(blockedRuns)))
+	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
+		"standard": {
+			{"kind": "check", "name": "first", "command": first},
+			{"kind": "check", "name": "blocked", "command": blocked},
+		},
+	})
+
+	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
+		repoPath: {stdout: taskJSON},
+	})
+
+	firstStdout, firstStderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, "p\n")
+	is.Empty(firstStdout)
+	is.Contains(firstStderr, "Automated blocker decisions for op-main are paused; resume with `orpheus task run op-main`.")
+
+	stateStore := taskstate.NewStore(paths)
+	state, err := stateStore.Load("alpha", "op-main")
+	must.NoError(err)
+	paused, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(taskstate.ReviewStatusWaitingForAutomatedDecision, paused.Status)
+	must.Len(paused.Steps, 2)
+	must.Len(paused.Findings, 1)
+
+	secondStdout, secondStderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, "r\np\n")
+	is.Empty(secondStdout)
+	is.Contains(secondStderr, "Resuming review attempt 1 at automated blocker decision for step \"blocked\".")
+	is.Contains(secondStderr, "Finding 1:")
+	is.Contains(secondStderr, "Decision for finding 1 [k=keep, d=downgrade advisory, w=waive/cancel, r=restart step, p=pause]:")
+	is.Contains(secondStderr, "Automated blocker decisions for op-main are paused; resume with `orpheus task run op-main`.")
+
+	state, err = stateStore.Load("alpha", "op-main")
+	must.NoError(err)
+	pausedAgain, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(paused.Attempt, pausedAgain.Attempt)
+	is.Equal(taskstate.ReviewStatusWaitingForAutomatedDecision, pausedAgain.Status)
+	must.Len(pausedAgain.Steps, 2)
+	must.Len(pausedAgain.Findings, 1)
+
+	finalStdout, finalStderr := executeCommandWithInput(t, []string{"task", "run", "op-main"}, "w\nAccepted for this task.\n")
+	is.Contains(finalStdout, "Finalized op-main")
+	is.Contains(finalStderr, "Resuming review attempt 1 at automated blocker decision for step \"blocked\".")
+	is.Contains(finalStderr, "Finding 1:")
+
+	state, err = stateStore.Load("alpha", "op-main")
+	must.NoError(err)
+	latest, ok := taskstate.LatestReview(state)
+	must.True(ok)
+	is.Equal(paused.Attempt, latest.Attempt)
+	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+	must.Len(latest.Steps, 2)
+	must.Len(latest.Findings, 1)
+	is.Equal("Accepted for this task.", latest.Findings[0].Waiver)
+
+	firstRunOutput, err := os.ReadFile(firstRuns)
+	must.NoError(err)
+	is.Equal("first\n", string(firstRunOutput))
+	blockedRunOutput, err := os.ReadFile(blockedRuns)
+	must.NoError(err)
+	is.Equal("blocked\nblocked\n", string(blockedRunOutput))
 }
 
 func TestIntegrationTaskReviewRejectsConflictingPipelineForManualWaitingAttempt(t *testing.T) {
@@ -6730,11 +6950,11 @@ func TestIntegrationTaskReviewRejectsConflictingPipelineForManualWaitingAttempt(
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
 	})
 
-	stdout, _, err := executeCommandWithError(t, []string{"task", "review", "--pipeline", "other", "op-main"})
+	stdout, _, err := executeCommandWithError(t, []string{"task", "run", "--pipeline", "other", "op-main"})
 
 	must.Error(err)
 	is.Empty(stdout)
-	is.ErrorContains(err, "cannot replace a paused review")
+	is.ErrorContains(err, "--pipeline cannot affect the selected workflow path")
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
 	latest, ok := taskstate.LatestReview(state)
@@ -6765,12 +6985,13 @@ func TestIntegrationTaskReviewUnknownPipelineIncludesRepoAliases(t *testing.T) {
 	writeReviewPipelineConfig(t, paths, "standard", map[string][]map[string]any{
 		"standard": {{"kind": "manual", "name": "standard-review"}},
 	})
+	recordMainCompletion(t, paths, "alpha", "op-main", repoPath, "Review pipeline", "Validate pipeline selection.")
 	taskJSON := mainReadyTaskJSON("op-main", repoPath)
 	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
 	})
 
-	stdout, _, err := executeCommandWithError(t, []string{"task", "review", "--pipeline", "unknown", "op-main"})
+	stdout, _, err := executeCommandWithError(t, []string{"task", "run", "--pipeline", "unknown", "op-main"})
 
 	must.Error(err)
 	is.Empty(stdout)
@@ -6829,7 +7050,6 @@ func TestIntegrationTaskDoneRefusesRunningCompletionWithoutInteractiveConfirmati
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
-//nolint:funlen // PR publication scenario is clearer as one linear workflow.
 func TestIntegrationTaskDonePublishesPRReadyTaskBranch(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -7021,7 +7241,6 @@ func TestIntegrationTaskSyncPollsExistingPRURLWithoutPushOrMutation(t *testing.T
 	is.NotContains(string(ghLog), "ARG_2<<END\ncreate\nEND")
 }
 
-//nolint:funlen // The conflict-repair sync path needs Git, PR, agent, and state assertions together.
 func TestIntegrationTaskSyncRecordsConflictResolutionUsageTelemetry(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -7150,7 +7369,6 @@ func TestIntegrationTaskSyncRecordsConflictResolutionUsageTelemetry(t *testing.T
 	is.Equal("matched_codex_session", finished.Execution.UsageCapture.Reason)
 }
 
-//nolint:funlen // Sync scenario is clearer when provider, backend, and audit checks stay together.
 func TestIntegrationTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -7226,7 +7444,6 @@ func TestIntegrationTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR(t *test
 	is.Equal("merged", event.ObservedPRState)
 }
 
-//nolint:funlen // Table-driven sync error scenarios share setup that is best kept adjacent.
 func TestIntegrationTaskSyncExistingPRErrorsDoNotMutateBackendOrAudit(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -7538,7 +7755,6 @@ func TestIntegrationTaskDoneFeatureBranchPushFailureIsNonZero(t *testing.T) {
 	is.ErrorContains(err, "origin")
 }
 
-//nolint:funlen // Sync-all boundary scenario is clearer as a single workflow.
 func TestIntegrationTaskSyncAllPollsPRBoundaryTasks(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -7678,7 +7894,6 @@ func TestIntegrationTaskSyncAllReturnsNonZeroAfterCandidateError(t *testing.T) {
 	is.ErrorContains(err, "task sync --all failed for 1 item")
 }
 
-//nolint:funlen // Cross-repo sync-all scenario is clearer as one integrated workflow.
 func TestIntegrationTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAfterFailures(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -8249,7 +8464,6 @@ func TestIntegrationTaskStartHonorsParentDependencyAndIdempotency(t *testing.T) 
 	}
 }
 
-//nolint:funlen // The cases cover the CLI closure contract end to end.
 func TestIntegrationTaskCloseRequiresVerifiedClosedChildrenAndIsIdempotent(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct {
