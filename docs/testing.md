@@ -92,12 +92,6 @@ seconds for suites, and the greater of 50 percent or 0.25 seconds for packages.
 Bounds may move up or down. Review the resulting `.quality.yml` diff before
 committing it.
 
-`coverage/test-coverage-baseline.json`,
-`performance/test-timing-baseline.json`, and their old Make targets remain only
-for temporary hosted-gate compatibility. The hosted wrapper still retrieves the
-legacy coverage file, but `make quality` and `make quality-policy-update` do not
-read it.
-
 ## Pull-request quality gate
 
 [`.github/workflows/quality-gate.yml`](../.github/workflows/quality-gate.yml)
@@ -124,9 +118,3 @@ artifacts, but no report becomes input to a later run.
 top-level scenario separately and reports runtime, containment in the full
 integration profile, similarity to other scenarios, and exclusive statements.
 It is too expensive for routine pull requests.
-
-## Legacy detailed timing commands
-
-The `test-perf*` targets remain temporarily for hosted compatibility. New policy
-updates use `make quality-policy-update`; do not update
-`performance/test-timing-baseline.json` for the local quality contract.

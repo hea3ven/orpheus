@@ -14,8 +14,6 @@ jobs:
   quality:
     name: Pull-request quality gate
     runs-on: ubuntu-latest
-    env:
-      BASE_SHA: ${{ github.event.pull_request.base.sha }}
     steps:
       # This runs before every setup action so failures still leave an artifact
       # directory for the cancellation-safe upload below.
@@ -34,7 +32,6 @@ jobs:
         with:
           # github.sha is the pull_request event's tested merge commit, not the head SHA.
           ref: ${{ github.sha }}
-          fetch-depth: 0
           # Preserve diagnostics that were initialized before this checkout.
           clean: false
 
@@ -42,8 +39,8 @@ jobs:
         id: setup-go
         uses: actions/setup-go@v6
         with:
-          # Coverage statement accounting changed in Go 1.27. Keep this exact
-          # version aligned with the tracked coverage baseline.
+          # Coverage statement accounting changed in Go 1.27. Keep the quality
+          # policy measurements on this exact version.
           go-version: '1.27.0'
 
       - name: Restore pinned quality tools
@@ -123,33 +120,23 @@ jobs:
             printf 'tool provisioning outcome: %s\n' '${{ steps.provision-tools.outcome }}'
           } >> "$log"
 
-      - name: Run single-pass quality report against base
+      - name: Run single-pass quality report
         id: quality-report
         if: ${{ success() && !cancelled() }}
         continue-on-error: true
         shell: bash
-        env:
-          BASELINE: ${{ runner.temp }}/base-test-coverage-baseline.json
         run: |
           set -uo pipefail
           set +e
           report='artifacts/test-coverage/report.json'
           log='artifacts/test-coverage/quality.log'
-          base_error='artifacts/test-coverage/base-baseline-error.log'
           mkdir -p artifacts/test-coverage
-          quality_exit=0
 
-          if ! git show "$BASE_SHA:coverage/test-coverage-baseline.json" >"$BASELINE" 2>"$base_error"; then
-            cat "$base_error" | tee -a "$log"
+          make quality 2>&1 | tee "$log"
+          statuses=("${PIPESTATUS[@]}")
+          quality_exit="${statuses[0]}"
+          if [[ "${statuses[1]}" -ne 0 ]]; then
             quality_exit=1
-          else
-            cp "$BASELINE" artifacts/test-coverage/base-test-coverage-baseline.json
-            make quality QUALITY_COMPARE_TO="$BASELINE" 2>&1 | tee "$log"
-            statuses=("${PIPESTATUS[@]}")
-            quality_exit="${statuses[0]}"
-            if [[ "${statuses[1]}" -ne 0 ]]; then
-              quality_exit=1
-            fi
           fi
 
           decision=execution_failure
@@ -157,7 +144,7 @@ jobs:
             decision="$(jq --raw-output '.decision.status // "execution_failure"' "$report" 2>>"$log")" || decision=execution_failure
           fi
           case "$decision" in
-            pass|policy_update_required|refresh_required|coverage_regression|timing_budget_exceeded|test_failed) ;;
+            pass|policy_update_required|coverage_regression|timing_budget_exceeded|test_failed) ;;
             *) decision=execution_failure; quality_exit=1 ;;
           esac
           if [[ "$quality_exit" -eq 0 && "$decision" != pass ]]; then
@@ -222,10 +209,6 @@ jobs:
               ;;
             policy_update_required)
               quality_result='**Failed:** Quality policy update required'
-              failed=1
-              ;;
-            refresh_required)
-              quality_result='**Failed:** Baseline refresh required'
               failed=1
               ;;
             coverage_regression)

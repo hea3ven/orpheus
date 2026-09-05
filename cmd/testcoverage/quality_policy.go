@@ -119,7 +119,7 @@ func validateQualityPolicy(policy localQualityPolicy) error {
 		if err := validateCoverageFloors(name, lane.Coverage.Packages); err != nil {
 			return err
 		}
-		if !validTiming(lane.Timing.CeilingSeconds) {
+		if !finitePositive(lane.Timing.CeilingSeconds) {
 			return fmt.Errorf("%s lane timing ceiling must be finite and positive", name)
 		}
 		if lane.Timing.Packages == nil {
@@ -165,7 +165,7 @@ func validateCoverageFloors(lane string, floors map[string]float64) error {
 
 func validateTimingCeilings(lane string, ceilings map[string]float64) error {
 	for name, ceiling := range ceilings {
-		if name == "" || !validTiming(ceiling) {
+		if name == "" || !finitePositive(ceiling) {
 			return fmt.Errorf("%s lane has invalid timing ceiling for package %q", lane, name)
 		}
 	}
