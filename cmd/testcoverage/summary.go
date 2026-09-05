@@ -78,8 +78,6 @@ func decisionPresentation(status string) (alert, title, description string) {
 		return "TIP", "Quality checks passed", "No blocking test, coverage, or timing issues were found."
 	case statusPolicyUpdateRequired:
 		return "WARNING", "Quality policy update required", "Run `make quality-policy-update` and review the `.quality.yml` diff."
-	case statusRefreshRequired:
-		return "WARNING", "Baseline refresh required", "Regenerate the tracked quality baseline and include it in this pull request."
 	case statusRegression:
 		return "CAUTION", "Coverage floor violated", "A lane or package fell below its accepted coverage floor."
 	case statusTimingFailed:

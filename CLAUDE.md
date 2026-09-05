@@ -2,6 +2,14 @@
 
 This file provides instructions and context for AI coding agents working on this project. Keep it aligned with `AGENTS.md`.
 
+## Validation
+
+Run `make check` for complete validation at the end of a change. It formats the code, runs each test lane once through the read-only quality check, lints, and builds the CLI.
+
+`make quality` reads the reviewed `.quality.yml` policy and never changes it. If it reports `policy_update_required` or an intentional bound violation, run `make quality-policy-update` and review the `.quality.yml` diff. When merging, keep the reviewed policy resolution and run the update command only if the merged result requires it.
+
+The unit and integration lane conventions and prerequisites are documented in `AGENTS.md` and `docs/testing.md`. Live evaluations such as `orpheus eval review-context` are not routine validation and must never run implicitly.
+
 ## Task Tracking and Follow-Up
 
 This project does **not** use agent-driven task management for the MVP workflow.
@@ -56,16 +64,6 @@ cp -rf source dest          # NOT: cp -r source dest
 - `ssh` - use `-o BatchMode=yes` to fail instead of prompting
 - `apt-get` - use `-y` flag
 - `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
-
-## Build & Test
-
-_Add your build and test commands here_
-
-```bash
-# Example:
-# npm install
-# npm test
-```
 
 ## Architecture Overview
 

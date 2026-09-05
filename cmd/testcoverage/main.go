@@ -9,19 +9,12 @@ import (
 	"path/filepath"
 )
 
-const (
-	baselineSchemaVersion = 3
-	reportSchemaVersion   = 1
-)
+const reportSchemaVersion = 1
 
 type options struct {
 	policy         string
-	baseline       string
 	output         string
 	updatePolicy   bool
-	writeBaseline  bool
-	forceBaseline  bool
-	compareTo      string
 	auditScenarios bool
 }
 
@@ -42,12 +35,8 @@ func parseOptions(args []string) (options, error) {
 	flags := flag.NewFlagSet("testcoverage", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	flags.StringVar(&opts.policy, "policy", ".quality.yml", "reviewed local quality policy")
-	flags.StringVar(&opts.baseline, "baseline", "coverage/test-coverage-baseline.json", "legacy tracked aggregate quality baseline")
 	flags.StringVar(&opts.output, "output", "artifacts/test-coverage/report.json", "machine-readable quality report path")
 	flags.BoolVar(&opts.updatePolicy, "update-policy", false, "update materially stale policy bounds from repeated measurements")
-	flags.BoolVar(&opts.writeBaseline, "write-baseline", false, "generate eligible legacy aggregate baseline updates")
-	flags.BoolVar(&opts.forceBaseline, "force-baseline", false, "generate a replacement baseline after an explicit maintainer override")
-	flags.StringVar(&opts.compareTo, "compare-to", "", "trusted prior baseline (normally the base branch baseline)")
 	flags.BoolVar(&opts.auditScenarios, "audit-scenarios", false, "profile every integration scenario separately (expensive)")
 	if err := flags.Parse(args); err != nil {
 		return options{}, err
@@ -55,22 +44,13 @@ func parseOptions(args []string) (options, error) {
 	if flags.NArg() != 0 {
 		return options{}, errors.New("testcoverage does not accept positional arguments")
 	}
-	if opts.updatePolicy && (opts.writeBaseline || opts.forceBaseline || opts.compareTo != "" || opts.auditScenarios) {
-		return options{}, errors.New("update-policy cannot be combined with legacy baseline or scenario-audit modes")
-	}
-	if opts.writeBaseline && opts.compareTo != "" {
-		return options{}, errors.New("write-baseline and compare-to cannot be combined")
-	}
-	if opts.forceBaseline && !opts.writeBaseline {
-		return options{}, errors.New("force-baseline requires write-baseline")
+	if opts.updatePolicy && opts.auditScenarios {
+		return options{}, errors.New("update-policy and audit-scenarios cannot be combined")
 	}
 	return opts, nil
 }
 
 func execute(opts options) error {
-	if opts.writeBaseline || opts.forceBaseline || opts.compareTo != "" {
-		return executeLegacy(opts)
-	}
 	policy, err := loadQualityPolicy(opts.policy)
 	if err != nil {
 		return fmt.Errorf("read quality policy %s: %w", opts.policy, err)
@@ -131,21 +111,6 @@ func executePolicyUpdate(opts options, policy localQualityPolicy, work string) e
 	return nil
 }
 
-func executeLegacy(opts options) error {
-	work, err := os.MkdirTemp("", "orpheus-quality-legacy-*")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.RemoveAll(work) }()
-
-	result, laneErrors := collectQuality(work, opts.auditScenarios)
-	if len(laneErrors) > 0 {
-		result.Decision = decision{Status: statusTestFailed, Findings: errorFindings(laneErrors)}
-		return finishReport(opts.output, result, errors.Join(laneErrors...))
-	}
-	return evaluateQuality(opts, result)
-}
-
 func collectQuality(work string, auditScenarios bool) (qualityReport, []error) {
 	result := qualityReport{SchemaVersion: reportSchemaVersion, Lanes: make(map[string]laneReport, 2)}
 	if err := os.MkdirAll(work, 0o755); err != nil {
@@ -174,84 +139,6 @@ func collectQuality(work string, auditScenarios bool) (qualityReport, []error) {
 		}
 	}
 	return result, laneErrors
-}
-
-func evaluateQuality(opts options, result qualityReport) error {
-	current := baselineFromReport(result, defaultPolicy())
-	tracked, trackedErr := loadBaseline(opts.baseline)
-	if opts.writeBaseline {
-		return writeBaseline(opts, result, current, tracked, trackedErr)
-	}
-	if trackedErr != nil {
-		result.Decision = decision{Status: statusRefreshRequired, Findings: []finding{{Kind: "baseline", Message: fmt.Sprintf("read tracked baseline: %v", trackedErr)}}}
-		return finishReport(opts.output, result, fmt.Errorf("read tracked baseline: %w (run make coverage-baseline)", trackedErr))
-	}
-
-	reference, referencePath := tracked, opts.baseline
-	if opts.compareTo != "" {
-		var err error
-		reference, err = loadBaseline(opts.compareTo)
-		if err != nil {
-			result.Decision = decision{Status: statusRegression, Findings: []finding{{Kind: "baseline", Message: fmt.Sprintf("read trusted baseline: %v", err)}}}
-			return finishReport(opts.output, result, fmt.Errorf("read trusted baseline: %w", err))
-		}
-		referencePath = opts.compareTo
-		if reference.Legacy {
-			reference = legacyBaselineWithTiming(reference, tracked)
-		}
-	}
-
-	assessment := assess(reference, result)
-	if opts.compareTo != "" {
-		assessment = verifyTrackedBaseline(reference, tracked, result, assessment)
-	}
-	result.Decision = assessment
-	if assessment.Status == statusPass {
-		return finishReport(opts.output, result, nil)
-	}
-	return finishReport(opts.output, result, fmt.Errorf("%s against %s", assessment.Status, referencePath))
-}
-
-func writeBaseline(opts options, result qualityReport, current, tracked baseline, trackedErr error) error {
-	if opts.forceBaseline {
-		if trackedErr == nil {
-			current = baselineFromReport(result, tracked.Policy)
-		}
-		return writeGeneratedBaseline(opts, result, current, "generated aggregate baseline after explicit maintainer override", nil)
-	}
-	if trackedErr != nil && !errors.Is(trackedErr, os.ErrNotExist) && !errors.Is(trackedErr, errUnsupportedBaseline) {
-		result.Decision = decision{Status: statusRefreshRequired, Findings: []finding{{Kind: "baseline", Message: trackedErr.Error()}}}
-		return finishReport(opts.output, result, fmt.Errorf("read tracked baseline: %w", trackedErr))
-	}
-	candidate := current
-	var warnings []finding
-	if trackedErr == nil {
-		reference := tracked
-		if tracked.Legacy {
-			reference = legacyBaselineWithTiming(tracked, current)
-		}
-		assessment := assess(reference, result)
-		if assessment.Status == statusRegression || assessment.Status == statusTimingFailed {
-			result.Decision = assessment
-			return finishReport(opts.output, result, errors.New("baseline generation refused a coverage regression or timing budget failure"))
-		}
-		warnings = assessment.Warnings
-		candidate = generatedBaseline(result, reference, tracked.Policy)
-	}
-	return writeGeneratedBaseline(opts, result, candidate, "generated aggregate baseline", warnings)
-}
-
-func writeGeneratedBaseline(opts options, result qualityReport, candidate baseline, message string, warnings []finding) error {
-	if err := writeJSON(opts.baseline, candidate); err != nil {
-		return fmt.Errorf("write baseline: %w", err)
-	}
-	result.Decision = decision{Status: statusPass, Findings: []finding{{Kind: "baseline", Message: message}}, Warnings: warnings}
-	if err := writeQualityReport(opts.output, result); err != nil {
-		return err
-	}
-	printReport(result, opts.output)
-	fmt.Printf("Wrote aggregate quality baseline to %s.\n", opts.baseline)
-	return nil
 }
 
 func finishReport(path string, result qualityReport, resultErr error) error {

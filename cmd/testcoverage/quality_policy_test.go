@@ -118,37 +118,37 @@ func TestQualityPolicyCoverageBoundaries(t *testing.T) {
 	}
 }
 
-func TestQualityPolicyTimingBoundariesAndPackageViolation(t *testing.T) {
+func TestQualityPolicyTimingRefreshIsNonBlockingAndCeilingViolationBlocks(t *testing.T) {
 	policy := testLocalQualityPolicy()
 	unitPolicy := policy.Lanes["unit"]
-	unitPolicy.Timing.CeilingSeconds = 1.5
-	unitPolicy.Timing.Packages["example.test/pkg"] = 1.5
+	unitPolicy.Timing.CeilingSeconds = 3
+	unitPolicy.Timing.Packages["example.test/pkg"] = 3
 	policy.Lanes["unit"] = unitPolicy
 
 	inside := testQualityReport()
 	lane := inside.Lanes["unit"]
-	lane.Timings[0].Seconds = 1.49
-	lane.SelectedTestSeconds = 1.49
+	lane.Timings[0].Seconds = 2
+	lane.SelectedTestSeconds = 2
 	inside.Lanes["unit"] = lane
 	if got := assessQualityPolicy(policy, inside); got.Status != statusPass {
 		t.Fatalf("timing inside refresh band = %#v, want pass", got)
 	}
 
-	atRefresh := cloneReport(t, inside)
-	lane = atRefresh.Lanes["unit"]
-	lane.Timings[0].Seconds = 1.5
-	lane.SelectedTestSeconds = 1.5
-	atRefresh.Lanes["unit"] = lane
-	if got := assessQualityPolicy(policy, atRefresh); got.Status != statusPolicyUpdateRequired {
-		t.Fatalf("timing at refresh boundary = %#v, want policy update", got)
+	faster := cloneReport(t, inside)
+	lane = faster.Lanes["unit"]
+	lane.Timings[0].Seconds = 1
+	lane.SelectedTestSeconds = 1
+	faster.Lanes["unit"] = lane
+	got := assessQualityPolicy(policy, faster)
+	if got.Status != statusPass || len(got.Findings) != 0 || !hasWarning(got, "timing_policy", "suite") {
+		t.Fatalf("timing below refresh floor = %#v, want pass with warning", got)
 	}
 
 	packageViolation := cloneReport(t, inside)
 	lane = packageViolation.Lanes["unit"]
-	lane.Timings[0].Seconds = 1.501
-	lane.SelectedTestSeconds = 1
+	lane.Timings[0].Seconds = 3.001
 	packageViolation.Lanes["unit"] = lane
-	got := assessQualityPolicy(policy, packageViolation)
+	got = assessQualityPolicy(policy, packageViolation)
 	if got.Status != statusTimingFailed || !hasFinding(got, "timing_policy", "package") {
 		t.Fatalf("package timing above ceiling = %#v, want blocking timing violation", got)
 	}

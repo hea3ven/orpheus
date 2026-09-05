@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"math"
 	"os"
 )
 
@@ -80,8 +79,8 @@ func findingLocationLabel(item finding) string {
 }
 
 func findingMessage(item finding) string {
-	switch {
-	case item.Kind == "coverage_policy":
+	switch item.Kind {
+	case "coverage_policy":
 		if item.Message == "removed obsolete bound" {
 			return fmt.Sprintf("%s (floor %.3f%%)", item.Message, item.Prior)
 		}
@@ -90,36 +89,11 @@ func findingMessage(item finding) string {
 				item.Message, item.Prior, item.Current, item.Proposed, item.Threshold)
 		}
 		return fmt.Sprintf("%s (floor %.3f%%, measured %.3f%%, proposed floor %.3f%%)", item.Message, item.Prior, item.Current, item.Proposed)
-	case item.Kind == "timing_policy":
+	case "timing_policy":
 		if item.Message == "removed obsolete bound" {
 			return fmt.Sprintf("%s (ceiling %.3fs)", item.Message, item.Prior)
 		}
 		return fmt.Sprintf("%s (ceiling %.3fs, measured %.3fs, proposed ceiling %.3fs)", item.Message, item.Prior, item.Current, item.Proposed)
-	case item.Kind == "coverage":
-		change := item.Current - item.Prior
-		direction := "up"
-		if change < 0 {
-			direction = "down"
-		}
-		return fmt.Sprintf("%s (baseline %.2f%%, current %.2f%%, %s %.2f percentage points; significance threshold %.2f percentage points)",
-			item.Message, item.Prior, item.Current, direction, math.Abs(change), item.Threshold)
-	case item.Kind == "timing" && item.Prior > 0:
-		baseline := item.Baseline
-		if baseline <= 0 {
-			baseline = item.Prior
-		}
-		difference := item.Current - baseline
-		percentageDifference := difference * 100 / baseline
-		budget := item.BudgetSeconds
-		if budget <= 0 {
-			budget = item.Prior
-		}
-		overBudget := item.OverageSeconds
-		if overBudget <= 0 {
-			overBudget = item.Current - budget
-		}
-		return fmt.Sprintf("%s (current %.3fs, baseline %.3fs, difference %+.3fs / %+.1f%%, budget %.3fs, over budget %+.3fs)",
-			item.Message, item.Current, baseline, difference, percentageDifference, budget, overBudget)
 	default:
 		return item.Message
 	}
