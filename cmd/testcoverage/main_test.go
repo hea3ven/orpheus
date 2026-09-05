@@ -297,7 +297,15 @@ func setLaneCoverage(report qualityReport, laneName string, total, covered int) 
 }
 
 func hasFinding(value decision, kind, scope string) bool {
-	for _, item := range value.Findings {
+	return containsFinding(value.Findings, kind, scope)
+}
+
+func hasWarning(value decision, kind, scope string) bool {
+	return containsFinding(value.Warnings, kind, scope)
+}
+
+func containsFinding(findings []finding, kind, scope string) bool {
+	for _, item := range findings {
 		if item.Kind == kind && item.Scope == scope {
 			return true
 		}

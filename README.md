@@ -91,10 +91,12 @@ It writes the current report and failure evidence under
 `artifacts/test-coverage/`.
 
 Run `make quality-policy-update` when the report returns
-`policy_update_required` or when a reviewed change needs different bounds. The
-updater uses five complete samples, changes only stale bounds, and leaves the
-`.quality.yml` diff in the working tree for review. It may tighten or relax a
-bound. Failed or inconsistent samples do not change the policy.
+`policy_update_required`, reports a stale timing warning, or when a reviewed
+change needs different bounds. Timing refresh warnings do not block routine
+checks because execution speed varies by host. The updater uses five complete
+samples, changes only stale bounds, and leaves the `.quality.yml` diff in the
+working tree for review. It may tighten or relax a bound. Failed or inconsistent
+samples do not change the policy.
 
 ## Documentation
 

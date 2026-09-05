@@ -64,10 +64,10 @@ does not count against the test ceiling.
 The policy has a coverage floor and suite timing ceiling for each lane. It also
 has a coverage floor for every production package and a timing ceiling for every
 package that runs selected tests. A value below a coverage floor or above a
-timing ceiling fails. Movement inside the configured refresh bands passes.
-Movement that crosses a refresh threshold without violating a bound returns
-`policy_update_required`. Package additions and removals require the same
-explicit update.
+timing ceiling fails. Coverage movement beyond a refresh threshold returns
+`policy_update_required`. Timing movement below its refresh floor is a
+non-blocking warning because execution speed varies by host. Package additions
+and removals still require an explicit update.
 
 The complete JSON report is written to
 `artifacts/test-coverage/report.json`, with a Markdown summary beside it. If a
@@ -102,9 +102,10 @@ There is no base-branch policy comparison or automatic policy edit.
 
 The report status is one of:
 
-- `pass` when tests and bounds pass and no bound needs refreshing;
-- `policy_update_required` when measurements or package structure crossed a
-  refresh threshold;
+- `pass` when tests and blocking bounds pass, possibly with a non-blocking
+  timing refresh warning;
+- `policy_update_required` when coverage or package structure crossed a refresh
+  threshold;
 - `coverage_regression` when a lane or package is below its coverage floor;
 - `timing_budget_exceeded` when a suite or package is above its timing ceiling;
 - `test_failed` when a lane or policy-update sample did not complete.

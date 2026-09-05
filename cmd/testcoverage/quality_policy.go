@@ -229,7 +229,7 @@ func writeQualityPolicy(name string, policy localQualityPolicy) error {
 }
 
 func assessQualityPolicy(policy localQualityPolicy, report qualityReport) decision {
-	var coverageViolations, timingViolations, updates []finding
+	var coverageViolations, timingViolations, updates, warnings []finding
 	for _, laneName := range laneNames {
 		bounds := policy.Lanes[laneName]
 		lane := report.Lanes[laneName]
@@ -253,8 +253,8 @@ func assessQualityPolicy(policy localQualityPolicy, report qualityReport) decisi
 		}
 
 		suiteSeconds := laneSelectedTestSeconds(lane)
-		timingViolations, updates = assessTimingBound(
-			timingViolations, updates, laneName, "suite", "",
+		timingViolations, warnings = assessTimingBound(
+			timingViolations, warnings, laneName, "suite", "",
 			bounds.Timing.CeilingSeconds, suiteSeconds, policy.Timing.Suite,
 		)
 		measuredTimings := timingMap(lane.Timings)
@@ -265,8 +265,8 @@ func assessQualityPolicy(policy localQualityPolicy, report qualityReport) decisi
 				updates = append(updates, structureFinding("timing_package", laneName, packageName, hasMeasurement))
 				continue
 			}
-			timingViolations, updates = assessTimingBound(
-				timingViolations, updates, laneName, "package", packageName,
+			timingViolations, warnings = assessTimingBound(
+				timingViolations, warnings, laneName, "package", packageName,
 				ceiling, measured, policy.Timing.Package,
 			)
 		}
@@ -277,13 +277,16 @@ func assessQualityPolicy(policy localQualityPolicy, report qualityReport) decisi
 		findings = append(findings, coverageViolations...)
 		findings = append(findings, timingViolations...)
 		findings = append(findings, updates...)
-		return decision{Status: statusRegression, Findings: findings}
+		return decision{Status: statusRegression, Findings: findings, Warnings: warnings}
 	case len(timingViolations) > 0:
-		return decision{Status: statusTimingFailed, Findings: append(timingViolations, updates...)}
+		findings := make([]finding, 0, len(timingViolations)+len(updates))
+		findings = append(findings, timingViolations...)
+		findings = append(findings, updates...)
+		return decision{Status: statusTimingFailed, Findings: findings, Warnings: warnings}
 	case len(updates) > 0:
-		return decision{Status: statusPolicyUpdateRequired, Findings: updates}
+		return decision{Status: statusPolicyUpdateRequired, Findings: updates, Warnings: warnings}
 	default:
-		return decision{Status: statusPass}
+		return decision{Status: statusPass, Warnings: warnings}
 	}
 }
 
@@ -304,7 +307,7 @@ func assessCoverageBound(violations, updates []finding, lane, scope, name string
 	return violations, updates
 }
 
-func assessTimingBound(violations, updates []finding, lane, scope, name string, ceiling, measured float64, settings timingBoundSettings) ([]finding, []finding) {
+func assessTimingBound(violations, warnings []finding, lane, scope, name string, ceiling, measured float64, settings timingBoundSettings) ([]finding, []finding) {
 	proposed := timingCeiling(measured, settings)
 	item := finding{
 		Kind: "timing_policy", Lane: lane, Scope: scope, Name: name, Prior: ceiling,
@@ -314,13 +317,13 @@ func assessTimingBound(violations, updates []finding, lane, scope, name string, 
 	if measured > ceiling {
 		item.OverageSeconds = measured - ceiling
 		item.Message = "timing exceeds its policy ceiling; run make quality-policy-update if the regression is intentional"
-		return append(violations, item), updates
+		return append(violations, item), warnings
 	}
-	if timingBoundNeedsUpdate(ceiling, measured, settings) {
-		item.Message = "timing moved beyond its refresh threshold; run make quality-policy-update"
-		updates = append(updates, item)
+	if timingBoundBelowRefreshFloor(ceiling, measured, settings) {
+		item.Message = "timing moved below its refresh floor; run make quality-policy-update"
+		warnings = append(warnings, item)
 	}
-	return violations, updates
+	return violations, warnings
 }
 
 func structureFinding(kind, lane, packageName string, added bool) finding {
@@ -355,6 +358,11 @@ func timingReference(ceiling float64, settings timingBoundSettings) float64 {
 		return ceiling / (1 + settings.RelativeHeadroom)
 	}
 	return math.Max(0, ceiling-settings.AbsoluteHeadroomSeconds)
+}
+
+func timingBoundBelowRefreshFloor(ceiling, measured float64, settings timingBoundSettings) bool {
+	reference := timingReference(ceiling, settings)
+	return reference-measured >= timingHeadroom(reference, settings)
 }
 
 func timingBoundNeedsUpdate(ceiling, measured float64, settings timingBoundSettings) bool {

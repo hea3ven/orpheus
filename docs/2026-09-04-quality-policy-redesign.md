@@ -193,14 +193,16 @@ The command is read-only with respect to `.quality.yml`. It reports:
 - test failure when a lane does not complete successfully;
 - a coverage violation when a lane or package falls below its floor;
 - a timing violation when a suite or package exceeds its ceiling;
-- policy update required when a result has moved far enough within the good
-  direction that its accepted bound is materially stale;
+- policy update required when coverage has moved far enough that its accepted
+  floor is materially stale;
+- a non-blocking warning when timing moves below its refresh floor;
 - policy update required for applicable package additions or removals;
-- pass when tests succeed and all results remain within accepted bounds and
-  refresh bands.
+- pass when tests succeed and all blocking bounds pass, possibly with a timing
+  refresh warning.
 
-A policy update requirement is blocking. The developer runs the explicit update
-target, reviews the policy diff, and commits it with the associated work.
+A policy update requirement is blocking. A timing refresh warning is not. The
+developer may run the explicit update target, review the policy diff, and commit
+it with the associated work.
 
 Reports remain disposable outputs under `artifacts/`. They continue to include
 current lane and package values, failures, warnings, and decoded test evidence,
@@ -302,9 +304,10 @@ review. A pull request can relax a bound and make its current result pass. That
 is expected and visible.
 
 Coverage or timing can regress within retained headroom without a policy change.
-This is the purpose of the noise and significance bands. Cumulative movement
-eventually crosses a bound or refresh threshold because every quality run
-compares the current repository state with the committed policy.
+This is the purpose of the noise and significance bands. Cumulative coverage
+movement eventually crosses a floor or refresh threshold, and cumulative timing
+regression eventually crosses a ceiling. Faster timing only produces a warning
+because host performance varies.
 
 Concurrent pull requests can still conflict when they update the same lane or
 package bound. They should conflict much less often because unrelated exact
