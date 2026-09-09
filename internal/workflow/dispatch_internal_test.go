@@ -541,6 +541,10 @@ func TestDispatchValidateStartRefusesAlreadyTargetedBlockedReview(t *testing.T) 
 func TestDispatchValidateStartRejectsMainModeAfterTargetLock(t *testing.T) {
 	paths := newDispatchTestPaths(t)
 	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
+	worktree, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-1"))
+	if err != nil {
+		t.Fatalf("worktree path: %v", err)
+	}
 	repo := task.Repository{
 		ID:            "alpha",
 		Name:          "Alpha",
@@ -553,7 +557,7 @@ func TestDispatchValidateStartRejectsMainModeAfterTargetLock(t *testing.T) {
 		Status: task.StatusInProgress,
 		Metadata: task.Metadata{
 			task.MetadataBranch:   "orpheus/op-1",
-			task.MetadataWorktree: filepath.Join(paths.DataRoot, "repos", "alpha", "worktrees", "op-1"),
+			task.MetadataWorktree: worktree,
 		},
 	}
 	store := fakeDispatchRunStore{
@@ -572,7 +576,7 @@ func TestDispatchValidateStartRejectsMainModeAfterTargetLock(t *testing.T) {
 	}
 	service := DispatchService{Paths: paths, RunStore: store}
 
-	_, err := service.validateStart(context.Background(), DispatchStartOptions{
+	_, err = service.validateStart(context.Background(), DispatchStartOptions{
 		TaskID:   taskItem.ID,
 		Source:   task.RepositorySource{Repository: repo},
 		Backend:  fakeDispatchBackend{taskItem: taskItem},
@@ -744,7 +748,10 @@ func TestDispatchValidateStartRejectsCompatibilityBranchCollisionAfterNormalizat
 func TestDispatchValidateStartPreservesRecordedBranchAfterTemplateChange(t *testing.T) {
 	paths := newDispatchTestPaths(t)
 	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
-	worktree := filepath.Join(paths.DataRoot, "repos", "alpha", "worktrees", "op-1")
+	worktree, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-1"))
+	if err != nil {
+		t.Fatalf("worktree path: %v", err)
+	}
 	repo := task.Repository{ID: "alpha", Name: "Alpha", Path: repoPath, DefaultBranch: "main", BranchTemplate: "changed/{{task_title}}"}
 	taskItem := task.Task{ID: "op-1", Title: "New template", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: "recorded/branch", task.MetadataWorktree: worktree}}
 	store := fakeDispatchRunStore{state: taskstate.TaskState{Target: taskstate.GitFacts{Branch: "recorded/branch", Worktree: worktree}}}
@@ -764,7 +771,10 @@ func TestDispatchValidateStartPreservesRecordedBranchAfterTemplateChange(t *test
 func TestDispatchValidateStartRecoversBackendRecordedBranchWithoutLocalGitFacts(t *testing.T) {
 	paths := newDispatchTestPaths(t)
 	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
-	worktree := filepath.Join(paths.DataRoot, "repos", "alpha", "worktrees", "op-1")
+	worktree, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-1"))
+	if err != nil {
+		t.Fatalf("worktree path: %v", err)
+	}
 	repo := task.Repository{ID: "alpha", Name: "Alpha", Path: repoPath, DefaultBranch: "main", BranchTemplate: "changed/{{external_ref}}"}
 	taskItem := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: "recorded/branch", task.MetadataWorktree: worktree}}
 	service := DispatchService{Paths: paths, RunStore: fakeDispatchRunStore{}}

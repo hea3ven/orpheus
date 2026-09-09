@@ -40,12 +40,25 @@ func writeTestExecutable(path string, content []byte) error {
 }
 
 var (
+	cliHelperFixtureOnce          sync.Once
+	cliHelperFixtureErr           error
 	cliHelperFixtureRoot          string
 	localOriginTestRepoTemplate   string
 	localWorktreeTestRepoTemplate string
 	normalTestRepoTemplate        string
 	orpheusCLIHelperPath          string
 )
+
+func requireCLIHelperFixture(t *testing.T) {
+	t.Helper()
+
+	cliHelperFixtureOnce.Do(func() {
+		cliHelperFixtureErr = setupCLIHelperFixture()
+	})
+	if cliHelperFixtureErr != nil {
+		t.Fatalf("setup CLI helper fixture: %v", cliHelperFixtureErr)
+	}
+}
 
 func setupCLIHelperFixture() error {
 	root, err := os.MkdirTemp("", "orpheus-cli-fixtures-*")
@@ -193,10 +206,6 @@ func cleanupCLIHelperFixture() {
 	orpheusCLIHelperPath = ""
 }
 
-func isOrpheusCLIHelperProcess() bool {
-	return os.Getenv("GO_WANT_ORPHEUS_CLI_HELPER") == "1"
-}
-
 func withoutRemote() testRepoOption {
 	return func(config *testRepoConfig) {
 		config.withRemote = false
@@ -234,6 +243,7 @@ func newTestRepoAt(t *testing.T, root string, relativePath string, config testRe
 
 func newSeededTestRepoAt(t *testing.T, root string, relativePath string, config testRepoConfig) string {
 	t.Helper()
+	requireCLIHelperFixture(t)
 
 	repoPath := filepath.Join(root, relativePath)
 	copySeededTestRepo(t, normalTestRepoTemplate, repoPath)
@@ -248,6 +258,7 @@ func newSeededTestRepoAt(t *testing.T, root string, relativePath string, config 
 
 func newTestRepoWithLocalOriginAt(t *testing.T, root string, relativePath string) string {
 	t.Helper()
+	requireCLIHelperFixture(t)
 
 	originPath := filepath.Join(root, "origins", filepath.Base(relativePath)+".git")
 	copySeededTestRepo(t, localOriginTestRepoTemplate, originPath)

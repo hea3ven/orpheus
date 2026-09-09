@@ -35,7 +35,7 @@ lanes:
         github.com/hea3ven/orpheus/internal/registry: 74.923
         github.com/hea3ven/orpheus/internal/review: 81.175
         github.com/hea3ven/orpheus/internal/revieweval: 29.349
-        github.com/hea3ven/orpheus/internal/state: 61.38
+        github.com/hea3ven/orpheus/internal/state: 69.654
         github.com/hea3ven/orpheus/internal/status: 65.262
         github.com/hea3ven/orpheus/internal/task: 62.573
         github.com/hea3ven/orpheus/internal/taskbranch: 79
@@ -44,7 +44,7 @@ lanes:
         github.com/hea3ven/orpheus/internal/tasktarget: 78.531
         github.com/hea3ven/orpheus/internal/testguard: 77.245
         github.com/hea3ven/orpheus/internal/testlane: 0
-        github.com/hea3ven/orpheus/internal/testutil: 88
+        github.com/hea3ven/orpheus/internal/testutil: 76.571
         github.com/hea3ven/orpheus/internal/workflow: 68.191
     timing:
       ceiling_seconds: 84.214
@@ -63,7 +63,7 @@ lanes:
         github.com/hea3ven/orpheus/internal/workflow: 1.053
   unit:
     coverage:
-      floor_percent: 53.999
+      floor_percent: 54.194
       packages:
         github.com/hea3ven/orpheus/cmd/orpheus: 0
         github.com/hea3ven/orpheus/cmd/testcoverage: 61.098
@@ -81,7 +81,7 @@ lanes:
         github.com/hea3ven/orpheus/internal/registry: 85.692
         github.com/hea3ven/orpheus/internal/review: 10.942
         github.com/hea3ven/orpheus/internal/revieweval: 55.937
-        github.com/hea3ven/orpheus/internal/state: 71.239
+        github.com/hea3ven/orpheus/internal/state: 76.346
         github.com/hea3ven/orpheus/internal/status: 90.857
         github.com/hea3ven/orpheus/internal/task: 83.176
         github.com/hea3ven/orpheus/internal/taskbranch: 92

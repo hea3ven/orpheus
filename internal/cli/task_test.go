@@ -3227,7 +3227,7 @@ func TestIntegrationTaskRunFailsFastWhenGlobalMutationLockHeldBeforeSetup(t *tes
 	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
 		repoPath: {stdout: `[{"id":"op-locked","title":"Locked setup","status":"open","priority":1,"issue_type":"task"}]`},
 	})
-	lockPath, err := paths.GlobalMutationLockPath()
+	lockPath, err := paths.DataPath(filepath.Join("locks", "mutation.lock"))
 	must.NoError(err)
 	must.NoError(os.MkdirAll(filepath.Dir(lockPath), 0o755))
 	must.NoError(os.WriteFile(lockPath, []byte("held by test"), 0o644))
@@ -3265,7 +3265,7 @@ func TestIntegrationTaskRunReleasesGlobalMutationLockWhileAgentRunsAndReacquires
 	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
 		repoPath: {stdout: `[{"id":"op-finalize","title":"Finalize lock","status":"open","priority":1,"issue_type":"task"}]`},
 	})
-	lockPath, err := paths.GlobalMutationLockPath()
+	lockPath, err := paths.DataPath(filepath.Join("locks", "mutation.lock"))
 	must.NoError(err)
 	statePath, err := paths.DataPath(filepath.Join("repos", "alpha", "tasks", "op-finalize.yaml"))
 	must.NoError(err)
@@ -3332,7 +3332,7 @@ func TestIntegrationTaskRunAgentFlagSelectsNamedProfile(t *testing.T) {
 		repoPath: {stdout: `[{"id":"op-2","title":"Use selected agent","status":"open","priority":1,"issue_type":"task"}]`},
 	})
 	agentLogPath := withFakeAgent(t, "selected-agent", 0)
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+	must.NoError(testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{"implementer": "default"},
 			"profiles": map[string]any{
@@ -4247,7 +4247,7 @@ printf 'reviewed\n' > reviewed.txt
   --task-description "Create a shared helper." \
   --task-acceptance-criteria "Helper is covered by tests."
 `, shellQuote(orpheusBin)))
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+	must.NoError(testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{
 				"implementer": "implementer",
@@ -5035,7 +5035,7 @@ func TestIntegrationTaskReviewCheckBlockerKeepAcceptsEOFAnswer(t *testing.T) {
 	must.NoError(os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644))
 
 	check := writeReviewScript(t, "#!/bin/sh\nexit 7\n")
-	must.NoError(paths.WriteConfigYAML(reviewconfig.ConfigFile, map[string]any{
+	must.NoError(testutil.WriteConfigYAML(paths, reviewconfig.ConfigFile, map[string]any{
 		"reviews": map[string]any{
 			"default_pipeline":               "standard",
 			"max_autonomous_review_attempts": 1,
@@ -6219,7 +6219,7 @@ func TestIntegrationTaskReviewAgentReviewMixedAutomatedBlockerDecisions(t *testi
 %s agent review add --type blocking --title "Downgrade blocker" --description "Can be advisory." --suggested-action "Document it."
 %s agent review add --type blocking --title "Cancel blocker" --description "False positive." --suggested-action "Ignore it."
 `, shellQuote(orpheusBin), shellQuote(orpheusBin), shellQuote(orpheusBin)))
-	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+	require.NoError(t, testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{
 				"implementer": "implementer",
@@ -7262,7 +7262,7 @@ func TestIntegrationTaskSyncRecordsConflictResolutionUsageTelemetry(t *testing.T
 		BeadsMode:     registry.BeadsModeLocal,
 		BeadsPrefix:   "op",
 	}}}))
-	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+	require.NoError(t, testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{
 				"implementer":            "impl-codex",
@@ -7575,7 +7575,9 @@ func TestIntegrationTaskSyncExistingPRErrorsDoNotMutateBackendOrAudit(t *testing
 				is.True(os.IsNotExist(readErr), "read gh log: %v", readErr)
 			}
 
-			_, statErr := os.Stat(filepath.Join(paths.DataRoot, "repos", "alpha", "tasks", "op-sync.yaml"))
+			statePath, pathErr := paths.DataPath(filepath.Join("repos", "alpha", "tasks", "op-sync.yaml"))
+			must.NoError(pathErr)
+			_, statErr := os.Stat(statePath)
 			is.True(os.IsNotExist(statErr), "task-state audit file should not be created: %v", statErr)
 		})
 	}
@@ -9137,7 +9139,7 @@ func writeTaskRunAgentConfig(t *testing.T, paths state.Paths, name string, comma
 	agentsConfig["defaults"] = defaults
 	agentsConfig["profiles"] = profiles
 	config["agents"] = agentsConfig
-	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, config))
+	require.NoError(t, testutil.WriteConfigYAML(paths, agent.ConfigFile, config))
 }
 
 func writeStructuredCodexTaskRunAgentConfig(
@@ -9150,7 +9152,7 @@ func writeStructuredCodexTaskRunAgentConfig(
 ) {
 	t.Helper()
 
-	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+	require.NoError(t, testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{"implementer": name},
 			"profiles": map[string]any{
@@ -9175,7 +9177,7 @@ func writeStructuredPiTaskRunAgentConfig(
 ) {
 	t.Helper()
 
-	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+	require.NoError(t, testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{"implementer": name},
 			"profiles": map[string]any{
@@ -9202,7 +9204,7 @@ func writeReviewPipelineConfig(
 	for name, steps := range pipelines {
 		configPipelines[name] = map[string]any{"steps": steps}
 	}
-	require.NoError(t, paths.WriteConfigYAML(reviewconfig.ConfigFile, map[string]any{
+	require.NoError(t, testutil.WriteConfigYAML(paths, reviewconfig.ConfigFile, map[string]any{
 		"reviews": map[string]any{
 			"default_pipeline": defaultPipeline,
 			"pipelines":        configPipelines,
@@ -9225,14 +9227,14 @@ func setReviewMaxAutonomousAttempts(t *testing.T, paths state.Paths, maxAttempts
 				},
 			},
 		}
-		require.NoError(t, paths.WriteConfigYAML(reviewconfig.ConfigFile, config))
+		require.NoError(t, testutil.WriteConfigYAML(paths, reviewconfig.ConfigFile, config))
 		return
 	}
 	require.NoError(t, err)
 	reviews, ok := config["reviews"].(map[string]any)
 	require.True(t, ok, "reviews config is missing")
 	reviews["max_autonomous_review_attempts"] = maxAttempts
-	require.NoError(t, paths.WriteConfigYAML(reviewconfig.ConfigFile, config))
+	require.NoError(t, testutil.WriteConfigYAML(paths, reviewconfig.ConfigFile, config))
 }
 
 func writeReviewAgentPipelineConfig(
@@ -9254,7 +9256,7 @@ func writeReviewAgentPipelineConfig(
 	if reviewerArgs != nil {
 		reviewerProfile["args"] = reviewerArgs
 	}
-	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+	require.NoError(t, testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{
 				"implementer": "implementer",
@@ -9287,7 +9289,7 @@ func writeStructuredCodexReviewAgentPipelineConfig(
 	for name, steps := range pipelines {
 		configPipelines[name] = map[string]any{"steps": steps}
 	}
-	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+	require.NoError(t, testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{
 				"implementer": "implementer",
@@ -9324,7 +9326,7 @@ func writeStructuredPiReviewAgentPipelineConfig(
 	for name, steps := range pipelines {
 		configPipelines[name] = map[string]any{"steps": steps}
 	}
-	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+	require.NoError(t, testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{
 				"implementer": "implementer",
@@ -9356,7 +9358,7 @@ func writeAutonomousReviewLoopConfig(
 ) {
 	t.Helper()
 
-	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+	require.NoError(t, testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{
 				"implementer": implementerName,
@@ -9388,7 +9390,7 @@ func writeAutonomousReviewLoopConfigWithImplementers(
 ) {
 	t.Helper()
 
-	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+	require.NoError(t, testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{
 				"implementer": defaultName,

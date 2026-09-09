@@ -359,11 +359,15 @@ func TestSyncConflictAgentResolverUsesEffectivePromptInCommandAndEnvironment(t *
 func syncConflictPromptTestPaths(t *testing.T, promptAppend string) state.Paths {
 	t.Helper()
 
-	paths, err := state.NewPaths(testutil.CanonicalTempDir(t), testutil.CanonicalTempDir(t))
+	root := testutil.CanonicalTempDir(t)
+	paths, err := state.NewPaths(
+		filepath.Join(root, "config", state.AppName),
+		filepath.Join(root, "data", state.AppName),
+	)
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}
-	err = paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+	err = testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{
 				"implementer":            "impl",

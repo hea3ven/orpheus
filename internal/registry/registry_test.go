@@ -44,7 +44,7 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 	want := registry.Registry{Repos: []registry.Repo{{
 		ID:                     "orpheus",
 		Name:                   "orpheus",
-		Path:                   filepath.Join(paths.DataRoot, "..", "repos", "orpheus"),
+		Path:                   filepath.Join(testutil.CanonicalTempDir(t), "repos", "orpheus"),
 		Remote:                 "git@example.com:org/orpheus.git",
 		DefaultBranch:          "main",
 		BeadsMode:              registry.BeadsModeLocal,
@@ -476,14 +476,14 @@ func TestRegistryResolveUnknownIsActionable(t *testing.T) {
 }
 
 func TestManagedBeadsDirUsesRepoIDUnderDataRoot(t *testing.T) {
-	paths := newTestPaths(t)
+	paths, dataRoot := newTestPathsWithDataRoot(t)
 	store := registry.NewStore(paths)
 
 	got, err := store.ManagedBeadsDir(" alpha ")
 	if err != nil {
 		t.Fatalf("managed beads dir: %v", err)
 	}
-	want := filepath.Join(paths.DataRoot, "repos", "alpha", "beads")
+	want := filepath.Join(dataRoot, "repos", "alpha", "beads")
 	if got != want {
 		t.Fatalf("managed beads dir = %q, want %q", got, want)
 	}
@@ -502,7 +502,7 @@ func TestManagedBeadsDirRejectsUnsafeRepoIDs(t *testing.T) {
 }
 
 func TestStoreBeadsDirUsesRepoMode(t *testing.T) {
-	paths := newTestPaths(t)
+	paths, dataRoot := newTestPathsWithDataRoot(t)
 	store := registry.NewStore(paths)
 	localPath := filepath.Join(testutil.CanonicalTempDir(t), "local")
 
@@ -519,7 +519,7 @@ func TestStoreBeadsDirUsesRepoMode(t *testing.T) {
 		{
 			name: "managed mode uses data root",
 			repo: registry.Repo{ID: "managed", Name: "Managed", Path: filepath.Join(testutil.CanonicalTempDir(t), "managed"), BeadsMode: registry.BeadsModeManaged, BeadsPrefix: "mp"},
-			want: filepath.Join(paths.DataRoot, "repos", "managed", "beads"),
+			want: filepath.Join(dataRoot, "repos", "managed", "beads"),
 		},
 	}
 
@@ -551,13 +551,20 @@ func TestStoreBeadsDirRejectsRepoWithoutBeadsMode(t *testing.T) {
 
 func newTestPaths(t *testing.T) state.Paths {
 	t.Helper()
+	paths, _ := newTestPathsWithDataRoot(t)
+	return paths
+}
+
+func newTestPathsWithDataRoot(t *testing.T) (state.Paths, string) {
+	t.Helper()
 
 	root := testutil.CanonicalTempDir(t)
-	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
+	dataRoot := filepath.Join(root, "data")
+	paths, err := state.NewPaths(filepath.Join(root, "config"), dataRoot)
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}
-	return paths
+	return paths, dataRoot
 }
 
 func writeDataFile(t *testing.T, paths state.Paths, rel string, content string) {

@@ -21,7 +21,7 @@ import (
 func TestIntegrationCompletionProtocolSuggestsContextAwareValues(t *testing.T) {
 	t.Parallel()
 	paths, alpha, beta := setupCompletionFixture(t, false)
-	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+	require.NoError(t, testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{"implementer": "builder"},
 			"profiles": map[string]any{"builder": map[string]any{"command": "agent"}, "fast": map[string]any{"command": "agent"}},

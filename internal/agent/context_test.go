@@ -97,7 +97,7 @@ func TestActiveContextResolverResolvesWorktreeTarget(t *testing.T) {
 func TestActiveContextResolverUsesGlobalPublicationPolicy(t *testing.T) {
 	must := require.New(t)
 	fixture := newActiveContextFixture(t, "op-global-policy")
-	must.NoError(fixture.paths.WriteConfigYAML("config.yaml", map[string]any{
+	must.NoError(testutil.WriteConfigYAML(fixture.paths, "config.yaml", map[string]any{
 		"publication": map[string]any{
 			"summary_guidance":       "Write a concise release note.",
 			"summary_guidance_style": registry.SummaryGuidanceStyleCapitalized,
@@ -858,7 +858,10 @@ func newActiveContextFixture(t *testing.T, taskID string) *activeContextFixture 
 	must := require.New(t)
 
 	root := testutil.CanonicalTempDir(t)
-	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
+	paths, err := state.NewPaths(
+		filepath.Join(root, "config", state.AppName),
+		filepath.Join(root, "data", state.AppName),
+	)
 	must.NoError(err)
 	repoPath := filepath.Join(root, "repo")
 	must.NoError(testMkdirAll(repoPath))

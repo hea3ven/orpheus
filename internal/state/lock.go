@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -56,15 +55,9 @@ func (e *LockAcquisitionError) Unwrap() error {
 }
 
 type mutationLock struct {
-	path     string
-	file     *os.File
-	released bool
-}
-
-// GlobalMutationLockPath returns the absolute path for the reusable global
-// mutation lock file.
-func (p Paths) GlobalMutationLockPath() (string, error) {
-	return p.DataPath(filepath.Join(globalMutationLockDir, globalMutationLockFile))
+	path      string
+	releaseFn func() error
+	released  bool
 }
 
 // WithGlobalMutationLock runs mutate while holding the global mutation lock.
@@ -87,7 +80,7 @@ func WithGlobalMutationLockLogger(
 
 	lockPath := globalMutationLockPathCandidate(paths)
 	span := logging.Start(ctx, logger, "global mutation lock", lockAttrs(operation, lockPath, attrs...)...)
-	lock, err := acquireGlobalMutationLock(paths, operation)
+	lock, err := paths.acquireGlobalMutationLock(operation)
 	if err != nil {
 		span.FinishError(ctx, err)
 		return err
@@ -123,25 +116,16 @@ func lockAttrs(operation string, path string, attrs ...slog.Attr) []slog.Attr {
 	return lockAttrs
 }
 
-func acquireGlobalMutationLock(paths Paths, operation string) (*mutationLock, error) {
-	lockPath, err := paths.GlobalMutationLockPath()
+func (p Paths) acquireGlobalMutationLock(operation string) (*mutationLock, error) {
+	lockPath, err := p.DataPath(filepath.Join(globalMutationLockDir, globalMutationLockFile))
 	if err != nil {
 		return nil, &LockAcquisitionError{
 			Operation: operation,
-			Path:      globalMutationLockPathCandidate(paths),
+			Path:      globalMutationLockPathCandidate(p),
 			Err:       err,
 		}
 	}
-
-	if err := os.MkdirAll(filepath.Dir(lockPath), directoryMode); err != nil {
-		return nil, &LockAcquisitionError{
-			Operation: operation,
-			Path:      lockPath,
-			Err:       fmt.Errorf("create lock directory: %w", err),
-		}
-	}
-
-	file, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, fileMode)
+	release, err := p.backend.acquireLock(lockPath, directoryMode, fileMode)
 	if err != nil {
 		return nil, &LockAcquisitionError{
 			Operation: operation,
@@ -150,14 +134,11 @@ func acquireGlobalMutationLock(paths Paths, operation string) (*mutationLock, er
 		}
 	}
 
-	return &mutationLock{
-		path: lockPath,
-		file: file,
-	}, nil
+	return &mutationLock{path: lockPath, releaseFn: release}, nil
 }
 
 func globalMutationLockPathCandidate(paths Paths) string {
-	return filepath.Join(paths.DataRoot, globalMutationLockDir, globalMutationLockFile)
+	return filepath.Join(paths.dataRoot, globalMutationLockDir, globalMutationLockFile)
 }
 
 func (l *mutationLock) release() error {
@@ -166,14 +147,8 @@ func (l *mutationLock) release() error {
 	}
 	l.released = true
 
-	var releaseErr error
-	if l.file != nil {
-		if err := l.file.Close(); err != nil {
-			releaseErr = errors.Join(releaseErr, fmt.Errorf("close global mutation lock %s: %w", l.path, err))
-		}
+	if l.releaseFn == nil {
+		return nil
 	}
-	if err := os.Remove(l.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		releaseErr = errors.Join(releaseErr, fmt.Errorf("remove global mutation lock %s: %w", l.path, err))
-	}
-	return releaseErr
+	return l.releaseFn()
 }

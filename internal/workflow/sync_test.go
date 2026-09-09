@@ -1894,7 +1894,7 @@ func TestSyncServiceSyncAllIgnoresTasksWithoutPRURL(t *testing.T) {
 func TestSyncServiceSyncAllHoldsGlobalLockAcrossScanAndSync(t *testing.T) {
 	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
 	paths, source, _ := newSyncTestSource(t, repoPath, "op-1")
-	lockPath, err := paths.GlobalMutationLockPath()
+	lockPath, err := paths.DataPath(filepath.Join("locks", "mutation.lock"))
 	if err != nil {
 		t.Fatalf("lock path: %v", err)
 	}

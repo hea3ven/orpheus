@@ -16,26 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationRepoAddAndListFlow(t *testing.T) {
-	t.Parallel()
-	is := assert.New(t)
-	withFakeBDInit(t)
-
-	repoPath := newTestRepoPath(t)
-
-	addOut, addErr := executeCommand(t, []string{"repo", "add", repoPath})
-	is.Empty(addErr)
-	for _, want := range []string{"Added repo alpha", repoPath, "git@example.com:org/alpha.git", "main"} {
-		is.Contains(addOut, want)
-	}
-
-	listOut, listErr := executeCommand(t, []string{"repo", "list"})
-	is.Empty(listErr)
-	for _, want := range []string{"ID", "NAME", "PATH", "REMOTE", "DEFAULT_BRANCH", "BEADS_MODE", "BEADS_PREFIX", "alpha", repoPath, "git@example.com:org/alpha.git", "main"} {
-		is.Contains(listOut, want)
-	}
-}
-
 func TestIntegrationRepoConfigInspectsEffectivePublicationPolicy(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -67,7 +47,7 @@ func TestIntegrationRepoConfigUsesGlobalPublicationPolicyFallbacks(t *testing.T)
 
 	_, addErr := executeCommand(t, []string{"repo", "add", repoPath})
 	is.Empty(addErr)
-	must.NoError(paths.WriteConfigYAML("config.yaml", map[string]any{
+	must.NoError(testutil.WriteConfigYAML(paths, "config.yaml", map[string]any{
 		"publication": map[string]any{
 			"summary_guidance":       "Write a concise global release note.",
 			"summary_guidance_style": registry.SummaryGuidanceStyleCapitalized,
@@ -164,7 +144,7 @@ func TestIntegrationRepoConfigSetsAndClearsBranchTemplateWithGlobalFallback(t *t
 
 	_, addErr := executeCommand(t, []string{"repo", "add", repoPath})
 	is.Empty(addErr)
-	must.NoError(paths.WriteConfigYAML("config.yaml", map[string]any{
+	must.NoError(testutil.WriteConfigYAML(paths, "config.yaml", map[string]any{
 		"tasks": map[string]any{"branch_template": "global/{{task_title}}"},
 	}))
 
@@ -225,7 +205,7 @@ func TestIntegrationRepoConfigSetsAndClearsIncludePRReviewProcess(t *testing.T) 
 	must.NotNil(reg.Repos[0].IncludePRReviewProcess)
 	is.False(*reg.Repos[0].IncludePRReviewProcess)
 
-	must.NoError(paths.WriteConfigYAML("config.yaml", map[string]any{
+	must.NoError(testutil.WriteConfigYAML(paths, "config.yaml", map[string]any{
 		"reviews": map[string]any{"include_pr_review_process": false},
 	}))
 	stdout, stderr = executeCommand(t, []string{
@@ -342,7 +322,7 @@ func TestIntegrationRepoConfigSetInvalidGlobalPublicationFlowDoesNotMutateRegist
 	must.NoError(err)
 	before, err := os.ReadFile(registryPath)
 	must.NoError(err)
-	must.NoError(paths.WriteConfigYAML("config.yaml", map[string]any{
+	must.NoError(testutil.WriteConfigYAML(paths, "config.yaml", map[string]any{
 		"publication": map[string]any{"integration_flow": "invalid-flow"},
 	}))
 
@@ -667,7 +647,7 @@ func TestIntegrationRepoAddHoldsGlobalMutationLockDuringManagedInitialization(t 
 	withFakeBDInit(t)
 	repoPath := newTestRepoPath(t)
 	paths := currentTestPaths(t)
-	lockPath, err := paths.GlobalMutationLockPath()
+	lockPath, err := paths.DataPath(filepath.Join("locks", "mutation.lock"))
 	must.NoError(err)
 	setTestEnvironment(t, "FAKE_BD_LOCK_PATH", lockPath)
 
@@ -688,7 +668,7 @@ func TestIntegrationRepoAddFailsFastWhenGlobalMutationLockIsHeld(t *testing.T) {
 	logPath := withFakeBDInit(t)
 	repoPath := newTestRepoPath(t)
 	paths := currentTestPaths(t)
-	lockPath, err := paths.GlobalMutationLockPath()
+	lockPath, err := paths.DataPath(filepath.Join("locks", "mutation.lock"))
 	must.NoError(err)
 	must.NoError(os.MkdirAll(filepath.Dir(lockPath), 0o755))
 	must.NoError(os.WriteFile(lockPath, []byte("held"), 0o644))

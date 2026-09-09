@@ -17,7 +17,9 @@ func TestInvocationDependenciesKeepEnvironmentScopedToInvocation(t *testing.T) {
 	t.Parallel()
 
 	root := testutil.CanonicalTempDir(t)
-	paths, err := state.NewPaths(filepath.Join(root, "config", state.AppName), filepath.Join(root, "data", state.AppName))
+	configRoot := filepath.Join(root, "config", state.AppName)
+	dataRoot := filepath.Join(root, "data", state.AppName)
+	paths, err := state.NewPaths(configRoot, dataRoot)
 	if err != nil {
 		t.Fatalf("create paths: %v", err)
 	}
@@ -35,8 +37,8 @@ func TestInvocationDependenciesKeepEnvironmentScopedToInvocation(t *testing.T) {
 	}
 
 	environment := deps.invocationEnvironment([]string{"ORPHEUS_TASK_ID=op-1"})
-	wantConfig := "XDG_CONFIG_HOME=" + filepath.Dir(paths.ConfigRoot)
-	wantData := "XDG_DATA_HOME=" + filepath.Dir(paths.DataRoot)
+	wantConfig := "XDG_CONFIG_HOME=" + filepath.Dir(configRoot)
+	wantData := "XDG_DATA_HOME=" + filepath.Dir(dataRoot)
 	if !containsEnvironment(environment, wantConfig) || !containsEnvironment(environment, wantData) {
 		t.Fatalf("agent environment = %#v, want %q and %q", environment, wantConfig, wantData)
 	}
