@@ -11,6 +11,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/registry"
+	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
@@ -21,8 +22,7 @@ func TestIntegrationAgentContextRendersValidatedWorktreeContext(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	repoPath, worktreePath, cwd, bdLogPath := setupAgentContextWorktree(t)
-	configPath, err := currentTestPaths(t).ConfigPath(agent.ConfigFile)
-	must.NoError(err)
+	configPath := filepath.Join(testInvocationFor(t).root, "xdg-config", state.AppName, agent.ConfigFile)
 	must.NoError(os.Remove(configPath))
 
 	stdout, stderr := executeCommand(t, []string{"agent", "context"})
@@ -137,8 +137,7 @@ func TestIntegrationAgentContextTreatsMissingRunInteractivityAsNonInteractive(t 
 	must.Contains(stateYAML, "        interactive: false\n")
 	legacyStateYAML := strings.Replace(stateYAML, "        interactive: false\n", "", 1)
 	must.NoError(os.WriteFile(statePath, []byte(legacyStateYAML), 0o644))
-	configPath, err := paths.ConfigPath(agent.ConfigFile)
-	must.NoError(err)
+	configPath := filepath.Join(testInvocationFor(t).root, "xdg-config", state.AppName, agent.ConfigFile)
 	must.NoError(os.WriteFile(configPath, []byte("agents:\n  defaults: {}\n  profiles: {}\n"), 0o644))
 
 	stdout, stderr := executeCommand(t, []string{"agent", "context"})
@@ -423,7 +422,7 @@ func writeAgentContextProfileConfig(t *testing.T, name string, interactive bool)
 	if !interactive {
 		profile["interactive"] = false
 	}
-	require.NoError(t, currentTestPaths(t).WriteConfigYAML("config.yaml", map[string]any{
+	require.NoError(t, testutil.WriteConfigYAML(currentTestPaths(t), "config.yaml", map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{
 				"implementer": name,

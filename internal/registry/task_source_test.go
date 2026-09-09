@@ -11,7 +11,8 @@ import (
 )
 
 func TestTaskRepositorySourcesProjectsNormalizedRegistryValues(t *testing.T) {
-	paths, err := state.NewPaths(testutil.CanonicalTempDir(t), testutil.CanonicalTempDir(t))
+	dataRoot := testutil.CanonicalTempDir(t)
+	paths, err := state.NewPaths(testutil.CanonicalTempDir(t), dataRoot)
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}
@@ -33,7 +34,7 @@ func TestTaskRepositorySourcesProjectsNormalizedRegistryValues(t *testing.T) {
 	if source.Repository.ID != "alpha" || source.Repository.Name != "Alpha" || source.Repository.TaskIDPrefix != "op" || source.Repository.DefaultBranch != "main" || source.Repository.BranchTemplate != "orpheus/{{task_id}}" {
 		t.Fatalf("repository = %#v", source.Repository)
 	}
-	if source.BackendDir != filepath.Join(paths.DataRoot, "repos", "alpha", "beads") {
+	if source.BackendDir != filepath.Join(dataRoot, "repos", "alpha", "beads") {
 		t.Fatalf("backend dir = %q", source.BackendDir)
 	}
 	if !source.MaintenanceOwned {
@@ -81,11 +82,15 @@ func TestTaskRepositorySourcesResolveRepositoryThenGlobalTemplates(t *testing.T)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			paths, err := state.NewPaths(testutil.CanonicalTempDir(t), testutil.CanonicalTempDir(t))
+			root := testutil.CanonicalTempDir(t)
+			paths, err := state.NewPaths(
+				filepath.Join(root, "config", state.AppName),
+				filepath.Join(root, "data", state.AppName),
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := paths.WriteConfigYAML("config.yaml", tt.globalConfig); err != nil {
+			if err := testutil.WriteConfigYAML(paths, "config.yaml", tt.globalConfig); err != nil {
 				t.Fatal(err)
 			}
 			store := registry.NewStore(paths)

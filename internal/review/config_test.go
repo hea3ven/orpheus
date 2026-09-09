@@ -12,7 +12,7 @@ import (
 
 func TestLoadConfigValidatesAndResolvesPipelines(t *testing.T) {
 	paths := newTestPaths(t)
-	if err := paths.WriteConfigYAML(review.ConfigFile, map[string]any{
+	if err := testutil.WriteConfigYAML(paths, review.ConfigFile, map[string]any{
 		"reviews": map[string]any{
 			"default_pipeline": "standard",
 			"pipelines": map[string]any{
@@ -57,7 +57,7 @@ func TestLoadConfigValidatesAndResolvesPipelines(t *testing.T) {
 
 func TestLoadConfigMaxAutonomousReviewAttempts(t *testing.T) {
 	paths := newTestPaths(t)
-	if err := paths.WriteConfigYAML(review.ConfigFile, map[string]any{
+	if err := testutil.WriteConfigYAML(paths, review.ConfigFile, map[string]any{
 		"reviews": map[string]any{
 			"max_autonomous_review_attempts": 2,
 			"pipelines": map[string]any{
@@ -112,7 +112,7 @@ func TestLoadConfigIncludePRReviewProcess(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			paths := newTestPaths(t)
-			if err := paths.WriteConfigYAML(review.ConfigFile, test.data); err != nil {
+			if err := testutil.WriteConfigYAML(paths, review.ConfigFile, test.data); err != nil {
 				t.Fatalf("write config: %v", err)
 			}
 
@@ -192,7 +192,7 @@ func TestLoadConfigRejectsInvalidReviewPipelines(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			paths := newTestPaths(t)
-			if err := paths.WriteConfigYAML(review.ConfigFile, test.data); err != nil {
+			if err := testutil.WriteConfigYAML(paths, review.ConfigFile, test.data); err != nil {
 				t.Fatalf("write config: %v", err)
 			}
 
@@ -209,7 +209,7 @@ func TestLoadConfigRejectsInvalidReviewPipelines(t *testing.T) {
 
 func TestLoadConfigRejectsDuplicateStepNameWithinPipeline(t *testing.T) {
 	paths := newTestPaths(t)
-	if err := paths.WriteConfigYAML(review.ConfigFile, map[string]any{
+	if err := testutil.WriteConfigYAML(paths, review.ConfigFile, map[string]any{
 		"reviews": map[string]any{
 			"pipelines": map[string]any{
 				"standard": map[string]any{
@@ -236,7 +236,7 @@ func TestLoadConfigRejectsDuplicateStepNameWithinPipeline(t *testing.T) {
 
 func TestLoadConfigAllowsStepNameReuseAcrossPipelines(t *testing.T) {
 	paths := newTestPaths(t)
-	if err := paths.WriteConfigYAML(review.ConfigFile, map[string]any{
+	if err := testutil.WriteConfigYAML(paths, review.ConfigFile, map[string]any{
 		"reviews": map[string]any{
 			"pipelines": map[string]any{
 				"standard": map[string]any{
@@ -271,7 +271,7 @@ func TestLoadConfigAllowsStepNameReuseAcrossPipelines(t *testing.T) {
 
 func TestLoadConfigRejectsInvalidMaxAutonomousReviewAttempts(t *testing.T) {
 	paths := newTestPaths(t)
-	if err := paths.WriteConfigYAML(review.ConfigFile, map[string]any{
+	if err := testutil.WriteConfigYAML(paths, review.ConfigFile, map[string]any{
 		"reviews": map[string]any{
 			"max_autonomous_review_attempts": 0,
 		},
@@ -327,7 +327,10 @@ func newTestPaths(t *testing.T) state.Paths {
 	t.Helper()
 
 	root := testutil.CanonicalTempDir(t)
-	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
+	paths, err := state.NewPaths(
+		filepath.Join(root, "config", state.AppName),
+		filepath.Join(root, "data", state.AppName),
+	)
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}

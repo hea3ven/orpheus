@@ -343,7 +343,7 @@ func freshReviewGuardFixtureWithOptions(t *testing.T, options freshReviewGuardFi
 		options.status = taskstate.ReviewStatusBlocked
 	}
 	paths := testPaths(t)
-	if err := paths.WriteConfigYAML(review.ConfigFile, map[string]any{
+	if err := testutil.WriteConfigYAML(paths, review.ConfigFile, map[string]any{
 		"reviews": map[string]any{
 			"default_pipeline": "default",
 			"pipelines": map[string]any{
@@ -510,7 +510,7 @@ func TestIntegrationReviewLifecycleManualPromptPersistsFindingsThroughWorkflowRe
 			task.MetadataWorktree: repoPath,
 		},
 	}
-	if err := paths.WriteConfigYAML(review.ConfigFile, map[string]any{
+	if err := testutil.WriteConfigYAML(paths, review.ConfigFile, map[string]any{
 		"reviews": map[string]any{
 			"default_pipeline":               "default",
 			"max_autonomous_review_attempts": 1,
@@ -815,7 +815,7 @@ func TestIntegrationReviewLifecycleRecoversBeforeReplacementConfiguration(t *tes
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			paths := testPaths(t)
-			if err := paths.WriteConfigYAML(review.ConfigFile, test.config); err != nil {
+			if err := testutil.WriteConfigYAML(paths, review.ConfigFile, test.config); err != nil {
 				t.Fatalf("write invalid replacement config: %v", err)
 			}
 			store := taskstate.NewStore(paths)
@@ -1486,7 +1486,7 @@ func (b *fakeReviewLifecycleBackend) Create(context.Context, task.CreateOptions)
 
 func writeAgentReviewPipelineConfig(t *testing.T, paths state.Paths) {
 	t.Helper()
-	if err := paths.WriteConfigYAML(review.ConfigFile, map[string]any{
+	if err := testutil.WriteConfigYAML(paths, review.ConfigFile, map[string]any{
 		"reviews": map[string]any{
 			"default_pipeline": "agent-review",
 			"pipelines": map[string]any{
@@ -1506,7 +1506,10 @@ func writeAgentReviewPipelineConfig(t *testing.T, paths state.Paths) {
 func testPaths(t *testing.T) state.Paths {
 	t.Helper()
 	root := testutil.CanonicalTempDir(t)
-	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
+	paths, err := state.NewPaths(
+		filepath.Join(root, "config", state.AppName),
+		filepath.Join(root, "data", state.AppName),
+	)
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}
