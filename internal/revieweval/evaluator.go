@@ -366,8 +366,8 @@ func executeRun(ctx context.Context, root string, opts Options, spec runSpec) Ru
 		return result
 	}
 	result.RepoPath = setup.repoPath
-	result.ConfigRoot = setup.paths.ConfigRoot
-	result.DataRoot = setup.paths.DataRoot
+	result.ConfigRoot = filepath.Join(setup.configBase, state.AppName)
+	result.DataRoot = filepath.Join(setup.dataBase, state.AppName)
 
 	err = withRunEnvironment(setup, spec, func() error {
 		return runPipeline(ctx, opts, spec, scenarioDef, setup)

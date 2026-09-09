@@ -1842,7 +1842,7 @@ func assertFeatureBranchPRReviewProcessPolicy(t *testing.T, global, repoOverride
 	t.Helper()
 	paths, source, targets := newFinalizationTestSource(t, "/fixture/repo", "op-1")
 	if global != nil {
-		if err := paths.WriteConfigYAML("config.yaml", map[string]any{
+		if err := testutil.WriteConfigYAML(paths, "config.yaml", map[string]any{
 			"reviews": map[string]any{"include_pr_review_process": *global},
 		}); err != nil {
 			t.Fatalf("write review config: %v", err)
@@ -1987,7 +1987,11 @@ func newFinalizationTestSource(
 
 func mustFinalizationTestPaths(t *testing.T) state.Paths {
 	t.Helper()
-	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
+	root := testutil.CanonicalTempDir(t)
+	paths, err := state.NewPaths(
+		filepath.Join(root, "config", state.AppName),
+		filepath.Join(root, "data", state.AppName),
+	)
 	if err != nil {
 		t.Fatalf("create paths: %v", err)
 	}

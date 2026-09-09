@@ -21,14 +21,16 @@ const (
 	fileMode      = 0o644
 )
 
-// Paths represents the resolved Orpheus configuration and data roots.
+// Paths represents resolved Orpheus roots and the storage used beneath them.
 //
 // Paths is intentionally generic: callers supply relative paths for the files
 // and directories they own; this package does not encode any registry, Beads,
-// Git, prompt, or CLI-specific layout.
+// Git, prompt, or CLI-specific layout. Constructed values are immutable and may
+// be copied safely.
 type Paths struct {
-	ConfigRoot string
-	DataRoot   string
+	configRoot string
+	dataRoot   string
+	backend    backend
 }
 
 // ResolveOptions provides deterministic inputs for XDG path resolution.
@@ -42,18 +44,28 @@ type ResolveOptions struct {
 	Env map[string]string
 }
 
-// NewPaths validates already-resolved Orpheus roots.
+// NewPaths validates already-resolved Orpheus roots and uses OS-backed state.
 func NewPaths(configRoot, dataRoot string) (Paths, error) {
+	return newPaths(configRoot, dataRoot, osBackend{})
+}
+
+// NewMemoryPaths validates already-resolved Orpheus roots and returns isolated,
+// in-process state. Paths copied from the returned value share that state.
+func NewMemoryPaths(configRoot, dataRoot string) (Paths, error) {
+	return newPaths(configRoot, dataRoot, newMemoryBackend())
+}
+
+func newPaths(configRoot, dataRoot string, storage backend) (Paths, error) {
 	if err := validateRoot("config root", configRoot); err != nil {
 		return Paths{}, err
 	}
 	if err := validateRoot("data root", dataRoot); err != nil {
 		return Paths{}, err
 	}
-
 	return Paths{
-		ConfigRoot: filepath.Clean(configRoot),
-		DataRoot:   filepath.Clean(dataRoot),
+		configRoot: filepath.Clean(configRoot),
+		dataRoot:   filepath.Clean(dataRoot),
+		backend:    storage,
 	}, nil
 }
 
@@ -102,60 +114,28 @@ func ResolveFromEnvironment() (Paths, error) {
 	return paths, nil
 }
 
-// ConfigPath returns an absolute path under the Orpheus config root.
-func (p Paths) ConfigPath(rel string) (string, error) {
-	return p.join("config", p.ConfigRoot, rel)
+// PropagateEnvironment sets XDG roots so child Orpheus processes resolve the
+// same state locations. Existing unrelated entries are preserved.
+func (p Paths) PropagateEnvironment(environment map[string]string) {
+	if environment == nil {
+		return
+	}
+	environment["XDG_CONFIG_HOME"] = filepath.Dir(p.configRoot)
+	environment["XDG_DATA_HOME"] = filepath.Dir(p.dataRoot)
 }
 
 // DataPath returns an absolute path under the Orpheus data root.
 func (p Paths) DataPath(rel string) (string, error) {
-	return p.join("data", p.DataRoot, rel)
-}
-
-// EnsureConfigDir creates a directory under the Orpheus config root and returns
-// its absolute path.
-func (p Paths) EnsureConfigDir(rel string) (string, error) {
-	path, err := p.ConfigPath(rel)
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(path, directoryMode); err != nil {
-		return "", fmt.Errorf("create config directory %q (%s): %w", rel, path, err)
-	}
-	return path, nil
-}
-
-// EnsureDataDir creates a directory under the Orpheus data root and returns its
-// absolute path.
-func (p Paths) EnsureDataDir(rel string) (string, error) {
-	path, err := p.DataPath(rel)
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(path, directoryMode); err != nil {
-		return "", fmt.Errorf("create data directory %q (%s): %w", rel, path, err)
-	}
-	return path, nil
+	return p.join("data", p.dataRoot, rel)
 }
 
 // ReadConfigYAML reads a YAML file under the Orpheus config root into out.
 func (p Paths) ReadConfigYAML(rel string, out any) error {
-	path, err := p.ConfigPath(rel)
+	path, err := p.configPath(rel)
 	if err != nil {
 		return err
 	}
-	return readYAML("config", rel, path, out)
-}
-
-// WriteConfigYAML writes value as a YAML file under the Orpheus config root.
-// Parent directories are created on demand and the target file is replaced via a
-// complete temporary file in the same directory.
-func (p Paths) WriteConfigYAML(rel string, value any) error {
-	path, err := p.ConfigPath(rel)
-	if err != nil {
-		return err
-	}
-	return writeYAML("config", rel, path, value)
+	return readYAML(p.backend, "config", rel, path, out)
 }
 
 // ReadDataYAML reads a YAML file under the Orpheus data root into out.
@@ -164,7 +144,7 @@ func (p Paths) ReadDataYAML(rel string, out any) error {
 	if err != nil {
 		return err
 	}
-	return readYAML("data", rel, path, out)
+	return readYAML(p.backend, "data", rel, path, out)
 }
 
 // WriteDataYAML writes value as a YAML file under the Orpheus data root. Parent
@@ -175,7 +155,7 @@ func (p Paths) WriteDataYAML(rel string, value any) error {
 	if err != nil {
 		return err
 	}
-	return writeYAML("data", rel, path, value)
+	return writeYAML(p.backend, "data", rel, path, value)
 }
 
 func xdgBase(opts ResolveOptions, envKey, fallbackRel string) (string, error) {
@@ -194,6 +174,10 @@ func xdgBase(opts ResolveOptions, envKey, fallbackRel string) (string, error) {
 	}
 
 	return filepath.Join(filepath.Clean(opts.HomeDir), fallbackRel), nil
+}
+
+func (p Paths) configPath(rel string) (string, error) {
+	return p.join("config", p.configRoot, rel)
 }
 
 func (p Paths) join(kind, root, rel string) (string, error) {
@@ -240,12 +224,11 @@ func cleanRelative(rel string) (string, error) {
 	return clean, nil
 }
 
-func readYAML(kind, rel, path string, out any) error {
+func readYAML(storage backend, kind, rel, path string, out any) error {
 	if out == nil {
 		return fmt.Errorf("read %s YAML %q (%s): destination is nil", kind, rel, path)
 	}
-
-	data, err := os.ReadFile(path)
+	data, err := storage.readFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("read %s YAML %q (%s): file does not exist: %w", kind, rel, path, err)
@@ -265,18 +248,17 @@ func readYAML(kind, rel, path string, out any) error {
 	return nil
 }
 
-func writeYAML(kind, rel, path string, value any) error {
+func writeYAML(storage backend, kind, rel, path string, value any) error {
 	data, err := marshalYAML(value)
 	if err != nil {
 		return fmt.Errorf("encode %s YAML %q (%s): %w", kind, rel, path, err)
 	}
 
-	parent := filepath.Dir(path)
-	if err := os.MkdirAll(parent, directoryMode); err != nil {
+	if err := storage.makeParentDirs(path, directoryMode); err != nil {
 		return fmt.Errorf("create parent directory for %s YAML %q (%s): %w", kind, rel, path, err)
 	}
 
-	if err := writeFileAtomically(path, data, fileMode); err != nil {
+	if err := storage.replaceFile(path, data, fileMode); err != nil {
 		return fmt.Errorf("write %s YAML %q (%s): %w", kind, rel, path, err)
 	}
 	return nil

@@ -18,7 +18,7 @@ func TestLoadConfigResolvesImplementerDefaultAndInterpolatesBootstrapPrompt(t *t
 	must := require.New(t)
 	paths := newAgentTestPaths(t)
 
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+	must.NoError(testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{
 				"implementer": "pi",
@@ -57,7 +57,7 @@ func TestLoadConfigPreservesExplicitNonInteractiveProfile(t *testing.T) {
 	must := require.New(t)
 	paths := newAgentTestPaths(t)
 
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+	must.NoError(testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{
 				"implementer": "autonomous",
@@ -89,7 +89,7 @@ func TestLoadConfigBuildsStructuredCodexCommands(t *testing.T) {
 	must := require.New(t)
 	paths := newAgentTestPaths(t)
 
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+	must.NoError(testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{"implementer": "codex-interactive", "reviewer": "codex-exec"},
 			"profiles": map[string]any{
@@ -153,7 +153,7 @@ func TestLoadConfigBuildsStructuredPiCommands(t *testing.T) {
 	must := require.New(t)
 	paths := newAgentTestPaths(t)
 
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+	must.NoError(testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{"implementer": "pi-interactive", "reviewer": "pi-print"},
 			"profiles": map[string]any{
@@ -218,27 +218,27 @@ func TestLoadConfigBuildsStructuredCommandsWithPromptAppend(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	paths := newAgentTestPaths(t)
-	configPath, err := paths.ConfigPath(agent.ConfigFile)
-	must.NoError(err)
-	must.NoError(os.MkdirAll(filepath.Dir(configPath), 0o755))
-	must.NoError(os.WriteFile(configPath, []byte(`
-agents:
-  defaults:
-    implementer: codex-arch
-    reviewer: pi-review
-  profiles:
-    codex-arch:
-      harness: codex
-      model: gpt-5.4
-      prompt_append: Focus on architecture boundaries.
-    pi-review:
-      harness: pi
-      model: openai-codex/gpt-5.4-mini
-      interactive: false
-      prompt_append: |
-        Review module boundaries.
-        Call out dependency direction risks.
-`), 0o644))
+	must.NoError(testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"implementer": "codex-arch",
+				"reviewer":    "pi-review",
+			},
+			"profiles": map[string]any{
+				"codex-arch": map[string]any{
+					"harness":       "codex",
+					"model":         "gpt-5.4",
+					"prompt_append": "Focus on architecture boundaries.",
+				},
+				"pi-review": map[string]any{
+					"harness":       "pi",
+					"model":         "openai-codex/gpt-5.4-mini",
+					"interactive":   false,
+					"prompt_append": "Review module boundaries.\nCall out dependency direction risks.\n",
+				},
+			},
+		},
+	}))
 
 	config, err := agent.LoadConfig(paths)
 	must.NoError(err)
@@ -296,7 +296,7 @@ func TestLoadConfigLeavesRawCodexCommandGeneric(t *testing.T) {
 	must := require.New(t)
 	paths := newAgentTestPaths(t)
 
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+	must.NoError(testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{"implementer": "codex"},
 			"profiles": map[string]any{
@@ -355,7 +355,7 @@ func TestLoadConfigResolvesNestedImplementerDefault(t *testing.T) {
 	must := require.New(t)
 	paths := newAgentTestPaths(t)
 
-	must.NoError(paths.WriteConfigYAML(agent.ConfigFile, map[string]any{
+	must.NoError(testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{
 				"implementer": "impl",
@@ -622,7 +622,7 @@ func TestConfigValidationErrorsAreActionable(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			paths := newAgentTestPaths(t)
-			require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, tt.data))
+			require.NoError(t, testutil.WriteConfigYAML(paths, agent.ConfigFile, tt.data))
 
 			_, err := agent.LoadConfig(paths)
 
@@ -655,7 +655,10 @@ func newAgentTestPaths(t *testing.T) state.Paths {
 	t.Helper()
 
 	root := testutil.CanonicalTempDir(t)
-	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
+	paths, err := state.NewPaths(
+		filepath.Join(root, "config", state.AppName),
+		filepath.Join(root, "data", state.AppName),
+	)
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}

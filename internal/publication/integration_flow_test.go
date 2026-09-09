@@ -1,6 +1,7 @@
 package publication_test
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -22,11 +23,15 @@ func TestResolveIntegrationFlowPrecedence(t *testing.T) {
 }
 
 func TestLoadPublicationConfig(t *testing.T) {
-	paths, err := state.NewPaths(testutil.CanonicalTempDir(t), testutil.CanonicalTempDir(t))
+	root := testutil.CanonicalTempDir(t)
+	paths, err := state.NewPaths(
+		filepath.Join(root, "config", state.AppName),
+		filepath.Join(root, "data", state.AppName),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := paths.WriteConfigYAML("config.yaml", map[string]any{
+	if err := testutil.WriteConfigYAML(paths, "config.yaml", map[string]any{
 		"publication": map[string]any{
 			"integration_flow":       "direct-merge",
 			"summary_guidance":       "  Write a release-note summary.  ",
@@ -72,11 +77,15 @@ func TestLoadPublicationConfigRejectsInvalidPolicy(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			paths, err := state.NewPaths(testutil.CanonicalTempDir(t), testutil.CanonicalTempDir(t))
+			root := testutil.CanonicalTempDir(t)
+			paths, err := state.NewPaths(
+				filepath.Join(root, "config", state.AppName),
+				filepath.Join(root, "data", state.AppName),
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := paths.WriteConfigYAML("config.yaml", map[string]any{"publication": tt.publication}); err != nil {
+			if err := testutil.WriteConfigYAML(paths, "config.yaml", map[string]any{"publication": tt.publication}); err != nil {
 				t.Fatal(err)
 			}
 

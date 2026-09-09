@@ -45,9 +45,11 @@ func newInvocationDependencies(command *cobra.Command, logger *slog.Logger) (*in
 		span.FinishError(ctx, err)
 		return nil, err
 	}
+	resolvedEnvironment := make(map[string]string, 2)
+	paths.PropagateEnvironment(resolvedEnvironment)
 	span.Finish(ctx, logging.StatusSuccess,
-		slog.String("config_root", paths.ConfigRoot),
-		slog.String("data_root", paths.DataRoot),
+		slog.String("xdg_config_home", resolvedEnvironment["XDG_CONFIG_HOME"]),
+		slog.String("xdg_data_home", resolvedEnvironment["XDG_DATA_HOME"]),
 	)
 
 	return newInvocationDependenciesWithPaths(paths, logger, invocationEnvironmentSnapshot()), nil
@@ -58,8 +60,7 @@ func newInvocationDependenciesWithPaths(paths state.Paths, logger *slog.Logger, 
 	if environment == nil {
 		environment = make(map[string]string)
 	}
-	environment["XDG_CONFIG_HOME"] = filepath.Dir(paths.ConfigRoot)
-	environment["XDG_DATA_HOME"] = filepath.Dir(paths.DataRoot)
+	paths.PropagateEnvironment(environment)
 	deps := &invocationDependencies{
 		paths:         paths,
 		logger:        logger,
@@ -121,6 +122,12 @@ func environmentEntries(values map[string]string) []string {
 	return entries
 }
 
+func stateEnvironmentEntries(paths state.Paths) []string {
+	environment := make(map[string]string, 2)
+	paths.PropagateEnvironment(environment)
+	return environmentEntries(environment)
+}
+
 func (d *invocationDependencies) environmentValue(name string) string {
 	return d.environment[name]
 }
@@ -131,10 +138,7 @@ func (d *invocationDependencies) resumeSessionsEnabled() bool {
 
 func (d *invocationDependencies) invocationEnvironment(values []string) []string {
 	values = append([]string{}, values...)
-	return append(values,
-		"XDG_CONFIG_HOME="+filepath.Dir(d.paths.ConfigRoot),
-		"XDG_DATA_HOME="+filepath.Dir(d.paths.DataRoot),
-	)
+	return append(values, stateEnvironmentEntries(d.paths)...)
 }
 
 func (d *invocationDependencies) executable(name string) string {

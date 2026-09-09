@@ -1,6 +1,7 @@
 package taskbranch_test
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -118,11 +119,15 @@ func TestValidateBranchRejectsGitRefSyntax(t *testing.T) {
 }
 
 func TestLoadConfigReadsAndValidatesGlobalTemplate(t *testing.T) {
-	paths, err := state.NewPaths(testutil.CanonicalTempDir(t), testutil.CanonicalTempDir(t))
+	root := testutil.CanonicalTempDir(t)
+	paths, err := state.NewPaths(
+		filepath.Join(root, "config", state.AppName),
+		filepath.Join(root, "data", state.AppName),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := paths.WriteConfigYAML("config.yaml", map[string]any{
+	if err := testutil.WriteConfigYAML(paths, "config.yaml", map[string]any{
 		"tasks":  map[string]any{"branch_template": "global/{{task_title}}"},
 		"agents": map[string]any{"defaults": map[string]any{"implementer": "ignored"}},
 	}); err != nil {
@@ -136,7 +141,7 @@ func TestLoadConfigReadsAndValidatesGlobalTemplate(t *testing.T) {
 		t.Fatalf("template = %q", config.Template)
 	}
 
-	if err := paths.WriteConfigYAML("config.yaml", map[string]any{
+	if err := testutil.WriteConfigYAML(paths, "config.yaml", map[string]any{
 		"tasks": map[string]any{"branch_template": "global/{{unknown}}"},
 	}); err != nil {
 		t.Fatal(err)

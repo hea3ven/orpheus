@@ -798,7 +798,7 @@ func writeCompletionFlowAgentConfigWithPublication(
 	if publicationConfig != nil {
 		config["publication"] = publicationConfig
 	}
-	require.NoError(t, paths.WriteConfigYAML(agent.ConfigFile, config))
+	require.NoError(t, testutil.WriteConfigYAML(paths, agent.ConfigFile, config))
 }
 
 const statefulCompletionBDScript = `#!/bin/sh
@@ -1019,9 +1019,7 @@ printf 'completion agent completed\n'
 
 func withOrpheusCLIHelper(t *testing.T) string {
 	t.Helper()
-	if orpheusCLIHelperPath == "" {
-		t.Fatal("CLI helper fixture is not initialized")
-	}
+	requireCLIHelperFixture(t)
 	prependTestPath(t, filepath.Dir(orpheusCLIHelperPath))
 	return orpheusCLIHelperPath
 }
