@@ -172,3 +172,10 @@ integration timing ceiling from 47.345s to 23.105s, based on a 15.403s median.
 The initial Beads timing overrun did not recur in the refresh or final checks;
 its existing 42.452s ceiling remains unchanged. No timing ceiling was loosened
 and no coverage floor was lowered by this migration.
+
+## Review and repair continuation
+
+The next migration runs review and repair through the real pipeline over this
+application fixture. See [the review assertion map and measurements](op-sc7-5-review-workflow-evidence.md).
+The dispatch-only scenarios above still intentionally supply review outcomes;
+the new review journeys do not.

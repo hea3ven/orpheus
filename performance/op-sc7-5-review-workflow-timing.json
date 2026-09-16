@@ -1,0 +1,75 @@
+{
+  "before": {
+    "wall_seconds": [
+      5.868772767993505,
+      5.7212130120024085,
+      5.792435501993168
+    ],
+    "median_seconds": 5.792435501993168,
+    "executing_descendant_pids": 1735,
+    "git_pids": 902,
+    "other_pids": 833
+  },
+  "after": {
+    "wall_seconds": [
+      0.7256534319894854,
+      0.7905298200057587,
+      0.7417034930113005
+    ],
+    "median_seconds": 0.7417034930113005,
+    "executing_descendant_pids": 0,
+    "git_pids": 0,
+    "other_pids": 0
+  },
+  "tests": [
+    "TestIntegrationTaskReviewApproveFinalizesAndRecordsPassedAttempt",
+    "TestIntegrationTaskReviewManualContextShowsOriginalAndLatestFollowUpCompletion",
+    "TestIntegrationTaskReviewBlockingFindingBlocksWithoutFinalizing",
+    "TestIntegrationTaskReviewAdvisoryAndSeparateTaskFindingsDoNotBlockApproval",
+    "TestIntegrationTaskReviewCreatesSelectedSeparateTaskFollowUp",
+    "TestIntegrationTaskReviewCanAbortWhenSeparateTaskCreationFails",
+    "TestIntegrationTaskReviewAbortDoesNotFinalize",
+    "TestIntegrationTaskReviewManualInputLossReplaysRecordedFindings",
+    "TestIntegrationTaskReviewInvalidReviewAgentConfigDoesNotStartFreshAttempt",
+    "TestIntegrationTaskReviewInvalidReviewAgentConfigDoesNotResumeManualAttempt",
+    "TestIntegrationTaskReviewCheckBlockerReasonEOFRecordsInterrupted",
+    "TestIntegrationTaskReviewCheckBlockerKeepAcceptsEOFAnswer",
+    "TestIntegrationTaskReviewCheckBlockerReasonAcceptsEOFAnswer",
+    "TestIntegrationTaskReviewCheckBlockerDowngradeContinuesPipeline",
+    "TestIntegrationTaskReviewCheckBlockerWaiverContinuesPipeline",
+    "TestIntegrationTaskReviewCheckStartFailureMarksOperationalFailure",
+    "TestIntegrationTaskRunAfterInterruptedAutomatedBlockerDecisionRequiresFreshReview",
+    "TestIntegrationTaskRunRecoversHardStoppedAutomatedBlockerDecision",
+    "TestIntegrationTaskReviewInterruptedAutomatedBlockerRecoveryReusesRecordedPipeline",
+    "TestIntegrationTaskReviewResumesManualWaitingAttempt",
+    "TestIntegrationTaskReviewRejectsConflictingPipelineForManualWaitingAttempt",
+    "TestIntegrationTaskReviewPipelineOverridePrecedence",
+    "TestIntegrationTaskReviewPipelineAliasResolvesToGlobalPipeline",
+    "TestIntegrationTaskReviewUnknownPipelineIncludesRepoAliases",
+    "TestIntegrationTaskReviewAgentReviewStepLaunchesReviewerAndPassesWithoutFindings",
+    "TestIntegrationTaskReviewAgentReviewBlockingFindingStopsPipeline",
+    "TestIntegrationTaskReviewAgentReviewMixedAutomatedBlockerDecisions",
+    "TestIntegrationTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp",
+    "TestIntegrationTaskReviewAgentReviewNonZeroExitMarksOperationalFailure",
+    "TestIntegrationTaskRunAutonomousReviewFollowUpRepairsCheckAndPublishes",
+    "TestIntegrationTaskRunAttachedManualBlockerRepairsAndApprovalFinalizes",
+    "TestIntegrationTaskReviewManualBlockerExhaustsBudgetWithoutExtraLaunch",
+    "TestIntegrationTaskRunPreservedManualBlockerExhaustsFreshBudget",
+    "TestIntegrationTaskRunAutonomousReviewLoopExhaustsPersistentCheckBlockers",
+    "TestIntegrationTaskReviewResumedAutonomousFollowUpPreservesSelectedImplementer",
+    "TestIntegrationTaskRunResumesPausedAutomatedBlockerDecision",
+    "TestIntegrationTaskReviewFollowUpHeaderWriteFailureRecordsStartFailure"
+  ],
+  "measurement": {
+    "base_revision": "c34aaa44e690b1fcfd5282dc2de8d61128e0af74",
+    "go_version": "go1.27.1-X:nodwarf5 linux/amd64",
+    "platform": "Linux 7.2.6-arch2-1 x86_64",
+    "test_flags": [
+      "-test.count=1",
+      "-test.parallel=1"
+    ],
+    "selection": "exact-name union of tests in this file",
+    "wall_time": "three runs of each precompiled binary; excludes compilation",
+    "process_count": "separate ptrace run; distinct descendant PIDs observed at exec; excludes root binary"
+  }
+}
