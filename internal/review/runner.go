@@ -45,6 +45,7 @@ type PipelineStore interface {
 
 // PipelineRunOptions describes one local review pipeline execution.
 type PipelineRunOptions struct {
+	Effects Effects
 	Context context.Context
 	Store   PipelineStore
 	Logger  *slog.Logger
@@ -326,14 +327,18 @@ func runReadOnlyStep(
 		span.Finish(opts.Context, reviewStepDiagnosticStatus(opts.Context, outcome, finalErr), attrs...)
 	}()
 
-	snapshot, err := captureCandidateSnapshot(opts.Context, opts.Workdir, opts.Logger, reviewStepAttrs(opts, step)...)
+	capture := opts.Effects.CaptureCandidate
+	if capture == nil {
+		capture = captureLocalCandidate
+	}
+	checkCandidate, err := capture(opts.Context, opts.Workdir, opts.Logger, reviewStepAttrs(opts, step)...)
 	if err != nil {
 		finalErr = fmt.Errorf("snapshot candidate changes: %w", err)
 		return stepOutcome{}, finalErr
 	}
 
 	outcome, stepErr := run()
-	mutationErr := restoreCandidateIfMutated(opts.Context, snapshot, opts.Logger, reviewStepAttrs(opts, step)...)
+	mutationErr := checkCandidate()
 	if mutationErr != nil {
 		finalErr = mutationErr
 		return stepOutcome{}, mutationErr
@@ -402,7 +407,7 @@ func runCheckStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome
 		return stepOutcome{}, nil
 	}
 
-	var exitErr *exec.ExitError
+	var exitErr interface{ ExitCode() int }
 	if !errors.As(err, &exitErr) {
 		output.finishExpanded()
 		return stepOutcome{}, fmt.Errorf("task run %s: start check step %q: %w", opts.TaskID, step.Name, err)
@@ -1385,6 +1390,9 @@ func runStepCommandWithOutput(
 	stdout io.Writer,
 	stderr io.Writer,
 ) (*int, error) {
+	if opts.Effects.RunCommand != nil {
+		return opts.Effects.RunCommand(CommandOptions{Context: opts.Context, Step: step, Workdir: opts.Workdir, Environment: mergeEnvironment(opts.Environment, env), Stdout: stdout, Stderr: stderr})
+	}
 	span := logging.Start(opts.Context, opts.Logger, "review command",
 		reviewCommandAttrs(opts, step)...,
 	)

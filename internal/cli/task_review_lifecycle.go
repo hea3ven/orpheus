@@ -221,7 +221,7 @@ func (r taskReviewLifecycleAgentRunner) RunReviewLifecycleAgent(
 		run.RepoID,
 		run.TaskID,
 		run.Start.Attempt.Attempt,
-		agent.CaptureUsage(agent.UsageCaptureOptions{
+		r.deps.captureUsage(agent.UsageCaptureOptions{
 			Harness:      run.Start.Attempt.Execution.Harness,
 			ExecutionDir: run.Start.ExecutionDir,
 			SessionName:  run.Start.Attempt.Execution.SessionName,
@@ -261,9 +261,12 @@ func newTaskReviewLifecycleService(
 	paths := deps.paths
 	store := deps.taskStateStore
 	service := workflow.ReviewLifecycleService{
-		Paths:    paths,
-		Sources:  taskCtx.Sources,
-		RunStore: store,
+		ReviewEffects:   deps.reviewEffects,
+		ReviewStatus:    deps.reviewStatus,
+		FinalizationGit: deps.finalizationGit,
+		Paths:           paths,
+		Sources:         taskCtx.Sources,
+		RunStore:        store,
 		BackendFactory: func(source taskmodel.RepositorySource) (workflow.ReviewLifecycleBackend, error) {
 			return invocationTaskBackend[workflow.ReviewLifecycleBackend](deps, source)
 		},

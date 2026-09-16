@@ -8,6 +8,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/beads"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
@@ -35,6 +36,10 @@ type CommandOptions struct {
 // production adapters. Collaborators are shared by reference and must remain
 // valid for the lifetime of commands constructed with them.
 type Dependencies struct {
+	PRProvider         pullrequest.Provider
+	ReviewEffects      review.Effects
+	ReviewStatus       func(context.Context, string) (string, error)
+	FinalizationGit    workflow.FinalizationGit
 	TaskBackendFactory taskmodel.BackendFactory
 	InspectGit         func(context.Context, string) (gitmeta.Inspection, error)
 	InspectLocalBeads  func(string, ...slog.Attr) (beads.LocalInspection, error)
@@ -45,8 +50,7 @@ type Dependencies struct {
 	ReviewCandidate    workflow.ReviewCandidateInspector
 	ReviewPipeline     func(review.PipelineRunOptions) (review.PipelineOutcome, error)
 	ProcessProbe       workflow.ProcessProbe
-	// CaptureUsage reads session usage after initial implementation dispatch.
-	// Review and repair execution retain their own usage-capture paths.
+	// CaptureUsage reads session usage after implementation and repair dispatch.
 	CaptureUsage func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions
 }
 
@@ -61,6 +65,10 @@ func (o CommandOptions) resolvePaths() (state.Paths, error) {
 }
 
 func (d Dependencies) applyTo(invocation *invocationDependencies) {
+	invocation.prProvider = d.PRProvider
+	invocation.reviewEffects = d.ReviewEffects
+	invocation.reviewStatus = d.ReviewStatus
+	invocation.finalizationGit = d.FinalizationGit
 	if d.CaptureUsage != nil {
 		invocation.captureUsage = d.CaptureUsage
 	}

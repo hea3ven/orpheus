@@ -47,6 +47,21 @@ An integration test verifies a cross-package workflow or an isolated local proce
 
 `make test-integration` requires `git` and `bd` on `PATH`. Tests that need `dolt` skip when it is unavailable. No lane may read operator data, use live networks or credentials, or run a real model agent.
 
+## Memory-backed application workflows
+
+The external `cli_test` fixtures in `internal/cli/*_workflow_test.go` construct
+fresh commands through `cli.NewRootCommandWithOptions`. They run real routing,
+workflow services, review decisions and stores over integration-only memory
+paths. Task sources, candidate contents, commands and agents are semantic fakes.
+They remain integration tests because they exercise cross-package behavior.
+
+Review scenarios must use the real `review.RunPipeline`, not supply terminal
+pipeline outcomes. The earlier dispatch-only journeys may supply review outcomes
+because pipeline behavior is outside their scope. Keep real child-process
+streaming, cancellation, PID, environment and Git snapshot contracts separate.
+See [review and repair migration evidence](../performance/op-sc7-5-review-workflow-evidence.md)
+for the assertion map and measurements.
+
 ## Structural membership
 
 Integration source files use `//go:build integration`, and their top-level test bodies begin with `TestIntegration`. Untagged test bodies whose names do not have that prefix are unit tests. `internal/testlane` validates this convention so every top-level body is selected by exactly one lane. The build constraint is the membership mechanism; the integration name filter only limits execution to structurally tagged integration bodies.
