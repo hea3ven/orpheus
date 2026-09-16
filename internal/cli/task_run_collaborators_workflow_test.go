@@ -227,6 +227,9 @@ func (g *memoryDispatchGit) lastLifecycle() gitmeta.TaskWorktreeLifecycle {
 }
 
 type semanticAgentOutcome struct {
+	mutateCandidate       func()
+	review                bool
+	findings              []taskstate.ReviewFinding
 	completion            *agent.CompleteOptions
 	startFailure          error
 	captureContext        bool
@@ -255,10 +258,13 @@ func (l *semanticAgentLauncher) Run(_ context.Context, command agentexec.Command
 	}
 	outcome := l.outcomes[0]
 	l.outcomes = l.outcomes[1:]
-	if outcome.completion == nil && outcome.err == nil && outcome.startFailure == nil && !outcome.exitWithoutCompletion {
+	if outcome.completion == nil && outcome.err == nil && outcome.startFailure == nil && !outcome.exitWithoutCompletion && !outcome.review {
 		return errors.New("agent outcome must explicitly specify completion, failure, or exit without completion")
 	}
 	environment := parseEnvironment(opts.Env)
+	if outcome.review != (environment["ORPHEUS_AGENT_PURPOSE"] == "review") {
+		return errors.New("scripted agent outcome does not match launch purpose")
+	}
 	l.launches = append(l.launches, semanticAgentLaunch{command: command, dir: opts.Dir, environment: environment})
 	if outcome.startFailure != nil {
 		return outcome.startFailure
@@ -277,6 +283,16 @@ func (l *semanticAgentLauncher) Run(_ context.Context, command agentexec.Command
 	if outcome.completion != nil || outcome.captureContext {
 		if err := l.captureContext(opts, environment); err != nil {
 			return err
+		}
+	}
+	if outcome.mutateCandidate != nil {
+		outcome.mutateCandidate()
+	}
+	if outcome.review {
+		for _, finding := range outcome.findings {
+			if err := l.recordFinding(opts, environment, finding); err != nil {
+				return err
+			}
 		}
 	}
 	if outcome.completion != nil {
@@ -387,4 +403,13 @@ func recordSuppliedReviewBlocker(opts review.PipelineRunOptions, pipelineName st
 		return review.PipelineOutcome{}, err
 	}
 	return review.PipelineOutcome{Status: taskstate.ReviewStatusBlocked}, nil
+}
+
+func (l *semanticAgentLauncher) recordFinding(opts agentexec.LaunchOptions, environment map[string]string, finding taskstate.ReviewFinding) error {
+	command := cli.NewRootCommandWithOptions(l.childOptions(opts.Dir, environment))
+	command.SetIn(opts.Stdin)
+	command.SetOut(opts.Stdout)
+	command.SetErr(opts.Stderr)
+	command.SetArgs([]string{"agent", "review", "add", "--type", string(finding.Type), "--title", finding.Title, "--description", finding.Description, "--suggested-action", finding.SuggestedAction})
+	return command.Execute()
 }

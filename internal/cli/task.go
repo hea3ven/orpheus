@@ -3136,6 +3136,7 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summa
 
 func newTaskFinalizationService(deps *invocationDependencies, taskCtx taskContext, logger *slog.Logger) workflow.FinalizationService {
 	return workflow.FinalizationService{
+		Git:     deps.finalizationGit,
 		Paths:   deps.paths,
 		Sources: taskCtx.Sources,
 		BackendFactory: func(source taskmodel.RepositorySource) (workflow.FinalizationBackend, error) {
@@ -3147,7 +3148,10 @@ func newTaskFinalizationService(deps *invocationDependencies, taskCtx taskContex
 	}
 }
 
-func newInvocationGHProvider(deps *invocationDependencies, logger *slog.Logger) pullrequest.GHProvider {
+func newInvocationGHProvider(deps *invocationDependencies, logger *slog.Logger) pullrequest.Provider {
+	if deps.prProvider != nil {
+		return deps.prProvider
+	}
 	return pullrequest.GHProvider{
 		Logger:      logger,
 		Binary:      deps.executable("gh"),

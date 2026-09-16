@@ -130,6 +130,9 @@ func (LocalReviewCandidateInspector) ValidateReviewCandidate(
 
 // ReviewLifecycleService owns complete task-review lifecycle orchestration.
 type ReviewLifecycleService struct {
+	ReviewEffects          review.Effects
+	ReviewStatus           func(context.Context, string) (string, error)
+	FinalizationGit        FinalizationGit
 	Paths                  state.Paths
 	Sources                []task.RepositorySource
 	BackendFactory         ReviewLifecycleBackendFactory
@@ -690,6 +693,7 @@ func (s ReviewLifecycleService) pipelineRunOptions(runCtx context.Context, ctx R
 	}
 	promptManualStep := s.manualStepPrompt(ctx, presentation.PromptManualStep)
 	return review.PipelineRunOptions{
+		Effects:           s.ReviewEffects,
 		Context:           runCtx,
 		Store:             ctx.store,
 		Logger:            s.Logger,
@@ -778,7 +782,11 @@ func (s ReviewLifecycleService) manualStepContext(
 	if latest.Completion == nil {
 		return ReviewManualStepContext{}, fmt.Errorf("latest run attempt %d has no completion block; run `orpheus agent done` first", latest.Attempt)
 	}
-	status, err := gitmeta.ShortStatus(runCtx, ctx.Workdir)
+	readStatus := s.ReviewStatus
+	if readStatus == nil {
+		readStatus = gitmeta.ShortStatus
+	}
+	status, err := readStatus(runCtx, ctx.Workdir)
 	if err != nil {
 		return ReviewManualStepContext{}, fmt.Errorf("read git status: %w", err)
 	}
@@ -1832,6 +1840,7 @@ func PendingSeparateTaskCandidates(store ReviewLifecycleStore, repoID string, ta
 
 func (s ReviewLifecycleService) finalizeApprovedReview(ctx context.Context, reviewCtx ReviewAttemptContext) (FinalizationResult, error) {
 	service := FinalizationService{
+		Git:            s.FinalizationGit,
 		Paths:          s.Paths,
 		Sources:        s.Sources,
 		BackendFactory: func(source task.RepositorySource) (FinalizationBackend, error) { return s.BackendFactory(source) },

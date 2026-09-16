@@ -14,6 +14,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/beads"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/logging"
+	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
@@ -24,6 +25,10 @@ import (
 )
 
 type invocationDependencies struct {
+	prProvider         pullrequest.Provider
+	reviewEffects      review.Effects
+	reviewStatus       func(context.Context, string) (string, error)
+	finalizationGit    workflow.FinalizationGit
 	paths              state.Paths
 	logger             *slog.Logger
 	registryStore      registry.Store
