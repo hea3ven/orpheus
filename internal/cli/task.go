@@ -16,7 +16,6 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
-	"github.com/hea3ven/orpheus/internal/beads"
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
@@ -1003,11 +1002,11 @@ func routeTaskRunRecovery(
 	resolved := execution.resolved
 	prepared, err := workflow.PrepareTaskRun(command.Context(), workflow.PrepareTaskRunOptions{
 		Paths:   execution.deps.paths,
-		Store:   taskstate.NewStoreWithLogger(execution.deps.paths, execution.logger),
+		Store:   execution.deps.taskStateStore,
 		RepoID:  resolved.Source.Repository.ID,
 		TaskID:  resolved.TaskID,
 		Task:    execution.task,
-		Probe:   agentexec.ProbePID,
+		Probe:   execution.deps.processProbe,
 		Trigger: "task_run",
 	})
 	if err != nil {
@@ -1270,7 +1269,8 @@ func startTaskRunDispatch(
 	dispatch := taskRunDispatch{
 		service: workflow.DispatchService{
 			Paths:                 deps.paths,
-			RunStore:              taskstate.NewStoreWithLogger(deps.paths, logger),
+			RunStore:              deps.taskStateStore,
+			Git:                   deps.dispatchGit,
 			Logger:                logger,
 			UsageCaptureEnv:       deps.usageCaptureEnvironment(),
 			ResumeSessionsEnabled: boolPtr(deps.resumeSessionsEnabled()),
@@ -1505,7 +1505,7 @@ func taskRunUsageOptions(
 	start workflow.DispatchStartResult,
 	logger *slog.Logger,
 ) taskstate.RecordRunUsageOptions {
-	return agent.CaptureUsage(agent.UsageCaptureOptions{
+	return deps.captureUsage(agent.UsageCaptureOptions{
 		Harness:      start.Attempt.Execution.Harness,
 		ExecutionDir: start.ExecutionDir,
 		SessionName:  start.Attempt.Execution.SessionName,
@@ -3139,9 +3139,9 @@ func newTaskFinalizationService(deps *invocationDependencies, taskCtx taskContex
 		Paths:   deps.paths,
 		Sources: taskCtx.Sources,
 		BackendFactory: func(source taskmodel.RepositorySource) (workflow.FinalizationBackend, error) {
-			return invocationTaskBackend(deps, source)
+			return invocationTaskBackend[workflow.FinalizationBackend](deps, source)
 		},
-		RunStore:   taskstate.NewStoreWithLogger(deps.paths, logger),
+		RunStore:   deps.taskStateStore,
 		PRProvider: newInvocationGHProvider(deps, logger),
 		Logger:     logger,
 	}
@@ -3155,14 +3155,15 @@ func newInvocationGHProvider(deps *invocationDependencies, logger *slog.Logger) 
 	}
 }
 
-func invocationTaskBackend(deps *invocationDependencies, source taskmodel.RepositorySource) (beads.TaskBackend, error) {
+func invocationTaskBackend[T any](deps *invocationDependencies, source taskmodel.RepositorySource) (T, error) {
+	var zero T
 	backend, err := deps.taskBackendFactory(source)
 	if err != nil {
-		return beads.TaskBackend{}, err
+		return zero, err
 	}
-	taskBackend, ok := backend.(beads.TaskBackend)
+	taskBackend, ok := backend.(T)
 	if !ok {
-		return beads.TaskBackend{}, fmt.Errorf("backend for repository %s does not support Beads task operations", source.Repository.ID)
+		return zero, fmt.Errorf("backend for repository %s does not support required task operations", source.Repository.ID)
 	}
 	return taskBackend, nil
 }
@@ -3306,9 +3307,9 @@ func runTaskSync(command *cobra.Command, opts *rootOptions, taskID string) error
 		Paths:   deps.paths,
 		Sources: taskCtx.Sources,
 		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.SyncBackend, error) {
-			return invocationTaskBackend(deps, source)
+			return invocationTaskBackend[taskmodel.SyncBackend](deps, source)
 		},
-		RunStore: taskstate.NewStoreWithLogger(deps.paths, logger),
+		RunStore: deps.taskStateStore,
 		ConflictResolver: syncConflictAgentResolver{
 			paths:            deps.paths,
 			stdout:           command.OutOrStdout(),
@@ -3358,12 +3359,12 @@ func runTaskSyncAll(command *cobra.Command, opts *rootOptions) error {
 		Paths:   deps.paths,
 		Sources: taskCtx.Sources,
 		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.SyncBackend, error) {
-			return invocationTaskBackend(deps, source)
+			return invocationTaskBackend[taskmodel.SyncBackend](deps, source)
 		},
 		ScanFactory: func(source taskmodel.RepositorySource) (taskmodel.ReadBackend, error) {
-			return invocationTaskBackend(deps, source)
+			return invocationTaskBackend[taskmodel.ReadBackend](deps, source)
 		},
-		RunStore: taskstate.NewStoreWithLogger(deps.paths, logger),
+		RunStore: deps.taskStateStore,
 		ConflictResolver: syncConflictAgentResolver{
 			paths:            deps.paths,
 			stdout:           command.OutOrStdout(),
@@ -3549,7 +3550,7 @@ func taskEditUpdateService(deps *invocationDependencies, taskCtx taskContext) ta
 	return taskmodel.UpdateService{
 		Sources: taskCtx.Sources,
 		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.UpdateBackend, error) {
-			return invocationTaskBackend(deps, source)
+			return invocationTaskBackend[taskmodel.UpdateBackend](deps, source)
 		},
 	}
 }

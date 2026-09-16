@@ -98,10 +98,36 @@ type DispatchCommandContext struct {
 	SessionName string
 }
 
+// DispatchGit prepares repository-root and worktree execution targets.
+type DispatchGit interface {
+	SetupRepoRoot(context.Context, gitmeta.RepoRootOptions) (gitmeta.TaskWorktreeSetupResult, error)
+	SetupRepoRootTaskBranch(context.Context, gitmeta.TaskWorktreeOptions) (gitmeta.TaskWorktreeSetupResult, error)
+	SetupTaskWorktree(context.Context, gitmeta.TaskWorktreeOptions) (gitmeta.TaskWorktreeSetupResult, error)
+}
+
+// LocalDispatchGit prepares execution targets through the local Git adapter.
+type LocalDispatchGit struct{}
+
+// SetupRepoRoot prepares a repository-root default-branch target.
+func (LocalDispatchGit) SetupRepoRoot(ctx context.Context, opts gitmeta.RepoRootOptions) (gitmeta.TaskWorktreeSetupResult, error) {
+	return gitmeta.SetupRepoRoot(ctx, opts)
+}
+
+// SetupRepoRootTaskBranch prepares a repository-root task-branch target.
+func (LocalDispatchGit) SetupRepoRootTaskBranch(ctx context.Context, opts gitmeta.TaskWorktreeOptions) (gitmeta.TaskWorktreeSetupResult, error) {
+	return gitmeta.SetupRepoRootTaskBranch(ctx, opts)
+}
+
+// SetupTaskWorktree prepares a dedicated task worktree target.
+func (LocalDispatchGit) SetupTaskWorktree(ctx context.Context, opts gitmeta.TaskWorktreeOptions) (gitmeta.TaskWorktreeSetupResult, error) {
+	return gitmeta.SetupTaskWorktree(ctx, opts)
+}
+
 // DispatchService prepares task run targets and records dispatch state.
 type DispatchService struct {
 	Paths                 state.Paths
 	RunStore              DispatchRunStore
+	Git                   DispatchGit
 	Logger                *slog.Logger
 	UsageCaptureEnv       map[string]string
 	ResumeSessionsEnabled *bool
@@ -931,13 +957,17 @@ func (s DispatchService) setupTarget(
 	branch string,
 	allowDirty bool,
 ) (gitmeta.TaskWorktreeSetupResult, error) {
+	git := s.Git
+	if git == nil {
+		git = LocalDispatchGit{}
+	}
 	switch targetKind {
 	case tasktarget.TargetMainSolo:
-		return gitmeta.SetupRepoRoot(ctx, dispatchRepoRootOptions(opts.Source.Repository, allowDirty))
+		return git.SetupRepoRoot(ctx, dispatchRepoRootOptions(opts.Source.Repository, allowDirty))
 	case tasktarget.TargetRepoRootTeam:
-		return gitmeta.SetupRepoRootTaskBranch(ctx, dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, branch, allowDirty))
+		return git.SetupRepoRootTaskBranch(ctx, dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, branch, allowDirty))
 	case tasktarget.TargetWorktreeTeam:
-		return gitmeta.SetupTaskWorktree(ctx, dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, branch, false))
+		return git.SetupTaskWorktree(ctx, dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, branch, false))
 	default:
 		return gitmeta.TaskWorktreeSetupResult{}, fmt.Errorf("task %s has unsupported target %q", opts.TaskID, targetKind)
 	}

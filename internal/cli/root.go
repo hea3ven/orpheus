@@ -2,6 +2,7 @@ package cli
 
 import (
 	"log/slog"
+	"maps"
 
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/spf13/cobra"
@@ -13,6 +14,7 @@ type rootOptions struct {
 	verbose        bool
 	logger         *slog.Logger
 	invocationDeps *invocationDependencies
+	commandOptions CommandOptions
 }
 
 func (o *rootOptions) loggingConfig() logging.Config {
@@ -32,7 +34,20 @@ func (o *rootOptions) log() *slog.Logger {
 
 // NewRootCommand constructs the root Orpheus CLI command.
 func NewRootCommand() *cobra.Command {
-	return newRootCommand(&rootOptions{logger: logging.Discard()})
+	return NewRootCommandWithOptions(CommandOptions{})
+}
+
+// NewRootCommandWithOptions constructs the same command tree as NewRootCommand
+// with explicit invocation inputs and external collaborators. It copies the
+// environment map and Paths value; storage and collaborators remain shared.
+// Construct a fresh command for each invocation.
+func NewRootCommandWithOptions(options CommandOptions) *cobra.Command {
+	options.Environment = maps.Clone(options.Environment)
+	if options.Paths != nil {
+		paths := *options.Paths
+		options.Paths = &paths
+	}
+	return newRootCommand(&rootOptions{logger: logging.Discard(), commandOptions: options})
 }
 
 func newRootCommand(opts *rootOptions) *cobra.Command {

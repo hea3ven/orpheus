@@ -12,7 +12,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/registry"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
-	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/spf13/cobra"
 )
@@ -212,6 +211,9 @@ func (r taskReviewLifecycleAgentRunner) RunReviewLifecycleAgent(
 		Stdin:  r.command.InOrStdin(),
 		Stdout: r.command.OutOrStdout(),
 		Stderr: r.command.ErrOrStderr(),
+		OnStart: func(pid int) error {
+			return r.service.RecordChildPID(run.RepoID, run.TaskID, run.Start.Attempt.Attempt, pid)
+		},
 	}); err != nil {
 		return workflow.ReviewLifecycleAgentRunResult{}, err
 	}
@@ -257,20 +259,24 @@ func newTaskReviewLifecycleService(
 	reader *bufio.Reader,
 ) workflow.ReviewLifecycleService {
 	paths := deps.paths
-	store := taskstate.NewStoreWithLogger(paths, logger)
+	store := deps.taskStateStore
 	service := workflow.ReviewLifecycleService{
 		Paths:    paths,
 		Sources:  taskCtx.Sources,
 		RunStore: store,
 		BackendFactory: func(source taskmodel.RepositorySource) (workflow.ReviewLifecycleBackend, error) {
-			return invocationTaskBackend(deps, source)
+			return invocationTaskBackend[workflow.ReviewLifecycleBackend](deps, source)
 		},
 		PRProvider:            newInvocationGHProvider(deps, logger),
+		CandidateInspector:    deps.reviewCandidate,
+		DispatchGit:           deps.dispatchGit,
 		AgentLauncher:         deps.agentLauncher,
 		Environment:           environmentEntries(deps.environment),
 		UsageCaptureEnv:       deps.usageCaptureEnvironment(),
 		ResumeSessionsEnabled: boolPtr(deps.resumeSessionsEnabled()),
 		Logger:                logger,
+		ProcessProbe:          deps.processProbe,
+		PipelineRunner:        deps.reviewPipeline,
 		Frontend: &taskReviewLifecycleFrontend{
 			command: command,
 			logger:  logger,
@@ -284,14 +290,14 @@ func newTaskReviewLifecycleService(
 		ResumeSessionsEnabled: boolPtr(deps.resumeSessionsEnabled()),
 	}}
 	service.ResolveCommand = func(commandContext workflow.DispatchCommandContext, agentName string) (workflow.DispatchCommand, string, error) {
-		prompt, commandSnapshot, err := resolveTaskRunAgentCommand(paths, agentName, commandContext.SessionName)
+		prompt, commandSnapshot, err := resolveTaskRunAgentCommand(deps.paths, agentName, commandContext.SessionName)
 		if err != nil {
 			return workflow.DispatchCommand{}, "", err
 		}
 		return workflow.NewDispatchCommand(commandSnapshot), prompt, nil
 	}
 	service.ResolveFollowUpCommand = func(commandContext workflow.DispatchCommandContext, agentName string) (workflow.DispatchCommand, string, error) {
-		prompt, commandSnapshot, err := resolveTaskRunFollowUpAgentCommand(paths, agentName, commandContext.SessionName)
+		prompt, commandSnapshot, err := resolveTaskRunFollowUpAgentCommand(deps.paths, agentName, commandContext.SessionName)
 		if err != nil {
 			return workflow.DispatchCommand{}, "", err
 		}

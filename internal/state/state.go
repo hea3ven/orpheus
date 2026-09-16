@@ -49,12 +49,6 @@ func NewPaths(configRoot, dataRoot string) (Paths, error) {
 	return newPaths(configRoot, dataRoot, osBackend{})
 }
 
-// NewMemoryPaths validates already-resolved Orpheus roots and returns isolated,
-// in-process state. Paths copied from the returned value share that state.
-func NewMemoryPaths(configRoot, dataRoot string) (Paths, error) {
-	return newPaths(configRoot, dataRoot, newMemoryBackend())
-}
-
 func newPaths(configRoot, dataRoot string, storage backend) (Paths, error) {
 	if err := validateRoot("config root", configRoot); err != nil {
 		return Paths{}, err
@@ -136,6 +130,20 @@ func (p Paths) ReadConfigYAML(rel string, out any) error {
 		return err
 	}
 	return readYAML(p.backend, "config", rel, path, out)
+}
+
+// ListDataFiles returns sorted basenames of direct non-directory entries under
+// rel. A missing directory returns an error wrapping os.ErrNotExist.
+func (p Paths) ListDataFiles(rel string) ([]string, error) {
+	path, err := p.DataPath(rel)
+	if err != nil {
+		return nil, err
+	}
+	names, err := p.backend.listFiles(path)
+	if err != nil {
+		return nil, fmt.Errorf("list data files %q (%s): %w", rel, path, err)
+	}
+	return names, nil
 }
 
 // ReadDataYAML reads a YAML file under the Orpheus data root into out.
