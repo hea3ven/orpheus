@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -908,11 +907,7 @@ func (s Store) TaskIDs(repoID string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	dir, err := s.paths.DataPath(filepath.Join("repos", repoID, "tasks"))
-	if err != nil {
-		return nil, err
-	}
-	entries, err := os.ReadDir(dir)
+	entries, err := s.paths.ListDataFiles(filepath.Join("repos", repoID, "tasks"))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return []string{}, nil
@@ -922,16 +917,15 @@ func (s Store) TaskIDs(repoID string) ([]string, error) {
 
 	taskIDs := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
+		if filepath.Ext(entry) != ".yaml" {
 			continue
 		}
-		taskID := strings.TrimSuffix(entry.Name(), ".yaml")
+		taskID := strings.TrimSuffix(entry, ".yaml")
 		if _, err := cleanPathComponent("task id", taskID); err != nil {
 			continue
 		}
 		taskIDs = append(taskIDs, taskID)
 	}
-	sort.Strings(taskIDs)
 	return taskIDs, nil
 }
 

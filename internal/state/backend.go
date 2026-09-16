@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 )
 
 type backend interface {
 	readFile(path string) ([]byte, error)
+	listFiles(path string) ([]string, error)
 	makeParentDirs(path string, mode os.FileMode) error
 	replaceFile(path string, data []byte, mode os.FileMode) error
 	acquireLock(path string, directoryMode, fileMode os.FileMode) (func() error, error)
@@ -19,6 +19,21 @@ type osBackend struct{}
 
 func (osBackend) readFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
+}
+
+// listFiles returns sorted names of direct non-directory entries.
+func (osBackend) listFiles(path string) ([]string, error) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+	return names, nil
 }
 
 func (osBackend) makeParentDirs(path string, mode os.FileMode) error {
@@ -48,58 +63,5 @@ func (osBackend) acquireLock(path string, dirMode, lockMode os.FileMode) (func()
 			releaseErr = errors.Join(releaseErr, fmt.Errorf("remove global mutation lock %s: %w", path, err))
 		}
 		return releaseErr
-	}, nil
-}
-
-type memoryBackend struct {
-	mu    sync.Mutex
-	files map[string][]byte
-	locks map[string]struct{}
-}
-
-func newMemoryBackend() *memoryBackend {
-	return &memoryBackend{
-		files: make(map[string][]byte),
-		locks: make(map[string]struct{}),
-	}
-}
-
-func (b *memoryBackend) readFile(path string) ([]byte, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	data, ok := b.files[path]
-	if !ok {
-		return nil, &os.PathError{Op: "open", Path: path, Err: os.ErrNotExist}
-	}
-	return append([]byte(nil), data...), nil
-}
-
-func (*memoryBackend) makeParentDirs(string, os.FileMode) error {
-	return nil
-}
-
-func (b *memoryBackend) replaceFile(path string, data []byte, _ os.FileMode) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	b.files[path] = append([]byte(nil), data...)
-	return nil
-}
-
-func (b *memoryBackend) acquireLock(path string, _, _ os.FileMode) (func() error, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	if _, exists := b.locks[path]; exists {
-		return nil, &os.PathError{Op: "open", Path: path, Err: os.ErrExist}
-	}
-	b.locks[path] = struct{}{}
-
-	return func() error {
-		b.mu.Lock()
-		defer b.mu.Unlock()
-		delete(b.locks, path)
-		return nil
 	}, nil
 }

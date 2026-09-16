@@ -10,7 +10,6 @@ import (
 
 func TestMain(m *testing.M) {
 	code := m.Run()
-	cleanupLocalBeadsFixture()
 	cleanupCLIHelperFixture()
 	os.Exit(code)
 }

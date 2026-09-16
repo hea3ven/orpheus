@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/testutil"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type sampleState struct {
@@ -96,22 +98,12 @@ func TestResolveRejectsRelativeInputs(t *testing.T) {
 	}
 }
 
-func TestPathConstructorsRejectRelativeRoots(t *testing.T) {
-	constructors := map[string]func(string, string) (Paths, error){
-		"OS":     NewPaths,
-		"memory": NewMemoryPaths,
-	}
+func TestNewPathsRejectsRelativeRoots(t *testing.T) {
+	_, configErr := NewPaths("relative-config", "/fixture/data")
+	_, dataErr := NewPaths("/fixture/config", "relative-data")
 
-	for name, constructor := range constructors {
-		t.Run(name, func(t *testing.T) {
-			if _, err := constructor("relative-config", "/fixture/data"); err == nil {
-				t.Fatal("constructor accepted relative config root, want error")
-			}
-			if _, err := constructor("/fixture/config", "relative-data"); err == nil {
-				t.Fatal("constructor accepted relative data root, want error")
-			}
-		})
-	}
+	assert.Error(t, configErr)
+	assert.Error(t, dataErr)
 }
 
 func TestDataPathResolvesRelativePath(t *testing.T) {
@@ -401,6 +393,28 @@ func TestWithGlobalMutationLockFailsFastOnContention(t *testing.T) {
 	}
 }
 
+func TestListDataFilesReturnsSortedDirectFiles(t *testing.T) {
+	paths := newTestPaths(t)
+	for _, rel := range []string{"inventory/z.yaml", "inventory/a.yaml", "inventory/nested.yaml/child.yaml"} {
+		require.NoError(t, paths.WriteDataYAML(rel, sampleState{Name: rel}))
+	}
+
+	names, err := paths.ListDataFiles("inventory")
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a.yaml", "z.yaml"}, names)
+}
+
+func TestListDataFilesRejectsMissingDirectoriesAndPathTraversal(t *testing.T) {
+	paths := newTestPaths(t)
+
+	_, missingErr := paths.ListDataFiles("missing")
+	_, escapeErr := paths.ListDataFiles("../escape")
+
+	assert.ErrorIs(t, missingErr, os.ErrNotExist)
+	assert.Error(t, escapeErr)
+}
+
 type testPathsFixture struct {
 	paths      Paths
 	configRoot string
@@ -444,4 +458,12 @@ func assertSampleState(t *testing.T, got, want sampleState) {
 	if got.Name != want.Name || got.Count != want.Count || got.Labels["role"] != want.Labels["role"] {
 		t.Fatalf("state = %#v, want %#v", got, want)
 	}
+}
+
+func writeConfigYAML(paths Paths, rel string, value any) error {
+	path, err := paths.configPath(rel)
+	if err != nil {
+		return err
+	}
+	return writeYAML(paths.backend, "config", rel, path, value)
 }

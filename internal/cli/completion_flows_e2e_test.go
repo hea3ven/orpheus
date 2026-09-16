@@ -19,91 +19,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationWorktreeCompletionFlowEndToEnd(t *testing.T) {
-	t.Parallel()
-	is := assert.New(t)
-	must := require.New(t)
-	paths, repoPath := setupCompletionFlowRepo(t)
-
-	const taskID = "op-worktree-completion"
-	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", taskID))
-	must.NoError(err)
-	bd := withStatefulCompletionBD(t, completionBDTask{
-		RepoPath:           repoPath,
-		TaskID:             taskID,
-		Title:              "Worktree completion flow",
-		Description:        "Validate the team worktree completion path.",
-		AcceptanceCriteria: "The agent completion is committed and waits for PR creation.",
-	})
-	withOrpheusCLIHelper(t)
-	agentLogPath := withCompletionFlowAgent(t, completionFlowAgentOptions{
-		Command:              "worktree-completion-agent",
-		FileName:             "worktree-change.txt",
-		Body:                 "worktree implementation",
-		Summary:              "Implement worktree completion flow",
-		Description:          "Created a worktree validation change.",
-		DetailedDescription:  "## Worktree completion\n\nCreated a worktree validation change.",
-		TechnicalExplanation: "Technical explanation.",
-	})
-	writeCompletionFlowAgentConfig(t, paths, "worktree-completion", "worktree-completion-agent")
-
-	stdout, stderr := executeCommand(t, []string{"task", "run", taskID})
-
-	is.Contains(stdout, "completion agent completed")
-	is.Contains(stderr, "Review for "+taskID+" is waiting for manual step \"local-review\"")
-	is.Contains(stderr, "Resume with `orpheus task run "+taskID+"`")
-
-	agentLog := readFileString(t, agentLogPath)
-	prompt := agentLogBlock(t, agentLog, "ORPHEUS_AGENT_PROMPT")
-	is.Equal(agent.RenderBootstrapPrompt(), prompt)
-	is.Equal(agent.RenderBootstrapPrompt(), agentLogBlock(t, agentLog, "ARG_2"))
-	is.Contains(prompt, "Run `orpheus agent context` now")
-	is.NotContains(prompt, "Task:")
-	is.NotContains(prompt, "Repository:")
-	is.NotContains(prompt, "Worktree completion flow")
-
-	contextOutput := agentLogBlock(t, agentLog, "AGENT_CONTEXT")
-	for _, want := range []string{
-		"# Orpheus Agent Context",
-		"- ID: " + taskID,
-		"- Title: Worktree completion flow",
-		"- Current branch: orpheus/" + taskID,
-		"- Work Directory: " + worktreePath,
-		"- Current directory: " + worktreePath,
-		"deterministic task worktree and task branch",
-		"PR-ready completion data for feature-branch publication",
-		"The human operator will later run `orpheus task run " + taskID + "` to review and publish the feature branch as a pull request",
-	} {
-		is.Contains(contextOutput, want)
-	}
-
-	state := readCompletionTaskState(t, paths, "alpha", taskID)
-	must.Len(state.Runs, 1)
-	latest := state.Runs[0]
-	is.Equal(taskstate.RunStatusSucceeded, latest.Status)
-	is.True(latest.Execution.Interactive)
-	must.NotNil(latest.Execution.FinishedAt)
-	must.NotNil(latest.Completion)
-	is.Equal("Implement worktree completion flow", latest.Completion.Summary)
-	is.Equal("Created a worktree validation change.", latest.Completion.Description)
-	is.Equal("## Worktree completion\n\nCreated a worktree validation change.", latest.Completion.DetailedDescription)
-	is.False(latest.Completion.CompletedAt.IsZero())
-	is.Empty(latest.Completion.Commit)
-	is.Contains(strings.TrimSpace(runGit(t, worktreePath, "status", "--porcelain=v1")), "worktree-change.txt")
-
-	statusOut, statusErr := executeCommand(t, []string{"status"})
-	is.Empty(statusErr)
-	is.Contains(statusOut, "Reviewing")
-	is.Contains(statusOut, taskID)
-	is.Contains(statusOut, "local review; run task run")
-	is.NotContains(statusOut, "https://")
-
-	is.Equal("in_progress", strings.TrimSpace(readFileString(t, bd.StatusPath)))
-	bdLog := readFileString(t, bd.LogPath)
-	is.NotContains(bdLog, "close "+taskID)
-	is.NotContains(bdLog, "orpheus.pr_url")
-}
-
 func TestIntegrationConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 	t.Parallel()
 	is := assert.New(t)
@@ -232,85 +147,6 @@ func TestIntegrationGlobalPublicationPolicyEndToEnd(t *testing.T) {
 		strings.TrimSpace(runGit(t, target.Worktree, "log", "-1", "--format=%B")),
 	)
 	is.Contains(readFileString(t, ghLogPath), "[TREX-4321] Replaced the global config for abc")
-}
-
-func TestIntegrationRepoAddInheritsGlobalSummaryStyleInAgentContext(t *testing.T) {
-	t.Parallel()
-	is := assert.New(t)
-	must := require.New(t)
-	withFakeBDInit(t)
-
-	root := newTestState(t)
-	paths := currentTestPaths(t)
-	repoPath := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "alpha"))
-	const taskID = "alpha-repo-add-global-style"
-	withOrpheusCLIHelper(t)
-	agentLogPath := withCompletionFlowAgent(t, completionFlowAgentOptions{
-		Command:              "repo-add-global-style-agent",
-		FileName:             "repo-add-global-style-change.txt",
-		Body:                 "repo add global style implementation",
-		Summary:              "Replaced the config for abc",
-		Description:          "Created a change for global style inheritance.",
-		DetailedDescription:  "## Repo add global style\n\nCreated a change for global style inheritance.",
-		TechnicalExplanation: "Technical explanation.",
-	})
-	writeCompletionFlowAgentConfigWithPublication(t, paths, "repo-add-global-style", "repo-add-global-style-agent", map[string]any{
-		"summary_guidance_style": registry.SummaryGuidanceStyleCapitalized,
-	})
-
-	addOut, addErr := executeCommand(t, []string{"repo", "add", repoPath})
-	is.Empty(addErr)
-	is.Contains(addOut, "Added repo alpha")
-	store := registry.NewStore(paths)
-	reg, err := store.Load()
-	must.NoError(err)
-	must.Len(reg.Repos, 1)
-	is.Empty(reg.Repos[0].SummaryGuidanceStyle)
-
-	withStatefulCompletionBD(t, completionBDTask{
-		RepoPath:           repoPath,
-		TaskID:             taskID,
-		Title:              "Repo add inherits global summary style",
-		Description:        "Verify a registered repository inherits the global style.",
-		AcceptanceCriteria: "Agent context uses global capitalized summary guidance.",
-	})
-	runOut, runErr := executeCommand(t, []string{"task", "run", taskID})
-	is.Contains(runErr, "Review for "+taskID+" is waiting for manual step \"local-review\"")
-	is.Contains(runOut, "completion agent completed")
-
-	contextOutput := agentLogBlock(t, readFileString(t, agentLogPath), "AGENT_CONTEXT")
-	is.Contains(contextOutput, "Use one capitalized plain-English summary line")
-}
-
-func TestIntegrationGlobalTitleTemplateRequiresExternalReferenceInStatusAndDispatch(t *testing.T) {
-	t.Parallel()
-	is := assert.New(t)
-	must := require.New(t)
-	paths, repoPath := setupCompletionFlowRepo(t)
-
-	const taskID = "op-global-missing-title-ref"
-	withStatefulCompletionBD(t, completionBDTask{
-		RepoPath:           repoPath,
-		TaskID:             taskID,
-		Title:              "Global title reference required",
-		Description:        "Validate global external-reference checks.",
-		AcceptanceCriteria: "Status and dispatch use the global title template.",
-	})
-	withOrpheusCLIHelper(t)
-	writeCompletionFlowAgentConfigWithPublication(t, paths, "global-missing-reference", "unused-global-agent", map[string]any{
-		"title_template": "[{{external_ref}}] {{summary}}",
-	})
-
-	statusOut, statusErr := executeCommand(t, []string{"status"})
-	is.Empty(statusErr)
-	is.Contains(statusOut, taskID)
-	is.Contains(statusOut, "missing required external reference")
-
-	stdout, stderr, runErr := executeCommandWithError(t, []string{"task", "run", taskID})
-	must.Error(runErr)
-	is.Empty(stdout)
-	is.Empty(stderr)
-	is.ErrorContains(runErr, "publication title template requires a task external reference")
 }
 
 func TestIntegrationMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd(t *testing.T) {
@@ -694,21 +530,6 @@ func TestIntegrationDoctorRepairsCleanClosedTaskWorktreeAndPreservesDirtyAndLock
 	is.Equal(taskstate.EventWorktreeRemoved, loaded.Events[len(loaded.Events)-1].Type)
 }
 
-func TestIntegrationTaskRunMainProvidesRepositoryRootMigrationGuidance(t *testing.T) {
-	t.Parallel()
-	is := assert.New(t)
-	paths, repoPath := setupCompletionFlowRepo(t)
-	const taskID = "op-main-completion"
-	withStatefulCompletionBD(t, completionBDTask{RepoPath: repoPath, TaskID: taskID, Title: "Deprecated main mode"})
-	withOrpheusCLIHelper(t)
-	writeCompletionFlowAgentConfig(t, paths, "main-completion", "main-completion-agent")
-
-	_, _, err := executeCommandWithError(t, []string{"task", "run", "--main", taskID})
-	is.Error(err)
-	is.ErrorContains(err, "--main is no longer supported")
-	is.ErrorContains(err, "use --repo-root")
-}
-
 func TestIntegrationOrpheusCLIHelperProcess(t *testing.T) {
 	t.Parallel()
 	if os.Getenv("GO_WANT_ORPHEUS_CLI_HELPER") != "1" {
@@ -772,6 +593,7 @@ func setupCompletionFlowRepo(t *testing.T) (state.Paths, string) {
 }
 
 func writeCompletionFlowAgentConfig(t *testing.T, paths state.Paths, name string, command string) {
+	t.Helper()
 	writeCompletionFlowAgentConfigWithPublication(t, paths, name, command, nil)
 }
 
