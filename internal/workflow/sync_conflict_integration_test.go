@@ -45,7 +45,7 @@ func (s *integrationSyncConflictStore) UpdateSyncConflictOperation(
 	operationID string,
 	update func(*taskstate.SyncConflictOperation) error,
 ) (taskstate.SyncConflictOperation, error) {
-	state, err := s.Store.Load(repoID, taskID)
+	state, err := s.Load(repoID, taskID)
 	if err != nil {
 		return taskstate.SyncConflictOperation{}, err
 	}

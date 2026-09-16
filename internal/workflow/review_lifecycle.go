@@ -110,6 +110,24 @@ type ReviewLifecycleFrontend interface {
 	PromptFreshReviewBlockerDispositions(ReviewAttemptContext, []FreshReviewBlocker) ([]FreshReviewBlockerDisposition, error)
 }
 
+// ReviewCandidateInspector validates that a candidate is ready for read-only review.
+type ReviewCandidateInspector interface {
+	ValidateReviewCandidate(context.Context, ReviewLifecycleStore, ReviewAttemptContext, string) error
+}
+
+// LocalReviewCandidateInspector validates candidates through the local Git adapter.
+type LocalReviewCandidateInspector struct{}
+
+// ValidateReviewCandidate checks staged and candidate changes in the local checkout.
+func (LocalReviewCandidateInspector) ValidateReviewCandidate(
+	ctx context.Context,
+	store ReviewLifecycleStore,
+	reviewCtx ReviewAttemptContext,
+	workdir string,
+) error {
+	return ValidateReviewCandidateReady(ctx, store, reviewCtx, workdir)
+}
+
 // ReviewLifecycleService owns complete task-review lifecycle orchestration.
 type ReviewLifecycleService struct {
 	Paths                  state.Paths
@@ -117,6 +135,8 @@ type ReviewLifecycleService struct {
 	BackendFactory         ReviewLifecycleBackendFactory
 	RunStore               ReviewLifecycleStore
 	PRProvider             pullrequest.Provider
+	CandidateInspector     ReviewCandidateInspector
+	DispatchGit            DispatchGit
 	AgentRunner            ReviewLifecycleAgentRunner
 	AgentLauncher          agentexec.Launcher
 	Environment            []string
@@ -952,7 +972,7 @@ func (s ReviewLifecycleService) validateReviewCandidate(
 	}
 	base.Target = target
 	base.Workdir = target.Worktree
-	if err := ValidateReviewCandidateReady(ctx, s.RunStore, base, target.Worktree); err != nil {
+	if err := s.inspectReviewCandidate(ctx, base, target.Worktree); err != nil {
 		return ReviewAttemptContext{}, fmt.Errorf("task run %s: %w", base.TaskID(), err)
 	}
 	return base, nil
@@ -1499,6 +1519,14 @@ func ValidateTaskMetadataMirror(taskItem task.Task, targets tasktarget.ExpectedT
 	return fmt.Errorf("task %s metadata target %q/%q does not mirror taskstate target %q/%q", taskItem.ID, metadataTarget.Branch, metadataTarget.Worktree, target.Branch, target.Worktree)
 }
 
+func (s ReviewLifecycleService) inspectReviewCandidate(ctx context.Context, reviewCtx ReviewAttemptContext, workdir string) error {
+	inspector := s.CandidateInspector
+	if inspector == nil {
+		inspector = LocalReviewCandidateInspector{}
+	}
+	return inspector.ValidateReviewCandidate(ctx, s.RunStore, reviewCtx, workdir)
+}
+
 // ValidateReviewCandidateReady ensures there is a read-only candidate to review.
 func ValidateReviewCandidateReady(ctx context.Context, store ReviewLifecycleStore, reviewCtx ReviewAttemptContext, workdir string) error {
 	if err := RequireCleanReviewIndex(ctx, workdir); err != nil {
@@ -1595,6 +1623,7 @@ func (s ReviewLifecycleService) dispatchAutonomousReviewFollowUp(
 	dispatch := DispatchService{
 		Paths:                 current.paths,
 		RunStore:              current.store,
+		Git:                   s.DispatchGit,
 		Logger:                s.Logger,
 		UsageCaptureEnv:       s.UsageCaptureEnv,
 		ResumeSessionsEnabled: s.ResumeSessionsEnabled,
@@ -1701,7 +1730,7 @@ func (s ReviewLifecycleService) startFreshAutonomousReview(ctx context.Context, 
 	}
 	previous.Target = target
 	previous.Workdir = target.Worktree
-	if err := ValidateReviewCandidateReady(ctx, previous.store, previous, target.Worktree); err != nil {
+	if err := s.inspectReviewCandidate(ctx, previous, target.Worktree); err != nil {
 		return ReviewAttemptContext{}, fmt.Errorf("task run %s: %w", previous.TaskID(), err)
 	}
 	return s.startFreshReview(previous, previous.Pipeline)

@@ -506,6 +506,7 @@ func newAgentCompletionService(deps *invocationDependencies, taskCtx taskContext
 		Paths:    deps.paths,
 		Resolver: activeAgentContextResolver(deps, taskCtx, store),
 		RunStore: store,
+		Git:      deps.agentGit,
 		Logger:   deps.logger,
 	}
 }
@@ -620,5 +621,6 @@ func activeAgentContextResolver(
 		},
 		RunStore: runStore,
 		Env:      deps.environment,
+		CWD:      deps.agentCWD,
 	}
 }

@@ -24,8 +24,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type testRepoOption func(*testRepoConfig)
-
 type testRepoConfig struct {
 	withRemote bool
 }
@@ -206,41 +204,6 @@ func cleanupCLIHelperFixture() {
 	orpheusCLIHelperPath = ""
 }
 
-func withoutRemote() testRepoOption {
-	return func(config *testRepoConfig) {
-		config.withRemote = false
-	}
-}
-
-func newTestRepoPath(t *testing.T, opts ...testRepoOption) string {
-	t.Helper()
-
-	root := newTestState(t)
-
-	config := testRepoConfig{withRemote: true}
-	for _, opt := range opts {
-		opt(&config)
-	}
-
-	return newTestRepoAt(t, root, filepath.Join("repos", "alpha"), config)
-}
-
-func newTestRepoAt(t *testing.T, root string, relativePath string, config testRepoConfig) string {
-	t.Helper()
-	must := require.New(t)
-
-	repoPath := filepath.Join(root, relativePath)
-	must.NoError(os.MkdirAll(repoPath, 0o755))
-	initGitRepo(t, repoPath)
-	if config.withRemote {
-		name := filepath.Base(repoPath)
-		runGit(t, repoPath, "remote", "add", "origin", "git@example.com:org/"+name+".git")
-		runGit(t, repoPath, "update-ref", "refs/remotes/origin/main", "HEAD")
-		runGit(t, repoPath, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
-	}
-	return repoPath
-}
-
 func newSeededTestRepoAt(t *testing.T, root string, relativePath string, config testRepoConfig) string {
 	t.Helper()
 	requireCLIHelperFixture(t)
@@ -364,22 +327,6 @@ func prependTestPath(t *testing.T, directory string) {
 
 	fixture := testInvocationFor(t)
 	fixture.environment["PATH"] = directory + string(os.PathListSeparator) + fixture.environment["PATH"]
-}
-
-func configureTestGitUser(t *testing.T, repoPath string) {
-	t.Helper()
-
-	runGit(t, repoPath, "config", "user.name", "Orpheus Test")
-	runGit(t, repoPath, "config", "user.email", "orpheus@example.com")
-}
-
-func initGitRepo(t *testing.T, repoPath string) {
-	t.Helper()
-
-	runGit(t, repoPath, "init")
-	runGit(t, repoPath, "checkout", "-b", "main")
-	configureTestGitUser(t, repoPath)
-	runGit(t, repoPath, "commit", "--allow-empty", "-m", "initial")
 }
 
 func runGit(t *testing.T, dir string, args ...string) string {
@@ -553,28 +500,8 @@ func TestIntegrationSeededLocalOriginRepositoriesAreIndependent(t *testing.T) {
 	require.Equal(t, "main\n", runGit(t, secondRepo, "branch", "--show-current"))
 }
 
-func withFakeBDInit(t *testing.T) string {
+func currentTestPaths(t *testing.T) state.Paths {
 	t.Helper()
 
-	binDir := testutil.CanonicalTempDir(t)
-	logPath := filepath.Join(binDir, "bd.log")
-	script := `#!/bin/sh
-if [ -n "${FAKE_BD_LOCK_PATH-}" ] && [ ! -f "$FAKE_BD_LOCK_PATH" ]; then
-  printf 'missing lock: %s\n' "$FAKE_BD_LOCK_PATH" >&2
-  exit 43
-fi
-{
-  pwd
-  printf '%s\n' "$@"
-  printf 'BD_NON_INTERACTIVE=%s\n' "${BD_NON_INTERACTIVE-unset}"
-  printf 'BEADS_DIR=%s\n' "${BEADS_DIR-unset}"
-} >> "$FAKE_BD_LOG"
-`
-	bdPath := filepath.Join(binDir, "bd")
-	if err := writeTestExecutable(bdPath, []byte(script)); err != nil {
-		t.Fatalf("write fake bd: %v", err)
-	}
-	setTestEnvironment(t, "FAKE_BD_LOG", logPath)
-	prependTestPath(t, binDir)
-	return logPath
+	return testInvocationFor(t).paths
 }

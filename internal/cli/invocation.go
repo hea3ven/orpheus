@@ -15,9 +15,11 @@ import (
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/registry"
+	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/spf13/cobra"
 )
 
@@ -32,15 +34,22 @@ type invocationDependencies struct {
 	taskStateStore     taskstate.Store
 	environment        map[string]string
 	agentLauncher      agentexec.Launcher
+	dispatchGit        workflow.DispatchGit
+	agentGit           agent.GitStateReader
+	reviewCandidate    workflow.ReviewCandidateInspector
+	reviewPipeline     func(review.PipelineRunOptions) (review.PipelineOutcome, error)
+	processProbe       workflow.ProcessProbe
+	agentCWD           string
+	captureUsage       func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions
 }
 
-func newInvocationDependencies(command *cobra.Command, logger *slog.Logger) (*invocationDependencies, error) {
+func newInvocationDependencies(command *cobra.Command, logger *slog.Logger, options CommandOptions) (*invocationDependencies, error) {
 	ctx := command.Context()
 	span := logging.Start(ctx, logger, "xdg path resolution",
 		slog.String("component", "state"),
 		slog.String("operation", "resolve_paths"),
 	)
-	paths, err := state.ResolveFromEnvironment()
+	paths, err := options.resolvePaths()
 	if err != nil {
 		span.FinishError(ctx, err)
 		return nil, err
@@ -52,7 +61,14 @@ func newInvocationDependencies(command *cobra.Command, logger *slog.Logger) (*in
 		slog.String("xdg_data_home", resolvedEnvironment["XDG_DATA_HOME"]),
 	)
 
-	return newInvocationDependenciesWithPaths(paths, logger, invocationEnvironmentSnapshot()), nil
+	environment := options.Environment
+	if environment == nil {
+		environment = invocationEnvironmentSnapshot()
+	}
+	deps := newInvocationDependenciesWithPaths(paths, logger, environment)
+	deps.agentCWD = options.AgentWorkingDirectory
+	options.Dependencies.applyTo(deps)
+	return deps, nil
 }
 
 func newInvocationDependenciesWithPaths(paths state.Paths, logger *slog.Logger, environment map[string]string) *invocationDependencies {
@@ -62,11 +78,17 @@ func newInvocationDependenciesWithPaths(paths state.Paths, logger *slog.Logger, 
 	}
 	paths.PropagateEnvironment(environment)
 	deps := &invocationDependencies{
-		paths:         paths,
-		logger:        logger,
-		registryStore: registry.NewStoreWithLogger(paths, logger),
-		environment:   environment,
-		agentLauncher: agentexec.AttachedLauncher{Environment: environmentEntries(environment)},
+		paths:           paths,
+		logger:          logger,
+		registryStore:   registry.NewStoreWithLogger(paths, logger),
+		environment:     environment,
+		agentLauncher:   agentexec.AttachedLauncher{Environment: environmentEntries(environment)},
+		dispatchGit:     workflow.LocalDispatchGit{},
+		agentGit:        agent.LocalGitState{},
+		reviewCandidate: workflow.LocalReviewCandidateInspector{},
+		reviewPipeline:  review.RunPipeline,
+		processProbe:    agentexec.ProbePID,
+		captureUsage:    agent.CaptureUsage,
 	}
 	deps.taskBackendFactory = func(source taskmodel.RepositorySource) (taskmodel.ReadBackend, error) {
 		return beads.NewTaskBackendForSourceWithRunner(source, beads.CommandRunner{
@@ -170,7 +192,7 @@ func (o *rootOptions) invocation(command *cobra.Command) (*invocationDependencie
 	if o.invocationDeps != nil {
 		return o.invocationDeps, nil
 	}
-	deps, err := newInvocationDependencies(command, o.log())
+	deps, err := newInvocationDependencies(command, o.log(), o.commandOptions)
 	if err != nil {
 		return nil, err
 	}
