@@ -122,7 +122,7 @@ separate contracts, not claims made by the semantic fakes:
 | Hunk polling/import and confirmed/manual-command process protocol | Retained Hunk and manual-command scenarios in `task_test.go` and `internal/review` |
 | Compiled command packaging with recursive agent commands | `TestIntegrationTaskRunUsesSeparateTaskProposalSelection` |
 | Codex/Pi session usage capture | Retained `TaskReviewAgentReviewStepCapturesCodexUsage` and `TaskReviewAgentReviewStepCapturesPiUsage` integration tests |
-| Task adapter translation | `TestTaskBackendCreateCreatesStandaloneTask`, `TestTaskBackendCreatePassesGraphAndOptionalFields`, `TestTaskBackendSetPRURLWritesMetadata`, `TestTaskBackendCloseClosesOpenTask`; real Beads creation remains in `TestIntegrationTaskBackendCreateRecordsBlockingDependencies` |
+| Task adapter translation | `TestTaskBackendCreateCreatesStandaloneTask`, `TestTaskBackendCreatePassesGraphAndOptionalFields`, `TestTaskBackendSetPRURLWritesMetadata`, `TestTaskBackendCloseClosesOpenTask`; real Beads creation remains in `TestIntegrationBeadsRelationshipContracts/TaskBackendCreateRecordsBlockingDependencies` |
 
 ## Measurements
 

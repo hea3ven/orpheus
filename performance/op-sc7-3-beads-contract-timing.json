@@ -1,0 +1,263 @@
+{
+  "baseline_commit": "cde958b94ffa808df43b95734351e93143214085",
+  "go": "go1.27.1-X:nodwarf5 linux/amd64",
+  "beads": "1.2.2 (6c124203e)",
+  "dolt": "2.3.4",
+  "timing_method": "Three alternating before/after compiled-binary runs, no wrappers or compilation in wall time. Separate PATH-wrapper subprocess traces capture bd, git and dolt invocations, not arbitrary execs.",
+  "before": {
+    "pattern": "^TestIntegration(UpdateService|TaskBackendCreateRecordsBlockingDependencies|ManagedTaskBackendRepairsRealBeadsSchemaDrift)",
+    "wall_seconds": [
+      34.133309,
+      34.970906,
+      33.889396
+    ],
+    "median_seconds": 34.133309,
+    "program_counts": {
+      "git": 387,
+      "bd": 51,
+      "dolt": 5
+    },
+    "bd_operation_counts": {
+      "create": 13,
+      "dep": 5,
+      "init": 6,
+      "list": 2,
+      "show": 25
+    },
+    "git_operation_counts": {
+      "-C": 63,
+      "add": 12,
+      "commit": 6,
+      "config": 90,
+      "init": 6,
+      "remote": 69,
+      "rev-parse": 141
+    },
+    "initialization_trace": [
+      {
+        "program": "git",
+        "args": [
+          "init"
+        ],
+        "seconds": 0.003158,
+        "exit_code": 0,
+        "workspace": "relationship-1"
+      },
+      {
+        "program": "bd",
+        "args": [
+          "init",
+          "--prefix",
+          "it",
+          "--non-interactive",
+          "--skip-agents",
+          "--skip-hooks",
+          "--quiet"
+        ],
+        "seconds": 3.773133,
+        "exit_code": 0,
+        "workspace": "relationship-1"
+      },
+      {
+        "program": "git",
+        "args": [
+          "init"
+        ],
+        "seconds": 0.005599,
+        "exit_code": 0,
+        "workspace": "relationship-2"
+      },
+      {
+        "program": "bd",
+        "args": [
+          "init",
+          "--prefix",
+          "it",
+          "--non-interactive",
+          "--skip-agents",
+          "--skip-hooks",
+          "--quiet"
+        ],
+        "seconds": 3.784049,
+        "exit_code": 0,
+        "workspace": "relationship-2"
+      },
+      {
+        "program": "git",
+        "args": [
+          "init"
+        ],
+        "seconds": 0.003313,
+        "exit_code": 0,
+        "workspace": "relationship-3"
+      },
+      {
+        "program": "bd",
+        "args": [
+          "init",
+          "--prefix",
+          "it",
+          "--non-interactive",
+          "--skip-agents",
+          "--skip-hooks",
+          "--quiet"
+        ],
+        "seconds": 3.728133,
+        "exit_code": 0,
+        "workspace": "relationship-3"
+      },
+      {
+        "program": "git",
+        "args": [
+          "init"
+        ],
+        "seconds": 0.006005,
+        "exit_code": 0,
+        "workspace": "relationship-4"
+      },
+      {
+        "program": "bd",
+        "args": [
+          "init",
+          "--prefix",
+          "it",
+          "--non-interactive",
+          "--skip-agents",
+          "--skip-hooks",
+          "--quiet"
+        ],
+        "seconds": 3.683517,
+        "exit_code": 0,
+        "workspace": "relationship-4"
+      },
+      {
+        "program": "git",
+        "args": [
+          "init"
+        ],
+        "seconds": 0.003143,
+        "exit_code": 0,
+        "workspace": "relationship-5"
+      },
+      {
+        "program": "bd",
+        "args": [
+          "init",
+          "--prefix",
+          "it",
+          "--non-interactive",
+          "--skip-agents",
+          "--skip-hooks",
+          "--quiet"
+        ],
+        "seconds": 3.74461,
+        "exit_code": 0,
+        "workspace": "relationship-5"
+      },
+      {
+        "program": "git",
+        "args": [
+          "init"
+        ],
+        "seconds": 0.006137,
+        "exit_code": 0,
+        "workspace": "schema-repair"
+      },
+      {
+        "program": "bd",
+        "args": [
+          "init",
+          "--prefix",
+          "it",
+          "--non-interactive",
+          "--skip-agents",
+          "--skip-hooks",
+          "--quiet"
+        ],
+        "seconds": 3.74664,
+        "exit_code": 0,
+        "workspace": "schema-repair"
+      }
+    ]
+  },
+  "after": {
+    "pattern": "^TestIntegration(BeadsRelationshipContracts|ManagedTaskBackendRepairsRealBeadsSchemaDrift)$",
+    "wall_seconds": [
+      21.147179,
+      19.649057,
+      21.136101
+    ],
+    "median_seconds": 21.136101,
+    "program_counts": {
+      "git": 259,
+      "bd": 47,
+      "dolt": 5
+    },
+    "bd_operation_counts": {
+      "create": 13,
+      "dep": 5,
+      "init": 2,
+      "list": 2,
+      "show": 25
+    },
+    "git_operation_counts": {
+      "-C": 51,
+      "add": 4,
+      "commit": 2,
+      "config": 70,
+      "init": 2,
+      "remote": 53,
+      "rev-parse": 77
+    },
+    "initialization_trace": [
+      {
+        "program": "git",
+        "args": [
+          "init"
+        ],
+        "seconds": 0.002797,
+        "exit_code": 0,
+        "workspace": "relationship-1"
+      },
+      {
+        "program": "bd",
+        "args": [
+          "init",
+          "--prefix",
+          "it",
+          "--non-interactive",
+          "--skip-agents",
+          "--skip-hooks",
+          "--quiet"
+        ],
+        "seconds": 4.49515,
+        "exit_code": 0,
+        "workspace": "relationship-1"
+      },
+      {
+        "program": "git",
+        "args": [
+          "init"
+        ],
+        "seconds": 0.00268,
+        "exit_code": 0,
+        "workspace": "schema-repair"
+      },
+      {
+        "program": "bd",
+        "args": [
+          "init",
+          "--prefix",
+          "it",
+          "--non-interactive",
+          "--skip-agents",
+          "--skip-hooks",
+          "--quiet"
+        ],
+        "seconds": 4.188385,
+        "exit_code": 0,
+        "workspace": "schema-repair"
+      }
+    ]
+  }
+}
