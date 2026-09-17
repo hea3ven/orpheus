@@ -179,16 +179,25 @@ func (g *memoryPublicationGit) ValidateRecordedDirectMerge(_ context.Context, _ 
 }
 
 type memoryPublicationPR struct {
-	url         string
-	existing    *pullrequest.CreateRequest
-	created     []pullrequest.CreateRequest
-	createError error
-	state       pullrequest.State
-	statusReads int
+	url            string
+	existing       *pullrequest.CreateRequest
+	created        []pullrequest.CreateRequest
+	createError    error
+	state          pullrequest.State
+	statusReads    int
+	findReads      int
+	findError      error
+	statusError    error
+	statuses       map[string]pullrequest.State
+	statusRequests []pullrequest.StatusByURLRequest
 }
 
 func (p *memoryPublicationPR) FindOpenByBranch(_ context.Context, req pullrequest.FindOpenByBranchRequest) (pullrequest.PullRequest, bool, error) {
-	if p.existing != nil && p.existing.RepositoryPath == req.RepositoryPath && p.existing.HeadBranch == req.HeadBranch && p.existing.BaseBranch == req.BaseBranch {
+	p.findReads++
+	if p.findError != nil {
+		return pullrequest.PullRequest{}, false, p.findError
+	}
+	if p.state != pullrequest.StateClosed && p.state != pullrequest.StateMerged && p.existing != nil && p.existing.RepositoryPath == req.RepositoryPath && p.existing.HeadBranch == req.HeadBranch && p.existing.BaseBranch == req.BaseBranch {
 		return pullrequest.PullRequest{URL: p.url}, true, nil
 	}
 	return pullrequest.PullRequest{}, false, nil
@@ -205,9 +214,16 @@ func (p *memoryPublicationPR) Create(_ context.Context, req pullrequest.CreateRe
 	return pullrequest.PullRequest{URL: p.url}, nil
 }
 func (p *memoryPublicationPR) StatusByURL(_ context.Context, req pullrequest.StatusByURLRequest) (pullrequest.PullRequestStatus, error) {
+	p.statusRequests = append(p.statusRequests, req)
+	p.statusReads++
+	if p.statusError != nil {
+		return pullrequest.PullRequestStatus{}, p.statusError
+	}
+	if state, ok := p.statuses[req.URL]; ok {
+		return pullrequest.PullRequestStatus{URL: req.URL, State: state}, nil
+	}
 	if req.URL != p.url || p.state == "" {
 		return pullrequest.PullRequestStatus{}, errors.New("unexpected PR status lookup")
 	}
-	p.statusReads++
 	return pullrequest.PullRequestStatus{URL: p.url, State: p.state}, nil
 }

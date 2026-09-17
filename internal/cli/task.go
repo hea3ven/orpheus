@@ -3324,6 +3324,7 @@ func runTaskSync(command *cobra.Command, opts *rootOptions, taskID string) error
 			stderr:           command.ErrOrStderr(),
 			launcher:         deps.agentLauncher,
 			usageEnvironment: deps.usageCaptureEnvironment(),
+			captureUsage:     deps.captureUsage,
 		},
 		PRProvider: newInvocationGHProvider(deps, logger),
 		Logger:     logger,
@@ -3381,6 +3382,7 @@ func runTaskSyncAll(command *cobra.Command, opts *rootOptions) error {
 			stderr:           command.ErrOrStderr(),
 			launcher:         deps.agentLauncher,
 			usageEnvironment: deps.usageCaptureEnvironment(),
+			captureUsage:     deps.captureUsage,
 		},
 		PRProvider: newInvocationGHProvider(deps, logger),
 		Logger:     logger,
@@ -3599,6 +3601,7 @@ type syncConflictAgentResolver struct {
 	stderr           io.Writer
 	launcher         agentexec.Launcher
 	usageEnvironment map[string]string
+	captureUsage     func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions
 }
 
 func (r syncConflictAgentResolver) PrepareSyncConflictResolution(
@@ -3652,18 +3655,14 @@ func (r syncConflictAgentResolver) PrepareSyncConflictResolution(
 				OnStart: opts.RecordChildPID,
 			})
 		},
-		CaptureUsage: syncConflictAgentUsageOptions(commandSnapshot, opts.Worktree, r.usageEnvironment),
+		CaptureUsage: r.usageOptions(commandSnapshot, opts.Worktree),
 	}, nil
 }
 
-func syncConflictAgentUsageOptions(
-	command agent.CommandSnapshot,
-	worktree string,
-	environments ...map[string]string,
-) func(taskstate.AgentExecution, error) taskstate.RecordRunUsageOptions {
-	var environment map[string]string
-	if len(environments) > 0 {
-		environment = environments[0]
+func (r syncConflictAgentResolver) usageOptions(command agent.CommandSnapshot, worktree string) func(taskstate.AgentExecution, error) taskstate.RecordRunUsageOptions {
+	capture := r.captureUsage
+	if capture == nil {
+		capture = agent.CaptureUsage
 	}
 	return func(execution taskstate.AgentExecution, runErr error) taskstate.RecordRunUsageOptions {
 		if agentexec.IsStartError(runErr) {
@@ -3674,12 +3673,12 @@ func syncConflictAgentUsageOptions(
 				},
 			}
 		}
-		return agent.CaptureUsage(agent.UsageCaptureOptions{
+		return capture(agent.UsageCaptureOptions{
 			Harness:      command.Harness,
 			ExecutionDir: worktree,
 			SessionName:  execution.SessionName,
 			StartedAt:    execution.StartedAt,
-			Env:          environment,
+			Env:          r.usageEnvironment,
 		})
 	}
 }

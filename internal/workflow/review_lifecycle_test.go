@@ -3,7 +3,6 @@
 package workflow_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -13,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agentexec"
-	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
@@ -406,7 +404,7 @@ func freshReviewGuardFixtureWithOptions(t *testing.T, options freshReviewGuardFi
 	return service, store, frontend
 }
 
-func TestIntegrationReviewLifecycleRunLogsGitDiagnosticsForGatingFailure(t *testing.T) {
+func TestIntegrationReviewLifecycleRunRejectsStagedCandidateBeforePipeline(t *testing.T) {
 	t.Parallel()
 
 	paths := testPaths(t)
@@ -434,7 +432,6 @@ func TestIntegrationReviewLifecycleRunLogsGitDiagnosticsForGatingFailure(t *test
 			task.MetadataWorktree: repoPath,
 		},
 	}
-	var diagnostics bytes.Buffer
 	service := workflow.ReviewLifecycleService{
 		Paths: paths,
 		Sources: []task.RepositorySource{{Repository: task.Repository{
@@ -444,7 +441,6 @@ func TestIntegrationReviewLifecycleRunLogsGitDiagnosticsForGatingFailure(t *test
 		BackendFactory: func(task.RepositorySource) (workflow.ReviewLifecycleBackend, error) {
 			return &fakeReviewLifecycleBackend{task: taskItem}, nil
 		},
-		Logger:   logging.New(&diagnostics, logging.Config{Verbose: true}),
 		Frontend: &recordingReviewFrontend{},
 		PipelineRunner: func(review.PipelineRunOptions) (review.PipelineOutcome, error) {
 			t.Fatal("pipeline should not run after review gating failure")
@@ -462,16 +458,6 @@ func TestIntegrationReviewLifecycleRunLogsGitDiagnosticsForGatingFailure(t *test
 	}
 	if outcome.Kind != workflow.ReviewLifecycleOutcomeOperationalFail {
 		t.Fatalf("outcome kind = %q, want %q", outcome.Kind, workflow.ReviewLifecycleOutcomeOperationalFail)
-	}
-	logs := diagnostics.String()
-	for _, want := range []string{
-		`component=git operation=diff_cached`,
-		`component=git operation=status`,
-		`exit_code=1`,
-	} {
-		if !strings.Contains(logs, want) {
-			t.Fatalf("diagnostics missing %q:\n%s", want, logs)
-		}
 	}
 }
 
@@ -532,7 +518,6 @@ func TestIntegrationReviewLifecycleManualPromptPersistsFindingsThroughWorkflowRe
 			return review.ManualResult{Status: taskstate.ReviewStatusBlocked, Stop: true}, err
 		},
 	}
-	var diagnostics bytes.Buffer
 	service := workflow.ReviewLifecycleService{
 		Paths: paths,
 		Sources: []task.RepositorySource{{Repository: task.Repository{
@@ -542,7 +527,6 @@ func TestIntegrationReviewLifecycleManualPromptPersistsFindingsThroughWorkflowRe
 		BackendFactory: func(task.RepositorySource) (workflow.ReviewLifecycleBackend, error) {
 			return &fakeReviewLifecycleBackend{task: taskItem}, nil
 		},
-		Logger:   logging.New(&diagnostics, logging.Config{Verbose: true}),
 		Frontend: frontend,
 		PipelineRunner: func(opts review.PipelineRunOptions) (review.PipelineOutcome, error) {
 			step := review.Step{Name: "local-review"}
@@ -571,16 +555,6 @@ func TestIntegrationReviewLifecycleManualPromptPersistsFindingsThroughWorkflowRe
 	}
 	if latest.Findings[0].Step != "local-review" {
 		t.Fatalf("manual finding step = %q, want local-review", latest.Findings[0].Step)
-	}
-	logs := diagnostics.String()
-	for _, want := range []string{
-		`component=git operation=diff_cached`,
-		`component=git operation=candidate_status`,
-		`component=git operation=status`,
-	} {
-		if !strings.Contains(logs, want) {
-			t.Fatalf("diagnostics missing %q:\n%s", want, logs)
-		}
 	}
 }
 

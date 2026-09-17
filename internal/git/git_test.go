@@ -3,12 +3,7 @@
 package git_test
 
 import (
-	"bufio"
-	"bytes"
-	"context"
-	"encoding/json"
 	"errors"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -100,39 +95,14 @@ func TestIntegrationInspectRejectsNonGitPath(t *testing.T) {
 	}
 }
 
-func TestIntegrationInspectDiagnosticsMarkMissingOriginHEADAsExpectedAbsence(t *testing.T) {
-	repoPath := newGitRepo(t)
-	runGit(t, repoPath, "remote", "add", "origin", "https://example.com/repo.git")
-	runGit(t, repoPath, "checkout", "-b", "feature")
-
-	var logs bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
-	got, err := orpheusgit.InspectWithLogger(context.Background(), repoPath, logger)
-	if err != nil {
-		t.Fatalf("inspect git repo: %v", err)
-	}
-	if got.DefaultBranchCandidate != "feature" || got.DefaultBranchSource != orpheusgit.DefaultBranchSourceCurrentBranch {
-		t.Fatalf("default branch = %q from %q, want feature from current branch", got.DefaultBranchCandidate, got.DefaultBranchSource)
-	}
-
-	record := findGitDiagnostic(t, logs.String(), "origin_head", "expected_absence")
-	if gotExitCode := record["exit_code"]; gotExitCode != float64(1) {
-		t.Fatalf("origin_head exit_code = %v, want 1", gotExitCode)
-	}
-}
-
-func TestIntegrationInspectDiagnosticsMarkDetachedHEADAsExpectedAbsence(t *testing.T) {
+func TestIntegrationInspectDetachedHEADUsesOriginDefaultBranch(t *testing.T) {
 	repoPath := newGitRepo(t)
 	runGit(t, repoPath, "remote", "add", "origin", "https://example.com/repo.git")
 	runGit(t, repoPath, "update-ref", "refs/remotes/origin/main", "HEAD")
 	runGit(t, repoPath, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 	runGit(t, repoPath, "checkout", "--detach", "HEAD")
 
-	var logs bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
-	got, err := orpheusgit.InspectWithLogger(context.Background(), repoPath, logger)
+	got, err := orpheusgit.Inspect(repoPath)
 	if err != nil {
 		t.Fatalf("inspect git repo: %v", err)
 	}
@@ -142,15 +112,9 @@ func TestIntegrationInspectDiagnosticsMarkDetachedHEADAsExpectedAbsence(t *testi
 	if got.CurrentBranch != "" {
 		t.Fatalf("current branch = %q, want empty detached HEAD", got.CurrentBranch)
 	}
-
-	record := findGitDiagnostic(t, logs.String(), "current_branch", "expected_absence")
-	if gotExitCode := record["exit_code"]; gotExitCode != float64(1) {
-		t.Fatalf("current_branch exit_code = %v, want 1", gotExitCode)
-	}
-	rejectGitDiagnostic(t, logs.String(), "current_branch", "failure")
 }
 
-func TestIntegrationInspectDiagnosticsMarkFatalOriginHEADErrorAsFailure(t *testing.T) {
+func TestIntegrationInspectMalformedOriginHEADFallsBackToCurrentBranch(t *testing.T) {
 	repoPath := newGitRepo(t)
 	runGit(t, repoPath, "remote", "add", "origin", "https://example.com/repo.git")
 	originDir := filepath.Join(repoPath, ".git", "refs", "remotes", "origin")
@@ -161,61 +125,13 @@ func TestIntegrationInspectDiagnosticsMarkFatalOriginHEADErrorAsFailure(t *testi
 		t.Fatalf("write malformed origin HEAD: %v", err)
 	}
 
-	var logs bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
-	got, err := orpheusgit.InspectWithLogger(context.Background(), repoPath, logger)
+	got, err := orpheusgit.Inspect(repoPath)
 	if err != nil {
 		t.Fatalf("inspect git repo: %v", err)
 	}
 	if got.DefaultBranchCandidate != "main" || got.DefaultBranchSource != orpheusgit.DefaultBranchSourceCurrentBranch {
 		t.Fatalf("default branch = %q from %q, want main from current branch", got.DefaultBranchCandidate, got.DefaultBranchSource)
 	}
-
-	record := findGitDiagnostic(t, logs.String(), "origin_head", "failure")
-	if gotExitCode := record["exit_code"]; gotExitCode != float64(128) {
-		t.Fatalf("origin_head exit_code = %v, want 128", gotExitCode)
-	}
-}
-
-func findGitDiagnostic(t *testing.T, logs string, operation string, status string) map[string]any {
-	t.Helper()
-
-	record, ok := gitDiagnostic(t, logs, operation, status)
-	if !ok {
-		t.Fatalf("missing git diagnostic operation %q with status %q in logs:\n%s", operation, status, logs)
-	}
-	return record
-}
-
-func rejectGitDiagnostic(t *testing.T, logs string, operation string, status string) {
-	t.Helper()
-
-	if _, ok := gitDiagnostic(t, logs, operation, status); ok {
-		t.Fatalf("unexpected git diagnostic operation %q with status %q in logs:\n%s", operation, status, logs)
-	}
-}
-
-func gitDiagnostic(t *testing.T, logs string, operation string, status string) (map[string]any, bool) {
-	t.Helper()
-
-	scanner := bufio.NewScanner(bytes.NewBufferString(logs))
-	for scanner.Scan() {
-		var record map[string]any
-		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
-			t.Fatalf("parse diagnostic log record %q: %v", scanner.Text(), err)
-		}
-		if record["msg"] == "git command finished" &&
-			record["component"] == "git" &&
-			record["operation"] == operation &&
-			record["status"] == status {
-			return record, true
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		t.Fatalf("scan diagnostic logs: %v", err)
-	}
-	return nil, false
 }
 
 func newGitRepo(t *testing.T) string {

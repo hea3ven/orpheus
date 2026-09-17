@@ -68,7 +68,6 @@ type repoWorkflowFixture struct {
 	gitErrors            map[string]error
 	localBeads           map[string]localBeadsResult
 	initialize           func(string, string) error
-	diagnosticAttrs      []slog.Attr
 }
 
 func newRepoWorkflowFixture(t *testing.T, repos ...gitRepositoryFixture) *repoWorkflowFixture {
@@ -99,18 +98,16 @@ func withRepoDiscovery(base *workflowFixture, repos ...gitRepositoryFixture) *re
 		}
 		return result, nil
 	}
-	f.options.Dependencies.InspectLocalBeads = func(path string, attrs ...slog.Attr) (beads.LocalInspection, error) {
+	f.options.Dependencies.InspectLocalBeads = func(path string, _ ...slog.Attr) (beads.LocalInspection, error) {
 		f.beadsInspections = append(f.beadsInspections, path)
-		f.diagnosticAttrs = append(f.diagnosticAttrs, attrs...)
 		result, ok := f.localBeads[path]
 		if !ok {
 			return beads.LocalInspection{}, fmt.Errorf("local Beads inspection needs an explicit outcome for %s", path)
 		}
 		return result.inspection, result.err
 	}
-	f.options.Dependencies.InitializeBeads = func(path, prefix string, attrs ...slog.Attr) error {
+	f.options.Dependencies.InitializeBeads = func(path, prefix string, _ ...slog.Attr) error {
 		f.beadsInitializations = append(f.beadsInitializations, beadsInitialization{dir: path, prefix: prefix})
-		f.diagnosticAttrs = append(f.diagnosticAttrs, attrs...)
 		if f.initialize != nil {
 			return f.initialize(path, prefix)
 		}

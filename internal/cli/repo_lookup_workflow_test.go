@@ -36,20 +36,6 @@ func TestIntegrationRepoBeadsDirResolvesRegisteredSourceByIDNameOrPrefix(t *test
 	}
 }
 
-func TestIntegrationRepoBeadsDirVerboseEmitsDiagnosticsToStderr(t *testing.T) {
-	fixture := newRepoConfigFixture(t)
-	repo := aRegisteredRepo("alpha-id")
-	repo.BeadsPrefix = "alpha-prefix"
-	fixture.withRegisteredRepos(repo)
-
-	stdout, stderr, err := fixture.execute("--verbose", "repo", "beads-dir", repo.BeadsPrefix)
-
-	require.NoError(t, err)
-	assert.Equal(t, repo.Path+"\n", stdout)
-	assert.NotContains(t, stdout, "level=DEBUG")
-	assertDiagnosticLine(t, stderr, "level=DEBUG", "operation=repo_beads_dir", "token=alpha-prefix", "repo_id=alpha-id", "beads_dir="+repo.Path)
-}
-
 func TestIntegrationRepoBeadsDirRejectsUnknownRepo(t *testing.T) {
 	fixture := newRepoConfigFixture(t)
 

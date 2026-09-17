@@ -541,36 +541,3 @@ func TestIntegrationAgentContextFailsBeforeRenderingWhenRunIsStale(t *testing.T)
 	is.Contains(err.Error(), "latest Orpheus run attempt 1")
 	is.NotContains(err.Error(), "# Orpheus Agent Context")
 }
-func setupAgentDoneWorktreeRun(t *testing.T) string {
-	t.Helper()
-
-	must := require.New(t)
-	root := newTestState(t)
-	paths := currentTestPaths(t)
-	repoPath := newSeededTestRepoAt(t, root, filepath.Join("repos", "alpha"), testRepoConfig{withRemote: true})
-	registerAgentTestRepo(t, repoPath)
-	worktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-1"))
-	must.NoError(err)
-	runGit(t, repoPath, "branch", "orpheus/op-1", "main")
-	runGit(t, repoPath, "worktree", "add", worktreePath, "orpheus/op-1")
-	t.Chdir(worktreePath)
-	withFakeBDTaskResponses(t, map[string]fakeBDTaskResponse{
-		repoPath: {stdout: agentDoneWorktreeTaskJSON(worktreePath)},
-	})
-	startAgentTestRun(t, "op-1", "orpheus/op-1", worktreePath, true)
-	setAgentRunEnv(t, "op-1", "orpheus/op-1", worktreePath)
-	return worktreePath
-}
-
-func agentDoneWorktreeTaskJSON(worktreePath string) string {
-	return `[
-		{
-			"id":"op-1",
-			"title":"Complete worktree run",
-			"status":"in_progress",
-			"priority":2,
-			"issue_type":"task",
-			"metadata":{"orpheus.branch":"orpheus/op-1","orpheus.worktree":"` + worktreePath + `"}
-		}
-	]`
-}

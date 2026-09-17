@@ -55,7 +55,7 @@ type Dependencies struct {
 	ReviewCandidate    workflow.ReviewCandidateInspector
 	ReviewPipeline     func(review.PipelineRunOptions) (review.PipelineOutcome, error)
 	ProcessProbe       workflow.ProcessProbe
-	// CaptureUsage reads session usage after implementation and repair dispatch.
+	// CaptureUsage reads session usage after implementation, review repair, and sync conflict resolution.
 	CaptureUsage func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions
 }
 

@@ -1,0 +1,39 @@
+{
+  "names": [
+    "TestIntegrationTaskSyncPollsExistingPRURLWithoutPushOrMutation",
+    "TestIntegrationTaskSyncRecordsConflictResolutionUsageTelemetry",
+    "TestIntegrationTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR",
+    "TestIntegrationTaskSyncExistingPRErrorsDoNotMutateBackendOrAudit",
+    "TestIntegrationTaskSyncSkipsClosedTaskWithoutPRPolling",
+    "TestIntegrationTaskSyncSkipsTaskWithoutPRURLAtRepoRoot",
+    "TestIntegrationTaskSyncSkipsMainSoloLocalReadyTaskWithoutPRURL",
+    "TestIntegrationTaskSyncAllPollsPRBoundaryTasks",
+    "TestIntegrationTaskSyncAllReturnsNonZeroAfterCandidateError",
+    "TestIntegrationTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAfterFailures"
+  ],
+  "before_seconds": [
+    0.9809108259796631,
+    0.9571225889958441,
+    0.9233135870017577
+  ],
+  "after_seconds": [
+    0.070382392994361,
+    0.06301378301577643,
+    0.06626224398496561
+  ],
+  "before_descendant_exec_pids": 295,
+  "before_git_exec_pids": 186,
+  "after_descendant_exec_pids": 0,
+  "after_git_exec_pids": 0,
+  "added_git_contract_seconds": [
+    1.3684569470060524,
+    1.3347036849881988,
+    1.3960284299973864
+  ],
+  "added_pr_contract_seconds": [
+    0.10152794700115919,
+    0.10267446699435823,
+    0.1033536060131155
+  ],
+  "expanded_workflow_exec_trace": "TRACE descendant_exec_pids=0 git_exec_pids=0 exit=0"
+}
