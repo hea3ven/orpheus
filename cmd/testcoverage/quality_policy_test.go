@@ -238,6 +238,7 @@ func TestAggregatePolicySamplesUsesFiveTimingMedians(t *testing.T) {
 		for _, laneName := range laneNames {
 			lane := samples[index].Lanes[laneName]
 			lane.SelectedTestSeconds = seconds
+			lane.WallSeconds = seconds / 4
 			lane.Timings[0].Seconds = seconds / 2
 			samples[index].Lanes[laneName] = lane
 		}
@@ -252,8 +253,8 @@ func TestAggregatePolicySamplesUsesFiveTimingMedians(t *testing.T) {
 	}
 	for _, laneName := range laneNames {
 		lane := got.Lanes[laneName]
-		if lane.SelectedTestSeconds != 3 || lane.Timings[0].Seconds != 1.5 {
-			t.Fatalf("%s timing medians = suite %v, package %#v", laneName, lane.SelectedTestSeconds, lane.Timings)
+		if lane.SelectedTestSeconds != 3 || lane.WallSeconds != 0.75 || lane.Timings[0].Seconds != 1.5 {
+			t.Fatalf("%s timing medians = work %v, wall %v, package %#v", laneName, lane.SelectedTestSeconds, lane.WallSeconds, lane.Timings)
 		}
 	}
 }

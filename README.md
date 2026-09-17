@@ -87,8 +87,13 @@ Add-Content -LiteralPath $PROFILE 'orpheus completion powershell | Out-String | 
 
 `.quality.yml` contains the reviewed coverage floors and timing ceilings for the
 unit and integration lanes. `make quality` reads this file without changing it.
-It writes the current report and failure evidence under
-`artifacts/test-coverage/`.
+It runs the lanes in sequence, with independent packages concurrent within each
+lane. It retains `-parallel=1` so tests within a package stay serialized pending
+final isolation work. Reports separate command wall time, the developer's wait,
+from selected package work, the sum of elapsed times for packages that ran tests.
+Only selected work and package timings govern timing policy; wall time is
+diagnostic and can be less than overlapping package work. The current report
+and failure evidence are written under `artifacts/test-coverage/`.
 
 Run `make quality-policy-update` when the report returns
 `policy_update_required`, reports a stale timing warning, or when a reviewed

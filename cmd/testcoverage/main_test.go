@@ -128,9 +128,9 @@ func TestPrintReportShowsPackageCoverageAndSelectedTestTiming(t *testing.T) {
 	printReportTo(&output, report, "report.json")
 	contents := output.String()
 	for _, want := range []string{
-		"unit: 10/15 statements (66.67%), 10 test events, 0.25s selected tests (1.00s wall)",
+		"unit: 10/15 statements (66.67%), 10 test events, 0.25s selected package work, 1.00s command wall time",
 		"example.test/timed: 8/10 statements (80.00%), 0.25s",
-		"example.test/not-timed: 2/5 statements (40.00%), no selected-test timing",
+		"example.test/not-timed: 2/5 statements (40.00%), no selected package work",
 	} {
 		if !strings.Contains(contents, want) {
 			t.Fatalf("report does not contain %q:\n%s", want, contents)
@@ -170,7 +170,7 @@ func TestReportSummaryUsesTablesAndCollapsesPackageDetails(t *testing.T) {
 	for _, want := range []string{
 		"> [!CAUTION]",
 		"**Coverage floor violated.**",
-		"| Lane | Result | Coverage | Test events | Selected-test time | Wall time |",
+		"| Lane | Result | Coverage | Test events | Selected package work | Command wall time |",
 		"| unit | **Pass** | 10/15 (66.67%) | 10 | 0.50s | 1.00s |",
 		"### Blocking issues",
 		"unit/repository",
@@ -219,12 +219,19 @@ func TestFailuresFromEventsPreservesDecodedAssertionOutput(t *testing.T) {
 	}
 }
 
-func TestCoverageCommandUsesOneCrossPackageCoverageExecution(t *testing.T) {
-	command := strings.Join(coverageCommand("integration", "result.cover", ""), " ")
-	for _, want := range []string{"-count=1", "-coverpkg=./...", "-covermode=set", "-tags=integration", "-run ^TestIntegration"} {
-		if !strings.Contains(command, want) {
-			t.Fatalf("command %q does not contain %q", command, want)
-		}
+func TestCoverageCommandsAllowConcurrentPackagesButSerializeTests(t *testing.T) {
+	for _, lane := range laneNames {
+		t.Run(lane, func(t *testing.T) {
+			command := strings.Join(coverageCommand(lane, "result.cover", ""), " ")
+			want := "go test -json -count=1 -parallel=1 -covermode=set -coverpkg=./... -coverprofile=result.cover"
+			if lane == "integration" {
+				want += " -tags=integration -run ^TestIntegration"
+			}
+			want += " ./..."
+			if command != want {
+				t.Fatalf("command = %q, want %q", command, want)
+			}
+		})
 	}
 }
 

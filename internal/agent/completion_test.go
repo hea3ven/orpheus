@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agent"
+	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/workflow"
@@ -101,6 +102,20 @@ func TestChildPIDPersistenceAndImmediateCompletionPreserveBothFacts(t *testing.T
 	must.True(ok)
 	must.Equal(456, latest.Execution.ChildPID)
 	must.NotNil(latest.Completion)
+}
+
+func TestCompletionServiceCancelsWhileMutationLockIsHeld(t *testing.T) {
+	fixture := newActiveContextFixture(t, "op-main")
+	completion := agent.CompletionService{Paths: fixture.paths, RunStore: fixture.store}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := state.WithGlobalMutationLock(fixture.paths, "hold completion lock", func() error {
+		_, err := completion.Complete(ctx, agent.CompleteOptions{})
+		return err
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestCompletionServiceCompletesMainRun(t *testing.T) {
