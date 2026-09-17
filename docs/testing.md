@@ -69,6 +69,22 @@ Real commits, pushed refs, upstream tracking, and failed pushes have focused Git
 contracts. See [finalization and publication migration evidence](../performance/op-sc7-6-finalization-evidence.md)
 for the assertion map, contract owners, and before/after measurements.
 
+## Real Beads relationship contracts
+
+`TestIntegrationBeadsRelationshipContracts` shares one initialized workspace
+across independent cases. Each case creates and checks its own task IDs, with
+subtest-prefixed titles and no whole-database assertions. Cases run serially in
+map iteration order. The destructive schema-repair contract owns a separate
+workspace. Keep environment sanitization and command translation in their
+focused contracts rather than adding more database initializations.
+
+See [the Beads contract measurements](../performance/op-sc7-3-beads-contract-evidence.md)
+for the assertion map, timings and subprocess counts. To run one case alone:
+
+```bash
+go test -tags=integration ./internal/beads -run '^TestIntegrationBeadsRelationshipContracts$/^TaskBackendCreateRecordsBlockingDependencies$'
+```
+
 ## Structural membership
 
 Integration source files use `//go:build integration`, and their top-level test bodies begin with `TestIntegration`. Untagged test bodies whose names do not have that prefix are unit tests. `internal/testlane` validates this convention so every top-level body is selected by exactly one lane. The build constraint is the membership mechanism; the integration name filter only limits execution to structurally tagged integration bodies.
