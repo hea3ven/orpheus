@@ -45,14 +45,14 @@ lanes:
         github.com/hea3ven/orpheus/internal/testguard: 77.245
         github.com/hea3ven/orpheus/internal/testlane: 0
         github.com/hea3ven/orpheus/internal/testutil: 76.571
-        github.com/hea3ven/orpheus/internal/workflow: 68.191
+        github.com/hea3ven/orpheus/internal/workflow: 70.696
     timing:
-      ceiling_seconds: 84.214
+      ceiling_seconds: 62.151
       packages:
         github.com/hea3ven/orpheus/cmd/testcoverage: 0.589
         github.com/hea3ven/orpheus/internal/agentexec: 0.644
         github.com/hea3ven/orpheus/internal/beads: 42.452
-        github.com/hea3ven/orpheus/internal/cli: 23.105
+        github.com/hea3ven/orpheus/internal/cli: 11.054
         github.com/hea3ven/orpheus/internal/doctor: 0.658
         github.com/hea3ven/orpheus/internal/git: 5.178
         github.com/hea3ven/orpheus/internal/pullrequest: 0.431
