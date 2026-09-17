@@ -29,7 +29,10 @@ type CommandOptions struct {
 	// AgentWorkingDirectory overrides current-directory discovery for agent commands.
 	// Empty uses the process working directory.
 	AgentWorkingDirectory string
-	Dependencies          Dependencies
+	// TaskWorkingDirectory overrides current-directory discovery for task done inference.
+	// Empty uses the process working directory.
+	TaskWorkingDirectory string
+	Dependencies         Dependencies
 }
 
 // Dependencies supplies external effects used by CLI workflows. Nil fields use
@@ -37,6 +40,8 @@ type CommandOptions struct {
 // valid for the lifetime of commands constructed with them.
 type Dependencies struct {
 	PRProvider         pullrequest.Provider
+	SyncGit            workflow.SyncGit
+	CleanupGit         workflow.ClosedTaskWorktreeGit
 	ReviewEffects      review.Effects
 	ReviewStatus       func(context.Context, string) (string, error)
 	FinalizationGit    workflow.FinalizationGit
@@ -66,6 +71,8 @@ func (o CommandOptions) resolvePaths() (state.Paths, error) {
 
 func (d Dependencies) applyTo(invocation *invocationDependencies) {
 	invocation.prProvider = d.PRProvider
+	invocation.syncGit = d.SyncGit
+	invocation.cleanupGit = d.CleanupGit
 	invocation.reviewEffects = d.ReviewEffects
 	invocation.reviewStatus = d.ReviewStatus
 	invocation.finalizationGit = d.FinalizationGit

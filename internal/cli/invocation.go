@@ -26,6 +26,8 @@ import (
 
 type invocationDependencies struct {
 	prProvider         pullrequest.Provider
+	syncGit            workflow.SyncGit
+	cleanupGit         workflow.ClosedTaskWorktreeGit
 	reviewEffects      review.Effects
 	reviewStatus       func(context.Context, string) (string, error)
 	finalizationGit    workflow.FinalizationGit
@@ -45,6 +47,7 @@ type invocationDependencies struct {
 	reviewPipeline     func(review.PipelineRunOptions) (review.PipelineOutcome, error)
 	processProbe       workflow.ProcessProbe
 	agentCWD           string
+	taskCWD            string
 	captureUsage       func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions
 }
 
@@ -72,6 +75,7 @@ func newInvocationDependencies(command *cobra.Command, logger *slog.Logger, opti
 	}
 	deps := newInvocationDependenciesWithPaths(paths, logger, environment)
 	deps.agentCWD = options.AgentWorkingDirectory
+	deps.taskCWD = options.TaskWorkingDirectory
 	options.Dependencies.applyTo(deps)
 	return deps, nil
 }

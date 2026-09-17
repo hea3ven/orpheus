@@ -62,6 +62,13 @@ streaming, cancellation, PID, environment and Git snapshot contracts separate.
 See [review and repair migration evidence](../performance/op-sc7-5-review-workflow-evidence.md)
 for the assertion map and measurements.
 
+Completion and publication journeys also use the memory-backed application.
+They assert operator output, completion and finalization facts, task closure,
+PR content, and retry outcomes through semantic task, Git, and PR collaborators.
+Real commits, pushed refs, upstream tracking, and failed pushes have focused Git
+contracts. See [finalization and publication migration evidence](../performance/op-sc7-6-finalization-evidence.md)
+for the assertion map, contract owners, and before/after measurements.
+
 ## Real Beads relationship contracts
 
 `TestIntegrationBeadsRelationshipContracts` shares one initialized workspace
