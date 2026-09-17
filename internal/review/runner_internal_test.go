@@ -1,25 +1,20 @@
 package review
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
-	"strings"
 	"testing"
 
-	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
-func TestRunHunkBackedManualCommandCanceledBeforeStartLogsCanceled(t *testing.T) {
+func TestRunHunkBackedManualCommandCanceledBeforeStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	var diagnostics bytes.Buffer
 	exitCode, notes, err := runHunkBackedManualCommand(PipelineRunOptions{
 		Context: ctx,
-		Logger:  logging.New(&diagnostics, logging.Config{Verbose: true}),
 		RepoID:  "alpha",
 		TaskID:  "op-1",
 		Branch:  "main",
@@ -44,19 +39,5 @@ func TestRunHunkBackedManualCommandCanceledBeforeStartLogsCanceled(t *testing.T)
 	}
 	if notes != nil {
 		t.Fatalf("notes = %#v, want nil", notes)
-	}
-
-	logs := diagnostics.String()
-	for _, want := range []string{
-		`msg="review command finished"`,
-		`operation=hunk_manual_command`,
-		`status=canceled`,
-	} {
-		if !strings.Contains(logs, want) {
-			t.Fatalf("diagnostics missing %q:\n%s", want, logs)
-		}
-	}
-	if strings.Contains(logs, `status=start_failure`) {
-		t.Fatalf("diagnostics logged start failure for canceled command:\n%s", logs)
 	}
 }

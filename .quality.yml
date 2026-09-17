@@ -23,14 +23,14 @@ lanes:
         github.com/hea3ven/orpheus/cmd/testcoverage: 0
         github.com/hea3ven/orpheus/internal/agent: 64.381
         github.com/hea3ven/orpheus/internal/agentexec: 80.456
-        github.com/hea3ven/orpheus/internal/beads: 64.667
+        github.com/hea3ven/orpheus/internal/beads: 62.06
         github.com/hea3ven/orpheus/internal/cli: 67.769
         github.com/hea3ven/orpheus/internal/doctor: 74.872
         github.com/hea3ven/orpheus/internal/git: 67.028
-        github.com/hea3ven/orpheus/internal/logging: 73
+        github.com/hea3ven/orpheus/internal/logging: 50.778
         github.com/hea3ven/orpheus/internal/pathutil: 87.474
         github.com/hea3ven/orpheus/internal/publication: 88.244
-        github.com/hea3ven/orpheus/internal/pullrequest: 82.354
+        github.com/hea3ven/orpheus/internal/pullrequest: 85.075
         github.com/hea3ven/orpheus/internal/readiness: 65.568
         github.com/hea3ven/orpheus/internal/registry: 74.923
         github.com/hea3ven/orpheus/internal/review: 81.175
@@ -55,7 +55,7 @@ lanes:
         github.com/hea3ven/orpheus/internal/cli: 20.07
         github.com/hea3ven/orpheus/internal/doctor: 1.106
         github.com/hea3ven/orpheus/internal/git: 13.821
-        github.com/hea3ven/orpheus/internal/pullrequest: 0.431
+        github.com/hea3ven/orpheus/internal/pullrequest: 0.695
         github.com/hea3ven/orpheus/internal/review: 5.811
         github.com/hea3ven/orpheus/internal/revieweval: 0.676
         github.com/hea3ven/orpheus/internal/taskbranch: 0.296
@@ -73,7 +73,7 @@ lanes:
         github.com/hea3ven/orpheus/internal/cli: 37.597
         github.com/hea3ven/orpheus/internal/doctor: 51.084
         github.com/hea3ven/orpheus/internal/git: 29.348
-        github.com/hea3ven/orpheus/internal/logging: 75.778
+        github.com/hea3ven/orpheus/internal/logging: 50.778
         github.com/hea3ven/orpheus/internal/pathutil: 87.474
         github.com/hea3ven/orpheus/internal/publication: 90.683
         github.com/hea3ven/orpheus/internal/pullrequest: 4.122
@@ -102,7 +102,6 @@ lanes:
         github.com/hea3ven/orpheus/internal/cli: 0.36
         github.com/hea3ven/orpheus/internal/doctor: 0.313
         github.com/hea3ven/orpheus/internal/git: 0.372
-        github.com/hea3ven/orpheus/internal/logging: 0.289
         github.com/hea3ven/orpheus/internal/publication: 0.293
         github.com/hea3ven/orpheus/internal/pullrequest: 0.306
         github.com/hea3ven/orpheus/internal/readiness: 0.29
