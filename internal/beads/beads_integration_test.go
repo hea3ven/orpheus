@@ -14,35 +14,11 @@ import (
 	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
-func TestIntegrationUpdateServiceRejectsRealBeadsParentDescendantCycle(t *testing.T) {
-	binary, err := exec.LookPath("bd")
-	if err != nil {
-		t.Skip("bd executable is required for Beads integration test")
-	}
-
-	dir := testutil.CanonicalTempDir(t)
-	t.Setenv("BEADS_DIR", "")
-	initCommand := exec.Command(binary, "init", "--prefix", "it", "--non-interactive", "--skip-agents", "--skip-hooks", "--quiet")
-	initCommand.Dir = dir
-	if output, err := initCommand.CombinedOutput(); err != nil {
-		t.Fatalf("initialize Beads workspace: %v\n%s", err, output)
-	}
-
-	backend, err := beads.NewTaskBackendWithRunner(dir, beads.CommandRunner{Binary: binary})
+func TestIntegrationBeadsRelationshipContracts(t *testing.T) {
+	dir, runner := initializeBeadsWorkspace(t)
+	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
 	if err != nil {
 		t.Fatalf("create backend: %v", err)
-	}
-	parent, err := backend.Create(context.Background(), task.CreateOptions{
-		Title: "Parent epic", Description: "Parent description.", AcceptanceCriteria: "Parent exists.", IssueType: task.IssueTypeEpic,
-	})
-	if err != nil {
-		t.Fatalf("create parent: %v", err)
-	}
-	child, err := backend.Create(context.Background(), task.CreateOptions{
-		Title: "Child epic", Description: "Child description.", AcceptanceCriteria: "Child exists.", IssueType: task.IssueTypeEpic, ParentID: parent.ID,
-	})
-	if err != nil {
-		t.Fatalf("create child: %v", err)
 	}
 
 	source := task.RepositorySource{Repository: task.Repository{ID: "integration", TaskIDPrefix: "it", Path: dir}, BackendDir: dir}
@@ -50,12 +26,49 @@ func TestIntegrationUpdateServiceRejectsRealBeadsParentDescendantCycle(t *testin
 		Sources:        []task.RepositorySource{source},
 		BackendFactory: func(task.RepositorySource) (task.UpdateBackend, error) { return backend, nil },
 	}
-	_, err = service.Update(context.Background(), source, task.UpdateOptions{ID: parent.ID, ParentID: &child.ID})
+
+	fixture := beadsRelationshipFixture{backend: backend, runner: runner, source: source, service: service}
+	// Cases own disjoint task IDs and assert only their own graph. Map iteration
+	// varies their order; keep them serial to avoid concurrent database writers.
+	for name, run := range map[string]func(*testing.T, beadsRelationshipFixture){
+		"UpdateServiceRejectsRealBeadsParentDescendantCycle":             checkParentDescendantCycle,
+		"UpdateServiceSupportsCrossTypeBlockingDependencies":             checkCrossTypeBlockingDependencies,
+		"UpdateServiceDoesNotRemoveRelatedDependency":                    checkRelatedDependencyPreserved,
+		"UpdateServiceRejectsNonBlockingDependencyBeforeContentMutation": checkRejectionBeforeContentMutation,
+		"TaskBackendCreateRecordsBlockingDependencies":                   checkCreateWithBlockingDependencies,
+	} {
+		t.Run(name, func(t *testing.T) { run(t, fixture) })
+	}
+}
+
+type beadsRelationshipFixture struct {
+	backend beads.TaskBackend
+	runner  beads.CommandRunner
+	source  task.RepositorySource
+	service task.UpdateService
+}
+
+func checkParentDescendantCycle(t *testing.T, fixture beadsRelationshipFixture) {
+	t.Helper()
+	parent, err := fixture.backend.Create(context.Background(), task.CreateOptions{
+		Title: t.Name() + "/Parent epic", Description: "Parent description.", AcceptanceCriteria: "Parent exists.", IssueType: task.IssueTypeEpic,
+	})
+	if err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+	child, err := fixture.backend.Create(context.Background(), task.CreateOptions{
+		Title: t.Name() + "/Child epic", Description: "Child description.", AcceptanceCriteria: "Child exists.", IssueType: task.IssueTypeEpic, ParentID: parent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+
+	_, err = fixture.service.Update(context.Background(), fixture.source, task.UpdateOptions{ID: parent.ID, ParentID: &child.ID})
 	if err == nil {
 		t.Fatal("Update() succeeded, want parent-child cycle rejection")
 	}
 
-	unchanged, err := backend.Get(context.Background(), parent.ID)
+	unchanged, err := fixture.backend.Get(context.Background(), parent.ID)
 	if err != nil {
 		t.Fatalf("inspect parent after rejected update: %v", err)
 	}
@@ -64,28 +77,12 @@ func TestIntegrationUpdateServiceRejectsRealBeadsParentDescendantCycle(t *testin
 	}
 }
 
-func TestIntegrationUpdateServiceSupportsCrossTypeBlockingDependencies(t *testing.T) {
-	binary, err := exec.LookPath("bd")
-	if err != nil {
-		t.Skip("bd executable is required for Beads integration test")
-	}
-
-	dir := testutil.CanonicalTempDir(t)
-	t.Setenv("BEADS_DIR", "")
-	initCommand := exec.Command(binary, "init", "--prefix", "it", "--non-interactive", "--skip-agents", "--skip-hooks", "--quiet")
-	initCommand.Dir = dir
-	if output, err := initCommand.CombinedOutput(); err != nil {
-		t.Fatalf("initialize Beads workspace: %v\n%s", err, output)
-	}
-
-	backend, err := beads.NewTaskBackendWithRunner(dir, beads.CommandRunner{Binary: binary})
-	if err != nil {
-		t.Fatalf("create backend: %v", err)
-	}
+func checkCrossTypeBlockingDependencies(t *testing.T, fixture beadsRelationshipFixture) {
+	t.Helper()
 	create := func(title string, issueType task.IssueType) task.Task {
 		t.Helper()
-		created, err := backend.Create(context.Background(), task.CreateOptions{
-			Title: title, Description: title + " description.", AcceptanceCriteria: title + " exists.", IssueType: issueType,
+		created, err := fixture.backend.Create(context.Background(), task.CreateOptions{
+			Title: t.Name() + "/" + title, Description: title + " description.", AcceptanceCriteria: title + " exists.", IssueType: issueType,
 		})
 		if err != nil {
 			t.Fatalf("create %s: %v", title, err)
@@ -97,11 +94,6 @@ func TestIntegrationUpdateServiceSupportsCrossTypeBlockingDependencies(t *testin
 	epicToTask := create("Epic depending on task", task.IssueTypeEpic)
 	taskTarget := create("Task dependency", task.IssueTypeTask)
 
-	source := task.RepositorySource{Repository: task.Repository{ID: "integration", TaskIDPrefix: "it", Path: dir}, BackendDir: dir}
-	service := task.UpdateService{
-		Sources:        []task.RepositorySource{source},
-		BackendFactory: func(task.RepositorySource) (task.UpdateBackend, error) { return backend, nil },
-	}
 	for _, test := range []struct {
 		name       string
 		itemID     string
@@ -111,7 +103,7 @@ func TestIntegrationUpdateServiceSupportsCrossTypeBlockingDependencies(t *testin
 		{"epic to task", epicToTask.ID, taskTarget.ID},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			updated, err := service.Update(context.Background(), source, task.UpdateOptions{
+			updated, err := fixture.service.Update(context.Background(), fixture.source, task.UpdateOptions{
 				ID: test.itemID, AddBlockingIDs: []string{test.dependency},
 			})
 			if err != nil {
@@ -124,28 +116,12 @@ func TestIntegrationUpdateServiceSupportsCrossTypeBlockingDependencies(t *testin
 	}
 }
 
-func TestIntegrationUpdateServiceDoesNotRemoveRelatedDependency(t *testing.T) {
-	binary, err := exec.LookPath("bd")
-	if err != nil {
-		t.Skip("bd executable is required for Beads integration test")
-	}
-
-	dir := testutil.CanonicalTempDir(t)
-	t.Setenv("BEADS_DIR", "")
-	initCommand := exec.Command(binary, "init", "--prefix", "it", "--non-interactive", "--skip-agents", "--skip-hooks", "--quiet")
-	initCommand.Dir = dir
-	if output, err := initCommand.CombinedOutput(); err != nil {
-		t.Fatalf("initialize Beads workspace: %v\n%s", err, output)
-	}
-
-	backend, err := beads.NewTaskBackendWithRunner(dir, beads.CommandRunner{Binary: binary})
-	if err != nil {
-		t.Fatalf("create backend: %v", err)
-	}
+func checkRelatedDependencyPreserved(t *testing.T, fixture beadsRelationshipFixture) {
+	t.Helper()
 	create := func(title string) task.Task {
 		t.Helper()
-		created, err := backend.Create(context.Background(), task.CreateOptions{
-			Title: title, Description: title + " description.", AcceptanceCriteria: title + " exists.", IssueType: task.IssueTypeTask,
+		created, err := fixture.backend.Create(context.Background(), task.CreateOptions{
+			Title: t.Name() + "/" + title, Description: title + " description.", AcceptanceCriteria: title + " exists.", IssueType: task.IssueTypeTask,
 		})
 		if err != nil {
 			t.Fatalf("create %s: %v", title, err)
@@ -154,26 +130,17 @@ func TestIntegrationUpdateServiceDoesNotRemoveRelatedDependency(t *testing.T) {
 	}
 	current := create("Related source")
 	related := create("Related target")
-	addRelated := exec.Command(binary, "dep", "add", current.ID, related.ID, "--type", "related")
-	addRelated.Dir = dir
-	if output, err := addRelated.CombinedOutput(); err != nil {
-		t.Fatalf("add related dependency: %v\n%s", err, output)
+	if result, err := fixture.runner.Run(fixture.source.BackendDir, "dep", "add", current.ID, related.ID, "--type", "related"); err != nil {
+		t.Fatalf("add related dependency: %v\n%s", err, result.Stderr)
 	}
 
-	source := task.RepositorySource{Repository: task.Repository{ID: "integration", TaskIDPrefix: "it", Path: dir}, BackendDir: dir}
-	service := task.UpdateService{
-		Sources:        []task.RepositorySource{source},
-		BackendFactory: func(task.RepositorySource) (task.UpdateBackend, error) { return backend, nil },
-	}
-	if _, err := service.Update(context.Background(), source, task.UpdateOptions{
+	if _, err := fixture.service.Update(context.Background(), fixture.source, task.UpdateOptions{
 		ID: current.ID, RemoveBlockingIDs: []string{related.ID},
 	}); err != nil {
 		t.Fatalf("Update() error = %v", err)
 	}
 
-	listRelated := exec.Command(binary, "dep", "list", current.ID, "--json")
-	listRelated.Dir = dir
-	output, err := listRelated.Output()
+	result, err := fixture.runner.Run(fixture.source.BackendDir, "dep", "list", current.ID, "--json")
 	if err != nil {
 		t.Fatalf("list dependencies: %v", err)
 	}
@@ -181,8 +148,8 @@ func TestIntegrationUpdateServiceDoesNotRemoveRelatedDependency(t *testing.T) {
 		ID             string `json:"id"`
 		DependencyType string `json:"dependency_type"`
 	}
-	if err := json.Unmarshal(output, &dependencies); err != nil {
-		t.Fatalf("parse dependencies: %v\n%s", err, output)
+	if err := json.Unmarshal([]byte(result.Stdout), &dependencies); err != nil {
+		t.Fatalf("parse dependencies: %v\n%s", err, result.Stdout)
 	}
 	if !reflect.DeepEqual(dependencies, []struct {
 		ID             string `json:"id"`
@@ -192,28 +159,12 @@ func TestIntegrationUpdateServiceDoesNotRemoveRelatedDependency(t *testing.T) {
 	}
 }
 
-func TestIntegrationUpdateServiceRejectsNonBlockingDependencyBeforeContentMutation(t *testing.T) {
-	binary, err := exec.LookPath("bd")
-	if err != nil {
-		t.Skip("bd executable is required for Beads integration test")
-	}
-
-	dir := testutil.CanonicalTempDir(t)
-	t.Setenv("BEADS_DIR", "")
-	initCommand := exec.Command(binary, "init", "--prefix", "it", "--non-interactive", "--skip-agents", "--skip-hooks", "--quiet")
-	initCommand.Dir = dir
-	if output, err := initCommand.CombinedOutput(); err != nil {
-		t.Fatalf("initialize Beads workspace: %v\n%s", err, output)
-	}
-
-	backend, err := beads.NewTaskBackendWithRunner(dir, beads.CommandRunner{Binary: binary})
-	if err != nil {
-		t.Fatalf("create backend: %v", err)
-	}
+func checkRejectionBeforeContentMutation(t *testing.T, fixture beadsRelationshipFixture) {
+	t.Helper()
 	create := func(title string) task.Task {
 		t.Helper()
-		created, err := backend.Create(context.Background(), task.CreateOptions{
-			Title: title, Description: title + " description.", AcceptanceCriteria: title + " exists.", IssueType: task.IssueTypeTask,
+		created, err := fixture.backend.Create(context.Background(), task.CreateOptions{
+			Title: t.Name() + "/" + title, Description: title + " description.", AcceptanceCriteria: title + " exists.", IssueType: task.IssueTypeTask,
 		})
 		if err != nil {
 			t.Fatalf("create %s: %v", title, err)
@@ -222,19 +173,12 @@ func TestIntegrationUpdateServiceRejectsNonBlockingDependencyBeforeContentMutati
 	}
 	current := create("Related source")
 	related := create("Related target")
-	addRelated := exec.Command(binary, "dep", "add", current.ID, related.ID, "--type", "related")
-	addRelated.Dir = dir
-	if output, err := addRelated.CombinedOutput(); err != nil {
-		t.Fatalf("add related dependency: %v\n%s", err, output)
+	if result, err := fixture.runner.Run(fixture.source.BackendDir, "dep", "add", current.ID, related.ID, "--type", "related"); err != nil {
+		t.Fatalf("add related dependency: %v\n%s", err, result.Stderr)
 	}
 
-	source := task.RepositorySource{Repository: task.Repository{ID: "integration", TaskIDPrefix: "it", Path: dir}, BackendDir: dir}
-	service := task.UpdateService{
-		Sources:        []task.RepositorySource{source},
-		BackendFactory: func(task.RepositorySource) (task.UpdateBackend, error) { return backend, nil },
-	}
 	updatedTitle := "Updated title"
-	_, err = service.Update(context.Background(), source, task.UpdateOptions{
+	_, err := fixture.service.Update(context.Background(), fixture.source, task.UpdateOptions{
 		ID:             current.ID,
 		Title:          &updatedTitle,
 		AddBlockingIDs: []string{related.ID},
@@ -243,7 +187,7 @@ func TestIntegrationUpdateServiceRejectsNonBlockingDependencyBeforeContentMutati
 		t.Fatal("Update() succeeded, want non-blocking relationship rejection")
 	}
 
-	unchanged, err := backend.Get(context.Background(), current.ID)
+	unchanged, err := fixture.backend.Get(context.Background(), current.ID)
 	if err != nil {
 		t.Fatalf("inspect task after rejected update: %v", err)
 	}
@@ -252,39 +196,23 @@ func TestIntegrationUpdateServiceRejectsNonBlockingDependencyBeforeContentMutati
 	}
 }
 
-func TestIntegrationTaskBackendCreateRecordsBlockingDependencies(t *testing.T) {
-	binary, err := exec.LookPath("bd")
-	if err != nil {
-		t.Skip("bd executable is required for Beads integration test")
-	}
-
-	dir := testutil.CanonicalTempDir(t)
-	t.Setenv("BEADS_DIR", "")
-	initCommand := exec.Command(binary, "init", "--prefix", "it", "--non-interactive", "--skip-agents", "--skip-hooks", "--quiet")
-	initCommand.Dir = dir
-	if output, err := initCommand.CombinedOutput(); err != nil {
-		t.Fatalf("initialize Beads workspace: %v\n%s", err, output)
-	}
-
-	backend, err := beads.NewTaskBackendWithRunner(dir, beads.CommandRunner{Binary: binary})
-	if err != nil {
-		t.Fatalf("create backend: %v", err)
-	}
-	blocker, err := backend.Create(context.Background(), task.CreateOptions{
-		Title: "Blocker", Description: "Blocks the dependent item.", AcceptanceCriteria: "Exists.", IssueType: task.IssueTypeTask,
+func checkCreateWithBlockingDependencies(t *testing.T, fixture beadsRelationshipFixture) {
+	t.Helper()
+	blocker, err := fixture.backend.Create(context.Background(), task.CreateOptions{
+		Title: t.Name() + "/Blocker", Description: "Blocks the dependent item.", AcceptanceCriteria: "Exists.", IssueType: task.IssueTypeTask,
 	})
 	if err != nil {
 		t.Fatalf("create blocker: %v", err)
 	}
-	created, err := backend.Create(context.Background(), task.CreateOptions{
-		Title: "Blocked", Description: "Depends on the blocker.", AcceptanceCriteria: "Exists.", IssueType: task.IssueTypeTask,
+	created, err := fixture.backend.Create(context.Background(), task.CreateOptions{
+		Title: t.Name() + "/Blocked", Description: "Depends on the blocker.", AcceptanceCriteria: "Exists.", IssueType: task.IssueTypeTask,
 		BlockingIDs: []string{blocker.ID},
 	})
 	if err != nil {
 		t.Fatalf("create blocked item: %v", err)
 	}
 
-	got, err := backend.Get(context.Background(), created.ID)
+	got, err := fixture.backend.Get(context.Background(), created.ID)
 	if err != nil {
 		t.Fatalf("inspect created item: %v", err)
 	}
@@ -294,24 +222,15 @@ func TestIntegrationTaskBackendCreateRecordsBlockingDependencies(t *testing.T) {
 }
 
 func TestIntegrationManagedTaskBackendRepairsRealBeadsSchemaDrift(t *testing.T) {
-	binary, err := exec.LookPath("bd")
-	if err != nil {
-		t.Skip("bd executable is required for Beads integration test")
-	}
 	dolt, err := exec.LookPath("dolt")
 	if err != nil {
 		t.Skip("dolt executable is required to prepare stale Beads schema")
 	}
 
-	dir := testutil.CanonicalTempDir(t)
-	t.Setenv("BEADS_DIR", "")
-	initCommand := exec.Command(binary, "init", "--prefix", "it", "--non-interactive", "--skip-agents", "--skip-hooks", "--quiet")
-	initCommand.Dir = dir
-	if output, err := initCommand.CombinedOutput(); err != nil {
-		t.Fatalf("initialize Beads workspace: %v\n%s", err, output)
-	}
+	// Schema repair is destructive and must not share the healthy relationship workspace.
+	dir, runner := initializeBeadsWorkspace(t)
 
-	writer, err := beads.NewTaskBackendWithRunner(dir, beads.CommandRunner{Binary: binary})
+	writer, err := beads.NewTaskBackendWithRunner(dir, runner)
 	if err != nil {
 		t.Fatalf("create task writer: %v", err)
 	}
@@ -333,6 +252,7 @@ func TestIntegrationManagedTaskBackendRepairsRealBeadsSchemaDrift(t *testing.T) 
 	} {
 		command := exec.Command(dolt, args...)
 		command.Dir = databaseDir
+		command.Env = runner.Environment
 		if output, err := command.CombinedOutput(); err != nil {
 			t.Fatalf("prepare stale schema with dolt %v: %v\n%s", args, err, output)
 		}
@@ -342,7 +262,7 @@ func TestIntegrationManagedTaskBackendRepairsRealBeadsSchemaDrift(t *testing.T) 
 		Repository:       task.Repository{ID: "integration", TaskIDPrefix: "it", Path: dir},
 		BackendDir:       dir,
 		MaintenanceOwned: true,
-	}, beads.CommandRunner{Binary: binary}, nil)
+	}, runner, nil)
 	if err != nil {
 		t.Fatalf("create managed backend: %v", err)
 	}
@@ -353,4 +273,18 @@ func TestIntegrationManagedTaskBackendRepairsRealBeadsSchemaDrift(t *testing.T) 
 	if len(tasks) != 1 || tasks[0].ID != created.ID || tasks[0].Title != created.Title {
 		t.Fatalf("tasks after schema repair = %#v, want retained task %q", tasks, created.ID)
 	}
+}
+
+func initializeBeadsWorkspace(t *testing.T) (string, beads.CommandRunner) {
+	t.Helper()
+	binary, err := exec.LookPath("bd")
+	if err != nil {
+		t.Skip("bd executable is required for Beads integration test")
+	}
+	dir := testutil.CanonicalTempDir(t)
+	runner := isolatedBeadsRunner(t, binary)
+	if result, err := runner.Run(dir, "init", "--prefix", "it", "--non-interactive", "--skip-agents", "--skip-hooks", "--quiet"); err != nil {
+		t.Fatalf("initialize Beads workspace: %v\n%s\n%s", err, result.Stdout, result.Stderr)
+	}
+	return dir, runner
 }
