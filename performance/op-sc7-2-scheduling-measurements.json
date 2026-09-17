@@ -1,0 +1,2624 @@
+{
+  "base_commit": "15c0217",
+  "go_version": "go1.27.1-X:nodwarf5 linux/amd64",
+  "available_cpus": 4,
+  "normalization": "Union duplicate source-position/statement-count blocks; omit zero-statement blocks from hashes.",
+  "median_seconds": {
+    "serial": {
+      "unit": {
+        "wall_seconds": 7.8535867080208845,
+        "selected_package_work_seconds": 1.896
+      },
+      "integration": {
+        "wall_seconds": 45.00695313399774,
+        "selected_package_work_seconds": 38.015
+      }
+    },
+    "concurrent": {
+      "unit": {
+        "wall_seconds": 3.8557893079996575,
+        "selected_package_work_seconds": 3.24
+      },
+      "integration": {
+        "wall_seconds": 30.847879587992793,
+        "selected_package_work_seconds": 61.43
+      }
+    }
+  },
+  "samples": [
+    {
+      "name": "serial-unit-1",
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "-parallel=1",
+        "-covermode=set",
+        "-coverpkg=./...",
+        "-coverprofile=artifacts/test-coverage/scheduling/final/serial-unit-1.cover",
+        "-p=1",
+        "./..."
+      ],
+      "exit_code": 0,
+      "wall_seconds": 9.260722756007453,
+      "selected_package_work_seconds": 1.949,
+      "test_count": 1106,
+      "passed_test_events": 1106,
+      "test_outcomes_sha256": "0201507720075bb7fa77b84c47bc6d4615f8b04ba53db78a442b4fd5b2885ec1",
+      "test_selection_sha256": "5cf4f9671d0ff226dd37be03dd1213085b4cea2f7bfa816fea279778ffea17a0",
+      "normalized_coverage_sha256": "ada6b204b30fafd3809d543df08e910cd218f5e341a86da02028a8784ea7e4b9",
+      "statement_total": 20917,
+      "covered_statements": 11419,
+      "package_timings": {
+        "github.com/hea3ven/orpheus/cmd/testcoverage": 0.053,
+        "github.com/hea3ven/orpheus/internal/agent": 0.155,
+        "github.com/hea3ven/orpheus/internal/agentexec": 0.039,
+        "github.com/hea3ven/orpheus/internal/beads": 0.052,
+        "github.com/hea3ven/orpheus/internal/cli": 0.119,
+        "github.com/hea3ven/orpheus/internal/doctor": 0.064,
+        "github.com/hea3ven/orpheus/internal/git": 0.126,
+        "github.com/hea3ven/orpheus/internal/logging": 0.04,
+        "github.com/hea3ven/orpheus/internal/publication": 0.054,
+        "github.com/hea3ven/orpheus/internal/pullrequest": 0.042,
+        "github.com/hea3ven/orpheus/internal/readiness": 0.04,
+        "github.com/hea3ven/orpheus/internal/registry": 0.048,
+        "github.com/hea3ven/orpheus/internal/review": 0.056,
+        "github.com/hea3ven/orpheus/internal/revieweval": 0.077,
+        "github.com/hea3ven/orpheus/internal/state": 0.045,
+        "github.com/hea3ven/orpheus/internal/status": 0.041,
+        "github.com/hea3ven/orpheus/internal/task": 0.051,
+        "github.com/hea3ven/orpheus/internal/taskbranch": 0.051,
+        "github.com/hea3ven/orpheus/internal/taskstate": 0.11,
+        "github.com/hea3ven/orpheus/internal/taskstats": 0.048,
+        "github.com/hea3ven/orpheus/internal/tasktarget": 0.181,
+        "github.com/hea3ven/orpheus/internal/testguard": 0.037,
+        "github.com/hea3ven/orpheus/internal/testlane": 0.159,
+        "github.com/hea3ven/orpheus/internal/testutil": 0.039,
+        "github.com/hea3ven/orpheus/internal/workflow": 0.222
+      }
+    },
+    {
+      "name": "serial-integration-1",
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "-parallel=1",
+        "-covermode=set",
+        "-coverpkg=./...",
+        "-coverprofile=artifacts/test-coverage/scheduling/final/serial-integration-1.cover",
+        "-p=1",
+        "-tags=integration",
+        "-run",
+        "^TestIntegration",
+        "./..."
+      ],
+      "exit_code": 0,
+      "wall_seconds": 46.43934128401452,
+      "selected_package_work_seconds": 38.021,
+      "test_count": 516,
+      "passed_test_events": 516,
+      "test_outcomes_sha256": "823d855c2a8bac33f58c0f186858621d0b4789847844f019c9d4123807fe0f52",
+      "test_selection_sha256": "e0d4b9b5baddba04ff44e8a9fbc95840abf83e66de9230351d432d7717179464",
+      "normalized_coverage_sha256": "6c44d21e8bf283f9cea7029cdcc982ba45f65a0dbe3080e7f3320322f630cb0a",
+      "statement_total": 20981,
+      "covered_statements": 13953,
+      "package_timings": {
+        "github.com/hea3ven/orpheus/cmd/testcoverage": 0.337,
+        "github.com/hea3ven/orpheus/internal/agentexec": 0.386,
+        "github.com/hea3ven/orpheus/internal/beads": 22.699,
+        "github.com/hea3ven/orpheus/internal/cli": 6.704,
+        "github.com/hea3ven/orpheus/internal/doctor": 0.368,
+        "github.com/hea3ven/orpheus/internal/git": 4.247,
+        "github.com/hea3ven/orpheus/internal/pullrequest": 0.171,
+        "github.com/hea3ven/orpheus/internal/review": 1.9140000000000001,
+        "github.com/hea3ven/orpheus/internal/revieweval": 0.229,
+        "github.com/hea3ven/orpheus/internal/taskbranch": 0.053,
+        "github.com/hea3ven/orpheus/internal/testguard": 0.233,
+        "github.com/hea3ven/orpheus/internal/workflow": 0.68
+      }
+    },
+    {
+      "name": "concurrent-unit-1",
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "-parallel=1",
+        "-covermode=set",
+        "-coverpkg=./...",
+        "-coverprofile=artifacts/test-coverage/scheduling/final/concurrent-unit-1.cover",
+        "./..."
+      ],
+      "exit_code": 0,
+      "wall_seconds": 3.819850574975135,
+      "selected_package_work_seconds": 3.407,
+      "test_count": 1106,
+      "passed_test_events": 1106,
+      "test_outcomes_sha256": "0201507720075bb7fa77b84c47bc6d4615f8b04ba53db78a442b4fd5b2885ec1",
+      "test_selection_sha256": "5cf4f9671d0ff226dd37be03dd1213085b4cea2f7bfa816fea279778ffea17a0",
+      "normalized_coverage_sha256": "ada6b204b30fafd3809d543df08e910cd218f5e341a86da02028a8784ea7e4b9",
+      "statement_total": 20917,
+      "covered_statements": 11419,
+      "package_timings": {
+        "github.com/hea3ven/orpheus/cmd/testcoverage": 0.125,
+        "github.com/hea3ven/orpheus/internal/agent": 0.281,
+        "github.com/hea3ven/orpheus/internal/agentexec": 0.074,
+        "github.com/hea3ven/orpheus/internal/beads": 0.124,
+        "github.com/hea3ven/orpheus/internal/cli": 0.215,
+        "github.com/hea3ven/orpheus/internal/doctor": 0.108,
+        "github.com/hea3ven/orpheus/internal/logging": 0.075,
+        "github.com/hea3ven/orpheus/internal/git": 0.275,
+        "github.com/hea3ven/orpheus/internal/publication": 0.089,
+        "github.com/hea3ven/orpheus/internal/pullrequest": 0.061,
+        "github.com/hea3ven/orpheus/internal/readiness": 0.075,
+        "github.com/hea3ven/orpheus/internal/registry": 0.108,
+        "github.com/hea3ven/orpheus/internal/review": 0.066,
+        "github.com/hea3ven/orpheus/internal/revieweval": 0.126,
+        "github.com/hea3ven/orpheus/internal/state": 0.075,
+        "github.com/hea3ven/orpheus/internal/status": 0.078,
+        "github.com/hea3ven/orpheus/internal/taskbranch": 0.097,
+        "github.com/hea3ven/orpheus/internal/task": 0.126,
+        "github.com/hea3ven/orpheus/internal/taskstate": 0.238,
+        "github.com/hea3ven/orpheus/internal/taskstats": 0.078,
+        "github.com/hea3ven/orpheus/internal/testguard": 0.057,
+        "github.com/hea3ven/orpheus/internal/testutil": 0.069,
+        "github.com/hea3ven/orpheus/internal/tasktarget": 0.31,
+        "github.com/hea3ven/orpheus/internal/testlane": 0.274,
+        "github.com/hea3ven/orpheus/internal/workflow": 0.203
+      }
+    },
+    {
+      "name": "concurrent-integration-1",
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "-parallel=1",
+        "-covermode=set",
+        "-coverpkg=./...",
+        "-coverprofile=artifacts/test-coverage/scheduling/final/concurrent-integration-1.cover",
+        "-tags=integration",
+        "-run",
+        "^TestIntegration",
+        "./..."
+      ],
+      "exit_code": 0,
+      "wall_seconds": 30.847879587992793,
+      "selected_package_work_seconds": 61.474000000000004,
+      "test_count": 516,
+      "passed_test_events": 516,
+      "test_outcomes_sha256": "823d855c2a8bac33f58c0f186858621d0b4789847844f019c9d4123807fe0f52",
+      "test_selection_sha256": "e0d4b9b5baddba04ff44e8a9fbc95840abf83e66de9230351d432d7717179464",
+      "normalized_coverage_sha256": "6c44d21e8bf283f9cea7029cdcc982ba45f65a0dbe3080e7f3320322f630cb0a",
+      "statement_total": 20981,
+      "covered_statements": 13953,
+      "package_timings": {
+        "github.com/hea3ven/orpheus/cmd/testcoverage": 0.698,
+        "github.com/hea3ven/orpheus/internal/agentexec": 0.953,
+        "github.com/hea3ven/orpheus/internal/doctor": 0.704,
+        "github.com/hea3ven/orpheus/internal/pullrequest": 0.275,
+        "github.com/hea3ven/orpheus/internal/review": 4.187,
+        "github.com/hea3ven/orpheus/internal/revieweval": 0.39,
+        "github.com/hea3ven/orpheus/internal/git": 9.086,
+        "github.com/hea3ven/orpheus/internal/taskbranch": 0.088,
+        "github.com/hea3ven/orpheus/internal/testguard": 0.735,
+        "github.com/hea3ven/orpheus/internal/cli": 13.531,
+        "github.com/hea3ven/orpheus/internal/workflow": 1.214,
+        "github.com/hea3ven/orpheus/internal/beads": 29.613
+      }
+    },
+    {
+      "name": "concurrent-unit-2",
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "-parallel=1",
+        "-covermode=set",
+        "-coverpkg=./...",
+        "-coverprofile=artifacts/test-coverage/scheduling/final/concurrent-unit-2.cover",
+        "./..."
+      ],
+      "exit_code": 0,
+      "wall_seconds": 3.9131956799828913,
+      "selected_package_work_seconds": 3.24,
+      "test_count": 1106,
+      "passed_test_events": 1106,
+      "test_outcomes_sha256": "0201507720075bb7fa77b84c47bc6d4615f8b04ba53db78a442b4fd5b2885ec1",
+      "test_selection_sha256": "5cf4f9671d0ff226dd37be03dd1213085b4cea2f7bfa816fea279778ffea17a0",
+      "normalized_coverage_sha256": "ada6b204b30fafd3809d543df08e910cd218f5e341a86da02028a8784ea7e4b9",
+      "statement_total": 20917,
+      "covered_statements": 11419,
+      "package_timings": {
+        "github.com/hea3ven/orpheus/cmd/testcoverage": 0.1,
+        "github.com/hea3ven/orpheus/internal/agent": 0.298,
+        "github.com/hea3ven/orpheus/internal/agentexec": 0.069,
+        "github.com/hea3ven/orpheus/internal/beads": 0.101,
+        "github.com/hea3ven/orpheus/internal/cli": 0.183,
+        "github.com/hea3ven/orpheus/internal/doctor": 0.119,
+        "github.com/hea3ven/orpheus/internal/logging": 0.061,
+        "github.com/hea3ven/orpheus/internal/git": 0.273,
+        "github.com/hea3ven/orpheus/internal/publication": 0.088,
+        "github.com/hea3ven/orpheus/internal/pullrequest": 0.08,
+        "github.com/hea3ven/orpheus/internal/readiness": 0.09,
+        "github.com/hea3ven/orpheus/internal/review": 0.068,
+        "github.com/hea3ven/orpheus/internal/registry": 0.101,
+        "github.com/hea3ven/orpheus/internal/revieweval": 0.147,
+        "github.com/hea3ven/orpheus/internal/state": 0.076,
+        "github.com/hea3ven/orpheus/internal/status": 0.064,
+        "github.com/hea3ven/orpheus/internal/task": 0.096,
+        "github.com/hea3ven/orpheus/internal/taskbranch": 0.082,
+        "github.com/hea3ven/orpheus/internal/taskstats": 0.086,
+        "github.com/hea3ven/orpheus/internal/taskstate": 0.181,
+        "github.com/hea3ven/orpheus/internal/testguard": 0.083,
+        "github.com/hea3ven/orpheus/internal/testutil": 0.066,
+        "github.com/hea3ven/orpheus/internal/tasktarget": 0.301,
+        "github.com/hea3ven/orpheus/internal/testlane": 0.241,
+        "github.com/hea3ven/orpheus/internal/workflow": 0.186
+      }
+    },
+    {
+      "name": "concurrent-integration-2",
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "-parallel=1",
+        "-covermode=set",
+        "-coverpkg=./...",
+        "-coverprofile=artifacts/test-coverage/scheduling/final/concurrent-integration-2.cover",
+        "-tags=integration",
+        "-run",
+        "^TestIntegration",
+        "./..."
+      ],
+      "exit_code": 0,
+      "wall_seconds": 30.463563547004014,
+      "selected_package_work_seconds": 60.693,
+      "test_count": 516,
+      "passed_test_events": 516,
+      "test_outcomes_sha256": "823d855c2a8bac33f58c0f186858621d0b4789847844f019c9d4123807fe0f52",
+      "test_selection_sha256": "e0d4b9b5baddba04ff44e8a9fbc95840abf83e66de9230351d432d7717179464",
+      "normalized_coverage_sha256": "6c44d21e8bf283f9cea7029cdcc982ba45f65a0dbe3080e7f3320322f630cb0a",
+      "statement_total": 20981,
+      "covered_statements": 13953,
+      "package_timings": {
+        "github.com/hea3ven/orpheus/cmd/testcoverage": 0.781,
+        "github.com/hea3ven/orpheus/internal/agentexec": 0.939,
+        "github.com/hea3ven/orpheus/internal/doctor": 0.731,
+        "github.com/hea3ven/orpheus/internal/pullrequest": 0.268,
+        "github.com/hea3ven/orpheus/internal/review": 4.127,
+        "github.com/hea3ven/orpheus/internal/revieweval": 0.38,
+        "github.com/hea3ven/orpheus/internal/git": 9.047,
+        "github.com/hea3ven/orpheus/internal/taskbranch": 0.106,
+        "github.com/hea3ven/orpheus/internal/testguard": 0.547,
+        "github.com/hea3ven/orpheus/internal/workflow": 1.229,
+        "github.com/hea3ven/orpheus/internal/cli": 13.399000000000001,
+        "github.com/hea3ven/orpheus/internal/beads": 29.139
+      }
+    },
+    {
+      "name": "serial-unit-2",
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "-parallel=1",
+        "-covermode=set",
+        "-coverpkg=./...",
+        "-coverprofile=artifacts/test-coverage/scheduling/final/serial-unit-2.cover",
+        "-p=1",
+        "./..."
+      ],
+      "exit_code": 0,
+      "wall_seconds": 7.797518823004793,
+      "selected_package_work_seconds": 1.871,
+      "test_count": 1106,
+      "passed_test_events": 1106,
+      "test_outcomes_sha256": "0201507720075bb7fa77b84c47bc6d4615f8b04ba53db78a442b4fd5b2885ec1",
+      "test_selection_sha256": "5cf4f9671d0ff226dd37be03dd1213085b4cea2f7bfa816fea279778ffea17a0",
+      "normalized_coverage_sha256": "ada6b204b30fafd3809d543df08e910cd218f5e341a86da02028a8784ea7e4b9",
+      "statement_total": 20917,
+      "covered_statements": 11419,
+      "package_timings": {
+        "github.com/hea3ven/orpheus/cmd/testcoverage": 0.049,
+        "github.com/hea3ven/orpheus/internal/agent": 0.16,
+        "github.com/hea3ven/orpheus/internal/agentexec": 0.041,
+        "github.com/hea3ven/orpheus/internal/beads": 0.049,
+        "github.com/hea3ven/orpheus/internal/cli": 0.111,
+        "github.com/hea3ven/orpheus/internal/doctor": 0.069,
+        "github.com/hea3ven/orpheus/internal/git": 0.123,
+        "github.com/hea3ven/orpheus/internal/logging": 0.041,
+        "github.com/hea3ven/orpheus/internal/publication": 0.043,
+        "github.com/hea3ven/orpheus/internal/pullrequest": 0.041,
+        "github.com/hea3ven/orpheus/internal/readiness": 0.04,
+        "github.com/hea3ven/orpheus/internal/registry": 0.053,
+        "github.com/hea3ven/orpheus/internal/review": 0.045,
+        "github.com/hea3ven/orpheus/internal/revieweval": 0.077,
+        "github.com/hea3ven/orpheus/internal/state": 0.044,
+        "github.com/hea3ven/orpheus/internal/status": 0.05,
+        "github.com/hea3ven/orpheus/internal/task": 0.06,
+        "github.com/hea3ven/orpheus/internal/taskbranch": 0.051,
+        "github.com/hea3ven/orpheus/internal/taskstate": 0.111,
+        "github.com/hea3ven/orpheus/internal/taskstats": 0.044,
+        "github.com/hea3ven/orpheus/internal/tasktarget": 0.164,
+        "github.com/hea3ven/orpheus/internal/testguard": 0.038,
+        "github.com/hea3ven/orpheus/internal/testlane": 0.158,
+        "github.com/hea3ven/orpheus/internal/testutil": 0.04,
+        "github.com/hea3ven/orpheus/internal/workflow": 0.169
+      }
+    },
+    {
+      "name": "serial-integration-2",
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "-parallel=1",
+        "-covermode=set",
+        "-coverpkg=./...",
+        "-coverprofile=artifacts/test-coverage/scheduling/final/serial-integration-2.cover",
+        "-p=1",
+        "-tags=integration",
+        "-run",
+        "^TestIntegration",
+        "./..."
+      ],
+      "exit_code": 0,
+      "wall_seconds": 44.614770682004746,
+      "selected_package_work_seconds": 37.659,
+      "test_count": 516,
+      "passed_test_events": 516,
+      "test_outcomes_sha256": "823d855c2a8bac33f58c0f186858621d0b4789847844f019c9d4123807fe0f52",
+      "test_selection_sha256": "e0d4b9b5baddba04ff44e8a9fbc95840abf83e66de9230351d432d7717179464",
+      "normalized_coverage_sha256": "6c44d21e8bf283f9cea7029cdcc982ba45f65a0dbe3080e7f3320322f630cb0a",
+      "statement_total": 20981,
+      "covered_statements": 13953,
+      "package_timings": {
+        "github.com/hea3ven/orpheus/cmd/testcoverage": 0.327,
+        "github.com/hea3ven/orpheus/internal/agentexec": 0.393,
+        "github.com/hea3ven/orpheus/internal/beads": 22.518,
+        "github.com/hea3ven/orpheus/internal/cli": 6.524,
+        "github.com/hea3ven/orpheus/internal/doctor": 0.388,
+        "github.com/hea3ven/orpheus/internal/git": 4.206,
+        "github.com/hea3ven/orpheus/internal/pullrequest": 0.165,
+        "github.com/hea3ven/orpheus/internal/review": 1.937,
+        "github.com/hea3ven/orpheus/internal/revieweval": 0.2,
+        "github.com/hea3ven/orpheus/internal/taskbranch": 0.05,
+        "github.com/hea3ven/orpheus/internal/testguard": 0.241,
+        "github.com/hea3ven/orpheus/internal/workflow": 0.71
+      }
+    },
+    {
+      "name": "serial-unit-3",
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "-parallel=1",
+        "-covermode=set",
+        "-coverpkg=./...",
+        "-coverprofile=artifacts/test-coverage/scheduling/final/serial-unit-3.cover",
+        "-p=1",
+        "./..."
+      ],
+      "exit_code": 0,
+      "wall_seconds": 7.8535867080208845,
+      "selected_package_work_seconds": 1.896,
+      "test_count": 1106,
+      "passed_test_events": 1106,
+      "test_outcomes_sha256": "0201507720075bb7fa77b84c47bc6d4615f8b04ba53db78a442b4fd5b2885ec1",
+      "test_selection_sha256": "5cf4f9671d0ff226dd37be03dd1213085b4cea2f7bfa816fea279778ffea17a0",
+      "normalized_coverage_sha256": "ada6b204b30fafd3809d543df08e910cd218f5e341a86da02028a8784ea7e4b9",
+      "statement_total": 20917,
+      "covered_statements": 11419,
+      "package_timings": {
+        "github.com/hea3ven/orpheus/cmd/testcoverage": 0.046,
+        "github.com/hea3ven/orpheus/internal/agent": 0.182,
+        "github.com/hea3ven/orpheus/internal/agentexec": 0.048,
+        "github.com/hea3ven/orpheus/internal/beads": 0.054,
+        "github.com/hea3ven/orpheus/internal/cli": 0.107,
+        "github.com/hea3ven/orpheus/internal/doctor": 0.063,
+        "github.com/hea3ven/orpheus/internal/git": 0.139,
+        "github.com/hea3ven/orpheus/internal/logging": 0.04,
+        "github.com/hea3ven/orpheus/internal/publication": 0.042,
+        "github.com/hea3ven/orpheus/internal/pullrequest": 0.041,
+        "github.com/hea3ven/orpheus/internal/readiness": 0.041,
+        "github.com/hea3ven/orpheus/internal/registry": 0.05,
+        "github.com/hea3ven/orpheus/internal/review": 0.048,
+        "github.com/hea3ven/orpheus/internal/revieweval": 0.078,
+        "github.com/hea3ven/orpheus/internal/state": 0.048,
+        "github.com/hea3ven/orpheus/internal/status": 0.045,
+        "github.com/hea3ven/orpheus/internal/task": 0.05,
+        "github.com/hea3ven/orpheus/internal/taskbranch": 0.04,
+        "github.com/hea3ven/orpheus/internal/taskstate": 0.104,
+        "github.com/hea3ven/orpheus/internal/taskstats": 0.043,
+        "github.com/hea3ven/orpheus/internal/tasktarget": 0.176,
+        "github.com/hea3ven/orpheus/internal/testguard": 0.04,
+        "github.com/hea3ven/orpheus/internal/testlane": 0.157,
+        "github.com/hea3ven/orpheus/internal/testutil": 0.04,
+        "github.com/hea3ven/orpheus/internal/workflow": 0.174
+      }
+    },
+    {
+      "name": "serial-integration-3",
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "-parallel=1",
+        "-covermode=set",
+        "-coverpkg=./...",
+        "-coverprofile=artifacts/test-coverage/scheduling/final/serial-integration-3.cover",
+        "-p=1",
+        "-tags=integration",
+        "-run",
+        "^TestIntegration",
+        "./..."
+      ],
+      "exit_code": 0,
+      "wall_seconds": 45.00695313399774,
+      "selected_package_work_seconds": 38.015,
+      "test_count": 516,
+      "passed_test_events": 516,
+      "test_outcomes_sha256": "823d855c2a8bac33f58c0f186858621d0b4789847844f019c9d4123807fe0f52",
+      "test_selection_sha256": "e0d4b9b5baddba04ff44e8a9fbc95840abf83e66de9230351d432d7717179464",
+      "normalized_coverage_sha256": "6c44d21e8bf283f9cea7029cdcc982ba45f65a0dbe3080e7f3320322f630cb0a",
+      "statement_total": 20981,
+      "covered_statements": 13953,
+      "package_timings": {
+        "github.com/hea3ven/orpheus/cmd/testcoverage": 0.346,
+        "github.com/hea3ven/orpheus/internal/agentexec": 0.406,
+        "github.com/hea3ven/orpheus/internal/beads": 22.605,
+        "github.com/hea3ven/orpheus/internal/cli": 6.662,
+        "github.com/hea3ven/orpheus/internal/doctor": 0.373,
+        "github.com/hea3ven/orpheus/internal/git": 4.2379999999999995,
+        "github.com/hea3ven/orpheus/internal/pullrequest": 0.173,
+        "github.com/hea3ven/orpheus/internal/review": 1.98,
+        "github.com/hea3ven/orpheus/internal/revieweval": 0.203,
+        "github.com/hea3ven/orpheus/internal/taskbranch": 0.05,
+        "github.com/hea3ven/orpheus/internal/testguard": 0.266,
+        "github.com/hea3ven/orpheus/internal/workflow": 0.713
+      }
+    },
+    {
+      "name": "concurrent-unit-3",
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "-parallel=1",
+        "-covermode=set",
+        "-coverpkg=./...",
+        "-coverprofile=artifacts/test-coverage/scheduling/final/concurrent-unit-3.cover",
+        "./..."
+      ],
+      "exit_code": 0,
+      "wall_seconds": 3.8557893079996575,
+      "selected_package_work_seconds": 3.183,
+      "test_count": 1106,
+      "passed_test_events": 1106,
+      "test_outcomes_sha256": "0201507720075bb7fa77b84c47bc6d4615f8b04ba53db78a442b4fd5b2885ec1",
+      "test_selection_sha256": "5cf4f9671d0ff226dd37be03dd1213085b4cea2f7bfa816fea279778ffea17a0",
+      "normalized_coverage_sha256": "ada6b204b30fafd3809d543df08e910cd218f5e341a86da02028a8784ea7e4b9",
+      "statement_total": 20917,
+      "covered_statements": 11419,
+      "package_timings": {
+        "github.com/hea3ven/orpheus/cmd/testcoverage": 0.097,
+        "github.com/hea3ven/orpheus/internal/agentexec": 0.06,
+        "github.com/hea3ven/orpheus/internal/beads": 0.088,
+        "github.com/hea3ven/orpheus/internal/agent": 0.299,
+        "github.com/hea3ven/orpheus/internal/cli": 0.187,
+        "github.com/hea3ven/orpheus/internal/doctor": 0.114,
+        "github.com/hea3ven/orpheus/internal/logging": 0.055,
+        "github.com/hea3ven/orpheus/internal/git": 0.249,
+        "github.com/hea3ven/orpheus/internal/publication": 0.074,
+        "github.com/hea3ven/orpheus/internal/pullrequest": 0.076,
+        "github.com/hea3ven/orpheus/internal/readiness": 0.066,
+        "github.com/hea3ven/orpheus/internal/registry": 0.11,
+        "github.com/hea3ven/orpheus/internal/review": 0.081,
+        "github.com/hea3ven/orpheus/internal/state": 0.081,
+        "github.com/hea3ven/orpheus/internal/revieweval": 0.103,
+        "github.com/hea3ven/orpheus/internal/status": 0.062,
+        "github.com/hea3ven/orpheus/internal/task": 0.112,
+        "github.com/hea3ven/orpheus/internal/taskbranch": 0.075,
+        "github.com/hea3ven/orpheus/internal/taskstate": 0.225,
+        "github.com/hea3ven/orpheus/internal/taskstats": 0.079,
+        "github.com/hea3ven/orpheus/internal/testguard": 0.061,
+        "github.com/hea3ven/orpheus/internal/testutil": 0.069,
+        "github.com/hea3ven/orpheus/internal/tasktarget": 0.301,
+        "github.com/hea3ven/orpheus/internal/testlane": 0.254,
+        "github.com/hea3ven/orpheus/internal/workflow": 0.205
+      }
+    },
+    {
+      "name": "concurrent-integration-3",
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "-parallel=1",
+        "-covermode=set",
+        "-coverpkg=./...",
+        "-coverprofile=artifacts/test-coverage/scheduling/final/concurrent-integration-3.cover",
+        "-tags=integration",
+        "-run",
+        "^TestIntegration",
+        "./..."
+      ],
+      "exit_code": 0,
+      "wall_seconds": 31.046828982012812,
+      "selected_package_work_seconds": 61.43,
+      "test_count": 516,
+      "passed_test_events": 516,
+      "test_outcomes_sha256": "823d855c2a8bac33f58c0f186858621d0b4789847844f019c9d4123807fe0f52",
+      "test_selection_sha256": "e0d4b9b5baddba04ff44e8a9fbc95840abf83e66de9230351d432d7717179464",
+      "normalized_coverage_sha256": "6c44d21e8bf283f9cea7029cdcc982ba45f65a0dbe3080e7f3320322f630cb0a",
+      "statement_total": 20981,
+      "covered_statements": 13953,
+      "package_timings": {
+        "github.com/hea3ven/orpheus/cmd/testcoverage": 0.685,
+        "github.com/hea3ven/orpheus/internal/agentexec": 0.858,
+        "github.com/hea3ven/orpheus/internal/doctor": 0.7,
+        "github.com/hea3ven/orpheus/internal/pullrequest": 0.274,
+        "github.com/hea3ven/orpheus/internal/review": 3.969,
+        "github.com/hea3ven/orpheus/internal/revieweval": 0.394,
+        "github.com/hea3ven/orpheus/internal/git": 9.386,
+        "github.com/hea3ven/orpheus/internal/taskbranch": 0.126,
+        "github.com/hea3ven/orpheus/internal/testguard": 0.602,
+        "github.com/hea3ven/orpheus/internal/cli": 13.527,
+        "github.com/hea3ven/orpheus/internal/workflow": 1.236,
+        "github.com/hea3ven/orpheus/internal/beads": 29.673000000000002
+      }
+    }
+  ],
+  "ancestry_difference": [
+    {
+      "block": "github.com/hea3ven/orpheus/internal/cli/watch_linux.go:21.3,22.1",
+      "statements": 1,
+      "guarded": true,
+      "unguarded": false
+    },
+    {
+      "block": "github.com/hea3ven/orpheus/internal/cli/watch_linux.go:23.2,23.56",
+      "statements": 1,
+      "guarded": false,
+      "unguarded": true
+    },
+    {
+      "block": "github.com/hea3ven/orpheus/internal/cli/watch_linux.go:27.2,27.21",
+      "statements": 1,
+      "guarded": false,
+      "unguarded": true
+    },
+    {
+      "block": "github.com/hea3ven/orpheus/internal/cli/watch_linux.go:28.3,29.10",
+      "statements": 2,
+      "guarded": false,
+      "unguarded": true
+    },
+    {
+      "block": "github.com/hea3ven/orpheus/internal/cli/watch_linux.go:32.3,32.19",
+      "statements": 1,
+      "guarded": false,
+      "unguarded": true
+    },
+    {
+      "block": "github.com/hea3ven/orpheus/internal/cli/watch_linux.go:35.3,35.35",
+      "statements": 1,
+      "guarded": false,
+      "unguarded": true
+    },
+    {
+      "block": "github.com/hea3ven/orpheus/internal/cli/watch_linux.go:38.3,38.15",
+      "statements": 1,
+      "guarded": false,
+      "unguarded": true
+    },
+    {
+      "block": "github.com/hea3ven/orpheus/internal/cli/watch_linux.go:40.2,40.14",
+      "statements": 1,
+      "guarded": false,
+      "unguarded": true
+    },
+    {
+      "block": "github.com/hea3ven/orpheus/internal/cli/watch_linux.go:44.2,45.16",
+      "statements": 2,
+      "guarded": false,
+      "unguarded": true
+    },
+    {
+      "block": "github.com/hea3ven/orpheus/internal/cli/watch_linux.go:49.2,51.57",
+      "statements": 3,
+      "guarded": false,
+      "unguarded": true
+    },
+    {
+      "block": "github.com/hea3ven/orpheus/internal/cli/watch_linux.go:52.3,53.10",
+      "statements": 2,
+      "guarded": false,
+      "unguarded": true
+    },
+    {
+      "block": "github.com/hea3ven/orpheus/internal/cli/watch_linux.go:54.4,54.12",
+      "statements": 1,
+      "guarded": false,
+      "unguarded": true
+    },
+    {
+      "block": "github.com/hea3ven/orpheus/internal/cli/watch_linux.go:56.3,57.14",
+      "statements": 2,
+      "guarded": false,
+      "unguarded": true
+    },
+    {
+      "block": "github.com/hea3ven/orpheus/internal/cli/watch_linux.go:59.4,59.16",
+      "statements": 1,
+      "guarded": false,
+      "unguarded": true
+    },
+    {
+      "block": "github.com/hea3ven/orpheus/internal/cli/watch_linux.go:61.4,62.18",
+      "statements": 2,
+      "guarded": false,
+      "unguarded": true
+    },
+    {
+      "block": "github.com/hea3ven/orpheus/internal/cli/watch_linux.go:67.2,67.47",
+      "statements": 1,
+      "guarded": false,
+      "unguarded": true
+    }
+  ],
+  "policy_update": {
+    "complete": true,
+    "measurement_samples": 5,
+    "changes": [
+      {
+        "kind": "timing_policy",
+        "lane": "unit",
+        "scope": "suite",
+        "prior": 2.411,
+        "current": 3.2950000000000004,
+        "proposed": 4.119,
+        "message": "updated accepted bound"
+      },
+      {
+        "kind": "timing_policy",
+        "lane": "integration",
+        "scope": "package",
+        "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
+        "prior": 0.589,
+        "current": 0.734,
+        "proposed": 1.101,
+        "message": "updated accepted bound"
+      },
+      {
+        "kind": "timing_policy",
+        "lane": "integration",
+        "scope": "package",
+        "name": "github.com/hea3ven/orpheus/internal/agentexec",
+        "prior": 0.644,
+        "current": 0.883,
+        "proposed": 1.325,
+        "message": "updated accepted bound"
+      },
+      {
+        "kind": "timing_policy",
+        "lane": "integration",
+        "scope": "package",
+        "name": "github.com/hea3ven/orpheus/internal/cli",
+        "prior": 11.054,
+        "current": 13.38,
+        "proposed": 20.07,
+        "message": "updated accepted bound"
+      },
+      {
+        "kind": "timing_policy",
+        "lane": "integration",
+        "scope": "package",
+        "name": "github.com/hea3ven/orpheus/internal/doctor",
+        "prior": 0.658,
+        "current": 0.737,
+        "proposed": 1.106,
+        "message": "updated accepted bound"
+      },
+      {
+        "kind": "timing_policy",
+        "lane": "integration",
+        "scope": "package",
+        "name": "github.com/hea3ven/orpheus/internal/git",
+        "prior": 5.178,
+        "current": 9.214,
+        "proposed": 13.821,
+        "message": "updated accepted bound"
+      },
+      {
+        "kind": "timing_policy",
+        "lane": "integration",
+        "scope": "package",
+        "name": "github.com/hea3ven/orpheus/internal/review",
+        "prior": 2.888,
+        "current": 3.874,
+        "proposed": 5.811,
+        "message": "updated accepted bound"
+      },
+      {
+        "kind": "timing_policy",
+        "lane": "integration",
+        "scope": "package",
+        "name": "github.com/hea3ven/orpheus/internal/testguard",
+        "prior": 0.489,
+        "current": 0.597,
+        "proposed": 0.896,
+        "message": "updated accepted bound"
+      },
+      {
+        "kind": "timing_policy",
+        "lane": "integration",
+        "scope": "package",
+        "name": "github.com/hea3ven/orpheus/internal/workflow",
+        "prior": 1.053,
+        "current": 1.19,
+        "proposed": 1.785,
+        "message": "updated accepted bound"
+      }
+    ]
+  },
+  "final_quality": {
+    "serial": {
+      "decision": "pass",
+      "lanes": {
+        "integration": {
+          "test_count": 516,
+          "coverage": {
+            "statement_total": 20981,
+            "covered_statements": 13953
+          },
+          "selected_test_seconds": 38.107000000000006,
+          "wall_seconds": 45.150815978
+        },
+        "unit": {
+          "test_count": 1106,
+          "coverage": {
+            "statement_total": 20917,
+            "covered_statements": 11419
+          },
+          "selected_test_seconds": 1.9020000000000001,
+          "wall_seconds": 7.810700919
+        }
+      }
+    },
+    "concurrent": {
+      "decision": "pass",
+      "lanes": {
+        "integration": {
+          "test_count": 516,
+          "coverage": {
+            "statement_total": 20981,
+            "covered_statements": 13953
+          },
+          "selected_test_seconds": 60.915000000000006,
+          "wall_seconds": 30.639359737
+        },
+        "unit": {
+          "test_count": 1106,
+          "coverage": {
+            "statement_total": 20917,
+            "covered_statements": 11419
+          },
+          "selected_test_seconds": 3.3960000000000004,
+          "wall_seconds": 3.859514901
+        }
+      }
+    }
+  },
+  "post_check_timing_noise": {
+    "status": "timing_budget_exceeded",
+    "findings": [
+      {
+        "kind": "timing_policy",
+        "lane": "integration",
+        "scope": "package",
+        "name": "github.com/hea3ven/orpheus/internal/revieweval",
+        "prior": 0.479,
+        "current": 0.482,
+        "threshold": 0.25,
+        "budget_seconds": 0.479,
+        "overage_seconds": 0.0030000000000000027,
+        "proposed": 0.732,
+        "message": "timing exceeds its policy ceiling; run make quality-policy-update if the regression is intentional"
+      }
+    ]
+  },
+  "review_followup": {
+    "method": "Five complete non-overlapping concurrent samples collected by make quality-policy-update; no GOFLAGS override; Go default package concurrency and -parallel=1. Update report contains validated medians, not individual samples.",
+    "before": {
+      "schema_version": 1,
+      "complete": true,
+      "measurement_samples": 1,
+      "lanes": {
+        "integration": {
+          "lane": "integration",
+          "command": [
+            "go",
+            "test",
+            "-json",
+            "-count=1",
+            "-parallel=1",
+            "-covermode=set",
+            "-coverpkg=./...",
+            "-coverprofile=<temporary-profile>",
+            "-tags=integration",
+            "-run",
+            "^TestIntegration",
+            "./..."
+          ],
+          "passed": true,
+          "wall_seconds": 39.478680198,
+          "selected_test_seconds": 83.98699999999998,
+          "test_count": 516,
+          "coverage": {
+            "statement_total": 20981,
+            "covered_statements": 13953
+          },
+          "package_timings": [
+            {
+              "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
+              "seconds": 0.857
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/agentexec",
+              "seconds": 1.073
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/beads",
+              "seconds": 37.675
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/cli",
+              "seconds": 19.151
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/doctor",
+              "seconds": 1.1400000000000001
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/git",
+              "seconds": 14.193
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/pullrequest",
+              "seconds": 0.413
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/review",
+              "seconds": 5.951
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/revieweval",
+              "seconds": 0.761
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/taskbranch",
+              "seconds": 0.134
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/testguard",
+              "seconds": 1.063
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/workflow",
+              "seconds": 1.576
+            }
+          ]
+        },
+        "unit": {
+          "lane": "unit",
+          "command": [
+            "go",
+            "test",
+            "-json",
+            "-count=1",
+            "-parallel=1",
+            "-covermode=set",
+            "-coverpkg=./...",
+            "-coverprofile=<temporary-profile>",
+            "./..."
+          ],
+          "passed": true,
+          "wall_seconds": 9.625425821,
+          "selected_test_seconds": 8.127,
+          "test_count": 1106,
+          "coverage": {
+            "statement_total": 20917,
+            "covered_statements": 11419
+          },
+          "package_timings": [
+            {
+              "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
+              "seconds": 0.143
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/agent",
+              "seconds": 0.92
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/agentexec",
+              "seconds": 0.147
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/beads",
+              "seconds": 0.165
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/cli",
+              "seconds": 0.338
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/doctor",
+              "seconds": 0.238
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/git",
+              "seconds": 0.605
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/logging",
+              "seconds": 0.318
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/publication",
+              "seconds": 0.351
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/pullrequest",
+              "seconds": 0.282
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/readiness",
+              "seconds": 0.079
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/registry",
+              "seconds": 0.204
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/review",
+              "seconds": 0.148
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/revieweval",
+              "seconds": 0.172
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/state",
+              "seconds": 0.222
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/status",
+              "seconds": 0.255
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/task",
+              "seconds": 0.234
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/taskbranch",
+              "seconds": 0.178
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/taskstate",
+              "seconds": 0.55
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/taskstats",
+              "seconds": 0.259
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/tasktarget",
+              "seconds": 0.71
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/testguard",
+              "seconds": 0.218
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/testlane",
+              "seconds": 0.485
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/testutil",
+              "seconds": 0.259
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/workflow",
+              "seconds": 0.647
+            }
+          ]
+        }
+      },
+      "decision": {
+        "status": "timing_budget_exceeded",
+        "findings": [
+          {
+            "kind": "timing_policy",
+            "lane": "unit",
+            "scope": "suite",
+            "prior": 4.119,
+            "current": 8.127,
+            "threshold": 0.8238,
+            "budget_seconds": 4.119,
+            "overage_seconds": 4.008000000000001,
+            "proposed": 10.159,
+            "message": "timing exceeds its policy ceiling; run make quality-policy-update if the regression is intentional"
+          },
+          {
+            "kind": "timing_policy",
+            "lane": "unit",
+            "scope": "package",
+            "name": "github.com/hea3ven/orpheus/internal/agent",
+            "prior": 0.411,
+            "current": 0.92,
+            "threshold": 0.25,
+            "budget_seconds": 0.411,
+            "overage_seconds": 0.5090000000000001,
+            "proposed": 1.38,
+            "message": "timing exceeds its policy ceiling; run make quality-policy-update if the regression is intentional"
+          },
+          {
+            "kind": "timing_policy",
+            "lane": "unit",
+            "scope": "package",
+            "name": "github.com/hea3ven/orpheus/internal/git",
+            "prior": 0.372,
+            "current": 0.605,
+            "threshold": 0.25,
+            "budget_seconds": 0.372,
+            "overage_seconds": 0.23299999999999998,
+            "proposed": 0.908,
+            "message": "timing exceeds its policy ceiling; run make quality-policy-update if the regression is intentional"
+          },
+          {
+            "kind": "timing_policy",
+            "lane": "unit",
+            "scope": "package",
+            "name": "github.com/hea3ven/orpheus/internal/logging",
+            "prior": 0.289,
+            "current": 0.318,
+            "threshold": 0.25,
+            "budget_seconds": 0.289,
+            "overage_seconds": 0.029000000000000026,
+            "proposed": 0.568,
+            "message": "timing exceeds its policy ceiling; run make quality-policy-update if the regression is intentional"
+          },
+          {
+            "kind": "timing_policy",
+            "lane": "unit",
+            "scope": "package",
+            "name": "github.com/hea3ven/orpheus/internal/publication",
+            "prior": 0.293,
+            "current": 0.351,
+            "threshold": 0.25,
+            "budget_seconds": 0.293,
+            "overage_seconds": 0.057999999999999996,
+            "proposed": 0.601,
+            "message": "timing exceeds its policy ceiling; run make quality-policy-update if the regression is intentional"
+          },
+          {
+            "kind": "timing_policy",
+            "lane": "unit",
+            "scope": "package",
+            "name": "github.com/hea3ven/orpheus/internal/taskstate",
+            "prior": 0.345,
+            "current": 0.55,
+            "threshold": 0.25,
+            "budget_seconds": 0.345,
+            "overage_seconds": 0.20500000000000007,
+            "proposed": 0.825,
+            "message": "timing exceeds its policy ceiling; run make quality-policy-update if the regression is intentional"
+          },
+          {
+            "kind": "timing_policy",
+            "lane": "unit",
+            "scope": "package",
+            "name": "github.com/hea3ven/orpheus/internal/tasktarget",
+            "prior": 0.447,
+            "current": 0.71,
+            "threshold": 0.25,
+            "budget_seconds": 0.447,
+            "overage_seconds": 0.26299999999999996,
+            "proposed": 1.065,
+            "message": "timing exceeds its policy ceiling; run make quality-policy-update if the regression is intentional"
+          },
+          {
+            "kind": "timing_policy",
+            "lane": "unit",
+            "scope": "package",
+            "name": "github.com/hea3ven/orpheus/internal/testlane",
+            "prior": 0.415,
+            "current": 0.485,
+            "threshold": 0.25,
+            "budget_seconds": 0.415,
+            "overage_seconds": 0.07,
+            "proposed": 0.735,
+            "message": "timing exceeds its policy ceiling; run make quality-policy-update if the regression is intentional"
+          },
+          {
+            "kind": "timing_policy",
+            "lane": "unit",
+            "scope": "package",
+            "name": "github.com/hea3ven/orpheus/internal/workflow",
+            "prior": 0.404,
+            "current": 0.647,
+            "threshold": 0.25,
+            "budget_seconds": 0.404,
+            "overage_seconds": 0.243,
+            "proposed": 0.971,
+            "message": "timing exceeds its policy ceiling; run make quality-policy-update if the regression is intentional"
+          },
+          {
+            "kind": "timing_policy",
+            "lane": "integration",
+            "scope": "suite",
+            "prior": 62.151,
+            "current": 83.98699999999998,
+            "threshold": 12.430200000000001,
+            "budget_seconds": 62.151,
+            "overage_seconds": 21.835999999999977,
+            "proposed": 104.984,
+            "message": "timing exceeds its policy ceiling; run make quality-policy-update if the regression is intentional"
+          },
+          {
+            "kind": "timing_policy",
+            "lane": "integration",
+            "scope": "package",
+            "name": "github.com/hea3ven/orpheus/internal/doctor",
+            "prior": 1.106,
+            "current": 1.1400000000000001,
+            "threshold": 0.3686666666666667,
+            "budget_seconds": 1.106,
+            "overage_seconds": 0.03400000000000003,
+            "proposed": 1.71,
+            "message": "timing exceeds its policy ceiling; run make quality-policy-update if the regression is intentional"
+          },
+          {
+            "kind": "timing_policy",
+            "lane": "integration",
+            "scope": "package",
+            "name": "github.com/hea3ven/orpheus/internal/git",
+            "prior": 13.821,
+            "current": 14.193,
+            "threshold": 4.607,
+            "budget_seconds": 13.821,
+            "overage_seconds": 0.3719999999999999,
+            "proposed": 21.29,
+            "message": "timing exceeds its policy ceiling; run make quality-policy-update if the regression is intentional"
+          },
+          {
+            "kind": "timing_policy",
+            "lane": "integration",
+            "scope": "package",
+            "name": "github.com/hea3ven/orpheus/internal/review",
+            "prior": 5.811,
+            "current": 5.951,
+            "threshold": 1.937,
+            "budget_seconds": 5.811,
+            "overage_seconds": 0.13999999999999968,
+            "proposed": 8.926,
+            "message": "timing exceeds its policy ceiling; run make quality-policy-update if the regression is intentional"
+          },
+          {
+            "kind": "timing_policy",
+            "lane": "integration",
+            "scope": "package",
+            "name": "github.com/hea3ven/orpheus/internal/revieweval",
+            "prior": 0.479,
+            "current": 0.761,
+            "threshold": 0.25,
+            "budget_seconds": 0.479,
+            "overage_seconds": 0.28200000000000003,
+            "proposed": 1.142,
+            "message": "timing exceeds its policy ceiling; run make quality-policy-update if the regression is intentional"
+          },
+          {
+            "kind": "timing_policy",
+            "lane": "integration",
+            "scope": "package",
+            "name": "github.com/hea3ven/orpheus/internal/testguard",
+            "prior": 0.896,
+            "current": 1.063,
+            "threshold": 0.2986666666666667,
+            "budget_seconds": 0.896,
+            "overage_seconds": 0.16699999999999993,
+            "proposed": 1.595,
+            "message": "timing exceeds its policy ceiling; run make quality-policy-update if the regression is intentional"
+          }
+        ]
+      }
+    },
+    "policy_update": {
+      "schema_version": 1,
+      "complete": true,
+      "measurement_samples": 5,
+      "lanes": {
+        "integration": {
+          "lane": "integration",
+          "command": [
+            "go",
+            "test",
+            "-json",
+            "-count=1",
+            "-parallel=1",
+            "-covermode=set",
+            "-coverpkg=./...",
+            "-coverprofile=<temporary-profile>",
+            "-tags=integration",
+            "-run",
+            "^TestIntegration",
+            "./..."
+          ],
+          "passed": true,
+          "wall_seconds": 33.436814622,
+          "selected_test_seconds": 67.613,
+          "test_count": 516,
+          "coverage": {
+            "statement_total": 20981,
+            "covered_statements": 13953
+          },
+          "packages": [
+            {
+              "name": "github.com/hea3ven/orpheus/cmd/orpheus",
+              "statement_total": 4,
+              "covered_statements": 0
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
+              "statement_total": 891,
+              "covered_statements": 0
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/agent",
+              "statement_total": 1987,
+              "covered_statements": 1342
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/agentexec",
+              "statement_total": 114,
+              "covered_statements": 94
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/beads",
+              "statement_total": 729,
+              "covered_statements": 486
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/cli",
+              "statement_total": 5073,
+              "covered_statements": 3571
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/doctor",
+              "statement_total": 454,
+              "covered_statements": 349
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/git",
+              "statement_total": 1595,
+              "covered_statements": 1090
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/logging",
+              "statement_total": 36,
+              "covered_statements": 27
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/pathutil",
+              "statement_total": 19,
+              "covered_statements": 17
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/publication",
+              "statement_total": 82,
+              "covered_statements": 74
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/pullrequest",
+              "statement_total": 147,
+              "covered_statements": 124
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/readiness",
+              "statement_total": 37,
+              "covered_statements": 25
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/registry",
+              "statement_total": 260,
+              "covered_statements": 200
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/review",
+              "statement_total": 1169,
+              "covered_statements": 968
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/revieweval",
+              "statement_total": 504,
+              "covered_statements": 158
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/state",
+              "statement_total": 287,
+              "covered_statements": 219
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/status",
+              "statement_total": 336,
+              "covered_statements": 226
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/task",
+              "statement_total": 796,
+              "covered_statements": 514
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/taskbranch",
+              "statement_total": 100,
+              "covered_statements": 81
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/taskstate",
+              "statement_total": 2250,
+              "covered_statements": 1624
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/taskstats",
+              "statement_total": 599,
+              "covered_statements": 282
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/tasktarget",
+              "statement_total": 113,
+              "covered_statements": 91
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/testguard",
+              "statement_total": 53,
+              "covered_statements": 42
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/testlane",
+              "statement_total": 117,
+              "covered_statements": 0
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/testutil",
+              "statement_total": 28,
+              "covered_statements": 22
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/workflow",
+              "statement_total": 3201,
+              "covered_statements": 2327
+            }
+          ],
+          "package_timings": [
+            {
+              "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
+              "seconds": 0.774
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/agentexec",
+              "seconds": 0.83
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/beads",
+              "seconds": 31.857
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/cli",
+              "seconds": 15.441
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/doctor",
+              "seconds": 0.778
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/git",
+              "seconds": 9.948
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/pullrequest",
+              "seconds": 0.268
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/review",
+              "seconds": 4.083
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/revieweval",
+              "seconds": 0.426
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/taskbranch",
+              "seconds": 0.107
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/testguard",
+              "seconds": 0.638
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/workflow",
+              "seconds": 1.225
+            }
+          ]
+        },
+        "unit": {
+          "lane": "unit",
+          "command": [
+            "go",
+            "test",
+            "-json",
+            "-count=1",
+            "-parallel=1",
+            "-covermode=set",
+            "-coverpkg=./...",
+            "-coverprofile=<temporary-profile>",
+            "./..."
+          ],
+          "passed": true,
+          "wall_seconds": 4.195423545,
+          "selected_test_seconds": 3.7960000000000007,
+          "test_count": 1106,
+          "coverage": {
+            "statement_total": 20917,
+            "covered_statements": 11419
+          },
+          "packages": [
+            {
+              "name": "github.com/hea3ven/orpheus/cmd/orpheus",
+              "statement_total": 4,
+              "covered_statements": 0
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
+              "statement_total": 891,
+              "covered_statements": 578
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/agent",
+              "statement_total": 1987,
+              "covered_statements": 1651
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/agentexec",
+              "statement_total": 114,
+              "covered_statements": 2
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/beads",
+              "statement_total": 729,
+              "covered_statements": 420
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/cli",
+              "statement_total": 5073,
+              "covered_statements": 1988
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/doctor",
+              "statement_total": 454,
+              "covered_statements": 241
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/git",
+              "statement_total": 1595,
+              "covered_statements": 500
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/logging",
+              "statement_total": 36,
+              "covered_statements": 28
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/pathutil",
+              "statement_total": 19,
+              "covered_statements": 17
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/publication",
+              "statement_total": 82,
+              "covered_statements": 76
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/pullrequest",
+              "statement_total": 147,
+              "covered_statements": 9
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/readiness",
+              "statement_total": 37,
+              "covered_statements": 34
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/registry",
+              "statement_total": 260,
+              "covered_statements": 228
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/review",
+              "statement_total": 1169,
+              "covered_statements": 150
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/revieweval",
+              "statement_total": 504,
+              "covered_statements": 292
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/state",
+              "statement_total": 223,
+              "covered_statements": 172
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/status",
+              "statement_total": 336,
+              "covered_statements": 312
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/task",
+              "statement_total": 796,
+              "covered_statements": 678
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/taskbranch",
+              "statement_total": 100,
+              "covered_statements": 94
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/taskstate",
+              "statement_total": 2250,
+              "covered_statements": 1571
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/taskstats",
+              "statement_total": 599,
+              "covered_statements": 520
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/tasktarget",
+              "statement_total": 113,
+              "covered_statements": 95
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/testguard",
+              "statement_total": 53,
+              "covered_statements": 31
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/testlane",
+              "statement_total": 117,
+              "covered_statements": 103
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/testutil",
+              "statement_total": 28,
+              "covered_statements": 25
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/workflow",
+              "statement_total": 3201,
+              "covered_statements": 1604
+            }
+          ],
+          "package_timings": [
+            {
+              "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
+              "seconds": 0.095
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/agent",
+              "seconds": 0.354
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/agentexec",
+              "seconds": 0.09
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/beads",
+              "seconds": 0.102
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/cli",
+              "seconds": 0.227
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/doctor",
+              "seconds": 0.135
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/git",
+              "seconds": 0.294
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/logging",
+              "seconds": 0.066
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/publication",
+              "seconds": 0.096
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/pullrequest",
+              "seconds": 0.083
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/readiness",
+              "seconds": 0.089
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/registry",
+              "seconds": 0.097
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/review",
+              "seconds": 0.087
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/revieweval",
+              "seconds": 0.12
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/state",
+              "seconds": 0.089
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/status",
+              "seconds": 0.071
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/task",
+              "seconds": 0.104
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/taskbranch",
+              "seconds": 0.072
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/taskstate",
+              "seconds": 0.242
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/taskstats",
+              "seconds": 0.089
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/tasktarget",
+              "seconds": 0.349
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/testguard",
+              "seconds": 0.073
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/testlane",
+              "seconds": 0.318
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/testutil",
+              "seconds": 0.076
+            },
+            {
+              "name": "github.com/hea3ven/orpheus/internal/workflow",
+              "seconds": 0.184
+            }
+          ]
+        }
+      },
+      "decision": {
+        "status": "pass",
+        "findings": [
+          {
+            "kind": "timing_policy",
+            "lane": "integration",
+            "scope": "suite",
+            "prior": 62.151,
+            "current": 67.613,
+            "proposed": 84.516,
+            "message": "updated accepted bound"
+          }
+        ]
+      }
+    },
+    "accepted_timing_changes": [
+      {
+        "lane": "integration",
+        "scope": "suite",
+        "prior": 62.151,
+        "median_seconds": 67.613,
+        "ceiling_seconds": 84.516,
+        "source": "Generated by make quality-policy-update with 25 percent suite headroom."
+      },
+      {
+        "lane": "integration",
+        "scope": "package",
+        "name": "github.com/hea3ven/orpheus/internal/revieweval",
+        "prior": 0.479,
+        "median_seconds": 0.426,
+        "ceiling_seconds": 0.676,
+        "source": "Explicit review-requested refresh using the same validated median plus configured 0.250s absolute package headroom; automatic refresh threshold was not crossed."
+      }
+    ],
+    "validation": [
+      {
+        "command": "make quality",
+        "run": 1,
+        "exit_code": 0,
+        "report": {
+          "schema_version": 1,
+          "complete": true,
+          "measurement_samples": 1,
+          "lanes": {
+            "integration": {
+              "lane": "integration",
+              "command": [
+                "go",
+                "test",
+                "-json",
+                "-count=1",
+                "-parallel=1",
+                "-covermode=set",
+                "-coverpkg=./...",
+                "-coverprofile=<temporary-profile>",
+                "-tags=integration",
+                "-run",
+                "^TestIntegration",
+                "./..."
+              ],
+              "passed": true,
+              "wall_seconds": 30.673060701,
+              "selected_test_seconds": 61.05599999999999,
+              "test_count": 516,
+              "coverage": {
+                "statement_total": 20981,
+                "covered_statements": 13953
+              },
+              "package_timings": [
+                {
+                  "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
+                  "seconds": 0.661
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/agentexec",
+                  "seconds": 0.893
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/beads",
+                  "seconds": 29.412
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/cli",
+                  "seconds": 13.49
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/doctor",
+                  "seconds": 0.78
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/git",
+                  "seconds": 9.23
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/pullrequest",
+                  "seconds": 0.259
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/review",
+                  "seconds": 3.998
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/revieweval",
+                  "seconds": 0.492
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/taskbranch",
+                  "seconds": 0.117
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/testguard",
+                  "seconds": 0.515
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/workflow",
+                  "seconds": 1.209
+                }
+              ]
+            },
+            "unit": {
+              "lane": "unit",
+              "command": [
+                "go",
+                "test",
+                "-json",
+                "-count=1",
+                "-parallel=1",
+                "-covermode=set",
+                "-coverpkg=./...",
+                "-coverprofile=<temporary-profile>",
+                "./..."
+              ],
+              "passed": true,
+              "wall_seconds": 3.905856015,
+              "selected_test_seconds": 3.4200000000000004,
+              "test_count": 1106,
+              "coverage": {
+                "statement_total": 20917,
+                "covered_statements": 11419
+              },
+              "package_timings": [
+                {
+                  "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
+                  "seconds": 0.092
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/agent",
+                  "seconds": 0.34
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/agentexec",
+                  "seconds": 0.075
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/beads",
+                  "seconds": 0.083
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/cli",
+                  "seconds": 0.193
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/doctor",
+                  "seconds": 0.127
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/git",
+                  "seconds": 0.273
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/logging",
+                  "seconds": 0.062
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/publication",
+                  "seconds": 0.084
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/pullrequest",
+                  "seconds": 0.081
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/readiness",
+                  "seconds": 0.068
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/registry",
+                  "seconds": 0.11
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/review",
+                  "seconds": 0.072
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/revieweval",
+                  "seconds": 0.109
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/state",
+                  "seconds": 0.081
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/status",
+                  "seconds": 0.078
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/task",
+                  "seconds": 0.09
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/taskbranch",
+                  "seconds": 0.067
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/taskstate",
+                  "seconds": 0.257
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/taskstats",
+                  "seconds": 0.127
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/tasktarget",
+                  "seconds": 0.344
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/testguard",
+                  "seconds": 0.069
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/testlane",
+                  "seconds": 0.257
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/testutil",
+                  "seconds": 0.097
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/workflow",
+                  "seconds": 0.184
+                }
+              ]
+            }
+          },
+          "decision": {
+            "status": "pass"
+          }
+        }
+      },
+      {
+        "command": "make quality",
+        "run": 2,
+        "exit_code": 0,
+        "report": {
+          "schema_version": 1,
+          "complete": true,
+          "measurement_samples": 1,
+          "lanes": {
+            "integration": {
+              "lane": "integration",
+              "command": [
+                "go",
+                "test",
+                "-json",
+                "-count=1",
+                "-parallel=1",
+                "-covermode=set",
+                "-coverpkg=./...",
+                "-coverprofile=<temporary-profile>",
+                "-tags=integration",
+                "-run",
+                "^TestIntegration",
+                "./..."
+              ],
+              "passed": true,
+              "wall_seconds": 31.090300043,
+              "selected_test_seconds": 61.666000000000004,
+              "test_count": 516,
+              "coverage": {
+                "statement_total": 20981,
+                "covered_statements": 13953
+              },
+              "package_timings": [
+                {
+                  "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
+                  "seconds": 0.749
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/agentexec",
+                  "seconds": 0.885
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/beads",
+                  "seconds": 29.708
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/cli",
+                  "seconds": 13.578
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/doctor",
+                  "seconds": 0.931
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/git",
+                  "seconds": 9.321
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/pullrequest",
+                  "seconds": 0.247
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/review",
+                  "seconds": 4.021
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/revieweval",
+                  "seconds": 0.432
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/taskbranch",
+                  "seconds": 0.142
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/testguard",
+                  "seconds": 0.555
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/workflow",
+                  "seconds": 1.097
+                }
+              ]
+            },
+            "unit": {
+              "lane": "unit",
+              "command": [
+                "go",
+                "test",
+                "-json",
+                "-count=1",
+                "-parallel=1",
+                "-covermode=set",
+                "-coverpkg=./...",
+                "-coverprofile=<temporary-profile>",
+                "./..."
+              ],
+              "passed": true,
+              "wall_seconds": 3.862552346,
+              "selected_test_seconds": 3.459,
+              "test_count": 1106,
+              "coverage": {
+                "statement_total": 20917,
+                "covered_statements": 11419
+              },
+              "package_timings": [
+                {
+                  "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
+                  "seconds": 0.106
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/agent",
+                  "seconds": 0.332
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/agentexec",
+                  "seconds": 0.101
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/beads",
+                  "seconds": 0.097
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/cli",
+                  "seconds": 0.241
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/doctor",
+                  "seconds": 0.133
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/git",
+                  "seconds": 0.294
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/logging",
+                  "seconds": 0.08
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/publication",
+                  "seconds": 0.078
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/pullrequest",
+                  "seconds": 0.069
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/readiness",
+                  "seconds": 0.07
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/registry",
+                  "seconds": 0.085
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/review",
+                  "seconds": 0.073
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/revieweval",
+                  "seconds": 0.144
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/state",
+                  "seconds": 0.077
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/status",
+                  "seconds": 0.073
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/task",
+                  "seconds": 0.084
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/taskbranch",
+                  "seconds": 0.075
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/taskstate",
+                  "seconds": 0.222
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/taskstats",
+                  "seconds": 0.077
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/tasktarget",
+                  "seconds": 0.364
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/testguard",
+                  "seconds": 0.061
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/testlane",
+                  "seconds": 0.297
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/testutil",
+                  "seconds": 0.053
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/workflow",
+                  "seconds": 0.173
+                }
+              ]
+            }
+          },
+          "decision": {
+            "status": "pass"
+          }
+        }
+      },
+      {
+        "command": "make quality",
+        "run": 3,
+        "exit_code": 0,
+        "report": {
+          "schema_version": 1,
+          "complete": true,
+          "measurement_samples": 1,
+          "lanes": {
+            "integration": {
+              "lane": "integration",
+              "command": [
+                "go",
+                "test",
+                "-json",
+                "-count=1",
+                "-parallel=1",
+                "-covermode=set",
+                "-coverpkg=./...",
+                "-coverprofile=<temporary-profile>",
+                "-tags=integration",
+                "-run",
+                "^TestIntegration",
+                "./..."
+              ],
+              "passed": true,
+              "wall_seconds": 30.589613631,
+              "selected_test_seconds": 60.708,
+              "test_count": 516,
+              "coverage": {
+                "statement_total": 20981,
+                "covered_statements": 13953
+              },
+              "package_timings": [
+                {
+                  "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
+                  "seconds": 0.659
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/agentexec",
+                  "seconds": 0.836
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/beads",
+                  "seconds": 29.421
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/cli",
+                  "seconds": 13.177
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/doctor",
+                  "seconds": 0.668
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/git",
+                  "seconds": 9.473
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/pullrequest",
+                  "seconds": 0.274
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/review",
+                  "seconds": 3.93
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/revieweval",
+                  "seconds": 0.427
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/taskbranch",
+                  "seconds": 0.081
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/testguard",
+                  "seconds": 0.593
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/workflow",
+                  "seconds": 1.169
+                }
+              ]
+            },
+            "unit": {
+              "lane": "unit",
+              "command": [
+                "go",
+                "test",
+                "-json",
+                "-count=1",
+                "-parallel=1",
+                "-covermode=set",
+                "-coverpkg=./...",
+                "-coverprofile=<temporary-profile>",
+                "./..."
+              ],
+              "passed": true,
+              "wall_seconds": 3.869098918,
+              "selected_test_seconds": 3.3330000000000006,
+              "test_count": 1106,
+              "coverage": {
+                "statement_total": 20917,
+                "covered_statements": 11419
+              },
+              "package_timings": [
+                {
+                  "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
+                  "seconds": 0.097
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/agent",
+                  "seconds": 0.331
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/agentexec",
+                  "seconds": 0.062
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/beads",
+                  "seconds": 0.148
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/cli",
+                  "seconds": 0.203
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/doctor",
+                  "seconds": 0.132
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/git",
+                  "seconds": 0.248
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/logging",
+                  "seconds": 0.062
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/publication",
+                  "seconds": 0.092
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/pullrequest",
+                  "seconds": 0.064
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/readiness",
+                  "seconds": 0.066
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/registry",
+                  "seconds": 0.085
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/review",
+                  "seconds": 0.084
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/revieweval",
+                  "seconds": 0.13
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/state",
+                  "seconds": 0.073
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/status",
+                  "seconds": 0.07
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/task",
+                  "seconds": 0.092
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/taskbranch",
+                  "seconds": 0.087
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/taskstate",
+                  "seconds": 0.228
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/taskstats",
+                  "seconds": 0.068
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/tasktarget",
+                  "seconds": 0.326
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/testguard",
+                  "seconds": 0.078
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/testlane",
+                  "seconds": 0.257
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/testutil",
+                  "seconds": 0.068
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/workflow",
+                  "seconds": 0.182
+                }
+              ]
+            }
+          },
+          "decision": {
+            "status": "pass"
+          }
+        }
+      },
+      {
+        "command": "make check",
+        "exit_code": 0,
+        "report": {
+          "schema_version": 1,
+          "complete": true,
+          "measurement_samples": 1,
+          "lanes": {
+            "integration": {
+              "lane": "integration",
+              "command": [
+                "go",
+                "test",
+                "-json",
+                "-count=1",
+                "-parallel=1",
+                "-covermode=set",
+                "-coverpkg=./...",
+                "-coverprofile=<temporary-profile>",
+                "-tags=integration",
+                "-run",
+                "^TestIntegration",
+                "./..."
+              ],
+              "passed": true,
+              "wall_seconds": 30.64672345,
+              "selected_test_seconds": 61.114000000000004,
+              "test_count": 516,
+              "coverage": {
+                "statement_total": 20981,
+                "covered_statements": 13953
+              },
+              "package_timings": [
+                {
+                  "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
+                  "seconds": 0.782
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/agentexec",
+                  "seconds": 0.86
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/beads",
+                  "seconds": 29.3
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/cli",
+                  "seconds": 13.383
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/doctor",
+                  "seconds": 0.744
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/git",
+                  "seconds": 9.475
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/pullrequest",
+                  "seconds": 0.323
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/review",
+                  "seconds": 4.069
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/revieweval",
+                  "seconds": 0.392
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/taskbranch",
+                  "seconds": 0.099
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/testguard",
+                  "seconds": 0.577
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/workflow",
+                  "seconds": 1.11
+                }
+              ]
+            },
+            "unit": {
+              "lane": "unit",
+              "command": [
+                "go",
+                "test",
+                "-json",
+                "-count=1",
+                "-parallel=1",
+                "-covermode=set",
+                "-coverpkg=./...",
+                "-coverprofile=<temporary-profile>",
+                "./..."
+              ],
+              "passed": true,
+              "wall_seconds": 3.855748234,
+              "selected_test_seconds": 3.5279999999999996,
+              "test_count": 1106,
+              "coverage": {
+                "statement_total": 20917,
+                "covered_statements": 11419
+              },
+              "package_timings": [
+                {
+                  "name": "github.com/hea3ven/orpheus/cmd/testcoverage",
+                  "seconds": 0.093
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/agent",
+                  "seconds": 0.303
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/agentexec",
+                  "seconds": 0.075
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/beads",
+                  "seconds": 0.106
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/cli",
+                  "seconds": 0.221
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/doctor",
+                  "seconds": 0.126
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/git",
+                  "seconds": 0.35
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/logging",
+                  "seconds": 0.094
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/publication",
+                  "seconds": 0.076
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/pullrequest",
+                  "seconds": 0.065
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/readiness",
+                  "seconds": 0.068
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/registry",
+                  "seconds": 0.083
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/review",
+                  "seconds": 0.078
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/revieweval",
+                  "seconds": 0.142
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/state",
+                  "seconds": 0.08
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/status",
+                  "seconds": 0.07
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/task",
+                  "seconds": 0.106
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/taskbranch",
+                  "seconds": 0.066
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/taskstate",
+                  "seconds": 0.268
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/taskstats",
+                  "seconds": 0.062
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/tasktarget",
+                  "seconds": 0.383
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/testguard",
+                  "seconds": 0.064
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/testlane",
+                  "seconds": 0.271
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/testutil",
+                  "seconds": 0.087
+                },
+                {
+                  "name": "github.com/hea3ven/orpheus/internal/workflow",
+                  "seconds": 0.191
+                }
+              ]
+            }
+          },
+          "decision": {
+            "status": "pass"
+          }
+        }
+      }
+    ]
+  }
+}

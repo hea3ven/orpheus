@@ -89,10 +89,12 @@ type laneFailure struct {
 }
 
 type laneReport struct {
-	Lane                string          `json:"lane"`
-	Command             []string        `json:"command"`
-	Passed              bool            `json:"passed"`
-	WallSeconds         float64         `json:"wall_seconds"`
+	Lane    string   `json:"lane"`
+	Command []string `json:"command"`
+	Passed  bool     `json:"passed"`
+	// WallSeconds measures command wait, including compilation and scheduling.
+	WallSeconds float64 `json:"wall_seconds"`
+	// SelectedTestSeconds sums elapsed package work, including overlapping packages.
 	SelectedTestSeconds float64         `json:"selected_test_seconds"`
 	TestCount           int             `json:"test_count"`
 	Coverage            coverageMetric  `json:"coverage"`
@@ -141,7 +143,9 @@ func coverageCommand(lane, profile, testName string) []string {
 }
 
 func coverageCommandForPackages(lane, profile, testName string, packages []string) []string {
-	command := []string{"go", "test", "-json", "-count=1", "-p=1", "-parallel=1", "-covermode=set", "-coverpkg=./...", "-coverprofile=" + profile}
+	// Let Go schedule independent packages. Keep tests within each package
+	// serialized until the final intra-package isolation work is complete.
+	command := []string{"go", "test", "-json", "-count=1", "-parallel=1", "-covermode=set", "-coverpkg=./...", "-coverprofile=" + profile}
 	if lane == "integration" {
 		command = append(command, "-tags="+testlane.IntegrationBuildTag, "-run", testlane.IntegrationTestPattern)
 	}

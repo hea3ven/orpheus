@@ -32,7 +32,7 @@ func renderReportSummary(output io.Writer, result qualityReport, reportPath stri
 	_, _ = fmt.Fprintf(output, "## Test quality\n\n> [!%s]\n> **%s.** %s\n\n", alert, title, description)
 
 	_, _ = fmt.Fprint(output, "### Lane results\n\n")
-	_, _ = fmt.Fprintln(output, "| Lane | Result | Coverage | Test events | Selected-test time | Wall time |")
+	_, _ = fmt.Fprintln(output, "| Lane | Result | Coverage | Test events | Selected package work | Command wall time |")
 	_, _ = fmt.Fprintln(output, "| --- | --- | ---: | ---: | ---: | ---: |")
 	for _, name := range laneNames {
 		lane := result.Lanes[name]
@@ -53,6 +53,8 @@ func renderReportSummary(output io.Writer, result qualityReport, reportPath stri
 			lane.WallSeconds,
 		)
 	}
+
+	_, _ = fmt.Fprintln(output, "\nCommand wall time measures developer wait and is diagnostic only. Selected package work sums elapsed times for packages that ran tests, including overlapping packages; timing policy governs this work.")
 
 	if len(result.Decision.Findings) > 0 {
 		heading := "Blocking issues"
@@ -105,7 +107,7 @@ func renderFindingTable(output io.Writer, heading string, findings []finding) {
 func renderPackageTable(output io.Writer, result qualityReport) {
 	_, _ = fmt.Fprintln(output, "\n<details>")
 	_, _ = fmt.Fprint(output, "<summary>Package coverage and timing</summary>\n\n")
-	_, _ = fmt.Fprintln(output, "| Lane | Package | Coverage | Selected-test time |")
+	_, _ = fmt.Fprintln(output, "| Lane | Package | Coverage | Selected package work |")
 	_, _ = fmt.Fprintln(output, "| --- | --- | ---: | ---: |")
 	for _, name := range laneNames {
 		lane := result.Lanes[name]
