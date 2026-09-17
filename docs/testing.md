@@ -92,12 +92,30 @@ Integration source files use `//go:build integration`, and their top-level test 
 ## Single-pass quality report
 
 `make quality` is the routine local and CI command. It reads `.quality.yml` and
-never writes it. The command runs the unit and integration lanes serially once
-with `-coverpkg=./...`. The decoded `go test -json` streams provide test
-outcomes, failure evidence, test-event counts, package timings, and coverage
-profiles. Suite timing is the sum of package elapsed times for packages that ran
-selected tests. Command wall time remains diagnostic only, so compilation time
-does not count against the test ceiling.
+never writes it. The command runs the unit lane once, then the integration lane
+once, with `-count=1` and `-coverpkg=./...`. Within each lane, Go schedules
+independent packages concurrently using its default package limit. The runner
+does not set `-p`; an explicit `GOFLAGS=-p=1` remains useful for a serial control.
+It retains `-parallel=1` to serialize tests marked with `t.Parallel` inside each
+package until the remaining isolation work is complete. This does not serialize
+goroutines started by a test.
+
+The decoded `go test -json` streams provide test outcomes, failure evidence,
+test-event counts, package timings, and coverage profiles. Reports distinguish:
+
+- Command wall time, the developer's wait for each `go test` command, including
+  compilation, scheduling, and coverage output. It is diagnostic only.
+- Selected package work, the sum of package elapsed times for packages that ran
+  selected tests. This is elapsed package work, not CPU time or a sum of test and
+  subtest durations. Overlapping packages still contribute their full elapsed
+  times, so work can exceed wall time. Packages with no selected tests contribute
+  no timing, even if they appear in the coverage profile.
+
+`.quality.yml` continues to govern selected package work and individual package
+timings, never command wall time. Scheduling reduces waiting without treating
+that reduction as removed test work. Resource contention can still affect
+package timings. The JSON fields remain `wall_seconds`, `selected_test_seconds`
+for selected package work, and `package_timings` for compatibility.
 
 The policy has a coverage floor and suite timing ceiling for each lane. It also
 has a coverage floor for every production package and a timing ceiling for every
@@ -113,6 +131,14 @@ lane fails, the command still runs the other lane and writes a partial report
 with stderr, raw JSON output, and decoded failing-test output. `make coverage`
 remains a compatibility alias.
 
+When comparing scheduling modes, use the same quality environment as well as
+identical selectors and coverage flags. In particular,
+`ORPHEUS_COVERAGE_RUN=1` disables incidental Linux launcher-ancestry detection.
+Omitting it changes CLI coverage without changing test selection. The historical
+21-statement difference came from that detection path, not package scheduling.
+See [scheduling evidence](../performance/op-sc7-2-scheduling-evidence.md) for
+controlled profiles and repeated comparisons.
+
 ## Updating the policy
 
 Run `make quality-policy-update` when routine quality reports stale bounds or
@@ -122,7 +148,10 @@ coverage package structure, and selected-test package structure across all five
 samples. Any failed, incomplete, or inconsistent sample stops the update before
 `.quality.yml` is written.
 
-The updater uses median suite and package timings. It changes only bounds whose
+The updater uses median command wall times, suite work, and package timings.
+Only suite work and package timings determine policy bounds. Samples must use
+the same recorded command, including scheduling flags; do not mix serialized
+and concurrent measurements in a policy refresh. It changes only bounds whose
 refresh threshold was crossed, plus package additions and removals. Coverage
 floors retain 0.5 percentage points of lane headroom and 2 percentage points of
 package headroom. Timing ceilings retain the greater of 25 percent or 0.5

@@ -2,7 +2,9 @@
 
 ## Validation
 
-Run `make check` for complete validation at the end of a change. It runs formatting, the unit lane once, the integration lane once, and linting.
+Run `make check` for complete validation at the end of a change. It runs formatting, the unit lane once, the integration lane once, linting, and a CLI build.
+
+Quality runs the lanes in sequence and allows Go's default package concurrency within each lane. Keep `-parallel=1` until the final intra-package isolation task. Reports distinguish command wall time, the developer's wait, from selected package work, the sum of elapsed times for packages that ran selected tests. `.quality.yml` governs selected work and package timings, not wall time. Policy updates require complete comparable samples with the same scheduling; do not mix serial controls with concurrent samples.
 
 `make test-unit` is the explicit package-owned unit lane; `make test` remains its compatibility alias. Unit tests use injected collaborators and require only Go: they do not invoke Git, Beads, gh, Codex, or Pi executables. `make test-integration` executes only cross-package workflows and isolated local Git, Beads, compiled-CLI, or child-process contracts. It requires `git` and `bd` on `PATH` (some schema tests also skip unless `dolt` is available).
 

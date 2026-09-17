@@ -559,6 +559,7 @@ func aggregatePolicySamples(samples []qualityReport) (qualityReport, error) {
 	for _, laneName := range laneNames {
 		reference := samples[0].Lanes[laneName]
 		suiteSamples := make([]float64, 0, len(samples))
+		wallSamples := make([]float64, 0, len(samples))
 		packageSamples := make(map[string][]float64, len(reference.Timings))
 		for index, sample := range samples {
 			lane := sample.Lanes[laneName]
@@ -566,11 +567,13 @@ func aggregatePolicySamples(samples []qualityReport) (qualityReport, error) {
 				return qualityReport{}, fmt.Errorf("quality policy sample %d %s lane is not comparable: %w", index+1, laneName, err)
 			}
 			suiteSamples = append(suiteSamples, laneSelectedTestSeconds(lane))
+			wallSamples = append(wallSamples, lane.WallSeconds)
 			for _, timing := range lane.Timings {
 				packageSamples[timing.Name] = append(packageSamples[timing.Name], timing.Seconds)
 			}
 		}
 		aggregated := reference
+		aggregated.WallSeconds = medianFloat64(wallSamples)
 		aggregated.SelectedTestSeconds = medianFloat64(suiteSamples)
 		aggregated.Timings = make([]packageTiming, 0, len(packageSamples))
 		for _, name := range sortedKeys(packageSamples) {
@@ -582,6 +585,9 @@ func aggregatePolicySamples(samples []qualityReport) (qualityReport, error) {
 }
 
 func comparableLane(reference, candidate laneReport) error {
+	if !reflect.DeepEqual(recordedCommand(reference.Command), recordedCommand(candidate.Command)) {
+		return errors.New("test command changed")
+	}
 	if reference.TestCount != candidate.TestCount {
 		return fmt.Errorf("test-event count changed from %d to %d", reference.TestCount, candidate.TestCount)
 	}

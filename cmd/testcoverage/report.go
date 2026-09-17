@@ -15,7 +15,7 @@ func printReportTo(outputWriter io.Writer, result qualityReport, output string) 
 		lane := result.Lanes[name]
 		_, _ = fmt.Fprintf(
 			outputWriter,
-			"%s: %d/%d statements (%.2f%%), %d test events, %.2fs selected tests (%.2fs wall)\n",
+			"%s: %d/%d statements (%.2f%%), %d test events, %.2fs selected package work, %.2fs command wall time\n",
 			name,
 			lane.Coverage.CoveredStatements,
 			lane.Coverage.StatementTotal,
@@ -47,7 +47,7 @@ func printPackageSummary(output io.Writer, lane laneReport) {
 	for _, pkg := range lane.Packages {
 		timing, measured := timings[pkg.Name]
 		if !measured {
-			_, _ = fmt.Fprintf(output, "  %s: %d/%d statements (%.2f%%), no selected-test timing\n", pkg.Name, pkg.CoveredStatements, pkg.StatementTotal, percentage(pkg.coverageMetric))
+			_, _ = fmt.Fprintf(output, "  %s: %d/%d statements (%.2f%%), no selected package work\n", pkg.Name, pkg.CoveredStatements, pkg.StatementTotal, percentage(pkg.coverageMetric))
 			continue
 		}
 		_, _ = fmt.Fprintf(output, "  %s: %d/%d statements (%.2f%%), %.2fs\n", pkg.Name, pkg.CoveredStatements, pkg.StatementTotal, percentage(pkg.coverageMetric), timing)
