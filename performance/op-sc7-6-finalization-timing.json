@@ -1,0 +1,59 @@
+{
+  "scenarios": [
+    "TestIntegrationTaskDoneCommitsPushesClosesAndRecordsFinalization",
+    "TestIntegrationTaskDoneRequiresPassedReview",
+    "TestIntegrationTaskDoneRefusesRunningCompletionWithoutInteractiveConfirmation",
+    "TestIntegrationTaskDonePublishesPRReadyTaskBranch",
+    "TestIntegrationTaskDoneRecoversExistingBranchPR",
+    "TestIntegrationTaskDoneFeatureBranchPushFailureIsNonZero",
+    "TestIntegrationTaskDoneInfersSingleMainReadyTaskFromRepoRootAndUsesOverrides",
+    "TestIntegrationTaskDoneInfersRepoRootFeatureBranchTask",
+    "TestIntegrationTaskDoneInfersWorktreeTask",
+    "TestIntegrationTaskDoneRejectsRemovedDetailsOverride",
+    "TestIntegrationTaskDoneWithoutTaskIDRequiresExactRegisteredRepoRoot",
+    "TestIntegrationTaskDoneRefusesNoChangesWithoutRecordedFinalizationCommit",
+    "TestIntegrationTaskDoneRetriesPushAndCloseFromRecordedFinalizationCommit",
+    "TestIntegrationAgentDoneRecordsMainCompletionForLocalReview",
+    "TestIntegrationAgentDoneRejectsMissingDescription",
+    "TestIntegrationAgentDoneRejectsMissingDetailedDescription",
+    "TestIntegrationAgentDoneRejectsMultipleDetailedDescriptionSources",
+    "TestIntegrationAgentDoneRejectsRemovedDetailsFlag",
+    "TestIntegrationAgentDoneRejectsMissingTechnicalExplanation",
+    "TestIntegrationAgentDoneRejectsMultipleTechnicalExplanationSources",
+    "TestIntegrationAgentDoneRepeatedMainCompletionIsNoopWithGuidance",
+    "TestIntegrationAgentDoneCommitsWorktreeCompletion",
+    "TestIntegrationAgentDoneRequiresMainWorkingTreeChangesBeforeWriting",
+    "TestIntegrationConfiguredPublicationPolicyEndToEnd",
+    "TestIntegrationGlobalPublicationPolicyEndToEnd",
+    "TestIntegrationMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd",
+    "TestIntegrationWorktreeLocalReviewTaskDonePRFlowEndToEnd",
+    "TestIntegrationRepoRootLocalReviewTaskDonePRFlowEndToEnd"
+  ],
+  "before_seconds": [
+    3.6629039690014906,
+    3.588200249010697,
+    3.320536617000471
+  ],
+  "after_seconds": [
+    0.29626466499757953,
+    0.26626594399567693,
+    0.2628092109953286
+  ],
+  "before_exec": {
+    "descendant_pids": 834,
+    "git_pids": 487,
+    "other_pids": 347,
+    "executables": [
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-sc7.6/artifacts/test-coverage/finalization-migration/before.test",
+      "/usr/bin/bash",
+      "/usr/bin/cat",
+      "/usr/bin/git"
+    ]
+  },
+  "after_exec": {
+    "descendant_pids": 0,
+    "git_pids": 0,
+    "other_pids": 0,
+    "executables": []
+  }
+}

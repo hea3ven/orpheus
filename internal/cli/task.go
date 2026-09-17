@@ -3116,6 +3116,7 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summa
 	service := newTaskFinalizationService(deps, taskCtx, logger)
 	finalized, err := finalizeTaskWithConfirmation(command, service, workflow.FinalizeOptions{
 		TaskID:              taskID,
+		CWD:                 deps.taskCWD,
 		Summary:             summary,
 		Description:         description,
 		RequirePassedReview: true,
@@ -3136,9 +3137,10 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summa
 
 func newTaskFinalizationService(deps *invocationDependencies, taskCtx taskContext, logger *slog.Logger) workflow.FinalizationService {
 	return workflow.FinalizationService{
-		Git:     deps.finalizationGit,
-		Paths:   deps.paths,
-		Sources: taskCtx.Sources,
+		Git:        deps.finalizationGit,
+		CleanupGit: deps.cleanupGit,
+		Paths:      deps.paths,
+		Sources:    taskCtx.Sources,
 		BackendFactory: func(source taskmodel.RepositorySource) (workflow.FinalizationBackend, error) {
 			return invocationTaskBackend[workflow.FinalizationBackend](deps, source)
 		},
@@ -3308,8 +3310,10 @@ func runTaskSync(command *cobra.Command, opts *rootOptions, taskID string) error
 	}
 
 	service := workflow.SyncService{
-		Paths:   deps.paths,
-		Sources: taskCtx.Sources,
+		Git:        deps.syncGit,
+		CleanupGit: deps.cleanupGit,
+		Paths:      deps.paths,
+		Sources:    taskCtx.Sources,
 		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.SyncBackend, error) {
 			return invocationTaskBackend[taskmodel.SyncBackend](deps, source)
 		},
@@ -3360,8 +3364,10 @@ func runTaskSyncAll(command *cobra.Command, opts *rootOptions) error {
 	}
 
 	service := workflow.SyncService{
-		Paths:   deps.paths,
-		Sources: taskCtx.Sources,
+		Git:        deps.syncGit,
+		CleanupGit: deps.cleanupGit,
+		Paths:      deps.paths,
+		Sources:    taskCtx.Sources,
 		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.SyncBackend, error) {
 			return invocationTaskBackend[taskmodel.SyncBackend](deps, source)
 		},

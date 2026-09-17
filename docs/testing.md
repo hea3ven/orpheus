@@ -62,6 +62,13 @@ streaming, cancellation, PID, environment and Git snapshot contracts separate.
 See [review and repair migration evidence](../performance/op-sc7-5-review-workflow-evidence.md)
 for the assertion map and measurements.
 
+Completion and publication journeys also use the memory-backed application.
+They assert operator output, completion and finalization facts, task closure,
+PR content, and retry outcomes through semantic task, Git, and PR collaborators.
+Real commits, pushed refs, upstream tracking, and failed pushes have focused Git
+contracts. See [finalization and publication migration evidence](../performance/op-sc7-6-finalization-evidence.md)
+for the assertion map, contract owners, and before/after measurements.
+
 ## Structural membership
 
 Integration source files use `//go:build integration`, and their top-level test bodies begin with `TestIntegration`. Untagged test bodies whose names do not have that prefix are unit tests. `internal/testlane` validates this convention so every top-level body is selected by exactly one lane. The build constraint is the membership mechanism; the integration name filter only limits execution to structurally tagged integration bodies.
