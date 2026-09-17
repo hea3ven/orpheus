@@ -10,6 +10,15 @@ Orpheus separates tests by behavioral scope, not by speed or whether a test writ
 - `make quality` runs both lanes once with coverage and timing policy.
 - `make check` formats code, runs the single-pass quality report, lints, and builds the CLI. Each test lane still runs only once.
 
+## Behavioral assertions
+
+Do not test logging. Do not add logging-only scenarios or assert log messages,
+levels, structured fields, correlation identifiers, timing fields, or log
+redaction. When removing logging checks from a mixed scenario, retain its
+functional assertions about returned errors, operator-facing command output,
+state changes, and external effects. Persisted task audit events and usage
+records are application data, not logs, and remain part of the test contract.
+
 ## Unit lane
 
 A unit test exercises package-owned logic with injected collaborators or fakes. It requires only Go and may use isolated temporary files. It must not require or start Git, Beads, gh, Codex, Pi, or any other child executable.
@@ -68,6 +77,13 @@ PR content, and retry outcomes through semantic task, Git, and PR collaborators.
 Real commits, pushed refs, upstream tracking, and failed pushes have focused Git
 contracts. See [finalization and publication migration evidence](../performance/op-sc7-6-finalization-evidence.md)
 for the assertion map, contract owners, and before/after measurements.
+
+Pull-request sync and conflict recovery use the same application fixture. Git
+fakes track branch heads, conflicts, pending merges, pushes, and rollback;
+PR fakes track identity, lifecycle state, and provider failures. Keep durable
+checkpoint/ref, local merge, separate push, rollback, and GH argument/parsing
+contracts at the adapter boundary. See [sync migration evidence](../performance/op-sc7-7-sync-evidence.md)
+for the assertion map, retained contracts, and measured replacements.
 
 ## Real Beads relationship contracts
 

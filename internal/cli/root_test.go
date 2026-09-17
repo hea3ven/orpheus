@@ -20,27 +20,6 @@ func TestIntegrationNewRootCommandHelp(t *testing.T) {
 	is.Contains(output, "--verbose")
 }
 
-func TestIntegrationRootCommandDoesNotEmitDebugByDefault(t *testing.T) {
-	t.Parallel()
-	is := assert.New(t)
-
-	stdout, stderr := executeCommand(t, []string{})
-
-	is.NotContains(stdout, "level=DEBUG")
-	is.NotContains(stderr, "level=DEBUG")
-}
-
-func TestIntegrationRootCommandVerboseEmitsDebugToStderr(t *testing.T) {
-	t.Parallel()
-	is := assert.New(t)
-
-	stdout, stderr := executeCommand(t, []string{"--verbose"})
-
-	is.NotContains(stdout, "level=DEBUG")
-	is.Contains(stderr, "level=DEBUG")
-	is.Contains(stderr, "msg=\"rendering root help\"")
-}
-
 type reviewWorkflowHelpCase struct {
 	name string
 	args []string

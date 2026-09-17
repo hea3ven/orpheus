@@ -1,10 +1,8 @@
 package beads_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -397,39 +395,6 @@ func TestManagedTaskBackendRepairsBehindSchemaAndRetriesRead(t *testing.T) {
 	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("runner has %d unused calls", len(runner.calls))
-	}
-}
-
-func TestManagedTaskBackendLogsSchemaRecoveryWithoutCommandOutput(t *testing.T) {
-	dir := testutil.CanonicalTempDir(t)
-	runner := &fakeRunner{calls: []fakeCall{
-		{
-			wantDir:  dir,
-			wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"},
-			result:   beads.Result{Stderr: "schema version mismatch: database is at v12, binary expects v14, and the read-only open cannot migrate it"},
-			err:      errors.New("exit status 1"),
-		},
-		{wantDir: dir, wantArgs: []string{"--json", "--sandbox", "migrate", "schema"}},
-		{wantDir: dir, wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "task"}, result: beads.Result{Stdout: `[]`}},
-		{wantDir: dir, wantArgs: []string{"--json", "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--type", "epic"}, result: beads.Result{Stdout: `[]`}},
-	}}
-	var logs bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	backend, err := beads.NewTaskBackendForSourceWithRunner(task.RepositorySource{BackendDir: dir, MaintenanceOwned: true}, runner, logger)
-	if err != nil {
-		t.Fatalf("create backend: %v", err)
-	}
-	if _, err := backend.List(context.Background()); err != nil {
-		t.Fatalf("list tasks: %v", err)
-	}
-	output := logs.String()
-	for _, want := range []string{`"operation":"schema_recovery"`, `"recovery_event":"detected"`, `"recovery_event":"retrying"`, `"recovery_event":"recovered"`} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("diagnostics = %s, want %s", output, want)
-		}
-	}
-	if strings.Contains(output, "schema version mismatch") {
-		t.Fatalf("diagnostics include command output: %s", output)
 	}
 }
 

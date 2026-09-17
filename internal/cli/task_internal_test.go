@@ -302,7 +302,7 @@ func TestSyncConflictAgentUsageOptionsUnsupportedHarnessUsesStableReason(t *test
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			options := syncConflictAgentUsageOptions(
+			options := (syncConflictAgentResolver{}).usageOptions(
 				agent.CommandSnapshot{Harness: tt.harness},
 				testutil.CanonicalTempDir(t),
 			)(taskstate.AgentExecution{}, nil)

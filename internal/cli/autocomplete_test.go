@@ -208,7 +208,6 @@ func TestIntegrationCompletionGeneratorsRemainCleanForAllSupportedShells(t *test
 		t.Run(shell, func(t *testing.T) {
 			stdout, stderr := executeCommand(t, []string{"completion", shell})
 			assert.NotEmpty(t, stdout)
-			assert.NotContains(t, stdout, "level=DEBUG")
 			assert.Empty(t, stderr)
 		})
 	}

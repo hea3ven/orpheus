@@ -24,10 +24,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type testRepoConfig struct {
-	withRemote bool
-}
-
 const immutableCLIHelperMode = 0o555
 
 // writeTestExecutable makes a fixture visible only after its complete content and
@@ -43,7 +39,6 @@ var (
 	cliHelperFixtureRoot          string
 	localOriginTestRepoTemplate   string
 	localWorktreeTestRepoTemplate string
-	normalTestRepoTemplate        string
 	orpheusCLIHelperPath          string
 )
 
@@ -128,7 +123,6 @@ func createSeededCLIRepositories(root string) error {
 		return err
 	}
 
-	normalTestRepoTemplate = normalTemplate
 	localOriginTestRepoTemplate = originTemplate
 	localWorktreeTestRepoTemplate = worktreeTemplate
 	return nil
@@ -200,23 +194,7 @@ func cleanupCLIHelperFixture() {
 	cliHelperFixtureRoot = ""
 	localOriginTestRepoTemplate = ""
 	localWorktreeTestRepoTemplate = ""
-	normalTestRepoTemplate = ""
 	orpheusCLIHelperPath = ""
-}
-
-func newSeededTestRepoAt(t *testing.T, root string, relativePath string, config testRepoConfig) string {
-	t.Helper()
-	requireCLIHelperFixture(t)
-
-	repoPath := filepath.Join(root, relativePath)
-	copySeededTestRepo(t, normalTestRepoTemplate, repoPath)
-	if config.withRemote {
-		name := filepath.Base(repoPath)
-		runGit(t, repoPath, "remote", "add", "origin", "git@example.com:org/"+name+".git")
-		runGit(t, repoPath, "update-ref", "refs/remotes/origin/main", "HEAD")
-		runGit(t, repoPath, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
-	}
-	return repoPath
 }
 
 func newTestRepoWithLocalOriginAt(t *testing.T, root string, relativePath string) string {
