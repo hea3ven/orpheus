@@ -2,12 +2,9 @@
 
 ## Scope
 
-28 scenarios moved from `internal/cli/agent_test.go`, `task_test.go`, and
-`completion_flows_e2e_test.go` to the external `cli_test` package. Their names
-remain unchanged. Several flag-validation scenarios already avoided processes;
-they now use the same isolated application fixture as the completion journeys.
-Unused shell-agent, stateful Beads, completion, and log-reading helpers were
-removed. The remaining doctor cleanup and CLI-helper contracts stay in place.
+The historical migration benchmark covered 28 scenarios moved from process-heavy CLI fixtures to the external `cli_test` package. They now live in the classified `completion_*_workflow_test.go`, `finalization_*_workflow_test.go`, and `publication_*_workflow_test.go` files and carry `TestIntegrationWorkflow...` names. The assertion map below uses scenario suffixes so it remains readable after classification.
+
+Several flag-validation scenarios already avoided processes; they now use the same isolated application fixture as the completion journeys. Unused shell-agent, stateful Beads, completion, and log-reading helpers were removed. The shared CLI-helper wrapper and its immutability scenario were also retired. Recursive packaging now has one binary-E2E owner, while child-process semantics remain focused launcher contracts.
 
 The new `completion_*_workflow_test.go`, `finalization_*_workflow_test.go`, and
 `publication_*_workflow_test.go` files run fresh public root commands over the
@@ -97,20 +94,23 @@ Git staging, upstream configuration, or safe worktree removal.
 
 | Boundary | Contract owner |
 | --- | --- |
-| Real staging, commit body, clean checkout, remote ref, task upstream, and unchanged remote main during task-branch publication | New `internal/git/publication_test.go:TestIntegrationPublicationCommitAndPushPreserveMessageAndRemoteRef`, with separate main and task-branch cases |
-| Real failed push to an unavailable local origin, contextual error, unchanged local commit | New `TestIntegrationPublicationPushReportsUnavailableOriginWithoutChangingCommit`, with separate main and task-branch cases |
-| Recorded commit parent/message verification | Retained `TestIntegrationVerifyCommitMatchesRecordedParentAndMessage` |
-| Merge commit ancestry, local-only merge, idempotent merge, and named destination verification | Retained `internal/git/direct_merge_test.go` contracts |
-| Branch materialization, reviewed changes, and stale/divergent local/remote refs | Retained `TestIntegrationMaterializeRepoRootTaskBranch*` contracts |
-| Deterministic worktree creation, reuse, branch/path rejection, and safe cleanup | Retained `internal/git/worktree_test.go` contracts and doctor dirty/locked worktree scenario |
+| Real staging, commit body, clean checkout, remote ref, task upstream, and unchanged remote main during task-branch publication | New `internal/git/publication_adapter_test.go:TestIntegrationAdapterContractPublicationCommitAndPushPreserveMessageAndRemoteRef`, with separate main and task-branch cases |
+| Real failed push to an unavailable local origin, contextual error, unchanged local commit | New `TestIntegrationAdapterContractPublicationPushReportsUnavailableOriginWithoutChangingCommit`, with separate main and task-branch cases |
+| Recorded commit parent/message verification | Retained `TestIntegrationAdapterContractVerifyCommitMatchesRecordedParentAndMessage` |
+| Merge commit ancestry, local-only merge, idempotent merge, and named destination verification | Retained `internal/git/direct_merge_adapter_test.go` contracts |
+| Branch materialization, reviewed changes, and stale/divergent local/remote refs | Retained `TestIntegrationAdapterContractMaterializeRepoRootTaskBranch*` contracts |
+| Deterministic worktree creation, reuse, branch/path rejection, and safe cleanup | Retained `internal/git/worktree_adapter_test.go` contracts and doctor dirty/locked worktree scenario |
 | Task branch sync, conflicts, and merge pushes | Retained Git sync/conflict contracts and workflow recovery scenarios |
 | PR CLI translation and provider failures | Retained `internal/pullrequest` tests |
 | Task mutation translation and real Beads behavior | Retained `internal/beads` unit and integration tests |
-| Child process, completion diagnostics, and recursive CLI packaging | Retained launcher, verbose-agent-completion, and CLI-helper contracts |
+| Agent completion validation and diagnostics | `TestIntegrationWorkflowAgentDoneRejectsMissingDescription`, `TestIntegrationWorkflowAgentDoneRejectsMissingDetailedDescription`, `TestIntegrationWorkflowAgentDoneRejectsMissingTechnicalExplanation`, and `TestIntegrationWorkflowAgentDoneRepeatedMainCompletionIsNoopWithGuidance`; the assertion map above lists the remaining focused owners |
+| Child argv, environment, streams, exit status, PID, cancellation, and reaping | `TestIntegrationAdapterContractAttachedLauncherForwardsWorkingDirectoryArgumentsAndStreams`, `TestIntegrationAdapterContractAttachedLauncherReportsDirectChildPIDBeforeWait`, and `TestIntegrationAdapterContractAttachedLauncherStreamsBeforeExitAndReapsCanceledChild` |
+| Recursive CLI packaging from controlled agent children | `TestIntegrationBinaryE2ETaskRunUsesSeparateTaskProposalSelection` |
+| Removed wrapper immutability | No replacement: immutability was a fixture implementation property, not a product contract |
 
-## Measurements
+## Historical measurements
 
-`op-sc7-6-finalization-timing.json` records the 28 scenario names, three elapsed
+These measurements compare the retired process-heavy fixture with the semantic workflow replacement. They are historical performance evidence, not an inventory of retained helper contracts. `op-sc7-6-finalization-timing.json` records the 28 scenario names, three elapsed
 samples per binary, and exec counts. Both binaries were compiled once on the same
 host with `go test -c -tags=integration ./internal/cli`. Each sample used the exact
 name alternation with `-test.count=1 -test.parallel=1`. Compilation is excluded.
@@ -129,12 +129,11 @@ These are targeted serial measurements, not whole-suite policy measurements.
 Median elapsed time fell by 92.6%. The separate Linux ptrace measurement follows
 fork, vfork, clone, and exec events. Counts exclude the root binary and compilation;
 a PID that executed Git belongs to the Git row even if it also executed another
-program. Before-migration executables were Git, Bash, cat, and the controlled
-CLI-helper test binary. Neither run used real Beads, gh, or model agents. Local
+program. The before-migration binary used Git, Bash, cat, and the now-retired controlled CLI-helper test binary; this does not describe current retained coverage. Neither run used real Beads, gh, or model agents. Local
 logs, binaries, and the tracer source are under
 `artifacts/test-coverage/finalization-migration/`.
 
-## Validation and policy
+## Historical validation and policy
 
 The initial functional lanes passed. Quality requested a refresh because workflow
 integration coverage increased. The first five-sample

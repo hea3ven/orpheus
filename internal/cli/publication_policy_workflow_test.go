@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationConfiguredPublicationPolicyEndToEnd(t *testing.T) {
+func TestIntegrationWorkflowConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 	f := newFinalizationFixture(t, "op-trex-title")
 	item := anOpenTask("op-trex-title")
 	item.ExternalRef = "TREX-1234"
@@ -51,7 +51,7 @@ func TestIntegrationConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 	f.assertPublishedPR(item.ID)
 }
 
-func TestIntegrationGlobalPublicationPolicyEndToEnd(t *testing.T) {
+func TestIntegrationWorkflowGlobalPublicationPolicyEndToEnd(t *testing.T) {
 	f := newFinalizationFixture(t, "op-global-title")
 	item := anOpenTask("op-global-title")
 	item.ExternalRef = "TREX-4321"
@@ -81,7 +81,7 @@ func TestIntegrationGlobalPublicationPolicyEndToEnd(t *testing.T) {
 	f.assertPublishedPR(item.ID)
 }
 
-func TestIntegrationMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd(t *testing.T) {
+func TestIntegrationWorkflowMissingPublicationExternalReferenceBlocksDispatchAndPublicationEndToEnd(t *testing.T) {
 	f := newFinalizationFixture(t, "op-missing-title-ref")
 	item := anOpenTask("op-missing-title-ref")
 	f.backend.tasks[item.ID] = item

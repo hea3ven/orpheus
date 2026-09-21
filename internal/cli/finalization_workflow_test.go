@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationTaskDoneCommitsPushesClosesAndRecordsFinalization(t *testing.T) {
+func TestIntegrationWorkflowTaskDoneCommitsPushesClosesAndRecordsFinalization(t *testing.T) {
 	f := newMainFinalizationFixture(t, "op-main")
 
 	stdout, stderr := f.run("", "task", "done", "op-main")
@@ -36,7 +36,7 @@ func TestIntegrationTaskDoneCommitsPushesClosesAndRecordsFinalization(t *testing
 	assert.Empty(t, f.pr.created)
 }
 
-func TestIntegrationTaskDoneRequiresPassedReview(t *testing.T) {
+func TestIntegrationWorkflowTaskDoneRequiresPassedReview(t *testing.T) {
 	f := newFinalizationFixture(t, "op-main")
 	f.completion("op-main", "main", taskWorkflowRepoRoot, "Implement task done", "Commit reviewed repo-root changes.", taskstate.RunStatusSucceeded)
 
@@ -50,7 +50,7 @@ func TestIntegrationTaskDoneRequiresPassedReview(t *testing.T) {
 	f.assertUnpublished("op-main")
 }
 
-func TestIntegrationTaskDoneRefusesRunningCompletionWithoutInteractiveConfirmation(t *testing.T) {
+func TestIntegrationWorkflowTaskDoneRefusesRunningCompletionWithoutInteractiveConfirmation(t *testing.T) {
 	f := newFinalizationFixture(t, "op-main")
 	f.completion("op-main", "main", taskWorkflowRepoRoot, "Implement task done", "Commit reviewed repo-root changes.", taskstate.RunStatusRunning)
 	f.passedReview("op-main")
@@ -66,7 +66,7 @@ func TestIntegrationTaskDoneRefusesRunningCompletionWithoutInteractiveConfirmati
 	f.assertUnpublished("op-main")
 }
 
-func TestIntegrationTaskDonePublishesPRReadyTaskBranch(t *testing.T) {
+func TestIntegrationWorkflowTaskDonePublishesPRReadyTaskBranch(t *testing.T) {
 	f := newFeatureFinalizationFixture(t, "op-sync", false)
 
 	stdout, stderr := f.run("", "task", "done", "op-sync")
@@ -88,7 +88,7 @@ func TestIntegrationTaskDonePublishesPRReadyTaskBranch(t *testing.T) {
 	f.assertPublishedPR("op-sync")
 }
 
-func TestIntegrationTaskDoneRecoversExistingBranchPR(t *testing.T) {
+func TestIntegrationWorkflowTaskDoneRecoversExistingBranchPR(t *testing.T) {
 	f := newFeatureFinalizationFixture(t, "op-sync", false)
 	f.pr.url = "https://github.test/org/alpha/pull/7"
 	f.pr.existing = &pullrequest.CreateRequest{RepositoryPath: taskWorkflowRepoRoot, HeadBranch: "orpheus/op-sync", BaseBranch: "main"}
@@ -104,7 +104,7 @@ func TestIntegrationTaskDoneRecoversExistingBranchPR(t *testing.T) {
 	assert.Equal(t, taskstate.EventPRRecovered, state.Events[len(state.Events)-1].Type)
 }
 
-func TestIntegrationTaskDoneFeatureBranchPushFailureIsNonZero(t *testing.T) {
+func TestIntegrationWorkflowTaskDoneFeatureBranchPushFailureIsNonZero(t *testing.T) {
 	f := newFeatureFinalizationFixture(t, "op-sync", false)
 	f.publication.pushError = errors.New("push task branch to origin: remote unavailable")
 
@@ -130,7 +130,7 @@ func TestIntegrationTaskDoneFeatureBranchPushFailureIsNonZero(t *testing.T) {
 	assert.Len(t, f.candidate.commits, 1)
 }
 
-func TestIntegrationTaskDoneInfersSingleMainReadyTaskFromRepoRootAndUsesOverrides(t *testing.T) {
+func TestIntegrationWorkflowTaskDoneInfersSingleMainReadyTaskFromRepoRootAndUsesOverrides(t *testing.T) {
 	f := newMainFinalizationFixture(t, "op-infer")
 	f.options.TaskWorkingDirectory = taskWorkflowRepoRoot
 
@@ -144,7 +144,7 @@ func TestIntegrationTaskDoneInfersSingleMainReadyTaskFromRepoRootAndUsesOverride
 	assert.Equal(t, "Implement task done", state.Runs[0].Completion.Summary)
 }
 
-func TestIntegrationTaskDoneInfersRepoRootFeatureBranchTask(t *testing.T) {
+func TestIntegrationWorkflowTaskDoneInfersRepoRootFeatureBranchTask(t *testing.T) {
 	f := newFeatureFinalizationFixture(t, "op-root-infer", true)
 
 	stdout, stderr := f.run("", "task", "done")
@@ -156,7 +156,7 @@ func TestIntegrationTaskDoneInfersRepoRootFeatureBranchTask(t *testing.T) {
 	f.assertPublishedPR("op-root-infer")
 }
 
-func TestIntegrationTaskDoneInfersWorktreeTask(t *testing.T) {
+func TestIntegrationWorkflowTaskDoneInfersWorktreeTask(t *testing.T) {
 	f := newFeatureFinalizationFixture(t, "op-worktree-infer", false)
 
 	stdout, stderr := f.run("", "task", "done")
@@ -168,7 +168,7 @@ func TestIntegrationTaskDoneInfersWorktreeTask(t *testing.T) {
 	f.assertPublishedPR("op-worktree-infer")
 }
 
-func TestIntegrationTaskDoneRejectsRemovedDetailsOverride(t *testing.T) {
+func TestIntegrationWorkflowTaskDoneRejectsRemovedDetailsOverride(t *testing.T) {
 	f := newMainFinalizationFixture(t, "op-main")
 
 	stdout, stderr, err := f.runError("", "task", "done", "op-main", "--details", "Old details.")
@@ -179,7 +179,7 @@ func TestIntegrationTaskDoneRejectsRemovedDetailsOverride(t *testing.T) {
 	f.assertUnpublished("op-main")
 }
 
-func TestIntegrationTaskDoneWithoutTaskIDRequiresExactRegisteredRepoRoot(t *testing.T) {
+func TestIntegrationWorkflowTaskDoneWithoutTaskIDRequiresExactRegisteredRepoRoot(t *testing.T) {
 	f := newMainFinalizationFixture(t, "op-main")
 	nested := taskWorkflowRepoRoot + "/nested"
 	f.options.TaskWorkingDirectory = nested
@@ -194,7 +194,7 @@ func TestIntegrationTaskDoneWithoutTaskIDRequiresExactRegisteredRepoRoot(t *test
 	f.assertUnpublished("op-main")
 }
 
-func TestIntegrationTaskDoneRefusesNoChangesWithoutRecordedFinalizationCommit(t *testing.T) {
+func TestIntegrationWorkflowTaskDoneRefusesNoChangesWithoutRecordedFinalizationCommit(t *testing.T) {
 	f := newMainFinalizationFixture(t, "op-clean")
 	f.git.hasCandidateChanges = false
 
@@ -207,7 +207,7 @@ func TestIntegrationTaskDoneRefusesNoChangesWithoutRecordedFinalizationCommit(t 
 	f.assertUnpublished("op-clean")
 }
 
-func TestIntegrationTaskDoneRetriesPushAndCloseFromRecordedFinalizationCommit(t *testing.T) {
+func TestIntegrationWorkflowTaskDoneRetriesPushAndCloseFromRecordedFinalizationCommit(t *testing.T) {
 	f := newMainFinalizationFixture(t, "op-retry")
 	f.publication.pushError = errors.New("origin unavailable")
 	_, _, err := f.runError("", "task", "done", "op-retry")
@@ -245,7 +245,7 @@ func TestIntegrationTaskDoneRetriesPushAndCloseFromRecordedFinalizationCommit(t 
 	assert.Len(t, f.tasks.closed, 1)
 }
 
-func TestIntegrationPublicationRetriesPRCreationAndMetadataWithoutRepublishing(t *testing.T) {
+func TestIntegrationWorkflowPublicationRetriesPRCreationAndMetadataWithoutRepublishing(t *testing.T) {
 	for _, failure := range []string{"create", "metadata"} {
 		t.Run(failure, func(t *testing.T) {
 			f := newFeatureFinalizationFixture(t, "op-retry", false)
@@ -286,7 +286,7 @@ func TestIntegrationPublicationRetriesPRCreationAndMetadataWithoutRepublishing(t
 	}
 }
 
-func TestIntegrationPublicationDirectMergeRetriesPushAndClose(t *testing.T) {
+func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing.T) {
 	f := newFeatureFinalizationFixture(t, "op-merge", true)
 	f.setConfig("publication", map[string]any{"integration_flow": publication.IntegrationFlowDirectMerge})
 	f.publication.pushError = errors.New("origin unavailable")

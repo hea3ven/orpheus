@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationRepoBeadsDirResolvesRegisteredSourceByIDNameOrPrefix(t *testing.T) {
+func TestIntegrationWorkflowRepoBeadsDirResolvesRegisteredSourceByIDNameOrPrefix(t *testing.T) {
 	for _, mode := range []string{registry.BeadsModeLocal, registry.BeadsModeManaged} {
 		t.Run(mode, func(t *testing.T) {
 			fixture := newRepoConfigFixture(t)
@@ -36,7 +36,7 @@ func TestIntegrationRepoBeadsDirResolvesRegisteredSourceByIDNameOrPrefix(t *test
 	}
 }
 
-func TestIntegrationRepoBeadsDirRejectsUnknownRepo(t *testing.T) {
+func TestIntegrationWorkflowRepoBeadsDirRejectsUnknownRepo(t *testing.T) {
 	fixture := newRepoConfigFixture(t)
 
 	stdout, stderr, err := fixture.execute("repo", "beads-dir", "missing")
@@ -45,4 +45,52 @@ func TestIntegrationRepoBeadsDirRejectsUnknownRepo(t *testing.T) {
 	assert.ErrorContains(t, err, "orpheus repo list")
 	assert.Empty(t, stdout)
 	assert.Empty(t, stderr)
+}
+
+func TestIntegrationWorkflowTaskShowReportsMalformedAndUnknownPrefixes(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	fixture := newRepoConfigFixture(t)
+	repo := aRegisteredRepo("alpha")
+	repo.Name, repo.BeadsPrefix = "Alpha", "op"
+	fixture.withRegisteredRepos(repo)
+
+	stdout, stderr, err := fixture.execute("task", "show", "notprefixed")
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "malformed task id")
+	is.ErrorContains(err, "expected <prefix>-<number>")
+
+	stdout, stderr, err = fixture.execute("task", "show", "zz-1")
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "unknown task id prefix")
+	is.ErrorContains(err, "orpheus repo list")
+	is.ErrorContains(err, "register the repo")
+}
+
+func TestIntegrationWorkflowTaskDirReportsMalformedAndUnknownPrefixes(t *testing.T) {
+	is := assert.New(t)
+	must := require.New(t)
+	fixture := newRepoConfigFixture(t)
+	repo := aRegisteredRepo("alpha")
+	repo.Name, repo.BeadsPrefix = "Alpha", "op"
+	fixture.withRegisteredRepos(repo)
+
+	stdout, stderr, err := fixture.execute("task", "dir", "notprefixed")
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "malformed task id")
+	is.ErrorContains(err, "expected <prefix>-<number>")
+
+	stdout, stderr, err = fixture.execute("task", "dir", "zz-1")
+	must.Error(err)
+	is.Empty(stdout)
+	is.Empty(stderr)
+	is.ErrorContains(err, "unknown task id prefix")
+	is.ErrorContains(err, "orpheus repo list")
+	is.ErrorContains(err, "register the repo")
 }

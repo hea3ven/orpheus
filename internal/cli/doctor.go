@@ -51,7 +51,14 @@ func runDoctor(command *cobra.Command, opts *rootOptions, fix bool) error {
 		return err
 	}
 
+	effects := deps.doctorEffects
+	if effects.CaptureUsage == nil {
+		effects.CaptureUsage = deps.captureUsage
+	}
 	result, err := doctor.Run(doctor.Options{
+		Effects:        effects,
+		CleanupGit:     deps.cleanupGit,
+		Probe:          deps.processProbe,
 		Paths:          deps.paths,
 		Registry:       reg,
 		Sources:        sources,

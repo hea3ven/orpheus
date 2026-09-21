@@ -3,14 +3,18 @@
 package cli_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
+	"github.com/hea3ven/orpheus/internal/cli"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/review"
@@ -28,13 +32,13 @@ const (
 
 type taskWorkflowFixture struct {
 	*workflowFixture
-	taskStore           taskstate.Store
-	backend             *memoryTaskBackend
-	git                 *memoryDispatchGit
-	agent               *semanticAgentLauncher
-	probedPIDs          map[int]int
-	initialTasks        map[string]taskmodel.Task
-	reviewPipelineCalls int
+	taskStore          taskstate.Store
+	backend            *memoryTaskBackend
+	git                *memoryDispatchGit
+	agent              *semanticAgentLauncher
+	probedPIDs         map[int]int
+	initialTasks       map[string]taskmodel.Task
+	reviewPipelineRuns int
 }
 
 func newTaskWorkflowFixture(t *testing.T, tasks ...taskmodel.Task) *taskWorkflowFixture {
@@ -103,6 +107,32 @@ func (f *taskWorkflowFixture) loadFinalTaskIDs() []string {
 		ids[i] = item.ID
 	}
 	return ids
+}
+
+func (f *taskWorkflowFixture) executeWithInput(input string, args ...string) (string, string, error) {
+	f.t.Helper()
+	var stdout, stderr bytes.Buffer
+	command := cli.NewRootCommandWithOptions(f.options)
+	command.SetIn(strings.NewReader(input))
+	command.SetOut(&stdout)
+	command.SetErr(&stderr)
+	command.SetArgs(args)
+	err := command.Execute()
+	return stdout.String(), stderr.String(), err
+}
+
+func (f *taskWorkflowFixture) withRealReviewPipeline() {
+	f.t.Helper()
+	f.options.Dependencies.ReviewEffects.CaptureCandidate = func(context.Context, string, *slog.Logger, ...slog.Attr) (review.CandidateCheck, error) {
+		return func() error { return nil }, nil
+	}
+	f.options.Dependencies.ReviewStatus = func(context.Context, string) (string, error) {
+		return "?? reviewed.txt\n", nil
+	}
+	f.options.Dependencies.ReviewPipeline = func(opts review.PipelineRunOptions) (review.PipelineOutcome, error) {
+		f.reviewPipelineRuns++
+		return review.RunPipeline(opts)
+	}
 }
 
 func (f *taskWorkflowFixture) configureImplementer(name string, profile agent.Profile) {

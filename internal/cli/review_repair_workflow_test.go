@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationTaskRunAutonomousReviewFollowUpRepairsCheckAndPublishes(t *testing.T) {
+func TestIntegrationWorkflowTaskRunAutonomousReviewFollowUpRepairsCheckAndPublishes(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewDispatchFixture(t, "op-auto")
@@ -49,7 +49,7 @@ func TestIntegrationTaskRunAutonomousReviewFollowUpRepairsCheckAndPublishes(t *t
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestIntegrationTaskRunAttachedManualBlockerRepairsAndApprovalFinalizes(t *testing.T) {
+func TestIntegrationWorkflowTaskRunAttachedManualBlockerRepairsAndApprovalFinalizes(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewDispatchFixture(t, "op-manual")
@@ -85,7 +85,7 @@ func TestIntegrationTaskRunAttachedManualBlockerRepairsAndApprovalFinalizes(t *t
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestIntegrationTaskReviewManualBlockerExhaustsBudgetWithoutExtraLaunch(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewManualBlockerExhaustsBudgetWithoutExtraLaunch(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-manual-loop", "Manual loop", "Repair manual blockers.")
@@ -119,7 +119,7 @@ func TestIntegrationTaskReviewManualBlockerExhaustsBudgetWithoutExtraLaunch(t *t
 	is.Zero(latest.Findings[0].TargetedByRunAttempt)
 }
 
-func TestIntegrationTaskRunPreservedManualBlockerExhaustsFreshBudget(t *testing.T) {
+func TestIntegrationWorkflowTaskRunPreservedManualBlockerExhaustsFreshBudget(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-manual-budget", "Manual budget", "Keep the manual blocker.")
@@ -152,7 +152,7 @@ func TestIntegrationTaskRunPreservedManualBlockerExhaustsFreshBudget(t *testing.
 	is.Zero(latest.Findings[0].TargetedByRunAttempt)
 }
 
-func TestIntegrationTaskRunAutonomousReviewLoopExhaustsPersistentCheckBlockers(t *testing.T) {
+func TestIntegrationWorkflowTaskRunAutonomousReviewLoopExhaustsPersistentCheckBlockers(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewDispatchFixture(t, "op-stubborn")
@@ -191,7 +191,7 @@ func TestIntegrationTaskRunAutonomousReviewLoopExhaustsPersistentCheckBlockers(t
 	is.Contains(taskStdout, "Review attempt 2 blocked (autonomous review budget exhausted)")
 }
 
-func TestIntegrationTaskReviewResumedAutonomousFollowUpPreservesSelectedImplementer(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewResumedAutonomousFollowUpPreservesSelectedImplementer(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewDispatchFixture(t, "op-resume")
@@ -228,7 +228,7 @@ func TestIntegrationTaskReviewResumedAutonomousFollowUpPreservesSelectedImplemen
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestIntegrationTaskRunResumesPausedAutomatedBlockerDecision(t *testing.T) {
+func TestIntegrationWorkflowTaskRunResumesPausedAutomatedBlockerDecision(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review pause", "Resume the blocker decision.")

@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationTaskSyncAllPollsPRBoundaryTasks(t *testing.T) {
+func TestIntegrationWorkflowTaskSyncAllPollsPRBoundaryTasks(t *testing.T) {
 	f := newFeatureFinalizationFixture(t, "op-create", false)
 	f.backend.tasks["op-open"] = syncTask("op-open", f.pr.url)
 	epic := syncTask("op-epic", "https://github.test/org/alpha/pull/88")
@@ -46,7 +46,7 @@ func TestIntegrationTaskSyncAllPollsPRBoundaryTasks(t *testing.T) {
 	f.assertUnpublished(item.ID)
 }
 
-func TestIntegrationTaskSyncAllReturnsNonZeroAfterCandidateError(t *testing.T) {
+func TestIntegrationWorkflowTaskSyncAllReturnsNonZeroAfterCandidateError(t *testing.T) {
 	f := newSyncFixture(t)
 	delete(f.backend.tasks, "op-sync")
 	f.backend.tasks["op-closed-pr"] = syncTask("op-closed-pr", f.pr.url)
@@ -69,7 +69,7 @@ func (*unavailableSyncTasks) List(context.Context) ([]taskmodel.Task, error) {
 	return nil, errors.New("task source unavailable")
 }
 
-func TestIntegrationTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAfterFailures(t *testing.T) {
+func TestIntegrationWorkflowTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAfterFailures(t *testing.T) {
 	f := newSyncFixture(t)
 	alpha, beta, gamma := taskWorkflowRepository(), taskWorkflowRepository(), taskWorkflowRepository()
 	alpha.BeadsPrefix = "a"

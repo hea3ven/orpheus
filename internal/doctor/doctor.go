@@ -4,7 +4,6 @@ package doctor
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -27,6 +26,7 @@ const (
 
 // Options describes one doctor diagnostics run.
 type Options struct {
+	Effects        Effects
 	Paths          state.Paths
 	Registry       registry.Registry
 	Sources        []task.RepositorySource
@@ -127,12 +127,14 @@ type executionRef struct {
 
 // Run executes doctor diagnostics across registered repositories and local task state.
 func Run(opts Options) (Result, error) {
+	opts.Effects = opts.Effects.withDefaults()
 	store := taskstate.NewStore(opts.Paths)
 	env := opts.Env
 	if env == nil {
 		env = agent.UsageCaptureEnvironment()
 	}
 
+	usage := usageReader{environment: env, capture: opts.Effects.CaptureUsage, sameSession: opts.Effects.SameSession}
 	var result Result
 	sources := doctorSourcesByRepoID(opts.Sources)
 	for _, repo := range opts.Registry.Repos {
@@ -158,7 +160,7 @@ func Run(opts Options) (Result, error) {
 			if err := diagnoseClosedTaskWorktree(&result, opts, store, source, sourceOK, backend, backendErr, taskState); err != nil {
 				return Result{}, fmt.Errorf("doctor repo %s task %s worktree cleanup: %w", repo.ID, taskID, err)
 			}
-			if err := diagnoseTask(&result, opts.Paths, store, env, repo, taskState, opts.Fix, opts.Probe); err != nil {
+			if err := diagnoseTask(&result, opts.Paths, store, usage, repo, taskState, opts.Fix, opts.Probe, opts.Effects.SyncGit); err != nil {
 				return Result{}, err
 			}
 		}
@@ -191,7 +193,7 @@ func diagnoseClosedTaskWorktree(
 	if !sourceOK || opts.BackendFactory == nil {
 		return nil
 	}
-	if recordedDedicatedWorktreeIsAbsent(context.Background(), opts.Paths, source.Repository, taskState, opts.CleanupGit) {
+	if recordedDedicatedWorktreeIsAbsent(context.Background(), opts.Paths, source.Repository, taskState, opts.CleanupGit, opts.Effects.WorktreeExists) {
 		return nil
 	}
 	taskItem, lookupReason := closedTaskWorktreeSourceTask(context.Background(), backend, backendErr, taskState.TaskID)
@@ -255,6 +257,7 @@ func recordedDedicatedWorktreeIsAbsent(
 	repo task.Repository,
 	taskState taskstate.TaskState,
 	gitState workflow.ClosedTaskWorktreeGit,
+	exists func(string) bool,
 ) bool {
 	facts, ok := taskstate.GitFactsFor(taskState)
 	if !ok {
@@ -271,7 +274,7 @@ func recordedDedicatedWorktreeIsAbsent(
 	if directory, recorded := taskstate.WorkDirectoryFor(taskState); recorded && filepath.Clean(directory.Path) != target.Worktree {
 		return false
 	}
-	if _, err := os.Lstat(target.Worktree); !os.IsNotExist(err) {
+	if exists(target.Worktree) {
 		return false
 	}
 	if gitState == nil {
@@ -298,11 +301,12 @@ func diagnoseTask(
 	result *Result,
 	paths state.Paths,
 	store taskstate.Store,
-	env map[string]string,
+	usage usageReader,
 	repo registry.Repo,
 	taskState taskstate.TaskState,
 	fix bool,
 	probe workflow.ProcessProbe,
+	git workflow.SyncConflictRecoveryGit,
 ) error {
 	if err := diagnoseImplementationRunRecovery(result, paths, store, repo, taskState, fix, probe); err != nil {
 		return err
@@ -316,11 +320,11 @@ func diagnoseTask(
 			if err != nil {
 				return fmt.Errorf("reload task state for locked sync recovery: %w", err)
 			}
-			return diagnoseSyncConflictRecovery(result, store, repo, current, fix, probe)
+			return diagnoseSyncConflictRecovery(result, store, repo, current, fix, probe, git)
 		}); err != nil {
 			return err
 		}
-	} else if err := diagnoseSyncConflictRecovery(result, store, repo, taskState, fix, probe); err != nil {
+	} else if err := diagnoseSyncConflictRecovery(result, store, repo, taskState, fix, probe, git); err != nil {
 		return err
 	}
 	// Recovery mutates lifecycle facts. Reload before telemetry diagnostics so
@@ -332,13 +336,13 @@ func diagnoseTask(
 		return fmt.Errorf("reload task state after recovery diagnostics: %w", err)
 	}
 	executionDirs := taskExecutionDirs(repo, taskState)
-	if err := diagnoseImplementationExecutions(result, store, env, repo, taskState, executionDirs, fix); err != nil {
+	if err := diagnoseImplementationExecutions(result, store, usage, repo, taskState, executionDirs, fix); err != nil {
 		return err
 	}
-	if err := diagnoseReviewExecutions(result, store, env, repo, taskState, executionDirs, fix); err != nil {
+	if err := diagnoseReviewExecutions(result, store, usage, repo, taskState, executionDirs, fix); err != nil {
 		return err
 	}
-	return diagnoseSyncConflictExecutions(result, store, env, repo, taskState, fix)
+	return diagnoseSyncConflictExecutions(result, store, usage, repo, taskState, fix)
 }
 
 func diagnoseImplementationRunRecovery(
@@ -427,14 +431,15 @@ func diagnoseSyncConflictRecovery(
 	taskState taskstate.TaskState,
 	fix bool,
 	probe workflow.ProcessProbe,
+	git workflow.SyncConflictRecoveryGit,
 ) error {
 	operation := taskState.ActiveSyncConflict
 	if operation == nil {
 		return nil
 	}
-	diagnosis := classifySyncConflictRecovery(repo, taskState, *operation, probe)
+	diagnosis := classifySyncConflictRecovery(repo, taskState, *operation, probe, git)
 	if fix {
-		diagnosis = repairSyncConflictRecovery(store, repo.ID, taskState.TaskID, *operation, diagnosis)
+		diagnosis = repairSyncConflictRecovery(store, repo.ID, taskState.TaskID, *operation, diagnosis, git)
 	}
 	result.SyncConflictRows = append(result.SyncConflictRows, SyncConflictRow{
 		RepoID: repo.ID, TaskID: taskState.TaskID, Outcome: diagnosis.outcome, Reason: diagnosis.reason,
@@ -447,6 +452,7 @@ func classifySyncConflictRecovery(
 	taskState taskstate.TaskState,
 	operation taskstate.SyncConflictOperation,
 	probe workflow.ProcessProbe,
+	git workflow.SyncConflictRecoveryGit,
 ) syncConflictRecoveryDiagnosis {
 	if !syncConflictOwnershipMatches(taskState, operation) {
 		return syncConflictRecoveryDiagnosis{outcome: "ownership_mismatch", reason: "current persisted task ownership does not match the recovery operation"}
@@ -466,7 +472,7 @@ func classifySyncConflictRecovery(
 	if inspection.Condition == workflow.AttachedExecutionUnverifiable {
 		return syncConflictRecoveryDiagnosis{outcome: "unverifiable", reason: inspection.Reason}
 	}
-	return classifyRecoverableSyncConflict(repo, operation, inspection)
+	return classifyRecoverableSyncConflict(repo, operation, inspection, git)
 }
 
 func syncConflictOwnershipMatches(taskState taskstate.TaskState, operation taskstate.SyncConflictOperation) bool {
@@ -481,11 +487,12 @@ func classifyRecoverableSyncConflict(
 	repo registry.Repo,
 	operation taskstate.SyncConflictOperation,
 	inspection workflow.AttachedExecutionInspection,
+	git workflow.SyncConflictRecoveryGit,
 ) syncConflictRecoveryDiagnosis {
 	syncOpts := gitmeta.TaskBranchSyncOptions{
 		RepoPath: repo.Path, DefaultBranch: operation.DefaultBranch, Branch: operation.Branch, Worktree: operation.Worktree,
 	}
-	remoteHead, err := gitmeta.InspectRemoteTaskBranchHead(context.Background(), syncOpts)
+	remoteHead, err := git.InspectRemoteTaskBranchHead(context.Background(), syncOpts)
 	if err != nil {
 		return syncConflictRecoveryDiagnosis{outcome: "unverifiable", reason: "remote inspection failed: " + err.Error()}
 	}
@@ -509,7 +516,7 @@ func classifyRecoverableSyncConflict(
 		diagnosis.reason = "remote task branch changed from the recorded checkpoint"
 		return diagnosis
 	}
-	if err := gitmeta.InspectTaskBranchConflictRollbackEligibility(context.Background(), syncOpts, diagnosis.checkpoint, operation.LocalHead); err != nil {
+	if err := git.InspectTaskBranchConflictRollbackEligibility(context.Background(), syncOpts, diagnosis.checkpoint, operation.LocalHead); err != nil {
 		diagnosis.outcome, diagnosis.reason = "locally_incompatible", err.Error()
 		return diagnosis
 	}
@@ -523,12 +530,13 @@ func repairSyncConflictRecovery(
 	taskID string,
 	operation taskstate.SyncConflictOperation,
 	diagnosis syncConflictRecoveryDiagnosis,
+	git workflow.SyncConflictRecoveryGit,
 ) syncConflictRecoveryDiagnosis {
 	switch diagnosis.outcome {
 	case "pushed":
 		return finishPushedSyncConflictRecovery(store, repoID, taskID, operation, diagnosis)
 	case "rollbackable":
-		return rollbackSyncConflictRecovery(store, repoID, taskID, operation, diagnosis)
+		return rollbackSyncConflictRecovery(store, repoID, taskID, operation, diagnosis, git)
 	default:
 		return diagnosis
 	}
@@ -573,12 +581,13 @@ func rollbackSyncConflictRecovery(
 	taskID string,
 	operation taskstate.SyncConflictOperation,
 	diagnosis syncConflictRecoveryDiagnosis,
+	git workflow.SyncConflictRecoveryGit,
 ) syncConflictRecoveryDiagnosis {
-	if err := gitmeta.InspectTaskBranchConflictRollbackEligibility(context.Background(), diagnosis.syncOpts, diagnosis.checkpoint, operation.LocalHead); err != nil {
+	if err := git.InspectTaskBranchConflictRollbackEligibility(context.Background(), diagnosis.syncOpts, diagnosis.checkpoint, operation.LocalHead); err != nil {
 		diagnosis.outcome, diagnosis.reason = "locally_incompatible", err.Error()
 		return diagnosis
 	}
-	if err := gitmeta.RollbackTaskBranchConflictResolution(context.Background(), diagnosis.syncOpts, diagnosis.checkpoint); err != nil {
+	if err := git.RollbackTaskBranchConflictResolution(context.Background(), diagnosis.syncOpts, diagnosis.checkpoint); err != nil {
 		diagnosis.outcome, diagnosis.reason = "rollback_failed", err.Error()
 		if markErr := store.MarkSyncConflictOperationUnresolved(repoID, taskID, operation.ID, "doctor rollback failed: "+diagnosis.reason); markErr != nil {
 			diagnosis.reason += "; failed to persist unresolved state: " + markErr.Error()
@@ -606,14 +615,14 @@ func syncConflictExecutionInspection(execution *taskstate.AgentExecution, probe 
 func diagnoseImplementationExecutions(
 	result *Result,
 	store taskstate.Store,
-	env map[string]string,
+	usage usageReader,
 	repo registry.Repo,
 	taskState taskstate.TaskState,
 	executionDirs []string,
 	fix bool,
 ) error {
 	for index, run := range taskState.Runs {
-		boundary, boundaryFailure := nextResumedUsageBoundary(taskState.Runs, index)
+		boundary, boundaryFailure := nextResumedUsageBoundary(taskState.Runs, index, usage.sameSession)
 		ref := executionRef{
 			repoID:                repo.ID,
 			taskID:                taskState.TaskID,
@@ -625,7 +634,7 @@ func diagnoseImplementationExecutions(
 			resumeBoundary:        boundary,
 			resumeBoundaryFailure: boundaryFailure,
 		}
-		if err := appendDiagnosticRow(result, store, env, ref, fix); err != nil {
+		if err := appendDiagnosticRow(result, store, usage, ref, fix); err != nil {
 			return err
 		}
 	}
@@ -635,6 +644,7 @@ func diagnoseImplementationExecutions(
 func nextResumedUsageBoundary(
 	runs []taskstate.RunAttempt,
 	index int,
+	sameSession func(*taskstate.AgentSession, *taskstate.AgentSession) (bool, error),
 ) (*agent.ResumedUsageBoundary, string) {
 	if index < 0 || index >= len(runs) {
 		return nil, ""
@@ -654,7 +664,7 @@ func nextResumedUsageBoundary(
 		if !strings.EqualFold(strings.TrimSpace(execution.Harness), strings.TrimSpace(laterExecution.Harness)) {
 			continue
 		}
-		matching, err := agent.SameCanonicalSession(launch.SourceSession, laterLaunch.SourceSession)
+		matching, err := sameSession(launch.SourceSession, laterLaunch.SourceSession)
 		if err != nil {
 			return nil, fmt.Sprintf(
 				"resumed_session_reuse_boundary_unsafe_at_run_%d: %v",
@@ -683,7 +693,7 @@ func nextResumedUsageBoundary(
 func diagnoseReviewExecutions(
 	result *Result,
 	store taskstate.Store,
-	env map[string]string,
+	usage usageReader,
 	repo registry.Repo,
 	taskState taskstate.TaskState,
 	executionDirs []string,
@@ -704,7 +714,7 @@ func diagnoseReviewExecutions(
 				execution:     *step.Execution,
 				executionDirs: executionDirs,
 			}
-			if err := appendDiagnosticRow(result, store, env, ref, fix); err != nil {
+			if err := appendDiagnosticRow(result, store, usage, ref, fix); err != nil {
 				return err
 			}
 		}
@@ -715,7 +725,7 @@ func diagnoseReviewExecutions(
 func diagnoseSyncConflictExecutions(
 	result *Result,
 	store taskstate.Store,
-	env map[string]string,
+	usage usageReader,
 	repo registry.Repo,
 	taskState taskstate.TaskState,
 	fix bool,
@@ -734,7 +744,7 @@ func diagnoseSyncConflictExecutions(
 			executionDirGroups: syncConflictExecutionDirGroups(repo, taskState, event),
 			event:              event,
 		}
-		if err := appendDiagnosticRow(result, store, env, ref, fix); err != nil {
+		if err := appendDiagnosticRow(result, store, usage, ref, fix); err != nil {
 			return err
 		}
 	}
@@ -744,11 +754,11 @@ func diagnoseSyncConflictExecutions(
 func appendDiagnosticRow(
 	result *Result,
 	store taskstate.Store,
-	env map[string]string,
+	usage usageReader,
 	ref executionRef,
 	fix bool,
 ) error {
-	row, err := diagnoseExecution(store, env, ref, fix)
+	row, err := diagnoseExecution(store, usage, ref, fix)
 	if err != nil {
 		return err
 	}
@@ -758,7 +768,7 @@ func appendDiagnosticRow(
 
 func diagnoseExecution(
 	store taskstate.Store,
-	env map[string]string,
+	usage usageReader,
 	ref executionRef,
 	fix bool,
 ) (*Row, error) {
@@ -777,7 +787,7 @@ func diagnoseExecution(
 	if ref.resumeBoundaryFailure != "" {
 		return unknownRow(ref, ref.resumeBoundaryFailure), nil
 	}
-	usageOpts := captureUsageWithDirectoryPriority(env, ref)
+	usageOpts := captureUsageWithDirectoryPriority(usage, ref)
 	usageOpts = preserveStoredUsageCost(ref.execution, usageOpts)
 	if usageOpts.UsageCapture.Status != taskstate.UsageCaptureCaptured ||
 		usageOpts.Session == nil ||
@@ -988,7 +998,7 @@ func executionDirGroups(ref executionRef) [][]string {
 }
 
 func captureUsageWithDirectoryPriority(
-	env map[string]string,
+	usage usageReader,
 	ref executionRef,
 ) taskstate.RecordRunUsageOptions {
 	var firstUnknown *taskstate.RecordRunUsageOptions
@@ -996,12 +1006,12 @@ func captureUsageWithDirectoryPriority(
 		if len(dirs) == 0 {
 			continue
 		}
-		usageOpts := agent.CaptureUsage(agent.UsageCaptureOptions{
+		usageOpts := usage.capture(agent.UsageCaptureOptions{
 			Harness:        ref.execution.Harness,
 			ExecutionDirs:  dirs,
 			SessionName:    ref.execution.SessionName,
 			StartedAt:      ref.execution.StartedAt,
-			Env:            env,
+			Env:            usage.environment,
 			Launch:         ref.execution.Launch,
 			ResumeBoundary: ref.resumeBoundary,
 		})

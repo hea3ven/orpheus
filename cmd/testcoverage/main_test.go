@@ -22,8 +22,17 @@ func TestParseOptionsSupportsQualityModes(t *testing.T) {
 		{name: "defaults"},
 		{name: "quality policy update", args: []string{"-update-policy"}},
 		{name: "scenario audit", args: []string{"-audit-scenarios"}},
+		{name: "focused scenario audit", args: []string{
+			"-audit-scenarios",
+			"-audit-package", "./internal/git",
+			"-audit-package", "./internal/beads",
+			"-audit-run", "^TestIntegrationAdapterContract",
+		}},
 		{name: "custom paths", args: []string{"-policy", "policy.yml", "-output", "report.json"}},
 		{name: "reject combined quality modes", args: []string{"-update-policy", "-audit-scenarios"}, wantErr: true},
+		{name: "reject audit package without audit", args: []string{"-audit-package", "./internal/git"}, wantErr: true},
+		{name: "reject audit regex without audit", args: []string{"-audit-run", "Git"}, wantErr: true},
+		{name: "reject empty audit package", args: []string{"-audit-scenarios", "-audit-package", ""}, wantErr: true},
 		{name: "reject retired comparison", args: []string{"-compare-to", "base.json"}, wantErr: true},
 		{name: "reject retired baseline write", args: []string{"-write-baseline"}, wantErr: true},
 		{name: "reject positional argument", args: []string{"extra"}, wantErr: true},
@@ -35,6 +44,42 @@ func TestParseOptionsSupportsQualityModes(t *testing.T) {
 				t.Fatalf("parseOptions(%v) error = %v, wantErr %t", test.args, err, test.wantErr)
 			}
 		})
+	}
+}
+
+func TestAuditSelectionDefaultsAndRetainsRepeatedPackages(t *testing.T) {
+	defaults, err := parseOptions([]string{"-audit-scenarios"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := defaults.auditSelection(), (scenarioSelection{Packages: []string{"./..."}, TestPattern: "^TestIntegration"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("default audit selection = %#v, want %#v", got, want)
+	}
+
+	focused, err := parseOptions([]string{
+		"-audit-scenarios",
+		"-audit-package", "./internal/git",
+		"-audit-package", "./internal/beads",
+		"-audit-run", "Git|Beads",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := scenarioSelection{Packages: []string{"./internal/git", "./internal/beads"}, TestPattern: "Git|Beads"}
+	if got := focused.auditSelection(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("focused audit selection = %#v, want %#v", got, want)
+	}
+}
+
+func TestAuditIntegrationListCommandUsesSelection(t *testing.T) {
+	selection := scenarioSelection{
+		Packages:    []string{"./internal/git", "./internal/beads"},
+		TestPattern: "^TestIntegrationAdapterContract",
+	}
+	got := strings.Join(integrationListCommand(selection), " ")
+	want := "go test -json -tags=integration -list ^TestIntegrationAdapterContract ./internal/git ./internal/beads"
+	if got != want {
+		t.Fatalf("integration list command = %q, want %q", got, want)
 	}
 }
 

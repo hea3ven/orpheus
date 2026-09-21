@@ -12,6 +12,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/beads"
+	"github.com/hea3ven/orpheus/internal/doctor"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
@@ -25,6 +26,8 @@ import (
 )
 
 type invocationDependencies struct {
+	terminal           TerminalCapabilities
+	doctorEffects      doctor.Effects
 	prProvider         pullrequest.Provider
 	syncGit            workflow.SyncGit
 	cleanupGit         workflow.ClosedTaskWorktreeGit

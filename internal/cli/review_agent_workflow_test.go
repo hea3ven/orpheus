@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationTaskReviewAgentReviewStepLaunchesReviewerAndPassesWithoutFindings(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewAgentReviewStepLaunchesReviewerAndPassesWithoutFindings(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review agent", "Run attached reviewer.")
@@ -53,7 +53,7 @@ func TestIntegrationTaskReviewAgentReviewStepLaunchesReviewerAndPassesWithoutFin
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestIntegrationTaskReviewAgentReviewBlockingFindingStopsPipeline(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewAgentReviewBlockingFindingStopsPipeline(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review agent blocker", "Record a blocker.")
@@ -80,7 +80,7 @@ func TestIntegrationTaskReviewAgentReviewBlockingFindingStopsPipeline(t *testing
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestIntegrationTaskReviewAgentReviewMixedAutomatedBlockerDecisions(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewAgentReviewMixedAutomatedBlockerDecisions(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review agent blockers", "Record blockers.")
@@ -133,7 +133,7 @@ func TestIntegrationTaskReviewAgentReviewMixedAutomatedBlockerDecisions(t *testi
 	is.Zero(latest.Findings[2].TargetedByRunAttempt)
 }
 
-func TestIntegrationTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review agent advisory", "Promote advisory if needed.")
@@ -245,7 +245,7 @@ func TestIntegrationTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollowUp(t *t
 	is.Equal([]int{1}, state.Runs[1].ReviewFollowUp.FindingIndexes)
 }
 
-func TestIntegrationTaskReviewAgentReviewNonZeroExitMarksOperationalFailure(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewAgentReviewNonZeroExitMarksOperationalFailure(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review agent failure", "Fail operationally.")
@@ -268,7 +268,7 @@ func TestIntegrationTaskReviewAgentReviewNonZeroExitMarksOperationalFailure(t *t
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestIntegrationReviewMutationFailsBeforePublication(t *testing.T) {
+func TestIntegrationWorkflowReviewMutationFailsBeforePublication(t *testing.T) {
 	fixture := newReviewWorkflowFixture(t, "op-mutated", "Candidate", "Keep these changes.")
 	fixture.reviewers(semanticAgentOutcome{mutateCandidate: func() { fixture.candidate.contents = "reviewer mutation" }})
 	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "agent_review", "name": "ai-review"}}})

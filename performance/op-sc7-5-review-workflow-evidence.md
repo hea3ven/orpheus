@@ -2,11 +2,7 @@
 
 ## Scope
 
-37 scenarios moved from `internal/cli/task_test.go` to the external `cli_test`
-package's `review_*_workflow_test.go` files. Test names and operator input remain
-unchanged. The 83 retained tests in `task_test.go` have unchanged bodies apart
-from whitespace. Unused shell-agent, delayed-input, config and completion
-helpers were removed.
+The historical migration moved 37 scenarios from the process-heavy task fixture to the external `cli_test` package's `review_*_workflow_test.go` files. Their current names carry the `TestIntegrationWorkflow...` prefix. Process-backed task and review scenarios remain in adapter-contract files; later curation moved boundary-free command registration, flag validation, guidance, and completion rendering into workflow files. Unused shell-agent, delayed-input, config, and completion helpers were removed.
 
 These journeys use the real root command, routing, config loading, workflow,
 review pipeline, finding recorder, task source interfaces and task-state store.
@@ -89,40 +85,38 @@ actual process and Git behavior has separate owners below.
 
 Additional application coverage:
 
-- `TestIntegrationReviewFailedRepairCanRetryWithoutLosingBlocker` runs runtime
+- `TestIntegrationWorkflowReviewFailedRepairCanRetryWithoutLosingBlocker` runs runtime
   failure, start failure and successful-exit-without-completion cases through a
   later successful retry. It preserves the failed/incomplete run, blocker
   eligibility, third-run targeting and passed second review.
-- `TestIntegrationReviewPrimaryProcessRecoveryKeepsFindingsForAudit` supplies
+- `TestIntegrationWorkflowReviewPrimaryProcessRecoveryKeepsFindingsForAudit` supplies
   absent, live and unknown process facts through CLI recovery. It checks
   unchanged running state where recovery is unsafe, failed interrupted state
   where both processes are absent, audit-only findings, actionable output,
   no repair launch and no publication. Invalid replacement configuration does
   not prevent recovery.
-- `TestIntegrationReviewMutationFailsBeforePublication` changes the candidate
+- `TestIntegrationWorkflowReviewMutationFailsBeforePublication` changes the candidate
   during the semantic reviewer. The real pipeline invokes the supplied snapshot
   check, fails review, restores contents and prevents publication.
 
 ## Retained process and Git contracts
 
-No migrated journey starts a model agent or contacts a provider. These are
-separate contracts, not claims made by the semantic fakes:
+No migrated journey starts a model agent or contacts a provider. `TestIntegrationWorkflowRunPipelineAgentReviewUsesEffectivePromptInCommandAndEnvironment` checks the options passed to a semantic launcher, and `TestIntegrationWorkflowRunPipelinePersistsPrimaryReviewerProcessFacts` checks persistence from a fabricated PID callback; neither claims a child-process boundary. The concrete contracts are listed below.
 
 | Boundary | Owner |
 | --- | --- |
-| Live streaming, cancellation and reaping the direct child | New `TestIntegrationAttachedLauncherStreamsBeforeExitAndReapsCanceledChild` cancels on the first stdout write from a controlled busy-loop shell. The context must report `context.Canceled`, not the five-second safety deadline, and the reported PID must be absent after `Run`. No sleeps or repository fixtures. |
-| stdout/stderr, exit status, argv and cwd | `TestIntegrationAttachedLauncherForwardsWorkingDirectoryArgumentsAndStreams` |
-| Invocation environment and direct PID callback | `TestIntegrationAttachedLauncherUsesConfiguredEnvironment`, `TestIntegrationAttachedLauncherReportsDirectChildPIDBeforeWait` |
-| Missing executable versus started process | `TestIntegrationAttachedLauncherMissingExecutableDoesNotReportProcessStarted` |
-| Review command and Hunk environment | `TestIntegrationReviewCommandUsesScopedEnvironment`, `TestIntegrationHunkNotesUseScopedEnvironment` |
-| Reviewer prompt/environment and primary process identity | `TestIntegrationRunPipelineAgentReviewUsesEffectivePromptInCommandAndEnvironment`, `TestIntegrationRunPipelinePersistsPrimaryReviewerProcessFacts` |
-| Review stream display and rolling tails | `TestIntegrationRunPipelineInteractiveAgentReviewOutputDependsOnProfileMode`, `TestIntegrationRunPipelineInteractiveBlockedCheckLeavesExpandedRollingTail` and the rolling-tail contracts |
-| Snapshot capture, mutation detection and restoration | `TestIntegrationTaskReviewRestoresCandidateChangesMutatedDuringManualStep`, `TestIntegrationRunPipelineVerboseDiagnosticsCaptureAndRestoreCandidateMutation`, and candidate-operation tests in `internal/git` |
+| Live streaming, cancellation and reaping the direct child | New `TestIntegrationAdapterContractAttachedLauncherStreamsBeforeExitAndReapsCanceledChild` cancels on the first stdout write from a controlled busy-loop shell. The context must report `context.Canceled`, not the five-second safety deadline, and the reported PID must be absent after `Run`. No sleeps or repository fixtures. |
+| stdout/stderr, exit status, argv and cwd | `TestIntegrationAdapterContractAttachedLauncherForwardsWorkingDirectoryArgumentsAndStreams` |
+| Invocation environment and direct PID callback | `TestIntegrationAdapterContractAttachedLauncherUsesConfiguredEnvironment`, `TestIntegrationAdapterContractAttachedLauncherReportsDirectChildPIDBeforeWait` |
+| Missing executable versus started process | `TestIntegrationAdapterContractAttachedLauncherMissingExecutableDoesNotReportProcessStarted` |
+| Review command and Hunk environment | `TestIntegrationAdapterContractReviewCommandUsesScopedEnvironment`, `TestIntegrationAdapterContractHunkNotesUseScopedEnvironment` |
+| Review stream display and rolling tails | `TestIntegrationWorkflowRunPipelineInteractivePassingCheckClearsRollingTail` and `TestIntegrationWorkflowRunPipelineInteractiveBlockedCheckLeavesExpandedRollingTail` run controlled commands. Fake-launcher display behavior lives in `TestIntegrationWorkflowRunPipelineInteractiveAgentReviewOutputDependsOnProfileMode`, `TestIntegrationWorkflowRunPipelineInteractiveAgentReviewNonBlockingFindingLeavesLiveTail`, `TestIntegrationWorkflowRunPipelineInteractivePassingAgentReviewClearsWrappedRollingTail`, and the focused rolling-tail workflows. |
+| Snapshot capture, mutation detection and restoration | `TestIntegrationWorkflowTaskReviewMarksFailedWhenCandidateChangesMutateDuringManualStep`, `TestIntegrationAdapterContractCandidateSnapshotRestoresTrackedAndUntrackedMutations`, `TestIntegrationAdapterContractCandidateSnapshotRestoresRedirectedStderrFile`, and `TestIntegrationAdapterContractCandidateGitOperationsCaptureAndRestoreTrackedDiff` |
 | Staged/missing candidate and stale metadata rejection | Retained `TaskReviewRejectsStagedCandidateChanges`, `TaskReviewRejectsMissingCandidateChangesWithoutFinalizationCommit`, `TaskReviewRejectsStaleMetadataMirror` integration tests |
-| Hunk polling/import and confirmed/manual-command process protocol | Retained Hunk and manual-command scenarios in `task_test.go` and `internal/review` |
-| Compiled command packaging with recursive agent commands | `TestIntegrationTaskRunUsesSeparateTaskProposalSelection` |
+| Hunk polling/import and confirmed/manual-command process protocol | Retained Hunk and manual-command scenarios in `task_adapter_contract_test.go` and `internal/review` |
+| Compiled command packaging with recursive agent commands | `TestIntegrationBinaryE2ETaskRunUsesSeparateTaskProposalSelection` |
 | Codex/Pi session usage capture | Retained `TaskReviewAgentReviewStepCapturesCodexUsage` and `TaskReviewAgentReviewStepCapturesPiUsage` integration tests |
-| Task adapter translation | `TestTaskBackendCreateCreatesStandaloneTask`, `TestTaskBackendCreatePassesGraphAndOptionalFields`, `TestTaskBackendSetPRURLWritesMetadata`, `TestTaskBackendCloseClosesOpenTask`; real Beads creation remains in `TestIntegrationBeadsRelationshipContracts/TaskBackendCreateRecordsBlockingDependencies` |
+| Task adapter translation | `TestTaskBackendCreateCreatesStandaloneTask`, `TestTaskBackendCreatePassesGraphAndOptionalFields`, `TestTaskBackendSetPRURLWritesMetadata`, `TestTaskBackendCloseClosesOpenTask`; real Beads creation remains in `TestIntegrationAdapterContractBeadsRelationshipContracts/TaskBackendCreateRecordsBlockingDependencies` |
 
 ## Measurements
 

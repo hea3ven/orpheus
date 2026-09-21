@@ -2,7 +2,7 @@
 
 ## Scope and decisions
 
-Ten CLI scenarios moved from `task_test.go` to the
+Ten CLI scenarios moved from `task_adapter_contract_test.go` to the
 external `cli_test` application fixture. Their top-level names remain unchanged.
 Commands, sync services, task-state stores, configuration, agent selection, and
 operator output remain real. Task sources, Git effects, PR state, agent execution,
@@ -78,13 +78,13 @@ deleted because it traverses similar code.
 
 | Boundary | Owner |
 | --- | --- |
-| GH repository/head/base arguments, title argument boundaries, body on stdin, scoped executable/environment, parsed identity | New `internal/pullrequest/gh_publication_test.go:TestIntegrationGHProviderPublicationTranslatesIdentityAndBody`; existing `gh_environment_test.go` |
-| Empty lookup, malformed JSON/URLs, missing URLs, lookup/create provider failures | New `TestIntegrationGHProviderPublicationOutputAndFailures`; missing status URL added to `TestIntegrationGHProviderStatusByURL` |
-| Repository and authentication diagnostics with actual process failure | New `TestIntegrationGHProviderStatusClassifiesRepositoryAndAuthenticationFailures`; existing generic/unknown-field contracts |
+| GH repository/head/base arguments, title argument boundaries, body on stdin, scoped executable/environment, parsed identity | New `internal/pullrequest/gh_publication_adapter_test.go:TestIntegrationAdapterContractGHProviderPublicationTranslatesIdentityAndBody`; existing `gh_environment_adapter_test.go` |
+| Empty lookup, malformed JSON/URLs, missing URLs, lookup/create provider failures | New `TestIntegrationAdapterContractGHProviderPublicationOutputAndFailures`; missing status URL added to `TestIntegrationAdapterContractGHProviderStatusByURL` |
+| Repository and authentication diagnostics with actual process failure | New `TestIntegrationAdapterContractGHProviderStatusClassifiesRepositoryAndAuthenticationFailures`; existing generic/unknown-field contracts |
 | Stored URL rejected before starting gh | Retained `TestGHProviderStatusByURLRejectsMalformedURL` |
-| Real conflict checkpoint refs, local-only resolved merge, exact merge parents, remote head inspection, separate push and repeated push | New `internal/git/conflict_recovery_test.go:TestIntegrationConflictRecoveryCommitsLocallyBeforeSeparatePush` |
-| Rollback ownership, aborted versus locally completed merge, restored file bytes/clean checkout, unchanged remote, incompatible remote verification | New `TestIntegrationConflictRecoveryRollsBackOnlyMatchingCheckpoint`, with independent in-progress and completed cases |
-| Merge/push, conflict-only preflight, remote fast-forward, unresolved merge, clean default changes and rename | Retained `internal/git/worktree_test.go` sync/conflict contracts |
+| Real conflict checkpoint refs, local-only resolved merge, exact merge parents, remote head inspection, separate push and repeated push | New `internal/git/conflict_recovery_adapter_test.go:TestIntegrationAdapterContractConflictRecoveryCommitsLocallyBeforeSeparatePush` |
+| Rollback ownership, aborted versus locally completed merge, restored file bytes/clean checkout, unchanged remote, incompatible remote verification | New `TestIntegrationAdapterContractConflictRecoveryRollsBackOnlyMatchingCheckpoint`, with independent in-progress and completed cases |
+| Merge/push, conflict-only preflight, remote fast-forward, unresolved merge, clean default changes and rename | Retained `internal/git/worktree_adapter_test.go` sync/conflict contracts |
 | Deterministic worktrees, ref/branch validation, divergent refs, safe cleanup, upstream and failed publication pushes | Retained worktree, direct-merge, and publication Git contracts |
 | Session matching/token parsing and dedicated resolver profile selection | Retained `internal/agent/codex_usage_test.go` and `profile_test.go` |
 | Beads query/mutation translation and read-before-close behavior | Retained `internal/beads` contracts |

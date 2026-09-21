@@ -28,29 +28,28 @@ combined result rises from 14,291 to 14,300 covered statements despite six new
 runner-seam statements in the denominator. The runner matrix below documents
 the retained assertion and failure-detection value for each transfer.
 
-## Compiled CLI contract
+## Compiled-binary contracts
 
 | Contract | Test | Why it remains compiled |
 | --- | --- | --- |
-| A shell-launched implementation and reviewer can call the installed command form while a repository-root workflow selects no separate task. | `TestIntegrationTaskRunUsesSeparateTaskProposalSelection` | The fake agents execute `orpheus agent done` and `orpheus agent review add` through a binary built from `cmd/orpheus`. This keeps one focused packaging and child-process smoke flow. |
+| A shell-launched implementation and reviewer can call the installed command form while a repository-root workflow selects no separate task. | `TestIntegrationBinaryE2ETaskRunUsesSeparateTaskProposalSelection` | The fake agents execute `orpheus agent done` and `orpheus agent review add` through a binary built from `cmd/orpheus`. This keeps one focused packaging and child-process smoke flow. |
+| A custom-named Go test binary still activates the model-agent safety gate at startup. | `TestIntegrationBinaryE2ECustomNamedTestBinaryRetainsSafetyGate` | The test must compile and start the custom-named binary to exercise process detection before launcher use. |
+| A production binary whose filename ends in `.test` does not enable test mode. | `TestIntegrationBinaryE2EProductionBinaryNamedTestDoesNotEnableTestMode` | The test must compile and start a production probe because filename-only detection is the rejected behavior. |
 
-The eight other workflow scenarios that only need an `orpheus` command for
-those agent subcommands use the package-scoped immutable Go test-binary helper.
-They still execute the real child-process contract, but no longer compile the
-same CLI eight additional times.
+No shared test-binary command wrapper remains. Application workflows call semantic collaborators in process. Focused adapter contracts start controlled executables when argv, environment, streams, exit status, or process lifecycle is the assertion.
 
 ## Real-Git contract matrix
 
 | Area | Retained real-Git scenarios | Semantics and failures covered |
 | --- | --- | --- |
-| Repository inspection | `TestIntegrationInspect*` | Root canonicalization, remote selection, `origin/HEAD` and current-branch fallback, non-repository rejection, and diagnostic classification for absent, detached, and malformed refs. |
-| Candidate state | `TestIntegrationHasStagedChangesDistinguishesChangesFromGitFailure`, `TestIntegrationCandidateGitOperationsCaptureAndRestoreTrackedDiff` | Staged-versus-command failure, porcelain status, untracked discovery, binary patch capture, cleanup, restoration, and reapplication. |
-| Worktree setup | `TestIntegrationSetupTaskWorktree*` | Create, reuse, recreate, mismatched worktree, missing origin, and foreign common-directory handling. |
-| Repository-root preparation | `TestIntegrationSetupRepoRoot*`, `TestIntegrationMaterializeRepoRootTaskBranch*` | Default/task branch checkout, clean and dirty checkout policy, fast-forward and divergence checks, and stale local/remote task-branch refusal. |
-| Branch synchronization | `TestIntegrationSyncTaskBranchWithDefaultMergesAndPushesCleanDefaultChanges`, `TestIntegrationSyncTaskBranchWithDefaultDetectsConflictWithoutPushing` | A real fetch and merge is pushed, while a real conflict preflight leaves the task branch unchanged. |
-| Conflict resolution | `TestIntegrationTaskBranchConflictResolutionCompletesMergeAndPushes`, `TestIntegrationTaskBranchConflictResolutionCompletesMergeWithCleanDefaultRename` | A real conflicted merge is resolved, committed, pushed, and preserves a clean default-branch rename. |
-| Direct merge | `TestIntegrationMergeTaskBranchIntoDefaultCreatesMergeWithoutPush`, `TestIntegrationMergeTaskBranchIntoNamedDestinationAndVerifyRemoteBranch` | No-fast-forward local merge without premature push, named-destination checkout, remote branch existence, missing destination, and unsafe-name rejection. |
-| Commit verification | `TestIntegrationVerifyCommitMatchesRecordedParentAndMessage` | The recorded publication commit must retain its parent and exact message. |
+| Repository inspection | `TestIntegrationAdapterContractInspect*` | Root canonicalization, remote selection, `origin/HEAD` and current-branch fallback, non-repository rejection, and diagnostic classification for absent, detached, and malformed refs. |
+| Candidate state | `TestIntegrationAdapterContractHasStagedChangesDistinguishesChangesFromGitFailure`, `TestIntegrationAdapterContractCandidateGitOperationsCaptureAndRestoreTrackedDiff` | Staged-versus-command failure, porcelain status, untracked discovery, binary patch capture, cleanup, restoration, and reapplication. |
+| Worktree setup | `TestIntegrationAdapterContractSetupTaskWorktree*` | Create, reuse, recreate, mismatched worktree, missing origin, and foreign common-directory handling. |
+| Repository-root preparation | `TestIntegrationAdapterContractSetupRepoRoot*`, `TestIntegrationAdapterContractMaterializeRepoRootTaskBranch*` | Default/task branch checkout, clean and dirty checkout policy, fast-forward and divergence checks, and stale local/remote task-branch refusal. |
+| Branch synchronization | `TestIntegrationAdapterContractSyncTaskBranchWithDefaultMergesAndPushesCleanDefaultChanges`, `TestIntegrationAdapterContractSyncTaskBranchWithDefaultDetectsConflictWithoutPushing` | A real fetch and merge is pushed, while a real conflict preflight leaves the task branch unchanged. |
+| Conflict resolution | `TestIntegrationAdapterContractTaskBranchConflictResolutionCompletesMergeAndPushes`, `TestIntegrationAdapterContractTaskBranchConflictResolutionCompletesMergeWithCleanDefaultRename` | A real conflicted merge is resolved, committed, pushed, and preserves a clean default-branch rename. |
+| Direct merge | `TestIntegrationAdapterContractMergeTaskBranchIntoDefaultCreatesMergeWithoutPush`, `TestIntegrationAdapterContractMergeTaskBranchIntoNamedDestinationAndVerifyRemoteBranch` | No-fast-forward local merge without premature push, named-destination checkout, remote branch existence, missing destination, and unsafe-name rejection. |
+| Commit verification | `TestIntegrationAdapterContractVerifyCommitMatchesRecordedParentAndMessage` | The recorded publication commit must retain its parent and exact message. |
 
 These tests retain actual Git repositories, worktrees, refs, merges, pushes,
 and patch behavior. The matrix intentionally keeps both successful operations
