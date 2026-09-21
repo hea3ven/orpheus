@@ -9,6 +9,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
+	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
 func TestClassifySyncConflictRecoveryLeavesUnresolvedStateUntouched(t *testing.T) {
@@ -26,7 +27,7 @@ func TestClassifySyncConflictRecoveryLeavesUnresolvedStateUntouched(t *testing.T
 	}
 	before := operation
 
-	diagnosis := classifySyncConflictRecovery(registry.Repo{}, taskState, operation, nil)
+	diagnosis := classifySyncConflictRecovery(registry.Repo{}, taskState, operation, nil, workflow.LocalSyncGit{})
 
 	if diagnosis.outcome != "unresolved" || diagnosis.reason != "operation was previously marked unresolved" {
 		t.Fatalf("diagnosis = %#v, want unresolved default reason", diagnosis)
@@ -42,7 +43,7 @@ func TestClassifySyncConflictRecoveryRejectsOwnershipMismatch(t *testing.T) {
 		Worktree: "/fixture/op-1",
 		Phase:    taskstate.SyncConflictPhasePrepared,
 	}
-	diagnosis := classifySyncConflictRecovery(registry.Repo{}, taskstate.TaskState{}, operation, nil)
+	diagnosis := classifySyncConflictRecovery(registry.Repo{}, taskstate.TaskState{}, operation, nil, workflow.LocalSyncGit{})
 	if diagnosis.outcome != "ownership_mismatch" {
 		t.Fatalf("outcome = %q, want ownership_mismatch", diagnosis.outcome)
 	}
@@ -74,7 +75,7 @@ func TestRepairSyncConflictRecoveryCompletesPushedState(t *testing.T) {
 
 	diagnosis := repairSyncConflictRecovery(store, "alpha", "op-1", operation, syncConflictRecoveryDiagnosis{
 		outcome: "pushed", reason: "remote task branch matches the recorded local completion", remoteHead: operation.LocalHead,
-	})
+	}, workflow.LocalSyncGit{})
 	if diagnosis.outcome != "pushed" {
 		t.Fatalf("outcome = %q, want pushed", diagnosis.outcome)
 	}

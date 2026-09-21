@@ -30,10 +30,15 @@ type scenarioTarget struct {
 	Test    string
 }
 
+type scenarioSelection struct {
+	Packages    []string
+	TestPattern string
+}
+
 func (target scenarioTarget) String() string { return target.Package + "/" + target.Test }
 
-func auditIntegrationScenarios(work string, integration laneCoverage) ([]scenarioResult, error) {
-	targets, err := integrationScenarioNames()
+func auditIntegrationScenarios(work string, integration laneCoverage, selection scenarioSelection) ([]scenarioResult, error) {
+	targets, err := integrationScenarioNames(selection)
 	if err != nil {
 		return nil, err
 	}
@@ -50,14 +55,27 @@ func auditIntegrationScenarios(work string, integration laneCoverage) ([]scenari
 	return result, nil
 }
 
-func integrationScenarioNames() ([]scenarioTarget, error) {
-	list := exec.Command("go", "test", "-json", "-tags="+testlane.IntegrationBuildTag, "-list", testlane.IntegrationTestPattern, "./...")
+func integrationScenarioNames(selection scenarioSelection) ([]scenarioTarget, error) {
+	command := integrationListCommand(selection)
+	list := exec.Command(command[0], command[1:]...)
 	list.Env = coverageEnvironment(os.Environ())
-	output, err := list.Output()
+	output, err := list.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("list integration scenarios: %w", err)
+		return nil, fmt.Errorf("list integration scenarios: %w\n%s", err, output)
 	}
-	return scenarioTargets(bytes.NewReader(output))
+	targets, err := scenarioTargets(bytes.NewReader(output))
+	if err != nil {
+		return nil, err
+	}
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("no integration scenarios matched packages %q and test pattern %q", selection.Packages, selection.TestPattern)
+	}
+	return targets, nil
+}
+
+func integrationListCommand(selection scenarioSelection) []string {
+	command := []string{"go", "test", "-json", "-tags=" + testlane.IntegrationBuildTag, "-list", selection.TestPattern}
+	return append(command, selection.Packages...)
 }
 
 func scenarioTargets(input io.Reader) ([]scenarioTarget, error) {

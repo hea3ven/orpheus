@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationReviewPrimaryProcessRecoveryKeepsFindingsForAudit(t *testing.T) {
+func TestIntegrationWorkflowReviewPrimaryProcessRecoveryKeepsFindingsForAudit(t *testing.T) {
 	for _, test := range []struct {
 		name       string
 		liveness   agentexec.ProcessLiveness
@@ -66,7 +66,7 @@ func TestIntegrationReviewPrimaryProcessRecoveryKeepsFindingsForAudit(t *testing
 	}
 }
 
-func TestIntegrationReviewFailedRepairCanRetryWithoutLosingBlocker(t *testing.T) {
+func TestIntegrationWorkflowReviewFailedRepairCanRetryWithoutLosingBlocker(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		outcome semanticAgentOutcome
@@ -114,7 +114,7 @@ func TestIntegrationReviewFailedRepairCanRetryWithoutLosingBlocker(t *testing.T)
 	}
 }
 
-func TestIntegrationTaskReviewFollowUpHeaderWriteFailureRecordsStartFailure(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewFollowUpHeaderWriteFailureRecordsStartFailure(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-followup-header", "Follow-up header", "Repair the blocker.")

@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationRepoAddStoresDiscoveredRootForNestedPath(t *testing.T) {
+func TestIntegrationWorkflowRepoAddStoresDiscoveredRootForNestedPath(t *testing.T) {
 	repo := aGitRepository(t, "alpha")
 	fixture := newRepoWorkflowFixture(t, repo)
 	fixture.withoutLocalBeads()
@@ -36,7 +36,7 @@ func TestIntegrationRepoAddStoresDiscoveredRootForNestedPath(t *testing.T) {
 	assert.Equal(t, []string{nested}, fixture.gitInspections)
 }
 
-func TestIntegrationRepoAddWarnsWhenRemoteIsMissing(t *testing.T) {
+func TestIntegrationWorkflowRepoAddWarnsWhenRemoteIsMissing(t *testing.T) {
 	repo := aGitRepository(t, "alpha")
 	repo.remote = ""
 	fixture := newRepoWorkflowFixture(t, repo)
@@ -57,7 +57,7 @@ func TestIntegrationRepoAddWarnsWhenRemoteIsMissing(t *testing.T) {
 	assert.Equal(t, []registry.Repo{repo.registeredWithManagedBeads()}, final.Repos)
 }
 
-func TestIntegrationRepoAddRejectsGitInspectionFailureWithoutRegistration(t *testing.T) {
+func TestIntegrationWorkflowRepoAddRejectsGitInspectionFailureWithoutRegistration(t *testing.T) {
 	repo := aGitRepository(t, "alpha")
 	fixture := newRepoWorkflowFixture(t, repo)
 	inspectionErr := errors.New("not a git worktree")
@@ -72,7 +72,7 @@ func TestIntegrationRepoAddRejectsGitInspectionFailureWithoutRegistration(t *tes
 	assert.Empty(t, fixture.beadsInitializations)
 }
 
-func TestIntegrationRepoAddRejectsRegistrationConflictsBeforeInitialization(t *testing.T) {
+func TestIntegrationWorkflowRepoAddRejectsRegistrationConflictsBeforeInitialization(t *testing.T) {
 	for _, conflict := range []string{"path", "identity", "prefix"} {
 		t.Run(conflict, func(t *testing.T) {
 			repo := aGitRepository(t, "alpha")
@@ -102,7 +102,7 @@ func TestIntegrationRepoAddRejectsRegistrationConflictsBeforeInitialization(t *t
 	}
 }
 
-func TestIntegrationRepoAddInitializationFailureLeavesRegistryUnchanged(t *testing.T) {
+func TestIntegrationWorkflowRepoAddInitializationFailureLeavesRegistryUnchanged(t *testing.T) {
 	repo := aGitRepository(t, "alpha")
 	fixture := newRepoWorkflowFixture(t, repo)
 	fixture.withoutLocalBeads()
@@ -120,7 +120,7 @@ func TestIntegrationRepoAddInitializationFailureLeavesRegistryUnchanged(t *testi
 	assert.Equal(t, beadsInitialization{dir: repoWorkflowDataRoot + "/repos/alpha/beads", prefix: "alpha"}, fixture.beadsInitializations[0])
 }
 
-func TestIntegrationRepoRegistersAndListsLocalAndManagedRepositories(t *testing.T) {
+func TestIntegrationWorkflowRepoRegistersAndListsLocalAndManagedRepositories(t *testing.T) {
 	local := aGitRepository(t, "localrepo")
 	managed := aGitRepository(t, "managedrepo")
 	fixture := newRepoWorkflowFixture(t, local, managed)
@@ -157,7 +157,7 @@ func TestIntegrationRepoRegistersAndListsLocalAndManagedRepositories(t *testing.
 	}
 }
 
-func TestIntegrationRepoAddRejectsDuplicateLocalBeadsPrefix(t *testing.T) {
+func TestIntegrationWorkflowRepoAddRejectsDuplicateLocalBeadsPrefix(t *testing.T) {
 	first := aGitRepository(t, "alpha")
 	second := aGitRepository(t, "beta")
 	fixture := newRepoWorkflowFixture(t, first, second)
@@ -175,7 +175,7 @@ func TestIntegrationRepoAddRejectsDuplicateLocalBeadsPrefix(t *testing.T) {
 	assert.Empty(t, fixture.beadsInitializations)
 }
 
-func TestIntegrationRepoAddHoldsMutationLockDuringInitializationAndReleasesIt(t *testing.T) {
+func TestIntegrationWorkflowRepoAddHoldsMutationLockDuringInitializationAndReleasesIt(t *testing.T) {
 	repo := aGitRepository(t, "alpha")
 	fixture := newRepoWorkflowFixture(t, repo)
 	fixture.withoutLocalBeads()
@@ -192,7 +192,7 @@ func TestIntegrationRepoAddHoldsMutationLockDuringInitializationAndReleasesIt(t 
 	assert.NoError(t, state.WithGlobalMutationLock(fixture.paths, "next registration", func() error { return nil }))
 }
 
-func TestIntegrationRepoAddHeldMutationLockPreventsInitializationAndRegistration(t *testing.T) {
+func TestIntegrationWorkflowRepoAddHeldMutationLockPreventsInitializationAndRegistration(t *testing.T) {
 	repo := aGitRepository(t, "alpha")
 	fixture := newRepoWorkflowFixture(t, repo)
 	fixture.withoutLocalBeads()

@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationRepoAddInheritsGlobalSummaryStyleInAgentContext(t *testing.T) {
+func TestIntegrationWorkflowRepoAddInheritsGlobalSummaryStyleInAgentContext(t *testing.T) {
 	repo := aGitRepository(t, "alpha")
 	fixture := newTaskWorkflowFixture(t, anOpenTask("op-style"))
 	fixture.withRegisteredRepos()
@@ -36,7 +36,7 @@ func TestIntegrationRepoAddInheritsGlobalSummaryStyleInAgentContext(t *testing.T
 	assert.Contains(t, fixture.agent.contexts[0], "Use one capitalized plain-English summary line")
 }
 
-func TestIntegrationTaskRunDeprecatedMainFlagExplainsReplacement(t *testing.T) {
+func TestIntegrationWorkflowTaskRunDeprecatedMainFlagExplainsReplacement(t *testing.T) {
 	fixture := newWorkflowFixture(t, taskWorkflowConfigRoot, taskWorkflowDataRoot)
 
 	_, _, err := fixture.execute("task", "run", "--main", "op-main")

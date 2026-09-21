@@ -32,7 +32,7 @@ func newAgentCompletionFixture(t *testing.T, taskID string, worktree bool) *fina
 	return f
 }
 
-func TestIntegrationAgentDoneRecordsMainCompletionForLocalReview(t *testing.T) {
+func TestIntegrationWorkflowAgentDoneRecordsMainCompletionForLocalReview(t *testing.T) {
 	f := newAgentCompletionFixture(t, "op-main", false)
 	before := f.backend.tasks["op-main"].Clone()
 
@@ -54,7 +54,7 @@ func TestIntegrationAgentDoneRecordsMainCompletionForLocalReview(t *testing.T) {
 	f.assertUnpublished("op-main")
 }
 
-func TestIntegrationAgentDoneRepeatedMainCompletionIsNoopWithGuidance(t *testing.T) {
+func TestIntegrationWorkflowAgentDoneRepeatedMainCompletionIsNoopWithGuidance(t *testing.T) {
 	f := newAgentCompletionFixture(t, "op-main", false)
 	attempt := completeAgentTestRun(t, f.taskStore)
 	require.NotZero(t, attempt.Attempt)
@@ -69,7 +69,7 @@ func TestIntegrationAgentDoneRepeatedMainCompletionIsNoopWithGuidance(t *testing
 
 // The historical name is retained in the assertion map. Completion deliberately
 // leaves the candidate uncommitted; publication owns commit creation.
-func TestIntegrationAgentDoneCommitsWorktreeCompletion(t *testing.T) {
+func TestIntegrationWorkflowAgentDoneCommitsWorktreeCompletion(t *testing.T) {
 	f := newAgentCompletionFixture(t, "op-1", true)
 
 	stdout, stderr := f.run("", "agent", "done", "--summary", "Add worktree review file", "--description", "Created ORPHEUS_WORKTREE_TEST.txt for pull request review.", "--detailed-description", "## Pull request\n\nCreated ORPHEUS_WORKTREE_TEST.txt for pull request review.", "--technical-explanation", "Added the worktree validation fixture so review can inspect an uncommitted candidate change.")
@@ -87,7 +87,7 @@ func TestIntegrationAgentDoneCommitsWorktreeCompletion(t *testing.T) {
 	f.assertUnpublished("op-1")
 }
 
-func TestIntegrationAgentDoneRequiresMainWorkingTreeChangesBeforeWriting(t *testing.T) {
+func TestIntegrationWorkflowAgentDoneRequiresMainWorkingTreeChangesBeforeWriting(t *testing.T) {
 	f := newAgentCompletionFixture(t, "op-main", false)
 	f.git.hasCandidateChanges = false
 

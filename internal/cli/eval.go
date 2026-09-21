@@ -33,7 +33,7 @@ func newEvalCommand(opts *rootOptions) *cobra.Command {
 	return cmd
 }
 
-func newReviewContextEvalCommand(_ *rootOptions) *cobra.Command {
+func newReviewContextEvalCommand(opts *rootOptions) *cobra.Command {
 	var evalOpts reviewContextEvalOptions
 	cmd := &cobra.Command{
 		Use:   "review-context",
@@ -42,7 +42,13 @@ func newReviewContextEvalCommand(_ *rootOptions) *cobra.Command {
 			"This command launches live Pi or Codex sessions and can incur model costs.",
 		Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
-			return revieweval.Run(command.Context(), evalOpts.toReviewEvalOptions(), command.OutOrStdout(), command.ErrOrStderr())
+			return revieweval.RunWithEffects(
+				command.Context(),
+				evalOpts.toReviewEvalOptions(),
+				command.OutOrStdout(),
+				command.ErrOrStderr(),
+				opts.commandOptions.Dependencies.EvaluationEffects,
+			)
 		},
 	}
 	cmd.Flags().StringSliceVar(&evalOpts.harnesses, "harness", nil, "harness selection: pi, codex, all, or comma-separated values")

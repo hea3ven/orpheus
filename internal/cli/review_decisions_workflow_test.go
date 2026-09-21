@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationTaskReviewApproveFinalizesAndRecordsPassedAttempt(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewApproveFinalizesAndRecordsPassedAttempt(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review approval", "Finalize after approval.")
@@ -53,7 +53,7 @@ func TestIntegrationTaskReviewApproveFinalizesAndRecordsPassedAttempt(t *testing
 	is.Equal([]string{"main"}, fixture.candidate.pushes)
 }
 
-func TestIntegrationTaskReviewManualContextShowsOriginalAndLatestFollowUpCompletion(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewManualContextShowsOriginalAndLatestFollowUpCompletion(t *testing.T) {
 	is := assert.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Original implementation", "Implemented the main task.")
 	paths := fixture.paths
@@ -77,7 +77,7 @@ func TestIntegrationTaskReviewManualContextShowsOriginalAndLatestFollowUpComplet
 	is.Equal("Original implementation\n\nImplemented the main task.", message)
 }
 
-func TestIntegrationTaskReviewBlockingFindingBlocksWithoutFinalizing(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewBlockingFindingBlocksWithoutFinalizing(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review blocking", "Do not finalize.")
@@ -123,7 +123,7 @@ func TestIntegrationTaskReviewBlockingFindingBlocksWithoutFinalizing(t *testing.
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestIntegrationTaskReviewAdvisoryAndSeparateTaskFindingsDoNotBlockApproval(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewAdvisoryAndSeparateTaskFindingsDoNotBlockApproval(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review advisory", "Finalize with notes.")
@@ -161,7 +161,7 @@ func TestIntegrationTaskReviewAdvisoryAndSeparateTaskFindingsDoNotBlockApproval(
 	is.Nil(latest.Findings[1].CreatedTaskAt)
 }
 
-func TestIntegrationTaskReviewCreatesSelectedSeparateTaskFollowUp(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewCreatesSelectedSeparateTaskFollowUp(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review follow-up", "Create follow-up task.")
@@ -198,7 +198,7 @@ func TestIntegrationTaskReviewCreatesSelectedSeparateTaskFollowUp(t *testing.T) 
 	is.NotNil(latest.Findings[0].CreatedTaskAt)
 }
 
-func TestIntegrationTaskReviewCanAbortWhenSeparateTaskCreationFails(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewCanAbortWhenSeparateTaskCreationFails(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review follow-up", "Creation can fail.")
@@ -237,7 +237,7 @@ func TestIntegrationTaskReviewCanAbortWhenSeparateTaskCreationFails(t *testing.T
 	is.Empty(fixture.candidate.pushes)
 }
 
-func TestIntegrationTaskReviewAbortDoesNotFinalize(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewAbortDoesNotFinalize(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review abort", "Do not finalize.")
@@ -257,7 +257,7 @@ func TestIntegrationTaskReviewAbortDoesNotFinalize(t *testing.T) {
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestIntegrationTaskReviewManualInputLossReplaysRecordedFindings(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewManualInputLossReplaysRecordedFindings(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review replay", "Replay manual findings.")
@@ -309,7 +309,7 @@ func TestIntegrationTaskReviewManualInputLossReplaysRecordedFindings(t *testing.
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestIntegrationTaskReviewInvalidReviewAgentConfigDoesNotStartFreshAttempt(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewInvalidReviewAgentConfigDoesNotStartFreshAttempt(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review agent config", "Validate preflight.")
@@ -330,7 +330,7 @@ func TestIntegrationTaskReviewInvalidReviewAgentConfigDoesNotStartFreshAttempt(t
 	is.False(ok, "fresh invalid agent config must not persist a review attempt")
 }
 
-func TestIntegrationTaskReviewInvalidReviewAgentConfigDoesNotResumeManualAttempt(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewInvalidReviewAgentConfigDoesNotResumeManualAttempt(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review agent resume", "Validate preflight.")
@@ -370,7 +370,7 @@ func TestIntegrationTaskReviewInvalidReviewAgentConfigDoesNotResumeManualAttempt
 	is.Equal("inspect", latest.Step)
 }
 
-func TestIntegrationTaskReviewCheckBlockerReasonEOFRecordsInterrupted(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewCheckBlockerReasonEOFRecordsInterrupted(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
@@ -415,7 +415,7 @@ func TestIntegrationTaskReviewCheckBlockerReasonEOFRecordsInterrupted(t *testing
 	}
 }
 
-func TestIntegrationTaskReviewCheckBlockerKeepAcceptsEOFAnswer(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewCheckBlockerKeepAcceptsEOFAnswer(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review keep EOF", "Keep blocker without newline.")
@@ -452,7 +452,7 @@ func TestIntegrationTaskReviewCheckBlockerKeepAcceptsEOFAnswer(t *testing.T) {
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestIntegrationTaskReviewCheckBlockerReasonAcceptsEOFAnswer(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewCheckBlockerReasonAcceptsEOFAnswer(t *testing.T) {
 	tests := []struct {
 		name          string
 		input         string
@@ -509,7 +509,7 @@ func TestIntegrationTaskReviewCheckBlockerReasonAcceptsEOFAnswer(t *testing.T) {
 	}
 }
 
-func TestIntegrationTaskReviewCheckBlockerDowngradeContinuesPipeline(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewCheckBlockerDowngradeContinuesPipeline(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review check downgrade", "Downgrade blocker.")
@@ -541,7 +541,7 @@ func TestIntegrationTaskReviewCheckBlockerDowngradeContinuesPipeline(t *testing.
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestIntegrationTaskReviewCheckBlockerWaiverContinuesPipeline(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewCheckBlockerWaiverContinuesPipeline(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review check waiver", "Waive blocker.")
@@ -571,7 +571,7 @@ func TestIntegrationTaskReviewCheckBlockerWaiverContinuesPipeline(t *testing.T) 
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestIntegrationTaskReviewCheckStartFailureMarksOperationalFailure(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewCheckStartFailureMarksOperationalFailure(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review missing check", "Fail operationally.")
@@ -600,7 +600,7 @@ func TestIntegrationTaskReviewCheckStartFailureMarksOperationalFailure(t *testin
 	is.Empty(latest.Findings)
 }
 
-func TestIntegrationTaskRunAfterInterruptedAutomatedBlockerDecisionRequiresFreshReview(t *testing.T) {
+func TestIntegrationWorkflowTaskRunAfterInterruptedAutomatedBlockerDecisionRequiresFreshReview(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review interrupted", "Do not launch follow-up.")
@@ -632,7 +632,7 @@ func TestIntegrationTaskRunAfterInterruptedAutomatedBlockerDecisionRequiresFresh
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestIntegrationTaskRunRecoversHardStoppedAutomatedBlockerDecision(t *testing.T) {
+func TestIntegrationWorkflowTaskRunRecoversHardStoppedAutomatedBlockerDecision(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Hard-stopped review", "Recover persisted blocker decision.")
@@ -671,7 +671,7 @@ func TestIntegrationTaskRunRecoversHardStoppedAutomatedBlockerDecision(t *testin
 	is.Zero(latest.Findings[0].TargetedByRunAttempt)
 }
 
-func TestIntegrationTaskReviewInterruptedAutomatedBlockerRecoveryReusesRecordedPipeline(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewInterruptedAutomatedBlockerRecoveryReusesRecordedPipeline(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review strict recovery", "Recover with selected pipeline.")
@@ -716,7 +716,7 @@ func TestIntegrationTaskReviewInterruptedAutomatedBlockerRecoveryReusesRecordedP
 	is.Equal("Strict failure accepted.", latest.Findings[0].DowngradeReason)
 }
 
-func TestIntegrationTaskReviewResumesManualWaitingAttempt(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewResumesManualWaitingAttempt(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review resume", "Resume manual gate.")
@@ -760,7 +760,7 @@ func TestIntegrationTaskReviewResumesManualWaitingAttempt(t *testing.T) {
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
 }
 
-func TestIntegrationTaskReviewRejectsConflictingPipelineForManualWaitingAttempt(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewRejectsConflictingPipelineForManualWaitingAttempt(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review conflict", "Reject replacement.")
@@ -792,7 +792,7 @@ func TestIntegrationTaskReviewRejectsConflictingPipelineForManualWaitingAttempt(
 	is.Equal("inspect", latest.Step)
 }
 
-func TestIntegrationTaskReviewPipelineOverridePrecedence(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewPipelineOverridePrecedence(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review override", "Use CLI-selected pipeline.")
@@ -824,7 +824,7 @@ func TestIntegrationTaskReviewPipelineOverridePrecedence(t *testing.T) {
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
 }
 
-func TestIntegrationTaskReviewPipelineAliasResolvesToGlobalPipeline(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewPipelineAliasResolvesToGlobalPipeline(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review alias", "Use alias-selected pipeline.")
@@ -857,7 +857,7 @@ func TestIntegrationTaskReviewPipelineAliasResolvesToGlobalPipeline(t *testing.T
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
 }
 
-func TestIntegrationTaskReviewUnknownPipelineIncludesRepoAliases(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewUnknownPipelineIncludesRepoAliases(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review pipeline", "Validate pipeline selection.")

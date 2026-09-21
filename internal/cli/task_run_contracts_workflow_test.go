@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationTaskRunConfiguredDefaultPreservesLaunchContextAndAuditFacts(t *testing.T) {
+func TestIntegrationWorkflowTaskRunConfiguredDefaultPreservesLaunchContextAndAuditFacts(t *testing.T) {
 	is := assert.New(t)
 	item := anOpenTask("op-profile")
 	item.Title = "Add search filters"
@@ -29,7 +29,7 @@ func TestIntegrationTaskRunConfiguredDefaultPreservesLaunchContextAndAuditFacts(
 			Args: []string{"--literal", "keep this argument", "--name", "{{session_name}}", "--prompt", "{{prompt}}"},
 		},
 	})
-	fixture.withSuppliedManualReview()
+	fixture.withRealReviewPipeline()
 	const worktree = taskWorkflowDataRoot + "/repos/alpha/worktrees/op-profile"
 	const branch = "orpheus/op-profile"
 	const session = "Implementing op-profile Add search filters"
@@ -93,7 +93,7 @@ func TestIntegrationTaskRunConfiguredDefaultPreservesLaunchContextAndAuditFacts(
 	}
 }
 
-func TestIntegrationTaskRunDispatchesChildOfInProgressEpic(t *testing.T) {
+func TestIntegrationWorkflowTaskRunDispatchesChildOfInProgressEpic(t *testing.T) {
 	is := assert.New(t)
 	parent := anInProgressEpic("op-parent")
 	fixture := newTaskWorkflowFixture(t, parent, anOpenChildTask("op-child", parent.ID))
@@ -114,7 +114,7 @@ func TestIntegrationTaskRunDispatchesChildOfInProgressEpic(t *testing.T) {
 
 // The backend is a dispatch-only stub, not a reusable Beads emulator. Its supported
 // mutation follows the same cases as the Beads MarkInProgress unit contracts.
-func TestIntegrationDispatchStubRejectsConflictingTaskStateWithoutMutation(t *testing.T) {
+func TestIntegrationWorkflowDispatchStubRejectsConflictingTaskStateWithoutMutation(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		status   taskmodel.Status
@@ -150,7 +150,7 @@ func TestIntegrationDispatchStubRejectsConflictingTaskStateWithoutMutation(t *te
 	}
 }
 
-func TestIntegrationDispatchStubRejectsUnsupportedMutations(t *testing.T) {
+func TestIntegrationWorkflowDispatchStubRejectsUnsupportedMutations(t *testing.T) {
 	is := assert.New(t)
 	initial := anOpenTask("op-1")
 	backend := newMemoryTaskBackend([]taskmodel.Task{initial})
@@ -167,7 +167,7 @@ func TestIntegrationDispatchStubRejectsUnsupportedMutations(t *testing.T) {
 	is.Equal([]taskmodel.Task{initial}, got)
 }
 
-func TestIntegrationScriptedAgentRejectsUnexpectedOrUnspecifiedLaunch(t *testing.T) {
+func TestIntegrationWorkflowScriptedAgentRejectsUnexpectedOrUnspecifiedLaunch(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		outcomes []semanticAgentOutcome

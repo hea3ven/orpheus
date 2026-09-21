@@ -14,16 +14,15 @@ import (
 )
 
 // These journeys use real CLI routing, profile resolution, workflow orchestration,
-// agent context/completion, and stores over memory-backed Orpheus persistence.
-// Task, Git, process liveness, and agent execution are supplied collaborators.
-// Review outcomes are supplied explicitly, not produced by the real pipeline.
-// Real Git mutation, process supervision, and review execution have separate contracts.
-func TestIntegrationTaskRunCompletionLeavesTaskAwaitingManualReview(t *testing.T) {
+// agent context/completion, review pipeline execution, and stores over memory-backed
+// Orpheus persistence. Task, Git, process liveness, and agent execution are supplied
+// collaborators. Real Git mutation and process supervision have separate contracts.
+func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *testing.T) {
 	is := assert.New(t)
 	fixture := newTaskWorkflowFixture(t, anOpenTask("op-completion"))
 	completion := aCompletion()
 	fixture.withCompletingAgent(completion)
-	fixture.withSuppliedManualReview()
+	fixture.withRealReviewPipeline()
 
 	stdout, stderr, err := fixture.execute("task", "run", "op-completion")
 	require.NoError(t, err, "task run; stderr: %s", stderr)
@@ -47,7 +46,7 @@ func TestIntegrationTaskRunCompletionLeavesTaskAwaitingManualReview(t *testing.T
 	assertStatusShowsManualReview(t, statusOutput, "op-completion")
 }
 
-func TestIntegrationTaskRunAgentFailureRecordsFailedAttempt(t *testing.T) {
+func TestIntegrationWorkflowTaskRunAgentFailureRecordsFailedAttempt(t *testing.T) {
 	is := assert.New(t)
 	fixture := newTaskWorkflowFixture(t, anOpenTask("op-failure"))
 	agentFailure := errors.New("agent failed")
@@ -75,7 +74,7 @@ func TestIntegrationTaskRunAgentFailureRecordsFailedAttempt(t *testing.T) {
 	is.Equal(taskstate.RunStatusFailed, finalState.Events[2].Status)
 }
 
-func TestIntegrationTaskRunSuccessfulExitWithoutCompletionAllowsOrdinaryRetry(t *testing.T) {
+func TestIntegrationWorkflowTaskRunSuccessfulExitWithoutCompletionAllowsOrdinaryRetry(t *testing.T) {
 	is := assert.New(t)
 	fixture := newTaskWorkflowFixture(t, anOpenTask("op-retry"))
 	fixture.withAgentExitingWithoutCompletion(2)
@@ -109,7 +108,7 @@ func TestIntegrationTaskRunSuccessfulExitWithoutCompletionAllowsOrdinaryRetry(t 
 	)
 }
 
-func TestIntegrationTaskRunAbsentProcessesInterruptPreviousAttemptBeforeRetry(t *testing.T) {
+func TestIntegrationWorkflowTaskRunAbsentProcessesInterruptPreviousAttemptBeforeRetry(t *testing.T) {
 	is := assert.New(t)
 	fixture := newTaskWorkflowFixture(t, anInProgressTask("op-recovery"))
 	const supervisorPID, childPID = 100, 101
@@ -139,18 +138,18 @@ func TestIntegrationTaskRunAbsentProcessesInterruptPreviousAttemptBeforeRetry(t 
 	assertTaskNotPublished(t, recovered, finalTask)
 }
 
-func TestIntegrationTaskRunBlockingReviewDispatchesTargetedRepair(t *testing.T) {
+func TestIntegrationWorkflowTaskRunBlockingReviewDispatchesTargetedRepair(t *testing.T) {
 	is := assert.New(t)
 	fixture := newTaskWorkflowFixture(t, anOpenTask("op-follow-up"))
 	implementation, repair := aCompletion(), aRepairCompletion()
 	finding := aBlockingFinding()
 	fixture.withCompletingAgent(implementation, repair)
-	fixture.withSuppliedKeptBlockerThenManualReview(finding)
+	fixture.withRealKeptBlockerThenManualReviewPipeline(finding)
 
-	_, stderr, err := fixture.execute("task", "run", "op-follow-up")
+	_, stderr, err := fixture.executeWithInput("k\n", "task", "run", "op-follow-up")
 	require.NoError(t, err, "task run; stderr: %s", stderr)
 
-	is.Equal(2, fixture.reviewPipelineCalls, "implementation and repair reviews")
+	is.Equal(2, fixture.reviewPipelineRuns, "implementation and repair reviews")
 	loaded, finalTask := fixture.loadFinalTask("op-follow-up")
 	finalTaskIDs := fixture.loadFinalTaskIDs()
 	require.Len(t, loaded.Runs, 2)
@@ -158,7 +157,7 @@ func TestIntegrationTaskRunBlockingReviewDispatchesTargetedRepair(t *testing.T) 
 	is.Equal(taskstate.RunStatusSucceeded, loaded.Runs[1].Status)
 	assertCompletionRecorded(t, implementation, loaded.Runs[0].Completion)
 	assertCompletionRecorded(t, repair, loaded.Runs[1].Completion)
-	is.Equal(4243, loaded.Runs[1].Execution.ChildPID, "repair child PID")
+	is.Equal(4244, loaded.Runs[1].Execution.ChildPID, "repair child PID")
 	followUp := loaded.Runs[1].ReviewFollowUp
 	require.NotNil(t, followUp)
 	is.Equal(1, followUp.ReviewAttempt)

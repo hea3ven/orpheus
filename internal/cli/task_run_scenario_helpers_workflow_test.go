@@ -63,10 +63,11 @@ func aRepairCompletion() agent.CompleteOptions {
 
 func aBlockingFinding() taskstate.ReviewFinding {
 	return taskstate.ReviewFinding{
-		Type:        taskstate.FindingTypeBlocking,
-		Step:        "correctness",
-		Title:       "Handle unknown repositories",
-		Description: "An unknown repository must return an empty result.",
+		Type:            taskstate.FindingTypeBlocking,
+		Step:            "correctness",
+		Title:           "Handle unknown repositories",
+		Description:     "An unknown repository must return an empty result.",
+		SuggestedAction: "Return an empty result for unknown repositories.",
 	}
 }
 
@@ -106,24 +107,19 @@ func (f *taskWorkflowFixture) withAbsentProcesses(pids ...int) {
 	}
 }
 
-func (f *taskWorkflowFixture) withSuppliedManualReview() {
-	f.t.Helper()
-	f.options.Dependencies.ReviewPipeline = suppliedManualReview("default", "local-review")
-}
-
-func (f *taskWorkflowFixture) withSuppliedKeptBlockerThenManualReview(finding taskstate.ReviewFinding) {
+func (f *taskWorkflowFixture) withRealKeptBlockerThenManualReviewPipeline(finding taskstate.ReviewFinding) {
 	f.t.Helper()
 	f.configureReviewPipeline("inspect", []review.Step{
 		{Kind: review.KindAgentReview, Name: finding.Step, Agent: "recorder"},
 		{Kind: review.KindManual, Name: "accept"},
 	})
-	f.options.Dependencies.ReviewPipeline = func(opts review.PipelineRunOptions) (review.PipelineOutcome, error) {
-		f.reviewPipelineCalls++
-		if f.reviewPipelineCalls == 1 {
-			return recordSuppliedReviewBlocker(opts, "inspect", finding)
-		}
-		return recordSuppliedManualWait(opts, "inspect", "accept")
-	}
+	f.withRealReviewPipeline()
+	reviewWithBlocker := semanticAgentOutcome{review: true, findings: []taskstate.ReviewFinding{finding}}
+	reviewWithoutFindings := semanticAgentOutcome{review: true}
+	require.GreaterOrEqual(f.t, len(f.agent.outcomes), 2, "blocking review scenario requires implementation and repair outcomes")
+	outcomes := []semanticAgentOutcome{f.agent.outcomes[0], reviewWithBlocker, f.agent.outcomes[1], reviewWithoutFindings}
+	outcomes = append(outcomes, f.agent.outcomes[2:]...)
+	f.agent.outcomes = outcomes
 }
 
 func (f *taskWorkflowFixture) onlyAgentLaunch() semanticAgentLaunch {

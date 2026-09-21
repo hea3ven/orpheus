@@ -10,6 +10,6 @@ import (
 
 func TestMain(m *testing.M) {
 	code := m.Run()
-	cleanupCLIHelperFixture()
+	cleanupCLIIntegrationFixture()
 	os.Exit(code)
 }

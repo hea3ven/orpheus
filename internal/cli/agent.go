@@ -212,9 +212,10 @@ type agentReviewAddOptions struct {
 }
 
 type agentReviewAddContext struct {
-	paths  state.Paths
-	store  taskstate.Store
-	review agent.ReviewContext
+	reviewerRole string
+	paths        state.Paths
+	store        taskstate.Store
+	review       agent.ReviewContext
 }
 
 type agentReviewFindingStore interface {
@@ -252,7 +253,7 @@ func runAgentReviewAdd(command *cobra.Command, opts *rootOptions, addOpts agentR
 		command,
 		addContext,
 		logger,
-		strings.TrimSpace(os.Getenv("ORPHEUS_REVIEWER_ROLE")),
+		strings.TrimSpace(addContext.reviewerRole),
 		finding,
 	)
 	if err != nil {
@@ -283,9 +284,10 @@ func resolveAgentReviewAddContext(command *cobra.Command, opts *rootOptions) (ag
 		return agentReviewAddContext{}, fmt.Errorf("agent review add: %w", err)
 	}
 	return agentReviewAddContext{
-		paths:  deps.paths,
-		store:  deps.taskStateStore,
-		review: reviewContext,
+		reviewerRole: deps.environmentValue("ORPHEUS_REVIEWER_ROLE"),
+		paths:        deps.paths,
+		store:        deps.taskStateStore,
+		review:       reviewContext,
 	}, nil
 }
 

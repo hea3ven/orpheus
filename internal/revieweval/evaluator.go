@@ -207,6 +207,46 @@ type runSetup struct {
 
 type runExecutor func(context.Context, string, Options, runSpec) RunResult
 
+type evaluatorDeps struct {
+	prepareRun     func(context.Context, string, scenario, runSpec) (runSetup, error)
+	runEnvironment func(runSetup, runSpec, func() error) error
+	runPipeline    func(context.Context, Options, runSpec, scenario, runSetup) error
+}
+
+type prepareRunDeps struct {
+	initializeBeads func(string, string) error
+	seedRepo        func(context.Context, string, scenario) error
+	provisionTask   func(context.Context, string, scenario) (string, error)
+}
+
+type pipelineDeps struct {
+	effects       review.Effects
+	agentLauncher agentexec.Launcher
+}
+
+// Effects replaces the external boundaries of a live evaluation. Nil fields use
+// the production adapters.
+type Effects struct {
+	InitializeBeads func(string, string) error
+	SeedRepo        func(context.Context, string, string) error
+	ProvisionTask   func(context.Context, string, string) (string, error)
+	RunEnvironment  func(Environment, func() error) error
+	ReviewEffects   review.Effects
+	AgentLauncher   agentexec.Launcher
+}
+
+// Environment describes the isolated run environment passed to RunEnvironment.
+type Environment struct {
+	Root       string
+	RepoPath   string
+	ConfigBase string
+	DataBase   string
+	Harness    string
+	Variant    string
+	Scenario   string
+	Repetition int
+}
+
 type previousEnv struct {
 	value string
 	ok    bool
@@ -214,7 +254,16 @@ type previousEnv struct {
 
 // Run executes the live evaluation and writes a JSON report to stdout.
 func Run(ctx context.Context, opts Options, stdout io.Writer, stderr io.Writer) error {
-	return runWithExecutor(ctx, opts, stdout, stderr, executeRun)
+	return RunWithEffects(ctx, opts, stdout, stderr, Effects{})
+}
+
+// RunWithEffects executes the live evaluation with selected external boundaries
+// replaced. Nil effect fields use production adapters.
+func RunWithEffects(ctx context.Context, opts Options, stdout io.Writer, stderr io.Writer, effects Effects) error {
+	executor := func(ctx context.Context, root string, opts Options, spec runSpec) RunResult {
+		return executeRunWithDeps(ctx, root, opts, spec, evaluatorDepsFromEffects(effects))
+	}
+	return runWithExecutor(ctx, opts, stdout, stderr, executor)
 }
 
 func runWithExecutor(ctx context.Context, opts Options, stdout io.Writer, stderr io.Writer, executor runExecutor) error {
@@ -356,9 +405,66 @@ func evaluationSpecs(opts Options) []runSpec {
 }
 
 func executeRun(ctx context.Context, root string, opts Options, spec runSpec) RunResult {
+	return executeRunWithDeps(ctx, root, opts, spec, evaluatorDeps{})
+}
+
+func evaluatorDepsFromEffects(effects Effects) evaluatorDeps {
+	var deps evaluatorDeps
+	if effects.InitializeBeads != nil || effects.SeedRepo != nil || effects.ProvisionTask != nil {
+		deps.prepareRun = func(ctx context.Context, root string, scenarioDef scenario, spec runSpec) (runSetup, error) {
+			return prepareRunWithDeps(ctx, root, scenarioDef, spec, prepareRunDeps{
+				initializeBeads: effects.InitializeBeads,
+				seedRepo:        seedRepoEffect(effects.SeedRepo),
+				provisionTask:   provisionTaskEffect(effects.ProvisionTask),
+			})
+		}
+	}
+	if effects.RunEnvironment != nil {
+		deps.runEnvironment = func(setup runSetup, spec runSpec, run func() error) error {
+			return effects.RunEnvironment(Environment{
+				Root:       setup.root,
+				RepoPath:   setup.repoPath,
+				ConfigBase: setup.configBase,
+				DataBase:   setup.dataBase,
+				Harness:    spec.Harness,
+				Variant:    spec.Variant,
+				Scenario:   spec.Scenario,
+				Repetition: spec.Repetition,
+			}, run)
+		}
+	}
+	deps.runPipeline = func(ctx context.Context, opts Options, spec runSpec, scenarioDef scenario, setup runSetup) error {
+		return runPipelineWithDeps(ctx, opts, spec, scenarioDef, setup, pipelineDeps{
+			effects:       effects.ReviewEffects,
+			agentLauncher: effects.AgentLauncher,
+		})
+	}
+	return deps
+}
+
+func seedRepoEffect(effect func(context.Context, string, string) error) func(context.Context, string, scenario) error {
+	if effect == nil {
+		return nil
+	}
+	return func(ctx context.Context, repoPath string, scenarioDef scenario) error {
+		return effect(ctx, repoPath, scenarioDef.name)
+	}
+}
+
+func provisionTaskEffect(effect func(context.Context, string, string) (string, error)) func(context.Context, string, scenario) (string, error) {
+	if effect == nil {
+		return nil
+	}
+	return func(ctx context.Context, repoPath string, scenarioDef scenario) (string, error) {
+		return effect(ctx, repoPath, scenarioDef.name)
+	}
+}
+
+func executeRunWithDeps(ctx context.Context, root string, opts Options, spec runSpec, deps evaluatorDeps) RunResult {
+	deps = deps.withDefaults()
 	scenarioDef := scenarioByName(spec.Scenario)
 	result := newRunResult(opts, spec, scenarioDef)
-	setup, err := prepareRun(ctx, root, scenarioDef, spec)
+	setup, err := deps.prepareRun(ctx, root, scenarioDef, spec)
 	if err != nil {
 		result.OperationalErr = err.Error()
 		recordNoExecutionUsageAndCost(&result)
@@ -369,8 +475,8 @@ func executeRun(ctx context.Context, root string, opts Options, spec runSpec) Ru
 	result.ConfigRoot = filepath.Join(setup.configBase, state.AppName)
 	result.DataRoot = filepath.Join(setup.dataBase, state.AppName)
 
-	err = withRunEnvironment(setup, spec, func() error {
-		return runPipeline(ctx, opts, spec, scenarioDef, setup)
+	err = deps.runEnvironment(setup, spec, func() error {
+		return deps.runPipeline(ctx, opts, spec, scenarioDef, setup)
 	})
 	stateResult := collectRunState(setup)
 	if stateResult.reviewStatus != "" {
@@ -387,6 +493,19 @@ func executeRun(ctx context.Context, root string, opts Options, spec runSpec) Ru
 	}
 	scoreFindings(&result, scenarioDef.knownFindings, stateResult.findings)
 	return result
+}
+
+func (deps evaluatorDeps) withDefaults() evaluatorDeps {
+	if deps.prepareRun == nil {
+		deps.prepareRun = prepareRun
+	}
+	if deps.runEnvironment == nil {
+		deps.runEnvironment = withRunEnvironment
+	}
+	if deps.runPipeline == nil {
+		deps.runPipeline = runPipeline
+	}
+	return deps
 }
 
 func recordNoExecutionUsageAndCost(result *RunResult) {
@@ -409,6 +528,11 @@ func newRunResult(opts Options, spec runSpec, scenarioDef scenario) RunResult {
 }
 
 func prepareRun(ctx context.Context, root string, scenarioDef scenario, spec runSpec) (runSetup, error) {
+	return prepareRunWithDeps(ctx, root, scenarioDef, spec, prepareRunDeps{})
+}
+
+func prepareRunWithDeps(ctx context.Context, root string, scenarioDef scenario, spec runSpec, deps prepareRunDeps) (runSetup, error) {
+	deps = deps.withDefaults()
 	runRoot := filepath.Join(root, runDirectoryName(spec))
 	repoPath := filepath.Join(runRoot, "repo")
 	configBase := filepath.Join(runRoot, "xdg-config")
@@ -420,13 +544,13 @@ func prepareRun(ctx context.Context, root string, scenarioDef scenario, spec run
 	if err := os.MkdirAll(repoPath, 0o755); err != nil {
 		return runSetup{}, fmt.Errorf("create scenario repo: %w", err)
 	}
-	if err := beads.InitializeManaged(repoPath, "op"); err != nil {
+	if err := deps.initializeBeads(repoPath, "op"); err != nil {
 		return runSetup{}, fmt.Errorf("initialize isolated Beads state: %w", err)
 	}
-	if err := seedGitRepo(ctx, repoPath, scenarioDef); err != nil {
+	if err := deps.seedRepo(ctx, repoPath, scenarioDef); err != nil {
 		return runSetup{}, err
 	}
-	taskID, err := seedTask(ctx, repoPath, scenarioDef)
+	taskID, err := deps.provisionTask(ctx, repoPath, scenarioDef)
 	if err != nil {
 		return runSetup{}, err
 	}
@@ -446,6 +570,19 @@ func prepareRun(ctx context.Context, root string, scenarioDef scenario, spec run
 		return runSetup{}, fmt.Errorf("start isolated review attempt: %w", err)
 	}
 	return runSetup{root: runRoot, repoPath: repoPath, configBase: configBase, dataBase: dataBase, paths: paths, taskID: taskID, attempt: attempt, store: store}, nil
+}
+
+func (deps prepareRunDeps) withDefaults() prepareRunDeps {
+	if deps.initializeBeads == nil {
+		deps.initializeBeads = beads.InitializeManaged
+	}
+	if deps.seedRepo == nil {
+		deps.seedRepo = seedGitRepo
+	}
+	if deps.provisionTask == nil {
+		deps.provisionTask = seedTask
+	}
+	return deps
 }
 
 func runDirectoryName(spec runSpec) string {
@@ -790,7 +927,13 @@ func restoreEnv(old map[string]previousEnv) {
 }
 
 func runPipeline(ctx context.Context, opts Options, spec runSpec, scenarioDef scenario, setup runSetup) error {
+	return runPipelineWithDeps(ctx, opts, spec, scenarioDef, setup, pipelineDeps{})
+}
+
+func runPipelineWithDeps(ctx context.Context, opts Options, spec runSpec, scenarioDef scenario, setup runSetup, deps pipelineDeps) error {
+	deps = deps.withDefaults()
 	outcome, err := review.RunPipeline(review.PipelineRunOptions{
+		Effects:     deps.effects,
 		Context:     ctx,
 		Store:       setup.store,
 		RepoID:      "review-eval",
@@ -807,7 +950,7 @@ func runPipeline(ctx context.Context, opts Options, spec runSpec, scenarioDef sc
 		RecordPrimaryChildPID: func(stepName string, pid int) error {
 			return recordEvaluatorPrimaryChildPID(setup, stepName, pid)
 		},
-		AgentLauncher: agentexec.AttachedLauncher{},
+		AgentLauncher: deps.agentLauncher,
 		PromptAutomatedBlockers: func(review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
 			return nil, nil
 		},
@@ -823,6 +966,13 @@ func runPipeline(ctx context.Context, opts Options, spec runSpec, scenarioDef sc
 		}
 	}
 	return err
+}
+
+func (deps pipelineDeps) withDefaults() pipelineDeps {
+	if deps.agentLauncher == nil {
+		deps.agentLauncher = agentexec.AttachedLauncher{}
+	}
+	return deps
 }
 
 func recordEvaluatorPrimaryChildPID(setup runSetup, stepName string, pid int) error {

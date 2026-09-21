@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -28,15 +29,25 @@ import (
 // candidate contents, commands, agents and task-source mutations are supplied.
 type reviewWorkflowFixture struct {
 	*taskWorkflowFixture
-	tasks      *memoryReviewTasks
-	candidate  *memoryReviewCandidate
-	checks     map[string][]checkResult
-	checkCalls []string
+	tasks          *memoryReviewTasks
+	candidate      *memoryReviewCandidate
+	checks         map[string][]checkResult
+	hunkCommands   map[string][]hunkCommandResult
+	checkCalls     []string
+	hunkCalls      []string
+	reviewLauncher *reviewPipelineAgentLauncher
 }
 
 type checkResult struct {
 	code           int
 	err            error
+	stdout, stderr string
+}
+
+type hunkCommandResult struct {
+	code           int
+	err            error
+	notes          []review.HunkNote
 	stdout, stderr string
 }
 type checkExit int
@@ -58,7 +69,7 @@ func newReviewDispatchFixture(t *testing.T, taskID string) *reviewWorkflowFixtur
 	item.Title = "Ready for task done"
 	item.Metadata = taskmodel.Metadata{taskmodel.MetadataBranch: "main", taskmodel.MetadataWorktree: taskWorkflowRepoRoot}
 	base := newTaskWorkflowFixture(t, item)
-	f := &reviewWorkflowFixture{taskWorkflowFixture: base, checks: make(map[string][]checkResult)}
+	f := &reviewWorkflowFixture{taskWorkflowFixture: base, checks: make(map[string][]checkResult), hunkCommands: make(map[string][]hunkCommandResult)}
 	f.tasks = &memoryReviewTasks{memoryTaskBackend: base.backend}
 	f.candidate = &memoryReviewCandidate{memoryDispatchGit: base.git, head: "initial-commit", contents: "fail\n"}
 	base.git.targets[taskWorkflowRepoRoot] = memoryGitTarget{branch: "main"}
@@ -68,10 +79,13 @@ func newReviewDispatchFixture(t *testing.T, taskID string) *reviewWorkflowFixtur
 	f.options.Dependencies.FinalizationGit = f.candidate
 	f.options.Dependencies.PRProvider = &memoryReviewPR{}
 	f.options.Dependencies.ReviewStatus = f.candidate.shortStatus
-	f.options.Dependencies.ReviewEffects = review.Effects{CaptureCandidate: f.candidate.capture, RunCommand: f.runCheck}
+	f.options.Dependencies.ReviewEffects = review.Effects{CaptureCandidate: f.candidate.capture, RunCommand: f.runCheck, RunHunkCommand: f.runHunkCommand}
 	t.Cleanup(func() {
 		for name, outcomes := range f.checks {
 			assert.Empty(t, outcomes, "unused check outcomes for %s", name)
+		}
+		for name, outcomes := range f.hunkCommands {
+			assert.Empty(t, outcomes, "unused Hunk command outcomes for %s", name)
 		}
 	})
 	return f
@@ -85,14 +99,28 @@ func (f *reviewWorkflowFixture) run(input string, args ...string) (string, strin
 }
 func (f *reviewWorkflowFixture) runError(input string, args ...string) (string, string, error) {
 	f.t.Helper()
-	command := cli.NewRootCommandWithOptions(f.options)
 	var stdout, stderr bytes.Buffer
-	command.SetIn(strings.NewReader(input))
-	command.SetOut(&stdout)
-	command.SetErr(&stderr)
-	command.SetArgs(args)
-	err := command.Execute()
+	err := f.runWithWriters(input, &stdout, &stderr, args...)
 	return stdout.String(), stderr.String(), err
+}
+func (f *reviewWorkflowFixture) runWithWriters(input string, stdout, stderr io.Writer, args ...string) error {
+	f.t.Helper()
+	command := cli.NewRootCommandWithOptions(f.options)
+	command.SetIn(strings.NewReader(input))
+	command.SetOut(stdout)
+	command.SetErr(stderr)
+	command.SetArgs(args)
+	return command.Execute()
+}
+func (f *reviewWorkflowFixture) forceInteractiveReviewOutput(width int) {
+	f.t.Helper()
+	f.options.Dependencies.Terminal = cli.TerminalCapabilities{
+		InputIsTerminal:  func(io.Reader) bool { return false },
+		OutputIsTerminal: func(io.Writer) bool { return true },
+		OutputWidth: func(io.Writer) (int, bool) {
+			return width, true
+		},
+	}
 }
 func (f *reviewWorkflowFixture) pipelines(name string, pipelines map[string][]map[string]any) {
 	f.t.Helper()
@@ -136,6 +164,35 @@ func (f *reviewWorkflowFixture) runCheck(opts review.CommandOptions) (*int, erro
 		return &result.code, checkExit(result.code)
 	}
 	return &result.code, nil
+}
+
+func (f *reviewWorkflowFixture) hunkCommand(name string, outcomes ...hunkCommandResult) string {
+	f.hunkCommands[name] = append(f.hunkCommands[name], outcomes...)
+	return name
+}
+
+func (f *reviewWorkflowFixture) runHunkCommand(opts review.HunkCommandOptions) (*int, []review.HunkNote, error) {
+	name := opts.Step.Command
+	outcomes := f.hunkCommands[name]
+	if len(outcomes) == 0 {
+		return nil, nil, fmt.Errorf("unexpected Hunk review command %q", name)
+	}
+	result := outcomes[0]
+	f.hunkCommands[name] = outcomes[1:]
+	f.hunkCalls = append(f.hunkCalls, name)
+	if result.err != nil {
+		return nil, nil, result.err
+	}
+	if _, err := fmt.Fprint(opts.Stdout, result.stdout); err != nil {
+		return nil, nil, err
+	}
+	if _, err := fmt.Fprint(opts.Stderr, result.stderr); err != nil {
+		return nil, nil, err
+	}
+	if result.code != 0 {
+		return &result.code, result.notes, checkExit(result.code)
+	}
+	return &result.code, result.notes, nil
 }
 
 type memoryReviewTasks struct {

@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationRepoConfigInspectsEffectivePublicationPolicy(t *testing.T) {
+func TestIntegrationWorkflowRepoConfigInspectsEffectivePublicationPolicy(t *testing.T) {
 	is := assert.New(t)
 	fixture := newRepoConfigFixture(t)
 
@@ -27,7 +27,7 @@ func TestIntegrationRepoConfigInspectsEffectivePublicationPolicy(t *testing.T) {
 	is.Contains(stdout, "default")
 }
 
-func TestIntegrationRepoConfigUsesGlobalPublicationPolicyFallbacks(t *testing.T) {
+func TestIntegrationWorkflowRepoConfigUsesGlobalPublicationPolicyFallbacks(t *testing.T) {
 	is := assert.New(t)
 	fixture := newRepoConfigFixture(t)
 	must := require.New(t)
@@ -83,7 +83,7 @@ func TestIntegrationRepoConfigUsesGlobalPublicationPolicyFallbacks(t *testing.T)
 	is.Empty(reg.Repos[0].TitleTemplate)
 }
 
-func TestIntegrationRepoConfigUpdatesPublicationPolicyForExistingRepo(t *testing.T) {
+func TestIntegrationWorkflowRepoConfigUpdatesPublicationPolicyForExistingRepo(t *testing.T) {
 	is := assert.New(t)
 	fixture := newRepoConfigFixture(t)
 	must := require.New(t)
@@ -116,7 +116,7 @@ func TestIntegrationRepoConfigUpdatesPublicationPolicyForExistingRepo(t *testing
 	is.Equal(template, reg.Repos[0].TitleTemplate)
 }
 
-func TestIntegrationRepoConfigSetsAndClearsBranchTemplateWithGlobalFallback(t *testing.T) {
+func TestIntegrationWorkflowRepoConfigSetsAndClearsBranchTemplateWithGlobalFallback(t *testing.T) {
 	is := assert.New(t)
 	fixture := newRepoConfigFixture(t)
 	must := require.New(t)
@@ -147,7 +147,7 @@ func TestIntegrationRepoConfigSetsAndClearsBranchTemplateWithGlobalFallback(t *t
 	is.Empty(reg.Repos[0].BranchTemplate)
 }
 
-func TestIntegrationRepoConfigSetsAndClearsIncludePRReviewProcess(t *testing.T) {
+func TestIntegrationWorkflowRepoConfigSetsAndClearsIncludePRReviewProcess(t *testing.T) {
 	is := assert.New(t)
 	fixture := newRepoConfigFixture(t)
 	must := require.New(t)
@@ -200,7 +200,7 @@ func TestIntegrationRepoConfigSetsAndClearsIncludePRReviewProcess(t *testing.T) 
 	is.Nil(reg.Repos[0].IncludePRReviewProcess)
 }
 
-func TestIntegrationRepoConfigClearsPublicationPolicy(t *testing.T) {
+func TestIntegrationWorkflowRepoConfigClearsPublicationPolicy(t *testing.T) {
 	is := assert.New(t)
 	fixture := newRepoConfigFixture(t)
 	must := require.New(t)
@@ -244,7 +244,7 @@ func TestIntegrationRepoConfigClearsPublicationPolicy(t *testing.T) {
 	is.Empty(reg.Repos[0].TitleTemplate)
 }
 
-func TestIntegrationRepoConfigRejectsInvalidPolicyWithoutMutatingRegistry(t *testing.T) {
+func TestIntegrationWorkflowRepoConfigRejectsInvalidPolicyWithoutMutatingRegistry(t *testing.T) {
 	is := assert.New(t)
 	fixture := newRepoConfigFixture(t)
 	must := require.New(t)
@@ -269,7 +269,7 @@ func TestIntegrationRepoConfigRejectsInvalidPolicyWithoutMutatingRegistry(t *tes
 	is.Equal("[OPS] {{summary}}", reg.Repos[0].TitleTemplate)
 }
 
-func TestIntegrationRepoConfigSetInvalidGlobalPublicationFlowDoesNotMutateRegistry(t *testing.T) {
+func TestIntegrationWorkflowRepoConfigSetInvalidGlobalPublicationFlowDoesNotMutateRegistry(t *testing.T) {
 	is := assert.New(t)
 	fixture := newRepoConfigFixture(t)
 	must := require.New(t)
@@ -286,7 +286,7 @@ func TestIntegrationRepoConfigSetInvalidGlobalPublicationFlowDoesNotMutateRegist
 	is.Equal(before, after)
 }
 
-func TestIntegrationRepoConfigRejectsUnknownConfigName(t *testing.T) {
+func TestIntegrationWorkflowRepoConfigRejectsUnknownConfigName(t *testing.T) {
 	is := assert.New(t)
 	fixture := newRepoConfigFixture(t)
 	must := require.New(t)
@@ -298,7 +298,7 @@ func TestIntegrationRepoConfigRejectsUnknownConfigName(t *testing.T) {
 	is.Empty(stdout)
 }
 
-func TestIntegrationRepoConfigGetOnePolicyValue(t *testing.T) {
+func TestIntegrationWorkflowRepoConfigGetOnePolicyValue(t *testing.T) {
 	is := assert.New(t)
 	fixture := newRepoConfigFixture(t)
 
@@ -316,7 +316,7 @@ func TestIntegrationRepoConfigGetOnePolicyValue(t *testing.T) {
 	is.NotContains(stdout, "summary-style")
 }
 
-func TestIntegrationRepoConfigSetsAndClearsReviewPipelineDefault(t *testing.T) {
+func TestIntegrationWorkflowRepoConfigSetsAndClearsReviewPipelineDefault(t *testing.T) {
 	is := assert.New(t)
 	fixture := newRepoConfigFixture(t)
 	must := require.New(t)
@@ -354,7 +354,7 @@ func TestIntegrationRepoConfigSetsAndClearsReviewPipelineDefault(t *testing.T) {
 	is.Empty(reg.Repos[0].ReviewPipeline)
 }
 
-func TestIntegrationRepoConfigSetsAndClearsReviewPipelineAlias(t *testing.T) {
+func TestIntegrationWorkflowRepoConfigSetsAndClearsReviewPipelineAlias(t *testing.T) {
 	is := assert.New(t)
 	fixture := newRepoConfigFixture(t)
 	must := require.New(t)
@@ -395,7 +395,7 @@ func TestIntegrationRepoConfigSetsAndClearsReviewPipelineAlias(t *testing.T) {
 	is.Empty(reg.Repos[0].ReviewPipelineAliases)
 }
 
-func TestIntegrationRepoConfigRejectsUnknownReviewPipelineWithoutMutatingRegistry(t *testing.T) {
+func TestIntegrationWorkflowRepoConfigRejectsUnknownReviewPipelineWithoutMutatingRegistry(t *testing.T) {
 	is := assert.New(t)
 	fixture := newRepoConfigFixture(t)
 	must := require.New(t)

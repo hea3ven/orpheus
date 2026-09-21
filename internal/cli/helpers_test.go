@@ -24,8 +24,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const immutableCLIHelperMode = 0o555
-
 // writeTestExecutable makes a fixture visible only after its complete content and
 // executable mode are in place. This prevents an overlapping command from trying
 // to execute a script while it is being replaced.
@@ -34,26 +32,25 @@ func writeTestExecutable(path string, content []byte) error {
 }
 
 var (
-	cliHelperFixtureOnce          sync.Once
-	cliHelperFixtureErr           error
-	cliHelperFixtureRoot          string
+	cliIntegrationFixtureOnce     sync.Once
+	cliIntegrationFixtureErr      error
+	cliIntegrationFixtureRoot     string
 	localOriginTestRepoTemplate   string
 	localWorktreeTestRepoTemplate string
-	orpheusCLIHelperPath          string
 )
 
-func requireCLIHelperFixture(t *testing.T) {
+func requireCLIIntegrationFixture(t *testing.T) {
 	t.Helper()
 
-	cliHelperFixtureOnce.Do(func() {
-		cliHelperFixtureErr = setupCLIHelperFixture()
+	cliIntegrationFixtureOnce.Do(func() {
+		cliIntegrationFixtureErr = setupCLIIntegrationFixture()
 	})
-	if cliHelperFixtureErr != nil {
-		t.Fatalf("setup CLI helper fixture: %v", cliHelperFixtureErr)
+	if cliIntegrationFixtureErr != nil {
+		t.Fatalf("setup CLI integration fixture: %v", cliIntegrationFixtureErr)
 	}
 }
 
-func setupCLIHelperFixture() error {
+func setupCLIIntegrationFixture() error {
 	root, err := os.MkdirTemp("", "orpheus-cli-fixtures-*")
 	if err != nil {
 		return fmt.Errorf("create fixture directory: %w", err)
@@ -62,31 +59,7 @@ func setupCLIHelperFixture() error {
 		_ = os.RemoveAll(root)
 		return err
 	}
-
-	testBinary, err := filepath.Abs(os.Args[0])
-	if err != nil {
-		_ = os.RemoveAll(root)
-		return fmt.Errorf("resolve test binary: %w", err)
-	}
-	helperPath := filepath.Join(root, "orpheus")
-	script := fmt.Sprintf(`#!/bin/sh
-GO_WANT_ORPHEUS_CLI_HELPER=1 exec %s -test.run=TestIntegrationOrpheusCLIHelperProcess -- "$@"
-`, shellQuote(testBinary))
-	if err := writeTestExecutable(helperPath, []byte(script)); err != nil {
-		_ = os.RemoveAll(root)
-		return fmt.Errorf("write orpheus helper: %w", err)
-	}
-	if err := os.Chmod(helperPath, immutableCLIHelperMode); err != nil {
-		_ = os.RemoveAll(root)
-		return fmt.Errorf("make orpheus helper immutable: %w", err)
-	}
-	if err := os.Chmod(root, immutableCLIHelperMode); err != nil {
-		_ = os.Chmod(root, 0o700)
-		_ = os.RemoveAll(root)
-		return fmt.Errorf("make fixture directory immutable: %w", err)
-	}
-	cliHelperFixtureRoot = root
-	orpheusCLIHelperPath = helperPath
+	cliIntegrationFixtureRoot = root
 	return nil
 }
 
@@ -185,21 +158,19 @@ func copyTestFile(source string, destination string, mode fs.FileMode) error {
 	return closeErr
 }
 
-func cleanupCLIHelperFixture() {
-	if cliHelperFixtureRoot == "" {
+func cleanupCLIIntegrationFixture() {
+	if cliIntegrationFixtureRoot == "" {
 		return
 	}
-	_ = os.Chmod(cliHelperFixtureRoot, 0o700)
-	_ = os.RemoveAll(cliHelperFixtureRoot)
-	cliHelperFixtureRoot = ""
+	_ = os.RemoveAll(cliIntegrationFixtureRoot)
+	cliIntegrationFixtureRoot = ""
 	localOriginTestRepoTemplate = ""
 	localWorktreeTestRepoTemplate = ""
-	orpheusCLIHelperPath = ""
 }
 
 func newTestRepoWithLocalOriginAt(t *testing.T, root string, relativePath string) string {
 	t.Helper()
-	requireCLIHelperFixture(t)
+	requireCLIIntegrationFixture(t)
 
 	originPath := filepath.Join(root, "origins", filepath.Base(relativePath)+".git")
 	copySeededTestRepo(t, localOriginTestRepoTemplate, originPath)
@@ -329,34 +300,6 @@ func canonicalFixturePath(t *testing.T, path string) string {
 	return canonicalPath
 }
 
-func executeCommand(t *testing.T, args []string) (stdout string, stderr string) {
-	t.Helper()
-	must := require.New(t)
-
-	stdout, stderr, err := executeCommandWithError(t, args)
-	must.NoError(err, "execute %v\nstderr: %s", args, stderr)
-	return stdout, stderr
-}
-
-func executeCommandWithError(t *testing.T, args []string) (stdout string, stderr string, err error) {
-	t.Helper()
-	return executeCommandWithInputAndError(t, args, nil)
-}
-
-func executeCommandWithInput(t *testing.T, args []string, input string) (stdout string, stderr string) {
-	t.Helper()
-	must := require.New(t)
-
-	stdout, stderr, err := executeCommandWithInputAndError(t, args, []byte(input))
-	must.NoError(err, "execute %v\nstderr: %s", args, stderr)
-	return stdout, stderr
-}
-
-func executeCommandWithInputAndError(t *testing.T, args []string, input []byte) (stdout string, stderr string, err error) {
-	t.Helper()
-	return executeCommandWithReaderAndError(t, args, bytes.NewBuffer(input))
-}
-
 func executeCommandWithScriptedInput(t *testing.T, args []string, input ...string) (stdout string, stderr string) {
 	t.Helper()
 	must := require.New(t)
@@ -441,41 +384,6 @@ func containsArgument(args []string, want string) bool {
 		}
 	}
 	return false
-}
-
-func TestIntegrationOrpheusCLIHelperIsSharedAndImmutable(t *testing.T) {
-	firstPath := withOrpheusCLIHelper(t)
-	before, err := os.ReadFile(firstPath)
-	require.NoError(t, err)
-
-	secondPath := withOrpheusCLIHelper(t)
-	after, err := os.ReadFile(secondPath)
-	require.NoError(t, err)
-	info, err := os.Stat(secondPath)
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(immutableCLIHelperMode), info.Mode().Perm())
-	require.Zero(t, info.Mode().Perm()&0o222)
-	require.Equal(t, firstPath, secondPath)
-	require.Equal(t, before, after)
-}
-
-func TestIntegrationSeededLocalOriginRepositoriesAreIndependent(t *testing.T) {
-	root := newTestState(t)
-	firstRepo := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "first"))
-	secondRepo := newTestRepoWithLocalOriginAt(t, root, filepath.Join("repos", "second"))
-
-	firstOrigin := strings.TrimSpace(runGit(t, firstRepo, "remote", "get-url", "origin"))
-	secondOrigin := strings.TrimSpace(runGit(t, secondRepo, "remote", "get-url", "origin"))
-	require.NotEqual(t, firstOrigin, secondOrigin)
-
-	runGit(t, firstRepo, "checkout", "-b", "only-first")
-	runGit(t, firstRepo, "commit", "--allow-empty", "-m", "only first")
-	runGit(t, firstRepo, "push", "origin", "only-first")
-
-	command := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/remotes/origin/only-first")
-	command.Dir = secondRepo
-	require.Error(t, command.Run())
-	require.Equal(t, "main\n", runGit(t, secondRepo, "branch", "--show-current"))
 }
 
 func currentTestPaths(t *testing.T) state.Paths {

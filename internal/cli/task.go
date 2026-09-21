@@ -1072,7 +1072,7 @@ func executeTaskRunRoute(command *cobra.Command, opts *rootOptions, execution ta
 		finalized, err := finalizeTaskWithConfirmation(command, newTaskFinalizationService(execution.deps, taskCtx, execution.logger), workflow.FinalizeOptions{
 			TaskID:              resolved.TaskID,
 			RequirePassedReview: true,
-		})
+		}, execution.deps.terminal)
 		if err != nil {
 			return err
 		}
@@ -1547,6 +1547,7 @@ func renderTaskReviewLifecycleOutcome(
 }
 
 type taskReviewExecutionOptions struct {
+	terminal          TerminalCapabilities
 	pauseBeforeManual bool
 	interactiveManual bool
 }
@@ -1561,7 +1562,7 @@ func taskReviewPipelinePresentation(command *cobra.Command,
 	if len(execOptions) > 0 {
 		execOpts = execOptions[0]
 	}
-	outputMode := taskReviewOutputMode(command, logger)
+	outputMode := taskReviewOutputMode(command, logger, execOpts.terminal)
 	presentation := workflow.ReviewPipelinePresentation{
 		Stdout:            outputMode.stdout,
 		Stderr:            outputMode.stderr,
@@ -1650,15 +1651,16 @@ type taskReviewOutputModeResult struct {
 	widthFunc   func() (int, bool)
 }
 
-func taskReviewOutputMode(command *cobra.Command, logger *slog.Logger) taskReviewOutputModeResult {
+func taskReviewOutputMode(command *cobra.Command, logger *slog.Logger, terminal TerminalCapabilities) taskReviewOutputModeResult {
+	terminal = terminal.withDefaults()
 	stdout := command.OutOrStdout()
 	stderr := command.ErrOrStderr()
 	stdoutInspection := inspectWriterTerminal(stdout)
 	stderrInspection := inspectWriterTerminal(stderr)
-	stdoutInteractive := taskReviewOutputIsTerminal(stdout)
-	stderrInteractive := taskReviewOutputIsTerminal(stderr)
+	stdoutInteractive := terminal.OutputIsTerminal(stdout)
+	stderrInteractive := terminal.OutputIsTerminal(stderr)
 	interactiveOutput := stdoutInteractive && stderrInteractive
-	outputWidth, _ := interactiveTerminalWidth(stderr)
+	outputWidth, _ := terminal.OutputWidth(stderr)
 	logTaskReviewOutputDetection(
 		command.Context(),
 		logger,
@@ -1673,7 +1675,7 @@ func taskReviewOutputMode(command *cobra.Command, logger *slog.Logger) taskRevie
 		interactive: interactiveOutput,
 		width:       outputWidth,
 		widthFunc: func() (int, bool) {
-			return interactiveTerminalWidth(stderr)
+			return terminal.OutputWidth(stderr)
 		},
 	}
 }
@@ -3120,7 +3122,7 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summa
 		Summary:             summary,
 		Description:         description,
 		RequirePassedReview: true,
-	})
+	}, deps.terminal)
 	if err != nil {
 		return err
 	}
@@ -3178,6 +3180,7 @@ func finalizeTaskWithConfirmation(
 	command *cobra.Command,
 	service workflow.FinalizationService,
 	finalizeOpts workflow.FinalizeOptions,
+	terminal TerminalCapabilities,
 ) (workflow.FinalizationResult, error) {
 	finalized, err := service.Finalize(command.Context(), finalizeOpts)
 	if err == nil {
@@ -3188,7 +3191,7 @@ func finalizeTaskWithConfirmation(
 	if !ok {
 		return workflow.FinalizationResult{}, fmt.Errorf("task done: %w", err)
 	}
-	confirmed, confirmErr := confirmRunningCompletionFinalization(command, confirmation)
+	confirmed, confirmErr := confirmRunningCompletionFinalizationWithReader(command, confirmation, nil, terminal)
 	if confirmErr != nil {
 		return workflow.FinalizationResult{}, fmt.Errorf("task done: %w", confirmErr)
 	}
@@ -3245,16 +3248,17 @@ func confirmRunningCompletionFinalization(
 	command *cobra.Command,
 	confirmation workflow.RunningCompletionConfirmation,
 ) (bool, error) {
-	return confirmRunningCompletionFinalizationWithReader(command, confirmation, nil)
+	return confirmRunningCompletionFinalizationWithReader(command, confirmation, nil, TerminalCapabilities{})
 }
 
 func confirmRunningCompletionFinalizationWithReader(
 	command *cobra.Command,
 	confirmation workflow.RunningCompletionConfirmation,
 	reader *bufio.Reader,
+	terminal TerminalCapabilities,
 ) (bool, error) {
 	input := command.InOrStdin()
-	if !taskDoneInputIsTerminal(input) {
+	if !terminal.withDefaults().InputIsTerminal(input) {
 		return false, nil
 	}
 	if reader == nil {

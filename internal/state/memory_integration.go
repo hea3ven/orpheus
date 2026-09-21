@@ -17,10 +17,11 @@ func NewMemoryPaths(configRoot, dataRoot string) (Paths, error) {
 }
 
 type memoryBackend struct {
-	mu    sync.Mutex
-	files map[string][]byte
-	locks map[string]struct{}
-	dirs  map[string]struct{}
+	mu         sync.Mutex
+	writeError func(string, []byte) error
+	files      map[string][]byte
+	locks      map[string]struct{}
+	dirs       map[string]struct{}
 }
 
 func newMemoryBackend() *memoryBackend {
@@ -84,6 +85,11 @@ func (b *memoryBackend) replaceFile(path string, data []byte, _ os.FileMode) err
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	if b.writeError != nil {
+		if err := b.writeError(path, append([]byte(nil), data...)); err != nil {
+			return err
+		}
+	}
 	b.files[path] = append([]byte(nil), data...)
 	return nil
 }

@@ -2,7 +2,7 @@
 
 ## Scope and isolation
 
-`internal/beads/beads_integration_test.go` now initializes one real Beads
+`internal/beads/beads_adapter_test.go` now initializes one real Beads
 workspace for five independent relationship cases. The real task backend and
 update service remain in use. No production code changed.
 
@@ -25,20 +25,20 @@ follows the task contract and `docs/testing.md`.
 
 ## Preserved assertions
 
-The original five top-level names become subtest suffixes beneath
-`TestIntegrationBeadsRelationshipContracts`. Every existing behavioral assertion
-remains.
+The relationship cases share `TestIntegrationAdapterContractBeadsRelationshipContracts`.
+Following the ownership repair, the adapter subtests call `beads.TaskBackend` directly.
+Parent-cycle rejection remains in the task-service unit `TestUpdateServiceRejectsParentDescendantCyclesBeforeMutation`.
 
 | Subtest suffix | Contract |
 | --- | --- |
-| `UpdateServiceRejectsRealBeadsParentDescendantCycle` | Parenting an epic under its child fails and leaves the root parent unchanged. |
-| `UpdateServiceSupportsCrossTypeBlockingDependencies` | Task-to-epic and epic-to-task updates return exactly the requested blocking dependency. |
-| `UpdateServiceDoesNotRemoveRelatedDependency` | Removing a blocking dependency does not remove a related edge; real `bd dep list --json` still returns that edge and type. |
-| `UpdateServiceRejectsNonBlockingDependencyBeforeContentMutation` | Adding an existing related edge as blocking fails before changing the title. |
+| `TaskBackendReadsParentRelationship` | Creating a child records the parent relationship, verified by a subsequent backend read. |
+| `TaskBackendSupportsCrossTypeBlockingDependencies` | Task-to-epic and epic-to-task updates return exactly the requested blocking dependency. |
+| `TaskBackendDoesNotRemoveRelatedDependency` | Removing a blocking dependency does not remove a related edge; real `bd dep list --json` still returns that edge and type. |
+| `TaskBackendRejectsNonBlockingDependencyBeforeContentMutation` | Adding an existing related edge as blocking fails before changing the title. |
 | `TaskBackendCreateRecordsBlockingDependencies` | Creating with a blocker persists the dependency, verified by a subsequent backend read. |
 
 Environment sanitization remains covered by
-`TestIntegrationCommandRunnerSanitizesBeadsEnvironment`. Exact adapter command
+`TestIntegrationAdapterContractCommandRunnerSanitizesBeadsEnvironment`. Exact adapter command
 translation remains in `internal/beads/beads_test.go`, including
 `TestTaskBackendCreatePassesGraphAndOptionalFields`,
 `TestTaskBackendUpdateUsesOrpheusBlockingEdgeAcrossTypes`, and the related-edge
@@ -107,3 +107,7 @@ retained under `artifacts/test-coverage/beads-contracts/`.
   `golangci-lint` pass.
 - No policy update is required. Quality reports only a non-blocking warning that
   integration timing is below its refresh floor. Coverage bounds are unchanged.
+
+## Ownership follow-up
+
+The relationship contract now calls `beads.TaskBackend` directly. Parent-cycle rejection remains in `internal/task` units; real parent readback, cross-type edges, related-edge preservation, and rejection before content mutation remain in Beads. See [the ownership assertion map](op-sc7-8-contract-ownership.md).
