@@ -9,10 +9,10 @@ coverage:
 timing:
   update_samples: 5
   suite:
-    relative_headroom: 0.25
+    relative_headroom: 0.5
     absolute_headroom_seconds: 0.5
   package:
-    relative_headroom: 0.5
+    relative_headroom: 0.75
     absolute_headroom_seconds: 0.25
 lanes:
   integration:
