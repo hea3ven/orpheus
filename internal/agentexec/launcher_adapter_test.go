@@ -1,0 +1,100 @@
+//go:build integration
+
+package agentexec_test
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/hea3ven/orpheus/internal/agentexec"
+	"github.com/hea3ven/orpheus/internal/testguard"
+	"github.com/hea3ven/orpheus/internal/testutil"
+)
+
+func TestIntegrationAdapterContractAttachedLauncherBlocksSupportedAgentBeforePATHLookup(t *testing.T) {
+	assertSupportedAgentBlockedBeforePATHLookup(t)
+}
+
+func assertSupportedAgentBlockedBeforePATHLookup(t *testing.T) {
+	t.Helper()
+	if !testguard.IsTestProcess() {
+		t.Fatal("test safety guard is not active in this test binary")
+	}
+
+	binDir := testutil.CanonicalTempDir(t)
+	marker := filepath.Join(testutil.CanonicalTempDir(t), "sentinel-ran")
+	sentinel := filepath.Join(binDir, "codex")
+	if err := testguard.WriteExecutable(sentinel, []byte("#!/bin/sh\nprintf invoked > "+marker+"\n")); err != nil {
+		t.Fatalf("write sentinel: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv(testguard.FakeAgentEnvKey("codex"), "")
+
+	err := (agentexec.AttachedLauncher{}).Run(context.Background(), agentexec.Command{
+		Name:    "codex",
+		Harness: "codex",
+		Command: "codex",
+	}, agentexec.LaunchOptions{Dir: testutil.CanonicalTempDir(t)})
+
+	if err == nil {
+		t.Fatal("Run() error = nil, want test safety gate error")
+	}
+	if !agentexec.IsStartError(err) {
+		t.Fatalf("Run() error = %T %v, want StartError", err, err)
+	}
+	if !strings.Contains(err.Error(), "test safety gate blocked") {
+		t.Fatalf("Run() error = %q, want test safety gate detail", err)
+	}
+	if _, statErr := os.Stat(marker); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("sentinel was invoked: stat error = %v", statErr)
+	}
+}
+
+func TestIntegrationAdapterContractAttachedLauncherReportsDirectChildPIDBeforeWait(t *testing.T) {
+	binDir := testutil.CanonicalTempDir(t)
+	fake := filepath.Join(binDir, "agent")
+	if err := testguard.WriteExecutable(fake, []byte("#!/bin/sh\nsleep 0.01\n")); err != nil {
+		t.Fatalf("write fake: %v", err)
+	}
+	var observed int
+	err := (agentexec.AttachedLauncher{}).Run(context.Background(), agentexec.Command{Name: "agent", Command: fake}, agentexec.LaunchOptions{
+		Dir: testutil.CanonicalTempDir(t),
+		OnStart: func(pid int) error {
+			observed = pid
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if observed <= 0 {
+		t.Fatalf("observed PID = %d, want positive direct child PID", observed)
+	}
+}
+
+func TestIntegrationAdapterContractAttachedLauncherRunsExplicitlyRegisteredFake(t *testing.T) {
+	binDir := testutil.CanonicalTempDir(t)
+	marker := filepath.Join(testutil.CanonicalTempDir(t), "fake-ran")
+	fake := filepath.Join(binDir, "pi")
+	if err := testguard.WriteExecutable(fake, []byte("#!/bin/sh\nprintf invoked > "+marker+"\n")); err != nil {
+		t.Fatalf("write fake: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv(testguard.FakeAgentEnvKey("pi"), fake)
+
+	err := (agentexec.AttachedLauncher{}).Run(context.Background(), agentexec.Command{
+		Name:    "pi",
+		Harness: "pi",
+		Command: "pi",
+	}, agentexec.LaunchOptions{Dir: testutil.CanonicalTempDir(t)})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("fake was not invoked: %v", err)
+	}
+}

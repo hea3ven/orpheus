@@ -2,14 +2,17 @@ package cli
 
 import (
 	"context"
+	"io"
 	"log/slog"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/beads"
+	"github.com/hea3ven/orpheus/internal/doctor"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/review"
+	"github.com/hea3ven/orpheus/internal/revieweval"
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -39,6 +42,9 @@ type CommandOptions struct {
 // production adapters. Collaborators are shared by reference and must remain
 // valid for the lifetime of commands constructed with them.
 type Dependencies struct {
+	Terminal           TerminalCapabilities
+	EvaluationEffects  revieweval.Effects
+	DoctorEffects      doctor.Effects
 	PRProvider         pullrequest.Provider
 	SyncGit            workflow.SyncGit
 	CleanupGit         workflow.ClosedTaskWorktreeGit
@@ -55,7 +61,7 @@ type Dependencies struct {
 	ReviewCandidate    workflow.ReviewCandidateInspector
 	ReviewPipeline     func(review.PipelineRunOptions) (review.PipelineOutcome, error)
 	ProcessProbe       workflow.ProcessProbe
-	// CaptureUsage reads session usage after implementation, review repair, and sync conflict resolution.
+	// CaptureUsage reads session usage for implementation, review, sync conflict resolution, and doctor recovery.
 	CaptureUsage func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions
 }
 
@@ -70,6 +76,8 @@ func (o CommandOptions) resolvePaths() (state.Paths, error) {
 }
 
 func (d Dependencies) applyTo(invocation *invocationDependencies) {
+	invocation.terminal = d.Terminal
+	invocation.doctorEffects = d.DoctorEffects
 	invocation.prProvider = d.PRProvider
 	invocation.syncGit = d.SyncGit
 	invocation.cleanupGit = d.CleanupGit
@@ -109,4 +117,25 @@ func (d Dependencies) applyTo(invocation *invocationDependencies) {
 	if d.ProcessProbe != nil {
 		invocation.processProbe = d.ProcessProbe
 	}
+}
+
+// TerminalCapabilities supplies invocation-scoped observations of attached I/O.
+// Nil functions retain the OS terminal probes.
+type TerminalCapabilities struct {
+	InputIsTerminal  func(io.Reader) bool
+	OutputIsTerminal func(io.Writer) bool
+	OutputWidth      func(io.Writer) (int, bool)
+}
+
+func (t TerminalCapabilities) withDefaults() TerminalCapabilities {
+	if t.InputIsTerminal == nil {
+		t.InputIsTerminal = taskDoneInputIsTerminal
+	}
+	if t.OutputIsTerminal == nil {
+		t.OutputIsTerminal = taskReviewOutputIsTerminal
+	}
+	if t.OutputWidth == nil {
+		t.OutputWidth = interactiveTerminalWidth
+	}
+	return t
 }

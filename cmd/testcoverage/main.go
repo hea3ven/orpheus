@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/hea3ven/orpheus/internal/testlane"
 )
 
 const reportSchemaVersion = 1
@@ -16,6 +19,34 @@ type options struct {
 	output         string
 	updatePolicy   bool
 	auditScenarios bool
+	auditPackages  stringListFlag
+	auditRun       string
+}
+
+func (opts options) auditSelection() scenarioSelection {
+	packages := append([]string(nil), opts.auditPackages...)
+	if len(packages) == 0 {
+		packages = []string{"./..."}
+	}
+	pattern := opts.auditRun
+	if pattern == "" {
+		pattern = testlane.IntegrationTestPattern
+	}
+	return scenarioSelection{Packages: packages, TestPattern: pattern}
+}
+
+// stringListFlag collects a repeatable command-line option.
+type stringListFlag []string
+
+func (values *stringListFlag) String() string { return strings.Join(*values, ",") }
+
+func (values *stringListFlag) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("value must not be empty")
+	}
+	*values = append(*values, value)
+	return nil
 }
 
 func main() {
@@ -37,7 +68,9 @@ func parseOptions(args []string) (options, error) {
 	flags.StringVar(&opts.policy, "policy", ".quality.yml", "reviewed local quality policy")
 	flags.StringVar(&opts.output, "output", "artifacts/test-coverage/report.json", "machine-readable quality report path")
 	flags.BoolVar(&opts.updatePolicy, "update-policy", false, "update materially stale policy bounds from repeated measurements")
-	flags.BoolVar(&opts.auditScenarios, "audit-scenarios", false, "profile every integration scenario separately (expensive)")
+	flags.BoolVar(&opts.auditScenarios, "audit-scenarios", false, "profile integration scenarios separately (expensive)")
+	flags.Var(&opts.auditPackages, "audit-package", "package pattern to audit; repeat to select more than one (default ./...)")
+	flags.StringVar(&opts.auditRun, "audit-run", "", "integration test-name regular expression to audit (default ^TestIntegration)")
 	if err := flags.Parse(args); err != nil {
 		return options{}, err
 	}
@@ -46,6 +79,9 @@ func parseOptions(args []string) (options, error) {
 	}
 	if opts.updatePolicy && opts.auditScenarios {
 		return options{}, errors.New("update-policy and audit-scenarios cannot be combined")
+	}
+	if !opts.auditScenarios && (len(opts.auditPackages) > 0 || opts.auditRun != "") {
+		return options{}, errors.New("audit-package and audit-run require audit-scenarios")
 	}
 	return opts, nil
 }
@@ -64,7 +100,12 @@ func execute(opts options) error {
 	if opts.updatePolicy {
 		return executePolicyUpdate(opts, policy, work)
 	}
-	result, laneErrors := collectQuality(work, opts.auditScenarios)
+	var audit *scenarioSelection
+	if opts.auditScenarios {
+		selection := opts.auditSelection()
+		audit = &selection
+	}
+	result, laneErrors := collectQuality(work, audit)
 	result.MeasurementSamples = 1
 	if len(laneErrors) > 0 {
 		result.Decision = decision{Status: statusTestFailed, Findings: errorFindings(laneErrors)}
@@ -81,7 +122,7 @@ func executePolicyUpdate(opts options, policy localQualityPolicy, work string) e
 	samples := make([]qualityReport, 0, policy.Timing.UpdateSamples)
 	for index := 0; index < policy.Timing.UpdateSamples; index++ {
 		fmt.Printf("Collecting quality policy sample %d/%d.\n", index+1, policy.Timing.UpdateSamples)
-		result, laneErrors := collectQuality(filepath.Join(work, fmt.Sprintf("sample-%d", index+1)), false)
+		result, laneErrors := collectQuality(filepath.Join(work, fmt.Sprintf("sample-%d", index+1)), nil)
 		result.MeasurementSamples = index + 1
 		if len(laneErrors) > 0 {
 			result.Decision = decision{Status: statusTestFailed, Findings: errorFindings(laneErrors)}
@@ -111,7 +152,7 @@ func executePolicyUpdate(opts options, policy localQualityPolicy, work string) e
 	return nil
 }
 
-func collectQuality(work string, auditScenarios bool) (qualityReport, []error) {
+func collectQuality(work string, audit *scenarioSelection) (qualityReport, []error) {
 	result := qualityReport{SchemaVersion: reportSchemaVersion, Lanes: make(map[string]laneReport, 2)}
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return result, []error{fmt.Errorf("create measurement directory: %w", err)}
@@ -129,8 +170,8 @@ func collectQuality(work string, auditScenarios bool) (qualityReport, []error) {
 		}
 	}
 	result.Complete = len(laneErrors) == 0
-	if result.Complete && auditScenarios {
-		scenarios, err := auditIntegrationScenarios(work, detailed["integration"])
+	if result.Complete && audit != nil {
+		scenarios, err := auditIntegrationScenarios(work, detailed["integration"], *audit)
 		if err != nil {
 			laneErrors = append(laneErrors, fmt.Errorf("audit integration scenarios: %w", err))
 			result.Complete = false

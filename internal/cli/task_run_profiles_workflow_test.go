@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationTaskRunStructuredCodexProfileBuildsAttachedCommand(t *testing.T) {
+func TestIntegrationWorkflowTaskRunStructuredCodexProfileBuildsAttachedCommand(t *testing.T) {
 	fixture := newTaskWorkflowFixture(t, anOpenTask("op-codex"))
 	fixture.withAgentExitingWithoutCompletion(1)
 	fixture.configureImplementer("codex-medium", agent.Profile{Harness: "codex", Model: "gpt-5.4", Thinking: "high", Interactive: true})
@@ -39,7 +39,7 @@ func TestIntegrationTaskRunStructuredCodexProfileBuildsAttachedCommand(t *testin
 	assert.Equal(t, args, execution.Args)
 }
 
-func TestIntegrationTaskRunStructuredPiProfilePersistsCapturedUsage(t *testing.T) {
+func TestIntegrationWorkflowTaskRunStructuredPiProfilePersistsCapturedUsage(t *testing.T) {
 	fixture := newTaskWorkflowFixture(t, anOpenTask("op-pi"))
 	fixture.withAgentExitingWithoutCompletion(1)
 	fixture.configureImplementer("pi-medium", agent.Profile{Harness: "pi", Model: "openai-codex/gpt-5.5", Thinking: "high"})
@@ -78,7 +78,7 @@ func TestIntegrationTaskRunStructuredPiProfilePersistsCapturedUsage(t *testing.T
 	assert.NotNil(t, capture.Logger)
 }
 
-func TestIntegrationTaskRunAgentFlagOverridesConfiguredDefault(t *testing.T) {
+func TestIntegrationWorkflowTaskRunAgentFlagOverridesConfiguredDefault(t *testing.T) {
 	fixture := newTaskWorkflowFixture(t, anOpenTask("op-selected"))
 	fixture.withAgentExitingWithoutCompletion(1)
 	fixture.configureAgentProfiles(agent.AgentDefaults{Implementer: "default"}, map[string]agent.Profile{
@@ -98,7 +98,7 @@ func TestIntegrationTaskRunAgentFlagOverridesConfiguredDefault(t *testing.T) {
 	assert.Equal(t, "custom", final.Runs[0].Execution.Profile)
 }
 
-func TestIntegrationTaskRunUnknownProfilePreventsLaunch(t *testing.T) {
+func TestIntegrationWorkflowTaskRunUnknownProfilePreventsLaunch(t *testing.T) {
 	fixture := newTaskWorkflowFixture(t, anOpenTask("op-unknown"))
 	fixture.configureImplementer("known", agent.Profile{Command: "unused-agent"})
 

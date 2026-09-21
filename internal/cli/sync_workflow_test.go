@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationTaskSyncPollsExistingPRURLWithoutPushOrMutation(t *testing.T) {
+func TestIntegrationWorkflowTaskSyncPollsExistingPRURLWithoutPushOrMutation(t *testing.T) {
 	f := newSyncFixture(t)
 	// Unsupported worktree metadata still permits polling, but never a Git update.
 	item := f.backend.tasks["op-sync"]
@@ -47,7 +47,7 @@ func (f *syncWorkflowFixture) assertSyncUnchanged(before taskmodel.Task) {
 	assert.Zero(f.t, f.pr.findReads)
 }
 
-func TestIntegrationTaskSyncRecordsConflictResolutionUsageTelemetry(t *testing.T) {
+func TestIntegrationWorkflowTaskSyncRecordsConflictResolutionUsageTelemetry(t *testing.T) {
 	f := newSyncFixture(t)
 	f.resolvingAgent(nil)
 	const usageRoot = "/fixture/sync-usage/codex"
@@ -107,7 +107,7 @@ func TestIntegrationTaskSyncRecordsConflictResolutionUsageTelemetry(t *testing.T
 	assert.Len(t, f.candidate.pushes, 1)
 }
 
-func TestIntegrationTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR(t *testing.T) {
+func TestIntegrationWorkflowTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR(t *testing.T) {
 	f := newSyncFixture(t)
 	item := f.backend.tasks["op-sync"]
 	item.Metadata[taskmodel.MetadataWorktree] = "/fixture/unused-worktree"
@@ -144,7 +144,7 @@ func assertMergedAudit(t *testing.T, event taskstate.Event, url string) {
 	assert.Equal(t, "merged", event.ObservedPRState)
 }
 
-func TestIntegrationTaskSyncExistingPRErrorsDoNotMutateBackendOrAudit(t *testing.T) {
+func TestIntegrationWorkflowTaskSyncExistingPRErrorsDoNotMutateBackendOrAudit(t *testing.T) {
 	// Parsing and error translation are asserted by the GH adapter contracts.
 	for _, message := range []string{
 		`pull request URL "not-a-url" is invalid`,
@@ -175,7 +175,7 @@ func TestIntegrationTaskSyncExistingPRErrorsDoNotMutateBackendOrAudit(t *testing
 	}
 }
 
-func TestIntegrationTaskSyncSkipsClosedTaskWithoutPRPolling(t *testing.T) {
+func TestIntegrationWorkflowTaskSyncSkipsClosedTaskWithoutPRPolling(t *testing.T) {
 	f := newSyncFixture(t)
 	item := f.backend.tasks["op-sync"]
 	item.Status = taskmodel.StatusClosed
@@ -191,7 +191,7 @@ func TestIntegrationTaskSyncSkipsClosedTaskWithoutPRPolling(t *testing.T) {
 	f.assertSyncUnchanged(item)
 }
 
-func TestIntegrationTaskSyncSkipsTaskWithoutPRURLAtRepoRoot(t *testing.T) {
+func TestIntegrationWorkflowTaskSyncSkipsTaskWithoutPRURLAtRepoRoot(t *testing.T) {
 	f := newFeatureFinalizationFixture(t, "op-sync", true)
 	before, item := f.loadFinalTask("op-sync")
 
@@ -208,7 +208,7 @@ func TestIntegrationTaskSyncSkipsTaskWithoutPRURLAtRepoRoot(t *testing.T) {
 	assert.Zero(t, f.pr.statusReads)
 }
 
-func TestIntegrationTaskSyncSkipsMainSoloLocalReadyTaskWithoutPRURL(t *testing.T) {
+func TestIntegrationWorkflowTaskSyncSkipsMainSoloLocalReadyTaskWithoutPRURL(t *testing.T) {
 	f := newMainFinalizationFixture(t, "op-main")
 	before, item := f.loadFinalTask("op-main")
 

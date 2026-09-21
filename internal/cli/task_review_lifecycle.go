@@ -17,9 +17,10 @@ import (
 )
 
 type taskReviewLifecycleFrontend struct {
-	command *cobra.Command
-	logger  *slog.Logger
-	reader  *bufio.Reader
+	terminal TerminalCapabilities
+	command  *cobra.Command
+	logger   *slog.Logger
+	reader   *bufio.Reader
 }
 
 func (f *taskReviewLifecycleFrontend) PipelinePresentation(ctx workflow.ReviewAttemptContext) (workflow.ReviewPipelinePresentation, error) {
@@ -28,6 +29,7 @@ func (f *taskReviewLifecycleFrontend) PipelinePresentation(ctx workflow.ReviewAt
 		taskReviewStartFromWorkflow(ctx),
 		f.reader,
 		f.logger,
+		taskReviewExecutionOptions{interactiveManual: true, terminal: f.terminal},
 	), nil
 }
 
@@ -154,7 +156,7 @@ func (f taskReviewLifecycleFrontend) ConfirmRunningCompletionFinalization(
 	_ workflow.ReviewAttemptContext,
 	confirmation workflow.RunningCompletionConfirmation,
 ) (bool, error) {
-	return confirmRunningCompletionFinalizationWithReader(f.command, confirmation, f.reader)
+	return confirmRunningCompletionFinalizationWithReader(f.command, confirmation, f.reader, f.terminal)
 }
 
 func (f taskReviewLifecycleFrontend) PromptFreshReviewBlockerDispositions(
@@ -260,8 +262,12 @@ func newTaskReviewLifecycleService(
 ) workflow.ReviewLifecycleService {
 	paths := deps.paths
 	store := deps.taskStateStore
+	effects := deps.reviewEffects
+	if effects.CaptureUsage == nil {
+		effects.CaptureUsage = deps.captureUsage
+	}
 	service := workflow.ReviewLifecycleService{
-		ReviewEffects:   deps.reviewEffects,
+		ReviewEffects:   effects,
 		ReviewStatus:    deps.reviewStatus,
 		FinalizationGit: deps.finalizationGit,
 		Paths:           paths,
@@ -281,9 +287,10 @@ func newTaskReviewLifecycleService(
 		ProcessProbe:          deps.processProbe,
 		PipelineRunner:        deps.reviewPipeline,
 		Frontend: &taskReviewLifecycleFrontend{
-			command: command,
-			logger:  logger,
-			reader:  reader,
+			terminal: deps.terminal,
+			command:  command,
+			logger:   logger,
+			reader:   reader,
 		},
 	}
 	service.AgentRunner = taskReviewLifecycleAgentRunner{command: command, deps: deps, service: workflow.DispatchService{

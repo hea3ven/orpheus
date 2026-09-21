@@ -428,9 +428,13 @@ func (p completionProvider) selectedRepository(command *cobra.Command) (string, 
 	if err != nil {
 		return "", false
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", false
+	cwd := strings.TrimSpace(deps.taskCWD)
+	if cwd == "" {
+		var err error
+		cwd, err = os.Getwd()
+		if err != nil {
+			return "", false
+		}
 	}
 	repository, err := taskmodel.ResolveCreationSource(completionTaskRepositorySources(registryCtx), taskmodel.CreationSourceOptions{
 		Repository:         flagString(command, "repo"),

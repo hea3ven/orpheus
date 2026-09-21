@@ -1537,10 +1537,21 @@ func (s ReviewLifecycleService) inspectReviewCandidate(ctx context.Context, revi
 
 // ValidateReviewCandidateReady ensures there is a read-only candidate to review.
 func ValidateReviewCandidateReady(ctx context.Context, store ReviewLifecycleStore, reviewCtx ReviewAttemptContext, workdir string) error {
-	if err := RequireCleanReviewIndex(ctx, workdir); err != nil {
+	return validateReviewCandidateReady(ctx, store, reviewCtx, workdir, RequireCleanReviewIndex, review.HasCandidateChanges)
+}
+
+func validateReviewCandidateReady(
+	ctx context.Context,
+	store ReviewLifecycleStore,
+	reviewCtx ReviewAttemptContext,
+	workdir string,
+	cleanIndex func(context.Context, string) error,
+	candidateChanges func(context.Context, string) (bool, error),
+) error {
+	if err := cleanIndex(ctx, workdir); err != nil {
 		return err
 	}
-	hasCandidate, err := review.HasCandidateChanges(ctx, workdir)
+	hasCandidate, err := candidateChanges(ctx, workdir)
 	if err != nil {
 		return err
 	}

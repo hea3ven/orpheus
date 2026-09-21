@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
@@ -20,7 +21,7 @@ func TestNextResumedUsageBoundaryFailsClosedWithoutLaterUsageBaseline(t *testing
 	laterCost := int64(200)
 	runs := resumedPiBoundaryRuns(session, initialUsage, &initialCost, nil, &laterCost)
 
-	boundary, reason := nextResumedUsageBoundary(runs, 0)
+	boundary, reason := nextResumedUsageBoundary(runs, 0, agent.SameCanonicalSession)
 
 	assert.Nil(t, boundary)
 	assert.Contains(t, reason, "without_usage_upper_bound")
@@ -35,7 +36,7 @@ func TestNextResumedUsageBoundaryAllowsMissingLaterCostBaseline(t *testing.T) {
 	laterUsage := &taskstate.AgentUsage{TotalTokens: 20}
 	runs := resumedPiBoundaryRuns(session, initialUsage, &initialCost, laterUsage, nil)
 
-	boundary, reason := nextResumedUsageBoundary(runs, 0)
+	boundary, reason := nextResumedUsageBoundary(runs, 0, agent.SameCanonicalSession)
 
 	require.NotNil(t, boundary)
 	assert.Same(t, laterUsage, boundary.Usage)

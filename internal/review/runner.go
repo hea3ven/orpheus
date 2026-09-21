@@ -577,12 +577,24 @@ func runManualStepCommand(opts PipelineRunOptions, step Step, env []string) (*in
 }
 
 func runHunkBackedManualCommand(opts PipelineRunOptions, step Step, env []string) (*int, []HunkNote, error) {
+	mergedEnv := mergeEnvironment(opts.Environment, env)
+	if opts.Effects.RunHunkCommand != nil {
+		return opts.Effects.RunHunkCommand(HunkCommandOptions{
+			Context:     opts.Context,
+			Step:        step,
+			Workdir:     opts.Workdir,
+			Environment: mergedEnv,
+			Stdout:      opts.Stdout,
+			Stderr:      opts.Stderr,
+		})
+	}
+
 	span := logging.Start(opts.Context, opts.Logger, "review command",
 		reviewCommandAttrs(opts, step)...,
 	)
 	process := exec.CommandContext(opts.Context, executable(opts.Environment, step.Command), step.Args...)
 	process.Dir = opts.Workdir
-	process.Env = mergeEnvironment(opts.Environment, env)
+	process.Env = mergedEnv
 	process.Stdout = opts.Stdout
 	process.Stderr = opts.Stderr
 
@@ -844,7 +856,7 @@ func runAlternateReviewerComparison(opts PipelineRunOptions, step Step, alternat
 }
 
 func finishAlternateReviewExecution(opts PipelineRunOptions, step Step, command agent.CommandSnapshot, execution taskstate.AgentExecution, status taskstate.RunStatus, runErr error) error {
-	usageOpts := agentReviewUsageOptions(command, opts.Workdir, execution, runErr, usageCaptureEnvironment(opts))
+	usageOpts := agentReviewUsageOptions(command, opts.Workdir, execution, runErr, usageCaptureEnvironment(opts), opts.Effects.CaptureUsage)
 	_, err := opts.Store.FinishReviewStepComparison(opts.RepoID, opts.TaskID, opts.Attempt.Attempt, step.Name, taskstate.FinishReviewStepExecutionOptions{Status: status, FinishedAt: time.Now().UTC(), Session: usageOpts.Session, Usage: usageOpts.Usage, UsageCost: usageOpts.UsageCost, UsageCapture: usageOpts.UsageCapture, Model: usageOpts.Model})
 	return err
 }
@@ -1000,7 +1012,7 @@ func finishAgentReviewExecution(
 	finishedAt time.Time,
 	runErr error,
 ) error {
-	usageOpts := agentReviewUsageOptions(command, opts.Workdir, execution, runErr, usageCaptureEnvironment(opts))
+	usageOpts := agentReviewUsageOptions(command, opts.Workdir, execution, runErr, usageCaptureEnvironment(opts), opts.Effects.CaptureUsage)
 	_, err := opts.Store.FinishReviewStepExecution(
 		opts.RepoID,
 		opts.TaskID,
@@ -1028,6 +1040,7 @@ func agentReviewUsageOptions(
 	execution taskstate.AgentExecution,
 	runErr error,
 	environment map[string]string,
+	capture func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions,
 ) taskstate.RecordRunUsageOptions {
 	if agentexec.IsStartError(runErr) {
 		return taskstate.RecordRunUsageOptions{
@@ -1046,7 +1059,10 @@ func agentReviewUsageOptions(
 			},
 		}
 	}
-	return agent.CaptureUsage(agent.UsageCaptureOptions{
+	if capture == nil {
+		capture = agent.CaptureUsage
+	}
+	return capture(agent.UsageCaptureOptions{
 		Harness:      command.Harness,
 		ExecutionDir: workdir,
 		SessionName:  execution.SessionName,

@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationTaskRunRejectsClosedTaskWithoutChangingRecordedState(t *testing.T) {
+func TestIntegrationWorkflowTaskRunRejectsClosedTaskWithoutChangingRecordedState(t *testing.T) {
 	item := aClosedTask("op-closed")
 	fixture := newTaskWorkflowFixture(t, item)
 	fixture.withCompletedRunAndPassedReview(item.ID)
@@ -38,7 +38,7 @@ func TestIntegrationTaskRunRejectsClosedTaskWithoutChangingRecordedState(t *test
 	assert.Empty(t, fixture.backend.markCalls)
 }
 
-func TestIntegrationTaskRunMissingExternalReferenceBlocksSetup(t *testing.T) {
+func TestIntegrationWorkflowTaskRunMissingExternalReferenceBlocksSetup(t *testing.T) {
 	for _, source := range []string{"repository", "global"} {
 		t.Run(source, func(t *testing.T) {
 			fixture := newTaskWorkflowFixture(t, anOpenTask("op-reference"))
@@ -68,7 +68,7 @@ func TestIntegrationTaskRunMissingExternalReferenceBlocksSetup(t *testing.T) {
 	}
 }
 
-func TestIntegrationTaskRunRejectsChildOfInactiveEpicBeforeSetup(t *testing.T) {
+func TestIntegrationWorkflowTaskRunRejectsChildOfInactiveEpicBeforeSetup(t *testing.T) {
 	parent := anOpenEpic("op-parent")
 	fixture := newTaskWorkflowFixture(t, parent, anOpenChildTask("op-child", parent.ID))
 
@@ -82,7 +82,7 @@ func TestIntegrationTaskRunRejectsChildOfInactiveEpicBeforeSetup(t *testing.T) {
 	fixture.assertDispatchDidNotStart(final)
 }
 
-func TestIntegrationTaskRunRepoRootDispatchLocksTargetAndRejectsModeOverrideOnRetry(t *testing.T) {
+func TestIntegrationWorkflowTaskRunRepoRootDispatchLocksTargetAndRejectsModeOverrideOnRetry(t *testing.T) {
 	fixture := newTaskWorkflowFixture(t, anOpenTask("op-root"))
 	fixture.withAgentExitingWithoutCompletion(1)
 
@@ -113,7 +113,7 @@ func TestIntegrationTaskRunRepoRootDispatchLocksTargetAndRejectsModeOverrideOnRe
 	assertBootstrapPromptOmitsTaskDetails(t, launch.environment["ORPHEUS_AGENT_PROMPT"], "Task op-root")
 }
 
-func TestIntegrationTaskRunBackendOwnedTargetWithoutLocalHistory(t *testing.T) {
+func TestIntegrationWorkflowTaskRunBackendOwnedTargetWithoutLocalHistory(t *testing.T) {
 	for _, mode := range []string{"worktree", "repo-root"} {
 		t.Run(mode, func(t *testing.T) {
 			fixture := newTaskWorkflowFixture(t, anInProgressTask("op-owned"))
@@ -140,7 +140,7 @@ func TestIntegrationTaskRunBackendOwnedTargetWithoutLocalHistory(t *testing.T) {
 	}
 }
 
-func TestIntegrationTaskRunBackendRepoRootMetadataRequiresExplicitMode(t *testing.T) {
+func TestIntegrationWorkflowTaskRunBackendRepoRootMetadataRequiresExplicitMode(t *testing.T) {
 	fixture := newTaskWorkflowFixture(t, anInProgressTask("op-root"))
 	fixture.withBackendTarget("op-root", "main", taskWorkflowRepoRoot)
 
@@ -154,7 +154,7 @@ func TestIntegrationTaskRunBackendRepoRootMetadataRequiresExplicitMode(t *testin
 	fixture.assertDispatchDidNotStart(final)
 }
 
-func TestIntegrationTaskRunOtherRepoRootOwnerDoesNotBlockWorktreeDispatch(t *testing.T) {
+func TestIntegrationWorkflowTaskRunOtherRepoRootOwnerDoesNotBlockWorktreeDispatch(t *testing.T) {
 	fixture := newTaskWorkflowFixture(t, anInProgressTask("op-owner"), anOpenTask("op-next"))
 	fixture.withBackendTarget("op-owner", "main", taskWorkflowRepoRoot)
 	fixture.withAgentExitingWithoutCompletion(1)
@@ -175,7 +175,7 @@ func TestIntegrationTaskRunOtherRepoRootOwnerDoesNotBlockWorktreeDispatch(t *tes
 	assert.Len(t, fixture.git.worktreeSetups, 1)
 }
 
-func TestIntegrationTaskRunRepoRootSetupFailureDoesNotBlockWorktreeDispatch(t *testing.T) {
+func TestIntegrationWorkflowTaskRunRepoRootSetupFailureDoesNotBlockWorktreeDispatch(t *testing.T) {
 	fixture := newTaskWorkflowFixture(t, anOpenTask("op-dirty"))
 	fixture.withAgentExitingWithoutCompletion(1)
 	setupErr := errors.New("uncommitted changes")
@@ -198,7 +198,7 @@ func TestIntegrationTaskRunRepoRootSetupFailureDoesNotBlockWorktreeDispatch(t *t
 	assert.Len(t, fixture.git.worktreeSetups, 1)
 }
 
-func TestIntegrationTaskRunMutationConflictPreventsAttemptAndLaunch(t *testing.T) {
+func TestIntegrationWorkflowTaskRunMutationConflictPreventsAttemptAndLaunch(t *testing.T) {
 	fixture := newTaskWorkflowFixture(t, anOpenTask("op-race"))
 	fixture.configureImplementer("recorder", agent.Profile{Command: "unused-agent"})
 	conflict := taskmodel.MutationConflictError{TaskID: "op-race", Reason: "orpheus.branch is missing"}
@@ -219,7 +219,7 @@ func TestIntegrationTaskRunMutationConflictPreventsAttemptAndLaunch(t *testing.T
 	assert.Equal(t, []string{"op-race"}, fixture.backend.markCalls)
 }
 
-func TestIntegrationTaskRunHeldMutationLockPreventsSetup(t *testing.T) {
+func TestIntegrationWorkflowTaskRunHeldMutationLockPreventsSetup(t *testing.T) {
 	fixture := newTaskWorkflowFixture(t, anOpenTask("op-locked"))
 	fixture.configureImplementer("recorder", agent.Profile{Command: "unused-agent"})
 	holdMutationLock(t, fixture.paths)
@@ -234,7 +234,7 @@ func TestIntegrationTaskRunHeldMutationLockPreventsSetup(t *testing.T) {
 	fixture.assertDispatchDidNotStart(final)
 }
 
-func TestIntegrationTaskRunReleasesMutationLockDuringAgentAndReacquiresForFinish(t *testing.T) {
+func TestIntegrationWorkflowTaskRunReleasesMutationLockDuringAgentAndReacquiresForFinish(t *testing.T) {
 	fixture := newTaskWorkflowFixture(t, anOpenTask("op-lock"))
 	fixture.withAgentExitingWithoutCompletion(1)
 	fixture.agent.afterStart = func() error {
@@ -256,7 +256,7 @@ func TestIntegrationTaskRunReleasesMutationLockDuringAgentAndReacquiresForFinish
 	assertEventTypes(t, final.Events, taskstate.EventWorktreeCreated, taskstate.EventRunStarted)
 }
 
-func TestIntegrationTaskRunAgentStartFailureRecordsFailedStartWithoutChildPID(t *testing.T) {
+func TestIntegrationWorkflowTaskRunAgentStartFailureRecordsFailedStartWithoutChildPID(t *testing.T) {
 	fixture := newTaskWorkflowFixture(t, anOpenTask("op-start"))
 	fixture.configureImplementer("missing", agent.Profile{Command: "missing-agent"})
 	startErr := &agentexec.StartError{Name: "missing", Err: errors.New("missing executable")}
@@ -276,7 +276,7 @@ func TestIntegrationTaskRunAgentStartFailureRecordsFailedStartWithoutChildPID(t 
 	assert.Contains(t, final.Events[2].Error, "missing executable")
 }
 
-func TestIntegrationTaskRunHeaderFailurePreventsLaunchAndRecordsFailedStart(t *testing.T) {
+func TestIntegrationWorkflowTaskRunHeaderFailurePreventsLaunchAndRecordsFailedStart(t *testing.T) {
 	fixture := newTaskWorkflowFixture(t, anOpenTask("op-header"))
 	fixture.configureImplementer("recorder", agent.Profile{Command: "unused-agent"})
 	command := cli.NewRootCommandWithOptions(fixture.options)
@@ -298,7 +298,7 @@ func TestIntegrationTaskRunHeaderFailurePreventsLaunchAndRecordsFailedStart(t *t
 	assert.Contains(t, final.Events[2].Error, "output unavailable")
 }
 
-func TestIntegrationTaskRunReportsActiveAttemptWithoutAnotherDispatch(t *testing.T) {
+func TestIntegrationWorkflowTaskRunReportsActiveAttemptWithoutAnotherDispatch(t *testing.T) {
 	fixture := newTaskWorkflowFixture(t, anInProgressTask("op-active"))
 	fixture.seedRunningAttempt("op-active", 100, 101)
 	fixture.options.Dependencies.ProcessProbe = func(int) (agentexec.ProcessLiveness, error) { return agentexec.ProcessLive, nil }

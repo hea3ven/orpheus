@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationRepoAddWithoutLocalBeadsRegistersManagedRepoAndListsIt(t *testing.T) {
+func TestIntegrationWorkflowRepoAddWithoutLocalBeadsRegistersManagedRepoAndListsIt(t *testing.T) {
 	is := assert.New(t)
 	repo := aGitRepository(t, "alpha")
 	fixture := newRepoWorkflowFixture(t, repo)
@@ -36,7 +36,7 @@ func TestIntegrationRepoAddWithoutLocalBeadsRegistersManagedRepoAndListsIt(t *te
 	}}, fixture.beadsInitializations)
 }
 
-func TestIntegrationRepoRegistrationSelectsStatusBackendAndMaintenanceOwnership(t *testing.T) {
+func TestIntegrationWorkflowRepoRegistrationSelectsStatusBackendAndMaintenanceOwnership(t *testing.T) {
 	for _, mode := range []string{"local", "managed"} {
 		t.Run(mode, func(t *testing.T) {
 			repo := aGitRepository(t, "alpha")

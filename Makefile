@@ -31,10 +31,11 @@ quality-policy-update:
 # Kept for callers that used the original coverage command.
 coverage: quality
 
-# This intentionally profiles every integration scenario separately; do not use it
-# on routine pull requests.
+# This intentionally runs only on demand. The default profiles every integration
+# scenario; pass repeated -audit-package and an -audit-run regex through
+# COVERAGE_AUDIT_ARGS to focus the audit before scenario profiles start.
 coverage-audit:
-	go run ./cmd/testcoverage -audit-scenarios
+	go run ./cmd/testcoverage -audit-scenarios $(COVERAGE_AUDIT_ARGS)
 
 fmt:
 	go fmt ./...

@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
+func TestIntegrationWorkflowWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	f := newFinalizationFixture(t, "op-m5-sync")
 	item := anOpenTask("op-m5-sync")
 	item.Title = "M5 sync flow"
@@ -90,7 +90,7 @@ func TestIntegrationWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	assert.Contains(t, stdout, item.ID)
 }
 
-func TestIntegrationRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
+func TestIntegrationWorkflowRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
 	f := newFinalizationFixture(t, "op-repo-root-sync")
 	item := anOpenTask("op-repo-root-sync")
 	f.backend.tasks[item.ID] = item

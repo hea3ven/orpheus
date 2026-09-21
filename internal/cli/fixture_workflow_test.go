@@ -28,7 +28,6 @@ type workflowFixture struct {
 
 func newWorkflowFixture(t *testing.T, configRoot, dataRoot string) *workflowFixture {
 	t.Helper()
-	t.Setenv("PATH", noExecutablePath)
 	paths, err := state.NewMemoryPaths(configRoot, dataRoot)
 	require.NoError(t, err, "create memory paths")
 	fixture := &workflowFixture{

@@ -17,7 +17,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/cli"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
-	"github.com/hea3ven/orpheus/internal/review"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/workflow"
@@ -351,58 +350,6 @@ func parseEnvironment(entries []string) map[string]string {
 		}
 	}
 	return values
-}
-
-func suppliedManualReview(pipelineName, stepName string) func(review.PipelineRunOptions) (review.PipelineOutcome, error) {
-	return func(opts review.PipelineRunOptions) (review.PipelineOutcome, error) {
-		return recordSuppliedManualWait(opts, pipelineName, stepName)
-	}
-}
-
-func validateSuppliedReviewStep(opts review.PipelineRunOptions, pipelineName, stepName, kind string) error {
-	if opts.Pipeline.Name != pipelineName {
-		return fmt.Errorf("review pipeline = %q, want %q", opts.Pipeline.Name, pipelineName)
-	}
-	for _, step := range opts.Pipeline.Steps {
-		if step.Name == stepName && step.Kind == kind {
-			return nil
-		}
-	}
-	return fmt.Errorf("review steps = %#v, want %s step %q", opts.Pipeline.Steps, kind, stepName)
-}
-
-func recordSuppliedManualWait(opts review.PipelineRunOptions, pipelineName, stepName string) (review.PipelineOutcome, error) {
-	if err := validateSuppliedReviewStep(opts, pipelineName, stepName, review.KindManual); err != nil {
-		return review.PipelineOutcome{}, err
-	}
-	if _, err := opts.Store.RecordReviewStep(opts.RepoID, opts.TaskID, opts.Attempt.Attempt, taskstate.RecordReviewStepOptions{
-		Kind: taskstate.ReviewStepKindManual, Name: stepName,
-	}); err != nil {
-		return review.PipelineOutcome{}, err
-	}
-	if _, err := opts.Store.PauseReviewForManual(opts.RepoID, opts.TaskID, opts.Attempt.Attempt, stepName); err != nil {
-		return review.PipelineOutcome{}, err
-	}
-	_, err := fmt.Fprintf(opts.Stderr, "Review for %s is waiting for manual step %q. Resume with `orpheus task run %s`.\n", opts.TaskID, stepName, opts.TaskID)
-	return review.PipelineOutcome{Status: taskstate.ReviewStatusWaitingForManual}, err
-}
-
-func recordSuppliedReviewBlocker(opts review.PipelineRunOptions, pipelineName string, finding taskstate.ReviewFinding) (review.PipelineOutcome, error) {
-	if err := validateSuppliedReviewStep(opts, pipelineName, finding.Step, review.KindAgentReview); err != nil {
-		return review.PipelineOutcome{}, err
-	}
-	if _, err := opts.Store.RecordReviewStep(opts.RepoID, opts.TaskID, opts.Attempt.Attempt, taskstate.RecordReviewStepOptions{
-		Kind: taskstate.ReviewStepKindAgentReview, Name: finding.Step,
-	}); err != nil {
-		return review.PipelineOutcome{}, err
-	}
-	if _, err := opts.Store.RecordReviewFinding(opts.RepoID, opts.TaskID, opts.Attempt.Attempt, finding); err != nil {
-		return review.PipelineOutcome{}, err
-	}
-	if _, err := opts.Store.MarkReviewAutomatedBlockerDecisionKept(opts.RepoID, opts.TaskID, opts.Attempt.Attempt); err != nil {
-		return review.PipelineOutcome{}, err
-	}
-	return review.PipelineOutcome{Status: taskstate.ReviewStatusBlocked}, nil
 }
 
 func (l *semanticAgentLauncher) recordFinding(opts agentexec.LaunchOptions, environment map[string]string, finding taskstate.ReviewFinding) error {

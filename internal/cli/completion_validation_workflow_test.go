@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationAgentDoneRejectsMissingDescription(t *testing.T) {
+func TestIntegrationWorkflowAgentDoneRejectsMissingDescription(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 
@@ -35,7 +35,7 @@ func TestIntegrationAgentDoneRejectsMissingDescription(t *testing.T) {
 	assert.Empty(t, state.Runs)
 }
 
-func TestIntegrationAgentDoneRejectsMissingDetailedDescription(t *testing.T) {
+func TestIntegrationWorkflowAgentDoneRejectsMissingDetailedDescription(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 
@@ -60,7 +60,7 @@ func TestIntegrationAgentDoneRejectsMissingDetailedDescription(t *testing.T) {
 	assert.Empty(t, state.Runs)
 }
 
-func TestIntegrationAgentDoneRejectsMultipleDetailedDescriptionSources(t *testing.T) {
+func TestIntegrationWorkflowAgentDoneRejectsMultipleDetailedDescriptionSources(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	detailedPath := "/fixture/body.md"
@@ -90,7 +90,7 @@ func TestIntegrationAgentDoneRejectsMultipleDetailedDescriptionSources(t *testin
 	assert.Empty(t, state.Runs)
 }
 
-func TestIntegrationAgentDoneRejectsRemovedDetailsFlag(t *testing.T) {
+func TestIntegrationWorkflowAgentDoneRejectsRemovedDetailsFlag(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 
@@ -119,7 +119,7 @@ func TestIntegrationAgentDoneRejectsRemovedDetailsFlag(t *testing.T) {
 	assert.Empty(t, state.Runs)
 }
 
-func TestIntegrationAgentDoneRejectsMissingTechnicalExplanation(t *testing.T) {
+func TestIntegrationWorkflowAgentDoneRejectsMissingTechnicalExplanation(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 
@@ -144,7 +144,7 @@ func TestIntegrationAgentDoneRejectsMissingTechnicalExplanation(t *testing.T) {
 	assert.Empty(t, state.Runs)
 }
 
-func TestIntegrationAgentDoneRejectsMultipleTechnicalExplanationSources(t *testing.T) {
+func TestIntegrationWorkflowAgentDoneRejectsMultipleTechnicalExplanationSources(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	technicalPath := "/fixture/technical.md"

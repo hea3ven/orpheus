@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationTaskSyncUpdatesBranchAndRetriesPushWithoutAnotherMerge(t *testing.T) {
+func TestIntegrationWorkflowTaskSyncUpdatesBranchAndRetriesPushWithoutAnotherMerge(t *testing.T) {
 	f := newSyncFixture(t)
 	f.syncGit.behind = true
 	f.publication.pushError = errors.New("origin unavailable")
@@ -43,7 +43,7 @@ func TestIntegrationTaskSyncUpdatesBranchAndRetriesPushWithoutAnotherMerge(t *te
 	}
 }
 
-func TestIntegrationTaskSyncAllLeavesConflictFreeBranchUnchanged(t *testing.T) {
+func TestIntegrationWorkflowTaskSyncAllLeavesConflictFreeBranchUnchanged(t *testing.T) {
 	f := newSyncFixture(t)
 	f.syncGit.behind = true
 	head := f.candidate.head
@@ -64,7 +64,7 @@ func TestIntegrationTaskSyncAllLeavesConflictFreeBranchUnchanged(t *testing.T) {
 	assert.Equal(t, 1, f.syncGit.commits)
 }
 
-func TestIntegrationTaskSyncConflictFailureRollsBackAndRetries(t *testing.T) {
+func TestIntegrationWorkflowTaskSyncConflictFailureRollsBackAndRetries(t *testing.T) {
 	for _, failure := range []string{"resolver", "push"} {
 		t.Run(failure, func(t *testing.T) {
 			f := newSyncFixture(t)
@@ -114,7 +114,7 @@ func TestIntegrationTaskSyncConflictFailureRollsBackAndRetries(t *testing.T) {
 	}
 }
 
-func TestIntegrationTaskSyncRecoversAmbiguousPushWithoutRepeatingRepair(t *testing.T) {
+func TestIntegrationWorkflowTaskSyncRecoversAmbiguousPushWithoutRepeatingRepair(t *testing.T) {
 	for _, moved := range []bool{false, true} {
 		name := "published head confirmed"
 		if moved {
@@ -170,7 +170,7 @@ func TestIntegrationTaskSyncRecoversAmbiguousPushWithoutRepeatingRepair(t *testi
 	}
 }
 
-func TestIntegrationTaskSyncMergedPRRetriesFailedClosure(t *testing.T) {
+func TestIntegrationWorkflowTaskSyncMergedPRRetriesFailedClosure(t *testing.T) {
 	f := newSyncFixture(t)
 	f.pr.state = pullrequest.StateMerged
 	branch, dir := f.expectedTarget("op-sync")
@@ -200,7 +200,7 @@ func TestIntegrationTaskSyncMergedPRRetriesFailedClosure(t *testing.T) {
 	assert.Equal(t, 2, f.pr.statusReads)
 }
 
-func TestIntegrationPublicationRetriesPRLookupWithoutRepublishing(t *testing.T) {
+func TestIntegrationWorkflowPublicationRetriesPRLookupWithoutRepublishing(t *testing.T) {
 	f := newFeatureFinalizationFixture(t, "op-retry", false)
 	f.pr.findError = errors.New("PR lookup unavailable")
 

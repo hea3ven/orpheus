@@ -568,3 +568,13 @@ func testRunSetup(t *testing.T) runSetup {
 		dataBase:   filepath.Join(root, "xdg-data"),
 	}
 }
+
+func TestWithRunEnvironmentRejectsRelativeCodexHomeBeforeExecution(t *testing.T) {
+	t.Setenv("CODEX_HOME", "relative-codex-home")
+	called := false
+	err := withRunEnvironment(testRunSetup(t), runSpec{Harness: HarnessCodex}, func() error { called = true; return nil })
+	require.ErrorContains(t, err, "provision Codex auth/config")
+	assert.ErrorContains(t, err, "CODEX_HOME must be absolute")
+	assert.False(t, called)
+	assert.Equal(t, "relative-codex-home", os.Getenv("CODEX_HOME"))
+}

@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationSyncGitRejectsUnknownRecoveryTargetsWithoutMutation(t *testing.T) {
+func TestIntegrationWorkflowSyncGitRejectsUnknownRecoveryTargetsWithoutMutation(t *testing.T) {
 	operations := map[string]func(*memorySyncGit, gitmeta.TaskBranchSyncOptions, gitmeta.TaskBranchConflictCheckpoint) error{
 		"sync": func(g *memorySyncGit, opts gitmeta.TaskBranchSyncOptions, _ gitmeta.TaskBranchConflictCheckpoint) error {
 			_, err := g.SyncTaskBranchWithDefault(context.Background(), opts)

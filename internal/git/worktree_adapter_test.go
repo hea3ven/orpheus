@@ -1,0 +1,1061 @@
+//go:build integration
+
+package git_test
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	orpheusgit "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/testutil"
+)
+
+func TestIntegrationAdapterContractVerifyCommitMatchesRecordedParentAndMessage(t *testing.T) {
+	repoPath := newGitRepo(t)
+	parent, err := orpheusgit.HeadCommit(context.Background(), repoPath)
+	if err != nil {
+		t.Fatalf("read parent commit: %v", err)
+	}
+	commitFile(t, repoPath, "publication.txt", "reviewed work\n", "Publish reviewed work")
+	commit, err := orpheusgit.HeadCommit(context.Background(), repoPath)
+	if err != nil {
+		t.Fatalf("read publication commit: %v", err)
+	}
+
+	if err := orpheusgit.VerifyCommit(context.Background(), repoPath, commit, parent, "Publish reviewed work"); err != nil {
+		t.Fatalf("verify matching commit: %v", err)
+	}
+	if err := orpheusgit.VerifyCommit(context.Background(), repoPath, commit, parent, "Unexpected message"); err == nil {
+		t.Fatal("verify mismatched message succeeded")
+	}
+}
+
+func TestIntegrationAdapterContractSetupTaskWorktreeCreatesAndReusesDeterministicWorktree(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+
+	got, err := orpheusgit.SetupTaskWorktree(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		TaskID:        "op-1",
+		Paths:         paths,
+	})
+	if err != nil {
+		t.Fatalf("setup task worktree: %v", err)
+	}
+
+	expectedPath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-1"))
+	if err != nil {
+		t.Fatalf("resolve expected path: %v", err)
+	}
+	if got.Branch != "orpheus/op-1" || got.WorktreePath != expectedPath || got.Lifecycle != orpheusgit.TaskWorktreeLifecycleCreated {
+		t.Fatalf("setup result = %#v, want branch/worktree/created", got)
+	}
+	assertGitBranch(t, got.WorktreePath, "orpheus/op-1")
+
+	marker := filepath.Join(got.WorktreePath, "retry-marker.txt")
+	if err := os.WriteFile(marker, []byte("preserve me"), 0o644); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+
+	reused, err := orpheusgit.SetupTaskWorktree(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		TaskID:        "op-1",
+		Paths:         paths,
+	})
+	if err != nil {
+		t.Fatalf("reuse task worktree: %v", err)
+	}
+	if reused.Lifecycle != orpheusgit.TaskWorktreeLifecycleReused {
+		t.Fatalf("reuse lifecycle = %q, want %q", reused.Lifecycle, orpheusgit.TaskWorktreeLifecycleReused)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("marker was not preserved on reuse: %v", err)
+	}
+}
+
+func TestIntegrationAdapterContractClosedTaskWorktreeCleanupRemovesOnlyCleanDeterministicWorktrees(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	opts := orpheusgit.ClosedTaskWorktreeOptions{
+		RepoID: "alpha", RepoName: "Alpha", RepoPath: repoPath, DefaultBranch: "main", TaskID: "op-clean", Paths: paths,
+	}
+	setup, err := orpheusgit.SetupTaskWorktree(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("setup clean worktree: %v", err)
+	}
+	inspection := orpheusgit.InspectClosedTaskWorktree(context.Background(), opts)
+	if inspection.Outcome != orpheusgit.ClosedTaskWorktreeClean || inspection.Worktree != setup.WorktreePath {
+		t.Fatalf("clean inspection = %#v, want clean %q", inspection, setup.WorktreePath)
+	}
+	removed := orpheusgit.RemoveClosedTaskWorktree(context.Background(), opts)
+	if removed.Outcome != orpheusgit.ClosedTaskWorktreeRemoved {
+		t.Fatalf("clean removal = %#v, want removed", removed)
+	}
+	if _, err := os.Stat(setup.WorktreePath); !os.IsNotExist(err) {
+		t.Fatalf("removed worktree stat error = %v, want absent", err)
+	}
+	if repeated := orpheusgit.RemoveClosedTaskWorktree(context.Background(), opts); repeated.Outcome != orpheusgit.ClosedTaskWorktreeAbsent {
+		t.Fatalf("repeated removal = %#v, want already absent", repeated)
+	}
+
+	dirtyOpts := opts
+	dirtyOpts.TaskID = "op-dirty-cleanup"
+	dirtySetup, err := orpheusgit.SetupTaskWorktree(context.Background(), dirtyOpts)
+	if err != nil {
+		t.Fatalf("setup dirty worktree: %v", err)
+	}
+	marker := filepath.Join(dirtySetup.WorktreePath, "preserve-me.txt")
+	if err := os.WriteFile(marker, []byte("uncommitted"), 0o644); err != nil {
+		t.Fatalf("write dirty marker: %v", err)
+	}
+	if dirty := orpheusgit.InspectClosedTaskWorktree(context.Background(), dirtyOpts); dirty.Outcome != orpheusgit.ClosedTaskWorktreeDirty {
+		t.Fatalf("dirty inspection = %#v, want dirty", dirty)
+	}
+	if dirty := orpheusgit.RemoveClosedTaskWorktree(context.Background(), dirtyOpts); dirty.Outcome != orpheusgit.ClosedTaskWorktreeDirty {
+		t.Fatalf("dirty removal = %#v, want dirty", dirty)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("dirty marker was not preserved: %v", err)
+	}
+	if err := os.Remove(marker); err != nil {
+		t.Fatalf("remove untracked marker: %v", err)
+	}
+	ignoreFile := filepath.Join(dirtySetup.WorktreePath, ".gitignore")
+	if err := os.WriteFile(ignoreFile, []byte("ignored-marker.txt\n"), 0o644); err != nil {
+		t.Fatalf("write gitignore: %v", err)
+	}
+	runGit(t, dirtySetup.WorktreePath, "add", ".gitignore")
+	runGit(t, dirtySetup.WorktreePath, "commit", "-m", "ignore cleanup marker")
+	ignoredMarker := filepath.Join(dirtySetup.WorktreePath, "ignored-marker.txt")
+	if err := os.WriteFile(ignoredMarker, []byte("preserve ignored file"), 0o644); err != nil {
+		t.Fatalf("write ignored marker: %v", err)
+	}
+	if ignored := orpheusgit.RemoveClosedTaskWorktree(context.Background(), dirtyOpts); ignored.Outcome != orpheusgit.ClosedTaskWorktreeDirty {
+		t.Fatalf("ignored-file removal = %#v, want dirty", ignored)
+	}
+	if _, err := os.Stat(ignoredMarker); err != nil {
+		t.Fatalf("ignored marker was not preserved: %v", err)
+	}
+}
+
+func TestIntegrationAdapterContractClosedTaskWorktreeCleanupReportsAbsentRegisteredWorktree(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	opts := orpheusgit.ClosedTaskWorktreeOptions{
+		RepoID: "alpha", RepoName: "Alpha", RepoPath: repoPath, DefaultBranch: "main", TaskID: "op-partial", Paths: paths,
+	}
+	setup, err := orpheusgit.SetupTaskWorktree(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("setup worktree: %v", err)
+	}
+	if err := os.RemoveAll(setup.WorktreePath); err != nil {
+		t.Fatalf("remove worktree directory: %v", err)
+	}
+
+	inspection := orpheusgit.InspectClosedTaskWorktree(context.Background(), opts)
+	if inspection.Outcome != orpheusgit.ClosedTaskWorktreeFailed || !strings.Contains(inspection.Reason, "still registers") {
+		t.Fatalf("absent registered inspection = %#v, want failed unresolved registration", inspection)
+	}
+}
+
+func TestIntegrationAdapterContractClosedTaskWorktreeCleanupPreservesLockedWorktrees(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	opts := orpheusgit.ClosedTaskWorktreeOptions{
+		RepoID: "alpha", RepoName: "Alpha", RepoPath: repoPath, DefaultBranch: "main", TaskID: "op-locked", Paths: paths,
+	}
+	setup, err := orpheusgit.SetupTaskWorktree(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("setup locked worktree: %v", err)
+	}
+	runGit(t, repoPath, "worktree", "lock", "--reason", "operator repair", setup.WorktreePath)
+
+	inspection := orpheusgit.InspectClosedTaskWorktree(context.Background(), opts)
+	if inspection.Outcome != orpheusgit.ClosedTaskWorktreeUnsafe || !strings.Contains(inspection.Reason, "locked") || !strings.Contains(inspection.Reason, "operator repair") {
+		t.Fatalf("locked inspection = %#v, want unsafe lock reason", inspection)
+	}
+	removal := orpheusgit.RemoveClosedTaskWorktree(context.Background(), opts)
+	if removal.Outcome != orpheusgit.ClosedTaskWorktreeUnsafe || !strings.Contains(removal.Reason, "locked") {
+		t.Fatalf("locked removal = %#v, want unsafe", removal)
+	}
+	if _, err := os.Stat(setup.WorktreePath); err != nil {
+		t.Fatalf("locked worktree was removed: %v", err)
+	}
+}
+
+func TestIntegrationAdapterContractSetupTaskWorktreeAndRepoRootUseResolvedCustomBranch(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	branch := "feature/PROJ-7/Ship-the-thing"
+
+	worktree, err := orpheusgit.SetupTaskWorktree(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID: "alpha", RepoName: "Alpha", RepoPath: repoPath, DefaultBranch: "main", TaskID: "op-7", Branch: branch, Paths: paths,
+	})
+	if err != nil {
+		t.Fatalf("setup custom worktree: %v", err)
+	}
+	if worktree.Branch != branch {
+		t.Fatalf("worktree branch = %q, want %q", worktree.Branch, branch)
+	}
+	assertGitBranch(t, worktree.WorktreePath, branch)
+
+	runGit(t, repoPath, "worktree", "remove", "--force", worktree.WorktreePath)
+	root, err := orpheusgit.SetupRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID: "alpha", RepoName: "Alpha", RepoPath: repoPath, DefaultBranch: "main", TaskID: "op-7", Branch: branch, Paths: paths,
+	})
+	if err != nil {
+		t.Fatalf("setup custom repo-root branch: %v", err)
+	}
+	if root.Branch != branch {
+		t.Fatalf("repo-root branch = %q, want %q", root.Branch, branch)
+	}
+	assertGitBranch(t, repoPath, branch)
+}
+
+func TestIntegrationAdapterContractSetupTaskWorktreeRecreatesMissingWorktreeForExistingBranch(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	runGit(t, repoPath, "branch", "orpheus/op-2", "main")
+
+	got, err := orpheusgit.SetupTaskWorktree(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		TaskID:        "op-2",
+		Paths:         paths,
+	})
+	if err != nil {
+		t.Fatalf("setup task worktree: %v", err)
+	}
+	if got.Lifecycle != orpheusgit.TaskWorktreeLifecycleRecreated {
+		t.Fatalf("lifecycle = %q, want %q", got.Lifecycle, orpheusgit.TaskWorktreeLifecycleRecreated)
+	}
+	assertGitBranch(t, got.WorktreePath, "orpheus/op-2")
+}
+
+func TestIntegrationAdapterContractSetupTaskWorktreeRefusesExistingPathOnDifferentBranch(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	expectedPath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-3"))
+	if err != nil {
+		t.Fatalf("resolve expected path: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(expectedPath), 0o755); err != nil {
+		t.Fatalf("create worktree parent: %v", err)
+	}
+	runGit(t, repoPath, "branch", "other", "main")
+	runGit(t, repoPath, "worktree", "add", expectedPath, "other")
+
+	_, err = orpheusgit.SetupTaskWorktree(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		TaskID:        "op-3",
+		Paths:         paths,
+	})
+	if err == nil {
+		t.Fatal("setup succeeded, want branch mismatch error")
+	}
+	if !strings.Contains(err.Error(), "is on branch \"other\"; expected \"orpheus/op-3\"") {
+		t.Fatalf("error = %v, want branch mismatch", err)
+	}
+}
+
+func TestIntegrationAdapterContractSetupTaskWorktreeRequiresOriginRemote(t *testing.T) {
+	repoPath := newGitRepo(t)
+	paths := newStatePaths(t)
+
+	_, err := orpheusgit.SetupTaskWorktree(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		TaskID:        "op-4",
+		Paths:         paths,
+	})
+	if err == nil {
+		t.Fatal("setup succeeded, want missing origin error")
+	}
+	if !strings.Contains(err.Error(), "requires an origin remote") {
+		t.Fatalf("error = %v, want missing origin", err)
+	}
+}
+
+func TestIntegrationAdapterContractSetupTaskWorktreeRefusesWorktreeFromUnexpectedRepository(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	otherRepoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	expectedPath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-5"))
+	if err != nil {
+		t.Fatalf("resolve expected path: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(expectedPath), 0o755); err != nil {
+		t.Fatalf("create worktree parent: %v", err)
+	}
+	runGit(t, otherRepoPath, "branch", "orpheus/op-5", "main")
+	runGit(t, otherRepoPath, "worktree", "add", expectedPath, "orpheus/op-5")
+
+	_, err = orpheusgit.SetupTaskWorktree(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		TaskID:        "op-5",
+		Paths:         paths,
+	})
+	if err == nil {
+		t.Fatal("setup succeeded, want unexpected repo error")
+	}
+	if !strings.Contains(err.Error(), "points at Git common dir") {
+		t.Fatalf("error = %v, want unexpected repo", err)
+	}
+}
+
+func TestIntegrationAdapterContractSetupRepoRootSwitchesToDefaultBranchAndFastForwards(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	pushRemoteCommit(t, repoPath, "origin.txt", "from origin")
+	runGit(t, repoPath, "checkout", "-b", "feature/local")
+
+	got, err := orpheusgit.SetupRepoRoot(context.Background(), orpheusgit.RepoRootOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("setup repo root: %v", err)
+	}
+
+	if got.Branch != "main" || got.WorktreePath != repoPath || got.Lifecycle != orpheusgit.TaskWorktreeLifecycleReused {
+		t.Fatalf("setup result = %#v, want main/repo root/reused", got)
+	}
+	assertGitBranch(t, repoPath, "main")
+	if _, err := os.Stat(filepath.Join(repoPath, "origin.txt")); err != nil {
+		t.Fatalf("repo root was not fast-forwarded from origin: %v", err)
+	}
+}
+
+func TestIntegrationAdapterContractSetupRepoRootTaskBranchSwitchesToTaskBranch(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+
+	got, err := orpheusgit.SetupRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		TaskID:        "op-root",
+		Paths:         paths,
+	})
+	if err != nil {
+		t.Fatalf("setup repo-root task branch: %v", err)
+	}
+
+	if got.Branch != "orpheus/op-root" || got.WorktreePath != repoPath || got.Lifecycle != orpheusgit.TaskWorktreeLifecycleTaskBranchCreated {
+		t.Fatalf("setup result = %#v, want task branch/repo root/task branch created", got)
+	}
+	assertGitBranch(t, repoPath, "orpheus/op-root")
+
+	expectedWorktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-root"))
+	if err != nil {
+		t.Fatalf("resolve deterministic worktree path: %v", err)
+	}
+	if _, err := os.Stat(expectedWorktreePath); !os.IsNotExist(err) {
+		t.Fatalf("deterministic worktree stat err = %v, want not exist", err)
+	}
+
+	reused, err := orpheusgit.SetupRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		TaskID:        "op-root",
+		Paths:         paths,
+	})
+	if err != nil {
+		t.Fatalf("reuse repo-root task branch: %v", err)
+	}
+	if reused.Lifecycle != orpheusgit.TaskWorktreeLifecycleReused {
+		t.Fatalf("reuse lifecycle = %q, want %q", reused.Lifecycle, orpheusgit.TaskWorktreeLifecycleReused)
+	}
+}
+
+func TestIntegrationAdapterContractMaterializeRepoRootTaskBranchPreservesReviewedChanges(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	if err := os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644); err != nil {
+		t.Fatalf("write reviewed change: %v", err)
+	}
+
+	got, err := orpheusgit.MaterializeRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		TaskID:        "op-reviewed",
+		Paths:         paths,
+		AllowDirty:    true,
+	})
+	if err != nil {
+		t.Fatalf("materialize repo-root task branch: %v", err)
+	}
+	if got.Branch != "orpheus/op-reviewed" || got.WorktreePath != repoPath || got.Lifecycle != orpheusgit.TaskWorktreeLifecycleTaskBranchCreated {
+		t.Fatalf("materialization = %#v, want task branch/repo root/task branch created", got)
+	}
+	assertGitBranch(t, repoPath, "orpheus/op-reviewed")
+	if _, err := os.Stat(filepath.Join(repoPath, "reviewed.txt")); err != nil {
+		t.Fatalf("reviewed change was not preserved: %v", err)
+	}
+}
+
+func TestIntegrationAdapterContractMaterializeRepoRootTaskBranchRefusesStaleExistingLocalBranch(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	runGit(t, repoPath, "branch", "orpheus/op-stale", "main")
+	pushRemoteCommit(t, repoPath, "default.txt", "new default\n")
+	runGit(t, repoPath, "pull", "--ff-only", "origin", "main")
+	if err := os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644); err != nil {
+		t.Fatalf("write reviewed change: %v", err)
+	}
+
+	_, err := orpheusgit.MaterializeRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID: "alpha", RepoName: "Alpha", RepoPath: repoPath, DefaultBranch: "main", TaskID: "op-stale", Paths: paths, AllowDirty: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "local deterministic task branch") || !strings.Contains(err.Error(), "refusing to reuse divergent branch") {
+		t.Fatalf("materialize error = %v, want stale local branch refusal", err)
+	}
+	assertGitBranch(t, repoPath, "main")
+}
+
+func TestIntegrationAdapterContractMaterializeRepoRootTaskBranchRefusesDivergentExistingLocalBranch(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	runGit(t, repoPath, "checkout", "-b", "orpheus/op-divergent")
+	commitFile(t, repoPath, "stale.txt", "stale\n", "stale task work")
+	runGit(t, repoPath, "checkout", "main")
+	if err := os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644); err != nil {
+		t.Fatalf("write reviewed change: %v", err)
+	}
+
+	_, err := orpheusgit.MaterializeRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID: "alpha", RepoName: "Alpha", RepoPath: repoPath, DefaultBranch: "main", TaskID: "op-divergent", Paths: paths, AllowDirty: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "local deterministic task branch") || !strings.Contains(err.Error(), "refusing to reuse divergent branch") {
+		t.Fatalf("materialize error = %v, want divergent local branch refusal", err)
+	}
+	assertGitBranch(t, repoPath, "main")
+}
+
+func TestIntegrationAdapterContractMaterializeRepoRootTaskBranchRefusesDivergentCurrentTaskBranch(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	runGit(t, repoPath, "checkout", "-b", "orpheus/op-current")
+	commitFile(t, repoPath, "stale.txt", "stale\n", "stale current task work")
+
+	_, err := orpheusgit.MaterializeRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID: "alpha", RepoName: "Alpha", RepoPath: repoPath, DefaultBranch: "main", TaskID: "op-current", Paths: paths, AllowDirty: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "local deterministic task branch") || !strings.Contains(err.Error(), "refusing to reuse divergent branch") {
+		t.Fatalf("materialize error = %v, want divergent current task branch refusal", err)
+	}
+	assertGitBranch(t, repoPath, "orpheus/op-current")
+}
+
+func TestIntegrationAdapterContractMaterializeRepoRootTaskBranchRefusesDivergentExistingRemoteBranch(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	runGit(t, repoPath, "checkout", "-b", "orpheus/op-remote")
+	commitFile(t, repoPath, "stale.txt", "stale\n", "stale remote task work")
+	runGit(t, repoPath, "push", "--set-upstream", "origin", "orpheus/op-remote")
+	runGit(t, repoPath, "checkout", "main")
+	runGit(t, repoPath, "branch", "-D", "orpheus/op-remote")
+	if err := os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644); err != nil {
+		t.Fatalf("write reviewed change: %v", err)
+	}
+
+	_, err := orpheusgit.MaterializeRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID: "alpha", RepoName: "Alpha", RepoPath: repoPath, DefaultBranch: "main", TaskID: "op-remote", Paths: paths, AllowDirty: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "remote deterministic task branch") || !strings.Contains(err.Error(), "refusing to reuse divergent branch") {
+		t.Fatalf("materialize error = %v, want divergent remote branch refusal", err)
+	}
+	assertGitBranch(t, repoPath, "main")
+}
+
+func TestIntegrationAdapterContractSetupRepoRootTaskBranchRefusesDirtyRepoBeforeSwitching(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	if err := os.WriteFile(filepath.Join(repoPath, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+
+	_, err := orpheusgit.SetupRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		TaskID:        "op-dirty",
+		Paths:         paths,
+	})
+	if err == nil {
+		t.Fatal("setup repo-root task branch succeeded, want dirty checkout error")
+	}
+	if !strings.Contains(err.Error(), "uncommitted changes") {
+		t.Fatalf("error = %v, want uncommitted changes", err)
+	}
+	assertGitBranch(t, repoPath, "main")
+}
+
+func TestIntegrationAdapterContractSetupRepoRootTaskBranchAllowsDirtyWhenAlreadyOnTarget(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	paths := newStatePaths(t)
+	runGit(t, repoPath, "checkout", "-b", "orpheus/op-dirty")
+	if err := os.WriteFile(filepath.Join(repoPath, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+
+	got, err := orpheusgit.SetupRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		TaskID:        "op-dirty",
+		Paths:         paths,
+		AllowDirty:    true,
+	})
+	if err != nil {
+		t.Fatalf("setup dirty repo-root task branch: %v", err)
+	}
+	if got.Branch != "orpheus/op-dirty" || got.WorktreePath != repoPath {
+		t.Fatalf("setup result = %#v, want dirty task branch target", got)
+	}
+	assertGitBranch(t, repoPath, "orpheus/op-dirty")
+}
+
+func TestIntegrationAdapterContractSetupRepoRootRefusesDirtyRepoBeforeSwitching(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	runGit(t, repoPath, "checkout", "-b", "feature/local")
+	if err := os.WriteFile(filepath.Join(repoPath, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+
+	_, err := orpheusgit.SetupRepoRoot(context.Background(), orpheusgit.RepoRootOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+	})
+	if err == nil {
+		t.Fatal("setup repo root succeeded, want dirty checkout error")
+	}
+	if !strings.Contains(err.Error(), "uncommitted changes") {
+		t.Fatalf("error = %v, want uncommitted changes", err)
+	}
+	assertGitBranch(t, repoPath, "feature/local")
+}
+
+func TestIntegrationAdapterContractSetupRepoRootAllowsDirtyWhenAlreadyOnDefaultBranch(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	if err := os.WriteFile(filepath.Join(repoPath, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+
+	got, err := orpheusgit.SetupRepoRoot(context.Background(), orpheusgit.RepoRootOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		AllowDirty:    true,
+	})
+	if err != nil {
+		t.Fatalf("setup dirty repo root: %v", err)
+	}
+	if got.Branch != "main" || got.WorktreePath != repoPath {
+		t.Fatalf("setup result = %#v, want dirty main target", got)
+	}
+	assertGitBranch(t, repoPath, "main")
+}
+
+func TestIntegrationAdapterContractSetupRepoRootRefusesDivergentDefaultBranch(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	pushRemoteCommit(t, repoPath, "origin.txt", "from origin")
+	if err := os.WriteFile(filepath.Join(repoPath, "local.txt"), []byte("local"), 0o644); err != nil {
+		t.Fatalf("write local file: %v", err)
+	}
+	runGit(t, repoPath, "add", "local.txt")
+	runGit(t, repoPath,
+		"-c", "user.name=Orpheus Test",
+		"-c", "user.email=orpheus@example.com",
+		"commit", "-m", "local main commit",
+	)
+
+	_, err := orpheusgit.SetupRepoRoot(context.Background(), orpheusgit.RepoRootOptions{
+		RepoID:        "alpha",
+		RepoName:      "Alpha",
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+	})
+	if err == nil {
+		t.Fatal("setup repo root succeeded, want divergent branch error")
+	}
+	if !strings.Contains(err.Error(), "fast-forward default branch") {
+		t.Fatalf("error = %v, want fast-forward failure", err)
+	}
+	assertGitBranch(t, repoPath, "main")
+}
+
+func TestIntegrationAdapterContractSyncTaskBranchWithDefaultMergesAndPushesCleanDefaultChanges(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	worktreePath := addTaskBranchWorktree(t, repoPath, "orpheus/op-sync")
+	commitFile(t, worktreePath, "task.txt", "task\n", "task work")
+	runGit(t, worktreePath, "push", "--set-upstream", "origin", "orpheus/op-sync")
+	pushRemoteCommit(t, repoPath, "default.txt", "default\n")
+
+	result, err := orpheusgit.SyncTaskBranchWithDefault(context.Background(), orpheusgit.TaskBranchSyncOptions{
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		Branch:        "orpheus/op-sync",
+		Worktree:      worktreePath,
+		UpdatePolicy:  orpheusgit.TaskBranchUpdateAlways,
+	})
+	if err != nil {
+		t.Fatalf("sync task branch: %v", err)
+	}
+	if result.Status != orpheusgit.TaskBranchSyncUpdated ||
+		result.Branch != "orpheus/op-sync" ||
+		result.DefaultBranch != "main" ||
+		result.PreviousHead == "" ||
+		result.Head == "" ||
+		result.Head == result.PreviousHead {
+		t.Fatalf("result = %#v, want updated branch with old/new heads", result)
+	}
+	if _, err := os.Stat(filepath.Join(worktreePath, "default.txt")); err != nil {
+		t.Fatalf("default branch change was not merged into task branch: %v", err)
+	}
+	runGit(t, worktreePath, "merge-base", "--is-ancestor", "refs/remotes/origin/main", "HEAD")
+
+	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
+	originTaskHead := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/orpheus/op-sync"))
+	localTaskHead := strings.TrimSpace(runGit(t, worktreePath, "rev-parse", "HEAD"))
+	if originTaskHead != localTaskHead {
+		t.Fatalf("origin task branch head = %s, want local head %s", originTaskHead, localTaskHead)
+	}
+}
+
+func TestIntegrationAdapterContractSyncTaskBranchWithDefaultConflictOnlyLeavesCleanBranchUnchanged(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	const branch = "orpheus/op-clean-batch"
+	worktreePath := addTaskBranchWorktree(t, repoPath, branch)
+	commitFile(t, worktreePath, "task.txt", "task\n", "task work")
+	runGit(t, worktreePath, "push", "--set-upstream", "origin", branch)
+	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
+	originTaskHeadBefore := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/"+branch))
+
+	commitFile(t, worktreePath, "local.txt", "local only\n", "local task work")
+	localHeadBefore := strings.TrimSpace(runGit(t, worktreePath, "rev-parse", "HEAD"))
+	pushRemoteCommit(t, repoPath, "default.txt", "clean default change\n")
+
+	result, err := orpheusgit.SyncTaskBranchWithDefault(context.Background(), orpheusgit.TaskBranchSyncOptions{
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		Branch:        branch,
+		Worktree:      worktreePath,
+		UpdatePolicy:  orpheusgit.TaskBranchUpdateConflictsOnly,
+	})
+	if err != nil {
+		t.Fatalf("sync task branch: %v", err)
+	}
+	if result.Status != orpheusgit.TaskBranchSyncConflictFree || result.Head != localHeadBefore {
+		t.Fatalf("result = %#v, want conflict-free branch at unchanged local head %s", result, localHeadBefore)
+	}
+	localHeadAfter := strings.TrimSpace(runGit(t, worktreePath, "rev-parse", "HEAD"))
+	if localHeadAfter != localHeadBefore {
+		t.Fatalf("local HEAD = %s, want unchanged %s", localHeadAfter, localHeadBefore)
+	}
+	originTaskHeadAfter := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/"+branch))
+	if originTaskHeadAfter != originTaskHeadBefore {
+		t.Fatalf("origin task branch = %s, want unchanged %s", originTaskHeadAfter, originTaskHeadBefore)
+	}
+	if _, err := os.Stat(filepath.Join(worktreePath, "default.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("default branch change was merged into task branch, stat error = %v", err)
+	}
+}
+
+func TestIntegrationAdapterContractSyncTaskBranchWithDefaultConflictOnlyRetainsRemoteFastForward(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	const branch = "orpheus/op-remote-ahead"
+	worktreePath := addTaskBranchWorktree(t, repoPath, branch)
+	commitFile(t, worktreePath, "task.txt", "task\n", "task work")
+	runGit(t, worktreePath, "push", "--set-upstream", "origin", branch)
+	remoteTaskHead := pushRemoteBranchCommit(t, repoPath, branch, "remote-task.txt", "remote task\n", "remote task work")
+	pushRemoteCommit(t, repoPath, "default.txt", "clean default change\n")
+
+	result, err := orpheusgit.SyncTaskBranchWithDefault(context.Background(), orpheusgit.TaskBranchSyncOptions{
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		Branch:        branch,
+		Worktree:      worktreePath,
+		UpdatePolicy:  orpheusgit.TaskBranchUpdateConflictsOnly,
+	})
+	if err != nil {
+		t.Fatalf("sync task branch: %v", err)
+	}
+	if result.Status != orpheusgit.TaskBranchSyncConflictFree || result.Head != remoteTaskHead {
+		t.Fatalf("result = %#v, want conflict-free branch fast-forwarded to %s", result, remoteTaskHead)
+	}
+	localHead := strings.TrimSpace(runGit(t, worktreePath, "rev-parse", "HEAD"))
+	if localHead != remoteTaskHead {
+		t.Fatalf("local HEAD = %s, want fetched remote task head %s", localHead, remoteTaskHead)
+	}
+	if _, err := os.Stat(filepath.Join(worktreePath, "remote-task.txt")); err != nil {
+		t.Fatalf("remote task change was not fast-forwarded: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(worktreePath, "default.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("default branch change was merged into task branch, stat error = %v", err)
+	}
+}
+
+func TestIntegrationAdapterContractSyncTaskBranchWithDefaultDetectsConflictWithoutPushing(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	worktreePath := addTaskBranchWorktree(t, repoPath, "orpheus/op-conflict")
+	commitFile(t, worktreePath, "conflict.txt", "task\n", "task conflict")
+	runGit(t, worktreePath, "push", "--set-upstream", "origin", "orpheus/op-conflict")
+	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
+	originTaskHeadBefore := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/orpheus/op-conflict"))
+	pushRemoteCommit(t, repoPath, "conflict.txt", "default\n")
+	localHeadBefore := strings.TrimSpace(runGit(t, worktreePath, "rev-parse", "HEAD"))
+
+	_, err := orpheusgit.SyncTaskBranchWithDefault(context.Background(), orpheusgit.TaskBranchSyncOptions{
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		Branch:        "orpheus/op-conflict",
+		Worktree:      worktreePath,
+		UpdatePolicy:  orpheusgit.TaskBranchUpdateConflictsOnly,
+	})
+	if err == nil || !strings.Contains(err.Error(), "would conflict") {
+		t.Fatalf("error = %v, want conflict preflight", err)
+	}
+
+	localHeadAfter := strings.TrimSpace(runGit(t, worktreePath, "rev-parse", "HEAD"))
+	if localHeadAfter != localHeadBefore {
+		t.Fatalf("local HEAD = %s, want unchanged %s", localHeadAfter, localHeadBefore)
+	}
+	originTaskHeadAfter := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/orpheus/op-conflict"))
+	if originTaskHeadAfter != originTaskHeadBefore {
+		t.Fatalf("origin task branch = %s, want unchanged %s", originTaskHeadAfter, originTaskHeadBefore)
+	}
+	status := strings.TrimSpace(runGit(t, worktreePath, "status", "--porcelain=v1"))
+	if status != "" {
+		t.Fatalf("worktree status = %q, want clean after conflict preflight", status)
+	}
+	content, err := os.ReadFile(filepath.Join(worktreePath, "conflict.txt"))
+	if err != nil {
+		t.Fatalf("read conflict file: %v", err)
+	}
+	if string(content) != "task\n" {
+		t.Fatalf("conflict file = %q, want task branch content preserved", string(content))
+	}
+}
+
+func TestIntegrationAdapterContractTaskBranchConflictResolutionCompletesMergeAndPushes(t *testing.T) {
+	fixture := newConflictResolutionFixture(t, "orpheus/op-resolve", nil, func(t *testing.T, repoPath string) {
+		t.Helper()
+		pushRemoteCommit(t, repoPath, "clean.txt", "clean merge\n")
+	})
+	repoPath := fixture.repoPath
+	worktreePath := fixture.worktreePath
+	result := fixture.result
+	if result.Status != orpheusgit.TaskBranchSyncConflicted ||
+		result.PreviousHead == "" ||
+		len(result.ConflictFiles) != 1 ||
+		result.ConflictFiles[0] != "conflict.txt" {
+		t.Fatalf("result = %#v, want conflicted conflict.txt", result)
+	}
+	status := runGit(t, worktreePath, "status", "--porcelain=v1")
+	if !strings.Contains(status, "conflict.txt") {
+		t.Fatalf("status = %q, want unresolved conflict", status)
+	}
+
+	if err := os.WriteFile(filepath.Join(worktreePath, "conflict.txt"), []byte("resolved\n"), 0o644); err != nil {
+		t.Fatalf("write resolved conflict: %v", err)
+	}
+	runGit(t, worktreePath, "add", "conflict.txt")
+	completed, err := orpheusgit.CompleteTaskBranchConflictResolution(
+		context.Background(),
+		orpheusgit.TaskBranchSyncOptions{
+			RepoPath:      repoPath,
+			DefaultBranch: "main",
+			Branch:        "orpheus/op-resolve",
+			Worktree:      worktreePath,
+		},
+		result.ConflictFiles,
+	)
+	if err != nil {
+		t.Fatalf("complete conflict resolution: %v", err)
+	}
+	if completed.Status != orpheusgit.TaskBranchSyncUpdated || completed.Head == "" {
+		t.Fatalf("completed = %#v, want updated head", completed)
+	}
+	runGit(t, worktreePath, "merge-base", "--is-ancestor", "refs/remotes/origin/main", "HEAD")
+
+	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
+	originTaskHead := strings.TrimSpace(runGit(t, originPath, "rev-parse", "refs/heads/orpheus/op-resolve"))
+	localTaskHead := strings.TrimSpace(runGit(t, worktreePath, "rev-parse", "HEAD"))
+	if originTaskHead != localTaskHead {
+		t.Fatalf("origin task branch head = %s, want local head %s", originTaskHead, localTaskHead)
+	}
+	if status := strings.TrimSpace(runGit(t, worktreePath, "status", "--porcelain=v1")); status != "" {
+		t.Fatalf("status = %q, want clean after completion", status)
+	}
+	cleanContent, err := os.ReadFile(filepath.Join(worktreePath, "clean.txt"))
+	if err != nil {
+		t.Fatalf("read clean merge file: %v", err)
+	}
+	if string(cleanContent) != "clean merge\n" {
+		t.Fatalf("clean merge file = %q, want default branch content", string(cleanContent))
+	}
+}
+
+func TestIntegrationAdapterContractTaskBranchConflictResolutionCompletesMergeWithCleanDefaultRename(t *testing.T) {
+	repoPath := newGitRepoWithLocalOrigin(t)
+	commitFile(t, repoPath, "old.txt", "base\n", "add old file")
+	runGit(t, repoPath, "push", "origin", "main")
+
+	branch := "orpheus/op-resolve-rename"
+	worktreePath := addTaskBranchWorktree(t, repoPath, branch)
+	commitFile(t, worktreePath, "conflict.txt", "task\n", "task conflict")
+	runGit(t, worktreePath, "push", "--set-upstream", "origin", branch)
+	pushRemoteRenameAndConflict(t, repoPath)
+
+	result, err := orpheusgit.BeginTaskBranchConflictResolution(context.Background(), orpheusgit.TaskBranchSyncOptions{
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		Branch:        branch,
+		Worktree:      worktreePath,
+	})
+	if err != nil {
+		t.Fatalf("begin conflict resolution: %v", err)
+	}
+	if result.Status != orpheusgit.TaskBranchSyncConflicted ||
+		len(result.ConflictFiles) != 1 ||
+		result.ConflictFiles[0] != "conflict.txt" {
+		t.Fatalf("result = %#v, want conflicted conflict.txt", result)
+	}
+	status := runGit(t, worktreePath, "status", "--porcelain=v1")
+	if !strings.Contains(status, "R  old.txt -> new.txt") {
+		t.Fatalf("status = %q, want clean default rename", status)
+	}
+
+	if err := os.WriteFile(filepath.Join(worktreePath, "conflict.txt"), []byte("resolved\n"), 0o644); err != nil {
+		t.Fatalf("write resolved conflict: %v", err)
+	}
+	runGit(t, worktreePath, "add", "conflict.txt")
+	completed, err := orpheusgit.CompleteTaskBranchConflictResolution(
+		context.Background(),
+		orpheusgit.TaskBranchSyncOptions{
+			RepoPath:      repoPath,
+			DefaultBranch: "main",
+			Branch:        branch,
+			Worktree:      worktreePath,
+		},
+		result.ConflictFiles,
+	)
+	if err != nil {
+		t.Fatalf("complete conflict resolution: %v", err)
+	}
+	if completed.Status != orpheusgit.TaskBranchSyncUpdated || completed.Head == "" {
+		t.Fatalf("completed = %#v, want updated head", completed)
+	}
+	if _, err := os.Stat(filepath.Join(worktreePath, "old.txt")); !os.IsNotExist(err) {
+		t.Fatalf("old.txt stat error = %v, want file removed by rename", err)
+	}
+	newContent, err := os.ReadFile(filepath.Join(worktreePath, "new.txt"))
+	if err != nil {
+		t.Fatalf("read renamed file: %v", err)
+	}
+	if string(newContent) != "base\n" {
+		t.Fatalf("new.txt = %q, want renamed default content", string(newContent))
+	}
+}
+
+type conflictResolutionFixture struct {
+	repoPath     string
+	worktreePath string
+	result       orpheusgit.TaskBranchSyncResult
+}
+
+func newConflictResolutionFixture(
+	t *testing.T,
+	branch string,
+	beforePush func(t *testing.T, worktreePath string),
+	afterDefaultConflict func(t *testing.T, repoPath string),
+) conflictResolutionFixture {
+	t.Helper()
+
+	repoPath := newGitRepoWithLocalOrigin(t)
+	worktreePath := addTaskBranchWorktree(t, repoPath, branch)
+	commitFile(t, worktreePath, "conflict.txt", "task\n", "task conflict")
+	if beforePush != nil {
+		beforePush(t, worktreePath)
+	}
+	runGit(t, worktreePath, "push", "--set-upstream", "origin", branch)
+	pushRemoteCommit(t, repoPath, "conflict.txt", "default\n")
+	if afterDefaultConflict != nil {
+		afterDefaultConflict(t, repoPath)
+	}
+
+	result, err := orpheusgit.BeginTaskBranchConflictResolution(context.Background(), orpheusgit.TaskBranchSyncOptions{
+		RepoPath:      repoPath,
+		DefaultBranch: "main",
+		Branch:        branch,
+		Worktree:      worktreePath,
+	})
+	if err != nil {
+		t.Fatalf("begin conflict resolution: %v", err)
+	}
+	return conflictResolutionFixture{
+		repoPath:     repoPath,
+		worktreePath: worktreePath,
+		result:       result,
+	}
+}
+
+func newStatePaths(t *testing.T) state.Paths {
+	t.Helper()
+
+	root := testutil.CanonicalTempDir(t)
+	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
+	if err != nil {
+		t.Fatalf("create state paths: %v", err)
+	}
+	return paths
+}
+
+func newGitRepoWithLocalOrigin(t *testing.T) string {
+	t.Helper()
+
+	root := testutil.CanonicalTempDir(t)
+	originPath := filepath.Join(root, "origin.git")
+	if err := os.MkdirAll(originPath, 0o755); err != nil {
+		t.Fatalf("create origin: %v", err)
+	}
+	runGit(t, originPath, "init", "--bare")
+	runGit(t, originPath, "symbolic-ref", "HEAD", "refs/heads/main")
+
+	repoPath := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+	runGit(t, repoPath, "init")
+	runGit(t, repoPath, "config", "user.name", "Orpheus Test")
+	runGit(t, repoPath, "config", "user.email", "orpheus@example.com")
+	runGit(t, repoPath, "checkout", "-b", "main")
+	runGit(t, repoPath, "commit", "--allow-empty", "-m", "initial")
+	runGit(t, repoPath, "remote", "add", "origin", originPath)
+	runGit(t, repoPath, "push", "--set-upstream", "origin", "main")
+	return repoPath
+}
+
+func addTaskBranchWorktree(t *testing.T, repoPath string, branch string) string {
+	t.Helper()
+
+	worktreePath := filepath.Join(testutil.CanonicalTempDir(t), "task-worktree")
+	runGit(t, repoPath, "branch", branch, "main")
+	runGit(t, repoPath, "worktree", "add", worktreePath, branch)
+	return worktreePath
+}
+
+func commitFile(t *testing.T, dir string, name string, content string, message string) {
+	t.Helper()
+
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	runGit(t, dir, "add", name)
+	runGit(t, dir,
+		"-c", "user.name=Orpheus Test",
+		"-c", "user.email=orpheus@example.com",
+		"commit", "-m", message,
+	)
+}
+
+func pushRemoteCommit(t *testing.T, repoPath string, name string, content string) {
+	t.Helper()
+
+	pushRemoteBranchCommit(t, repoPath, "main", name, content, "remote commit")
+}
+
+func pushRemoteRenameAndConflict(t *testing.T, repoPath string) {
+	t.Helper()
+
+	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
+	cloneParent := testutil.CanonicalTempDir(t)
+	clonePath := filepath.Join(cloneParent, "origin-work")
+	runGit(t, cloneParent, "clone", originPath, clonePath)
+	runGit(t, clonePath, "checkout", "main")
+	runGit(t, clonePath, "mv", "old.txt", "new.txt")
+	if err := os.WriteFile(filepath.Join(clonePath, "conflict.txt"), []byte("default\n"), 0o644); err != nil {
+		t.Fatalf("write remote conflict file: %v", err)
+	}
+	runGit(t, clonePath, "add", "conflict.txt")
+	runGit(t, clonePath,
+		"-c", "user.name=Orpheus Test",
+		"-c", "user.email=orpheus@example.com",
+		"commit", "-m", "rename file and add conflict",
+	)
+	runGit(t, clonePath, "push", "origin", "main")
+}
+
+func pushRemoteBranchCommit(
+	t *testing.T,
+	repoPath string,
+	branch string,
+	name string,
+	content string,
+	message string,
+) string {
+	t.Helper()
+
+	originPath := strings.TrimSpace(runGit(t, repoPath, "remote", "get-url", "origin"))
+	cloneParent := testutil.CanonicalTempDir(t)
+	clonePath := filepath.Join(cloneParent, "origin-work")
+	runGit(t, cloneParent, "clone", originPath, clonePath)
+	runGit(t, clonePath, "checkout", branch)
+	if err := os.WriteFile(filepath.Join(clonePath, name), []byte(content), 0o644); err != nil {
+		t.Fatalf("write remote commit file: %v", err)
+	}
+	runGit(t, clonePath, "add", name)
+	runGit(t, clonePath,
+		"-c", "user.name=Orpheus Test",
+		"-c", "user.email=orpheus@example.com",
+		"commit", "-m", message,
+	)
+	runGit(t, clonePath, "push", "origin", branch)
+	return strings.TrimSpace(runGit(t, clonePath, "rev-parse", "HEAD"))
+}
+
+func assertGitBranch(t *testing.T, worktreePath string, expected string) {
+	t.Helper()
+
+	branch := strings.TrimSpace(runGit(t, worktreePath, "symbolic-ref", "--quiet", "--short", "HEAD"))
+	if branch != expected {
+		t.Fatalf("branch at %q = %q, want %q", worktreePath, branch, expected)
+	}
+	root := strings.TrimSpace(runGit(t, worktreePath, "rev-parse", "--show-toplevel"))
+	if root != worktreePath {
+		t.Fatalf("worktree root = %q, want %q", root, worktreePath)
+	}
+}
