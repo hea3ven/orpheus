@@ -19,10 +19,9 @@ type WorktreeCleanupOutcome string
 
 const (
 	WorktreeCleanupNotApplicable WorktreeCleanupOutcome = "not_applicable"
-	WorktreeCleanupWouldRemove   WorktreeCleanupOutcome = "would_remove"
+	WorktreeCleanupPending       WorktreeCleanupOutcome = "cleanup_pending"
 	WorktreeCleanupRemoved       WorktreeCleanupOutcome = "removed"
 	WorktreeCleanupAlreadyAbsent WorktreeCleanupOutcome = "already_absent"
-	WorktreeCleanupDirty         WorktreeCleanupOutcome = "dirty"
 	WorktreeCleanupUnsafe        WorktreeCleanupOutcome = "unsafe"
 	WorktreeCleanupFailed        WorktreeCleanupOutcome = "failed"
 )
@@ -60,7 +59,7 @@ type ClosedTaskWorktreeCleanupOptions struct {
 // CleanClosedTaskWorktree classifies or removes one closed task's dedicated
 // worktree. It trusts neither recorded paths nor Git alone: backend task
 // status, task metadata, task state, and the deterministic target must agree.
-// Dirty or uncertain worktrees are left untouched.
+// Uncertain identities are left untouched. Git decides whether contents block removal.
 //
 //nolint:funlen // The policy intentionally lists each safety proof before Git can remove a worktree.
 func CleanClosedTaskWorktree(ctx context.Context, opts ClosedTaskWorktreeCleanupOptions) WorktreeCleanupResult {
@@ -113,7 +112,7 @@ func CleanClosedTaskWorktree(ctx context.Context, opts ClosedTaskWorktreeCleanup
 		DefaultBranch: opts.Repository.DefaultBranch, TaskID: opts.Task.ID, Branch: stateTarget.Branch, Paths: opts.Paths,
 	}
 	inspection := gitState.InspectClosedTaskWorktree(ctx, gitOpts)
-	if !opts.Fix || inspection.Outcome != gitmeta.ClosedTaskWorktreeClean {
+	if !opts.Fix || inspection.Outcome != gitmeta.ClosedTaskWorktreeEligible {
 		return worktreeCleanupInspectionResult(inspection)
 	}
 
@@ -186,12 +185,10 @@ func unsafeClosedTaskWorktreeCleanup(worktree string, operation string, err erro
 
 func worktreeCleanupInspectionResult(inspection gitmeta.ClosedTaskWorktreeInspection) WorktreeCleanupResult {
 	switch inspection.Outcome {
-	case gitmeta.ClosedTaskWorktreeClean:
-		return WorktreeCleanupResult{Outcome: WorktreeCleanupWouldRemove, Worktree: inspection.Worktree, Reason: "clean deterministic worktree can be removed"}
+	case gitmeta.ClosedTaskWorktreeEligible:
+		return WorktreeCleanupResult{Outcome: WorktreeCleanupPending, Worktree: inspection.Worktree, Reason: "cleanup pending; run `orpheus doctor --fix` to attempt non-forced Git removal"}
 	case gitmeta.ClosedTaskWorktreeAbsent:
 		return WorktreeCleanupResult{Outcome: WorktreeCleanupAlreadyAbsent, Worktree: inspection.Worktree, Reason: inspection.Reason}
-	case gitmeta.ClosedTaskWorktreeDirty:
-		return WorktreeCleanupResult{Outcome: WorktreeCleanupDirty, Worktree: inspection.Worktree, Reason: inspection.Reason}
 	case gitmeta.ClosedTaskWorktreeUnsafe:
 		return WorktreeCleanupResult{Outcome: WorktreeCleanupUnsafe, Worktree: inspection.Worktree, Reason: inspection.Reason}
 	default:
@@ -205,8 +202,6 @@ func worktreeCleanupRemovalResult(removal gitmeta.ClosedTaskWorktreeRemoval) Wor
 		return WorktreeCleanupResult{Outcome: WorktreeCleanupRemoved, Worktree: removal.Worktree, Reason: removal.Reason}
 	case gitmeta.ClosedTaskWorktreeAbsent:
 		return WorktreeCleanupResult{Outcome: WorktreeCleanupAlreadyAbsent, Worktree: removal.Worktree, Reason: removal.Reason}
-	case gitmeta.ClosedTaskWorktreeDirty:
-		return WorktreeCleanupResult{Outcome: WorktreeCleanupDirty, Worktree: removal.Worktree, Reason: removal.Reason}
 	case gitmeta.ClosedTaskWorktreeUnsafe:
 		return WorktreeCleanupResult{Outcome: WorktreeCleanupUnsafe, Worktree: removal.Worktree, Reason: removal.Reason}
 	default:

@@ -42,7 +42,7 @@ func (g *doctorCleanupGit) InspectClosedTaskWorktree(context.Context, gitmeta.Cl
 	g.inspects++
 	inspection := g.inspection
 	if inspection.Outcome == "" {
-		inspection.Outcome = gitmeta.ClosedTaskWorktreeClean
+		inspection.Outcome = gitmeta.ClosedTaskWorktreeEligible
 	}
 	if inspection.Worktree == "" {
 		inspection.Worktree = g.worktree
@@ -160,8 +160,8 @@ func TestRunReportsAndFixesClosedTaskWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("doctor: %v", err)
 	}
-	if len(result.WorktreeRows) != 1 || result.WorktreeRows[0].Outcome != workflow.WorktreeCleanupWouldRemove || git.removes != 0 {
-		t.Fatalf("doctor rows/removals = %#v/%d, want removable dry run", result.WorktreeRows, git.removes)
+	if len(result.WorktreeRows) != 1 || result.WorktreeRows[0].Outcome != workflow.WorktreeCleanupPending || git.removes != 0 {
+		t.Fatalf("doctor rows/removals = %#v/%d, want pending dry run", result.WorktreeRows, git.removes)
 	}
 	loaded, err := store.Load("alpha", taskID)
 	if err != nil {
@@ -191,8 +191,8 @@ func TestRunReportsAndFixesClosedTaskWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("doctor after cleanup: %v", err)
 	}
-	if len(result.WorktreeRows) != 0 || git.removes != 1 {
-		t.Fatalf("doctor rows/removals after cleanup = %#v/%d, want no lingering worktree", result.WorktreeRows, git.removes)
+	if len(result.WorktreeRows) != 1 || result.WorktreeRows[0].Outcome != workflow.WorktreeCleanupAlreadyAbsent || git.removes != 1 {
+		t.Fatalf("doctor rows/removals after cleanup = %#v/%d, want already absent without removal", result.WorktreeRows, git.removes)
 	}
 	if err := os.RemoveAll(worktree); err != nil {
 		t.Fatalf("remove cleaned worktree: %v", err)

@@ -874,7 +874,7 @@ func TestSyncServiceMergedPRCleansDedicatedWorktreeAfterRecordingClosure(t *test
 	runStore := &fakeSyncRunStore{states: map[string]taskstate.TaskState{"alpha/op-1": state}}
 	service.RunStore = runStore
 	cleanupGit := &fakeClosedTaskWorktreeGit{
-		inspection: gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeClean, Worktree: worktree},
+		inspection: gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeEligible, Worktree: worktree},
 		removal:    gitmeta.ClosedTaskWorktreeRemoval{Outcome: gitmeta.ClosedTaskWorktreeRemoved, Worktree: worktree},
 	}
 	service.CleanupGit = cleanupGit

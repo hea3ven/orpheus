@@ -12,12 +12,11 @@ import (
 type ClosedTaskWorktreeOutcome string
 
 const (
-	ClosedTaskWorktreeClean   ClosedTaskWorktreeOutcome = "clean"
-	ClosedTaskWorktreeAbsent  ClosedTaskWorktreeOutcome = "already_absent"
-	ClosedTaskWorktreeDirty   ClosedTaskWorktreeOutcome = "dirty"
-	ClosedTaskWorktreeUnsafe  ClosedTaskWorktreeOutcome = "unsafe"
-	ClosedTaskWorktreeRemoved ClosedTaskWorktreeOutcome = "removed"
-	ClosedTaskWorktreeFailed  ClosedTaskWorktreeOutcome = "failed"
+	ClosedTaskWorktreeEligible ClosedTaskWorktreeOutcome = "eligible"
+	ClosedTaskWorktreeAbsent   ClosedTaskWorktreeOutcome = "already_absent"
+	ClosedTaskWorktreeUnsafe   ClosedTaskWorktreeOutcome = "unsafe"
+	ClosedTaskWorktreeRemoved  ClosedTaskWorktreeOutcome = "removed"
+	ClosedTaskWorktreeFailed   ClosedTaskWorktreeOutcome = "failed"
 )
 
 // ClosedTaskWorktreeOptions identifies one deterministic task worktree.
@@ -25,8 +24,8 @@ const (
 // than trusting a caller-supplied directory.
 type ClosedTaskWorktreeOptions = TaskWorktreeOptions
 
-// ClosedTaskWorktreeInspection reports whether a deterministic worktree can
-// be removed without losing changes.
+// ClosedTaskWorktreeInspection reports identity and lock safety only.
+// Git decides whether contents prevent removal when removal is attempted.
 type ClosedTaskWorktreeInspection struct {
 	Outcome  ClosedTaskWorktreeOutcome
 	Worktree string
@@ -45,7 +44,7 @@ type ClosedTaskWorktreeRemoval struct {
 type LocalClosedTaskWorktreeGit struct{}
 
 // InspectClosedTaskWorktree validates registered-repository ownership,
-// deterministic identity, and working tree cleanliness without mutating Git.
+// deterministic identity, and lock state without checking cleanliness or mutating Git.
 func (LocalClosedTaskWorktreeGit) InspectClosedTaskWorktree(
 	ctx context.Context,
 	opts ClosedTaskWorktreeOptions,
@@ -72,7 +71,6 @@ func InspectClosedTaskWorktree(ctx context.Context, opts ClosedTaskWorktreeOptio
 	if err != nil {
 		return closedTaskWorktreeUnsafe("resolve deterministic worktree", "", err)
 	}
-	inspection := ClosedTaskWorktreeInspection{Worktree: plan.WorktreePath}
 
 	repoRoot, err := worktreeRoot(ctx, plan.RepoPath)
 	if err != nil {
@@ -112,28 +110,18 @@ func InspectClosedTaskWorktree(ctx context.Context, opts ClosedTaskWorktreeOptio
 		return ClosedTaskWorktreeInspection{Outcome: ClosedTaskWorktreeUnsafe, Worktree: plan.WorktreePath, Reason: reason}
 	}
 
-	output, err := runGitContext(ctx, plan.WorktreePath, "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching")
-	if err != nil {
-		return closedTaskWorktreeUnsafe("inspect deterministic worktree cleanliness", plan.WorktreePath, fmt.Errorf("%w%s", err, gitOutputSuffix(output)))
-	}
-	if strings.TrimSpace(output) != "" {
-		inspection.Outcome = ClosedTaskWorktreeDirty
-		inspection.Reason = "has tracked, untracked, or ignored files; commit, stash, or remove them before running `orpheus doctor --fix`"
-		return inspection
-	}
-	inspection.Outcome = ClosedTaskWorktreeClean
-	return inspection
+	return ClosedTaskWorktreeInspection{Outcome: ClosedTaskWorktreeEligible, Worktree: plan.WorktreePath}
 }
 
-// RemoveClosedTaskWorktree removes a clean deterministic worktree without
-// force. It re-runs all validation immediately before the mutating command.
+// RemoveClosedTaskWorktree asks Git to remove an eligible worktree without
+// force. It rechecks identity and lock safety, leaving content protection to Git.
 func RemoveClosedTaskWorktree(ctx context.Context, opts ClosedTaskWorktreeOptions) ClosedTaskWorktreeRemoval {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	inspection := InspectClosedTaskWorktree(ctx, opts)
 	removal := ClosedTaskWorktreeRemoval(inspection)
-	if inspection.Outcome != ClosedTaskWorktreeClean {
+	if inspection.Outcome != ClosedTaskWorktreeEligible {
 		return removal
 	}
 
