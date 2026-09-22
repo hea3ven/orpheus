@@ -57,7 +57,7 @@ func (r *fakeWorktreeCleanupRecorder) RecordWorktreeCleanup(
 	return taskstate.Event{Type: taskstate.EventWorktreeRemoved}, nil
 }
 
-func TestClosedTaskWorktreeCleanupClassifiesAndRepairsOnlyCleanDedicatedWorktrees(t *testing.T) {
+func TestClosedTaskWorktreeCleanupReportsPendingAndRepairsEligibleDedicatedWorktrees(t *testing.T) {
 	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
@@ -89,14 +89,14 @@ func TestClosedTaskWorktreeCleanupClassifiesAndRepairsOnlyCleanDedicatedWorktree
 		wantRecord int
 	}{
 		{
-			name:       "dry run reports clean worktree as removable",
-			inspection: gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeClean, Worktree: worktree},
-			want:       workflow.WorktreeCleanupWouldRemove,
+			name:       "dry run reports cleanup pending",
+			inspection: gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeEligible, Worktree: worktree},
+			want:       workflow.WorktreeCleanupPending,
 		},
 		{
-			name:       "fix removes clean worktree and records audit",
+			name:       "fix removes eligible worktree and records audit",
 			fix:        true,
-			inspection: gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeClean, Worktree: worktree},
+			inspection: gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeEligible, Worktree: worktree},
 			removal:    gitmeta.ClosedTaskWorktreeRemoval{Outcome: gitmeta.ClosedTaskWorktreeRemoved, Worktree: worktree},
 			want:       workflow.WorktreeCleanupRemoved,
 			wantRemove: 1,
@@ -106,13 +106,16 @@ func TestClosedTaskWorktreeCleanupClassifiesAndRepairsOnlyCleanDedicatedWorktree
 		{
 			name:       "dirty worktree remains for operator",
 			fix:        true,
-			inspection: gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeDirty, Worktree: worktree, Reason: "uncommitted changes"},
-			want:       workflow.WorktreeCleanupDirty,
+			inspection: gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeEligible, Worktree: worktree},
+			removal:    gitmeta.ClosedTaskWorktreeRemoval{Outcome: gitmeta.ClosedTaskWorktreeFailed, Worktree: worktree, Reason: "contains modified or untracked files"},
+			want:       workflow.WorktreeCleanupFailed,
+			wantReason: "contains modified or untracked files",
+			wantRemove: 1,
 		},
 		{
 			name:       "removal failure remains discoverable without an audit event",
 			fix:        true,
-			inspection: gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeClean, Worktree: worktree},
+			inspection: gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeEligible, Worktree: worktree},
 			removal:    gitmeta.ClosedTaskWorktreeRemoval{Outcome: gitmeta.ClosedTaskWorktreeFailed, Worktree: worktree, Reason: "worktree is locked"},
 			want:       workflow.WorktreeCleanupFailed,
 			wantRemove: 1,
@@ -120,7 +123,7 @@ func TestClosedTaskWorktreeCleanupClassifiesAndRepairsOnlyCleanDedicatedWorktree
 		{
 			name:       "audit recording failure remains visible after removal",
 			fix:        true,
-			inspection: gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeClean, Worktree: worktree},
+			inspection: gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeEligible, Worktree: worktree},
 			removal:    gitmeta.ClosedTaskWorktreeRemoval{Outcome: gitmeta.ClosedTaskWorktreeRemoved, Worktree: worktree},
 			recordErr:  errors.New("disk full"),
 			want:       workflow.WorktreeCleanupRemoved,
@@ -159,28 +162,51 @@ func TestClosedTaskWorktreeCleanupClassifiesAndRepairsOnlyCleanDedicatedWorktree
 	}
 }
 
-func TestClosedTaskWorktreeCleanupRejectsMismatchedTarget(t *testing.T) {
+func TestClosedTaskWorktreeCleanupRejectsUnownedOrActiveTargetsBeforeGit(t *testing.T) {
 	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
-		t.Fatalf("new paths: %v", err)
+		t.Fatal(err)
 	}
 	worktree, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-1"))
 	if err != nil {
-		t.Fatalf("worktree path: %v", err)
+		t.Fatal(err)
 	}
-	git := &fakeClosedTaskWorktreeGit{}
-	got := workflow.CleanClosedTaskWorktree(context.Background(), workflow.ClosedTaskWorktreeCleanupOptions{
-		Paths:      paths,
-		Repository: task.Repository{ID: "alpha", Path: "/fixture/alpha", DefaultBranch: "main"},
-		Task: task.Task{ID: "op-1", Status: task.StatusClosed, Metadata: task.Metadata{
-			task.MetadataBranch: "orpheus/op-1", task.MetadataWorktree: worktree,
-		}},
-		TaskState: taskstate.TaskState{RepoID: "alpha", TaskID: "op-1", GitFacts: taskstate.GitFacts{
-			Branch: "orpheus/op-1", Worktree: "/foreign/worktree",
-		}},
-		Fix: true, Git: git,
-	})
-	if got.Outcome != workflow.WorktreeCleanupUnsafe || git.inspects != 0 || git.removes != 0 {
-		t.Fatalf("cleanup = %#v, Git calls = %d/%d, want unsafe without Git", got, git.inspects, git.removes)
+	for _, kind := range []string{"active", "repo-root", "metadata", "state", "work-directory"} {
+		t.Run(kind, func(t *testing.T) {
+			git := &fakeClosedTaskWorktreeGit{}
+			opts := workflow.ClosedTaskWorktreeCleanupOptions{
+				Paths:      paths,
+				Repository: task.Repository{ID: "alpha", Path: "/fixture/alpha", DefaultBranch: "main"},
+				Task: task.Task{ID: "op-1", Status: task.StatusClosed, Metadata: task.Metadata{
+					task.MetadataBranch: "orpheus/op-1", task.MetadataWorktree: worktree,
+				}},
+				TaskState: taskstate.TaskState{RepoID: "alpha", TaskID: "op-1", GitFacts: taskstate.GitFacts{
+					Branch: "orpheus/op-1", Worktree: worktree,
+				}},
+				Fix: true, Git: git,
+			}
+			want := workflow.WorktreeCleanupUnsafe
+			switch kind {
+			case "active":
+				opts.Task.Status = task.StatusInProgress
+				want = workflow.WorktreeCleanupNotApplicable
+			case "repo-root":
+				opts.Task.Metadata[task.MetadataWorktree] = opts.Repository.Path
+				opts.TaskState.GitFacts.Worktree = opts.Repository.Path
+				want = workflow.WorktreeCleanupNotApplicable
+			case "metadata":
+				opts.Task.Metadata[task.MetadataBranch] = "foreign"
+			case "state":
+				opts.TaskState.GitFacts.Worktree = "/foreign/worktree"
+			case "work-directory":
+				opts.TaskState.WorkDirectory = taskstate.WorkDirectory{Path: "/foreign/worktree"}
+			}
+
+			got := workflow.CleanClosedTaskWorktree(context.Background(), opts)
+
+			if got.Outcome != want || git.inspects != 0 || git.removes != 0 {
+				t.Fatalf("cleanup = %#v, Git calls = %d/%d, want %s without Git", got, git.inspects, git.removes, want)
+			}
+		})
 	}
 }

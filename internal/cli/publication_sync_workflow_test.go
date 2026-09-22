@@ -168,15 +168,19 @@ func (*memoryPublicationGit) CompleteTaskBranchConflictResolution(context.Contex
 }
 func (g *memoryPublicationGit) InspectClosedTaskWorktree(_ context.Context, opts gitmeta.ClosedTaskWorktreeOptions) gitmeta.ClosedTaskWorktreeInspection {
 	dir, err := opts.Paths.DataPath(filepath.Join("repos", opts.RepoID, "worktrees", opts.TaskID))
-	if err != nil || g.targets[dir].branch != opts.Branch || g.hasCandidateChanges {
+	if err != nil || g.targets[dir].branch != opts.Branch {
 		return gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeUnsafe, Worktree: dir, Reason: "unexpected cleanup target"}
 	}
-	return gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeClean, Worktree: dir}
+	return gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeEligible, Worktree: dir}
 }
 func (g *memoryPublicationGit) RemoveClosedTaskWorktree(ctx context.Context, opts gitmeta.ClosedTaskWorktreeOptions) gitmeta.ClosedTaskWorktreeRemoval {
 	inspection := g.InspectClosedTaskWorktree(ctx, opts)
-	if inspection.Outcome != gitmeta.ClosedTaskWorktreeClean {
+	if inspection.Outcome != gitmeta.ClosedTaskWorktreeEligible {
 		return gitmeta.ClosedTaskWorktreeRemoval{Outcome: gitmeta.ClosedTaskWorktreeUnsafe, Worktree: inspection.Worktree}
+	}
+	g.cleanupAttempts = append(g.cleanupAttempts, inspection.Worktree)
+	if g.cleanupError != nil {
+		return gitmeta.ClosedTaskWorktreeRemoval{Outcome: gitmeta.ClosedTaskWorktreeFailed, Worktree: inspection.Worktree, Reason: g.cleanupError.Error()}
 	}
 	delete(g.targets, inspection.Worktree)
 	return gitmeta.ClosedTaskWorktreeRemoval{Outcome: gitmeta.ClosedTaskWorktreeRemoved, Worktree: inspection.Worktree}

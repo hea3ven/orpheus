@@ -3772,9 +3772,9 @@ func formatWorktreeCleanup(cleanup *workflow.WorktreeCleanupResult) string {
 		return fmt.Sprintf(" Worktree %s was removed.", worktree)
 	case workflow.WorktreeCleanupAlreadyAbsent:
 		return fmt.Sprintf(" Worktree %s was already absent.", worktree)
-	case workflow.WorktreeCleanupDirty, workflow.WorktreeCleanupUnsafe, workflow.WorktreeCleanupFailed:
+	case workflow.WorktreeCleanupUnsafe, workflow.WorktreeCleanupFailed:
 		reason := formatTaskStatsField(cleanup.Reason)
-		return fmt.Sprintf(" Worktree %s was left untouched and needs manual repair: %s.", worktree, reason)
+		return fmt.Sprintf(" Worktree %s was retained; cleanup needs attention: %s.", worktree, reason)
 	default:
 		return ""
 	}

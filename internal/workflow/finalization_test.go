@@ -1551,7 +1551,7 @@ func TestFinalizeDirectMergeDoesNotPublishTaskBranchOrCreatePR(t *testing.T) {
 	}})
 	service, git, store, backend := newFinalizationTestServiceForSource(t, paths, source, []task.Task{taskItem}, map[string]taskstate.TaskState{"alpha/op-1": state})
 	cleanupGit := &fakeClosedTaskWorktreeGit{
-		inspection: gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeClean, Worktree: worktree},
+		inspection: gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeEligible, Worktree: worktree},
 		removal:    gitmeta.ClosedTaskWorktreeRemoval{Outcome: gitmeta.ClosedTaskWorktreeRemoved, Worktree: worktree},
 	}
 	service.CleanupGit = cleanupGit
