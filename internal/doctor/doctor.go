@@ -229,7 +229,7 @@ func diagnoseClosedTaskWorktree(
 	} else {
 		cleanup = workflow.CleanClosedTaskWorktree(context.Background(), cleanupOpts)
 	}
-	if cleanup.Outcome == workflow.WorktreeCleanupNotApplicable || cleanup.Outcome == workflow.WorktreeCleanupAlreadyAbsent {
+	if cleanup.Outcome == workflow.WorktreeCleanupNotApplicable || (!opts.Fix && cleanup.Outcome == workflow.WorktreeCleanupAlreadyAbsent) {
 		return nil
 	}
 	result.WorktreeRows = append(result.WorktreeRows, WorktreeRow{RepoID: source.Repository.ID, TaskID: taskState.TaskID, Outcome: cleanup.Outcome, Worktree: cleanup.Worktree, Reason: cleanup.Reason})

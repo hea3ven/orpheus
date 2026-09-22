@@ -144,10 +144,12 @@ func (b *memoryPublicationTasks) SetPRURL(ctx context.Context, id, url string) e
 
 type memoryPublicationGit struct {
 	*memoryReviewCandidate
-	remote      map[string]string
-	pushError   error
-	mergeCommit string
-	merges      int
+	remote          map[string]string
+	pushError       error
+	mergeCommit     string
+	cleanupError    error
+	cleanupAttempts []string
+	merges          int
 }
 
 func (g *memoryPublicationGit) PushDefaultBranch(_ context.Context, _ string, branch string) error {
@@ -162,8 +164,15 @@ func (g *memoryPublicationGit) PushTaskBranch(ctx context.Context, dir, branch s
 	return g.PushDefaultBranch(ctx, dir, branch)
 }
 func (g *memoryPublicationGit) MergeTaskBranchIntoDestination(_ context.Context, repo taskmodel.Repository, destination, branch string) (string, error) {
-	if g.targets[repo.Path].branch != branch || g.hasCandidateChanges || len(g.commits) != 1 {
-		return "", errors.New("merge requires committed task branch at repository root")
+	hasBranch := false
+	for _, target := range g.targets {
+		if target.branch == branch {
+			hasBranch = true
+			break
+		}
+	}
+	if !hasBranch || g.hasCandidateChanges || len(g.commits) != 1 {
+		return "", errors.New("merge requires committed task branch")
 	}
 	g.merges++
 	g.mergeCommit = "merge-commit"

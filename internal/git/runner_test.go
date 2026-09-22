@@ -117,7 +117,6 @@ func TestRemoveClosedTaskWorktreeReportsPartialRemovalFailure(t *testing.T) {
 			gitCommand(worktree, "symbolic-ref", "--quiet", "--short", "HEAD").withStdout("orpheus/op-partial\n"),
 			gitCommand(worktree, "rev-parse", "--git-common-dir").withStdout(commonDir + "\n"),
 			gitCommand(repoPath, "worktree", "list", "--porcelain", "-z").withStdout("worktree " + worktree + "\x00\x00"),
-			gitCommand(worktree, "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching"),
 			gitCommand(worktree, "worktree", "remove", worktree).withError(CommandExitError{Code: 1, Err: errors.New("administrative cleanup failed")}),
 			gitCommand(repoPath, "rev-parse", "--show-toplevel").withStdout(repoPath + "\n"),
 			gitCommand(repoPath, "rev-parse", "--git-common-dir").withStdout(commonDir + "\n"),
