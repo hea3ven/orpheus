@@ -1779,3 +1779,44 @@ The deferred ideas above all serve the original long-term identity:
 Long-term product identity from the brief:
 
 > Human-controlled orchestration for structured agentic development.
+
+## Advanced full task workflow machine
+
+Here's an idea, not all tasks need the same workflow, for example, you could have tasks where I want the agent to only assist me with research, other tasks require creating a detailed implementation plan which then can be given to an implementation agent and then require the review pipeline, Other tasks the implementation agent can go with the implementation that they want without any planning and then do the review pipeline. Other tasks are mainly manual. And also, maybe what I want to do is to import a PR that exists and run the post-publication workflow on it to review it. This might go into future developments where after publication we get the comments and comment on them and address them (might be looking more in the future). Also, we are still not covering the planning of the tasks in our phase, so that's part of the idea here. I think that some kind of generic configurable workflow can be something interesting to look into.
+
+## Taskstate architecture review
+
+I want to do a deep architecture review of the current taskstate format and investigate if it would be beneficial to have any other different structure.
+The current format has grown organically as we have been adding features and we might be able to have a better format now that we have done all this work.
+
+### Compatibility
+
+We are currently in an unreleased MVP state, so we are able to rewrite the format to anything we want without providing compatiblity. The only thing we should do is provide a migration script in /tmp for the user to run.
+
+### Reset
+
+Sometimes the first implementation done is not quite right and we need to be able to reset the task to start over. I think this should not remove all the data about previous runs, but rather is a continuation of the work. As a mental model I see the following structure of agent calls/steps as an example:
+
+  * Implementation 1: agent tries to implement the task
+    * Review 1: review pipeline container
+      * Step 1 (check type): automatic check
+        * Finding 1: Blocking finding from the Step 1
+    * Followup 1: agent fixes Finding 1 from Review 1
+    * Review 2:
+      * Step 1 (check type)
+      * Step 2 (ai review): agent reviews the current state of code
+        * Finding 1: Blocking finding from Step 2
+    * Followup 2: agent fixes Finding 1 from Review 2
+    * Review 3:
+      * Step 1 (check type):
+        * Finding 1: Blocking finding from Step 1 caused by environment
+    * Review 4: discards Finding 1 from Step 1 from Review 3
+      * Step 1 (check type)
+      * Step 2 (ai review)
+        * Finding 1: Blocking finding from Step 2
+  * User figures out "Oh, no, we should change the task and restart"
+  * User updates the task and executes `task run`
+  * Reset worktree to default branch
+  * Implementation 2: agent tries to implement new task definition
+  ...
+

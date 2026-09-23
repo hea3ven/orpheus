@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Investigation and decision report for Orpheus GitHub Actions coverage workflow options.">
+  <title>Coverage without the churn — Orpheus decision report</title>
+  <style>
+    :root {
+      --paper: #f2efe6;
+      --paper-deep: #e6dfd0;
+      --ink: #17202a;
+      --muted: #59616a;
+      --blue: #1048a0;
+      --blue-soft: #dce7f7;
+      --red: #c43c2d;
+      --red-soft: #f4ddd6;
+      --green: #0c745b;
+      --green-soft: #d6ebe2;
+      --amber: #a85b00;
+      --amber-soft: #f4e5c9;
+      --line: #a9a497;
+      --shadow: 0 18px 50px rgba(24, 31, 38, .12);
+      --serif: Charter, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      --sans: Avenir, Montserrat, Futura, "Century Gothic", sans-serif;
+      --mono: "IBM Plex Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgba(16,72,160,.035) 1px, transparent 1px),
+        linear-gradient(rgba(16,72,160,.035) 1px, transparent 1px),
+        radial-gradient(circle at 78% 4%, rgba(196,60,45,.12), transparent 25rem),
+        var(--paper);
+      background-size: 28px 28px, 28px 28px, auto, auto;
+      font-family: var(--serif);
+      line-height: 1.58;
+    }
+
+    a { color: var(--blue); text-underline-offset: .2em; }
+    a:hover { color: var(--red); }
+    code, .mono { font-family: var(--mono); }
+    code {
+      background: rgba(23,32,42,.07);
+      border-radius: .25rem;
+      padding: .09rem .28rem;
+      font-size: .88em;
+    }
+    h1, h2, h3, p { margin-top: 0; }
+    h1, h2, h3 { text-wrap: balance; }
+    h2 {
+      font: 800 clamp(1.9rem, 4vw, 3.5rem)/.98 var(--sans);
+      letter-spacing: -.045em;
+      margin-bottom: 1.1rem;
+    }
+    h3 {
+      font: 800 1.06rem/1.15 var(--sans);
+      letter-spacing: -.015em;
+    }
+    p { max-width: 74ch; }
+
+    .progress {
+      position: fixed;
+      inset: 0 0 auto;
+      height: 4px;
+      background: var(--red);
+      transform-origin: 0 50%;
+      transform: scaleX(0);
+      z-index: 50;
+    }
+
+    .masthead {
+      min-height: 91vh;
+      display: grid;
+      align-items: end;
+      padding: clamp(2rem, 7vw, 7rem) clamp(1.25rem, 6vw, 7rem) 4rem;
+      position: relative;
+      overflow: hidden;
+      border-bottom: 1px solid var(--line);
+    }
+    .masthead::after {
+      content: "";
+      position: absolute;
+      width: 58vw;
+      height: 1px;
+      background: var(--red);
+      right: -8vw;
+      top: 31%;
+      transform: rotate(-13deg);
+      transform-origin: right;
+    }
+    .issue-tag {
+      display: inline-flex;
+      gap: .65rem;
+      align-items: center;
+      font: 800 .7rem/1 var(--sans);
+      letter-spacing: .16em;
+      text-transform: uppercase;
+      border: 1px solid var(--ink);
+      padding: .58rem .72rem;
+      width: fit-content;
+      margin-bottom: clamp(2rem, 8vh, 6rem);
+      background: rgba(242,239,230,.8);
+    }
+    .issue-tag::before { content: ""; width: .55rem; height: .55rem; background: var(--red); border-radius: 50%; }
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.55fr) minmax(17rem, .65fr);
+      gap: clamp(2rem, 8vw, 9rem);
+      align-items: end;
+    }
+    h1 {
+      font: 900 clamp(4rem, 11vw, 10.5rem)/.78 var(--sans);
+      letter-spacing: -.075em;
+      margin: 0;
+      max-width: 8ch;
+    }
+    h1 span { color: var(--red); }
+    .deck {
+      font-size: clamp(1.1rem, 1.9vw, 1.48rem);
+      margin: 0 0 1.5rem;
+    }
+    .meta {
+      font: 700 .72rem/1.5 var(--sans);
+      text-transform: uppercase;
+      letter-spacing: .12em;
+      color: var(--muted);
+      padding-top: 1rem;
+      border-top: 1px solid var(--ink);
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 15rem minmax(0, 1fr);
+      max-width: 94rem;
+      margin: 0 auto;
+    }
+    .rail {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 4rem 1.5rem;
+      border-right: 1px solid var(--line);
+      align-self: start;
+    }
+    .rail strong {
+      display: block;
+      font: 900 .73rem/1.2 var(--sans);
+      text-transform: uppercase;
+      letter-spacing: .13em;
+      margin-bottom: 1.5rem;
+    }
+    .rail a {
+      display: block;
+      color: var(--muted);
+      text-decoration: none;
+      font: 700 .78rem/1.3 var(--sans);
+      padding: .62rem 0;
+      border-bottom: 1px dotted var(--line);
+    }
+    .rail a:hover, .rail a.active { color: var(--red); }
+    .rail .stamp {
+      position: absolute;
+      bottom: 3rem;
+      transform: rotate(-4deg);
+      color: var(--red);
+      border: 2px solid var(--red);
+      padding: .55rem;
+      font: 900 .68rem/1 var(--sans);
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    main { min-width: 0; }
+    section {
+      padding: clamp(4.5rem, 9vw, 8rem) clamp(1.25rem, 6vw, 6rem);
+      border-bottom: 1px solid var(--line);
+      scroll-margin-top: 1rem;
+    }
+    .kicker {
+      font: 900 .73rem/1 var(--sans);
+      color: var(--red);
+      text-transform: uppercase;
+      letter-spacing: .16em;
+      margin-bottom: 1rem;
+    }
+    .lede { font-size: 1.2rem; }
+
+    .verdict {
+      display: grid;
+      grid-template-columns: .72fr 1.28fr;
+      gap: 2rem;
+      background: var(--ink);
+      color: var(--paper);
+      padding: clamp(1.5rem, 4vw, 3.5rem);
+      box-shadow: var(--shadow);
+      margin-top: 2.5rem;
+      position: relative;
+      overflow: hidden;
+    }
+    .verdict::after {
+      content: "01";
+      position: absolute;
+      right: -.05em;
+      bottom: -.27em;
+      font: 900 11rem/1 var(--sans);
+      color: rgba(242,239,230,.045);
+    }
+    .verdict .label {
+      font: 900 .75rem/1.4 var(--sans);
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: #f29b87;
+    }
+    .verdict h3 { font-size: clamp(1.35rem, 2.7vw, 2.35rem); margin: 0 0 .8rem; max-width: 21ch; }
+    .verdict p { color: #d1d4d6; margin-bottom: 0; }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      border: 1px solid var(--ink);
+      margin: 2.5rem 0 1rem;
+      background: rgba(242,239,230,.7);
+    }
+    .metric { padding: 1.25rem; min-height: 10rem; border-right: 1px solid var(--ink); }
+    .metric:last-child { border-right: 0; }
+    .metric b { display: block; font: 900 clamp(2.35rem, 5vw, 4.8rem)/.9 var(--sans); letter-spacing: -.06em; color: var(--blue); }
+    .metric span { display: block; margin-top: .8rem; font: 800 .75rem/1.35 var(--sans); }
+    .metric small { color: var(--muted); display: block; margin-top: .45rem; }
+
+    .evidence-note {
+      padding: 1rem 1.2rem;
+      border-left: 5px solid var(--red);
+      background: var(--red-soft);
+      margin-top: 1.5rem;
+      max-width: 76ch;
+    }
+    .evidence-note p:last-child { margin-bottom: 0; }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(7.5rem, 1fr));
+      gap: 1.1rem;
+      margin-top: 2.7rem;
+      align-items: stretch;
+    }
+    .flow article {
+      border-top: 6px solid var(--blue);
+      background: #fffdf7;
+      padding: 1rem;
+      min-height: 12rem;
+      position: relative;
+      box-shadow: 0 9px 24px rgba(23,32,42,.08);
+    }
+    .flow article:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      right: -1.05rem;
+      top: 45%;
+      z-index: 2;
+      color: var(--red);
+      font: 900 1.35rem/1 var(--sans);
+    }
+    .flow article.bad { border-color: var(--red); background: #fff4f0; }
+    .flow .n { font: 900 .68rem/1 var(--sans); color: var(--muted); }
+    .flow h3 { margin: .65rem 0; }
+    .flow p { font-size: .9rem; color: var(--muted); margin: 0; }
+
+    .two-up { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-top: 2.5rem; }
+    .finding {
+      padding: 1.35rem;
+      border: 1px solid var(--line);
+      background: rgba(255,253,247,.66);
+    }
+    .finding h3 { display: flex; gap: .7rem; align-items: center; }
+    .finding h3::before { content: ""; width: .8rem; height: .8rem; background: var(--red); flex: none; }
+    .finding p:last-child { margin-bottom: 0; }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .6rem;
+      margin: 2rem 0 1.4rem;
+    }
+    button {
+      appearance: none;
+      border: 1px solid var(--ink);
+      background: transparent;
+      color: var(--ink);
+      padding: .62rem .84rem;
+      font: 800 .72rem/1 var(--sans);
+      cursor: pointer;
+    }
+    button:hover, button.active { background: var(--ink); color: var(--paper); }
+
+    .options { display: grid; gap: 1rem; }
+    .option {
+      display: grid;
+      grid-template-columns: 4.5rem minmax(13rem, 1.2fr) minmax(18rem, 1fr) 8rem;
+      gap: 1.2rem;
+      padding: 1.3rem;
+      border: 1px solid var(--line);
+      background: rgba(255,253,247,.72);
+      transition: transform .2s ease, opacity .2s ease, border-color .2s ease, box-shadow .2s ease;
+    }
+    .option:hover { transform: translateX(.35rem); border-color: var(--ink); }
+    .option.recommended { border: 2px solid var(--green); box-shadow: 7px 7px 0 var(--green-soft); }
+    .option.dim { opacity: .36; }
+    .option.best { transform: translateX(.55rem); border-color: var(--red); box-shadow: 7px 7px 0 var(--red-soft); }
+    .letter { font: 900 3.4rem/.8 var(--sans); color: var(--blue); letter-spacing: -.08em; }
+    .option h3 { margin-bottom: .45rem; }
+    .option p { color: var(--muted); font-size: .92rem; margin-bottom: .55rem; }
+    .chips { display: flex; flex-wrap: wrap; gap: .35rem; }
+    .chip {
+      font: 800 .61rem/1 var(--sans);
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      padding: .36rem .45rem;
+      border-radius: 2rem;
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+    .chip.warn { background: var(--amber-soft); color: var(--amber); }
+    .chip.good { background: var(--green-soft); color: var(--green); }
+    .score { text-align: right; }
+    .score b { font: 900 2.4rem/1 var(--sans); color: var(--red); }
+    .score small { display: block; color: var(--muted); font: 700 .65rem/1.3 var(--sans); text-transform: uppercase; }
+
+    .matrix-wrap { overflow-x: auto; border: 1px solid var(--line); margin-top: 2.2rem; background: #fffdf7; }
+    table { width: 100%; border-collapse: collapse; min-width: 48rem; }
+    th, td { padding: .85rem 1rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { font: 900 .67rem/1.3 var(--sans); text-transform: uppercase; letter-spacing: .09em; background: var(--ink); color: var(--paper); }
+    tbody tr:last-child td { border-bottom: 0; }
+    td:not(:first-child) { font-family: var(--sans); font-size: .8rem; }
+    .dot { display: inline-block; width: .65rem; height: .65rem; border-radius: 50%; background: var(--line); }
+    .dot.good { background: var(--green); }
+    .dot.mid { background: var(--amber); }
+    .dot.bad { background: var(--red); }
+
+    .architecture {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      border: 1px solid var(--ink);
+      margin-top: 2.5rem;
+      background: #fffdf7;
+    }
+    .lane { padding: clamp(1.25rem, 4vw, 2.5rem); }
+    .lane + .lane { border-left: 1px solid var(--ink); background: var(--blue-soft); }
+    .lane-id { font: 900 .68rem/1 var(--sans); letter-spacing: .12em; text-transform: uppercase; color: var(--red); }
+    .lane h3 { font-size: 1.45rem; margin: .7rem 0 1rem; }
+    .lane ol { padding-left: 1.2rem; }
+    .lane li { margin-bottom: .65rem; }
+
+    .plan { counter-reset: phase; display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); margin-top: 2rem; }
+    .phase {
+      counter-increment: phase;
+      display: grid;
+      grid-template-columns: 6rem 1fr 10rem;
+      gap: 1rem;
+      padding: 1.4rem;
+      background: var(--paper);
+    }
+    .phase::before { content: "0" counter(phase); font: 900 2rem/1 var(--sans); color: var(--blue); }
+    .phase h3 { margin-bottom: .4rem; }
+    .phase p { margin: 0; color: var(--muted); }
+    .phase time { font: 800 .68rem/1.3 var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--red); text-align: right; }
+
+    .guardrails { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 2rem; }
+    .guardrail { padding: 1.2rem; border-top: 5px solid var(--ink); background: #fffdf7; }
+    .guardrail p { font-size: .92rem; color: var(--muted); margin: 0; }
+
+    .source-list { columns: 2; column-gap: 3rem; padding: 0; list-style: none; }
+    .source-list li { break-inside: avoid; border-top: 1px dotted var(--line); padding: .75rem 0; font-size: .92rem; }
+    .source-list b { font-family: var(--sans); font-size: .76rem; display: block; }
+    .method {
+      background: var(--paper-deep);
+      border-left: 5px solid var(--blue);
+      padding: 1.1rem 1.3rem;
+      margin-top: 2rem;
+      font-size: .9rem;
+    }
+    .method p:last-child { margin-bottom: 0; }
+
+    footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 2rem clamp(1.25rem, 6vw, 6rem);
+      font: 800 .67rem/1.3 var(--sans);
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      background: var(--ink);
+      color: var(--paper);
+    }
+
+    .reveal { opacity: 0; transform: translateY(20px); transition: opacity .55s ease, transform .55s ease; }
+    .reveal.visible { opacity: 1; transform: none; }
+
+    @media (max-width: 980px) {
+      .hero-grid, .verdict { grid-template-columns: 1fr; }
+      .shell { grid-template-columns: 1fr; }
+      .rail { display: none; }
+      .metrics { grid-template-columns: 1fr 1fr; }
+      .metric:nth-child(2) { border-right: 0; }
+      .metric:nth-child(-n+2) { border-bottom: 1px solid var(--ink); }
+      .flow { grid-template-columns: 1fr 1fr; }
+      .flow article::after { display: none; }
+      .option { grid-template-columns: 3.4rem 1fr 7rem; }
+      .option > div:nth-child(3) { grid-column: 2 / -1; }
+      .guardrails { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 650px) {
+      .masthead { min-height: auto; padding-top: 5rem; }
+      h1 { font-size: clamp(3.5rem, 22vw, 6rem); }
+      section { padding-block: 4rem; }
+      .metrics, .two-up, .architecture, .flow { grid-template-columns: 1fr; }
+      .metric { border-right: 0; border-bottom: 1px solid var(--ink); }
+      .metric:last-child { border-bottom: 0; }
+      .lane + .lane { border-left: 0; border-top: 1px solid var(--ink); }
+      .option { grid-template-columns: 2.7rem 1fr; }
+      .option > div:nth-child(3), .score { grid-column: 2; text-align: left; }
+      .phase { grid-template-columns: 3.5rem 1fr; }
+      .phase time { grid-column: 2; text-align: left; }
+      .source-list { columns: 1; }
+      footer { display: block; }
+    }
+    @media print {
+      body { background: white; }
+      .progress, .rail, .controls { display: none; }
+      .shell { display: block; }
+      .masthead { min-height: 0; padding: 2cm 1.5cm; }
+      section { padding: 1.2cm 1.5cm; break-inside: avoid; }
+      .reveal { opacity: 1; transform: none; }
+      a { color: inherit; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      .reveal { opacity: 1; transform: none; transition: none; }
+      .option { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="progress" aria-hidden="true"></div>
+
+  <header class="masthead">
+    <div>
+      <div class="issue-tag">Engineering field report · 20 Aug 2026</div>
+      <div class="hero-grid">
+        <h1>Coverage without the <span>churn.</span></h1>
+        <div>
+          <p class="deck">A repository-specific investigation into the failing baseline, repeated test cost, stacked/behind-base branches, and better ways to keep coverage useful.</p>
+          <div class="meta">Orpheus · GitHub Actions · Decision report<br>Scope: investigation only; no workflow behavior changed</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="shell">
+    <nav class="rail" aria-label="Report sections">
+      <strong>Contents</strong>
+      <a href="#verdict">Verdict</a>
+      <a href="#evidence">Evidence</a>
+      <a href="#mechanism">Failure mechanism</a>
+      <a href="#options">Options</a>
+      <a href="#recommendation">Recommendation</a>
+      <a href="#plan">Migration plan</a>
+      <a href="#sources">Sources</a>
+      <div class="stamp">No commit hook</div>
+    </nav>
+
+    <main>
+      <section id="verdict">
+        <div class="kicker">Executive decision</div>
+        <h2>Separate correctness from coverage observation.</h2>
+        <p class="lede">The current job combines three jobs with different lifecycles: test correctness, exact baseline freshness, and coverage comparison. The exact-freshness requirement is the source of most noise. A commit hook would only move that noise onto every developer machine.</p>
+
+        <div class="verdict reveal">
+          <div class="label">Recommended direction</div>
+          <div>
+            <h3>Lean required CI on every PR; full coverage off the commit path.</h3>
+            <p>Run unit and integration tests once for correctness, cancel superseded runs, and retain useful failure output. Move the two-sample classified coverage report to a nightly/manual workflow, remove the 9.8&nbsp;MB tracked baseline, and compute a comparison only when somebody asks for it. If automated patch coverage later proves valuable, let a coverage service store the history instead of Git.</p>
+          </div>
+        </div>
+
+        <div class="evidence-note">
+          <p><strong>Unavoidable trade-off:</strong> GitHub required checks must pass against the latest commit. A coverage gate that is required and current therefore has to run for each updated PR SHA. The only way to stop per-commit coverage runs is to make coverage non-required or move it to a different trigger.</p>
+        </div>
+      </section>
+
+      <section id="evidence">
+        <div class="kicker">Observed, not estimated</div>
+        <h2>The baseline is costing more than it protects.</h2>
+        <p>The workflow has only been active since 17 August, but its run history already shows the pattern clearly.</p>
+
+        <div class="metrics reveal" aria-label="Coverage workflow evidence">
+          <div class="metric"><b>7/12</b><span>runs failed on baseline freshness or baseline validity</span><small>58% of every run; 78% of failures</small></div>
+          <div class="metric"><b>4:57–6:17</b><span>wall time for the three successful runs</span><small>median 6:07</small></div>
+          <div class="metric"><b>9.8 MB</b><span>checked-in generated baseline</span><small>250,262 lines</small></div>
+          <div class="metric"><b>4×</b><span>full-suite invocations in one coverage run</span><small>two lanes × two samples</small></div>
+        </div>
+
+        <div class="two-up">
+          <article class="finding reveal">
+            <h3>More than half the successful runtime is setup</h3>
+            <p>Successful runs spent <strong>2:34–3:19</strong> compiling/installing Beads and installing Dolt, then <strong>2:08–2:38</strong> collecting coverage. The current tool cache does not prevent the large Beads install from dominating the job.</p>
+          </article>
+          <article class="finding reveal">
+            <h3>Baseline updates swamp ordinary diffs</h3>
+            <p>Recent feature work changed the baseline by roughly <strong>14k–34k lines per refresh</strong>. PR #104 carries 10,366 baseline additions and 9,668 deletions beside 567 lines of product, test, and documentation changes.</p>
+          </article>
+          <article class="finding reveal">
+            <h3>Failures are hard to diagnose</h3>
+            <p>Two runs failed in integration coverage, including PR #104 after its baseline was refreshed. The visible error is only <code>run integration coverage sample 1: exit status 1</code>; because collection exits before writing the report, the always-upload step finds no artifact.</p>
+          </article>
+          <article class="finding reveal">
+            <h3>This is currently the repository’s only Actions workflow</h3>
+            <p>Deleting it outright would also delete hosted PR test feedback. The useful replacement is a small correctness workflow, not a CI vacuum.</p>
+          </article>
+        </div>
+
+        <div class="method">
+          <p><strong>Dataset:</strong> the 12 runs returned for <code>test-coverage.yml</code> on 19–20 August 2026: 3 success, 9 failure. Seven failures explicitly reported stale/invalid baselines; two exited during integration coverage. Timings come from successful job step timestamps. Repository metrics come from the checked-in baseline and Git history.</p>
+        </div>
+      </section>
+
+      <section id="mechanism">
+        <div class="kicker">Root cause</div>
+        <h2>The job checks one tree against an artifact made for another.</h2>
+        <p class="lede">On a <code>pull_request</code> event, GitHub checks out <code>refs/pull/&lt;n&gt;/merge</code> by default—the synthetic result of merging the current base into the PR head. The tool then requires the baseline file inherited from the PR branch to exactly match that merged tree before it will compare against the base baseline.</p>
+
+        <div class="flow reveal" aria-label="Current failure sequence">
+          <article><div class="n">STEP 01</div><h3>Commit or base update</h3><p>A PR commit, stacked branch change, or base-branch advance creates a new merge SHA.</p></article>
+          <article><div class="n">STEP 02</div><h3>Merge tree checkout</h3><p>Actions tests the synthesized base + head tree, not merely the branch head.</p></article>
+          <article><div class="n">STEP 03</div><h3>Four test executions</h3><p>Unit twice, integration twice, all serial and instrumented with <code>-coverpkg=./...</code>.</p></article>
+          <article class="bad"><div class="n">STEP 04</div><h3>Exact freshness gate</h3><p>Test count, source blocks, aggregates, commands, and hit states must all equal the PR file.</p></article>
+          <article class="bad"><div class="n">STEP 05</div><h3>Refresh and retry</h3><p>Generate ~10 MB locally, commit a huge diff, push, and spend another five to six minutes.</p></article>
+        </div>
+
+        <div class="two-up">
+          <article class="finding reveal">
+            <h3>Why merging main is especially irritating</h3>
+            <p>The merge changes the effective source/test tree even when the feature itself is untouched. That legitimately changes source-block coordinates, fingerprints, denominators, test counts, or hit states. The current policy treats any such drift as a contributor error.</p>
+          </article>
+          <article class="finding reveal">
+            <h3>Why a commit hook does not fix it</h3>
+            <p>A hook cannot predict the future synthetic merge tree. It also adds four full-suite invocations to local commits, creates environment-dependent generated diffs, and can be skipped. It automates the symptom while preserving the coupling.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="options">
+        <div class="kicker">Decision space</div>
+        <h2>Six viable shapes, with different honesty about cost.</h2>
+        <p>Use the emphasis controls to see which option best matches a single priority. Scores are repository-specific, not universal product ratings.</p>
+
+        <div class="controls" role="group" aria-label="Emphasize an option priority">
+          <button type="button" class="active" data-filter="balanced">Balanced</button>
+          <button type="button" data-filter="fast">Least PR time</button>
+          <button type="button" data-filter="native">GitHub-only</button>
+          <button type="button" data-filter="delta">Automated deltas</button>
+          <button type="button" data-filter="minimal">Smallest change</button>
+        </div>
+
+        <div class="options">
+          <article class="option recommended" data-tags="balanced fast native">
+            <div class="letter">A</div>
+            <div><h3>Split CI and scheduled/manual coverage</h3><p>Run correctness tests once on each current PR SHA. Run rich, two-sample coverage nightly on main and on demand. Remove the tracked baseline.</p><div class="chips"><span class="chip good">recommended</span><span class="chip good">no repo churn</span><span class="chip">fast PR path</span></div></div>
+            <div><p><strong>Gain:</strong> directly matches the stated priority; preserves CI; keeps the existing deep report available.</p><p><strong>Give up:</strong> coverage is observational, not a per-commit merge gate.</p></div>
+            <div class="score"><b>4.7</b><small>fit / 5</small></div>
+          </article>
+
+          <article class="option" data-tags="balanced delta">
+            <div class="letter">B</div>
+            <div><h3>External coverage history (Codecov or similar)</h3><p>Upload one profile per lane on PRs and main. The service stores base reports and computes project/patch deltas; nothing generated is committed.</p><div class="chips"><span class="chip good">clean diffs</span><span class="chip">best PR UX</span><span class="chip warn">third party</span></div></div>
+            <div><p><strong>Gain:</strong> automated base selection, patch coverage, UI/comments, and no Git baseline.</p><p><strong>Give up:</strong> external dependency and still a coverage run on every updated PR SHA.</p></div>
+            <div class="score"><b>4.1</b><small>fit / 5</small></div>
+          </article>
+
+          <article class="option" data-tags="native delta">
+            <div class="letter">C</div>
+            <div><h3>Compute base and PR coverage in Actions</h3><p>Generate a baseline from the exact base SHA and a report from the merge SHA, then compare the two. Cache base results by SHA when possible.</p><div class="chips"><span class="chip good">exact comparison</span><span class="chip">GitHub-only</span><span class="chip warn">more compute</span></div></div>
+            <div><p><strong>Gain:</strong> no tracked file; correct for main, release, and stacked PR bases.</p><p><strong>Give up:</strong> a cold run doubles coverage work. Cross-run artifacts need a run ID/token; caches need a safe regeneration fallback.</p></div>
+            <div class="score"><b>3.5</b><small>fit / 5</small></div>
+          </article>
+
+          <article class="option" data-tags="native minimal">
+            <div class="letter">D</div>
+            <div><h3>Current-only report with a fixed floor</h3><p>Stop comparing exact hit states. Collect current coverage once per lane and optionally fail only below a deliberately loose project threshold.</p><div class="chips"><span class="chip good">simple</span><span class="chip">no baseline</span><span class="chip warn">weak signal</span></div></div>
+            <div><p><strong>Gain:</strong> smallest tool simplification that removes baseline churn; two suite runs instead of four if stability sampling is dropped.</p><p><strong>Give up:</strong> overall percentages hide changed-line regressions and invite threshold gaming.</p></div>
+            <div class="score"><b>3.3</b><small>fit / 5</small></div>
+          </article>
+
+          <article class="option" data-tags="native minimal">
+            <div class="letter">E</div>
+            <div><h3>Keep a main-only baseline maintained by automation</h3><p>PRs compare without checking their own baseline. A post-merge workflow refreshes a baseline artifact, cache, bot branch, or commit on main.</p><div class="chips"><span class="chip">incremental</span><span class="chip warn">automation state</span><span class="chip warn">stacked PR gaps</span></div></div>
+            <div><p><strong>Gain:</strong> preserves most of the current comparison code and removes contributor refresh commits.</p><p><strong>Give up:</strong> bot commits can loop or race; artifacts expire; a non-main base may lack a current baseline. Keeping the file in Git preserves repository bloat.</p></div>
+            <div class="score"><b>2.7</b><small>fit / 5</small></div>
+          </article>
+
+          <article class="option" data-tags="minimal">
+            <div class="letter">F</div>
+            <div><h3>Automate the existing refresh with a commit hook</h3><p>Run <code>make coverage-baseline</code> before commit and add the generated file automatically.</p><div class="chips"><span class="chip warn">local cost</span><span class="chip warn">huge diffs</span><span class="chip warn">does not solve merges</span></div></div>
+            <div><p><strong>Gain:</strong> fewer forgotten manual refreshes on a branch that has not moved.</p><p><strong>Give up:</strong> nearly everything the user wants to avoid. It cannot make an old baseline match a later synthetic merge.</p></div>
+            <div class="score"><b>1.2</b><small>fit / 5</small></div>
+          </article>
+        </div>
+
+        <div class="matrix-wrap reveal" role="region" aria-label="Options comparison" tabindex="0">
+          <table>
+            <thead><tr><th>Option</th><th>No generated Git file</th><th>Stops per-commit full coverage</th><th>Exact base delta</th><th>Works with stacked bases</th><th>New dependency</th></tr></thead>
+            <tbody>
+              <tr><td><strong>A · Split workflows</strong></td><td><span class="dot good"></span> Yes</td><td><span class="dot good"></span> Yes</td><td><span class="dot mid"></span> On demand</td><td><span class="dot good"></span> Yes</td><td><span class="dot good"></span> No</td></tr>
+              <tr><td><strong>B · Coverage service</strong></td><td><span class="dot good"></span> Yes</td><td><span class="dot bad"></span> No</td><td><span class="dot good"></span> Yes</td><td><span class="dot good"></span> Yes</td><td><span class="dot bad"></span> Service</td></tr>
+              <tr><td><strong>C · Compute both</strong></td><td><span class="dot good"></span> Yes</td><td><span class="dot bad"></span> No</td><td><span class="dot good"></span> Yes</td><td><span class="dot good"></span> Yes</td><td><span class="dot good"></span> No</td></tr>
+              <tr><td><strong>D · Fixed floor</strong></td><td><span class="dot good"></span> Yes</td><td><span class="dot bad"></span> No</td><td><span class="dot bad"></span> No</td><td><span class="dot good"></span> Yes</td><td><span class="dot good"></span> No</td></tr>
+              <tr><td><strong>E · Automated main baseline</strong></td><td><span class="dot mid"></span> Maybe</td><td><span class="dot bad"></span> No</td><td><span class="dot good"></span> Yes</td><td><span class="dot mid"></span> With fallback</td><td><span class="dot mid"></span> Automation</td></tr>
+              <tr><td><strong>F · Commit hook</strong></td><td><span class="dot bad"></span> No</td><td><span class="dot bad"></span> No</td><td><span class="dot mid"></span> Until base moves</td><td><span class="dot bad"></span> No</td><td><span class="dot bad"></span> Local hook</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="recommendation">
+        <div class="kicker">Target operating model</div>
+        <h2>Two lanes, two promises.</h2>
+        <p class="lede">The required lane answers “does this merged change work?” The observation lane answers “where is our coverage moving?” Neither pretends to be the other.</p>
+
+        <div class="architecture reveal">
+          <article class="lane">
+            <div class="lane-id">Required · each current PR SHA</div>
+            <h3>Correctness CI</h3>
+            <ol>
+              <li>Checkout the synthetic merge commit intentionally.</li>
+              <li>Run unit tests once and integration tests once; keep lint/build as appropriate.</li>
+              <li>Preserve complete failing test output and upload diagnostics.</li>
+              <li>Cancel superseded runs for the same PR.</li>
+              <li>Cache or download the pinned Beads binary instead of rebuilding its dependency graph every run.</li>
+            </ol>
+          </article>
+          <article class="lane">
+            <div class="lane-id">Non-required · nightly + manual</div>
+            <h3>Coverage observation</h3>
+            <ol>
+              <li>Keep the current classified unit/integration model and two-sample union if its stability is worth the cost.</li>
+              <li>Write JSON/HTML to a workflow artifact; do not commit generated hit-state inventories.</li>
+              <li>Trend main over time. For an occasional PR comparison, compute both selected base and target in that run.</li>
+              <li>Retain the scenario audit as explicit on-demand work.</li>
+              <li>Escalate to Codecov only if automated patch deltas become worth per-commit coverage again.</li>
+            </ol>
+          </article>
+        </div>
+
+        <div class="guardrails">
+          <article class="guardrail"><h3>Do not require a path-filtered workflow</h3><p>GitHub leaves a workflow skipped by path filtering in Pending when that workflow is required. Use an always-created required job with internal conditions, or do not path-filter the required workflow.</p></article>
+          <article class="guardrail"><h3>Key comparisons by immutable SHA</h3><p>Branch names move. Any cached or uploaded base report must be identified by the exact base commit plus Go/tool/schema versions, with regeneration on a miss.</p></article>
+          <article class="guardrail"><h3>Never discard failing test output</h3><p>The collector should retain decoded <code>go test -json</code> failure events and write a partial diagnostic report before returning an error.</p></article>
+        </div>
+      </section>
+
+      <section id="plan">
+        <div class="kicker">Proposed migration</div>
+        <h2>Small reversible steps, no hook.</h2>
+        <div class="plan reveal">
+          <article class="phase"><div><h3>Stop wasting obsolete runs</h3><p>Add PR-scoped concurrency with <code>cancel-in-progress: true</code>. Make current failure output visible. This is useful under every later option.</p></div><time>Low risk · first</time></article>
+          <article class="phase"><div><h3>Introduce lean correctness CI</h3><p>Run each lane once. Measure its real hosted duration, and cache/download the pinned test tools. Make this the required check before weakening coverage.</p></div><time>Low–medium risk</time></article>
+          <article class="phase"><div><h3>Move coverage off PR synchronize</h3><p>Change full coverage to scheduled + manual, mark it non-required, and keep report artifacts. Confirm one week of clean correctness CI.</p></div><time>Policy change</time></article>
+          <article class="phase"><div><h3>Remove the tracked baseline</h3><p>Teach <code>cmd/testcoverage</code> to report without an implicit freshness check, then delete the generated baseline and update testing documentation.</p></div><time>Repo cleanup</time></article>
+          <article class="phase"><div><h3>Review after two weeks</h3><p>If reviewers miss automatic deltas, trial Codecov or exact base/target computation. Decide with measured run time and actual review usage, not theoretical completeness.</p></div><time>Evidence gate</time></article>
+        </div>
+
+        <div class="evidence-note">
+          <p><strong>Success criteria:</strong> no contributor-authored coverage refresh commits; a normal PR receives actionable correctness feedback in roughly the duration of one integration lane rather than four instrumented suite runs; merging main into a branch does not demand repository changes; full coverage remains available within one deliberate action.</p>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="kicker">Evidence & references</div>
+        <h2>Repository facts and platform constraints.</h2>
+        <ul class="source-list">
+          <li><b>Current workflow</b><code>.github/workflows/test-coverage.yml</code> — PR trigger, synthetic checkout default, test-tool install, base baseline extraction, artifact upload.</li>
+          <li><b>Coverage collector</b><code>cmd/testcoverage/main.go</code> — exact freshness gate; two samples for each of two lanes; serial, uncached coverage commands.</li>
+          <li><b>Tracked baseline</b><code>coverage/test-coverage-baseline.json</code> — 9,812,316 bytes and 250,262 lines at inspection.</li>
+          <li><b>Repository run history</b><a href="https://github.com/hea3ven/orpheus/actions/workflows/test-coverage.yml">Test coverage workflow runs</a> and representative <a href="https://github.com/hea3ven/orpheus/actions/runs/32248970391">stale-baseline run</a>.</li>
+          <li><b>Latest affected PR</b><a href="https://github.com/hea3ven/orpheus/pull/104">PR #104</a> — refreshed baseline present, but integration coverage exited without a report.</li>
+          <li><b>GitHub event semantics</b><a href="https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request">Pull request workflows use the merge branch by default</a>.</li>
+          <li><b>Required checks</b><a href="https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks">Checks must pass for the latest SHA; path-skipped workflows can remain Pending</a>.</li>
+          <li><b>Superseded runs</b><a href="https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency">GitHub Actions concurrency and cancel-in-progress</a>.</li>
+          <li><b>Artifacts</b><a href="https://docs.github.com/en/actions/tutorials/store-and-share-data">Downloading from another run requires a token and run identifier</a>.</li>
+          <li><b>Caching</b><a href="https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching">Cache scope and regeneration expectations</a>; <a href="https://github.com/actions/setup-go#caching-dependency-files-and-build-outputs">setup-go caching behavior</a>.</li>
+          <li><b>External comparison model</b><a href="https://docs.codecov.com/docs/comparing-commits">How Codecov selects a base report and handles missing bases</a>.</li>
+        </ul>
+
+        <div class="method">
+          <p><strong>Caveats:</strong> only 12 workflow runs existed at inspection, so the failure rate is descriptive rather than a long-term forecast. Hosted timings include cold/variable runner setup. This report does not inspect or change branch-protection settings, Actions budgets, or third-party pricing. Option scores weight the user’s explicit preferences: eliminate baseline commits, avoid hooks, reduce per-commit cost, and behave sensibly when the base branch moves.</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer>
+    <span>Orpheus coverage workflow investigation</span>
+    <span>Recommendation: split · observe · compare on demand</span>
+  </footer>
+
+  <script>
+    const progress = document.querySelector('.progress');
+    const sections = [...document.querySelectorAll('main section')];
+    const navLinks = [...document.querySelectorAll('.rail a')];
+    const updateScroll = () => {
+      const max = document.documentElement.scrollHeight - innerHeight;
+      progress.style.transform = `scaleX(${max > 0 ? scrollY / max : 0})`;
+      let current = sections[0]?.id;
+      for (const section of sections) if (section.getBoundingClientRect().top < innerHeight * .35) current = section.id;
+      navLinks.forEach(link => link.classList.toggle('active', link.hash === `#${current}`));
+    };
+    addEventListener('scroll', updateScroll, { passive: true });
+    updateScroll();
+
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => { if (entry.isIntersecting) entry.target.classList.add('visible'); });
+    }, { threshold: .08 });
+    document.querySelectorAll('.reveal').forEach(item => observer.observe(item));
+
+    const preferred = { balanced: 'A', fast: 'A', native: 'A', delta: 'B', minimal: 'D' };
+    document.querySelectorAll('[data-filter]').forEach(button => {
+      button.addEventListener('click', () => {
+        const filter = button.dataset.filter;
+        document.querySelectorAll('[data-filter]').forEach(item => item.classList.toggle('active', item === button));
+        document.querySelectorAll('.option').forEach(option => {
+          const match = option.dataset.tags.split(' ').includes(filter);
+          option.classList.toggle('dim', filter !== 'balanced' && !match);
+          option.classList.toggle('best', option.querySelector('.letter').textContent === preferred[filter]);
+        });
+      });
+    });
+  </script>
+</body>
+</html>
