@@ -202,7 +202,7 @@ func (*memoryDispatchGit) Commit(context.Context, string, string) (string, error
 func (g *memoryDispatchGit) ValidateReviewCandidate(
 	_ context.Context,
 	_ workflow.ReviewLifecycleStore,
-	_ workflow.ReviewAttemptContext,
+	_ workflow.ReviewContext,
 	dir string,
 ) error {
 	g.mu.Lock()

@@ -31,7 +31,7 @@ func TestReviewCandidateReadinessRequiresCleanIndexAndChangesOrFinalization(t *t
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			store := &candidateReadinessStore{state: taskstate.TaskState{Finalization: &taskstate.Finalization{Commit: tt.commit}}, err: tt.loadErr}
-			reviewCtx := ReviewAttemptContext{Source: task.RepositorySource{Repository: task.Repository{ID: "alpha"}}, Task: task.Task{ID: "op-review"}}
+			reviewCtx := ReviewContext{Source: task.RepositorySource{Repository: task.Repository{ID: "alpha"}}, Task: task.Task{ID: "op-review"}}
 			var observations []string
 			err := validateReviewCandidateReady(context.Background(), store, reviewCtx, "/fixture/candidate",
 				func(_ context.Context, dir string) error {
