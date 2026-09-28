@@ -19,9 +19,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type reviewCandidateFunc func(context.Context, workflow.ReviewLifecycleStore, workflow.ReviewAttemptContext, string) error
+type reviewCandidateFunc func(context.Context, workflow.ReviewLifecycleStore, workflow.ReviewContext, string) error
 
-func (f reviewCandidateFunc) ValidateReviewCandidate(ctx context.Context, store workflow.ReviewLifecycleStore, attempt workflow.ReviewAttemptContext, dir string) error {
+func (f reviewCandidateFunc) ValidateReviewCandidate(ctx context.Context, store workflow.ReviewLifecycleStore, attempt workflow.ReviewContext, dir string) error {
 	return f(ctx, store, attempt, dir)
 }
 
@@ -92,7 +92,7 @@ func TestIntegrationWorkflowTaskReviewRejectsCandidatePreflightFailuresBeforeSta
 		{
 			name: "staged changes",
 			prepare: func(f *reviewWorkflowFixture) {
-				f.options.Dependencies.ReviewCandidate = reviewCandidateFunc(func(context.Context, workflow.ReviewLifecycleStore, workflow.ReviewAttemptContext, string) error {
+				f.options.Dependencies.ReviewCandidate = reviewCandidateFunc(func(context.Context, workflow.ReviewLifecycleStore, workflow.ReviewContext, string) error {
 					return errors.New("review requires a clean Git index; rerun `orpheus task run <task-id>` after unstaging changes")
 				})
 			},
@@ -101,7 +101,7 @@ func TestIntegrationWorkflowTaskReviewRejectsCandidatePreflightFailuresBeforeSta
 		{
 			name: "missing candidate changes",
 			prepare: func(f *reviewWorkflowFixture) {
-				f.options.Dependencies.ReviewCandidate = reviewCandidateFunc(func(context.Context, workflow.ReviewLifecycleStore, workflow.ReviewAttemptContext, string) error {
+				f.options.Dependencies.ReviewCandidate = reviewCandidateFunc(func(context.Context, workflow.ReviewLifecycleStore, workflow.ReviewContext, string) error {
 					return errors.New("worktree has no candidate changes to review and task has no recorded finalization commit")
 				})
 			},

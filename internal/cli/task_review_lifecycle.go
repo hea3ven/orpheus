@@ -35,7 +35,7 @@ func (f *taskReviewLifecycleFrontend) PipelinePresentation(ctx workflow.ReviewAt
 
 func (f taskReviewLifecycleFrontend) ReviewResumed(ctx workflow.ReviewAttemptContext) error {
 	message := "Resuming review attempt %d at manual step %q.\n"
-	if ctx.ResumeAutomatedBlockerDecision {
+	if ctx.ResumesAutomatedBlockerDecision() {
 		message = "Resuming review attempt %d at automated blocker decision for step %q.\n"
 	}
 	_, err := fmt.Fprintf(f.command.ErrOrStderr(), message, ctx.Review.Attempt, ctx.Review.Step)
@@ -160,7 +160,7 @@ func (f taskReviewLifecycleFrontend) ConfirmRunningCompletionFinalization(
 }
 
 func (f taskReviewLifecycleFrontend) PromptFreshReviewBlockerDispositions(
-	ctx workflow.ReviewAttemptContext,
+	ctx workflow.ReviewContext,
 	blockers []workflow.FreshReviewBlocker,
 ) ([]workflow.FreshReviewBlockerDisposition, error) {
 	return promptFreshReviewBlockerDispositions(f.command, f.reader, ctx.TaskID(), blockers)
@@ -241,7 +241,7 @@ func taskReviewStartFromWorkflow(ctx workflow.ReviewAttemptContext) taskReviewSt
 		target:   ctx.Target,
 		review:   ctx.Review,
 		pipeline: ctx.Pipeline,
-		resumed:  ctx.Resumed,
+		resumed:  ctx.Resumed(),
 		resolvedCtx: resolvedTaskContext{
 			Resolved: taskmodel.ResolvedTaskSource{
 				TaskID: ctx.TaskID(),

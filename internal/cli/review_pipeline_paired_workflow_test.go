@@ -254,6 +254,25 @@ func TestIntegrationWorkflowReviewPipelineInterruptedAlternateDecisionBlocksWith
 	comparison := latest.Steps[0].Comparison
 	must.NotNil(comparison)
 	is.True(comparison.InputInterrupted)
+
+	fixture.reviewLauncher.outcomes = append(fixture.reviewLauncher.outcomes, reviewOutcome(), reviewOutcome())
+	stdout, stderr := fixture.run("", "task", "run", "op-interrupt")
+
+	is.Contains(stdout, "Finalized op-interrupt")
+	is.NotContains(stderr, "Open blocking findings from the latest review")
+	state, err := fixture.taskStore.Load("alpha", "op-interrupt")
+	must.NoError(err)
+	must.Len(state.Reviews, 2)
+	is.Equal(latest, state.Reviews[0], "interrupted comparison remains in history")
+	fresh := state.Reviews[1]
+	is.Equal(2, fresh.Attempt)
+	is.Equal(latest.Pipeline, fresh.Pipeline)
+	is.Equal(taskstate.ReviewStatusPassed, fresh.Status)
+	must.Len(fresh.Steps, 1)
+	is.Equal("ai-review", fresh.Steps[0].Name)
+	must.NotNil(fresh.Steps[0].Comparison)
+	is.False(fresh.Steps[0].Comparison.InputInterrupted)
+	must.Len(fixture.reviewLauncher.launches, 4)
 }
 
 func TestIntegrationWorkflowReviewPipelinePrimaryFailureSkipsAlternateThroughCLI(t *testing.T) {
