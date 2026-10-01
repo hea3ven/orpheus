@@ -77,7 +77,7 @@ printf 'reviewed\n' > reviewed.txt
 
 	taskJSON := mainReadyTaskJSON("op-main", repoPath)
 	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
-		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main", stdout: taskJSON},
+		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main --include-dependents", stdout: taskJSON},
 		{dir: repoPath, args: "--json --readonly --sandbox list --all --limit 0", stdout: taskJSON},
 		{dir: repoPath, args: "--json --sandbox close op-main", stdout: "{}"},
 	})

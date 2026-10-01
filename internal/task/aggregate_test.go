@@ -394,9 +394,11 @@ type recordingFilteredReadBackend struct {
 	tasks   []task.Task
 	filters []task.ListFilter
 	getErr  map[string]error
+	gets    []string
 }
 
 func (b *recordingFilteredReadBackend) Get(_ context.Context, id string) (task.Task, error) {
+	b.gets = append(b.gets, id)
 	if err := b.getErr[id]; err != nil {
 		return task.Task{}, err
 	}
@@ -730,3 +732,57 @@ func (b *cancellationReadTracker) List(ctx context.Context) ([]task.Task, error)
 var _ task.ReadBackend = signalReadBackend{}
 var _ task.ReadBackend = trackedReadBackend{}
 var _ task.ReadBackend = (*cancellationReadTracker)(nil)
+
+func TestAggregatorFilteredSnapshotReusesCompleteRelationshipsAndSuppliedRows(t *testing.T) {
+	child := task.Task{ID: "a-child", IssueType: task.IssueTypeTask, Status: task.StatusClosed, Relations: task.RelationSummary{ParentID: "a-epic"}}
+	parent := task.Task{ID: "a-parent", IssueType: task.IssueTypeEpic, Status: task.StatusInProgress}
+	backend := &recordingFilteredReadBackend{tasks: []task.Task{
+		{ID: "a-epic", Title: "matching epic", IssueType: task.IssueTypeEpic, Relations: task.RelationSummary{Complete: true, ParentID: parent.ID, ChildIDs: []string{child.ID}, DependencyIDs: []string{"a-blocker"}}, RelatedItems: []task.Task{child, parent}},
+		{ID: "a-blocker", IssueType: task.IssueTypeTask, Status: task.StatusClosed},
+	}}
+	aggregator, err := task.NewAggregator([]task.RepositorySource{{Repository: task.Repository{ID: "alpha", TaskIDPrefix: "a"}, BackendDir: "/fixture/alpha"}}, func(task.RepositorySource) (task.ReadBackend, error) { return backend, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := aggregator.FilteredSnapshot(context.Background(), task.ListFilter{Query: "matching"})
+
+	if err != nil || got.Snapshot.HasFailures() {
+		t.Fatalf("FilteredSnapshot() = %#v, %v", got, err)
+	}
+	if ids := snapshotTaskIDsForRepository(t, got.Snapshot, "alpha"); !reflect.DeepEqual(ids, []string{"a-blocker", "a-child", "a-epic", "a-parent"}) {
+		t.Fatalf("snapshot IDs = %v", ids)
+	}
+	if ids := repoTaskIDs(got.Candidates); !reflect.DeepEqual(ids, []string{"a-epic"}) {
+		t.Fatalf("candidate IDs = %v", ids)
+	}
+	if !reflect.DeepEqual(backend.gets, []string{"a-blocker"}) {
+		t.Fatalf("Get calls = %v, want only missing blocker state", backend.gets)
+	}
+	if len(backend.filters) != 1 {
+		t.Fatalf("filters = %#v, want no child query", backend.filters)
+	}
+}
+
+func TestAggregatorFilteredSnapshotReusesRowsSuppliedByContextRead(t *testing.T) {
+	backend := &recordingFilteredReadBackend{tasks: []task.Task{
+		{ID: "a-task", Title: "matching task", IssueType: task.IssueTypeTask, Relations: task.RelationSummary{DependencyIDs: []string{"a-first", "a-second"}}},
+		{ID: "a-first", IssueType: task.IssueTypeTask, RelatedItems: []task.Task{{ID: "a-second", IssueType: task.IssueTypeTask, Status: task.StatusClosed}}},
+	}}
+	aggregator, err := task.NewAggregator([]task.RepositorySource{{Repository: task.Repository{ID: "alpha", TaskIDPrefix: "a"}, BackendDir: "/fixture/alpha"}}, func(task.RepositorySource) (task.ReadBackend, error) { return backend, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := aggregator.FilteredSnapshot(context.Background(), task.ListFilter{Query: "matching"})
+
+	if err != nil || got.Snapshot.HasFailures() {
+		t.Fatalf("FilteredSnapshot() = %#v, %v", got, err)
+	}
+	if ids := snapshotTaskIDsForRepository(t, got.Snapshot, "alpha"); !reflect.DeepEqual(ids, []string{"a-first", "a-second", "a-task"}) {
+		t.Fatalf("snapshot IDs = %v", ids)
+	}
+	if !reflect.DeepEqual(backend.gets, []string{"a-first"}) {
+		t.Fatalf("Get calls = %v, want only first dependency", backend.gets)
+	}
+}

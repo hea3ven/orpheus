@@ -4,6 +4,7 @@ package workflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -11,17 +12,17 @@ import (
 )
 
 type fakeEpicLifecycleBackend struct {
-	items     map[string]task.Task
-	listItems []task.Task
-	getErr    error
-	listErr   error
-	started   []string
-	closed    []string
-	startErr  error
-	closeErr  error
+	items    map[string]task.Task
+	gets     []string
+	getErr   error
+	started  []string
+	closed   []string
+	startErr error
+	closeErr error
 }
 
 func (b *fakeEpicLifecycleBackend) Get(_ context.Context, id string) (task.Task, error) {
+	b.gets = append(b.gets, id)
 	if b.getErr != nil {
 		return task.Task{}, b.getErr
 	}
@@ -30,13 +31,6 @@ func (b *fakeEpicLifecycleBackend) Get(_ context.Context, id string) (task.Task,
 		return task.Task{}, task.ErrNotFound
 	}
 	return item, nil
-}
-
-func (b *fakeEpicLifecycleBackend) List(_ context.Context) ([]task.Task, error) {
-	if b.listErr != nil {
-		return nil, b.listErr
-	}
-	return b.listItems, nil
 }
 
 func (b *fakeEpicLifecycleBackend) StartEpic(_ context.Context, id string) error {
@@ -199,6 +193,9 @@ func TestEpicLifecycleClose(t *testing.T) {
 			if result.Changed != tt.wantChange {
 				t.Fatalf("Close() changed = %t, want %t", result.Changed, tt.wantChange)
 			}
+			if strings.Join(tt.backend.gets, ",") != "op-epic" {
+				t.Fatalf("Get calls = %v, want only epic detail", tt.backend.gets)
+			}
 			if strings.Join(tt.backend.closed, ",") != strings.Join(tt.wantClose, ",") {
 				t.Fatalf("Close calls = %v, want %v", tt.backend.closed, tt.wantClose)
 			}
@@ -211,7 +208,17 @@ func lifecycleBackend(items ...task.Task) *fakeEpicLifecycleBackend {
 	for _, item := range items {
 		index[item.ID] = item
 	}
-	return &fakeEpicLifecycleBackend{items: index, listItems: items}
+	for id, parent := range index {
+		parent.Relations.Complete = true
+		for _, child := range items {
+			if child.Relations.ParentID == id {
+				parent.Relations.ChildIDs = append(parent.Relations.ChildIDs, child.ID)
+				parent.RelatedItems = append(parent.RelatedItems, child)
+			}
+		}
+		index[id] = parent
+	}
+	return &fakeEpicLifecycleBackend{items: index}
 }
 
 func epic(id string, status task.Status, parentID string, dependencies []string, blockedByCount int, childCount int) task.Task {
@@ -223,4 +230,48 @@ func epic(id string, status task.Status, parentID string, dependencies []string,
 
 func item(id string, issueType task.IssueType, status task.Status, parentID string) task.Task {
 	return task.Task{ID: id, IssueType: issueType, Status: status, Relations: task.RelationSummary{ParentID: parentID}}
+}
+
+func TestEpicLifecycleStartReusesSuppliedParentAndBlockingState(t *testing.T) {
+	item := epic("op-epic", task.StatusOpen, "op-parent", []string{"op-dependency"}, 1, 0)
+	item.RelatedItems = []task.Task{
+		epic("op-parent", task.StatusInProgress, "", nil, 0, 0),
+		{ID: "op-dependency", IssueType: task.IssueTypeTask, Status: task.StatusClosed},
+	}
+	backend := lifecycleBackend(item)
+
+	result, err := (EpicLifecycleService{}).Start(context.Background(), backend, item.ID)
+
+	if err != nil || !result.Changed {
+		t.Fatalf("Start() = %#v, %v", result, err)
+	}
+	if strings.Join(backend.gets, ",") != "op-epic" {
+		t.Fatalf("Get calls = %v, want only epic detail", backend.gets)
+	}
+}
+
+func TestEpicLifecycleCloseReadsOnlyMissingChildStateAndRefusesUnavailableChild(t *testing.T) {
+	for _, available := range []bool{true, false} {
+		t.Run(fmt.Sprint(available), func(t *testing.T) {
+			item := epic("op-epic", task.StatusInProgress, "", nil, 0, 2)
+			item.Relations.ChildIDs = []string{"op-supplied", "op-missing"}
+			item.RelatedItems = []task.Task{{ID: "op-supplied", Status: task.StatusClosed, IssueType: task.IssueTypeTask}}
+			backend := lifecycleBackend(item)
+			if available {
+				backend.items["op-missing"] = task.Task{ID: "op-missing", Status: task.StatusClosed, IssueType: task.IssueTypeTask}
+			}
+
+			result, err := (EpicLifecycleService{}).Close(context.Background(), backend, item.ID)
+
+			if available && (err != nil || !result.Changed) {
+				t.Fatalf("Close() = %#v, %v", result, err)
+			}
+			if !available && (!errors.Is(err, task.ErrNotFound) || len(backend.closed) != 0) {
+				t.Fatalf("Close() = %#v, %v, closed %v", result, err, backend.closed)
+			}
+			if strings.Join(backend.gets, ",") != "op-epic,op-missing" {
+				t.Fatalf("Get calls = %v", backend.gets)
+			}
+		})
+	}
 }

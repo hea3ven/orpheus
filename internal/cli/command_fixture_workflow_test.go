@@ -104,7 +104,7 @@ func (b workflowReadBackend) Get(_ context.Context, id string) (taskmodel.Task, 
 	}
 	for _, item := range b.result.tasks {
 		if item.ID == id {
-			return item.Clone(), nil
+			return taskWFDetail(item, b.result.tasks), nil
 		}
 	}
 	return taskmodel.Task{}, taskmodel.ErrNotFound
@@ -144,4 +144,17 @@ func workflowTime(value string) time.Time {
 func setWorkflowEnvironment(t *testing.T, fixture *workflowFixture, key, value string) {
 	t.Helper()
 	fixture.options.Environment[key] = value
+}
+
+// taskWFDetail models the complete direct-relationship contract without reads.
+func taskWFDetail(item taskmodel.Task, tasks []taskmodel.Task) taskmodel.Task {
+	item = item.Clone()
+	item.Relations.Complete = true
+	for _, related := range tasks {
+		if related.Relations.ParentID == item.ID {
+			item.Relations.ChildIDs = append(item.Relations.ChildIDs, related.ID)
+			item.RelatedItems = append(item.RelatedItems, related.Clone())
+		}
+	}
+	return item
 }

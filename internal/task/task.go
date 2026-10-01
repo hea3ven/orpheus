@@ -113,13 +113,20 @@ type OrpheusMetadata struct {
 	HasPRURL    bool
 }
 
-// RelationSummary keeps lightweight relation information when a backend provides it.
+// RelationSummary separates hierarchy from blocking relationships.
+// DependencyIDs and DependentIDs contain only blocking edges, never children
+// or unrelated edges. IDs remain present when related items cannot be resolved.
 //
 // Count fields are zero when the backend reports no matching relations or when the
 // backend did not include a count. ID slices are optional and may be empty even
 // when a count is known.
 type RelationSummary struct {
 	ParentID string
+
+	// Complete is true when all direct relationships have been read successfully.
+	// List rows may carry only partial relationship information; Get must set it.
+	Complete bool
+	ChildIDs []string
 
 	DependencyIDs []string
 	DependentIDs  []string
@@ -133,6 +140,7 @@ type RelationSummary struct {
 
 // Clone returns a copy of the relation summary.
 func (r RelationSummary) Clone() RelationSummary {
+	r.ChildIDs = cloneStrings(r.ChildIDs)
 	r.DependencyIDs = cloneStrings(r.DependencyIDs)
 	r.DependentIDs = cloneStrings(r.DependentIDs)
 	return r
@@ -168,6 +176,11 @@ type Task struct {
 	ClosedAt    *time.Time
 
 	Relations RelationSummary
+
+	// RelatedItems contains available task-source rows for direct relationships.
+	// Their own relationships may be incomplete. Missing rows do not erase IDs
+	// from Relations; callers may read them separately when more state is needed.
+	RelatedItems []Task
 }
 
 // Clone returns a deep copy of mutable task fields.
@@ -180,6 +193,7 @@ func (t Task) Clone() Task {
 	t.CompletedAt = cloneTime(t.CompletedAt)
 	t.ClosedAt = cloneTime(t.ClosedAt)
 	t.Relations = t.Relations.Clone()
+	t.RelatedItems = cloneTasks(t.RelatedItems)
 	return t
 }
 
@@ -227,7 +241,9 @@ func (t Task) OrpheusMetadata() OrpheusMetadata {
 	return ProjectOrpheusMetadata(t.Metadata)
 }
 
-// Getter fetches one task-source item by id.
+// Getter fetches one task-source item by id, including complete, classified
+// direct relationships. Required relationship-read failures must return errors.
+// RelatedItems supplies available related rows without recursively loading them.
 //
 // A conforming source returns only task and epic items. Looking up another
 // backend item type returns an error that wraps ErrUnsupportedTaskSourceItem

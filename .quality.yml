@@ -23,7 +23,7 @@ lanes:
         github.com/hea3ven/orpheus/cmd/testcoverage: 0
         github.com/hea3ven/orpheus/internal/agent: 51.8
         github.com/hea3ven/orpheus/internal/agentexec: 80.456
-        github.com/hea3ven/orpheus/internal/beads: 53.967
+        github.com/hea3ven/orpheus/internal/beads: 57.199
         github.com/hea3ven/orpheus/internal/cli: 67.769
         github.com/hea3ven/orpheus/internal/doctor: 74.872
         github.com/hea3ven/orpheus/internal/git: 67.028
@@ -66,7 +66,7 @@ lanes:
         github.com/hea3ven/orpheus/cmd/testcoverage: 61.098
         github.com/hea3ven/orpheus/internal/agent: 80.838
         github.com/hea3ven/orpheus/internal/agentexec: 0
-        github.com/hea3ven/orpheus/internal/beads: 55.613
+        github.com/hea3ven/orpheus/internal/beads: 60.328
         github.com/hea3ven/orpheus/internal/cli: 37.597
         github.com/hea3ven/orpheus/internal/doctor: 51.084
         github.com/hea3ven/orpheus/internal/git: 29.348

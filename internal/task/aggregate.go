@@ -268,6 +268,14 @@ func (a Aggregator) readSnapshotSource(ctx context.Context, source RepositorySou
 // classification and epic progress without becoming an output row.
 func (a Aggregator) completeFilteredSnapshotContext(ctx context.Context, snapshot *SnapshotResult, candidates []RepoTask) {
 	seen := snapshotTaskIDs(snapshot)
+	available := make(map[string]map[string]Task)
+	for _, repository := range snapshot.Repositories {
+		items := make(map[string]Task)
+		for _, item := range repository.Tasks {
+			cacheRelatedItems(items, item)
+		}
+		available[repository.Repository.ID] = items
+	}
 	backends := make(map[string]ReadBackend)
 	backendFor := func(source RepositorySource) (ReadBackend, error) {
 		if backend, ok := backends[source.Repository.ID]; ok {
@@ -292,11 +300,11 @@ func (a Aggregator) completeFilteredSnapshotContext(ctx context.Context, snapsho
 			continue
 		}
 
-		if candidate.Task.IssueType == IssueTypeEpic {
+		if candidate.Task.IssueType == IssueTypeEpic && !candidate.Task.Relations.Complete {
 			a.addEpicChildrenContext(ctx, snapshot, seen, source, backend, candidate.Task.ID)
 		}
 		for _, referenceID := range relationshipReferenceIDs(candidate.Task) {
-			a.addRelationshipContext(ctx, snapshot, seen, source, backend, candidate.Task.ID, referenceID)
+			a.addRelationshipContext(ctx, snapshot, seen, source, backend, available[source.Repository.ID], candidate.Task.ID, referenceID)
 		}
 	}
 }
@@ -353,6 +361,7 @@ func (a Aggregator) addRelationshipContext(
 	seen map[string]map[string]struct{},
 	source RepositorySource,
 	backend ReadBackend,
+	available map[string]Task,
 	taskID string,
 	referenceID string,
 ) {
@@ -379,7 +388,10 @@ func (a Aggregator) addRelationshipContext(
 		return
 	}
 
-	contextTask, err := backend.Get(ctx, referenceID)
+	contextTask, ok := available[referenceID]
+	if !ok {
+		contextTask, err = backend.Get(ctx, referenceID)
+	}
 	if err != nil {
 		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrUnsupportedTaskSourceItem) {
 			// The source confirmed this reference is unavailable to the task
@@ -390,7 +402,16 @@ func (a Aggregator) addRelationshipContext(
 		a.appendRelationshipFailure(snapshot, source.Repository, taskID, referenceID, resolved.Source.Repository, err)
 		return
 	}
+	cacheRelatedItems(available, contextTask)
 	appendSnapshotContextTask(snapshot, seen, source.Repository, contextTask)
+}
+
+func cacheRelatedItems(available map[string]Task, item Task) {
+	for _, related := range item.RelatedItems {
+		if _, exists := available[related.ID]; !exists {
+			available[related.ID] = related
+		}
+	}
 }
 
 func relationshipReferenceIDs(taskItem Task) []string {
@@ -399,6 +420,9 @@ func relationshipReferenceIDs(taskItem Task) []string {
 		ids = append(ids, parentID)
 	}
 	ids = append(ids, taskItem.Relations.DependencyIDs...)
+	if taskItem.IssueType == IssueTypeEpic && taskItem.Relations.Complete {
+		ids = append(ids, taskItem.Relations.ChildIDs...)
+	}
 	sort.Strings(ids)
 
 	unique := ids[:0]
