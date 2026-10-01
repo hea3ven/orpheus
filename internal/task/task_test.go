@@ -139,6 +139,7 @@ func TestTaskCloneCopiesMutableFields(t *testing.T) {
 		UpdatedAt: &updatedAt,
 		Relations: task.RelationSummary{
 			ParentID:        "op",
+			ChildIDs:        []string{"op-child"},
 			DependencyIDs:   []string{"op-0"},
 			DependentIDs:    []string{"op-2"},
 			DependencyCount: 1,
@@ -146,13 +147,19 @@ func TestTaskCloneCopiesMutableFields(t *testing.T) {
 		},
 	}
 
+	original.RelatedItems = []task.Task{{ID: "op-child", Metadata: task.Metadata{task.MetadataBranch: "child-branch"}}}
 	clone := original.Clone()
+	clone.Relations.ChildIDs[0] = "changed"
+	clone.RelatedItems[0].Metadata[task.MetadataBranch] = "changed"
 	clone.Labels[0] = "changed"
 	clone.Metadata[task.MetadataBranch] = "changed"
 	clone.CreatedAt = ptrTime(clone.CreatedAt.Add(time.Hour))
 	clone.Relations.DependencyIDs[0] = "changed"
 	clone.Relations.DependentIDs[0] = "changed"
 
+	if original.Relations.ChildIDs[0] != "op-child" || original.RelatedItems[0].Metadata[task.MetadataBranch] != "child-branch" {
+		t.Fatalf("original child data changed: %#v", original)
+	}
 	if original.Labels[0] != "m2" {
 		t.Fatalf("original label changed to %q", original.Labels[0])
 	}

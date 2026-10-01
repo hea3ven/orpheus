@@ -656,7 +656,7 @@ func TestTaskBackendGetParsesShowJSON(t *testing.T) {
 	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir:  dir,
-		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-9wh.2"},
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-9wh.2", "--include-dependents"},
 		result: beads.Result{Stdout: `[
 			{
 				"id":"op-9wh.2",
@@ -718,12 +718,12 @@ func TestTaskBackendUpdateDoesNotRemoveNonBlockingDependency(t *testing.T) {
 	runner := &fakeRunner{calls: []fakeCall{
 		{
 			wantDir:  dir,
-			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-current"},
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-current", "--include-dependents"},
 			result:   beads.Result{Stdout: `[{"id":"op-current","title":"Current","description":"Description","acceptance_criteria":"Acceptance","status":"open","issue_type":"task","dependencies":[{"id":"op-related","dependency_type":"related"}]}]`},
 		},
 		{
 			wantDir:  dir,
-			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-current"},
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-current", "--include-dependents"},
 			result:   beads.Result{Stdout: `[{"id":"op-current","title":"Current","description":"Description","acceptance_criteria":"Acceptance","status":"open","issue_type":"task","dependencies":[{"id":"op-related","dependency_type":"related"}]}]`},
 		},
 	}}
@@ -750,7 +750,7 @@ func TestTaskBackendUpdateRejectsNonBlockingDependencyBeforeContentMutation(t *t
 	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir:  dir,
-		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-current"},
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-current", "--include-dependents"},
 		result:   beads.Result{Stdout: `[{"id":"op-current","title":"Current","description":"Description","acceptance_criteria":"Acceptance","status":"open","issue_type":"task","dependencies":[{"id":"op-related","dependency_type":"related"}]}]`},
 	}}}
 
@@ -777,12 +777,12 @@ func TestTaskBackendUpdateUsesOrpheusBlockingEdgeAcrossTypes(t *testing.T) {
 	runner := &fakeRunner{calls: []fakeCall{
 		{
 			wantDir:  dir,
-			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-task"},
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-task", "--include-dependents"},
 			result:   beads.Result{Stdout: `[{"id":"op-task","title":"Task","description":"Description","acceptance_criteria":"Acceptance","status":"open","issue_type":"task"}]`},
 		},
 		{
 			wantDir:  dir,
-			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-epic"},
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-epic", "--include-dependents"},
 			result:   beads.Result{Stdout: `[{"id":"op-epic","title":"Epic","description":"Description","acceptance_criteria":"Acceptance","status":"open","issue_type":"epic"}]`},
 		},
 		{
@@ -792,7 +792,7 @@ func TestTaskBackendUpdateUsesOrpheusBlockingEdgeAcrossTypes(t *testing.T) {
 		},
 		{
 			wantDir:  dir,
-			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-task"},
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-task", "--include-dependents"},
 			result:   beads.Result{Stdout: `[{"id":"op-task","title":"Task","description":"Description","acceptance_criteria":"Acceptance","status":"open","issue_type":"task","dependencies":[{"id":"op-epic","dependency_type":"orpheus-blocks"}]}]`},
 		},
 	}}
@@ -819,7 +819,7 @@ func TestTaskBackendGetRecognizesOrpheusCrossTypeBlockingEdge(t *testing.T) {
 	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir:  dir,
-		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-task"},
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-task", "--include-dependents"},
 		result:   beads.Result{Stdout: `[{"id":"op-task","status":"open","issue_type":"task","dependencies":[{"id":"op-epic","dependency_type":"orpheus-blocks"}]}]`},
 	}}}
 
@@ -844,27 +844,27 @@ func TestTaskBackendGetReturnsClosedItemsAndRejectsUnsupportedTypes(t *testing.T
 	runner := &fakeRunner{calls: []fakeCall{
 		{
 			wantDir:  dir,
-			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-closed"},
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-closed", "--include-dependents"},
 			result:   beads.Result{Stdout: `[{"id":"op-closed","title":"done","status":"closed","priority":2,"issue_type":"task"}]`},
 		},
 		{
 			wantDir:  dir,
-			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-bug"},
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-bug", "--include-dependents"},
 			result:   beads.Result{Stdout: `[{"id":"op-bug","title":"bug","status":"open","priority":2,"issue_type":"bug"}]`},
 		},
 		{
 			wantDir:  dir,
-			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-chore"},
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-chore", "--include-dependents"},
 			result:   beads.Result{Stdout: `[{"id":"op-chore","title":"chore","status":"open","priority":2,"issue_type":"chore"}]`},
 		},
 		{
 			wantDir:  dir,
-			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-custom"},
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-custom", "--include-dependents"},
 			result:   beads.Result{Stdout: `[{"id":"op-custom","title":"custom","status":"open","priority":2,"issue_type":"custom"}]`},
 		},
 		{
 			wantDir:  dir,
-			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-unknown"},
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-unknown", "--include-dependents"},
 			result:   beads.Result{Stdout: `[{"id":"op-unknown","title":"unknown","status":"open","priority":2}]`},
 		},
 	}}
@@ -901,7 +901,7 @@ func TestTaskBackendMarkInProgressUpdatesOpenTaskStatusAndMetadata(t *testing.T)
 	runner := &fakeRunner{calls: []fakeCall{
 		{
 			wantDir:  dir,
-			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1"},
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1", "--include-dependents"},
 			result:   beads.Result{Stdout: `[{"id":"op-1","title":"task","status":"open","priority":2,"issue_type":"task","metadata":{"team":"platform"}}]`},
 		},
 		{
@@ -938,7 +938,7 @@ func TestTaskBackendMarkInProgressTreatsMatchingInProgressTaskAsSuccess(t *testi
 	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir:  dir,
-		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-2"},
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-2", "--include-dependents"},
 		result: beads.Result{Stdout: `[{"id":"op-2","title":"task","status":"in_progress","priority":2,"issue_type":"task","metadata":{` +
 			`"orpheus.branch":"orpheus/op-2","orpheus.worktree":"/fixture/op-2"}}]`},
 	}}}
@@ -989,7 +989,7 @@ func TestTaskBackendMarkInProgressReportsMutationConflicts(t *testing.T) {
 			dir := testutil.CanonicalTempDir(t)
 			runner := &fakeRunner{calls: []fakeCall{{
 				wantDir:  dir,
-				wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-3"},
+				wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-3", "--include-dependents"},
 				result:   beads.Result{Stdout: tt.stdout},
 			}}}
 			backend, err := beads.NewTaskBackendWithRunner(dir, runner)
@@ -1016,7 +1016,7 @@ func TestTaskBackendMarkInProgressReportsUpdateCommandFailure(t *testing.T) {
 	runner := &fakeRunner{calls: []fakeCall{
 		{
 			wantDir:  dir,
-			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-4"},
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-4", "--include-dependents"},
 			result:   beads.Result{Stdout: `[{"id":"op-4","title":"task","status":"open","priority":2,"issue_type":"task"}]`},
 		},
 		{
@@ -1056,7 +1056,7 @@ func TestTaskBackendStartEpicUpdatesOpenEpic(t *testing.T) {
 	runner := &fakeRunner{calls: []fakeCall{
 		{
 			wantDir:  dir,
-			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-epic"},
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-epic", "--include-dependents"},
 			result:   beads.Result{Stdout: `[{"id":"op-epic","title":"epic","status":"open","issue_type":"epic"}]`},
 		},
 		{
@@ -1081,7 +1081,7 @@ func TestTaskBackendStartEpicTreatsInProgressAsSuccess(t *testing.T) {
 	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir:  dir,
-		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-epic"},
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-epic", "--include-dependents"},
 		result:   beads.Result{Stdout: `[{"id":"op-epic","title":"epic","status":"in_progress","issue_type":"epic"}]`},
 	}}}
 	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
@@ -1110,7 +1110,7 @@ func TestTaskBackendStartEpicRejectsNonEpicAndClosedItems(t *testing.T) {
 			dir := testutil.CanonicalTempDir(t)
 			runner := &fakeRunner{calls: []fakeCall{{
 				wantDir:  dir,
-				wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-epic"},
+				wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-epic", "--include-dependents"},
 				result:   beads.Result{Stdout: test.output},
 			}}}
 			backend, err := beads.NewTaskBackendWithRunner(dir, runner)
@@ -1134,7 +1134,7 @@ func TestTaskBackendUpdateGitFactsWritesBranchAndWorktree(t *testing.T) {
 	runner := &fakeRunner{calls: []fakeCall{
 		{
 			wantDir:  dir,
-			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1"},
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1", "--include-dependents"},
 			result:   beads.Result{Stdout: `[{"id":"op-1","title":"task","status":"in_progress","priority":2,"issue_type":"task"}]`},
 		},
 		{
@@ -1168,7 +1168,7 @@ func TestTaskBackendUpdateGitFactsRejectsTaskNotInProgress(t *testing.T) {
 	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir:  dir,
-		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1"},
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1", "--include-dependents"},
 		result:   beads.Result{Stdout: `[{"id":"op-1","title":"task","status":"open","priority":2,"issue_type":"task"}]`},
 	}}}
 	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
@@ -1189,7 +1189,7 @@ func TestTaskBackendUpdateGitFactsRejectsTaskWithPRURL(t *testing.T) {
 	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir:  dir,
-		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1"},
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1", "--include-dependents"},
 		result:   beads.Result{Stdout: `[{"id":"op-1","title":"task","status":"in_progress","priority":2,"issue_type":"task","metadata":{"orpheus.pr_url":"https://github.test/org/repo/pull/1"}}]`},
 	}}}
 	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
@@ -1253,7 +1253,7 @@ func TestTaskBackendCloseClosesOpenTask(t *testing.T) {
 	runner := &fakeRunner{calls: []fakeCall{
 		{
 			wantDir:  dir,
-			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1"},
+			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1", "--include-dependents"},
 			result:   beads.Result{Stdout: `[{"id":"op-1","title":"task","status":"in_progress","priority":2,"issue_type":"task"}]`},
 		},
 		{
@@ -1278,7 +1278,7 @@ func TestTaskBackendCloseTreatsAlreadyClosedTaskAsSuccess(t *testing.T) {
 	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{{
 		wantDir:  dir,
-		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-2"},
+		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-2", "--include-dependents"},
 		result:   beads.Result{Stdout: `[{"id":"op-2","title":"task","status":"closed","priority":2,"issue_type":"task"}]`},
 	}}}
 	backend, err := beads.NewTaskBackendWithRunner(dir, runner)

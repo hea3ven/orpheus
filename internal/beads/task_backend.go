@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -101,6 +102,12 @@ func (b TaskBackend) Get(ctx context.Context, id string) (task.Task, error) {
 	if err := task.ValidateTaskSourceItem(taskItem); err != nil {
 		return task.Task{}, fmt.Errorf("get Beads task %q in %q: %w", taskItem.ID, b.dir, err)
 	}
+	taskItem.Relations.Complete = true
+	taskItem.Relations.DependencyCount = len(taskItem.Relations.DependencyIDs)
+	taskItem.Relations.DependentCount = len(taskItem.Relations.DependentIDs)
+	taskItem.Relations.BlockedByCount = len(taskItem.Relations.DependencyIDs)
+	taskItem.Relations.BlockingCount = len(taskItem.Relations.DependentIDs)
+	taskItem.Relations.ChildCount = len(taskItem.Relations.ChildIDs)
 	return taskItem, nil
 }
 
@@ -112,7 +119,7 @@ func (b TaskBackend) getRawTask(ctx context.Context, id string) (bdTask, error) 
 		return bdTask{}, fmt.Errorf("get Beads task in %q: task id is required", b.dir)
 	}
 
-	result, err := b.runWithAttrs(ctx, "get", []slog.Attr{slog.String("task_id", id)}, "show", "--id", id)
+	result, err := b.runWithAttrs(ctx, "get", []slog.Attr{slog.String("task_id", id)}, "show", "--id", id, "--include-dependents")
 	if err != nil {
 		if isNotFoundResult(result) {
 			return bdTask{}, fmt.Errorf("get Beads task %q in %q: %w%s", id, b.dir, task.ErrNotFound, formattedOutput(result))
@@ -126,6 +133,12 @@ func (b TaskBackend) getRawTask(ctx context.Context, id string) (bdTask, error) 
 	}
 	for _, rawTask := range rawTasks {
 		if rawTask.ID == id {
+			if rawTask.DependentCount > len(rawTask.Dependents) {
+				return bdTask{}, fmt.Errorf("get Beads task %q: incomplete dependents: source reports %d but returned %d", id, rawTask.DependentCount, len(rawTask.Dependents))
+			}
+			if rawTask.DependencyCount > len(rawTask.Dependencies) {
+				return bdTask{}, fmt.Errorf("get Beads task %q: incomplete dependencies: source reports %d but returned %d", id, rawTask.DependencyCount, len(rawTask.Dependencies))
+			}
 			return rawTask, nil
 		}
 	}
@@ -859,7 +872,7 @@ type bdTask struct {
 }
 
 type bdRelation struct {
-	ID          string `json:"id"`
+	bdTask
 	IssueID     string `json:"issue_id"`
 	DependsOnID string `json:"depends_on_id"`
 	Type        string `json:"type"`
@@ -940,11 +953,14 @@ func (t bdTask) toTask() (task.Task, error) {
 		return task.Task{}, err
 	}
 
-	labels := t.Labels
-	if labels == nil {
-		labels = []string{}
+	relations, err := t.relations()
+	if err != nil {
+		return task.Task{}, err
 	}
-
+	related, err := t.relatedItems()
+	if err != nil {
+		return task.Task{}, err
+	}
 	return task.Task{
 		ID:                 t.ID,
 		Title:              t.Title,
@@ -955,7 +971,7 @@ func (t bdTask) toTask() (task.Task, error) {
 		Status:             t.Status,
 		Priority:           t.Priority,
 		IssueType:          t.IssueType,
-		Labels:             labels,
+		Labels:             append([]string{}, t.Labels...),
 		Metadata:           metadata,
 		Assignee:           t.Assignee,
 		Owner:              t.Owner,
@@ -965,44 +981,98 @@ func (t bdTask) toTask() (task.Task, error) {
 		StartedAt:          startedAt,
 		CompletedAt:        completedAt,
 		ClosedAt:           closedAt,
-		Relations:          t.relations(),
+		Relations:          relations,
+		RelatedItems:       related,
 	}, nil
 }
 
-func (t bdTask) relations() task.RelationSummary {
+func (t bdTask) relations() (task.RelationSummary, error) {
 	relations := task.RelationSummary{
-		ParentID:        strings.TrimSpace(t.Parent),
-		DependencyIDs:   []string{},
-		DependentIDs:    []string{},
-		DependencyCount: t.DependencyCount,
-		DependentCount:  t.DependentCount,
-		BlockedByCount:  t.BlockedByCount,
-		BlockingCount:   t.BlockingCount,
-		ChildCount:      t.ChildCount,
+		ParentID:      strings.TrimSpace(t.Parent),
+		DependencyIDs: []string{}, DependentIDs: []string{}, ChildIDs: []string{},
+		DependencyCount: t.DependencyCount, DependentCount: t.DependentCount,
+		BlockedByCount: t.BlockedByCount, BlockingCount: t.BlockingCount, ChildCount: t.ChildCount,
 	}
-
 	for _, dependency := range t.Dependencies {
-		relationType := dependency.relationType()
-		if relationType == "parent-child" && relations.ParentID == "" {
-			relations.ParentID = dependency.dependencyID()
-			continue
-		}
-		if isBlockingDependencyType(relationType) {
-			relations.DependencyIDs = appendID(relations.DependencyIDs, dependency.dependencyID())
+		id := strings.TrimSpace(dependency.dependencyID())
+		switch {
+		case dependency.relationType() == "parent-child":
+			if id == "" {
+				return task.RelationSummary{}, fmt.Errorf("task %s has a parent relationship without an identifier", t.ID)
+			}
+			if relations.ParentID != "" && relations.ParentID != id {
+				return task.RelationSummary{}, fmt.Errorf("task %s has conflicting parents %s and %s", t.ID, relations.ParentID, id)
+			}
+			relations.ParentID = id
+		case isBlockingDependencyType(dependency.relationType()):
+			if id == "" {
+				return task.RelationSummary{}, fmt.Errorf("task %s has a blocking dependency without an identifier", t.ID)
+			}
+			relations.DependencyIDs = appendID(relations.DependencyIDs, id)
 		}
 	}
-
 	for _, dependent := range t.Dependents {
-		relations.DependentIDs = appendID(relations.DependentIDs, dependent.dependentID())
+		if (dependent.relationType() == "parent-child" || isBlockingDependencyType(dependent.relationType())) && strings.TrimSpace(dependent.dependentID()) == "" {
+			return task.RelationSummary{}, fmt.Errorf("task %s has an incoming relationship without an identifier", t.ID)
+		}
+		switch {
+		case dependent.relationType() == "parent-child":
+			relations.ChildIDs = appendID(relations.ChildIDs, dependent.dependentID())
+		case isBlockingDependencyType(dependent.relationType()):
+			relations.DependentIDs = appendID(relations.DependentIDs, dependent.dependentID())
+		}
 	}
-
+	sort.Strings(relations.DependencyIDs)
+	sort.Strings(relations.DependentIDs)
+	sort.Strings(relations.ChildIDs)
 	if relations.DependencyCount == 0 {
 		relations.DependencyCount = len(relations.DependencyIDs)
 	}
 	if relations.DependentCount == 0 {
 		relations.DependentCount = len(relations.DependentIDs)
 	}
-	return relations
+	if relations.ChildCount == 0 {
+		relations.ChildCount = len(relations.ChildIDs)
+	}
+	return relations, nil
+}
+
+func (t bdTask) relatedItems() ([]task.Task, error) {
+	var items []task.Task
+	seen := make(map[string]bool)
+	add := func(relation bdRelation, id string, child bool) error {
+		if seen[id] || relation.ID != id || relation.Status == task.StatusUnknown {
+			return nil
+		}
+		item, err := relation.toTask()
+		if err != nil {
+			return err
+		}
+		if !task.IsTaskSourceItem(item) {
+			return nil
+		}
+		if child {
+			item.Relations.ParentID = t.ID
+		}
+		seen[id] = true
+		items = append(items, item)
+		return nil
+	}
+	for _, relation := range t.Dependencies {
+		if relation.relationType() == "parent-child" || isBlockingDependencyType(relation.relationType()) {
+			if err := add(relation, relation.dependencyID(), false); err != nil {
+				return nil, err
+			}
+		}
+	}
+	for _, relation := range t.Dependents {
+		if relation.relationType() == "parent-child" || isBlockingDependencyType(relation.relationType()) {
+			if err := add(relation, relation.dependentID(), relation.relationType() == "parent-child"); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return items, nil
 }
 
 func isBlockingDependencyType(relationType string) bool {
@@ -1020,26 +1090,25 @@ func (r bdRelation) dependencyID() string {
 	if r.DependsOnID != "" {
 		return r.DependsOnID
 	}
-	if r.ID != "" {
-		return r.ID
-	}
-	return r.IssueID
+	return r.ID
 }
 
 func (r bdRelation) dependentID() string {
-	if r.ID != "" {
-		return r.ID
-	}
 	if r.IssueID != "" {
 		return r.IssueID
 	}
-	return r.DependsOnID
+	return r.ID
 }
 
 func appendID(ids []string, id string) []string {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return ids
+	}
+	for _, existing := range ids {
+		if existing == id {
+			return ids
+		}
 	}
 	return append(ids, id)
 }

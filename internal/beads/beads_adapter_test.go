@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/beads"
@@ -30,6 +31,7 @@ func TestIntegrationAdapterContractBeadsRelationshipContracts(t *testing.T) {
 		"TaskBackendDoesNotRemoveRelatedDependency":                    checkRelatedDependencyPreserved,
 		"TaskBackendRejectsNonBlockingDependencyBeforeContentMutation": checkRejectionBeforeContentMutation,
 		"TaskBackendCreateRecordsBlockingDependencies":                 checkCreateWithBlockingDependencies,
+		"TaskBackendRejectsIncompleteExternalDependencyRead":           checkIncompleteExternalDependencyRead,
 	} {
 		t.Run(name, func(t *testing.T) { run(t, fixture) })
 	}
@@ -62,6 +64,19 @@ func checkParentRelationshipReadback(t *testing.T, fixture beadsRelationshipFixt
 	}
 	if got.Relations.ParentID != parent.ID {
 		t.Fatalf("parent relation = %q, want %q", got.Relations.ParentID, parent.ID)
+	}
+	if len(got.RelatedItems) != 1 || got.RelatedItems[0].ID != parent.ID || got.RelatedItems[0].Title != parent.Title {
+		t.Fatalf("related parent = %#v", got.RelatedItems)
+	}
+	parentDetail, err := fixture.backend.Get(context.Background(), parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !parentDetail.Relations.Complete || !reflect.DeepEqual(parentDetail.Relations.ChildIDs, []string{child.ID}) || len(parentDetail.Relations.DependentIDs) != 0 {
+		t.Fatalf("parent relationships = %#v", parentDetail.Relations)
+	}
+	if len(parentDetail.RelatedItems) != 1 || parentDetail.RelatedItems[0].ID != child.ID || parentDetail.RelatedItems[0].Relations.ParentID != parent.ID {
+		t.Fatalf("related child = %#v", parentDetail.RelatedItems)
 	}
 }
 
@@ -99,6 +114,13 @@ func checkCrossTypeBlockingDependencies(t *testing.T, fixture beadsRelationshipF
 			}
 			if !reflect.DeepEqual(updated.Relations.DependencyIDs, []string{test.dependency}) {
 				t.Fatalf("dependencies = %#v, want %#v", updated.Relations.DependencyIDs, []string{test.dependency})
+			}
+			target, err := fixture.backend.Get(context.Background(), test.dependency)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(target.Relations.DependentIDs, []string{test.itemID}) || len(target.Relations.ChildIDs) != 0 {
+				t.Fatalf("incoming relationships = %#v", target.Relations)
 			}
 		})
 	}
@@ -275,4 +297,27 @@ func initializeBeadsWorkspace(t *testing.T) (string, beads.CommandRunner) {
 		t.Fatalf("initialize Beads workspace: %v\n%s\n%s", err, result.Stdout, result.Stderr)
 	}
 	return dir, runner
+}
+
+func checkIncompleteExternalDependencyRead(t *testing.T, fixture beadsRelationshipFixture) {
+	t.Helper()
+	item, err := fixture.backend.Create(context.Background(), task.CreateOptions{
+		Title: t.Name(), Description: "Reject omitted external dependencies.", AcceptanceCriteria: "Incomplete reads return an error.", IssueType: task.IssueTypeTask,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const reference = "external:other:missing"
+	if result, err := fixture.runner.Run(fixture.dir, "dep", "add", item.ID, reference); err != nil {
+		t.Fatalf("add external dependency: %v: %s", err, result.Stderr)
+	}
+
+	got, err := fixture.backend.Get(context.Background(), item.ID)
+
+	if err == nil || !strings.Contains(err.Error(), "incomplete dependencies: source reports 1 but returned 0") {
+		t.Fatalf("Get() error = %v, want incomplete dependencies", err)
+	}
+	if !reflect.DeepEqual(got, task.Task{}) {
+		t.Fatalf("Get() = %#v, want no task on incomplete read", got)
+	}
 }

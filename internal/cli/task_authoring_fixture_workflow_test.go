@@ -51,7 +51,11 @@ func (b *ownershipAuthoringBackend) Get(_ context.Context, id string) (taskmodel
 	if !ok {
 		return taskmodel.Task{}, taskmodel.ErrNotFound
 	}
-	return item.Clone(), nil
+	items := make([]taskmodel.Task, 0, len(b.tasks))
+	for _, related := range b.tasks {
+		items = append(items, related)
+	}
+	return taskWFDetail(item, items), nil
 }
 
 func (b *ownershipAuthoringBackend) List(context.Context) ([]taskmodel.Task, error) {

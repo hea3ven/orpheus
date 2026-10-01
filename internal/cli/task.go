@@ -680,7 +680,7 @@ func queryTaskShowChildren(
 			err,
 		)
 	}
-	tasks, err := backend.List(ctx)
+	children, err := taskmodel.ReadChildren(ctx, backend, parent)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"task show %s: query direct children for parent task %s in repo %s (%s; prefix %s): %w",
@@ -693,16 +693,6 @@ func queryTaskShowChildren(
 		)
 	}
 
-	children := make([]taskmodel.Task, 0)
-	parentID := strings.TrimSpace(parent.ID)
-	for _, candidate := range tasks {
-		if strings.TrimSpace(candidate.Relations.ParentID) == parentID {
-			children = append(children, candidate)
-		}
-	}
-	sort.SliceStable(children, func(i, j int) bool {
-		return children[i].ID < children[j].ID
-	})
 	return children, nil
 }
 

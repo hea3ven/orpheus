@@ -230,7 +230,7 @@ func TestIntegrationWorkflowTaskShowEpicRendersSortedDirectChildrenFromResolvedR
 	is := assert.New(t)
 
 	repos := saveTaskWorkflowRepos(t, fixture, taskWorkflowRepoSpec("local-alpha", "Local Alpha", "la"), taskWorkflowRepoSpec("managed-beta", "Managed Beta", "mb"))
-	withWorkflowSources(t, fixture, map[string]taskSourceResult{repos["local-alpha"]: {tasks: []taskmodel.Task{
+	reads := withWorkflowSources(t, fixture, map[string]taskSourceResult{repos["local-alpha"]: {tasks: []taskmodel.Task{
 		taskWFTask("la-epic", "Plan release", taskmodel.StatusInProgress, taskmodel.IssueTypeEpic),
 		taskWFTask("la-child-z", "Closed task", taskmodel.StatusClosed, taskmodel.IssueTypeTask, taskWFParent("la-epic")),
 		taskWFTask("la-child-b", "Nested epic", taskmodel.StatusInProgress, taskmodel.IssueTypeEpic, taskWFParent("la-epic")),
@@ -240,6 +240,8 @@ func TestIntegrationWorkflowTaskShowEpicRendersSortedDirectChildrenFromResolvedR
 	stdout, stderr := fixture.mustExecute("task", "show", "la-epic")
 
 	is.Empty(stderr)
+	is.Equal(1, reads.count("get"))
+	is.Zero(reads.count("list"))
 	for _, want := range []string{"Children:", "ID: la-child-b, Status: in_progress, Type: epic, Title: Nested epic", "ID: la-child-z, Status: closed, Type: task, Title: Closed task", "Orpheus metadata:", "History:"} {
 		is.Contains(stdout, want)
 	}
@@ -283,9 +285,9 @@ type workflowChildFailureBackend struct{}
 
 func (b workflowChildFailureBackend) Get(_ context.Context, id string) (taskmodel.Task, error) {
 	if id == "op-epic" {
-		return taskWFTask("op-epic", "Epic", taskmodel.StatusOpen, taskmodel.IssueTypeEpic, taskWFChildCount(1)), nil
+		return taskWFTask("op-epic", "Epic", taskmodel.StatusOpen, taskmodel.IssueTypeEpic, taskWFChildCount(1), func(item *taskmodel.Task) { item.Relations.ChildIDs = []string{"op-child"} }), nil
 	}
-	return taskmodel.Task{}, taskmodel.ErrNotFound
+	return taskmodel.Task{}, errors.New("backend unavailable")
 }
 func (b workflowChildFailureBackend) List(context.Context) ([]taskmodel.Task, error) {
 	return nil, errors.New("backend unavailable")

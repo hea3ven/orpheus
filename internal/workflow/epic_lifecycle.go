@@ -17,7 +17,6 @@ var ErrNotEpic = errors.New("item is not an epic")
 // and close epics while retaining the task source as lifecycle authority.
 type EpicLifecycleBackend interface {
 	task.Getter
-	task.Lister
 	task.EpicStartMutator
 	task.CloseMutator
 }
@@ -90,16 +89,12 @@ func (EpicLifecycleService) Close(ctx context.Context, backend EpicLifecycleBack
 		return EpicLifecycleResult{}, fmt.Errorf("epic %s can only be closed when in progress; current status is %s", item.ID, lifecycleStatus(item.Status))
 	}
 
-	tasks, err := backend.List(ctx)
+	children, err := task.ReadChildren(ctx, backend, item)
 	if err != nil {
 		return EpicLifecycleResult{}, lifecycleFailure{
 			message: fmt.Sprintf("cannot inspect direct children of epic %s", item.ID),
 			cause:   err,
 		}
-	}
-	children, err := directEpicChildren(item.ID, tasks)
-	if err != nil {
-		return EpicLifecycleResult{}, err
 	}
 	if item.Relations.ChildCount > len(children) {
 		return EpicLifecycleResult{}, fmt.Errorf(
@@ -149,7 +144,7 @@ func verifyEpicParent(ctx context.Context, backend task.Getter, item task.Task) 
 	if parentID == "" {
 		return nil
 	}
-	parent, err := backend.Get(ctx, parentID)
+	parent, err := task.ReadRelated(ctx, backend, item, parentID)
 	if err != nil {
 		return lifecycleFailure{
 			message: fmt.Sprintf("cannot inspect parent epic %s", parentID),
@@ -178,7 +173,7 @@ func verifyBlockingDependencies(ctx context.Context, backend task.Getter, item t
 
 	active := make([]string, 0)
 	for _, dependencyID := range dependencyIDs {
-		dependency, err := backend.Get(ctx, dependencyID)
+		dependency, err := task.ReadRelated(ctx, backend, item, dependencyID)
 		if err != nil {
 			return lifecycleFailure{
 				message: fmt.Sprintf("cannot inspect blocking dependency %s", dependencyID),
@@ -193,20 +188,6 @@ func verifyBlockingDependencies(ctx context.Context, backend task.Getter, item t
 		return fmt.Errorf("epic %s cannot be started; blocking dependencies are not closed: %s", item.ID, strings.Join(active, ", "))
 	}
 	return nil
-}
-
-func directEpicChildren(epicID string, tasks []task.Task) ([]task.Task, error) {
-	children := make([]task.Task, 0)
-	for _, candidate := range tasks {
-		if strings.TrimSpace(candidate.Relations.ParentID) != epicID {
-			continue
-		}
-		if strings.TrimSpace(candidate.ID) == "" {
-			return nil, fmt.Errorf("cannot verify direct children of epic %s: a child item has no identifier", epicID)
-		}
-		children = append(children, candidate)
-	}
-	return children, nil
 }
 
 func activeChildIDs(children []task.Task) []string {
