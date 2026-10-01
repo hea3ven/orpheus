@@ -933,6 +933,7 @@ func runPipeline(ctx context.Context, opts Options, spec runSpec, scenarioDef sc
 func runPipelineWithDeps(ctx context.Context, opts Options, spec runSpec, scenarioDef scenario, setup runSetup, deps pipelineDeps) error {
 	deps = deps.withDefaults()
 	outcome, err := review.RunPipeline(review.PipelineRunOptions{
+		Execution:   review.FreshExecution(),
 		Effects:     deps.effects,
 		Context:     ctx,
 		Store:       setup.store,
@@ -960,7 +961,7 @@ func runPipelineWithDeps(ctx context.Context, opts Options, spec runSpec, scenar
 			return finishErr
 		}
 	}
-	if err != nil {
+	if err != nil && !errors.Is(err, review.ErrInvalidExecution) {
 		if finishErr := finishReview(setup, taskstate.ReviewStatusFailed); finishErr != nil {
 			return errors.Join(err, finishErr)
 		}

@@ -211,19 +211,18 @@ type ReviewContext struct {
 // ReviewAttemptContext carries the prepared pipeline and execution state for one attempt.
 type ReviewAttemptContext struct {
 	ReviewContext
-	Review                         taskstate.ReviewAttempt
-	Pipeline                       review.Pipeline
-	AgentConfig                    agent.Config
-	resumed                        bool
-	resumeAutomatedBlockerDecision bool
+	Review      taskstate.ReviewAttempt
+	Pipeline    review.Pipeline
+	AgentConfig agent.Config
+	execution   review.ExecutionRequest
 }
 
 // Resumed reports whether this execution continues a paused review.
-func (c ReviewAttemptContext) Resumed() bool { return c.resumed }
+func (c ReviewAttemptContext) Resumed() bool { return c.execution.Resumed() }
 
 // ResumesAutomatedBlockerDecision reports which paused interaction to present.
 func (c ReviewAttemptContext) ResumesAutomatedBlockerDecision() bool {
-	return c.resumeAutomatedBlockerDecision
+	return c.execution.ResumesAutomatedDecision()
 }
 
 // ReviewManualStepContext contains read-only facts needed to render a manual review step.
@@ -691,6 +690,9 @@ func autonomousFollowUpFailure(current ReviewAttemptContext, err error) (ReviewL
 }
 
 func (s ReviewLifecycleService) pipelineRunOptions(runCtx context.Context, ctx ReviewAttemptContext) (review.PipelineRunOptions, error) {
+	if err := ctx.execution.ValidateRunning(ctx.Pipeline, ctx.Review); err != nil {
+		return review.PipelineRunOptions{}, err
+	}
 	presentation, err := s.Frontend.PipelinePresentation(ctx)
 	if err != nil {
 		return review.PipelineRunOptions{}, fmt.Errorf("task run %s: %w", ctx.TaskID(), err)
@@ -731,14 +733,13 @@ func (s ReviewLifecycleService) pipelineRunOptions(runCtx context.Context, ctx R
 		RecordPrimaryChildPID: func(stepName string, pid int) error {
 			return s.RecordPrimaryReviewChildPID(ctx.RepoID(), ctx.TaskID(), ctx.Review.Attempt, stepName, pid)
 		},
-		ResumeFromStep:                 ctx.resumed,
-		ResumeAutomatedBlockerDecision: ctx.resumeAutomatedBlockerDecision,
-		PauseBeforeManual:              presentation.PauseBeforeManual,
-		RenderManualStep:               renderManualStep,
-		ConfirmManualCommand:           presentation.ConfirmManualCommand,
-		PromptManualStep:               promptManualStep,
-		PromptAutomatedBlockers:        presentation.PromptAutomatedBlockers,
-		PromptAlternateFindings:        presentation.PromptAlternateFindings,
+		Execution:               ctx.execution,
+		PauseBeforeManual:       presentation.PauseBeforeManual,
+		RenderManualStep:        renderManualStep,
+		ConfirmManualCommand:    presentation.ConfirmManualCommand,
+		PromptManualStep:        promptManualStep,
+		PromptAutomatedBlockers: presentation.PromptAutomatedBlockers,
+		PromptAlternateFindings: presentation.PromptAlternateFindings,
 	}, nil
 }
 
@@ -889,7 +890,9 @@ func (s ReviewLifecycleService) executeReviewAttempt(runCtx context.Context, ctx
 	}
 	opts, err := s.pipelineRunOptions(runCtx, ctx)
 	if err != nil {
-		_, _ = ctx.store.FinishReview(ctx.RepoID(), ctx.TaskID(), ctx.Review.Attempt, taskstate.ReviewStatusFailed)
+		if !errors.Is(err, review.ErrInvalidExecution) {
+			_, _ = ctx.store.FinishReview(ctx.RepoID(), ctx.TaskID(), ctx.Review.Attempt, taskstate.ReviewStatusFailed)
+		}
 		return "", err
 	}
 	span := logging.Start(runCtx, s.Logger, "review attempt execution",
@@ -903,7 +906,9 @@ func (s ReviewLifecycleService) executeReviewAttempt(runCtx context.Context, ctx
 	outcome, err := runner(opts)
 	if err != nil {
 		span.FinishError(runCtx, err)
-		_, _ = ctx.store.FinishReview(ctx.RepoID(), ctx.TaskID(), ctx.Review.Attempt, taskstate.ReviewStatusFailed)
+		if !errors.Is(err, review.ErrInvalidExecution) {
+			_, _ = ctx.store.FinishReview(ctx.RepoID(), ctx.TaskID(), ctx.Review.Attempt, taskstate.ReviewStatusFailed)
+		}
 		return "", err
 	}
 	span.Finish(runCtx, logging.StatusSuccess, slog.String("review_status", string(outcome.Status)))
@@ -1155,6 +1160,7 @@ func (s ReviewLifecycleService) createFreshReview(base ReviewContext, pipeline r
 		return prepared, fmt.Errorf("task run %s: start review attempt: %w", base.TaskID(), err)
 	}
 	prepared.Review = reviewAttempt
+	prepared.execution = review.FreshExecution()
 	return prepared, nil
 }
 
@@ -1265,13 +1271,27 @@ func (s ReviewLifecycleService) resumeReview(base ReviewContext, paused taskstat
 	if err != nil {
 		return prepared, err
 	}
+	request, err := review.ResumeExecution(pipeline, paused)
+	if err != nil {
+		return prepared, err
+	}
+	state, err := base.store.Load(base.RepoID(), base.TaskID())
+	if err != nil {
+		return prepared, fmt.Errorf("task run %s: load paused review: %w", base.TaskID(), err)
+	}
+	latest, ok := taskstate.LatestReview(state)
+	if !ok {
+		return prepared, fmt.Errorf("%w: no paused review attempt", review.ErrInvalidExecution)
+	}
+	if err := request.ValidateResume(pipeline, latest); err != nil {
+		return prepared, err
+	}
 	reviewAttempt, err := base.store.ResumeReview(base.RepoID(), base.TaskID(), paused.Attempt)
 	if err != nil {
 		return prepared, fmt.Errorf("task run %s: resume review attempt: %w", base.TaskID(), err)
 	}
 	prepared.Review = reviewAttempt
-	prepared.resumed = true
-	prepared.resumeAutomatedBlockerDecision = paused.Status == taskstate.ReviewStatusWaitingForAutomatedDecision
+	prepared.execution = request
 	if err := s.Frontend.ReviewResumed(prepared); err != nil {
 		return prepared, err
 	}
