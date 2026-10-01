@@ -73,14 +73,13 @@ type PipelineRunOptions struct {
 	UsageCaptureEnv       map[string]string
 	RecordPrimaryChildPID func(stepName string, pid int) error
 
-	ResumeFromStep                 bool
-	ResumeAutomatedBlockerDecision bool
-	PauseBeforeManual              bool
-	RenderManualStep               func(step Step) error
-	ConfirmManualCommand           func(step Step) (bool, error)
-	PromptManualStep               func(step ManualStep) (ManualResult, error)
-	PromptAutomatedBlockers        func(review AutomatedBlockerReview) ([]AutomatedBlockerDecision, error)
-	PromptAlternateFindings        func(AlternateReviewComparison) ([]AlternateFindingDecision, error)
+	Execution               ExecutionRequest
+	PauseBeforeManual       bool
+	RenderManualStep        func(step Step) error
+	ConfirmManualCommand    func(step Step) (bool, error)
+	PromptManualStep        func(step ManualStep) (ManualResult, error)
+	PromptAutomatedBlockers func(review AutomatedBlockerReview) ([]AutomatedBlockerDecision, error)
+	PromptAlternateFindings func(AlternateReviewComparison) ([]AlternateFindingDecision, error)
 }
 
 // PipelineOutcome records the terminal status from a pipeline execution.
@@ -190,6 +189,9 @@ var ErrAutomatedBlockerInputUnavailable = errors.New("automated blocker decision
 
 // RunPipeline executes a configured review pipeline.
 func RunPipeline(opts PipelineRunOptions) (outcome PipelineOutcome, err error) {
+	if err := validatePipelineExecution(opts); err != nil {
+		return PipelineOutcome{}, err
+	}
 	opts = normalizePipelineRunOptions(opts)
 	span := logging.Start(opts.Context, opts.Logger, "review pipeline",
 		slog.String("component", "review"),
@@ -227,20 +229,18 @@ func normalizePipelineRunOptions(opts PipelineRunOptions) PipelineRunOptions {
 
 func executePipeline(opts PipelineRunOptions) (PipelineOutcome, error) {
 	startIndex := 0
-	if opts.ResumeFromStep {
+	if opts.Execution.Resumed() {
 		var err error
-		startIndex, err = pipelineStartIndex(opts.Pipeline, opts.Attempt.Step)
+		startIndex, err = pipelineStartIndex(opts.Pipeline, opts.Execution.step)
 		if err != nil {
 			return PipelineOutcome{}, err
 		}
 	}
+	resumeDecision := opts.Execution.ResumesAutomatedDecision()
 	for stepIndex := startIndex; stepIndex < len(opts.Pipeline.Steps); {
 		step := opts.Pipeline.Steps[stepIndex]
-		resumeDecision := opts.ResumeAutomatedBlockerDecision && stepIndex == startIndex
-		if resumeDecision {
-			opts.ResumeAutomatedBlockerDecision = false
-		}
 		outcome, err := executePipelineStep(opts, step, resumeDecision)
+		resumeDecision = false
 		if err != nil {
 			return PipelineOutcome{}, err
 		}
@@ -285,10 +285,6 @@ func reviewPipelineDiagnosticStatus(ctx context.Context, outcome PipelineOutcome
 }
 
 func pipelineStartIndex(pipeline Pipeline, stepName string) (int, error) {
-	stepName = strings.TrimSpace(stepName)
-	if stepName == "" {
-		return 0, nil
-	}
 	for index, step := range pipeline.Steps {
 		if step.Name == stepName {
 			return index, nil
