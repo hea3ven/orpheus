@@ -9,7 +9,7 @@ The architecture uses a pragmatic layered structure:
 - `cmd/orpheus` and `internal/cli` form the executable and presentation layer. The CLI is also the composition root that connects concrete adapters to application services.
 - `internal/workflow`, `internal/review`, `internal/agent`, `internal/agentexec`, and `internal/doctor` implement the main task, review, agent profile, shared agent execution, and local diagnostic use cases.
 - `internal/task`, `internal/taskstate`, `internal/tasktarget`, `internal/readiness`, `internal/status`, and `internal/publication` define the core models, policies, state transitions, and operator-facing projections.
-- `internal/beads`, `internal/git`, and `internal/pullrequest` adapt external command-line tools. `internal/registry`, `internal/state`, and `internal/logging` provide local infrastructure.
+- `internal/tasksource/beads`, `internal/git`, and `internal/pullrequest` adapt external command-line tools. `internal/registry`, `internal/state`, and `internal/logging` provide local infrastructure.
 
 State ownership is intentionally split. The configured task backend, currently Beads, is authoritative for task lifecycle data such as task identity, status, relations, and evolving Orpheus Git facts stored in task metadata. Orpheus owns the repository registry and per-task execution history, including the immutable work-directory selection, agent runs, completions, reviews, finalization facts, and audit events. Orpheus persists its state as human-readable YAML below the XDG config and data roots.
 
@@ -18,7 +18,7 @@ The main runtime integrations are the `bd`, `git`, and `gh` executables, configu
 ## Main Runtime Flow
 
 1. `internal/cli` resolves XDG paths and loads the registered repository catalog.
-2. A task ID is mapped to a repository and Beads workspace through `internal/task` and `internal/registry`; `internal/beads` supplies the task data.
+2. A task ID is mapped to a repository and Beads workspace through `internal/task` and `internal/registry`; `internal/tasksource/beads` supplies the task data.
 3. `internal/workflow` validates readiness, selects an immutable Work Directory, prepares it through `internal/git`, updates backend Git facts, and records a run in `internal/taskstate`. Worktree dispatch creates the deterministic Task Branch immediately; repository-root dispatch starts clean on the default branch and materializes that Task Branch only after review for pull-request publication.
 4. `internal/agent` resolves a configured profile and renders its validated context; `internal/agentexec` launches the attached process; `internal/agent` records completion and Codex usage facts.
 5. `internal/review` executes the selected read-only review pipeline, launches review-agent steps through `internal/agentexec`, and persists steps and findings in `internal/taskstate`.
@@ -37,7 +37,7 @@ flowchart TD
 
     cli --> agent["internal/agent"]
     cli --> agentexec["internal/agentexec"]
-    cli --> beads["internal/beads"]
+    cli --> beads["internal/tasksource/beads"]
     cli --> doctor["internal/doctor"]
     cli --> git["internal/git"]
     cli --> logging["internal/logging"]
@@ -96,7 +96,7 @@ flowchart TD
 
 The graph is acyclic. The leaf packages with no imports of other project packages are `internal/agentexec`, `internal/logging`, `internal/publication`, `internal/pullrequest`, `internal/state`, and `internal/task`.
 
-In dependency-direction terms, `internal/state`, `internal/task`, `internal/publication`, `internal/pullrequest`, `internal/logging`, and `internal/agentexec` provide lower-level contracts or infrastructure. `internal/beads`, `internal/git`, and `internal/registry` adapt external or local resources into those contracts. `internal/taskstate`, `internal/tasktarget`, and `internal/readiness` own persisted execution state and shared policies, including canonical execution-target identity and reconciliation. `internal/agent`, `internal/doctor`, `internal/review`, `internal/status`, and `internal/workflow` are application packages that combine lower-level concepts, while `internal/cli` is the composition and presentation package.
+In dependency-direction terms, `internal/state`, `internal/task`, `internal/publication`, `internal/pullrequest`, `internal/logging`, and `internal/agentexec` provide lower-level contracts or infrastructure. `internal/tasksource/beads`, `internal/git`, and `internal/registry` adapt external or local resources into those contracts. `internal/taskstate`, `internal/tasktarget`, and `internal/readiness` own persisted execution state and shared policies, including canonical execution-target identity and reconciliation. `internal/agent`, `internal/doctor`, `internal/review`, `internal/status`, and `internal/workflow` are application packages that combine lower-level concepts, while `internal/cli` is the composition and presentation package.
 
 ## Package Responsibilities
 
@@ -116,7 +116,9 @@ In dependency-direction terms, `internal/state`, `internal/task`, `internal/publ
 - Runs resolved commands as attached child processes with caller-supplied stdio, environment, execution directory, and cancellation context.
 - Classifies process-start failures separately from runtime failures without importing profile, CLI, workflow, or review packages.
 
-### `internal/beads`
+### `internal/tasksource/beads`
+
+Task-source implementations live under `internal/tasksource/`. The parent directory is not a Go package; shared models and contracts remain in `internal/task`.
 
 - Adapts the `bd` CLI to Orpheus' backend-neutral task contracts, including task reads, task creation, dispatch metadata updates, pull-request URL updates, closure, JSON translation, and idempotent mutation checks.
 - Discovers and validates repository-local Beads state or initializes an isolated Orpheus-managed Beads workspace while sanitizing environment variables and producing actionable command diagnostics.
@@ -210,7 +212,7 @@ At pipeline entry, review validates the request against both the supplied attemp
 
 A completed repair after a resumed automated blocker decision returns to step one within the same task run command. A repair without agent completion stops before another review or publication. This separation does not change the YAML schema, operator decisions, selected implementer, repair budget, or publication rules.
 
-Beads is the first task source, not the permanent task model. Core task contracts remain source-neutral. Source-specific identifiers, workspaces, commands, and translation belong in adapters such as `internal/beads` and in registry configuration that selects and configures those adapters.
+Beads is the first task source, not the permanent task model. Core task contracts remain source-neutral. Source-specific identifiers, workspaces, commands, and translation belong in adapters such as `internal/tasksource/beads` and in registry configuration that selects and configures those adapters.
 
 `registry.Repo` is the persisted repository schema. The registry boundary should eventually translate it into one validated application repository projection instead of requiring CLI and agent code to keep persisted and application models synchronized.
 

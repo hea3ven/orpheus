@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hea3ven/orpheus/internal/beads"
+	"github.com/hea3ven/orpheus/internal/tasksource/beads"
 	"github.com/hea3ven/orpheus/internal/testguard"
 	"github.com/hea3ven/orpheus/internal/testutil"
 )

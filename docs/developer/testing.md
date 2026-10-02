@@ -123,6 +123,9 @@ usage.
 
 ## Real Beads relationship contracts
 
+Beads unit and adapter-contract tests live with the implementation in
+`internal/tasksource/beads`. Cross-package workflows remain in `internal/cli`.
+
 `TestIntegrationAdapterContractBeadsRelationshipContracts` shares one initialized workspace
 across independent cases. Each case creates and checks its own task IDs, with
 subtest-prefixed titles and no whole-database assertions. Cases run serially in
@@ -133,7 +136,7 @@ focused contracts rather than adding more database initializations.
 To run one case alone:
 
 ```bash
-go test -tags=integration ./internal/beads -run '^TestIntegrationAdapterContractBeadsRelationshipContracts$/^TaskBackendCreateRecordsBlockingDependencies$'
+go test -tags=integration ./internal/tasksource/beads -run '^TestIntegrationAdapterContractBeadsRelationshipContracts$/^TaskBackendCreateRecordsBlockingDependencies$'
 ```
 
 ## Structural membership
@@ -241,7 +244,7 @@ make coverage-audit COVERAGE_AUDIT_ARGS="-audit-package ./internal/git -audit-ru
 Repeat `-audit-package` for more than one package. For example:
 
 ```bash
-make coverage-audit COVERAGE_AUDIT_ARGS="-audit-package ./internal/git -audit-package ./internal/beads -audit-run 'Publication|BeadsRelationship'"
+make coverage-audit COVERAGE_AUDIT_ARGS="-audit-package ./internal/git -audit-package ./internal/tasksource/beads -audit-run 'Publication|BeadsRelationship'"
 ```
 
 The unfiltered full-suite audit remains explicit:
