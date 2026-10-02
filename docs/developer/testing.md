@@ -88,9 +88,11 @@ A controlled executable is not sufficient justification for an adapter label. In
 
 When one file owns one category, use a descriptive suffix such as `_workflow_test.go`, `_adapter_test.go`, or `_binary_e2e_test.go`. The top-level category prefix remains the quickest way to identify mixed legacy files and select a family with `-run`.
 
-See [the CLI-entry migration map](../performance/op-sc7-8-cli-workflows.md) for consolidated journeys and owner-unit splits.
-
-See [the integration curation record](../performance/op-sc7-8-integration-curation.md) for package ownership, retained boundary reasons, and the removed helper assertion map.
+Recording-runner unit tests can verify adapter command construction and rejection
+decisions without starting Git. Keep real Git contracts for behavior that depends
+on refs, worktrees, merges, pushes, or patch restoration. A coverage overlap alone
+is not a reason to remove a boundary test; compare the assertions and failures it
+detects.
 
 ## Memory-backed application workflows
 
@@ -103,22 +105,21 @@ They remain integration tests because they exercise cross-package behavior.
 Workflows that reach review must use the real `review.RunPipeline`, not supply
 terminal pipeline outcomes. Keep real child-process
 streaming, cancellation, PID, environment and Git snapshot contracts separate.
-See [review and repair migration evidence](../performance/op-sc7-5-review-workflow-evidence.md)
-for the assertion map and measurements.
 
 Completion and publication journeys also use the memory-backed application.
 They assert operator output, completion and finalization facts, task closure,
 PR content, and retry outcomes through semantic task, Git, and PR collaborators.
 Real commits, pushed refs, upstream tracking, and failed pushes have focused Git
-contracts. See [finalization and publication migration evidence](../performance/op-sc7-6-finalization-evidence.md)
-for the assertion map, contract owners, and before/after measurements.
+contracts.
 
 Pull-request sync and conflict recovery use the same application fixture. Git
 fakes track branch heads, conflicts, pending merges, pushes, and rollback;
 PR fakes track identity, lifecycle state, and provider failures. Keep durable
 checkpoint/ref, local merge, separate push, rollback, and GH argument/parsing
-contracts at the adapter boundary. See [sync migration evidence](../performance/op-sc7-7-sync-evidence.md)
-for the assertion map, retained contracts, and measured replacements.
+contracts at the adapter boundary.
+
+See [CLI test isolation](../../internal/cli/TESTING.md) for constructor and fixture
+usage.
 
 ## Real Beads relationship contracts
 
@@ -129,8 +130,7 @@ map iteration order. The destructive schema-repair contract owns a separate
 workspace. Keep environment sanitization and command translation in their
 focused contracts rather than adding more database initializations.
 
-See [the Beads contract measurements](../performance/op-sc7-3-beads-contract-evidence.md)
-for the assertion map, timings and subprocess counts. To run one case alone:
+To run one case alone:
 
 ```bash
 go test -tags=integration ./internal/beads -run '^TestIntegrationAdapterContractBeadsRelationshipContracts$/^TaskBackendCreateRecordsBlockingDependencies$'
@@ -185,10 +185,7 @@ remains a compatibility alias.
 When comparing scheduling modes, use the same quality environment as well as
 identical selectors and coverage flags. In particular,
 `ORPHEUS_COVERAGE_RUN=1` disables incidental Linux launcher-ancestry detection.
-Omitting it changes CLI coverage without changing test selection. The historical
-21-statement difference came from that detection path, not package scheduling.
-See [scheduling evidence](../performance/op-sc7-2-scheduling-evidence.md) for
-controlled profiles and repeated comparisons.
+Omitting it changes CLI coverage without changing test selection.
 
 ## Updating the policy
 
@@ -212,7 +209,7 @@ committing it.
 
 ## Pull-request quality gate
 
-[`.github/workflows/quality-gate.yml`](../.github/workflows/quality-gate.yml)
+[`.github/workflows/quality-gate.yml`](../../.github/workflows/quality-gate.yml)
 runs for every pull request against GitHub's synthetic merge commit. The job
 runs `make quality` once, then runs lint and build without rerunning tests. The
 checked-in `.quality.yml` from that merge commit is the only quality policy.

@@ -37,19 +37,24 @@ and subprocess diagnostics belong in `internal/beads`; process launch contracts
 belong in `internal/agentexec`. Initial dispatch supplies usage-capture results
 and verifies their persistence. Session-file parsing stays in `internal/agent`.
 
-Deferred review, repair-loop, publication, finalization, and unrelated CLI tests
-still use the private invocation fixture. That
-fixture scopes state paths, external-command PATH, and attached-agent environment
-to each invocation without changing package wiring. Migrate these tests to the
-public constructor when changing their fixtures; do not extend private access to
-new workflow families. Focused private-helper unit tests may remain in
-`package cli` in `*_internal_test.go` files.
+Review, repair, completion, publication, and sync workflows also use the public
+constructor and memory-backed stores. They run the real review pipeline and
+workflow services with semantic task, Git, PR, command, and agent collaborators.
+Do not substitute a terminal pipeline outcome for the real review path.
+Focused private-helper unit tests remain in `package cli` in
+`*_internal_test.go` files.
+
+See [testing guidance](../../docs/developer/testing.md) for lane membership and
+owner-local adapter contracts.
 
 ## Process-global boundaries
 
-Run independent workflows in parallel unless they exercise process-global state:
+Quality retains `-parallel=1` until the remaining intra-package isolation work
+is complete. When reviewing parallel safety, distinguish invocation-scoped values
+from process-global changes:
 
-- Public environment-resolution contracts use `t.Setenv`.
-- Agent-context and task-location tests that call `t.Chdir` remain serial.
-- Workflow fixtures remain serial because they set process `PATH=/nonexistent` as
-  an additional guard against accidental executable launches.
+- The shared workflow fixture supplies `PATH=/nonexistent` through
+  `CommandOptions.Environment`; this is not a process-wide PATH change.
+- Tests using `t.Setenv` or `t.Chdir` remain serial.
+- Real process behavior belongs in adapter or binary contracts, not workflow
+  fixtures.

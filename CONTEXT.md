@@ -9,7 +9,7 @@ The engineer who chooses work, reviews outcomes, decides when work is safe to pu
 _Avoid_: User, developer, driver
 
 **Agent**:
-An executable coding-agent instance launched by Orpheus to perform focused implementation work for one task; it runs through a harness and may use a configured model.
+A coding-agent instance launched by Orpheus for task implementation, review, or sync-conflict resolution; it runs through a harness and may use a configured model.
 _Avoid_: Worker, bot, provider, harness
 
 **Harness**:
@@ -61,7 +61,7 @@ An agent execution focused on implementing code changes for a task.
 _Avoid_: Session, job, invocation, review step
 
 **Agent Execution**:
-One recorded execution of an agent for usage and timing statistics, covering runs and review-agent steps.
+One recorded execution of an agent for usage and timing statistics, covering implementation runs, review-agent steps, and sync-conflict resolution.
 _Avoid_: Provider execution, harness run
 
 **Session**:
@@ -77,7 +77,7 @@ The measured or estimated resource use of an agent execution, such as tokens, ac
 _Avoid_: Billing, exact cost
 
 **Estimated Cost**:
-An API-equivalent cost estimate calculated from recorded token usage and explicit pricing metadata; it is not guaranteed to match subscription billing or vendor invoices.
+An API-equivalent estimate calculated from recorded usage and pricing metadata, or a cost estimate reported by the harness. Neither is guaranteed to match subscription billing or vendor invoices.
 _Avoid_: Exact cost, billed cost
 
 **Unknown Usage**:
@@ -85,7 +85,7 @@ An agent usage result where Orpheus cannot reliably determine usage values and r
 _Avoid_: Zero usage, missing data, harness failure, session failure
 
 **Active Agent Working Time**:
-The elapsed time an agent execution is actively running.
+The elapsed time while an agent process is running, including any interactive waits within that execution. It is not a measure of model compute time.
 _Avoid_: Full task time, implementation lifecycle time, wall-clock task time
 
 **Full Task Time**:
@@ -117,11 +117,15 @@ The deterministic feature branch that carries a task's reviewed changes through 
 _Avoid_: Work branch, feature branch, implementation branch
 
 **Integration Flow**:
-The way reviewed task work is integrated: through a pull request or by merging the task branch into the registered default branch. It is resolved after review from configured defaults and any task-specific choice made during manual review, independently of the work directory.
+The way reviewed task work is integrated: through a pull request or by merging the task branch into the integration destination. Configured defaults and any task-specific manual-review choice determine it independently of the work directory.
 _Avoid_: Task target, publishing target, branch mode, review mode
 
+**Integration Destination**:
+The branch that receives reviewed task work, either as the pull-request base or the destination of a direct merge. It defaults to the repository's registered default branch unless the operator selects another destination during manual review.
+_Avoid_: Work directory, task branch, integration flow
+
 **Task Review**:
-The operator-side review gate after agent completion and before publication or finalization; a passed task review authorizes finalization or publication.
+The configured review gate after agent completion and before publication or finalization, using automated steps, manual decisions, or both. A passed task review authorizes finalization or publication.
 _Avoid_: Local review, PR review, code review, task approval, approval
 
 **Review Finding**:
@@ -129,7 +133,7 @@ An issue found during task review that may block publication or finalization, or
 _Avoid_: PR comment, task, bug
 
 **Publication**:
-The act of pushing reviewed work out of the task review boundary, either by pushing a task branch and creating or recovering a pull request, or by pushing the registered default branch.
+The act of pushing reviewed work out of the task review boundary, either by pushing a task branch and creating or recovering a pull request, or by pushing the integration destination after a direct merge.
 _Avoid_: Finalization, sync, release, deploy
 
 **Finalization**:
@@ -141,7 +145,7 @@ The external review object for feature-branch work after task review has passed.
 _Avoid_: Review, publication, merge request
 
 **Sync**:
-The reconciliation step where Orpheus observes recorded external review state and updates the task source when the outcome changes.
+The reconciliation step for published tasks, combining external pull-request state with task-source updates and integration-destination changes to open task branches. It does not create new pull requests.
 _Avoid_: Publication, polling, PR creation
 
 ## Status and Policy
@@ -167,7 +171,7 @@ A status projection for tasks that require operator correction before Orpheus ca
 _Avoid_: Error, repository failure, blocked
 
 **Publication Policy**:
-A per-repository rule set that guides agent summaries and determines how completion summaries become commit subjects or pull-request titles.
+The rules that guide agent summaries and determine how completion summaries become commit subjects or pull-request titles. Repository overrides refine machine-wide defaults.
 _Avoid_: Repository publication policy, commit template, PR template, Jira policy
 
 **Tracking Reference**:

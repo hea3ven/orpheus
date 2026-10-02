@@ -1,13 +1,16 @@
 ---
 name: architecture-review-planning
-description: Run a recurring repository architecture review from current documentation and code through decision-making and approved Beads planning. Use this skill whenever the user asks to repeat, refresh, continue, document, or plan an architecture review, assess package responsibilities or dependencies, compare architecture progress with a prior review, or turn architecture findings into Beads. Always begin by finding the latest prior architecture review and verifying progress against current code, docs, and Beads.
+description: Run a recurring repository architecture review from current documentation and code through decision-making and approved Beads planning. Use this skill whenever the user asks to repeat, refresh, continue, document, or plan an architecture review, assess package responsibilities or dependencies, compare architecture progress with a prior review, or turn architecture findings into Beads. Begin with the latest review report on the docs branch, verify progress against current code and Beads, update docs/developer/architecture.md on main, and write a new dated review report on docs.
 ---
 
 # Architecture Review And Planning
 
-Run a rigorous, evidence-based architecture review and convert approved findings into durable documentation and actionable Beads. Treat the repository's implemented code as the source of truth, current architecture documentation as the intended description, and dated review documents as historical baselines.
+Run an evidence-based architecture review and convert approved findings into durable documentation and actionable Beads. Treat implemented code as the source of truth. Maintain two distinct artifacts:
 
-Do not skip the prior-review progress assessment. A recurring review must explain what changed since the last review before proposing new work.
+- `docs/developer/architecture.md` on `main` describes the implemented architecture and durable design decisions.
+- `docs/arch-review/YYYY-MM-DD-architecture-review-<phase>.md` on `docs` records each review's findings, decisions, Beads, validation, and next-review checklist. It is a review and planning record, not a copy of the architecture document.
+
+Each review starts by checking progress against the previous report. Read the archive for that comparison without treating its older descriptions as current specifications.
 
 ## Hard Boundaries
 
@@ -17,40 +20,35 @@ Do not skip the prior-review progress assessment. A recurring review must explai
 - Do not create, update, close, defer, reprioritize, or add dependencies to a Bead until the user explicitly approves the exact operation and content.
 - Keep parent-child links structural. Add a sequencing dependency only when later work cannot be implemented or validated first.
 - If A must complete before B, run `bd dep add B A`, then verify from B with `bd show B --json` that A has `dependency_type: "blocks"`.
-- Do not put planning tables or transient status in the canonical architecture document. Keep those in a dated architecture-review report.
+- Keep verified architecture and durable decisions in the architecture reference on `main`. Keep findings, planning tables, Bead lists, and review-specific status in the dated report on `docs`.
+- Use separate worktrees for the two outputs. Do not switch the operator's current checkout, merge source branches into the archive, or overwrite existing reports. Commits and pushes still require explicit approval.
+- Orpheus is an unreleased, single-user MVP. Do not introduce backward-compatibility layers, migrations, or legacy support without an explicit requirement.
 - Prefer small, reversible package moves over rewrites or pattern adoption without a concrete driver.
 - Do not treat file size, task status, or documentation claims alone as evidence that architecture is correct.
 
 ## Workflow
 
-### 1. Review The Previous Architecture Review
+### 1. Review the previous architecture review
 
-This is always the first substantive step.
+This is the first substantive step after reading repository instructions.
 
-1. Find dated reports under `docs/arch-review/` and select the newest review that predates the current review run, including an earlier report from the same date when applicable. If none exists, state that this is the baseline review.
-2. Read the complete prior report, especially:
-   - architecture baseline;
-   - findings and decisions;
-   - proposed tasks and affected packages;
-   - Bead IDs and dependency decisions;
-   - deferred questions and the next-review checklist.
-3. Inspect every referenced Bead directly with `bd show <id> --json`. Do not infer progress from a backlog summary.
-4. Verify the implementation in current code, tests, package imports, and documentation. A closed Bead is not sufficient evidence, and an open Bead may contain partial implementation.
-5. Classify each prior item:
-   - **Implemented**: intended ownership and boundary are present and tested.
-   - **Partially implemented**: meaningful progress exists, but acceptance or dependency direction is incomplete.
-   - **Not started**: intended architecture is not present.
-   - **Superseded**: another decision or implementation replaced the recommendation.
-   - **No longer valid**: assumptions changed and the recommendation should be retired.
-6. Record evidence and explain architectural impact. Identify stale Beads or docs, but do not modify them without approval.
-7. Summarize progress to the user before beginning the new review.
+1. Find reports with `git ls-tree -r --name-only refs/heads/docs -- docs/arch-review`. Select the newest report that predates this review, including an earlier report from the same date. If the branch is unavailable, ask the operator for access rather than silently skipping the comparison. If the branch contains no report, state that this is the baseline review.
+2. Read the complete report with `git show refs/heads/docs:<report-path>`. Include its findings, decisions, affected packages, Bead IDs, dependencies, deferred questions, and next-review checklist.
+3. Inspect referenced Beads directly with `bd show <id> --json`. Do not infer progress from a backlog summary or assume that a closed Bead proves the intended boundary exists.
+4. Verify each prior item against current code, tests, imports, and `docs/developer/architecture.md`. Classify it as implemented, partially implemented, not started, superseded, or no longer valid, with evidence and architectural impact.
+5. Summarize progress before proposing new work. Identify stale Beads without modifying them unless the user approves the exact operation.
 
-### 2. Establish The Current Baseline
+Use `git worktree list --porcelain` to locate the `main` and `docs` checkouts, not
+assumed directory names. If the archive worktree contains a newer uncommitted
+report, ask whether it should be the comparison baseline instead of silently
+ignoring it.
+
+### 2. Inspect the current implementation
 
 Read:
 
 - root and scoped `AGENTS.md` files;
-- `docs/ARCHITECTURE.md` and relevant ADRs, PRDs, retrospectives, and workflow docs;
+- `docs/developer/architecture.md`, `CONTEXT.md`, and relevant current guides from `docs/README.md`;
 - repository entry points and package list;
 - production import relationships;
 - package-level tests around important boundaries;
@@ -157,16 +155,30 @@ If Beads cannot represent an approved relationship, stop, explain the constraint
 
 ### 7. Update Documentation
 
-Create a new point-in-time report under:
+Produce both outputs, following the instructions in their respective worktrees:
 
-`docs/arch-review/YYYY-MM-DD-architecture-review-<phase>.md`
+1. Update `docs/developer/architecture.md` in the `main` worktree with verified
+   implementation changes and agreed durable design decisions. Keep it undated,
+   preserve unreviewed sections, and exclude task plans and review-specific status.
+2. Create a new `docs/arch-review/YYYY-MM-DD-architecture-review-<phase>.md` in
+   the `docs` worktree. Use a distinct phase or suffix for multiple reviews on the
+   same date; never overwrite an earlier report.
 
-Follow scoped documentation instructions. Never overwrite an older dated report.
+Confirm each worktree's branch and status before writing, and preserve unrelated
+changes. If either worktree is unavailable, ask the operator to provide it or
+approve creating one. If the reviewed code is on another branch, agree on how to
+apply the canonical update to `main`; do not describe unmerged changes as already
+implemented there. Never switch the active checkout or merge code into `docs` to
+store a report.
 
-Include:
+Writing the report is part of the requested review. Leave both outputs uncommitted
+unless the operator explicitly requests commits or pushes. Report their paths and
+pending status so the archive report can be committed before the next review.
 
-1. purpose, scope, date, branch or revision, and method;
-2. progress assessment against the previous review;
+Include in the dated report:
+
+1. purpose, scope, date, reviewed branch and revision, and method;
+2. previous report path/revision and evidence-backed progress assessment;
 3. current architecture and dependency/data-flow summary;
 4. strengths worth preserving;
 5. findings ordered by severity with evidence and decisions;
@@ -178,19 +190,11 @@ Include:
 11. validation performed and limitations;
 12. a concrete checklist for the next architecture review.
 
-Update `docs/ARCHITECTURE.md` only when current implemented architecture or a durable evolution decision changed. Do not add a roadmap, status table, Bead list, or dated planning narrative to it.
-
 ### 8. Validate And Report
 
-For code or documentation changes, run the repository-required validation commands. For this repository that means:
+Follow the validation scope in `AGENTS.md`. Run `make check` when the review changes code, tests, dependencies, executable scripts, or build/test configuration. Do not run tests, quality checks, formatting, linting, or builds for documentation-only edits or read-only analysis unless explicitly requested.
 
-```bash
-make fmt
-make test
-make lint
-```
-
-Also run focused checks appropriate to the review artifacts, such as skill validation, Markdown inspection, import-graph checks, and `git diff --check`.
+For documentation changes, check only the affected documents, such as links and `git diff --check`. Inspect imports when needed as review evidence, not as a reason to run the validation suite.
 
 Finish with:
 
@@ -198,7 +202,8 @@ Finish with:
 - highest-impact current findings;
 - decisions made;
 - Bead operations and verified dependencies;
-- files changed;
+- architecture reference and dated report paths, their branches, and uncommitted status;
+- other files changed;
 - checks run and any limitations.
 
 ## Review Quality Checks
@@ -211,5 +216,7 @@ Before completing the work, verify:
 - No task was created without exact approval.
 - Task dependencies use the blocked-to-prerequisite direction.
 - Acceptance criteria test outcomes and boundaries, not arbitrary line counts.
-- The dated report separates current implementation from proposed architecture.
-- The next review can identify all Beads and decisions without reconstructing the conversation.
+- The maintained architecture document describes verified implementation and agreed durable decisions, not unimplemented proposals.
+- The new report on `docs` separates verified implementation from proposed work and records the prior-review progress assessment.
+- The next review can identify all findings, Beads, decisions, and follow-up checks from that report.
+- The architecture reference remains on `main`; dated review reports remain on `docs`.

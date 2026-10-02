@@ -1,8 +1,16 @@
 # Agent Instructions
 
+## Project stage and documentation
+
+Orpheus is an unreleased MVP used only by its author. It has not been released or published. Do not add backward-compatibility layers, legacy APIs, migrations, or deprecation machinery unless explicitly requested. Prefer the current design over preserving obsolete behavior for hypothetical users. This does not permit discarding operator data; call out any required local state changes before applying them.
+
+Use `docs/README.md` to find current user and developer guides, and `CONTEXT.md` for domain vocabulary. Historical plans, reviews, and validation reports live on the `docs` archive branch and are not routine implementation context. Keep current documentation concise and undated. `docs/developer/architecture.md` is maintained through architecture reviews, not general documentation cleanup.
+
 ## Validation
 
-Run `make check` for complete validation at the end of a change. It runs formatting, the unit lane once, the integration lane once, linting, and a CLI build.
+Run `make check` after changes to production code, tests, dependencies, executable scripts, or build/test configuration. It runs formatting, the unit lane once, the integration lane once, linting, and a CLI build.
+
+Do not run formatting, tests, quality checks, linting, or builds for documentation-only changes, including prompts and agent instructions. Use only relevant document checks, such as link verification and `git diff --check`. Read-only analysis or review requires no validation run unless the user explicitly requests one. Base this decision on changes made for the current task, not unrelated pre-existing changes in the checkout.
 
 Quality runs the lanes in sequence and allows Go's default package concurrency within each lane. Keep `-parallel=1` until the final intra-package isolation task. Reports distinguish command wall time, the developer's wait, from selected package work, the sum of elapsed times for packages that ran selected tests. `.quality.yml` governs selected work and package timings, not wall time. Policy updates require complete comparable samples with the same scheduling; do not mix serial controls with concurrent samples.
 
@@ -12,9 +20,9 @@ Integration test sources use `//go:build integration`. Their top-level names beg
 
 Classify integration tests by what they prove. Workflow integration is a fast, almost-E2E journey through the in-process CLI. Put it in `internal/cli`, use `package cli_test` and `*_workflow_test.go`, and reuse the shared fixtures. Run real routing, services, review pipelines, and memory-backed stores, replacing only external effects with semantic collaborators. Do not keep a duplicate service-level workflow layer; `TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview` is the reference journey. Adapter contracts live in `*_adapter_test.go` files and call the owning package's concrete filesystem, Git, Beads, gh, or child-process adapter directly. Do not invoke the CLI or a higher-level service to retest a downstream adapter. Supporting imports and domain values do not change ownership; the behavior being asserted does. For example, `TestIntegrationAdapterContractAttachedLauncherStreamsBeforeExitAndReapsCanceledChild` owns process streaming and reaping. Binary E2E compiles and starts a binary only when compilation, startup, exit handling, packaging, or recursive process behavior matters; `TestIntegrationBinaryE2ETaskRunUsesSeparateTaskProposalSelection` owns recursive CLI calls. During review, challenge every real filesystem and process dependency. If the assertions do not prove that boundary, replace it with an injected collaborator or a unit test. Temporary disk use alone does not make a test an integration.
 
-Both lanes are network-free, credential-free, isolated from operator data, and prevent real model agents. Live evaluations such as `orpheus eval review-context` are not routine test validation and must never be invoked implicitly. See `docs/testing.md` for the full guide, including focused on-demand coverage audits.
+Both lanes are network-free, credential-free, isolated from operator data, and prevent real model agents. Live evaluations such as `orpheus eval review-context` are not routine test validation and must never be invoked implicitly. See `docs/developer/testing.md` for the full guide, including focused on-demand coverage audits.
 
-After making changes, run `make quality`. If it reports `policy_update_required` or an intentional bound violation, run `make quality-policy-update` and review the `.quality.yml` diff.
+`make check` already runs `make quality`; do not run both separately as routine validation. If quality reports `policy_update_required` or an intentional bound violation, run `make quality-policy-update` and review the `.quality.yml` diff.
 When merging, resolve `.quality.yml` from the reviewed policy changes rather than combining measured values. Run `make quality-policy-update` only when the merged result requires it.
 
 ## Task Tracking and Follow-Up

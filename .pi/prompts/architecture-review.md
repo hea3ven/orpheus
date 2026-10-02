@@ -24,7 +24,10 @@ This is **not** a general bug, style, lint, or security review. Mention implemen
 ## Review Workflow
 
 1. **Orient before judging**
-   - Read relevant project guidance, README/docs, existing architecture notes/ADRs, package layout, entry points, and tests around the scope.
+   - Read `AGENTS.md`, `CONTEXT.md`, `docs/developer/architecture.md`, relevant current guides from `docs/README.md`, package layout, entry points, and tests around the scope.
+   - Start with the latest dated review under `docs/arch-review/` on the `docs` branch. Read it without switching checkouts and verify its findings and referenced Beads against current code. Summarize progress before proposing new work.
+   - Read `.agent/skills/architecture-review-planning/SKILL.md` for previous-report selection, progress assessment, and the two documentation outputs. The report is historical evidence; `docs/developer/architecture.md` on `main` is the maintained architecture reference.
+   - Orpheus is an unreleased, single-user MVP. Do not assume backward-compatibility requirements or recommend legacy support without an explicit need.
    - Summarize the current architecture in 3-6 bullets before listing problems.
    - Infer the architectural drivers from the code and docs: product capability, team maintainability, data consistency, integration points, operational constraints, and expected change axes.
 
@@ -48,6 +51,11 @@ This is **not** a general bug, style, lint, or security review. Mention implemen
    - Prefer small, reversible improvements over rewrites.
    - For significant changes, present at least two options with trade-offs.
 
+5. **Update both documentation outputs**
+   - Update `docs/developer/architecture.md` in the `main` worktree with verified implementation changes and agreed durable design decisions. Keep it undated and leave unreviewed sections unchanged.
+   - Add a new dated report under `docs/arch-review/` in the `docs` worktree, following the skill's report and worktree rules. Record previous-review progress, findings, decisions, any approved Bead operations, validation, and a next-review checklist there, not in the architecture reference.
+   - Leave both outputs uncommitted unless commits or pushes are explicitly requested. Do not switch the operator's checkout or merge source branches into the archive.
+
 ## What to Avoid
 
 - Do not nitpick formatting, naming, local control flow, or small bugs unless they reveal an architectural smell.
@@ -64,6 +72,10 @@ Use this structure:
 ## Scope reviewed
 - What was reviewed and why this scope was selected
 - Important adjacent areas not reviewed
+
+## Previous-review progress
+- Prior report used and implementation evidence for its findings
+- Implemented, partial, pending, superseded, or no-longer-valid items
 
 ## Architecture summary
 - 3-6 bullets describing the current design and main dependency/data-flow paths
@@ -85,6 +97,10 @@ Options: two or more options when the remediation is substantial
 ## Suggested next steps
 - Immediate architectural fixes, if any
 - Follow-up investigations or ADRs worth considering
+
+## Documentation and validation
+- Architecture reference on main and new review report on docs, with paths and pending status
+- Checks performed and limitations
 ```
 
 Severity guide:
