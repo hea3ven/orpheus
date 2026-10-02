@@ -44,13 +44,17 @@ For scripts, use JSON rather than parsing tables:
 ```sh
 orpheus status --full --json
 orpheus task list --repo my-repo --type task --json
+orpheus task show op-123 --json
 ```
 
-Each writes a deterministic array with semantic values, not truncated labels.
-Empty output is `[]`. Task entries include repository/task identity, fields,
-projected status, detail, optional epic progress, and timestamps. Status may also
-include `kind: "repo_failure"` entries. On partial repository failures, stdout
-remains valid JSON, diagnostics go to stderr, and the command exits nonzero.
+List and status return arrays; show returns one task with its content and
+relationships, without execution or review history. All use projected status.
+
+On read failures, commands exit nonzero and print diagnostics to stderr. List
+and status retain successful results; show writes no JSON. Blocked and
+needs-attention tasks remain valid results.
+
+Agents and tooling can use the [task JSON reference](../developer/task-json.md).
 
 ## Create and edit plans
 

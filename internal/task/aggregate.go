@@ -115,6 +115,18 @@ func (a Aggregator) FilteredSnapshot(ctx context.Context, filter ListFilter) (Fi
 	return result, nil
 }
 
+// SnapshotForTask completes the relationship context for one already-read task.
+// It uses the same context reads as filtered inventory without listing unrelated
+// tasks or repositories. Read failures remain separate from policy diagnostics.
+func (a Aggregator) SnapshotForTask(ctx context.Context, candidate RepoTask) SnapshotResult {
+	snapshot := SnapshotResult{Repositories: []RepositorySnapshot{{
+		Repository: candidate.Repository,
+		Tasks:      []Task{candidate.Task.Clone()},
+	}}}
+	a.completeFilteredSnapshotContext(ctx, &snapshot, []RepoTask{candidate})
+	return snapshot
+}
+
 // Snapshot reads visible task-backend snapshots for local status projection.
 //
 // Reads from distinct backend workspaces run concurrently. Sources that resolve

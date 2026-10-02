@@ -107,14 +107,16 @@ func newTaskListCommand(opts *rootOptions) *cobra.Command {
 }
 
 func newTaskShowCommand(opts *rootOptions) *cobra.Command {
+	var jsonOutput bool
 	cmd := &cobra.Command{
 		Use:   "show <task-id>",
 		Short: "Show an item from its registered repository",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
-			return runTaskShow(command, opts, args[0])
+			return runTaskShow(command, opts, args[0], jsonOutput)
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "write task details as JSON")
 	cmd.AddCommand(newTaskShowReviewCommand(opts))
 	return cmd
 }
@@ -611,7 +613,7 @@ func taskListCandidateKey(repositoryID, taskID string) string {
 	return repositoryID + "\x00" + taskID
 }
 
-func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error {
+func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string, jsonOutput bool) error {
 	logger := opts.log().With(
 		slog.String("component", "cli"),
 		slog.String("operation", "task_show"),
@@ -625,6 +627,9 @@ func runTaskShow(command *cobra.Command, opts *rootOptions, taskID string) error
 	resolvedCtx, err := resolveTaskShowContext(command, deps, taskID)
 	if err != nil {
 		return err
+	}
+	if jsonOutput {
+		return renderResolvedTaskJSON(command, deps, resolvedCtx)
 	}
 	taskState, err := deps.taskStateStore.Load(
 		resolvedCtx.Resolved.Source.Repository.ID,
