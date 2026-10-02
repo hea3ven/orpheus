@@ -7,7 +7,6 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
-	"github.com/hea3ven/orpheus/internal/beads"
 	"github.com/hea3ven/orpheus/internal/doctor"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
@@ -15,6 +14,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/revieweval"
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
+	"github.com/hea3ven/orpheus/internal/tasksource/beads"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/workflow"
 )

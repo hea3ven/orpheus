@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hea3ven/orpheus/internal/beads"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/publication"
@@ -19,6 +18,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskbranch"
+	"github.com/hea3ven/orpheus/internal/tasksource/beads"
 	"github.com/spf13/cobra"
 )
 

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hea3ven/orpheus/internal/beads"
 	"github.com/hea3ven/orpheus/internal/task"
+	"github.com/hea3ven/orpheus/internal/tasksource/beads"
 )
 
 func relationshipShowCall(t *testing.T, show, outgoing, incoming string) fakeCall {

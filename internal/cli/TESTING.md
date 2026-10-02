@@ -33,7 +33,7 @@ resolution and determine the state roots passed to children.
 
 Repo registration/configuration/lookup and initial task dispatch use public
 workflow fixtures. Real Beads initialization, local detection, database usability,
-and subprocess diagnostics belong in `internal/beads`; process launch contracts
+and subprocess diagnostics belong in `internal/tasksource/beads`; process launch contracts
 belong in `internal/agentexec`. Initial dispatch supplies usage-capture results
 and verifies their persistence. Session-file parsing stays in `internal/agent`.
 

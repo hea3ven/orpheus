@@ -25,7 +25,7 @@ func TestParseOptionsSupportsQualityModes(t *testing.T) {
 		{name: "focused scenario audit", args: []string{
 			"-audit-scenarios",
 			"-audit-package", "./internal/git",
-			"-audit-package", "./internal/beads",
+			"-audit-package", "./internal/tasksource/beads",
 			"-audit-run", "^TestIntegrationAdapterContract",
 		}},
 		{name: "custom paths", args: []string{"-policy", "policy.yml", "-output", "report.json"}},
@@ -59,13 +59,13 @@ func TestAuditSelectionDefaultsAndRetainsRepeatedPackages(t *testing.T) {
 	focused, err := parseOptions([]string{
 		"-audit-scenarios",
 		"-audit-package", "./internal/git",
-		"-audit-package", "./internal/beads",
+		"-audit-package", "./internal/tasksource/beads",
 		"-audit-run", "Git|Beads",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := scenarioSelection{Packages: []string{"./internal/git", "./internal/beads"}, TestPattern: "Git|Beads"}
+	want := scenarioSelection{Packages: []string{"./internal/git", "./internal/tasksource/beads"}, TestPattern: "Git|Beads"}
 	if got := focused.auditSelection(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("focused audit selection = %#v, want %#v", got, want)
 	}
@@ -73,11 +73,11 @@ func TestAuditSelectionDefaultsAndRetainsRepeatedPackages(t *testing.T) {
 
 func TestAuditIntegrationListCommandUsesSelection(t *testing.T) {
 	selection := scenarioSelection{
-		Packages:    []string{"./internal/git", "./internal/beads"},
+		Packages:    []string{"./internal/git", "./internal/tasksource/beads"},
 		TestPattern: "^TestIntegrationAdapterContract",
 	}
 	got := strings.Join(integrationListCommand(selection), " ")
-	want := "go test -json -tags=integration -list ^TestIntegrationAdapterContract ./internal/git ./internal/beads"
+	want := "go test -json -tags=integration -list ^TestIntegrationAdapterContract ./internal/git ./internal/tasksource/beads"
 	if got != want {
 		t.Fatalf("integration list command = %q, want %q", got, want)
 	}
