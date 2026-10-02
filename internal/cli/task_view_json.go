@@ -34,7 +34,7 @@ type taskViewJSONEpicProgress struct {
 	Total     int `json:"total"`
 }
 
-type taskViewJSONTaskEntry struct {
+type taskViewJSONTaskSummary struct {
 	Kind         string                    `json:"kind"`
 	Repository   taskViewJSONRepository    `json:"repository"`
 	ID           string                    `json:"id"`
@@ -73,7 +73,7 @@ func renderTaskViewJSON(
 		}
 		switch row.Entry.Kind {
 		case status.EntryTask:
-			entries = append(entries, taskViewJSONTaskEntryFor(row))
+			entries = append(entries, taskViewJSONTaskSummaryFor(row))
 		case status.EntryRepoFailure:
 			entries = append(entries, taskViewJSONRepoFailureEntryFor(row))
 		}
@@ -81,10 +81,10 @@ func renderTaskViewJSON(
 	return json.NewEncoder(output).Encode(entries)
 }
 
-func taskViewJSONTaskEntryFor(row statusDisplayRow) taskViewJSONTaskEntry {
+func taskViewJSONTaskSummaryFor(row statusDisplayRow) taskViewJSONTaskSummary {
 	entry := row.Entry
 	taskItem := entry.Task
-	result := taskViewJSONTaskEntry{
+	result := taskViewJSONTaskSummary{
 		Kind:       string(entry.Kind),
 		Repository: taskViewJSONRepositoryFor(entry.Repository),
 		ID:         taskItem.ID,
