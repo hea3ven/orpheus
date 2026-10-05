@@ -12,12 +12,14 @@ import (
 	"github.com/hea3ven/orpheus/internal/pathutil"
 )
 
-// maxConcurrentSnapshotWorkspaces caps default parallel Beads workspace reads.
+// maxConcurrentSnapshotWorkspaces caps default parallel task-source reads.
 const maxConcurrentSnapshotWorkspaces = 4
 
 // RepositorySource connects a registered repository identity to its task backend workspace.
 type RepositorySource struct {
 	Repository Repository
+	// Kind selects the adapter at the composition boundary. Empty means Beads.
+	Kind       string
 	BackendDir string
 
 	// MaintenanceOwned authorizes Orpheus to perform narrowly scoped backend

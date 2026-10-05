@@ -45,7 +45,7 @@ func (r gitRepositoryFixture) registeredWithManagedBeads() registry.Repo {
 	return registry.Repo{
 		ID: r.name, Name: r.name, Path: r.path,
 		Remote: r.remote, DefaultBranch: r.defaultBranch,
-		BeadsMode: registry.BeadsModeManaged, BeadsPrefix: r.name,
+		TaskSource: "beads", BeadsMode: registry.BeadsModeManaged, BeadsPrefix: r.name,
 	}
 }
 
@@ -142,7 +142,7 @@ func assertRepoAdded(t *testing.T, output string, want registry.Repo) {
 func assertRepoListed(t *testing.T, output string, want registry.Repo) {
 	t.Helper()
 	is := assert.New(t)
-	for _, header := range []string{"ID", "NAME", "PATH", "REMOTE", "DEFAULT_BRANCH", "BEADS_MODE", "BEADS_PREFIX"} {
+	for _, header := range []string{"ID", "NAME", "PATH", "REMOTE", "DEFAULT_BRANCH", "TASK_SOURCE", "MODE", "PREFIX"} {
 		is.Contains(output, header)
 	}
 	is.Contains(output, want.ID)

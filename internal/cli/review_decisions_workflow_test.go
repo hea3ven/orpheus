@@ -182,7 +182,7 @@ func TestIntegrationWorkflowTaskReviewCreatesSelectedSeparateTaskFollowUp(t *tes
 	stdout, stderr := fixture.run(input, "task", "run", "op-main")
 
 	is.Contains(stdout, "Finalized op-main")
-	is.Contains(stderr, "Created follow-up Bead op-41 for review finding 1.")
+	is.Contains(stderr, "Created follow-up task op-41 for review finding 1.")
 	must.Len(fixture.tasks.created, 1)
 	is.Equal(taskmodel.CreateOptions{Title: "Extract helper", Description: "Extract the helper later.\n\nProvenance:\nDiscovered during review of op-main in repository alpha (review attempt 1, finding 1). Review step: local-review.", AcceptanceCriteria: "Helper extraction has tests.", IssueType: taskmodel.IssueTypeTask}, fixture.tasks.created[0])
 	created, err := fixture.tasks.Get(context.Background(), "op-41")
@@ -221,7 +221,7 @@ func TestIntegrationWorkflowTaskReviewCanAbortWhenSeparateTaskCreationFails(t *t
 	stdout, stderr := fixture.run(input, "task", "run", "op-main")
 
 	is.Empty(stdout)
-	is.Contains(stderr, "Failed to create follow-up Bead for review finding 1")
+	is.Contains(stderr, "Failed to create follow-up task for review finding 1")
 	is.Equal(headBefore, fixture.candidate.head)
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))

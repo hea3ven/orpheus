@@ -60,7 +60,7 @@ func TestIntegrationWorkflowTaskShowReportsMalformedAndUnknownPrefixes(t *testin
 	is.Empty(stdout)
 	is.Empty(stderr)
 	is.ErrorContains(err, "malformed task id")
-	is.ErrorContains(err, "expected <prefix>-<number>")
+	is.ErrorContains(err, "expected <prefix>-<suffix>")
 
 	stdout, stderr, err = fixture.execute("task", "show", "zz-1")
 	must.Error(err)
@@ -84,7 +84,7 @@ func TestIntegrationWorkflowTaskDirReportsMalformedAndUnknownPrefixes(t *testing
 	is.Empty(stdout)
 	is.Empty(stderr)
 	is.ErrorContains(err, "malformed task id")
-	is.ErrorContains(err, "expected <prefix>-<number>")
+	is.ErrorContains(err, "expected <prefix>-<suffix>")
 
 	stdout, stderr, err = fixture.execute("task", "dir", "zz-1")
 	must.Error(err)

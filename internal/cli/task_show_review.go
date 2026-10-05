@@ -721,7 +721,7 @@ func formatReviewFindingIndexes(indexes []int) string {
 }
 
 func renderCreatedReviewFollowUpsForAttempt(output io.Writer, taskState taskstate.TaskState, reviewAttempt int) error {
-	if _, err := fmt.Fprintln(output, "\nCreated follow-up Beads:"); err != nil {
+	if _, err := fmt.Fprintln(output, "\nCreated follow-up tasks:"); err != nil {
 		return err
 	}
 	found := false

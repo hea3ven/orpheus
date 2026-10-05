@@ -93,7 +93,7 @@ func newTaskListCommand(opts *rootOptions) *cobra.Command {
 			return runTaskList(command, opts, listOpts)
 		},
 	}
-	cmd.Flags().StringVar(&listOpts.repo, "repo", "", "limit to registered repository id, name, or Beads prefix")
+	cmd.Flags().StringVar(&listOpts.repo, "repo", "", "limit to registered repository id, name, or task prefix")
 	cmd.Flags().StringVar(&listOpts.query, "query", "", "match task ID or title (case-insensitive partial match)")
 	cmd.Flags().StringArrayVar(&listOpts.types, "type", nil, "limit to task or epic (repeatable)")
 	cmd.Flags().StringVar(&listOpts.createdAfter, "created-after", "", "include items created after YYYY-MM-DD")

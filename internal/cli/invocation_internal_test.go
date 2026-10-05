@@ -10,6 +10,9 @@ import (
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
+	taskmodel "github.com/hea3ven/orpheus/internal/task"
+	"github.com/hea3ven/orpheus/internal/tasksource/beads"
+	"github.com/hea3ven/orpheus/internal/tasksource/gig"
 	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
@@ -94,4 +97,39 @@ func containsEnvironment(environment []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestInvocationSelectsRegisteredTaskSource(t *testing.T) {
+	root := testutil.CanonicalTempDir(t)
+	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := newInvocationDependenciesWithPaths(paths, logging.Discard(), map[string]string{"PATH": "/nonexistent"})
+	for _, kind := range []string{"", "beads", "gig", "unsupported"} {
+		t.Run(kind, func(t *testing.T) {
+			source := taskmodel.RepositorySource{Kind: kind, BackendDir: filepath.Join(root, "source"), MaintenanceOwned: true, Repository: taskmodel.Repository{TaskIDPrefix: "op"}}
+			backend, err := deps.taskBackendFactory(source)
+			switch kind {
+			case "gig":
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, ok := backend.(gig.Backend); !ok {
+					t.Fatalf("backend = %T, want gig.Backend", backend)
+				}
+			case "", "beads":
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, ok := backend.(beads.TaskBackend); !ok {
+					t.Fatalf("backend = %T, want beads.TaskBackend", backend)
+				}
+			default:
+				if err == nil {
+					t.Fatal("unsupported source accepted")
+				}
+			}
+		})
+	}
 }

@@ -464,7 +464,7 @@ func (p completionProvider) repositoryForTaskArgument(command *cobra.Command, ar
 		return ""
 	}
 	for _, repo := range registry.Repos {
-		prefix := strings.TrimSpace(repo.BeadsPrefix)
+		prefix := strings.TrimSpace(repo.Prefix())
 		if prefix != "" && strings.HasPrefix(strings.TrimSpace(args[0]), prefix+"-") {
 			return repo.ID
 		}

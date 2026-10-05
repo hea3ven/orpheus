@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	// ErrMalformedTaskID indicates a task id cannot be parsed as a prefixed Beads id.
+	// ErrMalformedTaskID indicates a task id cannot be parsed as a prefixed task id.
 	ErrMalformedTaskID = errors.New("malformed task id")
 
 	// ErrUnknownTaskPrefix indicates a task id prefix does not match a registered repository.
@@ -22,17 +22,17 @@ type ResolvedTaskSource struct {
 	// TaskID is the trimmed task id supplied by the user.
 	TaskID string
 
-	// Prefix is the Beads issue prefix that matched TaskID.
+	// Prefix is the task prefix that matched TaskID.
 	Prefix string
 
 	// Source is the registered repository source that owns tasks with Prefix.
 	Source RepositorySource
 }
 
-// ResolveTaskSource resolves a prefixed Beads task id to one registered repository source.
+// ResolveTaskSource resolves a prefixed task id to one registered repository source.
 //
 // Resolution uses only the supplied registry-derived sources. It does not construct a
-// backend and does not call Beads or Git.
+// backend and does not call a task source or Git.
 func ResolveTaskSource(sources []RepositorySource, taskID string) (ResolvedTaskSource, error) {
 	id, parsedPrefix, err := parsePrefixedTaskID(taskID)
 	if err != nil {
@@ -56,8 +56,8 @@ func ResolveTaskSource(sources []RepositorySource, taskID string) (ResolvedTaskS
 		}
 		if len(id) == len(prefix)+1 {
 			return ResolvedTaskSource{}, fmt.Errorf(
-				"%w: task id %q is missing the Beads task number after prefix %q; "+
-					"expected <prefix>-<number>, for example %s-123",
+				"%w: task id %q is missing the task suffix after prefix %q; "+
+					"expected <prefix>-<suffix>, for example %s-123",
 				ErrMalformedTaskID,
 				id,
 				prefix,
@@ -87,13 +87,13 @@ func parsePrefixedTaskID(taskID string) (id string, prefix string, err error) {
 	id = strings.TrimSpace(taskID)
 	if id == "" {
 		return "", "", fmt.Errorf(
-			"%w: task id is required; pass a Beads task id like <prefix>-123",
+			"%w: task id is required; pass a task id like <prefix>-123",
 			ErrMalformedTaskID,
 		)
 	}
 	if strings.ContainsAny(id, " \t\n\r") {
 		return "", "", fmt.Errorf(
-			"%w: task id %q contains whitespace; pass a single Beads task id like <prefix>-123",
+			"%w: task id %q contains whitespace; pass a single task id like <prefix>-123",
 			ErrMalformedTaskID,
 			id,
 		)
@@ -102,21 +102,21 @@ func parsePrefixedTaskID(taskID string) (id string, prefix string, err error) {
 	separator := strings.Index(id, "-")
 	if separator < 0 {
 		return "", "", fmt.Errorf(
-			"%w: task id %q has no Beads prefix separator; expected <prefix>-<number>, for example op-123",
+			"%w: task id %q has no task prefix separator; expected <prefix>-<suffix>, for example op-123",
 			ErrMalformedTaskID,
 			id,
 		)
 	}
 	if separator == 0 {
 		return "", "", fmt.Errorf(
-			"%w: task id %q is missing a Beads prefix before '-'; expected <prefix>-<number>, for example op-123",
+			"%w: task id %q is missing a task prefix before '-'; expected <prefix>-<suffix>, for example op-123",
 			ErrMalformedTaskID,
 			id,
 		)
 	}
 	if separator == len(id)-1 {
 		return "", "", fmt.Errorf(
-			"%w: task id %q is missing the Beads task number after '-'; expected <prefix>-<number>, for example op-123",
+			"%w: task id %q is missing the task suffix after '-'; expected <prefix>-<suffix>, for example op-123",
 			ErrMalformedTaskID,
 			id,
 		)
@@ -128,7 +128,7 @@ func parsePrefixedTaskID(taskID string) (id string, prefix string, err error) {
 func unknownTaskPrefixError(id string, parsedPrefix string, knownPrefixCount int, missingPrefixRepos []string) error {
 	if knownPrefixCount == 0 {
 		message := fmt.Sprintf(
-			"task id %q uses Beads prefix %q, but no registered repositories have Beads prefixes; "+
+			"task id %q uses task prefix %q, but no registered repositories have task prefixes; "+
 				"run `orpheus repo list` to inspect the registry or register the repo",
 			id,
 			parsedPrefix,
@@ -140,7 +140,7 @@ func unknownTaskPrefixError(id string, parsedPrefix string, knownPrefixCount int
 	}
 
 	return fmt.Errorf(
-		"%w: task id %q uses Beads prefix %q, which is not registered; "+
+		"%w: task id %q uses task prefix %q, which is not registered; "+
 			"run `orpheus repo list` to see registered prefixes or register the repo",
 		ErrUnknownTaskPrefix,
 		id,
@@ -158,7 +158,7 @@ func ambiguousTaskPrefixError(id string, matches []ResolvedTaskSource) error {
 	}
 
 	return fmt.Errorf(
-		"%w: task id %q matches multiple registered Beads prefixes: %s; "+
+		"%w: task id %q matches multiple registered task prefixes: %s; "+
 			"repo registration should prevent prefix collisions, run `orpheus repo list` and repair the registry",
 		ErrAmbiguousTaskPrefix,
 		id,

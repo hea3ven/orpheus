@@ -55,6 +55,7 @@ type Dependencies struct {
 	InspectGit         func(context.Context, string) (gitmeta.Inspection, error)
 	InspectLocalBeads  func(string, ...slog.Attr) (beads.LocalInspection, error)
 	InitializeBeads    func(string, string, ...slog.Attr) error
+	InitializeGig      func(string, string) error
 	AgentLauncher      agentexec.Launcher
 	DispatchGit        workflow.DispatchGit
 	AgentGit           agent.GitStateReader
@@ -98,6 +99,9 @@ func (d Dependencies) applyTo(invocation *invocationDependencies) {
 	}
 	if d.InitializeBeads != nil {
 		invocation.initializeBeads = d.InitializeBeads
+	}
+	if d.InitializeGig != nil {
+		invocation.initializeGig = d.InitializeGig
 	}
 	if d.AgentLauncher != nil {
 		invocation.agentLauncher = d.AgentLauncher

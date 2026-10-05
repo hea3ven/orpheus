@@ -34,7 +34,7 @@ func (s Store) TaskRepositorySource(repo Repo) (task.RepositorySource, error) {
 	if err != nil {
 		return task.RepositorySource{}, fmt.Errorf("validate registered repository: %w", err)
 	}
-	beadsDir, err := s.BeadsDir(normalizedRepo)
+	backendDir, err := s.TaskDir(normalizedRepo)
 	if err != nil {
 		return task.RepositorySource{}, err
 	}
@@ -51,7 +51,7 @@ func (s Store) TaskRepositorySource(repo Repo) (task.RepositorySource, error) {
 		Repository: task.Repository{
 			ID:                     normalizedRepo.ID,
 			Name:                   normalizedRepo.Name,
-			TaskIDPrefix:           normalizedRepo.BeadsPrefix,
+			TaskIDPrefix:           normalizedRepo.Prefix(),
 			Path:                   normalizedRepo.Path,
 			DefaultBranch:          normalizedRepo.DefaultBranch,
 			TitleTemplate:          publicationPolicy.TitleTemplate,
@@ -61,8 +61,9 @@ func (s Store) TaskRepositorySource(repo Repo) (task.RepositorySource, error) {
 			ReviewPipeline:         normalizedRepo.ReviewPipeline,
 			ReviewPipelineAliases:  cloneStringMap(normalizedRepo.ReviewPipelineAliases),
 		},
-		BackendDir:       beadsDir,
-		MaintenanceOwned: normalizedRepo.BeadsMode == BeadsModeManaged,
+		Kind:             normalizedRepo.Source(),
+		BackendDir:       backendDir,
+		MaintenanceOwned: normalizedRepo.StorageMode() == BeadsModeManaged,
 	}, nil
 }
 

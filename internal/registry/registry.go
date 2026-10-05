@@ -40,6 +40,9 @@ type Repo struct {
 	Path                   string                      `yaml:"path"`
 	Remote                 string                      `yaml:"remote,omitempty"`
 	DefaultBranch          string                      `yaml:"default_branch,omitempty"`
+	TaskSource             string                      `yaml:"task_source,omitempty"`
+	TaskMode               string                      `yaml:"task_mode,omitempty"`
+	TaskPrefix             string                      `yaml:"task_prefix,omitempty"`
 	BeadsMode              string                      `yaml:"beads_mode,omitempty"`
 	BeadsPrefix            string                      `yaml:"beads_prefix,omitempty"`
 	SummaryGuidance        string                      `yaml:"summary_guidance,omitempty"`
@@ -108,14 +111,18 @@ func (s Store) BeadsDir(repo Repo) (string, error) {
 
 // ManagedBeadsDir returns the deterministic Orpheus-managed Beads workspace for repoID.
 func ManagedBeadsDir(paths state.Paths, repoID string) (string, error) {
+	return managedSourceDir(paths, repoID, "beads")
+}
+
+func managedSourceDir(paths state.Paths, repoID, source string) (string, error) {
 	repoID = strings.TrimSpace(repoID)
 	if repoID == "" {
 		return "", errors.New("repo id is required")
 	}
 	if repoID == "." || repoID == ".." || strings.ContainsAny(repoID, `/\\`) || filepath.VolumeName(repoID) != "" {
-		return "", fmt.Errorf("repo id %q cannot be used in managed Beads path", repoID)
+		return "", fmt.Errorf("repo id %q cannot be used in managed task source path", repoID)
 	}
-	return paths.DataPath(filepath.Join("repos", repoID, "beads"))
+	return paths.DataPath(filepath.Join("repos", repoID, source))
 }
 
 // BeadsDir returns the directory where Beads commands should run for repo.
@@ -125,6 +132,9 @@ func BeadsDir(paths state.Paths, repo Repo) (string, error) {
 		return "", err
 	}
 
+	if normalizedRepo.Source() != "beads" {
+		return "", fmt.Errorf("repo %q uses %s; beads-dir applies only to Beads repositories", normalizedRepo.ID, normalizedRepo.Source())
+	}
 	switch normalizedRepo.BeadsMode {
 	case BeadsModeLocal:
 		return normalizedRepo.Path, nil
@@ -239,11 +249,11 @@ func (s Store) Save(registry Registry) error {
 	return nil
 }
 
-// Resolve returns the repository matching token by id, display name, or Beads prefix.
+// Resolve returns the repository matching token by id, display name, or task prefix.
 func (r Registry) Resolve(token string) (Repo, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return Repo{}, errors.New("repo id, name, or Beads prefix is required")
+		return Repo{}, errors.New("repo id, name, or task prefix is required")
 	}
 
 	normalizedRegistry, err := r.normalized()
@@ -252,12 +262,12 @@ func (r Registry) Resolve(token string) (Repo, error) {
 	}
 
 	for _, repo := range normalizedRegistry.Repos {
-		if repo.ID == token || repo.Name == token || repo.BeadsPrefix == token {
+		if repo.ID == token || repo.Name == token || repo.Prefix() == token {
 			return repo, nil
 		}
 	}
 
-	return Repo{}, fmt.Errorf("repo %q is not registered by id, name, or Beads prefix; run `orpheus repo list` to see registered repositories", token)
+	return Repo{}, fmt.Errorf("repo %q is not registered by id, name, or task prefix; run `orpheus repo list` to see registered repositories", token)
 }
 
 // Add validates and appends a repository record to the registry.
@@ -310,11 +320,11 @@ func (r Registry) Validate() error {
 		}
 		names[normalizedRepo.Name] = struct{}{}
 
-		if normalizedRepo.BeadsPrefix != "" {
-			if _, ok := prefixes[normalizedRepo.BeadsPrefix]; ok {
-				return fmt.Errorf("duplicate beads prefix %q: Beads prefixes must be unique across registered repositories", normalizedRepo.BeadsPrefix)
+		if normalizedRepo.Prefix() != "" {
+			if _, ok := prefixes[normalizedRepo.Prefix()]; ok {
+				return fmt.Errorf("duplicate task prefix %q: task prefixes must be unique across registered repositories", normalizedRepo.Prefix())
 			}
-			prefixes[normalizedRepo.BeadsPrefix] = struct{}{}
+			prefixes[normalizedRepo.Prefix()] = struct{}{}
 		}
 
 		if err := addIdentifier(identifiers, normalizedRepo.ID, "id", index); err != nil {
@@ -323,8 +333,8 @@ func (r Registry) Validate() error {
 		if err := addIdentifier(identifiers, normalizedRepo.Name, "name", index); err != nil {
 			return err
 		}
-		if normalizedRepo.BeadsPrefix != "" {
-			if err := addIdentifier(identifiers, normalizedRepo.BeadsPrefix, "beads_prefix", index); err != nil {
+		if normalizedRepo.Prefix() != "" {
+			if err := addIdentifier(identifiers, normalizedRepo.Prefix(), "task prefix", index); err != nil {
 				return err
 			}
 		}
@@ -345,7 +355,7 @@ func addIdentifier(identifiers map[string]identifierOwner, value string, field s
 			return nil
 		}
 		return fmt.Errorf(
-			"repo %s %q collides with repo[%d] %s: repo ids, names, and Beads prefixes must be unique to avoid ambiguous references",
+			"repo %s %q collides with repo[%d] %s: repo ids, names, and task prefixes must be unique to avoid ambiguous references",
 			field,
 			value,
 			owner.index,
@@ -374,6 +384,9 @@ func (r Registry) normalized() (Registry, error) {
 }
 
 func normalizeRepo(repo Repo) (Repo, error) {
+	if err := normalizeTaskSource(&repo); err != nil {
+		return Repo{}, err
+	}
 	repo.ID = strings.TrimSpace(repo.ID)
 	repo.Name = strings.TrimSpace(repo.Name)
 	repo.Remote = strings.TrimSpace(repo.Remote)

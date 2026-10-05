@@ -88,7 +88,7 @@ func (f taskReviewLifecycleFrontend) SelectSeparateTaskCandidates(
 	candidates []workflow.SeparateTaskCandidate,
 ) ([]workflow.SeparateTaskCandidate, error) {
 	output := f.command.ErrOrStderr()
-	if _, err := fmt.Fprintln(output, "\nSeparate-task review findings can be created as standalone Beads:"); err != nil {
+	if _, err := fmt.Fprintln(output, "\nSeparate-task review findings can be created as standalone tasks:"); err != nil {
 		return nil, err
 	}
 	for displayIndex, candidate := range candidates {
@@ -102,7 +102,7 @@ func (f taskReviewLifecycleFrontend) SelectSeparateTaskCandidates(
 			return nil, err
 		}
 	}
-	if _, err := fmt.Fprint(output, "Create follow-up Beads [numbers, a=all, n=none]: "); err != nil {
+	if _, err := fmt.Fprint(output, "Create follow-up tasks [numbers, a=all, n=none]: "); err != nil {
 		return nil, err
 	}
 	line, err := f.reader.ReadString('\n')
@@ -119,7 +119,7 @@ func (f taskReviewLifecycleFrontend) SeparateTaskCreated(
 ) error {
 	_, err := fmt.Fprintf(
 		f.command.ErrOrStderr(),
-		"Created follow-up Bead %s for review finding %d.\n",
+		"Created follow-up task %s for review finding %d.\n",
 		created.ID,
 		candidate.Index+1,
 	)
@@ -134,14 +134,14 @@ func (f taskReviewLifecycleFrontend) ContinueAfterFollowUpCreationFailure(
 	output := f.command.ErrOrStderr()
 	if _, err := fmt.Fprintf(
 		output,
-		"Failed to create follow-up Bead for review finding %d (%s): %v\n",
+		"Failed to create follow-up task for review finding %d (%s): %v\n",
 		candidate.Index+1,
 		candidate.Finding.TaskProposal.Title,
 		cause,
 	); err != nil {
 		return false, err
 	}
-	if _, err := fmt.Fprint(output, "Continue publication without creating this follow-up Bead? [y/N]: "); err != nil {
+	if _, err := fmt.Fprint(output, "Continue publication without creating this follow-up task? [y/N]: "); err != nil {
 		return false, err
 	}
 	line, err := f.reader.ReadString('\n')

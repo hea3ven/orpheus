@@ -478,6 +478,8 @@ func newRepoAddCommand(opts *rootOptions) *cobra.Command {
 			return runRepoAdd(command, opts, args[0])
 		},
 	}
+	cmd.Flags().String("task-source", "gig", "Task source: gig or beads")
+	_ = cmd.RegisterFlagCompletionFunc("task-source", fixedCompletion("gig", "beads"))
 	return cmd
 }
 
@@ -519,7 +521,7 @@ func runRepoAdd(command *cobra.Command, opts *rootOptions, inputPath string) err
 	if err := configureRepoGitValues(command, &repo, gitInspection, logger); err != nil {
 		return err
 	}
-	managed, err := configureRepoBeads(command, deps, &repo, gitInspection.Root, logger)
+	managed, err := configureRepoTaskSource(command, deps, &repo, gitInspection.Root, logger)
 	if err != nil {
 		return err
 	}
@@ -568,7 +570,7 @@ func registerInspectedRepoLocked(
 	}
 	logger.DebugContext(command.Context(), "validated registry update", slog.Int("repo_count", len(reg.Repos)))
 
-	managedDir, err := initializeManagedRepoBeads(command, deps, registryCtx, repo, managed, logger)
+	managedDir, err := initializeManagedRepoSource(command, deps, registryCtx, repo, managed, logger)
 	if err != nil {
 		return err
 	}
@@ -588,14 +590,15 @@ func registerInspectedRepoLocked(
 func renderRepoAdded(command *cobra.Command, repo registry.Repo) error {
 	_, err := fmt.Fprintf(
 		command.OutOrStdout(),
-		"Added repo %s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		"Added repo %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 		repo.ID,
 		repo.Name,
 		repo.Path,
 		repo.Remote,
 		repo.DefaultBranch,
-		repo.BeadsMode,
-		repo.BeadsPrefix,
+		repo.Source(),
+		repo.StorageMode(),
+		repo.Prefix(),
 	)
 	return err
 }
@@ -619,6 +622,23 @@ func configureRepoGitValues(
 		slog.String("default_branch", repo.DefaultBranch),
 	)
 	return nil
+}
+
+func configureRepoTaskSource(command *cobra.Command, deps *invocationDependencies, repo *registry.Repo, root string, logger *slog.Logger) (bool, error) {
+	source, err := command.Flags().GetString("task-source")
+	if err != nil {
+		return false, err
+	}
+	repo.TaskSource = source
+	switch source {
+	case "gig":
+		repo.TaskMode, repo.TaskPrefix = "managed", repo.ID
+		return true, nil
+	case "beads":
+		return configureRepoBeads(command, deps, repo, root, logger)
+	default:
+		return false, fmt.Errorf("unsupported task source %q; expected gig or beads", source)
+	}
 }
 
 func configureRepoBeads(
@@ -738,7 +758,7 @@ func configureRepoTitleTemplate(command *cobra.Command, repo *registry.Repo, log
 	return nil
 }
 
-func initializeManagedRepoBeads(
+func initializeManagedRepoSource(
 	command *cobra.Command,
 	deps *invocationDependencies,
 	registryCtx registryContext,
@@ -750,6 +770,16 @@ func initializeManagedRepoBeads(
 		return "", nil
 	}
 
+	if repo.Source() == "gig" {
+		dir, err := registryCtx.Store.ManagedGigDir(repo.ID)
+		if err != nil {
+			return "", err
+		}
+		if err := deps.initializeGig(dir, repo.Prefix()); err != nil {
+			return "", err
+		}
+		return dir, nil
+	}
 	managedDir, err := registryCtx.Store.ManagedBeadsDir(repo.ID)
 	if err != nil {
 		return "", err
@@ -764,7 +794,7 @@ func initializeManagedRepoBeads(
 func saveRepoRegistration(registryCtx registryContext, reg registry.Registry, managed bool, managedDir string) error {
 	if err := registryCtx.Store.Save(reg); err != nil {
 		if managed {
-			return fmt.Errorf("managed Beads was initialized at %q, but saving the repo registry failed; remove that directory before retrying if you do not want to keep it: %w", managedDir, err)
+			return fmt.Errorf("managed task source was initialized at %q, but saving the repo registry failed; remove that directory before retrying if you do not want to keep it: %w", managedDir, err)
 		}
 		return err
 	}
@@ -802,13 +832,14 @@ func newRepoListCommand(opts *rootOptions) *cobra.Command {
 					repo.Path,
 					repo.Remote,
 					repo.DefaultBranch,
-					repo.BeadsMode,
-					repo.BeadsPrefix,
+					repo.Source(),
+					repo.StorageMode(),
+					repo.Prefix(),
 				})
 			}
 			return renderTable(
 				command.OutOrStdout(),
-				[]string{"ID", "NAME", "PATH", "REMOTE", "DEFAULT_BRANCH", "BEADS_MODE", "BEADS_PREFIX"},
+				[]string{"ID", "NAME", "PATH", "REMOTE", "DEFAULT_BRANCH", "TASK_SOURCE", "MODE", "PREFIX"},
 				rows,
 			)
 		},

@@ -23,16 +23,17 @@ type ownershipAuthoringBackend struct {
 
 	tasks map[string]taskmodel.Task
 
-	getCalls   []string
-	listCalls  int
-	creates    []taskmodel.CreateOptions
-	updates    []taskmodel.UpdateOptions
-	started    []string
-	closed     []string
-	createdID  string
-	startError error
-	closeError error
-	updateErr  error
+	getCalls            []string
+	listCalls           int
+	creates             []taskmodel.CreateOptions
+	updates             []taskmodel.UpdateOptions
+	started             []string
+	closed              []string
+	createdID           string
+	startError          error
+	closeError          error
+	updateErr           error
+	dependencyUpdateErr error
 }
 
 func newOwnershipAuthoringBackend(tasks ...taskmodel.Task) *ownershipAuthoringBackend {
@@ -128,6 +129,10 @@ func (b *ownershipAuthoringBackend) Update(_ context.Context, opts taskmodel.Upd
 	}
 	if opts.ParentID != nil {
 		item.Relations.ParentID = *opts.ParentID
+	}
+	if b.dependencyUpdateErr != nil {
+		b.tasks[item.ID] = item.Clone()
+		return taskmodel.Task{}, b.dependencyUpdateErr
 	}
 	item.Relations.DependencyIDs = append(item.Relations.DependencyIDs, opts.AddBlockingIDs...)
 	if len(opts.RemoveBlockingIDs) > 0 {

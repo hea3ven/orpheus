@@ -802,12 +802,32 @@ func getUpdateReference(ctx context.Context, backend Getter, source RepositorySo
 	return item, nil
 }
 
+// PartialUpdateError reports that an edit saved changes before a later operation
+// failed. Its recovery guidance is safe to show without exposing storage details.
+type PartialUpdateError struct {
+	Cause error
+}
+
+// Error describes how to recover without assuming the edit was rolled back.
+func (e PartialUpdateError) Error() string {
+	return "edit partially applied; inspect content and dependencies before retrying"
+}
+
+// Unwrap preserves the underlying failure for diagnostic inspection.
+func (e PartialUpdateError) Unwrap() error { return e.Cause }
+
 type updateFailure struct {
 	message string
 	cause   error
 }
 
-func (e updateFailure) Error() string { return e.message }
+func (e updateFailure) Error() string {
+	var partial PartialUpdateError
+	if errors.As(e.cause, &partial) {
+		return e.message + "; " + partial.Error()
+	}
+	return e.message
+}
 
 func (e updateFailure) Unwrap() error { return e.cause }
 
@@ -828,6 +848,8 @@ type CreateOptions struct {
 
 // CreateMutator is the narrow backend-neutral mutation used to create items,
 // including standalone review follow-up work discovered during review.
+// A nonempty returned ID with an error means creation succeeded but subsequent
+// setup failed. Inspect and repair that item rather than repeating creation.
 type CreateMutator interface {
 	Create(ctx context.Context, opts CreateOptions) (Task, error)
 }
