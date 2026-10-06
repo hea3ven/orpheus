@@ -17,6 +17,7 @@ type fakeCreateBackend struct {
 	tasks   map[string]task.Task
 	created task.CreateOptions
 	err     error
+	partial task.Task
 }
 
 func (b *fakeCreateBackend) Get(_ context.Context, id string) (task.Task, error) {
@@ -29,7 +30,7 @@ func (b *fakeCreateBackend) Get(_ context.Context, id string) (task.Task, error)
 
 func (b *fakeCreateBackend) Create(_ context.Context, opts task.CreateOptions) (task.Task, error) {
 	if b.err != nil {
-		return task.Task{}, b.err
+		return b.partial, b.err
 	}
 	b.created = opts
 	return task.Task{ID: "op-new", IssueType: opts.IssueType}, nil
@@ -269,4 +270,22 @@ func TestCreateServiceBackendErrorIsPreserved(t *testing.T) {
 
 func createTestSource(id string, prefix string, path string) task.RepositorySource {
 	return task.RepositorySource{Repository: task.Repository{ID: id, Name: id, TaskIDPrefix: prefix, Path: path}, BackendDir: path}
+}
+
+func TestCreateServiceReportsCreatedIDWhenSetupFails(t *testing.T) {
+	source := createTestSource("alpha", "op", "/fixture")
+	setupErr := errors.New("dependency write failed")
+	backend := &fakeCreateBackend{err: setupErr, partial: task.Task{ID: "op-created"}}
+	service := task.CreateService{Sources: []task.RepositorySource{source}, BackendFactory: func(task.RepositorySource) (task.CreateBackend, error) { return backend, nil }}
+
+	created, err := service.Create(t.Context(), source, task.CreateRequest{Title: "title", Description: "description", AcceptanceCriteria: "acceptance"})
+
+	if !errors.Is(err, setupErr) || created.ID != "op-created" {
+		t.Fatalf("Create() = %+v, %v; want partial task and original failure", created, err)
+	}
+	for _, text := range []string{"op-created", "was created", "task edit", "do not repeat task create"} {
+		if !strings.Contains(err.Error(), text) {
+			t.Errorf("error %q missing recovery guidance %q", err, text)
+		}
+	}
 }

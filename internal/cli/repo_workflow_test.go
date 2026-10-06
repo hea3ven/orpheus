@@ -16,7 +16,7 @@ func TestIntegrationWorkflowRepoAddWithoutLocalBeadsRegistersManagedRepoAndLists
 	fixture := newRepoWorkflowFixture(t, repo)
 	fixture.withoutLocalBeads()
 
-	addOutput, addStderr, err := fixture.execute("repo", "add", repo.path)
+	addOutput, addStderr, err := fixture.execute("repo", "add", "--task-source", "beads", repo.path)
 	require.NoError(t, err, "repo add; stderr: %s", addStderr)
 	listOutput, listStderr, err := fixture.execute("repo", "list")
 	require.NoError(t, err, "repo list; stderr: %s", listStderr)
@@ -56,7 +56,7 @@ func TestIntegrationWorkflowRepoRegistrationSelectsStatusBackendAndMaintenanceOw
 				return backend, nil
 			}
 
-			_, addStderr, err := fixture.execute("repo", "add", repo.path)
+			_, addStderr, err := fixture.execute("repo", "add", "--task-source", "beads", repo.path)
 			require.NoError(t, err, "stderr: %s", addStderr)
 			stdout, stderr, err := fixture.execute("status", "--no-truncate")
 

@@ -22,7 +22,7 @@ func TestIntegrationWorkflowRepoAddStoresDiscoveredRootForNestedPath(t *testing.
 	nested := filepath.Join(repo.path, "nested", "dir")
 	fixture.gitResults[nested] = fixture.gitResults[repo.path]
 
-	added, stderr, err := fixture.execute("repo", "add", nested)
+	added, stderr, err := fixture.execute("repo", "add", "--task-source", "beads", nested)
 	require.NoError(t, err, "stderr: %s", stderr)
 	listed, stderr, err := fixture.execute("repo", "list")
 	require.NoError(t, err, "stderr: %s", stderr)
@@ -43,7 +43,7 @@ func TestIntegrationWorkflowRepoAddWarnsWhenRemoteIsMissing(t *testing.T) {
 	fixture.withoutLocalBeads()
 	fixture.gitResults[repo.path] = gitmeta.Inspection{Root: repo.path, RemoteErr: gitmeta.ErrNoRemote, DefaultBranchCandidate: "main", DefaultBranchSource: gitmeta.DefaultBranchSourceCurrentBranch}
 
-	stdout, stderr, err := fixture.execute("repo", "add", repo.path)
+	stdout, stderr, err := fixture.execute("repo", "add", "--task-source", "beads", repo.path)
 	require.NoError(t, err)
 	listed, listStderr, err := fixture.execute("repo", "list")
 	require.NoError(t, err)
@@ -63,7 +63,7 @@ func TestIntegrationWorkflowRepoAddRejectsGitInspectionFailureWithoutRegistratio
 	inspectionErr := errors.New("not a git worktree")
 	fixture.gitErrors[repo.path] = inspectionErr
 
-	stdout, _, err := fixture.execute("repo", "add", repo.path)
+	stdout, _, err := fixture.execute("repo", "add", "--task-source", "beads", repo.path)
 
 	assert.ErrorIs(t, err, inspectionErr)
 	assert.Empty(t, stdout)
@@ -88,11 +88,11 @@ func TestIntegrationWorkflowRepoAddRejectsRegistrationConflictsBeforeInitializat
 				wantError = "duplicate repo id \"alpha\""
 			case "prefix":
 				existing.BeadsPrefix = "alpha"
-				wantError = "duplicate beads prefix \"alpha\""
+				wantError = "duplicate task prefix \"alpha\""
 			}
 			fixture.withRegisteredRepos(existing)
 
-			stdout, _, err := fixture.execute("repo", "add", repo.path)
+			stdout, _, err := fixture.execute("repo", "add", "--task-source", "beads", repo.path)
 
 			assert.ErrorContains(t, err, wantError)
 			assert.Empty(t, stdout)
@@ -111,7 +111,7 @@ func TestIntegrationWorkflowRepoAddInitializationFailureLeavesRegistryUnchanged(
 	initErr := errors.New("directory already exists and is not empty")
 	fixture.initialize = func(string, string) error { return initErr }
 
-	stdout, _, err := fixture.execute("repo", "add", repo.path)
+	stdout, _, err := fixture.execute("repo", "add", "--task-source", "beads", repo.path)
 
 	assert.ErrorIs(t, err, initErr)
 	assert.Empty(t, stdout)
@@ -130,10 +130,10 @@ func TestIntegrationWorkflowRepoRegistersAndListsLocalAndManagedRepositories(t *
 	wantLocal.BeadsMode, wantLocal.BeadsPrefix = registry.BeadsModeLocal, "op"
 	wantManaged := managed.registeredWithManagedBeads()
 
-	localOutput, stderr, err := fixture.execute("repo", "add", local.path)
+	localOutput, stderr, err := fixture.execute("repo", "add", "--task-source", "beads", local.path)
 	require.NoError(t, err, "stderr: %s", stderr)
 	assert.Empty(t, stderr)
-	managedOutput, stderr, err := fixture.execute("repo", "add", managed.path)
+	managedOutput, stderr, err := fixture.execute("repo", "add", "--task-source", "beads", managed.path)
 	require.NoError(t, err, "stderr: %s", stderr)
 	assert.Empty(t, stderr)
 	listed, stderr, err := fixture.execute("repo", "list")
@@ -163,13 +163,13 @@ func TestIntegrationWorkflowRepoAddRejectsDuplicateLocalBeadsPrefix(t *testing.T
 	fixture := newRepoWorkflowFixture(t, first, second)
 	fixture.withLocalBeads(first, "op")
 	fixture.withLocalBeads(second, "op")
-	_, stderr, err := fixture.execute("repo", "add", first.path)
+	_, stderr, err := fixture.execute("repo", "add", "--task-source", "beads", first.path)
 	require.NoError(t, err, "stderr: %s", stderr)
 	before := fixture.loadFinalRegistry()
 
-	stdout, _, err := fixture.execute("repo", "add", second.path)
+	stdout, _, err := fixture.execute("repo", "add", "--task-source", "beads", second.path)
 
-	assert.ErrorContains(t, err, "duplicate beads prefix \"op\"")
+	assert.ErrorContains(t, err, "duplicate task prefix \"op\"")
 	assert.Empty(t, stdout)
 	assert.Equal(t, before, fixture.loadFinalRegistry())
 	assert.Empty(t, fixture.beadsInitializations)
@@ -185,7 +185,7 @@ func TestIntegrationWorkflowRepoAddHoldsMutationLockDuringInitializationAndRelea
 		return nil
 	}
 
-	_, stderr, err := fixture.execute("repo", "add", repo.path)
+	_, stderr, err := fixture.execute("repo", "add", "--task-source", "beads", repo.path)
 
 	require.NoError(t, err, "stderr: %s", stderr)
 	assert.ErrorIs(t, contention, os.ErrExist)
@@ -198,7 +198,7 @@ func TestIntegrationWorkflowRepoAddHeldMutationLockPreventsInitializationAndRegi
 	fixture.withoutLocalBeads()
 	holdMutationLock(t, fixture.paths)
 
-	stdout, _, err := fixture.execute("repo", "add", repo.path)
+	stdout, _, err := fixture.execute("repo", "add", "--task-source", "beads", repo.path)
 
 	var lockErr *state.LockAcquisitionError
 	require.ErrorAs(t, err, &lockErr)

@@ -84,7 +84,7 @@ func TestTaskShowReviewScopesHistoryAttemptAndFinding(t *testing.T) {
 	if err := renderTaskShowReview(&attempt, "alpha", "op-history", state, reviewShowScope{reviewAttempt: 1}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Authoritative review attempt 1:", "Findings by step:", "Follow-up runs:", "Run attempt 1: succeeded (required blocking findings 2; advisory opportunities 3)", "Created follow-up Beads:", "op-42 (finding 4, step ai-review): Extract helper"} {
+	for _, want := range []string{"Authoritative review attempt 1:", "Findings by step:", "Follow-up runs:", "Run attempt 1: succeeded (required blocking findings 2; advisory opportunities 3)", "Created follow-up tasks:", "op-42 (finding 4, step ai-review): Extract helper"} {
 		if !strings.Contains(attempt.String(), want) {
 			t.Fatalf("attempt detail missing %q:\n%s", want, attempt.String())
 		}

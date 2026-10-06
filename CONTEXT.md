@@ -51,8 +51,12 @@ The authoritative source of task lifecycle truth that Orpheus reads from and upd
 _Avoid_: Task backend, task provider, task store, Orpheus database
 
 **Beads**:
-The MVP task source for Orpheus; it owns the authoritative task lifecycle while Orpheus owns orchestration around that lifecycle.
+A supported task source for Orpheus; it owns the authoritative task lifecycle while Orpheus owns orchestration around that lifecycle.
 _Avoid_: Internal task store, issue DB
+
+**Gig**:
+The default task source for newly registered repositories; it owns task lifecycle facts while Orpheus owns execution and review history.
+_Avoid_: Execution store, review store
 
 ## Execution and Review
 

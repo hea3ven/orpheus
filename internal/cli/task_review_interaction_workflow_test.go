@@ -279,7 +279,7 @@ func TestIntegrationWorkflowTaskReviewImportsHunkSeparateTaskNoteAndCreatesFollo
 
 	is.Contains(stdout, "Finalized op-main")
 	is.Contains(stderr, "Imported Hunk note user:3 as separate-task finding.")
-	is.Contains(stderr, "Created follow-up Bead op-41 for review finding 1.")
+	is.Contains(stderr, "Created follow-up task op-41 for review finding 1.")
 	must.Len(fixture.tasks.created, 1)
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))

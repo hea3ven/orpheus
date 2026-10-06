@@ -115,6 +115,9 @@ func (s CreateService) Create(ctx context.Context, source RepositorySource, requ
 	}
 	created, err := backend.Create(ctx, opts)
 	if err != nil {
+		if created.ID != "" {
+			return created, creationFailure{message: fmt.Sprintf("task %s was created in repository %s but setup failed; inspect it and repair with task edit, do not repeat task create", created.ID, source.Repository.ID), cause: err}
+		}
 		return Task{}, creationFailure{message: fmt.Sprintf("cannot create %s in repository %s", opts.IssueType, source.Repository.ID), cause: err}
 	}
 	if created.IssueType == IssueTypeUnknown {

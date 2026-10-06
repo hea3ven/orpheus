@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"maps"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/tasksource/beads"
+	"github.com/hea3ven/orpheus/internal/tasksource/gig"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/spf13/cobra"
@@ -41,6 +43,7 @@ type invocationDependencies struct {
 	inspectGit         func(context.Context, string) (gitmeta.Inspection, error)
 	inspectLocalBeads  func(string, ...slog.Attr) (beads.LocalInspection, error)
 	initializeBeads    func(string, string, ...slog.Attr) error
+	initializeGig      func(string, string) error
 	taskStateStore     taskstate.Store
 	environment        map[string]string
 	agentLauncher      agentexec.Launcher
@@ -102,14 +105,20 @@ func newInvocationDependenciesWithPaths(paths state.Paths, logger *slog.Logger, 
 		processProbe:    agentexec.ProbePID,
 		captureUsage:    agent.CaptureUsage,
 	}
+	deps.initializeGig = gig.Initialize
 	deps.taskBackendFactory = func(source taskmodel.RepositorySource) (taskmodel.ReadBackend, error) {
-		return beads.NewTaskBackendForSourceWithRunner(source, beads.CommandRunner{
-			Logger:      logger,
-			Environment: environmentEntries(deps.environment),
-			DiagnosticAttrs: []slog.Attr{
-				slog.String("repo_id", source.Repository.ID),
-			},
-		}, logger)
+		switch source.Kind {
+		case "gig":
+			return gig.New(source)
+		case "", "beads":
+			return beads.NewTaskBackendForSourceWithRunner(source, beads.CommandRunner{
+				Logger:          logger,
+				Environment:     environmentEntries(deps.environment),
+				DiagnosticAttrs: []slog.Attr{slog.String("repo_id", source.Repository.ID)},
+			}, logger)
+		default:
+			return nil, fmt.Errorf("unsupported task source %q", source.Kind)
+		}
 	}
 	deps.inspectGit = func(ctx context.Context, path string) (gitmeta.Inspection, error) {
 		return gitmeta.InspectWithLogger(ctx, path, logger)

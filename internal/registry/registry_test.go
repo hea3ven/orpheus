@@ -289,10 +289,10 @@ func TestRegistryAddRejectsDuplicateBeadsPrefix(t *testing.T) {
 	reg := existing
 	err := reg.Add(repo)
 	if err == nil {
-		t.Fatal("add duplicate beads prefix succeeded, want error")
+		t.Fatal("add duplicate task prefix succeeded, want error")
 	}
-	if !strings.Contains(err.Error(), "duplicate beads prefix \"op\"") {
-		t.Fatalf("error = %v, want duplicate beads prefix", err)
+	if !strings.Contains(err.Error(), "duplicate task prefix \"op\"") {
+		t.Fatalf("error = %v, want duplicate task prefix", err)
 	}
 	assertRepos(t, reg.Repos, existing.Repos)
 }
@@ -314,12 +314,12 @@ func TestRegistryAddRejectsIDNamePrefixCrossCollision(t *testing.T) {
 		{
 			name: "name collides with existing prefix",
 			repo: registry.Repo{ID: "beta-id", Name: "alpha-prefix", Path: filepath.Join(testutil.CanonicalTempDir(t), "beta")},
-			want: "repo name \"alpha-prefix\" collides with repo[0] beads_prefix",
+			want: "repo name \"alpha-prefix\" collides with repo[0] task prefix",
 		},
 		{
 			name: "prefix collides with existing id",
 			repo: registry.Repo{ID: "beta-id", Name: "Beta", Path: filepath.Join(testutil.CanonicalTempDir(t), "beta"), BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "alpha-id"},
-			want: "repo beads_prefix \"alpha-id\" collides with repo[0] id",
+			want: "repo task prefix \"alpha-id\" collides with repo[0] id",
 		},
 	}
 

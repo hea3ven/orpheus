@@ -36,7 +36,7 @@ func TestTaskListDocumentsRepositoryFilter(t *testing.T) {
 	if flag == nil {
 		t.Fatal("task list --repo flag is not registered")
 	}
-	if flag.Usage != "limit to registered repository id, name, or Beads prefix" {
+	if flag.Usage != "limit to registered repository id, name, or task prefix" {
 		t.Fatalf("task list --repo help = %q", flag.Usage)
 	}
 }

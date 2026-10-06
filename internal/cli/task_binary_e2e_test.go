@@ -86,9 +86,9 @@ printf 'reviewed\n' > reviewed.txt
 	stdout, stderr := executeCommandWithScriptedInput(t, []string{"task", "run", "--repo-root", "op-main"}, "", "n\n")
 
 	is.Contains(stdout, "Published op-main")
-	is.Contains(stderr, "Separate-task review findings can be created as standalone Beads")
-	is.Contains(stderr, "Create follow-up Beads [numbers, a=all, n=none]")
-	is.NotContains(stderr, "Created follow-up Bead")
+	is.Contains(stderr, "Separate-task review findings can be created as standalone tasks")
+	is.Contains(stderr, "Create follow-up tasks [numbers, a=all, n=none]")
+	is.NotContains(stderr, "Created follow-up task")
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
 	latest, ok := taskstate.LatestReview(state)

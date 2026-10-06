@@ -1,6 +1,6 @@
 # Tasks
 
-Tasks and epics belong to registered repositories. Beads owns their lifecycle;
+Tasks and epics belong to registered repositories. Each task source owns their lifecycle;
 Orpheus records execution, review, and publication history. Operators choose
 which work to run. Epics are planning containers, not executable tasks.
 
@@ -9,14 +9,36 @@ which work to run. Epics are planning containers, not executable tasks.
 ```sh
 orpheus repo add /path/to/repository
 orpheus repo list
-orpheus repo beads-dir my-repo
 orpheus status
 orpheus task list --repo my-repo
 orpheus task show op-123
 ```
 
-Registration uses existing local Beads state or an Orpheus-managed Beads workspace.
-Task IDs resolve through registered repository prefixes. `task show` includes
+Registration defaults to gig, even when the repository contains local Beads state.
+Use `orpheus repo add /path/to/repository --task-source beads` to select Beads,
+or `--task-source gig` to select gig explicitly. `repo list` shows each source,
+storage mode, and task prefix. Source selection is fixed at registration.
+
+Gig supports managed storage only. Orpheus creates and owns
+`$XDG_DATA_HOME/orpheus/repos/<repo-id>/gig/tasks.db`, with the usual
+`~/.local/share` fallback when `XDG_DATA_HOME` is unset. The database is local
+SQLite state, not Git-synchronized task storage. No gig executable, daemon,
+or manual database setup is needed. Repository-local gig stores are never
+adopted. Back up the Orpheus data root, including gig databases, alongside your
+repository backups. Do not remove a managed database to repair a read failure.
+Missing or empty databases and physical storage failures produce errors rather
+than empty inventories. Gig may tolerate malformed optional fields as empty
+values. Its SDK applies schema upgrades when opening storage, including reads.
+Managed paths cannot contain `%`, `?`, or `#`.
+
+Existing registrations without a source field remain Beads registrations.
+Explicit Beads registration uses an existing local Beads store or initializes
+managed Beads storage. `orpheus repo beads-dir <repo>` prints that location and
+reports an error for gig repositories. No task data is rewritten or imported.
+There is no source-switching, migration, or import/export command.
+
+Gig and Beads repositories can share one workspace. Task IDs resolve through
+registered repository prefixes. `task show` includes
 relationships and execution history; showing an epic includes its direct children.
 
 `status` is the action queue. It emphasizes needs-attention, reviewing, working,
@@ -75,6 +97,35 @@ for editing fields and dependency flags.
 Task completion instead goes through review and publication. When working on the
 Orpheus repository itself, agents must also follow the task-management restrictions
 in [AGENTS.md](../../AGENTS.md).
+
+## Gig behavior and recovery
+
+Gig uses its native SDK behavior. Starting a child can advance its immediate open
+parent, but current Orpheus dispatch and epic-start checks already require that
+parent to be in progress. Closing a prerequisite can reopen native blocked
+dependents. Orpheus normally projects blocking from dependencies rather than
+writing that native status. Gig considers cancelled children terminal, while
+Orpheus requires closed children and prerequisites. Current commands do not create
+cancelled states; manually setting native statuses does not extend Orpheus policy.
+Beads behavior is unchanged.
+
+Managed storage is for Orpheus to mutate. Direct external writes bypass its
+protection and are unsupported unless you accept responsibility. The mutation lock
+covers participating writers, not every entry point yet. Avoid simultaneous
+uncoordinated edits. A lock also cannot undo completed SDK calls after an error or
+crash. Lists and task details assembled across calls are not a single snapshot.
+
+If creation reports a created ID with an error, inspect that task and repair its
+dependencies with `task edit`. Do not repeat `task create`. Failed edits may have
+saved content or some relationships. A failed dispatch can leave branch/worktree
+facts and a start-attempt timestamp on an open task; retry the same dispatch.
+Closure can succeed even if subsequent unblocking fails. Inspect the task and its
+dependents, since retrying an already closed task does not replay unblocking.
+
+Follow-up creation and review-history recording are separate writes. After a crash
+or recording failure, inspect existing source tasks before repeating creation to
+avoid duplicates. SDK calls cannot be interrupted directly while in flight.
+See [task sources](../developer/task-sources.md) for mapping and storage limits.
 
 ## Run a task
 

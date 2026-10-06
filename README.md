@@ -18,15 +18,17 @@ pass is deferred until preparation for the first release.
 
 ## Build and use
 
-From this checkout, with Go installed:
+From this checkout, with Go 1.26.1 or newer installed:
 
 ```sh
 go install ./cmd/orpheus
 orpheus --help
 ```
 
-Ensure the Go install directory is on `PATH`. Runtime workflows need Git, Beads
-`bd`, and a configured coding-agent executable. Pull-request publication also
+Ensure the Go install directory is on `PATH`. Runtime workflows need Git and a
+configured coding-agent executable. The default task source, gig v0.7.0, is
+embedded in Orpheus and needs no CLI or daemon. Beads repositories also need
+`bd`. Pull-request publication also
 needs authenticated GitHub CLI `gh` access. Configure an [agent profile](docs/user/agents.md)
 before running work.
 

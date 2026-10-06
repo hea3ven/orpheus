@@ -21,7 +21,7 @@ func TestIntegrationWorkflowRepoAddInheritsGlobalSummaryStyleInAgentContext(t *t
 	fixture.configureImplementer("recorder", agent.Profile{Command: "unused-agent"})
 	fixture.agent.outcomes = []semanticAgentOutcome{{exitWithoutCompletion: true, captureContext: true}}
 
-	addOutput, addStderr, addErr := fixture.execute("repo", "add", repo.path)
+	addOutput, addStderr, addErr := fixture.execute("repo", "add", "--task-source", "beads", repo.path)
 	require.NoError(t, addErr)
 	_, runStderr, runErr := fixture.execute("task", "run", "op-style")
 

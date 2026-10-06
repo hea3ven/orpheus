@@ -49,7 +49,7 @@ func TestResolveTaskSourceSupportsHyphenatedRegisteredPrefix(t *testing.T) {
 		t.Fatal("resolve hyphenated prefix without task number succeeded, want error")
 	}
 	if !errors.Is(err, task.ErrMalformedTaskID) ||
-		!strings.Contains(err.Error(), "missing the Beads task number") {
+		!strings.Contains(err.Error(), "missing the task suffix") {
 		t.Fatalf("error = %v, want malformed missing task number", err)
 	}
 }
@@ -84,9 +84,9 @@ func TestResolveTaskSourceMalformedTaskIDsAreActionable(t *testing.T) {
 		want string
 	}{
 		{name: "blank", id: "  ", want: "task id is required"},
-		{name: "no separator", id: "op", want: "no Beads prefix separator"},
-		{name: "missing prefix", id: "-1", want: "missing a Beads prefix"},
-		{name: "missing number", id: "op-", want: "missing the Beads task number"},
+		{name: "no separator", id: "op", want: "no task prefix separator"},
+		{name: "missing prefix", id: "-1", want: "missing a task prefix"},
+		{name: "missing number", id: "op-", want: "missing the task suffix"},
 		{name: "whitespace", id: "op 1", want: "contains whitespace"},
 	}
 
@@ -119,7 +119,7 @@ func TestResolveTaskSourceMissingRegisteredPrefixes(t *testing.T) {
 		t.Fatalf("error = %v, want ErrUnknownTaskPrefix", err)
 	}
 	for _, want := range []string{
-		"no registered repositories have Beads prefixes",
+		"no registered repositories have task prefixes",
 		"legacy",
 		"orpheus repo list",
 	} {
@@ -143,7 +143,7 @@ func TestResolveTaskSourceRejectsCollisionPreventedPrefixes(t *testing.T) {
 		t.Fatalf("error = %v, want ErrAmbiguousTaskPrefix", err)
 	}
 	for _, want := range []string{
-		"multiple registered Beads prefixes",
+		"multiple registered task prefixes",
 		"alpha",
 		"beta",
 		"repair the registry",

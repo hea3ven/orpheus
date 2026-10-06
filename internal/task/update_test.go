@@ -3,6 +3,7 @@ package task_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ type fakeUpdateBackend struct {
 	getErrors map[string]error
 	updated   bool
 	opts      task.UpdateOptions
+	updateErr error
 }
 
 func (b *fakeUpdateBackend) Get(_ context.Context, id string) (task.Task, error) {
@@ -32,7 +34,34 @@ func (b *fakeUpdateBackend) Get(_ context.Context, id string) (task.Task, error)
 func (b *fakeUpdateBackend) Update(_ context.Context, opts task.UpdateOptions) (task.Task, error) {
 	b.updated = true
 	b.opts = opts
-	return b.tasks[opts.ID], nil
+	return b.tasks[opts.ID], b.updateErr
+}
+
+func TestUpdateServicePreservesPartialRecoveryGuidanceWithoutExposingStorageDetails(t *testing.T) {
+	storageErr := errors.New("private storage details")
+	for _, partial := range []bool{false, true} {
+		t.Run(fmt.Sprintf("partial=%t", partial), func(t *testing.T) {
+			source := createTestSource("alpha", "op", "/fixture/alpha")
+			backend := updateBackendWithCurrent()
+			backend.updateErr = storageErr
+			if partial {
+				backend.updateErr = fmt.Errorf("source wrapper: %w", task.PartialUpdateError{Cause: storageErr})
+			}
+
+			_, err := updateService(source, backend).Update(t.Context(), source, task.UpdateOptions{ID: "op-current", Title: stringPtr("Changed")})
+
+			if !errors.Is(err, storageErr) {
+				t.Fatalf("Update() error = %v, want original storage failure in chain", err)
+			}
+			want := `cannot update task "op-current" in repository alpha`
+			if partial {
+				want += "; edit partially applied; inspect content and dependencies before retrying"
+			}
+			if err.Error() != want {
+				t.Errorf("Update() error = %q, want %q", err, want)
+			}
+		})
+	}
 }
 
 func TestUpdateServiceEnforcesRequiredExternalReferenceBeforeMutation(t *testing.T) {
