@@ -58,7 +58,7 @@ lanes:
         github.com/hea3ven/orpheus/internal/review: 0.963
         github.com/hea3ven/orpheus/internal/taskbranch: 0.296
         github.com/hea3ven/orpheus/internal/tasksource/beads: 42.452
-        github.com/hea3ven/orpheus/internal/tasksource/gig: 2.500
+        github.com/hea3ven/orpheus/internal/tasksource/gig: 2.5
         github.com/hea3ven/orpheus/internal/testguard: 0.896
   unit:
     coverage:
