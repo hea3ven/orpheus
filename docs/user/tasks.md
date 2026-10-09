@@ -145,6 +145,15 @@ advances the existing workflow rather than blindly launching another implementer
 It can resume [review](reviews.md), dispatch targeted repairs, or retry
 [publication](publication.md). Once a PR exists, use sync for reconciliation.
 
+If a repo-root agent exits without recording completion, rerun
+`orpheus task run <task-id>` without `--repo-root`. Matching local run history and
+task metadata allow continuation in the recorded directory and branch, preserving staged,
+unstaged, and untracked changes. Setup does not fetch, merge, switch branches,
+stash, reset, or commit. This also applies after failure or an interruption that
+Orpheus can safely reconcile. Live or unverifiable processes still block a new
+attempt. The agent starts a new session from the existing files, not the previous
+conversation. Missing run history does not authorize dirty reuse.
+
 ## Task branch names
 
 Configure the global template in Orpheus `config.yaml`:

@@ -128,6 +128,7 @@ type memoryDispatchGit struct {
 	setups              []gitmeta.TaskWorktreeSetupResult
 	hasCandidateChanges bool
 	repoRootError       error
+	repoRootDirty       bool
 	repoRootSetups      []gitmeta.RepoRootOptions
 	worktreeSetups      []gitmeta.TaskWorktreeOptions
 }
@@ -140,6 +141,9 @@ func (g *memoryDispatchGit) SetupRepoRoot(_ context.Context, opts gitmeta.RepoRo
 	g.repoRootSetups = append(g.repoRootSetups, opts)
 	if g.repoRootError != nil {
 		return gitmeta.TaskWorktreeSetupResult{}, g.repoRootError
+	}
+	if g.repoRootDirty && !opts.AllowDirty {
+		return gitmeta.TaskWorktreeSetupResult{}, errors.New("uncommitted changes")
 	}
 	return g.setup(opts.RepoPath, opts.DefaultBranch, gitmeta.TaskWorktreeLifecycleReused), nil
 }
