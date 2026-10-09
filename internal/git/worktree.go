@@ -34,8 +34,10 @@ type TaskWorktreeOptions struct {
 	TaskID        string
 	// Branch is the already-resolved task branch. An empty value preserves the
 	// historical orpheus/<task-id> convention for direct package callers.
-	Branch     string
-	Paths      state.Paths
+	Branch string
+	Paths  state.Paths
+	// AllowDirty reuses a validated repo-root target without switching branches
+	// or synchronizing with origin. The caller must establish task ownership.
 	AllowDirty bool
 }
 
@@ -45,7 +47,9 @@ type RepoRootOptions struct {
 	RepoName      string
 	RepoPath      string
 	DefaultBranch string
-	AllowDirty    bool
+	// AllowDirty reuses the current default-branch checkout without changing
+	// files or synchronizing with origin. The caller must establish task ownership.
+	AllowDirty bool
 }
 
 // TaskWorktreeSetupResult is the backend-neutral result of preparing a task execution target.
@@ -401,7 +405,7 @@ func SetupTaskWorktree(ctx context.Context, opts TaskWorktreeOptions) (TaskWorkt
 // It refuses to mutate the checkout until the repo root is clean, then fetches the
 // default branch from origin, switches to the local default branch, and fast-forwards
 // from origin using --ff-only. No task branch or deterministic task worktree is
-// created for this mode.
+// created for this mode. With AllowDirty, it only validates the existing target.
 func SetupRepoRoot(ctx context.Context, opts RepoRootOptions) (TaskWorktreeSetupResult, error) {
 	if ctx == nil {
 		ctx = context.Background()

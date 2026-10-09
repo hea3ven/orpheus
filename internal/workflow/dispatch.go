@@ -161,6 +161,7 @@ type dispatchStartPlan struct {
 	expected   gitmeta.TaskWorktreeSetupResult
 	targetKind tasktarget.TargetKind
 	followUp   *dispatchFollowUpPlan
+	continuing bool
 }
 
 type dispatchFollowUpPlan struct {
@@ -416,7 +417,7 @@ func (s DispatchService) setupTargetPhase(
 	span := s.startPhase(ctx, "git target preparation", opts.Source.Repository.ID, opts.TaskID,
 		slog.String("target_kind", string(plan.targetKind)),
 	)
-	setup, err := s.setupTarget(ctx, opts, plan.targetKind, plan.expected.Branch, plan.followUp != nil)
+	setup, err := s.setupTarget(ctx, opts, plan.targetKind, plan.expected.Branch, plan.followUp != nil || plan.continuing)
 	if err != nil {
 		span.FinishError(ctx, err)
 		return gitmeta.TaskWorktreeSetupResult{}, err
@@ -616,7 +617,11 @@ func (s DispatchService) validateDispatchStartTarget(
 	if err != nil {
 		return dispatchStartPlan{}, err
 	}
-	if err := ensureDispatchEligible(taskItem, expected, repo, opts.RepoRootMode, reviewPlan != nil); err != nil {
+	continuing, err := s.continuingRepoRootRun(repo.ID, taskItem, expected, targetKind)
+	if err != nil {
+		return dispatchStartPlan{}, err
+	}
+	if err := ensureDispatchEligible(taskItem, expected, repo, opts.RepoRootMode, reviewPlan != nil || continuing); err != nil {
 		return dispatchStartPlan{}, err
 	}
 	if isFeatureBranchTarget(targetKind) {
@@ -629,7 +634,40 @@ func (s DispatchService) validateDispatchStartTarget(
 			return dispatchStartPlan{}, err
 		}
 	}
-	return dispatchStartPlan{taskItem: taskItem, expected: expected, targetKind: targetKind, followUp: reviewPlan}, nil
+	return dispatchStartPlan{taskItem: taskItem, expected: expected, targetKind: targetKind, followUp: reviewPlan, continuing: continuing}, nil
+}
+
+// Continuing an unfinished implementation reuses the files, not the agent session.
+// Backend metadata alone cannot authorize dirty reuse without local run history.
+func (s DispatchService) continuingRepoRootRun(
+	repoID string,
+	taskItem task.Task,
+	expected gitmeta.TaskWorktreeSetupResult,
+	targetKind tasktarget.TargetKind,
+) (bool, error) {
+	if targetKind != tasktarget.TargetMainSolo && targetKind != tasktarget.TargetRepoRootTeam {
+		return false, nil
+	}
+	state, err := s.RunStore.Load(repoID, taskItem.ID)
+	if err != nil {
+		return false, fmt.Errorf("inspect unfinished implementation: %w", err)
+	}
+	latest, ok := taskstate.LatestRun(state)
+	if !ok || latest.Completion != nil {
+		return false, nil
+	}
+	switch latest.Status {
+	case taskstate.RunStatusSucceeded, taskstate.RunStatusFailed, taskstate.RunStatusInterrupted:
+	default:
+		return false, nil
+	}
+	facts, hasFacts := taskstate.GitFactsFor(state)
+	directory, hasDirectory := taskstate.WorkDirectoryFor(state)
+	return hasFacts && hasDirectory &&
+		strings.TrimSpace(facts.Branch) == expected.Branch &&
+		cleanDispatchPath(facts.Worktree) == cleanDispatchPath(expected.WorktreePath) &&
+		cleanDispatchPath(directory.Path) == cleanDispatchPath(expected.WorktreePath) &&
+		dispatchMetadataMatches(taskItem.OrpheusMetadata(), expected), nil
 }
 
 func ensureDispatchParentEpicGate(ctx context.Context, backend DispatchBackend, taskItem task.Task) error {
