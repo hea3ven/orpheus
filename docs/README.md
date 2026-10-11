@@ -20,7 +20,7 @@ Build instructions and shell completion remain in the [project README](../README
 | Guide | Contents |
 | --- | --- |
 | [Architecture](developer/architecture.md) | Package responsibilities, state ownership, and design decisions. Maintained through architecture reviews; check code before relying on implementation details. |
-| [Domain glossary](../CONTEXT.md) | Shared project terminology. |
+| [Domain glossary](../GLOSSARY.md) | Shared project terminology. |
 | [Testing](developer/testing.md) | Test ownership, fixtures, isolation, quality policy, and CI. |
 | [Task sources](developer/task-sources.md) | Adapter selection, managed gig storage, lifecycle semantics, and build requirements. |
 | [Task JSON](developer/task-json.md) | Agent/tooling contract, serializer definitions, relationships, and read failures. |

@@ -52,7 +52,7 @@ configuration and recovery rather than running historical validation recipes.
 
 ## Development
 
-Follow [AGENTS.md](AGENTS.md) for repository working rules and [CONTEXT.md](CONTEXT.md)
+Follow [AGENTS.md](AGENTS.md) for repository working rules and [GLOSSARY.md](GLOSSARY.md)
 for domain vocabulary. Run `make check` after code changes; it formats, runs both
 test lanes once through `make quality`, lints, and builds. Documentation-only edits
 and read-only analysis do not require these checks. See

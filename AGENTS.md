@@ -4,7 +4,7 @@
 
 Orpheus is an unreleased MVP used only by its author. It has not been released or published. Do not add backward-compatibility layers, legacy APIs, migrations, or deprecation machinery unless explicitly requested. Prefer the current design over preserving obsolete behavior for hypothetical users. This does not permit discarding operator data; call out any required local state changes before applying them.
 
-Use `docs/README.md` to find current user and developer guides, and `CONTEXT.md` for domain vocabulary. Historical plans, reviews, and validation reports live on the `docs` archive branch and are not routine implementation context. Keep current documentation concise and undated. `docs/developer/architecture.md` is maintained through architecture reviews, not general documentation cleanup.
+Use `docs/README.md` to find current user and developer guides, and `GLOSSARY.md` for domain vocabulary. Historical plans, reviews, and validation reports live on the `docs` archive branch and are not routine implementation context. Keep current documentation concise and undated. `docs/developer/architecture.md` is maintained through architecture reviews, not general documentation cleanup.
 
 ## Validation
 

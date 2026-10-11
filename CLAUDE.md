@@ -5,5 +5,5 @@ Orpheus is an unreleased, single-user MVP; do not assume backward-compatibility
 requirements or add legacy support without an explicit request.
 
 Use [docs/README.md](docs/README.md) for current documentation and
-[CONTEXT.md](CONTEXT.md) for domain vocabulary. Do not load the `docs` archive
+[GLOSSARY.md](GLOSSARY.md) for domain vocabulary. Do not load the `docs` archive
 branch as routine project context.

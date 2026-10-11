@@ -140,10 +140,11 @@ implementer. Use `--repo-root` on first dispatch to work in the registered
 repository checkout instead. That starts on a clean default branch and
 materializes the task branch at publication.
 
-The work directory stays fixed across retries and repairs. Rerunning `task run`
-advances the existing workflow rather than blindly launching another implementer.
-It can resume [review](reviews.md), dispatch targeted repairs, or retry
-[publication](publication.md). Once a PR exists, use sync for reconciliation.
+The work directory is selected on first dispatch and stays fixed across retries,
+repairs, and publication, even if the checked-out branch changes. Rerunning
+`task run` advances the existing workflow rather than blindly launching another
+implementer. It can resume [review](reviews.md), dispatch targeted repairs, or
+retry [publication](publication.md). Once a PR exists, use sync for reconciliation.
 
 If a repo-root agent exits without recording completion, rerun
 `orpheus task run <task-id>` without `--repo-root`. Matching local run history and

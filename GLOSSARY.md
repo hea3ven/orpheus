@@ -1,8 +1,10 @@
-# Orpheus Context
+# Orpheus
 
 Orpheus is a CLI-first orchestration layer for coordinating existing coding agents across repository-local tasks, review boundaries, and publication while keeping a human operator in control.
 
-## People and Control
+## Language
+
+### People and Control
 
 **Operator**:
 The engineer who chooses work, reviews outcomes, decides when work is safe to publish, and remains accountable for merge/finalization decisions.
@@ -25,10 +27,10 @@ The organization or service that supplies a model or model pricing; it is not th
 _Avoid_: Harness, agent, runtime
 
 **Agent Profile**:
-A named launch configuration for an agent; it may specify the harness, model, command, arguments, and prompt interpolation used to start the agent, but not what task should be done.
+A named configuration describing how an agent is launched, distinct from the task it performs.
 _Avoid_: Agent type, provider, runtime
 
-## Work Model
+### Work Model
 
 **Epic**:
 A repository-scoped feature or goal large enough to be broken into multiple tasks.
@@ -43,11 +45,11 @@ A relationship where one task cannot safely proceed until another task is comple
 _Avoid_: Blocker link, prerequisite
 
 **Registered Repository**:
-A repository that Orpheus knows how to locate, inspect through its task source, and apply repository-specific workflow policies to.
+A repository registered with Orpheus for task discovery and repository-specific workflow policies.
 _Avoid_: Repo record, source, checkout
 
 **Task Source**:
-The authoritative source of task lifecycle truth that Orpheus reads from and updates for task status, dependencies, lifecycle timestamps, and completion.
+The authoritative source of task lifecycle facts, including status, dependencies, timestamps, and completion.
 _Avoid_: Task backend, task provider, task store, Orpheus database
 
 **Beads**:
@@ -55,10 +57,10 @@ A supported task source for Orpheus; it owns the authoritative task lifecycle wh
 _Avoid_: Internal task store, issue DB
 
 **Gig**:
-The default task source for newly registered repositories; it owns task lifecycle facts while Orpheus owns execution and review history.
+A supported task source for Orpheus; it owns task lifecycle facts while Orpheus owns execution and review history.
 _Avoid_: Execution store, review store
 
-## Execution and Review
+### Execution and Review
 
 **Run**:
 An agent execution focused on implementing code changes for a task.
@@ -81,11 +83,11 @@ The measured or estimated resource use of an agent execution, such as tokens, ac
 _Avoid_: Billing, exact cost
 
 **Estimated Cost**:
-An API-equivalent estimate calculated from recorded usage and pricing metadata, or a cost estimate reported by the harness. Neither is guaranteed to match subscription billing or vendor invoices.
+An API-equivalent estimate of agent usage cost, or an estimate reported by the harness. Neither is guaranteed to match subscription billing or vendor invoices.
 _Avoid_: Exact cost, billed cost
 
 **Unknown Usage**:
-An agent usage result where Orpheus cannot reliably determine usage values and records the reason instead of inventing or hiding numbers.
+An agent usage result whose values cannot be reliably determined, with an explicit reason for the uncertainty.
 _Avoid_: Zero usage, missing data, harness failure, session failure
 
 **Active Agent Working Time**:
@@ -105,11 +107,11 @@ The task-source-agnostic task and repository guidance that Orpheus gives an agen
 _Avoid_: Prompt, task dump, Beads context
 
 **Agent Completion**:
-The point where an agent reports that implementation work is finished and hands Orpheus the summary and descriptions needed for review and publication; it makes the task ready for task review, not publication or task completion.
+The handoff of finished implementation work from an agent to task review. It is not task completion or authorization to publish.
 _Avoid_: Completion handshake, task completion, done state, merge readiness
 
 **Work Directory**:
-The checkout selected on first dispatch where an agent edits files for a task, either the registered repository root or a dedicated Orpheus worktree. It remains fixed across the task's runs even if the checked-out branch changes during publication.
+The checkout assigned to a task for implementation, either the registered repository root or a dedicated Orpheus worktree.
 _Avoid_: Workspace, folder, working copy
 
 **Worktree**:
@@ -117,15 +119,15 @@ A dedicated Git worktree created or reused by Orpheus as a task's isolated work 
 _Avoid_: Workspace, clone, checkout
 
 **Task Branch**:
-The deterministic feature branch that carries a task's reviewed changes through publication. Worktree-based tasks use it during implementation, while repository-root tasks may materialize it only after review.
+The branch that carries a task's reviewed changes through publication.
 _Avoid_: Work branch, feature branch, implementation branch
 
 **Integration Flow**:
-The way reviewed task work is integrated: through a pull request or by merging the task branch into the integration destination. Configured defaults and any task-specific manual-review choice determine it independently of the work directory.
+The way reviewed task work is integrated: through a pull request or by merging the task branch into the integration destination. It is independent of the task's work directory.
 _Avoid_: Task target, publishing target, branch mode, review mode
 
 **Integration Destination**:
-The branch that receives reviewed task work, either as the pull-request base or the destination of a direct merge. It defaults to the repository's registered default branch unless the operator selects another destination during manual review.
+The branch that receives reviewed task work, either as the pull-request base or the destination of a direct merge.
 _Avoid_: Work directory, task branch, integration flow
 
 **Task Review**:
@@ -137,7 +139,7 @@ An issue found during task review that may block publication or finalization, or
 _Avoid_: PR comment, task, bug
 
 **Publication**:
-The act of pushing reviewed work out of the task review boundary, either by pushing a task branch and creating or recovering a pull request, or by pushing the integration destination after a direct merge.
+The delivery of reviewed task work beyond the task review boundary to the remote repository, through a pull request or a direct merge.
 _Avoid_: Finalization, sync, release, deploy
 
 **Finalization**:
@@ -149,10 +151,10 @@ The external review object for feature-branch work after task review has passed.
 _Avoid_: Review, publication, merge request
 
 **Sync**:
-The reconciliation step for published tasks, combining external pull-request state with task-source updates and integration-destination changes to open task branches. It does not create new pull requests.
+The reconciliation of published task work with external pull-request state, task-source lifecycle facts, and the integration destination. It does not create new pull requests.
 _Avoid_: Publication, polling, PR creation
 
-## Status and Policy
+### Status and Policy
 
 **Status Projection**:
 Orpheus' local operator-facing classification of tasks using task-source facts, run facts, review state, and policy state.
@@ -175,7 +177,7 @@ A status projection for tasks that require operator correction before Orpheus ca
 _Avoid_: Error, repository failure, blocked
 
 **Publication Policy**:
-The rules that guide agent summaries and determine how completion summaries become commit subjects or pull-request titles. Repository overrides refine machine-wide defaults.
+The rules for agent completion summaries and their use as commit subjects or pull-request titles.
 _Avoid_: Repository publication policy, commit template, PR template, Jira policy
 
 **Tracking Reference**:

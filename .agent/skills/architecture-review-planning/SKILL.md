@@ -48,7 +48,7 @@ ignoring it.
 Read:
 
 - root and scoped `AGENTS.md` files;
-- `docs/developer/architecture.md`, `CONTEXT.md`, and relevant current guides from `docs/README.md`;
+- `docs/developer/architecture.md`, `GLOSSARY.md`, and relevant current guides from `docs/README.md`;
 - repository entry points and package list;
 - production import relationships;
 - package-level tests around important boundaries;

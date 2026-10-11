@@ -24,7 +24,7 @@ This is **not** a general bug, style, lint, or security review. Mention implemen
 ## Review Workflow
 
 1. **Orient before judging**
-   - Read `AGENTS.md`, `CONTEXT.md`, `docs/developer/architecture.md`, relevant current guides from `docs/README.md`, package layout, entry points, and tests around the scope.
+   - Read `AGENTS.md`, `GLOSSARY.md`, `docs/developer/architecture.md`, relevant current guides from `docs/README.md`, package layout, entry points, and tests around the scope.
    - Start with the latest dated review under `docs/arch-review/` on the `docs` branch. Read it without switching checkouts and verify its findings and referenced Beads against current code. Summarize progress before proposing new work.
    - Read `.agent/skills/architecture-review-planning/SKILL.md` for previous-report selection, progress assessment, and the two documentation outputs. The report is historical evidence; `docs/developer/architecture.md` on `main` is the maintained architecture reference.
    - Orpheus is an unreleased, single-user MVP. Do not assume backward-compatibility requirements or recommend legacy support without an explicit need.
