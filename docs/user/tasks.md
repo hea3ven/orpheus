@@ -101,7 +101,7 @@ in [AGENTS.md](../../AGENTS.md).
 ## Gig behavior and recovery
 
 Gig uses its native SDK behavior. Starting a child can advance its immediate open
-parent, but current Orpheus dispatch and epic-start checks already require that
+parent, but Orpheus initial dispatch and epic-start checks already require that
 parent to be in progress. Closing a prerequisite can reopen native blocked
 dependents. Orpheus normally projects blocking from dependencies rather than
 writing that native status. Gig considers cancelled children terminal, while
@@ -133,6 +133,13 @@ See [task sources](../developer/task-sources.md) for mapping and storage limits.
 orpheus task run op-123
 orpheus task dir op-123
 ```
+
+Before an open task starts, `task run` checks its status projection. Blocked and
+needs-attention tasks are rejected with the projected reason, before work directory
+setup, lifecycle changes, or a new execution record. Fix the reported problem and
+retry. In-progress tasks skip this eligibility gate, including dependency and parent
+checks, so later relationship changes do not prevent retries, reviews, or repairs.
+Run-state and target protections still apply.
 
 Orpheus creates or reuses a deterministic task worktree and branch, then launches
 the selected [agent profile](agents.md). Use `--agent <profile>` to override the

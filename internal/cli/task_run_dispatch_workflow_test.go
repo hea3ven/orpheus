@@ -58,7 +58,7 @@ func TestIntegrationWorkflowTaskRunMissingExternalReferenceBlocksSetup(t *testin
 			assert.Contains(t, statusOutput, "op-reference")
 			assert.Contains(t, statusOutput, "missing required external reference")
 			assert.Empty(t, statusStderr)
-			assert.ErrorContains(t, err, "publication title template requires a task external reference")
+			assert.ErrorContains(t, err, "missing required external reference")
 			assert.ErrorContains(t, err, "orpheus task edit op-reference --external-ref <reference>")
 			assert.Empty(t, stdout)
 			assert.Empty(t, stderr)
