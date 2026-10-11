@@ -110,6 +110,15 @@ def main():
         summary["published_baseline"][str(attempt)] = published_comparison(
             groups[1]["A"], groups[attempt]["B"],
             summary["attempts"]["1"]["fingerprint"], summary["attempts"][str(attempt)]["fingerprint"])
+    if 1 in groups and 3 in groups:
+        summary["cross_run_unchanged_source"] = {}
+        for before, after in [(1, 3), (3, 1)]:
+            result = compare(groups[before]["A"], groups[after]["A"])
+            summary["cross_run_unchanged_source"][f"{before}_to_{after}"] = {
+                "status": "unevaluated",
+                "reason": "Numerical simulation only: different CPUs and incomplete resource-limit fingerprints",
+                "comparison": result, "numerical_violations": violations(result),
+            }
     (root / "analysis.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     print(json.dumps(summary, indent=2))
 

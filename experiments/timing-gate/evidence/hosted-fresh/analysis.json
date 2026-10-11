@@ -407,7 +407,903 @@
       "status": "unevaluated"
     },
     "3": {
-      "reason": "[Errno 2] No such file or directory: 'experiments/timing-gate/evidence/hosted-fresh/attempt-3/hosted-output/manifest.json'",
+      "environment_error": "unevaluated: missing resource limits",
+      "fingerprint": null,
+      "groups": {
+        "A": {
+          "count": 5,
+          "lanes": {
+            "integration": {
+              "gig_seconds": {
+                "max": 0.723,
+                "median": 0.675,
+                "min": 0.616
+              },
+              "selected_package_count": 10,
+              "selected_test_seconds": {
+                "max": 27.644,
+                "median": 27.533,
+                "min": 27.253999999999998
+              },
+              "test_count": 638,
+              "wall_seconds": {
+                "max": 16.705531184,
+                "median": 16.567224795,
+                "min": 16.473366943
+              }
+            },
+            "unit": {
+              "gig_seconds": {
+                "max": 0.044,
+                "median": 0.04,
+                "min": 0.037
+              },
+              "selected_package_count": 25,
+              "selected_test_seconds": {
+                "max": 2.107,
+                "median": 2.0360000000000005,
+                "min": 2
+              },
+              "test_count": 1259,
+              "wall_seconds": {
+                "max": 2.401615223,
+                "median": 2.382202514,
+                "min": 2.341451374
+              }
+            }
+          },
+          "total": {
+            "selected_test_seconds": {
+              "max": 29.68,
+              "median": 29.54,
+              "min": 29.322999999999997
+            },
+            "wall_seconds": {
+              "max": 19.107146407000002,
+              "median": 18.949427309,
+              "min": 18.863641975
+            }
+          }
+        },
+        "B": {
+          "count": 5,
+          "lanes": {
+            "integration": {
+              "gig_seconds": {
+                "max": 3.6790000000000003,
+                "median": 3.67,
+                "min": 3.637
+              },
+              "selected_package_count": 10,
+              "selected_test_seconds": {
+                "max": 29.922,
+                "median": 29.709,
+                "min": 29.418999999999997
+              },
+              "test_count": 638,
+              "wall_seconds": {
+                "max": 16.941576208,
+                "median": 16.519094719,
+                "min": 16.482207955
+              }
+            },
+            "unit": {
+              "gig_seconds": {
+                "max": 0.05,
+                "median": 0.043,
+                "min": 0.037
+              },
+              "selected_package_count": 25,
+              "selected_test_seconds": {
+                "max": 2.2079999999999993,
+                "median": 2.059,
+                "min": 2.0290000000000004
+              },
+              "test_count": 1259,
+              "wall_seconds": {
+                "max": 2.534496808,
+                "median": 2.373971917,
+                "min": 2.321934028
+              }
+            }
+          },
+          "total": {
+            "selected_test_seconds": {
+              "max": 31.951,
+              "median": 31.892999999999997,
+              "min": 31.477999999999998
+            },
+            "wall_seconds": {
+              "max": 19.315548125,
+              "median": 18.878882762,
+              "min": 18.841028747000003
+            }
+          }
+        }
+      },
+      "original_policy_decisions": {
+        "1-A": "pass",
+        "1-B": "timing_budget_exceeded",
+        "2-A": "pass",
+        "2-B": "timing_budget_exceeded",
+        "3-A": "pass",
+        "3-B": "timing_budget_exceeded",
+        "4-A": "pass",
+        "4-B": "timing_budget_exceeded",
+        "5-A": "pass",
+        "5-B": "timing_budget_exceeded",
+        "warm-A": "pass",
+        "warm-B": "timing_budget_exceeded"
+      },
+      "pair_suspicions": [
+        [
+          "integration:github.com/hea3ven/orpheus/internal/tasksource/gig"
+        ],
+        [
+          "integration:github.com/hea3ven/orpheus/internal/tasksource/gig"
+        ],
+        [
+          "integration:github.com/hea3ven/orpheus/internal/tasksource/gig"
+        ],
+        [
+          "integration:github.com/hea3ven/orpheus/internal/tasksource/gig"
+        ],
+        [
+          "integration:github.com/hea3ven/orpheus/internal/tasksource/gig"
+        ]
+      ],
+      "path_costs": {
+        "confirmation_including_warmups": {
+          "collector_command_wall_seconds": 269.11153313599993,
+          "selected_test_seconds": 376.114,
+          "wall_seconds": 262.481382204
+        },
+        "normal_including_warmups": {
+          "collector_command_wall_seconds": 112.793719614,
+          "selected_test_seconds": 131.082,
+          "wall_seconds": 110.534174122
+        },
+        "published_consumer_confirmation": {
+          "collector_command_wall_seconds": 118.04531318499998,
+          "selected_test_seconds": 192.344,
+          "wall_seconds": 114.76467825200001
+        },
+        "published_consumer_normal": {
+          "collector_command_wall_seconds": 39.75523665499999,
+          "selected_test_seconds": 65.089,
+          "wall_seconds": 38.637194162
+        },
+        "publisher": {
+          "collector_command_wall_seconds": 151.06621995099994,
+          "selected_test_seconds": 183.76999999999998,
+          "wall_seconds": 147.716703952
+        }
+      },
+      "same_runner_comparison": {
+        "integration": {
+          "added": [],
+          "metrics": {
+            "github.com/hea3ven/orpheus/cmd/testcoverage": {
+              "base": 0.402,
+              "candidate": 0.374,
+              "ceiling": 0.7035,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/agentexec": {
+              "base": 0.679,
+              "candidate": 0.669,
+              "ceiling": 1.18825,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/cli": {
+              "base": 4.952,
+              "candidate": 4.427,
+              "ceiling": 8.666,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/git": {
+              "base": 6.4030000000000005,
+              "candidate": 6.105,
+              "ceiling": 11.205250000000001,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/pullrequest": {
+              "base": 0.23,
+              "candidate": 0.236,
+              "ceiling": 0.48,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/review": {
+              "base": 0.204,
+              "candidate": 0.202,
+              "ceiling": 0.45399999999999996,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/taskbranch": {
+              "base": 0.05,
+              "candidate": 0.051,
+              "ceiling": 0.3,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/tasksource/beads": {
+              "base": 13.68,
+              "candidate": 13.551,
+              "ceiling": 23.939999999999998,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/tasksource/gig": {
+              "base": 0.675,
+              "candidate": 3.67,
+              "ceiling": 1.1812500000000001,
+              "exceeds": true
+            },
+            "github.com/hea3ven/orpheus/internal/testguard": {
+              "base": 0.224,
+              "candidate": 0.197,
+              "ceiling": 0.474,
+              "exceeds": false
+            },
+            "suite": {
+              "base": 27.533,
+              "candidate": 29.709,
+              "ceiling": 41.2995,
+              "exceeds": false
+            }
+          },
+          "removed": []
+        },
+        "unit": {
+          "added": [],
+          "metrics": {
+            "github.com/hea3ven/orpheus/cmd/testcoverage": {
+              "base": 0.055,
+              "candidate": 0.052,
+              "ceiling": 0.305,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/agent": {
+              "base": 0.223,
+              "candidate": 0.22,
+              "ceiling": 0.473,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/agentexec": {
+              "base": 0.036,
+              "candidate": 0.039,
+              "ceiling": 0.286,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/cli": {
+              "base": 0.124,
+              "candidate": 0.125,
+              "ceiling": 0.374,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/doctor": {
+              "base": 0.08,
+              "candidate": 0.085,
+              "ceiling": 0.33,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/git": {
+              "base": 0.146,
+              "candidate": 0.162,
+              "ceiling": 0.396,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/publication": {
+              "base": 0.053,
+              "candidate": 0.052,
+              "ceiling": 0.303,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/pullrequest": {
+              "base": 0.042,
+              "candidate": 0.045,
+              "ceiling": 0.292,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/readiness": {
+              "base": 0.041,
+              "candidate": 0.041,
+              "ceiling": 0.291,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/registry": {
+              "base": 0.062,
+              "candidate": 0.056,
+              "ceiling": 0.312,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/review": {
+              "base": 0.056,
+              "candidate": 0.047,
+              "ceiling": 0.306,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/revieweval": {
+              "base": 0.078,
+              "candidate": 0.087,
+              "ceiling": 0.328,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/state": {
+              "base": 0.05,
+              "candidate": 0.053,
+              "ceiling": 0.3,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/status": {
+              "base": 0.043,
+              "candidate": 0.045,
+              "ceiling": 0.293,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/task": {
+              "base": 0.05,
+              "candidate": 0.06,
+              "ceiling": 0.3,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/taskbranch": {
+              "base": 0.041,
+              "candidate": 0.04,
+              "ceiling": 0.291,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/tasksource/beads": {
+              "base": 0.053,
+              "candidate": 0.053,
+              "ceiling": 0.303,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/tasksource/gig": {
+              "base": 0.04,
+              "candidate": 0.043,
+              "ceiling": 0.29,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/taskstate": {
+              "base": 0.228,
+              "candidate": 0.233,
+              "ceiling": 0.478,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/taskstats": {
+              "base": 0.042,
+              "candidate": 0.042,
+              "ceiling": 0.292,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/tasktarget": {
+              "base": 0.147,
+              "candidate": 0.166,
+              "ceiling": 0.397,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/testguard": {
+              "base": 0.037,
+              "candidate": 0.036,
+              "ceiling": 0.287,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/testlane": {
+              "base": 0.156,
+              "candidate": 0.147,
+              "ceiling": 0.406,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/testutil": {
+              "base": 0.029,
+              "candidate": 0.038,
+              "ceiling": 0.279,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/workflow": {
+              "base": 0.107,
+              "candidate": 0.109,
+              "ceiling": 0.357,
+              "exceeds": false
+            },
+            "suite": {
+              "base": 2.0360000000000005,
+              "candidate": 2.059,
+              "ceiling": 3.0540000000000007,
+              "exceeds": false
+            }
+          },
+          "removed": []
+        }
+      },
+      "same_runner_median_violations": [
+        "integration:github.com/hea3ven/orpheus/internal/tasksource/gig"
+      ],
+      "status": "unevaluated"
+    }
+  },
+  "cross_run_unchanged_source": {
+    "1_to_3": {
+      "comparison": {
+        "integration": {
+          "added": [],
+          "metrics": {
+            "github.com/hea3ven/orpheus/cmd/testcoverage": {
+              "base": 0.495,
+              "candidate": 0.402,
+              "ceiling": 0.86625,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/agentexec": {
+              "base": 0.895,
+              "candidate": 0.679,
+              "ceiling": 1.5662500000000001,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/cli": {
+              "base": 7.07,
+              "candidate": 4.952,
+              "ceiling": 12.3725,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/git": {
+              "base": 9.315,
+              "candidate": 6.4030000000000005,
+              "ceiling": 16.30125,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/pullrequest": {
+              "base": 0.294,
+              "candidate": 0.23,
+              "ceiling": 0.544,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/review": {
+              "base": 0.277,
+              "candidate": 0.204,
+              "ceiling": 0.527,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/taskbranch": {
+              "base": 0.077,
+              "candidate": 0.05,
+              "ceiling": 0.327,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/tasksource/beads": {
+              "base": 17.055,
+              "candidate": 13.68,
+              "ceiling": 29.846249999999998,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/tasksource/gig": {
+              "base": 0.844,
+              "candidate": 0.675,
+              "ceiling": 1.4769999999999999,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/testguard": {
+              "base": 0.368,
+              "candidate": 0.224,
+              "ceiling": 0.644,
+              "exceeds": false
+            },
+            "suite": {
+              "base": 36.744,
+              "candidate": 27.533,
+              "ceiling": 55.116,
+              "exceeds": false
+            }
+          },
+          "removed": []
+        },
+        "unit": {
+          "added": [],
+          "metrics": {
+            "github.com/hea3ven/orpheus/cmd/testcoverage": {
+              "base": 0.081,
+              "candidate": 0.055,
+              "ceiling": 0.331,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/agent": {
+              "base": 0.327,
+              "candidate": 0.223,
+              "ceiling": 0.577,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/agentexec": {
+              "base": 0.058,
+              "candidate": 0.036,
+              "ceiling": 0.308,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/cli": {
+              "base": 0.188,
+              "candidate": 0.124,
+              "ceiling": 0.438,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/doctor": {
+              "base": 0.124,
+              "candidate": 0.08,
+              "ceiling": 0.374,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/git": {
+              "base": 0.219,
+              "candidate": 0.146,
+              "ceiling": 0.469,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/publication": {
+              "base": 0.078,
+              "candidate": 0.053,
+              "ceiling": 0.328,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/pullrequest": {
+              "base": 0.075,
+              "candidate": 0.042,
+              "ceiling": 0.325,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/readiness": {
+              "base": 0.072,
+              "candidate": 0.041,
+              "ceiling": 0.322,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/registry": {
+              "base": 0.094,
+              "candidate": 0.062,
+              "ceiling": 0.344,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/review": {
+              "base": 0.082,
+              "candidate": 0.056,
+              "ceiling": 0.332,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/revieweval": {
+              "base": 0.126,
+              "candidate": 0.078,
+              "ceiling": 0.376,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/state": {
+              "base": 0.076,
+              "candidate": 0.05,
+              "ceiling": 0.326,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/status": {
+              "base": 0.073,
+              "candidate": 0.043,
+              "ceiling": 0.323,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/task": {
+              "base": 0.09,
+              "candidate": 0.05,
+              "ceiling": 0.33999999999999997,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/taskbranch": {
+              "base": 0.064,
+              "candidate": 0.041,
+              "ceiling": 0.314,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/tasksource/beads": {
+              "base": 0.087,
+              "candidate": 0.053,
+              "ceiling": 0.33699999999999997,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/tasksource/gig": {
+              "base": 0.069,
+              "candidate": 0.04,
+              "ceiling": 0.319,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/taskstate": {
+              "base": 0.284,
+              "candidate": 0.228,
+              "ceiling": 0.534,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/taskstats": {
+              "base": 0.07,
+              "candidate": 0.042,
+              "ceiling": 0.32,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/tasktarget": {
+              "base": 0.244,
+              "candidate": 0.147,
+              "ceiling": 0.494,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/testguard": {
+              "base": 0.065,
+              "candidate": 0.037,
+              "ceiling": 0.315,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/testlane": {
+              "base": 0.22,
+              "candidate": 0.156,
+              "ceiling": 0.47,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/testutil": {
+              "base": 0.053,
+              "candidate": 0.029,
+              "ceiling": 0.303,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/workflow": {
+              "base": 0.18,
+              "candidate": 0.107,
+              "ceiling": 0.43,
+              "exceeds": false
+            },
+            "suite": {
+              "base": 3.1050000000000004,
+              "candidate": 2.0360000000000005,
+              "ceiling": 4.657500000000001,
+              "exceeds": false
+            }
+          },
+          "removed": []
+        }
+      },
+      "numerical_violations": [],
+      "reason": "Numerical simulation only: different CPUs and incomplete resource-limit fingerprints",
+      "status": "unevaluated"
+    },
+    "3_to_1": {
+      "comparison": {
+        "integration": {
+          "added": [],
+          "metrics": {
+            "github.com/hea3ven/orpheus/cmd/testcoverage": {
+              "base": 0.402,
+              "candidate": 0.495,
+              "ceiling": 0.7035,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/agentexec": {
+              "base": 0.679,
+              "candidate": 0.895,
+              "ceiling": 1.18825,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/cli": {
+              "base": 4.952,
+              "candidate": 7.07,
+              "ceiling": 8.666,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/git": {
+              "base": 6.4030000000000005,
+              "candidate": 9.315,
+              "ceiling": 11.205250000000001,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/pullrequest": {
+              "base": 0.23,
+              "candidate": 0.294,
+              "ceiling": 0.48,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/review": {
+              "base": 0.204,
+              "candidate": 0.277,
+              "ceiling": 0.45399999999999996,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/taskbranch": {
+              "base": 0.05,
+              "candidate": 0.077,
+              "ceiling": 0.3,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/tasksource/beads": {
+              "base": 13.68,
+              "candidate": 17.055,
+              "ceiling": 23.939999999999998,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/tasksource/gig": {
+              "base": 0.675,
+              "candidate": 0.844,
+              "ceiling": 1.1812500000000001,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/testguard": {
+              "base": 0.224,
+              "candidate": 0.368,
+              "ceiling": 0.474,
+              "exceeds": false
+            },
+            "suite": {
+              "base": 27.533,
+              "candidate": 36.744,
+              "ceiling": 41.2995,
+              "exceeds": false
+            }
+          },
+          "removed": []
+        },
+        "unit": {
+          "added": [],
+          "metrics": {
+            "github.com/hea3ven/orpheus/cmd/testcoverage": {
+              "base": 0.055,
+              "candidate": 0.081,
+              "ceiling": 0.305,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/agent": {
+              "base": 0.223,
+              "candidate": 0.327,
+              "ceiling": 0.473,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/agentexec": {
+              "base": 0.036,
+              "candidate": 0.058,
+              "ceiling": 0.286,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/cli": {
+              "base": 0.124,
+              "candidate": 0.188,
+              "ceiling": 0.374,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/doctor": {
+              "base": 0.08,
+              "candidate": 0.124,
+              "ceiling": 0.33,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/git": {
+              "base": 0.146,
+              "candidate": 0.219,
+              "ceiling": 0.396,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/publication": {
+              "base": 0.053,
+              "candidate": 0.078,
+              "ceiling": 0.303,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/pullrequest": {
+              "base": 0.042,
+              "candidate": 0.075,
+              "ceiling": 0.292,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/readiness": {
+              "base": 0.041,
+              "candidate": 0.072,
+              "ceiling": 0.291,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/registry": {
+              "base": 0.062,
+              "candidate": 0.094,
+              "ceiling": 0.312,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/review": {
+              "base": 0.056,
+              "candidate": 0.082,
+              "ceiling": 0.306,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/revieweval": {
+              "base": 0.078,
+              "candidate": 0.126,
+              "ceiling": 0.328,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/state": {
+              "base": 0.05,
+              "candidate": 0.076,
+              "ceiling": 0.3,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/status": {
+              "base": 0.043,
+              "candidate": 0.073,
+              "ceiling": 0.293,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/task": {
+              "base": 0.05,
+              "candidate": 0.09,
+              "ceiling": 0.3,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/taskbranch": {
+              "base": 0.041,
+              "candidate": 0.064,
+              "ceiling": 0.291,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/tasksource/beads": {
+              "base": 0.053,
+              "candidate": 0.087,
+              "ceiling": 0.303,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/tasksource/gig": {
+              "base": 0.04,
+              "candidate": 0.069,
+              "ceiling": 0.29,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/taskstate": {
+              "base": 0.228,
+              "candidate": 0.284,
+              "ceiling": 0.478,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/taskstats": {
+              "base": 0.042,
+              "candidate": 0.07,
+              "ceiling": 0.292,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/tasktarget": {
+              "base": 0.147,
+              "candidate": 0.244,
+              "ceiling": 0.397,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/testguard": {
+              "base": 0.037,
+              "candidate": 0.065,
+              "ceiling": 0.287,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/testlane": {
+              "base": 0.156,
+              "candidate": 0.22,
+              "ceiling": 0.406,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/testutil": {
+              "base": 0.029,
+              "candidate": 0.053,
+              "ceiling": 0.279,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/workflow": {
+              "base": 0.107,
+              "candidate": 0.18,
+              "ceiling": 0.357,
+              "exceeds": false
+            },
+            "suite": {
+              "base": 2.0360000000000005,
+              "candidate": 3.1050000000000004,
+              "ceiling": 3.0540000000000007,
+              "exceeds": true
+            }
+          },
+          "removed": []
+        }
+      },
+      "numerical_violations": [
+        "unit:suite"
+      ],
+      "reason": "Numerical simulation only: different CPUs and incomplete resource-limit fingerprints",
       "status": "unevaluated"
     }
   },
@@ -418,7 +1314,251 @@
       "status": "unevaluated"
     },
     "3": {
-      "reason": "missing valid attempt",
+      "first_sample_suspicions": [
+        "integration:github.com/hea3ven/orpheus/internal/tasksource/gig"
+      ],
+      "incompatible_fields": [
+        "missing complete fingerprint"
+      ],
+      "numerical_comparison_only_if_incompatible": {
+        "integration": {
+          "added": [],
+          "metrics": {
+            "github.com/hea3ven/orpheus/cmd/testcoverage": {
+              "base": 0.495,
+              "candidate": 0.374,
+              "ceiling": 0.86625,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/agentexec": {
+              "base": 0.895,
+              "candidate": 0.669,
+              "ceiling": 1.5662500000000001,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/cli": {
+              "base": 7.07,
+              "candidate": 4.427,
+              "ceiling": 12.3725,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/git": {
+              "base": 9.315,
+              "candidate": 6.105,
+              "ceiling": 16.30125,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/pullrequest": {
+              "base": 0.294,
+              "candidate": 0.236,
+              "ceiling": 0.544,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/review": {
+              "base": 0.277,
+              "candidate": 0.202,
+              "ceiling": 0.527,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/taskbranch": {
+              "base": 0.077,
+              "candidate": 0.051,
+              "ceiling": 0.327,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/tasksource/beads": {
+              "base": 17.055,
+              "candidate": 13.551,
+              "ceiling": 29.846249999999998,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/tasksource/gig": {
+              "base": 0.844,
+              "candidate": 3.67,
+              "ceiling": 1.4769999999999999,
+              "exceeds": true
+            },
+            "github.com/hea3ven/orpheus/internal/testguard": {
+              "base": 0.368,
+              "candidate": 0.197,
+              "ceiling": 0.644,
+              "exceeds": false
+            },
+            "suite": {
+              "base": 36.744,
+              "candidate": 29.709,
+              "ceiling": 55.116,
+              "exceeds": false
+            }
+          },
+          "removed": []
+        },
+        "unit": {
+          "added": [],
+          "metrics": {
+            "github.com/hea3ven/orpheus/cmd/testcoverage": {
+              "base": 0.081,
+              "candidate": 0.052,
+              "ceiling": 0.331,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/agent": {
+              "base": 0.327,
+              "candidate": 0.22,
+              "ceiling": 0.577,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/agentexec": {
+              "base": 0.058,
+              "candidate": 0.039,
+              "ceiling": 0.308,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/cli": {
+              "base": 0.188,
+              "candidate": 0.125,
+              "ceiling": 0.438,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/doctor": {
+              "base": 0.124,
+              "candidate": 0.085,
+              "ceiling": 0.374,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/git": {
+              "base": 0.219,
+              "candidate": 0.162,
+              "ceiling": 0.469,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/publication": {
+              "base": 0.078,
+              "candidate": 0.052,
+              "ceiling": 0.328,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/pullrequest": {
+              "base": 0.075,
+              "candidate": 0.045,
+              "ceiling": 0.325,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/readiness": {
+              "base": 0.072,
+              "candidate": 0.041,
+              "ceiling": 0.322,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/registry": {
+              "base": 0.094,
+              "candidate": 0.056,
+              "ceiling": 0.344,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/review": {
+              "base": 0.082,
+              "candidate": 0.047,
+              "ceiling": 0.332,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/revieweval": {
+              "base": 0.126,
+              "candidate": 0.087,
+              "ceiling": 0.376,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/state": {
+              "base": 0.076,
+              "candidate": 0.053,
+              "ceiling": 0.326,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/status": {
+              "base": 0.073,
+              "candidate": 0.045,
+              "ceiling": 0.323,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/task": {
+              "base": 0.09,
+              "candidate": 0.06,
+              "ceiling": 0.33999999999999997,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/taskbranch": {
+              "base": 0.064,
+              "candidate": 0.04,
+              "ceiling": 0.314,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/tasksource/beads": {
+              "base": 0.087,
+              "candidate": 0.053,
+              "ceiling": 0.33699999999999997,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/tasksource/gig": {
+              "base": 0.069,
+              "candidate": 0.043,
+              "ceiling": 0.319,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/taskstate": {
+              "base": 0.284,
+              "candidate": 0.233,
+              "ceiling": 0.534,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/taskstats": {
+              "base": 0.07,
+              "candidate": 0.042,
+              "ceiling": 0.32,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/tasktarget": {
+              "base": 0.244,
+              "candidate": 0.166,
+              "ceiling": 0.494,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/testguard": {
+              "base": 0.065,
+              "candidate": 0.036,
+              "ceiling": 0.315,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/testlane": {
+              "base": 0.22,
+              "candidate": 0.147,
+              "ceiling": 0.47,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/testutil": {
+              "base": 0.053,
+              "candidate": 0.038,
+              "ceiling": 0.303,
+              "exceeds": false
+            },
+            "github.com/hea3ven/orpheus/internal/workflow": {
+              "base": 0.18,
+              "candidate": 0.109,
+              "ceiling": 0.43,
+              "exceeds": false
+            },
+            "suite": {
+              "base": 3.1050000000000004,
+              "candidate": 2.059,
+              "ceiling": 4.657500000000001,
+              "exceeds": false
+            }
+          },
+          "removed": []
+        }
+      },
+      "numerical_median_violations": [
+        "integration:github.com/hea3ven/orpheus/internal/tasksource/gig"
+      ],
       "status": "unevaluated"
     }
   }

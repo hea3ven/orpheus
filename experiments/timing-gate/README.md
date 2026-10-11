@@ -66,9 +66,10 @@ retained evidence, not itself or this documentation.
 
 The operator explicitly authorized diagnostic commits and a temporary PR during
 review repair. Draft PR #145 is experimental/do-not-merge. The original workflow
-at `9838019` ran on PR opening; one rerun consumed job 2. That rerun made the first
-artifact unavailable (saved artifact ID returned 404), so job 2 stopped before
-measurements. Its failure evidence is retained, not silently retried.
+at `9838019` ran on PR opening; one rerun consumed job 2. During that rerun,
+the first artifact was unavailable (a subsequent saved-ID lookup returned 404),
+so job 2 stopped before measurements. The availability failure's cause is not
+established. Its evidence is retained, not silently retried.
 
 The revised branch-only workflow consumes the final budgeted job on a workflow
 file push, collecting the slowdown control even when published input is missing;
@@ -92,7 +93,14 @@ arithmetic is available. No cache authority or production publisher is installed
 
 The original local driver is retained at `evidence/local/original-collect.py`;
 its SHA-256 matches the original manifest despite the later hosted extension.
-Consult the external handoff for actual outcomes, run links, and limitations.
+The three-job budget is now exhausted. Job 1 collected 12 unchanged-control
+samples; job 2 collected none; job 3 collected 12 slowdown-control samples and
+failed explicitly on unavailable baseline input. Numerical comparisons show
+0/5 unchanged suspicions and 5/5 slowdown suspicions, solely Gig integration.
+The measured hosts have different CPUs despite the same runner image, and both
+lack complete effective resource-limit metadata: diagnostic timing results remain
+unevaluated under the proposed strict contract, not production gate passes.
+Consult the external handoff for full outcomes, run links, and limitations.
 
 `hosted-historical/` archives run
 [37363908772](https://github.com/hea3ven/orpheus/actions/runs/37363908772), attempts
