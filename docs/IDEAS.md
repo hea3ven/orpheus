@@ -1820,3 +1820,6 @@ Sometimes the first implementation done is not quite right and we need to be abl
   * Implementation 2: agent tries to implement new task definition
   ...
 
+## Allow selection of base branch and target branch
+
+Sometimes we need to start work from a specific branch and not the default branch to stack the changes from branches. Additionally, sometimes we need to create the PR targeting a different branch than the default one in the PR or the direct-merge. I think both of these things can happen independently or together so we neet to take that into consideration.
