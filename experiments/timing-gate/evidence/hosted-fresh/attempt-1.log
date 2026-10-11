@@ -1,0 +1,301 @@
+diagnostic	Set up job	﻿2026-10-11T16:19:08.0564473Z Current runner version: '2.337.0'
+diagnostic	Set up job	2026-10-11T16:19:08.0591078Z ##[group]Runner Image Provisioner
+diagnostic	Set up job	2026-10-11T16:19:08.0592021Z Hosted Compute Agent
+diagnostic	Set up job	2026-10-11T16:19:08.0592604Z Version: 20261002.596
+diagnostic	Set up job	2026-10-11T16:19:08.0593213Z Commit: c3d12f3313a95f25162a1503be624f3b0617f8c0
+diagnostic	Set up job	2026-10-11T16:19:08.0594297Z Build Date: 2026-10-02T22:28:27Z
+diagnostic	Set up job	2026-10-11T16:19:08.0595015Z Worker ID: {bf0cd019-9c4d-4fa5-8383-6d6dd12f648a}
+diagnostic	Set up job	2026-10-11T16:19:08.0595785Z Region: northcentralus
+diagnostic	Set up job	2026-10-11T16:19:08.0596364Z Cloud: Azure
+diagnostic	Set up job	2026-10-11T16:19:08.0596881Z ##[endgroup]
+diagnostic	Set up job	2026-10-11T16:19:08.0598395Z ##[group]Operating System
+diagnostic	Set up job	2026-10-11T16:19:08.0599065Z Ubuntu
+diagnostic	Set up job	2026-10-11T16:19:08.0599634Z 24.04.5
+diagnostic	Set up job	2026-10-11T16:19:08.0600204Z LTS
+diagnostic	Set up job	2026-10-11T16:19:08.0600705Z ##[endgroup]
+diagnostic	Set up job	2026-10-11T16:19:08.0601346Z ##[group]Runner Image
+diagnostic	Set up job	2026-10-11T16:19:08.0601976Z Image: ubuntu-24.04
+diagnostic	Set up job	2026-10-11T16:19:08.0602565Z Version: 20261004.327.1
+diagnostic	Set up job	2026-10-11T16:19:08.0603855Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261004.327/images/ubuntu/Ubuntu2404-Readme.md
+diagnostic	Set up job	2026-10-11T16:19:08.0605699Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261004.327
+diagnostic	Set up job	2026-10-11T16:19:08.0606727Z ##[endgroup]
+diagnostic	Set up job	2026-10-11T16:19:08.0607949Z ##[group]GITHUB_TOKEN Permissions
+diagnostic	Set up job	2026-10-11T16:19:08.0610090Z Actions: read
+diagnostic	Set up job	2026-10-11T16:19:08.0610772Z Contents: read
+diagnostic	Set up job	2026-10-11T16:19:08.0611352Z Metadata: read
+diagnostic	Set up job	2026-10-11T16:19:08.0611937Z ##[endgroup]
+diagnostic	Set up job	2026-10-11T16:19:08.0614557Z Secret source: Actions
+diagnostic	Set up job	2026-10-11T16:19:08.0615534Z Cache mode: write
+diagnostic	Set up job	2026-10-11T16:19:08.0616650Z Prepare workflow directory
+diagnostic	Set up job	2026-10-11T16:19:08.0970358Z Prepare all required actions
+diagnostic	Set up job	2026-10-11T16:19:08.1019577Z Getting action download info
+diagnostic	Set up job	2026-10-11T16:19:08.3507184Z Download action repository 'actions/checkout@v5' (SHA:fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09)
+diagnostic	Set up job	2026-10-11T16:19:08.4511968Z Download action repository 'actions/setup-go@v6' (SHA:924ae3a1cded613372ab5595356fb5720e22ba16)
+diagnostic	Set up job	2026-10-11T16:19:08.9109983Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+diagnostic	Set up job	2026-10-11T16:19:09.1182825Z Complete job name: diagnostic
+diagnostic	Check out exact experimental head	﻿2026-10-11T16:19:09.2119787Z ##[group]Run actions/checkout@v5
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.2120770Z with:
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.2121311Z   ref: 98380192f55a4a66d1fe8c44cfb8591d2ee6bbf9
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.2121978Z   persist-credentials: false
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.2122555Z   repository: hea3ven/orpheus
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.2126630Z   token: ***
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.2127114Z   ssh-strict: true
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.2127591Z   ssh-user: git
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.2128050Z   clean: true
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.2128536Z   sparse-checkout-cone-mode: true
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.2129114Z   fetch-depth: 1
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.2129583Z   fetch-tags: false
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.2130074Z   show-progress: true
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.2130587Z   lfs: false
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.2131037Z   submodules: false
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.2131527Z   set-safe-directory: true
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.2132078Z   allow-unsafe-pr-checkout: false
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.2132944Z ##[endgroup]
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3170454Z Syncing repository: hea3ven/orpheus
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3173451Z ##[group]Getting Git version info
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3175054Z Working directory is '/home/runner/work/orpheus/orpheus'
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3177102Z [command]/usr/bin/git version
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3244361Z git version 2.55.0
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3300234Z ##[endgroup]
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3316135Z Temporarily overriding HOME='/home/runner/work/_temp/cc881b09-c254-49c8-aae0-78c66da5f1be' before making global git config changes
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3318742Z Adding repository directory to the temporary git global config as a safe directory
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3321809Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/orpheus/orpheus
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3379811Z Deleting the contents of '/home/runner/work/orpheus/orpheus'
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3384743Z ##[group]Initializing the repository
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3388601Z [command]/usr/bin/git init /home/runner/work/orpheus/orpheus
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3501540Z hint: Using 'master' as the name for the initial branch. This default branch name
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3503587Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3505521Z hint: to use in all of your new repositories, which will suppress this warning,
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3507184Z hint: call:
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3507915Z hint:
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3508857Z hint: 	git config --global init.defaultBranch <name>
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3510086Z hint:
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3511183Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3512902Z hint: 'development'. The just-created branch can be renamed via this command:
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3514500Z hint:
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3515330Z hint: 	git branch -m <name>
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3516248Z hint:
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3517372Z hint: Disable this message with "git config set advice.defaultBranchName false"
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3519164Z Initialized empty Git repository in /home/runner/work/orpheus/orpheus/.git/
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3522603Z [command]/usr/bin/git remote add origin https://github.com/hea3ven/orpheus
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3579974Z ##[endgroup]
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3581327Z ##[group]Disabling automatic garbage collection
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3584460Z [command]/usr/bin/git config --local gc.auto 0
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3618737Z ##[endgroup]
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3620095Z ##[group]Setting up auth
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3650843Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.3669990Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.4034535Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.4075828Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.4307513Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.4347489Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.4577650Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.4619507Z ##[endgroup]
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.4621230Z ##[group]Fetching the repository
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.4631122Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin 98380192f55a4a66d1fe8c44cfb8591d2ee6bbf9
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.9910530Z From https://github.com/hea3ven/orpheus
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.9913039Z  * branch            98380192f55a4a66d1fe8c44cfb8591d2ee6bbf9 -> FETCH_HEAD
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.9917281Z ##[endgroup]
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.9919394Z ##[group]Determining the checkout info
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.9920997Z ##[endgroup]
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.9925789Z [command]/usr/bin/git sparse-checkout disable
+diagnostic	Check out exact experimental head	2026-10-11T16:19:09.9978868Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0021114Z ##[group]Checking out the ref
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0024906Z [command]/usr/bin/git checkout --progress --force 98380192f55a4a66d1fe8c44cfb8591d2ee6bbf9
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0418908Z Note: switching to '98380192f55a4a66d1fe8c44cfb8591d2ee6bbf9'.
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0420449Z 
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0421273Z You are in 'detached HEAD' state. You can look around, make experimental
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0423537Z changes and commit them, and you can discard any commits you make in this
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0425920Z state without impacting any branches by switching back to a branch.
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0427825Z 
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0429005Z If you want to create a new branch to retain commits you create, you may
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0432474Z do so (now or later) by using -c with the switch command. Example:
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0434667Z 
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0435525Z   git switch -c <new-branch-name>
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0436926Z 
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0437772Z Or undo this operation with:
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0438981Z 
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0439692Z   git switch -
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0440639Z 
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0442148Z Turn off this advice by setting config variable advice.detachedHead to false
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0444637Z 
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0446161Z HEAD is now at 9838019 chore: prepare bounded experimental timing measurements
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0451225Z ##[endgroup]
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0484055Z [command]/usr/bin/git log -1 --format=%H
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0512557Z 98380192f55a4a66d1fe8c44cfb8591d2ee6bbf9
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0522337Z ##[group]Removing auth
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0526643Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0564052Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0814173Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0851231Z http.https://github.com/.extraheader
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0862648Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.0951204Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.1158862Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.1200411Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+diagnostic	Check out exact experimental head	2026-10-11T16:19:10.1448952Z ##[endgroup]
+diagnostic	Set up fixed Go without restored caches	﻿2026-10-11T16:19:10.1791426Z ##[group]Run actions/setup-go@v6
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:10.1792611Z with:
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:10.1793744Z   go-version: 1.27.0
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:10.1794741Z   cache: false
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:10.1795665Z   check-latest: false
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:10.1805280Z   token: ***
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:10.1806185Z ##[endgroup]
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:10.3120704Z Setup go version spec 1.27.0
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:10.3135036Z Attempting to download 1.27.0...
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:10.9362867Z matching 1.27.0...
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:10.9406395Z Acquiring 1.27.0 from https://github.com/actions/go-versions/releases/download/1.27.0-32325163857/go-1.27.0-linux-x64.tar.gz
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:11.4719845Z Extracting Go...
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:11.4831484Z [command]/usr/bin/tar xz --warning=no-unknown-keyword --overwrite -C /home/runner/work/_temp/edaa1620-8e4c-4467-bb05-780ac59c7526 -f /home/runner/work/_temp/72448a19-c593-41f4-8378-2d640cddfac3
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:13.2279806Z Successfully extracted go to /home/runner/work/_temp/edaa1620-8e4c-4467-bb05-780ac59c7526
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:13.2281127Z Adding to the cache ...
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.1482186Z Successfully cached go to /opt/hostedtoolcache/go/1.27.0/x64
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.1486000Z Added go to the path
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.1488610Z Successfully set up Go version 1.27.0
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.1705591Z go version go1.27.0 linux/amd64
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.1705895Z 
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.1706228Z ##[group]go env
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6607869Z AR='ar'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6608371Z CC='gcc'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6608779Z CGO_CFLAGS='-O2 -g'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6609232Z CGO_CPPFLAGS=''
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6609611Z CGO_CXXFLAGS='-O2 -g'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6610058Z CGO_ENABLED='1'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6610830Z CGO_FFLAGS='-O2 -g'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6611240Z CGO_LDFLAGS='-O2 -g'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6611604Z CXX='g++'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6611964Z GCCGO='gccgo'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6612343Z GO111MODULE=''
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6612771Z GOAMD64='v1'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6613145Z GOARCH='amd64'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6614140Z GOAUTH='netrc'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6614640Z GOBIN='/home/runner/go/bin'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6615142Z GOCACHE='/home/runner/.cache/go-build'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6615654Z GOCACHEPROG=''
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6616061Z GODEBUG=''
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6616468Z GOENV='/home/runner/.config/go/env'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6616990Z GOEXE=''
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6617363Z GOEXPERIMENT=''
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6617759Z GOFIPS140='off'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6618106Z GOFLAGS=''
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6619189Z GOGCCFLAGS='-fPIC -m64 -pthread -Wl,--no-gc-sections -fmessage-length=0 -ffile-prefix-map=/tmp/go-build2272556994=/tmp/go-build -gno-record-gcc-switches'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6620370Z GOHOSTARCH='amd64'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6620751Z GOHOSTOS='linux'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6621115Z GOINSECURE=''
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6621583Z GOMOD='/home/runner/work/orpheus/orpheus/go.mod'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6622135Z GOMODCACHE='/home/runner/go/pkg/mod'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6622587Z GONOPROXY=''
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6622914Z GONOSUMDB=''
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6623554Z GOOS='linux'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6623952Z GOPACKAGESDRIVER=''
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6624364Z GOPATH='/home/runner/go'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6624868Z GOPRIVATE=''
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6625314Z GOPROXY='https://proxy.golang.org,direct'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6625882Z GOROOT='/opt/hostedtoolcache/go/1.27.0/x64'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6626388Z GOSUMDB='sum.golang.org'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6626784Z GOTELEMETRY='local'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6627237Z GOTELEMETRYDIR='/home/runner/.config/go/telemetry'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6627758Z GOTMPDIR=''
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6628096Z GOTOOLCHAIN='local'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6628648Z GOTOOLDIR='/opt/hostedtoolcache/go/1.27.0/x64/pkg/tool/linux_amd64'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6629282Z GOVCS=''
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6629647Z GOVERSION='go1.27.0'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6630035Z GOWORK=''
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6630398Z PKG_CONFIG='pkg-config'
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6630651Z 
+diagnostic	Set up fixed Go without restored caches	2026-10-11T16:19:19.6631249Z ##[endgroup]
+diagnostic	Provision fixed tools and modules before offline measurements	﻿2026-10-11T16:19:19.6831816Z ##[group]Run set -euo pipefail
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6832216Z ^[[36;1mset -euo pipefail^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6832508Z ^[[36;1m[[ "$GITHUB_RUN_ATTEMPT" =~ ^[123]$ ]]^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6832843Z ^[[36;1mbin="$RUNNER_TEMP/timing-tools/bin"^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6833134Z ^[[36;1mmkdir -p "$bin"^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6833732Z ^[[36;1mdownloads="$(mktemp -d)"^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6834012Z ^[[36;1mtrap 'rm -rf "$downloads"' EXIT^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6834314Z ^[[36;1mbeads="$downloads/beads.tar.gz"^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6834669Z ^[[36;1mcurl --fail --location --retry 3 --silent --show-error \^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6835279Z ^[[36;1m  https://github.com/gastownhall/beads/releases/download/v1.2.2/beads_1.2.2_linux_amd64.tar.gz \^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6835787Z ^[[36;1m  --output "$beads"^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6836028Z ^[[36;1mprintf '%s  %s\n' \^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6836495Z ^[[36;1m  '8140098a51d3b81d5548d1c5e6db1a2d9930e5d141efe2a4bff7d079c4d321e8' "$beads" | sha256sum --check^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6837044Z ^[[36;1mtar -xzf "$beads" -C "$bin" bd^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6837305Z ^[[36;1m^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6837508Z ^[[36;1mdolt="$downloads/dolt.tar.gz"^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6837868Z ^[[36;1mcurl --fail --location --retry 3 --silent --show-error \^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6838449Z ^[[36;1m  https://github.com/dolthub/dolt/releases/download/v2.2.3/dolt-linux-amd64.tar.gz \^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6838948Z ^[[36;1m  --output "$dolt"^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6839192Z ^[[36;1mprintf '%s  %s\n' \^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6839657Z ^[[36;1m  'ffafa7cc172cada5f77ca3fb96306545ddac44a111625f75f870306c7f197301' "$dolt" | sha256sum --check^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6840165Z ^[[36;1mtar -xzf "$dolt" -C "$downloads"^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6840550Z ^[[36;1minstall -m 0755 "$downloads/dolt-linux-amd64/bin/dolt" "$bin/dolt"^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6840939Z ^[[36;1mecho "$bin" >> "$GITHUB_PATH"^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.6841203Z ^[[36;1mgo mod download^[[0m
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.7088987Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.7089431Z env:
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.7089871Z   GOTOOLCHAIN: local
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:19.7090132Z ##[endgroup]
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:20.1458223Z /tmp/tmp.P2GxfpIZ5l/beads.tar.gz: OK
+diagnostic	Provision fixed tools and modules before offline measurements	2026-10-11T16:19:21.4266552Z /tmp/tmp.P2GxfpIZ5l/dolt.tar.gz: OK
+diagnostic	Collect two warm-ups and five strictly alternating pairs	﻿2026-10-11T16:19:25.3246874Z ##[group]Run set -euo pipefail
+diagnostic	Collect two warm-ups and five strictly alternating pairs	2026-10-11T16:19:25.3247230Z ^[[36;1mset -euo pipefail^[[0m
+diagnostic	Collect two warm-ups and five strictly alternating pairs	2026-10-11T16:19:25.3247740Z ^[[36;1mpython3 experiments/timing-gate/collect.py experiments/timing-gate/hosted-output "$GITHUB_RUN_ATTEMPT"^[[0m
+diagnostic	Collect two warm-ups and five strictly alternating pairs	2026-10-11T16:19:25.3310204Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+diagnostic	Collect two warm-ups and five strictly alternating pairs	2026-10-11T16:19:25.3310561Z env:
+diagnostic	Collect two warm-ups and five strictly alternating pairs	2026-10-11T16:19:25.3310762Z   GOTOOLCHAIN: local
+diagnostic	Collect two warm-ups and five strictly alternating pairs	2026-10-11T16:19:25.3310975Z ##[endgroup]
+diagnostic	Collect two warm-ups and five strictly alternating pairs	2026-10-11T16:19:32.2666163Z Collecting warm-A (base)
+diagnostic	Collect two warm-ups and five strictly alternating pairs	2026-10-11T16:20:39.4183781Z Collecting warm-B (base)
+diagnostic	Collect two warm-ups and five strictly alternating pairs	2026-10-11T16:21:04.1926997Z Collecting 1-A (base)
+diagnostic	Collect two warm-ups and five strictly alternating pairs	2026-10-11T16:21:29.4518513Z Collecting 1-B (base)
+diagnostic	Collect two warm-ups and five strictly alternating pairs	2026-10-11T16:21:54.1512364Z Collecting 2-B (base)
+diagnostic	Collect two warm-ups and five strictly alternating pairs	2026-10-11T16:22:18.7013131Z Collecting 2-A (base)
+diagnostic	Collect two warm-ups and five strictly alternating pairs	2026-10-11T16:22:43.0832719Z Collecting 3-A (base)
+diagnostic	Collect two warm-ups and five strictly alternating pairs	2026-10-11T16:23:07.7853570Z Collecting 3-B (base)
+diagnostic	Collect two warm-ups and five strictly alternating pairs	2026-10-11T16:23:32.8777420Z Collecting 4-B (base)
+diagnostic	Collect two warm-ups and five strictly alternating pairs	2026-10-11T16:23:58.1669424Z Collecting 4-A (base)
+diagnostic	Collect two warm-ups and five strictly alternating pairs	2026-10-11T16:24:23.3072270Z Collecting 5-A (base)
+diagnostic	Collect two warm-ups and five strictly alternating pairs	2026-10-11T16:24:47.9450173Z Collecting 5-B (base)
+diagnostic	Collect two warm-ups and five strictly alternating pairs	2026-10-11T16:25:12.6329310Z Completed 12 samples (2 excluded warm-ups).
+diagnostic	Retain complete or partial diagnostics	﻿2026-10-11T16:25:12.6477521Z ##[group]Run actions/upload-artifact@v4
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:12.6477843Z with:
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:12.6478060Z   name: timing-38154946436-1
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:12.6478499Z   path: experiments/timing-gate/hosted-output/
+diagnostic	Retain complete or partial diagnostics	experiments/timing-gate/published-input/
+diagnostic	Retain complete or partial diagnostics	
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:12.6478962Z   if-no-files-found: warn
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:12.6479196Z   retention-days: 30
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:12.6479418Z   compression-level: 6
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:12.6479639Z   overwrite: false
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:12.6479860Z   include-hidden-files: false
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:12.6480099Z env:
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:12.6480283Z   GOTOOLCHAIN: local
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:12.6480494Z ##[endgroup]
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:12.8100733Z (node:85693) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:12.8106053Z (Use `node --trace-deprecation ...` to show where the warning was created)
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:12.8295366Z Multiple search paths detected. Calculating the least common ancestor of all paths
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:12.8298390Z The least common ancestor is /home/runner/work/orpheus/orpheus/experiments/timing-gate. This will be the root directory of the artifact
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:12.8299566Z With the provided path, there will be 43 files uploaded
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:12.8304998Z Artifact name is valid!
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:12.8305438Z Root directory input is valid!
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:13.0699589Z Beginning upload of artifact content to blob storage
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:13.1501936Z (node:85693) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:13.3156050Z Uploaded bytes 58430
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:13.3536820Z Finished uploading artifact content to blob storage!
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:13.3538010Z SHA256 digest of uploaded artifact zip is bed4de5d1e6b0eba8e8cb83a06979463ef56c7851a3b93bf0ec7cd46c3516634
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:13.3540688Z Finalizing artifact upload
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:13.5561973Z Artifact timing-38154946436-1.zip successfully finalized. Artifact ID 11708152552
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:13.5563972Z Artifact timing-38154946436-1 has been successfully uploaded! Final size is 58430 bytes. Artifact ID is 11708152552
+diagnostic	Retain complete or partial diagnostics	2026-10-11T16:25:13.5570311Z Artifact download URL: https://github.com/hea3ven/orpheus/actions/runs/38154946436/artifacts/11708152552
+diagnostic	Post Set up fixed Go without restored caches	﻿2026-10-11T16:25:13.5749684Z Post job cleanup.
+diagnostic	Post Check out exact experimental head	﻿2026-10-11T16:25:13.7032662Z Post job cleanup.
+diagnostic	Post Check out exact experimental head	2026-10-11T16:25:13.7971073Z [command]/usr/bin/git version
+diagnostic	Post Check out exact experimental head	2026-10-11T16:25:13.8027946Z git version 2.55.0
+diagnostic	Post Check out exact experimental head	2026-10-11T16:25:13.8084183Z Temporarily overriding HOME='/home/runner/work/_temp/a5927c81-a31b-4083-9375-b0ae67e31b19' before making global git config changes
+diagnostic	Post Check out exact experimental head	2026-10-11T16:25:13.8086325Z Adding repository directory to the temporary git global config as a safe directory
+diagnostic	Post Check out exact experimental head	2026-10-11T16:25:13.8092828Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/orpheus/orpheus
+diagnostic	Post Check out exact experimental head	2026-10-11T16:25:13.8143211Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+diagnostic	Post Check out exact experimental head	2026-10-11T16:25:13.8187228Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+diagnostic	Post Check out exact experimental head	2026-10-11T16:25:13.8497776Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+diagnostic	Post Check out exact experimental head	2026-10-11T16:25:13.8577671Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+diagnostic	Post Check out exact experimental head	2026-10-11T16:25:13.8894375Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+diagnostic	Post Check out exact experimental head	2026-10-11T16:25:13.8937507Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+diagnostic	Complete job	﻿2026-10-11T16:25:13.9361783Z Cleaning up orphan processes
+diagnostic	Complete job	2026-10-11T16:25:13.9680703Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/upload-artifact@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

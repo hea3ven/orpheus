@@ -1,0 +1,60 @@
+unit: 12073/21637 statements (55.80%), 1259 test events, 3.15s selected package work, 3.24s command wall time
+  github.com/hea3ven/orpheus/cmd/orpheus: 0/4 statements (0.00%), no selected package work
+  github.com/hea3ven/orpheus/cmd/testcoverage: 597/920 statements (64.89%), 0.08s
+  github.com/hea3ven/orpheus/internal/agent: 1651/1987 statements (83.09%), 0.30s
+  github.com/hea3ven/orpheus/internal/agentexec: 2/114 statements (1.75%), 0.06s
+  github.com/hea3ven/orpheus/internal/cli: 2041/5148 statements (39.65%), 0.18s
+  github.com/hea3ven/orpheus/internal/doctor: 253/467 statements (54.18%), 0.14s
+  github.com/hea3ven/orpheus/internal/git: 491/1583 statements (31.02%), 0.26s
+  github.com/hea3ven/orpheus/internal/logging: 19/36 statements (52.78%), no selected package work
+  github.com/hea3ven/orpheus/internal/pathutil: 17/19 statements (89.47%), no selected package work
+  github.com/hea3ven/orpheus/internal/publication: 76/82 statements (92.68%), 0.08s
+  github.com/hea3ven/orpheus/internal/pullrequest: 9/147 statements (6.12%), 0.08s
+  github.com/hea3ven/orpheus/internal/readiness: 34/37 statements (91.89%), 0.08s
+  github.com/hea3ven/orpheus/internal/registry: 262/295 statements (88.81%), 0.10s
+  github.com/hea3ven/orpheus/internal/review: 371/1229 statements (30.19%), 0.09s
+  github.com/hea3ven/orpheus/internal/revieweval: 313/548 statements (57.12%), 0.12s
+  github.com/hea3ven/orpheus/internal/state: 172/223 statements (77.13%), 0.08s
+  github.com/hea3ven/orpheus/internal/status: 312/336 statements (92.86%), 0.06s
+  github.com/hea3ven/orpheus/internal/task: 721/837 statements (86.14%), 0.08s
+  github.com/hea3ven/orpheus/internal/taskbranch: 94/100 statements (94.00%), 0.06s
+  github.com/hea3ven/orpheus/internal/tasksource/beads: 481/778 statements (61.83%), 0.10s
+  github.com/hea3ven/orpheus/internal/tasksource/gig: 51/383 statements (13.32%), 0.07s
+  github.com/hea3ven/orpheus/internal/taskstate: 1571/2250 statements (69.82%), 0.30s
+  github.com/hea3ven/orpheus/internal/taskstats: 520/599 statements (86.81%), 0.07s
+  github.com/hea3ven/orpheus/internal/tasktarget: 95/113 statements (84.07%), 0.25s
+  github.com/hea3ven/orpheus/internal/testguard: 31/53 statements (58.49%), 0.07s
+  github.com/hea3ven/orpheus/internal/testlane: 103/117 statements (88.03%), 0.23s
+  github.com/hea3ven/orpheus/internal/testutil: 25/28 statements (89.29%), 0.05s
+  github.com/hea3ven/orpheus/internal/workflow: 1761/3204 statements (54.96%), 0.19s
+integration: 14288/21719 statements (65.79%), 638 test events, 36.81s selected package work, 20.78s command wall time
+  github.com/hea3ven/orpheus/cmd/orpheus: 0/4 statements (0.00%), no selected package work
+  github.com/hea3ven/orpheus/cmd/testcoverage: 0/920 statements (0.00%), 0.48s
+  github.com/hea3ven/orpheus/internal/agent: 1047/1987 statements (52.69%), no selected package work
+  github.com/hea3ven/orpheus/internal/agentexec: 94/114 statements (82.46%), 0.86s
+  github.com/hea3ven/orpheus/internal/cli: 3696/5148 statements (71.79%), 7.29s
+  github.com/hea3ven/orpheus/internal/doctor: 356/467 statements (76.23%), no selected package work
+  github.com/hea3ven/orpheus/internal/git: 1090/1583 statements (68.86%), 9.35s
+  github.com/hea3ven/orpheus/internal/logging: 19/36 statements (52.78%), no selected package work
+  github.com/hea3ven/orpheus/internal/pathutil: 17/19 statements (89.47%), no selected package work
+  github.com/hea3ven/orpheus/internal/publication: 74/82 statements (90.24%), no selected package work
+  github.com/hea3ven/orpheus/internal/pullrequest: 127/147 statements (86.39%), 0.28s
+  github.com/hea3ven/orpheus/internal/readiness: 25/37 statements (67.57%), no selected package work
+  github.com/hea3ven/orpheus/internal/registry: 228/295 statements (77.29%), no selected package work
+  github.com/hea3ven/orpheus/internal/review: 955/1229 statements (77.71%), 0.28s
+  github.com/hea3ven/orpheus/internal/revieweval: 292/548 statements (53.28%), no selected package work
+  github.com/hea3ven/orpheus/internal/state: 227/305 statements (74.43%), no selected package work
+  github.com/hea3ven/orpheus/internal/status: 227/336 statements (67.56%), no selected package work
+  github.com/hea3ven/orpheus/internal/task: 555/837 statements (66.31%), no selected package work
+  github.com/hea3ven/orpheus/internal/taskbranch: 80/100 statements (80.00%), 0.09s
+  github.com/hea3ven/orpheus/internal/tasksource/beads: 452/778 statements (58.10%), 16.94s
+  github.com/hea3ven/orpheus/internal/tasksource/gig: 325/383 statements (84.86%), 0.88s
+  github.com/hea3ven/orpheus/internal/taskstate: 1640/2250 statements (72.89%), no selected package work
+  github.com/hea3ven/orpheus/internal/taskstats: 282/599 statements (47.08%), no selected package work
+  github.com/hea3ven/orpheus/internal/tasktarget: 90/113 statements (79.65%), no selected package work
+  github.com/hea3ven/orpheus/internal/testguard: 41/53 statements (77.36%), 0.36s
+  github.com/hea3ven/orpheus/internal/testlane: 0/117 statements (0.00%), no selected package work
+  github.com/hea3ven/orpheus/internal/testutil: 22/28 statements (78.57%), no selected package work
+  github.com/hea3ven/orpheus/internal/workflow: 2327/3204 statements (72.63%), no selected package work
+quality decision: pass
+Quality report: /home/runner/work/orpheus/orpheus/experiments/timing-gate/hosted-output/5-B/report.json

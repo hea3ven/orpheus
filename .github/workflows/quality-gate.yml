@@ -1,10 +1,11 @@
-# TEMPORARY DIAGNOSTIC ONLY. Do not merge. Opening this PR consumes job 1;
-# manually rerun this exact run twice for jobs 2 and 3. No synchronize trigger.
+# TEMPORARY DIAGNOSTIC ONLY. Do not merge or rerun: this is budgeted job 3.
+# The first run and its rerun consumed jobs 1/2. Evidence-only pushes do not run.
 name: Experimental timing investigation - DO NOT MERGE
 
 on:
   pull_request:
-    types: [opened]
+    types: [synchronize]
+    paths: ['.github/workflows/quality-gate.yml']
 
 permissions:
   contents: read
@@ -32,7 +33,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$GITHUB_RUN_ATTEMPT" =~ ^[123]$ ]]
+          [[ "$GITHUB_RUN_ATTEMPT" == 1 ]]
           bin="$RUNNER_TEMP/timing-tools/bin"
           mkdir -p "$bin"
           downloads="$(mktemp -d)"
@@ -56,8 +57,9 @@ jobs:
           echo "$bin" >> "$GITHUB_PATH"
           go mod download
 
-      - name: Retrieve exact attempt-one artifact as experimental authority
-        if: github.run_attempt != '1'
+      - name: Retrieve original producer artifact without hiding a miss
+        id: baseline
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -65,12 +67,12 @@ jobs:
           set -euo pipefail
           archive='experiments/timing-gate/published-input'
           mkdir -p "$archive"
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/1" > "$archive/producer.json"
-          jq -e --arg sha '${{ github.event.pull_request.head.sha }}' \
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/38154946436/attempts/1" > "$archive/producer.json"
+          jq -e --arg sha '98380192f55a4a66d1fe8c44cfb8591d2ee6bbf9' \
             '.head_sha == $sha and .run_attempt == 1 and .conclusion == "success" and .event == "pull_request"' \
             "$archive/producer.json"
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" > "$archive/artifacts.json"
-          name="timing-$GITHUB_RUN_ID-1"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/38154946436/artifacts" > "$archive/artifacts.json"
+          name='timing-38154946436-1'
           jq --arg name "$name" '[.artifacts[] | select(.name == $name and .expired == false)] | if length == 1 then .[0] else error("missing or ambiguous artifact") end' \
             "$archive/artifacts.json" > "$archive/artifact.json"
           id="$(jq -r .id "$archive/artifact.json")"
@@ -83,7 +85,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 experiments/timing-gate/collect.py experiments/timing-gate/hosted-output "$GITHUB_RUN_ATTEMPT"
+          python3 experiments/timing-gate/collect.py experiments/timing-gate/hosted-output 3
+
+      - name: Keep unavailable baseline explicitly blocking
+        if: steps.baseline.outcome != 'success'
+        shell: bash
+        run: |
+          echo 'Published-baseline comparison UNEVALUATED: authoritative artifact unavailable.'
+          exit 1
 
       - name: Retain complete or partial diagnostics
         if: always()

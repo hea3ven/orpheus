@@ -65,20 +65,30 @@ retained evidence, not itself or this documentation.
 ## Hosted evidence and limits
 
 The operator explicitly authorized diagnostic commits and a temporary PR during
-review repair. The branch-only workflow runs on PR opening (not later pushes),
-with one job and a 20-minute timeout. Manually rerun the same run exactly twice:
-attempts 1/2 measure unchanged A/B, attempt 3 overlays the three-second slowdown
-on B. Each attempt performs two excluded warm-ups and five strictly alternating
-pairs (AB first in attempts 1/3, BA first in attempt 2). The driver rejects attempt
-numbers outside 1–3. Use `collect.py NEW_OUTPUT ATTEMPT` to reproduce that order.
+review repair. Draft PR #145 is experimental/do-not-merge. The original workflow
+at `9838019` ran on PR opening; one rerun consumed job 2. That rerun made the first
+artifact unavailable (saved artifact ID returned 404), so job 2 stopped before
+measurements. Its failure evidence is retained, not silently retried.
+
+The revised branch-only workflow consumes the final budgeted job on a workflow
+file push, collecting the slowdown control even when published input is missing;
+the missing input still explicitly fails the job. **Do not rerun or modify/push
+the workflow again without operator approval for more jobs.** Evidence-only
+pushes do not trigger it. Each job has a 20-minute timeout. The driver modes
+1/2 select unchanged A/B and mode 3 overlays the slowdown on B; mode numbers are
+not necessarily GitHub attempt numbers. Each mode uses two excluded warm-ups and
+five strictly alternating pairs (AB first in modes 1/3, BA first in mode 2).
+Use `collect.py NEW_OUTPUT MODE` to reproduce that order.
 
 Each fresh runner provisions fixed Go/Beads/Dolt versions without restored build
 or tool caches. Both variants share a checkout/cache within the job; this remains
 a diagnostic overlay experiment, not isolated-checkout production enforcement.
-Attempts 2/3 download the exact attempt-one artifact through the GitHub API,
-verify its ZIP digest, and retain producer metadata. This tests transport, not
-main-only trust; local analysis compares its five A samples against later B
-samples. No cache authority or production publisher is installed.
+The workflow attempts to download the exact original producer artifact through
+the GitHub API and verify its ZIP digest. Missing input is not a timing pass.
+The original artifact was downloaded and verified locally before the rerun;
+`analyze_hosted.py evidence/hosted-fresh` compares the retained reports offline.
+Incomplete environment fingerprints remain unevaluated even when numerical
+arithmetic is available. No cache authority or production publisher is installed.
 
 The original local driver is retained at `evidence/local/original-collect.py`;
 its SHA-256 matches the original manifest despite the later hosted extension.
