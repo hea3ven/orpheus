@@ -90,7 +90,7 @@ func TestIntegrationWorkflowMissingPublicationExternalReferenceBlocksDispatchAnd
 
 	stdout, stderr, err := f.runError("", "task", "run", item.ID)
 
-	require.ErrorContains(t, err, "publication title template requires a task external reference")
+	require.ErrorContains(t, err, "missing required external reference")
 	assert.ErrorContains(t, err, "orpheus task edit "+item.ID+" --external-ref <reference>")
 	assert.Empty(t, stdout)
 	assert.Empty(t, stderr)

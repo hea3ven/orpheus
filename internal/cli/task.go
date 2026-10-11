@@ -934,6 +934,9 @@ func runTaskRun(
 	if err != nil {
 		return err
 	}
+	if err := validateTaskRunInitialEligibility(command, execution); err != nil {
+		return err
+	}
 	route, recoveryHandled, err := routeTaskRunRecovery(command, execution)
 	if err != nil || recoveryHandled {
 		return err

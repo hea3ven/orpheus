@@ -14,7 +14,6 @@ import (
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/pathutil"
-	"github.com/hea3ven/orpheus/internal/readiness"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -566,9 +565,6 @@ func resolveDispatchStartTask(ctx context.Context, opts DispatchStartOptions) (t
 	if taskItem.ID != opts.TaskID {
 		return task.Task{}, fmt.Errorf("task dispatch preloaded task id %q does not match requested task id %q", taskItem.ID, opts.TaskID)
 	}
-	if err := ensureDispatchParentEpicGate(ctx, opts.Backend, taskItem); err != nil {
-		return task.Task{}, err
-	}
 	return taskItem, nil
 }
 
@@ -668,21 +664,6 @@ func (s DispatchService) continuingRepoRootRun(
 		cleanDispatchPath(facts.Worktree) == cleanDispatchPath(expected.WorktreePath) &&
 		cleanDispatchPath(directory.Path) == cleanDispatchPath(expected.WorktreePath) &&
 		dispatchMetadataMatches(taskItem.OrpheusMetadata(), expected), nil
-}
-
-func ensureDispatchParentEpicGate(ctx context.Context, backend DispatchBackend, taskItem task.Task) error {
-	if strings.TrimSpace(taskItem.Relations.ParentID) == "" {
-		return nil
-	}
-	tasks, err := backend.List(ctx)
-	if err != nil {
-		return fmt.Errorf("inspect immediate parent epic: %w", err)
-	}
-	gate := readiness.EvaluateParentEpicGate(taskItem, tasks)
-	if gate.State == readiness.ParentEpicGateAllowed {
-		return nil
-	}
-	return fmt.Errorf("task %s is not eligible for dispatch: %s", taskItem.ID, gate.Detail())
 }
 
 func dispatchLockedTarget(repo task.Repository, state taskstate.TaskState) (tasktarget.Target, bool, error) {
