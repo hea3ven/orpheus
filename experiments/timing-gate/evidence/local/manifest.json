@@ -1,0 +1,72 @@
+{
+  "branch": "orpheus/op-dys",
+  "build": {
+    "exit_code": 0,
+    "wall_seconds": 0.5674307129811496
+  },
+  "cgroup": {
+    "cpuset.cpus.effective": "0-3"
+  },
+  "collection_note": "Unmodified Go collector; exit status is policy assessment, not sample completeness. No policy updates. Base and unchanged candidate are identical sources in one checkout; slowdown is an overlay, not a commit. Default package concurrency, -parallel=1, ORPHEUS_COVERAGE_RUN=1 retained by collector.",
+  "collector_binary_sha256": "9c86c11de10739552031dfbe0d873bbff2e16f5ba4dee4b65cb7ff1cc35950cb",
+  "collector_sources": {
+    "cmd/testcoverage/audit.go": "fec0f8daf7025b2455dc51ce7967814a92efebcc289ac4cead36856c7480a0ac",
+    "cmd/testcoverage/coverage.go": "c92bb64c611bf6531c3dc2d830927c384b614cb83e4dc7f1b53b19c92bd27cf8",
+    "cmd/testcoverage/crosspackage_adapter_test.go": "2c971de38781d072253490e9a412fa2fbe6fb1351a1b503cc6da7f917554b329",
+    "cmd/testcoverage/main.go": "fc3234c5dba89c699450d457a30c0f286b71e2018be38a96c0b0b809c1c764b7",
+    "cmd/testcoverage/main_test.go": "8ca37231840f750e4c2a982b624db10faebbb72c49c69f362d488237ae31dd9b",
+    "cmd/testcoverage/quality_policy.go": "29c7df9f6cb354cc7fae57cc71820fbae52c68fce33bbbc106151452c69a1fb9",
+    "cmd/testcoverage/quality_policy_test.go": "81616bc9a1ca6674128b1525346bc7a421195ea80d4510c003c43f4170ff1f9d",
+    "cmd/testcoverage/report.go": "1951f2004668a0eab117dcde76aac34932363999b0c4ee6d09617c29eefccfb1",
+    "cmd/testcoverage/report_types.go": "96b1aff6e202d6bd38cde384954dc807f5780355ff522a216c2e11b2a0a3c793",
+    "cmd/testcoverage/scheduling_test.go": "2e5f08b30274a980233749a11b3058f338d48225e261a44079609b101a438b25",
+    "cmd/testcoverage/summary.go": "814b9dc4fdae9169326fe57b9e8df25f492d48a579a6fbc8755f5659ea7ea0a6"
+  },
+  "cpu_affinity": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "cpu_model": "model name\t: AMD Athlon 3000G with Radeon Vega Graphics",
+  "driver_sha256": "7da07cf59db08d9b49586aafe4c023d80ec8beb22a69509aebb06f16e5f83c27",
+  "environment": {
+    "CC": null,
+    "CXX": null,
+    "GODEBUG": null,
+    "GOEXPERIMENT": null,
+    "GOFLAGS": null,
+    "GOMAXPROCS": null,
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": null
+  },
+  "go_env": {
+    "CGO_ENABLED": "1",
+    "GOARCH": "amd64",
+    "GOCACHE": "/home/mati/.cache/go-build",
+    "GOEXPERIMENT": "nodwarf5",
+    "GOFLAGS": "",
+    "GOMODCACHE": "/home/mati/go/pkg/mod",
+    "GOOS": "linux",
+    "GOTOOLCHAIN": "auto",
+    "GOVERSION": "go1.27.1-X:nodwarf5"
+  },
+  "original_test_sha256": "b1521d9a234bc04f07884b9f02a019f5c64be510adf8bfe5244b352976061cc1",
+  "platform": "Linux-7.2.6-arch2-1-x86_64-with-glibc2.44",
+  "policy_sha256": "cc7540fbf2a5545a0038b6cd78a278c66a2780a43c0b0d1f4013bcf733b89227",
+  "revision": "11e9054c494418df99688c2e6a05c65374537965",
+  "runtime": "NumCPU=4 GOMAXPROCS=4",
+  "sample_timeout_seconds": 180,
+  "schema": "timing-investigation-v1",
+  "slow_source_sha256": "acc31661c0d70c112a0e1dac41f4cac6ecf987ac71bcb1905099f3b5b06beaf2",
+  "tools": {
+    "bd": "bd version 1.2.2 (6c124203e: HEAD@6c124203e771)",
+    "dolt": "dolt version 2.3.4\nWarning: you are on an old version of Dolt. The newest version is 2.4.2.",
+    "git": "git version 2.55.0",
+    "go": "go version go1.27.1-X:nodwarf5 linux/amd64",
+    "python": "3.14.7 (main, Aug 10 2026, 07:46:56) [GCC 16.1.1 20260728]"
+  },
+  "total_measurement_budget_seconds": 1200,
+  "tree": "96a2a3554d26e62faf64c392805627afd9e43683"
+}

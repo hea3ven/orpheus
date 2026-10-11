@@ -1,0 +1,9 @@
+Document placeholders and local Markdown links checked: /home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/README.md
+Document placeholders and local Markdown links checked: /home/mati/Documents/prog/orpheus-docs/timing-gate-handoff.md
+Tracked and experimental source/document whitespace checks passed
+Original measurement identity unchanged: /home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/.quality.yml
+Original measurement identity unchanged: /home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/collect.py
+Original measurement identity unchanged: /home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/internal/tasksource/gig/gig_adapter_test.go
+HEAD 11e9054c494418df99688c2e6a05c65374537965
+main 11e9054c494418df99688c2e6a05c65374537965
+Production source, policy, scheduling, build and workflow files unchanged

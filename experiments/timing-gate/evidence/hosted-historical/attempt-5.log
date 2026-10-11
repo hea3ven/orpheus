@@ -1,0 +1,596 @@
+Pull-request quality gate	UNKNOWN STEP	﻿2026-10-06T19:32:21.6900698Z Current runner version: '2.337.0'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6935056Z ##[group]Runner Image Provisioner
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6935998Z Hosted Compute Agent
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6936717Z Version: 20260901.588
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6937425Z Commit: f88ec8081b781fac6c440065ac7ff9e710ce3d0b
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6938173Z Build Date: 2026-09-01T19:56:44Z
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6938963Z Worker ID: {430ff6d4-183e-400c-972f-453307d2e887}
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6939972Z Azure Region: northcentralus
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6940653Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6942176Z ##[group]Operating System
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6942828Z Ubuntu
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6943491Z 24.04.5
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6944026Z LTS
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6944604Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6945239Z ##[group]Runner Image
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6945877Z Image: ubuntu-24.04
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6946563Z Version: 20260927.320.1
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6947865Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260927.320/images/ubuntu/Ubuntu2404-Readme.md
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6949777Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260927.320
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6950791Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6952033Z ##[group]GITHUB_TOKEN Permissions
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6954284Z Contents: read
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6955025Z Metadata: read
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6955633Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6957863Z Secret source: Actions
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6958979Z Cache mode: write
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.6960321Z Prepare workflow directory
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.7362331Z Prepare all required actions
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:21.7431542Z Getting action download info
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:22.0257701Z Download action repository 'actions/checkout@v5' (SHA:fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09)
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:22.1096433Z Download action repository 'actions/setup-go@v6' (SHA:924ae3a1cded613372ab5595356fb5720e22ba16)
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:22.4715387Z Download action repository 'actions/cache@v4' (SHA:0057852bfaa89a56745cba8c7296529d2fc39830)
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:22.6295294Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:22.8728709Z Complete job name: Pull-request quality gate
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:22.9595547Z ##[group]Run set -euo pipefail
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:22.9596766Z ^[[36;1mset -euo pipefail^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:22.9597808Z ^[[36;1mmkdir -p artifacts/test-coverage^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:22.9599746Z ^[[36;1mprintf 'QUALITY_TOOLS=%s/orpheus-quality-tools\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:22.9601928Z ^[[36;1mprintf 'Quality gate setup started.\n' > artifacts/test-coverage/setup.log^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:22.9845981Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:22.9847622Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.0372840Z ##[group]Run actions/checkout@v5
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.0373952Z with:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.0374832Z   ref: 3914307d8e353b3952ac4fa601027ba2dfd77678
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.0375983Z   clean: false
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.0376839Z   repository: hea3ven/orpheus
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.0385891Z   token: ***
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.0386761Z   ssh-strict: true
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.0387611Z   ssh-user: git
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.0388460Z   persist-credentials: true
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.0389573Z   sparse-checkout-cone-mode: true
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.0390586Z   fetch-depth: 1
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.0391407Z   fetch-tags: false
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.0392253Z   show-progress: true
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.0393119Z   lfs: false
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.0393978Z   submodules: false
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.0468615Z   set-safe-directory: true
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.0470220Z   allow-unsafe-pr-checkout: false
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.0471308Z env:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.0472350Z   QUALITY_TOOLS: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.0473823Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1536726Z Syncing repository: hea3ven/orpheus
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1541130Z ##[group]Getting Git version info
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1542551Z Working directory is '/home/runner/work/orpheus/orpheus'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1545507Z [command]/usr/bin/git version
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1626830Z git version 2.55.0
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1653856Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1671037Z Temporarily overriding HOME='/home/runner/work/_temp/da22fdfe-5716-4699-9974-4d9bd533e7c2' before making global git config changes
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1675342Z Adding repository directory to the temporary git global config as a safe directory
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1679533Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/orpheus/orpheus
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1732817Z Deleting the contents of '/home/runner/work/orpheus/orpheus'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1750686Z ##[group]Initializing the repository
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1754921Z [command]/usr/bin/git init /home/runner/work/orpheus/orpheus
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1840469Z hint: Using 'master' as the name for the initial branch. This default branch name
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1842839Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1845479Z hint: to use in all of your new repositories, which will suppress this warning,
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1847672Z hint: call:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1848921Z hint:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1851016Z hint: 	git config --global init.defaultBranch <name>
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1853415Z hint:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1855023Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1857681Z hint: 'development'. The just-created branch can be renamed via this command:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1860268Z hint:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1861371Z hint: 	git branch -m <name>
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1862635Z hint:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1864378Z hint: Disable this message with "git config set advice.defaultBranchName false"
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1867051Z Initialized empty Git repository in /home/runner/work/orpheus/orpheus/.git/
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1871364Z [command]/usr/bin/git remote add origin https://github.com/hea3ven/orpheus
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1917419Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1920259Z ##[group]Disabling automatic garbage collection
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1922587Z [command]/usr/bin/git config --local gc.auto 0
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1956960Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1959504Z ##[group]Setting up auth
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.1962994Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.2010731Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.2362032Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.2407857Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.2670733Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.2717657Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.2972972Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.3019810Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.3021764Z ##[group]Fetching the repository
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.3030669Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin 3914307d8e353b3952ac4fa601027ba2dfd77678
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9183938Z From https://github.com/hea3ven/orpheus
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9184632Z  * branch            3914307d8e353b3952ac4fa601027ba2dfd77678 -> FETCH_HEAD
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9188106Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9189052Z ##[group]Determining the checkout info
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9191544Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9198285Z [command]/usr/bin/git sparse-checkout disable
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9256028Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9295864Z ##[group]Checking out the ref
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9296569Z [command]/usr/bin/git checkout --progress --force 3914307d8e353b3952ac4fa601027ba2dfd77678
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9612935Z Note: switching to '3914307d8e353b3952ac4fa601027ba2dfd77678'.
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9613416Z 
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9613775Z You are in 'detached HEAD' state. You can look around, make experimental
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9614554Z changes and commit them, and you can discard any commits you make in this
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9615295Z state without impacting any branches by switching back to a branch.
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9615703Z 
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9616084Z If you want to create a new branch to retain commits you create, you may
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9616830Z do so (now or later) by using -c with the switch command. Example:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9617232Z 
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9617475Z   git switch -c <new-branch-name>
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9617789Z 
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9618014Z Or undo this operation with:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9618471Z 
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9618739Z   git switch -
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9619106Z 
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9619751Z Turn off this advice by setting config variable advice.detachedHead to false
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9620433Z 
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9621144Z HEAD is now at 3914307 Merge eb58df633911dc7d218b3b630516a6e6757aece6 into 8e749f18f57cf20a9b464c9a7d68cd7211fe76a7
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9624538Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9676993Z [command]/usr/bin/git log -1 --format=%H
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:23.9709119Z 3914307d8e353b3952ac4fa601027ba2dfd77678
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:24.0008996Z ##[group]Run actions/setup-go@v6
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:24.0009614Z with:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:24.0009969Z   go-version: 1.27.0
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:24.0010361Z   check-latest: false
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:24.0012925Z   token: ***
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:24.0013286Z   cache: true
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:24.0013638Z env:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:24.0014079Z   QUALITY_TOOLS: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:24.0014579Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:24.1305270Z Setup go version spec 1.27.0
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:24.1316787Z Attempting to download 1.27.0...
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:24.9005551Z matching 1.27.0...
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:24.9038154Z Acquiring 1.27.0 from https://github.com/actions/go-versions/releases/download/1.27.0-32325163857/go-1.27.0-linux-x64.tar.gz
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:25.3102990Z Extracting Go...
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:25.3223016Z [command]/usr/bin/tar xz --warning=no-unknown-keyword --overwrite -C /home/runner/work/_temp/63f19ecd-1c17-4c82-98b4-61991f0b59ce -f /home/runner/work/_temp/16cea22b-1a57-443c-9fc3-ebd798713a0d
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:27.1678259Z Successfully extracted go to /home/runner/work/_temp/63f19ecd-1c17-4c82-98b4-61991f0b59ce
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:27.1678833Z Adding to the cache ...
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.4724577Z Successfully cached go to /opt/hostedtoolcache/go/1.27.0/x64
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.4730658Z Added go to the path
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.4731212Z Successfully set up Go version 1.27.0
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.4972074Z [command]/opt/hostedtoolcache/go/1.27.0/x64/bin/go env GOMODCACHE
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.5011051Z [command]/opt/hostedtoolcache/go/1.27.0/x64/bin/go env GOCACHE
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.5052081Z /home/runner/go/pkg/mod
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.5072202Z /home/runner/.cache/go-build
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.6124942Z Cache is not found
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.6153147Z go version go1.27.0 linux/amd64
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.6153415Z 
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.6153762Z ##[group]go env
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7353011Z AR='ar'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7353457Z CC='gcc'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7353794Z CGO_CFLAGS='-O2 -g'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7354171Z CGO_CPPFLAGS=''
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7354519Z CGO_CXXFLAGS='-O2 -g'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7354881Z CGO_ENABLED='1'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7355173Z CGO_FFLAGS='-O2 -g'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7355504Z CGO_LDFLAGS='-O2 -g'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7355808Z CXX='g++'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7356155Z GCCGO='gccgo'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7356459Z GO111MODULE=''
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7356791Z GOAMD64='v1'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7357168Z GOARCH='amd64'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7357864Z GOAUTH='netrc'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7358243Z GOBIN='/home/runner/go/bin'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7358637Z GOCACHE='/home/runner/.cache/go-build'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7359041Z GOCACHEPROG=''
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7359640Z GODEBUG=''
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7359945Z GOENV='/home/runner/.config/go/env'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7360314Z GOEXE=''
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7360598Z GOEXPERIMENT=''
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7360896Z GOFIPS140='off'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7361175Z GOFLAGS=''
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7362140Z GOGCCFLAGS='-fPIC -m64 -pthread -Wl,--no-gc-sections -fmessage-length=0 -ffile-prefix-map=/tmp/go-build136139664=/tmp/go-build -gno-record-gcc-switches'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7363161Z GOHOSTARCH='amd64'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7363473Z GOHOSTOS='linux'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7363781Z GOINSECURE=''
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7364180Z GOMOD='/home/runner/work/orpheus/orpheus/go.mod'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7364699Z GOMODCACHE='/home/runner/go/pkg/mod'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7365107Z GONOPROXY=''
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7365400Z GONOSUMDB=''
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7365698Z GOOS='linux'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7365998Z GOPACKAGESDRIVER=''
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7366323Z GOPATH='/home/runner/go'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7366659Z GOPRIVATE=''
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7367044Z GOPROXY='https://proxy.golang.org,direct'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7367553Z GOROOT='/opt/hostedtoolcache/go/1.27.0/x64'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7368000Z GOSUMDB='sum.golang.org'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7368367Z GOTELEMETRY='local'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7368781Z GOTELEMETRYDIR='/home/runner/.config/go/telemetry'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7369478Z GOTMPDIR=''
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7370079Z GOTOOLCHAIN='local'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7370620Z GOTOOLDIR='/opt/hostedtoolcache/go/1.27.0/x64/pkg/tool/linux_amd64'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7371181Z GOVCS=''
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7371476Z GOVERSION='go1.27.0'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7371807Z GOWORK=''
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7372126Z PKG_CONFIG='pkg-config'
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7372359Z 
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7372977Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7617453Z ##[group]Run actions/cache@v4
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7617767Z with:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7618082Z   path: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7618555Z   key: quality-tools-Linux-X64-bd-1.2.2-dolt-2.2.3-golangci-lint-2.12.2
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7618983Z   enableCrossOsArchive: false
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7619505Z   fail-on-cache-miss: false
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7619757Z   lookup-only: false
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7619981Z   save-always: false
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7620196Z env:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7620476Z   QUALITY_TOOLS: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7620823Z   GOTOOLCHAIN: local
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.7621037Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.8759769Z (node:2383) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.8761119Z (Use `node --trace-deprecation ...` to show where the warning was created)
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9773889Z Cache not found for input keys: quality-tools-Linux-X64-bd-1.2.2-dolt-2.2.3-golangci-lint-2.12.2
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9868020Z ##[group]Run set -euo pipefail
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9868398Z ^[[36;1mset -euo pipefail^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9868690Z ^[[36;1mlog='artifacts/test-coverage/setup.log'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9869021Z ^[[36;1mexec > >(tee -a "$log") 2>&1^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9869537Z ^[[36;1m^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9869760Z ^[[36;1mtools="$QUALITY_TOOLS"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9870021Z ^[[36;1mbin="$tools/bin"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9870259Z ^[[36;1mtools_ready() {^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9870604Z ^[[36;1m  [[ -x "$bin/bd" && -x "$bin/dolt" && -x "$bin/golangci-lint" ]] &&^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9871039Z ^[[36;1m    "$bin/bd" --version | grep --fixed-strings '1.2.2' &&^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9871430Z ^[[36;1m    "$bin/dolt" version | grep --fixed-strings '2.2.3' &&^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9871850Z ^[[36;1m    "$bin/golangci-lint" version | grep --fixed-strings '2.12.2'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9872202Z ^[[36;1m}^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9872395Z ^[[36;1m^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9872652Z ^[[36;1mif ! tools_ready; then^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9873115Z ^[[36;1m  rm -rf "$tools"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9873361Z ^[[36;1m  mkdir -p "$bin"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9873609Z ^[[36;1m  downloads="$(mktemp -d)"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9873891Z ^[[36;1m  trap 'rm -rf "$downloads"' EXIT^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9874161Z ^[[36;1m^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9874371Z ^[[36;1m  beads="$downloads/beads.tar.gz"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9874713Z ^[[36;1m  curl --fail --location --retry 3 --silent --show-error \^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9875320Z ^[[36;1m    https://github.com/gastownhall/beads/releases/download/v1.2.2/beads_1.2.2_linux_amd64.tar.gz \^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9875833Z ^[[36;1m    --output "$beads"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9876096Z ^[[36;1m  printf '%s  %s\n' \^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9876569Z ^[[36;1m    '8140098a51d3b81d5548d1c5e6db1a2d9930e5d141efe2a4bff7d079c4d321e8' "$beads" | sha256sum --check^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9877075Z ^[[36;1m  tar -xzf "$beads" -C "$bin" bd^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9877342Z ^[[36;1m^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9877560Z ^[[36;1m  dolt="$downloads/dolt.tar.gz"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9877913Z ^[[36;1m  curl --fail --location --retry 3 --silent --show-error \^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9878435Z ^[[36;1m    https://github.com/dolthub/dolt/releases/download/v2.2.3/dolt-linux-amd64.tar.gz \^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9878878Z ^[[36;1m    --output "$dolt"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9879129Z ^[[36;1m  printf '%s  %s\n' \^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9879866Z ^[[36;1m    'ffafa7cc172cada5f77ca3fb96306545ddac44a111625f75f870306c7f197301' "$dolt" | sha256sum --check^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9880377Z ^[[36;1m  tar -xzf "$dolt" -C "$downloads"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9880768Z ^[[36;1m  install -m 0755 "$downloads/dolt-linux-amd64/bin/dolt" "$bin/dolt"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9881124Z ^[[36;1m^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9881380Z ^[[36;1m  golangci_lint="$downloads/golangci-lint.tar.gz"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9881786Z ^[[36;1m  curl --fail --location --retry 3 --silent --show-error \^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9882409Z ^[[36;1m    https://github.com/golangci/golangci-lint/releases/download/v2.12.2/golangci-lint-2.12.2-linux-amd64.tar.gz \^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9882965Z ^[[36;1m    --output "$golangci_lint"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9883239Z ^[[36;1m  printf '%s  %s\n' \^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9883731Z ^[[36;1m    '8df580d2670fed8fa984aac0507099af8df275e665215f5c7a2ae3943893a553' "$golangci_lint" | sha256sum --check^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9884283Z ^[[36;1m  tar -xzf "$golangci_lint" -C "$downloads"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9884794Z ^[[36;1m  install -m 0755 "$downloads/golangci-lint-2.12.2-linux-amd64/golangci-lint" "$bin/golangci-lint"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9885266Z ^[[36;1mfi^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9885458Z ^[[36;1m^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9885653Z ^[[36;1mtools_ready^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9885884Z ^[[36;1mecho "$bin" >> "$GITHUB_PATH"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9960610Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9960987Z env:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9961284Z   QUALITY_TOOLS: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9961856Z   GOTOOLCHAIN: local
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:33.9962101Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:34.0067501Z tee: artifacts/test-coverage/setup.log: No such file or directory
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:34.4799461Z /tmp/tmp.aO2MMMsOVq/beads.tar.gz: OK
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:35.8649576Z /tmp/tmp.aO2MMMsOVq/dolt.tar.gz: OK
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:36.9559652Z /tmp/tmp.aO2MMMsOVq/golangci-lint.tar.gz: OK
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.3007868Z Warning: /home/runner/work/orpheus/orpheus/.beads has permissions 0755 (recommended: 0700). Run: chmod 700 /home/runner/work/orpheus/orpheus/.beads
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.3069555Z bd version 1.2.2 (6c124203e)
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.4244424Z dolt version 2.2.3
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5024021Z golangci-lint has version 2.12.2 built with go1.26.2 from c0d3ddc9 on 2026-05-06T11:07:58Z
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5559137Z ##[group]Run set -euo pipefail
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5559764Z ^[[36;1mset -euo pipefail^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5560037Z ^[[36;1mmkdir -p artifacts/test-coverage^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5560369Z ^[[36;1mlog='artifacts/test-coverage/setup.log'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5560880Z ^[[36;1m{^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5561129Z ^[[36;1m  printf 'checkout outcome: %s\n' 'success'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5561457Z ^[[36;1m  printf 'Go setup outcome: %s\n' 'success'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5561784Z ^[[36;1m  printf 'tool cache outcome: %s\n' 'success'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5562142Z ^[[36;1m  printf 'tool provisioning outcome: %s\n' 'success'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5562469Z ^[[36;1m} >> "$log"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5632455Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5632798Z env:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5633099Z   QUALITY_TOOLS: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5633444Z   GOTOOLCHAIN: local
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5633669Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5798259Z ##[group]Run set -uo pipefail
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5798596Z ^[[36;1mset -uo pipefail^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5798838Z ^[[36;1mset +e^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5799107Z ^[[36;1mreport='artifacts/test-coverage/report.json'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5799710Z ^[[36;1mlog='artifacts/test-coverage/quality.log'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5800040Z ^[[36;1mmkdir -p artifacts/test-coverage^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5800318Z ^[[36;1m^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5800526Z ^[[36;1mmake quality 2>&1 | tee "$log"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5800810Z ^[[36;1mstatuses=("${PIPESTATUS[@]}")^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5801093Z ^[[36;1mquality_exit="${statuses[0]}"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5801372Z ^[[36;1mif [[ "${statuses[1]}" -ne 0 ]]; then^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5801661Z ^[[36;1m  quality_exit=1^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5801894Z ^[[36;1mfi^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5802082Z ^[[36;1m^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5802283Z ^[[36;1mdecision=execution_failure^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5802556Z ^[[36;1mif [[ -f "$report" ]]; then^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5803148Z ^[[36;1m  decision="$(jq --raw-output '.decision.status // "execution_failure"' "$report" 2>>"$log")" || decision=execution_failure^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5803683Z ^[[36;1mfi^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5803885Z ^[[36;1mcase "$decision" in^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5804322Z ^[[36;1m  pass|policy_update_required|coverage_regression|timing_budget_exceeded|test_failed) ;;^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5804820Z ^[[36;1m  *) decision=execution_failure; quality_exit=1 ;;^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5805126Z ^[[36;1mesac^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5805398Z ^[[36;1mif [[ "$quality_exit" -eq 0 && "$decision" != pass ]]; then^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5805745Z ^[[36;1m  quality_exit=1^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5805968Z ^[[36;1mfi^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5806315Z ^[[36;1mprintf 'decision=%s\nexit_code=%s\n' "$decision" "$quality_exit" >> "$GITHUB_OUTPUT"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5806742Z ^[[36;1mexit "$quality_exit"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5876422Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5876783Z env:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5877074Z   QUALITY_TOOLS: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5877415Z   GOTOOLCHAIN: local
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.5877642Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.6006522Z go run ./cmd/testcoverage
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:32:37.6076876Z go: downloading gopkg.in/yaml.v3 v3.0.1
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7972557Z unit: 12007/21621 statements (55.53%), 1250 test events, 3.44s selected package work, 36.57s command wall time
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7973833Z   github.com/hea3ven/orpheus/cmd/orpheus: 0/4 statements (0.00%), no selected package work
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7974865Z   github.com/hea3ven/orpheus/cmd/testcoverage: 597/920 statements (64.89%), 0.11s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7975853Z   github.com/hea3ven/orpheus/internal/agent: 1651/1987 statements (83.09%), 0.55s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7976794Z   github.com/hea3ven/orpheus/internal/agentexec: 2/114 statements (1.75%), 0.11s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7977707Z   github.com/hea3ven/orpheus/internal/cli: 2041/5148 statements (39.65%), 0.21s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7978656Z   github.com/hea3ven/orpheus/internal/doctor: 253/467 statements (54.18%), 0.14s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7979784Z   github.com/hea3ven/orpheus/internal/git: 491/1583 statements (31.02%), 0.20s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7980918Z   github.com/hea3ven/orpheus/internal/logging: 19/36 statements (52.78%), no selected package work
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7982477Z   github.com/hea3ven/orpheus/internal/pathutil: 17/19 statements (89.47%), no selected package work
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7983594Z   github.com/hea3ven/orpheus/internal/publication: 76/82 statements (92.68%), 0.08s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7984541Z   github.com/hea3ven/orpheus/internal/pullrequest: 9/147 statements (6.12%), 0.07s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7985442Z   github.com/hea3ven/orpheus/internal/readiness: 34/37 statements (91.89%), 0.09s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7986319Z   github.com/hea3ven/orpheus/internal/registry: 262/295 statements (88.81%), 0.09s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7987192Z   github.com/hea3ven/orpheus/internal/review: 371/1229 statements (30.19%), 0.09s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7988478Z   github.com/hea3ven/orpheus/internal/revieweval: 313/548 statements (57.12%), 0.11s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7989558Z   github.com/hea3ven/orpheus/internal/state: 172/223 statements (77.13%), 0.08s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7990415Z   github.com/hea3ven/orpheus/internal/status: 312/336 statements (92.86%), 0.07s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7991279Z   github.com/hea3ven/orpheus/internal/task: 721/837 statements (86.14%), 0.09s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7992155Z   github.com/hea3ven/orpheus/internal/taskbranch: 94/100 statements (94.00%), 0.07s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7993422Z   github.com/hea3ven/orpheus/internal/tasksource/beads: 481/778 statements (61.83%), 0.09s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7994382Z   github.com/hea3ven/orpheus/internal/tasksource/gig: 51/383 statements (13.32%), 0.07s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7995329Z   github.com/hea3ven/orpheus/internal/taskstate: 1571/2250 statements (69.82%), 0.28s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7996240Z   github.com/hea3ven/orpheus/internal/taskstats: 520/599 statements (86.81%), 0.08s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7997170Z   github.com/hea3ven/orpheus/internal/tasktarget: 95/113 statements (84.07%), 0.22s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7998058Z   github.com/hea3ven/orpheus/internal/testguard: 31/53 statements (58.49%), 0.06s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7998935Z   github.com/hea3ven/orpheus/internal/testlane: 103/117 statements (88.03%), 0.20s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.7999945Z   github.com/hea3ven/orpheus/internal/testutil: 25/28 statements (89.29%), 0.07s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8000819Z   github.com/hea3ven/orpheus/internal/workflow: 1695/3188 statements (53.17%), 0.22s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8001819Z integration: 14251/21703 statements (65.66%), 616 test events, 44.02s selected package work, 32.68s command wall time
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8002919Z   github.com/hea3ven/orpheus/cmd/orpheus: 0/4 statements (0.00%), no selected package work
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8003841Z   github.com/hea3ven/orpheus/cmd/testcoverage: 0/920 statements (0.00%), 0.62s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8004885Z   github.com/hea3ven/orpheus/internal/agent: 1047/1987 statements (52.69%), no selected package work
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8005861Z   github.com/hea3ven/orpheus/internal/agentexec: 94/114 statements (82.46%), 1.47s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8006729Z   github.com/hea3ven/orpheus/internal/cli: 3696/5148 statements (71.79%), 10.35s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8007695Z   github.com/hea3ven/orpheus/internal/doctor: 356/467 statements (76.23%), no selected package work
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8008639Z   github.com/hea3ven/orpheus/internal/git: 1084/1583 statements (68.48%), 10.53s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8009731Z   github.com/hea3ven/orpheus/internal/logging: 19/36 statements (52.78%), no selected package work
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8010855Z   github.com/hea3ven/orpheus/internal/pathutil: 17/19 statements (89.47%), no selected package work
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8012004Z   github.com/hea3ven/orpheus/internal/publication: 74/82 statements (90.24%), no selected package work
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8012834Z   github.com/hea3ven/orpheus/internal/pullrequest: 127/147 statements (86.39%), 0.35s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8013848Z   github.com/hea3ven/orpheus/internal/readiness: 25/37 statements (67.57%), no selected package work
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8014967Z   github.com/hea3ven/orpheus/internal/registry: 228/295 statements (77.29%), no selected package work
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8015959Z   github.com/hea3ven/orpheus/internal/review: 955/1229 statements (77.71%), 0.42s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8017213Z   github.com/hea3ven/orpheus/internal/revieweval: 292/548 statements (53.28%), no selected package work
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8018325Z   github.com/hea3ven/orpheus/internal/state: 227/305 statements (74.43%), no selected package work
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8019566Z   github.com/hea3ven/orpheus/internal/status: 227/336 statements (67.56%), no selected package work
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8020638Z   github.com/hea3ven/orpheus/internal/task: 555/837 statements (66.31%), no selected package work
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8021609Z   github.com/hea3ven/orpheus/internal/taskbranch: 80/100 statements (80.00%), 0.18s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8022746Z   github.com/hea3ven/orpheus/internal/tasksource/beads: 452/778 statements (58.10%), 18.49s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8023745Z   github.com/hea3ven/orpheus/internal/tasksource/gig: 325/383 statements (84.86%), 1.17s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8024822Z   github.com/hea3ven/orpheus/internal/taskstate: 1640/2250 statements (72.89%), no selected package work
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8025964Z   github.com/hea3ven/orpheus/internal/taskstats: 282/599 statements (47.08%), no selected package work
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8027111Z   github.com/hea3ven/orpheus/internal/tasktarget: 90/113 statements (79.65%), no selected package work
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8028127Z   github.com/hea3ven/orpheus/internal/testguard: 41/53 statements (77.36%), 0.43s
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8029119Z   github.com/hea3ven/orpheus/internal/testlane: 0/117 statements (0.00%), no selected package work
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8030351Z   github.com/hea3ven/orpheus/internal/testutil: 22/28 statements (78.57%), no selected package work
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8031470Z   github.com/hea3ven/orpheus/internal/workflow: 2296/3188 statements (72.02%), no selected package work
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8032236Z quality decision: timing_budget_exceeded
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8033883Z   - integration/github.com/hea3ven/orpheus/internal/tasksource/gig: timing exceeds its policy ceiling; run make quality-policy-update if the regression is intentional (ceiling 1.038s, measured 1.167s, proposed ceiling 2.042s)
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8035411Z Quality report: artifacts/test-coverage/report.json
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8050841Z quality report: timing_budget_exceeded against .quality.yml
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8059723Z exit status 1
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8373736Z make: *** [Makefile:24: quality] Error 1
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8438053Z ##[error]Process completed with exit code 2.
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8494023Z ##[group]Run set -uo pipefail
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8494391Z ^[[36;1mset -uo pipefail^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8494625Z ^[[36;1mset +e^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8494862Z ^[[36;1mmkdir -p artifacts/test-coverage^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8495235Z ^[[36;1mmake lint 2>&1 | tee artifacts/test-coverage/lint.log^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8495592Z ^[[36;1mstatuses=("${PIPESTATUS[@]}")^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8495893Z ^[[36;1mif [[ "${statuses[1]}" -ne 0 ]]; then^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8496191Z ^[[36;1m  exit 1^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8496426Z ^[[36;1mfi^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8496639Z ^[[36;1mexit "${statuses[0]}"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8567620Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8567985Z env:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8568293Z   QUALITY_TOOLS: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8568644Z   GOTOOLCHAIN: local
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8568873Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:33:53.8700461Z GOTOOLCHAIN=go1.26.3 golangci-lint run ./...
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:40.7011292Z 0 issues.
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:40.7583600Z ##[group]Run set -uo pipefail
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:40.7583927Z ^[[36;1mset -uo pipefail^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:40.7584172Z ^[[36;1mset +e^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:40.7584422Z ^[[36;1mmkdir -p artifacts/test-coverage^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:40.7584808Z ^[[36;1mmake build 2>&1 | tee artifacts/test-coverage/build.log^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:40.7585174Z ^[[36;1mstatuses=("${PIPESTATUS[@]}")^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:40.7585479Z ^[[36;1mif [[ "${statuses[1]}" -ne 0 ]]; then^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:40.7585772Z ^[[36;1m  exit 1^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:40.7586191Z ^[[36;1mfi^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:40.7586404Z ^[[36;1mexit "${statuses[0]}"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:40.7656336Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:40.7656689Z env:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:40.7656979Z   QUALITY_TOOLS: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:40.7657339Z   GOTOOLCHAIN: local
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:40.7657571Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:40.7783168Z go build ./cmd/orpheus
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3008113Z ##[group]Run set -euo pipefail
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3008518Z ^[[36;1mset -euo pipefail^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3008770Z ^[[36;1mfailed=0^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3008981Z ^[[36;1m^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3009192Z ^[[36;1mcase "$QUALITY_DECISION" in^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3009807Z ^[[36;1m  pass)^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3010076Z ^[[36;1m    if [[ "$QUALITY_OUTCOME" == success ]]; then^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3010411Z ^[[36;1m      quality_result='**Pass**'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3010685Z ^[[36;1m    else^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3010951Z ^[[36;1m      quality_result='**Execution failed**'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3011248Z ^[[36;1m      failed=1^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3011469Z ^[[36;1m    fi^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3011668Z ^[[36;1m    ;;^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3011881Z ^[[36;1m  policy_update_required)^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3012230Z ^[[36;1m    quality_result='**Failed:** Quality policy update required'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3012587Z ^[[36;1m    failed=1^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3012850Z ^[[36;1m    ;;^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3013087Z ^[[36;1m  coverage_regression)^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3013394Z ^[[36;1m    quality_result='**Failed:** Coverage regression'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3013711Z ^[[36;1m    failed=1^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3013916Z ^[[36;1m    ;;^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3014119Z ^[[36;1m  timing_budget_exceeded)^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3014432Z ^[[36;1m    quality_result='**Failed:** Timing budget exceeded'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3014753Z ^[[36;1m    failed=1^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3014954Z ^[[36;1m    ;;^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3015156Z ^[[36;1m  test_failed)^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3015415Z ^[[36;1m    quality_result='**Failed:** Tests failed'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3015706Z ^[[36;1m    failed=1^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3015908Z ^[[36;1m    ;;^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3016096Z ^[[36;1m  *)^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3016327Z ^[[36;1m    quality_result='**Execution failed**'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3016608Z ^[[36;1m    failed=1^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3016812Z ^[[36;1m    ;;^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3017013Z ^[[36;1mesac^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3017202Z ^[[36;1m^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3017406Z ^[[36;1mcase "$LINT_OUTCOME" in^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3017672Z ^[[36;1m  success) lint_result='**Pass**' ;;^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3018000Z ^[[36;1m  failure) lint_result='**Failed**'; failed=1 ;;^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3018334Z ^[[36;1m  *) lint_result='**Not run**'; failed=1 ;;^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3018608Z ^[[36;1mesac^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3018812Z ^[[36;1mcase "$BUILD_OUTCOME" in^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3019089Z ^[[36;1m  success) build_result='**Pass**' ;;^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3019840Z ^[[36;1m  failure) build_result='**Failed**'; failed=1 ;;^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3020182Z ^[[36;1m  *) build_result='**Not run**'; failed=1 ;;^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3020460Z ^[[36;1mesac^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3020647Z ^[[36;1m^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3020856Z ^[[36;1mif [[ "$failed" -eq 0 ]]; then^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3021138Z ^[[36;1m  gate_alert='TIP'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3021391Z ^[[36;1m  gate_result='Gate passed'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3021661Z ^[[36;1melse^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3021866Z ^[[36;1m  gate_alert='CAUTION'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3022117Z ^[[36;1m  gate_result='Gate failed'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3022358Z ^[[36;1mfi^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3022555Z ^[[36;1m^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3022747Z ^[[36;1mappend_log() {^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3022975Z ^[[36;1m  local title="$1"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3023209Z ^[[36;1m  local path="$2"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3023454Z ^[[36;1m  [[ -s "$path" ]] || return 0^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3023786Z ^[[36;1m  printf '\n<details>\n<summary>%s</summary>\n\n' "$title"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3024333Z ^[[36;1m  printf '%s\n' '```text'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3024585Z ^[[36;1m  cat "$path"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3024821Z ^[[36;1m  printf '%s\n' '```' '</details>'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3025087Z ^[[36;1m}^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3025281Z ^[[36;1m^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3025457Z ^[[36;1m{^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3025669Z ^[[36;1m  echo '# Pull-request quality gate'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3026111Z ^[[36;1m  echo^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3026318Z ^[[36;1m  echo "> [!$gate_alert]"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3026675Z ^[[36;1m  echo "> **$gate_result.** See the check results and test details below."^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3027040Z ^[[36;1m  echo^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3027247Z ^[[36;1m  echo '| Check | Result |'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3027512Z ^[[36;1m  echo '| --- | --- |'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3027800Z ^[[36;1m  echo "| Test quality | $quality_result |"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3028110Z ^[[36;1m  echo "| Lint | $lint_result |"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3028409Z ^[[36;1m  echo "| Build | $build_result |"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3028672Z ^[[36;1m  echo^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3028989Z ^[[36;1m  echo "Quality command exit code: \`${QUALITY_EXIT_CODE:-unavailable}\`"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3029537Z ^[[36;1m^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3029794Z ^[[36;1m  if [[ -f artifacts/test-coverage/report.md ]]; then^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3030104Z ^[[36;1m    echo^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3030361Z ^[[36;1m    cat artifacts/test-coverage/report.md^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3030653Z ^[[36;1m  else^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3030851Z ^[[36;1m    echo^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3031062Z ^[[36;1m    echo '## Test quality'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3031304Z ^[[36;1m    echo^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3031506Z ^[[36;1m    echo '> [!CAUTION]'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3031935Z ^[[36;1m    echo '> **Quality report unavailable.** Inspect the setup and command diagnostics below.'^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3032367Z ^[[36;1m  fi^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3032564Z ^[[36;1m^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3032797Z ^[[36;1m  if [[ "$QUALITY_OUTCOME" != success ]]; then^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3033228Z ^[[36;1m    append_log 'Quality command output' artifacts/test-coverage/quality.log^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3033618Z ^[[36;1m  fi^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3033876Z ^[[36;1m  if [[ ! -f artifacts/test-coverage/report.md ]]; then^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3034306Z ^[[36;1m    append_log 'Setup diagnostics' artifacts/test-coverage/setup.log^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3034667Z ^[[36;1m  fi^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3034901Z ^[[36;1m  if [[ "$LINT_OUTCOME" != success ]]; then^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3035269Z ^[[36;1m    append_log 'Lint output' artifacts/test-coverage/lint.log^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3035604Z ^[[36;1m  fi^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3035829Z ^[[36;1m  if [[ "$BUILD_OUTCOME" != success ]]; then^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3036203Z ^[[36;1m    append_log 'Build output' artifacts/test-coverage/build.log^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3036556Z ^[[36;1m  fi^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3036760Z ^[[36;1m} >> "$GITHUB_STEP_SUMMARY"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3037003Z ^[[36;1m^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3037215Z ^[[36;1mif [[ "$failed" -ne 0 ]]; then^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3037651Z ^[[36;1m  echo "::error::Pull-request quality gate failed: ${QUALITY_DECISION:-execution_failure}"^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3038081Z ^[[36;1m  exit 1^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3038279Z ^[[36;1mfi^[[0m
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3107749Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3108118Z env:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3108437Z   QUALITY_TOOLS: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3108787Z   GOTOOLCHAIN: local
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3109036Z   QUALITY_DECISION: timing_budget_exceeded
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3109503Z   QUALITY_EXIT_CODE: 2
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3109752Z   QUALITY_OUTCOME: failure
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3109986Z   LINT_OUTCOME: success
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3110212Z   BUILD_OUTCOME: success
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3110437Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3246245Z ##[error]Pull-request quality gate failed: timing_budget_exceeded
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3248163Z ##[error]Process completed with exit code 1.
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3356161Z ##[group]Run actions/upload-artifact@v4
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3356463Z with:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3356694Z   name: pull-request-quality-37363908772-5
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3356994Z   path: artifacts/test-coverage/
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3357254Z   if-no-files-found: warn
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3357491Z   retention-days: 7
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3357712Z   compression-level: 6
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3357951Z   overwrite: false
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3358171Z   include-hidden-files: false
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3358411Z env:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3358719Z   QUALITY_TOOLS: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3359068Z   GOTOOLCHAIN: local
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.3359528Z ##[endgroup]
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.5134381Z (node:17157) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.5135873Z (Use `node --trace-deprecation ...` to show where the warning was created)
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.5235135Z With the provided path, there will be 6 files uploaded
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.5260641Z Artifact name is valid!
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.5261280Z Root directory input is valid!
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.7792244Z Beginning upload of artifact content to blob storage
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.8051442Z (node:17157) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.9112056Z Uploaded bytes 5043
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.9439751Z Finished uploading artifact content to blob storage!
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.9440787Z SHA256 digest of uploaded artifact zip is a6f9ef16ef22cd556cda5c094d715ca214e6b3b23f51100fc687d57e0e0d5034
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:41.9442578Z Finalizing artifact upload
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:42.1843913Z Artifact pull-request-quality-37363908772-5.zip successfully finalized. Artifact ID 11437784936
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:42.1844876Z Artifact pull-request-quality-37363908772-5 has been successfully uploaded! Final size is 5043 bytes. Artifact ID is 11437784936
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:42.1850788Z Artifact download URL: https://github.com/hea3ven/orpheus/actions/runs/37363908772/artifacts/11437784936
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:42.2057889Z Post job cleanup.
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:42.2940079Z [command]/usr/bin/git version
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:42.2988953Z git version 2.55.0
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:42.3035213Z Temporarily overriding HOME='/home/runner/work/_temp/56d1b8b7-8f54-480d-a218-041a95ee537e' before making global git config changes
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:42.3036573Z Adding repository directory to the temporary git global config as a safe directory
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:42.3041835Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/orpheus/orpheus
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:42.3091853Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:42.3135986Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:42.3428706Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:42.3458735Z http.https://github.com/.extraheader
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:42.3472906Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:42.3530754Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:42.3821630Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:42.3868834Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:42.4326046Z Cleaning up orphan processes
+Pull-request quality gate	UNKNOWN STEP	2026-10-06T19:34:42.4651827Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@v4, actions/upload-artifact@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

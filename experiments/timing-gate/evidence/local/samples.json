@@ -1,0 +1,427 @@
+[
+  {
+    "GOFLAGS": "-overlay=/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/base-overlay.json",
+    "command": [
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/.scratch/collector",
+      "-output",
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/warm-A/report.json"
+    ],
+    "complete": true,
+    "decision": "pass",
+    "exit_code": 0,
+    "label": "warm-A",
+    "load_after": [
+      5.11767578125,
+      2.0234375,
+      1.33251953125
+    ],
+    "load_before": [
+      0.50927734375,
+      0.6103515625,
+      0.85400390625
+    ],
+    "started_utc": "2026-10-11T09:00:12Z",
+    "variant": "base",
+    "wall_seconds": 62.132813656993676
+  },
+  {
+    "GOFLAGS": "-overlay=/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/slow-overlay.json",
+    "command": [
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/.scratch/collector",
+      "-output",
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/warm-S/report.json"
+    ],
+    "complete": true,
+    "decision": "timing_budget_exceeded",
+    "exit_code": 1,
+    "label": "warm-S",
+    "load_after": [
+      4.6123046875,
+      2.255859375,
+      1.4375
+    ],
+    "load_before": [
+      5.11767578125,
+      2.0234375,
+      1.33251953125
+    ],
+    "started_utc": "2026-10-11T09:01:14Z",
+    "variant": "slow",
+    "wall_seconds": 32.11906335398089
+  },
+  {
+    "GOFLAGS": "-overlay=/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/base-overlay.json",
+    "command": [
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/.scratch/collector",
+      "-output",
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/1-A/report.json"
+    ],
+    "complete": true,
+    "decision": "pass",
+    "exit_code": 0,
+    "label": "1-A",
+    "load_after": [
+      4.79736328125,
+      2.5205078125,
+      1.5517578125
+    ],
+    "load_before": [
+      4.6123046875,
+      2.255859375,
+      1.4375
+    ],
+    "started_utc": "2026-10-11T09:01:46Z",
+    "variant": "base",
+    "wall_seconds": 32.01182041101856
+  },
+  {
+    "GOFLAGS": "-overlay=/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/base-overlay.json",
+    "command": [
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/.scratch/collector",
+      "-output",
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/1-B/report.json"
+    ],
+    "complete": true,
+    "decision": "pass",
+    "exit_code": 0,
+    "label": "1-B",
+    "load_after": [
+      5.15185546875,
+      2.884765625,
+      1.7119140625
+    ],
+    "load_before": [
+      4.79736328125,
+      2.5205078125,
+      1.5517578125
+    ],
+    "started_utc": "2026-10-11T09:02:18Z",
+    "variant": "base",
+    "wall_seconds": 32.93354380596429
+  },
+  {
+    "GOFLAGS": "-overlay=/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/slow-overlay.json",
+    "command": [
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/.scratch/collector",
+      "-output",
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/1-S/report.json"
+    ],
+    "complete": true,
+    "decision": "timing_budget_exceeded",
+    "exit_code": 1,
+    "label": "1-S",
+    "load_after": [
+      4.947265625,
+      3.0791015625,
+      1.81494140625
+    ],
+    "load_before": [
+      5.15185546875,
+      2.884765625,
+      1.7119140625
+    ],
+    "started_utc": "2026-10-11T09:02:51Z",
+    "variant": "slow",
+    "wall_seconds": 31.558527865970973
+  },
+  {
+    "GOFLAGS": "-overlay=/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/slow-overlay.json",
+    "command": [
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/.scratch/collector",
+      "-output",
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/2-S/report.json"
+    ],
+    "complete": true,
+    "decision": "timing_budget_exceeded",
+    "exit_code": 1,
+    "label": "2-S",
+    "load_after": [
+      5.05712890625,
+      3.3056640625,
+      1.93310546875
+    ],
+    "load_before": [
+      4.947265625,
+      3.0791015625,
+      1.81494140625
+    ],
+    "started_utc": "2026-10-11T09:03:22Z",
+    "variant": "slow",
+    "wall_seconds": 31.793609765009023
+  },
+  {
+    "GOFLAGS": "-overlay=/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/base-overlay.json",
+    "command": [
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/.scratch/collector",
+      "-output",
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/2-B/report.json"
+    ],
+    "complete": true,
+    "decision": "pass",
+    "exit_code": 0,
+    "label": "2-B",
+    "load_after": [
+      4.8701171875,
+      3.484375,
+      2.0458984375
+    ],
+    "load_before": [
+      5.05712890625,
+      3.3056640625,
+      1.93310546875
+    ],
+    "started_utc": "2026-10-11T09:03:54Z",
+    "variant": "base",
+    "wall_seconds": 31.617587257002015
+  },
+  {
+    "GOFLAGS": "-overlay=/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/base-overlay.json",
+    "command": [
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/.scratch/collector",
+      "-output",
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/2-A/report.json"
+    ],
+    "complete": true,
+    "decision": "pass",
+    "exit_code": 0,
+    "label": "2-A",
+    "load_after": [
+      4.44482421875,
+      3.52978515625,
+      2.1064453125
+    ],
+    "load_before": [
+      4.8701171875,
+      3.484375,
+      2.0458984375
+    ],
+    "started_utc": "2026-10-11T09:04:26Z",
+    "variant": "base",
+    "wall_seconds": 31.682474013010506
+  },
+  {
+    "GOFLAGS": "-overlay=/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/base-overlay.json",
+    "command": [
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/.scratch/collector",
+      "-output",
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/3-B/report.json"
+    ],
+    "complete": true,
+    "decision": "pass",
+    "exit_code": 0,
+    "label": "3-B",
+    "load_after": [
+      4.75439453125,
+      3.7255859375,
+      2.21923828125
+    ],
+    "load_before": [
+      4.44482421875,
+      3.52978515625,
+      2.1064453125
+    ],
+    "started_utc": "2026-10-11T09:04:57Z",
+    "variant": "base",
+    "wall_seconds": 32.23869165999349
+  },
+  {
+    "GOFLAGS": "-overlay=/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/base-overlay.json",
+    "command": [
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/.scratch/collector",
+      "-output",
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/3-A/report.json"
+    ],
+    "complete": true,
+    "decision": "pass",
+    "exit_code": 0,
+    "label": "3-A",
+    "load_after": [
+      4.6826171875,
+      3.8330078125,
+      2.31201171875
+    ],
+    "load_before": [
+      4.75439453125,
+      3.7255859375,
+      2.21923828125
+    ],
+    "started_utc": "2026-10-11T09:05:30Z",
+    "variant": "base",
+    "wall_seconds": 31.80597209901316
+  },
+  {
+    "GOFLAGS": "-overlay=/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/slow-overlay.json",
+    "command": [
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/.scratch/collector",
+      "-output",
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/3-S/report.json"
+    ],
+    "complete": true,
+    "decision": "timing_budget_exceeded",
+    "exit_code": 1,
+    "label": "3-S",
+    "load_after": [
+      4.83837890625,
+      3.98388671875,
+      2.4130859375
+    ],
+    "load_before": [
+      4.6826171875,
+      3.8330078125,
+      2.31201171875
+    ],
+    "started_utc": "2026-10-11T09:06:01Z",
+    "variant": "slow",
+    "wall_seconds": 31.324987284024246
+  },
+  {
+    "GOFLAGS": "-overlay=/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/slow-overlay.json",
+    "command": [
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/.scratch/collector",
+      "-output",
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/4-S/report.json"
+    ],
+    "complete": true,
+    "decision": "timing_budget_exceeded",
+    "exit_code": 1,
+    "label": "4-S",
+    "load_after": [
+      4.74755859375,
+      4.04833984375,
+      2.4853515625
+    ],
+    "load_before": [
+      4.83837890625,
+      3.98388671875,
+      2.4130859375
+    ],
+    "started_utc": "2026-10-11T09:06:33Z",
+    "variant": "slow",
+    "wall_seconds": 31.726434757001698
+  },
+  {
+    "GOFLAGS": "-overlay=/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/base-overlay.json",
+    "command": [
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/.scratch/collector",
+      "-output",
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/4-A/report.json"
+    ],
+    "complete": true,
+    "decision": "pass",
+    "exit_code": 0,
+    "label": "4-A",
+    "load_after": [
+      5.13427734375,
+      4.2431640625,
+      2.61083984375
+    ],
+    "load_before": [
+      4.74755859375,
+      4.04833984375,
+      2.4853515625
+    ],
+    "started_utc": "2026-10-11T09:07:04Z",
+    "variant": "base",
+    "wall_seconds": 31.88451183203142
+  },
+  {
+    "GOFLAGS": "-overlay=/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/base-overlay.json",
+    "command": [
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/.scratch/collector",
+      "-output",
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/4-B/report.json"
+    ],
+    "complete": true,
+    "decision": "pass",
+    "exit_code": 0,
+    "label": "4-B",
+    "load_after": [
+      5.21337890625,
+      4.35986328125,
+      2.70361328125
+    ],
+    "load_before": [
+      5.13427734375,
+      4.2431640625,
+      2.61083984375
+    ],
+    "started_utc": "2026-10-11T09:07:36Z",
+    "variant": "base",
+    "wall_seconds": 31.80882225901587
+  },
+  {
+    "GOFLAGS": "-overlay=/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/base-overlay.json",
+    "command": [
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/.scratch/collector",
+      "-output",
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/5-A/report.json"
+    ],
+    "complete": true,
+    "decision": "timing_budget_exceeded",
+    "exit_code": 1,
+    "label": "5-A",
+    "load_after": [
+      6.06201171875,
+      4.7431640625,
+      2.89794921875
+    ],
+    "load_before": [
+      5.21337890625,
+      4.35986328125,
+      2.70361328125
+    ],
+    "started_utc": "2026-10-11T09:08:08Z",
+    "variant": "base",
+    "wall_seconds": 33.80405240197433
+  },
+  {
+    "GOFLAGS": "-overlay=/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/slow-overlay.json",
+    "command": [
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/.scratch/collector",
+      "-output",
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/5-S/report.json"
+    ],
+    "complete": true,
+    "decision": "timing_budget_exceeded",
+    "exit_code": 1,
+    "label": "5-S",
+    "load_after": [
+      6.0537109375,
+      4.90234375,
+      3.01171875
+    ],
+    "load_before": [
+      6.06201171875,
+      4.7431640625,
+      2.89794921875
+    ],
+    "started_utc": "2026-10-11T09:08:42Z",
+    "variant": "slow",
+    "wall_seconds": 32.11432081699604
+  },
+  {
+    "GOFLAGS": "-overlay=/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/base-overlay.json",
+    "command": [
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/.scratch/collector",
+      "-output",
+      "/home/mati/.local/share/orpheus/repos/orpheus/worktrees/op-dys/experiments/timing-gate/evidence/local/5-B/report.json"
+    ],
+    "complete": true,
+    "decision": "pass",
+    "exit_code": 0,
+    "label": "5-B",
+    "load_after": [
+      5.68505859375,
+      4.9931640625,
+      3.115234375
+    ],
+    "load_before": [
+      6.0537109375,
+      4.90234375,
+      3.01171875
+    ],
+    "started_utc": "2026-10-11T09:09:14Z",
+    "variant": "base",
+    "wall_seconds": 32.04779379902175
+  }
+]

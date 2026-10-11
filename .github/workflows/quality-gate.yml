@@ -1,314 +1,97 @@
-name: Pull-request quality gate
+# TEMPORARY DIAGNOSTIC ONLY. Do not merge. Opening this PR consumes job 1;
+# manually rerun this exact run twice for jobs 2 and 3. No synchronize trigger.
+name: Experimental timing investigation - DO NOT MERGE
 
 on:
   pull_request:
-
-concurrency:
-  group: pull-request-quality-${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+    types: [opened]
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  quality:
-    name: Pull-request quality gate
-    runs-on: ubuntu-latest
+  diagnostic:
+    if: github.head_ref == 'orpheus/op-dys'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      # This runs before every setup action so failures still leave an artifact
-      # directory for the cancellation-safe upload below.
-      - name: Initialize quality diagnostics
-        id: diagnostics
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p artifacts/test-coverage
-          printf 'QUALITY_TOOLS=%s/orpheus-quality-tools\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
-          printf 'Quality gate setup started.\n' > artifacts/test-coverage/setup.log
-
-      - name: Check out synthetic pull-request merge
-        id: checkout
+      - name: Check out exact experimental head
         uses: actions/checkout@v5
         with:
-          # github.sha is the pull_request event's tested merge commit, not the head SHA.
-          ref: ${{ github.sha }}
-          # Preserve diagnostics that were initialized before this checkout.
-          clean: false
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
 
-      - name: Set up Go
-        id: setup-go
+      - name: Set up fixed Go without restored caches
         uses: actions/setup-go@v6
         with:
-          # Coverage statement accounting changed in Go 1.27. Keep the quality
-          # policy measurements on this exact version.
           go-version: '1.27.0'
+          cache: false
 
-      - name: Restore pinned quality tools
-        id: quality-tools
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/orpheus-quality-tools
-          key: quality-tools-${{ runner.os }}-${{ runner.arch }}-bd-1.2.2-dolt-2.2.3-golangci-lint-2.12.2
-
-      - name: Provision pinned quality tools
-        id: provision-tools
-        if: ${{ success() && !cancelled() }}
+      - name: Provision fixed tools and modules before offline measurements
         shell: bash
         run: |
           set -euo pipefail
-          log='artifacts/test-coverage/setup.log'
-          exec > >(tee -a "$log") 2>&1
+          [[ "$GITHUB_RUN_ATTEMPT" =~ ^[123]$ ]]
+          bin="$RUNNER_TEMP/timing-tools/bin"
+          mkdir -p "$bin"
+          downloads="$(mktemp -d)"
+          trap 'rm -rf "$downloads"' EXIT
+          beads="$downloads/beads.tar.gz"
+          curl --fail --location --retry 3 --silent --show-error \
+            https://github.com/gastownhall/beads/releases/download/v1.2.2/beads_1.2.2_linux_amd64.tar.gz \
+            --output "$beads"
+          printf '%s  %s\n' \
+            '8140098a51d3b81d5548d1c5e6db1a2d9930e5d141efe2a4bff7d079c4d321e8' "$beads" | sha256sum --check
+          tar -xzf "$beads" -C "$bin" bd
 
-          tools="$QUALITY_TOOLS"
-          bin="$tools/bin"
-          tools_ready() {
-            [[ -x "$bin/bd" && -x "$bin/dolt" && -x "$bin/golangci-lint" ]] &&
-              "$bin/bd" --version | grep --fixed-strings '1.2.2' &&
-              "$bin/dolt" version | grep --fixed-strings '2.2.3' &&
-              "$bin/golangci-lint" version | grep --fixed-strings '2.12.2'
-          }
-
-          if ! tools_ready; then
-            rm -rf "$tools"
-            mkdir -p "$bin"
-            downloads="$(mktemp -d)"
-            trap 'rm -rf "$downloads"' EXIT
-
-            beads="$downloads/beads.tar.gz"
-            curl --fail --location --retry 3 --silent --show-error \
-              https://github.com/gastownhall/beads/releases/download/v1.2.2/beads_1.2.2_linux_amd64.tar.gz \
-              --output "$beads"
-            printf '%s  %s\n' \
-              '8140098a51d3b81d5548d1c5e6db1a2d9930e5d141efe2a4bff7d079c4d321e8' "$beads" | sha256sum --check
-            tar -xzf "$beads" -C "$bin" bd
-
-            dolt="$downloads/dolt.tar.gz"
-            curl --fail --location --retry 3 --silent --show-error \
-              https://github.com/dolthub/dolt/releases/download/v2.2.3/dolt-linux-amd64.tar.gz \
-              --output "$dolt"
-            printf '%s  %s\n' \
-              'ffafa7cc172cada5f77ca3fb96306545ddac44a111625f75f870306c7f197301' "$dolt" | sha256sum --check
-            tar -xzf "$dolt" -C "$downloads"
-            install -m 0755 "$downloads/dolt-linux-amd64/bin/dolt" "$bin/dolt"
-
-            golangci_lint="$downloads/golangci-lint.tar.gz"
-            curl --fail --location --retry 3 --silent --show-error \
-              https://github.com/golangci/golangci-lint/releases/download/v2.12.2/golangci-lint-2.12.2-linux-amd64.tar.gz \
-              --output "$golangci_lint"
-            printf '%s  %s\n' \
-              '8df580d2670fed8fa984aac0507099af8df275e665215f5c7a2ae3943893a553' "$golangci_lint" | sha256sum --check
-            tar -xzf "$golangci_lint" -C "$downloads"
-            install -m 0755 "$downloads/golangci-lint-2.12.2-linux-amd64/golangci-lint" "$bin/golangci-lint"
-          fi
-
-          tools_ready
+          dolt="$downloads/dolt.tar.gz"
+          curl --fail --location --retry 3 --silent --show-error \
+            https://github.com/dolthub/dolt/releases/download/v2.2.3/dolt-linux-amd64.tar.gz \
+            --output "$dolt"
+          printf '%s  %s\n' \
+            'ffafa7cc172cada5f77ca3fb96306545ddac44a111625f75f870306c7f197301' "$dolt" | sha256sum --check
+          tar -xzf "$dolt" -C "$downloads"
+          install -m 0755 "$downloads/dolt-linux-amd64/bin/dolt" "$bin/dolt"
           echo "$bin" >> "$GITHUB_PATH"
+          go mod download
 
-      # Action logs are owned by GitHub, but their outcomes and all shell setup
-      # output are retained locally so failed setup paths remain diagnosable.
-      - name: Record setup status
-        if: ${{ !cancelled() && (success() || failure()) }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p artifacts/test-coverage
-          log='artifacts/test-coverage/setup.log'
-          {
-            printf 'checkout outcome: %s\n' '${{ steps.checkout.outcome }}'
-            printf 'Go setup outcome: %s\n' '${{ steps.setup-go.outcome }}'
-            printf 'tool cache outcome: %s\n' '${{ steps.quality-tools.outcome }}'
-            printf 'tool provisioning outcome: %s\n' '${{ steps.provision-tools.outcome }}'
-          } >> "$log"
-
-      - name: Run single-pass quality report
-        id: quality-report
-        if: ${{ success() && !cancelled() }}
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -uo pipefail
-          set +e
-          report='artifacts/test-coverage/report.json'
-          log='artifacts/test-coverage/quality.log'
-          mkdir -p artifacts/test-coverage
-
-          make quality 2>&1 | tee "$log"
-          statuses=("${PIPESTATUS[@]}")
-          quality_exit="${statuses[0]}"
-          if [[ "${statuses[1]}" -ne 0 ]]; then
-            quality_exit=1
-          fi
-
-          decision=execution_failure
-          if [[ -f "$report" ]]; then
-            decision="$(jq --raw-output '.decision.status // "execution_failure"' "$report" 2>>"$log")" || decision=execution_failure
-          fi
-          case "$decision" in
-            pass|policy_update_required|coverage_regression|timing_budget_exceeded|test_failed) ;;
-            *) decision=execution_failure; quality_exit=1 ;;
-          esac
-          if [[ "$quality_exit" -eq 0 && "$decision" != pass ]]; then
-            quality_exit=1
-          fi
-          printf 'decision=%s\nexit_code=%s\n' "$decision" "$quality_exit" >> "$GITHUB_OUTPUT"
-          exit "$quality_exit"
-
-      - name: Lint without rerunning tests
-        id: lint
-        if: ${{ success() && !cancelled() }}
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -uo pipefail
-          set +e
-          mkdir -p artifacts/test-coverage
-          make lint 2>&1 | tee artifacts/test-coverage/lint.log
-          statuses=("${PIPESTATUS[@]}")
-          if [[ "${statuses[1]}" -ne 0 ]]; then
-            exit 1
-          fi
-          exit "${statuses[0]}"
-
-      - name: Build without rerunning tests
-        id: build
-        if: ${{ success() && !cancelled() }}
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -uo pipefail
-          set +e
-          mkdir -p artifacts/test-coverage
-          make build 2>&1 | tee artifacts/test-coverage/build.log
-          statuses=("${PIPESTATUS[@]}")
-          if [[ "${statuses[1]}" -ne 0 ]]; then
-            exit 1
-          fi
-          exit "${statuses[0]}"
-
-      - name: Enforce quality gate
-        if: ${{ !cancelled() && (success() || failure()) }}
-        shell: bash
+      - name: Retrieve exact attempt-one artifact as experimental authority
+        if: github.run_attempt != '1'
         env:
-          QUALITY_DECISION: ${{ steps.quality-report.outputs.decision }}
-          QUALITY_EXIT_CODE: ${{ steps.quality-report.outputs.exit_code }}
-          QUALITY_OUTCOME: ${{ steps.quality-report.outcome }}
-          LINT_OUTCOME: ${{ steps.lint.outcome }}
-          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -euo pipefail
-          failed=0
+          archive='experiments/timing-gate/published-input'
+          mkdir -p "$archive"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/1" > "$archive/producer.json"
+          jq -e --arg sha '${{ github.event.pull_request.head.sha }}' \
+            '.head_sha == $sha and .run_attempt == 1 and .conclusion == "success" and .event == "pull_request"' \
+            "$archive/producer.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" > "$archive/artifacts.json"
+          name="timing-$GITHUB_RUN_ID-1"
+          jq --arg name "$name" '[.artifacts[] | select(.name == $name and .expired == false)] | if length == 1 then .[0] else error("missing or ambiguous artifact") end' \
+            "$archive/artifacts.json" > "$archive/artifact.json"
+          id="$(jq -r .id "$archive/artifact.json")"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" > "$archive/baseline.zip"
+          digest="$(jq -r .digest "$archive/artifact.json")"
+          [[ "$digest" == sha256:* ]]
+          printf '%s  %s\n' "${digest#sha256:}" "$archive/baseline.zip" | sha256sum --check
 
-          case "$QUALITY_DECISION" in
-            pass)
-              if [[ "$QUALITY_OUTCOME" == success ]]; then
-                quality_result='**Pass**'
-              else
-                quality_result='**Execution failed**'
-                failed=1
-              fi
-              ;;
-            policy_update_required)
-              quality_result='**Failed:** Quality policy update required'
-              failed=1
-              ;;
-            coverage_regression)
-              quality_result='**Failed:** Coverage regression'
-              failed=1
-              ;;
-            timing_budget_exceeded)
-              quality_result='**Failed:** Timing budget exceeded'
-              failed=1
-              ;;
-            test_failed)
-              quality_result='**Failed:** Tests failed'
-              failed=1
-              ;;
-            *)
-              quality_result='**Execution failed**'
-              failed=1
-              ;;
-          esac
+      - name: Collect two warm-ups and five strictly alternating pairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 experiments/timing-gate/collect.py experiments/timing-gate/hosted-output "$GITHUB_RUN_ATTEMPT"
 
-          case "$LINT_OUTCOME" in
-            success) lint_result='**Pass**' ;;
-            failure) lint_result='**Failed**'; failed=1 ;;
-            *) lint_result='**Not run**'; failed=1 ;;
-          esac
-          case "$BUILD_OUTCOME" in
-            success) build_result='**Pass**' ;;
-            failure) build_result='**Failed**'; failed=1 ;;
-            *) build_result='**Not run**'; failed=1 ;;
-          esac
-
-          if [[ "$failed" -eq 0 ]]; then
-            gate_alert='TIP'
-            gate_result='Gate passed'
-          else
-            gate_alert='CAUTION'
-            gate_result='Gate failed'
-          fi
-
-          append_log() {
-            local title="$1"
-            local path="$2"
-            [[ -s "$path" ]] || return 0
-            printf '\n<details>\n<summary>%s</summary>\n\n' "$title"
-            printf '%s\n' '```text'
-            cat "$path"
-            printf '%s\n' '```' '</details>'
-          }
-
-          {
-            echo '# Pull-request quality gate'
-            echo
-            echo "> [!$gate_alert]"
-            echo "> **$gate_result.** See the check results and test details below."
-            echo
-            echo '| Check | Result |'
-            echo '| --- | --- |'
-            echo "| Test quality | $quality_result |"
-            echo "| Lint | $lint_result |"
-            echo "| Build | $build_result |"
-            echo
-            echo "Quality command exit code: \`${QUALITY_EXIT_CODE:-unavailable}\`"
-
-            if [[ -f artifacts/test-coverage/report.md ]]; then
-              echo
-              cat artifacts/test-coverage/report.md
-            else
-              echo
-              echo '## Test quality'
-              echo
-              echo '> [!CAUTION]'
-              echo '> **Quality report unavailable.** Inspect the setup and command diagnostics below.'
-            fi
-
-            if [[ "$QUALITY_OUTCOME" != success ]]; then
-              append_log 'Quality command output' artifacts/test-coverage/quality.log
-            fi
-            if [[ ! -f artifacts/test-coverage/report.md ]]; then
-              append_log 'Setup diagnostics' artifacts/test-coverage/setup.log
-            fi
-            if [[ "$LINT_OUTCOME" != success ]]; then
-              append_log 'Lint output' artifacts/test-coverage/lint.log
-            fi
-            if [[ "$BUILD_OUTCOME" != success ]]; then
-              append_log 'Build output' artifacts/test-coverage/build.log
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [[ "$failed" -ne 0 ]]; then
-            echo "::error::Pull-request quality gate failed: ${QUALITY_DECISION:-execution_failure}"
-            exit 1
-          fi
-
-      # This is the only cancellation-safe follow-up: partial diagnostics are
-      # useful even when a newer pull-request SHA has superseded this run.
-      - name: Upload quality report and diagnostics
-        if: ${{ always() }}
+      - name: Retain complete or partial diagnostics
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pull-request-quality-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/test-coverage/
+          name: timing-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            experiments/timing-gate/hosted-output/
+            experiments/timing-gate/published-input/
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 30

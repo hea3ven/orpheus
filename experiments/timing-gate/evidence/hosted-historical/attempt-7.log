@@ -1,0 +1,596 @@
+Pull-request quality gate	Set up job	﻿2026-10-06T19:42:51.9219785Z Current runner version: '2.337.0'
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9245803Z ##[group]Runner Image Provisioner
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9246779Z Hosted Compute Agent
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9247451Z Version: 20260901.588
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9248154Z Commit: f88ec8081b781fac6c440065ac7ff9e710ce3d0b
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9248897Z Build Date: 2026-09-01T19:56:44Z
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9249647Z Worker ID: {88ecd428-b097-4ac5-93f6-860debc9614d}
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9250356Z Azure Region: westus
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9250906Z ##[endgroup]
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9252470Z ##[group]Operating System
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9253147Z Ubuntu
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9253792Z 24.04.5
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9254319Z LTS
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9255080Z ##[endgroup]
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9255760Z ##[group]Runner Image
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9256387Z Image: ubuntu-24.04
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9256986Z Version: 20260927.320.1
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9258071Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260927.320/images/ubuntu/Ubuntu2404-Readme.md
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9259916Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260927.320
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9260878Z ##[endgroup]
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9262212Z ##[group]GITHUB_TOKEN Permissions
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9264061Z Contents: read
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9264987Z Metadata: read
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9265633Z ##[endgroup]
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9268066Z Secret source: Actions
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9269153Z Cache mode: write
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9269857Z Prepare workflow directory
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9622724Z Prepare all required actions
+Pull-request quality gate	Set up job	2026-10-06T19:42:51.9696381Z Getting action download info
+Pull-request quality gate	Set up job	2026-10-06T19:42:52.3527270Z Download action repository 'actions/checkout@v5' (SHA:fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09)
+Pull-request quality gate	Set up job	2026-10-06T19:42:52.4744057Z Download action repository 'actions/setup-go@v6' (SHA:924ae3a1cded613372ab5595356fb5720e22ba16)
+Pull-request quality gate	Set up job	2026-10-06T19:42:52.8977040Z Download action repository 'actions/cache@v4' (SHA:0057852bfaa89a56745cba8c7296529d2fc39830)
+Pull-request quality gate	Set up job	2026-10-06T19:42:52.9901484Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+Pull-request quality gate	Set up job	2026-10-06T19:42:53.2296493Z Complete job name: Pull-request quality gate
+Pull-request quality gate	Initialize quality diagnostics	﻿2026-10-06T19:42:53.3167259Z ##[group]Run set -euo pipefail
+Pull-request quality gate	Initialize quality diagnostics	2026-10-06T19:42:53.3168468Z ^[[36;1mset -euo pipefail^[[0m
+Pull-request quality gate	Initialize quality diagnostics	2026-10-06T19:42:53.3169553Z ^[[36;1mmkdir -p artifacts/test-coverage^[[0m
+Pull-request quality gate	Initialize quality diagnostics	2026-10-06T19:42:53.3171332Z ^[[36;1mprintf 'QUALITY_TOOLS=%s/orpheus-quality-tools\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"^[[0m
+Pull-request quality gate	Initialize quality diagnostics	2026-10-06T19:42:53.3173593Z ^[[36;1mprintf 'Quality gate setup started.\n' > artifacts/test-coverage/setup.log^[[0m
+Pull-request quality gate	Initialize quality diagnostics	2026-10-06T19:42:53.3456992Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+Pull-request quality gate	Initialize quality diagnostics	2026-10-06T19:42:53.3458722Z ##[endgroup]
+Pull-request quality gate	Check out synthetic pull-request merge	﻿2026-10-06T19:42:53.3967858Z ##[group]Run actions/checkout@v5
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.3968964Z with:
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.3969831Z   ref: 3914307d8e353b3952ac4fa601027ba2dfd77678
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.3970963Z   clean: false
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.3971787Z   repository: hea3ven/orpheus
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.3981616Z   token: ***
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.3982426Z   ssh-strict: true
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.3983276Z   ssh-user: git
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.3984106Z   persist-credentials: true
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.3985251Z   sparse-checkout-cone-mode: true
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.3986242Z   fetch-depth: 1
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.3987030Z   fetch-tags: false
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.3987841Z   show-progress: true
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.3988730Z   lfs: false
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.4052657Z   submodules: false
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.4053720Z   set-safe-directory: true
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.4055066Z   allow-unsafe-pr-checkout: false
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.4056060Z env:
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.4057068Z   QUALITY_TOOLS: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.4058366Z ##[endgroup]
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5082902Z Syncing repository: hea3ven/orpheus
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5087103Z ##[group]Getting Git version info
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5089229Z Working directory is '/home/runner/work/orpheus/orpheus'
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5092304Z [command]/usr/bin/git version
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5158585Z git version 2.55.0
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5197701Z ##[endgroup]
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5210730Z Temporarily overriding HOME='/home/runner/work/_temp/0d20d47f-cb92-4580-bbc0-4c38530f98e2' before making global git config changes
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5216585Z Adding repository directory to the temporary git global config as a safe directory
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5220476Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/orpheus/orpheus
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5266588Z Deleting the contents of '/home/runner/work/orpheus/orpheus'
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5288936Z ##[group]Initializing the repository
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5291760Z [command]/usr/bin/git init /home/runner/work/orpheus/orpheus
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5426445Z hint: Using 'master' as the name for the initial branch. This default branch name
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5430155Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5433448Z hint: to use in all of your new repositories, which will suppress this warning,
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5436509Z hint: call:
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5437880Z hint:
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5439543Z hint: 	git config --global init.defaultBranch <name>
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5443032Z hint:
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5445325Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5448274Z hint: 'development'. The just-created branch can be renamed via this command:
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5451032Z hint:
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5452483Z hint: 	git branch -m <name>
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5454187Z hint:
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5456671Z hint: Disable this message with "git config set advice.defaultBranchName false"
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5460383Z Initialized empty Git repository in /home/runner/work/orpheus/orpheus/.git/
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5466494Z [command]/usr/bin/git remote add origin https://github.com/hea3ven/orpheus
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5496023Z ##[endgroup]
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5498434Z ##[group]Disabling automatic garbage collection
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5501305Z [command]/usr/bin/git config --local gc.auto 0
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5544191Z ##[endgroup]
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5546324Z ##[group]Setting up auth
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5548111Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5594746Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.5993178Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.6030767Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.6257875Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.6295628Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.6529002Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.6572132Z ##[endgroup]
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.6574658Z ##[group]Fetching the repository
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:53.6583090Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin 3914307d8e353b3952ac4fa601027ba2dfd77678
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3381807Z From https://github.com/hea3ven/orpheus
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3383634Z  * branch            3914307d8e353b3952ac4fa601027ba2dfd77678 -> FETCH_HEAD
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3386822Z ##[endgroup]
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3387974Z ##[group]Determining the checkout info
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3395813Z ##[endgroup]
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3396787Z [command]/usr/bin/git sparse-checkout disable
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3429072Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3464009Z ##[group]Checking out the ref
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3469649Z [command]/usr/bin/git checkout --progress --force 3914307d8e353b3952ac4fa601027ba2dfd77678
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3780778Z Note: switching to '3914307d8e353b3952ac4fa601027ba2dfd77678'.
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3781365Z 
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3781687Z You are in 'detached HEAD' state. You can look around, make experimental
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3782397Z changes and commit them, and you can discard any commits you make in this
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3783100Z state without impacting any branches by switching back to a branch.
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3783489Z 
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3783781Z If you want to create a new branch to retain commits you create, you may
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3784766Z do so (now or later) by using -c with the switch command. Example:
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3785163Z 
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3785404Z   git switch -c <new-branch-name>
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3785751Z 
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3785982Z Or undo this operation with:
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3786311Z 
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3786518Z   git switch -
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3786821Z 
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3787239Z Turn off this advice by setting config variable advice.detachedHead to false
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3787718Z 
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3788251Z HEAD is now at 3914307 Merge eb58df633911dc7d218b3b630516a6e6757aece6 into 8e749f18f57cf20a9b464c9a7d68cd7211fe76a7
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3793264Z ##[endgroup]
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3841561Z [command]/usr/bin/git log -1 --format=%H
+Pull-request quality gate	Check out synthetic pull-request merge	2026-10-06T19:42:54.3869375Z 3914307d8e353b3952ac4fa601027ba2dfd77678
+Pull-request quality gate	Set up Go	﻿2026-10-06T19:42:54.4097646Z ##[group]Run actions/setup-go@v6
+Pull-request quality gate	Set up Go	2026-10-06T19:42:54.4098149Z with:
+Pull-request quality gate	Set up Go	2026-10-06T19:42:54.4098508Z   go-version: 1.27.0
+Pull-request quality gate	Set up Go	2026-10-06T19:42:54.4098888Z   check-latest: false
+Pull-request quality gate	Set up Go	2026-10-06T19:42:54.4101799Z   token: ***
+Pull-request quality gate	Set up Go	2026-10-06T19:42:54.4102162Z   cache: true
+Pull-request quality gate	Set up Go	2026-10-06T19:42:54.4102508Z env:
+Pull-request quality gate	Set up Go	2026-10-06T19:42:54.4102943Z   QUALITY_TOOLS: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	Set up Go	2026-10-06T19:42:54.4103452Z ##[endgroup]
+Pull-request quality gate	Set up Go	2026-10-06T19:42:54.5431173Z Setup go version spec 1.27.0
+Pull-request quality gate	Set up Go	2026-10-06T19:42:54.5445090Z Attempting to download 1.27.0...
+Pull-request quality gate	Set up Go	2026-10-06T19:42:55.1459230Z matching 1.27.0...
+Pull-request quality gate	Set up Go	2026-10-06T19:42:55.1498382Z Acquiring 1.27.0 from https://github.com/actions/go-versions/releases/download/1.27.0-32325163857/go-1.27.0-linux-x64.tar.gz
+Pull-request quality gate	Set up Go	2026-10-06T19:42:55.7298247Z Extracting Go...
+Pull-request quality gate	Set up Go	2026-10-06T19:42:55.7431014Z [command]/usr/bin/tar xz --warning=no-unknown-keyword --overwrite -C /home/runner/work/_temp/19c6d9a5-e9bd-4e83-a26c-51a695bcc67a -f /home/runner/work/_temp/57404d00-2f0c-4a8f-ab0e-19a19cdbfddb
+Pull-request quality gate	Set up Go	2026-10-06T19:42:57.4707087Z Successfully extracted go to /home/runner/work/_temp/19c6d9a5-e9bd-4e83-a26c-51a695bcc67a
+Pull-request quality gate	Set up Go	2026-10-06T19:42:57.4708410Z Adding to the cache ...
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.4097859Z Successfully cached go to /opt/hostedtoolcache/go/1.27.0/x64
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.4100683Z Added go to the path
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.4103567Z Successfully set up Go version 1.27.0
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.4324119Z [command]/opt/hostedtoolcache/go/1.27.0/x64/bin/go env GOMODCACHE
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.4360853Z [command]/opt/hostedtoolcache/go/1.27.0/x64/bin/go env GOCACHE
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.4398148Z /home/runner/go/pkg/mod
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.4419417Z /home/runner/.cache/go-build
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.6976243Z Cache is not found
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.6997882Z go version go1.27.0 linux/amd64
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.6998124Z 
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.6998441Z ##[group]go env
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8426859Z AR='ar'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8427512Z CC='gcc'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8427917Z CGO_CFLAGS='-O2 -g'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8428353Z CGO_CPPFLAGS=''
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8428806Z CGO_CXXFLAGS='-O2 -g'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8429229Z CGO_ENABLED='1'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8429595Z CGO_FFLAGS='-O2 -g'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8430008Z CGO_LDFLAGS='-O2 -g'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8430435Z CXX='g++'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8430790Z GCCGO='gccgo'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8431174Z GO111MODULE=''
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8431557Z GOAMD64='v1'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8431912Z GOARCH='amd64'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8432261Z GOAUTH='netrc'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8433114Z GOBIN='/home/runner/go/bin'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8433639Z GOCACHE='/home/runner/.cache/go-build'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8434200Z GOCACHEPROG=''
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8434889Z GODEBUG=''
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8435240Z GOENV='/home/runner/.config/go/env'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8435658Z GOEXE=''
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8436028Z GOEXPERIMENT=''
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8436374Z GOFIPS140='off'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8436726Z GOFLAGS=''
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8437910Z GOGCCFLAGS='-fPIC -m64 -pthread -Wl,--no-gc-sections -fmessage-length=0 -ffile-prefix-map=/tmp/go-build1134234850=/tmp/go-build -gno-record-gcc-switches'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8439036Z GOHOSTARCH='amd64'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8439377Z GOHOSTOS='linux'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8439700Z GOINSECURE=''
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8440119Z GOMOD='/home/runner/work/orpheus/orpheus/go.mod'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8440663Z GOMODCACHE='/home/runner/go/pkg/mod'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8441128Z GONOPROXY=''
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8441471Z GONOSUMDB=''
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8441802Z GOOS='linux'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8442141Z GOPACKAGESDRIVER=''
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8442537Z GOPATH='/home/runner/go'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8442942Z GOPRIVATE=''
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8443479Z GOPROXY='https://proxy.golang.org,direct'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8444246Z GOROOT='/opt/hostedtoolcache/go/1.27.0/x64'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8445018Z GOSUMDB='sum.golang.org'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8445412Z GOTELEMETRY='local'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8445859Z GOTELEMETRYDIR='/home/runner/.config/go/telemetry'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8446358Z GOTMPDIR=''
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8446690Z GOTOOLCHAIN='local'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8447530Z GOTOOLDIR='/opt/hostedtoolcache/go/1.27.0/x64/pkg/tool/linux_amd64'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8448122Z GOVCS=''
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8448445Z GOVERSION='go1.27.0'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8448786Z GOWORK=''
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8449120Z PKG_CONFIG='pkg-config'
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8449362Z 
+Pull-request quality gate	Set up Go	2026-10-06T19:43:03.8449886Z ##[endgroup]
+Pull-request quality gate	Restore pinned quality tools	﻿2026-10-06T19:43:03.8683360Z ##[group]Run actions/cache@v4
+Pull-request quality gate	Restore pinned quality tools	2026-10-06T19:43:03.8683683Z with:
+Pull-request quality gate	Restore pinned quality tools	2026-10-06T19:43:03.8683975Z   path: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	Restore pinned quality tools	2026-10-06T19:43:03.8684656Z   key: quality-tools-Linux-X64-bd-1.2.2-dolt-2.2.3-golangci-lint-2.12.2
+Pull-request quality gate	Restore pinned quality tools	2026-10-06T19:43:03.8685090Z   enableCrossOsArchive: false
+Pull-request quality gate	Restore pinned quality tools	2026-10-06T19:43:03.8685353Z   fail-on-cache-miss: false
+Pull-request quality gate	Restore pinned quality tools	2026-10-06T19:43:03.8685590Z   lookup-only: false
+Pull-request quality gate	Restore pinned quality tools	2026-10-06T19:43:03.8685802Z   save-always: false
+Pull-request quality gate	Restore pinned quality tools	2026-10-06T19:43:03.8686005Z env:
+Pull-request quality gate	Restore pinned quality tools	2026-10-06T19:43:03.8686269Z   QUALITY_TOOLS: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	Restore pinned quality tools	2026-10-06T19:43:03.8686619Z   GOTOOLCHAIN: local
+Pull-request quality gate	Restore pinned quality tools	2026-10-06T19:43:03.8686820Z ##[endgroup]
+Pull-request quality gate	Restore pinned quality tools	2026-10-06T19:43:03.9756105Z (node:2384) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+Pull-request quality gate	Restore pinned quality tools	2026-10-06T19:43:03.9757422Z (Use `node --trace-deprecation ...` to show where the warning was created)
+Pull-request quality gate	Restore pinned quality tools	2026-10-06T19:43:04.2316348Z Cache not found for input keys: quality-tools-Linux-X64-bd-1.2.2-dolt-2.2.3-golangci-lint-2.12.2
+Pull-request quality gate	Provision pinned quality tools	﻿2026-10-06T19:43:04.2408790Z ##[group]Run set -euo pipefail
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2409156Z ^[[36;1mset -euo pipefail^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2409436Z ^[[36;1mlog='artifacts/test-coverage/setup.log'^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2409751Z ^[[36;1mexec > >(tee -a "$log") 2>&1^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2410014Z ^[[36;1m^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2410213Z ^[[36;1mtools="$QUALITY_TOOLS"^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2410460Z ^[[36;1mbin="$tools/bin"^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2410689Z ^[[36;1mtools_ready() {^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2411015Z ^[[36;1m  [[ -x "$bin/bd" && -x "$bin/dolt" && -x "$bin/golangci-lint" ]] &&^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2411456Z ^[[36;1m    "$bin/bd" --version | grep --fixed-strings '1.2.2' &&^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2411855Z ^[[36;1m    "$bin/dolt" version | grep --fixed-strings '2.2.3' &&^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2412282Z ^[[36;1m    "$bin/golangci-lint" version | grep --fixed-strings '2.12.2'^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2412654Z ^[[36;1m}^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2412857Z ^[[36;1m^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2413051Z ^[[36;1mif ! tools_ready; then^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2413532Z ^[[36;1m  rm -rf "$tools"^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2413771Z ^[[36;1m  mkdir -p "$bin"^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2414019Z ^[[36;1m  downloads="$(mktemp -d)"^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2414305Z ^[[36;1m  trap 'rm -rf "$downloads"' EXIT^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2414871Z ^[[36;1m^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2415086Z ^[[36;1m  beads="$downloads/beads.tar.gz"^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2415441Z ^[[36;1m  curl --fail --location --retry 3 --silent --show-error \^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2416028Z ^[[36;1m    https://github.com/gastownhall/beads/releases/download/v1.2.2/beads_1.2.2_linux_amd64.tar.gz \^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2416541Z ^[[36;1m    --output "$beads"^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2416788Z ^[[36;1m  printf '%s  %s\n' \^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2417252Z ^[[36;1m    '8140098a51d3b81d5548d1c5e6db1a2d9930e5d141efe2a4bff7d079c4d321e8' "$beads" | sha256sum --check^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2417761Z ^[[36;1m  tar -xzf "$beads" -C "$bin" bd^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2418018Z ^[[36;1m^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2418218Z ^[[36;1m  dolt="$downloads/dolt.tar.gz"^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2418572Z ^[[36;1m  curl --fail --location --retry 3 --silent --show-error \^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2419092Z ^[[36;1m    https://github.com/dolthub/dolt/releases/download/v2.2.3/dolt-linux-amd64.tar.gz \^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2419548Z ^[[36;1m    --output "$dolt"^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2419786Z ^[[36;1m  printf '%s  %s\n' \^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2420254Z ^[[36;1m    'ffafa7cc172cada5f77ca3fb96306545ddac44a111625f75f870306c7f197301' "$dolt" | sha256sum --check^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2420770Z ^[[36;1m  tar -xzf "$dolt" -C "$downloads"^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2421155Z ^[[36;1m  install -m 0755 "$downloads/dolt-linux-amd64/bin/dolt" "$bin/dolt"^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2421515Z ^[[36;1m^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2421758Z ^[[36;1m  golangci_lint="$downloads/golangci-lint.tar.gz"^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2422156Z ^[[36;1m  curl --fail --location --retry 3 --silent --show-error \^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2422784Z ^[[36;1m    https://github.com/golangci/golangci-lint/releases/download/v2.12.2/golangci-lint-2.12.2-linux-amd64.tar.gz \^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2423349Z ^[[36;1m    --output "$golangci_lint"^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2423623Z ^[[36;1m  printf '%s  %s\n' \^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2424125Z ^[[36;1m    '8df580d2670fed8fa984aac0507099af8df275e665215f5c7a2ae3943893a553' "$golangci_lint" | sha256sum --check^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2425003Z ^[[36;1m  tar -xzf "$golangci_lint" -C "$downloads"^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2425525Z ^[[36;1m  install -m 0755 "$downloads/golangci-lint-2.12.2-linux-amd64/golangci-lint" "$bin/golangci-lint"^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2425994Z ^[[36;1mfi^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2426185Z ^[[36;1m^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2426372Z ^[[36;1mtools_ready^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2426597Z ^[[36;1mecho "$bin" >> "$GITHUB_PATH"^[[0m
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2492259Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2492603Z env:
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2492883Z   QUALITY_TOOLS: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2493240Z   GOTOOLCHAIN: local
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2493657Z ##[endgroup]
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.2587163Z tee: artifacts/test-coverage/setup.log: No such file or directory
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:04.8062313Z /tmp/tmp.E2QN7WmrTI/beads.tar.gz: OK
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:06.5305307Z /tmp/tmp.E2QN7WmrTI/dolt.tar.gz: OK
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:07.6857746Z /tmp/tmp.E2QN7WmrTI/golangci-lint.tar.gz: OK
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:07.9977098Z Warning: /home/runner/work/orpheus/orpheus/.beads has permissions 0755 (recommended: 0700). Run: chmod 700 /home/runner/work/orpheus/orpheus/.beads
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:08.0043608Z bd version 1.2.2 (6c124203e)
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:08.1326120Z dolt version 2.2.3
+Pull-request quality gate	Provision pinned quality tools	2026-10-06T19:43:08.2215153Z golangci-lint has version 2.12.2 built with go1.26.2 from c0d3ddc9 on 2026-05-06T11:07:58Z
+Pull-request quality gate	Record setup status	﻿2026-10-06T19:43:08.2725875Z ##[group]Run set -euo pipefail
+Pull-request quality gate	Record setup status	2026-10-06T19:43:08.2726211Z ^[[36;1mset -euo pipefail^[[0m
+Pull-request quality gate	Record setup status	2026-10-06T19:43:08.2726480Z ^[[36;1mmkdir -p artifacts/test-coverage^[[0m
+Pull-request quality gate	Record setup status	2026-10-06T19:43:08.2726806Z ^[[36;1mlog='artifacts/test-coverage/setup.log'^[[0m
+Pull-request quality gate	Record setup status	2026-10-06T19:43:08.2727276Z ^[[36;1m{^[[0m
+Pull-request quality gate	Record setup status	2026-10-06T19:43:08.2727513Z ^[[36;1m  printf 'checkout outcome: %s\n' 'success'^[[0m
+Pull-request quality gate	Record setup status	2026-10-06T19:43:08.2727844Z ^[[36;1m  printf 'Go setup outcome: %s\n' 'success'^[[0m
+Pull-request quality gate	Record setup status	2026-10-06T19:43:08.2728170Z ^[[36;1m  printf 'tool cache outcome: %s\n' 'success'^[[0m
+Pull-request quality gate	Record setup status	2026-10-06T19:43:08.2728526Z ^[[36;1m  printf 'tool provisioning outcome: %s\n' 'success'^[[0m
+Pull-request quality gate	Record setup status	2026-10-06T19:43:08.2728842Z ^[[36;1m} >> "$log"^[[0m
+Pull-request quality gate	Record setup status	2026-10-06T19:43:08.2791660Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+Pull-request quality gate	Record setup status	2026-10-06T19:43:08.2792000Z env:
+Pull-request quality gate	Record setup status	2026-10-06T19:43:08.2792285Z   QUALITY_TOOLS: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	Record setup status	2026-10-06T19:43:08.2792622Z   GOTOOLCHAIN: local
+Pull-request quality gate	Record setup status	2026-10-06T19:43:08.2812520Z ##[endgroup]
+Pull-request quality gate	Run single-pass quality report	﻿2026-10-06T19:43:08.2939159Z ##[group]Run set -uo pipefail
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2939486Z ^[[36;1mset -uo pipefail^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2939717Z ^[[36;1mset +e^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2939972Z ^[[36;1mreport='artifacts/test-coverage/report.json'^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2940326Z ^[[36;1mlog='artifacts/test-coverage/quality.log'^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2940655Z ^[[36;1mmkdir -p artifacts/test-coverage^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2940925Z ^[[36;1m^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2941120Z ^[[36;1mmake quality 2>&1 | tee "$log"^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2941394Z ^[[36;1mstatuses=("${PIPESTATUS[@]}")^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2941664Z ^[[36;1mquality_exit="${statuses[0]}"^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2941940Z ^[[36;1mif [[ "${statuses[1]}" -ne 0 ]]; then^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2942215Z ^[[36;1m  quality_exit=1^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2942428Z ^[[36;1mfi^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2942613Z ^[[36;1m^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2942808Z ^[[36;1mdecision=execution_failure^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2943073Z ^[[36;1mif [[ -f "$report" ]]; then^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2943608Z ^[[36;1m  decision="$(jq --raw-output '.decision.status // "execution_failure"' "$report" 2>>"$log")" || decision=execution_failure^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2944166Z ^[[36;1mfi^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2944676Z ^[[36;1mcase "$decision" in^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2945120Z ^[[36;1m  pass|policy_update_required|coverage_regression|timing_budget_exceeded|test_failed) ;;^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2945621Z ^[[36;1m  *) decision=execution_failure; quality_exit=1 ;;^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2945922Z ^[[36;1mesac^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2946186Z ^[[36;1mif [[ "$quality_exit" -eq 0 && "$decision" != pass ]]; then^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2946518Z ^[[36;1m  quality_exit=1^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2946738Z ^[[36;1mfi^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2947076Z ^[[36;1mprintf 'decision=%s\nexit_code=%s\n' "$decision" "$quality_exit" >> "$GITHUB_OUTPUT"^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.2947491Z ^[[36;1mexit "$quality_exit"^[[0m
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.3006361Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.3006701Z env:
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.3006982Z   QUALITY_TOOLS: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.3007318Z   GOTOOLCHAIN: local
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.3007530Z ##[endgroup]
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.3124285Z go run ./cmd/testcoverage
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:43:08.3190646Z go: downloading gopkg.in/yaml.v3 v3.0.1
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1536495Z unit: 12007/21621 statements (55.53%), 1250 test events, 3.65s selected package work, 38.15s command wall time
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1537924Z   github.com/hea3ven/orpheus/cmd/orpheus: 0/4 statements (0.00%), no selected package work
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1539047Z   github.com/hea3ven/orpheus/cmd/testcoverage: 597/920 statements (64.89%), 0.13s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1540121Z   github.com/hea3ven/orpheus/internal/agent: 1651/1987 statements (83.09%), 0.61s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1541159Z   github.com/hea3ven/orpheus/internal/agentexec: 2/114 statements (1.75%), 0.16s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1542168Z   github.com/hea3ven/orpheus/internal/cli: 2041/5148 statements (39.65%), 0.18s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1543155Z   github.com/hea3ven/orpheus/internal/doctor: 253/467 statements (54.18%), 0.15s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1544172Z   github.com/hea3ven/orpheus/internal/git: 491/1583 statements (31.02%), 0.24s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1545664Z   github.com/hea3ven/orpheus/internal/logging: 19/36 statements (52.78%), no selected package work
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1547205Z   github.com/hea3ven/orpheus/internal/pathutil: 17/19 statements (89.47%), no selected package work
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1548288Z   github.com/hea3ven/orpheus/internal/publication: 76/82 statements (92.68%), 0.07s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1549280Z   github.com/hea3ven/orpheus/internal/pullrequest: 9/147 statements (6.12%), 0.07s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1550226Z   github.com/hea3ven/orpheus/internal/readiness: 34/37 statements (91.89%), 0.07s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1551184Z   github.com/hea3ven/orpheus/internal/registry: 262/295 statements (88.81%), 0.10s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1552150Z   github.com/hea3ven/orpheus/internal/review: 371/1229 statements (30.19%), 0.09s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1553134Z   github.com/hea3ven/orpheus/internal/revieweval: 313/548 statements (57.12%), 0.12s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1554544Z   github.com/hea3ven/orpheus/internal/state: 172/223 statements (77.13%), 0.08s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1555498Z   github.com/hea3ven/orpheus/internal/status: 312/336 statements (92.86%), 0.07s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1556576Z   github.com/hea3ven/orpheus/internal/task: 721/837 statements (86.14%), 0.09s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1557520Z   github.com/hea3ven/orpheus/internal/taskbranch: 94/100 statements (94.00%), 0.07s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1558593Z   github.com/hea3ven/orpheus/internal/tasksource/beads: 481/778 statements (61.83%), 0.09s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1559637Z   github.com/hea3ven/orpheus/internal/tasksource/gig: 51/383 statements (13.32%), 0.08s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1560623Z   github.com/hea3ven/orpheus/internal/taskstate: 1571/2250 statements (69.82%), 0.28s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1561597Z   github.com/hea3ven/orpheus/internal/taskstats: 520/599 statements (86.81%), 0.07s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1562575Z   github.com/hea3ven/orpheus/internal/tasktarget: 95/113 statements (84.07%), 0.24s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1563536Z   github.com/hea3ven/orpheus/internal/testguard: 31/53 statements (58.49%), 0.06s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1564697Z   github.com/hea3ven/orpheus/internal/testlane: 103/117 statements (88.03%), 0.20s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1565656Z   github.com/hea3ven/orpheus/internal/testutil: 25/28 statements (89.29%), 0.06s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1566610Z   github.com/hea3ven/orpheus/internal/workflow: 1695/3188 statements (53.17%), 0.23s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1567689Z integration: 14251/21703 statements (65.66%), 616 test events, 44.65s selected package work, 33.63s command wall time
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1568848Z   github.com/hea3ven/orpheus/cmd/orpheus: 0/4 statements (0.00%), no selected package work
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1569829Z   github.com/hea3ven/orpheus/cmd/testcoverage: 0/920 statements (0.00%), 0.66s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1570855Z   github.com/hea3ven/orpheus/internal/agent: 1047/1987 statements (52.69%), no selected package work
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1571932Z   github.com/hea3ven/orpheus/internal/agentexec: 94/114 statements (82.46%), 1.34s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1572737Z   github.com/hea3ven/orpheus/internal/cli: 3696/5148 statements (71.79%), 10.53s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1574020Z   github.com/hea3ven/orpheus/internal/doctor: 356/467 statements (76.23%), no selected package work
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1575315Z   github.com/hea3ven/orpheus/internal/git: 1084/1583 statements (68.48%), 10.23s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1576390Z   github.com/hea3ven/orpheus/internal/logging: 19/36 statements (52.78%), no selected package work
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1577564Z   github.com/hea3ven/orpheus/internal/pathutil: 17/19 statements (89.47%), no selected package work
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1578786Z   github.com/hea3ven/orpheus/internal/publication: 74/82 statements (90.24%), no selected package work
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1579878Z   github.com/hea3ven/orpheus/internal/pullrequest: 127/147 statements (86.39%), 0.31s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1580985Z   github.com/hea3ven/orpheus/internal/readiness: 25/37 statements (67.57%), no selected package work
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1582187Z   github.com/hea3ven/orpheus/internal/registry: 228/295 statements (77.29%), no selected package work
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1583250Z   github.com/hea3ven/orpheus/internal/review: 955/1229 statements (77.71%), 0.32s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1584724Z   github.com/hea3ven/orpheus/internal/revieweval: 292/548 statements (53.28%), no selected package work
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1585925Z   github.com/hea3ven/orpheus/internal/state: 227/305 statements (74.43%), no selected package work
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1587093Z   github.com/hea3ven/orpheus/internal/status: 227/336 statements (67.56%), no selected package work
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1588247Z   github.com/hea3ven/orpheus/internal/task: 555/837 statements (66.31%), no selected package work
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1589307Z   github.com/hea3ven/orpheus/internal/taskbranch: 80/100 statements (80.00%), 0.10s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1590351Z   github.com/hea3ven/orpheus/internal/tasksource/beads: 452/778 statements (58.10%), 19.24s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1591631Z   github.com/hea3ven/orpheus/internal/tasksource/gig: 325/383 statements (84.86%), 1.57s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1592796Z   github.com/hea3ven/orpheus/internal/taskstate: 1640/2250 statements (72.89%), no selected package work
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1594043Z   github.com/hea3ven/orpheus/internal/taskstats: 282/599 statements (47.08%), no selected package work
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1595453Z   github.com/hea3ven/orpheus/internal/tasktarget: 90/113 statements (79.65%), no selected package work
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1596524Z   github.com/hea3ven/orpheus/internal/testguard: 41/53 statements (77.36%), 0.36s
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1597602Z   github.com/hea3ven/orpheus/internal/testlane: 0/117 statements (0.00%), no selected package work
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1598776Z   github.com/hea3ven/orpheus/internal/testutil: 22/28 statements (78.57%), no selected package work
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1599981Z   github.com/hea3ven/orpheus/internal/workflow: 2296/3188 statements (72.02%), no selected package work
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1600800Z quality decision: timing_budget_exceeded
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1602545Z   - integration/github.com/hea3ven/orpheus/internal/tasksource/gig: timing exceeds its policy ceiling; run make quality-policy-update if the regression is intentional (ceiling 1.038s, measured 1.569s, proposed ceiling 2.746s)
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1604157Z Quality report: artifacts/test-coverage/report.json
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1610436Z quality report: timing_budget_exceeded against .quality.yml
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1627901Z exit status 1
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.1958014Z make: *** [Makefile:24: quality] Error 1
+Pull-request quality gate	Run single-pass quality report	2026-10-06T19:44:27.2014800Z ##[error]Process completed with exit code 2.
+Pull-request quality gate	Lint without rerunning tests	﻿2026-10-06T19:44:27.2066068Z ##[group]Run set -uo pipefail
+Pull-request quality gate	Lint without rerunning tests	2026-10-06T19:44:27.2066426Z ^[[36;1mset -uo pipefail^[[0m
+Pull-request quality gate	Lint without rerunning tests	2026-10-06T19:44:27.2066660Z ^[[36;1mset +e^[[0m
+Pull-request quality gate	Lint without rerunning tests	2026-10-06T19:44:27.2066891Z ^[[36;1mmkdir -p artifacts/test-coverage^[[0m
+Pull-request quality gate	Lint without rerunning tests	2026-10-06T19:44:27.2067246Z ^[[36;1mmake lint 2>&1 | tee artifacts/test-coverage/lint.log^[[0m
+Pull-request quality gate	Lint without rerunning tests	2026-10-06T19:44:27.2067587Z ^[[36;1mstatuses=("${PIPESTATUS[@]}")^[[0m
+Pull-request quality gate	Lint without rerunning tests	2026-10-06T19:44:27.2067870Z ^[[36;1mif [[ "${statuses[1]}" -ne 0 ]]; then^[[0m
+Pull-request quality gate	Lint without rerunning tests	2026-10-06T19:44:27.2068139Z ^[[36;1m  exit 1^[[0m
+Pull-request quality gate	Lint without rerunning tests	2026-10-06T19:44:27.2068333Z ^[[36;1mfi^[[0m
+Pull-request quality gate	Lint without rerunning tests	2026-10-06T19:44:27.2068543Z ^[[36;1mexit "${statuses[0]}"^[[0m
+Pull-request quality gate	Lint without rerunning tests	2026-10-06T19:44:27.2130825Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+Pull-request quality gate	Lint without rerunning tests	2026-10-06T19:44:27.2131165Z env:
+Pull-request quality gate	Lint without rerunning tests	2026-10-06T19:44:27.2131447Z   QUALITY_TOOLS: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	Lint without rerunning tests	2026-10-06T19:44:27.2131786Z   GOTOOLCHAIN: local
+Pull-request quality gate	Lint without rerunning tests	2026-10-06T19:44:27.2131994Z ##[endgroup]
+Pull-request quality gate	Lint without rerunning tests	2026-10-06T19:44:27.2240055Z GOTOOLCHAIN=go1.26.3 golangci-lint run ./...
+Pull-request quality gate	Lint without rerunning tests	2026-10-06T19:45:14.1517936Z 0 issues.
+Pull-request quality gate	Build without rerunning tests	﻿2026-10-06T19:45:14.2000736Z ##[group]Run set -uo pipefail
+Pull-request quality gate	Build without rerunning tests	2026-10-06T19:45:14.2001095Z ^[[36;1mset -uo pipefail^[[0m
+Pull-request quality gate	Build without rerunning tests	2026-10-06T19:45:14.2001325Z ^[[36;1mset +e^[[0m
+Pull-request quality gate	Build without rerunning tests	2026-10-06T19:45:14.2001552Z ^[[36;1mmkdir -p artifacts/test-coverage^[[0m
+Pull-request quality gate	Build without rerunning tests	2026-10-06T19:45:14.2001913Z ^[[36;1mmake build 2>&1 | tee artifacts/test-coverage/build.log^[[0m
+Pull-request quality gate	Build without rerunning tests	2026-10-06T19:45:14.2002263Z ^[[36;1mstatuses=("${PIPESTATUS[@]}")^[[0m
+Pull-request quality gate	Build without rerunning tests	2026-10-06T19:45:14.2002546Z ^[[36;1mif [[ "${statuses[1]}" -ne 0 ]]; then^[[0m
+Pull-request quality gate	Build without rerunning tests	2026-10-06T19:45:14.2002815Z ^[[36;1m  exit 1^[[0m
+Pull-request quality gate	Build without rerunning tests	2026-10-06T19:45:14.2003200Z ^[[36;1mfi^[[0m
+Pull-request quality gate	Build without rerunning tests	2026-10-06T19:45:14.2003403Z ^[[36;1mexit "${statuses[0]}"^[[0m
+Pull-request quality gate	Build without rerunning tests	2026-10-06T19:45:14.2068207Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+Pull-request quality gate	Build without rerunning tests	2026-10-06T19:45:14.2068552Z env:
+Pull-request quality gate	Build without rerunning tests	2026-10-06T19:45:14.2068837Z   QUALITY_TOOLS: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	Build without rerunning tests	2026-10-06T19:45:14.2069177Z   GOTOOLCHAIN: local
+Pull-request quality gate	Build without rerunning tests	2026-10-06T19:45:14.2069387Z ##[endgroup]
+Pull-request quality gate	Build without rerunning tests	2026-10-06T19:45:14.2185931Z go build ./cmd/orpheus
+Pull-request quality gate	Enforce quality gate	﻿2026-10-06T19:45:14.7461644Z ##[group]Run set -euo pipefail
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7462036Z ^[[36;1mset -euo pipefail^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7462275Z ^[[36;1mfailed=0^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7462475Z ^[[36;1m^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7462674Z ^[[36;1mcase "$QUALITY_DECISION" in^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7462931Z ^[[36;1m  pass)^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7463176Z ^[[36;1m    if [[ "$QUALITY_OUTCOME" == success ]]; then^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7463493Z ^[[36;1m      quality_result='**Pass**'^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7463761Z ^[[36;1m    else^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7464018Z ^[[36;1m      quality_result='**Execution failed**'^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7464307Z ^[[36;1m      failed=1^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7464819Z ^[[36;1m    fi^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7465013Z ^[[36;1m    ;;^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7465225Z ^[[36;1m  policy_update_required)^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7465572Z ^[[36;1m    quality_result='**Failed:** Quality policy update required'^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7465922Z ^[[36;1m    failed=1^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7466124Z ^[[36;1m    ;;^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7466346Z ^[[36;1m  coverage_regression)^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7466645Z ^[[36;1m    quality_result='**Failed:** Coverage regression'^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7466956Z ^[[36;1m    failed=1^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7467151Z ^[[36;1m    ;;^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7467351Z ^[[36;1m  timing_budget_exceeded)^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7467659Z ^[[36;1m    quality_result='**Failed:** Timing budget exceeded'^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7467972Z ^[[36;1m    failed=1^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7468169Z ^[[36;1m    ;;^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7468363Z ^[[36;1m  test_failed)^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7468625Z ^[[36;1m    quality_result='**Failed:** Tests failed'^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7468910Z ^[[36;1m    failed=1^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7469107Z ^[[36;1m    ;;^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7469285Z ^[[36;1m  *)^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7469508Z ^[[36;1m    quality_result='**Execution failed**'^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7469789Z ^[[36;1m    failed=1^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7469981Z ^[[36;1m    ;;^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7470161Z ^[[36;1mesac^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7470347Z ^[[36;1m^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7470541Z ^[[36;1mcase "$LINT_OUTCOME" in^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7470809Z ^[[36;1m  success) lint_result='**Pass**' ;;^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7471127Z ^[[36;1m  failure) lint_result='**Failed**'; failed=1 ;;^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7471457Z ^[[36;1m  *) lint_result='**Not run**'; failed=1 ;;^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7471730Z ^[[36;1mesac^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7471930Z ^[[36;1mcase "$BUILD_OUTCOME" in^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7472196Z ^[[36;1m  success) build_result='**Pass**' ;;^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7472519Z ^[[36;1m  failure) build_result='**Failed**'; failed=1 ;;^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7472844Z ^[[36;1m  *) build_result='**Not run**'; failed=1 ;;^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7473116Z ^[[36;1mesac^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7473300Z ^[[36;1m^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7473492Z ^[[36;1mif [[ "$failed" -eq 0 ]]; then^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7473759Z ^[[36;1m  gate_alert='TIP'^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7474004Z ^[[36;1m  gate_result='Gate passed'^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7474247Z ^[[36;1melse^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7474776Z ^[[36;1m  gate_alert='CAUTION'^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7475032Z ^[[36;1m  gate_result='Gate failed'^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7475277Z ^[[36;1mfi^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7475456Z ^[[36;1m^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7475641Z ^[[36;1mappend_log() {^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7475869Z ^[[36;1m  local title="$1"^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7476101Z ^[[36;1m  local path="$2"^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7476336Z ^[[36;1m  [[ -s "$path" ]] || return 0^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7476675Z ^[[36;1m  printf '\n<details>\n<summary>%s</summary>\n\n' "$title"^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7477216Z ^[[36;1m  printf '%s\n' '```text'^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7477462Z ^[[36;1m  cat "$path"^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7477733Z ^[[36;1m  printf '%s\n' '```' '</details>'^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7477991Z ^[[36;1m}^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7478167Z ^[[36;1m^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7478337Z ^[[36;1m{^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7478550Z ^[[36;1m  echo '# Pull-request quality gate'^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7478827Z ^[[36;1m  echo^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7479193Z ^[[36;1m  echo "> [!$gate_alert]"^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7479548Z ^[[36;1m  echo "> **$gate_result.** See the check results and test details below."^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7479911Z ^[[36;1m  echo^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7480112Z ^[[36;1m  echo '| Check | Result |'^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7480365Z ^[[36;1m  echo '| --- | --- |'^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7480635Z ^[[36;1m  echo "| Test quality | $quality_result |"^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7480933Z ^[[36;1m  echo "| Lint | $lint_result |"^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7481229Z ^[[36;1m  echo "| Build | $build_result |"^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7481490Z ^[[36;1m  echo^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7481799Z ^[[36;1m  echo "Quality command exit code: \`${QUALITY_EXIT_CODE:-unavailable}\`"^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7482167Z ^[[36;1m^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7482410Z ^[[36;1m  if [[ -f artifacts/test-coverage/report.md ]]; then^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7482721Z ^[[36;1m    echo^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7482951Z ^[[36;1m    cat artifacts/test-coverage/report.md^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7483228Z ^[[36;1m  else^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7483411Z ^[[36;1m    echo^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7483612Z ^[[36;1m    echo '## Test quality'^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7483855Z ^[[36;1m    echo^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7484052Z ^[[36;1m    echo '> [!CAUTION]'^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7484818Z ^[[36;1m    echo '> **Quality report unavailable.** Inspect the setup and command diagnostics below.'^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7485323Z ^[[36;1m  fi^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7485506Z ^[[36;1m^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7485726Z ^[[36;1m  if [[ "$QUALITY_OUTCOME" != success ]]; then^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7486149Z ^[[36;1m    append_log 'Quality command output' artifacts/test-coverage/quality.log^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7486534Z ^[[36;1m  fi^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7486795Z ^[[36;1m  if [[ ! -f artifacts/test-coverage/report.md ]]; then^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7487230Z ^[[36;1m    append_log 'Setup diagnostics' artifacts/test-coverage/setup.log^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7487588Z ^[[36;1m  fi^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7487808Z ^[[36;1m  if [[ "$LINT_OUTCOME" != success ]]; then^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7488180Z ^[[36;1m    append_log 'Lint output' artifacts/test-coverage/lint.log^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7488513Z ^[[36;1m  fi^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7488737Z ^[[36;1m  if [[ "$BUILD_OUTCOME" != success ]]; then^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7489106Z ^[[36;1m    append_log 'Build output' artifacts/test-coverage/build.log^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7489446Z ^[[36;1m  fi^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7489647Z ^[[36;1m} >> "$GITHUB_STEP_SUMMARY"^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7489891Z ^[[36;1m^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7490089Z ^[[36;1mif [[ "$failed" -ne 0 ]]; then^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7490526Z ^[[36;1m  echo "::error::Pull-request quality gate failed: ${QUALITY_DECISION:-execution_failure}"^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7490957Z ^[[36;1m  exit 1^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7491147Z ^[[36;1mfi^[[0m
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7553406Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7553744Z env:
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7554017Z   QUALITY_TOOLS: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7554617Z   GOTOOLCHAIN: local
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7554859Z   QUALITY_DECISION: timing_budget_exceeded
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7555133Z   QUALITY_EXIT_CODE: 2
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7555348Z   QUALITY_OUTCOME: failure
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7555572Z   LINT_OUTCOME: success
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7555785Z   BUILD_OUTCOME: success
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7555999Z ##[endgroup]
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7688326Z ##[error]Pull-request quality gate failed: timing_budget_exceeded
+Pull-request quality gate	Enforce quality gate	2026-10-06T19:45:14.7690354Z ##[error]Process completed with exit code 1.
+Pull-request quality gate	Upload quality report and diagnostics	﻿2026-10-06T19:45:14.7783419Z ##[group]Run actions/upload-artifact@v4
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:14.7783743Z with:
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:14.7783970Z   name: pull-request-quality-37363908772-7
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:14.7784269Z   path: artifacts/test-coverage/
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:14.7784832Z   if-no-files-found: warn
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:14.7785064Z   retention-days: 7
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:14.7785276Z   compression-level: 6
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:14.7785490Z   overwrite: false
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:14.7785703Z   include-hidden-files: false
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:14.7785932Z env:
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:14.7786238Z   QUALITY_TOOLS: /home/runner/work/_temp/orpheus-quality-tools
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:14.7786583Z   GOTOOLCHAIN: local
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:14.7786791Z ##[endgroup]
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:14.9531763Z (node:17130) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:14.9533416Z (Use `node --trace-deprecation ...` to show where the warning was created)
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:14.9650294Z With the provided path, there will be 6 files uploaded
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:14.9657471Z Artifact name is valid!
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:14.9659106Z Root directory input is valid!
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:15.3732908Z Beginning upload of artifact content to blob storage
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:15.4025536Z (node:17130) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:15.6952743Z Uploaded bytes 5060
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:15.7803107Z Finished uploading artifact content to blob storage!
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:15.7804548Z SHA256 digest of uploaded artifact zip is 05182eaa7441845214ece5f9d0d01ef3d7c55213da0e936e0bce0237aee71179
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:15.7806249Z Finalizing artifact upload
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:16.0393651Z Artifact pull-request-quality-37363908772-7.zip successfully finalized. Artifact ID 11439583013
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:16.0395555Z Artifact pull-request-quality-37363908772-7 has been successfully uploaded! Final size is 5060 bytes. Artifact ID is 11439583013
+Pull-request quality gate	Upload quality report and diagnostics	2026-10-06T19:45:16.0402436Z Artifact download URL: https://github.com/hea3ven/orpheus/actions/runs/37363908772/artifacts/11439583013
+Pull-request quality gate	Post Check out synthetic pull-request merge	﻿2026-10-06T19:45:16.0602814Z Post job cleanup.
+Pull-request quality gate	Post Check out synthetic pull-request merge	2026-10-06T19:45:16.1529386Z [command]/usr/bin/git version
+Pull-request quality gate	Post Check out synthetic pull-request merge	2026-10-06T19:45:16.1578920Z git version 2.55.0
+Pull-request quality gate	Post Check out synthetic pull-request merge	2026-10-06T19:45:16.1626942Z Temporarily overriding HOME='/home/runner/work/_temp/d7d2adf8-ae52-4d92-91e0-cd2e7704f16e' before making global git config changes
+Pull-request quality gate	Post Check out synthetic pull-request merge	2026-10-06T19:45:16.1628033Z Adding repository directory to the temporary git global config as a safe directory
+Pull-request quality gate	Post Check out synthetic pull-request merge	2026-10-06T19:45:16.1632852Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/orpheus/orpheus
+Pull-request quality gate	Post Check out synthetic pull-request merge	2026-10-06T19:45:16.1676585Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+Pull-request quality gate	Post Check out synthetic pull-request merge	2026-10-06T19:45:16.1715371Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Pull-request quality gate	Post Check out synthetic pull-request merge	2026-10-06T19:45:16.1991665Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Pull-request quality gate	Post Check out synthetic pull-request merge	2026-10-06T19:45:16.2025352Z http.https://github.com/.extraheader
+Pull-request quality gate	Post Check out synthetic pull-request merge	2026-10-06T19:45:16.2031113Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+Pull-request quality gate	Post Check out synthetic pull-request merge	2026-10-06T19:45:16.2082611Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Pull-request quality gate	Post Check out synthetic pull-request merge	2026-10-06T19:45:16.2363694Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Pull-request quality gate	Post Check out synthetic pull-request merge	2026-10-06T19:45:16.2406081Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Pull-request quality gate	Complete job	﻿2026-10-06T19:45:16.2803033Z Cleaning up orphan processes
+Pull-request quality gate	Complete job	2026-10-06T19:45:16.3090064Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@v4, actions/upload-artifact@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
