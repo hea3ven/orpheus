@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/spf13/cobra"
 )
@@ -59,7 +60,11 @@ func runTaskEpicLifecycle(command *cobra.Command, opts *rootOptions, taskID stri
 		return fmt.Errorf("%s %s: task source for repository %s does not support epic lifecycle commands", operation, resolvedCtx.Resolved.TaskID, resolvedCtx.Resolved.Source.Repository.ID)
 	}
 
-	service := workflow.EpicLifecycleService{}
+	taskCtx, err := loadTaskContextFromInvocation(deps)
+	if err != nil {
+		return err
+	}
+	service := workflow.EpicLifecycleService{Dependencies: &task.DependencyReader{Sources: taskCtx.Sources, Factory: func(source task.RepositorySource) (task.Getter, error) { return deps.taskBackendFactory(source) }}}
 	var result workflow.EpicLifecycleResult
 	if start {
 		result, err = service.Start(command.Context(), lifecycleBackend, resolvedCtx.Resolved.TaskID)

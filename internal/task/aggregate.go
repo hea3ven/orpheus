@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -33,9 +34,10 @@ type BackendFactory func(RepositorySource) (ReadBackend, error)
 
 // Aggregator performs read-only task queries across registered repository sources.
 type Aggregator struct {
-	sources []RepositorySource
-	factory BackendFactory
-	logger  *slog.Logger
+	sources          []RepositorySource
+	referenceSources []RepositorySource
+	factory          BackendFactory
+	logger           *slog.Logger
 }
 
 // FilteredSnapshotResult keeps task-list output candidates separate from the
@@ -66,7 +68,14 @@ func NewAggregatorWithLogger(sources []RepositorySource, factory BackendFactory,
 
 	copied := make([]RepositorySource, len(sources))
 	copy(copied, sources)
-	return Aggregator{sources: copied, factory: factory, logger: logger}, nil
+	return Aggregator{sources: copied, referenceSources: copied, factory: factory, logger: logger}, nil
+}
+
+// WithReferenceSources retains the selected output sources while allowing
+// relationship lookups in the complete registry. Excluded sources are not listed.
+func (a Aggregator) WithReferenceSources(sources []RepositorySource) Aggregator {
+	a.referenceSources = append([]RepositorySource(nil), sources...)
+	return a
 }
 
 // List lists active task-source items across all configured repositories.
@@ -77,7 +86,7 @@ func (a Aggregator) List(ctx context.Context) QueryResult {
 }
 
 // FilteredSnapshot finds source-filtered output candidates, then completes
-// only the repository-local relationship context required to project them.
+// only the relationship context required to project them.
 // Context rows must never be rendered as task-list output candidates.
 func (a Aggregator) FilteredSnapshot(ctx context.Context, filter ListFilter) (FilteredSnapshotResult, error) {
 	filter, err := filter.Normalized()
@@ -156,6 +165,13 @@ func (a Aggregator) Snapshot(ctx context.Context) SnapshotResult {
 			Repository: source.Repository,
 			Tasks:      outcome.tasks,
 		})
+	}
+	for _, repository := range result.Repositories {
+		for _, item := range repository.Tasks {
+			for _, id := range item.Relations.DependencyIDs {
+				a.addCrossRepositoryContext(ctx, &result, repository.Repository, item.ID, id)
+			}
+		}
 	}
 	span.Finish(ctx, aggregationStatus(result.Failures),
 		slog.Int("repository_count", len(result.Repositories)),
@@ -318,7 +334,7 @@ func (a Aggregator) completeFilteredSnapshotContext(ctx context.Context, snapsho
 			a.addEpicChildrenContext(ctx, snapshot, seen, source, backend, candidate.Task.ID)
 		}
 		for _, referenceID := range relationshipReferenceIDs(candidate.Task) {
-			a.addRelationshipContext(ctx, snapshot, seen, source, backend, available[source.Repository.ID], candidate.Task.ID, referenceID)
+			a.addRelationshipContext(ctx, snapshot, seen, source, backend, available[source.Repository.ID], candidate.Task.ID, referenceID, slices.Contains(candidate.Task.Relations.DependencyIDs, referenceID))
 		}
 	}
 }
@@ -378,13 +394,14 @@ func (a Aggregator) addRelationshipContext(
 	available map[string]Task,
 	taskID string,
 	referenceID string,
+	dependency bool,
 ) {
 	referenceID = strings.TrimSpace(referenceID)
 	if referenceID == "" {
 		return
 	}
 
-	resolved, err := ResolveTaskSource(a.sources, referenceID)
+	resolved, err := ResolveTaskSource(a.referenceSources, referenceID)
 	if err != nil {
 		// An unresolved source is unavailable context, not confirmation that the
 		// referenced task is missing from a source.
@@ -392,10 +409,11 @@ func (a Aggregator) addRelationshipContext(
 		return
 	}
 	if resolved.Source.Repository.ID != source.Repository.ID {
-		// Cross-repository relationship projection is not currently supported.
-		// Preserve the registered target identity and make the unavailable
-		// context explicit so it cannot become a false missing diagnostic.
-		a.appendRelationshipContextUnavailable(snapshot, source.Repository, taskID, referenceID, resolved.Source.Repository)
+		if !dependency {
+			a.appendRelationshipContextUnavailable(snapshot, source.Repository, taskID, referenceID, resolved.Source.Repository)
+			return
+		}
+		a.addCrossRepositoryContext(ctx, snapshot, source.Repository, taskID, referenceID)
 		return
 	}
 	if _, ok := seen[source.Repository.ID][referenceID]; ok {
@@ -418,6 +436,48 @@ func (a Aggregator) addRelationshipContext(
 	}
 	cacheRelatedItems(available, contextTask)
 	appendSnapshotContextTask(snapshot, seen, source.Repository, contextTask)
+}
+
+// addCrossRepositoryContext reads through the owner, not through a row embedded
+// in the consumer's source. Context is never an output candidate.
+func (a Aggregator) addCrossRepositoryContext(ctx context.Context, snapshot *SnapshotResult, consumer Repository, taskID, id string) {
+	resolved, err := ResolveTaskSource(a.referenceSources, id)
+	if err != nil {
+		a.appendRelationshipContextUnavailable(snapshot, consumer, taskID, id, Repository{})
+		return
+	}
+	owner := resolved.Source.Repository
+	if owner.ID == consumer.ID {
+		return
+	}
+	for _, repository := range snapshot.Repositories {
+		if repository.Repository.ID == consumer.ID && slices.ContainsFunc(repository.DependencyTasks, func(item Task) bool { return item.ID == id }) {
+			return
+		}
+	}
+	// Use the same detail read as activation even when the owner's inventory
+	// already contains this ID. A successful list must not mask an unreadable reference.
+	backend, err := a.factory(resolved.Source)
+	var item Task
+	if err == nil {
+		item, err = backend.Get(ctx, id)
+	}
+	if err != nil {
+		if !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrUnsupportedTaskSourceItem) {
+			a.appendRelationshipFailure(snapshot, consumer, taskID, id, owner, err)
+		}
+		return
+	}
+
+	if !IsTaskSourceItem(item) {
+		return
+	}
+	for i := range snapshot.Repositories {
+		if snapshot.Repositories[i].Repository.ID == consumer.ID {
+			snapshot.Repositories[i].DependencyTasks = append(snapshot.Repositories[i].DependencyTasks, item.Clone())
+			return
+		}
+	}
 }
 
 func cacheRelatedItems(available map[string]Task, item Task) {

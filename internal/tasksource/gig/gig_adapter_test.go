@@ -323,3 +323,32 @@ func TestIntegrationAdapterContractGigRelationshipRetriesRetainTimestamps(t *tes
 	assert.Equal(t, removed.UpdatedAt, retried.UpdatedAt)
 	assert.Empty(t, retried.Relations.DependencyIDs)
 }
+
+func TestIntegrationAdapterContractGigPersistsCrossRepositoryDependenciesWithoutLocalTargets(t *testing.T) {
+	backend, _ := newSource(t)
+	local := createItem(t, backend, "Local prerequisite", task.IssueTypeTask, "")
+	item, err := backend.Create(t.Context(), task.CreateOptions{Title: "Consumer", Description: "Plan", AcceptanceCriteria: "Done", BlockingIDs: []string{local.ID, "other-1"}, CrossRepositoryBlockingIDs: []string{"other-1"}})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{local.ID, "other-1"}, item.Relations.DependencyIDs)
+	assert.Len(t, item.RelatedItems, 1)
+	for range 2 {
+		item, err = backend.Update(t.Context(), task.UpdateOptions{ID: item.ID, AddBlockingIDs: []string{"other-2"}, CrossRepositoryBlockingIDs: []string{"other-2"}})
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{local.ID, "other-1", "other-2"}, item.Relations.DependencyIDs)
+	}
+	listed, err := backend.List(t.Context())
+	require.NoError(t, err)
+	for _, row := range listed {
+		if row.ID == item.ID {
+			assert.ElementsMatch(t, item.Relations.DependencyIDs, row.Relations.DependencyIDs)
+		}
+	}
+	require.NoError(t, backend.MarkInProgress(t.Context(), item.ID, "branch", "/fixture/worktree"))
+	assert.ElementsMatch(t, item.Relations.DependencyIDs, getItem(t, backend, item.ID).Relations.DependencyIDs)
+	for range 2 {
+		item, err = backend.Update(t.Context(), task.UpdateOptions{ID: item.ID, RemoveBlockingIDs: []string{"other-1", "other-2"}})
+		require.NoError(t, err)
+		assert.Equal(t, []string{local.ID}, item.Relations.DependencyIDs)
+		assert.Equal(t, "branch", item.Metadata[task.MetadataBranch])
+	}
+}

@@ -165,7 +165,7 @@ func taskRunStateIndexForRepositoryCandidates(
 	repoSnapshot taskmodel.RepositorySnapshot,
 	selectedTaskIDs map[string]bool,
 ) (status.LocalTaskStateIndex, []taskmodel.RepoFailure) {
-	candidates := status.LocalTaskStateCandidates(repoSnapshot.Repository, repoSnapshot.Tasks)
+	candidates := status.LocalTaskStateCandidates(repoSnapshot)
 	if selectedTaskIDs != nil && len(selectedTaskIDs) == 0 {
 		return status.LocalTaskStateIndex{}, nil
 	}

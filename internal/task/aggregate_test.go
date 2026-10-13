@@ -233,14 +233,13 @@ func TestAggregatorFilteredSnapshotPreservesCrossRepositoryRelationshipOwner(t *
 			break
 		}
 	}
-	wantFailures := []task.RelationshipContextFailure{{
-		TaskID:              "a-selected",
-		ReferenceID:         "b-dependency",
-		ReferenceRepository: beta,
-	}}
-	if !reflect.DeepEqual(alphaSnapshot.RelationshipContextFailures, wantFailures) {
-		t.Fatalf("relationship context failures = %#v, want %#v", alphaSnapshot.RelationshipContextFailures, wantFailures)
+	if len(alphaSnapshot.RelationshipContextFailures) != 0 {
+		t.Fatalf("failures = %#v", alphaSnapshot.RelationshipContextFailures)
 	}
+	if len(alphaSnapshot.DependencyTasks) != 1 || alphaSnapshot.DependencyTasks[0].ID != "b-dependency" || alphaSnapshot.DependencyTasks[0].Status != task.StatusClosed {
+		t.Fatalf("dependency context = %#v", alphaSnapshot.DependencyTasks)
+	}
+
 }
 
 func TestAggregatorFilteredSnapshotDistinguishesRelationshipQueryFailure(t *testing.T) {

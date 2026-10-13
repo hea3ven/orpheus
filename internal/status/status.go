@@ -221,8 +221,9 @@ func RunStateKey(repoID, taskID string) string {
 // LocalTaskStateCandidates returns task IDs whose persisted local state can
 // affect their status projection. Callers should use this after inventorying
 // local state so tasks without persisted state never require an individual read.
-func LocalTaskStateCandidates(repository task.Repository, tasks []task.Task) map[string]bool {
-	index := newRepositoryIndex(tasks)
+func LocalTaskStateCandidates(snapshot task.RepositorySnapshot) map[string]bool {
+	repository, tasks := snapshot.Repository, snapshot.Tasks
+	index := newRepositoryIndex(append(append([]task.Task(nil), snapshot.DependencyTasks...), tasks...))
 	candidates := make(map[string]bool)
 	for _, taskItem := range tasks {
 		if localTaskStateCanAffectProjection(repository, taskItem, index) {
@@ -269,7 +270,7 @@ func localTaskStateCanAffectProjection(
 }
 
 func projectRepository(projection *Projection, repoSnapshot task.RepositorySnapshot, localStates LocalTaskStateIndex) {
-	index := newRepositoryIndex(repoSnapshot.Tasks)
+	index := newRepositoryIndex(append(append([]task.Task(nil), repoSnapshot.DependencyTasks...), repoSnapshot.Tasks...))
 	progressByEpic := epicChildProgressByParent(repoSnapshot.Tasks)
 	relationshipFailures := relationshipContextFailureIndex(repoSnapshot.RelationshipContextFailures)
 	for _, taskItem := range repoSnapshot.Tasks {

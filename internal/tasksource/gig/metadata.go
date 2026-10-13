@@ -84,7 +84,7 @@ func encodeMetadata(stored storedTask) (string, error) {
 		return "", err
 	}
 	stored.metadata[fieldsKey] = rawFields
-	for _, key := range []string{task.MetadataBranch, task.MetadataWorktree, task.MetadataPRURL} {
+	for _, key := range []string{task.MetadataBranch, task.MetadataWorktree, task.MetadataPRURL, task.MetadataCrossRepositoryBlocks} {
 		if value, ok := item.Metadata[key]; ok {
 			raw, err := json.Marshal(value)
 			if err != nil {

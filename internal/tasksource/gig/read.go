@@ -62,6 +62,11 @@ func (b Backend) Get(ctx context.Context, id string) (task.Task, error) {
 		ids := append([]string{item.Relations.ParentID}, item.Relations.ChildIDs...)
 		ids = append(ids, item.Relations.DependencyIDs...)
 		ids = append(ids, item.Relations.DependentIDs...)
+		remoteIDs, err := task.CrossRepositoryBlocks(item.Metadata)
+		if err != nil {
+			return err
+		}
+		ids = task.LocalBlockingIDs(ids, remoteIDs)
 		seen := make(map[string]bool)
 		for _, relatedID := range ids {
 			if relatedID == "" || seen[relatedID] {
@@ -150,6 +155,12 @@ func readRelations(ctx context.Context, store *sdk.Store, item *task.Task) error
 	if err := readBlockingRelations(ctx, store, item); err != nil {
 		return err
 	}
+	remoteIDs, err := task.CrossRepositoryBlocks(item.Metadata)
+	if err != nil {
+		return err
+	}
+	item.Relations.DependencyIDs = append(item.Relations.DependencyIDs, remoteIDs...)
+	item.Relations.BlockedByCount += len(remoteIDs)
 	sort.Strings(item.Relations.ChildIDs)
 	sort.Strings(item.Relations.DependencyIDs)
 	sort.Strings(item.Relations.DependentIDs)

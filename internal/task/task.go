@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -446,6 +447,8 @@ type UpdateOptions struct {
 	ParentID           *string
 	AddBlockingIDs     []string
 	RemoveBlockingIDs  []string
+	// CrossRepositoryBlockingIDs is the subset of additions stored as source metadata.
+	CrossRepositoryBlockingIDs []string
 }
 
 // UpdateMutator is the narrow backend-neutral mutation used to update task items.
@@ -524,6 +527,11 @@ func (s UpdateService) Update(ctx context.Context, source RepositorySource, requ
 	// it: they are retry-safe no-ops and may instead name an unrelated edge.
 	opts.RemoveBlockingIDs = existingBlockingDependencyIDs(current, opts.RemoveBlockingIDs)
 
+	opts.AddBlockingIDs = slices.DeleteFunc(opts.AddBlockingIDs, func(id string) bool { return slices.Contains(current.Relations.DependencyIDs, id) })
+	opts.CrossRepositoryBlockingIDs, err = crossRepositoryIDs(s.Sources, source, opts.AddBlockingIDs)
+	if err != nil {
+		return Task{}, err
+	}
 	updated, err := backend.Update(ctx, opts)
 	if err != nil {
 		return Task{}, updateFailure{message: fmt.Sprintf("cannot update task %q in repository %s", opts.ID, source.Repository.ID), cause: err}
@@ -544,10 +552,7 @@ func (s UpdateService) validateRelations(
 	if err := s.validateParent(ctx, source, backend, opts, current); err != nil {
 		return err
 	}
-	if err := s.validateAddBlockingDependencies(ctx, source, backend, opts, current); err != nil {
-		return err
-	}
-	return s.validateRemoveBlockingDependencies(ctx, source, backend, opts, current)
+	return s.validateAddBlockingDependencies(ctx, opts, current)
 }
 
 func (s UpdateService) validateParent(
@@ -619,21 +624,19 @@ func (s UpdateService) wouldCreateParentCycle(
 
 func (s UpdateService) validateAddBlockingDependencies(
 	ctx context.Context,
-	source RepositorySource,
-	backend UpdateBackend,
 	opts UpdateOptions,
 	current Task,
 ) error {
 	for _, dependencyID := range opts.AddBlockingIDs {
-		if err := s.validateReferenceRepository(source, dependencyID, "blocking dependency"); err != nil {
-			return err
+		if slices.Contains(current.Relations.DependencyIDs, dependencyID) {
+			continue
 		}
-		dependency, err := getUpdateReference(ctx, backend, source, dependencyID, "blocking dependency")
+		dependency, err := s.dependencyReader().Get(ctx, dependencyID)
 		if err != nil {
 			return err
 		}
 		if dependency.IssueType != IssueTypeTask && dependency.IssueType != IssueTypeEpic {
-			return fmt.Errorf("blocking dependency %q in repository %s must be a task or epic", dependencyID, source.Repository.ID)
+			return fmt.Errorf("blocking dependency %q must be a task or epic", dependencyID)
 		}
 		if dependencyID == current.ID {
 			return fmt.Errorf("task %q cannot depend on itself", current.ID)
@@ -641,7 +644,7 @@ func (s UpdateService) validateAddBlockingDependencies(
 
 		// Check for cycle: would adding this dependency create a cycle?
 		// We need to check if there's a path from dependencyID to current.ID
-		createsCycle, err := s.wouldCreateCycle(ctx, backend, source, current.ID, dependencyID)
+		createsCycle, err := s.wouldCreateCycle(ctx, current.ID, dependencyID)
 		if err != nil {
 			return err
 		}
@@ -656,8 +659,6 @@ func (s UpdateService) validateAddBlockingDependencies(
 // It does this by checking if there's already a path from dependencyID to taskID.
 func (s UpdateService) wouldCreateCycle(
 	ctx context.Context,
-	backend UpdateBackend,
-	source RepositorySource,
 	taskID string,
 	dependencyID string,
 ) (bool, error) {
@@ -673,7 +674,7 @@ func (s UpdateService) wouldCreateCycle(
 		}
 		visited[currentID] = true
 
-		item, err := getUpdateReference(ctx, backend, source, currentID, "blocking dependency")
+		item, err := s.dependencyReader().Get(ctx, currentID)
 		if err != nil {
 			return false, err
 		}
@@ -693,39 +694,8 @@ func (s UpdateService) wouldCreateCycle(
 	return dfs(dependencyID)
 }
 
-func (s UpdateService) validateRemoveBlockingDependencies(
-	ctx context.Context,
-	source RepositorySource,
-	backend UpdateBackend,
-	opts UpdateOptions,
-	current Task,
-) error {
-	for _, dependencyID := range opts.RemoveBlockingIDs {
-		if err := s.validateReferenceRepository(source, dependencyID, "blocking dependency"); err != nil {
-			return err
-		}
-		if !s.dependencyExists(current, dependencyID) {
-			// Retry-safe no-op: removing an absent dependency succeeds.
-			continue
-		}
-		dependency, err := getUpdateReference(ctx, backend, source, dependencyID, "blocking dependency")
-		if err != nil {
-			return err
-		}
-		if dependency.IssueType != IssueTypeTask && dependency.IssueType != IssueTypeEpic {
-			return fmt.Errorf("blocking dependency %q in repository %s must be a task or epic", dependencyID, source.Repository.ID)
-		}
-	}
-	return nil
-}
-
-func (s UpdateService) dependencyExists(current Task, dependencyID string) bool {
-	for _, dep := range current.Relations.DependencyIDs {
-		if dep == dependencyID {
-			return true
-		}
-	}
-	return false
+func (s UpdateService) dependencyReader() DependencyReader {
+	return DependencyReader{Sources: s.Sources, Factory: func(source RepositorySource) (Getter, error) { return s.BackendFactory(source) }}
 }
 
 func existingBlockingDependencyIDs(current Task, requested []string) []string {
@@ -844,6 +814,8 @@ type CreateOptions struct {
 	IssueType          IssueType
 	ParentID           string
 	BlockingIDs        []string
+	// CrossRepositoryBlockingIDs is the subset stored as source metadata.
+	CrossRepositoryBlockingIDs []string
 }
 
 // CreateMutator is the narrow backend-neutral mutation used to create items,
@@ -930,14 +902,17 @@ type RelationshipContextFailure struct {
 
 // RepositorySnapshot is the local read state for one repository used by status projections.
 type RepositorySnapshot struct {
-	Repository                  Repository
-	Tasks                       []Task
+	Repository Repository
+	Tasks      []Task
+	// DependencyTasks contains resolved cross-repository prerequisites, never output rows.
+	DependencyTasks             []Task
 	RelationshipContextFailures []RelationshipContextFailure
 }
 
 // Clone returns a copy of the repository snapshot and mutable task fields.
 func (s RepositorySnapshot) Clone() RepositorySnapshot {
 	s.Tasks = cloneTasks(s.Tasks)
+	s.DependencyTasks = cloneTasks(s.DependencyTasks)
 	s.RelationshipContextFailures = cloneRelationshipContextFailures(s.RelationshipContextFailures)
 	return s
 }
