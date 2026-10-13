@@ -29,6 +29,7 @@ func printReportTo(outputWriter io.Writer, result qualityReport, output string) 
 			_, _ = fmt.Fprintf(outputWriter, "  failed: %s (%d decoded failures)\n", lane.Failure.Error, len(lane.Failure.Failures))
 		}
 	}
+	_, _ = fmt.Fprintf(outputWriter, "execution: %s; coverage: %s; timing: %s\n", checkLabel(result.Execution), checkLabel(result.CoverageDecision), checkLabel(result.Timing))
 	_, _ = fmt.Fprintf(outputWriter, "quality decision: %s\n", result.Decision.Status)
 	for _, item := range result.Decision.Findings {
 		_, _ = fmt.Fprintf(outputWriter, "  - %s%s\n", findingLocation(item), findingMessage(item))
@@ -89,12 +90,16 @@ func findingMessage(item finding) string {
 				item.Message, item.Prior, item.Current, item.Proposed, item.Threshold)
 		}
 		return fmt.Sprintf("%s (floor %.3f%%, measured %.3f%%, proposed floor %.3f%%)", item.Message, item.Prior, item.Current, item.Proposed)
-	case "timing_policy":
-		if item.Message == "removed obsolete bound" {
-			return fmt.Sprintf("%s (ceiling %.3fs)", item.Message, item.Prior)
-		}
-		return fmt.Sprintf("%s (ceiling %.3fs, measured %.3fs, proposed ceiling %.3fs)", item.Message, item.Prior, item.Current, item.Proposed)
+	case "timing_comparison":
+		return fmt.Sprintf("%s (base %.3fs, merge %.3fs, ceiling %.3fs, overage %.3fs)", item.Message, item.Prior, item.Current, item.BudgetSeconds, item.OverageSeconds)
 	default:
 		return item.Message
 	}
+}
+
+func checkLabel(check decision) string {
+	if check.Status == "" || check.Status == statusNotEvaluated {
+		return "not evaluated"
+	}
+	return check.Status
 }

@@ -12,7 +12,9 @@ Run `make check` after changes to production code, tests, dependencies, executab
 
 Do not run formatting, tests, quality checks, linting, or builds for documentation-only changes, including prompts and agent instructions. Use only relevant document checks, such as link verification and `git diff --check`. Read-only analysis or review requires no validation run unless the user explicitly requests one. Base this decision on changes made for the current task, not unrelated pre-existing changes in the checkout.
 
-Quality runs the lanes in sequence and allows Go's default package concurrency within each lane. Keep `-parallel=1` until the final intra-package isolation task. Reports distinguish command wall time, the developer's wait, from selected package work, the sum of elapsed times for packages that ran selected tests. `.quality.yml` governs selected work and package timings, not wall time. Policy updates require complete comparable samples with the same scheduling; do not mix serial controls with concurrent samples.
+Quality runs the lanes in sequence and allows Go's default package concurrency within each lane. Keep `-parallel=1` until the final intra-package isolation task. Routine `make check` runs each lane once and labels timing **not evaluated**. Reports distinguish command wall time (developer wait) from selected package work (the sum of elapsed times for packages that ran selected tests).
+
+PR timing compares fresh exact base and synthetic-merge measurements on one runner, using one candidate collector, matching configuration, isolated build caches, and one excluded full warm-up per revision. One pair is measured initially; suspected violations trigger four more alternating pairs and five-sample medians. Missing, failed, incomplete, or incompatible evidence leaves timing **unevaluated**, blocking CI rather than claiming a regression. Never load base policy for measurement, selectively retry failed samples, or let confirmation erase first-sample candidate coverage findings. `.quality.yml` retains coverage floors and timing tolerances, not absolute timing ceilings. Coverage-policy refreshes remain explicit five-sample operations; do not mix scheduling modes or add machine-specific timing bounds.
 
 `make test-unit` is the explicit package-owned unit lane; `make test` remains its compatibility alias. Unit tests use injected collaborators and require only Go: they do not invoke Git, Beads, gh, Codex, or Pi executables. `make test-integration` executes only cross-package workflows and isolated local Git, Beads, compiled-CLI, or child-process contracts. It requires `git` and `bd` on `PATH` (some schema tests also skip unless `dolt` is available).
 
@@ -22,8 +24,8 @@ Classify integration tests by what they prove. Workflow integration is a fast, a
 
 Both lanes are network-free, credential-free, isolated from operator data, and prevent real model agents. Live evaluations such as `orpheus eval review-context` are not routine test validation and must never be invoked implicitly. See `docs/developer/testing.md` for the full guide, including focused on-demand coverage audits.
 
-`make check` already runs `make quality`; do not run both separately as routine validation. If quality reports `policy_update_required` or an intentional bound violation, run `make quality-policy-update` and review the `.quality.yml` diff.
-When merging, resolve `.quality.yml` from the reviewed policy changes rather than combining measured values. Run `make quality-policy-update` only when the merged result requires it.
+`make check` already runs `make quality`; do not run both separately as routine validation. If quality reports `policy_update_required` or an intentional coverage-floor violation, run `make quality-policy-update` and review the `.quality.yml` diff.
+When merging, resolve `.quality.yml` from the reviewed policy changes rather than combining coverage floors. Timing regressions require investigation, not machine-specific policy refreshes. Run `make quality-policy-update` only when the merged result requires it.
 
 ## Task Tracking and Follow-Up
 

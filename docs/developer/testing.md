@@ -7,7 +7,7 @@ Orpheus separates tests by behavioral scope, not by speed or whether a test writ
 - `make test-unit` runs the explicit unit lane.
 - `make test` is a compatibility alias for `make test-unit`.
 - `make test-integration` runs the integration lane only.
-- `make quality` runs both lanes once with coverage and timing policy.
+- `make quality` runs both lanes once with coverage policy; timing is **not evaluated** locally.
 - `make check` formats code, runs the single-pass quality report, lints, and builds the CLI. Each test lane still runs only once.
 
 ## Behavioral assertions
@@ -143,95 +143,99 @@ go test -tags=integration ./internal/tasksource/beads -run '^TestIntegrationAdap
 
 Integration source files use `//go:build integration`, and their top-level test bodies begin with one of the three `TestIntegration...` category prefixes above. Untagged test bodies whose names do not begin `TestIntegration` are unit tests. `internal/testlane` validates the lane convention so every top-level body is selected by exactly one lane. The build constraint is the membership mechanism; category names support review and focused runs but do not create new lanes.
 
-## Single-pass quality report
+## Single-pass local quality report
 
-`make quality` is the routine local and CI command. It reads `.quality.yml` and
-never writes it. The command runs the unit lane once, then the integration lane
-once, with `-count=1` and `-coverpkg=./...`. Within each lane, Go schedules
-independent packages concurrently using its default package limit. The runner
-does not set `-p`; an explicit `GOFLAGS=-p=1` remains useful for a serial control.
-It retains `-parallel=1` to serialize tests marked with `t.Parallel` inside each
-package until the remaining isolation work is complete. This does not serialize
-goroutines started by a test.
+`make quality` reads candidate `.quality.yml` without writing it. It runs unit,
+then integration once, with `-count=1`, `-parallel=1`, `-covermode=set`, and
+`-coverpkg=./...`. Go uses its default package concurrency (no `-p` override).
+`ORPHEUS_COVERAGE_RUN=1` fixes incidental launcher-ancestry detection so coverage
+instrumentation is consistent. `make check` adds formatting, lint, and build
+without rerunning either lane.
 
-The decoded `go test -json` streams provide test outcomes, failure evidence,
-test-event counts, package timings, and coverage profiles. Reports distinguish:
+Reports distinguish command wall time (developer wait, diagnostic only) from
+selected package work (the sum of elapsed times for packages that ran selected
+tests, including overlapping packages). Packages without selected tests do not
+contribute work. Timings are reported, but local timing is **not evaluated**;
+there are no tracked machine-specific timing ceilings.
 
-- Command wall time, the developer's wait for each `go test` command, including
-  compilation, scheduling, and coverage output. It is diagnostic only.
-- Selected package work, the sum of package elapsed times for packages that ran
-  selected tests. This is elapsed package work, not CPU time or a sum of test and
-  subtest durations. Overlapping packages still contribute their full elapsed
-  times, so work can exceed wall time. Packages with no selected tests contribute
-  no timing, even if they appear in the coverage profile.
+Coverage floors and refresh thresholds remain blocking. Package coverage
+additions/removals require an explicit policy update. JSON and Markdown reports
+are written to `artifacts/test-coverage/report.json` and `report.md`. A failed
+lane does not prevent the other lane from running; failure reports retain raw
+JSON, stderr, and decoded failing-test evidence.
 
-`.quality.yml` continues to govern selected package work and individual package
-timings, never command wall time. Scheduling reduces waiting without treating
-that reduction as removed test work. Resource contention can still affect
-package timings. The JSON fields remain `wall_seconds`, `selected_test_seconds`
-for selected package work, and `package_timings` for compatibility.
+## Updating coverage policy
 
-The policy has a coverage floor and suite timing ceiling for each lane. It also
-has a coverage floor for every production package and a timing ceiling for every
-package that runs selected tests. A value below a coverage floor or above a
-timing ceiling fails. Coverage movement beyond a refresh threshold returns
-`policy_update_required`. Timing movement below its refresh floor is a
-non-blocking warning because execution speed varies by host. Package additions
-and removals still require an explicit update.
-
-The complete JSON report is written to
-`artifacts/test-coverage/report.json`, with a Markdown summary beside it. If a
-lane fails, the command still runs the other lane and writes a partial report
-with stderr, raw JSON output, and decoded failing-test output. `make coverage`
-remains a compatibility alias.
-
-When comparing scheduling modes, use the same quality environment as well as
-identical selectors and coverage flags. In particular,
-`ORPHEUS_COVERAGE_RUN=1` disables incidental Linux launcher-ancestry detection.
-Omitting it changes CLI coverage without changing test selection.
-
-## Updating the policy
-
-Run `make quality-policy-update` when routine quality reports stale bounds or
-when a reviewed regression needs new bounds. The command runs five complete,
-coverage-instrumented samples of each lane. It requires matching test counts,
-coverage package structure, and selected-test package structure across all five
-samples. Any failed, incomplete, or inconsistent sample stops the update before
-`.quality.yml` is written.
-
-The updater uses median command wall times, suite work, and package timings.
-Only suite work and package timings determine policy bounds. Samples must use
-the same recorded command, including scheduling flags; do not mix serialized
-and concurrent measurements in a policy refresh. It changes only bounds whose
-refresh threshold was crossed, plus package additions and removals. Coverage
-floors retain 0.5 percentage points of lane headroom and 2 percentage points of
-package headroom. Timing ceilings retain the greater of 25 percent or 0.5
-seconds for suites, and the greater of 50 percent or 0.25 seconds for packages.
-Bounds may move up or down. Review the resulting `.quality.yml` diff before
-committing it.
+`make quality-policy-update` is an explicit five-sample operation. Failed,
+incomplete, or inconsistent samples prevent writes. Within a revision, selected
+test counts (including per-package counts), coverage package statement totals,
+selected-test package structure, and normalized commands must agree. Do not mix
+scheduling modes. Only materially stale coverage floors and package structure
+are updated, retaining 0.5 percentage points of lane headroom and 2 percentage
+points of package headroom. Review the `.quality.yml` diff. The updater never
+rewrites timing tolerances or produces absolute timing bounds.
 
 ## Pull-request quality gate
 
-[`.github/workflows/quality-gate.yml`](../../.github/workflows/quality-gate.yml)
-runs for every pull request against GitHub's synthetic merge commit. The job
-runs `make quality` once, then runs lint and build without rerunning tests. The
-checked-in `.quality.yml` from that merge commit is the only quality policy.
-There is no base-branch policy comparison or automatic policy edit.
+[The workflow](../../.github/workflows/quality-gate.yml) is bounded to twenty
+minutes. It builds one collector from GitHub's exact tested synthetic merge,
+then uses it for both the event's exact base commit and that merge. Detached
+checkouts are isolated, source IDs and cleanliness are checked before and after
+each collection, and the synthetic merge's first parent must be the exact base.
+The historical base policy is never loaded for measurement or comparison.
 
-The report status is one of:
+Both revisions use the same tools, selectors, coverage instrumentation,
+scheduling, and cache regime: fresh independent Go build and fixture-binary
+caches, one shared module cache, and one excluded full warm-up per revision.
+The compiled cross-package fixture uses `ORPHEUS_TEST_BINARY_CACHE` only when
+supplied by the comparator; otherwise its binary remains test-owned temporary
+state. Go validates build inputs on every sample, while the revision-local
+output path avoids relinking unchanged inputs after warm-up. Each sample still
+executes the binary and checks a fresh coverage profile.
+The first measured pair runs
+base then merge. If any suite or common package exceeds its allowance, four
+additional pairs alternate order (merge/base, base/merge, merge/base,
+base/merge), and five-sample medians determine timing. Any failed measurement
+aborts; there are no selective retries. Counts and package structure must agree
+within each revision, but legitimate differences across revisions are allowed.
 
-- `pass` when tests and blocking bounds pass, possibly with a non-blocking
-  timing refresh warning;
-- `policy_update_required` when coverage or package structure crossed a refresh
-  threshold;
-- `coverage_regression` when a lane or package is below its coverage floor;
-- `timing_budget_exceeded` when a suite or package is above its timing ceiling;
-- `test_failed` when a lane or policy-update sample did not complete.
+Whole-lane work includes new packages; common packages are compared separately.
+Added/removed selected-test packages are reported. Ceilings retain three-decimal
+rounding and strict `measured > ceiling` boundaries:
 
-A missing report, malformed policy, failed setup, or inconsistent command result
-is an execution failure. Lint and build failures also fail the required job.
-The workflow publishes the current report and command diagnostics as short-lived
-artifacts, but no report becomes input to a later run.
+- Lane: base median + `max(50%, 0.5 seconds)`.
+- Package: base median + `max(75%, 0.25 seconds)`.
+
+Source identity is distinct from environment compatibility. Per-sample metadata
+records tool/collector hashes and versions, effective Go configuration, CPU
+identity/affinity, kernel boot identity, process limits, host memory, and all visible cgroup v2 ancestor
+CPU, cpuset, memory, and PID constraints. An absent controller needs affirmative
+parent-delegation evidence. Missing required files, hidden cgroup ancestors,
+non-v2 resource layouts, or incompatible configurations leave timing
+**unevaluated**, blocking CI without claiming a regression.
+
+Sample metadata is published before tests start, command streams are written as
+they arrive, and atomic report replacement preserves the last complete report.
+In-progress comparison reports retain first-pair coverage even if confirmation is
+interrupted. Candidate coverage is assessed against candidate policy from the first complete
+post-warm-up candidate sample. Confirmation cannot replace those findings with
+later coverage. Tests/execution, coverage, and timing have independent report
+statuses. Coverage regression and refresh requirements still block even when
+timing passes. Timing is `pass`, `timing_budget_exceeded` only after confirmation,
+or `unevaluated` when evidence is missing, failed, incomplete, or incompatible.
+Routine local timing instead reports `not_evaluated` and is non-blocking.
+
+Lint and build run on the tested merge without rerunning tests. The workflow
+retains available warm-up/sample reports, metadata, profiles, raw command streams,
+setup/command diagnostics, and failure evidence as short-lived artifacts, including
+on failure or cancellation. No artifact is input to a later run. The comparator
+also has a sixteen-minute process deadline, with process-group cancellation, to
+leave time for enforcement and upload. CI never edits coverage policy.
+
+Comparator decision/resource tests are hermetic units. Focused local Git and
+controlled-process adapter contracts prove detached checkout identity, isolation,
+collector invocation, partial-report retention, workflow enforcement, and cancellation without real
+model agents, credentials, networks, or operator state.
 
 `make coverage-audit` remains an on-demand command. With no selectors, it explicitly profiles every integration top-level scenario and reports runtime, containment in the full integration profile, similarity to other selected scenarios, and exclusive statements. It is too expensive for routine pull requests and is never part of `make quality` or CI.
 

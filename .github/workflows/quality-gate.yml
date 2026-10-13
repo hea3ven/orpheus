@@ -14,6 +14,7 @@ jobs:
   quality:
     name: Pull-request quality gate
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       # This runs before every setup action so failures still leave an artifact
       # directory for the cancellation-safe upload below.
@@ -32,6 +33,7 @@ jobs:
         with:
           # github.sha is the pull_request event's tested merge commit, not the head SHA.
           ref: ${{ github.sha }}
+          fetch-depth: 0
           # Preserve diagnostics that were initialized before this checkout.
           clean: false
 
@@ -42,6 +44,8 @@ jobs:
           # Coverage statement accounting changed in Go 1.27. Keep the quality
           # policy measurements on this exact version.
           go-version: '1.27.0'
+          # The comparator owns fresh, symmetric caches and excludes warmups.
+          cache: false
 
       - name: Restore pinned quality tools
         id: quality-tools
@@ -120,11 +124,14 @@ jobs:
             printf 'tool provisioning outcome: %s\n' '${{ steps.provision-tools.outcome }}'
           } >> "$log"
 
-      - name: Run single-pass quality report
+      - name: Measure exact base and synthetic merge on this runner
         id: quality-report
         if: ${{ success() && !cancelled() }}
         continue-on-error: true
         shell: bash
+        env:
+          QUALITY_BASE: ${{ github.event.pull_request.base.sha }}
+          QUALITY_MERGE: ${{ github.sha }}
         run: |
           set -uo pipefail
           set +e
@@ -132,7 +139,18 @@ jobs:
           log='artifacts/test-coverage/quality.log'
           mkdir -p artifacts/test-coverage
 
-          make quality 2>&1 | tee "$log"
+          # Build once from the tested candidate. Never run a historical collector
+          # or load the base policy. One binary supplies both revisions' selectors.
+          collector="$RUNNER_TEMP/quality-collector"
+          go build -o "$collector" ./cmd/testcoverage >>"$log" 2>&1
+          build_exit=$?
+          if [[ "$build_exit" -ne 0 ]]; then
+            printf 'decision=unevaluated\nexit_code=%s\n' "$build_exit" >> "$GITHUB_OUTPUT"
+            exit "$build_exit"
+          fi
+          timeout --kill-after=10s 17m "$collector" \
+            -compare-base "$QUALITY_BASE" -compare-merge "$QUALITY_MERGE" \
+            2>&1 | tee -a "$log"
           statuses=("${PIPESTATUS[@]}")
           quality_exit="${statuses[0]}"
           if [[ "${statuses[1]}" -ne 0 ]]; then
@@ -144,9 +162,15 @@ jobs:
             decision="$(jq --raw-output '.decision.status // "execution_failure"' "$report" 2>>"$log")" || decision=execution_failure
           fi
           case "$decision" in
-            pass|policy_update_required|coverage_regression|timing_budget_exceeded|test_failed) ;;
+            pass|policy_update_required|coverage_regression|timing_budget_exceeded|test_failed|unevaluated) ;;
             *) decision=execution_failure; quality_exit=1 ;;
           esac
+          if [[ "$decision" == pass ]] && ! jq --exit-status \
+            '.complete and .execution.status == "pass" and .coverage_decision.status == "pass" and .timing.status == "pass"' \
+            "$report" >>"$log" 2>&1; then
+            decision=unevaluated
+            quality_exit=1
+          fi
           if [[ "$quality_exit" -eq 0 && "$decision" != pass ]]; then
             quality_exit=1
           fi
@@ -216,7 +240,11 @@ jobs:
               failed=1
               ;;
             timing_budget_exceeded)
-              quality_result='**Failed:** Timing budget exceeded'
+              quality_result='**Failed:** Confirmed same-runner timing regression'
+              failed=1
+              ;;
+            unevaluated)
+              quality_result='**Blocked:** Timing unevaluated (evidence unavailable or incompatible)'
               failed=1
               ;;
             test_failed)
