@@ -73,7 +73,9 @@ func TestLoadQualityPolicyRejectsMalformedAndUnknownData(t *testing.T) {
 		{name: "unknown field", contents: strings.Replace(valid, "version: 1", "version: 1\nunknown: true", 1), want: "field unknown not found"},
 		{name: "missing lane", contents: strings.Replace(valid, "  integration:\n", "  other:\n", 1), want: "no integration lane"},
 		{name: "invalid floor", contents: strings.Replace(valid, "floor_percent: 49.5", "floor_percent: 101", 1), want: "between 0 and 100"},
-		{name: "invalid timing", contents: strings.Replace(valid, "ceiling_seconds: 1", "ceiling_seconds: 0", 1), want: "finite and positive"},
+		{name: "invalid timing", contents: strings.Replace(valid, "relative_headroom: 0.5", "relative_headroom: -1", 1), want: "finite and non-negative"},
+		{name: "absolute timing is not policy", contents: strings.Replace(valid, "    coverage:", "    timing:\n      ceiling_seconds: 1\n    coverage:", 1), want: "field timing not found"},
+		{name: "coverage requires five samples", contents: strings.Replace(valid, "coverage_update_samples: 5", "coverage_update_samples: 1", 1), want: "exactly 5"},
 		{name: "second document", contents: valid + "---\nversion: 1\n", want: "multiple YAML documents"},
 	}
 	for _, test := range tests {
@@ -118,47 +120,10 @@ func TestQualityPolicyCoverageBoundaries(t *testing.T) {
 	}
 }
 
-func TestQualityPolicyTimingRefreshIsNonBlockingAndCeilingViolationBlocks(t *testing.T) {
-	policy := testLocalQualityPolicy()
-	unitPolicy := policy.Lanes["unit"]
-	unitPolicy.Timing.CeilingSeconds = 3
-	unitPolicy.Timing.Packages["example.test/pkg"] = 3
-	policy.Lanes["unit"] = unitPolicy
-
-	inside := testQualityReport()
-	lane := inside.Lanes["unit"]
-	lane.Timings[0].Seconds = 2
-	lane.SelectedTestSeconds = 2
-	inside.Lanes["unit"] = lane
-	if got := assessQualityPolicy(policy, inside); got.Status != statusPass {
-		t.Fatalf("timing inside refresh band = %#v, want pass", got)
-	}
-
-	faster := cloneReport(t, inside)
-	lane = faster.Lanes["unit"]
-	lane.Timings[0].Seconds = 1
-	lane.SelectedTestSeconds = 1
-	faster.Lanes["unit"] = lane
-	got := assessQualityPolicy(policy, faster)
-	if got.Status != statusPass || len(got.Findings) != 0 || !hasWarning(got, "timing_policy", "suite") {
-		t.Fatalf("timing below refresh floor = %#v, want pass with warning", got)
-	}
-
-	packageViolation := cloneReport(t, inside)
-	lane = packageViolation.Lanes["unit"]
-	lane.Timings[0].Seconds = 3.001
-	packageViolation.Lanes["unit"] = lane
-	got = assessQualityPolicy(policy, packageViolation)
-	if got.Status != statusTimingFailed || !hasFinding(got, "timing_policy", "package") {
-		t.Fatalf("package timing above ceiling = %#v, want blocking timing violation", got)
-	}
-}
-
 func TestQualityPolicyUpdateMovesCrossedBoundsAndReconcilesPackages(t *testing.T) {
 	policy := testLocalQualityPolicy()
 	unit := policy.Lanes["unit"]
 	unit.Coverage.Packages["example.test/removed"] = 25
-	unit.Timing.Packages["example.test/removed"] = 2
 	policy.Lanes["unit"] = unit
 
 	report := testQualityReportWithPackages(
@@ -181,34 +146,8 @@ func TestQualityPolicyUpdateMovesCrossedBoundsAndReconcilesPackages(t *testing.T
 	if _, found := got.Coverage.Packages["example.test/removed"]; found {
 		t.Fatal("removed coverage package remained in policy")
 	}
-	if got.Timing.CeilingSeconds != 2.5 || got.Timing.Packages["example.test/pkg"] != 3 || got.Timing.Packages["example.test/new"] != 0.45 {
-		t.Fatalf("updated timings = %#v, suite %v", got.Timing.Packages, got.Timing.CeilingSeconds)
-	}
-	if _, found := got.Timing.Packages["example.test/removed"]; found {
-		t.Fatal("removed timing package remained in policy")
-	}
-	if len(changes) < 6 {
-		t.Fatalf("changes = %#v, want changed, added, and removed bounds", changes)
-	}
-}
-
-func TestQualityPolicyUpdateLowersTimingCeilingsAfterMaterialImprovement(t *testing.T) {
-	policy := testLocalQualityPolicy()
-	unit := policy.Lanes["unit"]
-	unit.Timing.CeilingSeconds = 3
-	unit.Timing.Packages["example.test/pkg"] = 3
-	policy.Lanes["unit"] = unit
-
-	report := testQualityReport()
-	lane := report.Lanes["unit"]
-	lane.SelectedTestSeconds = 1
-	lane.Timings[0].Seconds = 1
-	report.Lanes["unit"] = lane
-
-	updated, _ := updatedQualityPolicy(policy, report)
-	unit = updated.Lanes["unit"]
-	if unit.Timing.CeilingSeconds != 1.5 || unit.Timing.Packages["example.test/pkg"] != 1.5 {
-		t.Fatalf("improved timing ceilings = suite %v, packages %#v", unit.Timing.CeilingSeconds, unit.Timing.Packages)
+	if len(changes) < 3 {
+		t.Fatalf("changes = %#v, want changed, added, and removed coverage bounds", changes)
 	}
 }
 
@@ -269,7 +208,7 @@ func TestInBandSamplesLeaveQualityPolicyFileUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	samples := make([]qualityReport, policy.Timing.UpdateSamples)
+	samples := make([]qualityReport, policy.UpdateSamples)
 	for index := range samples {
 		samples[index] = testQualityReport()
 	}
@@ -296,7 +235,7 @@ func TestFailedSamplesCannotModifyQualityPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	samples := make([]qualityReport, policy.Timing.UpdateSamples)
+	samples := make([]qualityReport, policy.UpdateSamples)
 	for index := range samples {
 		samples[index] = testQualityReport()
 	}
@@ -331,22 +270,21 @@ func TestAggregatePolicySamplesRejectsFailedAndInconsistentMeasurements(t *testi
 
 func testLocalQualityPolicy() localQualityPolicy {
 	policy := localQualityPolicy{
-		Version: qualityPolicyVersion,
+		Version:       qualityPolicyVersion,
+		UpdateSamples: 5,
 		Coverage: localCoverageSettings{
 			Repository: coverageBoundSettings{SignificancePercentagePoints: 0.5, HeadroomPercentagePoints: 0.5},
 			Package:    coverageBoundSettings{SignificancePercentagePoints: 2, HeadroomPercentagePoints: 2},
 		},
 		Timing: localTimingSettings{
-			UpdateSamples: 5,
-			Suite:         timingBoundSettings{RelativeHeadroom: 0.25, AbsoluteHeadroomSeconds: 0.5},
-			Package:       timingBoundSettings{RelativeHeadroom: 0.5, AbsoluteHeadroomSeconds: 0.25},
+			Suite:   timingBoundSettings{RelativeHeadroom: 0.5, AbsoluteHeadroomSeconds: 0.5},
+			Package: timingBoundSettings{RelativeHeadroom: 0.75, AbsoluteHeadroomSeconds: 0.25},
 		},
 		Lanes: make(map[string]laneQualityPolicy, len(laneNames)),
 	}
 	for _, laneName := range laneNames {
 		policy.Lanes[laneName] = laneQualityPolicy{
 			Coverage: coverageBounds{FloorPercent: 49.5, Packages: map[string]float64{"example.test/pkg": 48}},
-			Timing:   timingBounds{CeilingSeconds: 1, Packages: map[string]float64{"example.test/pkg": 1}},
 		}
 	}
 	return policy

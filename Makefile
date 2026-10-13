@@ -18,13 +18,13 @@ test-integration:
 	@command -v bd >/dev/null 2>&1 || { echo "Beads integration tests require bd; install Beads or ensure bd is on PATH." >&2; exit 1; }
 	go test $(INTEGRATION_TEST_ARGS) ./...
 
-# quality runs each lane exactly once and derives tests, coverage, and timing
-# decisions from the reviewed repository policy.
+# quality runs each lane exactly once and evaluates reviewed coverage floors.
+# Timing is diagnostic only locally; the PR gate compares fresh base/merge work.
 quality:
 	go run ./cmd/testcoverage
 
-# Collect five complete coverage-instrumented samples, update materially stale
-# bounds, and leave the .quality.yml diff for review.
+# Collect five complete coverage-instrumented samples, update only stale
+# coverage floors, and leave the .quality.yml diff for review.
 quality-policy-update:
 	go run ./cmd/testcoverage -update-policy
 

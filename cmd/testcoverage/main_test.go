@@ -20,6 +20,11 @@ func TestParseOptionsSupportsQualityModes(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "defaults"},
+		{name: "same-runner comparison", args: []string{"-compare-base", fixtureBase, "-compare-merge", fixtureMerge}},
+		{name: "isolated measurement", args: []string{"-measure-revision", fixtureBase}},
+		{name: "missing comparison identity", args: []string{"-compare-base", fixtureBase}, wantErr: true},
+		{name: "reject comparison plus update", args: []string{"-compare-base", fixtureBase, "-compare-merge", fixtureMerge, "-update-policy"}, wantErr: true},
+		{name: "reject comparison plus measurement", args: []string{"-compare-base", fixtureBase, "-compare-merge", fixtureMerge, "-measure-revision", fixtureBase}, wantErr: true},
 		{name: "quality policy update", args: []string{"-update-policy"}},
 		{name: "scenario audit", args: []string{"-audit-scenarios"}},
 		{name: "focused scenario audit", args: []string{
@@ -149,10 +154,10 @@ func TestFindingMessageShowsQualityPolicyBounds(t *testing.T) {
 	}
 
 	timing := findingMessage(finding{
-		Kind: "timing_policy", Prior: 0.415, Current: 0.472, Proposed: 0.722,
+		Kind: "timing_comparison", Prior: 0.415, Current: 0.472, BudgetSeconds: 0.722, OverageSeconds: 0.01,
 		Message: "timing exceeds its policy ceiling",
 	})
-	for _, want := range []string{"ceiling 0.415s", "measured 0.472s", "proposed ceiling 0.722s"} {
+	for _, want := range []string{"base 0.415s", "merge 0.472s", "ceiling 0.722s"} {
 		if !strings.Contains(timing, want) {
 			t.Fatalf("timing finding message %q does not contain %q", timing, want)
 		}
@@ -204,7 +209,7 @@ func TestReportSummaryUsesTablesAndCollapsesPackageDetails(t *testing.T) {
 			Message: "coverage is below its policy floor",
 		}},
 		Warnings: []finding{{
-			Kind: "timing_policy", Lane: "unit", Scope: "package", Name: "example.test/first", Prior: 0.75, Current: 0.8, Proposed: 1.05,
+			Kind: "timing_comparison", Lane: "unit", Scope: "package", Name: "example.test/first", Prior: 0.5, Current: 0.8, BudgetSeconds: 0.75,
 			Message: "timing diagnostic",
 		}},
 	}
@@ -350,10 +355,6 @@ func setLaneCoverage(report qualityReport, laneName string, total, covered int) 
 
 func hasFinding(value decision, kind, scope string) bool {
 	return containsFinding(value.Findings, kind, scope)
-}
-
-func hasWarning(value decision, kind, scope string) bool {
-	return containsFinding(value.Warnings, kind, scope)
 }
 
 func containsFinding(findings []finding, kind, scope string) bool {

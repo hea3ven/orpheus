@@ -96,6 +96,7 @@ type laneReport struct {
 	WallSeconds float64 `json:"wall_seconds"`
 	// SelectedTestSeconds sums elapsed package work, including overlapping packages.
 	SelectedTestSeconds float64         `json:"selected_test_seconds"`
+	PackageTestCounts   map[string]int  `json:"package_test_counts,omitempty"`
 	TestCount           int             `json:"test_count"`
 	Coverage            coverageMetric  `json:"coverage"`
 	Packages            []packageMetric `json:"packages,omitempty"`
@@ -174,22 +175,31 @@ func runGoTest(lane string, command []string) (laneReport, error) {
 	result := laneReport{Lane: lane, Command: recordedCommand(command)}
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Env = coverageEnvironment(os.Environ())
+	stdoutEvidence, stderrEvidence, err := createCommandEvidence(command)
+	if err != nil {
+		return result, err
+	}
+	defer func() { _ = stdoutEvidence.Close(); _ = stderrEvidence.Close() }()
 	var stderr bytes.Buffer
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return result, err
 	}
-	cmd.Stderr = &stderr
+	cmd.Stderr = io.MultiWriter(&stderr, stderrEvidence)
 	if err := cmd.Start(); err != nil {
 		return result, err
 	}
 
-	events := decodeTestEvents(stdout)
+	events := decodeTestEventsWithEvidence(stdout, stdoutEvidence)
 	waitErr := cmd.Wait()
 	result.WallSeconds = time.Since(started).Seconds()
 	result.TestCount = events.testCount
+	result.PackageTestCounts = events.packageTestCounts
 	result.Timings = sortedTimings(events.packages)
 	result.SelectedTestSeconds = selectedTestSeconds(result.Timings)
+	if events.decodeErr == nil {
+		events.decodeErr = completeTestEvents(events)
+	}
 	if events.decodeErr == nil && waitErr == nil {
 		result.Passed = true
 		return result, nil
@@ -205,21 +215,40 @@ func runGoTest(lane string, command []string) (laneReport, error) {
 }
 
 type decodedTestEvents struct {
-	testCount    int
-	packages     map[string]float64
-	testPackages map[string]bool
-	outputs      map[testID]string
-	failed       map[testID]bool
-	raw          bytes.Buffer
-	decodeErr    error
+	testCount         int
+	packageTestCounts map[string]int
+	pending           map[testID]bool
+	finishedPackages  map[string]bool
+	startedPackages   map[string]bool
+	packages          map[string]float64
+	testPackages      map[string]bool
+	outputs           map[testID]string
+	failed            map[testID]bool
+	raw               bytes.Buffer
+	decodeErr         error
+}
+
+func decodeTestEventsWithEvidence(stdout io.Reader, evidence io.Writer) decodedTestEvents {
+	events := decodeTestEvents(io.TeeReader(stdout, evidence))
+	if events.decodeErr != nil {
+		// A failed evidence write must not leave the child blocked on a full
+		// stdout pipe while the collector waits for its exit.
+		_, err := io.Copy(io.Discard, stdout)
+		events.decodeErr = errors.Join(events.decodeErr, err)
+	}
+	return events
 }
 
 func decodeTestEvents(input io.Reader) decodedTestEvents {
 	result := decodedTestEvents{
-		packages:     make(map[string]float64),
-		testPackages: make(map[string]bool),
-		outputs:      make(map[testID]string),
-		failed:       make(map[testID]bool),
+		packages:          make(map[string]float64),
+		packageTestCounts: make(map[string]int),
+		pending:           make(map[testID]bool),
+		finishedPackages:  make(map[string]bool),
+		startedPackages:   make(map[string]bool),
+		testPackages:      make(map[string]bool),
+		outputs:           make(map[testID]string),
+		failed:            make(map[testID]bool),
 	}
 	decoder := json.NewDecoder(io.TeeReader(input, &result.raw))
 	for {
@@ -237,8 +266,21 @@ func decodeTestEvents(input io.Reader) decodedTestEvents {
 
 func recordTestEvent(result *decodedTestEvents, event testEvent) {
 	id := testID{Package: event.Package, Test: event.Test}
+	if event.Action == "start" {
+		result.startedPackages[event.Package] = true
+	}
 	if event.Test != "" && (event.Action == "run" || event.Action == "pass" || event.Action == "fail") {
 		result.testPackages[event.Package] = true
+	}
+	if event.Test != "" {
+		if event.Action == "run" {
+			result.pending[id] = true
+		}
+		if event.Action == "pass" || event.Action == "fail" || event.Action == "skip" {
+			delete(result.pending, id)
+		}
+	} else if event.Action == "pass" || event.Action == "fail" || event.Action == "skip" {
+		result.finishedPackages[event.Package] = true
 	}
 	switch event.Action {
 	case "output":
@@ -255,8 +297,44 @@ func recordTestEvent(result *decodedTestEvents, event testEvent) {
 			}
 		} else {
 			result.testCount++
+			result.packageTestCounts[event.Package]++
 		}
 	}
+}
+
+func completeTestEvents(events decodedTestEvents) error {
+	if len(events.pending) > 0 {
+		return errors.New("go test stream ended with unfinished tests")
+	}
+	if len(events.finishedPackages) == 0 {
+		return errors.New("go test stream has no completed packages")
+	}
+	for _, pkg := range sortedUnionKeys(events.testPackages, events.startedPackages) {
+		if !events.finishedPackages[pkg] {
+			return fmt.Errorf("go test stream has no terminal event for %s", pkg)
+		}
+	}
+	return nil
+}
+
+func createCommandEvidence(command []string) (*os.File, *os.File, error) {
+	for _, arg := range command {
+		if !strings.HasPrefix(arg, "-coverprofile=") {
+			continue
+		}
+		base := strings.TrimPrefix(arg, "-coverprofile=")
+		stdout, err := os.Create(base + ".events.jsonl")
+		if err != nil {
+			return nil, nil, err
+		}
+		stderr, err := os.Create(base + ".stderr.log")
+		if err != nil {
+			_ = stdout.Close()
+			return nil, nil, err
+		}
+		return stdout, stderr, nil
+	}
+	return nil, nil, errors.New("test command has no coverage profile for evidence retention")
 }
 
 func testCommandError(decodeErr, waitErr error) string {
@@ -456,5 +534,28 @@ func writeJSON(name string, value any) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(name, append(contents, '\n'), 0o644)
+	return writeReportFile(name, append(contents, '\n'))
+}
+
+// writeReportFile preserves the last complete report if collection is canceled
+// while an in-progress comparison is being published.
+func writeReportFile(path string, contents []byte) error {
+	file, err := os.CreateTemp(filepath.Dir(path), ".report-*")
+	if err != nil {
+		return err
+	}
+	temporary := file.Name()
+	defer func() { _ = os.Remove(temporary) }()
+	if _, err := file.Write(contents); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Chmod(0o644); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporary, path)
 }
