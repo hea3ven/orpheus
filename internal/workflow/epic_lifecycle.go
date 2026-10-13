@@ -27,11 +27,13 @@ type EpicLifecycleResult struct {
 }
 
 // EpicLifecycleService applies source-neutral epic lifecycle policy.
-type EpicLifecycleService struct{}
+type EpicLifecycleService struct {
+	Dependencies *task.DependencyReader
+}
 
 // Start changes an open epic to in progress after verifying its immediate
 // parent and all blocking dependencies. An in-progress epic is a no-op.
-func (EpicLifecycleService) Start(ctx context.Context, backend EpicLifecycleBackend, id string) (EpicLifecycleResult, error) {
+func (s EpicLifecycleService) Start(ctx context.Context, backend EpicLifecycleBackend, id string) (EpicLifecycleResult, error) {
 	if backend == nil {
 		return EpicLifecycleResult{}, errors.New("epic lifecycle backend is required")
 	}
@@ -55,7 +57,7 @@ func (EpicLifecycleService) Start(ctx context.Context, backend EpicLifecycleBack
 	if err := verifyEpicParent(ctx, backend, item); err != nil {
 		return EpicLifecycleResult{}, err
 	}
-	if err := verifyBlockingDependencies(ctx, backend, item); err != nil {
+	if err := verifyBlockingDependencies(ctx, backend, item, s.Dependencies); err != nil {
 		return EpicLifecycleResult{}, err
 	}
 	if err := backend.StartEpic(ctx, item.ID); err != nil {
@@ -160,7 +162,7 @@ func verifyEpicParent(ctx context.Context, backend task.Getter, item task.Task) 
 	return nil
 }
 
-func verifyBlockingDependencies(ctx context.Context, backend task.Getter, item task.Task) error {
+func verifyBlockingDependencies(ctx context.Context, backend task.Getter, item task.Task, reader *task.DependencyReader) error {
 	dependencyIDs := uniqueSortedIDs(item.Relations.DependencyIDs)
 	if item.Relations.BlockedByCount > len(dependencyIDs) {
 		return fmt.Errorf(
@@ -173,12 +175,21 @@ func verifyBlockingDependencies(ctx context.Context, backend task.Getter, item t
 
 	active := make([]string, 0)
 	for _, dependencyID := range dependencyIDs {
-		dependency, err := task.ReadRelated(ctx, backend, item, dependencyID)
+		var dependency task.Task
+		var err error
+		if reader != nil {
+			dependency, err = reader.ReadDependency(ctx, item, dependencyID)
+		} else {
+			dependency, err = task.ReadRelated(ctx, backend, item, dependencyID)
+		}
 		if err != nil {
 			return lifecycleFailure{
 				message: fmt.Sprintf("cannot inspect blocking dependency %s", dependencyID),
 				cause:   err,
 			}
+		}
+		if !task.IsTaskSourceItem(dependency) {
+			return fmt.Errorf("blocking dependency %s must be a task or epic", dependencyID)
 		}
 		if dependency.Status != task.StatusClosed {
 			active = append(active, dependencyID)

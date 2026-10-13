@@ -35,6 +35,8 @@ empty values and relationship normalization.
 | `dependencies` | Prerequisite IDs. These tasks block this task while incomplete. |
 | `dependents` | IDs of tasks that depend on this task. This task blocks them while incomplete. |
 
+Dependencies may reference other registered repositories. Dependents are native
+source-local incoming edges; no cross-repository reverse index is maintained.
 Parent-child edges are not blocking edges. Relationship arrays contain sorted,
 deduplicated IDs; `[]` means none. Completed and unresolved references retain
 their IDs. Values contain IDs only, with no per-relationship repository IDs,

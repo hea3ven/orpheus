@@ -5,6 +5,7 @@ package beads_test
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"reflect"
 	"strings"
@@ -13,6 +14,8 @@ import (
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/tasksource/beads"
 	"github.com/hea3ven/orpheus/internal/testutil"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIntegrationAdapterContractBeadsRelationshipContracts(t *testing.T) {
@@ -26,6 +29,7 @@ func TestIntegrationAdapterContractBeadsRelationshipContracts(t *testing.T) {
 	// Cases own disjoint task IDs and assert only their own graph. Map iteration
 	// varies their order; keep them serial to avoid concurrent database writers.
 	for name, run := range map[string]func(*testing.T, beadsRelationshipFixture){
+		"TaskBackendCrossRepositoryReferences":                         checkCrossRepositoryReferences,
 		"TaskBackendReadsParentRelationship":                           checkParentRelationshipReadback,
 		"TaskBackendSupportsCrossTypeBlockingDependencies":             checkCrossTypeBlockingDependencies,
 		"TaskBackendDoesNotRemoveRelatedDependency":                    checkRelatedDependencyPreserved,
@@ -287,13 +291,18 @@ func TestIntegrationAdapterContractManagedTaskBackendRepairsRealBeadsSchemaDrift
 
 func initializeBeadsWorkspace(t *testing.T) (string, beads.CommandRunner) {
 	t.Helper()
+	return initializeBeadsWorkspaceWithPrefix(t, "it")
+}
+
+func initializeBeadsWorkspaceWithPrefix(t *testing.T, prefix string) (string, beads.CommandRunner) {
+	t.Helper()
 	binary, err := exec.LookPath("bd")
 	if err != nil {
 		t.Skip("bd executable is required for Beads integration test")
 	}
 	dir := testutil.CanonicalTempDir(t)
 	runner := isolatedBeadsRunner(t, binary)
-	if result, err := runner.Run(dir, "init", "--prefix", "it", "--non-interactive", "--skip-agents", "--skip-hooks", "--quiet"); err != nil {
+	if result, err := runner.Run(dir, "init", "--prefix", prefix, "--non-interactive", "--skip-agents", "--skip-hooks", "--quiet"); err != nil {
 		t.Fatalf("initialize Beads workspace: %v\n%s\n%s", err, result.Stdout, result.Stderr)
 	}
 	return dir, runner
@@ -319,5 +328,50 @@ func checkIncompleteExternalDependencyRead(t *testing.T, fixture beadsRelationsh
 	}
 	if !reflect.DeepEqual(got, task.Task{}) {
 		t.Fatalf("Get() = %#v, want no task on incomplete read", got)
+	}
+}
+
+func checkCrossRepositoryReferences(t *testing.T, fixture beadsRelationshipFixture) {
+	dir, runner := initializeBeadsWorkspaceWithPrefix(t, "other")
+	owner, err := beads.NewTaskBackendWithRunner(dir, runner)
+	require.NoError(t, err)
+	prerequisite, err := owner.Create(t.Context(), task.CreateOptions{Title: "Remote epic", Description: "Plan", AcceptanceCriteria: "Done", IssueType: task.IssueTypeEpic})
+	require.NoError(t, err)
+	consumer, err := fixture.backend.Create(t.Context(), task.CreateOptions{Title: t.Name(), Description: "Plan", AcceptanceCriteria: "Done", BlockingIDs: []string{prerequisite.ID}, CrossRepositoryBlockingIDs: []string{prerequisite.ID}})
+	require.NoError(t, err)
+
+	for range 2 {
+		updated, err := fixture.backend.Update(t.Context(), task.UpdateOptions{ID: consumer.ID, AddBlockingIDs: []string{prerequisite.ID}, CrossRepositoryBlockingIDs: []string{prerequisite.ID}})
+		require.NoError(t, err)
+		assert.Equal(t, []string{prerequisite.ID}, updated.Relations.DependencyIDs)
+		assert.Empty(t, updated.RelatedItems, "consumer must not invent a cached remote lifecycle row")
+	}
+	listed, err := fixture.backend.List(t.Context())
+	require.NoError(t, err)
+	for _, item := range listed {
+		if item.ID == consumer.ID {
+			assert.Equal(t, []string{prerequisite.ID}, item.Relations.DependencyIDs)
+		}
+	}
+	remote, err := owner.Get(t.Context(), prerequisite.ID)
+	require.NoError(t, err)
+	assert.Equal(t, task.StatusOpen, remote.Status)
+	require.NoError(t, owner.StartEpic(t.Context(), prerequisite.ID))
+	require.NoError(t, owner.Close(t.Context(), prerequisite.ID))
+	remote, err = owner.Get(t.Context(), prerequisite.ID)
+	require.NoError(t, err)
+	assert.Equal(t, task.StatusClosed, remote.Status)
+	retained, err := fixture.backend.Get(t.Context(), consumer.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{prerequisite.ID}, retained.Relations.DependencyIDs)
+	_, err = fixture.backend.Get(t.Context(), prerequisite.ID)
+	assert.ErrorIs(t, err, task.ErrNotFound, "no proxy item is created in the consuming source")
+
+	// Removal is independent of the owning source, even after it is unavailable.
+	require.NoError(t, os.RemoveAll(dir))
+	for range 2 {
+		updated, err := fixture.backend.Update(t.Context(), task.UpdateOptions{ID: consumer.ID, RemoveBlockingIDs: []string{prerequisite.ID}})
+		require.NoError(t, err)
+		assert.Empty(t, updated.Relations.DependencyIDs)
 	}
 }

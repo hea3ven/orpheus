@@ -228,8 +228,6 @@ func TestUpdateServiceRejectsForeignRelationshipReferencesBeforeMutation(t *test
 		opts task.UpdateOptions
 	}{
 		{"parent", task.UpdateOptions{ParentID: stringPtr("be-parent")}},
-		{"added dependency", task.UpdateOptions{AddBlockingIDs: []string{"be-dependency"}}},
-		{"removed dependency", task.UpdateOptions{RemoveBlockingIDs: []string{"be-dependency"}}},
 	} {
 		t.Run(request.name, func(t *testing.T) {
 			backend := updateBackendWithCurrent()
@@ -274,7 +272,7 @@ func TestUpdateServiceFiltersAbsentBlockingRemovalsBeforeMutation(t *testing.T) 
 	}
 }
 
-func TestUpdateServiceRejectsRemovalOfUnsupportedBlockingDependencyBeforeMutation(t *testing.T) {
+func TestUpdateServiceRemovesUnsupportedBlockingDependencyForRepair(t *testing.T) {
 	source := createTestSource("alpha", "op", testutil.CanonicalTempDir(t))
 	backend := updateBackendWithCurrent()
 	backend.tasks["op-current"] = task.Task{
@@ -288,12 +286,13 @@ func TestUpdateServiceRejectsRemovalOfUnsupportedBlockingDependencyBeforeMutatio
 		ID:                "op-current",
 		RemoveBlockingIDs: []string{"op-bug"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "must be a task or epic") {
-		t.Fatalf("Update() error = %v, want unsupported dependency rejection", err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if backend.updated {
-		t.Fatal("Update mutator was called")
+	if !backend.updated || !reflect.DeepEqual(backend.opts.RemoveBlockingIDs, []string{"op-bug"}) {
+		t.Fatalf("removal = %#v", backend.opts)
 	}
+
 }
 
 func TestUpdateServicePreservesLongFormPlanningContent(t *testing.T) {

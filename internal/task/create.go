@@ -99,7 +99,11 @@ func (s CreateService) Create(ctx context.Context, source RepositorySource, requ
 		return Task{}, err
 	}
 
-	opts, err := NormalizeCreateOptions(CreateOptions(request))
+	opts, err := NormalizeCreateOptions(CreateOptions{
+		Title: request.Title, Description: request.Description, Design: request.Design,
+		AcceptanceCriteria: request.AcceptanceCriteria, ExternalRef: request.ExternalRef,
+		IssueType: request.IssueType, ParentID: request.ParentID, BlockingIDs: request.BlockingIDs,
+	})
 	if err != nil {
 		return Task{}, err
 	}
@@ -111,6 +115,10 @@ func (s CreateService) Create(ctx context.Context, source RepositorySource, requ
 		return Task{}, creationFailure{message: fmt.Sprintf("cannot prepare task creation in repository %s", source.Repository.ID), cause: err}
 	}
 	if err := s.validateRelations(ctx, source, backend, opts); err != nil {
+		return Task{}, err
+	}
+	opts.CrossRepositoryBlockingIDs, err = crossRepositoryIDs(s.Sources, source, opts.BlockingIDs)
+	if err != nil {
 		return Task{}, err
 	}
 	created, err := backend.Create(ctx, opts)
@@ -129,14 +137,15 @@ func (s CreateService) Create(ctx context.Context, source RepositorySource, requ
 // NormalizeCreateOptions applies the backend-neutral creation validation policy.
 func NormalizeCreateOptions(opts CreateOptions) (CreateOptions, error) {
 	normalized := CreateOptions{
-		Title:              strings.TrimSpace(opts.Title),
-		Description:        strings.TrimSpace(opts.Description),
-		Design:             strings.TrimSpace(opts.Design),
-		AcceptanceCriteria: strings.TrimSpace(opts.AcceptanceCriteria),
-		ExternalRef:        strings.TrimSpace(opts.ExternalRef),
-		IssueType:          opts.IssueType,
-		ParentID:           strings.TrimSpace(opts.ParentID),
-		BlockingIDs:        normalizeIDs(opts.BlockingIDs),
+		Title:                      strings.TrimSpace(opts.Title),
+		Description:                strings.TrimSpace(opts.Description),
+		Design:                     strings.TrimSpace(opts.Design),
+		AcceptanceCriteria:         strings.TrimSpace(opts.AcceptanceCriteria),
+		ExternalRef:                strings.TrimSpace(opts.ExternalRef),
+		IssueType:                  opts.IssueType,
+		ParentID:                   strings.TrimSpace(opts.ParentID),
+		BlockingIDs:                normalizeIDs(opts.BlockingIDs),
+		CrossRepositoryBlockingIDs: normalizeIDs(opts.CrossRepositoryBlockingIDs),
 	}
 	if normalized.Title == "" {
 		return CreateOptions{}, errors.New("title is required")
@@ -182,16 +191,14 @@ func (s CreateService) validateRelations(ctx context.Context, source RepositoryS
 			return fmt.Errorf("parent epic %q in repository %s is closed", opts.ParentID, source.Repository.ID)
 		}
 	}
+	reader := DependencyReader{Sources: s.Sources, Factory: func(source RepositorySource) (Getter, error) { return s.BackendFactory(source) }}
 	for _, dependencyID := range opts.BlockingIDs {
-		if err := s.validateReferenceRepository(source, dependencyID, "blocking dependency"); err != nil {
-			return err
-		}
-		dependency, err := getCreationReference(ctx, backend, source, dependencyID, "blocking dependency")
+		dependency, err := reader.Get(ctx, dependencyID)
 		if err != nil {
 			return err
 		}
 		if dependency.IssueType != IssueTypeTask && dependency.IssueType != IssueTypeEpic {
-			return fmt.Errorf("blocking dependency %q in repository %s must be a task or epic", dependencyID, source.Repository.ID)
+			return fmt.Errorf("blocking dependency %q must be a task or epic", dependencyID)
 		}
 	}
 	return nil
@@ -296,15 +303,16 @@ func copyStringPointer(s *string) *string {
 // NormalizeUpdateOptions applies the backend-neutral update validation policy.
 func NormalizeUpdateOptions(opts UpdateOptions) (UpdateOptions, error) {
 	normalized := UpdateOptions{
-		ID:                 strings.TrimSpace(opts.ID),
-		Title:              trimStringPointer(opts.Title),
-		Description:        copyStringPointer(opts.Description),
-		Design:             copyStringPointer(opts.Design),
-		AcceptanceCriteria: copyStringPointer(opts.AcceptanceCriteria),
-		ExternalRef:        trimStringPointer(opts.ExternalRef),
-		ParentID:           trimStringPointer(opts.ParentID),
-		AddBlockingIDs:     normalizeIDs(opts.AddBlockingIDs),
-		RemoveBlockingIDs:  normalizeIDs(opts.RemoveBlockingIDs),
+		ID:                         strings.TrimSpace(opts.ID),
+		Title:                      trimStringPointer(opts.Title),
+		Description:                copyStringPointer(opts.Description),
+		Design:                     copyStringPointer(opts.Design),
+		AcceptanceCriteria:         copyStringPointer(opts.AcceptanceCriteria),
+		ExternalRef:                trimStringPointer(opts.ExternalRef),
+		ParentID:                   trimStringPointer(opts.ParentID),
+		AddBlockingIDs:             normalizeIDs(opts.AddBlockingIDs),
+		RemoveBlockingIDs:          normalizeIDs(opts.RemoveBlockingIDs),
+		CrossRepositoryBlockingIDs: normalizeIDs(opts.CrossRepositoryBlockingIDs),
 	}
 
 	if normalized.ID == "" {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -244,7 +245,18 @@ func (b TaskBackend) Create(ctx context.Context, opts task.CreateOptions) (task.
 	if createOpts.ParentID != "" {
 		args = append(args, "--parent", createOpts.ParentID)
 	}
-	for _, dependencyID := range createOpts.BlockingIDs {
+	if len(createOpts.CrossRepositoryBlockingIDs) > 0 {
+		metadata, err := task.EditCrossRepositoryBlocks(nil, createOpts.CrossRepositoryBlockingIDs, nil)
+		if err != nil {
+			return task.Task{}, err
+		}
+		raw, err := json.Marshal(metadata)
+		if err != nil {
+			return task.Task{}, err
+		}
+		args = append(args, "--metadata", string(raw))
+	}
+	for _, dependencyID := range task.LocalBlockingIDs(createOpts.BlockingIDs, createOpts.CrossRepositoryBlockingIDs) {
 		args = append(args, "--deps", dependencyID)
 	}
 
@@ -455,10 +467,25 @@ func (b TaskBackend) Update(ctx context.Context, opts task.UpdateOptions) (task.
 	if current.Status == task.StatusClosed {
 		return task.Task{}, task.MutationConflictError{TaskID: id, Reason: "task is closed"}
 	}
+	remoteIDs, err := task.CrossRepositoryBlocks(current.Metadata)
+	if err != nil {
+		return task.Task{}, err
+	}
+	updateOpts.AddBlockingIDs = task.LocalBlockingIDs(updateOpts.AddBlockingIDs, updateOpts.CrossRepositoryBlockingIDs)
 	if err := preflightBlockingDependencyAdditions(rawCurrent, updateOpts.AddBlockingIDs); err != nil {
 		return task.Task{}, fmt.Errorf("update Beads task %q in %q: %w", id, b.dir, err)
 	}
 
+	if len(updateOpts.CrossRepositoryBlockingIDs) > 0 || len(updateOpts.RemoveBlockingIDs) > 0 && len(remoteIDs) > 0 {
+		metadata, err := task.EditCrossRepositoryBlocks(current.Metadata, updateOpts.CrossRepositoryBlockingIDs, updateOpts.RemoveBlockingIDs)
+		if err != nil {
+			return task.Task{}, err
+		}
+		if _, err := b.runWrite(ctx, "update cross-repository dependencies", "update", id, "--set-metadata", task.MetadataCrossRepositoryBlocks+"="+metadata[task.MetadataCrossRepositoryBlocks]); err != nil {
+			return task.Task{}, err
+		}
+	}
+	updateOpts.RemoveBlockingIDs = task.LocalBlockingIDs(updateOpts.RemoveBlockingIDs, remoteIDs)
 	if err := b.updateContentFields(ctx, id, updateOpts); err != nil {
 		return task.Task{}, err
 	}
@@ -574,6 +601,9 @@ func preflightBlockingDependencyAdditions(current bdTask, depIDs []string) error
 
 func (b TaskBackend) addBlockingDependencies(ctx context.Context, current task.Task, depIDs []string) error {
 	for _, depID := range depIDs {
+		if slices.Contains(current.Relations.DependencyIDs, depID) {
+			continue
+		}
 		dependency, err := b.Get(ctx, depID)
 		if err != nil {
 			return fmt.Errorf("add blocking dependency %q to task %q in %q: inspect dependency: %w", depID, current.ID, b.dir, err)
@@ -953,7 +983,7 @@ func (t bdTask) toTask() (task.Task, error) {
 		return task.Task{}, err
 	}
 
-	relations, err := t.relations()
+	relations, err := t.relations(metadata)
 	if err != nil {
 		return task.Task{}, err
 	}
@@ -986,7 +1016,7 @@ func (t bdTask) toTask() (task.Task, error) {
 	}, nil
 }
 
-func (t bdTask) relations() (task.RelationSummary, error) {
+func (t bdTask) relations(metadata task.Metadata) (task.RelationSummary, error) {
 	relations := task.RelationSummary{
 		ParentID:      strings.TrimSpace(t.Parent),
 		DependencyIDs: []string{}, DependentIDs: []string{}, ChildIDs: []string{},
@@ -1034,6 +1064,20 @@ func (t bdTask) relations() (task.RelationSummary, error) {
 	if relations.ChildCount == 0 {
 		relations.ChildCount = len(relations.ChildIDs)
 	}
+	return includeCrossRepositoryBlocks(relations, metadata)
+}
+
+func includeCrossRepositoryBlocks(relations task.RelationSummary, metadata task.Metadata) (task.RelationSummary, error) {
+	ids, err := task.CrossRepositoryBlocks(metadata)
+	if err != nil {
+		return task.RelationSummary{}, err
+	}
+	for _, id := range ids {
+		relations.DependencyIDs = appendID(relations.DependencyIDs, id)
+	}
+	relations.DependencyCount += len(ids)
+	relations.BlockedByCount += len(ids)
+	sort.Strings(relations.DependencyIDs)
 	return relations, nil
 }
 
