@@ -14,16 +14,24 @@ import (
 
 // This fixture prevents a per-package profile regression: the consumer test must
 // credit executable statements in its collaborating package through -coverpkg.
-func TestIntegrationAdapterContractCrossPackageCoverageCreditsCollaborator(t *testing.T) {
+func TestIntegrationBinaryE2ECrossPackageCoverageCreditsCollaborator(t *testing.T) {
 	fixture := filepath.Join("testdata", "crosspackage")
-	profile := filepath.Join(testutil.CanonicalTempDir(t), "crosspackage.cover")
-	// Run only the consumer: executing a separate no-test collaborator binary
-	// adds no evidence that the consumer credits its collaborating package.
-	command := exec.Command("go", "test", "-count=1", "-run", "^TestConsumerCreditsCollaborator$", "-covermode=set", "-coverpkg=./...", "-coverprofile="+profile, "./consumer")
-	command.Dir = fixture
+	root := testutil.CanonicalTempDir(t)
+	profile := filepath.Join(root, "crosspackage.cover")
+	binary := filepath.Join(root, "consumer.test")
+	// This contract owns compiler instrumentation and the resulting profile,
+	// not Go's test orchestration or a separate no-test collaborator binary.
+	build := exec.Command("go", "test", "-c", "-covermode=set", "-coverpkg=./...", "-o", binary, "./consumer")
+	build.Dir = fixture
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("compile cross-package fixture: %v\n%s", err, output)
+	}
+
+	command := exec.Command(binary, "-test.run=^TestConsumerCreditsCollaborator$", "-test.coverprofile="+profile)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("run cross-package fixture: %v\n%s", err, output)
 	}
+
 	contents := readProfile(t, profile)
 	collaborator := filepath.ToSlash("example.test/crosspackage/collaborator/work.go")
 	for _, line := range strings.Split(contents, "\n") {
