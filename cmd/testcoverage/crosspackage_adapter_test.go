@@ -17,7 +17,9 @@ import (
 func TestIntegrationAdapterContractCrossPackageCoverageCreditsCollaborator(t *testing.T) {
 	fixture := filepath.Join("testdata", "crosspackage")
 	profile := filepath.Join(testutil.CanonicalTempDir(t), "crosspackage.cover")
-	command := exec.Command("go", "test", "-count=1", "-run", "^TestConsumerCreditsCollaborator$", "-covermode=set", "-coverpkg=./...", "-coverprofile="+profile, "./...")
+	// Run only the consumer: executing a separate no-test collaborator binary
+	// adds no evidence that the consumer credits its collaborating package.
+	command := exec.Command("go", "test", "-count=1", "-run", "^TestConsumerCreditsCollaborator$", "-covermode=set", "-coverpkg=./...", "-coverprofile="+profile, "./consumer")
 	command.Dir = fixture
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("run cross-package fixture: %v\n%s", err, output)

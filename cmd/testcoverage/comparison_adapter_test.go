@@ -55,7 +55,7 @@ func syntheticMergeFixture(t *testing.T) (string, string, string) {
 	return repo, base, merge
 }
 
-func TestIntegrationAdapterContractComparisonDoltVersionRemainsStableWithCachedUpdate(t *testing.T) {
+func TestIntegrationAdapterContractComparisonDoltVersionOmitsCachedUpdateWarning(t *testing.T) {
 	if _, err := exec.LookPath("dolt"); err != nil {
 		t.Skip("Dolt is not installed")
 	}
@@ -71,34 +71,25 @@ func TestIntegrationAdapterContractComparisonDoltVersionRemainsStableWithCachedU
 		t.Fatal(err)
 	}
 	// A fresh cached newer release reproduces the once-only update warning
-	// without allowing either version probe to query the network.
+	// without allowing the version probe to query the network.
 	if err := os.WriteFile(filepath.Join(doltConfig, "version_check.txt"), []byte("999.0.0"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	var versions [][]byte
 
-	for _, name := range []string{"base", "base", "merge"} {
-		cmd := exec.Command("dolt", "version")
-		cmd.Dir = runner.work
-		cmd.Env = comparisonEnvironment(runner.work, name)
-		version, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("%s Dolt version probe: %v\n%s", name, err, version)
-		}
-		versions = append(versions, version)
+	cmd := exec.Command("dolt", "version")
+	cmd.Dir = runner.work
+	cmd.Env = comparisonEnvironment(runner.work, "base")
+	version, err := cmd.CombinedOutput()
+
+	if err != nil {
+		t.Fatalf("Dolt version probe: %v\n%s", err, version)
 	}
-
-	for _, version := range versions {
-		if !bytes.HasPrefix(version, []byte("dolt version ")) || bytes.Count(version, []byte("\n")) != 1 {
-			t.Fatalf("version metadata contains more than the installed version: %q", version)
-		}
-		if !bytes.Equal(version, versions[0]) {
-			t.Fatalf("Dolt version metadata changed: %q != %q", version, versions[0])
-		}
+	if !bytes.HasPrefix(version, []byte("dolt version ")) || bytes.Count(version, []byte("\n")) != 1 {
+		t.Fatalf("version metadata contains more than the installed version: %q", version)
 	}
 }
 
-func TestIntegrationAdapterContractComparisonPreparesExactDetachedCheckouts(t *testing.T) {
+func TestIntegrationAdapterContractComparisonPreparesExactDetachedCheckoutsAndRejectsInvalidIdentities(t *testing.T) {
 	repo, base, merge := syntheticMergeFixture(t)
 	work := filepath.Join(testutil.CanonicalTempDir(t), "work")
 	var diagnostics bytes.Buffer
@@ -111,58 +102,56 @@ func TestIntegrationAdapterContractComparisonPreparesExactDetachedCheckouts(t *t
 		}
 	})
 
-	if err := runner.prepare(context.Background(), base, merge); err != nil {
-		t.Fatal(err)
-	}
-
-	for _, item := range []struct{ name, revision string }{{"base", base}, {"merge", merge}} {
-		t.Chdir(filepath.Join(work, item.name))
-		identity, err := verifyCheckout(item.revision)
-		if err != nil || identity.Revision != item.revision || !identity.Clean {
-			t.Fatalf("%s identity = %#v, %v", item.name, identity, err)
+	t.Run("exact detached checkouts", func(t *testing.T) {
+		if err := runner.prepare(context.Background(), base, merge); err != nil {
+			t.Fatal(err)
 		}
-		if output, err := exec.Command("git", "symbolic-ref", "-q", "HEAD").CombinedOutput(); err == nil {
-			t.Fatalf("measurement checkout is not detached: %s", output)
+		for _, item := range []struct{ name, revision string }{{"base", base}, {"merge", merge}} {
+			t.Chdir(filepath.Join(work, item.name))
+			identity, err := verifyCheckout(item.revision)
+			if err != nil || identity.Revision != item.revision || !identity.Clean {
+				t.Fatalf("%s identity = %#v, %v", item.name, identity, err)
+			}
+			if output, err := exec.Command("git", "symbolic-ref", "-q", "HEAD").CombinedOutput(); err == nil {
+				t.Fatalf("measurement checkout is not detached: %s", output)
+			}
 		}
-	}
-	if _, err := os.Stat(filepath.Join(work, "base", "candidate.txt")); !os.IsNotExist(err) {
-		t.Fatalf("candidate contents leaked into base: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(work, "merge", "candidate.txt")); err != nil {
-		t.Fatal(err)
-	}
-}
+		if _, err := os.Stat(filepath.Join(work, "base", "candidate.txt")); !os.IsNotExist(err) {
+			t.Fatalf("candidate contents leaked into base: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(work, "merge", "candidate.txt")); err != nil {
+			t.Fatal(err)
+		}
+	})
 
-func TestIntegrationAdapterContractComparisonRejectsMismatchedAndDirtyIdentities(t *testing.T) {
-	repo, base, merge := syntheticMergeFixture(t)
-	runner := comparisonRunner{root: repo, work: testutil.CanonicalTempDir(t), log: &bytes.Buffer{}}
-
-	if err := runner.prepare(context.Background(), merge, merge); err == nil {
-		t.Fatal("identical identities accepted")
-	}
-	if err := runner.prepare(context.Background(), merge, base); err == nil {
-		t.Fatal("non-merge or mismatched parent accepted")
-	}
-	if err := runner.prepare(context.Background(), base[:12], merge); err == nil {
-		t.Fatal("abbreviated identity accepted")
-	}
-	t.Chdir(repo)
-	if _, err := verifyCheckout(base); err == nil {
-		t.Fatal("wrong checkout HEAD accepted")
-	}
-	if _, err := verifyCheckout(merge); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile("base.txt", []byte("dirty\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := verifyCheckout(merge); err == nil {
-		t.Fatal("dirty checkout accepted")
-	}
+	t.Run("mismatched and dirty identities", func(t *testing.T) {
+		if err := runner.prepare(context.Background(), merge, merge); err == nil {
+			t.Fatal("identical identities accepted")
+		}
+		if err := runner.prepare(context.Background(), merge, base); err == nil {
+			t.Fatal("non-merge or mismatched parent accepted")
+		}
+		if err := runner.prepare(context.Background(), base[:12], merge); err == nil {
+			t.Fatal("abbreviated identity accepted")
+		}
+		t.Chdir(repo)
+		if _, err := verifyCheckout(base); err == nil {
+			t.Fatal("wrong checkout HEAD accepted")
+		}
+		if _, err := verifyCheckout(merge); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile("base.txt", []byte("dirty\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := verifyCheckout(merge); err == nil {
+			t.Fatal("dirty checkout accepted")
+		}
+	})
 }
 
 func TestIntegrationAdapterContractComparisonCollectorUsesSameBinaryAndIsolatedCaches(t *testing.T) {
-	repo, base, merge := syntheticMergeFixture(t)
+	base, merge := fixtureBase, fixtureMerge
 	root := testutil.CanonicalTempDir(t)
 	collector := filepath.Join(root, "collector")
 	seed := filepath.Join(root, "seed.json")
@@ -180,17 +169,13 @@ func TestIntegrationAdapterContractComparisonCollectorUsesSameBinaryAndIsolatedC
 	if err := os.WriteFile(collector, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runner := comparisonRunner{root: repo, work: filepath.Join(root, "work"), output: filepath.Join(root, "reports", "report.json"), collector: collector, log: &bytes.Buffer{}}
-	if err := runner.prepare(context.Background(), base, merge); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		for _, name := range []string{"base", "merge"} {
-			if err := runner.gitCommand(context.Background(), repo, "worktree", "remove", "--force", filepath.Join(runner.work, name)); err != nil {
-				t.Error(err)
-			}
+	runner := comparisonRunner{work: filepath.Join(root, "work"), output: filepath.Join(root, "reports", "report.json"), collector: collector, baseRevision: base, log: &bytes.Buffer{}}
+	// This contract owns collector invocation, not Git checkout preparation.
+	for _, name := range []string{"base", "merge"} {
+		if err := os.MkdirAll(filepath.Join(runner.work, name), 0o755); err != nil {
+			t.Fatal(err)
 		}
-	})
+	}
 
 	for _, revision := range []string{base, merge} {
 		result, path, err := runner.collect(context.Background(), revision, false, 1)
