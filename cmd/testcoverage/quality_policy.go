@@ -27,14 +27,13 @@ type localCoverageSettings struct {
 }
 
 type timingBoundSettings struct {
-	RelativeHeadroom        float64 `yaml:"relative_headroom"`
-	AbsoluteHeadroomSeconds float64 `yaml:"absolute_headroom_seconds"`
+	RelativeHeadroom        float64 `yaml:"relative_headroom" json:"relative_headroom"`
+	AbsoluteHeadroomSeconds float64 `yaml:"absolute_headroom_seconds" json:"absolute_headroom_seconds"`
 }
 
 type localTimingSettings struct {
-	UpdateSamples int                 `yaml:"update_samples"`
-	Suite         timingBoundSettings `yaml:"suite"`
-	Package       timingBoundSettings `yaml:"package"`
+	Suite   timingBoundSettings `yaml:"suite" json:"suite"`
+	Package timingBoundSettings `yaml:"package" json:"package"`
 }
 
 type coverageBounds struct {
@@ -42,21 +41,16 @@ type coverageBounds struct {
 	Packages     map[string]float64 `yaml:"packages"`
 }
 
-type timingBounds struct {
-	CeilingSeconds float64            `yaml:"ceiling_seconds"`
-	Packages       map[string]float64 `yaml:"packages"`
-}
-
 type laneQualityPolicy struct {
 	Coverage coverageBounds `yaml:"coverage"`
-	Timing   timingBounds   `yaml:"timing"`
 }
 
 type localQualityPolicy struct {
-	Version  int                          `yaml:"version"`
-	Coverage localCoverageSettings        `yaml:"coverage"`
-	Timing   localTimingSettings          `yaml:"timing"`
-	Lanes    map[string]laneQualityPolicy `yaml:"lanes"`
+	Version       int                          `yaml:"version"`
+	Coverage      localCoverageSettings        `yaml:"coverage"`
+	UpdateSamples int                          `yaml:"coverage_update_samples"`
+	Timing        localTimingSettings          `yaml:"timing"`
+	Lanes         map[string]laneQualityPolicy `yaml:"lanes"`
 }
 
 func loadQualityPolicy(name string) (localQualityPolicy, error) {
@@ -93,8 +87,8 @@ func validateQualityPolicy(policy localQualityPolicy) error {
 	if err := validateCoverageSettings("package", policy.Coverage.Package); err != nil {
 		return err
 	}
-	if policy.Timing.UpdateSamples < 1 {
-		return errors.New("timing update_samples must be at least 1")
+	if policy.UpdateSamples != 5 {
+		return errors.New("coverage_update_samples must be exactly 5")
 	}
 	if err := validateTimingSettings("suite", policy.Timing.Suite); err != nil {
 		return err
@@ -117,15 +111,6 @@ func validateQualityPolicy(policy localQualityPolicy) error {
 			return fmt.Errorf("%s lane coverage packages must be a mapping", name)
 		}
 		if err := validateCoverageFloors(name, lane.Coverage.Packages); err != nil {
-			return err
-		}
-		if !finitePositive(lane.Timing.CeilingSeconds) {
-			return fmt.Errorf("%s lane timing ceiling must be finite and positive", name)
-		}
-		if lane.Timing.Packages == nil {
-			return fmt.Errorf("%s lane timing packages must be a mapping", name)
-		}
-		if err := validateTimingCeilings(name, lane.Timing.Packages); err != nil {
 			return err
 		}
 	}
@@ -158,15 +143,6 @@ func validateCoverageFloors(lane string, floors map[string]float64) error {
 	for name, floor := range floors {
 		if name == "" || !validPercentage(floor) {
 			return fmt.Errorf("%s lane has invalid coverage floor for package %q", lane, name)
-		}
-	}
-	return nil
-}
-
-func validateTimingCeilings(lane string, ceilings map[string]float64) error {
-	for name, ceiling := range ceilings {
-		if name == "" || !finitePositive(ceiling) {
-			return fmt.Errorf("%s lane has invalid timing ceiling for package %q", lane, name)
 		}
 	}
 	return nil
@@ -229,7 +205,7 @@ func writeQualityPolicy(name string, policy localQualityPolicy) error {
 }
 
 func assessQualityPolicy(policy localQualityPolicy, report qualityReport) decision {
-	var coverageViolations, timingViolations, updates, warnings []finding
+	var coverageViolations, updates []finding
 	for _, laneName := range laneNames {
 		bounds := policy.Lanes[laneName]
 		lane := report.Lanes[laneName]
@@ -252,41 +228,14 @@ func assessQualityPolicy(policy localQualityPolicy, report qualityReport) decisi
 			)
 		}
 
-		suiteSeconds := laneSelectedTestSeconds(lane)
-		timingViolations, warnings = assessTimingBound(
-			timingViolations, warnings, laneName, "suite", "",
-			bounds.Timing.CeilingSeconds, suiteSeconds, policy.Timing.Suite,
-		)
-		measuredTimings := timingMap(lane.Timings)
-		for _, packageName := range sortedUnionKeys(bounds.Timing.Packages, measuredTimings) {
-			ceiling, hasCeiling := bounds.Timing.Packages[packageName]
-			measured, hasMeasurement := measuredTimings[packageName]
-			if !hasCeiling || !hasMeasurement {
-				updates = append(updates, structureFinding("timing_package", laneName, packageName, hasMeasurement))
-				continue
-			}
-			timingViolations, warnings = assessTimingBound(
-				timingViolations, warnings, laneName, "package", packageName,
-				ceiling, measured, policy.Timing.Package,
-			)
-		}
 	}
 	switch {
 	case len(coverageViolations) > 0:
-		findings := make([]finding, 0, len(coverageViolations)+len(timingViolations)+len(updates))
-		findings = append(findings, coverageViolations...)
-		findings = append(findings, timingViolations...)
-		findings = append(findings, updates...)
-		return decision{Status: statusRegression, Findings: findings, Warnings: warnings}
-	case len(timingViolations) > 0:
-		findings := make([]finding, 0, len(timingViolations)+len(updates))
-		findings = append(findings, timingViolations...)
-		findings = append(findings, updates...)
-		return decision{Status: statusTimingFailed, Findings: findings, Warnings: warnings}
+		return decision{Status: statusRegression, Findings: append(coverageViolations, updates...)}
 	case len(updates) > 0:
-		return decision{Status: statusPolicyUpdateRequired, Findings: updates, Warnings: warnings}
+		return decision{Status: statusPolicyUpdateRequired, Findings: updates}
 	default:
-		return decision{Status: statusPass, Warnings: warnings}
+		return decision{Status: statusPass}
 	}
 }
 
@@ -305,25 +254,6 @@ func assessCoverageBound(violations, updates []finding, lane, scope, name string
 		updates = append(updates, item)
 	}
 	return violations, updates
-}
-
-func assessTimingBound(violations, warnings []finding, lane, scope, name string, ceiling, measured float64, settings timingBoundSettings) ([]finding, []finding) {
-	proposed := timingCeiling(measured, settings)
-	item := finding{
-		Kind: "timing_policy", Lane: lane, Scope: scope, Name: name, Prior: ceiling,
-		Current: measured, Threshold: timingHeadroom(timingReference(ceiling, settings), settings),
-		BudgetSeconds: ceiling, Proposed: proposed,
-	}
-	if measured > ceiling {
-		item.OverageSeconds = measured - ceiling
-		item.Message = "timing exceeds its policy ceiling; run make quality-policy-update if the regression is intentional"
-		return append(violations, item), warnings
-	}
-	if timingBoundBelowRefreshFloor(ceiling, measured, settings) {
-		item.Message = "timing moved below its refresh floor; run make quality-policy-update"
-		warnings = append(warnings, item)
-	}
-	return violations, warnings
 }
 
 func structureFinding(kind, lane, packageName string, added bool) finding {
@@ -347,30 +277,6 @@ func timingCeiling(measured float64, settings timingBoundSettings) float64 {
 
 func timingHeadroom(measured float64, settings timingBoundSettings) float64 {
 	return math.Max(measured*settings.RelativeHeadroom, settings.AbsoluteHeadroomSeconds)
-}
-
-func timingReference(ceiling float64, settings timingBoundSettings) float64 {
-	if settings.RelativeHeadroom == 0 {
-		return math.Max(0, ceiling-settings.AbsoluteHeadroomSeconds)
-	}
-	crossover := settings.AbsoluteHeadroomSeconds / settings.RelativeHeadroom
-	if ceiling >= crossover+settings.AbsoluteHeadroomSeconds {
-		return ceiling / (1 + settings.RelativeHeadroom)
-	}
-	return math.Max(0, ceiling-settings.AbsoluteHeadroomSeconds)
-}
-
-func timingBoundBelowRefreshFloor(ceiling, measured float64, settings timingBoundSettings) bool {
-	reference := timingReference(ceiling, settings)
-	return reference-measured >= timingHeadroom(reference, settings)
-}
-
-func timingBoundNeedsUpdate(ceiling, measured float64, settings timingBoundSettings) bool {
-	if measured > ceiling {
-		return true
-	}
-	reference := timingReference(ceiling, settings)
-	return math.Abs(measured-reference) >= timingHeadroom(reference, settings)
 }
 
 func roundPolicyValue(value float64) float64 {
@@ -408,13 +314,6 @@ func updatedQualityPolicy(policy localQualityPolicy, report qualityReport) (loca
 			lanePolicy.Coverage.Packages, measuredCoverage, policy.Coverage.Package, changes, laneName,
 		)
 
-		lanePolicy.Timing.CeilingSeconds, changes = updateTimingBound(
-			lanePolicy.Timing.CeilingSeconds, laneSelectedTestSeconds(lane), policy.Timing.Suite,
-			changes, laneName, "suite", "",
-		)
-		lanePolicy.Timing.Packages, changes = updateTimingPackages(
-			lanePolicy.Timing.Packages, timingMap(lane.Timings), policy.Timing.Package, changes, laneName,
-		)
 		updated.Lanes[laneName] = lanePolicy
 	}
 	return updated, changes
@@ -425,7 +324,6 @@ func cloneQualityPolicy(policy localQualityPolicy) localQualityPolicy {
 	result.Lanes = make(map[string]laneQualityPolicy, len(policy.Lanes))
 	for name, lane := range policy.Lanes {
 		lane.Coverage.Packages = cloneFloatMap(lane.Coverage.Packages)
-		lane.Timing.Packages = cloneFloatMap(lane.Timing.Packages)
 		result.Lanes[name] = lane
 	}
 	return result
@@ -469,36 +367,6 @@ func updateCoveragePackages(current, measured map[string]float64, settings cover
 	return result, changes
 }
 
-func updateTimingBound(current, measured float64, settings timingBoundSettings, changes []finding, lane, scope, name string) (float64, []finding) {
-	if !timingBoundNeedsUpdate(current, measured, settings) {
-		return current, changes
-	}
-	proposed := timingCeiling(measured, settings)
-	changes = append(changes, changedBoundFinding("timing_policy", lane, scope, name, current, proposed, measured))
-	return proposed, changes
-}
-
-func updateTimingPackages(current, measured map[string]float64, settings timingBoundSettings, changes []finding, lane string) (map[string]float64, []finding) {
-	result := make(map[string]float64, len(measured))
-	for _, name := range sortedKeys(measured) {
-		value := measured[name]
-		prior, found := current[name]
-		if !found {
-			proposed := timingCeiling(value, settings)
-			result[name] = proposed
-			changes = append(changes, addedBoundFinding("timing_policy", lane, name, proposed, value))
-			continue
-		}
-		result[name], changes = updateTimingBound(prior, value, settings, changes, lane, "package", name)
-	}
-	for _, name := range sortedKeys(current) {
-		if _, found := measured[name]; !found {
-			changes = append(changes, removedBoundFinding("timing_policy", lane, name, current[name]))
-		}
-	}
-	return result, changes
-}
-
 func changedBoundFinding(kind, lane, scope, name string, prior, proposed, measured float64) finding {
 	return finding{Kind: kind, Lane: lane, Scope: scope, Name: name, Prior: prior, Current: measured, Proposed: proposed, Message: "updated accepted bound"}
 }
@@ -521,8 +389,8 @@ func sortedKeys[T any](values map[string]T) []string {
 }
 
 func applyQualityPolicyUpdate(name string, policy localQualityPolicy, samples []qualityReport) (qualityReport, []finding, error) {
-	if len(samples) != policy.Timing.UpdateSamples {
-		return qualityReport{}, nil, fmt.Errorf("quality policy update requires %d samples, got %d", policy.Timing.UpdateSamples, len(samples))
+	if len(samples) != policy.UpdateSamples {
+		return qualityReport{}, nil, fmt.Errorf("quality policy update requires %d samples, got %d", policy.UpdateSamples, len(samples))
 	}
 	representative, err := aggregatePolicySamples(samples)
 	if err != nil {
@@ -587,6 +455,9 @@ func aggregatePolicySamples(samples []qualityReport) (qualityReport, error) {
 func comparableLane(reference, candidate laneReport) error {
 	if !reflect.DeepEqual(recordedCommand(reference.Command), recordedCommand(candidate.Command)) {
 		return errors.New("test command changed")
+	}
+	if !reflect.DeepEqual(reference.PackageTestCounts, candidate.PackageTestCounts) {
+		return errors.New("per-package test-event counts changed")
 	}
 	if reference.TestCount != candidate.TestCount {
 		return fmt.Errorf("test-event count changed from %d to %d", reference.TestCount, candidate.TestCount)

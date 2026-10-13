@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"slices"
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/logging"
@@ -360,11 +361,18 @@ func runGitCommand(ctx context.Context, logger *slog.Logger, dir string, operati
 	return output, err
 }
 
-type systemCommandRunner struct{}
+// NewCommandRunner constructs the concrete Git process adapter. A nil environment
+// inherits the caller's environment; an explicit one isolates tooling checkouts.
+func NewCommandRunner(environment []string) CommandRunner {
+	return systemCommandRunner{environment: slices.Clone(environment)}
+}
 
-func (systemCommandRunner) Run(ctx context.Context, command Command) (CommandResult, error) {
+type systemCommandRunner struct{ environment []string }
+
+func (runner systemCommandRunner) Run(ctx context.Context, command Command) (CommandResult, error) {
 	process := exec.CommandContext(ctx, "git", command.Args...)
 	process.Dir = command.Directory
+	process.Env = runner.environment
 	process.Stdin = strings.NewReader(command.Input)
 
 	var stdout bytes.Buffer

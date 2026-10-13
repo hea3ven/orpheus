@@ -4,9 +4,12 @@ import "sort"
 
 const (
 	statusPass                 = "pass"
+	statusNotEvaluated         = "not_evaluated"
+	statusUnevaluated          = "unevaluated"
 	statusPolicyUpdateRequired = "policy_update_required"
 	statusRegression           = "coverage_regression"
 	statusTimingFailed         = "timing_budget_exceeded"
+	statusExecutionFailed      = "execution_failure"
 	statusTestFailed           = "test_failed"
 )
 
@@ -35,6 +38,11 @@ type qualityReport struct {
 	Complete           bool                  `json:"complete"`
 	MeasurementSamples int                   `json:"measurement_samples,omitempty"`
 	Lanes              map[string]laneReport `json:"lanes"`
+	Execution          decision              `json:"execution"`
+	CoverageDecision   decision              `json:"coverage_decision"`
+	Timing             decision              `json:"timing"`
+	Metadata           *measurementMetadata  `json:"metadata,omitempty"`
+	Comparison         *comparisonEvidence   `json:"comparison,omitempty"`
 	Decision           decision              `json:"decision"`
 	Scenarios          []scenarioResult      `json:"scenarios,omitempty"`
 }

@@ -1,4 +1,4 @@
-// Command testcoverage runs the classified test lanes once and evaluates quality budgets.
+// Command testcoverage runs the classified test lanes and evaluates coverage and same-runner timing.
 package main
 
 import (
@@ -15,12 +15,15 @@ import (
 const reportSchemaVersion = 1
 
 type options struct {
-	policy         string
-	output         string
-	updatePolicy   bool
-	auditScenarios bool
-	auditPackages  stringListFlag
-	auditRun       string
+	policy          string
+	output          string
+	updatePolicy    bool
+	auditScenarios  bool
+	auditPackages   stringListFlag
+	auditRun        string
+	compareBase     string
+	compareMerge    string
+	measureRevision string
 }
 
 func (opts options) auditSelection() scenarioSelection {
@@ -67,18 +70,31 @@ func parseOptions(args []string) (options, error) {
 	flags.SetOutput(os.Stderr)
 	flags.StringVar(&opts.policy, "policy", ".quality.yml", "reviewed local quality policy")
 	flags.StringVar(&opts.output, "output", "artifacts/test-coverage/report.json", "machine-readable quality report path")
-	flags.BoolVar(&opts.updatePolicy, "update-policy", false, "update materially stale policy bounds from repeated measurements")
+	flags.BoolVar(&opts.updatePolicy, "update-policy", false, "update materially stale coverage floors from five measurements")
 	flags.BoolVar(&opts.auditScenarios, "audit-scenarios", false, "profile integration scenarios separately (expensive)")
 	flags.Var(&opts.auditPackages, "audit-package", "package pattern to audit; repeat to select more than one (default ./...)")
 	flags.StringVar(&opts.auditRun, "audit-run", "", "integration test-name regular expression to audit (default ^TestIntegration)")
+	flags.StringVar(&opts.compareBase, "compare-base", "", "exact pull-request base commit")
+	flags.StringVar(&opts.compareMerge, "compare-merge", "", "exact tested synthetic merge commit")
+	flags.StringVar(&opts.measureRevision, "measure-revision", "", "collect without policy; verify this exact checkout identity")
 	if err := flags.Parse(args); err != nil {
 		return options{}, err
 	}
 	if flags.NArg() != 0 {
 		return options{}, errors.New("testcoverage does not accept positional arguments")
 	}
-	if opts.updatePolicy && opts.auditScenarios {
-		return options{}, errors.New("update-policy and audit-scenarios cannot be combined")
+	flagsCompare := opts.compareBase != "" || opts.compareMerge != ""
+	if flagsCompare && (opts.compareBase == "" || opts.compareMerge == "") {
+		return options{}, errors.New("compare-base and compare-merge are both required")
+	}
+	modes := 0
+	for _, enabled := range []bool{opts.updatePolicy, opts.auditScenarios, flagsCompare, opts.measureRevision != ""} {
+		if enabled {
+			modes++
+		}
+	}
+	if modes > 1 {
+		return options{}, errors.New("quality modes cannot be combined")
 	}
 	if !opts.auditScenarios && (len(opts.auditPackages) > 0 || opts.auditRun != "") {
 		return options{}, errors.New("audit-package and audit-run require audit-scenarios")
@@ -87,6 +103,12 @@ func parseOptions(args []string) (options, error) {
 }
 
 func execute(opts options) error {
+	if opts.measureRevision != "" {
+		return executeMeasurement(opts)
+	}
+	if opts.compareBase != "" {
+		return executeComparison(opts)
+	}
 	policy, err := loadQualityPolicy(opts.policy)
 	if err != nil {
 		return fmt.Errorf("read quality policy %s: %w", opts.policy, err)
@@ -107,11 +129,15 @@ func execute(opts options) error {
 	}
 	result, laneErrors := collectQuality(work, audit)
 	result.MeasurementSamples = 1
+	result.Timing = decision{Status: statusNotEvaluated}
+	result.Execution = decision{Status: statusPass}
 	if len(laneErrors) > 0 {
-		result.Decision = decision{Status: statusTestFailed, Findings: errorFindings(laneErrors)}
+		result.Execution = decision{Status: statusTestFailed, Findings: errorFindings(laneErrors)}
+		result.Decision = result.Execution
 		return finishReport(opts.output, result, errors.Join(laneErrors...))
 	}
-	result.Decision = assessQualityPolicy(policy, result)
+	result.CoverageDecision = assessQualityPolicy(policy, result)
+	result.Decision = result.CoverageDecision
 	if result.Decision.Status == statusPass {
 		return finishReport(opts.output, result, nil)
 	}
@@ -119,9 +145,9 @@ func execute(opts options) error {
 }
 
 func executePolicyUpdate(opts options, policy localQualityPolicy, work string) error {
-	samples := make([]qualityReport, 0, policy.Timing.UpdateSamples)
-	for index := 0; index < policy.Timing.UpdateSamples; index++ {
-		fmt.Printf("Collecting quality policy sample %d/%d.\n", index+1, policy.Timing.UpdateSamples)
+	samples := make([]qualityReport, 0, policy.UpdateSamples)
+	for index := 0; index < policy.UpdateSamples; index++ {
+		fmt.Printf("Collecting quality policy sample %d/%d.\n", index+1, policy.UpdateSamples)
 		result, laneErrors := collectQuality(filepath.Join(work, fmt.Sprintf("sample-%d", index+1)), nil)
 		result.MeasurementSamples = index + 1
 		if len(laneErrors) > 0 {
@@ -136,10 +162,14 @@ func executePolicyUpdate(opts options, policy localQualityPolicy, work string) e
 			representative = samples[len(samples)-1]
 			representative.Complete = false
 		}
-		representative.Decision = decision{Status: statusTestFailed, Findings: []finding{{Kind: "measurement", Message: err.Error()}}}
+		representative.Execution = decision{Status: statusExecutionFailed}
+		representative.Decision = decision{Status: statusExecutionFailed, Findings: []finding{{Kind: "measurement", Message: err.Error()}}}
 		return finishReport(opts.output, representative, fmt.Errorf("update quality policy: %w", err))
 	}
-	representative.Decision = decision{Status: statusPass, Findings: changes}
+	representative.Timing = decision{Status: statusNotEvaluated}
+	representative.Execution = decision{Status: statusPass}
+	representative.CoverageDecision = decision{Status: statusPass, Findings: changes}
+	representative.Decision = representative.CoverageDecision
 	if err := writeQualityReport(opts.output, representative); err != nil {
 		return err
 	}
@@ -153,7 +183,7 @@ func executePolicyUpdate(opts options, policy localQualityPolicy, work string) e
 }
 
 func collectQuality(work string, audit *scenarioSelection) (qualityReport, []error) {
-	result := qualityReport{SchemaVersion: reportSchemaVersion, Lanes: make(map[string]laneReport, 2)}
+	result := qualityReport{SchemaVersion: reportSchemaVersion, Lanes: make(map[string]laneReport, 2), Execution: decision{Status: statusNotEvaluated}, CoverageDecision: decision{Status: statusNotEvaluated}, Timing: decision{Status: statusNotEvaluated}}
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return result, []error{fmt.Errorf("create measurement directory: %w", err)}
 	}
@@ -170,6 +200,10 @@ func collectQuality(work string, audit *scenarioSelection) (qualityReport, []err
 		}
 	}
 	result.Complete = len(laneErrors) == 0
+	result.Execution = decision{Status: statusPass}
+	if !result.Complete {
+		result.Execution = decision{Status: statusTestFailed, Findings: errorFindings(laneErrors)}
+	}
 	if result.Complete && audit != nil {
 		scenarios, err := auditIntegrationScenarios(work, detailed["integration"], *audit)
 		if err != nil {
