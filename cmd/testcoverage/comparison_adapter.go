@@ -8,29 +8,34 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	gitadapter "github.com/hea3ven/orpheus/internal/git"
 )
 
 type comparisonRunner struct {
-	root         string
-	work         string
-	output       string
-	collector    string
-	baseRevision string
-	log          io.Writer
+	root               string
+	work               string
+	output             string
+	collector          string
+	checkoutRepository string
+	log                io.Writer
 }
 
 func executeComparison(opts options) (resultErr error) {
-	output, err := filepath.Abs(opts.output)
+	output, err := comparisonOutput(opts)
 	if err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(output), 0o755); err != nil {
 		return err
+	}
+	if opts.compareWorktree {
+		fmt.Printf("Local timing evidence: %s\n", filepath.Dir(output))
 	}
 	initial := qualityReport{SchemaVersion: reportSchemaVersion, Execution: decision{Status: statusUnevaluated}, CoverageDecision: decision{Status: statusUnevaluated}, Timing: decision{Status: statusUnevaluated}, Comparison: &comparisonEvidence{BaseRevision: opts.compareBase, MergeRevision: opts.compareMerge}}
 	// Write a blocking report before setup so setup failure cannot look like pass.
@@ -44,44 +49,76 @@ func executeComparison(opts options) (resultErr error) {
 			resultErr = finishReport(output, initial, resultErr)
 		}
 	}()
-	policy, err := loadQualityPolicy(opts.policy)
-	if err != nil {
-		return err
-	}
 	runner, cleanup, err := newComparisonRunner(output)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-	ctx, cancel := context.WithTimeout(context.Background(), 16*time.Minute)
+	deadline, stop := context.WithTimeout(context.Background(), 16*time.Minute)
+	defer stop()
+	ctx, cancel := signal.NotifyContext(deadline, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	if err := runner.prepare(ctx, opts.compareBase, opts.compareMerge); err != nil {
+	if err := runner.prepareComparison(ctx, opts, initial.Comparison); err != nil {
 		return err
 	}
-	result, err := compareRevisions(policy, opts.compareBase, opts.compareMerge, func(revision string, warmup bool, index int) (qualityReport, string, error) {
-		return runner.collect(ctx, revision, warmup, index)
-	}, func(progress qualityReport) error { return writeQualityReport(output, progress) })
+	policyPath := opts.policy
+	if opts.compareWorktree {
+		policyPath = filepath.Join(runner.work, "merge", ".quality.yml")
+	}
+	policy, err := loadQualityPolicy(policyPath)
+	if err != nil {
+		return err
+	}
+	result, err := runner.compare(ctx, policy, initial.Comparison)
 	initial = result
 	return finishReport(output, result, err)
 }
 
-func newComparisonRunner(output string) (comparisonRunner, func(), error) {
+func (runner *comparisonRunner) prepareComparison(ctx context.Context, opts options, evidence *comparisonEvidence) error {
+	if !opts.compareWorktree {
+		return runner.prepare(ctx, opts.compareBase, opts.compareMerge)
+	}
+	snapshot, base, err := runner.prepareWorkingTree(ctx, opts.compareBase)
+	evidence.BaseRevision, evidence.MergeRevision = base, snapshot.Revision
+	evidence.Snapshot = &snapshot
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(filepath.Join(filepath.Dir(runner.output), "snapshot.json"), snapshot); err != nil {
+		return err
+	}
+	return runner.buildCollector(ctx)
+}
+
+func (runner comparisonRunner) compare(ctx context.Context, policy localQualityPolicy, evidence *comparisonEvidence) (qualityReport, error) {
+	annotate := func(result *qualityReport) { result.Comparison.Snapshot = evidence.Snapshot }
+	result, err := compareRevisions(policy, evidence.BaseRevision, evidence.MergeRevision, func(subject, revision string, warmup bool, index int) (qualityReport, string, error) {
+		return runner.collect(ctx, subject, revision, warmup, index)
+	}, func(progress qualityReport) error {
+		annotate(&progress)
+		return writeQualityReport(runner.output, progress)
+	})
+	annotate(&result)
+	return result, err
+}
+
+func newComparisonRunner(output string) (*comparisonRunner, func(), error) {
 	root, err := os.Getwd()
 	if err != nil {
-		return comparisonRunner{}, nil, err
+		return nil, nil, err
 	}
 	self, err := os.Executable()
 	if err != nil {
-		return comparisonRunner{}, nil, err
+		return nil, nil, err
 	}
 	work, err := os.MkdirTemp("", "orpheus-comparison-*")
 	if err != nil {
-		return comparisonRunner{}, nil, err
+		return nil, nil, err
 	}
 	log, err := os.Create(filepath.Join(filepath.Dir(output), "commands.log"))
 	if err != nil {
 		_ = os.RemoveAll(work)
-		return comparisonRunner{}, nil, err
+		return nil, nil, err
 	}
 	// Dolt's version probe otherwise queries for updates and emits a once-only
 	// warning, making unchanged tool metadata drift between captures.
@@ -89,13 +126,16 @@ func newComparisonRunner(output string) (comparisonRunner, func(), error) {
 	if err := writeJSON(doltConfig, map[string]string{"versioncheck.disabled": "true", "metrics.disabled": "true"}); err != nil {
 		_ = log.Close()
 		_ = os.RemoveAll(work)
-		return comparisonRunner{}, nil, err
+		return nil, nil, err
 	}
-	runner := comparisonRunner{root: root, work: work, output: output, collector: self, log: log}
+	runner := &comparisonRunner{root: root, work: work, output: output, collector: self, log: log}
 	cleanup := func() {
 		for _, name := range []string{"base", "merge"} {
+			if runner.checkoutRepository == "" {
+				break
+			}
 			// Cleanup is local only; never prune other worktrees or operator state.
-			_ = runner.gitCommand(context.Background(), root, "worktree", "remove", "--force", filepath.Join(work, name))
+			_ = runner.gitCommand(context.Background(), runner.checkoutRepository, "worktree", "remove", "--force", filepath.Join(work, name))
 		}
 		_ = log.Close()
 		_ = os.RemoveAll(work)
@@ -116,12 +156,16 @@ func (runner *comparisonRunner) prepare(ctx context.Context, base, merge string)
 	if len(identities) != 3 || identities[0] != merge || identities[1] != base {
 		return errors.New("tested commit is not a synthetic merge with the exact base as first parent")
 	}
+	return runner.prepareCheckouts(ctx, base, merge)
+}
+
+func (runner *comparisonRunner) prepareCheckouts(ctx context.Context, base, merge string) error {
+	runner.checkoutRepository = runner.root
 	for _, item := range []struct{ name, revision string }{{"base", base}, {"merge", merge}} {
 		if err := runner.gitCommand(ctx, runner.root, "worktree", "add", "--detach", filepath.Join(runner.work, item.name), item.revision); err != nil {
 			return err
 		}
 	}
-	runner.baseRevision = base
 	return nil
 }
 
@@ -131,9 +175,13 @@ func (runner comparisonRunner) gitCommand(ctx context.Context, dir string, args 
 }
 
 func (runner comparisonRunner) runGit(ctx context.Context, dir string, args ...string) (string, error) {
+	return runner.runGitInput(ctx, dir, "", args...)
+}
+
+func (runner comparisonRunner) runGitInput(ctx context.Context, dir, input string, args ...string) (string, error) {
 	adapter := gitadapter.NewCommandRunner(comparisonEnvironment(runner.work, "setup"))
 	_, _ = fmt.Fprintf(runner.log, "git %s\n", strings.Join(args, " "))
-	result, err := adapter.Run(ctx, gitadapter.Command{Directory: dir, Args: args})
+	result, err := adapter.Run(ctx, gitadapter.Command{Directory: dir, Args: args, Input: input})
 	_, _ = fmt.Fprint(runner.log, result.Stdout, result.Stderr)
 	if err != nil {
 		return result.Stdout, fmt.Errorf("git %s: %w: %s", args, err, result.Stderr)
@@ -141,11 +189,7 @@ func (runner comparisonRunner) runGit(ctx context.Context, dir string, args ...s
 	return result.Stdout, nil
 }
 
-func (runner comparisonRunner) collect(ctx context.Context, revision string, warmup bool, index int) (qualityReport, string, error) {
-	name := "merge"
-	if revision == runner.baseRevision {
-		name = "base"
-	}
+func (runner comparisonRunner) collect(ctx context.Context, name, revision string, warmup bool, index int) (qualityReport, string, error) {
 	label := fmt.Sprintf("sample-%d", index)
 	if warmup {
 		label = "warmup"
@@ -181,10 +225,18 @@ func comparisonEnvironment(work, name string) []string {
 		"HOME":                     filepath.Join(work, "home"), "DOLT_ROOT_PATH": filepath.Join(work, "home"),
 		"GOENV": "off", "GOWORK": "off",
 		"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.DevNull,
+		"GIT_AUTHOR_NAME": "Orpheus timing snapshot", "GIT_AUTHOR_EMAIL": "timing@example.invalid",
+		"GIT_COMMITTER_NAME": "Orpheus timing snapshot", "GIT_COMMITTER_EMAIL": "timing@example.invalid",
+		"GIT_AUTHOR_DATE": "2000-01-01T00:00:00Z", "GIT_COMMITTER_DATE": "2000-01-01T00:00:00Z",
+		"GIT_TERMINAL_PROMPT": "0",
 	}
 	result := make([]string, 0, len(os.Environ())+len(values))
-	for _, entry := range coverageEnvironment(os.Environ()) {
+	for _, entry := range gitRoutingEnvironment(coverageEnvironment(os.Environ())) {
 		key, _, _ := strings.Cut(entry, "=")
+		// Inherited configuration can enable operator hooks in private checkouts.
+		if key == "GIT_CONFIG" || strings.HasPrefix(key, "GIT_CONFIG_") {
+			continue
+		}
 		if _, replaced := values[key]; !replaced {
 			result = append(result, entry)
 		}

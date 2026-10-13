@@ -57,7 +57,7 @@ func renderReportSummary(output io.Writer, result qualityReport, reportPath stri
 		)
 	}
 
-	_, _ = fmt.Fprintln(output, "\nCommand wall time measures developer wait and is diagnostic only. Selected package work sums elapsed times for packages that ran tests, including overlapping packages; CI compares this work against the same-runner base; local timing is diagnostic only.")
+	_, _ = fmt.Fprintln(output, "\nCommand wall time measures developer wait and is diagnostic only. Selected package work sums elapsed times for packages that ran tests, including overlapping packages; explicit CI and local comparisons evaluate this work against the same-host base; routine local timing is diagnostic only.")
 
 	if len(result.Decision.Findings) > 0 {
 		heading := "Blocking issues"
@@ -90,7 +90,7 @@ func decisionPresentation(status string) (alert, title, description string) {
 	case statusExecutionFailed:
 		return "CAUTION", "Execution failed", "Inspect the retained command and measurement diagnostics."
 	case statusUnevaluated:
-		return "CAUTION", "Timing unevaluated", "Missing, failed, incomplete, or incompatible evidence blocks CI; no regression is claimed."
+		return "CAUTION", "Timing unevaluated", "Missing, failed, incomplete, or incompatible evidence blocks the comparison; no regression is claimed."
 	case statusTestFailed:
 		return "CAUTION", "Tests failed", "At least one test lane did not complete successfully."
 	default:
@@ -171,9 +171,16 @@ func renderComparisonSummary(output io.Writer, result qualityReport) {
 	if evidence == nil {
 		return
 	}
-	_, _ = fmt.Fprintf(output, "### Same-runner comparison\n\nBase: `%s`  \nSynthetic merge: `%s`  \nMeasured pairs: %d (one excluded warm-up per revision).\n\n", evidence.BaseRevision, evidence.MergeRevision, result.MeasurementSamples)
+	label := "Synthetic merge"
+	if evidence.Snapshot != nil {
+		label = "Working-tree snapshot"
+	}
+	_, _ = fmt.Fprintf(output, "### Same-runner comparison\n\nBase: `%s`  \n%s: `%s`  \nMeasured pairs: %d (one excluded warm-up per revision).\n\n", evidence.BaseRevision, label, evidence.MergeRevision, result.MeasurementSamples)
+	if snapshot := evidence.Snapshot; snapshot != nil {
+		_, _ = fmt.Fprintf(output, "Source HEAD: `%s`  \nRaw tree: `%s`  \nReproducible candidate bundle: `%s`\n\n", snapshot.HeadRevision, snapshot.Tree, markdownEscape(snapshot.Bundle))
+	}
 	renderSampleReferences(output, evidence.Samples)
-	_, _ = fmt.Fprintln(output, "| Lane/scope | Base median | Merge median | Ceiling |\n| --- | ---: | ---: | ---: |")
+	_, _ = fmt.Fprintln(output, "| Lane/scope | Base median | Candidate median | Ceiling |\n| --- | ---: | ---: | ---: |")
 	for _, name := range laneNames {
 		base, baseOK := evidence.BaseMedians[name]
 		merge, mergeOK := evidence.MergeMedians[name]
@@ -195,9 +202,9 @@ func renderComparisonSummary(output io.Writer, result qualityReport) {
 
 func renderSampleReferences(output io.Writer, samples []sampleReference) {
 	_, _ = fmt.Fprint(output, "<details>\n<summary>Collected sample evidence</summary>\n\n")
-	_, _ = fmt.Fprintln(output, "| Revision | Excluded warm-up | Report |\n| --- | --- | --- |")
+	_, _ = fmt.Fprintln(output, "| Subject | Revision | Excluded warm-up | Report |\n| --- | --- | --- | --- |")
 	for _, sample := range samples {
-		_, _ = fmt.Fprintf(output, "| `%s` | %t | `%s` |\n", sample.Revision, sample.Warmup, markdownEscape(sample.Path))
+		_, _ = fmt.Fprintf(output, "| %s | `%s` | %t | `%s` |\n", sample.Subject, sample.Revision, sample.Warmup, markdownEscape(sample.Path))
 	}
 	_, _ = fmt.Fprint(output, "\n</details>\n\n")
 }

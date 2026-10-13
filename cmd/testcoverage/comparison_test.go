@@ -40,7 +40,7 @@ func TestSameRunnerComparisonExcludesWarmupsAndBoundsConfirmation(t *testing.T) 
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var calls []string
-			collect := func(revision string, warmup bool, index int) (qualityReport, string, error) {
+			collect := func(_ string, revision string, warmup bool, index int) (qualityReport, string, error) {
 				calls = append(calls, fmt.Sprintf("%s/%t/%d", revision[:1], warmup, index))
 				seconds := 1.0
 				if warmup {
@@ -133,7 +133,7 @@ func TestConfirmationNeverErasesFirstCandidateCoverageFindings(t *testing.T) {
 		{name: "refresh required", covered: 505, want: statusPolicyUpdateRequired},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			collect := func(revision string, warmup bool, index int) (qualityReport, string, error) {
+			collect := func(_ string, revision string, warmup bool, index int) (qualityReport, string, error) {
 				seconds := 1.0
 				if revision == fixtureMerge && index == 1 {
 					seconds = 2
@@ -183,7 +183,7 @@ func TestMissingIncompatibleAndFailedEvidenceAbortWithoutSelectiveRetries(t *tes
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			calls := 0
-			collect := func(revision string, warmup bool, index int) (qualityReport, string, error) {
+			collect := func(_ string, revision string, warmup bool, index int) (qualityReport, string, error) {
 				calls++
 				sample := timingFixture(revision, 1)
 				if revision == fixtureMerge && index == 1 {
@@ -215,7 +215,7 @@ func TestMissingIncompatibleAndFailedEvidenceAbortWithoutSelectiveRetries(t *tes
 }
 
 func TestCrossRevisionCountsAndStructureMayChange(t *testing.T) {
-	collect := func(revision string, warmup bool, index int) (qualityReport, string, error) {
+	collect := func(_ string, revision string, warmup bool, index int) (qualityReport, string, error) {
 		sample := timingFixture(revision, 1)
 		if revision == fixtureMerge {
 			lane := sample.Lanes["unit"]
@@ -266,7 +266,7 @@ func TestIncompleteTestStreamsCannotBecomeSuccessfulMeasurements(t *testing.T) {
 
 func TestConfirmationPublishesCoverageBeforeFurtherMeasurements(t *testing.T) {
 	var progress []qualityReport
-	collect := func(revision string, warmup bool, index int) (qualityReport, string, error) {
+	collect := func(_ string, revision string, warmup bool, index int) (qualityReport, string, error) {
 		if index == 2 && len(progress) != 1 {
 			t.Fatal("first-pair evidence was not published before confirmation")
 		}
@@ -306,7 +306,7 @@ func TestCrossRevisionMeasurementConfigurationAndEnvironmentMustMatch(t *testing
 		},
 	} {
 		calls := 0
-		collect := func(revision string, warmup bool, index int) (qualityReport, string, error) {
+		collect := func(_ string, revision string, warmup bool, index int) (qualityReport, string, error) {
 			calls++
 			sample := timingFixture(revision, 1)
 			if revision == fixtureMerge {
@@ -324,7 +324,7 @@ func TestCrossRevisionMeasurementConfigurationAndEnvironmentMustMatch(t *testing
 }
 
 func TestFirstCompleteCandidateCoverageRemainsVisibleWhenTimingIsIncompatible(t *testing.T) {
-	collect := func(revision string, warmup bool, index int) (qualityReport, string, error) {
+	collect := func(_ string, revision string, warmup bool, index int) (qualityReport, string, error) {
 		sample := timingFixture(revision, 1)
 		if revision == fixtureMerge && index == 1 {
 			setLaneCoverage(sample, "unit", 1000, 494)
@@ -353,5 +353,47 @@ func TestEvidenceWriteFailureDrainsChildOutputWithoutAcceptingMeasurement(t *tes
 
 	if result.decodeErr == nil || input.Len() != 0 {
 		t.Fatalf("evidence write failure left child output undrained or was accepted: %v, %d unread bytes", result.decodeErr, input.Len())
+	}
+}
+
+func TestComparisonMeasuresIdenticalCommitIDsAsSeparateSubjects(t *testing.T) {
+	var calls []string
+	collect := func(subject, revision string, warmup bool, index int) (qualityReport, string, error) {
+		calls = append(calls, fmt.Sprintf("%s/%t/%d", subject, warmup, index))
+		return timingFixture(revision, 1), subject + ".json", nil
+	}
+
+	result, err := compareRevisions(testLocalQualityPolicy(), fixtureBase, fixtureBase, collect, nil)
+
+	if err != nil || result.Decision.Status != statusPass || result.MeasurementSamples != 1 {
+		t.Fatalf("identical source comparison = %#v, %v", result, err)
+	}
+	want := []string{"base/true/0", "merge/true/0", "base/false/1", "merge/false/1"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("subject collection order = %v, want %v", calls, want)
+	}
+	for index, reference := range result.Comparison.Samples {
+		if reference.Subject != []string{"base", "merge"}[index%2] || reference.Revision != fixtureBase {
+			t.Fatalf("identical revision lost its subject: %#v", reference)
+		}
+	}
+}
+
+func TestIdenticalCommitSubjectsStillRequireWithinRevisionStructure(t *testing.T) {
+	collect := func(subject, revision string, warmup bool, index int) (qualityReport, string, error) {
+		sample := timingFixture(revision, 1)
+		if subject == "merge" {
+			lane := sample.Lanes["unit"]
+			lane.TestCount++
+			lane.PackageTestCounts["example.test/pkg"]++
+			sample.Lanes["unit"] = lane
+		}
+		return sample, subject + ".json", nil
+	}
+
+	result, err := compareRevisions(testLocalQualityPolicy(), fixtureBase, fixtureBase, collect, nil)
+
+	if err == nil || result.Timing.Status != statusUnevaluated || result.Complete || len(result.Comparison.Samples) != 2 {
+		t.Fatalf("same revision accepted inconsistent structure: %#v, %v", result, err)
 	}
 }
