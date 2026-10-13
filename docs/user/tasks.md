@@ -92,6 +92,18 @@ Without `--repo`, selection uses active Orpheus repository context, then an
 unambiguous registered repository containing the current directory. Use `--help`
 for editing fields and dependency flags.
 
+Prerequisites can be tasks or epics in any registered repository. Add them with
+`--blocked-by` on creation or `task edit <id> --add-block <id>`. They remain
+unsatisfied until closed; filters such as `task list --repo` do not hide their
+effect on readiness. Missing, ambiguous, or unreadable references require
+attention and prevent initial task dispatch and epic activation. Cross-repository
+cycles are rejected before editing. Parents remain in the same repository.
+
+Use `task edit <id> --remove-block <id>` to repair an unavailable prerequisite,
+even after its repository is unregistered. Repeated additions and removals are
+safe. These edges belong to the consuming task source; native source commands do
+not enforce cross-repository readiness or show incoming cross-repository links.
+
 `orpheus task start <epic-id>` starts an eligible epic;
 `orpheus task close <epic-id>` closes an epic whose lifecycle checks pass.
 Task completion instead goes through review and publication. When working on the

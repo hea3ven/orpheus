@@ -27,7 +27,7 @@ func loadTaskContextFromInvocation(deps *invocationDependencies) (taskContext, e
 
 // loadTaskListContextFromInvocation resolves an optional repository filter
 // before projecting task sources, so excluded repositories never reach the
-// aggregator or its backend factory.
+// inventory. Referenced repositories remain available for targeted reads.
 func loadTaskListContextFromInvocation(deps *invocationDependencies, repository string) (taskContext, error) {
 	registryCtx, err := loadRegistryContextFromInvocation(deps)
 	if err != nil {
@@ -49,7 +49,16 @@ func loadTaskListContextFromInvocation(deps *invocationDependencies, repository 
 	if err != nil {
 		return taskContext{}, err
 	}
-	return newTaskContext(deps, registryCtx, []taskmodel.RepositorySource{source})
+	ctx, err := newTaskContext(deps, registryCtx, []taskmodel.RepositorySource{source})
+	if err != nil {
+		return taskContext{}, err
+	}
+	allSources, err := registryCtx.Store.TaskRepositorySources(registryCtx.Registry)
+	if err != nil {
+		return taskContext{}, err
+	}
+	ctx.Aggregator = ctx.Aggregator.WithReferenceSources(allSources)
+	return ctx, nil
 }
 
 func newTaskContext(

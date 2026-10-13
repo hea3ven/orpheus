@@ -322,12 +322,14 @@ func taskEditLongHelp() string {
 		"Orpheus rejects edits when:\n" +
 		"  - The target item is closed\n" +
 		"  - A parent is not an active epic in the same repository\n" +
-		"  - A dependency is outside the repository\n" +
+		"  - An added dependency cannot be resolved in the registered repositories\n" +
 		"  - A dependency is not a task or epic\n" +
 		"  - The resulting graph contains a cycle\n" +
 		"  - The same dependency is requested for both addition and removal\n\n" +
 		"Retry-safe no-ops such as adding an existing dependency, removing an absent\n" +
-		"dependency, or setting the existing parent succeed without duplicating relationships."
+		"dependency, or setting the existing parent succeed without duplicating relationships.\n" +
+		"Dependencies may belong to other registered repositories. Removal does not require\n" +
+		"the referenced repository to remain available."
 }
 
 func addTaskEditFlags(cmd *cobra.Command,

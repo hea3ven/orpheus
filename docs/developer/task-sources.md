@@ -12,6 +12,22 @@ Registration persists `task_source`. New records default to `gig` with
 for existing records. This fallback does not rewrite task data. Source switching
 and task-data migration are not supported.
 
+## Cross-repository dependencies
+
+Shared services resolve prerequisite IDs against all registered prefixes, reject
+ambiguous ownership, and traverse the owning sources before adding graph edges.
+Cross-repository references are stored on the consumer under
+`orpheus.cross_repository_blocks` in task-source metadata. Beads and gig expose
+these IDs alongside native blocking edges. No proxy items or execution-state
+relationship records are created. Existing source data needs no migration.
+
+Views read prerequisite lifecycle facts from their owning source, never from a
+consumer-supplied related row. Repository and content filters select output only;
+referenced context remains available without listing excluded repositories.
+Only closed prerequisites satisfy readiness. Removal uses the consumer's stored
+IDs and does not require access to the owner. Native dependents remain local;
+there is no cross-repository reverse index or source-native automatic unblocking.
+
 ## Embedded gig
 
 The production module pins the unmodified `github.com/NeerajG03/gig` v0.7.0 SDK

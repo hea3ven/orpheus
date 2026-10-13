@@ -150,7 +150,7 @@ func TestCreateServiceRejectsInvalidRelationsBeforeCreate(t *testing.T) {
 		{"non epic parent", map[string]task.Task{"op-parent": {IssueType: task.IssueTypeTask, Status: task.StatusOpen}}, task.CreateRequest{ParentID: "op-parent"}, "must be an epic"},
 		{"missing parent", nil, task.CreateRequest{ParentID: "op-parent"}, "was not found"},
 		{"unsupported dependency", map[string]task.Task{"op-bug": {IssueType: task.IssueTypeBug}}, task.CreateRequest{BlockingIDs: []string{"op-bug"}}, "must be a task or epic"},
-		{"cross repository dependency", nil, task.CreateRequest{BlockingIDs: []string{"be-1"}}, "belongs to repository beta"},
+		{"missing cross repository dependency", nil, task.CreateRequest{BlockingIDs: []string{"be-1"}}, "was not found in repository beta"},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -169,7 +169,7 @@ func TestCreateServiceRejectsInvalidRelationsBeforeCreate(t *testing.T) {
 	}
 }
 
-func TestCreateServiceAcceptsOverlappingPrefixRelationsRegardlessOfSourceOrder(t *testing.T) {
+func TestCreateServiceRejectsAmbiguousDependenciesRegardlessOfSourceOrder(t *testing.T) {
 	for _, relation := range []struct {
 		name    string
 		request task.CreateRequest
@@ -206,8 +206,16 @@ func TestCreateServiceAcceptsOverlappingPrefixRelationsRegardlessOfSourceOrder(t
 				request := relation.request
 				request.Title, request.Description, request.AcceptanceCriteria = "title", "description", "acceptance"
 
-				if _, err := service.Create(context.Background(), long, request); err != nil {
-					t.Fatalf("Create() error = %v", err)
+				_, err := service.Create(context.Background(), long, request)
+				if relation.name == "blocking dependency" {
+					if !errors.Is(err, task.ErrAmbiguousTaskPrefix) {
+						t.Fatalf("Create() error = %v, want ambiguous prefix", err)
+					}
+					if backend.created.Title != "" {
+						t.Fatal("mutated before rejecting ambiguous dependency")
+					}
+				} else if err != nil {
+					t.Fatal(err)
 				}
 			})
 		}

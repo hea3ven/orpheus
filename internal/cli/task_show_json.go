@@ -48,7 +48,7 @@ func renderResolvedTaskJSON(command *cobra.Command, deps *invocationDependencies
 		return fmt.Errorf("task show %s: load local task-state for repo %s: %w", candidate.Task.ID, candidate.Repository.ID, err)
 	}
 	states := status.LocalTaskStateIndex{}
-	if hasState && status.LocalTaskStateCandidates(candidate.Repository, snapshot.Repositories[0].Tasks)[candidate.Task.ID] {
+	if hasState && status.LocalTaskStateCandidates(snapshot.Repositories[0])[candidate.Task.ID] {
 		states[status.RunStateKey(candidate.Repository.ID, candidate.Task.ID)] = localState
 	}
 	projection := status.ProjectWithLocalTaskStates(snapshot, states)

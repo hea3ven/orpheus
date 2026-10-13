@@ -21,13 +21,17 @@ func (b Backend) Create(ctx context.Context, opts task.CreateOptions) (task.Task
 		if err := validateParent(ctx, store, "", opts.ParentID); err != nil {
 			return err
 		}
-		for _, id := range opts.BlockingIDs {
+		for _, id := range task.LocalBlockingIDs(opts.BlockingIDs, opts.CrossRepositoryBlockingIDs) {
 			if _, err := readTask(ctx, store, id); err != nil {
 				return err
 			}
 		}
 		item := task.Task{Title: opts.Title, Description: opts.Description,
 			Design: opts.Design, AcceptanceCriteria: opts.AcceptanceCriteria, ExternalRef: opts.ExternalRef}
+		item.Metadata, err = task.EditCrossRepositoryBlocks(nil, opts.CrossRepositoryBlockingIDs, nil)
+		if err != nil {
+			return err
+		}
 		metadata, err := encodeMetadata(storedTask{item: item, metadata: make(map[string]json.RawMessage)})
 		if err != nil {
 			return err
@@ -42,7 +46,7 @@ func (b Backend) Create(ctx context.Context, opts task.CreateOptions) (task.Task
 			return err
 		}
 		created = task.Task{ID: native.ID}
-		for _, id := range opts.BlockingIDs {
+		for _, id := range task.LocalBlockingIDs(opts.BlockingIDs, opts.CrossRepositoryBlockingIDs) {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
@@ -79,6 +83,10 @@ func (b Backend) Update(ctx context.Context, opts task.UpdateOptions) (task.Task
 				return err
 			}
 		}
+		opts, err = prepareCrossRepositoryUpdate(stored, opts)
+		if err != nil {
+			return err
+		}
 		if err := preflightDependencies(ctx, store, opts); err != nil {
 			return err
 		}
@@ -113,6 +121,22 @@ func (b Backend) Update(ctx context.Context, opts task.UpdateOptions) (task.Task
 		return task.Task{}, err
 	}
 	return b.Get(ctx, opts.ID)
+}
+
+// prepareCrossRepositoryUpdate edits source metadata and leaves only native
+// relationships in the options passed to the SDK.
+func prepareCrossRepositoryUpdate(stored *storedTask, opts task.UpdateOptions) (task.UpdateOptions, error) {
+	ids, err := task.CrossRepositoryBlocks(stored.item.Metadata)
+	if err != nil {
+		return task.UpdateOptions{}, err
+	}
+	stored.item.Metadata, err = task.EditCrossRepositoryBlocks(stored.item.Metadata, opts.CrossRepositoryBlockingIDs, opts.RemoveBlockingIDs)
+	if err != nil {
+		return task.UpdateOptions{}, err
+	}
+	opts.AddBlockingIDs = task.LocalBlockingIDs(opts.AddBlockingIDs, opts.CrossRepositoryBlockingIDs)
+	opts.RemoveBlockingIDs = task.LocalBlockingIDs(opts.RemoveBlockingIDs, ids)
+	return opts, nil
 }
 
 func (b Backend) mutate(ctx context.Context, id string, change func(*sdk.Store, *storedTask) error) error {
