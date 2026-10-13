@@ -177,7 +177,8 @@ func (runner comparisonRunner) collect(ctx context.Context, revision string, war
 func comparisonEnvironment(work, name string) []string {
 	values := map[string]string{
 		"GOCACHE": filepath.Join(work, "cache-"+name), "GOMODCACHE": filepath.Join(work, "modules"),
-		"HOME": filepath.Join(work, "home"), "DOLT_ROOT_PATH": filepath.Join(work, "home"),
+		testBinaryCacheEnvironment: filepath.Join(work, "test-binaries-"+name),
+		"HOME":                     filepath.Join(work, "home"), "DOLT_ROOT_PATH": filepath.Join(work, "home"),
 		"GOENV": "off", "GOWORK": "off",
 		"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.DevNull,
 	}

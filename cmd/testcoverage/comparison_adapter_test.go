@@ -164,7 +164,7 @@ func TestIntegrationAdapterContractComparisonCollectorUsesSameBinaryAndIsolatedC
 	}
 	script := "#!/bin/sh\nset -eu\n" +
 		"test \"$1\" = -measure-revision\ntest \"$3\" = -output\n" +
-		"printf '%s\\n' \"$2\" \"$PWD\" \"$GOCACHE\" \"$GOMODCACHE\" \"$GOENV\" \"$GOWORK\" >\"$4.request\"\n" +
+		"printf '%s\\n' \"$2\" \"$PWD\" \"$GOCACHE\" \"$GOMODCACHE\" \"$GOENV\" \"$GOWORK\" \"$ORPHEUS_TEST_BINARY_CACHE\" >\"$4.request\"\n" +
 		"cat '" + seed + "' >\"$4\"\n"
 	if err := os.WriteFile(collector, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -190,7 +190,7 @@ func TestIntegrationAdapterContractComparisonCollectorUsesSameBinaryAndIsolatedC
 		if revision == base {
 			name = "base"
 		}
-		want := strings.Join([]string{revision, filepath.Join(runner.work, name), filepath.Join(runner.work, "cache-"+name), filepath.Join(runner.work, "modules"), "off", "off", ""}, "\n")
+		want := strings.Join([]string{revision, filepath.Join(runner.work, name), filepath.Join(runner.work, "cache-"+name), filepath.Join(runner.work, "modules"), "off", "off", filepath.Join(runner.work, "test-binaries-"+name), ""}, "\n")
 		if string(request) != want {
 			t.Fatalf("collector request = %q, want %q", request, want)
 		}

@@ -17,7 +17,10 @@ import (
 	gitadapter "github.com/hea3ven/orpheus/internal/git"
 )
 
-const cacheRegime = "isolated-empty-build-caches;shared-module-cache;one-full-warmup"
+const (
+	cacheRegime                = "isolated-empty-build-and-test-binary-caches;shared-module-cache;one-full-warmup"
+	testBinaryCacheEnvironment = "ORPHEUS_TEST_BINARY_CACHE"
+)
 
 var commitPattern = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 

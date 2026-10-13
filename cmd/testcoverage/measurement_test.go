@@ -26,6 +26,25 @@ func TestComparisonEnvironmentOverridesOperatorDoltRoot(t *testing.T) {
 	}
 }
 
+func TestComparisonEnvironmentIsolatesTestBinaryCachesByRevision(t *testing.T) {
+	t.Setenv(testBinaryCacheEnvironment, "/fixture/operator-cache")
+
+	for _, name := range []string{"base", "merge"} {
+		environment := comparisonEnvironment("/fixture/comparison", name)
+
+		var caches []string
+		for _, entry := range environment {
+			if cache, found := strings.CutPrefix(entry, testBinaryCacheEnvironment+"="); found {
+				caches = append(caches, cache)
+			}
+		}
+		want := []string{"/fixture/comparison/test-binaries-" + name}
+		if !reflect.DeepEqual(caches, want) {
+			t.Fatalf("%s test binary caches = %v, want %v", name, caches, want)
+		}
+	}
+}
+
 type identityRunner struct {
 	head   string
 	status string

@@ -185,8 +185,14 @@ each collection, and the synthetic merge's first parent must be the exact base.
 The historical base policy is never loaded for measurement or comparison.
 
 Both revisions use the same tools, selectors, coverage instrumentation,
-scheduling, and cache regime: fresh independent build caches, one shared module
-cache, and one excluded full warm-up per revision. The first measured pair runs
+scheduling, and cache regime: fresh independent Go build and fixture-binary
+caches, one shared module cache, and one excluded full warm-up per revision.
+The compiled cross-package fixture uses `ORPHEUS_TEST_BINARY_CACHE` only when
+supplied by the comparator; otherwise its binary remains test-owned temporary
+state. Go validates build inputs on every sample, while the revision-local
+output path avoids relinking unchanged inputs after warm-up. Each sample still
+executes the binary and checks a fresh coverage profile.
+The first measured pair runs
 base then merge. If any suite or common package exceeds its allowance, four
 additional pairs alternate order (merge/base, base/merge, merge/base,
 base/merge), and five-sample medians determine timing. Any failed measurement

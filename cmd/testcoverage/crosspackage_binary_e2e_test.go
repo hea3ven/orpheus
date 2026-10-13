@@ -19,6 +19,14 @@ func TestIntegrationBinaryE2ECrossPackageCoverageCreditsCollaborator(t *testing.
 	root := testutil.CanonicalTempDir(t)
 	profile := filepath.Join(root, "crosspackage.cover")
 	binary := filepath.Join(root, "consumer.test")
+	if cache := os.Getenv(testBinaryCacheEnvironment); cache != "" {
+		if err := os.MkdirAll(cache, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		binary = filepath.Join(cache, "crosspackage-consumer.test")
+	}
+	// Go revalidates the build inputs on every invocation. A stable output path
+	// avoids relinking unchanged inputs after the comparator's excluded warm-up.
 	// This contract owns compiler instrumentation and the resulting profile,
 	// not Go's test orchestration or a separate no-test collaborator binary.
 	build := exec.Command("go", "test", "-c", "-covermode=set", "-coverpkg=./...", "-o", binary, "./consumer")
