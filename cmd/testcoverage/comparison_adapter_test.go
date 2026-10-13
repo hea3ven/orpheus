@@ -55,6 +55,49 @@ func syntheticMergeFixture(t *testing.T) (string, string, string) {
 	return repo, base, merge
 }
 
+func TestIntegrationAdapterContractComparisonDoltVersionRemainsStableWithCachedUpdate(t *testing.T) {
+	if _, err := exec.LookPath("dolt"); err != nil {
+		t.Skip("Dolt is not installed")
+	}
+	t.Setenv("DOLT_ROOT_PATH", "")
+	output := filepath.Join(testutil.CanonicalTempDir(t), "report.json")
+	runner, cleanup, err := newComparisonRunner(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cleanup)
+	doltConfig := filepath.Join(runner.work, "home", ".dolt")
+	if err := os.MkdirAll(doltConfig, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh cached newer release reproduces the once-only update warning
+	// without allowing either version probe to query the network.
+	if err := os.WriteFile(filepath.Join(doltConfig, "version_check.txt"), []byte("999.0.0"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var versions [][]byte
+
+	for _, name := range []string{"base", "base", "merge"} {
+		cmd := exec.Command("dolt", "version")
+		cmd.Dir = runner.work
+		cmd.Env = comparisonEnvironment(runner.work, name)
+		version, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s Dolt version probe: %v\n%s", name, err, version)
+		}
+		versions = append(versions, version)
+	}
+
+	for _, version := range versions {
+		if !bytes.HasPrefix(version, []byte("dolt version ")) || bytes.Count(version, []byte("\n")) != 1 {
+			t.Fatalf("version metadata contains more than the installed version: %q", version)
+		}
+		if !bytes.Equal(version, versions[0]) {
+			t.Fatalf("Dolt version metadata changed: %q != %q", version, versions[0])
+		}
+	}
+}
+
 func TestIntegrationAdapterContractComparisonPreparesExactDetachedCheckouts(t *testing.T) {
 	repo, base, merge := syntheticMergeFixture(t)
 	work := filepath.Join(testutil.CanonicalTempDir(t), "work")

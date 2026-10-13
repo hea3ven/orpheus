@@ -83,7 +83,10 @@ func newComparisonRunner(output string) (comparisonRunner, func(), error) {
 		_ = os.RemoveAll(work)
 		return comparisonRunner{}, nil, err
 	}
-	if err := os.MkdirAll(filepath.Join(work, "home"), 0o755); err != nil {
+	// Dolt's version probe otherwise queries for updates and emits a once-only
+	// warning, making unchanged tool metadata drift between captures.
+	doltConfig := filepath.Join(work, "home", ".dolt", "config_global.json")
+	if err := writeJSON(doltConfig, map[string]string{"versioncheck.disabled": "true", "metrics.disabled": "true"}); err != nil {
 		_ = log.Close()
 		_ = os.RemoveAll(work)
 		return comparisonRunner{}, nil, err
@@ -174,7 +177,8 @@ func (runner comparisonRunner) collect(ctx context.Context, revision string, war
 func comparisonEnvironment(work, name string) []string {
 	values := map[string]string{
 		"GOCACHE": filepath.Join(work, "cache-"+name), "GOMODCACHE": filepath.Join(work, "modules"),
-		"HOME": filepath.Join(work, "home"), "GOENV": "off", "GOWORK": "off",
+		"HOME": filepath.Join(work, "home"), "DOLT_ROOT_PATH": filepath.Join(work, "home"),
+		"GOENV": "off", "GOWORK": "off",
 		"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.DevNull,
 	}
 	result := make([]string, 0, len(os.Environ())+len(values))

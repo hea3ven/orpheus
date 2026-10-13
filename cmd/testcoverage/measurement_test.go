@@ -4,10 +4,27 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	gitadapter "github.com/hea3ven/orpheus/internal/git"
 )
+
+func TestComparisonEnvironmentOverridesOperatorDoltRoot(t *testing.T) {
+	t.Setenv("DOLT_ROOT_PATH", "/fixture/operator-dolt-root")
+
+	environment := comparisonEnvironment("/fixture/comparison", "base")
+
+	var roots []string
+	for _, entry := range environment {
+		if root, found := strings.CutPrefix(entry, "DOLT_ROOT_PATH="); found {
+			roots = append(roots, root)
+		}
+	}
+	if !reflect.DeepEqual(roots, []string{"/fixture/comparison/home"}) {
+		t.Fatalf("Dolt roots = %v, want only the isolated comparison home", roots)
+	}
+}
 
 type identityRunner struct {
 	head   string
