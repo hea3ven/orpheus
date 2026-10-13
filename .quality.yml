@@ -20,7 +20,7 @@ lanes:
       floor_percent: 64.392
       packages:
         github.com/hea3ven/orpheus/cmd/orpheus: 0
-        github.com/hea3ven/orpheus/cmd/testcoverage: 4.701
+        github.com/hea3ven/orpheus/cmd/testcoverage: 7.008
         github.com/hea3ven/orpheus/internal/agent: 51.8
         github.com/hea3ven/orpheus/internal/agentexec: 80.456
         github.com/hea3ven/orpheus/internal/cli: 69.795

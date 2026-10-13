@@ -114,11 +114,21 @@ func captureMetadata(revision string) (measurementMetadata, error) {
 }
 
 func probeToolCommand(command []string) ([]byte, error) {
+	// Successful metadata comes from stdout only. Stderr may contain warnings
+	// about checkout paths, not tool identity; retain it when the probe fails.
 	if command[0] == "git" {
 		result, err := gitadapter.NewCommandRunner(nil).Run(context.Background(), gitadapter.Command{Args: command[1:]})
-		return []byte(result.Stdout + result.Stderr), err
+		if err != nil {
+			return []byte(result.Stdout + result.Stderr), err
+		}
+		return []byte(result.Stdout), nil
 	}
-	return exec.Command(command[0], command[1:]...).CombinedOutput()
+	output, err := exec.Command(command[0], command[1:]...).Output()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		output = append(output, exitErr.Stderr...)
+	}
+	return output, err
 }
 
 func fileDigest(path string) (string, error) {
