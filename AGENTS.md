@@ -81,3 +81,7 @@ cp -rf source dest          # NOT: cp -r source dest
 - `ssh` - use `-o BatchMode=yes` to fail instead of prompting
 - `apt-get` - use `-y` flag
 - `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
+
+## Handling merge conflicts
+
+When handling merge conflicts in a branch due to the .quality.yml file, use the changes from the upstream branch discarding the local branch changes and then run `make quality-policy-update` before finishing.
