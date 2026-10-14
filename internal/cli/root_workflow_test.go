@@ -8,18 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestIntegrationWorkflowNewRootCommandHelp(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	t.Parallel()
-	is := assert.New(t)
-
-	output, _ := fixture.mustExecute("--help")
-
-	is.Contains(output, "Orpheus")
-	is.Contains(output, "Usage:")
-	is.Contains(output, "--verbose")
-}
-
 type reviewWorkflowHelpCase struct {
 	name string
 	args []string
@@ -27,6 +15,9 @@ type reviewWorkflowHelpCase struct {
 }
 
 var reviewWorkflowHelpCases = []reviewWorkflowHelpCase{
+	{name: "root", args: []string{"--help"}, want: []string{"Orpheus", "Usage:", "--verbose"}},
+	{name: "task list", args: []string{"task", "list", "--help"}, want: []string{"--repo", "repository"}},
+	{name: "task sync", args: []string{"task", "sync", "--help"}, want: []string{"integration branch", "conflict-free branches unchanged", "configured conflict resolver"}},
 	{
 		name: "task run",
 		args: []string{"task", "run", "--help"},
@@ -81,14 +72,4 @@ func TestIntegrationWorkflowReviewWorkflowCommandHelpExplainsResponsibilitiesAnd
 			}
 		})
 	}
-}
-
-func TestIntegrationWorkflowTaskReviewCommandIsAbsent(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	t.Parallel()
-	is := assert.New(t)
-
-	stdout, stderr := fixture.mustExecute("task", "--help")
-	is.Empty(stderr)
-	is.NotContains(stdout, "  review")
 }

@@ -14,8 +14,9 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
-	"github.com/hea3ven/orpheus/internal/tasktarget"
 	"github.com/hea3ven/orpheus/internal/testutil"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDispatchPrepareFollowUpResumeHonorsStrictFeatureFlag(t *testing.T) {
@@ -138,155 +139,92 @@ func equalStrings(left []string, right []string) bool {
 	return strings.Join(left, "\x00") == strings.Join(right, "\x00")
 }
 
-func TestDispatchValidateStartInfersBlockedReviewFollowUpTarget(t *testing.T) {
-	paths := newDispatchTestPaths(t)
-	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
-	repo := task.Repository{
-		ID:            "alpha",
-		Name:          "Alpha",
-		Path:          repoPath,
-		DefaultBranch: "main",
-		TaskIDPrefix:  "op",
-	}
-	taskItem := task.Task{
-		ID:     "op-1",
-		Status: task.StatusInProgress,
-		Metadata: task.Metadata{
-			task.MetadataBranch:   "main",
-			task.MetadataWorktree: repoPath,
-		},
-	}
-	store := fakeDispatchRunStore{
-		state: taskstate.TaskState{
-			Version: 2,
-			RepoID:  repo.ID,
-			TaskID:  taskItem.ID,
-			Target: taskstate.GitFacts{
-				Branch:   "main",
-				Worktree: repoPath,
-			},
-			Reviews: []taskstate.ReviewAttempt{
-				{
-					Attempt:  1,
-					Status:   taskstate.ReviewStatusBlocked,
-					Pipeline: "default",
-					Step:     "local-review",
-					Findings: []taskstate.ReviewFinding{
-						{Type: taskstate.FindingTypeBlocking, Title: "Bug", Description: "Fix it."},
-					},
-				},
-			},
-		},
-	}
-	service := DispatchService{Paths: paths, RunStore: store}
+func TestDispatchStartSelectsOnlyEligibleReviewRepairs(t *testing.T) {
+	for _, tc := range []struct {
+		name                         string
+		kind                         string
+		finding                      taskstate.FindingType
+		interrupted, kept, exhausted bool
+		targeted                     taskstate.RunStatus
+		wantError                    string
+	}{
+		{name: "manual blocker retains main target", kind: taskstate.ReviewStepKindManual, finding: taskstate.FindingTypeBlocking},
+		{name: "interrupted decision", kind: taskstate.ReviewStepKindCheck, finding: taskstate.FindingTypeBlocking, interrupted: true, wantError: "interrupted automated blocker decisions"},
+		{name: "unkept automated blocker", kind: taskstate.ReviewStepKindCheck, finding: taskstate.FindingTypeBlocking, wantError: "automated blockers without an explicit keep decision"},
+		{name: "advisory only", kind: taskstate.ReviewStepKindManual, finding: taskstate.FindingTypeAdvisory, wantError: "no untargeted blocking findings"},
+		{name: "kept exhausted blocker", kind: taskstate.ReviewStepKindAgentReview, finding: taskstate.FindingTypeBlocking, kept: true, exhausted: true},
+		{name: "active repair already owns finding", kind: taskstate.ReviewStepKindManual, finding: taskstate.FindingTypeBlocking, targeted: taskstate.RunStatusRunning, wantError: "latest run attempt 2 is still running"},
+		{name: "completed repair already owns finding", kind: taskstate.ReviewStepKindManual, finding: taskstate.FindingTypeBlocking, targeted: taskstate.RunStatusSucceeded, wantError: "rerun `orpheus task run op-1`"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := task.Repository{ID: "alpha", Name: "Alpha", Path: "/fixture/repo", DefaultBranch: "main", TaskIDPrefix: "op"}
+			item := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: "main", task.MetadataWorktree: repo.Path}}
+			finding := taskstate.ReviewFinding{Type: tc.finding, Step: "inspect", Title: "Finding", Description: "Fix it"}
+			var runs []taskstate.RunAttempt
+			if tc.targeted != "" {
+				finding.TargetedByRunAttempt = 2
+				run := taskstate.RunAttempt{Attempt: 2, Status: tc.targeted,
+					ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{0}}}
+				if tc.targeted == taskstate.RunStatusSucceeded {
+					run.Completion = &taskstate.Completion{Summary: "Repaired"}
+				}
+				runs = []taskstate.RunAttempt{run}
+			}
+			blocked := taskstate.ReviewAttempt{
+				Attempt: 1, Status: taskstate.ReviewStatusBlocked, Pipeline: "default", Step: "inspect",
+				AutomatedBlockerDecisionInterrupted: tc.interrupted, AutomatedBlockerDecisionKept: tc.kept, AutonomousBudgetExhausted: tc.exhausted,
+				Steps: []taskstate.ReviewStep{{Kind: tc.kind, Name: "inspect"}}, Findings: []taskstate.ReviewFinding{finding},
+			}
+			store := &repairEligibilityStore{fakeDispatchRunStore: fakeDispatchRunStore{state: taskstate.TaskState{
+				Version: 2, RepoID: repo.ID, TaskID: item.ID, Target: taskstate.GitFacts{Branch: "main", Worktree: repo.Path},
+				Runs: runs, Reviews: []taskstate.ReviewAttempt{blocked},
+			}}}
+			backend := &repairEligibilityBackend{fakeDispatchBackend: fakeDispatchBackend{taskItem: item}}
+			git := &continuationDispatchGit{setupError: errors.New("selected main target")}
+			service := DispatchService{Paths: newDispatchTestPaths(t), RunStore: store, Git: git}
 
-	plan, err := service.validateStart(context.Background(), DispatchStartOptions{
-		TaskID: taskItem.ID,
-		Source: task.RepositorySource{
-			Repository: repo,
-		},
-		Backend: fakeDispatchBackend{taskItem: taskItem},
-	})
-	if err != nil {
-		t.Fatalf("validate start: %v", err)
-	}
+			_, err := service.Start(context.Background(), DispatchStartOptions{TaskID: item.ID, Source: task.RepositorySource{Repository: repo}, Backend: backend})
 
-	if plan.followUp == nil {
-		t.Fatalf("follow-up plan is nil")
-	}
-	if plan.followUp.targetKind != tasktarget.TargetMainSolo {
-		t.Fatalf("follow-up target = %q, want %q", plan.followUp.targetKind, tasktarget.TargetMainSolo)
-	}
-	if plan.expected.Branch != "main" || plan.expected.WorktreePath != repoPath {
-		t.Fatalf("expected target = %#v, want main repo root", plan.expected)
+			assertRepairDispatchRoute(t, err, tc.wantError, git)
+			assert.Zero(t, store.writes, "eligibility must not persist run or setup state")
+			assert.Zero(t, backend.writes, "eligibility must not mutate the task")
+		})
 	}
 }
 
-func TestDispatchValidateStartRefusesInterruptedAutomatedBlockerDecision(t *testing.T) {
-	paths := newDispatchTestPaths(t)
-	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
-	repo := task.Repository{
-		ID:            "alpha",
-		Name:          "Alpha",
-		Path:          repoPath,
-		DefaultBranch: "main",
-		TaskIDPrefix:  "op",
+func assertRepairDispatchRoute(t *testing.T, err error, wantError string, git *continuationDispatchGit) {
+	t.Helper()
+	if wantError != "" {
+		require.ErrorContains(t, err, wantError)
+		assert.Zero(t, git.setupCalls, "rejected repairs must not set up Git")
+		return
 	}
-	taskItem := task.Task{
-		ID:     "op-1",
-		Status: task.StatusInProgress,
-		Metadata: task.Metadata{
-			task.MetadataBranch:   "main",
-			task.MetadataWorktree: repoPath,
-		},
-	}
-	store := fakeDispatchRunStore{
-		state: taskstate.TaskState{
-			Version: 2,
-			RepoID:  repo.ID,
-			TaskID:  taskItem.ID,
-			Target: taskstate.GitFacts{
-				Branch:   "main",
-				Worktree: repoPath,
-			},
-			Reviews: []taskstate.ReviewAttempt{
-				{
-					Attempt:                             1,
-					Status:                              taskstate.ReviewStatusBlocked,
-					Pipeline:                            "default",
-					Step:                                "local-review",
-					AutomatedBlockerDecisionInterrupted: true,
-					Findings: []taskstate.ReviewFinding{
-						{Type: taskstate.FindingTypeBlocking, Title: "Bug", Description: "Fix it."},
-					},
-				},
-			},
-		},
-	}
-	service := DispatchService{Paths: paths, RunStore: store}
-
-	_, err := service.validateStart(context.Background(), DispatchStartOptions{
-		TaskID: taskItem.ID,
-		Source: task.RepositorySource{
-			Repository: repo,
-		},
-		Backend: fakeDispatchBackend{taskItem: taskItem},
-	})
-
-	if err == nil || !strings.Contains(err.Error(), "interrupted automated blocker decisions") {
-		t.Fatalf("validate error = %v, want interrupted blocker guidance", err)
-	}
-	if !strings.Contains(err.Error(), "run `orpheus task run op-1`") {
-		t.Fatalf("validate error = %v, want task run guidance", err)
-	}
+	require.ErrorIs(t, err, git.setupError, "eligible repairs must select the original main target")
+	assert.Equal(t, 1, git.setupCalls, "eligible repair must select one main-target setup")
 }
 
-func TestDispatchValidateStartRefusesUnkeptAutomatedBlockers(t *testing.T) {
-	reviewAttempt := taskstate.ReviewAttempt{
-		Attempt:  1,
-		Status:   taskstate.ReviewStatusBlocked,
-		Pipeline: "default",
-		Step:     "unit",
-		Steps: []taskstate.ReviewStep{{
-			Kind: taskstate.ReviewStepKindCheck,
-			Name: "unit",
-		}},
-		Findings: []taskstate.ReviewFinding{{
-			Type:        taskstate.FindingTypeBlocking,
-			Step:        "unit",
-			Title:       "Check failed",
-			Description: "Fix it.",
-		}},
-	}
+type repairEligibilityStore struct {
+	fakeDispatchRunStore
+	writes int
+}
 
-	_, err := validateDispatchStartForReview(t, reviewAttempt)
+func (s *repairEligibilityStore) RecordSetupEvent(string, string, taskstate.EventType, taskstate.SetupEventOptions) (taskstate.Event, error) {
+	s.writes++
+	return taskstate.Event{}, errors.New("unexpected setup persistence")
+}
+func (s *repairEligibilityStore) StartRun(string, string, taskstate.StartRunOptions) (taskstate.RunAttempt, error) {
+	s.writes++
+	return taskstate.RunAttempt{}, errors.New("unexpected run persistence")
+}
 
-	if err == nil || !strings.Contains(err.Error(), "automated blockers without an explicit keep decision") {
-		t.Fatalf("validate error = %v, want explicit-keep guidance", err)
-	}
-	if !strings.Contains(err.Error(), "run `orpheus task run op-1`") {
-		t.Fatalf("validate error = %v, want task run guidance", err)
-	}
+type repairEligibilityBackend struct {
+	fakeDispatchBackend
+	writes int
+}
+
+func (b *repairEligibilityBackend) MarkInProgress(context.Context, string, string, string) error {
+	b.writes++
+	return errors.New("unexpected task mutation")
 }
 
 func TestDispatchValidateStartAllowsFollowUpForNormalizedFailedReview(t *testing.T) {
@@ -377,75 +315,6 @@ func TestDispatchValidateStartScopesEligibleAdvisoriesWithBlockers(t *testing.T)
 	}
 }
 
-func TestDispatchValidateStartDoesNotStartForAdvisoriesOnly(t *testing.T) {
-	reviewAttempt := taskstate.ReviewAttempt{
-		Attempt: 1, Status: taskstate.ReviewStatusBlocked, Pipeline: "default", Step: "inspect",
-		Steps:    []taskstate.ReviewStep{{Kind: taskstate.ReviewStepKindManual, Name: "inspect"}},
-		Findings: []taskstate.ReviewFinding{{Type: taskstate.FindingTypeAdvisory, Step: "inspect", Title: "Only advisory", Description: "No implementation run."}},
-	}
-
-	_, err := validateDispatchStartForReview(t, reviewAttempt)
-	if err == nil || !strings.Contains(err.Error(), "no untargeted blocking findings") {
-		t.Fatalf("validate error = %v, want advisory-only review rejection", err)
-	}
-}
-
-func TestDispatchValidateStartAllowsManualBlockersWithoutKeepDecision(t *testing.T) {
-	reviewAttempt := taskstate.ReviewAttempt{
-		Attempt:  1,
-		Status:   taskstate.ReviewStatusBlocked,
-		Pipeline: "default",
-		Step:     "inspect",
-		Steps: []taskstate.ReviewStep{{
-			Kind: taskstate.ReviewStepKindManual,
-			Name: "inspect",
-		}},
-		Findings: []taskstate.ReviewFinding{{
-			Type:        taskstate.FindingTypeBlocking,
-			Step:        "inspect",
-			Title:       "Manual issue",
-			Description: "Fix it.",
-		}},
-	}
-
-	plan, err := validateDispatchStartForReview(t, reviewAttempt)
-	if err != nil {
-		t.Fatalf("validate start: %v", err)
-	}
-	if plan.followUp == nil || len(plan.followUp.findingIndexes) != 1 || plan.followUp.findingIndexes[0] != 0 {
-		t.Fatalf("follow-up plan = %#v, want finding 0", plan.followUp)
-	}
-}
-
-func TestDispatchValidateStartAllowsKeptBudgetExhaustedAutomatedBlockers(t *testing.T) {
-	reviewAttempt := taskstate.ReviewAttempt{
-		Attempt:                      1,
-		Status:                       taskstate.ReviewStatusBlocked,
-		Pipeline:                     "default",
-		Step:                         "agent-review",
-		AutomatedBlockerDecisionKept: true,
-		AutonomousBudgetExhausted:    true,
-		Steps: []taskstate.ReviewStep{{
-			Kind: taskstate.ReviewStepKindAgentReview,
-			Name: "agent-review",
-		}},
-		Findings: []taskstate.ReviewFinding{{
-			Type:        taskstate.FindingTypeBlocking,
-			Step:        "agent-review",
-			Title:       "Agent blocker",
-			Description: "Fix it.",
-		}},
-	}
-
-	plan, err := validateDispatchStartForReview(t, reviewAttempt)
-	if err != nil {
-		t.Fatalf("validate start: %v", err)
-	}
-	if plan.followUp == nil || len(plan.followUp.findingIndexes) != 1 || plan.followUp.findingIndexes[0] != 0 {
-		t.Fatalf("follow-up plan = %#v, want finding 0", plan.followUp)
-	}
-}
-
 func TestDispatchValidateStartRetriesFailedFollowUpTargets(t *testing.T) {
 	reviewAttempt := taskstate.ReviewAttempt{
 		Attempt:  1,
@@ -478,113 +347,18 @@ func TestDispatchValidateStartRetriesFailedFollowUpTargets(t *testing.T) {
 	}
 }
 
-func TestDispatchValidateStartRefusesAlreadyTargetedBlockedReview(t *testing.T) {
-	paths := newDispatchTestPaths(t)
-	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
-	repo := task.Repository{
-		ID:            "alpha",
-		Name:          "Alpha",
-		Path:          repoPath,
-		DefaultBranch: "main",
-		TaskIDPrefix:  "op",
-	}
-	taskItem := task.Task{
-		ID:     "op-1",
-		Status: task.StatusInProgress,
-		Metadata: task.Metadata{
-			task.MetadataBranch:   "main",
-			task.MetadataWorktree: repoPath,
-		},
-	}
-	store := fakeDispatchRunStore{
-		state: taskstate.TaskState{
-			Version: 2,
-			RepoID:  repo.ID,
-			TaskID:  taskItem.ID,
-			Target: taskstate.GitFacts{
-				Branch:   "main",
-				Worktree: repoPath,
-			},
-			Reviews: []taskstate.ReviewAttempt{
-				{
-					Attempt:  1,
-					Status:   taskstate.ReviewStatusBlocked,
-					Pipeline: "default",
-					Step:     "local-review",
-					Findings: []taskstate.ReviewFinding{
-						{
-							Type:                 taskstate.FindingTypeBlocking,
-							Title:                "Bug",
-							Description:          "Fix it.",
-							TargetedByRunAttempt: 2,
-						},
-					},
-				},
-			},
-		},
-	}
-	service := DispatchService{Paths: paths, RunStore: store}
+func TestDispatchStartRejectsRemovedMainOptionBeforeSetup(t *testing.T) {
+	git := &continuationDispatchGit{setupError: errors.New("unexpected setup")}
+	store := &repairEligibilityStore{}
+	service := DispatchService{Paths: newDispatchTestPaths(t), RunStore: store, Git: git}
 
-	_, err := service.validateStart(context.Background(), DispatchStartOptions{
-		TaskID: taskItem.ID,
-		Source: task.RepositorySource{
-			Repository: repo,
-		},
-		Backend: fakeDispatchBackend{taskItem: taskItem},
-	})
-
-	if err == nil || !strings.Contains(err.Error(), "rerun `orpheus task run op-1`") {
-		t.Fatalf("validate error = %v, want task run guidance", err)
-	}
-}
-
-func TestDispatchValidateStartRejectsMainModeAfterTargetLock(t *testing.T) {
-	paths := newDispatchTestPaths(t)
-	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
-	worktree, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-1"))
-	if err != nil {
-		t.Fatalf("worktree path: %v", err)
-	}
-	repo := task.Repository{
-		ID:            "alpha",
-		Name:          "Alpha",
-		Path:          repoPath,
-		DefaultBranch: "main",
-		TaskIDPrefix:  "op",
-	}
-	taskItem := task.Task{
-		ID:     "op-1",
-		Status: task.StatusInProgress,
-		Metadata: task.Metadata{
-			task.MetadataBranch:   "orpheus/op-1",
-			task.MetadataWorktree: worktree,
-		},
-	}
-	store := fakeDispatchRunStore{
-		state: taskstate.TaskState{
-			Version: 2,
-			RepoID:  repo.ID,
-			TaskID:  taskItem.ID,
-			Target: taskstate.GitFacts{
-				Branch:   taskItem.Metadata[task.MetadataBranch],
-				Worktree: taskItem.Metadata[task.MetadataWorktree],
-			},
-			Runs: []taskstate.RunAttempt{
-				{Attempt: 1, Status: taskstate.RunStatusFailed},
-			},
-		},
-	}
-	service := DispatchService{Paths: paths, RunStore: store}
-
-	_, err = service.validateStart(context.Background(), DispatchStartOptions{
-		TaskID:   taskItem.ID,
-		Source:   task.RepositorySource{Repository: repo},
-		Backend:  fakeDispatchBackend{taskItem: taskItem},
-		MainMode: true,
-	})
+	_, err := service.Start(context.Background(), DispatchStartOptions{MainMode: true})
 
 	if err == nil || !strings.Contains(err.Error(), "--main is no longer supported") {
-		t.Fatalf("validate error = %v, want --main migration guidance", err)
+		t.Fatalf("dispatch error = %v, want removed-option guidance", err)
+	}
+	if git.setupCalls != 0 || store.writes != 0 {
+		t.Fatalf("removed option caused effects: Git=%d store=%d", git.setupCalls, store.writes)
 	}
 }
 
@@ -658,20 +432,35 @@ func TestDispatchValidateStartRejectsMissingTemplateValueBeforeSetup(t *testing.
 	}
 }
 
-func TestDispatchValidateStartRejectsReservedBranchTemplateBeforeSetup(t *testing.T) {
-	paths := newDispatchTestPaths(t)
-	repo := task.Repository{
-		ID: "alpha", Name: "Alpha", Path: filepath.Join(testutil.CanonicalTempDir(t), "repo"), DefaultBranch: "main",
-		BranchTemplate: "HEAD",
-	}
-	taskItem := task.Task{ID: "op-1", Status: task.StatusOpen}
-	service := DispatchService{Paths: paths, RunStore: fakeDispatchRunStore{}}
+func TestDispatchStartRejectsInvalidBranchTemplatesBeforeEffects(t *testing.T) {
+	for _, template := range []string{"HEAD", "feature//{{task_id}}", "feature/{{external_ref}}"} {
+		t.Run(template, func(t *testing.T) {
+			repo := task.Repository{ID: "alpha", Name: "Alpha", Path: "/fixture/repo", DefaultBranch: "main", BranchTemplate: template}
+			item := task.Task{ID: "op-1", Status: task.StatusOpen}
+			git := &continuationDispatchGit{setupError: errors.New("unexpected setup")}
+			store := &repairEligibilityStore{}
+			backend := &repairEligibilityBackend{fakeDispatchBackend: fakeDispatchBackend{taskItem: item}}
+			service := DispatchService{Paths: newDispatchTestPaths(t), RunStore: store, Git: git}
 
-	_, err := service.validateStart(context.Background(), DispatchStartOptions{
-		TaskID: taskItem.ID, Source: task.RepositorySource{Repository: repo}, Backend: fakeDispatchBackend{taskItem: taskItem},
-	})
-	if err == nil || !strings.Contains(err.Error(), "invalid Git ref syntax") {
-		t.Fatalf("validate start error = %v, want reserved branch rejection", err)
+			_, err := service.Start(context.Background(), DispatchStartOptions{TaskID: item.ID, Source: task.RepositorySource{Repository: repo}, Backend: backend})
+
+			if err == nil {
+				t.Fatal("invalid template accepted")
+			}
+			want := "invalid Git ref syntax"
+			if strings.Contains(template, "external_ref") {
+				want = "external reference"
+			}
+			if template == "feature//{{task_id}}" {
+				want = "empty path component"
+			}
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("dispatch error = %v, want %q", err, want)
+			}
+			if git.setupCalls != 0 || store.writes != 0 || backend.writes != 0 {
+				t.Fatalf("invalid template caused effects: Git=%d store=%d backend=%d", git.setupCalls, store.writes, backend.writes)
+			}
+		})
 	}
 }
 

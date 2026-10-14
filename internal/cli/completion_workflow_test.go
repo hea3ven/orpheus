@@ -3,10 +3,13 @@
 package cli_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,26 +35,47 @@ func newAgentCompletionFixture(t *testing.T, taskID string, worktree bool) *fina
 	return f
 }
 
-func TestIntegrationWorkflowAgentDoneRecordsMainCompletionForLocalReview(t *testing.T) {
-	f := newAgentCompletionFixture(t, "op-main", false)
-	before := f.backend.tasks["op-main"].Clone()
+func TestIntegrationWorkflowAgentDoneRecordsCompletionForLocalReviewWithoutCommitting(t *testing.T) {
+	for _, target := range []struct {
+		name, taskID string
+		worktree     bool
+	}{
+		{"main", "op-main", false},
+		{"worktree", "op-1", true},
+	} {
+		t.Run(target.name, func(t *testing.T) {
+			f := newAgentCompletionFixture(t, target.taskID, target.worktree)
+			before := f.backend.tasks[target.taskID].Clone()
+			body := "## PR body\n\nPreserve the final newline.\n"
+			technical := "## Technical explanation\n\nPreserve these exact bytes too.\n"
+			dir := testutil.CanonicalTempDir(t)
+			bodyPath, technicalPath := filepath.Join(dir, "body.md"), filepath.Join(dir, "technical.md")
+			require.NoError(t, os.WriteFile(bodyPath, []byte(body), 0o600))
+			require.NoError(t, os.WriteFile(technicalPath, []byte(technical), 0o600))
 
-	stdout, stderr := f.run("", "agent", "done", "--summary", "Add local review file", "--description", "Created ORPHEUS_TEST.txt for local review.", "--detailed-description", "## PR body\n\nCreated ORPHEUS_TEST.txt for local review.", "--technical-explanation", "Updated the main-target completion path and left changes uncommitted for local review.")
+			stdout, stderr := f.run("", "agent", "done", "--summary", "Add local review file", "--description", "Created a candidate for local review.", "--detailed-description-file", bodyPath, "--technical-explanation-file", technicalPath)
 
-	assert.Empty(t, stderr)
-	assert.Contains(t, stdout, "Recorded completion for op-main")
-	state, item := f.loadFinalTask("op-main")
-	require.Len(t, state.Runs, 1)
-	latest := state.Runs[0]
-	assert.Equal(t, taskstate.RunStatusRunning, latest.Status)
-	require.NotNil(t, latest.Completion)
-	assert.Equal(t, "Add local review file", latest.Completion.Summary)
-	assert.Equal(t, "Created ORPHEUS_TEST.txt for local review.", latest.Completion.Description)
-	assert.Equal(t, "## PR body\n\nCreated ORPHEUS_TEST.txt for local review.", latest.Completion.DetailedDescription)
-	assert.Equal(t, "Updated the main-target completion path and left changes uncommitted for local review.", latest.Completion.TechnicalExplanation)
-	assert.Equal(t, before, item)
-	assert.True(t, f.git.hasCandidateChanges)
-	f.assertUnpublished("op-main")
+			assert.Empty(t, stderr)
+			assert.Contains(t, stdout, "Recorded completion for "+target.taskID)
+			if target.worktree {
+				assert.Contains(t, stdout, "advance the workflow with `orpheus task run "+target.taskID+"`")
+			}
+			state, item := f.loadFinalTask(target.taskID)
+			require.Len(t, state.Runs, 1)
+			latest := state.Runs[0]
+			assert.Equal(t, taskstate.RunStatusRunning, latest.Status)
+			require.NotNil(t, latest.Completion)
+			assert.Equal(t, "Add local review file", latest.Completion.Summary)
+			assert.Equal(t, "Created a candidate for local review.", latest.Completion.Description)
+			assert.Equal(t, body, latest.Completion.DetailedDescription)
+			assert.Equal(t, technical, latest.Completion.TechnicalExplanation)
+			assert.Empty(t, latest.Completion.Commit)
+			assert.Empty(t, latest.Completion.CommitError)
+			assert.Equal(t, before, item)
+			assert.True(t, f.git.hasCandidateChanges)
+			f.assertUnpublished(target.taskID)
+		})
+	}
 }
 
 func TestIntegrationWorkflowAgentDoneRepeatedMainCompletionIsNoopWithGuidance(t *testing.T) {
@@ -65,26 +89,6 @@ func TestIntegrationWorkflowAgentDoneRepeatedMainCompletionIsNoopWithGuidance(t 
 	assertRepeatedAgentDoneOutput(t, stdout)
 	assertRepeatedAgentCompletion(t, f.taskStore, attempt)
 	f.assertUnpublished("op-main")
-}
-
-// The historical name is retained in the assertion map. Completion deliberately
-// leaves the candidate uncommitted; publication owns commit creation.
-func TestIntegrationWorkflowAgentDoneCommitsWorktreeCompletion(t *testing.T) {
-	f := newAgentCompletionFixture(t, "op-1", true)
-
-	stdout, stderr := f.run("", "agent", "done", "--summary", "Add worktree review file", "--description", "Created ORPHEUS_WORKTREE_TEST.txt for pull request review.", "--detailed-description", "## Pull request\n\nCreated ORPHEUS_WORKTREE_TEST.txt for pull request review.", "--technical-explanation", "Added the worktree validation fixture so review can inspect an uncommitted candidate change.")
-
-	assert.Empty(t, stderr)
-	assert.Contains(t, stdout, "Recorded completion for op-1; advance the workflow with `orpheus task run op-1`")
-	state, _ := f.loadFinalTask("op-1")
-	latest := state.Runs[0]
-	assert.Equal(t, taskstate.RunStatusRunning, latest.Status)
-	require.NotNil(t, latest.Completion)
-	assert.Equal(t, "Added the worktree validation fixture so review can inspect an uncommitted candidate change.", latest.Completion.TechnicalExplanation)
-	assert.Empty(t, latest.Completion.Commit)
-	assert.Empty(t, latest.Completion.CommitError)
-	assert.True(t, f.git.hasCandidateChanges)
-	f.assertUnpublished("op-1")
 }
 
 func TestIntegrationWorkflowAgentDoneRequiresMainWorkingTreeChangesBeforeWriting(t *testing.T) {

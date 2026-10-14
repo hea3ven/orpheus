@@ -21,7 +21,8 @@ func TestIntegrationWorkflowWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing
 	item := anOpenTask("op-m5-sync")
 	item.Title = "M5 sync flow"
 	f.backend.tasks[item.ID] = item
-	f.withCompletingAgent(aCompletion())
+	completion := aCompletion()
+	f.withCompletingAgent(completion)
 
 	stdout, stderr := f.run("", "task", "run", item.ID)
 
@@ -46,6 +47,16 @@ func TestIntegrationWorkflowWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing
 	assert.Contains(t, stdout, "created PR "+f.pr.url)
 	assert.Contains(t, stdout, "Backend task remains open for PR review")
 	f.assertPublishedPR(item.ID)
+	require.Len(t, f.pr.created, 1)
+	request := f.pr.created[0]
+	assert.Equal(t, taskWorkflowRepoRoot, request.RepositoryPath)
+	assert.Equal(t, branch, request.HeadBranch)
+	assert.Equal(t, "main", request.BaseBranch)
+	assert.Equal(t, completion.Summary, request.Title)
+	assert.Contains(t, request.Body, completion.DetailedDescription)
+	for _, unwanted := range []string{"Created by Orpheus.", "Ready for sync", item.ID + ":"} {
+		assert.NotContains(t, request.Body, unwanted)
+	}
 	stdout, stderr = f.run("", "status")
 	assert.Empty(t, stderr)
 	for _, want := range []string{"Reviewing", item.ID, item.Title, f.pr.url} {

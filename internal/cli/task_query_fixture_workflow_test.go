@@ -4,7 +4,6 @@ package cli_test
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -201,8 +200,4 @@ func setupTaskShowReviewWorkflowRepoWithStatus(t *testing.T, fixture *workflowFi
 		taskWFTask(taskID, "Ready for review show", status, taskmodel.IssueTypeTask, taskWFPriority(1), taskWFMetadata(map[string]string{taskmodel.MetadataBranch: "main", taskmodel.MetadataWorktree: repoPath})),
 	}}})
 	return taskstate.NewStore(fixture.paths), repoPath
-}
-
-func unsupportedTaskSourceError(kind taskmodel.IssueType) error {
-	return fmt.Errorf("%w: issue type %q is not task or epic", taskmodel.ErrUnsupportedTaskSourceItem, kind)
 }

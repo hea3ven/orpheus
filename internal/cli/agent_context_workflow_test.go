@@ -3,6 +3,7 @@
 package cli_test
 
 import (
+	"fmt"
 	"testing"
 
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
@@ -12,112 +13,110 @@ import (
 )
 
 func TestIntegrationWorkflowAgentContextRendersValidatedWorktreeContext(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	is := assert.New(t)
-	backend, repoPath, worktreePath, cwd := setupOwnershipAgentImplementation(t, fixture, true)
+	for _, rootTarget := range []bool{false, true} {
+		t.Run(fmt.Sprintf("repo_root_%t", rootTarget), func(t *testing.T) {
+			fixture := newCommandWorkflow(t)
+			is := assert.New(t)
+			var backend *ownershipAuthoringBackend
+			var repoPath, worktreePath, cwd string
+			taskID := "op-1"
+			if rootTarget {
+				backend, repoPath = setupOwnershipAgentRepoRoot(t, fixture)
+				worktreePath, cwd, taskID = repoPath, repoPath, "op-root"
+			} else {
+				backend, repoPath, worktreePath, cwd = setupOwnershipAgentImplementation(t, fixture, true)
+			}
 
-	stdout, stderr := fixture.mustExecute("agent", "context")
+			stdout, stderr := fixture.mustExecute("agent", "context")
 
-	is.Empty(stderr)
-	for _, want := range []string{
-		"# Orpheus Agent Context",
-		"- ID: op-1",
-		"- Title: Render context",
-		"Move detailed task instructions to agent context.",
-		"Only the latest running attempt can render context.",
-		"- ID: alpha",
-		"- Name: Alpha Repo",
-		"- Registered root: " + repoPath,
-		"- Registered default branch: main",
-		"- Current branch: orpheus/op-1",
-		"- Work Directory: " + worktreePath,
-		"- Current directory: " + cwd,
-		"- Run attempt: 1",
-		"- Agent: recorder",
-		"orpheus agent done",
-		"Do not create Git commits yourself. Leave completed changes uncommitted; Orpheus owns commit creation at the appropriate workflow stage.",
-		"one-time completion handoff for this Orpheus run attempt",
-		"not once per reusable harness session",
-		"call it exactly once after finishing the current attempt's work",
-		"whether this harness session is fresh or resumed",
-		"successful `orpheus agent done` visible in resumed session history belongs to an earlier",
-		"does not satisfy the current attempt",
-		"do not run `orpheus agent done` again",
-		"repeated same-attempt calls are no-ops",
-		"PR-ready completion data for feature-branch publication",
-		"The human operator will later run `orpheus task run op-1` to review and publish the feature branch as a pull request",
-		"Interaction guidance:",
-		"attached interactive implementation session",
-		"may ask the human operator for clarification or decisions",
-		"Minimize interruptions",
-		"ask only for critical ambiguity or major product/architecture decisions",
-		"Make low-risk, low-level implementation decisions independently",
-	} {
-		is.Contains(stdout, want)
+			is.Empty(stderr)
+			var wants []string
+			if rootTarget {
+				wants = []string{
+					"- Current branch: orpheus/op-root",
+					"- Work Directory: " + repoPath,
+					"registered repository root on the task branch",
+					"orpheus agent done",
+					"Do not create Git commits yourself. Leave completed changes uncommitted; Orpheus owns commit creation at the appropriate workflow stage.",
+					"PR-ready completion data for feature-branch publication",
+					"The human operator will later run `orpheus task run op-root` to review and publish the feature branch as a pull request",
+				}
+			} else {
+				wants = []string{
+					"# Orpheus Agent Context",
+					"- ID: op-1",
+					"- Title: Render context",
+					"Move detailed task instructions to agent context.",
+					"Only the latest running attempt can render context.",
+					"- ID: alpha",
+					"- Name: Alpha Repo",
+					"- Registered root: " + repoPath,
+					"- Registered default branch: main",
+					"- Current branch: orpheus/op-1",
+					"- Work Directory: " + worktreePath,
+					"- Current directory: " + cwd,
+					"- Run attempt: 1",
+					"- Agent: recorder",
+					"orpheus agent done",
+					"Do not create Git commits yourself. Leave completed changes uncommitted; Orpheus owns commit creation at the appropriate workflow stage.",
+					"one-time completion handoff for this Orpheus run attempt",
+					"not once per reusable harness session",
+					"call it exactly once after finishing the current attempt's work",
+					"whether this harness session is fresh or resumed",
+					"successful `orpheus agent done` visible in resumed session history belongs to an earlier",
+					"does not satisfy the current attempt",
+					"do not run `orpheus agent done` again",
+					"repeated same-attempt calls are no-ops",
+					"PR-ready completion data for feature-branch publication",
+					"The human operator will later run `orpheus task run op-1` to review and publish the feature branch as a pull request",
+					"Interaction guidance:",
+					"attached interactive implementation session",
+					"may ask the human operator for clarification or decisions",
+					"Minimize interruptions",
+					"ask only for critical ambiguity or major product/architecture decisions",
+					"Make low-risk, low-level implementation decisions independently",
+				}
+			}
+			for _, want := range wants {
+				is.Contains(stdout, want)
+			}
+			is.NotContains(stdout, "Beads")
+			is.NotContains(stdout, "bd")
+			is.Equal([]string{taskID}, backend.getCalls)
+			is.Zero(backend.listCalls)
+			is.Zero(backend.mutationCount())
+		})
 	}
-	is.NotContains(stdout, "Beads")
-	is.NotContains(stdout, "bd")
-	is.Equal([]string{"op-1"}, backend.getCalls)
-	is.Zero(backend.listCalls)
-	is.Zero(backend.mutationCount())
-}
-
-func TestIntegrationWorkflowAgentContextRendersRepoRootFeatureBranchContext(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	is := assert.New(t)
-	_, repoPath := setupOwnershipAgentRepoRoot(t, fixture)
-
-	stdout, stderr := fixture.mustExecute("agent", "context")
-
-	is.Empty(stderr)
-	for _, want := range []string{
-		"- Current branch: orpheus/op-root",
-		"- Work Directory: " + repoPath,
-		"registered repository root on the task branch",
-		"orpheus agent done",
-		"Do not create Git commits yourself. Leave completed changes uncommitted; Orpheus owns commit creation at the appropriate workflow stage.",
-		"PR-ready completion data for feature-branch publication",
-		"The human operator will later run `orpheus task run op-root` to review and publish the feature branch as a pull request",
-	} {
-		is.Contains(stdout, want)
-	}
-	is.NotEmpty(stdout)
 }
 
 func TestIntegrationWorkflowAgentContextRendersNonInteractiveRunGuidanceAfterProfileChanges(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	is := assert.New(t)
-	setupOwnershipAgentImplementation(t, fixture, false)
-	writeOwnershipAgentProfileConfig(t, fixture, "recorder", true)
+	for _, omitted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("omitted_interactivity_%t", omitted), func(t *testing.T) {
+			fixture := newCommandWorkflow(t)
+			is := assert.New(t)
+			_, _, worktree, _ := setupOwnershipAgentImplementation(t, fixture, false)
+			if omitted {
+				seedOwnershipLegacyRunningAttempt(t, fixture, "op-1", "orpheus/op-1", worktree)
+			}
+			writeOwnershipAgentProfileConfig(t, fixture, "recorder", true)
 
-	stdout, stderr := fixture.mustExecute("agent", "context")
+			stdout, stderr := fixture.mustExecute("agent", "context")
 
-	is.Empty(stderr)
-	for _, want := range []string{
-		"Interaction guidance:",
-		"non-interactive implementation session",
-		"do not ask the human operator for clarification or decisions",
-		"Decide independently when a reasonable, low-risk path exists",
-		"fail clearly",
-		"missing information",
-		"summarize significant decisions in the visible terminal/session output",
-	} {
-		is.Contains(stdout, want)
+			is.Empty(stderr)
+			for _, want := range []string{
+				"Interaction guidance:",
+				"non-interactive implementation session",
+				"do not ask the human operator for clarification or decisions",
+				"Decide independently when a reasonable, low-risk path exists",
+				"fail clearly",
+				"missing information",
+				"summarize significant decisions in the visible terminal/session output",
+			} {
+				is.Contains(stdout, want)
+			}
+			is.NotContains(stdout, "attached interactive implementation session")
+		})
 	}
-	is.NotContains(stdout, "attached interactive implementation session")
-}
-
-func TestIntegrationWorkflowAgentContextTreatsMissingRunInteractivityAsNonInteractive(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	is := assert.New(t)
-	_, _, worktree, _ := setupOwnershipAgentImplementation(t, fixture, false)
-	seedOwnershipLegacyRunningAttempt(t, fixture, "op-1", "orpheus/op-1", worktree)
-
-	stdout, stderr := fixture.mustExecute("agent", "context")
-
-	is.Empty(stderr)
-	is.Contains(stdout, "non-interactive implementation session")
-	is.NotContains(stdout, "attached interactive implementation session")
 }
 
 func TestIntegrationWorkflowAgentContextRendersReviewContext(t *testing.T) {

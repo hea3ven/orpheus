@@ -10,168 +10,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationWorkflowAgentDoneRejectsMissingDescription(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
+func TestIntegrationWorkflowAgentDoneRejectsInvalidCompletionWithoutEffects(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"missing description", []string{"--detailed-description", "PR body.", "--technical-explanation", "Technical explanation."}, `required flag(s) "description" not set`},
+		{"missing detailed description", []string{"--description", "Commit body.", "--technical-explanation", "Technical explanation."}, "detailed description is required"},
+		{"multiple detailed sources", []string{"--description", "Commit body.", "--detailed-description", "Inline body.", "--detailed-description-file", "/fixture/body.md", "--technical-explanation", "Technical explanation."}, "use exactly one of --detailed-description or --detailed-description-file"},
+		{"removed details flag", []string{"--description", "Commit body.", "--details", "Old details.", "--detailed-description", "PR body.", "--technical-explanation", "Technical explanation."}, "unknown flag: --details"},
+		{"missing technical explanation", []string{"--description", "Commit body.", "--detailed-description", "PR body."}, "technical explanation is required"},
+		{"multiple technical sources", []string{"--description", "Commit body.", "--detailed-description", "PR body.", "--technical-explanation", "Inline explanation.", "--technical-explanation-file", "/fixture/technical.md"}, "use exactly one of --technical-explanation or --technical-explanation-file"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			f := newFinalizationFixture(t, "op-main")
+			before := f.backend.tasks["op-main"].Clone()
+			args := append([]string{"agent", "done", "--summary", "Completion"}, test.args...)
 
-	f := newFinalizationFixture(t, "op-main")
-	stdout, stderr, err := f.execute(
-		"agent",
-		"done",
-		"--summary",
-		"Missing description",
-		"--detailed-description",
-		"Detailed PR body.",
-		"--technical-explanation",
-		"Technical explanation.",
-	)
+			stdout, stderr, err := f.execute(args...)
 
-	must.Error(err)
-	is.Empty(stdout)
-	is.Empty(stderr)
-	is.Contains(err.Error(), `required flag(s) "description" not set`)
-	f.assertUnpublished("op-main")
-	state, _ := f.loadFinalTask("op-main")
-	assert.Empty(t, state.Runs)
-}
-
-func TestIntegrationWorkflowAgentDoneRejectsMissingDetailedDescription(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-
-	f := newFinalizationFixture(t, "op-main")
-	stdout, stderr, err := f.execute(
-		"agent",
-		"done",
-		"--summary",
-		"Missing detailed description",
-		"--description",
-		"Commit body.",
-		"--technical-explanation",
-		"Technical explanation.",
-	)
-
-	must.Error(err)
-	is.Empty(stdout)
-	is.Empty(stderr)
-	is.Contains(err.Error(), "detailed description is required")
-	f.assertUnpublished("op-main")
-	state, _ := f.loadFinalTask("op-main")
-	assert.Empty(t, state.Runs)
-}
-
-func TestIntegrationWorkflowAgentDoneRejectsMultipleDetailedDescriptionSources(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	detailedPath := "/fixture/body.md"
-
-	f := newFinalizationFixture(t, "op-main")
-	stdout, stderr, err := f.execute(
-		"agent",
-		"done",
-		"--summary",
-		"Multiple detailed sources",
-		"--description",
-		"Commit body.",
-		"--detailed-description",
-		"Inline PR body.",
-		"--detailed-description-file",
-		detailedPath,
-		"--technical-explanation",
-		"Technical explanation.",
-	)
-
-	must.Error(err)
-	is.Empty(stdout)
-	is.Empty(stderr)
-	is.Contains(err.Error(), "use exactly one of --detailed-description or --detailed-description-file")
-	f.assertUnpublished("op-main")
-	state, _ := f.loadFinalTask("op-main")
-	assert.Empty(t, state.Runs)
-}
-
-func TestIntegrationWorkflowAgentDoneRejectsRemovedDetailsFlag(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-
-	f := newFinalizationFixture(t, "op-main")
-	stdout, stderr, err := f.execute(
-		"agent",
-		"done",
-		"--summary",
-		"Removed flag",
-		"--description",
-		"Commit body.",
-		"--details",
-		"Old details.",
-		"--detailed-description",
-		"Detailed PR body.",
-		"--technical-explanation",
-		"Technical explanation.",
-	)
-
-	must.Error(err)
-	is.Empty(stdout)
-	is.Empty(stderr)
-	is.Contains(err.Error(), "unknown flag: --details")
-	f.assertUnpublished("op-main")
-	state, _ := f.loadFinalTask("op-main")
-	assert.Empty(t, state.Runs)
-}
-
-func TestIntegrationWorkflowAgentDoneRejectsMissingTechnicalExplanation(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-
-	f := newFinalizationFixture(t, "op-main")
-	stdout, stderr, err := f.execute(
-		"agent",
-		"done",
-		"--summary",
-		"Missing technical explanation",
-		"--description",
-		"Commit body.",
-		"--detailed-description",
-		"Detailed PR body.",
-	)
-
-	must.Error(err)
-	is.Empty(stdout)
-	is.Empty(stderr)
-	is.Contains(err.Error(), "technical explanation is required")
-	f.assertUnpublished("op-main")
-	state, _ := f.loadFinalTask("op-main")
-	assert.Empty(t, state.Runs)
-}
-
-func TestIntegrationWorkflowAgentDoneRejectsMultipleTechnicalExplanationSources(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	technicalPath := "/fixture/technical.md"
-
-	f := newFinalizationFixture(t, "op-main")
-	stdout, stderr, err := f.execute(
-		"agent",
-		"done",
-		"--summary",
-		"Multiple technical sources",
-		"--description",
-		"Commit body.",
-		"--detailed-description",
-		"Detailed PR body.",
-		"--technical-explanation",
-		"Inline technical explanation.",
-		"--technical-explanation-file",
-		technicalPath,
-	)
-
-	must.Error(err)
-	is.Empty(stdout)
-	is.Empty(stderr)
-	is.Contains(err.Error(), "use exactly one of --technical-explanation or --technical-explanation-file")
-	f.assertUnpublished("op-main")
-	state, _ := f.loadFinalTask("op-main")
-	assert.Empty(t, state.Runs)
+			require.ErrorContains(t, err, test.want)
+			assert.Empty(t, stdout)
+			assert.Empty(t, stderr)
+			f.assertUnpublished("op-main")
+			state, item := f.loadFinalTask("op-main")
+			assert.Empty(t, state.Runs)
+			assert.Equal(t, before, item)
+		})
+	}
 }
 
 func completeAgentTestRun(t *testing.T, runStore taskstate.Store) taskstate.RunAttempt {

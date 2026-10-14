@@ -27,6 +27,7 @@ func TestIntegrationAdapterContractCLIRepositoryFixtureCreatesIndependentOrigins
 	runGit(t, firstRepo, "commit", "--allow-empty", "-m", "only first")
 	runGit(t, firstRepo, "push", "origin", "only-first")
 
+	runGit(t, secondRepo, "fetch", "origin")
 	command := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/remotes/origin/only-first")
 	command.Dir = secondRepo
 	require.Error(t, command.Run())

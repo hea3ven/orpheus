@@ -37,11 +37,21 @@ func TestIntegrationWorkflowCompletionProtocolCompletesCommaSeparatedEvalSelecti
 
 func TestIntegrationWorkflowCompletionGeneratorsRemainCleanForAllSupportedShells(t *testing.T) {
 	t.Parallel()
-	for _, shell := range []string{"bash", "zsh", "fish", "powershell"} {
-		t.Run(shell, func(t *testing.T) {
+	for _, shell := range []struct {
+		name  string
+		hooks []string
+	}{
+		{"bash", []string{"__start_orpheus", "complete -o default"}},
+		{"zsh", []string{"#compdef orpheus", "compdef _orpheus orpheus"}},
+		{"fish", []string{"function __orpheus", "complete -c orpheus"}},
+		{"powershell", []string{"Register-ArgumentCompleter", "-CommandName 'orpheus'"}},
+	} {
+		t.Run(shell.name, func(t *testing.T) {
 			fixture := newCommandWorkflow(t)
-			stdout, stderr := fixture.mustExecute("completion", shell)
-			assert.NotEmpty(t, stdout)
+			stdout, stderr := fixture.mustExecute("completion", shell.name)
+			for _, hook := range shell.hooks {
+				assert.Contains(t, stdout, hook)
+			}
 			assert.Empty(t, stderr)
 		})
 	}

@@ -4,12 +4,14 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/testlane"
 	"github.com/hea3ven/orpheus/internal/testutil"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRepositoryTestSourcesConformToConventions(t *testing.T) {
@@ -84,37 +86,24 @@ func TestValidateIntegrationSourcesSkipsGitDirectory(t *testing.T) {
 	}
 }
 
-func TestValidateIntegrationSourcesRejectsNonconformingTopLevelTest(t *testing.T) {
-	root := testutil.CanonicalTempDir(t)
-	path := filepath.Join(root, "adapter_integration_test.go")
-	contents := "//go:build integration\n\npackage adapter\n\nfunc TestAdapterContract(t *testing.T) {}\n"
-	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
-		t.Fatalf("write integration fixture: %v", err)
-	}
-
-	violations, err := testlane.ValidateIntegrationSources(root)
-	if err != nil {
-		t.Fatalf("validate integration fixture: %v", err)
-	}
-	if len(violations) != 1 || !strings.Contains(violations[0], "TestAdapterContract") {
-		t.Fatalf("violations = %v, want TestAdapterContract naming violation", violations)
-	}
-}
-
-func TestValidateIntegrationSourcesRejectsIntegrationNameWithoutTag(t *testing.T) {
-	root := testutil.CanonicalTempDir(t)
-	path := filepath.Join(root, "adapter_test.go")
-	contents := "package adapter\n\nfunc TestIntegrationAdapterContract(t *testing.T) {}\n"
-	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
-		t.Fatalf("write unit fixture: %v", err)
-	}
-
-	violations, err := testlane.ValidateIntegrationSources(root)
-	if err != nil {
-		t.Fatalf("validate unit fixture: %v", err)
-	}
-	if len(violations) != 1 || !strings.Contains(violations[0], "TestIntegrationAdapterContract") {
-		t.Fatalf("violations = %v, want integration-name placement violation", violations)
+func TestValidateIntegrationSourcesRejectsLaneMembershipMismatch(t *testing.T) {
+	for _, tt := range []struct{ name, contents, testName string }{
+		{name: "tag without category", contents: "//go:build integration\n\npackage adapter\n\nfunc TestAdapterContract(t *testing.T) {}\n", testName: "TestAdapterContract"},
+		{name: "category without tag", contents: "package adapter\n\nfunc TestIntegrationAdapterContract(t *testing.T) {}\n", testName: "TestIntegrationAdapterContract"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := testutil.CanonicalTempDir(t)
+			if err := os.WriteFile(filepath.Join(root, "adapter_test.go"), []byte(tt.contents), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			violations, err := testlane.ValidateIntegrationSources(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(violations) != 1 || !strings.Contains(violations[0], tt.testName) {
+				t.Fatalf("violations = %v, want one violation naming %s", violations, tt.testName)
+			}
+		})
 	}
 }
 
@@ -165,20 +154,84 @@ func TestLaneCommandsUseSharedConvention(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read Makefile: %v", err)
 	}
-
-	for _, want := range []string{
-		"test-unit:\n\tgo test ./...",
-		"test: test-unit",
-		"INTEGRATION_TEST_PATTERN := " + testlane.IntegrationTestPattern,
-		"INTEGRATION_TEST_ARGS := -tags=" + testlane.IntegrationBuildTag + " -run '$(INTEGRATION_TEST_PATTERN)'",
-		"go test $(INTEGRATION_TEST_ARGS) ./...",
-		"quality:\n\tgo run ./cmd/testcoverage",
-		"check: fmt quality lint",
+	conventions := parseMakefileConventions(string(contents))
+	for _, tt := range []struct {
+		target string
+		want   []string
+	}{
+		{target: "test-unit", want: []string{"go", "test", "./..."}},
+		{target: "test-integration", want: []string{"go", "test", "-tags=" + testlane.IntegrationBuildTag, "-run", "'" + testlane.IntegrationTestPattern + "'", "./..."}},
+		{target: "quality", want: []string{"go", "run", "./cmd/testcoverage"}},
 	} {
-		if !strings.Contains(string(contents), want) {
-			t.Fatalf("Makefile does not use the lane convention %q", want)
+		t.Run(tt.target, func(t *testing.T) {
+			commands := conventions.goCommands(tt.target)
+			require.Len(t, commands, 1, "effective Go commands for %s", tt.target)
+			require.GreaterOrEqual(t, len(commands[0]), 2)
+			require.Equal(t, tt.want[:2], commands[0][:2])
+			arguments, expected := slices.Clone(commands[0][2:]), slices.Clone(tt.want[2:])
+			slices.Sort(arguments)
+			slices.Sort(expected)
+			if !slices.Equal(arguments, expected) {
+				t.Fatalf("effective Go commands for %s = %v, want %v", tt.target, commands, tt.want)
+			}
+		})
+	}
+	if strings.Join(conventions.dependencies["test"], " ") != "test-unit" {
+		t.Fatalf("test dependencies = %v", conventions.dependencies["test"])
+	}
+	for _, target := range []string{"fmt", "quality", "lint", "build"} {
+		require.Contains(t, conventions.dependencies["check"], target)
+	}
+}
+
+type makefileConventions struct {
+	variables    map[string]string
+	dependencies map[string][]string
+	recipes      map[string][]string
+}
+
+func parseMakefileConventions(contents string) makefileConventions {
+	conventions := makefileConventions{variables: map[string]string{}, dependencies: map[string][]string{}, recipes: map[string][]string{}}
+	var targets []string
+	for _, raw := range strings.Split(contents, "\n") {
+		if strings.HasPrefix(raw, "\t") {
+			command := strings.TrimSpace(strings.TrimLeft(raw, "\t@"))
+			for _, target := range targets {
+				conventions.recipes[target] = append(conventions.recipes[target], command)
+			}
+			continue
+		}
+		line := strings.TrimSpace(strings.SplitN(raw, "#", 2)[0])
+		if line == "" {
+			continue
+		}
+		targets = nil
+		if name, value, ok := strings.Cut(line, ":="); ok {
+			conventions.variables[strings.TrimSpace(name)] = strings.TrimSpace(value)
+		} else if names, deps, ok := strings.Cut(line, ":"); ok {
+			targets = strings.Fields(names)
+			for _, target := range targets {
+				conventions.dependencies[target] = strings.Fields(deps)
+			}
 		}
 	}
+	return conventions
+}
+
+func (m makefileConventions) goCommands(target string) [][]string {
+	var commands [][]string
+	for _, recipe := range m.recipes[target] {
+		for range len(m.variables) {
+			for name, value := range m.variables {
+				recipe = strings.ReplaceAll(recipe, "$("+name+")", value)
+			}
+		}
+		fields := strings.Fields(recipe)
+		if len(fields) >= 2 && fields[0] == "go" {
+			commands = append(commands, fields)
+		}
+	}
+	return commands
 }
 
 func repositoryRoot(t *testing.T) string {

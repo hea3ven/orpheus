@@ -204,6 +204,10 @@ func TestIntegrationWorkflowStatusAndTaskListUseLocalRunHistoryOnOpenTaskAsNeeds
 	is.Empty(listStderr)
 	is.Contains(listStdout, "ar-ready")
 	is.Contains(listStdout, "ar-running")
+	row := tableRowForTask(listStdout, "ar-running")
+	require.NotEmpty(t, row)
+	is.Contains(row, "Needs attention")
+	is.Contains(row, "backend status is open but local run attempt 1 is running")
 }
 
 func TestIntegrationWorkflowStatusAndTaskListRenderEquivalentRowsIdentically(t *testing.T) {
@@ -217,7 +221,18 @@ func TestIntegrationWorkflowStatusAndTaskListRenderEquivalentRowsIdentically(t *
 	require.Empty(t, statusStderr)
 	require.Empty(t, listStderr)
 	for _, taskID := range []string{"ar-ready", "ar-review", "ar-running"} {
-		assert.Equal(t, tableRowForTask(statusOutput, taskID), tableRowForTask(listOutput, taskID))
+		statusRow, listRow := tableRowForTask(statusOutput, taskID), tableRowForTask(listOutput, taskID)
+		require.NotEmpty(t, statusRow, "status row %s", taskID)
+		require.NotEmpty(t, listRow, "task list row %s", taskID)
+		assert.Equal(t, strings.Fields(statusRow), strings.Fields(listRow))
+		for _, want := range map[string][]string{
+			"ar-ready":   {"Ready", "Ready task"},
+			"ar-review":  {"Reviewing", "https://example.test/pr/3"},
+			"ar-running": {"Working", "run attempt 1 is running"},
+		}[taskID] {
+			assert.Contains(t, statusRow, want)
+			assert.Contains(t, listRow, want)
+		}
 	}
 	assert.NotContains(t, statusOutput, "ar-blocked")
 	assert.Contains(t, listOutput, "ar-blocked")
@@ -266,6 +281,19 @@ func TestIntegrationWorkflowStatusRendersEpicChildrenAsIntegratedTreeRows(t *tes
 	is.Contains(fullStdout, "└─ ar-done")
 	assertStatusGroupOrder(t, fullStdout, []string{"ar-epic", "├─ ar-nested", "│ └─ ar-nested-child", "├─ ar-ready", "├─ ar-blocked", "└─ ar-done"})
 	assertTaskListRendersActiveEpicTree(t, fixture)
+	jsonOut, jsonErr := fixture.mustExecute("task", "list", "--sort", "status", "--json")
+	is.Empty(jsonErr)
+	var entries []taskViewJSONTaskEntry
+	require.NoError(t, json.Unmarshal([]byte(jsonOut), &entries))
+	var ids []string
+	for _, entry := range entries {
+		is.Equal("task", entry.Kind)
+		ids = append(ids, entry.ID)
+	}
+	is.Equal([]string{"ar-epic", "ar-nested", "ar-nested-child", "ar-ready", "ar-blocked"}, ids)
+	require.NotNil(t, entries[0].EpicProgress)
+	is.Equal(1, entries[0].EpicProgress.Completed)
+	is.Equal(4, entries[0].EpicProgress.Total)
 }
 
 func assertTaskListRendersActiveEpicTree(t *testing.T, fixture *workflowFixture) {
@@ -339,13 +367,14 @@ func TestIntegrationWorkflowTaskViewsApplySharedSortModesAcrossRepositories(t *t
 		}},
 		repos["alpha"]: {tasks: []taskmodel.Task{
 			taskWFTask("a-ready-p2", "Lowest priority", taskmodel.StatusOpen, taskmodel.IssueTypeTask, taskWFPriority(2), taskWFCreated("2026-01-01T00:00:00Z"), taskWFUpdated("2026-01-03T00:00:00Z")),
+			taskWFTask("a-ready-p0-old", "Older highest priority", taskmodel.StatusOpen, taskmodel.IssueTypeTask, taskWFPriority(0), taskWFCreated("2025-12-31T00:00:00Z"), taskWFUpdated("2025-12-31T00:00:00Z")),
 			taskWFTask("a-ready-p0", "Highest priority", taskmodel.StatusOpen, taskmodel.IssueTypeTask, taskWFPriority(0), taskWFCreated("2026-01-02T00:00:00Z"), taskWFUpdated("2026-01-02T00:00:00Z")),
 		}},
 	})
 
-	statusOrder := []string{"b-review", "a-ready-p0", "b-ready", "a-ready-p2"}
-	createdOrder := []string{"b-review", "b-ready", "a-ready-p0", "a-ready-p2"}
-	updatedOrder := []string{"b-ready", "a-ready-p2", "a-ready-p0", "b-review"}
+	statusOrder := []string{"b-review", "a-ready-p0", "a-ready-p0-old", "b-ready", "a-ready-p2"}
+	createdOrder := []string{"b-review", "b-ready", "a-ready-p0", "a-ready-p2", "a-ready-p0-old"}
+	updatedOrder := []string{"b-ready", "a-ready-p2", "a-ready-p0", "b-review", "a-ready-p0-old"}
 	for _, test := range []struct {
 		name string
 		args []string
@@ -356,6 +385,8 @@ func TestIntegrationWorkflowTaskViewsApplySharedSortModesAcrossRepositories(t *t
 		{name: "status updated", args: []string{"status", "--sort", "updated"}, want: updatedOrder},
 		{name: "task list default", args: []string{"task", "list"}, want: createdOrder},
 		{name: "task list status", args: []string{"task", "list", "--sort", "status"}, want: statusOrder},
+		{name: "status normalized", args: []string{"status", "--sort", " UPDATED "}, want: updatedOrder},
+		{name: "task list normalized", args: []string{"task", "list", "--sort", " UPDATED "}, want: updatedOrder},
 		{name: "task list updated", args: []string{"task", "list", "--sort", "updated"}, want: updatedOrder},
 	} {
 		stdout, stderr := fixture.mustExecute(test.args...)

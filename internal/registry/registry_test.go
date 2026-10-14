@@ -12,32 +12,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
-func TestStoreLoadMissingRegistryIsEmpty(t *testing.T) {
-	store := registry.NewStore(newTestPaths(t))
-
-	got, err := store.Load()
-	if err != nil {
-		t.Fatalf("load missing registry: %v", err)
-	}
-	if len(got.Repos) != 0 {
-		t.Fatalf("repos = %#v, want empty", got.Repos)
-	}
-}
-
-func TestStoreLoadEmptyRegistryFileIsEmpty(t *testing.T) {
-	paths := newTestPaths(t)
-	writeDataFile(t, paths, "registry.yaml", "")
-	store := registry.NewStore(paths)
-
-	got, err := store.Load()
-	if err != nil {
-		t.Fatalf("load empty registry: %v", err)
-	}
-	if len(got.Repos) != 0 {
-		t.Fatalf("repos = %#v, want empty", got.Repos)
-	}
-}
-
 func TestStoreSaveLoadRoundTrip(t *testing.T) {
 	paths := newTestPaths(t)
 	store := registry.NewStore(paths)
@@ -51,7 +25,7 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 		BeadsPrefix:            "op",
 		SummaryGuidance:        "Use sentence-case summaries without a type prefix.",
 		SummaryGuidanceStyle:   registry.SummaryGuidanceStyleCapitalized,
-		TitleTemplate:          "[OPS] {{summary}}",
+		TitleTemplate:          "[{{external_ref}}] {{summary}}",
 		IncludePRReviewProcess: boolPtr(false),
 		ReviewPipeline:         "go-standard",
 		ReviewPipelineAliases: map[string]string{
@@ -72,19 +46,7 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read registry file: %v", err)
 	}
-	if !strings.Contains(string(onDisk), "repos:") ||
-		!strings.Contains(string(onDisk), "id: orpheus") ||
-		!strings.Contains(string(onDisk), "remote: git@example.com:org/orpheus.git") ||
-		!strings.Contains(string(onDisk), "default_branch: main") ||
-		!strings.Contains(string(onDisk), "beads_mode: local") ||
-		!strings.Contains(string(onDisk), "beads_prefix: op") ||
-		!strings.Contains(string(onDisk), "summary_guidance: Use sentence-case summaries without a type prefix.") ||
-		!strings.Contains(string(onDisk), "summary_guidance_style: capitalized") ||
-		!strings.Contains(string(onDisk), "title_template: '[OPS] {{summary}}'") ||
-		!strings.Contains(string(onDisk), "include_pr_review_process: false") ||
-		!strings.Contains(string(onDisk), "review_pipeline: go-standard") ||
-		!strings.Contains(string(onDisk), "review_pipeline_aliases:") ||
-		!strings.Contains(string(onDisk), "quick: go-standard") {
+	if !strings.Contains(string(onDisk), "repos:") || !strings.Contains(string(onDisk), "review_pipeline_aliases:") {
 		t.Fatalf("registry file is not human-editable YAML: %s", onDisk)
 	}
 
@@ -95,84 +57,49 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 	assertRepos(t, got.Repos, want.Repos)
 }
 
+func TestStoreLoadsRegistryAndRejectsInvalidConfiguration(t *testing.T) {
+	for _, tt := range []struct {
+		name, contents string
+		missing        bool
+		wantErrors     []string
+	}{
+		{name: "missing", missing: true},
+		{name: "empty"},
+		{name: "valid empty", contents: "repos: []\n"},
+		{name: "invalid alias", contents: "repos:\n  - id: alpha\n    name: alpha\n    path: /fixture/alpha\n    review_pipeline_aliases:\n      \" \": standard\n", wantErrors: []string{"review_pipeline_aliases name is required"}},
+		{name: "invalid summary style", contents: "repos:\n  - id: alpha\n    name: alpha\n    path: /fixture/alpha\n    summary_guidance_style: informal\n", wantErrors: []string{`summary_guidance_style "informal" is invalid`, `expected "typed" or "capitalized"`}},
+		{name: "malformed YAML", contents: "repos: [unterminated\n", wantErrors: []string{"load repo registry", "registry.yaml"}},
+		{name: "unknown field", contents: "repos: []\nunknown: true\n", wantErrors: []string{"field unknown not found"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			paths := newTestPaths(t)
+			if !tt.missing {
+				writeDataFile(t, paths, "registry.yaml", tt.contents)
+			}
+			got, err := registry.NewStore(paths).Load()
+			if len(tt.wantErrors) != 0 {
+				if err == nil {
+					t.Fatal("invalid registry loaded successfully")
+				}
+				for _, want := range tt.wantErrors {
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("load error = %v, want %q", err, want)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("load registry: %v", err)
+			}
+			if len(got.Repos) != 0 {
+				t.Fatalf("repos = %#v, want empty", got.Repos)
+			}
+		})
+	}
+}
+
 func boolPtr(value bool) *bool {
 	return &value
-}
-
-func TestStoreLoadRejectsInvalidReviewPipelineAliases(t *testing.T) {
-	paths := newTestPaths(t)
-	writeDataFile(t, paths, "registry.yaml", `repos:
-  - id: alpha
-    name: alpha
-    path: /fixture/alpha
-    review_pipeline_aliases:
-      " ": standard
-`)
-	store := registry.NewStore(paths)
-
-	_, err := store.Load()
-
-	if err == nil {
-		t.Fatal("load registry with invalid review pipeline alias succeeded, want error")
-	}
-	if !strings.Contains(err.Error(), "review_pipeline_aliases name is required") {
-		t.Fatalf("error = %v, want actionable alias validation", err)
-	}
-}
-
-func TestStoreLoadRejectsInvalidSummaryGuidanceStyle(t *testing.T) {
-	paths := newTestPaths(t)
-	writeDataFile(t, paths, "registry.yaml", `repos:
-  - id: alpha
-    name: alpha
-    path: /fixture/alpha
-    summary_guidance_style: informal
-`)
-	store := registry.NewStore(paths)
-
-	_, err := store.Load()
-
-	if err == nil {
-		t.Fatal("load registry with invalid summary guidance style succeeded, want error")
-	}
-	if !strings.Contains(err.Error(), `summary_guidance_style "informal" is invalid`) ||
-		!strings.Contains(err.Error(), `expected "typed" or "capitalized"`) {
-		t.Fatalf("error = %v, want actionable style validation", err)
-	}
-}
-
-func TestStoreLoadMalformedRegistry(t *testing.T) {
-	paths := newTestPaths(t)
-	writeDataFile(t, paths, "registry.yaml", "repos: [unterminated\n")
-	store := registry.NewStore(paths)
-
-	_, err := store.Load()
-	if err == nil {
-		t.Fatal("load malformed registry succeeded, want error")
-	}
-	if !strings.Contains(err.Error(), "load repo registry") || !strings.Contains(err.Error(), "registry.yaml") {
-		t.Fatalf("error is not actionable: %v", err)
-	}
-}
-
-func TestStoreLoadAcceptsExternalReferenceTitleTemplate(t *testing.T) {
-	paths := newTestPaths(t)
-	writeDataFile(t, paths, "registry.yaml", `repos:
-  - id: alpha
-    name: alpha
-    path: /fixture/alpha
-    title_template: "[{{external_ref}}] {{summary}}"
-`)
-	store := registry.NewStore(paths)
-
-	got, err := store.Load()
-
-	if err != nil {
-		t.Fatalf("load registry: %v", err)
-	}
-	if got.Repos[0].TitleTemplate != "[{{external_ref}}] {{summary}}" {
-		t.Fatalf("title template = %q, want external reference template", got.Repos[0].TitleTemplate)
-	}
 }
 
 func TestRepoEffectivePublicationPolicyAppliesCompatibilityDefaults(t *testing.T) {
@@ -210,26 +137,14 @@ func TestRepoEffectivePublicationPolicyAppliesCompatibilityDefaults(t *testing.T
 	}
 }
 
-func TestStoreLoadRejectsUnknownRegistryFields(t *testing.T) {
-	paths := newTestPaths(t)
-	writeDataFile(t, paths, "registry.yaml", "repos: []\nunknown: true\n")
-	store := registry.NewStore(paths)
-
-	_, err := store.Load()
-	if err == nil {
-		t.Fatal("load registry with unknown field succeeded, want error")
-	}
-	if !strings.Contains(err.Error(), "field unknown not found") {
-		t.Fatalf("error = %v, want unknown field validation", err)
-	}
-}
-
 func TestRegistryAddRejectsDuplicateIDNameAndPath(t *testing.T) {
 	basePath := filepath.Join(testutil.CanonicalTempDir(t), "alpha")
 	existing := registry.Registry{Repos: []registry.Repo{{
-		ID:   "alpha",
-		Name: "Alpha",
-		Path: basePath,
+		ID:          "alpha",
+		Name:        "Alpha",
+		Path:        basePath,
+		BeadsMode:   registry.BeadsModeLocal,
+		BeadsPrefix: "op",
 	}}}
 
 	tests := []struct {
@@ -237,6 +152,9 @@ func TestRegistryAddRejectsDuplicateIDNameAndPath(t *testing.T) {
 		repo registry.Repo
 		want string
 	}{
+		{name: "duplicate prefix", repo: registry.Repo{ID: "beta", Name: "Beta", Path: "/fixture/beta", BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "op"}, want: "duplicate task prefix \"op\""},
+		{name: "name collides with prefix", repo: registry.Repo{ID: "beta", Name: "op", Path: "/fixture/beta"}, want: "repo name \"op\" collides with repo[0] task prefix"},
+		{name: "prefix collides with id", repo: registry.Repo{ID: "beta", Name: "Beta", Path: "/fixture/beta", BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "alpha"}, want: "repo task prefix \"alpha\" collides with repo[0] id"},
 		{
 			name: "id",
 			repo: registry.Repo{ID: "alpha", Name: "Other", Path: filepath.Join(testutil.CanonicalTempDir(t), "other")},
@@ -260,75 +178,6 @@ func TestRegistryAddRejectsDuplicateIDNameAndPath(t *testing.T) {
 			err := reg.Add(tt.repo)
 			if err == nil {
 				t.Fatal("add duplicate repo succeeded, want error")
-			}
-			if !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("error = %v, want substring %q", err, tt.want)
-			}
-			assertRepos(t, reg.Repos, existing.Repos)
-		})
-	}
-}
-
-func TestRegistryAddRejectsDuplicateBeadsPrefix(t *testing.T) {
-	existing := registry.Registry{Repos: []registry.Repo{{
-		ID:          "alpha",
-		Name:        "Alpha",
-		Path:        filepath.Join(testutil.CanonicalTempDir(t), "alpha"),
-		BeadsMode:   registry.BeadsModeLocal,
-		BeadsPrefix: "op",
-	}}}
-
-	repo := registry.Repo{
-		ID:          "beta",
-		Name:        "Beta",
-		Path:        filepath.Join(testutil.CanonicalTempDir(t), "beta"),
-		BeadsMode:   registry.BeadsModeLocal,
-		BeadsPrefix: "op",
-	}
-
-	reg := existing
-	err := reg.Add(repo)
-	if err == nil {
-		t.Fatal("add duplicate task prefix succeeded, want error")
-	}
-	if !strings.Contains(err.Error(), "duplicate task prefix \"op\"") {
-		t.Fatalf("error = %v, want duplicate task prefix", err)
-	}
-	assertRepos(t, reg.Repos, existing.Repos)
-}
-
-func TestRegistryAddRejectsIDNamePrefixCrossCollision(t *testing.T) {
-	existing := registry.Registry{Repos: []registry.Repo{{
-		ID:          "alpha-id",
-		Name:        "Alpha Name",
-		Path:        filepath.Join(testutil.CanonicalTempDir(t), "alpha"),
-		BeadsMode:   registry.BeadsModeLocal,
-		BeadsPrefix: "alpha-prefix",
-	}}}
-
-	tests := []struct {
-		name string
-		repo registry.Repo
-		want string
-	}{
-		{
-			name: "name collides with existing prefix",
-			repo: registry.Repo{ID: "beta-id", Name: "alpha-prefix", Path: filepath.Join(testutil.CanonicalTempDir(t), "beta")},
-			want: "repo name \"alpha-prefix\" collides with repo[0] task prefix",
-		},
-		{
-			name: "prefix collides with existing id",
-			repo: registry.Repo{ID: "beta-id", Name: "Beta", Path: filepath.Join(testutil.CanonicalTempDir(t), "beta"), BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "alpha-id"},
-			want: "repo task prefix \"alpha-id\" collides with repo[0] id",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			reg := existing
-			err := reg.Add(tt.repo)
-			if err == nil {
-				t.Fatal("add cross-colliding repo succeeded, want error")
 			}
 			if !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error = %v, want substring %q", err, tt.want)
@@ -377,17 +226,14 @@ func TestRegistryAddValidatesBeadsModeAndPrefixTogether(t *testing.T) {
 
 func TestNewRepoFromPathDerivesIdentityAndNormalizesPath(t *testing.T) {
 	root := testutil.CanonicalTempDir(t)
-	input := filepath.Join(root, "..", filepath.Base(root), "my-repo", ".")
+	input := root + "/../" + filepath.Base(root) + "/my-repo/."
 
 	got, err := registry.NewRepoFromPath(input)
 	if err != nil {
 		t.Fatalf("new repo from path: %v", err)
 	}
 
-	wantPath, err := registry.NormalizePath(filepath.Join(root, "my-repo"))
-	if err != nil {
-		t.Fatalf("normalize expected path: %v", err)
-	}
+	wantPath := filepath.Join(root, "my-repo")
 	if got.ID != "my-repo" || got.Name != "my-repo" || got.Path != wantPath {
 		t.Fatalf("repo = %#v, want id/name my-repo path %q", got, wantPath)
 	}
@@ -435,10 +281,12 @@ func TestRegistryResolveByIDNameAndBeadsPrefix(t *testing.T) {
 	reg := registry.Registry{Repos: []registry.Repo{alpha, beta}}
 
 	tests := []struct {
-		name  string
-		token string
-		want  registry.Repo
+		name      string
+		token     string
+		want      registry.Repo
+		wantError bool
 	}{
+		{name: "unknown", token: "missing", wantError: true},
 		{name: "id", token: " alpha-id ", want: alpha},
 		{name: "display name", token: "Beta Repo", want: beta},
 		{name: "beads prefix", token: "alpha-prefix", want: alpha},
@@ -447,6 +295,12 @@ func TestRegistryResolveByIDNameAndBeadsPrefix(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := reg.Resolve(tt.token)
+			if tt.wantError {
+				if err == nil || !strings.Contains(err.Error(), "repo \"missing\" is not registered") || !strings.Contains(err.Error(), "orpheus repo list") {
+					t.Fatalf("resolve error = %v", err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("resolve %q: %v", tt.token, err)
 			}
@@ -454,38 +308,6 @@ func TestRegistryResolveByIDNameAndBeadsPrefix(t *testing.T) {
 				t.Fatalf("resolve %q = %#v, want %#v", tt.token, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestRegistryResolveUnknownIsActionable(t *testing.T) {
-	reg := registry.Registry{Repos: []registry.Repo{{
-		ID:          "alpha-id",
-		Name:        "Alpha Repo",
-		Path:        filepath.Join(testutil.CanonicalTempDir(t), "alpha"),
-		BeadsMode:   registry.BeadsModeLocal,
-		BeadsPrefix: "alpha-prefix",
-	}}}
-
-	_, err := reg.Resolve("missing")
-	if err == nil {
-		t.Fatal("resolve unknown repo succeeded, want error")
-	}
-	if !strings.Contains(err.Error(), "repo \"missing\" is not registered") || !strings.Contains(err.Error(), "orpheus repo list") {
-		t.Fatalf("error is not actionable: %v", err)
-	}
-}
-
-func TestManagedBeadsDirUsesRepoIDUnderDataRoot(t *testing.T) {
-	paths, dataRoot := newTestPathsWithDataRoot(t)
-	store := registry.NewStore(paths)
-
-	got, err := store.ManagedBeadsDir(" alpha ")
-	if err != nil {
-		t.Fatalf("managed beads dir: %v", err)
-	}
-	want := filepath.Join(dataRoot, "repos", "alpha", "beads")
-	if got != want {
-		t.Fatalf("managed beads dir = %q, want %q", got, want)
 	}
 }
 
@@ -507,10 +329,12 @@ func TestStoreBeadsDirUsesRepoMode(t *testing.T) {
 	localPath := filepath.Join(testutil.CanonicalTempDir(t), "local")
 
 	tests := []struct {
-		name string
-		repo registry.Repo
-		want string
+		name      string
+		repo      registry.Repo
+		want      string
+		wantError bool
 	}{
+		{name: "missing mode", repo: registry.Repo{ID: "alpha", Name: "alpha", Path: "/fixture/alpha"}, wantError: true},
 		{
 			name: "local mode uses repo path",
 			repo: registry.Repo{ID: "local", Name: "Local", Path: localPath, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "lp"},
@@ -518,7 +342,7 @@ func TestStoreBeadsDirUsesRepoMode(t *testing.T) {
 		},
 		{
 			name: "managed mode uses data root",
-			repo: registry.Repo{ID: "managed", Name: "Managed", Path: filepath.Join(testutil.CanonicalTempDir(t), "managed"), BeadsMode: registry.BeadsModeManaged, BeadsPrefix: "mp"},
+			repo: registry.Repo{ID: " managed ", Name: "Managed", Path: filepath.Join(testutil.CanonicalTempDir(t), "managed"), BeadsMode: registry.BeadsModeManaged, BeadsPrefix: "mp"},
 			want: filepath.Join(dataRoot, "repos", "managed", "beads"),
 		},
 	}
@@ -526,6 +350,12 @@ func TestStoreBeadsDirUsesRepoMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := store.BeadsDir(tt.repo)
+			if tt.wantError {
+				if err == nil || !strings.Contains(err.Error(), "has no beads_mode") || !strings.Contains(err.Error(), "registry.yaml") {
+					t.Fatalf("beads dir error = %v", err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("beads dir: %v", err)
 			}
@@ -533,19 +363,6 @@ func TestStoreBeadsDirUsesRepoMode(t *testing.T) {
 				t.Fatalf("beads dir = %q, want %q", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestStoreBeadsDirRejectsRepoWithoutBeadsMode(t *testing.T) {
-	store := registry.NewStore(newTestPaths(t))
-	repo := registry.Repo{ID: "alpha", Name: "alpha", Path: filepath.Join(testutil.CanonicalTempDir(t), "alpha")}
-
-	_, err := store.BeadsDir(repo)
-	if err == nil {
-		t.Fatal("beads dir without mode succeeded, want error")
-	}
-	if !strings.Contains(err.Error(), "has no beads_mode") || !strings.Contains(err.Error(), "registry.yaml") {
-		t.Fatalf("error is not actionable: %v", err)
 	}
 }
 

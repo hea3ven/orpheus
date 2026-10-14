@@ -85,6 +85,9 @@ func TestIntegrationWorkflowTaskRunRejectsProjectedProblemsUntilResolved(t *test
 			stdout, stderr, err := fixture.execute("task", "run", item.ID)
 
 			require.ErrorContains(t, err, scenario.reason)
+			if scenario.name == "open parent" {
+				assert.ErrorContains(t, err, "immediate parent epic must be in_progress")
+			}
 			assert.Contains(t, statusOutput, scenario.reason)
 			assert.Empty(t, stdout)
 			assert.Empty(t, stderr)

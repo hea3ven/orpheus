@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
+	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -40,6 +41,7 @@ func TestIntegrationWorkflowTaskStartActivatesEligibleEpicAndRejectsOrdinaryTask
 	setupOwnershipAuthoringWorkflow(t, fixture, repo, ordinary)
 	_, _, err := fixture.execute("task", "start", "op-task")
 	require.Error(t, err)
+	is.ErrorIs(err, workflow.ErrNotEpic)
 	is.ErrorContains(err, "item is not an epic")
 	is.ErrorContains(err, "use `orpheus task run op-task` for the normal task workflow")
 	is.Empty(ordinary.started)
@@ -53,6 +55,17 @@ func TestIntegrationWorkflowTaskStartHonorsParentDependencyAndIdempotency(t *tes
 		wantErr  string
 		wantCall []string
 	}{
+
+		{name: "closed epic", tasks: []taskmodel.Task{ownershipAuthoringEpic("op-epic", taskmodel.StatusClosed)}, wantErr: "cannot be started"},
+		{name: "incomplete dependency identifiers", tasks: []taskmodel.Task{
+			func() taskmodel.Task {
+				epic := ownershipAuthoringEpic("op-epic", taskmodel.StatusOpen)
+				epic.Relations.BlockedByCount = 2
+				epic.Relations.DependencyIDs = []string{"op-dependency"}
+				return epic
+			}(),
+			ownershipAuthoringTask("op-dependency", "Prerequisite", taskmodel.StatusClosed, taskmodel.IssueTypeTask),
+		}, wantErr: "source reports 2 blockers but only 1 identifiers"},
 		{
 			name: "parent not active",
 			tasks: []taskmodel.Task{
@@ -114,7 +127,8 @@ func TestIntegrationWorkflowTaskCloseRequiresVerifiedClosedChildrenAndIsIdempote
 		wantErr  string
 		wantCall []string
 	}{
-		{
+
+		{name: "open epic", tasks: []taskmodel.Task{ownershipAuthoringEpic("op-epic", taskmodel.StatusOpen)}, wantErr: "can only be closed when in progress"}, {
 			name: "closes fully completed epic",
 			tasks: []taskmodel.Task{
 				func() taskmodel.Task {
@@ -193,6 +207,9 @@ func TestIntegrationWorkflowTaskCloseRequiresVerifiedClosedChildrenAndIsIdempote
 			stdout, stderr, err := fixture.execute("task", "close", "op-epic")
 			if tt.wantErr != "" {
 				require.Error(t, err)
+				if tt.name == "ordinary task uses normal workflow guidance" {
+					assert.ErrorIs(t, err, workflow.ErrNotEpic)
+				}
 				assert.Contains(t, err.Error(), tt.wantErr)
 				assert.Empty(t, stdout)
 				assert.Empty(t, stderr)

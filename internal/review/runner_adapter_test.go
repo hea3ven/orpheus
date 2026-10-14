@@ -37,6 +37,8 @@ func TestIntegrationAdapterContractCandidateSnapshotRestoresTrackedAndUntrackedM
 		t.Fatalf("write candidate tracked change: %v", err)
 	}
 	untrackedPath := filepath.Join(workdir, "untracked.txt")
+	logPath := filepath.Join(workdir, "review.log")
+	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
 	if err := os.WriteFile(untrackedPath, []byte("candidate untracked\n"), 0o644); err != nil {
 		t.Fatalf("write candidate untracked file: %v", err)
 	}
@@ -48,6 +50,7 @@ func TestIntegrationAdapterContractCandidateSnapshotRestoresTrackedAndUntrackedM
 	if err := os.WriteFile(trackedPath, []byte("mutated\n"), 0o644); err != nil {
 		t.Fatalf("mutate tracked file: %v", err)
 	}
+	require.NoError(t, os.WriteFile(logPath, []byte("review output\n"), 0o644))
 	if err := os.Remove(untrackedPath); err != nil {
 		t.Fatalf("remove untracked file: %v", err)
 	}
@@ -67,52 +70,18 @@ func TestIntegrationAdapterContractCandidateSnapshotRestoresTrackedAndUntrackedM
 	if got := string(mustReadReviewAdapterFile(t, untrackedPath)); got != "candidate untracked\n" {
 		t.Fatalf("untracked file = %q, want restored candidate file", got)
 	}
+	assert.Empty(t, mustReadReviewAdapterFile(t, logPath), "initially empty file must survive restoration")
 	if _, err := os.Stat(createdPath); !os.IsNotExist(err) {
 		t.Fatalf("reviewer-created file stat error = %v, want file removed", err)
 	}
 	status := runReviewAdapterGit(t, workdir, "status", "--short")
-	for _, want := range []string{" M tracked.txt", "?? untracked.txt"} {
+	for _, want := range []string{" M tracked.txt", "?? untracked.txt", "?? review.log"} {
 		if !strings.Contains(status, want) {
 			t.Fatalf("git status = %q, want %q", status, want)
 		}
 	}
 	if strings.Contains(status, "created-by-review.txt") {
 		t.Fatalf("git status = %q, want reviewer-created file removed", status)
-	}
-}
-
-func TestIntegrationAdapterContractCandidateSnapshotRestoresRedirectedStderrFile(t *testing.T) {
-	workdir := testutil.CanonicalTempDir(t)
-	candidatePath := initReviewAdapterGitRepoWithCandidateChange(t, workdir)
-	logPath := filepath.Join(workdir, "review.log")
-	if err := os.WriteFile(logPath, nil, 0o644); err != nil {
-		t.Fatalf("create redirected stderr file: %v", err)
-	}
-
-	snapshot, err := captureCandidateSnapshot(context.Background(), workdir, nil)
-	if err != nil {
-		t.Fatalf("capture candidate snapshot: %v", err)
-	}
-	if err := os.WriteFile(logPath, []byte("== Review step: unit (check) ==\n"), 0o644); err != nil {
-		t.Fatalf("write redirected stderr: %v", err)
-	}
-
-	err = restoreCandidateIfMutated(context.Background(), snapshot, nil)
-
-	if err == nil || !strings.Contains(err.Error(), "review step mutated candidate changes") {
-		t.Fatalf("restore error = %v, want candidate mutation error", err)
-	}
-	if got := string(mustReadReviewAdapterFile(t, candidatePath)); got != "candidate\n" {
-		t.Fatalf("candidate file = %q, want restored candidate change", got)
-	}
-	if got := string(mustReadReviewAdapterFile(t, logPath)); got != "" {
-		t.Fatalf("redirected stderr file = %q, want restored empty file", got)
-	}
-	status := runReviewAdapterGit(t, workdir, "status", "--short")
-	for _, want := range []string{" M candidate.txt", "?? review.log"} {
-		if !strings.Contains(status, want) {
-			t.Fatalf("git status = %q, want %q", status, want)
-		}
 	}
 }
 

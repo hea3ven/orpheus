@@ -1,6 +1,7 @@
 package testutil_test
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -8,7 +9,12 @@ import (
 )
 
 func TestCanonicalTempDirReturnsResolvedAbsolutePath(t *testing.T) {
-	dir := testutil.CanonicalTempDir(t)
+	physical := testutil.CanonicalTempDir(t)
+	alias := filepath.Join(testutil.CanonicalTempDir(t), "alias")
+	if err := os.Symlink(physical, alias); err != nil {
+		t.Fatalf("create temporary directory alias: %v", err)
+	}
+	dir := testutil.CanonicalTempDir(aliasedTempDirectory{TB: t, path: alias})
 
 	if !filepath.IsAbs(dir) {
 		t.Fatalf("temporary directory %q is not absolute", dir)
@@ -16,11 +22,14 @@ func TestCanonicalTempDirReturnsResolvedAbsolutePath(t *testing.T) {
 	if filepath.Clean(dir) != dir {
 		t.Fatalf("temporary directory %q is not clean", dir)
 	}
-	resolved, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		t.Fatalf("resolve temporary directory %q: %v", dir, err)
-	}
-	if filepath.Clean(resolved) != dir {
-		t.Fatalf("temporary directory = %q, want resolved path %q", dir, filepath.Clean(resolved))
+	if dir != physical {
+		t.Fatalf("temporary directory = %q, want physical path %q", dir, physical)
 	}
 }
+
+type aliasedTempDirectory struct {
+	testing.TB
+	path string
+}
+
+func (d aliasedTempDirectory) TempDir() string { return d.path }

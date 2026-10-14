@@ -32,23 +32,6 @@ var targetPolicySurface = map[string]bool{
 	"ClassifyGitFacts":       true,
 }
 
-var targetPolicyDeclarations = map[string]bool{
-	"TargetKind":             true,
-	"TargetUnknown":          true,
-	"TargetWorktreeTeam":     true,
-	"TargetRepoRootTeam":     true,
-	"TargetMainSolo":         true,
-	"ExpectedTargets":        true,
-	"ExpectedTargetsForTask": true,
-	"ClassifyMetadataTarget": true,
-	"ClassifyRunTarget":      true,
-	"ClassifyGitFacts":       true,
-}
-
-var targetPolicyTypeDeclarations = map[string]bool{
-	"Target": true,
-}
-
 var targetPolicyTypes = map[string]bool{
 	"Target":          true,
 	"TargetKind":      true,
@@ -71,10 +54,30 @@ func TestTargetPolicyDeclarationsStayInTaskTarget(t *testing.T) {
 		if skipTargetPolicyBoundaryPath(repoRoot, path, entry) {
 			return nil
 		}
-		fileViolations, err := targetPolicyDeclarationViolations(repoRoot, path)
+		fileset := token.NewFileSet()
+		file, err := parser.ParseFile(fileset, path, nil, 0)
 		if err != nil {
 			return err
 		}
+		relative, err := filepath.Rel(repoRoot, path)
+		if err != nil {
+			return err
+		}
+		imports := importPathsByName(file)
+		var fileViolations []string
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch spec := node.(type) {
+			case *ast.TypeSpec:
+				if typeAliasToTargetPolicy(relative, imports, spec) {
+					fileViolations = append(fileViolations, formatTargetPolicyViolation(repoRoot, fileset, spec.Pos(), "reexports target policy type"))
+				}
+			case *ast.ValueSpec:
+				if valueAliasToTargetPolicy(relative, imports, spec) {
+					fileViolations = append(fileViolations, formatTargetPolicyViolation(repoRoot, fileset, spec.Pos(), "reexports target policy operation"))
+				}
+			}
+			return true
+		})
 		violations = append(violations, fileViolations...)
 		return nil
 	}); err != nil {
@@ -147,68 +150,6 @@ func skipTargetPolicyBoundaryPath(repoRoot string, path string, entry fs.DirEntr
 	}
 	return relative == filepath.Join("internal", "tasktarget") ||
 		strings.HasPrefix(relative, filepath.Join("internal", "tasktarget")+string(filepath.Separator))
-}
-
-func targetPolicyDeclarationViolations(repoRoot string, path string) ([]string, error) {
-	fileset := token.NewFileSet()
-	file, err := parser.ParseFile(fileset, path, nil, parser.ParseComments)
-	if err != nil {
-		return nil, err
-	}
-
-	relative, err := filepath.Rel(repoRoot, path)
-	if err != nil {
-		relative = path
-	}
-	imports := importPathsByName(file)
-
-	violations := []string{}
-	for _, decl := range file.Decls {
-		switch typed := decl.(type) {
-		case *ast.FuncDecl:
-			if typed.Recv == nil && targetPolicyDeclarations[typed.Name.Name] {
-				violations = append(violations, formatTargetPolicyViolation(repoRoot, fileset, typed.Name.Pos(), "declares "+typed.Name.Name))
-			}
-			if isTargetPolicyConsumerPath(relative) && typed.Name.Name == "DisplayName" {
-				violations = append(violations, formatTargetPolicyViolation(repoRoot, fileset, typed.Name.Pos(), "declares DisplayName"))
-			}
-		case *ast.GenDecl:
-			for _, spec := range typed.Specs {
-				specViolations := targetPolicySpecViolations(repoRoot, fileset, relative, imports, spec)
-				violations = append(violations, specViolations...)
-			}
-		}
-	}
-	return violations, nil
-}
-
-func targetPolicySpecViolations(
-	repoRoot string,
-	fileset *token.FileSet,
-	relative string,
-	imports map[string]string,
-	spec ast.Spec,
-) []string {
-	violations := []string{}
-	switch typed := spec.(type) {
-	case *ast.TypeSpec:
-		if targetPolicyDeclarations[typed.Name.Name] || targetPolicyTypeDeclarations[typed.Name.Name] {
-			violations = append(violations, formatTargetPolicyViolation(repoRoot, fileset, typed.Name.Pos(), "declares "+typed.Name.Name))
-		}
-		if typeAliasToTargetPolicy(relative, imports, typed) {
-			violations = append(violations, formatTargetPolicyViolation(repoRoot, fileset, typed.Name.Pos(), "aliases "+typed.Name.Name+" to target policy"))
-		}
-	case *ast.ValueSpec:
-		for _, name := range typed.Names {
-			if targetPolicyDeclarations[name.Name] {
-				violations = append(violations, formatTargetPolicyViolation(repoRoot, fileset, name.Pos(), "declares "+name.Name))
-			}
-			if valueAliasToTargetPolicy(relative, imports, typed) {
-				violations = append(violations, formatTargetPolicyViolation(repoRoot, fileset, name.Pos(), "aliases "+name.Name+" to target policy"))
-			}
-		}
-	}
-	return violations
 }
 
 func typeAliasToTargetPolicy(relative string, imports map[string]string, typed *ast.TypeSpec) bool {

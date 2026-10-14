@@ -147,30 +147,27 @@ func TestTaskShowReviewRejectsUnknownAttemptAndFinding(t *testing.T) {
 		}},
 	}}}
 	tests := []struct {
+		empty bool
 		scope reviewShowScope
 		want  string
 	}{
+		{empty: true, scope: reviewShowScope{reviewAttempt: 1}, want: "review attempt 1 was not found for task op-1: no review attempts are recorded"},
+		{empty: true, scope: reviewShowScope{reviewAttempt: 1, findingNumber: 1}, want: "review attempt 1 was not found for task op-1: no review attempts are recorded"},
 		{scope: reviewShowScope{reviewAttempt: 1}, want: "review attempt 1 was not found for task op-1"},
 		{scope: reviewShowScope{reviewAttempt: 2, findingNumber: 2}, want: "authoritative finding number 2 is out of range for review attempt 2 (has 1 authoritative finding(s))"},
 	}
 	for _, test := range tests {
 		var output bytes.Buffer
-		err := renderTaskShowReview(&output, "alpha", "op-1", state, test.scope)
+		current := state
+		if test.empty {
+			current = taskstate.TaskState{}
+		}
+		err := renderTaskShowReview(&output, "alpha", "op-1", current, test.scope)
+		if strings.Contains(output.String(), "No review attempts recorded") {
+			t.Fatalf("scoped lookup must fail: %s", output.String())
+		}
 		if err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Errorf("renderTaskShowReview(scope=%+v) error = %v, want %q", test.scope, err, test.want)
-		}
-	}
-}
-
-func TestTaskShowReviewRejectsScopesWhenNoReviewsExist(t *testing.T) {
-	for _, scope := range []reviewShowScope{{reviewAttempt: 1}, {reviewAttempt: 1, findingNumber: 1}} {
-		var output bytes.Buffer
-		err := renderTaskShowReview(&output, "alpha", "op-empty", taskstate.TaskState{}, scope)
-		if err == nil || !strings.Contains(err.Error(), "review attempt 1 was not found for task op-empty: no review attempts are recorded") {
-			t.Fatalf("renderTaskShowReview(scope=%+v) error = %v, want missing-attempt error", scope, err)
-		}
-		if strings.Contains(output.String(), "No review attempts recorded") {
-			t.Fatalf("scoped no-history output must not succeed:\n%s", output.String())
 		}
 	}
 }
@@ -236,65 +233,15 @@ func TestAlternateFindingPromptRendersReviewerProvenance(t *testing.T) {
 	prompt := taskReviewAlternateFindingPrompt(command, bufio.NewReader(strings.NewReader("a\n")))
 	decisions, err := prompt(review.AlternateReviewComparison{
 		Step:               review.Step{Name: "ai-review"},
+		Primary:            []review.AutomatedBlocker{{Index: 0, Number: 2, Finding: taskstate.ReviewFinding{Title: "Primary finding", Description: "Authoritative description.", SuggestedAction: "Fix it."}}},
 		PrimaryExecution:   &taskstate.AgentExecution{Profile: "primary", Model: "primary-model", Harness: "pi", Status: taskstate.RunStatusSucceeded},
 		AlternateExecution: &taskstate.AgentExecution{Profile: "alternate", Model: "alternate-model", Harness: "codex", Status: taskstate.RunStatusSucceeded},
-		Alternate:          []review.AlternateFinding{{Index: 0, Finding: taskstate.ReviewFinding{Title: "alternate", Description: "finding"}}},
+		Alternate:          []review.AlternateFinding{{Index: 2, Finding: taskstate.ReviewFinding{Title: "Alternate title", Description: "Alternate description."}}},
 	})
-	if err != nil || len(decisions) != 1 || decisions[0].Classification != taskstate.AlternateFindingAdmitted {
+	if err != nil || len(decisions) != 1 || decisions[0].Classification != taskstate.AlternateFindingAdmitted || decisions[0].FindingIndex != 2 {
 		t.Fatalf("decisions=%#v err=%v", decisions, err)
 	}
-	for _, want := range []string{"Primary reviewer: profile=primary model=primary-model harness=pi", "Alternate reviewer: profile=alternate model=alternate-model harness=codex"} {
-		if !strings.Contains(output.String(), want) {
-			t.Fatalf("output missing %q:\n%s", want, output.String())
-		}
-	}
-}
-
-func TestRenderAlternateReviewComparisonShowsAuthoritativeFindings(t *testing.T) {
-	var output bytes.Buffer
-	comparison := review.AlternateReviewComparison{
-		Step: review.Step{Name: "ai-review"},
-		Primary: []review.AutomatedBlocker{{
-			Index:  0,
-			Number: 2,
-			Finding: taskstate.ReviewFinding{
-				Title:           "Primary finding",
-				Description:     "Authoritative description.",
-				SuggestedAction: "Fix it.",
-			},
-		}},
-	}
-
-	if err := renderAlternateReviewComparison(&output, comparison); err != nil {
-		t.Fatalf("render comparison: %v", err)
-	}
-	for _, want := range []string{
-		`Paired reviewer comparison for step "ai-review"`,
-		"Primary findings:",
-		"Finding 2:",
-		"Title: Primary finding",
-		"Suggested action: Fix it.",
-	} {
-		if !strings.Contains(output.String(), want) {
-			t.Fatalf("output missing %q:\n%s", want, output.String())
-		}
-	}
-}
-
-func TestRenderAlternateReviewFinding(t *testing.T) {
-	var output bytes.Buffer
-	alternate := review.AlternateFinding{
-		Index: 2,
-		Finding: taskstate.ReviewFinding{
-			Title:       "Alternate title",
-			Description: "Alternate description.",
-		},
-	}
-
-	if err := renderAlternateReviewFinding(&output, alternate); err != nil {
-		t.Fatalf("render alternate finding: %v", err)
-	}
-	for _, want := range []string{"Alternate finding 3:", "Title: Alternate title", "Description: Alternate description."} {
+	for _, want := range []string{"Primary findings:", "Finding 2:", "Title: Primary finding", "Authoritative description.", "Suggested action: Fix it.", "Alternate finding 3:", "Title: Alternate title", "Description: Alternate description.", "Primary reviewer: profile=primary model=primary-model harness=pi", "Alternate reviewer: profile=alternate model=alternate-model harness=codex"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("output missing %q:\n%s", want, output.String())
 		}
@@ -308,8 +255,10 @@ func TestPromptAlternateReviewFindingDecisionClassifiesInput(t *testing.T) {
 		primaryFindingCount int
 		want                review.AlternateFindingDecision
 		wantOutput          string
+		wantError           bool
 	}{
-		{
+
+		{name: "cancel", input: "cancel\n", wantError: true}, {
 			name:  "empty admits",
 			input: "\n",
 			want:  review.AlternateFindingDecision{FindingIndex: 4, Classification: taskstate.AlternateFindingAdmitted},
@@ -359,6 +308,12 @@ func TestPromptAlternateReviewFindingDecisionClassifiesInput(t *testing.T) {
 				4,
 				test.primaryFindingCount,
 			)
+			if test.wantError {
+				if !errors.Is(err, review.ErrAutomatedBlockerInputUnavailable) {
+					t.Fatalf("cancel error = %v", err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("prompt decision: %v", err)
 			}
@@ -369,18 +324,5 @@ func TestPromptAlternateReviewFindingDecisionClassifiesInput(t *testing.T) {
 				t.Fatalf("output missing %q:\n%s", test.wantOutput, output.String())
 			}
 		})
-	}
-}
-
-func TestPromptAlternateReviewFindingDecisionCancels(t *testing.T) {
-	var output bytes.Buffer
-	_, err := promptAlternateReviewFindingDecision(
-		&output,
-		bufio.NewReader(strings.NewReader("cancel\n")),
-		0,
-		1,
-	)
-	if !errors.Is(err, review.ErrAutomatedBlockerInputUnavailable) {
-		t.Fatalf("error = %v, want input unavailable", err)
 	}
 }

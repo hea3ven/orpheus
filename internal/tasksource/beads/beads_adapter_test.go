@@ -350,11 +350,14 @@ func checkCrossRepositoryReferences(t *testing.T, fixture beadsRelationshipFixtu
 	}
 	listed, err := fixture.backend.List(t.Context())
 	require.NoError(t, err)
+	foundConsumer := false
 	for _, item := range listed {
 		if item.ID == consumer.ID {
+			foundConsumer = true
 			assert.Equal(t, []string{prerequisite.ID}, item.Relations.DependencyIDs)
 		}
 	}
+	require.True(t, foundConsumer, "list must include the consumer with its remote dependency")
 	remote, err := owner.Get(t.Context(), prerequisite.ID)
 	require.NoError(t, err)
 	assert.Equal(t, task.StatusOpen, remote.Status)

@@ -10,32 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationWorkflowRepoAddWithoutLocalBeadsRegistersManagedRepoAndListsIt(t *testing.T) {
-	is := assert.New(t)
-	repo := aGitRepository(t, "alpha")
-	fixture := newRepoWorkflowFixture(t, repo)
-	fixture.withoutLocalBeads()
-
-	addOutput, addStderr, err := fixture.execute("repo", "add", "--task-source", "beads", repo.path)
-	require.NoError(t, err, "repo add; stderr: %s", addStderr)
-	listOutput, listStderr, err := fixture.execute("repo", "list")
-	require.NoError(t, err, "repo list; stderr: %s", listStderr)
-
-	finalRegistry := fixture.loadFinalRegistry()
-	require.Len(t, finalRegistry.Repos, 1)
-	wantRepo := repo.registeredWithManagedBeads()
-	is.Equal(wantRepo, finalRegistry.Repos[0])
-	assertRepoAdded(t, addOutput, wantRepo)
-	assertRepoListed(t, listOutput, wantRepo)
-	is.Empty(addStderr)
-	is.Empty(listStderr)
-	is.Equal([]string{repo.path}, fixture.gitInspections)
-	is.Equal([]string{repo.path}, fixture.beadsInspections)
-	is.Equal([]beadsInitialization{{
-		dir: repoWorkflowDataRoot + "/repos/alpha/beads", prefix: "alpha",
-	}}, fixture.beadsInitializations)
-}
-
 func TestIntegrationWorkflowRepoRegistrationSelectsStatusBackendAndMaintenanceOwnership(t *testing.T) {
 	for _, mode := range []string{"local", "managed"} {
 		t.Run(mode, func(t *testing.T) {

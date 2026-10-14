@@ -5,12 +5,11 @@ package cli_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	reviewconfig "github.com/hea3ven/orpheus/internal/review"
-	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/stretchr/testify/assert"
@@ -309,67 +308,6 @@ func TestIntegrationWorkflowTaskReviewManualInputLossReplaysRecordedFindings(t *
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
-func TestIntegrationWorkflowTaskReviewInvalidReviewAgentConfigDoesNotStartFreshAttempt(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newReviewWorkflowFixture(t, "op-main", "Review agent config", "Validate preflight.")
-	paths := fixture.paths
-	fixture.pipelines("standard", map[string][]map[string]any{
-		"standard": {{"kind": "agent_review", "name": "ai-review"}},
-	})
-
-	stdout, stderr, err := fixture.runError("", "task", "run", "op-main")
-
-	must.Error(err)
-	is.Empty(stdout)
-	is.Empty(stderr)
-	is.ErrorContains(err, "load agent profiles")
-	var state taskstate.TaskState
-	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
-	_, ok := taskstate.LatestReview(state)
-	is.False(ok, "fresh invalid agent config must not persist a review attempt")
-}
-
-func TestIntegrationWorkflowTaskReviewInvalidReviewAgentConfigDoesNotResumeManualAttempt(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newReviewWorkflowFixture(t, "op-main", "Review agent resume", "Validate preflight.")
-	paths := fixture.paths
-	fixture.pipelines("standard", map[string][]map[string]any{
-		"standard": {
-			{"kind": "agent_review", "name": "ai-review"},
-			{"kind": "manual", "name": "inspect"},
-		},
-	})
-	runStore := taskstate.NewStore(paths)
-	reviewAttempt, err := runStore.StartReviewWithOptions("alpha", "op-main", taskstate.StartReviewOptions{
-		Pipeline: "standard",
-		Step:     "ai-review",
-	})
-	must.NoError(err)
-	_, err = runStore.RecordReviewStep("alpha", "op-main", reviewAttempt.Attempt, taskstate.RecordReviewStepOptions{
-		Kind: "agent_review",
-		Name: "ai-review",
-	})
-	must.NoError(err)
-	_, err = runStore.PauseReviewForManual("alpha", "op-main", reviewAttempt.Attempt, "inspect")
-	must.NoError(err)
-
-	stdout, stderr, err := fixture.runError("", "task", "run", "op-main")
-
-	must.Error(err)
-	is.Empty(stdout)
-	is.Empty(stderr)
-	is.ErrorContains(err, "load agent profiles")
-	var state taskstate.TaskState
-	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
-	latest, ok := taskstate.LatestReview(state)
-	must.True(ok)
-	is.Equal(reviewAttempt.Attempt, latest.Attempt)
-	is.Equal(taskstate.ReviewStatusWaitingForManual, latest.Status)
-	is.Equal("inspect", latest.Step)
-}
-
 func TestIntegrationWorkflowTaskReviewCheckBlockerReasonEOFRecordsInterrupted(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -413,162 +351,6 @@ func TestIntegrationWorkflowTaskReviewCheckBlockerReasonEOFRecordsInterrupted(t 
 			is.Empty(taskstate.FinalizationFacts(state).Commit)
 		})
 	}
-}
-
-func TestIntegrationWorkflowTaskReviewCheckBlockerKeepAcceptsEOFAnswer(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newReviewWorkflowFixture(t, "op-main", "Review keep EOF", "Keep blocker without newline.")
-	paths := fixture.paths
-
-	check := fixture.check("check", checkResult{code: 7})
-	must.NoError(state.SeedMemoryConfigYAML(paths, reviewconfig.ConfigFile, map[string]any{
-		"reviews": map[string]any{
-			"default_pipeline":               "standard",
-			"max_autonomous_review_attempts": 1,
-			"pipelines": map[string]any{
-				"standard": map[string]any{"steps": []map[string]any{{"kind": "check", "name": "unit", "command": check}}},
-			},
-		},
-	}))
-
-	stdout, stderr := fixture.run("k", "task", "run", "--pipeline", "standard", "op-main")
-
-	is.Empty(stdout)
-	is.Contains(stderr, "Decision for finding 1")
-	is.Contains(stderr, "Autonomous review attempt budget exhausted")
-	is.NotContains(stderr, "Automated blocker decisions for op-main were interrupted")
-
-	var state taskstate.TaskState
-	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
-	latest, ok := taskstate.LatestReview(state)
-	must.True(ok)
-	is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
-	is.True(latest.AutomatedBlockerDecisionKept)
-	is.False(latest.AutomatedBlockerDecisionInterrupted)
-	is.True(latest.AutonomousBudgetExhausted)
-	must.Len(latest.Findings, 1)
-	is.Equal(taskstate.FindingTypeBlocking, latest.Findings[0].Type)
-	is.Empty(taskstate.FinalizationFacts(state).Commit)
-}
-
-func TestIntegrationWorkflowTaskReviewCheckBlockerReasonAcceptsEOFAnswer(t *testing.T) {
-	tests := []struct {
-		name          string
-		input         string
-		wantType      taskstate.FindingType
-		wantDowngrade string
-		wantWaiver    string
-		wantPrompt    string
-	}{
-		{
-			name:          "downgrade",
-			input:         "d\nFalse positive for this task.",
-			wantType:      taskstate.FindingTypeAdvisory,
-			wantDowngrade: "False positive for this task.",
-			wantPrompt:    "Downgrade reason",
-		},
-		{
-			name:       "waive",
-			input:      "w\nKnown flaky check.",
-			wantType:   taskstate.FindingTypeBlocking,
-			wantWaiver: "Known flaky check.",
-			wantPrompt: "Waiver reason",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			is := assert.New(t)
-			must := require.New(t)
-			fixture := newReviewWorkflowFixture(t, "op-main", "Review reason EOF", "Accept blocker reason.")
-			paths := fixture.paths
-
-			check := fixture.check("check", checkResult{code: 7})
-			fixture.pipelines("standard", map[string][]map[string]any{
-				"standard": {{"kind": "check", "name": "unit", "command": check}},
-			})
-
-			stdout, stderr := fixture.run(test.input, "task", "run", "--pipeline", "standard", "op-main")
-
-			is.Contains(stdout, "Finalized op-main")
-			is.Contains(stderr, test.wantPrompt)
-			is.NotContains(stderr, "Automated blocker decisions for op-main were interrupted")
-
-			var state taskstate.TaskState
-			must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
-			latest, ok := taskstate.LatestReview(state)
-			must.True(ok)
-			is.Equal(taskstate.ReviewStatusPassed, latest.Status)
-			must.Len(latest.Findings, 1)
-			is.Equal(test.wantType, latest.Findings[0].Type)
-			is.Equal(test.wantDowngrade, latest.Findings[0].DowngradeReason)
-			is.Equal(test.wantWaiver, latest.Findings[0].Waiver)
-			is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
-		})
-	}
-}
-
-func TestIntegrationWorkflowTaskReviewCheckBlockerDowngradeContinuesPipeline(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newReviewWorkflowFixture(t, "op-main", "Review check downgrade", "Downgrade blocker.")
-	paths := fixture.paths
-
-	check := fixture.check("check", checkResult{code: 7})
-	fixture.pipelines("standard", map[string][]map[string]any{
-		"standard": []map[string]any{
-			{"kind": "check", "name": "unit", "command": check},
-			{"kind": "manual", "name": "approval"},
-		},
-	})
-
-	stdout, stderr := fixture.run("d\nFalse positive for this task.\na\n", "task", "run", "--pipeline", "standard", "op-main")
-
-	is.Contains(stdout, "Finalized op-main")
-	is.Contains(stderr, "Automated blocking findings from step \"unit\"")
-	is.Contains(stderr, "Decision for finding 1")
-	is.Contains(stderr, "◆ REVIEW STEP · approval (manual)")
-
-	var state taskstate.TaskState
-	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
-	latest, ok := taskstate.LatestReview(state)
-	must.True(ok)
-	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
-	must.Len(latest.Findings, 1)
-	is.Equal(taskstate.FindingTypeAdvisory, latest.Findings[0].Type)
-	is.Equal("False positive for this task.", latest.Findings[0].DowngradeReason)
-	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
-}
-
-func TestIntegrationWorkflowTaskReviewCheckBlockerWaiverContinuesPipeline(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newReviewWorkflowFixture(t, "op-main", "Review check waiver", "Waive blocker.")
-	paths := fixture.paths
-
-	check := fixture.check("check", checkResult{code: 7})
-	fixture.pipelines("standard", map[string][]map[string]any{
-		"standard": []map[string]any{
-			{"kind": "check", "name": "unit", "command": check},
-			{"kind": "manual", "name": "approval"},
-		},
-	})
-
-	stdout, stderr := fixture.run("c\nKnown flaky check.\na\n", "task", "run", "--pipeline", "standard", "op-main")
-
-	is.Contains(stdout, "Finalized op-main")
-	is.Contains(stderr, "Automated blocking findings from step \"unit\"")
-
-	var state taskstate.TaskState
-	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
-	latest, ok := taskstate.LatestReview(state)
-	must.True(ok)
-	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
-	must.Len(latest.Findings, 1)
-	is.Equal(taskstate.FindingTypeBlocking, latest.Findings[0].Type)
-	is.Equal("Known flaky check.", latest.Findings[0].Waiver)
-	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
 }
 
 func TestIntegrationWorkflowTaskReviewCheckStartFailureMarksOperationalFailure(t *testing.T) {
@@ -793,68 +575,40 @@ func TestIntegrationWorkflowTaskReviewRejectsConflictingPipelineForManualWaiting
 }
 
 func TestIntegrationWorkflowTaskReviewPipelineOverridePrecedence(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newReviewWorkflowFixture(t, "op-main", "Review override", "Use CLI-selected pipeline.")
-	paths := fixture.paths
-	repo := taskWorkflowRepository()
-	repo.ReviewPipeline = "repo"
-	fixture.withRegisteredRepos(repo)
+	for _, selection := range []string{"cli", "quick"} {
+		t.Run(selection, func(t *testing.T) {
+			is := assert.New(t)
+			must := require.New(t)
+			fixture := newReviewWorkflowFixture(t, "op-main", "Review override", "Use CLI-selected pipeline.")
+			paths := fixture.paths
+			repo := taskWorkflowRepository()
+			repo.ReviewPipeline = "repo"
+			repo.ReviewPipelineAliases = map[string]string{"quick": "cli"}
+			fixture.withRegisteredRepos(repo)
 
-	fail := "must-not-run"
-	pass := fixture.check("cli", checkResult{stdout: "cli pipeline\n"})
-	fixture.pipelines("global", map[string][]map[string]any{
-		"global": []map[string]any{{"kind": "check", "name": "global", "command": fail}},
-		"repo":   []map[string]any{{"kind": "check", "name": "repo", "command": fail}},
-		"cli":    []map[string]any{{"kind": "check", "name": "cli", "command": pass}},
-	})
+			fail := "must-not-run"
+			pass := fixture.check("cli", checkResult{stdout: "cli pipeline\n"})
+			fixture.pipelines("global", map[string][]map[string]any{
+				"global": []map[string]any{{"kind": "check", "name": "global", "command": fail}},
+				"repo":   []map[string]any{{"kind": "check", "name": "repo", "command": fail}},
+				"cli":    []map[string]any{{"kind": "check", "name": "cli", "command": pass}},
+			})
 
-	stdout, stderr := fixture.run("", "task", "run", "--pipeline", "cli", "op-main")
+			stdout, stderr := fixture.run("", "task", "run", "--pipeline", selection, "op-main")
 
-	is.Contains(stdout, "cli pipeline")
-	is.NotContains(stdout, "wrong pipeline")
-	is.Contains(stdout, "Finalized op-main")
-	is.Contains(stderr, "== Review step: cli (check) ==")
+			is.Contains(stdout, "cli pipeline")
+			is.NotContains(stdout, "wrong pipeline")
+			is.Contains(stdout, "Finalized op-main")
+			is.Contains(stderr, "== Review step: cli (check) ==")
 
-	var state taskstate.TaskState
-	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
-	latest, ok := taskstate.LatestReview(state)
-	must.True(ok)
-	is.Equal("cli", latest.Pipeline)
-	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
-}
-
-func TestIntegrationWorkflowTaskReviewPipelineAliasResolvesToGlobalPipeline(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newReviewWorkflowFixture(t, "op-main", "Review alias", "Use alias-selected pipeline.")
-	paths := fixture.paths
-	repo := taskWorkflowRepository()
-	repo.ReviewPipeline = "repo"
-	repo.ReviewPipelineAliases = map[string]string{"quick": "cli"}
-	fixture.withRegisteredRepos(repo)
-
-	fail := "must-not-run"
-	pass := fixture.check("alias", checkResult{stdout: "alias pipeline\n"})
-	fixture.pipelines("global", map[string][]map[string]any{
-		"global": {{"kind": "check", "name": "global", "command": fail}},
-		"repo":   {{"kind": "check", "name": "repo", "command": fail}},
-		"cli":    {{"kind": "check", "name": "cli", "command": pass}},
-	})
-
-	stdout, stderr := fixture.run("", "task", "run", "--pipeline", "quick", "op-main")
-
-	is.Contains(stdout, "alias pipeline")
-	is.NotContains(stdout, "wrong pipeline")
-	is.Contains(stdout, "Finalized op-main")
-	is.Contains(stderr, "== Review step: cli (check) ==")
-
-	var state taskstate.TaskState
-	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
-	latest, ok := taskstate.LatestReview(state)
-	must.True(ok)
-	is.Equal("cli", latest.Pipeline)
-	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+			var state taskstate.TaskState
+			must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
+			latest, ok := taskstate.LatestReview(state)
+			must.True(ok)
+			is.Equal("cli", latest.Pipeline)
+			is.Equal(taskstate.ReviewStatusPassed, latest.Status)
+		})
+	}
 }
 
 func TestIntegrationWorkflowTaskReviewUnknownPipelineIncludesRepoAliases(t *testing.T) {
@@ -873,4 +627,87 @@ func TestIntegrationWorkflowTaskReviewUnknownPipelineIncludesRepoAliases(t *test
 	is.ErrorContains(err, `CLI --pipeline "unknown" does not match a configured review pipeline`)
 	is.ErrorContains(err, "configured pipelines: standard")
 	is.ErrorContains(err, "configured repo aliases: quick=standard")
+}
+func TestIntegrationWorkflowTaskReviewInvalidAgentConfigPreservesFreshAndWaitingState(t *testing.T) {
+	for _, waiting := range []bool{false, true} {
+		t.Run(fmt.Sprintf("waiting_%t", waiting), func(t *testing.T) {
+			fixture := newReviewWorkflowFixture(t, "op-main", "Review preflight", "Validate before persistence.")
+			fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "agent_review", "name": "ai-review"}, {"kind": "manual", "name": "inspect"}}})
+			if waiting {
+				attempt, err := fixture.taskStore.StartReviewWithOptions("alpha", "op-main", taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review"})
+				require.NoError(t, err)
+				_, err = fixture.taskStore.RecordReviewStep("alpha", "op-main", attempt.Attempt, taskstate.RecordReviewStepOptions{Kind: "agent_review", Name: "ai-review"})
+				require.NoError(t, err)
+				_, err = fixture.taskStore.PauseReviewForManual("alpha", "op-main", attempt.Attempt, "inspect")
+				require.NoError(t, err)
+			}
+			before, item := fixture.loadFinalTask("op-main")
+
+			stdout, stderr, err := fixture.runError("", "task", "run", "op-main")
+
+			require.ErrorContains(t, err, "load agent profiles")
+			assert.Empty(t, stdout)
+			assert.Empty(t, stderr)
+			after, got := fixture.loadFinalTask("op-main")
+			assert.Equal(t, before, after)
+			assert.Equal(t, item, got)
+			assert.Empty(t, fixture.agent.launches)
+		})
+	}
+}
+
+func TestIntegrationWorkflowTaskReviewCheckDecisionsPersistDispositionAndContinuePipeline(t *testing.T) {
+	for _, test := range []struct {
+		name, input               string
+		manual, keep              bool
+		wantType                  taskstate.FindingType
+		downgrade, waiver, prompt string
+	}{
+		{name: "keep EOF", input: "k", keep: true, wantType: taskstate.FindingTypeBlocking, prompt: "Decision for finding 1"},
+		{name: "downgrade EOF", input: "d\nFalse positive for this task.", wantType: taskstate.FindingTypeAdvisory, downgrade: "False positive for this task.", prompt: "Downgrade reason"},
+		{name: "waive EOF", input: "w\nKnown flaky check.", wantType: taskstate.FindingTypeBlocking, waiver: "Known flaky check.", prompt: "Waiver reason"},
+		{name: "downgrade continues", input: "d\nFalse positive for this task.\na\n", manual: true, wantType: taskstate.FindingTypeAdvisory, downgrade: "False positive for this task.", prompt: "Downgrade reason"},
+		{name: "waiver alias continues", input: "c\nKnown flaky check.\na\n", manual: true, wantType: taskstate.FindingTypeBlocking, waiver: "Known flaky check.", prompt: "Waiver reason"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newReviewWorkflowFixture(t, "op-main", "Check decisions", "Record operator disposition.")
+			check := fixture.check("check", checkResult{code: 7})
+			steps := []map[string]any{{"kind": "check", "name": "unit", "command": check}}
+			if test.manual {
+				steps = append(steps, map[string]any{"kind": "manual", "name": "approval"})
+			}
+			fixture.pipelines("standard", map[string][]map[string]any{"standard": steps})
+			if test.keep {
+				fixture.budget(1)
+			}
+
+			stdout, stderr := fixture.run(test.input, "task", "run", "--pipeline", "standard", "op-main")
+
+			assert.Contains(t, stderr, test.prompt)
+			assert.NotContains(t, stderr, "Automated blocker decisions for op-main were interrupted")
+			state, _ := fixture.loadFinalTask("op-main")
+			latest, ok := taskstate.LatestReview(state)
+			require.True(t, ok)
+			require.Len(t, latest.Findings, 1)
+			assert.Equal(t, test.wantType, latest.Findings[0].Type)
+			assert.Equal(t, test.downgrade, latest.Findings[0].DowngradeReason)
+			assert.Equal(t, test.waiver, latest.Findings[0].Waiver)
+			assert.False(t, latest.AutomatedBlockerDecisionInterrupted)
+			if test.keep {
+				assert.Empty(t, stdout)
+				assert.Equal(t, taskstate.ReviewStatusBlocked, latest.Status)
+				assert.True(t, latest.AutomatedBlockerDecisionKept)
+				assert.True(t, latest.AutonomousBudgetExhausted)
+				assert.Contains(t, stderr, "Autonomous review attempt budget exhausted")
+				assert.Empty(t, taskstate.FinalizationFacts(state).Commit)
+			} else {
+				assert.Equal(t, taskstate.ReviewStatusPassed, latest.Status)
+				assert.Contains(t, stdout, "Finalized op-main")
+				assert.NotEmpty(t, taskstate.FinalizationFacts(state).Commit)
+				if test.manual {
+					assert.Contains(t, stderr, "◆ REVIEW STEP · approval (manual)")
+				}
+			}
+		})
+	}
 }

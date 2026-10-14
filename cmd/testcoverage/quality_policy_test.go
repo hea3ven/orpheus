@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -40,25 +42,6 @@ func TestQualityPolicySerializationIsDeterministicAndRoundTrips(t *testing.T) {
 	}
 	if !reflect.DeepEqual(loaded, policy) {
 		t.Fatalf("loaded policy = %#v, want %#v", loaded, policy)
-	}
-}
-
-func TestTrackedQualityPolicyUsesCanonicalSerialization(t *testing.T) {
-	path := filepath.Join("..", "..", ".quality.yml")
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	policy, err := loadQualityPolicy(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	canonical, err := marshalQualityPolicy(policy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(contents, canonical) {
-		t.Fatalf("tracked quality policy is not canonical; serialize it through writeQualityPolicy")
 	}
 }
 
@@ -151,25 +134,6 @@ func TestQualityPolicyUpdateMovesCrossedBoundsAndReconcilesPackages(t *testing.T
 	}
 }
 
-func TestQualityPolicyUpdateLeavesInBandBoundsUnchanged(t *testing.T) {
-	policy := testLocalQualityPolicy()
-	report := testQualityReport()
-	lane := report.Lanes["unit"]
-	lane.Coverage = coverageMetric{StatementTotal: 1000, CoveredStatements: 496}
-	lane.Packages[0].coverageMetric = lane.Coverage
-	lane.SelectedTestSeconds = 0.51
-	lane.Timings[0].Seconds = 0.51
-	report.Lanes["unit"] = lane
-
-	updated, changes := updatedQualityPolicy(policy, report)
-	if !reflect.DeepEqual(updated, policy) {
-		t.Fatalf("in-band update changed policy:\nold %#v\nnew %#v", policy, updated)
-	}
-	if len(changes) != 0 {
-		t.Fatalf("in-band update reported changes: %#v", changes)
-	}
-}
-
 func TestAggregatePolicySamplesUsesFiveTimingMedians(t *testing.T) {
 	samples := make([]qualityReport, 5)
 	for index, seconds := range []float64{5, 1, 4, 2, 3} {
@@ -198,29 +162,40 @@ func TestAggregatePolicySamplesUsesFiveTimingMedians(t *testing.T) {
 	}
 }
 
-func TestInBandSamplesLeaveQualityPolicyFileUnchanged(t *testing.T) {
-	path := filepath.Join(testutil.CanonicalTempDir(t), ".quality.yml")
-	policy := testLocalQualityPolicy()
-	if err := writeQualityPolicy(path, policy); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	samples := make([]qualityReport, policy.UpdateSamples)
-	for index := range samples {
-		samples[index] = testQualityReport()
-	}
-	if _, changes, err := applyQualityPolicyUpdate(path, policy, samples); err != nil || len(changes) != 0 {
-		t.Fatalf("apply in-band policy update = %d changes, %v", len(changes), err)
-	}
-	after, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(after, before) {
-		t.Fatal("in-band samples rewrote the policy")
+func TestInBandSamplesLeaveQualityPolicyFileAndProposedBoundsUnchanged(t *testing.T) {
+	for _, covered := range []int{496, 500} {
+		t.Run(fmt.Sprint(covered), func(t *testing.T) {
+			path := filepath.Join(testutil.CanonicalTempDir(t), ".quality.yml")
+			policy := testLocalQualityPolicy()
+			if err := writeQualityPolicy(path, policy); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			samples := make([]qualityReport, policy.UpdateSamples)
+			for i := range samples {
+				samples[i] = testQualityReport()
+				setLaneCoverage(samples[i], "unit", 1000, covered)
+			}
+
+			proposed, changes := updatedQualityPolicy(policy, samples[0])
+			if !reflect.DeepEqual(proposed, policy) || len(changes) != 0 {
+				t.Fatalf("in-band proposal = %#v, changes %#v", proposed, changes)
+			}
+			if _, changes, err := applyQualityPolicyUpdate(path, policy, samples); err != nil || len(changes) != 0 {
+				t.Fatalf("apply in-band update = %#v, %v", changes, err)
+			}
+
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(before, after) {
+				t.Fatal("in-band update rewrote the policy")
+			}
+		})
 	}
 }
 

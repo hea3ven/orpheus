@@ -19,44 +19,46 @@ func (e fixtureEnvironment) PropagateEnvironment(environment map[string]string) 
 	}
 }
 
-func TestWriteConfigYAMLWritesFixtureUnderOrpheusDirectory(t *testing.T) {
-	configHome := testutil.CanonicalTempDir(t)
+func TestWriteConfigYAMLUsesOnlyPropagatedFixtureRoot(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		missingRoot bool
+		value       any
+		wantError   string
+	}{
+		{name: "writes nested YAML", value: map[string]string{"name": "example"}},
+		{name: "requires propagated root", missingRoot: true, value: map[string]string{}, wantError: "XDG_CONFIG_HOME is required"},
+		{name: "reports encoding failure", value: map[string]any{"unsupported": make(chan int)}, wantError: "encode config fixture"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := testutil.CanonicalTempDir(t)
+			environment := fixtureEnvironment{configHome: root}
+			if tt.missingRoot {
+				environment.configHome = ""
+			}
 
-	err := testutil.WriteConfigYAML(
-		fixtureEnvironment{configHome: configHome},
-		"nested/config.yaml",
-		map[string]string{"name": "example"},
-	)
+			err := testutil.WriteConfigYAML(environment, "nested/config.yaml", tt.value)
 
-	if err != nil {
-		t.Fatalf("write config YAML: %v", err)
-	}
-	path := filepath.Join(configHome, "orpheus", "nested", "config.yaml")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read config fixture: %v", err)
-	}
-	if got, want := string(data), "name: example\n"; got != want {
-		t.Fatalf("config fixture = %q, want %q", got, want)
-	}
-}
-
-func TestWriteConfigYAMLRequiresPropagatedConfigHome(t *testing.T) {
-	err := testutil.WriteConfigYAML(fixtureEnvironment{}, "config.yaml", map[string]string{})
-
-	if err == nil || !strings.Contains(err.Error(), "XDG_CONFIG_HOME is required") {
-		t.Fatalf("error = %v, want missing XDG config home", err)
-	}
-}
-
-func TestWriteConfigYAMLReportsEncodingFailure(t *testing.T) {
-	err := testutil.WriteConfigYAML(
-		fixtureEnvironment{configHome: testutil.CanonicalTempDir(t)},
-		"config.yaml",
-		map[string]any{"unsupported": make(chan int)},
-	)
-
-	if err == nil || !strings.Contains(err.Error(), "encode config fixture") {
-		t.Fatalf("error = %v, want encoding failure", err)
+			path := filepath.Join(root, "orpheus", "nested", "config.yaml")
+			if tt.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Fatalf("write error = %v, want %q", err, tt.wantError)
+				}
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Fatalf("failed write created fixture: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("write config YAML: %v", err)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read config fixture: %v", err)
+			}
+			if string(data) != "name: example\n" {
+				t.Fatalf("config fixture = %q", data)
+			}
+		})
 	}
 }

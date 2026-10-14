@@ -3,29 +3,13 @@
 package cli_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestIntegrationWorkflowRepoConfigInspectsEffectivePublicationPolicy(t *testing.T) {
-	is := assert.New(t)
-	fixture := newRepoConfigFixture(t)
-
-	stdout, stderr, err := fixture.execute("repo", "config", "get", "alpha")
-	require.NoError(t, err)
-	is.Empty(stderr)
-	is.Contains(stdout, "CONFIG")
-	is.Contains(stdout, "summary-guidance")
-	is.Contains(stdout, "(not set)")
-	is.Contains(stdout, "typed")
-	is.Contains(stdout, "title-template")
-	is.Contains(stdout, "completion summary")
-	is.Contains(stdout, "review-pipeline")
-	is.Contains(stdout, "default")
-}
 
 func TestIntegrationWorkflowRepoConfigUsesGlobalPublicationPolicyFallbacks(t *testing.T) {
 	is := assert.New(t)
@@ -81,39 +65,6 @@ func TestIntegrationWorkflowRepoConfigUsesGlobalPublicationPolicyFallbacks(t *te
 	is.Empty(reg.Repos[0].SummaryGuidance)
 	is.Empty(reg.Repos[0].SummaryGuidanceStyle)
 	is.Empty(reg.Repos[0].TitleTemplate)
-}
-
-func TestIntegrationWorkflowRepoConfigUpdatesPublicationPolicyForExistingRepo(t *testing.T) {
-	is := assert.New(t)
-	fixture := newRepoConfigFixture(t)
-	must := require.New(t)
-
-	guidance := "Use sentence-case summaries without a type prefix."
-	template := "[{{external_ref}}] {{summary}}"
-	stdout, stderr, err := fixture.execute(
-		"repo", "config", "set", "alpha", "summary-guidance", guidance,
-	)
-	require.NoError(t, err)
-	is.Empty(stderr)
-	is.Contains(stdout, guidance)
-	stdout, stderr, err = fixture.execute(
-		"repo", "config", "set", "alpha", "summary-style", registry.SummaryGuidanceStyleCapitalized,
-	)
-	require.NoError(t, err)
-	is.Empty(stderr)
-	is.Contains(stdout, registry.SummaryGuidanceStyleCapitalized)
-	stdout, stderr, err = fixture.execute(
-		"repo", "config", "set", "alpha", "title-template", template,
-	)
-	require.NoError(t, err)
-	is.Empty(stderr)
-	is.Contains(stdout, template)
-
-	reg := fixture.loadFinalRegistry()
-	must.Len(reg.Repos, 1)
-	is.Equal(guidance, reg.Repos[0].SummaryGuidance)
-	is.Equal(registry.SummaryGuidanceStyleCapitalized, reg.Repos[0].SummaryGuidanceStyle)
-	is.Equal(template, reg.Repos[0].TitleTemplate)
 }
 
 func TestIntegrationWorkflowRepoConfigSetsAndClearsBranchTemplateWithGlobalFallback(t *testing.T) {
@@ -200,75 +151,6 @@ func TestIntegrationWorkflowRepoConfigSetsAndClearsIncludePRReviewProcess(t *tes
 	is.Nil(reg.Repos[0].IncludePRReviewProcess)
 }
 
-func TestIntegrationWorkflowRepoConfigClearsPublicationPolicy(t *testing.T) {
-	is := assert.New(t)
-	fixture := newRepoConfigFixture(t)
-	must := require.New(t)
-
-	for _, args := range [][]string{
-		{"repo", "config", "set", "alpha", "summary-guidance", "Use sentence-case summaries."},
-		{"repo", "config", "set", "alpha", "summary-style", registry.SummaryGuidanceStyleCapitalized},
-		{"repo", "config", "set", "alpha", "title-template", "[OPS] {{summary}}"},
-	} {
-		_, configErr, err := fixture.execute(args...)
-		require.NoError(t, err)
-		is.Empty(configErr)
-	}
-
-	_, stderr, err := fixture.execute(
-		"repo", "config", "set", "alpha", "summary-guidance", "",
-	)
-	require.NoError(t, err)
-	is.Empty(stderr)
-	_, stderr, err = fixture.execute(
-		"repo", "config", "set", "alpha", "summary-style", "",
-	)
-	require.NoError(t, err)
-	is.Empty(stderr)
-	_, stderr, err = fixture.execute(
-		"repo", "config", "set", "alpha", "title-template", "",
-	)
-	require.NoError(t, err)
-	is.Empty(stderr)
-	stdout, stderr, err := fixture.execute("repo", "config", "get", "alpha")
-	require.NoError(t, err)
-	is.Empty(stderr)
-	is.Contains(stdout, "(not set)")
-	is.Contains(stdout, "typed")
-	is.Contains(stdout, "completion summary")
-
-	reg := fixture.loadFinalRegistry()
-	must.Len(reg.Repos, 1)
-	is.Empty(reg.Repos[0].SummaryGuidance)
-	is.Empty(reg.Repos[0].SummaryGuidanceStyle)
-	is.Empty(reg.Repos[0].TitleTemplate)
-}
-
-func TestIntegrationWorkflowRepoConfigRejectsInvalidPolicyWithoutMutatingRegistry(t *testing.T) {
-	is := assert.New(t)
-	fixture := newRepoConfigFixture(t)
-	must := require.New(t)
-
-	_, configErr, err := fixture.execute("repo", "config", "set", "alpha", "title-template", "[OPS] {{summary}}")
-	require.NoError(t, err)
-	is.Empty(configErr)
-
-	for _, args := range [][]string{
-		{"repo", "config", "set", "alpha", "summary-style", "informal"},
-		{"repo", "config", "set", "alpha", "title-template", "{{task_id}}: {{summary}}"},
-		{"repo", "config", "set", "alpha", "branch-template", "{{summary}}"},
-	} {
-		stdout, _, err := fixture.execute(args...)
-		must.Error(err)
-		is.Empty(stdout)
-	}
-
-	reg := fixture.loadFinalRegistry()
-	must.Len(reg.Repos, 1)
-	is.Empty(reg.Repos[0].SummaryGuidanceStyle)
-	is.Equal("[OPS] {{summary}}", reg.Repos[0].TitleTemplate)
-}
-
 func TestIntegrationWorkflowRepoConfigSetInvalidGlobalPublicationFlowDoesNotMutateRegistry(t *testing.T) {
 	is := assert.New(t)
 	fixture := newRepoConfigFixture(t)
@@ -284,36 +166,6 @@ func TestIntegrationWorkflowRepoConfigSetInvalidGlobalPublicationFlowDoesNotMuta
 	is.Empty(stdout)
 	after := fixture.loadFinalRegistry()
 	is.Equal(before, after)
-}
-
-func TestIntegrationWorkflowRepoConfigRejectsUnknownConfigName(t *testing.T) {
-	is := assert.New(t)
-	fixture := newRepoConfigFixture(t)
-	must := require.New(t)
-
-	stdout, _, err := fixture.execute(
-		"repo", "config", "set", "alpha", "unknown", "value",
-	)
-	must.Error(err)
-	is.Empty(stdout)
-}
-
-func TestIntegrationWorkflowRepoConfigGetOnePolicyValue(t *testing.T) {
-	is := assert.New(t)
-	fixture := newRepoConfigFixture(t)
-
-	_, setErr, err := fixture.execute(
-		"repo", "config", "set", "alpha", "title-template", "[OPS] {{summary}}",
-	)
-	require.NoError(t, err)
-	is.Empty(setErr)
-
-	stdout, stderr, err := fixture.execute("repo", "config", "get", "alpha", "title-template")
-	require.NoError(t, err)
-	is.Empty(stderr)
-	is.Contains(stdout, "title-template")
-	is.Contains(stdout, "[OPS] {{summary}}")
-	is.NotContains(stdout, "summary-style")
 }
 
 func TestIntegrationWorkflowRepoConfigSetsAndClearsReviewPipelineDefault(t *testing.T) {
@@ -428,4 +280,77 @@ func (f *workflowFixture) withReviewPipelines(defaultPipeline string, pipelines 
 		configured[name] = map[string]any{"steps": steps}
 	}
 	f.setConfig("reviews", map[string]any{"default_pipeline": defaultPipeline, "pipelines": configured})
+}
+func TestIntegrationWorkflowRepoConfigPublicationPolicyLifecycle(t *testing.T) {
+	for _, global := range []bool{false, true} {
+		t.Run(fmt.Sprintf("global_%t", global), func(t *testing.T) {
+			fixture := newRepoConfigFixture(t)
+			fallbackGuidance, fallbackTitle := "typed", "completion summary"
+			if global {
+				fallbackGuidance, fallbackTitle = "Write a concise global release note.", "[GLOBAL] {{summary}}"
+				fixture.setConfig("publication", map[string]any{"summary_guidance": fallbackGuidance, "summary_guidance_style": registry.SummaryGuidanceStyleCapitalized, "title_template": fallbackTitle})
+			}
+			stdout, stderr, err := fixture.execute("repo", "config", "get", "alpha")
+			require.NoError(t, err)
+			assert.Empty(t, stderr)
+			for _, want := range []string{"CONFIG", "summary-guidance", "(not set)", fallbackGuidance, "title-template", fallbackTitle, "review-pipeline", "default"} {
+				assert.Contains(t, stdout, want)
+			}
+			if global {
+				assert.Contains(t, stdout, "overridden by custom guidance")
+			}
+			guidance, template := "Use sentence-case summaries without a type prefix.", "[{{external_ref}}] {{summary}}"
+			for _, setting := range [][2]string{{"summary-guidance", guidance}, {"summary-style", registry.SummaryGuidanceStyleCapitalized}, {"title-template", template}} {
+				stdout, stderr, err = fixture.execute("repo", "config", "set", "alpha", setting[0], setting[1])
+				require.NoError(t, err)
+				assert.Empty(t, stderr)
+				assert.Contains(t, stdout, setting[1])
+			}
+			reg := fixture.loadFinalRegistry()
+			require.Len(t, reg.Repos, 1)
+			assert.Equal(t, guidance, reg.Repos[0].SummaryGuidance)
+			assert.Equal(t, registry.SummaryGuidanceStyleCapitalized, reg.Repos[0].SummaryGuidanceStyle)
+			assert.Equal(t, template, reg.Repos[0].TitleTemplate)
+			stdout, stderr, err = fixture.execute("repo", "config", "get", "alpha", "title-template")
+			require.NoError(t, err)
+			assert.Empty(t, stderr)
+			assert.Contains(t, stdout, "title-template")
+			assert.Contains(t, stdout, template)
+			assert.NotContains(t, stdout, "summary-style")
+			for _, key := range []string{"summary-guidance", "summary-style", "title-template"} {
+				_, stderr, err = fixture.execute("repo", "config", "set", "alpha", key, "")
+				require.NoError(t, err)
+				assert.Empty(t, stderr)
+			}
+			stdout, stderr, err = fixture.execute("repo", "config", "get", "alpha")
+			require.NoError(t, err)
+			assert.Empty(t, stderr)
+			assert.Contains(t, stdout, fallbackGuidance)
+			assert.Contains(t, stdout, fallbackTitle)
+			reg = fixture.loadFinalRegistry()
+			assert.Empty(t, reg.Repos[0].SummaryGuidance)
+			assert.Empty(t, reg.Repos[0].SummaryGuidanceStyle)
+			assert.Empty(t, reg.Repos[0].TitleTemplate)
+		})
+	}
+}
+
+func TestIntegrationWorkflowRepoConfigRejectsInvalidPublicationSettingWithoutMutation(t *testing.T) {
+	fixture := newRepoConfigFixture(t)
+	_, _, err := fixture.execute("repo", "config", "set", "alpha", "title-template", "[OPS] {{summary}}")
+	require.NoError(t, err)
+	before := fixture.loadFinalRegistry()
+	for _, test := range []struct{ key, value, want string }{
+		{"summary-style", "informal", "invalid"},
+		{"title-template", "{{task_id}}: {{summary}}", "unsupported placeholder"},
+		{"branch-template", "{{summary}}", "unsupported placeholder"},
+		{"unknown", "value", "unknown"},
+	} {
+		t.Run(test.key, func(t *testing.T) {
+			stdout, _, err := fixture.execute("repo", "config", "set", "alpha", test.key, test.value)
+			require.ErrorContains(t, err, test.want)
+			assert.Empty(t, stdout)
+			assert.Equal(t, before, fixture.loadFinalRegistry())
+		})
+	}
 }

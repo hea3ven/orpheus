@@ -32,6 +32,7 @@ func TestIntegrationWorkflowReviewPipelineAdmitsAlternateFindingAfterPrimaryThro
 	stdout, stderr := fixture.run("a\n", "task", "run", "op-paired")
 
 	is.Contains(stdout, "Recorded advisory review finding 1 for op-paired.")
+	is.Equal(2, strings.Count(stdout, "Recorded advisory review finding 1 for op-paired."))
 	is.Contains(stderr, "Paired reviewer comparison for step \"ai-review\"")
 	is.Contains(stderr, "Primary reviewer: profile=reviewer")
 	is.Contains(stderr, "Alternate reviewer: profile=alternate")
@@ -132,6 +133,7 @@ func TestIntegrationWorkflowReviewPipelineLabelsAndIsolatesPairedRollingOutputTh
 	must.NoError(err)
 	is.NotContains(stdout.String(), "rolling output")
 	raw := stderr.Raw()
+	is.Contains(raw, "Recorded advisory review finding 0 for op-rolling.")
 	primaryHeader := "== Reviewer: primary (profile: reviewer; model: -) =="
 	alternateHeader := "== Reviewer: alternate (profile: alternate; model: -) =="
 	primaryHeaderIndex := strings.Index(raw, primaryHeader)
@@ -215,26 +217,6 @@ func TestIntegrationWorkflowReviewPipelineLabelsAttachedPairedOutputThroughCLI(t
 	is.Equal("alternate", fixture.reviewLauncher.launches[1].environment["ORPHEUS_REVIEWER_ROLE"])
 }
 
-func TestIntegrationWorkflowReviewPipelineAlternateFailureKeepsPrimaryAuthoritativeThroughCLI(t *testing.T) {
-	t.Setenv("ORPHEUS_ALTERNATE_REVIEWER_PROFILE", "alternate")
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newPairedReviewWorkflowFixture(t, "op-alt-fails")
-	fixture.reviewLauncher.outcomes = append(fixture.reviewLauncher.outcomes,
-		reviewOutcome(),
-		semanticAgentOutcome{review: true, err: fmt.Errorf("alternate unavailable")},
-	)
-
-	fixture.run("", "task", "run", "op-alt-fails")
-
-	latest := loadLatestReview(t, fixture, "op-alt-fails")
-	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
-	comparison := latest.Steps[0].Comparison
-	must.NotNil(comparison)
-	is.Equal(taskstate.RunStatusFailed, comparison.AlternateExecution.Status)
-	is.Contains(comparison.Failure, "alternate unavailable")
-}
-
 func TestIntegrationWorkflowReviewPipelineInterruptedAlternateDecisionBlocksWithoutAdmissionThroughCLI(t *testing.T) {
 	t.Setenv("ORPHEUS_ALTERNATE_REVIEWER_PROFILE", "alternate")
 	is := assert.New(t)
@@ -290,28 +272,6 @@ func TestIntegrationWorkflowReviewPipelinePrimaryFailureSkipsAlternateThroughCLI
 	latest := loadLatestReview(t, fixture, "op-primary-fails")
 	must.Len(latest.Steps, 1)
 	is.Nil(latest.Steps[0].Comparison)
-}
-
-func TestIntegrationWorkflowReviewPipelineMissingAlternateProfilePersistsComparisonFailureThroughCLI(t *testing.T) {
-	t.Setenv("ORPHEUS_ALTERNATE_REVIEWER_PROFILE", "missing")
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newReviewWorkflowFixture(t, "op-missing-alt", "Missing alternate", "Missing alternate profile.")
-	fixture.configureAgentProfiles(agent.AgentDefaults{Implementer: "impl", Reviewer: "reviewer"}, map[string]agent.Profile{
-		"impl":     {Command: "impl"},
-		"reviewer": {Command: "review-agent"},
-	})
-	fixture.agent.outcomes = append(fixture.agent.outcomes, reviewOutcome())
-	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "agent_review", "name": "ai-review"}}})
-
-	fixture.run("", "task", "run", "op-missing-alt")
-
-	latest := loadLatestReview(t, fixture, "op-missing-alt")
-	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
-	comparison := latest.Steps[0].Comparison
-	must.NotNil(comparison)
-	is.Equal(taskstate.RunStatusFailed, comparison.AlternateExecution.Status)
-	is.Contains(comparison.Failure, "missing")
 }
 
 func TestIntegrationWorkflowReviewPipelineReviewerHeaderFailureDoesNotLaunchOrRecordStepThroughCLI(t *testing.T) {
@@ -459,4 +419,32 @@ func (w *failingReviewerHeaderWriter) Write(p []byte) (int, error) {
 		return 0, fmt.Errorf("reviewer header output unavailable")
 	}
 	return w.output.Write(p)
+}
+func TestIntegrationWorkflowReviewPipelineAlternateFailurePreservesAuthoritativePrimary(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("missing_profile_%t", missing), func(t *testing.T) {
+			profile, want := "alternate", "alternate unavailable"
+			if missing {
+				profile, want = "missing", "missing"
+			}
+			t.Setenv("ORPHEUS_ALTERNATE_REVIEWER_PROFILE", profile)
+			fixture := newPairedReviewWorkflowFixture(t, "op-alt-fails")
+			fixture.reviewLauncher.outcomes = append(fixture.reviewLauncher.outcomes, reviewOutcome())
+			if !missing {
+				fixture.reviewLauncher.outcomes = append(fixture.reviewLauncher.outcomes, semanticAgentOutcome{review: true, err: fmt.Errorf("alternate unavailable")})
+			}
+
+			fixture.run("", "task", "run", "op-alt-fails")
+
+			latest := loadLatestReview(t, fixture, "op-alt-fails")
+			assert.Equal(t, taskstate.ReviewStatusPassed, latest.Status)
+			assert.Empty(t, latest.Findings)
+			require.Len(t, latest.Steps, 1)
+			comparison := latest.Steps[0].Comparison
+			require.NotNil(t, comparison)
+			require.NotNil(t, comparison.AlternateExecution)
+			assert.Equal(t, taskstate.RunStatusFailed, comparison.AlternateExecution.Status)
+			assert.Contains(t, comparison.Failure, want)
+		})
+	}
 }

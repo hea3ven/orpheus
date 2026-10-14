@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"sort"
 	"testing"
 	"time"
 
@@ -29,47 +28,6 @@ func (b fakeReadBackend) List(context.Context) ([]task.Task, error) {
 }
 
 var _ task.ReadBackend = fakeReadBackend{}
-
-func TestReadBackendContractIsReadOnly(t *testing.T) {
-	backendType := reflect.TypeOf((*task.ReadBackend)(nil)).Elem()
-
-	got := make([]string, 0, backendType.NumMethod())
-	for i := range backendType.NumMethod() {
-		got = append(got, backendType.Method(i).Name)
-	}
-	sort.Strings(got)
-
-	expected := []string{"Get", "List"}
-	if !reflect.DeepEqual(got, expected) {
-		t.Fatalf("ReadBackend methods = %v, want only %v", got, expected)
-	}
-}
-
-func TestReadBackendCanGetAndList(t *testing.T) {
-	backend := fakeReadBackend{
-		tasks: []task.Task{
-			{ID: "op-1", Title: "first", IssueType: task.IssueTypeTask, Status: task.StatusOpen},
-			{ID: "op-2", Title: "second", IssueType: task.IssueTypeTask, Status: task.StatusInProgress},
-		},
-	}
-
-	got, err := backend.Get(context.Background(), "op-2")
-	if err != nil {
-		t.Fatalf("get task: %v", err)
-	}
-	if got.ID != "op-2" || got.Title != "second" {
-		t.Fatalf("task = %#v, want op-2 second", got)
-	}
-
-	listed, err := backend.List(context.Background())
-	if err != nil {
-		t.Fatalf("list tasks: %v", err)
-	}
-	if len(listed) != 2 {
-		t.Fatalf("list returned %d tasks, want 2", len(listed))
-	}
-
-}
 
 func TestListFilterComposesQueryTypeAndTimeConstraints(t *testing.T) {
 	created := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
@@ -148,12 +106,14 @@ func TestTaskCloneCopiesMutableFields(t *testing.T) {
 	}
 
 	original.RelatedItems = []task.Task{{ID: "op-child", Metadata: task.Metadata{task.MetadataBranch: "child-branch"}}}
+	wantCreated, wantUpdated := createdAt, updatedAt
 	clone := original.Clone()
 	clone.Relations.ChildIDs[0] = "changed"
 	clone.RelatedItems[0].Metadata[task.MetadataBranch] = "changed"
 	clone.Labels[0] = "changed"
 	clone.Metadata[task.MetadataBranch] = "changed"
-	clone.CreatedAt = ptrTime(clone.CreatedAt.Add(time.Hour))
+	*clone.CreatedAt = clone.CreatedAt.Add(time.Hour)
+	*clone.UpdatedAt = clone.UpdatedAt.Add(time.Hour)
 	clone.Relations.DependencyIDs[0] = "changed"
 	clone.Relations.DependentIDs[0] = "changed"
 
@@ -166,8 +126,8 @@ func TestTaskCloneCopiesMutableFields(t *testing.T) {
 	if original.Metadata[task.MetadataBranch] != "task/op-1-model" {
 		t.Fatalf("original metadata changed to %q", original.Metadata[task.MetadataBranch])
 	}
-	if !original.CreatedAt.Equal(createdAt) {
-		t.Fatalf("original created_at changed to %v", original.CreatedAt)
+	if !original.CreatedAt.Equal(wantCreated) || !original.UpdatedAt.Equal(wantUpdated) {
+		t.Fatalf("original timestamps changed: created=%v updated=%v", original.CreatedAt, original.UpdatedAt)
 	}
 	if original.Relations.DependencyIDs[0] != "op-0" {
 		t.Fatalf("original dependency id changed to %q", original.Relations.DependencyIDs[0])
@@ -179,29 +139,39 @@ func TestTaskCloneCopiesMutableFields(t *testing.T) {
 
 func TestTaskSessionName(t *testing.T) {
 	tests := []struct {
-		name string
-		task task.Task
-		want string
+		name             string
+		task             task.Task
+		want             string
+		followUp, review string
 	}{
 		{
-			name: "with title",
-			task: task.Task{ID: "op-1", Title: "Implement attached run"},
-			want: "Implementing op-1 Implement attached run",
+			name:     "with title",
+			task:     task.Task{ID: "op-1", Title: "Implement attached run"},
+			want:     "Implementing op-1 Implement attached run",
+			followUp: "Resolving issues in op-1 Implement attached run", review: "Reviewing op-1 Implement attached run",
 		},
 		{
-			name: "without title",
-			task: task.Task{ID: "op-2"},
-			want: "Implementing op-2",
+			name:     "without title",
+			task:     task.Task{ID: "op-2"},
+			want:     "Implementing op-2",
+			followUp: "Resolving issues in op-2", review: "Reviewing op-2",
 		},
 		{
-			name: "blank title",
-			task: task.Task{ID: "op-3", Title: "  "},
-			want: "Implementing op-3",
+			name:     "blank title",
+			task:     task.Task{ID: "op-3", Title: "  "},
+			want:     "Implementing op-3",
+			followUp: "Resolving issues in op-3", review: "Reviewing op-3",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.task.FollowUpSessionName(); got != tt.followUp {
+				t.Fatalf("follow-up label = %q, want %q", got, tt.followUp)
+			}
+			if got := tt.task.ReviewSessionName(); got != tt.review {
+				t.Fatalf("review label = %q, want %q", got, tt.review)
+			}
 			got := tt.task.SessionName()
 
 			if got != tt.want {
@@ -211,53 +181,13 @@ func TestTaskSessionName(t *testing.T) {
 	}
 }
 
-func TestTaskPurposeSessionNames(t *testing.T) {
-	taskItem := task.Task{ID: "op-1", Title: "Implement attached run"}
-
-	if got := taskItem.SessionName(); got != "Implementing op-1 Implement attached run" {
-		t.Fatalf("SessionName() = %q", got)
-	}
-	if got := taskItem.FollowUpSessionName(); got != "Resolving issues in op-1 Implement attached run" {
-		t.Fatalf("FollowUpSessionName() = %q", got)
-	}
-	if got := taskItem.ReviewSessionName(); got != "Reviewing op-1 Implement attached run" {
-		t.Fatalf("ReviewSessionName() = %q", got)
-	}
-}
-
-func TestTaskOrpheusMetadataProjectsKnownKeys(t *testing.T) {
-	taskItem := task.Task{Metadata: task.Metadata{
-		task.MetadataBranch:   "task/op-1-model",
-		task.MetadataWorktree: "/fixture/orpheus/op-1",
-		task.MetadataPRURL:    "https://github.com/example/repo/pull/1",
-		"backend.custom":      "preserved but not projected",
-	}}
-
-	got := taskItem.OrpheusMetadata()
-	expected := task.OrpheusMetadata{
-		Branch:      "task/op-1-model",
-		HasBranch:   true,
-		Worktree:    "/fixture/orpheus/op-1",
-		HasWorktree: true,
-		PRURL:       "https://github.com/example/repo/pull/1",
-		HasPRURL:    true,
-	}
-	if !reflect.DeepEqual(got, expected) {
-		t.Fatalf("orpheus metadata = %#v, want %#v", got, expected)
-	}
-
-	value, ok := taskItem.Metadata.Value("backend.custom")
-	if !ok || value != "preserved but not projected" {
-		t.Fatalf("custom metadata lookup = %q, %v", value, ok)
-	}
-}
-
-func TestTaskOrpheusMetadataRepresentsAbsentFields(t *testing.T) {
+func TestTaskOrpheusMetadataProjectsKnownAndAbsentFields(t *testing.T) {
 	tests := []struct {
 		name     string
 		metadata task.Metadata
 		expected task.OrpheusMetadata
 	}{
+		{name: "all known and custom keys", metadata: task.Metadata{task.MetadataBranch: "task/op-1-model", task.MetadataWorktree: "/fixture/orpheus/op-1", task.MetadataPRURL: "https://github.com/example/repo/pull/1", "backend.custom": "preserved but not projected"}, expected: task.OrpheusMetadata{Branch: "task/op-1-model", HasBranch: true, Worktree: "/fixture/orpheus/op-1", HasWorktree: true, PRURL: "https://github.com/example/repo/pull/1", HasPRURL: true}},
 		{
 			name:     "nil metadata",
 			metadata: nil,
@@ -290,6 +220,9 @@ func TestTaskOrpheusMetadataRepresentsAbsentFields(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := task.Task{Metadata: tt.metadata}.OrpheusMetadata()
+			if value, ok := tt.metadata.Value("backend.custom"); tt.name == "all known and custom keys" && (!ok || value != "preserved but not projected") {
+				t.Fatalf("custom metadata = %q, %v", value, ok)
+			}
 			if !reflect.DeepEqual(got, tt.expected) {
 				t.Fatalf("orpheus metadata = %#v, want %#v", got, tt.expected)
 			}
@@ -343,8 +276,4 @@ func cloneTasks(tasks []task.Task) []task.Task {
 		clone[i] = taskItem.Clone()
 	}
 	return clone
-}
-
-func ptrTime(value time.Time) *time.Time {
-	return &value
 }

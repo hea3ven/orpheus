@@ -11,7 +11,73 @@ Orpheus separates tests by behavioral scope, not by speed or whether a test writ
 - `make check` formats code, runs the single-pass quality report, lints, and builds the CLI. Each test lane still runs only once.
 - `make timing-check BASE=<ref>` explicitly compares a working-tree snapshot with a fresh measurement of that exact base on the local host. It is never part of routine checks.
 
+## Test value and ownership
+
+Prefer coherent journeys through public application behavior. Keep focused unit
+and adapter tests for distinct contracts such as parsing, calculations, ownership,
+failure recovery, and persistence. Do not mirror each production function or
+branch with a test, or repeat a successful workflow at several layers.
+
+Before adding a test or table case, identify:
+
+1. The observable contract it protects, including relevant state and external effects.
+2. A plausible incorrect implementation that its assertions would reject.
+3. The existing test that owns that behavior, and whether extending it is sufficient.
+4. Any distinct contract that justifies a separate test or a different layer.
+
+Extend the existing owner when the case protects the same contract. Group related
+inputs in a table when they share an operation and assertions, with each outcome
+named clearly. Keep consequential setup and expected values visible. Do not merge
+unrelated behaviors into a large test or fixture just to reduce test counts.
+
+Compare assertions and failure modes, not executed lines or test counts. Before
+removing a duplicate, identify the test retaining each consequential assertion;
+keep any distinct protection that has no replacement. Reviewers should consider
+extension, consolidation, and removal as well as additions. Every request for an
+additional test must name the missing regression and explain why existing tests
+would miss it. Put relevant reasoning in the change or review summary, without
+requiring justification comments on every test.
+
+Coverage is a diagnostic and a blocking safety floor, not a reason for a test to
+exist. When a floor fails, first look for missing behavioral protection. If a
+deliberate removal changes coverage without losing a meaningful contract, explain
+that trade-off and follow the [explicit policy update](#updating-coverage-policy)
+process. Do not pad the suite, retain dead APIs for coverage, or lower floors
+automatically.
+
 ## Behavioral assertions
+
+Call the production operation and assert its observable results against
+independent expectations. Do not generate expected output with the production
+renderer or repeat the implementation's algorithm in the assertion. Prefer
+semantic output checks over full snapshots of incidental wording, colors, or
+column positions. Exact output and arguments are appropriate when their format
+is itself a documented command or adapter protocol contract.
+
+Use these checks when designing assertions:
+
+- For parsers, assert returned values, not only a nil error. For lists and output,
+  assert expected items and exclusions independently before comparing two views;
+  two empty results can agree while both are wrong.
+- For copying and ownership, mutate a copied pointee, slice, or map and verify the
+  original is unchanged. Replacing a pointer does not prove a deep copy.
+- For refusal, rollback, or retry, assert the error or outcome and the state whose
+  preservation or recovery is part of the contract. Relevant checks include file
+  bytes, reloaded persisted state, local and remote refs, and the Git index. File
+  existence or an unchanged HEAD alone does not prove preservation.
+- For selection, include an adversarial candidate that defeats a shortcut. A
+  newer incompatible run after the expected run makes "choose the last run"
+  fail when compatibility is required.
+- For injected failures, check error identity with `errors.Is` where applicable
+  and the absence of unintended effects. Several opaque error strings through
+  the same fake do not exercise distinct provider states or parsing behavior.
+- For process identity, ordering, and cancellation, use controlled handshakes,
+  the child's reported PID, and bounded waits. A sleep or a positive PID alone
+  does not prove the claimed lifecycle behavior.
+
+Fakes replace external effects, not the production decision under test. A fake
+that returns a terminal workflow outcome cannot prove that workflow, and a no-op
+collaborator cannot prove a concrete filesystem or process isolation boundary.
 
 Do not test logging. Do not add logging-only scenarios or assert log messages,
 levels, structured fields, correlation identifiers, timing fields, or log
@@ -89,11 +155,12 @@ A controlled executable is not sufficient justification for an adapter label. In
 
 When one file owns one category, use a descriptive suffix such as `_workflow_test.go`, `_adapter_test.go`, or `_binary_e2e_test.go`. The top-level category prefix remains the quickest way to identify mixed legacy files and select a family with `-run`.
 
-Recording-runner unit tests can verify adapter command construction and rejection
-decisions without starting Git. Keep real Git contracts for behavior that depends
-on refs, worktrees, merges, pushes, or patch restoration. A coverage overlap alone
-is not a reason to remove a boundary test; compare the assertions and failures it
-detects.
+Recording-runner unit tests can verify exact arguments when command translation
+is the adapter's boundary contract. Do not prescribe an internal sequence of Git
+commands or script every response to claim that stateful safety is proven. Keep
+real Git contracts for behavior that depends on refs, the index, worktrees,
+merges, pushes, or patch restoration. A coverage overlap alone is not a reason to
+remove a boundary test; compare the assertions and failures it detects.
 
 ## Memory-backed application workflows
 

@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agent"
@@ -13,103 +14,116 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestFreshReviewConstructionExcludesPreviousAttemptState(t *testing.T) {
-	for _, interruptedComparison := range []bool{false, true} {
-		name := "ordinary fresh review"
-		if interruptedComparison {
-			name = "interrupted comparison"
-		}
-		t.Run(name, func(t *testing.T) {
+func TestReviewExecutionRestartsFreshAttemptsAndPreservesPausedInteractions(t *testing.T) {
+	for _, tc := range []struct {
+		name                                    string
+		fresh, interruptedComparison, automated bool
+	}{
+		{"fresh after manual pause", true, false, false},
+		{"fresh after interrupted comparison", true, true, true},
+		{"resume manual step", false, false, false},
+		{"resume automated decision", false, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			store := &freshReviewStore{}
 			frontend := &freshReviewFrontend{}
-			service := ReviewLifecycleService{Frontend: frontend}
-			previous := pausedReviewContext(t, true)
-			previous.ReviewContext = ReviewContext{
-				store:  store,
-				Source: task.RepositorySource{Repository: task.Repository{ID: "alpha"}},
-				Task:   task.Task{ID: "op-fresh"}, Workdir: "/fixture/worktree",
+			ctx := pausedReviewContext(t, tc.automated)
+			ctx.ReviewContext = ReviewContext{
+				store: store, Source: task.RepositorySource{Repository: task.Repository{ID: "alpha"}},
+				Task: task.Task{ID: "op-fresh"}, Workdir: "/fixture/worktree",
 				Target: tasktarget.Target{Branch: "task-branch", Worktree: "/fixture/worktree"},
 			}
-			previous.AgentConfig = agent.Config{Defaults: agent.AgentDefaults{Reviewer: "old-reviewer"}}
-			pipeline := review.Pipeline{Name: "fresh-pipeline", Steps: []review.Step{
-				{Name: "first", Kind: review.KindCheck}, {Name: "second", Kind: review.KindCheck},
+			ctx.AgentConfig = agent.Config{Defaults: agent.AgentDefaults{Reviewer: "previous-reviewer"}}
+			var commands []string
+			service := ReviewLifecycleService{Frontend: frontend, ReviewEffects: review.Effects{
+				CaptureCandidate: func(context.Context, string, *slog.Logger, ...slog.Attr) (review.CandidateCheck, error) {
+					return func() error { return nil }, nil
+				},
+				RunCommand: func(opts review.CommandOptions) (*int, error) {
+					commands = append(commands, opts.Step.Name)
+					code := 0
+					return &code, nil
+				},
 			}}
-			start := service.startFreshReview
-			if interruptedComparison {
-				start = service.startFreshReviewAfterInterruptedComparison
-			}
-
-			fresh, err := start(previous.ReviewContext, pipeline)
-
-			require.NoError(t, err)
-			assert.Equal(t, previous.ReviewContext, fresh.ReviewContext)
-			assert.Equal(t, pipeline, fresh.Pipeline)
-			assert.Equal(t, taskstate.ReviewAttempt{Attempt: 8, Pipeline: pipeline.Name, Step: "first", Status: taskstate.ReviewStatusRunning}, fresh.Review)
-			assert.Empty(t, fresh.AgentConfig)
-			assert.False(t, fresh.Resumed())
-			assert.False(t, fresh.ResumesAutomatedBlockerDecision())
-			assert.True(t, previous.Resumed())
-			assert.True(t, previous.ResumesAutomatedBlockerDecision())
-			assert.Equal(t, []string{"alpha", "op-fresh"}, store.target)
-			assert.Equal(t, []taskstate.StartReviewOptions{{Pipeline: "fresh-pipeline", Step: "first"}}, store.starts)
-			if interruptedComparison {
-				assert.Zero(t, store.loads, "interrupted comparisons skip blocker disposition")
+			if tc.fresh {
+				pipeline := review.Pipeline{Name: "fresh-pipeline", Steps: []review.Step{
+					{Name: "first", Kind: review.KindCheck, Command: "semantic-check"},
+					{Name: "approval", Kind: review.KindManual},
+				}}
+				start := service.startFreshReview
+				if tc.interruptedComparison {
+					start = service.startFreshReviewAfterInterruptedComparison
+				}
+				var err error
+				ctx, err = start(ctx.ReviewContext, pipeline)
+				require.NoError(t, err)
 			} else {
-				assert.Equal(t, 1, store.loads, "ordinary fresh reviews retain the blocker guard")
+				ctx.Pipeline.Steps = append([]review.Step{{Name: "already-completed", Kind: review.KindCheck, Command: "must-not-rerun"}}, ctx.Pipeline.Steps...)
+				ctx.Review.Status = taskstate.ReviewStatusRunning
+				store.current = ctx.Review
+			}
+			captured := false
+			service.PipelineRunner = func(opts review.PipelineRunOptions) (review.PipelineOutcome, error) {
+				captured = true
+				assert.Equal(t, !tc.fresh, opts.Execution.Resumed())
+				assert.Equal(t, !tc.fresh && tc.automated, opts.Execution.ResumesAutomatedDecision())
+				assert.Equal(t, "task-branch", opts.Branch)
+				assert.Equal(t, "/fixture/worktree", opts.Workdir)
+				if tc.fresh {
+					assert.Empty(t, opts.AgentConfig)
+				}
+				return review.RunPipeline(opts)
 			}
 
-			opts, err := service.pipelineRunOptions(context.Background(), fresh)
-			require.NoError(t, err)
-			assert.Equal(t, fresh, frontend.presented)
-			assert.Equal(t, fresh.Review, opts.Attempt)
-			assert.Equal(t, pipeline, opts.Pipeline)
-			assert.Equal(t, "task-branch", opts.Branch)
-			assert.Equal(t, "/fixture/worktree", opts.Workdir)
-			assert.False(t, opts.Execution.Resumed())
-			assert.False(t, opts.Execution.ResumesAutomatedDecision())
-		})
-	}
-}
-
-func TestPipelineHandoffPreservesPausedAttemptInstructions(t *testing.T) {
-	for _, automatedDecision := range []bool{false, true} {
-		name := "manual step"
-		if automatedDecision {
-			name = "automated blocker decision"
-		}
-		t.Run(name, func(t *testing.T) {
-			frontend := &freshReviewFrontend{}
-			service := ReviewLifecycleService{Frontend: frontend}
-			resumed := pausedReviewContext(t, automatedDecision)
-			resumed.Review.Status = taskstate.ReviewStatusRunning
-
-			opts, err := service.pipelineRunOptions(context.Background(), resumed)
+			status, err := service.executeReviewAttempt(context.Background(), ctx)
 
 			require.NoError(t, err)
-			assert.Equal(t, resumed, frontend.presented)
-			assert.Equal(t, resumed.Review, opts.Attempt)
-			assert.True(t, opts.Execution.Resumed())
-			assert.Equal(t, automatedDecision, opts.Execution.ResumesAutomatedDecision())
+			assert.True(t, captured)
+			assert.Equal(t, ctx, frontend.presented)
+			if tc.fresh {
+				assert.Equal(t, []string{"first"}, commands, "fresh attempts must execute step one before pausing")
+				assert.Equal(t, taskstate.ReviewStatusWaitingForManual, status)
+				assert.Empty(t, store.current.Findings, "fresh attempts must not inherit previous blockers")
+			} else {
+				assert.Empty(t, commands, "resuming a paused interaction must not rerun completed checks")
+				if tc.automated {
+					assert.Equal(t, taskstate.ReviewStatusWaitingForAutomatedDecision, status)
+				} else {
+					assert.Equal(t, taskstate.ReviewStatusWaitingForManual, status)
+				}
+			}
 		})
 	}
 }
 
 type freshReviewStore struct {
 	ReviewLifecycleStore
-	loads  int
-	target []string
-	starts []taskstate.StartReviewOptions
+	current taskstate.ReviewAttempt
 }
 
 func (s *freshReviewStore) Load(string, string) (taskstate.TaskState, error) {
-	s.loads++
-	return taskstate.TaskState{}, nil
+	if s.current.Attempt == 0 {
+		return taskstate.TaskState{}, nil
+	}
+	return taskstate.TaskState{Reviews: []taskstate.ReviewAttempt{s.current}}, nil
 }
-
-func (s *freshReviewStore) StartReviewWithOptions(repoID, taskID string, opts taskstate.StartReviewOptions) (taskstate.ReviewAttempt, error) {
-	s.target = []string{repoID, taskID}
-	s.starts = append(s.starts, opts)
-	return taskstate.ReviewAttempt{Attempt: 8, Pipeline: opts.Pipeline, Step: opts.Step, Status: taskstate.ReviewStatusRunning}, nil
+func (s *freshReviewStore) StartReviewWithOptions(_, _ string, opts taskstate.StartReviewOptions) (taskstate.ReviewAttempt, error) {
+	s.current = taskstate.ReviewAttempt{Attempt: 8, Pipeline: opts.Pipeline, Step: opts.Step, Status: taskstate.ReviewStatusRunning}
+	return s.current, nil
+}
+func (s *freshReviewStore) RecordReviewStep(_, _ string, _ int, opts taskstate.RecordReviewStepOptions) (taskstate.ReviewAttempt, error) {
+	s.current.Steps = append(s.current.Steps, taskstate.ReviewStep{Kind: opts.Kind, Name: opts.Name})
+	return s.current, nil
+}
+func (s *freshReviewStore) PauseReviewForManual(_, _ string, _ int, step string) (taskstate.ReviewAttempt, error) {
+	s.current.Step = step
+	s.current.Status = taskstate.ReviewStatusWaitingForManual
+	return s.current, nil
+}
+func (s *freshReviewStore) PauseReviewForAutomatedBlockerDecision(_, _ string, _ int, step string) (taskstate.ReviewAttempt, error) {
+	s.current.Step = step
+	s.current.Status = taskstate.ReviewStatusWaitingForAutomatedDecision
+	return s.current, nil
 }
 
 type freshReviewFrontend struct {
@@ -119,7 +133,12 @@ type freshReviewFrontend struct {
 
 func (f *freshReviewFrontend) PipelinePresentation(ctx ReviewAttemptContext) (ReviewPipelinePresentation, error) {
 	f.presented = ctx
-	return ReviewPipelinePresentation{}, nil
+	return ReviewPipelinePresentation{
+		PauseBeforeManual: true,
+		PromptAutomatedBlockers: func(review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
+			return []review.AutomatedBlockerDecision{{Action: review.AutomatedBlockerActionPause}}, nil
+		},
+	}, nil
 }
 
 func pausedReviewContext(t *testing.T, automated bool) ReviewAttemptContext {

@@ -47,6 +47,13 @@ func TestIntegrationWorkflowReviewPrimaryProcessRecoveryKeepsFindingsForAudit(t 
 			stdout, stderr := fixture.run("", "task", "run", "op-recovery")
 
 			assert.Contains(t, stdout+stderr, test.guidance)
+			for _, want := range map[agentexec.ProcessLiveness][]string{
+				agentexec.ProcessAbsent:  {"orpheus task dir op-recovery", "git status --short", "git diff", "task show review op-recovery"},
+				agentexec.ProcessLive:    {"wait for it to finish", "task show review op-recovery"},
+				agentexec.ProcessUnknown: {"orpheus doctor", "task show review op-recovery"},
+			}[test.liveness] {
+				assert.Contains(t, stdout+stderr, want)
+			}
 			loaded, task := fixture.loadFinalTask("op-recovery")
 			require.Len(t, loaded.Reviews, 1)
 			latest := loaded.Reviews[0]

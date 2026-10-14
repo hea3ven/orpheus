@@ -6,13 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
-	"github.com/hea3ven/orpheus/internal/tasksource/beads"
-	"github.com/hea3ven/orpheus/internal/tasksource/gig"
 	"github.com/hea3ven/orpheus/internal/testutil"
 )
 
@@ -48,48 +45,6 @@ func TestInvocationDependenciesKeepEnvironmentScopedToInvocation(t *testing.T) {
 
 }
 
-func TestInvocationSnapshotUsesIsolatedUsageRoots(t *testing.T) {
-	t.Parallel()
-
-	snapshot := invocationEnvironmentSnapshot()
-	for key, want := range agent.UsageCaptureEnvironment() {
-		if got := snapshot[key]; got != want {
-			t.Fatalf("snapshot[%q] = %q, want isolated usage root %q", key, got, want)
-		}
-	}
-}
-
-func TestInvocationScopedRepoListWorkflowsRunInParallel(t *testing.T) {
-	for _, repoID := range []string{"alpha", "beta"} {
-		t.Run(repoID, func(t *testing.T) {
-			t.Parallel()
-
-			root := testutil.CanonicalTempDir(t)
-			paths, err := state.NewPaths(filepath.Join(root, "config", state.AppName), filepath.Join(root, "data", state.AppName))
-			if err != nil {
-				t.Fatalf("create paths: %v", err)
-			}
-			deps := newInvocationDependenciesWithPaths(paths, logging.Discard(), map[string]string{})
-			repoPath := filepath.Join(root, "repo")
-			if err := deps.registryStore.Save(registry.Registry{Repos: []registry.Repo{{ID: repoID, Name: repoID, Path: repoPath, DefaultBranch: "main", BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "op"}}}); err != nil {
-				t.Fatalf("save registry: %v", err)
-			}
-
-			command := newRootCommand(&rootOptions{logger: logging.Discard(), invocationDeps: deps})
-			output := new(bytes.Buffer)
-			command.SetOut(output)
-			command.SetErr(new(bytes.Buffer))
-			command.SetArgs([]string{"repo", "list"})
-			if err := command.Execute(); err != nil {
-				t.Fatalf("execute repo list: %v", err)
-			}
-			if !strings.Contains(output.String(), repoID) {
-				t.Fatalf("repo list output = %q, want %q", output.String(), repoID)
-			}
-		})
-	}
-}
-
 func containsEnvironment(environment []string, want string) bool {
 	for _, entry := range environment {
 		if entry == want {
@@ -99,37 +54,76 @@ func containsEnvironment(environment []string, want string) bool {
 	return false
 }
 
-func TestInvocationSelectsRegisteredTaskSource(t *testing.T) {
+func TestInvocationSnapshotPreservesExplicitUsageRoots(t *testing.T) {
+	want := map[string]string{"CODEX_HOME": "/isolated/codex", "HOME": "/isolated/home", "PI_CODING_AGENT_DIR": "/isolated/pi", "PI_CODING_AGENT_SESSION_DIR": "/isolated/pi/sessions", "ORPHEUS_REPO_ID": "process-repo"}
+	for key, value := range want {
+		t.Setenv(key, value)
+	}
+
+	snapshot := invocationEnvironmentSnapshot()
+
+	for key, value := range want {
+		if snapshot[key] != value {
+			t.Fatalf("snapshot[%q] = %q, want %q", key, snapshot[key], value)
+		}
+	}
+}
+
+func TestInvocationScopedRepoListsRemainIsolatedDuringConcurrentExecution(t *testing.T) {
+	type result struct {
+		id, output string
+		err        error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	for _, repoID := range []string{"alpha", "beta"} {
+		root := testutil.CanonicalTempDir(t)
+		paths, err := state.NewPaths(filepath.Join(root, "config", state.AppName), filepath.Join(root, "data", state.AppName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		deps := newInvocationDependenciesWithPaths(paths, logging.Discard(), map[string]string{})
+		if err := deps.registryStore.Save(registry.Registry{Repos: []registry.Repo{{ID: repoID, Name: repoID, Path: filepath.Join(root, "repo"), DefaultBranch: "main", BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "op"}}}); err != nil {
+			t.Fatal(err)
+		}
+		command := newRootCommand(&rootOptions{logger: logging.Discard(), invocationDeps: deps})
+		var output bytes.Buffer
+		command.SetOut(&output)
+		command.SetErr(new(bytes.Buffer))
+		command.SetArgs([]string{"repo", "list"})
+		go func() {
+			<-start
+			err := command.Execute()
+			results <- result{id: repoID, output: output.String(), err: err}
+		}()
+	}
+	close(start)
+	for range 2 {
+		got := <-results
+		if got.err != nil {
+			t.Fatalf("repo %s: %v", got.id, got.err)
+		}
+		other := "alpha"
+		if got.id == other {
+			other = "beta"
+		}
+		if !strings.Contains(got.output, got.id) || strings.Contains(got.output, other) {
+			t.Fatalf("repo %s output = %q, want own repository without %s", got.id, got.output, other)
+		}
+	}
+}
+
+func TestInvocationRejectsUnsupportedTaskSource(t *testing.T) {
 	root := testutil.CanonicalTempDir(t)
 	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	deps := newInvocationDependenciesWithPaths(paths, logging.Discard(), map[string]string{"PATH": "/nonexistent"})
-	for _, kind := range []string{"", "beads", "gig", "unsupported"} {
-		t.Run(kind, func(t *testing.T) {
-			source := taskmodel.RepositorySource{Kind: kind, BackendDir: filepath.Join(root, "source"), MaintenanceOwned: true, Repository: taskmodel.Repository{TaskIDPrefix: "op"}}
-			backend, err := deps.taskBackendFactory(source)
-			switch kind {
-			case "gig":
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, ok := backend.(gig.Backend); !ok {
-					t.Fatalf("backend = %T, want gig.Backend", backend)
-				}
-			case "", "beads":
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, ok := backend.(beads.TaskBackend); !ok {
-					t.Fatalf("backend = %T, want beads.TaskBackend", backend)
-				}
-			default:
-				if err == nil {
-					t.Fatal("unsupported source accepted")
-				}
-			}
-		})
+
+	_, err = deps.taskBackendFactory(taskmodel.RepositorySource{Kind: "unsupported"})
+
+	if err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("unsupported source error = %v", err)
 	}
 }

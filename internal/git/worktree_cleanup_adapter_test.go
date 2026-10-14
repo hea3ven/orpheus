@@ -110,8 +110,15 @@ func TestIntegrationAdapterContractClosedTaskWorktreeCleanupRejectsUnsafeIdentit
 				runGit(t, setup.WorktreePath, "checkout", "-b", "other")
 			}
 			runner := &cleanupGitRunner{t: t}
+			ctx := gitmeta.ContextWithRunner(context.Background(), runner)
+			inspection := gitmeta.InspectClosedTaskWorktree(ctx, opts)
+			assert.Equal(t, gitmeta.ClosedTaskWorktreeUnsafe, inspection.Outcome)
+			if kind == "locked" {
+				assert.Contains(t, inspection.Reason, "locked")
+				assert.Contains(t, inspection.Reason, "operator repair")
+			}
 
-			result := gitmeta.RemoveClosedTaskWorktree(gitmeta.ContextWithRunner(context.Background(), runner), opts)
+			result := gitmeta.RemoveClosedTaskWorktree(ctx, opts)
 
 			assert.Equal(t, gitmeta.ClosedTaskWorktreeUnsafe, result.Outcome, result.Reason)
 			assert.Zero(t, runner.removes)

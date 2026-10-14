@@ -23,10 +23,17 @@ func TestIntegrationWorkflowRepoBeadsDirResolvesRegisteredSourceByIDNameOrPrefix
 				wantDir, err = fixture.registryStore.ManagedBeadsDir(repo.ID)
 				require.NoError(t, err)
 			}
-			for _, token := range []string{repo.ID, repo.Name, repo.BeadsPrefix} {
+			for _, token := range []string{repo.ID, repo.Name, repo.BeadsPrefix, "missing"} {
 				t.Run(token, func(t *testing.T) {
 					stdout, stderr, err := fixture.execute("repo", "beads-dir", token)
 
+					if token == "missing" {
+						require.ErrorContains(t, err, `repo "missing" is not registered`)
+						assert.ErrorContains(t, err, "orpheus repo list")
+						assert.Empty(t, stdout)
+						assert.Empty(t, stderr)
+						return
+					}
 					require.NoError(t, err)
 					assert.Equal(t, wantDir+"\n", stdout)
 					assert.Empty(t, stderr)
@@ -36,61 +43,30 @@ func TestIntegrationWorkflowRepoBeadsDirResolvesRegisteredSourceByIDNameOrPrefix
 	}
 }
 
-func TestIntegrationWorkflowRepoBeadsDirRejectsUnknownRepo(t *testing.T) {
-	fixture := newRepoConfigFixture(t)
+func TestIntegrationWorkflowTaskLookupRejectsMalformedAndUnknownPrefixes(t *testing.T) {
+	for _, command := range []string{"show", "dir"} {
+		for _, test := range []struct {
+			id       string
+			guidance []string
+		}{
+			{"notprefixed", []string{"malformed task id", "expected <prefix>-<suffix>"}},
+			{"zz-1", []string{"unknown task id prefix", "orpheus repo list", "register the repo"}},
+		} {
+			t.Run(command+"/"+test.id, func(t *testing.T) {
+				fixture := newRepoConfigFixture(t)
+				repo := aRegisteredRepo("alpha")
+				repo.Name, repo.BeadsPrefix = "Alpha", "op"
+				fixture.withRegisteredRepos(repo)
 
-	stdout, stderr, err := fixture.execute("repo", "beads-dir", "missing")
+				stdout, stderr, err := fixture.execute("task", command, test.id)
 
-	assert.ErrorContains(t, err, `repo "missing" is not registered`)
-	assert.ErrorContains(t, err, "orpheus repo list")
-	assert.Empty(t, stdout)
-	assert.Empty(t, stderr)
-}
-
-func TestIntegrationWorkflowTaskShowReportsMalformedAndUnknownPrefixes(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newRepoConfigFixture(t)
-	repo := aRegisteredRepo("alpha")
-	repo.Name, repo.BeadsPrefix = "Alpha", "op"
-	fixture.withRegisteredRepos(repo)
-
-	stdout, stderr, err := fixture.execute("task", "show", "notprefixed")
-	must.Error(err)
-	is.Empty(stdout)
-	is.Empty(stderr)
-	is.ErrorContains(err, "malformed task id")
-	is.ErrorContains(err, "expected <prefix>-<suffix>")
-
-	stdout, stderr, err = fixture.execute("task", "show", "zz-1")
-	must.Error(err)
-	is.Empty(stdout)
-	is.Empty(stderr)
-	is.ErrorContains(err, "unknown task id prefix")
-	is.ErrorContains(err, "orpheus repo list")
-	is.ErrorContains(err, "register the repo")
-}
-
-func TestIntegrationWorkflowTaskDirReportsMalformedAndUnknownPrefixes(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newRepoConfigFixture(t)
-	repo := aRegisteredRepo("alpha")
-	repo.Name, repo.BeadsPrefix = "Alpha", "op"
-	fixture.withRegisteredRepos(repo)
-
-	stdout, stderr, err := fixture.execute("task", "dir", "notprefixed")
-	must.Error(err)
-	is.Empty(stdout)
-	is.Empty(stderr)
-	is.ErrorContains(err, "malformed task id")
-	is.ErrorContains(err, "expected <prefix>-<suffix>")
-
-	stdout, stderr, err = fixture.execute("task", "dir", "zz-1")
-	must.Error(err)
-	is.Empty(stdout)
-	is.Empty(stderr)
-	is.ErrorContains(err, "unknown task id prefix")
-	is.ErrorContains(err, "orpheus repo list")
-	is.ErrorContains(err, "register the repo")
+				require.Error(t, err)
+				for _, want := range test.guidance {
+					assert.ErrorContains(t, err, want)
+				}
+				assert.Empty(t, stdout)
+				assert.Empty(t, stderr)
+			})
+		}
+	}
 }

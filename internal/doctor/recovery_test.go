@@ -3,7 +3,6 @@ package doctor_test
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -32,7 +31,6 @@ func (doctorClosedTaskBackend) List(context.Context) ([]task.Task, error) {
 
 type doctorCleanupGit struct {
 	inspection gitmeta.ClosedTaskWorktreeInspection
-	removal    gitmeta.ClosedTaskWorktreeRemoval
 	inspects   int
 	removes    int
 	worktree   string
@@ -52,17 +50,7 @@ func (g *doctorCleanupGit) InspectClosedTaskWorktree(context.Context, gitmeta.Cl
 
 func (g *doctorCleanupGit) RemoveClosedTaskWorktree(context.Context, gitmeta.ClosedTaskWorktreeOptions) gitmeta.ClosedTaskWorktreeRemoval {
 	g.removes++
-	removal := g.removal
-	if removal.Outcome == "" {
-		removal.Outcome = gitmeta.ClosedTaskWorktreeRemoved
-	}
-	if removal.Worktree == "" {
-		removal.Worktree = g.worktree
-	}
-	if removal.Outcome == gitmeta.ClosedTaskWorktreeRemoved {
-		g.inspection = gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeAbsent, Worktree: removal.Worktree}
-	}
-	return removal
+	return gitmeta.ClosedTaskWorktreeRemoval{Outcome: gitmeta.ClosedTaskWorktreeRemoved, Worktree: g.worktree}
 }
 
 func TestRunReportsAndRepairsRecoverablePrimaryReviewer(t *testing.T) {
@@ -119,94 +107,6 @@ func TestRunReportsAndRepairsRecoverablePrimaryReviewer(t *testing.T) {
 	}
 	if latest.Steps[0].Execution.UsageCost == nil {
 		t.Fatalf("fixed execution = %#v, want recovered usage cost without restoring running state", latest.Steps[0].Execution)
-	}
-}
-
-func TestRunReportsAndFixesClosedTaskWorktree(t *testing.T) {
-	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
-	if err != nil {
-		t.Fatalf("new paths: %v", err)
-	}
-	const taskID = "op-cleanup"
-	worktree, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", taskID))
-	if err != nil {
-		t.Fatalf("worktree path: %v", err)
-	}
-	if err := os.MkdirAll(worktree, 0o755); err != nil {
-		t.Fatalf("create worktree path: %v", err)
-	}
-	store := taskstate.NewStore(paths)
-	if _, err := store.StartRun("alpha", taskID, taskstate.StartRunOptions{
-		Agent: "implementer", WorkDirectory: worktree, Branch: "orpheus/" + taskID, Worktree: worktree,
-	}); err != nil {
-		t.Fatalf("start run: %v", err)
-	}
-	source := task.RepositorySource{Repository: task.Repository{ID: "alpha", Name: "Alpha", Path: "/fixture/alpha", DefaultBranch: "main"}}
-	backend := doctorClosedTaskBackend{task: task.Task{ID: taskID, Status: task.StatusClosed, Metadata: task.Metadata{
-		task.MetadataBranch: "orpheus/" + taskID, task.MetadataWorktree: worktree,
-	}}}
-	git := &doctorCleanupGit{worktree: worktree}
-	opts := doctor.Options{
-		Paths:    paths,
-		Registry: registry.Registry{Repos: []registry.Repo{{ID: "alpha", Path: "/fixture/alpha"}}},
-		Sources:  []task.RepositorySource{source},
-		BackendFactory: func(task.RepositorySource) (task.ReadBackend, error) {
-			return backend, nil
-		},
-		CleanupGit: git,
-	}
-
-	result, err := doctor.Run(opts)
-	if err != nil {
-		t.Fatalf("doctor: %v", err)
-	}
-	if len(result.WorktreeRows) != 1 || result.WorktreeRows[0].Outcome != workflow.WorktreeCleanupPending || git.removes != 0 {
-		t.Fatalf("doctor rows/removals = %#v/%d, want pending dry run", result.WorktreeRows, git.removes)
-	}
-	loaded, err := store.Load("alpha", taskID)
-	if err != nil {
-		t.Fatalf("load dry run state: %v", err)
-	}
-	if len(loaded.Events) != 1 {
-		t.Fatalf("dry run events = %#v, want only start event", loaded.Events)
-	}
-
-	opts.Fix = true
-	result, err = doctor.Run(opts)
-	if err != nil {
-		t.Fatalf("doctor --fix: %v", err)
-	}
-	if len(result.WorktreeRows) != 1 || result.WorktreeRows[0].Outcome != workflow.WorktreeCleanupRemoved || git.removes != 1 {
-		t.Fatalf("fixed rows/removals = %#v/%d, want removed", result.WorktreeRows, git.removes)
-	}
-	loaded, err = store.Load("alpha", taskID)
-	if err != nil {
-		t.Fatalf("load fixed state: %v", err)
-	}
-	if got := loaded.Events[len(loaded.Events)-1]; got.Type != taskstate.EventWorktreeRemoved || got.Worktree != worktree {
-		t.Fatalf("cleanup event = %#v, want removed worktree audit", got)
-	}
-
-	result, err = doctor.Run(opts)
-	if err != nil {
-		t.Fatalf("doctor after cleanup: %v", err)
-	}
-	if len(result.WorktreeRows) != 1 || result.WorktreeRows[0].Outcome != workflow.WorktreeCleanupAlreadyAbsent || git.removes != 1 {
-		t.Fatalf("doctor rows/removals after cleanup = %#v/%d, want already absent without removal", result.WorktreeRows, git.removes)
-	}
-	if err := os.RemoveAll(worktree); err != nil {
-		t.Fatalf("remove cleaned worktree: %v", err)
-	}
-
-	opts.BackendFactory = func(task.RepositorySource) (task.ReadBackend, error) {
-		return nil, errors.New("task source unavailable")
-	}
-	result, err = doctor.Run(opts)
-	if err != nil {
-		t.Fatalf("doctor with unavailable source after cleanup: %v", err)
-	}
-	if len(result.WorktreeRows) != 0 || git.removes != 1 {
-		t.Fatalf("doctor rows/removals with unavailable source = %#v/%d, want absent worktree skipped", result.WorktreeRows, git.removes)
 	}
 }
 
@@ -287,71 +187,6 @@ func TestRunReportsAbsentRegisteredClosedTaskWorktree(t *testing.T) {
 	}
 	if len(result.WorktreeRows) != 1 || result.WorktreeRows[0].Outcome != workflow.WorktreeCleanupFailed || result.WorktreeRows[0].Worktree != worktree || git.inspects != 2 || git.removes != 0 {
 		t.Fatalf("doctor rows/inspections/removals = %#v/%d/%d, want failed unresolved registration", result.WorktreeRows, git.inspects, git.removes)
-	}
-}
-
-func TestRunReportsLockedClosedTaskWorktreeWithoutRemovingIt(t *testing.T) {
-	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
-	if err != nil {
-		t.Fatalf("new paths: %v", err)
-	}
-	const taskID = "op-locked-cleanup"
-	worktree, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", taskID))
-	if err != nil {
-		t.Fatalf("worktree path: %v", err)
-	}
-	if err := os.MkdirAll(worktree, 0o755); err != nil {
-		t.Fatalf("create locked worktree path: %v", err)
-	}
-	store := taskstate.NewStore(paths)
-	if _, err := store.StartRun("alpha", taskID, taskstate.StartRunOptions{
-		Agent: "implementer", WorkDirectory: worktree, Branch: "orpheus/" + taskID, Worktree: worktree,
-	}); err != nil {
-		t.Fatalf("start run: %v", err)
-	}
-	source := task.RepositorySource{Repository: task.Repository{ID: "alpha", Name: "Alpha", Path: "/fixture/alpha", DefaultBranch: "main"}}
-	backend := doctorClosedTaskBackend{task: task.Task{ID: taskID, Status: task.StatusClosed, Metadata: task.Metadata{
-		task.MetadataBranch: "orpheus/" + taskID, task.MetadataWorktree: worktree,
-	}}}
-	git := &doctorCleanupGit{
-		worktree: worktree,
-		inspection: gitmeta.ClosedTaskWorktreeInspection{
-			Outcome: gitmeta.ClosedTaskWorktreeUnsafe,
-			Reason:  "Git marks the deterministic worktree as locked: operator repair",
-		},
-	}
-	opts := doctor.Options{
-		Paths:    paths,
-		Registry: registry.Registry{Repos: []registry.Repo{{ID: "alpha", Path: "/fixture/alpha"}}},
-		Sources:  []task.RepositorySource{source},
-		BackendFactory: func(task.RepositorySource) (task.ReadBackend, error) {
-			return backend, nil
-		},
-		CleanupGit: git,
-	}
-
-	result, err := doctor.Run(opts)
-	if err != nil {
-		t.Fatalf("doctor: %v", err)
-	}
-	if len(result.WorktreeRows) != 1 || result.WorktreeRows[0].Outcome != workflow.WorktreeCleanupUnsafe || git.inspects != 1 || git.removes != 0 {
-		t.Fatalf("doctor rows/inspections/removals = %#v/%d/%d, want unsafe without removal", result.WorktreeRows, git.inspects, git.removes)
-	}
-
-	opts.Fix = true
-	result, err = doctor.Run(opts)
-	if err != nil {
-		t.Fatalf("doctor --fix: %v", err)
-	}
-	if len(result.WorktreeRows) != 1 || result.WorktreeRows[0].Outcome != workflow.WorktreeCleanupUnsafe || git.inspects != 2 || git.removes != 0 {
-		t.Fatalf("fixed rows/inspections/removals = %#v/%d/%d, want unsafe without removal", result.WorktreeRows, git.inspects, git.removes)
-	}
-	loaded, err := store.Load("alpha", taskID)
-	if err != nil {
-		t.Fatalf("load after fix: %v", err)
-	}
-	if len(loaded.Events) != 1 {
-		t.Fatalf("events = %#v, want only start event", loaded.Events)
 	}
 }
 

@@ -1,34 +1,13 @@
 package cli
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/taskstats"
 )
-
-func TestTaskStatsRowDisplaysResumeProvenance(t *testing.T) {
-	record := taskStatsExecutionRecord{
-		activity: "implementation",
-		attempt:  "2",
-		step:     "-",
-		status:   "succeeded",
-		execution: taskstate.AgentExecution{
-			Profile: "implementer",
-			Harness: "pi",
-			Launch: &taskstate.AgentLaunch{
-				Mode:             taskstate.AgentLaunchResumed,
-				SourceRunAttempt: 1,
-				SourceSession:    &taskstate.AgentSession{ID: "session-1", LogPath: "/fixture/session.jsonl"},
-			},
-		},
-	}
-
-	row := taskStatsRow(record)
-	if row[11] != "resumed" || row[12] != "run 1 / session session-1" || row[13] != "-" {
-		t.Fatalf("resume columns = %#v", row[11:14])
-	}
-}
 
 func TestTaskHistoryEventDisplaysFreshFallbackReason(t *testing.T) {
 	event := taskstate.Event{Type: taskstate.EventRunStarted, Attempt: 2}
@@ -47,30 +26,44 @@ func TestTaskHistoryEventDisplaysFreshFallbackReason(t *testing.T) {
 	}
 }
 
-func TestFormatTaskStatsTotalTokensShowsPartialKnownTotals(t *testing.T) {
-	got := formatTaskStatsTotalTokens(taskstats.IntCohort{Total: 150, Samples: 1})
-	if got != "150" {
-		t.Fatalf("total tokens = %q, want %q", got, "150")
+func TestRenderedTaskStatsDisplaysResumeProvenance(t *testing.T) {
+	state := taskstate.TaskState{Runs: []taskstate.RunAttempt{{
+		Attempt: 2, Status: taskstate.RunStatusSucceeded,
+		Execution: taskstate.AgentExecution{
+			Profile: "implementer", Harness: "pi",
+			Launch: &taskstate.AgentLaunch{Mode: taskstate.AgentLaunchResumed, SourceRunAttempt: 1, SourceSession: &taskstate.AgentSession{ID: "session-1", LogPath: "/fixture/session.jsonl"}},
+		},
+	}}}
+	var output bytes.Buffer
+
+	if err := renderTaskStats(&output, state); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{"LAUNCH_MODE", "RESUME_SOURCE", "RESUME_FALLBACK", "resumed", "run 1 / session session-1"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("stats missing %q:\n%s", want, output.String())
+		}
 	}
 }
 
-func TestFormatTaskStatsTotalTokensHidesAllUnknownZeroTotals(t *testing.T) {
-	got := formatTaskStatsTotalTokens(taskstats.IntCohort{Samples: 1})
-	if got != "-" {
-		t.Fatalf("total tokens = %q, want %q", got, "-")
-	}
-}
-
-func TestFormatTaskStatsTotalCostShowsPartialKnownTotals(t *testing.T) {
-	got := formatTaskStatsTotalCost(taskstats.CostCohort{TotalMicroUSD: 625, Samples: 1})
-	if got != "$0.000625" {
-		t.Fatalf("total cost = %q, want %q", got, "$0.000625")
-	}
-}
-
-func TestFormatTaskStatsTotalCostHidesAllUnknownZeroTotals(t *testing.T) {
-	got := formatTaskStatsTotalCost(taskstats.CostCohort{Samples: 1})
-	if got != "-" {
-		t.Fatalf("total cost = %q, want %q", got, "-")
+func TestTaskStatsCohortPresentationDistinguishesUnknownKnownAndZero(t *testing.T) {
+	for _, test := range []struct {
+		name                 string
+		known, samples       int
+		tokens, cost         int64
+		wantTokens, wantCost string
+	}{
+		{"partial", 1, 2, 150, 625, "150", "$0.000625"},
+		{"unknown", 0, 1, 0, 0, "-", "-"},
+		{"known zero", 1, 1, 0, 0, "0", "$0.000000"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			gotTokens := formatTaskStatsTotalTokens(taskstats.IntCohort{Known: test.known, Samples: test.samples, Total: int(test.tokens)})
+			gotCost := formatTaskStatsTotalCost(taskstats.CostCohort{Known: test.known, Samples: test.samples, TotalMicroUSD: test.cost})
+			if gotTokens != test.wantTokens || gotCost != test.wantCost {
+				t.Fatalf("tokens/cost = %q / %q, want %q / %q", gotTokens, gotCost, test.wantTokens, test.wantCost)
+			}
+		})
 	}
 }

@@ -93,31 +93,24 @@ func TestLocalTimingReportsRemainOutsideTheSource(t *testing.T) {
 	}
 }
 
-func TestWorkingTreeOptionsUseFreshReportsUnlessAnOutsideOutputIsExplicit(t *testing.T) {
-	for _, output := range []string{"", "/fixture/new-reports/report.json"} {
-		args := []string{"-compare-worktree", "-compare-base", "HEAD"}
-		if output != "" {
-			args = append(args, "-output", output)
-		}
-
-		opts, err := parseOptions(args)
-
-		if err != nil || opts.output != output {
-			t.Fatalf("working-tree options = %#v, %v", opts, err)
-		}
-	}
-}
-
 func TestWorkingTreeReportLabelsSnapshotAndKeepsComparisonFailuresDistinct(t *testing.T) {
-	for _, status := range []string{statusPass, statusTimingFailed, statusUnevaluated, statusExecutionFailed} {
+	for _, test := range []struct {
+		status string
+		want   string
+	}{
+		{statusPass, "Quality checks passed"},
+		{statusTimingFailed, "Timing ceiling exceeded"},
+		{statusUnevaluated, "Timing unevaluated"},
+		{statusExecutionFailed, "Execution failed"},
+	} {
 		report := timingFixture(fixtureMerge, 1)
-		report.Decision = decision{Status: status}
+		report.Decision = decision{Status: test.status}
 		report.Comparison = &comparisonEvidence{BaseRevision: fixtureBase, MergeRevision: fixtureMerge, Snapshot: &workingTreeSnapshot{HeadRevision: fixtureBase, Tree: "tree-id", Bundle: "/fixture/candidate.bundle"}}
 		var output strings.Builder
 
 		renderReportSummary(&output, report, "/fixture/report.json")
 
-		for _, want := range []string{"Working-tree snapshot", "Source HEAD:", "Raw tree: `tree-id`", "candidate.bundle"} {
+		for _, want := range []string{test.want, "Working-tree snapshot", "Source HEAD:", "Raw tree: `tree-id`", "candidate.bundle"} {
 			if !strings.Contains(output.String(), want) {
 				t.Fatalf("snapshot report missing %q: %s", want, output.String())
 			}

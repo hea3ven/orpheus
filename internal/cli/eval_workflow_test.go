@@ -83,120 +83,6 @@ func TestIntegrationWorkflowEvalReviewContextReportsUnknownExecutionWhenEnvironm
 	is.Equal(filepath.Join(observed.DataBase, state.AppName), run.DataRoot)
 }
 
-func TestIntegrationWorkflowEvalReviewContextKeepsOperatorBeadsEnvOutOfSeededRepo(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	operatorBeadsDir := filepath.Join(testutil.CanonicalTempDir(t), "operator-beads")
-	must.NoError(os.MkdirAll(operatorBeadsDir, 0o755))
-	t.Setenv("BEADS_DIR", operatorBeadsDir)
-	t.Setenv("BD_NON_INTERACTIVE", "0")
-	launcher := &recordingEvalLauncher{}
-	var operations []string
-	var provisionedRepo string
-	var observedBeadsDir string
-	var observedNonInteractive string
-
-	effects := revieweval.Effects{
-		InitializeBeads: func(repoPath string, prefix string) error {
-			is.Equal("op", prefix)
-			is.Contains(filepath.ToSlash(repoPath), "/codex-legacy-general-01/repo")
-			operations = append(operations, "initialize")
-			return nil
-		},
-		SeedRepo: func(context.Context, string, string) error {
-			operations = append(operations, "seed-repo")
-			return nil
-		},
-		ProvisionTask: func(_ context.Context, repoPath string, _ string) (string, error) {
-			operations = append(operations, "seed-task")
-			provisionedRepo = repoPath
-			observedBeadsDir = os.Getenv("BEADS_DIR")
-			observedNonInteractive = os.Getenv("BD_NON_INTERACTIVE")
-			return "op-eval", nil
-		},
-		RunEnvironment: func(revieweval.Environment, func() error) error { return nil },
-		AgentLauncher:  launcher,
-	}
-
-	stdout, stderr, err := executeEvalCommand(t, cli.CommandOptions{Dependencies: cli.Dependencies{EvaluationEffects: effects}},
-		"eval", "review-context",
-		"--harness", "codex",
-		"--variant", "legacy",
-		"--scenario", "general",
-		"--repetitions", "1",
-	)
-	must.NoError(err, "stderr: %s", stderr)
-
-	var report revieweval.Report
-	must.NoError(json.Unmarshal([]byte(stdout), &report))
-	must.Len(report.Runs, 1)
-	is.Equal([]string{"initialize", "seed-repo", "seed-task"}, operations)
-	is.Equal(report.Runs[0].RepoPath, provisionedRepo)
-	is.NotEqual(operatorBeadsDir, provisionedRepo)
-	is.Equal(operatorBeadsDir, observedBeadsDir)
-	is.Equal("0", observedNonInteractive)
-	is.NoFileExists(filepath.Join(operatorBeadsDir, "config.yaml"))
-	is.NoDirExists(filepath.Join(operatorBeadsDir, ".beads"))
-	is.Empty(launcher.launches())
-}
-
-func TestIntegrationWorkflowEvalReviewContextPersistsExecutionSessionArgsAndPromptEnv(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	launcher := &recordingEvalLauncher{}
-
-	effects := revieweval.Effects{
-		InitializeBeads: func(string, string) error { return nil },
-		SeedRepo:        func(context.Context, string, string) error { return nil },
-		ProvisionTask:   func(context.Context, string, string) (string, error) { return "op-eval", nil },
-		RunEnvironment: func(_ revieweval.Environment, run func() error) error {
-			return run()
-		},
-		ReviewEffects: review.Effects{
-			CaptureCandidate: func(context.Context, string, *slog.Logger, ...slog.Attr) (review.CandidateCheck, error) {
-				return func() error { return nil }, nil
-			},
-			CaptureUsage: func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions {
-				return taskstate.RecordRunUsageOptions{UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureUnknown, Reason: "no supplied usage"}}
-			},
-		},
-		AgentLauncher: launcher,
-	}
-
-	stdout, stderr, err := executeEvalCommand(t, cli.CommandOptions{Dependencies: cli.Dependencies{EvaluationEffects: effects}},
-		"eval", "review-context",
-		"--harness", "codex",
-		"--variant", "legacy",
-		"--scenario", "architecture",
-		"--repetitions", "1",
-		"--codex-model", "test-codex",
-		"--pi-model", "test-pi",
-		"--keep-workdirs",
-	)
-	must.NoError(err, "stderr: %s", stderr)
-
-	var report revieweval.Report
-	must.NoError(json.Unmarshal([]byte(stdout), &report))
-	must.Len(report.Runs, 1)
-	run := report.Runs[0]
-	is.Equal("passed", run.ReviewStatus)
-	is.True(report.IsolatedRootKept)
-	t.Cleanup(func() { _ = os.RemoveAll(report.IsolatedRoot) })
-
-	launches := launcher.launches()
-	must.Len(launches, 1)
-	launch := launches[0]
-	execution := loadEvalReviewExecution(t, run, "op-eval")
-	wantSessionName := "Reviewing op-eval Review order architecture boundaries"
-	is.Equal(wantSessionName, execution.SessionName)
-	is.Equal(launch.command.Args, execution.Args)
-	is.Equal(run.RepoPath, launch.options.Dir)
-	promptArg := execution.Args[len(execution.Args)-1]
-	is.NotRegexp(`(?m)^ - `, promptArg)
-	is.Contains(promptArg, wantSessionName+" - ")
-	is.Equal(promptArg, envValue(launch.options.Env, "ORPHEUS_AGENT_PROMPT"))
-}
-
 func TestIntegrationWorkflowEvalReviewContextRunsPipelineWithSafeBoundaries(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -283,6 +169,14 @@ func TestIntegrationWorkflowEvalReviewContextRunsPipelineWithSafeBoundaries(t *t
 	is.Equal(revieweval.VariantExhaustive, run.Variant)
 	is.Equal(revieweval.ScenarioArchitecture, run.Scenario)
 	is.Equal("passed", run.ReviewStatus)
+	execution := loadEvalReviewExecution(t, run, "op-eval")
+	is.Equal("Reviewing op-eval Review order architecture boundaries", execution.SessionName)
+	is.Equal(launch.command.Args, execution.Args)
+	is.Equal(run.RepoPath, launch.options.Dir)
+	promptArg := execution.Args[len(execution.Args)-1]
+	is.NotRegexp(`(?m)^ - `, promptArg)
+	is.Contains(promptArg, execution.SessionName+" - ")
+	is.Equal(promptArg, envValue(launch.options.Env, "ORPHEUS_AGENT_PROMPT"))
 	is.Empty(run.OperationalErr)
 	is.Equal([]string{"domain-imports-http", "api-bypasses-service-store", "global-shared-store"}, run.MissedSeededIDs)
 	is.False(run.CompleteSession)

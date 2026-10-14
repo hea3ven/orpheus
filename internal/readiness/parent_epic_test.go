@@ -17,7 +17,11 @@ func TestEvaluateParentEpicGate(t *testing.T) {
 			if tt.parent != nil {
 				tasks = append(tasks, *tt.parent)
 			}
-			got := readiness.EvaluateParentEpicGate(child, tasks)
+			item := child
+			if tt.standalone {
+				item.Relations.ParentID = ""
+			}
+			got := readiness.EvaluateParentEpicGate(item, tasks)
 			if got.State != tt.wantState {
 				t.Fatalf("gate state = %q, want %q", got.State, tt.wantState)
 			}
@@ -30,6 +34,7 @@ func TestEvaluateParentEpicGate(t *testing.T) {
 
 type parentEpicGateCase struct {
 	name       string
+	standalone bool
 	parent     *task.Task
 	wantState  readiness.ParentEpicGateState
 	wantDetail string
@@ -37,6 +42,7 @@ type parentEpicGateCase struct {
 
 func parentEpicGateCases() []parentEpicGateCase {
 	return []parentEpicGateCase{
+		{name: "standalone", standalone: true, wantState: readiness.ParentEpicGateAllowed},
 		{
 			name:       "missing parent",
 			wantState:  readiness.ParentEpicGateAttention,
@@ -71,12 +77,5 @@ func parentEpicGateCases() []parentEpicGateCase {
 			parent:    &task.Task{ID: "parent", IssueType: task.IssueTypeEpic, Status: task.StatusInProgress},
 			wantState: readiness.ParentEpicGateAllowed,
 		},
-	}
-}
-
-func TestEvaluateParentEpicGateAllowsStandaloneItems(t *testing.T) {
-	got := readiness.EvaluateParentEpicGate(task.Task{ID: "standalone"}, nil)
-	if got.State != readiness.ParentEpicGateAllowed {
-		t.Fatalf("gate state = %q, want %q", got.State, readiness.ParentEpicGateAllowed)
 	}
 }

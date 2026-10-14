@@ -105,20 +105,36 @@ func TestEstimateUsageCostAtLeavesEffectiveDatedHistoryWithoutAPriceUnknown(t *t
 	}
 }
 
-func TestEstimateCodexUsageCostAtPersistsEffectivePricingSnapshot(t *testing.T) {
-	stored, ok := agent.EstimateCodexUsageCostAt(
-		"gpt-5.6-luna",
-		taskstate.AgentUsage{InputTokens: 1_000_000},
-		time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC),
-	)
-	if !ok || stored.Pricing == nil {
-		t.Fatalf("stored cost = %#v, ok = %t; want pricing snapshot", stored, ok)
-	}
-	if stored.Pricing.EffectiveDate != "2026-07-30" ||
-		stored.Pricing.InputUSDPerMillionTokens != "0.2" ||
-		stored.Pricing.Source == "" ||
-		stored.Pricing.SourceAccessed == "" {
-		t.Fatalf("pricing snapshot = %#v, want selected effective version and provenance", stored.Pricing)
+func TestEstimateCodexUsageCostPersistsEffectivePricingSnapshots(t *testing.T) {
+	for _, tc := range []struct {
+		name, model                      string
+		started                          time.Time
+		amount                           int64
+		input, cached, output, effective string
+	}{
+		{"static", "gpt-5", time.Time{}, 1_250_000, "1.25", "0.125", "10", ""},
+		{"effective dated", "gpt-5.6-luna", time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC), 200_000, "0.2", "0.02", "1.2", "2026-07-30"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stored, ok := agent.EstimateCodexUsageCostAt(tc.model, taskstate.AgentUsage{InputTokens: 1_000_000}, tc.started)
+			if !ok || stored.Pricing == nil {
+				t.Fatalf("cost = %#v, ok = %t, want pricing snapshot", stored, ok)
+			}
+			pricing := stored.Pricing
+			if stored.AmountMicroUSD != tc.amount || pricing.Provider != "openai" || pricing.Model != tc.model ||
+				pricing.ServiceTier != "standard" || pricing.InputUSDPerMillionTokens != tc.input ||
+				pricing.CachedUSDPerMillionTokens != tc.cached || pricing.OutputUSDPerMillionTokens != tc.output ||
+				pricing.EffectiveDate != tc.effective || pricing.ReasoningOutputTreatment == "" ||
+				pricing.Source == "" || pricing.SourceURL == "" {
+				t.Fatalf("cost = %#v, pricing = %#v, want complete selected pricing metadata", stored, pricing)
+			}
+			if tc.effective == "" && pricing.SourcePublished == "" {
+				t.Fatal("static price must retain published source date")
+			}
+			if tc.effective != "" && pricing.SourceAccessed == "" {
+				t.Fatal("effective price must retain source access date")
+			}
+		})
 	}
 }
 
@@ -223,28 +239,9 @@ func TestResolveExecutionUsageCostFallsBackToPricingForNonPi(t *testing.T) {
 	if resolved.Cost.Kind != agent.UsageCostKindEstimatedAPIEquivalent {
 		t.Fatalf("cost kind = %q, want estimated API-equivalent", resolved.Cost.Kind)
 	}
-}
 
-func TestEstimateCodexUsageCostPersistsCompletePricingSnapshot(t *testing.T) {
-	stored, ok := agent.EstimateCodexUsageCost("gpt-5", taskstate.AgentUsage{
-		InputTokens: 1,
-	})
-	if !ok {
-		t.Fatal("estimate stored Codex cost ok = false, want true")
-	}
-	if stored.AmountMicroUSD != 1 || stored.Pricing == nil {
-		t.Fatalf("stored cost = %#v, want amount and pricing snapshot", stored)
-	}
-	if stored.Pricing.Provider != "openai" ||
-		stored.Pricing.Model != "gpt-5" ||
-		stored.Pricing.ServiceTier != "standard" ||
-		stored.Pricing.InputUSDPerMillionTokens != "1.25" ||
-		stored.Pricing.CachedUSDPerMillionTokens != "0.125" ||
-		stored.Pricing.OutputUSDPerMillionTokens != "10" ||
-		stored.Pricing.ReasoningOutputTreatment == "" ||
-		stored.Pricing.Source == "" ||
-		stored.Pricing.SourcePublished == "" {
-		t.Fatalf("pricing snapshot = %#v, want complete persisted metadata", stored.Pricing)
+	if resolved.Cost.AmountMicroUSD != 625 || resolved.Cost.Pricing.Model != "gpt-5" {
+		t.Fatalf("cost = %#v, want 625 micro USD using normalized GPT-5 pricing", resolved.Cost)
 	}
 }
 

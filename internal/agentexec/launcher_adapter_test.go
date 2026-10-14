@@ -3,12 +3,16 @@
 package agentexec_test
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/testguard"
@@ -57,22 +61,50 @@ func assertSupportedAgentBlockedBeforePATHLookup(t *testing.T) {
 func TestIntegrationAdapterContractAttachedLauncherReportsDirectChildPIDBeforeWait(t *testing.T) {
 	binDir := testutil.CanonicalTempDir(t)
 	fake := filepath.Join(binDir, "agent")
-	if err := testguard.WriteExecutable(fake, []byte("#!/bin/sh\nsleep 0.01\n")); err != nil {
-		t.Fatalf("write fake: %v", err)
+	if err := testguard.WriteExecutable(fake, []byte("#!/bin/sh\nprintf '%s\\n' \"$$\"\nIFS= read -r release\n[ \"$release\" = released ]\n")); err != nil {
+		t.Fatal(err)
 	}
-	var observed int
-	err := (agentexec.AttachedLauncher{}).Run(context.Background(), agentexec.Command{Name: "agent", Command: fake}, agentexec.LaunchOptions{
-		Dir: testutil.CanonicalTempDir(t),
+	input, release, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, childOutput, err := os.Pipe()
+	if err != nil {
+		_ = input.Close()
+		_ = release.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = input.Close(); _ = release.Close(); _ = output.Close(); _ = childOutput.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
+	if err := output.SetReadDeadline(deadline); err != nil {
+		t.Fatal(err)
+	}
+	observed := 0
+
+	err = (agentexec.AttachedLauncher{}).Run(ctx, agentexec.Command{Name: "agent", Command: fake}, agentexec.LaunchOptions{
+		Dir: binDir, Stdin: input, Stdout: childOutput,
 		OnStart: func(pid int) error {
+			line, err := bufio.NewReader(output).ReadString('\n')
+			if err != nil {
+				return fmt.Errorf("read direct child identity before exit: %w", err)
+			}
+			childPID, err := strconv.Atoi(strings.TrimSpace(line))
+			if err != nil || childPID != pid || pid <= 0 {
+				return fmt.Errorf("callback PID %d differs from child PID %q", pid, line)
+			}
 			observed = pid
-			return nil
+			_, err = release.WriteString("released\n")
+			return err
 		},
 	})
+
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("launch and release direct child: %v", err)
 	}
 	if observed <= 0 {
-		t.Fatalf("observed PID = %d, want positive direct child PID", observed)
+		t.Fatal("child finished without its OnStart identity being observed")
 	}
 }
 

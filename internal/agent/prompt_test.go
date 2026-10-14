@@ -42,58 +42,75 @@ func TestRenderEffectivePromptAppendsSupplementalInstructions(t *testing.T) {
 	)
 }
 
-func TestRenderActiveContextIncludesWorktreeContract(t *testing.T) {
-	is := assert.New(t)
-
-	ctx := sampleWorktreeActiveContext()
-	output := agent.RenderActiveContext(ctx)
-
-	for _, want := range []string{
-		"# Orpheus Agent Context",
-		"- ID: op-1",
-		"- Title: Implement context",
-		"- Description: Resolve the active run.",
-		"- Acceptance criteria: Context renders only for running attempts.",
-		"- ID: alpha",
-		"- Name: Alpha Repo",
-		"- Registered root: /repo/alpha",
-		"- Registered default branch: main",
-		"- Current branch: orpheus/op-1",
-		"- Work Directory: /worktrees/op-1",
-		"- Current directory: /worktrees/op-1/internal",
-		"- Run attempt: 2",
-		"- Agent: recorder",
-		"deterministic task worktree and task branch",
-		"orpheus agent done",
-		"Do not create Git commits yourself. Leave completed changes uncommitted; Orpheus owns commit creation at the appropriate workflow stage.",
-		"one commit-style summary line, 80 characters or fewer",
-		"<type(fix,feat,test,chore,conf,etc)>: <description>",
-		"do not include the task/bead ID",
-		"do not mention tests even if included",
-		"--technical-explanation",
-		"one technical explanation source",
-		"implementation rationale and notable code changes",
-		"one-time completion handoff for this Orpheus run attempt",
-		"not once per reusable harness session",
-		"call it exactly once after finishing the current attempt's work",
-		"whether this harness session is fresh or resumed",
-		"successful `orpheus agent done` visible in resumed session history belongs to an earlier",
-		"does not satisfy the current attempt",
-		"repeated same-attempt calls are no-ops",
-		"first handoff remains authoritative",
-		"PR-ready completion data for feature-branch publication",
-		"The human operator will later run `orpheus task run op-1` to review and publish the feature branch as a pull request",
+func TestRenderActiveContextDescribesTargetAndCompletionContract(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		kind                    agent.ExecutionTarget
+		branch, path, directory string
+		wants                   []string
+	}{
+		{"worktree", agent.ExecutionTargetWorktree, "orpheus/op-1", "/worktrees/op-1", "/worktrees/op-1/internal", []string{"deterministic task worktree and task branch", "to review and publish the feature branch as a pull request"}},
+		{"main", agent.ExecutionTargetMain, "main", "/repo/alpha", "/repo/alpha", []string{"registered repository root on the registered default branch", "do not run `orpheus agent done` again", "do not run it yourself unless explicitly asked"}},
+		{"repo root", agent.ExecutionTargetRepoRoot, "orpheus/op-1", "/repo/alpha", "/repo/alpha/internal", []string{"registered repository root on the task branch", "to review and publish the feature branch as a pull request"}},
 	} {
-		is.Contains(output, want)
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := sampleWorktreeActiveContext()
+			ctx.Task.ExternalRef = "TREX-1234"
+			ctx.Target.Kind = tc.kind
+			ctx.Target.Branch = tc.branch
+			ctx.Target.Path = tc.path
+			ctx.Target.CurrentDirectory = tc.directory
+
+			output := agent.RenderActiveContext(ctx)
+
+			for _, want := range []string{
+				"# Orpheus Agent Context",
+				"- ID: op-1",
+				"- Title: Implement context",
+				"- Description: Resolve the active run.",
+				"- Acceptance criteria: Context renders only for running attempts.",
+				"- ID: alpha",
+				"- Name: Alpha Repo",
+				"- Registered root: /repo/alpha",
+				"- Registered default branch: main",
+				"- Run attempt: 2",
+				"- Agent: recorder",
+				"orpheus agent done",
+				"Do not create Git commits yourself. Leave completed changes uncommitted; Orpheus owns commit creation at the appropriate workflow stage.",
+				"one commit-style summary line, 80 characters or fewer",
+				"<type(fix,feat,test,chore,conf,etc)>: <description>",
+				"do not include the task/bead ID",
+				"do not mention tests even if included",
+				"--technical-explanation",
+				"one technical explanation source",
+				"implementation rationale and notable code changes",
+				"one-time completion handoff for this Orpheus run attempt",
+				"not once per reusable harness session",
+				"call it exactly once after finishing the current attempt's work",
+				"whether this harness session is fresh or resumed",
+				"successful `orpheus agent done` visible in resumed session history belongs to an earlier",
+				"does not satisfy the current attempt",
+				"repeated same-attempt calls are no-ops",
+				"first handoff remains authoritative",
+				"PR-ready completion data for feature-branch publication",
+				"- External reference: TREX-1234",
+			} {
+				assert.Contains(t, output, want)
+			}
+			for _, want := range tc.wants {
+				assert.Contains(t, output, want)
+			}
+			assert.Contains(t, output, "- Current branch: "+tc.branch)
+			assert.Contains(t, output, "- Work Directory: "+tc.path)
+			assert.Contains(t, output, "- Current directory: "+tc.directory)
+			assert.Contains(t, output, "The human operator will later run `orpheus task run op-1`")
+			assert.NotContains(t, output, "Beads")
+			assert.NotContains(t, output, "bd")
+			assert.NotContains(t, output, "Interaction guidance:")
+			assert.Equal(t, output, agent.RenderActiveContextWithOptions(ctx, agent.ActiveContextRenderOptions{}))
+			assert.Equal(t, output, agent.RenderActiveContextWithOptions(ctx, agent.ActiveContextRenderOptions{InteractionMode: agent.AgentInteractionModeUnspecified}))
+		})
 	}
-	is.NotContains(output, "Beads")
-	is.NotContains(output, "bd")
-	is.NotContains(output, "Interaction guidance:")
-	is.Equal(output, agent.RenderActiveContextWithOptions(ctx, agent.ActiveContextRenderOptions{}))
-	is.Equal(output, agent.RenderActiveContextWithOptions(
-		ctx,
-		agent.ActiveContextRenderOptions{InteractionMode: agent.AgentInteractionModeUnspecified},
-	))
 }
 
 func TestRenderActiveContextsSafelyTransportCompletionText(t *testing.T) {
@@ -227,54 +244,39 @@ func sampleWorktreeActiveContext() agent.ActiveContext {
 	}
 }
 
-func TestRenderActiveContextIncludesExternalReference(t *testing.T) {
-	output := agent.RenderActiveContext(agent.ActiveContext{
-		Task: agent.ContextTask{ExternalRef: "TREX-1234"},
-	})
-
-	assert.Contains(t, output, "- External reference: TREX-1234")
-}
-
-func TestRenderActiveContextIncludesOptInInteractiveGuidance(t *testing.T) {
-	output := agent.RenderActiveContextWithOptions(
-		agent.ActiveContext{
-			Task:   agent.ContextTask{ID: "op-1"},
-			Target: agent.ContextTarget{Kind: agent.ExecutionTargetMain},
-		},
-		agent.ActiveContextRenderOptions{InteractionMode: agent.AgentInteractionModeInteractive},
-	)
-
-	for _, want := range []string{
-		"Interaction guidance:",
-		"attached interactive implementation session",
-		"may ask the human operator for clarification or decisions",
-		"Minimize interruptions",
-		"ask only for critical ambiguity or major product/architecture decisions",
-		"Make low-risk, low-level implementation decisions independently",
+func TestRenderActiveContextInteractionGuidance(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		mode     agent.AgentInteractionMode
+		wants    []string
+		excludes string
+	}{
+		{"interactive", agent.AgentInteractionModeInteractive, []string{
+			"Interaction guidance:",
+			"attached interactive implementation session",
+			"may ask the human operator for clarification or decisions",
+			"Minimize interruptions",
+			"ask only for critical ambiguity or major product/architecture decisions",
+			"Make low-risk, low-level implementation decisions independently",
+		}, "do not ask the human operator for clarification or decisions"},
+		{"noninteractive", agent.AgentInteractionModeNonInteractive, []string{
+			"Interaction guidance:",
+			"non-interactive implementation session",
+			"do not ask the human operator for clarification or decisions",
+			"Decide independently when a reasonable, low-risk path exists",
+			"fail clearly",
+			"missing information",
+			"summarize significant decisions in the visible terminal/session output",
+		}, "may ask the human operator for clarification or decisions"},
 	} {
-		assert.Contains(t, output, want)
-	}
-}
+		t.Run(tc.name, func(t *testing.T) {
+			output := agent.RenderActiveContextWithOptions(sampleWorktreeActiveContext(), agent.ActiveContextRenderOptions{InteractionMode: tc.mode})
 
-func TestRenderActiveContextIncludesNonInteractiveGuidance(t *testing.T) {
-	output := agent.RenderActiveContextWithOptions(
-		agent.ActiveContext{
-			Task:   agent.ContextTask{ID: "op-1"},
-			Target: agent.ContextTarget{Kind: agent.ExecutionTargetMain},
-		},
-		agent.ActiveContextRenderOptions{InteractionMode: agent.AgentInteractionModeNonInteractive},
-	)
-
-	for _, want := range []string{
-		"Interaction guidance:",
-		"non-interactive implementation session",
-		"do not ask the human operator for clarification or decisions",
-		"Decide independently when a reasonable, low-risk path exists",
-		"fail clearly",
-		"missing information",
-		"summarize significant decisions in the visible terminal/session output",
-	} {
-		assert.Contains(t, output, want)
+			for _, want := range tc.wants {
+				assert.Contains(t, output, want)
+			}
+			assert.NotContains(t, output, tc.excludes)
+		})
 	}
 }
 
@@ -320,134 +322,40 @@ func TestRenderActiveContextIncludesReviewFollowUpContract(t *testing.T) {
 		"Description: The command panics on empty input.",
 		"Suggested action: Add input validation.",
 		"Fix the required blocking findings; advisories are best-effort",
-		"Do not create Git commits yourself. Leave completed changes uncommitted; Orpheus owns commit creation at the appropriate workflow stage.",
-		"one-time completion handoff for this Orpheus run attempt",
-		"not once per reusable harness session",
-		"whether this harness session is fresh or resumed",
-		"does not satisfy the current attempt",
-		"repeated same-attempt calls are no-ops",
 	} {
 		assert.Contains(t, output, want)
 	}
 }
 
-func TestRenderActiveContextIncludesMainContract(t *testing.T) {
-	is := assert.New(t)
-
-	output := agent.RenderActiveContext(agent.ActiveContext{
-		Repository: agent.ContextRepository{
-			ID:            "alpha",
-			Name:          "Alpha Repo",
-			Root:          "/repo/alpha",
-			DefaultBranch: "main",
-		},
-		Task: agent.ContextTask{ID: "op-main", Title: "Main target"},
-		Run:  agent.ContextRun{Attempt: 1},
-		Target: agent.ContextTarget{
-			Kind:             agent.ExecutionTargetMain,
-			Branch:           "main",
-			Path:             "/repo/alpha",
-			CurrentDirectory: "/repo/alpha",
-		},
-	})
-
-	for _, want := range []string{
-		"registered repository root on the registered default branch",
-		"Do not create Git commits yourself. Leave completed changes uncommitted; Orpheus owns commit creation at the appropriate workflow stage.",
-		"one-time completion handoff for this Orpheus run attempt",
-		"not once per reusable harness session",
-		"one commit-style summary line, 80 characters or fewer",
-		"<type(fix,feat,test,chore,conf,etc)>: <description>",
-		"do not include the task/bead ID",
-		"do not mention tests even if included",
-		"--technical-explanation",
-		"one technical explanation source",
-		"call it exactly once after finishing the current attempt's work",
-		"whether this harness session is fresh or resumed",
-		"do not run `orpheus agent done` again",
-		"repeated same-attempt calls are no-ops",
-		"Orpheus will record PR-ready completion data for feature-branch publication",
-		"The human operator will later run `orpheus task run op-main`",
-		"do not run it yourself unless explicitly asked",
+func TestRenderActiveContextSummaryGuidancePrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name, custom    string
+		style           string
+		wants, excludes []string
+	}{
+		{"custom overrides style", "Use sentence-case summaries without a type prefix.", registry.SummaryGuidanceStyleCapitalized,
+			[]string{"Write `--summary` following this repository guidance: Use sentence-case summaries without a type prefix."},
+			[]string{"one commit-style summary line, 80 characters or fewer", "<type(fix,feat,test,chore,conf,etc)>: <description>", "capitalized plain-English summary"}},
+		{"capitalized", "", registry.SummaryGuidanceStyleCapitalized,
+			[]string{"capitalized plain-English summary line", "with no task type prefix"},
+			[]string{"<type(fix,feat,test,chore,conf,etc)>: <description>"}},
+		{"default", "", "",
+			[]string{"one commit-style summary line, 80 characters or fewer", "<type(fix,feat,test,chore,conf,etc)>: <description>"},
+			[]string{"capitalized plain-English summary"}},
 	} {
-		is.Contains(output, want)
-	}
-	is.NotContains(output, "Beads")
-	is.NotContains(output, "bd")
-}
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := sampleWorktreeActiveContext()
+			ctx.Repository.SummaryGuidance = tc.custom
+			ctx.Repository.SummaryGuidanceStyle = tc.style
 
-func TestRenderActiveContextUsesCustomSummaryGuidance(t *testing.T) {
-	is := assert.New(t)
-	guidance := "Use sentence-case summaries without a type prefix."
+			output := agent.RenderActiveContext(ctx)
 
-	output := agent.RenderActiveContext(agent.ActiveContext{
-		Repository: agent.ContextRepository{
-			ID:                   "alpha",
-			Name:                 "Alpha Repo",
-			Root:                 "/repo/alpha",
-			DefaultBranch:        "main",
-			SummaryGuidance:      guidance,
-			SummaryGuidanceStyle: registry.SummaryGuidanceStyleCapitalized,
-		},
-		Task: agent.ContextTask{ID: "op-main", Title: "Main target"},
-		Run:  agent.ContextRun{Attempt: 1},
-		Target: agent.ContextTarget{
-			Kind:             agent.ExecutionTargetMain,
-			Branch:           "main",
-			Path:             "/repo/alpha",
-			CurrentDirectory: "/repo/alpha",
-		},
-	})
-
-	is.Contains(output, "Write `--summary` following this repository guidance: "+guidance)
-	is.NotContains(output, "one commit-style summary line, 80 characters or fewer")
-	is.NotContains(output, "<type(fix,feat,test,chore,conf,etc)>: <description>")
-	is.NotContains(output, "capitalized plain-English summary")
-}
-
-func TestRenderActiveContextUsesCapitalizedSummaryGuidance(t *testing.T) {
-	output := agent.RenderActiveContext(agent.ActiveContext{
-		Repository: agent.ContextRepository{
-			SummaryGuidanceStyle: registry.SummaryGuidanceStyleCapitalized,
-		},
-		Target: agent.ContextTarget{Kind: agent.ExecutionTargetMain},
-	})
-
-	assert.Contains(t, output, "capitalized plain-English summary line")
-	assert.Contains(t, output, "with no task type prefix")
-	assert.Contains(t, output, "Replaced the config for abc")
-	assert.NotContains(t, output, "<type(fix,feat,test,chore,conf,etc)>: <description>")
-}
-
-func TestRenderActiveContextIncludesRepoRootTaskBranchContract(t *testing.T) {
-	is := assert.New(t)
-
-	output := agent.RenderActiveContext(agent.ActiveContext{
-		Repository: agent.ContextRepository{
-			ID:            "alpha",
-			Name:          "Alpha Repo",
-			Root:          "/repo/alpha",
-			DefaultBranch: "main",
-		},
-		Task: agent.ContextTask{ID: "op-root", Title: "Repo root"},
-		Run:  agent.ContextRun{Attempt: 1},
-		Target: agent.ContextTarget{
-			Kind:             agent.ExecutionTargetRepoRoot,
-			Branch:           "orpheus/op-root",
-			Path:             "/repo/alpha",
-			CurrentDirectory: "/repo/alpha/internal",
-		},
-	})
-
-	for _, want := range []string{
-		"- Current branch: orpheus/op-root",
-		"- Work Directory: /repo/alpha",
-		"registered repository root on the task branch",
-		"orpheus agent done",
-		"Do not create Git commits yourself. Leave completed changes uncommitted; Orpheus owns commit creation at the appropriate workflow stage.",
-		"PR-ready completion data for feature-branch publication",
-		"The human operator will later run `orpheus task run op-root` to review and publish the feature branch as a pull request",
-	} {
-		is.Contains(output, want)
+			for _, want := range tc.wants {
+				assert.Contains(t, output, want)
+			}
+			for _, unwanted := range tc.excludes {
+				assert.NotContains(t, output, unwanted)
+			}
+		})
 	}
 }

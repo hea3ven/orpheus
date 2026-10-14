@@ -2,110 +2,135 @@ package cli
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
-func TestRenderReviewNextStepPreservesReviewStatusGuidance(t *testing.T) {
+func TestReviewInspectionGivesActionableGuidanceForEachReviewState(t *testing.T) {
 	blockedFinding := taskstate.ReviewFinding{Type: taskstate.FindingTypeBlocking, Title: "Blocker"}
 	tests := []struct {
-		name   string
-		state  taskstate.TaskState
-		review taskstate.ReviewAttempt
-		want   string
+		name                          string
+		state                         taskstate.TaskState
+		review                        taskstate.ReviewAttempt
+		want, wantHistory, wantDetail []string
 	}{
 		{
-			name:   "waiting for automated decision",
-			review: taskstate.ReviewAttempt{Status: taskstate.ReviewStatusWaitingForAutomatedDecision, Step: "unit"},
-			want:   "\nNext step: automated blocker decision is paused; run `orpheus task run op-1` to resume step unit.\n",
+			name: "waiting for automated decision", want: []string{"paused", "resume step unit"},
+			wantDetail: []string{"Automated blocker decisions: paused"},
+			review:     taskstate.ReviewAttempt{Status: taskstate.ReviewStatusWaitingForAutomatedDecision, Step: "unit"},
 		},
 		{
-			name:   "waiting for manual step",
+			name: "waiting for manual step", want: []string{"resume manual step approval"},
 			review: taskstate.ReviewAttempt{Status: taskstate.ReviewStatusWaitingForManual, Step: "approval"},
-			want:   "\nNext step: run `orpheus task run op-1` to resume manual step approval.\n",
 		},
 		{
-			name: "blocked comparison input interrupted",
+			name: "blocked comparison input interrupted", want: []string{"alternate comparison input was interrupted", "start a fresh review"},
 			review: taskstate.ReviewAttempt{
 				Status: taskstate.ReviewStatusBlocked,
 				Steps:  []taskstate.ReviewStep{{Comparison: &taskstate.ReviewComparison{InputInterrupted: true}}},
 			},
-			want: "\nNext step: alternate comparison input was interrupted; run `orpheus task run op-1` to start a fresh review.\n",
 		},
 		{
-			name:   "blocked automated decision interrupted",
-			review: taskstate.ReviewAttempt{Status: taskstate.ReviewStatusBlocked, AutomatedBlockerDecisionInterrupted: true},
-			want:   "\nNext step: automated blocker decisions were interrupted; run `orpheus task run op-1` to start a fresh review.\n",
+			name: "blocked automated decision interrupted", want: []string{"automated blocker decisions were interrupted", "start a fresh review"},
+			wantDetail: []string{"Automated blocker decisions: interrupted"},
+			review:     taskstate.ReviewAttempt{Status: taskstate.ReviewStatusBlocked, AutomatedBlockerDecisionInterrupted: true},
 		},
 		{
-			name: "blocked unkept automated findings",
+			name: "blocked unkept automated findings", want: []string{"automated blockers need operator decisions", "start a fresh review"},
 			review: taskstate.ReviewAttempt{
 				Status:   taskstate.ReviewStatusBlocked,
 				Findings: []taskstate.ReviewFinding{{Type: taskstate.FindingTypeBlocking, Step: "unit", Title: "Blocker"}},
 				Steps:    []taskstate.ReviewStep{{Kind: taskstate.ReviewStepKindCheck, Name: "unit"}},
 			},
-			want: "\nNext step: automated blockers need operator decisions; run `orpheus task run op-1` to start a fresh review.\n",
 		},
 		{
-			name:   "blocked autonomous budget exhausted",
+			name: "blocked autonomous budget exhausted", want: []string{"attempts are exhausted", "fresh budget"},
 			review: taskstate.ReviewAttempt{Status: taskstate.ReviewStatusBlocked, AutonomousBudgetExhausted: true},
-			want:   "\nNext step: autonomous review attempts are exhausted; run `orpheus task run op-1` to continue with a fresh budget.\n",
 		},
 		{
-			name:   "blocked open findings",
+			name: "blocked open findings", want: []string{"address open blocking findings", "fresh review after repair"},
 			review: taskstate.ReviewAttempt{Status: taskstate.ReviewStatusBlocked, Findings: []taskstate.ReviewFinding{blockedFinding}},
-			want:   "\nNext step: run `orpheus task run op-1` to address open blocking findings; it starts a fresh review after repair.\n",
 		},
 		{
-			name: "blocked failed follow-up",
+			name: "blocked failed follow-up", want: []string{"retry", "address open blocking findings"},
+			wantHistory: []string{"follow-up run 1 failed"},
 			state: taskstate.TaskState{Runs: []taskstate.RunAttempt{{
 				Attempt:        1,
 				Status:         taskstate.RunStatusFailed,
 				ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{0}},
 			}}},
 			review: taskstate.ReviewAttempt{Status: taskstate.ReviewStatusBlocked, Findings: []taskstate.ReviewFinding{{Type: taskstate.FindingTypeBlocking, Title: "Blocker", TargetedByRunAttempt: 1}}},
-			want:   "\nNext step: retry `orpheus task run op-1` to address open blocking findings; it starts a fresh review after repair.\n",
 		},
 		{
-			name: "blocked targeted findings",
+			name: "blocked targeted findings", want: []string{"after targeted follow-up work completes"},
 			state: taskstate.TaskState{Runs: []taskstate.RunAttempt{{
 				Attempt:        1,
 				Status:         taskstate.RunStatusRunning,
 				ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{0}},
 			}}},
 			review: taskstate.ReviewAttempt{Status: taskstate.ReviewStatusBlocked, Findings: []taskstate.ReviewFinding{{Type: taskstate.FindingTypeBlocking, Title: "Blocker", TargetedByRunAttempt: 1}}},
-			want:   "\nNext step: run `orpheus task run op-1` after targeted follow-up work completes.\n",
 		},
 		{
-			name:   "failed",
+			name: "failed", want: []string{"when ready"},
 			review: taskstate.ReviewAttempt{Status: taskstate.ReviewStatusFailed},
-			want:   "\nNext step: run `orpheus task run op-1` when ready.\n",
 		},
 		{
-			name:   "aborted",
+			name: "aborted", want: []string{"when ready"},
 			review: taskstate.ReviewAttempt{Status: taskstate.ReviewStatusAborted},
-			want:   "\nNext step: run `orpheus task run op-1` when ready.\n",
 		},
 		{
-			name:   "running",
+			name: "running", want: nil,
 			review: taskstate.ReviewAttempt{Status: taskstate.ReviewStatusRunning},
 		},
 		{
-			name:   "passed",
+			name: "passed", want: nil,
 			review: taskstate.ReviewAttempt{Status: taskstate.ReviewStatusPassed},
 		},
+		{name: "no review attempts", want: []string{"No review attempts recorded", "after task work is ready"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var output bytes.Buffer
-			if err := renderReviewNextStep(&output, "op-1", tt.state, tt.review); err != nil {
-				t.Fatalf("renderReviewNextStep() error = %v", err)
+			state := tt.state
+			scopes := []reviewShowScope{{}}
+			if tt.review.Status != "" {
+				tt.review.Attempt = 1
+				state.Reviews = []taskstate.ReviewAttempt{tt.review}
+				scopes = append(scopes, reviewShowScope{reviewAttempt: 1})
 			}
-			if got := output.String(); got != tt.want {
-				t.Errorf("renderReviewNextStep() output = %q, want %q", got, tt.want)
+			for _, scope := range scopes {
+				scopeWant := tt.wantHistory
+				if scope.reviewAttempt > 0 {
+					scopeWant = tt.wantDetail
+				}
+				assertReviewInspectionGuidance(t, state, scope, tt.want, scopeWant)
 			}
 		})
+	}
+}
+
+func assertReviewInspectionGuidance(t *testing.T, state taskstate.TaskState, scope reviewShowScope, want, scopeWant []string) {
+	t.Helper()
+	var output bytes.Buffer
+
+	if err := renderTaskShowReview(&output, "alpha", "op-1", state, scope); err != nil {
+		t.Fatal(err)
+	}
+
+	got := output.String()
+	if len(want) == 0 {
+		if strings.Contains(got, "Next step:") {
+			t.Fatalf("scope %+v has unexpected next action: %s", scope, got)
+		}
+		return
+	}
+	fragments := append([]string{"orpheus task run op-1"}, want...)
+	fragments = append(fragments, scopeWant...)
+	for _, fragment := range fragments {
+		if !strings.Contains(got, fragment) {
+			t.Fatalf("scope %+v missing %q: %s", scope, fragment, got)
+		}
 	}
 }

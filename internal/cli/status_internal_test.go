@@ -149,53 +149,33 @@ func stateReaderKey(repoID string, taskID string) string {
 	return repoID + "/" + taskID
 }
 
-func TestStatusRenderOptionsUseWatchWidthWhenStdoutIsNotTerminal(t *testing.T) {
-	options := statusRenderOptionsForOutput(
-		io.Discard,
-		false,
-		statusWidthDetector{
-			OutputWidth: func(io.Writer) (int, bool) {
-				return 0, false
-			},
-			WatchWidth: func() (int, bool) {
-				return 72, true
-			},
-		},
-	)
-
-	if options.NoTruncate {
-		t.Fatalf("NoTruncate = true, want false")
-	}
-	if options.MaxWidth != 72 {
-		t.Fatalf("MaxWidth = %d, want 72", options.MaxWidth)
-	}
-}
-
-func TestStatusRenderOptionsNoTruncateSkipsWidthDetection(t *testing.T) {
-	called := false
-	options := statusRenderOptionsForOutput(
-		io.Discard,
-		true,
-		statusWidthDetector{
-			OutputWidth: func(io.Writer) (int, bool) {
-				called = true
-				return 80, true
-			},
-			WatchWidth: func() (int, bool) {
-				called = true
-				return 72, true
-			},
-		},
-	)
-
-	if !options.NoTruncate {
-		t.Fatalf("NoTruncate = false, want true")
-	}
-	if options.MaxWidth != 0 {
-		t.Fatalf("MaxWidth = %d, want 0", options.MaxWidth)
-	}
-	if called {
-		t.Fatalf("width detector was called for no-truncate")
+func TestStatusRenderOptionsChooseAvailableWidthUnlessUnbounded(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		outputWidth     int
+		outputAvailable bool
+		watchAvailable  bool
+		noTruncate      bool
+		want            statusRenderOptions
+	}{
+		{name: "terminal takes precedence", outputWidth: 100, outputAvailable: true, watchAvailable: true, want: statusRenderOptions{MaxWidth: 100}},
+		{name: "redirected watch uses pane width", watchAvailable: true, want: statusRenderOptions{MaxWidth: 72}},
+		{name: "no available width remains unbounded", want: statusRenderOptions{}},
+		{name: "explicit unbounded skips detection", noTruncate: true, want: statusRenderOptions{NoTruncate: true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			detectCalls := 0
+			got := statusRenderOptionsForOutput(io.Discard, test.noTruncate, statusWidthDetector{
+				OutputWidth: func(io.Writer) (int, bool) { detectCalls++; return test.outputWidth, test.outputAvailable },
+				WatchWidth:  func() (int, bool) { detectCalls++; return 72, test.watchAvailable },
+			})
+			if got != test.want {
+				t.Fatalf("render options = %#v, want %#v", got, test.want)
+			}
+			if test.noTruncate && detectCalls != 0 {
+				t.Fatal("unbounded output queried terminal width")
+			}
+		})
 	}
 }
 
@@ -233,104 +213,47 @@ func TestRenderStatusEmptyProjectionRendersIntegratedTableOnly(t *testing.T) {
 	}
 }
 
-func TestRenderStatusResponsiveUsesShortDetailHidesRepoAndTruncatesTitle(t *testing.T) {
-	projection := status.Projection{Groups: []status.Group{{
-		ID:    status.GroupInReview,
-		Title: "Reviewing",
-		Entries: []status.Entry{{
-			Kind: status.EntryTask,
-			Repository: task.Repository{
-				ID:           "alpha",
-				Name:         "Very Long Repository Name",
-				TaskIDPrefix: "op",
-			},
-			Task: task.Task{
-				ID:       "op-123456",
-				Priority: 2,
-				Title:    "Implement an extremely long operator status title that cannot fit",
-			},
-			Detail:         "https://github.test/org/alpha/pull/123456",
-			SemanticDetail: status.Detail{Kind: status.DetailPullRequest, URL: "https://github.test/org/alpha/pull/123456"},
-		}},
-	}, {
-		ID:    status.GroupReadyToRun,
-		Title: "Ready to run",
-		Entries: []status.Entry{{
-			Kind: status.EntryTask,
-			Repository: task.Repository{
-				ID:           "beta",
-				Name:         "Short Repo",
-				TaskIDPrefix: "op",
-			},
-			Task: task.Task{
-				ID:       "op-ready",
-				Priority: 1,
-				Title:    "Ready short",
-			},
-		}},
-	}}}
-
-	var output bytes.Buffer
-	err := renderStatus(&output, projection, true, statusRenderOptions{MaxWidth: 62})
-	if err != nil {
-		t.Fatalf("render status: %v", err)
+func TestRenderStatusAdaptsColumnsAndDetailsToAvailableWidth(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		width        int
+		id           string
+		detail       status.Detail
+		fullDetail   string
+		wantDetail   string
+		hidePriority bool
+	}{
+		{name: "compact PR and truncated title", width: 62, id: "op-123456", detail: status.Detail{Kind: status.DetailPullRequest, URL: "https://github.test/org/alpha/pull/123456"}, fullDetail: "https://github.test/org/alpha/pull/123456", wantDetail: "PR #123456"},
+		{name: "very narrow pane sacrifices priority", width: 44, id: "op-123456789", detail: status.Detail{Kind: status.DetailLocalReview}, fullDetail: "local review; run task run", wantDetail: "loc", hidePriority: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			projection := status.Projection{Groups: []status.Group{{ID: status.GroupInReview, Title: "Reviewing", Entries: []status.Entry{{
+				Kind:       status.EntryTask,
+				Repository: task.Repository{ID: "alpha", Name: "Very Long Repository Name", TaskIDPrefix: "op"},
+				Task:       task.Task{ID: test.id, Priority: 2, Title: "Implement an extremely long operator status title that cannot fit"},
+				Detail:     test.fullDetail, SemanticDetail: test.detail,
+			}}}, {ID: status.GroupReadyToRun, Title: "Ready to run", Entries: []status.Entry{{
+				Kind: status.EntryTask, Repository: task.Repository{ID: "beta", Name: "Short Repo", TaskIDPrefix: "op"},
+				Task: task.Task{ID: "op-ready", Priority: 1, Title: "Ready short"},
+			}}}}}
+			got := renderProjectedStatusForTest(t, projection, test.width)
+			for _, want := range []string{"TASK_ID", "TITLE", "DETAIL", test.id, test.wantDetail, "◉", "op-ready", "..."} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("output missing %q:\n%s", want, got)
+				}
+			}
+			for _, unwanted := range []string{"REPO", "Very Long Repository Name", "Short Repo", test.fullDetail} {
+				if strings.Contains(got, unwanted) {
+					t.Fatalf("narrow output retained %q:\n%s", unwanted, got)
+				}
+			}
+			header := strings.SplitN(got, "\n", 2)[0]
+			if test.hidePriority && strings.Contains(" "+header+" ", " P ") {
+				t.Fatalf("narrow output kept priority:\n%s", got)
+			}
+			assertStatusLinesWithinWidth(t, got, test.width)
+		})
 	}
-
-	got := output.String()
-	if strings.Contains(got, "REPO") ||
-		strings.Contains(got, "Very Long Repository Name") ||
-		strings.Contains(got, "Short Repo") {
-		t.Fatalf("responsive output kept repo column:\n%s", got)
-	}
-	for _, want := range []string{"S", "TASK_ID", "TITLE", "DETAIL", "op-123456", "PR #123456", "◉ reviewing", "..."} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("responsive output missing %q:\n%s", want, got)
-		}
-	}
-	if strings.Contains(got, "https://") {
-		t.Fatalf("responsive output kept full PR URL:\n%s", got)
-	}
-	assertStatusLinesWithinWidth(t, got, 62)
-}
-
-func TestRenderStatusResponsiveHidesPriorityAtLowWidth(t *testing.T) {
-	projection := status.Projection{Groups: []status.Group{{
-		ID:    status.GroupInReview,
-		Title: "Reviewing",
-		Entries: []status.Entry{{
-			Kind: status.EntryTask,
-			Repository: task.Repository{
-				ID:           "alpha",
-				Name:         "Repo",
-				TaskIDPrefix: "op",
-			},
-			Task: task.Task{
-				ID:       "op-123456789",
-				Priority: 2,
-				Title:    "Implement a compact status row",
-			},
-			Detail:         "local review; run task run",
-			SemanticDetail: status.Detail{Kind: status.DetailLocalReview},
-		}},
-	}}}
-
-	var output bytes.Buffer
-	err := renderStatus(&output, projection, true, statusRenderOptions{MaxWidth: 44})
-	if err != nil {
-		t.Fatalf("render status: %v", err)
-	}
-
-	got := output.String()
-	header := strings.SplitN(got, "\n", 2)[0]
-	if strings.Contains(header, " P ") || strings.HasSuffix(header, " P") {
-		t.Fatalf("responsive output kept priority column:\n%s", got)
-	}
-	for _, want := range []string{"TASK_ID", "S", "TITLE", "DETAIL", "op-123456789", "◉"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("responsive output missing %q:\n%s", want, got)
-		}
-	}
-	assertStatusLinesWithinWidth(t, got, 44)
 }
 
 func TestRenderStatusNarrowSymbolModePreservesTreeTitleContext(t *testing.T) {
@@ -372,200 +295,71 @@ func TestRenderStatusNarrowSymbolModePreservesTreeTitleContext(t *testing.T) {
 	}
 }
 
-func TestRenderStatusNarrowPaneUsesSymbolsBeforeTreeTitlesAreCrowded(t *testing.T) {
-	projection := crowdedTreeStatusProjection()
-	rows := statusDisplayRows(visibleStatusGroups(projection.Groups, false))
-
-	tests := []struct {
-		name                   string
-		width                  int
-		wantSymbol             bool
-		requirePreferredBudget bool
-	}{
-		{
-			name:       "symbol fallback below preferred title budget",
-			width:      55,
-			wantSymbol: true,
-		},
-		{
-			name:                   "symbol pane preserves thirty five title cells",
-			width:                  68,
-			wantSymbol:             true,
-			requirePreferredBudget: true,
-		},
-		{
-			name:                   "symbol pane does not revert at adjacent width",
-			width:                  69,
-			wantSymbol:             true,
-			requirePreferredBudget: true,
-		},
-		{
-			name:                   "descriptive pane preserves thirty five title cells",
-			width:                  80,
-			wantSymbol:             false,
-			requirePreferredBudget: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assertCrowdedTreeLayout(
-				t,
-				projection,
-				rows,
-				tt.width,
-				tt.wantSymbol,
-				tt.requirePreferredBudget,
-			)
+func TestRenderStatusNarrowPanePreservesReadableTreeTitles(t *testing.T) {
+	for _, test := range []struct {
+		width   int
+		symbols bool
+	}{{55, true}, {68, true}, {69, true}, {80, false}} {
+		t.Run(fmt.Sprintf("width %d", test.width), func(t *testing.T) {
+			got := renderProjectedStatusForTest(t, crowdedTreeStatusProjection(), test.width)
+			if test.symbols {
+				assertCrowdedTreeSymbolOutput(t, got)
+			} else {
+				assertCrowdedTreeDescriptiveOutput(t, got)
+			}
+			assertStatusColumnAligned(t, got)
+			assertCrowdedTreeTitleContext(t, got)
+			assertStatusLinesWithinWidth(t, got, test.width)
 		})
 	}
 }
 
-func assertCrowdedTreeLayout(
-	t *testing.T,
-	projection status.Projection,
-	rows []statusDisplayRow,
-	width int,
-	wantSymbol bool,
-	requirePreferredBudget bool,
-) {
-	t.Helper()
-
-	layout := statusLayoutFor(rows, statusRenderOptions{MaxWidth: width})
-	if layout.SymbolStatus != wantSymbol {
-		t.Fatalf("SymbolStatus = %t, want %t", layout.SymbolStatus, wantSymbol)
-	}
-	budget := statusTitleBudget(rows, layout)
-	if requirePreferredBudget && budget < statusSymbolPreferredTitleWidth {
-		t.Fatalf("title budget = %d, want >= %d", budget, statusSymbolPreferredTitleWidth)
-	}
-	if wantSymbol && !requirePreferredBudget {
-		assertSymbolBudgetBeatsDescriptiveFallback(t, rows, width, budget)
-	}
-
-	var output bytes.Buffer
-	err := renderStatus(&output, projection, false, statusRenderOptions{MaxWidth: width})
-	if err != nil {
-		t.Fatalf("render status: %v", err)
-	}
-
-	got := output.String()
-	if wantSymbol {
-		assertCrowdedTreeSymbolOutput(t, got)
-	} else {
-		assertCrowdedTreeDescriptiveOutput(t, got)
-	}
-	assertStatusColumnAligned(t, got)
-	assertCrowdedTreeTitleContext(t, got)
-	assertStatusLinesWithinWidth(t, got, width)
-}
-
-func assertSymbolBudgetBeatsDescriptiveFallback(
-	t *testing.T,
-	rows []statusDisplayRow,
-	width int,
-	symbolBudget int,
-) {
-	t.Helper()
-
-	descriptiveBudget := bestDescriptiveCrowdedTreeTitleBudget(rows, width)
-	if symbolBudget < descriptiveBudget {
-		t.Fatalf("symbol title budget = %d, want >= descriptive budget %d", symbolBudget, descriptiveBudget)
-	}
-	if descriptiveBudget >= statusSymbolPreferredTitleWidth {
-		t.Fatalf("descriptive budget = %d, want below %d", descriptiveBudget, statusSymbolPreferredTitleWidth)
-	}
-}
-
-func bestDescriptiveCrowdedTreeTitleBudget(rows []statusDisplayRow, maxWidth int) int {
-	candidates := []statusRenderLayout{
-		{IncludeRepo: true, IncludePriority: true, ShortDetail: true, MaxWidth: maxWidth},
-		{IncludePriority: true, ShortDetail: true, MaxWidth: maxWidth},
-		{ShortDetail: true, MaxWidth: maxWidth},
-	}
-	budget := 0
-	for _, candidate := range candidates {
-		candidate.TruncateTitles = true
-		candidate = alignResponsiveStatusColumn(rows, candidate)
-		budget = max(budget, statusTitleBudget(rows, candidate))
-	}
-	return budget
-}
-
-func TestRenderStatusEpicRowsPreservePrimaryDetailsWithProgress(t *testing.T) {
+func TestRenderStatusEpicRowsPreserveActionsAndUseProgressAsFallback(t *testing.T) {
 	projection := epicActionStatusProjection()
-
-	t.Run("wide output keeps full primary wording and progress", func(t *testing.T) {
-		var output bytes.Buffer
-		err := renderStatus(&output, projection, true, statusRenderOptions{})
-		if err != nil {
-			t.Fatalf("render status: %v", err)
-		}
-
-		got := output.String()
-		for _, want := range []string{
-			"https://github.test/org/alpha/pull/44; 1/3 done",
-			"review failed operationally; run task run; 2/5 done",
-			"run attempt 2 failed; 3/8 done",
-			"blocked by op-dep; 4/9 done",
-		} {
-			if !strings.Contains(got, want) {
-				t.Fatalf("wide output missing %q:\n%s", want, got)
+	projection.Groups = append(projection.Groups, status.Group{ID: status.GroupReadyToRun, Title: "Ready to run", Entries: []status.Entry{{
+		Kind: status.EntryTask, Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op"},
+		Task: epicActionTask("op-epic", "Ready epic progress"), Detail: "-",
+		EpicProgress: status.Detail{Kind: status.DetailEpicProgress, Completed: 7, Total: 11},
+	}}})
+	for _, width := range []int{0, 80, 64} {
+		t.Run(fmt.Sprintf("width %d", width), func(t *testing.T) {
+			got := renderProjectedStatusForTest(t, projection, width)
+			for _, row := range []struct{ id, fullAction, shortAction, progress string }{
+				{"op-pr", "https://github.test/org/alpha/pull/44", "PR #44", "1/3"},
+				{"op-review", "review failed operationally; run task run", "failed", "2/5"},
+				{"op-run", "run attempt 2 failed", "run #2", "3/8"},
+				{"op-blocked", "blocked by op-dep", "blocked", "4/9"},
+				{"op-epic", "7/11 done", "7/11", "7/11"},
+			} {
+				line := renderedStatusTaskLine(t, got, row.id)
+				action := row.shortAction
+				if width == 0 {
+					action = row.fullAction
+				}
+				if !strings.Contains(line, action) {
+					t.Errorf("%s lost action %q: %q\n%s", row.id, action, line, got)
+				}
+				if (width == 0 || row.id == "op-epic") && !strings.Contains(line, row.progress) {
+					t.Errorf("%s lost progress %q: %q\n%s", row.id, row.progress, line, got)
+				}
 			}
-		}
-	})
-
-	t.Run("narrow output compacts primary wording before progress", func(t *testing.T) {
-		var output bytes.Buffer
-		err := renderStatus(&output, projection, true, statusRenderOptions{MaxWidth: 64})
-		if err != nil {
-			t.Fatalf("render status: %v", err)
-		}
-
-		got := output.String()
-		for _, want := range []string{"PR #44", "failed", "run #2", "blocked"} {
-			if !strings.Contains(got, want) {
-				t.Fatalf("narrow output missing compact primary detail %q:\n%s", want, got)
+			if width > 0 {
+				assertStatusLinesWithinWidth(t, got, width)
 			}
-		}
-		for _, unexpected := range []string{"https://github.test", "review failed operationally", "run attempt 2", "blocked by op-dep;"} {
-			if strings.Contains(got, unexpected) {
-				t.Fatalf("narrow output kept full primary detail %q:\n%s", unexpected, got)
-			}
-		}
-		assertStatusLinesWithinWidth(t, got, 67)
-	})
+		})
+	}
 }
 
-func TestRenderStatusEpicProgressFallbackDetail(t *testing.T) {
-	projection := status.Projection{Groups: []status.Group{{
-		ID:    status.GroupReadyToRun,
-		Title: "Ready to run",
-		Entries: []status.Entry{{
-			Kind:       status.EntryTask,
-			Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op"},
-			Task: task.Task{
-				ID:        "op-epic",
-				Title:     "Ready epic progress",
-				Status:    task.StatusOpen,
-				IssueType: task.IssueTypeEpic,
-			},
-			Detail:       "-",
-			EpicProgress: status.Detail{Kind: status.DetailEpicProgress, Completed: 7, Total: 11},
-		}},
-	}}}
-
-	var output bytes.Buffer
-	err := renderStatus(&output, projection, true, statusRenderOptions{MaxWidth: 48})
-	if err != nil {
-		t.Fatalf("render status: %v", err)
+func renderedStatusTaskLine(t *testing.T, output, taskID string) string {
+	t.Helper()
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && fields[0] == taskID {
+			return line
+		}
 	}
-
-	got := output.String()
-	if !strings.Contains(got, "7/11") {
-		t.Fatalf("narrow output missing epic progress fallback:\n%s", got)
-	}
-	assertStatusLinesWithinWidth(t, got, 48)
+	t.Fatalf("task %s is missing from rendered status:\n%s", taskID, output)
+	return ""
 }
 
 func TestRenderStatusProjectedInProgressEpicUsesProgressInsteadOfNoRun(t *testing.T) {
@@ -662,22 +456,43 @@ func TestRenderStatusProjectionSemanticDetailsAcrossBoundary(t *testing.T) {
 			assertProjectedStatusDetail(t, entry.SemanticDetail, tt.wantDetail)
 			assertProjectedStatusDetail(t, entry.EpicProgress, tt.wantEpicProgress)
 
-			wide := renderProjectedStatusForTest(t, projection, 0)
-			if !strings.Contains(wide, tt.wantWide) {
-				t.Fatalf("wide output missing %q:\n%s", tt.wantWide, wide)
-			}
-
-			const narrowWidth = 88
-			narrow := renderProjectedStatusForTest(t, projection, narrowWidth)
-			if !strings.Contains(narrow, tt.wantNarrow) {
-				t.Fatalf("narrow output missing compact detail %q:\n%s", tt.wantNarrow, narrow)
-			}
-			if tt.wantWide != tt.wantNarrow && strings.Contains(narrow, tt.wantWide) {
-				t.Fatalf("narrow output kept full detail %q:\n%s", tt.wantWide, narrow)
-			}
-			assertStatusLinesWithinWidth(t, narrow, narrowWidth)
+			assertStatusUsesProjectedMeaning(t, projection, tt.wantWide, tt.wantNarrow)
 		})
 	}
+}
+
+func assertStatusUsesProjectedMeaning(t *testing.T, projection status.Projection, wantWide, wantNarrow string) {
+	t.Helper()
+	for _, options := range []statusRenderOptions{{}, {MaxWidth: 52, NoTruncate: true}} {
+		var output bytes.Buffer
+		if err := renderStatus(&output, projection, true, options); err != nil {
+			t.Fatalf("render unbounded status: %v", err)
+		}
+		if !strings.Contains(output.String(), wantWide) {
+			t.Fatalf("unbounded output missing %q:\n%s", wantWide, output.String())
+		}
+	}
+	// Compact output must use projected meaning, not parse presentation text.
+	for groupIndex := range projection.Groups {
+		for entryIndex := range projection.Groups[groupIndex].Entries {
+			entry := &projection.Groups[groupIndex].Entries[entryIndex]
+			if entry.SemanticDetail.Kind != "" || entry.EpicProgress.Kind != "" {
+				entry.Detail = "misleading fallback should not render"
+			}
+		}
+	}
+	const narrowWidth = 88
+	narrow := renderProjectedStatusForTest(t, projection, narrowWidth)
+	if !strings.Contains(narrow, wantNarrow) {
+		t.Fatalf("narrow output missing compact detail %q:\n%s", wantNarrow, narrow)
+	}
+	if wantWide != wantNarrow && strings.Contains(narrow, wantWide) {
+		t.Fatalf("narrow output kept full detail %q:\n%s", wantWide, narrow)
+	}
+	if strings.Contains(narrow, "misleading fallback") {
+		t.Fatalf("compact output parsed presentation text:\n%s", narrow)
+	}
+	assertStatusLinesWithinWidth(t, narrow, narrowWidth)
 }
 
 type projectedStatusDetailCase struct {
@@ -1496,122 +1311,14 @@ func assertNarrowTreeSymbolLegend(t *testing.T, got string) {
 	}
 }
 
-func TestRenderStatusResponsiveCompactsManualReviewWaitDetail(t *testing.T) {
-	const fullDetail = "local review; run task run (waiting for manual step local-review)"
-	projection := manualReviewStatusProjection(fullDetail)
-
-	t.Run("narrow output uses compact manual wait detail", func(t *testing.T) {
-		var output bytes.Buffer
-		err := renderStatus(&output, projection, true, statusRenderOptions{MaxWidth: 64})
-		if err != nil {
-			t.Fatalf("render status: %v", err)
-		}
-
-		got := output.String()
-		if !strings.Contains(got, "manual local") {
-			t.Fatalf("responsive output missing compact manual review detail:\n%s", got)
-		}
-		if strings.Contains(got, "waiting for manual step") {
-			t.Fatalf("responsive output kept full manual wait detail:\n%s", got)
-		}
-		assertStatusLinesWithinWidth(t, got, 64)
-	})
-
-	t.Run("unbounded output preserves full manual step detail", func(t *testing.T) {
-		var output bytes.Buffer
-		err := renderStatus(&output, projection, true, statusRenderOptions{})
-		if err != nil {
-			t.Fatalf("render status: %v", err)
-		}
-
-		got := output.String()
-		if !strings.Contains(got, fullDetail) {
-			t.Fatalf("unbounded output missing full manual wait detail:\n%s", got)
-		}
-	})
-
-	t.Run("no truncate output preserves full manual step detail", func(t *testing.T) {
-		var output bytes.Buffer
-		err := renderStatus(&output, projection, true, statusRenderOptions{MaxWidth: 52, NoTruncate: true})
-		if err != nil {
-			t.Fatalf("render status: %v", err)
-		}
-
-		got := output.String()
-		if !strings.Contains(got, fullDetail) {
-			t.Fatalf("no-truncate output missing full manual wait detail:\n%s", got)
-		}
-	})
-}
-
-type compactStatusDetailCase struct {
-	name   string
-	detail status.Detail
-	want   string
-}
-
-func TestCompactStatusDetailUsesSemanticKindsForRunsAndPullRequests(t *testing.T) {
-	assertCompactStatusDetails(t, []compactStatusDetailCase{
-		{"pull request number", status.Detail{Kind: status.DetailPullRequest, URL: "https://github.test/org/repo/pull/44"}, "PR #44"},
-		{"pull request without parseable number", status.Detail{Kind: status.DetailPullRequest, URL: "not a url"}, "PR"},
-		{"epic progress", status.Detail{Kind: status.DetailEpicProgress, Completed: 27, Total: 28}, "27/28"},
-		{"run running", status.Detail{Kind: status.DetailRunRunning, Attempt: 1}, "run #1"},
-		{"run failed", status.Detail{Kind: status.DetailRunFailed, Attempt: 1}, "run #1 failed"},
-		{"run incomplete", status.Detail{Kind: status.DetailRunIncomplete, Attempt: 1}, "run #1 incomplete"},
-		{"no run", status.Detail{Kind: status.DetailNoRun}, "no run"},
-		{"open task run history", status.Detail{Kind: status.DetailOpenTaskRunHistory, Attempt: 1}, "open; run #1"},
-		{"unknown run state", status.Detail{Kind: status.DetailRunUnknownState, Attempt: 1, State: "lost"}, "run #1 lost"},
-	})
-}
-
-func TestCompactStatusDetailUsesSemanticKindsForReviews(t *testing.T) {
-	assertCompactStatusDetails(t, []compactStatusDetailCase{
-		{"local review", status.Detail{Kind: status.DetailLocalReview}, "local review"},
-		{"review running", status.Detail{Kind: status.DetailReviewRunning}, "running"},
-		{"manual review step", status.Detail{Kind: status.DetailReviewManualStep, Step: "inspect"}, "manual inspect"},
-		{"review decision lost", status.Detail{Kind: status.DetailReviewDecisionLost}, "decision lost"},
-		{"review decision required", status.Detail{Kind: status.DetailReviewDecisionRequired}, "decision required"},
-		{"review follow up ready", status.Detail{Kind: status.DetailReviewFollowUpReady}, "follow-up ready"},
-		{"review budget spent", status.Detail{Kind: status.DetailReviewBudgetSpent, Count: 2}, "budget spent"},
-		{"review findings", status.Detail{Kind: status.DetailReviewFindings, Count: 3}, "3 findings"},
-		{"review aborted", status.Detail{Kind: status.DetailReviewAborted}, "aborted"},
-		{"review failed", status.Detail{Kind: status.DetailReviewFailed}, "failed"},
-		{"review passed", status.Detail{Kind: status.DetailReviewPassed}, "passed"},
-		{"publication failed", status.Detail{Kind: status.DetailReviewPublishFailed}, "publish failed"},
-		{"unknown review state", status.Detail{Kind: status.DetailReviewUnknownState, Attempt: 2, State: "stalled"}, "review stalled"},
-	})
-}
-
-func TestCompactStatusDetailUsesSemanticKindsForBlockersAndCompletion(t *testing.T) {
-	assertCompactStatusDetails(t, []compactStatusDetailCase{
-		{"parent missing", status.Detail{Kind: status.DetailParentMissing, ID: "op-x"}, "parent op-x missing"},
-		{"parent not epic", status.Detail{Kind: status.DetailParentNotEpic, ID: "op-x"}, "parent op-x not epic"},
-		{"parent open", status.Detail{Kind: status.DetailParentNotReady, ID: "op-x", State: "open"}, "parent op-x open"},
-		{"missing dependency", status.Detail{Kind: status.DetailMissingDependency, ID: "op-x"}, "missing op-x"},
-		{"missing dependencies", status.Detail{Kind: status.DetailMissingDependencies, Count: 3}, "3 deps missing"},
-		{"unknown blockers", status.Detail{Kind: status.DetailDependencyDetailsMissing, Count: 2}, "2 blockers unknown"},
-		{"blocked dependency", status.Detail{Kind: status.DetailBlockedDependency, ID: "op-x"}, "blocked op-x"},
-		{"blocked dependencies", status.Detail{Kind: status.DetailBlockedDependencies, Count: 3}, "blocked by 3 deps"},
-		{"missing external ref", status.Detail{Kind: status.DetailMissingExternalRef, ID: "op-x"}, "missing ext ref"},
-		{"wrong PR target", status.Detail{Kind: status.DetailWrongPRTarget}, "wrong PR target"},
-		{"wrong local target", status.Detail{Kind: status.DetailWrongLocalTarget}, "wrong local target"},
-		{"finalized but open", status.Detail{Kind: status.DetailFinalizedButOpen}, "finalized but open"},
-		{"unknown task status", status.Detail{Kind: status.DetailUnknownTaskStatus, State: "triaged"}, "status triaged"},
-		{"repository failure", status.Detail{Kind: status.DetailRepoFailure, Source: "task_backend", Operation: "snapshot"}, "task_backend/snapshot failed"},
-	})
-}
-
-func assertCompactStatusDetails(t *testing.T, tests []compactStatusDetailCase) {
-	t.Helper()
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := compactStatusDetail(tt.detail, "fallback text that should not be parsed")
-			if got != tt.want {
-				t.Fatalf("compactStatusDetail() = %q, want %q", got, tt.want)
-			}
-		})
+func TestRenderStatusFallsBackSafelyForUnparseablePullRequestNumber(t *testing.T) {
+	projection := manualReviewStatusProjection("misleading fallback text")
+	projection.Groups[0].Entries[0].SemanticDetail = status.Detail{Kind: status.DetailPullRequest, URL: "not a url"}
+	got := renderProjectedStatusForTest(t, projection, 64)
+	if !strings.Contains(got, "PR") || strings.Contains(got, "misleading") || strings.Contains(got, "not a url") {
+		t.Fatalf("unparseable PR was not safely summarized:\n%s", got)
 	}
+	assertStatusLinesWithinWidth(t, got, 64)
 }
 
 func manualReviewStatusProjection(detail string) status.Projection {

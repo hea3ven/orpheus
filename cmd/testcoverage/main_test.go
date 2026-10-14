@@ -18,27 +18,29 @@ func TestParseOptionsSupportsQualityModes(t *testing.T) {
 		name    string
 		args    []string
 		wantErr bool
+		want    options
 	}{
 		{name: "defaults"},
-		{name: "same-runner comparison", args: []string{"-compare-base", fixtureBase, "-compare-merge", fixtureMerge}},
-		{name: "working-tree comparison", args: []string{"-compare-worktree", "-compare-base", "main"}},
+		{name: "same-runner comparison", args: []string{"-compare-base", fixtureBase, "-compare-merge", fixtureMerge}, want: options{compareBase: fixtureBase, compareMerge: fixtureMerge}},
+		{name: "working-tree comparison", args: []string{"-compare-worktree", "-compare-base", "main"}, want: options{compareWorktree: true, compareBase: "main"}},
+		{name: "working-tree explicit output", args: []string{"-compare-worktree", "-compare-base", "main", "-output", "/fixture/new-reports/report.json"}, want: options{compareWorktree: true, compareBase: "main", output: "/fixture/new-reports/report.json"}},
 		{name: "working-tree comparison requires explicit base", args: []string{"-compare-worktree"}, wantErr: true},
 		{name: "working-tree comparison rejects merge", args: []string{"-compare-worktree", "-compare-base", "main", "-compare-merge", fixtureMerge}, wantErr: true},
 		{name: "working-tree comparison rejects policy override", args: []string{"-compare-worktree", "-compare-base", "main", "-policy", "base.yml"}, wantErr: true},
 		{name: "working-tree comparison rejects update", args: []string{"-compare-worktree", "-compare-base", "main", "-update-policy"}, wantErr: true},
-		{name: "isolated measurement", args: []string{"-measure-revision", fixtureBase}},
+		{name: "isolated measurement", args: []string{"-measure-revision", fixtureBase}, want: options{measureRevision: fixtureBase}},
 		{name: "missing comparison identity", args: []string{"-compare-base", fixtureBase}, wantErr: true},
 		{name: "reject comparison plus update", args: []string{"-compare-base", fixtureBase, "-compare-merge", fixtureMerge, "-update-policy"}, wantErr: true},
 		{name: "reject comparison plus measurement", args: []string{"-compare-base", fixtureBase, "-compare-merge", fixtureMerge, "-measure-revision", fixtureBase}, wantErr: true},
-		{name: "quality policy update", args: []string{"-update-policy"}},
-		{name: "scenario audit", args: []string{"-audit-scenarios"}},
+		{name: "quality policy update", args: []string{"-update-policy"}, want: options{updatePolicy: true}},
+		{name: "scenario audit", args: []string{"-audit-scenarios"}, want: options{auditScenarios: true}},
 		{name: "focused scenario audit", args: []string{
 			"-audit-scenarios",
 			"-audit-package", "./internal/git",
 			"-audit-package", "./internal/tasksource/beads",
 			"-audit-run", "^TestIntegrationAdapterContract",
-		}},
-		{name: "custom paths", args: []string{"-policy", "policy.yml", "-output", "report.json"}},
+		}, want: options{auditScenarios: true, auditPackages: stringListFlag{"./internal/git", "./internal/tasksource/beads"}, auditRun: "^TestIntegrationAdapterContract"}},
+		{name: "custom paths", args: []string{"-policy", "policy.yml", "-output", "report.json"}, want: options{policy: "policy.yml", output: "report.json"}},
 		{name: "reject combined quality modes", args: []string{"-update-policy", "-audit-scenarios"}, wantErr: true},
 		{name: "reject audit package without audit", args: []string{"-audit-package", "./internal/git"}, wantErr: true},
 		{name: "reject audit regex without audit", args: []string{"-audit-run", "Git"}, wantErr: true},
@@ -49,101 +51,98 @@ func TestParseOptionsSupportsQualityModes(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := parseOptions(test.args)
+			got, err := parseOptions(test.args)
 			if (err != nil) != test.wantErr {
 				t.Fatalf("parseOptions(%v) error = %v, wantErr %t", test.args, err, test.wantErr)
+			}
+			if test.wantErr {
+				return
+			}
+			want := test.want
+			if want.policy == "" {
+				want.policy = ".quality.yml"
+			}
+			if want.output == "" && !want.compareWorktree {
+				want.output = "artifacts/test-coverage/report.json"
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("parseOptions(%v) = %#v, want %#v", test.args, got, want)
 			}
 		})
 	}
 }
 
-func TestAuditSelectionDefaultsAndRetainsRepeatedPackages(t *testing.T) {
-	defaults, err := parseOptions([]string{"-audit-scenarios"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := defaults.auditSelection(), (scenarioSelection{Packages: []string{"./..."}, TestPattern: "^TestIntegration"}); !reflect.DeepEqual(got, want) {
-		t.Fatalf("default audit selection = %#v, want %#v", got, want)
-	}
+func TestAuditSelectionPreservesDefaultsAndRequestedPackagesInDiscoveryCommand(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+		want scenarioSelection
+	}{
+		{name: "defaults", args: []string{"-audit-scenarios"}, want: scenarioSelection{Packages: []string{"./..."}, TestPattern: "^TestIntegration"}},
+		{name: "focused", args: []string{"-audit-scenarios", "-audit-package", "./internal/git", "-audit-package", "./internal/tasksource/beads", "-audit-run", "Git|Beads"}, want: scenarioSelection{Packages: []string{"./internal/git", "./internal/tasksource/beads"}, TestPattern: "Git|Beads"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			opts, err := parseOptions(test.args)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	focused, err := parseOptions([]string{
-		"-audit-scenarios",
-		"-audit-package", "./internal/git",
-		"-audit-package", "./internal/tasksource/beads",
-		"-audit-run", "Git|Beads",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := scenarioSelection{Packages: []string{"./internal/git", "./internal/tasksource/beads"}, TestPattern: "Git|Beads"}
-	if got := focused.auditSelection(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("focused audit selection = %#v, want %#v", got, want)
+			got := opts.auditSelection()
+			command := integrationListCommand(got)
+
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("audit selection = %#v, want %#v", got, test.want)
+			}
+			wantCommand := append([]string{"go", "test", "-json", "-tags=integration", "-list", test.want.TestPattern}, test.want.Packages...)
+			if !reflect.DeepEqual(command, wantCommand) {
+				t.Fatalf("discovery command = %v, want %v", command, wantCommand)
+			}
+		})
 	}
 }
 
-func TestAuditIntegrationListCommandUsesSelection(t *testing.T) {
-	selection := scenarioSelection{
-		Packages:    []string{"./internal/git", "./internal/tasksource/beads"},
-		TestPattern: "^TestIntegrationAdapterContract",
-	}
-	got := strings.Join(integrationListCommand(selection), " ")
-	want := "go test -json -tags=integration -list ^TestIntegrationAdapterContract ./internal/git ./internal/tasksource/beads"
-	if got != want {
-		t.Fatalf("integration list command = %q, want %q", got, want)
-	}
-}
+func TestFinishReportPreservesFailureEvidenceAndSeparateArtifacts(t *testing.T) {
+	for _, filename := range []string{"partial.json", "partial.md"} {
+		t.Run(filename, func(t *testing.T) {
+			path := filepath.Join(testutil.CanonicalTempDir(t), filename)
+			report := testQualityReport()
+			report.Complete = false
+			report.Decision = decision{Status: statusTestFailed}
+			lane := report.Lanes["unit"]
+			lane.Passed = false
+			lane.Failure = &laneFailure{Error: "exit status 1", Stderr: "compiler stderr", TestOutput: "json events"}
+			report.Lanes["unit"] = lane
 
-func TestFinishReportWritesPartialFailureReport(t *testing.T) {
-	path := filepath.Join(testutil.CanonicalTempDir(t), "partial.json")
-	report := testQualityReport()
-	report.Complete = false
-	report.Decision = decision{Status: statusTestFailed}
-	lane := report.Lanes["unit"]
-	lane.Passed = false
-	lane.Failure = &laneFailure{Error: "exit status 1", Stderr: "compiler stderr", TestOutput: "json events"}
-	report.Lanes["unit"] = lane
+			err := finishReport(path, report, os.ErrInvalid)
 
-	if err := finishReport(path, report, os.ErrInvalid); !errors.Is(err, os.ErrInvalid) {
-		t.Fatalf("finishReport error = %v, want original failure", err)
-	}
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"\"complete\": false", "compiler stderr", "json events"} {
-		if !strings.Contains(string(contents), want) {
-			t.Fatalf("partial report does not contain %q: %s", want, contents)
-		}
-	}
-	markdown, err := os.ReadFile(reportSummaryPath(path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"## Test quality", "**Tests failed.**", "| unit | **Fail** |"} {
-		if !strings.Contains(string(markdown), want) {
-			t.Fatalf("partial Markdown report does not contain %q:\n%s", want, markdown)
-		}
-	}
-}
-
-func TestDecodeTestEventsExcludesPackagesWithoutSelectedTestsFromTimings(t *testing.T) {
-	events := strings.NewReader(strings.Join([]string{
-		`{"Action":"start","Package":"example.test/no-tests"}`,
-		`{"Action":"pass","Package":"example.test/no-tests","Elapsed":0.472}`,
-		`{"Action":"run","Package":"example.test/with-tests","Test":"TestFeature"}`,
-		`{"Action":"pass","Package":"example.test/with-tests","Test":"TestFeature","Elapsed":0.01}`,
-		`{"Action":"pass","Package":"example.test/with-tests","Elapsed":0.02}`,
-	}, "\n"))
-
-	got := decodeTestEvents(events)
-	if got.decodeErr != nil {
-		t.Fatal(got.decodeErr)
-	}
-	if got.testCount != 1 {
-		t.Fatalf("test count = %d, want 1", got.testCount)
-	}
-	if !reflect.DeepEqual(got.packages, map[string]float64{"example.test/with-tests": 0.02}) {
-		t.Fatalf("package timings = %#v, want only package with selected tests", got.packages)
+			if !errors.Is(err, os.ErrInvalid) {
+				t.Fatalf("finishReport error = %v, want original failure", err)
+			}
+			contents, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var persisted qualityReport
+			if err := json.Unmarshal(contents, &persisted); err != nil {
+				t.Fatal(err)
+			}
+			if persisted.Complete || persisted.Lanes["unit"].Passed || persisted.Lanes["unit"].Failure == nil || !reflect.DeepEqual(persisted.Lanes["unit"].Failure, lane.Failure) {
+				t.Fatalf("persisted failure = %#v", persisted)
+			}
+			summaryPath := strings.TrimSuffix(path, filepath.Ext(path)) + ".md"
+			if filename == "partial.md" {
+				summaryPath = strings.TrimSuffix(path, ".md") + ".summary.md"
+			}
+			markdown, err := os.ReadFile(summaryPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{"Tests failed", "unit", "Fail"} {
+				if !strings.Contains(string(markdown), want) {
+					t.Fatalf("failure summary missing %q: %s", want, markdown)
+				}
+			}
+		})
 	}
 }
 
@@ -196,52 +195,36 @@ func TestPrintReportShowsPackageCoverageAndSelectedTestTiming(t *testing.T) {
 	}
 }
 
-func TestReportSummaryPathDoesNotOverwriteNonJSONReport(t *testing.T) {
-	if got, want := reportSummaryPath("report.md"), "report.summary.md"; got != want {
-		t.Fatalf("reportSummaryPath(report.md) = %q, want %q", got, want)
-	}
-}
-
-func TestReportSummaryUsesTablesAndCollapsesPackageDetails(t *testing.T) {
+func TestReportSummaryPrioritizesBlockingDecisionAndCollapsesPackageDetails(t *testing.T) {
 	report := testQualityReportWithPackages(
 		packageMetric{Name: "example.test/first", coverageMetric: coverageMetric{StatementTotal: 10, CoveredStatements: 8}},
 		packageMetric{Name: "example.test/second", coverageMetric: coverageMetric{StatementTotal: 5, CoveredStatements: 2}},
 	)
 	report.Decision = decision{
-		Status: statusRegression,
-		Findings: []finding{{
-			Kind: "coverage_policy", Lane: "unit", Scope: "repository", Prior: 70, Current: 66.67, Proposed: 66.17, Threshold: 0.5,
-			Message: "coverage is below its policy floor",
-		}},
-		Warnings: []finding{{
-			Kind: "timing_comparison", Lane: "unit", Scope: "package", Name: "example.test/first", Prior: 0.5, Current: 0.8, BudgetSeconds: 0.75,
-			Message: "timing diagnostic",
-		}},
+		Status:   statusRegression,
+		Findings: []finding{{Kind: "coverage_policy", Lane: "unit", Scope: "repository", Prior: 70, Current: 66.67, Proposed: 66.17, Threshold: 0.5, Message: "coverage is below its policy floor"}},
+		Warnings: []finding{{Kind: "timing_comparison", Lane: "unit", Scope: "package", Name: "example.test/first", Prior: 0.5, Current: 0.8, BudgetSeconds: 0.75, Message: "timing diagnostic"}},
 	}
-
 	var output bytes.Buffer
+
 	renderReportSummary(&output, report, "artifacts/test-coverage/report.json")
+
 	contents := output.String()
-	for _, want := range []string{
-		"> [!CAUTION]",
-		"**Coverage floor violated.**",
-		"| Lane | Result | Coverage | Test events | Selected package work | Command wall time |",
-		"| unit | **Pass** | 10/15 (66.67%) | 10 | 0.50s | 1.00s |",
-		"### Blocking issues",
-		"unit/repository",
-		"floor 70.000%",
-		"### Warnings",
-		"ceiling 0.750s",
-		"<details>",
-		"<summary>Package coverage and timing</summary>",
-		"Machine-readable report: `artifacts/test-coverage/report.json`",
-	} {
-		if !strings.Contains(contents, want) {
-			t.Fatalf("Markdown report does not contain %q:\n%s", want, contents)
+	for _, fact := range []string{"Coverage floor violated", "unit/repository", "floor 70.000%", "66.67%", "ceiling 0.750s", "example.test/first", "example.test/second", "artifacts/test-coverage/report.json"} {
+		if !strings.Contains(contents, fact) {
+			t.Fatalf("summary missing %q: %s", fact, contents)
 		}
 	}
-	if strings.Index(contents, "### Blocking issues") > strings.Index(contents, "<summary>Package coverage and timing</summary>") {
-		t.Fatalf("blocking issues appear after package details:\n%s", contents)
+	start, end := strings.Index(contents, "<details>"), strings.Index(contents, "</details>")
+	summary, closing := strings.Index(contents, "<summary>"), strings.Index(contents, "</summary>")
+	blocking := strings.Index(contents, "unit/repository")
+	if start < 0 || end <= start || summary <= start || closing <= summary || closing >= end || blocking >= start {
+		t.Fatalf("blocking decision must precede collapsible details: %s", contents)
+	}
+	for _, pkg := range []string{"example.test/first", "example.test/second"} {
+		if !strings.Contains(contents[closing:end], pkg) {
+			t.Fatalf("package %s is outside collapsible details: %s", pkg, contents)
+		}
 	}
 }
 
@@ -266,11 +249,24 @@ func TestNormalizeProfileDeduplicatesAndUnionsCoverage(t *testing.T) {
 	}
 }
 
-func TestFailuresFromEventsPreservesDecodedAssertionOutput(t *testing.T) {
-	id := testID{Package: "example.test/pkg", Test: "TestBroken"}
-	got := failuresFromEvents(map[testID]string{id: "want true, got false\n"}, map[testID]bool{id: true})
-	if len(got) != 1 || got[0].Output != "want true, got false\n" {
-		t.Fatalf("decoded failures = %#v", got)
+func TestFailedTestEventsRetainNamedAssertionOutput(t *testing.T) {
+	input := strings.NewReader(strings.Join([]string{
+		"{\"Action\":\"run\",\"Package\":\"example.test/pkg\",\"Test\":\"TestBroken\"}",
+		"{\"Action\":\"output\",\"Package\":\"example.test/pkg\",\"Test\":\"TestBroken\",\"Output\":\"want true, got false\\n\"}",
+		"{\"Action\":\"fail\",\"Package\":\"example.test/pkg\",\"Test\":\"TestBroken\"}",
+		"{\"Action\":\"pass\",\"Package\":\"example.test/pkg\",\"Test\":\"TestOther\"}",
+		"{\"Action\":\"fail\",\"Package\":\"example.test/pkg\"}",
+	}, "\n"))
+
+	events := decodeTestEvents(input)
+	failures := failuresFromEvents(events.outputs, events.failed)
+
+	if events.decodeErr != nil {
+		t.Fatal(events.decodeErr)
+	}
+	want := []testFailure{{Package: "example.test/pkg"}, {Package: "example.test/pkg", Test: "TestBroken", Output: "want true, got false\n"}}
+	if !reflect.DeepEqual(failures, want) {
+		t.Fatalf("failures = %#v, want %#v", failures, want)
 	}
 }
 

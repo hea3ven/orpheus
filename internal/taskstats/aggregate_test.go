@@ -1,6 +1,7 @@
 package taskstats_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -25,8 +26,8 @@ func TestAggregateReportFromSnapshotProjectsResolvedTaskMetrics(t *testing.T) {
 		Repositories: []taskmodel.RepositorySnapshot{{
 			Repository: taskmodel.Repository{ID: "alpha", Name: "Alpha"},
 			Tasks: []taskmodel.Task{
-				{ID: "op-1", CreatedAt: &createdAt, ClosedAt: &closedAt},
 				{ID: "op-2", CompletedAt: &completedAt},
+				{ID: "op-1", CreatedAt: &createdAt, ClosedAt: &closedAt},
 				{ID: "op-open"},
 			},
 		}},
@@ -62,35 +63,26 @@ func TestAggregateReportFromSnapshotProjectsResolvedTaskMetrics(t *testing.T) {
 	july2 := got.Periods[0]
 	is.Equal("2026-07-02", july2.Key)
 	is.Equal(1, july2.Resolved)
-	is.Equal(36*time.Hour, july2.FullTaskTime)
-	is.Equal(1, july2.FullTaskTimeCount)
-	averageFullTaskTime, ok := july2.AverageFullTaskTime()
-	assertDurationValue(t, averageFullTaskTime, ok, 36*time.Hour)
-	is.Equal(2*time.Hour, july2.ImplementationTime)
-	is.Equal(1, july2.ImplementationTimeCount)
-	averageImplementationTime, ok := july2.AverageImplementationTime()
-	assertDurationValue(t, averageImplementationTime, ok, 2*time.Hour)
-	is.Equal(1, july2.Totals.Executions)
-	is.Equal(30*time.Minute, july2.Totals.Duration)
-	averageActiveAgentTime, ok := july2.AverageActiveAgentTime()
-	assertDurationValue(t, averageActiveAgentTime, ok, 30*time.Minute)
-	is.Equal(150, july2.Totals.Usage.TotalTokens)
-	averageTokenCount, ok := july2.AverageTokenCount()
-	assertIntValue(t, averageTokenCount, ok, 150)
-	is.Zero(july2.Totals.UnknownUsage)
-	is.Zero(july2.Totals.UnknownCost)
+	is.Equal(1, july2.Tasks)
+	is.Equal(1, july2.WorkflowTime.Known)
+	is.Equal(1, july2.WorkflowTime.Samples)
+	is.Equal(2*time.Hour, july2.WorkflowTime.Median)
+	is.Equal(2*time.Hour, july2.WorkflowTime.P75)
 
 	july3 := got.Periods[1]
 	is.Equal("2026-07-03", july3.Key)
 	is.Equal(1, july3.Resolved)
-	is.Equal(1, july3.UnknownFullTaskTime)
-	is.Equal(1, july3.UnknownImplementationTime)
-	is.Equal(1, july3.Totals.UnknownUsage)
-	is.Equal(1, july3.Totals.UnknownCost)
-	_, ok = july3.AverageTokenCount()
-	is.False(ok)
-	_, ok = july3.AverageCostMicroUSD()
-	is.False(ok)
+	is.Zero(july3.WorkflowTime.Known)
+	is.Equal(1, july3.WorkflowTime.Samples)
+	is.Equal(1, july3.WorkflowTime.Unknown())
+
+	consumption, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{Group: taskstats.GroupDay, View: taskstats.ViewConsumption})
+	must.Empty(failures)
+	must.Len(consumption.Periods, 1)
+	is.Equal(1, consumption.Periods[0].Executions)
+	is.Equal(150, consumption.Periods[0].Tokens.Total)
+	is.Equal(1, consumption.Periods[0].Tokens.Known)
+	is.Equal(1, consumption.Periods[0].Tokens.Samples)
 }
 
 func TestAggregateReportFromSnapshotExcludesEpicsBeforeStateLoading(t *testing.T) {
@@ -146,7 +138,7 @@ func TestAggregateReportFromSnapshotExcludesEpicsBeforeStateLoading(t *testing.T
 	}
 }
 
-func TestAggregateReportFromSnapshotAveragesKnownUsageAndCostOnly(t *testing.T) {
+func TestAggregateConsumptionSeparatesKnownUsageCostAndUnknownSamples(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 
@@ -154,6 +146,7 @@ func TestAggregateReportFromSnapshotAveragesKnownUsageAndCostOnly(t *testing.T) 
 	allUnknownClosedAt := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
 	startedAt := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
 	finishedAt := time.Date(2026, 7, 2, 10, 30, 0, 0, time.UTC)
+	allUnknownFinishedAt := finishedAt.Add(24 * time.Hour)
 
 	snapshot := taskmodel.SnapshotResult{
 		Repositories: []taskmodel.RepositorySnapshot{{
@@ -209,47 +202,46 @@ func TestAggregateReportFromSnapshotAveragesKnownUsageAndCostOnly(t *testing.T) 
 				Runs: []taskstate.RunAttempt{{
 					Execution: taskstate.AgentExecution{
 						Model:      "gpt-5",
-						StartedAt:  startedAt,
-						FinishedAt: &finishedAt,
+						StartedAt:  startedAt.Add(24 * time.Hour),
+						FinishedAt: &allUnknownFinishedAt,
 					},
 				}},
 			},
 		},
 	}
 
-	got, failures := taskstats.AggregateReportFromSnapshot(snapshot, loader, taskstats.GroupDay)
+	got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{Group: taskstats.GroupDay, View: taskstats.ViewConsumption})
 
 	must.Empty(failures)
 	must.Len(got.Periods, 2)
 
 	mixed := got.Periods[0]
 	is.Equal("2026-07-02", mixed.Key)
-	is.Equal(3, mixed.Resolved)
-	is.Equal(450, mixed.Totals.Usage.TotalTokens)
-	is.Equal(2, mixed.Totals.KnownUsageTasks)
-	is.Equal(1, mixed.Totals.UnknownUsage)
-	averageTokenCount, ok := mixed.AverageTokenCount()
-	assertIntValue(t, averageTokenCount, ok, 225)
-	is.Equal(int64(625), mixed.Totals.CostMicroUSD)
-	is.Equal(1, mixed.Totals.KnownCostTasks)
-	is.Equal(2, mixed.Totals.UnknownCost)
-	averageCostMicroUSD, ok := mixed.AverageCostMicroUSD()
-	assertInt64Value(t, averageCostMicroUSD, ok, 625)
+	is.Equal(3, mixed.Tasks)
+	is.Equal(3, mixed.Executions)
+	is.Equal(450, mixed.Tokens.Total)
+	is.Equal(2, mixed.Tokens.Known)
+	is.Equal(3, mixed.Tokens.Samples)
+	is.Equal(225, mixed.Tokens.Median)
+	is.Equal(int64(625), mixed.Cost.TotalMicroUSD)
+	is.Equal(1, mixed.Cost.Known)
+	is.Equal(3, mixed.Cost.Samples)
+	is.Equal(int64(625), mixed.Cost.MedianMicroUSD)
 
 	allUnknown := got.Periods[1]
 	is.Equal("2026-07-03", allUnknown.Key)
-	is.Equal(1, allUnknown.Resolved)
-	is.Zero(allUnknown.Totals.KnownUsageTasks)
-	is.Equal(1, allUnknown.Totals.UnknownUsage)
-	_, ok = allUnknown.AverageTokenCount()
-	is.False(ok)
-	is.Zero(allUnknown.Totals.KnownCostTasks)
-	is.Equal(1, allUnknown.Totals.UnknownCost)
-	_, ok = allUnknown.AverageCostMicroUSD()
-	is.False(ok)
+	is.Equal(1, allUnknown.Tasks)
+	is.Zero(allUnknown.Tokens.Total)
+	is.Zero(allUnknown.Tokens.Known)
+	is.Equal(1, allUnknown.Tokens.Samples)
+	is.Zero(allUnknown.Tokens.Median)
+	is.Zero(allUnknown.Cost.TotalMicroUSD)
+	is.Zero(allUnknown.Cost.Known)
+	is.Equal(1, allUnknown.Cost.Samples)
+	is.Zero(allUnknown.Cost.MedianMicroUSD)
 }
 
-func TestAggregateReportUsesStoredPiReportedCost(t *testing.T) {
+func TestAggregateConsumptionUsesStoredPiReportedCost(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 
@@ -288,19 +280,19 @@ func TestAggregateReportUsesStoredPiReportedCost(t *testing.T) {
 		},
 	}
 
-	got, failures := taskstats.AggregateReportFromSnapshot(snapshot, loader, taskstats.GroupDay)
+	got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{Group: taskstats.GroupDay, View: taskstats.ViewConsumption})
 
 	must.Empty(failures)
 	must.Len(got.Periods, 1)
 	period := got.Periods[0]
-	is.Equal(int64(1240), period.Totals.CostMicroUSD)
-	is.Equal(1, period.Totals.KnownCostTasks)
-	is.Zero(period.Totals.UnknownCost)
-	averageCostMicroUSD, ok := period.AverageCostMicroUSD()
-	assertInt64Value(t, averageCostMicroUSD, ok, 1240)
+	is.Equal(int64(1240), period.Cost.TotalMicroUSD)
+	is.Equal(int64(1240), period.Cost.MedianMicroUSD)
+	is.Equal(1, period.Cost.Known)
+	is.Equal(1, period.Cost.Samples)
+	is.Zero(period.Cost.Unknown())
 }
 
-func TestAggregateReportIncludesTerminalSyncConflictResolutionExecutions(t *testing.T) {
+func TestAggregateConsumptionIncludesTerminalSyncConflictExecutionExactlyOnce(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 
@@ -362,31 +354,23 @@ func TestAggregateReportIncludesTerminalSyncConflictResolutionExecutions(t *test
 		},
 	}
 
-	got, failures := taskstats.AggregateReportFromSnapshot(snapshot, loader, taskstats.GroupDay)
+	got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{Group: taskstats.GroupDay, View: taskstats.ViewConsumption})
 
 	must.Empty(failures)
 	must.Len(got.Periods, 1)
 	period := got.Periods[0]
-	is.Equal(2, period.Totals.Executions)
-	is.Equal(18*time.Minute, period.Totals.Duration)
-	is.Equal(210, period.Totals.Usage.TotalTokens)
-	is.Equal(1, period.Totals.KnownUsageTasks)
-	is.Zero(period.Totals.UnknownUsage)
-	must.Len(period.TotalsByPurpose, 2)
+	is.Equal(1, period.Tasks)
+	is.Equal(2, period.Executions)
+	is.Equal(210, period.Tokens.Total)
+	is.Equal(1, period.Tokens.Known)
+	is.Equal(1, period.Tokens.Samples)
+	is.Zero(period.Tokens.Unknown())
 
-	implementationTotals := period.TotalsByPurpose[taskstate.AgentExecutionPurposeImplementation]
-	is.Equal(1, implementationTotals.Executions)
-	is.Equal(6*time.Minute, implementationTotals.Duration)
-	is.Equal(60, implementationTotals.Usage.TotalTokens)
-	is.Equal(1, implementationTotals.KnownUsageTasks)
-	is.Zero(implementationTotals.UnknownUsage)
-
-	conflictTotals := period.TotalsByPurpose[taskstate.AgentExecutionPurposeSyncConflictResolution]
-	is.Equal(1, conflictTotals.Executions)
-	is.Equal(12*time.Minute, conflictTotals.Duration)
-	is.Equal(150, conflictTotals.Usage.TotalTokens)
-	is.Equal(1, conflictTotals.KnownUsageTasks)
-	is.Zero(conflictTotals.UnknownUsage)
+	conflictOnly, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{Group: taskstats.GroupDay, View: taskstats.ViewConsumption, From: &startedAt})
+	must.Empty(failures)
+	must.Len(conflictOnly.Periods, 1)
+	is.Equal(1, conflictOnly.Periods[0].Executions)
+	is.Equal(150, conflictOnly.Periods[0].Tokens.Total)
 }
 
 func TestAggregateImplementationViewUsesAgentDoneDurationAndKeepsKnownUsage(t *testing.T) {
@@ -474,48 +458,37 @@ func TestAggregateImplementationViewUsesAgentDoneDurationAndKeepsKnownUsage(t *t
 	is.Equal(2, period.Tokens.Samples)
 }
 
-func TestAggregateImplementationViewKeepsPartialKnownConsumptionTotals(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	snapshot, loader := partialKnownConsumptionFixture()
+func TestAggregateViewsKeepPartialKnownTotalsWithoutClaimingCompleteSamples(t *testing.T) {
+	for _, view := range []taskstats.View{taskstats.ViewImplementation, taskstats.ViewConsumption} {
+		for _, finished := range []bool{false, true} {
+			t.Run(string(view)+"/second execution finished="+fmt.Sprint(finished), func(t *testing.T) {
+				snapshot, loader := partialKnownConsumptionFixture()
+				if finished {
+					state := loader.states["alpha/op-partial"]
+					end := state.Runs[1].Execution.StartedAt.Add(30 * time.Minute)
+					state.Runs[1].Execution.FinishedAt = &end
+					loader.states["alpha/op-partial"] = state
+				}
+				got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{Group: taskstats.GroupDay, View: view})
 
-	got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{
-		Group: taskstats.GroupDay,
-		View:  taskstats.ViewImplementation,
-	})
-
-	must.Empty(failures)
-	must.Len(got.Periods, 1)
-	period := got.Periods[0]
-	is.Equal(150, period.Tokens.Total)
-	is.Zero(period.Tokens.Known)
-	is.Equal(1, period.Tokens.Samples)
-	is.Equal(int64(625), period.Cost.TotalMicroUSD)
-	is.Zero(period.Cost.Known)
-	is.Equal(1, period.Cost.Samples)
-}
-
-func TestAggregateConsumptionViewKeepsPartialKnownConsumptionTotals(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	snapshot, loader := partialKnownConsumptionFixture()
-
-	got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{
-		Group: taskstats.GroupDay,
-		View:  taskstats.ViewConsumption,
-	})
-
-	must.Empty(failures)
-	must.Len(got.Periods, 1)
-	period := got.Periods[0]
-	is.Equal(1, period.Tasks)
-	is.Equal(2, period.Executions)
-	is.Equal(150, period.Tokens.Total)
-	is.Zero(period.Tokens.Known)
-	is.Equal(1, period.Tokens.Samples)
-	is.Equal(int64(625), period.Cost.TotalMicroUSD)
-	is.Zero(period.Cost.Known)
-	is.Equal(1, period.Cost.Samples)
+				require.Empty(t, failures)
+				require.Len(t, got.Periods, 1)
+				period := got.Periods[0]
+				assert.Equal(t, 150, period.Tokens.Total)
+				assert.Zero(t, period.Tokens.Known)
+				assert.Equal(t, 1, period.Tokens.Samples)
+				assert.Zero(t, period.Tokens.Median)
+				assert.Equal(t, int64(625), period.Cost.TotalMicroUSD)
+				assert.Zero(t, period.Cost.Known)
+				assert.Equal(t, 1, period.Cost.Samples)
+				assert.Zero(t, period.Cost.MedianMicroUSD)
+				if view == taskstats.ViewConsumption {
+					assert.Equal(t, 1, period.Tasks)
+					assert.Equal(t, 2, period.Executions)
+				}
+			})
+		}
+	}
 }
 
 func TestAggregateReviewViewSumsReviewActivityWithoutFollowUpGap(t *testing.T) {
@@ -634,69 +607,6 @@ func TestAggregateReviewViewSeparatesRepairCyclesAndOperationalOutcomes(t *testi
 	is.Equal(2, period.PausedReviews)
 	is.Equal(0, period.ReviewTime.Known)
 	is.Equal(1, period.ReviewTime.Samples)
-}
-
-func TestAggregateReportFromSnapshotExcludesPartialUnknownTaskFromAverages(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-
-	closedAt := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
-	startedAt := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
-	finishedAt := time.Date(2026, 7, 2, 10, 30, 0, 0, time.UTC)
-	secondFinishedAt := time.Date(2026, 7, 2, 11, 30, 0, 0, time.UTC)
-
-	snapshot := taskmodel.SnapshotResult{
-		Repositories: []taskmodel.RepositorySnapshot{{
-			Repository: taskmodel.Repository{ID: "alpha", Name: "Alpha"},
-			Tasks: []taskmodel.Task{
-				{ID: "op-partial", ClosedAt: &closedAt},
-			},
-		}},
-	}
-	loader := fakeStateLoader{
-		states: map[string]taskstate.TaskState{
-			"alpha/op-partial": {
-				Runs: []taskstate.RunAttempt{
-					{
-						Execution: taskstate.AgentExecution{
-							Model:      "gpt-5",
-							StartedAt:  startedAt,
-							FinishedAt: &finishedAt,
-							Usage: &taskstate.AgentUsage{
-								InputTokens:  100,
-								OutputTokens: 50,
-								TotalTokens:  150,
-							},
-						},
-					},
-					{
-						Execution: taskstate.AgentExecution{
-							Model:      "gpt-5",
-							StartedAt:  startedAt.Add(time.Hour),
-							FinishedAt: &secondFinishedAt,
-						},
-					},
-				},
-			},
-		},
-	}
-
-	got, failures := taskstats.AggregateReportFromSnapshot(snapshot, loader, taskstats.GroupDay)
-
-	must.Empty(failures)
-	must.Len(got.Periods, 1)
-
-	period := got.Periods[0]
-	is.Equal(150, period.Totals.Usage.TotalTokens)
-	is.Zero(period.Totals.KnownUsageTasks)
-	is.Equal(1, period.Totals.UnknownUsage)
-	_, ok := period.AverageTokenCount()
-	is.False(ok)
-	is.Equal(int64(625), period.Totals.CostMicroUSD)
-	is.Zero(period.Totals.KnownCostTasks)
-	is.Equal(1, period.Totals.UnknownCost)
-	_, ok = period.AverageCostMicroUSD()
-	is.False(ok)
 }
 
 func TestAggregateImplementationModelViewSeparatesOutcomesAndUsageAttribution(t *testing.T) {
@@ -997,58 +907,39 @@ func TestAggregateReviewerModelViewKeepsManualOnlyAndMixedCohortsVisible(t *test
 	is.Equal(70, claude.Tokens.Total)
 }
 
-func TestAggregateReviewerModelViewTreatsAgentReviewWithoutExecutionAsUnknown(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	snapshot, loader := missingReviewerExecutionFixture()
+func TestAggregateReviewerViewsPreserveUnknownIdentityAndKnownSparseUsage(t *testing.T) {
+	for _, tt := range []struct {
+		view                       taskstats.View
+		prefix                     string
+		unknownTokens, mixedTokens int
+	}{
+		{view: taskstats.ViewReviewerModel},
+		{view: taskstats.ViewModelPair, prefix: "gpt-5/", unknownTokens: 100, mixedTokens: 75},
+	} {
+		t.Run(string(tt.view), func(t *testing.T) {
+			snapshot, loader := missingReviewerExecutionFixture()
 
-	got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{
-		Group: taskstats.GroupDay,
-		View:  taskstats.ViewReviewerModel,
-	})
+			got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{Group: taskstats.GroupDay, View: tt.view})
 
-	must.Empty(failures)
-	unknown := modelCohortByKey(t, got.Cohorts, "unknown")
-	is.Equal(1, unknown.Tasks)
-	is.Equal(1, unknown.FirstPassApprovals)
-	is.Zero(unknown.Tokens.Samples)
-
-	mixed := modelCohortByKey(t, got.Cohorts, "mixed")
-	is.Equal(1, mixed.Tasks)
-	is.Equal(1, mixed.BlockingFindings)
-	is.Zero(mixed.Tokens.Samples)
-
-	gpt := modelCohortByKey(t, got.Cohorts, "reviewer-gpt")
-	is.Zero(gpt.Tasks)
-	is.Equal(50, gpt.Tokens.Total)
-	assertNoModelCohort(t, got.Cohorts, "manual-only")
-}
-
-func TestAggregateModelPairViewTreatsAgentReviewWithoutExecutionAsUnknown(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	snapshot, loader := missingReviewerExecutionFixture()
-
-	got, failures := taskstats.AggregateReportFromSnapshotWithOptions(snapshot, loader, taskstats.AggregateReportOptions{
-		Group: taskstats.GroupDay,
-		View:  taskstats.ViewModelPair,
-	})
-
-	must.Empty(failures)
-	unknownPair := modelCohortByKey(t, got.Cohorts, "gpt-5/unknown")
-	is.Equal(1, unknownPair.Tasks)
-	is.Equal(1, unknownPair.FirstPassApprovals)
-	is.Equal(100, unknownPair.Tokens.Total)
-
-	mixedPair := modelCohortByKey(t, got.Cohorts, "gpt-5/mixed")
-	is.Equal(1, mixedPair.Tasks)
-	is.Equal(1, mixedPair.BlockingFindings)
-	is.Equal(75, mixedPair.Tokens.Total)
-
-	gptSparse := modelCohortByKey(t, got.Cohorts, "gpt-5/reviewer-gpt")
-	is.Zero(gptSparse.Tasks)
-	is.Equal(50, gptSparse.Tokens.Total)
-	assertNoModelCohort(t, got.Cohorts, "gpt-5/manual-only")
+			require.Empty(t, failures)
+			unknown := modelCohortByKey(t, got.Cohorts, tt.prefix+"unknown")
+			assert.Equal(t, 1, unknown.Tasks)
+			assert.Equal(t, 1, unknown.FirstPassApprovals)
+			assert.Equal(t, tt.unknownTokens, unknown.Tokens.Total)
+			mixed := modelCohortByKey(t, got.Cohorts, tt.prefix+"mixed")
+			assert.Equal(t, 1, mixed.Tasks)
+			assert.Equal(t, 1, mixed.BlockingFindings)
+			assert.Equal(t, tt.mixedTokens, mixed.Tokens.Total)
+			sparse := modelCohortByKey(t, got.Cohorts, tt.prefix+"reviewer-gpt")
+			assert.Zero(t, sparse.Tasks)
+			assert.Equal(t, 50, sparse.Tokens.Total)
+			if tt.view == taskstats.ViewReviewerModel {
+				assert.Zero(t, unknown.Tokens.Samples)
+				assert.Zero(t, mixed.Tokens.Samples)
+			}
+			assertNoModelCohort(t, got.Cohorts, tt.prefix+"manual-only")
+		})
+	}
 }
 
 func TestAggregateModelPairViewCombinesSamePairUsagePerTask(t *testing.T) {
@@ -1435,24 +1326,6 @@ func assertNoModelCohort(t *testing.T, cohorts []taskstats.AggregateModelCohort,
 			require.Failf(t, "unexpected model cohort", "key %q found in %#v", key, cohorts)
 		}
 	}
-}
-
-func assertDurationValue(t *testing.T, got time.Duration, ok bool, want time.Duration) {
-	t.Helper()
-	require.True(t, ok)
-	assert.Equal(t, want, got)
-}
-
-func assertIntValue(t *testing.T, got int, ok bool, want int) {
-	t.Helper()
-	require.True(t, ok)
-	assert.Equal(t, want, got)
-}
-
-func assertInt64Value(t *testing.T, got int64, ok bool, want int64) {
-	t.Helper()
-	require.True(t, ok)
-	assert.Equal(t, want, got)
 }
 
 type recordingStateLoader struct {

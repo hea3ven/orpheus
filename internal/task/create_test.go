@@ -37,38 +37,50 @@ func (b *fakeCreateBackend) Create(_ context.Context, opts task.CreateOptions) (
 }
 
 func TestCreateServiceCreatesValidatedTaskGraphItem(t *testing.T) {
-	backend := &fakeCreateBackend{tasks: map[string]task.Task{
-		"op-parent": {ID: "op-parent", IssueType: task.IssueTypeEpic, Status: task.StatusOpen},
-		"op-dep":    {ID: "op-dep", IssueType: task.IssueTypeTask, Status: task.StatusClosed},
-	}}
-	source := createTestSource("alpha", "op", testutil.CanonicalTempDir(t))
-	service := task.CreateService{
-		Sources:        []task.RepositorySource{source},
-		BackendFactory: func(task.RepositorySource) (task.CreateBackend, error) { return backend, nil },
-	}
+	for _, itemType := range []struct {
+		name            string
+		requested, want task.IssueType
+	}{
+		{name: "default task", want: task.IssueTypeTask},
+		{name: "explicit task", requested: task.IssueTypeTask, want: task.IssueTypeTask},
+		{name: "epic", requested: task.IssueTypeEpic, want: task.IssueTypeEpic},
+	} {
+		t.Run(itemType.name, func(t *testing.T) {
+			backend := &fakeCreateBackend{tasks: map[string]task.Task{
+				"op-parent": {ID: "op-parent", IssueType: task.IssueTypeEpic, Status: task.StatusOpen},
+				"op-dep":    {ID: "op-dep", IssueType: task.IssueTypeTask, Status: task.StatusClosed},
+			}}
+			source := createTestSource("alpha", "op", testutil.CanonicalTempDir(t))
+			service := task.CreateService{
+				Sources:        []task.RepositorySource{source},
+				BackendFactory: func(task.RepositorySource) (task.CreateBackend, error) { return backend, nil },
+			}
 
-	created, err := service.Create(context.Background(), source, task.CreateRequest{
-		Title:              " Implement graph ",
-		Description:        " Build the graph. ",
-		Design:             " Keep it neutral. ",
-		AcceptanceCriteria: " It works. ",
-		ExternalRef:        " PLAN-7 ",
-		ParentID:           " op-parent ",
-		BlockingIDs:        []string{" op-dep ", "op-dep"},
-	})
-	if err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
-	if created.ID != "op-new" || created.IssueType != task.IssueTypeTask {
-		t.Fatalf("created = %#v", created)
-	}
-	want := task.CreateOptions{
-		Title: "Implement graph", Description: "Build the graph.", Design: "Keep it neutral.",
-		AcceptanceCriteria: "It works.", ExternalRef: "PLAN-7", IssueType: task.IssueTypeTask,
-		ParentID: "op-parent", BlockingIDs: []string{"op-dep"},
-	}
-	if !reflect.DeepEqual(backend.created, want) {
-		t.Fatalf("backend options = %#v, want %#v", backend.created, want)
+			created, err := service.Create(context.Background(), source, task.CreateRequest{
+				IssueType:          itemType.requested,
+				Title:              " Implement graph ",
+				Description:        " Build the graph. ",
+				Design:             " Keep it neutral. ",
+				AcceptanceCriteria: " It works. ",
+				ExternalRef:        " PLAN-7 ",
+				ParentID:           " op-parent ",
+				BlockingIDs:        []string{" op-dep ", "op-dep"},
+			})
+			if err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+			if created.ID != "op-new" || created.IssueType != itemType.want {
+				t.Fatalf("created = %#v", created)
+			}
+			want := task.CreateOptions{
+				Title: "Implement graph", Description: "Build the graph.", Design: "Keep it neutral.",
+				AcceptanceCriteria: "It works.", ExternalRef: "PLAN-7", IssueType: itemType.want,
+				ParentID: "op-parent", BlockingIDs: []string{"op-dep"},
+			}
+			if !reflect.DeepEqual(backend.created, want) {
+				t.Fatalf("backend options = %#v, want %#v", backend.created, want)
+			}
+		})
 	}
 }
 
@@ -146,6 +158,7 @@ func TestCreateServiceRejectsInvalidRelationsBeforeCreate(t *testing.T) {
 		request task.CreateRequest
 		want    string
 	}{
+		{"child waits on own parent", map[string]task.Task{"op-parent": {ID: "op-parent", IssueType: task.IssueTypeEpic, Status: task.StatusOpen}}, task.CreateRequest{ParentID: "op-parent", BlockingIDs: []string{"op-parent"}}, "circular"},
 		{"closed parent", map[string]task.Task{"op-parent": {IssueType: task.IssueTypeEpic, Status: task.StatusClosed}}, task.CreateRequest{ParentID: "op-parent"}, "is closed"},
 		{"non epic parent", map[string]task.Task{"op-parent": {IssueType: task.IssueTypeTask, Status: task.StatusOpen}}, task.CreateRequest{ParentID: "op-parent"}, "must be an epic"},
 		{"missing parent", nil, task.CreateRequest{ParentID: "op-parent"}, "was not found"},
@@ -207,35 +220,40 @@ func TestCreateServiceRejectsAmbiguousDependenciesRegardlessOfSourceOrder(t *tes
 				request.Title, request.Description, request.AcceptanceCriteria = "title", "description", "acceptance"
 
 				_, err := service.Create(context.Background(), long, request)
-				if relation.name == "blocking dependency" || relation.name == "parent" {
-					if !errors.Is(err, task.ErrAmbiguousTaskPrefix) {
-						t.Fatalf("Create() error = %v, want ambiguous prefix", err)
-					}
-					if backend.created.Title != "" {
-						t.Fatal("mutated before rejecting ambiguous dependency")
-					}
-				} else if err != nil {
-					t.Fatal(err)
+				if !errors.Is(err, task.ErrAmbiguousTaskPrefix) {
+					t.Fatalf("Create() error = %v, want ambiguous prefix", err)
+				}
+				if backend.created.Title != "" {
+					t.Fatal("mutated before rejecting ambiguous dependency")
 				}
 			})
 		}
 	}
 }
 
-func TestNormalizeCreateOptionsRequiresTaskCreationFields(t *testing.T) {
-	for _, opts := range []task.CreateOptions{
-		{Description: "description", AcceptanceCriteria: "acceptance"},
-		{Title: "title", AcceptanceCriteria: "acceptance"},
-		{Title: "title", Description: "description"},
-		{Title: "title", Description: "description", AcceptanceCriteria: "acceptance", IssueType: task.IssueTypeBug},
+func TestCreateServiceRequiresPlanningFieldsBeforeMutation(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		request task.CreateRequest
+		want    string
+	}{
+		{name: "missing title", request: task.CreateRequest{Description: "description", AcceptanceCriteria: "acceptance"}, want: "title"},
+		{name: "missing description", request: task.CreateRequest{Title: "title", AcceptanceCriteria: "acceptance"}, want: "description"},
+		{name: "missing acceptance", request: task.CreateRequest{Title: "title", Description: "description"}, want: "acceptance"},
+		{name: "unsupported type", request: task.CreateRequest{Title: "title", Description: "description", AcceptanceCriteria: "acceptance", IssueType: task.IssueTypeBug}, want: "unsupported item type"},
 	} {
-		if _, err := task.NormalizeCreateOptions(opts); err == nil {
-			t.Fatalf("NormalizeCreateOptions(%#v) succeeded", opts)
-		}
-	}
-	got, err := task.NormalizeCreateOptions(task.CreateOptions{Title: "title", Description: "description", AcceptanceCriteria: "acceptance", IssueType: task.IssueTypeEpic})
-	if err != nil || got.IssueType != task.IssueTypeEpic {
-		t.Fatalf("NormalizeCreateOptions epic = %#v, %v", got, err)
+		t.Run(tt.name, func(t *testing.T) {
+			source := createTestSource("alpha", "op", "/fixture/alpha")
+			backend := &fakeCreateBackend{}
+			service := task.CreateService{Sources: []task.RepositorySource{source}, BackendFactory: func(task.RepositorySource) (task.CreateBackend, error) { return backend, nil }}
+			_, err := service.Create(t.Context(), source, tt.request)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("create error = %v, want %q", err, tt.want)
+			}
+			if backend.created.Title != "" {
+				t.Fatalf("invalid request mutated backend: %#v", backend.created)
+			}
+		})
 	}
 }
 

@@ -89,6 +89,8 @@ func TestIntegrationWorkflowTaskRunRepeatedAutomatedPausePreservesDecisionTarget
 					require.Len(t, latest.Findings, 1)
 					assert.Equal(t, "Accepted risk.", latest.Findings[0].Waiver)
 				case "restart":
+					require.Len(t, latest.Steps, 3)
+					assert.Equal(t, "pending", latest.Steps[1].Name)
 					assert.Empty(t, latest.Findings)
 				}
 				assert.Equal(t, wantChecks, fixture.checkCalls)

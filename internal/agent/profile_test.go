@@ -214,81 +214,61 @@ func TestLoadConfigBuildsStructuredPiCommands(t *testing.T) {
 	}, reviewer.Args)
 }
 
-func TestLoadConfigBuildsStructuredCommandsWithPromptAppend(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	paths := newAgentTestPaths(t)
-	must.NoError(testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
-		"agents": map[string]any{
-			"defaults": map[string]any{
-				"implementer": "codex-arch",
-				"reviewer":    "pi-review",
-			},
-			"profiles": map[string]any{
-				"codex-arch": map[string]any{
-					"harness":       "codex",
-					"model":         "gpt-5.4",
-					"prompt_append": "Focus on architecture boundaries.",
+func TestLoadedStructuredCommandsAppendInstructionsAfterBootstrap(t *testing.T) {
+	for _, tc := range []struct {
+		name, harness, model, append string
+		interactive                  bool
+	}{
+		{"codex custom", "codex", "gpt-5.4", "Focus on architecture boundaries.", true},
+		{"pi custom", "pi", "openai-codex/gpt-5.4-mini", "Review module boundaries.\nCall out dependency direction risks.\n", false},
+		{"pi blank", "pi", "openai-codex/gpt-5.5", " \n\t ", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			paths := newAgentTestPaths(t)
+			require.NoError(t, testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
+				"agents": map[string]any{
+					"defaults": map[string]any{"implementer": "configured"},
+					"profiles": map[string]any{"configured": map[string]any{
+						"harness": tc.harness, "model": tc.model, "interactive": tc.interactive, "prompt_append": tc.append,
+					}},
 				},
-				"pi-review": map[string]any{
-					"harness":       "pi",
-					"model":         "openai-codex/gpt-5.4-mini",
-					"interactive":   false,
-					"prompt_append": "Review module boundaries.\nCall out dependency direction risks.\n",
-				},
-			},
-		},
-	}))
+			}))
+			config, err := agent.LoadConfig(paths)
+			require.NoError(t, err)
 
-	config, err := agent.LoadConfig(paths)
-	must.NoError(err)
+			snapshot, err := config.ResolveCommandWithValues("", agent.InterpolationValues{SessionName: "Architecture task"})
 
-	impl, err := config.ResolveCommandWithValues("", agent.InterpolationValues{
-		SessionName: "Implementing op-1 Architecture task",
-	})
-	must.NoError(err)
-	codexPrompt := "Implementing op-1 Architecture task - " +
-		agent.RenderEffectivePrompt("Focus on architecture boundaries.")
-	is.Equal(codexPrompt, impl.Prompt)
-	is.Equal(codexPrompt, impl.Args[len(impl.Args)-1])
-	is.Equal("codex", impl.Harness)
-	is.Equal("gpt-5.4", impl.Model)
-
-	reviewer, err := config.ResolveReviewerCommandWithValues("", agent.InterpolationValues{
-		SessionName: "Reviewing op-1 Architecture task",
-	})
-	must.NoError(err)
-	piPrompt := agent.RenderEffectivePrompt("Review module boundaries.\nCall out dependency direction risks.")
-	is.Equal(piPrompt, reviewer.Prompt)
-	is.Equal(piPrompt, reviewer.Args[len(reviewer.Args)-1])
-	is.Equal([]string{
-		"--print",
-		"--model",
-		"openai-codex/gpt-5.4-mini",
-		"--name",
-		"Reviewing op-1 Architecture task",
-		piPrompt,
-	}, reviewer.Args)
-}
-
-func TestStructuredBlankPromptAppendPreservesBootstrapPrompt(t *testing.T) {
-	is := assert.New(t)
-	config := agent.Config{
-		Defaults: agent.AgentDefaults{Implementer: "pi"},
-		Agents: map[string]agent.Profile{
-			"pi": {
-				Harness:      "pi",
-				Model:        "openai-codex/gpt-5.5",
-				PromptAppend: " \n\t ",
-			},
-		},
+			require.NoError(t, err)
+			require.NotEmpty(t, snapshot.Args)
+			prompt := snapshot.Args[len(snapshot.Args)-1]
+			assert.Equal(t, snapshot.Prompt, prompt)
+			assert.Equal(t, tc.harness, snapshot.Harness)
+			assert.Equal(t, tc.model, snapshot.Model)
+			assert.Contains(t, snapshot.Args, tc.model)
+			assert.Contains(t, prompt, "Run `orpheus agent context` now")
+			assert.Equal(t, 1, strings.Count(prompt, "Run `orpheus agent context` now"))
+			marker := strings.TrimSpace(tc.append)
+			if marker == "" {
+				assert.NotContains(t, prompt, "Supplemental instructions:")
+				assert.True(t, strings.HasSuffix(prompt, agent.RenderBootstrapPrompt()))
+			} else {
+				assert.Equal(t, 1, strings.Count(prompt, marker))
+				assert.Contains(t, prompt, "\nSupplemental instructions:\n"+marker)
+				assert.Less(t, strings.Index(prompt, "Run `orpheus agent context` now"), strings.Index(prompt, marker))
+			}
+			if tc.harness == "pi" {
+				assert.Contains(t, snapshot.Args, "--name")
+				assert.Contains(t, snapshot.Args, "Architecture task")
+				if tc.interactive {
+					assert.NotContains(t, snapshot.Args, "--print")
+				} else {
+					assert.Contains(t, snapshot.Args, "--print")
+				}
+			} else {
+				assert.True(t, strings.HasPrefix(prompt, "Architecture task - "))
+			}
+		})
 	}
-
-	snapshot, err := config.ResolveCommand("")
-
-	require.NoError(t, err)
-	is.Equal(agent.RenderBootstrapPrompt(), snapshot.Prompt)
-	is.Equal(agent.RenderBootstrapPrompt(), snapshot.Args[len(snapshot.Args)-1])
 }
 
 func TestLoadConfigLeavesRawCodexCommandGeneric(t *testing.T) {
@@ -375,16 +355,17 @@ func TestLoadConfigResolvesNestedImplementerDefault(t *testing.T) {
 	config, err := agent.LoadConfig(paths)
 	must.NoError(err)
 
-	snapshot, err := config.ResolveImplementerCommand("")
-	must.NoError(err)
-	is.Equal("impl", snapshot.AgentName)
-	is.Equal("codex", snapshot.Command)
-	is.Equal([]string{agent.RenderBootstrapPrompt()}, snapshot.Args)
-
-	override, err := config.ResolveImplementerCommand("other")
-	must.NoError(err)
-	is.Equal("other", override.AgentName)
-	is.Equal("other", override.Command)
+	for _, tc := range []struct{ override, wantName, wantCommand string }{
+		{"", "impl", "codex"}, {"other", "other", "other"}, {" other ", "other", "other"},
+	} {
+		snapshot, err := config.ResolveImplementerCommand(tc.override)
+		must.NoError(err)
+		is.Equal(tc.wantName, snapshot.AgentName)
+		is.Equal(tc.wantCommand, snapshot.Command)
+		if tc.wantName == "impl" {
+			is.Equal([]string{agent.RenderBootstrapPrompt()}, snapshot.Args)
+		}
+	}
 }
 
 func TestResolveReviewerCommandUsesReviewerDefaultOrOverride(t *testing.T) {
@@ -428,43 +409,28 @@ func TestResolveReviewerCommandRequiresReviewerDefaultWithoutOverride(t *testing
 	}
 }
 
-func TestResolveSyncConflictResolverCommandUsesDedicatedDefault(t *testing.T) {
-	is := assert.New(t)
-	config := agent.Config{
-		Defaults: agent.AgentDefaults{
-			Implementer:          "impl",
-			SyncConflictResolver: "sync-resolver",
-		},
-		Agents: map[string]agent.Profile{
-			"impl":          {Command: "impl-agent"},
-			"sync-resolver": {Command: "resolver-agent", Args: []string{"{{session_name}}", "{{prompt}}"}},
-		},
+func TestResolveSyncConflictResolverCommandPrecedence(t *testing.T) {
+	for _, tc := range []struct{ name, dedicated, wantName, wantCommand string }{
+		{"dedicated", "sync-resolver", "sync-resolver", "resolver-agent"},
+		{"implementer fallback", "", "impl", "impl-agent"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := agent.Config{
+				Defaults: agent.AgentDefaults{Implementer: "impl", SyncConflictResolver: tc.dedicated},
+				Agents: map[string]agent.Profile{
+					"impl":          {Command: "impl-agent", Args: []string{"{{session_name}}", "{{prompt}}"}},
+					"sync-resolver": {Command: "resolver-agent", Args: []string{"{{session_name}}", "{{prompt}}"}},
+				},
+			}
+
+			snapshot, err := config.ResolveSyncConflictResolverCommand(agent.InterpolationValues{SessionName: "sync-conflict-op-1"})
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantName, snapshot.AgentName)
+			assert.Equal(t, tc.wantCommand, snapshot.Command)
+			assert.Equal(t, []string{"sync-conflict-op-1", agent.RenderBootstrapPrompt()}, snapshot.Args)
+		})
 	}
-
-	snapshot, err := config.ResolveSyncConflictResolverCommand(agent.InterpolationValues{
-		SessionName: "sync-conflict-op-1",
-	})
-
-	require.NoError(t, err)
-	is.Equal("sync-resolver", snapshot.AgentName)
-	is.Equal("resolver-agent", snapshot.Command)
-	is.Equal([]string{"sync-conflict-op-1", agent.RenderBootstrapPrompt()}, snapshot.Args)
-}
-
-func TestResolveSyncConflictResolverCommandFallsBackToImplementerDefault(t *testing.T) {
-	is := assert.New(t)
-	config := agent.Config{
-		Defaults: agent.AgentDefaults{Implementer: "impl"},
-		Agents: map[string]agent.Profile{
-			"impl": {Command: "impl-agent"},
-		},
-	}
-
-	snapshot, err := config.ResolveSyncConflictResolverCommand(agent.InterpolationValues{})
-
-	require.NoError(t, err)
-	is.Equal("impl", snapshot.AgentName)
-	is.Equal("impl-agent", snapshot.Command)
 }
 
 func TestLoadConfigReportsMissingFileWithSetupGuidance(t *testing.T) {
@@ -631,24 +597,6 @@ func TestConfigValidationErrorsAreActionable(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestResolveCommandSelectsNamedAgent(t *testing.T) {
-	is := assert.New(t)
-	config := agent.Config{
-		Defaults: agent.AgentDefaults{Implementer: "default"},
-		Agents: map[string]agent.Profile{
-			"default": {Command: "default-agent"},
-			"custom":  {Command: "custom-agent", Args: []string{"{{prompt}}"}},
-		},
-	}
-
-	snapshot, err := config.ResolveCommand(" custom ")
-
-	require.NoError(t, err)
-	is.Equal("custom", snapshot.AgentName)
-	is.Equal("custom-agent", snapshot.Command)
-	is.Equal([]string{agent.RenderBootstrapPrompt()}, snapshot.Args)
 }
 
 func newAgentTestPaths(t *testing.T) state.Paths {

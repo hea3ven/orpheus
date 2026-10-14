@@ -8,54 +8,58 @@ import (
 	"github.com/hea3ven/orpheus/internal/tasktarget"
 )
 
-func TestClassifyRunTargetRecognizesRepoRootTaskBranch(t *testing.T) {
+func TestClassifyRunTargetDescribesShapeWithoutAuthorizingTarget(t *testing.T) {
 	repo := task.Repository{Path: "/repo/alpha", DefaultBranch: "main"}
-
-	got := tasktarget.ClassifyRunTarget(repo, "orpheus/op-1", "/repo/alpha")
-
-	if got != tasktarget.TargetRepoRootTeam {
-		t.Fatalf("shape target = %q, want %q", got, tasktarget.TargetRepoRootTeam)
+	for _, tc := range []struct {
+		name, branch, worktree string
+		want                   tasktarget.TargetKind
+	}{
+		{"main", "main", "/repo/alpha", tasktarget.TargetMainSolo},
+		{"repository task branch", "orpheus/op-1", "/repo/alpha", tasktarget.TargetRepoRootTeam},
+		{"managed worktree", "orpheus/op-1", "/state/worktrees/alpha/op-1", tasktarget.TargetWorktreeTeam},
+		{"unmanaged diagnostic shape", "manual/op-1", "/fixture/manual-worktree", tasktarget.TargetWorktreeTeam},
+		{"default branch outside root", "main", "/fixture/manual-worktree", tasktarget.TargetUnknown},
+		{"missing branch", "", "/repo/alpha", tasktarget.TargetUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tasktarget.ClassifyRunTarget(repo, tc.branch, tc.worktree); got != tc.want {
+				t.Fatalf("shape = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
-func TestClassifyRunTargetRemainsShapeOnlyForDiagnostics(t *testing.T) {
-	repo := task.Repository{Path: "/repo/alpha", DefaultBranch: "main"}
-
-	got := tasktarget.ClassifyRunTarget(repo, "manual/op-1", "/fixture/manual-worktree")
-
-	if got != tasktarget.TargetWorktreeTeam {
-		t.Fatalf("shape target = %q, want %q", got, tasktarget.TargetWorktreeTeam)
-	}
-}
-
-func TestClassifyMetadataTargetMatchesExpectedTargets(t *testing.T) {
+func TestStrictTargetClassifiersMatchOnlyExpectedBranchAndLocation(t *testing.T) {
 	targets := testExpectedTargets()
-	metadata := task.OrpheusMetadata{
-		Branch:      "orpheus/op-1",
-		HasBranch:   true,
-		Worktree:    "/state/worktrees/alpha/op-1",
-		HasWorktree: true,
-	}
+	for _, tc := range []struct {
+		name, branch, worktree string
+		want                   tasktarget.Target
+		valid                  bool
+	}{
+		{"main", "main", "/repo/alpha", targets.MainSolo, true},
+		{"worktree", "orpheus/op-1", "/state/worktrees/alpha/op-1", targets.WorktreeTeam, true},
+		{"repo root", "orpheus/op-1", "/repo/alpha", targets.RepoRootTeam, true},
+		{"manual branch", "manual/op-1", "/state/worktrees/alpha/op-1", tasktarget.Target{}, false},
+		{"manual location", "orpheus/op-1", "/fixture/manual-worktree", tasktarget.Target{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			metadata := task.OrpheusMetadata{Branch: tc.branch, HasBranch: true, Worktree: tc.worktree, HasWorktree: true}
+			fromMetadata, metadataErr := tasktarget.ClassifyMetadataTarget(metadata, targets)
+			fromGit, gitErr := tasktarget.ClassifyGitFacts(taskstate.TaskTarget{Branch: tc.branch, Worktree: tc.worktree}, targets)
 
-	got, err := tasktarget.ClassifyMetadataTarget(metadata, targets)
-	if err != nil {
-		t.Fatalf("classify metadata target: %v", err)
-	}
-	if got != targets.WorktreeTeam {
-		t.Fatalf("target = %#v, want %#v", got, targets.WorktreeTeam)
-	}
-}
-
-func TestClassifyGitFactsMatchesExpectedTargets(t *testing.T) {
-	targets := testExpectedTargets()
-	taskTarget := taskstate.TaskTarget{Branch: "orpheus/op-1", Worktree: "/repo/alpha"}
-
-	got, err := tasktarget.ClassifyGitFacts(taskTarget, targets)
-	if err != nil {
-		t.Fatalf("classify taskstate target: %v", err)
-	}
-	if got != targets.RepoRootTeam {
-		t.Fatalf("target = %#v, want %#v", got, targets.RepoRootTeam)
+			if !tc.valid {
+				if metadataErr == nil || gitErr == nil {
+					t.Fatalf("invalid target accepted: metadata error = %v, Git error = %v", metadataErr, gitErr)
+				}
+				return
+			}
+			if metadataErr != nil || gitErr != nil {
+				t.Fatalf("classify: metadata error = %v, Git error = %v", metadataErr, gitErr)
+			}
+			if fromMetadata != tc.want || fromGit != tc.want {
+				t.Fatalf("metadata = %#v, Git = %#v, want %#v", fromMetadata, fromGit, tc.want)
+			}
+		})
 	}
 }
 
