@@ -68,20 +68,6 @@ func TestIntegrationWorkflowTaskRunMissingExternalReferenceBlocksSetup(t *testin
 	}
 }
 
-func TestIntegrationWorkflowTaskRunRejectsChildOfInactiveEpicBeforeSetup(t *testing.T) {
-	parent := anOpenEpic("op-parent")
-	fixture := newTaskWorkflowFixture(t, parent, anOpenChildTask("op-child", parent.ID))
-
-	stdout, stderr, err := fixture.execute("task", "run", "op-child")
-
-	assert.ErrorContains(t, err, "immediate parent epic op-parent is open")
-	assert.ErrorContains(t, err, "immediate parent epic must be in_progress")
-	assert.Empty(t, stdout)
-	assert.Empty(t, stderr)
-	final, _ := fixture.loadFinalTask("op-child")
-	fixture.assertDispatchDidNotStart(final)
-}
-
 func TestIntegrationWorkflowTaskRunRepoRootDispatchLocksTargetAndRejectsModeOverrideOnRetry(t *testing.T) {
 	fixture := newTaskWorkflowFixture(t, anOpenTask("op-root"))
 	fixture.withAgentExitingWithoutCompletion(1)
@@ -296,25 +282,6 @@ func TestIntegrationWorkflowTaskRunHeaderFailurePreventsLaunchAndRecordsFailedSt
 	assert.NotNil(t, final.Runs[0].Execution.FinishedAt)
 	assertEventTypes(t, final.Events, taskstate.EventWorktreeCreated, taskstate.EventRunStarted, taskstate.EventRunStartFailed)
 	assert.Contains(t, final.Events[2].Error, "output unavailable")
-}
-
-func TestIntegrationWorkflowTaskRunReportsActiveAttemptWithoutAnotherDispatch(t *testing.T) {
-	fixture := newTaskWorkflowFixture(t, anInProgressTask("op-active"))
-	fixture.seedRunningAttempt("op-active", 100, 101)
-	fixture.options.Dependencies.ProcessProbe = func(int) (agentexec.ProcessLiveness, error) { return agentexec.ProcessLive, nil }
-	before, beforeTask := fixture.loadFinalTask("op-active")
-	setups := len(fixture.git.setups)
-
-	stdout, stderr, err := fixture.execute("task", "run", "op-active")
-
-	require.NoError(t, err)
-	assert.Contains(t, stdout, "implementation attempt 1 is active")
-	assert.Empty(t, stderr)
-	final, finalTask := fixture.loadFinalTask("op-active")
-	assert.Equal(t, before, final)
-	assert.Equal(t, beforeTask, finalTask)
-	assert.Len(t, fixture.git.setups, setups)
-	assert.Empty(t, fixture.agent.launches)
 }
 
 func (f *taskWorkflowFixture) withBackendTarget(id, branch, dir string) {

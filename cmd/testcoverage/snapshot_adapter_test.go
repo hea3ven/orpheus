@@ -296,6 +296,10 @@ func TestIntegrationAdapterContractWorkingTreeSnapshotSupportsLinkedWorktreesAnd
 	if err != nil || resolved != base || snapshot.HeadRevision != base {
 		t.Fatalf("linked snapshot = %#v, %s, %v", snapshot, resolved, err)
 	}
+	contents, readErr := os.ReadFile(filepath.Join(runner.work, "merge", "base.txt"))
+	if readErr != nil || string(contents) != "dirty linked checkout\n" {
+		t.Fatalf("linked snapshot content = %q, %v; want exact dirty working-tree bytes", contents, readErr)
+	}
 	if !reflect.DeepEqual(before, snapshotOperatorState(t, linked)) {
 		t.Fatal("linked snapshot changed operator state")
 	}

@@ -9,8 +9,10 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/testutil"
@@ -22,7 +24,7 @@ func TestAggregatorListQueriesReposAndPreservesContext(t *testing.T) {
 		{Repository: task.Repository{ID: "beta", Name: "Beta", TaskIDPrefix: "b"}, BackendDir: "/fixture/beta"},
 	}
 	backends := map[string]fakeReadBackend{
-		"/fixture/alpha": {tasks: []task.Task{{ID: "a-1", Title: "alpha task", IssueType: task.IssueTypeTask, Status: task.StatusOpen}}},
+		"/fixture/alpha": {tasks: []task.Task{{ID: "a-1", Title: "alpha task", IssueType: task.IssueTypeTask, Status: task.StatusOpen}, {ID: "a-closed", IssueType: task.IssueTypeTask, Status: task.StatusClosed}, {ID: "a-epic", IssueType: task.IssueTypeEpic, Status: task.StatusInProgress}}},
 		"/fixture/beta":  {tasks: []task.Task{{ID: "b-1", Title: "beta task", IssueType: task.IssueTypeTask, Status: task.StatusInProgress}}},
 	}
 
@@ -42,41 +44,17 @@ func TestAggregatorListQueriesReposAndPreservesContext(t *testing.T) {
 	if got.HasFailures() {
 		t.Fatalf("failures = %#v, want none", got.Failures)
 	}
-	if len(got.Rows) != 2 {
-		t.Fatalf("rows = %#v, want two task rows", got.Rows)
+	if len(got.Rows) != 3 {
+		t.Fatalf("rows = %#v, want active task and epic rows", got.Rows)
 	}
 	if got.Rows[0].Repository.ID != "alpha" || got.Rows[0].Repository.TaskIDPrefix != "a" || got.Rows[0].Task.ID != "a-1" {
 		t.Fatalf("first row = %#v, want alpha/a/a-1", got.Rows[0])
 	}
-	if got.Rows[1].Repository.ID != "beta" || got.Rows[1].Repository.TaskIDPrefix != "b" || got.Rows[1].Task.ID != "b-1" {
-		t.Fatalf("second row = %#v, want beta/b/b-1", got.Rows[1])
+	if !reflect.DeepEqual(repoTaskIDs(got.Rows), []string{"a-1", "a-epic", "b-1"}) {
+		t.Fatalf("selected rows = %#v", got.Rows)
 	}
-}
-
-func TestAggregatorListFiltersClosedTaskSourceItems(t *testing.T) {
-	repos := []task.RepositorySource{{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}, BackendDir: "/fixture/alpha"}}
-	backend := fakeReadBackend{tasks: []task.Task{
-		{ID: "a-1", Title: "active task", IssueType: task.IssueTypeTask, Status: task.StatusOpen},
-		{ID: "a-2", Title: "closed task", IssueType: task.IssueTypeTask, Status: task.StatusClosed},
-		{ID: "a-4", Title: "epic", IssueType: task.IssueTypeEpic, Status: task.StatusInProgress},
-	}}
-
-	aggregator, err := task.NewAggregator(repos, func(task.RepositorySource) (task.ReadBackend, error) {
-		return backend, nil
-	})
-	if err != nil {
-		t.Fatalf("create aggregator: %v", err)
-	}
-
-	got := aggregator.List(context.Background())
-
-	gotIDs := []string{}
-	for _, row := range got.Rows {
-		gotIDs = append(gotIDs, row.Task.ID)
-	}
-	expectedIDs := []string{"a-1", "a-4"}
-	if !reflect.DeepEqual(gotIDs, expectedIDs) {
-		t.Fatalf("rows = %#v, want active task-source items %v", got.Rows, expectedIDs)
+	if got.Rows[2].Repository.ID != "beta" || got.Rows[2].Repository.TaskIDPrefix != "b" || got.Rows[2].Task.ID != "b-1" {
+		t.Fatalf("last row = %#v, want beta/b/b-1", got.Rows[2])
 	}
 }
 
@@ -183,65 +161,6 @@ func TestAggregatorFilteredSnapshotAddsNonmatchingEpicChildrenAsContext(t *testi
 	}
 }
 
-func TestAggregatorFilteredSnapshotPreservesCrossRepositoryRelationshipOwner(t *testing.T) {
-	alpha := task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}
-	beta := task.Repository{ID: "beta", Name: "Beta", TaskIDPrefix: "b"}
-	alphaBackend := &recordingFilteredReadBackend{tasks: []task.Task{{
-		ID:        "a-selected",
-		Title:     "matching task",
-		IssueType: task.IssueTypeTask,
-		Status:    task.StatusOpen,
-		Relations: task.RelationSummary{DependencyIDs: []string{"b-dependency"}},
-	}}}
-	betaBackend := &recordingFilteredReadBackend{tasks: []task.Task{{
-		ID:        "b-dependency",
-		Title:     "other dependency",
-		IssueType: task.IssueTypeTask,
-		Status:    task.StatusClosed,
-	}}}
-	alphaSource := task.RepositorySource{Repository: alpha, BackendDir: testutil.CanonicalTempDir(t)}
-	betaSource := task.RepositorySource{Repository: beta, BackendDir: testutil.CanonicalTempDir(t)}
-	aggregator, err := task.NewAggregator([]task.RepositorySource{alphaSource, betaSource}, func(source task.RepositorySource) (task.ReadBackend, error) {
-		switch source.Repository.ID {
-		case alpha.ID:
-			return alphaBackend, nil
-		case beta.ID:
-			return betaBackend, nil
-		default:
-			return nil, fmt.Errorf("unexpected repository %q", source.Repository.ID)
-		}
-	})
-	if err != nil {
-		t.Fatalf("create aggregator: %v", err)
-	}
-
-	got, err := aggregator.FilteredSnapshot(context.Background(), task.ListFilter{Query: "matching"})
-	if err != nil {
-		t.Fatalf("filtered snapshot: %v", err)
-	}
-	if got.Snapshot.HasFailures() {
-		t.Fatalf("failures = %#v, want none", got.Snapshot.Failures)
-	}
-	if gotIDs := repoTaskIDs(got.Candidates); !reflect.DeepEqual(gotIDs, []string{"a-selected"}) {
-		t.Fatalf("candidates = %v, want selected task only", gotIDs)
-	}
-
-	var alphaSnapshot task.RepositorySnapshot
-	for _, repository := range got.Snapshot.Repositories {
-		if repository.Repository.ID == alpha.ID {
-			alphaSnapshot = repository
-			break
-		}
-	}
-	if len(alphaSnapshot.RelationshipContextFailures) != 0 {
-		t.Fatalf("failures = %#v", alphaSnapshot.RelationshipContextFailures)
-	}
-	if len(alphaSnapshot.RelationshipTasks) != 1 || alphaSnapshot.RelationshipTasks[0].ID != "b-dependency" || alphaSnapshot.RelationshipTasks[0].Status != task.StatusClosed {
-		t.Fatalf("dependency context = %#v", alphaSnapshot.RelationshipTasks)
-	}
-
-}
-
 func TestAggregatorFilteredSnapshotDistinguishesRelationshipQueryFailure(t *testing.T) {
 	repo := task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"}
 	backend := &recordingFilteredReadBackend{
@@ -309,58 +228,6 @@ func TestAggregatorFilteredSnapshotRecordsParentFailureAfterEarlierDependencyFai
 	}
 	if failures := got.Snapshot.Repositories[0].RelationshipContextFailures; !reflect.DeepEqual(failures, wantFailures) {
 		t.Fatalf("relationship context failures = %#v, want %#v", failures, wantFailures)
-	}
-}
-
-func TestAggregatorSnapshotContinuesAfterRepoFailure(t *testing.T) {
-	queryErr := errors.New("bd list failed")
-	repos := []task.RepositorySource{
-		{Repository: task.Repository{ID: "broken", Name: "Broken", TaskIDPrefix: "br"}, BackendDir: "/fixture/broken"},
-		{Repository: task.Repository{ID: "ok", Name: "OK", TaskIDPrefix: "ok"}, BackendDir: "/fixture/ok"},
-	}
-
-	aggregator, err := task.NewAggregator(repos, func(source task.RepositorySource) (task.ReadBackend, error) {
-		if source.Repository.ID == "broken" {
-			return failingReadBackend{err: queryErr}, nil
-		}
-		return fakeReadBackend{tasks: []task.Task{{ID: "ok-1", Title: "still listed", IssueType: task.IssueTypeTask, Status: task.StatusOpen}}}, nil
-	})
-	if err != nil {
-		t.Fatalf("create aggregator: %v", err)
-	}
-
-	got := aggregator.Snapshot(context.Background())
-
-	if !got.HasFailures() || len(got.Failures) != 1 {
-		t.Fatalf("failures = %#v, want one failure", got.Failures)
-	}
-	failure := got.Failures[0]
-	if failure.Repository.ID != "broken" || failure.Source != "task_backend" || failure.Operation != "snapshot" || !errors.Is(failure.Err, queryErr) {
-		t.Fatalf("failure = %#v, want structured broken snapshot error", failure)
-	}
-	if len(got.Repositories) != 1 || got.Repositories[0].Tasks[0].ID != "ok-1" {
-		t.Fatalf("repositories = %#v, want successful snapshot row", got.Repositories)
-	}
-}
-
-func TestAggregatorReportsBackendCreationFailure(t *testing.T) {
-	factoryErr := errors.New("backend unavailable")
-	repos := []task.RepositorySource{{Repository: task.Repository{ID: "broken", Name: "Broken", TaskIDPrefix: "br"}, BackendDir: "/fixture/broken"}}
-
-	aggregator, err := task.NewAggregator(repos, func(task.RepositorySource) (task.ReadBackend, error) {
-		return nil, factoryErr
-	})
-	if err != nil {
-		t.Fatalf("create aggregator: %v", err)
-	}
-
-	got := aggregator.Snapshot(context.Background())
-
-	if len(got.Repositories) != 0 {
-		t.Fatalf("repositories = %#v, want none", got.Repositories)
-	}
-	if len(got.Failures) != 1 || got.Failures[0].Repository.ID != "broken" || got.Failures[0].Source != "task_backend" || got.Failures[0].Operation != "create_backend" || !errors.Is(got.Failures[0].Err, factoryErr) {
-		t.Fatalf("failures = %#v, want structured backend creation failure", got.Failures)
 	}
 }
 
@@ -512,10 +379,10 @@ func TestAggregatorSnapshotPreservesFailureOrderAcrossConcurrentReads(t *testing
 	if len(got.Failures) != 2 {
 		t.Fatalf("failures = %#v, want two", got.Failures)
 	}
-	if failure := got.Failures[0]; failure.Repository.ID != "alpha" || failure.Operation != "create_backend" || !errors.Is(failure.Err, createErr) {
+	if failure := got.Failures[0]; failure.Repository.ID != "alpha" || failure.Source != "task_backend" || failure.Operation != "create_backend" || !errors.Is(failure.Err, createErr) {
 		t.Fatalf("first failure = %#v, want alpha backend creation error", failure)
 	}
-	if failure := got.Failures[1]; failure.Repository.ID != "beta" || failure.Operation != "snapshot" || !errors.Is(failure.Err, listErr) {
+	if failure := got.Failures[1]; failure.Repository.ID != "beta" || failure.Source != "task_backend" || failure.Operation != "snapshot" || !errors.Is(failure.Err, listErr) {
 		t.Fatalf("second failure = %#v, want beta snapshot error", failure)
 	}
 	if len(got.Repositories) != 1 || got.Repositories[0].Repository.ID != "gamma" || got.Repositories[0].Tasks[0].ID != "gamma-1" {
@@ -524,39 +391,60 @@ func TestAggregatorSnapshotPreservesFailureOrderAcrossConcurrentReads(t *testing
 }
 
 func TestAggregatorSnapshotBoundsDistinctWorkspaceReads(t *testing.T) {
-	repos := make([]task.RepositorySource, 5)
+	repos := make([]task.RepositorySource, 32)
 	for i := range repos {
-		repos[i] = task.RepositorySource{
-			Repository: task.Repository{ID: fmt.Sprintf("repo-%d", i)},
-			BackendDir: testutil.CanonicalTempDir(t),
-		}
+		repos[i] = task.RepositorySource{Repository: task.Repository{ID: fmt.Sprintf("repo-%d", i)}, BackendDir: testutil.CanonicalTempDir(t)}
 	}
-	tracker := &boundedReadTracker{
-		started: make(chan struct{}, 4),
-		release: make(chan struct{}),
-	}
+	tracker := &boundedReadTracker{started: make(chan struct{}, len(repos)), release: make(chan struct{})}
+	var release sync.Once
+	unblock := func() { release.Do(func() { close(tracker.release) }) }
+	t.Cleanup(unblock)
 	aggregator, err := task.NewAggregator(repos, func(source task.RepositorySource) (task.ReadBackend, error) {
 		return trackedReadBackend{id: source.Repository.ID, tracker: &tracker.concurrentReadTracker, started: tracker.started, release: tracker.release}, nil
 	})
 	if err != nil {
-		t.Fatalf("create aggregator: %v", err)
+		t.Fatal(err)
 	}
-
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
 	result := make(chan task.SnapshotResult, 1)
-	go func() {
-		result <- aggregator.Snapshot(context.Background())
-	}()
-	for range cap(tracker.started) {
-		<-tracker.started
-	}
-	close(tracker.release)
-	got := <-result
+	go func() { result <- aggregator.Snapshot(ctx) }()
 
-	if got.HasFailures() {
-		t.Fatalf("failures = %#v, want none", got.Failures)
+	// Keep every entered read blocked until the pool is saturated.
+	started := 0
+	for started < 2 {
+		select {
+		case <-tracker.started:
+			started++
+		case <-ctx.Done():
+			t.Fatal("distinct workspace reads did not overlap before deadline")
+		}
 	}
-	if maximum := tracker.max.Load(); maximum != 4 {
-		t.Fatalf("maximum simultaneous reads = %d, want bounded maximum of 4", maximum)
+	idle := time.NewTimer(100 * time.Millisecond)
+	defer idle.Stop()
+waiting:
+	for {
+		select {
+		case <-tracker.started:
+			started++
+			idle.Reset(100 * time.Millisecond)
+		case <-idle.C:
+			break waiting
+		case <-ctx.Done():
+			t.Fatal("snapshot did not reach a bounded pool before deadline")
+		}
+	}
+	if started < 2 || started >= len(repos) {
+		t.Fatalf("overlapping reads = %d for %d workspaces, want bounded parallelism", started, len(repos))
+	}
+	unblock()
+	select {
+	case got := <-result:
+		if got.HasFailures() || len(got.Repositories) != len(repos) {
+			t.Fatalf("snapshot = %#v", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("snapshot workers did not finish")
 	}
 }
 
@@ -564,42 +452,57 @@ func TestAggregatorSnapshotSerializesNormalizedDuplicateWorkspaces(t *testing.T)
 	workspace := testutil.CanonicalTempDir(t)
 	alias := filepath.Join(testutil.CanonicalTempDir(t), "workspace-alias")
 	if err := os.Symlink(workspace, alias); err != nil {
-		t.Fatalf("create workspace symlink: %v", err)
+		t.Fatal(err)
 	}
 	repos := []task.RepositorySource{
 		{Repository: task.Repository{ID: "alpha"}, BackendDir: workspace},
 		{Repository: task.Repository{ID: "beta"}, BackendDir: alias},
+		{Repository: task.Repository{ID: "independent"}, BackendDir: testutil.CanonicalTempDir(t)},
 	}
-	tracker := &boundedReadTracker{
-		started: make(chan struct{}, 1),
-		release: make(chan struct{}),
-	}
-
+	tracker := &boundedReadTracker{started: make(chan struct{}, 2), release: make(chan struct{})}
+	independent := make(chan struct{}, 1)
+	var release sync.Once
+	unblock := func() { release.Do(func() { close(tracker.release) }) }
+	t.Cleanup(unblock)
 	aggregator, err := task.NewAggregator(repos, func(source task.RepositorySource) (task.ReadBackend, error) {
-		return trackedReadBackend{
-			id:      source.Repository.ID,
-			tracker: &tracker.concurrentReadTracker,
-			started: tracker.started,
-			release: tracker.release,
-		}, nil
+		if source.Repository.ID == "independent" {
+			return trackedReadBackend{id: source.Repository.ID, tracker: &concurrentReadTracker{}, started: independent}, nil
+		}
+		return trackedReadBackend{id: source.Repository.ID, tracker: &tracker.concurrentReadTracker, started: tracker.started, release: tracker.release}, nil
 	})
 	if err != nil {
-		t.Fatalf("create aggregator: %v", err)
+		t.Fatal(err)
 	}
-
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
 	result := make(chan task.SnapshotResult, 1)
-	go func() {
-		result <- aggregator.Snapshot(context.Background())
-	}()
-	<-tracker.started
-	close(tracker.release)
-	got := <-result
+	go func() { result <- aggregator.Snapshot(ctx) }()
 
-	if got.HasFailures() {
-		t.Fatalf("failures = %#v, want none", got.Failures)
+	for _, signal := range []<-chan struct{}{tracker.started, independent} {
+		select {
+		case <-signal:
+		case <-ctx.Done():
+			t.Fatal("readers did not start before deadline")
+		}
+	}
+	select {
+	case <-tracker.started:
+		t.Error("both aliases entered the same workspace concurrently")
+	case <-time.After(100 * time.Millisecond):
+	case <-ctx.Done():
+		t.Fatal("workspace serialization deadline exceeded")
+	}
+	unblock()
+	select {
+	case got := <-result:
+		if got.HasFailures() || len(got.Repositories) != 3 {
+			t.Fatalf("snapshot = %#v", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("serialized readers did not finish")
 	}
 	if maximum := tracker.max.Load(); maximum != 1 {
-		t.Fatalf("maximum simultaneous reads = %d, want 1 for one normalized workspace", maximum)
+		t.Fatalf("maximum simultaneous alias reads = %d, want 1", maximum)
 	}
 }
 
@@ -687,7 +590,7 @@ func (b trackedReadBackend) Get(context.Context, string) (task.Task, error) {
 	return task.Task{}, task.ErrNotFound
 }
 
-func (b trackedReadBackend) List(context.Context) ([]task.Task, error) {
+func (b trackedReadBackend) List(ctx context.Context) ([]task.Task, error) {
 	active := b.tracker.active.Add(1)
 	defer b.tracker.active.Add(-1)
 	for {
@@ -700,7 +603,11 @@ func (b trackedReadBackend) List(context.Context) ([]task.Task, error) {
 		b.started <- struct{}{}
 	}
 	if b.release != nil {
-		<-b.release
+		select {
+		case <-b.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	return []task.Task{{ID: b.id + "-1", IssueType: task.IssueTypeTask}}, nil
 }

@@ -24,132 +24,51 @@ func TestTerminalDetectionRejectsNonTTYCharacterDevice(t *testing.T) {
 	require.False(t, writerIsTerminal(devNull))
 }
 
-func TestConfigureRepoSummaryGuidanceNonInteractiveLeavesStyleUnset(t *testing.T) {
-	originalIsTerminal := isTerminal
-	isTerminal = func(io.Reader) bool { return false }
-	t.Cleanup(func() { isTerminal = originalIsTerminal })
+func TestRepoWizardCollectsPublicationSettings(t *testing.T) {
+	tests := []struct {
+		name, input                string
+		interactive                bool
+		style                      string
+		guidance, title, wantError string
+	}{
+		{name: "noninteractive"},
+		{name: "inherited", interactive: true, input: "\n"},
+		{name: "capitalized", interactive: true, input: "capitalized\n", style: registry.SummaryGuidanceStyleCapitalized, title: "[OPS] {{summary}}"},
+		{name: "custom", interactive: true, input: "custom\nUse sentence-case summaries without a type prefix.\n", guidance: "Use sentence-case summaries without a type prefix.", title: "[{{external_ref}}] {{summary}}"},
+		{name: "invalid", interactive: true, input: "informal\n", wantError: `summary_guidance_style "informal" is invalid`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			original := isTerminal
+			isTerminal = func(io.Reader) bool { return test.interactive }
+			t.Cleanup(func() { isTerminal = original })
+			command := &cobra.Command{}
+			command.SetIn(strings.NewReader(test.input))
+			var stderr bytes.Buffer
+			command.SetErr(&stderr)
+			var repo registry.Repo
+			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	command := &cobra.Command{}
-	command.SetIn(strings.NewReader(""))
-	repo := registry.Repo{}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+			err := configureRepoSummaryGuidance(command, &repo, logger)
+			if test.wantError != "" {
+				require.ErrorContains(t, err, test.wantError)
+				require.Empty(t, repo.SummaryGuidanceStyle)
+				return
+			}
+			require.NoError(t, err)
+			command.SetIn(strings.NewReader(test.title + "\n"))
+			require.NoError(t, configureRepoTitleTemplate(command, &repo, logger))
 
-	err := configureRepoSummaryGuidance(command, &repo, logger)
-
-	require.NoError(t, err)
-	require.Empty(t, repo.SummaryGuidanceStyle)
-	require.Empty(t, repo.SummaryGuidance)
-}
-
-func TestConfigureRepoSummaryGuidanceInteractiveDefaultLeavesStyleUnset(t *testing.T) {
-	originalIsTerminal := isTerminal
-	isTerminal = func(io.Reader) bool { return true }
-	t.Cleanup(func() { isTerminal = originalIsTerminal })
-
-	command := &cobra.Command{}
-	command.SetIn(strings.NewReader("\n"))
-	stderr := new(bytes.Buffer)
-	command.SetErr(stderr)
-	repo := registry.Repo{}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-
-	err := configureRepoSummaryGuidance(command, &repo, logger)
-
-	require.NoError(t, err)
-	require.Empty(t, repo.SummaryGuidanceStyle)
-	require.Empty(t, repo.SummaryGuidance)
-	require.Contains(t, stderr.String(), "Summary guidance style (typed, capitalized, custom) [typed]:")
-	require.NotContains(t, stderr.String(), "Custom summary guidance")
-}
-
-func TestConfigureRepoSummaryGuidanceInteractiveUsesCapitalizedStyle(t *testing.T) {
-	originalIsTerminal := isTerminal
-	isTerminal = func(io.Reader) bool { return true }
-	t.Cleanup(func() { isTerminal = originalIsTerminal })
-
-	command := &cobra.Command{}
-	command.SetIn(strings.NewReader("capitalized\n"))
-	stderr := new(bytes.Buffer)
-	command.SetErr(stderr)
-	repo := registry.Repo{}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-
-	err := configureRepoSummaryGuidance(command, &repo, logger)
-
-	require.NoError(t, err)
-	require.Equal(t, registry.SummaryGuidanceStyleCapitalized, repo.SummaryGuidanceStyle)
-	require.Empty(t, repo.SummaryGuidance)
-	require.NotContains(t, stderr.String(), "Custom summary guidance")
-}
-
-func TestConfigureRepoSummaryGuidanceInteractiveAcceptsCustomGuidance(t *testing.T) {
-	originalIsTerminal := isTerminal
-	isTerminal = func(io.Reader) bool { return true }
-	t.Cleanup(func() { isTerminal = originalIsTerminal })
-
-	command := &cobra.Command{}
-	command.SetIn(strings.NewReader("custom\nUse sentence-case summaries without a type prefix.\n"))
-	stderr := new(bytes.Buffer)
-	command.SetErr(stderr)
-	repo := registry.Repo{}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-
-	err := configureRepoSummaryGuidance(command, &repo, logger)
-
-	require.NoError(t, err)
-	require.Empty(t, repo.SummaryGuidanceStyle)
-	require.Equal(t, "Use sentence-case summaries without a type prefix.", repo.SummaryGuidance)
-	require.Contains(t, stderr.String(), "Custom summary guidance:")
-}
-
-func TestConfigureRepoSummaryGuidanceRejectsInvalidStyle(t *testing.T) {
-	originalIsTerminal := isTerminal
-	isTerminal = func(io.Reader) bool { return true }
-	t.Cleanup(func() { isTerminal = originalIsTerminal })
-
-	command := &cobra.Command{}
-	command.SetIn(strings.NewReader("informal\n"))
-	command.SetErr(new(bytes.Buffer))
-	repo := registry.Repo{}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-
-	err := configureRepoSummaryGuidance(command, &repo, logger)
-
-	require.ErrorContains(t, err, `summary_guidance_style "informal" is invalid`)
-}
-
-func TestConfigureRepoTitleTemplateInteractive(t *testing.T) {
-	originalIsTerminal := isTerminal
-	isTerminal = func(io.Reader) bool { return true }
-	t.Cleanup(func() { isTerminal = originalIsTerminal })
-
-	command := &cobra.Command{}
-	command.SetIn(strings.NewReader("[OPS] {{summary}}\n"))
-	stderr := new(bytes.Buffer)
-	command.SetErr(stderr)
-	repo := registry.Repo{}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-
-	err := configureRepoTitleTemplate(command, &repo, logger)
-
-	require.NoError(t, err)
-	require.Equal(t, "[OPS] {{summary}}", repo.TitleTemplate)
-	require.Contains(t, stderr.String(), "Publication title template (optional):")
-}
-
-func TestConfigureRepoTitleTemplateAcceptsExternalReferencePlaceholder(t *testing.T) {
-	originalIsTerminal := isTerminal
-	isTerminal = func(io.Reader) bool { return true }
-	t.Cleanup(func() { isTerminal = originalIsTerminal })
-
-	command := &cobra.Command{}
-	command.SetIn(strings.NewReader("[{{external_ref}}] {{summary}}\n"))
-	command.SetErr(new(bytes.Buffer))
-	repo := registry.Repo{}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-
-	err := configureRepoTitleTemplate(command, &repo, logger)
-
-	require.NoError(t, err)
-	require.Equal(t, "[{{external_ref}}] {{summary}}", repo.TitleTemplate)
+			require.Equal(t, test.style, repo.SummaryGuidanceStyle)
+			require.Equal(t, test.guidance, repo.SummaryGuidance)
+			require.Equal(t, test.title, repo.TitleTemplate)
+			if !test.interactive {
+				require.Empty(t, stderr.String())
+			} else {
+				require.Contains(t, stderr.String(), "Summary guidance style")
+				require.Contains(t, stderr.String(), "Publication title template")
+				require.Equal(t, test.guidance != "", strings.Contains(stderr.String(), "Custom summary guidance:"))
+			}
+		})
+	}
 }

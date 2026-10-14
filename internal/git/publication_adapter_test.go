@@ -41,6 +41,8 @@ func TestIntegrationAdapterContractPublicationCommitAndPushPreserveMessageAndRem
 			assert.Equal(t, commit, strings.TrimSpace(runGit(t, origin, "rev-parse", "refs/heads/"+branch)))
 			assert.Empty(t, strings.TrimSpace(runGit(t, repo, "status", "--porcelain=v1")))
 			require.NoError(t, orpheusgit.VerifyCommit(ctx, repo, commit, parent, message))
+			require.Error(t, orpheusgit.VerifyCommit(ctx, repo, commit, parent, "Different publication message"))
+			require.Error(t, orpheusgit.VerifyCommit(ctx, repo, commit, commit, message))
 			if branch != "main" {
 				assert.Equal(t, "origin/"+branch, strings.TrimSpace(runGit(t, repo, "rev-parse", "--abbrev-ref", "@{upstream}")))
 				assert.Equal(t, parent, strings.TrimSpace(runGit(t, origin, "rev-parse", "refs/heads/main")))

@@ -10,39 +10,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func TestNormalizeTaskViewSortUsesDefaultsAndRejectsUnknownValues(t *testing.T) {
-	tests := []struct {
-		name        string
-		value       string
-		defaultSort taskViewSort
-		want        taskViewSort
-		wantError   string
-	}{
-		{name: "status default", defaultSort: taskViewSortStatus, want: taskViewSortStatus},
-		{name: "list default", defaultSort: taskViewSortCreated, want: taskViewSortCreated},
-		{name: "trimmed case-insensitive", value: " UPDATED ", defaultSort: taskViewSortStatus, want: taskViewSortUpdated},
-		{name: "unknown", value: "priority", defaultSort: taskViewSortStatus, wantError: `invalid --sort "priority"; expected status, created, or updated`},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := normalizeTaskViewSort(tt.value, tt.defaultSort)
-			if tt.wantError != "" {
-				if err == nil || err.Error() != tt.wantError {
-					t.Fatalf("normalizeTaskViewSort() error = %v, want %q", err, tt.wantError)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("normalizeTaskViewSort() error = %v", err)
-			}
-			if got != tt.want {
-				t.Fatalf("normalizeTaskViewSort() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestTaskViewCommandsDocumentDefaultsAndRejectUnknownSort(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -70,33 +37,6 @@ func TestTaskViewCommandsDocumentDefaultsAndRejectUnknownSort(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestStatusDisplayRowsSortStatusByProjectionPriorityAndCreation(t *testing.T) {
-	projection := taskViewSortProjection(
-		statusGroup(status.GroupNeedsAttention,
-			taskViewSortEntry("beta", "b-attention-p1", task.IssueTypeTask, 1, timeAt(2026, 1, 4), nil, ""),
-			taskViewSortEntry("alpha", "a-attention-p0", task.IssueTypeTask, 0, timeAt(2026, 1, 1), nil, ""),
-		),
-		statusGroup(status.GroupInReview,
-			taskViewSortEntry("alpha", "a-review", task.IssueTypeTask, 4, timeAt(2026, 1, 5), nil, ""),
-		),
-		statusGroup(status.GroupReadyToRun,
-			taskViewSortEntry("alpha", "a-ready-p2", task.IssueTypeTask, 2, timeAt(2026, 1, 2), nil, ""),
-			taskViewSortEntry("beta", "b-ready-p0-old", task.IssueTypeTask, 0, timeAt(2026, 1, 1), nil, ""),
-			taskViewSortEntry("alpha", "a-ready-p0-new", task.IssueTypeTask, 0, timeAt(2026, 1, 3), nil, ""),
-		),
-	)
-
-	rows := statusDisplayRowsForSort(projection.Groups, taskViewSortStatus)
-	assertTaskViewSortIDs(t, rows, []string{
-		"a-attention-p0",
-		"b-attention-p1",
-		"a-review",
-		"a-ready-p0-new",
-		"b-ready-p0-old",
-		"a-ready-p2",
-	})
 }
 
 func TestStatusDisplayRowsSortTimestampsGloballyAndDeterministically(t *testing.T) {

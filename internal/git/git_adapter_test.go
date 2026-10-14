@@ -48,40 +48,49 @@ func TestIntegrationAdapterContractInspectDetectsRootRemoteAndOriginHEAD(t *test
 	}
 }
 
-func TestIntegrationAdapterContractInspectMissingRemoteKeepsDefaultBranchCandidate(t *testing.T) {
-	repoPath := newGitRepo(t)
+func TestIntegrationAdapterContractInspectChoosesDefaultBranchAcrossRemoteAndCheckoutStates(t *testing.T) {
+	for _, kind := range []string{"no remote", "missing remote HEAD", "malformed remote HEAD", "detached checkout"} {
+		t.Run(kind, func(t *testing.T) {
+			repo := newGitRepo(t)
+			current, branch, source := "main", "main", orpheusgit.DefaultBranchSourceCurrentBranch
+			if kind != "no remote" {
+				runGit(t, repo, "remote", "add", "origin", "https://example.com/repo.git")
+			}
+			switch kind {
+			case "missing remote HEAD":
+				runGit(t, repo, "checkout", "-b", "feature")
+				current, branch = "feature", "feature"
+			case "malformed remote HEAD":
+				dir := filepath.Join(repo, ".git", "refs", "remotes", "origin")
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "HEAD"), []byte("not-a-ref\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			case "detached checkout":
+				runGit(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+				runGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+				runGit(t, repo, "checkout", "--detach", "HEAD")
+				current, source = "", orpheusgit.DefaultBranchSourceOriginHEAD
+			}
 
-	got, err := orpheusgit.Inspect(repoPath)
-	if err != nil {
-		t.Fatalf("inspect git repo: %v", err)
-	}
+			got, err := orpheusgit.Inspect(repo)
 
-	if !errors.Is(got.RemoteErr, orpheusgit.ErrNoRemote) {
-		t.Fatalf("remote error = %v, want ErrNoRemote", got.RemoteErr)
-	}
-	if got.RemoteCandidate != "" || got.RemoteCandidateName != "" {
-		t.Fatalf("remote candidate = %q %q, want empty", got.RemoteCandidateName, got.RemoteCandidate)
-	}
-	if got.DefaultBranchCandidate != "main" || got.DefaultBranchSource != orpheusgit.DefaultBranchSourceCurrentBranch {
-		t.Fatalf("default branch = %q from %q, want main from current branch", got.DefaultBranchCandidate, got.DefaultBranchSource)
-	}
-}
-
-func TestIntegrationAdapterContractInspectFallsBackToCurrentBranchWhenOriginHEADIsMissing(t *testing.T) {
-	repoPath := newGitRepo(t)
-	runGit(t, repoPath, "remote", "add", "origin", "https://example.com/repo.git")
-	runGit(t, repoPath, "checkout", "-b", "feature")
-
-	got, err := orpheusgit.Inspect(repoPath)
-	if err != nil {
-		t.Fatalf("inspect git repo: %v", err)
-	}
-
-	if got.DefaultBranchCandidate != "feature" || got.DefaultBranchSource != orpheusgit.DefaultBranchSourceCurrentBranch {
-		t.Fatalf("default branch = %q from %q, want feature from current branch", got.DefaultBranchCandidate, got.DefaultBranchSource)
-	}
-	if got.RemoteCandidate != "https://example.com/repo.git" {
-		t.Fatalf("remote candidate = %q, want origin URL", got.RemoteCandidate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Root != repo || got.CurrentBranch != current || got.DefaultBranchCandidate != branch || got.DefaultBranchSource != source || got.DefaultBranchErr != nil {
+				t.Fatalf("inspection = %#v, want current %q default %q from %q", got, current, branch, source)
+			}
+			if kind == "no remote" {
+				if !errors.Is(got.RemoteErr, orpheusgit.ErrNoRemote) || got.RemoteCandidate != "" || got.RemoteCandidateName != "" {
+					t.Fatalf("unexpected remote: %#v", got)
+				}
+			} else if got.RemoteErr != nil || got.RemoteCandidateName != "origin" || got.RemoteCandidate != "https://example.com/repo.git" {
+				t.Fatalf("lost origin: %#v", got)
+			}
+		})
 	}
 }
 
@@ -92,45 +101,6 @@ func TestIntegrationAdapterContractInspectRejectsNonGitPath(t *testing.T) {
 	}
 	if !errors.Is(err, orpheusgit.ErrNotRepository) {
 		t.Fatalf("error = %v, want ErrNotRepository", err)
-	}
-}
-
-func TestIntegrationAdapterContractInspectDetachedHEADUsesOriginDefaultBranch(t *testing.T) {
-	repoPath := newGitRepo(t)
-	runGit(t, repoPath, "remote", "add", "origin", "https://example.com/repo.git")
-	runGit(t, repoPath, "update-ref", "refs/remotes/origin/main", "HEAD")
-	runGit(t, repoPath, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
-	runGit(t, repoPath, "checkout", "--detach", "HEAD")
-
-	got, err := orpheusgit.Inspect(repoPath)
-	if err != nil {
-		t.Fatalf("inspect git repo: %v", err)
-	}
-	if got.DefaultBranchCandidate != "main" || got.DefaultBranchSource != orpheusgit.DefaultBranchSourceOriginHEAD {
-		t.Fatalf("default branch = %q from %q, want main from origin/HEAD", got.DefaultBranchCandidate, got.DefaultBranchSource)
-	}
-	if got.CurrentBranch != "" {
-		t.Fatalf("current branch = %q, want empty detached HEAD", got.CurrentBranch)
-	}
-}
-
-func TestIntegrationAdapterContractInspectMalformedOriginHEADFallsBackToCurrentBranch(t *testing.T) {
-	repoPath := newGitRepo(t)
-	runGit(t, repoPath, "remote", "add", "origin", "https://example.com/repo.git")
-	originDir := filepath.Join(repoPath, ".git", "refs", "remotes", "origin")
-	if err := os.MkdirAll(originDir, 0o755); err != nil {
-		t.Fatalf("create origin refs dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(originDir, "HEAD"), []byte("not-a-ref\n"), 0o644); err != nil {
-		t.Fatalf("write malformed origin HEAD: %v", err)
-	}
-
-	got, err := orpheusgit.Inspect(repoPath)
-	if err != nil {
-		t.Fatalf("inspect git repo: %v", err)
-	}
-	if got.DefaultBranchCandidate != "main" || got.DefaultBranchSource != orpheusgit.DefaultBranchSourceCurrentBranch {
-		t.Fatalf("default branch = %q from %q, want main from current branch", got.DefaultBranchCandidate, got.DefaultBranchSource)
 	}
 }
 

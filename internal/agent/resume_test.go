@@ -13,19 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPrepareFollowUpResumePreservesFreshCommandWhenDisabled(t *testing.T) {
-	command := resumeTestCommand("pi", false)
-	got, launch := agent.PrepareFollowUpResume(agent.FollowUpResumeOptions{
-		Command: command,
-		Enabled: false,
-	})
-
-	assert.Equal(t, command.Args, got.Args)
-	require.NotNil(t, launch)
-	assert.Equal(t, taskstate.AgentLaunchFresh, launch.Mode)
-	assert.Empty(t, launch.FallbackReason)
-}
-
 func TestPrepareFollowUpResumeBuildsStructuredCommandsInBothLaunchModes(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -80,6 +67,8 @@ func TestPrepareFollowUpResumeSelectsLatestUsableCompatibleRun(t *testing.T) {
 	state.Runs = append(state.Runs,
 		resumeTestRun(2, "other-profile", "pi", latest),
 		resumeTestRun(3, "implementer", "pi", latest),
+		resumeTestRun(4, "other-profile", "pi", older),
+		resumeTestRun(5, "implementer", "pi", taskstate.AgentSession{ID: "missing", LogPath: filepath.Join(workdir, "missing.jsonl")}),
 	)
 
 	_, launch := agent.PrepareFollowUpResume(agent.FollowUpResumeOptions{
@@ -156,11 +145,13 @@ func TestPrepareFollowUpResumeFallsBackForRawIncompatibleAndUnsafeState(t *testi
 	require.NoError(t, os.MkdirAll(workdir, 0o755))
 	deleted := taskstate.AgentSession{ID: "gone", LogPath: filepath.Join(testutil.CanonicalTempDir(t), "gone.jsonl")}
 	tests := []struct {
-		name    string
-		command agent.CommandSnapshot
-		state   taskstate.TaskState
-		want    string
+		name     string
+		command  agent.CommandSnapshot
+		state    taskstate.TaskState
+		want     string
+		disabled bool
 	}{
+		{name: "disabled", command: resumeTestCommand("pi", false), disabled: true},
 		{
 			name:    "raw profile",
 			command: agent.CommandSnapshot{AgentName: "raw", Command: "agent", Args: []string{"prompt"}},
@@ -195,12 +186,15 @@ func TestPrepareFollowUpResumeFallsBackForRawIncompatibleAndUnsafeState(t *testi
 				Command:      tt.command,
 				State:        tt.state,
 				ExecutionDir: workdir,
-				Enabled:      true,
+				Enabled:      !tt.disabled,
 			})
 			assert.Equal(t, original, got.Args)
 			require.NotNil(t, launch)
 			assert.Equal(t, taskstate.AgentLaunchFresh, launch.Mode)
 			assert.Contains(t, launch.FallbackReason, tt.want)
+			if tt.disabled {
+				assert.Empty(t, launch.FallbackReason)
+			}
 		})
 	}
 }

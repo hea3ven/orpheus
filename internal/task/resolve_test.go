@@ -9,73 +9,53 @@ import (
 )
 
 func TestResolveTaskSourceKnownPrefix(t *testing.T) {
-	sources := []task.RepositorySource{
-		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op"}, BackendDir: "/fixture/alpha"},
-		{Repository: task.Repository{ID: "beta", Name: "Beta", TaskIDPrefix: "bt"}, BackendDir: "/fixture/beta"},
-	}
-
-	got, err := task.ResolveTaskSource(sources, " op-9wh.3 ")
-	if err != nil {
-		t.Fatalf("resolve known task prefix: %v", err)
-	}
-	if got.TaskID != "op-9wh.3" {
-		t.Fatalf("task id = %q, want trimmed op-9wh.3", got.TaskID)
-	}
-	if got.Prefix != "op" {
-		t.Fatalf("prefix = %q, want op", got.Prefix)
-	}
-	if got.Source.Repository.ID != "alpha" ||
-		got.Source.Repository.Name != "Alpha" ||
-		got.Source.BackendDir != "/fixture/alpha" {
-		t.Fatalf("source = %#v, want alpha repo context", got.Source)
-	}
-}
-
-func TestResolveTaskSourceSupportsHyphenatedRegisteredPrefix(t *testing.T) {
-	sources := []task.RepositorySource{
-		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "my-admin"}, BackendDir: "/fixture/alpha"},
-	}
-
-	got, err := task.ResolveTaskSource(sources, "my-admin-123")
-	if err != nil {
-		t.Fatalf("resolve hyphenated prefix: %v", err)
-	}
-	if got.Prefix != "my-admin" || got.Source.Repository.ID != "alpha" {
-		t.Fatalf("resolved = %#v, want my-admin alpha", got)
-	}
-
-	_, err = task.ResolveTaskSource(sources, "my-admin-")
-	if err == nil {
-		t.Fatal("resolve hyphenated prefix without task number succeeded, want error")
-	}
-	if !errors.Is(err, task.ErrMalformedTaskID) ||
-		!strings.Contains(err.Error(), "missing the task suffix") {
-		t.Fatalf("error = %v, want malformed missing task number", err)
+	for _, tt := range []struct{ prefix, id, wantID string }{
+		{prefix: "op", id: " op-9wh.3 ", wantID: "op-9wh.3"},
+		{prefix: "my-admin", id: "my-admin-123", wantID: "my-admin-123"},
+	} {
+		t.Run(tt.prefix, func(t *testing.T) {
+			sources := []task.RepositorySource{
+				{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: tt.prefix}, BackendDir: "/fixture/alpha"},
+				{Repository: task.Repository{ID: "beta", Name: "Beta", TaskIDPrefix: "bt"}, BackendDir: "/fixture/beta"},
+			}
+			got, err := task.ResolveTaskSource(sources, tt.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.TaskID != tt.wantID || got.Prefix != tt.prefix || got.Source.Repository.ID != "alpha" || got.Source.Repository.Name != "Alpha" || got.Source.BackendDir != "/fixture/alpha" {
+				t.Fatalf("resolved = %#v", got)
+			}
+		})
 	}
 }
 
 func TestResolveTaskSourceUnknownPrefixIsActionable(t *testing.T) {
-	sources := []task.RepositorySource{
-		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op"}, BackendDir: "/fixture/alpha"},
-	}
-
-	_, err := task.ResolveTaskSource(sources, "zz-1")
-	if err == nil {
-		t.Fatal("resolve unknown task prefix succeeded, want error")
-	}
-	if !errors.Is(err, task.ErrUnknownTaskPrefix) {
-		t.Fatalf("error = %v, want ErrUnknownTaskPrefix", err)
-	}
-	for _, want := range []string{"zz-1", "zz", "orpheus repo list", "register the repo"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("error = %v, want substring %q", err, want)
-		}
+	for _, tt := range []struct {
+		name, prefix, id string
+		want             []string
+	}{
+		{name: "unknown prefix", prefix: "op", id: "zz-1", want: []string{"zz-1", "zz", "orpheus repo list", "register the repo"}},
+		{name: "no registered prefixes", id: "op-1", want: []string{"no registered repositories have task prefixes", "alpha", "orpheus repo list"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sources := []task.RepositorySource{{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: tt.prefix}, BackendDir: "/fixture/alpha"}}
+			_, err := task.ResolveTaskSource(sources, tt.id)
+			if !errors.Is(err, task.ErrUnknownTaskPrefix) {
+				t.Fatalf("error = %v, want ErrUnknownTaskPrefix", err)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error = %v, want %q", err, want)
+				}
+			}
+		})
 	}
 }
 
 func TestResolveTaskSourceMalformedTaskIDsAreActionable(t *testing.T) {
 	sources := []task.RepositorySource{
 		{Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "op"}, BackendDir: "/fixture/alpha"},
+		{Repository: task.Repository{ID: "admin", TaskIDPrefix: "my-admin"}, BackendDir: "/fixture/admin"},
 	}
 
 	tests := []struct {
@@ -87,6 +67,7 @@ func TestResolveTaskSourceMalformedTaskIDsAreActionable(t *testing.T) {
 		{name: "no separator", id: "op", want: "no task prefix separator"},
 		{name: "missing prefix", id: "-1", want: "missing a task prefix"},
 		{name: "missing number", id: "op-", want: "missing the task suffix"},
+		{name: "hyphenated empty suffix", id: "my-admin-", want: "missing the task suffix"},
 		{name: "whitespace", id: "op 1", want: "contains whitespace"},
 	}
 
@@ -103,29 +84,6 @@ func TestResolveTaskSourceMalformedTaskIDsAreActionable(t *testing.T) {
 				t.Fatalf("error = %v, want actionable malformed-id guidance containing %q", err, tt.want)
 			}
 		})
-	}
-}
-
-func TestResolveTaskSourceMissingRegisteredPrefixes(t *testing.T) {
-	sources := []task.RepositorySource{
-		{Repository: task.Repository{ID: "legacy", Name: "Legacy"}, BackendDir: "/fixture/legacy"},
-	}
-
-	_, err := task.ResolveTaskSource(sources, "op-1")
-	if err == nil {
-		t.Fatal("resolve without registered prefixes succeeded, want error")
-	}
-	if !errors.Is(err, task.ErrUnknownTaskPrefix) {
-		t.Fatalf("error = %v, want ErrUnknownTaskPrefix", err)
-	}
-	for _, want := range []string{
-		"no registered repositories have task prefixes",
-		"legacy",
-		"orpheus repo list",
-	} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("error = %v, want substring %q", err, want)
-		}
 	}
 }
 

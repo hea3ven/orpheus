@@ -12,28 +12,46 @@ import (
 	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
-func TestClassifySyncConflictRecoveryLeavesUnresolvedStateUntouched(t *testing.T) {
-	operation := taskstate.SyncConflictOperation{
-		ID:            "sync-1",
-		Branch:        "orpheus/op-1",
-		Worktree:      "/fixture/op-1",
-		DefaultBranch: "main",
-		Phase:         taskstate.SyncConflictPhaseUnresolved,
+func TestRunLeavesPersistedUnresolvedSyncConflictUntouched(t *testing.T) {
+	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	taskState := taskstate.TaskState{
-		TaskID:        "op-1",
-		WorkDirectory: taskstate.WorkDirectory{Path: operation.Worktree},
-		GitFacts:      taskstate.GitFacts{Branch: operation.Branch, Worktree: operation.Worktree},
+	store := taskstate.NewStore(paths)
+	run, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Agent: "recorder", WorkDirectory: "/fixture/op-1", Branch: "orpheus/op-1", Worktree: "/fixture/op-1"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	before := operation
+	if _, err := store.FinishRun("alpha", "op-1", run.Attempt, taskstate.RunStatusSucceeded); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.BeginSyncConflictOperation("alpha", "op-1", taskstate.SyncConflictOperation{
+		ID: "sync-1", Branch: "orpheus/op-1", Worktree: "/fixture/op-1", DefaultBranch: "main", Phase: taskstate.SyncConflictPhaseUnresolved,
+		Checkpoint: taskstate.SyncConflictCheckpoint{LocalHead: "before", RemoteHead: "before", MergeSource: "main-head"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	diagnosis := classifySyncConflictRecovery(registry.Repo{}, taskState, operation, nil, workflow.LocalSyncGit{})
-
-	if diagnosis.outcome != "unresolved" || diagnosis.reason != "operation was previously marked unresolved" {
-		t.Fatalf("diagnosis = %#v, want unresolved default reason", diagnosis)
-	}
-	if !reflect.DeepEqual(operation, before) {
-		t.Fatalf("operation = %#v, want unchanged %#v", operation, before)
+	for _, fix := range []bool{false, true} {
+		result, err := Run(Options{Paths: paths, Registry: registry.Registry{Repos: []registry.Repo{{ID: "alpha", Path: "/fixture/alpha"}}}, Fix: fix})
+		if err != nil {
+			t.Fatalf("doctor fix=%v: %v", fix, err)
+		}
+		if len(result.SyncConflictRows) != 1 || result.SyncConflictRows[0].Outcome != "unresolved" || result.SyncConflictRows[0].Reason != "operation was previously marked unresolved" {
+			t.Fatalf("sync diagnosis = %#v", result.SyncConflictRows)
+		}
+		after, err := store.Load("alpha", "op-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(after, before) {
+			t.Fatalf("doctor fix=%v changed durable unresolved state: got %#v, want %#v", fix, after, before)
+		}
 	}
 }
 

@@ -112,61 +112,6 @@ func TestIntegrationWorkflowTaskRunDispatchesChildOfInProgressEpic(t *testing.T)
 	is.Empty(parentState.Runs, "only the child should be dispatched")
 }
 
-// The backend is a dispatch-only stub, not a reusable Beads emulator. Its supported
-// mutation follows the same cases as the Beads MarkInProgress unit contracts.
-func TestIntegrationWorkflowDispatchStubRejectsConflictingTaskStateWithoutMutation(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		status   taskmodel.Status
-		metadata taskmodel.Metadata
-		conflict bool
-	}{
-		{name: "open", status: taskmodel.StatusOpen},
-		{name: "matching retry", status: taskmodel.StatusInProgress, metadata: taskmodel.Metadata{taskmodel.MetadataBranch: "branch", taskmodel.MetadataWorktree: "/fixture/worktree"}},
-		{name: "missing retry target", status: taskmodel.StatusInProgress, conflict: true},
-		{name: "conflicting branch", status: taskmodel.StatusInProgress, metadata: taskmodel.Metadata{taskmodel.MetadataBranch: "different", taskmodel.MetadataWorktree: "/fixture/worktree"}, conflict: true},
-		{name: "conflicting worktree", status: taskmodel.StatusInProgress, metadata: taskmodel.Metadata{taskmodel.MetadataBranch: "branch", taskmodel.MetadataWorktree: "/fixture/different"}, conflict: true},
-		{name: "closed", status: taskmodel.StatusClosed, conflict: true},
-		{name: "published", status: taskmodel.StatusOpen, metadata: taskmodel.Metadata{taskmodel.MetadataPRURL: "https://example.test/pr/1"}, conflict: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			initial := taskmodel.Task{ID: "op-1", Status: tc.status, Metadata: tc.metadata}
-			backend := newMemoryTaskBackend([]taskmodel.Task{initial})
-
-			err := backend.MarkInProgress(context.Background(), "op-1", "branch", "/fixture/worktree")
-
-			got, getErr := backend.Get(context.Background(), "op-1")
-			require.NoError(t, getErr)
-			if tc.conflict {
-				assert.ErrorIs(t, err, taskmodel.ErrMutationConflict)
-				assert.Equal(t, initial, got, "rejected mutation must leave the task unchanged")
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, taskmodel.StatusInProgress, got.Status)
-			assert.Equal(t, "branch", got.OrpheusMetadata().Branch)
-			assert.Equal(t, "/fixture/worktree", got.OrpheusMetadata().Worktree)
-		})
-	}
-}
-
-func TestIntegrationWorkflowDispatchStubRejectsUnsupportedMutations(t *testing.T) {
-	is := assert.New(t)
-	initial := anOpenTask("op-1")
-	backend := newMemoryTaskBackend([]taskmodel.Task{initial})
-	ctx := context.Background()
-
-	is.Error(backend.UpdateGitFacts(ctx, "op-1", "branch", "/fixture/worktree"), "target relocation is unsupported")
-	is.Error(backend.SetPRURL(ctx, "op-1", "https://example.test/pr/1"), "publication is unsupported")
-	is.Error(backend.Close(ctx, "op-1"), "closure is unsupported")
-	_, createErr := backend.Create(ctx, taskmodel.CreateOptions{Title: "Unrelated task"})
-	is.Error(createErr, "creation is unsupported")
-
-	got, err := backend.List(ctx)
-	require.NoError(t, err)
-	is.Equal([]taskmodel.Task{initial}, got)
-}
-
 func TestIntegrationWorkflowScriptedAgentRejectsUnexpectedOrUnspecifiedLaunch(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

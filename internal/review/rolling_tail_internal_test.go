@@ -8,34 +8,31 @@ import (
 	"unicode/utf8"
 )
 
-func TestRollingTailFinishClearClearsTabbedAndWideOutput(t *testing.T) {
-	tests := []struct {
-		name      string
-		line      string
-		notWanted string
+func TestRollingTailClearErasesVisibleOutputAcrossWidths(t *testing.T) {
+	for _, tc := range []struct {
+		name, line     string
+		width, resized int
 	}{
-		{
-			name:      "tab expands past terminal width",
-			line:      "\tabcdefghijk",
-			notWanted: "abc",
-		},
-		{
-			name:      "wide runes expand past terminal width",
-			line:      "abcdefg界界",
-			notWanted: "界",
-		},
-	}
+		{"tabs", "\tabcdefghijk", 10, 0},
+		{"wide characters", "abcdefg界界", 10, 0},
+		{"wrapped text", "wrapped " + strings.Repeat("x", 80), 20, 0},
+		{"resize", "aaaaaaaaa界aaaaaaaaa", 21, 10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			terminal := newCellVisualTerminal(tc.width)
+			tail := newRollingTail(terminal, tc.width, func() (int, bool) { return terminal.width, true })
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			terminal := newCellVisualTerminal(10)
-			tail := newRollingTail(terminal, 10, func() (int, bool) { return terminal.width, true })
-
-			tail.append(tailStreamStdout, test.line)
+			tail.append(tailStreamStdout, tc.line)
+			if terminal.Visible() == "" {
+				t.Fatal("tail did not render before clear")
+			}
+			if tc.resized != 0 {
+				terminal.Resize(tc.resized)
+			}
 			tail.finish(tailFinishClear)
 
-			if visible := terminal.Visible(); strings.Contains(visible, test.notWanted) {
-				t.Fatalf("visible terminal = %q, want cleared tail", visible)
+			if visible := terminal.Visible(); strings.TrimSpace(visible) != "" {
+				t.Fatalf("visible terminal = %q, want completely cleared tail", visible)
 			}
 		})
 	}
@@ -56,31 +53,6 @@ func TestRollingTailSanitizesOutput(t *testing.T) {
 	}
 	if !strings.Contains(raw, "safe") || !strings.Contains(raw, "text") {
 		t.Fatalf("raw terminal output = %q, want sanitized text", raw)
-	}
-}
-
-func TestRollingTailFinishClearUsesCurrentWidthAfterResize(t *testing.T) {
-	terminal := newCellVisualTerminal(21)
-	tail := newRollingTail(terminal, 21, func() (int, bool) { return terminal.width, true })
-
-	tail.append(tailStreamStdout, "aaaaaaaaa界aaaaaaaaa")
-	terminal.Resize(10)
-	tail.finish(tailFinishClear)
-
-	if visible := terminal.Visible(); strings.Contains(visible, "aaaa") || strings.Contains(visible, "界") {
-		t.Fatalf("visible terminal = %q, want resized tail cleared", visible)
-	}
-}
-
-func TestRollingTailFinishClearClearsWrappedOutput(t *testing.T) {
-	terminal := newCellVisualTerminal(20)
-	tail := newRollingTail(terminal, 20, nil)
-
-	tail.append(tailStreamStdout, "wrapped "+strings.Repeat("x", 80))
-	tail.finish(tailFinishClear)
-
-	if visible := terminal.Visible(); strings.Contains(visible, "wrapped") || strings.Contains(visible, "xxxx") {
-		t.Fatalf("visible terminal = %q, want wrapped tail cleared", visible)
 	}
 }
 

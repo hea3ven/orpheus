@@ -110,76 +110,46 @@ func TestInspectLocalWithRunnerDetectsPrefix(t *testing.T) {
 	}
 }
 
-func TestInspectLocalWithRunnerReportsNoLocalWithoutRunningBD(t *testing.T) {
-	root := testutil.CanonicalTempDir(t)
-	runner := &fakeRunner{}
+func TestInspectLocalDistinguishesAbsenceFromActionableFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		noDirectory bool
+		result      beads.Result
+		cause       error
+		noLocal     bool
+		wants       []string
+	}{
+		{name: "no directory", noDirectory: true, noLocal: true},
+		{name: "no workspace JSON", result: beads.Result{Stdout: `{"error":"no_beads_directory","message":"No active beads workspace found."}`}, cause: errors.New("exit status 1"), noLocal: true},
+		{name: "missing executable", cause: exec.ErrNotFound, wants: []string{"bd executable not found"}},
+		{name: "invalid JSON", result: beads.Result{Stdout: "not-json"}, wants: []string{"parse bd context JSON", "not-json"}},
+		{name: "command failure", result: beads.Result{Stderr: "database locked"}, cause: errors.New("exit status 1"), wants: []string{"run bd --json --readonly context", "database locked"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := testutil.CanonicalTempDir(t)
+			runner := &fakeRunner{}
+			if !tc.noDirectory {
+				root = newRootWithBeadsDir(t)
+				runner.calls = []fakeCall{{wantArgs: []string{"--json", "--readonly", "context"}, result: tc.result, err: tc.cause}}
+			}
 
-	_, err := beads.InspectLocalWithRunner(root, runner)
-	if !errors.Is(err, beads.ErrNoLocal) {
-		t.Fatalf("error = %v, want ErrNoLocal", err)
-	}
-}
+			_, err := beads.InspectLocalWithRunner(root, runner)
 
-func TestInspectLocalWithRunnerDistinguishesBDNoWorkspace(t *testing.T) {
-	root := newRootWithBeadsDir(t)
-	runner := &fakeRunner{calls: []fakeCall{{
-		wantArgs: []string{"--json", "--readonly", "context"},
-		result:   beads.Result{Stdout: `{"error":"no_beads_directory","message":"No active beads workspace found."}`},
-		err:      errors.New("exit status 1"),
-	}}}
-
-	_, err := beads.InspectLocalWithRunner(root, runner)
-	if !errors.Is(err, beads.ErrNoLocal) {
-		t.Fatalf("error = %v, want ErrNoLocal", err)
-	}
-}
-
-func TestInspectLocalWithRunnerReportsMissingBD(t *testing.T) {
-	root := newRootWithBeadsDir(t)
-	runner := &fakeRunner{calls: []fakeCall{{
-		wantArgs: []string{"--json", "--readonly", "context"},
-		err:      exec.ErrNotFound,
-	}}}
-
-	_, err := beads.InspectLocalWithRunner(root, runner)
-	if err == nil {
-		t.Fatal("inspect local succeeded, want error")
-	}
-	if !strings.Contains(err.Error(), "bd executable not found") {
-		t.Fatalf("error = %v, want missing bd guidance", err)
-	}
-}
-
-func TestInspectLocalWithRunnerReportsParseFailure(t *testing.T) {
-	root := newRootWithBeadsDir(t)
-	runner := &fakeRunner{calls: []fakeCall{{
-		wantArgs: []string{"--json", "--readonly", "context"},
-		result:   beads.Result{Stdout: `not-json`},
-	}}}
-
-	_, err := beads.InspectLocalWithRunner(root, runner)
-	if err == nil {
-		t.Fatal("inspect local succeeded, want error")
-	}
-	if !strings.Contains(err.Error(), "parse bd context JSON") || !strings.Contains(err.Error(), "not-json") {
-		t.Fatalf("error = %v, want actionable parse failure", err)
-	}
-}
-
-func TestInspectLocalWithRunnerReportsCommandFailure(t *testing.T) {
-	root := newRootWithBeadsDir(t)
-	runner := &fakeRunner{calls: []fakeCall{{
-		wantArgs: []string{"--json", "--readonly", "context"},
-		result:   beads.Result{Stderr: "database locked"},
-		err:      errors.New("exit status 1"),
-	}}}
-
-	_, err := beads.InspectLocalWithRunner(root, runner)
-	if err == nil {
-		t.Fatal("inspect local succeeded, want error")
-	}
-	if !strings.Contains(err.Error(), "run bd --json --readonly context") || !strings.Contains(err.Error(), "database locked") {
-		t.Fatalf("error = %v, want actionable command failure", err)
+			if err == nil {
+				t.Fatal("inspection succeeded, want diagnostic")
+			}
+			if errors.Is(err, beads.ErrNoLocal) != tc.noLocal {
+				t.Fatalf("inspection error = %v, no-local = %t", err, tc.noLocal)
+			}
+			for _, want := range tc.wants {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error = %v, want %q", err, want)
+				}
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("unused calls = %d", len(runner.calls))
+			}
+		})
 	}
 }
 
@@ -205,32 +175,6 @@ func TestInspectLocalWithRunnerRequiresPrefix(t *testing.T) {
 	}
 }
 
-func TestInitializeManagedWithRunnerInitializesEmptyDirectory(t *testing.T) {
-	dir := filepath.Join(testutil.CanonicalTempDir(t), "managed", "beads")
-	runner := &fakeRunner{calls: []fakeCall{{
-		wantDir: dir,
-		wantArgs: []string{
-			"init",
-			"--non-interactive",
-			"--prefix",
-			"alpha",
-			"--skip-agents",
-			"--skip-hooks",
-			"--quiet",
-		},
-	}}}
-
-	if err := beads.InitializeManagedWithRunner(dir, " alpha ", runner); err != nil {
-		t.Fatalf("initialize managed: %v", err)
-	}
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		t.Fatalf("managed directory was not created: info=%v err=%v", info, err)
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("runner has %d unused calls", len(runner.calls))
-	}
-}
-
 func TestInitializeManagedWithRunnerRejectsExistingStateBeforeRunningBD(t *testing.T) {
 	dir := testutil.CanonicalTempDir(t)
 	if err := os.WriteFile(filepath.Join(dir, "leftover"), []byte("state"), 0o644); err != nil {
@@ -247,29 +191,52 @@ func TestInitializeManagedWithRunnerRejectsExistingStateBeforeRunningBD(t *testi
 	}
 }
 
-func TestInitializeManagedWithRunnerReportsCommandFailure(t *testing.T) {
-	dir := filepath.Join(testutil.CanonicalTempDir(t), "beads")
-	runner := &fakeRunner{calls: []fakeCall{{
-		wantDir: dir,
-		wantArgs: []string{
-			"init",
-			"--non-interactive",
-			"--prefix",
-			"alpha",
-			"--skip-agents",
-			"--skip-hooks",
-			"--quiet",
-		},
-		result: beads.Result{Stderr: "cannot initialize"},
-		err:    errors.New("exit status 1"),
-	}}}
+func TestInitializeManagedDirectoryCreationAndCommandResults(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		name := "success"
+		if fail {
+			name = "command failure"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(testutil.CanonicalTempDir(t), "beads")
+			runner := &fakeRunner{calls: []fakeCall{{
+				wantDir: dir,
+				wantArgs: []string{
+					"init",
+					"--non-interactive",
+					"--prefix",
+					"alpha",
+					"--skip-agents",
+					"--skip-hooks",
+					"--quiet",
+				},
+			}}}
 
-	err := beads.InitializeManagedWithRunner(dir, "alpha", runner)
-	if err == nil {
-		t.Fatal("initialize managed succeeded, want command failure")
-	}
-	if !strings.Contains(err.Error(), "run bd init") || !strings.Contains(err.Error(), "cannot initialize") {
-		t.Fatalf("error = %v, want actionable command failure", err)
+			if fail {
+				runner.calls[0].result.Stderr = "cannot initialize"
+				runner.calls[0].err = errors.New("exit status 1")
+			}
+			err := beads.InitializeManagedWithRunner(dir, "alpha", runner)
+			if !fail {
+				if err != nil {
+					t.Fatal(err)
+				}
+				info, statErr := os.Stat(dir)
+				if statErr != nil || !info.IsDir() {
+					t.Fatalf("managed directory missing: %v", statErr)
+				}
+				if len(runner.calls) != 0 {
+					t.Fatalf("unused calls = %d", len(runner.calls))
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("initialize managed succeeded, want command failure")
+			}
+			if !strings.Contains(err.Error(), "run bd init") || !strings.Contains(err.Error(), "cannot initialize") {
+				t.Fatalf("error = %v, want actionable command failure", err)
+			}
+		})
 	}
 }
 
@@ -345,7 +312,11 @@ func TestTaskBackendListFilteredPushesSupportedFieldsAndMatchesQueryAtSource(t *
 	if err != nil {
 		t.Fatalf("list filtered tasks: %v", err)
 	}
-	if gotIDs := []string{got[0].ID, got[1].ID}; !reflect.DeepEqual(gotIDs, []string{"op-match-id", "op-other"}) {
+	var gotIDs []string
+	for _, item := range got {
+		gotIDs = append(gotIDs, item.ID)
+	}
+	if !reflect.DeepEqual(gotIDs, []string{"op-match-id", "op-other"}) {
 		t.Fatalf("filtered task IDs = %v, want ID and title query matches", gotIDs)
 	}
 	if len(runner.calls) != 0 {
@@ -677,7 +648,8 @@ func TestTaskBackendGetParsesShowJSON(t *testing.T) {
 				"metadata":{"orpheus.worktree":"/fixture/worktree"},
 				"dependencies":[
 					{"id":"op-9wh","dependency_type":"parent-child"},
-					{"id":"op-9wh.1","dependency_type":"blocks"}
+					{"id":"op-9wh.1","dependency_type":"blocks"},
+					{"id":"op-epic","dependency_type":"orpheus-blocks"}
 				],
 				"dependents":[{"id":"op-9wh.4","dependency_type":"blocks"}]
 			}
@@ -702,7 +674,7 @@ func TestTaskBackendGetParsesShowJSON(t *testing.T) {
 	if got.Metadata[task.MetadataWorktree] != "/fixture/worktree" {
 		t.Fatalf("metadata = %#v, want worktree", got.Metadata)
 	}
-	if got.Relations.ParentID != "op-9wh" || !reflect.DeepEqual(got.Relations.DependencyIDs, []string{"op-9wh.1"}) {
+	if got.Relations.ParentID != "op-9wh" || !reflect.DeepEqual(got.Relations.DependencyIDs, []string{"op-9wh.1", "op-epic"}) {
 		t.Fatalf("dependencies = %#v, want parent and blocking dependency", got.Relations)
 	}
 	if !reflect.DeepEqual(got.Relations.DependentIDs, []string{"op-9wh.4"}) {
@@ -809,30 +781,6 @@ func TestTaskBackendUpdateUsesOrpheusBlockingEdgeAcrossTypes(t *testing.T) {
 	}
 	if want := []string{"op-epic"}; !reflect.DeepEqual(updated.Relations.DependencyIDs, want) {
 		t.Fatalf("dependencies = %#v, want %#v", updated.Relations.DependencyIDs, want)
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("runner has %d unused calls", len(runner.calls))
-	}
-}
-
-func TestTaskBackendGetRecognizesOrpheusCrossTypeBlockingEdge(t *testing.T) {
-	dir := testutil.CanonicalTempDir(t)
-	runner := &fakeRunner{calls: []fakeCall{{
-		wantDir:  dir,
-		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-task", "--include-dependents"},
-		result:   beads.Result{Stdout: `[{"id":"op-task","status":"open","issue_type":"task","dependencies":[{"id":"op-epic","dependency_type":"orpheus-blocks"}]}]`},
-	}}}
-
-	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
-	if err != nil {
-		t.Fatalf("create backend: %v", err)
-	}
-	got, err := backend.Get(context.Background(), "op-task")
-	if err != nil {
-		t.Fatalf("get task: %v", err)
-	}
-	if want := []string{"op-epic"}; !reflect.DeepEqual(got.Relations.DependencyIDs, want) {
-		t.Fatalf("dependencies = %#v, want %#v", got.Relations.DependencyIDs, want)
 	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("runner has %d unused calls", len(runner.calls))
@@ -1011,286 +959,194 @@ func TestTaskBackendMarkInProgressReportsMutationConflicts(t *testing.T) {
 	}
 }
 
-func TestTaskBackendMarkInProgressReportsUpdateCommandFailure(t *testing.T) {
-	dir := testutil.CanonicalTempDir(t)
-	runner := &fakeRunner{calls: []fakeCall{
-		{
-			wantDir:  dir,
-			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-4", "--include-dependents"},
-			result:   beads.Result{Stdout: `[{"id":"op-4","title":"task","status":"open","priority":2,"issue_type":"task"}]`},
-		},
-		{
-			wantDir: dir,
-			wantArgs: []string{
-				"--json",
-				"--sandbox",
-				"update",
-				"op-4",
-				"--status",
-				"in_progress",
-				"--set-metadata",
-				"orpheus.branch=orpheus/op-4",
-				"--set-metadata",
-				"orpheus.worktree=/fixture/op-4",
-			},
-			result: beads.Result{Stderr: "database locked"},
-			err:    errors.New("exit status 1"),
-		},
-	}}
-	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
-	if err != nil {
-		t.Fatalf("create backend: %v", err)
-	}
-
-	err = backend.MarkInProgress(context.Background(), "op-4", "orpheus/op-4", "/fixture/op-4")
-	if err == nil {
-		t.Fatal("mark in progress succeeded, want update failure")
-	}
-	if !strings.Contains(err.Error(), "run bd --json --sandbox update op-4") || !strings.Contains(err.Error(), "database locked") {
-		t.Fatalf("error = %v, want update command output", err)
-	}
-}
-
-func TestTaskBackendStartEpicUpdatesOpenEpic(t *testing.T) {
-	dir := testutil.CanonicalTempDir(t)
-	runner := &fakeRunner{calls: []fakeCall{
-		{
-			wantDir:  dir,
-			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-epic", "--include-dependents"},
-			result:   beads.Result{Stdout: `[{"id":"op-epic","title":"epic","status":"open","issue_type":"epic"}]`},
-		},
-		{
-			wantDir:  dir,
-			wantArgs: []string{"--json", "--sandbox", "update", "op-epic", "--status", "in_progress"},
-		},
-	}}
-	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
-	if err != nil {
-		t.Fatalf("create backend: %v", err)
-	}
-
-	if err := backend.StartEpic(context.Background(), " op-epic "); err != nil {
-		t.Fatalf("start epic: %v", err)
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("runner has %d unused calls", len(runner.calls))
-	}
-}
-
-func TestTaskBackendStartEpicTreatsInProgressAsSuccess(t *testing.T) {
-	dir := testutil.CanonicalTempDir(t)
-	runner := &fakeRunner{calls: []fakeCall{{
-		wantDir:  dir,
-		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-epic", "--include-dependents"},
-		result:   beads.Result{Stdout: `[{"id":"op-epic","title":"epic","status":"in_progress","issue_type":"epic"}]`},
-	}}}
-	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
-	if err != nil {
-		t.Fatalf("create backend: %v", err)
-	}
-
-	if err := backend.StartEpic(context.Background(), "op-epic"); err != nil {
-		t.Fatalf("start already in-progress epic: %v", err)
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("runner has %d unused calls", len(runner.calls))
-	}
-}
-
-func TestTaskBackendStartEpicRejectsNonEpicAndClosedItems(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		output string
-		want   string
-	}{
-		{"non epic", `[{"id":"op-epic","status":"open","issue_type":"task"}]`, "item is not an epic"},
-		{"closed", `[{"id":"op-epic","status":"closed","issue_type":"epic"}]`, "epic is closed"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
+func TestTaskBackendStartMutationReportsCommandOutcome(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		name := "success"
+		if fail {
+			name = "failed write"
+		}
+		t.Run(name, func(t *testing.T) {
 			dir := testutil.CanonicalTempDir(t)
-			runner := &fakeRunner{calls: []fakeCall{{
-				wantDir:  dir,
-				wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-epic", "--include-dependents"},
-				result:   beads.Result{Stdout: test.output},
-			}}}
+			runner := &fakeRunner{calls: []fakeCall{
+				{
+					wantDir:  dir,
+					wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-4", "--include-dependents"},
+					result:   beads.Result{Stdout: `[{"id":"op-4","title":"task","status":"open","priority":2,"issue_type":"task"}]`},
+				},
+				{
+					wantDir: dir,
+					wantArgs: []string{
+						"--json",
+						"--sandbox",
+						"update",
+						"op-4",
+						"--status",
+						"in_progress",
+						"--set-metadata",
+						"orpheus.branch=orpheus/op-4",
+						"--set-metadata",
+						"orpheus.worktree=/fixture/op-4",
+					},
+				},
+			}}
+			if fail {
+				runner.calls[1].result.Stderr = "database locked"
+				runner.calls[1].err = errors.New("exit status 1")
+			}
 			backend, err := beads.NewTaskBackendWithRunner(dir, runner)
 			if err != nil {
 				t.Fatalf("create backend: %v", err)
 			}
 
-			err = backend.StartEpic(context.Background(), "op-epic")
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("StartEpic() error = %v, want containing %q", err, test.want)
+			err = backend.MarkInProgress(context.Background(), "op-4", "orpheus/op-4", "/fixture/op-4")
+			if !fail {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(runner.calls) != 0 {
+					t.Fatalf("unused calls = %d", len(runner.calls))
+				}
+				return
 			}
-			if len(runner.calls) != 0 {
-				t.Fatalf("runner has %d unused calls", len(runner.calls))
+			if err == nil {
+				t.Fatal("mark in progress succeeded, want update failure")
+			}
+			if !strings.Contains(err.Error(), "run bd --json --sandbox update op-4") || !strings.Contains(err.Error(), "database locked") {
+				t.Fatalf("error = %v, want update command output", err)
 			}
 		})
 	}
 }
 
-func TestTaskBackendUpdateGitFactsWritesBranchAndWorktree(t *testing.T) {
+func TestTaskBackendStartEpicLifecycle(t *testing.T) {
+	for _, tc := range []struct {
+		name, status, kind, wantError string
+		mutate                        bool
+	}{
+		{"open epic", "open", "epic", "", true},
+		{"running retry", "in_progress", "epic", "", false},
+		{"closed epic", "closed", "epic", "epic is closed", false},
+		{"ordinary task", "open", "task", "item is not an epic", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := testutil.CanonicalTempDir(t)
+			runner := &fakeRunner{calls: []fakeCall{{
+				wantDir: dir, wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-epic", "--include-dependents"},
+				result: beads.Result{Stdout: `[{"id":"op-epic","status":"` + tc.status + `","issue_type":"` + tc.kind + `"}]`},
+			}}}
+			if tc.mutate {
+				runner.calls = append(runner.calls, fakeCall{wantDir: dir, wantArgs: []string{"--json", "--sandbox", "update", "op-epic", "--status", "in_progress"}})
+			}
+			backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = backend.StartEpic(context.Background(), " op-epic ")
+
+			if tc.wantError == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("error = %v, want %q", err, tc.wantError)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("unused calls = %d", len(runner.calls))
+			}
+		})
+	}
+}
+
+func TestTaskBackendGitFactsUpdateGuardsAndTranslation(t *testing.T) {
+	for _, tc := range []struct{ name, status, metadata, wantError string }{
+		{"running", "in_progress", "", ""},
+		{"not started", "open", "", "task is not in progress"},
+		{"published", "in_progress", `,"metadata":{"orpheus.pr_url":"https://github.test/org/repo/pull/1"}`, "orpheus.pr_url is already set"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := testutil.CanonicalTempDir(t)
+			runner := &fakeRunner{calls: []fakeCall{{
+				wantDir: dir, wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1", "--include-dependents"},
+				result: beads.Result{Stdout: `[{"id":"op-1","status":"` + tc.status + `","issue_type":"task"` + tc.metadata + `}]`},
+			}}}
+			if tc.wantError == "" {
+				runner.calls = append(runner.calls, fakeCall{wantDir: dir, wantArgs: []string{"--json", "--sandbox", "update", "op-1", "--set-metadata", "orpheus.branch=orpheus/op-1", "--set-metadata", "orpheus.worktree=/fixture/op-1"}})
+			}
+			backend, err := beads.NewTaskBackendWithRunner(dir, runner)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = backend.UpdateGitFacts(context.Background(), " op-1 ", " orpheus/op-1 ", " /fixture/op-1 ")
+
+			if tc.wantError == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("error = %v, want %q", err, tc.wantError)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("unused calls = %d", len(runner.calls))
+			}
+		})
+	}
+}
+
+func TestTaskBackendSetPRURLValidatesBeforeExternalMutation(t *testing.T) {
+	for _, tc := range []struct{ name, id, url, wantError string }{
+		{"valid", " op-5 ", " https://github.test/org/repo/pull/5 ", ""},
+		{"missing ID", "", "https://github.test/org/repo/pull/5", "task id is required"},
+		{"missing URL", "op-5", " ", "PR URL is required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &fakeRunner{}
+			if tc.wantError == "" {
+				runner.calls = []fakeCall{{wantArgs: []string{"--json", "--sandbox", "update", "op-5", "--set-metadata", "orpheus.pr_url=https://github.test/org/repo/pull/5"}}}
+			}
+			backend, err := beads.NewTaskBackendWithRunner(testutil.CanonicalTempDir(t), runner)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = backend.SetPRURL(context.Background(), tc.id, tc.url)
+
+			if tc.wantError == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("error = %v, want %q", err, tc.wantError)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("unused calls = %d", len(runner.calls))
+			}
+		})
+	}
+}
+
+func TestTaskBackendCloseRetriesWithoutRepeatedMutation(t *testing.T) {
 	dir := testutil.CanonicalTempDir(t)
+	show := []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1", "--include-dependents"}
 	runner := &fakeRunner{calls: []fakeCall{
-		{
-			wantDir:  dir,
-			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1", "--include-dependents"},
-			result:   beads.Result{Stdout: `[{"id":"op-1","title":"task","status":"in_progress","priority":2,"issue_type":"task"}]`},
-		},
-		{
-			wantDir: dir,
-			wantArgs: []string{
-				"--json",
-				"--sandbox",
-				"update",
-				"op-1",
-				"--set-metadata",
-				"orpheus.branch=orpheus/op-1",
-				"--set-metadata",
-				"orpheus.worktree=/fixture/op-1",
-			},
-		},
+		{wantDir: dir, wantArgs: show, result: beads.Result{Stdout: `[{"id":"op-1","status":"in_progress","issue_type":"task"}]`}},
+		{wantDir: dir, wantArgs: []string{"--json", "--sandbox", "close", "op-1"}},
+		{wantDir: dir, wantArgs: show, result: beads.Result{Stdout: `[{"id":"op-1","status":"closed","issue_type":"task"}]`}},
 	}}
 	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
 	if err != nil {
-		t.Fatalf("create backend: %v", err)
+		t.Fatal(err)
 	}
 
-	if err := backend.UpdateGitFacts(context.Background(), " op-1 ", " orpheus/op-1 ", " /fixture/op-1 "); err != nil {
-		t.Fatalf("update Git facts: %v", err)
+	for range 2 {
+		if err := backend.Close(context.Background(), "op-1"); err != nil {
+			t.Fatal(err)
+		}
 	}
+
 	if len(runner.calls) != 0 {
-		t.Fatalf("runner has %d unused calls", len(runner.calls))
-	}
-}
-
-func TestTaskBackendUpdateGitFactsRejectsTaskNotInProgress(t *testing.T) {
-	dir := testutil.CanonicalTempDir(t)
-	runner := &fakeRunner{calls: []fakeCall{{
-		wantDir:  dir,
-		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1", "--include-dependents"},
-		result:   beads.Result{Stdout: `[{"id":"op-1","title":"task","status":"open","priority":2,"issue_type":"task"}]`},
-	}}}
-	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
-	if err != nil {
-		t.Fatalf("create backend: %v", err)
-	}
-
-	err = backend.UpdateGitFacts(context.Background(), "op-1", "orpheus/op-1", "/fixture/op-1")
-	if err == nil || !strings.Contains(err.Error(), "task is not in progress") {
-		t.Fatalf("update Git facts error = %v, want task not in progress", err)
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("runner has %d unused calls", len(runner.calls))
-	}
-}
-
-func TestTaskBackendUpdateGitFactsRejectsTaskWithPRURL(t *testing.T) {
-	dir := testutil.CanonicalTempDir(t)
-	runner := &fakeRunner{calls: []fakeCall{{
-		wantDir:  dir,
-		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1", "--include-dependents"},
-		result:   beads.Result{Stdout: `[{"id":"op-1","title":"task","status":"in_progress","priority":2,"issue_type":"task","metadata":{"orpheus.pr_url":"https://github.test/org/repo/pull/1"}}]`},
-	}}}
-	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
-	if err != nil {
-		t.Fatalf("create backend: %v", err)
-	}
-
-	err = backend.UpdateGitFacts(context.Background(), "op-1", "orpheus/op-1", "/fixture/op-1")
-	if err == nil || !strings.Contains(err.Error(), "orpheus.pr_url is already set") {
-		t.Fatalf("update Git facts error = %v, want existing PR URL", err)
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("runner has %d unused calls", len(runner.calls))
-	}
-}
-
-func TestTaskBackendSetPRURLWritesMetadata(t *testing.T) {
-	dir := testutil.CanonicalTempDir(t)
-	runner := &fakeRunner{calls: []fakeCall{{
-		wantDir: dir,
-		wantArgs: []string{
-			"--json",
-			"--sandbox",
-			"update",
-			"op-5",
-			"--set-metadata",
-			"orpheus.pr_url=https://github.test/org/repo/pull/5",
-		},
-	}}}
-	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
-	if err != nil {
-		t.Fatalf("create backend: %v", err)
-	}
-
-	if err := backend.SetPRURL(context.Background(), " op-5 ", " https://github.test/org/repo/pull/5 "); err != nil {
-		t.Fatalf("set PR URL: %v", err)
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("runner has %d unused calls", len(runner.calls))
-	}
-}
-
-func TestTaskBackendSetPRURLValidatesRequiredInputs(t *testing.T) {
-	backend, err := beads.NewTaskBackendWithRunner(testutil.CanonicalTempDir(t), &fakeRunner{})
-	if err != nil {
-		t.Fatalf("create backend: %v", err)
-	}
-
-	if err := backend.SetPRURL(context.Background(), "", "https://github.test/org/repo/pull/5"); err == nil ||
-		!strings.Contains(err.Error(), "task id is required") {
-		t.Fatalf("missing task id error = %v", err)
-	}
-	if err := backend.SetPRURL(context.Background(), "op-5", " "); err == nil ||
-		!strings.Contains(err.Error(), "PR URL is required") {
-		t.Fatalf("missing PR URL error = %v", err)
-	}
-}
-
-func TestTaskBackendCloseClosesOpenTask(t *testing.T) {
-	dir := testutil.CanonicalTempDir(t)
-	runner := &fakeRunner{calls: []fakeCall{
-		{
-			wantDir:  dir,
-			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1", "--include-dependents"},
-			result:   beads.Result{Stdout: `[{"id":"op-1","title":"task","status":"in_progress","priority":2,"issue_type":"task"}]`},
-		},
-		{
-			wantDir:  dir,
-			wantArgs: []string{"--json", "--sandbox", "close", "op-1"},
-		},
-	}}
-	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
-	if err != nil {
-		t.Fatalf("create backend: %v", err)
-	}
-
-	if err := backend.Close(context.Background(), "op-1"); err != nil {
-		t.Fatalf("close task: %v", err)
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("runner has %d unused calls", len(runner.calls))
-	}
-}
-
-func TestTaskBackendCloseTreatsAlreadyClosedTaskAsSuccess(t *testing.T) {
-	dir := testutil.CanonicalTempDir(t)
-	runner := &fakeRunner{calls: []fakeCall{{
-		wantDir:  dir,
-		wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-2", "--include-dependents"},
-		result:   beads.Result{Stdout: `[{"id":"op-2","title":"task","status":"closed","priority":2,"issue_type":"task"}]`},
-	}}}
-	backend, err := beads.NewTaskBackendWithRunner(dir, runner)
-	if err != nil {
-		t.Fatalf("create backend: %v", err)
-	}
-
-	if err := backend.Close(context.Background(), "op-2"); err != nil {
-		t.Fatalf("close already closed task: %v", err)
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("runner has %d unused calls", len(runner.calls))
+		t.Fatalf("unused calls = %d", len(runner.calls))
 	}
 }
 

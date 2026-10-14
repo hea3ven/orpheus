@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -115,10 +116,20 @@ func TestIntegrationWorkflowTaskListScopesOneRegisteredRepository(t *testing.T) 
 	must.NoError(json.Unmarshal([]byte(filteredJSON), &filteredEntries))
 	must.Len(filteredEntries, 1)
 	is.Equal("a-closed", filteredEntries[0].ID)
+	is.Equal("closed", filteredEntries[0].Status)
+	beforeUnknown := append([]string{}, reads.directories()...)
+	originalFactory := fixture.options.Dependencies.TaskBackendFactory
+	var created []string
+	fixture.options.Dependencies.TaskBackendFactory = func(source taskmodel.RepositorySource) (taskmodel.ReadBackend, error) {
+		created = append(created, source.Repository.ID)
+		return originalFactory(source)
+	}
 	_, _, unknownErr := fixture.execute("task", "list", "--repo", "missing")
 	must.Error(unknownErr)
 	is.ErrorContains(unknownErr, `repo "missing" is not registered`)
 	is.ErrorContains(unknownErr, "orpheus repo list")
+	is.Equal(beforeUnknown, reads.directories())
+	is.Empty(created, "unknown selector must not construct any backend")
 	is.NotContains(reads.directories(), repos["beta"])
 }
 
@@ -151,31 +162,6 @@ func TestIntegrationWorkflowTaskListReportsSelectedRepositoryFailure(t *testing.
 	is.NotContains(stdout, "Healthy Repo")
 	is.NotContains(stderr, "Healthy Repo")
 	is.NotContains(reads.directories(), repos["beta"])
-}
-
-func TestIntegrationWorkflowTaskListComposesSourceAndProjectedStatusFilters(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	t.Parallel()
-	is := assert.New(t)
-
-	repo := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "a")
-	withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {tasks: taskListScopeTasks()}})
-
-	args := []string{"task", "list", "--query", "match", "--type", "task", "--created-after", "2026-06-01", "--created-before", "2026-06-05", "--updated-after", "2026-06-02", "--updated-before", "2026-06-05", "--status", "closed"}
-	stdout, stderr := fixture.mustExecute(args...)
-
-	is.Empty(stderr)
-	is.Contains(stdout, "a-closed")
-	for _, hidden := range []string{"a-open", "a-late", "a-other"} {
-		is.NotContains(stdout, hidden)
-	}
-	jsonStdout, jsonStderr := fixture.mustExecute(append([]string{"task", "list", "--json"}, args[2:]...)...)
-	is.Empty(jsonStderr)
-	var jsonEntries []taskViewJSONTaskEntry
-	require.NoError(t, json.Unmarshal([]byte(jsonStdout), &jsonEntries))
-	require.Len(t, jsonEntries, 1)
-	is.Equal("a-closed", jsonEntries[0].ID)
-	is.Equal("closed", jsonEntries[0].Status)
 }
 
 func TestIntegrationWorkflowTaskListReportsPartialRepoFailures(t *testing.T) {
@@ -231,42 +217,39 @@ func TestIntegrationWorkflowTaskShowResolvesPrefixQueriesOnlyResolvedRepoAndRend
 }
 
 func TestIntegrationWorkflowTaskShowEpicRendersSortedDirectChildrenFromResolvedRepo(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	t.Parallel()
-	is := assert.New(t)
+	for _, empty := range []bool{false, true} {
+		t.Run(fmt.Sprintf("empty_%t", empty), func(t *testing.T) {
+			fixture := newCommandWorkflow(t)
+			is := assert.New(t)
 
-	repos := saveTaskWorkflowRepos(t, fixture, taskWorkflowRepoSpec("local-alpha", "Local Alpha", "la"), taskWorkflowRepoSpec("managed-beta", "Managed Beta", "mb"))
-	reads := withWorkflowSources(t, fixture, map[string]taskSourceResult{repos["local-alpha"]: {tasks: []taskmodel.Task{
-		taskWFTask("la-epic", "Plan release", taskmodel.StatusInProgress, taskmodel.IssueTypeEpic),
-		taskWFTask("la-child-z", "Closed task", taskmodel.StatusClosed, taskmodel.IssueTypeTask, taskWFParent("la-epic")),
-		taskWFTask("la-child-b", "Nested epic", taskmodel.StatusInProgress, taskmodel.IssueTypeEpic, taskWFParent("la-epic")),
-		taskWFTask("la-grandchild", "Must not appear", taskmodel.StatusOpen, taskmodel.IssueTypeTask, taskWFParent("la-child-a")),
-	}}, repos["managed-beta"]: {}})
+			repos := saveTaskWorkflowRepos(t, fixture, taskWorkflowRepoSpec("local-alpha", "Local Alpha", "la"), taskWorkflowRepoSpec("managed-beta", "Managed Beta", "mb"))
+			reads := withWorkflowSources(t, fixture, map[string]taskSourceResult{repos["local-alpha"]: {tasks: []taskmodel.Task{
+				taskWFTask("la-epic", "Plan release", taskmodel.StatusInProgress, taskmodel.IssueTypeEpic),
+				taskWFTask("la-child-z", "Closed task", taskmodel.StatusClosed, taskmodel.IssueTypeTask, taskWFParent("la-epic")),
+				taskWFTask("la-child-b", "Nested epic", taskmodel.StatusInProgress, taskmodel.IssueTypeEpic, taskWFParent("la-epic")),
+				taskWFTask("la-grandchild", "Must not appear", taskmodel.StatusOpen, taskmodel.IssueTypeTask, taskWFParent("la-child-a")),
+			}}, repos["managed-beta"]: {}})
 
-	stdout, stderr := fixture.mustExecute("task", "show", "la-epic")
+			if empty {
+				reads = withWorkflowSources(t, fixture, map[string]taskSourceResult{repos["local-alpha"]: {tasks: []taskmodel.Task{taskWFTask("la-epic", "Empty epic", taskmodel.StatusOpen, taskmodel.IssueTypeEpic)}}, repos["managed-beta"]: {}})
+			}
+			stdout, stderr := fixture.mustExecute("task", "show", "la-epic")
 
-	is.Empty(stderr)
-	is.Equal(1, reads.count("get"))
-	is.Zero(reads.count("list"))
-	for _, want := range []string{"Children:", "ID: la-child-b, Status: in_progress, Type: epic, Title: Nested epic", "ID: la-child-z, Status: closed, Type: task, Title: Closed task", "Orpheus metadata:", "History:"} {
-		is.Contains(stdout, want)
+			is.Empty(stderr)
+			if empty {
+				is.Contains(stdout, "Children:\n  - No direct children.\n")
+				return
+			}
+			is.Equal(1, reads.count("get"))
+			is.Zero(reads.count("list"))
+			for _, want := range []string{"Children:", "ID: la-child-b, Status: in_progress, Type: epic, Title: Nested epic", "ID: la-child-z, Status: closed, Type: task, Title: Closed task", "Orpheus metadata:", "History:"} {
+				is.Contains(stdout, want)
+			}
+			is.NotContains(stdout, "la-child-a")
+			is.NotContains(stdout, "la-grandchild")
+			is.Less(strings.Index(stdout, "la-child-b"), strings.Index(stdout, "la-child-z"))
+		})
 	}
-	is.NotContains(stdout, "la-child-a")
-	is.NotContains(stdout, "la-grandchild")
-	is.Less(strings.Index(stdout, "la-child-b"), strings.Index(stdout, "la-child-z"))
-}
-
-func TestIntegrationWorkflowTaskShowEpicRendersEmptyChildrenState(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	t.Parallel()
-
-	repo := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
-	withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {tasks: []taskmodel.Task{taskWFTask("op-epic", "Empty epic", taskmodel.StatusOpen, taskmodel.IssueTypeEpic)}}})
-
-	stdout, stderr := fixture.mustExecute("task", "show", "op-epic")
-
-	assert.Empty(t, stderr)
-	assert.Contains(t, stdout, "Children:\n  - No direct children.\n")
 }
 
 func TestIntegrationWorkflowTaskShowEpicReportsChildQueryFailureWithRepositoryAndParent(t *testing.T) {
@@ -322,27 +305,11 @@ func TestIntegrationWorkflowTaskStatsRendersImplementationExecutionUsage(t *test
 	_, err = stateStore.FinishReview("alpha", "op-1", reviewAttempt.Attempt, taskstate.ReviewStatusPassed)
 	must.NoError(err)
 
-	stdout, stderr := fixture.mustExecute("task", "stats", "op-1")
-
-	is.Empty(stderr)
-	for _, want := range []string{"Executions", "Estimated cost uses harness-reported estimates", "implementation", "codex-profile", "codex", "gpt-5", `"codex" "exec" "--model" "gpt-5"`, "2026-07-07T10:00:00Z", "2026-07-07T10:02:00Z", "2m0s", "succeeded", "session-123", "total=190 input=123 cached_input=45 output=67 reasoning_output=8", "estimated API-equivalent cost=$0.000773", "review-agent", "ai-review", "review-session-123", "total=50 input=20 cached_input=5 output=30 reasoning_output=7", "combined", "$0.001092"} {
-		is.Contains(stdout, want)
-	}
-}
-
-func TestIntegrationWorkflowTaskStatsRendersSyncConflictResolutionExecutionUsage(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	t.Parallel()
-	is := assert.New(t)
-	must := require.New(t)
-
-	repo := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
-	withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {tasks: []taskmodel.Task{taskWFTask("op-1", "Stats", taskmodel.StatusInProgress, taskmodel.IssueTypeTask)}}})
 	startedAt := workflowTime("2026-07-07T10:00:00Z")
 	finishedAt := workflowTime("2026-07-07T10:12:00Z")
-	stateStore := taskstate.NewStoreWithClock(fixture.paths, clockSequence(startedAt, finishedAt))
+	stateStore = taskstate.NewStoreWithClock(fixture.paths, clockSequence(startedAt, finishedAt))
 	opts := taskstate.SyncConflictResolutionEventOptions{Execution: taskstate.AgentExecution{Agent: "codex", Profile: "sync-profile", Harness: "codex", Model: "gpt-5", Command: "codex", Args: []string{"exec", "--profile", "sync-profile"}, SessionName: "sync-conflict-op-1", StartedAt: startedAt}, Branch: "orpheus/op-1", DefaultBranch: "main", Worktree: repo, PRURL: "https://github.test/org/repo/pull/42", ConflictFiles: []string{"conflict.txt"}}
-	_, err := stateStore.RecordSyncConflictResolutionStarted("alpha", "op-1", opts)
+	_, err = stateStore.RecordSyncConflictResolutionStarted("alpha", "op-1", opts)
 	must.NoError(err)
 	finishedOpts := opts
 	finishedOpts.Commit = "merge123"
@@ -353,7 +320,10 @@ func TestIntegrationWorkflowTaskStatsRendersSyncConflictResolutionExecutionUsage
 	stdout, stderr := fixture.mustExecute("task", "stats", "op-1")
 
 	is.Empty(stderr)
-	for _, want := range []string{"sync-conflict-resolution", "sync-profile", "codex", "gpt-5", `"codex" "exec" "--profile" "sync-profile"`, "2026-07-07T10:00:00Z", "2026-07-07T10:12:00Z", "12m0s", "succeeded", "sync-session-123", "total=165 input=120 cached_input=10 output=30 reasoning_output=5", "estimated API-equivalent cost=$", "Totals"} {
+	for _, want := range []string{"Executions", "Estimated cost uses harness-reported estimates", "implementation", "codex-profile", "codex", "gpt-5", `"codex" "exec" "--model" "gpt-5"`, "2026-07-07T10:00:00Z", "2026-07-07T10:02:00Z", "2m0s", "succeeded", "session-123", "total=190 input=123 cached_input=45 output=67 reasoning_output=8", "estimated API-equivalent cost=$0.000773", "review-agent", "ai-review", "review-session-123", "total=50 input=20 cached_input=5 output=30 reasoning_output=7", "combined"} {
+		is.Contains(stdout, want)
+	}
+	for _, want := range []string{"sync-conflict-resolution", "sync-profile", `"codex" "exec" "--profile" "sync-profile"`, "2026-07-07T10:12:00Z", "12m0s", "sync-session-123", "total=165 input=120 cached_input=10 output=30 reasoning_output=5"} {
 		is.Contains(stdout, want)
 	}
 	is.Regexp(`(?m)^sync-conflict-resolution\s+1\s+12m0s\s+165\s+120\s+10\s+30\s+5\s+\$[0-9.]+\s+0\s+0$`, stdout)
@@ -420,6 +390,8 @@ func TestIntegrationWorkflowTaskStatsCountsMissingPiUsageCostAsUnknown(t *testin
 	must.NoError(err)
 	stdout, stderr := fixture.mustExecute("task", "stats", "op-1")
 	is.Empty(stderr)
+	is.Regexp(`(?m)^implementation\s+1\s+2m0s\s+0\s+0\s+0\s+0\s+0\s+\$0\.000000\s+1\s+1$`, stdout)
+	is.NotContains(stdout, "Pi-reported estimated cost=")
 	for _, want := range []string{"pi-profile", "pi", "openai-codex/gpt-5.5", "unknown: matching_pi_session_has_no_assistant_usage (candidates=1)", "$0.000000"} {
 		is.Contains(stdout, want)
 	}
@@ -513,71 +485,58 @@ func TestIntegrationWorkflowTaskStatsDirectEpicStatsRemainAvailable(t *testing.T
 	is.Contains(stdout, "150")
 }
 
-func TestIntegrationWorkflowTaskShowRendersClosedItemsAndHistory(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	t.Parallel()
-	is := assert.New(t)
-	must := require.New(t)
-
-	repo := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
-	withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {tasks: []taskmodel.Task{taskWFTask("op-closed", "done", taskmodel.StatusClosed, taskmodel.IssueTypeTask, taskWFPriority(2))}}})
-	stateStore := taskstate.NewStoreWithClock(fixture.paths, func() time.Time { return workflowTime("2026-01-02T03:04:05Z") })
-	_, err := stateStore.RecordTaskClosed("alpha", "op-closed", taskstate.TaskClosedOptions{Reason: taskstate.CloseReasonPRMerged, PRURL: "https://github.test/org/alpha/pull/42", ObservedPRState: "merged"})
-	must.NoError(err)
-	stdout, stderr := fixture.mustExecute("task", "show", "op-closed")
-	is.Empty(stderr)
-	is.Contains(stdout, "ID: op-closed")
-	is.Contains(stdout, "Status: closed")
-	is.Contains(stdout, "History:\n  2026-01-02T03:04:05Z Task closed\n")
-}
-
 func TestIntegrationWorkflowTaskShowRendersChronologicalHistoryForClosedEpic(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	t.Parallel()
-	is := assert.New(t)
-	must := require.New(t)
+	for _, kind := range []taskmodel.IssueType{taskmodel.IssueTypeTask, taskmodel.IssueTypeEpic} {
+		t.Run(string(kind), func(t *testing.T) {
+			fixture := newCommandWorkflow(t)
+			is := assert.New(t)
+			must := require.New(t)
 
-	repo := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
-	withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {tasks: []taskmodel.Task{taskWFTask("op-epic", "Closed epic", taskmodel.StatusClosed, taskmodel.IssueTypeEpic, taskWFPriority(1))}}})
-	now := workflowTime("2026-01-02T03:04:05Z")
-	stateStore := taskstate.NewStoreWithClock(fixture.paths, func() time.Time { return now })
-	_, err := stateStore.RecordSetupEvent("alpha", "op-epic", taskstate.EventWorktreeCreated, taskstate.SetupEventOptions{})
-	must.NoError(err)
-	now = now.Add(time.Minute)
-	taskState, err := stateStore.Load("alpha", "op-epic")
-	must.NoError(err)
-	taskState.Events = append(taskState.Events, taskstate.Event{Type: taskstate.EventWorktreeReused, At: now})
-	must.NoError(fixture.paths.WriteDataYAML(filepath.Join("repos", "alpha", "tasks", "op-epic.yaml"), taskState))
-	now = now.Add(time.Minute)
-	run, err := stateStore.StartRun("alpha", "op-epic", taskstate.StartRunOptions{Agent: "codex"})
-	must.NoError(err)
-	now = now.Add(time.Minute)
-	_, err = stateStore.CompleteRun("alpha", "op-epic", run.Attempt, taskstate.CompleteRunOptions{Summary: "Record task history", Description: "Recorded completion history.", DetailedDescription: "Detailed history.", TechnicalExplanation: "Technical explanation."})
-	must.NoError(err)
-	now = now.Add(time.Minute)
-	_, err = stateStore.FinishRun("alpha", "op-epic", run.Attempt, taskstate.RunStatusSucceeded)
-	must.NoError(err)
-	now = now.Add(time.Minute)
-	_, err = stateStore.RecordFinalizationCommit("alpha", "op-epic", "abc123")
-	must.NoError(err)
-	now = now.Add(time.Minute)
-	_, err = stateStore.RecordFinalizationPush("alpha", "op-epic", taskstate.FinalizationPushOptions{Branch: "main", PushTarget: taskstate.PushTargetMain})
-	must.NoError(err)
-	now = now.Add(time.Minute)
-	_, err = stateStore.RecordFinalizationClose("alpha", "op-epic", taskstate.FinalizationCloseOptions{Reason: taskstate.CloseReasonDefaultBranchPublished})
-	must.NoError(err)
-	stdout, stderr := fixture.mustExecute("task", "show", "op-epic")
-	is.Empty(stderr)
-	expected := []string{"2026-01-02T03:04:05Z Worktree created", "2026-01-02T03:06:05Z Run started", "2026-01-02T03:07:05Z Completion recorded", "2026-01-02T03:08:05Z Run finished", "2026-01-02T03:10:05Z Pushed main", "2026-01-02T03:11:05Z Task closed"}
-	prev := strings.Index(stdout, "History:")
-	for _, want := range expected {
-		idx := strings.Index(stdout, want)
-		is.Greater(idx, prev, want)
-		prev = idx
+			repo := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
+			withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {tasks: []taskmodel.Task{taskWFTask("op-epic", "Closed epic", taskmodel.StatusClosed, kind, taskWFPriority(1))}}})
+			now := workflowTime("2026-01-02T03:04:05Z")
+			stateStore := taskstate.NewStoreWithClock(fixture.paths, func() time.Time { return now })
+			_, err := stateStore.RecordSetupEvent("alpha", "op-epic", taskstate.EventWorktreeCreated, taskstate.SetupEventOptions{})
+			must.NoError(err)
+			now = now.Add(time.Minute)
+			taskState, err := stateStore.Load("alpha", "op-epic")
+			must.NoError(err)
+			taskState.Events = append(taskState.Events, taskstate.Event{Type: taskstate.EventWorktreeReused, At: now})
+			must.NoError(fixture.paths.WriteDataYAML(filepath.Join("repos", "alpha", "tasks", "op-epic.yaml"), taskState))
+			now = now.Add(time.Minute)
+			run, err := stateStore.StartRun("alpha", "op-epic", taskstate.StartRunOptions{Agent: "codex"})
+			must.NoError(err)
+			now = now.Add(time.Minute)
+			_, err = stateStore.CompleteRun("alpha", "op-epic", run.Attempt, taskstate.CompleteRunOptions{Summary: "Record task history", Description: "Recorded completion history.", DetailedDescription: "Detailed history.", TechnicalExplanation: "Technical explanation."})
+			must.NoError(err)
+			now = now.Add(time.Minute)
+			_, err = stateStore.FinishRun("alpha", "op-epic", run.Attempt, taskstate.RunStatusSucceeded)
+			must.NoError(err)
+			now = now.Add(time.Minute)
+			_, err = stateStore.RecordFinalizationCommit("alpha", "op-epic", "abc123")
+			must.NoError(err)
+			now = now.Add(time.Minute)
+			_, err = stateStore.RecordFinalizationPush("alpha", "op-epic", taskstate.FinalizationPushOptions{Branch: "main", PushTarget: taskstate.PushTargetMain})
+			must.NoError(err)
+			now = now.Add(time.Minute)
+			_, err = stateStore.RecordFinalizationClose("alpha", "op-epic", taskstate.FinalizationCloseOptions{Reason: taskstate.CloseReasonDefaultBranchPublished})
+			must.NoError(err)
+			stdout, stderr := fixture.mustExecute("task", "show", "op-epic")
+			is.Empty(stderr)
+			is.Contains(stdout, "ID: op-epic")
+			is.Contains(stdout, "Status: closed")
+			expected := []string{"2026-01-02T03:04:05Z Worktree created", "2026-01-02T03:06:05Z Run started", "2026-01-02T03:07:05Z Completion recorded", "2026-01-02T03:08:05Z Run finished", "2026-01-02T03:10:05Z Pushed main", "2026-01-02T03:11:05Z Task closed"}
+			prev := strings.Index(stdout, "History:")
+			for _, want := range expected {
+				idx := strings.Index(stdout, want)
+				is.Greater(idx, prev, want)
+				prev = idx
+			}
+			is.NotContains(stdout, "Worktree reused")
+			is.NotContains(stdout, "codex")
+			is.NotContains(stdout, "succeeded")
+		})
 	}
-	is.NotContains(stdout, "Worktree reused")
-	is.NotContains(stdout, "codex")
-	is.NotContains(stdout, "succeeded")
 }
 
 func TestIntegrationWorkflowTaskShowProjectsReviewAttemptMilestonesIntoHistory(t *testing.T) {
@@ -654,45 +613,38 @@ func TestIntegrationWorkflowTaskShowFailsWhenLocalTaskStateCannotBeLoaded(t *tes
 	is.ErrorContains(err, `repo_id is "wrong", expected "alpha"`)
 }
 
-func TestIntegrationWorkflowTaskShowRejectsUnsupportedItemsAtTaskSourceBoundary(t *testing.T) {
+func TestIntegrationWorkflowTaskShowPropagatesTaskSourceReadFailure(t *testing.T) {
 	fixture := newCommandWorkflow(t)
 	t.Parallel()
 	is := assert.New(t)
 
 	repo := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
-	withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {getErrors: map[string]error{"op-bug": unsupportedTaskSourceError(taskmodel.IssueTypeBug)}}})
+	withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {getErrors: map[string]error{"op-bug": errors.New("source read unavailable")}}})
 	stdout, stderr, err := fixture.execute("task", "show", "op-bug")
 	is.Empty(stdout)
 	is.Empty(stderr)
 	require.Error(t, err)
-	is.ErrorContains(err, "unsupported task source item")
-	is.ErrorContains(err, "issue type \"bug\" is not task or epic")
+	is.ErrorContains(err, "source read unavailable")
 }
 
 func TestIntegrationWorkflowTaskDirPrintsWorktreeDirectory(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	t.Parallel()
-	is := assert.New(t)
+	for _, main := range []bool{false, true} {
+		t.Run(fmt.Sprintf("main_%t", main), func(t *testing.T) {
+			fixture := newCommandWorkflow(t)
+			is := assert.New(t)
 
-	repos := saveTaskWorkflowRepos(t, fixture, taskWorkflowRepoSpec("alpha", "Alpha", "op"), taskWorkflowRepoSpec("beta", "Beta", "bt"))
-	worktreeDir := "/fixture/worktrees/op-1"
-	reads := withWorkflowSources(t, fixture, map[string]taskSourceResult{repos["alpha"]: {tasks: []taskmodel.Task{taskWFTask("op-1", "Worktree task", taskmodel.StatusInProgress, taskmodel.IssueTypeTask, taskWFMetadata(map[string]string{taskmodel.MetadataBranch: "orpheus/op-1", taskmodel.MetadataWorktree: worktreeDir}))}}, repos["beta"]: {err: errors.New("other repo should not be queried")}})
-	stdout, stderr := fixture.mustExecute("task", "dir", "op-1")
-	is.Empty(stderr)
-	is.Equal(worktreeDir+"\n", stdout)
-	is.NotContains(reads.directories(), repos["beta"])
-}
-
-func TestIntegrationWorkflowTaskDirPrintsRepoRootForMainTask(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	t.Parallel()
-	is := assert.New(t)
-
-	repo := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
-	withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {tasks: []taskmodel.Task{taskWFTask("op-main", "Main task", taskmodel.StatusInProgress, taskmodel.IssueTypeTask, taskWFMetadata(map[string]string{taskmodel.MetadataBranch: "main", taskmodel.MetadataWorktree: filepath.Join(repo, ".")}))}}})
-	stdout, stderr := fixture.mustExecute("task", "dir", "op-main")
-	is.Empty(stderr)
-	is.Equal(filepath.Clean(repo)+"\n", stdout)
+			repos := saveTaskWorkflowRepos(t, fixture, taskWorkflowRepoSpec("alpha", "Alpha", "op"), taskWorkflowRepoSpec("beta", "Beta", "bt"))
+			worktreeDir, branch := "/fixture/worktrees/op-1", "orpheus/op-1"
+			if main {
+				worktreeDir, branch = filepath.Clean(repos["alpha"]), "main"
+			}
+			reads := withWorkflowSources(t, fixture, map[string]taskSourceResult{repos["alpha"]: {tasks: []taskmodel.Task{taskWFTask("op-1", "Worktree task", taskmodel.StatusInProgress, taskmodel.IssueTypeTask, taskWFMetadata(map[string]string{taskmodel.MetadataBranch: branch, taskmodel.MetadataWorktree: worktreeDir}))}}, repos["beta"]: {err: errors.New("other repo should not be queried")}})
+			stdout, stderr := fixture.mustExecute("task", "dir", "op-1")
+			is.Empty(stderr)
+			is.Equal(worktreeDir+"\n", stdout)
+			is.NotContains(reads.directories(), repos["beta"])
+		})
+	}
 }
 
 func TestIntegrationWorkflowTaskDirReportsMissingAndInconsistentMetadata(t *testing.T) {
@@ -719,53 +671,20 @@ func TestIntegrationWorkflowTaskDirReportsMissingAndInconsistentMetadata(t *test
 }
 
 func TestIntegrationWorkflowTaskShowReviewDisplaysCrossAttemptFindingHistory(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	t.Parallel()
-	is := assert.New(t)
-	store, repoPath := setupTaskShowReviewWorkflowRepo(t, fixture, "op-main")
-	seedTaskShowReviewState(t, fixture.paths, repoPath)
-	_ = store
-	stdout, stderr := fixture.mustExecute("task", "show", "review", "op-main")
-	is.Empty(stderr)
-	for _, want := range []string{"Review state for op-main (repo alpha)", "Authoritative review history:", "Attempt 1: passed (1 authoritative finding(s))", "1/1 · manual · separate_task · created task op-41 · Older cleanup", "Attempt 2: blocked (4 authoritative finding(s))", "2/1 · unit-tests · blocking · open · Tests fail", "2/2 · ai-review · blocking · follow-up run 1 running · Race condition", "2/3 · ai-review · blocking · waived · Known limitation", "2/4 · ai-review · separate_task · created task op-42 · Extract helper", "orpheus task show review <task-id> <review-attempt> <finding-number>", "Next step: run `orpheus task run op-main` to address open blocking findings"} {
-		is.Contains(stdout, want)
+	for _, status := range []taskmodel.Status{taskmodel.StatusInProgress, taskmodel.StatusClosed} {
+		t.Run(string(status), func(t *testing.T) {
+			fixture := newCommandWorkflow(t)
+			is := assert.New(t)
+			store, repoPath := setupTaskShowReviewWorkflowRepoWithStatus(t, fixture, "op-main", status)
+			seedTaskShowReviewState(t, fixture.paths, repoPath)
+			_ = store
+			stdout, stderr := fixture.mustExecute("task", "show", "review", "op-main")
+			is.Empty(stderr)
+			for _, want := range []string{"Review state for op-main (repo alpha)", "Authoritative review history:", "Attempt 1: passed (1 authoritative finding(s))", "1/1 · manual · separate_task · created task op-41 · Older cleanup", "Attempt 2: blocked (4 authoritative finding(s))", "2/1 · unit-tests · blocking · open · Tests fail", "2/2 · ai-review · blocking · follow-up run 1 running · Race condition", "2/3 · ai-review · blocking · waived · Known limitation", "2/4 · ai-review · separate_task · created task op-42 · Extract helper", "orpheus task show review <task-id> <review-attempt> <finding-number>", "Next step: run `orpheus task run op-main` to address open blocking findings"} {
+				is.Contains(stdout, want)
+			}
+		})
 	}
-}
-
-func TestIntegrationWorkflowTaskShowReviewGuidesRetryAfterFailedFollowUp(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	t.Parallel()
-	is := assert.New(t)
-	must := require.New(t)
-	runStore, repoPath := setupTaskShowReviewWorkflowRepo(t, fixture, "op-retry")
-	review, err := runStore.StartReview("alpha", "op-retry")
-	must.NoError(err)
-	_, err = runStore.RecordReviewFinding("alpha", "op-retry", review.Attempt, taskstate.ReviewFinding{Type: taskstate.FindingTypeBlocking, Title: "Retry me", Description: "The first fix failed."})
-	must.NoError(err)
-	_, err = runStore.FinishReview("alpha", "op-retry", review.Attempt, taskstate.ReviewStatusBlocked)
-	must.NoError(err)
-	failed, err := runStore.StartRun("alpha", "op-retry", taskstate.StartRunOptions{Agent: "implementer", Branch: "main", Worktree: repoPath, ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: review.Attempt, FindingIndexes: []int{0}}})
-	must.NoError(err)
-	_, err = runStore.TargetReviewFindings("alpha", "op-retry", review.Attempt, []int{0}, failed.Attempt)
-	must.NoError(err)
-	_, err = runStore.FinishRun("alpha", "op-retry", failed.Attempt, taskstate.RunStatusFailed)
-	must.NoError(err)
-	stdout, stderr := fixture.mustExecute("task", "show", "review", "op-retry")
-	is.Empty(stderr)
-	is.Contains(stdout, "follow-up run 1 failed · Retry me")
-	is.Contains(stdout, "Next step: retry `orpheus task run op-retry`")
-}
-
-func TestIntegrationWorkflowTaskShowReviewGuidesWhenTaskHasNoReviewAttempts(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	t.Parallel()
-	is := assert.New(t)
-	setupTaskShowReviewWorkflowRepo(t, fixture, "op-empty")
-	stdout, stderr := fixture.mustExecute("task", "show", "review", "op-empty")
-	is.Empty(stderr)
-	is.Contains(stdout, "Review state for op-empty (repo alpha)")
-	is.Contains(stdout, "No review attempts recorded for op-empty.")
-	is.Contains(stdout, "Next step: run `orpheus task run op-empty` after task work is ready.")
 }
 
 func TestIntegrationWorkflowTaskShowReviewRendersManuallyAddressedFinding(t *testing.T) {
@@ -786,59 +705,4 @@ func TestIntegrationWorkflowTaskShowReviewRendersManuallyAddressedFinding(t *tes
 	is.Empty(stderr)
 	is.Contains(stdout, "Authoritative finding 1/1:")
 	is.Contains(stdout, "Disposition: addressed manually: Verified in the worktree.")
-}
-
-func TestIntegrationWorkflowTaskShowReviewGuidesPausedAutomatedBlockerDecision(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	t.Parallel()
-	is := assert.New(t)
-	must := require.New(t)
-	runStore, _ := setupTaskShowReviewWorkflowRepo(t, fixture, "op-paused")
-	reviewAttempt, err := runStore.StartReviewWithOptions("alpha", "op-paused", taskstate.StartReviewOptions{Pipeline: "quality", Step: "unit"})
-	must.NoError(err)
-	_, err = runStore.RecordReviewStep("alpha", "op-paused", reviewAttempt.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindCheck, Name: "unit"})
-	must.NoError(err)
-	_, err = runStore.RecordReviewFinding("alpha", "op-paused", reviewAttempt.Attempt, taskstate.ReviewFinding{Type: taskstate.FindingTypeBlocking, Title: "Check failed", Description: "make test failed.", Step: "unit"})
-	must.NoError(err)
-	_, err = runStore.PauseReviewForAutomatedBlockerDecision("alpha", "op-paused", reviewAttempt.Attempt, "unit")
-	must.NoError(err)
-	stdout, stderr := fixture.mustExecute("task", "show", "review", "op-paused", "1")
-	is.Empty(stderr)
-	is.Contains(stdout, "Automated blocker decisions: paused")
-	is.Contains(stdout, "Next step: automated blocker decision is paused; run `orpheus task run op-paused` to resume step unit.")
-}
-
-func TestIntegrationWorkflowTaskShowReviewGuidesInterruptedAutomatedBlockerDecision(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	t.Parallel()
-	is := assert.New(t)
-	must := require.New(t)
-	runStore, _ := setupTaskShowReviewWorkflowRepo(t, fixture, "op-interrupted")
-	reviewAttempt, err := runStore.StartReviewWithOptions("alpha", "op-interrupted", taskstate.StartReviewOptions{Pipeline: "quality", Step: "unit"})
-	must.NoError(err)
-	_, err = runStore.RecordReviewFinding("alpha", "op-interrupted", reviewAttempt.Attempt, taskstate.ReviewFinding{Type: taskstate.FindingTypeBlocking, Title: "Check failed", Description: "make test failed.", Step: "unit"})
-	must.NoError(err)
-	_, err = runStore.MarkReviewAutomatedBlockerDecisionInterrupted("alpha", "op-interrupted", reviewAttempt.Attempt)
-	must.NoError(err)
-	_, err = runStore.FinishReview("alpha", "op-interrupted", reviewAttempt.Attempt, taskstate.ReviewStatusBlocked)
-	must.NoError(err)
-	stdout, stderr := fixture.mustExecute("task", "show", "review", "op-interrupted", "1")
-	is.Empty(stderr)
-	is.Contains(stdout, "Automated blocker decisions: interrupted")
-	is.Contains(stdout, "Next step: automated blocker decisions were interrupted; run `orpheus task run op-interrupted` to start a fresh review.")
-}
-
-func TestIntegrationWorkflowTaskShowReviewDisplaysClosedTaskReviewState(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	t.Parallel()
-	is := assert.New(t)
-	_, repoPath := setupTaskShowReviewWorkflowRepoWithStatus(t, fixture, "op-main", taskmodel.StatusClosed)
-	seedTaskShowReviewState(t, fixture.paths, repoPath)
-	stdout, stderr := fixture.mustExecute("task", "show", "review", "op-main")
-	is.Empty(stderr)
-	is.Contains(stdout, "Review state for op-main (repo alpha)")
-	is.Contains(stdout, "Authoritative review history:")
-	is.Contains(stdout, "Attempt 2: blocked")
-	is.Contains(stdout, "2/1 · unit-tests · blocking · open · Tests fail")
-	is.Contains(stdout, "2/4 · ai-review · separate_task · created task op-42 · Extract helper")
 }

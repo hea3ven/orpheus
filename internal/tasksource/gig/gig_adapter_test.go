@@ -134,6 +134,9 @@ func TestIntegrationAdapterContractGigEditsPreserveMetadataAndProtectNonblocking
 	assert.Equal(t, "operator", updated.Owner)
 	assert.Equal(t, other.ID, updated.Relations.ParentID)
 	assert.Equal(t, []string{dependency.ID}, updated.Relations.DependencyIDs)
+	retriedAdd, err := backend.Update(t.Context(), task.UpdateOptions{ID: item.ID, AddBlockingIDs: []string{dependency.ID}})
+	require.NoError(t, err)
+	assert.Equal(t, updated.UpdatedAt, retriedAdd.UpdatedAt)
 	require.NoError(t, backend.SetPRURL(t.Context(), item.ID, "url"))
 	withNative(t, dir, func(store *sdk.Store) {
 		native, err := store.Get(item.ID)
@@ -160,10 +163,11 @@ func TestIntegrationAdapterContractGigEditsPreserveMetadataAndProtectNonblocking
 	assert.ErrorIs(t, err, task.ErrMutationConflict)
 	_, err = backend.Update(t.Context(), task.UpdateOptions{ID: item.ID, ParentID: stringPtr(""), ExternalRef: stringPtr(""), AddBlockingIDs: []string{dependency.ID}})
 	require.NoError(t, err)
-	_, err = backend.Update(t.Context(), task.UpdateOptions{ID: item.ID, RemoveBlockingIDs: []string{dependency.ID}})
+	removed, err := backend.Update(t.Context(), task.UpdateOptions{ID: item.ID, RemoveBlockingIDs: []string{dependency.ID}})
 	require.NoError(t, err)
-	_, err = backend.Update(t.Context(), task.UpdateOptions{ID: item.ID, RemoveBlockingIDs: []string{dependency.ID}})
+	retriedRemove, err := backend.Update(t.Context(), task.UpdateOptions{ID: item.ID, RemoveBlockingIDs: []string{dependency.ID}})
 	require.NoError(t, err)
+	assert.Equal(t, removed.UpdatedAt, retriedRemove.UpdatedAt)
 	final := getItem(t, backend, item.ID)
 	assert.Empty(t, final.Relations.ParentID)
 	assert.Empty(t, final.ExternalRef)
@@ -309,21 +313,6 @@ func TestIntegrationAdapterContractGigRejectsIncompleteAndMalformedStoreReads(t 
 			assert.Empty(t, items)
 		})
 	}
-}
-
-func TestIntegrationAdapterContractGigRelationshipRetriesRetainTimestamps(t *testing.T) {
-	backend, _ := newSource(t)
-	dependency := createItem(t, backend, "Dependency", task.IssueTypeTask, "")
-	item := createItem(t, backend, "Task", task.IssueTypeTask, "", dependency.ID)
-	added, err := backend.Update(t.Context(), task.UpdateOptions{ID: item.ID, AddBlockingIDs: []string{dependency.ID}})
-	require.NoError(t, err)
-	assert.Equal(t, item.UpdatedAt, added.UpdatedAt)
-	removed, err := backend.Update(t.Context(), task.UpdateOptions{ID: item.ID, RemoveBlockingIDs: []string{dependency.ID}})
-	require.NoError(t, err)
-	retried, err := backend.Update(t.Context(), task.UpdateOptions{ID: item.ID, RemoveBlockingIDs: []string{dependency.ID}})
-	require.NoError(t, err)
-	assert.Equal(t, removed.UpdatedAt, retried.UpdatedAt)
-	assert.Empty(t, retried.Relations.DependencyIDs)
 }
 
 func TestIntegrationAdapterContractGigPersistsCrossRepositoryDependenciesWithoutLocalTargets(t *testing.T) {

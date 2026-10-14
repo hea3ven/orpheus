@@ -7,25 +7,25 @@ import (
 )
 
 func TestResolveExecutionUsageCostDoesNotRepriceStoredEstimate(t *testing.T) {
-	usage := taskstate.AgentUsage{InputTokens: 100, OutputTokens: 50}
-	stored, ok := EstimateCodexUsageCost("gpt-5", usage)
-	if !ok {
-		t.Fatal("estimate stored cost ok = false, want true")
+	stored := &taskstate.AgentUsageCost{
+		Kind: UsageCostKindEstimatedAPIEquivalent, Currency: "USD", AmountMicroUSD: 17,
+		Pricing: &taskstate.AgentUsagePricing{
+			Model: "gpt-5", InputUSDPerMillionTokens: "0.01", OutputUSDPerMillionTokens: "0.32",
+			Source: "historical price snapshot", EffectiveDate: "2025-01-01",
+		},
 	}
-
-	original := usagePrices["gpt-5"]
-	usagePrices["gpt-5"] = usagePrice{
-		model: "gpt-5", inputMicroUSDPerMillion: 999_000_000, outputMicroUSDPerMillion: 999_000_000,
-	}
-	t.Cleanup(func() { usagePrices["gpt-5"] = original })
 
 	resolved := ResolveExecutionUsageCost(taskstate.AgentExecution{
-		Harness: "codex", Model: "gpt-5", Usage: &usage, UsageCost: stored,
+		Harness: "codex", Model: "gpt-5",
+		Usage: &taskstate.AgentUsage{InputTokens: 100, OutputTokens: 50}, UsageCost: stored,
 	})
-	if !resolved.Known || resolved.Cost.AmountMicroUSD != stored.AmountMicroUSD {
-		t.Fatalf("resolved = %#v, want unchanged stored amount %d", resolved, stored.AmountMicroUSD)
+
+	if !resolved.Known || resolved.Cost.AmountMicroUSD != 17 {
+		t.Fatalf("resolved = %#v, want stored historical amount 17", resolved)
 	}
-	if resolved.Cost.Pricing.InputUSDPerMillionTokens != "1.25" {
-		t.Fatalf("stored pricing = %#v, want original pricing snapshot", resolved.Cost.Pricing)
+	if resolved.Cost.Pricing.InputUSDPerMillionTokens != "0.01" ||
+		resolved.Cost.Pricing.OutputUSDPerMillionTokens != "0.32" ||
+		resolved.Cost.Pricing.EffectiveDate != "2025-01-01" {
+		t.Fatalf("pricing = %#v, want unchanged historical snapshot", resolved.Cost.Pricing)
 	}
 }

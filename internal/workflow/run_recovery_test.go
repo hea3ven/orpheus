@@ -160,32 +160,6 @@ func TestReconcilePrimaryReviewExecutionRecordsFailedReview(t *testing.T) {
 	}
 }
 
-func TestReconcilePrimaryReviewExecutionRecognizesConcurrentRecovery(t *testing.T) {
-	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
-	if err != nil {
-		t.Fatalf("new paths: %v", err)
-	}
-	store := taskstate.NewStore(paths)
-	review, err := store.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{Pipeline: "ai", Step: "ai-review"})
-	if err != nil {
-		t.Fatalf("start review: %v", err)
-	}
-	execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, Agent: "reviewer", StartedAt: review.StartedAt, SupervisorPID: 10}
-	if _, err := store.RecordReviewStep("alpha", "op-review", review.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution}); err != nil {
-		t.Fatalf("record review step: %v", err)
-	}
-	if _, err := store.InterruptPrimaryReviewExecution("alpha", "op-review", review.Attempt, "ai-review", taskstate.InterruptPrimaryReviewExecutionOptions{Reason: "supervisor_absent_child_pid_not_recorded_assume_not_started", Trigger: "task_run"}); err != nil {
-		t.Fatalf("interrupt review: %v", err)
-	}
-	inspection, err := workflow.ReconcilePrimaryReviewExecution(context.Background(), paths, store, "alpha", "op-review", review.Attempt, "task_review", recoveryProbe(map[int]agentexec.ProcessLiveness{10: agentexec.ProcessAbsent}))
-	if err != nil {
-		t.Fatalf("reconcile concurrently recovered review: %v", err)
-	}
-	if inspection.Condition != workflow.AttachedExecutionAlreadyRecovered || inspection.Reason != "primary_review_interrupted_by_concurrent_recovery" {
-		t.Fatalf("inspection = %#v, want concurrent recovery marker", inspection)
-	}
-}
-
 func TestPrepareTaskRunMarksConcurrentlyRecoveredPrimaryForInspectionStop(t *testing.T) {
 	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
@@ -214,7 +188,7 @@ func TestPrepareTaskRunMarksConcurrentlyRecoveredPrimaryForInspectionStop(t *tes
 	if err != nil {
 		t.Fatalf("prepare task run: %v", err)
 	}
-	if prepared.ReviewInspection.Condition != workflow.AttachedExecutionAlreadyRecovered {
+	if prepared.ReviewInspection.Condition != workflow.AttachedExecutionAlreadyRecovered || prepared.ReviewInspection.Reason != "primary_review_interrupted_by_concurrent_recovery" {
 		t.Fatalf("review inspection = %#v, want concurrent recovery marker", prepared.ReviewInspection)
 	}
 }

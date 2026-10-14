@@ -19,28 +19,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func TestTaskSyncHelpExplainsBranchUpdatePolicies(t *testing.T) {
-	command := newTaskSyncCommand(&rootOptions{})
-	for _, want := range []string{
-		"task sync <task-id> incorporates the integration branch",
-		"task sync --all leaves conflict-free branches unchanged",
-	} {
-		if !strings.Contains(command.Long, want) {
-			t.Fatalf("task sync help = %q, want %q", command.Long, want)
-		}
-	}
-}
-
-func TestTaskListDocumentsRepositoryFilter(t *testing.T) {
-	flag := newTaskListCommand(&rootOptions{}).Flags().Lookup("repo")
-	if flag == nil {
-		t.Fatal("task list --repo flag is not registered")
-	}
-	if flag.Usage != "limit to registered repository id, name, or task prefix" {
-		t.Fatalf("task list --repo help = %q", flag.Usage)
-	}
-}
-
 func TestTaskListOptionsRejectUnsupportedStatusAndDate(t *testing.T) {
 	for _, options := range []taskListOptions{
 		{statuses: []string{"ready"}},
@@ -51,118 +29,6 @@ func TestTaskListOptionsRejectUnsupportedStatusAndDate(t *testing.T) {
 		if _, err := options.normalized(); err == nil {
 			t.Fatalf("normalized %#v successfully, want validation error", options)
 		}
-	}
-}
-
-func TestTaskClosureOutputReportsAuditFailureAfterWorktreeRemoval(t *testing.T) {
-	cleanup := &workflow.WorktreeCleanupResult{
-		Outcome:  workflow.WorktreeCleanupRemoved,
-		Worktree: "/worktrees/op-1",
-		Reason:   "removed, but could not record local cleanup history: disk full",
-	}
-
-	t.Run("done", func(t *testing.T) {
-		var output bytes.Buffer
-		command := &cobra.Command{}
-		command.SetOut(&output)
-		if err := renderTaskDoneResult(command, workflow.FinalizationResult{
-			Task:            taskmodel.Task{ID: "op-1"},
-			Finalization:    taskstate.Finalization{Commit: "abc123"},
-			Branch:          "main",
-			WorktreeCleanup: cleanup,
-		}); err != nil {
-			t.Fatalf("render task done result: %v", err)
-		}
-		if !strings.Contains(output.String(), cleanup.Reason) {
-			t.Fatalf("task done output = %q, want audit failure %q", output.String(), cleanup.Reason)
-		}
-	})
-
-	t.Run("sync", func(t *testing.T) {
-		var output bytes.Buffer
-		if err := renderTaskSyncResult(&output, workflow.SyncResult{
-			Status:          workflow.SyncStatusPRMerged,
-			Task:            taskmodel.Task{ID: "op-1"},
-			PRURL:           "https://github.test/org/repo/pull/1",
-			WorktreeCleanup: cleanup,
-		}); err != nil {
-			t.Fatalf("render task sync result: %v", err)
-		}
-		if !strings.Contains(output.String(), cleanup.Reason) {
-			t.Fatalf("task sync output = %q, want audit failure %q", output.String(), cleanup.Reason)
-		}
-	})
-}
-
-func TestTaskClosureOutputReportsUnsafeWorktreePath(t *testing.T) {
-	cleanup := &workflow.WorktreeCleanupResult{
-		Outcome:  workflow.WorktreeCleanupUnsafe,
-		Worktree: "/worktrees/op-1",
-		Reason:   "reload local task state after closure: state storage unavailable",
-	}
-
-	t.Run("done", func(t *testing.T) {
-		var output bytes.Buffer
-		command := &cobra.Command{}
-		command.SetOut(&output)
-		if err := renderTaskDoneResult(command, workflow.FinalizationResult{
-			Task:            taskmodel.Task{ID: "op-1"},
-			Finalization:    taskstate.Finalization{Commit: "abc123"},
-			Branch:          "main",
-			WorktreeCleanup: cleanup,
-		}); err != nil {
-			t.Fatalf("render task done result: %v", err)
-		}
-		if !strings.Contains(output.String(), cleanup.Worktree) || !strings.Contains(output.String(), cleanup.Reason) {
-			t.Fatalf("task done output = %q, want worktree and reload failure", output.String())
-		}
-	})
-
-	t.Run("sync", func(t *testing.T) {
-		var output bytes.Buffer
-		if err := renderTaskSyncResult(&output, workflow.SyncResult{
-			Status:          workflow.SyncStatusPRMerged,
-			Task:            taskmodel.Task{ID: "op-1"},
-			PRURL:           "https://github.test/org/repo/pull/1",
-			WorktreeCleanup: cleanup,
-		}); err != nil {
-			t.Fatalf("render task sync result: %v", err)
-		}
-		if !strings.Contains(output.String(), cleanup.Worktree) || !strings.Contains(output.String(), cleanup.Reason) {
-			t.Fatalf("task sync output = %q, want worktree and reload failure", output.String())
-		}
-	})
-}
-
-func TestFilteredTaskInventoryAppliesProjectedStatusAfterHidingContext(t *testing.T) {
-	repository := taskmodel.Repository{ID: "alpha"}
-	projection := status.Projection{Groups: []status.Group{
-		{
-			ID: status.GroupReadyToRun,
-			Entries: []status.Entry{
-				{Kind: status.EntryTask, Repository: repository, Task: taskmodel.Task{ID: "a-selected"}},
-				{Kind: status.EntryTask, Repository: repository, Task: taskmodel.Task{ID: "a-context"}},
-			},
-		},
-		{
-			ID: status.GroupDoneClosed,
-			Entries: []status.Entry{
-				{Kind: status.EntryTask, Repository: repository, Task: taskmodel.Task{ID: "a-closed", Status: taskmodel.StatusClosed}},
-			},
-		},
-	}}
-	candidates := []taskmodel.RepoTask{
-		{Repository: repository, Task: taskmodel.Task{ID: "a-selected"}},
-		{Repository: repository, Task: taskmodel.Task{ID: "a-closed", Status: taskmodel.StatusClosed}},
-	}
-
-	defaultInventory := filteredTaskInventory(projection, candidates, nil)
-	if got := taskIDsInInventory(defaultInventory); !equalStrings(got, []string{"a-selected"}) {
-		t.Fatalf("default task-list rows = %v, want selected non-closed row only", got)
-	}
-	closedInventory := filteredTaskInventory(projection, candidates, map[status.GroupID]struct{}{status.GroupDoneClosed: {}})
-	if got := taskIDsInInventory(closedInventory); !equalStrings(got, []string{"a-closed"}) {
-		t.Fatalf("closed task-list rows = %v, want selected closed row only", got)
 	}
 }
 
@@ -180,6 +46,7 @@ func TestFilteredTaskInventoryProjectsExcludedRelationshipContext(t *testing.T) 
 		},
 	}}}
 	candidates := []taskmodel.RepoTask{
+		{Repository: repository, Task: taskmodel.Task{ID: "a-child", Status: taskmodel.StatusClosed}},
 		{Repository: repository, Task: taskmodel.Task{ID: "a-epic"}},
 		{Repository: repository, Task: taskmodel.Task{ID: "a-selected-child"}},
 		{Repository: repository, Task: taskmodel.Task{ID: "a-selected-dependent"}},
@@ -189,6 +56,10 @@ func TestFilteredTaskInventoryProjectsExcludedRelationshipContext(t *testing.T) 
 		t.Fatalf("task-list rows = %v, want selected rows without context", got)
 	}
 
+	closed := filteredTaskInventory(status.Project(snapshot), candidates, map[status.GroupID]struct{}{status.GroupDoneClosed: {}})
+	if got := taskIDsInInventory(closed); !equalStrings(got, []string{"a-child"}) {
+		t.Fatalf("closed filtered rows=%v,want only selected closed child", got)
+	}
 	entries := inventoryEntries(inventory)
 	if epic := entries["a-epic"]; epic.EpicProgress.Completed != 1 || epic.EpicProgress.Total != 1 {
 		t.Fatalf("epic progress = %#v, want completed excluded child counted", epic.EpicProgress)
@@ -422,4 +293,33 @@ func envValue(env []string, key string) string {
 		}
 	}
 	return ""
+}
+func TestTaskClosureOutputPreservesCleanupRecoveryDetails(t *testing.T) {
+	for _, cleanup := range []*workflow.WorktreeCleanupResult{
+		{Outcome: workflow.WorktreeCleanupRemoved, Worktree: "/worktrees/op-1", Reason: "removed, but could not record local cleanup history: disk full"},
+		{Outcome: workflow.WorktreeCleanupUnsafe, Worktree: "/worktrees/op-1", Reason: "reload local task state after closure: state storage unavailable"},
+	} {
+		for _, commandName := range []string{"done", "sync"} {
+			t.Run(commandName+"/"+string(cleanup.Outcome), func(t *testing.T) {
+				var output bytes.Buffer
+				var err error
+				if commandName == "done" {
+					command := &cobra.Command{}
+					command.SetOut(&output)
+					err = renderTaskDoneResult(command, workflow.FinalizationResult{Task: taskmodel.Task{ID: "op-1"}, Finalization: taskstate.Finalization{Commit: "abc123"}, Branch: "main", WorktreeCleanup: cleanup})
+				} else {
+					err = renderTaskSyncResult(&output, workflow.SyncResult{Status: workflow.SyncStatusPRMerged, Task: taskmodel.Task{ID: "op-1"}, PRURL: "https://github.test/org/repo/pull/1", WorktreeCleanup: cleanup})
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(output.String(), cleanup.Reason) {
+					t.Fatalf("missing cleanup recovery reason: %s", output.String())
+				}
+				if cleanup.Outcome == workflow.WorktreeCleanupUnsafe && !strings.Contains(output.String(), cleanup.Worktree) {
+					t.Fatalf("missing retained worktree path: %s", output.String())
+				}
+			})
+		}
+	}
 }

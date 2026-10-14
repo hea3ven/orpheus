@@ -41,11 +41,16 @@ Review, repair, completion, publication, and sync workflows also use the public
 constructor and memory-backed stores. They run the real review pipeline and
 workflow services with semantic task, Git, PR, command, and agent collaborators.
 Do not substitute a terminal pipeline outcome for the real review path.
-Focused private-helper unit tests remain in `package cli` in
-`*_internal_test.go` files.
 
-See [testing guidance](../../docs/developer/testing.md) for lane membership and
-owner-local adapter contracts.
+Extend an existing command journey when a new assertion protects the same
+behavior. A private-helper test must protect a distinct regression the journey
+does not already detect; helper accessibility alone is not a reason to add it.
+Keep these focused package-owned unit tests in `package cli` in
+`*_internal_test.go` files. Assert the contract, not internal helper call order
+or a duplicate of the command's successful outcome.
+
+See [testing guidance](../../docs/developer/testing.md) for test value, behavioral
+assertions, lane membership, and owner-local adapter contracts.
 
 ## Process-global boundaries
 

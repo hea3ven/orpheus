@@ -5,11 +5,14 @@ package cli_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/registry"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
+	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -46,80 +49,129 @@ func TestIntegrationWorkflowTaskSyncAllPollsPRBoundaryTasks(t *testing.T) {
 	f.assertUnpublished(item.ID)
 }
 
-func TestIntegrationWorkflowTaskSyncAllReturnsNonZeroAfterCandidateError(t *testing.T) {
-	f := newSyncFixture(t)
-	delete(f.backend.tasks, "op-sync")
-	f.backend.tasks["op-closed-pr"] = syncTask("op-closed-pr", f.pr.url)
-	f.pr.state = pullrequest.StateClosed
-	before := f.backend.tasks["op-closed-pr"].Clone()
-
-	stdout, stderr, err := f.runError("", "task", "sync", "--all")
-
-	require.ErrorContains(t, err, "task sync --all failed for 1 item")
-	assert.Empty(t, stderr)
-	assert.Contains(t, stdout, "Errors (1):")
-	assert.Contains(t, stdout, "op-closed-pr (alpha): sync:")
-	assert.Contains(t, stdout, "closed without merge")
-	f.assertSyncUnchanged(before)
-}
-
 type unavailableSyncTasks struct{ *memoryTaskBackend }
+
+func TestIntegrationWorkflowTaskSyncAllContinuesAfterGitAndConflictAgentFailures(t *testing.T) {
+	for _, failure := range []string{"Git update", "conflict agent"} {
+		t.Run(failure, func(t *testing.T) {
+			f := newSyncFixture(t)
+			cause := errors.New("repair unavailable")
+			if failure == "Git update" {
+				f.syncGit.syncError = cause
+			} else {
+				f.resolvingAgent(cause)
+			}
+			f.backend.tasks["op-z-current"] = syncTask("op-z-current", "https://github.test/org/alpha/pull/99")
+			f.pr.statuses = map[string]pullrequest.State{"https://github.test/org/alpha/pull/99": pullrequest.StateOpen}
+			head := f.candidate.head
+			remote := f.publication.remote["orpheus/op-sync"]
+
+			stdout, stderr, err := f.runError("", "task", "sync", "--all")
+
+			require.ErrorContains(t, err, "task sync --all failed for 1 item")
+			assert.Empty(t, stderr)
+			assert.Contains(t, stdout, "repair unavailable")
+			assert.Contains(t, stdout, "op-z-current (alpha): PR")
+			assert.Contains(t, stdout, "Open/in-review PRs (1):")
+			assert.Equal(t, head, f.candidate.head)
+			assert.Equal(t, remote, f.publication.remote["orpheus/op-sync"])
+			assert.Empty(t, f.candidate.pushes)
+			assert.Empty(t, f.tasks.closed)
+			assert.Empty(t, f.mutations.prURLs)
+			state, item := f.loadFinalTask("op-sync")
+			assert.Equal(t, taskmodel.StatusInProgress, item.Status)
+			assert.Nil(t, state.ActiveSyncConflict)
+			require.Len(t, f.syncGit.calls, 1)
+			assert.Equal(t, gitmeta.TaskBranchUpdateConflictsOnly, f.syncGit.calls[0].UpdatePolicy)
+			if failure == "conflict agent" {
+				assert.Equal(t, 1, f.syncGit.rollbacks)
+				assert.False(t, f.syncGit.mergeActive)
+				require.Len(t, state.Events, 3)
+				assert.Equal(t, taskstate.EventSyncConflictFailed, state.Events[1].Type)
+				assert.Contains(t, state.Events[1].Error, cause.Error())
+				assert.Equal(t, taskstate.EventSyncConflictRolledBack, state.Events[2].Type)
+			} else {
+				assert.Empty(t, state.Events)
+				assert.Empty(t, f.agent.launches)
+			}
+		})
+	}
+}
 
 func (*unavailableSyncTasks) List(context.Context) ([]taskmodel.Task, error) {
 	return nil, errors.New("task source unavailable")
 }
 
 func TestIntegrationWorkflowTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAfterFailures(t *testing.T) {
-	f := newSyncFixture(t)
-	alpha, beta, gamma := taskWorkflowRepository(), taskWorkflowRepository(), taskWorkflowRepository()
-	alpha.BeadsPrefix = "a"
-	beta.ID, beta.Name, beta.Path, beta.BeadsPrefix = "beta", "Beta Repo", "/fixture/task-workflow/repos/beta", "b"
-	gamma.ID, gamma.Name, gamma.Path, gamma.BeadsPrefix = "gamma", "Gamma Repo", "/fixture/task-workflow/repos/gamma", "g"
-	f.withRegisteredRepos([]registry.Repo{alpha, beta, gamma}...)
-	f.mustRemainOffDisk(beta.Path, gamma.Path)
-	openURL, mergedURL, closedURL := "https://github.test/org/alpha/pull/77", "https://github.test/org/beta/pull/88", "https://github.test/org/beta/pull/99"
-	f.backend.tasks = map[string]taskmodel.Task{
-		"a-create": syncTask("a-create", ""), "a-open": syncTask("a-open", openURL),
-	}
-	f.completion("a-create", "orpheus/a-create", taskWorkflowRepoRoot, "Ready for PR", "Completed but not published", "succeeded")
-	betaTasks := &memoryReviewTasks{memoryTaskBackend: newMemoryTaskBackend([]taskmodel.Task{syncTask("b-merged", mergedURL), syncTask("b-closed", closedURL)})}
-	gammaTasks := &unavailableSyncTasks{newMemoryTaskBackend(nil)}
-	f.options.Dependencies.TaskBackendFactory = func(source taskmodel.RepositorySource) (taskmodel.ReadBackend, error) {
-		switch source.Repository.ID {
-		case "alpha":
-			return f.mutations, nil
-		case "beta":
-			return betaTasks, nil
-		case "gamma":
-			return gammaTasks, nil
-		default:
-			return nil, errors.New("unknown repository")
-		}
-	}
-	f.pr.statuses = map[string]pullrequest.State{openURL: pullrequest.StateOpen, mergedURL: pullrequest.StateMerged, closedURL: pullrequest.StateClosed}
+	for _, factoryFailure := range []bool{false, true} {
+		t.Run(fmt.Sprintf("factory failure=%t", factoryFailure), func(t *testing.T) {
+			f := newSyncFixture(t)
+			alpha, beta, gamma := taskWorkflowRepository(), taskWorkflowRepository(), taskWorkflowRepository()
+			alpha.BeadsPrefix = "a"
+			beta.ID, beta.Name, beta.Path, beta.BeadsPrefix = "beta", "Beta Repo", "/fixture/task-workflow/repos/beta", "b"
+			gamma.ID, gamma.Name, gamma.Path, gamma.BeadsPrefix = "gamma", "Gamma Repo", "/fixture/task-workflow/repos/gamma", "g"
+			f.withRegisteredRepos([]registry.Repo{alpha, beta, gamma}...)
+			f.mustRemainOffDisk(beta.Path, gamma.Path)
+			openURL, mergedURL, closedURL := "https://github.test/org/alpha/pull/77", "https://github.test/org/beta/pull/88", "https://github.test/org/beta/pull/99"
+			f.backend.tasks = map[string]taskmodel.Task{
+				"a-create": syncTask("a-create", ""), "a-open": syncTask("a-open", openURL),
+			}
+			f.completion("a-create", "orpheus/a-create", taskWorkflowRepoRoot, "Ready for PR", "Completed but not published", "succeeded")
+			betaTasks := &memoryReviewTasks{memoryTaskBackend: newMemoryTaskBackend([]taskmodel.Task{syncTask("b-merged", mergedURL), syncTask("b-closed", closedURL)})}
+			gammaTasks := &unavailableSyncTasks{newMemoryTaskBackend(nil)}
+			f.options.Dependencies.TaskBackendFactory = func(source taskmodel.RepositorySource) (taskmodel.ReadBackend, error) {
+				switch source.Repository.ID {
+				case "alpha":
+					return f.mutations, nil
+				case "beta":
+					return betaTasks, nil
+				case "gamma":
+					if factoryFailure {
+						return nil, errors.New("task source unavailable")
+					}
+					return gammaTasks, nil
+				default:
+					return nil, errors.New("unknown repository")
+				}
+			}
+			failedBefore, err := betaTasks.Get(context.Background(), "b-closed")
+			require.NoError(t, err)
+			failedStateBefore, err := f.taskStore.Load("beta", "b-closed")
+			require.NoError(t, err)
+			f.pr.statuses = map[string]pullrequest.State{openURL: pullrequest.StateOpen, mergedURL: pullrequest.StateMerged, closedURL: pullrequest.StateClosed}
 
-	stdout, stderr, err := f.runError("", "task", "sync", "--all")
+			stdout, stderr, err := f.runError("", "task", "sync", "--all")
 
-	require.ErrorContains(t, err, "task sync --all failed for 2 item")
-	assert.Empty(t, stderr)
-	for _, want := range []string{
-		"Open/in-review PRs (1):", "a-open (alpha): PR " + openURL + " is still open for review",
-		"Merged/closed tasks (1):", "b-merged (beta): PR " + mergedURL + " is merged; backend task was closed",
-		"Errors (2):", "repo gamma: scan_tasks:", "task source unavailable", "b-closed (beta): sync:", "closed without merge",
-	} {
-		assert.Contains(t, stdout, want)
+			require.ErrorContains(t, err, "task sync --all failed for 2 item")
+			assert.Empty(t, stderr)
+			for _, want := range []string{
+				"Open/in-review PRs (1):", "a-open (alpha): PR " + openURL + " is still open for review",
+				"Merged/closed tasks (1):", "b-merged (beta): PR " + mergedURL + " is merged; backend task was closed",
+				"Errors (2):", "repo gamma:", "task source unavailable", "b-closed (beta): sync:", "closed without merge",
+			} {
+				assert.Contains(t, stdout, want)
+			}
+			if factoryFailure {
+				assert.Contains(t, stdout, "create_scan_backend:")
+			} else {
+				assert.Contains(t, stdout, "scan_tasks:")
+			}
+			assert.NotContains(t, stdout, "a-create")
+			assert.Empty(t, f.pr.created)
+			assert.Zero(t, f.pr.findReads)
+			assert.Equal(t, 3, f.pr.statusReads)
+			assert.Empty(t, f.mutations.prURLs)
+			assert.Equal(t, []string{"b-merged"}, betaTasks.closed)
+			closed, err := betaTasks.Get(context.Background(), "b-closed")
+			require.NoError(t, err)
+			assert.Equal(t, failedBefore, closed)
+			failedStateAfter, err := f.taskStore.Load("beta", "b-closed")
+			require.NoError(t, err)
+			assert.Equal(t, failedStateBefore, failedStateAfter)
+			state, err := f.taskStore.Load("beta", "b-merged")
+			require.NoError(t, err)
+			require.Len(t, state.Events, 1)
+			assertMergedAudit(t, state.Events[0], mergedURL)
+		})
 	}
-	assert.NotContains(t, stdout, "a-create")
-	assert.Empty(t, f.pr.created)
-	assert.Zero(t, f.pr.findReads)
-	assert.Equal(t, 3, f.pr.statusReads)
-	assert.Empty(t, f.mutations.prURLs)
-	assert.Equal(t, []string{"b-merged"}, betaTasks.closed)
-	closed, err := betaTasks.Get(context.Background(), "b-closed")
-	require.NoError(t, err)
-	assert.Equal(t, taskmodel.StatusInProgress, closed.Status)
-	state, err := f.taskStore.Load("beta", "b-merged")
-	require.NoError(t, err)
-	require.Len(t, state.Events, 1)
-	assertMergedAudit(t, state.Events[0], mergedURL)
 }

@@ -82,6 +82,7 @@ type memorySyncGit struct {
 	calls                 []gitmeta.TaskBranchSyncOptions
 	commits, rollbacks    int
 	remoteError           error
+	syncError             error
 }
 
 var _ workflow.SyncConflictRecoveryGit = (*memorySyncGit)(nil)
@@ -101,6 +102,9 @@ func (g *memorySyncGit) SyncTaskBranchWithDefault(ctx context.Context, opts gitm
 		return gitmeta.TaskBranchSyncResult{}, err
 	}
 	g.calls = append(g.calls, opts)
+	if g.syncError != nil {
+		return gitmeta.TaskBranchSyncResult{}, g.syncError
+	}
 	if g.behind && len(g.conflicts) > 0 {
 		return gitmeta.TaskBranchSyncResult{}, gitmeta.ErrMergeConflict
 	}

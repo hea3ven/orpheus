@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io/fs"
 	"strings"
 	"testing"
@@ -42,24 +43,38 @@ func fixtureResourceReader(files map[string]string) func(string) ([]byte, error)
 	}
 }
 
-func TestResourceProbeRetainsAncestorConstraintsAndVerifiedLeafAbsence(t *testing.T) {
-	files := resourceFixture()
+func TestResourceProbeRetainsConstraintsAndRequiresEvidenceOfControllerAbsence(t *testing.T) {
+	for _, controllerAbsent := range []bool{false, true} {
+		t.Run(fmt.Sprintf("controller absent=%t", controllerAbsent), func(t *testing.T) {
+			files := resourceFixture()
+			if controllerAbsent {
+				files["/sys/fs/cgroup/cgroup.controllers"] = ""
+				files["/sys/fs/cgroup/cgroup.subtree_control"] = ""
+			}
 
-	got, err := resourceEnvironment(fixtureResourceReader(files))
+			got, err := resourceEnvironment(fixtureResourceReader(files))
 
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range []string{"/sys/fs/cgroup/team/cpu.max", "/sys/fs/cgroup/team/memory.max", "/sys/fs/cgroup/team/memory.high", "/sys/fs/cgroup/team/pids.max", "/sys/fs/cgroup/team/cpuset.cpus.effective"} {
-		if got[path] != files[path] {
-			t.Fatalf("ancestor probe %s = %q, want %q", path, got[path], files[path])
-		}
-	}
-	if !strings.HasPrefix(got["/sys/fs/cgroup/team/job/cpu.absence"], "verified:") {
-		t.Fatalf("leaf absence lacks evidence: %#v", got)
-	}
-	if strings.Contains(got["/proc/meminfo"], "MemFree") || strings.Contains(got["/proc/self/status"], "collector") {
-		t.Fatal("probe included volatile resource usage")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if controllerAbsent {
+				if !strings.HasPrefix(got["/sys/fs/cgroup/team/memory.absence"], "verified:") {
+					t.Fatalf("controller absence lacks evidence: %#v", got)
+				}
+			} else {
+				for _, path := range []string{"/sys/fs/cgroup/team/cpu.max", "/sys/fs/cgroup/team/memory.max", "/sys/fs/cgroup/team/memory.high", "/sys/fs/cgroup/team/pids.max", "/sys/fs/cgroup/team/cpuset.cpus.effective"} {
+					if got[path] != files[path] {
+						t.Fatalf("ancestor constraint %s = %q, want %q", path, got[path], files[path])
+					}
+				}
+				if !strings.HasPrefix(got["/sys/fs/cgroup/team/job/cpu.absence"], "verified:") {
+					t.Fatalf("leaf absence lacks evidence: %#v", got)
+				}
+			}
+			if strings.Contains(got["/proc/meminfo"], "MemFree") || strings.Contains(got["/proc/self/status"], "collector") {
+				t.Fatal("probe included volatile usage")
+			}
+		})
 	}
 }
 
@@ -98,21 +113,6 @@ func TestResourceProbeRejectsHiddenAncestryAndUnsupportedMembership(t *testing.T
 				t.Fatal("unobservable resource constraints were accepted")
 			}
 		})
-	}
-}
-
-func TestResourceProbeAcceptsVerifiedControllerAbsence(t *testing.T) {
-	files := resourceFixture()
-	files["/sys/fs/cgroup/cgroup.controllers"] = ""
-	files["/sys/fs/cgroup/cgroup.subtree_control"] = ""
-
-	got, err := resourceEnvironment(fixtureResourceReader(files))
-
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasPrefix(got["/sys/fs/cgroup/team/memory.absence"], "verified:") {
-		t.Fatal("verified controller absence was not recorded")
 	}
 }
 

@@ -6,6 +6,12 @@ Orpheus is an unreleased MVP used only by its author. It has not been released o
 
 Use `docs/README.md` to find current user and developer guides, and `GLOSSARY.md` for domain vocabulary. Historical plans, reviews, and validation reports live on the `docs` archive branch and are not routine implementation context. Keep current documentation concise and undated. `docs/developer/architecture.md` is maintained through architecture reviews, not general documentation cleanup.
 
+## Test design
+
+Read the [testing guide](docs/developer/testing.md) before adding or changing tests. Prefer coherent behavioral journeys over one test per function or branch. Before adding a test, identify the observable contract, a plausible regression, and the existing test that owns that behavior. Extend that owner when the new case protects the same contract. Keep focused tests for distinct parsing, calculation, safety, persistence, and boundary contracts; do not duplicate a workflow across layers.
+
+Use independent expectations that would fail for a plausible incorrect implementation. Coverage gains, test counts, and executing a branch do not establish test value. When removing or consolidating tests, preserve consequential assertions in a named owner. Reviewers requesting additional tests must name the missing regression and explain why existing tests would miss it. Follow the guide's assertion and consolidation checks.
+
 ## Validation
 
 Run `make check` after changes to production code, tests, dependencies, executable scripts, or build/test configuration. It runs formatting, the unit lane once, the integration lane once, linting, and a CLI build.

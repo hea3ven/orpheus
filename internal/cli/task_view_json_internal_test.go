@@ -112,66 +112,6 @@ func assertTaskViewJSONTaskEntry(t *testing.T, entry map[string]any) {
 	}
 }
 
-func TestRenderTaskViewJSONTaskListExcludesNonTaskEntriesAndUsesTreeOrder(t *testing.T) {
-	repository := taskmodel.Repository{ID: "alpha", Name: "Alpha"}
-	projection := status.Projection{Groups: []status.Group{
-		{
-			ID: status.GroupReadyToRun,
-			Entries: []status.Entry{
-				{
-					Kind:       status.EntryTask,
-					Repository: repository,
-					Task: taskmodel.Task{
-						ID: "a-epic", Title: "Epic", IssueType: taskmodel.IssueTypeEpic, Priority: 1,
-					},
-					EpicProgress: status.Detail{Kind: status.DetailEpicProgress, Completed: 1, Total: 2},
-				},
-				{
-					Kind:       status.EntryTask,
-					Repository: repository,
-					Task: taskmodel.Task{
-						ID: "a-child", Title: "Child", IssueType: taskmodel.IssueTypeTask, Priority: 2,
-						Relations: taskmodel.RelationSummary{ParentID: "a-epic"},
-					},
-				},
-			},
-		},
-		{
-			ID: status.GroupNeedsAttention,
-			Entries: []status.Entry{{
-				Kind:       status.EntryRepoFailure,
-				Repository: repository,
-				Failure:    errors.New("unavailable"),
-				SemanticDetail: status.Detail{
-					Kind: status.DetailRepoFailure,
-				},
-			}},
-		},
-	}}
-
-	var output bytes.Buffer
-	if err := renderTaskViewJSON(&output, projection, true, taskViewSortStatus, true); err != nil {
-		t.Fatalf("render task-list JSON: %v", err)
-	}
-
-	var entries []struct {
-		Kind         string                    `json:"kind"`
-		ID           string                    `json:"id"`
-		Status       string                    `json:"status"`
-		EpicProgress *taskViewJSONEpicProgress `json:"epic_progress"`
-	}
-	if err := json.Unmarshal(output.Bytes(), &entries); err != nil {
-		t.Fatalf("parse JSON output: %v\n%s", err, output.String())
-	}
-	if got, want := jsonTaskEntryIDs(entries), []string{"a-epic", "a-child"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("task-list JSON IDs = %v, want selected tree order %v", got, want)
-	}
-	if entries[0].Status != "ready" || entries[0].EpicProgress == nil ||
-		entries[0].EpicProgress.Completed != 1 || entries[0].EpicProgress.Total != 2 {
-		t.Fatalf("epic JSON entry = %#v, want semantic projected status and progress", entries[0])
-	}
-}
-
 func TestTaskViewJSONDetailDoesNotExposeTaskSourceLifecycleStates(t *testing.T) {
 	for _, detail := range []status.Detail{
 		{Kind: status.DetailUnknownTaskStatus, State: "deferred"},
@@ -199,17 +139,4 @@ func TestRenderTaskViewJSONEmptyProjectionIsArray(t *testing.T) {
 	if output.String() != "[]\n" {
 		t.Fatalf("empty JSON output = %q, want []", output.String())
 	}
-}
-
-func jsonTaskEntryIDs(entries []struct {
-	Kind         string                    `json:"kind"`
-	ID           string                    `json:"id"`
-	Status       string                    `json:"status"`
-	EpicProgress *taskViewJSONEpicProgress `json:"epic_progress"`
-}) []string {
-	ids := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		ids = append(ids, entry.ID)
-	}
-	return ids
 }

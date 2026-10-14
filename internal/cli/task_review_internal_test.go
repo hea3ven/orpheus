@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"io"
 	"log/slog"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -157,62 +158,59 @@ func TestRenderManualReviewContextUsesStructuredPlainAndInteractiveOutput(t *tes
 		},
 		GitStatus: " M internal/cli/task.go\n?? notes.md\n",
 	}
+	ansi := regexp.MustCompile("\x1b\\[[0-9;]*m")
 
-	plain := new(bytes.Buffer)
-	command := &cobra.Command{}
-	command.SetOut(plain)
-	command.SetErr(plain)
-	if err := renderManualReviewContext(command, context); err != nil {
-		t.Fatalf("renderManualReviewContext() error = %v", err)
-	}
-	if _, err := promptManualCommandConfirmation(command, bufio.NewReader(strings.NewReader("y\n")), review.Step{Name: "manual", Command: "hunk", Args: []string{"diff"}}); err != nil {
-		t.Fatalf("promptManualCommandConfirmation() error = %v", err)
-	}
-	output := plain.String()
-	for _, want := range []string{
-		"◆ REVIEW STEP · manual (manual)\nTASK  op-42 — Make review context readable",
-		"○ ORIGINAL COMPLETION\nOriginal implementation summary\n\nDESCRIPTION\nOriginal implementation description\n\nTECHNICAL EXPLANATION\nOriginal implementation technical explanation",
-		"● LATEST FIX COMPLETION\nLatest fix summary\n\nDESCRIPTION\nLatest fix description\n\nTECHNICAL EXPLANATION\nLatest fix technical explanation",
-		"≡ GIT STATUS --SHORT\n M internal/cli/task.go\n?? notes.md",
-		"▲ RECORDED FINDINGS FOR THIS STEP\nFinding 1 · manual · advisory\nCurrent finding\n\nDESCRIPTION\nCurrent finding description\n\nSUGGESTED ACTION\nCurrent finding action",
-		"▲ OPEN BLOCKERS FROM EARLIER STEPS\nFinding 2 · checks · blocking\nEarlier blocker\n\nDESCRIPTION\nEarlier blocker description\n\nSUGGESTED ACTION\nEarlier blocker action",
-		"▲ PRIOR UNRESOLVED ADVISORIES\nFinding 3 · ai-review · advisory\nEarlier advisory\n\nDESCRIPTION\nEarlier advisory description\n\nSUGGESTED ACTION\nEarlier advisory action",
-		"↳ NEXT  Run manual command for step \"manual\" (\"hunk\" \"diff\")? [Y/n]: ",
+	for _, mode := range []struct {
+		name              string
+		terminal, noColor bool
+	}{
+		{name: "redirected plain"},
+		{name: "interactive", terminal: true},
+		{name: "NO_COLOR interactive", terminal: true, noColor: true},
 	} {
-		if !strings.Contains(output, want) {
-			t.Errorf("plain output = %q, want %q", output, want)
-		}
-	}
-	if strings.Contains(output, "\x1b[") {
-		t.Errorf("plain output contains ANSI escape sequence: %q", output)
-	}
-
-	interactive := new(bytes.Buffer)
-	command.SetOut(interactive)
-	command.SetErr(interactive)
-	taskReviewOutputIsTerminal = func(io.Writer) bool { return true }
-	if err := renderManualReviewContext(command, context); err != nil {
-		t.Fatalf("render interactive context: %v", err)
-	}
-	if _, err := promptManualCommandConfirmation(command, bufio.NewReader(strings.NewReader("y\n")), review.Step{Name: "manual", Command: "hunk"}); err != nil {
-		t.Fatalf("prompt interactive command: %v", err)
-	}
-	for _, want := range []string{"\x1b[34m◆ REVIEW STEP", "\x1b[32m● LATEST FIX COMPLETION", "\x1b[33m▲ RECORDED", "\x1b[36m↳ NEXT", "\x1b[1mop-42", "\x1b[2mDESCRIPTION"} {
-		if !strings.Contains(interactive.String(), want) {
-			t.Errorf("interactive output = %q, want ANSI-styled %q", interactive.String(), want)
-		}
-	}
-
-	manualReviewColorIsDisabled = originalColorDisabled
-	t.Setenv("NO_COLOR", "1")
-	noColor := new(bytes.Buffer)
-	command.SetOut(noColor)
-	command.SetErr(noColor)
-	if err := renderManualReviewContext(command, context); err != nil {
-		t.Fatalf("render NO_COLOR context: %v", err)
-	}
-	if strings.Contains(noColor.String(), "\x1b[") {
-		t.Errorf("NO_COLOR output contains ANSI escape sequence: %q", noColor.String())
+		t.Run(mode.name, func(t *testing.T) {
+			taskReviewOutputIsTerminal = func(io.Writer) bool { return mode.terminal }
+			manualReviewColorIsDisabled = func() bool { return false }
+			if mode.noColor {
+				t.Setenv("NO_COLOR", "1")
+				manualReviewColorIsDisabled = originalColorDisabled
+			}
+			var output bytes.Buffer
+			command := &cobra.Command{}
+			command.SetOut(&output)
+			command.SetErr(&output)
+			if err := renderManualReviewContext(command, context); err != nil {
+				t.Fatalf("render manual context: %v", err)
+			}
+			confirmed, err := promptManualCommandConfirmation(command, bufio.NewReader(strings.NewReader("y\n")), review.Step{Name: "manual", Command: "hunk", Args: []string{"diff"}})
+			if err != nil || !confirmed {
+				t.Fatalf("confirmation = %t, %v", confirmed, err)
+			}
+			raw := output.String()
+			wantANSI := mode.terminal && !mode.noColor
+			hasANSI := strings.Contains(raw, "\x1b[")
+			if hasANSI != wantANSI {
+				t.Fatalf("ANSI enabled = %t, want %t: %q", hasANSI, wantANSI, raw)
+			}
+			plain := ansi.ReplaceAllString(raw, "")
+			cursor := 0
+			for _, fact := range []string{
+				"REVIEW STEP", "manual (manual)", "op-42", "Make review context readable",
+				"ORIGINAL COMPLETION", "Original implementation summary", "Original implementation description", "Original implementation technical explanation",
+				"LATEST FIX COMPLETION", "Latest fix summary", "Latest fix description", "Latest fix technical explanation",
+				"GIT STATUS --SHORT", " M internal/cli/task.go", "?? notes.md",
+				"RECORDED FINDINGS FOR THIS STEP", "manual", "advisory", "Current finding", "Current finding description", "Current finding action",
+				"OPEN BLOCKERS FROM EARLIER STEPS", "checks", "blocking", "Earlier blocker", "Earlier blocker description", "Earlier blocker action",
+				"PRIOR UNRESOLVED ADVISORIES", "ai-review", "advisory", "Earlier advisory", "Earlier advisory description", "Earlier advisory action",
+				"NEXT", "Run manual command", "\"manual\"", "\"hunk\"", "\"diff\"", "[Y/n]",
+			} {
+				offset := strings.Index(plain[cursor:], fact)
+				if offset < 0 {
+					t.Fatalf("missing or out-of-order fact %q:\n%s", fact, plain)
+				}
+				cursor += offset + len(fact)
+			}
+		})
 	}
 }
 

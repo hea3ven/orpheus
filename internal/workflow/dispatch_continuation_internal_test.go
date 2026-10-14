@@ -12,23 +12,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDispatchStartRequiresUnfinishedHistoryForRepoRootReuse(t *testing.T) {
+func TestDispatchStartKeepsDirtyCheckoutGuardForIncompleteContinuationHistory(t *testing.T) {
 	for _, test := range []struct {
-		name       string
-		runs       []taskstate.RunAttempt
-		directory  string
-		allowDirty bool
+		name      string
+		runs      []taskstate.RunAttempt
+		directory string
 	}{
-		{name: "target without history", directory: "/fixture/repo"},
-		{name: "successful unfinished run", directory: "/fixture/repo", runs: []taskstate.RunAttempt{
-			{Attempt: 1, Status: taskstate.RunStatusSucceeded},
-		}, allowDirty: true},
-		{name: "failed unfinished run", directory: "/fixture/repo", runs: []taskstate.RunAttempt{
-			{Attempt: 1, Status: taskstate.RunStatusFailed},
-		}, allowDirty: true},
-		{name: "interrupted unfinished run", directory: "/fixture/repo", runs: []taskstate.RunAttempt{
-			{Attempt: 1, Status: taskstate.RunStatusInterrupted},
-		}, allowDirty: true},
 		{name: "completed latest run", directory: "/fixture/repo", runs: []taskstate.RunAttempt{
 			{Attempt: 1, Status: taskstate.RunStatusFailed},
 			{Attempt: 2, Status: taskstate.RunStatusSucceeded, Completion: &taskstate.Completion{Summary: "done"}},
@@ -62,7 +51,8 @@ func TestDispatchStartRequiresUnfinishedHistoryForRepoRootReuse(t *testing.T) {
 			})
 
 			require.ErrorIs(t, err, git.setupError)
-			assert.Equal(t, test.allowDirty, git.allowDirty)
+			assert.False(t, git.allowDirty)
+			assert.Equal(t, 1, git.setupCalls)
 		})
 	}
 }
@@ -70,9 +60,11 @@ func TestDispatchStartRequiresUnfinishedHistoryForRepoRootReuse(t *testing.T) {
 type continuationDispatchGit struct {
 	allowDirty bool
 	setupError error
+	setupCalls int
 }
 
 func (g *continuationDispatchGit) SetupRepoRoot(_ context.Context, opts gitmeta.RepoRootOptions) (gitmeta.TaskWorktreeSetupResult, error) {
+	g.setupCalls++
 	g.allowDirty = opts.AllowDirty
 	return gitmeta.TaskWorktreeSetupResult{}, g.setupError
 }

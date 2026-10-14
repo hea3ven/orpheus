@@ -144,44 +144,43 @@ func TestUpdateServiceEnforcesRequiredExternalReferenceBeforeMutation(t *testing
 	}
 }
 
-func TestUpdateServiceRejectsEmptyRequiredPlanningFieldsBeforeMutation(t *testing.T) {
+func TestUpdateServiceRejectsInvalidEditsBeforeMutation(t *testing.T) {
 	for _, request := range []struct {
-		name string
-		opts task.UpdateOptions
-		want string
+		name        string
+		opts        task.UpdateOptions
+		want        string
+		unsupported bool
 	}{
-		{"title flag", task.UpdateOptions{Title: stringPtr("")}, "title is required"},
-		{"description flag", task.UpdateOptions{Description: stringPtr(" \n ")}, "description is required"},
-		{"acceptance flag", task.UpdateOptions{AcceptanceCriteria: stringPtr("")}, "acceptance criteria is required"},
+		{"missing foreign parent", task.UpdateOptions{ParentID: stringPtr("be-parent")}, "was not found in repository beta", false},
+		{"unsupported target", task.UpdateOptions{}, "unsupported item type", true},
+		{"title flag", task.UpdateOptions{Title: stringPtr("")}, "title is required", false},
+		{"description flag", task.UpdateOptions{Description: stringPtr(" \n ")}, "description is required", false},
+		{"acceptance flag", task.UpdateOptions{AcceptanceCriteria: stringPtr("")}, "acceptance criteria is required", false},
 	} {
 		t.Run(request.name, func(t *testing.T) {
 			source := createTestSource("alpha", "op", testutil.CanonicalTempDir(t))
 			backend := updateBackendWithCurrent()
-			service := updateService(source, backend)
+			if request.unsupported {
+				backend.tasks["op-current"] = task.Task{ID: "op-current", IssueType: task.IssueTypeBug, Status: task.StatusOpen}
+			}
+			other := createTestSource("beta", "be", "/fixture/beta")
+			owner := &fakeUpdateBackend{}
+			service := task.UpdateService{Sources: []task.RepositorySource{source, other}, BackendFactory: func(requested task.RepositorySource) (task.UpdateBackend, error) {
+				if requested.Repository.ID == source.Repository.ID {
+					return backend, nil
+				}
+				return owner, nil
+			}}
 			request.opts.ID = "op-current"
 
 			_, err := service.Update(context.Background(), source, request.opts)
 			if err == nil || !strings.Contains(err.Error(), request.want) {
 				t.Fatalf("Update() error = %v, want %q", err, request.want)
 			}
-			if backend.updated {
+			if backend.updated || owner.updated {
 				t.Fatalf("Update mutator was called with %#v", backend.opts)
 			}
 		})
-	}
-}
-
-func TestUpdateServiceRejectsUnsupportedTargetTypeBeforeMutation(t *testing.T) {
-	source := createTestSource("alpha", "op", testutil.CanonicalTempDir(t))
-	backend := updateBackendWithCurrent()
-	backend.tasks["op-current"] = task.Task{ID: "op-current", IssueType: task.IssueTypeBug, Status: task.StatusOpen}
-
-	_, err := updateService(source, backend).Update(context.Background(), source, task.UpdateOptions{ID: "op-current"})
-	if err == nil || !strings.Contains(err.Error(), "unsupported item type") {
-		t.Fatalf("Update() error = %v, want unsupported type", err)
-	}
-	if backend.updated {
-		t.Fatal("Update mutator was called")
 	}
 }
 
@@ -212,33 +211,6 @@ func TestUpdateServiceRejectsParentDescendantCyclesBeforeMutation(t *testing.T) 
 			_, err := updateService(source, backend).Update(context.Background(), source, task.UpdateOptions{ID: "op-current", ParentID: stringPtr("op-child")})
 			if err == nil || !strings.Contains(err.Error(), "parent-child cycle") {
 				t.Fatalf("Update() error = %v, want parent cycle", err)
-			}
-			if backend.updated {
-				t.Fatal("Update mutator was called")
-			}
-		})
-	}
-}
-
-func TestUpdateServiceRejectsMissingForeignParentBeforeMutation(t *testing.T) {
-	source := createTestSource("alpha", "op", testutil.CanonicalTempDir(t))
-	other := createTestSource("beta", "be", testutil.CanonicalTempDir(t))
-	for _, request := range []struct {
-		name string
-		opts task.UpdateOptions
-	}{
-		{"parent", task.UpdateOptions{ParentID: stringPtr("be-parent")}},
-	} {
-		t.Run(request.name, func(t *testing.T) {
-			backend := updateBackendWithCurrent()
-			service := task.UpdateService{
-				Sources:        []task.RepositorySource{source, other},
-				BackendFactory: func(task.RepositorySource) (task.UpdateBackend, error) { return backend, nil },
-			}
-			request.opts.ID = "op-current"
-			_, err := service.Update(context.Background(), source, request.opts)
-			if err == nil || !strings.Contains(err.Error(), "was not found in repository beta") {
-				t.Fatalf("Update() error = %v, want missing foreign parent rejection", err)
 			}
 			if backend.updated {
 				t.Fatal("Update mutator was called")

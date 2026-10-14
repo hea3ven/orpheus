@@ -15,109 +15,75 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
+	"github.com/stretchr/testify/require"
 )
 
 func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
-	store := newTestStore(t,
-		time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC),
-		time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
-		time.Date(2026, 6, 3, 10, 2, 0, 0, time.UTC),
-	)
+	for _, interactive := range []bool{false, true} {
+		t.Run(fmt.Sprint(interactive), func(t *testing.T) {
+			store := newTestStore(t,
+				time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC),
+				time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
+				time.Date(2026, 6, 3, 10, 2, 0, 0, time.UTC),
+			)
 
-	if _, err := store.RecordSetupEvent("alpha", "op-1", taskstate.EventWorktreeCreated, taskstate.SetupEventOptions{
-		Branch:   "orpheus/op-1",
-		Worktree: "/fixture/op-1",
-	}); err != nil {
-		t.Fatalf("record worktree event: %v", err)
-	}
-
-	attempt, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
-		Agent:       "recorder",
-		SessionName: "(op-1) Implement task",
-		Branch:      "orpheus/op-1",
-		Worktree:    "/fixture/op-1",
-	})
-	if err != nil {
-		t.Fatalf("start run: %v", err)
-	}
-	if attempt.Attempt != 1 || attempt.Status != taskstate.RunStatusRunning {
-		t.Fatalf("attempt = %#v, want running attempt 1", attempt)
-	}
-
-	finished, err := store.FinishRun("alpha", "op-1", attempt.Attempt, taskstate.RunStatusSucceeded)
-	if err != nil {
-		t.Fatalf("finish run: %v", err)
-	}
-	if finished.Status != taskstate.RunStatusSucceeded || finished.Execution.FinishedAt == nil {
-		t.Fatalf("finished attempt = %#v, want succeeded with finished_at", finished)
-	}
-
-	loaded, err := store.Load("alpha", "op-1")
-	if err != nil {
-		t.Fatalf("load state: %v", err)
-	}
-	if loaded.RepoID != "alpha" || loaded.TaskID != "op-1" || len(loaded.Runs) != 1 || len(loaded.Events) != 3 {
-		t.Fatalf("loaded state = %#v", loaded)
-	}
-	if loaded.Events[0].Type != taskstate.EventWorktreeCreated || loaded.Events[1].Type != taskstate.EventRunStarted || loaded.Events[2].Type != taskstate.EventRunFinished {
-		t.Fatalf("event types = %#v", loaded.Events)
-	}
-
-	assertStoreYAMLContains(t, store, "alpha", "op-1",
-		"version: 4",
-		"repo_id: alpha",
-		"task_id: op-1",
-		"git_facts:",
-		"branch: orpheus/op-1",
-		"worktree: /fixture/op-1",
-		"attempt: 1",
-		"status: succeeded",
-		"execution:",
-		"purpose: implementation",
-		"agent: recorder",
-		"profile: recorder",
-		"session_name: (op-1) Implement task",
-		"worktree_created",
-		"run_started",
-		"run_finished",
-	)
-	assertStoreYAMLNotContains(t, store, "alpha", "op-1",
-		"target:",
-		"  branch: orpheus/op-1\n  worktree: /fixture/op-1\n  started_at",
-	)
-}
-
-func TestStorePersistsImplementationInteractivity(t *testing.T) {
-	tests := []struct {
-		name        string
-		interactive bool
-	}{
-		{name: "interactive", interactive: true},
-		{name: "non-interactive", interactive: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			store := newTestStore(t, time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC))
-			attempt, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
-				Agent:       "implementer",
-				Interactive: tt.interactive,
+			_, err := store.RecordSetupEvent("alpha", "op-1", taskstate.EventWorktreeCreated, taskstate.SetupEventOptions{
+				Branch:   "orpheus/op-1",
+				Worktree: "/fixture/op-1",
 			})
-			if err != nil {
-				t.Fatalf("start run: %v", err)
-			}
-			if attempt.Execution.Interactive != tt.interactive {
-				t.Fatalf("started interactivity = %t, want %t", attempt.Execution.Interactive, tt.interactive)
-			}
+			require.NoError(t, err, "record worktree event")
+
+			attempt, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+				Agent:       "recorder",
+				Interactive: interactive,
+				SessionName: "(op-1) Implement task",
+				Branch:      "orpheus/op-1",
+				Worktree:    "/fixture/op-1",
+			})
+			require.NoError(t, err, "start run")
+			require.Equal(t, 1, attempt.Attempt)
+			require.Equal(t, taskstate.RunStatusRunning, attempt.Status)
+
+			finished, err := store.FinishRun("alpha", "op-1", attempt.Attempt, taskstate.RunStatusSucceeded)
+			require.NoError(t, err, "finish run")
+			require.Equal(t, taskstate.RunStatusSucceeded, finished.Status)
+			require.NotNil(t, finished.Execution.FinishedAt)
 
 			loaded, err := store.Load("alpha", "op-1")
-			if err != nil {
-				t.Fatalf("load run: %v", err)
-			}
-			if loaded.Runs[0].Execution.Interactive != tt.interactive {
-				t.Fatalf("loaded interactivity = %t, want %t", loaded.Runs[0].Execution.Interactive, tt.interactive)
-			}
-			assertStoreYAMLContains(t, store, "alpha", "op-1", "interactive: "+fmt.Sprint(tt.interactive))
+			require.NoError(t, err, "load state")
+			require.Equal(t, "alpha", loaded.RepoID)
+			require.Equal(t, "op-1", loaded.TaskID)
+			require.Len(t, loaded.Runs, 1)
+			require.Len(t, loaded.Events, 3)
+			require.Equal(t, interactive, attempt.Execution.Interactive)
+			require.Equal(t, interactive, loaded.Runs[0].Execution.Interactive)
+			assertStoreYAMLContains(t, store, "alpha", "op-1", "interactive: "+fmt.Sprint(interactive))
+			require.Equal(t, taskstate.EventWorktreeCreated, loaded.Events[0].Type)
+			require.Equal(t, taskstate.EventRunStarted, loaded.Events[1].Type)
+			require.Equal(t, taskstate.EventRunFinished, loaded.Events[2].Type)
+
+			assertStoreYAMLContains(t, store, "alpha", "op-1",
+				"version: 4",
+				"repo_id: alpha",
+				"task_id: op-1",
+				"git_facts:",
+				"branch: orpheus/op-1",
+				"worktree: /fixture/op-1",
+				"attempt: 1",
+				"status: succeeded",
+				"execution:",
+				"purpose: implementation",
+				"agent: recorder",
+				"profile: recorder",
+				"session_name: (op-1) Implement task",
+				"worktree_created",
+				"run_started",
+				"run_finished",
+			)
+			assertStoreYAMLNotContains(t, store, "alpha", "op-1",
+				"target:",
+				"  branch: orpheus/op-1\n  worktree: /fixture/op-1\n  started_at",
+			)
 		})
 	}
 }
@@ -168,101 +134,45 @@ func TestStoreTreatsMissingImplementationInteractivityAsNonInteractive(t *testin
 }
 
 func TestStorePersistsResumedFollowUpLaunchProvenance(t *testing.T) {
-	store := newTestStore(t, time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC))
-	baselineCost := int64(1250)
-	attempt, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
-		Agent:         "implementer",
-		Profile:       "implementer",
-		Harness:       "pi",
-		WorkDirectory: "/fixture/op-1",
-		Branch:        "orpheus/op-1",
-		Worktree:      "/fixture/op-1",
-		ReviewFollowUp: &taskstate.ReviewFollowUp{
-			ReviewAttempt:  1,
-			FindingIndexes: []int{0},
-		},
-		Launch: &taskstate.AgentLaunch{
-			Mode:             taskstate.AgentLaunchResumed,
-			SourceRunAttempt: 1,
-			SourceSession:    &taskstate.AgentSession{ID: "session-1", LogPath: "/fixture/session-1.jsonl"},
-			UsageBaseline:    &taskstate.AgentUsage{TotalTokens: 200},
-			CostBaseline:     &baselineCost,
-		},
-	})
-	if err != nil {
-		t.Fatalf("start resumed run: %v", err)
-	}
-	if attempt.Execution.Launch == nil || attempt.Execution.Launch.Mode != taskstate.AgentLaunchResumed {
-		t.Fatalf("launch = %#v, want resumed", attempt.Execution.Launch)
-	}
-
-	loaded, err := store.Load("alpha", "op-1")
-	if err != nil {
-		t.Fatalf("load resumed run: %v", err)
-	}
-	launch := loaded.Runs[0].Execution.Launch
-	if launch == nil || launch.SourceRunAttempt != 1 || launch.SourceSession == nil || launch.SourceSession.ID != "session-1" {
-		t.Fatalf("persisted launch = %#v", launch)
-	}
-	assertStoreYAMLContains(t, store, "alpha", "op-1",
-		"launch:",
-		"mode: resumed",
-		"source_run_attempt: 1",
-		"id: session-1",
-		"usage_baseline:",
-		"total_tokens: 200",
-		"cost_baseline_micro_usd: 1250",
-	)
-}
-
-func TestStorePersistsResumedLaunchWithUnknownUsageBaseline(t *testing.T) {
-	store := newTestStore(t, time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC))
-	attempt, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
-		Agent: "implementer", Profile: "implementer", Harness: "codex",
-		WorkDirectory: "/fixture/op-1", Branch: "orpheus/op-1", Worktree: "/fixture/op-1",
-		Launch: &taskstate.AgentLaunch{
-			Mode:             taskstate.AgentLaunchResumed,
-			SourceRunAttempt: 1,
-			SourceSession:    &taskstate.AgentSession{ID: "session-1", LogPath: "/fixture/session-1.jsonl"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("start resumed run with unknown baseline: %v", err)
-	}
-	if attempt.Execution.Launch == nil || attempt.Execution.Launch.UsageBaseline != nil {
-		t.Fatalf("launch = %#v, want resumed with unknown usage baseline", attempt.Execution.Launch)
-	}
-
-	loaded, err := store.Load("alpha", "op-1")
-	if err != nil {
-		t.Fatalf("load resumed run: %v", err)
-	}
-	launch := loaded.Runs[0].Execution.Launch
-	if launch == nil || launch.Mode != taskstate.AgentLaunchResumed || launch.UsageBaseline != nil {
-		t.Fatalf("persisted launch = %#v, want resumed with unknown usage baseline", launch)
-	}
-}
-
-func TestStoreReconcilesLegacyTargetIntoGitFactsOnLoad(t *testing.T) {
-	store := newTestStore(t)
-	path, err := store.Path("alpha", "op-legacy")
-	if err != nil {
-		t.Fatalf("state path: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("create state directory: %v", err)
-	}
-	if err := os.WriteFile(path, []byte("version: 4\nrepo_id: alpha\ntask_id: op-legacy\ntarget:\n  branch: main\n  worktree: /fixture/repo\n"), 0o644); err != nil {
-		t.Fatalf("write legacy state: %v", err)
-	}
-
-	loaded, err := store.Load("alpha", "op-legacy")
-	if err != nil {
-		t.Fatalf("load legacy state: %v", err)
-	}
-	facts, ok := taskstate.GitFactsFor(loaded)
-	if !ok || facts.Branch != "main" || facts.Worktree != "/fixture/repo" {
-		t.Fatalf("Git facts = %#v/%t, want migrated main repo root facts", facts, ok)
+	for _, known := range []bool{true, false} {
+		t.Run(fmt.Sprintf("known baseline=%t", known), func(t *testing.T) {
+			store := newTestStore(t)
+			launch := &taskstate.AgentLaunch{Mode: taskstate.AgentLaunchResumed, SourceRunAttempt: 1, SourceSession: &taskstate.AgentSession{ID: "session-1", LogPath: "/fixture/session-1.jsonl"}}
+			if known {
+				cost := int64(1250)
+				launch.UsageBaseline = &taskstate.AgentUsage{TotalTokens: 200}
+				launch.CostBaseline = &cost
+			}
+			harness := "pi"
+			if !known {
+				harness = "codex"
+			}
+			attempt, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+				Agent: "implementer", Profile: "implementer", Harness: harness,
+				WorkDirectory: "/fixture/op-1", Branch: "orpheus/op-1", Worktree: "/fixture/op-1",
+				ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{0}},
+				Launch:         launch,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := store.Load("alpha", "op-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(attempt.Execution.Launch, launch) || !reflect.DeepEqual(loaded.Runs[0].Execution.Launch, launch) {
+				t.Fatalf("launch provenance changed: started=%#v loaded=%#v want=%#v", attempt.Execution.Launch, loaded.Runs[0].Execution.Launch, launch)
+			}
+			if !reflect.DeepEqual(loaded.Runs[0].ReviewFollowUp, &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{0}}) {
+				t.Fatalf("follow-up provenance = %#v", loaded.Runs[0].ReviewFollowUp)
+			}
+			assertStoreYAMLContains(t, store, "alpha", "op-1", "mode: resumed", "source_run_attempt: 1", "id: session-1")
+			if known {
+				assertStoreYAMLContains(t, store, "alpha", "op-1", "total_tokens: 200", "cost_baseline_micro_usd: 1250")
+			} else {
+				assertStoreYAMLNotContains(t, store, "alpha", "op-1", "usage_baseline:", "cost_baseline_micro_usd:")
+			}
+		})
 	}
 }
 
@@ -298,6 +208,10 @@ func TestStartRunPreservesLegacyTargetPublicationMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load legacy state: %v", err)
 	}
+	facts, ok := taskstate.GitFactsFor(loaded)
+	if !ok || facts.Branch != "main" || facts.Worktree != "/fixture/repo" {
+		t.Fatalf("loaded Git facts = %#v, ok=%t", facts, ok)
+	}
 	if _, modern := taskstate.WorkDirectoryFor(loaded); modern {
 		t.Fatalf("work directory = %#v, want absent legacy publication classification", loaded.WorkDirectory)
 	}
@@ -306,37 +220,35 @@ func TestStartRunPreservesLegacyTargetPublicationMode(t *testing.T) {
 	}
 }
 
-func TestStoreRejectsOldRunLevelTargetSchema(t *testing.T) {
-	store := newTestStore(t)
-	path, err := store.Path("alpha", "op-1")
-	if err != nil {
-		t.Fatalf("state path: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("mkdir state dir: %v", err)
-	}
-	oldYAML := strings.Join([]string{
-		"version: 1",
-		"repo_id: alpha",
-		"task_id: op-1",
-		"runs:",
-		"- attempt: 1",
-		"  status: succeeded",
-		"  branch: orpheus/op-1",
-		"  worktree: /fixture/op-1",
-		"  started_at: 2026-06-03T10:00:00Z",
-		"",
-	}, "\n")
-	if err := os.WriteFile(path, []byte(oldYAML), 0o644); err != nil {
-		t.Fatalf("write old state: %v", err)
-	}
+func TestStoreRejectsUnsupportedStateVersionsWithoutRewritingFiles(t *testing.T) {
+	for _, version := range []int{1, 2} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			store := newTestStore(t)
+			path, err := store.Path("alpha", "op-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			contents := fmt.Sprintf("version: %d\nrepo_id: alpha\ntask_id: op-1\nruns:\n- attempt: 1\n  status: succeeded\n  branch: orpheus/op-1\n  worktree: /fixture/op-1\n  agent: recorder\n  started_at: 2026-06-03T10:00:00Z\n", version)
+			if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+				t.Fatal(err)
+			}
 
-	_, err = store.Load("alpha", "op-1")
-	if err == nil {
-		t.Fatal("load old run-level target state succeeded, want error")
-	}
-	if !strings.Contains(err.Error(), "unsupported task state version 1") {
-		t.Fatalf("error = %v, want old schema rejection", err)
+			_, err = store.Load("alpha", "op-1")
+
+			if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("unsupported task state version %d", version)) {
+				t.Fatalf("load error = %v", err)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != contents {
+				t.Fatal("rejected state was rewritten")
+			}
+		})
 	}
 }
 
@@ -386,39 +298,6 @@ func TestStoreMigratesVersionThreeCompletionsMissingTechnicalExplanation(t *test
 	if !strings.Contains(completion.TechnicalExplanation, "before Orpheus required a dedicated technical explanation") ||
 		!strings.Contains(completion.TechnicalExplanation, "Legacy PR body.") {
 		t.Fatalf("technical explanation = %q, want compatibility backfill from legacy completion", completion.TechnicalExplanation)
-	}
-}
-
-func TestStoreRejectsVersionTwoState(t *testing.T) {
-	store := newTestStore(t)
-	path, err := store.Path("alpha", "op-1")
-	if err != nil {
-		t.Fatalf("state path: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("mkdir state dir: %v", err)
-	}
-	oldYAML := strings.Join([]string{
-		"version: 2",
-		"repo_id: alpha",
-		"task_id: op-1",
-		"runs:",
-		"- attempt: 1",
-		"  status: succeeded",
-		"  agent: recorder",
-		"  started_at: 2026-06-03T10:00:00Z",
-		"",
-	}, "\n")
-	if err := os.WriteFile(path, []byte(oldYAML), 0o644); err != nil {
-		t.Fatalf("write old state: %v", err)
-	}
-
-	_, err = store.Load("alpha", "op-1")
-	if err == nil {
-		t.Fatal("load v2 state succeeded, want error")
-	}
-	if !strings.Contains(err.Error(), "unsupported task state version 2") {
-		t.Fatalf("error = %v, want old schema rejection", err)
 	}
 }
 
@@ -738,6 +617,13 @@ func TestStoreRecordsReviewAttemptsAndFindings(t *testing.T) {
 		t.Fatalf("findings = %#v, want separate-task finding", review.Findings)
 	}
 
+	review, err = store.RecordReviewFindingCreatedTask("alpha", "op-1", review.Attempt, 0, "op-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if review.Findings[0].CreatedTaskID != "op-2" || review.Findings[0].CreatedTaskAt == nil || !review.Findings[0].CreatedTaskAt.Equal(time.Date(2026, 6, 26, 10, 1, 0, 0, time.UTC)) {
+		t.Fatalf("created task provenance = %#v", review.Findings[0])
+	}
 	passed, err := store.FinishReview("alpha", "op-1", review.Attempt, taskstate.ReviewStatusPassed)
 	if err != nil {
 		t.Fatalf("finish review: %v", err)
@@ -755,7 +641,12 @@ func TestStoreRecordsReviewAttemptsAndFindings(t *testing.T) {
 		t.Fatalf("latest review = %#v ok=%v, want passed", latest, ok)
 	}
 
+	if !reflect.DeepEqual(latest.Findings, review.Findings) {
+		t.Fatalf("findings changed on reload: %#v", latest.Findings)
+	}
 	assertStoreYAMLContains(t, store, "alpha", "op-1",
+		"created_task_id: op-2",
+		"created_task_at: 2026-06-26T10:01:00Z",
 		"reviews:",
 		"status: passed",
 		"pipeline: default",
@@ -825,6 +716,14 @@ func TestStoreRestartAutomatedStepDiscardsItsFindings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start review: %v", err)
 	}
+	neighbor := taskstate.ReviewFinding{Type: taskstate.FindingTypeAdvisory, Step: "security", Title: "Unrelated", Description: "Keep this completed result."}
+	exitCode := 0
+	if _, err := store.RecordReviewStep("alpha", "op-1", review.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindCheck, Name: "security", ExitCode: &exitCode}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RecordReviewFinding("alpha", "op-1", review.Attempt, neighbor); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.RecordReviewStep("alpha", "op-1", review.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindCheck, Name: "lint"}); err != nil {
 		t.Fatalf("record step: %v", err)
 	}
@@ -853,7 +752,15 @@ func TestStoreRestartAutomatedStepDiscardsItsFindings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("restart automated step: %v", err)
 	}
-	if restarted.Step != "lint" || len(restarted.Steps) != 0 || len(restarted.Findings) != 0 {
+	loaded, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded.Reviews[0], restarted) {
+		t.Fatal("restart was not persisted")
+	}
+	wantSteps := []taskstate.ReviewStep{{Kind: taskstate.ReviewStepKindCheck, Name: "security", ExitCode: &exitCode}}
+	if restarted.Step != "lint" || !reflect.DeepEqual(restarted.Steps, wantSteps) || !reflect.DeepEqual(restarted.Findings, []taskstate.ReviewFinding{neighbor}) {
 		t.Fatalf("restarted review = %#v, want only pending lint step", restarted)
 	}
 }
@@ -1068,207 +975,58 @@ func TestStoreRetriesFailedReviewFollowUpTargets(t *testing.T) {
 	}
 }
 
-func TestStoreRecordsReviewFindingCreatedTaskTimestamp(t *testing.T) {
-	store := newTestStore(t,
-		time.Date(2026, 6, 26, 10, 0, 0, 0, time.UTC),
-		time.Date(2026, 6, 26, 10, 1, 0, 0, time.UTC),
-	)
+func TestStorePersistsFindingDispositionWithoutChangingNeighboringFindings(t *testing.T) {
+	for _, tt := range []struct {
+		name              string
+		initial, wantType taskstate.FindingType
+		reason            string
+	}{
+		{name: "promote", initial: taskstate.FindingTypeAdvisory, wantType: taskstate.FindingTypeBlocking},
+		{name: "downgrade", initial: taskstate.FindingTypeBlocking, wantType: taskstate.FindingTypeAdvisory, reason: "False positive for this task."},
+		{name: "waive", initial: taskstate.FindingTypeBlocking, wantType: taskstate.FindingTypeBlocking, reason: "Known flaky check."},
+		{name: "address manually", initial: taskstate.FindingTypeBlocking, wantType: taskstate.FindingTypeBlocking, reason: "Verified in the worktree."},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newTestStore(t)
+			review, err := store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review"})
+			require.NoError(t, err)
+			_, err = store.RecordReviewStep("alpha", "op-1", review.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review"})
+			require.NoError(t, err)
+			original := taskstate.ReviewFinding{Type: tt.initial, Title: "Generated finding", Description: "Review identified a risk.", Step: "ai-review", SuggestedAction: "Inspect this risk."}
+			neighbor := taskstate.ReviewFinding{Type: taskstate.FindingTypeAdvisory, Title: "Unrelated", Description: "Preserve this neighboring finding."}
+			for _, finding := range []taskstate.ReviewFinding{original, neighbor} {
+				_, err := store.RecordReviewFinding("alpha", "op-1", review.Attempt, finding)
+				require.NoError(t, err)
+			}
+			if tt.name == "address manually" {
+				_, err := store.FinishReview("alpha", "op-1", review.Attempt, taskstate.ReviewStatusBlocked)
+				require.NoError(t, err)
+			}
+			expected := original
+			expected.Type = tt.wantType
 
-	review, err := store.StartReview("alpha", "op-1")
-	if err != nil {
-		t.Fatalf("start review: %v", err)
-	}
-	review, err = store.RecordReviewFinding("alpha", "op-1", review.Attempt, taskstate.ReviewFinding{
-		Type:        taskstate.FindingTypeSeparateTask,
-		Title:       "Follow-up",
-		Description: "Track separately.",
-		TaskProposal: taskstate.ReviewTaskProposal{
-			Title:              "Clean up",
-			Description:        "Clean up separately.",
-			AcceptanceCriteria: "Cleanup has tests.",
-		},
-	})
-	if err != nil {
-		t.Fatalf("record separate-task finding: %v", err)
-	}
+			switch tt.name {
+			case "promote":
+				_, err = store.PromoteReviewAdvisoryFinding("alpha", "op-1", review.Attempt, 0)
+			case "downgrade":
+				_, err = store.DowngradeReviewBlockingFinding("alpha", "op-1", review.Attempt, 0, tt.reason)
+				expected.DowngradeReason = tt.reason
+			case "waive":
+				_, err = store.WaiveReviewBlockingFinding("alpha", "op-1", review.Attempt, 0, tt.reason)
+				expected.Waiver = tt.reason
+			case "address manually":
+				_, err = store.AddressReviewBlockingFindingManually("alpha", "op-1", review.Attempt, 0, tt.reason)
+				expected.AddressedManually = tt.reason
+			}
+			require.NoError(t, err)
 
-	review, err = store.RecordReviewFindingCreatedTask("alpha", "op-1", review.Attempt, 0, "op-2")
-	if err != nil {
-		t.Fatalf("record created task: %v", err)
+			loaded, err := store.Load("alpha", "op-1")
+			require.NoError(t, err)
+			got := loaded.Reviews[0].Findings
+			require.Equal(t, []taskstate.ReviewFinding{expected, neighbor}, got)
+			require.Equal(t, tt.name == "promote", taskstate.IsOpenBlockingReviewFinding(got[0]), "publication-blocking status after %s", tt.name)
+		})
 	}
-
-	if review.Findings[0].CreatedTaskAt == nil ||
-		!review.Findings[0].CreatedTaskAt.Equal(time.Date(2026, 6, 26, 10, 1, 0, 0, time.UTC)) {
-		t.Fatalf("created task timestamp = %#v, want 2026-06-26T10:01:00Z", review.Findings[0].CreatedTaskAt)
-	}
-	assertStoreYAMLContains(t, store, "alpha", "op-1",
-		"created_task_id: op-2",
-		"created_task_at: 2026-06-26T10:01:00Z",
-	)
-}
-
-func TestStorePromotesReviewAdvisoryFinding(t *testing.T) {
-	store := newTestStore(t)
-	review, err := store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{
-		Pipeline: "standard",
-		Step:     "ai-review",
-	})
-	if err != nil {
-		t.Fatalf("start review: %v", err)
-	}
-	_, err = store.RecordReviewStep("alpha", "op-1", review.Attempt, taskstate.RecordReviewStepOptions{
-		Kind: taskstate.ReviewStepKindAgentReview,
-		Name: "ai-review",
-	})
-	if err != nil {
-		t.Fatalf("record review step: %v", err)
-	}
-	review, err = store.RecordReviewFinding("alpha", "op-1", review.Attempt, taskstate.ReviewFinding{
-		Type:            taskstate.FindingTypeAdvisory,
-		Title:           "Generated advisory",
-		Description:     "The review agent found a risk.",
-		Step:            "ai-review",
-		SuggestedAction: "Make it block publication.",
-	})
-	if err != nil {
-		t.Fatalf("record advisory finding: %v", err)
-	}
-
-	promoted, err := store.PromoteReviewAdvisoryFinding("alpha", "op-1", review.Attempt, 0)
-	if err != nil {
-		t.Fatalf("promote advisory finding: %v", err)
-	}
-	if promoted.Findings[0].Type != taskstate.FindingTypeBlocking {
-		t.Fatalf("promoted finding type = %q, want blocking", promoted.Findings[0].Type)
-	}
-	if promoted.Findings[0].Title != "Generated advisory" ||
-		promoted.Findings[0].SuggestedAction != "Make it block publication." {
-		t.Fatalf("promoted finding = %#v, want content preserved", promoted.Findings[0])
-	}
-	assertStoreYAMLContains(t, store, "alpha", "op-1",
-		"type: blocking",
-		"title: Generated advisory",
-		"suggested_action: Make it block publication.",
-	)
-}
-
-func TestStoreDowngradesReviewBlockingFinding(t *testing.T) {
-	store := newTestStore(t)
-	review, err := store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{
-		Pipeline: "standard",
-		Step:     "unit",
-	})
-	if err != nil {
-		t.Fatalf("start review: %v", err)
-	}
-	review, err = store.RecordReviewFinding("alpha", "op-1", review.Attempt, taskstate.ReviewFinding{
-		Type:            taskstate.FindingTypeBlocking,
-		Title:           "Generated blocker",
-		Description:     "The automated step found a blocker.",
-		Step:            "unit",
-		SuggestedAction: "Fix the blocker.",
-	})
-	if err != nil {
-		t.Fatalf("record blocking finding: %v", err)
-	}
-
-	downgraded, err := store.DowngradeReviewBlockingFinding(
-		"alpha",
-		"op-1",
-		review.Attempt,
-		0,
-		"False positive for this task.",
-	)
-	if err != nil {
-		t.Fatalf("downgrade blocking finding: %v", err)
-	}
-	finding := downgraded.Findings[0]
-	if finding.Type != taskstate.FindingTypeAdvisory {
-		t.Fatalf("downgraded finding type = %q, want advisory", finding.Type)
-	}
-	if finding.Title != "Generated blocker" ||
-		finding.Description != "The automated step found a blocker." ||
-		finding.Step != "unit" ||
-		finding.SuggestedAction != "Fix the blocker." {
-		t.Fatalf("downgraded finding = %#v, want content preserved", finding)
-	}
-	if finding.DowngradeReason != "False positive for this task." {
-		t.Fatalf("downgrade reason = %q", finding.DowngradeReason)
-	}
-
-	assertStoreYAMLContains(t, store, "alpha", "op-1",
-		"type: advisory",
-		"title: Generated blocker",
-		"downgrade_reason: False positive for this task.",
-	)
-}
-
-func TestStoreWaivesReviewBlockingFinding(t *testing.T) {
-	store := newTestStore(t)
-	review, err := store.StartReview("alpha", "op-1")
-	if err != nil {
-		t.Fatalf("start review: %v", err)
-	}
-	review, err = store.RecordReviewFinding("alpha", "op-1", review.Attempt, taskstate.ReviewFinding{
-		Type:        taskstate.FindingTypeBlocking,
-		Title:       "Check failed",
-		Description: "The check failed.",
-	})
-	if err != nil {
-		t.Fatalf("record blocking finding: %v", err)
-	}
-
-	waived, err := store.WaiveReviewBlockingFinding("alpha", "op-1", review.Attempt, 0, "Known flaky check.")
-	if err != nil {
-		t.Fatalf("waive blocking finding: %v", err)
-	}
-	finding := waived.Findings[0]
-	if finding.Type != taskstate.FindingTypeBlocking {
-		t.Fatalf("waived finding type = %q, want blocking audit type preserved", finding.Type)
-	}
-	if finding.Waiver != "Known flaky check." {
-		t.Fatalf("waiver = %q", finding.Waiver)
-	}
-
-	assertStoreYAMLContains(t, store, "alpha", "op-1",
-		"type: blocking",
-		"waiver: Known flaky check.",
-	)
-}
-
-func TestStoreRecordsManualAddressForBlockedReviewFinding(t *testing.T) {
-	store := newTestStore(t)
-	review, err := store.StartReview("alpha", "op-1")
-	if err != nil {
-		t.Fatalf("start review: %v", err)
-	}
-	if _, err := store.RecordReviewFinding("alpha", "op-1", review.Attempt, taskstate.ReviewFinding{
-		Type:        taskstate.FindingTypeBlocking,
-		Title:       "Direct fix",
-		Description: "Requires an out-of-band repair.",
-	}); err != nil {
-		t.Fatalf("record finding: %v", err)
-	}
-	if _, err := store.FinishReview("alpha", "op-1", review.Attempt, taskstate.ReviewStatusBlocked); err != nil {
-		t.Fatalf("finish review: %v", err)
-	}
-
-	updated, err := store.AddressReviewBlockingFindingManually("alpha", "op-1", review.Attempt, 0, "Verified in the worktree.")
-	if err != nil {
-		t.Fatalf("address finding manually: %v", err)
-	}
-	finding := updated.Findings[0]
-	if finding.AddressedManually != "Verified in the worktree." {
-		t.Fatalf("manual address reason = %q", finding.AddressedManually)
-	}
-	if finding.Waiver != "" {
-		t.Fatalf("waiver = %q, want empty", finding.Waiver)
-	}
-	if taskstate.IsOpenBlockingReviewFinding(finding) {
-		t.Fatal("manually addressed finding remains open")
-	}
-
-	assertStoreYAMLContains(t, store, "alpha", "op-1", "addressed_manually: Verified in the worktree.")
 }
 
 func TestStoreAllowsFailedReviewBlockerDispositions(t *testing.T) {
@@ -1289,16 +1047,37 @@ func TestStoreAllowsFailedReviewBlockerDispositions(t *testing.T) {
 	if _, err := store.FinishReview("alpha", "op-1", review.Attempt, taskstate.ReviewStatusFailed); err != nil {
 		t.Fatalf("finish failed review: %v", err)
 	}
+	before, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := before.Reviews[0]
+	assertPersisted := func() {
+		t.Helper()
+		loaded, loadErr := store.Load("alpha", "op-1")
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		if !reflect.DeepEqual(loaded.Reviews[0], expected) {
+			t.Fatalf("failed review disposition = %#v, want %#v", loaded.Reviews[0], expected)
+		}
+	}
 	if _, err := store.AddressReviewBlockingFindingManually("alpha", "op-1", review.Attempt, 0, "Fixed outside Orpheus."); err != nil {
 		t.Fatalf("address failed review finding manually: %v", err)
 	}
+	expected.Findings[0].AddressedManually = "Fixed outside Orpheus."
+	assertPersisted()
 	if _, err := store.WaiveReviewBlockingFinding("alpha", "op-1", review.Attempt, 1, "Accepted compatibility risk."); err != nil {
 		t.Fatalf("waive failed review finding: %v", err)
 	}
+	expected.Findings[1].Waiver = "Accepted compatibility risk."
+	assertPersisted()
 	updated, err := store.MarkReviewAutomatedBlockerDecisionKept("alpha", "op-1", review.Attempt)
 	if err != nil {
 		t.Fatalf("keep automated blocker from failed review: %v", err)
 	}
+	expected.AutomatedBlockerDecisionKept = true
+	assertPersisted()
 	if !updated.AutomatedBlockerDecisionKept {
 		t.Fatal("automated blocker keep decision was not retained")
 	}
@@ -1741,6 +1520,16 @@ func TestStoreLocksIntegrationFlowWhenPublicationStarts(t *testing.T) {
 	}
 	if _, err := store.SetFinalizationIntegrationFlow("alpha", "op-1", publication.IntegrationFlowDirectMerge); !errors.Is(err, taskstate.ErrFinalizationConflict) {
 		t.Fatalf("change locked integration flow error = %v, want ErrFinalizationConflict", err)
+	}
+	if _, err := store.SetFinalizationDestination("alpha", "op-1", "release/next"); !errors.Is(err, taskstate.ErrFinalizationConflict) || !strings.Contains(err.Error(), "locked as \"main\"") {
+		t.Fatalf("change locked destination error = %v", err)
+	}
+	loaded, err := store.Load("alpha", "op-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Finalization.IntegrationFlow != publication.IntegrationFlowPullRequest || loaded.Finalization.DestinationBranch != "main" {
+		t.Fatalf("publication policy changed: %#v", loaded.Finalization)
 	}
 	again, err := store.RecordFinalizationPublicationStart("alpha", "op-1")
 	if err != nil {
@@ -2320,21 +2109,5 @@ func assertStoreYAMLNotContains(t *testing.T, store taskstate.Store, repoID, tas
 		if strings.Contains(text, value) {
 			t.Fatalf("YAML contains %q:\n%s", value, text)
 		}
-	}
-}
-
-func TestStoreLocksIntegrationDestinationWhenPublicationStarts(t *testing.T) {
-	store := newTestStore(t, time.Date(2026, 6, 4, 9, 0, 0, 0, time.UTC))
-	if _, err := store.SetFinalizationIntegrationFlow("alpha", "op-1", publication.IntegrationFlowPullRequest); err != nil {
-		t.Fatalf("set flow: %v", err)
-	}
-	if _, err := store.SetFinalizationDestination("alpha", "op-1", "release/next"); err != nil {
-		t.Fatalf("set destination: %v", err)
-	}
-	if _, err := store.RecordFinalizationPublicationStart("alpha", "op-1"); err != nil {
-		t.Fatalf("record publication start: %v", err)
-	}
-	if _, err := store.SetFinalizationDestination("alpha", "op-1", "main"); !errors.Is(err, taskstate.ErrFinalizationConflict) || !strings.Contains(err.Error(), "locked as \"release/next\"") {
-		t.Fatalf("change locked destination error = %v, want actionable ErrFinalizationConflict", err)
 	}
 }

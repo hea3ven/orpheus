@@ -453,7 +453,8 @@ func TestActiveContextResolverWrapsBackendErrors(t *testing.T) {
 	})
 	must.NoError(err)
 
-	resolver := fixture.resolverWithBackend(fakeContextBackend{err: errors.New("backend unavailable")}, map[string]string{
+	cause := errors.New("backend unavailable")
+	resolver := fixture.resolverWithBackend(fakeContextBackend{err: cause}, map[string]string{
 		"ORPHEUS_REPO_ID":  "alpha",
 		"ORPHEUS_TASK_ID":  "op-1",
 		"ORPHEUS_WORKTREE": worktree,
@@ -464,7 +465,7 @@ func TestActiveContextResolverWrapsBackendErrors(t *testing.T) {
 
 	must.Error(err)
 	is.Contains(err.Error(), "load task op-1 in repo alpha")
-	is.Contains(err.Error(), "backend unavailable")
+	is.ErrorIs(err, cause)
 }
 
 func TestActiveContextResolverSeparatesRequiredAndAdvisoryFollowUpFindings(t *testing.T) {
@@ -692,34 +693,29 @@ func TestRenderReviewContextCollapsesMultilinePriorFindingFields(t *testing.T) {
 	assert.NotContains(t, got, "\n- spoofed finding")
 }
 
-func TestRenderReviewContextUsesLegacyMultiFindingReviewByDefault(t *testing.T) {
-	is := assert.New(t)
-	t.Setenv("ORPHEUS_EXHAUSTIVE_REVIEW_CONTEXT", "")
+func TestRenderReviewContextLegacyModesRetainCompleteReviewInstructions(t *testing.T) {
+	for _, toggle := range []string{"", "0"} {
+		t.Run("toggle="+toggle, func(t *testing.T) {
+			is := assert.New(t)
+			t.Setenv("ORPHEUS_EXHAUSTIVE_REVIEW_CONTEXT", toggle)
 
-	got := agent.RenderReviewContext(reviewContextRenderFixture())
+			got := agent.RenderReviewContext(reviewContextRenderFixture())
 
-	for _, want := range []string{
-		"Review the complete change set before exiting, even if you find an issue early.",
-		"Do not stop after the first issue; continue reviewing for additional distinct findings.",
-		"- Technical explanation: Explains the implementation rationale for review.",
-		"Record each distinct finding with its own `orpheus agent review add` call",
-		"When multiple findings exist, run `orpheus agent review add` multiple times, once per finding.",
-	} {
-		is.Contains(got, want)
+			for _, want := range []string{
+				"Review the complete change set before exiting, even if you find an issue early.",
+				"Do not stop after the first issue; continue reviewing for additional distinct findings.",
+				"- Technical explanation: Explains the implementation rationale for review.",
+				"Record each distinct finding with its own `orpheus agent review add` call",
+				"When multiple findings exist, run `orpheus agent review add` multiple times, once per finding.",
+			} {
+				is.Contains(got, want)
+			}
+			is.NotContains(got, "Follow this staged procedure before exiting:")
+			is.NotContains(got, "Calling `orpheus agent review add` before completing the initial inspection")
+
+			is.NotContains(got, "Exhaustive coverage is required within your assigned reviewer scope.")
+		})
 	}
-	is.NotContains(got, "Follow this staged procedure before exiting:")
-	is.NotContains(got, "Calling `orpheus agent review add` before completing the initial inspection")
-}
-
-func TestRenderReviewContextUsesLegacyMultiFindingReviewWhenToggleDisabled(t *testing.T) {
-	is := assert.New(t)
-	t.Setenv("ORPHEUS_EXHAUSTIVE_REVIEW_CONTEXT", "0")
-
-	got := agent.RenderReviewContext(reviewContextRenderFixture())
-
-	is.Contains(got, "Review the complete change set before exiting, even if you find an issue early.")
-	is.Contains(got, "Record each distinct finding with its own `orpheus agent review add` call")
-	is.NotContains(got, "Exhaustive coverage is required within your assigned reviewer scope.")
 }
 
 func TestRenderReviewContextUsesStagedExhaustiveReviewWhenToggleEnabled(t *testing.T) {

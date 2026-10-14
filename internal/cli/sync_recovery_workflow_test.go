@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/agent"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
@@ -32,13 +33,20 @@ func TestIntegrationWorkflowTaskSyncUpdatesBranchAndRetriesPushWithoutAnotherMer
 	assert.Empty(t, stderr)
 	assert.Contains(t, stdout, "origin was behind")
 	assert.Equal(t, head, f.publication.remote["orpheus/op-sync"])
-	f.run("", "task", "sync", "op-sync")
+	currentOut, currentErr := f.run("", "task", "sync", "op-sync")
+	assert.Empty(t, currentErr)
+	assert.Contains(t, currentOut, "already includes main")
 	assert.Equal(t, 1, f.syncGit.commits)
 	assert.Len(t, f.candidate.pushes, 1)
 	assert.Empty(t, f.agent.launches)
 	assert.Empty(t, f.pr.created)
 	assert.Empty(t, f.tasks.closed)
+	branch, worktree := f.expectedTarget("op-sync")
 	for _, call := range f.syncGit.calls {
+		assert.Equal(t, taskWorkflowRepoRoot, call.RepoPath)
+		assert.Equal(t, "main", call.DefaultBranch)
+		assert.Equal(t, branch, call.Branch)
+		assert.Equal(t, worktree, call.Worktree)
 		assert.Equal(t, gitmeta.TaskBranchUpdateAlways, call.UpdatePolicy)
 	}
 }
@@ -65,21 +73,34 @@ func TestIntegrationWorkflowTaskSyncAllLeavesConflictFreeBranchUnchanged(t *test
 }
 
 func TestIntegrationWorkflowTaskSyncConflictFailureRollsBackAndRetries(t *testing.T) {
-	for _, failure := range []string{"resolver", "push"} {
+	for _, failure := range []string{"resolver", "unresolved files", "push"} {
 		t.Run(failure, func(t *testing.T) {
 			f := newSyncFixture(t)
 			cause := errors.New("repair unavailable")
 			if failure == "resolver" {
 				f.resolvingAgent(cause)
+			} else if failure == "unresolved files" {
+				f.resolvingAgent(nil)
+				f.agent.outcomes[0].mutateCandidate = func() {}
 			} else {
 				f.resolvingAgent(nil)
 				f.publication.pushError = cause
+			}
+			captured := false
+			f.options.Dependencies.CaptureUsage = func(opts agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions {
+				captured = true
+				assert.Equal(t, "sync-conflict-op-sync", opts.SessionName)
+				return taskstate.RecordRunUsageOptions{UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureUnknown, Reason: "failed execution has no usage record"}}
 			}
 			head := f.candidate.head
 
 			stdout, stderr, err := f.runError("", "task", "sync", "op-sync")
 
-			require.ErrorIs(t, err, cause)
+			if failure == "unresolved files" {
+				require.ErrorContains(t, err, "unresolved conflict files")
+			} else {
+				require.ErrorIs(t, err, cause)
+			}
 			assert.Empty(t, stdout)
 			assert.Empty(t, stderr)
 			assert.Equal(t, head, f.candidate.head)
@@ -92,7 +113,17 @@ func TestIntegrationWorkflowTaskSyncConflictFailureRollsBackAndRetries(t *testin
 			require.GreaterOrEqual(t, len(state.Events), 2)
 			assert.Equal(t, taskstate.EventSyncConflictStarted, state.Events[0].Type)
 			assert.Equal(t, taskstate.EventSyncConflictFailed, state.Events[1].Type)
-			assert.Contains(t, state.Events[1].Error, cause.Error())
+			if failure == "unresolved files" {
+				assert.Contains(t, state.Events[1].Error, "unresolved conflict files")
+			} else {
+				assert.Contains(t, state.Events[1].Error, cause.Error())
+			}
+			assert.True(t, captured)
+			require.NotNil(t, state.Events[1].Execution)
+			assert.Equal(t, taskstate.RunStatusFailed, state.Events[1].Execution.Status)
+			assert.Nil(t, state.Events[1].Execution.Usage)
+			assert.Equal(t, taskstate.UsageCaptureUnknown, state.Events[1].Execution.UsageCapture.Status)
+			assert.Equal(t, "failed execution has no usage record", state.Events[1].Execution.UsageCapture.Reason)
 			f.publication.pushError = nil
 			f.resolvingAgent(nil)
 

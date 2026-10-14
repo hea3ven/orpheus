@@ -87,6 +87,7 @@ func TestIntegrationAdapterContractGHProviderStatusClassifiesRepositoryAndAuthen
 		t.Run(tc.want, func(t *testing.T) {
 			log := installFakeGH(t, tc.output, 1)
 			_, err := (pullrequest.GHProvider{}).StatusByURL(context.Background(), pullrequest.StatusByURLRequest{URL: "https://github.test/org/alpha/pull/42"})
+			require.ErrorContains(t, err, "poll GitHub PR https://github.test/org/alpha/pull/42")
 			require.ErrorContains(t, err, tc.want)
 			logged, err := os.ReadFile(log)
 			require.NoError(t, err)

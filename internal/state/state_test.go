@@ -20,80 +20,28 @@ type sampleState struct {
 	Labels map[string]string `yaml:"labels"`
 }
 
-func TestResolveUsesXDGRoots(t *testing.T) {
-	paths, err := Resolve(ResolveOptions{
-		HomeDir: "/home/tester",
-		Env: map[string]string{
-			"XDG_CONFIG_HOME": "/fixture/xdg-config",
-			"XDG_DATA_HOME":   "/fixture/xdg-data",
-		},
-	})
-	if err != nil {
-		t.Fatalf("resolve paths: %v", err)
-	}
-
-	assertPropagatedRoots(t, paths, "/fixture/xdg-config", "/fixture/xdg-data")
-}
-
-func TestResolveFallsBackToHome(t *testing.T) {
-	paths, err := Resolve(ResolveOptions{HomeDir: "/home/tester"})
-	if err != nil {
-		t.Fatalf("resolve paths: %v", err)
-	}
-
-	assertPropagatedRoots(
-		t,
-		paths,
-		filepath.Join("/home/tester", ".config"),
-		filepath.Join("/home/tester", ".local", "share"),
-	)
-}
-
-func TestResolveAllowsXDGWithoutHome(t *testing.T) {
-	paths, err := Resolve(ResolveOptions{
-		Env: map[string]string{
-			"XDG_CONFIG_HOME": "/fixture/xdg-config",
-			"XDG_DATA_HOME":   "/fixture/xdg-data",
-		},
-	})
-	if err != nil {
-		t.Fatalf("resolve paths without home: %v", err)
-	}
-	assertPropagatedRoots(t, paths, "/fixture/xdg-config", "/fixture/xdg-data")
-}
-
-func TestResolveRejectsRelativeInputs(t *testing.T) {
-	tests := []struct {
-		name string
-		opts ResolveOptions
-		want string
+func TestResolvePropagatesConfiguredAndFallbackRoots(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		opts         ResolveOptions
+		config, data string
+		wantError    string
 	}{
-		{
-			name: "relative XDG config",
-			opts: ResolveOptions{HomeDir: "/home/tester", Env: map[string]string{"XDG_CONFIG_HOME": "relative"}},
-			want: "XDG_CONFIG_HOME must be an absolute path",
-		},
-		{
-			name: "relative XDG data",
-			opts: ResolveOptions{HomeDir: "/home/tester", Env: map[string]string{"XDG_DATA_HOME": "relative"}},
-			want: "XDG_DATA_HOME must be an absolute path",
-		},
-		{
-			name: "relative home fallback",
-			opts: ResolveOptions{HomeDir: "home/tester"},
-			want: "home directory must be an absolute path",
-		},
-	}
-
-	for _, tt := range tests {
+		{name: "explicit XDG", opts: ResolveOptions{HomeDir: "/home/tester", Env: map[string]string{"XDG_CONFIG_HOME": "/fixture/xdg-config", "XDG_DATA_HOME": "/fixture/xdg-data"}}, config: "/fixture/xdg-config", data: "/fixture/xdg-data"},
+		{name: "home fallback", opts: ResolveOptions{HomeDir: "/home/tester"}, config: "/home/tester/.config", data: "/home/tester/.local/share"},
+		{name: "XDG without home", opts: ResolveOptions{Env: map[string]string{"XDG_CONFIG_HOME": "/fixture/xdg-config", "XDG_DATA_HOME": "/fixture/xdg-data"}}, config: "/fixture/xdg-config", data: "/fixture/xdg-data"},
+		{name: "relative XDG config", opts: ResolveOptions{HomeDir: "/home/tester", Env: map[string]string{"XDG_CONFIG_HOME": "relative"}}, wantError: "XDG_CONFIG_HOME must be an absolute path"},
+		{name: "relative XDG data", opts: ResolveOptions{HomeDir: "/home/tester", Env: map[string]string{"XDG_DATA_HOME": "relative"}}, wantError: "XDG_DATA_HOME must be an absolute path"},
+		{name: "relative fallback", opts: ResolveOptions{HomeDir: "home/tester"}, wantError: "home directory must be an absolute path"},
+	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Resolve(tt.opts)
-			if err == nil {
-				t.Fatal("resolve paths succeeded, want error")
+			paths, err := Resolve(tt.opts)
+			if tt.wantError != "" {
+				require.ErrorContains(t, err, tt.wantError)
+				return
 			}
-			if !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("error = %q, want substring %q", err, tt.want)
-			}
+			require.NoError(t, err)
+			assertPropagatedRoots(t, paths, tt.config, tt.data)
 		})
 	}
 }
@@ -104,23 +52,6 @@ func TestNewPathsRejectsRelativeRoots(t *testing.T) {
 
 	assert.Error(t, configErr)
 	assert.Error(t, dataErr)
-}
-
-func TestDataPathResolvesRelativePath(t *testing.T) {
-	root := testutil.CanonicalTempDir(t)
-	paths, err := NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
-	if err != nil {
-		t.Fatalf("new paths: %v", err)
-	}
-
-	dataPath, err := paths.DataPath(filepath.Join("runs", "task-1", "run.yaml"))
-	if err != nil {
-		t.Fatalf("data path: %v", err)
-	}
-	wantData := filepath.Join(root, "data", "runs", "task-1", "run.yaml")
-	if dataPath != wantData {
-		t.Fatalf("data path = %q, want %q", dataPath, wantData)
-	}
 }
 
 func TestRelativePathHelpersRejectEscapes(t *testing.T) {
@@ -146,7 +77,9 @@ func TestRelativePathHelpersRejectEscapes(t *testing.T) {
 }
 
 func TestYAMLHelpersRoundTripConfigAndData(t *testing.T) {
-	paths := newTestPaths(t)
+	root := testutil.CanonicalTempDir(t)
+	paths, err := NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
+	require.NoError(t, err)
 	want := sampleState{Name: "example", Count: 2, Labels: map[string]string{"role": "test"}}
 
 	if err := writeConfigYAML(paths, filepath.Join("nested", "config.yaml"), want); err != nil {
@@ -166,6 +99,11 @@ func TestYAMLHelpersRoundTripConfigAndData(t *testing.T) {
 		t.Fatalf("read data YAML: %v", err)
 	}
 	assertSampleState(t, gotData, want)
+	dataPath, err := paths.DataPath(filepath.Join("runs", "run.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(root, "data", "runs", "run.yaml"), dataPath)
+	_, err = os.Stat(dataPath)
+	require.NoError(t, err)
 }
 
 func TestReadYAMLMissingFileIsActionable(t *testing.T) {
@@ -312,52 +250,30 @@ func TestWriteYAMLParentCreationFailureIsActionable(t *testing.T) {
 	}
 }
 
-func TestWithGlobalMutationLockRunsAndReleases(t *testing.T) {
-	paths := newTestPaths(t)
-	lockPath, err := paths.DataPath(filepath.Join("locks", "mutation.lock"))
-	if err != nil {
-		t.Fatalf("global mutation lock path: %v", err)
-	}
+func TestWithGlobalMutationLockReleasesAfterCallback(t *testing.T) {
+	for _, callbackError := range []error{nil, errors.New("mutation failed")} {
+		t.Run(fmt.Sprint(callbackError), func(t *testing.T) {
+			paths := newTestPaths(t)
+			lockPath, err := paths.DataPath(filepath.Join("locks", "mutation.lock"))
+			require.NoError(t, err)
+			called := false
 
-	var lockExisted bool
-	err = WithGlobalMutationLock(paths, "test mutation", func() error {
-		info, statErr := os.Stat(lockPath)
-		lockExisted = statErr == nil
-		if statErr == nil {
-			mode := info.Mode().Perm()
-			if mode&0o600 != 0o600 || mode&^os.FileMode(0o644) != 0 {
-				return fmt.Errorf("lock permissions = %o, want owner rw and no bits beyond 644", mode)
-			}
-		}
-		return statErr
-	})
-	if err != nil {
-		t.Fatalf("with global mutation lock: %v", err)
-	}
-	if !lockExisted {
-		t.Fatal("lock file did not exist while callback ran")
-	}
-	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("lock file still exists after release: %v", err)
-	}
-}
+			err = WithGlobalMutationLock(paths, "test mutation", func() error {
+				called = true
+				info, statErr := os.Stat(lockPath)
+				require.NoError(t, statErr)
+				mode := info.Mode().Perm()
+				if mode&0o600 != 0o600 || mode&^os.FileMode(0o644) != 0 {
+					t.Fatalf("lock permissions = %o", mode)
+				}
+				return callbackError
+			})
 
-func TestWithGlobalMutationLockReleasesAfterCallbackError(t *testing.T) {
-	paths := newTestPaths(t)
-	lockPath, err := paths.DataPath(filepath.Join("locks", "mutation.lock"))
-	if err != nil {
-		t.Fatalf("global mutation lock path: %v", err)
-	}
-	wantErr := errors.New("mutation failed")
-
-	err = WithGlobalMutationLock(paths, "test mutation", func() error {
-		return wantErr
-	})
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("error = %v, want %v", err, wantErr)
-	}
-	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("lock file still exists after callback error: %v", err)
+			require.ErrorIs(t, err, callbackError)
+			assert.True(t, called)
+			_, statErr := os.Stat(lockPath)
+			require.ErrorIs(t, statErr, os.ErrNotExist)
+		})
 	}
 }
 

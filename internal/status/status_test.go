@@ -17,6 +17,8 @@ func TestProjectGroupsItemsByLocalM4Policy(t *testing.T) {
 		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"},
 		Tasks: []task.Task{
 			{ID: "a-ready", Title: "ready", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
+			{ID: "a-after-closed", Status: task.StatusOpen, IssueType: task.IssueTypeTask, Relations: task.RelationSummary{DependencyIDs: []string{"a-done"}}},
+			{ID: "a-missing-dependency", Status: task.StatusOpen, IssueType: task.IssueTypeTask, Relations: task.RelationSummary{DependencyIDs: []string{"a-missing"}}},
 			{ID: "a-dep", Title: "dependency", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
 			{
 				ID:        "a-blocked",
@@ -59,15 +61,18 @@ func TestProjectGroupsItemsByLocalM4Policy(t *testing.T) {
 		status.GroupBlocked,
 		status.GroupDoneClosed,
 	})
-	assertGroupTaskIDs(t, got, status.GroupReadyToRun, []string{"a-ready", "a-dep", "a-epic-ready"})
+	assertGroupTaskIDs(t, got, status.GroupReadyToRun, []string{"a-ready", "a-after-closed", "a-dep", "a-epic-ready"})
 	assertGroupTaskIDs(t, got, status.GroupWorking, nil)
 	assertGroupTaskIDs(t, got, status.GroupIdle, []string{"a-idle", "a-epic-idle"})
 	assertGroupTaskIDs(t, got, status.GroupBlocked, []string{"a-blocked", "a-epic-blocked"})
 	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-review"})
 	assertGroupTaskIDs(t, got, status.GroupDoneClosed, []string{"a-done", "a-epic-done"})
-	assertGroupTaskIDs(t, got, status.GroupNeedsAttention, []string{"a-unknown"})
+	assertGroupTaskIDs(t, got, status.GroupNeedsAttention, []string{"a-missing-dependency", "a-unknown"})
 
 	assertLocalM4PolicyProjectionDetails(t, got)
+	if entry := projectionEntryByTaskID(t, got, "a-missing-dependency"); entry.Detail != "missing dependency a-missing" {
+		t.Fatalf("missing dependency detail = %q", entry.Detail)
+	}
 }
 
 func assertLocalM4PolicyProjectionDetails(t *testing.T, got status.Projection) {
@@ -261,111 +266,40 @@ func externalRefGateFixture() (task.SnapshotResult, status.RunStateIndex) {
 	return snapshot, runStates
 }
 
-func TestProjectWithRunStatesShowsSuccessfulMainCompletionInReview(t *testing.T) {
-	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
-		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/fixture/alpha", DefaultBranch: "main"},
-		Tasks: []task.Task{{
-			ID:        "a-main",
-			Title:     "local main review",
-			Status:    task.StatusInProgress,
-			IssueType: task.IssueTypeTask,
-			Metadata: task.Metadata{
-				task.MetadataBranch:   "main",
-				task.MetadataWorktree: "/fixture/alpha",
-			},
-		}},
-	}}}
-	latestRun := taskstate.RunAttempt{
-		Attempt: 1,
-		Status:  taskstate.RunStatusSucceeded,
-		Completion: &taskstate.Completion{
-			Summary:              "Done",
-			Description:          "Ready for review.",
-			DetailedDescription:  "Detailed PR body.",
-			TechnicalExplanation: "Technical explanation.",
-			CompletedAt:          time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
-		},
-	}
-	localStates := status.LocalTaskStateIndex{
-		status.RunStateKey("alpha", "a-main"): {
-			LatestRun:       &latestRun,
-			GitFacts:        testTaskTarget("main", "/fixture/alpha"),
-			ExpectedTargets: testExpectedTargets("main", "/fixture/alpha", "orpheus/a-main", "/fixture/orpheus/worktrees/a-main"),
-		},
-	}
+func TestProjectCompletionRequiresRecordedCompletionRegardlessOfCommitOutcome(t *testing.T) {
+	for _, tt := range []struct {
+		name, branch, worktree string
+		completion             *taskstate.Completion
+		wantGroup              status.GroupID
+		wantDetail             string
+	}{
+		{name: "repository root completion", branch: "main", worktree: "/fixture/alpha", completion: &taskstate.Completion{Summary: "Done"}, wantGroup: status.GroupInReview, wantDetail: "local review; run task run"},
+		{name: "committed worktree completion", branch: "orpheus/a-task", worktree: "/fixture/worktree", completion: &taskstate.Completion{Summary: "Done", Commit: "abc123"}, wantGroup: status.GroupInReview, wantDetail: "local review; run task run"},
+		{name: "worktree commit failure", branch: "orpheus/a-task", worktree: "/fixture/worktree", completion: &taskstate.Completion{Summary: "Done", CommitError: "commit failed"}, wantGroup: status.GroupInReview, wantDetail: "local review; run task run"},
+		{name: "successful exit without completion", branch: "main", worktree: "/fixture/alpha", wantGroup: status.GroupIdle, wantDetail: "agent exited without completion"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
+				Repository: task.Repository{ID: "alpha", Path: "/fixture/alpha", DefaultBranch: "main"},
+				Tasks:      []task.Task{{ID: "a-task", Status: task.StatusInProgress, IssueType: task.IssueTypeTask, Metadata: task.Metadata{task.MetadataBranch: tt.branch, task.MetadataWorktree: tt.worktree}}},
+			}}}
+			run := taskstate.RunAttempt{Attempt: 1, Status: taskstate.RunStatusSucceeded, Completion: tt.completion}
+			states := status.LocalTaskStateIndex{status.RunStateKey("alpha", "a-task"): {
+				LatestRun: &run, GitFacts: testTaskTarget(tt.branch, tt.worktree),
+				ExpectedTargets: testExpectedTargets("main", "/fixture/alpha", "orpheus/a-task", "/fixture/worktree"),
+			}}
 
-	got := status.ProjectWithLocalTaskStates(snapshot, localStates)
+			got := status.ProjectWithLocalTaskStates(snapshot, states)
 
-	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-main"})
-	reviewEntry := groupEntries(t, got, status.GroupInReview)[0]
-	if reviewEntry.Detail != "local review; run task run" {
-		t.Fatalf("review detail = %q, want local review detail", reviewEntry.Detail)
-	}
-	assertGroupTaskIDs(t, got, status.GroupWorking, nil)
-}
-
-func TestProjectWithRunStatesShowsWorktreeCompletionReadyForTaskDone(t *testing.T) {
-	got := projectWorktreeCompletion(taskstate.Completion{
-		Summary:              "Done",
-		Description:          "Ready for PR.",
-		DetailedDescription:  "Detailed PR body.",
-		TechnicalExplanation: "Technical explanation.",
-		CompletedAt:          time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
-		Commit:               "abc123",
-	})
-
-	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-worktree"})
-	entry := groupEntries(t, got, status.GroupInReview)[0]
-	if entry.Detail != "local review; run task run" {
-		t.Fatalf("review detail = %q, want task review detail", entry.Detail)
-	}
-}
-
-func TestProjectWithRunStatesShowsWorktreeCompletionWithoutCommitReadyForTaskDone(t *testing.T) {
-	got := projectWorktreeCompletion(taskstate.Completion{
-		Summary:              "Done",
-		Description:          "Commit failed.",
-		DetailedDescription:  "Detailed PR body.",
-		TechnicalExplanation: "Technical explanation.",
-		CompletedAt:          time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
-		CommitError:          "commit failed",
-	})
-
-	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-worktree"})
-	entry := groupEntries(t, got, status.GroupInReview)[0]
-	if entry.Detail != "local review; run task run" {
-		t.Fatalf("review detail = %q, want task review detail", entry.Detail)
-	}
-}
-
-func TestProjectWithRunStatesDoesNotInferRepoRootReviewWithoutCompletion(t *testing.T) {
-	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
-		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/fixture/alpha", DefaultBranch: "main"},
-		Tasks: []task.Task{{
-			ID:        "a-main",
-			Title:     "local main review",
-			Status:    task.StatusInProgress,
-			IssueType: task.IssueTypeTask,
-			Metadata: task.Metadata{
-				task.MetadataBranch:   "main",
-				task.MetadataWorktree: "/fixture/alpha",
-			},
-		}},
-	}}}
-	runStates := status.RunStateIndex{
-		status.RunStateKey("alpha", "a-main"): {
-			Attempt: 1,
-			Status:  taskstate.RunStatusSucceeded,
-		},
-	}
-
-	got := status.ProjectWithRunStates(snapshot, runStates)
-
-	assertGroupTaskIDs(t, got, status.GroupInReview, nil)
-	assertGroupTaskIDs(t, got, status.GroupIdle, []string{"a-main"})
-	idleEntry := groupEntries(t, got, status.GroupIdle)[0]
-	if !strings.Contains(idleEntry.Detail, "agent exited without completion") {
-		t.Fatalf("idle detail = %q, want missing-completion detail", idleEntry.Detail)
+			assertGroupTaskIDs(t, got, tt.wantGroup, []string{"a-task"})
+			assertGroupTaskIDs(t, got, status.GroupWorking, nil)
+			if entry := projectionEntryByTaskID(t, got, "a-task"); !strings.Contains(entry.Detail, tt.wantDetail) {
+				t.Fatalf("detail = %q, want %q", entry.Detail, tt.wantDetail)
+			}
+			if tt.completion == nil {
+				assertGroupTaskIDs(t, got, status.GroupInReview, nil)
+			}
+		})
 	}
 }
 
@@ -674,48 +608,6 @@ func assertLatestAttachedAttemptProjection(t *testing.T, got status.Projection) 
 	}
 }
 
-func TestProjectTreatsSameRepoClosedDependenciesAsReady(t *testing.T) {
-	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
-		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"},
-		Tasks: []task.Task{
-			{ID: "a-dep", Title: "done dependency", Status: task.StatusClosed, IssueType: task.IssueTypeTask},
-			{
-				ID:        "a-ready",
-				Title:     "ready",
-				Status:    task.StatusOpen,
-				IssueType: task.IssueTypeTask,
-				Relations: task.RelationSummary{DependencyIDs: []string{"a-dep"}},
-			},
-		},
-	}}}
-
-	got := status.Project(snapshot)
-
-	assertGroupTaskIDs(t, got, status.GroupReadyToRun, []string{"a-ready"})
-	assertGroupTaskIDs(t, got, status.GroupDoneClosed, []string{"a-dep"})
-}
-
-func TestProjectTreatsMissingDependenciesAsUnknown(t *testing.T) {
-	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
-		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"},
-		Tasks: []task.Task{{
-			ID:        "a-task",
-			Title:     "missing dependency",
-			Status:    task.StatusOpen,
-			IssueType: task.IssueTypeTask,
-			Relations: task.RelationSummary{DependencyIDs: []string{"a-missing"}},
-		}},
-	}}}
-
-	got := status.Project(snapshot)
-	entries := groupEntries(t, got, status.GroupNeedsAttention)
-
-	if len(entries) != 1 || entries[0].Task.ID != "a-task" || entries[0].Detail != "missing dependency a-missing" {
-		t.Fatalf("unknown entries = %#v, want missing dependency detail", entries)
-	}
-	assertGroupTaskIDs(t, got, status.GroupReadyToRun, nil)
-}
-
 func TestProjectTreatsCrossRepositoryContextAsUnavailableRatherThanMissing(t *testing.T) {
 	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
 		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"},
@@ -853,35 +745,6 @@ func projectionEntryByTaskID(t *testing.T, projection status.Projection, taskID 
 	}
 	t.Fatalf("missing projected task %s", taskID)
 	return status.Entry{}
-}
-
-func projectWorktreeCompletion(completion taskstate.Completion) status.Projection {
-	snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
-		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a", Path: "/fixture/alpha", DefaultBranch: "main"},
-		Tasks: []task.Task{{
-			ID:        "a-worktree",
-			Title:     "worktree review",
-			Status:    task.StatusInProgress,
-			IssueType: task.IssueTypeTask,
-			Metadata: task.Metadata{
-				task.MetadataBranch:   "orpheus/a-worktree",
-				task.MetadataWorktree: "/fixture/orpheus/worktrees/a-worktree",
-			},
-		}},
-	}}}
-	latestRun := taskstate.RunAttempt{
-		Attempt:    1,
-		Status:     taskstate.RunStatusSucceeded,
-		Completion: &completion,
-	}
-	localStates := status.LocalTaskStateIndex{
-		status.RunStateKey("alpha", "a-worktree"): {
-			LatestRun:       &latestRun,
-			GitFacts:        testTaskTarget("orpheus/a-worktree", "/fixture/orpheus/worktrees/a-worktree"),
-			ExpectedTargets: testExpectedTargets("main", "/fixture/alpha", "orpheus/a-worktree", "/fixture/orpheus/worktrees/a-worktree"),
-		},
-	}
-	return status.ProjectWithLocalTaskStates(snapshot, localStates)
 }
 
 func testTaskTarget(branch string, worktree string) *taskstate.TaskTarget {

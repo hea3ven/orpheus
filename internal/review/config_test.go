@@ -55,30 +55,43 @@ func TestLoadConfigValidatesAndResolvesPipelines(t *testing.T) {
 	}
 }
 
-func TestLoadConfigMaxAutonomousReviewAttempts(t *testing.T) {
-	paths := newTestPaths(t)
-	if err := testutil.WriteConfigYAML(paths, review.ConfigFile, map[string]any{
-		"reviews": map[string]any{
-			"max_autonomous_review_attempts": 2,
-			"pipelines": map[string]any{
-				"standard": map[string]any{
-					"steps": []map[string]any{{
-						"kind": review.KindManual,
-						"name": "approval",
-					}},
-				},
-			},
-		},
-	}); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
+func TestLoadConfigAutonomousReviewBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		value     *int
+		want      int
+		wantError string
+	}{
+		{"missing config", nil, review.DefaultMaxAutonomousReviewAttempts, ""},
+		{"configured", new(2), 2, ""},
+		{"zero rejected", new(0), 0, "reviews.max_autonomous_review_attempts must be positive, got 0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			paths := newTestPaths(t)
+			if tc.value != nil {
+				if err := testutil.WriteConfigYAML(paths, review.ConfigFile, map[string]any{"reviews": map[string]any{"max_autonomous_review_attempts": *tc.value}}); err != nil {
+					t.Fatal(err)
+				}
+			}
 
-	config, err := review.LoadConfig(paths)
-	if err != nil {
-		t.Fatalf("load review config: %v", err)
-	}
-	if config.MaxAutonomousReviewAttempts != 2 {
-		t.Fatalf("max autonomous review attempts = %d, want 2", config.MaxAutonomousReviewAttempts)
+			config, err := review.LoadConfig(paths)
+
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("load error = %v, want %q", err, tc.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("load config: %v", err)
+			}
+			if config.MaxAutonomousReviewAttempts != tc.want {
+				t.Fatalf("budget = %d, want %d", config.MaxAutonomousReviewAttempts, tc.want)
+			}
+			if !config.IncludePRReviewProcess {
+				t.Fatal("review process inclusion should default to true")
+			}
+		})
 	}
 }
 
@@ -124,23 +137,6 @@ func TestLoadConfigIncludePRReviewProcess(t *testing.T) {
 				t.Fatalf("include PR review process = %t, want %t", config.IncludePRReviewProcess, test.want)
 			}
 		})
-	}
-}
-
-func TestLoadConfigMissingFileDefaultsMaxAutonomousReviewAttempts(t *testing.T) {
-	config, err := review.LoadConfig(newTestPaths(t))
-	if err != nil {
-		t.Fatalf("load missing review config: %v", err)
-	}
-	if config.MaxAutonomousReviewAttempts != review.DefaultMaxAutonomousReviewAttempts {
-		t.Fatalf(
-			"max autonomous review attempts = %d, want %d",
-			config.MaxAutonomousReviewAttempts,
-			review.DefaultMaxAutonomousReviewAttempts,
-		)
-	}
-	if !config.IncludePRReviewProcess {
-		t.Fatal("include PR review process = false, want default true")
 	}
 }
 
@@ -207,84 +203,44 @@ func TestLoadConfigRejectsInvalidReviewPipelines(t *testing.T) {
 	}
 }
 
-func TestLoadConfigRejectsDuplicateStepNameWithinPipeline(t *testing.T) {
-	paths := newTestPaths(t)
-	if err := testutil.WriteConfigYAML(paths, review.ConfigFile, map[string]any{
-		"reviews": map[string]any{
-			"pipelines": map[string]any{
-				"standard": map[string]any{
-					"steps": []map[string]any{
-						{"kind": "manual", "name": " local-review "},
-						{"kind": "check", "name": "local-review", "command": "make"},
-					},
-				},
-			},
-		},
-	}); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
+func TestLoadConfigStepNamesAreUniqueWithinEachPipeline(t *testing.T) {
+	for _, samePipeline := range []bool{true, false} {
+		name := "reuse across pipelines"
+		if samePipeline {
+			name = "duplicate after trimming"
+		}
+		t.Run(name, func(t *testing.T) {
+			paths := newTestPaths(t)
+			steps := []map[string]any{{"kind": "manual", "name": " local-review "}}
+			pipelines := map[string]any{"standard": map[string]any{"steps": steps}}
+			second := map[string]any{"kind": "check", "name": "local-review", "command": "make"}
+			if samePipeline {
+				pipelines["standard"] = map[string]any{"steps": append(steps, second)}
+			} else {
+				pipelines["strict"] = map[string]any{"steps": []map[string]any{second}}
+			}
+			if err := testutil.WriteConfigYAML(paths, review.ConfigFile, map[string]any{"reviews": map[string]any{"pipelines": pipelines}}); err != nil {
+				t.Fatal(err)
+			}
 
-	_, err := review.LoadConfig(paths)
-	if err == nil {
-		t.Fatal("load invalid config succeeded, want error")
-	}
-	want := `reviews.pipelines.standard.steps contains duplicate step name "local-review" after trimming whitespace`
-	if !strings.Contains(err.Error(), want) {
-		t.Fatalf("error = %v, want substring %q", err, want)
-	}
-}
+			config, err := review.LoadConfig(paths)
 
-func TestLoadConfigAllowsStepNameReuseAcrossPipelines(t *testing.T) {
-	paths := newTestPaths(t)
-	if err := testutil.WriteConfigYAML(paths, review.ConfigFile, map[string]any{
-		"reviews": map[string]any{
-			"pipelines": map[string]any{
-				"standard": map[string]any{
-					"steps": []map[string]any{{
-						"kind": "manual",
-						"name": "local-review",
-					}},
-				},
-				"strict": map[string]any{
-					"steps": []map[string]any{{
-						"kind": "manual",
-						"name": " local-review ",
-					}},
-				},
-			},
-		},
-	}); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	config, err := review.LoadConfig(paths)
-	if err != nil {
-		t.Fatalf("load review config: %v", err)
-	}
-	if config.Pipelines["standard"].Steps[0].Name != "local-review" {
-		t.Fatalf("standard step = %#v, want trimmed name", config.Pipelines["standard"].Steps[0])
-	}
-	if config.Pipelines["strict"].Steps[0].Name != "local-review" {
-		t.Fatalf("strict step = %#v, want trimmed name", config.Pipelines["strict"].Steps[0])
-	}
-}
-
-func TestLoadConfigRejectsInvalidMaxAutonomousReviewAttempts(t *testing.T) {
-	paths := newTestPaths(t)
-	if err := testutil.WriteConfigYAML(paths, review.ConfigFile, map[string]any{
-		"reviews": map[string]any{
-			"max_autonomous_review_attempts": 0,
-		},
-	}); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	_, err := review.LoadConfig(paths)
-	if err == nil {
-		t.Fatal("load invalid config succeeded, want error")
-	}
-	if !strings.Contains(err.Error(), "reviews.max_autonomous_review_attempts must be positive, got 0") {
-		t.Fatalf("error = %v", err)
+			if samePipeline {
+				want := "reviews.pipelines.standard.steps contains duplicate step name \"local-review\" after trimming whitespace"
+				if err == nil || !strings.Contains(err.Error(), want) {
+					t.Fatalf("load error = %v, want %q", err, want)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, pipeline := range []string{"standard", "strict"} {
+				if got := config.Pipelines[pipeline].Steps[0].Name; got != "local-review" {
+					t.Fatalf("%s step name = %q", pipeline, got)
+				}
+			}
+		})
 	}
 }
 

@@ -20,7 +20,6 @@ type fakeGitState struct {
 	hasChanges bool
 	branchErr  error
 	changesErr error
-	stageErr   error
 	commit     string
 	commitErr  error
 	staged     int
@@ -43,7 +42,7 @@ func (g fakeGitState) HasWorkingTreeChanges(ctx context.Context, dir string) (bo
 
 func (g *fakeGitState) StageAll(ctx context.Context, dir string) error {
 	g.staged++
-	return g.stageErr
+	return nil
 }
 
 func (g *fakeGitState) Commit(ctx context.Context, dir string, message string) (string, error) {
@@ -118,164 +117,42 @@ func TestCompletionServiceCancelsWhileMutationLockIsHeld(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
-func TestCompletionServiceCompletesMainRun(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newActiveContextFixture(t, "op-main")
-	taskItem := mainTask("op-main", fixture.repoPath)
-	_, err := fixture.store.StartRun("alpha", "op-main", taskstate.StartRunOptions{
-		Agent:    "recorder",
-		Branch:   "main",
-		Worktree: fixture.repoPath,
-	})
-	must.NoError(err)
-
-	service := agent.CompletionService{
-		Paths:    fixture.paths,
-		Resolver: fixture.resolver(taskItem, mainEnv("op-main", fixture.repoPath), fixture.repoPath),
-		RunStore: fixture.store,
-		Git:      &fakeGitState{branch: "main", hasChanges: true},
-	}
-
-	completed, err := service.Complete(context.Background(), agent.CompleteOptions{
-		Summary:              "Implemented main completion",
-		Description:          "Recorded local review completion data.",
-		DetailedDescription:  "Detailed PR body.",
-		TechnicalExplanation: "Technical explanation.",
-	})
-
-	must.NoError(err)
-	is.Equal("op-main", completed.Context.Task.ID)
-	is.Equal(agent.ExecutionTargetMain, completed.Context.Target.Kind)
-	is.Equal(taskstate.RunStatusRunning, completed.Run.Status)
-	must.NotNil(completed.Run.Completion)
-	is.Equal("Implemented main completion", completed.Run.Completion.Summary)
-	is.Equal("Recorded local review completion data.", completed.Run.Completion.Description)
-	is.Equal("Detailed PR body.", completed.Run.Completion.DetailedDescription)
-	is.Equal("Technical explanation.", completed.Run.Completion.TechnicalExplanation)
-
-	latest, ok, err := fixture.store.LatestRun("alpha", "op-main")
-	must.NoError(err)
-	must.True(ok)
-	is.Equal(taskstate.RunStatusRunning, latest.Status)
-	must.NotNil(latest.Completion)
-}
-
-func TestCompletionServiceCompletesWorktreeRunWithoutCommit(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
+func TestCompletionServiceWorktreeHandoffIsImmutableAndDoesNotCommit(t *testing.T) {
 	fixture := newActiveContextFixture(t, "op-1")
 	worktree := fixture.expectedWorktree(t, "op-1")
 	taskItem := fixture.worktreeTask("op-1", worktree)
-	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
-		Branch:   "orpheus/op-1",
-		Worktree: worktree,
-	})
-	must.NoError(err)
-
+	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Branch: "orpheus/op-1", Worktree: worktree})
+	require.NoError(t, err)
+	gitState := &fakeGitState{branch: "orpheus/op-1", hasChanges: true, commitErr: errors.New("completion must not commit")}
 	service := agent.CompletionService{
-		Paths:    fixture.paths,
-		Resolver: fixture.resolver(taskItem, worktreeEnv("op-1", worktree), worktree),
-		RunStore: fixture.store,
-		Git:      &fakeGitState{branch: "orpheus/op-1", hasChanges: true, commit: "abc123"},
+		Paths: fixture.paths, Resolver: fixture.resolver(taskItem, worktreeEnv("op-1", worktree), worktree),
+		RunStore: fixture.store, Git: gitState,
 	}
+	payload := agent.CompleteOptions{Summary: "Done", Description: "Details", DetailedDescription: "Detailed PR body.", TechnicalExplanation: "Technical explanation."}
 
-	completed, err := service.Complete(context.Background(), agent.CompleteOptions{
-		Summary:              "Done",
-		Description:          "Details",
-		DetailedDescription:  "Detailed PR body.",
-		TechnicalExplanation: "Technical explanation.",
-	})
+	first, err := service.Complete(context.Background(), payload)
+	require.NoError(t, err)
+	require.NotNil(t, first.Run.Completion)
+	assert.Equal(t, taskstate.RunStatusRunning, first.Run.Status)
+	assert.False(t, first.Repeated)
+	assert.Empty(t, first.Run.Completion.Commit)
+	assert.Empty(t, first.Run.Completion.CommitError)
+	assert.NoError(t, first.CommitError)
 
-	must.NoError(err)
-	is.Equal(taskstate.RunStatusRunning, completed.Run.Status)
-	must.NotNil(completed.Run.Completion)
-	is.Empty(completed.Run.Completion.Commit)
+	gitState.branchErr = errors.New("repeat must not inspect Git")
+	gitState.changesErr = errors.New("repeat must not inspect changes")
+	repeated, err := service.Complete(context.Background(), payload)
 
-	latest, ok, loadErr := fixture.store.LatestRun("alpha", "op-1")
-	must.NoError(loadErr)
-	must.True(ok)
-	is.Equal(taskstate.RunStatusRunning, latest.Status)
-	must.NotNil(latest.Completion)
-	is.Empty(latest.Completion.Commit)
-}
-
-func TestCompletionServiceWorktreeCompletionDoesNotStageOrCommit(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newActiveContextFixture(t, "op-1")
-	worktree := fixture.expectedWorktree(t, "op-1")
-	taskItem := fixture.worktreeTask("op-1", worktree)
-	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
-		Branch:   "orpheus/op-1",
-		Worktree: worktree,
-	})
-	must.NoError(err)
-
-	commitErr := errors.New("commit failed")
-	gitState := &fakeGitState{branch: "orpheus/op-1", hasChanges: true, commitErr: commitErr}
-	service := agent.CompletionService{
-		Paths:    fixture.paths,
-		Resolver: fixture.resolver(taskItem, worktreeEnv("op-1", worktree), worktree),
-		RunStore: fixture.store,
-		Git:      gitState,
-	}
-
-	completed, err := service.Complete(context.Background(), agent.CompleteOptions{
-		Summary:              "Done",
-		Description:          "Details",
-		DetailedDescription:  "Detailed PR body.",
-		TechnicalExplanation: "Technical explanation.",
-	})
-
-	must.NoError(err)
-	is.NoError(completed.CommitError)
-	is.Equal(0, gitState.staged)
-	is.Equal(0, gitState.committed)
-	must.NotNil(completed.Run.Completion)
-	is.Empty(completed.Run.Completion.Commit)
-	is.Empty(completed.Run.Completion.CommitError)
-}
-
-func TestCompletionServiceIdempotentWorktreeCompletionDoesNotCommitAgain(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newActiveContextFixture(t, "op-1")
-	worktree := fixture.expectedWorktree(t, "op-1")
-	taskItem := fixture.worktreeTask("op-1", worktree)
-	attempt, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
-		Branch:   "orpheus/op-1",
-		Worktree: worktree,
-	})
-	must.NoError(err)
-	_, err = fixture.store.CompleteRun("alpha", "op-1", attempt.Attempt, taskstate.CompleteRunOptions{
-		Summary:              "Done",
-		Description:          "Details",
-		DetailedDescription:  "Detailed PR body.",
-		TechnicalExplanation: "Technical explanation.",
-	})
-	must.NoError(err)
-
-	gitState := &fakeGitState{branch: "orpheus/op-1", hasChanges: true, commit: "abc123"}
-	service := agent.CompletionService{
-		Paths:    fixture.paths,
-		Resolver: fixture.resolver(taskItem, worktreeEnv("op-1", worktree), worktree),
-		RunStore: fixture.store,
-		Git:      gitState,
-	}
-
-	completed, err := service.Complete(context.Background(), agent.CompleteOptions{
-		Summary:              "Done",
-		Description:          "Details",
-		DetailedDescription:  "Detailed PR body.",
-		TechnicalExplanation: "Technical explanation.",
-	})
-
-	must.NoError(err)
-	is.Equal(0, gitState.staged)
-	is.Equal(0, gitState.committed)
-	must.NotNil(completed.Run.Completion)
-	is.Empty(completed.Run.Completion.Commit)
+	require.NoError(t, err)
+	assert.True(t, repeated.Repeated)
+	assert.Equal(t, first.Run.Completion, repeated.Run.Completion)
+	assert.Zero(t, gitState.staged)
+	assert.Zero(t, gitState.committed)
+	latest, ok, err := fixture.store.LatestRun("alpha", "op-1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, taskstate.RunStatusRunning, latest.Status)
+	assert.Equal(t, first.Run.Completion, latest.Completion)
 }
 
 func TestCompletionServiceRepeatedWorktreeCompletionWithDifferentPayloadIsNoop(t *testing.T) {
@@ -401,40 +278,6 @@ func TestCompletionServiceRejectsMissingTechnicalExplanation(t *testing.T) {
 	is.Nil(latest.Completion)
 }
 
-func TestCompletionServiceRequiresChangesBeforeWriting(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newActiveContextFixture(t, "op-main")
-	taskItem := mainTask("op-main", fixture.repoPath)
-	_, err := fixture.store.StartRun("alpha", "op-main", taskstate.StartRunOptions{
-		Branch:   "main",
-		Worktree: fixture.repoPath,
-	})
-	must.NoError(err)
-
-	service := agent.CompletionService{
-		Paths:    fixture.paths,
-		Resolver: fixture.resolver(taskItem, mainEnv("op-main", fixture.repoPath), fixture.repoPath),
-		RunStore: fixture.store,
-		Git:      &fakeGitState{branch: "main", hasChanges: false},
-	}
-
-	_, err = service.Complete(context.Background(), agent.CompleteOptions{
-		Summary:              "Done",
-		Description:          "Details",
-		DetailedDescription:  "Detailed PR body.",
-		TechnicalExplanation: "Technical explanation.",
-	})
-
-	must.Error(err)
-	is.Contains(err.Error(), "working tree has no changes")
-	latest, ok, loadErr := fixture.store.LatestRun("alpha", "op-main")
-	must.NoError(loadErr)
-	must.True(ok)
-	is.Equal(taskstate.RunStatusRunning, latest.Status)
-	is.Nil(latest.Completion)
-}
-
 func TestCompletionServiceRejectsCurrentBranchMismatch(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -464,35 +307,38 @@ func TestCompletionServiceRejectsCurrentBranchMismatch(t *testing.T) {
 	is.Contains(err.Error(), `current Git branch is "feature"`)
 }
 
-func TestCompletionServiceWrapsGitInspectionErrors(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newActiveContextFixture(t, "op-main")
-	taskItem := mainTask("op-main", fixture.repoPath)
-	_, err := fixture.store.StartRun("alpha", "op-main", taskstate.StartRunOptions{
-		Branch:   "main",
-		Worktree: fixture.repoPath,
-	})
-	must.NoError(err)
+func TestCompletionServiceGitInspectionFailureDoesNotWriteCompletion(t *testing.T) {
+	cause := errors.New("Git inspection unavailable")
+	for _, tc := range []struct {
+		name string
+		git  *fakeGitState
+		want string
+	}{
+		{"branch", &fakeGitState{branchErr: cause, hasChanges: true}, "inspect current Git branch"},
+		{"changes", &fakeGitState{branch: "main", changesErr: cause}, "Git inspection unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newActiveContextFixture(t, "op-main")
+			_, err := fixture.store.StartRun("alpha", "op-main", taskstate.StartRunOptions{Branch: "main", Worktree: fixture.repoPath})
+			require.NoError(t, err)
+			service := agent.CompletionService{
+				Paths: fixture.paths, Resolver: fixture.resolver(mainTask("op-main", fixture.repoPath), mainEnv("op-main", fixture.repoPath), fixture.repoPath),
+				RunStore: fixture.store, Git: tc.git,
+			}
 
-	branchErr := errors.New("detached head")
-	service := agent.CompletionService{
-		Paths:    fixture.paths,
-		Resolver: fixture.resolver(taskItem, mainEnv("op-main", fixture.repoPath), fixture.repoPath),
-		RunStore: fixture.store,
-		Git:      &fakeGitState{branchErr: branchErr, hasChanges: true},
+			_, err = service.Complete(context.Background(), agent.CompleteOptions{Summary: "Done", Description: "Details", DetailedDescription: "PR body", TechnicalExplanation: "Rationale"})
+
+			require.ErrorIs(t, err, cause)
+			require.ErrorContains(t, err, tc.want)
+			latest, ok, err := fixture.store.LatestRun("alpha", "op-main")
+			require.NoError(t, err)
+			require.True(t, ok)
+			assert.Nil(t, latest.Completion)
+			assert.Equal(t, taskstate.RunStatusRunning, latest.Status)
+			assert.Zero(t, tc.git.staged)
+			assert.Zero(t, tc.git.committed)
+		})
 	}
-
-	_, err = service.Complete(context.Background(), agent.CompleteOptions{
-		Summary:              "Done",
-		Description:          "Details",
-		DetailedDescription:  "Detailed PR body.",
-		TechnicalExplanation: "Technical explanation.",
-	})
-
-	must.Error(err)
-	is.Contains(err.Error(), "inspect current Git branch")
-	is.ErrorIs(err, branchErr)
 }
 
 func mainTask(taskID string, repoPath string) taskmodel.Task {

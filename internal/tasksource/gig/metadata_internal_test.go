@@ -47,15 +47,30 @@ func TestMetadataRejectsMalformedSourceData(t *testing.T) {
 }
 
 func TestBackendRequiresManagedStorageAndPrefix(t *testing.T) {
-	for _, source := range []task.RepositorySource{
-		{},
-		{MaintenanceOwned: true, BackendDir: "relative", Repository: task.Repository{TaskIDPrefix: "op"}},
-		{MaintenanceOwned: true, BackendDir: "/fixture/gig"},
-		{MaintenanceOwned: true, BackendDir: "/fixture/percent%41", Repository: task.Repository{TaskIDPrefix: "op"}},
-		{MaintenanceOwned: true, BackendDir: "/fixture/question?", Repository: task.Repository{TaskIDPrefix: "op"}},
-		{MaintenanceOwned: true, BackendDir: "/fixture/fragment#", Repository: task.Repository{TaskIDPrefix: "op"}},
+	for _, tc := range []struct {
+		name   string
+		mutate func(*task.RepositorySource)
+		want   string
+	}{
+		{"valid", func(*task.RepositorySource) {}, ""},
+		{"unmanaged", func(s *task.RepositorySource) { s.MaintenanceOwned = false }, "gig supports only managed storage"},
+		{"relative directory", func(s *task.RepositorySource) { s.BackendDir = "relative" }, "absolute storage directory"},
+		{"missing prefix", func(s *task.RepositorySource) { s.Repository.TaskIDPrefix = "" }, "task prefix"},
+		{"percent", func(s *task.RepositorySource) { s.BackendDir = "/fixture/percent%41" }, "without %, ?, or #"},
+		{"question", func(s *task.RepositorySource) { s.BackendDir = "/fixture/question?" }, "without %, ?, or #"},
+		{"fragment", func(s *task.RepositorySource) { s.BackendDir = "/fixture/fragment#" }, "without %, ?, or #"},
 	} {
-		_, err := New(source)
-		require.Error(t, err)
+		t.Run(tc.name, func(t *testing.T) {
+			source := task.RepositorySource{MaintenanceOwned: true, BackendDir: "/fixture/gig", Repository: task.Repository{TaskIDPrefix: "op"}}
+			tc.mutate(&source)
+
+			_, err := New(source)
+
+			if tc.want == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.want)
+			}
+		})
 	}
 }

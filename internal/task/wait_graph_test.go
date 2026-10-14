@@ -137,18 +137,6 @@ func TestUpdateServiceUsesResultingGraphAndAllowsSiblingDependencies(t *testing.
 	assert.Equal(t, []string{sibling.ID}, consumer.opts.CrossRepositoryBlockingIDs)
 }
 
-func TestCreateServiceRejectsChildWaitingForItsOwnParentToClose(t *testing.T) {
-	source := createTestSource("alpha", "op", "/fixture/alpha")
-	parent := task.Task{ID: "op-parent", IssueType: task.IssueTypeEpic, Status: task.StatusOpen}
-	backend := &fakeCreateBackend{tasks: map[string]task.Task{parent.ID: parent}}
-	service := task.CreateService{Sources: []task.RepositorySource{source}, BackendFactory: func(task.RepositorySource) (task.CreateBackend, error) { return backend, nil }}
-
-	_, err := service.Create(t.Context(), source, task.CreateRequest{Title: "Child", Description: "Plan", AcceptanceCriteria: "Done", ParentID: parent.ID, BlockingIDs: []string{parent.ID}})
-
-	require.ErrorContains(t, err, "circular")
-	assert.Empty(t, backend.created.Title)
-}
-
 func TestUpdateServiceClearsUnavailableParentWithoutReadingItsOwner(t *testing.T) {
 	for _, issueType := range []task.IssueType{task.IssueTypeTask, task.IssueTypeEpic} {
 		t.Run(string(issueType), func(t *testing.T) {

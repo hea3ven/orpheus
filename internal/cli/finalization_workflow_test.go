@@ -4,6 +4,7 @@ package cli_test
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/publication"
@@ -66,28 +67,6 @@ func TestIntegrationWorkflowTaskDoneRefusesRunningCompletionWithoutInteractiveCo
 	f.assertUnpublished("op-main")
 }
 
-func TestIntegrationWorkflowTaskDonePublishesPRReadyTaskBranch(t *testing.T) {
-	f := newFeatureFinalizationFixture(t, "op-sync", false)
-
-	stdout, stderr := f.run("", "task", "done", "op-sync")
-
-	assert.Empty(t, stderr)
-	for _, want := range []string{"Published op-sync", "pushed orpheus/op-sync", "created PR " + f.pr.url, "Backend task remains open for PR review"} {
-		assert.Contains(t, stdout, want)
-	}
-	require.Len(t, f.pr.created, 1)
-	request := f.pr.created[0]
-	assert.Equal(t, taskWorkflowRepoRoot, request.RepositoryPath)
-	assert.Equal(t, "orpheus/op-sync", request.HeadBranch)
-	assert.Equal(t, "main", request.BaseBranch)
-	assert.Equal(t, "Ready for PR", request.Title)
-	assert.Contains(t, request.Body, "Detailed PR body.")
-	for _, unwanted := range []string{"Created by Orpheus.", "Ready for sync", "op-sync:"} {
-		assert.NotContains(t, request.Body, unwanted)
-	}
-	f.assertPublishedPR("op-sync")
-}
-
 func TestIntegrationWorkflowTaskDoneRecoversExistingBranchPR(t *testing.T) {
 	f := newFeatureFinalizationFixture(t, "op-sync", false)
 	f.pr.url = "https://github.test/org/alpha/pull/7"
@@ -123,6 +102,12 @@ func TestIntegrationWorkflowTaskDoneFeatureBranchPushFailureIsNonZero(t *testing
 	assert.Empty(t, item.OrpheusMetadata().PRURL)
 	assert.Empty(t, f.pr.created)
 	assert.Empty(t, f.publication.remote)
+	failed, ok := taskstate.LatestFinalizationFailure(state)
+	require.True(t, ok)
+	assert.Contains(t, failed.Error, "remote unavailable")
+	review, ok := taskstate.LatestReview(state)
+	require.True(t, ok)
+	assert.Equal(t, taskstate.ReviewStatusPassed, review.Status)
 
 	f.publication.pushError = nil
 	f.run("", "task", "done", "op-sync")
@@ -142,41 +127,6 @@ func TestIntegrationWorkflowTaskDoneInfersSingleMainReadyTaskFromRepoRootAndUses
 	state, item := f.loadFinalTask("op-infer")
 	assert.Equal(t, taskmodel.StatusClosed, item.Status)
 	assert.Equal(t, "Implement task done", state.Runs[0].Completion.Summary)
-}
-
-func TestIntegrationWorkflowTaskDoneInfersRepoRootFeatureBranchTask(t *testing.T) {
-	f := newFeatureFinalizationFixture(t, "op-root-infer", true)
-
-	stdout, stderr := f.run("", "task", "done")
-
-	assert.Empty(t, stderr)
-	assert.Contains(t, stdout, "Published op-root-infer")
-	assert.Contains(t, stdout, "pushed orpheus/op-root-infer")
-	assert.Contains(t, stdout, "created PR "+f.pr.url)
-	f.assertPublishedPR("op-root-infer")
-}
-
-func TestIntegrationWorkflowTaskDoneInfersWorktreeTask(t *testing.T) {
-	f := newFeatureFinalizationFixture(t, "op-worktree-infer", false)
-
-	stdout, stderr := f.run("", "task", "done")
-
-	assert.Empty(t, stderr)
-	assert.Contains(t, stdout, "Published op-worktree-infer")
-	assert.Contains(t, stdout, "pushed orpheus/op-worktree-infer")
-	assert.Contains(t, stdout, "created PR "+f.pr.url)
-	f.assertPublishedPR("op-worktree-infer")
-}
-
-func TestIntegrationWorkflowTaskDoneRejectsRemovedDetailsOverride(t *testing.T) {
-	f := newMainFinalizationFixture(t, "op-main")
-
-	stdout, stderr, err := f.runError("", "task", "done", "op-main", "--details", "Old details.")
-
-	require.ErrorContains(t, err, "unknown flag: --details")
-	assert.Empty(t, stdout)
-	assert.Empty(t, stderr)
-	f.assertUnpublished("op-main")
 }
 
 func TestIntegrationWorkflowTaskDoneWithoutTaskIDRequiresExactRegisteredRepoRoot(t *testing.T) {
@@ -287,38 +237,108 @@ func TestIntegrationWorkflowPublicationRetriesPRCreationAndMetadataWithoutRepubl
 }
 
 func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing.T) {
-	f := newFeatureFinalizationFixture(t, "op-merge", true)
-	f.setConfig("publication", map[string]any{"integration_flow": publication.IntegrationFlowDirectMerge})
-	f.publication.pushError = errors.New("origin unavailable")
-	_, _, err := f.runError("", "task", "done", "op-merge")
-	require.ErrorContains(t, err, "origin unavailable")
-	state, item := f.loadFinalTask("op-merge")
-	assert.Equal(t, "merge-commit", taskstate.FinalizationFacts(state).MergeCommit)
-	assert.Nil(t, taskstate.FinalizationFacts(state).PushedAt)
-	assert.Equal(t, taskmodel.StatusInProgress, item.Status)
-	f.publication.pushError = nil
-	f.mutations.closeError = errors.New("close unavailable")
-	_, _, err = f.runError("", "task", "done", "op-merge")
-	require.ErrorContains(t, err, "close unavailable")
-	f.mutations.closeError = nil
+	for _, repoRoot := range []bool{false, true} {
+		t.Run(fmt.Sprintf("repo_root_%t", repoRoot), func(t *testing.T) {
+			f := newFeatureFinalizationFixture(t, "op-merge", repoRoot)
+			_, dir := f.expectedTarget("op-merge")
+			if repoRoot {
+				dir = taskWorkflowRepoRoot
+			}
+			f.setConfig("publication", map[string]any{"integration_flow": publication.IntegrationFlowDirectMerge})
+			var state taskstate.TaskState
+			var item taskmodel.Task
+			assert.Empty(t, f.publication.cleanupAttempts)
+			if repoRoot {
+				f.publication.pushError = errors.New("origin unavailable")
 
-	stdout, stderr := f.run("", "task", "done", "op-merge")
+				_, _, err := f.runError("", "task", "done", "op-merge")
 
-	assert.Empty(t, stderr)
-	assert.Contains(t, stdout, "Finalized op-merge")
-	state, item = f.loadFinalTask("op-merge")
-	facts := taskstate.FinalizationFacts(state)
-	assert.Equal(t, publication.IntegrationFlowDirectMerge, facts.IntegrationFlow)
-	assert.Equal(t, "commit-1", facts.Commit)
-	assert.Equal(t, "merge-commit", facts.MergeCommit)
-	assert.NotNil(t, facts.PushedAt)
-	assert.NotNil(t, facts.ClosedAt)
-	assert.Equal(t, taskmodel.StatusClosed, item.Status)
-	assert.Empty(t, item.OrpheusMetadata().PRURL)
-	assert.Equal(t, map[string]string{"main": "merge-commit"}, f.publication.remote)
-	assert.Equal(t, "main", f.git.targets[taskWorkflowRepoRoot].branch)
-	assert.Equal(t, 1, f.publication.merges)
-	assert.Len(t, f.candidate.commits, 1)
-	assert.Len(t, f.candidate.pushes, 1)
-	assert.Empty(t, f.pr.created)
+				require.ErrorContains(t, err, "origin unavailable")
+				state, item = f.loadFinalTask("op-merge")
+				assert.Equal(t, "merge-commit", taskstate.FinalizationFacts(state).MergeCommit)
+				assert.Nil(t, taskstate.FinalizationFacts(state).PushedAt)
+				assert.Equal(t, taskmodel.StatusInProgress, item.Status)
+				assert.Contains(t, f.git.targets, dir, "failed push must retain the checkout")
+				assert.Empty(t, f.publication.cleanupAttempts)
+				for _, event := range state.Events {
+					assert.NotEqual(t, taskstate.EventWorktreeRemoved, event.Type)
+				}
+				f.publication.pushError = nil
+				f.mutations.closeError = errors.New("close unavailable")
+
+				_, _, err = f.runError("", "task", "done", "op-merge")
+
+				require.ErrorContains(t, err, "close unavailable")
+				state, item = f.loadFinalTask("op-merge")
+				assert.Equal(t, taskmodel.StatusInProgress, item.Status)
+				assert.NotNil(t, taskstate.FinalizationFacts(state).PushedAt)
+				assert.Nil(t, taskstate.FinalizationFacts(state).ClosedAt)
+				assert.Contains(t, f.git.targets, dir, "failed closure must retain the checkout")
+				assert.Empty(t, f.publication.cleanupAttempts)
+				for _, event := range state.Events {
+					assert.NotEqual(t, taskstate.EventWorktreeRemoved, event.Type)
+				}
+				f.mutations.closeError = nil
+			}
+
+			stdout, stderr := f.run("", "task", "done", "op-merge")
+
+			assert.Empty(t, stderr)
+			assert.Contains(t, stdout, "Finalized op-merge")
+			state, item = f.loadFinalTask("op-merge")
+			facts := taskstate.FinalizationFacts(state)
+			assert.Equal(t, publication.IntegrationFlowDirectMerge, facts.IntegrationFlow)
+			assert.Equal(t, "commit-1", facts.Commit)
+			assert.Equal(t, "merge-commit", facts.MergeCommit)
+			assert.NotNil(t, facts.PushedAt)
+			assert.NotNil(t, facts.ClosedAt)
+			assert.Equal(t, taskmodel.StatusClosed, item.Status)
+			assert.Equal(t, []string{"op-merge"}, f.tasks.closed)
+			assert.Empty(t, item.OrpheusMetadata().PRURL)
+			assert.Empty(t, f.mutations.prURLs)
+			assert.Empty(t, f.pr.created)
+			assert.Zero(t, f.pr.findReads)
+			assert.Equal(t, map[string]string{"main": "merge-commit"}, f.publication.remote)
+			assert.Equal(t, []string{"main"}, f.candidate.pushes, "direct merge never pushes the task branch")
+			assert.Equal(t, "main", f.git.targets[taskWorkflowRepoRoot].branch)
+			assert.Equal(t, 1, f.publication.merges)
+			assert.Len(t, f.candidate.commits, 1)
+			var cleanups []taskstate.Event
+			for _, event := range state.Events {
+				if event.Type == taskstate.EventWorktreeRemoved {
+					cleanups = append(cleanups, event)
+				}
+			}
+			if repoRoot {
+				assert.Contains(t, f.git.targets, taskWorkflowRepoRoot)
+				assert.Empty(t, f.publication.cleanupAttempts)
+				assert.Empty(t, cleanups)
+				assert.NotContains(t, stdout, "was removed")
+			} else {
+				assert.NotContains(t, f.git.targets, dir)
+				assert.Equal(t, []string{dir}, f.publication.cleanupAttempts)
+				require.Len(t, cleanups, 1)
+				assert.Equal(t, dir, cleanups[0].Worktree)
+				assert.Equal(t, taskstate.EventTaskClosed, state.Events[len(state.Events)-2].Type)
+				assert.Equal(t, taskstate.EventWorktreeRemoved, state.Events[len(state.Events)-1].Type)
+				assert.Contains(t, stdout, "Worktree "+dir+" was removed")
+			}
+		})
+	}
+}
+
+func TestIntegrationWorkflowTaskDoneInfersFeatureTaskAcrossWorkingDirectories(t *testing.T) {
+	for _, root := range []bool{false, true} {
+		t.Run(fmt.Sprintf("repo_root_%t", root), func(t *testing.T) {
+			f := newFeatureFinalizationFixture(t, "op-infer", root)
+
+			stdout, stderr := f.run("", "task", "done")
+
+			assert.Empty(t, stderr)
+			for _, want := range []string{"Published op-infer", "pushed orpheus/op-infer", "created PR " + f.pr.url} {
+				assert.Contains(t, stdout, want)
+			}
+			f.assertPublishedPR("op-infer")
+		})
+	}
 }

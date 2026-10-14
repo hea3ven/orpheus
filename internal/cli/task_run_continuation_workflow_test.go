@@ -5,6 +5,7 @@ package cli_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agent"
@@ -177,40 +178,47 @@ func TestIntegrationWorkflowTaskRunRepoRootContinuationRejectsConflictingTargets
 }
 
 func TestIntegrationWorkflowTaskRunRepoRootContinuationBlocksUnresolvedProcesses(t *testing.T) {
-	for _, test := range []struct {
-		name       string
-		supervisor agentexec.ProcessLiveness
-		child      agentexec.ProcessLiveness
-	}{
-		{name: "live supervisor", supervisor: agentexec.ProcessLive},
-		{name: "unverifiable supervisor", supervisor: agentexec.ProcessUnknown},
-		{name: "live child", supervisor: agentexec.ProcessAbsent, child: agentexec.ProcessLive},
-		{name: "unverifiable child", supervisor: agentexec.ProcessAbsent, child: agentexec.ProcessUnknown},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			fixture := newTaskWorkflowFixture(t, anInProgressTask("op-continue"))
-			fixture.seedRepoRootAttempt("op-continue")
-			fixture.git.repoRootDirty = true
-			fixture.options.Dependencies.ProcessProbe = func(pid int) (agentexec.ProcessLiveness, error) {
-				if pid == 100 {
-					return test.supervisor, nil
+	for _, repoRoot := range []bool{false, true} {
+		for _, test := range []struct {
+			name       string
+			supervisor agentexec.ProcessLiveness
+			child      agentexec.ProcessLiveness
+		}{
+			{name: "live supervisor", supervisor: agentexec.ProcessLive},
+			{name: "unverifiable supervisor", supervisor: agentexec.ProcessUnknown},
+			{name: "live child", supervisor: agentexec.ProcessAbsent, child: agentexec.ProcessLive},
+			{name: "unverifiable child", supervisor: agentexec.ProcessAbsent, child: agentexec.ProcessUnknown},
+		} {
+			t.Run(fmt.Sprintf("repo_root_%t/%s", repoRoot, test.name), func(t *testing.T) {
+				fixture := newTaskWorkflowFixture(t, anInProgressTask("op-continue"))
+				if repoRoot {
+					fixture.seedRepoRootAttempt("op-continue")
+					fixture.git.repoRootDirty = true
+				} else {
+					fixture.seedRunningAttempt("op-continue", 100, 101)
 				}
-				return test.child, nil
-			}
-			before, beforeTask := fixture.loadFinalTask("op-continue")
-			setups := len(fixture.git.setups)
+				fixture.options.Dependencies.ProcessProbe = func(pid int) (agentexec.ProcessLiveness, error) {
+					if pid == 100 {
+						return test.supervisor, nil
+					}
+					return test.child, nil
+				}
+				before, beforeTask := fixture.loadFinalTask("op-continue")
+				setups := len(fixture.git.setups)
 
-			stdout, _, err := fixture.execute("task", "run", "op-continue")
+				stdout, stderr, err := fixture.execute("task", "run", "op-continue")
 
-			require.NoError(t, err)
-			assert.Contains(t, stdout, "implementation attempt 1 is active")
-			final, item := fixture.loadFinalTask("op-continue")
-			assert.Equal(t, before, final)
-			assert.Equal(t, beforeTask, item)
-			assert.Len(t, fixture.git.setups, setups)
-			assert.Empty(t, fixture.agent.launches)
-			assert.Empty(t, fixture.backend.markCalls)
-		})
+				require.NoError(t, err)
+				assert.Empty(t, stderr)
+				assert.Contains(t, stdout, "implementation attempt 1 is active")
+				final, item := fixture.loadFinalTask("op-continue")
+				assert.Equal(t, before, final)
+				assert.Equal(t, beforeTask, item)
+				assert.Len(t, fixture.git.setups, setups)
+				assert.Empty(t, fixture.agent.launches)
+				assert.Empty(t, fixture.backend.markCalls)
+			})
+		}
 	}
 }
 

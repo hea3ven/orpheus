@@ -45,22 +45,29 @@ func TestRenderNormalizesSupportedValues(t *testing.T) {
 	}
 }
 
-func TestRequiresExternalRef(t *testing.T) {
-	if !taskbranch.RequiresExternalRef("feature/{{external_ref}}") {
-		t.Fatal("template external reference was not detected")
-	}
-	if taskbranch.RequiresExternalRef("feature/{{task_id}}") {
-		t.Fatal("task ID template incorrectly requires external reference")
-	}
-}
+func TestBranchTemplateRenderingAndExternalReferenceRequirement(t *testing.T) {
+	for _, tc := range []struct {
+		name, template, external, want string
+		required                       bool
+	}{
+		{"default template", "", "", "orpheus/op-7", false},
+		{"optional external reference", "feature/{{task_id}}", "", "feature/op-7", false},
+		{"required external reference", "feature/{{external_ref}}", "OPS-7", "feature/OPS-7", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := taskbranch.RequiresExternalRef(tc.template); got != tc.required {
+				t.Fatalf("requires external ref = %t, want %t", got, tc.required)
+			}
 
-func TestRenderPreservesCompatibilityDefault(t *testing.T) {
-	got, err := taskbranch.Render("", taskbranch.Values{TaskID: "op-7"})
-	if err != nil {
-		t.Fatalf("Render() error = %v", err)
-	}
-	if got != "orpheus/op-7" {
-		t.Fatalf("Render() = %q, want compatibility branch", got)
+			branch, err := taskbranch.Render(tc.template, taskbranch.Values{TaskID: "op-7", ExternalRef: tc.external})
+
+			if err != nil {
+				t.Fatal(err)
+			}
+			if branch != tc.want {
+				t.Fatalf("rendered branch = %q, want %q", branch, tc.want)
+			}
+		})
 	}
 }
 

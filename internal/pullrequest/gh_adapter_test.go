@@ -89,41 +89,6 @@ func TestIntegrationAdapterContractGHProviderStatusByURL(t *testing.T) {
 	}
 }
 
-func TestIntegrationAdapterContractGHProviderStatusByURLRequestsSupportedFields(t *testing.T) {
-	logPath := installFakeGH(t, `{"url":"https://github.com/org/repo/pull/1","state":"OPEN","mergedAt":null}`, 0)
-
-	_, err := pullrequest.GHProvider{}.StatusByURL(
-		context.Background(),
-		pullrequest.StatusByURLRequest{URL: "https://github.com/org/repo/pull/1"},
-	)
-	if err != nil {
-		t.Fatalf("status by URL: %v", err)
-	}
-
-	logged, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatalf("read gh log: %v", err)
-	}
-	text := string(logged)
-	if !strings.Contains(text, "--json url,state,mergedAt") {
-		t.Fatalf("gh args = %q, want mergedAt status fields", text)
-	}
-	if strings.Contains(text, "--json url,state,merged\n") {
-		t.Fatalf("gh args = %q, should not request unsupported merged field", text)
-	}
-}
-
-func TestIntegrationAdapterContractGHProviderStatusByURLWrapsProviderFailure(t *testing.T) {
-	installFakeGH(t, "authentication required", 1)
-	_, err := pullrequest.GHProvider{}.StatusByURL(
-		context.Background(),
-		pullrequest.StatusByURLRequest{URL: "https://github.com/org/repo/pull/1"},
-	)
-	if err == nil || !strings.Contains(err.Error(), "poll GitHub PR https://github.com/org/repo/pull/1") {
-		t.Fatalf("error = %v, want polling context", err)
-	}
-}
-
 func TestIntegrationAdapterContractGHProviderStatusByURLDoesNotMisclassifyUnknownJSONFieldAsAuth(t *testing.T) {
 	installFakeGH(t, "Unknown JSON field: \"merged\"\nAvailable fields:\n  author\n  autoMergeRequest\n", 1)
 

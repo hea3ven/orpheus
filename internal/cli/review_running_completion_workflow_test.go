@@ -22,9 +22,10 @@ func TestIntegrationWorkflowTaskDoneConfirmsRunningCompletionWithoutRewritingRun
 			f := newFinalizationFixture(t, "op-main")
 			f.completion("op-main", "main", taskWorkflowRepoRoot, "Implementation complete", "Ready for local review.", taskstate.RunStatusRunning)
 			f.passedReview("op-main")
+			f.options.TaskWorkingDirectory = taskWorkflowRepoRoot
 			f.options.Dependencies.Terminal.InputIsTerminal = func(io.Reader) bool { return true }
 
-			stdout, stderr, err := f.runError(test.input, "task", "done", "op-main")
+			stdout, stderr, err := f.runError(test.input, "task", "done")
 
 			assert.Equal(t, 1, strings.Count(stderr, "Finalize anyway? [y/N]:"))
 			assert.Contains(t, stderr, "Implementation complete")
@@ -36,6 +37,19 @@ func TestIntegrationWorkflowTaskDoneConfirmsRunningCompletionWithoutRewritingRun
 				assert.Contains(t, stdout, "Finalized op-main")
 				assert.Equal(t, taskmodel.StatusClosed, item.Status)
 				assert.NotEmpty(t, taskstate.FinalizationFacts(current).Commit)
+				var pushed, closed bool
+				for _, event := range current.Events {
+					if event.Type == taskstate.EventChangesPushed {
+						pushed = true
+						assert.Equal(t, taskstate.PushTargetMain, event.PushTarget)
+					}
+					if event.Type == taskstate.EventTaskClosed {
+						closed = true
+						assert.Equal(t, taskstate.CloseReasonDefaultBranchPublished, event.CloseReason)
+					}
+				}
+				assert.True(t, pushed)
+				assert.True(t, closed)
 			} else {
 				require.ErrorContains(t, err, "explicit interactive confirmation is required")
 				assert.Empty(t, stdout)

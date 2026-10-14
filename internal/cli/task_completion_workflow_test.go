@@ -19,6 +19,10 @@ func TestIntegrationWorkflowCompletionProtocolSuggestsContextAwareValues(t *test
 	fixture := newCommandWorkflow(t)
 	t.Parallel()
 	paths, alpha, beta, _ := setupCompletionWorkflowFixture(t, fixture, false)
+	registered, err := registryStoreForWorkflow(t, fixture).Load()
+	require.NoError(t, err)
+	registered.Repos = append(registered.Repos, registryRepoWithoutTaskSource("legacy", "Legacy Repo"))
+	require.NoError(t, registryStoreForWorkflow(t, fixture).Save(registered))
 	require.NoError(t, state.SeedMemoryConfigYAML(paths, agent.ConfigFile, map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{"implementer": "builder"},
@@ -63,6 +67,7 @@ func TestIntegrationWorkflowCompletionProtocolSuggestsContextAwareValues(t *test
 	assertCompletionChoices(t, fixture, []string{"task", "list", "--repo", ""}, []string{
 		"alpha\tAlpha Repo (" + alpha + ")",
 		"beta\tBeta Repo (" + beta + ")",
+		"legacy\tLegacy Repo (/fixture/repos/legacy)",
 	})
 	assertCompletionChoices(t, fixture, []string{"task", "create", "--repo", "alpha", "--parent", ""}, []string{"ar-epic-open\tOpen epic (alpha)"})
 	assertCompletionChoices(t, fixture, []string{"task", "edit", "ar-open", "--add-block", ""}, []string{"ar-epic-open\tOpen epic (alpha)"})
@@ -99,25 +104,6 @@ func TestIntegrationWorkflowCompletionProtocolUsesOneSnapshotAndToleratesReposit
 	assert.NotContains(t, stderr, "broken backend")
 	assert.Equal(t, 2, reads.count("list"))
 	assert.Contains(t, reads.directories(), alpha)
-}
-
-func TestIntegrationWorkflowCompletionProtocolSkipsUnprojectableRepositorySource(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	t.Parallel()
-	setupCompletionWorkflowFixture(t, fixture, false)
-	registered, err := registryStoreForWorkflow(t, fixture).Load()
-	require.NoError(t, err)
-	registered.Repos = append(registered.Repos, registryRepoWithoutTaskSource("legacy", "Legacy Repo"))
-	require.NoError(t, registryStoreForWorkflow(t, fixture).Save(registered))
-
-	assertCompletionChoices(t, fixture, []string{"task", "show", ""}, []string{
-		"review\tInspect persisted review history, an attempt, or an authoritative finding",
-		"ar-closed\tClosed task (alpha)",
-		"ar-epic-open\tOpen epic (alpha)",
-		"ar-open\tOpen task (alpha)",
-		"br-epic-running\tRunning epic (beta)",
-		"br-open\tBeta task (beta)",
-	})
 }
 
 func TestIntegrationWorkflowCompletionProtocolScopesCreateRelationsToCurrentDirectory(t *testing.T) {

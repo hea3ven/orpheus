@@ -31,21 +31,9 @@ func TestStoreTaskIDsDiscoversOnlyDirectValidYAMLFilesInSortedOrder(t *testing.T
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"op-a", "op-z"}, ids)
-}
-
-func TestStoreTaskIDsReturnsEmptyInventoryForMissingRepository(t *testing.T) {
-	store := newTestStore(t)
-
-	ids, err := store.TaskIDs("missing")
-
+	missing, err := store.TaskIDs("missing")
 	require.NoError(t, err)
-	assert.Empty(t, ids)
-}
-
-func TestStoreTaskIDsRejectsInvalidRepositoryID(t *testing.T) {
-	store := newTestStore(t)
-
-	_, err := store.TaskIDs("../escape")
-
-	assert.Error(t, err)
+	assert.Empty(t, missing)
+	_, err = store.TaskIDs("../escape")
+	require.Error(t, err)
 }

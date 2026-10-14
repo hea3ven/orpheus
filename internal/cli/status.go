@@ -526,10 +526,6 @@ func statusDisplayTitleForLayout(taskItem taskmodel.Task, layout statusRenderLay
 	return statusDisplayTitle(taskItem)
 }
 
-func statusDisplayRows(visibleGroups []status.Group) []statusDisplayRow {
-	return statusDisplayRowsForSort(visibleGroups, taskViewSortStatus)
-}
-
 func statusDisplayRowsForSort(visibleGroups []status.Group, sortMode taskViewSort) []statusDisplayRow {
 	rows := make([]statusDisplayRow, 0)
 	for statusOrder, group := range visibleGroups {

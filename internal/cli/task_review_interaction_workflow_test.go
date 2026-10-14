@@ -83,53 +83,6 @@ func TestIntegrationWorkflowTaskReviewRejectsStaleMetadataMirror(t *testing.T) {
 	is.False(ok)
 }
 
-func TestIntegrationWorkflowTaskReviewRejectsCandidatePreflightFailuresBeforeStartingReview(t *testing.T) {
-	tests := []struct {
-		name    string
-		prepare func(*reviewWorkflowFixture)
-		want    string
-	}{
-		{
-			name: "staged changes",
-			prepare: func(f *reviewWorkflowFixture) {
-				f.options.Dependencies.ReviewCandidate = reviewCandidateFunc(func(context.Context, workflow.ReviewLifecycleStore, workflow.ReviewContext, string) error {
-					return errors.New("review requires a clean Git index; rerun `orpheus task run <task-id>` after unstaging changes")
-				})
-			},
-			want: "review requires a clean Git index",
-		},
-		{
-			name: "missing candidate changes",
-			prepare: func(f *reviewWorkflowFixture) {
-				f.options.Dependencies.ReviewCandidate = reviewCandidateFunc(func(context.Context, workflow.ReviewLifecycleStore, workflow.ReviewContext, string) error {
-					return errors.New("worktree has no candidate changes to review and task has no recorded finalization commit")
-				})
-			},
-			want: "has no candidate changes to review",
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			is := assert.New(t)
-			must := require.New(t)
-			fixture := newReviewWorkflowFixture(t, "op-main", "Review preflight", "Reject bad candidate.")
-			paths := fixture.paths
-			test.prepare(fixture)
-
-			stdout, stderr, err := fixture.runError("a\n", "task", "run", "op-main")
-
-			must.Error(err)
-			is.Empty(stdout)
-			is.Empty(stderr)
-			is.ErrorContains(err, test.want)
-			var state taskstate.TaskState
-			must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
-			_, ok := taskstate.LatestReview(state)
-			is.False(ok)
-		})
-	}
-}
-
 func TestIntegrationWorkflowTaskReviewMarksFailedWhenCandidateChangesMutateDuringManualStep(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -292,30 +245,6 @@ func TestIntegrationWorkflowTaskReviewImportsHunkSeparateTaskNoteAndCreatesFollo
 	is.NotNil(latest.Findings[0].CreatedTaskAt)
 }
 
-func TestIntegrationWorkflowTaskReviewDeclinedManualCommandAbortsWithoutRunningCommand(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newReviewWorkflowFixture(t, "op-main", "Review decline", "Decline command.")
-	paths := fixture.paths
-	manual := fixture.check("manual")
-	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "manual", "name": "inspect", "command": manual}}})
-
-	stdout, stderr := fixture.run("n\n", "task", "run", "--pipeline", "standard", "op-main")
-
-	is.Empty(stdout)
-	is.Contains(stderr, "Run manual command for step \"inspect\"")
-	is.Contains(stderr, "Review aborted for op-main.")
-	is.NotContains(stderr, "Review action")
-	is.Empty(fixture.checkCalls)
-	var state taskstate.TaskState
-	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
-	latest, ok := taskstate.LatestReview(state)
-	must.True(ok)
-	is.Equal(taskstate.ReviewStatusAborted, latest.Status)
-	is.Empty(latest.Steps)
-	is.Empty(taskstate.FinalizationFacts(state).Commit)
-}
-
 func TestIntegrationWorkflowTaskReviewManualCommandEOFConfirmationHandlesUnavailableInput(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -324,6 +253,7 @@ func TestIntegrationWorkflowTaskReviewManualCommandEOFConfirmationHandlesUnavail
 		wantStatus  taskstate.ReviewStatus
 	}{
 		{name: "empty EOF", input: "", wantMessage: "Review for op-main is waiting for manual step \"inspect\" because manual review input is unavailable.", wantStatus: taskstate.ReviewStatusWaitingForManual},
+		{name: "ordinary decline", input: "n\n", wantMessage: "Review aborted for op-main.", wantStatus: taskstate.ReviewStatusAborted},
 		{name: "decline without newline", input: "n", wantMessage: "Review aborted for op-main.", wantStatus: taskstate.ReviewStatusAborted},
 	}
 	for _, test := range tests {
@@ -349,6 +279,7 @@ func TestIntegrationWorkflowTaskReviewManualCommandEOFConfirmationHandlesUnavail
 			must.True(ok)
 			is.Equal(test.wantStatus, latest.Status)
 			is.Empty(latest.Steps)
+			is.Empty(taskstate.FinalizationFacts(state).Commit)
 		})
 	}
 }
@@ -440,4 +371,22 @@ func TestIntegrationWorkflowTaskReviewAgentReviewStepCapturesUsage(t *testing.T)
 			is.Equal(1, execution.UsageCapture.CandidateCount)
 		})
 	}
+}
+func TestIntegrationWorkflowTaskReviewPreflightFailurePreventsReviewAndPublication(t *testing.T) {
+	fixture := newReviewWorkflowFixture(t, "op-main", "Review preflight", "Reject candidate.")
+	sentinel := errors.New("candidate preflight unavailable")
+	fixture.options.Dependencies.ReviewCandidate = reviewCandidateFunc(func(context.Context, workflow.ReviewLifecycleStore, workflow.ReviewContext, string) error {
+		return sentinel
+	})
+	before, item := fixture.loadFinalTask("op-main")
+
+	stdout, stderr, err := fixture.runError("a\n", "task", "run", "op-main")
+
+	require.ErrorIs(t, err, sentinel)
+	assert.Empty(t, stdout)
+	assert.Empty(t, stderr)
+	after, got := fixture.loadFinalTask("op-main")
+	assert.Equal(t, before, after)
+	assert.Equal(t, item, got)
+	assert.Empty(t, fixture.agent.launches)
 }

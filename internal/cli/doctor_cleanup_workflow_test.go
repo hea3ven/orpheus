@@ -4,6 +4,7 @@ package cli_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
@@ -36,6 +37,8 @@ func TestIntegrationWorkflowDoctorReportsPendingThenAttemptsCleanupAndPreservesR
 	locked := tasks[1].Metadata[taskmodel.MetadataWorktree]
 	git.states[locked] = gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeUnsafe, Worktree: locked, Reason: "locked by operator"}
 	withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {tasks: tasks}})
+	lockedBefore, err := store.Load("alpha", tasks[1].ID)
+	require.NoError(t, err)
 
 	git.failures[worktree] = "fatal: contains modified or untracked files"
 	output, stderr := fixture.mustExecute("doctor")
@@ -45,6 +48,9 @@ func TestIntegrationWorkflowDoctorReportsPendingThenAttemptsCleanupAndPreservesR
 	}
 	assert.NotContains(t, output, "modified or untracked")
 	assert.Empty(t, git.attempted)
+	lockedAfter, err := store.Load("alpha", tasks[1].ID)
+	require.NoError(t, err)
+	assert.Equal(t, lockedBefore, lockedAfter)
 	before, err := store.Load("alpha", tasks[0].ID)
 	require.NoError(t, err)
 
@@ -57,6 +63,9 @@ func TestIntegrationWorkflowDoctorReportsPendingThenAttemptsCleanupAndPreservesR
 	after, err := store.Load("alpha", tasks[0].ID)
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
+	lockedAfter, err = store.Load("alpha", tasks[1].ID)
+	require.NoError(t, err)
+	assert.Equal(t, lockedBefore, lockedAfter)
 
 	delete(git.failures, worktree)
 	output, stderr = fixture.mustExecute("doctor", "--fix")
@@ -65,6 +74,9 @@ func TestIntegrationWorkflowDoctorReportsPendingThenAttemptsCleanupAndPreservesR
 	assert.Equal(t, []string{worktree, worktree}, git.attempted)
 	assert.Equal(t, []string{worktree}, git.removed)
 	assert.Equal(t, gitmeta.ClosedTaskWorktreeUnsafe, git.states[locked].Outcome)
+	lockedAfter, err = store.Load("alpha", tasks[1].ID)
+	require.NoError(t, err)
+	assert.Equal(t, lockedBefore, lockedAfter)
 
 	git.states[locked] = gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeEligible, Worktree: locked}
 	output, stderr = fixture.mustExecute("doctor", "--fix")
@@ -75,10 +87,26 @@ func TestIntegrationWorkflowDoctorReportsPendingThenAttemptsCleanupAndPreservesR
 	assert.Empty(t, stderr)
 	assert.Contains(t, output, "No lingering closed-task worktrees found.")
 	assert.NotContains(t, output, "already_absent")
+	completedStates := make(map[string]taskstate.TaskState)
 	for _, item := range tasks {
 		loaded, err := store.Load("alpha", item.ID)
 		require.NoError(t, err)
 		assert.Equal(t, taskstate.EventWorktreeRemoved, loaded.Events[len(loaded.Events)-1].Type)
+		completedStates[item.ID] = loaded
+	}
+
+	opts.Dependencies.TaskBackendFactory = func(taskmodel.RepositorySource) (taskmodel.ReadBackend, error) {
+		return nil, errors.New("task source unavailable")
+	}
+	output, stderr = fixture.mustExecute("doctor", "--fix")
+	assert.Empty(t, stderr)
+	assert.Contains(t, output, "No lingering closed-task worktrees found.")
+	assert.Equal(t, []string{worktree, worktree, locked}, git.attempted)
+	assert.Equal(t, []string{worktree, locked}, git.removed)
+	for _, item := range tasks {
+		loaded, err := store.Load("alpha", item.ID)
+		require.NoError(t, err)
+		assert.Equal(t, completedStates[item.ID], loaded, "repeated cleanup must not append audit events")
 	}
 }
 
