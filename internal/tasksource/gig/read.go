@@ -66,6 +66,7 @@ func (b Backend) Get(ctx context.Context, id string) (task.Task, error) {
 		if err != nil {
 			return err
 		}
+		remoteIDs = append(remoteIDs, task.CrossRepositoryParent(item.Metadata))
 		ids = task.LocalBlockingIDs(ids, remoteIDs)
 		seen := make(map[string]bool)
 		for _, relatedID := range ids {
@@ -74,7 +75,7 @@ func (b Backend) Get(ctx context.Context, id string) (task.Task, error) {
 			}
 			seen[relatedID] = true
 			related, err := readTask(ctx, store, relatedID)
-			if errors.Is(err, task.ErrUnsupportedTaskSourceItem) {
+			if errors.Is(err, task.ErrUnsupportedTaskSourceItem) || relatedID == item.Relations.ParentID && errors.Is(err, task.ErrNotFound) {
 				continue
 			}
 			if err != nil {
@@ -100,9 +101,7 @@ func (b Backend) ListFiltered(ctx context.Context, filter task.ListFilter) ([]ta
 		return nil, err
 	}
 	params := sdk.ListParams{}
-	if filter.ParentID != "" {
-		params.ParentID = &filter.ParentID
-	}
+	// Parent filtering follows metadata projection so remote membership is included.
 	if len(filter.IssueTypes) == 1 {
 		kind := sdk.TaskType(filter.IssueTypes[0])
 		params.Type = &kind

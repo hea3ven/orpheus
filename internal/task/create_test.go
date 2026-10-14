@@ -207,7 +207,7 @@ func TestCreateServiceRejectsAmbiguousDependenciesRegardlessOfSourceOrder(t *tes
 				request.Title, request.Description, request.AcceptanceCriteria = "title", "description", "acceptance"
 
 				_, err := service.Create(context.Background(), long, request)
-				if relation.name == "blocking dependency" {
+				if relation.name == "blocking dependency" || relation.name == "parent" {
 					if !errors.Is(err, task.ErrAmbiguousTaskPrefix) {
 						t.Fatalf("Create() error = %v, want ambiguous prefix", err)
 					}
@@ -296,4 +296,12 @@ func TestCreateServiceReportsCreatedIDWhenSetupFails(t *testing.T) {
 			t.Errorf("error %q missing recovery guidance %q", err, text)
 		}
 	}
+}
+
+func (b *fakeCreateBackend) List(context.Context) ([]task.Task, error) {
+	var items []task.Task
+	for _, item := range b.tasks {
+		items = append(items, item.Clone())
+	}
+	return items, nil
 }

@@ -3,6 +3,7 @@ package status
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -114,18 +115,19 @@ const (
 
 // Detail carries compact-rendering inputs without requiring CLI prose parsing.
 type Detail struct {
-	Kind      DetailKind
-	URL       string
-	ID        string
-	IDs       []string
-	Attempt   int
-	State     string
-	Step      string
-	Count     int
-	Completed int
-	Total     int
-	Source    string
-	Operation string
+	Kind       DetailKind
+	URL        string
+	ID         string
+	IDs        []string
+	Attempt    int
+	State      string
+	Step       string
+	Count      int
+	Completed  int
+	Incomplete bool
+	Total      int
+	Source     string
+	Operation  string
 }
 
 // Group is an ordered collection of status entries.
@@ -223,7 +225,7 @@ func RunStateKey(repoID, taskID string) string {
 // local state so tasks without persisted state never require an individual read.
 func LocalTaskStateCandidates(snapshot task.RepositorySnapshot) map[string]bool {
 	repository, tasks := snapshot.Repository, snapshot.Tasks
-	index := newRepositoryIndex(append(append([]task.Task(nil), snapshot.DependencyTasks...), tasks...))
+	index := newRepositoryIndex(append(append([]task.Task(nil), snapshot.RelationshipTasks...), tasks...))
 	candidates := make(map[string]bool)
 	for _, taskItem := range tasks {
 		if localTaskStateCanAffectProjection(repository, taskItem, index) {
@@ -270,8 +272,12 @@ func localTaskStateCanAffectProjection(
 }
 
 func projectRepository(projection *Projection, repoSnapshot task.RepositorySnapshot, localStates LocalTaskStateIndex) {
-	index := newRepositoryIndex(append(append([]task.Task(nil), repoSnapshot.DependencyTasks...), repoSnapshot.Tasks...))
-	progressByEpic := epicChildProgressByParent(repoSnapshot.Tasks)
+	index := newRepositoryIndex(append(append([]task.Task(nil), repoSnapshot.RelationshipTasks...), repoSnapshot.Tasks...))
+	context := make([]task.Task, 0, len(index))
+	for _, item := range index {
+		context = append(context, item)
+	}
+	progressByEpic := epicChildProgressByParent(context)
 	relationshipFailures := relationshipContextFailureIndex(repoSnapshot.RelationshipContextFailures)
 	for _, taskItem := range repoSnapshot.Tasks {
 		result := classify(
@@ -284,6 +290,7 @@ func projectRepository(projection *Projection, repoSnapshot task.RepositorySnaps
 		epicProgress := Detail{}
 		if taskItem.IssueType == task.IssueTypeEpic {
 			epicProgress = epicProgressDetail(progressByEpic[strings.TrimSpace(taskItem.ID)])
+			epicProgress.Incomplete = slices.Contains(repoSnapshot.IncompleteEpicIDs, taskItem.ID)
 		}
 		projection.add(groupForState(result.state), taskEntry(repoSnapshot.Repository, taskItem, result, epicProgress))
 	}

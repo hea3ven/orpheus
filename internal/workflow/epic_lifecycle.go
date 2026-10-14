@@ -28,7 +28,8 @@ type EpicLifecycleResult struct {
 
 // EpicLifecycleService applies source-neutral epic lifecycle policy.
 type EpicLifecycleService struct {
-	Dependencies *task.DependencyReader
+	Dependencies  *task.DependencyReader
+	Relationships *task.RelationshipReader
 }
 
 // Start changes an open epic to in progress after verifying its immediate
@@ -54,7 +55,7 @@ func (s EpicLifecycleService) Start(ctx context.Context, backend EpicLifecycleBa
 	default:
 		return EpicLifecycleResult{}, fmt.Errorf("epic %s can only be started when open; current status is %s", item.ID, lifecycleStatus(item.Status))
 	}
-	if err := verifyEpicParent(ctx, backend, item); err != nil {
+	if err := verifyEpicParent(ctx, backend, item, s.Relationships); err != nil {
 		return EpicLifecycleResult{}, err
 	}
 	if err := verifyBlockingDependencies(ctx, backend, item, s.Dependencies); err != nil {
@@ -71,7 +72,7 @@ func (s EpicLifecycleService) Start(ctx context.Context, backend EpicLifecycleBa
 
 // Close changes an in-progress epic to closed only after verifying every direct
 // child is visible and closed. A closed epic is a no-op.
-func (EpicLifecycleService) Close(ctx context.Context, backend EpicLifecycleBackend, id string) (EpicLifecycleResult, error) {
+func (s EpicLifecycleService) Close(ctx context.Context, backend EpicLifecycleBackend, id string) (EpicLifecycleResult, error) {
 	if backend == nil {
 		return EpicLifecycleResult{}, errors.New("epic lifecycle backend is required")
 	}
@@ -91,10 +92,15 @@ func (EpicLifecycleService) Close(ctx context.Context, backend EpicLifecycleBack
 		return EpicLifecycleResult{}, fmt.Errorf("epic %s can only be closed when in progress; current status is %s", item.ID, lifecycleStatus(item.Status))
 	}
 
-	children, err := task.ReadChildren(ctx, backend, item)
+	var children []task.Task
+	if s.Relationships != nil {
+		children, err = s.Relationships.Children(ctx, item)
+	} else {
+		children, err = task.ReadChildren(ctx, backend, item)
+	}
 	if err != nil {
 		return EpicLifecycleResult{}, lifecycleFailure{
-			message: fmt.Sprintf("cannot inspect direct children of epic %s", item.ID),
+			message: fmt.Sprintf("cannot inspect direct children of epic %s: child information is incomplete", item.ID),
 			cause:   err,
 		}
 	}
@@ -141,12 +147,18 @@ func requireEpic(item task.Task) error {
 	return fmt.Errorf("%w: item %s", ErrNotEpic, item.ID)
 }
 
-func verifyEpicParent(ctx context.Context, backend task.Getter, item task.Task) error {
+func verifyEpicParent(ctx context.Context, backend task.Getter, item task.Task, reader *task.RelationshipReader) error {
 	parentID := strings.TrimSpace(item.Relations.ParentID)
 	if parentID == "" {
 		return nil
 	}
-	parent, err := task.ReadRelated(ctx, backend, item, parentID)
+	var parent task.Task
+	var err error
+	if reader != nil {
+		parent, err = reader.Get(ctx, parentID)
+	} else {
+		parent, err = task.ReadRelated(ctx, backend, item, parentID)
+	}
 	if err != nil {
 		return lifecycleFailure{
 			message: fmt.Sprintf("cannot inspect parent epic %s", parentID),

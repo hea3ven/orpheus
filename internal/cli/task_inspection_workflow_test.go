@@ -67,7 +67,7 @@ func TestIntegrationWorkflowTaskListScopesOneRegisteredRepository(t *testing.T) 
 	repos := saveTaskWorkflowRepos(t, fixture, taskWorkflowRepoSpec("alpha", "Alpha Repo", "a"), taskWorkflowRepoSpec("beta", "Beta Repo", "b"))
 	reads := withWorkflowSources(t, fixture, map[string]taskSourceResult{
 		repos["alpha"]: {tasks: taskListScopeTasks()},
-		repos["beta"]:  {err: errors.New("excluded backend should not be queried")},
+		repos["beta"]:  {tasks: []taskmodel.Task{taskWFTask("b-other", "Excluded task", taskmodel.StatusOpen, taskmodel.IssueTypeTask)}},
 	})
 
 	stdout, stderr, err := fixture.execute("task", "list", "--repo", "alpha")
@@ -92,6 +92,12 @@ func TestIntegrationWorkflowTaskListScopesOneRegisteredRepository(t *testing.T) 
 	}
 	is.ElementsMatch([]string{"a-epic", "a-open"}, jsonIDs)
 
+	// Task-only inventories still exclude unrelated sources; epics above query
+	// all registered sources specifically to discover membership.
+	reads = withWorkflowSources(t, fixture, map[string]taskSourceResult{
+		repos["alpha"]: {tasks: taskListScopeTasks()},
+		repos["beta"]:  {err: errors.New("excluded backend should not be queried")},
+	})
 	filteredArgs := []string{"task", "list", "--repo", "Alpha Repo", "--query", "match", "--type", "task", "--created-after", "2026-06-01", "--created-before", "2026-06-05", "--updated-after", "2026-06-02", "--updated-before", "2026-06-05", "--status", "closed"}
 	for _, sortMode := range []string{"created", "status"} {
 		filteredStdout, filteredStderr, filteredErr := fixture.execute(append(append([]string{}, filteredArgs...), "--sort", sortMode)...)
@@ -209,7 +215,7 @@ func TestIntegrationWorkflowTaskShowResolvesPrefixQueriesOnlyResolvedRepoAndRend
 	repos := saveTaskWorkflowRepos(t, fixture, taskWorkflowRepoSpec("local-alpha", "Local Alpha", "la"), taskWorkflowRepoSpec("managed-beta", "Managed Beta", "mb"))
 	reads := withWorkflowSources(t, fixture, map[string]taskSourceResult{
 		repos["local-alpha"]:  {tasks: []taskmodel.Task{taskWFTask("la-42", "Implement local task show", taskmodel.StatusInProgress, taskmodel.IssueTypeTask, taskWFPriority(2), taskWFExternalRef("TREX-1234"), taskWFDetails("Render a backend-neutral detail view.\nKeep it read-only.", "Use prefix resolution and the task backend.", "Only the resolved repo is queried."), taskWFLabels("m2", "task-show"), taskWFMetadata(map[string]string{taskmodel.MetadataBranch: "task/la-42", taskmodel.MetadataWorktree: "/fixture/la-42", taskmodel.MetadataPRURL: "https://example.test/pr/42"}))}},
-		repos["managed-beta"]: {err: errors.New("managed repo should not be queried")},
+		repos["managed-beta"]: {},
 	})
 
 	stdout, stderr := fixture.mustExecute("task", "show", "la-42")
@@ -235,7 +241,7 @@ func TestIntegrationWorkflowTaskShowEpicRendersSortedDirectChildrenFromResolvedR
 		taskWFTask("la-child-z", "Closed task", taskmodel.StatusClosed, taskmodel.IssueTypeTask, taskWFParent("la-epic")),
 		taskWFTask("la-child-b", "Nested epic", taskmodel.StatusInProgress, taskmodel.IssueTypeEpic, taskWFParent("la-epic")),
 		taskWFTask("la-grandchild", "Must not appear", taskmodel.StatusOpen, taskmodel.IssueTypeTask, taskWFParent("la-child-a")),
-	}}, repos["managed-beta"]: {err: errors.New("managed repo should not be queried")}})
+	}}, repos["managed-beta"]: {}})
 
 	stdout, stderr := fixture.mustExecute("task", "show", "la-epic")
 

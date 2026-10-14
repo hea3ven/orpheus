@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -350,5 +352,37 @@ func TestIntegrationAdapterContractGigPersistsCrossRepositoryDependenciesWithout
 		require.NoError(t, err)
 		assert.Equal(t, []string{local.ID}, item.Relations.DependencyIDs)
 		assert.Equal(t, "branch", item.Metadata[task.MetadataBranch])
+	}
+}
+
+func TestIntegrationAdapterContractGigCrossRepositoryParentsPersistWithoutNativeLinks(t *testing.T) {
+	backend, dir := newSource(t)
+	parent := createItem(t, backend, "Local parent", task.IssueTypeEpic, "")
+	child, err := backend.Create(t.Context(), task.CreateOptions{Title: "Remote child", Description: "Plan", AcceptanceCriteria: "Done", IssueType: task.IssueTypeEpic, ParentID: "remote-epic", CrossRepositoryParent: true})
+	require.NoError(t, err)
+	reopened, err := gig.New(task.RepositorySource{Repository: task.Repository{TaskIDPrefix: "op"}, BackendDir: dir, MaintenanceOwned: true})
+	require.NoError(t, err)
+	for _, parentID := range []string{"remote-epic", parent.ID, "remote-other", ""} {
+		if parentID != "remote-epic" {
+			_, err := reopened.Update(t.Context(), task.UpdateOptions{ID: child.ID, ParentID: &parentID, CrossRepositoryParent: strings.HasPrefix(parentID, "remote-")})
+			require.NoError(t, err)
+		}
+		got := getItem(t, reopened, child.ID)
+		assert.Equal(t, child.ID, got.ID)
+		assert.Equal(t, parentID, got.Relations.ParentID)
+		listed, err := reopened.ListFiltered(t.Context(), task.ListFilter{ParentID: parentID})
+		require.NoError(t, err)
+		assert.True(t, slices.ContainsFunc(listed, func(item task.Task) bool { return item.ID == child.ID }))
+		local := getItem(t, reopened, parent.ID)
+		assert.Equal(t, parentID == parent.ID, slices.Contains(local.Relations.ChildIDs, child.ID))
+		withNative(t, dir, func(store *sdk.Store) {
+			native, err := store.Get(child.ID)
+			require.NoError(t, err)
+			if strings.HasPrefix(parentID, "remote-") {
+				assert.Empty(t, native.ParentID)
+			} else {
+				assert.Equal(t, parentID, native.ParentID)
+			}
+		})
 	}
 }

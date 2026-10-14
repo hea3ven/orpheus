@@ -236,8 +236,8 @@ func TestAggregatorFilteredSnapshotPreservesCrossRepositoryRelationshipOwner(t *
 	if len(alphaSnapshot.RelationshipContextFailures) != 0 {
 		t.Fatalf("failures = %#v", alphaSnapshot.RelationshipContextFailures)
 	}
-	if len(alphaSnapshot.DependencyTasks) != 1 || alphaSnapshot.DependencyTasks[0].ID != "b-dependency" || alphaSnapshot.DependencyTasks[0].Status != task.StatusClosed {
-		t.Fatalf("dependency context = %#v", alphaSnapshot.DependencyTasks)
+	if len(alphaSnapshot.RelationshipTasks) != 1 || alphaSnapshot.RelationshipTasks[0].ID != "b-dependency" || alphaSnapshot.RelationshipTasks[0].Status != task.StatusClosed {
+		t.Fatalf("dependency context = %#v", alphaSnapshot.RelationshipTasks)
 	}
 
 }

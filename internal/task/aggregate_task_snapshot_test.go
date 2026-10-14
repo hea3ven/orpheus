@@ -14,7 +14,7 @@ func TestAggregatorSnapshotForTaskReusesDetailAndLoadsOnlyRequiredContext(t *tes
 	child := task.Task{ID: "a-child", IssueType: task.IssueTypeTask, Status: task.StatusClosed, Relations: task.RelationSummary{ParentID: "a-epic"}}
 	candidate := task.RepoTask{Repository: repository, Task: task.Task{
 		ID: "a-epic", IssueType: task.IssueTypeEpic,
-		Relations:    task.RelationSummary{Complete: true, ChildIDs: []string{child.ID}, DependencyIDs: []string{"a-blocker"}, DependentIDs: []string{"a-dependent"}},
+		Relations:    task.RelationSummary{Complete: true, ChildIDs: []string{child.ID}, ChildCount: 1, DependencyIDs: []string{"a-blocker"}, DependentIDs: []string{"a-dependent"}},
 		RelatedItems: []task.Task{child},
 	}}
 	backend := &recordingFilteredReadBackend{tasks: []task.Task{
@@ -25,8 +25,10 @@ func TestAggregatorSnapshotForTaskReusesDetailAndLoadsOnlyRequiredContext(t *tes
 		{Repository: repository, BackendDir: "/fixture/alpha"},
 		{Repository: task.Repository{ID: "other", TaskIDPrefix: "b"}, BackendDir: "/fixture/other"},
 	}, func(source task.RepositorySource) (task.ReadBackend, error) {
-		assert.Equal(t, repository.ID, source.Repository.ID)
-		return backend, nil
+		if source.Repository.ID == repository.ID {
+			return backend, nil
+		}
+		return &recordingFilteredReadBackend{}, nil
 	})
 	require.NoError(t, err)
 

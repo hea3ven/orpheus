@@ -171,7 +171,7 @@ func TestIntegrationWorkflowTaskCloseRequiresVerifiedClosedChildrenAndIsIdempote
 					return child
 				}(),
 			},
-			wantErr: "source reports 2 child items but only 1 could be inspected",
+			wantErr: "child information is incomplete",
 		},
 		{
 			name:     "already closed",

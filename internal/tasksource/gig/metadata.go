@@ -55,6 +55,11 @@ func decodeMetadata(item task.Task, raw string) (storedTask, error) {
 		}
 		item.Metadata[key] = text
 	}
+	var err error
+	item.Relations, err = task.IncludeCrossRepositoryParent(item.Relations, item.Metadata)
+	if err != nil {
+		return storedTask{}, err
+	}
 	return storedTask{item: item, metadata: values}, nil
 }
 
@@ -84,7 +89,7 @@ func encodeMetadata(stored storedTask) (string, error) {
 		return "", err
 	}
 	stored.metadata[fieldsKey] = rawFields
-	for _, key := range []string{task.MetadataBranch, task.MetadataWorktree, task.MetadataPRURL, task.MetadataCrossRepositoryBlocks} {
+	for _, key := range []string{task.MetadataBranch, task.MetadataWorktree, task.MetadataPRURL, task.MetadataCrossRepositoryBlocks, task.MetadataCrossRepositoryParent} {
 		if value, ok := item.Metadata[key]; ok {
 			raw, err := json.Marshal(value)
 			if err != nil {

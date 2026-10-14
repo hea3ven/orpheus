@@ -220,7 +220,7 @@ func TestUpdateServiceRejectsParentDescendantCyclesBeforeMutation(t *testing.T) 
 	}
 }
 
-func TestUpdateServiceRejectsForeignRelationshipReferencesBeforeMutation(t *testing.T) {
+func TestUpdateServiceRejectsMissingForeignParentBeforeMutation(t *testing.T) {
 	source := createTestSource("alpha", "op", testutil.CanonicalTempDir(t))
 	other := createTestSource("beta", "be", testutil.CanonicalTempDir(t))
 	for _, request := range []struct {
@@ -237,8 +237,8 @@ func TestUpdateServiceRejectsForeignRelationshipReferencesBeforeMutation(t *test
 			}
 			request.opts.ID = "op-current"
 			_, err := service.Update(context.Background(), source, request.opts)
-			if err == nil || !strings.Contains(err.Error(), "belongs to repository beta") {
-				t.Fatalf("Update() error = %v, want foreign repository rejection", err)
+			if err == nil || !strings.Contains(err.Error(), "was not found in repository beta") {
+				t.Fatalf("Update() error = %v, want missing foreign parent rejection", err)
 			}
 			if backend.updated {
 				t.Fatal("Update mutator was called")
@@ -337,7 +337,7 @@ func TestUpdateServiceFailsClosedWhenDependencyGraphCannotBeRead(t *testing.T) {
 	_, err := updateService(source, backend).Update(context.Background(), source, task.UpdateOptions{
 		ID: "op-current", AddBlockingIDs: []string{"op-dependency"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "cannot inspect blocking dependency") {
+	if err == nil || !strings.Contains(err.Error(), "cannot inspect relationship") {
 		t.Fatalf("Update() error = %v, want graph read failure", err)
 	}
 	if backend.updated {
@@ -364,3 +364,11 @@ func currentUpdateTask() task.Task {
 }
 
 func stringPtr(value string) *string { return &value }
+
+func (b *fakeUpdateBackend) List(context.Context) ([]task.Task, error) {
+	var items []task.Task
+	for _, item := range b.tasks {
+		items = append(items, item.Clone())
+	}
+	return items, nil
+}

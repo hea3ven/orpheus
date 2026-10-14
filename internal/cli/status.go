@@ -902,7 +902,11 @@ func compactEpicProgressDetail(detail status.Detail) string {
 	if detail.Kind != status.DetailEpicProgress {
 		return ""
 	}
-	return fmt.Sprintf("%d/%d", detail.Completed, detail.Total)
+	progress := fmt.Sprintf("%d/%d", detail.Completed, detail.Total)
+	if detail.Incomplete {
+		progress += " (incomplete)"
+	}
+	return progress
 }
 
 func compactReviewDetail(detail status.Detail) (string, bool) {

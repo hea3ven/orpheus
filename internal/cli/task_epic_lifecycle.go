@@ -64,7 +64,7 @@ func runTaskEpicLifecycle(command *cobra.Command, opts *rootOptions, taskID stri
 	if err != nil {
 		return err
 	}
-	service := workflow.EpicLifecycleService{Dependencies: &task.DependencyReader{Sources: taskCtx.Sources, Factory: func(source task.RepositorySource) (task.Getter, error) { return deps.taskBackendFactory(source) }}}
+	service := workflow.EpicLifecycleService{Relationships: &task.RelationshipReader{Sources: taskCtx.Sources, Factory: func(source task.RepositorySource) (task.Getter, error) { return deps.taskBackendFactory(source) }}, Dependencies: &task.DependencyReader{Sources: taskCtx.Sources, Factory: func(source task.RepositorySource) (task.Getter, error) { return deps.taskBackendFactory(source) }}}
 	var result workflow.EpicLifecycleResult
 	if start {
 		result, err = service.Start(command.Context(), lifecycleBackend, resolvedCtx.Resolved.TaskID)

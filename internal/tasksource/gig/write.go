@@ -16,9 +16,13 @@ func (b Backend) Create(ctx context.Context, opts task.CreateOptions) (task.Task
 	if err != nil {
 		return task.Task{}, err
 	}
+	parentID := opts.ParentID
+	if opts.CrossRepositoryParent {
+		parentID = ""
+	}
 	var created task.Task
 	err = b.withStore(ctx, func(store *sdk.Store) error {
-		if err := validateParent(ctx, store, "", opts.ParentID); err != nil {
+		if err := validateParent(ctx, store, "", parentID); err != nil {
 			return err
 		}
 		for _, id := range task.LocalBlockingIDs(opts.BlockingIDs, opts.CrossRepositoryBlockingIDs) {
@@ -26,13 +30,7 @@ func (b Backend) Create(ctx context.Context, opts task.CreateOptions) (task.Task
 				return err
 			}
 		}
-		item := task.Task{Title: opts.Title, Description: opts.Description,
-			Design: opts.Design, AcceptanceCriteria: opts.AcceptanceCriteria, ExternalRef: opts.ExternalRef}
-		item.Metadata, err = task.EditCrossRepositoryBlocks(nil, opts.CrossRepositoryBlockingIDs, nil)
-		if err != nil {
-			return err
-		}
-		metadata, err := encodeMetadata(storedTask{item: item, metadata: make(map[string]json.RawMessage)})
+		metadata, err := creationMetadata(opts)
 		if err != nil {
 			return err
 		}
@@ -40,7 +38,7 @@ func (b Backend) Create(ctx context.Context, opts task.CreateOptions) (task.Task
 			return err
 		}
 		native, err := store.Create(sdk.CreateParams{Title: opts.Title, Description: opts.Description,
-			Type: sdk.TaskType(opts.IssueType), Priority: sdk.P2, ParentID: opts.ParentID,
+			Type: sdk.TaskType(opts.IssueType), Priority: sdk.P2, ParentID: parentID,
 			Metadata: metadata, CreatedBy: "orpheus"})
 		if err != nil {
 			return err
@@ -69,6 +67,20 @@ func (b Backend) Create(ctx context.Context, opts task.CreateOptions) (task.Task
 	return task.Task{}, err
 }
 
+func creationMetadata(opts task.CreateOptions) (string, error) {
+	item := task.Task{Title: opts.Title, Description: opts.Description,
+		Design: opts.Design, AcceptanceCriteria: opts.AcceptanceCriteria, ExternalRef: opts.ExternalRef}
+	var err error
+	item.Metadata, err = task.EditCrossRepositoryBlocks(nil, opts.CrossRepositoryBlockingIDs, nil)
+	if err != nil {
+		return "", err
+	}
+	if opts.CrossRepositoryParent {
+		item.Metadata[task.MetadataCrossRepositoryParent] = opts.ParentID
+	}
+	return encodeMetadata(storedTask{item: item, metadata: make(map[string]json.RawMessage)})
+}
+
 func (b Backend) Update(ctx context.Context, opts task.UpdateOptions) (task.Task, error) {
 	opts, err := task.NormalizeUpdateOptions(opts)
 	if err != nil {
@@ -78,7 +90,7 @@ func (b Backend) Update(ctx context.Context, opts task.UpdateOptions) (task.Task
 		if stored.item.Status == task.StatusClosed {
 			return conflict(opts.ID, "task is closed")
 		}
-		if opts.ParentID != nil {
+		if opts.ParentID != nil && !opts.CrossRepositoryParent {
 			if err := validateParent(ctx, store, opts.ID, *opts.ParentID); err != nil {
 				return err
 			}
@@ -98,12 +110,14 @@ func (b Backend) Update(ctx context.Context, opts task.UpdateOptions) (task.Task
 				*field.target = *field.value
 			}
 		}
+		parentID := prepareParentUpdate(stored, opts)
 		metadata, err := encodeMetadata(*stored)
 		if err != nil {
 			return err
 		}
-		params := sdk.UpdateParams{Title: opts.Title, Description: opts.Description, Metadata: &metadata, ParentID: opts.ParentID}
-		if opts.ParentID != nil && *opts.ParentID == "" {
+
+		params := sdk.UpdateParams{Title: opts.Title, Description: opts.Description, Metadata: &metadata, ParentID: parentID}
+		if parentID != nil && *parentID == "" {
 			params.ParentID, params.Orphan = nil, true
 		}
 		if err := ctx.Err(); err != nil {
@@ -121,6 +135,19 @@ func (b Backend) Update(ctx context.Context, opts task.UpdateOptions) (task.Task
 		return task.Task{}, err
 	}
 	return b.Get(ctx, opts.ID)
+}
+
+func prepareParentUpdate(stored *storedTask, opts task.UpdateOptions) *string {
+	if opts.ParentID == nil {
+		return nil
+	}
+	stored.item.Metadata[task.MetadataCrossRepositoryParent] = ""
+	if !opts.CrossRepositoryParent {
+		return opts.ParentID
+	}
+	stored.item.Metadata[task.MetadataCrossRepositoryParent] = *opts.ParentID
+	empty := ""
+	return &empty
 }
 
 // prepareCrossRepositoryUpdate edits source metadata and leaves only native

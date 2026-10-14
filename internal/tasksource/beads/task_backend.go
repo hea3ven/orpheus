@@ -208,9 +208,7 @@ func listFilterArgs(filter task.ListFilter) []string {
 	appendTime("--created-before", filter.CreatedBefore)
 	appendTime("--updated-after", filter.UpdatedAfter)
 	appendTime("--updated-before", filter.UpdatedBefore)
-	if filter.ParentID != "" {
-		args = append(args, "--parent", filter.ParentID)
-	}
+	// Parent filtering follows metadata projection so remote membership is included.
 	return args
 }
 
@@ -242,13 +240,16 @@ func (b TaskBackend) Create(ctx context.Context, opts task.CreateOptions) (task.
 	if createOpts.ExternalRef != "" {
 		args = append(args, "--external-ref", createOpts.ExternalRef)
 	}
-	if createOpts.ParentID != "" {
+	if createOpts.ParentID != "" && !createOpts.CrossRepositoryParent {
 		args = append(args, "--parent", createOpts.ParentID)
 	}
-	if len(createOpts.CrossRepositoryBlockingIDs) > 0 {
+	if len(createOpts.CrossRepositoryBlockingIDs) > 0 || createOpts.CrossRepositoryParent {
 		metadata, err := task.EditCrossRepositoryBlocks(nil, createOpts.CrossRepositoryBlockingIDs, nil)
 		if err != nil {
 			return task.Task{}, err
+		}
+		if createOpts.CrossRepositoryParent {
+			metadata[task.MetadataCrossRepositoryParent] = createOpts.ParentID
 		}
 		raw, err := json.Marshal(metadata)
 		if err != nil {
@@ -560,13 +561,12 @@ func (b TaskBackend) updateParent(ctx context.Context, id string, opts task.Upda
 		return nil
 	}
 	parentID := strings.TrimSpace(*opts.ParentID)
-	var args []string
-	if parentID == "" {
-		// Clear parent
-		args = []string{"update", id, "--parent", ""}
-	} else {
-		args = []string{"update", id, "--parent", parentID}
+	remoteParent := ""
+	if opts.CrossRepositoryParent {
+		remoteParent, parentID = parentID, ""
 	}
+	args := []string{"update", id, "--parent", parentID,
+		"--set-metadata", task.MetadataCrossRepositoryParent + "=" + remoteParent}
 
 	result, err := b.runWriteWithAttrs(
 		ctx,
@@ -1063,6 +1063,10 @@ func (t bdTask) relations(metadata task.Metadata) (task.RelationSummary, error) 
 	}
 	if relations.ChildCount == 0 {
 		relations.ChildCount = len(relations.ChildIDs)
+	}
+	relations, err := task.IncludeCrossRepositoryParent(relations, metadata)
+	if err != nil {
+		return task.RelationSummary{}, err
 	}
 	return includeCrossRepositoryBlocks(relations, metadata)
 }
