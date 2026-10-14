@@ -17,7 +17,7 @@ timing:
 lanes:
   integration:
     coverage:
-      floor_percent: 66.785
+      floor_percent: 67.319
       packages:
         github.com/hea3ven/orpheus/cmd/orpheus: 0
         github.com/hea3ven/orpheus/cmd/testcoverage: 46.181
