@@ -17,10 +17,10 @@ timing:
 lanes:
   integration:
     coverage:
-      floor_percent: 65.028
+      floor_percent: 67.319
       packages:
         github.com/hea3ven/orpheus/cmd/orpheus: 0
-        github.com/hea3ven/orpheus/cmd/testcoverage: 7.008
+        github.com/hea3ven/orpheus/cmd/testcoverage: 46.181
         github.com/hea3ven/orpheus/internal/agent: 51.8
         github.com/hea3ven/orpheus/internal/agentexec: 80.456
         github.com/hea3ven/orpheus/internal/cli: 69.795
@@ -52,7 +52,7 @@ lanes:
       floor_percent: 54.985
       packages:
         github.com/hea3ven/orpheus/cmd/orpheus: 0
-        github.com/hea3ven/orpheus/cmd/testcoverage: 56.704
+        github.com/hea3ven/orpheus/cmd/testcoverage: 53.039
         github.com/hea3ven/orpheus/internal/agent: 80.838
         github.com/hea3ven/orpheus/internal/agentexec: 0
         github.com/hea3ven/orpheus/internal/cli: 37.597

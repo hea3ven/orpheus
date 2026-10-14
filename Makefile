@@ -1,4 +1,6 @@
-.PHONY: build test test-unit test-integration quality quality-policy-update coverage coverage-audit fmt lint check
+.PHONY: build test test-unit test-integration quality quality-policy-update coverage coverage-audit fmt lint check timing-check
+
+export BASE
 
 INTEGRATION_TEST_PATTERN := ^TestIntegration
 INTEGRATION_TEST_ARGS := -tags=integration -run '$(INTEGRATION_TEST_PATTERN)'
@@ -22,6 +24,12 @@ test-integration:
 # Timing is diagnostic only locally; the PR gate compares fresh base/merge work.
 quality:
 	go run ./cmd/testcoverage
+
+# Explicit, expensive same-host comparison. Never part of routine checks.
+# Bootstrap read-only; the measurement collector is built from the snapshot.
+timing-check:
+	@test -n "$$BASE" || { echo "Supply an explicit base: make timing-check BASE=<ref>" >&2; exit 2; }
+	go run -mod=readonly ./cmd/testcoverage -compare-worktree -compare-base "$$BASE"
 
 # Collect five complete coverage-instrumented samples, update only stale
 # coverage floors, and leave the .quality.yml diff for review.

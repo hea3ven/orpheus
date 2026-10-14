@@ -169,7 +169,7 @@ func TestIntegrationAdapterContractComparisonCollectorUsesSameBinaryAndIsolatedC
 	if err := os.WriteFile(collector, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runner := comparisonRunner{work: filepath.Join(root, "work"), output: filepath.Join(root, "reports", "report.json"), collector: collector, baseRevision: base, log: &bytes.Buffer{}}
+	runner := comparisonRunner{work: filepath.Join(root, "work"), output: filepath.Join(root, "reports", "report.json"), collector: collector, log: &bytes.Buffer{}}
 	// This contract owns collector invocation, not Git checkout preparation.
 	for _, name := range []string{"base", "merge"} {
 		if err := os.MkdirAll(filepath.Join(runner.work, name), 0o755); err != nil {
@@ -178,17 +178,17 @@ func TestIntegrationAdapterContractComparisonCollectorUsesSameBinaryAndIsolatedC
 	}
 
 	for _, revision := range []string{base, merge} {
-		result, path, err := runner.collect(context.Background(), revision, false, 1)
+		name := "merge"
+		if revision == base {
+			name = "base"
+		}
+		result, path, err := runner.collect(context.Background(), name, revision, false, 1)
 		if err != nil || !result.Complete {
 			t.Fatalf("collector report = %#v, %v", result, err)
 		}
 		request, err := os.ReadFile(path + ".request")
 		if err != nil {
 			t.Fatal(err)
-		}
-		name := "merge"
-		if revision == base {
-			name = "base"
 		}
 		want := strings.Join([]string{revision, filepath.Join(runner.work, name), filepath.Join(runner.work, "cache-"+name), filepath.Join(runner.work, "modules"), "off", "off", filepath.Join(runner.work, "test-binaries-"+name), ""}, "\n")
 		if string(request) != want {
@@ -198,7 +198,7 @@ func TestIntegrationAdapterContractComparisonCollectorUsesSameBinaryAndIsolatedC
 	if err := os.WriteFile(collector, []byte(script+"exit 3\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	partial, path, err := runner.collect(context.Background(), merge, false, 2)
+	partial, path, err := runner.collect(context.Background(), "merge", merge, false, 2)
 	if err == nil || !partial.Complete {
 		t.Fatalf("failed child lost available partial report: %#v, %s, %v", partial, path, err)
 	}

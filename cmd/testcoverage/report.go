@@ -29,6 +29,9 @@ func printReportTo(outputWriter io.Writer, result qualityReport, output string) 
 			_, _ = fmt.Fprintf(outputWriter, "  failed: %s (%d decoded failures)\n", lane.Failure.Error, len(lane.Failure.Failures))
 		}
 	}
+	if evidence := result.Comparison; evidence != nil {
+		_, _ = fmt.Fprintf(outputWriter, "comparison base: %s; candidate: %s; measured pairs: %d\n", evidence.BaseRevision, evidence.MergeRevision, result.MeasurementSamples)
+	}
 	_, _ = fmt.Fprintf(outputWriter, "execution: %s; coverage: %s; timing: %s\n", checkLabel(result.Execution), checkLabel(result.CoverageDecision), checkLabel(result.Timing))
 	_, _ = fmt.Fprintf(outputWriter, "quality decision: %s\n", result.Decision.Status)
 	for _, item := range result.Decision.Findings {
@@ -91,7 +94,7 @@ func findingMessage(item finding) string {
 		}
 		return fmt.Sprintf("%s (floor %.3f%%, measured %.3f%%, proposed floor %.3f%%)", item.Message, item.Prior, item.Current, item.Proposed)
 	case "timing_comparison":
-		return fmt.Sprintf("%s (base %.3fs, merge %.3fs, ceiling %.3fs, overage %.3fs)", item.Message, item.Prior, item.Current, item.BudgetSeconds, item.OverageSeconds)
+		return fmt.Sprintf("%s (base %.3fs, candidate %.3fs, ceiling %.3fs, overage %.3fs)", item.Message, item.Prior, item.Current, item.BudgetSeconds, item.OverageSeconds)
 	default:
 		return item.Message
 	}

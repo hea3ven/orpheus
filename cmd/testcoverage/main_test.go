@@ -21,6 +21,11 @@ func TestParseOptionsSupportsQualityModes(t *testing.T) {
 	}{
 		{name: "defaults"},
 		{name: "same-runner comparison", args: []string{"-compare-base", fixtureBase, "-compare-merge", fixtureMerge}},
+		{name: "working-tree comparison", args: []string{"-compare-worktree", "-compare-base", "main"}},
+		{name: "working-tree comparison requires explicit base", args: []string{"-compare-worktree"}, wantErr: true},
+		{name: "working-tree comparison rejects merge", args: []string{"-compare-worktree", "-compare-base", "main", "-compare-merge", fixtureMerge}, wantErr: true},
+		{name: "working-tree comparison rejects policy override", args: []string{"-compare-worktree", "-compare-base", "main", "-policy", "base.yml"}, wantErr: true},
+		{name: "working-tree comparison rejects update", args: []string{"-compare-worktree", "-compare-base", "main", "-update-policy"}, wantErr: true},
 		{name: "isolated measurement", args: []string{"-measure-revision", fixtureBase}},
 		{name: "missing comparison identity", args: []string{"-compare-base", fixtureBase}, wantErr: true},
 		{name: "reject comparison plus update", args: []string{"-compare-base", fixtureBase, "-compare-merge", fixtureMerge, "-update-policy"}, wantErr: true},
@@ -157,7 +162,7 @@ func TestFindingMessageShowsQualityPolicyBounds(t *testing.T) {
 		Kind: "timing_comparison", Prior: 0.415, Current: 0.472, BudgetSeconds: 0.722, OverageSeconds: 0.01,
 		Message: "timing exceeds its policy ceiling",
 	})
-	for _, want := range []string{"base 0.415s", "merge 0.472s", "ceiling 0.722s"} {
+	for _, want := range []string{"base 0.415s", "candidate 0.472s", "ceiling 0.722s"} {
 		if !strings.Contains(timing, want) {
 			t.Fatalf("timing finding message %q does not contain %q", timing, want)
 		}

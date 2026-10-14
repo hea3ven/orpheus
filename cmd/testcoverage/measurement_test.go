@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -41,6 +42,37 @@ func TestComparisonEnvironmentIsolatesTestBinaryCachesByRevision(t *testing.T) {
 		want := []string{"/fixture/comparison/test-binaries-" + name}
 		if !reflect.DeepEqual(caches, want) {
 			t.Fatalf("%s test binary caches = %v, want %v", name, caches, want)
+		}
+	}
+}
+
+func TestComparisonEnvironmentRemovesInheritedGitConfiguration(t *testing.T) {
+	inherited := map[string]string{
+		"GIT_CONFIG":            "/fixture/operator-config",
+		"GIT_CONFIG_SYSTEM":     "/fixture/operator-system-config",
+		"GIT_CONFIG_GLOBAL":     "/fixture/operator-global-config",
+		"GIT_CONFIG_NOSYSTEM":   "0",
+		"GIT_CONFIG_COUNT":      "1",
+		"GIT_CONFIG_KEY_0":      "core.hooksPath",
+		"GIT_CONFIG_VALUE_0":    "/fixture/operator-hooks",
+		"GIT_CONFIG_PARAMETERS": "'core.hooksPath=/fixture/operator-hooks'",
+	}
+	for key, value := range inherited {
+		t.Setenv(key, value)
+	}
+
+	for _, name := range []string{"setup", "collector", "base", "merge"} {
+		environment := environmentValues(comparisonEnvironment("/fixture/comparison", name))
+
+		configuration := make(map[string]string)
+		for key := range inherited {
+			if value, found := environment[key]; found {
+				configuration[key] = value
+			}
+		}
+		want := map[string]string{"GIT_CONFIG_GLOBAL": os.DevNull, "GIT_CONFIG_NOSYSTEM": "1"}
+		if !reflect.DeepEqual(configuration, want) {
+			t.Fatalf("%s Git configuration = %v, want only %v", name, configuration, want)
 		}
 	}
 }
@@ -91,5 +123,16 @@ func TestSourceIdentityValidationIsIndependentOfEnvironmentCompatibility(t *test
 				t.Fatalf("cleanliness probe = %#v", runner.calls[1])
 			}
 		})
+	}
+}
+
+func TestPrivateGitEnvironmentCannotUseOperatorRepositoryRouting(t *testing.T) {
+	input := []string{"PATH=/fixture/bin", "GIT_DIR=/fixture/operator", "GIT_WORK_TREE=/fixture/operator", "GIT_INDEX_FILE=/fixture/operator/index", "GIT_OBJECT_DIRECTORY=/fixture/operator/objects", "GIT_COMMON_DIR=/fixture/operator", "GIT_ALTERNATE_OBJECT_DIRECTORIES=/fixture/operator/objects", "GIT_CONFIG_GLOBAL=/fixture/ignores"}
+
+	got := gitRoutingEnvironment(input)
+
+	want := []string{"PATH=/fixture/bin", "GIT_CONFIG_GLOBAL=/fixture/ignores"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Git environment = %v, want %v", got, want)
 	}
 }

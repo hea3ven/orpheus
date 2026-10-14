@@ -9,6 +9,7 @@ Orpheus separates tests by behavioral scope, not by speed or whether a test writ
 - `make test-integration` runs the integration lane only.
 - `make quality` runs both lanes once with coverage policy; timing is **not evaluated** locally.
 - `make check` formats code, runs the single-pass quality report, lints, and builds the CLI. Each test lane still runs only once.
+- `make timing-check BASE=<ref>` explicitly compares a working-tree snapshot with a fresh measurement of that exact base on the local host. It is never part of routine checks.
 
 ## Behavioral assertions
 
@@ -163,6 +164,69 @@ additions/removals require an explicit policy update. JSON and Markdown reports
 are written to `artifacts/test-coverage/report.json` and `report.md`. A failed
 lane does not prevent the other lane from running; failure reports retain raw
 JSON, stderr, and decoded failing-test evidence.
+
+## Explicit local timing comparison
+
+Run from the repository root with an explicit locally available revision:
+
+```sh
+make timing-check BASE=main   # Or a tag, full commit ID, or HEAD.
+```
+
+The supplied base is resolved once to an exact commit; there is no merge-base
+lookup, remote fetch, or substitution of main. The candidate captures raw on-disk
+bytes, executable modes, and symlinks for paths tracked in HEAD or the index,
+plus non-ignored untracked files. Missing paths are deletions; disk contents win
+over staged versions, even for staged additions/deletions. Repository, local,
+and global ignore rules exclude only untracked paths. Avoid editing during
+capture: files are read in turn, not atomically across the checkout. Later edits
+cannot change the snapshot. Submodules, nested repositories, special files, and
+symlinked tracked parent directories are unsupported and fail clearly.
+
+The checkout, index, refs, and worktree registrations remain read-only. A private
+repository holds both detached measurement checkouts, with Git filters and
+line-ending/encoding conversions disabled. One collector is built from the
+immutable candidate and its `.quality.yml` supplies policy; base policy is never
+loaded. The CI engine handles sampling, coverage, environment validation,
+thresholds, and reporting. Source, test, package, and policy differences are
+allowed across subjects, while tools, Go configuration, and resources must match.
+
+Prerequisites: Go, Git, Beads, Dolt, sufficient temporary disk, and Linux with
+fully observable cgroup v2 ancestry. Unsupported hosts/containers leave timing
+**unevaluated**, not passed. Tools are not provisioned; module downloads may need
+network access, as in CI, but tests remain network- and credential-free. Each
+invocation has fresh independent build/fixture-binary caches, a shared module
+cache, and fresh base evidence; no persistent baseline is reused. Two excluded
+warm-ups and one measured pair cost eight lane runs. Suspected violations add
+four alternating pairs (twenty-four lane runs total), with five-sample medians.
+Setup and collection have a sixteen-minute deadline. A busy host can produce
+noisy results; never weaken policy for that machine.
+
+Evidence is retained in a new `orpheus-timing-report-*` system temporary directory,
+printed before setup. `snapshot.json` identifies source HEAD, raw tree, deterministic
+snapshot commit, and the self-contained `candidate.bundle`. To restore raw bytes
+elsewhere without repository filters:
+
+```sh
+git clone --no-checkout --branch candidate /path/to/candidate.bundle /path/to/new-checkout
+printf '* -filter -text -ident -working-tree-encoding\n' > /path/to/new-checkout/.git/info/attributes
+git -C /path/to/new-checkout checkout --detach candidate
+```
+
+Private checkouts/caches are removed on normal exit, failure, and handled
+interruption; reports, streams, available samples, and the bundle remain.
+SIGINT/SIGTERM cancel the active process group. Forced termination may leave
+private temporary state, never operator changes. Comparisons exit zero only when
+execution, candidate coverage, and timing all pass. Confirmed timing violations,
+coverage violations/refresh needs, failed tests, and execution/evidence failures
+exit nonzero. Invalid evidence leaves timing **unevaluated**, not a regression;
+confirmation never replaces first-sample candidate coverage.
+
+For custom output, run the collector with `-compare-worktree -compare-base <ref>
+-output /outside/new-directory/report.json`. The containing directory must be new
+and outside the checkout and its Git metadata; the system temporary directory
+must also be outside those roots.
+Remove retained reports explicitly when no longer needed; later runs never read them.
 
 ## Updating coverage policy
 

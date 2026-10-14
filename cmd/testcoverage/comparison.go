@@ -8,6 +8,7 @@ import (
 )
 
 type sampleReference struct {
+	Subject  string `json:"subject"`
 	Revision string `json:"revision"`
 	Warmup   bool   `json:"warmup"`
 	Path     string `json:"path"`
@@ -17,12 +18,18 @@ type comparisonEvidence struct {
 	Settings      localTimingSettings   `json:"tolerances"`
 	BaseRevision  string                `json:"base_revision"`
 	MergeRevision string                `json:"merge_revision"`
+	Snapshot      *workingTreeSnapshot  `json:"working_tree_snapshot,omitempty"`
 	Samples       []sampleReference     `json:"samples"`
 	BaseMedians   map[string]laneReport `json:"base_medians,omitempty"`
 	MergeMedians  map[string]laneReport `json:"merge_medians,omitempty"`
 }
 
-type sampleCollector func(revision string, warmup bool, index int) (qualityReport, string, error)
+type comparisonSubject struct {
+	Name     string
+	Revision string
+}
+
+type sampleCollector func(subject, revision string, warmup bool, index int) (qualityReport, string, error)
 
 // compareRevisions keeps coverage tied to the first complete candidate sample.
 // Warmups establish compatibility but never enter the timing medians.
@@ -33,35 +40,36 @@ func compareRevisions(policy localQualityPolicy, base, merge string, collect sam
 		Timing:     decision{Status: statusUnevaluated},
 		Comparison: &comparisonEvidence{BaseRevision: base, MergeRevision: merge, Settings: policy.Timing},
 	}
-	if !commitPattern.MatchString(base) || !commitPattern.MatchString(merge) || base == merge {
-		return abortComparison(result, errors.New("comparison requires distinct exact full commit IDs"))
+	if !commitPattern.MatchString(base) || !commitPattern.MatchString(merge) {
+		return abortComparison(result, errors.New("comparison requires exact full commit IDs"))
 	}
-	samples := map[string][]qualityReport{base: nil, merge: nil}
+	subjects := []comparisonSubject{{Name: "base", Revision: base}, {Name: "merge", Revision: merge}}
+	samples := map[string][]qualityReport{"base": nil, "merge": nil}
 	references := make(map[string]qualityReport, 2)
-	if err := collectWarmups(&result, references, base, merge, collect); err != nil {
+	if err := collectWarmups(&result, references, subjects, collect); err != nil {
 		return abortComparison(result, err)
 	}
 	pairs := 1
 	for index := 1; index <= pairs; index++ {
-		order := []string{base, merge}
+		order := []comparisonSubject{subjects[0], subjects[1]}
 		if index%2 == 0 {
-			order = []string{merge, base}
+			order = []comparisonSubject{subjects[1], subjects[0]}
 		}
-		for _, revision := range order {
-			sample, err := collectValidated(&result, revision, false, index, collect)
+		for _, subject := range order {
+			sample, err := collectValidated(&result, subject, false, index, collect)
 			if err != nil {
 				return abortComparison(result, err)
 			}
-			if revision == merge && index == 1 {
+			if subject.Name == "merge" && index == 1 {
 				result.Lanes = sample.Lanes
 				result.CoverageDecision = assessQualityPolicy(policy, sample)
 			}
-			if err := compatibleWithReferences(references, revision, sample); err != nil {
+			if err := compatibleWithReferences(references, subject.Name, sample); err != nil {
 				return abortComparison(result, err)
 			}
-			samples[revision] = append(samples[revision], sample)
+			samples[subject.Name] = append(samples[subject.Name], sample)
 		}
-		if err := aggregateTiming(&result, samples[base], samples[merge], policy.Timing); err != nil {
+		if err := aggregateTiming(&result, samples["base"], samples["merge"], policy.Timing); err != nil {
 			return abortComparison(result, err)
 		}
 		if index == 1 && result.Timing.Status == statusTimingFailed {
@@ -85,16 +93,16 @@ func compareRevisions(policy localQualityPolicy, base, merge string, collect sam
 	return result, nil
 }
 
-func collectWarmups(result *qualityReport, references map[string]qualityReport, base, merge string, collect sampleCollector) error {
-	for _, revision := range []string{base, merge} {
-		sample, err := collectValidated(result, revision, true, 0, collect)
+func collectWarmups(result *qualityReport, references map[string]qualityReport, subjects []comparisonSubject, collect sampleCollector) error {
+	for _, subject := range subjects {
+		sample, err := collectValidated(result, subject, true, 0, collect)
 		if err != nil {
 			return err
 		}
-		if err := compatibleWithReferences(references, revision, sample); err != nil {
+		if err := compatibleWithReferences(references, subject.Name, sample); err != nil {
 			return err
 		}
-		references[revision] = sample
+		references[subject.Name] = sample
 	}
 	return nil
 }
@@ -115,17 +123,17 @@ func aggregateTiming(result *qualityReport, base, merge []qualityReport, setting
 	return nil
 }
 
-func collectValidated(result *qualityReport, revision string, warmup bool, index int, collect sampleCollector) (qualityReport, error) {
-	sample, path, err := collect(revision, warmup, index)
-	result.Comparison.Samples = append(result.Comparison.Samples, sampleReference{Revision: revision, Warmup: warmup, Path: path})
+func collectValidated(result *qualityReport, subject comparisonSubject, warmup bool, index int, collect sampleCollector) (qualityReport, error) {
+	sample, path, err := collect(subject.Name, subject.Revision, warmup, index)
+	result.Comparison.Samples = append(result.Comparison.Samples, sampleReference{Subject: subject.Name, Revision: subject.Revision, Warmup: warmup, Path: path})
 	if err != nil {
 		result.Execution = decision{Status: statusExecutionFailed, Findings: sample.Execution.Findings}
 		if sample.Execution.Status == statusTestFailed {
 			result.Execution.Status = statusTestFailed
 		}
-		return sample, fmt.Errorf("measurement %s warmup=%t sample=%d: %w", revision, warmup, index, err)
+		return sample, fmt.Errorf("measurement %s warmup=%t sample=%d: %w", subject.Revision, warmup, index, err)
 	}
-	if err := validateTimingSample(sample, revision); err != nil {
+	if err := validateTimingSample(sample, subject.Revision); err != nil {
 		result.Execution = decision{Status: statusExecutionFailed}
 		return sample, err
 	}
@@ -133,15 +141,15 @@ func collectValidated(result *qualityReport, revision string, warmup bool, index
 	return sample, nil
 }
 
-func compatibleWithReferences(references map[string]qualityReport, revision string, sample qualityReport) error {
-	for priorRevision, reference := range references {
+func compatibleWithReferences(references map[string]qualityReport, subject string, sample qualityReport) error {
+	for priorSubject, reference := range references {
 		if err := compatibleMeasurements(reference, sample); err != nil {
 			return err
 		}
-		if priorRevision == revision {
+		if priorSubject == subject || reference.Metadata.Source.Revision == sample.Metadata.Source.Revision {
 			for _, lane := range laneNames {
 				if err := comparableLane(reference.Lanes[lane], sample.Lanes[lane]); err != nil {
-					return fmt.Errorf("%s %s within-revision sample changed: %w", revision, lane, err)
+					return fmt.Errorf("%s %s within-revision sample changed: %w", subject, lane, err)
 				}
 			}
 		}
