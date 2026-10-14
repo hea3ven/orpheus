@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -29,6 +30,7 @@ func TestIntegrationAdapterContractBeadsRelationshipContracts(t *testing.T) {
 	// Cases own disjoint task IDs and assert only their own graph. Map iteration
 	// varies their order; keep them serial to avoid concurrent database writers.
 	for name, run := range map[string]func(*testing.T, beadsRelationshipFixture){
+		"TaskBackendCrossRepositoryParents":                            checkCrossRepositoryParents,
 		"TaskBackendCrossRepositoryReferences":                         checkCrossRepositoryReferences,
 		"TaskBackendReadsParentRelationship":                           checkParentRelationshipReadback,
 		"TaskBackendSupportsCrossTypeBlockingDependencies":             checkCrossTypeBlockingDependencies,
@@ -373,5 +375,31 @@ func checkCrossRepositoryReferences(t *testing.T, fixture beadsRelationshipFixtu
 		updated, err := fixture.backend.Update(t.Context(), task.UpdateOptions{ID: consumer.ID, RemoveBlockingIDs: []string{prerequisite.ID}})
 		require.NoError(t, err)
 		assert.Empty(t, updated.Relations.DependencyIDs)
+	}
+}
+
+func checkCrossRepositoryParents(t *testing.T, fixture beadsRelationshipFixture) {
+	t.Helper()
+	parent, err := fixture.backend.Create(t.Context(), task.CreateOptions{Title: t.Name() + "/Local", Description: "Plan", AcceptanceCriteria: "Done", IssueType: task.IssueTypeEpic})
+	require.NoError(t, err)
+	child, err := fixture.backend.Create(t.Context(), task.CreateOptions{Title: t.Name() + "/Child", Description: "Plan", AcceptanceCriteria: "Done", IssueType: task.IssueTypeEpic, ParentID: "remote-epic", CrossRepositoryParent: true})
+	require.NoError(t, err)
+	reopened, err := beads.NewTaskBackendWithRunner(fixture.dir, fixture.runner)
+	require.NoError(t, err)
+	for _, parentID := range []string{"remote-epic", parent.ID, "remote-other", ""} {
+		if parentID != "remote-epic" {
+			_, err := reopened.Update(t.Context(), task.UpdateOptions{ID: child.ID, ParentID: &parentID, CrossRepositoryParent: strings.HasPrefix(parentID, "remote-")})
+			require.NoError(t, err)
+		}
+		got, err := reopened.Get(t.Context(), child.ID)
+		require.NoError(t, err)
+		assert.Equal(t, child.ID, got.ID)
+		assert.Equal(t, parentID, got.Relations.ParentID)
+		listed, err := reopened.ListFiltered(t.Context(), task.ListFilter{ParentID: parentID})
+		require.NoError(t, err)
+		assert.True(t, slices.ContainsFunc(listed, func(item task.Task) bool { return item.ID == child.ID }))
+		local, err := reopened.Get(t.Context(), parent.ID)
+		require.NoError(t, err)
+		assert.Equal(t, parentID == parent.ID, slices.Contains(local.Relations.ChildIDs, child.ID))
 	}
 }

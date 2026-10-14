@@ -32,6 +32,7 @@ type ownershipAuthoringBackend struct {
 	createdID           string
 	startError          error
 	closeError          error
+	listError           error
 	updateErr           error
 	dependencyUpdateErr error
 }
@@ -63,6 +64,9 @@ func (b *ownershipAuthoringBackend) List(context.Context) ([]taskmodel.Task, err
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.listCalls++
+	if b.listError != nil {
+		return nil, b.listError
+	}
 	ids := make([]string, 0, len(b.tasks))
 	for id := range b.tasks {
 		ids = append(ids, id)
@@ -395,4 +399,18 @@ func seedOwnershipLegacyRunningAttempt(t *testing.T, fixture *workflowFixture, t
 
 func sourceNeutralFailure(message string) error {
 	return errors.New(message)
+}
+
+func (b *ownershipAuthoringBackend) ListFiltered(ctx context.Context, filter taskmodel.ListFilter) ([]taskmodel.Task, error) {
+	items, err := b.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var result []taskmodel.Task
+	for _, item := range items {
+		if filter.Matches(item) {
+			result = append(result, item)
+		}
+	}
+	return result, nil
 }

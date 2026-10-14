@@ -36,7 +36,7 @@ lanes:
         github.com/hea3ven/orpheus/internal/revieweval: 51.285
         github.com/hea3ven/orpheus/internal/state: 71.519
         github.com/hea3ven/orpheus/internal/status: 76.338
-        github.com/hea3ven/orpheus/internal/task: 69.459
+        github.com/hea3ven/orpheus/internal/task: 76.018
         github.com/hea3ven/orpheus/internal/taskbranch: 79
         github.com/hea3ven/orpheus/internal/tasksource/beads: 61.738
         github.com/hea3ven/orpheus/internal/tasksource/gig: 82.777

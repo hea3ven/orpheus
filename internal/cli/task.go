@@ -675,19 +675,14 @@ func queryTaskShowChildren(
 	}
 
 	resolved := resolvedCtx.Resolved
-	backend, err := deps.taskBackendFactory(resolved.Source)
+	taskCtx, err := loadTaskContextFromInvocation(deps)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"task show %s: prepare direct-child query for parent task %s in repo %s (%s; prefix %s): %w",
-			resolved.TaskID,
-			parent.ID,
-			resolved.Source.Repository.ID,
-			resolved.Source.Repository.Name,
-			resolved.Source.Repository.TaskIDPrefix,
-			err,
-		)
+		return nil, err
 	}
-	children, err := taskmodel.ReadChildren(ctx, backend, parent)
+	reader := taskmodel.RelationshipReader{Sources: taskCtx.Sources, Factory: func(source taskmodel.RepositorySource) (taskmodel.Getter, error) {
+		return deps.taskBackendFactory(source)
+	}}
+	children, err := reader.Children(ctx, parent)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"task show %s: query direct children for parent task %s in repo %s (%s; prefix %s): %w",

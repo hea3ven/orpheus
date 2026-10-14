@@ -72,7 +72,7 @@ func NewAggregatorWithLogger(sources []RepositorySource, factory BackendFactory,
 }
 
 // WithReferenceSources retains the selected output sources while allowing
-// relationship lookups in the complete registry. Excluded sources are not listed.
+// relationship lookups in the complete registry. Excluded sources are queried only for referenced context and epic membership.
 func (a Aggregator) WithReferenceSources(sources []RepositorySource) Aggregator {
 	a.referenceSources = append([]RepositorySource(nil), sources...)
 	return a
@@ -168,11 +168,21 @@ func (a Aggregator) Snapshot(ctx context.Context) SnapshotResult {
 	}
 	for _, repository := range result.Repositories {
 		for _, item := range repository.Tasks {
-			for _, id := range item.Relations.DependencyIDs {
+			for _, id := range append(append([]string(nil), item.Relations.DependencyIDs...), item.Relations.ParentID) {
+				if strings.TrimSpace(id) == "" {
+					continue
+				}
 				a.addCrossRepositoryContext(ctx, &result, repository.Repository, item.ID, id)
 			}
 		}
 	}
+	var candidates []RepoTask
+	for _, repository := range result.Repositories {
+		for _, item := range repository.Tasks {
+			candidates = append(candidates, RepoTask{Repository: repository.Repository, Task: item})
+		}
+	}
+	a.completeEpicMembership(ctx, &result, candidates, true)
 	span.Finish(ctx, aggregationStatus(result.Failures),
 		slog.Int("repository_count", len(result.Repositories)),
 		slog.Int("failure_count", len(result.Failures)),
@@ -330,13 +340,11 @@ func (a Aggregator) completeFilteredSnapshotContext(ctx context.Context, snapsho
 			continue
 		}
 
-		if candidate.Task.IssueType == IssueTypeEpic && !candidate.Task.Relations.Complete {
-			a.addEpicChildrenContext(ctx, snapshot, seen, source, backend, candidate.Task.ID)
-		}
 		for _, referenceID := range relationshipReferenceIDs(candidate.Task) {
-			a.addRelationshipContext(ctx, snapshot, seen, source, backend, available[source.Repository.ID], candidate.Task.ID, referenceID, slices.Contains(candidate.Task.Relations.DependencyIDs, referenceID))
+			a.addRelationshipContext(ctx, snapshot, seen, source, backend, available[source.Repository.ID], candidate.Task.ID, referenceID)
 		}
 	}
+	a.completeEpicMembership(ctx, snapshot, candidates, false)
 }
 
 func (a Aggregator) sourceForRepository(repositoryID string) (RepositorySource, bool) {
@@ -362,29 +370,6 @@ func snapshotTaskIDs(snapshot *SnapshotResult) map[string]map[string]struct{} {
 	return seen
 }
 
-func (a Aggregator) addEpicChildrenContext(
-	ctx context.Context,
-	snapshot *SnapshotResult,
-	seen map[string]map[string]struct{},
-	source RepositorySource,
-	backend ReadBackend,
-	epicID string,
-) {
-	lister, ok := backend.(FilteredLister)
-	if !ok {
-		a.appendRelationshipFailure(snapshot, source.Repository, "", "", Repository{}, errors.New("task backend does not support relationship-context listing"))
-		return
-	}
-	children, err := lister.ListFiltered(ctx, ListFilter{ParentID: epicID})
-	if err != nil {
-		a.appendRelationshipFailure(snapshot, source.Repository, "", "", Repository{}, err)
-		return
-	}
-	for _, child := range children {
-		appendSnapshotContextTask(snapshot, seen, source.Repository, child)
-	}
-}
-
 func (a Aggregator) addRelationshipContext(
 	ctx context.Context,
 	snapshot *SnapshotResult,
@@ -394,7 +379,6 @@ func (a Aggregator) addRelationshipContext(
 	available map[string]Task,
 	taskID string,
 	referenceID string,
-	dependency bool,
 ) {
 	referenceID = strings.TrimSpace(referenceID)
 	if referenceID == "" {
@@ -409,10 +393,6 @@ func (a Aggregator) addRelationshipContext(
 		return
 	}
 	if resolved.Source.Repository.ID != source.Repository.ID {
-		if !dependency {
-			a.appendRelationshipContextUnavailable(snapshot, source.Repository, taskID, referenceID, resolved.Source.Repository)
-			return
-		}
 		a.addCrossRepositoryContext(ctx, snapshot, source.Repository, taskID, referenceID)
 		return
 	}
@@ -451,7 +431,7 @@ func (a Aggregator) addCrossRepositoryContext(ctx context.Context, snapshot *Sna
 		return
 	}
 	for _, repository := range snapshot.Repositories {
-		if repository.Repository.ID == consumer.ID && slices.ContainsFunc(repository.DependencyTasks, func(item Task) bool { return item.ID == id }) {
+		if repository.Repository.ID == consumer.ID && slices.ContainsFunc(repository.RelationshipTasks, func(item Task) bool { return item.ID == id }) {
 			return
 		}
 	}
@@ -474,7 +454,7 @@ func (a Aggregator) addCrossRepositoryContext(ctx context.Context, snapshot *Sna
 	}
 	for i := range snapshot.Repositories {
 		if snapshot.Repositories[i].Repository.ID == consumer.ID {
-			snapshot.Repositories[i].DependencyTasks = append(snapshot.Repositories[i].DependencyTasks, item.Clone())
+			snapshot.Repositories[i].RelationshipTasks = append(snapshot.Repositories[i].RelationshipTasks, item.Clone())
 			return
 		}
 	}

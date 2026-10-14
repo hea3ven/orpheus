@@ -32,7 +32,7 @@ func TestIntegrationWorkflowTaskShowJSONSharesEverySummaryFieldWithTaskList(t *t
 		taskWFTask("op-working", "Working", taskmodel.StatusInProgress, taskmodel.IssueTypeTask),
 	}
 	reads := withWorkflowSources(t, fixture, map[string]taskSourceResult{
-		repos["alpha"]: {tasks: items}, repos["other"]: {err: errors.New("unrelated source must not be read")},
+		repos["alpha"]: {tasks: items}, repos["other"]: {},
 	})
 	_, err := taskstate.NewStore(fixture.paths).StartRun("alpha", "op-working", taskstate.StartRunOptions{Agent: "implementer", Branch: "main", Worktree: repos["alpha"]})
 	require.NoError(t, err)
@@ -82,8 +82,8 @@ func TestIntegrationWorkflowTaskShowJSONSharesEverySummaryFieldWithTaskList(t *t
 			}
 		})
 	}
-	assert.NotContains(t, reads.directories(), repos["other"])
-	assert.Equal(t, 2, reads.count("list"), "show must not list the repository")
+	assert.Contains(t, reads.directories(), repos["other"], "epics discover remote children even when output is repository-filtered")
+	assert.Equal(t, 2, reads.count("list"), "show uses targeted membership queries, not full inventories")
 }
 
 func TestIntegrationWorkflowTaskShowJSONReadFailuresProduceNoJSON(t *testing.T) {

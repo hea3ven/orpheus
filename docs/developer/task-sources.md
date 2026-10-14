@@ -28,6 +28,22 @@ Only closed prerequisites satisfy readiness. Removal uses the consumer's stored
 IDs and does not require access to the owner. Native dependents remain local;
 there is no cross-repository reverse index or source-native automatic unblocking.
 
+## Cross-repository epic membership
+
+A remote parent is stored on its child under `orpheus.cross_repository_parent`.
+Native local parents remain native; reparenting replaces the previous link rather
+than adding another parent or changing repository ownership. Both adapters project
+this metadata into `Relations.ParentID` and apply parent filters after projection.
+Clearing a remote link does not require its owner's source to be available.
+
+Shared readers discover direct children across every registered source. There is
+no reverse membership index. Epic views retain context separately from output
+candidates; incomplete inventories mark progress incomplete, and closure requires
+all inventories plus all declared direct children to be available and closed.
+Graph validation distinguishes activation from completion: children wait for
+parent activation, while epic completion waits for child completion. This rejects
+mixed parent/dependency waits without rejecting ordinary membership.
+
 ## Embedded gig
 
 The production module pins the unmodified `github.com/NeerajG03/gig` v0.7.0 SDK

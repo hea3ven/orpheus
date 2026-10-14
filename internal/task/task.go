@@ -445,8 +445,10 @@ type UpdateOptions struct {
 	AcceptanceCriteria *string
 	ExternalRef        *string
 	ParentID           *string
-	AddBlockingIDs     []string
-	RemoveBlockingIDs  []string
+	// CrossRepositoryParent stores ParentID as source metadata instead of a native edge.
+	CrossRepositoryParent bool
+	AddBlockingIDs        []string
+	RemoveBlockingIDs     []string
 	// CrossRepositoryBlockingIDs is the subset of additions stored as source metadata.
 	CrossRepositoryBlockingIDs []string
 }
@@ -519,16 +521,10 @@ func (s UpdateService) Update(ctx context.Context, source RepositorySource, requ
 
 	// Validate all graph changes before invoking the backend mutator, whose
 	// individual source operations are not necessarily atomic.
-	if err := s.validateRelations(ctx, source, backend, opts, current); err != nil {
+	if err := s.validateRelations(ctx, opts, current); err != nil {
 		return Task{}, err
 	}
-	// The underlying task source removes relationships by item pair rather than
-	// by relationship type. Do not pass absent blocking dependencies through to
-	// it: they are retry-safe no-ops and may instead name an unrelated edge.
-	opts.RemoveBlockingIDs = existingBlockingDependencyIDs(current, opts.RemoveBlockingIDs)
-
-	opts.AddBlockingIDs = slices.DeleteFunc(opts.AddBlockingIDs, func(id string) bool { return slices.Contains(current.Relations.DependencyIDs, id) })
-	opts.CrossRepositoryBlockingIDs, err = crossRepositoryIDs(s.Sources, source, opts.AddBlockingIDs)
+	opts, err = s.prepareRelations(source, opts, current)
 	if err != nil {
 		return Task{}, err
 	}
@@ -542,160 +538,64 @@ func (s UpdateService) Update(ctx context.Context, source RepositorySource, requ
 	return updated, nil
 }
 
-func (s UpdateService) validateRelations(
-	ctx context.Context,
-	source RepositorySource,
-	backend UpdateBackend,
-	opts UpdateOptions,
-	current Task,
-) error {
-	if err := s.validateParent(ctx, source, backend, opts, current); err != nil {
-		return err
-	}
-	return s.validateAddBlockingDependencies(ctx, opts, current)
-}
-
-func (s UpdateService) validateParent(
-	ctx context.Context,
-	source RepositorySource,
-	backend UpdateBackend,
-	opts UpdateOptions,
-	current Task,
-) error {
-	if opts.ParentID == nil {
-		return nil
-	}
-	parentID := strings.TrimSpace(*opts.ParentID)
-	if parentID == "" {
-		// Clearing parent is allowed if backend supports it
-		return nil
-	}
-	if err := s.validateReferenceRepository(source, parentID, "parent"); err != nil {
-		return err
-	}
-	parent, err := getUpdateReference(ctx, backend, source, parentID, "parent")
+func (s UpdateService) prepareRelations(source RepositorySource, opts UpdateOptions, current Task) (UpdateOptions, error) {
+	// Source removals operate by pair; absent removals must not erase other edges.
+	opts.RemoveBlockingIDs = existingBlockingDependencyIDs(current, opts.RemoveBlockingIDs)
+	opts.AddBlockingIDs = slices.DeleteFunc(opts.AddBlockingIDs, func(id string) bool { return slices.Contains(current.Relations.DependencyIDs, id) })
+	var err error
+	opts.CrossRepositoryBlockingIDs, err = crossRepositoryIDs(s.Sources, source, opts.AddBlockingIDs)
 	if err != nil {
-		return err
+		return UpdateOptions{}, err
 	}
-	if parent.IssueType != IssueTypeEpic {
-		return fmt.Errorf("parent %q in repository %s must be an epic", parentID, source.Repository.ID)
-	}
-	if parent.Status == StatusClosed {
-		return fmt.Errorf("parent epic %q in repository %s is closed", parentID, source.Repository.ID)
-	}
-	createsCycle, err := s.wouldCreateParentCycle(ctx, backend, source, current.ID, parentID)
-	if err != nil {
-		return err
-	}
-	if createsCycle {
-		return fmt.Errorf("setting parent %q would create a parent-child cycle", parentID)
-	}
-	return nil
-}
-
-// wouldCreateParentCycle reports whether setting parentID as taskID's parent
-// would make taskID an ancestor of itself. Every reference read is surfaced so
-// callers do not mutate after incomplete graph validation.
-func (s UpdateService) wouldCreateParentCycle(
-	ctx context.Context,
-	backend UpdateBackend,
-	source RepositorySource,
-	taskID string,
-	parentID string,
-) (bool, error) {
-	visited := make(map[string]struct{})
-	for currentID := parentID; currentID != ""; {
-		if currentID == taskID {
-			return true, nil
-		}
-		if _, seen := visited[currentID]; seen {
-			return true, nil
-		}
-		visited[currentID] = struct{}{}
-
-		item, err := getUpdateReference(ctx, backend, source, currentID, "parent")
+	if opts.ParentID != nil && *opts.ParentID != "" {
+		ids, err := crossRepositoryIDs(s.Sources, source, []string{*opts.ParentID})
 		if err != nil {
-			return false, err
+			return UpdateOptions{}, err
 		}
-		currentID = strings.TrimSpace(item.Relations.ParentID)
+		opts.CrossRepositoryParent = len(ids) > 0
 	}
-	return false, nil
+	return opts, nil
 }
 
-func (s UpdateService) validateAddBlockingDependencies(
-	ctx context.Context,
-	opts UpdateOptions,
-	current Task,
-) error {
-	for _, dependencyID := range opts.AddBlockingIDs {
-		if slices.Contains(current.Relations.DependencyIDs, dependencyID) {
+func (s UpdateService) validateRelations(ctx context.Context, opts UpdateOptions, current Task) error {
+	reader := s.relationshipReader()
+	if opts.ParentID != nil && *opts.ParentID != "" {
+		if err := validateParentChange(ctx, reader, current.ID, *opts.ParentID); err != nil {
+			return err
+		}
+
+	}
+	changed := opts.ParentID != nil && *opts.ParentID != "" && *opts.ParentID != current.Relations.ParentID
+	for _, id := range opts.AddBlockingIDs {
+		if slices.Contains(current.Relations.DependencyIDs, id) {
 			continue
 		}
-		dependency, err := s.dependencyReader().Get(ctx, dependencyID)
-		if err != nil {
-			return err
-		}
-		if dependency.IssueType != IssueTypeTask && dependency.IssueType != IssueTypeEpic {
-			return fmt.Errorf("blocking dependency %q must be a task or epic", dependencyID)
-		}
-		if dependencyID == current.ID {
+		if id == current.ID {
 			return fmt.Errorf("task %q cannot depend on itself", current.ID)
 		}
-
-		// Check for cycle: would adding this dependency create a cycle?
-		// We need to check if there's a path from dependencyID to current.ID
-		createsCycle, err := s.wouldCreateCycle(ctx, current.ID, dependencyID)
+		dependency, err := reader.Get(ctx, id)
 		if err != nil {
 			return err
 		}
-		if createsCycle {
-			return fmt.Errorf("adding blocking dependency %q would create a dependency cycle", dependencyID)
+		if !IsTaskSourceItem(dependency) {
+			return fmt.Errorf("blocking dependency %q must be a task or epic", id)
 		}
+		changed = true
 	}
-	return nil
+	if !changed {
+		return nil
+	}
+	proposed := current.Clone()
+	if opts.ParentID != nil {
+		proposed.Relations.ParentID = *opts.ParentID
+	}
+	proposed.Relations.DependencyIDs = normalizeIDs(append(proposed.Relations.DependencyIDs, opts.AddBlockingIDs...))
+	proposed.Relations.DependencyIDs = slices.DeleteFunc(proposed.Relations.DependencyIDs, func(id string) bool { return slices.Contains(opts.RemoveBlockingIDs, id) })
+	return validateWaitGraph(ctx, reader, proposed)
 }
 
-// wouldCreateCycle checks if adding a dependency from taskID to dependencyID would create a cycle.
-// It does this by checking if there's already a path from dependencyID to taskID.
-func (s UpdateService) wouldCreateCycle(
-	ctx context.Context,
-	taskID string,
-	dependencyID string,
-) (bool, error) {
-	// Use DFS to check if there's a path from dependencyID to taskID.
-	visited := make(map[string]bool)
-	var dfs func(string) (bool, error)
-	dfs = func(currentID string) (bool, error) {
-		if currentID == taskID {
-			return true, nil
-		}
-		if visited[currentID] {
-			return false, nil
-		}
-		visited[currentID] = true
-
-		item, err := s.dependencyReader().Get(ctx, currentID)
-		if err != nil {
-			return false, err
-		}
-
-		for _, dep := range item.Relations.DependencyIDs {
-			createsCycle, err := dfs(dep)
-			if err != nil {
-				return false, err
-			}
-			if createsCycle {
-				return true, nil
-			}
-		}
-		return false, nil
-	}
-
-	return dfs(dependencyID)
-}
-
-func (s UpdateService) dependencyReader() DependencyReader {
-	return DependencyReader{Sources: s.Sources, Factory: func(source RepositorySource) (Getter, error) { return s.BackendFactory(source) }}
+func (s UpdateService) relationshipReader() RelationshipReader {
+	return RelationshipReader{Sources: s.Sources, Factory: func(source RepositorySource) (Getter, error) { return s.BackendFactory(source) }}
 }
 
 func existingBlockingDependencyIDs(current Task, requested []string) []string {
@@ -715,23 +615,6 @@ func existingBlockingDependencyIDs(current Task, requested []string) []string {
 		}
 	}
 	return filtered
-}
-
-func (s UpdateService) validateReferenceRepository(source RepositorySource, id string, relation string) error {
-	var owner RepositorySource
-	longestPrefix := 0
-	for _, candidate := range s.Sources {
-		prefix := strings.TrimSpace(candidate.Repository.TaskIDPrefix)
-		if prefix == "" || !strings.HasPrefix(id, prefix+"-") || len(prefix) <= longestPrefix {
-			continue
-		}
-		owner = candidate
-		longestPrefix = len(prefix)
-	}
-	if owner.Repository.ID != "" && owner.Repository.ID != source.Repository.ID {
-		return fmt.Errorf("%s %q belongs to repository %s, not selected repository %s", relation, id, owner.Repository.ID, source.Repository.ID)
-	}
-	return nil
 }
 
 func validateRequiredUpdateContent(opts UpdateOptions, current Task) error {
@@ -813,7 +696,9 @@ type CreateOptions struct {
 	ExternalRef        string
 	IssueType          IssueType
 	ParentID           string
-	BlockingIDs        []string
+	// CrossRepositoryParent stores ParentID as source metadata instead of a native edge.
+	CrossRepositoryParent bool
+	BlockingIDs           []string
 	// CrossRepositoryBlockingIDs is the subset stored as source metadata.
 	CrossRepositoryBlockingIDs []string
 }
@@ -904,16 +789,19 @@ type RelationshipContextFailure struct {
 type RepositorySnapshot struct {
 	Repository Repository
 	Tasks      []Task
-	// DependencyTasks contains resolved cross-repository prerequisites, never output rows.
-	DependencyTasks             []Task
+	// RelationshipTasks contains resolved cross-repository relationships, never output rows.
+	RelationshipTasks           []Task
 	RelationshipContextFailures []RelationshipContextFailure
+	// IncompleteEpicIDs identifies epics whose direct-child inventory is unavailable.
+	IncompleteEpicIDs []string
 }
 
 // Clone returns a copy of the repository snapshot and mutable task fields.
 func (s RepositorySnapshot) Clone() RepositorySnapshot {
 	s.Tasks = cloneTasks(s.Tasks)
-	s.DependencyTasks = cloneTasks(s.DependencyTasks)
+	s.RelationshipTasks = cloneTasks(s.RelationshipTasks)
 	s.RelationshipContextFailures = cloneRelationshipContextFailures(s.RelationshipContextFailures)
+	s.IncompleteEpicIDs = cloneStrings(s.IncompleteEpicIDs)
 	return s
 }
 

@@ -96,8 +96,20 @@ Prerequisites can be tasks or epics in any registered repository. Add them with
 `--blocked-by` on creation or `task edit <id> --add-block <id>`. They remain
 unsatisfied until closed; filters such as `task list --repo` do not hide their
 effect on readiness. Missing, ambiguous, or unreadable references require
-attention and prevent initial task dispatch and epic activation. Cross-repository
-cycles are rejected before editing. Parents remain in the same repository.
+attention and prevent initial task dispatch and epic activation. Parent and
+dependency cycles, including circular waits between epic activation and child
+completion, are rejected before editing.
+
+Parents may be open or in-progress epics in any registered repository. Creation
+with `--parent` and edits with `--parent <epic-id>` preserve the child's repository
+ownership; `task edit <id> --parent ''` detaches it, even when its old parent is
+unavailable. An open task or nested epic waits for its immediate parent to enter
+progress, not for every ancestor to do so.
+
+Epic progress and closure include every direct child across registered sources,
+including closed children and children excluded by repository or content filters.
+Unavailable child inventories are reported as incomplete and prevent closure.
+Epic views query registered sources for membership even when output is filtered.
 
 Use `task edit <id> --remove-block <id>` to repair an unavailable prerequisite,
 even after its repository is unregistered. Repeated additions and removals are

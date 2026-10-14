@@ -35,9 +35,11 @@ empty values and relationship normalization.
 | `dependencies` | Prerequisite IDs. These tasks block this task while incomplete. |
 | `dependents` | IDs of tasks that depend on this task. This task blocks them while incomplete. |
 
-Dependencies may reference other registered repositories. Dependents are native
-source-local incoming edges; no cross-repository reverse index is maintained.
-Parent-child edges are not blocking edges. Relationship arrays contain sorted,
+Parents, children, and dependencies may reference other registered repositories.
+Children include cross-repository members discovered from their owning sources.
+Dependents are native source-local incoming edges; no cross-repository reverse index is maintained.
+Parent-child edges are not dependency edges; open children require their immediate
+parent epic to be in progress. Relationship arrays contain sorted,
 deduplicated IDs; `[]` means none. Completed and unresolved references retain
 their IDs. Values contain IDs only, with no per-relationship repository IDs,
 `complete`, or `issues` fields.
@@ -50,5 +52,8 @@ and no JSON. Confirmed missing references, blocked dependencies, and other
 needs-attention projections are valid results, not read failures.
 
 List and status retain valid JSON arrays on partial repository failures and exit
-nonzero with stderr diagnostics. Only status may include `kind: "repo_failure"`
+nonzero with stderr diagnostics. Epic progress includes `incomplete: true` when
+child context is unavailable; its counts may be partial and must not imply closure
+eligibility.
+Only status may include `kind: "repo_failure"`
 entries; task-list arrays contain summaries only.

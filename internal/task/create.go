@@ -114,12 +114,19 @@ func (s CreateService) Create(ctx context.Context, source RepositorySource, requ
 	if err != nil {
 		return Task{}, creationFailure{message: fmt.Sprintf("cannot prepare task creation in repository %s", source.Repository.ID), cause: err}
 	}
-	if err := s.validateRelations(ctx, source, backend, opts); err != nil {
+	if err := s.validateRelations(ctx, opts); err != nil {
 		return Task{}, err
 	}
 	opts.CrossRepositoryBlockingIDs, err = crossRepositoryIDs(s.Sources, source, opts.BlockingIDs)
 	if err != nil {
 		return Task{}, err
+	}
+	if opts.ParentID != "" {
+		ids, err := crossRepositoryIDs(s.Sources, source, []string{opts.ParentID})
+		if err != nil {
+			return Task{}, err
+		}
+		opts.CrossRepositoryParent = len(ids) > 0
 	}
 	created, err := backend.Create(ctx, opts)
 	if err != nil {
@@ -144,6 +151,7 @@ func NormalizeCreateOptions(opts CreateOptions) (CreateOptions, error) {
 		ExternalRef:                strings.TrimSpace(opts.ExternalRef),
 		IssueType:                  opts.IssueType,
 		ParentID:                   strings.TrimSpace(opts.ParentID),
+		CrossRepositoryParent:      opts.CrossRepositoryParent,
 		BlockingIDs:                normalizeIDs(opts.BlockingIDs),
 		CrossRepositoryBlockingIDs: normalizeIDs(opts.CrossRepositoryBlockingIDs),
 	}
@@ -175,50 +183,32 @@ func validateRequiredExternalRef(template string, issueType IssueType, externalR
 	return errors.New("publication title template requires a task external reference; provide --external-ref <reference>")
 }
 
-func (s CreateService) validateRelations(ctx context.Context, source RepositorySource, backend CreateBackend, opts CreateOptions) error {
+func (s CreateService) validateRelations(ctx context.Context, opts CreateOptions) error {
+	reader := RelationshipReader{Sources: s.Sources, Factory: func(source RepositorySource) (Getter, error) { return s.BackendFactory(source) }}
 	if opts.ParentID != "" {
-		if err := s.validateReferenceRepository(source, opts.ParentID, "parent"); err != nil {
-			return err
-		}
-		parent, err := getCreationReference(ctx, backend, source, opts.ParentID, "parent")
+		parent, err := reader.Get(ctx, opts.ParentID)
 		if err != nil {
 			return err
 		}
-		if parent.IssueType != IssueTypeEpic {
-			return fmt.Errorf("parent %q in repository %s must be an epic", opts.ParentID, source.Repository.ID)
-		}
-		if parent.Status == StatusClosed {
-			return fmt.Errorf("parent epic %q in repository %s is closed", opts.ParentID, source.Repository.ID)
+		if err := validateEligibleParent(parent, opts.ParentID); err != nil {
+			return err
 		}
 	}
-	reader := DependencyReader{Sources: s.Sources, Factory: func(source RepositorySource) (Getter, error) { return s.BackendFactory(source) }}
-	for _, dependencyID := range opts.BlockingIDs {
-		dependency, err := reader.Get(ctx, dependencyID)
+	for _, id := range opts.BlockingIDs {
+		dependency, err := reader.Get(ctx, id)
 		if err != nil {
 			return err
 		}
-		if dependency.IssueType != IssueTypeTask && dependency.IssueType != IssueTypeEpic {
-			return fmt.Errorf("blocking dependency %q must be a task or epic", dependencyID)
+		if !IsTaskSourceItem(dependency) {
+			return fmt.Errorf("blocking dependency %q must be a task or epic", id)
 		}
 	}
-	return nil
-}
-
-func (s CreateService) validateReferenceRepository(source RepositorySource, id string, relation string) error {
-	var owner RepositorySource
-	longestPrefix := 0
-	for _, candidate := range s.Sources {
-		prefix := strings.TrimSpace(candidate.Repository.TaskIDPrefix)
-		if prefix == "" || !strings.HasPrefix(id, prefix+"-") || len(prefix) <= longestPrefix {
-			continue
-		}
-		owner = candidate
-		longestPrefix = len(prefix)
+	if opts.ParentID == "" && len(opts.BlockingIDs) == 0 {
+		return nil
 	}
-	if owner.Repository.ID != "" && owner.Repository.ID != source.Repository.ID {
-		return fmt.Errorf("%s %q belongs to repository %s, not selected repository %s", relation, id, owner.Repository.ID, source.Repository.ID)
-	}
-	return nil
+	// This temporary identity exists only in validation, never in a task source.
+	proposed := Task{ID: "\x00new", IssueType: opts.IssueType, Relations: RelationSummary{ParentID: opts.ParentID, DependencyIDs: opts.BlockingIDs}}
+	return validateWaitGraph(ctx, reader, proposed)
 }
 
 func resolveCreationSourceToken(sources []RepositorySource, token string, origin string) (RepositorySource, error) {
@@ -238,17 +228,6 @@ func sourceIsConfigured(sources []RepositorySource, source RepositorySource) err
 		}
 	}
 	return fmt.Errorf("create task: repository %q is not configured", source.Repository.ID)
-}
-
-func getCreationReference(ctx context.Context, backend Getter, source RepositorySource, id string, relation string) (Task, error) {
-	item, err := backend.Get(ctx, id)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return Task{}, fmt.Errorf("%s %q was not found in repository %s", relation, id, source.Repository.ID)
-		}
-		return Task{}, creationFailure{message: fmt.Sprintf("cannot inspect %s %q in repository %s", relation, id, source.Repository.ID), cause: err}
-	}
-	return item, nil
 }
 
 type creationFailure struct {
@@ -310,6 +289,7 @@ func NormalizeUpdateOptions(opts UpdateOptions) (UpdateOptions, error) {
 		AcceptanceCriteria:         copyStringPointer(opts.AcceptanceCriteria),
 		ExternalRef:                trimStringPointer(opts.ExternalRef),
 		ParentID:                   trimStringPointer(opts.ParentID),
+		CrossRepositoryParent:      opts.CrossRepositoryParent,
 		AddBlockingIDs:             normalizeIDs(opts.AddBlockingIDs),
 		RemoveBlockingIDs:          normalizeIDs(opts.RemoveBlockingIDs),
 		CrossRepositoryBlockingIDs: normalizeIDs(opts.CrossRepositoryBlockingIDs),
