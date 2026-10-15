@@ -1053,10 +1053,11 @@ func executeTaskRunRoute(command *cobra.Command, opts *rootOptions, execution ta
 			return fmt.Errorf("task run %s: %w", resolved.TaskID, err)
 		}
 		logTaskRunLaunch(command, execution.logger, execution.repo.ID, resolved.TaskID, dispatch.start)
-		if err := launchTaskRunAgent(command, execution.deps, execution.logger, dispatch.service, execution.repo.ID, resolved.TaskID, dispatch.start, dispatch.prompt); err != nil {
+		result := executeTaskRunAgent(command.Context(), command, execution.deps, execution.logger, dispatch.service, execution.repo.ID, resolved.TaskID, dispatch.start, dispatch.prompt)
+		if err := dispatch.service.RecordExecution(execution.repo.ID, resolved.TaskID, dispatch.start.Attempt.Attempt, result); err != nil {
 			return err
 		}
-		return finishTaskRunAndReview(command, opts, dispatch, execution.repo.ID, resolved.TaskID, execution.agentName, execution.pipelineName)
+		return reviewAfterTaskRun(command, opts, dispatch, execution.repo.ID, resolved.TaskID, execution.agentName, execution.pipelineName)
 	case workflow.TaskRunActionTargetedRepair, workflow.TaskRunActionStartReview, workflow.TaskRunActionResumeReview:
 		return runTaskRunReview(command, execution.deps, execution.logger, resolved.TaskID, execution.agentName, execution.pipelineName)
 	case workflow.TaskRunActionRetryFinalization:
@@ -1174,7 +1175,7 @@ func renderTaskRunRoute(output io.Writer, taskID string, route workflow.TaskRunR
 	return err
 }
 
-func finishTaskRunAndReview(
+func reviewAfterTaskRun(
 	command *cobra.Command,
 	opts *rootOptions,
 	dispatch taskRunDispatch,
@@ -1187,10 +1188,6 @@ func finishTaskRunAndReview(
 	if err != nil {
 		return err
 	}
-	if err := finishTaskRun(command, deps, dispatch.service, repoID, taskID, dispatch.start); err != nil {
-		return err
-	}
-
 	logger := opts.log().With(
 		slog.String("component", "cli"),
 		slog.String("operation", "task_run_review"),
@@ -1324,7 +1321,8 @@ func logTaskRunLaunch(
 	)
 }
 
-func launchTaskRunAgent(
+func executeTaskRunAgent(
+	ctx context.Context,
 	command *cobra.Command,
 	deps *invocationDependencies,
 	logger *slog.Logger,
@@ -1333,90 +1331,75 @@ func launchTaskRunAgent(
 	taskID string,
 	start workflow.DispatchStartResult,
 	prompt string,
-) error {
-	if err := renderTaskRunAgentHeader(command.ErrOrStderr(), start.Attempt); err != nil {
-		return recordTaskRunAgentHeaderFailure(service, repoID, taskID, start.Attempt.Attempt, err)
-	}
-	span := logging.Start(command.Context(), logger, "attached agent process",
+) agent.ExecutionResult {
+	span := logging.Start(ctx, logger, "attached agent process",
 		taskRunProcessAttrs(repoID, taskID, start)...,
 	)
-	err := deps.agentLauncher.Run(command.Context(), agentexec.Command{
-		Name:    start.Command.AgentName,
-		Harness: start.Command.Harness,
-		Command: start.Command.Command,
-		Args:    append([]string{}, start.Command.Args...),
-	}, agentexec.LaunchOptions{
-		Dir: start.ExecutionDir,
-		Env: deps.invocationEnvironment(taskRunEnvironment(
-			repoID,
-			start.Task.ID,
-			start.Setup.WorktreePath,
-			start.Setup.Branch,
-			prompt,
-		)),
-		Stdin:  command.InOrStdin(),
-		Stdout: command.OutOrStdout(),
-		Stderr: command.ErrOrStderr(),
-		OnStart: func(pid int) error {
-			return service.RecordChildPID(repoID, taskID, start.Attempt.Attempt, pid)
+	result := agent.Execute(ctx, deps.agentLauncher, agent.ExecutionOptions{
+		Command: agentexec.Command{
+			Name:    start.Command.AgentName,
+			Harness: start.Command.Harness,
+			Command: start.Command.Command,
+			Args:    append([]string{}, start.Command.Args...),
 		},
+		Launch: agentexec.LaunchOptions{
+			Dir: start.ExecutionDir,
+			Env: deps.invocationEnvironment(taskRunEnvironment(
+				repoID,
+				start.Task.ID,
+				start.Setup.WorktreePath,
+				start.Setup.Branch,
+				prompt,
+			)),
+			Stdin:  command.InOrStdin(),
+			Stdout: command.OutOrStdout(),
+			Stderr: command.ErrOrStderr(),
+			OnStart: func(pid int) error {
+				return service.RecordChildPID(repoID, taskID, start.Attempt.Attempt, pid)
+			},
+		},
+		BeforeStart: func() error { return renderTaskRunAgentHeader(command.ErrOrStderr(), start.Attempt) },
+		Usage: agent.UsageCaptureOptions{
+			SessionName: start.Attempt.Execution.SessionName,
+			StartedAt:   start.Attempt.Execution.StartedAt,
+			Env:         deps.usageCaptureEnvironment(),
+			Logger:      logger,
+			RepoID:      repoID,
+			TaskID:      taskID,
+			Attempt:     start.Attempt.Attempt,
+			Launch:      start.Attempt.Execution.Launch,
+		},
+		CaptureUsage: deps.captureUsage,
 	})
-	if err == nil {
-		span.Finish(command.Context(), logging.StatusSuccess,
+	if result.Err == nil {
+		span.Finish(ctx, logging.StatusSuccess,
 			slog.String("lifecycle_outcome", "success"),
 			slog.Int("exit_code", 0),
 		)
-		return nil
+	} else {
+		span.Finish(ctx, taskRunProcessStatus(ctx, result.Err), taskRunProcessOutcomeAttrs(ctx, result.Err)...)
 	}
-
-	span.Finish(command.Context(), taskRunProcessStatus(command.Context(), err), taskRunProcessOutcomeAttrs(command.Context(), err)...)
-	recordErr := service.Fail(workflow.DispatchFailureOptions{
-		RepoID:      repoID,
-		TaskID:      taskID,
-		Attempt:     start.Attempt.Attempt,
-		Cause:       err,
-		StartFailed: agentexec.IsStartError(err),
-	})
-	if recordErr != nil {
-		return fmt.Errorf("task run %s: %w; additionally failed to record run failure: %w", taskID, err, recordErr)
-	}
-	return fmt.Errorf("task run %s: %w", taskID, err)
-}
-
-func recordTaskRunAgentHeaderFailure(
-	service workflow.DispatchService,
-	repoID string,
-	taskID string,
-	attempt int,
-	cause error,
-) error {
-	recordErr := service.Fail(workflow.DispatchFailureOptions{
-		RepoID:      repoID,
-		TaskID:      taskID,
-		Attempt:     attempt,
-		Cause:       cause,
-		StartFailed: true,
-	})
-	if recordErr != nil {
-		return fmt.Errorf("task run %s: render agent run header: %w; additionally failed to record run failure: %w", taskID, cause, recordErr)
-	}
-	return fmt.Errorf("task run %s: render agent run header: %w", taskID, cause)
+	return result
 }
 
 func renderTaskRunAgentHeader(output io.Writer, attempt taskstate.RunAttempt) error {
+	var err error
 	if attempt.ReviewFollowUp == nil {
-		_, err := fmt.Fprintf(output, "== Agent run: implementation (run attempt %d) ==\n", attempt.Attempt)
-		return err
+		_, err = fmt.Fprintf(output, "== Agent run: implementation (run attempt %d) ==\n", attempt.Attempt)
+	} else {
+		_, err = fmt.Fprintf(
+			output,
+			"== Agent run: review follow-up (run attempt %d; review attempt %d; required blocking findings %s; advisory opportunities %s) ==\n",
+			attempt.Attempt,
+			attempt.ReviewFollowUp.ReviewAttempt,
+			workflow.FormatReviewFindingIndexes(attempt.ReviewFollowUp.FindingIndexes),
+			workflow.FormatReviewFindingIndexes(attempt.ReviewFollowUp.AdvisoryFindingIndexes),
+		)
 	}
-	_, err := fmt.Fprintf(
-		output,
-		"== Agent run: review follow-up (run attempt %d; review attempt %d; required blocking findings %s; advisory opportunities %s) ==\n",
-		attempt.Attempt,
-		attempt.ReviewFollowUp.ReviewAttempt,
-		workflow.FormatReviewFindingIndexes(attempt.ReviewFollowUp.FindingIndexes),
-		workflow.FormatReviewFindingIndexes(attempt.ReviewFollowUp.AdvisoryFindingIndexes),
-	)
-	return err
+	if err != nil {
+		return fmt.Errorf("render agent run header: %w", err)
+	}
+	return nil
 }
 
 func taskRunProcessAttrs(repoID string, taskID string, start workflow.DispatchStartResult) []slog.Attr {
@@ -1459,60 +1442,6 @@ func taskRunProcessOutcomeAttrs(ctx context.Context, err error) []slog.Attr {
 
 func taskRunProcessCanceled(ctx context.Context, err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil
-}
-
-func recordTaskRunUsage(
-	command *cobra.Command,
-	deps *invocationDependencies,
-	service workflow.DispatchService,
-	repoID string,
-	taskID string,
-	start workflow.DispatchStartResult,
-) error {
-	usageOpts := taskRunUsageOptions(command, deps, repoID, taskID, start, service.Logger)
-	_, err := service.RunStore.RecordRunUsage(repoID, taskID, start.Attempt.Attempt, usageOpts)
-	return err
-}
-
-func finishTaskRun(
-	command *cobra.Command,
-	deps *invocationDependencies,
-	service workflow.DispatchService,
-	repoID string,
-	taskID string,
-	start workflow.DispatchStartResult,
-) error {
-	usageErr := recordTaskRunUsage(command, deps, service, repoID, taskID, start)
-	if err := service.Finish(repoID, taskID, start.Attempt.Attempt); err != nil {
-		return fmt.Errorf("task run %s: record run finish: %w", taskID, err)
-	}
-	if usageErr != nil {
-		return fmt.Errorf("task run %s: record run usage: %w", taskID, usageErr)
-	}
-	return nil
-}
-
-func taskRunUsageOptions(
-	command *cobra.Command,
-	deps *invocationDependencies,
-	repoID string,
-	taskID string,
-	start workflow.DispatchStartResult,
-	logger *slog.Logger,
-) taskstate.RecordRunUsageOptions {
-	return deps.captureUsage(agent.UsageCaptureOptions{
-		Harness:      start.Attempt.Execution.Harness,
-		ExecutionDir: start.ExecutionDir,
-		SessionName:  start.Attempt.Execution.SessionName,
-		StartedAt:    start.Attempt.Execution.StartedAt,
-		Env:          deps.usageCaptureEnvironment(),
-		Logger:       logger,
-		Context:      command.Context(),
-		RepoID:       repoID,
-		TaskID:       taskID,
-		Attempt:      start.Attempt.Attempt,
-		Launch:       start.Attempt.Execution.Launch,
-	})
 }
 
 func renderTaskReviewLifecycleOutcome(
@@ -3495,49 +3424,33 @@ func (r syncConflictAgentResolver) PrepareSyncConflictResolution(
 			Args:        append([]string{}, commandSnapshot.Args...),
 			SessionName: sessionName,
 		},
-		Resolve: func(ctx context.Context) error {
-			return launcher.Run(ctx, commandSnapshot.ExecCommand(), agentexec.LaunchOptions{
-				Dir: opts.Worktree,
-				Env: append(syncConflictAgentEnvironment(
-					opts.Repository.ID,
-					opts.Task.ID,
-					opts.Worktree,
-					opts.Branch,
-					commandSnapshot.Prompt,
-					opts.ConflictFiles,
-				), stateEnvironmentEntries(r.paths)...),
-				Stdin:   strings.NewReader(""),
-				Stdout:  r.stdout,
-				Stderr:  r.stderr,
-				OnStart: opts.RecordChildPID,
+		Execute: func(ctx context.Context, execution taskstate.AgentExecution) agent.ExecutionResult {
+			return agent.Execute(ctx, launcher, agent.ExecutionOptions{
+				Command: commandSnapshot.ExecCommand(),
+				Launch: agentexec.LaunchOptions{
+					Dir: opts.Worktree,
+					Env: append(syncConflictAgentEnvironment(
+						opts.Repository.ID,
+						opts.Task.ID,
+						opts.Worktree,
+						opts.Branch,
+						commandSnapshot.Prompt,
+						opts.ConflictFiles,
+					), stateEnvironmentEntries(r.paths)...),
+					Stdin:   strings.NewReader(""),
+					Stdout:  r.stdout,
+					Stderr:  r.stderr,
+					OnStart: opts.RecordChildPID,
+				},
+				Usage: agent.UsageCaptureOptions{
+					SessionName: execution.SessionName,
+					StartedAt:   execution.StartedAt,
+					Env:         r.usageEnvironment,
+				},
+				CaptureUsage: r.captureUsage,
 			})
 		},
-		CaptureUsage: r.usageOptions(commandSnapshot, opts.Worktree),
 	}, nil
-}
-
-func (r syncConflictAgentResolver) usageOptions(command agent.CommandSnapshot, worktree string) func(taskstate.AgentExecution, error) taskstate.RecordRunUsageOptions {
-	capture := r.captureUsage
-	if capture == nil {
-		capture = agent.CaptureUsage
-	}
-	return func(execution taskstate.AgentExecution, runErr error) taskstate.RecordRunUsageOptions {
-		if agentexec.IsStartError(runErr) {
-			return taskstate.RecordRunUsageOptions{
-				UsageCapture: taskstate.AgentUsageCapture{
-					Status: taskstate.UsageCaptureUnknown,
-					Reason: "agent process failed before usage capture",
-				},
-			}
-		}
-		return capture(agent.UsageCaptureOptions{
-			Harness:      command.Harness,
-			ExecutionDir: worktree,
-			SessionName:  execution.SessionName,
-			StartedAt:    execution.StartedAt,
-			Env:          r.usageEnvironment,
-		})
-	}
 }
 
 func syncConflictAgentSessionName(taskID string) string {

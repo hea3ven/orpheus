@@ -1,12 +1,15 @@
 package agent_test
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/hea3ven/orpheus/internal/agent"
+	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
@@ -304,7 +307,7 @@ func TestCaptureUsageReportsUnknownWhenResumedBaselineIsUnavailable(t *testing.T
 	}
 }
 
-func TestCaptureUsageReportsOnlyIncrementalResumedPiUsageAndCost(t *testing.T) {
+func TestExecuteFailedResumedPiAccountsOnlyIncrementalUsageAndCost(t *testing.T) {
 	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 	require.NoError(t, os.MkdirAll(workdir, 0o755))
 	session := writeResumeTestSession(t, "pi", workdir, "pi-session")
@@ -320,7 +323,17 @@ func TestCaptureUsageReportsOnlyIncrementalResumedPiUsageAndCost(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, file.Close())
 
-	got := agent.CaptureUsage(agent.UsageCaptureOptions{Harness: "pi", ExecutionDir: workdir, Launch: launch})
+	runErr := errors.New("repair failed")
+	result := agent.Execute(context.Background(), executionLauncherFunc(func(_ context.Context, _ agentexec.Command, opts agentexec.LaunchOptions) error {
+		require.NoError(t, opts.OnStart(4321))
+		return runErr
+	}), agent.ExecutionOptions{
+		Command: agentexec.Command{Harness: "pi"},
+		Launch:  agentexec.LaunchOptions{Dir: workdir},
+		Usage:   agent.UsageCaptureOptions{Launch: launch},
+	})
+	require.ErrorIs(t, result.Err, runErr)
+	got := result.Usage
 	require.NotNil(t, got.Usage)
 	assert.Equal(t, taskstate.AgentUsage{InputTokens: 11, CachedInputTokens: 3, OutputTokens: 7, ReasoningOutputTokens: 2, TotalTokens: 18}, *got.Usage)
 	require.NotNil(t, got.UsageCost)
@@ -328,7 +341,7 @@ func TestCaptureUsageReportsOnlyIncrementalResumedPiUsageAndCost(t *testing.T) {
 	assert.Equal(t, taskstate.UsageCaptureCaptured, got.UsageCapture.Status)
 }
 
-func TestCaptureUsageReportsOnlyIncrementalResumedCodexUsage(t *testing.T) {
+func TestExecuteCanceledResumedCodexAccountsOnlyIncrementalUsage(t *testing.T) {
 	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 	require.NoError(t, os.MkdirAll(workdir, 0o755))
 	session := writeResumeTestSession(t, "codex", workdir, "codex-session")
@@ -345,7 +358,19 @@ func TestCaptureUsageReportsOnlyIncrementalResumedCodexUsage(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, file.Close())
 
-	got := agent.CaptureUsage(agent.UsageCaptureOptions{Harness: "codex", ExecutionDir: workdir, Env: env, Launch: launch})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := agent.Execute(ctx, executionLauncherFunc(func(_ context.Context, _ agentexec.Command, opts agentexec.LaunchOptions) error {
+		require.NoError(t, opts.OnStart(4321))
+		cancel()
+		return context.Canceled
+	}), agent.ExecutionOptions{
+		Command: agentexec.Command{Harness: "codex"},
+		Launch:  agentexec.LaunchOptions{Dir: workdir},
+		Usage:   agent.UsageCaptureOptions{Env: env, Launch: launch},
+	})
+	require.ErrorIs(t, result.Err, context.Canceled)
+	got := result.Usage
 	require.NotNil(t, got.Usage)
 	assert.Equal(t, taskstate.AgentUsage{InputTokens: 17, CachedInputTokens: 5, OutputTokens: 13, ReasoningOutputTokens: 2, TotalTokens: 30}, *got.Usage)
 	require.NotNil(t, got.UsageCost)

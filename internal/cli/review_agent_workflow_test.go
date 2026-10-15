@@ -3,11 +3,14 @@
 package cli_test
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/agent"
+	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,7 +48,7 @@ func TestIntegrationWorkflowTaskReviewAgentReviewStepLaunchesReviewerAndPassesWi
 	is.GreaterOrEqual(latest.Steps[0].Execution.DurationMillis, int64(0))
 	is.Equal(4242, latest.Steps[0].Execution.ChildPID)
 	is.Equal(taskstate.UsageCaptureUnknown, latest.Steps[0].Execution.UsageCapture.Status)
-	is.Equal("usage capture is not supported for harness -", latest.Steps[0].Execution.UsageCapture.Reason)
+	is.Equal("not supplied by scenario", latest.Steps[0].Execution.UsageCapture.Reason)
 	must.Len(latest.Steps[0].Execution.Args, 1)
 	is.Contains(latest.Steps[0].Execution.Args[0], "Reviewing op-main Ready for task done - ")
 	is.Contains(latest.Steps[0].Execution.Args[0], "You are an agent dispatched by Orpheus.")
@@ -245,27 +248,52 @@ func TestIntegrationWorkflowTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollo
 	is.Equal([]int{1}, state.Runs[1].ReviewFollowUp.FindingIndexes)
 }
 
-func TestIntegrationWorkflowTaskReviewAgentReviewNonZeroExitMarksOperationalFailure(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newReviewWorkflowFixture(t, "op-main", "Review agent failure", "Fail operationally.")
-	paths := fixture.paths
-	fixture.reviewers(semanticAgentOutcome{err: errors.New("exit status 7")})
-	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "agent_review", "name": "ai-review"}}})
-	_, _, err := fixture.runError("", "task", "run", "op-main")
+func TestIntegrationWorkflowTaskReviewAgentOperationalFailureCapturesOnlyStartedUsage(t *testing.T) {
+	runtimeErr := errors.New("exit status 7")
+	for _, tt := range []struct {
+		name    string
+		outcome semanticAgentOutcome
+		cause   error
+		started bool
+	}{
+		{name: "runtime failure", outcome: semanticAgentOutcome{err: runtimeErr}, cause: runtimeErr, started: true},
+		{name: "canceled", outcome: semanticAgentOutcome{err: context.Canceled}, cause: context.Canceled, started: true},
+		{name: "start failure", outcome: semanticAgentOutcome{startFailure: &agentexec.StartError{Err: context.Canceled}}, cause: context.Canceled},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newReviewWorkflowFixture(t, "op-review-usage", "Candidate", "Review this work.")
+			fixture.reviewers(tt.outcome)
+			fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "agent_review", "name": "review"}}})
+			captures := 0
+			fixture.options.Dependencies.CaptureUsage = func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions {
+				captures++
+				return aCapturedPiUsage()
+			}
 
-	must.Error(err)
-	is.ErrorContains(err, "run agent_review step \"ai-review\"")
+			_, _, err := fixture.runError("", "task", "run", "op-review-usage")
 
-	var state taskstate.TaskState
-	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
-	latest, ok := taskstate.LatestReview(state)
-	must.True(ok)
-	is.Equal(taskstate.ReviewStatusFailed, latest.Status)
-	must.Len(latest.Steps, 1)
-	is.Equal("agent_review", latest.Steps[0].Kind)
-	is.Empty(latest.Findings)
-	is.Empty(taskstate.FinalizationFacts(state).Commit)
+			require.ErrorIs(t, err, tt.cause)
+			assert.ErrorContains(t, err, "run agent_review step \"review\"")
+			loaded, task := fixture.loadFinalTask("op-review-usage")
+			require.Len(t, loaded.Reviews, 1)
+			assert.Equal(t, taskstate.ReviewStatusFailed, loaded.Reviews[0].Status)
+			require.Len(t, loaded.Reviews[0].Steps, 1)
+			assert.Empty(t, loaded.Reviews[0].Findings)
+			assert.Equal(t, "agent_review", loaded.Reviews[0].Steps[0].Kind)
+			execution := loaded.Reviews[0].Steps[0].Execution
+			require.NotNil(t, execution)
+			assert.Equal(t, taskstate.RunStatusFailed, execution.Status)
+			if tt.started {
+				assert.Equal(t, 1, captures)
+				assert.Equal(t, aCapturedPiUsage().Usage, execution.Usage)
+			} else {
+				assert.Zero(t, captures)
+				assert.Nil(t, execution.Usage)
+				assert.Equal(t, taskstate.UsageCaptureUnknown, execution.UsageCapture.Status)
+			}
+			assertTaskNotPublished(t, loaded, task)
+		})
+	}
 }
 
 func TestIntegrationWorkflowReviewMutationFailsBeforePublication(t *testing.T) {

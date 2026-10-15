@@ -176,15 +176,6 @@ type resolvedDispatchCommand struct {
 	launch         *taskstate.AgentLaunch
 }
 
-// DispatchFailureOptions describes how a failed dispatch attempt ended.
-type DispatchFailureOptions struct {
-	RepoID      string
-	TaskID      string
-	Attempt     int
-	Cause       error
-	StartFailed bool
-}
-
 // Start prepares the run target, marks the backend task in progress, and records
 // a running attempt while holding the global mutation lock.
 func (s DispatchService) Start(ctx context.Context, opts DispatchStartOptions) (DispatchStartResult, error) {
@@ -264,13 +255,41 @@ func recordChildPIDWithMutationLock(paths state.Paths, operation string, logger 
 	return err
 }
 
-// Finish records a successful attached run while holding the global mutation lock.
-func (s DispatchService) Finish(repoID string, taskID string, attempt int) error {
+// RecordExecution records usage independently of the process outcome, then always
+// attempts terminal bookkeeping. A successful process still requires Agent Completion.
+func (s DispatchService) RecordExecution(repoID string, taskID string, attempt int, result agent.ExecutionResult) error {
 	if err := s.validate(); err != nil {
-		return err
+		return errors.Join(result.Err, err)
 	}
+	var usageErr error
+	if result.Started {
+		if _, err := s.RunStore.RecordRunUsage(repoID, taskID, attempt, result.Usage); err != nil {
+			usageErr = fmt.Errorf("task run %s: record run usage: %w", taskID, err)
+		}
+	}
+	terminalErr := s.finishExecution(repoID, taskID, attempt, result)
+	if result.Err != nil {
+		if terminalErr != nil {
+			terminalErr = fmt.Errorf("additionally failed to record run failure: %w", terminalErr)
+		}
+		return errors.Join(fmt.Errorf("task run %s: %w", taskID, result.Err), usageErr, terminalErr)
+	}
+	if terminalErr != nil {
+		terminalErr = fmt.Errorf("task run %s: record run finish: %w", taskID, terminalErr)
+	}
+	return errors.Join(terminalErr, usageErr)
+}
 
+func (s DispatchService) finishExecution(repoID string, taskID string, attempt int, result agent.ExecutionResult) error {
 	return state.WithGlobalMutationLockLogger(context.Background(), s.Paths, dispatchFinalizationLockOperation, s.Logger, func() error {
+		if result.Err != nil {
+			if !result.Started {
+				_, err := s.RunStore.FailRunStart(repoID, taskID, attempt, result.Err)
+				return err
+			}
+			_, err := s.RunStore.FinishRun(repoID, taskID, attempt, taskstate.RunStatusFailed)
+			return err
+		}
 		latest, ok, err := s.RunStore.LatestRun(repoID, taskID)
 		if err != nil {
 			return err
@@ -278,26 +297,9 @@ func (s DispatchService) Finish(repoID string, taskID string, attempt int) error
 		if ok && latest.Attempt == attempt && latest.Status == taskstate.RunStatusSucceeded && latest.Completion != nil {
 			return nil
 		}
-
 		_, err = s.RunStore.FinishRun(repoID, taskID, attempt, taskstate.RunStatusSucceeded)
 		return err
 	}, dispatchAttemptAttrs(repoID, taskID, attempt)...)
-}
-
-// Fail records a failed attached run while holding the global mutation lock.
-func (s DispatchService) Fail(opts DispatchFailureOptions) error {
-	if err := s.validate(); err != nil {
-		return err
-	}
-
-	return state.WithGlobalMutationLockLogger(context.Background(), s.Paths, dispatchFinalizationLockOperation, s.Logger, func() error {
-		if opts.StartFailed {
-			_, err := s.RunStore.FailRunStart(opts.RepoID, opts.TaskID, opts.Attempt, opts.Cause)
-			return err
-		}
-		_, err := s.RunStore.FinishRun(opts.RepoID, opts.TaskID, opts.Attempt, taskstate.RunStatusFailed)
-		return err
-	}, dispatchAttemptAttrs(opts.RepoID, opts.TaskID, opts.Attempt)...)
 }
 
 func (s DispatchService) validate() error {

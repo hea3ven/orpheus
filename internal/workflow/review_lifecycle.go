@@ -55,25 +55,15 @@ type ReviewLifecycleStore interface {
 // ReviewLifecycleAgentRun describes an attached implementation/fix run that the
 // frontend must execute using its chosen process launcher and streams.
 type ReviewLifecycleAgentRun struct {
-	RepoID       string
-	TaskID       string
-	Start        DispatchStartResult
-	Prompt       string
-	Environment  []string
-	ExecutionDir string
-}
-
-// ReviewLifecycleAgentRunResult describes post-execution facts from an attached
-// implementation/fix agent run. UsageError is separate from the execution error
-// path so successful runs are not recorded as failed when telemetry capture fails.
-type ReviewLifecycleAgentRunResult struct {
-	UsageError error
+	RepoID string
+	TaskID string
+	Start  DispatchStartResult
+	Prompt string
 }
 
 // ReviewLifecycleAgentRunner executes an attached implementation/fix agent.
 type ReviewLifecycleAgentRunner interface {
-	RunReviewLifecycleAgent(ctx context.Context, run ReviewLifecycleAgentRun) (ReviewLifecycleAgentRunResult, error)
-	IsStartError(error) bool
+	RunReviewLifecycleAgent(ctx context.Context, run ReviewLifecycleAgentRun) agent.ExecutionResult
 }
 
 // ReviewPipelinePresentation contains frontend-owned review presentation hooks.
@@ -906,7 +896,9 @@ func (s ReviewLifecycleService) executeReviewAttempt(runCtx context.Context, ctx
 	if err != nil {
 		span.FinishError(runCtx, err)
 		if !errors.Is(err, review.ErrInvalidExecution) {
-			_, _ = ctx.store.FinishReview(ctx.RepoID(), ctx.TaskID(), ctx.Review.Attempt, taskstate.ReviewStatusFailed)
+			if _, recordErr := ctx.store.FinishReview(ctx.RepoID(), ctx.TaskID(), ctx.Review.Attempt, taskstate.ReviewStatusFailed); recordErr != nil {
+				err = errors.Join(err, fmt.Errorf("task run %s: record failed review: %w", ctx.TaskID(), recordErr))
+			}
 		}
 		return "", err
 	}
@@ -1604,8 +1596,11 @@ func (s ReviewLifecycleService) runAutonomousReviewFollowUp(
 	if err != nil {
 		return err
 	}
-	result, runErr := s.executeAutonomousReviewFollowUpAgent(ctx, current, followUp)
-	if err := s.finalizeAutonomousReviewFollowUp(current, followUp, result, runErr); err != nil {
+	result := s.AgentRunner.RunReviewLifecycleAgent(ctx, ReviewLifecycleAgentRun{
+		RepoID: current.RepoID(), TaskID: current.TaskID(),
+		Start: followUp.start, Prompt: followUp.prompt,
+	})
+	if err := followUp.dispatch.RecordExecution(current.RepoID(), current.TaskID(), followUp.start.Attempt.Attempt, result); err != nil {
 		return err
 	}
 	return s.validateAutonomousReviewFollowUpCompletion(current, followUp.start.Attempt.Attempt)
@@ -1658,53 +1653,6 @@ func (s ReviewLifecycleService) dispatchAutonomousReviewFollowUp(
 		)
 	}
 	return autonomousReviewFollowUpRun{dispatch: dispatch, start: start, prompt: promptCapture}, nil
-}
-
-func (s ReviewLifecycleService) executeAutonomousReviewFollowUpAgent(
-	ctx context.Context,
-	current ReviewAttemptContext,
-	followUp autonomousReviewFollowUpRun,
-) (ReviewLifecycleAgentRunResult, error) {
-	return s.AgentRunner.RunReviewLifecycleAgent(ctx, ReviewLifecycleAgentRun{
-		RepoID:       current.RepoID(),
-		TaskID:       current.TaskID(),
-		Start:        followUp.start,
-		Prompt:       followUp.prompt,
-		ExecutionDir: followUp.start.ExecutionDir,
-	})
-}
-
-func (s ReviewLifecycleService) finalizeAutonomousReviewFollowUp(
-	current ReviewAttemptContext,
-	followUp autonomousReviewFollowUpRun,
-	result ReviewLifecycleAgentRunResult,
-	runErr error,
-) error {
-	if runErr != nil {
-		recordErr := followUp.dispatch.Fail(DispatchFailureOptions{
-			RepoID:      current.RepoID(),
-			TaskID:      current.TaskID(),
-			Attempt:     followUp.start.Attempt.Attempt,
-			Cause:       runErr,
-			StartFailed: s.AgentRunner.IsStartError(runErr),
-		})
-		if recordErr != nil {
-			return fmt.Errorf(
-				"task run %s: %w; additionally failed to record run failure: %w",
-				current.TaskID(), runErr, recordErr,
-			)
-		}
-		return fmt.Errorf("task run %s: %w", current.TaskID(), runErr)
-	}
-	if err := followUp.dispatch.Finish(
-		current.RepoID(), current.TaskID(), followUp.start.Attempt.Attempt,
-	); err != nil {
-		return fmt.Errorf("task run %s: record run finish: %w", current.TaskID(), err)
-	}
-	if result.UsageError != nil {
-		return fmt.Errorf("task run %s: record run usage: %w", current.TaskID(), result.UsageError)
-	}
-	return nil
 }
 
 func (s ReviewLifecycleService) validateAutonomousReviewFollowUpCompletion(

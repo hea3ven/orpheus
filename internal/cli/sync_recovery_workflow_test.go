@@ -3,10 +3,12 @@
 package cli_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agent"
+	"github.com/hea3ven/orpheus/internal/agentexec"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
@@ -73,12 +75,19 @@ func TestIntegrationWorkflowTaskSyncAllLeavesConflictFreeBranchUnchanged(t *test
 }
 
 func TestIntegrationWorkflowTaskSyncConflictFailureRollsBackAndRetries(t *testing.T) {
-	for _, failure := range []string{"resolver", "unresolved files", "push"} {
+	for _, failure := range []string{"resolver", "cancellation", "start failure", "unresolved files", "push"} {
 		t.Run(failure, func(t *testing.T) {
 			f := newSyncFixture(t)
 			cause := errors.New("repair unavailable")
-			if failure == "resolver" {
+			if failure == "resolver" || failure == "cancellation" || failure == "start failure" {
+				if failure == "cancellation" {
+					cause = context.Canceled
+				}
 				f.resolvingAgent(cause)
+				if failure == "start failure" {
+					f.agent.outcomes[0].err = nil
+					f.agent.outcomes[0].startFailure = &agentexec.StartError{Err: cause}
+				}
 			} else if failure == "unresolved files" {
 				f.resolvingAgent(nil)
 				f.agent.outcomes[0].mutateCandidate = func() {}
@@ -118,12 +127,16 @@ func TestIntegrationWorkflowTaskSyncConflictFailureRollsBackAndRetries(t *testin
 			} else {
 				assert.Contains(t, state.Events[1].Error, cause.Error())
 			}
-			assert.True(t, captured)
+			assert.Equal(t, failure != "start failure", captured)
 			require.NotNil(t, state.Events[1].Execution)
 			assert.Equal(t, taskstate.RunStatusFailed, state.Events[1].Execution.Status)
 			assert.Nil(t, state.Events[1].Execution.Usage)
 			assert.Equal(t, taskstate.UsageCaptureUnknown, state.Events[1].Execution.UsageCapture.Status)
-			assert.Equal(t, "failed execution has no usage record", state.Events[1].Execution.UsageCapture.Reason)
+			if failure == "start failure" {
+				assert.Equal(t, "agent process failed before usage capture", state.Events[1].Execution.UsageCapture.Reason)
+			} else {
+				assert.Equal(t, "failed execution has no usage record", state.Events[1].Execution.UsageCapture.Reason)
+			}
 			f.publication.pushError = nil
 			f.resolvingAgent(nil)
 

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/hea3ven/orpheus/internal/agent"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/publication"
@@ -155,9 +156,8 @@ type SyncConflictResolver interface {
 
 // PreparedSyncConflictResolution describes a selected conflict-repair agent launch.
 type PreparedSyncConflictResolution struct {
-	Execution    taskstate.AgentExecution
-	Resolve      func(context.Context) error
-	CaptureUsage func(taskstate.AgentExecution, error) taskstate.RecordRunUsageOptions
+	Execution taskstate.AgentExecution
+	Execute   func(context.Context, taskstate.AgentExecution) agent.ExecutionResult
 }
 
 // SyncConflictResolutionOptions describes one conflicted open-PR branch repair.

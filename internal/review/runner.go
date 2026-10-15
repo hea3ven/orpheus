@@ -296,8 +296,8 @@ func runReadOnlyStep(opts PipelineRunOptions, step Step) (stepOutcome, error) {
 	// Verify the candidate after the whole step, including operator interaction.
 	mutationErr := checkCandidate()
 	if mutationErr != nil {
-		finalErr = mutationErr
-		return stepOutcome{}, mutationErr
+		finalErr = errors.Join(stepErr, mutationErr)
+		return stepOutcome{}, finalErr
 	}
 	if stepErr != nil {
 		finalErr = stepErr
@@ -673,14 +673,15 @@ func runAgentReviewStep(opts PipelineRunOptions, step Step, checkCandidate Candi
 		return stepOutcome{}, err
 	}
 	output := newStepOutput(opts, !profile.Interactive)
-	runErr := launchAgentReview(opts, step, profile, command, output)
+	result := launchAgentReview(opts, step, profile, command, execution, output)
+	runErr := result.Err
 	// Reject reviewer mutations before recording success or presenting blockers.
 	if mutationErr := checkCandidate(); mutationErr != nil {
-		runErr = mutationErr
+		runErr = errors.Join(runErr, mutationErr)
 	}
-	if err := finishAgentReviewExecution(opts, step, command, execution, runErr); err != nil {
+	if err := finishAgentReviewExecution(opts, step, result.Usage, runErr); err != nil {
 		output.finishExpanded()
-		return stepOutcome{}, err
+		return stepOutcome{}, errors.Join(runErr, err)
 	}
 	if runErr != nil {
 		output.finishExpanded()
@@ -694,8 +695,9 @@ func launchAgentReview(
 	step Step,
 	profile agent.Profile,
 	command agent.CommandSnapshot,
+	execution taskstate.AgentExecution,
 	output stepOutput,
-) error {
+) agent.ExecutionResult {
 	attrs := append(reviewCommandAttrs(opts, step),
 		slog.String("agent", command.AgentName),
 		slog.String("harness", command.Harness),
@@ -712,9 +714,19 @@ func launchAgentReview(
 		}
 		return opts.RecordChildPID(step.Name, pid)
 	}
-	err := opts.AgentLauncher.Run(opts.Context, command.ExecCommand(), launchOpts)
-	span.Finish(opts.Context, agentReviewCommandStatus(opts.Context, err), agentReviewCommandExitAttrs(err)...)
-	return err
+	result := agent.Execute(opts.Context, opts.AgentLauncher, agent.ExecutionOptions{
+		Command: command.ExecCommand(),
+		Launch:  launchOpts,
+		Usage: agent.UsageCaptureOptions{
+			SessionName: execution.SessionName,
+			StartedAt:   execution.StartedAt,
+			Env:         usageCaptureEnvironment(opts),
+			Launch:      execution.Launch,
+		},
+		CaptureUsage: opts.Effects.CaptureUsage,
+	})
+	span.Finish(opts.Context, agentReviewCommandStatus(opts.Context, result.Err), agentReviewCommandExitAttrs(result.Err)...)
+	return result
 }
 
 func agentReviewCommandStatus(ctx context.Context, err error) string {
@@ -765,8 +777,7 @@ func recordAgentReviewStep(opts PipelineRunOptions, step Step, command agent.Com
 func finishAgentReviewExecution(
 	opts PipelineRunOptions,
 	step Step,
-	command agent.CommandSnapshot,
-	execution taskstate.AgentExecution,
+	usageOpts taskstate.RecordRunUsageOptions,
 	runErr error,
 ) error {
 	status := taskstate.RunStatusSucceeded
@@ -774,7 +785,6 @@ func finishAgentReviewExecution(
 		status = taskstate.RunStatusFailed
 	}
 	finishedAt := time.Now().UTC()
-	usageOpts := agentReviewUsageOptions(command, opts.Workdir, execution, runErr, usageCaptureEnvironment(opts), opts.Effects.CaptureUsage)
 	_, err := opts.Store.FinishReviewStepExecution(
 		opts.RepoID,
 		opts.TaskID,
@@ -796,56 +806,11 @@ func finishAgentReviewExecution(
 	return nil
 }
 
-func agentReviewUsageOptions(
-	command agent.CommandSnapshot,
-	workdir string,
-	execution taskstate.AgentExecution,
-	runErr error,
-	environment map[string]string,
-	capture func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions,
-) taskstate.RecordRunUsageOptions {
-	if agentexec.IsStartError(runErr) {
-		return taskstate.RecordRunUsageOptions{
-			UsageCapture: taskstate.AgentUsageCapture{
-				Status: taskstate.UsageCaptureUnknown,
-				Reason: "agent process failed before usage capture",
-			},
-		}
-	}
-	if command.Harness != "codex" && command.Harness != "pi" {
-		return taskstate.RecordRunUsageOptions{
-			UsageCapture: taskstate.AgentUsageCapture{
-				Status: taskstate.UsageCaptureUnknown,
-				Reason: "usage capture is not supported for harness " +
-					formatUsageHarness(command.Harness),
-			},
-		}
-	}
-	if capture == nil {
-		capture = agent.CaptureUsage
-	}
-	return capture(agent.UsageCaptureOptions{
-		Harness:      command.Harness,
-		ExecutionDir: workdir,
-		SessionName:  execution.SessionName,
-		StartedAt:    execution.StartedAt,
-		Env:          environment,
-	})
-}
-
 func usageCaptureEnvironment(opts PipelineRunOptions) map[string]string {
 	if opts.UsageCaptureEnv != nil {
 		return opts.UsageCaptureEnv
 	}
 	return agent.UsageCaptureEnvironment()
-}
-
-func formatUsageHarness(harness string) string {
-	harness = strings.TrimSpace(harness)
-	if harness == "" {
-		return "-"
-	}
-	return harness
 }
 
 func finishAgentReviewStep(
