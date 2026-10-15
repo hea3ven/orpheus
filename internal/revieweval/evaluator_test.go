@@ -134,7 +134,7 @@ func TestExecuteRunReportsUsageAndCostUnknownWhenSetupFailsBeforeExecution(t *te
 	is.False(result.CompleteSession)
 }
 
-func TestEvaluatorPrimaryChildPIDPreservesConcurrentFinding(t *testing.T) {
+func TestEvaluatorChildPIDPreservesConcurrentFinding(t *testing.T) {
 	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	require.NoError(t, err)
 	store := taskstate.NewStore(paths)
@@ -152,7 +152,7 @@ func TestEvaluatorPrimaryChildPIDPreservesConcurrentFinding(t *testing.T) {
 	go func() {
 		defer wait.Done()
 		<-start
-		errs <- recordEvaluatorPrimaryChildPID(setup, "ai-review", 4242)
+		errs <- recordEvaluatorChildPID(setup, "ai-review", 4242)
 	}()
 	go func() {
 		defer wait.Done()

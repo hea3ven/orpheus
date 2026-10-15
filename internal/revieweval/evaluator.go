@@ -948,8 +948,8 @@ func runPipelineWithDeps(ctx context.Context, opts Options, spec runSpec, scenar
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 		AgentConfig: agentConfig(opts, spec.Harness, scenarioDef.promptAppend),
-		RecordPrimaryChildPID: func(stepName string, pid int) error {
-			return recordEvaluatorPrimaryChildPID(setup, stepName, pid)
+		RecordChildPID: func(stepName string, pid int) error {
+			return recordEvaluatorChildPID(setup, stepName, pid)
 		},
 		AgentLauncher: deps.agentLauncher,
 		PromptAutomatedBlockers: func(review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
@@ -976,8 +976,8 @@ func (deps pipelineDeps) withDefaults() pipelineDeps {
 	return deps
 }
 
-func recordEvaluatorPrimaryChildPID(setup runSetup, stepName string, pid int) error {
-	return workflow.RecordPrimaryReviewChildPID(setup.paths, nil, setup.store, "review-eval", setup.taskID, setup.attempt.Attempt, stepName, pid)
+func recordEvaluatorChildPID(setup runSetup, stepName string, pid int) error {
+	return workflow.RecordReviewChildPID(setup.paths, nil, setup.store, "review-eval", setup.taskID, setup.attempt.Attempt, stepName, pid)
 }
 
 func evaluationSessionName(taskID string, scenarioDef scenario) string {

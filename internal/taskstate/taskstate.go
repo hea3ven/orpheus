@@ -458,36 +458,11 @@ const (
 
 // ReviewStep records one executed review pipeline step.
 type ReviewStep struct {
-	Kind       string            `yaml:"kind"`
-	Name       string            `yaml:"name"`
-	Execution  *AgentExecution   `yaml:"execution,omitempty"`
-	Comparison *ReviewComparison `yaml:"comparison,omitempty"`
-	ExitCode   *int              `yaml:"exit_code,omitempty"`
+	Kind      string          `yaml:"kind"`
+	Name      string          `yaml:"name"`
+	Execution *AgentExecution `yaml:"execution,omitempty"`
+	ExitCode  *int            `yaml:"exit_code,omitempty"`
 }
-
-// ReviewComparison records an opt-in alternate reviewer execution and its raw findings.
-type ReviewComparison struct {
-	AlternateExecution *AgentExecution          `yaml:"alternate_execution,omitempty"`
-	AlternateFindings  []AlternateReviewFinding `yaml:"alternate_findings,omitempty"`
-	Failure            string                   `yaml:"failure,omitempty"`
-	InputInterrupted   bool                     `yaml:"input_interrupted,omitempty"`
-}
-
-// AlternateReviewFinding is an alternate finding retained outside the authoritative flow.
-type AlternateReviewFinding struct {
-	Finding        ReviewFinding                  `yaml:"finding"`
-	Classification AlternateFindingClassification `yaml:"classification,omitempty"`
-	DuplicateOf    int                            `yaml:"duplicate_of,omitempty"`
-}
-
-// AlternateFindingClassification records the operator's comparison decision.
-type AlternateFindingClassification string
-
-const (
-	AlternateFindingAdmitted  AlternateFindingClassification = "admitted"
-	AlternateFindingDuplicate AlternateFindingClassification = "duplicate"
-	AlternateFindingExcluded  AlternateFindingClassification = "excluded"
-)
 
 // ReviewFinding records one review finding.
 type ReviewFinding struct {
@@ -496,7 +471,6 @@ type ReviewFinding struct {
 	Description string      `yaml:"description"`
 
 	Step              string             `yaml:"step,omitempty"`
-	Reviewer          string             `yaml:"reviewer,omitempty"`
 	SuggestedAction   string             `yaml:"suggested_action,omitempty"`
 	DowngradeReason   string             `yaml:"downgrade_reason,omitempty"`
 	AddressedManually string             `yaml:"addressed_manually,omitempty"`
@@ -659,7 +633,7 @@ func (e Event) DisplayName() string {
 	case EventRunInterrupted:
 		return "Run interrupted"
 	case EventReviewInterrupted:
-		return "Primary review interrupted"
+		return "Review interrupted"
 	case EventCompletionRecorded:
 		return "Completion recorded"
 	case EventCompletionRepeated:
@@ -727,9 +701,9 @@ type InterruptRunOptions struct {
 	Trigger string
 }
 
-// InterruptPrimaryReviewExecutionOptions records a safely recovered primary
-// reviewer execution and the recovery source.
-type InterruptPrimaryReviewExecutionOptions struct {
+// InterruptReviewExecutionOptions records a safely recovered reviewer
+// execution and the recovery source.
+type InterruptReviewExecutionOptions struct {
 	Reason  string
 	Trigger string
 }
@@ -825,13 +799,6 @@ type FinishReviewStepExecutionOptions struct {
 	UsageCost    *AgentUsageCost
 	UsageCapture AgentUsageCapture
 	Model        string
-}
-
-// AlternateReviewFindingDecision is one operator classification for an alternate finding.
-type AlternateReviewFindingDecision struct {
-	FindingIndex   int
-	Classification AlternateFindingClassification
-	DuplicateOf    int
 }
 
 // WorktreeCleanupOptions describes a successful deterministic worktree cleanup.
@@ -1621,7 +1588,7 @@ func (s Store) RecordReviewStep(
 }
 
 // RecordReviewStepChildPID records the direct child PID observed immediately after
-// a primary reviewer launches. The launcher stops the child when this fails.
+// a reviewer launches. The launcher stops the child when this fails.
 func (s Store) RecordReviewStepChildPID(repoID, taskID string, attempt int, stepName string, pid int) (ReviewAttempt, error) {
 	stepName = strings.TrimSpace(stepName)
 	if stepName == "" || pid <= 0 {
@@ -1637,7 +1604,7 @@ func (s Store) RecordReviewStepChildPID(repoID, taskID string, attempt int, step
 	}
 	execution := state.Reviews[reviewIndex].Steps[stepIndex].Execution
 	if execution == nil || execution.Purpose != AgentExecutionPurposeReview || execution.Status != RunStatusRunning {
-		return ReviewAttempt{}, fmt.Errorf("record review child PID for task %s/%s: review attempt %d step %q has no running primary reviewer", repoID, taskID, attempt, stepName)
+		return ReviewAttempt{}, fmt.Errorf("record review child PID for task %s/%s: review attempt %d step %q has no running reviewer", repoID, taskID, attempt, stepName)
 	}
 	execution.ChildPID = pid
 	if err := s.save(state); err != nil {
@@ -1646,32 +1613,32 @@ func (s Store) RecordReviewStepChildPID(repoID, taskID string, attempt int, step
 	return state.Reviews[reviewIndex], nil
 }
 
-// InterruptPrimaryReviewExecution atomically records a recovered interrupted
-// primary reviewer and its containing failed review attempt.
-func (s Store) InterruptPrimaryReviewExecution(repoID, taskID string, attempt int, stepName string, opts InterruptPrimaryReviewExecutionOptions) (ReviewAttempt, error) {
+// InterruptReviewExecution atomically records a recovered interrupted
+// reviewer and its containing failed review attempt.
+func (s Store) InterruptReviewExecution(repoID, taskID string, attempt int, stepName string, opts InterruptReviewExecutionOptions) (ReviewAttempt, error) {
 	reason, trigger, stepName := strings.TrimSpace(opts.Reason), strings.TrimSpace(opts.Trigger), strings.TrimSpace(stepName)
 	if reason == "" || trigger == "" || stepName == "" {
-		return ReviewAttempt{}, fmt.Errorf("interrupt primary review execution for task %s/%s: reason, trigger, and step name are required", repoID, taskID)
+		return ReviewAttempt{}, fmt.Errorf("interrupt review execution for task %s/%s: reason, trigger, and step name are required", repoID, taskID)
 	}
 	state, err := s.Load(repoID, taskID)
 	if err != nil {
 		return ReviewAttempt{}, err
 	}
 	if len(state.Reviews) == 0 || state.Reviews[len(state.Reviews)-1].Attempt != attempt {
-		return ReviewAttempt{}, fmt.Errorf("interrupt primary review execution for task %s/%s: review attempt %d is not latest", repoID, taskID, attempt)
+		return ReviewAttempt{}, fmt.Errorf("interrupt review execution for task %s/%s: review attempt %d is not latest", repoID, taskID, attempt)
 	}
 	reviewIndex := len(state.Reviews) - 1
 	review := &state.Reviews[reviewIndex]
 	if review.Status != ReviewStatusRunning {
-		return ReviewAttempt{}, fmt.Errorf("interrupt primary review execution for task %s/%s: review attempt %d is %q, expected %q", repoID, taskID, attempt, review.Status, ReviewStatusRunning)
+		return ReviewAttempt{}, fmt.Errorf("interrupt review execution for task %s/%s: review attempt %d is %q, expected %q", repoID, taskID, attempt, review.Status, ReviewStatusRunning)
 	}
 	stepIndex := latestReviewStepExecutionIndex(*review, stepName)
 	if stepIndex < 0 {
-		return ReviewAttempt{}, fmt.Errorf("interrupt primary review execution for task %s/%s: review attempt %d step %q was not found", repoID, taskID, attempt, stepName)
+		return ReviewAttempt{}, fmt.Errorf("interrupt review execution for task %s/%s: review attempt %d step %q was not found", repoID, taskID, attempt, stepName)
 	}
 	execution := review.Steps[stepIndex].Execution
 	if execution == nil || execution.Purpose != AgentExecutionPurposeReview || execution.Status != RunStatusRunning {
-		return ReviewAttempt{}, fmt.Errorf("interrupt primary review execution for task %s/%s: review attempt %d step %q has no running primary reviewer", repoID, taskID, attempt, stepName)
+		return ReviewAttempt{}, fmt.Errorf("interrupt review execution for task %s/%s: review attempt %d step %q has no running reviewer", repoID, taskID, attempt, stepName)
 	}
 	now := s.nowUTC()
 	execution.Status = RunStatusInterrupted
@@ -1873,218 +1840,6 @@ func (s Store) RecordReviewFinding(
 		return ReviewAttempt{}, err
 	}
 	return state.Reviews[index], nil
-}
-
-// StartReviewStepComparison records the alternate execution before it launches.
-func (s Store) StartReviewStepComparison(repoID, taskID string, attempt int, stepName string, execution AgentExecution) (ReviewAttempt, error) {
-	stepName = strings.TrimSpace(stepName)
-	execution = normalizeAgentExecution(execution)
-	if stepName == "" {
-		return ReviewAttempt{}, fmt.Errorf("start review comparison for task %s/%s: step name is required", repoID, taskID)
-	}
-	if execution.Purpose != AgentExecutionPurposeReview || execution.Status != RunStatusRunning {
-		return ReviewAttempt{}, fmt.Errorf("start review comparison for task %s/%s: alternate execution must be a running review execution", repoID, taskID)
-	}
-	state, err := s.Load(repoID, taskID)
-	if err != nil {
-		return ReviewAttempt{}, err
-	}
-	reviewIndex, stepIndex, err := reviewStepIndex(state, repoID, taskID, attempt, stepName)
-	if err != nil {
-		return ReviewAttempt{}, err
-	}
-	step := &state.Reviews[reviewIndex].Steps[stepIndex]
-	if step.Execution == nil || step.Comparison != nil {
-		return ReviewAttempt{}, fmt.Errorf("start review comparison for task %s/%s: step %q is not eligible", repoID, taskID, stepName)
-	}
-	step.Comparison = &ReviewComparison{AlternateExecution: &execution}
-	if err := s.save(state); err != nil {
-		return ReviewAttempt{}, err
-	}
-	return state.Reviews[reviewIndex], nil
-}
-
-// FinishReviewStepComparison records alternate terminal execution facts and telemetry.
-func (s Store) FinishReviewStepComparison(repoID, taskID string, attempt int, stepName string, opts FinishReviewStepExecutionOptions) (ReviewAttempt, error) {
-	if err := validateFinishReviewStepExecutionInput(repoID, taskID, strings.TrimSpace(stepName), opts.Status); err != nil {
-		return ReviewAttempt{}, err
-	}
-	state, err := s.Load(repoID, taskID)
-	if err != nil {
-		return ReviewAttempt{}, err
-	}
-	reviewIndex, stepIndex, err := reviewStepIndex(state, repoID, taskID, attempt, strings.TrimSpace(stepName))
-	if err != nil {
-		return ReviewAttempt{}, err
-	}
-	comparison := state.Reviews[reviewIndex].Steps[stepIndex].Comparison
-	if comparison == nil || comparison.AlternateExecution == nil {
-		return ReviewAttempt{}, fmt.Errorf("finish review comparison for task %s/%s: step %q has no alternate execution", repoID, taskID, stepName)
-	}
-	finishedAt := opts.FinishedAt
-	if finishedAt.IsZero() {
-		finishedAt = s.nowUTC()
-	}
-	usageOpts := RecordRunUsageOptions{Session: opts.Session, Usage: opts.Usage, UsageCost: opts.UsageCost, UsageCapture: opts.UsageCapture, Model: opts.Model}
-	finishedAt = finishedAt.UTC()
-	execution := applyRunUsageOptions(*comparison.AlternateExecution, usageOpts, finishedAt)
-	execution.Status = opts.Status
-	execution.FinishedAt = &finishedAt
-	execution.DurationMillis = durationMillis(execution.StartedAt, finishedAt)
-	comparison.AlternateExecution = normalizeOptionalAgentExecution(&execution)
-	if err := s.save(state); err != nil {
-		return ReviewAttempt{}, err
-	}
-	return state.Reviews[reviewIndex], nil
-}
-
-// RecordReviewComparisonFailure preserves a non-fatal alternate execution failure.
-func (s Store) RecordReviewComparisonFailure(repoID, taskID string, attempt int, stepName string, failure string) (ReviewAttempt, error) {
-	failure = strings.TrimSpace(failure)
-	if failure == "" {
-		return ReviewAttempt{}, fmt.Errorf("record review comparison failure for task %s/%s: failure is required", repoID, taskID)
-	}
-	state, err := s.Load(repoID, taskID)
-	if err != nil {
-		return ReviewAttempt{}, err
-	}
-	reviewIndex, stepIndex, err := reviewStepIndex(state, repoID, taskID, attempt, strings.TrimSpace(stepName))
-	if err != nil {
-		return ReviewAttempt{}, err
-	}
-	comparison := state.Reviews[reviewIndex].Steps[stepIndex].Comparison
-	if comparison == nil || comparison.AlternateExecution == nil || comparison.AlternateExecution.Status != RunStatusFailed {
-		return ReviewAttempt{}, fmt.Errorf("record review comparison failure for task %s/%s: step %q has no failed alternate execution", repoID, taskID, stepName)
-	}
-	comparison.Failure = failure
-	if err := s.save(state); err != nil {
-		return ReviewAttempt{}, err
-	}
-	return state.Reviews[reviewIndex], nil
-}
-
-// RecordAlternateReviewFinding appends a raw finding to the active alternate execution.
-func (s Store) RecordAlternateReviewFinding(repoID, taskID string, attempt int, stepName string, finding ReviewFinding) (ReviewAttempt, error) {
-	finding.Reviewer = "alternate"
-	finding, err := normalizeReviewFinding(finding)
-	if err != nil {
-		return ReviewAttempt{}, fmt.Errorf("record alternate review finding for task %s/%s: %w", repoID, taskID, err)
-	}
-	state, err := s.Load(repoID, taskID)
-	if err != nil {
-		return ReviewAttempt{}, err
-	}
-	reviewIndex, stepIndex, err := reviewStepIndex(state, repoID, taskID, attempt, strings.TrimSpace(stepName))
-	if err != nil {
-		return ReviewAttempt{}, err
-	}
-	comparison := state.Reviews[reviewIndex].Steps[stepIndex].Comparison
-	if state.Reviews[reviewIndex].Status != ReviewStatusRunning || comparison == nil || comparison.AlternateExecution == nil || comparison.AlternateExecution.Status != RunStatusRunning {
-		return ReviewAttempt{}, fmt.Errorf("record alternate review finding for task %s/%s: step %q has no running alternate execution", repoID, taskID, stepName)
-	}
-	comparison.AlternateFindings = append(comparison.AlternateFindings, AlternateReviewFinding{Finding: finding})
-	if err := s.save(state); err != nil {
-		return ReviewAttempt{}, err
-	}
-	return state.Reviews[reviewIndex], nil
-}
-
-// ClassifyAlternateReviewFindings atomically admits, deduplicates, or excludes all alternate findings.
-func (s Store) ClassifyAlternateReviewFindings(repoID, taskID string, attempt int, stepName string, decisions []AlternateReviewFindingDecision) (ReviewAttempt, error) {
-	state, err := s.Load(repoID, taskID)
-	if err != nil {
-		return ReviewAttempt{}, err
-	}
-	reviewIndex, stepIndex, err := reviewStepIndex(state, repoID, taskID, attempt, strings.TrimSpace(stepName))
-	if err != nil {
-		return ReviewAttempt{}, err
-	}
-	review := &state.Reviews[reviewIndex]
-	comparison := review.Steps[stepIndex].Comparison
-	if review.Status != ReviewStatusRunning || comparison == nil || comparison.AlternateExecution == nil || comparison.AlternateExecution.Status != RunStatusSucceeded || comparison.InputInterrupted {
-		return ReviewAttempt{}, fmt.Errorf("classify alternate review findings for task %s/%s: step %q is not ready", repoID, taskID, stepName)
-	}
-	for _, finding := range comparison.AlternateFindings {
-		if finding.Classification != "" {
-			return ReviewAttempt{}, fmt.Errorf("classify alternate review findings for task %s/%s: step %q is already classified", repoID, taskID, stepName)
-		}
-	}
-	if err := validateAlternateDecisions(*review, stepName, comparison.AlternateFindings, decisions); err != nil {
-		return ReviewAttempt{}, err
-	}
-	for _, decision := range decisions {
-		alternate := &comparison.AlternateFindings[decision.FindingIndex]
-		alternate.Classification = decision.Classification
-		alternate.DuplicateOf = decision.DuplicateOf
-		if decision.Classification == AlternateFindingAdmitted {
-			admitted := alternate.Finding
-			admitted.Reviewer = "alternate"
-			review.Findings = append(review.Findings, admitted)
-		}
-	}
-	if err := s.save(state); err != nil {
-		return ReviewAttempt{}, err
-	}
-	return *review, nil
-}
-
-// MarkReviewComparisonInputInterrupted records an incomplete comparison without implicit classifications.
-func (s Store) MarkReviewComparisonInputInterrupted(repoID, taskID string, attempt int, stepName string) (ReviewAttempt, error) {
-	state, err := s.Load(repoID, taskID)
-	if err != nil {
-		return ReviewAttempt{}, err
-	}
-	reviewIndex, stepIndex, err := reviewStepIndex(state, repoID, taskID, attempt, strings.TrimSpace(stepName))
-	if err != nil {
-		return ReviewAttempt{}, err
-	}
-	comparison := state.Reviews[reviewIndex].Steps[stepIndex].Comparison
-	if comparison == nil {
-		return ReviewAttempt{}, fmt.Errorf("mark review comparison interruption for task %s/%s: step %q has no comparison", repoID, taskID, stepName)
-	}
-	comparison.InputInterrupted = true
-	if err := s.save(state); err != nil {
-		return ReviewAttempt{}, err
-	}
-	return state.Reviews[reviewIndex], nil
-}
-
-func reviewStepIndex(state TaskState, repoID, taskID string, attempt int, stepName string) (int, int, error) {
-	reviewIndex := reviewAttemptIndex(state, attempt)
-	if reviewIndex < 0 {
-		return 0, 0, fmt.Errorf("review step for task %s/%s: review attempt %d was not found", repoID, taskID, attempt)
-	}
-	stepIndex := latestReviewStepExecutionIndex(state.Reviews[reviewIndex], stepName)
-	if stepIndex < 0 {
-		return 0, 0, fmt.Errorf("review step for task %s/%s: review attempt %d step %q was not found", repoID, taskID, attempt, stepName)
-	}
-	return reviewIndex, stepIndex, nil
-}
-
-func validateAlternateDecisions(review ReviewAttempt, stepName string, findings []AlternateReviewFinding, decisions []AlternateReviewFindingDecision) error {
-	if len(decisions) != len(findings) {
-		return fmt.Errorf("expected classifications for %d alternate findings, got %d", len(findings), len(decisions))
-	}
-	seen := make(map[int]bool, len(decisions))
-	for _, decision := range decisions {
-		if decision.FindingIndex < 0 || decision.FindingIndex >= len(findings) || seen[decision.FindingIndex] {
-			return fmt.Errorf("alternate finding classification %d is invalid", decision.FindingIndex+1)
-		}
-		seen[decision.FindingIndex] = true
-		switch decision.Classification {
-		case AlternateFindingAdmitted, AlternateFindingExcluded:
-			if decision.DuplicateOf != 0 {
-				return fmt.Errorf("alternate finding %d cannot specify duplicate_of", decision.FindingIndex+1)
-			}
-		case AlternateFindingDuplicate:
-			if decision.DuplicateOf < 0 || decision.DuplicateOf >= len(review.Findings) || review.Findings[decision.DuplicateOf].Step != stepName || review.Findings[decision.DuplicateOf].Reviewer == "alternate" {
-				return fmt.Errorf("alternate finding %d has invalid primary duplicate target", decision.FindingIndex+1)
-			}
-		default:
-			return fmt.Errorf("alternate finding %d has unsupported classification %q", decision.FindingIndex+1, decision.Classification)
-		}
-	}
-	return nil
 }
 
 // PromoteReviewAdvisoryFinding changes an unresolved advisory finding into a blocking finding.
@@ -2489,7 +2244,7 @@ func EligibleAdvisoryFindingIndexes(review ReviewAttempt) []int {
 	indexes := make([]int, 0)
 	for index, finding := range review.Findings {
 		if finding.Type != FindingTypeAdvisory ||
-			InterruptedPrimaryReviewFinding(review, finding) ||
+			InterruptedReviewFinding(review, finding) ||
 			strings.TrimSpace(finding.Waiver) != "" ||
 			strings.TrimSpace(finding.AddressedManually) != "" {
 			continue
@@ -2508,7 +2263,7 @@ func ReviewHasOpenBlockers(review ReviewAttempt) bool {
 func UntargetedBlockingFindingIndexes(review ReviewAttempt) []int {
 	indexes := make([]int, 0)
 	for index, finding := range review.Findings {
-		if IsOpenBlockingReviewFinding(finding) && !InterruptedPrimaryReviewFinding(review, finding) {
+		if IsOpenBlockingReviewFinding(finding) && !InterruptedReviewFinding(review, finding) {
 			indexes = append(indexes, index)
 		}
 	}
@@ -2526,7 +2281,7 @@ func ReviewHasOpenBlockersInState(state TaskState, review ReviewAttempt) bool {
 func UntargetedBlockingFindingIndexesInState(state TaskState, review ReviewAttempt) []int {
 	indexes := make([]int, 0)
 	for index, finding := range review.Findings {
-		if IsOpenBlockingReviewFindingInState(state, finding) && !InterruptedPrimaryReviewFinding(review, finding) {
+		if IsOpenBlockingReviewFindingInState(state, finding) && !InterruptedReviewFinding(review, finding) {
 			indexes = append(indexes, index)
 		}
 	}
@@ -2625,20 +2380,20 @@ func automatedReviewStepNames(review ReviewAttempt) map[string]bool {
 	return automatedSteps
 }
 
-// InterruptedPrimaryReviewFinding reports whether a finding belongs to a
-// primary reviewer execution recovered as interrupted. Such findings are
+// InterruptedReviewFinding reports whether a finding belongs to a
+// reviewer execution recovered as interrupted. Such findings are
 // retained for audit but never drive blocker routing.
-func InterruptedPrimaryReviewFinding(review ReviewAttempt, finding ReviewFinding) bool {
-	return InterruptedPrimaryReviewStepNames(review)[strings.TrimSpace(finding.Step)]
+func InterruptedReviewFinding(review ReviewAttempt, finding ReviewFinding) bool {
+	return InterruptedReviewStepNames(review)[strings.TrimSpace(finding.Step)]
 }
 
-// PrimaryReviewExecutionInterrupted reports whether primary-reviewer recovery
+// ReviewExecutionInterrupted reports whether reviewer recovery
 // interrupted any execution in this attempt.
-func PrimaryReviewExecutionInterrupted(review ReviewAttempt) bool {
-	return len(InterruptedPrimaryReviewStepNames(review)) > 0
+func ReviewExecutionInterrupted(review ReviewAttempt) bool {
+	return len(InterruptedReviewStepNames(review)) > 0
 }
 
-func InterruptedPrimaryReviewStepNames(review ReviewAttempt) map[string]bool {
+func InterruptedReviewStepNames(review ReviewAttempt) map[string]bool {
 	steps := make(map[string]bool)
 	for _, step := range review.Steps {
 		if step.Kind == ReviewStepKindAgentReview && step.Execution != nil &&
@@ -2649,16 +2404,6 @@ func InterruptedPrimaryReviewStepNames(review ReviewAttempt) map[string]bool {
 		}
 	}
 	return steps
-}
-
-// ReviewComparisonInputInterrupted reports whether an alternate comparison lost operator input.
-func ReviewComparisonInputInterrupted(review ReviewAttempt) bool {
-	for _, step := range review.Steps {
-		if step.Comparison != nil && step.Comparison.InputInterrupted {
-			return true
-		}
-	}
-	return false
 }
 
 func currentReviewStepKind(review ReviewAttempt) string {
@@ -4722,11 +4467,6 @@ func normalizeReviewStep(step ReviewStep) (ReviewStep, error) {
 	step.Kind = strings.TrimSpace(step.Kind)
 	step.Name = strings.TrimSpace(step.Name)
 	step.Execution = normalizeOptionalAgentExecution(step.Execution)
-	comparison, err := normalizeReviewComparison(step.Comparison)
-	if err != nil {
-		return ReviewStep{}, err
-	}
-	step.Comparison = comparison
 	step.ExitCode = cloneIntPointer(step.ExitCode)
 
 	if step.Kind == "" {
@@ -4749,41 +4489,6 @@ func normalizeReviewStep(step ReviewStep) (ReviewStep, error) {
 	return step, nil
 }
 
-func normalizeReviewComparison(comparison *ReviewComparison) (*ReviewComparison, error) {
-	if comparison == nil {
-		return nil, nil
-	}
-	if comparison.AlternateExecution == nil {
-		return nil, errors.New("comparison alternate_execution is required")
-	}
-	execution := normalizeAgentExecution(*comparison.AlternateExecution)
-	if execution.Purpose != AgentExecutionPurposeReview {
-		return nil, errors.New("comparison alternate_execution purpose must be review")
-	}
-	if err := validateAgentExecution(execution); err != nil {
-		return nil, fmt.Errorf("comparison alternate_execution is invalid: %w", err)
-	}
-	findings := make([]AlternateReviewFinding, len(comparison.AlternateFindings))
-	for i, alternate := range comparison.AlternateFindings {
-		finding, err := normalizeReviewFinding(alternate.Finding)
-		if err != nil {
-			return nil, fmt.Errorf("comparison alternate finding %d is invalid: %w", i+1, err)
-		}
-		if finding.Reviewer != "alternate" {
-			return nil, fmt.Errorf("comparison alternate finding %d reviewer must be alternate", i+1)
-		}
-		classification := AlternateFindingClassification(strings.TrimSpace(string(alternate.Classification)))
-		if classification != "" && classification != AlternateFindingAdmitted && classification != AlternateFindingDuplicate && classification != AlternateFindingExcluded {
-			return nil, fmt.Errorf("comparison alternate finding %d has unsupported classification %q", i+1, classification)
-		}
-		if classification != AlternateFindingDuplicate && alternate.DuplicateOf != 0 {
-			return nil, fmt.Errorf("comparison alternate finding %d has duplicate_of without duplicate classification", i+1)
-		}
-		findings[i] = AlternateReviewFinding{Finding: finding, Classification: classification, DuplicateOf: alternate.DuplicateOf}
-	}
-	return &ReviewComparison{AlternateExecution: &execution, AlternateFindings: findings, Failure: strings.TrimSpace(comparison.Failure), InputInterrupted: comparison.InputInterrupted}, nil
-}
-
 func validateCommandArgsForSave(taskState TaskState) error {
 	for _, run := range taskState.Runs {
 		if err := validateCommandArgs(run.Execution.Args); err != nil {
@@ -4795,11 +4500,6 @@ func validateCommandArgsForSave(taskState TaskState) error {
 			if step.Execution != nil {
 				if err := validateCommandArgs(step.Execution.Args); err != nil {
 					return fmt.Errorf("review attempt %d step %q has invalid args: %w", review.Attempt, step.Name, err)
-				}
-			}
-			if step.Comparison != nil && step.Comparison.AlternateExecution != nil {
-				if err := validateCommandArgs(step.Comparison.AlternateExecution.Args); err != nil {
-					return fmt.Errorf("review attempt %d step %q alternate has invalid args: %w", review.Attempt, step.Name, err)
 				}
 			}
 		}
@@ -4821,7 +4521,6 @@ func normalizeReviewFinding(finding ReviewFinding) (ReviewFinding, error) {
 	finding.Title = strings.TrimSpace(finding.Title)
 	finding.Description = strings.TrimSpace(finding.Description)
 	finding.Step = strings.TrimSpace(finding.Step)
-	finding.Reviewer = strings.TrimSpace(finding.Reviewer)
 	finding.SuggestedAction = strings.TrimSpace(finding.SuggestedAction)
 	finding.DowngradeReason = strings.TrimSpace(finding.DowngradeReason)
 	finding.Waiver = strings.TrimSpace(finding.Waiver)

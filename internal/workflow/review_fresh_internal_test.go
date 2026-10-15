@@ -16,13 +16,12 @@ import (
 
 func TestReviewExecutionRestartsFreshAttemptsAndPreservesPausedInteractions(t *testing.T) {
 	for _, tc := range []struct {
-		name                                    string
-		fresh, interruptedComparison, automated bool
+		name             string
+		fresh, automated bool
 	}{
-		{"fresh after manual pause", true, false, false},
-		{"fresh after interrupted comparison", true, true, true},
-		{"resume manual step", false, false, false},
-		{"resume automated decision", false, false, true},
+		{"fresh after manual pause", true, false},
+		{"resume manual step", false, false},
+		{"resume automated decision", false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &freshReviewStore{}
@@ -50,12 +49,8 @@ func TestReviewExecutionRestartsFreshAttemptsAndPreservesPausedInteractions(t *t
 					{Name: "first", Kind: review.KindCheck, Command: "semantic-check"},
 					{Name: "approval", Kind: review.KindManual},
 				}}
-				start := service.startFreshReview
-				if tc.interruptedComparison {
-					start = service.startFreshReviewAfterInterruptedComparison
-				}
 				var err error
-				ctx, err = start(ctx.ReviewContext, pipeline)
+				ctx, err = service.startFreshReview(ctx.ReviewContext, pipeline)
 				require.NoError(t, err)
 			} else {
 				ctx.Pipeline.Steps = append([]review.Step{{Name: "already-completed", Kind: review.KindCheck, Command: "must-not-rerun"}}, ctx.Pipeline.Steps...)

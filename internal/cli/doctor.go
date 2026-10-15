@@ -75,7 +75,7 @@ func runDoctor(command *cobra.Command, opts *rootOptions, fix bool) error {
 func renderDoctorResult(output io.Writer, result doctor.Result) error {
 	sections := []func(io.Writer, doctor.Result) error{
 		renderImplementationRunRecovery,
-		renderPrimaryReviewerRecovery,
+		renderReviewerRecovery,
 		renderSyncConflictRecovery,
 		renderClosedTaskWorktreeCleanup,
 		renderAgentUsageTelemetry,
@@ -99,13 +99,13 @@ func renderImplementationRunRecovery(output io.Writer, result doctor.Result) err
 	)
 }
 
-func renderPrimaryReviewerRecovery(output io.Writer, result doctor.Result) error {
+func renderReviewerRecovery(output io.Writer, result doctor.Result) error {
 	return renderDoctorRowsSection(
 		output,
-		"\nPrimary reviewer recovery",
-		"No running primary reviewer executions found.",
+		"\nReviewer recovery",
+		"No running reviewer executions found.",
 		[]string{"REPO", "TASK", "ATTEMPT", "STEP", "OUTCOME", "REASON"},
-		primaryReviewRows(result.PrimaryReviewRows),
+		reviewRows(result.ReviewRows),
 	)
 }
 
@@ -218,7 +218,7 @@ func worktreeCleanupRows(rows []doctor.WorktreeRow) [][]string {
 	return rendered
 }
 
-func primaryReviewRows(rows []doctor.PrimaryReviewRow) [][]string {
+func reviewRows(rows []doctor.ReviewRow) [][]string {
 	rendered := make([][]string, 0, len(rows))
 	for _, row := range rows {
 		rendered = append(rendered, []string{

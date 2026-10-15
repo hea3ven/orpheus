@@ -4,6 +4,7 @@ package cli_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -25,8 +26,7 @@ func TestIntegrationWorkflowReviewPipelineAttachedReviewerPassesOutputThroughCLI
 		"reviewer": {Command: "review-agent", Interactive: true},
 	})
 	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "agent_review", "name": "ai-review"}}})
-	launcher := &reviewPipelineAgentLauncher{t: t, options: &fixture.options, outcomes: []semanticAgentOutcome{reviewOutcome()}, outputs: []reviewPipelineLaunchOutput{{stdout: "attached stdout\n", stderr: "attached stderr\n"}}, nextPID: 4242}
-	fixture.options.Dependencies.AgentLauncher = launcher
+	fixture.agent.outcomes = []semanticAgentOutcome{{review: true, stdout: "attached stdout\n", stderr: "attached stderr\n"}}
 
 	stdout, stderr := fixture.run("", "task", "run", "op-attached")
 
@@ -34,48 +34,79 @@ func TestIntegrationWorkflowReviewPipelineAttachedReviewerPassesOutputThroughCLI
 	is.Contains(stdout, "Finalized op-attached")
 	is.Contains(stderr, "attached stderr")
 	is.NotContains(stderr, "\x1b[31mattached stderr")
-	must.Len(launcher.launches, 1)
-	is.Empty(launcher.launches[0].environment["ORPHEUS_REVIEWER_ROLE"])
+	must.Len(fixture.agent.launches, 1)
 	latest := loadLatestReview(t, fixture, "op-attached")
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
 }
 
-func TestIntegrationWorkflowReviewPipelineNoninteractiveAdvisoryLeavesLiveTailThroughCLI(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newReviewWorkflowFixture(t, "op-tail", "Review tail", "Keep advisory reviewer output visible.")
-	fixture.forceInteractiveReviewOutput(80)
-	fixture.configureAgentProfiles(agent.AgentDefaults{Implementer: "impl", Reviewer: "reviewer"}, map[string]agent.Profile{
-		"impl":     {Command: "impl"},
-		"reviewer": {Command: "review-agent"},
-	})
-	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "agent_review", "name": "ai-review"}}})
-	var builder strings.Builder
-	for i := 1; i <= 12; i++ {
-		fmt.Fprintf(&builder, "agent stdout %02d\n", i)
-	}
-	launcher := &reviewPipelineAgentLauncher{
-		t:        t,
-		options:  &fixture.options,
-		outcomes: []semanticAgentOutcome{reviewOutcome(taskstate.ReviewFinding{Type: taskstate.FindingTypeAdvisory, Title: "advisory", Description: "Keep this visible."})},
-		outputs:  []reviewPipelineLaunchOutput{{stdout: builder.String()}},
-		nextPID:  4242,
-	}
-	fixture.options.Dependencies.AgentLauncher = launcher
-	var stdout bytes.Buffer
-	stderr := newCLIVisualTerminal(80)
+func TestIntegrationWorkflowReviewPipelineNoninteractiveReviewerFinalizesOutputThroughCLI(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		findingType taskstate.FindingType
+		failure     bool
+	}{
+		{name: "clean pass"},
+		{name: "advisory live tail", findingType: taskstate.FindingTypeAdvisory},
+		{name: "blocker expanded tail", findingType: taskstate.FindingTypeBlocking},
+		{name: "failure expanded tail", failure: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newReviewWorkflowFixture(t, "op-tail", "Review tail", "Finalize reviewer output.")
+			fixture.forceInteractiveReviewOutput(80)
+			var builder strings.Builder
+			for i := 1; i <= 35; i++ {
+				fmt.Fprintf(&builder, "agent stdout %02d\n", i)
+			}
+			outcome := semanticAgentOutcome{stdout: builder.String()}
+			if tc.findingType != "" {
+				outcome.findings = []taskstate.ReviewFinding{{Type: tc.findingType, Title: "Review finding", Description: "Keep this visible.", SuggestedAction: "Address the finding."}}
+			}
+			if tc.failure {
+				outcome.err = errors.New("reviewer failed")
+			}
+			fixture.reviewers(outcome)
+			fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "agent_review", "name": "ai-review"}}})
+			var stdout bytes.Buffer
+			stderr := newCLIVisualTerminal(80)
 
-	err := fixture.runWithWriters("", &stdout, stderr, "task", "run", "op-tail")
+			err := fixture.runWithWriters("p\n", &stdout, stderr, "task", "run", "op-tail")
 
-	must.NoError(err)
-	is.NotContains(stdout.String(), "agent stdout")
-	visible := stderr.Visible()
-	is.Contains(visible, "agent stdout 12")
-	is.Contains(visible, "Recorded advisory review finding 1 for op-tail.")
-	is.NotContains(visible, "agent stdout 04")
-	latest := loadLatestReview(t, fixture, "op-tail")
-	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
-	must.Len(latest.Findings, 1)
+			if tc.failure {
+				require.ErrorIs(t, err, outcome.err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.NotContains(t, stdout.String(), "agent stdout")
+			visible := stderr.Visible()
+			latest := loadLatestReview(t, fixture, "op-tail")
+			switch {
+			case tc.failure:
+				assert.Equal(t, taskstate.ReviewStatusFailed, latest.Status)
+				assert.Contains(t, visible, "agent stdout 06")
+				assert.Contains(t, visible, "agent stdout 35")
+				assert.NotContains(t, visible, "agent stdout 05")
+			case tc.findingType == taskstate.FindingTypeBlocking:
+				assert.Equal(t, taskstate.ReviewStatusWaitingForAutomatedDecision, latest.Status)
+				assert.Contains(t, visible, "agent stdout 07")
+				assert.Contains(t, visible, "agent stdout 35")
+				assert.NotContains(t, visible, "agent stdout 06")
+				assert.Less(t, strings.Index(visible, "agent stdout 35"), strings.Index(visible, "Decision for finding 1"))
+			case tc.findingType == taskstate.FindingTypeAdvisory:
+				assert.Equal(t, taskstate.ReviewStatusPassed, latest.Status)
+				assert.Contains(t, visible, "agent stdout 35")
+				assert.Contains(t, visible, "Recorded advisory review finding 1 for op-tail.")
+				assert.NotContains(t, visible, "agent stdout 27")
+			default:
+				assert.Equal(t, taskstate.ReviewStatusPassed, latest.Status)
+				assert.NotContains(t, visible, "agent stdout")
+			}
+			if tc.failure || tc.findingType == taskstate.FindingTypeBlocking {
+				assert.Empty(t, fixture.candidate.commits)
+			} else {
+				assert.Contains(t, stdout.String(), "Finalized op-tail")
+			}
+		})
+	}
 }
 
 func TestIntegrationWorkflowReviewPipelinePassingCheckClearsRollingTailThroughCLI(t *testing.T) {

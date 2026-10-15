@@ -1014,11 +1014,11 @@ func routeTaskRunRecovery(
 	}
 	switch prepared.ReviewInspection.Condition {
 	case workflow.AttachedExecutionRecoverable, workflow.AttachedExecutionAlreadyRecovered:
-		return workflow.TaskRunRoute{}, true, renderPrimaryReviewRecoveryGuidance(command.ErrOrStderr(), resolved.TaskID, prepared.ReviewInspection.Reason)
+		return workflow.TaskRunRoute{}, true, renderReviewRecoveryGuidance(command.ErrOrStderr(), resolved.TaskID, prepared.ReviewInspection.Reason)
 	case workflow.AttachedExecutionLive:
-		return workflow.TaskRunRoute{}, true, renderPrimaryReviewActiveGuidance(command.OutOrStdout(), resolved.TaskID, prepared.ReviewInspection.Reason)
+		return workflow.TaskRunRoute{}, true, renderReviewActiveGuidance(command.OutOrStdout(), resolved.TaskID, prepared.ReviewInspection.Reason)
 	case workflow.AttachedExecutionUnverifiable:
-		return workflow.TaskRunRoute{}, true, renderPrimaryReviewUnverifiableGuidance(command.ErrOrStderr(), resolved.TaskID, prepared.ReviewInspection.Reason)
+		return workflow.TaskRunRoute{}, true, renderReviewUnverifiableGuidance(command.ErrOrStderr(), resolved.TaskID, prepared.ReviewInspection.Reason)
 	default:
 		return prepared.Route, false, nil
 	}
@@ -1131,18 +1131,18 @@ func validateTaskRunRouteFlags(
 	return nil
 }
 
-func renderPrimaryReviewRecoveryGuidance(output io.Writer, taskID string, reason string) error {
-	_, err := fmt.Fprintf(output, "Task %s: recovered interrupted primary reviewer (%s). The candidate may contain reviewer mutations; inspect the worktree with `cd \"$(orpheus task dir %s)\" && git status --short && git diff`, then inspect audit history with `orpheus task show review %s`, before running a fresh `orpheus task run %s`.\n", taskID, reason, taskID, taskID, taskID)
+func renderReviewRecoveryGuidance(output io.Writer, taskID string, reason string) error {
+	_, err := fmt.Fprintf(output, "Task %s: recovered interrupted reviewer (%s). The candidate may contain reviewer mutations; inspect the worktree with `cd \"$(orpheus task dir %s)\" && git status --short && git diff`, then inspect audit history with `orpheus task show review %s`, before running a fresh `orpheus task run %s`.\n", taskID, reason, taskID, taskID, taskID)
 	return err
 }
 
-func renderPrimaryReviewActiveGuidance(output io.Writer, taskID string, reason string) error {
-	_, err := fmt.Fprintf(output, "Task %s: primary reviewer is still active (%s); wait for it to finish, then inspect `orpheus task show review %s`.\n", taskID, reason, taskID)
+func renderReviewActiveGuidance(output io.Writer, taskID string, reason string) error {
+	_, err := fmt.Fprintf(output, "Task %s: reviewer is still active (%s); wait for it to finish, then inspect `orpheus task show review %s`.\n", taskID, reason, taskID)
 	return err
 }
 
-func renderPrimaryReviewUnverifiableGuidance(output io.Writer, taskID string, reason string) error {
-	_, err := fmt.Fprintf(output, "Task %s: cannot automatically recover the primary reviewer (%s); inspect `orpheus doctor` and `orpheus task show review %s`.\n", taskID, reason, taskID)
+func renderReviewUnverifiableGuidance(output io.Writer, taskID string, reason string) error {
+	_, err := fmt.Fprintf(output, "Task %s: cannot automatically recover the reviewer (%s); inspect `orpheus doctor` and `orpheus task show review %s`.\n", taskID, reason, taskID)
 	return err
 }
 
@@ -1521,12 +1521,12 @@ func renderTaskReviewLifecycleOutcome(
 	outcome workflow.ReviewLifecycleOutcome,
 ) error {
 	switch outcome.Kind {
-	case workflow.ReviewLifecycleOutcomePrimaryRecovered:
-		return renderPrimaryReviewRecoveryGuidance(command.ErrOrStderr(), outcome.Context.TaskID(), outcome.RecoveryInspection.Reason)
-	case workflow.ReviewLifecycleOutcomePrimaryLive:
-		return renderPrimaryReviewActiveGuidance(command.OutOrStdout(), outcome.Context.TaskID(), outcome.RecoveryInspection.Reason)
-	case workflow.ReviewLifecycleOutcomePrimaryUnknown:
-		return renderPrimaryReviewUnverifiableGuidance(command.ErrOrStderr(), outcome.Context.TaskID(), outcome.RecoveryInspection.Reason)
+	case workflow.ReviewLifecycleOutcomeExecutionRecovered:
+		return renderReviewRecoveryGuidance(command.ErrOrStderr(), outcome.Context.TaskID(), outcome.RecoveryInspection.Reason)
+	case workflow.ReviewLifecycleOutcomeExecutionLive:
+		return renderReviewActiveGuidance(command.OutOrStdout(), outcome.Context.TaskID(), outcome.RecoveryInspection.Reason)
+	case workflow.ReviewLifecycleOutcomeExecutionUnknown:
+		return renderReviewUnverifiableGuidance(command.ErrOrStderr(), outcome.Context.TaskID(), outcome.RecoveryInspection.Reason)
 	}
 	if outcome.Kind != workflow.ReviewLifecycleOutcomePassed {
 		return nil
@@ -1625,7 +1625,6 @@ func attachInteractiveReviewHooks(
 		}, nil
 	}
 	presentation.PromptAutomatedBlockers = taskReviewAutomatedBlockerPrompt(command, reviewInput)
-	presentation.PromptAlternateFindings = taskReviewAlternateFindingPrompt(command, reviewInput)
 	return presentation
 }
 
@@ -2568,147 +2567,6 @@ func promptAutomatedBlockerDecision(
 			}
 		}
 	}
-}
-
-func taskReviewAlternateFindingPrompt(command *cobra.Command, reader *bufio.Reader) func(review.AlternateReviewComparison) ([]review.AlternateFindingDecision, error) {
-	return func(comparison review.AlternateReviewComparison) ([]review.AlternateFindingDecision, error) {
-		output := command.ErrOrStderr()
-		if err := renderAlternateReviewComparison(output, comparison); err != nil {
-			return nil, err
-		}
-		decisions := make([]review.AlternateFindingDecision, 0, len(comparison.Alternate))
-		for _, alternate := range comparison.Alternate {
-			if err := renderAlternateReviewFinding(output, alternate); err != nil {
-				return nil, err
-			}
-			decision, err := promptAlternateReviewFindingDecision(output, reader, alternate.Index, len(comparison.Primary))
-			if err != nil {
-				return nil, err
-			}
-			decisions = append(decisions, decision)
-		}
-		return decisions, nil
-	}
-}
-
-func renderAlternateReviewComparison(output io.Writer, comparison review.AlternateReviewComparison) error {
-	if _, err := fmt.Fprintf(output, "\nPaired reviewer comparison for step %q. Primary findings are authoritative; classify every alternate finding.\n", comparison.Step.Name); err != nil {
-		return err
-	}
-	if err := renderComparisonReviewerProvenance(output, "Primary", comparison.PrimaryExecution); err != nil {
-		return err
-	}
-	if err := renderComparisonReviewerProvenance(output, "Alternate", comparison.AlternateExecution); err != nil {
-		return err
-	}
-	if len(comparison.Primary) == 0 {
-		_, err := fmt.Fprintln(output, "  Primary findings: (none)")
-		return err
-	}
-	if _, err := fmt.Fprintln(output, "  Primary findings:"); err != nil {
-		return err
-	}
-	for _, primary := range comparison.Primary {
-		if err := renderAutomatedBlocker(output, primary); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func renderAlternateReviewFinding(output io.Writer, alternate review.AlternateFinding) error {
-	_, err := fmt.Fprintf(
-		output,
-		"  Alternate finding %d:\n    Title: %s\n    Description: %s\n",
-		alternate.Index+1,
-		formatReviewValue(alternate.Finding.Title),
-		formatReviewValue(alternate.Finding.Description),
-	)
-	return err
-}
-
-func promptAlternateReviewFindingDecision(
-	output io.Writer,
-	reader *bufio.Reader,
-	findingIndex int,
-	primaryFindingCount int,
-) (review.AlternateFindingDecision, error) {
-	for {
-		if _, err := fmt.Fprint(output, "Classification [a=admit, d=duplicate primary, e=exclude, q=cancel]: "); err != nil {
-			return review.AlternateFindingDecision{}, err
-		}
-		line, err := readReviewLineWithReadError(
-			reader,
-			"read alternate finding classification",
-			automatedBlockerInputReadError,
-		)
-		if err != nil {
-			return review.AlternateFindingDecision{}, err
-		}
-		switch strings.ToLower(strings.TrimSpace(line)) {
-		case "a", "admit", "":
-			return review.AlternateFindingDecision{
-				FindingIndex:   findingIndex,
-				Classification: taskstate.AlternateFindingAdmitted,
-			}, nil
-		case "e", "exclude":
-			return review.AlternateFindingDecision{
-				FindingIndex:   findingIndex,
-				Classification: taskstate.AlternateFindingExcluded,
-			}, nil
-		case "d", "duplicate":
-			decision, ok, err := promptAlternateDuplicateDecision(output, reader, findingIndex, primaryFindingCount)
-			if err != nil {
-				return review.AlternateFindingDecision{}, err
-			}
-			if ok {
-				return decision, nil
-			}
-		case "q", "quit", "cancel":
-			return review.AlternateFindingDecision{}, review.ErrAutomatedBlockerInputUnavailable
-		default:
-			if _, err := fmt.Fprintln(output, "Choose admit, duplicate, exclude, or cancel."); err != nil {
-				return review.AlternateFindingDecision{}, err
-			}
-		}
-	}
-}
-
-func promptAlternateDuplicateDecision(
-	output io.Writer,
-	reader *bufio.Reader,
-	findingIndex int,
-	primaryFindingCount int,
-) (review.AlternateFindingDecision, bool, error) {
-	if primaryFindingCount == 0 {
-		_, err := fmt.Fprintln(output, "No primary findings are available as duplicate targets.")
-		return review.AlternateFindingDecision{}, false, err
-	}
-	if _, err := fmt.Fprint(output, "Duplicate of primary finding number: "); err != nil {
-		return review.AlternateFindingDecision{}, false, err
-	}
-	target, err := readReviewLineWithReadError(reader, "read primary duplicate target", automatedBlockerInputReadError)
-	if err != nil {
-		return review.AlternateFindingDecision{}, false, err
-	}
-	number, parseErr := strconv.Atoi(strings.TrimSpace(target))
-	if parseErr != nil || number <= 0 {
-		_, err := fmt.Fprintln(output, "Enter a valid primary finding number.")
-		return review.AlternateFindingDecision{}, false, err
-	}
-	return review.AlternateFindingDecision{
-		FindingIndex:   findingIndex,
-		Classification: taskstate.AlternateFindingDuplicate,
-		DuplicateOf:    number - 1,
-	}, true, nil
-}
-
-func renderComparisonReviewerProvenance(output io.Writer, label string, execution *taskstate.AgentExecution) error {
-	if execution == nil {
-		return nil
-	}
-	_, err := fmt.Fprintf(output, "  %s reviewer: profile=%s model=%s harness=%s status=%s agent=%s session=%s command=%s started=%s duration=%dms\n", label, formatReviewValue(execution.Profile), formatReviewValue(execution.Model), formatReviewValue(execution.Harness), execution.Status, formatReviewValue(execution.Agent), formatReviewValue(execution.SessionName), formatReviewValue(execution.Command), execution.StartedAt.UTC().Format(time.RFC3339), execution.DurationMillis)
-	return err
 }
 
 func keepAutomatedBlockerDecision(blocker review.AutomatedBlocker) review.AutomatedBlockerDecision {

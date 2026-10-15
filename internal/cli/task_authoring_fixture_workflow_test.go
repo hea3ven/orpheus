@@ -329,7 +329,6 @@ func setupOwnershipAgentRepoRoot(t *testing.T, fixture *workflowFixture) (*owner
 func setupOwnershipActiveReview(t *testing.T, fixture *workflowFixture, taskID string) (*ownershipAuthoringBackend, string, taskstate.ReviewAttempt) {
 	t.Helper()
 
-	fixture.options.Environment["ORPHEUS_REVIEWER_ROLE"] = ""
 	repo := ownershipAuthoringRepo()
 	backend := newOwnershipAuthoringBackend(taskmodel.Task{
 		ID:        taskID,

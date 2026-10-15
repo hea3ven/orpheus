@@ -121,7 +121,7 @@ func priorReviewFindings(state taskstate.TaskState, activeAttempt int) []Context
 		}
 		authoritativeNumber := 0
 		for _, finding := range review.Findings {
-			if taskstate.InterruptedPrimaryReviewFinding(review, finding) {
+			if taskstate.InterruptedReviewFinding(review, finding) {
 				continue
 			}
 			authoritativeNumber++

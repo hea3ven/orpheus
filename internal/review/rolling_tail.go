@@ -44,7 +44,7 @@ func newStepOutput(opts PipelineRunOptions, rolling bool) stepOutput {
 }
 
 func (o *stepOutput) finishClear() {
-	if o == nil || o.tail == nil {
+	if o.tail == nil {
 		return
 	}
 	o.flush()
@@ -52,7 +52,7 @@ func (o *stepOutput) finishClear() {
 }
 
 func (o *stepOutput) finishTail() {
-	if o == nil || o.tail == nil {
+	if o.tail == nil {
 		return
 	}
 	o.flush()
@@ -60,7 +60,7 @@ func (o *stepOutput) finishTail() {
 }
 
 func (o *stepOutput) finishExpanded() {
-	if o == nil || o.tail == nil {
+	if o.tail == nil {
 		return
 	}
 	o.flush()

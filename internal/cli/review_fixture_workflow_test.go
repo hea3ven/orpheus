@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -29,13 +30,12 @@ import (
 // candidate contents, commands, agents and task-source mutations are supplied.
 type reviewWorkflowFixture struct {
 	*taskWorkflowFixture
-	tasks          *memoryReviewTasks
-	candidate      *memoryReviewCandidate
-	checks         map[string][]checkResult
-	hunkCommands   map[string][]hunkCommandResult
-	checkCalls     []string
-	hunkCalls      []string
-	reviewLauncher *reviewPipelineAgentLauncher
+	tasks        *memoryReviewTasks
+	candidate    *memoryReviewCandidate
+	checks       map[string][]checkResult
+	hunkCommands map[string][]hunkCommandResult
+	checkCalls   []string
+	hunkCalls    []string
 }
 
 type checkResult struct {
@@ -232,6 +232,7 @@ func (b *memoryReviewTasks) Close(_ context.Context, id string) error {
 type memoryReviewCandidate struct {
 	*memoryDispatchGit
 	head, contents string
+	snapshots      int
 	staged         bool
 	commits        []string
 	pushes         []string
@@ -244,6 +245,7 @@ func (g *memoryReviewCandidate) shortStatus(context.Context, string) (string, er
 	return "", nil
 }
 func (g *memoryReviewCandidate) capture(context.Context, string, *slog.Logger, ...slog.Attr) (review.CandidateCheck, error) {
+	g.snapshots++
 	contents := g.contents
 	return func() error {
 		if contents != g.contents {
@@ -455,4 +457,13 @@ func (*memoryReviewCandidate) ValidateRecordedDirectMerge(context.Context, taskm
 }
 func (*memoryReviewCandidate) ValidateMaterializedTaskBranchRetry(context.Context, taskmodel.Repository, string, string, state.Paths) error {
 	return errors.New("unexpected publication retry")
+}
+
+func loadLatestReview(t *testing.T, fixture *reviewWorkflowFixture, taskID string) taskstate.ReviewAttempt {
+	t.Helper()
+	var state taskstate.TaskState
+	require.NoError(t, fixture.paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", taskID+".yaml"), &state))
+	latest, ok := taskstate.LatestReview(state)
+	require.True(t, ok)
+	return latest
 }

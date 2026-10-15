@@ -26,13 +26,6 @@ func TestReviewInspectionGivesActionableGuidanceForEachReviewState(t *testing.T)
 			review: taskstate.ReviewAttempt{Status: taskstate.ReviewStatusWaitingForManual, Step: "approval"},
 		},
 		{
-			name: "blocked comparison input interrupted", want: []string{"alternate comparison input was interrupted", "start a fresh review"},
-			review: taskstate.ReviewAttempt{
-				Status: taskstate.ReviewStatusBlocked,
-				Steps:  []taskstate.ReviewStep{{Comparison: &taskstate.ReviewComparison{InputInterrupted: true}}},
-			},
-		},
-		{
 			name: "blocked automated decision interrupted", want: []string{"automated blocker decisions were interrupted", "start a fresh review"},
 			wantDetail: []string{"Automated blocker decisions: interrupted"},
 			review:     taskstate.ReviewAttempt{Status: taskstate.ReviewStatusBlocked, AutomatedBlockerDecisionInterrupted: true},

@@ -55,7 +55,7 @@ lanes:
         github.com/hea3ven/orpheus/cmd/testcoverage: 53.039
         github.com/hea3ven/orpheus/internal/agent: 80.838
         github.com/hea3ven/orpheus/internal/agentexec: 0
-        github.com/hea3ven/orpheus/internal/cli: 37.597
+        github.com/hea3ven/orpheus/internal/cli: 34.806
         github.com/hea3ven/orpheus/internal/doctor: 51.084
         github.com/hea3ven/orpheus/internal/git: 7.349
         github.com/hea3ven/orpheus/internal/logging: 48.778
@@ -64,7 +64,7 @@ lanes:
         github.com/hea3ven/orpheus/internal/pullrequest: 2.122
         github.com/hea3ven/orpheus/internal/readiness: 87.892
         github.com/hea3ven/orpheus/internal/registry: 85.692
-        github.com/hea3ven/orpheus/internal/review: 38.69
+        github.com/hea3ven/orpheus/internal/review: 41.579
         github.com/hea3ven/orpheus/internal/revieweval: 53.117
         github.com/hea3ven/orpheus/internal/state: 73.13
         github.com/hea3ven/orpheus/internal/status: 90.857

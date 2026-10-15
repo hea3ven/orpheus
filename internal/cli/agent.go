@@ -212,26 +212,9 @@ type agentReviewAddOptions struct {
 }
 
 type agentReviewAddContext struct {
-	reviewerRole string
-	paths        state.Paths
-	store        taskstate.Store
-	review       agent.ReviewContext
-}
-
-type agentReviewFindingStore interface {
-	RecordReviewFinding(
-		repoID string,
-		taskID string,
-		attempt int,
-		finding taskstate.ReviewFinding,
-	) (taskstate.ReviewAttempt, error)
-	RecordAlternateReviewFinding(
-		repoID string,
-		taskID string,
-		attempt int,
-		stepName string,
-		finding taskstate.ReviewFinding,
-	) (taskstate.ReviewAttempt, error)
+	paths  state.Paths
+	store  taskstate.Store
+	review agent.ReviewContext
 }
 
 func runAgentReviewAdd(command *cobra.Command, opts *rootOptions, addOpts agentReviewAddOptions) error {
@@ -253,7 +236,6 @@ func runAgentReviewAdd(command *cobra.Command, opts *rootOptions, addOpts agentR
 		command,
 		addContext,
 		logger,
-		strings.TrimSpace(addContext.reviewerRole),
 		finding,
 	)
 	if err != nil {
@@ -284,10 +266,9 @@ func resolveAgentReviewAddContext(command *cobra.Command, opts *rootOptions) (ag
 		return agentReviewAddContext{}, fmt.Errorf("agent review add: %w", err)
 	}
 	return agentReviewAddContext{
-		reviewerRole: deps.environmentValue("ORPHEUS_REVIEWER_ROLE"),
-		paths:        deps.paths,
-		store:        deps.taskStateStore,
-		review:       reviewContext,
+		paths:  deps.paths,
+		store:  deps.taskStateStore,
+		review: reviewContext,
 	}, nil
 }
 
@@ -295,37 +276,15 @@ func recordAgentReviewFinding(
 	command *cobra.Command,
 	ctx agentReviewAddContext,
 	logger *slog.Logger,
-	role string,
 	finding taskstate.ReviewFinding,
 ) (taskstate.ReviewAttempt, error) {
 	var reviewAttempt taskstate.ReviewAttempt
 	err := withAgentReviewMutationLock(command, ctx.paths, logger, func() error {
 		var err error
-		reviewAttempt, err = persistAgentReviewFinding(ctx.store, ctx.review, role, finding)
+		reviewAttempt, err = ctx.store.RecordReviewFinding(ctx.review.Repository.ID, ctx.review.Task.ID, ctx.review.Review.Attempt, finding)
 		return err
 	})
 	return reviewAttempt, err
-}
-
-func persistAgentReviewFinding(
-	store agentReviewFindingStore,
-	ctx agent.ReviewContext,
-	role string,
-	finding taskstate.ReviewFinding,
-) (taskstate.ReviewAttempt, error) {
-	if role == "alternate" {
-		return store.RecordAlternateReviewFinding(
-			ctx.Repository.ID,
-			ctx.Task.ID,
-			ctx.Review.Attempt,
-			ctx.Review.EnvStep,
-			finding,
-		)
-	}
-	if role == "primary" {
-		finding.Reviewer = "primary"
-	}
-	return store.RecordReviewFinding(ctx.Repository.ID, ctx.Task.ID, ctx.Review.Attempt, finding)
 }
 
 func renderAgentReviewAddResult(
