@@ -22,6 +22,7 @@ type options struct {
 	auditPackages   stringListFlag
 	auditRun        string
 	compareBase     string
+	compareHead     string
 	compareMerge    string
 	compareWorktree bool
 	measureRevision string
@@ -75,8 +76,9 @@ func parseOptions(args []string) (options, error) {
 	flags.BoolVar(&opts.auditScenarios, "audit-scenarios", false, "profile integration scenarios separately (expensive)")
 	flags.Var(&opts.auditPackages, "audit-package", "package pattern to audit; repeat to select more than one (default ./...)")
 	flags.StringVar(&opts.auditRun, "audit-run", "", "integration test-name regular expression to audit (default ^TestIntegration)")
-	flags.StringVar(&opts.compareBase, "compare-base", "", "exact CI base commit or explicit local base revision")
-	flags.StringVar(&opts.compareMerge, "compare-merge", "", "exact tested synthetic merge commit")
+	flags.StringVar(&opts.compareBase, "compare-base", "", "explicit local base revision (requires compare-worktree)")
+	flags.StringVar(&opts.compareHead, "compare-head", "", "exact expected PR head, the tested merge's second parent")
+	flags.StringVar(&opts.compareMerge, "compare-merge", "", "exact tested synthetic merge commit; its first parent supplies the base")
 	flags.BoolVar(&opts.compareWorktree, "compare-worktree", false, "compare an immutable on-disk snapshot against compare-base")
 	flags.StringVar(&opts.measureRevision, "measure-revision", "", "collect without policy; verify this exact checkout identity")
 	if err := flags.Parse(args); err != nil {
@@ -99,14 +101,13 @@ func parseOptions(args []string) (options, error) {
 }
 
 func (opts options) validate() error {
-	flagsCompare := opts.compareBase != "" || opts.compareMerge != ""
-	if flagsCompare && (opts.compareBase == "" || (!opts.compareWorktree && opts.compareMerge == "")) {
-		return errors.New("compare-base and compare-merge are both required for CI comparison")
-	}
+	flagsCompare := opts.compareWorktree || opts.compareBase != "" || opts.compareHead != "" || opts.compareMerge != ""
 	if opts.compareWorktree {
-		if opts.compareBase == "" || opts.compareMerge != "" || opts.policy != ".quality.yml" {
-			return errors.New("compare-worktree requires compare-base, uses snapshot .quality.yml, and cannot use compare-merge")
+		if opts.compareBase == "" || opts.compareHead != "" || opts.compareMerge != "" || opts.policy != ".quality.yml" {
+			return errors.New("compare-worktree requires compare-base, uses snapshot .quality.yml, and cannot use compare-head or compare-merge")
 		}
+	} else if flagsCompare && (opts.compareHead == "" || opts.compareMerge == "" || opts.compareBase != "") {
+		return errors.New("CI comparison requires compare-head and compare-merge; compare-base is only for compare-worktree")
 	}
 	modes := 0
 	for _, enabled := range []bool{opts.updatePolicy, opts.auditScenarios, flagsCompare, opts.measureRevision != ""} {
@@ -127,7 +128,7 @@ func execute(opts options) error {
 	if opts.measureRevision != "" {
 		return executeMeasurement(opts)
 	}
-	if opts.compareBase != "" {
+	if opts.compareWorktree || opts.compareMerge != "" {
 		return executeComparison(opts)
 	}
 	policy, err := loadQualityPolicy(opts.policy)

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -89,65 +90,174 @@ func TestIntegrationAdapterContractComparisonDoltVersionOmitsCachedUpdateWarning
 	}
 }
 
-func TestIntegrationAdapterContractComparisonPreparesExactDetachedCheckoutsAndRejectsInvalidIdentities(t *testing.T) {
+func TestIntegrationAdapterContractComparisonPinsTestedMergeParentsDespiteStaleMetadataAndMovingMain(t *testing.T) {
+	for _, stale := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stale base metadata=%t", stale), func(t *testing.T) {
+			repo, eventBase, merge := syntheticMergeFixture(t)
+			head := snapshotGit(t, repo, "rev-parse", merge+"^2")
+			base := eventBase
+			if stale {
+				base = snapshotGit(t, repo, "commit-tree", eventBase+"^{tree}", "-p", eventBase, "-m", "base advanced before tested merge")
+				merge = snapshotGit(t, repo, "commit-tree", head+"^{tree}", "-p", base, "-p", head, "-m", "tested merge with newer base")
+			}
+			newMain := snapshotGit(t, repo, "commit-tree", base+"^{tree}", "-p", base, "-m", "main advanced after tested merge")
+			snapshotGit(t, repo, "update-ref", "refs/heads/main", newMain)
+			t.Chdir(repo)
+			// Event base metadata is intentionally irrelevant to selection.
+			t.Setenv("QUALITY_BASE", eventBase)
+			runner := snapshotRunner(t, repo)
+			evidence := &comparisonEvidence{MergeRevision: merge}
+
+			if err := runner.prepareComparison(context.Background(), options{compareHead: head, compareMerge: merge}, evidence); err != nil {
+				t.Fatal(err)
+			}
+			if evidence.BaseRevision != base || evidence.MergeRevision != merge {
+				t.Fatalf("comparison identities = %#v, want base %s and merge %s", evidence, base, merge)
+			}
+			for _, item := range []struct{ name, revision string }{{"base", base}, {"merge", merge}} {
+				t.Chdir(filepath.Join(runner.work, item.name))
+				identity, err := verifyCheckout(item.revision)
+				if err != nil || identity.Revision != item.revision || !identity.Clean {
+					t.Fatalf("%s identity = %#v, %v", item.name, identity, err)
+				}
+				if output, err := exec.Command("git", "symbolic-ref", "-q", "HEAD").CombinedOutput(); err == nil {
+					t.Fatalf("measurement checkout is not detached: %s", output)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(runner.work, "base", "candidate.txt")); !os.IsNotExist(err) {
+				t.Fatalf("candidate contents leaked into base: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(runner.work, "merge", "candidate.txt")); err != nil {
+				t.Fatal(err)
+			}
+			laterMain := snapshotGit(t, repo, "commit-tree", newMain+"^{tree}", "-p", newMain, "-m", "main advanced after selection")
+			snapshotGit(t, repo, "update-ref", "refs/heads/main", laterMain)
+			seedComparisonCollector(t, runner, base, merge)
+
+			result, err := runner.compare(context.Background(), testLocalQualityPolicy(), evidence)
+			if err := finishReport(runner.output, result, err); err != nil {
+				t.Fatal(err)
+			}
+			if result.Decision.Status != statusPass || len(result.Comparison.Samples) != 4 {
+				t.Fatalf("comparison did not run one measured pair: %#v", result)
+			}
+			for _, sample := range result.Comparison.Samples {
+				want := merge
+				if sample.Subject == "base" {
+					want = base
+				}
+				if sample.Revision != want {
+					t.Fatalf("sample identity = %s, want %s", sample.Revision, want)
+				}
+			}
+			for _, path := range []string{runner.output, reportSummaryPath(runner.output)} {
+				contents, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Contains(contents, []byte(base)) || !bytes.Contains(contents, []byte(merge)) || bytes.Contains(contents, []byte(laterMain)) || (stale && bytes.Contains(contents, []byte(eventBase))) {
+					t.Fatalf("report does not identify actual comparison commits: %s", contents)
+				}
+			}
+		})
+	}
+}
+
+func seedComparisonCollector(t *testing.T, runner *comparisonRunner, base, merge string) {
+	t.Helper()
+	script := "#!/bin/sh\nset -eu\ntest \"$1\" = -measure-revision\ntest \"$3\" = -output\ncase \"$2\" in\n"
+	for _, revision := range []string{base, merge} {
+		seed := filepath.Join(runner.work, revision+".json")
+		if err := writeJSON(seed, timingFixture(revision, 1)); err != nil {
+			t.Fatal(err)
+		}
+		script += fmt.Sprintf("%s) cat '%s' >\"$4\";;\n", revision, seed)
+	}
+	script += "*) exit 1;;\nesac\n"
+	runner.collector = filepath.Join(runner.work, "collector")
+	if err := os.WriteFile(runner.collector, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIntegrationAdapterContractComparisonInvalidMergeIdentitiesBlockBeforeMeasurement(t *testing.T) {
+	for _, test := range []struct {
+		name, head, merge, remove, want string
+	}{
+		{name: "root commit", merge: "base", want: "two-parent synthetic merge"},
+		{name: "one parent", head: "base", merge: "head", want: "two-parent synthetic merge"},
+		{name: "octopus merge", merge: "octopus", want: "two-parent synthetic merge"},
+		{name: "unexpected PR head", head: "base", want: "second parent"},
+		{name: "reversed parents", merge: "reversed", want: "second parent"},
+		{name: "identical identities", head: "merge", want: "distinct exact full commit IDs"},
+		{name: "abbreviated head", head: "short", want: "exact full commit IDs"},
+		{name: "abbreviated merge", merge: "short", want: "exact full commit IDs"},
+		{name: "missing merge", merge: "missing", want: "verify tested merge"},
+		{name: "missing base object", remove: "base", want: "verify base (first parent) commit"},
+		{name: "missing head object", remove: "head", want: "verify PR head (second parent) commit"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo, base, merge := syntheticMergeFixture(t)
+			head := snapshotGit(t, repo, "rev-parse", merge+"^2")
+			identities := map[string]string{
+				"base": base, "head": head, "merge": merge, "short": merge[:12], "missing": strings.Repeat("f", 40),
+				"octopus":  snapshotGit(t, repo, "commit-tree", merge+"^{tree}", "-p", base, "-p", head, "-p", merge, "-m", "three parents"),
+				"reversed": snapshotGit(t, repo, "commit-tree", merge+"^{tree}", "-p", head, "-p", base, "-m", "reversed parents"),
+			}
+			if test.head != "" {
+				head = identities[test.head]
+			}
+			if test.merge != "" {
+				merge = identities[test.merge]
+			}
+			if test.remove != "" {
+				id := identities[test.remove]
+				if err := os.Remove(filepath.Join(repo, ".git", "objects", id[:2], id[2:])); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Chdir(repo)
+			before := snapshotGit(t, repo, "worktree", "list", "--porcelain")
+			output := filepath.Join(testutil.CanonicalTempDir(t), "report.json")
+
+			err := execute(options{compareHead: head, compareMerge: merge, output: output, policy: ".quality.yml"})
+
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("comparison error = %v, want %q", err, test.want)
+			}
+			contents, err := os.ReadFile(output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result qualityReport
+			if err := json.Unmarshal(contents, &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.Complete || result.Execution.Status != statusExecutionFailed || result.Timing.Status != statusUnevaluated || len(result.Timing.Findings) == 0 || len(result.Comparison.Samples) != 0 {
+				t.Fatalf("invalid identity did not block measurement: %#v", result)
+			}
+			if after := snapshotGit(t, repo, "worktree", "list", "--porcelain"); after != before {
+				t.Fatalf("invalid comparison changed worktrees: %s", after)
+			}
+		})
+	}
+}
+
+func TestIntegrationAdapterContractComparisonCheckoutRejectsWrongAndDirtyIdentities(t *testing.T) {
 	repo, base, merge := syntheticMergeFixture(t)
-	work := filepath.Join(testutil.CanonicalTempDir(t), "work")
-	var diagnostics bytes.Buffer
-	runner := comparisonRunner{root: repo, work: work, log: &diagnostics}
-	t.Cleanup(func() {
-		for _, name := range []string{"base", "merge"} {
-			if err := runner.gitCommand(context.Background(), repo, "worktree", "remove", "--force", filepath.Join(work, name)); err != nil {
-				t.Error(err)
-			}
-		}
-	})
-
-	t.Run("exact detached checkouts", func(t *testing.T) {
-		if err := runner.prepare(context.Background(), base, merge); err != nil {
-			t.Fatal(err)
-		}
-		for _, item := range []struct{ name, revision string }{{"base", base}, {"merge", merge}} {
-			t.Chdir(filepath.Join(work, item.name))
-			identity, err := verifyCheckout(item.revision)
-			if err != nil || identity.Revision != item.revision || !identity.Clean {
-				t.Fatalf("%s identity = %#v, %v", item.name, identity, err)
-			}
-			if output, err := exec.Command("git", "symbolic-ref", "-q", "HEAD").CombinedOutput(); err == nil {
-				t.Fatalf("measurement checkout is not detached: %s", output)
-			}
-		}
-		if _, err := os.Stat(filepath.Join(work, "base", "candidate.txt")); !os.IsNotExist(err) {
-			t.Fatalf("candidate contents leaked into base: %v", err)
-		}
-		if _, err := os.Stat(filepath.Join(work, "merge", "candidate.txt")); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	t.Run("mismatched and dirty identities", func(t *testing.T) {
-		if err := runner.prepare(context.Background(), merge, merge); err == nil {
-			t.Fatal("identical identities accepted")
-		}
-		if err := runner.prepare(context.Background(), merge, base); err == nil {
-			t.Fatal("non-merge or mismatched parent accepted")
-		}
-		if err := runner.prepare(context.Background(), base[:12], merge); err == nil {
-			t.Fatal("abbreviated identity accepted")
-		}
-		t.Chdir(repo)
-		if _, err := verifyCheckout(base); err == nil {
-			t.Fatal("wrong checkout HEAD accepted")
-		}
-		if _, err := verifyCheckout(merge); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile("base.txt", []byte("dirty\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := verifyCheckout(merge); err == nil {
-			t.Fatal("dirty checkout accepted")
-		}
-	})
+	t.Chdir(repo)
+	if _, err := verifyCheckout(base); err == nil {
+		t.Fatal("wrong checkout HEAD accepted")
+	}
+	if _, err := verifyCheckout(merge); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("base.txt", []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifyCheckout(merge); err == nil {
+		t.Fatal("dirty checkout accepted")
+	}
 }
 
 func TestIntegrationAdapterContractComparisonCollectorUsesSameBinaryAndIsolatedCaches(t *testing.T) {
