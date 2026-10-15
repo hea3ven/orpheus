@@ -8,6 +8,7 @@ Orpheus separates tests by behavioral scope, not by speed or whether a test writ
 - `make test` is a compatibility alias for `make test-unit`.
 - `make test-integration` runs the integration lane only.
 - `make quality` runs both lanes once with coverage policy; timing is **not evaluated** locally.
+- `make lint` runs GolangCI-Lint with package exclusions from `.quality.yml`.
 - `make check` formats code, runs the single-pass quality report, lints, and builds the CLI. Each test lane still runs only once.
 - `make timing-check BASE=<ref>` explicitly compares a working-tree snapshot with a fresh measurement of that exact base on the local host. It is never part of routine checks.
 
@@ -121,7 +122,7 @@ _ = t.TempDir() //nolint:forbidigo // Path identity is intentionally irrelevant 
 
 An integration test verifies a cross-package workflow or an isolated local process contract. This includes real Git and Beads behavior, compiled CLI behavior, and child-process contracts. It may use temporary directories, local bare Git remotes, and fake executables, but it remains network-free and credential-free.
 
-`make test-integration` requires `git` and `bd` on `PATH`. Tests that need `dolt` skip when it is unavailable. No lane may read operator data, use live networks or credentials, or run a real model agent.
+`make test-integration` requires `git` and `bd` on `PATH`. Tests that need `dolt` skip when it is unavailable. The lint adapter contract also requires `golangci-lint` and the cached Go 1.26.3 lint toolchain; it disables module and toolchain downloads. No lane may read operator data, use live networks or credentials, or run a real model agent.
 
 ## Integration review categories
 
@@ -226,7 +227,7 @@ tests, including overlapping packages). Packages without selected tests do not
 contribute work. Timings are reported, but local timing is **not evaluated**;
 there are no tracked machine-specific timing ceilings.
 
-Coverage floors and refresh thresholds remain blocking. Package coverage
+Coverage floors and refresh thresholds remain blocking. Guarded package coverage
 additions/removals require an explicit policy update. JSON and Markdown reports
 are written to `artifacts/test-coverage/report.json` and `report.md`. A failed
 lane does not prevent the other lane from running; failure reports retain raw
@@ -253,6 +254,35 @@ Findings use one decimal for percentages and two for seconds, adding precision
 when rounding would conceal a boundary crossing. Only confirmed timing failures
 say “increased significantly”; unavailable evidence stays unevaluated. Proposed
 floor changes appear only in explicit `make quality-policy-update` output.
+
+### Shared coverage and lint exclusions
+
+`.quality.yml` owns `package_exclusions`, a list of exact module-relative package
+paths. It initially excludes `internal/testutil`, `internal/testlane`,
+`internal/testguard`, and `cmd/testcoverage`. Paths must be canonical and unique;
+absolute paths, import paths, wildcards, and traversal are rejected. An entry does
+not match descendants or similarly named packages. Removed packages may remain
+listed without triggering a coverage structure finding.
+
+Excluded packages still compile, are instrumented with `-coverpkg=./...`, and run
+their selected tests. Their coverage floors, refresh checks, and coverage package
+addition/removal checks are ignored. Guarded aggregate coverage removes their
+covered statements **and** total statements. Reports identify exclusions and show
+guarded coverage separately from raw coverage; JSON retains the original
+`coverage` and `packages` measurements alongside `guarded_coverage` and
+`package_exclusions`. Policy-free measurement samples remain raw.
+
+`make lint` derives a temporary GolangCI-Lint configuration from `.golangci.yml`
+and the same policy list; CI calls this target too. It suppresses findings only
+for files directly in each excluded package, without skipping package loading or
+type checking. Do not maintain a separate `linters.exclusions.paths` list or run
+GolangCI-Lint directly when validating policy exclusions. Formatting, AST safety
+checks, test failures, and package and aggregate timing guards are unchanged.
+
+After changing exclusions, run the explicit five-sample policy update and review
+the diff. It preserves the exclusion list, removes excluded floors, never
+recreates them, and refreshes materially stale aggregate floors using guarded
+coverage. Sample consistency checks still include excluded packages' raw evidence.
 
 ## Explicit local timing comparison
 

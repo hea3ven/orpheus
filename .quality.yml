@@ -1,4 +1,9 @@
 version: 1
+package_exclusions:
+  - internal/testutil
+  - internal/testlane
+  - internal/testguard
+  - cmd/testcoverage
 coverage:
   repository:
     significance_percentage_points: 0.5
@@ -17,10 +22,9 @@ timing:
 lanes:
   integration:
     coverage:
-      floor_percent: 66.563
+      floor_percent: 68.506
       packages:
         github.com/hea3ven/orpheus/cmd/orpheus: 0
-        github.com/hea3ven/orpheus/cmd/testcoverage: 46.181
         github.com/hea3ven/orpheus/internal/agent: 48.693
         github.com/hea3ven/orpheus/internal/agentexec: 77.439
         github.com/hea3ven/orpheus/internal/cli: 69.795
@@ -43,16 +47,12 @@ lanes:
         github.com/hea3ven/orpheus/internal/taskstate: 69.207
         github.com/hea3ven/orpheus/internal/taskstats: 43.078
         github.com/hea3ven/orpheus/internal/tasktarget: 75.451
-        github.com/hea3ven/orpheus/internal/testguard: 74.471
-        github.com/hea3ven/orpheus/internal/testlane: 0
-        github.com/hea3ven/orpheus/internal/testutil: 74.571
         github.com/hea3ven/orpheus/internal/workflow: 70.696
   unit:
     coverage:
       floor_percent: 52.481
       packages:
         github.com/hea3ven/orpheus/cmd/orpheus: 0
-        github.com/hea3ven/orpheus/cmd/testcoverage: 53.039
         github.com/hea3ven/orpheus/internal/agent: 80.838
         github.com/hea3ven/orpheus/internal/agentexec: 0
         github.com/hea3ven/orpheus/internal/cli: 34.806
@@ -75,7 +75,4 @@ lanes:
         github.com/hea3ven/orpheus/internal/taskstate: 67.565
         github.com/hea3ven/orpheus/internal/taskstats: 82.59
         github.com/hea3ven/orpheus/internal/tasktarget: 82.071
-        github.com/hea3ven/orpheus/internal/testguard: 54.491
-        github.com/hea3ven/orpheus/internal/testlane: 84.034
-        github.com/hea3ven/orpheus/internal/testutil: 85.5
         github.com/hea3ven/orpheus/internal/workflow: 48.308

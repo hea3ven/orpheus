@@ -18,6 +18,7 @@ type options struct {
 	policy          string
 	output          string
 	updatePolicy    bool
+	lint            bool
 	auditScenarios  bool
 	auditPackages   stringListFlag
 	auditRun        string
@@ -75,6 +76,7 @@ func parseOptions(args []string) (options, error) {
 	flags.SetOutput(os.Stderr)
 	flags.StringVar(&opts.policy, "policy", ".quality.yml", "reviewed local quality policy")
 	flags.StringVar(&opts.output, "output", "artifacts/test-coverage/report.json", "machine-readable quality report path")
+	flags.BoolVar(&opts.lint, "lint", false, "lint using package exclusions from the quality policy")
 	flags.BoolVar(&opts.updatePolicy, "update-policy", false, "update materially stale coverage floors from five measurements")
 	flags.BoolVar(&opts.auditScenarios, "audit-scenarios", false, "profile integration scenarios separately (expensive)")
 	flags.Var(&opts.auditPackages, "audit-package", "package pattern to audit; repeat to select more than one (default ./...)")
@@ -113,7 +115,7 @@ func (opts options) validate() error {
 		return errors.New("CI comparison requires compare-head and compare-merge; compare-base is only for compare-worktree")
 	}
 	modes := 0
-	for _, enabled := range []bool{opts.updatePolicy, opts.auditScenarios, flagsCompare, opts.measureRevision != ""} {
+	for _, enabled := range []bool{opts.updatePolicy, opts.lint, opts.auditScenarios, flagsCompare, opts.measureRevision != ""} {
 		if enabled {
 			modes++
 		}
@@ -138,6 +140,9 @@ func execute(opts options) error {
 	if err != nil {
 		return fmt.Errorf("read quality policy %s: %w", opts.policy, err)
 	}
+	if opts.lint {
+		return executeLint(policy, os.Stdout, os.Stderr)
+	}
 	work, err := os.MkdirTemp("", "orpheus-quality-*")
 	if err != nil {
 		return err
@@ -153,6 +158,7 @@ func execute(opts options) error {
 		audit = &selection
 	}
 	result, laneErrors := collectQuality(work, audit)
+	result = withCoverageExclusions(result, policy.PackageExclusions)
 	result.MeasurementSamples = 1
 	result.Timing = decision{Status: statusNotEvaluated}
 	result.Execution = decision{Status: statusPass}
@@ -174,6 +180,7 @@ func executePolicyUpdate(opts options, policy localQualityPolicy, work string) e
 	for index := 0; index < policy.UpdateSamples; index++ {
 		fmt.Printf("Collecting quality policy sample %d/%d.\n", index+1, policy.UpdateSamples)
 		result, laneErrors := collectQuality(filepath.Join(work, fmt.Sprintf("sample-%d", index+1)), nil)
+		result = withCoverageExclusions(result, policy.PackageExclusions)
 		result.MeasurementSamples = index + 1
 		if len(laneErrors) > 0 {
 			result.Decision = decision{Status: statusTestFailed, Findings: errorFindings(laneErrors)}

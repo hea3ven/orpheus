@@ -46,11 +46,12 @@ type laneQualityPolicy struct {
 }
 
 type localQualityPolicy struct {
-	Version       int                          `yaml:"version"`
-	Coverage      localCoverageSettings        `yaml:"coverage"`
-	UpdateSamples int                          `yaml:"coverage_update_samples"`
-	Timing        localTimingSettings          `yaml:"timing"`
-	Lanes         map[string]laneQualityPolicy `yaml:"lanes"`
+	Version           int                          `yaml:"version"`
+	PackageExclusions []string                     `yaml:"package_exclusions,omitempty"`
+	Coverage          localCoverageSettings        `yaml:"coverage"`
+	UpdateSamples     int                          `yaml:"coverage_update_samples"`
+	Timing            localTimingSettings          `yaml:"timing"`
+	Lanes             map[string]laneQualityPolicy `yaml:"lanes"`
 }
 
 func loadQualityPolicy(name string) (localQualityPolicy, error) {
@@ -80,6 +81,9 @@ func loadQualityPolicy(name string) (localQualityPolicy, error) {
 func validateQualityPolicy(policy localQualityPolicy) error {
 	if policy.Version != qualityPolicyVersion {
 		return fmt.Errorf("unsupported quality policy version %d", policy.Version)
+	}
+	if err := validatePackageExclusions(policy.PackageExclusions); err != nil {
+		return err
 	}
 	if err := validateCoverageSettings("repository", policy.Coverage.Repository); err != nil {
 		return err
@@ -211,11 +215,14 @@ func assessQualityPolicy(policy localQualityPolicy, report qualityReport) decisi
 		lane := report.Lanes[laneName]
 		coverageViolations, updates = assessCoverageBound(
 			coverageViolations, updates, laneName, "repository", "",
-			bounds.Coverage.FloorPercent, percentage(lane.Coverage), policy.Coverage.Repository,
+			bounds.Coverage.FloorPercent, percentage(guardedCoverage(lane, policy.PackageExclusions)), policy.Coverage.Repository,
 		)
 
 		measuredCoverage := reportCoveragePercentages(lane.Packages)
 		for _, packageName := range sortedUnionKeys(bounds.Coverage.Packages, measuredCoverage) {
+			if packageExcluded(policy.PackageExclusions, packageName) {
+				continue
+			}
 			floor, hasFloor := bounds.Coverage.Packages[packageName]
 			measured, hasMeasurement := measuredCoverage[packageName]
 			if !hasFloor || !hasMeasurement {
@@ -307,10 +314,10 @@ func updatedQualityPolicy(policy localQualityPolicy, report qualityReport) (loca
 		lane := report.Lanes[laneName]
 
 		lanePolicy.Coverage.FloorPercent, changes = updateCoverageBound(
-			lanePolicy.Coverage.FloorPercent, percentage(lane.Coverage), policy.Coverage.Repository,
+			lanePolicy.Coverage.FloorPercent, percentage(guardedCoverage(lane, policy.PackageExclusions)), policy.Coverage.Repository,
 			changes, laneName, "repository", "",
 		)
-		measuredCoverage := reportCoveragePercentages(lane.Packages)
+		measuredCoverage := guardedCoverageFloors(reportCoveragePercentages(lane.Packages), policy.PackageExclusions)
 		lanePolicy.Coverage.Packages, changes = updateCoveragePackages(
 			lanePolicy.Coverage.Packages, measuredCoverage, policy.Coverage.Package, changes, laneName,
 		)
@@ -322,6 +329,7 @@ func updatedQualityPolicy(policy localQualityPolicy, report qualityReport) (loca
 
 func cloneQualityPolicy(policy localQualityPolicy) localQualityPolicy {
 	result := policy
+	result.PackageExclusions = append([]string(nil), policy.PackageExclusions...)
 	result.Lanes = make(map[string]laneQualityPolicy, len(policy.Lanes))
 	for name, lane := range policy.Lanes {
 		lane.Coverage.Packages = cloneFloatMap(lane.Coverage.Packages)
@@ -397,6 +405,7 @@ func applyQualityPolicyUpdate(name string, policy localQualityPolicy, samples []
 	if err != nil {
 		return qualityReport{}, nil, err
 	}
+	representative = withCoverageExclusions(representative, policy.PackageExclusions)
 	updated, changes := updatedQualityPolicy(policy, representative)
 	if len(changes) == 0 {
 		return representative, nil, nil

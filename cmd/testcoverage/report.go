@@ -16,20 +16,19 @@ func printReportTo(outputWriter io.Writer, result qualityReport, output string) 
 	_, verdict := decisionPresentation(result.Decision.Status)
 	_, _ = fmt.Fprintf(outputWriter, "%s.\n", verdict)
 	_, _ = fmt.Fprintf(outputWriter, "tests: %s; coverage: %s; timing: %s\n", checkLabel(result.Execution), checkLabel(result.CoverageDecision), checkLabel(result.Timing))
+	printCoverageExclusions(outputWriter, result.PackageExclusions)
 	for _, name := range laneNames {
 		lane := result.Lanes[name]
 		_, _ = fmt.Fprintf(
 			outputWriter,
-			"%s: %d/%d statements (%.2f%%), %d test events, %.2fs selected package work, %.2fs command wall time\n",
+			"%s: %s, %d test events, %.2fs selected package work, %.2fs command wall time\n",
 			name,
-			lane.Coverage.CoveredStatements,
-			lane.Coverage.StatementTotal,
-			percentage(lane.Coverage),
+			laneCoverageSummary(lane),
 			lane.TestCount,
 			laneSelectedTestSeconds(lane),
 			lane.WallSeconds,
 		)
-		printPackageSummary(outputWriter, lane)
+		printPackageSummary(outputWriter, lane, result.PackageExclusions)
 	}
 	if evidence := result.Comparison; evidence != nil {
 		_, _ = fmt.Fprintf(outputWriter, "comparison base: %s; candidate: %s; measured pairs: %d\n", evidence.BaseRevision, evidence.MergeRevision, result.MeasurementSamples)
@@ -51,16 +50,38 @@ func printReportTo(outputWriter io.Writer, result qualityReport, output string) 
 	_, _ = fmt.Fprintf(outputWriter, "Quality report: %s\n", output)
 }
 
-func printPackageSummary(output io.Writer, lane laneReport) {
+func printPackageSummary(output io.Writer, lane laneReport, exclusions []string) {
 	timings := timingMap(lane.Timings)
 	for _, pkg := range lane.Packages {
+		guard := ""
+		if packageExcluded(exclusions, pkg.Name) {
+			guard = ", coverage excluded"
+		}
 		timing, measured := timings[pkg.Name]
 		if !measured {
-			_, _ = fmt.Fprintf(output, "  %s: %d/%d statements (%.2f%%), no selected package work\n", packageLabel(pkg.Name), pkg.CoveredStatements, pkg.StatementTotal, percentage(pkg.coverageMetric))
+			_, _ = fmt.Fprintf(output, "  %s: %d/%d raw statements (%.2f%%)%s, no selected package work\n", packageLabel(pkg.Name), pkg.CoveredStatements, pkg.StatementTotal, percentage(pkg.coverageMetric), guard)
 			continue
 		}
-		_, _ = fmt.Fprintf(output, "  %s: %d/%d statements (%.2f%%), %.2fs\n", packageLabel(pkg.Name), pkg.CoveredStatements, pkg.StatementTotal, percentage(pkg.coverageMetric), timing)
+		_, _ = fmt.Fprintf(output, "  %s: %d/%d raw statements (%.2f%%)%s, %.2fs\n", packageLabel(pkg.Name), pkg.CoveredStatements, pkg.StatementTotal, percentage(pkg.coverageMetric), guard, timing)
 	}
+}
+
+func printCoverageExclusions(output io.Writer, exclusions []string) {
+	if len(exclusions) > 0 {
+		_, _ = fmt.Fprintf(output, "Coverage exclusions (exact packages): %s. Raw measurements are retained; tests and timing are unchanged.\n", strings.Join(exclusions, ", "))
+	}
+}
+
+func laneCoverageSummary(lane laneReport) string {
+	raw := fmt.Sprintf("raw coverage: %d/%d statements (%.2f%%)", lane.Coverage.CoveredStatements, lane.Coverage.StatementTotal, percentage(lane.Coverage))
+	if lane.GuardedCoverage == nil {
+		return raw
+	}
+	return "guarded coverage: " + coverageTableValue(*lane.GuardedCoverage) + "; " + raw
+}
+
+func coverageTableValue(metric coverageMetric) string {
+	return fmt.Sprintf("%d/%d (%.2f%%)", metric.CoveredStatements, metric.StatementTotal, percentage(metric))
 }
 
 func findingLocation(item finding) string {
@@ -93,7 +114,7 @@ func findingLocationLabel(item finding) string {
 // packageLabel shortens only this module's package and test identities.
 // Machine-readable reports and raw diagnostic streams keep their original values.
 func packageLabel(name string) string {
-	return strings.TrimPrefix(name, "github.com/hea3ven/orpheus/")
+	return strings.TrimPrefix(name, modulePath+"/")
 }
 
 func findingMessage(item finding) string {

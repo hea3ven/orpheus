@@ -35,23 +35,27 @@ func renderReportSummary(output io.Writer, result qualityReport, reportPath stri
 	_, _ = fmt.Fprintln(output, "| Check | Result |\n| --- | --- |")
 	_, _ = fmt.Fprintf(output, "| Tests/execution | %s |\n| Coverage | %s |\n| Timing | %s |\n\n", checkLabel(result.Execution), checkLabel(result.CoverageDecision), checkLabel(result.Timing))
 	renderComparisonSummary(output, result)
-	_, _ = fmt.Fprint(output, "### Lane results\n\n")
-	_, _ = fmt.Fprintln(output, "| Lane | Result | Coverage | Test events | Selected package work | Command wall time |")
-	_, _ = fmt.Fprintln(output, "| --- | --- | ---: | ---: | ---: | ---: |")
+	printCoverageExclusions(output, result.PackageExclusions)
+	_, _ = fmt.Fprint(output, "\n### Lane results\n\n")
+	_, _ = fmt.Fprintln(output, "| Lane | Result | Guarded coverage | Raw coverage | Test events | Selected package work | Command wall time |")
+	_, _ = fmt.Fprintln(output, "| --- | --- | ---: | ---: | ---: | ---: | ---: |")
 	for _, name := range laneNames {
 		lane := result.Lanes[name]
 		laneResult := "Pass"
 		if !lane.Passed || lane.Failure != nil {
 			laneResult = "Fail"
 		}
+		guarded := "Not evaluated"
+		if lane.GuardedCoverage != nil {
+			guarded = coverageTableValue(*lane.GuardedCoverage)
+		}
 		_, _ = fmt.Fprintf(
 			output,
-			"| %s | **%s** | %d/%d (%.2f%%) | %d | %.2fs | %.2fs |\n",
+			"| %s | **%s** | %s | %s | %d | %.2fs | %.2fs |\n",
 			markdownEscape(name),
 			laneResult,
-			lane.Coverage.CoveredStatements,
-			lane.Coverage.StatementTotal,
-			percentage(lane.Coverage),
+			guarded,
+			coverageTableValue(lane.Coverage),
 			lane.TestCount,
 			laneSelectedTestSeconds(lane),
 			lane.WallSeconds,
@@ -113,8 +117,8 @@ func renderFindingTable(output io.Writer, heading string, findings []finding) {
 func renderPackageTable(output io.Writer, result qualityReport) {
 	_, _ = fmt.Fprintln(output, "\n<details>")
 	_, _ = fmt.Fprint(output, "<summary>Package coverage and timing</summary>\n\n")
-	_, _ = fmt.Fprintln(output, "| Lane | Package | Coverage | Selected package work |")
-	_, _ = fmt.Fprintln(output, "| --- | --- | ---: | ---: |")
+	_, _ = fmt.Fprintln(output, "| Lane | Package | Raw coverage | Coverage guard | Selected package work |")
+	_, _ = fmt.Fprintln(output, "| --- | --- | ---: | --- | ---: |")
 	for _, name := range laneNames {
 		lane := result.Lanes[name]
 		timings := timingMap(lane.Timings)
@@ -123,14 +127,21 @@ func renderPackageTable(output io.Writer, result qualityReport) {
 			if seconds, measured := timings[pkg.Name]; measured {
 				timing = fmt.Sprintf("%.2fs", seconds)
 			}
+			guard := "Guarded"
+			if packageExcluded(result.PackageExclusions, pkg.Name) {
+				guard = "Excluded"
+			} else if lane.GuardedCoverage == nil {
+				guard = "Not evaluated"
+			}
 			_, _ = fmt.Fprintf(
 				output,
-				"| %s | %s | %d/%d (%.2f%%) | %s |\n",
+				"| %s | %s | %d/%d (%.2f%%) | %s | %s |\n",
 				markdownEscape(name),
 				markdownEscape(packageLabel(pkg.Name)),
 				pkg.CoveredStatements,
 				pkg.StatementTotal,
 				percentage(pkg.coverageMetric),
+				guard,
 				timing,
 			)
 		}

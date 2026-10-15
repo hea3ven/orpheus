@@ -49,10 +49,21 @@ func TestSameRunnerComparisonExcludesWarmupsAndBoundsConfirmation(t *testing.T) 
 				if revision == fixtureMerge && !warmup {
 					seconds = test.values[index-1]
 				}
-				return timingFixture(revision, seconds), "sample.json", nil
+				sample := timingFixture(revision, seconds)
+				for _, name := range laneNames {
+					lane := sample.Lanes[name]
+					lane.Packages = append(lane.Packages, packageMetric{Name: modulePath + "/internal/infra", coverageMetric: coverageMetric{StatementTotal: 1000}})
+					lane.Coverage.StatementTotal += 1000
+					lane.Timings[0].Name = modulePath + "/internal/infra"
+					lane.PackageTestCounts = map[string]int{modulePath + "/internal/infra": 10}
+					sample.Lanes[name] = lane
+				}
+				return sample, "sample.json", nil
 			}
 
-			result, err := compareRevisions(testLocalQualityPolicy(), fixtureBase, fixtureMerge, collect, nil)
+			policy := testLocalQualityPolicy()
+			policy.PackageExclusions = []string{"internal/infra"}
+			result, err := compareRevisions(policy, fixtureBase, fixtureMerge, collect, nil)
 
 			if result.Timing.Status != test.want || (err != nil) != (test.want != statusPass) || result.MeasurementSamples != test.pairs {
 				t.Fatalf("comparison = %s, %d pairs, %v; want %s, %d pairs", result.Timing.Status, result.MeasurementSamples, err, test.want, test.pairs)
@@ -66,6 +77,20 @@ func TestSameRunnerComparisonExcludesWarmupsAndBoundsConfirmation(t *testing.T) 
 			}
 			if result.Execution.Status != statusPass || result.CoverageDecision.Status != statusPass || result.Comparison.BaseMedians["unit"].SelectedTestSeconds != 1 {
 				t.Fatalf("independent results or warm-up exclusion = %#v", result)
+			}
+			lane := result.Lanes["unit"]
+			if lane.GuardedCoverage == nil || lane.GuardedCoverage.StatementTotal != 1000 || lane.Coverage.StatementTotal != 2000 || lane.TestCount != 10 {
+				t.Fatalf("comparison lost guarded/raw coverage or excluded tests: %#v", lane)
+			}
+			if test.want == statusTimingFailed {
+				if !hasFinding(result.Timing, "timing_comparison", "suite") || !hasFinding(result.Timing, "timing_comparison", "package") {
+					t.Fatalf("excluded package escaped suite or package timing guard: %#v", result.Timing)
+				}
+				for _, item := range result.Timing.Findings {
+					if item.Scope == "package" && item.Name != modulePath+"/internal/infra" {
+						t.Fatalf("timing finding lost excluded package identity: %#v", item)
+					}
+				}
 			}
 		})
 	}
@@ -225,7 +250,9 @@ func TestMissingIncompatibleAndFailedEvidenceAbortWithoutSelectiveRetries(t *tes
 				return sample, "sample.json", nil
 			}
 
-			result, err := compareRevisions(testLocalQualityPolicy(), fixtureBase, fixtureMerge, collect, nil)
+			policy := testLocalQualityPolicy()
+			policy.PackageExclusions = []string{"internal/tasksource/beads"}
+			result, err := compareRevisions(policy, fixtureBase, fixtureMerge, collect, nil)
 
 			if err == nil || result.Timing.Status != statusUnevaluated || result.Complete || calls != test.wantCalls {
 				t.Fatalf("abort = timing %s, calls %d (want %d), complete %t, err %v", result.Timing.Status, calls, test.wantCalls, result.Complete, err)

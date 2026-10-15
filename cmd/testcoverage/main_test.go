@@ -37,6 +37,9 @@ func TestParseOptionsSupportsQualityModes(t *testing.T) {
 		{name: "reject comparison plus update", args: []string{"-compare-head", fixtureBase, "-compare-merge", fixtureMerge, "-update-policy"}, wantErr: true},
 		{name: "reject comparison plus measurement", args: []string{"-compare-head", fixtureBase, "-compare-merge", fixtureMerge, "-measure-revision", fixtureBase}, wantErr: true},
 		{name: "quality policy update", args: []string{"-update-policy"}, want: options{updatePolicy: true}},
+		{name: "lint", args: []string{"-lint"}, want: options{lint: true}},
+		{name: "reject lint plus update", args: []string{"-lint", "-update-policy"}, wantErr: true},
+		{name: "reject lint plus measurement", args: []string{"-lint", "-measure-revision", fixtureBase}, wantErr: true},
 		{name: "scenario audit", args: []string{"-audit-scenarios"}, want: options{auditScenarios: true}},
 		{name: "focused scenario audit", args: []string{
 			"-audit-scenarios",
@@ -252,14 +255,29 @@ func TestPrintReportShowsPackageCoverageAndSelectedTestTiming(t *testing.T) {
 		report.Lanes[name] = lane
 	}
 	report.Scenarios = []scenarioResult{{Name: "github.com/hea3ven/orpheus/internal/tasksource/beads/TestIntegrationScenario"}}
+	annotated := withCoverageExclusions(report, []string{"internal/tasksource/beads"})
+	persisted := cloneReport(t, annotated)
+	for _, name := range laneNames {
+		lane := persisted.Lanes[name]
+		if lane.GuardedCoverage == nil || *lane.GuardedCoverage != (coverageMetric{StatementTotal: 5, CoveredStatements: 2}) || lane.Coverage != (coverageMetric{StatementTotal: 15, CoveredStatements: 10}) || len(lane.Packages) != 2 || lane.Timings[0].Seconds != 0.25 {
+			t.Fatalf("%s guarded/raw evidence = %#v", name, lane)
+		}
+		if report.Lanes[name].GuardedCoverage != nil {
+			t.Fatal("annotating report mutated raw sample")
+		}
+	}
+	if !reflect.DeepEqual(persisted.PackageExclusions, []string{"internal/tasksource/beads"}) {
+		t.Fatalf("persisted exclusions = %v", persisted.PackageExclusions)
+	}
 	var output bytes.Buffer
-	printReportTo(&output, report, "report.json")
+	printReportTo(&output, persisted, "report.json")
 	contents := output.String()
 	for _, want := range []string{
-		"unit: 10/15 statements (66.67%), 10 test events, 0.25s selected package work, 1.00s command wall time",
-		"internal/tasksource/beads: 8/10 statements (80.00%), 0.25s",
+		"unit: guarded coverage: 2/5 (40.00%); raw coverage: 10/15 statements (66.67%), 10 test events, 0.25s selected package work, 1.00s command wall time",
+		"internal/tasksource/beads: 8/10 raw statements (80.00%), coverage excluded, 0.25s",
+		"Coverage exclusions (exact packages): internal/tasksource/beads. Raw measurements are retained; tests and timing are unchanged.",
 		"scenario internal/tasksource/beads/TestIntegrationScenario:",
-		"example.test/not-timed: 2/5 statements (40.00%), no selected package work",
+		"example.test/not-timed: 2/5 raw statements (40.00%), no selected package work",
 	} {
 		if !strings.Contains(contents, want) {
 			t.Fatalf("report does not contain %q:\n%s", want, contents)
@@ -267,6 +285,13 @@ func TestPrintReportShowsPackageCoverageAndSelectedTestTiming(t *testing.T) {
 	}
 	if strings.Contains(contents, "start_line") || strings.Contains(contents, "blocks") || strings.Contains(contents, "github.com/hea3ven/orpheus/") {
 		t.Fatalf("report includes source-level coverage detail:\n%s", contents)
+	}
+	output.Reset()
+	renderReportSummary(&output, persisted, "report.json")
+	for _, want := range []string{"Guarded coverage | Raw coverage", "| unit | **Pass** | 2/5 (40.00%) | 10/15 (66.67%) |", "internal/tasksource/beads | 8/10 (80.00%) | Excluded | 0.25s", "example.test/not-timed | 2/5 (40.00%) | Guarded | Not measured", "Coverage exclusions (exact packages): internal/tasksource/beads."} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("Markdown missing %q:\n%s", want, output.String())
+		}
 	}
 }
 
