@@ -247,10 +247,16 @@ func TestIntegrationWorkflowTaskRunAgentStartFailureRecordsFailedStartWithoutChi
 	fixture.configureImplementer("missing", agent.Profile{Command: "missing-agent"})
 	startErr := &agentexec.StartError{Name: "missing", Err: errors.New("missing executable")}
 	fixture.agent.outcomes = []semanticAgentOutcome{{startFailure: startErr}}
+	captures := 0
+	fixture.options.Dependencies.CaptureUsage = func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions {
+		captures++
+		return aCapturedPiUsage()
+	}
 
 	stdout, stderr, err := fixture.execute("task", "run", "op-start")
 
 	assert.ErrorIs(t, err, startErr)
+	assert.Zero(t, captures)
 	assert.Empty(t, stdout)
 	assert.Contains(t, stderr, "== Agent run: implementation (run attempt 1) ==")
 	final, _ := fixture.loadFinalTask("op-start")
@@ -265,6 +271,11 @@ func TestIntegrationWorkflowTaskRunAgentStartFailureRecordsFailedStartWithoutChi
 func TestIntegrationWorkflowTaskRunHeaderFailurePreventsLaunchAndRecordsFailedStart(t *testing.T) {
 	fixture := newTaskWorkflowFixture(t, anOpenTask("op-header"))
 	fixture.configureImplementer("recorder", agent.Profile{Command: "unused-agent"})
+	captures := 0
+	fixture.options.Dependencies.CaptureUsage = func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions {
+		captures++
+		return aCapturedPiUsage()
+	}
 	command := cli.NewRootCommandWithOptions(fixture.options)
 	command.SetIn(bytes.NewReader(nil))
 	command.SetOut(new(bytes.Buffer))
@@ -275,6 +286,7 @@ func TestIntegrationWorkflowTaskRunHeaderFailurePreventsLaunchAndRecordsFailedSt
 
 	assert.ErrorContains(t, err, "render agent run header")
 	assert.ErrorContains(t, err, "output unavailable")
+	assert.Zero(t, captures)
 	assert.Empty(t, fixture.agent.launches)
 	final, _ := fixture.loadFinalTask("op-header")
 	require.Len(t, final.Runs, 1)

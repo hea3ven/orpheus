@@ -3,13 +3,11 @@ package cli
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/agent"
-	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/registry"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/workflow"
@@ -172,67 +170,11 @@ type taskReviewLifecycleAgentRunner struct {
 	service workflow.DispatchService
 }
 
-type reviewLifecycleAgentHeaderWriteError struct {
-	cause error
-}
-
-func (e reviewLifecycleAgentHeaderWriteError) Error() string {
-	return fmt.Sprintf("render agent run header: %v", e.cause)
-}
-
-func (e reviewLifecycleAgentHeaderWriteError) Unwrap() error {
-	return e.cause
-}
-
-func (r taskReviewLifecycleAgentRunner) IsStartError(err error) bool {
-	var headerErr reviewLifecycleAgentHeaderWriteError
-	return errors.As(err, &headerErr) || agentexec.IsStartError(err)
-}
-
 func (r taskReviewLifecycleAgentRunner) RunReviewLifecycleAgent(
 	ctx context.Context,
 	run workflow.ReviewLifecycleAgentRun,
-) (workflow.ReviewLifecycleAgentRunResult, error) {
-	if err := renderTaskRunAgentHeader(r.command.ErrOrStderr(), run.Start.Attempt); err != nil {
-		return workflow.ReviewLifecycleAgentRunResult{}, reviewLifecycleAgentHeaderWriteError{cause: err}
-	}
-	if err := r.deps.agentLauncher.Run(ctx, agentexec.Command{
-		Name:    run.Start.Command.AgentName,
-		Harness: run.Start.Command.Harness,
-		Command: run.Start.Command.Command,
-		Args:    append([]string{}, run.Start.Command.Args...),
-	}, agentexec.LaunchOptions{
-		Dir: run.Start.ExecutionDir,
-		Env: r.deps.invocationEnvironment(taskRunEnvironment(
-			run.RepoID,
-			run.Start.Task.ID,
-			run.Start.Setup.WorktreePath,
-			run.Start.Setup.Branch,
-			run.Prompt,
-		)),
-		Stdin:  r.command.InOrStdin(),
-		Stdout: r.command.OutOrStdout(),
-		Stderr: r.command.ErrOrStderr(),
-		OnStart: func(pid int) error {
-			return r.service.RecordChildPID(run.RepoID, run.TaskID, run.Start.Attempt.Attempt, pid)
-		},
-	}); err != nil {
-		return workflow.ReviewLifecycleAgentRunResult{}, err
-	}
-	_, err := r.service.RunStore.RecordRunUsage(
-		run.RepoID,
-		run.TaskID,
-		run.Start.Attempt.Attempt,
-		r.deps.captureUsage(agent.UsageCaptureOptions{
-			Harness:      run.Start.Attempt.Execution.Harness,
-			ExecutionDir: run.Start.ExecutionDir,
-			SessionName:  run.Start.Attempt.Execution.SessionName,
-			StartedAt:    run.Start.Attempt.Execution.StartedAt,
-			Env:          r.deps.usageCaptureEnvironment(),
-			Launch:       run.Start.Attempt.Execution.Launch,
-		}),
-	)
-	return workflow.ReviewLifecycleAgentRunResult{UsageError: err}, nil
+) agent.ExecutionResult {
+	return executeTaskRunAgent(ctx, r.command, r.deps, r.service.Logger, r.service, run.RepoID, run.TaskID, run.Start, run.Prompt)
 }
 
 func taskReviewStartFromWorkflow(ctx workflow.ReviewAttemptContext) taskReviewStart {

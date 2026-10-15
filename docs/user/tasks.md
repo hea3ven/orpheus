@@ -270,6 +270,11 @@ remain explicit. These are correlations, not proof that a model caused an outcom
 
 ### Capture reliability and cost
 
+Orpheus attempts usage capture after every started implementation, repair,
+reviewer, or Sync conflict agent, including failed and canceled executions.
+Failures before process startup do not trigger session matching. Capture is
+best-effort: it neither changes the execution outcome nor reruns the agent.
+
 Usage capture requires a structured Pi or Codex profile. Raw profiles remain
 unknown even when their command launches one of those tools. Orpheus correlates
 local JSONL logs by working directory, execution start, and session name where

@@ -3,6 +3,8 @@
 package cli_test
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -39,43 +41,62 @@ func TestIntegrationWorkflowTaskRunStructuredCodexProfileBuildsAttachedCommand(t
 	assert.Equal(t, args, execution.Args)
 }
 
-func TestIntegrationWorkflowTaskRunStructuredPiProfilePersistsCapturedUsage(t *testing.T) {
-	fixture := newTaskWorkflowFixture(t, anOpenTask("op-pi"))
-	fixture.withAgentExitingWithoutCompletion(1)
-	fixture.configureImplementer("pi-medium", agent.Profile{Harness: "pi", Model: "openai-codex/gpt-5.5", Thinking: "high"})
-	captured := aCapturedPiUsage()
-	var captures []agent.UsageCaptureOptions
-	fixture.options.Dependencies.CaptureUsage = func(opts agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions {
-		captures = append(captures, opts)
-		return captured
+func TestIntegrationWorkflowTaskRunStructuredPiProfilePersistsUsageForEveryStartedOutcome(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		err    error
+		status taskstate.RunStatus
+	}{
+		{"success without completion", nil, taskstate.RunStatusSucceeded},
+		{"runtime failure", errors.New("implementation failed"), taskstate.RunStatusFailed},
+		{"cancellation", context.Canceled, taskstate.RunStatusFailed},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newTaskWorkflowFixture(t, anOpenTask("op-pi"))
+			fixture.withAgentExitingWithoutCompletion(1)
+			fixture.agent.outcomes[0].err = test.err
+			fixture.configureImplementer("pi-medium", agent.Profile{Harness: "pi", Model: "openai-codex/gpt-5.5", Thinking: "high"})
+			captured := aCapturedPiUsage()
+			var captures []agent.UsageCaptureOptions
+			fixture.options.Dependencies.CaptureUsage = func(opts agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions {
+				captures = append(captures, opts)
+				return captured
+			}
+
+			_, stderr, err := fixture.execute("task", "run", "op-pi")
+
+			if test.err == nil {
+				require.NoError(t, err, "stderr: %s", stderr)
+			} else {
+				require.ErrorIs(t, err, test.err)
+			}
+			final, _ := fixture.loadFinalTask("op-pi")
+			require.Len(t, final.Runs, 1)
+			execution := final.Runs[0].Execution
+			assert.Equal(t, test.status, execution.Status)
+			assert.Nil(t, final.Runs[0].Completion)
+			assert.Zero(t, fixture.reviewPipelineRuns)
+			assert.Equal(t, "pi-medium", execution.Agent)
+			assert.False(t, execution.Interactive)
+			assert.Equal(t, "pi", execution.Harness)
+			assert.Equal(t, "openai-codex/gpt-5.5", execution.Model)
+			assert.Equal(t, captured.Session, execution.Session)
+			assert.Equal(t, captured.Usage, execution.Usage)
+			assert.Equal(t, captured.UsageCost, execution.UsageCost)
+			assert.Equal(t, captured.UsageCapture, execution.UsageCapture)
+			require.Len(t, captures, 1)
+			capture := captures[0]
+			_, worktree := fixture.expectedTarget("op-pi")
+			assert.Equal(t, "pi", capture.Harness)
+			assert.Equal(t, worktree, capture.ExecutionDir)
+			assert.Equal(t, execution.SessionName, capture.SessionName)
+			assert.Equal(t, execution.StartedAt, capture.StartedAt)
+			assert.Equal(t, "alpha", capture.RepoID)
+			assert.Equal(t, "op-pi", capture.TaskID)
+			assert.Equal(t, 1, capture.Attempt)
+			assert.NotNil(t, capture.Logger)
+		})
 	}
-
-	_, stderr, err := fixture.execute("task", "run", "op-pi")
-
-	require.NoError(t, err, "stderr: %s", stderr)
-	final, _ := fixture.loadFinalTask("op-pi")
-	require.Len(t, final.Runs, 1)
-	execution := final.Runs[0].Execution
-	assert.Equal(t, taskstate.RunStatusSucceeded, execution.Status)
-	assert.Equal(t, "pi-medium", execution.Agent)
-	assert.False(t, execution.Interactive)
-	assert.Equal(t, "pi", execution.Harness)
-	assert.Equal(t, "openai-codex/gpt-5.5", execution.Model)
-	assert.Equal(t, captured.Session, execution.Session)
-	assert.Equal(t, captured.Usage, execution.Usage)
-	assert.Equal(t, captured.UsageCost, execution.UsageCost)
-	assert.Equal(t, captured.UsageCapture, execution.UsageCapture)
-	require.Len(t, captures, 1)
-	capture := captures[0]
-	_, worktree := fixture.expectedTarget("op-pi")
-	assert.Equal(t, "pi", capture.Harness)
-	assert.Equal(t, worktree, capture.ExecutionDir)
-	assert.Equal(t, execution.SessionName, capture.SessionName)
-	assert.Equal(t, execution.StartedAt, capture.StartedAt)
-	assert.Equal(t, "alpha", capture.RepoID)
-	assert.Equal(t, "op-pi", capture.TaskID)
-	assert.Equal(t, 1, capture.Attempt)
-	assert.NotNil(t, capture.Logger)
 }
 
 func TestIntegrationWorkflowTaskRunAgentFlagOverridesConfiguredDefault(t *testing.T) {

@@ -161,33 +161,6 @@ func TestTaskEditRecognizesExplicitlyEmptyPlanningInput(t *testing.T) {
 	})
 }
 
-func TestSyncConflictAgentUsageOptionsUnsupportedHarnessUsesStableReason(t *testing.T) {
-	tests := []struct {
-		name    string
-		harness string
-		want    string
-	}{
-		{name: "blank", want: "unsupported_harness:unknown"},
-		{name: "trimmed", harness: " local ", want: "unsupported_harness:local"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			options := (syncConflictAgentResolver{}).usageOptions(
-				agent.CommandSnapshot{Harness: tt.harness},
-				testutil.CanonicalTempDir(t),
-			)(taskstate.AgentExecution{}, nil)
-
-			if options.UsageCapture.Status != taskstate.UsageCaptureUnknown {
-				t.Fatalf("status = %q, want %q", options.UsageCapture.Status, taskstate.UsageCaptureUnknown)
-			}
-			if options.UsageCapture.Reason != tt.want {
-				t.Fatalf("reason = %q, want %q", options.UsageCapture.Reason, tt.want)
-			}
-		})
-	}
-}
-
 func TestSyncConflictAgentResolverUsesEffectivePromptInCommandAndEnvironment(t *testing.T) {
 	t.Parallel()
 
@@ -216,8 +189,8 @@ func TestSyncConflictAgentResolverUsesEffectivePromptInCommandAndEnvironment(t *
 	if got := execution.Args[len(execution.Args)-1]; got != wantPrompt {
 		t.Fatalf("recorded prompt arg = %q, want %q", got, wantPrompt)
 	}
-	if err := prepared.Resolve(context.Background()); err != nil {
-		t.Fatalf("resolve conflict: %v", err)
+	if result := prepared.Execute(context.Background(), prepared.Execution); result.Err != nil {
+		t.Fatalf("resolve conflict: %v", result.Err)
 	}
 	if gotPromptArg != wantPrompt {
 		t.Fatalf("launch prompt arg = %q, want %q", gotPromptArg, wantPrompt)
@@ -270,6 +243,9 @@ func syncConflictPromptTestResolver(paths state.Paths, gotPromptArg *string, got
 			opts agentexec.LaunchOptions,
 		) error {
 			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := opts.OnStart(4242); err != nil {
 				return err
 			}
 			*gotPromptArg = command.Args[len(command.Args)-1]

@@ -507,8 +507,9 @@ func (s SyncService) runSyncConflictResolver(
 		auditOpts.Execution = *startedEvent.Execution
 	}
 
-	err = prepared.Resolve(ctx)
-	auditOpts.Usage = syncConflictResolverUsageOptions(prepared, auditOpts.Execution, err)
+	result := prepared.Execute(ctx, auditOpts.Execution)
+	err = result.Err
+	auditOpts.Usage = result.Usage
 	if err != nil {
 		if recordErr := s.recordSyncConflictResolutionFailure(repoID, taskID, auditOpts, err); recordErr != nil {
 			err = errors.Join(err, recordErr)
@@ -541,17 +542,6 @@ func recordSyncConflictResolverExecution(
 		return fmt.Errorf("record conflict resolver execution for task %s: %w", taskID, err)
 	}
 	return nil
-}
-
-func syncConflictResolverUsageOptions(
-	prepared PreparedSyncConflictResolution,
-	execution taskstate.AgentExecution,
-	runErr error,
-) taskstate.RecordRunUsageOptions {
-	if prepared.CaptureUsage == nil {
-		return taskstate.RecordRunUsageOptions{}
-	}
-	return prepared.CaptureUsage(execution, runErr)
 }
 
 func (s SyncService) recordSyncConflictResolutionFailure(

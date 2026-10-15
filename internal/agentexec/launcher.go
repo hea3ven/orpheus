@@ -36,7 +36,9 @@ type LaunchOptions struct {
 	OnStart func(pid int) error
 }
 
-// Launcher runs a resolved agent command.
+// Launcher runs a resolved agent command. Implementations must call OnStart
+// once after startup and wait for process cleanup before returning. Failures
+// before startup must not call OnStart.
 type Launcher interface {
 	Run(ctx context.Context, command Command, opts LaunchOptions) error
 }

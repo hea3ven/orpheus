@@ -3,6 +3,7 @@
 package cli_test
 
 import (
+	"context"
 	"errors"
 	"io"
 	"path/filepath"
@@ -80,6 +81,7 @@ func TestIntegrationWorkflowReviewFailedRepairCanRetryWithoutLosingBlocker(t *te
 		status  taskstate.RunStatus
 	}{
 		{"runtime failure", semanticAgentOutcome{err: errors.New("repair failed")}, taskstate.RunStatusFailed},
+		{"cancellation", semanticAgentOutcome{err: context.Canceled}, taskstate.RunStatusFailed},
 		{"start failure", semanticAgentOutcome{startFailure: &agentexec.StartError{Err: errors.New("repair did not start")}}, taskstate.RunStatusFailed},
 		{"no completion", semanticAgentOutcome{exitWithoutCompletion: true}, taskstate.RunStatusSucceeded},
 	} {
@@ -91,6 +93,12 @@ func TestIntegrationWorkflowReviewFailedRepairCanRetryWithoutLosingBlocker(t *te
 			fixture.budget(2)
 			fixture.completingRepairs("repairer", 1, false)
 			fixture.agent.outcomes[0] = test.outcome
+			captures := 0
+			fixture.options.Dependencies.CaptureUsage = func(opts agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions {
+				captures++
+				assert.Contains(t, opts.SessionName, "op-retry")
+				return aCapturedPiUsage()
+			}
 
 			_, _, err := fixture.runError("", "task", "run", "op-retry")
 			if test.outcome.exitWithoutCompletion {
@@ -102,6 +110,13 @@ func TestIntegrationWorkflowReviewFailedRepairCanRetryWithoutLosingBlocker(t *te
 			require.Len(t, failed.Runs, 2)
 			assert.Equal(t, test.status, failed.Runs[1].Status)
 			assert.Nil(t, failed.Runs[1].Completion)
+			if test.outcome.startFailure != nil {
+				assert.Zero(t, captures)
+				assert.Nil(t, failed.Runs[1].Execution.Usage)
+			} else {
+				assert.Equal(t, 1, captures)
+				assert.Equal(t, aCapturedPiUsage().Usage, failed.Runs[1].Execution.Usage)
+			}
 			indexes, eligible := taskstate.UntargetedBlockingFindingIndexesForFollowUpInState(failed, failed.Reviews[0])
 			assert.True(t, eligible)
 			assert.Equal(t, []int{0}, indexes)
@@ -141,6 +156,11 @@ func TestIntegrationWorkflowTaskReviewFollowUpHeaderWriteFailureRecordsStartFail
 	_, err = runStore.FinishReview("alpha", "op-followup-header", reviewAttempt.Attempt, taskstate.ReviewStatusBlocked)
 	must.NoError(err)
 
+	captures := 0
+	fixture.options.Dependencies.CaptureUsage = func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions {
+		captures++
+		return aCapturedPiUsage()
+	}
 	command := cli.NewRootCommandWithOptions(fixture.options)
 	command.SetIn(strings.NewReader(""))
 	command.SetOut(io.Discard)
@@ -151,6 +171,7 @@ func TestIntegrationWorkflowTaskReviewFollowUpHeaderWriteFailureRecordsStartFail
 	is.ErrorContains(err, "render agent run header")
 	is.ErrorContains(err, "agent header output unavailable")
 	is.Empty(fixture.agent.launches)
+	is.Zero(captures)
 
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-followup-header.yaml"), &state))
