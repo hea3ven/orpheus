@@ -230,7 +230,29 @@ Coverage floors and refresh thresholds remain blocking. Package coverage
 additions/removals require an explicit policy update. JSON and Markdown reports
 are written to `artifacts/test-coverage/report.json` and `report.md`. A failed
 lane does not prevent the other lane from running; failure reports retain raw
-JSON, stderr, and decoded failing-test evidence.
+JSON, stderr, and decoded failing-test evidence. Human summaries include raw stdout
+alongside stderr when decoded failure output is unavailable.
+
+Terminal and Markdown/CI summaries show one overall verdict with independent
+results for tests, coverage, and timing. Findings identify the lane and scope,
+using module-relative package paths (for example, `internal/tasksource/beads`);
+JSON identities and raw diagnostics remain unchanged. Routine findings show only
+the measurement and relevant boundary:
+
+```text
+unit/internal/tasksource/beads: Coverage decreased significantly to 61.2%, min is 63.0%.
+unit/repository: Coverage improved significantly to 54.2%, refresh at 54.1%.
+integration/suite: Timing increased significantly to 3.44s, max is 1.38s.
+unit: Test failed: internal/tasksource/beads/TestName.
+Timing unevaluated: measurement environments differ.
+```
+
+Refresh percentages are actual coverage boundaries, not proposed floors or
+refresh deltas. Downward refreshes say “decreased,” even above the minimum.
+Findings use one decimal for percentages and two for seconds, adding precision
+when rounding would conceal a boundary crossing. Only confirmed timing failures
+say “increased significantly”; unavailable evidence stays unevaluated. Proposed
+floor changes appear only in explicit `make quality-policy-update` output.
 
 ## Explicit local timing comparison
 
@@ -287,7 +309,9 @@ private temporary state, never operator changes. Comparisons exit zero only when
 execution, candidate coverage, and timing all pass. Confirmed timing violations,
 coverage violations/refresh needs, failed tests, and execution/evidence failures
 exit nonzero. Invalid evidence leaves timing **unevaluated**, not a regression;
-confirmation never replaces first-sample candidate coverage.
+confirmation never replaces first-sample candidate coverage. Failed-sample
+summaries identify the comparison subject and lane and retain named failures and
+diagnostics independently of that coverage evidence.
 
 For custom output, run the collector with `-compare-worktree -compare-base <ref>
 -output /outside/new-directory/report.json`. The containing directory must be new

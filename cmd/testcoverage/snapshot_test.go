@@ -95,27 +95,35 @@ func TestLocalTimingReportsRemainOutsideTheSource(t *testing.T) {
 
 func TestWorkingTreeReportLabelsSnapshotAndKeepsComparisonFailuresDistinct(t *testing.T) {
 	for _, test := range []struct {
-		status string
-		want   string
+		status, execution, timing, want, checks string
 	}{
-		{statusPass, "Quality checks passed"},
-		{statusTimingFailed, "Timing ceiling exceeded"},
-		{statusUnevaluated, "Timing unevaluated"},
-		{statusExecutionFailed, "Execution failed"},
+		{statusPass, statusPass, statusPass, "Quality checks passed", "| Tests/execution | passed |\n| Coverage | passed |\n| Timing | passed |"},
+		{statusTimingFailed, statusPass, statusTimingFailed, "Quality checks failed", "| Tests/execution | passed |\n| Coverage | passed |\n| Timing | failed |"},
+		{statusUnevaluated, statusPass, statusUnevaluated, "Quality checks blocked", "| Tests/execution | passed |\n| Coverage | passed |\n| Timing | unevaluated |"},
+		{statusExecutionFailed, statusExecutionFailed, statusUnevaluated, "Quality checks failed", "| Tests/execution | failed |\n| Coverage | passed |\n| Timing | unevaluated |"},
 	} {
 		report := timingFixture(fixtureMerge, 1)
 		report.Decision = decision{Status: test.status}
+		report.Execution = decision{Status: test.execution}
+		report.Timing = decision{Status: test.timing}
 		report.Comparison = &comparisonEvidence{BaseRevision: fixtureBase, MergeRevision: fixtureMerge, Snapshot: &workingTreeSnapshot{HeadRevision: fixtureBase, Tree: "tree-id", Bundle: "/fixture/candidate.bundle"}}
+		lane := report.Lanes["unit"]
+		lane.Timings = []packageTiming{{Name: "github.com/hea3ven/orpheus/internal/tasksource/beads", Seconds: 1}}
+		report.Comparison.BaseMedians = map[string]laneReport{"unit": lane}
+		report.Comparison.MergeMedians = map[string]laneReport{"unit": lane}
 		var output strings.Builder
 
 		renderReportSummary(&output, report, "/fixture/report.json")
 
-		for _, want := range []string{test.want, "Working-tree snapshot", "Source HEAD:", "Raw tree: `tree-id`", "candidate.bundle"} {
+		for _, want := range []string{test.want, "Working-tree snapshot", "Source HEAD:", "Raw tree: `tree-id`", "candidate.bundle", "| unit/internal/tasksource/beads | 1.000s | 1.000s |"} {
 			if !strings.Contains(output.String(), want) {
 				t.Fatalf("snapshot report missing %q: %s", want, output.String())
 			}
 		}
-		if strings.Contains(output.String(), "Synthetic merge:") {
+		if !strings.Contains(output.String(), test.checks) {
+			t.Fatalf("snapshot report lost independent check results: %s", output.String())
+		}
+		if strings.Contains(output.String(), "Synthetic merge:") || strings.Contains(output.String(), "github.com/hea3ven/orpheus/") {
 			t.Fatalf("local snapshot mislabeled as merge: %s", output.String())
 		}
 	}

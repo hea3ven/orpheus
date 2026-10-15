@@ -158,12 +158,32 @@ func TestConfirmationNeverErasesFirstCandidateCoverageFindings(t *testing.T) {
 }
 
 func TestMissingIncompatibleAndFailedEvidenceAbortWithoutSelectiveRetries(t *testing.T) {
+	childErr := errors.New("child exited 1")
+	failNamedTest := func(sample *qualityReport) {
+		sample.Complete = false
+		lane := sample.Lanes["unit"]
+		lane.Passed = false
+		lane.Failure = &laneFailure{Error: "exit status 1", Stderr: "command warning", Failures: []testFailure{
+			{Package: "github.com/hea3ven/orpheus/internal/tasksource/beads", Test: "TestBroken/subtest", Output: "want true, got false"},
+		}}
+		sample.Lanes["unit"] = lane
+		sample.Execution = decision{Status: statusTestFailed, Findings: []finding{{Kind: "test", Message: "unit lane: exit status 1"}}}
+	}
 	for _, test := range []struct {
 		name       string
 		mutate     func(*qualityReport)
 		collectErr error
+		failAt     string
+		wantCalls  int
+		subject    string
 	}{
-		{name: "failed process", collectErr: errors.New("child exited 1")},
+		{name: "failed process", collectErr: childErr},
+		{name: "named base warmup failure", mutate: failNamedTest, collectErr: childErr, failAt: "base/true/0", wantCalls: 1, subject: "base"},
+		{name: "named candidate warmup failure", mutate: failNamedTest, collectErr: childErr, failAt: "merge/true/0", wantCalls: 2, subject: "merge"},
+		{name: "named base first-pair failure", mutate: failNamedTest, collectErr: childErr, failAt: "base/false/1", wantCalls: 3, subject: "base"},
+		{name: "named candidate first-pair failure", mutate: failNamedTest, collectErr: childErr, failAt: "merge/false/1", wantCalls: 4, subject: "merge"},
+		{name: "named candidate confirmation failure", mutate: failNamedTest, collectErr: childErr, subject: "merge"},
+		{name: "named base confirmation failure", mutate: failNamedTest, collectErr: childErr, failAt: "base/false/2", wantCalls: 6, subject: "base"},
 		{name: "incomplete", mutate: func(r *qualityReport) { r.Complete = false }},
 		{name: "missing lane", mutate: func(r *qualityReport) { delete(r.Lanes, "unit") }},
 		{name: "missing metadata", mutate: func(r *qualityReport) { r.Metadata = nil }},
@@ -181,9 +201,12 @@ func TestMissingIncompatibleAndFailedEvidenceAbortWithoutSelectiveRetries(t *tes
 		{name: "selected structure drift", mutate: func(r *qualityReport) { r.Lanes["unit"].Timings[0].Name = "other" }},
 		{name: "invalid timing", mutate: func(r *qualityReport) { r.Lanes["unit"].Timings[0].Seconds = math.NaN() }},
 	} {
+		if test.failAt == "" {
+			test.failAt, test.wantCalls = "merge/false/2", 5
+		}
 		t.Run(test.name, func(t *testing.T) {
 			calls := 0
-			collect := func(_ string, revision string, warmup bool, index int) (qualityReport, string, error) {
+			collect := func(subject, revision string, warmup bool, index int) (qualityReport, string, error) {
 				calls++
 				sample := timingFixture(revision, 1)
 				if revision == fixtureMerge && index == 1 {
@@ -193,7 +216,7 @@ func TestMissingIncompatibleAndFailedEvidenceAbortWithoutSelectiveRetries(t *tes
 					lane.SelectedTestSeconds = 2
 					sample.Lanes["unit"] = lane
 				}
-				if revision == fixtureMerge && index == 2 {
+				if fmt.Sprintf("%s/%t/%d", subject, warmup, index) == test.failAt {
 					if test.mutate != nil {
 						test.mutate(&sample)
 					}
@@ -204,13 +227,44 @@ func TestMissingIncompatibleAndFailedEvidenceAbortWithoutSelectiveRetries(t *tes
 
 			result, err := compareRevisions(testLocalQualityPolicy(), fixtureBase, fixtureMerge, collect, nil)
 
-			if err == nil || result.Timing.Status != statusUnevaluated || result.Complete || calls != 5 {
-				t.Fatalf("abort = timing %s, calls %d, complete %t, err %v", result.Timing.Status, calls, result.Complete, err)
+			if err == nil || result.Timing.Status != statusUnevaluated || result.Complete || calls != test.wantCalls {
+				t.Fatalf("abort = timing %s, calls %d (want %d), complete %t, err %v", result.Timing.Status, calls, test.wantCalls, result.Complete, err)
 			}
-			if result.CoverageDecision.Status != statusRegression || len(result.Timing.Findings) == 0 || len(result.Comparison.Samples) != calls {
-				t.Fatalf("failure lost coverage/evidence: %#v", result)
+			if test.collectErr != nil && !errors.Is(err, test.collectErr) {
+				t.Fatalf("comparison error = %v, want %v", err, test.collectErr)
 			}
+			if len(result.Timing.Findings) == 0 || len(result.Comparison.Samples) != calls {
+				t.Fatalf("failure lost evidence: %#v", result)
+			}
+			hasCandidateCoverage := test.wantCalls >= 5
+			assertAbortedComparisonReport(t, result, test.subject, hasCandidateCoverage)
 		})
+	}
+}
+
+func assertAbortedComparisonReport(t *testing.T, result qualityReport, failedSubject string, hasCandidateCoverage bool) {
+	t.Helper()
+	want, unwanted := []string{"Timing unevaluated:"}, []string{"Timing increased significantly"}
+	if hasCandidateCoverage {
+		if result.CoverageDecision.Status != statusRegression || result.Lanes["unit"].Coverage.CoveredStatements != 494 || result.Lanes["unit"].Failure != nil {
+			t.Fatalf("failure replaced first-candidate coverage: %#v", result)
+		}
+		want = append(want, "Coverage decreased significantly")
+	} else if result.CoverageDecision.Status != statusUnevaluated || len(result.Lanes) != 0 {
+		t.Fatalf("failed sample became coverage evidence: %#v", result)
+	}
+	if failedSubject != "" {
+		if result.Execution.Status != statusTestFailed {
+			t.Fatalf("failed sample execution = %s, want %s", result.Execution.Status, statusTestFailed)
+		}
+		want = append(want, "Test failed: internal/tasksource/beads/TestBroken/subtest.", "want true, got false", "command warning", failedSubject+"/unit test diagnostics")
+		unwanted = append(unwanted, "unit lane: exit status 1")
+	}
+	var terminal, markdown strings.Builder
+	printReportTo(&terminal, result, "report.json")
+	renderReportSummary(&markdown, result, "report.json")
+	for _, contents := range []string{terminal.String(), markdown.String()} {
+		assertReportText(t, contents, want, unwanted)
 	}
 }
 

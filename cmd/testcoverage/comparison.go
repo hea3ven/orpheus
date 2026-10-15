@@ -126,6 +126,11 @@ func aggregateTiming(result *qualityReport, base, merge []qualityReport, setting
 func collectValidated(result *qualityReport, subject comparisonSubject, warmup bool, index int, collect sampleCollector) (qualityReport, error) {
 	sample, path, err := collect(subject.Name, subject.Revision, warmup, index)
 	result.Comparison.Samples = append(result.Comparison.Samples, sampleReference{Subject: subject.Name, Revision: subject.Revision, Warmup: warmup, Path: path})
+	for _, name := range laneNames {
+		if failure := sample.Lanes[name].Failure; failure != nil {
+			result.sampleFailures = append(result.sampleFailures, reportFailure{subject: subject.Name, lane: name, failure: failure})
+		}
+	}
 	if err != nil {
 		result.Execution = decision{Status: statusExecutionFailed, Findings: sample.Execution.Findings}
 		if sample.Execution.Status == statusTestFailed {

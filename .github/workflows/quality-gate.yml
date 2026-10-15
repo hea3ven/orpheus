@@ -224,37 +224,11 @@ jobs:
 
           case "$QUALITY_DECISION" in
             pass)
-              if [[ "$QUALITY_OUTCOME" == success ]]; then
-                quality_result='**Pass**'
-              else
-                quality_result='**Execution failed**'
+              if [[ "$QUALITY_OUTCOME" != success ]]; then
                 failed=1
               fi
               ;;
-            policy_update_required)
-              quality_result='**Failed:** Quality policy update required'
-              failed=1
-              ;;
-            coverage_regression)
-              quality_result='**Failed:** Coverage regression'
-              failed=1
-              ;;
-            timing_budget_exceeded)
-              quality_result='**Failed:** Confirmed same-runner timing regression'
-              failed=1
-              ;;
-            unevaluated)
-              quality_result='**Blocked:** Timing unevaluated (evidence unavailable or incompatible)'
-              failed=1
-              ;;
-            test_failed)
-              quality_result='**Failed:** Tests failed'
-              failed=1
-              ;;
-            *)
-              quality_result='**Execution failed**'
-              failed=1
-              ;;
+            *) failed=1 ;;
           esac
 
           case "$LINT_OUTCOME" in
@@ -290,11 +264,10 @@ jobs:
             echo '# Pull-request quality gate'
             echo
             echo "> [!$gate_alert]"
-            echo "> **$gate_result.** See the check results and test details below."
+            echo "> **$gate_result.**"
             echo
             echo '| Check | Result |'
             echo '| --- | --- |'
-            echo "| Test quality | $quality_result |"
             echo "| Lint | $lint_result |"
             echo "| Build | $build_result |"
             echo
@@ -302,13 +275,22 @@ jobs:
 
             if [[ -f artifacts/test-coverage/report.md ]]; then
               echo
-              cat artifacts/test-coverage/report.md
+              # The gate above owns the overall verdict. Keep the collector's
+              # independent tests, coverage, timing, findings, and evidence.
+              sed '/^> \[!/,/^$/d' artifacts/test-coverage/report.md
             else
               echo
               echo '## Test quality'
               echo
-              echo '> [!CAUTION]'
-              echo '> **Quality report unavailable.** Inspect the setup and command diagnostics below.'
+              echo 'Quality report unavailable.'
+              echo
+              echo '| Check | Result |'
+              echo '| --- | --- |'
+              echo '| Tests/execution | unavailable |'
+              echo '| Coverage | unavailable |'
+              echo '| Timing | unevaluated |'
+              echo
+              echo 'Timing unevaluated: evidence unavailable.'
             fi
 
             if [[ "$QUALITY_OUTCOME" != success ]]; then

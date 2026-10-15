@@ -244,6 +244,7 @@ func assessCoverageBound(violations, updates []finding, lane, scope, name string
 	item := finding{
 		Kind: "coverage_policy", Lane: lane, Scope: scope, Name: name, Prior: floor,
 		Current: measured, Threshold: settings.SignificancePercentagePoints, Proposed: proposed,
+		headroomPercent: settings.HeadroomPercentagePoints,
 	}
 	if measured < floor {
 		item.Message = "coverage is below its policy floor; run make quality-policy-update if the regression is intentional"
