@@ -130,7 +130,8 @@ jobs:
         continue-on-error: true
         shell: bash
         env:
-          QUALITY_BASE: ${{ github.event.pull_request.base.sha }}
+          # The tested merge pins the actual base; event base metadata can be stale.
+          QUALITY_HEAD: ${{ github.event.pull_request.head.sha }}
           QUALITY_MERGE: ${{ github.sha }}
         run: |
           set -uo pipefail
@@ -149,7 +150,7 @@ jobs:
             exit "$build_exit"
           fi
           timeout --kill-after=10s 17m "$collector" \
-            -compare-base "$QUALITY_BASE" -compare-merge "$QUALITY_MERGE" \
+            -compare-head "$QUALITY_HEAD" -compare-merge "$QUALITY_MERGE" \
             2>&1 | tee -a "$log"
           statuses=("${PIPESTATUS[@]}")
           quality_exit="${statuses[0]}"
