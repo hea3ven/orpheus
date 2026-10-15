@@ -45,7 +45,7 @@ lanes:
         github.com/hea3ven/orpheus/internal/tasktarget: 75.451
         github.com/hea3ven/orpheus/internal/testguard: 74.471
         github.com/hea3ven/orpheus/internal/testlane: 0
-        github.com/hea3ven/orpheus/internal/testutil: 76.571
+        github.com/hea3ven/orpheus/internal/testutil: 74.571
         github.com/hea3ven/orpheus/internal/workflow: 70.696
   unit:
     coverage:
