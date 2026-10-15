@@ -80,29 +80,55 @@ func TestStatusDisplayRowsSortTimestampsGloballyAndDeterministically(t *testing.
 func TestStatusDisplayRowsKeepSortedEpicSubtreesContiguous(t *testing.T) {
 	projection := taskViewSortProjection(
 		statusGroup(status.GroupReadyToRun,
-			taskViewSortEntry("alpha", "a-root-old", task.IssueTypeEpic, 1, timeAt(2026, 1, 1), nil, ""),
-			taskViewSortEntry("alpha", "a-root-new", task.IssueTypeEpic, 1, timeAt(2026, 1, 5), nil, ""),
-			taskViewSortEntry("alpha", "a-child-old", task.IssueTypeTask, 1, timeAt(2026, 1, 2), nil, "a-root-new"),
-			taskViewSortEntry("alpha", "a-child-new", task.IssueTypeEpic, 1, timeAt(2026, 1, 4), nil, "a-root-new"),
-			taskViewSortEntry("alpha", "a-grandchild", task.IssueTypeTask, 1, timeAt(2026, 1, 3), nil, "a-child-new"),
-			taskViewSortEntry("beta", "b-context-child", task.IssueTypeTask, 1, timeAt(2026, 1, 6), nil, "b-filtered-parent"),
+			taskViewSortEntry("alpha", "a-root-old", task.IssueTypeEpic, 1, timeAt(2026, 1, 1), timeAt(2026, 2, 5), ""),
+			taskViewSortEntry("alpha", "a-child-old", task.IssueTypeTask, 2, timeAt(2026, 1, 2), timeAt(2026, 2, 4), "a-root-new"),
+			taskViewSortEntry("alpha", "a-grandchild", task.IssueTypeTask, 1, timeAt(2026, 1, 3), timeAt(2026, 2, 3), "b-child-new"),
+			taskViewSortEntry("beta", "b-context-child", task.IssueTypeTask, 0, timeAt(2026, 1, 6), timeAt(2026, 2, 6), "a-filtered-parent"),
+		),
+		statusGroup(status.GroupWorking,
+			taskViewSortEntry("alpha", "a-root-new", task.IssueTypeEpic, 1, timeAt(2026, 1, 5), timeAt(2026, 2, 1), ""),
+			taskViewSortEntry("beta", "b-child-new", task.IssueTypeEpic, 1, timeAt(2026, 1, 4), timeAt(2026, 2, 2), "a-root-new"),
+		),
+		statusGroup(status.GroupDoneClosed,
+			taskViewSortEntry("alpha", "a-filtered-parent", task.IssueTypeEpic, 1, timeAt(2026, 1, 7), timeAt(2026, 2, 7), ""),
 		),
 	)
 
-	rows := statusDisplayRowsForSort(projection.Groups, taskViewSortCreated)
-	assertTaskViewSortIDs(t, rows, []string{
-		"b-context-child",
-		"a-root-new",
-		"a-child-new",
-		"a-grandchild",
-		"a-child-old",
-		"a-root-old",
-	})
-	if rows[0].TaskID != "b-context-child" {
-		t.Fatalf("context child TaskID = %q, want standalone task id", rows[0].TaskID)
+	tests := []struct {
+		sort      taskViewSort
+		wantIDs   []string
+		wantTree  []string
+		wantDepth []int
+	}{
+		{
+			sort:      taskViewSortStatus,
+			wantIDs:   []string{"b-context-child", "a-root-old", "a-root-new", "a-child-old", "b-child-new", "a-grandchild"},
+			wantTree:  []string{"b-context-child", "a-root-old", "a-root-new", "├─ a-child-old", "└─ b-child-new", "  └─ a-grandchild"},
+			wantDepth: []int{0, 0, 0, 1, 1, 2},
+		},
+		{
+			sort:      taskViewSortCreated,
+			wantIDs:   []string{"b-context-child", "a-root-new", "b-child-new", "a-grandchild", "a-child-old", "a-root-old"},
+			wantTree:  []string{"b-context-child", "a-root-new", "├─ b-child-new", "│ └─ a-grandchild", "└─ a-child-old", "a-root-old"},
+			wantDepth: []int{0, 0, 1, 2, 1, 0},
+		},
+		{
+			sort:      taskViewSortUpdated,
+			wantIDs:   []string{"b-context-child", "a-root-old", "a-root-new", "a-child-old", "b-child-new", "a-grandchild"},
+			wantTree:  []string{"b-context-child", "a-root-old", "a-root-new", "├─ a-child-old", "└─ b-child-new", "  └─ a-grandchild"},
+			wantDepth: []int{0, 0, 0, 1, 1, 2},
+		},
 	}
-	if rows[2].TaskID != "├─ a-child-new" || rows[3].TaskID != "│ └─ a-grandchild" || rows[4].TaskID != "└─ a-child-old" {
-		t.Fatalf("sorted tree markers = %#v, want nested contiguous subtree", []string{rows[2].TaskID, rows[3].TaskID, rows[4].TaskID})
+	for _, tt := range tests {
+		t.Run(string(tt.sort), func(t *testing.T) {
+			rows := statusDisplayRowsForSort(visibleStatusGroups(projection.Groups, false), tt.sort)
+			assertTaskViewSortIDs(t, rows, tt.wantIDs)
+			for i, row := range rows {
+				if row.TaskID != tt.wantTree[i] || row.TreeDepth != tt.wantDepth[i] {
+					t.Errorf("row %s tree = (%q, %d), want (%q, %d)", row.Entry.Task.ID, row.TaskID, row.TreeDepth, tt.wantTree[i], tt.wantDepth[i])
+				}
+			}
+		})
 	}
 }
 
