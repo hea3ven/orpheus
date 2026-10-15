@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationWorkflowReviewPrimaryProcessRecoveryKeepsFindingsForAudit(t *testing.T) {
+func TestIntegrationWorkflowReviewProcessRecoveryKeepsFindingsForAudit(t *testing.T) {
 	for _, test := range []struct {
 		name       string
 		liveness   agentexec.ProcessLiveness
@@ -61,7 +61,7 @@ func TestIntegrationWorkflowReviewPrimaryProcessRecoveryKeepsFindingsForAudit(t 
 			require.Len(t, latest.Findings, 1)
 			assert.Equal(t, "Unfinished finding", latest.Findings[0].Title)
 			assert.Zero(t, latest.Findings[0].TargetedByRunAttempt)
-			assert.Equal(t, test.liveness == agentexec.ProcessAbsent, taskstate.PrimaryReviewExecutionInterrupted(latest))
+			assert.Equal(t, test.liveness == agentexec.ProcessAbsent, taskstate.ReviewExecutionInterrupted(latest))
 			assert.Empty(t, fixture.agent.launches)
 			assertTaskNotPublished(t, loaded, task)
 			if test.liveness == agentexec.ProcessAbsent {

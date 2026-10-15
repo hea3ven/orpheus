@@ -1,40 +1,13 @@
 package cli
 
 import (
-	"bufio"
 	"bytes"
-	"errors"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/taskstate"
-	"github.com/spf13/cobra"
 )
-
-func TestRenderTaskShowReviewRendersPairedReviewerComparison(t *testing.T) {
-	started := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
-	finished := started.Add(time.Minute)
-	var output bytes.Buffer
-	state := taskstate.TaskState{Reviews: []taskstate.ReviewAttempt{{
-		Attempt: 1, Status: taskstate.ReviewStatusPassed, Pipeline: "standard", Step: "ai-review", StartedAt: started, FinishedAt: &finished,
-		Steps: []taskstate.ReviewStep{{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusSucceeded, Profile: "primary", Harness: "pi", Model: "primary-model", StartedAt: started, FinishedAt: &finished}, Comparison: &taskstate.ReviewComparison{
-			AlternateExecution: &taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusSucceeded, Profile: "alternate", Harness: "codex", Model: "alternate-model", StartedAt: started, FinishedAt: &finished, Usage: &taskstate.AgentUsage{TotalTokens: 42}},
-			AlternateFindings:  []taskstate.AlternateReviewFinding{{Finding: taskstate.ReviewFinding{Type: taskstate.FindingTypeAdvisory, Title: "alternate raw", Description: "kept for comparison", Reviewer: "alternate"}, Classification: taskstate.AlternateFindingExcluded}},
-		}}},
-		Findings: []taskstate.ReviewFinding{{Type: taskstate.FindingTypeAdvisory, Title: "primary raw", Description: "authoritative", Step: "ai-review", Reviewer: "primary"}},
-	}}}
-	err := renderTaskShowReview(&output, "alpha", "op-paired", state, reviewShowScope{reviewAttempt: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"Primary execution:", "Profile: primary", "Alternate execution:", "Profile: alternate", "Usage: input=0 cached_input=0 output=0 reasoning_output=0 total=42", "Raw alternate findings:", "Alternate finding 1 [excluded]", "Reviewer: primary"} {
-		if !strings.Contains(output.String(), want) {
-			t.Fatalf("output missing %q:\n%s", want, output.String())
-		}
-	}
-}
 
 func TestTaskShowReviewScopesHistoryAttemptAndFinding(t *testing.T) {
 	state := taskstate.TaskState{
@@ -172,7 +145,7 @@ func TestTaskShowReviewRejectsUnknownAttemptAndFinding(t *testing.T) {
 	}
 }
 
-func TestTaskReviewHistoryExcludesInterruptedPrimaryAuditFindings(t *testing.T) {
+func TestTaskReviewHistoryExcludesInterruptedReviewAuditFindings(t *testing.T) {
 	finished := time.Now()
 	state := taskstate.TaskState{Reviews: []taskstate.ReviewAttempt{
 		{
@@ -200,7 +173,7 @@ func TestTaskReviewHistoryExcludesInterruptedPrimaryAuditFindings(t *testing.T) 
 	if err := renderTaskShowReview(&finding, "alpha", "op-audit", state, reviewShowScope{reviewAttempt: 1, findingNumber: 1}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Audit-only finding 1/1:", "Interrupted audit finding", "Disposition: audit-only (interrupted primary reviewer)", "Audit-only: interrupted primary reviewer"} {
+	for _, want := range []string{"Audit-only finding 1/1:", "Interrupted audit finding", "Disposition: audit-only (interrupted reviewer)", "Audit-only: interrupted reviewer"} {
 		if !strings.Contains(finding.String(), want) {
 			t.Fatalf("exact finding inspection missing %q:\n%s", want, finding.String())
 		}
@@ -223,106 +196,5 @@ func TestTaskReviewHistoryCollapsesMultilineFindingFields(t *testing.T) {
 	}
 	if strings.Contains(output.String(), "\n- spoofed finding") {
 		t.Fatalf("multiline title split compact history:\n%s", output.String())
-	}
-}
-
-func TestAlternateFindingPromptRendersReviewerProvenance(t *testing.T) {
-	var output bytes.Buffer
-	command := &cobra.Command{}
-	command.SetErr(&output)
-	prompt := taskReviewAlternateFindingPrompt(command, bufio.NewReader(strings.NewReader("a\n")))
-	decisions, err := prompt(review.AlternateReviewComparison{
-		Step:               review.Step{Name: "ai-review"},
-		Primary:            []review.AutomatedBlocker{{Index: 0, Number: 2, Finding: taskstate.ReviewFinding{Title: "Primary finding", Description: "Authoritative description.", SuggestedAction: "Fix it."}}},
-		PrimaryExecution:   &taskstate.AgentExecution{Profile: "primary", Model: "primary-model", Harness: "pi", Status: taskstate.RunStatusSucceeded},
-		AlternateExecution: &taskstate.AgentExecution{Profile: "alternate", Model: "alternate-model", Harness: "codex", Status: taskstate.RunStatusSucceeded},
-		Alternate:          []review.AlternateFinding{{Index: 2, Finding: taskstate.ReviewFinding{Title: "Alternate title", Description: "Alternate description."}}},
-	})
-	if err != nil || len(decisions) != 1 || decisions[0].Classification != taskstate.AlternateFindingAdmitted || decisions[0].FindingIndex != 2 {
-		t.Fatalf("decisions=%#v err=%v", decisions, err)
-	}
-	for _, want := range []string{"Primary findings:", "Finding 2:", "Title: Primary finding", "Authoritative description.", "Suggested action: Fix it.", "Alternate finding 3:", "Title: Alternate title", "Description: Alternate description.", "Primary reviewer: profile=primary model=primary-model harness=pi", "Alternate reviewer: profile=alternate model=alternate-model harness=codex"} {
-		if !strings.Contains(output.String(), want) {
-			t.Fatalf("output missing %q:\n%s", want, output.String())
-		}
-	}
-}
-
-func TestPromptAlternateReviewFindingDecisionClassifiesInput(t *testing.T) {
-	tests := []struct {
-		name                string
-		input               string
-		primaryFindingCount int
-		want                review.AlternateFindingDecision
-		wantOutput          string
-		wantError           bool
-	}{
-
-		{name: "cancel", input: "cancel\n", wantError: true}, {
-			name:  "empty admits",
-			input: "\n",
-			want:  review.AlternateFindingDecision{FindingIndex: 4, Classification: taskstate.AlternateFindingAdmitted},
-		},
-		{
-			name:  "admit",
-			input: "admit\n",
-			want:  review.AlternateFindingDecision{FindingIndex: 4, Classification: taskstate.AlternateFindingAdmitted},
-		},
-		{
-			name:  "exclude",
-			input: "e\n",
-			want:  review.AlternateFindingDecision{FindingIndex: 4, Classification: taskstate.AlternateFindingExcluded},
-		},
-		{
-			name:                "duplicate",
-			input:               "d\n2\n",
-			primaryFindingCount: 2,
-			want:                review.AlternateFindingDecision{FindingIndex: 4, Classification: taskstate.AlternateFindingDuplicate, DuplicateOf: 1},
-		},
-		{
-			name:       "invalid classification retries",
-			input:      "invalid\na\n",
-			want:       review.AlternateFindingDecision{FindingIndex: 4, Classification: taskstate.AlternateFindingAdmitted},
-			wantOutput: "Choose admit, duplicate, exclude, or cancel.",
-		},
-		{
-			name:       "duplicate without primary retries",
-			input:      "d\na\n",
-			want:       review.AlternateFindingDecision{FindingIndex: 4, Classification: taskstate.AlternateFindingAdmitted},
-			wantOutput: "No primary findings are available as duplicate targets.",
-		},
-		{
-			name:                "invalid duplicate target retries classification",
-			input:               "d\nzero\ne\n",
-			primaryFindingCount: 1,
-			want:                review.AlternateFindingDecision{FindingIndex: 4, Classification: taskstate.AlternateFindingExcluded},
-			wantOutput:          "Enter a valid primary finding number.",
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			var output bytes.Buffer
-			got, err := promptAlternateReviewFindingDecision(
-				&output,
-				bufio.NewReader(strings.NewReader(test.input)),
-				4,
-				test.primaryFindingCount,
-			)
-			if test.wantError {
-				if !errors.Is(err, review.ErrAutomatedBlockerInputUnavailable) {
-					t.Fatalf("cancel error = %v", err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("prompt decision: %v", err)
-			}
-			if got != test.want {
-				t.Fatalf("decision = %#v, want %#v", got, test.want)
-			}
-			if !strings.Contains(output.String(), test.wantOutput) {
-				t.Fatalf("output missing %q:\n%s", test.wantOutput, output.String())
-			}
-		})
 	}
 }

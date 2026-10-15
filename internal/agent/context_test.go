@@ -614,33 +614,25 @@ func TestActiveContextResolverProvidesEarlierAuthoritativeFindingsOnly(t *testin
 
 	interrupted, err := fixture.store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review"})
 	must.NoError(err)
-	interruptedPrimary := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, StartedAt: time.Now()}
-	_, err = fixture.store.RecordReviewStep("alpha", "op-1", interrupted.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &interruptedPrimary})
+	interruptedExecution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, StartedAt: time.Now()}
+	_, err = fixture.store.RecordReviewStep("alpha", "op-1", interrupted.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &interruptedExecution})
 	must.NoError(err)
 	_, err = fixture.store.RecordReviewFinding("alpha", "op-1", interrupted.Attempt, taskstate.ReviewFinding{
 		Type: taskstate.FindingTypeBlocking, Step: "ai-review", Title: "Interrupted audit finding", Description: "Not authoritative.",
 	})
 	must.NoError(err)
-	_, err = fixture.store.InterruptPrimaryReviewExecution("alpha", "op-1", interrupted.Attempt, "ai-review", taskstate.InterruptPrimaryReviewExecutionOptions{Reason: "supervisor disappeared", Trigger: "recovery"})
+	_, err = fixture.store.InterruptReviewExecution("alpha", "op-1", interrupted.Attempt, "ai-review", taskstate.InterruptReviewExecutionOptions{Reason: "supervisor disappeared", Trigger: "recovery"})
 	must.NoError(err)
 
 	active, err := fixture.store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review"})
 	must.NoError(err)
-	primary := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, StartedAt: time.Now()}
-	_, err = fixture.store.RecordReviewStep("alpha", "op-1", active.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &primary})
+	execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, StartedAt: time.Now()}
+	_, err = fixture.store.RecordReviewStep("alpha", "op-1", active.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution})
 	must.NoError(err)
 	_, err = fixture.store.RecordReviewFinding("alpha", "op-1", active.Attempt, taskstate.ReviewFinding{
-		Type: taskstate.FindingTypeBlocking, Step: "ai-review", Title: "Current primary finding", Description: "Must not be injected.",
+		Type: taskstate.FindingTypeBlocking, Step: "ai-review", Title: "Current review finding", Description: "Must not be injected.",
 	})
 	must.NoError(err)
-	alternate := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, StartedAt: time.Now()}
-	_, err = fixture.store.StartReviewStepComparison("alpha", "op-1", active.Attempt, "ai-review", alternate)
-	must.NoError(err)
-	_, err = fixture.store.RecordAlternateReviewFinding("alpha", "op-1", active.Attempt, "ai-review", taskstate.ReviewFinding{
-		Type: taskstate.FindingTypeAdvisory, Title: "Current alternate finding", Description: "Must not be injected.",
-	})
-	must.NoError(err)
-
 	resolver := fixture.resolver(taskItem, map[string]string{
 		"ORPHEUS_REPO_ID": "alpha", "ORPHEUS_TASK_ID": "op-1", "ORPHEUS_WORKTREE": worktree, "ORPHEUS_BRANCH": "orpheus/op-1",
 		"ORPHEUS_AGENT_PURPOSE": "review", "ORPHEUS_REVIEW_ATTEMPT": "3", "ORPHEUS_REVIEW_STEP": "ai-review",
@@ -651,8 +643,7 @@ func TestActiveContextResolverProvidesEarlierAuthoritativeFindingsOnly(t *testin
 	must.Len(resolved.Review.PriorFindings, 1)
 	is.Equal(agent.ContextPriorReviewFinding{Attempt: 1, Number: 1, Step: "ai-review", Type: taskstate.FindingTypeBlocking, Disposition: "waived", Title: "Prior blocker"}, resolved.Review.PriorFindings[0])
 	is.NotContains(agent.RenderReviewContext(resolved), "Interrupted audit finding")
-	is.NotContains(agent.RenderReviewContext(resolved), "Current primary finding")
-	is.NotContains(agent.RenderReviewContext(resolved), "Current alternate finding")
+	is.NotContains(agent.RenderReviewContext(resolved), "Current review finding")
 }
 
 func TestRenderReviewContextRendersCompactPriorAuthoritativeFindings(t *testing.T) {

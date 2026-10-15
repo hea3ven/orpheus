@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestReviewStartupStopsAfterConcurrentPrimaryRecovery(t *testing.T) {
+func TestReviewStartupStopsAfterConcurrentReviewRecovery(t *testing.T) {
 	paths := newDispatchTestPaths(t)
 	store := taskstate.NewStore(paths)
 	attempt, err := store.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{Pipeline: "ai", Step: "inspect"})
@@ -22,7 +22,7 @@ func TestReviewStartupStopsAfterConcurrentPrimaryRecovery(t *testing.T) {
 	require.NoError(t, err)
 	stale, err := store.Load("alpha", "op-review")
 	require.NoError(t, err)
-	_, err = store.InterruptPrimaryReviewExecution("alpha", "op-review", attempt.Attempt, "inspect", taskstate.InterruptPrimaryReviewExecutionOptions{Reason: "supervisor_absent_child_pid_not_recorded_assume_not_started", Trigger: "task_run"})
+	_, err = store.InterruptReviewExecution("alpha", "op-review", attempt.Attempt, "inspect", taskstate.InterruptReviewExecutionOptions{Reason: "supervisor_absent_child_pid_not_recorded_assume_not_started", Trigger: "task_run"})
 	require.NoError(t, err)
 	recovered, err := store.Load("alpha", "op-review")
 	require.NoError(t, err)
@@ -41,9 +41,9 @@ func TestReviewStartupStopsAfterConcurrentPrimaryRecovery(t *testing.T) {
 	outcome, err := service.Run(context.Background(), ReviewLifecycleOptions{TaskID: "op-review"})
 
 	require.NoError(t, err)
-	assert.Equal(t, ReviewLifecycleOutcomePrimaryRecovered, outcome.Kind)
+	assert.Equal(t, ReviewLifecycleOutcomeExecutionRecovered, outcome.Kind)
 	assert.Equal(t, AttachedExecutionAlreadyRecovered, outcome.RecoveryInspection.Condition)
-	assert.Equal(t, "primary_review_interrupted_by_concurrent_recovery", outcome.RecoveryInspection.Reason)
+	assert.Equal(t, "review_interrupted_by_concurrent_recovery", outcome.RecoveryInspection.Reason)
 	assert.False(t, pipelineCalled)
 	final, err := store.Load("alpha", "op-review")
 	require.NoError(t, err)

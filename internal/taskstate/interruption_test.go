@@ -7,7 +7,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
-func TestStoreInterruptPrimaryReviewExecutionRecordsAtomicAuditFacts(t *testing.T) {
+func TestStoreInterruptReviewExecutionRecordsAtomicAuditFacts(t *testing.T) {
 	store := newTestStore(t, time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC))
 	review, err := store.StartReviewWithOptions("alpha", "op-interrupted-review", taskstate.StartReviewOptions{Pipeline: "ai", Step: "ai-review"})
 	if err != nil {
@@ -26,11 +26,11 @@ func TestStoreInterruptPrimaryReviewExecutionRecordsAtomicAuditFacts(t *testing.
 	if _, err := store.RecordReviewFinding("alpha", "op-interrupted-review", review.Attempt, taskstate.ReviewFinding{Type: taskstate.FindingTypeBlocking, Title: "retained", Description: "audit finding"}); err != nil {
 		t.Fatalf("record finding: %v", err)
 	}
-	interrupted, err := store.InterruptPrimaryReviewExecution("alpha", "op-interrupted-review", review.Attempt, "ai-review", taskstate.InterruptPrimaryReviewExecutionOptions{
+	interrupted, err := store.InterruptReviewExecution("alpha", "op-interrupted-review", review.Attempt, "ai-review", taskstate.InterruptReviewExecutionOptions{
 		Reason: "supervisor_and_child_pids_absent", Trigger: "doctor_fix",
 	})
 	if err != nil {
-		t.Fatalf("interrupt primary review: %v", err)
+		t.Fatalf("interrupt review: %v", err)
 	}
 	if interrupted.Status != taskstate.ReviewStatusFailed || interrupted.FinishedAt == nil || len(interrupted.Findings) != 1 {
 		t.Fatalf("interrupted review = %#v, want failed review with retained findings", interrupted)
@@ -52,7 +52,7 @@ func TestStoreInterruptPrimaryReviewExecutionRecordsAtomicAuditFacts(t *testing.
 	}
 }
 
-func TestInterruptedPrimaryReviewExcludesOnlyItsFindings(t *testing.T) {
+func TestInterruptedReviewExcludesOnlyItsFindings(t *testing.T) {
 	store := newTestStore(t, time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC))
 	review, err := store.StartReviewWithOptions("alpha", "op-multi-review", taskstate.StartReviewOptions{Pipeline: "ai", Step: "first"})
 	if err != nil {
@@ -75,7 +75,7 @@ func TestInterruptedPrimaryReviewExcludesOnlyItsFindings(t *testing.T) {
 	if _, err := store.RecordReviewFinding("alpha", "op-multi-review", review.Attempt, taskstate.ReviewFinding{Type: taskstate.FindingTypeBlocking, Step: "second", Title: "second finding", Description: "audit-only"}); err != nil {
 		t.Fatalf("record second finding: %v", err)
 	}
-	if _, err := store.InterruptPrimaryReviewExecution("alpha", "op-multi-review", review.Attempt, "second", taskstate.InterruptPrimaryReviewExecutionOptions{Reason: "supervisor_absent_child_pid_not_recorded_assume_not_started", Trigger: "task_run"}); err != nil {
+	if _, err := store.InterruptReviewExecution("alpha", "op-multi-review", review.Attempt, "second", taskstate.InterruptReviewExecutionOptions{Reason: "supervisor_absent_child_pid_not_recorded_assume_not_started", Trigger: "task_run"}); err != nil {
 		t.Fatalf("interrupt second step: %v", err)
 	}
 	state, err := store.Load("alpha", "op-multi-review")
@@ -87,7 +87,7 @@ func TestInterruptedPrimaryReviewExcludesOnlyItsFindings(t *testing.T) {
 	if len(indexes) != 1 || indexes[0] != 0 {
 		t.Fatalf("untargeted blocker indexes = %v, want only completed first-step finding", indexes)
 	}
-	if taskstate.InterruptedPrimaryReviewFinding(latest, latest.Findings[0]) || !taskstate.InterruptedPrimaryReviewFinding(latest, latest.Findings[1]) {
+	if taskstate.InterruptedReviewFinding(latest, latest.Findings[0]) || !taskstate.InterruptedReviewFinding(latest, latest.Findings[1]) {
 		t.Fatalf("interrupted finding scope = %#v, want only second-step finding audit-only", latest.Findings)
 	}
 }

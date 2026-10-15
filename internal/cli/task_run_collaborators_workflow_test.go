@@ -232,6 +232,7 @@ func (g *memoryDispatchGit) lastLifecycle() gitmeta.TaskWorktreeLifecycle {
 type semanticAgentOutcome struct {
 	mutateCandidate       func()
 	review                bool
+	stdout, stderr        string
 	findings              []taskstate.ReviewFinding
 	completion            *agent.CompleteOptions
 	startFailure          error
@@ -287,6 +288,12 @@ func (l *semanticAgentLauncher) Run(_ context.Context, command agentexec.Command
 		if err := l.captureContext(opts, environment); err != nil {
 			return err
 		}
+	}
+	if _, err := fmt.Fprint(opts.Stdout, outcome.stdout); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprint(opts.Stderr, outcome.stderr); err != nil {
+		return err
 	}
 	if outcome.mutateCandidate != nil {
 		outcome.mutateCandidate()

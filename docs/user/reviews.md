@@ -58,9 +58,10 @@ reviews:
 ```
 
 A `check` runs a command; a nonzero exit records a blocker. An `agent_review`
-launches the configured reviewer, which reports findings with
+launches only its configured reviewer, which reports findings with
 `orpheus agent review add`. A `manual` step collects operator decisions directly.
-Configure the reviewer under `agents.defaults.reviewer`; see
+Configure the reviewer under `agents.defaults.reviewer` or override it with the
+step's `agent` field; see
 [agent profiles](agents.md). Step names must be nonblank and unique within a
 pipeline. Empty pipelines are not allowed.
 
@@ -109,7 +110,8 @@ repair does not start another review or publish.
 `reviews.max_autonomous_review_attempts` defaults to `4`, including the initial
 review. That allows at most three repair runs before the fourth blocked review
 stops. A new `task run` grants a fresh budget. Restarting a step does not consume
-that budget or rerun earlier passed steps.
+that budget or rerun earlier passed steps. Repairs and explicit step restarts
+use the same configured reviewer selection.
 
 Resume paused decisions, waiting manual steps, or aborted reviews with:
 
@@ -147,21 +149,6 @@ Fresh reviewers receive the technical explanation and a compact history of prior
 authoritative findings. Earlier waivers supply context, not permission to ignore
 a newly applicable or materially changed defect. The latest attempt governs the
 workflow; older attempts remain audit history.
-
-## Optional reviewer comparison
-
-Set `ORPHEUS_ALTERNATE_REVIEWER_PROFILE` to another configured profile to run a
-second reviewer after each primary `agent_review`. The reviewers run sequentially
-against the same restored candidate. This can roughly double reviewer time and
-cost, including after repairs.
-
-The primary is authoritative. The operator must admit, mark duplicate, or exclude
-each alternate finding. Only admitted findings affect blockers, repairs, proposals,
-and approval. All results remain inspectable. Primary failure skips the alternate;
-alternate failure is recorded without invalidating a successful primary review.
-Interrupted comparison input grants no implicit admissions and requires a fresh
-review through `task run`. Restart discards both results together. Leave the
-variable unset for a single reviewer.
 
 ## Optional follow-up session resumption
 

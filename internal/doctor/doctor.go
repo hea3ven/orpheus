@@ -41,7 +41,7 @@ type Options struct {
 type Result struct {
 	Rows               []Row
 	ImplementationRows []ImplementationRunRow
-	PrimaryReviewRows  []PrimaryReviewRow
+	ReviewRows         []ReviewRow
 	SyncConflictRows   []SyncConflictRow
 	WorktreeRows       []WorktreeRow
 	Summary            Summary
@@ -73,8 +73,8 @@ type WorktreeRow struct {
 	Reason   string
 }
 
-// PrimaryReviewRow describes stale primary-reviewer recovery diagnostics.
-type PrimaryReviewRow struct {
+// ReviewRow describes stale reviewer recovery diagnostics.
+type ReviewRow struct {
 	RepoID  string
 	TaskID  string
 	Attempt int
@@ -311,7 +311,7 @@ func diagnoseTask(
 	if err := diagnoseImplementationRunRecovery(result, paths, store, repo, taskState, fix, probe); err != nil {
 		return err
 	}
-	if err := diagnosePrimaryReviewRecovery(result, paths, store, repo, taskState, fix, probe); err != nil {
+	if err := diagnoseReviewRecovery(result, paths, store, repo, taskState, fix, probe); err != nil {
 		return err
 	}
 	if fix {
@@ -382,7 +382,7 @@ func diagnoseImplementationRunRecovery(
 	return nil
 }
 
-func diagnosePrimaryReviewRecovery(
+func diagnoseReviewRecovery(
 	result *Result,
 	paths state.Paths,
 	store taskstate.Store,
@@ -391,14 +391,14 @@ func diagnosePrimaryReviewRecovery(
 	fix bool,
 	probe workflow.ProcessProbe,
 ) error {
-	primary, ok := workflow.ActivePrimaryReviewExecution(taskState)
+	execution, ok := workflow.ActiveReviewExecution(taskState)
 	if !ok {
 		return nil
 	}
-	inspection := workflow.InspectAttachedExecution(primary.Execution, probe)
+	inspection := workflow.InspectAttachedExecution(execution.Execution, probe)
 	outcome := string(inspection.Condition)
 	if fix && inspection.Condition == workflow.AttachedExecutionRecoverable {
-		reconciled, err := workflow.ReconcilePrimaryReviewExecution(context.Background(), paths, store, repo.ID, taskState.TaskID, primary.Attempt, "doctor_fix", probe)
+		reconciled, err := workflow.ReconcileReviewExecution(context.Background(), paths, store, repo.ID, taskState.TaskID, execution.Attempt, "doctor_fix", probe)
 		switch {
 		case err != nil:
 			outcome = "interruption_failed"
@@ -410,8 +410,8 @@ func diagnosePrimaryReviewRecovery(
 			inspection.Reason = "diagnosed_attempt_no_longer_active"
 		}
 	}
-	result.PrimaryReviewRows = append(result.PrimaryReviewRows, PrimaryReviewRow{
-		RepoID: repo.ID, TaskID: taskState.TaskID, Attempt: primary.Attempt, Step: primary.StepName, Outcome: outcome, Reason: inspection.Reason,
+	result.ReviewRows = append(result.ReviewRows, ReviewRow{
+		RepoID: repo.ID, TaskID: taskState.TaskID, Attempt: execution.Attempt, Step: execution.StepName, Outcome: outcome, Reason: inspection.Reason,
 	})
 	return nil
 }

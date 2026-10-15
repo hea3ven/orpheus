@@ -40,7 +40,7 @@ type TaskRunRoute struct {
 // required before task-run routing.
 type TaskRunRecoveryStore interface {
 	ImplementationRunRecoveryStore
-	PrimaryReviewRecoveryStore
+	ReviewRecoveryStore
 }
 
 // PrepareTaskRunOptions supplies the workflow-owned state and process facts
@@ -86,14 +86,14 @@ func PrepareTaskRun(ctx context.Context, opts PrepareTaskRunOptions) (PreparedTa
 		}
 	}
 	var reviewInspection AttachedExecutionInspection
-	if primary, ok := ActivePrimaryReviewExecution(taskState); ok {
-		reviewInspection, err = ReconcilePrimaryReviewExecution(ctx, opts.Paths, opts.Store, opts.RepoID, opts.TaskID, primary.Attempt, opts.Trigger, opts.Probe)
+	if execution, ok := ActiveReviewExecution(taskState); ok {
+		reviewInspection, err = ReconcileReviewExecution(ctx, opts.Paths, opts.Store, opts.RepoID, opts.TaskID, execution.Attempt, opts.Trigger, opts.Probe)
 		if err != nil {
 			return PreparedTaskRun{}, err
 		}
 		taskState, err = opts.Store.Load(opts.RepoID, opts.TaskID)
 		if err != nil {
-			return PreparedTaskRun{}, fmt.Errorf("reload reconciled primary review state: %w", err)
+			return PreparedTaskRun{}, fmt.Errorf("reload reconciled review state: %w", err)
 		}
 	}
 	route, err := SelectTaskRunRoute(opts.Task, taskState)

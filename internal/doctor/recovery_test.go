@@ -53,7 +53,7 @@ func (g *doctorCleanupGit) RemoveClosedTaskWorktree(context.Context, gitmeta.Clo
 	return gitmeta.ClosedTaskWorktreeRemoval{Outcome: gitmeta.ClosedTaskWorktreeRemoved, Worktree: g.worktree}
 }
 
-func TestRunReportsAndRepairsRecoverablePrimaryReviewer(t *testing.T) {
+func TestRunReportsAndRepairsRecoverableReviewer(t *testing.T) {
 	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
@@ -83,16 +83,16 @@ func TestRunReportsAndRepairsRecoverablePrimaryReviewer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("doctor: %v", err)
 	}
-	if len(result.PrimaryReviewRows) != 1 || result.PrimaryReviewRows[0].Outcome != string(workflow.AttachedExecutionRecoverable) {
-		t.Fatalf("primary review rows = %#v, want recoverable row", result.PrimaryReviewRows)
+	if len(result.ReviewRows) != 1 || result.ReviewRows[0].Outcome != string(workflow.AttachedExecutionRecoverable) {
+		t.Fatalf("review rows = %#v, want recoverable row", result.ReviewRows)
 	}
 	opts.Fix = true
 	result, err = doctor.Run(opts)
 	if err != nil {
 		t.Fatalf("doctor --fix: %v", err)
 	}
-	if len(result.PrimaryReviewRows) != 1 || result.PrimaryReviewRows[0].Outcome != "interrupted" {
-		t.Fatalf("fixed primary review rows = %#v, want interrupted row", result.PrimaryReviewRows)
+	if len(result.ReviewRows) != 1 || result.ReviewRows[0].Outcome != "interrupted" {
+		t.Fatalf("fixed review rows = %#v, want interrupted row", result.ReviewRows)
 	}
 	if len(result.Rows) != 1 || result.Rows[0].Outcome != doctor.OutcomeRecovered {
 		t.Fatalf("fixed telemetry rows = %#v, want recovered cost row", result.Rows)
@@ -102,8 +102,8 @@ func TestRunReportsAndRepairsRecoverablePrimaryReviewer(t *testing.T) {
 		t.Fatalf("load after fix: %v", err)
 	}
 	latest, _ := taskstate.LatestReview(loaded)
-	if latest.Status != taskstate.ReviewStatusFailed || !taskstate.PrimaryReviewExecutionInterrupted(latest) {
-		t.Fatalf("fixed review = %#v, want failed interrupted primary review", latest)
+	if latest.Status != taskstate.ReviewStatusFailed || !taskstate.ReviewExecutionInterrupted(latest) {
+		t.Fatalf("fixed review = %#v, want failed interrupted review", latest)
 	}
 	if latest.Steps[0].Execution.UsageCost == nil {
 		t.Fatalf("fixed execution = %#v, want recovered usage cost without restoring running state", latest.Steps[0].Execution)

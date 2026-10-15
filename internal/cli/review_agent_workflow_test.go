@@ -270,15 +270,23 @@ func TestIntegrationWorkflowTaskReviewAgentReviewNonZeroExitMarksOperationalFail
 
 func TestIntegrationWorkflowReviewMutationFailsBeforePublication(t *testing.T) {
 	fixture := newReviewWorkflowFixture(t, "op-mutated", "Candidate", "Keep these changes.")
-	fixture.reviewers(semanticAgentOutcome{mutateCandidate: func() { fixture.candidate.contents = "reviewer mutation" }})
+	fixture.reviewers(semanticAgentOutcome{
+		findings:        []taskstate.ReviewFinding{aBlockingFinding()},
+		mutateCandidate: func() { fixture.candidate.contents = "reviewer mutation" },
+	})
 	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "agent_review", "name": "ai-review"}}})
 
-	_, _, err := fixture.runError("", "task", "run", "op-mutated")
+	_, stderr, err := fixture.runError("p\n", "task", "run", "op-mutated")
 
 	require.ErrorContains(t, err, "restored the pre-step snapshot")
+	assert.NotContains(t, stderr, "Decision for finding")
 	loaded, task := fixture.loadFinalTask("op-mutated")
 	require.Len(t, loaded.Reviews, 1)
 	assert.Equal(t, taskstate.ReviewStatusFailed, loaded.Reviews[0].Status)
+	require.Len(t, loaded.Reviews[0].Steps, 1)
+	require.NotNil(t, loaded.Reviews[0].Steps[0].Execution)
+	assert.Equal(t, taskstate.RunStatusFailed, loaded.Reviews[0].Steps[0].Execution.Status)
+	assert.Equal(t, 1, fixture.candidate.snapshots, "one snapshot owns the whole step")
 	assert.Equal(t, "reviewed\n", fixture.candidate.contents)
 	assert.Empty(t, fixture.candidate.commits)
 	assert.Empty(t, fixture.candidate.pushes)

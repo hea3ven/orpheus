@@ -84,7 +84,7 @@ const (
 	DetailReviewFindings                 DetailKind = "review_findings"
 	DetailReviewAborted                  DetailKind = "review_aborted"
 	DetailReviewFailed                   DetailKind = "review_failed"
-	DetailPrimaryReviewInterrupted       DetailKind = "primary_review_interrupted"
+	DetailReviewInterrupted              DetailKind = "review_interrupted"
 	DetailReviewPassed                   DetailKind = "review_passed"
 	DetailReviewPublishFailed            DetailKind = "review_publish_failed"
 	DetailReviewUnknownState             DetailKind = "review_unknown_state"
@@ -598,11 +598,11 @@ func classifyAbortedReview() policyResult {
 }
 
 func classifyFailedReview(review taskstate.ReviewAttempt) policyResult {
-	if taskstate.PrimaryReviewExecutionInterrupted(review) {
+	if taskstate.ReviewExecutionInterrupted(review) {
 		return newPolicyResult(
 			readinessAttention,
-			"primary reviewer interrupted; candidate may contain reviewer mutations; inspect it before running task run",
-			Detail{Kind: DetailPrimaryReviewInterrupted},
+			"reviewer interrupted; candidate may contain reviewer mutations; inspect it before running task run",
+			Detail{Kind: DetailReviewInterrupted},
 		)
 	}
 	return newPolicyResult(

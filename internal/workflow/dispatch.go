@@ -24,7 +24,7 @@ const (
 	dispatchSetupLockOperation        = "task run setup"
 	dispatchFinalizationLockOperation = "task run finalization"
 	dispatchChildPIDLockOperation     = "task run child PID persistence"
-	reviewChildPIDLockOperation       = "primary review child PID persistence"
+	reviewChildPIDLockOperation       = "review child PID persistence"
 	childPIDLockRetryDelay            = 10 * time.Millisecond
 	childPIDLockRetryCount            = 100
 )
@@ -229,16 +229,16 @@ func (s DispatchService) RecordChildPID(repoID string, taskID string, attempt in
 	)
 }
 
-// ReviewChildPIDStore persists the direct process PID for a primary review step.
+// ReviewChildPIDStore persists the direct process PID for a review step.
 type ReviewChildPIDStore interface {
 	RecordReviewStepChildPID(repoID, taskID string, attempt int, stepName string, pid int) (taskstate.ReviewAttempt, error)
 }
 
-// RecordPrimaryReviewChildPID persists a primary reviewer's direct child PID
+// RecordReviewChildPID persists a reviewer's direct child PID
 // under the shared lock/retry policy for attached processes.
-func RecordPrimaryReviewChildPID(paths state.Paths, logger *slog.Logger, store ReviewChildPIDStore, repoID string, taskID string, attempt int, stepName string, pid int) error {
+func RecordReviewChildPID(paths state.Paths, logger *slog.Logger, store ReviewChildPIDStore, repoID string, taskID string, attempt int, stepName string, pid int) error {
 	if store == nil {
-		return errors.New("primary review child PID store is required")
+		return errors.New("review child PID store is required")
 	}
 	return recordChildPIDWithMutationLock(
 		paths,

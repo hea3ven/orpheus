@@ -44,7 +44,7 @@ func TestInspectImplementationRun(t *testing.T) {
 	}
 }
 
-func TestRecordPrimaryReviewChildPIDPreservesConcurrentFinding(t *testing.T) {
+func TestRecordReviewChildPIDPreservesConcurrentFinding(t *testing.T) {
 	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
@@ -66,7 +66,7 @@ func TestRecordPrimaryReviewChildPIDPreservesConcurrentFinding(t *testing.T) {
 	go func() {
 		defer wait.Done()
 		<-start
-		errs <- service.RecordPrimaryReviewChildPID("alpha", "op-review", review.Attempt, "ai-review", 4242)
+		errs <- service.RecordReviewChildPID("alpha", "op-review", review.Attempt, "ai-review", 4242)
 	}()
 	go func() {
 		defer wait.Done()
@@ -94,7 +94,7 @@ func TestRecordPrimaryReviewChildPIDPreservesConcurrentFinding(t *testing.T) {
 	}
 }
 
-func TestPrepareTaskRunPreservesLivePrimaryReviewExecution(t *testing.T) {
+func TestPrepareTaskRunPreservesLiveReviewExecution(t *testing.T) {
 	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
@@ -117,15 +117,15 @@ func TestPrepareTaskRunPreservesLivePrimaryReviewExecution(t *testing.T) {
 		t.Fatalf("prepare task run: %v", err)
 	}
 	if prepared.ReviewInspection.Condition != workflow.AttachedExecutionLive || prepared.ReviewInspection.Reason != "supervisor_pid_live" {
-		t.Fatalf("review inspection = %#v, want live primary reviewer", prepared.ReviewInspection)
+		t.Fatalf("review inspection = %#v, want live reviewer", prepared.ReviewInspection)
 	}
 	latest, ok := taskstate.LatestReview(prepared.State)
 	if !ok || latest.Status != taskstate.ReviewStatusRunning || latest.Steps[0].Execution.Status != taskstate.RunStatusRunning {
-		t.Fatalf("review state = %#v, want unchanged running primary reviewer", latest)
+		t.Fatalf("review state = %#v, want unchanged running reviewer", latest)
 	}
 }
 
-func TestReconcilePrimaryReviewExecutionRecordsFailedReview(t *testing.T) {
+func TestReconcileReviewExecutionRecordsFailedReview(t *testing.T) {
 	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
@@ -143,9 +143,9 @@ func TestReconcilePrimaryReviewExecutionRecordsFailedReview(t *testing.T) {
 		t.Fatalf("record child PID: %v", err)
 	}
 
-	inspection, err := workflow.ReconcilePrimaryReviewExecution(context.Background(), paths, store, "alpha", "op-review", review.Attempt, "task_run", recoveryProbe(map[int]agentexec.ProcessLiveness{10: agentexec.ProcessAbsent, 11: agentexec.ProcessAbsent}))
+	inspection, err := workflow.ReconcileReviewExecution(context.Background(), paths, store, "alpha", "op-review", review.Attempt, "task_run", recoveryProbe(map[int]agentexec.ProcessLiveness{10: agentexec.ProcessAbsent, 11: agentexec.ProcessAbsent}))
 	if err != nil {
-		t.Fatalf("reconcile primary review: %v", err)
+		t.Fatalf("reconcile review: %v", err)
 	}
 	if inspection.Condition != workflow.AttachedExecutionRecoverable || inspection.Reason != "supervisor_and_child_pids_absent" {
 		t.Fatalf("inspection = %#v, want recoverable absent process inspection", inspection)
@@ -155,12 +155,12 @@ func TestReconcilePrimaryReviewExecutionRecordsFailedReview(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 	latest, ok := taskstate.LatestReview(loaded)
-	if !ok || latest.Status != taskstate.ReviewStatusFailed || !taskstate.PrimaryReviewExecutionInterrupted(latest) {
-		t.Fatalf("latest review = %#v, want failed interrupted primary review", latest)
+	if !ok || latest.Status != taskstate.ReviewStatusFailed || !taskstate.ReviewExecutionInterrupted(latest) {
+		t.Fatalf("latest review = %#v, want failed interrupted review", latest)
 	}
 }
 
-func TestPrepareTaskRunMarksConcurrentlyRecoveredPrimaryForInspectionStop(t *testing.T) {
+func TestPrepareTaskRunMarksConcurrentlyRecoveredReviewForInspectionStop(t *testing.T) {
 	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
@@ -178,7 +178,7 @@ func TestPrepareTaskRunMarksConcurrentlyRecoveredPrimaryForInspectionStop(t *tes
 	if err != nil {
 		t.Fatalf("load stale state: %v", err)
 	}
-	if _, err := store.InterruptPrimaryReviewExecution("alpha", "op-review", review.Attempt, "ai-review", taskstate.InterruptPrimaryReviewExecutionOptions{Reason: "supervisor_absent_child_pid_not_recorded_assume_not_started", Trigger: "task_run"}); err != nil {
+	if _, err := store.InterruptReviewExecution("alpha", "op-review", review.Attempt, "ai-review", taskstate.InterruptReviewExecutionOptions{Reason: "supervisor_absent_child_pid_not_recorded_assume_not_started", Trigger: "task_run"}); err != nil {
 		t.Fatalf("interrupt review: %v", err)
 	}
 	prepared, err := workflow.PrepareTaskRun(context.Background(), workflow.PrepareTaskRunOptions{
@@ -188,7 +188,7 @@ func TestPrepareTaskRunMarksConcurrentlyRecoveredPrimaryForInspectionStop(t *tes
 	if err != nil {
 		t.Fatalf("prepare task run: %v", err)
 	}
-	if prepared.ReviewInspection.Condition != workflow.AttachedExecutionAlreadyRecovered || prepared.ReviewInspection.Reason != "primary_review_interrupted_by_concurrent_recovery" {
+	if prepared.ReviewInspection.Condition != workflow.AttachedExecutionAlreadyRecovered || prepared.ReviewInspection.Reason != "review_interrupted_by_concurrent_recovery" {
 		t.Fatalf("review inspection = %#v, want concurrent recovery marker", prepared.ReviewInspection)
 	}
 }

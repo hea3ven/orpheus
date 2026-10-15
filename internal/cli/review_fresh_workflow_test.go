@@ -63,7 +63,7 @@ func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview
 				require.Len(t, paused.Reviews, 1)
 				assert.Equal(t, taskstate.ReviewStatusWaitingForAutomatedDecision, paused.Reviews[0].Status)
 				assertTaskNotPublished(t, paused, item)
-				fixture.configureAgentProfiles(agent.AgentDefaults{Implementer: "other", Reviewer: "reviewer"}, profiles)
+				fixture.configureAgentProfiles(agent.AgentDefaults{Implementer: "other", Reviewer: "other"}, profiles)
 
 				stdout, stderr := fixture.run("k\n", "task", "run", "op-fresh")
 
@@ -103,6 +103,11 @@ func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview
 				assert.Equal(t, "first", fresh.Steps[0].Name)
 				assert.Equal(t, "correctness", fresh.Steps[1].Name)
 				assert.Empty(t, fresh.Findings)
+				if kind == "agent_review" {
+					require.Len(t, fixture.agent.launches, 4, "implementation, reviewer, repair, configured reviewer")
+					assert.Equal(t, "unused-reviewer", fixture.agent.launches[1].command.Command)
+					assert.Equal(t, "unused-reviewer", fixture.agent.launches[3].command.Command)
+				}
 				assert.NotEmpty(t, taskstate.FinalizationFacts(final).Commit)
 				assert.True(t, item.OrpheusMetadata().HasPRURL)
 				assert.Equal(t, append(wantChecks, wantChecks...), fixture.checkCalls)

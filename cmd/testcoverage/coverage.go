@@ -375,9 +375,9 @@ func sortedTimings(values map[string]float64) []packageTiming {
 
 func coverageEnvironment(base []string) []string {
 	ignored := map[string]struct{}{
-		"NO_COLOR": {}, "ORPHEUS_AGENT_PURPOSE": {}, "ORPHEUS_ALTERNATE_REVIEWER_PROFILE": {},
+		"NO_COLOR": {}, "ORPHEUS_AGENT_PURPOSE": {},
 		"ORPHEUS_EXHAUSTIVE_REVIEW_CONTEXT": {}, "ORPHEUS_RESUME_SESSIONS": {},
-		"ORPHEUS_REVIEWER_ROLE": {}, "CODEX_HOME": {}, "PI_CODING_AGENT_DIR": {},
+		"CODEX_HOME": {}, "PI_CODING_AGENT_DIR": {},
 		"PI_CODING_AGENT_SESSION_DIR": {}, coverageRunEnvironment: {},
 	}
 	result := make([]string, 0, len(base)+1)
