@@ -156,6 +156,8 @@ func TestUpdateServiceRejectsInvalidEditsBeforeMutation(t *testing.T) {
 		{"title flag", task.UpdateOptions{Title: stringPtr("")}, "title is required", false},
 		{"description flag", task.UpdateOptions{Description: stringPtr(" \n ")}, "description is required", false},
 		{"acceptance flag", task.UpdateOptions{AcceptanceCriteria: stringPtr("")}, "acceptance criteria is required", false},
+		{"negative priority", task.UpdateOptions{Priority: new(-1), Title: stringPtr("Must not change")}, "invalid priority", false},
+		{"priority above backlog", task.UpdateOptions{Priority: new(5), Title: stringPtr("Must not change")}, "invalid priority", false},
 	} {
 		t.Run(request.name, func(t *testing.T) {
 			source := createTestSource("alpha", "op", testutil.CanonicalTempDir(t))

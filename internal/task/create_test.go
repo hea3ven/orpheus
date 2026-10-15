@@ -40,10 +40,12 @@ func TestCreateServiceCreatesValidatedTaskGraphItem(t *testing.T) {
 	for _, itemType := range []struct {
 		name            string
 		requested, want task.IssueType
+		priority        *int
+		wantPriority    int
 	}{
-		{name: "default task", want: task.IssueTypeTask},
-		{name: "explicit task", requested: task.IssueTypeTask, want: task.IssueTypeTask},
-		{name: "epic", requested: task.IssueTypeEpic, want: task.IssueTypeEpic},
+		{name: "default task", want: task.IssueTypeTask, wantPriority: 2},
+		{name: "explicit P0 task", requested: task.IssueTypeTask, want: task.IssueTypeTask, priority: new(0), wantPriority: 0},
+		{name: "P4 epic", requested: task.IssueTypeEpic, want: task.IssueTypeEpic, priority: new(4), wantPriority: 4},
 	} {
 		t.Run(itemType.name, func(t *testing.T) {
 			backend := &fakeCreateBackend{tasks: map[string]task.Task{
@@ -58,6 +60,7 @@ func TestCreateServiceCreatesValidatedTaskGraphItem(t *testing.T) {
 
 			created, err := service.Create(context.Background(), source, task.CreateRequest{
 				IssueType:          itemType.requested,
+				Priority:           itemType.priority,
 				Title:              " Implement graph ",
 				Description:        " Build the graph. ",
 				Design:             " Keep it neutral. ",
@@ -75,7 +78,7 @@ func TestCreateServiceCreatesValidatedTaskGraphItem(t *testing.T) {
 			want := task.CreateOptions{
 				Title: "Implement graph", Description: "Build the graph.", Design: "Keep it neutral.",
 				AcceptanceCriteria: "It works.", ExternalRef: "PLAN-7", IssueType: itemType.want,
-				ParentID: "op-parent", BlockingIDs: []string{"op-dep"},
+				ParentID: "op-parent", BlockingIDs: []string{"op-dep"}, Priority: new(itemType.wantPriority),
 			}
 			if !reflect.DeepEqual(backend.created, want) {
 				t.Fatalf("backend options = %#v, want %#v", backend.created, want)
@@ -241,6 +244,8 @@ func TestCreateServiceRequiresPlanningFieldsBeforeMutation(t *testing.T) {
 		{name: "missing description", request: task.CreateRequest{Title: "title", AcceptanceCriteria: "acceptance"}, want: "description"},
 		{name: "missing acceptance", request: task.CreateRequest{Title: "title", Description: "description"}, want: "acceptance"},
 		{name: "unsupported type", request: task.CreateRequest{Title: "title", Description: "description", AcceptanceCriteria: "acceptance", IssueType: task.IssueTypeBug}, want: "unsupported item type"},
+		{name: "negative priority", request: task.CreateRequest{Title: "title", Description: "description", AcceptanceCriteria: "acceptance", Priority: new(-1)}, want: "invalid priority"},
+		{name: "priority above backlog", request: task.CreateRequest{Title: "title", Description: "description", AcceptanceCriteria: "acceptance", Priority: new(5)}, want: "invalid priority"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			source := createTestSource("alpha", "op", "/fixture/alpha")

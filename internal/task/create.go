@@ -22,6 +22,7 @@ type CreateBackendFactory func(RepositorySource) (CreateBackend, error)
 
 // CreateRequest is a backend-neutral request to create one task or epic.
 type CreateRequest struct {
+	Priority           *int
 	Title              string
 	Description        string
 	Design             string
@@ -102,7 +103,7 @@ func (s CreateService) Create(ctx context.Context, source RepositorySource, requ
 	opts, err := NormalizeCreateOptions(CreateOptions{
 		Title: request.Title, Description: request.Description, Design: request.Design,
 		AcceptanceCriteria: request.AcceptanceCriteria, ExternalRef: request.ExternalRef,
-		IssueType: request.IssueType, ParentID: request.ParentID, BlockingIDs: request.BlockingIDs,
+		Priority: request.Priority, IssueType: request.IssueType, ParentID: request.ParentID, BlockingIDs: request.BlockingIDs,
 	})
 	if err != nil {
 		return Task{}, err
@@ -144,6 +145,7 @@ func (s CreateService) Create(ctx context.Context, source RepositorySource, requ
 // NormalizeCreateOptions applies the backend-neutral creation validation policy.
 func NormalizeCreateOptions(opts CreateOptions) (CreateOptions, error) {
 	normalized := CreateOptions{
+		Priority:                   opts.Priority,
 		Title:                      strings.TrimSpace(opts.Title),
 		Description:                strings.TrimSpace(opts.Description),
 		Design:                     strings.TrimSpace(opts.Design),
@@ -154,6 +156,12 @@ func NormalizeCreateOptions(opts CreateOptions) (CreateOptions, error) {
 		CrossRepositoryParent:      opts.CrossRepositoryParent,
 		BlockingIDs:                normalizeIDs(opts.BlockingIDs),
 		CrossRepositoryBlockingIDs: normalizeIDs(opts.CrossRepositoryBlockingIDs),
+	}
+	if normalized.Priority == nil {
+		normalized.Priority = new(2)
+	}
+	if err := validatePriority(normalized.Priority); err != nil {
+		return CreateOptions{}, err
 	}
 	if normalized.Title == "" {
 		return CreateOptions{}, errors.New("title is required")
@@ -283,6 +291,7 @@ func copyStringPointer(s *string) *string {
 func NormalizeUpdateOptions(opts UpdateOptions) (UpdateOptions, error) {
 	normalized := UpdateOptions{
 		ID:                         strings.TrimSpace(opts.ID),
+		Priority:                   opts.Priority,
 		Title:                      trimStringPointer(opts.Title),
 		Description:                copyStringPointer(opts.Description),
 		Design:                     copyStringPointer(opts.Design),
@@ -298,6 +307,9 @@ func NormalizeUpdateOptions(opts UpdateOptions) (UpdateOptions, error) {
 	if normalized.ID == "" {
 		return UpdateOptions{}, errors.New("task id is required")
 	}
+	if err := validatePriority(normalized.Priority); err != nil {
+		return UpdateOptions{}, err
+	}
 
 	// Check for conflicting add/remove of the same dependency
 	addSet := make(map[string]struct{}, len(normalized.AddBlockingIDs))
@@ -311,6 +323,13 @@ func NormalizeUpdateOptions(opts UpdateOptions) (UpdateOptions, error) {
 	}
 
 	return normalized, nil
+}
+
+func validatePriority(priority *int) error {
+	if priority != nil && (*priority < 0 || *priority > 4) {
+		return fmt.Errorf("invalid priority %d; expected 0–4 (P0 critical, P1 high, P2 medium, P3 low, P4 backlog)", *priority)
+	}
+	return nil
 }
 
 func pathIsInside(path string, root string) (bool, error) {

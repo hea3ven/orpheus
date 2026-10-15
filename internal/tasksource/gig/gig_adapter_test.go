@@ -108,15 +108,30 @@ func TestIntegrationAdapterContractGigFieldsRelationshipsAndLifecycle(t *testing
 	require.NoError(t, backend.Close(t.Context(), epic.ID))
 	assert.ErrorIs(t, backend.StartEpic(t.Context(), epic.ID), task.ErrMutationConflict)
 	assert.ErrorIs(t, backend.MarkInProgress(t.Context(), blocker.ID, "branch", "/worktree"), task.ErrMutationConflict)
-	_, err := backend.Update(t.Context(), task.UpdateOptions{ID: child.ID, Title: stringPtr("Changed")})
-	assert.ErrorIs(t, err, task.ErrMutationConflict)
+	for _, id := range []string{child.ID, epic.ID} {
+		before := getItem(t, backend, id)
+		_, err := backend.Update(t.Context(), task.UpdateOptions{ID: id, Priority: new(0)})
+		assert.ErrorIs(t, err, task.ErrMutationConflict)
+		assert.Equal(t, before, getItem(t, backend, id))
+	}
 }
 
 func TestIntegrationAdapterContractGigEditsPreserveMetadataAndProtectNonblockingEdges(t *testing.T) {
 	backend, dir := newSource(t)
 	parent := createItem(t, backend, "Parent", task.IssueTypeEpic, "")
 	other := createItem(t, backend, "Other", task.IssueTypeEpic, "")
-	item := createItem(t, backend, "Original", task.IssueTypeTask, parent.ID)
+	item, err := backend.Create(t.Context(), task.CreateOptions{
+		Title: "Original", Description: "Description", Design: "Design", AcceptanceCriteria: "Acceptance",
+		ExternalRef: "OPS-42", IssueType: task.IssueTypeTask, ParentID: parent.ID, Priority: new(4),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 4, getItem(t, backend, item.ID).Priority)
+	assert.Equal(t, 2, parent.Priority, "omitted creation priority is P2")
+	critical, err := backend.Create(t.Context(), task.CreateOptions{
+		Title: "Critical epic", Description: "Description", AcceptanceCriteria: "Acceptance", IssueType: task.IssueTypeEpic, Priority: new(0),
+	})
+	require.NoError(t, err)
+	assert.Zero(t, getItem(t, backend, critical.ID).Priority, "explicit P0 must not default to P2")
 	dependency := createItem(t, backend, "Dependency", task.IssueTypeTask, "")
 	withNative(t, dir, func(store *sdk.Store) {
 		raw := `{"unrelated":{"nested":[1,true]},"orpheus.gig":{"future":"keep","owner":"operator"}}`
@@ -124,8 +139,9 @@ func TestIntegrationAdapterContractGigEditsPreserveMetadataAndProtectNonblocking
 		require.NoError(t, err)
 		require.NoError(t, store.AddDependency(item.ID, parent.ID, sdk.RelatesTo))
 	})
-	updated, err := backend.Update(t.Context(), task.UpdateOptions{ID: item.ID, Title: stringPtr("Changed"), Description: stringPtr("New description"), Design: stringPtr("New design"), AcceptanceCriteria: stringPtr("New acceptance"), ExternalRef: stringPtr("NEW-9"), ParentID: &other.ID, AddBlockingIDs: []string{dependency.ID}})
+	updated, err := backend.Update(t.Context(), task.UpdateOptions{ID: item.ID, Title: stringPtr("Changed"), Description: stringPtr("New description"), Design: stringPtr("New design"), AcceptanceCriteria: stringPtr("New acceptance"), ExternalRef: stringPtr("NEW-9"), ParentID: &other.ID, AddBlockingIDs: []string{dependency.ID}, Priority: new(0)})
 	require.NoError(t, err)
+	assert.Zero(t, updated.Priority)
 	assert.Equal(t, "Changed", updated.Title)
 	assert.Equal(t, "New description", updated.Description)
 	assert.Equal(t, "New design", updated.Design)
@@ -137,6 +153,26 @@ func TestIntegrationAdapterContractGigEditsPreserveMetadataAndProtectNonblocking
 	retriedAdd, err := backend.Update(t.Context(), task.UpdateOptions{ID: item.ID, AddBlockingIDs: []string{dependency.ID}})
 	require.NoError(t, err)
 	assert.Equal(t, updated.UpdatedAt, retriedAdd.UpdatedAt)
+	assert.Zero(t, retriedAdd.Priority, "omitted edit priority preserves P0")
+	require.NoError(t, backend.MarkInProgress(t.Context(), item.ID, "branch", "/worktree"))
+	require.NoError(t, backend.StartEpic(t.Context(), other.ID))
+	for _, target := range []struct {
+		id       string
+		priority int
+	}{{item.ID, 3}, {other.ID, 0}} {
+		before := getItem(t, backend, target.id)
+		require.Equal(t, task.StatusInProgress, before.Status)
+		changed, err := backend.Update(t.Context(), task.UpdateOptions{ID: target.id, Priority: &target.priority})
+		require.NoError(t, err)
+		want := before.Clone()
+		want.Priority, want.UpdatedAt = target.priority, changed.UpdatedAt
+		assert.Equal(t, want, changed, "priority-only edits preserve the rest of the native task or epic")
+		for _, invalid := range []int{-1, 5} {
+			_, err = backend.Update(t.Context(), task.UpdateOptions{ID: target.id, Priority: &invalid, Title: new("Must not change")})
+			require.ErrorContains(t, err, "invalid priority")
+			assert.Equal(t, changed, getItem(t, backend, target.id))
+		}
+	}
 	require.NoError(t, backend.SetPRURL(t.Context(), item.ID, "url"))
 	withNative(t, dir, func(store *sdk.Store) {
 		native, err := store.Get(item.ID)
@@ -174,6 +210,10 @@ func TestIntegrationAdapterContractGigEditsPreserveMetadataAndProtectNonblocking
 	assert.Empty(t, final.Relations.DependencyIDs)
 	before, err := backend.List(t.Context())
 	require.NoError(t, err)
+	for _, priority := range []int{-1, 5} {
+		_, err = backend.Create(t.Context(), task.CreateOptions{Title: "Fail", Description: "Description", AcceptanceCriteria: "Acceptance", Priority: &priority})
+		require.ErrorContains(t, err, "invalid priority")
+	}
 	_, err = backend.Create(t.Context(), task.CreateOptions{Title: "Fail", Description: "Description", AcceptanceCriteria: "Acceptance", IssueType: task.IssueTypeTask, BlockingIDs: []string{"op-missing"}})
 	assert.ErrorIs(t, err, task.ErrNotFound)
 	after, err := backend.List(t.Context())

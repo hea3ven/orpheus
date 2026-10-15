@@ -38,7 +38,7 @@ func (b Backend) Create(ctx context.Context, opts task.CreateOptions) (task.Task
 			return err
 		}
 		native, err := store.Create(sdk.CreateParams{Title: opts.Title, Description: opts.Description,
-			Type: sdk.TaskType(opts.IssueType), Priority: sdk.P2, ParentID: parentID,
+			Type: sdk.TaskType(opts.IssueType), Priority: sdk.Priority(*opts.Priority), ParentID: parentID,
 			Metadata: metadata, CreatedBy: "orpheus"})
 		if err != nil {
 			return err
@@ -116,7 +116,10 @@ func (b Backend) Update(ctx context.Context, opts task.UpdateOptions) (task.Task
 			return err
 		}
 
-		params := sdk.UpdateParams{Title: opts.Title, Description: opts.Description, Metadata: &metadata, ParentID: parentID}
+		params := sdk.UpdateParams{
+			Title: opts.Title, Description: opts.Description, Priority: (*sdk.Priority)(opts.Priority),
+			Metadata: &metadata, ParentID: parentID,
+		}
 		if parentID != nil && *parentID == "" {
 			params.ParentID, params.Orphan = nil, true
 		}
