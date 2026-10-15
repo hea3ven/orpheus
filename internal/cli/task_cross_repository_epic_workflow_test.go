@@ -5,6 +5,7 @@ package cli_test
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
@@ -17,7 +18,10 @@ func TestIntegrationWorkflowCrossRepositoryNestedEpicsPreserveOwnershipAndLifecy
 	alpha := newOwnershipAuthoringBackend(ownershipAuthoringEpic("op-root", taskmodel.StatusOpen), ownershipAuthoringEpic("op-other", taskmodel.StatusOpen))
 	beta := newOwnershipAuthoringBackend()
 	beta.createdID = "be-nested"
-	fixture.withRegisteredRepos(ownershipAuthoringRepo(), crossRepositoryOwner())
+	betaRepo := crossRepositoryOwner()
+	betaRepo.TaskSource, betaRepo.TaskMode, betaRepo.TaskPrefix = "gig", "managed", "be"
+	betaRepo.BeadsMode, betaRepo.BeadsPrefix = "", ""
+	fixture.withRegisteredRepos(ownershipAuthoringRepo(), betaRepo)
 	fixture.options.Dependencies.TaskBackendFactory = func(source taskmodel.RepositorySource) (taskmodel.ReadBackend, error) {
 		if source.Repository.ID == "alpha" {
 			return alpha, nil
@@ -35,6 +39,57 @@ func TestIntegrationWorkflowCrossRepositoryNestedEpicsPreserveOwnershipAndLifecy
 	require.ErrorContains(t, err, "parent epic op-root must be in progress")
 	fixture.mustExecute("task", "start", "op-root")
 	fixture.mustExecute("task", "start", "be-nested")
+
+	for _, args := range [][]string{{"status"}, {"task", "list"}} {
+		text, stderr := fixture.mustExecute(append(args, "--sort", "status")...)
+		assert.Empty(t, stderr)
+		assertStatusGroupOrder(t, text, []string{"op-root", "└─ be-nested", "  └─ op-9", "op-other"})
+		for _, id := range []string{"op-root", "be-nested", "op-9", "op-other"} {
+			rowCount := 0
+			for _, line := range strings.Split(text, "\n") {
+				if strings.Contains(line, id) {
+					rowCount++
+				}
+			}
+			assert.Equal(t, 1, rowCount, "%v: %s must appear once", args, id)
+		}
+		assert.Contains(t, tableRowForTask(text, "be-nested"), betaRepo.Name)
+		assert.Contains(t, tableRowForTask(text, "be-nested"), "Working")
+		assert.Contains(t, tableRowForTask(text, "be-nested"), "0/1 done")
+		assert.Contains(t, tableRowForTask(text, "op-9"), "Alpha Repo")
+		assert.Contains(t, tableRowForTask(text, "op-9"), "Ready")
+
+		jsonOut, stderr := fixture.mustExecute(append(args, "--sort", "status", "--json")...)
+		assert.Empty(t, stderr)
+		var entries []taskViewJSONTaskEntry
+		require.NoError(t, json.Unmarshal([]byte(jsonOut), &entries))
+		require.Len(t, entries, 4)
+		assert.Equal(t, []string{"op-root", "be-nested", "op-9", "op-other"}, []string{entries[0].ID, entries[1].ID, entries[2].ID, entries[3].ID})
+		assert.Equal(t, taskViewJSONRepository{ID: "beta", Name: betaRepo.Name, TaskIDPrefix: "be"}, entries[1].Repository)
+		assert.Equal(t, "idle", entries[1].Status)
+		assert.Equal(t, "no_run", entries[1].Detail.Kind)
+		assert.Equal(t, "epic", entries[1].IssueType)
+		assert.Equal(t, &taskViewJSONEpicProgress{Completed: 0, Total: 1}, entries[1].EpicProgress)
+		assert.Equal(t, "alpha", entries[2].Repository.ID)
+		assert.Equal(t, "ready", entries[2].Status)
+		assert.Equal(t, "none", entries[2].Detail.Kind)
+	}
+
+	for _, filter := range [][]string{{"--repo", "alpha", "--query", "op-9"}, {"--type", "task"}} {
+		args := append([]string{"task", "list"}, filter...)
+		text, stderr := fixture.mustExecute(args...)
+		assert.Empty(t, stderr)
+		assert.Contains(t, text, "op-9")
+		assert.NotContains(t, text, "op-root")
+		assert.NotContains(t, text, "be-nested")
+		assert.NotContains(t, text, "└─")
+		jsonOut, _ := fixture.mustExecute(append(args, "--json")...)
+		var entries []taskViewJSONTaskEntry
+		require.NoError(t, json.Unmarshal([]byte(jsonOut), &entries))
+		require.Len(t, entries, 1)
+		assert.Equal(t, "op-9", entries[0].ID)
+		assert.Equal(t, "ready", entries[0].Status)
+	}
 
 	listed, _ := fixture.mustExecute("task", "list", "--repo", "alpha", "--query", "op-root", "--json")
 	var rows []map[string]any

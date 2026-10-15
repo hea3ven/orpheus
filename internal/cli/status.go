@@ -711,11 +711,12 @@ func statusTreeRows(rows []statusDisplayRow) []statusDisplayRow {
 	return ordered
 }
 
-func visibleEpicKeys(rows []statusDisplayRow) map[statusTaskKey]struct{} {
-	visibleEpics := make(map[statusTaskKey]struct{})
+// visibleEpicKeys resolves parent IDs to their owning repository using only selected rows.
+func visibleEpicKeys(rows []statusDisplayRow) map[string]statusTaskKey {
+	visibleEpics := make(map[string]statusTaskKey)
 	for _, row := range rows {
 		if row.Entry.Kind == status.EntryTask && row.Entry.Task.IssueType == taskmodel.IssueTypeEpic {
-			visibleEpics[statusKey(row.Entry.Repository.ID, row.Entry.Task.ID)] = struct{}{}
+			visibleEpics[row.Entry.Task.ID] = statusKey(row.Entry.Repository.ID, row.Entry.Task.ID)
 		}
 	}
 	return visibleEpics
@@ -723,7 +724,7 @@ func visibleEpicKeys(rows []statusDisplayRow) map[statusTaskKey]struct{} {
 
 func statusTreeChildIndex(
 	rows []statusDisplayRow,
-	visibleEpics map[statusTaskKey]struct{},
+	visibleEpics map[string]statusTaskKey,
 ) (map[statusTaskKey][]int, map[int]struct{}) {
 	childrenByParent := make(map[statusTaskKey][]int)
 	hasVisibleParent := make(map[int]struct{})
@@ -735,8 +736,8 @@ func statusTreeChildIndex(
 		if parentID == "" {
 			continue
 		}
-		parentKey := statusKey(row.Entry.Repository.ID, parentID)
-		if _, ok := visibleEpics[parentKey]; !ok {
+		parentKey, ok := visibleEpics[parentID]
+		if !ok {
 			continue
 		}
 		childrenByParent[parentKey] = append(childrenByParent[parentKey], i)
