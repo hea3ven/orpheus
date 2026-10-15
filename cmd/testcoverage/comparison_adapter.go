@@ -61,6 +61,9 @@ func executeComparison(opts options) (resultErr error) {
 	if err := runner.prepareComparison(ctx, opts, initial.Comparison); err != nil {
 		return err
 	}
+	if err := writeQualityReport(output, initial); err != nil {
+		return err
+	}
 	policyPath := opts.policy
 	if opts.compareWorktree {
 		policyPath = filepath.Join(runner.work, "merge", ".quality.yml")
@@ -76,7 +79,9 @@ func executeComparison(opts options) (resultErr error) {
 
 func (runner *comparisonRunner) prepareComparison(ctx context.Context, opts options, evidence *comparisonEvidence) error {
 	if !opts.compareWorktree {
-		return runner.prepare(ctx, opts.compareBase, opts.compareMerge)
+		base, err := runner.prepare(ctx, opts.compareHead, opts.compareMerge)
+		evidence.BaseRevision = base
+		return err
 	}
 	snapshot, base, err := runner.prepareWorkingTree(ctx, opts.compareBase)
 	evidence.BaseRevision, evidence.MergeRevision = base, snapshot.Revision
@@ -143,20 +148,28 @@ func newComparisonRunner(output string) (*comparisonRunner, func(), error) {
 	return runner, cleanup, nil
 }
 
-func (runner *comparisonRunner) prepare(ctx context.Context, base, merge string) error {
-	if !commitPattern.MatchString(base) || !commitPattern.MatchString(merge) || base == merge {
-		return errors.New("base and merge must be distinct exact full commit IDs")
+func (runner *comparisonRunner) prepare(ctx context.Context, head, merge string) (string, error) {
+	if !commitPattern.MatchString(head) || !commitPattern.MatchString(merge) || head == merge {
+		return "", errors.New("PR head and tested merge must be distinct exact full commit IDs")
 	}
-	command := []string{"show", "-s", "--format=%H %P", merge}
-	output, err := runner.runGit(ctx, runner.root, command...)
+	output, err := runner.runGit(ctx, runner.root, "log", "-1", "--no-walk", "--format=%H %P", merge)
 	if err != nil {
-		return fmt.Errorf("verify merge: %w", err)
+		return "", fmt.Errorf("verify tested merge %s: %w", merge, err)
 	}
 	identities := strings.Fields(output)
-	if len(identities) != 3 || identities[0] != merge || identities[1] != base {
-		return errors.New("tested commit is not a synthetic merge with the exact base as first parent")
+	if len(identities) != 3 || identities[0] != merge || identities[1] == identities[2] {
+		return "", fmt.Errorf("tested commit %s must be a two-parent synthetic merge", merge)
 	}
-	return runner.prepareCheckouts(ctx, base, merge)
+	base := identities[1]
+	if identities[2] != head {
+		return base, fmt.Errorf("tested merge %s second parent %s does not match expected PR head %s", merge, identities[2], head)
+	}
+	for _, item := range []struct{ name, revision string }{{"base (first parent)", base}, {"PR head (second parent)", head}} {
+		if err := runner.gitCommand(ctx, runner.root, "cat-file", "-e", item.revision+"^{commit}"); err != nil {
+			return base, fmt.Errorf("verify %s commit %s: %w", item.name, item.revision, err)
+		}
+	}
+	return base, runner.prepareCheckouts(ctx, base, merge)
 }
 
 func (runner *comparisonRunner) prepareCheckouts(ctx context.Context, base, merge string) error {

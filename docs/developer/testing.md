@@ -325,19 +325,26 @@ Remove retained reports explicitly when no longer needed; later runs never read 
 incomplete, or inconsistent samples prevent writes. Within a revision, selected
 test counts (including per-package counts), coverage package statement totals,
 selected-test package structure, and normalized commands must agree. Do not mix
-scheduling modes. Only materially stale coverage floors and package structure
-are updated, retaining 0.5 percentage points of lane headroom and 2 percentage
-points of package headroom. Review the `.quality.yml` diff. The updater never
-rewrites timing tolerances or produces absolute timing bounds.
+scheduling modes. Use the pull-request workflow's pinned Go version: coverage
+statement accounting can change between toolchains. Only materially stale
+coverage floors and package structure are updated, retaining 0.5 percentage points
+of lane headroom and 2 percentage points of package headroom. Review the
+`.quality.yml` diff. The updater never rewrites timing tolerances or produces
+absolute timing bounds.
 
 ## Pull-request quality gate
 
 [The workflow](../../.github/workflows/quality-gate.yml) is bounded to twenty
 minutes. It builds one collector from GitHub's exact tested synthetic merge,
-then uses it for both the event's exact base commit and that merge. Detached
-checkouts are isolated, source IDs and cleanliness are checked before and after
-each collection, and the synthetic merge's first parent must be the exact base.
-The historical base policy is never loaded for measurement or comparison.
+validates that it has exactly two parents and its second parent is the event's
+expected PR head, then compares its first parent against that exact merge.
+Both parents must be available commits. The event's base SHA is not used: it can
+be stale when a PR is behind main, and no branch update is required. Later changes
+to main cannot change either selected commit. Detached checkouts are isolated,
+source IDs and cleanliness are checked before and after each collection, and
+reports identify the actual comparison commits. Invalid merge identities or
+missing commits block comparison with timing **unevaluated**. The historical
+base policy is never loaded for measurement or comparison.
 
 Both revisions use the same tools, selectors, coverage instrumentation,
 scheduling, and cache regime: fresh independent Go build and fixture-binary

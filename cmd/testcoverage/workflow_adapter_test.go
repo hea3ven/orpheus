@@ -22,7 +22,10 @@ func qualityWorkflowScripts(t *testing.T) (string, string) {
 	}
 	var workflow struct {
 		Jobs map[string]struct {
-			Steps []struct{ Name, ID, Run string }
+			Steps []struct {
+				Name, ID, Run string
+				Env           map[string]string
+			}
 		}
 	}
 	if err := yaml.Unmarshal(contents, &workflow); err != nil {
@@ -32,6 +35,9 @@ func qualityWorkflowScripts(t *testing.T) (string, string) {
 	for _, step := range workflow.Jobs["quality"].Steps {
 		if step.ID == "quality-report" {
 			measure = step.Run
+			if step.Env["QUALITY_HEAD"] != "${{ github.event.pull_request.head.sha }}" || step.Env["QUALITY_MERGE"] != "${{ github.sha }}" || step.Env["QUALITY_BASE"] != "" {
+				t.Fatalf("comparison must pin the tested merge and expected PR head, not event base metadata: %#v", step.Env)
+			}
 		}
 		if step.Name == "Enforce quality gate" {
 			enforce = step.Run
@@ -77,7 +83,7 @@ func TestIntegrationAdapterContractQualityWorkflowBlocksUnevaluatedAndInconsiste
 				t.Fatal(err)
 			}
 			collector := filepath.Join(root, "quality-collector")
-			script := "#!/bin/sh\nset -eu\ntest \"$1\" = -compare-base\ntest \"$2\" = \"$QUALITY_BASE\"\ntest \"$3\" = -compare-merge\ntest \"$4\" = \"$QUALITY_MERGE\"\n" +
+			script := "#!/bin/sh\nset -eu\ntest \"$#\" = 4\ntest \"$1\" = -compare-head\ntest \"$2\" = \"$QUALITY_HEAD\"\ntest \"$3\" = -compare-merge\ntest \"$4\" = \"$QUALITY_MERGE\"\n" +
 				"if test \"$QUALITY_FIXTURE_MISSING\" = false; then cat \"$QUALITY_FIXTURE_REPORT\" >artifacts/test-coverage/report.json; cat \"$QUALITY_FIXTURE_SUMMARY\" >artifacts/test-coverage/report.md; fi\nexit \"$QUALITY_FIXTURE_EXIT\"\n"
 			if err := os.WriteFile(collector, []byte(script), 0o755); err != nil {
 				t.Fatal(err)
@@ -123,7 +129,7 @@ func TestIntegrationAdapterContractQualityWorkflowBlocksUnevaluatedAndInconsiste
 			output := filepath.Join(root, "outputs")
 			summary := filepath.Join(root, "summary.md")
 			env := append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "RUNNER_TEMP="+root, "GITHUB_OUTPUT="+output, "GITHUB_STEP_SUMMARY="+summary,
-				"QUALITY_BASE="+fixtureBase, "QUALITY_MERGE="+fixtureMerge, "QUALITY_FIXTURE_REPORT="+report,
+				"QUALITY_HEAD="+fixtureBase, "QUALITY_MERGE="+fixtureMerge, "QUALITY_BASE=stale-unused-metadata", "QUALITY_FIXTURE_REPORT="+report,
 				"QUALITY_FIXTURE_SUMMARY="+reportSummaryPath(report), "QUALITY_FIXTURE_MISSING="+strconv.FormatBool(test.missing), "QUALITY_FIXTURE_EXIT="+strconv.Itoa(test.collectorExit))
 			cmd := exec.Command("bash", "-c", measure)
 			cmd.Dir, cmd.Env = root, env
