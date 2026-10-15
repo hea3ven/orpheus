@@ -99,6 +99,7 @@ type laneReport struct {
 	PackageTestCounts   map[string]int  `json:"package_test_counts,omitempty"`
 	TestCount           int             `json:"test_count"`
 	Coverage            coverageMetric  `json:"coverage"`
+	GuardedCoverage     *coverageMetric `json:"guarded_coverage,omitempty"`
 	Packages            []packageMetric `json:"packages,omitempty"`
 	Timings             []packageTiming `json:"package_timings,omitempty"`
 	Failure             *laneFailure    `json:"failure,omitempty"`

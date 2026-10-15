@@ -49,6 +49,6 @@ fmt:
 	go fmt ./...
 
 lint:
-	GOTOOLCHAIN=go1.26.3 golangci-lint run ./...
+	GOTOOLCHAIN=go1.26.3 go run ./cmd/testcoverage -lint
 
 check: fmt quality lint build

@@ -35,8 +35,9 @@ type sampleCollector func(subject, revision string, warmup bool, index int) (qua
 // Warmups establish compatibility but never enter the timing medians.
 func compareRevisions(policy localQualityPolicy, base, merge string, collect sampleCollector, publish func(qualityReport) error) (qualityReport, error) {
 	result := qualityReport{
-		SchemaVersion: reportSchemaVersion,
-		Execution:     decision{Status: statusUnevaluated}, CoverageDecision: decision{Status: statusUnevaluated},
+		SchemaVersion:     reportSchemaVersion,
+		PackageExclusions: append([]string(nil), policy.PackageExclusions...),
+		Execution:         decision{Status: statusUnevaluated}, CoverageDecision: decision{Status: statusUnevaluated},
 		Timing:     decision{Status: statusUnevaluated},
 		Comparison: &comparisonEvidence{BaseRevision: base, MergeRevision: merge, Settings: policy.Timing},
 	}
@@ -61,7 +62,7 @@ func compareRevisions(policy localQualityPolicy, base, merge string, collect sam
 				return abortComparison(result, err)
 			}
 			if subject.Name == "merge" && index == 1 {
-				result.Lanes = sample.Lanes
+				result.Lanes = withCoverageExclusions(sample, policy.PackageExclusions).Lanes
 				result.CoverageDecision = assessQualityPolicy(policy, sample)
 			}
 			if err := compatibleWithReferences(references, subject.Name, sample); err != nil {

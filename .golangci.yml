@@ -1,6 +1,8 @@
 version: "2"
 
 run:
+  # The quality collector adds policy exclusions to a temporary configuration.
+  relative-path-mode: gomod
   # testpackage needs test files to be analyzed so package-level tests stay in
   # external <package>_test packages unless intentionally exempted below.
   tests: true

@@ -38,6 +38,7 @@ type decision struct {
 
 type qualityReport struct {
 	SchemaVersion      int                   `json:"schema_version"`
+	PackageExclusions  []string              `json:"package_exclusions,omitempty"`
 	Complete           bool                  `json:"complete"`
 	MeasurementSamples int                   `json:"measurement_samples,omitempty"`
 	Lanes              map[string]laneReport `json:"lanes"`
