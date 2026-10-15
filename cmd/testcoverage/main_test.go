@@ -106,21 +106,36 @@ func TestAuditSelectionPreservesDefaultsAndRequestedPackagesInDiscoveryCommand(t
 }
 
 func TestFinishReportPreservesFailureEvidenceAndSeparateArtifacts(t *testing.T) {
-	for _, filename := range []string{"partial.json", "partial.md"} {
-		t.Run(filename, func(t *testing.T) {
+	for _, test := range []struct {
+		name, filename string
+		failure        laneFailure
+		want, unwanted []string
+	}{
+		{name: "named assertion", filename: "partial.json", failure: laneFailure{Error: "exit status 1", Stderr: "compiler stderr", TestOutput: "raw json events", Failures: []testFailure{
+			{Package: "github.com/hea3ven/orpheus/internal/tasksource/beads", Output: "package diagnostic"},
+			{Package: "github.com/hea3ven/orpheus/internal/tasksource/beads", Test: "TestBroken/subtest", Output: "want true, got false"},
+			{Package: "example.test/build", Output: "build failed"},
+		}}, want: []string{"Test failed: internal/tasksource/beads/TestBroken/subtest.", "Test failed: example.test/build.", "want true, got false", "package diagnostic", "compiler stderr"}, unwanted: []string{"raw json events"}},
+		{name: "stderr with raw stdout", filename: "partial.md", failure: laneFailure{Error: "exit status 1", Stderr: "compiler stderr", TestOutput: "raw json events"}, want: []string{"Test failed: lane command.", "compiler stderr", "raw json events"}},
+		{name: "undecodable stream with stderr", filename: "partial.json", failure: laneFailure{Error: "decode go test JSON", Stderr: "command warning", TestOutput: "malformed raw stream"}, want: []string{"Test failed: lane command.", "decode go test JSON", "malformed raw stream", "command warning"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			filename := test.filename
 			path := filepath.Join(testutil.CanonicalTempDir(t), filename)
 			report := testQualityReport()
 			report.Complete = false
-			report.Decision = decision{Status: statusTestFailed}
+			report.Execution = decision{Status: statusTestFailed, Findings: []finding{{Kind: "test", Message: "unit lane: " + test.failure.Error}}}
+			report.Decision = report.Execution
 			lane := report.Lanes["unit"]
 			lane.Passed = false
-			lane.Failure = &laneFailure{Error: "exit status 1", Stderr: "compiler stderr", TestOutput: "json events"}
+			lane.Failure = &test.failure
 			report.Lanes["unit"] = lane
 
 			err := finishReport(path, report, os.ErrInvalid)
 
-			if !errors.Is(err, os.ErrInvalid) {
-				t.Fatalf("finishReport error = %v, want original failure", err)
+			var reported *reportedQualityError
+			if !errors.Is(err, os.ErrInvalid) || !errors.As(err, &reported) {
+				t.Fatalf("finishReport error = %v, want reported original failure", err)
 			}
 			contents, err := os.ReadFile(path)
 			if err != nil {
@@ -141,83 +156,144 @@ func TestFinishReportPreservesFailureEvidenceAndSeparateArtifacts(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, want := range []string{"Tests failed", "unit", "Fail"} {
-				if !strings.Contains(string(markdown), want) {
-					t.Fatalf("failure summary missing %q: %s", want, markdown)
+			want := append([]string{"Quality checks failed"}, test.want...)
+			unwanted := append([]string{"unit lane: " + test.failure.Error, "Test failed: internal/tasksource/beads."}, test.unwanted...)
+			assertReportText(t, string(markdown), want, unwanted)
+			var terminal bytes.Buffer
+			printReportTo(&terminal, report, path)
+			assertReportText(t, terminal.String(), want, unwanted)
+		})
+	}
+}
+
+func TestReportFindingsShowConciseBoundariesWithoutChangingEvidence(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		item     finding
+		settings coverageBoundSettings
+		want     string
+	}{
+		{name: "coverage regression", item: finding{Prior: 63, Current: 61.2}, settings: coverageBoundSettings{SignificancePercentagePoints: 0.5, HeadroomPercentagePoints: 2}, want: "Coverage decreased significantly to 61.2%, min is 63.0%."},
+		{name: "upward refresh", item: finding{Prior: 51.6, Current: 54.2}, settings: coverageBoundSettings{SignificancePercentagePoints: 0.5, HeadroomPercentagePoints: 2}, want: "Coverage improved significantly to 54.2%, refresh at 54.1%."},
+		{name: "downward refresh above floor", item: finding{Prior: 53, Current: 54.9}, settings: coverageBoundSettings{SignificancePercentagePoints: 2, HeadroomPercentagePoints: 4}, want: "Coverage decreased significantly to 54.9%, refresh at 55.0%."},
+		{name: "coverage precision", item: finding{Prior: 63, Current: 62.9996}, settings: coverageBoundSettings{SignificancePercentagePoints: 0.5, HeadroomPercentagePoints: 2}, want: "Coverage decreased significantly to 62.9996%, min is 63.0000%."},
+		{name: "refresh rounding boundary", item: finding{Prior: 51.6, Current: 54.0996}, settings: coverageBoundSettings{SignificancePercentagePoints: 0.5, HeadroomPercentagePoints: 2}, want: "Coverage improved significantly to 54.100%, refresh at 54.099%."},
+		{name: "confirmed timing", item: finding{Kind: "timing_comparison", Current: 3.44, BudgetSeconds: 1.38}, want: "Timing increased significantly to 3.44s, max is 1.38s."},
+		{name: "timing precision", item: finding{Kind: "timing_comparison", Current: 1.3804, BudgetSeconds: 1.38}, want: "Timing increased significantly to 1.3804s, max is 1.3800s."},
+		{name: "zero boundary", item: finding{Kind: "timing_comparison", Current: 0.0001}, want: "Timing increased significantly to 0.0001s, max is 0.0000s."},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			item := test.item
+			status := statusTimingFailed
+			if item.Kind == "" {
+				violations, updates := assessCoverageBound(nil, nil, "unit", "package", "github.com/hea3ven/orpheus/internal/tasksource/beads", item.Prior, item.Current, test.settings)
+				items := violations
+				items = append(items, updates...)
+				if len(items) != 1 {
+					t.Fatalf("coverage assessment = %#v, want one finding", items)
 				}
+				item = items[0]
+				status = statusRegression
+				if len(violations) == 0 {
+					status = statusPolicyUpdateRequired
+				}
+			} else {
+				item.Lane, item.Scope, item.Name = "unit", "package", "github.com/hea3ven/orpheus/internal/tasksource/beads"
+			}
+			report := testQualityReport()
+			report.Decision = decision{Status: status, Findings: []finding{item}}
+			if status == statusTimingFailed {
+				report.Timing = report.Decision
+			} else {
+				report.CoverageDecision = report.Decision
+			}
+			before, err := json.Marshal(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var terminal, markdown bytes.Buffer
+			printReportTo(&terminal, report, "report.json")
+			renderReportSummary(&markdown, report, "report.json")
+
+			for _, contents := range []string{terminal.String(), markdown.String()} {
+				assertReportText(t, contents, []string{test.want, "unit/internal/tasksource/beads"}, []string{"make quality-policy-update", "proposed floor", "refresh threshold", " overage ", "github.com/hea3ven/orpheus/"})
+			}
+			after, err := json.Marshal(report)
+			if err != nil || !bytes.Equal(before, after) || !bytes.Contains(after, []byte("github.com/hea3ven/orpheus/internal/tasksource/beads")) {
+				t.Fatalf("rendering changed machine evidence: %s, %v", after, err)
 			}
 		})
 	}
 }
 
-func TestFindingMessageShowsQualityPolicyBounds(t *testing.T) {
-	coverage := findingMessage(finding{
-		Kind: "coverage_policy", Prior: 75.25, Current: 73.5, Proposed: 71.5, Threshold: 2,
-		Message: "coverage is below its policy floor",
-	})
-	for _, want := range []string{"floor 75.250%", "measured 73.500%", "proposed floor 71.500%", "refresh threshold 2.000 percentage points"} {
-		if !strings.Contains(coverage, want) {
-			t.Fatalf("coverage finding message %q does not contain %q", coverage, want)
+func assertReportText(t *testing.T, contents string, want, unwanted []string) {
+	t.Helper()
+	for _, phrase := range want {
+		if strings.Count(contents, phrase) != 1 {
+			t.Fatalf("report must contain %q once:\n%s", phrase, contents)
 		}
 	}
-
-	timing := findingMessage(finding{
-		Kind: "timing_comparison", Prior: 0.415, Current: 0.472, BudgetSeconds: 0.722, OverageSeconds: 0.01,
-		Message: "timing exceeds its policy ceiling",
-	})
-	for _, want := range []string{"base 0.415s", "candidate 0.472s", "ceiling 0.722s"} {
-		if !strings.Contains(timing, want) {
-			t.Fatalf("timing finding message %q does not contain %q", timing, want)
+	for _, phrase := range unwanted {
+		if strings.Contains(contents, phrase) {
+			t.Fatalf("report contains %q:\n%s", phrase, contents)
 		}
 	}
 }
 
 func TestPrintReportShowsPackageCoverageAndSelectedTestTiming(t *testing.T) {
 	report := testQualityReportWithPackages(
-		packageMetric{Name: "example.test/timed", coverageMetric: coverageMetric{StatementTotal: 10, CoveredStatements: 8}},
+		packageMetric{Name: "github.com/hea3ven/orpheus/internal/tasksource/beads", coverageMetric: coverageMetric{StatementTotal: 10, CoveredStatements: 8}},
 		packageMetric{Name: "example.test/not-timed", coverageMetric: coverageMetric{StatementTotal: 5, CoveredStatements: 2}},
 	)
 	for _, name := range laneNames {
 		lane := report.Lanes[name]
-		lane.Timings = []packageTiming{{Name: "example.test/timed", Seconds: 0.25}}
+		lane.Timings = []packageTiming{{Name: "github.com/hea3ven/orpheus/internal/tasksource/beads", Seconds: 0.25}}
 		report.Lanes[name] = lane
 	}
+	report.Scenarios = []scenarioResult{{Name: "github.com/hea3ven/orpheus/internal/tasksource/beads/TestIntegrationScenario"}}
 	var output bytes.Buffer
 	printReportTo(&output, report, "report.json")
 	contents := output.String()
 	for _, want := range []string{
 		"unit: 10/15 statements (66.67%), 10 test events, 0.25s selected package work, 1.00s command wall time",
-		"example.test/timed: 8/10 statements (80.00%), 0.25s",
+		"internal/tasksource/beads: 8/10 statements (80.00%), 0.25s",
+		"scenario internal/tasksource/beads/TestIntegrationScenario:",
 		"example.test/not-timed: 2/5 statements (40.00%), no selected package work",
 	} {
 		if !strings.Contains(contents, want) {
 			t.Fatalf("report does not contain %q:\n%s", want, contents)
 		}
 	}
-	if strings.Contains(contents, "start_line") || strings.Contains(contents, "blocks") {
+	if strings.Contains(contents, "start_line") || strings.Contains(contents, "blocks") || strings.Contains(contents, "github.com/hea3ven/orpheus/") {
 		t.Fatalf("report includes source-level coverage detail:\n%s", contents)
 	}
 }
 
 func TestReportSummaryPrioritizesBlockingDecisionAndCollapsesPackageDetails(t *testing.T) {
 	report := testQualityReportWithPackages(
-		packageMetric{Name: "example.test/first", coverageMetric: coverageMetric{StatementTotal: 10, CoveredStatements: 8}},
-		packageMetric{Name: "example.test/second", coverageMetric: coverageMetric{StatementTotal: 5, CoveredStatements: 2}},
+		packageMetric{Name: "github.com/hea3ven/orpheus/internal/tasksource/beads", coverageMetric: coverageMetric{StatementTotal: 10, CoveredStatements: 8}},
+		packageMetric{Name: "github.com/hea3ven/orpheus/internal/other/beads", coverageMetric: coverageMetric{StatementTotal: 5, CoveredStatements: 2}},
+		packageMetric{Name: "github.com/hea3ven/orpheus-extra/pkg"},
 	)
 	report.Decision = decision{
 		Status:   statusRegression,
 		Findings: []finding{{Kind: "coverage_policy", Lane: "unit", Scope: "repository", Prior: 70, Current: 66.67, Proposed: 66.17, Threshold: 0.5, Message: "coverage is below its policy floor"}},
-		Warnings: []finding{{Kind: "timing_comparison", Lane: "unit", Scope: "package", Name: "example.test/first", Prior: 0.5, Current: 0.8, BudgetSeconds: 0.75, Message: "timing diagnostic"}},
+		Warnings: []finding{{Kind: "timing_package", Lane: "unit", Scope: "package", Name: "github.com/hea3ven/orpheus/internal/tasksource/beads", Message: "selected-test package added (included in lane total)"}},
 	}
+	report.Scenarios = []scenarioResult{{Name: "github.com/hea3ven/orpheus/internal/tasksource/beads/TestIntegrationScenario"}}
 	var output bytes.Buffer
 
 	renderReportSummary(&output, report, "artifacts/test-coverage/report.json")
 
 	contents := output.String()
-	for _, fact := range []string{"Coverage floor violated", "unit/repository", "floor 70.000%", "66.67%", "ceiling 0.750s", "example.test/first", "example.test/second", "artifacts/test-coverage/report.json"} {
+	for _, fact := range []string{"Quality checks failed", "internal/tasksource/beads/TestIntegrationScenario", "unit/repository", "Coverage decreased significantly to 66.7%, min is 70.0%.", "66.67%", "selected-test package added", "internal/tasksource/beads", "internal/other/beads", "github.com/hea3ven/orpheus-extra/pkg", "artifacts/test-coverage/report.json"} {
 		if !strings.Contains(contents, fact) {
 			t.Fatalf("summary missing %q: %s", fact, contents)
 		}
+	}
+	if strings.Contains(contents, "github.com/hea3ven/orpheus/") {
+		t.Fatalf("summary retained a full module label: %s", contents)
 	}
 	start, end := strings.Index(contents, "<details>"), strings.Index(contents, "</details>")
 	summary, closing := strings.Index(contents, "<summary>"), strings.Index(contents, "</summary>")
@@ -225,7 +301,7 @@ func TestReportSummaryPrioritizesBlockingDecisionAndCollapsesPackageDetails(t *t
 	if start < 0 || end <= start || summary <= start || closing <= summary || closing >= end || blocking >= start {
 		t.Fatalf("blocking decision must precede collapsible details: %s", contents)
 	}
-	for _, pkg := range []string{"example.test/first", "example.test/second"} {
+	for _, pkg := range []string{"internal/tasksource/beads", "internal/other/beads"} {
 		if !strings.Contains(contents[closing:end], pkg) {
 			t.Fatalf("package %s is outside collapsible details: %s", pkg, contents)
 		}
@@ -327,7 +403,7 @@ func testQualityReportWithPackages(packages ...packageMetric) qualityReport {
 		total.StatementTotal += pkg.StatementTotal
 		total.CoveredStatements += pkg.CoveredStatements
 	}
-	report := qualityReport{SchemaVersion: reportSchemaVersion, Complete: true, Lanes: make(map[string]laneReport, 2)}
+	report := qualityReport{SchemaVersion: reportSchemaVersion, Complete: true, Lanes: make(map[string]laneReport, 2), Execution: decision{Status: statusPass}, CoverageDecision: decision{Status: statusPass}, Timing: decision{Status: statusNotEvaluated}, Decision: decision{Status: statusPass}}
 	for _, name := range laneNames {
 		report.Lanes[name] = laneReport{
 			Lane: name, Passed: true, WallSeconds: 1, TestCount: 10, Coverage: total,

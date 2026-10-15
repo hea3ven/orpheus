@@ -25,6 +25,9 @@ type finding struct {
 	OverageSeconds float64 `json:"overage_seconds,omitempty"`
 	Proposed       float64 `json:"proposed,omitempty"`
 	Message        string  `json:"message"`
+
+	// headroomPercent is presentation-only; policy evidence is unchanged in JSON.
+	headroomPercent float64
 }
 
 type decision struct {
@@ -45,6 +48,10 @@ type qualityReport struct {
 	Comparison         *comparisonEvidence   `json:"comparison,omitempty"`
 	Decision           decision              `json:"decision"`
 	Scenarios          []scenarioResult      `json:"scenarios,omitempty"`
+
+	// sampleFailures retains comparison diagnostics for presentation without
+	// replacing first-candidate coverage or changing persisted sample evidence.
+	sampleFailures []reportFailure
 }
 
 func percentage(metric coverageMetric) float64 {

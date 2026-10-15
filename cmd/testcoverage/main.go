@@ -61,7 +61,10 @@ func main() {
 		os.Exit(2)
 	}
 	if err := execute(opts); err != nil {
-		fmt.Fprintln(os.Stderr, "quality report:", err)
+		var reported *reportedQualityError
+		if !errors.As(err, &reported) {
+			fmt.Fprintln(os.Stderr, "quality report:", err)
+		}
 		os.Exit(1)
 	}
 }
@@ -238,6 +241,15 @@ func collectQuality(work string, audit *scenarioSelection) (qualityReport, []err
 	return result, laneErrors
 }
 
+// reportedQualityError preserves the failure for callers and exit handling,
+// without printing a second conclusion after the human report.
+type reportedQualityError struct {
+	cause error
+}
+
+func (err *reportedQualityError) Error() string { return err.cause.Error() }
+func (err *reportedQualityError) Unwrap() error { return err.cause }
+
 func finishReport(path string, result qualityReport, resultErr error) error {
 	if err := writeQualityReport(path, result); err != nil {
 		if resultErr != nil {
@@ -246,7 +258,10 @@ func finishReport(path string, result qualityReport, resultErr error) error {
 		return err
 	}
 	printReport(result, path)
-	return resultErr
+	if resultErr != nil {
+		return &reportedQualityError{cause: resultErr}
+	}
+	return nil
 }
 
 func writeQualityReport(path string, result qualityReport) error {

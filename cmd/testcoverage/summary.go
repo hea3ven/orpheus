@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"html"
 	"io"
 	"os"
 	"path/filepath"
@@ -28,8 +29,8 @@ func reportSummaryPath(reportPath string) string {
 }
 
 func renderReportSummary(output io.Writer, result qualityReport, reportPath string) {
-	alert, title, description := decisionPresentation(result.Decision.Status)
-	_, _ = fmt.Fprintf(output, "## Test quality\n\n> [!%s]\n> **%s.** %s\n\n", alert, title, description)
+	alert, verdict := decisionPresentation(result.Decision.Status)
+	_, _ = fmt.Fprintf(output, "## Test quality\n\n> [!%s]\n> **%s.**\n\n", alert, verdict)
 
 	_, _ = fmt.Fprintln(output, "| Check | Result |\n| --- | --- |")
 	_, _ = fmt.Fprintf(output, "| Tests/execution | %s |\n| Coverage | %s |\n| Timing | %s |\n\n", checkLabel(result.Execution), checkLabel(result.CoverageDecision), checkLabel(result.Timing))
@@ -59,15 +60,21 @@ func renderReportSummary(output io.Writer, result qualityReport, reportPath stri
 
 	_, _ = fmt.Fprintln(output, "\nCommand wall time measures developer wait and is diagnostic only. Selected package work sums elapsed times for packages that ran tests, including overlapping packages; explicit CI and local comparisons evaluate this work against the same-host base; routine local timing is diagnostic only.")
 
-	if len(result.Decision.Findings) > 0 {
+	if findings := reportFindings(result); len(findings) > 0 {
 		heading := "Blocking issues"
 		if result.Decision.Status == statusPass {
 			heading = "Notes"
 		}
-		renderFindingTable(output, heading, result.Decision.Findings)
+		renderFindingTable(output, heading, findings)
 	}
 	if len(result.Decision.Warnings) > 0 {
 		renderFindingTable(output, "Warnings", result.Decision.Warnings)
+	}
+
+	for _, failure := range reportFailures(result) {
+		if details := failureDiagnostics(failure.failure); details != "" {
+			_, _ = fmt.Fprintf(output, "\n<details>\n<summary>%s test diagnostics</summary>\n\n<pre>%s</pre>\n\n</details>\n", html.EscapeString(failure.location()), html.EscapeString(details))
+		}
 	}
 
 	renderPackageTable(output, result)
@@ -77,24 +84,16 @@ func renderReportSummary(output io.Writer, result qualityReport, reportPath stri
 	_, _ = fmt.Fprintf(output, "\nMachine-readable report: `%s`\n", markdownEscape(reportPath))
 }
 
-func decisionPresentation(status string) (alert, title, description string) {
+func decisionPresentation(status string) (alert, verdict string) {
 	switch status {
 	case statusPass:
-		return "TIP", "Quality checks passed", "All blocking checks passed. Independent results are listed below."
-	case statusPolicyUpdateRequired:
-		return "WARNING", "Quality policy update required", "Run `make quality-policy-update` and review the `.quality.yml` diff."
-	case statusRegression:
-		return "CAUTION", "Coverage floor violated", "A lane or package fell below its accepted coverage floor."
-	case statusTimingFailed:
-		return "CAUTION", "Timing ceiling exceeded", "Five-sample medians confirm a regression against the same-runner base."
-	case statusExecutionFailed:
-		return "CAUTION", "Execution failed", "Inspect the retained command and measurement diagnostics."
+		return "TIP", "Quality checks passed"
 	case statusUnevaluated:
-		return "CAUTION", "Timing unevaluated", "Missing, failed, incomplete, or incompatible evidence blocks the comparison; no regression is claimed."
-	case statusTestFailed:
-		return "CAUTION", "Tests failed", "At least one test lane did not complete successfully."
+		return "CAUTION", "Quality checks blocked"
+	case statusPolicyUpdateRequired, statusRegression, statusTimingFailed, statusExecutionFailed, statusTestFailed:
+		return "CAUTION", "Quality checks failed"
 	default:
-		return "WARNING", "Quality result unavailable", "Inspect the uploaded diagnostics for the execution failure."
+		return "WARNING", "Quality result unavailable"
 	}
 }
 
@@ -128,7 +127,7 @@ func renderPackageTable(output io.Writer, result qualityReport) {
 				output,
 				"| %s | %s | %d/%d (%.2f%%) | %s |\n",
 				markdownEscape(name),
-				markdownEscape(pkg.Name),
+				markdownEscape(packageLabel(pkg.Name)),
 				pkg.CoveredStatements,
 				pkg.StatementTotal,
 				percentage(pkg.coverageMetric),
@@ -148,7 +147,7 @@ func renderScenarioTable(output io.Writer, scenarios []scenarioResult) {
 		_, _ = fmt.Fprintf(
 			output,
 			"| %s | %.2fs | %.2f%% | %.2f%% | %d |\n",
-			markdownEscape(scenario.Name),
+			markdownEscape(packageLabel(scenario.Name)),
 			scenario.RuntimeSeconds,
 			scenario.ContainmentPercentage,
 			scenario.SimilarityPercentage,
@@ -193,7 +192,7 @@ func renderComparisonSummary(output io.Writer, result qualityReport) {
 			old, inBase := prior[pkg]
 			current, inMerge := candidate[pkg]
 			if inBase && inMerge {
-				_, _ = fmt.Fprintf(output, "| %s/%s | %.3fs | %.3fs | %.3fs |\n", name, markdownEscape(pkg), old, current, timingCeiling(old, evidence.Settings.Package))
+				_, _ = fmt.Fprintf(output, "| %s/%s | %.3fs | %.3fs | %.3fs |\n", name, markdownEscape(packageLabel(pkg)), old, current, timingCeiling(old, evidence.Settings.Package))
 			}
 		}
 	}

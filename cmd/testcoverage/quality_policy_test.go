@@ -132,6 +132,15 @@ func TestQualityPolicyUpdateMovesCrossedBoundsAndReconcilesPackages(t *testing.T
 	if len(changes) < 3 {
 		t.Fatalf("changes = %#v, want changed, added, and removed coverage bounds", changes)
 	}
+	var output strings.Builder
+	updatedReport := report
+	updatedReport.Decision = decision{Status: statusPass, Findings: changes}
+	printReportTo(&output, updatedReport, "report.json")
+	for _, want := range []string{"proposed floor 59.500%", "proposed floor 38.000%", "proposed floor 78.000%", "removed obsolete bound (floor 25.000%)"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("explicit policy update missing %q: %s", want, output.String())
+		}
+	}
 }
 
 func TestAggregatePolicySamplesUsesFiveTimingMedians(t *testing.T) {
