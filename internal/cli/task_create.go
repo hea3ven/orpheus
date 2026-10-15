@@ -19,6 +19,7 @@ type taskCreateInput struct {
 	acceptanceCriteriaFile string
 	externalRef            string
 	issueType              string
+	priority               string
 	parent                 string
 	blocking               []string
 	repository             string
@@ -45,6 +46,7 @@ func newTaskCreateCommand(opts *rootOptions) *cobra.Command {
 	flags.StringVar(&input.acceptanceCriteriaFile, "acceptance-file", "", "file containing acceptance criteria")
 	flags.StringVar(&input.externalRef, "external-ref", "", "optional external tracking reference")
 	flags.StringVar(&input.issueType, "type", string(taskmodel.IssueTypeTask), "item type: task or epic")
+	flags.StringVarP(&input.priority, "priority", "p", "2", "priority: 0–4 or P0–P4 (critical, high, medium, low, backlog)")
 	flags.StringVar(&input.parent, "parent", "", "optional parent epic id")
 	flags.StringArrayVar(&input.blocking, "blocked-by", nil, "task or epic that blocks this item; repeatable")
 	flags.StringVar(&input.repository, "repo", "", "registered repository id, name, or task prefix")
@@ -103,6 +105,10 @@ func runTaskCreate(command *cobra.Command, root *rootOptions, input taskCreateIn
 }
 
 func (input taskCreateInput) request() (taskmodel.CreateRequest, error) {
+	priority, err := parseTaskPriority(input.priority)
+	if err != nil {
+		return taskmodel.CreateRequest{}, err
+	}
 	description, err := resolveCreateContent(input.description, input.descriptionFile, "--description", "--description-file")
 	if err != nil {
 		return taskmodel.CreateRequest{}, err
@@ -116,6 +122,7 @@ func (input taskCreateInput) request() (taskmodel.CreateRequest, error) {
 		return taskmodel.CreateRequest{}, err
 	}
 	return taskmodel.CreateRequest{
+		Priority:           &priority,
 		Title:              input.title,
 		Description:        description,
 		Design:             design,

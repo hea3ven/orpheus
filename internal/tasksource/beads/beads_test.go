@@ -540,6 +540,8 @@ func TestTaskBackendCreateCreatesStandaloneTask(t *testing.T) {
 			"Cleanup has tests.",
 			"--type",
 			"task",
+			"--priority",
+			"2",
 		},
 		result: beads.Result{Stdout: `{"id":"op-7","title":"Follow-up cleanup","description":"Clean up the review finding.","acceptance_criteria":"Cleanup has tests.","status":"open","issue_type":"task"}`},
 	}}}
@@ -572,7 +574,7 @@ func TestTaskBackendCreatePassesGraphAndOptionalFields(t *testing.T) {
 		wantDir: dir,
 		wantArgs: []string{
 			"--json", "--sandbox", "create", "Plan release",
-			"--description", "Description", "--acceptance", "Acceptance", "--type", "epic",
+			"--description", "Description", "--acceptance", "Acceptance", "--type", "epic", "--priority", "0",
 			"--design", "Design", "--external-ref", "PLAN-1", "--parent", "op-parent",
 			"--deps", "op-first", "--deps", "op-second",
 		},
@@ -584,7 +586,7 @@ func TestTaskBackendCreatePassesGraphAndOptionalFields(t *testing.T) {
 	}
 	_, err = backend.Create(context.Background(), task.CreateOptions{
 		Title: "Plan release", Description: "Description", Design: "Design", AcceptanceCriteria: "Acceptance",
-		ExternalRef: "PLAN-1", IssueType: task.IssueTypeEpic, ParentID: "op-parent", BlockingIDs: []string{"op-first", "op-second"},
+		ExternalRef: "PLAN-1", IssueType: task.IssueTypeEpic, ParentID: "op-parent", BlockingIDs: []string{"op-first", "op-second"}, Priority: new(0),
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)

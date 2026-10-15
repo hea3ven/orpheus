@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -233,6 +234,7 @@ func (b TaskBackend) Create(ctx context.Context, opts task.CreateOptions) (task.
 		"--description", createOpts.Description,
 		"--acceptance", createOpts.AcceptanceCriteria,
 		"--type", string(createOpts.IssueType),
+		"--priority", strconv.Itoa(*createOpts.Priority),
 	}
 	if createOpts.Design != "" {
 		args = append(args, "--design", createOpts.Design)
@@ -516,15 +518,18 @@ func (b TaskBackend) Update(ctx context.Context, opts task.UpdateOptions) (task.
 }
 
 func (b TaskBackend) updateContentFields(ctx context.Context, id string, opts task.UpdateOptions) error {
-	// Skip content update when no content fields are specified
+	// Priority-only edits still require a native field update.
 	hasContentFields := opts.Title != nil || opts.Description != nil || opts.Design != nil ||
-		opts.AcceptanceCriteria != nil || opts.ExternalRef != nil
+		opts.AcceptanceCriteria != nil || opts.ExternalRef != nil || opts.Priority != nil
 	if !hasContentFields {
 		return nil
 	}
 
 	args := []string{"update", id}
 
+	if opts.Priority != nil {
+		args = append(args, "--priority", strconv.Itoa(*opts.Priority))
+	}
 	if opts.Title != nil {
 		args = append(args, "--title", *opts.Title)
 	}

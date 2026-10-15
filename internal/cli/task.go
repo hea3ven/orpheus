@@ -274,6 +274,7 @@ func newTaskEditCommand(opts *rootOptions) *cobra.Command {
 		acceptanceFile     string
 		externalRefFile    string
 		parentIDFile       string
+		priority           string
 	)
 
 	cmd := &cobra.Command{
@@ -282,7 +283,16 @@ func newTaskEditCommand(opts *rootOptions) *cobra.Command {
 		Long:  taskEditLongHelp(),
 		Args:  cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
+			var priorityValue *int
+			if command.Flags().Changed("priority") {
+				parsed, err := parseTaskPriority(priority)
+				if err != nil {
+					return err
+				}
+				priorityValue = &parsed
+			}
 			return runTaskEdit(command, opts, args[0], taskEditOptions{
+				priority:           priorityValue,
 				title:              title,
 				description:        description,
 				design:             design,
@@ -305,6 +315,7 @@ func newTaskEditCommand(opts *rootOptions) *cobra.Command {
 		&externalRef, &parentID, &addBlockingIDs, &removeBlockingIDs,
 		&titleFile, &descriptionFile, &designFile, &acceptanceFile,
 		&externalRefFile, &parentIDFile)
+	cmd.Flags().StringVarP(&priority, "priority", "p", "", "priority: 0–4 or P0–P4 (critical, high, medium, low, backlog); unchanged if omitted")
 
 	return cmd
 }
@@ -355,6 +366,7 @@ func addTaskEditFlags(cmd *cobra.Command,
 }
 
 type taskEditOptions struct {
+	priority           *int
 	title              string
 	description        string
 	design             string
@@ -3404,6 +3416,7 @@ func buildTaskEditUpdateOptions(taskID string, editOpts taskEditOptions) taskmod
 
 	return taskmodel.UpdateOptions{
 		ID:                 taskID,
+		Priority:           editOpts.priority,
 		Title:              titlePtr,
 		Description:        descriptionPtr,
 		Design:             designPtr,

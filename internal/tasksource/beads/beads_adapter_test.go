@@ -30,6 +30,7 @@ func TestIntegrationAdapterContractBeadsRelationshipContracts(t *testing.T) {
 	// Cases own disjoint task IDs and assert only their own graph. Map iteration
 	// varies their order; keep them serial to avoid concurrent database writers.
 	for name, run := range map[string]func(*testing.T, beadsRelationshipFixture){
+		"TaskBackendPrioritiesPreserveActivePlans":                     checkPrioritiesPreserveActivePlans,
 		"TaskBackendCrossRepositoryParents":                            checkCrossRepositoryParents,
 		"TaskBackendCrossRepositoryReferences":                         checkCrossRepositoryReferences,
 		"TaskBackendReadsParentRelationship":                           checkParentRelationshipReadback,
@@ -47,6 +48,78 @@ type beadsRelationshipFixture struct {
 	backend beads.TaskBackend
 	runner  beads.CommandRunner
 	dir     string
+}
+
+func checkPrioritiesPreserveActivePlans(t *testing.T, fixture beadsRelationshipFixture) {
+	t.Helper()
+	parent, err := fixture.backend.Create(t.Context(), task.CreateOptions{
+		Title: t.Name() + "/Parent", Description: "Description", AcceptanceCriteria: "Acceptance", IssueType: task.IssueTypeEpic,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, parent.Priority, "omitted creation priority is P2")
+	require.NoError(t, fixture.backend.StartEpic(t.Context(), parent.ID))
+	invalidTitle := t.Name() + "/Invalid priority"
+	for _, priority := range []int{-1, 5} {
+		_, err := fixture.backend.Create(t.Context(), task.CreateOptions{
+			Title: invalidTitle, Description: "Description", AcceptanceCriteria: "Acceptance", Priority: &priority,
+		})
+		require.ErrorContains(t, err, "invalid priority")
+	}
+	invalidItems, err := fixture.backend.ListFiltered(t.Context(), task.ListFilter{Query: invalidTitle})
+	require.NoError(t, err)
+	assert.Empty(t, invalidItems, "invalid creation priority must not insert an item")
+	for _, tc := range []struct {
+		kind            task.IssueType
+		initial, edited int
+	}{{task.IssueTypeTask, 0, 4}, {task.IssueTypeEpic, 4, 0}} {
+		t.Run(string(tc.kind), func(t *testing.T) {
+			blocker, err := fixture.backend.Create(t.Context(), task.CreateOptions{
+				Title: t.Name() + "/Blocker", Description: "Description", AcceptanceCriteria: "Acceptance", IssueType: tc.kind,
+			})
+			require.NoError(t, err)
+			item, err := fixture.backend.Create(t.Context(), task.CreateOptions{
+				Title: t.Name(), Description: "Description", Design: "Design", AcceptanceCriteria: "Acceptance",
+				ExternalRef: "PLAN-1", IssueType: tc.kind, ParentID: parent.ID, Priority: new(tc.initial), BlockingIDs: []string{blocker.ID},
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.initial, item.Priority)
+			_, err = fixture.runner.Run(fixture.dir, "update", item.ID, "--assignee", "operator", "--add-label", "planning", "--set-metadata", "team=platform")
+			require.NoError(t, err)
+			if tc.kind == task.IssueTypeTask {
+				require.NoError(t, fixture.backend.MarkInProgress(t.Context(), item.ID, "task/priority", "/fixture/priority"))
+			} else {
+				require.NoError(t, fixture.backend.StartEpic(t.Context(), item.ID))
+			}
+			before, err := fixture.backend.Get(t.Context(), item.ID)
+			require.NoError(t, err)
+			require.Equal(t, task.StatusInProgress, before.Status)
+			updated, err := fixture.backend.Update(t.Context(), task.UpdateOptions{ID: item.ID, Priority: new(tc.edited)})
+			require.NoError(t, err)
+			expected := before.Clone()
+			expected.Priority, expected.UpdatedAt = tc.edited, updated.UpdatedAt
+			assert.Equal(t, expected, updated, "priority-only edits preserve content, ownership, metadata, relationships, and lifecycle")
+
+			updated, err = fixture.backend.Update(t.Context(), task.UpdateOptions{ID: item.ID, Title: new("Retitled")})
+			require.NoError(t, err)
+			assert.Equal(t, tc.edited, updated.Priority, "omitted edit priority preserves the source value")
+			for _, priority := range []int{-1, 5} {
+				_, err = fixture.backend.Update(t.Context(), task.UpdateOptions{ID: item.ID, Priority: &priority, Title: new("Must not change")})
+				require.ErrorContains(t, err, "invalid priority")
+				preserved, err := fixture.backend.Get(t.Context(), item.ID)
+				require.NoError(t, err)
+				assert.Equal(t, updated, preserved)
+			}
+			require.NoError(t, fixture.backend.Close(t.Context(), blocker.ID))
+			require.NoError(t, fixture.backend.Close(t.Context(), item.ID))
+			closed, err := fixture.backend.Get(t.Context(), item.ID)
+			require.NoError(t, err)
+			_, err = fixture.backend.Update(t.Context(), task.UpdateOptions{ID: item.ID, Priority: new(1)})
+			require.ErrorIs(t, err, task.ErrMutationConflict)
+			preserved, err := fixture.backend.Get(t.Context(), item.ID)
+			require.NoError(t, err)
+			assert.Equal(t, closed, preserved)
+		})
+	}
 }
 
 func checkParentRelationshipReadback(t *testing.T, fixture beadsRelationshipFixture) {

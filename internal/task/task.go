@@ -434,11 +434,11 @@ type SyncBackend interface {
 
 // UpdateOptions describes a backend-neutral request to update a task item.
 //
-// Pointer fields distinguish "not specified" (nil) from "explicitly cleared" (empty string).
-// Use the NormalizeUpdateOptions helper to apply validation and convert to UpdateOptions
-// with nil pointers for unspecified fields.
+// Pointer fields distinguish unspecified values (nil) from explicit values,
+// including empty strings and priority zero. NormalizeUpdateOptions validates them.
 type UpdateOptions struct {
 	ID                 string
+	Priority           *int
 	Title              *string
 	Description        *string
 	Design             *string
@@ -686,9 +686,11 @@ func (e updateFailure) Unwrap() error { return e.cause }
 
 // CreateOptions describes one backend task item to create.
 //
+// Priority defaults to P2 when nil; an explicit zero means P0.
 // ParentID and BlockingIDs express the new item's graph relationships without
 // exposing backend-specific command syntax.
 type CreateOptions struct {
+	Priority           *int
 	Title              string
 	Description        string
 	Design             string

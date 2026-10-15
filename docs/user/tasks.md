@@ -84,6 +84,7 @@ Agents and tooling can use the [task JSON reference](../developer/task-json.md).
 orpheus task create --repo my-repo --title 'Add parser validation' \
   --description-file /tmp/task.md --acceptance-file /tmp/acceptance.md
 orpheus task edit op-123 --external-ref TREX-1234
+orpheus task edit op-123 --priority P1
 ```
 
 Creation defaults to `--type task`; use `--type epic` for a planning container,
@@ -91,6 +92,14 @@ Creation defaults to `--type task`; use `--type epic` for a planning container,
 Without `--repo`, selection uses active Orpheus repository context, then an
 unambiguous registered repository containing the current directory. Use `--help`
 for editing fields and dependency flags.
+
+Both `task create` and `task edit` accept `--priority` (`-p`) for tasks and epics.
+Use `0`–`4` or `P0`–`P4`: critical, high, medium, low, backlog. Creation defaults
+to P2 (medium); editing without the flag preserves the current priority. Explicit
+P0 sets critical priority. Priority-only edits leave content, relationships,
+ownership, and lifecycle unchanged; closed items cannot be edited. The owning
+task source stores priority, and existing task views and JSON show it using the
+usual ordering.
 
 Prerequisites can be tasks or epics in any registered repository. Add them with
 `--blocked-by` on creation or `task edit <id> --add-block <id>`. They remain

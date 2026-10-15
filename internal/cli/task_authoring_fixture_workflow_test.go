@@ -95,6 +95,7 @@ func (b *ownershipAuthoringBackend) Create(_ context.Context, opts taskmodel.Cre
 		AcceptanceCriteria: opts.AcceptanceCriteria,
 		ExternalRef:        opts.ExternalRef,
 		IssueType:          opts.IssueType,
+		Priority:           *opts.Priority,
 		Status:             taskmodel.StatusOpen,
 		Relations: taskmodel.RelationSummary{
 			ParentID:      opts.ParentID,
@@ -115,6 +116,9 @@ func (b *ownershipAuthoringBackend) Update(_ context.Context, opts taskmodel.Upd
 	item, ok := b.tasks[opts.ID]
 	if !ok {
 		return taskmodel.Task{}, taskmodel.ErrNotFound
+	}
+	if opts.Priority != nil {
+		item.Priority = *opts.Priority
 	}
 	if opts.Title != nil {
 		item.Title = *opts.Title
