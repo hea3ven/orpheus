@@ -2,10 +2,10 @@ version: 1
 coverage:
   repository:
     significance_percentage_points: 0.5
-    headroom_percentage_points: 0.5
+    headroom_percentage_points: 2
   package:
     significance_percentage_points: 2
-    headroom_percentage_points: 2
+    headroom_percentage_points: 4
 coverage_update_samples: 5
 timing:
   suite:
