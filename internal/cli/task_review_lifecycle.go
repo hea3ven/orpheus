@@ -219,7 +219,7 @@ func newTaskReviewLifecycleService(
 			return invocationTaskBackend[workflow.ReviewLifecycleBackend](deps, source)
 		},
 		PRProvider:            newInvocationGHProvider(deps, logger),
-		CandidateInspector:    deps.reviewCandidate,
+		CandidateGit:          deps.reviewCandidateGit,
 		DispatchGit:           deps.dispatchGit,
 		AgentLauncher:         deps.agentLauncher,
 		Environment:           environmentEntries(deps.environment),
