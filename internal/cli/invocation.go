@@ -49,7 +49,7 @@ type invocationDependencies struct {
 	agentLauncher      agentexec.Launcher
 	dispatchGit        workflow.DispatchGit
 	agentGit           agent.GitStateReader
-	reviewCandidate    workflow.ReviewCandidateInspector
+	reviewCandidateGit workflow.ReviewCandidateGit
 	reviewPipeline     func(review.PipelineRunOptions) (review.PipelineOutcome, error)
 	processProbe       workflow.ProcessProbe
 	agentCWD           string
@@ -93,17 +93,17 @@ func newInvocationDependenciesWithPaths(paths state.Paths, logger *slog.Logger, 
 	}
 	paths.PropagateEnvironment(environment)
 	deps := &invocationDependencies{
-		paths:           paths,
-		logger:          logger,
-		registryStore:   registry.NewStoreWithLogger(paths, logger),
-		environment:     environment,
-		agentLauncher:   agentexec.AttachedLauncher{Environment: environmentEntries(environment)},
-		dispatchGit:     workflow.LocalDispatchGit{},
-		agentGit:        agent.LocalGitState{},
-		reviewCandidate: workflow.LocalReviewCandidateInspector{},
-		reviewPipeline:  review.RunPipeline,
-		processProbe:    agentexec.ProbePID,
-		captureUsage:    agent.CaptureUsage,
+		paths:              paths,
+		logger:             logger,
+		registryStore:      registry.NewStoreWithLogger(paths, logger),
+		environment:        environment,
+		agentLauncher:      agentexec.AttachedLauncher{Environment: environmentEntries(environment)},
+		dispatchGit:        workflow.LocalDispatchGit{},
+		agentGit:           agent.LocalGitState{},
+		reviewCandidateGit: workflow.LocalReviewCandidateGit{},
+		reviewPipeline:     review.RunPipeline,
+		processProbe:       agentexec.ProbePID,
+		captureUsage:       agent.CaptureUsage,
 	}
 	deps.initializeGig = gig.Initialize
 	deps.taskBackendFactory = func(source taskmodel.RepositorySource) (taskmodel.ReadBackend, error) {

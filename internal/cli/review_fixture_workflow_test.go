@@ -78,7 +78,7 @@ func newReviewDispatchFixture(t *testing.T, taskID string) *reviewWorkflowFixtur
 	f.options.Dependencies.ReviewPipeline = review.RunPipeline
 	f.options.Dependencies.FinalizationGit = f.candidate
 	f.options.Dependencies.PRProvider = &memoryReviewPR{}
-	f.options.Dependencies.ReviewStatus = f.candidate.shortStatus
+	f.options.Dependencies.ReviewStatus = f.candidate.ShortStatus
 	f.options.Dependencies.ReviewEffects = review.Effects{CaptureCandidate: f.candidate.capture, RunCommand: f.runCheck, RunHunkCommand: f.runHunkCommand}
 	t.Cleanup(func() {
 		for name, outcomes := range f.checks {
@@ -233,17 +233,10 @@ type memoryReviewCandidate struct {
 	*memoryDispatchGit
 	head, contents string
 	snapshots      int
-	staged         bool
 	commits        []string
 	pushes         []string
 }
 
-func (g *memoryReviewCandidate) shortStatus(context.Context, string) (string, error) {
-	if g.hasCandidateChanges {
-		return "?? reviewed.txt\n", nil
-	}
-	return "", nil
-}
 func (g *memoryReviewCandidate) capture(context.Context, string, *slog.Logger, ...slog.Attr) (review.CandidateCheck, error) {
 	g.snapshots++
 	contents := g.contents
@@ -264,14 +257,17 @@ func (g *memoryReviewCandidate) HasWorkingTreeChanges(ctx context.Context, dir s
 func (g *memoryReviewCandidate) HeadCommit(context.Context, string) (string, error) {
 	return g.head, nil
 }
-func (g *memoryReviewCandidate) StageAll(context.Context, string) error { g.staged = true; return nil }
+func (g *memoryReviewCandidate) StageAll(context.Context, string) error {
+	g.hasStagedChanges = true
+	return nil
+}
 func (g *memoryReviewCandidate) Commit(_ context.Context, _ string, message string) (string, error) {
-	if !g.staged || !g.hasCandidateChanges {
+	if !g.hasStagedChanges || !g.hasCandidateChanges {
 		return "", errors.New("commit requires staged candidate changes")
 	}
 	g.commits = append(g.commits, message)
 	g.head = fmt.Sprintf("commit-%d", len(g.commits))
-	g.staged = false
+	g.hasStagedChanges = false
 	g.hasCandidateChanges = false
 	return g.head, nil
 }

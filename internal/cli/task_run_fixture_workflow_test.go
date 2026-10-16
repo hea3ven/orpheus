@@ -63,7 +63,7 @@ func newTaskWorkflowFixture(t *testing.T, tasks ...taskmodel.Task) *taskWorkflow
 	fixture.options.Dependencies.TaskBackendFactory = func(taskmodel.RepositorySource) (taskmodel.ReadBackend, error) { return backend, nil }
 	fixture.options.Dependencies.DispatchGit = git
 	fixture.options.Dependencies.AgentGit = git
-	fixture.options.Dependencies.ReviewCandidate = git
+	fixture.options.Dependencies.ReviewCandidateGit = git
 	fixture.options.Dependencies.AgentLauncher = launcher
 	fixture.options.Dependencies.CaptureUsage = func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions {
 		return taskstate.RecordRunUsageOptions{UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureUnknown, Reason: "not supplied by scenario"}}

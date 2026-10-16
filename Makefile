@@ -20,6 +20,9 @@ test-integration:
 	@command -v bd >/dev/null 2>&1 || { echo "Beads integration tests require bd; install Beads or ensure bd is on PATH." >&2; exit 1; }
 	go test $(INTEGRATION_TEST_ARGS) ./...
 
+# Keep coverage measurements on CI's exact toolchain, including child commands.
+quality quality-policy-update: export GOTOOLCHAIN = go$(shell cat .go-version)
+
 # quality runs each lane exactly once and evaluates reviewed coverage floors.
 # Timing is diagnostic only locally; the PR gate compares fresh base/merge work.
 quality:
@@ -31,8 +34,8 @@ timing-check:
 	@test -n "$$BASE" || { echo "Supply an explicit base: make timing-check BASE=<ref>" >&2; exit 2; }
 	go run -mod=readonly ./cmd/testcoverage -compare-worktree -compare-base "$$BASE"
 
-# Collect five complete coverage-instrumented samples, update only stale
-# coverage floors, and leave the .quality.yml diff for review.
+# Collect five complete samples with CI's exact coverage toolchain, update only
+# stale coverage floors, and leave the .quality.yml diff for review.
 quality-policy-update:
 	go run ./cmd/testcoverage -update-policy
 

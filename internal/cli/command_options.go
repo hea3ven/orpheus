@@ -59,7 +59,7 @@ type Dependencies struct {
 	AgentLauncher      agentexec.Launcher
 	DispatchGit        workflow.DispatchGit
 	AgentGit           agent.GitStateReader
-	ReviewCandidate    workflow.ReviewCandidateInspector
+	ReviewCandidateGit workflow.ReviewCandidateGit
 	ReviewPipeline     func(review.PipelineRunOptions) (review.PipelineOutcome, error)
 	ProcessProbe       workflow.ProcessProbe
 	// CaptureUsage reads session usage for implementation, review, sync conflict resolution, and doctor recovery.
@@ -112,8 +112,8 @@ func (d Dependencies) applyTo(invocation *invocationDependencies) {
 	if d.AgentGit != nil {
 		invocation.agentGit = d.AgentGit
 	}
-	if d.ReviewCandidate != nil {
-		invocation.reviewCandidate = d.ReviewCandidate
+	if d.ReviewCandidateGit != nil {
+		invocation.reviewCandidateGit = d.ReviewCandidateGit
 	}
 	if d.ReviewPipeline != nil {
 		invocation.reviewPipeline = d.ReviewPipeline

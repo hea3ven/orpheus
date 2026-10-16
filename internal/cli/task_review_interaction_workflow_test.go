@@ -14,16 +14,9 @@ import (
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/taskstate"
-	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-type reviewCandidateFunc func(context.Context, workflow.ReviewLifecycleStore, workflow.ReviewContext, string) error
-
-func (f reviewCandidateFunc) ValidateReviewCandidate(ctx context.Context, store workflow.ReviewLifecycleStore, attempt workflow.ReviewContext, dir string) error {
-	return f(ctx, store, attempt, dir)
-}
 
 func TestIntegrationWorkflowTaskRunReviewFollowUpAllowsDirtyMainTarget(t *testing.T) {
 	is := assert.New(t)
@@ -372,21 +365,59 @@ func TestIntegrationWorkflowTaskReviewAgentReviewStepCapturesUsage(t *testing.T)
 		})
 	}
 }
-func TestIntegrationWorkflowTaskReviewPreflightFailurePreventsReviewAndPublication(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewAdmissionPreventsReviewUntilCandidateIsReady(t *testing.T) {
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review preflight", "Reject candidate.")
-	sentinel := errors.New("candidate preflight unavailable")
-	fixture.options.Dependencies.ReviewCandidate = reviewCandidateFunc(func(context.Context, workflow.ReviewLifecycleStore, workflow.ReviewContext, string) error {
-		return sentinel
-	})
+	fixture.pipelines("standard", map[string][]map[string]any{"standard": {
+		{"kind": "check", "name": "check", "command": fixture.check("check", checkResult{})},
+		{"kind": "manual", "name": "approval"},
+	}})
+	fixture.candidate.hasStagedChanges = true
 	before, item := fixture.loadFinalTask("op-main")
 
 	stdout, stderr, err := fixture.runError("a\n", "task", "run", "op-main")
 
-	require.ErrorIs(t, err, sentinel)
+	require.ErrorContains(t, err, "review requires a clean Git index")
+	assert.ErrorContains(t, err, "A  reviewed.txt")
 	assert.Empty(t, stdout)
 	assert.Empty(t, stderr)
 	after, got := fixture.loadFinalTask("op-main")
 	assert.Equal(t, before, after)
 	assert.Equal(t, item, got)
+	assert.Empty(t, after.Reviews)
+	assert.Empty(t, fixture.checkCalls)
+	assert.Zero(t, fixture.candidate.snapshots)
+	assert.True(t, fixture.candidate.hasStagedChanges)
+
+	fixture.candidate.hasStagedChanges = false
+	fixture.candidate.hasCandidateChanges = false
+	_, _, err = fixture.runError("a\n", "task", "run", "op-main")
+
+	require.ErrorContains(t, err, "has no candidate changes to review and task has no recorded finalization commit")
+	after, got = fixture.loadFinalTask("op-main")
+	assert.Equal(t, before, after)
+	assert.Equal(t, item, got)
+	assert.Empty(t, fixture.checkCalls)
+	assert.Zero(t, fixture.candidate.snapshots)
+
+	_, err = fixture.taskStore.RecordFinalizationCommit("alpha", "op-main", "recorded-commit")
+	require.NoError(t, err)
+	_, stderr = fixture.run("", "task", "run", "op-main")
+
+	assert.Contains(t, stderr, "waiting for manual step")
+	after, got = fixture.loadFinalTask("op-main")
+	require.Len(t, after.Reviews, 1)
+	latest := after.Reviews[0]
+	assert.Equal(t, taskstate.ReviewStatusWaitingForManual, latest.Status)
+	assert.Equal(t, "approval", latest.Step)
+	require.Len(t, latest.Steps, 2)
+	assert.Equal(t, "check", latest.Steps[0].Name)
+	assert.Equal(t, "approval", latest.Steps[1].Name)
+	require.NotNil(t, latest.Steps[0].ExitCode)
+	assert.Zero(t, *latest.Steps[0].ExitCode)
+	assert.Equal(t, "recorded-commit", taskstate.FinalizationFacts(after).Commit)
+	assert.Equal(t, item, got)
+	assert.Equal(t, []string{"check"}, fixture.checkCalls)
 	assert.Empty(t, fixture.agent.launches)
+	assert.Empty(t, fixture.candidate.commits)
+	assert.Empty(t, fixture.candidate.pushes)
 }

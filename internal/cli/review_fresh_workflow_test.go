@@ -13,12 +13,16 @@ import (
 
 func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview(t *testing.T) {
 	for _, kind := range []string{"check", "agent_review"} {
-		for _, completed := range []bool{true, false} {
-			name := kind + "/completed repair"
-			if !completed {
-				name = kind + "/repair without completion"
-			}
-			t.Run(name, func(t *testing.T) {
+		for _, repairCase := range []struct {
+			name      string
+			completed bool
+			staged    bool
+		}{
+			{name: "completed repair", completed: true},
+			{name: "repair without completion"},
+			{name: "completed repair with staged changes", completed: true, staged: true},
+		} {
+			t.Run(kind+"/"+repairCase.name, func(t *testing.T) {
 				fixture := newReviewDispatchFixture(t, "op-fresh")
 				fixture.budget(2)
 				profiles := map[string]agent.Profile{
@@ -30,14 +34,14 @@ func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview
 				implementation, repair := aCompletion(), aRepairCompletion()
 				fixture.agent.outcomes = []semanticAgentOutcome{{completion: &implementation}}
 				firstResults := []checkResult{{}}
-				if completed {
+				if repairCase.completed && !repairCase.staged {
 					firstResults = append(firstResults, checkResult{})
 				}
 				first := fixture.check("first", firstResults...)
 				findingStep := map[string]any{"kind": kind, "name": "correctness"}
 				if kind == "check" {
 					results := []checkResult{{code: 7}}
-					if completed {
+					if repairCase.completed && !repairCase.staged {
 						results = append(results, checkResult{})
 					}
 					findingStep["command"] = fixture.check("correctness", results...)
@@ -45,9 +49,14 @@ func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview
 					findingStep["agent"] = "reviewer"
 					fixture.agent.outcomes = append(fixture.agent.outcomes, semanticAgentOutcome{review: true, findings: []taskstate.ReviewFinding{aBlockingFinding()}})
 				}
-				if completed {
-					fixture.agent.outcomes = append(fixture.agent.outcomes, semanticAgentOutcome{completion: &repair})
-					if kind == "agent_review" {
+				if repairCase.completed {
+					fixture.agent.outcomes = append(fixture.agent.outcomes, semanticAgentOutcome{
+						completion: &repair,
+						mutateCandidate: func() {
+							fixture.candidate.hasStagedChanges = repairCase.staged
+						},
+					})
+					if kind == "agent_review" && !repairCase.staged {
 						fixture.agent.outcomes = append(fixture.agent.outcomes, semanticAgentOutcome{review: true})
 					}
 				} else {
@@ -65,7 +74,12 @@ func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview
 				assertTaskNotPublished(t, paused, item)
 				fixture.configureAgentProfiles(agent.AgentDefaults{Implementer: "other", Reviewer: "other"}, profiles)
 
-				stdout, stderr := fixture.run("k\n", "task", "run", "op-fresh")
+				stdout, stderr, err := fixture.runError("k\n", "task", "run", "op-fresh")
+				if repairCase.staged {
+					require.ErrorContains(t, err, "review requires a clean Git index")
+				} else {
+					require.NoError(t, err, "stderr: %s", stderr)
+				}
 
 				assert.Contains(t, stderr, "Resuming review attempt 1 at automated blocker decision for step \"correctness\".")
 				final, item := fixture.loadFinalTask("op-fresh")
@@ -85,7 +99,16 @@ func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview
 				if kind == "check" {
 					wantChecks = append(wantChecks, "correctness")
 				}
-				if !completed {
+				if repairCase.staged {
+					require.Len(t, final.Reviews, 1, "staged repair must not create a fresh review")
+					require.NotNil(t, final.Runs[1].Completion)
+					assert.Equal(t, taskstate.RunStatusSucceeded, final.Runs[1].Status)
+					assert.True(t, fixture.candidate.hasStagedChanges)
+					assertTaskNotPublished(t, final, item)
+					assert.Equal(t, wantChecks, fixture.checkCalls, "fresh pipeline must not execute")
+					return
+				}
+				if !repairCase.completed {
 					assert.Contains(t, stderr, "exited without completion")
 					require.Len(t, final.Reviews, 1)
 					assert.Nil(t, final.Runs[1].Completion)
