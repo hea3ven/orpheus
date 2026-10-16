@@ -11,8 +11,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
-const resumeSessionsEnvironment = "ORPHEUS_RESUME_SESSIONS"
-
 // FollowUpResumeOptions describes a resolved review-follow-up command and the
 // completed implementation history that may supply a compatible session.
 type FollowUpResumeOptions struct {
@@ -20,23 +18,12 @@ type FollowUpResumeOptions struct {
 	State        taskstate.TaskState
 	ExecutionDir string
 	Env          map[string]string
-	Enabled      bool
-}
-
-// ResumeSessionsEnabled reports whether follow-up session resumption is
-// strictly opted in for this process.
-func ResumeSessionsEnabled() bool {
-	return os.Getenv(resumeSessionsEnvironment) == "1"
 }
 
 // PrepareFollowUpResume returns either an exact-session resume command or the
 // original fresh command with persisted provenance explaining the fallback.
 func PrepareFollowUpResume(opts FollowUpResumeOptions) (CommandSnapshot, *taskstate.AgentLaunch) {
 	fresh := &taskstate.AgentLaunch{Mode: taskstate.AgentLaunchFresh}
-	if !opts.Enabled {
-		return opts.Command, fresh
-	}
-
 	harness := strings.ToLower(strings.TrimSpace(opts.Command.Harness))
 	if harness != piHarness && harness != codexHarness {
 		fresh.FallbackReason = "selected profile is a raw command; only structured Pi and Codex profiles support session resumption"

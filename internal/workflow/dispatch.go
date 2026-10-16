@@ -124,12 +124,11 @@ func (LocalDispatchGit) SetupTaskWorktree(ctx context.Context, opts gitmeta.Task
 
 // DispatchService prepares task run targets and records dispatch state.
 type DispatchService struct {
-	Paths                 state.Paths
-	RunStore              DispatchRunStore
-	Git                   DispatchGit
-	Logger                *slog.Logger
-	UsageCaptureEnv       map[string]string
-	ResumeSessionsEnabled *bool
+	Paths           state.Paths
+	RunStore        DispatchRunStore
+	Git             DispatchGit
+	Logger          *slog.Logger
+	UsageCaptureEnv map[string]string
 }
 
 // DispatchStartOptions describes the task run to start.
@@ -492,7 +491,6 @@ func (s DispatchService) prepareFollowUpResume(
 		State:        state,
 		ExecutionDir: plan.expected.WorktreePath,
 		Env:          s.usageCaptureEnvironment(),
-		Enabled:      s.resumeSessionsEnabled(),
 	})
 	command.Command = prepared.Command
 	command.Args = append([]string{}, prepared.Args...)
@@ -504,13 +502,6 @@ func (s DispatchService) usageCaptureEnvironment() map[string]string {
 		return s.UsageCaptureEnv
 	}
 	return agent.UsageCaptureEnvironment()
-}
-
-func (s DispatchService) resumeSessionsEnabled() bool {
-	if s.ResumeSessionsEnabled != nil {
-		return *s.ResumeSessionsEnabled
-	}
-	return agent.ResumeSessionsEnabled()
 }
 
 func dispatchLaunchMode(launch *taskstate.AgentLaunch) string {

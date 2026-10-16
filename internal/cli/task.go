@@ -1255,10 +1255,6 @@ type taskRunDispatch struct {
 	prompt  string
 }
 
-func boolPtr(value bool) *bool {
-	return &value
-}
-
 func startTaskRunDispatch(
 	command *cobra.Command,
 	deps *invocationDependencies,
@@ -1272,12 +1268,11 @@ func startTaskRunDispatch(
 ) (taskRunDispatch, error) {
 	dispatch := taskRunDispatch{
 		service: workflow.DispatchService{
-			Paths:                 deps.paths,
-			RunStore:              deps.taskStateStore,
-			Git:                   deps.dispatchGit,
-			Logger:                logger,
-			UsageCaptureEnv:       deps.usageCaptureEnvironment(),
-			ResumeSessionsEnabled: boolPtr(deps.resumeSessionsEnabled()),
+			Paths:           deps.paths,
+			RunStore:        deps.taskStateStore,
+			Git:             deps.dispatchGit,
+			Logger:          logger,
+			UsageCaptureEnv: deps.usageCaptureEnvironment(),
 		},
 	}
 	start, err := dispatch.service.Start(command.Context(), workflow.DispatchStartOptions{

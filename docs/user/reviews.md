@@ -150,12 +150,12 @@ authoritative findings. Earlier waivers supply context, not permission to ignore
 a newly applicable or materially changed defect. The latest attempt governs the
 workflow; older attempts remain audit history.
 
-## Optional follow-up session resumption
+## Follow-up session resumption
 
-Set `ORPHEUS_RESUME_SESSIONS=1` to let repairs reuse the latest usable successful,
-completed session from the same selected structured Pi or Codex profile. Other
-values disable resumption. Raw profiles, reviewers, and sync-conflict agents
-always start fresh.
+Repairs reuse the latest usable, successful, completed implementation session
+from the same selected structured Pi or Codex profile, in attached and
+non-interactive launches. Initial implementation runs, raw-command profiles,
+reviewers, and sync-conflict agents always start fresh.
 
 Missing, ambiguous, incompatible, or unsafe session data falls back to a fresh
 repair with a recorded reason. If a resumed process starts and fails, Orpheus

@@ -45,7 +45,7 @@ configuration and recovery rather than running historical validation recipes.
 ## Documentation
 
 - [Tasks](docs/user/tasks.md): registration, inventory, execution, branch names, stats, and recovery.
-- [Reviews](docs/user/reviews.md): approval, pipelines, findings, repairs, and optional experiments.
+- [Reviews](docs/user/reviews.md): approval, pipelines, findings, repairs, and session resumption.
 - [Publication](docs/user/publication.md): PRs, direct merges, titles, and sync.
 - [Agent profiles](docs/user/agents.md): Pi, Codex, and custom command configuration.
 - [Documentation index](docs/README.md): developer guides, agent instructions, and archive access.

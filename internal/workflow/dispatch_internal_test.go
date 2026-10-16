@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDispatchPrepareFollowUpResumeHonorsStrictFeatureFlag(t *testing.T) {
+func TestDispatchResolveCommandResumesOnlyReviewFollowUps(t *testing.T) {
 	workdir := testutil.CanonicalTempDir(t)
 	sessionPath := filepath.Join(testutil.CanonicalTempDir(t), "session.jsonl")
 	content := `{"type":"session","version":3,"id":"session-1","timestamp":"2026-07-07T10:00:00Z","cwd":"` + workdir + `"}
@@ -52,32 +52,21 @@ func TestDispatchPrepareFollowUpResumeHonorsStrictFeatureFlag(t *testing.T) {
 	})
 	opts := DispatchStartOptions{TaskID: "op-1", Source: task.RepositorySource{Repository: task.Repository{ID: "alpha"}}}
 
-	t.Setenv("ORPHEUS_RESUME_SESSIONS", "0")
-	fresh, launch, err := service.prepareFollowUpResume(opts, plan, command)
-	if err != nil {
-		t.Fatalf("prepare disabled follow-up: %v", err)
-	}
-	if launch.Mode != taskstate.AgentLaunchFresh || !equalStrings(fresh.Args, command.Args) {
-		t.Fatalf("disabled result = %#v, %#v", fresh.Args, launch)
-	}
-	if !fresh.Interactive {
-		t.Fatal("disabled follow-up lost interactive launch behavior")
-	}
+	opts.Command = command
 
-	t.Setenv("ORPHEUS_RESUME_SESSIONS", "1")
-	resumed, launch, err := service.prepareFollowUpResume(opts, plan, command)
-	if err != nil {
-		t.Fatalf("prepare enabled follow-up: %v", err)
-	}
-	if launch.Mode != taskstate.AgentLaunchResumed || launch.SourceRunAttempt != 1 {
-		t.Fatalf("enabled launch = %#v", launch)
-	}
-	if len(resumed.Args) < 3 || resumed.Args[0] != "--session" || resumed.Args[1] != sessionPath {
-		t.Fatalf("resumed args = %#v", resumed.Args)
-	}
-	if !resumed.Interactive {
-		t.Fatal("resumed follow-up lost interactive launch behavior")
-	}
+	initial, err := service.resolveCommandPhase(context.Background(), opts, plan)
+	require.NoError(t, err)
+	assert.Nil(t, initial.launch, "implementations must ignore even usable prior sessions")
+	assert.Equal(t, command, initial.command)
+
+	plan.followUp = &dispatchFollowUpPlan{reviewAttempt: 1, findingIndexes: []int{0}}
+	resumed, err := service.resolveCommandPhase(context.Background(), opts, plan)
+	require.NoError(t, err)
+	require.NotNil(t, resumed.launch)
+	assert.Equal(t, taskstate.AgentLaunchResumed, resumed.launch.Mode)
+	assert.Equal(t, 1, resumed.launch.SourceRunAttempt)
+	assert.Equal(t, []string{"--session", sessionPath, "--model", "gpt-5", "prompt"}, resumed.command.Args)
+	assert.True(t, resumed.command.Interactive, "resumption must preserve attached launch behavior")
 }
 
 func TestDispatchPrepareFollowUpResumeUsesActiveCodexHome(t *testing.T) {
@@ -108,7 +97,6 @@ func TestDispatchPrepareFollowUpResumeUsesActiveCodexHome(t *testing.T) {
 		t.Fatalf("create active sessions: %v", err)
 	}
 	t.Setenv("CODEX_HOME", activeHome)
-	t.Setenv("ORPHEUS_RESUME_SESSIONS", "1")
 
 	for _, nonInteractive := range []bool{false, true} {
 		name := "interactive"
@@ -125,7 +113,7 @@ func TestDispatchPrepareFollowUpResumeUsesActiveCodexHome(t *testing.T) {
 			if err != nil {
 				t.Fatalf("prepare Codex follow-up: %v", err)
 			}
-			if launch.Mode != taskstate.AgentLaunchFresh || !equalStrings(fresh.Args, command.Args) {
+			if launch.Mode != taskstate.AgentLaunchFresh || !slices.Equal(fresh.Args, command.Args) {
 				t.Fatalf("changed CODEX_HOME result = %#v, %#v", fresh.Args, launch)
 			}
 			if !strings.Contains(launch.FallbackReason, "active Codex sessions root") {
@@ -133,10 +121,6 @@ func TestDispatchPrepareFollowUpResumeUsesActiveCodexHome(t *testing.T) {
 			}
 		})
 	}
-}
-
-func equalStrings(left []string, right []string) bool {
-	return strings.Join(left, "\x00") == strings.Join(right, "\x00")
 }
 
 func TestDispatchStartSelectsOnlyEligibleReviewRepairs(t *testing.T) {

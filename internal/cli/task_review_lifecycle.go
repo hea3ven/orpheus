@@ -218,16 +218,15 @@ func newTaskReviewLifecycleService(
 		BackendFactory: func(source taskmodel.RepositorySource) (workflow.ReviewLifecycleBackend, error) {
 			return invocationTaskBackend[workflow.ReviewLifecycleBackend](deps, source)
 		},
-		PRProvider:            newInvocationGHProvider(deps, logger),
-		CandidateInspector:    deps.reviewCandidate,
-		DispatchGit:           deps.dispatchGit,
-		AgentLauncher:         deps.agentLauncher,
-		Environment:           environmentEntries(deps.environment),
-		UsageCaptureEnv:       deps.usageCaptureEnvironment(),
-		ResumeSessionsEnabled: boolPtr(deps.resumeSessionsEnabled()),
-		Logger:                logger,
-		ProcessProbe:          deps.processProbe,
-		PipelineRunner:        deps.reviewPipeline,
+		PRProvider:         newInvocationGHProvider(deps, logger),
+		CandidateInspector: deps.reviewCandidate,
+		DispatchGit:        deps.dispatchGit,
+		AgentLauncher:      deps.agentLauncher,
+		Environment:        environmentEntries(deps.environment),
+		UsageCaptureEnv:    deps.usageCaptureEnvironment(),
+		Logger:             logger,
+		ProcessProbe:       deps.processProbe,
+		PipelineRunner:     deps.reviewPipeline,
 		Frontend: &taskReviewLifecycleFrontend{
 			terminal: deps.terminal,
 			command:  command,
@@ -236,10 +235,9 @@ func newTaskReviewLifecycleService(
 		},
 	}
 	service.AgentRunner = taskReviewLifecycleAgentRunner{command: command, deps: deps, service: workflow.DispatchService{
-		Paths:                 paths,
-		RunStore:              store,
-		UsageCaptureEnv:       deps.usageCaptureEnvironment(),
-		ResumeSessionsEnabled: boolPtr(deps.resumeSessionsEnabled()),
+		Paths:           paths,
+		RunStore:        store,
+		UsageCaptureEnv: deps.usageCaptureEnvironment(),
 	}}
 	service.ResolveCommand = func(commandContext workflow.DispatchCommandContext, agentName string) (workflow.DispatchCommand, string, error) {
 		prompt, commandSnapshot, err := resolveTaskRunAgentCommand(deps.paths, agentName, commandContext.SessionName)

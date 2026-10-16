@@ -393,10 +393,10 @@ func TestCoverageCommandsAllowConcurrentPackagesButSerializeTests(t *testing.T) 
 
 func TestCoverageEnvironmentRemovesOperatorSettings(t *testing.T) {
 	got := environmentValues(coverageEnvironment([]string{
-		"PATH=/test/bin", "NO_COLOR=1", "ORPHEUS_RESUME_SESSIONS=1", "CODEX_HOME=/operator/codex",
+		"PATH=/test/bin", "NO_COLOR=1", "CODEX_HOME=/operator/codex",
 		coverageRunEnvironment + "=operator-value", "UNRELATED=value",
 	}))
-	for _, name := range []string{"NO_COLOR", "ORPHEUS_RESUME_SESSIONS", "CODEX_HOME"} {
+	for _, name := range []string{"NO_COLOR", "CODEX_HOME"} {
 		if _, found := got[name]; found {
 			t.Errorf("coverage environment retained %s", name)
 		}

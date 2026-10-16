@@ -175,10 +175,6 @@ func (d *invocationDependencies) environmentValue(name string) string {
 	return d.environment[name]
 }
 
-func (d *invocationDependencies) resumeSessionsEnabled() bool {
-	return d.environmentValue("ORPHEUS_RESUME_SESSIONS") == "1"
-}
-
 func (d *invocationDependencies) invocationEnvironment(values []string) []string {
 	values = append([]string{}, values...)
 	return append(values, stateEnvironmentEntries(d.paths)...)
