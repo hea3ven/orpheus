@@ -214,8 +214,10 @@ Integration source files use `//go:build integration`, and their top-level test 
 
 ## Single-pass local quality report
 
-`make quality` reads candidate `.quality.yml` without writing it. It runs unit,
-then integration once, with `-count=1`, `-parallel=1`, `-covermode=set`, and
+`make quality` reads candidate `.quality.yml` without writing it. It selects the
+exact Go version in `.go-version`, shared with CI and policy refreshes, regardless
+of the caller's `GOTOOLCHAIN`. It runs unit, then integration once, with
+`-count=1`, `-parallel=1`, `-covermode=set`, and
 `-coverpkg=./...`. Go uses its default package concurrency (no `-p` override).
 `ORPHEUS_COVERAGE_RUN=1` fixes incidental launcher-ancestry detection so coverage
 instrumentation is consistent. `make check` adds formatting, lint, and build
@@ -355,12 +357,14 @@ Remove retained reports explicitly when no longer needed; later runs never read 
 incomplete, or inconsistent samples prevent writes. Within a revision, selected
 test counts (including per-package counts), coverage package statement totals,
 selected-test package structure, and normalized commands must agree. Do not mix
-scheduling modes. Use the pull-request workflow's pinned Go version: coverage
-statement accounting can change between toolchains. Only materially stale
-coverage floors and package structure are updated, retaining 0.5 percentage points
-of lane headroom and 2 percentage points of package headroom. Review the
-`.quality.yml` diff. The updater never rewrites timing tolerances or produces
-absolute timing bounds.
+scheduling modes. The target selects the exact Go version in `.go-version`, also
+used by the pull-request workflow and `make quality`: coverage statement
+accounting can change between toolchains. Change this shared pin deliberately,
+then rerun the five-sample update and review any coverage changes before accepting
+new floors. Only materially stale coverage floors and package structure are
+updated, retaining the headroom configured in `.quality.yml` (2 percentage points
+per lane and 4 per package). Review the `.quality.yml` diff. The updater never
+rewrites timing tolerances or produces absolute timing bounds.
 
 ## Pull-request quality gate
 
