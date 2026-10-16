@@ -41,9 +41,9 @@ jobs:
         id: setup-go
         uses: actions/setup-go@v6
         with:
-          # Coverage statement accounting changed in Go 1.27. Keep the quality
-          # policy measurements on this exact version.
-          go-version: '1.27.0'
+          # Share the exact coverage toolchain with local quality/policy updates:
+          # statement accounting can change between Go versions.
+          go-version-file: '.go-version'
           # The comparator owns fresh, symmetric caches and excludes warmups.
           cache: false
 
