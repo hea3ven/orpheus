@@ -19,7 +19,6 @@ import (
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
-	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
 type memoryTaskBackend struct {
@@ -127,6 +126,7 @@ type memoryDispatchGit struct {
 	targets             map[string]memoryGitTarget
 	setups              []gitmeta.TaskWorktreeSetupResult
 	hasCandidateChanges bool
+	hasStagedChanges    bool
 	repoRootError       error
 	repoRootDirty       bool
 	repoRootSetups      []gitmeta.RepoRootOptions
@@ -203,21 +203,37 @@ func (*memoryDispatchGit) Commit(context.Context, string, string) (string, error
 	return "", errors.New("unexpected Commit: completion must not commit changes")
 }
 
-func (g *memoryDispatchGit) ValidateReviewCandidate(
-	_ context.Context,
-	_ workflow.ReviewLifecycleStore,
-	_ workflow.ReviewContext,
-	dir string,
-) error {
+func (g *memoryDispatchGit) HasStagedChanges(_ context.Context, dir string) (bool, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if _, ok := g.targets[dir]; !ok {
-		return fmt.Errorf("unknown memory Git target %q", dir)
+		return false, fmt.Errorf("unknown memory Git target %q", dir)
 	}
-	if !g.hasCandidateChanges {
-		return errors.New("memory Git candidate has no changes")
+	return g.hasStagedChanges, nil
+}
+
+func (g *memoryDispatchGit) HasCandidateChanges(_ context.Context, dir string) (bool, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if _, ok := g.targets[dir]; !ok {
+		return false, fmt.Errorf("unknown memory Git target %q", dir)
 	}
-	return nil
+	return g.hasCandidateChanges, nil
+}
+
+func (g *memoryDispatchGit) ShortStatus(_ context.Context, dir string) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if _, ok := g.targets[dir]; !ok {
+		return "", fmt.Errorf("unknown memory Git target %q", dir)
+	}
+	if g.hasStagedChanges {
+		return "A  reviewed.txt\n", nil
+	}
+	if g.hasCandidateChanges {
+		return "?? reviewed.txt\n", nil
+	}
+	return "", nil
 }
 
 func (g *memoryDispatchGit) lastLifecycle() gitmeta.TaskWorktreeLifecycle {

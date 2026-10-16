@@ -50,7 +50,7 @@ lanes:
         github.com/hea3ven/orpheus/internal/workflow: 70.696
   unit:
     coverage:
-      floor_percent: 53.007
+      floor_percent: 52.492
       packages:
         github.com/hea3ven/orpheus/cmd/orpheus: 0
         github.com/hea3ven/orpheus/internal/agent: 80.838

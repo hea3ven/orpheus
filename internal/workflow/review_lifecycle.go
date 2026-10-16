@@ -100,24 +100,6 @@ type ReviewLifecycleFrontend interface {
 	PromptFreshReviewBlockerDispositions(ReviewContext, []FreshReviewBlocker) ([]FreshReviewBlockerDisposition, error)
 }
 
-// ReviewCandidateInspector validates that a candidate is ready for read-only review.
-type ReviewCandidateInspector interface {
-	ValidateReviewCandidate(context.Context, ReviewLifecycleStore, ReviewContext, string) error
-}
-
-// LocalReviewCandidateInspector validates candidates through the local Git adapter.
-type LocalReviewCandidateInspector struct{}
-
-// ValidateReviewCandidate checks staged and candidate changes in the local checkout.
-func (LocalReviewCandidateInspector) ValidateReviewCandidate(
-	ctx context.Context,
-	store ReviewLifecycleStore,
-	reviewCtx ReviewContext,
-	workdir string,
-) error {
-	return ValidateReviewCandidateReady(ctx, store, reviewCtx, workdir)
-}
-
 // ReviewLifecycleService owns complete task-review lifecycle orchestration.
 type ReviewLifecycleService struct {
 	ReviewEffects          review.Effects
@@ -128,7 +110,7 @@ type ReviewLifecycleService struct {
 	BackendFactory         ReviewLifecycleBackendFactory
 	RunStore               ReviewLifecycleStore
 	PRProvider             pullrequest.Provider
-	CandidateInspector     ReviewCandidateInspector
+	CandidateGit           ReviewCandidateGit
 	DispatchGit            DispatchGit
 	AgentRunner            ReviewLifecycleAgentRunner
 	AgentLauncher          agentexec.Launcher
@@ -1501,63 +1483,6 @@ func ValidateTaskMetadataMirror(taskItem task.Task, targets tasktarget.ExpectedT
 		return nil
 	}
 	return fmt.Errorf("task %s metadata target %q/%q does not mirror taskstate target %q/%q", taskItem.ID, metadataTarget.Branch, metadataTarget.Worktree, target.Branch, target.Worktree)
-}
-
-func (s ReviewLifecycleService) inspectReviewCandidate(ctx context.Context, reviewCtx ReviewContext, workdir string) error {
-	inspector := s.CandidateInspector
-	if inspector == nil {
-		inspector = LocalReviewCandidateInspector{}
-	}
-	return inspector.ValidateReviewCandidate(ctx, s.RunStore, reviewCtx, workdir)
-}
-
-// ValidateReviewCandidateReady ensures there is a read-only candidate to review.
-func ValidateReviewCandidateReady(ctx context.Context, store ReviewLifecycleStore, reviewCtx ReviewContext, workdir string) error {
-	return validateReviewCandidateReady(ctx, store, reviewCtx, workdir, RequireCleanReviewIndex, review.HasCandidateChanges)
-}
-
-func validateReviewCandidateReady(
-	ctx context.Context,
-	store ReviewLifecycleStore,
-	reviewCtx ReviewContext,
-	workdir string,
-	cleanIndex func(context.Context, string) error,
-	candidateChanges func(context.Context, string) (bool, error),
-) error {
-	if err := cleanIndex(ctx, workdir); err != nil {
-		return err
-	}
-	hasCandidate, err := candidateChanges(ctx, workdir)
-	if err != nil {
-		return err
-	}
-	if hasCandidate {
-		return nil
-	}
-	taskState, err := store.Load(reviewCtx.RepoID(), reviewCtx.TaskID())
-	if err != nil {
-		return fmt.Errorf("load task state: %w", err)
-	}
-	if strings.TrimSpace(taskstate.FinalizationFacts(taskState).Commit) != "" {
-		return nil
-	}
-	return fmt.Errorf("worktree %q has no candidate changes to review and task has no recorded finalization commit", workdir)
-}
-
-// RequireCleanReviewIndex rejects staged changes before read-only review.
-func RequireCleanReviewIndex(ctx context.Context, workdir string) error {
-	hasStagedChanges, err := gitmeta.HasStagedChanges(ctx, workdir)
-	if err != nil {
-		return err
-	}
-	if !hasStagedChanges {
-		return nil
-	}
-	status, statusErr := gitmeta.ShortStatus(ctx, workdir)
-	if statusErr != nil {
-		status = "unable to read git status: " + statusErr.Error()
-	}
-	return fmt.Errorf("review requires a clean Git index, but staged changes are present in %q; unstage them, then rerun `orpheus task run <task-id>`\n%s", workdir, strings.TrimSpace(status))
 }
 
 func latestAutonomousReviewBlockers(store ReviewLifecycleStore, repoID string, taskID string) (taskstate.ReviewAttempt, []int, bool, error) {

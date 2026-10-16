@@ -44,6 +44,29 @@ func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *t
 	fixture.assertAgentRanInTaskWorktree("op-completion")
 	fixture.assertIsTaskInAgentContext("op-completion")
 	assertStatusShowsManualReview(t, statusOutput, "op-completion")
+
+	fixture.git.hasStagedChanges = true
+	_, _, err = fixture.execute("task", "run", "op-completion")
+
+	require.ErrorContains(t, err, "review requires a clean Git index")
+	rejected, rejectedTask := fixture.loadFinalTask("op-completion")
+	is.Equal(finalState, rejected, "staged changes must not resume the paused review")
+	is.Equal(finalTask, rejectedTask)
+	is.Equal(1, fixture.reviewPipelineRuns)
+	is.True(fixture.git.hasStagedChanges)
+
+	fixture.git.hasStagedChanges = false
+	_, stderr, err = fixture.execute("task", "run", "op-completion")
+
+	require.NoError(t, err, "resume review; stderr: %s", stderr)
+	resumed, resumedTask := fixture.loadFinalTask("op-completion")
+	require.Len(t, resumed.Reviews, 1, "resumption must retain the existing attempt")
+	is.Equal(finalState.Reviews[0].Attempt, resumed.Reviews[0].Attempt)
+	is.Equal(finalState.Reviews[0].StartedAt, resumed.Reviews[0].StartedAt)
+	is.Equal(finalTask, resumedTask)
+	is.Equal(2, fixture.reviewPipelineRuns)
+	assertWaitingForManualReview(t, resumed)
+	assertTaskNotPublished(t, resumed, resumedTask)
 }
 
 func TestIntegrationWorkflowTaskRunAgentFailureRecordsFailedAttempt(t *testing.T) {
