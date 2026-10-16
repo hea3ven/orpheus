@@ -31,7 +31,6 @@ Classify integration tests by what they prove. Workflow integration is a fast, a
 Both lanes are network-free, credential-free, isolated from operator data, and prevent real model agents. Live evaluations such as `orpheus eval review-context` are not routine test validation and must never be invoked implicitly. See `docs/developer/testing.md` for the full guide, including focused on-demand coverage audits.
 
 `make check` already runs `make quality`; do not run both separately as routine validation. If quality reports `policy_update_required` or an intentional coverage-floor violation, run `make quality-policy-update` and review the `.quality.yml` diff.
-When merging, resolve `.quality.yml` from the reviewed policy changes rather than combining coverage floors. Timing regressions require investigation, not machine-specific policy refreshes. Run `make quality-policy-update` only when the merged result requires it.
 
 ## Task Tracking and Follow-Up
 
