@@ -40,7 +40,6 @@ func TestPrepareFollowUpResumeBuildsStructuredCommandsInBothLaunchModes(t *testi
 				State:        state,
 				ExecutionDir: workdir,
 				Env:          resumeTestEnvironment(tt.harness, session),
-				Enabled:      true,
 			})
 
 			require.NotNil(t, launch)
@@ -66,19 +65,28 @@ func TestPrepareFollowUpResumeSelectsLatestUsableCompatibleRun(t *testing.T) {
 	require.NoError(t, os.MkdirAll(workdir, 0o755))
 	older := writeResumeTestSession(t, "pi", workdir, "older")
 	latest := writeResumeTestSession(t, "pi", workdir, "latest")
+	failed := resumeTestRun(7, "implementer", "pi", older)
+	failed.Status = taskstate.RunStatusFailed
+	incomplete := resumeTestRun(8, "implementer", "pi", older)
+	incomplete.Completion = nil
+	reviewer := resumeTestRun(9, "implementer", "pi", older)
+	reviewer.Execution.Purpose = taskstate.AgentExecutionPurposeReview
+	syncConflict := resumeTestRun(10, "implementer", "pi", older)
+	syncConflict.Execution.Purpose = taskstate.AgentExecutionPurposeSyncConflictResolution
 	state := resumeTestState(1, "implementer", "pi", older)
 	state.Runs = append(state.Runs,
 		resumeTestRun(2, "other-profile", "pi", latest),
 		resumeTestRun(3, "implementer", "pi", latest),
 		resumeTestRun(4, "other-profile", "pi", older),
 		resumeTestRun(5, "implementer", "pi", taskstate.AgentSession{ID: "missing", LogPath: filepath.Join(workdir, "missing.jsonl")}),
+		resumeTestRun(6, "implementer", "codex", older),
+		failed, incomplete, reviewer, syncConflict,
 	)
 
 	_, launch := agent.PrepareFollowUpResume(agent.FollowUpResumeOptions{
 		Command:      resumeTestCommand("pi", false),
 		State:        state,
 		ExecutionDir: workdir,
-		Enabled:      true,
 	})
 
 	require.NotNil(t, launch)
@@ -97,7 +105,6 @@ func TestPrepareFollowUpResumeSelectsSuccessfulResumedRunAfterCaptureReadFailure
 		Command:      resumeTestCommand("pi", false),
 		State:        state,
 		ExecutionDir: workdir,
-		Enabled:      true,
 	})
 	require.Equal(t, taskstate.AgentLaunchResumed, secondLaunch.Mode)
 
@@ -134,7 +141,6 @@ func TestPrepareFollowUpResumeSelectsSuccessfulResumedRunAfterCaptureReadFailure
 		Command:      resumeTestCommand("pi", false),
 		State:        state,
 		ExecutionDir: workdir,
-		Enabled:      true,
 	})
 
 	require.Equal(t, taskstate.AgentLaunchResumed, thirdLaunch.Mode)
@@ -147,14 +153,15 @@ func TestPrepareFollowUpResumeFallsBackForRawIncompatibleAndUnsafeState(t *testi
 	workdir := filepath.Join(testutil.CanonicalTempDir(t), "worktree")
 	require.NoError(t, os.MkdirAll(workdir, 0o755))
 	deleted := taskstate.AgentSession{ID: "gone", LogPath: filepath.Join(testutil.CanonicalTempDir(t), "gone.jsonl")}
+	wrongID := writeResumeTestSession(t, "pi", workdir, "recorded-id")
+	wrongID.ID = "different-id"
+	wrongDir := writeResumeTestSession(t, "pi", filepath.Join(workdir, "other-worktree"), "elsewhere")
 	tests := []struct {
-		name     string
-		command  agent.CommandSnapshot
-		state    taskstate.TaskState
-		want     string
-		disabled bool
+		name    string
+		command agent.CommandSnapshot
+		state   taskstate.TaskState
+		want    string
 	}{
-		{name: "disabled", command: resumeTestCommand("pi", false), disabled: true},
 		{
 			name:    "raw profile",
 			command: agent.CommandSnapshot{AgentName: "raw", Command: "agent", Args: []string{"prompt"}},
@@ -167,10 +174,27 @@ func TestPrepareFollowUpResumeFallsBackForRawIncompatibleAndUnsafeState(t *testi
 			want:    "matches profile",
 		},
 		{
+			name:    "no prior session",
+			command: resumeTestCommand("pi", false),
+			want:    "no successful completed implementation session",
+		},
+		{
 			name:    "deleted session",
 			command: resumeTestCommand("pi", false),
 			state:   resumeTestState(1, "implementer", "pi", deleted),
 			want:    "unavailable",
+		},
+		{
+			name:    "session identity mismatch",
+			command: resumeTestCommand("pi", false),
+			state:   resumeTestState(1, "implementer", "pi", wrongID),
+			want:    "session id mismatch",
+		},
+		{
+			name:    "different worktree",
+			command: resumeTestCommand("pi", false),
+			state:   resumeTestState(1, "implementer", "pi", wrongDir),
+			want:    "session working directory mismatch",
 		},
 		{
 			name:    "ambiguous telemetry",
@@ -189,15 +213,11 @@ func TestPrepareFollowUpResumeFallsBackForRawIncompatibleAndUnsafeState(t *testi
 				Command:      tt.command,
 				State:        tt.state,
 				ExecutionDir: workdir,
-				Enabled:      !tt.disabled,
 			})
 			assert.Equal(t, original, got.Args)
 			require.NotNil(t, launch)
 			assert.Equal(t, taskstate.AgentLaunchFresh, launch.Mode)
 			assert.Contains(t, launch.FallbackReason, tt.want)
-			if tt.disabled {
-				assert.Empty(t, launch.FallbackReason)
-			}
 		})
 	}
 }
@@ -219,7 +239,7 @@ func TestPrepareFollowUpResumeFallsBackWhenCodexHomeChanged(t *testing.T) {
 			command := resumeTestCommand("codex", nonInteractive)
 			got, launch := agent.PrepareFollowUpResume(agent.FollowUpResumeOptions{
 				Command: command, State: state, ExecutionDir: workdir,
-				Env: map[string]string{"CODEX_HOME": activeHome}, Enabled: true,
+				Env: map[string]string{"CODEX_HOME": activeHome},
 			})
 
 			assert.Equal(t, command.Args, got.Args)
@@ -248,7 +268,7 @@ func TestPrepareFollowUpResumeRejectsDuplicateCodexSessionIDs(t *testing.T) {
 			command := resumeTestCommand("codex", nonInteractive)
 			got, launch := agent.PrepareFollowUpResume(agent.FollowUpResumeOptions{
 				Command: command, State: state, ExecutionDir: workdir,
-				Env: env, Enabled: true,
+				Env: env,
 			})
 
 			assert.Equal(t, command.Args, got.Args)
@@ -285,7 +305,7 @@ func TestCaptureUsageReportsUnknownWhenResumedBaselineIsUnavailable(t *testing.T
 			env := resumeTestEnvironment(tt.harness, session)
 			_, launch := agent.PrepareFollowUpResume(agent.FollowUpResumeOptions{
 				Command: resumeTestCommand(tt.harness, false), State: resumeTestState(1, "implementer", tt.harness, session),
-				ExecutionDir: workdir, Env: env, Enabled: true,
+				ExecutionDir: workdir, Env: env,
 			})
 			require.Equal(t, taskstate.AgentLaunchResumed, launch.Mode)
 			assert.Nil(t, launch.UsageBaseline)
@@ -313,7 +333,7 @@ func TestExecuteFailedResumedPiAccountsOnlyIncrementalUsageAndCost(t *testing.T)
 	session := writeResumeTestSession(t, "pi", workdir, "pi-session")
 	state := resumeTestState(1, "implementer", "pi", session)
 	_, launch := agent.PrepareFollowUpResume(agent.FollowUpResumeOptions{
-		Command: resumeTestCommand("pi", false), State: state, ExecutionDir: workdir, Enabled: true,
+		Command: resumeTestCommand("pi", false), State: state, ExecutionDir: workdir,
 	})
 	require.Equal(t, taskstate.AgentLaunchResumed, launch.Mode)
 
@@ -348,7 +368,7 @@ func TestExecuteCanceledResumedCodexAccountsOnlyIncrementalUsage(t *testing.T) {
 	state := resumeTestState(1, "implementer", "codex", session)
 	env := resumeTestEnvironment("codex", session)
 	_, launch := agent.PrepareFollowUpResume(agent.FollowUpResumeOptions{
-		Command: resumeTestCommand("codex", true), State: state, ExecutionDir: workdir, Env: env, Enabled: true,
+		Command: resumeTestCommand("codex", true), State: state, ExecutionDir: workdir, Env: env,
 	})
 	require.Equal(t, taskstate.AgentLaunchResumed, launch.Mode)
 

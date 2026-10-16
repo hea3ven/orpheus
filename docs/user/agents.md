@@ -90,5 +90,5 @@ instructions in the prompt argument; raw profiles cannot use `prompt_append` or
 mix `command`/`args` with structured `harness`/`model` settings.
 
 See [tasks](tasks.md#stats-and-usage) for usage reliability and cost estimates,
-and [reviews](reviews.md#optional-follow-up-session-resumption) for opt-in repair
+and [reviews](reviews.md#follow-up-session-resumption) for repair
 session resumption.

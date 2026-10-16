@@ -90,7 +90,6 @@ func TestIntegrationWorkflowTaskReviewAutonomousFollowUpResumesCompatiblePiSessi
 	must := require.New(t)
 	fixture := newReviewDispatchFixture(t, "op-resume-session")
 	paths := fixture.paths
-	fixture.options.Environment["ORPHEUS_RESUME_SESSIONS"] = "1"
 	fixture.pipelines("standard", map[string][]map[string]any{
 		"standard": {
 			{"kind": "manual", "name": "approval"},
@@ -135,6 +134,11 @@ func TestIntegrationWorkflowTaskReviewAutonomousFollowUpResumesCompatiblePiSessi
 	is.Contains(reviewStdout, "Published op-resume-session")
 	is.Contains(reviewStderr, "Autonomous review follow-up for op-resume-session targets review attempt 1 finding(s) 1.")
 	must.Len(fixture.agent.launches, 2)
+	must.Len(fixture.agent.contexts, 2)
+	is.Contains(fixture.agent.contexts[0], "- Run attempt: 1")
+	is.Contains(fixture.agent.contexts[1], "- Run attempt: 2")
+	is.Contains(fixture.agent.contexts[1], "Required blocking findings:")
+	is.Contains(fixture.agent.contexts[1], "call `orpheus agent done` exactly once for the current attempt")
 	args := fixture.agent.launches[1].command.Args
 	sessionArg := -1
 	for i := 0; i+1 < len(args); i++ {
@@ -148,6 +152,11 @@ func TestIntegrationWorkflowTaskReviewAutonomousFollowUpResumesCompatiblePiSessi
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-resume-session.yaml"), &state))
 	must.Len(state.Runs, 2)
+	is.Nil(state.Runs[0].Execution.Launch, "initial implementations must not select a prior session")
+	must.NotNil(state.Runs[0].Completion)
+	is.Equal(implementation.Summary, state.Runs[0].Completion.Summary)
+	must.NotNil(state.Runs[1].Completion)
+	is.Equal(repair.Summary, state.Runs[1].Completion.Summary)
 	launch := state.Runs[1].Execution.Launch
 	must.NotNil(launch)
 	is.Equal(taskstate.AgentLaunchResumed, launch.Mode)

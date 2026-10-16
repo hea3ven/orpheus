@@ -116,7 +116,6 @@ type ReviewLifecycleService struct {
 	AgentLauncher          agentexec.Launcher
 	Environment            []string
 	UsageCaptureEnv        map[string]string
-	ResumeSessionsEnabled  *bool
 	Frontend               ReviewLifecycleFrontend
 	PipelineRunner         func(review.PipelineRunOptions) (review.PipelineOutcome, error)
 	ResolveCommand         func(DispatchCommandContext, string) (DispatchCommand, string, error)
@@ -1544,12 +1543,11 @@ func (s ReviewLifecycleService) dispatchAutonomousReviewFollowUp(
 	}
 	promptCapture := ""
 	dispatch := DispatchService{
-		Paths:                 current.paths,
-		RunStore:              current.store,
-		Git:                   s.DispatchGit,
-		Logger:                s.Logger,
-		UsageCaptureEnv:       s.UsageCaptureEnv,
-		ResumeSessionsEnabled: s.ResumeSessionsEnabled,
+		Paths:           current.paths,
+		RunStore:        current.store,
+		Git:             s.DispatchGit,
+		Logger:          s.Logger,
+		UsageCaptureEnv: s.UsageCaptureEnv,
 	}
 	start, err := dispatch.Start(ctx, DispatchStartOptions{
 		TaskID:  current.TaskID(),
