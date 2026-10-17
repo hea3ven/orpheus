@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"io"
 	"log/slog"
@@ -9,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/registry"
-	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,25 +39,19 @@ func TestRepoWizardCollectsPublicationSettings(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			original := isTerminal
-			isTerminal = func(io.Reader) bool { return test.interactive }
-			t.Cleanup(func() { isTerminal = original })
-			command := &cobra.Command{}
-			command.SetIn(strings.NewReader(test.input))
 			var stderr bytes.Buffer
-			command.SetErr(&stderr)
+			wizard := repoAddWizard{reader: bufio.NewReader(strings.NewReader(test.input + test.title + "\n")), output: &stderr, interactive: test.interactive}
 			var repo registry.Repo
 			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-			err := configureRepoSummaryGuidance(command, &repo, logger)
+			err := configureRepoSummaryGuidance(t.Context(), wizard, &repo, logger)
 			if test.wantError != "" {
 				require.ErrorContains(t, err, test.wantError)
 				require.Empty(t, repo.SummaryGuidanceStyle)
 				return
 			}
 			require.NoError(t, err)
-			command.SetIn(strings.NewReader(test.title + "\n"))
-			require.NoError(t, configureRepoTitleTemplate(command, &repo, logger))
+			require.NoError(t, configureRepoTitleTemplate(t.Context(), wizard, &repo, logger))
 
 			require.Equal(t, test.style, repo.SummaryGuidanceStyle)
 			require.Equal(t, test.guidance, repo.SummaryGuidance)

@@ -3,18 +3,15 @@
 package cli_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
-	"github.com/hea3ven/orpheus/internal/cli"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/review"
@@ -107,18 +104,6 @@ func (f *taskWorkflowFixture) loadFinalTaskIDs() []string {
 		ids[i] = item.ID
 	}
 	return ids
-}
-
-func (f *taskWorkflowFixture) executeWithInput(input string, args ...string) (string, string, error) {
-	f.t.Helper()
-	var stdout, stderr bytes.Buffer
-	command := cli.NewRootCommandWithOptions(f.options)
-	command.SetIn(strings.NewReader(input))
-	command.SetOut(&stdout)
-	command.SetErr(&stderr)
-	command.SetArgs(args)
-	err := command.Execute()
-	return stdout.String(), stderr.String(), err
 }
 
 func (f *taskWorkflowFixture) withRealReviewPipeline() {

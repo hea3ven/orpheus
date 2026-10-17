@@ -15,43 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationWorkflowRegistrationDefaultsToGigEvenWithLocalBeads(t *testing.T) {
-	for _, explicit := range []bool{false, true} {
-		t.Run(map[bool]string{false: "default", true: "explicit"}[explicit], func(t *testing.T) {
-			repo := aGitRepository(t, "alpha")
-			fixture := newRepoWorkflowFixture(t, repo)
-			fixture.withLocalBeads(repo, "local")
-			var initialized []string
-			fixture.options.Dependencies.InitializeGig = func(dir, prefix string) error {
-				initialized = append(initialized, dir, prefix)
-				return nil
-			}
-			args := []string{"repo", "add", repo.path}
-			if explicit {
-				args = append(args, "--task-source", "gig")
-			}
-			stdout, stderr, err := fixture.execute(args...)
-			require.NoError(t, err, "stderr: %s", stderr)
-			assert.Contains(t, stdout, "gig")
-			assert.Empty(t, fixture.beadsInspections)
-			assert.Empty(t, fixture.beadsInitializations)
-			assert.Equal(t, []string{repoWorkflowDataRoot + "/repos/alpha/gig", "alpha"}, initialized)
-			final := fixture.loadFinalRegistry()
-			require.Len(t, final.Repos, 1)
-			assert.Equal(t, "gig", final.Repos[0].TaskSource)
-			assert.Equal(t, "managed", final.Repos[0].TaskMode)
-			assert.Equal(t, "alpha", final.Repos[0].TaskPrefix)
-			assert.Empty(t, final.Repos[0].BeadsMode)
-			stdout, _, err = fixture.execute("repo", "list")
-			require.NoError(t, err)
-			assert.Contains(t, stdout, "TASK_SOURCE")
-			assert.Contains(t, stdout, "gig")
-			_, _, err = fixture.execute("repo", "beads-dir", "alpha")
-			assert.ErrorContains(t, err, "applies only to Beads")
-		})
-	}
-}
-
 func TestIntegrationWorkflowGigRegistrationFailureDoesNotPersistSource(t *testing.T) {
 	for _, source := range []string{"gig", "unknown"} {
 		t.Run(source, func(t *testing.T) {

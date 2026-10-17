@@ -5,6 +5,7 @@ package cli_test
 import (
 	"bytes"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -44,6 +45,18 @@ func newWorkflowFixture(t *testing.T, configRoot, dataRoot string) *workflowFixt
 func (f *workflowFixture) execute(args ...string) (string, string, error) {
 	f.t.Helper()
 	return executeRootCommand(cli.NewRootCommandWithOptions(f.options), args...)
+}
+
+func (f *workflowFixture) executeWithInput(input string, args ...string) (string, string, error) {
+	f.t.Helper()
+	var stdout, stderr bytes.Buffer
+	command := cli.NewRootCommandWithOptions(f.options)
+	command.SetIn(strings.NewReader(input))
+	command.SetOut(&stdout)
+	command.SetErr(&stderr)
+	command.SetArgs(args)
+	err := command.Execute()
+	return stdout.String(), stderr.String(), err
 }
 
 func (f *workflowFixture) loadFinalRegistry() registry.Registry {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/task"
@@ -24,16 +25,16 @@ func TestIntegrationAdapterContractInitializeManagedCreatesUsableIsolatedDatabas
 	runner := isolatedBeadsRunner(t, binary)
 	runner.Environment = append(runner.Environment, "BEADS_DIR="+filepath.Join(root, "wrong-workspace"))
 
-	err = beads.InitializeManagedWithRunner(dir, "managed", runner)
+	err = beads.InitializeManagedWithRunner(dir, "Team_9", runner)
 
 	require.NoError(t, err)
 	item := createBeadsTask(t, dir, runner)
-	assert.Contains(t, item.ID, "managed-")
+	assert.True(t, strings.HasPrefix(item.ID, "Team_9-"), "created ID: %s", item.ID)
 	assertBeadsTaskStored(t, dir, runner, item)
 	assert.NoDirExists(t, filepath.Join(root, "wrong-workspace"))
 	assert.NoFileExists(t, filepath.Join(dir, "AGENTS.md"))
 
-	require.ErrorContains(t, beads.InitializeManagedWithRunner(dir, "managed", runner), "not empty")
+	require.ErrorContains(t, beads.InitializeManagedWithRunner(dir, "Team_9", runner), "not empty")
 	assertBeadsTaskStored(t, dir, runner, item)
 }
 
