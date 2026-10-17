@@ -65,6 +65,8 @@ func configureTaskCompletions(task *cobra.Command, complete completionProvider) 
 	taskShowReview.ValidArgsFunction = complete.inspectItems
 	taskSync.ValidArgsFunction = complete.activeTasks
 	taskEdit.ValidArgsFunction = complete.activeItems
+	commandAt(task, "block").ValidArgsFunction = complete.activeItems
+	commandAt(task, "unblock").ValidArgsFunction = complete.activeItems
 	taskStart.ValidArgsFunction = complete.openEpics
 	taskClose.ValidArgsFunction = complete.inProgressEpics
 

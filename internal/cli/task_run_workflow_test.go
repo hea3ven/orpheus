@@ -45,6 +45,12 @@ func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *t
 	fixture.assertIsTaskInAgentContext("op-completion")
 	assertStatusShowsManualReview(t, statusOutput, "op-completion")
 
+	_, _, err = fixture.execute("task", "block", "op-completion")
+	require.ErrorContains(t, err, "review boundary")
+	preserved, preservedTask := fixture.loadFinalTask("op-completion")
+	is.Equal(finalState, preserved, "blocking refusal preserves review and completion history")
+	is.Equal(finalTask, preservedTask)
+
 	fixture.git.hasStagedChanges = true
 	_, _, err = fixture.execute("task", "run", "op-completion")
 

@@ -56,12 +56,14 @@ func TestIntegrationWorkflowCompletionProtocolSuggestsContextAwareValues(t *test
 		"br-open\tBeta task (beta)",
 	})
 	assertCompletionChoices(t, fixture, []string{"task", "run", ""}, []string{"ar-open\tOpen task (alpha)", "br-open\tBeta task (beta)"})
-	assertCompletionChoices(t, fixture, []string{"task", "edit", ""}, []string{
-		"ar-epic-open\tOpen epic (alpha)",
-		"ar-open\tOpen task (alpha)",
-		"br-epic-running\tRunning epic (beta)",
-		"br-open\tBeta task (beta)",
-	})
+	for _, command := range []string{"edit", "block", "unblock"} {
+		assertCompletionChoices(t, fixture, []string{"task", command, ""}, []string{
+			"ar-epic-open\tOpen epic (alpha)",
+			"ar-open\tOpen task (alpha)",
+			"br-epic-running\tRunning epic (beta)",
+			"br-open\tBeta task (beta)",
+		})
+	}
 	assertCompletionChoices(t, fixture, []string{"task", "start", ""}, []string{"ar-epic-open\tOpen epic (alpha)"})
 	assertCompletionChoices(t, fixture, []string{"task", "close", ""}, []string{"br-epic-running\tRunning epic (beta)"})
 	assertCompletionChoices(t, fixture, []string{"task", "list", "--repo", ""}, []string{

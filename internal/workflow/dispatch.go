@@ -14,6 +14,7 @@ import (
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/pathutil"
+	"github.com/hea3ven/orpheus/internal/readiness"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -129,6 +130,9 @@ type DispatchService struct {
 	Git             DispatchGit
 	Logger          *slog.Logger
 	UsageCaptureEnv map[string]string
+	// Parents resolves authoritative parent facts, including across repositories.
+	// Nil uses the dispatch backend for repository-local parent reads.
+	Parents task.Getter
 }
 
 // DispatchStartOptions describes the task run to start.
@@ -522,6 +526,9 @@ func (s DispatchService) validateStart(
 	if err != nil {
 		return dispatchStartPlan{}, err
 	}
+	if err := s.validateInitialDispatchParent(ctx, opts.Backend, taskItem); err != nil {
+		return dispatchStartPlan{}, err
+	}
 	lockedTarget, hasLockedTarget, err := s.resolveDispatchStartTargetLock(opts, taskItem)
 	if err != nil {
 		return dispatchStartPlan{}, err
@@ -559,6 +566,29 @@ func resolveDispatchStartTask(ctx context.Context, opts DispatchStartOptions) (t
 		return task.Task{}, fmt.Errorf("task dispatch preloaded task id %q does not match requested task id %q", taskItem.ID, opts.TaskID)
 	}
 	return taskItem, nil
+}
+
+// Initial eligibility may have been read before another command blocked the
+// parent. Recheck under the dispatch mutation lock, never using related rows
+// from the preloaded task. Existing in-progress retries retain their policy.
+func (s DispatchService) validateInitialDispatchParent(ctx context.Context, backend task.Getter, item task.Task) error {
+	parentID := strings.TrimSpace(item.Relations.ParentID)
+	if item.Status != task.StatusOpen || parentID == "" {
+		return nil
+	}
+	reader := s.Parents
+	if reader == nil {
+		reader = backend
+	}
+	parent, err := reader.Get(ctx, parentID)
+	if err != nil {
+		return fmt.Errorf("cannot inspect immediate parent epic %s before dispatching %s: %w", parentID, item.ID, err)
+	}
+	gate := readiness.EvaluateParentEpicGate(item, []task.Task{parent})
+	if gate.State != readiness.ParentEpicGateAllowed {
+		return fmt.Errorf("task %s is not eligible for dispatch: %s", item.ID, gate.Detail())
+	}
+	return nil
 }
 
 func (s DispatchService) resolveDispatchStartTargetLock(

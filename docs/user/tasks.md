@@ -140,14 +140,45 @@ Task completion instead goes through review and publication. When working on the
 Orpheus repository itself, agents must also follow the task-management restrictions
 in [AGENTS.md](../../AGENTS.md).
 
+## Block and unblock work
+
+```sh
+orpheus task block op-123
+orpheus task unblock op-123
+```
+
+Both commands resolve the owning repository from the ID and support tasks and
+epics in Beads and Gig. Blocking accepts open work and safely inactive
+in-progress work, retaining content, relationships, Git facts, and all execution
+and review history. Active or unverifiable executions, completion handoffs,
+review decisions, and publication boundaries are refused without changes.
+Wait for active work to finish; inspect `orpheus doctor` for unverifiable history,
+or continue review/publication through `task run` or `task sync` as directed.
+There is no forced cancellation or reason-text flag.
+
+Blocking an epic prevents new child starts and presents waiting children as
+Blocked. Existing child executions and in-progress retries are not stopped.
+Explicit unblocking restores the recorded open or in-progress lifecycle; items
+blocked outside Orpheus without restoration information return to open. Repeated
+commands are safe. Unblocking removes no dependencies and bypasses no readiness,
+review, or publication gates.
+
+This uses the source's native blocked status, **not a persistent manual hold**.
+In particular, Gig can automatically reopen blocked work when prerequisites
+finish. A later `task unblock` does not restore an obsolete in-progress lifecycle,
+even after a subsequent native block. Native reopening may leave an open item
+with execution history; existing history-consistency checks still apply. Inspect
+the item and diagnostics rather than discarding history to restart it.
+
 ## Gig behavior and recovery
 
 Gig uses its native SDK behavior. Starting a child can advance its immediate open
 parent, but Orpheus initial dispatch and epic-start checks already require that
 parent to be in progress. Closing a prerequisite can reopen native blocked
-dependents. Orpheus normally projects blocking from dependencies rather than
-writing that native status. Gig considers cancelled children terminal, while
-Orpheus requires closed children and prerequisites. Current commands do not create
+dependents, including items blocked with `task block`. Dependency and parent
+blocking alone remains a projection rather than a native lifecycle mutation. Gig
+considers cancelled children terminal, while Orpheus requires closed children and
+prerequisites. Current commands do not create
 cancelled states; manually setting native statuses does not extend Orpheus policy.
 Beads behavior is unchanged.
 

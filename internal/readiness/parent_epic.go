@@ -16,8 +16,8 @@ const (
 	// is an in-progress epic.
 	ParentEpicGateAllowed ParentEpicGateState = "allowed"
 
-	// ParentEpicGateBlocked means the immediate parent is an open epic that has
-	// not yet entered progress.
+	// ParentEpicGateBlocked means the immediate parent is an open or blocked
+	// epic rather than an active in-progress epic.
 	ParentEpicGateBlocked ParentEpicGateState = "blocked"
 
 	// ParentEpicGateAttention means the immediate parent relation cannot be used
@@ -71,7 +71,7 @@ func EvaluateParentEpicGateFromIndex(child task.Task, index map[string]task.Task
 	switch parent.Status {
 	case task.StatusInProgress:
 		gate.State = ParentEpicGateAllowed
-	case task.StatusOpen:
+	case task.StatusOpen, task.StatusBlocked:
 		gate.State = ParentEpicGateBlocked
 	default:
 		gate.State = ParentEpicGateAttention

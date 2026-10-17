@@ -61,8 +61,8 @@ func (b *memoryTaskBackend) List(context.Context) ([]taskmodel.Task, error) {
 	return items, nil
 }
 
-// This local dispatch stub supports reads and MarkInProgress only. Publication,
-// task creation, and target relocation are outside these scenarios and fail closed.
+// Publication, task creation, and target relocation are outside this local
+// lifecycle stub's scenarios and fail closed.
 // The accepted dispatch states match the Beads MarkInProgress contract.
 func (b *memoryTaskBackend) MarkInProgress(_ context.Context, taskID, branch, worktree string) error {
 	b.mu.Lock()

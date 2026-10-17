@@ -34,6 +34,7 @@ type EpicLifecycleService struct {
 
 // Start changes an open epic to in progress after verifying its immediate
 // parent and all blocking dependencies. An in-progress epic is a no-op.
+// Managed callers must hold the global mutation lock across this operation.
 func (s EpicLifecycleService) Start(ctx context.Context, backend EpicLifecycleBackend, id string) (EpicLifecycleResult, error) {
 	if backend == nil {
 		return EpicLifecycleResult{}, errors.New("epic lifecycle backend is required")
