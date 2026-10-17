@@ -48,6 +48,9 @@ const (
 	// StatusInProgress means work on the task has started.
 	StatusInProgress Status = "in_progress"
 
+	// StatusBlocked means the task source explicitly marks the task as blocked.
+	StatusBlocked Status = "blocked"
+
 	// StatusClosed means the task is done or otherwise closed in the backend.
 	StatusClosed Status = "closed"
 )

@@ -34,7 +34,7 @@ const (
 	// GroupReadyToRun contains items Orpheus' local readiness policy considers ready.
 	GroupReadyToRun GroupID = "ready_to_run"
 
-	// GroupBlocked contains items with locally visible open blocking dependencies.
+	// GroupBlocked contains items blocked by task-source status or readiness gates.
 	GroupBlocked GroupID = "blocked"
 
 	// GroupDoneClosed contains closed backend items.
@@ -442,6 +442,9 @@ func classifyOpenOrUnknownTask(
 		)
 	}
 
+	if taskItem.Status == task.StatusBlocked {
+		return newPolicyResult(readinessBlocked, "", Detail{})
+	}
 	if taskItem.Status == task.StatusOpen {
 		return newPolicyResult(readinessReady, "-", Detail{})
 	}
@@ -997,7 +1000,7 @@ func taskEntry(repository task.Repository, taskItem task.Task, result policyResu
 		Kind:           EntryTask,
 		Repository:     repository,
 		Task:           taskItem.Clone(),
-		Detail:         detailOrDash(result.detail),
+		Detail:         strings.TrimSpace(result.detail),
 		SemanticDetail: result.semanticDetail,
 		EpicProgress:   epicProgress,
 	}
@@ -1018,14 +1021,6 @@ func failureEntry(failure task.RepoFailure) Entry {
 			Operation: valueOrUnknown(failure.Operation),
 		},
 	}
-}
-
-func detailOrDash(detail string) string {
-	detail = strings.TrimSpace(detail)
-	if detail == "" {
-		return "-"
-	}
-	return detail
 }
 
 func valueOrUnknown(value string) string {

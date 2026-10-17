@@ -66,7 +66,7 @@ func renderTaskViewJSON(
 	sortMode taskViewSort,
 	tasksOnly bool,
 ) error {
-	rows := statusDisplayRowsForSort(visibleStatusGroups(projection.Groups, full), sortMode)
+	rows := selectedTaskViewRows(projection, full, sortMode)
 	entries := make([]any, 0, len(rows))
 	for _, row := range rows {
 		if tasksOnly && row.Entry.Kind != status.EntryTask {
