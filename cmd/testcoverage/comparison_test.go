@@ -223,6 +223,12 @@ func TestMissingIncompatibleAndFailedEvidenceAbortWithoutSelectiveRetries(t *tes
 			r.Lanes["unit"] = lane
 		}},
 		{name: "coverage structure drift", mutate: func(r *qualityReport) { r.Lanes["unit"].Packages[0].StatementTotal++ }},
+		{name: "excluded statement drift", mutate: func(r *qualityReport) {
+			lane := r.Lanes["unit"]
+			lane.Packages = append(lane.Packages, packageMetric{Name: modulePath + "/internal/tasksource/beads", coverageMetric: coverageMetric{StatementTotal: 100}})
+			lane.Coverage.StatementTotal += 100
+			r.Lanes["unit"] = lane
+		}},
 		{name: "selected structure drift", mutate: func(r *qualityReport) { r.Lanes["unit"].Timings[0].Name = "other" }},
 		{name: "invalid timing", mutate: func(r *qualityReport) { r.Lanes["unit"].Timings[0].Seconds = math.NaN() }},
 	} {
@@ -476,5 +482,49 @@ func TestIdenticalCommitSubjectsStillRequireWithinRevisionStructure(t *testing.T
 
 	if err == nil || result.Timing.Status != statusUnevaluated || result.Complete || len(result.Comparison.Samples) != 2 {
 		t.Fatalf("same revision accepted inconsistent structure: %#v, %v", result, err)
+	}
+}
+
+func TestAggregateTimingSamplesUsesFiveTimingMedians(t *testing.T) {
+	samples := make([]qualityReport, 5)
+	for index, seconds := range []float64{5, 1, 4, 2, 3} {
+		samples[index] = testQualityReport()
+		for _, laneName := range laneNames {
+			lane := samples[index].Lanes[laneName]
+			lane.SelectedTestSeconds = seconds
+			lane.WallSeconds = seconds / 4
+			lane.Timings[0].Seconds = seconds / 2
+			samples[index].Lanes[laneName] = lane
+		}
+	}
+
+	got, err := aggregateTimingSamples(samples)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MeasurementSamples != 5 {
+		t.Fatalf("measurement samples = %d, want 5", got.MeasurementSamples)
+	}
+	for _, laneName := range laneNames {
+		lane := got.Lanes[laneName]
+		if lane.SelectedTestSeconds != 3 || lane.WallSeconds != 0.75 || lane.Timings[0].Seconds != 1.5 {
+			t.Fatalf("%s timing medians = work %v, wall %v, package %#v", laneName, lane.SelectedTestSeconds, lane.WallSeconds, lane.Timings)
+		}
+	}
+}
+
+func TestAggregateTimingSamplesRejectsFailedAndInconsistentMeasurements(t *testing.T) {
+	failed := []qualityReport{testQualityReport(), testQualityReport()}
+	failed[1].Complete = false
+	if _, err := aggregateTimingSamples(failed); err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("incomplete sample error = %v", err)
+	}
+
+	inconsistent := []qualityReport{testQualityReport(), testQualityReport()}
+	lane := inconsistent[1].Lanes["integration"]
+	lane.TestCount++
+	inconsistent[1].Lanes["integration"] = lane
+	if _, err := aggregateTimingSamples(inconsistent); err == nil || !strings.Contains(err.Error(), "not comparable") {
+		t.Fatalf("inconsistent sample error = %v", err)
 	}
 }

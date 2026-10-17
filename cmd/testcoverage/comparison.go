@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"sort"
 )
 
 type sampleReference struct {
@@ -109,11 +110,11 @@ func collectWarmups(result *qualityReport, references map[string]qualityReport, 
 }
 
 func aggregateTiming(result *qualityReport, base, merge []qualityReport, settings localTimingSettings) error {
-	baseMedian, err := aggregatePolicySamples(base)
+	baseMedian, err := aggregateTimingSamples(base)
 	if err != nil {
 		return err
 	}
-	mergeMedian, err := aggregatePolicySamples(merge)
+	mergeMedian, err := aggregateTimingSamples(merge)
 	if err != nil {
 		return err
 	}
@@ -291,4 +292,96 @@ func combinedDecision(result qualityReport) decision {
 	findings = append(findings, result.CoverageDecision.Findings...)
 	findings = append(findings, result.Timing.Findings...)
 	return decision{Status: status, Findings: findings, Warnings: result.Timing.Warnings}
+}
+
+func aggregateTimingSamples(samples []qualityReport) (qualityReport, error) {
+	if len(samples) == 0 {
+		return qualityReport{}, errors.New("timing aggregation requires at least one complete sample")
+	}
+	for index, sample := range samples {
+		if !sample.Complete {
+			return qualityReport{}, fmt.Errorf("timing sample %d is incomplete", index+1)
+		}
+		for _, laneName := range laneNames {
+			lane := sample.Lanes[laneName]
+			if !lane.Passed || lane.Failure != nil {
+				return qualityReport{}, fmt.Errorf("timing sample %d has a failed %s lane", index+1, laneName)
+			}
+		}
+	}
+	result := samples[0]
+	result.Lanes = make(map[string]laneReport, len(laneNames))
+	result.MeasurementSamples = len(samples)
+	for _, laneName := range laneNames {
+		reference := samples[0].Lanes[laneName]
+		suiteSamples := make([]float64, 0, len(samples))
+		wallSamples := make([]float64, 0, len(samples))
+		packageSamples := make(map[string][]float64, len(reference.Timings))
+		for index, sample := range samples {
+			lane := sample.Lanes[laneName]
+			if err := comparableLane(reference, lane); err != nil {
+				return qualityReport{}, fmt.Errorf("timing sample %d %s lane is not comparable: %w", index+1, laneName, err)
+			}
+			suiteSamples = append(suiteSamples, laneSelectedTestSeconds(lane))
+			wallSamples = append(wallSamples, lane.WallSeconds)
+			for _, timing := range lane.Timings {
+				packageSamples[timing.Name] = append(packageSamples[timing.Name], timing.Seconds)
+			}
+		}
+		aggregated := reference
+		aggregated.WallSeconds = medianFloat64(wallSamples)
+		aggregated.SelectedTestSeconds = medianFloat64(suiteSamples)
+		aggregated.Timings = make([]packageTiming, 0, len(packageSamples))
+		for _, name := range sortedKeys(packageSamples) {
+			aggregated.Timings = append(aggregated.Timings, packageTiming{Name: name, Seconds: medianFloat64(packageSamples[name])})
+		}
+		result.Lanes[laneName] = aggregated
+	}
+	return result, nil
+}
+
+func comparableLane(reference, candidate laneReport) error {
+	if !reflect.DeepEqual(recordedCommand(reference.Command), recordedCommand(candidate.Command)) {
+		return errors.New("test command changed")
+	}
+	if !reflect.DeepEqual(reference.PackageTestCounts, candidate.PackageTestCounts) {
+		return errors.New("per-package test-event counts changed")
+	}
+	if reference.TestCount != candidate.TestCount {
+		return fmt.Errorf("test-event count changed from %d to %d", reference.TestCount, candidate.TestCount)
+	}
+	if !reflect.DeepEqual(packageStatementTotals(reference.Packages), packageStatementTotals(candidate.Packages)) {
+		return errors.New("coverage package structure changed")
+	}
+	if !reflect.DeepEqual(timingNames(reference.Timings), timingNames(candidate.Timings)) {
+		return errors.New("selected-test package structure changed")
+	}
+	return nil
+}
+
+func packageStatementTotals(packages []packageMetric) map[string]int {
+	result := make(map[string]int, len(packages))
+	for _, pkg := range packages {
+		result[pkg.Name] = pkg.StatementTotal
+	}
+	return result
+}
+
+func timingNames(timings []packageTiming) []string {
+	result := make([]string, len(timings))
+	for index, timing := range timings {
+		result[index] = timing.Name
+	}
+	sort.Strings(result)
+	return result
+}
+
+func medianFloat64(values []float64) float64 {
+	ordered := append([]float64(nil), values...)
+	sort.Float64s(ordered)
+	middle := len(ordered) / 2
+	if len(ordered)%2 == 1 {
+		return ordered[middle]
+	}
+	return (ordered[middle-1] + ordered[middle]) / 2
 }

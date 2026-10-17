@@ -79,6 +79,95 @@ func TestParseOptionsSupportsQualityModes(t *testing.T) {
 	}
 }
 
+func TestPolicyUpdateCollectsOnceAndReportsFailuresWithoutRetry(t *testing.T) {
+	collectionErr := errors.New("collection failed")
+	for _, test := range []struct {
+		name          string
+		incomplete    bool
+		collectionErr error
+		wantExecution string
+		wantCoverage  string
+	}{
+		{name: "updated", wantExecution: statusPass, wantCoverage: statusPass},
+		{name: "failed collection", collectionErr: collectionErr, wantExecution: statusTestFailed, wantCoverage: statusNotEvaluated},
+		{name: "incomplete collection", incomplete: true, wantExecution: statusExecutionFailed, wantCoverage: statusNotEvaluated},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := testutil.CanonicalTempDir(t)
+			opts := options{policy: filepath.Join(root, ".quality.yml"), output: filepath.Join(root, "report.json")}
+			policy := testLocalQualityPolicy()
+			if err := writeQualityPolicy(opts.policy, policy); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(opts.policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			collect := func() (qualityReport, []error) {
+				calls++
+				report := testQualityReport()
+				setLaneCoverage(report, "unit", 1000, 800)
+				lane := report.Lanes["unit"]
+				lane.WallSeconds = 1.25
+				lane.SelectedTestSeconds = 2.5
+				lane.Timings[0].Seconds = 2.5
+				if test.collectionErr != nil {
+					lane.Passed = false
+					lane.Failure = &laneFailure{Error: test.collectionErr.Error()}
+				}
+				report.Lanes["unit"] = lane
+				report.Complete = !test.incomplete && test.collectionErr == nil
+				if test.collectionErr != nil {
+					return report, []error{test.collectionErr}
+				}
+				return report, nil
+			}
+
+			err = executePolicyUpdate(opts, policy, collect)
+
+			wantFailure := test.wantExecution != statusPass
+			if (err != nil) != wantFailure || calls != 1 {
+				t.Fatalf("policy update = %v, %d collections; want failure %t, one collection", err, calls, wantFailure)
+			}
+			if test.collectionErr != nil && !errors.Is(err, test.collectionErr) {
+				t.Fatalf("policy update error = %v, want %v", err, test.collectionErr)
+			}
+			contents, err := os.ReadFile(opts.output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var report qualityReport
+			if err := json.Unmarshal(contents, &report); err != nil {
+				t.Fatal(err)
+			}
+			if report.MeasurementSamples != 1 || report.Execution.Status != test.wantExecution || report.Decision.Status != test.wantExecution || report.CoverageDecision.Status != test.wantCoverage || report.Timing.Status != statusNotEvaluated || report.Complete == wantFailure {
+				t.Fatalf("policy update report = %#v", report)
+			}
+			if lane := report.Lanes["unit"]; lane.WallSeconds != 1.25 || lane.SelectedTestSeconds != 2.5 || lane.Timings[0].Seconds != 2.5 {
+				t.Fatalf("report lost single-collection diagnostic timing: %#v", lane)
+			}
+			after, err := os.ReadFile(opts.policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if wantFailure {
+				if !bytes.Equal(before, after) {
+					t.Fatal("failed collection changed policy bytes")
+				}
+			} else {
+				updated, err := loadQualityPolicy(opts.policy)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if updated.Lanes["unit"].Coverage.FloorPercent != 79.5 {
+					t.Fatalf("updated unit floor = %v, want 79.5", updated.Lanes["unit"].Coverage.FloorPercent)
+				}
+			}
+		})
+	}
+}
+
 func TestAuditSelectionPreservesDefaultsAndRequestedPackagesInDiscoveryCommand(t *testing.T) {
 	for _, test := range []struct {
 		name string
