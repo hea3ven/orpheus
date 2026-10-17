@@ -19,6 +19,23 @@ Use `orpheus repo add /path/to/repository --task-source beads` to select Beads,
 or `--task-source gig` to select gig explicitly. `repo list` shows each source,
 storage mode, and task prefix. Source selection is fixed at registration.
 
+For new managed Gig or Beads storage, choose a task prefix with
+`orpheus repo add /path/to/repository --prefix op` (add `--task-source beads`
+for Beads). The flag skips the prefix prompt. Without it, interactive registration
+prompts with the repository ID as the default; noninteractive registration uses
+that default. Existing repository-local Beads storage keeps its stored prefix
+without prompting. An explicit matching prefix is accepted; a conflicting one
+is rejected without changing storage or registration.
+
+Prefixes cannot be empty, start with a hyphen, or contain whitespace, control
+characters, or path separators. Managed Beads prefixes additionally use at most
+64 ASCII letters, digits, underscores, or hyphens, start with a letter or
+underscore, and cannot end with a hyphen. Values Beads would silently rewrite
+(such as dotted prefixes) are rejected so stored and registered prefixes agree.
+Prefixes must not collide with another registered repository's ID, name, or
+prefix. Prefix selection applies only to new registrations; it does not rename
+existing task IDs or import previous tasks.
+
 Gig supports managed storage only. Orpheus creates and owns
 `$XDG_DATA_HOME/orpheus/repos/<repo-id>/gig/tasks.db`, with the usual
 `~/.local/share` fallback when `XDG_DATA_HOME` is unset. The database is local

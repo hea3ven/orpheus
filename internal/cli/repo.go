@@ -2,14 +2,17 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/logging"
@@ -29,8 +32,6 @@ const (
 	summaryGuidanceStyleCustom = "custom"
 	summaryGuidanceStylePrompt = "Summary guidance style (typed, capitalized, custom)"
 )
-
-var isTerminal = readerIsTerminal
 
 func newRepoCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
@@ -473,12 +474,18 @@ func newRepoAddCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add <path>",
 		Short: "Register a repository path",
-		Args:  cobra.ExactArgs(1),
+		Long: "Register a repository path with a fixed task source and prefix.\n\n" +
+			"For new managed Gig or Beads storage, --prefix selects the task prefix without prompting. " +
+			"Otherwise interactive registration prompts with the repository ID as the default; " +
+			"noninteractive registration uses that default. Existing repo-local Beads storage " +
+			"keeps its stored prefix; --prefix must match it. Prefixes cannot be changed after registration.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			return runRepoAdd(command, opts, args[0])
 		},
 	}
 	cmd.Flags().String("task-source", "gig", "Task source: gig or beads")
+	cmd.Flags().String("prefix", "", "Task prefix for new managed storage (default: repository ID); must match existing local Beads")
 	_ = cmd.RegisterFlagCompletionFunc("task-source", fixedCompletion("gig", "beads"))
 	return cmd
 }
@@ -518,17 +525,22 @@ func runRepoAdd(command *cobra.Command, opts *rootOptions, inputPath string) err
 	}
 	logger.DebugContext(command.Context(), "derived repo identity", slog.String("repo_id", repo.ID), slog.String("repo_name", repo.Name))
 
-	if err := configureRepoGitValues(command, &repo, gitInspection, logger); err != nil {
+	wizard := repoAddWizard{
+		reader:      bufio.NewReader(command.InOrStdin()),
+		output:      command.ErrOrStderr(),
+		interactive: deps.terminal.withDefaults().InputIsTerminal(command.InOrStdin()),
+	}
+	if err := configureRepoGitValues(command.Context(), wizard, &repo, gitInspection, logger); err != nil {
 		return err
 	}
-	managed, err := configureRepoTaskSource(command, deps, &repo, gitInspection.Root, logger)
+	managed, err := configureRepoTaskSource(command, deps, &repo, gitInspection.Root, wizard, logger)
 	if err != nil {
 		return err
 	}
-	if err := configureRepoSummaryGuidance(command, &repo, logger); err != nil {
+	if err := configureRepoSummaryGuidance(command.Context(), wizard, &repo, logger); err != nil {
 		return err
 	}
-	if err := configureRepoTitleTemplate(command, &repo, logger); err != nil {
+	if err := configureRepoTitleTemplate(command.Context(), wizard, &repo, logger); err != nil {
 		return err
 	}
 
@@ -604,19 +616,20 @@ func renderRepoAdded(command *cobra.Command, repo registry.Repo) error {
 }
 
 func configureRepoGitValues(
-	command *cobra.Command,
+	ctx context.Context,
+	wizard repoAddWizard,
 	repo *registry.Repo,
 	inspection gitmeta.Inspection,
 	logger *slog.Logger,
 ) error {
-	remote, defaultBranch, err := confirmGitValues(command, inspection)
+	remote, defaultBranch, err := confirmGitValues(wizard, inspection)
 	if err != nil {
 		return err
 	}
 	repo.Remote = remote
 	repo.DefaultBranch = defaultBranch
 	logger.DebugContext(
-		command.Context(),
+		ctx,
 		"confirmed git values",
 		slog.Bool("remote_set", repo.Remote != ""),
 		slog.String("default_branch", repo.DefaultBranch),
@@ -624,21 +637,71 @@ func configureRepoGitValues(
 	return nil
 }
 
-func configureRepoTaskSource(command *cobra.Command, deps *invocationDependencies, repo *registry.Repo, root string, logger *slog.Logger) (bool, error) {
+func configureRepoTaskSource(command *cobra.Command, deps *invocationDependencies, repo *registry.Repo, root string, wizard repoAddWizard, logger *slog.Logger) (bool, error) {
 	source, err := command.Flags().GetString("task-source")
 	if err != nil {
 		return false, err
 	}
+	prefix, err := command.Flags().GetString("prefix")
+	if err != nil {
+		return false, err
+	}
+	prefix = strings.TrimSpace(prefix)
+	explicitPrefix := command.Flags().Changed("prefix")
+	if explicitPrefix && prefix == "" {
+		return false, errors.New("--prefix must not be empty")
+	}
+
 	repo.TaskSource = source
+	managed := true
 	switch source {
 	case "gig":
-		repo.TaskMode, repo.TaskPrefix = "managed", repo.ID
-		return true, nil
+		repo.TaskMode = "managed"
 	case "beads":
-		return configureRepoBeads(command, deps, repo, root, logger)
+		managed, err = configureRepoBeads(command, deps, repo, root, logger)
+		if err != nil {
+			return false, err
+		}
 	default:
 		return false, fmt.Errorf("unsupported task source %q; expected gig or beads", source)
 	}
+	if !managed {
+		if explicitPrefix && prefix != repo.Prefix() {
+			return false, fmt.Errorf("--prefix %q conflicts with existing repo-local Beads prefix %q; omit --prefix or use the stored prefix; registration does not rename existing task IDs", prefix, repo.Prefix())
+		}
+		return false, nil
+	}
+	if !explicitPrefix {
+		prefix, err = wizard.managedTaskPrefix(repo.ID)
+		if err != nil {
+			return false, err
+		}
+	}
+	if err := validateManagedTaskPrefix(source, prefix); err != nil {
+		return false, err
+	}
+	if source == "gig" {
+		repo.TaskPrefix = prefix
+	} else {
+		repo.BeadsPrefix = prefix
+	}
+	return true, nil
+}
+
+var managedBeadsPrefixPattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_-]*$`)
+
+func validateManagedTaskPrefix(source, prefix string) error {
+	if prefix == "" || strings.HasPrefix(prefix, "-") || strings.ContainsAny(prefix, "/\\") ||
+		strings.ContainsFunc(prefix, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return fmt.Errorf("invalid %s task prefix %q: must be nonempty, not start with '-', and contain no whitespace, control characters, or path separators", source, prefix)
+	}
+	// Beads derives a SQL database name from the prefix and silently rewrites
+	// dots, numeric starts, and trailing hyphens. Require an unchanged prefix so
+	// storage and registry identity cannot diverge.
+	if source == "beads" && (len(prefix) > 64 || !managedBeadsPrefixPattern.MatchString(prefix) || strings.HasSuffix(prefix, "-")) {
+		return fmt.Errorf("invalid Beads task prefix %q: use at most 64 ASCII letters, digits, underscores, or hyphens; start with a letter or underscore and do not end with a hyphen", prefix)
+	}
+	return nil
 }
 
 func configureRepoBeads(
@@ -675,30 +738,15 @@ func configureRepoBeads(
 	}
 	span.Finish(command.Context(), logging.StatusExpectedAbsence)
 
-	prefix, err := confirmManagedBeadsPrefix(command, repo.ID)
-	if err != nil {
-		return false, err
-	}
 	repo.BeadsMode = registry.BeadsModeManaged
-	repo.BeadsPrefix = prefix
-	logger.DebugContext(
-		command.Context(),
-		"selected managed Beads mode",
-		slog.String("beads_prefix", repo.BeadsPrefix),
-	)
 	return true, nil
 }
 
-func configureRepoSummaryGuidance(command *cobra.Command, repo *registry.Repo, logger *slog.Logger) error {
-	input := command.InOrStdin()
-	if !isTerminal(input) {
+func configureRepoSummaryGuidance(ctx context.Context, wizard repoAddWizard, repo *registry.Repo, logger *slog.Logger) error {
+	if !wizard.interactive {
 		return nil
 	}
 
-	wizard := repoAddWizard{
-		reader: bufio.NewReader(input),
-		output: command.ErrOrStderr(),
-	}
 	style, err := wizard.promptOverrideValue(summaryGuidanceStylePrompt, registry.SummaryGuidanceStyleTyped)
 	if err != nil {
 		return err
@@ -713,7 +761,7 @@ func configureRepoSummaryGuidance(command *cobra.Command, repo *registry.Repo, l
 		}
 		repo.SummaryGuidance = strings.TrimSpace(guidance)
 		logger.DebugContext(
-			command.Context(),
+			ctx,
 			"configured custom summary guidance",
 			slog.String("summary_guidance_style", repo.SummaryGuidanceStyle),
 		)
@@ -724,23 +772,18 @@ func configureRepoSummaryGuidance(command *cobra.Command, repo *registry.Repo, l
 	}
 	repo.SummaryGuidanceStyle = style
 	logger.DebugContext(
-		command.Context(),
+		ctx,
 		"configured summary guidance",
 		slog.String("summary_guidance_style", repo.SummaryGuidanceStyle),
 	)
 	return nil
 }
 
-func configureRepoTitleTemplate(command *cobra.Command, repo *registry.Repo, logger *slog.Logger) error {
-	input := command.InOrStdin()
-	if !isTerminal(input) {
+func configureRepoTitleTemplate(ctx context.Context, wizard repoAddWizard, repo *registry.Repo, logger *slog.Logger) error {
+	if !wizard.interactive {
 		return nil
 	}
 
-	wizard := repoAddWizard{
-		reader: bufio.NewReader(input),
-		output: command.ErrOrStderr(),
-	}
 	template, err := wizard.promptValue("Publication title template", "", false)
 	if err != nil {
 		return err
@@ -751,7 +794,7 @@ func configureRepoTitleTemplate(command *cobra.Command, repo *registry.Repo, log
 	}
 	repo.TitleTemplate = template
 	logger.DebugContext(
-		command.Context(),
+		ctx,
 		"configured publication title template",
 		slog.Bool("title_template_set", repo.TitleTemplate != ""),
 	)
@@ -894,19 +937,13 @@ func newRepoBeadsDirCommand(opts *rootOptions) *cobra.Command {
 	return cmd
 }
 
-func confirmGitValues(command *cobra.Command, inspection gitmeta.Inspection) (string, string, error) {
-	input := command.InOrStdin()
-	wizard := repoAddWizard{
-		reader: bufio.NewReader(input),
-		output: command.ErrOrStderr(),
-	}
-
-	if !isTerminal(input) {
+func confirmGitValues(wizard repoAddWizard, inspection gitmeta.Inspection) (string, string, error) {
+	if !wizard.interactive {
 		remote, defaultBranch, err := confirmedGitValuesFromInspection(inspection)
 		if err != nil {
 			return "", "", err
 		}
-		emitGitInspectionWarnings(command.ErrOrStderr(), inspection)
+		emitGitInspectionWarnings(wizard.output, inspection)
 		return remote, defaultBranch, nil
 	}
 
@@ -926,29 +963,11 @@ func confirmGitValues(command *cobra.Command, inspection gitmeta.Inspection) (st
 	return strings.TrimSpace(remote), strings.TrimSpace(defaultBranch), nil
 }
 
-func confirmManagedBeadsPrefix(command *cobra.Command, defaultPrefix string) (string, error) {
-	input := command.InOrStdin()
-	defaultPrefix = strings.TrimSpace(defaultPrefix)
-	if defaultPrefix == "" {
-		return "", errors.New("managed Beads prefix is required")
-	}
-
-	if !isTerminal(input) {
+func (w repoAddWizard) managedTaskPrefix(defaultPrefix string) (string, error) {
+	if !w.interactive {
 		return defaultPrefix, nil
 	}
-
-	wizard := repoAddWizard{
-		reader: bufio.NewReader(input),
-		output: command.ErrOrStderr(),
-	}
-	if _, err := fmt.Fprintln(wizard.output, "No repo-local Beads setup detected; Orpheus will initialize managed Beads state."); err != nil {
-		return "", err
-	}
-	prefix, err := wizard.promptValue("Beads prefix", defaultPrefix, true)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(prefix), nil
+	return w.promptValue("Task prefix", defaultPrefix, true)
 }
 
 func confirmedGitValuesFromInspection(inspection gitmeta.Inspection) (string, string, error) {
@@ -986,8 +1005,9 @@ func emitGitInspectionWarnings(output io.Writer, inspection gitmeta.Inspection) 
 }
 
 type repoAddWizard struct {
-	reader *bufio.Reader
-	output io.Writer
+	reader      *bufio.Reader
+	output      io.Writer
+	interactive bool
 }
 
 func (w repoAddWizard) presentInspection(inspection gitmeta.Inspection) error {

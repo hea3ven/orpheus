@@ -49,7 +49,7 @@ func (r gitRepositoryFixture) registeredWithManagedBeads() registry.Repo {
 	}
 }
 
-type beadsInitialization struct {
+type taskSourceInitialization struct {
 	dir    string
 	prefix string
 }
@@ -63,7 +63,8 @@ type repoWorkflowFixture struct {
 	*workflowFixture
 	gitInspections       []string
 	beadsInspections     []string
-	beadsInitializations []beadsInitialization
+	beadsInitializations []taskSourceInitialization
+	gigInitializations   []taskSourceInitialization
 	gitResults           map[string]gitmeta.Inspection
 	gitErrors            map[string]error
 	localBeads           map[string]localBeadsResult
@@ -107,7 +108,14 @@ func withRepoDiscovery(base *workflowFixture, repos ...gitRepositoryFixture) *re
 		return result.inspection, result.err
 	}
 	f.options.Dependencies.InitializeBeads = func(path, prefix string, _ ...slog.Attr) error {
-		f.beadsInitializations = append(f.beadsInitializations, beadsInitialization{dir: path, prefix: prefix})
+		f.beadsInitializations = append(f.beadsInitializations, taskSourceInitialization{dir: path, prefix: prefix})
+		if f.initialize != nil {
+			return f.initialize(path, prefix)
+		}
+		return nil
+	}
+	f.options.Dependencies.InitializeGig = func(path, prefix string) error {
+		f.gigInitializations = append(f.gigInitializations, taskSourceInitialization{dir: path, prefix: prefix})
 		if f.initialize != nil {
 			return f.initialize(path, prefix)
 		}
@@ -135,8 +143,9 @@ func assertRepoAdded(t *testing.T, output string, want registry.Repo) {
 	is.Contains(output, want.Path)
 	is.Contains(output, want.Remote)
 	is.Contains(output, want.DefaultBranch)
-	is.Contains(output, want.BeadsMode)
-	is.Contains(output, want.BeadsPrefix)
+	is.Contains(output, want.Source())
+	is.Contains(output, want.StorageMode())
+	is.Contains(output, want.Prefix())
 }
 
 func assertRepoListed(t *testing.T, output string, want registry.Repo) {
@@ -150,6 +159,7 @@ func assertRepoListed(t *testing.T, output string, want registry.Repo) {
 	is.Contains(output, want.Path)
 	is.Contains(output, want.Remote)
 	is.Contains(output, want.DefaultBranch)
-	is.Contains(output, want.BeadsMode)
-	is.Contains(output, want.BeadsPrefix)
+	is.Contains(output, want.Source())
+	is.Contains(output, want.StorageMode())
+	is.Contains(output, want.Prefix())
 }

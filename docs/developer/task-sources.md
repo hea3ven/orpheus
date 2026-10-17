@@ -12,6 +12,14 @@ Registration persists `task_source`. New records default to `gig` with
 for existing records. This fallback does not rewrite task data. Source switching
 and task-data migration are not supported.
 
+`repo add --prefix` selects the prefix for new managed storage and bypasses the
+prefix prompt. Otherwise the shared registration wizard prompts interactively or
+uses the repository ID noninteractively. Local Beads prefixes remain authoritative;
+an explicit value must match. Registration validates selected prefixes and registry
+collisions before initializing storage, passes the selected prefix to initialization,
+and persists it for subsequent task-source construction. Managed Beads prefix
+validation rejects values its CLI would rewrite, avoiding registry/storage drift.
+
 ## Cross-repository dependencies
 
 Shared services resolve prerequisite IDs against all registered prefixes, reject

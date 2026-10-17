@@ -49,17 +49,20 @@ func TestIntegrationBinaryE2EEmbeddedGigWorksAcrossInvocationsWithoutTaskCLIs(t 
 		require.NoError(t, err, "%v: %s", args, output)
 		return string(output)
 	}
-	assert.Contains(t, run("repo", "add", repo), "gig")
+	assert.Contains(t, run("repo", "add", repo, "--prefix", "sdk-app"), "gig")
 	// No executables are available to subsequent task-source invocations.
 	environment[3] = "PATH=" + filepath.Join(root, "no-executables")
-	assert.Contains(t, run("task", "create", "--repo", "sample", "--title", "Embedded task", "--description", "Description", "--acceptance", "Acceptance"), "Created task sample-")
+	assert.Contains(t, run("task", "create", "--repo", "sample", "--title", "Embedded task", "--description", "Description", "--acceptance", "Acceptance"), "Created task sdk-app-")
 	var rows []struct {
 		ID    string `json:"id"`
 		Title string `json:"title"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(run("task", "list", "--json")), &rows))
 	require.Len(t, rows, 1)
+	assert.Regexp(t, `^sdk-app-[a-z0-9]+$`, rows[0].ID)
 	assert.Equal(t, "Embedded task", rows[0].Title)
 	assert.Contains(t, run("task", "show", rows[0].ID), "Acceptance")
-	assert.Contains(t, run("repo", "list"), "gig")
+	listed := run("repo", "list")
+	assert.Contains(t, listed, "gig")
+	assert.Contains(t, listed, "sdk-app")
 }
