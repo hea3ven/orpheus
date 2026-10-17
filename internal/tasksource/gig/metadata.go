@@ -98,6 +98,16 @@ func encodeMetadata(stored storedTask) (string, error) {
 			stored.metadata[key] = raw
 		}
 	}
+	for _, key := range []string{task.MetadataPreBlockStatus, blockEventCursorKey} {
+		delete(stored.metadata, key)
+		if value, ok := item.Metadata[key]; ok {
+			raw, err := json.Marshal(value)
+			if err != nil {
+				return "", err
+			}
+			stored.metadata[key] = raw
+		}
+	}
 	raw, err := json.Marshal(stored.metadata)
 	return string(raw), err
 }

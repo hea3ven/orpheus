@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/spf13/cobra"
@@ -67,7 +68,10 @@ func runTaskEpicLifecycle(command *cobra.Command, opts *rootOptions, taskID stri
 	service := workflow.EpicLifecycleService{Relationships: &task.RelationshipReader{Sources: taskCtx.Sources, Factory: func(source task.RepositorySource) (task.Getter, error) { return deps.taskBackendFactory(source) }}, Dependencies: &task.DependencyReader{Sources: taskCtx.Sources, Factory: func(source task.RepositorySource) (task.Getter, error) { return deps.taskBackendFactory(source) }}}
 	var result workflow.EpicLifecycleResult
 	if start {
-		result, err = service.Start(command.Context(), lifecycleBackend, resolvedCtx.Resolved.TaskID)
+		err = state.WithGlobalMutationLockLogger(command.Context(), deps.paths, operation, deps.logger, func() error {
+			result, err = service.Start(command.Context(), lifecycleBackend, resolvedCtx.Resolved.TaskID)
+			return err
+		})
 	} else {
 		result, err = service.Close(command.Context(), lifecycleBackend, resolvedCtx.Resolved.TaskID)
 	}

@@ -17,6 +17,8 @@ type reviewWorkflowHelpCase struct {
 var reviewWorkflowHelpCases = []reviewWorkflowHelpCase{
 	{name: "root", args: []string{"--help"}, want: []string{"Orpheus", "Usage:", "--verbose"}},
 	{name: "task list", args: []string{"task", "list", "--help"}, want: []string{"--repo", "repository"}},
+	{name: "task block", args: []string{"task", "block", "--help"}, want: []string{"block <id>", "safely inactive", "review/publication boundaries", "without stopping existing executions", "not a persistent manual hold"}},
+	{name: "task unblock", args: []string{"task", "unblock", "--help"}, want: []string{"unblock <id>", "recorded pre-block lifecycle", "automatic reopening takes precedence", "existing workflow gates still apply"}},
 	{name: "task sync", args: []string{"task", "sync", "--help"}, want: []string{"integration branch", "conflict-free branches unchanged", "configured conflict resolver"}},
 	{
 		name: "task run",

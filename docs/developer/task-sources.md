@@ -105,10 +105,41 @@ commands generally do not exercise automatic parent advancement.
 `CloseTask` refuses nonterminal children and opens native blocked dependents once
 all blockers are terminal. Gig treats cancelled as terminal; Orpheus still requires
 closed prerequisites and direct children. Current commands do not create cancelled
-or native blocked states. Status projection recognizes native `blocked` as Blocked,
+states. `task block` and `task unblock` use native blocked status for tasks and epics.
+Status projection recognizes native `blocked` as Blocked,
 as well as blocking from dependencies and parent gates, without adding lifecycle
 mutations. Other manually introduced native statuses do not gain additional shared
 workflow semantics. These differences are accepted for evaluation, without changing Beads.
+
+## Explicit blocking
+
+The workflow blocking service inspects execution/review history read-only under
+the managed mutation lock, then calls the source's narrow block/unblock capability.
+It accepts open or inactive in-progress work, including attached executions whose
+recorded processes are provably absent. Live or unverifiable executions and
+review/publication boundaries refuse mutation. An unfinished targeted repair may
+retain historical reviews. Epic blocking does not inspect or stop children; the
+immediate-parent gate prevents new starts and projects waiting children as Blocked.
+Initial dispatch rereads the parent's authoritative lifecycle under that same lock,
+before Git setup or source/history writes, so an earlier eligibility snapshot
+cannot authorize a start after epic blocking succeeds. Epic activation (`task start`)
+holds that lock across its source reads, parent/dependency checks, and status write.
+In-progress retries keep their existing policy.
+
+`orpheus.pre_block_status` belongs to task-source metadata, not Orpheus state.
+Beads updates it together with native status and removes it on explicit unblock.
+Gig saves it before the status write alongside `orpheus.gig.block_after_event`, a
+native event-ID cursor. Restoration is valid only for that single subsequent
+blocked transition. Intervening native status transitions invalidate it, including
+automatic reopening followed by another native block in the same timestamp second.
+Missing restoration information defaults to open; an already nonblocked item is
+never transitioned by unblock. No dependencies or Git facts are edited.
+
+Gig blocking can save restoration metadata before a failed status write; retrying
+block records the current lifecycle again. Unblocking writes status before
+removing restoration metadata. A cleanup failure reports that unblocking already
+succeeded; stale metadata cannot restore an ended blocked interval. This preserves
+native automatic reopening rather than implementing a persistent manual hold.
 
 ## Managed writers and partial operations
 

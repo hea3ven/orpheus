@@ -61,6 +61,12 @@ func parentEpicGateCases() []parentEpicGateCase {
 			wantDetail: "is open",
 		},
 		{
+			name:       "blocked epic",
+			parent:     &task.Task{ID: "parent", IssueType: task.IssueTypeEpic, Status: task.StatusBlocked},
+			wantState:  readiness.ParentEpicGateBlocked,
+			wantDetail: "is blocked",
+		},
+		{
 			name:       "closed epic",
 			parent:     &task.Task{ID: "parent", IssueType: task.IssueTypeEpic, Status: task.StatusClosed},
 			wantState:  readiness.ParentEpicGateAttention,

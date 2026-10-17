@@ -71,6 +71,8 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 		newTaskCreateCommand(opts),
 		newTaskStartCommand(opts),
 		newTaskCloseCommand(opts),
+		newTaskBlockCommand(opts, true),
+		newTaskBlockCommand(opts, false),
 		newTaskListCommand(opts),
 		newTaskShowCommand(opts),
 		newTaskStatsCommand(opts),
@@ -1266,8 +1268,15 @@ func startTaskRunDispatch(
 	mainMode bool,
 	repoRootMode bool,
 ) (taskRunDispatch, error) {
+	taskCtx, err := loadTaskContextFromInvocation(deps)
+	if err != nil {
+		return taskRunDispatch{}, err
+	}
 	dispatch := taskRunDispatch{
 		service: workflow.DispatchService{
+			Parents: taskmodel.RelationshipReader{Sources: taskCtx.Sources, Factory: func(source taskmodel.RepositorySource) (taskmodel.Getter, error) {
+				return deps.taskBackendFactory(source)
+			}},
 			Paths:           deps.paths,
 			RunStore:        deps.taskStateStore,
 			Git:             deps.dispatchGit,

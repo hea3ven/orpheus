@@ -30,6 +30,7 @@ func TestIntegrationAdapterContractBeadsRelationshipContracts(t *testing.T) {
 	// Cases own disjoint task IDs and assert only their own graph. Map iteration
 	// varies their order; keep them serial to avoid concurrent database writers.
 	for name, run := range map[string]func(*testing.T, beadsRelationshipFixture){
+		"TaskBackendBlockingPreservesPlansAndRestoresLifecycle":        checkBlockingPreservesPlansAndRestoresLifecycle,
 		"TaskBackendPrioritiesPreserveActivePlans":                     checkPrioritiesPreserveActivePlans,
 		"TaskBackendCrossRepositoryParents":                            checkCrossRepositoryParents,
 		"TaskBackendCrossRepositoryReferences":                         checkCrossRepositoryReferences,

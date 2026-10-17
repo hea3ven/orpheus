@@ -33,7 +33,7 @@ lanes:
         github.com/hea3ven/orpheus/internal/pathutil: 85.474
         github.com/hea3ven/orpheus/internal/publication: 86.244
         github.com/hea3ven/orpheus/internal/pullrequest: 82.615
-        github.com/hea3ven/orpheus/internal/readiness: 71.676
+        github.com/hea3ven/orpheus/internal/readiness: 87.892
         github.com/hea3ven/orpheus/internal/registry: 74.923
         github.com/hea3ven/orpheus/internal/review: 73.624
         github.com/hea3ven/orpheus/internal/revieweval: 48.76
