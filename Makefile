@@ -34,7 +34,7 @@ timing-check:
 	@test -n "$$BASE" || { echo "Supply an explicit base: make timing-check BASE=<ref>" >&2; exit 2; }
 	go run -mod=readonly ./cmd/testcoverage -compare-worktree -compare-base "$$BASE"
 
-# Collect five complete samples with CI's exact coverage toolchain, update only
+# Collect each lane once with CI's exact coverage toolchain, update only
 # stale coverage floors, and leave the .quality.yml diff for review.
 quality-policy-update:
 	go run ./cmd/testcoverage -update-policy

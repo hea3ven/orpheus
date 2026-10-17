@@ -59,7 +59,7 @@ func TestLoadQualityPolicyRejectsMalformedAndUnknownData(t *testing.T) {
 		{name: "invalid floor", contents: strings.Replace(valid, "floor_percent: 49.5", "floor_percent: 101", 1), want: "between 0 and 100"},
 		{name: "invalid timing", contents: strings.Replace(valid, "relative_headroom: 0.5", "relative_headroom: -1", 1), want: "finite and non-negative"},
 		{name: "absolute timing is not policy", contents: strings.Replace(valid, "    coverage:", "    timing:\n      ceiling_seconds: 1\n    coverage:", 1), want: "field timing not found"},
-		{name: "coverage requires five samples", contents: strings.Replace(valid, "coverage_update_samples: 5", "coverage_update_samples: 1", 1), want: "exactly 5"},
+		{name: "coverage sampling is not configurable", contents: "coverage_update_samples: 5\n" + valid, want: "field coverage_update_samples not found"},
 		{name: "second document", contents: valid + "---\nversion: 1\n", want: "multiple YAML documents"},
 	}
 	for _, exclusion := range []string{"''", "'/internal/infra'", "'./internal/infra'", "'internal/../infra'", "'internal/infra/'", "'internal/*'", "'internal/...'", "'internal/infra '", "'internal\\infra'", "'" + modulePath + "/internal/infra'", "'internal/infra'\n  - 'internal/infra'"} {
@@ -161,11 +161,7 @@ func TestQualityPolicyUpdateMovesCrossedBoundsAndReconcilesPackages(t *testing.T
 	report.Lanes["unit"] = lane
 
 	path := filepath.Join(testutil.CanonicalTempDir(t), ".quality.yml")
-	samples := make([]qualityReport, 5)
-	for i := range samples {
-		samples[i] = report
-	}
-	_, changes, err := applyQualityPolicyUpdate(path, policy, samples)
+	_, changes, err := applyQualityPolicyUpdate(path, policy, report)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,6 +178,9 @@ func TestQualityPolicyUpdateMovesCrossedBoundsAndReconcilesPackages(t *testing.T
 				t.Fatalf("%s policy recreated excluded floor for %s", laneName, name)
 			}
 		}
+	}
+	if !reflect.DeepEqual(updated.Timing, policy.Timing) {
+		t.Fatalf("coverage update changed timing tolerances: %#v", updated.Timing)
 	}
 	got := updated.Lanes["unit"]
 	if got.Coverage.FloorPercent != 59.5 {
@@ -207,57 +206,26 @@ func TestQualityPolicyUpdateMovesCrossedBoundsAndReconcilesPackages(t *testing.T
 	}
 }
 
-func TestAggregatePolicySamplesUsesFiveTimingMedians(t *testing.T) {
-	samples := make([]qualityReport, 5)
-	for index, seconds := range []float64{5, 1, 4, 2, 3} {
-		samples[index] = testQualityReport()
-		for _, laneName := range laneNames {
-			lane := samples[index].Lanes[laneName]
-			lane.SelectedTestSeconds = seconds
-			lane.WallSeconds = seconds / 4
-			lane.Timings[0].Seconds = seconds / 2
-			samples[index].Lanes[laneName] = lane
-		}
-	}
-
-	got, err := aggregatePolicySamples(samples)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.MeasurementSamples != 5 {
-		t.Fatalf("measurement samples = %d, want 5", got.MeasurementSamples)
-	}
-	for _, laneName := range laneNames {
-		lane := got.Lanes[laneName]
-		if lane.SelectedTestSeconds != 3 || lane.WallSeconds != 0.75 || lane.Timings[0].Seconds != 1.5 {
-			t.Fatalf("%s timing medians = work %v, wall %v, package %#v", laneName, lane.SelectedTestSeconds, lane.WallSeconds, lane.Timings)
-		}
-	}
-}
-
-func TestInBandSamplesLeaveQualityPolicyFileAndProposedBoundsUnchanged(t *testing.T) {
+func TestInBandCollectionLeavesQualityPolicyFileAndProposedBoundsUnchanged(t *testing.T) {
 	for _, covered := range []int{496, 500} {
 		t.Run(fmt.Sprint(covered), func(t *testing.T) {
 			path := filepath.Join(testutil.CanonicalTempDir(t), ".quality.yml")
 			policy := testLocalQualityPolicy()
-			if err := writeQualityPolicy(path, policy); err != nil {
+			if err := os.WriteFile(path, []byte("# Reviewed coverage floors.\n"+validPolicyYAML(t)), 0o644); err != nil {
 				t.Fatal(err)
 			}
 			before, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			samples := make([]qualityReport, policy.UpdateSamples)
-			for i := range samples {
-				samples[i] = testQualityReport()
-				setLaneCoverage(samples[i], "unit", 1000, covered)
-			}
+			report := testQualityReport()
+			setLaneCoverage(report, "unit", 1000, covered)
 
-			proposed, changes := updatedQualityPolicy(policy, samples[0])
+			proposed, changes := updatedQualityPolicy(policy, report)
 			if !reflect.DeepEqual(proposed, policy) || len(changes) != 0 {
 				t.Fatalf("in-band proposal = %#v, changes %#v", proposed, changes)
 			}
-			if _, changes, err := applyQualityPolicyUpdate(path, policy, samples); err != nil || len(changes) != 0 {
+			if _, changes, err := applyQualityPolicyUpdate(path, policy, report); err != nil || len(changes) != 0 {
 				t.Fatalf("apply in-band update = %#v, %v", changes, err)
 			}
 
@@ -272,7 +240,7 @@ func TestInBandSamplesLeaveQualityPolicyFileAndProposedBoundsUnchanged(t *testin
 	}
 }
 
-func TestFailedSamplesCannotModifyQualityPolicy(t *testing.T) {
+func TestFailedOrIncompleteCollectionCannotModifyQualityPolicy(t *testing.T) {
 	path := filepath.Join(testutil.CanonicalTempDir(t), ".quality.yml")
 	policy := testLocalQualityPolicy()
 	policy.PackageExclusions = []string{"internal/infra"}
@@ -284,63 +252,43 @@ func TestFailedSamplesCannotModifyQualityPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, name := range []string{"incomplete", "excluded test failure", "excluded statement drift", "too few samples"} {
+	for _, name := range []string{"incomplete", "missing lane", "failed lane", "excluded test failure"} {
 		t.Run(name, func(t *testing.T) {
-			samples := make([]qualityReport, policy.UpdateSamples)
-			for index := range samples {
-				samples[index] = testQualityReportWithPackages(
-					packageMetric{Name: "example.test/pkg", coverageMetric: coverageMetric{StatementTotal: 1000, CoveredStatements: 500}},
-					packageMetric{Name: modulePath + "/internal/infra", coverageMetric: coverageMetric{StatementTotal: 100}},
-				)
-			}
-			lane := samples[2].Lanes["unit"]
+			report := testQualityReportWithPackages(
+				packageMetric{Name: "example.test/pkg", coverageMetric: coverageMetric{StatementTotal: 1000, CoveredStatements: 800}},
+				packageMetric{Name: modulePath + "/internal/infra", coverageMetric: coverageMetric{StatementTotal: 100}},
+			)
+			lane := report.Lanes["unit"]
 			switch name {
 			case "incomplete":
-				samples[2].Complete = false
-			case "excluded test failure":
+				report.Complete = false
+			case "failed lane":
 				lane.Passed = false
+			case "excluded test failure":
 				lane.Failure = &laneFailure{Failures: []testFailure{{Package: modulePath + "/internal/infra", Test: "TestBroken"}}}
-			case "excluded statement drift":
-				lane.Packages[1].StatementTotal++
-				lane.Coverage.StatementTotal++
-			case "too few samples":
-				samples = samples[:4]
 			}
-			samples[2].Lanes["unit"] = lane
-			if _, _, err := applyQualityPolicyUpdate(path, policy, samples); err == nil {
-				t.Fatal("invalid samples produced a policy update")
+			report.Lanes["unit"] = lane
+			if name == "missing lane" {
+				delete(report.Lanes, "integration")
+			}
+
+			if failed, _, err := applyQualityPolicyUpdate(path, policy, report); err == nil || failed.Complete {
+				t.Fatalf("invalid collection produced a complete report or policy update: complete %t, err %v", failed.Complete, err)
 			}
 			after, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if !bytes.Equal(after, before) {
-				t.Fatal("invalid samples modified the policy")
+				t.Fatal("invalid collection modified the policy")
 			}
 		})
 	}
 }
 
-func TestAggregatePolicySamplesRejectsFailedAndInconsistentMeasurements(t *testing.T) {
-	failed := []qualityReport{testQualityReport(), testQualityReport()}
-	failed[1].Complete = false
-	if _, err := aggregatePolicySamples(failed); err == nil || !strings.Contains(err.Error(), "incomplete") {
-		t.Fatalf("incomplete sample error = %v", err)
-	}
-
-	inconsistent := []qualityReport{testQualityReport(), testQualityReport()}
-	lane := inconsistent[1].Lanes["integration"]
-	lane.TestCount++
-	inconsistent[1].Lanes["integration"] = lane
-	if _, err := aggregatePolicySamples(inconsistent); err == nil || !strings.Contains(err.Error(), "not comparable") {
-		t.Fatalf("inconsistent sample error = %v", err)
-	}
-}
-
 func testLocalQualityPolicy() localQualityPolicy {
 	policy := localQualityPolicy{
-		Version:       qualityPolicyVersion,
-		UpdateSamples: 5,
+		Version: qualityPolicyVersion,
 		Coverage: localCoverageSettings{
 			Repository: coverageBoundSettings{SignificancePercentagePoints: 0.5, HeadroomPercentagePoints: 0.5},
 			Package:    coverageBoundSettings{SignificancePercentagePoints: 2, HeadroomPercentagePoints: 2},

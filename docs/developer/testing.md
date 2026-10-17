@@ -8,6 +8,7 @@ Orpheus separates tests by behavioral scope, not by speed or whether a test writ
 - `make test` is a compatibility alias for `make test-unit`.
 - `make test-integration` runs the integration lane only.
 - `make quality` runs both lanes once with coverage policy; timing is **not evaluated** locally.
+- `make quality-policy-update` explicitly collects both lanes once and updates materially stale coverage floors; timing remains **not evaluated**.
 - `make lint` runs GolangCI-Lint with package exclusions from `.quality.yml`.
 - `make check` formats code, runs the single-pass quality report, lints, and builds the CLI. Each test lane still runs only once.
 - `make timing-check BASE=<ref>` explicitly compares a working-tree snapshot with a fresh measurement of that exact base on the local host. It is never part of routine checks.
@@ -281,10 +282,10 @@ type checking. Do not maintain a separate `linters.exclusions.paths` list or run
 GolangCI-Lint directly when validating policy exclusions. Formatting, AST safety
 checks, test failures, and package and aggregate timing guards are unchanged.
 
-After changing exclusions, run the explicit five-sample policy update and review
+After changing exclusions, run the explicit single-pass policy update and review
 the diff. It preserves the exclusion list, removes excluded floors, never
 recreates them, and refreshes materially stale aggregate floors using guarded
-coverage. Sample consistency checks still include excluded packages' raw evidence.
+coverage. Excluded packages still run; their failures prevent policy writes.
 
 ## Explicit local timing comparison
 
@@ -353,18 +354,23 @@ Remove retained reports explicitly when no longer needed; later runs never read 
 
 ## Updating coverage policy
 
-`make quality-policy-update` is an explicit five-sample operation. Failed,
-incomplete, or inconsistent samples prevent writes. Within a revision, selected
-test counts (including per-package counts), coverage package statement totals,
-selected-test package structure, and normalized commands must agree. Do not mix
-scheduling modes. The target selects the exact Go version in `.go-version`, also
-used by the pull-request workflow and `make quality`: coverage statement
-accounting can change between toolchains. Change this shared pin deliberately,
-then rerun the five-sample update and review any coverage changes before accepting
-new floors. Only materially stale coverage floors and package structure are
-updated, retaining the headroom configured in `.quality.yml` (2 percentage points
-per lane and 4 per package). Review the `.quality.yml` diff. The updater never
-rewrites timing tolerances or produces absolute timing bounds.
+`make quality-policy-update` runs unit once, then integration once, using the same
+instrumentation and pinned toolchain as `make quality` and CI. Single-pass
+collection is fixed behavior, not configurable. Failed or incomplete collection
+prevents writes and is reported without retries. A failed lane does not prevent
+the other lane from running. Reports retain that collection's coverage and
+diagnostic timings; timing is **not evaluated**, and there are no warm-ups,
+medians, or timing-confirmation runs for policy updates.
+
+Coverage statement accounting can change between toolchains. Change the shared
+`.go-version` pin deliberately, then rerun the single-pass update and review any
+coverage changes before accepting new floors. Only materially stale coverage
+floors and package structure are updated, retaining the headroom configured in
+`.quality.yml` (2 percentage points per lane and 4 per package). No-op updates
+leave policy bytes unchanged. Review the `.quality.yml` diff. The updater never
+rewrites timing tolerances or produces absolute timing bounds. CI and
+`make timing-check` retain their independent timing-regression confirmation
+with warm-ups, one initial pair, and four more alternating pairs when needed.
 
 ## Pull-request quality gate
 

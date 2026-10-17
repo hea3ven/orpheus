@@ -77,7 +77,7 @@ func parseOptions(args []string) (options, error) {
 	flags.StringVar(&opts.policy, "policy", ".quality.yml", "reviewed local quality policy")
 	flags.StringVar(&opts.output, "output", "artifacts/test-coverage/report.json", "machine-readable quality report path")
 	flags.BoolVar(&opts.lint, "lint", false, "lint using package exclusions from the quality policy")
-	flags.BoolVar(&opts.updatePolicy, "update-policy", false, "update materially stale coverage floors from five measurements")
+	flags.BoolVar(&opts.updatePolicy, "update-policy", false, "update materially stale coverage floors from one collection of both lanes")
 	flags.BoolVar(&opts.auditScenarios, "audit-scenarios", false, "profile integration scenarios separately (expensive)")
 	flags.Var(&opts.auditPackages, "audit-package", "package pattern to audit; repeat to select more than one (default ./...)")
 	flags.StringVar(&opts.auditRun, "audit-run", "", "integration test-name regular expression to audit (default ^TestIntegration)")
@@ -150,7 +150,9 @@ func execute(opts options) error {
 	defer func() { _ = os.RemoveAll(work) }()
 
 	if opts.updatePolicy {
-		return executePolicyUpdate(opts, policy, work)
+		return executePolicyUpdate(opts, policy, func() (qualityReport, []error) {
+			return collectQuality(work, nil)
+		})
 	}
 	var audit *scenarioSelection
 	if opts.auditScenarios {
@@ -175,37 +177,31 @@ func execute(opts options) error {
 	return finishReport(opts.output, result, fmt.Errorf("%s against %s", result.Decision.Status, opts.policy))
 }
 
-func executePolicyUpdate(opts options, policy localQualityPolicy, work string) error {
-	samples := make([]qualityReport, 0, policy.UpdateSamples)
-	for index := 0; index < policy.UpdateSamples; index++ {
-		fmt.Printf("Collecting quality policy sample %d/%d.\n", index+1, policy.UpdateSamples)
-		result, laneErrors := collectQuality(filepath.Join(work, fmt.Sprintf("sample-%d", index+1)), nil)
-		result = withCoverageExclusions(result, policy.PackageExclusions)
-		result.MeasurementSamples = index + 1
-		if len(laneErrors) > 0 {
-			result.Decision = decision{Status: statusTestFailed, Findings: errorFindings(laneErrors)}
-			return finishReport(opts.output, result, fmt.Errorf("quality policy sample %d failed: %w", index+1, errors.Join(laneErrors...)))
-		}
-		samples = append(samples, result)
+func executePolicyUpdate(opts options, policy localQualityPolicy, collect func() (qualityReport, []error)) error {
+	fmt.Println("Collecting coverage policy once (unit, then integration).")
+	result, laneErrors := collect()
+	result = withCoverageExclusions(result, policy.PackageExclusions)
+	result.MeasurementSamples = 1
+	result.CoverageDecision = decision{Status: statusNotEvaluated}
+	result.Timing = decision{Status: statusNotEvaluated}
+	if len(laneErrors) > 0 {
+		result.Complete = false
+		result.Execution = decision{Status: statusTestFailed, Findings: errorFindings(laneErrors)}
+		result.Decision = result.Execution
+		return finishReport(opts.output, result, fmt.Errorf("quality policy collection failed: %w", errors.Join(laneErrors...)))
 	}
-	representative, changes, err := applyQualityPolicyUpdate(opts.policy, policy, samples)
+	result, changes, err := applyQualityPolicyUpdate(opts.policy, policy, result)
 	if err != nil {
-		if len(representative.Lanes) == 0 {
-			representative = samples[len(samples)-1]
-			representative.Complete = false
-		}
-		representative.Execution = decision{Status: statusExecutionFailed}
-		representative.Decision = decision{Status: statusExecutionFailed, Findings: []finding{{Kind: "measurement", Message: err.Error()}}}
-		return finishReport(opts.output, representative, fmt.Errorf("update quality policy: %w", err))
+		result.Execution = decision{Status: statusExecutionFailed}
+		result.Decision = decision{Status: statusExecutionFailed, Findings: []finding{{Kind: "measurement", Message: err.Error()}}}
+		return finishReport(opts.output, result, fmt.Errorf("update quality policy: %w", err))
 	}
-	representative.Timing = decision{Status: statusNotEvaluated}
-	representative.Execution = decision{Status: statusPass}
-	representative.CoverageDecision = decision{Status: statusPass, Findings: changes}
-	representative.Decision = representative.CoverageDecision
-	if err := writeQualityReport(opts.output, representative); err != nil {
+	result.Execution = decision{Status: statusPass}
+	result.CoverageDecision = decision{Status: statusPass, Findings: changes}
+	result.Decision = result.CoverageDecision
+	if err := finishReport(opts.output, result, nil); err != nil {
 		return err
 	}
-	printReport(representative, opts.output)
 	if len(changes) == 0 {
 		fmt.Printf("Quality policy is current; left %s unchanged.\n", opts.policy)
 		return nil

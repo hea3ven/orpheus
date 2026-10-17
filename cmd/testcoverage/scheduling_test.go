@@ -56,7 +56,7 @@ func TestQualityPolicyIgnoresCommandWallTimeForDecisionsAndUpdates(t *testing.T)
 	}
 }
 
-func TestPolicySamplesRejectMixedSchedulingButAllowTemporaryProfilePaths(t *testing.T) {
+func TestTimingSamplesRejectMixedSchedulingButAllowTemporaryProfilePaths(t *testing.T) {
 	samples := []qualityReport{testQualityReport(), testQualityReport()}
 	for index := range samples {
 		for _, name := range laneNames {
@@ -65,7 +65,7 @@ func TestPolicySamplesRejectMixedSchedulingButAllowTemporaryProfilePaths(t *test
 			samples[index].Lanes[name] = lane
 		}
 	}
-	if _, err := aggregatePolicySamples(samples); err != nil {
+	if _, err := aggregateTimingSamples(samples); err != nil {
 		t.Fatalf("comparable commands with different temporary profiles: %v", err)
 	}
 
@@ -73,7 +73,7 @@ func TestPolicySamplesRejectMixedSchedulingButAllowTemporaryProfilePaths(t *test
 	lane.Command = append(lane.Command[:len(lane.Command)-1], "-p=1", "./...")
 	samples[1].Lanes["unit"] = lane
 
-	if _, err := aggregatePolicySamples(samples); err == nil || !strings.Contains(err.Error(), "test command changed") {
+	if _, err := aggregateTimingSamples(samples); err == nil || !strings.Contains(err.Error(), "test command changed") {
 		t.Fatalf("mixed scheduling error = %v, want test command changed", err)
 	}
 }
