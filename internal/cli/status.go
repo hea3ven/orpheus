@@ -33,7 +33,7 @@ func newStatusCommand(opts *rootOptions) *cobra.Command {
 			return runStatus(command, opts, full, jsonOutput, noTruncate, sortValue)
 		},
 	}
-	cmd.Flags().BoolVar(&full, "full", false, "show lower-priority groups such as blocked and done/closed")
+	cmd.Flags().BoolVar(&full, "full", false, "include closed items and keep blocked items in epic trees")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "write selected status entries as JSON")
 	cmd.Flags().BoolVar(&noTruncate, "no-truncate", false, "preserve unbounded status table output")
 	cmd.Flags().StringVar(&sortValue, "sort", string(taskViewSortStatus), "order by status, created, or updated")
@@ -358,8 +358,7 @@ func renderStatusWithSort(
 	options statusRenderOptions,
 	sortMode taskViewSort,
 ) error {
-	visibleGroups := visibleStatusGroups(projection.Groups, full)
-	rows := statusDisplayRowsForSort(visibleGroups, sortMode)
+	rows := selectedTaskViewRows(projection, full, sortMode)
 	layout := statusLayoutFor(rows, options)
 	return renderStatusRows(output, rows, layout)
 }
@@ -526,7 +525,37 @@ func statusDisplayTitleForLayout(taskItem taskmodel.Task, layout statusRenderLay
 	return statusDisplayTitle(taskItem)
 }
 
+// selectedTaskViewRows shares selection and ordering between text and JSON views.
+// Inventory callers use full after filtering; only the default action queue
+// separates blocked rows from epic trees. Date sorts retain their usual ordering.
+func selectedTaskViewRows(projection status.Projection, full bool, sortMode taskViewSort) []statusDisplayRow {
+	visibleGroups := visibleStatusGroups(projection.Groups, full)
+	if full || sortMode != taskViewSortStatus {
+		return statusDisplayRowsForSort(visibleGroups, sortMode)
+	}
+
+	activeGroups := make([]status.Group, 0, len(visibleGroups))
+	var blockedGroups []status.Group
+	for _, group := range visibleGroups {
+		if group.ID == status.GroupBlocked {
+			blockedGroups = append(blockedGroups, group)
+		} else {
+			activeGroups = append(activeGroups, group)
+		}
+	}
+	rows := statusDisplayRowsForSort(activeGroups, sortMode)
+	blockedRows := statusDisplayRows(blockedGroups)
+	sortStatusDisplayRows(blockedRows, sortMode)
+	return append(rows, blockedRows...)
+}
+
 func statusDisplayRowsForSort(visibleGroups []status.Group, sortMode taskViewSort) []statusDisplayRow {
+	rows := statusDisplayRows(visibleGroups)
+	sortStatusDisplayRows(rows, sortMode)
+	return statusTreeRows(rows)
+}
+
+func statusDisplayRows(visibleGroups []status.Group) []statusDisplayRow {
 	rows := make([]statusDisplayRow, 0)
 	for statusOrder, group := range visibleGroups {
 		for _, entry := range group.Entries {
@@ -552,8 +581,7 @@ func statusDisplayRowsForSort(visibleGroups []status.Group, sortMode taskViewSor
 			rows = append(rows, row)
 		}
 	}
-	sortStatusDisplayRows(rows, sortMode)
-	return statusTreeRows(rows)
+	return rows
 }
 
 func sortStatusDisplayRows(rows []statusDisplayRow, sortMode taskViewSort) {
@@ -1458,7 +1486,7 @@ func statusGroupHiddenWhenEmpty(group status.Group) bool {
 }
 
 func statusGroupHiddenByDefault(groupID status.GroupID) bool {
-	return groupID == status.GroupBlocked || groupID == status.GroupDoneClosed
+	return groupID == status.GroupDoneClosed
 }
 
 func statusGroupShowsDetail(groupID status.GroupID) bool {

@@ -165,7 +165,7 @@ A status projection for tasks that Orpheus considers eligible for agent executio
 _Avoid_: Backend ready, bd ready, available
 
 **Blocked**:
-A status projection for tasks that are waiting on incomplete task dependencies.
+A status projection for work waiting on task-source blocking, incomplete dependencies, or an inactive parent epic.
 _Avoid_: Needs attention, error, policy failure
 
 **Reviewing**:

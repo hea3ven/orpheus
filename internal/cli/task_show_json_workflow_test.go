@@ -24,6 +24,7 @@ func TestIntegrationWorkflowTaskShowJSONSharesEverySummaryFieldWithTaskList(t *t
 			func(item *taskmodel.Task) { item.Relations.DependentIDs = []string{"op-blocked"} },
 			taskWFCreated("2026-07-01T12:00:00Z"), taskWFUpdated("2026-07-02T12:00:00Z")),
 		taskWFTask("op-blocked", "Blocked", taskmodel.StatusOpen, taskmodel.IssueTypeTask, taskWFBlocks("op-ready")),
+		taskWFTask("op-native-blocked", "Native blocked", taskmodel.StatusBlocked, taskmodel.IssueTypeTask),
 		taskWFTask("op-missing", "Missing dependency", taskmodel.StatusOpen, taskmodel.IssueTypeTask, taskWFBlocks("op-absent")),
 		taskWFTask("op-epic", "Epic", taskmodel.StatusInProgress, taskmodel.IssueTypeEpic),
 		taskWFTask("op-child", "Child", taskmodel.StatusOpen, taskmodel.IssueTypeTask, taskWFParent("op-epic")),
@@ -46,7 +47,7 @@ func TestIntegrationWorkflowTaskShowJSONSharesEverySummaryFieldWithTaskList(t *t
 	require.NoError(t, json.Unmarshal([]byte(closed), &closedSummaries))
 	summaries = append(summaries, closedSummaries...)
 	require.Len(t, summaries, len(items))
-	wantStatuses := map[string]string{"op-ready": "ready", "op-blocked": "blocked", "op-missing": "needs_attention", "op-closed": "closed", "op-pr": "reviewing", "op-working": "working"}
+	wantStatuses := map[string]string{"op-ready": "ready", "op-blocked": "blocked", "op-native-blocked": "blocked", "op-missing": "needs_attention", "op-closed": "closed", "op-pr": "reviewing", "op-working": "working"}
 	for _, summary := range summaries {
 		id := summary["id"].(string)
 		t.Run(id, func(t *testing.T) {
@@ -65,6 +66,9 @@ func TestIntegrationWorkflowTaskShowJSONSharesEverySummaryFieldWithTaskList(t *t
 			if id == "op-epic" {
 				assert.Equal(t, map[string]any{"completed": float64(1), "total": float64(2)}, detail["epic_progress"])
 				assert.Equal(t, map[string]any{"parent": nil, "children": []any{"op-child", "op-closed"}, "dependencies": []any{}, "dependents": []any{}}, detail["relationships"])
+			}
+			if id == "op-native-blocked" {
+				assert.Equal(t, map[string]any{"kind": "none"}, detail["detail"])
 			}
 			if id == "op-blocked" {
 				assert.Equal(t, map[string]any{"parent": nil, "children": []any{}, "dependencies": []any{"op-ready"}, "dependents": []any{}}, detail["relationships"])

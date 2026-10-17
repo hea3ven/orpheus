@@ -132,6 +132,34 @@ func TestStatusDisplayRowsKeepSortedEpicSubtreesContiguous(t *testing.T) {
 	}
 }
 
+func TestDefaultStatusKeepsBlockedEpicsAndTheirBlockedChildrenStandalone(t *testing.T) {
+	projection := taskViewSortProjection(
+		statusGroup(status.GroupWorking,
+			taskViewSortEntry("alpha", "a-active", task.IssueTypeEpic, 1, nil, nil, ""),
+		),
+		statusGroup(status.GroupReadyToRun,
+			taskViewSortEntry("alpha", "a-ready", task.IssueTypeTask, 1, nil, nil, "a-active"),
+			taskViewSortEntry("alpha", "a-standalone", task.IssueTypeTask, 1, nil, nil, ""),
+		),
+		statusGroup(status.GroupBlocked,
+			taskViewSortEntry("alpha", "a-blocked-epic", task.IssueTypeEpic, 0, nil, nil, "a-active"),
+			taskViewSortEntry("alpha", "a-blocked-child", task.IssueTypeTask, 1, nil, nil, "a-blocked-epic"),
+		),
+	)
+
+	rows := selectedTaskViewRows(projection, false, taskViewSortStatus)
+
+	assertTaskViewSortIDs(t, rows, []string{"a-active", "a-ready", "a-standalone", "a-blocked-epic", "a-blocked-child"})
+	for _, row := range rows {
+		if row.GroupID == status.GroupBlocked && (row.TreeDepth != 0 || row.TaskID != row.Entry.Task.ID) {
+			t.Errorf("blocked row = %#v, want standalone row", row)
+		}
+	}
+	if rows[1].TaskID != "└─ a-ready" {
+		t.Errorf("ready child = %q, want active epic tree", rows[1].TaskID)
+	}
+}
+
 func taskViewSortProjection(groups ...status.Group) status.Projection {
 	return status.Projection{Groups: groups}
 }

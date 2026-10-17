@@ -97,9 +97,10 @@ commands generally do not exercise automatic parent advancement.
 `CloseTask` refuses nonterminal children and opens native blocked dependents once
 all blockers are terminal. Gig treats cancelled as terminal; Orpheus still requires
 closed prerequisites and direct children. Current commands do not create cancelled
-or native blocked states. Orpheus projects blocking from dependencies instead.
-Manually introduced native statuses do not gain additional shared workflow
-semantics. These differences are accepted for evaluation, without changing Beads.
+or native blocked states. Status projection recognizes native `blocked` as Blocked,
+as well as blocking from dependencies and parent gates, without adding lifecycle
+mutations. Other manually introduced native statuses do not gain additional shared
+workflow semantics. These differences are accepted for evaluation, without changing Beads.
 
 ## Managed writers and partial operations
 

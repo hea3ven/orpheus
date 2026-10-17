@@ -4,6 +4,17 @@
 `task show <id> --json` returns one `Task`, including closed tasks and epics.
 `Task` extends the summary at the top level, not under a nested property.
 
+`status --json` includes blocked items after active/ready epic trees as standalone
+entries and excludes closed items. `status --full --json` retains epic ordering,
+including blocked children and closed items. `task list --json` keeps inventory
+grouping; date sorts keep their usual chronological ordering instead of placing
+blocked items last. JSON order matches the corresponding text view.
+
+Native task-source `blocked` projects as `status: "blocked"` with
+`detail: {"kind": "none"}` unless a readiness gate provides an explanation or a
+relationship, policy, or operational diagnostic takes precedence. Dependency
+details and epic progress remain available.
+
 ## Format definitions
 
 The Go DTOs and their JSON tags define the fields, types, and omission rules:

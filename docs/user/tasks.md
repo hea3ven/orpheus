@@ -41,11 +41,20 @@ Gig and Beads repositories can share one workspace. Task IDs resolve through
 registered repository prefixes. `task show` includes
 relationships and execution history; showing an epic includes its direct children.
 
-`status` is the action queue. It emphasizes needs-attention, reviewing, working,
-idle, and ready tasks. Add `--full` to include blocked and closed items.
+`status` is the action queue. It groups active and ready work into epic trees,
+then shows blocked items as standalone rows. Closed items remain hidden.
+Add `--full` to retain epic grouping for blocked children and include closed items.
 `task list` is the inventory of all non-closed tasks and epics, including blocked
-items. Both use the same projected status and presentation; that projection is
-not the task source's lifecycle status.
+items, and keeps its epic grouping. Both use the same projected statuses; these
+are not the task source's lifecycle statuses.
+
+`status` defaults to `--sort status`; `task list` defaults to `--sort created`.
+Explicit `--sort created` or `--sort updated` uses newest-first ordering within
+the usual epic grouping, without forcing blocked items to the end.
+
+A native task-source `blocked` status projects as Blocked without adding an
+explanation to DETAIL. Dependency and parent-gate explanations remain visible;
+relationship, policy, and operational problems still require Needs attention.
 
 Useful inventory filters:
 

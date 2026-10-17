@@ -17,13 +17,14 @@ func TestProjectGroupsItemsByLocalM4Policy(t *testing.T) {
 		Repository: task.Repository{ID: "alpha", Name: "Alpha", TaskIDPrefix: "a"},
 		Tasks: []task.Task{
 			{ID: "a-ready", Title: "ready", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
+			{ID: "a-native-blocked", Title: "native blocked", Status: task.StatusBlocked, IssueType: task.IssueTypeTask},
 			{ID: "a-after-closed", Status: task.StatusOpen, IssueType: task.IssueTypeTask, Relations: task.RelationSummary{DependencyIDs: []string{"a-done"}}},
 			{ID: "a-missing-dependency", Status: task.StatusOpen, IssueType: task.IssueTypeTask, Relations: task.RelationSummary{DependencyIDs: []string{"a-missing"}}},
 			{ID: "a-dep", Title: "dependency", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
 			{
 				ID:        "a-blocked",
 				Title:     "blocked",
-				Status:    task.StatusOpen,
+				Status:    task.StatusBlocked,
 				IssueType: task.IssueTypeTask,
 				Relations: task.RelationSummary{DependencyIDs: []string{"a-dep"}},
 			},
@@ -64,7 +65,7 @@ func TestProjectGroupsItemsByLocalM4Policy(t *testing.T) {
 	assertGroupTaskIDs(t, got, status.GroupReadyToRun, []string{"a-ready", "a-after-closed", "a-dep", "a-epic-ready"})
 	assertGroupTaskIDs(t, got, status.GroupWorking, nil)
 	assertGroupTaskIDs(t, got, status.GroupIdle, []string{"a-idle", "a-epic-idle"})
-	assertGroupTaskIDs(t, got, status.GroupBlocked, []string{"a-blocked", "a-epic-blocked"})
+	assertGroupTaskIDs(t, got, status.GroupBlocked, []string{"a-native-blocked", "a-blocked", "a-epic-blocked"})
 	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-review"})
 	assertGroupTaskIDs(t, got, status.GroupDoneClosed, []string{"a-done", "a-epic-done"})
 	assertGroupTaskIDs(t, got, status.GroupNeedsAttention, []string{"a-missing-dependency", "a-unknown"})
@@ -82,13 +83,66 @@ func assertLocalM4PolicyProjectionDetails(t *testing.T, got status.Projection) {
 	if reviewEntry.Detail != "https://example.test/pr/1" {
 		t.Fatalf("review detail = %q, want PR URL", reviewEntry.Detail)
 	}
-	blockedEntry := groupEntries(t, got, status.GroupBlocked)[0]
+	nativeBlockedEntry := projectionEntryByTaskID(t, got, "a-native-blocked")
+	if nativeBlockedEntry.Detail != "" || nativeBlockedEntry.SemanticDetail.Kind != status.DetailNone {
+		t.Fatalf("native blocked detail = %#v / %q, want no explanation", nativeBlockedEntry.SemanticDetail, nativeBlockedEntry.Detail)
+	}
+	blockedEntry := projectionEntryByTaskID(t, got, "a-blocked")
 	if blockedEntry.Detail != "blocked by a-dep" {
 		t.Fatalf("blocked detail = %q, want dependency detail", blockedEntry.Detail)
 	}
 	idleEntry := groupEntries(t, got, status.GroupIdle)[0]
 	if idleEntry.Detail != "no attached run recorded" {
 		t.Fatalf("idle detail = %q, want no-run detail", idleEntry.Detail)
+	}
+}
+
+func TestProjectNativeBlockedPreservesNeedsAttentionDiagnostics(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		relations  task.RelationSummary
+		policy     string
+		failures   []task.RelationshipContextFailure
+		localState status.LocalTaskState
+		wantKind   status.DetailKind
+	}{
+		{name: "missing dependency", relations: task.RelationSummary{DependencyIDs: []string{"a-missing"}}, wantKind: status.DetailMissingDependency},
+		{name: "missing dependency details", relations: task.RelationSummary{BlockedByCount: 1}, wantKind: status.DetailDependencyDetailsMissing},
+		{name: "missing parent", relations: task.RelationSummary{ParentID: "a-missing"}, wantKind: status.DetailParentMissing},
+		{name: "non-epic parent", relations: task.RelationSummary{ParentID: "a-dependency"}, wantKind: status.DetailParentNotEpic},
+		{name: "publication policy", policy: "[{{external_ref}}] {{summary}}", wantKind: status.DetailMissingExternalRef},
+		{
+			name: "unavailable relationship", relations: task.RelationSummary{DependencyIDs: []string{"a-dependency"}},
+			failures: []task.RelationshipContextFailure{{TaskID: "a-blocked", ReferenceID: "a-dependency"}},
+			wantKind: status.DetailRelationshipContextUnavailable,
+		},
+		{
+			name: "unresolved sync conflict",
+			localState: status.LocalTaskState{ActiveSyncConflict: &taskstate.SyncConflictOperation{
+				Phase: taskstate.SyncConflictPhaseUnresolved, Reason: "recovery required",
+			}},
+			wantKind: status.DetailUnknownTaskStatus,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{
+				Repository: task.Repository{ID: "alpha", TitleTemplate: tt.policy},
+				Tasks: []task.Task{
+					{ID: "a-blocked", Status: task.StatusBlocked, IssueType: task.IssueTypeTask, Relations: tt.relations},
+					{ID: "a-dependency", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
+				},
+				RelationshipContextFailures: tt.failures,
+			}}}
+			states := status.LocalTaskStateIndex{status.RunStateKey("alpha", "a-blocked"): tt.localState}
+
+			projection := status.ProjectWithLocalTaskStates(snapshot, states)
+
+			entries := groupEntries(t, projection, status.GroupNeedsAttention)
+			if len(entries) == 0 || entries[0].Task.ID != "a-blocked" || entries[0].SemanticDetail.Kind != tt.wantKind || entries[0].Detail == "" {
+				t.Fatalf("needs-attention entries = %#v, want a-blocked with %s diagnostic", entries, tt.wantKind)
+			}
+			assertGroupTaskIDs(t, projection, status.GroupBlocked, nil)
+		})
 	}
 }
 

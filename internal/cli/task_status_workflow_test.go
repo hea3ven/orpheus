@@ -33,13 +33,14 @@ func TestIntegrationWorkflowStatusGroupsLocalTaskSnapshots(t *testing.T) {
 		"ar-succeeded", "Succeeded attached agent", "agent exited without completion",
 		"Reviewing", "ar-review", "Review task", "https://example.test/pr/3",
 		"ar-missing", "Needs inspection", "missing dependency ar-bug",
+		"Blocked", "ar-blocked", "blocked by ar-dep",
 	} {
 		is.Contains(stdout, want)
 	}
-	for _, hidden := range []string{"Blocked", "ar-blocked", "Done / closed", "ar-closed"} {
+	for _, hidden := range []string{"Done / closed", "ar-closed"} {
 		is.NotContains(stdout, hidden)
 	}
-	assertStatusGroupOrder(t, stdout, []string{"Needs attention", "Reviewing", "Working", "Idle", "Ready"})
+	assertStatusGroupOrder(t, stdout, []string{"Needs attention", "Reviewing", "Working", "Idle", "Ready", "Blocked"})
 
 	fullStdout, fullStderr := fixture.mustExecute("status", "--full")
 	is.Empty(fullStderr)
@@ -53,14 +54,16 @@ func TestIntegrationWorkflowStatusGroupsLocalTaskSnapshots(t *testing.T) {
 	for _, entry := range jsonEntries {
 		jsonEntriesByID[entry.ID] = entry
 	}
-	for _, taskID := range []string{"ar-ready", "ar-dep", "ar-idle", "ar-running", "ar-failed", "ar-succeeded", "ar-review", "ar-missing"} {
+	for _, taskID := range []string{"ar-ready", "ar-dep", "ar-idle", "ar-running", "ar-failed", "ar-succeeded", "ar-review", "ar-missing", "ar-blocked"} {
 		_, ok := jsonEntriesByID[taskID]
 		is.True(ok, "JSON output must contain visible task %s", taskID)
 	}
-	for _, hiddenID := range []string{"ar-blocked", "ar-closed"} {
+	for _, hiddenID := range []string{"ar-closed"} {
 		_, ok := jsonEntriesByID[hiddenID]
 		is.False(ok, "JSON output must hide default status task %s", hiddenID)
 	}
+	is.Equal("blocked", jsonEntriesByID["ar-blocked"].Status)
+	is.Equal("blocked_dependency", jsonEntriesByID["ar-blocked"].Detail.Kind)
 	is.Equal("ready", jsonEntriesByID["ar-ready"].Status)
 	is.Equal("task", jsonEntriesByID["ar-ready"].Kind)
 	is.Empty(jsonEntriesByID["ar-ready"].EpicProgress)
@@ -220,7 +223,7 @@ func TestIntegrationWorkflowStatusAndTaskListRenderEquivalentRowsIdentically(t *
 
 	require.Empty(t, statusStderr)
 	require.Empty(t, listStderr)
-	for _, taskID := range []string{"ar-ready", "ar-review", "ar-running"} {
+	for _, taskID := range []string{"ar-ready", "ar-review", "ar-running", "ar-blocked"} {
 		statusRow, listRow := tableRowForTask(statusOutput, taskID), tableRowForTask(listOutput, taskID)
 		require.NotEmpty(t, statusRow, "status row %s", taskID)
 		require.NotEmpty(t, listRow, "task list row %s", taskID)
@@ -229,12 +232,13 @@ func TestIntegrationWorkflowStatusAndTaskListRenderEquivalentRowsIdentically(t *
 			"ar-ready":   {"Ready", "Ready task"},
 			"ar-review":  {"Reviewing", "https://example.test/pr/3"},
 			"ar-running": {"Working", "run attempt 1 is running"},
+			"ar-blocked": {"Blocked", "blocked by ar-dep"},
 		}[taskID] {
 			assert.Contains(t, statusRow, want)
 			assert.Contains(t, listRow, want)
 		}
 	}
-	assert.NotContains(t, statusOutput, "ar-blocked")
+	assert.Contains(t, statusOutput, "ar-blocked")
 	assert.Contains(t, listOutput, "ar-blocked")
 	assert.NotContains(t, listOutput, "ar-closed")
 }
@@ -259,7 +263,9 @@ func TestIntegrationWorkflowStatusRendersEpicChildrenAsIntegratedTreeRows(t *tes
 		taskWFTask("ar-ready", "Ready child", taskmodel.StatusOpen, taskmodel.IssueTypeTask, taskWFPriority(2), taskWFParent("ar-epic")),
 		taskWFTask("ar-nested", "Nested epic", taskmodel.StatusInProgress, taskmodel.IssueTypeEpic, taskWFPriority(2), taskWFParent("ar-epic")),
 		taskWFTask("ar-nested-child", "Nested child", taskmodel.StatusOpen, taskmodel.IssueTypeTask, taskWFPriority(3), taskWFParent("ar-nested")),
-		taskWFTask("ar-blocked", "Hidden blocked child", taskmodel.StatusOpen, taskmodel.IssueTypeTask, taskWFPriority(2), taskWFParent("ar-epic"), taskWFBlocks("ar-ready")),
+		taskWFTask("ar-blocked", "Blocked child", taskmodel.StatusOpen, taskmodel.IssueTypeTask, taskWFPriority(2), taskWFParent("ar-epic"), taskWFBlocks("ar-ready")),
+		taskWFTask("ar-native", "Native blocked child", taskmodel.StatusBlocked, taskmodel.IssueTypeTask, taskWFPriority(0), taskWFParent("ar-nested")),
+		taskWFTask("ar-standalone", "Standalone ready task", taskmodel.StatusOpen, taskmodel.IssueTypeTask, taskWFPriority(3)),
 		taskWFTask("ar-done", "Hidden done child", taskmodel.StatusClosed, taskmodel.IssueTypeTask, taskWFPriority(2), taskWFParent("ar-epic")),
 	}}})
 
@@ -271,29 +277,47 @@ func TestIntegrationWorkflowStatusRendersEpicChildrenAsIntegratedTreeRows(t *tes
 	is.Contains(stdout, "ar-epic")
 	is.Contains(stdout, "1/4 done")
 	is.Contains(stdout, "└─ ar-ready")
-	is.NotContains(stdout, "ar-blocked")
+	is.Contains(stdout, "ar-blocked")
+	is.Contains(stdout, "ar-native")
+	is.NotContains(stdout, "─ ar-blocked")
+	is.NotContains(stdout, "─ ar-native")
 	is.NotContains(stdout, "ar-done")
-	assertStatusGroupOrder(t, stdout, []string{"ar-epic", "├─ ar-nested", "│ └─ ar-nested-child", "└─ ar-ready"})
+	is.Contains(tableRowForTask(stdout, "ar-blocked"), "blocked by ar-ready")
+	is.Equal([]string{"ar-native", "Blocked", "0", "Native", "blocked", "child", "Alpha", "Repo"}, strings.Fields(tableRowForTask(stdout, "ar-native")))
+	assertStatusGroupOrder(t, stdout, []string{"ar-epic", "├─ ar-nested", "│ └─ ar-nested-child", "└─ ar-ready", "ar-standalone", "ar-native", "ar-blocked"})
 
 	fullStdout, fullStderr := fixture.mustExecute("status", "--full")
 	is.Empty(fullStderr)
 	is.Contains(fullStdout, "├─ ar-blocked")
 	is.Contains(fullStdout, "└─ ar-done")
-	assertStatusGroupOrder(t, fullStdout, []string{"ar-epic", "├─ ar-nested", "│ └─ ar-nested-child", "├─ ar-ready", "├─ ar-blocked", "└─ ar-done"})
+	assertStatusGroupOrder(t, fullStdout, []string{"ar-epic", "├─ ar-nested", "│ ├─ ar-nested-child", "│ └─ ar-native", "├─ ar-ready", "├─ ar-blocked", "└─ ar-done", "ar-standalone"})
 	assertTaskListRendersActiveEpicTree(t, fixture)
-	jsonOut, jsonErr := fixture.mustExecute("task", "list", "--sort", "status", "--json")
-	is.Empty(jsonErr)
-	var entries []taskViewJSONTaskEntry
-	require.NoError(t, json.Unmarshal([]byte(jsonOut), &entries))
-	var ids []string
-	for _, entry := range entries {
-		is.Equal("task", entry.Kind)
-		ids = append(ids, entry.ID)
+	for _, tt := range []struct {
+		args []string
+		want []string
+	}{
+		{args: []string{"status", "--json"}, want: []string{"ar-epic", "ar-nested", "ar-nested-child", "ar-ready", "ar-standalone", "ar-native", "ar-blocked"}},
+		{args: []string{"status", "--full", "--json"}, want: []string{"ar-epic", "ar-nested", "ar-nested-child", "ar-native", "ar-ready", "ar-blocked", "ar-done", "ar-standalone"}},
+		{args: []string{"task", "list", "--sort", "status", "--json"}, want: []string{"ar-epic", "ar-nested", "ar-nested-child", "ar-native", "ar-ready", "ar-blocked", "ar-standalone"}},
+	} {
+		jsonOut, jsonErr := fixture.mustExecute(tt.args...)
+		is.Empty(jsonErr)
+		var entries []taskViewJSONTaskEntry
+		require.NoError(t, json.Unmarshal([]byte(jsonOut), &entries))
+		var ids []string
+		for _, entry := range entries {
+			is.Equal("task", entry.Kind)
+			ids = append(ids, entry.ID)
+			if entry.ID == "ar-native" {
+				is.Equal("blocked", entry.Status)
+				is.Equal(taskViewJSONDetail{Kind: "none"}, entry.Detail)
+			}
+		}
+		is.Equal(tt.want, ids, "%v", tt.args)
+		require.NotNil(t, entries[0].EpicProgress)
+		is.Equal(1, entries[0].EpicProgress.Completed)
+		is.Equal(4, entries[0].EpicProgress.Total)
 	}
-	is.Equal([]string{"ar-epic", "ar-nested", "ar-nested-child", "ar-ready", "ar-blocked"}, ids)
-	require.NotNil(t, entries[0].EpicProgress)
-	is.Equal(1, entries[0].EpicProgress.Completed)
-	is.Equal(4, entries[0].EpicProgress.Total)
 }
 
 func assertTaskListRendersActiveEpicTree(t *testing.T, fixture *workflowFixture) {
@@ -367,14 +391,15 @@ func TestIntegrationWorkflowTaskViewsApplySharedSortModesAcrossRepositories(t *t
 		}},
 		repos["alpha"]: {tasks: []taskmodel.Task{
 			taskWFTask("a-ready-p2", "Lowest priority", taskmodel.StatusOpen, taskmodel.IssueTypeTask, taskWFPriority(2), taskWFCreated("2026-01-01T00:00:00Z"), taskWFUpdated("2026-01-03T00:00:00Z")),
+			taskWFTask("a-blocked", "Newest blocked task", taskmodel.StatusBlocked, taskmodel.IssueTypeTask, taskWFPriority(0), taskWFCreated("2026-01-06T00:00:00Z"), taskWFUpdated("2026-01-04T00:00:00Z")),
 			taskWFTask("a-ready-p0-old", "Older highest priority", taskmodel.StatusOpen, taskmodel.IssueTypeTask, taskWFPriority(0), taskWFCreated("2025-12-31T00:00:00Z"), taskWFUpdated("2025-12-31T00:00:00Z")),
 			taskWFTask("a-ready-p0", "Highest priority", taskmodel.StatusOpen, taskmodel.IssueTypeTask, taskWFPriority(0), taskWFCreated("2026-01-02T00:00:00Z"), taskWFUpdated("2026-01-02T00:00:00Z")),
 		}},
 	})
 
-	statusOrder := []string{"b-review", "a-ready-p0", "a-ready-p0-old", "b-ready", "a-ready-p2"}
-	createdOrder := []string{"b-review", "b-ready", "a-ready-p0", "a-ready-p2", "a-ready-p0-old"}
-	updatedOrder := []string{"b-ready", "a-ready-p2", "a-ready-p0", "b-review", "a-ready-p0-old"}
+	statusOrder := []string{"b-review", "a-ready-p0", "a-ready-p0-old", "b-ready", "a-ready-p2", "a-blocked"}
+	createdOrder := []string{"a-blocked", "b-review", "b-ready", "a-ready-p0", "a-ready-p2", "a-ready-p0-old"}
+	updatedOrder := []string{"b-ready", "a-blocked", "a-ready-p2", "a-ready-p0", "b-review", "a-ready-p0-old"}
 	for _, test := range []struct {
 		name string
 		args []string
