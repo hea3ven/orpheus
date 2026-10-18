@@ -37,7 +37,7 @@ A repository-scoped feature or goal large enough to be broken into multiple task
 _Avoid_: Project, initiative, plan
 
 **Task**:
-A repository-scoped unit of work that Orpheus can dispatch to an agent and track as one coherent reviewable change.
+A repository-scoped unit of work with one coherent outcome, such as a code change, research result, or implementation plan.
 _Avoid_: Issue, ticket, job
 
 **Dependency**:
@@ -60,15 +60,85 @@ _Avoid_: Internal task store, issue DB
 A supported task source for Orpheus; it owns task lifecycle facts while Orpheus owns execution and review history.
 _Avoid_: Execution store, review store
 
+### Workflow
+
+**Workflow Configuration**:
+The shared phases, steps, and progression rules that govern workflows for tasks.
+_Avoid_: Workflow, work cycle, workflow definition, agent profile, review pipeline
+
+**Workflow**:
+One instance of a workflow configuration applied to a task, with its own progress and history. Pauses and repairs continue that workflow; a deliberate reset creates another.
+_Avoid_: Work cycle, workflow run, agent execution, session
+
+**Workflow Reset**:
+A confirmed restart of task work from a chosen baseline that discards local checkout changes and begins a new workflow. Earlier workflow records remain history.
+_Avoid_: Repair, resume, step retry
+
+**Phase**:
+A part of a task workflow with a distinct purpose and an explicit condition for finishing, such as implementation, review, or publication.
+_Avoid_: Status, command, step
+
+**Phase Attempt**:
+One occurrence of a phase within a workflow. Returning to review after a repair begins another review phase attempt.
+_Avoid_: Run, workflow, step attempt
+
+**Workflow Step**:
+A defined unit of work within a phase, performed by Orpheus, an agent, an external tool, or the operator.
+_Avoid_: Phase, command, agent execution
+
+**Step Attempt**:
+One effort to perform a workflow step. Retrying a step creates another attempt without discarding the earlier result.
+_Avoid_: Run, phase attempt, session
+
+**Work Artifact**:
+A retained result of task work, such as a research report, implementation plan, or agent completion.
+_Avoid_: Log, agent execution, task
+
+**Revision**:
+An identified, retained version of task output, such as code, a plan, or research, with its producing effort identified. Review and publication refer to that version; recording it implies neither review approval nor publication consent.
+_Avoid_: Candidate, work checkpoint, latest changes, work directory, completion summary
+
+**Checkpoint Branch**:
+The local branch retaining a workflow's code revisions, independent of the chosen work directory and distinct from the task branch selected for publication.
+_Avoid_: Task branch, integration destination, publication branch
+
+**Task Baseline**:
+The recorded starting version against which the cumulative changes of a workflow are measured. It is distinct from the branch that will receive published changes.
+_Avoid_: Integration destination, previous revision, review delta
+
+**Review Delta**:
+The changes between a particular earlier revision and the current revision, presented to focus review. Reviewing that delta does not by itself establish that the entire task satisfies review requirements.
+_Avoid_: Task diff, review approval, latest changes
+
+**Review Scope**:
+The task requirements and comparison context under which a revision is evaluated, including the relevant baseline and integration destination for code changes.
+_Avoid_: Revision, task description, branch name
+
+**Workflow Interaction**:
+A point in a task workflow that requires an operator decision before work can continue.
+_Avoid_: Prompt, manual phase, terminal input
+
+**Publication Plan**:
+The chosen revision, publication content, integration flow, and integration destination for delivering reviewed work.
+_Avoid_: Review approval, finalization, agent completion
+
+**Publication Consent**:
+The operator's decision authorizing publication of a reviewed revision according to a particular publication plan.
+_Avoid_: Review approval, agent completion, task completion
+
+**Publication Commit**:
+The commit selected to deliver reviewed task changes through the publication plan. It may present the changes developed across several revisions as one commit while preserving the reviewed output.
+_Avoid_: Revision, agent completion, review approval
+
+**External Review**:
+The evaluation of published task work through external feedback and responses, including requests for further revisions before acceptance.
+_Avoid_: Integration, merge, task review, publication
+
 ### Execution and Review
 
-**Run**:
-An agent execution focused on implementing code changes for a task.
-_Avoid_: Session, job, invocation, review step
-
 **Agent Execution**:
-One recorded execution of an agent for usage and timing statistics, covering implementation runs, review-agent steps, and sync-conflict resolution.
-_Avoid_: Provider execution, harness run
+One execution of an agent for a particular purpose, such as implementation, review, or conflict resolution, with its own outcome and usage record.
+_Avoid_: Run, implementation run, provider execution, harness run
 
 **Session**:
 A harness-provided identity or log stream used to correlate an agent execution with usage data.
@@ -103,7 +173,7 @@ The elapsed time from the first Orpheus dispatch for a task to finalization or t
 _Avoid_: Full task time, active agent working time
 
 **Agent Context**:
-The task-source-agnostic task and repository guidance that Orpheus gives an agent for the current run.
+The task-source-agnostic task and repository guidance that Orpheus gives an agent for the current execution.
 _Avoid_: Prompt, task dump, Beads context
 
 **Agent Completion**:
@@ -111,7 +181,7 @@ The handoff of finished implementation work from an agent to task review. It is 
 _Avoid_: Completion handshake, task completion, done state, merge readiness
 
 **Work Directory**:
-The checkout assigned to a task for implementation, either the registered repository root or a dedicated Orpheus worktree.
+The checkout assigned to task work, either the registered repository root or a dedicated Orpheus worktree. Its location is independent of the branch and workflow used for that work.
 _Avoid_: Workspace, folder, working copy
 
 **Worktree**:
@@ -131,11 +201,11 @@ The branch that receives reviewed task work, either as the pull-request base or 
 _Avoid_: Work directory, task branch, integration flow
 
 **Task Review**:
-The configured review gate after agent completion and before publication or finalization, using automated steps, manual decisions, or both. A passed task review authorizes finalization or publication.
+The evaluation of a revision through automated steps, manual decisions, or both. Passing task review satisfies the review prerequisite for publishing that revision.
 _Avoid_: Local review, PR review, code review, task approval, approval
 
 **Review Finding**:
-An issue found during task review that may block publication or finalization, or require follow-up work before task review can pass.
+An issue identified during task review or external review, with its origin and disposition retained. It may require changes to task output or a response before work can proceed.
 _Avoid_: PR comment, task, bug
 
 **Publication**:
@@ -143,7 +213,7 @@ The delivery of reviewed task work beyond the task review boundary to the remote
 _Avoid_: Finalization, sync, release, deploy
 
 **Finalization**:
-The Orpheus workflow step that records the consequences of reviewed work after publication, such as task-source closure or local audit facts.
+The recording of task closure and other consequences after the task workflow's required publication and acceptance of its output are established.
 _Avoid_: Publication, sync, completion
 
 **Pull Request**:
@@ -157,7 +227,7 @@ _Avoid_: Publication, polling, PR creation
 ### Status and Policy
 
 **Status Projection**:
-Orpheus' local operator-facing classification of tasks using task-source facts, run facts, review state, and policy state.
+Orpheus' local operator-facing classification of tasks using task-source facts, agent execution facts, review state, and policy state.
 _Avoid_: Task status, task lifecycle, dashboard
 
 **Ready to Run**:
