@@ -239,7 +239,19 @@ func TestIntegrationWorkflowPublicationRetriesPRCreationAndMetadataWithoutRepubl
 func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing.T) {
 	for _, repoRoot := range []bool{false, true} {
 		t.Run(fmt.Sprintf("repo_root_%t", repoRoot), func(t *testing.T) {
-			f := newFeatureFinalizationFixture(t, "op-merge", repoRoot)
+			f := newFinalizationFixture(t, "op-merge")
+			f.backend.tasks["op-merge"] = anOpenTask("op-merge")
+			f.withCompletingAgent(aCompletion())
+			args := []string{"task", "run", "op-merge"}
+			if repoRoot {
+				args = append(args, "--repo-root")
+			}
+			f.run("", args...)
+			f.passedReview("op-merge")
+			prepared, preparedTask := f.loadFinalTask("op-merge")
+			assert.Equal(t, "initial-commit", prepared.BaselineCommit)
+			assert.Equal(t, "orpheus/op-merge", preparedTask.OrpheusMetadata().Branch)
+			assert.Contains(t, f.agent.contexts[0], "- Task baseline: initial-commit")
 			_, dir := f.expectedTarget("op-merge")
 			if repoRoot {
 				dir = taskWorkflowRepoRoot

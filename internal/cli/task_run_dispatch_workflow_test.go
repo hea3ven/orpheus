@@ -68,35 +68,90 @@ func TestIntegrationWorkflowTaskRunMissingExternalReferenceBlocksSetup(t *testin
 	}
 }
 
-func TestIntegrationWorkflowTaskRunRepoRootDispatchLocksTargetAndRejectsModeOverrideOnRetry(t *testing.T) {
-	fixture := newTaskWorkflowFixture(t, anOpenTask("op-root"))
-	fixture.withAgentExitingWithoutCompletion(1)
+func TestIntegrationWorkflowTaskRunDispatchLocksTargetAndBaselineAcrossRetries(t *testing.T) {
+	for _, mode := range []string{"repo-root", "worktree"} {
+		t.Run(mode, func(t *testing.T) {
+			fixture := newTaskWorkflowFixture(t, anOpenTask("op-root"))
+			fixture.withAgentExitingWithoutCompletion(1)
+			fixture.agent.outcomes[0].captureContext = true
+			branch, dir := fixture.expectedTarget("op-root")
+			args := []string{"task", "run", "op-root"}
+			if mode == "repo-root" {
+				dir = taskWorkflowRepoRoot
+				args = append(args, "--repo-root")
+			}
 
-	_, stderr, err := fixture.execute("task", "run", "--repo-root", "op-root")
-	require.NoError(t, err, "stderr: %s", stderr)
-	before, item := fixture.loadFinalTask("op-root")
-	_, _, retryErr := fixture.execute("task", "run", "--repo-root", "op-root")
+			_, stderr, err := fixture.execute(args...)
+			require.NoError(t, err, "stderr: %s", stderr)
+			before, item := fixture.loadFinalTask("op-root")
+			_, _, retryErr := fixture.execute("task", "run", "--repo-root", "op-root")
 
-	assert.ErrorContains(t, retryErr, "already has target branch")
-	assert.ErrorContains(t, retryErr, "retry without --repo-root")
-	final, finalTask := fixture.loadFinalTask("op-root")
-	assert.Equal(t, before, final)
-	assert.Equal(t, item, finalTask)
-	assertPersistedTaskTarget(t, final, finalTask, "main", taskWorkflowRepoRoot)
-	require.Len(t, final.Runs, 1)
-	assert.Equal(t, taskstate.RunStatusSucceeded, final.Runs[0].Status)
-	assertEventTypes(t, final.Events, taskstate.EventWorktreeReused, taskstate.EventRunStarted, taskstate.EventRunFinished)
-	require.Len(t, fixture.git.repoRootSetups, 1)
-	assert.Equal(t, "main", fixture.git.repoRootSetups[0].DefaultBranch)
-	assert.Equal(t, taskWorkflowRepoRoot, fixture.git.repoRootSetups[0].RepoPath)
-	assert.Empty(t, fixture.git.worktreeSetups)
-	launch := fixture.onlyAgentLaunch()
-	assert.Equal(t, taskWorkflowRepoRoot, launch.dir)
-	assert.Equal(t, "main", launch.environment["ORPHEUS_BRANCH"])
-	assert.Equal(t, taskWorkflowRepoRoot, launch.environment["ORPHEUS_WORKTREE"])
-	assert.Equal(t, "alpha", launch.environment["ORPHEUS_REPO_ID"])
-	assert.Equal(t, "op-root", launch.environment["ORPHEUS_TASK_ID"])
-	assertBootstrapPromptOmitsTaskDetails(t, launch.environment["ORPHEUS_AGENT_PROMPT"], "Task op-root")
+			assert.ErrorContains(t, retryErr, "already has target branch")
+			assert.ErrorContains(t, retryErr, "retry without --repo-root")
+			final, finalTask := fixture.loadFinalTask("op-root")
+			assert.Equal(t, before, final)
+			assert.Equal(t, item, finalTask)
+			assertPersistedTaskTarget(t, final, finalTask, branch, dir)
+			require.Len(t, final.Runs, 1)
+			assert.Equal(t, taskstate.RunStatusSucceeded, final.Runs[0].Status)
+			if mode == "repo-root" {
+				assertEventTypes(t, final.Events, taskstate.EventTaskBranchCreated, taskstate.EventRunStarted, taskstate.EventRunFinished)
+				require.Len(t, fixture.git.repoRootSetups, 1)
+				assert.Equal(t, "main", fixture.git.repoRootSetups[0].DefaultBranch)
+				assert.Equal(t, dir, fixture.git.repoRootSetups[0].RepoPath)
+				assert.Empty(t, fixture.git.worktreeSetups)
+			} else {
+				assertEventTypes(t, final.Events, taskstate.EventWorktreeCreated, taskstate.EventRunStarted, taskstate.EventRunFinished)
+				require.Len(t, fixture.git.worktreeSetups, 1)
+				assert.Equal(t, branch, fixture.git.worktreeSetups[0].Branch)
+				assert.Empty(t, fixture.git.repoRootSetups)
+			}
+			launch := fixture.onlyAgentLaunch()
+			assert.Equal(t, dir, launch.dir)
+			assert.Equal(t, branch, launch.environment["ORPHEUS_BRANCH"])
+			assert.Equal(t, dir, launch.environment["ORPHEUS_WORKTREE"])
+			assert.Equal(t, "alpha", launch.environment["ORPHEUS_REPO_ID"])
+			assert.Equal(t, "op-root", launch.environment["ORPHEUS_TASK_ID"])
+			assertBootstrapPromptOmitsTaskDetails(t, launch.environment["ORPHEUS_AGENT_PROMPT"], "Task op-root")
+			assert.Equal(t, "initial-commit", final.BaselineCommit)
+			require.Len(t, fixture.agent.contexts, 1)
+			assert.Contains(t, fixture.agent.contexts[0], "- Task baseline: initial-commit")
+			inspection, _, showErr := fixture.execute("task", "show", "op-root")
+			require.NoError(t, showErr)
+			assert.Contains(t, inspection, "initial-commit")
+			assert.Contains(t, inspection, branch)
+
+			fixture.withAgentExitingWithoutCompletion(1)
+			fixture.git.startingCommit = "later-head"
+			repo := taskWorkflowRepository()
+			repo.BranchTemplate = "changed/{{task_title}}"
+			fixture.withRegisteredRepos(repo)
+			_, stderr, err = fixture.execute("task", "run", "op-root")
+			require.NoError(t, err, "stderr: %s", stderr)
+			retried, retriedTask := fixture.loadFinalTask("op-root")
+			assertPersistedTaskTarget(t, retried, retriedTask, branch, dir)
+			assert.Equal(t, "initial-commit", retried.BaselineCommit, "a later head must not replace the task baseline")
+			assert.Equal(t, before.Runs[0], retried.Runs[0])
+			assert.Len(t, retried.Runs, 2)
+
+			retried.BaselineCommit = ""
+			require.NoError(t, fixture.paths.WriteDataYAML("repos/alpha/tasks/op-root.yaml", retried))
+			legacyState, legacyTask := fixture.loadFinalTask("op-root")
+			setups, launches, mutations := len(fixture.git.setups), len(fixture.agent.launches), len(fixture.backend.markCalls)
+
+			_, _, err = fixture.execute("task", "run", "op-root")
+
+			require.ErrorContains(t, err, "prior run history but no recorded task baseline")
+			assert.ErrorContains(t, err, "preserve the checkout")
+			assert.ErrorContains(t, err, "explicitly repair the baseline")
+			preserved, preservedTask := fixture.loadFinalTask("op-root")
+			assert.Equal(t, legacyState, preserved, "refusal must not invent a baseline or append run history")
+			assert.Equal(t, legacyTask, preservedTask)
+			assert.Len(t, fixture.git.setups, setups, "baseline safety must be checked before Git preparation")
+			assert.Len(t, fixture.agent.launches, launches)
+			assert.Len(t, fixture.backend.markCalls, mutations)
+		})
+	}
 }
 
 func TestIntegrationWorkflowTaskRunBackendOwnedTargetWithoutLocalHistory(t *testing.T) {
@@ -106,7 +161,7 @@ func TestIntegrationWorkflowTaskRunBackendOwnedTargetWithoutLocalHistory(t *test
 			branch, dir := fixture.expectedTarget("op-owned")
 			args := []string{"task", "run", "op-owned"}
 			if mode == "repo-root" {
-				branch, dir = "main", taskWorkflowRepoRoot
+				branch, dir = "orpheus/op-owned", taskWorkflowRepoRoot
 				args = append(args, "--repo-root")
 			}
 			fixture.withBackendTarget("op-owned", branch, dir)
@@ -138,6 +193,42 @@ func TestIntegrationWorkflowTaskRunBackendRepoRootMetadataRequiresExplicitMode(t
 	assert.Empty(t, stderr)
 	final, _ := fixture.loadFinalTask("op-root")
 	fixture.assertDispatchDidNotStart(final)
+
+	_, _, err = fixture.execute("task", "run", "--repo-root", "op-root")
+	require.ErrorContains(t, err, "recorded repository-root context is on the default branch")
+	preserved, preservedTask := fixture.loadFinalTask("op-root")
+	assert.Equal(t, final, preserved)
+	assert.Equal(t, "main", preservedTask.OrpheusMetadata().Branch)
+	fixture.assertDispatchDidNotStart(preserved)
+}
+
+func TestIntegrationWorkflowTaskRunOtherOwnerRefusesConflictingBranchOrDirectory(t *testing.T) {
+	for _, mode := range []string{"repo-root", "worktree"} {
+		t.Run(mode, func(t *testing.T) {
+			fixture := newTaskWorkflowFixture(t, anInProgressTask("op-owner"), anOpenTask("op-next"))
+			repo := taskWorkflowRepository()
+			repo.BranchTemplate = "feature/shared"
+			fixture.withRegisteredRepos(repo)
+			ownerDir := taskWorkflowRepoRoot
+			if mode == "worktree" {
+				ownerDir = "/fixture/owner-worktree"
+			}
+			fixture.withBackendTarget("op-owner", "feature/shared", ownerDir)
+			before, beforeTask := fixture.loadFinalTask("op-next")
+			args := []string{"task", "run", "op-next"}
+			if mode == "repo-root" {
+				args = append(args, "--repo-root")
+			}
+
+			_, _, err := fixture.execute(args...)
+
+			require.ErrorContains(t, err, "already recorded for task op-owner")
+			final, item := fixture.loadFinalTask("op-next")
+			assert.Equal(t, before, final)
+			assert.Equal(t, beforeTask, item)
+			fixture.assertDispatchDidNotStart(final)
+		})
+	}
 }
 
 func TestIntegrationWorkflowTaskRunOtherRepoRootOwnerDoesNotBlockWorktreeDispatch(t *testing.T) {

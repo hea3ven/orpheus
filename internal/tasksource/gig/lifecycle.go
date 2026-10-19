@@ -70,24 +70,6 @@ func start(ctx context.Context, store *sdk.Store, stored *storedTask) error {
 	return store.UpdateStatus(stored.item.ID, sdk.StatusInProgress, "orpheus")
 }
 
-func (b Backend) UpdateGitFacts(ctx context.Context, id, branch, worktree string) error {
-	branch, worktree = strings.TrimSpace(branch), strings.TrimSpace(worktree)
-	if branch == "" || worktree == "" {
-		return errors.New("branch and worktree are required")
-	}
-	return b.mutate(ctx, id, func(store *sdk.Store, stored *storedTask) error {
-		item := &stored.item
-		if item.Status != task.StatusInProgress {
-			return conflict(id, "task is not in progress")
-		}
-		if strings.TrimSpace(item.OrpheusMetadata().PRURL) != "" {
-			return conflict(id, "PR URL is already set")
-		}
-		item.Metadata[task.MetadataBranch], item.Metadata[task.MetadataWorktree] = branch, worktree
-		return saveMetadata(ctx, store, *stored)
-	})
-}
-
 func (b Backend) SetPRURL(ctx context.Context, id, prURL string) error {
 	prURL = strings.TrimSpace(prURL)
 	if prURL == "" {
@@ -122,6 +104,5 @@ var (
 	_ task.UpdateMutator    = Backend{}
 	_ task.DispatchBackend  = Backend{}
 	_ task.EpicStartMutator = Backend{}
-	_ task.GitFactsMutator  = Backend{}
 	_ task.SyncBackend      = Backend{}
 )

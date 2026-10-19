@@ -163,7 +163,7 @@ func TestIntegrationWorkflowTaskRunAutonomousReviewLoopExhaustsPersistentCheckBl
 	stdout, stderr := fixture.run("k\nk\n", "task", "run", "--repo-root", "op-stubborn")
 
 	is.Contains(stdout, "Recorded completion for op-stubborn")
-	is.NotContains(stdout, "Finalized op-stubborn")
+	is.NotContains(stdout, "Published op-stubborn")
 	is.Equal(2, strings.Count(stderr, "Review blocked for op-stubborn by check \"unit\"."))
 	is.Contains(stderr, "Autonomous review follow-up for op-stubborn targets review attempt 1 finding(s) 1.")
 	is.Contains(stderr, "Autonomous review attempt budget exhausted for op-stubborn after 2 review attempt(s).")
@@ -269,7 +269,7 @@ func TestIntegrationWorkflowTaskRunResumesPausedAutomatedBlockerDecision(t *test
 	must.Len(pausedAgain.Findings, 1)
 
 	finalStdout, finalStderr := fixture.run("w\nAccepted for this task.\n", "task", "run", "op-main")
-	is.Contains(finalStdout, "Finalized op-main")
+	is.Contains(finalStdout, "Published op-main")
 	is.Contains(finalStderr, "Resuming review attempt 1 at automated blocker decision for step \"blocked\".")
 	is.Contains(finalStderr, "Finding 1:")
 

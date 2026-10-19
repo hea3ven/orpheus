@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	orpheusgit "github.com/hea3ven/orpheus/internal/git"
@@ -51,9 +52,14 @@ func TestIntegrationAdapterContractRepoRootContinuationPreservesCheckout(t *test
 
 				if checkout == "matching" {
 					require.NoError(t, err)
-					assert.Equal(t, orpheusgit.TaskWorktreeSetupResult{
+					expected := orpheusgit.TaskWorktreeSetupResult{
 						Branch: branch, WorktreePath: repo, Lifecycle: orpheusgit.TaskWorktreeLifecycleReused,
-					}, result)
+						StartingCommit: strings.TrimSpace(before["head"]),
+					}
+					if branch == "main" {
+						expected.StartingCommit = ""
+					}
+					assert.Equal(t, expected, result)
 				} else {
 					require.Error(t, err, "continuation must not switch to its target branch")
 				}

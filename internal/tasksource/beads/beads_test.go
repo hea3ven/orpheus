@@ -1060,42 +1060,6 @@ func TestTaskBackendStartEpicLifecycle(t *testing.T) {
 	}
 }
 
-func TestTaskBackendGitFactsUpdateGuardsAndTranslation(t *testing.T) {
-	for _, tc := range []struct{ name, status, metadata, wantError string }{
-		{"running", "in_progress", "", ""},
-		{"not started", "open", "", "task is not in progress"},
-		{"published", "in_progress", `,"metadata":{"orpheus.pr_url":"https://github.test/org/repo/pull/1"}`, "orpheus.pr_url is already set"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := testutil.CanonicalTempDir(t)
-			runner := &fakeRunner{calls: []fakeCall{{
-				wantDir: dir, wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-1", "--include-dependents"},
-				result: beads.Result{Stdout: `[{"id":"op-1","status":"` + tc.status + `","issue_type":"task"` + tc.metadata + `}]`},
-			}}}
-			if tc.wantError == "" {
-				runner.calls = append(runner.calls, fakeCall{wantDir: dir, wantArgs: []string{"--json", "--sandbox", "update", "op-1", "--set-metadata", "orpheus.branch=orpheus/op-1", "--set-metadata", "orpheus.worktree=/fixture/op-1"}})
-			}
-			backend, err := beads.NewTaskBackendWithRunner(dir, runner)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			err = backend.UpdateGitFacts(context.Background(), " op-1 ", " orpheus/op-1 ", " /fixture/op-1 ")
-
-			if tc.wantError == "" {
-				if err != nil {
-					t.Fatal(err)
-				}
-			} else if err == nil || !strings.Contains(err.Error(), tc.wantError) {
-				t.Fatalf("error = %v, want %q", err, tc.wantError)
-			}
-			if len(runner.calls) != 0 {
-				t.Fatalf("unused calls = %d", len(runner.calls))
-			}
-		})
-	}
-}
-
 func TestTaskBackendSetPRURLValidatesBeforeExternalMutation(t *testing.T) {
 	for _, tc := range []struct{ name, id, url, wantError string }{
 		{"valid", " op-5 ", " https://github.test/org/repo/pull/5 ", ""},

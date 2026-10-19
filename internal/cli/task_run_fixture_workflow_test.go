@@ -156,13 +156,14 @@ func (f *taskWorkflowFixture) seedRunningAttempt(taskID string, supervisorPID, c
 	item := f.backend.tasks[taskID]
 	item.Metadata = taskmodel.Metadata{taskmodel.MetadataBranch: branch, taskmodel.MetadataWorktree: worktree}
 	f.backend.tasks[taskID] = item
-	_, err := f.git.SetupTaskWorktree(context.Background(), gitmeta.TaskWorktreeOptions{
+	setup, err := f.git.SetupTaskWorktree(context.Background(), gitmeta.TaskWorktreeOptions{
 		RepoID: "alpha", RepoName: "Alpha Repo", RepoPath: taskWorkflowRepoRoot,
 		DefaultBranch: "main", TaskID: taskID, Branch: branch, Paths: f.paths,
 	})
 	require.NoError(f.t, err, "seed worktree")
 	run, err := f.taskStore.StartRun("alpha", taskID, taskstate.StartRunOptions{
 		Agent: "recorder", Branch: branch, Worktree: worktree, WorkDirectory: worktree, SupervisorPID: supervisorPID,
+		BaselineCommit: setup.StartingCommit,
 	})
 	require.NoError(f.t, err, "seed running attempt")
 	_, err = f.taskStore.RecordRunChildPID("alpha", taskID, run.Attempt, childPID)

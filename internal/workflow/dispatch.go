@@ -100,18 +100,12 @@ type DispatchCommandContext struct {
 
 // DispatchGit prepares repository-root and worktree execution targets.
 type DispatchGit interface {
-	SetupRepoRoot(context.Context, gitmeta.RepoRootOptions) (gitmeta.TaskWorktreeSetupResult, error)
 	SetupRepoRootTaskBranch(context.Context, gitmeta.TaskWorktreeOptions) (gitmeta.TaskWorktreeSetupResult, error)
 	SetupTaskWorktree(context.Context, gitmeta.TaskWorktreeOptions) (gitmeta.TaskWorktreeSetupResult, error)
 }
 
 // LocalDispatchGit prepares execution targets through the local Git adapter.
 type LocalDispatchGit struct{}
-
-// SetupRepoRoot prepares a repository-root default-branch target.
-func (LocalDispatchGit) SetupRepoRoot(ctx context.Context, opts gitmeta.RepoRootOptions) (gitmeta.TaskWorktreeSetupResult, error) {
-	return gitmeta.SetupRepoRoot(ctx, opts)
-}
 
 // SetupRepoRootTaskBranch prepares a repository-root task-branch target.
 func (LocalDispatchGit) SetupRepoRootTaskBranch(ctx context.Context, opts gitmeta.TaskWorktreeOptions) (gitmeta.TaskWorktreeSetupResult, error) {
@@ -421,10 +415,25 @@ func (s DispatchService) setupTargetPhase(
 	span := s.startPhase(ctx, "git target preparation", opts.Source.Repository.ID, opts.TaskID,
 		slog.String("target_kind", string(plan.targetKind)),
 	)
-	setup, err := s.setupTarget(ctx, opts, plan.targetKind, plan.expected.Branch, plan.followUp != nil || plan.continuing)
+	allowDirty := plan.followUp != nil || plan.continuing
+	ownedContext := dispatchMetadataMatches(plan.taskItem.OrpheusMetadata(), plan.expected)
+	setup, err := s.setupTarget(ctx, opts, plan.targetKind, plan.expected.Branch, allowDirty, ownedContext)
 	if err != nil {
 		span.FinishError(ctx, err)
 		return gitmeta.TaskWorktreeSetupResult{}, err
+	}
+	if setup.Branch != plan.expected.Branch || cleanDispatchPath(setup.WorktreePath) != cleanDispatchPath(plan.expected.WorktreePath) {
+		return gitmeta.TaskWorktreeSetupResult{}, errors.New("prepared Git target does not match the selected task context")
+	}
+	persisted, err := s.RunStore.Load(opts.Source.Repository.ID, opts.TaskID)
+	if err != nil {
+		return gitmeta.TaskWorktreeSetupResult{}, fmt.Errorf("inspect task baseline: %w", err)
+	}
+	if persisted.BaselineCommit != "" {
+		setup.StartingCommit = persisted.BaselineCommit
+	}
+	if strings.TrimSpace(setup.StartingCommit) == "" {
+		return gitmeta.TaskWorktreeSetupResult{}, errors.New("prepared Git target has no starting commit")
 	}
 	span.Finish(ctx, logging.StatusSuccess,
 		slog.String("branch", setup.Branch),
@@ -605,6 +614,9 @@ func (s DispatchService) resolveDispatchStartTargetLock(
 	if err != nil {
 		return tasktarget.Target{}, false, fmt.Errorf("inspect task target state: %w", err)
 	}
+	if len(state.Runs) > 0 && strings.TrimSpace(state.BaselineCommit) == "" {
+		return tasktarget.Target{}, false, fmt.Errorf("task %s has prior run history but no recorded task baseline; preserve the checkout and explicitly repair the baseline before retrying", opts.TaskID)
+	}
 	lockedTarget, hasLockedTarget, permitRepoRootRetry, err := resolveDispatchLockedTarget(repo, taskItem, state, s.Paths, opts.RepoRootMode)
 	if err != nil {
 		return tasktarget.Target{}, false, err
@@ -635,6 +647,9 @@ func (s DispatchService) validateDispatchStartTarget(
 	expected, targetKind, err := s.expectedSetup(opts, taskItem, lockedTarget, hasLockedTarget, reviewPlan)
 	if err != nil {
 		return dispatchStartPlan{}, err
+	}
+	if targetKind == tasktarget.TargetMainSolo {
+		return dispatchStartPlan{}, errors.New("recorded repository-root context is on the default branch; preserve its files and repair the task context before dispatching on a task branch")
 	}
 	continuing, err := s.continuingRepoRootRun(repo.ID, taskItem, expected, targetKind)
 	if err != nil {
@@ -735,7 +750,7 @@ func resolveDispatchLockedTarget(
 	if !repoRootMode && recorded.Kind == tasktarget.TargetMainSolo {
 		return tasktarget.Target{}, false, false, nil
 	}
-	return recorded, true, recorded.Kind == tasktarget.TargetMainSolo, nil
+	return recorded, true, recorded.Kind == tasktarget.TargetMainSolo || recorded.Kind == tasktarget.TargetRepoRootTeam, nil
 }
 
 // dispatchRecordedMetadataTarget recovers the target persisted by the backend
@@ -898,6 +913,7 @@ func (s DispatchService) recordStart(
 		Args:           command.Args,
 		SessionName:    commandContext.SessionName,
 		WorkDirectory:  setup.WorktreePath,
+		BaselineCommit: setup.StartingCommit,
 		Branch:         setup.Branch,
 		Worktree:       setup.WorktreePath,
 		ReviewFollowUp: taskstateReviewFollowUp(followUp),
@@ -960,7 +976,7 @@ func (s DispatchService) expectedSetup(
 		targetKind = followUp.targetKind
 		branch = lockedTarget.Branch
 	case opts.MainMode || opts.RepoRootMode:
-		targetKind = tasktarget.TargetMainSolo
+		targetKind = tasktarget.TargetRepoRootTeam
 	}
 
 	if branch == "" {
@@ -998,18 +1014,19 @@ func (s DispatchService) setupTarget(
 	targetKind tasktarget.TargetKind,
 	branch string,
 	allowDirty bool,
+	ownedContext bool,
 ) (gitmeta.TaskWorktreeSetupResult, error) {
 	git := s.Git
 	if git == nil {
 		git = LocalDispatchGit{}
 	}
+	worktreeOpts := dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, branch, allowDirty)
+	worktreeOpts.OwnedContext = ownedContext
 	switch targetKind {
-	case tasktarget.TargetMainSolo:
-		return git.SetupRepoRoot(ctx, dispatchRepoRootOptions(opts.Source.Repository, allowDirty))
 	case tasktarget.TargetRepoRootTeam:
-		return git.SetupRepoRootTaskBranch(ctx, dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, branch, allowDirty))
+		return git.SetupRepoRootTaskBranch(ctx, worktreeOpts)
 	case tasktarget.TargetWorktreeTeam:
-		return git.SetupTaskWorktree(ctx, dispatchTaskWorktreeOptions(s.Paths, opts.Source.Repository, opts.TaskID, branch, false))
+		return git.SetupTaskWorktree(ctx, worktreeOpts)
 	default:
 		return gitmeta.TaskWorktreeSetupResult{}, fmt.Errorf("task %s has unsupported target %q", opts.TaskID, targetKind)
 	}
@@ -1056,16 +1073,6 @@ func dispatchTaskWorktreeOptions(paths state.Paths, repo task.Repository, taskID
 	}
 }
 
-func dispatchRepoRootOptions(repo task.Repository, allowDirty bool) gitmeta.RepoRootOptions {
-	return gitmeta.RepoRootOptions{
-		RepoID:        repo.ID,
-		RepoName:      repo.Name,
-		RepoPath:      repo.Path,
-		DefaultBranch: repo.DefaultBranch,
-		AllowDirty:    allowDirty,
-	}
-}
-
 func ensureDispatchEligible(
 	taskItem task.Task,
 	expected gitmeta.TaskWorktreeSetupResult,
@@ -1100,7 +1107,7 @@ func ensureDispatchEligible(
 
 		target := "the deterministic Orpheus branch/worktree"
 		if repoRootMode {
-			target = "the registered default branch/repo root"
+			target = "the task branch/repo root"
 		}
 		return fmt.Errorf(
 			"task %s is in_progress but is not tied to %s: %s",

@@ -35,12 +35,13 @@ func TestDispatchStartKeepsDirtyCheckoutGuardForIncompleteContinuationHistory(t 
 		t.Run(test.name, func(t *testing.T) {
 			repo := task.Repository{ID: "alpha", Path: "/fixture/repo", DefaultBranch: "main"}
 			item := task.Task{ID: "op-continue", Status: task.StatusInProgress, Metadata: task.Metadata{
-				task.MetadataBranch: "main", task.MetadataWorktree: repo.Path,
+				task.MetadataBranch: "orpheus/op-continue", task.MetadataWorktree: repo.Path,
 			}}
 			store := fakeDispatchRunStore{state: taskstate.TaskState{
 				RepoID: repo.ID, TaskID: item.ID, Runs: test.runs,
-				GitFacts:      taskstate.GitFacts{Branch: "main", Worktree: repo.Path},
-				WorkDirectory: taskstate.WorkDirectory{Path: test.directory},
+				BaselineCommit: "initial-commit",
+				GitFacts:       taskstate.GitFacts{Branch: "orpheus/op-continue", Worktree: repo.Path},
+				WorkDirectory:  taskstate.WorkDirectory{Path: test.directory},
 			}}
 			git := &continuationDispatchGit{setupError: errors.New("stop at Git setup")}
 			service := DispatchService{Paths: newDispatchTestPaths(t), RunStore: store, Git: git}
@@ -63,14 +64,10 @@ type continuationDispatchGit struct {
 	setupCalls int
 }
 
-func (g *continuationDispatchGit) SetupRepoRoot(_ context.Context, opts gitmeta.RepoRootOptions) (gitmeta.TaskWorktreeSetupResult, error) {
+func (g *continuationDispatchGit) SetupRepoRootTaskBranch(_ context.Context, opts gitmeta.TaskWorktreeOptions) (gitmeta.TaskWorktreeSetupResult, error) {
 	g.setupCalls++
 	g.allowDirty = opts.AllowDirty
 	return gitmeta.TaskWorktreeSetupResult{}, g.setupError
-}
-
-func (*continuationDispatchGit) SetupRepoRootTaskBranch(context.Context, gitmeta.TaskWorktreeOptions) (gitmeta.TaskWorktreeSetupResult, error) {
-	return gitmeta.TaskWorktreeSetupResult{}, errors.New("unexpected repo-root task branch setup")
 }
 
 func (*continuationDispatchGit) SetupTaskWorktree(context.Context, gitmeta.TaskWorktreeOptions) (gitmeta.TaskWorktreeSetupResult, error) {

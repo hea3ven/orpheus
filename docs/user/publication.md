@@ -6,7 +6,9 @@ if it failed. `agent done` records an implementation handoff, not a commit or PR
 
 The work directory and integration flow are independent. Both worktree and
 repository-root tasks publish a reviewed task branch. Choosing `--repo-root`
-does not select direct merge.
+does not select direct merge. Preparation selects the task branch before the
+agent starts; publication uses that recorded branch without moving changes from
+the default branch.
 
 ## Integration flow and destination
 
@@ -130,3 +132,8 @@ repair is required.
 Conflict repair uses `agents.defaults.sync_conflict_resolver`, falling back to
 `agents.defaults.implementer` when unset. See [agent profiles](agents.md).
 Closed-task worktree cleanup and recovery are described in [tasks](tasks.md#recovery-and-cleanup).
+
+Existing repository-root work recorded on the default branch is not automatically
+moved to a task branch during publication. Preserve its checkout and inspect its
+recorded context before repairing it manually; do not clear task history or reset
+files to force a retry. No operator state is converted by this change.

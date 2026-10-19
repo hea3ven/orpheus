@@ -43,6 +43,12 @@ func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *t
 	assertTaskNotPublished(t, finalState, finalTask)
 	fixture.assertAgentRanInTaskWorktree("op-completion")
 	fixture.assertIsTaskInAgentContext("op-completion")
+	is.Equal("initial-commit", finalState.BaselineCommit)
+	is.Contains(fixture.agent.contexts[0], "- Task baseline: initial-commit")
+	inspection, _, showErr := fixture.execute("task", "show", "op-completion")
+	require.NoError(t, showErr)
+	is.Contains(inspection, "initial-commit")
+	is.Contains(inspection, "orpheus/op-completion")
 	assertStatusShowsManualReview(t, statusOutput, "op-completion")
 
 	_, _, err = fixture.execute("task", "block", "op-completion")

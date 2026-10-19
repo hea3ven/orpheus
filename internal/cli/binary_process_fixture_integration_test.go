@@ -106,7 +106,7 @@ func writeTestFile(t *testing.T, path string, content string, label string) {
 	}
 }
 
-func mainReadyTaskJSON(taskID string, repoPath string) string {
+func repoRootReadyTaskJSON(taskID string, repoPath string) string {
 	return `[
 		{
 			"id":"` + taskID + `",
@@ -114,7 +114,7 @@ func mainReadyTaskJSON(taskID string, repoPath string) string {
 			"status":"in_progress",
 			"priority":1,
 			"issue_type":"task",
-			"metadata":{"orpheus.branch":"main","orpheus.worktree":"` + repoPath + `"}
+			"metadata":{"orpheus.branch":"orpheus/` + taskID + `","orpheus.worktree":"` + repoPath + `"}
 		}
 	]`
 }

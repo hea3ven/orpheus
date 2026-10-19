@@ -37,7 +37,7 @@ func TestIntegrationWorkflowTaskReviewApproveFinalizesAndRecordsPassedAttempt(t 
 	is.Contains(stderr, "Review action [a=approve, b=block, v=advisory, t=task, q=abort]")
 	is.NotContains(stderr, "p=promote advisory")
 	is.Contains(stderr, "Choose approve, block, advisory, task, or abort.")
-	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stdout, "Published op-main")
 
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
@@ -47,9 +47,9 @@ func TestIntegrationWorkflowTaskReviewApproveFinalizesAndRecordsPassedAttempt(t 
 	is.Empty(latest.Findings)
 	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
 	_, task := fixture.loadFinalTask("op-main")
-	is.Equal(taskmodel.StatusClosed, task.Status)
-	is.Equal([]string{"op-main"}, fixture.tasks.closed)
-	is.Equal([]string{"main"}, fixture.candidate.pushes)
+	is.Equal(taskmodel.StatusInProgress, task.Status)
+	is.Empty(fixture.tasks.closed)
+	is.Equal([]string{"orpheus/op-main"}, fixture.candidate.pushes)
 }
 
 func TestIntegrationWorkflowTaskReviewManualContextShowsOriginalAndLatestFollowUpCompletion(t *testing.T) {
@@ -70,7 +70,7 @@ func TestIntegrationWorkflowTaskReviewManualContextShowsOriginalAndLatestFollowU
 	is.Contains(stderr, "TECHNICAL EXPLANATION\nTechnical explanation.")
 	is.NotContains(stderr, "Latest completion: Latest fix")
 	is.NotContains(stderr, "Latest fix completion: First fix")
-	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stdout, "Published op-main")
 
 	message := fixture.candidate.commits[0]
 	is.Equal("Original implementation\n\nImplemented the main task.", message)
@@ -146,7 +146,7 @@ func TestIntegrationWorkflowTaskReviewAdvisoryAndSeparateTaskFindingsDoNotBlockA
 	}, "\n")
 	stdout, stderr := fixture.run(input, "task", "run", "op-main")
 
-	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stdout, "Published op-main")
 	is.Contains(stderr, "Finding title:")
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
@@ -180,7 +180,7 @@ func TestIntegrationWorkflowTaskReviewCreatesSelectedSeparateTaskFollowUp(t *tes
 	}, "\n")
 	stdout, stderr := fixture.run(input, "task", "run", "op-main")
 
-	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stdout, "Published op-main")
 	is.Contains(stderr, "Created follow-up task op-41 for review finding 1.")
 	must.Len(fixture.tasks.created, 1)
 	is.Equal(taskmodel.CreateOptions{Title: "Extract helper", Description: "Extract the helper later.\n\nProvenance:\nDiscovered during review of op-main in repository alpha (review attempt 1, finding 1). Review step: local-review.", AcceptanceCriteria: "Helper extraction has tests.", IssueType: taskmodel.IssueTypeTask}, fixture.tasks.created[0])
@@ -478,7 +478,7 @@ func TestIntegrationWorkflowTaskReviewInterruptedAutomatedBlockerRecoveryReusesR
 
 	is.Contains(recoveryStdout, "strict pipeline")
 	is.NotContains(recoveryStdout, "default pipeline")
-	is.Contains(recoveryStdout, "Finalized op-main")
+	is.Contains(recoveryStdout, "Published op-main")
 	is.Contains(recoveryStderr, "Open blocking findings from the latest review")
 	is.Contains(recoveryStderr, "Finding 1 from step strict")
 	is.Contains(recoveryStderr, "Title: Check \"strict\" failed")
@@ -530,7 +530,7 @@ func TestIntegrationWorkflowTaskReviewResumesManualWaitingAttempt(t *testing.T) 
 
 	stdout, stderr := fixture.run("a\n", "task", "run", "op-main")
 
-	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stdout, "Published op-main")
 	is.Contains(stderr, "Resuming review attempt 1 at manual step \"inspect\".")
 	is.Contains(stderr, "◆ REVIEW STEP · inspect (manual)")
 	is.NotContains(stdout, "check reran")
@@ -598,7 +598,7 @@ func TestIntegrationWorkflowTaskReviewPipelineOverridePrecedence(t *testing.T) {
 
 			is.Contains(stdout, "cli pipeline")
 			is.NotContains(stdout, "wrong pipeline")
-			is.Contains(stdout, "Finalized op-main")
+			is.Contains(stdout, "Published op-main")
 			is.Contains(stderr, "== Review step: cli (check) ==")
 
 			var state taskstate.TaskState
@@ -702,7 +702,7 @@ func TestIntegrationWorkflowTaskReviewCheckDecisionsPersistDispositionAndContinu
 				assert.Empty(t, taskstate.FinalizationFacts(state).Commit)
 			} else {
 				assert.Equal(t, taskstate.ReviewStatusPassed, latest.Status)
-				assert.Contains(t, stdout, "Finalized op-main")
+				assert.Contains(t, stdout, "Published op-main")
 				assert.NotEmpty(t, taskstate.FinalizationFacts(state).Commit)
 				if test.manual {
 					assert.Contains(t, stderr, "◆ REVIEW STEP · approval (manual)")

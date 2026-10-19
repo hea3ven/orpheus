@@ -32,6 +32,7 @@ func TestIntegrationWorkflowWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing
 	require.Len(t, state.Runs, 1)
 	require.NotNil(t, state.Runs[0].Completion)
 	assert.Empty(t, state.Runs[0].Completion.Commit)
+	assert.Equal(t, "initial-commit", state.BaselineCommit)
 	target, ok := taskstate.GitFactsFor(state)
 	require.True(t, ok)
 	branch, dir := f.expectedTarget(item.ID)
@@ -111,9 +112,9 @@ func TestIntegrationWorkflowRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing
 
 	assert.Contains(t, stderr, "Review for "+item.ID+" is waiting for manual step \"local-review\"")
 	assert.Contains(t, stdout, "Recorded completion for "+item.ID)
-	assert.Equal(t, "main", f.git.targets[taskWorkflowRepoRoot].branch)
+	assert.Equal(t, "orpheus/"+item.ID, f.git.targets[taskWorkflowRepoRoot].branch)
 	require.Len(t, f.agent.contexts, 1)
-	for _, want := range []string{"- Current branch: main", "- Work Directory: " + taskWorkflowRepoRoot, "- Current directory: " + taskWorkflowRepoRoot, "registered repository root on the registered default branch", "deterministic task branch is created only after review"} {
+	for _, want := range []string{"- Current branch: orpheus/" + item.ID, "- Work Directory: " + taskWorkflowRepoRoot, "- Current directory: " + taskWorkflowRepoRoot, "registered repository root on the task branch", "- Task baseline: initial-commit"} {
 		assert.Contains(t, f.agent.contexts[0], want)
 	}
 	stdout, stderr = f.run("", "task", "dir", item.ID)
@@ -123,9 +124,10 @@ func TestIntegrationWorkflowRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing
 	require.Len(t, state.Runs, 1)
 	require.NotNil(t, state.Runs[0].Completion)
 	assert.Empty(t, state.Runs[0].Completion.Commit)
+	assert.Equal(t, "initial-commit", state.BaselineCommit)
 	target, ok := taskstate.GitFactsFor(state)
 	require.True(t, ok)
-	assert.Equal(t, "main", target.Branch)
+	assert.Equal(t, "orpheus/"+item.ID, target.Branch)
 	assert.Equal(t, taskWorkflowRepoRoot, target.Worktree)
 	assert.True(t, f.git.hasCandidateChanges)
 	f.passedReview(item.ID)

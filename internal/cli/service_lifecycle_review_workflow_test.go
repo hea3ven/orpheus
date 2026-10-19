@@ -32,7 +32,7 @@ func TestIntegrationWorkflowTaskReviewFreshBlockerDispositionsStartFreshCLIPipel
 	stdout, stderr := fixture.run("a\nVerified direct repair.\nw\nAccepted compatibility risk.\n", "task", "run", "op-main")
 
 	is.Contains(stdout, "fresh pipeline")
-	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stdout, "Published op-main")
 	is.Contains(stderr, "Open blocking findings from the latest review")
 	is.Contains(stderr, "Manual address reason")
 	is.Contains(stderr, "Waiver reason")

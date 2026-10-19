@@ -102,7 +102,7 @@ func ExpectedTargetsForTaskItem(repo task.Repository, taskItem task.Task, paths 
 	return ExpectedTargetsForTaskBranch(repo, taskItem.ID, branch, paths)
 }
 
-// ExpectedTargetsForTaskOrRecordedBranch uses a materialized non-default
+// ExpectedTargetsForTaskOrRecordedBranch uses a prepared non-default
 // branch from local Git facts or backend task metadata when present. Otherwise
 // it renders the current configured template for a new task branch.
 func ExpectedTargetsForTaskOrRecordedBranch(repo task.Repository, taskItem task.Task, recordedBranch string, paths state.Paths) (ExpectedTargets, error) {
