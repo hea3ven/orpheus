@@ -8,6 +8,8 @@ import (
 )
 
 type backend interface {
+	checkTree(path string) error
+	removeTree(path string) error
 	readFile(path string) ([]byte, error)
 	listFiles(path string) ([]string, error)
 	makeParentDirs(path string, mode os.FileMode) error
@@ -64,4 +66,28 @@ func (osBackend) acquireLock(path string, dirMode, lockMode os.FileMode) (func()
 		}
 		return releaseErr
 	}, nil
+}
+
+// checkTree refuses symlinked ancestors so recursive deletion cannot be redirected
+// outside the named data tree. Missing trees are safe for retry.
+func (osBackend) checkTree(path string) error {
+	for current := path; ; current = filepath.Dir(current) {
+		info, err := os.Lstat(current)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err == nil && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
+			return fmt.Errorf("%q is not an unambiguous directory; repair the path before retrying", current)
+		}
+		if filepath.Dir(current) == current {
+			return nil
+		}
+	}
+}
+
+func (b osBackend) removeTree(path string) error {
+	if err := b.checkTree(path); err != nil {
+		return err
+	}
+	return os.RemoveAll(path)
 }

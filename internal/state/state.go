@@ -320,3 +320,37 @@ func writeFileAtomically(path string, data []byte, mode os.FileMode) error {
 	cleanup = false
 	return nil
 }
+
+// CheckDataTree verifies that a non-root data directory can be safely addressed
+// for recursive deletion. It does not establish domain ownership of its contents.
+func (p Paths) CheckDataTree(rel string) error {
+	path, err := p.removalPath(rel)
+	if err != nil {
+		return err
+	}
+	return p.backend.checkTree(path)
+}
+
+// RemoveDataTree deletes a non-root data directory and its contents. Missing
+// directories are already complete; symlinked ancestors are refused.
+func (p Paths) RemoveDataTree(rel string) error {
+	path, err := p.removalPath(rel)
+	if err != nil {
+		return err
+	}
+	if err := p.backend.removeTree(path); err != nil {
+		return fmt.Errorf("remove data tree %q: %w", path, err)
+	}
+	return nil
+}
+
+func (p Paths) removalPath(rel string) (string, error) {
+	path, err := p.DataPath(rel)
+	if err != nil {
+		return "", err
+	}
+	if path == p.dataRoot {
+		return "", errors.New("refusing to remove the Orpheus data root")
+	}
+	return path, nil
+}

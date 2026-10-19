@@ -28,6 +28,8 @@ import (
 )
 
 type invocationDependencies struct {
+	repositoryRemovalGit RepositoryRemovalGit
+
 	terminal           TerminalCapabilities
 	doctorEffects      doctor.Effects
 	prProvider         pullrequest.Provider

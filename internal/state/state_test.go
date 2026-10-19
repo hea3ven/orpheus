@@ -72,7 +72,13 @@ func TestRelativePathHelpersRejectEscapes(t *testing.T) {
 			if _, err := paths.DataPath(rel); err == nil {
 				t.Fatal("data path succeeded, want error")
 			}
+			assert.Error(t, paths.CheckDataTree(rel))
+			assert.Error(t, paths.RemoveDataTree(rel))
 		})
+	}
+	for _, rel := range []string{"", ".", "nested/.."} {
+		assert.ErrorContains(t, paths.CheckDataTree(rel), "refusing to remove the Orpheus data root")
+		assert.ErrorContains(t, paths.RemoveDataTree(rel), "refusing to remove the Orpheus data root")
 	}
 }
 
