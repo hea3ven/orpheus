@@ -40,11 +40,17 @@ func TestIntegrationAdapterContractSetupTaskWorktreeCreatesAndReusesDeterministi
 		t.Fatalf("setup result = %#v, want branch/worktree/created", got)
 	}
 	assertGitBranch(t, got.WorktreePath, "orpheus/op-1")
+	if want := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "refs/remotes/origin/main")); got.StartingCommit != want {
+		t.Fatalf("starting commit = %q, want %q", got.StartingCommit, want)
+	}
 
+	commitFile(t, got.WorktreePath, "owned.txt", "owned task history\n", "task work")
 	marker := filepath.Join(got.WorktreePath, "retry-marker.txt")
 	if err := os.WriteFile(marker, []byte("preserve me"), 0o644); err != nil {
 		t.Fatalf("write marker: %v", err)
 	}
+	runGit(t, repoPath, "remote", "set-url", "origin", filepath.Join(repoPath, "offline-origin.git"))
+	before := captureRepoRootCheckout(t, got.WorktreePath)
 
 	reused, err := orpheusgit.SetupTaskWorktree(context.Background(), orpheusgit.TaskWorktreeOptions{
 		RepoID:        "alpha",
@@ -53,6 +59,7 @@ func TestIntegrationAdapterContractSetupTaskWorktreeCreatesAndReusesDeterministi
 		DefaultBranch: "main",
 		TaskID:        "op-1",
 		Paths:         paths,
+		OwnedContext:  true,
 	})
 	if err != nil {
 		t.Fatalf("reuse task worktree: %v", err)
@@ -60,9 +67,16 @@ func TestIntegrationAdapterContractSetupTaskWorktreeCreatesAndReusesDeterministi
 	if reused.Lifecycle != orpheusgit.TaskWorktreeLifecycleReused {
 		t.Fatalf("reuse lifecycle = %q, want %q", reused.Lifecycle, orpheusgit.TaskWorktreeLifecycleReused)
 	}
-	if _, err := os.Stat(marker); err != nil {
-		t.Fatalf("marker was not preserved on reuse: %v", err)
+	if reused.StartingCommit != strings.TrimSpace(before["head"]) {
+		t.Fatalf("reused head = %q, want owned head %q", reused.StartingCommit, before["head"])
 	}
+	for key, got := range captureRepoRootCheckout(t, reused.WorktreePath) {
+		if got != before[key] {
+			t.Fatalf("owned worktree %s changed on reuse", key)
+		}
+	}
+	assertFileContent(t, marker, "preserve me")
+	assertFileContent(t, filepath.Join(reused.WorktreePath, "owned.txt"), "owned task history\n")
 }
 
 func TestIntegrationAdapterContractClosedTaskWorktreeCleanupReportsAbsentRegisteredWorktree(t *testing.T) {
@@ -117,7 +131,11 @@ func TestIntegrationAdapterContractSetupTaskWorktreeAndRepoRootUseResolvedCustom
 func TestIntegrationAdapterContractSetupTaskWorktreeRecreatesMissingWorktreeForExistingBranch(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	paths := newStatePaths(t)
-	runGit(t, repoPath, "branch", "orpheus/op-2", "main")
+	runGit(t, repoPath, "checkout", "-b", "orpheus/op-2")
+	commitFile(t, repoPath, "task.txt", "retained task output\n", "task work")
+	startingCommit := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD"))
+	runGit(t, repoPath, "checkout", "main")
+	runGit(t, repoPath, "remote", "set-url", "origin", filepath.Join(repoPath, "offline-origin.git"))
 
 	got, err := orpheusgit.SetupTaskWorktree(context.Background(), orpheusgit.TaskWorktreeOptions{
 		RepoID:        "alpha",
@@ -125,6 +143,7 @@ func TestIntegrationAdapterContractSetupTaskWorktreeRecreatesMissingWorktreeForE
 		RepoPath:      repoPath,
 		DefaultBranch: "main",
 		TaskID:        "op-2",
+		OwnedContext:  true,
 		Paths:         paths,
 	})
 	if err != nil {
@@ -134,6 +153,10 @@ func TestIntegrationAdapterContractSetupTaskWorktreeRecreatesMissingWorktreeForE
 		t.Fatalf("lifecycle = %q, want %q", got.Lifecycle, orpheusgit.TaskWorktreeLifecycleRecreated)
 	}
 	assertGitBranch(t, got.WorktreePath, "orpheus/op-2")
+	if got.StartingCommit != startingCommit {
+		t.Fatalf("recreated head = %q, want owned head %q", got.StartingCommit, startingCommit)
+	}
+	assertFileContent(t, filepath.Join(got.WorktreePath, "task.txt"), "retained task output\n")
 }
 
 func TestIntegrationAdapterContractSetupTaskWorktreeRefusesExistingPathOnDifferentBranch(t *testing.T) {
@@ -242,6 +265,7 @@ func TestIntegrationAdapterContractSetupRepoRootSwitchesToDefaultBranchAndFastFo
 func TestIntegrationAdapterContractSetupRepoRootTaskBranchSwitchesToTaskBranch(t *testing.T) {
 	repoPath := newGitRepoWithLocalOrigin(t)
 	paths := newStatePaths(t)
+	pushRemoteCommit(t, repoPath, "remote.txt", "new baseline\n")
 
 	got, err := orpheusgit.SetupRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
 		RepoID:        "alpha",
@@ -259,6 +283,9 @@ func TestIntegrationAdapterContractSetupRepoRootTaskBranchSwitchesToTaskBranch(t
 		t.Fatalf("setup result = %#v, want task branch/repo root/task branch created", got)
 	}
 	assertGitBranch(t, repoPath, "orpheus/op-root")
+	if want := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "refs/remotes/origin/main")); got.StartingCommit != want {
+		t.Fatalf("starting commit = %q, want refreshed origin commit %q", got.StartingCommit, want)
+	}
 
 	expectedWorktreePath, err := paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-root"))
 	if err != nil {
@@ -284,89 +311,98 @@ func TestIntegrationAdapterContractSetupRepoRootTaskBranchSwitchesToTaskBranch(t
 	}
 }
 
-func TestIntegrationAdapterContractMaterializeRepoRootTaskBranchPreservesReviewedChanges(t *testing.T) {
-	repoPath := newGitRepoWithLocalOrigin(t)
-	paths := newStatePaths(t)
-	if err := os.WriteFile(filepath.Join(repoPath, "reviewed.txt"), []byte("reviewed\n"), 0o644); err != nil {
-		t.Fatalf("write reviewed change: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(repoPath, "staged.txt"), []byte("staged reviewed\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, repoPath, "add", "staged.txt")
-	beforeStatus := runGit(t, repoPath, "status", "--porcelain=v1")
-	beforeIndex := runGit(t, repoPath, "diff", "--cached", "--binary")
-
-	got, err := orpheusgit.MaterializeRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{
-		RepoID:        "alpha",
-		RepoName:      "Alpha",
-		RepoPath:      repoPath,
-		DefaultBranch: "main",
-		TaskID:        "op-reviewed",
-		Paths:         paths,
-		AllowDirty:    true,
-	})
-	if err != nil {
-		t.Fatalf("materialize repo-root task branch: %v", err)
-	}
-	if got.Branch != "orpheus/op-reviewed" || got.WorktreePath != repoPath || got.Lifecycle != orpheusgit.TaskWorktreeLifecycleTaskBranchCreated {
-		t.Fatalf("materialization = %#v, want task branch/repo root/task branch created", got)
-	}
-	assertGitBranch(t, repoPath, "orpheus/op-reviewed")
-	assertFileContent(t, filepath.Join(repoPath, "reviewed.txt"), "reviewed\n")
-	assertFileContent(t, filepath.Join(repoPath, "staged.txt"), "staged reviewed\n")
-	if runGit(t, repoPath, "status", "--porcelain=v1") != beforeStatus || runGit(t, repoPath, "diff", "--cached", "--binary") != beforeIndex {
-		t.Fatal("materialization changed reviewed working-tree or index contents")
-	}
-}
-
-func TestIntegrationAdapterContractMaterializationRefusesDivergentTargetsWithoutChangingReviewedWork(t *testing.T) {
-	for _, kind := range []string{"stale local", "ahead local", "current", "remote only"} {
-		t.Run(kind, func(t *testing.T) {
-			repo := newGitRepoWithLocalOrigin(t)
-			const branch = "orpheus/op-target"
-			switch kind {
-			case "stale local":
-				runGit(t, repo, "branch", branch, "main")
-				pushRemoteCommit(t, repo, "default.txt", "new default\n")
-				runGit(t, repo, "pull", "--ff-only", "origin", "main")
-			default:
+func TestIntegrationAdapterContractPreparationRefusesDivergentBranchesWithoutChangingCheckout(t *testing.T) {
+	for _, mode := range []string{"repo-root", "worktree"} {
+		kinds := []string{"local", "remote", "unrelated checkout"}
+		if mode == "worktree" {
+			kinds = append(kinds, "existing worktree")
+		}
+		for _, kind := range kinds {
+			t.Run(mode+"/"+kind, func(t *testing.T) {
+				repo := newGitRepoWithLocalOrigin(t)
+				const branch = "orpheus/op-target"
 				runGit(t, repo, "checkout", "-b", branch)
-				commitFile(t, repo, "stale.txt", "stale\n", "unreviewed task history")
-				if kind == "remote only" {
-					runGit(t, repo, "push", "--set-upstream", "origin", branch)
+				commitFile(t, repo, "unrelated.txt", "unrelated history\n", "unrelated work")
+				if kind == "remote" {
+					runGit(t, repo, "push", "origin", branch)
 				}
-				if kind != "current" {
-					runGit(t, repo, "checkout", "main")
-				}
-				if kind == "remote only" {
+				runGit(t, repo, "checkout", "main")
+				if kind == "remote" {
 					runGit(t, repo, "branch", "-D", branch)
 				}
-			}
-			if err := os.WriteFile(filepath.Join(repo, "reviewed.txt"), []byte("reviewed\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			origin := strings.TrimSpace(runGit(t, repo, "remote", "get-url", "origin"))
-			beforeRefs, beforeRemote := runGit(t, repo, "show-ref", "--heads"), runGit(t, origin, "show-ref", "--heads")
-			beforeBranch, beforeStatus := runGit(t, repo, "branch", "--show-current"), runGit(t, repo, "status", "--porcelain=v1")
-
-			_, err := orpheusgit.MaterializeRepoRootTaskBranch(context.Background(), orpheusgit.TaskWorktreeOptions{RepoID: "alpha", RepoName: "Alpha", RepoPath: repo, DefaultBranch: "main", TaskID: "op-target", Paths: newStatePaths(t), AllowDirty: true})
-
-			if err == nil || !strings.Contains(err.Error(), "refusing to reuse divergent branch") {
-				t.Fatalf("materialize = %v, want divergent target rejection", err)
-			}
-			scope := "local deterministic task branch"
-			if kind == "remote only" {
-				scope = "remote deterministic task branch"
-			}
-			if !strings.Contains(err.Error(), scope) {
-				t.Fatalf("error = %v, want %s", err, scope)
-			}
-			if runGit(t, repo, "show-ref", "--heads") != beforeRefs || runGit(t, origin, "show-ref", "--heads") != beforeRemote || runGit(t, repo, "branch", "--show-current") != beforeBranch || runGit(t, repo, "status", "--porcelain=v1") != beforeStatus {
-				t.Fatal("refusal changed branch, refs or reviewed state")
-			}
-			assertFileContent(t, filepath.Join(repo, "reviewed.txt"), "reviewed\n")
-		})
+				if kind == "unrelated checkout" {
+					runGit(t, repo, "checkout", "-b", "unrelated")
+				}
+				opts := orpheusgit.TaskWorktreeOptions{RepoID: "alpha", RepoPath: repo, DefaultBranch: "main", TaskID: "op-target", Paths: newStatePaths(t)}
+				var worktreePath string
+				var worktreeBefore map[string]string
+				if kind == "existing worktree" {
+					var err error
+					worktreePath, err = opts.Paths.DataPath(filepath.Join("repos", "alpha", "worktrees", "op-target"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					runGit(t, repo, "worktree", "add", worktreePath, branch)
+					if err := os.WriteFile(filepath.Join(worktreePath, "unrelated.txt"), []byte("staged work\n"), 0o644); err != nil {
+						t.Fatal(err)
+					}
+					runGit(t, worktreePath, "add", "unrelated.txt")
+					if err := os.WriteFile(filepath.Join(worktreePath, "unrelated.txt"), []byte("unstaged work\n"), 0o644); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(worktreePath, "untracked.txt"), []byte("untracked work\n"), 0o644); err != nil {
+						t.Fatal(err)
+					}
+					worktreeBefore = captureRepoRootCheckout(t, worktreePath)
+				}
+				before := captureRepoRootCheckout(t, repo)
+				localRefs := runGit(t, repo, "show-ref", "--heads")
+				var err error
+				if mode == "repo-root" {
+					_, err = orpheusgit.SetupRepoRootTaskBranch(context.Background(), opts)
+				} else {
+					_, err = orpheusgit.SetupTaskWorktree(context.Background(), opts)
+				}
+				if err == nil {
+					t.Fatal("preparation adopted unrelated branch history")
+				}
+				if worktreePath != "" {
+					if !strings.Contains(err.Error(), "refusing to reuse divergent branch") {
+						t.Fatalf("preparation error = %v, want divergent history refusal", err)
+					}
+					for key, got := range captureRepoRootCheckout(t, worktreePath) {
+						if got != worktreeBefore[key] {
+							t.Fatalf("existing worktree %s changed on refusal", key)
+						}
+					}
+					assertFileContent(t, filepath.Join(worktreePath, "unrelated.txt"), "unstaged work\n")
+					assertFileContent(t, filepath.Join(worktreePath, "untracked.txt"), "untracked work\n")
+					if got := runGit(t, worktreePath, "show", ":unrelated.txt"); got != "staged work\n" {
+						t.Fatalf("staged content = %q, want preserved work", got)
+					}
+				}
+				after := captureRepoRootCheckout(t, repo)
+				if got := runGit(t, repo, "show-ref", "--heads"); got != localRefs {
+					t.Fatal("refusal changed local branches")
+				}
+				// Fetch may update remote-tracking refs, but never local refs or checkout contents.
+				delete(before, "refs")
+				delete(after, "refs")
+				delete(before, "reflog")
+				delete(after, "reflog")
+				for key, want := range before {
+					if after[key] != want {
+						t.Fatalf("%s changed on refusal", key)
+					}
+				}
+				if got := runGit(t, repo, "ls-tree", "HEAD", "unrelated.txt"); got != "" {
+					t.Fatalf("unrelated content entered checkout: %s", got)
+				}
+			})
+		}
 	}
 }
 

@@ -152,8 +152,11 @@ type TaskState struct {
 	// dispatch. Branch and other Git facts may evolve during publication.
 	WorkDirectory WorkDirectory `yaml:"work_directory,omitempty"`
 
+	// BaselineCommit is the immutable starting commit, not the integration destination.
+	BaselineCommit string `yaml:"baseline_commit,omitempty"`
+
 	// GitFacts are the current branch and checkout facts for the fixed work
-	// directory. Publication may update these facts without changing WorkDirectory.
+	// directory. Publication consumes these facts without selecting another branch.
 	GitFacts GitFacts `yaml:"git_facts,omitempty"`
 
 	// Target is retained only to reconcile state written before work-directory
@@ -685,9 +688,10 @@ type StartRunOptions struct {
 
 	// WorkDirectory is immutable after the first run. Branch is an evolving Git
 	// fact and Worktree remains for compatibility with persisted legacy state.
-	WorkDirectory string
-	Branch        string
-	Worktree      string
+	WorkDirectory  string
+	BaselineCommit string
+	Branch         string
+	Worktree       string
 
 	ReviewFollowUp *ReviewFollowUp
 	Launch         *AgentLaunch
@@ -1001,6 +1005,13 @@ func (s Store) StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt
 		err = fmt.Errorf("start run attempt for task %s/%s: %w", repoID, taskID, err)
 		span.FinishError(context.Background(), err, slog.Int("attempt", attempt.Attempt))
 		return RunAttempt{}, err
+	}
+	baseline := strings.TrimSpace(opts.BaselineCommit)
+	if baseline != "" {
+		if state.BaselineCommit != "" && state.BaselineCommit != baseline {
+			return RunAttempt{}, fmt.Errorf("task baseline is already locked to %q; requested %q", state.BaselineCommit, baseline)
+		}
+		state.BaselineCommit = baseline
 	}
 	state.Runs = append(state.Runs, attempt)
 	state.Events = append(state.Events, Event{
@@ -3461,31 +3472,6 @@ func WorkDirectoryFor(state TaskState) (WorkDirectory, bool) {
 	return directory, !directory.IsZero()
 }
 
-// RecordGitFacts updates the current branch after repository-root publication
-// materializes its deterministic task branch. The work directory remains fixed.
-func (s Store) RecordGitFacts(repoID, taskID, branch, worktree string) (TaskState, error) {
-	state, err := s.Load(repoID, taskID)
-	if err != nil {
-		return TaskState{}, err
-	}
-	directory, ok := WorkDirectoryFor(state)
-	if !ok {
-		return TaskState{}, fmt.Errorf("record Git facts for task %s/%s: work directory is missing", repoID, taskID)
-	}
-	facts := normalizeGitFacts(GitFacts{Branch: branch, Worktree: worktree})
-	if err := validateGitFacts(facts); err != nil {
-		return TaskState{}, fmt.Errorf("record Git facts for task %s/%s: %w", repoID, taskID, err)
-	}
-	if directory.Path != facts.Worktree {
-		return TaskState{}, fmt.Errorf("record Git facts for task %s/%s: work directory %q does not match %q", repoID, taskID, directory.Path, facts.Worktree)
-	}
-	state.GitFacts = facts
-	if err := s.save(state); err != nil {
-		return TaskState{}, err
-	}
-	return state, nil
-}
-
 func (s Store) appendEvent(repoID, taskID string, event Event) (Event, error) {
 	state, err := s.Load(repoID, taskID)
 	if err != nil {
@@ -3860,7 +3846,8 @@ func legacyTechnicalExplanation(completion Completion) string {
 }
 
 func taskStateContentIsEmpty(taskState TaskState) bool {
-	return taskState.WorkDirectory.IsZero() &&
+	return taskState.BaselineCommit == "" &&
+		taskState.WorkDirectory.IsZero() &&
 		taskState.GitFacts.IsZero() &&
 		taskState.Target.IsZero() &&
 		len(taskState.Runs) == 0 &&

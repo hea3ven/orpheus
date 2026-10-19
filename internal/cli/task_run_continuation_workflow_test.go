@@ -60,14 +60,14 @@ func TestIntegrationWorkflowTaskRunUnfinishedRepoRootContinuesThroughCompletion(
 			assert.Equal(t, 2, final.Runs[1].Attempt)
 			assert.Equal(t, taskstate.RunStatusSucceeded, final.Runs[1].Status)
 			assertCompletionRecorded(t, completion, final.Runs[1].Completion)
-			assertPersistedTaskTarget(t, final, item, "main", taskWorkflowRepoRoot)
+			assertPersistedTaskTarget(t, final, item, "orpheus/op-continue", taskWorkflowRepoRoot)
 			assert.Equal(t, taskmodel.StatusInProgress, item.Status)
 			assertWaitingForManualReview(t, final)
 			assertTaskNotPublished(t, final, item)
 			require.Len(t, fixture.agent.launches, 2)
 			for _, launch := range fixture.agent.launches {
 				assert.Equal(t, taskWorkflowRepoRoot, launch.dir)
-				assert.Equal(t, "main", launch.environment["ORPHEUS_BRANCH"])
+				assert.Equal(t, "orpheus/op-continue", launch.environment["ORPHEUS_BRANCH"])
 			}
 			assert.Empty(t, fixture.git.worktreeSetups)
 			assert.True(t, fixture.git.repoRootDirty)
@@ -96,7 +96,7 @@ func TestIntegrationWorkflowTaskRunInterruptedRepoRootContinuesThroughCompletion
 	assert.Equal(t, "supervisor_and_child_pids_absent", final.Events[1].InterruptionReason)
 	assert.Equal(t, taskstate.RunStatusSucceeded, final.Runs[1].Status)
 	assertCompletionRecorded(t, completion, final.Runs[1].Completion)
-	assertPersistedTaskTarget(t, final, item, "main", taskWorkflowRepoRoot)
+	assertPersistedTaskTarget(t, final, item, "orpheus/op-continue", taskWorkflowRepoRoot)
 	assertWaitingForManualReview(t, final)
 	assertTaskNotPublished(t, final, item)
 	assert.Equal(t, taskWorkflowRepoRoot, fixture.onlyAgentLaunch().dir)
@@ -114,7 +114,7 @@ func TestIntegrationWorkflowTaskRunDirtyRepoRootRequiresRunHistory(t *testing.T)
 			fixture.configureImplementer("recorder", agent.Profile{Command: "unused-agent"})
 			fixture.git.repoRootDirty = true
 			if recordedTarget {
-				fixture.withBackendTarget("op-continue", "main", taskWorkflowRepoRoot)
+				fixture.withBackendTarget("op-continue", "orpheus/op-continue", taskWorkflowRepoRoot)
 			}
 			before, beforeTask := fixture.loadFinalTask("op-continue")
 
@@ -141,7 +141,7 @@ func TestIntegrationWorkflowTaskRunRepoRootContinuationRejectsConflictingTargets
 			f.withBackendTarget("op-continue", "other", taskWorkflowRepoRoot)
 		}, errorText: "repository-root metadata"},
 		{name: "directory mismatch", change: func(f *taskWorkflowFixture) {
-			f.withBackendTarget("op-continue", "main", "/fixture/other")
+			f.withBackendTarget("op-continue", "orpheus/op-continue", "/fixture/other")
 		}, errorText: "not tied to"},
 		{name: "missing metadata", change: func(f *taskWorkflowFixture) {
 			item := f.backend.tasks["op-continue"]
@@ -150,7 +150,7 @@ func TestIntegrationWorkflowTaskRunRepoRootContinuationRejectsConflictingTargets
 		}, errorText: "not tied to"},
 		{name: "another owner", change: func(f *taskWorkflowFixture) {
 			f.backend.tasks["op-other"] = anInProgressTask("op-other")
-			f.withBackendTarget("op-other", "main", taskWorkflowRepoRoot)
+			f.withBackendTarget("op-other", "orpheus/op-other", taskWorkflowRepoRoot)
 		}, errorText: "already has non-closed task op-other"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -224,14 +224,15 @@ func TestIntegrationWorkflowTaskRunRepoRootContinuationBlocksUnresolvedProcesses
 
 func (f *taskWorkflowFixture) seedRepoRootAttempt(taskID string) {
 	f.t.Helper()
-	f.withBackendTarget(taskID, "main", taskWorkflowRepoRoot)
-	_, err := f.git.SetupRepoRoot(context.Background(), gitmeta.RepoRootOptions{
-		RepoID: "alpha", RepoPath: taskWorkflowRepoRoot, DefaultBranch: "main",
+	f.withBackendTarget(taskID, "orpheus/op-continue", taskWorkflowRepoRoot)
+	setup, err := f.git.SetupRepoRootTaskBranch(context.Background(), gitmeta.TaskWorktreeOptions{
+		RepoID: "alpha", RepoPath: taskWorkflowRepoRoot, DefaultBranch: "main", Branch: "orpheus/op-continue",
 	})
 	require.NoError(f.t, err)
 	_, err = f.taskStore.StartRun("alpha", taskID, taskstate.StartRunOptions{
-		Agent: "recorder", Branch: "main", Worktree: taskWorkflowRepoRoot,
+		Agent: "recorder", Branch: "orpheus/op-continue", Worktree: taskWorkflowRepoRoot,
 		WorkDirectory: taskWorkflowRepoRoot, SupervisorPID: 100,
+		BaselineCommit: setup.StartingCommit,
 	})
 	require.NoError(f.t, err)
 	_, err = f.taskStore.RecordRunChildPID("alpha", taskID, 1, 101)

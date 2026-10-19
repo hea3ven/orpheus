@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationWorkflowTaskRunReviewFollowUpAllowsDirtyMainTarget(t *testing.T) {
+func TestIntegrationWorkflowTaskRunReviewFollowUpAllowsDirtyTaskBranch(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-followup", "Review approval", "Finalize after approval.")
@@ -48,7 +48,7 @@ func TestIntegrationWorkflowTaskRunReviewFollowUpAllowsDirtyMainTarget(t *testin
 	must.Len(latest.Findings, 1)
 	is.Equal(2, latest.Findings[0].TargetedByRunAttempt)
 	must.Len(state.Runs, 2)
-	is.Equal("main", state.GitFacts.Branch)
+	is.Equal("orpheus/op-followup", state.GitFacts.Branch)
 	is.Equal(taskWorkflowRepoRoot, state.GitFacts.Worktree)
 	is.Equal("Resolving issues in op-followup Ready for task done", state.Runs[1].Execution.SessionName)
 	must.NotNil(state.Runs[1].ReviewFollowUp)
@@ -114,7 +114,7 @@ func TestIntegrationWorkflowTaskReviewPassingCheckContinuesToManualStep(t *testi
 	stdout, stderr := fixture.run("a\n", "task", "run", "--pipeline", "standard", "op-main")
 
 	is.Contains(stdout, "check stdout 1 unit")
-	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stdout, "Published op-main")
 	is.Contains(stderr, "== Review step: unit (check) ==")
 	is.Contains(stderr, "◆ REVIEW STEP · approval (manual)")
 	is.Contains(stderr, "check stderr review")
@@ -142,7 +142,7 @@ func TestIntegrationWorkflowTaskReviewConfirmedManualCommandRunsAndRecordsStep(t
 	stdout, stderr := fixture.run("\na\n", "task", "run", "--pipeline", "standard", "op-main")
 
 	is.Contains(stdout, "manual command ran inspect")
-	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stdout, "Published op-main")
 	is.Contains(stderr, "◆ REVIEW STEP · inspect (manual)")
 	is.Contains(stderr, "Run manual command for step \"inspect\"")
 	is.Contains(stderr, "Review action")
@@ -223,7 +223,7 @@ func TestIntegrationWorkflowTaskReviewImportsHunkSeparateTaskNoteAndCreatesFollo
 
 	stdout, stderr := fixture.run(input, "task", "run", "--pipeline", "standard", "op-main")
 
-	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stdout, "Published op-main")
 	is.Contains(stderr, "Imported Hunk note user:3 as separate-task finding.")
 	is.Contains(stderr, "Created follow-up task op-41 for review finding 1.")
 	must.Len(fixture.tasks.created, 1)
@@ -339,7 +339,7 @@ func TestIntegrationWorkflowTaskReviewAgentReviewStepCapturesUsage(t *testing.T)
 
 			stdout, _ := fixture.run("", "task", "run", "op-main")
 
-			is.Contains(stdout, "Finalized op-main")
+			is.Contains(stdout, "Published op-main")
 			var state taskstate.TaskState
 			must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
 			latest, ok := taskstate.LatestReview(state)

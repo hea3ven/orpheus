@@ -75,7 +75,8 @@ printf 'reviewed\n' > reviewed.txt
 		},
 	}))
 
-	taskJSON := mainReadyTaskJSON("op-main", repoPath)
+	must.NoError(runFixtureCommand(repoPath, "git", "checkout", "-b", "orpheus/op-main"))
+	taskJSON := repoRootReadyTaskJSON("op-main", repoPath)
 	withFakeBDCommandResponses(t, []fakeBDCommandResponse{
 		{dir: repoPath, args: "--json --readonly --sandbox show --id op-main --include-dependents", stdout: taskJSON},
 		{dir: repoPath, args: "--json --readonly --sandbox list --all --limit 0", stdout: taskJSON},

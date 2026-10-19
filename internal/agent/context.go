@@ -136,6 +136,7 @@ type ContextTarget struct {
 	Branch           string
 	Path             string
 	CurrentDirectory string
+	BaselineCommit   string
 }
 
 type agentEnvironment struct {
@@ -159,7 +160,7 @@ func (r ActiveContextResolver) Resolve(ctx context.Context) (ActiveContext, erro
 	if err != nil {
 		return ActiveContext{}, err
 	}
-	run, taskTarget, err := r.resolveRunningRun(repo.ID, env.TaskID)
+	run, taskTarget, baseline, err := r.resolveRunningRun(repo.ID, env.TaskID)
 	if err != nil {
 		return ActiveContext{}, err
 	}
@@ -189,6 +190,7 @@ func (r ActiveContextResolver) Resolve(ctx context.Context) (ActiveContext, erro
 	if err != nil {
 		return ActiveContext{}, err
 	}
+	activeContext.Target.BaselineCommit = baseline
 	activeContext.FollowUp = followUp
 	return activeContext, nil
 }
@@ -316,10 +318,10 @@ func (r ActiveContextResolver) resolveConflictResolutionTask(
 func (r ActiveContextResolver) resolveRunningRun(
 	repoID string,
 	taskID string,
-) (taskstate.RunAttempt, taskstate.GitFacts, error) {
+) (taskstate.RunAttempt, taskstate.GitFacts, string, error) {
 	state, err := r.RunStore.Load(repoID, taskID)
 	if err != nil {
-		return taskstate.RunAttempt{}, taskstate.GitFacts{}, fmt.Errorf(
+		return taskstate.RunAttempt{}, taskstate.GitFacts{}, "", fmt.Errorf(
 			"load latest Orpheus run for task %s/%s: %w",
 			repoID,
 			taskID,
@@ -328,14 +330,14 @@ func (r ActiveContextResolver) resolveRunningRun(
 	}
 	run, ok := taskstate.LatestRun(state)
 	if !ok {
-		return taskstate.RunAttempt{}, taskstate.GitFacts{}, fmt.Errorf(
+		return taskstate.RunAttempt{}, taskstate.GitFacts{}, "", fmt.Errorf(
 			"task %s/%s has no Orpheus run attempts",
 			repoID,
 			taskID,
 		)
 	}
 	if run.Status != taskstate.RunStatusRunning {
-		return taskstate.RunAttempt{}, taskstate.GitFacts{}, fmt.Errorf(
+		return taskstate.RunAttempt{}, taskstate.GitFacts{}, "", fmt.Errorf(
 			"latest Orpheus run attempt %d for task %s/%s is %q, expected %q",
 			run.Attempt,
 			repoID,
@@ -346,13 +348,13 @@ func (r ActiveContextResolver) resolveRunningRun(
 	}
 	target, ok := taskstate.GitFactsFor(state)
 	if !ok {
-		return taskstate.RunAttempt{}, taskstate.GitFacts{}, fmt.Errorf(
+		return taskstate.RunAttempt{}, taskstate.GitFacts{}, "", fmt.Errorf(
 			"task %s/%s has no taskstate target",
 			repoID,
 			taskID,
 		)
 	}
-	return run, target, nil
+	return run, target, state.BaselineCommit, nil
 }
 
 func (r ActiveContextResolver) resolveFollowUpContext(

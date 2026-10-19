@@ -282,8 +282,18 @@ Run-state and target protections still apply.
 Orpheus creates or reuses a deterministic task worktree and branch, then launches
 the selected [agent profile](agents.md). Use `--agent <profile>` to override the
 implementer. Use `--repo-root` on first dispatch to work in the registered
-repository checkout instead. That starts on a clean default branch and
-materializes the task branch at publication.
+repository checkout instead. Both modes prepare the selected task branch from
+`origin/<default-branch>` before launching the agent and record its starting commit
+as the task baseline. `agent context` and text `task show` display that baseline;
+it does not change when a different integration destination is selected.
+If prior runs exist without a recorded baseline, dispatch stops before preparation.
+Preserve the checkout and explicitly repair the baseline using verified starting
+context; Orpheus does not guess it from current HEAD or the default branch.
+
+Initial repository-root setup requires a clean checkout on the registered default
+branch or the matching task branch. Unrelated branches and divergent existing task
+branches are refused rather than reset. Another non-closed task cannot own the
+same repository root; branch names also cannot belong to another task.
 
 The work directory is selected on first dispatch and stays fixed across retries,
 repairs, and publication, even if the checked-out branch changes. Rerunning
@@ -326,8 +336,8 @@ introduce `/`; literal template slashes create branch namespaces. The rendered
 name must be a valid Git branch, differ from the registered default branch, and
 not already be recorded for another task.
 
-Once recorded, the branch remains authoritative despite later configuration
-changes. Repository-root work records it when publication materializes the branch.
+Once prepared, the branch remains authoritative despite later configuration
+changes, in both work-directory modes.
 
 ## Stats and usage
 

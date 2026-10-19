@@ -132,7 +132,7 @@ func TestDispatchStartSelectsOnlyEligibleReviewRepairs(t *testing.T) {
 		targeted                     taskstate.RunStatus
 		wantError                    string
 	}{
-		{name: "manual blocker retains main target", kind: taskstate.ReviewStepKindManual, finding: taskstate.FindingTypeBlocking},
+		{name: "manual blocker retains task branch", kind: taskstate.ReviewStepKindManual, finding: taskstate.FindingTypeBlocking},
 		{name: "interrupted decision", kind: taskstate.ReviewStepKindCheck, finding: taskstate.FindingTypeBlocking, interrupted: true, wantError: "interrupted automated blocker decisions"},
 		{name: "unkept automated blocker", kind: taskstate.ReviewStepKindCheck, finding: taskstate.FindingTypeBlocking, wantError: "automated blockers without an explicit keep decision"},
 		{name: "advisory only", kind: taskstate.ReviewStepKindManual, finding: taskstate.FindingTypeAdvisory, wantError: "no untargeted blocking findings"},
@@ -142,7 +142,7 @@ func TestDispatchStartSelectsOnlyEligibleReviewRepairs(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := task.Repository{ID: "alpha", Name: "Alpha", Path: "/fixture/repo", DefaultBranch: "main", TaskIDPrefix: "op"}
-			item := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: "main", task.MetadataWorktree: repo.Path}}
+			item := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-1", task.MetadataWorktree: repo.Path}}
 			finding := taskstate.ReviewFinding{Type: tc.finding, Step: "inspect", Title: "Finding", Description: "Fix it"}
 			var runs []taskstate.RunAttempt
 			if tc.targeted != "" {
@@ -160,11 +160,12 @@ func TestDispatchStartSelectsOnlyEligibleReviewRepairs(t *testing.T) {
 				Steps: []taskstate.ReviewStep{{Kind: tc.kind, Name: "inspect"}}, Findings: []taskstate.ReviewFinding{finding},
 			}
 			store := &repairEligibilityStore{fakeDispatchRunStore: fakeDispatchRunStore{state: taskstate.TaskState{
-				Version: 2, RepoID: repo.ID, TaskID: item.ID, Target: taskstate.GitFacts{Branch: "main", Worktree: repo.Path},
-				Runs: runs, Reviews: []taskstate.ReviewAttempt{blocked},
+				Version: 2, RepoID: repo.ID, TaskID: item.ID, Target: taskstate.GitFacts{Branch: "orpheus/op-1", Worktree: repo.Path},
+				BaselineCommit: "initial-commit",
+				Runs:           runs, Reviews: []taskstate.ReviewAttempt{blocked},
 			}}}
 			backend := &repairEligibilityBackend{fakeDispatchBackend: fakeDispatchBackend{taskItem: item}}
-			git := &continuationDispatchGit{setupError: errors.New("selected main target")}
+			git := &continuationDispatchGit{setupError: errors.New("selected task branch")}
 			service := DispatchService{Paths: newDispatchTestPaths(t), RunStore: store, Git: git}
 
 			_, err := service.Start(context.Background(), DispatchStartOptions{TaskID: item.ID, Source: task.RepositorySource{Repository: repo}, Backend: backend})
@@ -183,8 +184,8 @@ func assertRepairDispatchRoute(t *testing.T, err error, wantError string, git *c
 		assert.Zero(t, git.setupCalls, "rejected repairs must not set up Git")
 		return
 	}
-	require.ErrorIs(t, err, git.setupError, "eligible repairs must select the original main target")
-	assert.Equal(t, 1, git.setupCalls, "eligible repair must select one main-target setup")
+	require.ErrorIs(t, err, git.setupError, "eligible repairs must select the original task branch")
+	assert.Equal(t, 1, git.setupCalls, "eligible repair must select one task-branch setup")
 }
 
 type repairEligibilityStore struct {
@@ -221,11 +222,11 @@ func TestDispatchValidateStartAllowsFollowUpForNormalizedFailedReview(t *testing
 		ID:     "op-1",
 		Status: task.StatusInProgress,
 		Metadata: task.Metadata{
-			task.MetadataBranch: "main", task.MetadataWorktree: repoPath,
+			task.MetadataBranch: "orpheus/op-1", task.MetadataWorktree: repoPath,
 		},
 	}
 	store := taskstate.NewStore(paths)
-	run, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Branch: "main", Worktree: repoPath})
+	run, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Branch: "orpheus/op-1", Worktree: repoPath, BaselineCommit: "initial-commit"})
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}
@@ -374,17 +375,18 @@ func validateDispatchStartForReviewWithRuns(
 		ID:     "op-1",
 		Status: task.StatusInProgress,
 		Metadata: task.Metadata{
-			task.MetadataBranch:   "main",
+			task.MetadataBranch:   "orpheus/op-1",
 			task.MetadataWorktree: repoPath,
 		},
 	}
 	store := fakeDispatchRunStore{
 		state: taskstate.TaskState{
-			Version: 2,
-			RepoID:  repo.ID,
-			TaskID:  taskItem.ID,
+			Version:        2,
+			RepoID:         repo.ID,
+			TaskID:         taskItem.ID,
+			BaselineCommit: "initial-commit",
 			Target: taskstate.GitFacts{
-				Branch:   "main",
+				Branch:   "orpheus/op-1",
 				Worktree: repoPath,
 			},
 			Runs:    runs,

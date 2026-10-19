@@ -40,6 +40,7 @@ func appendReviewTargetContext(builder *strings.Builder, ctx ReviewContext) {
 	builder.WriteString("\nReview target:\n")
 	appendPromptLine(builder, "- Work Directory", ctx.Target.Path)
 	appendPromptLine(builder, "- Current branch", ctx.Target.Branch)
+	appendPromptLine(builder, "- Task baseline", ctx.Target.BaselineCommit)
 	appendPromptLine(builder, "- Current directory", ctx.Target.CurrentDirectory)
 	appendPromptLine(builder, "- Review attempt", fmt.Sprintf("%d", ctx.Review.Attempt))
 	appendPromptLine(builder, "- Review step", ctx.Review.Step)

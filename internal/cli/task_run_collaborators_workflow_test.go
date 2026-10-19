@@ -101,10 +101,6 @@ func (b *memoryTaskBackend) MarkInProgress(_ context.Context, taskID, branch, wo
 	return taskmodel.MutationConflictError{TaskID: taskID, Reason: "task status or existing target prevents dispatch"}
 }
 
-func (*memoryTaskBackend) UpdateGitFacts(context.Context, string, string, string) error {
-	return errors.New("unexpected UpdateGitFacts: target relocation is outside this dispatch stub")
-}
-
 func (*memoryTaskBackend) SetPRURL(context.Context, string, string) error {
 	return errors.New("unexpected SetPRURL: publication is outside this dispatch stub")
 }
@@ -123,6 +119,7 @@ type memoryGitTarget struct {
 
 type memoryDispatchGit struct {
 	mu                  sync.Mutex
+	startingCommit      string
 	targets             map[string]memoryGitTarget
 	setups              []gitmeta.TaskWorktreeSetupResult
 	hasCandidateChanges bool
@@ -134,7 +131,7 @@ type memoryDispatchGit struct {
 }
 
 func newMemoryDispatchGit() *memoryDispatchGit {
-	return &memoryDispatchGit{targets: make(map[string]memoryGitTarget)}
+	return &memoryDispatchGit{targets: make(map[string]memoryGitTarget), startingCommit: "initial-commit"}
 }
 
 func (g *memoryDispatchGit) SetupRepoRoot(_ context.Context, opts gitmeta.RepoRootOptions) (gitmeta.TaskWorktreeSetupResult, error) {
@@ -149,6 +146,13 @@ func (g *memoryDispatchGit) SetupRepoRoot(_ context.Context, opts gitmeta.RepoRo
 }
 
 func (g *memoryDispatchGit) SetupRepoRootTaskBranch(_ context.Context, opts gitmeta.TaskWorktreeOptions) (gitmeta.TaskWorktreeSetupResult, error) {
+	g.repoRootSetups = append(g.repoRootSetups, gitmeta.RepoRootOptions{RepoID: opts.RepoID, RepoPath: opts.RepoPath, DefaultBranch: opts.DefaultBranch, AllowDirty: opts.AllowDirty})
+	if g.repoRootError != nil {
+		return gitmeta.TaskWorktreeSetupResult{}, g.repoRootError
+	}
+	if g.repoRootDirty && !opts.AllowDirty {
+		return gitmeta.TaskWorktreeSetupResult{}, errors.New("uncommitted changes")
+	}
 	return g.setup(opts.RepoPath, opts.Branch, gitmeta.TaskWorktreeLifecycleTaskBranchCreated), nil
 }
 
@@ -174,7 +178,7 @@ func (g *memoryDispatchGit) setup(path, branch string, initial gitmeta.TaskWorkt
 		lifecycle = gitmeta.TaskWorktreeLifecycleReused
 	}
 	g.targets[path] = memoryGitTarget{branch: branch}
-	result := gitmeta.TaskWorktreeSetupResult{Branch: branch, WorktreePath: path, Lifecycle: lifecycle}
+	result := gitmeta.TaskWorktreeSetupResult{Branch: branch, WorktreePath: path, Lifecycle: lifecycle, StartingCommit: g.startingCommit}
 	g.setups = append(g.setups, result)
 	return result
 }

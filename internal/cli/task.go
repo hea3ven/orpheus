@@ -180,7 +180,7 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 		Long: "Advance or resume a task's persisted implement-review-fix-finalize workflow.\n\n" +
 			"task run selects the next safe transition: implementation, review, a paused review resume, targeted repair, or finalization retry. It reports active runs, open pull requests, and finalized tasks without starting inappropriate work. " +
 			"By default, implementation runs use a deterministic task branch and worktree. " +
-			"Use --repo-root to run from the registered repository root. Repository-root work starts on the registered default branch and is published through the same pull-request flow.\n\n" +
+			"Use --repo-root to run from the registered repository root. Both directory modes prepare a task-specific branch before implementation; the integration flow is independent of directory selection.\n\n" +
 			"Review pipeline selection uses --pipeline, then the repo registry review_pipeline, reviews.default_pipeline, and finally the built-in manual local-review step. --pipeline accepts configured global pipeline names and repo-local aliases. Configured pipelines may include check, manual, and agent_review steps. A pipeline override cannot replace the pipeline stored on a paused attempt. Approval records a passed review attempt and continues into finalization.\n\n" +
 			"Automated blockers require an explicit keep, downgrade, or waive/cancel decision. They also offer restart and pause before targeted fixes: restart reruns only the blocked automated step, while pause resumes through task run. Kept blockers run bounded targeted fixes and restart the pipeline from step 1. Manual steps are persisted and resumed without rerunning completed review steps. If blocker-decision input disappears, the attempt is blocked and each preserved blocker needs an explicit disposition before a fresh review.\n\n" +
 			"Fix operational review failures, then rerun task run. Exhausted autonomous blockers remain blocked until the operator explicitly continues with task run. Use `task show review` to inspect review findings and created follow-up tasks. `task done` remains available for finalization retries, and PR synchronization remains `task sync`.",
@@ -3913,6 +3913,11 @@ func renderTaskDetails(
 	}
 	if _, err := fmt.Fprintln(output); err != nil {
 		return err
+	}
+	if state.BaselineCommit != "" {
+		if err := renderKeyValue(output, "Task baseline", state.BaselineCommit); err != nil {
+			return err
+		}
 	}
 	return renderTaskHistory(output, state)
 }

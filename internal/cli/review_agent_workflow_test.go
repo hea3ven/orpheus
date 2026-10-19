@@ -21,11 +21,13 @@ func TestIntegrationWorkflowTaskReviewAgentReviewStepLaunchesReviewerAndPassesWi
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review agent", "Run attached reviewer.")
 	paths := fixture.paths
-	fixture.reviewers(semanticAgentOutcome{})
+	fixture.reviewers(semanticAgentOutcome{captureContext: true})
 	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "agent_review", "name": "ai-review"}}})
 	stdout, _ := fixture.run("", "task", "run", "op-main")
 
-	is.Contains(stdout, "Finalized op-main")
+	is.Contains(stdout, "Published op-main")
+	must.Len(fixture.agent.contexts, 1)
+	is.Contains(fixture.agent.contexts[0], "- Task baseline: initial-commit")
 	must.Len(fixture.agent.launches, 1)
 	launch := fixture.agent.launches[0]
 	is.Equal(taskWorkflowRepoRoot, launch.dir)

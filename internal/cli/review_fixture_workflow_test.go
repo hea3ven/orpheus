@@ -15,7 +15,6 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/cli"
-	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
@@ -59,7 +58,7 @@ func newReviewWorkflowFixture(t *testing.T, taskID, summary, description string)
 	t.Helper()
 	f := newReviewDispatchFixture(t, taskID)
 	f.candidate.contents = "reviewed\n"
-	recordMainCompletion(t, f.paths, "alpha", taskID, taskWorkflowRepoRoot, summary, description)
+	recordRepoRootCompletion(t, f.paths, "alpha", taskID, taskWorkflowRepoRoot, summary, description)
 	return f
 }
 
@@ -67,12 +66,12 @@ func newReviewDispatchFixture(t *testing.T, taskID string) *reviewWorkflowFixtur
 	t.Helper()
 	item := anInProgressTask(taskID)
 	item.Title = "Ready for task done"
-	item.Metadata = taskmodel.Metadata{taskmodel.MetadataBranch: "main", taskmodel.MetadataWorktree: taskWorkflowRepoRoot}
+	item.Metadata = taskmodel.Metadata{taskmodel.MetadataBranch: "orpheus/" + taskID, taskmodel.MetadataWorktree: taskWorkflowRepoRoot}
 	base := newTaskWorkflowFixture(t, item)
 	f := &reviewWorkflowFixture{taskWorkflowFixture: base, checks: make(map[string][]checkResult), hunkCommands: make(map[string][]hunkCommandResult)}
 	f.tasks = &memoryReviewTasks{memoryTaskBackend: base.backend}
 	f.candidate = &memoryReviewCandidate{memoryDispatchGit: base.git, head: "initial-commit", contents: "fail\n"}
-	base.git.targets[taskWorkflowRepoRoot] = memoryGitTarget{branch: "main"}
+	base.git.targets[taskWorkflowRepoRoot] = memoryGitTarget{branch: "orpheus/" + taskID}
 	base.git.hasCandidateChanges = true
 	f.options.Dependencies.TaskBackendFactory = func(taskmodel.RepositorySource) (taskmodel.ReadBackend, error) { return f.tasks, nil }
 	f.options.Dependencies.ReviewPipeline = review.RunPipeline
@@ -282,13 +281,14 @@ func (g *memoryReviewCandidate) VerifyCommit(_ context.Context, _ string, commit
 	return nil
 }
 
-func recordMainCompletion(t *testing.T, paths state.Paths, repoID string, taskID string, repoPath string, summary string, description string) {
+func recordRepoRootCompletion(t *testing.T, paths state.Paths, repoID string, taskID string, repoPath string, summary string, description string) {
 	t.Helper()
 	store := taskstate.NewStore(paths)
 	attempt, err := store.StartRun(repoID, taskID, taskstate.StartRunOptions{
-		Agent:    "recorder",
-		Branch:   "main",
-		Worktree: repoPath,
+		Agent:          "recorder",
+		Branch:         "orpheus/" + taskID,
+		Worktree:       repoPath,
+		BaselineCommit: "initial-commit",
 	})
 	if err != nil {
 		t.Fatalf("start main run: %v", err)
@@ -319,9 +319,10 @@ func recordReviewFollowUpCompletion(
 	t.Helper()
 	store := taskstate.NewStore(paths)
 	attempt, err := store.StartRun(repoID, taskID, taskstate.StartRunOptions{
-		Agent:    "recorder",
-		Branch:   "main",
-		Worktree: repoPath,
+		Agent:          "recorder",
+		Branch:         "orpheus/" + taskID,
+		Worktree:       repoPath,
+		BaselineCommit: "initial-commit",
 		ReviewFollowUp: &taskstate.ReviewFollowUp{
 			ReviewAttempt:  reviewAttempt,
 			FindingIndexes: []int{0},
@@ -378,21 +379,6 @@ func (p *memoryReviewPR) Create(_ context.Context, req pullrequest.CreateRequest
 func (*memoryReviewPR) StatusByURL(context.Context, pullrequest.StatusByURLRequest) (pullrequest.PullRequestStatus, error) {
 	return pullrequest.PullRequestStatus{}, errors.New("unexpected PR status lookup")
 }
-func (b *memoryReviewTasks) UpdateGitFacts(_ context.Context, id, branch, worktree string) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	item, ok := b.tasks[id]
-	if !ok {
-		return taskmodel.ErrNotFound
-	}
-	if item.OrpheusMetadata().PRURL != "" {
-		return taskmodel.MutationConflictError{TaskID: id, Reason: "already published"}
-	}
-	item.Metadata[taskmodel.MetadataBranch] = branch
-	item.Metadata[taskmodel.MetadataWorktree] = worktree
-	b.tasks[id] = item
-	return nil
-}
 func (b *memoryReviewTasks) SetPRURL(_ context.Context, id, url string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -403,10 +389,6 @@ func (b *memoryReviewTasks) SetPRURL(_ context.Context, id, url string) error {
 	item.Metadata[taskmodel.MetadataPRURL] = url
 	b.tasks[id] = item
 	return nil
-}
-func (g *memoryReviewCandidate) MaterializeTaskBranch(_ context.Context, repo taskmodel.Repository, _ string, branch string, _ state.Paths) (gitmeta.TaskWorktreeSetupResult, error) {
-	g.targets[repo.Path] = memoryGitTarget{branch: branch}
-	return gitmeta.TaskWorktreeSetupResult{Branch: branch, WorktreePath: repo.Path}, nil
 }
 func (g *memoryReviewCandidate) PushTaskBranch(ctx context.Context, dir, branch string) error {
 	return g.PushDefaultBranch(ctx, dir, branch)
@@ -450,9 +432,6 @@ func (*memoryReviewCandidate) MergeTaskBranchIntoDestination(context.Context, ta
 }
 func (*memoryReviewCandidate) ValidateRecordedDirectMerge(context.Context, taskmodel.Repository, string, string) (bool, error) {
 	return false, errors.New("unexpected direct merge retry")
-}
-func (*memoryReviewCandidate) ValidateMaterializedTaskBranchRetry(context.Context, taskmodel.Repository, string, string, state.Paths) error {
-	return errors.New("unexpected publication retry")
 }
 
 func loadLatestReview(t *testing.T, fixture *reviewWorkflowFixture, taskID string) taskstate.ReviewAttempt {

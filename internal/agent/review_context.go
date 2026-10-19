@@ -95,6 +95,7 @@ func (r ActiveContextResolver) ResolveReview(ctx context.Context) (ReviewContext
 		return ReviewContext{}, err
 	}
 
+	activeContext.Target.BaselineCommit = state.BaselineCommit
 	completion := reviewCompletionContext(completions)
 	return ReviewContext{
 		Repository: activeContext.Repository,

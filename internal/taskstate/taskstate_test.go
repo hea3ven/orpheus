@@ -34,11 +34,12 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 			require.NoError(t, err, "record worktree event")
 
 			attempt, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
-				Agent:       "recorder",
-				Interactive: interactive,
-				SessionName: "(op-1) Implement task",
-				Branch:      "orpheus/op-1",
-				Worktree:    "/fixture/op-1",
+				Agent:          "recorder",
+				BaselineCommit: "baseline-sha",
+				Interactive:    interactive,
+				SessionName:    "(op-1) Implement task",
+				Branch:         "orpheus/op-1",
+				Worktree:       "/fixture/op-1",
 			})
 			require.NoError(t, err, "start run")
 			require.Equal(t, 1, attempt.Attempt)
@@ -53,6 +54,7 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 			require.NoError(t, err, "load state")
 			require.Equal(t, "alpha", loaded.RepoID)
 			require.Equal(t, "op-1", loaded.TaskID)
+			require.Equal(t, "baseline-sha", loaded.BaselineCommit)
 			require.Len(t, loaded.Runs, 1)
 			require.Len(t, loaded.Events, 3)
 			require.Equal(t, interactive, attempt.Execution.Interactive)
@@ -80,6 +82,13 @@ func TestStoreRecordsWorktreeAndRunAttempts(t *testing.T) {
 				"run_started",
 				"run_finished",
 			)
+			_, err = store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+				Branch: "orpheus/op-1", Worktree: "/fixture/op-1", BaselineCommit: "different-sha",
+			})
+			require.ErrorContains(t, err, "task baseline is already locked")
+			preserved, loadErr := store.Load("alpha", "op-1")
+			require.NoError(t, loadErr)
+			require.Equal(t, loaded, preserved, "refused baseline changes preserve persisted history")
 			assertStoreYAMLNotContains(t, store, "alpha", "op-1",
 				"target:",
 				"  branch: orpheus/op-1\n  worktree: /fixture/op-1\n  started_at",

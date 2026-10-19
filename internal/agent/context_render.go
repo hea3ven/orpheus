@@ -158,6 +158,7 @@ func appendExecutionTargetContext(builder *strings.Builder, ctx ActiveContext) {
 	builder.WriteString("\nExecution target:\n")
 	appendPromptLine(builder, "- Work Directory", ctx.Target.Path)
 	appendPromptLine(builder, "- Current branch", ctx.Target.Branch)
+	appendPromptLine(builder, "- Task baseline", ctx.Target.BaselineCommit)
 	appendPromptLine(builder, "- Current directory", ctx.Target.CurrentDirectory)
 	appendPromptLine(builder, "- Run attempt", fmt.Sprintf("%d", ctx.Run.Attempt))
 	if strings.TrimSpace(ctx.Run.Agent) != "" {
@@ -213,7 +214,7 @@ func appendExecutionContract(builder *strings.Builder, ctx ActiveContext) {
 		appendFeatureBranchExecutionContract(builder, ctx.Task.ID, ctx.Repository.SummaryGuidance, ctx.Repository.SummaryGuidanceStyle)
 	case ExecutionTargetMain:
 		builder.WriteString("- You are running in the registered repository root on the registered default branch.\n")
-		builder.WriteString("- The deterministic task branch is created only after review, immediately before publication.\n")
+		builder.WriteString("- This recorded default-branch context needs operator repair before publication; new work must start on a task branch.\n")
 		appendFeatureBranchExecutionContract(builder, ctx.Task.ID, ctx.Repository.SummaryGuidance, ctx.Repository.SummaryGuidanceStyle)
 	default:
 		builder.WriteString("- The execution target is unknown; stop and ask the human operator for help.\n")
