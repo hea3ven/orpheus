@@ -48,3 +48,25 @@ func SetMemoryDataWriteError(paths Paths, fail func(string, []byte) error) error
 	}
 	return nil
 }
+
+// SetMemoryDataRemoveError injects a recursive-deletion failure. The callback
+// receives a relative data path and must not reenter these Paths.
+func SetMemoryDataRemoveError(paths Paths, fail func(string) error) error {
+	backend, ok := paths.backend.(*memoryBackend)
+	if !ok {
+		return errors.New("remove fault requires memory-backed paths")
+	}
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	backend.removeError = nil
+	if fail != nil {
+		backend.removeError = func(path string) error {
+			rel, err := filepath.Rel(paths.dataRoot, path)
+			if err != nil {
+				return err
+			}
+			return fail(rel)
+		}
+	}
+	return nil
+}

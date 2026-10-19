@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -17,11 +18,12 @@ func NewMemoryPaths(configRoot, dataRoot string) (Paths, error) {
 }
 
 type memoryBackend struct {
-	mu         sync.Mutex
-	writeError func(string, []byte) error
-	files      map[string][]byte
-	locks      map[string]struct{}
-	dirs       map[string]struct{}
+	mu          sync.Mutex
+	writeError  func(string, []byte) error
+	removeError func(string) error
+	files       map[string][]byte
+	locks       map[string]struct{}
+	dirs        map[string]struct{}
 }
 
 func newMemoryBackend() *memoryBackend {
@@ -110,4 +112,27 @@ func (b *memoryBackend) acquireLock(path string, _, _ os.FileMode) (func() error
 		delete(b.locks, path)
 		return nil
 	}, nil
+}
+
+func (b *memoryBackend) checkTree(string) error { return nil }
+
+func (b *memoryBackend) removeTree(path string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.removeError != nil {
+		if err := b.removeError(path); err != nil {
+			return err
+		}
+	}
+	for file := range b.files {
+		if file == path || strings.HasPrefix(file, path+string(filepath.Separator)) {
+			delete(b.files, file)
+		}
+	}
+	for dir := range b.dirs {
+		if dir == path || strings.HasPrefix(dir, path+string(filepath.Separator)) {
+			delete(b.dirs, dir)
+		}
+	}
+	return nil
 }

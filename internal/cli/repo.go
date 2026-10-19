@@ -44,6 +44,7 @@ func newRepoCommand(opts *rootOptions) *cobra.Command {
 		newRepoAddCommand(opts),
 		newRepoConfigCommand(opts),
 		newRepoListCommand(opts),
+		newRepoRemoveCommand(opts),
 		newRepoBeadsDirCommand(opts),
 	)
 	return cmd

@@ -42,6 +42,8 @@ type CommandOptions struct {
 // production adapters. Collaborators are shared by reference and must remain
 // valid for the lifetime of commands constructed with them.
 type Dependencies struct {
+	RepositoryRemovalGit RepositoryRemovalGit
+
 	Terminal           TerminalCapabilities
 	EvaluationEffects  revieweval.Effects
 	DoctorEffects      doctor.Effects
@@ -82,6 +84,7 @@ func (d Dependencies) applyTo(invocation *invocationDependencies) {
 	invocation.prProvider = d.PRProvider
 	invocation.syncGit = d.SyncGit
 	invocation.cleanupGit = d.CleanupGit
+	invocation.repositoryRemovalGit = d.RepositoryRemovalGit
 	invocation.reviewEffects = d.ReviewEffects
 	invocation.reviewStatus = d.ReviewStatus
 	invocation.finalizationGit = d.FinalizationGit

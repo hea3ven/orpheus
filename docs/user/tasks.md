@@ -58,6 +58,54 @@ Gig and Beads repositories can share one workspace. Task IDs resolve through
 registered repository prefixes. `task show` includes
 relationships and execution history; showing an epic includes its direct children.
 
+## Remove a repository
+
+```sh
+orpheus repo remove <repo-id-name-or-prefix>
+```
+
+Removal is destructive and does not prompt. First ensure no task is running in
+that repository and no other command is mutating it. Orpheus holds the existing
+global mutation lock, but does not check active executions or coordinate with
+other processes. Back up any managed tasks or history you need before removal.
+
+Cross-repository dependencies and epic membership, incoming or outgoing, prevent
+removal even for closed tasks. The error lists the repositories, task IDs, and
+relationships to remove manually. An incomplete task-source relationship read
+also refuses removal; repair the read failure first. Orpheus never detaches or
+rewrites these relationships for you.
+
+All owned worktrees, including unfinished tasks and worktrees without task
+records, are removed through Git without force before any history, managed task
+storage, or registration is deleted. Unsafe ownership, dirty or locked
+worktrees, and missing directories still registered in Git require manual
+repair. Errors identify affected paths. Inspect `git worktree list`, preserve or
+commit changes, unlock only when appropriate, and repair registrations with Git;
+use `git worktree prune --dry-run` to inspect stale entries before pruning.
+Do not blindly delete directories. Retry `repo remove` after repair: worktrees
+already removed stay removed, while task history, managed storage, and the
+registration remain until all worktree cleanup succeeds.
+
+After worktree cleanup, Orpheus deletes `repos/<repo-id>` under its data root
+(task state, execution/review history, usage, and managed Gig or Beads storage),
+then saves the registry without that repository. Later deletion failures may
+leave only some data; inspect the reported directory and repair permissions
+before retrying. A registry-save failure leaves the registration but no owned
+data. Local Beads can still be checked on retry. If managed storage was deleted,
+the relationship check cannot complete: recover from your own backup or finish
+cleanup manually and remove only the affected entry from
+`$XDG_DATA_HOME/orpheus/registry.yaml` (default
+`~/.local/share/orpheus/registry.yaml`). Do not initialize an empty replacement
+source merely to bypass the check. Success is reported only after cleanup and
+unregistration complete.
+
+The original checkout, Git branches and remotes, unrelated worktrees,
+repository-local Beads, and other repositories' data are preserved. Register the
+same checkout again to start fresh; new managed storage can use a different
+`--prefix`. Deleted managed tasks and history are not restored or migrated.
+
+## Task views
+
 `status` is the action queue. It groups active and ready work into epic trees,
 then shows blocked items as standalone rows. Closed items remain hidden.
 Add `--full` to retain epic grouping for blocked children and include closed items.

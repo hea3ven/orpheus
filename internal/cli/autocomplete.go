@@ -39,6 +39,7 @@ func configureRepoCompletions(repo *cobra.Command, complete completionProvider) 
 	commandAt(repoConfig, "get").ValidArgsFunction = complete.repoConfigArguments
 	commandAt(repoConfig, "set").ValidArgsFunction = complete.repoConfigArguments
 	commandAt(repo, "beads-dir").ValidArgsFunction = complete.repositories
+	commandAt(repo, "remove").ValidArgsFunction = complete.repositories
 	// repo add deliberately has no argument completion function, preserving normal
 	// directory completion from the generated shell scripts.
 }
