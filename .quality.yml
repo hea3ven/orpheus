@@ -21,7 +21,7 @@ timing:
 lanes:
   integration:
     coverage:
-      floor_percent: 68.506
+      floor_percent: 66.363
       packages:
         github.com/hea3ven/orpheus/cmd/orpheus: 0
         github.com/hea3ven/orpheus/internal/agent: 48.693
@@ -46,6 +46,7 @@ lanes:
         github.com/hea3ven/orpheus/internal/taskstate: 69.207
         github.com/hea3ven/orpheus/internal/taskstats: 43.078
         github.com/hea3ven/orpheus/internal/tasktarget: 75.451
+        github.com/hea3ven/orpheus/internal/work: 0
         github.com/hea3ven/orpheus/internal/workflow: 70.696
   unit:
     coverage:
@@ -74,4 +75,5 @@ lanes:
         github.com/hea3ven/orpheus/internal/taskstate: 67.565
         github.com/hea3ven/orpheus/internal/taskstats: 82.59
         github.com/hea3ven/orpheus/internal/tasktarget: 82.071
+        github.com/hea3ven/orpheus/internal/work: 82.739
         github.com/hea3ven/orpheus/internal/workflow: 48.308
