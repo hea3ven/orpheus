@@ -82,12 +82,12 @@ _Avoid_: Status, command, step
 One occurrence of a phase within a workflow. Returning to review after a repair begins another review phase attempt.
 _Avoid_: Run, workflow, step attempt
 
-**Workflow Step**:
-A defined unit of work within a phase, performed by Orpheus, an agent, an external tool, or the operator.
-_Avoid_: Phase, command, agent execution
+**Review Step**:
+A configured check, agent assessment, or operator assessment within a task review pipeline.
+_Avoid_: Phase, command, agent execution, workflow step
 
 **Step Attempt**:
-One effort to perform a workflow step. Retrying a step creates another attempt without discarding the earlier result.
+One effort to perform a review step. Retrying retains the earlier result as history.
 _Avoid_: Run, phase attempt, session
 
 **Work Artifact**:
@@ -114,9 +114,9 @@ _Avoid_: Task diff, review approval, latest changes
 The task requirements and comparison context under which a revision is evaluated, including the relevant baseline and integration destination for code changes.
 _Avoid_: Revision, task description, branch name
 
-**Workflow Interaction**:
-A point in a task workflow that requires an operator decision before work can continue.
-_Avoid_: Prompt, manual phase, terminal input
+**Review Contract**:
+The captured requirements under which a particular task review evaluates its output. A successful subset does not satisfy the complete contract.
+_Avoid_: Review result, latest pipeline configuration, approval
 
 **Publication Plan**:
 The chosen revision, publication content, integration flow, and integration destination for delivering reviewed work.
@@ -131,8 +131,12 @@ The commit selected to deliver reviewed task changes through the publication pla
 _Avoid_: Revision, agent completion, review approval
 
 **External Review**:
-The evaluation of published task work through external feedback and responses, including requests for further revisions before acceptance.
-_Avoid_: Integration, merge, task review, publication
+The period between publishing a pull request and confirming its merge, during which its branch may be synchronized with the integration destination.
+_Avoid_: Task review, publication, conflict resolution
+
+**Branch Sync**:
+One effort to bring a published task branch up to date with its integration destination, resolving conflicts when needed and delivering the resulting branch changes.
+_Avoid_: Implementation, task review, publication
 
 ### Execution and Review
 
@@ -205,7 +209,7 @@ The evaluation of a revision through automated steps, manual decisions, or both.
 _Avoid_: Local review, PR review, code review, task approval, approval
 
 **Review Finding**:
-An issue identified during task review or external review, with its origin and disposition retained. It may require changes to task output or a response before work can proceed.
+An issue identified during task review, with the reported problem and its disposition retained. It may require changes to task output before work can proceed.
 _Avoid_: PR comment, task, bug
 
 **Publication**:
@@ -213,7 +217,7 @@ The delivery of reviewed task work beyond the task review boundary to the remote
 _Avoid_: Finalization, sync, release, deploy
 
 **Finalization**:
-The recording of task closure and other consequences after the task workflow's required publication and acceptance of its output are established.
+The recording of task closure and local cleanup after a pull request is confirmed merged or direct integration is delivered.
 _Avoid_: Publication, sync, completion
 
 **Pull Request**:
