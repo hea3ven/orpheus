@@ -107,6 +107,14 @@ func TestIntegrationAdapterContractInspectRejectsNonGitPath(t *testing.T) {
 func newGitRepo(t *testing.T) string {
 	t.Helper()
 
+	// Inherited identities override repository configuration. Setenv registers
+	// cleanup, but Git needs these variables absent rather than empty.
+	for _, key := range []string{"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"} {
+		t.Setenv(key, "")
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatalf("unset %s: %v", key, err)
+		}
+	}
 	repoPath := testutil.CanonicalTempDir(t)
 	runGit(t, repoPath, "init")
 	runGit(t, repoPath, "checkout", "-b", "main")

@@ -18,6 +18,12 @@ import (
 )
 
 func TestIntegrationAdapterContractRevisionCaptureRetainsOrdinaryHookOutputInBothDirectories(t *testing.T) {
+	for key, value := range map[string]string{
+		"GIT_AUTHOR_NAME": "Inherited Author", "GIT_AUTHOR_EMAIL": "author@example.invalid",
+		"GIT_COMMITTER_NAME": "Inherited Committer", "GIT_COMMITTER_EMAIL": "committer@example.invalid",
+	} {
+		t.Setenv(key, value)
+	}
 	for _, linked := range []bool{false, true} {
 		t.Run(map[bool]string{false: "repository root", true: "linked worktree"}[linked], func(t *testing.T) {
 			repo := newGitRepo(t)
@@ -44,6 +50,7 @@ func TestIntegrationAdapterContractRevisionCaptureRetainsOrdinaryHookOutputInBot
 			assert.Equal(t, "feature\n", runGit(t, dir, "show", revision.Commit+":feature.txt"))
 			assert.Equal(t, opts.Message, strings.TrimSpace(runGit(t, dir, "show", "-s", "--format=%B", revision.Commit)))
 			assert.Equal(t, "Configured Author <configured@example.test>", strings.TrimSpace(runGit(t, dir, "show", "-s", "--format=%an <%ae>", revision.Commit)))
+			assert.Equal(t, "Configured Author <configured@example.test>", strings.TrimSpace(runGit(t, dir, "show", "-s", "--format=%cn <%ce>", revision.Commit)))
 			assert.Equal(t, input, strings.TrimSpace(runGit(t, dir, "show", "-s", "--format=%P", revision.Commit)))
 			assert.Equal(t, revision.Tree, strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD^{tree}")))
 			require.NoError(t, orpheusgit.VerifyRevision(context.Background(), dir, orpheusgit.CheckoutIdentity{Commit: revision.Commit, Ref: opts.Input.Ref}, revision))
