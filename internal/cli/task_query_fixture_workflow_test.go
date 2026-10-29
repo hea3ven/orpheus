@@ -4,6 +4,7 @@ package cli_test
 
 import (
 	"context"
+	workmodel "github.com/hea3ven/orpheus/internal/work"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/registry"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/stretchr/testify/require"
 )
 
@@ -152,7 +154,7 @@ func (b workflowReadBackend) ListFiltered(_ context.Context, filter taskmodel.Li
 func writeMismatchedTaskState(t *testing.T, fixture *workflowFixture, repoID, taskID string) {
 	t.Helper()
 	rel := filepath.Join("repos", repoID, "tasks", taskID+".yaml")
-	require.NoError(t, fixture.paths.WriteDataYAML(rel, taskstate.TaskState{Version: 1, RepoID: "wrong", TaskID: taskID}))
+	require.NoError(t, fixture.paths.WriteDataYAML(rel, taskstate.TaskState{Work: &work.State{RepositoryID: "wrong", TaskID: taskID}}))
 }
 
 type taskStatsWorkflowRunFixture struct {
@@ -172,17 +174,17 @@ func recordWorkflowTaskStatsAggregateRun(
 ) {
 	t.Helper()
 	*now = fixture.startedAt
-	run, err := stateStore.StartRun("alpha", fixture.taskID, taskstate.StartRunOptions{
+	run, err := stateStore.StartRun("alpha", fixture.taskID, taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent: "codex", Profile: "codex-profile", Harness: "codex", Model: fixture.model,
 		Command: "codex", Args: []string{"exec", "--model", fixture.model}, Branch: "main", Worktree: repoDir,
 	})
 	require.NoError(t, err)
 	if fixture.usage != nil {
-		_, err = stateStore.RecordRunUsage("alpha", fixture.taskID, run.Attempt, taskstate.RecordRunUsageOptions{Usage: fixture.usage})
+		_, err = seedFixtureUsage(stateStore, "alpha", fixture.taskID, run.Attempt, taskstate.RecordRunUsageOptions{Usage: fixture.usage})
 		require.NoError(t, err)
 	}
 	*now = fixture.finishedAt
-	_, err = stateStore.FinishRun("alpha", fixture.taskID, run.Attempt, taskstate.RunStatusSucceeded)
+	_, err = stateStore.FinishObservedRun(run.Address, &work.ExitedProcess{Code: fixtureExitCode(0), At: fixture.finishedAt}, 0)
 	require.NoError(t, err)
 }
 

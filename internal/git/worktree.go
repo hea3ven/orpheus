@@ -62,6 +62,8 @@ type TaskWorktreeSetupResult struct {
 	Lifecycle    TaskWorktreeLifecycle
 	// StartingCommit is the verified HEAD before implementation begins.
 	StartingCommit string
+	StartingTree   string
+	CheckpointRef  string
 }
 
 // TaskBranchUpdatePolicy controls whether a clean integration-branch merge is applied.

@@ -17,7 +17,9 @@ import (
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/tasktarget"
 	"github.com/hea3ven/orpheus/internal/testutil"
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,8 +33,9 @@ type fakeSyncRunStore struct {
 }
 
 type fakeSyncGit struct {
-	requests []gitmeta.TaskBranchSyncOptions
-	result   gitmeta.TaskBranchSyncResult
+	requests     []gitmeta.TaskBranchSyncOptions
+	result       gitmeta.TaskBranchSyncResult
+	head, remote string
 }
 
 type fakeSyncBackend struct {
@@ -59,8 +62,13 @@ func (g *fakeSyncGit) SyncTaskBranchWithDefault(_ context.Context, opts gitmeta.
 	return result, nil
 }
 
-func (*fakeSyncGit) BeginTaskBranchConflictResolution(context.Context, gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchSyncResult, error) {
-	return gitmeta.TaskBranchSyncResult{}, errors.New("unexpected conflict resolution")
+func (g *fakeSyncGit) BeginTaskBranchConflictResolution(ctx context.Context, opts gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchSyncResult, error) {
+	result, err := g.SyncTaskBranchWithDefault(ctx, opts)
+	if result.Head == "" {
+		result.Head = "fixture-output"
+	}
+	g.head = result.Head
+	return result, err
 }
 
 func (*fakeSyncGit) CompleteTaskBranchConflictResolution(context.Context, gitmeta.TaskBranchSyncOptions, []string) (gitmeta.TaskBranchSyncResult, error) {
@@ -133,18 +141,6 @@ func (s *fakeSyncRunStore) RecordTaskClosed(repoID, taskID string, opts taskstat
 	return taskstate.Event{Type: taskstate.EventTaskClosed, At: time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC), CloseReason: opts.Reason, PRURL: opts.PRURL, ObservedPRState: opts.ObservedPRState}, nil
 }
 
-func (*fakeSyncRunStore) RecordSyncConflictResolutionStarted(string, string, taskstate.SyncConflictResolutionEventOptions) (taskstate.Event, error) {
-	return taskstate.Event{}, errors.New("unexpected conflict start")
-}
-
-func (*fakeSyncRunStore) RecordSyncConflictResolutionFinished(string, string, taskstate.SyncConflictResolutionEventOptions) (taskstate.Event, error) {
-	return taskstate.Event{}, errors.New("unexpected conflict completion")
-}
-
-func (*fakeSyncRunStore) RecordSyncConflictResolutionFailed(string, string, taskstate.SyncConflictResolutionEventOptions, error) (taskstate.Event, error) {
-	return taskstate.Event{}, errors.New("unexpected conflict failure")
-}
-
 type fakePRProvider struct {
 	findRequests   []pullrequest.FindOpenByBranchRequest
 	createRequests []pullrequest.CreateRequest
@@ -194,10 +190,7 @@ func TestSyncServiceMergedPRReportsWorktreeWhenCleanupStateReloadFails(t *testin
 		task.MetadataBranch: targets.WorktreeTeam.Branch, task.MetadataWorktree: worktree,
 		task.MetadataPRURL: "https://github.test/org/repo/pull/42",
 	}}
-	state := taskstate.TaskState{
-		RepoID: "alpha", TaskID: "op-1", WorkDirectory: taskstate.WorkDirectory{Path: worktree},
-		GitFacts: taskstate.GitFacts{Branch: targets.WorktreeTeam.Branch, Worktree: worktree},
-	}
+	state := deliveredSyncView(t, worktree, targets.WorktreeTeam.Branch)
 	service, provider, _ := newSyncTestService(t, taskItem, state, paths, source)
 	service.RunStore = &fakeSyncRunStore{
 		states:         map[string]taskstate.TaskState{"alpha/op-1": state},
@@ -227,7 +220,7 @@ func TestSyncServiceMergedPRCloseAndAuditFailures(t *testing.T) {
 
 	closeErr := errors.New("close rejected")
 	service, provider, backend := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
-	runStore := &fakeSyncRunStore{}
+	runStore := service.RunStore.(*fakeSyncRunStore)
 	service.RunStore = runStore
 	backend.closeErr = closeErr
 	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateMerged}
@@ -242,9 +235,8 @@ func TestSyncServiceMergedPRCloseAndAuditFailures(t *testing.T) {
 
 	auditErr := errors.New("disk full")
 	service, provider, backend = newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
-	runStore = &fakeSyncRunStore{
-		recordErr: auditErr,
-	}
+	runStore = service.RunStore.(*fakeSyncRunStore)
+	runStore.recordErr = auditErr
 	service.RunStore = runStore
 	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateMerged}
 
@@ -257,6 +249,50 @@ func TestSyncServiceMergedPRCloseAndAuditFailures(t *testing.T) {
 	if len(backend.closed) != 1 || backend.closed[0] != "op-1" {
 		t.Fatalf("closed = %#v, want backend close before audit error", backend.closed)
 	}
+	for _, unsafe := range []string{"missing workflow", "live implementation", "unsettled branch sync"} {
+		t.Run(unsafe, func(t *testing.T) {
+			service, provider, backend := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
+			observed := service.RunStore.(*fakeSyncRunStore)
+			view := observed.states["alpha/op-1"]
+			switch unsafe {
+			case "missing workflow":
+				view = taskstate.TaskState{RepoID: "alpha", TaskID: "op-1"}
+			case "live implementation":
+				w := &view.Work.Workflows[0]
+				w.Phases = append(w.Phases, &work.ImplementationPhase{Input: &work.OutputRef{Phase: 1}, Execution: work.AgentExecution{StartedAt: time.Now().UTC(), SupervisorPID: 10, Process: &work.RunningProcess{}}})
+			case "unsettled branch sync":
+				view.Work.Workflows[0].Phases[4].(*work.ExternalReviewPhase).BranchSyncs = []work.BranchSync{{StartedAt: time.Now().UTC(), Checkpoint: work.BranchSyncCheckpoint{LocalHead: "fixture-output", RemoteHead: "fixture-output", MergeSource: "destination-head"}}}
+			}
+			if view.Work != nil {
+				var err error
+				view, err = taskstate.Project(*view.Work)
+				require.NoError(t, err)
+			}
+			observed.states["alpha/op-1"] = view
+			var before []byte
+			if view.Work != nil {
+				var err error
+				before, err = workstate.Encode(*view.Work)
+				require.NoError(t, err)
+			}
+			provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateMerged}
+
+			_, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
+
+			require.ErrorContains(t, err, "refuse source closure before workflow acceptance")
+			assert.Empty(t, backend.closed, "a later local-state refusal cannot undo an external task-source closure")
+			assert.Empty(t, observed.events)
+			assert.Equal(t, task.StatusInProgress, backend.tasks[0].Status)
+			if view.Work != nil {
+				after, err := observed.Load("alpha", "op-1")
+				require.NoError(t, err)
+				encoded, err := workstate.Encode(*after.Work)
+				require.NoError(t, err)
+				assert.Equal(t, before, encoded, "prospective acceptance cannot mutate current history")
+			}
+		})
+	}
+
 }
 
 func TestSyncServiceSyncAllHoldsGlobalLockAcrossScanAndSync(t *testing.T) {
@@ -290,7 +326,7 @@ func TestSyncServiceSyncAllHoldsGlobalLockAcrossScanAndSync(t *testing.T) {
 		BackendFactory: func(task.RepositorySource) (task.SyncBackend, error) {
 			return backend, nil
 		},
-		RunStore: &fakeSyncRunStore{},
+		RunStore: &fakeSyncRunStore{states: map[string]taskstate.TaskState{"alpha/op-1": deliveredSyncView(t, repoPath, "orpheus/op-1")}},
 		PRProvider: &fakePRProvider{status: pullrequest.PullRequestStatus{
 			URL:   "https://github.test/org/repo/pull/42",
 			State: pullrequest.StateOpen,
@@ -520,6 +556,17 @@ func newSyncTestService(
 	source task.RepositorySource,
 ) (workflow.SyncService, *fakePRProvider, *fakeSyncBackend) {
 	t.Helper()
+	if taskState.Work == nil {
+		dir := taskItem.Metadata[task.MetadataWorktree]
+		if dir == "" {
+			dir = source.Repository.Path
+		}
+		branch := taskItem.Metadata[task.MetadataBranch]
+		if branch == "" {
+			branch = "orpheus/" + taskItem.ID
+		}
+		taskState = deliveredSyncView(t, dir, branch)
+	}
 	provider := &fakePRProvider{created: pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/42"}}
 	backend := &fakeSyncBackend{tasks: []task.Task{taskItem}}
 	service := workflow.SyncService{
@@ -571,10 +618,23 @@ func TestSyncServiceUpdatesOpenPRBranchFromRecordedDestination(t *testing.T) {
 		task.MetadataPRURL: "https://github.test/org/repo/pull/42",
 	}}
 	service, provider, _ := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
-	runStore := service.RunStore.(*fakeSyncRunStore)
-	runStore.states = map[string]taskstate.TaskState{
-		"alpha/op-1": {RepoID: "alpha", TaskID: "op-1", Finalization: &taskstate.Finalization{DestinationBranch: "release/next"}},
-	}
+	snapshot, err := testutil.DeliveredPRWork("alpha", "op-1", targets.WorktreeTeam.Worktree, targets.WorktreeTeam.Branch, taskItem.Metadata[task.MetadataPRURL])
+	require.NoError(t, err)
+	w := &snapshot.Workflows[0]
+	delivery := w.Phases[3].(*work.PublicationPhase).Delivery
+	w.Phases = w.Phases[:4]
+	w.Phases[3].(*work.PublicationPhase).Delivery = nil
+	w.Phases[2].(*work.ReviewPhase).Scope.Destination.Branch = "release/next"
+	w.Phases[3].(*work.PublicationPhase).Consent = nil
+	grant := delivery.(*work.PullRequestDelivery).ObservedAt.Add(-time.Second)
+	require.NoError(t, snapshot.AuthorizePublication(0, work.PublicationRef{Phase: 3}, grant, "Explicit synthetic fixture grant for named destination"))
+	delivery.(*work.PullRequestDelivery).ObservedAt = grant.Add(time.Second)
+	w.Phases[3].(*work.PublicationPhase).Delivery = delivery
+	w.Phases = append(w.Phases, &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 3}})
+	_, err = workstate.NewStore(paths).Save(snapshot, 0)
+	require.NoError(t, err)
+	service.RunStore = taskstate.NewStore(paths)
+
 	gitState := &fakeSyncGit{result: gitmeta.TaskBranchSyncResult{Status: gitmeta.TaskBranchSyncUpdated}}
 	service.Git = gitState
 	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateOpen}
@@ -589,4 +649,42 @@ func TestSyncServiceUpdatesOpenPRBranchFromRecordedDestination(t *testing.T) {
 	if len(gitState.requests) != 1 || gitState.requests[0].DefaultBranch != "release/next" {
 		t.Fatalf("sync request = %#v, want release/next", gitState.requests)
 	}
+}
+
+func (g *fakeSyncGit) InspectTaskBranchConflictCheckpoint(context.Context, gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchConflictCheckpoint, error) {
+	if g.head == "" {
+		g.head = "fixture-output"
+	}
+	if g.remote == "" {
+		g.remote = "fixture-output"
+	}
+	return gitmeta.TaskBranchConflictCheckpoint{LocalHead: g.head, RemoteHead: g.remote, MergeSource: "destination-head"}, nil
+}
+func (g *fakeSyncGit) InspectRemoteTaskBranchHead(context.Context, gitmeta.TaskBranchSyncOptions) (string, error) {
+	return g.remote, nil
+}
+func (g *fakeSyncGit) InspectTaskBranchConflictRollbackEligibility(context.Context, gitmeta.TaskBranchSyncOptions, gitmeta.TaskBranchConflictCheckpoint, string) error {
+	return errors.New("unexpected rollback")
+}
+func (g *fakeSyncGit) RollbackTaskBranchConflictResolution(context.Context, gitmeta.TaskBranchSyncOptions, gitmeta.TaskBranchConflictCheckpoint) error {
+	return errors.New("unexpected rollback")
+}
+func (g *fakeSyncGit) VerifyTaskBranchConflictRollback(context.Context, gitmeta.TaskBranchSyncOptions, gitmeta.TaskBranchConflictCheckpoint) error {
+	return errors.New("unexpected rollback")
+}
+func (g *fakeSyncGit) CommitTaskBranchConflictResolution(context.Context, gitmeta.TaskBranchSyncOptions, []string) (gitmeta.TaskBranchSyncResult, error) {
+	return gitmeta.TaskBranchSyncResult{}, errors.New("unexpected resolver")
+}
+func (g *fakeSyncGit) PushCommittedTaskBranchConflictResolution(context.Context, gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchSyncResult, error) {
+	g.remote = g.head
+	return gitmeta.TaskBranchSyncResult{Head: g.head, Status: gitmeta.TaskBranchSyncUpdated}, nil
+}
+
+func deliveredSyncView(t *testing.T, dir, branch string) taskstate.TaskState {
+	t.Helper()
+	snapshot, err := testutil.DeliveredPRWork("alpha", "op-1", dir, branch, "https://github.test/org/repo/pull/42")
+	require.NoError(t, err)
+	view, err := taskstate.Project(snapshot)
+	require.NoError(t, err)
+	return view
 }

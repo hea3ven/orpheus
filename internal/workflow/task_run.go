@@ -121,19 +121,28 @@ func SelectTaskRunRoute(taskItem task.Task, state taskstate.TaskState) (TaskRunR
 	}
 
 	latestReview, hasReview := taskstate.LatestReview(state)
+	if active, ok := taskstate.ActiveRun(state); ok {
+		return TaskRunRoute{Action: TaskRunActionImplementationActive, Attempt: active.Attempt}, nil
+	}
+	latestRun, hasRun := taskstate.LatestRun(state)
+	if hasRun && hasReview && latestRun.Address.Workflow == latestReview.Address.Workflow && latestRun.Address.Phase > latestReview.Address.Phase {
+		if latestRun.Status == taskstate.RunStatusFailed || latestRun.Status == taskstate.RunStatusInterrupted || latestRun.Completion == nil {
+			action := TaskRunActionStartImplementation
+			if latestRun.ReviewFollowUp != nil {
+				action = TaskRunActionTargetedRepair
+			}
+			return TaskRunRoute{Action: action}, nil
+		}
+		return TaskRunRoute{Action: TaskRunActionStartReview}, nil
+	}
 	if hasReview && latestReview.Status == taskstate.ReviewStatusPassed {
 		return TaskRunRoute{Action: TaskRunActionRetryFinalization, Attempt: latestReview.Attempt}, nil
 	}
 
-	if active, ok := taskstate.ActiveRun(state); ok {
-		return TaskRunRoute{Action: TaskRunActionImplementationActive, Attempt: active.Attempt}, nil
-	}
-
-	latestRun, hasRun := taskstate.LatestRun(state)
 	if !hasRun {
 		return TaskRunRoute{Action: TaskRunActionStartImplementation}, nil
 	}
-	if latestRun.Status == taskstate.RunStatusFailed || latestRun.Completion == nil {
+	if latestRun.Status == taskstate.RunStatusFailed || latestRun.Status == taskstate.RunStatusInterrupted || latestRun.Completion == nil {
 		action := TaskRunActionStartImplementation
 		if latestRun.ReviewFollowUp != nil {
 			action = TaskRunActionTargetedRepair

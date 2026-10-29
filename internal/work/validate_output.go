@@ -22,6 +22,15 @@ func (v *validator) implementation(p *ImplementationPhase) {
 			v.check(!sameFinding(earlier, target), "duplicate repair target")
 		}
 	}
+	for i, advisory := range p.AdvisoryFindings {
+		v.findingRef(advisory, "advisory input")
+		for _, earlier := range p.AdvisoryFindings[:i] {
+			v.check(!sameFinding(earlier, advisory), "duplicate advisory input")
+		}
+		for _, target := range p.TargetFindings {
+			v.check(!sameFinding(target, advisory), "required repair cannot also be an advisory opportunity")
+		}
+	}
 	if p.Completion != nil {
 		_, notStarted := p.Execution.Process.(*StartFailedProcess)
 		v.check(!notStarted, "start-failed execution cannot own a completion handoff")
@@ -33,6 +42,25 @@ func (v *validator) implementation(p *ImplementationPhase) {
 		_, err := v.w.Output(OutputRef{Phase: v.phase})
 		v.check(err == nil, "invalid owned output: %v", err)
 	}
+}
+
+// CheckOutputCapture requires the live last implementation's own handoff and
+// observed successful process exit. A callback while its agent is running may
+// record completion, but cannot authorize Git capture. Already captured output
+// may be reverified idempotently by its owner without changing history.
+func (s *State) CheckOutputCapture(ref AttemptRef) error {
+	if err := s.Validate(); err != nil {
+		return err
+	}
+	w := s.ActiveWorkflow()
+	if w == nil || ref.RepositoryID != s.RepositoryID || ref.TaskID != s.TaskID || ref.Workflow != len(s.Workflows)-1 || ref.Phase != len(w.Phases)-1 || ref.Phase < 0 || ref.Step != nil || ref.BranchSync != nil {
+		return fmt.Errorf("capture attempt does not own the active last implementation")
+	}
+	p, ok := w.LastPhase().(*ImplementationPhase)
+	if !ok || p == nil {
+		return fmt.Errorf("capture attempt does not own implementation")
+	}
+	return captureProblem(p)
 }
 
 func captureProblem(p *ImplementationPhase) error {
@@ -93,9 +121,26 @@ func (v *validator) finding(f Finding) {
 	v.check(strings.TrimSpace(f.Title) != "", "finding title is required")
 	v.check(f.Classification == FindingBlocking || f.Classification == FindingAdvisory || f.Classification == FindingSeparateTask, "invalid finding classification")
 	v.text(f.Description, "finding description")
+	if f.SuggestedAction != "" {
+		v.text(f.SuggestedAction, "finding suggested action")
+	}
+	if proposal := f.Proposal; proposal != nil {
+		v.check(f.Classification == FindingSeparateTask, "follow-up proposal requires a separate-task finding")
+		v.text(proposal.Title, "follow-up title")
+		v.text(proposal.Description, "follow-up description")
+		v.text(proposal.AcceptanceCriteria, "follow-up acceptance criteria")
+	}
+	if created := f.CreatedTask; created != nil {
+		v.check(f.Proposal != nil, "created follow-up requires its authored proposal")
+		v.text(created.TaskID, "created follow-up task identity")
+		v.check(!created.ObservedAt.IsZero(), "created follow-up requires observation time")
+	}
 	var latest time.Time
 	for i, disposition := range f.Dispositions {
 		v.disposition(disposition)
+		if _, promoted := disposition.(*PromotedFinding); promoted {
+			v.check(f.Classification == FindingAdvisory, "promotion requires an originally advisory finding")
+		}
 		at := dispositionTime(disposition)
 		v.check(i == 0 || !at.IsZero(), "later finding decisions require observation time")
 		if !at.IsZero() {
@@ -111,6 +156,8 @@ func (v *validator) disposition(disposition FindingDisposition) {
 		v.check(false, "finding disposition is required")
 	case *RepairRequired:
 		v.check(disposition != nil, "finding disposition is nil")
+	case *PromotedFinding:
+		v.check(disposition != nil && !disposition.At.IsZero(), "promotion requires observed time")
 	case *WaivedFinding:
 		if disposition == nil {
 			v.check(false, "finding disposition is nil")

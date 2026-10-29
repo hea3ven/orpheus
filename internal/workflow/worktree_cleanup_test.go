@@ -12,7 +12,9 @@ import (
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/hea3ven/orpheus/internal/workflow"
+	"time"
 )
 
 type fakeClosedTaskWorktreeGit struct {
@@ -71,10 +73,13 @@ func TestClosedTaskWorktreeCleanupReportsPendingAndRepairsEligibleDedicatedWorkt
 		ID: "op-1", Status: task.StatusClosed,
 		Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-1", task.MetadataWorktree: worktree},
 	}
-	taskState := taskstate.TaskState{
-		RepoID: "alpha", TaskID: "op-1",
-		WorkDirectory: taskstate.WorkDirectory{Path: worktree},
-		GitFacts:      taskstate.GitFacts{Branch: "orpheus/op-1", Worktree: worktree},
+	snapshot, err := testutil.DeliveredPRWork("alpha", "op-1", worktree, "orpheus/op-1", "https://github.test/org/repo/pull/42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskState, err := taskstate.Project(snapshot)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	tests := []struct {
@@ -171,7 +176,7 @@ func TestClosedTaskWorktreeCleanupRejectsUnownedOrActiveTargetsBeforeGit(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, kind := range []string{"active", "repo-root", "metadata", "state", "work-directory"} {
+	for _, kind := range []string{"active", "repo-root", "metadata", "state", "work-directory", "newer-unpublished"} {
 		t.Run(kind, func(t *testing.T) {
 			git := &fakeClosedTaskWorktreeGit{}
 			opts := workflow.ClosedTaskWorktreeCleanupOptions{
@@ -184,6 +189,14 @@ func TestClosedTaskWorktreeCleanupRejectsUnownedOrActiveTargetsBeforeGit(t *test
 					Branch: "orpheus/op-1", Worktree: worktree,
 				}},
 				Fix: true, Git: git,
+			}
+			snapshot, err := testutil.DeliveredPRWork("alpha", "op-1", worktree, "orpheus/op-1", "https://github.test/org/repo/pull/42")
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts.TaskState, err = taskstate.Project(snapshot)
+			if err != nil {
+				t.Fatal(err)
 			}
 			want := workflow.WorktreeCleanupUnsafe
 			switch kind {
@@ -198,12 +211,23 @@ func TestClosedTaskWorktreeCleanupRejectsUnownedOrActiveTargetsBeforeGit(t *test
 				opts.Task.Metadata[task.MetadataBranch] = "foreign"
 			case "state":
 				opts.TaskState.GitFacts.Worktree = "/foreign/worktree"
+			case "newer-unpublished":
+				at := time.Date(2026, 1, 1, 0, 0, 20, 0, time.UTC)
+				code := 0
+				snapshot.Workflows[0].Phases = append(snapshot.Workflows[0].Phases, &work.ImplementationPhase{Input: &work.OutputRef{Phase: 1}, Execution: work.AgentExecution{StartedAt: at, Process: &work.ExitedProcess{Code: &code, At: at.Add(2 * time.Second)}}, Completion: &work.Completion{Summary: "feat: retained local R3", Description: "Must not be removed with earlier PR", DetailedDescription: "New local content", TechnicalExplanation: "New local rationale", CompletedAt: at.Add(time.Second)}, Output: &work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: "local-R3", Tree: "local-T3"}, RetainedRef: "refs/orpheus/local-r3"}})
+				opts.TaskState, err = taskstate.Project(snapshot)
+				if err != nil {
+					t.Fatal(err)
+				}
 			case "work-directory":
 				opts.TaskState.WorkDirectory = taskstate.WorkDirectory{Path: "/foreign/worktree"}
 			}
 
 			got := workflow.CleanClosedTaskWorktree(context.Background(), opts)
 
+			if kind == "newer-unpublished" && !strings.Contains(got.Reason, "newer unpublished local work") {
+				t.Fatalf("cleanup reason = %q, want retained unpublished revision", got.Reason)
+			}
 			if got.Outcome != want || git.inspects != 0 || git.removes != 0 {
 				t.Fatalf("cleanup = %#v, Git calls = %d/%d, want %s without Git", got, git.inspects, git.removes, want)
 			}

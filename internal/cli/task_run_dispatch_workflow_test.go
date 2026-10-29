@@ -95,13 +95,13 @@ func TestIntegrationWorkflowTaskRunDispatchLocksTargetAndBaselineAcrossRetries(t
 			require.Len(t, final.Runs, 1)
 			assert.Equal(t, taskstate.RunStatusSucceeded, final.Runs[0].Status)
 			if mode == "repo-root" {
-				assertEventTypes(t, final.Events, taskstate.EventTaskBranchCreated, taskstate.EventRunStarted, taskstate.EventRunFinished)
+				assertEventTypes(t, final.Events, taskstate.EventWorkPrepared, taskstate.EventRunStarted, taskstate.EventRunFinished)
 				require.Len(t, fixture.git.repoRootSetups, 1)
 				assert.Equal(t, "main", fixture.git.repoRootSetups[0].DefaultBranch)
 				assert.Equal(t, dir, fixture.git.repoRootSetups[0].RepoPath)
 				assert.Empty(t, fixture.git.worktreeSetups)
 			} else {
-				assertEventTypes(t, final.Events, taskstate.EventWorktreeCreated, taskstate.EventRunStarted, taskstate.EventRunFinished)
+				assertEventTypes(t, final.Events, taskstate.EventWorkPrepared, taskstate.EventRunStarted, taskstate.EventRunFinished)
 				require.Len(t, fixture.git.worktreeSetups, 1)
 				assert.Equal(t, branch, fixture.git.worktreeSetups[0].Branch)
 				assert.Empty(t, fixture.git.repoRootSetups)
@@ -134,20 +134,19 @@ func TestIntegrationWorkflowTaskRunDispatchLocksTargetAndBaselineAcrossRetries(t
 			assert.Equal(t, before.Runs[0], retried.Runs[0])
 			assert.Len(t, retried.Runs, 2)
 
-			retried.BaselineCommit = ""
-			require.NoError(t, fixture.paths.WriteDataYAML("repos/alpha/tasks/op-root.yaml", retried))
+			baselineRef := retried.Work.Workflows[retried.CurrentWorkflow].Context().CheckpointRef
+			delete(fixture.git.retained, baselineRef)
+
 			legacyState, legacyTask := fixture.loadFinalTask("op-root")
 			setups, launches, mutations := len(fixture.git.setups), len(fixture.agent.launches), len(fixture.backend.markCalls)
 
 			_, _, err = fixture.execute("task", "run", "op-root")
 
-			require.ErrorContains(t, err, "prior run history but no recorded task baseline")
-			assert.ErrorContains(t, err, "preserve the checkout")
-			assert.ErrorContains(t, err, "explicitly repair the baseline")
+			require.ErrorContains(t, err, "baseline retention differs")
 			preserved, preservedTask := fixture.loadFinalTask("op-root")
 			assert.Equal(t, legacyState, preserved, "refusal must not invent a baseline or append run history")
 			assert.Equal(t, legacyTask, preservedTask)
-			assert.Len(t, fixture.git.setups, setups, "baseline safety must be checked before Git preparation")
+			assert.Len(t, fixture.git.setups, setups+1, "native preparation is independently verified before agent admission")
 			assert.Len(t, fixture.agent.launches, launches)
 			assert.Len(t, fixture.backend.markCalls, mutations)
 		})
@@ -323,14 +322,13 @@ func TestIntegrationWorkflowTaskRunReleasesMutationLockDuringAgentAndReacquiresF
 	_, stderr, err := fixture.execute("task", "run", "op-lock")
 
 	assert.ErrorIs(t, err, os.ErrExist)
-	assert.ErrorContains(t, err, "record run finish")
 	assert.ErrorContains(t, err, "task run finalization")
 	assert.Contains(t, stderr, "== Agent run: implementation (run attempt 1) ==")
 	final, _ := fixture.loadFinalTask("op-lock")
 	require.Len(t, final.Runs, 1)
 	assert.Equal(t, taskstate.RunStatusRunning, final.Runs[0].Status)
 	assert.Equal(t, 4242, final.Runs[0].Execution.ChildPID)
-	assertEventTypes(t, final.Events, taskstate.EventWorktreeCreated, taskstate.EventRunStarted)
+	assertEventTypes(t, final.Events, taskstate.EventWorkPrepared, taskstate.EventRunStarted)
 }
 
 func TestIntegrationWorkflowTaskRunAgentStartFailureRecordsFailedStartWithoutChildPID(t *testing.T) {
@@ -355,7 +353,7 @@ func TestIntegrationWorkflowTaskRunAgentStartFailureRecordsFailedStartWithoutChi
 	assert.Equal(t, taskstate.RunStatusFailed, final.Runs[0].Status)
 	assert.Zero(t, final.Runs[0].Execution.ChildPID)
 	assert.NotNil(t, final.Runs[0].Execution.FinishedAt)
-	assertEventTypes(t, final.Events, taskstate.EventWorktreeCreated, taskstate.EventRunStarted, taskstate.EventRunStartFailed)
+	assertEventTypes(t, final.Events, taskstate.EventWorkPrepared, taskstate.EventRunStarted, taskstate.EventRunStartFailed)
 	assert.Contains(t, final.Events[2].Error, "missing executable")
 }
 
@@ -383,7 +381,7 @@ func TestIntegrationWorkflowTaskRunHeaderFailurePreventsLaunchAndRecordsFailedSt
 	require.Len(t, final.Runs, 1)
 	assert.Equal(t, taskstate.RunStatusFailed, final.Runs[0].Status)
 	assert.NotNil(t, final.Runs[0].Execution.FinishedAt)
-	assertEventTypes(t, final.Events, taskstate.EventWorktreeCreated, taskstate.EventRunStarted, taskstate.EventRunStartFailed)
+	assertEventTypes(t, final.Events, taskstate.EventWorkPrepared, taskstate.EventRunStarted, taskstate.EventRunStartFailed)
 	assert.Contains(t, final.Events[2].Error, "output unavailable")
 }
 

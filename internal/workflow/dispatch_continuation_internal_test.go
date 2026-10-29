@@ -73,3 +73,7 @@ func (g *continuationDispatchGit) SetupRepoRootTaskBranch(_ context.Context, opt
 func (*continuationDispatchGit) SetupTaskWorktree(context.Context, gitmeta.TaskWorktreeOptions) (gitmeta.TaskWorktreeSetupResult, error) {
 	return gitmeta.TaskWorktreeSetupResult{}, errors.New("unexpected worktree setup")
 }
+
+func (*continuationDispatchGit) PrepareBaseline(context.Context, string, string, string, *gitmeta.Revision) (gitmeta.Revision, error) {
+	return gitmeta.Revision{}, errors.New("unexpected baseline preparation")
+}

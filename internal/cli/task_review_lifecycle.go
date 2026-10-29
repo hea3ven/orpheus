@@ -150,13 +150,6 @@ func (f taskReviewLifecycleFrontend) ContinueAfterFollowUpCreationFailure(
 	return answer == "y" || answer == "yes", nil
 }
 
-func (f taskReviewLifecycleFrontend) ConfirmRunningCompletionFinalization(
-	_ workflow.ReviewAttemptContext,
-	confirmation workflow.RunningCompletionConfirmation,
-) (bool, error) {
-	return confirmRunningCompletionFinalizationWithReader(f.command, confirmation, f.reader, f.terminal)
-}
-
 func (f taskReviewLifecycleFrontend) PromptFreshReviewBlockerDispositions(
 	ctx workflow.ReviewContext,
 	blockers []workflow.FreshReviewBlocker,
@@ -221,6 +214,7 @@ func newTaskReviewLifecycleService(
 		PRProvider:      newInvocationGHProvider(deps, logger),
 		CandidateGit:    deps.reviewCandidateGit,
 		DispatchGit:     deps.dispatchGit,
+		OutputGit:       deps.outputGit,
 		AgentLauncher:   deps.agentLauncher,
 		Environment:     environmentEntries(deps.environment),
 		UsageCaptureEnv: deps.usageCaptureEnvironment(),

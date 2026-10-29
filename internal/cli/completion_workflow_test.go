@@ -3,6 +3,7 @@
 package cli_test
 
 import (
+	workmodel "github.com/hea3ven/orpheus/internal/work"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,9 +26,11 @@ func newAgentCompletionFixture(t *testing.T, taskID string, worktree bool) *fina
 	item.Metadata[taskmodel.MetadataBranch], item.Metadata[taskmodel.MetadataWorktree] = branch, dir
 	f.backend.tasks[taskID] = item
 	f.git.targets[dir] = memoryGitTarget{branch: branch}
-	_, err := f.taskStore.StartRun("alpha", taskID, taskstate.StartRunOptions{Agent: "recorder", Interactive: true, Branch: branch, Worktree: dir})
+	_, err := f.taskStore.StartRun("alpha", taskID, taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: dir, TaskBranch: branch, CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "recorder", Interactive: true, Branch: branch, Worktree: dir})
 	require.NoError(t, err)
 	f.options.AgentWorkingDirectory = dir
+	f.options.Environment["ORPHEUS_WORKFLOW"] = "0"
+	f.options.Environment["ORPHEUS_PHASE"] = "1"
 	f.options.Environment["ORPHEUS_REPO_ID"] = "alpha"
 	f.options.Environment["ORPHEUS_TASK_ID"] = taskID
 	f.options.Environment["ORPHEUS_BRANCH"] = branch
@@ -91,17 +94,18 @@ func TestIntegrationWorkflowAgentDoneRepeatedMainCompletionIsNoopWithGuidance(t 
 	f.assertUnpublished("op-main")
 }
 
-func TestIntegrationWorkflowAgentDoneRequiresMainWorkingTreeChangesBeforeWriting(t *testing.T) {
+func TestIntegrationWorkflowAgentDoneAcceptsNoChangeHandoffWithoutClaimingCapturedOutput(t *testing.T) {
 	f := newAgentCompletionFixture(t, "op-main", false)
 	f.git.hasCandidateChanges = false
 
 	stdout, stderr, err := f.runError("", "agent", "done", "--summary", "No changes", "--description", "Should fail before writing.", "--detailed-description", "Should fail before writing a PR body.", "--technical-explanation", "Should fail before writing a technical explanation.")
 
-	require.ErrorContains(t, err, "working tree has no changes")
-	assert.Empty(t, stdout)
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "Recorded completion")
 	assert.Empty(t, stderr)
 	state, _ := f.loadFinalTask("op-main")
 	assert.Equal(t, taskstate.RunStatusRunning, state.Runs[0].Status)
-	assert.Nil(t, state.Runs[0].Completion)
+	require.NotNil(t, state.Runs[0].Completion)
+	assert.Empty(t, state.Runs[0].Completion.Commit)
 	f.assertUnpublished("op-main")
 }

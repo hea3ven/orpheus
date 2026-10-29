@@ -410,7 +410,6 @@ func TestProjectWithLocalTaskStatesClassifiesLatestReviewAttempts(t *testing.T) 
 		name           string
 		review         taskstate.ReviewAttempt
 		runs           []taskstate.RunAttempt
-		failure        *taskstate.Event
 		wantGroup      status.GroupID
 		wantDetail     string
 		wantDetailPart string
@@ -506,17 +505,6 @@ func TestProjectWithLocalTaskStatesClassifiesLatestReviewAttempts(t *testing.T) 
 			wantGroup:  status.GroupNeedsAttention,
 			wantDetail: "review failed operationally; run task run",
 		},
-		{
-			name:   "passed review with publication failure needs task done retry",
-			review: reviewAttempt(1, taskstate.ReviewStatusPassed, nil),
-			failure: &taskstate.Event{
-				Type:  taskstate.EventFinalizationFailed,
-				At:    time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
-				Error: "push failed",
-			},
-			wantGroup:      status.GroupNeedsAttention,
-			wantDetailPart: "review passed; publication failed",
-		},
 	}
 
 	for _, tt := range tests {
@@ -525,12 +513,11 @@ func TestProjectWithLocalTaskStatesClassifiesLatestReviewAttempts(t *testing.T) 
 			latestRun := localReviewRun("/fixture/alpha")
 			localStates := status.LocalTaskStateIndex{
 				status.RunStateKey("alpha", "a-main"): {
-					LatestRun:                 &latestRun,
-					Runs:                      tt.runs,
-					GitFacts:                  testTaskTarget("main", "/fixture/alpha"),
-					LatestReview:              &tt.review,
-					LatestFinalizationFailure: tt.failure,
-					ExpectedTargets:           testExpectedTargets("main", "/fixture/alpha", "orpheus/a-main", "/fixture/orpheus/worktrees/a-main"),
+					LatestRun:       &latestRun,
+					Runs:            tt.runs,
+					GitFacts:        testTaskTarget("main", "/fixture/alpha"),
+					LatestReview:    &tt.review,
+					ExpectedTargets: testExpectedTargets("main", "/fixture/alpha", "orpheus/a-main", "/fixture/orpheus/worktrees/a-main"),
 				},
 			}
 
@@ -571,6 +558,26 @@ func TestProjectWithRunStatesClassifiesLatestAttachedAttempts(t *testing.T) {
 	assertLatestAttachedAttemptProjection(t, got)
 	assertGroupTaskIDs(t, got, status.GroupReadyToRun, []string{"a-ready"})
 
+	for _, hasHandoff := range []bool{false, true} {
+		name := "without handoff"
+		var completion *taskstate.Completion
+		if hasHandoff {
+			name = "handoff without successful exit"
+			completion = &taskstate.Completion{Summary: "feat: intent"}
+		}
+		t.Run(name, func(t *testing.T) {
+			interrupted := localReviewSnapshot("a-interrupted", "/fixture/repo")
+			projected := status.ProjectWithRunStates(interrupted, status.RunStateIndex{
+				status.RunStateKey("alpha", "a-interrupted"): {Attempt: 5, Status: taskstate.RunStatusInterrupted, Completion: completion},
+			})
+			assertGroupTaskIDs(t, projected, status.GroupInReview, nil)
+			assertGroupTaskIDs(t, projected, status.GroupIdle, []string{"a-interrupted"})
+			entry := groupEntries(t, projected, status.GroupIdle)[0]
+			if entry.Detail != "implementation interrupted; retry task run" {
+				t.Fatalf("interrupted detail = %q; must retry rather than imply review permission", entry.Detail)
+			}
+		})
+	}
 }
 
 func localReviewSnapshot(taskID string, repoPath string) task.SnapshotResult {
@@ -801,8 +808,8 @@ func projectionEntryByTaskID(t *testing.T, projection status.Projection, taskID 
 	return status.Entry{}
 }
 
-func testTaskTarget(branch string, worktree string) *taskstate.TaskTarget {
-	return &taskstate.TaskTarget{
+func testTaskTarget(branch string, worktree string) *taskstate.GitFacts {
+	return &taskstate.GitFacts{
 		Branch:   branch,
 		Worktree: worktree,
 	}

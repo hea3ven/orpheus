@@ -5,6 +5,7 @@ package cli_test
 import (
 	"encoding/json"
 	"errors"
+	workmodel "github.com/hea3ven/orpheus/internal/work"
 	"strings"
 	"testing"
 
@@ -90,15 +91,15 @@ func setupWorkflowStatusGroupsLocalTaskSnapshots(t *testing.T, fixture *workflow
 	repos := saveTaskWorkflowRepos(t, fixture, taskWorkflowRepoSpec("alpha", "Alpha Repo", "ar"))
 	repoDir := repos["alpha"]
 	stateStore := taskstate.NewStore(fixture.paths)
-	_, err := stateStore.StartRun("alpha", "ar-running", taskstate.StartRunOptions{Agent: "recorder"})
+	_, err := stateStore.StartRun("alpha", "ar-running", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: "/fixture/work", TaskBranch: "task-branch", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "recorder"})
 	require.NoError(t, err)
-	failedRun, err := stateStore.StartRun("alpha", "ar-failed", taskstate.StartRunOptions{Agent: "recorder"})
+	failedRun, err := stateStore.StartRun("alpha", "ar-failed", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: "/fixture/work", TaskBranch: "task-branch", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "recorder"})
 	require.NoError(t, err)
-	_, err = stateStore.FinishRun("alpha", "ar-failed", failedRun.Attempt, taskstate.RunStatusFailed)
+	_, err = seedFixtureExit(stateStore, "alpha", "ar-failed", failedRun.Attempt, 1)
 	require.NoError(t, err)
-	succeededRun, err := stateStore.StartRun("alpha", "ar-succeeded", taskstate.StartRunOptions{Agent: "recorder"})
+	succeededRun, err := stateStore.StartRun("alpha", "ar-succeeded", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: "/fixture/work", TaskBranch: "task-branch", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "recorder"})
 	require.NoError(t, err)
-	_, err = stateStore.FinishRun("alpha", "ar-succeeded", succeededRun.Attempt, taskstate.RunStatusSucceeded)
+	_, err = seedFixtureExit(stateStore, "alpha", "ar-succeeded", succeededRun.Attempt, 0)
 	require.NoError(t, err)
 
 	reads := withWorkflowSources(t, fixture, map[string]taskSourceResult{repoDir: {tasks: workflowStatusTasks(repoDir)}})
@@ -162,11 +163,11 @@ func TestIntegrationWorkflowStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t 
 	repos := saveTaskWorkflowRepos(t, fixture, repo)
 	repoDir := repos["alpha"]
 	runStore := taskstate.NewStore(fixture.paths)
-	attempt, err := runStore.StartRun("alpha", "ar-main", taskstate.StartRunOptions{Agent: "recorder", Branch: "main", Worktree: repoDir})
+	attempt, err := runStore.StartRun("alpha", "ar-main", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "recorder", Branch: "main", Worktree: repoDir})
 	must.NoError(err)
-	_, err = runStore.CompleteRun("alpha", "ar-main", attempt.Attempt, taskstate.CompleteRunOptions{Summary: "Ready", Description: "Ready for local review.", DetailedDescription: "Detailed PR body.", TechnicalExplanation: "Technical explanation."})
+	_, err = seedFixtureHandoff(runStore, "alpha", "ar-main", attempt.Attempt, taskstate.CompleteRunOptions{Summary: "Ready", Description: "Ready for local review.", DetailedDescription: "Detailed PR body.", TechnicalExplanation: "Technical explanation."})
 	must.NoError(err)
-	_, err = runStore.FinishRun("alpha", "ar-main", attempt.Attempt, taskstate.RunStatusSucceeded)
+	_, err = seedFixtureExit(runStore, "alpha", "ar-main", attempt.Attempt, 0)
 	must.NoError(err)
 	withWorkflowSources(t, fixture, map[string]taskSourceResult{repoDir: {tasks: []taskmodel.Task{
 		taskWFTask("ar-main", "Local main review", taskmodel.StatusInProgress, taskmodel.IssueTypeTask, taskWFPriority(2), taskWFMetadata(map[string]string{taskmodel.MetadataBranch: "main", taskmodel.MetadataWorktree: repoDir})),
@@ -188,7 +189,7 @@ func TestIntegrationWorkflowStatusAndTaskListUseLocalRunHistoryOnOpenTaskAsNeeds
 	must := require.New(t)
 
 	repos := saveTaskWorkflowRepos(t, fixture, taskWorkflowRepoSpec("alpha", "Alpha Repo", "ar"))
-	_, err := taskstate.NewStore(fixture.paths).StartRun("alpha", "ar-running", taskstate.StartRunOptions{Agent: "recorder"})
+	_, err := taskstate.NewStore(fixture.paths).StartRun("alpha", "ar-running", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: "/fixture/work", TaskBranch: "task-branch", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "recorder"})
 	must.NoError(err)
 	withWorkflowSources(t, fixture, map[string]taskSourceResult{repos["alpha"]: {tasks: []taskmodel.Task{
 		taskWFTask("ar-running", "Already running", taskmodel.StatusOpen, taskmodel.IssueTypeTask, taskWFPriority(2)),

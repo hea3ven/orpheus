@@ -25,10 +25,15 @@ func TestIntegrationAdapterContractAttachedLauncherStreamsBeforeExitAndReapsCanc
 	defer cancel()
 	output := &cancelingOutput{cancel: cancel}
 	var pid int
+	var exits []agentexec.ProcessExit
+	before := time.Now().UTC()
 
 	err := (agentexec.AttachedLauncher{Environment: []string{"PATH=" + dir}}).Run(ctx,
 		agentexec.Command{Name: "stream-probe", Command: probe},
-		agentexec.LaunchOptions{Dir: dir, Stdout: output, OnStart: func(child int) error { pid = child; return nil }},
+		agentexec.LaunchOptions{
+			Dir: dir, Stdout: output, OnStart: func(child int) error { pid = child; return nil },
+			OnExit: func(exit agentexec.ProcessExit) { exits = append(exits, exit) },
+		},
 	)
 
 	require.Error(t, err)
@@ -36,6 +41,11 @@ func TestIntegrationAdapterContractAttachedLauncherStreamsBeforeExitAndReapsCanc
 	assert.ErrorIs(t, ctx.Err(), context.Canceled, "output must arrive before the deadline or child exit")
 	assert.Equal(t, "ready\n", output.buffer.String())
 	require.Positive(t, pid)
+	require.Len(t, exits, 1)
+	assert.Equal(t, pid, exits[0].PID)
+	assert.Equal(t, -1, exits[0].Code, "a signal must not become an implicit zero exit")
+	assert.False(t, exits[0].At.Before(before))
+	assert.False(t, exits[0].At.After(time.Now().UTC()))
 	liveness, probeErr := agentexec.ProbePID(pid)
 	require.NoError(t, probeErr)
 	assert.Equal(t, agentexec.ProcessAbsent, liveness, "Run must wait for the canceled direct child")

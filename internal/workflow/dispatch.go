@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,6 +20,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/tasktarget"
+	"github.com/hea3ven/orpheus/internal/work"
 )
 
 const (
@@ -42,18 +44,11 @@ type DispatchRunStore interface {
 	Load(repoID, taskID string) (taskstate.TaskState, error)
 	LatestRun(repoID, taskID string) (taskstate.RunAttempt, bool, error)
 	ActiveRun(repoID, taskID string) (taskstate.RunAttempt, bool, error)
-	RecordSetupEvent(
-		repoID,
-		taskID string,
-		eventType taskstate.EventType,
-		opts taskstate.SetupEventOptions,
-	) (taskstate.Event, error)
+	PrepareWork(repoID, taskID string, context work.WorkContext) error
 	StartRun(repoID, taskID string, opts taskstate.StartRunOptions) (taskstate.RunAttempt, error)
-	RecordRunChildPID(repoID, taskID string, attempt int, pid int) (taskstate.RunAttempt, error)
-	RecordRunUsage(repoID, taskID string, attempt int, opts taskstate.RecordRunUsageOptions) (taskstate.RunAttempt, error)
-	TargetReviewFindings(repoID, taskID string, reviewAttempt int, findingIndexes []int, runAttempt int) (taskstate.ReviewAttempt, error)
-	FinishRun(repoID, taskID string, attempt int, status taskstate.RunStatus) (taskstate.RunAttempt, error)
-	FailRunStart(repoID, taskID string, attempt int, cause error) (taskstate.RunAttempt, error)
+	RecordRunChildPIDAt(work.AttemptRef, int) (taskstate.RunAttempt, error)
+	RecordRunUsageAt(work.AttemptRef, taskstate.RecordRunUsageOptions) (taskstate.RunAttempt, error)
+	FinishObservedRun(work.AttemptRef, work.ProcessResult, int) (taskstate.RunAttempt, error)
 }
 
 // DispatchCommand records the agent command selected by the caller.
@@ -100,12 +95,18 @@ type DispatchCommandContext struct {
 
 // DispatchGit prepares repository-root and worktree execution targets.
 type DispatchGit interface {
+	PrepareBaseline(context.Context, string, string, string, *gitmeta.Revision) (gitmeta.Revision, error)
 	SetupRepoRootTaskBranch(context.Context, gitmeta.TaskWorktreeOptions) (gitmeta.TaskWorktreeSetupResult, error)
 	SetupTaskWorktree(context.Context, gitmeta.TaskWorktreeOptions) (gitmeta.TaskWorktreeSetupResult, error)
 }
 
 // LocalDispatchGit prepares execution targets through the local Git adapter.
 type LocalDispatchGit struct{}
+
+// PrepareBaseline records or verifies native baseline identity and retention.
+func (LocalDispatchGit) PrepareBaseline(ctx context.Context, dir, branch, ref string, recorded *gitmeta.Revision) (gitmeta.Revision, error) {
+	return gitmeta.PrepareBaseline(ctx, dir, branch, ref, recorded)
+}
 
 // SetupRepoRootTaskBranch prepares a repository-root task-branch target.
 func (LocalDispatchGit) SetupRepoRootTaskBranch(ctx context.Context, opts gitmeta.TaskWorktreeOptions) (gitmeta.TaskWorktreeSetupResult, error) {
@@ -201,43 +202,31 @@ func (s DispatchService) Start(ctx context.Context, opts DispatchStartOptions) (
 // RecordChildPID persists the direct child PID while the launch is paused at
 // the shared attached-process boundary. It retries brief lock contention from
 // an immediately-started agent completion so both state updates are preserved.
-func (s DispatchService) RecordChildPID(repoID string, taskID string, attempt int, pid int) error {
+func (s DispatchService) RecordChildPID(ref work.AttemptRef, pid int) error {
 	if err := s.validate(); err != nil {
 		return err
 	}
-	return recordChildPIDWithMutationLock(
-		s.Paths,
-		dispatchChildPIDLockOperation,
-		s.Logger,
-		dispatchAttemptAttrs(repoID, taskID, attempt),
-		func() error {
-			_, err := s.RunStore.RecordRunChildPID(repoID, taskID, attempt, pid)
-			return err
-		},
-	)
+	return recordChildPIDWithMutationLock(s.Paths, dispatchChildPIDLockOperation, s.Logger, dispatchAttemptAttrs(ref.RepositoryID, ref.TaskID, ref.Phase), func() error {
+		_, err := s.RunStore.RecordRunChildPIDAt(ref, pid)
+		return err
+	})
 }
 
 // ReviewChildPIDStore persists the direct process PID for a review step.
 type ReviewChildPIDStore interface {
-	RecordReviewStepChildPID(repoID, taskID string, attempt int, stepName string, pid int) (taskstate.ReviewAttempt, error)
+	RecordReviewStepChildPIDAt(work.AttemptRef, int) (taskstate.ReviewAttempt, error)
 }
 
 // RecordReviewChildPID persists a reviewer's direct child PID
 // under the shared lock/retry policy for attached processes.
-func RecordReviewChildPID(paths state.Paths, logger *slog.Logger, store ReviewChildPIDStore, repoID string, taskID string, attempt int, stepName string, pid int) error {
+func RecordReviewChildPID(paths state.Paths, logger *slog.Logger, store ReviewChildPIDStore, ref work.AttemptRef, pid int) error {
 	if store == nil {
 		return errors.New("review child PID store is required")
 	}
-	return recordChildPIDWithMutationLock(
-		paths,
-		reviewChildPIDLockOperation,
-		logger,
-		dispatchAttemptAttrs(repoID, taskID, attempt),
-		func() error {
-			_, err := store.RecordReviewStepChildPID(repoID, taskID, attempt, stepName, pid)
-			return err
-		},
-	)
+	return recordChildPIDWithMutationLock(paths, reviewChildPIDLockOperation, logger, dispatchAttemptAttrs(ref.RepositoryID, ref.TaskID, ref.Phase), func() error {
+		_, err := store.RecordReviewStepChildPIDAt(ref, pid)
+		return err
+	})
 }
 
 func recordChildPIDWithMutationLock(paths state.Paths, operation string, logger *slog.Logger, attrs []slog.Attr, record func() error) error {
@@ -254,49 +243,40 @@ func recordChildPIDWithMutationLock(paths state.Paths, operation string, logger 
 
 // RecordExecution records usage independently of the process outcome, then always
 // attempts terminal bookkeeping. A successful process still requires Agent Completion.
-func (s DispatchService) RecordExecution(repoID string, taskID string, attempt int, result agent.ExecutionResult) error {
+func (s DispatchService) RecordExecution(ref work.AttemptRef, result agent.ExecutionResult) error {
 	if err := s.validate(); err != nil {
 		return errors.Join(result.Err, err)
 	}
 	var usageErr error
 	if result.Started {
-		if _, err := s.RunStore.RecordRunUsage(repoID, taskID, attempt, result.Usage); err != nil {
-			usageErr = fmt.Errorf("task run %s: record run usage: %w", taskID, err)
+		if _, err := s.RunStore.RecordRunUsageAt(ref, result.Usage); err != nil {
+			usageErr = fmt.Errorf("record implementation usage: %w", err)
 		}
 	}
-	terminalErr := s.finishExecution(repoID, taskID, attempt, result)
-	if result.Err != nil {
-		if terminalErr != nil {
-			terminalErr = fmt.Errorf("additionally failed to record run failure: %w", terminalErr)
-		}
-		return errors.Join(fmt.Errorf("task run %s: %w", taskID, result.Err), usageErr, terminalErr)
-	}
-	if terminalErr != nil {
-		terminalErr = fmt.Errorf("task run %s: record run finish: %w", taskID, terminalErr)
-	}
-	return errors.Join(terminalErr, usageErr)
+	terminalErr := s.finishExecution(ref, result)
+	return errors.Join(result.Err, usageErr, terminalErr)
 }
 
-func (s DispatchService) finishExecution(repoID string, taskID string, attempt int, result agent.ExecutionResult) error {
+func (s DispatchService) finishExecution(ref work.AttemptRef, result agent.ExecutionResult) error {
+	var process work.ProcessResult
+	pid := 0
+	switch {
+	case !result.Started:
+		if result.Err == nil {
+			return errors.New("launcher supplied no observed startup or outcome")
+		}
+		process = &work.StartFailedProcess{At: time.Now().UTC(), Reason: result.Err.Error()}
+	case result.Exit != nil:
+		code := result.Exit.Code
+		pid = result.Exit.PID
+		process = &work.ExitedProcess{At: result.Exit.At, Code: &code}
+	default:
+		return errors.New("implementation exit is unresolved; inspect execution recovery before retrying")
+	}
 	return state.WithGlobalMutationLockLogger(context.Background(), s.Paths, dispatchFinalizationLockOperation, s.Logger, func() error {
-		if result.Err != nil {
-			if !result.Started {
-				_, err := s.RunStore.FailRunStart(repoID, taskID, attempt, result.Err)
-				return err
-			}
-			_, err := s.RunStore.FinishRun(repoID, taskID, attempt, taskstate.RunStatusFailed)
-			return err
-		}
-		latest, ok, err := s.RunStore.LatestRun(repoID, taskID)
-		if err != nil {
-			return err
-		}
-		if ok && latest.Attempt == attempt && latest.Status == taskstate.RunStatusSucceeded && latest.Completion != nil {
-			return nil
-		}
-		_, err = s.RunStore.FinishRun(repoID, taskID, attempt, taskstate.RunStatusSucceeded)
+		_, err := s.RunStore.FinishObservedRun(ref, process, pid)
 		return err
-	}, dispatchAttemptAttrs(repoID, taskID, attempt)...)
+	}, dispatchAttemptAttrs(ref.RepositoryID, ref.TaskID, ref.Phase)...)
 }
 
 func (s DispatchService) validate() error {
@@ -429,12 +409,27 @@ func (s DispatchService) setupTargetPhase(
 	if err != nil {
 		return gitmeta.TaskWorktreeSetupResult{}, fmt.Errorf("inspect task baseline: %w", err)
 	}
-	if persisted.BaselineCommit != "" {
-		setup.StartingCommit = persisted.BaselineCommit
+	workflowIndex := 0
+	var recorded *gitmeta.Revision
+	if persisted.Work != nil && len(persisted.Work.Workflows) > 0 {
+		workflowIndex = len(persisted.Work.Workflows) - 1
+		if prepared := persisted.Work.Workflows[workflowIndex].Context(); prepared != nil {
+			recorded = &gitmeta.Revision{Commit: prepared.Baseline.Commit, Tree: prepared.Baseline.Tree, RetainedRef: prepared.CheckpointRef}
+		}
 	}
-	if strings.TrimSpace(setup.StartingCommit) == "" {
-		return gitmeta.TaskWorktreeSetupResult{}, errors.New("prepared Git target has no starting commit")
+	ref := fmt.Sprintf("refs/orpheus/baselines/%s/%s/%d", hex.EncodeToString([]byte(opts.Source.Repository.ID)), hex.EncodeToString([]byte(opts.TaskID)), workflowIndex)
+	if recorded != nil {
+		ref = recorded.RetainedRef
 	}
+	baselineGit := s.Git
+	if baselineGit == nil {
+		baselineGit = LocalDispatchGit{}
+	}
+	baseline, err := baselineGit.PrepareBaseline(ctx, setup.WorktreePath, setup.Branch, ref, recorded)
+	if err != nil {
+		return gitmeta.TaskWorktreeSetupResult{}, fmt.Errorf("retain prepared task baseline: %w", err)
+	}
+	setup.StartingCommit, setup.StartingTree, setup.CheckpointRef = baseline.Commit, baseline.Tree, baseline.RetainedRef
 	span.Finish(ctx, logging.StatusSuccess,
 		slog.String("branch", setup.Branch),
 		slog.String("worktree", setup.WorktreePath),
@@ -884,24 +879,12 @@ func (s DispatchService) recordStart(
 	followUp *dispatchFollowUpPlan,
 	launch *taskstate.AgentLaunch,
 ) (taskstate.RunAttempt, error) {
-	setupEvent, hasSetupEvent, err := dispatchSetupEvent(setup.Lifecycle)
-	if err != nil {
-		return taskstate.RunAttempt{}, err
-	}
-
 	repo := opts.Source.Repository
-	if hasSetupEvent {
-		if _, err := s.RunStore.RecordSetupEvent(
-			repo.ID,
-			opts.TaskID,
-			setupEvent,
-			taskstate.SetupEventOptions{
-				Branch:   setup.Branch,
-				Worktree: setup.WorktreePath,
-			},
-		); err != nil {
-			return taskstate.RunAttempt{}, fmt.Errorf("record setup event: %w", err)
-		}
+	if err := s.RunStore.PrepareWork(repo.ID, opts.TaskID, work.WorkContext{
+		Directory: setup.WorktreePath, TaskBranch: setup.Branch, CheckpointRef: setup.CheckpointRef,
+		Baseline: work.CodeIdentity{Commit: setup.StartingCommit, Tree: setup.StartingTree},
+	}); err != nil {
+		return taskstate.RunAttempt{}, fmt.Errorf("retain prepared work context: %w", err)
 	}
 
 	attempt, err := s.RunStore.StartRun(repo.ID, opts.TaskID, taskstate.StartRunOptions{
@@ -925,11 +908,6 @@ func (s DispatchService) recordStart(
 			return taskstate.RunAttempt{}, fmt.Errorf("%w; inspect the implementation run for active supervision", err)
 		}
 		return taskstate.RunAttempt{}, fmt.Errorf("record run start: %w", err)
-	}
-	if followUp != nil {
-		if _, err := s.RunStore.TargetReviewFindings(repo.ID, opts.TaskID, followUp.reviewAttempt, followUp.findingIndexes, attempt.Attempt); err != nil {
-			return taskstate.RunAttempt{}, fmt.Errorf("target review findings: %w", err)
-		}
 	}
 	return attempt, nil
 }
@@ -1236,26 +1214,11 @@ func activeDispatchRunError(
 	}
 	return fmt.Errorf(
 		"latest run attempt %d is still running; "+
-			"M3 cannot reconcile stale attached runs automatically; "+
+			"attached supervision has not recorded a terminal boundary; "+
 			"wait for the attached agent to finish or repair %s manually",
 		active.Attempt,
 		statePath,
 	)
-}
-
-func dispatchSetupEvent(lifecycle gitmeta.TaskWorktreeLifecycle) (taskstate.EventType, bool, error) {
-	switch lifecycle {
-	case gitmeta.TaskWorktreeLifecycleCreated:
-		return taskstate.EventWorktreeCreated, true, nil
-	case gitmeta.TaskWorktreeLifecycleTaskBranchCreated:
-		return taskstate.EventTaskBranchCreated, true, nil
-	case gitmeta.TaskWorktreeLifecycleReused:
-		return taskstate.EventWorktreeReused, true, nil
-	case gitmeta.TaskWorktreeLifecycleRecreated:
-		return taskstate.EventWorktreeRecreated, true, nil
-	default:
-		return "", false, fmt.Errorf("unknown worktree lifecycle %q", lifecycle)
-	}
 }
 
 func dispatchMetadataMismatchDetail(metadata task.OrpheusMetadata, expected gitmeta.TaskWorktreeSetupResult) string {

@@ -128,6 +128,7 @@ func (g *changeGuard) phase(before, after Phase) {
 		next := after.(*ImplementationPhase)
 		g.same(before.Input, next.Input, "implementation input")
 		g.same(before.TargetFindings, next.TargetFindings, "repair targets")
+		g.same(before.AdvisoryFindings, next.AdvisoryFindings, "selected advisory opportunities")
 		g.execution(before.Execution, next.Execution)
 		g.assigned(before.Completion, next.Completion, "completion handoff")
 		if before.Completion == nil && next.Completion != nil && !running(&before.Execution) {
@@ -164,6 +165,7 @@ func (g *changeGuard) execution(before, after AgentExecution) {
 	old, current := before, after
 	old.Process, current.Process = nil, nil
 	old.Session, current.Session = nil, nil
+	old.ObservedModel, current.ObservedModel = "", ""
 	old.Usage, current.Usage, old.Cost, current.Cost = nil, nil, nil, nil
 	old.UsageCapture, current.UsageCapture = UsageCapture{}, UsageCapture{}
 	old.Duration, current.Duration = 0, 0
@@ -175,7 +177,10 @@ func (g *changeGuard) execution(before, after AgentExecution) {
 	if before.SupervisorPID != 0 {
 		g.same(before.SupervisorPID, after.SupervisorPID, "native supervisor PID")
 	}
-	g.assigned(before.Session, after.Session, "native session")
+	g.session(before.Session, after.Session)
+	if before.ObservedModel != "" {
+		g.same(before.ObservedModel, after.ObservedModel, "observed native model")
+	}
 	g.assigned(before.Usage, after.Usage, "captured usage")
 	g.assigned(before.Cost, after.Cost, "captured cost")
 	if before.Duration != 0 {
@@ -188,8 +193,24 @@ func (g *changeGuard) execution(before, after AgentExecution) {
 		g.same(before.Process, after.Process, "terminal process result")
 		return
 	}
-	if _, impossible := after.Process.(*StartFailedProcess); impossible {
-		g.same(before.Process, after.Process, "started process")
+	if _, failedStart := after.Process.(*StartFailedProcess); failedStart && before.ChildPID != 0 {
+		g.same(before.Process, after.Process, "started child process")
+	}
+}
+
+func (g *changeGuard) session(before, after *Session) {
+	if before == nil {
+		return
+	}
+	if after == nil {
+		g.same(before, after, "native session")
+		return
+	}
+	if before.ID != "" {
+		g.same(before.ID, after.ID, "native session identity")
+	}
+	if before.LogPath != "" {
+		g.same(before.LogPath, after.LogPath, "native session log path")
 	}
 }
 
@@ -197,6 +218,10 @@ func (g *changeGuard) review(before, after *ReviewPhase) {
 	g.same(before.Contract, after.Contract, "review contract selection")
 	g.same(before.Scope, after.Scope, "review scope")
 	g.same(before.StartedAt, after.StartedAt, "review entry time")
+	g.assigned(before.AdmissionFailure, after.AdmissionFailure, "read-only admission failure")
+	g.assigned(before.ExecutionFailure, after.ExecutionFailure, "review execution failure")
+	g.assigned(before.Abort, after.Abort, "operator review stop")
+	g.prefix(before.RepairBudgetStops, after.RepairBudgetStops, "repair budget observations")
 	if len(after.Steps) < len(before.Steps) {
 		g.errors = append(g.errors, fmt.Errorf("review attempts are append-only"))
 		return
@@ -213,21 +238,47 @@ func (g *changeGuard) step(before, after ReviewStep, active bool) {
 	oldSlot, _ := reviewSlot(before)
 	newSlot, _ := reviewSlot(after)
 	g.same(oldSlot, newSlot, "review slot")
+	g.prefix(readOnlyFailures(before), readOnlyFailures(after), "read-only verification failures")
+	g.prefix(decisionPauses(before), decisionPauses(after), "automated decision pauses")
+	if !active {
+		g.same(len(readOnlyFailures(before)), len(readOnlyFailures(after)), "historical read-only verification failures")
+		g.same(len(decisionPauses(before)), len(decisionPauses(after)), "historical automated decision pauses")
+	}
 	switch before := before.(type) {
 	case *CheckStep:
 		next := after.(*CheckStep)
 		if active {
+			g.assigned(before.StartFailure, next.StartFailure, "check start failure")
 			g.assigned(before.Result, next.Result, "check result")
 			g.assigned(before.Waiver, next.Waiver, "check waiver")
 		} else {
-			g.same(before, next, "historical review attempt")
+			g.same(before.StartFailure, next.StartFailure, "historical check start failure")
+			g.same(before.Result, next.Result, "historical check result")
+			g.same(before.Waiver, next.Waiver, "historical check waiver")
+			g.same(len(before.Findings), len(next.Findings), "historical check findings")
 		}
+		g.findings(before.Findings, next.Findings)
 	case *AgentReviewStep:
 		next := after.(*AgentReviewStep)
+		if active {
+			g.assigned(before.ExecutionFailure, next.ExecutionFailure, "review execution failure")
+		} else {
+			g.same(before.ExecutionFailure, next.ExecutionFailure, "historical review execution failure")
+		}
 		g.execution(before.Execution, next.Execution)
 		g.report(before.Report, next.Report, active && running(&before.Execution))
 	case *ManualReviewStep:
-		g.assessment(before.Decision, after.(*ManualReviewStep).Decision, active)
+		next := after.(*ManualReviewStep)
+		g.findings(before.Findings, next.Findings)
+		if active && before.Decision == nil {
+			g.assigned(before.CommandResult, next.CommandResult, "manual command result")
+		} else {
+			g.same(before.CommandResult, next.CommandResult, "manual command result")
+		}
+		if before.Decision != nil || !active {
+			g.same(len(before.Findings), len(next.Findings), "answered manual findings")
+		}
+		g.assessment(before.Decision, next.Decision, active)
 	}
 }
 
@@ -235,15 +286,7 @@ func (g *changeGuard) assessment(before, after ManualAssessment, active bool) {
 	if before == nil && active {
 		return
 	}
-	old, ok := before.(*RequestedChanges)
-	if !ok || !g.same(reflect.TypeOf(before), reflect.TypeOf(after), "manual assessment kind") {
-		g.same(before, after, "manual assessment")
-		return
-	}
-	next := after.(*RequestedChanges)
-	g.same(old.At, next.At, "manual assessment time")
-	g.findings(old.Findings, next.Findings)
-	g.same(len(old.Findings), len(next.Findings), "manual assessment findings")
+	g.same(before, after, "manual assessment")
 }
 
 func (g *changeGuard) report(before, after *ReviewReport, active bool) {
@@ -277,7 +320,9 @@ func (g *changeGuard) findings(before, after []Finding) {
 	for i, old := range before {
 		current := after[i]
 		old.Dispositions, current.Dispositions = nil, nil
+		old.CreatedTask, current.CreatedTask = nil, nil
 		g.same(old, current, "reported finding")
+		g.assigned(before[i].CreatedTask, after[i].CreatedTask, "created follow-up task")
 		g.prefix(before[i].Dispositions, after[i].Dispositions, "finding disposition history")
 	}
 }

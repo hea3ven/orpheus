@@ -7,16 +7,20 @@ func (v *validator) execution(e *AgentExecution, active bool) {
 		v.check(process != nil, "process result is nil")
 		v.check(active, "running execution must belong to the active last effort")
 	case *ExitedProcess:
-		v.check(process != nil && process.Code != nil && !process.At.IsZero() && !process.At.Before(e.StartedAt), "exit requires explicit code and observed finish time after start")
+		v.check(process != nil && process.Code != nil && *process.Code >= -1 && !process.At.IsZero() && !process.At.Before(e.StartedAt), "exit requires explicit code and observed finish time after start")
 	case *InterruptedProcess:
 		v.check(process != nil && process.Reason != "" && !process.At.IsZero() && !process.At.Before(e.StartedAt), "interruption requires reason and observed time")
 	case *StartFailedProcess:
+		v.check(e.ChildPID == 0, "start-failed execution cannot own a started child PID")
 		v.check(process != nil && process.Reason != "" && !process.At.IsZero() && !process.At.Before(e.StartedAt), "start failure requires reason and observed time")
 	default:
 		v.check(false, "explicit process result is required")
 	}
 	v.check(e.SupervisorPID >= 0 && e.ChildPID >= 0, "native process IDs cannot be negative")
 	v.check(e.Duration >= 0, "execution duration cannot be negative")
+	if e.ObservedModel != "" {
+		v.text(e.ObservedModel, "observed native model")
+	}
 	v.usage(e.Usage)
 	if e.Cost != nil {
 		v.check(e.Cost.AmountMicroUSD >= 0, "usage cost cannot be negative")

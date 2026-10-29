@@ -34,14 +34,14 @@ func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview
 				implementation, repair := aCompletion(), aRepairCompletion()
 				fixture.agent.outcomes = []semanticAgentOutcome{{completion: &implementation}}
 				firstResults := []checkResult{{}}
-				if repairCase.completed && !repairCase.staged {
+				if repairCase.completed {
 					firstResults = append(firstResults, checkResult{})
 				}
 				first := fixture.check("first", firstResults...)
 				findingStep := map[string]any{"kind": kind, "name": "correctness"}
 				if kind == "check" {
 					results := []checkResult{{code: 7}}
-					if repairCase.completed && !repairCase.staged {
+					if repairCase.completed {
 						results = append(results, checkResult{})
 					}
 					findingStep["command"] = fixture.check("correctness", results...)
@@ -56,7 +56,7 @@ func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview
 							fixture.candidate.hasStagedChanges = repairCase.staged
 						},
 					})
-					if kind == "agent_review" && !repairCase.staged {
+					if kind == "agent_review" {
 						fixture.agent.outcomes = append(fixture.agent.outcomes, semanticAgentOutcome{review: true})
 					}
 				} else {
@@ -75,11 +75,7 @@ func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview
 				fixture.configureAgentProfiles(agent.AgentDefaults{Implementer: "other", Reviewer: "other"}, profiles)
 
 				stdout, stderr, err := fixture.runError("k\n", "task", "run", "op-fresh")
-				if repairCase.staged {
-					require.ErrorContains(t, err, "review requires a clean Git index")
-				} else {
-					require.NoError(t, err, "stderr: %s", stderr)
-				}
+				require.NoError(t, err, "stderr: %s", stderr)
 
 				assert.Contains(t, stderr, "Resuming review attempt 1 at automated blocker decision for step \"correctness\".")
 				final, item := fixture.loadFinalTask("op-fresh")
@@ -99,15 +95,7 @@ func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview
 				if kind == "check" {
 					wantChecks = append(wantChecks, "correctness")
 				}
-				if repairCase.staged {
-					require.Len(t, final.Reviews, 1, "staged repair must not create a fresh review")
-					require.NotNil(t, final.Runs[1].Completion)
-					assert.Equal(t, taskstate.RunStatusSucceeded, final.Runs[1].Status)
-					assert.True(t, fixture.candidate.hasStagedChanges)
-					assertTaskNotPublished(t, final, item)
-					assert.Equal(t, wantChecks, fixture.checkCalls, "fresh pipeline must not execute")
-					return
-				}
+
 				if !repairCase.completed {
 					assert.Contains(t, stderr, "exited without completion")
 					require.Len(t, final.Reviews, 1)
@@ -116,7 +104,7 @@ func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview
 					assert.Equal(t, wantChecks, fixture.checkCalls)
 					return
 				}
-				assert.Contains(t, stdout, "Published op-fresh")
+				assert.Contains(t, stdout, "Review passed for op-fresh")
 				assert.NotContains(t, stderr, "budget exhausted")
 				require.Len(t, final.Reviews, 2)
 				fresh := final.Reviews[1]
@@ -131,8 +119,9 @@ func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview
 					assert.Equal(t, "unused-reviewer", fixture.agent.launches[1].command.Command)
 					assert.Equal(t, "unused-reviewer", fixture.agent.launches[3].command.Command)
 				}
-				assert.NotEmpty(t, taskstate.FinalizationFacts(final).Commit)
-				assert.True(t, item.OrpheusMetadata().HasPRURL)
+				assertUnconsentedPublication(t, final)
+				assert.False(t, item.OrpheusMetadata().HasPRURL)
+				assert.False(t, fixture.candidate.hasStagedChanges, "implementation capture committed its completed index before review")
 				assert.Equal(t, append(wantChecks, wantChecks...), fixture.checkCalls)
 			})
 		}

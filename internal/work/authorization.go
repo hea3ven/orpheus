@@ -53,6 +53,7 @@ type authorizationMaterial struct {
 	Baseline                                        CodeIdentity
 	TaskBranch                                      string
 	Requirements                                    string
+	AutomatedDestination                            *Destination
 	Destination                                     *Destination
 	Code                                            *CodeOutput
 	Delta                                           *CodeOutput
@@ -110,13 +111,17 @@ func (s *State) authorizationMaterial(wi, pi int, p *PublicationPhase, c *Public
 	if _, direct := p.Plan.Target.(*DirectMergeTarget); direct {
 		flow = "direct-merge"
 	}
+	destination, err := w.ReviewDestination(p.Plan.Review)
+	if err != nil {
+		return zero, err
+	}
 	return authorizationMaterial{
 		RepositoryID: s.RepositoryID, TaskID: s.TaskID,
 		Workflow: wi, Publication: pi, Review: p.Plan.Review.Phase,
 		Output: r.Scope.Output.Phase, Contract: r.Contract,
 		DeltaPhase: deltaPhase,
 		Baseline:   context.Baseline, TaskBranch: context.TaskBranch,
-		Requirements: r.Scope.Requirements, Destination: r.Scope.Destination,
+		Requirements: r.Scope.Requirements, Destination: destination, AutomatedDestination: r.Scope.Destination,
 		Code: output, Delta: delta, Policy: *contract,
 		Flow: flow, Target: p.Plan.Target, Content: p.Plan.Content,
 		GrantedAt: c.GrantedAt.UTC(), Evidence: c.Evidence,
@@ -138,34 +143,37 @@ func (s *State) validateConsent(wi, pi int, p *PublicationPhase) error {
 }
 
 func stepTime(step ReviewStep) time.Time {
+	at := stepResultTime(step)
+	for _, failure := range readOnlyFailures(step) {
+		if failure.At.After(at) {
+			at = failure.At
+		}
+	}
+	return at
+}
+
+func stepResultTime(step ReviewStep) time.Time {
 	var at time.Time
 	switch step := step.(type) {
 	case *CheckStep:
 		if step != nil && step.Result != nil {
 			at = step.Result.FinishedAt
 		}
+		if step != nil && step.StartFailure != nil {
+			at = step.StartFailure.At
+		}
 		if step != nil && step.Waiver != nil && step.Waiver.At.After(at) {
 			at = step.Waiver.At
 		}
 	case *AgentReviewStep:
 		if step != nil {
-			if exit, ok := step.Execution.Process.(*ExitedProcess); ok && exit != nil {
-				at = exit.At
+			at = executionFinishTime(&step.Execution)
+			if step.ExecutionFailure != nil && step.ExecutionFailure.At.After(at) {
+				at = step.ExecutionFailure.At
 			}
 		}
 	case *ManualReviewStep:
-		if step != nil {
-			switch assessment := step.Decision.(type) {
-			case *ApprovedReview:
-				if assessment != nil {
-					at = assessment.At
-				}
-			case *RequestedChanges:
-				if assessment != nil {
-					at = assessment.At
-				}
-			}
-		}
+		at = manualStepTime(step)
 	}
 	return at
 }
@@ -173,6 +181,10 @@ func stepTime(step ReviewStep) time.Time {
 func dispositionTime(disposition FindingDisposition) time.Time {
 	switch disposition := disposition.(type) {
 	case *RepairRequired:
+		if disposition != nil {
+			return disposition.At
+		}
+	case *PromotedFinding:
 		if disposition != nil {
 			return disposition.At
 		}

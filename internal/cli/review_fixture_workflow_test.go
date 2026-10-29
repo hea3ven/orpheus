@@ -5,13 +5,19 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/work"
+
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"io"
 	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/cli"
@@ -73,9 +79,13 @@ func newReviewDispatchFixture(t *testing.T, taskID string) *reviewWorkflowFixtur
 	f.candidate = &memoryReviewCandidate{memoryDispatchGit: base.git, head: "initial-commit", contents: "fail\n"}
 	base.git.targets[taskWorkflowRepoRoot] = memoryGitTarget{branch: "orpheus/" + taskID}
 	base.git.hasCandidateChanges = true
+	base.git.heads[taskWorkflowRepoRoot] = "initial-commit"
+	base.git.retained["refs/orpheus/fixture-baseline"] = gitmeta.Revision{Commit: "initial-commit", Tree: "initial-tree", RetainedRef: "refs/orpheus/fixture-baseline"}
 	f.options.Dependencies.TaskBackendFactory = func(taskmodel.RepositorySource) (taskmodel.ReadBackend, error) { return f.tasks, nil }
 	f.options.Dependencies.ReviewPipeline = review.RunPipeline
 	f.options.Dependencies.FinalizationGit = f.candidate
+	f.options.Dependencies.OutputGit = f.candidate
+	f.options.Dependencies.ReviewCandidateGit = f.candidate
 	f.options.Dependencies.PRProvider = &memoryReviewPR{}
 	f.options.Dependencies.ReviewStatus = f.candidate.ShortStatus
 	f.options.Dependencies.ReviewEffects = review.Effects{CaptureCandidate: f.candidate.capture, RunCommand: f.runCheck, RunHunkCommand: f.runHunkCommand}
@@ -230,13 +240,18 @@ func (b *memoryReviewTasks) Close(_ context.Context, id string) error {
 // Direct merge and publication retry contracts live outside these scenarios.
 type memoryReviewCandidate struct {
 	*memoryDispatchGit
-	head, contents string
-	snapshots      int
-	commits        []string
-	pushes         []string
+	head, contents       string
+	destinationHeads     map[string]string
+	observedDestinations []string
+	snapshots            int
+	commits              []string
+	pushes               []string
 }
 
-func (g *memoryReviewCandidate) capture(context.Context, string, *slog.Logger, ...slog.Attr) (review.CandidateCheck, error) {
+func (g *memoryReviewCandidate) capture(ctx context.Context, dir string, expected review.CommittedCandidate, _ *slog.Logger, _ ...slog.Attr) (review.CandidateCheck, error) {
+	if err := g.VerifyRevision(ctx, dir, expected.Identity, expected.Revision); err != nil {
+		return nil, err
+	}
 	g.snapshots++
 	contents := g.contents
 	return func() error {
@@ -285,7 +300,8 @@ func recordRepoRootCompletion(t *testing.T, paths state.Paths, repoID string, ta
 	t.Helper()
 	store := taskstate.NewStore(paths)
 	attempt, err := store.StartRun(repoID, taskID, taskstate.StartRunOptions{
-		Agent:          "recorder",
+		Agent: "recorder", Harness: "pi", Command: "fixture-agent",
+		Context:        &work.WorkContext{Directory: repoPath, TaskBranch: "orpheus/" + taskID, CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: work.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Branch:         "orpheus/" + taskID,
 		Worktree:       repoPath,
 		BaselineCommit: "initial-commit",
@@ -293,7 +309,7 @@ func recordRepoRootCompletion(t *testing.T, paths state.Paths, repoID string, ta
 	if err != nil {
 		t.Fatalf("start main run: %v", err)
 	}
-	if _, err := store.CompleteRun(repoID, taskID, attempt.Attempt, taskstate.CompleteRunOptions{
+	if _, err := store.CompleteImplementation(attempt.Address, taskstate.CompleteRunOptions{
 		Summary:              summary,
 		Description:          description,
 		DetailedDescription:  "Detailed PR body.",
@@ -301,7 +317,7 @@ func recordRepoRootCompletion(t *testing.T, paths state.Paths, repoID string, ta
 	}); err != nil {
 		t.Fatalf("complete main run: %v", err)
 	}
-	if _, err := store.FinishRun(repoID, taskID, attempt.Attempt, taskstate.RunStatusSucceeded); err != nil {
+	if _, err := store.FinishObservedRun(attempt.Address, &work.ExitedProcess{Code: fixtureExitCode(0), At: time.Now().UTC()}, 0); err != nil {
 		t.Fatalf("finish main run: %v", err)
 	}
 }
@@ -319,7 +335,8 @@ func recordReviewFollowUpCompletion(
 	t.Helper()
 	store := taskstate.NewStore(paths)
 	attempt, err := store.StartRun(repoID, taskID, taskstate.StartRunOptions{
-		Agent:          "recorder",
+		Agent: "recorder", Harness: "pi", Command: "fixture-agent",
+		Context:        &work.WorkContext{Directory: repoPath, TaskBranch: "orpheus/" + taskID, CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: work.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Branch:         "orpheus/" + taskID,
 		Worktree:       repoPath,
 		BaselineCommit: "initial-commit",
@@ -331,7 +348,7 @@ func recordReviewFollowUpCompletion(
 	if err != nil {
 		t.Fatalf("start review follow-up run: %v", err)
 	}
-	if _, err := store.CompleteRun(repoID, taskID, attempt.Attempt, taskstate.CompleteRunOptions{
+	if _, err := store.CompleteImplementation(attempt.Address, taskstate.CompleteRunOptions{
 		Summary:              summary,
 		Description:          description,
 		DetailedDescription:  "Detailed follow-up body.",
@@ -339,7 +356,7 @@ func recordReviewFollowUpCompletion(
 	}); err != nil {
 		t.Fatalf("complete review follow-up run: %v", err)
 	}
-	if _, err := store.FinishRun(repoID, taskID, attempt.Attempt, taskstate.RunStatusSucceeded); err != nil {
+	if _, err := store.FinishObservedRun(attempt.Address, &work.ExitedProcess{Code: fixtureExitCode(0), At: time.Now().UTC()}, 0); err != nil {
 		t.Fatalf("finish review follow-up run: %v", err)
 	}
 }
@@ -441,4 +458,91 @@ func loadLatestReview(t *testing.T, fixture *reviewWorkflowFixture, taskID strin
 	latest, ok := taskstate.LatestReview(state)
 	require.True(t, ok)
 	return latest
+}
+
+func fixtureExitCode(code int) *int { return &code }
+func (g *memoryReviewCandidate) CaptureRevision(ctx context.Context, opts gitmeta.RevisionCapture) (gitmeta.Revision, error) {
+	if g.heads[opts.Directory] == "" {
+		g.heads[opts.Directory] = g.head
+		g.trees[g.head] = "initial-tree"
+	}
+	if g.head != g.heads[opts.Directory] {
+		return gitmeta.Revision{}, errors.New("candidate and checkout heads disagree")
+	}
+	desired := fmt.Sprintf("tree-%x", sha256.Sum256([]byte(g.contents)))
+	// The fixture models raw candidate content, so a second unchanged effort can
+	// explicitly reuse code rather than pretending every handoff changes Git.
+	g.hasCandidateChanges = g.trees[g.head] != desired
+	revision, err := g.memoryDispatchGit.CaptureRevision(ctx, opts)
+	if err != nil {
+		return gitmeta.Revision{}, err
+	}
+	if !revision.Reused {
+		g.commits = append(g.commits, opts.Message)
+		revision.Tree = desired
+		g.trees[revision.Commit] = desired
+		g.retained[revision.RetainedRef] = revision
+	}
+	g.head = revision.Commit
+	return revision, nil
+}
+func (g *memoryReviewCandidate) ObserveDestination(ctx context.Context, dir, branch string) (work.Destination, error) {
+	g.observedDestinations = append(g.observedDestinations, branch)
+	if g.destinationHeads == nil {
+		return g.memoryDispatchGit.ObserveDestination(ctx, dir, branch)
+	}
+	commit, ok := g.destinationHeads[branch]
+	if !ok {
+		return work.Destination{}, errors.New("unknown native destination branch")
+	}
+	return work.Destination{Remote: "origin", Branch: branch, Commit: commit}, nil
+}
+
+func (g *memoryReviewCandidate) VerifyRevision(ctx context.Context, dir string, identity gitmeta.CheckoutIdentity, revision gitmeta.Revision) error {
+	if g.head != revision.Commit {
+		return errors.New("candidate is not at the reviewed commit")
+	}
+	if len(g.commits) > 0 && g.trees[g.head] != fmt.Sprintf("tree-%x", sha256.Sum256([]byte(g.contents))) {
+		return errors.New("candidate content differs from its committed tree")
+	}
+	return g.memoryDispatchGit.VerifyRevision(ctx, dir, identity, revision)
+}
+func (*memoryReviewCandidate) PublishedRevision(context.Context, string, string) (gitmeta.Revision, error) {
+	return gitmeta.Revision{}, errors.New("unexpected publication before explicit authorization")
+}
+func (*memoryReviewCandidate) DirectRevisionDelivery(context.Context, taskmodel.Repository, string, string, string, string, string, gitmeta.Revision) (gitmeta.Revision, error) {
+	return gitmeta.Revision{}, errors.New("unexpected direct delivery before explicit authorization")
+}
+
+// beginConfiguredFixtureReview arranges admission from explicitly captured
+// semantic Git output and the complete configured contract. It does not supply
+// reviewer exits, findings, operator decisions, consent or a pipeline outcome.
+func beginConfiguredFixtureReview(f *reviewWorkflowFixture, store taskstate.Store, taskID string, opts taskstate.StartReviewOptions) (taskstate.ReviewAttempt, error) {
+	view, err := store.Load("alpha", taskID)
+	if err != nil {
+		return taskstate.ReviewAttempt{}, err
+	}
+	run, ok := taskstate.LatestRun(view)
+	if !ok {
+		return taskstate.ReviewAttempt{}, errors.New("fixture needs a completed implementation")
+	}
+	service := workflow.ImplementationService{Paths: f.paths, Store: workstate.NewStore(f.paths), Git: f.candidate}
+	if _, err := service.Capture(context.Background(), run.Address); err != nil {
+		return taskstate.ReviewAttempt{}, err
+	}
+	configured, err := review.LoadConfig(f.paths)
+	if err != nil {
+		return taskstate.ReviewAttempt{}, err
+	}
+	pipeline, err := review.ResolvePipeline(configured, opts.Pipeline, "")
+	if err != nil {
+		return taskstate.ReviewAttempt{}, err
+	}
+	opts.Pipeline = pipeline.Name
+	opts.Contract = work.ReviewContract{PipelineKey: pipeline.Name}
+	for _, step := range pipeline.Steps {
+		opts.Contract.Slots = append(opts.Contract.Slots, work.ReviewSlot{Kind: work.ReviewStepKind(step.Kind), ConfigKey: step.Name})
+	}
+	opts.Scope = work.ReviewScope{Requirements: "Explicit fixture task requirements", Output: work.OutputRef{Phase: run.Address.Phase}, Destination: &work.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}
+	return store.StartReviewWithOptions("alpha", taskID, opts)
 }

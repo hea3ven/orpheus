@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/hea3ven/orpheus/internal/agent"
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
@@ -13,10 +14,17 @@ import (
 // Nil fields retain the local Git and child-process adapters. Pipeline decisions,
 // findings, prompts, and persistence always remain in RunPipeline.
 type Effects struct {
-	CaptureCandidate func(context.Context, string, *slog.Logger, ...slog.Attr) (CandidateCheck, error)
+	CaptureCandidate func(context.Context, string, CommittedCandidate, *slog.Logger, ...slog.Attr) (CandidateCheck, error)
 	RunCommand       func(CommandOptions) (*int, error)
 	RunHunkCommand   func(HunkCommandOptions) (*int, []HunkNote, error)
 	CaptureUsage     func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions
+}
+
+// CommittedCandidate is the exact retained output and attached branch evaluated
+// by this review; a clean checkout alone is not admission evidence.
+type CommittedCandidate struct {
+	Identity gitmeta.CheckoutIdentity
+	Revision gitmeta.Revision
 }
 
 // CandidateCheck checks for reviewer mutations and restores the captured candidate.
@@ -45,10 +53,6 @@ type HunkCommandOptions struct {
 	Stderr      io.Writer
 }
 
-func captureLocalCandidate(ctx context.Context, workdir string, logger *slog.Logger, attrs ...slog.Attr) (CandidateCheck, error) {
-	snapshot, err := captureCandidateSnapshot(ctx, workdir, logger, attrs...)
-	if err != nil {
-		return nil, err
-	}
-	return func() error { return restoreCandidateIfMutated(ctx, snapshot, logger, attrs...) }, nil
+func captureLocalCandidate(ctx context.Context, workdir string, candidate CommittedCandidate, logger *slog.Logger, _ ...slog.Attr) (CandidateCheck, error) {
+	return CaptureCommittedCandidate(ctx, workdir, candidate.Identity, candidate.Revision, logger)
 }

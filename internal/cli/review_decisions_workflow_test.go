@@ -12,6 +12,9 @@ import (
 
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,13 +34,13 @@ func TestIntegrationWorkflowTaskReviewApproveFinalizesAndRecordsPassedAttempt(t 
 	is.NotContains(stderr, "Original completion:")
 	is.NotContains(stderr, "Latest fix completion:")
 	is.Contains(stderr, "≡ GIT STATUS --SHORT")
-	is.Contains(stderr, "reviewed.txt")
+	is.Contains(stderr, "(clean)")
 	is.NotContains(stderr, "git diff --stat:")
 	is.Contains(stderr, "◆ REVIEW STEP · local-review (manual)")
 	is.Contains(stderr, "Review action [a=approve, b=block, v=advisory, t=task, q=abort]")
 	is.NotContains(stderr, "p=promote advisory")
 	is.Contains(stderr, "Choose approve, block, advisory, task, or abort.")
-	is.Contains(stdout, "Published op-main")
+	is.Contains(stdout, "Review passed for op-main")
 
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
@@ -45,22 +48,23 @@ func TestIntegrationWorkflowTaskReviewApproveFinalizesAndRecordsPassedAttempt(t 
 	must.True(ok)
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
 	is.Empty(latest.Findings)
-	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
+	assertUnconsentedPublication(t, state)
 	_, task := fixture.loadFinalTask("op-main")
 	is.Equal(taskmodel.StatusInProgress, task.Status)
 	is.Empty(fixture.tasks.closed)
-	is.Equal([]string{"orpheus/op-main"}, fixture.candidate.pushes)
+	is.Empty(fixture.candidate.pushes)
 }
 
 func TestIntegrationWorkflowTaskReviewManualContextShowsOriginalAndLatestFollowUpCompletion(t *testing.T) {
 	is := assert.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Original implementation", "Implemented the main task.")
-	paths := fixture.paths
-	repoPath := taskWorkflowRepoRoot
-	recordReviewFollowUpCompletion(t, paths, "alpha", "op-main", repoPath, 1, "First fix", "Addressed the first review blocker.")
-	recordReviewFollowUpCompletion(t, paths, "alpha", "op-main", repoPath, 2, "Latest fix", "Addressed the most recent review blocker.")
-
-	stdout, stderr := fixture.run("a\n", "task", "run", "op-main")
+	fixture.budget(3)
+	fixture.completingRepairs("repairer", 2, false)
+	fixture.agent.outcomes[0].completion.Summary = "First fix"
+	fixture.agent.outcomes[0].completion.Description = "Addressed the first review blocker."
+	fixture.agent.outcomes[1].completion.Summary = "Latest fix"
+	fixture.agent.outcomes[1].completion.Description = "Addressed the most recent review blocker."
+	stdout, stderr := fixture.run("b\nFirst blocker\nRepair one.\nFix one.\nf\nb\nSecond blocker\nRepair two.\nFix two.\nf\na\n", "task", "run", "op-main")
 
 	is.Contains(stderr, "○ ORIGINAL COMPLETION\nOriginal implementation")
 	is.Contains(stderr, "DESCRIPTION\nImplemented the main task.")
@@ -70,7 +74,7 @@ func TestIntegrationWorkflowTaskReviewManualContextShowsOriginalAndLatestFollowU
 	is.Contains(stderr, "TECHNICAL EXPLANATION\nTechnical explanation.")
 	is.NotContains(stderr, "Latest completion: Latest fix")
 	is.NotContains(stderr, "Latest fix completion: First fix")
-	is.Contains(stdout, "Published op-main")
+	is.Contains(stdout, "Review passed for op-main")
 
 	message := fixture.candidate.commits[0]
 	is.Equal("Original implementation\n\nImplemented the main task.", message)
@@ -109,7 +113,8 @@ func TestIntegrationWorkflowTaskReviewBlockingFindingBlocksWithoutFinalizing(t *
 	is.Empty(stdout)
 	is.Contains(stderr, "Review action [f=finish/block, b=block, v=advisory, t=task, q=abort]")
 	is.Contains(stderr, "Review blocked for op-main.")
-	is.Equal(headBefore, fixture.candidate.head)
+	is.NotEqual(headBefore, fixture.candidate.head)
+	is.Equal("output-1", fixture.candidate.head)
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
 	latest, ok := taskstate.LatestReview(state)
@@ -146,7 +151,7 @@ func TestIntegrationWorkflowTaskReviewAdvisoryAndSeparateTaskFindingsDoNotBlockA
 	}, "\n")
 	stdout, stderr := fixture.run(input, "task", "run", "op-main")
 
-	is.Contains(stdout, "Published op-main")
+	is.Contains(stdout, "Review passed for op-main")
 	is.Contains(stderr, "Finding title:")
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
@@ -180,7 +185,7 @@ func TestIntegrationWorkflowTaskReviewCreatesSelectedSeparateTaskFollowUp(t *tes
 	}, "\n")
 	stdout, stderr := fixture.run(input, "task", "run", "op-main")
 
-	is.Contains(stdout, "Published op-main")
+	is.Contains(stdout, "Review passed for op-main")
 	is.Contains(stderr, "Created follow-up task op-41 for review finding 1.")
 	must.Len(fixture.tasks.created, 1)
 	is.Equal(taskmodel.CreateOptions{Title: "Extract helper", Description: "Extract the helper later.\n\nProvenance:\nDiscovered during review of op-main in repository alpha (review attempt 1, finding 1). Review step: local-review.", AcceptanceCriteria: "Helper extraction has tests.", IssueType: taskmodel.IssueTypeTask}, fixture.tasks.created[0])
@@ -221,7 +226,8 @@ func TestIntegrationWorkflowTaskReviewCanAbortWhenSeparateTaskCreationFails(t *t
 
 	is.Empty(stdout)
 	is.Contains(stderr, "Failed to create follow-up task for review finding 1")
-	is.Equal(headBefore, fixture.candidate.head)
+	is.NotEqual(headBefore, fixture.candidate.head)
+	is.Equal("output-1", fixture.candidate.head)
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
 	latest, ok := taskstate.LatestReview(state)
@@ -247,7 +253,8 @@ func TestIntegrationWorkflowTaskReviewAbortDoesNotFinalize(t *testing.T) {
 
 	is.Empty(stdout)
 	is.Contains(stderr, "Review aborted for op-main.")
-	is.Equal(headBefore, fixture.candidate.head)
+	is.NotEqual(headBefore, fixture.candidate.head)
+	is.Equal("output-1", fixture.candidate.head)
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
 	latest, ok := taskstate.LatestReview(state)
@@ -341,7 +348,7 @@ func TestIntegrationWorkflowTaskReviewCheckBlockerReasonEOFRecordsInterrupted(t 
 			must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
 			latest, ok := taskstate.LatestReview(state)
 			must.True(ok)
-			is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
+			is.Equal(taskstate.ReviewStatusWaitingForAutomatedDecision, latest.Status)
 			is.True(latest.AutomatedBlockerDecisionInterrupted)
 			is.False(latest.AutomatedBlockerDecisionKept)
 			must.Len(latest.Findings, 1)
@@ -382,7 +389,7 @@ func TestIntegrationWorkflowTaskReviewCheckStartFailureMarksOperationalFailure(t
 	is.Empty(latest.Findings)
 }
 
-func TestIntegrationWorkflowTaskRunAfterInterruptedAutomatedBlockerDecisionRequiresFreshReview(t *testing.T) {
+func TestIntegrationWorkflowTaskRunAfterInterruptedAutomatedBlockerDecisionResumesItsExactPendingDecision(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review interrupted", "Do not launch follow-up.")
@@ -399,7 +406,7 @@ func TestIntegrationWorkflowTaskRunAfterInterruptedAutomatedBlockerDecisionRequi
 	stdout, stderr, err := fixture.runError("", "task", "run", "op-main")
 	must.NoError(err)
 	is.Empty(stdout)
-	is.Contains(stderr, "Fresh review blocker dispositions for op-main were interrupted")
+	is.Contains(stderr, "Automated blocker decisions for op-main were interrupted")
 	is.Empty(fixture.agent.launches)
 
 	var state taskstate.TaskState
@@ -407,7 +414,7 @@ func TestIntegrationWorkflowTaskRunAfterInterruptedAutomatedBlockerDecisionRequi
 	must.Len(state.Runs, 1)
 	latest, ok := taskstate.LatestReview(state)
 	must.True(ok)
-	is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
+	is.Equal(taskstate.ReviewStatusWaitingForAutomatedDecision, latest.Status)
 	is.True(latest.AutomatedBlockerDecisionInterrupted)
 	must.Len(latest.Findings, 1)
 	is.Zero(latest.Findings[0].TargetedByRunAttempt)
@@ -424,18 +431,17 @@ func TestIntegrationWorkflowTaskRunRecoversHardStoppedAutomatedBlockerDecision(t
 	})
 
 	stateStore := taskstate.NewStore(paths)
-	reviewAttempt, err := stateStore.StartReviewWithOptions("alpha", "op-main", taskstate.StartReviewOptions{Pipeline: "standard", Step: "unit"})
+	reviewAttempt, err := beginConfiguredFixtureReview(fixture, stateStore, "op-main", taskstate.StartReviewOptions{Pipeline: "standard", Step: "unit"})
 	must.NoError(err)
-	_, err = stateStore.RecordReviewStep("alpha", "op-main", reviewAttempt.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindCheck, Name: "unit"})
+	_, err = stateStore.RecordReviewStep("alpha", "op-main", reviewAttempt.Attempt, taskstate.RecordReviewStepOptions{Address: reviewAttempt.Address, Kind: taskstate.ReviewStepKindCheck, Name: "unit", ExitCode: fixtureExitCode(7), Findings: []taskstate.ReviewFinding{{Type: taskstate.FindingTypeBlocking, Step: "unit", Title: "Check \"unit\" failed", Description: "Fix the failing check."}}})
 	must.NoError(err)
-	_, err = stateStore.RecordReviewFinding("alpha", "op-main", reviewAttempt.Attempt, taskstate.ReviewFinding{Type: taskstate.FindingTypeBlocking, Step: "unit", Title: "Check \"unit\" failed", Description: "Fix the failing check."})
-	must.NoError(err)
+	fixture.budget(1)
 
 	stdout, stderr := fixture.run("k\n", "task", "run", "op-main")
 
 	is.Empty(stdout)
-	is.Contains(stderr, "Open blocking findings from the latest review")
-	is.Contains(stderr, "Finding 1 from step unit")
+	is.Contains(stderr, "Resuming review attempt 1 at automated blocker decision")
+	is.Contains(stderr, "Finding 1:")
 	is.NotContains(stderr, "== Agent run: implementation")
 	is.Empty(fixture.agent.launches)
 
@@ -463,7 +469,7 @@ func TestIntegrationWorkflowTaskReviewInterruptedAutomatedBlockerRecoveryReusesR
 	fixture.withRegisteredRepos(repo)
 
 	defaultCheck := "must-not-run"
-	strictCheck := fixture.check("strict", checkResult{code: 7, stdout: "strict pipeline\n"}, checkResult{code: 7, stdout: "strict pipeline\n"})
+	strictCheck := fixture.check("strict", checkResult{code: 7, stdout: "strict pipeline\n"})
 	fixture.pipelines("default", map[string][]map[string]any{
 		"default": {{"kind": "check", "name": "default", "command": defaultCheck}},
 		"strict":  {{"kind": "check", "name": "strict", "command": strictCheck}},
@@ -474,20 +480,20 @@ func TestIntegrationWorkflowTaskReviewInterruptedAutomatedBlockerRecoveryReusesR
 	is.NotContains(firstStdout, "default pipeline")
 	is.Contains(firstStderr, "Automated blocker decisions for op-main were interrupted")
 
-	recoveryStdout, recoveryStderr := fixture.run("a\nFixed outside Orpheus.\nd\nStrict failure accepted.", "task", "run", "op-main")
+	recoveryStdout, recoveryStderr := fixture.run("d\nStrict failure accepted.\n", "task", "run", "op-main")
 
-	is.Contains(recoveryStdout, "strict pipeline")
+	is.NotContains(recoveryStdout, "strict pipeline", "the completed native check is not rerun")
 	is.NotContains(recoveryStdout, "default pipeline")
-	is.Contains(recoveryStdout, "Published op-main")
-	is.Contains(recoveryStderr, "Open blocking findings from the latest review")
-	is.Contains(recoveryStderr, "Finding 1 from step strict")
+	is.Contains(recoveryStdout, "Review passed for op-main")
+	is.Contains(recoveryStderr, "Resuming review attempt 1 at automated blocker decision for step \"strict\".")
+	is.Contains(recoveryStderr, "Finding 1:")
 	is.Contains(recoveryStderr, "Title: Check \"strict\" failed")
-	is.Contains(recoveryStderr, "== Review step: strict (check) ==")
+	is.NotContains(recoveryStderr, "== Review step: strict (check) ==")
 	is.NotContains(recoveryStderr, "== Review step: default (check) ==")
 
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
-	must.Len(state.Reviews, 2)
+	must.Len(state.Reviews, 1)
 	is.Equal("strict", state.Reviews[0].Pipeline)
 	latest, ok := taskstate.LatestReview(state)
 	must.True(ok)
@@ -515,22 +521,22 @@ func TestIntegrationWorkflowTaskReviewResumesManualWaitingAttempt(t *testing.T) 
 		},
 	})
 	runStore := taskstate.NewStore(paths)
-	reviewAttempt, err := runStore.StartReviewWithOptions("alpha", "op-main", taskstate.StartReviewOptions{
+	reviewAttempt, err := beginConfiguredFixtureReview(fixture, runStore, "op-main", taskstate.StartReviewOptions{
 		Pipeline: "standard",
 		Step:     "lint",
 	})
 	must.NoError(err)
-	_, err = runStore.RecordReviewStep("alpha", "op-main", reviewAttempt.Attempt, taskstate.RecordReviewStepOptions{
-		Kind: "check",
+	_, err = runStore.RecordReviewStep("alpha", "op-main", reviewAttempt.Attempt, taskstate.RecordReviewStepOptions{Address: reviewAttempt.Address,
+		ExitCode: fixtureExitCode(0), Kind: "check",
 		Name: "lint",
 	})
 	must.NoError(err)
-	_, err = runStore.PauseReviewForManual("alpha", "op-main", reviewAttempt.Attempt, "inspect")
+	_, err = seedFixtureManualEntry(runStore, "alpha", "op-main", reviewAttempt.Attempt, "inspect")
 	must.NoError(err)
 
 	stdout, stderr := fixture.run("a\n", "task", "run", "op-main")
 
-	is.Contains(stdout, "Published op-main")
+	is.Contains(stdout, "Review passed for op-main")
 	is.Contains(stderr, "Resuming review attempt 1 at manual step \"inspect\".")
 	is.Contains(stderr, "◆ REVIEW STEP · inspect (manual)")
 	is.NotContains(stdout, "check reran")
@@ -552,12 +558,12 @@ func TestIntegrationWorkflowTaskReviewRejectsConflictingPipelineForManualWaiting
 		"other":    {{"kind": "manual", "name": "other-inspect"}},
 	})
 	runStore := taskstate.NewStore(paths)
-	reviewAttempt, err := runStore.StartReviewWithOptions("alpha", "op-main", taskstate.StartReviewOptions{
+	reviewAttempt, err := beginConfiguredFixtureReview(fixture, runStore, "op-main", taskstate.StartReviewOptions{
 		Pipeline: "standard",
 		Step:     "inspect",
 	})
 	must.NoError(err)
-	_, err = runStore.PauseReviewForManual("alpha", "op-main", reviewAttempt.Attempt, "inspect")
+	_, err = seedFixtureManualEntry(runStore, "alpha", "op-main", reviewAttempt.Attempt, "inspect")
 	must.NoError(err)
 
 	stdout, _, err := fixture.runError("", "task", "run", "--pipeline", "other", "op-main")
@@ -598,7 +604,7 @@ func TestIntegrationWorkflowTaskReviewPipelineOverridePrecedence(t *testing.T) {
 
 			is.Contains(stdout, "cli pipeline")
 			is.NotContains(stdout, "wrong pipeline")
-			is.Contains(stdout, "Published op-main")
+			is.Contains(stdout, "Review passed for op-main")
 			is.Contains(stderr, "== Review step: cli (check) ==")
 
 			var state taskstate.TaskState
@@ -633,12 +639,16 @@ func TestIntegrationWorkflowTaskReviewInvalidAgentConfigPreservesFreshAndWaiting
 		t.Run(fmt.Sprintf("waiting_%t", waiting), func(t *testing.T) {
 			fixture := newReviewWorkflowFixture(t, "op-main", "Review preflight", "Validate before persistence.")
 			fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "agent_review", "name": "ai-review"}, {"kind": "manual", "name": "inspect"}}})
+			view, _ := fixture.loadFinalTask("op-main")
+			capture := workflow.ImplementationService{Paths: fixture.paths, Store: workstate.NewStore(fixture.paths), Git: fixture.candidate}
+			_, captureErr := capture.Capture(context.Background(), view.Runs[0].Address)
+			require.NoError(t, captureErr)
 			if waiting {
-				attempt, err := fixture.taskStore.StartReviewWithOptions("alpha", "op-main", taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review"})
+				attempt, err := beginConfiguredFixtureReview(fixture, fixture.taskStore, "op-main", taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review"})
 				require.NoError(t, err)
-				_, err = fixture.taskStore.RecordReviewStep("alpha", "op-main", attempt.Attempt, taskstate.RecordReviewStepOptions{Kind: "agent_review", Name: "ai-review"})
+				_, err = fixture.taskStore.RecordReviewStep("alpha", "op-main", attempt.Attempt, taskstate.RecordReviewStepOptions{Address: attempt.Address, Kind: "agent_review", Name: "ai-review", Execution: &taskstate.AgentExecution{Agent: "fixture-reviewer", Status: taskstate.RunStatusSucceeded, StartedAt: attempt.StartedAt, Process: &work.ExitedProcess{Code: fixtureExitCode(0), At: attempt.StartedAt}}})
 				require.NoError(t, err)
-				_, err = fixture.taskStore.PauseReviewForManual("alpha", "op-main", attempt.Attempt, "inspect")
+				_, err = seedFixtureManualEntry(fixture.taskStore, "alpha", "op-main", attempt.Attempt, "inspect")
 				require.NoError(t, err)
 			}
 			before, item := fixture.loadFinalTask("op-main")
@@ -702,8 +712,8 @@ func TestIntegrationWorkflowTaskReviewCheckDecisionsPersistDispositionAndContinu
 				assert.Empty(t, taskstate.FinalizationFacts(state).Commit)
 			} else {
 				assert.Equal(t, taskstate.ReviewStatusPassed, latest.Status)
-				assert.Contains(t, stdout, "Published op-main")
-				assert.NotEmpty(t, taskstate.FinalizationFacts(state).Commit)
+				assert.Contains(t, stdout, "Review passed for op-main")
+				assertUnconsentedPublication(t, state)
 				if test.manual {
 					assert.Contains(t, stderr, "◆ REVIEW STEP · approval (manual)")
 				}

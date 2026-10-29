@@ -9,6 +9,7 @@ import (
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,6 +23,18 @@ func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *t
 	fixture := newTaskWorkflowFixture(t, anOpenTask("op-completion"))
 	completion := aCompletion()
 	fixture.withCompletingAgent(completion)
+	fixture.agent.afterCompletion = func() error {
+		live, err := fixture.taskStore.Load("alpha", "op-completion")
+		if err != nil {
+			return err
+		}
+		require.Len(t, live.Runs, 1)
+		is.Equal(taskstate.RunStatusRunning, live.Runs[0].Status)
+		require.NotNil(t, live.Runs[0].Completion)
+		is.Empty(live.Runs[0].Completion.Commit, "handoff cannot capture while its child remains active")
+		is.Empty(fixture.git.captured)
+		return nil
+	}
 	fixture.withRealReviewPipeline()
 
 	stdout, stderr, err := fixture.execute("task", "run", "op-completion")
@@ -36,7 +49,23 @@ func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *t
 	is.NotNil(run.Execution.FinishedAt)
 	is.Contains(stdout, "Recorded completion for op-completion")
 	assertCompletionRecorded(t, completion, run.Completion)
-	is.Empty(run.Completion.Commit)
+	is.Equal("output-1", run.Completion.Commit)
+	require.NotNil(t, finalState.Work)
+	require.Len(t, fixture.git.captured, 1)
+	is.Equal(completion.Summary+"\n\n"+completion.Description, fixture.git.captured[0].Message)
+	effort := finalState.Work.Workflows[0].Phases[1].(*work.ImplementationPhase)
+	observed, ok := effort.Execution.Process.(*work.ExitedProcess)
+	require.True(t, ok)
+	is.Equal(0, *observed.Code)
+	require.NotNil(t, effort.Completion)
+	is.False(effort.Completion.CompletedAt.After(observed.At))
+	output, err := finalState.Work.Workflows[0].Output(work.OutputRef{Phase: 1})
+	require.NoError(t, err)
+	is.Equal("output-tree-1", output.Tree)
+	is.Equal("refs/orpheus/revisions/616c706861/6f702d636f6d706c6574696f6e/0/1/output", output.RetainedRef)
+	reviewScope := finalState.Work.Workflows[0].Phases[2].(*work.ReviewPhase).Scope
+	is.Equal(work.OutputRef{Phase: 1}, reviewScope.Output)
+	is.Nil(reviewScope.DeltaFrom)
 	is.Empty(run.Completion.CommitError)
 	is.Equal(taskmodel.StatusInProgress, finalTask.Status)
 	assertWaitingForManualReview(t, finalState)
@@ -77,6 +106,7 @@ func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *t
 	is.Equal(finalState.Reviews[0].StartedAt, resumed.Reviews[0].StartedAt)
 	is.Equal(finalTask, resumedTask)
 	is.Equal(2, fixture.reviewPipelineRuns)
+	is.Len(fixture.git.captured, 1, "review resumption must not create another implementation revision")
 	assertWaitingForManualReview(t, resumed)
 	assertTaskNotPublished(t, resumed, resumedTask)
 }
@@ -103,7 +133,7 @@ func TestIntegrationWorkflowTaskRunAgentFailureRecordsFailedAttempt(t *testing.T
 	is.Empty(finalState.Reviews)
 	assertTaskNotPublished(t, finalState, finalTask)
 	assertEventTypes(t, finalState.Events,
-		taskstate.EventWorktreeCreated, taskstate.EventRunStarted, taskstate.EventRunFinished,
+		taskstate.EventWorkPrepared, taskstate.EventRunStarted, taskstate.EventRunFinished,
 	)
 	require.Len(t, finalState.Events, 3)
 	is.Equal(taskstate.RunStatusFailed, finalState.Events[2].Status)
@@ -138,8 +168,8 @@ func TestIntegrationWorkflowTaskRunSuccessfulExitWithoutCompletionAllowsOrdinary
 	is.Empty(retried.Reviews)
 	assertTaskNotPublished(t, retried, finalTask)
 	assertEventTypes(t, retried.Events,
-		taskstate.EventWorktreeCreated, taskstate.EventRunStarted, taskstate.EventRunFinished,
-		taskstate.EventWorktreeReused, taskstate.EventRunStarted, taskstate.EventRunFinished,
+		taskstate.EventWorkPrepared, taskstate.EventRunStarted, taskstate.EventRunFinished,
+		taskstate.EventRunStarted, taskstate.EventRunFinished,
 	)
 }
 
@@ -163,7 +193,7 @@ func TestIntegrationWorkflowTaskRunAbsentProcessesInterruptPreviousAttemptBefore
 	is.Equal(taskstate.RunStatusSucceeded, recovered.Runs[1].Status)
 	is.Equal(gitmeta.TaskWorktreeLifecycleReused, fixture.git.lastLifecycle())
 	require.GreaterOrEqual(t, len(recovered.Events), 2)
-	interruption := recovered.Events[1]
+	interruption := recovered.Events[2]
 	is.Equal(taskstate.EventRunInterrupted, interruption.Type)
 	is.Equal(1, interruption.Attempt)
 	is.Equal("task_run", interruption.InterruptionTrigger)

@@ -146,7 +146,7 @@ type ReviewExecution struct {
 // is the latest running attempt.
 func ActiveReviewExecution(taskState taskstate.TaskState) (ReviewExecution, bool) {
 	latest, ok := taskstate.LatestReview(taskState)
-	if !ok || latest.Status != taskstate.ReviewStatusRunning {
+	if !ok {
 		return ReviewExecution{}, false
 	}
 	for index := len(latest.Steps) - 1; index >= 0; index-- {
@@ -206,6 +206,9 @@ func ReconcileReviewExecution(ctx context.Context, paths state.Paths, store Revi
 func inspectionAfterMissingReview(taskState taskstate.TaskState, expectedAttempt int) AttachedExecutionInspection {
 	if expectedAttempt > 0 {
 		for _, review := range taskState.Reviews {
+			if taskState.Work != nil && review.Address.Workflow != taskState.CurrentWorkflow {
+				continue
+			}
 			if review.Attempt == expectedAttempt && taskstate.ReviewExecutionInterrupted(review) {
 				return AttachedExecutionInspection{Condition: AttachedExecutionAlreadyRecovered, Reason: "review_interrupted_by_concurrent_recovery"}
 			}

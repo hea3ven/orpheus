@@ -50,6 +50,7 @@ type invocationDependencies struct {
 	environment        map[string]string
 	agentLauncher      agentexec.Launcher
 	dispatchGit        workflow.DispatchGit
+	outputGit          workflow.OutputGit
 	agentGit           agent.GitStateReader
 	reviewCandidateGit workflow.ReviewCandidateGit
 	reviewPipeline     func(review.PipelineRunOptions) (review.PipelineOutcome, error)

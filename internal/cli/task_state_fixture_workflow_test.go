@@ -3,122 +3,47 @@
 package cli_test
 
 import (
+	workmodel "github.com/hea3ven/orpheus/internal/work"
 	"testing"
 	"time"
 
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/require"
 )
 
-func recordTaskShowReviewAttempt(
-	t *testing.T,
-	store taskstate.Store,
-	now *time.Time,
-	status taskstate.ReviewStatus,
-) {
-	t.Helper()
-
-	must := require.New(t)
-	reviewAttempt, err := store.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{
-		Pipeline: "local",
-		Step:     "manual",
-	})
-	must.NoError(err)
-	*now = now.Add(time.Minute)
-	_, err = store.FinishReview(
-		"alpha",
-		"op-review",
-		reviewAttempt.Attempt,
-		status,
-	)
-	must.NoError(err)
-	*now = now.Add(time.Minute)
-}
-
+// The reader owner supplies complete synthetic history rather than pretending
+// aggregate statuses are native observations or approvals.
 func seedTaskShowReviewState(t *testing.T, paths state.Paths, repoPath string) {
 	t.Helper()
-
-	must := require.New(t)
-	runStore := taskstate.NewStore(paths)
-	oldReview := recordCreatedReviewFollowUp(t, runStore)
-	_, err := runStore.FinishReview("alpha", "op-main", oldReview.Attempt, taskstate.ReviewStatusPassed)
-	must.NoError(err)
-
-	latestReview := recordMixedReviewFindings(t, runStore)
-	latestReview, err = runStore.MarkReviewAutomatedBlockerDecisionKept("alpha", "op-main", latestReview.Attempt)
-	must.NoError(err)
-	_, err = runStore.FinishReview("alpha", "op-main", latestReview.Attempt, taskstate.ReviewStatusBlocked)
-	must.NoError(err)
-	followUpRun, err := runStore.StartRun("alpha", "op-main", taskstate.StartRunOptions{
-		Agent:    "codex",
-		Branch:   "main",
-		Worktree: repoPath,
-	})
-	must.NoError(err)
-	_, err = runStore.TargetReviewFindings("alpha", "op-main", latestReview.Attempt, []int{1}, followUpRun.Attempt)
-	must.NoError(err)
-}
-
-func recordCreatedReviewFollowUp(t *testing.T, runStore taskstate.Store) taskstate.ReviewAttempt {
-	t.Helper()
-
-	must := require.New(t)
-	oldReview, err := runStore.StartReviewWithOptions("alpha", "op-main", taskstate.StartReviewOptions{
-		Pipeline: "manual",
-		Step:     "manual",
-	})
-	must.NoError(err)
-	_, err = runStore.RecordReviewStep("alpha", "op-main", oldReview.Attempt, taskstate.RecordReviewStepOptions{
-		Kind: "manual",
-		Name: "manual",
-	})
-	must.NoError(err)
-	_, err = runStore.RecordReviewFinding("alpha", "op-main", oldReview.Attempt, taskstate.ReviewFinding{
-		Type:        taskstate.FindingTypeSeparateTask,
-		Title:       "Older cleanup",
-		Description: "Track old cleanup separately.",
-		Step:        "manual",
-		TaskProposal: taskstate.ReviewTaskProposal{
-			Title:              "Older cleanup",
-			Description:        "Clean up old code.",
-			AcceptanceCriteria: "Cleanup is tested.",
-		},
-	})
-	must.NoError(err)
-	_, err = runStore.RecordReviewFindingCreatedTask("alpha", "op-main", oldReview.Attempt, 0, "op-41")
-	must.NoError(err)
-	return oldReview
-}
-
-func recordMixedReviewFindings(t *testing.T, runStore taskstate.Store) taskstate.ReviewAttempt {
-	t.Helper()
-
-	must := require.New(t)
-	latestReview, err := runStore.StartReviewWithOptions("alpha", "op-main", taskstate.StartReviewOptions{
-		Pipeline: "quality",
-		Step:     "unit-tests",
-	})
-	must.NoError(err)
-	exitCode := 1
-	_, err = runStore.RecordReviewStep("alpha", "op-main", latestReview.Attempt, taskstate.RecordReviewStepOptions{
-		Kind:     "check",
-		Name:     "unit-tests",
-		ExitCode: &exitCode,
-	})
-	must.NoError(err)
-	_, err = runStore.RecordReviewStep("alpha", "op-main", latestReview.Attempt, taskstate.RecordReviewStepOptions{
-		Kind: "agent_review",
-		Name: "ai-review",
-	})
-	must.NoError(err)
-	for _, finding := range mixedReviewFindings() {
-		_, err = runStore.RecordReviewFinding("alpha", "op-main", latestReview.Attempt, finding)
-		must.NoError(err)
+	snapshot := testutil.ReviewableWork("alpha", "op-main", repoPath, "main")
+	w := &snapshot.Workflows[0]
+	at := time.Date(2026, 1, 1, 0, 0, 10, 0, time.UTC)
+	old := workmodel.Finding{Title: "Older cleanup", Classification: workmodel.FindingSeparateTask, Description: "Track old cleanup separately.", Proposal: &workmodel.FollowUpProposal{Title: "Older cleanup", Description: "Clean up old code.", AcceptanceCriteria: "Cleanup is tested."}, CreatedTask: &workmodel.CreatedFollowUp{TaskID: "op-41", ObservedAt: at}}
+	w.ReviewContracts = []workmodel.ReviewContract{{PipelineKey: "manual", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewManual, ConfigKey: "manual"}}}, {PipelineKey: "quality", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewCheck, ConfigKey: "unit-tests"}, {Kind: workmodel.ReviewAgent, ConfigKey: "ai-review"}}}}
+	scope := workmodel.ReviewScope{Requirements: "Synthetic task requirements", Output: workmodel.OutputRef{Phase: 1}, Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}
+	authored := mixedReviewFindings()
+	findings := make([]workmodel.Finding, len(authored))
+	for i, f := range authored {
+		findings[i] = workmodel.Finding{Title: f.Title, Classification: workmodel.FindingClassification(f.Type), Description: f.Description, SuggestedAction: f.SuggestedAction}
+		if f.Type == taskstate.FindingTypeBlocking {
+			findings[i].Dispositions = []workmodel.FindingDisposition{&workmodel.RepairRequired{}, &workmodel.RepairRequired{At: at.Add(2 * time.Second)}}
+		}
+		if f.Waiver != "" {
+			findings[i].Dispositions = append(findings[i].Dispositions, &workmodel.WaivedFinding{Waiver: workmodel.Waiver{At: at.Add(3 * time.Second), Reason: f.Waiver}})
+		}
+		if !f.TaskProposal.IsZero() {
+			findings[i].Proposal = &workmodel.FollowUpProposal{Title: f.TaskProposal.Title, Description: f.TaskProposal.Description, AcceptanceCriteria: f.TaskProposal.AcceptanceCriteria}
+			findings[i].CreatedTask = &workmodel.CreatedFollowUp{TaskID: "op-42", ObservedAt: at.Add(3 * time.Second)}
+		}
 	}
-	_, err = runStore.RecordReviewFindingCreatedTask("alpha", "op-main", latestReview.Attempt, 3, "op-42")
-	must.NoError(err)
-	return latestReview
+	code := 0
+	checkCode := 1
+	w.Phases = append(w.Phases, &workmodel.ReviewPhase{Contract: 0, Scope: scope, StartedAt: at, Steps: []workmodel.ReviewStep{&workmodel.ManualReviewStep{Slot: 0, Findings: []workmodel.Finding{old}, Decision: &workmodel.ApprovedReview{At: at}}}}, &workmodel.ReviewPhase{Contract: 1, Scope: scope, StartedAt: at.Add(time.Second), Steps: []workmodel.ReviewStep{&workmodel.CheckStep{Slot: 0, Result: &workmodel.CheckResult{ExitCode: &checkCode, FinishedAt: at.Add(time.Second)}, Findings: findings[:1]}, &workmodel.AgentReviewStep{Slot: 1, Execution: workmodel.AgentExecution{StartedAt: at.Add(time.Second), Process: &workmodel.ExitedProcess{Code: &code, At: at.Add(2 * time.Second)}}, Report: &workmodel.ReviewReport{Findings: findings[1:]}}}}, &workmodel.ImplementationPhase{Input: &workmodel.OutputRef{Phase: 1}, TargetFindings: []workmodel.FindingRef{{Phase: 3, Step: 1, Finding: 0}}, Execution: workmodel.AgentExecution{Profile: "codex", StartedAt: at.Add(4 * time.Second), Process: &workmodel.RunningProcess{}}})
+	_, err := workstate.NewStore(paths).Save(snapshot, 0)
+	require.NoError(t, err)
 }
 
 func mixedReviewFindings() []taskstate.ReviewFinding {

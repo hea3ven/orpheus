@@ -16,6 +16,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
@@ -23,6 +24,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/tasksource/beads"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testguard"
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
@@ -203,6 +205,7 @@ type runSetup struct {
 	taskID     string
 	attempt    taskstate.ReviewAttempt
 	store      taskstate.Store
+	scope      work.ReviewScope
 }
 
 type runExecutor func(context.Context, string, Options, runSpec) RunResult
@@ -214,6 +217,7 @@ type evaluatorDeps struct {
 }
 
 type prepareRunDeps struct {
+	prepareFixture  func(context.Context, state.Paths, string, string) (work.ReviewScope, error)
 	initializeBeads func(string, string) error
 	seedRepo        func(context.Context, string, scenario) error
 	provisionTask   func(context.Context, string, scenario) (string, error)
@@ -227,6 +231,9 @@ type pipelineDeps struct {
 // Effects replaces the external boundaries of a live evaluation. Nil fields use
 // the production adapters.
 type Effects struct {
+	// PrepareFixture replaces only isolated native fixture preparation, not review
+	// routing, execution, findings, decisions or persistence validation.
+	PrepareFixture  func(context.Context, state.Paths, string, string) (work.ReviewScope, error)
 	InitializeBeads func(string, string) error
 	SeedRepo        func(context.Context, string, string) error
 	ProvisionTask   func(context.Context, string, string) (string, error)
@@ -410,10 +417,11 @@ func executeRun(ctx context.Context, root string, opts Options, spec runSpec) Ru
 
 func evaluatorDepsFromEffects(effects Effects) evaluatorDeps {
 	var deps evaluatorDeps
-	if effects.InitializeBeads != nil || effects.SeedRepo != nil || effects.ProvisionTask != nil {
+	if effects.InitializeBeads != nil || effects.SeedRepo != nil || effects.ProvisionTask != nil || effects.PrepareFixture != nil {
 		deps.prepareRun = func(ctx context.Context, root string, scenarioDef scenario, spec runSpec) (runSetup, error) {
 			return prepareRunWithDeps(ctx, root, scenarioDef, spec, prepareRunDeps{
 				initializeBeads: effects.InitializeBeads,
+				prepareFixture:  effects.PrepareFixture,
 				seedRepo:        seedRepoEffect(effects.SeedRepo),
 				provisionTask:   provisionTaskEffect(effects.ProvisionTask),
 			})
@@ -559,20 +567,26 @@ func prepareRunWithDeps(ctx context.Context, root string, scenarioDef scenario, 
 	}
 
 	store := taskstate.NewStore(paths)
-	if err := seedTaskState(store, taskID, repoPath); err != nil {
+	scope, err := deps.prepareFixture(ctx, paths, repoPath, taskID)
+	if err != nil {
 		return runSetup{}, err
 	}
+	scope.Requirements = scenarioDef.title + "\n\n" + scenarioDef.description + "\n\n" + scenarioDef.acceptanceCriteria
 	attempt, err := store.StartReviewWithOptions("review-eval", taskID, taskstate.StartReviewOptions{
 		Pipeline: "review-context-eval",
 		Step:     "ai-review",
+		Contract: work.ReviewContract{PipelineKey: "review-context-eval", Slots: []work.ReviewSlot{{Kind: work.ReviewAgent, ConfigKey: "ai-review"}}}, Scope: scope,
 	})
 	if err != nil {
 		return runSetup{}, fmt.Errorf("start isolated review attempt: %w", err)
 	}
-	return runSetup{root: runRoot, repoPath: repoPath, configBase: configBase, dataBase: dataBase, paths: paths, taskID: taskID, attempt: attempt, store: store}, nil
+	return runSetup{root: runRoot, repoPath: repoPath, configBase: configBase, dataBase: dataBase, paths: paths, taskID: taskID, attempt: attempt, store: store, scope: scope}, nil
 }
 
 func (deps prepareRunDeps) withDefaults() prepareRunDeps {
+	if deps.prepareFixture == nil {
+		deps.prepareFixture = prepareCommittedFixture
+	}
 	if deps.initializeBeads == nil {
 		deps.initializeBeads = beads.InitializeManaged
 	}
@@ -654,34 +668,10 @@ func seedTask(ctx context.Context, repoPath string, scenarioDef scenario) (strin
 	if err != nil {
 		return "", fmt.Errorf("create isolated Beads task: %w", err)
 	}
-	if err := backend.MarkInProgress(ctx, created.ID, "main", repoPath); err != nil {
+	if err := backend.MarkInProgress(ctx, created.ID, "orpheus/"+created.ID, repoPath); err != nil {
 		return "", fmt.Errorf("mark isolated task in progress: %w", err)
 	}
 	return created.ID, nil
-}
-
-func seedTaskState(store taskstate.Store, taskID string, repoPath string) error {
-	run, err := store.StartRun("review-eval", taskID, taskstate.StartRunOptions{
-		Agent:    "seed-implementer",
-		Branch:   "main",
-		Worktree: repoPath,
-	})
-	if err != nil {
-		return fmt.Errorf("start isolated implementation run: %w", err)
-	}
-	_, err = store.CompleteRun("review-eval", taskID, run.Attempt, taskstate.CompleteRunOptions{
-		Summary:              "Implement seeded review scenario",
-		Description:          "Seeded multiple independent defects for live review-context evaluation.",
-		DetailedDescription:  "This run intentionally leaves known defects in the working tree so reviewer recall can be measured.",
-		TechnicalExplanation: "The scenario is synthetic and isolated from operator repositories and normal Orpheus state.",
-	})
-	if err != nil {
-		return fmt.Errorf("complete isolated implementation run: %w", err)
-	}
-	if _, err := store.FinishRun("review-eval", taskID, run.Attempt, taskstate.RunStatusSucceeded); err != nil {
-		return fmt.Errorf("finish isolated implementation run: %w", err)
-	}
-	return nil
 }
 
 func runCommand(ctx context.Context, dir string, name string, args ...string) error {
@@ -932,14 +922,28 @@ func runPipeline(ctx context.Context, opts Options, spec runSpec, scenarioDef sc
 
 func runPipelineWithDeps(ctx context.Context, opts Options, spec runSpec, scenarioDef scenario, setup runSetup, deps pipelineDeps) error {
 	deps = deps.withDefaults()
+	snapshot, err := setup.store.Load("review-eval", setup.taskID)
+	if err != nil {
+		return err
+	}
+	if snapshot.Work == nil || snapshot.Work.ActiveWorkflow() == nil {
+		return errors.New("evaluation review has no prepared workflow")
+	}
+	w := snapshot.Work.ActiveWorkflow()
+	output, err := w.Output(setup.scope.Output)
+	if err != nil {
+		return err
+	}
+	candidate := review.CommittedCandidate{Identity: gitmeta.CheckoutIdentity{Commit: output.Commit, Ref: "refs/heads/" + w.Context().TaskBranch}, Revision: gitmeta.Revision{Commit: output.Commit, Tree: output.Tree, RetainedRef: output.RetainedRef}}
 	outcome, err := review.RunPipeline(review.PipelineRunOptions{
 		Execution:   review.FreshExecution(),
+		Candidate:   candidate,
 		Effects:     deps.effects,
 		Context:     ctx,
 		Store:       setup.store,
 		RepoID:      "review-eval",
 		TaskID:      setup.taskID,
-		Branch:      "main",
+		Branch:      w.Context().TaskBranch,
 		Workdir:     setup.repoPath,
 		Attempt:     setup.attempt,
 		Pipeline:    evaluationPipeline(),
@@ -948,8 +952,8 @@ func runPipelineWithDeps(ctx context.Context, opts Options, spec runSpec, scenar
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 		AgentConfig: agentConfig(opts, spec.Harness, scenarioDef.promptAppend),
-		RecordChildPID: func(stepName string, pid int) error {
-			return recordEvaluatorChildPID(setup, stepName, pid)
+		RecordChildPID: func(ref work.AttemptRef, pid int) error {
+			return recordEvaluatorChildPID(setup, ref, pid)
 		},
 		AgentLauncher: deps.agentLauncher,
 		PromptAutomatedBlockers: func(review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
@@ -962,7 +966,7 @@ func runPipelineWithDeps(ctx context.Context, opts Options, spec runSpec, scenar
 		}
 	}
 	if err != nil && !errors.Is(err, review.ErrInvalidExecution) {
-		if finishErr := finishReview(setup, taskstate.ReviewStatusFailed); finishErr != nil {
+		if _, finishErr := setup.store.RecordReviewFailure(setup.attempt.Address, err); finishErr != nil {
 			return errors.Join(err, finishErr)
 		}
 	}
@@ -976,8 +980,8 @@ func (deps pipelineDeps) withDefaults() pipelineDeps {
 	return deps
 }
 
-func recordEvaluatorChildPID(setup runSetup, stepName string, pid int) error {
-	return workflow.RecordReviewChildPID(setup.paths, nil, setup.store, "review-eval", setup.taskID, setup.attempt.Attempt, stepName, pid)
+func recordEvaluatorChildPID(setup runSetup, ref work.AttemptRef, pid int) error {
+	return workflow.RecordReviewChildPID(setup.paths, nil, setup.store, ref, pid)
 }
 
 func evaluationSessionName(taskID string, scenarioDef scenario) string {
@@ -989,9 +993,9 @@ func evaluationSessionName(taskID string, scenarioDef scenario) string {
 }
 
 func finishReview(setup runSetup, status taskstate.ReviewStatus) error {
-	_, err := setup.store.FinishReview("review-eval", setup.taskID, setup.attempt.Attempt, status)
+	_, err := setup.store.CurrentReviewAt(setup.attempt.Address)
 	if err != nil {
-		return fmt.Errorf("finish isolated review attempt as %s: %w", status, err)
+		return fmt.Errorf("observe isolated review outcome %s: %w", status, err)
 	}
 	return nil
 }

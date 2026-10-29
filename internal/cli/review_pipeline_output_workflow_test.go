@@ -31,7 +31,7 @@ func TestIntegrationWorkflowReviewPipelineAttachedReviewerPassesOutputThroughCLI
 	stdout, stderr := fixture.run("", "task", "run", "op-attached")
 
 	is.Contains(stdout, "attached stdout")
-	is.Contains(stdout, "Published op-attached")
+	is.Contains(stdout, "Review passed for op-attached")
 	is.Contains(stderr, "attached stderr")
 	is.NotContains(stderr, "\x1b[31mattached stderr")
 	must.Len(fixture.agent.launches, 1)
@@ -101,9 +101,9 @@ func TestIntegrationWorkflowReviewPipelineNoninteractiveReviewerFinalizesOutputT
 				assert.NotContains(t, visible, "agent stdout")
 			}
 			if tc.failure || tc.findingType == taskstate.FindingTypeBlocking {
-				assert.Empty(t, fixture.candidate.commits)
+				assert.Len(t, fixture.candidate.commits, 1)
 			} else {
-				assert.Contains(t, stdout.String(), "Published op-tail")
+				assert.Contains(t, stdout.String(), "Review passed for op-tail")
 			}
 		})
 	}
@@ -123,7 +123,7 @@ func TestIntegrationWorkflowReviewPipelinePassingCheckClearsRollingTailThroughCL
 
 	must.NoError(err)
 	is.NotContains(stdout.String(), "passing stdout")
-	is.Contains(stdout.String(), "Published op-check-pass")
+	is.Contains(stdout.String(), "Review passed for op-check-pass")
 	visible := stderr.Visible()
 	is.Contains(visible, "== Review step: unit (check) ==")
 	is.NotContains(visible, "passing stdout")
@@ -155,7 +155,7 @@ func TestIntegrationWorkflowReviewPipelineBlockedCheckExpandsRollingTailThroughC
 	is.NotContains(visible, "blocked stdout 05")
 	is.Contains(visible, "Review blocked for op-check-blocked by check \"unit\".")
 	latest := loadLatestReview(t, fixture, "op-check-blocked")
-	is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
+	is.Equal(taskstate.ReviewStatusWaitingForAutomatedDecision, latest.Status)
 	must.Len(latest.Findings, 1)
 }
 

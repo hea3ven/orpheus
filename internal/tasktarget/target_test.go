@@ -45,7 +45,7 @@ func TestStrictTargetClassifiersMatchOnlyExpectedBranchAndLocation(t *testing.T)
 		t.Run(tc.name, func(t *testing.T) {
 			metadata := task.OrpheusMetadata{Branch: tc.branch, HasBranch: true, Worktree: tc.worktree, HasWorktree: true}
 			fromMetadata, metadataErr := tasktarget.ClassifyMetadataTarget(metadata, targets)
-			fromGit, gitErr := tasktarget.ClassifyGitFacts(taskstate.TaskTarget{Branch: tc.branch, Worktree: tc.worktree}, targets)
+			fromGit, gitErr := tasktarget.ClassifyGitFacts(taskstate.GitFacts{Branch: tc.branch, Worktree: tc.worktree}, targets)
 
 			if !tc.valid {
 				if metadataErr == nil || gitErr == nil {

@@ -2,11 +2,16 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
+	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTaskShowReviewScopesHistoryAttemptAndFinding(t *testing.T) {
@@ -90,6 +95,41 @@ func TestTaskShowReviewScopesHistoryAttemptAndFinding(t *testing.T) {
 	if !strings.Contains(finding.String(), "Run attempt 1: succeeded (completion recorded)") || !strings.Contains(finding.String(), "Run attempt 2: failed (no completion)") {
 		t.Fatalf("advisory follow-up audit missing:\n%s", finding.String())
 	}
+	// Reused human ordinals after reset must never select older review/repair
+	// ownership. The current attempt also exposes its immutable committed scope.
+	snapshot := testutil.ReviewableWork("alpha", "op-snapshot", "/fixture/current", "task-branch")
+	old := testutil.ReviewableWork("alpha", "op-snapshot", "/fixture/old", "old-task-branch").Workflows[0]
+	snapshot.Workflows = append([]work.Workflow{old}, snapshot.Workflows...)
+	for wi := range snapshot.Workflows {
+		w := &snapshot.Workflows[wi]
+		w.ReviewContracts = []work.ReviewContract{{PipelineKey: "manual", Slots: []work.ReviewSlot{{Kind: work.ReviewManual, ConfigKey: "approval"}}}}
+		at := time.Date(2026, 1, 1, 0, 0, 10, 0, time.UTC)
+		finding := work.Finding{Classification: work.FindingSeparateTask, Title: "old task receipt", Description: "Archived task receipt", Proposal: &work.FollowUpProposal{Title: "Old follow-up", Description: "Old task body", AcceptanceCriteria: "Old acceptance"}, CreatedTask: &work.CreatedFollowUp{TaskID: "old-followup", ObservedAt: at}}
+		if wi == 1 {
+			finding.Title = "current task receipt"
+			finding.CreatedTask = &work.CreatedFollowUp{TaskID: "current-followup", ObservedAt: at}
+		}
+		w.Phases = append(w.Phases, &work.ReviewPhase{Contract: 0, StartedAt: at, Scope: work.ReviewScope{Requirements: fmt.Sprintf("Workflow %d requirements", wi), Output: work.OutputRef{Phase: 1}, Destination: &work.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}, Steps: []work.ReviewStep{&work.ManualReviewStep{Slot: 0, Findings: []work.Finding{finding}, Decision: &work.ApprovedReview{At: at}}}})
+	}
+	current, err := taskstate.Project(snapshot)
+	require.NoError(t, err)
+	// An adversarial old repair uses the same display ordinals.
+	current.Runs = append(current.Runs, taskstate.RunAttempt{Address: work.AttemptRef{Workflow: 0, Phase: 3}, Attempt: 99, Status: taskstate.RunStatusFailed, ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{0}}})
+	attempt.Reset()
+	require.NoError(t, renderTaskShowReview(&attempt, "alpha", "op-snapshot", current, reviewShowScope{reviewAttempt: 1}))
+	assert.Contains(t, attempt.String(), "Committed scope (workflow 1, phase 2)")
+	assert.Contains(t, attempt.String(), "Full-task comparison: initial-commit -> fixture-output")
+	assert.Contains(t, attempt.String(), "Captured requirements: Workflow 1 requirements")
+	assert.Contains(t, attempt.String(), "current-followup")
+	assert.NotContains(t, attempt.String(), "old-followup")
+	assert.NotContains(t, attempt.String(), "Run attempt 99")
+	var allWorkflows bytes.Buffer
+	require.NoError(t, renderTaskShowReview(&allWorkflows, "alpha", "op-snapshot", current, reviewShowScope{}))
+	assert.Contains(t, allWorkflows.String(), "Workflow 0, phase 2")
+	assert.Contains(t, allWorkflows.String(), "Workflow 1, phase 2")
+	assert.Contains(t, allWorkflows.String(), "old task receipt")
+	assert.Contains(t, allWorkflows.String(), "current task receipt")
+
 }
 
 func TestReviewShowRejectsInvalidScopes(t *testing.T) {

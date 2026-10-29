@@ -51,7 +51,7 @@ func TestIntegrationAdapterContractHasStagedChangesDistinguishesChangesFromGitFa
 	}
 }
 
-func TestIntegrationAdapterContractCandidateGitOperationsCaptureAndRestoreTrackedDiff(t *testing.T) {
+func TestIntegrationAdapterContractCandidateGitOperationsInspectChangesAndCleanOnlyUntracked(t *testing.T) {
 	repoPath := newGitRepo(t)
 	trackedPath := filepath.Join(repoPath, "tracked.txt")
 	commitTrackedFile(t, repoPath, "tracked.txt", "base\n")
@@ -83,29 +83,21 @@ func TestIntegrationAdapterContractCandidateGitOperationsCaptureAndRestoreTracke
 		t.Fatalf("untracked files = %#v, want nested/new.txt", untracked)
 	}
 
-	patch, err := orpheusgit.BinaryDiff(context.Background(), repoPath)
-	if err != nil {
-		t.Fatalf("binary diff: %v", err)
-	}
-	if !strings.Contains(string(patch), "+changed") {
-		t.Fatalf("patch = %q, want tracked change", patch)
-	}
-
 	if err := orpheusgit.CleanUntrackedFiles(context.Background(), repoPath); err != nil {
 		t.Fatalf("clean untracked files: %v", err)
 	}
-	if err := orpheusgit.RestoreTrackedFilesFromHEAD(context.Background(), repoPath); err != nil {
-		t.Fatalf("restore tracked files from HEAD: %v", err)
+	if _, err := os.Stat(filepath.Join(repoPath, "nested", "new.txt")); !os.IsNotExist(err) {
+		t.Fatalf("cleaned untracked path stat = %v, want absent", err)
 	}
-	if status := strings.TrimSpace(runGit(t, repoPath, "status", "--short")); status != "" {
-		t.Fatalf("status after restore = %q, want clean", status)
+	tracked, err := os.ReadFile(trackedPath)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	if err := orpheusgit.ApplyBinaryPatch(context.Background(), repoPath, patch); err != nil {
-		t.Fatalf("apply binary patch: %v", err)
+	if string(tracked) != "changed\n" {
+		t.Fatalf("tracked bytes = %q, want preserved change", tracked)
 	}
 	if got := strings.TrimSpace(runGit(t, repoPath, "status", "--short")); got != "M tracked.txt" {
-		t.Fatalf("status after patch = %q, want tracked modification", got)
+		t.Fatalf("status after clean = %q, want tracked modification", got)
 	}
 }
 

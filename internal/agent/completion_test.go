@@ -3,6 +3,7 @@ package agent_test
 import (
 	"context"
 	"errors"
+	workmodel "github.com/hea3ven/orpheus/internal/work"
 	"sync"
 	"testing"
 
@@ -57,7 +58,7 @@ func TestChildPIDPersistenceAndImmediateCompletionPreserveBothFacts(t *testing.T
 	must := require.New(t)
 	fixture := newActiveContextFixture(t, "op-main")
 	taskItem := mainTask("op-main", fixture.repoPath)
-	run, err := fixture.store.StartRun("alpha", "op-main", taskstate.StartRunOptions{
+	run, err := fixture.store.StartRun("alpha", "op-main", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: fixture.repoPath, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent: "recorder", Branch: "main", Worktree: fixture.repoPath, SupervisorPID: 123,
 	})
 	must.NoError(err)
@@ -76,7 +77,7 @@ func TestChildPIDPersistenceAndImmediateCompletionPreserveBothFacts(t *testing.T
 	go func() {
 		defer wait.Done()
 		<-start
-		errs <- dispatch.RecordChildPID("alpha", "op-main", run.Attempt, 456)
+		errs <- dispatch.RecordChildPID(run.Address, 456)
 	}()
 	go func() {
 		defer wait.Done()
@@ -121,7 +122,7 @@ func TestCompletionServiceWorktreeHandoffIsImmutableAndDoesNotCommit(t *testing.
 	fixture := newActiveContextFixture(t, "op-1")
 	worktree := fixture.expectedWorktree(t, "op-1")
 	taskItem := fixture.worktreeTask("op-1", worktree)
-	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Branch: "orpheus/op-1", Worktree: worktree})
+	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Branch: "orpheus/op-1", Worktree: worktree})
 	require.NoError(t, err)
 	gitState := &fakeGitState{branch: "orpheus/op-1", hasChanges: true, commitErr: errors.New("completion must not commit")}
 	service := agent.CompletionService{
@@ -161,13 +162,13 @@ func TestCompletionServiceRepeatedWorktreeCompletionWithDifferentPayloadIsNoop(t
 	fixture := newActiveContextFixture(t, "op-1")
 	worktree := fixture.expectedWorktree(t, "op-1")
 	taskItem := fixture.worktreeTask("op-1", worktree)
-	attempt, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+	attempt, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent:    "recorder",
 		Branch:   "orpheus/op-1",
 		Worktree: worktree,
 	})
 	must.NoError(err)
-	first, err := fixture.store.CompleteRun("alpha", "op-1", attempt.Attempt, taskstate.CompleteRunOptions{
+	first, err := fixture.store.CompleteImplementation(attempt.Address, taskstate.CompleteRunOptions{
 		Summary:              "First summary",
 		Description:          "First details.",
 		DetailedDescription:  "Detailed PR body.",
@@ -200,7 +201,7 @@ func TestCompletionServiceRepeatedWorktreeCompletionWithDifferentPayloadIsNoop(t
 	is.Equal(0, gitState.staged)
 	is.Equal(0, gitState.committed)
 	assertCompletionMatchesFirst(t, completed, first)
-	assertRepeatedDiagnostic(t, completed)
+	is.Nil(completed.RepeatedDiagnostic, "repeated handoff is a no-op, not a generic operation journal")
 
 	latest, ok, loadErr := fixture.store.LatestRun("alpha", "op-1")
 	must.NoError(loadErr)
@@ -210,10 +211,13 @@ func TestCompletionServiceRepeatedWorktreeCompletionWithDifferentPayloadIsNoop(t
 	is.Equal("First details.", latest.Completion.Description)
 	is.Equal("Detailed PR body.", latest.Completion.DetailedDescription)
 	is.Equal("Technical explanation.", latest.Completion.TechnicalExplanation)
-	is.Equal("abc123", latest.Completion.Commit)
+	is.Empty(latest.Completion.Commit, "an agent-provided SHA cannot become captured output identity")
 	events, eventsErr := fixture.store.Events("alpha", "op-1")
 	must.NoError(eventsErr)
-	is.Equal(taskstate.EventCompletionRepeated, events[len(events)-1].Type)
+	must.Len(events, 3)
+	is.Equal(taskstate.EventWorkPrepared, events[0].Type)
+	is.Equal(taskstate.EventRunStarted, events[1].Type)
+	is.Equal(taskstate.EventCompletionRecorded, events[2].Type)
 }
 
 func assertCompletionMatchesFirst(
@@ -233,25 +237,12 @@ func assertCompletionMatchesFirst(
 	is.Equal(first.Completion.Commit, completed.Run.Completion.Commit)
 }
 
-func assertRepeatedDiagnostic(t *testing.T, completed agent.CompleteResult) {
-	t.Helper()
-	is := assert.New(t)
-	must := require.New(t)
-
-	must.NotNil(completed.RepeatedDiagnostic)
-	is.Equal(taskstate.EventCompletionRepeated, completed.RepeatedDiagnostic.Type)
-	is.Equal("Second summary", completed.RepeatedDiagnostic.RequestedSummary)
-	is.Equal("Second details.", completed.RepeatedDiagnostic.RequestedDescription)
-	is.Equal("Detailed PR body.", completed.RepeatedDiagnostic.RequestedDetailedDescription)
-	is.Equal("Technical explanation.", completed.RepeatedDiagnostic.RequestedTechnicalExplanation)
-}
-
 func TestCompletionServiceRejectsMissingTechnicalExplanation(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newActiveContextFixture(t, "op-main")
 	taskItem := mainTask("op-main", fixture.repoPath)
-	_, err := fixture.store.StartRun("alpha", "op-main", taskstate.StartRunOptions{
+	_, err := fixture.store.StartRun("alpha", "op-main", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: fixture.repoPath, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Branch:   "main",
 		Worktree: fixture.repoPath,
 	})
@@ -283,7 +274,7 @@ func TestCompletionServiceRejectsCurrentBranchMismatch(t *testing.T) {
 	must := require.New(t)
 	fixture := newActiveContextFixture(t, "op-main")
 	taskItem := mainTask("op-main", fixture.repoPath)
-	_, err := fixture.store.StartRun("alpha", "op-main", taskstate.StartRunOptions{
+	_, err := fixture.store.StartRun("alpha", "op-main", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: fixture.repoPath, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Branch:   "main",
 		Worktree: fixture.repoPath,
 	})
@@ -315,11 +306,10 @@ func TestCompletionServiceGitInspectionFailureDoesNotWriteCompletion(t *testing.
 		want string
 	}{
 		{"branch", &fakeGitState{branchErr: cause, hasChanges: true}, "inspect current Git branch"},
-		{"changes", &fakeGitState{branch: "main", changesErr: cause}, "Git inspection unavailable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := newActiveContextFixture(t, "op-main")
-			_, err := fixture.store.StartRun("alpha", "op-main", taskstate.StartRunOptions{Branch: "main", Worktree: fixture.repoPath})
+			_, err := fixture.store.StartRun("alpha", "op-main", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: fixture.repoPath, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Branch: "main", Worktree: fixture.repoPath})
 			require.NoError(t, err)
 			service := agent.CompletionService{
 				Paths: fixture.paths, Resolver: fixture.resolver(mainTask("op-main", fixture.repoPath), mainEnv("op-main", fixture.repoPath), fixture.repoPath),

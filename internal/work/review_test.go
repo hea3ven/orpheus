@@ -26,8 +26,9 @@ func TestReviewOutcomeRequiresTheWholeContractAndLatestOwnedEvidence(t *testing.
 	r.Steps = append(r.Steps, &work.AgentReviewStep{Slot: 1, Execution: execution(22, 23, 1)}, &work.ManualReviewStep{Slot: 2, Decision: &work.ApprovedReview{At: at(24)}})
 	assertOutcome(work.ReviewFailed)
 	r.Steps = append(r.Steps, &work.AgentReviewStep{Slot: 1, Execution: execution(25, 26, 0)})
-	assertOutcome(work.ReviewPending)
+	assertOutcome(work.ReviewPassed)
 	agent := r.Steps[3].(*work.AgentReviewStep)
+	require.Nil(t, agent.Report, "successful no-findings review must not invent a report or verification")
 	agent.Report = &work.ReviewReport{Findings: []work.Finding{blocker("Required change")}}
 	assertOutcome(work.ReviewChangesRequired)
 	agent.Report.Findings[0].Dispositions = append(agent.Report.Findings[0].Dispositions, &work.WaivedFinding{Waiver: work.Waiver{Reason: " ", At: at(27)}})
@@ -60,6 +61,17 @@ func TestReviewFailedCheckNeedsExplicitReasonedWaiverNotManualApproval(t *testin
 	require.NoError(t, err)
 	require.Equal(t, work.ReviewPassedWithWaivers, outcome)
 	require.Equal(t, 3, *check.Result.ExitCode)
+	check.Findings = []work.Finding{blocker("Reported check failure")}
+	outcome, err = w.ReviewOutcome(ref)
+	require.NoError(t, err)
+	require.Equal(t, work.ReviewChangesRequired, outcome, "waiving a command does not erase its reported required finding")
+	check.Findings[0].Dispositions = append(check.Findings[0].Dispositions, &work.WaivedFinding{Waiver: *check.Waiver})
+	outcome, err = w.ReviewOutcome(ref)
+	require.NoError(t, err)
+	require.Equal(t, work.ReviewPassedWithWaivers, outcome)
+	finding, err := w.Finding(work.FindingRef{Phase: 2, Step: 0, Finding: 0})
+	require.NoError(t, err)
+	require.Equal(t, "Reported check failure", finding.Title)
 	check.Waiver.Reason = ""
 	_, err = w.ReviewOutcome(ref)
 	require.ErrorContains(t, err, "nonblank reason")
@@ -71,6 +83,8 @@ func TestReviewFailedCheckNeedsExplicitReasonedWaiverNotManualApproval(t *testin
 	_, err = w.ReviewOutcome(ref)
 	require.ErrorContains(t, err, "explicit exit code")
 	check.Result.ExitCode = exitValue(0)
+	require.ErrorContains(t, s.Validate(), "check findings require an observed failed check")
+	check.Findings = nil
 	r.Steps[2].(*work.ManualReviewStep).Decision = nil
 	outcome, err = w.ReviewOutcome(ref)
 	require.NoError(t, err)

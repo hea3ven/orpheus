@@ -13,7 +13,9 @@ func TestCaptureKeepsHandoffSeparateFromSafeCodeAndUnchangedOutput(t *testing.T)
 	p := w.Phases[1].(*work.ImplementationPhase)
 	p.Execution.Process = &work.RunningProcess{}
 	p.Output = nil
+	capture := work.AttemptRef{RepositoryID: s.RepositoryID, TaskID: s.TaskID, Workflow: 0, Phase: 1}
 	require.NoError(t, s.Validate(), "a handoff can arrive before process exit")
+	require.ErrorContains(t, s.CheckOutputCapture(capture), "successful safe execution boundary")
 	p.Output = code("1")
 	require.ErrorContains(t, s.Validate(), "safe execution boundary")
 	_, err := w.Output(work.OutputRef{Phase: 1})
@@ -28,6 +30,7 @@ func TestCaptureKeepsHandoffSeparateFromSafeCodeAndUnchangedOutput(t *testing.T)
 	require.ErrorContains(t, s.Validate(), "safe execution boundary")
 	p.Execution.Process = &work.ExitedProcess{At: at(12), Code: exitValue(0)}
 	require.NoError(t, s.Validate())
+	require.NoError(t, s.CheckOutputCapture(capture))
 	captured, err := w.Output(work.OutputRef{Phase: 1})
 	require.NoError(t, err)
 	require.Equal(t, "C1", captured.Commit)
@@ -38,6 +41,12 @@ func TestCaptureKeepsHandoffSeparateFromSafeCodeAndUnchangedOutput(t *testing.T)
 	unchanged.Output = &work.ReusedOutput{Input: *outputRef(t, 1)}
 	w.Phases = append(w.Phases, unchanged)
 	require.NoError(t, s.Validate())
+	require.ErrorContains(t, s.CheckOutputCapture(capture), "active last implementation", "an earlier successful effort cannot recapture after repair starts")
+	capture.Phase = 2
+	require.NoError(t, s.CheckOutputCapture(capture))
+	foreign := capture
+	foreign.TaskID = "another task"
+	require.ErrorContains(t, s.CheckOutputCapture(foreign), "active last implementation")
 	selected, ok := w.LatestOutput()
 	require.True(t, ok)
 	require.Equal(t, 2, selected.Phase)
@@ -123,7 +132,7 @@ func TestCompletionAndReviewKeepRequiredAndOptionalTextDistinct(t *testing.T) {
 	w.Phases = append(w.Phases, r)
 	report := r.Steps[1].(*work.AgentReviewStep).Report
 	require.Empty(t, report.Evidence)
-	require.NoError(t, s.Validate(), "the report itself is required for acceptance, not an optional narrative")
+	require.NoError(t, s.Validate(), "a findings report need not supply an extra narrative")
 	require.Equal(t, "\n# Retained completion\n", completion.DetailedDescription, "validation preserves the actual text rather than normalizing it")
 	report.Evidence = " \n"
 	require.ErrorContains(t, s.Validate(), "review report requires nonblank text")

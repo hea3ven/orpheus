@@ -48,7 +48,7 @@ func completeAgentTestRun(t *testing.T, runStore taskstate.Store) taskstate.RunA
 	latest, ok, err := runStore.LatestRun("alpha", "op-main")
 	require.NoError(t, err)
 	require.True(t, ok)
-	completed, err := runStore.CompleteRun("alpha", "op-main", latest.Attempt, taskstate.CompleteRunOptions{
+	completed, err := seedFixtureHandoff(runStore, "alpha", "op-main", latest.Attempt, taskstate.CompleteRunOptions{
 		Summary:              "First summary",
 		Description:          "First details.",
 		DetailedDescription:  "Detailed PR body.",
@@ -65,7 +65,6 @@ func assertRepeatedAgentDoneOutput(t *testing.T, stdout string) {
 	is.Contains(stdout, "already recorded")
 	is.Contains(stdout, "Do not run `orpheus agent done` again")
 	is.Contains(stdout, "first completion remains authoritative")
-	is.Contains(stdout, "local diagnostic")
 }
 
 func assertRepeatedAgentCompletion(t *testing.T, runStore taskstate.Store, attempt taskstate.RunAttempt) {
@@ -85,10 +84,7 @@ func assertRepeatedAgentCompletion(t *testing.T, runStore taskstate.Store, attem
 	must.NoError(err)
 	must.NotEmpty(events)
 	last := events[len(events)-1]
-	is.Equal(taskstate.EventCompletionRepeated, last.Type)
+	is.Equal(taskstate.EventCompletionRecorded, last.Type)
 	is.Equal(attempt.Attempt, last.Attempt)
-	is.Equal("Second summary", last.RequestedSummary)
-	is.Equal("Second details.", last.RequestedDescription)
-	is.Equal("Second detailed PR body.", last.RequestedDetailedDescription)
-	is.Equal("Second technical explanation.", last.RequestedTechnicalExplanation)
+	is.Len(events, 3, "preparation, admission and first handoff only; repeats append nothing")
 }

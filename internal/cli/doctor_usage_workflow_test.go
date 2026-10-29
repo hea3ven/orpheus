@@ -3,6 +3,7 @@
 package cli_test
 
 import (
+	workmodel "github.com/hea3ven/orpheus/internal/work"
 	"path/filepath"
 	"testing"
 	"time"
@@ -25,62 +26,9 @@ func TestIntegrationWorkflowDoctorRecoversCodexUsageForImplementationAndReviewAg
 	repoDir := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 	withWorkflowSources(t, fixture, map[string]taskSourceResult{repoDir: {tasks: []taskmodel.Task{{ID: "op-1", Title: "Doctor", Status: taskmodel.StatusInProgress, IssueType: taskmodel.IssueTypeTask}}}})
 
-	store := taskstate.NewStoreWithClock(paths, clockSequence(
-		time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
-		time.Date(2026, 7, 7, 10, 2, 0, 0, time.UTC),
-		time.Date(2026, 7, 7, 10, 10, 0, 0, time.UTC),
-		time.Date(2026, 7, 7, 10, 13, 0, 0, time.UTC),
-	))
-	run, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
-		Agent:    "codex-profile",
-		Profile:  "codex-profile",
-		Harness:  "codex",
-		Command:  "codex",
-		Args:     []string{"exec"},
-		Branch:   "main",
-		Worktree: repoDir,
-	})
-	must.NoError(err)
-	_, err = store.FinishRun("alpha", "op-1", run.Attempt, taskstate.RunStatusSucceeded)
-	must.NoError(err)
-
-	reviewAttempt, err := store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{
-		Pipeline: "standard",
-		Step:     "ai-review",
-	})
-	must.NoError(err)
-	_, err = store.RecordReviewStep("alpha", "op-1", reviewAttempt.Attempt, taskstate.RecordReviewStepOptions{
-		Kind: "agent_review",
-		Name: "ai-review",
-		Execution: &taskstate.AgentExecution{
-			Purpose:   taskstate.AgentExecutionPurposeReview,
-			Status:    taskstate.RunStatusRunning,
-			Agent:     "reviewer",
-			Profile:   "reviewer",
-			Harness:   "codex",
-			Command:   "codex",
-			Args:      []string{"exec", "review"},
-			StartedAt: time.Date(2026, 7, 7, 10, 10, 0, 0, time.UTC),
-		},
-	})
-	must.NoError(err)
-	_, err = store.FinishReviewStepExecution(
-		"alpha",
-		"op-1",
-		reviewAttempt.Attempt,
-		"ai-review",
-		taskstate.FinishReviewStepExecutionOptions{
-			Status:     taskstate.RunStatusSucceeded,
-			FinishedAt: time.Date(2026, 7, 7, 10, 12, 0, 0, time.UTC),
-			UsageCapture: taskstate.AgentUsageCapture{
-				Status: taskstate.UsageCaptureUnknown,
-				Reason: "no_matching_codex_session",
-			},
-		},
-	)
-	must.NoError(err)
-	_, err = store.FinishReview("alpha", "op-1", reviewAttempt.Attempt, taskstate.ReviewStatusPassed)
-	must.NoError(err)
+	store := taskstate.NewStore(paths)
+	snapshot := readerDeliveredHistory(t, "alpha", "op-1", repoDir, "orpheus/op-1", workflowTime("2026-07-07T10:00:00Z"))
+	saveReaderHistory(t, fixture, snapshot)
 
 	withDoctorCapture(t, fixture, func(opts agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions {
 		require.Equal(t, "codex", opts.Harness)
@@ -150,7 +98,7 @@ func TestIntegrationWorkflowDoctorDoesNotOverwriteExistingCodexCostWhenRecoverin
 
 	startedAt := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	store := taskstate.NewStoreWithClock(paths, func() time.Time { return startedAt })
-	run, err := store.StartRun("alpha", "op-immutable-cost", taskstate.StartRunOptions{
+	run, err := store.StartRun("alpha", "op-immutable-cost", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Harness: "codex", Model: "gpt-5", Command: "codex", Branch: "main", Worktree: repoDir,
 	})
 	must.NoError(err)
@@ -162,7 +110,7 @@ func TestIntegrationWorkflowDoctorDoesNotOverwriteExistingCodexCostWhenRecoverin
 			Provider: "openai", Model: "gpt-5", ServiceTier: "standard", Source: "old pricing snapshot",
 		},
 	}
-	_, err = store.RecordRunUsage("alpha", "op-immutable-cost", run.Attempt, taskstate.RecordRunUsageOptions{
+	_, err = seedFixtureUsage(store, "alpha", "op-immutable-cost", run.Attempt, taskstate.RecordRunUsageOptions{
 		Model: "gpt-5", Usage: &taskstate.AgentUsage{InputTokens: 100, OutputTokens: 50}, UsageCost: &oldCost,
 	})
 	must.NoError(err)
@@ -194,11 +142,11 @@ func TestIntegrationWorkflowDoctorLeavesTotalOnlyCodexUsageCostUnknown(t *testin
 	store := taskstate.NewStoreWithClock(paths, func() time.Time {
 		return time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	})
-	run, err := store.StartRun("alpha", "op-total-only-cost", taskstate.StartRunOptions{
+	run, err := store.StartRun("alpha", "op-total-only-cost", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Harness: "codex", Model: "gpt-5", Command: "codex", Branch: "main", Worktree: repoDir,
 	})
 	must.NoError(err)
-	_, err = store.RecordRunUsage("alpha", "op-total-only-cost", run.Attempt, taskstate.RecordRunUsageOptions{
+	_, err = seedFixtureUsage(store, "alpha", "op-total-only-cost", run.Attempt, taskstate.RecordRunUsageOptions{
 		Model: "gpt-5", Usage: &taskstate.AgentUsage{TotalTokens: 100},
 	})
 	must.NoError(err)
@@ -222,47 +170,15 @@ func TestIntegrationWorkflowDoctorStampsStoredCodexCostsWithoutSessionLogRecorre
 	paths := fixture.paths
 	repoDir := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 
-	store := taskstate.NewStoreWithClock(paths, func() time.Time {
-		return time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
-	})
-	usage := taskstate.AgentUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150}
-
-	run, err := store.StartRun("alpha", "op-stored-cost", taskstate.StartRunOptions{
-		Harness: "codex", Model: "gpt-5", Command: "codex", Branch: "main", Worktree: repoDir,
-	})
-	must.NoError(err)
-	_, err = store.RecordRunUsage("alpha", "op-stored-cost", run.Attempt, taskstate.RecordRunUsageOptions{
-		Model: "gpt-5", Usage: &usage,
-	})
-	must.NoError(err)
-
-	review, err := store.StartReviewWithOptions("alpha", "op-stored-cost", taskstate.StartReviewOptions{
-		Pipeline: "standard", Step: "ai-review",
-	})
-	must.NoError(err)
-	_, err = store.RecordReviewStep("alpha", "op-stored-cost", review.Attempt, taskstate.RecordReviewStepOptions{
-		Kind: "agent_review", Name: "ai-review", Execution: &taskstate.AgentExecution{
-			Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning,
-			Harness: "codex", Model: "gpt-5", Command: "codex", StartedAt: time.Date(2026, 7, 7, 10, 1, 0, 0, time.UTC),
-		},
-	})
-	must.NoError(err)
-	_, err = store.FinishReviewStepExecution("alpha", "op-stored-cost", review.Attempt, "ai-review", taskstate.FinishReviewStepExecutionOptions{
-		Status: taskstate.RunStatusSucceeded, FinishedAt: time.Date(2026, 7, 7, 10, 2, 0, 0, time.UTC), Model: "gpt-5", Usage: &usage,
-	})
-	must.NoError(err)
-
-	syncOpts := taskstate.SyncConflictResolutionEventOptions{
-		Execution:     taskstate.AgentExecution{Harness: "codex", Model: "gpt-5", Command: "codex"},
-		Branch:        "main",
-		DefaultBranch: "main",
-		Worktree:      repoDir,
-	}
-	_, err = store.RecordSyncConflictResolutionStarted("alpha", "op-stored-cost", syncOpts)
-	must.NoError(err)
-	syncOpts.Usage = taskstate.RecordRunUsageOptions{Model: "gpt-5", Usage: &usage}
-	_, err = store.RecordSyncConflictResolutionFinished("alpha", "op-stored-cost", syncOpts)
-	must.NoError(err)
+	store := taskstate.NewStore(paths)
+	start := workflowTime("2026-07-07T10:00:00Z")
+	snapshot := readerDeliveredHistory(t, "alpha", "op-stored-cost", repoDir, "orpheus/op-stored-cost", start)
+	w := &snapshot.Workflows[0]
+	usage := &workmodel.Usage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150}
+	w.Phases[1].(*workmodel.ImplementationPhase).Execution.Usage = usage
+	w.Phases[2].(*workmodel.ReviewPhase).Steps[0].(*workmodel.AgentReviewStep).Execution.Usage = usage
+	w.Phases[4].(*workmodel.ExternalReviewPhase).BranchSyncs = []workmodel.BranchSync{{StartedAt: start.Add(20 * time.Minute), Checkpoint: workmodel.BranchSyncCheckpoint{LocalHead: "fixture-output", RemoteHead: "fixture-output", MergeSource: "destination-head"}, ConflictResolution: &workmodel.ConflictResolution{Files: []string{"conflict.txt"}, Execution: workmodel.AgentExecution{Harness: "codex", Model: "gpt-5", Command: "codex", StartedAt: start.Add(20 * time.Minute), Process: &workmodel.ExitedProcess{Code: fixtureExitCode(0), At: start.Add(21 * time.Minute)}, Duration: time.Minute, Usage: usage}}, LocalCommit: &workmodel.BranchSyncCommit{Head: "sync-output", ObservedAt: start.Add(22 * time.Minute)}, Push: &workmodel.BranchSyncPush{Head: "sync-output", ObservedAt: start.Add(23 * time.Minute), Evidence: "Synthetic independently observed remote head"}}}
+	saveReaderHistory(t, fixture, snapshot)
 
 	rejectDoctorCapture(t, fixture)
 
@@ -295,11 +211,11 @@ func TestIntegrationWorkflowDoctorBackfillSelectsPricingByExecutionStart(t *test
 
 	startedAt := time.Date(2026, 7, 29, 23, 59, 59, 0, time.UTC)
 	store := taskstate.NewStoreWithClock(paths, func() time.Time { return startedAt })
-	run, err := store.StartRun("alpha", "op-effective-price", taskstate.StartRunOptions{
+	run, err := store.StartRun("alpha", "op-effective-price", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Harness: "codex", Model: "gpt-5.6-luna", Command: "codex", Branch: "main", Worktree: repoDir,
 	})
 	must.NoError(err)
-	_, err = store.RecordRunUsage("alpha", "op-effective-price", run.Attempt, taskstate.RecordRunUsageOptions{
+	_, err = seedFixtureUsage(store, "alpha", "op-effective-price", run.Attempt, taskstate.RecordRunUsageOptions{
 		Model: "gpt-5.6-luna", Usage: &taskstate.AgentUsage{InputTokens: 1_000_000},
 	})
 	must.NoError(err)
@@ -330,7 +246,7 @@ func assertDoctorCodexCostSnapshot(t *testing.T, cost *taskstate.AgentUsageCost)
 	must.NotEmpty(cost.Pricing.Source)
 }
 
-func TestIntegrationWorkflowDoctorFallsBackToRegisteredRepoRootWhenTaskTargetIsMissing(t *testing.T) {
+func TestIntegrationWorkflowDoctorUsesPreparedDirectoryWhenSourceMetadataIsMissing(t *testing.T) {
 	fixture := newCommandWorkflow(t)
 	t.Parallel()
 	is := assert.New(t)
@@ -343,7 +259,7 @@ func TestIntegrationWorkflowDoctorFallsBackToRegisteredRepoRootWhenTaskTargetIsM
 		time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 7, 10, 2, 0, 0, time.UTC),
 	))
-	run, err := store.StartRun("alpha", "op-legacy", taskstate.StartRunOptions{
+	run, err := store.StartRun("alpha", "op-legacy", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent:   "codex-profile",
 		Profile: "codex-profile",
 		Harness: "codex",
@@ -351,7 +267,7 @@ func TestIntegrationWorkflowDoctorFallsBackToRegisteredRepoRootWhenTaskTargetIsM
 		Args:    []string{"exec"},
 	})
 	must.NoError(err)
-	_, err = store.FinishRun("alpha", "op-legacy", run.Attempt, taskstate.RunStatusSucceeded)
+	_, err = seedFixtureExit(store, "alpha", "op-legacy", run.Attempt, 0)
 	must.NoError(err)
 
 	supplyDoctorUsage(t, fixture, "codex", repoDir, doctorCapturedUsage("codex", "repo-root-session", 42))
@@ -376,7 +292,7 @@ func TestIntegrationWorkflowDoctorRecoversPiUsageAndReportedCost(t *testing.T) {
 		time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 7, 10, 2, 0, 0, time.UTC),
 	))
-	run, err := store.StartRun("alpha", "op-pi", taskstate.StartRunOptions{
+	run, err := store.StartRun("alpha", "op-pi", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent:       "pi-profile",
 		Profile:     "pi-profile",
 		Harness:     "pi",
@@ -387,7 +303,7 @@ func TestIntegrationWorkflowDoctorRecoversPiUsageAndReportedCost(t *testing.T) {
 		Worktree:    repoDir,
 	})
 	must.NoError(err)
-	_, err = store.FinishRun("alpha", "op-pi", run.Attempt, taskstate.RunStatusSucceeded)
+	_, err = seedFixtureExit(store, "alpha", "op-pi", run.Attempt, 0)
 	must.NoError(err)
 
 	supplyDoctorUsage(t, fixture, "pi", repoDir, doctorCapturedUsage("pi", "pi-session", 180))
@@ -420,7 +336,7 @@ func TestIntegrationWorkflowDoctorRecoversPiUsageAndReportedCost(t *testing.T) {
 	is.Equal(taskstate.UsageCaptureCaptured, execution.UsageCapture.Status)
 }
 
-func TestIntegrationWorkflowDoctorRefreshesStoredPiReportedCost(t *testing.T) {
+func TestIntegrationWorkflowDoctorFillsSessionWithoutRewritingKnownPiUsageOrCost(t *testing.T) {
 	fixture := newCommandWorkflow(t)
 	t.Parallel()
 	is := assert.New(t)
@@ -435,7 +351,7 @@ func TestIntegrationWorkflowDoctorRefreshesStoredPiReportedCost(t *testing.T) {
 	run, err := store.StartRun("alpha", "op-pi-refresh", doctorPiStartOptions(repoDir, sessionName))
 	must.NoError(err)
 	oldCost := agent.PiReportedUsageCost(1)
-	_, err = store.RecordRunUsage("alpha", "op-pi-refresh", run.Attempt, taskstate.RecordRunUsageOptions{
+	_, err = seedFixtureUsage(store, "alpha", "op-pi-refresh", run.Attempt, taskstate.RecordRunUsageOptions{
 		Model: "openai-codex/gpt-5.5", Usage: &taskstate.AgentUsage{InputTokens: 1, TotalTokens: 1}, UsageCost: &oldCost,
 	})
 	must.NoError(err)
@@ -445,12 +361,13 @@ func TestIntegrationWorkflowDoctorRefreshesStoredPiReportedCost(t *testing.T) {
 	stdout, stderr := fixture.mustExecute("doctor", "--fix")
 	is.Empty(stderr)
 	is.Contains(stdout, "recovered")
-	is.Contains(stdout, "$0.001240")
+	is.Contains(stdout, "$0.000001")
 	loaded, err := store.Load("alpha", "op-pi-refresh")
 	must.NoError(err)
 	must.NotNil(loaded.Runs[0].Execution.Session)
+	is.Equal(&taskstate.AgentUsage{InputTokens: 1, TotalTokens: 1}, loaded.Runs[0].Execution.Usage)
 	must.NotNil(loaded.Runs[0].Execution.UsageCost)
-	is.Equal(int64(1240), loaded.Runs[0].Execution.UsageCost.AmountMicroUSD)
+	is.Equal(int64(1), loaded.Runs[0].Execution.UsageCost.AmountMicroUSD)
 	is.Equal(agent.UsageCostKindPiReportedEstimated, loaded.Runs[0].Execution.UsageCost.Kind)
 }
 
@@ -508,13 +425,13 @@ func testDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(
 	firstCost := int64(1240)
 	first, err := store.StartRun("alpha", "op-resumed", doctorPiStartOptions(repoDir, sessionName))
 	must.NoError(err)
-	_, err = store.RecordRunUsage("alpha", "op-resumed", first.Attempt, taskstate.RecordRunUsageOptions{
+	_, err = seedFixtureUsage(store, "alpha", "op-resumed", first.Attempt, taskstate.RecordRunUsageOptions{
 		Session: &session, Model: "gpt-5.5", Usage: &firstUsage,
 		UsageCost:    agentUsageCost(firstCost),
 		UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureCaptured, Reason: "matched_pi_session"},
 	})
 	must.NoError(err)
-	_, err = store.FinishRun("alpha", "op-resumed", first.Attempt, taskstate.RunStatusSucceeded)
+	_, err = seedFixtureExit(store, "alpha", "op-resumed", first.Attempt, 0)
 	must.NoError(err)
 
 	secondLaunch := &taskstate.AgentLaunch{
@@ -525,11 +442,11 @@ func testDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(
 	secondOpts.Launch = secondLaunch
 	second, err := store.StartRun("alpha", "op-resumed", secondOpts)
 	must.NoError(err)
-	_, err = store.RecordRunUsage("alpha", "op-resumed", second.Attempt, taskstate.RecordRunUsageOptions{
+	_, err = seedFixtureUsage(store, "alpha", "op-resumed", second.Attempt, taskstate.RecordRunUsageOptions{
 		UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureUnknown, Reason: "read_resumed_session_failed"},
 	})
 	must.NoError(err)
-	_, err = store.FinishRun("alpha", "op-resumed", second.Attempt, taskstate.RunStatusSucceeded)
+	_, err = seedFixtureExit(store, "alpha", "op-resumed", second.Attempt, 0)
 	must.NoError(err)
 
 	thirdBaseline := taskstate.AgentUsage{
@@ -537,7 +454,7 @@ func testDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(
 		ReasoningOutputTokens: 7, TotalTokens: 198,
 	}
 	thirdLaunch := &taskstate.AgentLaunch{
-		Mode: taskstate.AgentLaunchResumed, SourceRunAttempt: second.Attempt, SourceSession: &session,
+		Mode: taskstate.AgentLaunchResumed, SourceRunAttempt: first.Attempt, SourceSession: &session,
 		UsageBaseline: &thirdBaseline, CostBaseline: costBaseline,
 	}
 	thirdOpts := doctorPiStartOptions(repoDir, sessionName)
@@ -548,13 +465,13 @@ func testDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(
 		InputTokens: 20, CachedInputTokens: 4, OutputTokens: 10,
 		ReasoningOutputTokens: 3, TotalTokens: 30,
 	}
-	_, err = store.RecordRunUsage("alpha", "op-resumed", third.Attempt, taskstate.RecordRunUsageOptions{
+	_, err = seedFixtureUsage(store, "alpha", "op-resumed", third.Attempt, taskstate.RecordRunUsageOptions{
 		Session: &session, Model: "gpt-5.5", Usage: &thirdUsage,
 		UsageCost:    agentUsageCost(500),
 		UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureCaptured, Reason: "matched_resumed_pi_session"},
 	})
 	must.NoError(err)
-	_, err = store.FinishRun("alpha", "op-resumed", third.Attempt, taskstate.RunStatusSucceeded)
+	_, err = seedFixtureExit(store, "alpha", "op-resumed", third.Attempt, 0)
 	must.NoError(err)
 
 	fixture.options.Dependencies.DoctorEffects.SameSession = func(left, right *taskstate.AgentSession) (bool, error) {
@@ -618,7 +535,7 @@ func TestIntegrationWorkflowDoctorRecoversPiUsageWhenMatchedSessionHasNoReported
 		"(op-pi-usage-no-cost) Pi task",
 	))
 	must.NoError(err)
-	_, err = store.FinishRun("alpha", "op-pi-usage-no-cost", run.Attempt, taskstate.RunStatusSucceeded)
+	_, err = seedFixtureExit(store, "alpha", "op-pi-usage-no-cost", run.Attempt, 0)
 	must.NoError(err)
 
 	capture := doctorCapturedUsage("pi", "pi-usage-no-cost", 180)
@@ -661,9 +578,9 @@ func TestIntegrationWorkflowDoctorDoesNotRecoverPiCostWhenMatchedSessionHasNoRep
 	))
 	run, err := store.StartRun("alpha", "op-pi-no-cost", doctorPiStartOptions(repoDir, "(op-pi-no-cost) Pi task"))
 	must.NoError(err)
-	_, err = store.FinishRun("alpha", "op-pi-no-cost", run.Attempt, taskstate.RunStatusSucceeded)
+	_, err = seedFixtureExit(store, "alpha", "op-pi-no-cost", run.Attempt, 0)
 	must.NoError(err)
-	_, err = store.RecordRunUsage("alpha", "op-pi-no-cost", run.Attempt, taskstate.RecordRunUsageOptions{
+	_, err = seedFixtureUsage(store, "alpha", "op-pi-no-cost", run.Attempt, taskstate.RecordRunUsageOptions{
 		Session: &taskstate.AgentSession{
 			ID:      "existing-pi-session",
 			LogPath: filepath.Join(piSessionDir, "existing-pi-session.jsonl"),
@@ -748,11 +665,11 @@ func TestIntegrationWorkflowDoctorReportsAmbiguousAndNoMatchWithoutMutating(t *t
 	))
 	ambiguousRun, err := store.StartRun("alpha", "op-ambiguous", doctorCodexStartOptions(repoDir))
 	must.NoError(err)
-	_, err = store.FinishRun("alpha", "op-ambiguous", ambiguousRun.Attempt, taskstate.RunStatusSucceeded)
+	_, err = seedFixtureExit(store, "alpha", "op-ambiguous", ambiguousRun.Attempt, 0)
 	must.NoError(err)
 	missingRun, err := store.StartRun("alpha", "op-missing", doctorCodexStartOptions(repoDir))
 	must.NoError(err)
-	_, err = store.FinishRun("alpha", "op-missing", missingRun.Attempt, taskstate.RunStatusSucceeded)
+	_, err = seedFixtureExit(store, "alpha", "op-missing", missingRun.Attempt, 0)
 	must.NoError(err)
 
 	withDoctorCapture(t, fixture, func(opts agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions {
@@ -794,7 +711,7 @@ func TestIntegrationWorkflowDoctorReportsAmbiguousPiMatchesWithoutMutating(t *te
 		time.Date(2026, 7, 7, 11, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 7, 11, 5, 0, 0, time.UTC),
 	))
-	run, err := store.StartRun("alpha", "op-pi-ambiguous", taskstate.StartRunOptions{
+	run, err := store.StartRun("alpha", "op-pi-ambiguous", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent:    "pi-profile",
 		Profile:  "pi-profile",
 		Harness:  "pi",
@@ -803,7 +720,7 @@ func TestIntegrationWorkflowDoctorReportsAmbiguousPiMatchesWithoutMutating(t *te
 		Worktree: repoDir,
 	})
 	must.NoError(err)
-	_, err = store.FinishRun("alpha", "op-pi-ambiguous", run.Attempt, taskstate.RunStatusSucceeded)
+	_, err = seedFixtureExit(store, "alpha", "op-pi-ambiguous", run.Attempt, 0)
 	must.NoError(err)
 
 	supplyDoctorUsage(t, fixture, "pi", repoDir, taskstate.RecordRunUsageOptions{
@@ -848,49 +765,26 @@ func TestIntegrationWorkflowDoctorRecoversSyncConflictTerminalUsage(t *testing.T
 	repoDir := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 	withWorkflowSources(t, fixture, map[string]taskSourceResult{repoDir: {tasks: []taskmodel.Task{{ID: "op-sync", Title: "Sync conflict", Status: taskmodel.StatusInProgress, IssueType: taskmodel.IssueTypeTask}}}})
 
-	store := taskstate.NewStoreWithClock(paths, clockSequence(
-		time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
-		time.Date(2026, 7, 7, 10, 5, 0, 0, time.UTC),
-		time.Date(2026, 7, 7, 11, 0, 0, 0, time.UTC),
-		time.Date(2026, 7, 7, 11, 5, 0, 0, time.UTC),
-	))
-	codexOpts := doctorSyncConflictOptions(repoDir, taskstate.AgentExecution{
-		Agent:       "sync-codex",
-		Profile:     "sync-codex",
-		Harness:     "codex",
-		Command:     "codex",
-		Args:        []string{"exec", "resolve"},
-		SessionName: "sync-conflict-op-sync",
-		StartedAt:   time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
-	})
-	_, err := store.RecordSyncConflictResolutionStarted("alpha", "op-sync", codexOpts)
-	must.NoError(err)
-	codexOpts.Commit = "codex-merge"
-	_, err = store.RecordSyncConflictResolutionFinished("alpha", "op-sync", codexOpts)
-	must.NoError(err)
-
-	piOpts := doctorSyncConflictOptions(repoDir, taskstate.AgentExecution{
-		Agent:       "sync-pi",
-		Profile:     "sync-pi",
-		Harness:     "pi",
-		Command:     "pi",
-		Args:        []string{"--model", "openai-codex/gpt-5.5"},
-		SessionName: "sync-conflict-op-sync-pi",
-		StartedAt:   time.Date(2026, 7, 7, 11, 0, 0, 0, time.UTC),
-	})
-	_, err = store.RecordSyncConflictResolutionStarted("alpha", "op-sync", piOpts)
-	must.NoError(err)
-	_, err = store.RecordSyncConflictResolutionFailed("alpha", "op-sync", piOpts, assert.AnError)
-	must.NoError(err)
+	store := taskstate.NewStore(paths)
+	snapshot := readerDeliveredHistory(t, "alpha", "op-sync", repoDir, "orpheus/op-sync", workflowTime("2026-07-07T09:00:00Z"))
+	w := &snapshot.Workflows[0]
+	w.Phases[1].(*workmodel.ImplementationPhase).Execution.Harness = "raw"
+	w.Phases[2].(*workmodel.ReviewPhase).Steps[0].(*workmodel.AgentReviewStep).Execution.Harness = "raw"
+	codexStart, piStart := workflowTime("2026-07-07T10:00:00Z"), workflowTime("2026-07-07T11:00:00Z")
+	w.Phases[4].(*workmodel.ExternalReviewPhase).BranchSyncs = []workmodel.BranchSync{
+		{StartedAt: codexStart, Checkpoint: workmodel.BranchSyncCheckpoint{LocalHead: "fixture-output", RemoteHead: "fixture-output", MergeSource: "destination-head"}, ConflictResolution: &workmodel.ConflictResolution{Files: []string{"conflict.txt"}, Execution: workmodel.AgentExecution{Profile: "sync-codex", Harness: "codex", Command: "codex", Args: []string{"exec", "resolve"}, SessionName: "sync-conflict-op-sync", StartedAt: codexStart, Duration: 5 * time.Minute, Process: &workmodel.ExitedProcess{Code: fixtureExitCode(0), At: codexStart.Add(5 * time.Minute)}}}, LocalCommit: &workmodel.BranchSyncCommit{Head: "codex-merge", ObservedAt: codexStart.Add(5 * time.Minute)}, Push: &workmodel.BranchSyncPush{Head: "codex-merge", ObservedAt: codexStart.Add(6 * time.Minute), Evidence: "Synthetic independently verified resolver push"}},
+		{StartedAt: piStart, Checkpoint: workmodel.BranchSyncCheckpoint{LocalHead: "codex-merge", RemoteHead: "codex-merge", MergeSource: "destination-head"}, ConflictResolution: &workmodel.ConflictResolution{Files: []string{"conflict.txt"}, Execution: workmodel.AgentExecution{Profile: "sync-pi", Harness: "pi", Command: "pi", Args: []string{"--model", "openai-codex/gpt-5.5"}, SessionName: "sync-conflict-op-sync-pi", StartedAt: piStart, Duration: 5 * time.Minute, Process: &workmodel.ExitedProcess{Code: fixtureExitCode(1), At: piStart.Add(5 * time.Minute)}}}, Rollback: &workmodel.BranchSyncRollback{LocalHead: "codex-merge", RemoteHead: "codex-merge", ObservedAt: piStart.Add(6 * time.Minute), Reason: "Synthetic native resolver failed", Evidence: "Synthetic independently verified checkpoint restoration"}},
+	}
+	saveReaderHistory(t, fixture, snapshot)
 
 	withDoctorCapture(t, fixture, func(opts agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions {
 		require.Equal(t, []string{repoDir}, opts.ExecutionDirs)
 		if opts.Harness == "codex" {
-			require.Equal(t, codexOpts.Execution.StartedAt, opts.StartedAt)
+			require.Equal(t, codexStart, opts.StartedAt)
 			return doctorCapturedUsage("codex", "sync-codex-session", 165)
 		}
 		require.Equal(t, "pi", opts.Harness)
-		require.Equal(t, piOpts.Execution.StartedAt, opts.StartedAt)
+		require.Equal(t, piStart, opts.StartedAt)
 		return doctorCapturedUsage("pi", "sync-pi-session", 180)
 	})
 
@@ -903,6 +797,7 @@ func TestIntegrationWorkflowDoctorRecoversSyncConflictTerminalUsage(t *testing.T
 
 	loaded, err := store.Load("alpha", "op-sync")
 	must.NoError(err)
+	loaded.Events = resolverEvents(loaded.Events)
 	must.Len(loaded.Events, 4)
 	is.Nil(loaded.Events[1].Execution.Usage)
 	is.Nil(loaded.Events[3].Execution.Usage)
@@ -915,6 +810,7 @@ func TestIntegrationWorkflowDoctorRecoversSyncConflictTerminalUsage(t *testing.T
 
 	loaded, err = store.Load("alpha", "op-sync")
 	must.NoError(err)
+	loaded.Events = resolverEvents(loaded.Events)
 	must.Len(loaded.Events, 4)
 	is.Equal(taskstate.EventSyncConflictStarted, loaded.Events[0].Type)
 	is.Equal(taskstate.EventSyncConflictFinished, loaded.Events[1].Type)
@@ -922,8 +818,8 @@ func TestIntegrationWorkflowDoctorRecoversSyncConflictTerminalUsage(t *testing.T
 	is.Equal(taskstate.EventSyncConflictFailed, loaded.Events[3].Type)
 	is.Equal(beforeEvents[1].At, loaded.Events[1].At)
 	is.Equal(beforeEvents[3].Error, loaded.Events[3].Error)
-	is.Nil(loaded.Events[0].Execution.Usage)
-	is.Nil(loaded.Events[2].Execution.Usage)
+	is.Equal(loaded.Events[1].Execution.Usage, loaded.Events[0].Execution.Usage, "derived start and terminal views share the owning execution facts, not journal snapshots")
+	is.Equal(loaded.Events[3].Execution.Usage, loaded.Events[2].Execution.Usage)
 
 	codexExecution := loaded.Events[1].Execution
 	must.NotNil(codexExecution.Session)
@@ -956,7 +852,7 @@ func TestIntegrationWorkflowDoctorRecoversSyncConflictTerminalUsage(t *testing.T
 	is.Regexp(`(?m)^sync-conflict-resolution\s+2\s+10m0s\s+345\s+151\s+22\s+33\s+9\s+\$[0-9.]+\s+0\s+0$`, statsOut)
 }
 
-func TestIntegrationWorkflowDoctorPrefersRecordedSyncConflictWorktreeBeforeFallbackDirs(t *testing.T) {
+func TestIntegrationWorkflowDoctorPrefersPreparedSyncDirectoryOverSourceMetadata(t *testing.T) {
 	fixture := newCommandWorkflow(t)
 	t.Parallel()
 	is := assert.New(t)
@@ -968,35 +864,15 @@ func TestIntegrationWorkflowDoctorPrefersRecordedSyncConflictWorktreeBeforeFallb
 	targetWorktree := filepath.Join(workflowDirectory(t), "target-worktree")
 	eventWorktree := filepath.Join(workflowDirectory(t), "event-worktree")
 
-	startedAt := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
-	store := taskstate.NewStoreWithClock(paths, clockSequence(
-		time.Date(2026, 7, 7, 9, 50, 0, 0, time.UTC),
-		time.Date(2026, 7, 7, 10, 5, 0, 0, time.UTC),
-	))
-	_, err := store.StartRun("alpha", "op-sync-priority", taskstate.StartRunOptions{
-		Agent:    "raw-profile",
-		Profile:  "raw-profile",
-		Harness:  "raw",
-		Command:  "sh",
-		Args:     []string{"-c", "true"},
-		Branch:   "main",
-		Worktree: targetWorktree,
-	})
-	must.NoError(err)
-	_, err = store.RecordSyncConflictResolutionFinished(
-		"alpha",
-		"op-sync-priority",
-		doctorSyncConflictOptions(eventWorktree, taskstate.AgentExecution{
-			Agent:       "sync-codex",
-			Profile:     "sync-codex",
-			Harness:     "codex",
-			Command:     "codex",
-			Args:        []string{"exec", "resolve"},
-			SessionName: "sync-conflict-op-sync-priority",
-			StartedAt:   startedAt,
-		}),
-	)
-	must.NoError(err)
+	startedAt := workflowTime("2026-07-07T10:00:00Z")
+	store := taskstate.NewStore(paths)
+	snapshot := readerDeliveredHistory(t, "alpha", "op-sync-priority", eventWorktree, "orpheus/op-sync-priority", workflowTime("2026-07-07T09:00:00Z"))
+	w := &snapshot.Workflows[0]
+	w.Phases[1].(*workmodel.ImplementationPhase).Execution.Harness = "raw"
+	w.Phases[2].(*workmodel.ReviewPhase).Steps[0].(*workmodel.AgentReviewStep).Execution.Harness = "raw"
+	w.Phases[4].(*workmodel.ExternalReviewPhase).BranchSyncs = []workmodel.BranchSync{{StartedAt: startedAt, Checkpoint: workmodel.BranchSyncCheckpoint{LocalHead: "fixture-output", RemoteHead: "fixture-output", MergeSource: "destination-head"}, ConflictResolution: &workmodel.ConflictResolution{Files: []string{"conflict.txt"}, Execution: workmodel.AgentExecution{Profile: "sync-codex", Harness: "codex", Command: "codex", SessionName: "sync-conflict-op-sync-priority", StartedAt: startedAt, Duration: 5 * time.Minute, Process: &workmodel.ExitedProcess{Code: fixtureExitCode(0), At: startedAt.Add(5 * time.Minute)}}}, LocalCommit: &workmodel.BranchSyncCommit{Head: "sync-output", ObservedAt: startedAt.Add(5 * time.Minute)}, Push: &workmodel.BranchSyncPush{Head: "sync-output", ObservedAt: startedAt.Add(6 * time.Minute), Evidence: "Synthetic independently observed task branch push"}}}
+	saveReaderHistory(t, fixture, snapshot)
+	withWorkflowSources(t, fixture, map[string]taskSourceResult{ownershipAuthoringRepo().Path: {tasks: []taskmodel.Task{{ID: "op-sync-priority", IssueType: taskmodel.IssueTypeTask, Status: taskmodel.StatusInProgress, Metadata: taskmodel.Metadata{taskmodel.MetadataWorktree: targetWorktree}}}}})
 
 	supplyDoctorUsage(t, fixture, "codex", eventWorktree, doctorCapturedUsage("codex", "recorded-worktree-session", 111))
 
@@ -1008,6 +884,7 @@ func TestIntegrationWorkflowDoctorPrefersRecordedSyncConflictWorktreeBeforeFallb
 
 	loaded, err := store.Load("alpha", "op-sync-priority")
 	must.NoError(err)
+	loaded.Events = resolverEvents(loaded.Events)
 	must.Len(loaded.Events, 2)
 	syncEvent := loaded.Events[1]
 	is.Equal(taskstate.EventSyncConflictFinished, syncEvent.Type)
@@ -1044,11 +921,11 @@ func TestIntegrationWorkflowDoctorTraversesAllRegisteredRepos(t *testing.T) {
 	))
 	alphaRun, err := store.StartRun("alpha", "op-1", doctorCodexStartOptions(alphaDir))
 	must.NoError(err)
-	_, err = store.FinishRun("alpha", "op-1", alphaRun.Attempt, taskstate.RunStatusSucceeded)
+	_, err = seedFixtureExit(store, "alpha", "op-1", alphaRun.Attempt, 0)
 	must.NoError(err)
 	betaRun, err := store.StartRun("beta", "bt-1", doctorCodexStartOptions(betaDir))
 	must.NoError(err)
-	_, err = store.FinishRun("beta", "bt-1", betaRun.Attempt, taskstate.RunStatusSucceeded)
+	_, err = seedFixtureExit(store, "beta", "bt-1", betaRun.Attempt, 0)
 	must.NoError(err)
 
 	withDoctorCapture(t, fixture, func(opts agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions {
@@ -1072,22 +949,8 @@ func TestIntegrationWorkflowDoctorTraversesAllRegisteredRepos(t *testing.T) {
 	is.Contains(stdout, "beta-session")
 }
 
-func doctorSyncConflictOptions(
-	worktree string,
-	execution taskstate.AgentExecution,
-) taskstate.SyncConflictResolutionEventOptions {
-	return taskstate.SyncConflictResolutionEventOptions{
-		Execution:     execution,
-		Branch:        "orpheus/op-sync",
-		DefaultBranch: "main",
-		Worktree:      worktree,
-		PRURL:         "https://github.test/org/repo/pull/42",
-		ConflictFiles: []string{"conflict.txt"},
-	}
-}
-
 func doctorCodexStartOptions(worktree string) taskstate.StartRunOptions {
-	return taskstate.StartRunOptions{
+	return taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent:    "codex-profile",
 		Profile:  "codex-profile",
 		Harness:  "codex",
@@ -1099,7 +962,7 @@ func doctorCodexStartOptions(worktree string) taskstate.StartRunOptions {
 }
 
 func doctorPiStartOptions(worktree string, sessionName string) taskstate.StartRunOptions {
-	return taskstate.StartRunOptions{
+	return taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent:       "pi-profile",
 		Profile:     "pi-profile",
 		Harness:     "pi",

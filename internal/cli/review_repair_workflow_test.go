@@ -10,11 +10,12 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationWorkflowTaskRunAutonomousReviewFollowUpRepairsCheckAndPublishes(t *testing.T) {
+func TestIntegrationWorkflowTaskRunAutonomousReviewFollowUpRepairsCheckAndRetainsReviewedOutput(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewDispatchFixture(t, "op-auto")
@@ -22,9 +23,12 @@ func TestIntegrationWorkflowTaskRunAutonomousReviewFollowUpRepairsCheckAndPublis
 	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "check", "name": "status", "command": fixture.candidateCheck()}}})
 	fixture.budget(4)
 	fixture.completingRepairs("repairer", 2, true)
+	fixture.agent.outcomes[0].completion.Summary = "feat: original feature intent"
+	fixture.agent.outcomes[1].completion.Summary = "fix: repair discovered issue"
 	stdout, stderr := fixture.run("k\n", "task", "run", "--repo-root", "op-auto")
 
-	is.Contains(stdout, "Published op-auto")
+	is.Contains(stdout, "Review passed for op-auto")
+	is.Contains(stdout, "publication awaits explicit authorization")
 	is.Contains(stderr, "Review blocked for op-auto by check \"status\".")
 	is.Contains(stderr, "Autonomous review follow-up for op-auto targets review attempt 1 finding(s) 1.")
 	is.NotContains(stderr, "Autonomous review attempt budget exhausted")
@@ -32,7 +36,7 @@ func TestIntegrationWorkflowTaskRunAutonomousReviewFollowUpRepairsCheckAndPublis
 	is.NotEmpty(fixture.candidate.head)
 	finalTask, err := fixture.tasks.Get(context.Background(), "op-auto")
 	must.NoError(err)
-	is.NotEmpty(finalTask.OrpheusMetadata().PRURL)
+	is.Empty(finalTask.OrpheusMetadata().PRURL)
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-auto.yaml"), &state))
 	must.Len(state.Runs, 2)
@@ -46,22 +50,43 @@ func TestIntegrationWorkflowTaskRunAutonomousReviewFollowUpRepairsCheckAndPublis
 	must.True(ok)
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
 	is.False(latest.AutonomousBudgetExhausted)
-	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
+	assertUnconsentedPublication(t, state)
+	w := &state.Work.Workflows[0]
+	must.Len(w.Phases, 6)
+	first := w.Phases[1].(*work.ImplementationPhase)
+	repair := w.Phases[3].(*work.ImplementationPhase)
+	is.Equal("feat: original feature intent", first.Completion.Summary)
+	is.Equal("fix: repair discovered issue", repair.Completion.Summary)
+	is.Equal(&work.OutputRef{Phase: 1}, repair.Input)
+	is.Equal([]work.FindingRef{{Phase: 2, Step: 0, Finding: 0}}, repair.TargetFindings)
+	is.Equal("output-1", state.Runs[0].Completion.Commit)
+	is.Equal("output-2", state.Runs[1].Completion.Commit)
+	scope := w.Phases[4].(*work.ReviewPhase).Scope
+	is.Equal(work.OutputRef{Phase: 3}, scope.Output)
+	is.Equal(&work.OutputRef{Phase: 1}, scope.DeltaFrom)
+	is.Contains(scope.Requirements, "Ready for task done")
+	is.Equal("initial-commit", w.Context().Baseline.Commit)
+	is.Len(fixture.candidate.commits, 2)
+	is.Empty(fixture.candidate.pushes)
+	must.NotNil(w.FeatureCompletion())
+	is.Equal("feat: original feature intent", w.FeatureCompletion().Summary)
 }
 
-func TestIntegrationWorkflowTaskRunAttachedManualBlockerRepairsAndApprovalFinalizes(t *testing.T) {
+func TestIntegrationWorkflowTaskRunAttachedManualBlockerRepairsAndApprovalPreparesUnconsentedPublication(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
 	fixture := newReviewDispatchFixture(t, "op-manual")
 	paths := fixture.paths
-	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "manual", "name": "approval"}}})
+	scopeCheck := fixture.check("scope-check", checkResult{}, checkResult{})
+	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "check", "name": "scope-check", "command": scopeCheck}, {"kind": "manual", "name": "approval"}}})
+	fixture.candidate.destinationHeads = map[string]string{"main": "initial-commit", "release/final": "approved-destination-head"}
 	fixture.budget(4)
 	fixture.completingRepairs("repairer", 2, false)
-	stdout, stderr, err := fixture.runError("b\nManual blocker\nRepair the implementation before approval.\nApply the fix.\nf\na\n", "task", "run", "--repo-root", "op-manual")
+	stdout, stderr, err := fixture.runError("i\nd\nrelease/tentative\nb\nManual blocker\nRepair the implementation before approval.\nApply the fix.\nf\ni\nd\nrelease/final\na\n", "task", "run", "--repo-root", "op-manual")
 
 	must.NoError(err)
 	is.Contains(stdout, "Recorded completion for op-manual")
-	is.Contains(stdout, "Published op-manual")
+	is.Contains(stdout, "Review passed for op-manual")
 	is.Contains(stderr, "== Agent run: implementation (run attempt 1) ==")
 	is.Contains(stderr, "== Agent run: review follow-up (run attempt 2; review attempt 1; required blocking findings 1; advisory opportunities -) ==")
 	is.Contains(stderr, "◆ REVIEW STEP · approval (manual)")
@@ -82,7 +107,22 @@ func TestIntegrationWorkflowTaskRunAttachedManualBlockerRepairsAndApprovalFinali
 	latest, ok := taskstate.LatestReview(state)
 	must.True(ok)
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
-	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
+	assertUnconsentedPublication(t, state)
+	w := &state.Work.Workflows[0]
+	prior := w.Phases[2].(*work.ReviewPhase)
+	current := w.Phases[4].(*work.ReviewPhase)
+	is.Equal("main", prior.Scope.Destination.Branch, "blocked tentative publication edits do not escape their prompt")
+	is.IsType(&work.RequestedChanges{}, prior.Steps[1].(*work.ManualReviewStep).Decision)
+	is.Equal(&work.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}, current.Scope.Destination, "approval cannot rewrite automated review scope")
+	approved := current.Steps[1].(*work.ManualReviewStep).Decision.(*work.ApprovedReview)
+	must.NotNil(approved.Publication)
+	is.Equal(work.Destination{Remote: "origin", Branch: "release/final", Commit: "approved-destination-head"}, approved.Publication.Destination)
+	is.IsType(&work.DirectMergeTarget{}, approved.Publication.Target)
+	is.IsType(&work.DirectMergeTarget{}, w.Phases[5].(*work.PublicationPhase).Plan.Target)
+	is.Equal([]string{"scope-check", "scope-check"}, fixture.checkCalls, "a final manual destination choice does not rerun completed automated slots")
+	is.Equal([]string{"main", "main", "release/final"}, fixture.candidate.observedDestinations, "only the approved destination is independently observed after its automated scope")
+	is.Empty(fixture.candidate.pushes)
+
 }
 
 func TestIntegrationWorkflowTaskReviewManualBlockerExhaustsBudgetWithoutExtraLaunch(t *testing.T) {
@@ -127,15 +167,18 @@ func TestIntegrationWorkflowTaskRunPreservedManualBlockerExhaustsFreshBudget(t *
 	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "manual", "name": "approval"}}})
 	fixture.budget(1)
 	runStore := taskstate.NewStore(paths)
-	reviewAttempt, err := runStore.StartReviewWithOptions("alpha", "op-manual-budget", taskstate.StartReviewOptions{
+	reviewAttempt, err := beginConfiguredFixtureReview(fixture, runStore, "op-manual-budget", taskstate.StartReviewOptions{
 		Pipeline: "standard", Step: "approval",
 	})
 	must.NoError(err)
-	_, err = runStore.RecordReviewFinding("alpha", "op-manual-budget", reviewAttempt.Attempt, taskstate.ReviewFinding{
+	reviewAttempt, err = runStore.PauseReviewForManualAt(reviewAttempt.Address, "approval")
+	must.NoError(err)
+	actor := reviewAttempt.Steps[len(reviewAttempt.Steps)-1].Address
+	_, err = runStore.RecordReviewFinding("alpha", "op-manual-budget", reviewAttempt.Attempt, taskstate.ReviewFinding{Actor: &actor,
 		Type: taskstate.FindingTypeBlocking, Title: "Manual blocker", Description: "Repair before approval.", Step: "approval",
 	})
 	must.NoError(err)
-	_, err = runStore.FinishReview("alpha", "op-manual-budget", reviewAttempt.Attempt, taskstate.ReviewStatusBlocked)
+	_, err = runStore.RecordManualDecision(actor, taskstate.ReviewStatusBlocked, nil)
 	must.NoError(err)
 	stdout, stderr := fixture.run("", "task", "run", "op-manual-budget")
 
@@ -163,7 +206,7 @@ func TestIntegrationWorkflowTaskRunAutonomousReviewLoopExhaustsPersistentCheckBl
 	stdout, stderr := fixture.run("k\nk\n", "task", "run", "--repo-root", "op-stubborn")
 
 	is.Contains(stdout, "Recorded completion for op-stubborn")
-	is.NotContains(stdout, "Published op-stubborn")
+	is.NotContains(stdout, "Review passed for op-stubborn")
 	is.Equal(2, strings.Count(stderr, "Review blocked for op-stubborn by check \"unit\"."))
 	is.Contains(stderr, "Autonomous review follow-up for op-stubborn targets review attempt 1 finding(s) 1.")
 	is.Contains(stderr, "Autonomous review attempt budget exhausted for op-stubborn after 2 review attempt(s).")
@@ -207,7 +250,7 @@ func TestIntegrationWorkflowTaskReviewResumedAutonomousFollowUpPreservesSelected
 	fixture.configureAgentProfiles(agent.AgentDefaults{Implementer: "other"}, map[string]agent.Profile{"selected": {Command: "unused-implementer"}, "other": {Command: "unused-other"}})
 
 	reviewStdout, reviewStderr := fixture.run("a\nk\na\n", "task", "run", "op-resume")
-	is.Contains(reviewStdout, "Published op-resume")
+	is.Contains(reviewStdout, "Review passed for op-resume")
 	is.Contains(reviewStderr, "Resuming review attempt 1 at manual step \"approval\".")
 	is.Contains(reviewStderr, "Review blocked for op-resume by check \"status\".")
 	is.Contains(reviewStderr, "Autonomous review follow-up for op-resume targets review attempt 1 finding(s) 1.")
@@ -228,7 +271,7 @@ func TestIntegrationWorkflowTaskReviewResumedAutonomousFollowUpPreservesSelected
 	latest, ok := taskstate.LatestReview(state)
 	must.True(ok)
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
-	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
+	assertUnconsentedPublication(t, state)
 }
 
 func TestIntegrationWorkflowTaskRunResumesPausedAutomatedBlockerDecision(t *testing.T) {
@@ -265,11 +308,12 @@ func TestIntegrationWorkflowTaskRunResumesPausedAutomatedBlockerDecision(t *test
 	must.True(ok)
 	is.Equal(paused.Attempt, pausedAgain.Attempt)
 	is.Equal(taskstate.ReviewStatusWaitingForAutomatedDecision, pausedAgain.Status)
-	must.Len(pausedAgain.Steps, 2)
-	must.Len(pausedAgain.Findings, 1)
+	must.Len(pausedAgain.Steps, 3)
+	must.Len(pausedAgain.Findings, 2)
+	is.True(pausedAgain.Findings[0].Superseded)
 
 	finalStdout, finalStderr := fixture.run("w\nAccepted for this task.\n", "task", "run", "op-main")
-	is.Contains(finalStdout, "Published op-main")
+	is.Contains(finalStdout, "Review passed for op-main")
 	is.Contains(finalStderr, "Resuming review attempt 1 at automated blocker decision for step \"blocked\".")
 	is.Contains(finalStderr, "Finding 1:")
 
@@ -279,8 +323,21 @@ func TestIntegrationWorkflowTaskRunResumesPausedAutomatedBlockerDecision(t *test
 	must.True(ok)
 	is.Equal(paused.Attempt, latest.Attempt)
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
-	must.Len(latest.Steps, 2)
-	must.Len(latest.Findings, 1)
-	is.Equal("Accepted for this task.", latest.Findings[0].Waiver)
+	must.Len(latest.Steps, 3)
+	is.Equal(paused.Steps[1], latest.Steps[1], "restart keeps the original failed attempt as audit history")
+	must.Len(latest.Findings, 2)
+	is.True(latest.Findings[0].Superseded)
+	is.Equal("Accepted for this task.", latest.Findings[1].Waiver)
 	is.Equal([]string{"first", "blocked", "blocked"}, fixture.checkCalls)
+}
+
+func assertUnconsentedPublication(t *testing.T, state taskstate.TaskState) {
+	t.Helper()
+	require.NotNil(t, state.Work)
+	w := &state.Work.Workflows[len(state.Work.Workflows)-1]
+	plan, ok := w.LastPhase().(*work.PublicationPhase)
+	require.True(t, ok, "passed review prepares immutable publication intent")
+	assert.Nil(t, plan.Consent, "approval is not publication authorization")
+	assert.Nil(t, plan.Delivery, "retaining local commits is not publication")
+	assert.Empty(t, taskstate.FinalizationFacts(state).Commit)
 }

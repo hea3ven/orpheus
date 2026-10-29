@@ -31,12 +31,14 @@ func TestIntegrationWorkflowReviewProcessRecoveryKeepsFindingsForAudit(t *testin
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newReviewWorkflowFixture(t, "op-recovery", "Review interrupted", "Preserve the candidate.")
-			attempt, err := fixture.taskStore.StartReviewWithOptions("alpha", "op-recovery", taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review"})
+			fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "agent_review", "name": "ai-review"}}})
+			attempt, err := beginConfiguredFixtureReview(fixture, fixture.taskStore, "op-recovery", taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review"})
 			require.NoError(t, err)
 			execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, Agent: "reviewer", StartedAt: attempt.StartedAt, SupervisorPID: 100, ChildPID: 101}
-			_, err = fixture.taskStore.RecordReviewStep("alpha", "op-recovery", attempt.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution})
+			started, err := fixture.taskStore.RecordReviewStep("alpha", "op-recovery", attempt.Attempt, taskstate.RecordReviewStepOptions{Address: attempt.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution})
 			require.NoError(t, err)
-			_, err = fixture.taskStore.RecordReviewFinding("alpha", "op-recovery", attempt.Attempt, taskstate.ReviewFinding{Type: taskstate.FindingTypeBlocking, Title: "Unfinished finding", Description: "Do not repair automatically.", Step: "ai-review"})
+			actor := started.Steps[len(started.Steps)-1].Address
+			_, err = fixture.taskStore.RecordReviewFinding("alpha", "op-recovery", attempt.Attempt, taskstate.ReviewFinding{Actor: &actor, Type: taskstate.FindingTypeBlocking, Title: "Unfinished finding", Description: "Do not repair automatically.", Step: "ai-review"})
 			require.NoError(t, err)
 			fixture.options.Dependencies.ProcessProbe = func(pid int) (agentexec.ProcessLiveness, error) {
 				assert.Contains(t, []int{100, 101}, pid)
@@ -124,7 +126,7 @@ func TestIntegrationWorkflowReviewFailedRepairCanRetryWithoutLosingBlocker(t *te
 			fixture.completingRepairs("repairer", 1, true)
 			stdout, _ := fixture.run("a\n", "task", "run", "op-retry")
 
-			assert.Contains(t, stdout, "Published op-retry")
+			assert.Contains(t, stdout, "Review passed for op-retry")
 			retried, _ := fixture.loadFinalTask("op-retry")
 			require.Len(t, retried.Runs, 3)
 			assert.Equal(t, failed.Runs[1], retried.Runs[1])
@@ -145,15 +147,18 @@ func TestIntegrationWorkflowTaskReviewFollowUpHeaderWriteFailureRecordsStartFail
 	fixture.budget(2)
 	fixture.configureImplementer("followup-header", agent.Profile{Command: "unused-implementer"})
 	runStore := taskstate.NewStore(paths)
-	reviewAttempt, err := runStore.StartReviewWithOptions("alpha", "op-followup-header", taskstate.StartReviewOptions{
+	reviewAttempt, err := beginConfiguredFixtureReview(fixture, runStore, "op-followup-header", taskstate.StartReviewOptions{
 		Pipeline: "standard", Step: "approval",
 	})
 	must.NoError(err)
-	_, err = runStore.RecordReviewFinding("alpha", "op-followup-header", reviewAttempt.Attempt, taskstate.ReviewFinding{
+	reviewAttempt, err = runStore.PauseReviewForManualAt(reviewAttempt.Address, "approval")
+	must.NoError(err)
+	actor := reviewAttempt.Steps[len(reviewAttempt.Steps)-1].Address
+	_, err = runStore.RecordReviewFinding("alpha", "op-followup-header", reviewAttempt.Attempt, taskstate.ReviewFinding{Actor: &actor,
 		Type: taskstate.FindingTypeBlocking, Title: "Manual blocker", Description: "Repair before approval.", Step: "approval",
 	})
 	must.NoError(err)
-	_, err = runStore.FinishReview("alpha", "op-followup-header", reviewAttempt.Attempt, taskstate.ReviewStatusBlocked)
+	_, err = runStore.RecordManualDecision(actor, taskstate.ReviewStatusBlocked, nil)
 	must.NoError(err)
 
 	captures := 0

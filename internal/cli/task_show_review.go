@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/spf13/cobra"
 )
 
@@ -132,7 +133,7 @@ func renderTaskShowReview(
 	}
 
 	latest, ok := taskstate.LatestReview(taskState)
-	if !ok {
+	if !ok && (scope.reviewAttempt != 0 || len(taskState.Reviews) == 0) {
 		if scope.reviewAttempt > 0 {
 			return fmt.Errorf("review attempt %d was not found for task %s: no review attempts are recorded", scope.reviewAttempt, taskID)
 		}
@@ -145,6 +146,10 @@ func renderTaskShowReview(
 
 	if scope.reviewAttempt == 0 {
 		if err := renderReviewHistory(output, taskState); err != nil {
+			return err
+		}
+		if !ok {
+			_, err := fmt.Fprintf(output, "\nNo review is recorded in the current workflow; run `orpheus task run %s` to continue current work.\n", taskID)
 			return err
 		}
 		return renderReviewNextStep(output, taskID, taskState, latest)
@@ -171,12 +176,17 @@ func renderReviewHistory(output io.Writer, taskState taskstate.TaskState) error 
 		return err
 	}
 	for _, review := range taskState.Reviews {
+		if taskState.CurrentWorkflow > 0 {
+			if _, err := fmt.Fprintf(output, "  Workflow %d, phase %d:\n", review.Address.Workflow, review.Address.Phase); err != nil {
+				return err
+			}
+		}
 		if _, err := fmt.Fprintf(output, "  Attempt %d: %s (%d authoritative finding(s))\n", review.Attempt, formatReviewValue(string(review.Status)), authoritativeFindingCount(review)); err != nil {
 			return err
 		}
 		authoritativeNumber := 0
 		for _, finding := range review.Findings {
-			if taskstate.InterruptedReviewFinding(review, finding) {
+			if taskstate.AuditOnlyReviewFinding(review, finding) {
 				continue
 			}
 			authoritativeNumber++
@@ -196,7 +206,7 @@ func renderReviewHistory(output io.Writer, taskState taskstate.TaskState) error 
 func authoritativeFindingCount(review taskstate.ReviewAttempt) int {
 	count := 0
 	for _, finding := range review.Findings {
-		if !taskstate.InterruptedReviewFinding(review, finding) {
+		if !taskstate.AuditOnlyReviewFinding(review, finding) {
 			count++
 		}
 	}
@@ -209,7 +219,7 @@ func compactReviewText(value string) string {
 
 func reviewAttemptByNumber(taskState taskstate.TaskState, attempt int) (taskstate.ReviewAttempt, bool) {
 	for _, review := range taskState.Reviews {
-		if review.Attempt == attempt {
+		if review.Address.Workflow == taskState.CurrentWorkflow && review.Attempt == attempt {
 			return review, true
 		}
 	}
@@ -241,6 +251,9 @@ func renderReviewAttemptDetail(output io.Writer, taskState taskstate.TaskState, 
 		}
 	}
 
+	if err := renderCommittedReviewScope(output, taskState, review); err != nil {
+		return err
+	}
 	if err := renderReviewSteps(output, review.Steps); err != nil {
 		return err
 	}
@@ -345,7 +358,7 @@ func renderReviewFindings(output io.Writer, taskState taskstate.TaskState, revie
 	authoritativeNumbers := make(map[int]int)
 	authoritativeNumber := 0
 	for index, finding := range review.Findings {
-		if taskstate.InterruptedReviewFinding(review, finding) {
+		if taskstate.AuditOnlyReviewFinding(review, finding) {
 			continue
 		}
 		authoritativeNumber++
@@ -356,7 +369,7 @@ func renderReviewFindings(output io.Writer, taskState taskstate.TaskState, revie
 			return err
 		}
 		for _, finding := range group.findings {
-			auditOnly := taskstate.InterruptedReviewFinding(review, finding.finding)
+			auditOnly := taskstate.AuditOnlyReviewFinding(review, finding.finding)
 			if err := renderReviewFinding(output, taskState, review, finding, authoritativeNumbers[finding.index], auditOnly); err != nil {
 				return err
 			}
@@ -401,7 +414,7 @@ func renderReviewFinding(output io.Writer, taskState taskstate.TaskState, review
 	finding := indexed.finding
 	resolution := reviewFindingResolution(taskState, finding)
 	if interrupted {
-		resolution = "audit-only (interrupted reviewer)"
+		resolution = "audit-only (" + taskstate.ReviewFindingAuditReason(review, indexed.finding) + ")"
 	}
 	label := fmt.Sprintf("    Finding %d:", number)
 	if interrupted {
@@ -483,6 +496,7 @@ type reviewFindingReference struct {
 	index       int
 	finding     taskstate.ReviewFinding
 	interrupted bool
+	auditReason string
 }
 
 func renderAuthoritativeFinding(output io.Writer, taskState taskstate.TaskState, review taskstate.ReviewAttempt, number int) error {
@@ -499,7 +513,7 @@ func renderAuthoritativeFinding(output io.Writer, taskState taskstate.TaskState,
 func reviewFindingByAuthoritativeNumber(review taskstate.ReviewAttempt, number int) (reviewFindingReference, int, bool) {
 	findingCount := 0
 	for index, finding := range review.Findings {
-		if taskstate.InterruptedReviewFinding(review, finding) {
+		if taskstate.AuditOnlyReviewFinding(review, finding) {
 			continue
 		}
 		findingCount++
@@ -507,10 +521,10 @@ func reviewFindingByAuthoritativeNumber(review taskstate.ReviewAttempt, number i
 			return reviewFindingReference{index: index, finding: finding}, findingCount, true
 		}
 	}
-	if number <= len(review.Findings) && taskstate.InterruptedReviewFinding(review, review.Findings[number-1]) {
+	if number <= len(review.Findings) && taskstate.AuditOnlyReviewFinding(review, review.Findings[number-1]) {
 		// Interrupted reviewer findings retain their legacy persisted inspection reference.
 		finding := review.Findings[number-1]
-		return reviewFindingReference{index: number - 1, finding: finding, interrupted: true}, findingCount, true
+		return reviewFindingReference{index: number - 1, finding: finding, interrupted: true, auditReason: taskstate.ReviewFindingAuditReason(review, review.Findings[number-1])}, findingCount, true
 	}
 	return reviewFindingReference{}, findingCount, false
 }
@@ -535,7 +549,7 @@ func renderScopedReviewFinding(
 
 func reviewFindingPresentation(taskState taskstate.TaskState, reference reviewFindingReference) (string, string) {
 	if reference.interrupted {
-		return "Audit-only", "audit-only (interrupted reviewer)"
+		return "Audit-only", "audit-only (" + reference.auditReason + ")"
 	}
 	return "Authoritative", reviewFindingResolution(taskState, reference.finding)
 }
@@ -549,7 +563,7 @@ func reviewFindingDetailLines(finding taskstate.ReviewFinding, disposition strin
 		"  Disposition: " + disposition,
 	}
 	if interrupted {
-		lines = append(lines, "  Audit-only: interrupted reviewer")
+		lines = append(lines, "  Audit-only: "+strings.TrimSuffix(strings.TrimPrefix(disposition, "audit-only ("), ")"))
 	}
 	if strings.TrimSpace(finding.SuggestedAction) != "" {
 		lines = append(lines, "  Suggested action: "+finding.SuggestedAction)
@@ -579,7 +593,7 @@ func renderReviewFollowUpRunsForAttempt(output io.Writer, taskState taskstate.Ta
 	}
 	found := false
 	for _, run := range taskState.Runs {
-		if run.ReviewFollowUp == nil || run.ReviewFollowUp.ReviewAttempt != reviewAttempt {
+		if run.Address.Workflow != taskState.CurrentWorkflow || run.ReviewFollowUp == nil || run.ReviewFollowUp.ReviewAttempt != reviewAttempt {
 			continue
 		}
 		found = true
@@ -607,7 +621,7 @@ func renderReviewFollowUpRunsForFinding(output io.Writer, taskState taskstate.Ta
 	}
 	found := false
 	for _, run := range taskState.Runs {
-		if run.ReviewFollowUp == nil || run.ReviewFollowUp.ReviewAttempt != reviewAttempt ||
+		if run.Address.Workflow != taskState.CurrentWorkflow || run.ReviewFollowUp == nil || run.ReviewFollowUp.ReviewAttempt != reviewAttempt ||
 			(!containsFindingIndex(run.ReviewFollowUp.FindingIndexes, findingIndex) &&
 				!containsFindingIndex(run.ReviewFollowUp.AdvisoryFindingIndexes, findingIndex)) {
 			continue
@@ -654,7 +668,7 @@ func renderCreatedReviewFollowUpsForAttempt(output io.Writer, taskState taskstat
 	}
 	found := false
 	for _, followUp := range createdReviewFollowUps(taskState) {
-		if followUp.reviewAttempt != reviewAttempt {
+		if followUp.workflow != taskState.CurrentWorkflow || followUp.reviewAttempt != reviewAttempt {
 			continue
 		}
 		found = true
@@ -686,6 +700,7 @@ func renderCreatedReviewFollowUpsForAttempt(output io.Writer, taskState taskstat
 }
 
 type createdReviewFollowUp struct {
+	workflow      int
 	createdTaskID string
 	reviewAttempt int
 	findingIndex  int
@@ -701,7 +716,7 @@ func createdReviewFollowUps(taskState taskstate.TaskState) []createdReviewFollow
 				continue
 			}
 			followUps = append(followUps, createdReviewFollowUp{
-				createdTaskID: strings.TrimSpace(finding.CreatedTaskID),
+				workflow: review.Address.Workflow, createdTaskID: strings.TrimSpace(finding.CreatedTaskID),
 				reviewAttempt: review.Attempt,
 				findingIndex:  index,
 				step:          strings.TrimSpace(finding.Step),
@@ -710,6 +725,9 @@ func createdReviewFollowUps(taskState taskstate.TaskState) []createdReviewFollow
 		}
 	}
 	sort.SliceStable(followUps, func(i, j int) bool {
+		if followUps[i].workflow != followUps[j].workflow {
+			return followUps[i].workflow < followUps[j].workflow
+		}
 		if followUps[i].reviewAttempt != followUps[j].reviewAttempt {
 			return followUps[i].reviewAttempt < followUps[j].reviewAttempt
 		}
@@ -786,4 +804,44 @@ func formatReviewValue(value string) string {
 		return "-"
 	}
 	return value
+}
+
+func renderCommittedReviewScope(output io.Writer, view taskstate.TaskState, review taskstate.ReviewAttempt) error {
+	if view.Work == nil {
+		return nil
+	}
+	w := &view.Work.Workflows[review.Address.Workflow]
+	phase := w.Phases[review.Address.Phase].(*work.ReviewPhase)
+	code, err := w.Output(phase.Scope.Output)
+	if err != nil {
+		return err
+	}
+	lines := []string{fmt.Sprintf("\nCommitted scope (workflow %d, phase %d):", review.Address.Workflow, review.Address.Phase), fmt.Sprintf("  Full-task comparison: %s -> %s", w.Context().Baseline.Commit, code.Commit), "  Reviewed tree: " + code.Tree, "  Retained ref: " + code.RetainedRef, "  Captured requirements: " + phase.Scope.Requirements}
+	if phase.Scope.DeltaFrom != nil {
+		input, err := w.Output(*phase.Scope.DeltaFrom)
+		if err != nil {
+			return err
+		}
+		lines = append(lines, fmt.Sprintf("  Repair-delta comparison: %s -> %s", input.Commit, code.Commit))
+	}
+	destination := phase.Scope.Destination
+	lines = append(lines, fmt.Sprintf("  Automated destination: %s/%s at %s", destination.Remote, destination.Branch, destination.Commit))
+	for _, step := range phase.Steps {
+		manual, ok := step.(*work.ManualReviewStep)
+		if !ok {
+			continue
+		}
+		approval, ok := manual.Decision.(*work.ApprovedReview)
+		if !ok || approval.Publication == nil {
+			continue
+		}
+		selected := approval.Publication
+		flow := "pull-request"
+		if _, direct := selected.Target.(*work.DirectMergeTarget); direct {
+			flow = "direct-merge"
+		}
+		lines = append(lines, fmt.Sprintf("  Approved publication choice: %s to %s/%s at %s", flow, selected.Destination.Remote, selected.Destination.Branch, selected.Destination.Commit))
+	}
+	_, err = fmt.Fprintln(output, strings.Join(lines, "\n"))
+	return err
 }

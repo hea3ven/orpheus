@@ -1,8 +1,14 @@
 # Publication
 
-Publication requires a passed [task review](reviews.md). `task run` publishes
-after approval; `orpheus task done <task-id>` retries publication or finalization
-if it failed. `agent done` records an implementation handoff, not a commit or PR.
+Publication requires both a passed [task review](reviews.md) and explicit consent
+for its exact publication plan. **The separate consent UX is not implemented yet:**
+`task run` retains committed reviewed output and stops with publication pending.
+A review pass, `agent done`, or commit existence is not permission to push or close
+a task. There is no interim authorization flag or running-agent bypass.
+
+`orpheus task done <task-id>` is only a retry entry for an already authorized
+intent. It consumes committed input without creating another implementation
+revision. Do not edit state to manufacture authorization.
 
 The work directory and integration flow are independent. Both worktree and
 repository-root tasks publish a reviewed task branch. Choosing `--repo-root`
@@ -37,14 +43,16 @@ must already exist on `origin`; Orpheus verifies it rather than creating it.
 Pipelines without a manual step use configured flow defaults and the registered
 default branch.
 
-Before publication changes Git or the task source, Orpheus records the resolved
-flow and destination. Retries keep those values even if configuration changes.
-They cannot be changed after publication starts.
+Manual flow/destination edits are tentative until actual approval; block/abort
+discards them. Approval establishes the final observed destination without
+rerunning automated steps, while retaining their original scope for inspection.
+The prepared plan freezes this choice and authored content. Retries keep them
+even if configuration changes; approval still does not authorize delivery.
 
 | Flow | What Orpheus does |
 | --- | --- |
-| `pull-request` | Commit the task branch, push it, create or recover a PR against the destination, and record its URL. The task stays open until merge reconciliation. |
-| `direct-merge` | Commit the task branch, refresh the destination from `origin`, create a no-fast-forward merge, push the destination, then close the task. It does not push the task branch or call `gh`. |
+| `pull-request` | Push the already committed reviewed task branch, create or recover a PR against the destination, and record its URL. The task stays open until merge reconciliation. |
+| `direct-merge` | Verify the reviewed task output and unchanged observed destination, create an ordinary no-fast-forward integration merge, push the destination, then close the task. It does not push the task branch or call `gh`. |
 
 A direct-merge conflict is aborted without pushing the destination or closing the
 task. Resolve the conflict outside Orpheus before retrying. Recorded task commits,
@@ -83,11 +91,11 @@ inherit its global value again.
 Title templates support only `{{summary}}` and `{{external_ref}}`. The reference
 is inserted after whitespace normalization; Orpheus does not contact Jira or
 validate Jira-key syntax. The example renders `[TREX-1234] <summary>` for both
-the commit subject and PR title.
+the PR title. Ordinary implementation commits retain each effort's own handoff summary/description; publication does not rewrite them.
 
 A template requiring a missing external reference makes the task need attention
-and blocks dispatch before worktree creation or agent launch. Publication checks
-again before committing, pushing, or calling the PR provider. Restore the reference
+and blocks dispatch before worktree creation or agent launch. Plan preparation checks
+again before freezing publication content. Restore the reference
 with `task edit --external-ref`, then retry the pending operation.
 
 ## PR body and review-process summary

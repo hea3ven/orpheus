@@ -158,3 +158,15 @@ func (w *Workflow) Finding(ref FindingRef) (*Finding, error) {
 	}
 	return element(stepFindings(*step), ref.Finding)
 }
+
+// Equal compares containment values, not the allocation identity of optional
+// index pointers from independently decoded snapshots.
+func (ref AttemptRef) Equal(other AttemptRef) bool {
+	return ref.RepositoryID == other.RepositoryID && ref.TaskID == other.TaskID && ref.Workflow == other.Workflow && ref.Phase == other.Phase && sameOptionalIndex(ref.Step, other.Step) && sameOptionalIndex(ref.BranchSync, other.BranchSync)
+}
+func sameOptionalIndex(left, right *int) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}

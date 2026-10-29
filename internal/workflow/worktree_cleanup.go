@@ -11,6 +11,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/tasktarget"
+	"github.com/hea3ven/orpheus/internal/work"
 )
 
 // WorktreeCleanupOutcome is the operator-facing result of closed-task
@@ -103,6 +104,9 @@ func CleanClosedTaskWorktree(ctx context.Context, opts ClosedTaskWorktreeCleanup
 		}
 	}
 
+	if reason := unpublishedLocalWork(opts.TaskState); reason != "" {
+		return WorktreeCleanupResult{Outcome: WorktreeCleanupUnsafe, Worktree: stateTarget.Worktree, Reason: reason}
+	}
 	gitState := opts.Git
 	if gitState == nil {
 		gitState = gitmeta.LocalClosedTaskWorktreeGit{}
@@ -215,4 +219,27 @@ func joinCleanupReason(reason string, suffix string) string {
 		return suffix
 	}
 	return fmt.Sprintf("%s; %s", reason, suffix)
+}
+
+func unpublishedLocalWork(view taskstate.TaskState) string {
+	if view.Work == nil || len(view.Work.Workflows) == 0 {
+		return "workflow-owned delivery evidence is missing"
+	}
+	w := &view.Work.Workflows[len(view.Work.Workflows)-1]
+	publicationIndex := -1
+	for i, phase := range w.Phases {
+		if publication, ok := phase.(*work.PublicationPhase); ok && publication.Delivery != nil {
+			publicationIndex = i
+		}
+	}
+	if publicationIndex < 0 {
+		return "workflow has no observed publication to clean up"
+	}
+	for _, phase := range w.Phases[publicationIndex+1:] {
+		switch phase.(type) {
+		case *work.ImplementationPhase, *work.ReviewPhase:
+			return "newer unpublished local work must be retained even though the earlier PR was merged"
+		}
+	}
+	return ""
 }

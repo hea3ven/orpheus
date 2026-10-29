@@ -18,7 +18,11 @@ func TestIntegrationWorkflowClosureSucceedsWhenWorktreeRemovalFails(t *testing.T
 	for _, flow := range []publication.IntegrationFlow{publication.IntegrationFlowPullRequest, publication.IntegrationFlowDirectMerge} {
 		t.Run(string(flow), func(t *testing.T) {
 			const taskID = "op-retained"
-			f := newFeatureFinalizationFixture(t, taskID, false)
+			f := newFinalizationFixture(t, taskID)
+			f.setConfig("publication", map[string]any{"integration_flow": flow})
+			branch, workdir := f.expectedTarget(taskID)
+			f.completion(taskID, branch, workdir, "Ready for PR", "Implemented task branch changes.", taskstate.RunStatusSucceeded)
+			f.passedReview(taskID)
 			_, dir := f.expectedTarget(taskID)
 			f.setConfig("publication", map[string]any{"integration_flow": flow})
 			f.publication.cleanupError = errors.New("fatal: contains modified or untracked files")

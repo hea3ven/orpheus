@@ -27,11 +27,23 @@ type ReviewContract struct {
 	Slots       []ReviewSlot
 }
 
-// ReviewReport is an agent's explicit handoff, distinct from successful process exit.
+// ReviewReport retains observations actually supplied by a reviewer. The current
+// application reports findings, not a separate final assessment: a successful
+// reviewer with no findings needs no fabricated empty report.
 type ReviewReport struct {
-	Evidence      string
-	Findings      []Finding
+	// Evidence is not currently collected by the application; leave it empty.
+	Evidence string
+	Findings []Finding
+	// Verifications are not currently collected. Whole-review success must not
+	// manufacture per-finding positive evidence here.
 	Verifications []FindingVerification
+}
+
+// ReviewExecutionFailure is an actual supervision/bookkeeping error independent
+// of the child's observed exit code. It is not a fabricated nonzero exit.
+type ReviewExecutionFailure struct {
+	At     time.Time
+	Reason string
 }
 
 // ReviewOutcome is a computed projection, never a stored field on review/step.
@@ -78,6 +90,15 @@ func (w *Workflow) reviewOutcome(ref ReviewRef, cutoff time.Time) (ReviewOutcome
 	contract, err := element(w.ReviewContracts, p.Contract)
 	if err != nil {
 		return "", err
+	}
+	if p.Abort != nil && observedBy(p.Abort.At, cutoff) {
+		return ReviewPending, nil
+	}
+	if p.ExecutionFailure != nil && observedBy(p.ExecutionFailure.At, cutoff) {
+		return ReviewFailed, nil
+	}
+	if p.AdmissionFailure != nil && observedBy(p.AdmissionFailure.At, cutoff) {
+		return ReviewFailed, nil
 	}
 	return aggregateReview(w, p.Steps, len(contract.Slots), cutoff), nil
 }
@@ -131,15 +152,28 @@ func stepOutcome(w *Workflow, step ReviewStep, cutoff time.Time) StepOutcome {
 	if !observedBy(stepTime(step), cutoff) {
 		return StepPending
 	}
+	if len(readOnlyFailures(step)) > 0 {
+		return StepFailed
+	}
 	switch step := step.(type) {
 	case *CheckStep:
+		if step != nil && step.StartFailure != nil {
+			return StepFailed
+		}
 		if step == nil || step.Result == nil {
 			return StepPending
 		}
 		if *step.Result.ExitCode == 0 {
 			return StepPassed
 		}
+		findingResult := findingOutcome(step.Findings, cutoff)
+		if findingResult == StepWaived {
+			return StepWaived
+		}
 		if step.Waiver != nil {
+			if findingResult == StepChangesRequired {
+				return StepChangesRequired
+			}
 			return StepWaived
 		}
 		return StepFailed
@@ -149,10 +183,13 @@ func stepOutcome(w *Workflow, step ReviewStep, cutoff time.Time) StepOutcome {
 		if step == nil {
 			return StepPending
 		}
+		if manualCommandFailed(step.CommandResult) {
+			return StepFailed
+		}
 		switch decision := step.Decision.(type) {
 		case *ApprovedReview:
 			if decision != nil {
-				return StepPassed
+				return findingOutcome(step.Findings, cutoff)
 			}
 		case *RequestedChanges:
 			if decision != nil {
@@ -170,11 +207,14 @@ func agentReviewOutcome(w *Workflow, step *AgentReviewStep, cutoff time.Time) St
 	if running(&step.Execution) {
 		return StepPending
 	}
+	if step.ExecutionFailure != nil {
+		return StepFailed
+	}
 	if !successful(&step.Execution) {
 		return StepFailed
 	}
 	if step.Report == nil {
-		return StepPending
+		return StepPassed
 	}
 	outcome := findingOutcome(step.Report.Findings, cutoff)
 	for _, verification := range step.Report.Verifications {
@@ -199,7 +239,7 @@ func agentReviewOutcome(w *Workflow, step *AgentReviewStep, cutoff time.Time) St
 func findingOutcome(findings []Finding, cutoff time.Time) StepOutcome {
 	outcome := StepPassed
 	for _, finding := range findings {
-		if finding.Classification != FindingBlocking {
+		if !finding.blockingAt(cutoff) {
 			continue
 		}
 		switch finding.dispositionAt(cutoff).(type) {
@@ -214,15 +254,17 @@ func findingOutcome(findings []Finding, cutoff time.Time) StepOutcome {
 
 func stepFindings(step ReviewStep) []Finding {
 	switch step := step.(type) {
+	case *CheckStep:
+		if step != nil {
+			return step.Findings
+		}
 	case *AgentReviewStep:
 		if step != nil && step.Report != nil {
 			return step.Report.Findings
 		}
 	case *ManualReviewStep:
 		if step != nil {
-			if decision, ok := step.Decision.(*RequestedChanges); ok && decision != nil {
-				return decision.Findings
-			}
+			return step.Findings
 		}
 	}
 	return nil
@@ -251,4 +293,22 @@ func observedBy(at, cutoff time.Time) bool {
 
 func passed(outcome ReviewOutcome) bool {
 	return outcome == ReviewPassed || outcome == ReviewPassedWithWaivers
+}
+
+// ReviewDestination retains the original automated scope while permitting the
+// last effective manual approval to establish the final integration context.
+func (w *Workflow) ReviewDestination(ref ReviewRef) (*Destination, error) {
+	phase, err := phaseAs[*ReviewPhase](w, ref.Phase)
+	if err != nil || phase == nil {
+		return nil, fmt.Errorf("review reference requires review")
+	}
+	destination := phase.Scope.Destination
+	for _, step := range effectiveSteps(phase.Steps, len(w.ReviewContracts[phase.Contract].Slots)) {
+		if manual, ok := step.(*ManualReviewStep); ok && manual != nil {
+			if approval, ok := manual.Decision.(*ApprovedReview); ok && approval != nil && approval.Publication != nil {
+				destination = &approval.Publication.Destination
+			}
+		}
+	}
+	return destination, nil
 }

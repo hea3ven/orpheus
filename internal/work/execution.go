@@ -5,11 +5,17 @@ import "time"
 // AgentExecution is the concrete process and telemetry record owned by an effort.
 // Role follows containment. Process is the only process-outcome authority.
 type AgentExecution struct {
-	Profile       string
-	Harness       string
-	Model         string
+	Profile string
+	Harness string
+	Model   string
+	// ObservedModel is native usage/session evidence, distinct from the model
+	// selected at launch. It remains empty until the harness supplies it.
+	ObservedModel string
 	Thinking      string
 	Interactive   bool
+	// SessionName is the label actually selected for this launch, not a current
+	// task-title snapshot or a substitute for the native session ID.
+	SessionName   string
 	Command       string
 	Args          []string
 	Session       *Session

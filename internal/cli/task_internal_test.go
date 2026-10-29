@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
@@ -250,6 +251,7 @@ func syncConflictPromptTestResolver(paths state.Paths, gotPromptArg *string, got
 			}
 			*gotPromptArg = command.Args[len(command.Args)-1]
 			*gotEnvPrompt = envValue(opts.Env, "ORPHEUS_AGENT_PROMPT")
+			opts.OnExit(agentexec.ProcessExit{PID: 4242, Code: 0, At: time.Now().UTC()})
 			return nil
 		}),
 	}

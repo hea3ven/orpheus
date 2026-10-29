@@ -1,6 +1,7 @@
 package taskstate_test
 
 import (
+	workmodel "github.com/hea3ven/orpheus/internal/work"
 	"path/filepath"
 	"testing"
 
@@ -17,7 +18,7 @@ func TestStoreTaskIDsDiscoversOnlyDirectValidYAMLFilesInSortedOrder(t *testing.T
 	require.NoError(t, err)
 	store := taskstate.NewStore(paths)
 	for _, id := range []string{"op-z", "op-a"} {
-		_, err := store.StartRun("alpha", id, taskstate.StartRunOptions{Agent: "recorder"})
+		_, err := store.StartRun("alpha", id, taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: "/fixture/work", TaskBranch: "task-branch", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "recorder"})
 		require.NoError(t, err)
 	}
 	for _, rel := range []string{

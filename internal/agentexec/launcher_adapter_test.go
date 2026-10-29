@@ -82,9 +82,18 @@ func TestIntegrationAdapterContractAttachedLauncherReportsDirectChildPIDBeforeWa
 		t.Fatal(err)
 	}
 	observed := 0
+	var exits []agentexec.ProcessExit
+	before := time.Now().UTC()
 
 	err = (agentexec.AttachedLauncher{}).Run(ctx, agentexec.Command{Name: "agent", Command: fake}, agentexec.LaunchOptions{
 		Dir: binDir, Stdin: input, Stdout: childOutput,
+		OnExit: func(exit agentexec.ProcessExit) {
+			exits = append(exits, exit)
+			liveness, probeErr := agentexec.ProbePID(exit.PID)
+			if probeErr != nil || liveness != agentexec.ProcessAbsent {
+				t.Errorf("exit observer ran before child reaping: liveness=%s err=%v", liveness, probeErr)
+			}
+		},
 		OnStart: func(pid int) error {
 			line, err := bufio.NewReader(output).ReadString('\n')
 			if err != nil {
@@ -105,6 +114,9 @@ func TestIntegrationAdapterContractAttachedLauncherReportsDirectChildPIDBeforeWa
 	}
 	if observed <= 0 {
 		t.Fatal("child finished without its OnStart identity being observed")
+	}
+	if len(exits) != 1 || exits[0].PID != observed || exits[0].Code != 0 || exits[0].At.Before(before) || exits[0].At.After(time.Now().UTC()) {
+		t.Fatalf("exit observations = %#v, want one observed zero exit of child %d", exits, observed)
 	}
 }
 
@@ -128,5 +140,38 @@ func TestIntegrationAdapterContractAttachedLauncherRunsExplicitlyRegisteredFake(
 	}
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatalf("fake was not invoked: %v", err)
+	}
+}
+
+func TestIntegrationAdapterContractAttachedLauncherObservesReapedChildWhenPIDRecordingFails(t *testing.T) {
+	dir := testutil.CanonicalTempDir(t)
+	probe := filepath.Join(dir, "pid-failure-probe")
+	if err := testguard.WriteExecutable(probe, []byte("#!/bin/sh\nwhile :; do :; done\n")); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pidFailure := errors.New("cannot persist direct child")
+	var pid int
+	var exits []agentexec.ProcessExit
+
+	err := (agentexec.AttachedLauncher{}).Run(ctx, agentexec.Command{Name: "pid-failure-probe", Command: probe}, agentexec.LaunchOptions{
+		Dir: dir,
+		OnStart: func(child int) error {
+			pid = child
+			return pidFailure
+		},
+		OnExit: func(exit agentexec.ProcessExit) { exits = append(exits, exit) },
+	})
+
+	if !errors.Is(err, pidFailure) || agentexec.IsStartError(err) {
+		t.Fatalf("Run error = %v, want retained PID-recording failure after startup", err)
+	}
+	if len(exits) != 1 || exits[0].PID != pid || exits[0].Code != -1 || exits[0].At.IsZero() {
+		t.Fatalf("exit observations = %#v, want one observed killed-child result for %d", exits, pid)
+	}
+	liveness, probeErr := agentexec.ProbePID(pid)
+	if probeErr != nil || liveness != agentexec.ProcessAbsent {
+		t.Fatalf("child survived launch failure: liveness=%s err=%v", liveness, probeErr)
 	}
 }

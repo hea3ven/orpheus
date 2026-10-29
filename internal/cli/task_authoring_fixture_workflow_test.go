@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	workmodel "github.com/hea3ven/orpheus/internal/work"
 	"sort"
 	"strings"
 	"sync"
@@ -15,7 +16,10 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/require"
+	"time"
 )
 
 type ownershipAuthoringBackend struct {
@@ -283,7 +287,7 @@ func setupOwnershipAgentImplementation(t *testing.T, fixture *workflowFixture, i
 	})
 	setupOwnershipAuthoringWorkflow(t, fixture, repo, backend)
 	writeOwnershipAgentProfileConfig(t, fixture, "recorder", true)
-	_, err = taskstate.NewStore(fixture.paths).StartRun("alpha", "op-1", taskstate.StartRunOptions{
+	_, err = taskstate.NewStore(fixture.paths).StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent:       "recorder",
 		Interactive: interactive,
 		Branch:      "orpheus/op-1",
@@ -291,6 +295,8 @@ func setupOwnershipAgentImplementation(t *testing.T, fixture *workflowFixture, i
 	})
 	require.NoError(t, err)
 	fixture.options.AgentWorkingDirectory = cwd
+	setWorkflowEnvironment(t, fixture, "ORPHEUS_WORKFLOW", "0")
+	setWorkflowEnvironment(t, fixture, "ORPHEUS_PHASE", "1")
 	setWorkflowEnvironment(t, fixture, "ORPHEUS_REPO_ID", "alpha")
 	setWorkflowEnvironment(t, fixture, "ORPHEUS_TASK_ID", "op-1")
 	setWorkflowEnvironment(t, fixture, "ORPHEUS_WORKTREE", worktree)
@@ -315,7 +321,7 @@ func setupOwnershipAgentRepoRoot(t *testing.T, fixture *workflowFixture) (*owner
 	})
 	setupOwnershipAuthoringWorkflow(t, fixture, repo, backend)
 	writeOwnershipAgentProfileConfig(t, fixture, "recorder", true)
-	_, err := taskstate.NewStore(fixture.paths).StartRun("alpha", "op-root", taskstate.StartRunOptions{
+	_, err := taskstate.NewStore(fixture.paths).StartRun("alpha", "op-root", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repo.Path, TaskBranch: "orpheus/op-root", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent:       "recorder",
 		Interactive: true,
 		Branch:      "orpheus/op-root",
@@ -323,6 +329,8 @@ func setupOwnershipAgentRepoRoot(t *testing.T, fixture *workflowFixture) (*owner
 	})
 	require.NoError(t, err)
 	fixture.options.AgentWorkingDirectory = repo.Path
+	setWorkflowEnvironment(t, fixture, "ORPHEUS_WORKFLOW", "0")
+	setWorkflowEnvironment(t, fixture, "ORPHEUS_PHASE", "1")
 	setWorkflowEnvironment(t, fixture, "ORPHEUS_REPO_ID", "alpha")
 	setWorkflowEnvironment(t, fixture, "ORPHEUS_TASK_ID", "op-root")
 	setWorkflowEnvironment(t, fixture, "ORPHEUS_WORKTREE", repo.Path)
@@ -348,15 +356,24 @@ func setupOwnershipActiveReview(t *testing.T, fixture *workflowFixture, taskID s
 	setupOwnershipAuthoringWorkflow(t, fixture, repo, backend)
 	fixture.options.AgentWorkingDirectory = repo.Path
 	store := taskstate.NewStore(fixture.paths)
-	recordOwnershipMainCompletion(t, store, "alpha", taskID, repo.Path, "Review summary", "Review description.")
-	review, err := store.StartReviewWithOptions("alpha", taskID, taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review"})
+	snapshot := testutil.ReviewableWork("alpha", taskID, repo.Path, "main")
+	snapshot.Workflows[0].Phases[1].(*workmodel.ImplementationPhase).Completion = &workmodel.Completion{Summary: "Review summary", Description: "Review description.", DetailedDescription: "Detailed PR body.", TechnicalExplanation: "Technical explanation.", CompletedAt: time.Date(2026, 1, 1, 0, 0, 2, 0, time.UTC)}
+	_, err := workstate.NewStore(fixture.paths).Save(snapshot, 0)
 	require.NoError(t, err)
-	_, err = store.RecordReviewStep("alpha", taskID, review.Attempt, taskstate.RecordReviewStepOptions{Kind: "agent_review", Name: "ai-review"})
+	review, err := store.StartReviewWithOptions("alpha", taskID, taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review", Contract: workmodel.ReviewContract{PipelineKey: "standard", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewAgent, ConfigKey: "ai-review"}}}, Scope: workmodel.ReviewScope{Requirements: "Review task requirements", Output: workmodel.OutputRef{Phase: 1}, Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}})
 	require.NoError(t, err)
+	execution := taskstate.AgentExecution{Agent: "reviewer", Status: taskstate.RunStatusRunning, StartedAt: review.StartedAt, SupervisorPID: 10}
+	_, err = store.RecordReviewStep("alpha", taskID, review.Attempt, taskstate.RecordReviewStepOptions{Address: review.Address, Kind: "agent_review", Name: "ai-review", Execution: &execution})
+	require.NoError(t, err)
+
+	setWorkflowEnvironment(t, fixture, "ORPHEUS_WORKFLOW", "0")
+	setWorkflowEnvironment(t, fixture, "ORPHEUS_PHASE", "1")
 	setWorkflowEnvironment(t, fixture, "ORPHEUS_REPO_ID", "alpha")
 	setWorkflowEnvironment(t, fixture, "ORPHEUS_TASK_ID", taskID)
 	setWorkflowEnvironment(t, fixture, "ORPHEUS_WORKTREE", repo.Path)
 	setWorkflowEnvironment(t, fixture, "ORPHEUS_BRANCH", "main")
+	setWorkflowEnvironment(t, fixture, "ORPHEUS_PHASE", "2")
+	setWorkflowEnvironment(t, fixture, "ORPHEUS_STEP_INDEX", "0")
 	setWorkflowEnvironment(t, fixture, "ORPHEUS_AGENT_PURPOSE", "review")
 	setWorkflowEnvironment(t, fixture, "ORPHEUS_REVIEW_ATTEMPT", "1")
 	setWorkflowEnvironment(t, fixture, "ORPHEUS_REVIEW_STEP", "ai-review")
@@ -365,39 +382,25 @@ func setupOwnershipActiveReview(t *testing.T, fixture *workflowFixture, taskID s
 
 func recordOwnershipMainCompletion(t *testing.T, store taskstate.Store, repoID string, taskID string, repoPath string, summary string, description string) {
 	t.Helper()
-	attempt, err := store.StartRun(repoID, taskID, taskstate.StartRunOptions{Agent: "recorder", Branch: "main", Worktree: repoPath})
+	attempt, err := store.StartRun(repoID, taskID, taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repoPath, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "recorder", Branch: "main", Worktree: repoPath})
 	require.NoError(t, err)
-	_, err = store.CompleteRun(repoID, taskID, attempt.Attempt, taskstate.CompleteRunOptions{
+	_, err = seedFixtureHandoff(store, repoID, taskID, attempt.Attempt, taskstate.CompleteRunOptions{
 		Summary:              summary,
 		Description:          description,
 		DetailedDescription:  "Detailed PR body.",
 		TechnicalExplanation: "Technical explanation.",
 	})
 	require.NoError(t, err)
-	_, err = store.FinishRun(repoID, taskID, attempt.Attempt, taskstate.RunStatusSucceeded)
+	_, err = seedFixtureExit(store, repoID, taskID, attempt.Attempt, 0)
 	require.NoError(t, err)
 }
 
-func seedOwnershipLegacyRunningAttempt(t *testing.T, fixture *workflowFixture, taskID string, branch string, worktree string) {
+func seedOwnershipNoninteractiveAttempt(t *testing.T, fixture *workflowFixture, taskID, branch, worktree string) {
 	t.Helper()
-	rel := fmt.Sprintf("repos/alpha/tasks/%s.yaml", taskID)
-	err := fixture.paths.WriteDataYAML(rel, map[string]any{
-		"version":   4,
-		"repo_id":   "alpha",
-		"task_id":   taskID,
-		"git_facts": map[string]any{"branch": branch, "worktree": worktree},
-		"runs": []map[string]any{{
-			"attempt": 1,
-			"status":  "running",
-			"execution": map[string]any{
-				"purpose":    "implementation",
-				"status":     "running",
-				"started_at": "2026-06-03T10:00:00Z",
-				"agent":      "recorder",
-			},
-		}},
-	})
+	snapshot, err := workstate.NewStore(fixture.paths).Load("alpha", taskID)
 	require.NoError(t, err)
+	execution := snapshot.Workflows[0].Phases[1].(*workmodel.ImplementationPhase).Execution
+	require.False(t, execution.Interactive, "later profile changes must not rewrite launch-selected interactivity")
 }
 
 func sourceNeutralFailure(message string) error {

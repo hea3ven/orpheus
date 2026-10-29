@@ -14,13 +14,16 @@ import (
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/require"
 )
 
 type syncWorkflowFixture struct {
 	*finalizationWorkflowFixture
 	syncGit *memorySyncGit
+	initial taskstate.TaskState
 }
 
 func newSyncFixture(t *testing.T) *syncWorkflowFixture {
@@ -32,6 +35,14 @@ func newSyncFixture(t *testing.T) *syncWorkflowFixture {
 	item.Metadata[taskmodel.MetadataBranch] = branch
 	item.Metadata[taskmodel.MetadataWorktree] = dir
 	base.backend.tasks[item.ID] = item
+	snapshot, err := testutil.DeliveredPRWork("alpha", "op-sync", dir, branch, base.pr.url)
+	require.NoError(t, err)
+	// The semantic Git adapter observes the same synthetic delivered revision.
+	base.candidate.head = "fixture-output"
+	base.git.heads[dir] = "fixture-output"
+	base.git.trees["fixture-output"] = "fixture-tree"
+	_, err = workstate.NewStore(base.paths).Save(snapshot, 0)
+	require.NoError(t, err)
 	base.git.targets[dir] = memoryGitTarget{branch: branch}
 	base.git.hasCandidateChanges = false
 	base.publication.remote[branch] = base.candidate.head
@@ -39,7 +50,9 @@ func newSyncFixture(t *testing.T) *syncWorkflowFixture {
 	base.pr.existing = &pullrequest.CreateRequest{RepositoryPath: taskWorkflowRepoRoot, HeadBranch: branch, BaseBranch: "main"}
 	git := &memorySyncGit{memoryPublicationGit: base.publication}
 	base.options.Dependencies.SyncGit = git
-	return &syncWorkflowFixture{finalizationWorkflowFixture: base, syncGit: git}
+	initial, err := base.taskStore.Load("alpha", "op-sync")
+	require.NoError(t, err)
+	return &syncWorkflowFixture{finalizationWorkflowFixture: base, syncGit: git, initial: initial}
 }
 
 func syncTask(id, url string) taskmodel.Task {
@@ -134,12 +147,29 @@ func (g *memorySyncGit) BeginTaskBranchConflictResolution(_ context.Context, opt
 	if err := g.validate(opts); err != nil {
 		return gitmeta.TaskBranchSyncResult{}, err
 	}
-	if !g.behind || len(g.conflicts) == 0 || g.mergeActive {
-		return gitmeta.TaskBranchSyncResult{}, errors.New("no new conflict to resolve")
+	g.calls = append(g.calls, opts)
+	if g.syncError != nil {
+		return gitmeta.TaskBranchSyncResult{}, g.syncError
 	}
-	g.mergeActive = true
-	return g.result(opts, gitmeta.TaskBranchSyncConflicted), nil
+	if g.mergeActive {
+		return gitmeta.TaskBranchSyncResult{}, errors.New("merge already active")
+	}
+	if g.behind && len(g.conflicts) > 0 {
+		g.mergeActive = true
+		return g.result(opts, gitmeta.TaskBranchSyncConflicted), nil
+	}
+	if opts.UpdatePolicy == gitmeta.TaskBranchUpdateConflictsOnly && g.behind {
+		return g.result(opts, gitmeta.TaskBranchSyncConflictFree), nil
+	}
+	if g.behind {
+		g.commits++
+		g.head = fmt.Sprintf("sync-merge-%d", g.commits)
+		g.behind = false
+		return g.result(opts, gitmeta.TaskBranchSyncUpdated), nil
+	}
+	return g.result(opts, gitmeta.TaskBranchSyncAlreadyCurrent), nil
 }
+
 func (g *memorySyncGit) CompleteTaskBranchConflictResolution(_ context.Context, opts gitmeta.TaskBranchSyncOptions, _ []string) (gitmeta.TaskBranchSyncResult, error) {
 	if err := g.validate(opts); err != nil {
 		return gitmeta.TaskBranchSyncResult{}, err
@@ -211,4 +241,11 @@ func (g *memorySyncGit) VerifyTaskBranchConflictRollback(_ context.Context, opts
 		return errors.New("rollback not complete")
 	}
 	return nil
+}
+
+func seedPublishedPollingTask(t *testing.T, f *workflowFixture, repoID, taskID, directory, url string) {
+	t.Helper()
+	snapshot, err := testutil.DeliveredPRWork(repoID, taskID, directory, "orpheus/"+taskID, url)
+	require.NoError(t, err)
+	saveReaderHistory(t, f, snapshot)
 }

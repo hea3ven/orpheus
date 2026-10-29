@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
@@ -15,6 +16,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -160,7 +162,7 @@ func TestDispatchStartSelectsOnlyEligibleReviewRepairs(t *testing.T) {
 				Steps: []taskstate.ReviewStep{{Kind: tc.kind, Name: "inspect"}}, Findings: []taskstate.ReviewFinding{finding},
 			}
 			store := &repairEligibilityStore{fakeDispatchRunStore: fakeDispatchRunStore{state: taskstate.TaskState{
-				Version: 2, RepoID: repo.ID, TaskID: item.ID, Target: taskstate.GitFacts{Branch: "orpheus/op-1", Worktree: repo.Path},
+				Version: 2, RepoID: repo.ID, TaskID: item.ID, GitFacts: taskstate.GitFacts{Branch: "orpheus/op-1", Worktree: repo.Path},
 				BaselineCommit: "initial-commit",
 				Runs:           runs, Reviews: []taskstate.ReviewAttempt{blocked},
 			}}}
@@ -193,9 +195,9 @@ type repairEligibilityStore struct {
 	writes int
 }
 
-func (s *repairEligibilityStore) RecordSetupEvent(string, string, taskstate.EventType, taskstate.SetupEventOptions) (taskstate.Event, error) {
+func (s *repairEligibilityStore) PrepareWork(string, string, work.WorkContext) error {
 	s.writes++
-	return taskstate.Event{}, errors.New("unexpected setup persistence")
+	return errors.New("unexpected setup persistence")
 }
 func (s *repairEligibilityStore) StartRun(string, string, taskstate.StartRunOptions) (taskstate.RunAttempt, error) {
 	s.writes++
@@ -212,7 +214,7 @@ func (b *repairEligibilityBackend) MarkInProgress(context.Context, string, strin
 	return errors.New("unexpected task mutation")
 }
 
-func TestDispatchValidateStartAllowsFollowUpForNormalizedFailedReview(t *testing.T) {
+func TestDispatchValidateStartAllowsRepairFromExplicitlyKeptFailedCheck(t *testing.T) {
 	paths := newDispatchTestPaths(t)
 	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
 	repo := task.Repository{
@@ -225,39 +227,15 @@ func TestDispatchValidateStartAllowsFollowUpForNormalizedFailedReview(t *testing
 			task.MetadataBranch: "orpheus/op-1", task.MetadataWorktree: repoPath,
 		},
 	}
-	store := taskstate.NewStore(paths)
-	run, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Branch: "orpheus/op-1", Worktree: repoPath, BaselineCommit: "initial-commit"})
-	if err != nil {
-		t.Fatalf("start run: %v", err)
-	}
-	if _, err := store.FinishRun("alpha", "op-1", run.Attempt, taskstate.RunStatusSucceeded); err != nil {
-		t.Fatalf("finish run: %v", err)
-	}
-	reviewAttempt, err := store.StartReview("alpha", "op-1")
-	if err != nil {
-		t.Fatalf("start review: %v", err)
-	}
-	if _, err := store.RecordReviewStep("alpha", "op-1", reviewAttempt.Attempt, taskstate.RecordReviewStepOptions{
-		Kind: taskstate.ReviewStepKindCheck,
-		Name: "local-review",
-	}); err != nil {
-		t.Fatalf("record review step: %v", err)
-	}
-	if _, err := store.RecordReviewFinding("alpha", "op-1", reviewAttempt.Attempt, taskstate.ReviewFinding{
-		Type: taskstate.FindingTypeBlocking, Step: "local-review", Title: "Failed review blocker", Description: "Fix it.",
-	}); err != nil {
-		t.Fatalf("record review finding: %v", err)
-	}
-	if _, err := store.FinishReview("alpha", "op-1", reviewAttempt.Attempt, taskstate.ReviewStatusFailed); err != nil {
-		t.Fatalf("finish failed review: %v", err)
-	}
-	if _, err := store.MarkReviewAutomatedBlockerDecisionKept("alpha", "op-1", reviewAttempt.Attempt); err != nil {
-		t.Fatalf("record keep decision: %v", err)
-	}
-	if _, err := store.PrepareReviewForTargetedFollowUp("alpha", "op-1", reviewAttempt.Attempt); err != nil {
-		t.Fatalf("normalize failed review for follow-up: %v", err)
-	}
-
+	history := testutil.ReviewableWork("alpha", "op-1", repoPath, "orpheus/op-1")
+	w := &history.Workflows[0]
+	at := w.Phases[1].(*work.ImplementationPhase).Execution.StartedAt.Add(5 * time.Second)
+	failed := 7
+	w.ReviewContracts = []work.ReviewContract{{PipelineKey: "check", Slots: []work.ReviewSlot{{Kind: work.ReviewCheck, ConfigKey: "local-review"}}}}
+	w.Phases = append(w.Phases, &work.ReviewPhase{Contract: 0, Scope: work.ReviewScope{Requirements: "Task requirements", Output: work.OutputRef{Phase: 1}, Destination: &work.Destination{Remote: "origin", Branch: "main", Commit: "destination"}}, StartedAt: at, Steps: []work.ReviewStep{&work.CheckStep{Slot: 0, Result: &work.CheckResult{ExitCode: &failed, FinishedAt: at}, Findings: []work.Finding{{Classification: work.FindingBlocking, Title: "Failed review blocker", Description: "Fix it.", Dispositions: []work.FindingDisposition{&work.RepairRequired{At: at}}}}}}})
+	projected, err := taskstate.Project(history)
+	require.NoError(t, err)
+	store := fakeDispatchRunStore{state: projected}
 	service := DispatchService{Paths: paths, RunStore: store}
 	plan, err := service.validateStart(context.Background(), DispatchStartOptions{
 		TaskID: taskItem.ID, Source: task.RepositorySource{Repository: repo}, Backend: fakeDispatchBackend{taskItem: taskItem},
@@ -265,7 +243,7 @@ func TestDispatchValidateStartAllowsFollowUpForNormalizedFailedReview(t *testing
 	if err != nil {
 		t.Fatalf("validate start: %v", err)
 	}
-	if plan.followUp == nil || plan.followUp.reviewAttempt != reviewAttempt.Attempt || len(plan.followUp.findingIndexes) != 1 || plan.followUp.findingIndexes[0] != 0 {
+	if plan.followUp == nil || plan.followUp.reviewAttempt != 1 || len(plan.followUp.findingIndexes) != 1 || plan.followUp.findingIndexes[0] != 0 {
 		t.Fatalf("follow-up plan = %#v, want normalized failed review finding 0", plan.followUp)
 	}
 }
@@ -385,7 +363,7 @@ func validateDispatchStartForReviewWithRuns(
 			RepoID:         repo.ID,
 			TaskID:         taskItem.ID,
 			BaselineCommit: "initial-commit",
-			Target: taskstate.GitFacts{
+			GitFacts: taskstate.GitFacts{
 				Branch:   "orpheus/op-1",
 				Worktree: repoPath,
 			},
@@ -529,7 +507,7 @@ func TestDispatchValidateStartPreservesRecordedBranchAfterTemplateChange(t *test
 	}
 	repo := task.Repository{ID: "alpha", Name: "Alpha", Path: repoPath, DefaultBranch: "main", BranchTemplate: "changed/{{task_title}}"}
 	taskItem := task.Task{ID: "op-1", Title: "New template", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: "recorded/branch", task.MetadataWorktree: worktree}}
-	store := fakeDispatchRunStore{state: taskstate.TaskState{Target: taskstate.GitFacts{Branch: "recorded/branch", Worktree: worktree}}}
+	store := fakeDispatchRunStore{state: taskstate.TaskState{GitFacts: taskstate.GitFacts{Branch: "recorded/branch", Worktree: worktree}}}
 	service := DispatchService{Paths: paths, RunStore: store}
 
 	plan, err := service.validateStart(context.Background(), DispatchStartOptions{
@@ -607,19 +585,19 @@ func (s fakeDispatchRunStore) ActiveRun(string, string) (taskstate.RunAttempt, b
 	return run, ok, nil
 }
 
-func (s fakeDispatchRunStore) RecordSetupEvent(string, string, taskstate.EventType, taskstate.SetupEventOptions) (taskstate.Event, error) {
-	return taskstate.Event{}, errors.New("not implemented")
+func (s fakeDispatchRunStore) PrepareWork(string, string, work.WorkContext) error {
+	return errors.New("not implemented")
 }
 
 func (s fakeDispatchRunStore) StartRun(string, string, taskstate.StartRunOptions) (taskstate.RunAttempt, error) {
 	return taskstate.RunAttempt{}, errors.New("not implemented")
 }
 
-func (s fakeDispatchRunStore) RecordRunChildPID(string, string, int, int) (taskstate.RunAttempt, error) {
+func (s fakeDispatchRunStore) RecordRunChildPIDAt(work.AttemptRef, int) (taskstate.RunAttempt, error) {
 	return taskstate.RunAttempt{}, errors.New("not implemented")
 }
 
-func (s fakeDispatchRunStore) RecordRunUsage(string, string, int, taskstate.RecordRunUsageOptions) (taskstate.RunAttempt, error) {
+func (s fakeDispatchRunStore) RecordRunUsageAt(work.AttemptRef, taskstate.RecordRunUsageOptions) (taskstate.RunAttempt, error) {
 	return taskstate.RunAttempt{}, errors.New("not implemented")
 }
 
@@ -627,7 +605,7 @@ func (s fakeDispatchRunStore) TargetReviewFindings(string, string, int, []int, i
 	return taskstate.ReviewAttempt{}, errors.New("not implemented")
 }
 
-func (s fakeDispatchRunStore) FinishRun(string, string, int, taskstate.RunStatus) (taskstate.RunAttempt, error) {
+func (s fakeDispatchRunStore) FinishObservedRun(work.AttemptRef, work.ProcessResult, int) (taskstate.RunAttempt, error) {
 	return taskstate.RunAttempt{}, errors.New("not implemented")
 }
 

@@ -58,6 +58,19 @@ Gig and Beads repositories can share one workspace. Task IDs resolve through
 registered repository prefixes. `task show` includes
 relationships and execution history; showing an epic includes its direct children.
 
+## Local workflow state
+
+Only the current workflow-state format is supported; old task-state files are
+rejected, never imported or converted. Before adopting it, stop old Orpheus
+processes and archive outside the data root or discard only the old YAML files
+in `$XDG_DATA_HOME/orpheus/repos/<repo-id>/tasks/` (default
+`~/.local/share/orpheus/repos/<repo-id>/tasks/`). New work starts with empty local
+workflow history. Existing checkouts and Git branches are not reset or removed.
+
+Task definitions and lifecycle in Beads/Gig are unchanged. Do not delete the
+repository data directory: it may contain managed task-source storage and
+worktrees. The application does not perform this archival or deletion for you.
+
 ## Remove a repository
 
 ```sh
@@ -299,7 +312,9 @@ The work directory is selected on first dispatch and stays fixed across retries,
 repairs, and publication, even if the checked-out branch changes. Rerunning
 `task run` advances the existing workflow rather than blindly launching another
 implementer. It can resume [review](reviews.md), dispatch targeted repairs, or
-retry [publication](publication.md). Once a PR exists, use sync for reconciliation.
+prepare [publication](publication.md) after approval. Publication currently waits
+for the separate consent UX; approval does not authorize delivery. Once a PR
+exists, use sync for reconciliation.
 
 If a repo-root agent exits without recording completion, rerun
 `orpheus task run <task-id>` without `--repo-root`. Matching local run history and

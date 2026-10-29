@@ -346,6 +346,7 @@ func TestExecuteFailedResumedPiAccountsOnlyIncrementalUsageAndCost(t *testing.T)
 	runErr := errors.New("repair failed")
 	result := agent.Execute(context.Background(), executionLauncherFunc(func(_ context.Context, _ agentexec.Command, opts agentexec.LaunchOptions) error {
 		require.NoError(t, opts.OnStart(4321))
+		opts.OnExit(agentexec.ProcessExit{PID: 4321, Code: 1, At: time.Now().UTC()})
 		return runErr
 	}), agent.ExecutionOptions{
 		Command: agentexec.Command{Harness: "pi"},
@@ -383,6 +384,7 @@ func TestExecuteCanceledResumedCodexAccountsOnlyIncrementalUsage(t *testing.T) {
 	result := agent.Execute(ctx, executionLauncherFunc(func(_ context.Context, _ agentexec.Command, opts agentexec.LaunchOptions) error {
 		require.NoError(t, opts.OnStart(4321))
 		cancel()
+		opts.OnExit(agentexec.ProcessExit{PID: 4321, Code: -1, At: time.Now().UTC()})
 		return context.Canceled
 	}), agent.ExecutionOptions{
 		Command: agentexec.Command{Harness: "codex"},
