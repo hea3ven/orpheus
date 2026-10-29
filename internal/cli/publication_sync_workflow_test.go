@@ -31,7 +31,7 @@ func TestIntegrationWorkflowWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing
 	state, _ := f.loadFinalTask(item.ID)
 	require.Len(t, state.Runs, 1)
 	require.NotNil(t, state.Runs[0].Completion)
-	assert.Empty(t, state.Runs[0].Completion.Commit)
+	assert.Equal(t, "output-1", state.Runs[0].Completion.Commit)
 	assert.Equal(t, "initial-commit", state.BaselineCommit)
 	target, ok := taskstate.GitFactsFor(state)
 	require.True(t, ok)
@@ -45,7 +45,7 @@ func TestIntegrationWorkflowWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing
 	assert.Empty(t, stderr)
 	assert.Contains(t, stdout, "Published "+item.ID)
 	assert.Contains(t, stdout, "pushed "+branch)
-	assert.Contains(t, stdout, "created PR "+f.pr.url)
+	assert.Contains(t, stdout, "observed PR "+f.pr.url)
 	assert.Contains(t, stdout, "Backend task remains open for PR review")
 	f.assertPublishedPR(item.ID)
 	require.Len(t, f.pr.created, 1)
@@ -64,14 +64,14 @@ func TestIntegrationWorkflowWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing
 		assert.Contains(t, stdout, want)
 	}
 	assert.NotContains(t, stdout, "needs PR")
-	assert.Zero(t, f.pr.statusReads)
+	assert.Equal(t, 1, f.pr.statusReads, "read-only status must not add another provider observation")
 	f.pr.state = pullrequest.StateOpen
 
 	stdout, stderr = f.run("", "task", "sync", item.ID)
 
 	assert.Empty(t, stderr)
 	assert.Contains(t, stdout, "PR "+f.pr.url+" is still open for review")
-	assert.Equal(t, 1, f.pr.statusReads)
+	assert.Equal(t, 2, f.pr.statusReads)
 	assert.Len(t, f.pr.created, 1)
 	f.assertPublishedPR(item.ID)
 	f.pr.state = pullrequest.StateMerged
@@ -123,20 +123,20 @@ func TestIntegrationWorkflowRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing
 	state, _ := f.loadFinalTask(item.ID)
 	require.Len(t, state.Runs, 1)
 	require.NotNil(t, state.Runs[0].Completion)
-	assert.Empty(t, state.Runs[0].Completion.Commit)
+	assert.Equal(t, "output-1", state.Runs[0].Completion.Commit)
 	assert.Equal(t, "initial-commit", state.BaselineCommit)
 	target, ok := taskstate.GitFactsFor(state)
 	require.True(t, ok)
 	assert.Equal(t, "orpheus/"+item.ID, target.Branch)
 	assert.Equal(t, taskWorkflowRepoRoot, target.Worktree)
-	assert.True(t, f.git.hasCandidateChanges)
+	assert.False(t, f.git.hasCandidateChanges)
 	f.passedReview(item.ID)
 
 	stdout, stderr = f.run("", "task", "done", item.ID)
 
 	assert.Empty(t, stderr)
 	branch := "orpheus/" + item.ID
-	for _, want := range []string{"Published " + item.ID, "pushed " + branch, "created PR " + f.pr.url, "Backend task remains open for PR review"} {
+	for _, want := range []string{"Published " + item.ID, "pushed " + branch, "observed PR " + f.pr.url, "Backend task remains open for PR review"} {
 		assert.Contains(t, stdout, want)
 	}
 	f.assertPublishedPR(item.ID)
@@ -146,7 +146,7 @@ func TestIntegrationWorkflowRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing
 	stdout, stderr = f.run("", "task", "sync", item.ID)
 	assert.Empty(t, stderr)
 	assert.Contains(t, stdout, "PR "+f.pr.url+" is still open for review")
-	assert.Equal(t, 1, f.pr.statusReads)
+	assert.Equal(t, 2, f.pr.statusReads)
 	f.pr.state = pullrequest.StateMerged
 
 	stdout, stderr = f.run("", "task", "sync", item.ID)
@@ -173,8 +173,8 @@ func (g *memoryPublicationGit) SyncTaskBranchWithDefault(_ context.Context, opts
 	}
 	return gitmeta.TaskBranchSyncResult{Status: gitmeta.TaskBranchSyncAlreadyCurrent, Branch: opts.Branch, DefaultBranch: opts.DefaultBranch, Head: g.head}, nil
 }
-func (*memoryPublicationGit) BeginTaskBranchConflictResolution(context.Context, gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchSyncResult, error) {
-	return gitmeta.TaskBranchSyncResult{}, errors.New("unexpected conflict resolution")
+func (g *memoryPublicationGit) BeginTaskBranchConflictResolution(ctx context.Context, opts gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchSyncResult, error) {
+	return g.SyncTaskBranchWithDefault(ctx, opts)
 }
 func (*memoryPublicationGit) CompleteTaskBranchConflictResolution(context.Context, gitmeta.TaskBranchSyncOptions, []string) (gitmeta.TaskBranchSyncResult, error) {
 	return gitmeta.TaskBranchSyncResult{}, errors.New("unexpected conflict completion")
@@ -197,4 +197,39 @@ func (g *memoryPublicationGit) RemoveClosedTaskWorktree(ctx context.Context, opt
 	}
 	delete(g.targets, inspection.Worktree)
 	return gitmeta.ClosedTaskWorktreeRemoval{Outcome: gitmeta.ClosedTaskWorktreeRemoved, Worktree: inspection.Worktree}
+}
+
+func (g *memoryPublicationGit) InspectTaskBranchConflictCheckpoint(_ context.Context, opts gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchConflictCheckpoint, error) {
+	if g.targets[opts.Worktree].branch != opts.Branch || g.remote[opts.Branch] == "" {
+		return gitmeta.TaskBranchConflictCheckpoint{}, errors.New("unknown published sync checkout")
+	}
+	return gitmeta.TaskBranchConflictCheckpoint{LocalHead: g.head, RemoteHead: g.remote[opts.Branch], MergeSource: "initial-commit"}, nil
+}
+func (g *memoryPublicationGit) InspectRemoteTaskBranchHead(_ context.Context, opts gitmeta.TaskBranchSyncOptions) (string, error) {
+	head, ok := g.remote[opts.Branch]
+	if !ok {
+		return "", errors.New("remote task branch has not been observed")
+	}
+	return head, nil
+}
+func (g *memoryPublicationGit) InspectTaskBranchConflictRollbackEligibility(_ context.Context, opts gitmeta.TaskBranchSyncOptions, checkpoint gitmeta.TaskBranchConflictCheckpoint, _ string) error {
+	if g.targets[opts.Worktree].branch != opts.Branch || g.head != checkpoint.LocalHead || g.remote[opts.Branch] != checkpoint.RemoteHead {
+		return errors.New("checkout differs from the checkpoint")
+	}
+	return nil
+}
+func (g *memoryPublicationGit) RollbackTaskBranchConflictResolution(ctx context.Context, opts gitmeta.TaskBranchSyncOptions, checkpoint gitmeta.TaskBranchConflictCheckpoint) error {
+	return g.InspectTaskBranchConflictRollbackEligibility(ctx, opts, checkpoint, "")
+}
+func (g *memoryPublicationGit) VerifyTaskBranchConflictRollback(ctx context.Context, opts gitmeta.TaskBranchSyncOptions, checkpoint gitmeta.TaskBranchConflictCheckpoint) error {
+	return g.InspectTaskBranchConflictRollbackEligibility(ctx, opts, checkpoint, "")
+}
+func (*memoryPublicationGit) CommitTaskBranchConflictResolution(context.Context, gitmeta.TaskBranchSyncOptions, []string) (gitmeta.TaskBranchSyncResult, error) {
+	return gitmeta.TaskBranchSyncResult{}, errors.New("this fixture has no resolver merge")
+}
+func (g *memoryPublicationGit) PushCommittedTaskBranchConflictResolution(ctx context.Context, opts gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchSyncResult, error) {
+	if err := g.PushTaskBranch(ctx, opts.Worktree, opts.Branch); err != nil {
+		return gitmeta.TaskBranchSyncResult{}, err
+	}
+	return gitmeta.TaskBranchSyncResult{Status: gitmeta.TaskBranchSyncUpdated, Branch: opts.Branch, DefaultBranch: opts.DefaultBranch, Head: g.head}, nil
 }

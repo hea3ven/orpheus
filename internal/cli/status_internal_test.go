@@ -420,19 +420,18 @@ func TestRenderStatusProjectionSemanticDetailsAcrossBoundary(t *testing.T) {
 		projectedNoRunDetailCase(),
 		projectedRunDetailCase("open run history", "op-open-history", task.StatusOpen, taskstate.RunAttempt{Attempt: 1, Status: taskstate.RunStatusFailed}, status.GroupNeedsAttention, status.Detail{Kind: status.DetailOpenTaskRunHistory, Attempt: 1}, "backend status is open but local run attempt 1 failed", "open; run #1"),
 		projectedRunDetailCase("unknown run state", "op-run-unknown", task.StatusInProgress, taskstate.RunAttempt{Attempt: 5, Status: taskstate.RunStatus("lost")}, status.GroupNeedsAttention, status.Detail{Kind: status.DetailRunUnknownState, Attempt: 5, State: "lost"}, "run attempt 5 has status lost", "run #5 lost"),
-		projectedLocalReviewDetailCase("local review", nil, nil, status.GroupInReview, status.Detail{Kind: status.DetailLocalReview}, "local review; run task run", "local review"),
-		projectedLocalReviewDetailCase("review running", reviewAttemptForStatus(taskstate.ReviewStatusRunning), nil, status.GroupInReview, status.Detail{Kind: status.DetailReviewRunning}, "review running", "running"),
-		projectedLocalReviewDetailCase("manual review step", reviewAttemptForStatus(taskstate.ReviewStatusWaitingForManual), nil, status.GroupInReview, status.Detail{Kind: status.DetailReviewManualStep, Step: "inspect"}, "waiting for manual step inspect", "manual inspect"),
-		projectedLocalReviewDetailCase("review decision lost", reviewAttemptWithDecisionLost(), nil, status.GroupInReview, status.Detail{Kind: status.DetailReviewDecisionLost}, "review blocker decision interrupted", "decision lost"),
-		projectedLocalReviewDetailCase("review decision required", reviewAttemptWithDecisionRequired(), nil, status.GroupInReview, status.Detail{Kind: status.DetailReviewDecisionRequired}, "review blocker decision required", "decision required"),
-		projectedLocalReviewDetailCase("review follow-up ready", reviewAttemptWithTargetedBlocker(), nil, status.GroupInReview, status.Detail{Kind: status.DetailReviewFollowUpReady}, "review blockers targeted", "follow-up ready"),
-		projectedLocalReviewDetailCase("review budget spent", reviewAttemptWithBudgetSpent(), nil, status.GroupIdle, status.Detail{Kind: status.DetailReviewBudgetSpent, Count: 1}, "review blocked after autonomous attempt budget", "budget spent"),
-		projectedLocalReviewDetailCase("review findings", reviewAttemptWithFindings(3), nil, status.GroupIdle, status.Detail{Kind: status.DetailReviewFindings, Count: 3}, "review blocked by 3 finding(s); run task run", "3 findings"),
-		projectedLocalReviewDetailCase("review aborted", reviewAttemptForStatus(taskstate.ReviewStatusAborted), nil, status.GroupInReview, status.Detail{Kind: status.DetailReviewAborted}, "review aborted; run task run", "aborted"),
-		projectedLocalReviewDetailCase("review failed", reviewAttemptForStatus(taskstate.ReviewStatusFailed), nil, status.GroupNeedsAttention, status.Detail{Kind: status.DetailReviewFailed}, "review failed operationally; run task run", "failed"),
-		projectedLocalReviewDetailCase("review passed", reviewAttemptForStatus(taskstate.ReviewStatusPassed), nil, status.GroupInReview, status.Detail{Kind: status.DetailReviewPassed}, "review passed; run task run", "passed"),
-		projectedLocalReviewDetailCase("review publish failed", reviewAttemptForStatus(taskstate.ReviewStatusPassed), finalizationFailureEvent(), status.GroupNeedsAttention, status.Detail{Kind: status.DetailReviewPublishFailed}, "review passed; publication failed", "publish failed"),
-		projectedLocalReviewDetailCase("unknown review state", reviewAttemptForStatus(taskstate.ReviewStatus("stalled")), nil, status.GroupNeedsAttention, status.Detail{Kind: status.DetailReviewUnknownState, Attempt: 7, State: "stalled"}, "review attempt 7 has status stalled", "review stalled"),
+		projectedLocalReviewDetailCase("local review", nil, status.GroupInReview, status.Detail{Kind: status.DetailLocalReview}, "local review; run task run", "local review"),
+		projectedLocalReviewDetailCase("review running", reviewAttemptForStatus(taskstate.ReviewStatusRunning), status.GroupInReview, status.Detail{Kind: status.DetailReviewRunning}, "review running", "running"),
+		projectedLocalReviewDetailCase("manual review step", reviewAttemptForStatus(taskstate.ReviewStatusWaitingForManual), status.GroupInReview, status.Detail{Kind: status.DetailReviewManualStep, Step: "inspect"}, "waiting for manual step inspect", "manual inspect"),
+		projectedLocalReviewDetailCase("review decision lost", reviewAttemptWithDecisionLost(), status.GroupInReview, status.Detail{Kind: status.DetailReviewDecisionLost}, "review blocker decision interrupted", "decision lost"),
+		projectedLocalReviewDetailCase("review decision required", reviewAttemptWithDecisionRequired(), status.GroupInReview, status.Detail{Kind: status.DetailReviewDecisionRequired}, "review blocker decision required", "decision required"),
+		projectedLocalReviewDetailCase("review follow-up ready", reviewAttemptWithTargetedBlocker(), status.GroupInReview, status.Detail{Kind: status.DetailReviewFollowUpReady}, "review blockers targeted", "follow-up ready"),
+		projectedLocalReviewDetailCase("review budget spent", reviewAttemptWithBudgetSpent(), status.GroupIdle, status.Detail{Kind: status.DetailReviewBudgetSpent, Count: 1}, "review blocked after autonomous attempt budget", "budget spent"),
+		projectedLocalReviewDetailCase("review findings", reviewAttemptWithFindings(3), status.GroupIdle, status.Detail{Kind: status.DetailReviewFindings, Count: 3}, "review blocked by 3 finding(s); run task run", "3 findings"),
+		projectedLocalReviewDetailCase("review aborted", reviewAttemptForStatus(taskstate.ReviewStatusAborted), status.GroupInReview, status.Detail{Kind: status.DetailReviewAborted}, "review aborted; run task run", "aborted"),
+		projectedLocalReviewDetailCase("review failed", reviewAttemptForStatus(taskstate.ReviewStatusFailed), status.GroupNeedsAttention, status.Detail{Kind: status.DetailReviewFailed}, "review failed operationally; run task run", "failed"),
+		projectedLocalReviewDetailCase("review passed", reviewAttemptForStatus(taskstate.ReviewStatusPassed), status.GroupInReview, status.Detail{Kind: status.DetailReviewPassed}, "review passed; run task run", "passed"),
+		projectedLocalReviewDetailCase("unknown review state", reviewAttemptForStatus(taskstate.ReviewStatus("stalled")), status.GroupNeedsAttention, status.Detail{Kind: status.DetailReviewUnknownState, Attempt: 7, State: "stalled"}, "review attempt 7 has status stalled", "review stalled"),
 		projectedParentMissingDetailCase(),
 		projectedParentNotEpicDetailCase(),
 		projectedParentNotReadyDetailCase(),
@@ -579,7 +578,6 @@ func projectedNoRunDetailCase() projectedStatusDetailCase {
 func projectedLocalReviewDetailCase(
 	name string,
 	review *taskstate.ReviewAttempt,
-	failure *taskstate.Event,
 	groupID status.GroupID,
 	wantDetail status.Detail,
 	wantWide string,
@@ -590,7 +588,6 @@ func projectedLocalReviewDetailCase(
 	localState := projectedReviewReadyLocalState(taskItem.ID, "main", "/fixture/alpha")
 	localState.LatestRun = &run
 	localState.LatestReview = review
-	localState.LatestFinalizationFailure = failure
 	return projectedStatusDetailCase{
 		name:        name,
 		snapshot:    projectedStatusSnapshot(taskItem),
@@ -678,7 +675,7 @@ func projectedWrongTargetDetailCase(
 	run := projectedCompletedRun()
 	localState := status.LocalTaskState{
 		LatestRun: &run,
-		GitFacts:  &taskstate.TaskTarget{Branch: branch, Worktree: worktree},
+		GitFacts:  &taskstate.GitFacts{Branch: branch, Worktree: worktree},
 	}
 	return projectedStatusDetailCase{
 		name:        name,
@@ -905,7 +902,7 @@ func projectedStatusLocalStates(taskID string, localState status.LocalTaskState)
 
 func projectedReviewReadyLocalState(taskID string, branch string, worktree string) status.LocalTaskState {
 	return status.LocalTaskState{
-		GitFacts:        &taskstate.TaskTarget{Branch: branch, Worktree: worktree},
+		GitFacts:        &taskstate.GitFacts{Branch: branch, Worktree: worktree},
 		ExpectedTargets: projectedExpectedTargets(taskID),
 	}
 }
@@ -991,14 +988,6 @@ func reviewAttemptWithFindings(count int) *taskstate.ReviewAttempt {
 		})
 	}
 	return review
-}
-
-func finalizationFailureEvent() *taskstate.Event {
-	return &taskstate.Event{
-		Type:  taskstate.EventFinalizationFailed,
-		At:    time.Date(2026, 6, 3, 11, 0, 0, 0, time.UTC),
-		Error: "push failed",
-	}
 }
 
 func assertCrowdedTreeSymbolOutput(t *testing.T, got string) {

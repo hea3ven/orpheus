@@ -2,8 +2,9 @@
 
 A task review is the approval boundary between implementation and
 [publication](publication.md). `orpheus task run <task-id>` advances the workflow:
-it runs the implementer, enters review after completion, handles repairs, and
-publishes after approval. Later invocations resume or retry the pending work.
+it runs the implementer, retains safely completed output, enters review, and handles
+repairs. A passed review prepares publication but does not authorize it. Publication
+remains gated pending the separate consent UX. Later invocations resume pending work.
 
 ## Completion and approval
 
@@ -22,18 +23,26 @@ and one technical-explanation source. It records completion, not approval or a
 commit. The technical explanation goes to reviewers; it does not replace the PR
 body. Each implementation or repair attempt needs its own successful `agent done`,
 even when it resumes a harness conversation containing an older handoff.
-Same-attempt repeats keep the first handoff unchanged.
+Same-attempt repeats keep the first handoff unchanged. After the child's actual successful
+exit, Orpheus captures an ordinary commit with repository hooks, signing, and
+configuration intact. A live handoff cannot trigger capture. No-change efforts
+may explicitly reuse their actual input while retaining their own handoff.
+Review evaluates the retained commit, never a moving HEAD or dirty candidate;
+reviewer context includes the full-task baseline and repair-delta endpoints.
 
 Without configuration, Orpheus uses a single manual `local-review` step. The
 command stays attached for the operator to approve, record findings, or abort.
 Manual commands, when configured, run after confirmation. Review steps are
-read-only: a mutation is an operational failure, and Orpheus restores the
-pre-step candidate snapshot where possible. Keep temporary review reports outside
-the candidate worktree.
+read-only: changing HEAD or its branch attachment, index entries, tracked or
+untracked file contents, symlinks, or file modes is an operational failure.
+Orpheus restores and verifies the pre-step checkout and index where possible,
+even after reviewer cancellation. An incomplete restore requires manual repair;
+it is never reported as successful rollback. Keep temporary review reports
+outside the candidate worktree.
 
-`task done` cannot bypass review. After approval, it is the retry command for
-publication or finalization failures; fixing a push or authentication problem
-does not require another review.
+`task done` cannot bypass review, a live process, or missing publication consent.
+It only retries an existing explicitly authorized publication intent; it does not
+commit implementation changes or offer a temporary confirmation override.
 
 ## Configure a pipeline
 
@@ -98,7 +107,7 @@ For check and agent-review blockers, Orpheus asks the operator to choose:
 | Keep | Preserve the blocker and dispatch a targeted implementation repair. |
 | Downgrade | Make it advisory, with a required reason. |
 | Waive/cancel | Waive it, with a required reason. |
-| Restart | Discard that step execution and its findings, then rerun only that step. |
+| Restart | Append another attempt for that slot; retain the previous execution/findings as superseded audit history. |
 | Pause | Preserve the pending decision and exit without a repair or publication. |
 
 A manual `finish/block` decision already keeps the blockers recorded at that
@@ -121,8 +130,8 @@ orpheus task run op-123
 
 A waiting manual step resumes within the same attempt without rerunning completed
 steps. Interrupted blocker input launches no repair and grants no approval. On
-recovery, Orpheus asks for explicit dispositions of unresolved blockers before
-starting a fresh review. Addressed-manually and waiver decisions require reasons.
+continuation, Orpheus resumes the exact pending automated decision; when a fresh
+review is required it first asks for dispositions of unresolved prior blockers. Addressed-manually and waiver decisions require reasons.
 
 Operational failures, such as a missing executable, failed reviewer process, or
 read-only violation, are not product findings. Correct the environment or review

@@ -293,11 +293,17 @@ func renderAgentReviewAddResult(
 	reviewAttempt taskstate.ReviewAttempt,
 	taskID string,
 ) error {
+	number := 0
+	for _, finding := range reviewAttempt.Findings {
+		if !finding.Superseded {
+			number++
+		}
+	}
 	_, err := fmt.Fprintf(
 		output,
 		"Recorded %s review finding %d for %s.\n",
 		findingType,
-		len(reviewAttempt.Findings),
+		number,
 		taskID,
 	)
 	return err
@@ -322,6 +328,7 @@ func buildAgentReviewFinding(ctx agent.ReviewContext, opts agentReviewAddOptions
 	}
 
 	finding := taskstate.ReviewFinding{
+		Actor:           &ctx.Review.Address,
 		Type:            findingType,
 		Title:           title,
 		Description:     description,

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -23,6 +24,9 @@ type Command struct {
 	Directory string
 	Args      []string
 	Input     string
+	// Environment overrides individual variables without discarding the runner's
+	// configured environment. Nil preserves the runner's ordinary inheritance.
+	Environment map[string]string
 }
 
 // CommandResult contains the captured output from one Git command.
@@ -341,16 +345,20 @@ func runGitContextLogger(ctx context.Context, logger *slog.Logger, dir string, o
 }
 
 func runGitCommand(ctx context.Context, logger *slog.Logger, dir string, operation string, input string, args ...string) (string, error) {
+	return runCommand(ctx, logger, operation, Command{Directory: dir, Args: append([]string(nil), args...), Input: input})
+}
+
+func runCommand(ctx context.Context, logger *slog.Logger, operation string, command Command) (string, error) {
 	span := logging.Start(ctx, logger, "git command",
 		slog.String("component", "git"),
 		slog.String("operation", operation),
-		slog.String("cwd", dir),
+		slog.String("cwd", command.Directory),
 	)
 	runner := runnerFromContext(ctx)
 	if runner == nil {
 		runner = systemCommandRunner{}
 	}
-	result, err := runner.Run(ctx, Command{Directory: dir, Args: append([]string(nil), args...), Input: input})
+	result, err := runner.Run(ctx, command)
 	output := combineCommandOutput(result)
 	finishAttrs := gitExitAttrs(err)
 	if err != nil && expectedGitAbsence(operation, output, err) {
@@ -373,6 +381,19 @@ func (runner systemCommandRunner) Run(ctx context.Context, command Command) (Com
 	process := exec.CommandContext(ctx, "git", command.Args...)
 	process.Dir = command.Directory
 	process.Env = runner.environment
+	if len(command.Environment) > 0 {
+		base := runner.environment
+		if base == nil {
+			base = os.Environ()
+		}
+		process.Env = slices.Clone(base)
+		for key, value := range command.Environment {
+			process.Env = slices.DeleteFunc(process.Env, func(entry string) bool {
+				return strings.HasPrefix(entry, key+"=")
+			})
+			process.Env = append(process.Env, key+"="+value)
+		}
+	}
 	process.Stdin = strings.NewReader(command.Input)
 
 	var stdout bytes.Buffer

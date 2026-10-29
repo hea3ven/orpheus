@@ -1,6 +1,10 @@
 package workflow
 
 import (
+	"github.com/hea3ven/orpheus/internal/testutil"
+	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workstate"
+
 	"context"
 	"errors"
 	"testing"
@@ -15,10 +19,14 @@ import (
 func TestReviewStartupStopsAfterConcurrentReviewRecovery(t *testing.T) {
 	paths := newDispatchTestPaths(t)
 	store := taskstate.NewStore(paths)
-	attempt, err := store.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{Pipeline: "ai", Step: "inspect"})
+	snapshot := testutil.ReviewableWork("alpha", "op-review", "/fixture/work", "task-branch")
+	if _, err := workstate.NewStore(paths).Save(snapshot, 0); err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := store.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{Pipeline: "ai", Step: "inspect", Contract: work.ReviewContract{PipelineKey: "ai", Slots: []work.ReviewSlot{{Kind: work.ReviewAgent, ConfigKey: "inspect"}}}, Scope: work.ReviewScope{Requirements: "Fixture task requirements", Destination: &work.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}, Output: work.OutputRef{Phase: 1}}})
 	require.NoError(t, err)
 	execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, SupervisorPID: 10, StartedAt: attempt.StartedAt}
-	_, err = store.RecordReviewStep("alpha", "op-review", attempt.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "inspect", Execution: &execution})
+	_, err = store.RecordReviewStep("alpha", "op-review", attempt.Attempt, taskstate.RecordReviewStepOptions{Address: attempt.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "inspect", Execution: &execution})
 	require.NoError(t, err)
 	stale, err := store.Load("alpha", "op-review")
 	require.NoError(t, err)

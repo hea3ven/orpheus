@@ -12,8 +12,12 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agent"
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -24,12 +28,19 @@ func TestIntegrationWorkflowTaskRunReviewFollowUpAllowsDirtyTaskBranch(t *testin
 	fixture := newReviewWorkflowFixture(t, "op-followup", "Review approval", "Finalize after approval.")
 	paths := fixture.paths
 	runStore := taskstate.NewStore(paths)
-	reviewAttempt, err := runStore.StartReview("alpha", "op-followup")
+	reviewAttempt, err := beginConfiguredFixtureReview(fixture, runStore, "op-followup", taskstate.StartReviewOptions{})
 	must.NoError(err)
-	_, err = runStore.RecordReviewFinding("alpha", "op-followup", reviewAttempt.Attempt, taskstate.ReviewFinding{Type: taskstate.FindingTypeBlocking, Title: "Fix bug", Description: "The reviewed change still has a blocker.", SuggestedAction: "Patch the dirty candidate changes."})
+	reviewAttempt, err = runStore.PauseReviewForManualAt(reviewAttempt.Address, "local-review")
 	must.NoError(err)
-	_, err = runStore.FinishReview("alpha", "op-followup", reviewAttempt.Attempt, taskstate.ReviewStatusBlocked)
+	actor := reviewAttempt.Steps[len(reviewAttempt.Steps)-1].Address
+	_, err = runStore.RecordReviewFinding("alpha", "op-followup", reviewAttempt.Attempt, taskstate.ReviewFinding{Actor: &actor, Type: taskstate.FindingTypeBlocking, Title: "Fix bug", Description: "The reviewed change still has a blocker.", SuggestedAction: "Patch the dirty candidate changes."})
 	must.NoError(err)
+	_, err = runStore.RecordManualDecision(actor, taskstate.ReviewStatusBlocked, nil)
+	must.NoError(err)
+	// New operator changes are valid repair input, not a read-only review target.
+	fixture.candidate.contents = "operator changes awaiting repair\n"
+	fixture.candidate.hasCandidateChanges = true
+
 	fixture.configureImplementer("followup", agent.Profile{Command: "unused-implementer"})
 	fixture.agent.outcomes = append(fixture.agent.outcomes, semanticAgentOutcome{exitWithoutCompletion: true})
 
@@ -37,7 +48,7 @@ func TestIntegrationWorkflowTaskRunReviewFollowUpAllowsDirtyTaskBranch(t *testin
 
 	is.Contains(stderr, "Autonomous review follow-up for op-followup targets review attempt 1 finding(s) 1.")
 	is.Empty(stdout)
-	is.Equal("reviewed\n", fixture.candidate.contents)
+	is.Equal("operator changes awaiting repair\n", fixture.candidate.contents)
 	is.True(fixture.candidate.hasCandidateChanges)
 	must.Len(fixture.agent.launches, 1)
 	is.Equal(taskWorkflowRepoRoot, fixture.agent.launches[0].dir)
@@ -81,7 +92,7 @@ func TestIntegrationWorkflowTaskReviewMarksFailedWhenCandidateChangesMutateDurin
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review restore", "Restore mutated candidates.")
 	paths := fixture.paths
-	fixture.options.Dependencies.ReviewEffects.CaptureCandidate = func(context.Context, string, *slog.Logger, ...slog.Attr) (review.CandidateCheck, error) {
+	fixture.options.Dependencies.ReviewEffects.CaptureCandidate = func(context.Context, string, review.CommittedCandidate, *slog.Logger, ...slog.Attr) (review.CandidateCheck, error) {
 		return func() error {
 			return errors.New("review step mutated candidate changes; restored the pre-step snapshot and marked review failed")
 		}, nil
@@ -114,7 +125,7 @@ func TestIntegrationWorkflowTaskReviewPassingCheckContinuesToManualStep(t *testi
 	stdout, stderr := fixture.run("a\n", "task", "run", "--pipeline", "standard", "op-main")
 
 	is.Contains(stdout, "check stdout 1 unit")
-	is.Contains(stdout, "Published op-main")
+	is.Contains(stdout, "Review passed for op-main")
 	is.Contains(stderr, "== Review step: unit (check) ==")
 	is.Contains(stderr, "◆ REVIEW STEP · approval (manual)")
 	is.Contains(stderr, "check stderr review")
@@ -142,7 +153,7 @@ func TestIntegrationWorkflowTaskReviewConfirmedManualCommandRunsAndRecordsStep(t
 	stdout, stderr := fixture.run("\na\n", "task", "run", "--pipeline", "standard", "op-main")
 
 	is.Contains(stdout, "manual command ran inspect")
-	is.Contains(stdout, "Published op-main")
+	is.Contains(stdout, "Review passed for op-main")
 	is.Contains(stderr, "◆ REVIEW STEP · inspect (manual)")
 	is.Contains(stderr, "Run manual command for step \"inspect\"")
 	is.Contains(stderr, "Review action")
@@ -223,7 +234,7 @@ func TestIntegrationWorkflowTaskReviewImportsHunkSeparateTaskNoteAndCreatesFollo
 
 	stdout, stderr := fixture.run(input, "task", "run", "--pipeline", "standard", "op-main")
 
-	is.Contains(stdout, "Published op-main")
+	is.Contains(stdout, "Review passed for op-main")
 	is.Contains(stderr, "Imported Hunk note user:3 as separate-task finding.")
 	is.Contains(stderr, "Created follow-up task op-41 for review finding 1.")
 	must.Len(fixture.tasks.created, 1)
@@ -271,7 +282,9 @@ func TestIntegrationWorkflowTaskReviewManualCommandEOFConfirmationHandlesUnavail
 			latest, ok := taskstate.LatestReview(state)
 			must.True(ok)
 			is.Equal(test.wantStatus, latest.Status)
-			is.Empty(latest.Steps)
+			must.Len(latest.Steps, 1)
+			is.Equal("inspect", latest.Steps[0].Name)
+			is.Nil(latest.Steps[0].ExitCode, "a declined or unavailable command cannot invent a native process outcome")
 			is.Empty(taskstate.FinalizationFacts(state).Commit)
 		})
 	}
@@ -296,7 +309,7 @@ func TestIntegrationWorkflowTaskReviewNonZeroCheckRecordsBlockingFindingAndStops
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
 	latest, ok := taskstate.LatestReview(state)
 	must.True(ok)
-	is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
+	is.Equal(taskstate.ReviewStatusWaitingForAutomatedDecision, latest.Status)
 	is.True(latest.AutomatedBlockerDecisionInterrupted)
 	must.Len(latest.Steps, 1)
 	must.NotNil(latest.Steps[0].ExitCode)
@@ -339,7 +352,7 @@ func TestIntegrationWorkflowTaskReviewAgentReviewStepCapturesUsage(t *testing.T)
 
 			stdout, _ := fixture.run("", "task", "run", "op-main")
 
-			is.Contains(stdout, "Published op-main")
+			is.Contains(stdout, "Review passed for op-main")
 			var state taskstate.TaskState
 			must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
 			latest, ok := taskstate.LatestReview(state)
@@ -366,58 +379,49 @@ func TestIntegrationWorkflowTaskReviewAgentReviewStepCapturesUsage(t *testing.T)
 	}
 }
 func TestIntegrationWorkflowTaskReviewAdmissionPreventsReviewUntilCandidateIsReady(t *testing.T) {
-	fixture := newReviewWorkflowFixture(t, "op-main", "Review preflight", "Reject candidate.")
-	fixture.pipelines("standard", map[string][]map[string]any{"standard": {
-		{"kind": "check", "name": "check", "command": fixture.check("check", checkResult{})},
-		{"kind": "manual", "name": "approval"},
-	}})
-	fixture.candidate.hasStagedChanges = true
-	before, item := fixture.loadFinalTask("op-main")
-
-	stdout, stderr, err := fixture.runError("a\n", "task", "run", "op-main")
-
-	require.ErrorContains(t, err, "review requires a clean Git index")
-	assert.ErrorContains(t, err, "A  reviewed.txt")
-	assert.Empty(t, stdout)
-	assert.Empty(t, stderr)
-	after, got := fixture.loadFinalTask("op-main")
-	assert.Equal(t, before, after)
-	assert.Equal(t, item, got)
-	assert.Empty(t, after.Reviews)
-	assert.Empty(t, fixture.checkCalls)
-	assert.Zero(t, fixture.candidate.snapshots)
-	assert.True(t, fixture.candidate.hasStagedChanges)
-
-	fixture.candidate.hasStagedChanges = false
-	fixture.candidate.hasCandidateChanges = false
-	_, _, err = fixture.runError("a\n", "task", "run", "op-main")
-
-	require.ErrorContains(t, err, "has no candidate changes to review and task has no recorded finalization commit")
-	after, got = fixture.loadFinalTask("op-main")
-	assert.Equal(t, before, after)
-	assert.Equal(t, item, got)
-	assert.Empty(t, fixture.checkCalls)
-	assert.Zero(t, fixture.candidate.snapshots)
-
-	_, err = fixture.taskStore.RecordFinalizationCommit("alpha", "op-main", "recorded-commit")
+	fixture := newReviewWorkflowFixture(t, "op-main", "Review preflight", "Reject a clean wrong revision.")
+	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "check", "name": "check", "command": fixture.check("check", checkResult{})}, {"kind": "manual", "name": "approval"}}})
+	view, item := fixture.loadFinalTask("op-main")
+	capture := workflow.ImplementationService{Paths: fixture.paths, Store: workstate.NewStore(fixture.paths), Git: fixture.candidate}
+	_, err := capture.Capture(context.Background(), view.Runs[0].Address)
 	require.NoError(t, err)
-	_, stderr = fixture.run("", "task", "run", "op-main")
-
+	before, _ := fixture.loadFinalTask("op-main")
+	output := before.Work.Workflows[0].Phases[1].(*work.ImplementationPhase).Output.(*work.CodeOutput)
+	for _, wrong := range []string{"head", "branch", "retention", "index"} {
+		t.Run(wrong, func(t *testing.T) {
+			switch wrong {
+			case "head":
+				fixture.candidate.head = "clean-wrong-commit"
+			case "branch":
+				fixture.git.targets[taskWorkflowRepoRoot] = memoryGitTarget{branch: "another-task"}
+			case "retention":
+				delete(fixture.git.retained, output.RetainedRef)
+			case "index":
+				fixture.candidate.hasStagedChanges = true
+			}
+			stdout, stderr, err := fixture.runError("", "task", "run", "op-main")
+			require.Error(t, err)
+			assert.Empty(t, stdout)
+			assert.Empty(t, stderr)
+			after, got := fixture.loadFinalTask("op-main")
+			assert.Equal(t, before, after)
+			assert.Equal(t, item, got)
+			assert.Empty(t, after.Reviews)
+			assert.Empty(t, fixture.checkCalls)
+			assert.Zero(t, fixture.candidate.snapshots)
+			fixture.candidate.head = output.Commit
+			fixture.git.targets[taskWorkflowRepoRoot] = memoryGitTarget{branch: "orpheus/op-main"}
+			fixture.git.retained[output.RetainedRef] = gitmeta.Revision{Commit: output.Commit, Tree: output.Tree, RetainedRef: output.RetainedRef}
+			fixture.candidate.hasStagedChanges = false
+		})
+	}
+	_, stderr := fixture.run("", "task", "run", "op-main")
 	assert.Contains(t, stderr, "waiting for manual step")
-	after, got = fixture.loadFinalTask("op-main")
+	after, got := fixture.loadFinalTask("op-main")
 	require.Len(t, after.Reviews, 1)
-	latest := after.Reviews[0]
-	assert.Equal(t, taskstate.ReviewStatusWaitingForManual, latest.Status)
-	assert.Equal(t, "approval", latest.Step)
-	require.Len(t, latest.Steps, 2)
-	assert.Equal(t, "check", latest.Steps[0].Name)
-	assert.Equal(t, "approval", latest.Steps[1].Name)
-	require.NotNil(t, latest.Steps[0].ExitCode)
-	assert.Zero(t, *latest.Steps[0].ExitCode)
-	assert.Equal(t, "recorded-commit", taskstate.FinalizationFacts(after).Commit)
-	assert.Equal(t, item, got)
+	assert.Equal(t, taskstate.ReviewStatusWaitingForManual, after.Reviews[0].Status)
 	assert.Equal(t, []string{"check"}, fixture.checkCalls)
-	assert.Empty(t, fixture.agent.launches)
-	assert.Empty(t, fixture.candidate.commits)
+	assert.Equal(t, item, got)
+	assert.Len(t, fixture.candidate.commits, 1, "review uses captured output without making another implementation commit")
 	assert.Empty(t, fixture.candidate.pushes)
 }

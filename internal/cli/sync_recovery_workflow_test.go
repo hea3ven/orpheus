@@ -13,6 +13,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,7 +34,7 @@ func TestIntegrationWorkflowTaskSyncUpdatesBranchAndRetriesPushWithoutAnotherMer
 	f.publication.pushError = nil
 	stdout, stderr = f.run("", "task", "sync", "op-sync")
 	assert.Empty(t, stderr)
-	assert.Contains(t, stdout, "origin was behind")
+	assert.Contains(t, stdout, "already includes main")
 	assert.Equal(t, head, f.publication.remote["orpheus/op-sync"])
 	currentOut, currentErr := f.run("", "task", "sync", "op-sync")
 	assert.Empty(t, currentErr)
@@ -119,24 +120,35 @@ func TestIntegrationWorkflowTaskSyncConflictFailureRollsBackAndRetries(t *testin
 			state, item := f.loadFinalTask("op-sync")
 			assert.Nil(t, state.ActiveSyncConflict)
 			assert.Equal(t, taskmodel.StatusInProgress, item.Status)
-			require.GreaterOrEqual(t, len(state.Events), 2)
-			assert.Equal(t, taskstate.EventSyncConflictStarted, state.Events[0].Type)
-			assert.Equal(t, taskstate.EventSyncConflictFailed, state.Events[1].Type)
+			events := resolverEvents(state.Events)
+			require.Len(t, events, 2)
+			assert.Equal(t, taskstate.EventSyncConflictStarted, events[0].Type)
+			finished := events[1]
+			require.NotNil(t, finished.Execution)
+			native := state.Work.Workflows[0].Phases[4].(*work.ExternalReviewPhase).BranchSyncs[0]
+			require.NotNil(t, native.Rollback)
 			if failure == "unresolved files" {
-				assert.Contains(t, state.Events[1].Error, "unresolved conflict files")
+				assert.Contains(t, native.Rollback.Reason, "unresolved conflict files")
 			} else {
-				assert.Contains(t, state.Events[1].Error, cause.Error())
+				assert.Contains(t, native.Rollback.Reason, cause.Error())
 			}
 			assert.Equal(t, failure != "start failure", captured)
-			require.NotNil(t, state.Events[1].Execution)
-			assert.Equal(t, taskstate.RunStatusFailed, state.Events[1].Execution.Status)
-			assert.Nil(t, state.Events[1].Execution.Usage)
-			assert.Equal(t, taskstate.UsageCaptureUnknown, state.Events[1].Execution.UsageCapture.Status)
-			if failure == "start failure" {
-				assert.Equal(t, "agent process failed before usage capture", state.Events[1].Execution.UsageCapture.Reason)
+			if failure == "unresolved files" || failure == "push" {
+				assert.Equal(t, taskstate.RunStatusSucceeded, finished.Execution.Status, "a successful native resolver exit does not establish successful merge/push")
+				exit := native.ConflictResolution.Execution.Process.(*work.ExitedProcess)
+				assert.Equal(t, 0, *exit.Code)
 			} else {
-				assert.Equal(t, "failed execution has no usage record", state.Events[1].Execution.UsageCapture.Reason)
+				assert.Equal(t, taskstate.RunStatusFailed, finished.Execution.Status)
 			}
+			assert.Nil(t, finished.Execution.Usage)
+			assert.Equal(t, taskstate.UsageCaptureUnknown, finished.Execution.UsageCapture.Status)
+			if failure == "start failure" {
+				assert.IsType(t, &work.StartFailedProcess{}, native.ConflictResolution.Execution.Process)
+				assert.Equal(t, "agent process failed before usage capture", finished.Execution.UsageCapture.Reason)
+			} else {
+				assert.Equal(t, "failed execution has no usage record", finished.Execution.UsageCapture.Reason)
+			}
+
 			f.publication.pushError = nil
 			f.resolvingAgent(nil)
 
@@ -148,7 +160,8 @@ func TestIntegrationWorkflowTaskSyncConflictFailureRollsBackAndRetries(t *testin
 			assert.Equal(t, f.candidate.head, f.publication.remote["orpheus/op-sync"])
 			state, _ = f.loadFinalTask("op-sync")
 			assert.Nil(t, state.ActiveSyncConflict)
-			assert.Equal(t, taskstate.EventSyncConflictFinished, state.Events[len(state.Events)-1].Type)
+			events = resolverEvents(state.Events)
+			assert.Equal(t, taskstate.EventSyncConflictFinished, events[len(events)-1].Type)
 			f.run("", "task", "sync", "op-sync")
 			assert.Len(t, f.agent.launches, 2)
 			assert.Len(t, f.candidate.pushes, 1)
@@ -174,13 +187,13 @@ func TestIntegrationWorkflowTaskSyncRecoversAmbiguousPushWithoutRepeatingRepair(
 			require.ErrorContains(t, err, "remote inspection unavailable")
 			state, _ := f.loadFinalTask("op-sync")
 			require.NotNil(t, state.ActiveSyncConflict)
-			assert.Equal(t, taskstate.SyncConflictPhasePushIntent, state.ActiveSyncConflict.Phase)
+			assert.Equal(t, taskstate.SyncConflictPhaseLocalCompleted, state.ActiveSyncConflict.Phase)
 			assert.Equal(t, f.candidate.head, state.ActiveSyncConflict.LocalHead)
 			assert.Equal(t, f.candidate.head, f.publication.remote["orpheus/op-sync"])
-			operationID := state.ActiveSyncConflict.ID
-			// Simulate a stopped supervisor; the application must inspect the durable intent.
-			_, err = f.taskStore.UpdateSyncConflictOperation("alpha", "op-sync", operationID, func(active *taskstate.SyncConflictOperation) error { active.Execution = nil; return nil })
-			require.NoError(t, err)
+			require.NotNil(t, state.ActiveSyncConflict.Execution)
+			assert.Equal(t, taskstate.RunStatusSucceeded, state.ActiveSyncConflict.Execution.Status, "native exit is retained while remote inspection is unavailable")
+			beforeRetry := state
+
 			f.syncGit.remoteError = nil
 			if moved {
 				f.publication.remote["orpheus/op-sync"] = "someone-elses-commit"
@@ -194,17 +207,21 @@ func TestIntegrationWorkflowTaskSyncRecoversAmbiguousPushWithoutRepeatingRepair(
 				require.ErrorContains(t, err, "remote task branch changed from the recorded checkpoint")
 				assert.Empty(t, stdout)
 				require.NotNil(t, state.ActiveSyncConflict)
-				assert.Equal(t, taskstate.SyncConflictPhaseUnresolved, state.ActiveSyncConflict.Phase)
+				assert.Equal(t, taskstate.SyncConflictPhaseLocalCompleted, state.ActiveSyncConflict.Phase)
 				assert.Equal(t, "someone-elses-commit", f.publication.remote["orpheus/op-sync"])
+				assert.Equal(t, beforeRetry, state, "remote uncertainty cannot rewrite a native exit or add an unresolved-status journal")
 				_, _, err = f.runError("", "task", "sync", "op-sync")
 				require.ErrorContains(t, err, "unresolved sync conflict recovery")
 			} else {
 				require.NoError(t, err)
 				assert.Contains(t, stdout, "is still open for review")
 				assert.Nil(t, state.ActiveSyncConflict)
-				require.Len(t, state.Events, 2)
-				assert.Equal(t, taskstate.EventSyncConflictFinished, state.Events[1].Type)
-				assert.Equal(t, f.candidate.head, state.Events[1].Commit)
+				events := resolverEvents(state.Events)
+				require.Len(t, events, 2)
+				assert.Equal(t, taskstate.EventSyncConflictFinished, events[1].Type)
+				first := state.Work.Workflows[0].Phases[4].(*work.ExternalReviewPhase).BranchSyncs[0]
+				require.NotNil(t, first.Push)
+				assert.Equal(t, f.candidate.head, first.Push.Head)
 			}
 			assert.Len(t, f.agent.launches, 1)
 			assert.Equal(t, 1, f.syncGit.commits)
@@ -217,10 +234,6 @@ func TestIntegrationWorkflowTaskSyncRecoversAmbiguousPushWithoutRepeatingRepair(
 func TestIntegrationWorkflowTaskSyncMergedPRRetriesFailedClosure(t *testing.T) {
 	f := newSyncFixture(t)
 	f.pr.state = pullrequest.StateMerged
-	branch, dir := f.expectedTarget("op-sync")
-	itemBefore := f.backend.tasks["op-sync"].Clone()
-	f.completion("op-sync", branch, dir, "Ready", "Published implementation", taskstate.RunStatusSucceeded)
-	f.backend.tasks["op-sync"] = itemBefore
 	f.mutations.closeError = errors.New("backend unavailable")
 	beforeState, before := f.loadFinalTask("op-sync")
 

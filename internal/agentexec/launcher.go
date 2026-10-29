@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/testguard"
 )
@@ -34,11 +35,27 @@ type LaunchOptions struct {
 	// an error stops the child before Run returns, so callers never knowingly
 	// continue an untracked attached execution.
 	OnStart func(pid int) error
+
+	// OnExit receives the observed direct-child exit after Wait has reaped it
+	// and finished copying its output, including when OnStart failed. It is not
+	// called for a start failure or an unobserved exit. It must not authorize
+	// workflow progression independently of the execution owner's other facts.
+	OnExit func(ProcessExit)
+}
+
+// ProcessExit is an observed OS result, not an aggregate launcher status. Code
+// is -1 when the child was terminated by a signal rather than an exit code.
+// At is the observation time after Wait, not a harness-provided timestamp.
+type ProcessExit struct {
+	PID  int
+	Code int
+	At   time.Time
 }
 
 // Launcher runs a resolved agent command. Implementations must call OnStart
-// once after startup and wait for process cleanup before returning. Failures
-// before startup must not call OnStart.
+// once after startup and wait for process cleanup before returning. They call
+// OnExit once when that wait establishes the direct child's result. Failures
+// before startup must not call either callback.
 type Launcher interface {
 	Run(ctx context.Context, command Command, opts LaunchOptions) error
 }
@@ -117,14 +134,22 @@ func (l AttachedLauncher) Run(ctx context.Context, command Command, opts LaunchO
 	if opts.OnStart != nil {
 		if err := opts.OnStart(process.Process.Pid); err != nil {
 			_ = process.Process.Kill()
-			_ = process.Wait()
-			return fmt.Errorf("record started agent %q: %w", command.Name, err)
+			waitErr := waitForAgent(process, opts.OnExit)
+			return errors.Join(fmt.Errorf("record started agent %q: %w", command.Name, err), waitErr)
 		}
 	}
-	if err := process.Wait(); err != nil {
+	if err := waitForAgent(process, opts.OnExit); err != nil {
 		return fmt.Errorf("run agent %q: %w", command.Name, err)
 	}
 	return nil
+}
+
+func waitForAgent(process *exec.Cmd, observe func(ProcessExit)) error {
+	err := process.Wait()
+	if process.ProcessState != nil && observe != nil {
+		observe(ProcessExit{PID: process.Process.Pid, Code: process.ProcessState.ExitCode(), At: time.Now().UTC()})
+	}
+	return err
 }
 
 func mergeEnvironment(base []string, overrides []string) []string {

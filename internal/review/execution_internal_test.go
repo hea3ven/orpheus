@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -24,13 +25,13 @@ func TestResumeExecutionDerivesInteractionBeforeRunning(t *testing.T) {
 			assert.Equal(t, paused.Attempt, request.attempt)
 			assert.Equal(t, paused.Step, request.step)
 			assert.NoError(t, request.ValidateResume(pipeline, paused))
-			assert.ErrorIs(t, request.ValidateRunning(pipeline, paused), ErrInvalidExecution)
+			assert.NoError(t, request.ValidateRunning(pipeline, paused), "waiting remains a derived boundary, not a flag to rewrite")
 			running := paused
 			running.Status = taskstate.ReviewStatusRunning
-			assert.NoError(t, request.ValidateRunning(pipeline, running))
+			assert.ErrorIs(t, request.ValidateRunning(pipeline, running), ErrInvalidExecution)
 			assert.ErrorIs(t, request.ValidateResume(pipeline, running), ErrInvalidExecution)
 			_, err = ResumeExecution(pipeline, running)
-			assert.ErrorIs(t, err, ErrInvalidExecution, "intent cannot be recovered after the transition")
+			assert.ErrorIs(t, err, ErrInvalidExecution, "a non-waiting view cannot claim a pending interaction")
 		})
 	}
 }
@@ -41,6 +42,8 @@ func TestResumeExecutionRejectsInvalidWaitingState(t *testing.T) {
 		change func(*Pipeline, *taskstate.ReviewAttempt)
 	}{
 		{"missing attempt", func(_ *Pipeline, a *taskstate.ReviewAttempt) { a.Attempt = 0 }},
+		{"missing owner", func(_ *Pipeline, a *taskstate.ReviewAttempt) { a.Address.RepositoryID = "" }},
+		{"no actual pending step", func(_ *Pipeline, a *taskstate.ReviewAttempt) { a.Steps = nil }},
 		{"missing pipeline", func(p *Pipeline, _ *taskstate.ReviewAttempt) { p.Name = "" }},
 		{"different pipeline", func(_ *Pipeline, a *taskstate.ReviewAttempt) { a.Pipeline = "other" }},
 		{"empty pipeline", func(p *Pipeline, _ *taskstate.ReviewAttempt) { p.Steps = nil }},
@@ -80,8 +83,8 @@ func TestRunPipelineRejectsInvalidExecutionBeforeEffectsOrMutations(t *testing.T
 		{"wrong attempt", func(o *PipelineRunOptions, _ *executionStore) { o.Attempt.Attempt++ }},
 		{"wrong step", func(o *PipelineRunOptions, _ *executionStore) { o.Attempt.Step = "first" }},
 		{"wrong pipeline", func(o *PipelineRunOptions, _ *executionStore) { o.Pipeline.Name = "other" }},
-		{"waiting snapshot", func(o *PipelineRunOptions, _ *executionStore) {
-			o.Attempt.Status = taskstate.ReviewStatusWaitingForAutomatedDecision
+		{"different waiting interaction", func(o *PipelineRunOptions, _ *executionStore) {
+			o.Attempt.Status = taskstate.ReviewStatusWaitingForManual
 		}},
 		{"no latest attempt", func(_ *PipelineRunOptions, s *executionStore) { s.state.Reviews = nil }},
 		{"stale attempt", func(_ *PipelineRunOptions, s *executionStore) { s.state.Reviews[0].Attempt++ }},
@@ -98,11 +101,10 @@ func TestRunPipelineRejectsInvalidExecutionBeforeEffectsOrMutations(t *testing.T
 			request, err := ResumeExecution(pipeline, paused)
 			require.NoError(t, err)
 			running := paused
-			running.Status = taskstate.ReviewStatusRunning
 			store := &executionStore{state: taskstate.TaskState{Reviews: []taskstate.ReviewAttempt{running}}}
 			opts := PipelineRunOptions{
 				Execution: request, Pipeline: pipeline, Attempt: running, Store: store,
-				Effects: Effects{CaptureCandidate: func(context.Context, string, *slog.Logger, ...slog.Attr) (CandidateCheck, error) {
+				Effects: Effects{CaptureCandidate: func(context.Context, string, CommittedCandidate, *slog.Logger, ...slog.Attr) (CandidateCheck, error) {
 					t.Fatal("invalid execution captured the candidate")
 					return nil, nil
 				}},
@@ -123,7 +125,7 @@ func TestRunPipelineRejectsInvalidExecutionBeforeEffectsOrMutations(t *testing.T
 
 func TestFreshExecutionRequiresNewAttempt(t *testing.T) {
 	pipeline := Pipeline{Name: "standard", Steps: []Step{{Name: "first", Kind: KindCheck}}}
-	attempt := taskstate.ReviewAttempt{Attempt: 2, Pipeline: pipeline.Name, Step: "first", Status: taskstate.ReviewStatusRunning}
+	attempt := taskstate.ReviewAttempt{Address: work.AttemptRef{RepositoryID: "alpha", TaskID: "task", Phase: 2}, Attempt: 2, Pipeline: pipeline.Name, Step: "first", Status: taskstate.ReviewStatusRunning}
 	request := FreshExecution()
 
 	assert.NoError(t, request.ValidateRunning(pipeline, attempt))
@@ -141,12 +143,23 @@ func TestResumeExecutionRejectsChangedWaitingTarget(t *testing.T) {
 	pipeline, paused := pausedExecution(KindManual)
 	request, err := ResumeExecution(pipeline, paused)
 	require.NoError(t, err)
-
+	independent := paused
+	independent.Steps = append([]taskstate.ReviewStep(nil), paused.Steps...)
+	copyOf := *paused.Steps[len(paused.Steps)-1].Address.Step
+	independent.Steps[len(independent.Steps)-1].Address.Step = &copyOf
+	require.NoError(t, request.ValidateResume(pipeline, independent), "independently decoded equal addresses have different pointer allocations")
 	for _, tt := range []struct {
 		name   string
 		change func(*taskstate.ReviewAttempt)
 	}{
 		{"attempt", func(a *taskstate.ReviewAttempt) { a.Attempt++ }},
+		{"workflow", func(a *taskstate.ReviewAttempt) { a.Address.Workflow++ }},
+		{"same name new owned step", func(a *taskstate.ReviewAttempt) {
+			next := a.Steps[len(a.Steps)-1]
+			index := len(a.Steps)
+			next.Address.Step = &index
+			a.Steps = append(append([]taskstate.ReviewStep(nil), a.Steps...), next)
+		}},
 		{"step", func(a *taskstate.ReviewAttempt) { a.Step = "first" }},
 		{"pipeline", func(a *taskstate.ReviewAttempt) { a.Pipeline = "other" }},
 		{"waiting interaction", func(a *taskstate.ReviewAttempt) { a.Status = taskstate.ReviewStatusWaitingForAutomatedDecision }},
@@ -164,11 +177,15 @@ func TestResumeExecutionRejectsChangedWaitingTarget(t *testing.T) {
 
 func pausedExecution(kind string) (Pipeline, taskstate.ReviewAttempt) {
 	pipeline := Pipeline{Name: "standard", Steps: []Step{{Name: "first", Kind: KindCheck}, {Name: "pending", Kind: kind}}}
-	attempt := taskstate.ReviewAttempt{Attempt: 2, Pipeline: pipeline.Name, Step: "pending", Status: taskstate.ReviewStatusWaitingForManual}
+	attempt := taskstate.ReviewAttempt{Address: work.AttemptRef{RepositoryID: "alpha", TaskID: "task", Phase: 2}, Attempt: 2, Pipeline: pipeline.Name, Step: "pending", Status: taskstate.ReviewStatusWaitingForManual}
 	if kind != KindManual {
 		attempt.Status = taskstate.ReviewStatusWaitingForAutomatedDecision
 		attempt.Findings = []taskstate.ReviewFinding{{Type: taskstate.FindingTypeBlocking, Step: "pending", Title: "existing finding"}}
 	}
+	first, pending := 0, 1
+	firstRef, pendingRef := attempt.Address, attempt.Address
+	firstRef.Step, pendingRef.Step = &first, &pending
+	attempt.Steps = []taskstate.ReviewStep{{Address: firstRef, Name: "first", Kind: KindCheck}, {Address: pendingRef, Name: "pending", Kind: kind}}
 	return pipeline, attempt
 }
 

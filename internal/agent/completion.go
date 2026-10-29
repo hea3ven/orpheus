@@ -13,6 +13,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/work"
 )
 
 const (
@@ -40,16 +41,12 @@ type CompleteResult struct {
 
 // CompletionRunStore persists completion facts on a run attempt.
 type CompletionRunStore interface {
-	CompleteRun(repoID, taskID string, attempt int, opts taskstate.CompleteRunOptions) (taskstate.RunAttempt, error)
-	RecordRepeatedCompletion(repoID, taskID string, attempt int, opts taskstate.RepeatedCompletionOptions) (taskstate.Event, error)
+	CompleteImplementation(work.AttemptRef, taskstate.CompleteRunOptions) (taskstate.RunAttempt, error)
 }
 
 // GitStateReader provides the Git checks and commit operations needed before completion.
 type GitStateReader interface {
 	CurrentBranch(ctx context.Context, dir string) (string, error)
-	HasWorkingTreeChanges(ctx context.Context, dir string) (bool, error)
-	StageAll(ctx context.Context, dir string) error
-	Commit(ctx context.Context, dir string, message string) (string, error)
 }
 
 // LocalGitState reads Git state from the local checkout.
@@ -196,63 +193,7 @@ func (s CompletionService) completeLocked(
 		slog.Int("attempt", activeContext.Run.Attempt),
 		slog.String("target_kind", string(activeContext.Target.Kind)),
 	)
-	if activeContext.Target.Kind != ExecutionTargetMain {
-		return s.completeWorktree(ctx, activeContext, summary, description, detailedDescription, technicalExplanation, gitState)
-	}
-	return s.completeMain(ctx, activeContext, summary, description, detailedDescription, technicalExplanation, gitState)
-}
-
-func (s CompletionService) completeMain(
-	ctx context.Context,
-	activeContext ActiveContext,
-	summary string,
-	description string,
-	detailedDescription string,
-	technicalExplanation string,
-	gitState GitStateReader,
-) (CompleteResult, error) {
-	if existing, ok, err := s.existingCompletionResult(activeContext, summary, description, detailedDescription, technicalExplanation); ok || err != nil {
-		return existing, err
-	}
-
-	currentBranch, err := gitState.CurrentBranch(ctx, activeContext.Repository.Root)
-	if err != nil {
-		return CompleteResult{}, fmt.Errorf("inspect current Git branch: %w", err)
-	}
-	if currentBranch != activeContext.Repository.DefaultBranch {
-		return CompleteResult{}, fmt.Errorf(
-			"current Git branch is %q, expected registered default branch %q",
-			currentBranch,
-			activeContext.Repository.DefaultBranch,
-		)
-	}
-
-	hasChanges, err := gitState.HasWorkingTreeChanges(ctx, activeContext.Repository.Root)
-	if err != nil {
-		return CompleteResult{}, err
-	}
-	if !hasChanges {
-		return CompleteResult{}, errors.New("working tree has no changes; make implementation changes before running agent done")
-	}
-
-	span := s.startCompletionPersistence(ctx, activeContext)
-	run, err := s.RunStore.CompleteRun(
-		activeContext.Repository.ID,
-		activeContext.Task.ID,
-		activeContext.Run.Attempt,
-		taskstate.CompleteRunOptions{
-			Summary:              summary,
-			Description:          description,
-			DetailedDescription:  detailedDescription,
-			TechnicalExplanation: technicalExplanation,
-		},
-	)
-	if err != nil {
-		span.FinishError(ctx, err)
-		return CompleteResult{}, fmt.Errorf("record completion: %w", err)
-	}
-	span.Finish(ctx, logging.StatusSuccess)
-	return CompleteResult{Context: activeContext, Run: run}, nil
+	return s.completeWorktree(ctx, activeContext, summary, description, detailedDescription, technicalExplanation, gitState)
 }
 
 func (s CompletionService) completeWorktree(
@@ -281,10 +222,8 @@ func (s CompletionService) completeWorktree(
 	}
 
 	span := s.startCompletionPersistence(ctx, activeContext)
-	run, err := s.RunStore.CompleteRun(
-		activeContext.Repository.ID,
-		activeContext.Task.ID,
-		activeContext.Run.Attempt,
+	run, err := s.RunStore.CompleteImplementation(
+		activeContext.Run.Address,
 		taskstate.CompleteRunOptions{
 			Summary:              summary,
 			Description:          description,
@@ -321,30 +260,11 @@ func (s CompletionService) existingCompletionResult(
 		return CompleteResult{}, false, nil
 	}
 
-	diagnostic, err := s.RunStore.RecordRepeatedCompletion(
-		activeContext.Repository.ID,
-		activeContext.Task.ID,
-		activeContext.Run.Attempt,
-		taskstate.RepeatedCompletionOptions{
-			Summary:              summary,
-			Description:          description,
-			DetailedDescription:  detailedDescription,
-			TechnicalExplanation: technicalExplanation,
-		},
-	)
+	run, err := s.RunStore.CompleteImplementation(activeContext.Run.Address, taskstate.CompleteRunOptions{
+		Summary: summary, Description: description, DetailedDescription: detailedDescription, TechnicalExplanation: technicalExplanation,
+	})
 	if err != nil {
-		return CompleteResult{}, true, fmt.Errorf("record repeated completion diagnostic: %w", err)
+		return CompleteResult{}, true, fmt.Errorf("validate repeated completion: %w", err)
 	}
-
-	return CompleteResult{
-		Context: activeContext,
-		Run: taskstate.RunAttempt{
-			Attempt:    activeContext.Run.Attempt,
-			Status:     taskstate.RunStatusRunning,
-			Execution:  activeContext.Run.Execution,
-			Completion: activeContext.Run.Completion,
-		},
-		Repeated:           true,
-		RepeatedDiagnostic: &diagnostic,
-	}, true, nil
+	return CompleteResult{Context: activeContext, Run: run, Repeated: true}, true, nil
 }

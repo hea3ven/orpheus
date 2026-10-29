@@ -32,7 +32,7 @@ type CompletionClassification struct {
 }
 
 func completedHandoffStatus(status taskstate.RunStatus) bool {
-	return status == taskstate.RunStatusSucceeded || status == taskstate.RunStatusInterrupted
+	return status == taskstate.RunStatusSucceeded
 }
 
 // ClassifyCompletionTarget classifies a successful Orpheus completion into its review lifecycle.

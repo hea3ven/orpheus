@@ -259,9 +259,7 @@ func loadLocalTaskState(
 	if latestReview, hasReview := taskstate.LatestReview(state); hasReview {
 		localState.LatestReview = &latestReview
 	}
-	if latestFinalizationFailure, hasFinalizationFailure := taskstate.LatestFinalizationFailure(state); hasFinalizationFailure {
-		localState.LatestFinalizationFailure = &latestFinalizationFailure
-	}
+
 	recordedBranch := ""
 	if localState.GitFacts != nil {
 		recordedBranch = localState.GitFacts.Branch
@@ -962,8 +960,7 @@ func compactReviewDetail(detail status.Detail) (string, bool) {
 		return "reviewer interrupted", true
 	case status.DetailReviewPassed:
 		return "passed", true
-	case status.DetailReviewPublishFailed:
-		return "publish failed", true
+
 	case status.DetailReviewUnknownState:
 		return "review " + valueOrUnknown(detail.State), true
 	default:

@@ -253,7 +253,33 @@ func readYAML(storage backend, kind, rel, path string, out any) error {
 		return fmt.Errorf("parse %s YAML %q (%s): %w", kind, rel, path, err)
 	}
 
+	var trailing yaml.Node
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err != nil {
+			return fmt.Errorf("parse trailing %s YAML %q (%s): %w", kind, rel, path, err)
+		}
+		return fmt.Errorf("parse %s YAML %q (%s): multiple documents are not supported", kind, rel, path)
+	}
 	return nil
+}
+
+// WithDataLock holds an exclusive, fail-fast lock at a caller-owned data path.
+// It is separate from the global application mutation lock. Callers must not
+// reuse a document path as a lock path or recursively acquire the same lock.
+func (p Paths) WithDataLock(rel string, apply func() error) (err error) {
+	if apply == nil {
+		return errors.New("data lock requires an operation")
+	}
+	path, err := p.DataPath(rel)
+	if err != nil {
+		return err
+	}
+	release, err := p.backend.acquireLock(path, directoryMode, fileMode)
+	if err != nil {
+		return fmt.Errorf("acquire data lock %q: %w", rel, err)
+	}
+	defer func() { err = errors.Join(err, release()) }()
+	return apply()
 }
 
 func writeYAML(storage backend, kind, rel, path string, value any) error {

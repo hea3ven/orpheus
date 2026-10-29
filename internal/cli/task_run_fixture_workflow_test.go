@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	workmodel "github.com/hea3ven/orpheus/internal/work"
 	"log/slog"
 	"path/filepath"
 	"testing"
@@ -59,6 +60,7 @@ func newTaskWorkflowFixture(t *testing.T, tasks ...taskmodel.Task) *taskWorkflow
 	fixture.agent = launcher
 	fixture.options.Dependencies.TaskBackendFactory = func(taskmodel.RepositorySource) (taskmodel.ReadBackend, error) { return backend, nil }
 	fixture.options.Dependencies.DispatchGit = git
+	fixture.options.Dependencies.OutputGit = git
 	fixture.options.Dependencies.AgentGit = git
 	fixture.options.Dependencies.ReviewCandidateGit = git
 	fixture.options.Dependencies.AgentLauncher = launcher
@@ -108,7 +110,7 @@ func (f *taskWorkflowFixture) loadFinalTaskIDs() []string {
 
 func (f *taskWorkflowFixture) withRealReviewPipeline() {
 	f.t.Helper()
-	f.options.Dependencies.ReviewEffects.CaptureCandidate = func(context.Context, string, *slog.Logger, ...slog.Attr) (review.CandidateCheck, error) {
+	f.options.Dependencies.ReviewEffects.CaptureCandidate = func(context.Context, string, review.CommittedCandidate, *slog.Logger, ...slog.Attr) (review.CandidateCheck, error) {
 		return func() error { return nil }, nil
 	}
 	f.options.Dependencies.ReviewStatus = func(context.Context, string) (string, error) {
@@ -161,12 +163,15 @@ func (f *taskWorkflowFixture) seedRunningAttempt(taskID string, supervisorPID, c
 		DefaultBranch: "main", TaskID: taskID, Branch: branch, Paths: f.paths,
 	})
 	require.NoError(f.t, err, "seed worktree")
-	run, err := f.taskStore.StartRun("alpha", taskID, taskstate.StartRunOptions{
+	_, err = f.git.PrepareBaseline(context.Background(), worktree, branch, "refs/orpheus/fixture-baseline", nil)
+	require.NoError(f.t, err)
+
+	run, err := f.taskStore.StartRun("alpha", taskID, taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: branch, CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: setup.StartingCommit, Tree: "initial-tree"}},
 		Agent: "recorder", Branch: branch, Worktree: worktree, WorkDirectory: worktree, SupervisorPID: supervisorPID,
 		BaselineCommit: setup.StartingCommit,
 	})
 	require.NoError(f.t, err, "seed running attempt")
-	_, err = f.taskStore.RecordRunChildPID("alpha", taskID, run.Attempt, childPID)
+	_, err = seedFixtureChildPID(f.taskStore, "alpha", taskID, run.Attempt, childPID)
 	require.NoError(f.t, err, "seed child PID")
 }
 

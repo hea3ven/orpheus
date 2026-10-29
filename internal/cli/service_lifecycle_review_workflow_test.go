@@ -7,12 +7,16 @@ import (
 	"path/filepath"
 	"testing"
 
+	"context"
 	"github.com/hea3ven/orpheus/internal/agent"
-	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
+	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"time"
 )
 
 func TestIntegrationWorkflowTaskReviewFreshBlockerDispositionsStartFreshCLIPipeline(t *testing.T) {
@@ -24,15 +28,12 @@ func TestIntegrationWorkflowTaskReviewFreshBlockerDispositionsStartFreshCLIPipel
 	fixture.pipelines("standard", map[string][]map[string]any{
 		"standard": {{"kind": "check", "name": "unit", "command": check}},
 	})
-	seedReviewWithFindings(t, paths, "op-main", "standard", "lint", taskstate.ReviewStatusBlocked, []taskstate.ReviewFinding{
-		{Type: taskstate.FindingTypeBlocking, Step: "lint", Title: "Lint failure", Description: "Fix the lint failure."},
-		{Type: taskstate.FindingTypeBlocking, Step: "lint", Title: "Second blocker", Description: "Waive with an explicit reason."},
-	})
+	seedReviewBeforeCapturedContinuation(t, fixture)
 
 	stdout, stderr := fixture.run("a\nVerified direct repair.\nw\nAccepted compatibility risk.\n", "task", "run", "op-main")
 
 	is.Contains(stdout, "fresh pipeline")
-	is.Contains(stdout, "Published op-main")
+	is.Contains(stdout, "Review passed for op-main")
 	is.Contains(stderr, "Open blocking findings from the latest review")
 	is.Contains(stderr, "Manual address reason")
 	is.Contains(stderr, "Waiver reason")
@@ -48,41 +49,7 @@ func TestIntegrationWorkflowTaskReviewFreshBlockerDispositionsStartFreshCLIPipel
 	is.Equal(2, latest.Attempt)
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
 	is.Empty(latest.Findings)
-	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
-}
-
-func TestIntegrationWorkflowTaskReviewKeepsFailedFreshBlockerEligibleForFollowUp(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newReviewWorkflowFixture(t, "op-main", "Review failed blocker", "Keep a failed blocker.")
-	paths := fixture.paths
-	fixture.pipelines("standard", map[string][]map[string]any{
-		"standard": {{"kind": "check", "name": "unit", "command": "must-not-run"}},
-	})
-	prior := seedReviewWithFindings(t, paths, "op-main", "standard", "unit", taskstate.ReviewStatusFailed, []taskstate.ReviewFinding{
-		{Type: taskstate.FindingTypeBlocking, Step: "unit", Title: "Unit failure", Description: "Fix the failing test."},
-	})
-	priorFinishedAt := *prior.FinishedAt
-
-	stdout, stderr := fixture.run("k\n", "task", "run", "op-main")
-
-	is.Empty(stdout)
-	is.Contains(stderr, "Open blocking findings from the latest review")
-	is.Contains(stderr, "Decision for finding 1")
-	is.Empty(fixture.agent.launches)
-	is.Empty(fixture.checkCalls)
-	var state taskstate.TaskState
-	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
-	must.Len(state.Reviews, 1)
-	latest, ok := taskstate.LatestReview(state)
-	must.True(ok)
-	is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
-	must.NotNil(latest.FinishedAt)
-	is.True(latest.FinishedAt.Equal(priorFinishedAt))
-	indexes, eligible := taskstate.UntargetedBlockingFindingIndexesForFollowUp(latest)
-	is.True(latest.AutomatedBlockerDecisionKept)
-	is.True(eligible)
-	is.Equal([]int{0}, indexes)
+	assertUnconsentedPublication(t, state)
 }
 
 func TestIntegrationWorkflowTaskReviewAutonomousFollowUpResumesCompatiblePiSession(t *testing.T) {
@@ -131,7 +98,7 @@ func TestIntegrationWorkflowTaskReviewAutonomousFollowUpResumesCompatiblePiSessi
 	is.Contains(runStderr, "Review for op-resume-session is waiting for manual step \"approval\"")
 	reviewStdout, reviewStderr := fixture.run("a\nk\na\n", "task", "run", "op-resume-session")
 
-	is.Contains(reviewStdout, "Published op-resume-session")
+	is.Contains(reviewStdout, "Review passed for op-resume-session")
 	is.Contains(reviewStderr, "Autonomous review follow-up for op-resume-session targets review attempt 1 finding(s) 1.")
 	must.Len(fixture.agent.launches, 2)
 	must.Len(fixture.agent.contexts, 2)
@@ -170,26 +137,22 @@ func TestIntegrationWorkflowTaskReviewAutonomousFollowUpResumesCompatiblePiSessi
 	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
 }
 
-func seedReviewWithFindings(
-	t *testing.T,
-	paths state.Paths,
-	taskID string,
-	pipeline string,
-	step string,
-	status taskstate.ReviewStatus,
-	findings []taskstate.ReviewFinding,
-) taskstate.ReviewAttempt {
+func seedReviewBeforeCapturedContinuation(t *testing.T, f *reviewWorkflowFixture) {
 	t.Helper()
-	store := taskstate.NewStore(paths)
-	attempt, err := store.StartReviewWithOptions("alpha", taskID, taskstate.StartReviewOptions{Pipeline: pipeline, Step: step})
-	require.NoError(t, err, "start review")
-	_, err = store.RecordReviewStep("alpha", taskID, attempt.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindCheck, Name: step})
-	require.NoError(t, err, "record review step")
-	for _, finding := range findings {
-		_, err = store.RecordReviewFinding("alpha", taskID, attempt.Attempt, finding)
-		require.NoError(t, err, "record review finding")
-	}
-	finished, err := store.FinishReview("alpha", taskID, attempt.Attempt, status)
-	require.NoError(t, err, "finish review")
-	return finished
+	capture := workflow.ImplementationService{Paths: f.paths, Store: workstate.NewStore(f.paths), Git: f.candidate}
+	view, _ := f.loadFinalTask("op-main")
+	_, err := capture.Capture(context.Background(), view.Runs[0].Address)
+	require.NoError(t, err)
+	prior, err := f.taskStore.StartReviewWithOptions("alpha", "op-main", taskstate.StartReviewOptions{Pipeline: "prior", Step: "lint", Contract: work.ReviewContract{PipelineKey: "prior", Slots: []work.ReviewSlot{{Kind: work.ReviewCheck, ConfigKey: "lint"}}}, Scope: work.ReviewScope{Requirements: "Prior task requirements", Output: work.OutputRef{Phase: 1}, Destination: &work.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}})
+	require.NoError(t, err)
+	_, err = f.taskStore.RecordReviewStep("alpha", "op-main", prior.Attempt, taskstate.RecordReviewStepOptions{Address: prior.Address, Kind: taskstate.ReviewStepKindCheck, Name: "lint", ExitCode: fixtureExitCode(7), ObservedAt: time.Now().UTC(), Findings: []taskstate.ReviewFinding{{Type: taskstate.FindingTypeBlocking, Step: "lint", Title: "Lint failure", Description: "Fix the lint failure."}, {Type: taskstate.FindingTypeBlocking, Step: "lint", Title: "Second blocker", Description: "Waive with an explicit reason."}}})
+	require.NoError(t, err)
+	continuation, err := f.taskStore.StartRun("alpha", "op-main", taskstate.StartRunOptions{Agent: "fixture-manual-continuation"})
+	require.NoError(t, err)
+	_, err = f.taskStore.CompleteImplementation(continuation.Address, taskstate.CompleteRunOptions{Summary: "fix: direct operator repair", Description: "An independently completed continuation before fresh review.", DetailedDescription: "Original feature content remains authoritative.", TechnicalExplanation: "Explicit synthetic continuation history."})
+	require.NoError(t, err)
+	_, err = f.taskStore.FinishObservedRun(continuation.Address, &work.ExitedProcess{Code: fixtureExitCode(0), At: time.Now().UTC()}, 0)
+	require.NoError(t, err)
+	_, err = capture.Capture(context.Background(), continuation.Address)
+	require.NoError(t, err)
 }

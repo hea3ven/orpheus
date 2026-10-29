@@ -57,8 +57,8 @@ func TestIntegrationWorkflowConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 			stdout, stderr = f.run("", "task", "done", item.ID)
 
 			assert.Empty(t, stderr)
-			assert.Contains(t, stdout, "created PR "+f.pr.url)
-			assert.Equal(t, []string{"[TREX-1234] Replaced the config for abc\n\nReplaced the config used for publication validation."}, f.candidate.commits)
+			assert.Contains(t, stdout, "observed PR "+f.pr.url)
+			assert.Equal(t, []string{"Replaced the config for abc\n\nReplaced the config used for publication validation."}, f.candidate.commits)
 			require.Len(t, f.pr.created, 1)
 			assert.Equal(t, "[TREX-1234] Replaced the config for abc", f.pr.created[0].Title)
 			assert.Contains(t, f.pr.created[0].Body, completion.DetailedDescription)
@@ -66,11 +66,11 @@ func TestIntegrationWorkflowConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 			state, _ = f.loadFinalTask(item.ID)
 			var publicationEvents []taskstate.EventType
 			for _, event := range state.Events {
-				if event.Type == taskstate.EventChangesPushed || event.Type == taskstate.EventPRCreated {
+				if event.Type == taskstate.EventChangesPushed || event.Type == taskstate.EventPRObserved {
 					publicationEvents = append(publicationEvents, event.Type)
 				}
 			}
-			assert.Equal(t, []taskstate.EventType{taskstate.EventChangesPushed, taskstate.EventPRCreated}, publicationEvents)
+			assert.Equal(t, []taskstate.EventType{taskstate.EventChangesPushed, taskstate.EventPRObserved}, publicationEvents)
 		})
 	}
 }
@@ -104,9 +104,11 @@ func TestIntegrationWorkflowMissingPublicationExternalReferenceBlocksDispatchAnd
 
 	stdout, stderr, err = f.runError("", "task", "done", item.ID)
 
-	require.ErrorContains(t, err, "publication title template requires a task external reference")
-	assert.Empty(t, stdout)
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "Published "+item.ID)
 	assert.Empty(t, stderr)
-	assert.True(t, f.git.hasCandidateChanges)
-	f.assertUnpublished(item.ID)
+	assert.False(t, f.git.hasCandidateChanges)
+	f.assertPublishedPR(item.ID)
+	require.Len(t, f.pr.created, 1)
+	assert.Equal(t, "feat: add search filters", f.pr.created[0].Title, "later config edits cannot rewrite an authorized plan")
 }

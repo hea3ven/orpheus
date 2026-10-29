@@ -86,7 +86,6 @@ const (
 	DetailReviewFailed                   DetailKind = "review_failed"
 	DetailReviewInterrupted              DetailKind = "review_interrupted"
 	DetailReviewPassed                   DetailKind = "review_passed"
-	DetailReviewPublishFailed            DetailKind = "review_publish_failed"
 	DetailReviewUnknownState             DetailKind = "review_unknown_state"
 	DetailNoRun                          DetailKind = "no_run"
 	DetailRunRunning                     DetailKind = "run_running"
@@ -147,14 +146,13 @@ type RunStateIndex map[string]taskstate.RunAttempt
 
 // LocalTaskState contains local Orpheus facts used by status projection.
 type LocalTaskState struct {
-	LatestRun                 *taskstate.RunAttempt
-	Runs                      []taskstate.RunAttempt
-	GitFacts                  *taskstate.GitFacts
-	LatestReview              *taskstate.ReviewAttempt
-	LatestFinalizationFailure *taskstate.Event
-	Finalization              taskstate.Finalization
-	ExpectedTargets           *tasktarget.ExpectedTargets
-	ActiveSyncConflict        *taskstate.SyncConflictOperation
+	LatestRun          *taskstate.RunAttempt
+	Runs               []taskstate.RunAttempt
+	GitFacts           *taskstate.GitFacts
+	LatestReview       *taskstate.ReviewAttempt
+	Finalization       taskstate.Finalization
+	ExpectedTargets    *tasktarget.ExpectedTargets
+	ActiveSyncConflict *taskstate.SyncConflictOperation
 }
 
 // LocalTaskStateIndex contains local Orpheus facts by repository/task key.
@@ -506,7 +504,7 @@ func classifyExpectedReviewReady(
 	}
 	if _, ok := workflow.ClassifyExpectedPRReviewReady(*expectedTargets, taskItem, *taskTarget, latestRun); ok {
 		if localState != nil {
-			if result, ok := classifyLatestReview(localState.Runs, localState.LatestReview, localState.LatestFinalizationFailure); ok {
+			if result, ok := classifyLatestReview(localState.Runs, localState.LatestReview); ok {
 				return result, true
 			}
 		}
@@ -516,7 +514,7 @@ func classifyExpectedReviewReady(
 		return policyResult{}, false
 	}
 	if localState != nil {
-		if result, ok := classifyLatestReview(localState.Runs, localState.LatestReview, localState.LatestFinalizationFailure); ok {
+		if result, ok := classifyLatestReview(localState.Runs, localState.LatestReview); ok {
 			return result, true
 		}
 	}
@@ -533,7 +531,6 @@ func classifyExpectedReviewReady(
 func classifyLatestReview(
 	runs []taskstate.RunAttempt,
 	latestReview *taskstate.ReviewAttempt,
-	latestFinalizationFailure *taskstate.Event,
 ) (policyResult, bool) {
 	if latestReview == nil {
 		return policyResult{}, false
@@ -553,7 +550,7 @@ func classifyLatestReview(
 	case taskstate.ReviewStatusFailed:
 		return classifyFailedReview(*latestReview), true
 	case taskstate.ReviewStatusPassed:
-		return classifyPassedReview(latestFinalizationFailure), true
+		return classifyPassedReview(), true
 	default:
 		return classifyUnknownReview(*latestReview), true
 	}
@@ -615,14 +612,7 @@ func classifyFailedReview(review taskstate.ReviewAttempt) policyResult {
 	)
 }
 
-func classifyPassedReview(latestFinalizationFailure *taskstate.Event) policyResult {
-	if latestFinalizationFailure != nil {
-		return newPolicyResult(
-			readinessAttention,
-			"review passed; publication failed; fix publication issue, then run task run",
-			Detail{Kind: DetailReviewPublishFailed},
-		)
-	}
+func classifyPassedReview() policyResult {
 	return newPolicyResult(
 		readinessReview,
 		"review passed; run task run",
@@ -701,9 +691,6 @@ func classifyInProgress(latestRun *taskstate.RunAttempt) policyResult {
 	case taskstate.RunStatusFailed:
 		return newPolicyResult(readinessAttention, runAttemptDetail(*latestRun), runDetail(*latestRun))
 	case taskstate.RunStatusInterrupted:
-		if latestRun.Completion != nil {
-			return newPolicyResult(readinessReview, "implementation handoff interrupted; run task run to continue review", runDetail(*latestRun))
-		}
 		return newPolicyResult(readinessIdle, "implementation interrupted; retry task run", runDetail(*latestRun))
 	case taskstate.RunStatusSucceeded:
 		return newPolicyResult(

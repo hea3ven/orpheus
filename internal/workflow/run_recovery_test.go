@@ -1,8 +1,11 @@
 package workflow_test
 
 import (
+	"github.com/hea3ven/orpheus/internal/workstate"
+
 	"context"
 	"errors"
+	workmodel "github.com/hea3ven/orpheus/internal/work"
 	"os"
 	"path/filepath"
 	"sync"
@@ -50,14 +53,20 @@ func TestRecordReviewChildPIDPreservesConcurrentFinding(t *testing.T) {
 		t.Fatalf("new paths: %v", err)
 	}
 	store := taskstate.NewStore(paths)
-	review, err := store.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{Pipeline: "ai", Step: "ai-review"})
+	snapshot := testutil.ReviewableWork("alpha", "op-review", "/fixture/work", "task-branch")
+	if _, err := workstate.NewStore(paths).Save(snapshot, 0); err != nil {
+		t.Fatal(err)
+	}
+	review, err := store.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{Pipeline: "ai", Step: "ai-review", Contract: workmodel.ReviewContract{PipelineKey: "ai", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewAgent, ConfigKey: "ai-review"}}}, Scope: workmodel.ReviewScope{Requirements: "Fixture task requirements", Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}, Output: workmodel.OutputRef{Phase: 1}}})
 	if err != nil {
 		t.Fatalf("start review: %v", err)
 	}
 	execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, Agent: "reviewer", StartedAt: review.StartedAt, SupervisorPID: 10}
-	if _, err := store.RecordReviewStep("alpha", "op-review", review.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution}); err != nil {
+	startedReview, err := store.RecordReviewStep("alpha", "op-review", review.Attempt, taskstate.RecordReviewStepOptions{Address: review.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution})
+	if err != nil {
 		t.Fatalf("record review step: %v", err)
 	}
+	actor := startedReview.Steps[len(startedReview.Steps)-1].Address
 	service := workflow.ReviewLifecycleService{Paths: paths, RunStore: store}
 	start := make(chan struct{})
 	errs := make(chan error, 2)
@@ -66,13 +75,13 @@ func TestRecordReviewChildPIDPreservesConcurrentFinding(t *testing.T) {
 	go func() {
 		defer wait.Done()
 		<-start
-		errs <- service.RecordReviewChildPID("alpha", "op-review", review.Attempt, "ai-review", 4242)
+		errs <- service.RecordReviewChildPID(actor, 4242)
 	}()
 	go func() {
 		defer wait.Done()
 		<-start
 		errs <- retryTestMutationLock(paths, "test review finding", func() error {
-			_, err := store.RecordReviewFinding("alpha", "op-review", review.Attempt, taskstate.ReviewFinding{Type: taskstate.FindingTypeAdvisory, Step: "ai-review", Title: "immediate", Description: "finding"})
+			_, err := store.RecordReviewFinding("alpha", "op-review", review.Attempt, taskstate.ReviewFinding{Actor: &actor, Type: taskstate.FindingTypeAdvisory, Step: "ai-review", Title: "immediate", Description: "finding"})
 			return err
 		})
 	}()
@@ -100,12 +109,16 @@ func TestPrepareTaskRunPreservesLiveReviewExecution(t *testing.T) {
 		t.Fatalf("new paths: %v", err)
 	}
 	store := taskstate.NewStore(paths)
-	review, err := store.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{Pipeline: "ai", Step: "ai-review"})
+	snapshot := testutil.ReviewableWork("alpha", "op-review", "/fixture/work", "task-branch")
+	if _, err := workstate.NewStore(paths).Save(snapshot, 0); err != nil {
+		t.Fatal(err)
+	}
+	review, err := store.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{Pipeline: "ai", Step: "ai-review", Contract: workmodel.ReviewContract{PipelineKey: "ai", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewAgent, ConfigKey: "ai-review"}}}, Scope: workmodel.ReviewScope{Requirements: "Fixture task requirements", Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}, Output: workmodel.OutputRef{Phase: 1}}})
 	if err != nil {
 		t.Fatalf("start review: %v", err)
 	}
 	execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, Agent: "reviewer", StartedAt: review.StartedAt, SupervisorPID: 10}
-	if _, err := store.RecordReviewStep("alpha", "op-review", review.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution}); err != nil {
+	if _, err := store.RecordReviewStep("alpha", "op-review", review.Attempt, taskstate.RecordReviewStepOptions{Address: review.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution}); err != nil {
 		t.Fatalf("record review step: %v", err)
 	}
 
@@ -131,15 +144,19 @@ func TestReconcileReviewExecutionRecordsFailedReview(t *testing.T) {
 		t.Fatalf("new paths: %v", err)
 	}
 	store := taskstate.NewStore(paths)
-	review, err := store.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{Pipeline: "ai", Step: "ai-review"})
+	snapshot := testutil.ReviewableWork("alpha", "op-review", "/fixture/work", "task-branch")
+	if _, err := workstate.NewStore(paths).Save(snapshot, 0); err != nil {
+		t.Fatal(err)
+	}
+	review, err := store.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{Pipeline: "ai", Step: "ai-review", Contract: workmodel.ReviewContract{PipelineKey: "ai", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewAgent, ConfigKey: "ai-review"}}}, Scope: workmodel.ReviewScope{Requirements: "Fixture task requirements", Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}, Output: workmodel.OutputRef{Phase: 1}}})
 	if err != nil {
 		t.Fatalf("start review: %v", err)
 	}
 	execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, Agent: "reviewer", StartedAt: review.StartedAt, SupervisorPID: 10}
-	if _, err := store.RecordReviewStep("alpha", "op-review", review.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution}); err != nil {
+	if _, err := store.RecordReviewStep("alpha", "op-review", review.Attempt, taskstate.RecordReviewStepOptions{Address: review.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution}); err != nil {
 		t.Fatalf("record review step: %v", err)
 	}
-	if _, err := store.RecordReviewStepChildPID("alpha", "op-review", review.Attempt, "ai-review", 11); err != nil {
+	if _, err := store.RecordReviewStepChildPIDAt(workmodel.AttemptRef{RepositoryID: "alpha", TaskID: "op-review", Phase: 2, Step: recoveryIndex(0)}, 11); err != nil {
 		t.Fatalf("record child PID: %v", err)
 	}
 
@@ -166,12 +183,16 @@ func TestPrepareTaskRunMarksConcurrentlyRecoveredReviewForInspectionStop(t *test
 		t.Fatalf("new paths: %v", err)
 	}
 	store := taskstate.NewStore(paths)
-	review, err := store.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{Pipeline: "ai", Step: "ai-review"})
+	snapshot := testutil.ReviewableWork("alpha", "op-review", "/fixture/work", "task-branch")
+	if _, err := workstate.NewStore(paths).Save(snapshot, 0); err != nil {
+		t.Fatal(err)
+	}
+	review, err := store.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{Pipeline: "ai", Step: "ai-review", Contract: workmodel.ReviewContract{PipelineKey: "ai", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewAgent, ConfigKey: "ai-review"}}}, Scope: workmodel.ReviewScope{Requirements: "Fixture task requirements", Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}, Output: workmodel.OutputRef{Phase: 1}}})
 	if err != nil {
 		t.Fatalf("start review: %v", err)
 	}
 	execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, Agent: "reviewer", StartedAt: review.StartedAt, SupervisorPID: 10}
-	if _, err := store.RecordReviewStep("alpha", "op-review", review.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution}); err != nil {
+	if _, err := store.RecordReviewStep("alpha", "op-review", review.Attempt, taskstate.RecordReviewStepOptions{Address: review.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution}); err != nil {
 		t.Fatalf("record review step: %v", err)
 	}
 	stale, err := store.Load("alpha", "op-review")
@@ -199,7 +220,7 @@ func TestPrepareTaskRunReconcilesAndRoutesRecoveredAttempt(t *testing.T) {
 		t.Fatalf("new paths: %v", err)
 	}
 	store := taskstate.NewStore(paths)
-	run, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Agent: "implementer", SupervisorPID: 10})
+	run, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: "/fixture/work", TaskBranch: "task-branch", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "implementer", SupervisorPID: 10})
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}
@@ -228,7 +249,7 @@ func TestReconcileImplementationRunRequiresExpectedActiveAttempt(t *testing.T) {
 		t.Fatalf("new paths: %v", err)
 	}
 	store := taskstate.NewStore(paths)
-	run, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Agent: "implementer", SupervisorPID: 10})
+	run, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: "/fixture/work", TaskBranch: "task-branch", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "implementer", SupervisorPID: 10})
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}
@@ -289,3 +310,5 @@ func (s *staleThenRecoveredStore) Load(repoID, taskID string) (taskstate.TaskSta
 	}
 	return s.Store.Load(repoID, taskID)
 }
+
+func recoveryIndex(index int) *int { return &index }

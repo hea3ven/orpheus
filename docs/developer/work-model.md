@@ -1,12 +1,13 @@
 # Workflow work model
 
-`internal/work` defines shared, I/O-free domain values and validation. Existing
-services and task-state storage have not adopted them. This package does not
-change CLI behavior or operator records. Persistence, conversion, configuration
-resolution, progression, prompting, PR discovery, and external effects stay with
-consumers. Task title, description, and tracking metadata remain in the task
-source and are read there by consumers; workflows do not retain a task-definition
-snapshot. Review-specific captured requirements remain part of the review scope.
+`internal/work` defines shared, I/O-free domain values and validation.
+`internal/workstate` is the single validated, atomic persistence boundary used by
+application orchestration. `internal/taskstate` coordinates typed mutations and
+projects transient service/operator views; its projections are never persisted.
+Task sources retain task definitions and lifecycle authority. Review-specific
+captured requirements belong to the immutable review scope. Configuration,
+progression, prompting, Git/PR discovery, and external observations stay with the
+existing services; there is no shared phase controller or persisted cursor.
 
 ## One ownership tree
 
@@ -31,8 +32,9 @@ State.Workflows[]
 ```
 
 PR work follows publication, external review, then finalization. Direct merge
-follows publication straight to finalization. Publication owns committing and
-pushing the initial PR or merging/pushing the integration destination. Finalization
+follows publication straight to finalization. Implementation owns ordinary retained
+code commits. Publication consumes already committed reviewed output, pushing the
+task branch or merging/pushing the integration destination. Finalization
 owns task-source closure and cleanup, not another publication. The destination
 can differ from the registered default branch.
 
@@ -44,10 +46,20 @@ names and aggregate statuses are not stored.
 
 Output belongs to its implementation. Findings belong to task-review steps;
 there are no external comment, thread, or finding records. Reported finding text
-and classification stay immutable. `Dispositions` retains append-only decisions;
-`Disposition()` derives the last choice. Reasoned choices require nonblank reasons
-and ordered observation times. Only the initial reported `RepairRequired` choice
-may lack a time; later reopenings must be dated.
+and classification stay immutable. Manual steps retain findings while unanswered
+and after approval, requested changes, or abort; answering does not move finding
+addresses. New findings may append only while that manual step is unanswered.
+Approval cannot accept its own unresolved required findings or override another
+failed requirement.
+
+`Dispositions` retains append-only decisions; `Disposition()` derives the last
+choice. Advisory promotion is a dated decision, not a classification rewrite.
+Reasoned choices require nonblank reasons and ordered observation times. Only the
+initial reported `RepairRequired` choice may lack a time; later reopenings must be
+dated. Separate-task findings may retain an immutable authored `FollowUpProposal`
+and a once-recorded `CreatedFollowUp` with the observed native task ID/time.
+Proposals are future intent, not snapshots of task-source definitions. Creation
+does not copy lifecycle authority away from the task source.
 
 Plan, consent, and initial delivery belong to publication. Branch context and PR
 identity follow that owner; each sync retains only its changing Git inputs and
@@ -84,16 +96,20 @@ but not a running process or unresolved branch sync. No cursor is persisted.
 
 `ReviewOutcome` validates the scope and derives the result from the captured
 contract and the **last attempt for every required slot**. It never substitutes
-an earlier success. Missing slots and reports remain pending. Invalid evidence
-is an error, not approval.
+an earlier success. Missing slots and unresolved process outcomes remain pending.
+Invalid evidence is an error, not approval.
 
 - Failed checks block unless explicitly waived with a nonblank reason and time;
   the failed exit remains intact and the effective result is waived, not passed.
-- A reviewer must exit successfully and supply its report. Process success does
-  not erase blockers or explicitly unresolved findings. Reviewer failures cannot
-  be waived into successful evidence.
-- Manual approval cannot override another failed requirement. Its alternative
-  cannot also carry requested-change findings.
+- A successful reviewer exit satisfies its slot unless recorded findings require
+  changes, matching the application's current behavior. No separate report
+  submission is required or fabricated. Extra report narratives and explicit
+  per-finding verifications are not currently collected; their model fields stay
+  empty. Process success does not erase blockers or explicitly unresolved findings.
+  Reviewer failures cannot be waived into successful evidence.
+- Manual approval cannot override another failed requirement or accept its own
+  unresolved required findings. Its step retains advisory/separate-task findings
+  and later decisions without rewriting the original assessment.
 - Config edits append contracts for new work; they do not reinterpret historical
   approvals or turn a successful prefix into a complete pipeline.
 
@@ -119,14 +135,19 @@ reverse an earlier positive statement.
 
 ## Publication consent
 
-A publication plan selects a review and inherits its output, requirements, scope,
-and destination. It owns the chosen PR/create-update or direct-merge target and
+A publication plan selects a review and inherits its output and captured requirements.
+An approved manual step may establish the final observed destination and flow
+without rerunning automated slots. Its `ApprovedReview.Publication` records that
+actual choice; the original automated scope/destination remains immutable. Blocked
+or aborted tentative edits are discarded. The plan inherits this effective
+approved destination, or the automated destination when there is no override. It owns the chosen PR/create-update or direct-merge target and
 authored text. Review success is not publication consent.
 
 `AuthorizePublication` records the first explicit grant and evidence. Its computed
 `IntentDigest` binds repository/task, workflow/publication address, reviewed
 scope/output/contract, baseline, target, content, and grant. This is an intent
 seal, not a generated PlanID or proof of who supplied the operator evidence.
+It binds both the automated scope destination and any approved final destination.
 Changed intent needs another occurrence and fresh consent; state-version changes
 alone do not invalidate it.
 
@@ -137,6 +158,12 @@ authorize earlier grants. Retained consent uses that historical view, while
 `ReviewOutcome` still reflects current decisions. Later dismissal/reopening does
 not rewrite the original grant or delivery. A retained receipt is not permission
 to ignore current blockers when performing new effects.
+
+The CLI intentionally stops at an unconsented prepared publication plan. A passed
+review or retained commit cannot authorize delivery. The separate publication
+consent UX belongs to T8; there is no interim consent flag or confirmation bypass.
+Backend delivery contracts can consume an explicitly authorized plan, but ordinary
+`task run` does not manufacture that grant.
 
 Publication is an idempotent application action: find/verify a matching PR,
 import it when present, and create only when confirmed absent. Failed lookup is
@@ -198,12 +225,82 @@ shared-pointer mutation cannot be detected after the evidence was overwritten.
 
 Validation does not authenticate observations, run Git, choose the next action,
 or replace expected-version atomic saves. Storage owns advancing `StateVersion`,
-separately from its serialization format. Future persistence/callback decoders
-must reject omitted or null required index fields before constructing values:
+separately from its serialization format. Persistence and callback decoders
+reject omitted or null required index fields before constructing values:
 plain integers cannot distinguish omission from an intentional zero. Optional
 fields retain `nil`; closed alternatives need explicit decoding.
 
-Operator-data conversion remains separate, explicit work. Any unmatched source
-records must be preserved outside authoritative workflow state, without inventing
-approval or associations. No conversion report is part of the shared model, and
-no record conversion, compatibility reader, or migration framework is introduced.
+### Persistence boundary
+
+`internal/workstate.Store` serializes the domain tree directly, with explicit
+`kind`/`value` alternatives, required integer addresses, and separate serialization
+and persistence versions. Missing or null required addresses, unknown fields,
+ambiguous alternatives, and multiple YAML documents are rejected. Optional index
+pointers preserve the difference between absent and explicit zero.
+
+`Save` holds a document-specific lock, independently reloads the prior state,
+checks the expected version and `ValidateSuccessor`, and atomically replaces the
+file only after validation. It returns the next version without mutating its input.
+This lock can be held inside the application's progression lock.
+`workstate.Encode`/`Decode` expose the same validated codec without advancing the
+persistence version or choosing progression.
+
+Only the new workflow format is supported. There is no old-format reader,
+converter, import path, or historical exception to domain requirements. Before
+using it, the operator archives or discards old local task-state files and starts
+with empty workflow history; task definitions and lifecycle remain in Beads/Gig.
+See [local workflow state](../user/tasks.md#local-workflow-state) for the storage
+boundary. The application never deletes or rewrites unsupported files.
+
+### Git output boundary
+
+Typed `taskstate.Store` mutations record implementation callbacks at stable
+parent/index addresses: the effort's own completion, direct child PID, and actual
+observed exit. Terminal, pre-reset, cross-task, and wrong-kind callbacks are refused.
+The first live handoff is authoritative; repeats are no-ops, not diagnostic journals.
+Recording a handoff or exit neither captures output nor grants review permission.
+`workflow.ImplementationService` owns capture using those independent facts.
+
+`agentexec.AttachedLauncher` reports the direct child's exit code and observation
+time only after reaping and draining output, including cancellation and PID-recording
+failure. `agent.Execute` keeps that observation separate from usage and launcher
+errors. Missing, conflicting, backdated, or wrong-child observations cannot become
+implicit successful exits. Usage capture still runs for every started child.
+
+The implementation service validates the live last implementation's own
+completion and observed successful exit before any Git effect. Under the global
+mutation lock, it consumes the prepared baseline or exact earlier input and saves
+only the captured output at the loaded persistence version. A failed save leaves
+Git retention available for reconciliation on retry. Explicit unchanged-input
+reuse keeps its own handoff and inherits the original producer's retention.
+Already captured output is reverified without another commit or state write.
+
+`git.CaptureRevision` takes that effort's exact input commit, attached branch,
+completion message, and effort-owned ref namespace. The adapter does not itself
+authenticate a handoff or grant review/publication permission.
+
+Capture stages completed output and invokes ordinary `git commit`, retaining the
+input and actual result under owned refs. Hooks, signing, author configuration,
+and content filters apply normally. Unchanged output retains the actual input
+without an empty commit; the caller must preserve the effort's own completion and
+choose domain reuse only when that input addresses earlier implementation output.
+
+A stable effort-specific reflog action and input checkpoint distinguish recoverable
+interrupted commits from unrelated branch movement. Recovery requires one ordinary
+commit on the recorded input, the matching branch/reflog, and a verified checkout
+and index. Missing proof, unfinished Git operations, or hook leftovers stop review.
+Commit failures are reported even if reconciliation finds a retained commit.
+Hook leftovers are preserved for inspection; only a verified checkout matching
+the retained commit can authorize review.
+
+`git.VerifyRevision` checks the recorded commit, branch attachment, retention ref,
+index tree, tracked content and executable/symlink modes, and unignored untracked
+files. Hidden index flags and submodules are refused rather than treated as clean.
+`review.CaptureCommittedCandidate` composes that admission with verified raw-file
+and index rollback, including canceled reviewers. The application pipeline uses this committed candidate for every check, reviewer,
+and manual command. Agent context exposes full-task baseline/output and optional
+repair-delta input/output endpoints, together with captured requirements.
+
+`git.VerifyRetainedRevision` verifies retained commit/tree and owned-ref identity
+without requiring the checkout to represent that revision. It does not establish
+a safe review checkout.

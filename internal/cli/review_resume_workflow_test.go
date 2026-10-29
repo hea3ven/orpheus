@@ -75,7 +75,13 @@ func TestIntegrationWorkflowTaskRunRepeatedAutomatedPausePreservesDecisionTarget
 				if action == "keep" {
 					assert.Equal(t, taskstate.ReviewStatusBlocked, latest.Status)
 					assert.True(t, latest.AutomatedBlockerDecisionKept)
-					assert.Equal(t, paused.Findings, latest.Findings)
+					require.Len(t, latest.Findings, 1)
+					assert.Equal(t, paused.Findings[0].Address, latest.Findings[0].Address)
+					assert.Equal(t, paused.Findings[0].Title, latest.Findings[0].Title)
+					indexes, eligible := taskstate.UntargetedBlockingFindingIndexesForFollowUp(latest)
+					assert.True(t, eligible)
+					assert.Equal(t, []int{0}, indexes)
+					assert.Equal(t, paused.Steps[1], latest.Steps[1], "keeping a finding cannot rewrite the native failure or reporting execution")
 				} else {
 					assert.Equal(t, taskstate.ReviewStatusPassed, latest.Status)
 					wantChecks = append(wantChecks, "last")
@@ -89,9 +95,12 @@ func TestIntegrationWorkflowTaskRunRepeatedAutomatedPausePreservesDecisionTarget
 					require.Len(t, latest.Findings, 1)
 					assert.Equal(t, "Accepted risk.", latest.Findings[0].Waiver)
 				case "restart":
-					require.Len(t, latest.Steps, 3)
+					require.Len(t, latest.Steps, 4)
 					assert.Equal(t, "pending", latest.Steps[1].Name)
-					assert.Empty(t, latest.Findings)
+					assert.Equal(t, "pending", latest.Steps[2].Name)
+					require.Len(t, latest.Findings, 1)
+					assert.True(t, latest.Findings[0].Superseded)
+					assert.Equal(t, paused.Findings[0].Address, latest.Findings[0].Address)
 				}
 				assert.Equal(t, wantChecks, fixture.checkCalls)
 				assert.Len(t, fixture.agent.launches, wantReviews)

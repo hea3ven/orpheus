@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	workmodel "github.com/hea3ven/orpheus/internal/work"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,6 +16,8 @@ import (
 	"github.com/hea3ven/orpheus/internal/agent"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -285,37 +288,24 @@ func TestIntegrationWorkflowTaskStatsRendersImplementationExecutionUsage(t *test
 	fixture := newCommandWorkflow(t)
 	t.Parallel()
 	is := assert.New(t)
-	must := require.New(t)
 
 	repo := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 	withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {tasks: []taskmodel.Task{taskWFTask("op-1", "Stats", taskmodel.StatusInProgress, taskmodel.IssueTypeTask, taskWFPriority(1))}}})
-	stateStore := taskstate.NewStoreWithClock(fixture.paths, clockSequence(workflowTime("2026-07-07T10:00:00Z"), workflowTime("2026-07-07T10:01:00Z"), workflowTime("2026-07-07T10:02:00Z"), workflowTime("2026-07-07T10:03:00Z"), workflowTime("2026-07-07T10:04:00Z"), workflowTime("2026-07-07T10:05:00Z")))
-	run, err := stateStore.StartRun("alpha", "op-1", taskstate.StartRunOptions{Agent: "codex-profile", Profile: "codex-profile", Harness: "codex", Model: "gpt-5", Command: "codex", Args: []string{"exec", "--model", "gpt-5"}, Branch: "main", Worktree: repo})
-	must.NoError(err)
-	_, err = stateStore.RecordRunUsage("alpha", "op-1", run.Attempt, taskstate.RecordRunUsageOptions{Session: &taskstate.AgentSession{ID: "session-123", LogPath: "/fixture/codex.jsonl"}, Usage: &taskstate.AgentUsage{InputTokens: 123, CachedInputTokens: 45, OutputTokens: 67, ReasoningOutputTokens: 8, TotalTokens: 190}, UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureCaptured, Reason: "matched_codex_session", CandidateCount: 1}})
-	must.NoError(err)
-	_, err = stateStore.FinishRun("alpha", "op-1", run.Attempt, taskstate.RunStatusSucceeded)
-	must.NoError(err)
-	reviewAttempt, err := stateStore.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review"})
-	must.NoError(err)
-	_, err = stateStore.RecordReviewStep("alpha", "op-1", reviewAttempt.Attempt, taskstate.RecordReviewStepOptions{Kind: "agent_review", Name: "ai-review", Execution: &taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, Agent: "reviewer", Profile: "reviewer", Harness: "codex", Model: "gpt-5", Command: "codex", Args: []string{"exec", "--model", "gpt-5", "review"}, StartedAt: workflowTime("2026-07-07T10:03:00Z")}})
-	must.NoError(err)
-	_, err = stateStore.FinishReviewStepExecution("alpha", "op-1", reviewAttempt.Attempt, "ai-review", taskstate.FinishReviewStepExecutionOptions{Status: taskstate.RunStatusSucceeded, Session: &taskstate.AgentSession{ID: "review-session-123", LogPath: "/fixture/codex-review.jsonl"}, Usage: &taskstate.AgentUsage{InputTokens: 20, CachedInputTokens: 5, OutputTokens: 30, ReasoningOutputTokens: 7, TotalTokens: 50}, UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureCaptured, Reason: "matched_codex_session", CandidateCount: 1}})
-	must.NoError(err)
-	_, err = stateStore.FinishReview("alpha", "op-1", reviewAttempt.Attempt, taskstate.ReviewStatusPassed)
-	must.NoError(err)
-
-	startedAt := workflowTime("2026-07-07T10:00:00Z")
-	finishedAt := workflowTime("2026-07-07T10:12:00Z")
-	stateStore = taskstate.NewStoreWithClock(fixture.paths, clockSequence(startedAt, finishedAt))
-	opts := taskstate.SyncConflictResolutionEventOptions{Execution: taskstate.AgentExecution{Agent: "codex", Profile: "sync-profile", Harness: "codex", Model: "gpt-5", Command: "codex", Args: []string{"exec", "--profile", "sync-profile"}, SessionName: "sync-conflict-op-1", StartedAt: startedAt}, Branch: "orpheus/op-1", DefaultBranch: "main", Worktree: repo, PRURL: "https://github.test/org/repo/pull/42", ConflictFiles: []string{"conflict.txt"}}
-	_, err = stateStore.RecordSyncConflictResolutionStarted("alpha", "op-1", opts)
-	must.NoError(err)
-	finishedOpts := opts
-	finishedOpts.Commit = "merge123"
-	finishedOpts.Usage = taskstate.RecordRunUsageOptions{Session: &taskstate.AgentSession{ID: "sync-session-123", LogPath: "/fixture/codex-sync.jsonl"}, Usage: &taskstate.AgentUsage{InputTokens: 120, CachedInputTokens: 10, OutputTokens: 30, ReasoningOutputTokens: 5, TotalTokens: 165}, UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureCaptured, Reason: "matched_codex_session", CandidateCount: 1}}
-	_, err = stateStore.RecordSyncConflictResolutionFinished("alpha", "op-1", finishedOpts)
-	must.NoError(err)
+	start := workflowTime("2026-07-07T10:00:00Z")
+	snapshot := readerDeliveredHistory(t, "alpha", "op-1", repo, "orpheus/op-1", start)
+	w := &snapshot.Workflows[0]
+	implementation := &w.Phases[1].(*workmodel.ImplementationPhase).Execution
+	implementation.Args = []string{"exec", "--model", "gpt-5"}
+	implementation.Session = &workmodel.Session{ID: "session-123", LogPath: "/fixture/codex.jsonl"}
+	implementation.Usage = &workmodel.Usage{InputTokens: 123, CachedInputTokens: 45, OutputTokens: 67, ReasoningOutputTokens: 8, TotalTokens: 190}
+	implementation.UsageCapture = workmodel.UsageCapture{Status: workmodel.UsageCaptured, Reason: "matched_codex_session", CandidateCount: 1}
+	reviewer := &w.Phases[2].(*workmodel.ReviewPhase).Steps[0].(*workmodel.AgentReviewStep).Execution
+	reviewer.Args = []string{"exec", "--model", "gpt-5", "review"}
+	reviewer.Session = &workmodel.Session{ID: "review-session-123", LogPath: "/fixture/codex-review.jsonl"}
+	reviewer.Usage = &workmodel.Usage{InputTokens: 20, CachedInputTokens: 5, OutputTokens: 30, ReasoningOutputTokens: 7, TotalTokens: 50}
+	reviewer.UsageCapture = workmodel.UsageCapture{Status: workmodel.UsageCaptured, Reason: "matched_codex_session", CandidateCount: 1}
+	w.Phases[4].(*workmodel.ExternalReviewPhase).BranchSyncs = []workmodel.BranchSync{{StartedAt: start.Add(20 * time.Minute), Checkpoint: workmodel.BranchSyncCheckpoint{LocalHead: "fixture-output", RemoteHead: "fixture-output", MergeSource: "destination-head"}, ConflictResolution: &workmodel.ConflictResolution{Files: []string{"conflict.txt"}, Execution: workmodel.AgentExecution{Profile: "sync-profile", Harness: "codex", Model: "gpt-5", Command: "codex", Args: []string{"exec", "--profile", "sync-profile"}, SessionName: "sync-conflict-op-1", StartedAt: start.Add(20 * time.Minute), Process: &workmodel.ExitedProcess{Code: fixtureExitCode(0), At: start.Add(32 * time.Minute)}, Duration: 12 * time.Minute, Session: &workmodel.Session{ID: "sync-session-123", LogPath: "/fixture/codex-sync.jsonl"}, Usage: &workmodel.Usage{InputTokens: 120, CachedInputTokens: 10, OutputTokens: 30, ReasoningOutputTokens: 5, TotalTokens: 165}, UsageCapture: workmodel.UsageCapture{Status: workmodel.UsageCaptured, Reason: "matched_codex_session", CandidateCount: 1}}}, LocalCommit: &workmodel.BranchSyncCommit{Head: "merge123", ObservedAt: start.Add(33 * time.Minute)}, Push: &workmodel.BranchSyncPush{Head: "merge123", ObservedAt: start.Add(34 * time.Minute), Evidence: "Synthetic independently observed remote head"}}}
+	saveReaderHistory(t, fixture, snapshot)
 
 	stdout, stderr := fixture.mustExecute("task", "stats", "op-1")
 
@@ -323,7 +313,7 @@ func TestIntegrationWorkflowTaskStatsRendersImplementationExecutionUsage(t *test
 	for _, want := range []string{"Executions", "Estimated cost uses harness-reported estimates", "implementation", "codex-profile", "codex", "gpt-5", `"codex" "exec" "--model" "gpt-5"`, "2026-07-07T10:00:00Z", "2026-07-07T10:02:00Z", "2m0s", "succeeded", "session-123", "total=190 input=123 cached_input=45 output=67 reasoning_output=8", "estimated API-equivalent cost=$0.000773", "review-agent", "ai-review", "review-session-123", "total=50 input=20 cached_input=5 output=30 reasoning_output=7", "combined"} {
 		is.Contains(stdout, want)
 	}
-	for _, want := range []string{"sync-conflict-resolution", "sync-profile", `"codex" "exec" "--profile" "sync-profile"`, "2026-07-07T10:12:00Z", "12m0s", "sync-session-123", "total=165 input=120 cached_input=10 output=30 reasoning_output=5"} {
+	for _, want := range []string{"sync-conflict-resolution", "sync-profile", `"codex" "exec" "--profile" "sync-profile"`, "2026-07-07T10:32:00Z", "12m0s", "sync-session-123", "total=165 input=120 cached_input=10 output=30 reasoning_output=5"} {
 		is.Contains(stdout, want)
 	}
 	is.Regexp(`(?m)^sync-conflict-resolution\s+1\s+12m0s\s+165\s+120\s+10\s+30\s+5\s+\$[0-9.]+\s+0\s+0$`, stdout)
@@ -338,11 +328,11 @@ func TestIntegrationWorkflowTaskStatsKeepsTokenUsageWhenCostPricingIsUnknown(t *
 	repo := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 	withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {tasks: []taskmodel.Task{taskWFTask("op-1", "Stats", taskmodel.StatusInProgress, taskmodel.IssueTypeTask)}}})
 	stateStore := taskstate.NewStoreWithClock(fixture.paths, clockSequence(workflowTime("2026-07-07T10:00:00Z"), workflowTime("2026-07-07T10:01:00Z"), workflowTime("2026-07-07T10:02:00Z")))
-	run, err := stateStore.StartRun("alpha", "op-1", taskstate.StartRunOptions{Agent: "codex-profile", Profile: "codex-profile", Harness: "codex", Model: "vendor-model", Command: "codex", Args: []string{"exec", "--model", "vendor-model"}, Branch: "main", Worktree: repo})
+	run, err := stateStore.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repo, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "codex-profile", Profile: "codex-profile", Harness: "codex", Model: "vendor-model", Command: "codex", Args: []string{"exec", "--model", "vendor-model"}, Branch: "main", Worktree: repo})
 	must.NoError(err)
-	_, err = stateStore.RecordRunUsage("alpha", "op-1", run.Attempt, taskstate.RecordRunUsageOptions{Usage: &taskstate.AgentUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150}, UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureCaptured, Reason: "matched_codex_session"}})
+	_, err = seedFixtureUsage(stateStore, "alpha", "op-1", run.Attempt, taskstate.RecordRunUsageOptions{Usage: &taskstate.AgentUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150}, UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureCaptured, Reason: "matched_codex_session"}})
 	must.NoError(err)
-	_, err = stateStore.FinishRun("alpha", "op-1", run.Attempt, taskstate.RunStatusSucceeded)
+	_, err = stateStore.FinishObservedRun(run.Address, &workmodel.ExitedProcess{Code: fixtureExitCode(0), At: workflowTime("2026-07-07T10:02:00Z")}, 0)
 	must.NoError(err)
 	stdout, stderr := fixture.mustExecute("task", "stats", "op-1")
 	is.Empty(stderr)
@@ -360,11 +350,11 @@ func TestIntegrationWorkflowTaskStatsUsesPiReportedEstimatedCost(t *testing.T) {
 	repo := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 	withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {tasks: []taskmodel.Task{taskWFTask("op-1", "Stats", taskmodel.StatusInProgress, taskmodel.IssueTypeTask)}}})
 	stateStore := taskstate.NewStoreWithClock(fixture.paths, clockSequence(workflowTime("2026-07-07T10:00:00Z"), workflowTime("2026-07-07T10:01:00Z"), workflowTime("2026-07-07T10:02:00Z")))
-	run, err := stateStore.StartRun("alpha", "op-1", taskstate.StartRunOptions{Agent: "pi-profile", Profile: "pi-profile", Harness: "pi", Model: "openai-codex/gpt-5.5", Command: "pi", Args: []string{"--model", "openai-codex/gpt-5.5"}, Branch: "main", Worktree: repo})
+	run, err := stateStore.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repo, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "pi-profile", Profile: "pi-profile", Harness: "pi", Model: "openai-codex/gpt-5.5", Command: "pi", Args: []string{"--model", "openai-codex/gpt-5.5"}, Branch: "main", Worktree: repo})
 	must.NoError(err)
-	_, err = stateStore.RecordRunUsage("alpha", "op-1", run.Attempt, taskstate.RecordRunUsageOptions{Session: &taskstate.AgentSession{ID: "pi-session", LogPath: "/fixture/pi.jsonl"}, Usage: &taskstate.AgentUsage{InputTokens: 100, CachedInputTokens: 20, OutputTokens: 30, ReasoningOutputTokens: 5, TotalTokens: 130}, UsageCost: &taskstate.AgentUsageCost{Kind: agent.UsageCostKindPiReportedEstimated, Currency: "USD", AmountMicroUSD: 1240, Source: "Pi usage.cost.total", Notes: "Pi-reported estimate only; not exact billed cost or invoice reconciliation."}, UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureCaptured, Reason: "matched_pi_session"}})
+	_, err = seedFixtureUsage(stateStore, "alpha", "op-1", run.Attempt, taskstate.RecordRunUsageOptions{Session: &taskstate.AgentSession{ID: "pi-session", LogPath: "/fixture/pi.jsonl"}, Usage: &taskstate.AgentUsage{InputTokens: 100, CachedInputTokens: 20, OutputTokens: 30, ReasoningOutputTokens: 5, TotalTokens: 130}, UsageCost: &taskstate.AgentUsageCost{Kind: agent.UsageCostKindPiReportedEstimated, Currency: "USD", AmountMicroUSD: 1240, Source: "Pi usage.cost.total", Notes: "Pi-reported estimate only; not exact billed cost or invoice reconciliation."}, UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureCaptured, Reason: "matched_pi_session"}})
 	must.NoError(err)
-	_, err = stateStore.FinishRun("alpha", "op-1", run.Attempt, taskstate.RunStatusSucceeded)
+	_, err = stateStore.FinishObservedRun(run.Address, &workmodel.ExitedProcess{Code: fixtureExitCode(0), At: workflowTime("2026-07-07T10:02:00Z")}, 0)
 	must.NoError(err)
 	stdout, stderr := fixture.mustExecute("task", "stats", "op-1")
 	is.Empty(stderr)
@@ -382,11 +372,11 @@ func TestIntegrationWorkflowTaskStatsCountsMissingPiUsageCostAsUnknown(t *testin
 	repo := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 	withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {tasks: []taskmodel.Task{taskWFTask("op-1", "Stats", taskmodel.StatusInProgress, taskmodel.IssueTypeTask)}}})
 	stateStore := taskstate.NewStoreWithClock(fixture.paths, clockSequence(workflowTime("2026-07-07T10:00:00Z"), workflowTime("2026-07-07T10:01:00Z"), workflowTime("2026-07-07T10:02:00Z")))
-	run, err := stateStore.StartRun("alpha", "op-1", taskstate.StartRunOptions{Agent: "pi-profile", Profile: "pi-profile", Harness: "pi", Model: "openai-codex/gpt-5.5", Command: "pi", Args: []string{"--model", "openai-codex/gpt-5.5"}, Branch: "main", Worktree: repo})
+	run, err := stateStore.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repo, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "pi-profile", Profile: "pi-profile", Harness: "pi", Model: "openai-codex/gpt-5.5", Command: "pi", Args: []string{"--model", "openai-codex/gpt-5.5"}, Branch: "main", Worktree: repo})
 	must.NoError(err)
-	_, err = stateStore.RecordRunUsage("alpha", "op-1", run.Attempt, taskstate.RecordRunUsageOptions{UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureUnknown, Reason: "matching_pi_session_has_no_assistant_usage", CandidateCount: 1}})
+	_, err = seedFixtureUsage(stateStore, "alpha", "op-1", run.Attempt, taskstate.RecordRunUsageOptions{UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureUnknown, Reason: "matching_pi_session_has_no_assistant_usage", CandidateCount: 1}})
 	must.NoError(err)
-	_, err = stateStore.FinishRun("alpha", "op-1", run.Attempt, taskstate.RunStatusSucceeded)
+	_, err = stateStore.FinishObservedRun(run.Address, &workmodel.ExitedProcess{Code: fixtureExitCode(0), At: workflowTime("2026-07-07T10:02:00Z")}, 0)
 	must.NoError(err)
 	stdout, stderr := fixture.mustExecute("task", "stats", "op-1")
 	is.Empty(stderr)
@@ -485,111 +475,20 @@ func TestIntegrationWorkflowTaskStatsDirectEpicStatsRemainAvailable(t *testing.T
 	is.Contains(stdout, "150")
 }
 
-func TestIntegrationWorkflowTaskShowRendersChronologicalHistoryForClosedEpic(t *testing.T) {
-	for _, kind := range []taskmodel.IssueType{taskmodel.IssueTypeTask, taskmodel.IssueTypeEpic} {
-		t.Run(string(kind), func(t *testing.T) {
-			fixture := newCommandWorkflow(t)
-			is := assert.New(t)
-			must := require.New(t)
-
-			repo := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
-			withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {tasks: []taskmodel.Task{taskWFTask("op-epic", "Closed epic", taskmodel.StatusClosed, kind, taskWFPriority(1))}}})
-			now := workflowTime("2026-01-02T03:04:05Z")
-			stateStore := taskstate.NewStoreWithClock(fixture.paths, func() time.Time { return now })
-			_, err := stateStore.RecordSetupEvent("alpha", "op-epic", taskstate.EventWorktreeCreated, taskstate.SetupEventOptions{})
-			must.NoError(err)
-			now = now.Add(time.Minute)
-			taskState, err := stateStore.Load("alpha", "op-epic")
-			must.NoError(err)
-			taskState.Events = append(taskState.Events, taskstate.Event{Type: taskstate.EventWorktreeReused, At: now})
-			must.NoError(fixture.paths.WriteDataYAML(filepath.Join("repos", "alpha", "tasks", "op-epic.yaml"), taskState))
-			now = now.Add(time.Minute)
-			run, err := stateStore.StartRun("alpha", "op-epic", taskstate.StartRunOptions{Agent: "codex"})
-			must.NoError(err)
-			now = now.Add(time.Minute)
-			_, err = stateStore.CompleteRun("alpha", "op-epic", run.Attempt, taskstate.CompleteRunOptions{Summary: "Record task history", Description: "Recorded completion history.", DetailedDescription: "Detailed history.", TechnicalExplanation: "Technical explanation."})
-			must.NoError(err)
-			now = now.Add(time.Minute)
-			_, err = stateStore.FinishRun("alpha", "op-epic", run.Attempt, taskstate.RunStatusSucceeded)
-			must.NoError(err)
-			now = now.Add(time.Minute)
-			_, err = stateStore.RecordFinalizationCommit("alpha", "op-epic", "abc123")
-			must.NoError(err)
-			now = now.Add(time.Minute)
-			_, err = stateStore.RecordFinalizationPush("alpha", "op-epic", taskstate.FinalizationPushOptions{Branch: "main", PushTarget: taskstate.PushTargetMain})
-			must.NoError(err)
-			now = now.Add(time.Minute)
-			_, err = stateStore.RecordFinalizationClose("alpha", "op-epic", taskstate.FinalizationCloseOptions{Reason: taskstate.CloseReasonDefaultBranchPublished})
-			must.NoError(err)
-			stdout, stderr := fixture.mustExecute("task", "show", "op-epic")
-			is.Empty(stderr)
-			is.Contains(stdout, "ID: op-epic")
-			is.Contains(stdout, "Status: closed")
-			expected := []string{"2026-01-02T03:04:05Z Worktree created", "2026-01-02T03:06:05Z Run started", "2026-01-02T03:07:05Z Completion recorded", "2026-01-02T03:08:05Z Run finished", "2026-01-02T03:10:05Z Pushed main", "2026-01-02T03:11:05Z Task closed"}
-			prev := strings.Index(stdout, "History:")
-			for _, want := range expected {
-				idx := strings.Index(stdout, want)
-				is.Greater(idx, prev, want)
-				prev = idx
-			}
-			is.NotContains(stdout, "Worktree reused")
-			is.NotContains(stdout, "codex")
-			is.NotContains(stdout, "succeeded")
-		})
-	}
-}
-
-func TestIntegrationWorkflowTaskShowProjectsReviewAttemptMilestonesIntoHistory(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	t.Parallel()
-	is := assert.New(t)
-	must := require.New(t)
-
-	repo := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
-	withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {tasks: []taskmodel.Task{taskWFTask("op-review", "Review history", taskmodel.StatusOpen, taskmodel.IssueTypeTask)}}})
-	now := workflowTime("2026-01-02T03:04:05Z")
-	stateStore := taskstate.NewStoreWithClock(fixture.paths, func() time.Time { return now })
-	_, err := stateStore.RecordSetupEvent("alpha", "op-review", taskstate.EventWorktreeCreated, taskstate.SetupEventOptions{})
-	must.NoError(err)
-	now = now.Add(time.Minute)
-	recordTaskShowReviewAttempt(t, stateStore, &now, taskstate.ReviewStatusPassed)
-	_, err = stateStore.StartRun("alpha", "op-review", taskstate.StartRunOptions{Agent: "codex"})
-	must.NoError(err)
-	now = now.Add(time.Minute)
-	recordTaskShowReviewAttempt(t, stateStore, &now, taskstate.ReviewStatusBlocked)
-	recordTaskShowReviewAttempt(t, stateStore, &now, taskstate.ReviewStatusFailed)
-	recordTaskShowReviewAttempt(t, stateStore, &now, taskstate.ReviewStatusAborted)
-	stdout, stderr := fixture.mustExecute("task", "show", "op-review")
-	is.Empty(stderr)
-	previous := strings.Index(stdout, "History:")
-	for _, want := range []string{"2026-01-02T03:04:05Z Worktree created", "2026-01-02T03:05:05Z Review attempt 1 started", "2026-01-02T03:06:05Z Review attempt 1 passed", "2026-01-02T03:07:05Z Run started", "2026-01-02T03:08:05Z Review attempt 2 started", "2026-01-02T03:09:05Z Review attempt 2 blocked", "2026-01-02T03:10:05Z Review attempt 3 started", "2026-01-02T03:11:05Z Review attempt 3 failed", "2026-01-02T03:12:05Z Review attempt 4 started", "2026-01-02T03:13:05Z Review attempt 4 aborted"} {
-		idx := strings.Index(stdout, want)
-		is.Greater(idx, previous, want)
-		previous = idx
-	}
-}
-
 func TestIntegrationWorkflowTaskShowProjectsReviewFollowUpCreationIntoHistory(t *testing.T) {
 	fixture := newCommandWorkflow(t)
 	t.Parallel()
 	is := assert.New(t)
-	must := require.New(t)
 
 	repo := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 	withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {tasks: []taskmodel.Task{taskWFTask("op-review", "Review history", taskmodel.StatusOpen, taskmodel.IssueTypeTask)}}})
-	now := workflowTime("2026-01-02T03:04:05Z")
-	stateStore := taskstate.NewStoreWithClock(fixture.paths, func() time.Time { return now })
-	review, err := stateStore.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{Pipeline: "local", Step: "manual"})
-	must.NoError(err)
-	_, err = stateStore.RecordReviewFinding("alpha", "op-review", review.Attempt, taskstate.ReviewFinding{Type: taskstate.FindingTypeSeparateTask, Title: "Extract helper", Description: "Track separately.", TaskProposal: taskstate.ReviewTaskProposal{Title: "Extract helper", Description: "Extract helper separately.", AcceptanceCriteria: "Helper extraction has tests."}})
-	must.NoError(err)
-	now = now.Add(time.Minute)
-	_, err = stateStore.RecordReviewFindingCreatedTask("alpha", "op-review", review.Attempt, 0, "op-42")
-	must.NoError(err)
-	taskState, err := stateStore.Load("alpha", "op-review")
-	must.NoError(err)
-	taskState.Reviews[0].Findings = append(taskState.Reviews[0].Findings, taskstate.ReviewFinding{Type: taskstate.FindingTypeSeparateTask, Title: "Legacy follow-up", Description: "Created before timestamps were recorded.", CreatedTaskID: "op-legacy", TaskProposal: taskstate.ReviewTaskProposal{Title: "Legacy follow-up", Description: "Created before timestamps were recorded.", AcceptanceCriteria: "Legacy task exists."}})
-	must.NoError(fixture.paths.WriteDataYAML(filepath.Join("repos", "alpha", "tasks", "op-review.yaml"), taskState))
+	at := workflowTime("2026-01-02T03:04:05Z")
+	snapshot := testutil.ReviewableWork("alpha", "op-review", repo, "orpheus/op-review")
+	w := &snapshot.Workflows[0]
+	w.ReviewContracts = []workmodel.ReviewContract{{PipelineKey: "local", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewManual, ConfigKey: "manual"}}}}
+	w.Phases = append(w.Phases, &workmodel.ReviewPhase{Contract: 0, Scope: workmodel.ReviewScope{Requirements: "Task requirements", Output: workmodel.OutputRef{Phase: 1}, Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}, StartedAt: at, Steps: []workmodel.ReviewStep{&workmodel.ManualReviewStep{Slot: 0, Findings: []workmodel.Finding{{Classification: workmodel.FindingSeparateTask, Title: "Extract helper", Description: "Track separately.", Proposal: &workmodel.FollowUpProposal{Title: "Extract helper", Description: "Extract helper separately.", AcceptanceCriteria: "Helper extraction has tests."}, CreatedTask: &workmodel.CreatedFollowUp{TaskID: "op-42", ObservedAt: at.Add(time.Minute)}}}}}})
+	saveReaderHistory(t, fixture, snapshot)
+
 	stdout, stderr := fixture.mustExecute("task", "show", "op-review")
 	is.Empty(stderr)
 	is.Contains(stdout, "2026-01-02T03:04:05Z Review attempt 1 started")
@@ -610,7 +509,7 @@ func TestIntegrationWorkflowTaskShowFailsWhenLocalTaskStateCannotBeLoaded(t *tes
 	is.Empty(stdout)
 	is.Empty(stderr)
 	is.ErrorContains(err, "task show op-corrupt: load local task-state for repo alpha")
-	is.ErrorContains(err, `repo_id is "wrong", expected "alpha"`)
+	is.ErrorContains(err, "workflow document identity does not match alpha/op-corrupt")
 }
 
 func TestIntegrationWorkflowTaskShowPropagatesTaskSourceReadFailure(t *testing.T) {
@@ -680,29 +579,113 @@ func TestIntegrationWorkflowTaskShowReviewDisplaysCrossAttemptFindingHistory(t *
 			_ = store
 			stdout, stderr := fixture.mustExecute("task", "show", "review", "op-main")
 			is.Empty(stderr)
-			for _, want := range []string{"Review state for op-main (repo alpha)", "Authoritative review history:", "Attempt 1: passed (1 authoritative finding(s))", "1/1 · manual · separate_task · created task op-41 · Older cleanup", "Attempt 2: blocked (4 authoritative finding(s))", "2/1 · unit-tests · blocking · open · Tests fail", "2/2 · ai-review · blocking · follow-up run 1 running · Race condition", "2/3 · ai-review · blocking · waived · Known limitation", "2/4 · ai-review · separate_task · created task op-42 · Extract helper", "orpheus task show review <task-id> <review-attempt> <finding-number>", "Next step: run `orpheus task run op-main` to address open blocking findings"} {
+			for _, want := range []string{"Review state for op-main (repo alpha)", "Authoritative review history:", "Attempt 1: passed (1 authoritative finding(s))", "1/1 · manual · separate_task · created task op-41 · Older cleanup", "Attempt 2: blocked (4 authoritative finding(s))", "2/1 · unit-tests · blocking · open · Tests fail", "2/2 · ai-review · blocking · follow-up run 2 running · Race condition", "2/3 · ai-review · blocking · waived · Known limitation", "2/4 · ai-review · separate_task · created task op-42 · Extract helper", "orpheus task show review <task-id> <review-attempt> <finding-number>", "Next step: run `orpheus task run op-main` to address open blocking findings"} {
 				is.Contains(stdout, want)
 			}
 		})
 	}
 }
 
+func TestIntegrationWorkflowTaskShowRendersChronologicalHistoryForClosedEpic(t *testing.T) {
+	for _, kind := range []taskmodel.IssueType{taskmodel.IssueTypeTask, taskmodel.IssueTypeEpic} {
+		t.Run(string(kind), func(t *testing.T) {
+			f := newCommandWorkflow(t)
+			repo := registerWorkflowRepo(t, f, "alpha", "Alpha", "op")
+			withWorkflowSources(t, f, map[string]taskSourceResult{repo: {tasks: []taskmodel.Task{taskWFTask("op-epic", "Closed epic", taskmodel.StatusClosed, kind, taskWFPriority(1))}}})
+			snapshot := testutil.ReviewableWork("alpha", "op-epic", repo, "orpheus/op-epic")
+			w := &snapshot.Workflows[0]
+			at := workflowTime("2026-01-02T03:04:05Z")
+			w.Phases[0].(*workmodel.PreparationPhase).EstablishedAt = &at
+			effort := w.Phases[1].(*workmodel.ImplementationPhase)
+			effort.Execution.StartedAt = at.Add(2 * time.Minute)
+			effort.Completion.CompletedAt = at.Add(3 * time.Minute)
+			effort.Completion.Summary = "Record task history"
+			zero := 0
+			effort.Execution.Process = &workmodel.ExitedProcess{At: at.Add(4 * time.Minute), Code: &zero}
+			effort.Output = &workmodel.CodeOutput{CodeIdentity: workmodel.CodeIdentity{Commit: "abc123", Tree: "reviewed-tree"}, RetainedRef: "refs/orpheus/fixture-output"}
+			w.ReviewContracts = []workmodel.ReviewContract{{PipelineKey: "manual", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewManual, ConfigKey: "approval"}}}}
+			w.Phases = append(w.Phases, &workmodel.ReviewPhase{Contract: 0, Scope: workmodel.ReviewScope{Requirements: "Closed epic requirements", Output: workmodel.OutputRef{Phase: 1}, Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}, StartedAt: at.Add(4*time.Minute + time.Second), Steps: []workmodel.ReviewStep{&workmodel.ManualReviewStep{Slot: 0, Decision: &workmodel.ApprovedReview{At: at.Add(5 * time.Minute)}}}}, &workmodel.PublicationPhase{Plan: workmodel.PublicationPlan{Review: workmodel.ReviewRef{Phase: 2}, Target: &workmodel.DirectMergeTarget{}, Content: "Record task history\n\nReviewed content"}})
+			require.NoError(t, snapshot.AuthorizePublication(0, workmodel.PublicationRef{Phase: 3}, at.Add(5*time.Minute+time.Second), "Explicit historical fixture grant"))
+			w.Phases[3].(*workmodel.PublicationPhase).Delivery = &workmodel.DirectDelivery{PublicCommit: "abc123", Destination: workmodel.CodeIdentity{Commit: "native-merge", Tree: "reviewed-tree"}, ObservedAt: at.Add(6 * time.Minute), Evidence: "Fixture independently observed destination push"}
+			w.Phases = append(w.Phases, &workmodel.FinalizationPhase{Acceptance: &workmodel.DirectAcceptance{Publication: workmodel.PublicationRef{Phase: 3}}, Closure: &workmodel.TaskClosure{At: at.Add(7 * time.Minute), Reason: "destination_published", Evidence: "Fixture task source confirmed closure"}})
+			saveReaderHistory(t, f, snapshot)
+
+			stdout, stderr := f.mustExecute("task", "show", "op-epic")
+
+			assert.Empty(t, stderr)
+			assert.Contains(t, stdout, "ID: op-epic")
+			assert.Contains(t, stdout, "Status: closed")
+			previous := strings.Index(stdout, "History:")
+			for _, want := range []string{"2026-01-02T03:04:05Z Work prepared", "2026-01-02T03:06:05Z Run started", "2026-01-02T03:07:05Z Completion recorded", "2026-01-02T03:08:05Z Run finished", "2026-01-02T03:10:05Z Pushed main", "2026-01-02T03:11:05Z Task closed"} {
+				index := strings.Index(stdout, want)
+				assert.Greater(t, index, previous, want)
+				previous = index
+			}
+			assert.NotContains(t, stdout, "Worktree reused", "unsupported generic event journals cannot become a second history authority")
+		})
+	}
+}
+
+func TestIntegrationWorkflowTaskShowProjectsReviewAttemptMilestonesIntoHistory(t *testing.T) {
+	f := newCommandWorkflow(t)
+	repo := registerWorkflowRepo(t, f, "alpha", "Alpha", "op")
+	withWorkflowSources(t, f, map[string]taskSourceResult{repo: {tasks: []taskmodel.Task{taskWFTask("op-review", "Review history", taskmodel.StatusOpen, taskmodel.IssueTypeTask)}}})
+	snapshot := testutil.ReviewableWork("alpha", "op-review", repo, "orpheus/op-review")
+	w := &snapshot.Workflows[0]
+	at := workflowTime("2026-01-02T03:04:05Z")
+	w.Phases[0].(*workmodel.PreparationPhase).EstablishedAt = &at
+	first := w.Phases[1].(*workmodel.ImplementationPhase)
+	first.Execution.StartedAt = at.Add(10 * time.Second)
+	first.Completion.CompletedAt = at.Add(20 * time.Second)
+	zero := 0
+	first.Execution.Process = &workmodel.ExitedProcess{At: at.Add(30 * time.Second), Code: &zero}
+	w.ReviewContracts = []workmodel.ReviewContract{{PipelineKey: "local", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewManual, ConfigKey: "manual"}}}, {PipelineKey: "check", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewCheck, ConfigKey: "check"}}}}
+	scope := workmodel.ReviewScope{Requirements: "Review history requirements", Output: workmodel.OutputRef{Phase: 1}, Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}
+	w.Phases = append(w.Phases, &workmodel.ReviewPhase{Contract: 0, Scope: scope, StartedAt: at.Add(time.Minute), Steps: []workmodel.ReviewStep{&workmodel.ManualReviewStep{Slot: 0, Decision: &workmodel.ApprovedReview{At: at.Add(2 * time.Minute)}}}})
+	w.Phases = append(w.Phases, &workmodel.ImplementationPhase{Input: &workmodel.OutputRef{Phase: 1}, Execution: workmodel.AgentExecution{StartedAt: at.Add(3 * time.Minute), Process: &workmodel.ExitedProcess{At: at.Add(3*time.Minute + 30*time.Second), Code: &zero}}, Completion: &workmodel.Completion{Summary: "fix: revised output", Description: "Repair work", DetailedDescription: "Repair details", CompletedAt: at.Add(3*time.Minute + 20*time.Second)}, Output: &workmodel.CodeOutput{CodeIdentity: workmodel.CodeIdentity{Commit: "R2", Tree: "T2"}, RetainedRef: "refs/orpheus/fixture-repair"}})
+	scope.Output = workmodel.OutputRef{Phase: 3}
+	scope.DeltaFrom = &workmodel.OutputRef{Phase: 1}
+	w.Phases = append(w.Phases,
+		&workmodel.ReviewPhase{Contract: 0, Scope: scope, StartedAt: at.Add(4 * time.Minute), Steps: []workmodel.ReviewStep{&workmodel.ManualReviewStep{Slot: 0, Findings: []workmodel.Finding{{Classification: workmodel.FindingBlocking, Title: "Fixture blocker", Description: "Still requires work"}}, Decision: &workmodel.RequestedChanges{At: at.Add(5 * time.Minute)}}}},
+		&workmodel.ReviewPhase{Contract: 1, Scope: scope, StartedAt: at.Add(6 * time.Minute), Steps: []workmodel.ReviewStep{&workmodel.CheckStep{Slot: 0, StartFailure: &workmodel.StartFailedProcess{At: at.Add(7 * time.Minute), Reason: "Fixture command did not start"}}}},
+		&workmodel.ReviewPhase{Contract: 0, Scope: scope, StartedAt: at.Add(8 * time.Minute), Steps: []workmodel.ReviewStep{&workmodel.ManualReviewStep{Slot: 0, Decision: &workmodel.AbortedReview{At: at.Add(9 * time.Minute), Reason: "Operator stopped fixture review"}}}},
+	)
+	saveReaderHistory(t, f, snapshot)
+
+	stdout, stderr := f.mustExecute("task", "show", "op-review")
+
+	assert.Empty(t, stderr)
+	previous := strings.Index(stdout, "History:")
+	for _, want := range []string{"2026-01-02T03:04:05Z Work prepared", "2026-01-02T03:05:05Z Review attempt 1 started", "2026-01-02T03:06:05Z Review attempt 1 passed", "2026-01-02T03:07:05Z Run started", "2026-01-02T03:08:05Z Review attempt 2 started", "2026-01-02T03:09:05Z Review attempt 2 blocked", "2026-01-02T03:10:05Z Review attempt 3 started", "2026-01-02T03:11:05Z Review attempt 3 failed", "2026-01-02T03:12:05Z Review attempt 4 started", "2026-01-02T03:13:05Z Review attempt 4 aborted"} {
+		index := strings.Index(stdout, want)
+		assert.Greater(t, index, previous, want)
+		previous = index
+	}
+}
+
 func TestIntegrationWorkflowTaskShowReviewRendersManuallyAddressedFinding(t *testing.T) {
-	fixture := newCommandWorkflow(t)
-	t.Parallel()
-	is := assert.New(t)
-	must := require.New(t)
-	runStore, _ := setupTaskShowReviewWorkflowRepo(t, fixture, "op-addressed")
-	reviewAttempt, err := runStore.StartReviewWithOptions("alpha", "op-addressed", taskstate.StartReviewOptions{Pipeline: "default", Step: "inspect"})
-	must.NoError(err)
-	_, err = runStore.RecordReviewFinding("alpha", "op-addressed", reviewAttempt.Attempt, taskstate.ReviewFinding{Type: taskstate.FindingTypeBlocking, Title: "Direct repair", Description: "Fixed outside the review loop.", Step: "inspect"})
-	must.NoError(err)
-	_, err = runStore.FinishReview("alpha", "op-addressed", reviewAttempt.Attempt, taskstate.ReviewStatusBlocked)
-	must.NoError(err)
-	_, err = runStore.AddressReviewBlockingFindingManually("alpha", "op-addressed", reviewAttempt.Attempt, 0, "Verified in the worktree.")
-	must.NoError(err)
-	stdout, stderr := fixture.mustExecute("task", "show", "review", "op-addressed", "1", "1")
-	is.Empty(stderr)
-	is.Contains(stdout, "Authoritative finding 1/1:")
-	is.Contains(stdout, "Disposition: addressed manually: Verified in the worktree.")
+	f := newCommandWorkflow(t)
+	_, repo := setupTaskShowReviewWorkflowRepo(t, f, "op-addressed")
+	snapshot := testutil.ReviewableWork("alpha", "op-addressed", repo, "main")
+	at := workflowTime("2026-01-02T03:04:05Z")
+	w := &snapshot.Workflows[0]
+	w.ReviewContracts = []workmodel.ReviewContract{{PipelineKey: "default", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewManual, ConfigKey: "inspect"}}}}
+	w.Phases = append(w.Phases, &workmodel.ReviewPhase{Contract: 0, Scope: workmodel.ReviewScope{Requirements: "Task requirements", Output: workmodel.OutputRef{Phase: 1}, Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}, StartedAt: at, Steps: []workmodel.ReviewStep{&workmodel.ManualReviewStep{Slot: 0, Findings: []workmodel.Finding{{Classification: workmodel.FindingBlocking, Title: "Direct repair", Description: "Fixed outside the review loop.", Dispositions: []workmodel.FindingDisposition{&workmodel.AddressedFinding{Waiver: workmodel.Waiver{At: at.Add(time.Minute), Reason: "Verified in the worktree."}}}}}, Decision: &workmodel.RequestedChanges{At: at.Add(30 * time.Second)}}}})
+	saveReaderHistory(t, f, snapshot)
+
+	stdout, stderr := f.mustExecute("task", "show", "review", "op-addressed", "1", "1")
+
+	assert.Empty(t, stderr)
+	assert.Contains(t, stdout, "Authoritative finding 1/1:")
+	assert.Contains(t, stdout, "Disposition: addressed manually: Verified in the worktree.")
+}
+
+func saveReaderHistory(t *testing.T, f *workflowFixture, snapshot workmodel.State) {
+	t.Helper()
+	adapter := workstate.NewStore(f.paths)
+	previous, err := adapter.Load(snapshot.RepositoryID, snapshot.TaskID)
+	require.NoError(t, err)
+	snapshot.Version = previous.Version
+	_, err = adapter.Save(snapshot, snapshot.Version)
+	require.NoError(t, err)
 }

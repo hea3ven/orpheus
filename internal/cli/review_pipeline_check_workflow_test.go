@@ -46,11 +46,13 @@ func TestIntegrationWorkflowReviewPipelineRestartedStepRetainsFindingNumberThrou
 			}
 			latest := loadLatestReview(t, fixture, "op-retry-number")
 			is.Equal(taskstate.ReviewStatusWaitingForAutomatedDecision, latest.Status)
-			must.Len(latest.Steps, 1)
-			must.Len(latest.Findings, 1)
+			must.Len(latest.Steps, 2)
+			must.Len(latest.Findings, 2)
+			is.True(latest.Findings[0].Superseded)
+			is.NotEqual(latest.Findings[0].Address, latest.Findings[1].Address, "restart retains distinct native reporting ownership")
 			is.Equal("unit", latest.Findings[0].Step)
 			if kind == "agent_review" {
-				is.Equal("Current blocker", latest.Findings[0].Title)
+				is.Equal("Current blocker", latest.Findings[1].Title)
 			}
 		})
 	}

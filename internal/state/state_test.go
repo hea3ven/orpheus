@@ -135,17 +135,19 @@ func TestReadYAMLMalformedFileIsActionable(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(path, []byte("name: [unterminated\n"), 0o644); err != nil {
-		t.Fatalf("write malformed YAML: %v", err)
-	}
-
-	var got sampleState
-	err := paths.ReadConfigYAML("bad.yaml", &got)
-	if err == nil {
-		t.Fatal("read malformed YAML succeeded, want error")
-	}
-	if !strings.Contains(err.Error(), "parse config YAML") || !strings.Contains(err.Error(), "bad.yaml") {
-		t.Fatalf("error is not actionable: %v", err)
+	for name, text := range map[string]string{
+		"malformed first document":    "name: [unterminated\n",
+		"second document":             "name: first\n---\nname: second\n",
+		"malformed trailing document": "name: first\n---\nname: [unterminated\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.NoError(t, os.WriteFile(path, []byte(text), 0o644))
+			var got sampleState
+			err := paths.ReadConfigYAML("bad.yaml", &got)
+			require.Error(t, err, "ambiguous YAML must not silently select its first document")
+			assert.ErrorContains(t, err, "parse")
+			assert.ErrorContains(t, err, "bad.yaml")
+		})
 	}
 }
 
@@ -313,6 +315,24 @@ func TestWithGlobalMutationLockFailsFastOnContention(t *testing.T) {
 	if err != nil {
 		t.Fatalf("outer lock: %v", err)
 	}
+}
+
+func TestDataLockProtectsOneDocumentIndependentlyAndReleasesAfterFailure(t *testing.T) {
+	paths := newTestPaths(t)
+	failure := errors.New("save refused")
+	called := false
+	err := WithGlobalMutationLock(paths, "progress workflow", func() error {
+		return paths.WithDataLock("tasks/one.lock", func() error {
+			err := paths.WithDataLock("tasks/one.lock", func() error { called = true; return nil })
+			require.ErrorIs(t, err, os.ErrExist)
+			require.NoError(t, paths.WithDataLock("tasks/two.lock", func() error { return nil }))
+			return failure
+		})
+	})
+	require.ErrorIs(t, err, failure)
+	assert.False(t, called, "the contending writer must not run")
+	require.NoError(t, paths.WithDataLock("tasks/one.lock", func() error { called = true; return nil }))
+	assert.True(t, called, "failed operations must release their document lock")
 }
 
 func TestListDataFilesReturnsSortedDirectFiles(t *testing.T) {

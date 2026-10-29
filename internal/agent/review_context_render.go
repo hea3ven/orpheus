@@ -16,6 +16,7 @@ func RenderReviewContext(ctx ReviewContext) string {
 	appendReviewTaskContext(&builder, ctx)
 	appendRepositoryContext(&builder, ctx.Repository)
 	appendReviewTargetContext(&builder, ctx)
+	appendCommittedReviewScope(&builder, ctx.Review)
 	appendReviewCompletionContext(&builder, ctx.Review)
 	appendPriorReviewFindings(&builder, ctx.Task.ID, ctx.Review.PriorFindings)
 	if exhaustiveReviewContextEnabled() {
@@ -190,4 +191,20 @@ func appendReviewFindingValidationRules(builder *strings.Builder) {
 	builder.WriteString("- Blocking findings from a successful review-agent process stop the pipeline.\n")
 	builder.WriteString("- Advisory and separate-task findings do not stop the pipeline.\n")
 	builder.WriteString("- Do not call `orpheus agent done`; implementation completion has already been recorded.\n")
+}
+
+func appendCommittedReviewScope(builder *strings.Builder, review ContextReview) {
+	builder.WriteString("\nCommitted review scope:\n")
+	appendPromptLine(builder, "- Full-task baseline", review.Baseline.Commit)
+	appendPromptLine(builder, "- Reviewed output", review.Output.Commit)
+	appendPromptLine(builder, "- Reviewed tree", review.Output.Tree)
+	if review.RepairInput != nil {
+		appendPromptLine(builder, "- Repair-delta input", review.RepairInput.Commit)
+		appendPromptLine(builder, "- Repair-delta output", review.Output.Commit)
+	}
+	appendPromptBlock(builder, "- Captured task requirements", review.Scope.Requirements)
+	if review.Scope.Destination != nil {
+		appendPromptLine(builder, "- Automated review destination", review.Scope.Destination.Remote+"/"+review.Scope.Destination.Branch+" at "+review.Scope.Destination.Commit)
+	}
+	builder.WriteString("Review the complete task from the full-task baseline to the reviewed output; use the repair delta as additional context, not a replacement for full-task coverage. Do not review a moving HEAD or uncommitted changes.\n")
 }

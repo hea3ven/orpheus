@@ -3,68 +3,96 @@ package workflow
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workstate"
 )
 
-// ReviewCandidateGit supplies Git observations for task-review admission.
-// Admission policy and task-state reads belong to the workflow.
+// ReviewCandidateGit observes exact committed review input and its destination.
 type ReviewCandidateGit interface {
-	HasStagedChanges(context.Context, string) (bool, error)
-	HasCandidateChanges(context.Context, string) (bool, error)
-	ShortStatus(context.Context, string) (string, error)
+	VerifyRevision(context.Context, string, gitmeta.CheckoutIdentity, gitmeta.Revision) error
+	ObserveDestination(context.Context, string, string) (work.Destination, error)
 }
 
-// LocalReviewCandidateGit observes the candidate in the local checkout.
+// LocalReviewCandidateGit uses ordinary local Git and the configured origin.
 type LocalReviewCandidateGit struct{}
 
-// HasStagedChanges reports whether the Git index contains staged changes.
-func (LocalReviewCandidateGit) HasStagedChanges(ctx context.Context, workdir string) (bool, error) {
-	return gitmeta.HasStagedChanges(ctx, workdir)
+func (LocalReviewCandidateGit) VerifyRevision(ctx context.Context, dir string, identity gitmeta.CheckoutIdentity, revision gitmeta.Revision) error {
+	return gitmeta.VerifyRevision(ctx, dir, identity, revision)
 }
 
-// HasCandidateChanges reports whether the checkout contains candidate changes.
-func (LocalReviewCandidateGit) HasCandidateChanges(ctx context.Context, workdir string) (bool, error) {
-	return review.HasCandidateChanges(ctx, workdir)
+func (LocalReviewCandidateGit) ObserveDestination(ctx context.Context, dir, branch string) (work.Destination, error) {
+	commit, err := gitmeta.ObserveRemoteBranch(ctx, dir, branch)
+	if err != nil {
+		return work.Destination{}, err
+	}
+	return work.Destination{Remote: "origin", Branch: branch, Commit: commit}, nil
 }
 
-// ShortStatus returns Git status for admission diagnostics.
-func (LocalReviewCandidateGit) ShortStatus(ctx context.Context, workdir string) (string, error) {
-	return gitmeta.ShortStatus(ctx, workdir)
+func (s ReviewLifecycleService) outputService() ImplementationService {
+	boundary := s.OutputGit
+	if boundary == nil {
+		boundary = LocalOutputGit{}
+	}
+	return ImplementationService{Paths: s.Paths, Store: workstate.NewStore(s.Paths), Git: boundary, Logger: s.Logger}
 }
 
 func (s ReviewLifecycleService) inspectReviewCandidate(ctx context.Context, reviewCtx ReviewContext, workdir string) error {
-	git := s.CandidateGit
-	if git == nil {
-		git = LocalReviewCandidateGit{}
-	}
-	hasStagedChanges, err := git.HasStagedChanges(ctx, workdir)
-	if err != nil {
-		return err
-	}
-	if hasStagedChanges {
-		status, statusErr := git.ShortStatus(ctx, workdir)
-		if statusErr != nil {
-			status = "unable to read git status: " + statusErr.Error()
-		}
-		return fmt.Errorf("review requires a clean Git index, but staged changes are present in %q; unstage them, then rerun `orpheus task run <task-id>`\n%s", workdir, strings.TrimSpace(status))
-	}
-	hasCandidate, err := git.HasCandidateChanges(ctx, workdir)
-	if err != nil {
-		return err
-	}
-	if hasCandidate {
-		return nil
-	}
-	taskState, err := s.RunStore.Load(reviewCtx.RepoID(), reviewCtx.TaskID())
+	snapshot, err := s.RunStore.Load(reviewCtx.RepoID(), reviewCtx.TaskID())
 	if err != nil {
 		return fmt.Errorf("load task state: %w", err)
 	}
-	if strings.TrimSpace(taskstate.FinalizationFacts(taskState).Commit) != "" {
-		return nil
+	run, ok := taskstate.LatestRun(snapshot)
+	if !ok || snapshot.Work == nil {
+		return fmt.Errorf("review requires a workflow-owned implementation")
 	}
-	return fmt.Errorf("worktree %q has no candidate changes to review and task has no recorded finalization commit", workdir)
+	w := snapshot.Work.ActiveWorkflow()
+	if w == nil {
+		return fmt.Errorf("review requires an open workflow")
+	}
+	effort, ok := w.Phases[run.Address.Phase].(*work.ImplementationPhase)
+	if !ok {
+		return fmt.Errorf("review requires implementation output")
+	}
+	if effort.Output == nil {
+		if _, err := s.outputService().Capture(ctx, run.Address); err != nil {
+			return fmt.Errorf("retain completed implementation before review: %w", err)
+		}
+		snapshot, err = s.RunStore.Load(reviewCtx.RepoID(), reviewCtx.TaskID())
+		if err != nil {
+			return err
+		}
+		w = snapshot.Work.ActiveWorkflow()
+	}
+	output, err := w.Output(work.OutputRef{Phase: run.Address.Phase})
+	if err != nil {
+		return err
+	}
+	boundary := s.CandidateGit
+	if boundary == nil {
+		boundary = LocalReviewCandidateGit{}
+	}
+	return boundary.VerifyRevision(ctx, workdir, gitmeta.CheckoutIdentity{Commit: output.Commit, Ref: "refs/heads/" + w.Context().TaskBranch}, gitmeta.Revision{Commit: output.Commit, Tree: output.Tree, RetainedRef: output.RetainedRef})
+}
+
+func committedCandidate(snapshot taskstate.TaskState, ref work.AttemptRef) (review.CommittedCandidate, error) {
+	if snapshot.Work == nil || ref.Workflow < 0 || ref.Workflow >= len(snapshot.Work.Workflows) {
+		return review.CommittedCandidate{}, fmt.Errorf("review has no workflow-owned scope")
+	}
+	w := &snapshot.Work.Workflows[ref.Workflow]
+	if ref.Phase < 0 || ref.Phase >= len(w.Phases) {
+		return review.CommittedCandidate{}, fmt.Errorf("invalid review phase")
+	}
+	p, ok := w.Phases[ref.Phase].(*work.ReviewPhase)
+	if !ok {
+		return review.CommittedCandidate{}, fmt.Errorf("expected review phase")
+	}
+	output, err := w.Output(p.Scope.Output)
+	if err != nil {
+		return review.CommittedCandidate{}, err
+	}
+	return review.CommittedCandidate{Identity: gitmeta.CheckoutIdentity{Commit: output.Commit, Ref: "refs/heads/" + w.Context().TaskBranch}, Revision: gitmeta.Revision{Commit: output.Commit, Tree: output.Tree, RetainedRef: output.RetainedRef}}, nil
 }

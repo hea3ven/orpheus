@@ -34,7 +34,7 @@ func TestIntegrationWorkflowReviewPipelinePassesPromptModelEnvironmentAndChildPI
 
 	stdout, _ := fixture.run("", "task", "run", "op-review")
 
-	is.Contains(stdout, "Published op-review")
+	is.Contains(stdout, "Review passed for op-review")
 	must.Len(fixture.agent.launches, 1)
 	launch := fixture.agent.launches[0]
 	wantPrompt := agent.RenderEffectivePrompt(promptAppend)

@@ -5,6 +5,7 @@ package cli_test
 import (
 	"context"
 	"errors"
+	workmodel "github.com/hea3ven/orpheus/internal/work"
 	"os"
 	"path/filepath"
 	"testing"
@@ -106,7 +107,11 @@ func newRepositoryRemovalFixture(t *testing.T, repo registry.Repo) (*workflowFix
 		return "", nil
 	}
 	for _, rel := range []string{"repos/alpha/tasks/a-open.yaml", "repos/alpha/" + repo.Source() + "/owned.yaml", "repos/beta/tasks/beta-work.yaml", "repos/alphabet/tasks/keep.yaml"} {
-		require.NoError(t, f.paths.WriteDataYAML(rel, map[string]string{"keep": rel}))
+		if rel == "repos/alpha/tasks/a-open.yaml" {
+			require.NoError(t, f.paths.WriteDataYAML(rel, taskstate.TaskState{Work: &workmodel.State{RepositoryID: "alpha", TaskID: "a-open", Version: 1}}))
+		} else {
+			require.NoError(t, f.paths.WriteDataYAML(rel, map[string]string{"keep": rel}))
+		}
 	}
 	return f, g, backend
 }
@@ -125,11 +130,15 @@ func assertRemovalLockReleased(t *testing.T, f *workflowFixture) {
 func assertRemovalDataRetained(t *testing.T, f *workflowFixture, repo registry.Repo) {
 	t.Helper()
 	assert.Len(t, f.loadFinalRegistry().Repos, 2)
-	for _, rel := range []string{"repos/alpha/tasks/a-open.yaml", "repos/alpha/" + repo.Source() + "/owned.yaml"} {
-		var got map[string]string
-		require.NoError(t, f.paths.ReadDataYAML(rel, &got))
-		assert.Equal(t, map[string]string{"keep": rel}, got)
-	}
+	var taskDocument taskstate.TaskState
+	require.NoError(t, f.paths.ReadDataYAML("repos/alpha/tasks/a-open.yaml", &taskDocument))
+	require.NotNil(t, taskDocument.Work)
+	assert.Equal(t, "alpha", taskDocument.Work.RepositoryID)
+	var owned map[string]string
+	rel := "repos/alpha/" + repo.Source() + "/owned.yaml"
+	require.NoError(t, f.paths.ReadDataYAML(rel, &owned))
+	assert.Equal(t, map[string]string{"keep": rel}, owned)
+
 	assertRemovalLockReleased(t, f)
 }
 
@@ -148,17 +157,16 @@ func TestIntegrationWorkflowRepositoryRemovalDeletesOwnedDataAndAllowsFreshRegis
 			}
 			f, g, backend := newRepositoryRemovalFixture(t, repo)
 			// Stale running facts do not introduce an active-execution gate.
-			require.NoError(t, f.paths.WriteDataYAML("repos/alpha/tasks/a-open.yaml", taskstate.TaskState{Version: 4, RepoID: "alpha", TaskID: "a-open"}))
 			store := taskstate.NewStore(f.paths)
-			run, err := store.StartRun(repo.ID, "a-open", taskstate.StartRunOptions{Agent: "pi", Branch: "main", Worktree: repo.Path})
+			run, err := store.StartRun(repo.ID, "a-open", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repo.Path, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "pi", Branch: "main", Worktree: repo.Path})
 			require.NoError(t, err)
-			_, err = store.RecordRunUsage(repo.ID, "a-open", run.Attempt, taskstate.RecordRunUsageOptions{
+			_, err = seedFixtureUsage(store, repo.ID, "a-open", run.Attempt, taskstate.RecordRunUsageOptions{
 				Usage:        &taskstate.AgentUsage{InputTokens: 100, OutputTokens: 40, TotalTokens: 140},
 				UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureCaptured},
 			})
 			require.NoError(t, err)
-			_, err = store.StartReview(repo.ID, "a-closed")
-			require.NoError(t, err)
+			history := readerDeliveredHistory(t, repo.ID, "a-closed", repo.Path, "orpheus/a-closed", workflowTime("2026-07-07T10:00:00Z"))
+			saveReaderHistory(t, f, history)
 			stdout, _, err := f.execute("__complete", "repo", "remove", "a")
 			require.NoError(t, err)
 			assert.Contains(t, stdout, "alpha\tAlpha Repo")

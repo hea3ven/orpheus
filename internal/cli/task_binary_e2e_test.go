@@ -86,7 +86,7 @@ printf 'reviewed\n' > reviewed.txt
 	withFakeGHPRResponses(t, fakeGHPRResponses{listStdout: "[]", createStdout: "https://github.test/org/alpha/pull/1\n"})
 	stdout, stderr := executeCommandWithScriptedInput(t, []string{"task", "run", "--repo-root", "op-main"}, "", "n\n")
 
-	is.Contains(stdout, "Published op-main")
+	is.Contains(stdout, "Review passed for op-main")
 	is.Contains(stderr, "Separate-task review findings can be created as standalone tasks")
 	is.Contains(stderr, "Create follow-up tasks [numbers, a=all, n=none]")
 	is.NotContains(stderr, "Created follow-up task")

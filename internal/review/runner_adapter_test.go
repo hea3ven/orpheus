@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/testguard"
 	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
@@ -83,6 +84,141 @@ func TestIntegrationAdapterContractCandidateSnapshotRestoresTrackedAndUntrackedM
 	if strings.Contains(status, "created-by-review.txt") {
 		t.Fatalf("git status = %q, want reviewer-created file removed", status)
 	}
+	for name, mutate := range committedReviewMutations() {
+		t.Run(name, func(t *testing.T) { assertCommittedReviewRestoration(t, mutate) })
+	}
+}
+
+type reviewMutation func(*testing.T, string)
+
+func committedReviewMutations() map[string]reviewMutation {
+	return map[string]reviewMutation{
+		"committed output and new tracked file": func(t *testing.T, dir string) {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("committed mutation\n"), 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "new.txt"), []byte("new\n"), 0o644))
+			runReviewAdapterGit(t, dir, "add", "--all")
+			runReviewAdapterGit(t, dir, "-c", "user.name=Reviewer", "-c", "user.email=reviewer@example.test", "commit", "-m", "unwanted commit")
+		},
+		"clean wrong ref at expected commit": func(t *testing.T, dir string) {
+			runReviewAdapterGit(t, dir, "checkout", "-b", "other")
+		},
+		"clean wrong ref at different commit": func(t *testing.T, dir string) {
+			runReviewAdapterGit(t, dir, "checkout", "-b", "other", "HEAD^")
+		},
+		"clean detached wrong commit": func(t *testing.T, dir string) {
+			runReviewAdapterGit(t, dir, "checkout", "--detach", "HEAD^")
+		},
+		"different index and worktree content": func(t *testing.T, dir string) {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("staged\n"), 0o644))
+			runReviewAdapterGit(t, dir, "add", "tracked.txt")
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("unstaged\n"), 0o644))
+		},
+		"tracked mode hidden by repository configuration": func(t *testing.T, dir string) {
+			runReviewAdapterGit(t, dir, "config", "core.filemode", "false")
+			require.NoError(t, os.Chmod(filepath.Join(dir, "tracked.txt"), 0o644))
+		},
+		"index flags hide tracked content": func(t *testing.T, dir string) {
+			runReviewAdapterGit(t, dir, "update-index", "--assume-unchanged", "tracked.txt")
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("hidden mutation\n"), 0o755))
+		},
+		"file replaced by symlink": func(t *testing.T, dir string) {
+			require.NoError(t, os.Remove(filepath.Join(dir, "tracked.txt")))
+			require.NoError(t, os.Symlink("nested/file.txt", filepath.Join(dir, "tracked.txt")))
+		},
+		"tracked parent replaced by symlink": func(t *testing.T, dir string) {
+			outside := testutil.CanonicalTempDir(t)
+			outsidePath := filepath.Join(outside, "file.txt")
+			require.NoError(t, os.WriteFile(outsidePath, []byte("unrelated operator data\n"), 0o644))
+			t.Cleanup(func() {
+				assert.Equal(t, "unrelated operator data\n", string(mustReadReviewAdapterFile(t, outsidePath)))
+			})
+			require.NoError(t, os.Remove(filepath.Join(dir, "nested", "file.txt")))
+			require.NoError(t, os.Remove(filepath.Join(dir, "nested")))
+			require.NoError(t, os.Symlink(outside, filepath.Join(dir, "nested")))
+		},
+		"corrupt index": func(t *testing.T, dir string) {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "index"), []byte("corrupt"), 0o644))
+		},
+	}
+}
+
+func assertCommittedReviewRestoration(t *testing.T, mutate reviewMutation) {
+	t.Helper()
+	dir := testutil.CanonicalTempDir(t)
+	initReviewAdapterGitRepo(t, dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("reviewed\n"), 0o755))
+	require.NoError(t, os.Chmod(filepath.Join(dir, "tracked.txt"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "nested"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "nested", "file.txt"), []byte("nested reviewed\n"), 0o640))
+	runReviewAdapterGit(t, dir, "add", "--all")
+	runReviewAdapterGit(t, dir, "-c", "user.name=Orpheus Test", "-c", "user.email=orpheus@example.com", "commit", "-m", "reviewed revision")
+	head := strings.TrimSpace(runReviewAdapterGit(t, dir, "rev-parse", "HEAD"))
+	revision := gitmeta.Revision{Commit: head, Tree: strings.TrimSpace(runReviewAdapterGit(t, dir, "rev-parse", "HEAD^{tree}")), RetainedRef: "refs/orpheus/revisions/reviewed"}
+	runReviewAdapterGit(t, dir, "update-ref", revision.RetainedRef, head)
+	expected := gitmeta.CheckoutIdentity{Commit: head, Ref: "refs/heads/main"}
+	wrong := expected
+	wrong.Ref = "refs/heads/another-task"
+	refused, err := CaptureCommittedCandidate(context.Background(), dir, wrong, revision, nil)
+	require.ErrorContains(t, err, "requires HEAD")
+	require.Nil(t, refused, "a clean wrong checkout must not become the snapshot authority")
+	entries := runReviewAdapterGit(t, dir, "ls-files", "--stage", "-v", "-z")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	check, err := CaptureCommittedCandidate(ctx, dir, expected, revision, nil)
+	require.NoError(t, err)
+	require.NoError(t, check(), "unchanged input must not be diagnosed as mutation")
+
+	mutate(t, dir)
+	otherBefore := runReviewAdapterGit(t, dir, "for-each-ref", "--format=%(objectname)", "refs/heads/other")
+	// Restoration must remain possible after the reviewer process is canceled.
+	cancel()
+	err = check()
+	require.ErrorContains(t, err, "restored the pre-step snapshot")
+	assert.Equal(t, head, strings.TrimSpace(runReviewAdapterGit(t, dir, "rev-parse", "HEAD")))
+	assert.Equal(t, "refs/heads/main", strings.TrimSpace(runReviewAdapterGit(t, dir, "symbolic-ref", "HEAD")))
+	assert.Equal(t, otherBefore, runReviewAdapterGit(t, dir, "for-each-ref", "--format=%(objectname)", "refs/heads/other"), "rollback must not move an unrelated selected branch")
+	assert.Equal(t, entries, runReviewAdapterGit(t, dir, "ls-files", "--stage", "-v", "-z"))
+	assert.Equal(t, "reviewed\n", string(mustReadReviewAdapterFile(t, filepath.Join(dir, "tracked.txt"))))
+	assert.Equal(t, "nested reviewed\n", string(mustReadReviewAdapterFile(t, filepath.Join(dir, "nested", "file.txt"))))
+	info, err := os.Lstat(filepath.Join(dir, "tracked.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm())
+	assert.True(t, info.Mode().IsRegular(), "a reviewer-created symlink must not survive restoration")
+	assert.Empty(t, runReviewAdapterGit(t, dir, "status", "--porcelain=v1"))
+	require.NoError(t, check(), "full checkout and index verification must agree after restore")
+}
+
+func TestIntegrationAdapterContractCandidateRollbackReportsIncompleteRestoration(t *testing.T) {
+	dir := testutil.CanonicalTempDir(t)
+	path := initReviewAdapterGitRepoWithCandidateChange(t, dir)
+	snapshot, err := captureCandidateSnapshot(context.Background(), dir, nil)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, []byte("mutated\n"), 0o644))
+	lockPath := filepath.Join(dir, ".git", "index.lock")
+	require.NoError(t, os.WriteFile(lockPath, []byte("other Git operation"), 0o644))
+
+	err = restoreCandidateIfMutated(context.Background(), snapshot, nil)
+	require.ErrorContains(t, err, "automatic restore failed")
+	assert.ErrorContains(t, err, "manual repair required")
+	assert.Equal(t, "mutated\n", string(mustReadReviewAdapterFile(t, path)))
+	assert.Equal(t, "other Git operation", string(mustReadReviewAdapterFile(t, lockPath)))
+	require.NoError(t, os.Remove(lockPath))
+	require.ErrorContains(t, restoreCandidateIfMutated(context.Background(), snapshot, nil), "restored the pre-step snapshot")
+	assert.Equal(t, "candidate\n", string(mustReadReviewAdapterFile(t, path)))
+
+	outside := testutil.CanonicalTempDir(t)
+	outsidePath := filepath.Join(outside, "candidate.txt")
+	require.NoError(t, os.WriteFile(outsidePath, []byte("unrelated operator data\n"), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte("another mutation\n"), 0o644))
+	runReviewAdapterGit(t, dir, "config", "core.worktree", outside)
+	err = restoreCandidateIfMutated(context.Background(), snapshot, nil)
+	require.ErrorContains(t, err, "automatic restore failed")
+	assert.ErrorContains(t, err, "redirected")
+	assert.Equal(t, "unrelated operator data\n", string(mustReadReviewAdapterFile(t, outsidePath)), "rollback must not reset a redirected work directory")
+	assert.Equal(t, "another mutation\n", string(mustReadReviewAdapterFile(t, path)))
+	runReviewAdapterGit(t, dir, "config", "--unset", "core.worktree")
+	require.ErrorContains(t, restoreCandidateIfMutated(context.Background(), snapshot, nil), "restored the pre-step snapshot")
+	assert.Equal(t, "candidate\n", string(mustReadReviewAdapterFile(t, path)))
 }
 
 func TestIntegrationAdapterContractHunkManualCommandCapturesNotesAfterCommandExit(t *testing.T) {

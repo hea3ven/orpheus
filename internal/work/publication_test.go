@@ -143,6 +143,8 @@ func TestFinalizationRequiresMergeConfirmationAndPreservesSeparatelyRetryableCle
 	require.Equal(t, work.FindingResolved, w.LatestLocalVerification(followupFindingRef(t)).Resolution)
 	w.Phases[8].(*work.ReviewPhase).Steps[2].(*work.AgentReviewStep).Report.Verifications = nil
 	require.Nil(t, w.LatestLocalVerification(followupFindingRef(t)), "PR merge does not fabricate per-finding local verification")
+	f.Acceptance = nil
+	require.ErrorContains(t, s.Validate(), "explicit delivery acceptance is required", "recorded source closure cannot replace delivery acceptance")
 }
 
 func TestDirectFinalizationNeedsObservedDestinationPushNotJustLocalMerge(t *testing.T) {

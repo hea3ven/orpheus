@@ -457,13 +457,6 @@ func classifySyncConflictRecovery(
 	if !syncConflictOwnershipMatches(taskState, operation) {
 		return syncConflictRecoveryDiagnosis{outcome: "ownership_mismatch", reason: "current persisted task ownership does not match the recovery operation"}
 	}
-	if operation.Phase == taskstate.SyncConflictPhaseUnresolved {
-		reason := strings.TrimSpace(operation.Reason)
-		if reason == "" {
-			reason = "operation was previously marked unresolved"
-		}
-		return syncConflictRecoveryDiagnosis{outcome: "unresolved", reason: reason}
-	}
 
 	inspection := syncConflictExecutionInspection(operation.Execution, probe)
 	if inspection.Condition == workflow.AttachedExecutionLive {
@@ -505,8 +498,7 @@ func classifyRecoverableSyncConflict(
 			MergeSource: operation.Checkpoint.MergeSource,
 		},
 	}
-	if operation.LocalHead != "" && remoteHead == operation.LocalHead &&
-		(operation.Phase == taskstate.SyncConflictPhasePushIntent || operation.Phase == taskstate.SyncConflictPhasePushed) {
+	if operation.LocalHead != "" && remoteHead == operation.LocalHead {
 		diagnosis.outcome = "pushed"
 		diagnosis.reason = "remote task branch matches the recorded local completion"
 		return diagnosis
@@ -558,17 +550,7 @@ func finishPushedSyncConflictRecovery(
 		diagnosis.outcome, diagnosis.reason = "state_transition_failed", err.Error()
 		return diagnosis
 	}
-	var execution taskstate.AgentExecution
-	if updated.Execution != nil {
-		execution = *updated.Execution
-	}
-	_, err = store.RecordSyncConflictResolutionFinished(repoID, taskID, taskstate.SyncConflictResolutionEventOptions{
-		Execution: execution, Branch: updated.Branch, DefaultBranch: updated.DefaultBranch,
-		Worktree: updated.Worktree, ConflictFiles: updated.ConflictFiles, Commit: updated.LocalHead,
-	})
-	if err == nil {
-		err = store.ClearSyncConflictOperation(repoID, taskID, updated.ID)
-	}
+	err = store.ClearSyncConflictOperation(repoID, taskID, updated.ID)
 	if err != nil {
 		diagnosis.outcome, diagnosis.reason = "state_transition_failed", err.Error()
 	}
@@ -608,6 +590,9 @@ func rollbackSyncConflictRecovery(
 func syncConflictExecutionInspection(execution *taskstate.AgentExecution, probe workflow.ProcessProbe) workflow.AttachedExecutionInspection {
 	if execution == nil {
 		return workflow.AttachedExecutionInspection{Condition: workflow.AttachedExecutionRecoverable, Reason: "resolver_not_started"}
+	}
+	if execution.Status != taskstate.RunStatusRunning {
+		return workflow.AttachedExecutionInspection{Condition: workflow.AttachedExecutionRecoverable, Reason: "resolver_process_outcome_observed"}
 	}
 	return workflow.InspectAttachedExecution(*execution, probe)
 }
@@ -788,7 +773,7 @@ func diagnoseExecution(
 		return unknownRow(ref, ref.resumeBoundaryFailure), nil
 	}
 	usageOpts := captureUsageWithDirectoryPriority(usage, ref)
-	usageOpts = preserveStoredUsageCost(ref.execution, usageOpts)
+	usageOpts = preserveStoredExecutionFacts(ref.execution, usageOpts)
 	if usageOpts.UsageCapture.Status != taskstate.UsageCaptureCaptured ||
 		usageOpts.Session == nil ||
 		usageOpts.Usage == nil {
@@ -878,14 +863,31 @@ func diagnoseStoredCodexCostEstimate(
 	return &row, true, nil
 }
 
-func preserveStoredUsageCost(
-	execution taskstate.AgentExecution,
-	usageOpts taskstate.RecordRunUsageOptions,
-) taskstate.RecordRunUsageOptions {
-	if strings.TrimSpace(execution.Harness) == "codex" &&
-		execution.UsageCost != nil &&
-		strings.TrimSpace(execution.UsageCost.Kind) == agent.UsageCostKindEstimatedAPIEquivalent {
+func preserveStoredExecutionFacts(execution taskstate.AgentExecution, usageOpts taskstate.RecordRunUsageOptions) taskstate.RecordRunUsageOptions {
+	if execution.Usage != nil {
+		usageOpts.Usage = execution.Usage
+	}
+	if execution.UsageCost != nil {
 		usageOpts.UsageCost = execution.UsageCost
+	}
+	if execution.ObservedModel != "" {
+		usageOpts.Model = execution.ObservedModel
+	}
+	if execution.UsageCapture.Status == taskstate.UsageCaptureCaptured {
+		usageOpts.UsageCapture = execution.UsageCapture
+	}
+	if execution.Session != nil {
+		session := taskstate.AgentSession{}
+		if usageOpts.Session != nil {
+			session = *usageOpts.Session
+		}
+		if execution.Session.ID != "" {
+			session.ID = execution.Session.ID
+		}
+		if execution.Session.LogPath != "" {
+			session.LogPath = execution.Session.LogPath
+		}
+		usageOpts.Session = &session
 	}
 	return usageOpts
 }
@@ -1109,42 +1111,8 @@ func persistRecovery(
 	ref executionRef,
 	usageOpts taskstate.RecordRunUsageOptions,
 ) error {
-	switch ref.activity {
-	case "implementation":
-		if _, err := store.RecordRunUsage(ref.repoID, ref.taskID, ref.attempt, usageOpts); err != nil {
-			return fmt.Errorf("doctor recover implementation usage for %s/%s attempt %d: %w",
-				ref.repoID,
-				ref.taskID,
-				ref.attempt,
-				err,
-			)
-		}
-	case "review-agent":
-		if _, err := store.RecordReviewStepUsage(
-			ref.repoID,
-			ref.taskID,
-			ref.reviewAttempt,
-			ref.step,
-			usageOpts,
-		); err != nil {
-			return fmt.Errorf("doctor recover review usage for %s/%s attempt %d step %s: %w",
-				ref.repoID,
-				ref.taskID,
-				ref.attempt,
-				ref.step,
-				err,
-			)
-		}
-	case "sync-conflict-resolution":
-		if _, err := store.RecordSyncConflictResolutionUsage(ref.repoID, ref.taskID, ref.event, usageOpts); err != nil {
-			return fmt.Errorf("doctor recover sync-conflict usage for %s/%s: %w",
-				ref.repoID,
-				ref.taskID,
-				err,
-			)
-		}
-	default:
-		return fmt.Errorf("doctor recover usage for %s/%s: unsupported activity %q", ref.repoID, ref.taskID, ref.activity)
+	if err := store.RecordExecutionUsage(ref.execution.Address, usageOpts); err != nil {
+		return fmt.Errorf("doctor recover %s usage for %s/%s: %w", ref.activity, ref.repoID, ref.taskID, err)
 	}
 	return nil
 }

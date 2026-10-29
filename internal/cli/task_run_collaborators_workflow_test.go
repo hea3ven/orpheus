@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
@@ -19,6 +20,7 @@ import (
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/work"
 )
 
 type memoryTaskBackend struct {
@@ -119,6 +121,10 @@ type memoryGitTarget struct {
 
 type memoryDispatchGit struct {
 	mu                  sync.Mutex
+	heads               map[string]string
+	trees               map[string]string
+	retained            map[string]gitmeta.Revision
+	captured            []gitmeta.RevisionCapture
 	startingCommit      string
 	targets             map[string]memoryGitTarget
 	setups              []gitmeta.TaskWorktreeSetupResult
@@ -131,7 +137,7 @@ type memoryDispatchGit struct {
 }
 
 func newMemoryDispatchGit() *memoryDispatchGit {
-	return &memoryDispatchGit{targets: make(map[string]memoryGitTarget), startingCommit: "initial-commit"}
+	return &memoryDispatchGit{heads: make(map[string]string), trees: map[string]string{"initial-commit": "initial-tree"}, retained: make(map[string]gitmeta.Revision), targets: make(map[string]memoryGitTarget), startingCommit: "initial-commit"}
 }
 
 func (g *memoryDispatchGit) SetupRepoRoot(_ context.Context, opts gitmeta.RepoRootOptions) (gitmeta.TaskWorktreeSetupResult, error) {
@@ -268,15 +274,16 @@ type semanticAgentLaunch struct {
 }
 
 type semanticAgentLauncher struct {
-	options    *cli.CommandOptions
-	outcomes   []semanticAgentOutcome
-	launches   []semanticAgentLaunch
-	contexts   []string
-	nextPID    int
-	afterStart func() error
+	options         *cli.CommandOptions
+	outcomes        []semanticAgentOutcome
+	launches        []semanticAgentLaunch
+	contexts        []string
+	nextPID         int
+	afterStart      func() error
+	afterCompletion func() error
 }
 
-func (l *semanticAgentLauncher) Run(_ context.Context, command agentexec.Command, opts agentexec.LaunchOptions) error {
+func (l *semanticAgentLauncher) Run(_ context.Context, command agentexec.Command, opts agentexec.LaunchOptions) (runErr error) {
 	if len(l.outcomes) == 0 {
 		return fmt.Errorf("unexpected agent launch: %s in %s; no scripted outcome remains", command.Name, opts.Dir)
 	}
@@ -293,6 +300,16 @@ func (l *semanticAgentLauncher) Run(_ context.Context, command agentexec.Command
 	if outcome.startFailure != nil {
 		return outcome.startFailure
 	}
+	pid := l.nextPID
+	defer func() {
+		if opts.OnExit != nil {
+			code := 0
+			if runErr != nil {
+				code = 1
+			}
+			opts.OnExit(agentexec.ProcessExit{PID: pid, Code: code, At: time.Now().UTC()})
+		}
+	}()
 	if opts.OnStart != nil {
 		if err := opts.OnStart(l.nextPID); err != nil {
 			return err
@@ -328,6 +345,11 @@ func (l *semanticAgentLauncher) Run(_ context.Context, command agentexec.Command
 	if outcome.completion != nil {
 		if err := l.recordCompletion(opts, environment, *outcome.completion); err != nil {
 			return err
+		}
+		if l.afterCompletion != nil {
+			if err := l.afterCompletion(); err != nil {
+				return err
+			}
 		}
 	}
 	return outcome.err
@@ -390,4 +412,74 @@ func (l *semanticAgentLauncher) recordFinding(opts agentexec.LaunchOptions, envi
 	command.SetErr(opts.Stderr)
 	command.SetArgs([]string{"agent", "review", "add", "--type", string(finding.Type), "--title", finding.Title, "--description", finding.Description, "--suggested-action", finding.SuggestedAction})
 	return command.Execute()
+}
+
+func (g *memoryDispatchGit) PrepareBaseline(_ context.Context, dir, branch, ref string, recorded *gitmeta.Revision) (gitmeta.Revision, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.targets[dir].branch != branch {
+		return gitmeta.Revision{}, errors.New("baseline checkout branch mismatch")
+	}
+	if g.heads[dir] == "" {
+		g.heads[dir] = g.startingCommit
+		g.trees[g.startingCommit] = "initial-tree"
+	}
+	if recorded != nil {
+		if retained, ok := g.retained[ref]; !ok || retained.Commit != recorded.Commit || retained.Tree != recorded.Tree {
+			return gitmeta.Revision{}, errors.New("baseline retention differs")
+		}
+		return *recorded, nil
+	}
+	revision := gitmeta.Revision{Commit: g.heads[dir], Tree: g.trees[g.heads[dir]], RetainedRef: ref}
+	if existing, ok := g.retained[ref]; ok && existing != revision {
+		return gitmeta.Revision{}, errors.New("baseline ref already exists at different code")
+	}
+	g.retained[ref] = revision
+	return revision, nil
+}
+func (g *memoryDispatchGit) CaptureRevision(_ context.Context, opts gitmeta.RevisionCapture) (gitmeta.Revision, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.targets[opts.Directory].branch == "" || "refs/heads/"+g.targets[opts.Directory].branch != opts.Input.Ref || g.heads[opts.Directory] != opts.Input.Commit {
+		return gitmeta.Revision{}, errors.New("capture input does not match checkout")
+	}
+	if revision, ok := g.retained[opts.Ref+"/output"]; ok {
+		return revision, nil
+	}
+	reused := !g.hasCandidateChanges && !g.hasStagedChanges
+	commit := opts.Input.Commit
+	if !reused {
+		commit = fmt.Sprintf("output-%d", len(g.captured)+1)
+		g.trees[commit] = fmt.Sprintf("output-tree-%d", len(g.captured)+1)
+	}
+	g.captured = append(g.captured, opts)
+	g.heads[opts.Directory] = commit
+	g.hasCandidateChanges, g.hasStagedChanges = false, false
+	revision := gitmeta.Revision{Commit: commit, Tree: g.trees[commit], RetainedRef: opts.Ref + "/output", Reused: reused}
+	g.retained[revision.RetainedRef] = revision
+	return revision, nil
+}
+func (g *memoryDispatchGit) VerifyRevision(_ context.Context, dir string, identity gitmeta.CheckoutIdentity, revision gitmeta.Revision) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.hasStagedChanges {
+		return errors.New("review requires a clean Git index")
+	}
+	if g.hasCandidateChanges {
+		return errors.New("checkout has uncommitted changes")
+	}
+	if g.heads[dir] != identity.Commit || "refs/heads/"+g.targets[dir].branch != identity.Ref {
+		return errors.New("checkout does not match expected committed revision")
+	}
+	retained, ok := g.retained[revision.RetainedRef]
+	if !ok || retained.Commit != revision.Commit || retained.Tree != revision.Tree || identity.Commit != revision.Commit || g.trees[revision.Commit] != revision.Tree {
+		return errors.New("revision retention or tree differs")
+	}
+	return nil
+}
+func (*memoryDispatchGit) ObserveDestination(_ context.Context, _ string, branch string) (work.Destination, error) {
+	if branch == "" {
+		return work.Destination{}, errors.New("missing destination")
+	}
+	return work.Destination{Remote: "origin", Branch: branch, Commit: "initial-commit"}, nil
 }

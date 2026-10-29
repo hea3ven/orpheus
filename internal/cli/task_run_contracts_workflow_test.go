@@ -80,7 +80,7 @@ func TestIntegrationWorkflowTaskRunConfiguredDefaultPreservesLaunchContextAndAud
 		attempt int
 		status  taskstate.RunStatus
 	}{
-		{kind: taskstate.EventWorktreeCreated},
+		{kind: taskstate.EventWorkPrepared},
 		{kind: taskstate.EventRunStarted, attempt: 1, status: taskstate.RunStatusRunning},
 		{kind: taskstate.EventCompletionRecorded, attempt: 1, status: taskstate.RunStatusRunning},
 		{kind: taskstate.EventRunFinished, attempt: 1, status: taskstate.RunStatusSucceeded},

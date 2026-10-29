@@ -4,146 +4,90 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestReviewCandidateReadinessRequiresCleanIndexAndChangesOrFinalization(t *testing.T) {
-	indexErr := errors.New("index unavailable")
-	changeErr := errors.New("candidate unavailable")
-	loadErr := errors.New("state unavailable")
-	for _, tt := range []struct {
-		name             string
-		staged           bool
-		indexErr         error
-		statusErr        error
-		hasChanges       bool
-		changeErr        error
-		commit           string
-		loadErr          error
-		wantErr          string
-		wantCause        error
-		wantObservations []string
-		wantReads        int
-	}{
-		{
-			name:   "staged index rejects before candidate and state reads",
-			staged: true, hasChanges: true, changeErr: changeErr, commit: "reviewed-commit", loadErr: loadErr,
-			wantErr: "review requires a clean Git index", wantObservations: []string{"index", "status"},
-		},
-		{
-			name:   "status failure cannot bypass staged rejection",
-			staged: true, statusErr: errors.New("status unavailable"),
-			wantErr: "review requires a clean Git index", wantObservations: []string{"index", "status"},
-		},
-		{
-			name:   "index observation failure",
-			staged: true, indexErr: indexErr, wantErr: "index unavailable", wantCause: indexErr,
-			wantObservations: []string{"index"},
-		},
-		{
-			name:       "uncommitted candidate needs no task-state read",
-			hasChanges: true, loadErr: loadErr, wantObservations: []string{"index", "candidate"},
-		},
-		{
-			name:             "missing changes and finalization rejects",
-			wantErr:          "has no candidate changes to review and task has no recorded finalization commit",
-			wantObservations: []string{"index", "candidate"}, wantReads: 1,
-		},
-		{
-			name: "blank finalization commit does not admit unchanged candidate", commit: " \n\t ",
-			wantErr:          "has no candidate changes to review and task has no recorded finalization commit",
-			wantObservations: []string{"index", "candidate"}, wantReads: 1,
-		},
-		{
-			name: "recorded finalization permits unchanged candidate", commit: "reviewed-commit",
-			wantObservations: []string{"index", "candidate"}, wantReads: 1,
-		},
-		{
-			name:       "candidate observation failure precedes recorded finalization",
-			hasChanges: true, changeErr: changeErr, commit: "reviewed-commit", wantErr: "candidate unavailable", wantCause: changeErr,
-			wantObservations: []string{"index", "candidate"},
-		},
-		{
-			name: "required task-state read failure", loadErr: loadErr,
-			wantErr: "load task state: state unavailable", wantCause: loadErr,
-			wantObservations: []string{"index", "candidate"}, wantReads: 1,
-		},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			store := &candidateReadinessStore{state: taskstate.TaskState{Finalization: &taskstate.Finalization{Commit: tt.commit}}, err: tt.loadErr}
-			reviewCtx := ReviewContext{Source: task.RepositorySource{Repository: task.Repository{ID: "alpha"}}, Task: task.Task{ID: "op-review"}}
-			git := &candidateReadinessGit{t: t, staged: tt.staged, indexErr: tt.indexErr, statusErr: tt.statusErr, hasChanges: tt.hasChanges, changeErr: tt.changeErr}
-			service := ReviewLifecycleService{RunStore: store, CandidateGit: git}
+func TestReviewCandidateReadinessRequiresExactCapturedRevision(t *testing.T) {
+	boundaryError := errors.New("clean checkout is on a different retained commit")
+	loadError := errors.New("state unavailable")
+	for _, scenario := range []string{"retained committed input", "wrong clean checkout", "missing implementation", "state read failure"} {
+		t.Run(scenario, func(t *testing.T) {
+			at := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+			zero := 0
+			snapshot := work.State{RepositoryID: "alpha", TaskID: "op-review", Workflows: []work.Workflow{{Phases: []work.Phase{
+				&work.PreparationPhase{EstablishedAt: &at, Context: &work.WorkContext{Directory: "/fixture/candidate", TaskBranch: "task", CheckpointRef: "refs/orpheus/baseline", Baseline: work.CodeIdentity{Commit: "B", Tree: "BT"}}},
+				&work.ImplementationPhase{Execution: work.AgentExecution{Profile: "implementer", Harness: "pi", Command: "pi", StartedAt: at.Add(time.Second), Process: &work.ExitedProcess{Code: &zero, At: at.Add(3 * time.Second)}}, Completion: &work.Completion{Summary: "feat: output", Description: "Completed work", DetailedDescription: "PR body", CompletedAt: at.Add(2 * time.Second)}, Output: &work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: "R", Tree: "T"}, RetainedRef: "refs/orpheus/output"}},
+			}}}}
+			if scenario == "missing implementation" {
+				snapshot.Workflows[0].Phases = snapshot.Workflows[0].Phases[:1]
+			}
+			view, err := taskstate.Project(snapshot)
+			require.NoError(t, err)
+			store := &candidateReadinessStore{state: view}
+			boundary := &candidateReadinessGit{}
+			if scenario == "wrong clean checkout" {
+				boundary.err = boundaryError
+			}
+			if scenario == "state read failure" {
+				store.err = loadError
+			}
+			service := ReviewLifecycleService{RunStore: store, CandidateGit: boundary}
+			base := ReviewContext{Source: task.RepositorySource{Repository: task.Repository{ID: "alpha"}}, Task: task.Task{ID: "op-review"}}
 
-			err := service.inspectReviewCandidate(context.Background(), reviewCtx, "/fixture/candidate")
+			err = service.inspectReviewCandidate(context.Background(), base, "/fixture/candidate")
 
-			if tt.wantErr == "" {
+			switch scenario {
+			case "retained committed input":
 				require.NoError(t, err)
+			case "wrong clean checkout":
+				require.ErrorIs(t, err, boundaryError)
+			case "state read failure":
+				require.ErrorIs(t, err, loadError)
+			default:
+				require.ErrorContains(t, err, "workflow-owned implementation")
+			}
+			if scenario == "retained committed input" || scenario == "wrong clean checkout" {
+				assert.Equal(t, "/fixture/candidate", boundary.dir)
+				assert.Equal(t, gitmeta.CheckoutIdentity{Commit: "R", Ref: "refs/heads/task"}, boundary.identity)
+				assert.Equal(t, gitmeta.Revision{Commit: "R", Tree: "T", RetainedRef: "refs/orpheus/output"}, boundary.revision)
 			} else {
-				require.ErrorContains(t, err, tt.wantErr)
+				assert.Empty(t, boundary.dir)
 			}
-			if tt.wantCause != nil {
-				assert.ErrorIs(t, err, tt.wantCause)
-			}
-			if tt.staged && tt.indexErr == nil {
-				assert.ErrorContains(t, err, "unstage them, then rerun `orpheus task run <task-id>`")
-				if tt.statusErr != nil {
-					assert.ErrorContains(t, err, "unable to read git status: status unavailable")
-				} else {
-					assert.ErrorContains(t, err, "A  reviewed.txt")
-				}
-			}
-			assert.Equal(t, tt.wantObservations, git.observations)
-			assert.Equal(t, tt.wantReads, store.reads)
-			if tt.wantReads > 0 {
-				assert.Equal(t, []string{"alpha", "op-review"}, store.target)
-			}
+			assert.Equal(t, 1, store.reads)
 		})
 	}
 }
 
 type candidateReadinessGit struct {
-	t            *testing.T
-	staged       bool
-	indexErr     error
-	statusErr    error
-	hasChanges   bool
-	changeErr    error
-	observations []string
+	err      error
+	dir      string
+	identity gitmeta.CheckoutIdentity
+	revision gitmeta.Revision
 }
 
-func (g *candidateReadinessGit) HasStagedChanges(_ context.Context, dir string) (bool, error) {
-	assert.Equal(g.t, "/fixture/candidate", dir)
-	g.observations = append(g.observations, "index")
-	return g.staged, g.indexErr
+func (g *candidateReadinessGit) VerifyRevision(_ context.Context, dir string, identity gitmeta.CheckoutIdentity, revision gitmeta.Revision) error {
+	g.dir, g.identity, g.revision = dir, identity, revision
+	return g.err
 }
-
-func (g *candidateReadinessGit) HasCandidateChanges(_ context.Context, dir string) (bool, error) {
-	assert.Equal(g.t, "/fixture/candidate", dir)
-	g.observations = append(g.observations, "candidate")
-	return g.hasChanges, g.changeErr
-}
-
-func (g *candidateReadinessGit) ShortStatus(_ context.Context, dir string) (string, error) {
-	assert.Equal(g.t, "/fixture/candidate", dir)
-	g.observations = append(g.observations, "status")
-	return "A  reviewed.txt\n", g.statusErr
+func (*candidateReadinessGit) ObserveDestination(context.Context, string, string) (work.Destination, error) {
+	return work.Destination{}, errors.New("unexpected destination observation")
 }
 
 type candidateReadinessStore struct {
 	ReviewLifecycleStore
-	state  taskstate.TaskState
-	err    error
-	reads  int
-	target []string
+	state taskstate.TaskState
+	err   error
+	reads int
 }
 
-func (s *candidateReadinessStore) Load(repoID, taskID string) (taskstate.TaskState, error) {
+func (s *candidateReadinessStore) Load(string, string) (taskstate.TaskState, error) {
 	s.reads++
-	s.target = []string{repoID, taskID}
 	return s.state, s.err
 }

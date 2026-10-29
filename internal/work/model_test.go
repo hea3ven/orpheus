@@ -182,6 +182,15 @@ func TestStateRejectsInvalidStructuralOwnershipAndReferences(t *testing.T) {
 		change func(*work.State)
 		want   string
 	}{
+		{"missing baseline commit", func(s *work.State) {
+			s.Workflows[0].Context().Baseline.Commit = ""
+		}, "code requires commit and tree identity"},
+		{"missing baseline tree", func(s *work.State) {
+			s.Workflows[0].Context().Baseline.Tree = ""
+		}, "code requires commit and tree identity"},
+		{"missing baseline retention", func(s *work.State) {
+			s.Workflows[0].Context().CheckpointRef = ""
+		}, "context requires task branch and owned checkpoint ref"},
 		{"negative review index", func(s *work.State) {
 			s.Workflows[0].Phases[9].(*work.PublicationPhase).Plan.Review.Phase = -1
 		}, "earlier phase"},

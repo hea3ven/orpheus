@@ -1,6 +1,21 @@
 package work
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
+
+func (f *Finding) blockingAt(cutoff time.Time) bool {
+	if f.Classification == FindingBlocking {
+		return true
+	}
+	for _, disposition := range f.Dispositions {
+		if promoted, ok := disposition.(*PromotedFinding); ok && promoted != nil && observedBy(promoted.At, cutoff) {
+			return true
+		}
+	}
+	return false
+}
 
 func (w *Workflow) findingOutput(ref FindingRef) (OutputRef, error) {
 	p, err := phaseAs[*ReviewPhase](w, ref.Phase)

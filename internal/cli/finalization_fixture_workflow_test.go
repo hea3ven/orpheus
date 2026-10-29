@@ -6,13 +6,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	workmodel "github.com/hea3ven/orpheus/internal/work"
 	"testing"
 
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"time"
 )
 
 // Publication outcomes describe external effects, not workflow decisions. The
@@ -29,7 +34,7 @@ func newFinalizationFixture(t *testing.T, taskID string) *finalizationWorkflowFi
 	base := newReviewDispatchFixture(t, taskID)
 	f := &finalizationWorkflowFixture{reviewWorkflowFixture: base}
 	f.publication = &memoryPublicationGit{memoryReviewCandidate: base.candidate, remote: make(map[string]string)}
-	f.pr = &memoryPublicationPR{url: "https://github.test/org/alpha/pull/42"}
+	f.pr = &memoryPublicationPR{url: "https://github.test/org/alpha/pull/42", state: pullrequest.StateOpen}
 	f.mutations = &memoryPublicationTasks{memoryReviewTasks: base.tasks}
 	f.options.Dependencies.FinalizationGit = f.publication
 	f.options.Dependencies.SyncGit = f.publication
@@ -45,28 +50,47 @@ func (f *finalizationWorkflowFixture) completion(taskID, branch, dir, summary, d
 	item.Metadata = taskmodel.Metadata{taskmodel.MetadataBranch: branch, taskmodel.MetadataWorktree: dir}
 	f.backend.tasks[taskID] = item
 	f.git.targets[dir] = memoryGitTarget{branch: branch}
-	run, err := f.taskStore.StartRun("alpha", taskID, taskstate.StartRunOptions{Agent: "recorder", Branch: branch, Worktree: dir})
+	run, err := f.taskStore.StartRun("alpha", taskID, taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: dir, TaskBranch: branch, CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "recorder", Branch: branch, Worktree: dir})
 	require.NoError(f.t, err)
-	_, err = f.taskStore.CompleteRun("alpha", taskID, run.Attempt, taskstate.CompleteRunOptions{Summary: summary, Description: description, DetailedDescription: "Detailed PR body.", TechnicalExplanation: "Technical explanation."})
+	_, err = seedFixtureHandoff(f.taskStore, "alpha", taskID, run.Attempt, taskstate.CompleteRunOptions{Summary: summary, Description: description, DetailedDescription: "Detailed PR body.", TechnicalExplanation: "Technical explanation."})
 	require.NoError(f.t, err)
-	if status != taskstate.RunStatusRunning {
-		_, err = f.taskStore.FinishRun("alpha", taskID, run.Attempt, status)
-		require.NoError(f.t, err)
+	switch status {
+	case taskstate.RunStatusSucceeded:
+		_, err = seedFixtureExit(f.taskStore, "alpha", taskID, run.Attempt, 0)
+	case taskstate.RunStatusFailed:
+		_, err = seedFixtureExit(f.taskStore, "alpha", taskID, run.Attempt, 1)
+	case taskstate.RunStatusInterrupted:
+		_, err = f.taskStore.InterruptRun("alpha", taskID, run.Attempt, taskstate.InterruptRunOptions{Reason: "Synthetic fixture supervision was lost", Trigger: "fixture"})
 	}
+	require.NoError(f.t, err)
 }
 
+// Publication journeys start from an explicitly authorized fixture plan. The
+// application still records only review approval and never supplies this grant.
 func (f *finalizationWorkflowFixture) passedReview(taskID string) {
 	f.t.Helper()
-	review, err := f.taskStore.StartReview("alpha", taskID)
+	view, err := f.taskStore.Load("alpha", taskID)
 	require.NoError(f.t, err)
-	_, err = f.taskStore.FinishReview("alpha", taskID, review.Attempt, taskstate.ReviewStatusPassed)
+	if _, ready := view.Work.ActiveWorkflow().LastPhase().(*workmodel.PublicationPhase); !ready {
+		f.run("a\n", "task", "run", taskID)
+	}
+	adapter := workstate.NewStore(f.paths)
+	snapshot, err := adapter.Load("alpha", taskID)
+	require.NoError(f.t, err)
+	w := snapshot.ActiveWorkflow()
+	require.NotNil(f.t, w)
+	_, ready := w.LastPhase().(*workmodel.PublicationPhase)
+	require.True(f.t, ready, "fixture must complete the real review before granting publication consent")
+	require.NoError(f.t, snapshot.AuthorizePublication(len(snapshot.Workflows)-1, workmodel.PublicationRef{Phase: len(w.Phases) - 1}, time.Now().UTC(), "Explicit synthetic authorization for publication-boundary tests"))
+	_, err = adapter.Save(snapshot, snapshot.Version)
 	require.NoError(f.t, err)
 }
 
 func newMainFinalizationFixture(t *testing.T, taskID string) *finalizationWorkflowFixture {
 	t.Helper()
 	f := newFinalizationFixture(t, taskID)
-	f.completion(taskID, "main", taskWorkflowRepoRoot, "Implement task done", "Commit reviewed repo-root changes.", taskstate.RunStatusSucceeded)
+	f.setConfig("publication", map[string]any{"integration_flow": publication.IntegrationFlowDirectMerge})
+	f.completion(taskID, "orpheus/"+taskID, taskWorkflowRepoRoot, "Implement task done", "Commit reviewed repo-root changes.", taskstate.RunStatusSucceeded)
 	f.passedReview(taskID)
 	return f
 }
@@ -90,11 +114,11 @@ func (f *finalizationWorkflowFixture) assertUnpublished(taskID string) {
 	assert.Equal(f.t, taskmodel.StatusInProgress, item.Status)
 	assert.Empty(f.t, item.OrpheusMetadata().PRURL)
 	assert.Empty(f.t, taskstate.FinalizationFacts(state).Commit)
-	assert.Empty(f.t, f.candidate.commits)
+
 	assert.Empty(f.t, f.publication.remote)
 	assert.Empty(f.t, f.pr.created)
 	assert.Empty(f.t, f.tasks.closed)
-	assert.Equal(f.t, "initial-commit", f.candidate.head)
+
 }
 
 func (f *finalizationWorkflowFixture) assertPublishedPR(taskID string) {
@@ -108,14 +132,14 @@ func (f *finalizationWorkflowFixture) assertPublishedPR(taskID string) {
 	require.NotEmpty(f.t, facts.Commit)
 	assert.Equal(f.t, f.candidate.head, facts.Commit)
 	assert.Equal(f.t, facts.Commit, f.publication.remote[target.Branch])
-	assert.NotNil(f.t, facts.CommittedAt)
+	assert.Nil(f.t, facts.CommittedAt, "publication does not fabricate a second implementation commit")
 	assert.NotNil(f.t, facts.PushedAt)
 	assert.Nil(f.t, facts.ClosedAt)
 	assert.Empty(f.t, f.tasks.closed)
 	require.Len(f.t, state.Runs, 1)
 	assert.Equal(f.t, taskstate.RunStatusSucceeded, state.Runs[0].Status)
 	require.NotNil(f.t, state.Runs[0].Completion)
-	assert.Empty(f.t, state.Runs[0].Completion.Commit)
+	assert.Equal(f.t, facts.Commit, state.Runs[0].Completion.Commit)
 	assert.Equal(f.t, []string{f.pr.url}, f.mutations.prURLs)
 }
 
@@ -156,7 +180,9 @@ func (g *memoryPublicationGit) PushDefaultBranch(_ context.Context, _ string, br
 	if g.pushError != nil {
 		return g.pushError
 	}
-	g.pushes = append(g.pushes, branch)
+	if g.remote[branch] != g.head {
+		g.pushes = append(g.pushes, branch)
+	}
 	g.remote[branch] = g.head
 	return nil
 }
@@ -171,7 +197,7 @@ func (g *memoryPublicationGit) MergeTaskBranchIntoDestination(_ context.Context,
 			break
 		}
 	}
-	if !hasBranch || g.hasCandidateChanges || len(g.commits) != 1 {
+	if !hasBranch || g.hasCandidateChanges || len(g.commits) == 0 {
 		return "", errors.New("merge requires committed task branch")
 	}
 	g.merges++
@@ -235,4 +261,32 @@ func (p *memoryPublicationPR) StatusByURL(_ context.Context, req pullrequest.Sta
 		return pullrequest.PullRequestStatus{}, errors.New("unexpected PR status lookup")
 	}
 	return pullrequest.PullRequestStatus{URL: p.url, State: p.state}, nil
+}
+
+func (g *memoryPublicationGit) PublishedRevision(_ context.Context, _ string, branch string) (gitmeta.Revision, error) {
+	commit, ok := g.remote[branch]
+	if !ok {
+		return gitmeta.Revision{}, errors.New("remote publication branch has not been observed")
+	}
+	tree, ok := g.trees[commit]
+	if !ok {
+		return gitmeta.Revision{}, errors.New("remote publication tree has not been observed")
+	}
+	return gitmeta.Revision{Commit: commit, Tree: tree}, nil
+}
+func (g *memoryPublicationGit) DirectRevisionDelivery(ctx context.Context, repo taskmodel.Repository, dir, branch, destination, commit, _ string, output gitmeta.Revision) (gitmeta.Revision, error) {
+	if commit != "initial-commit" || g.heads[dir] != output.Commit || g.trees[output.Commit] != output.Tree {
+		return gitmeta.Revision{}, errors.New("direct delivery differs from reviewed fixture input")
+	}
+	if g.mergeCommit == "" {
+		merged, err := g.MergeTaskBranchIntoDestination(ctx, repo, destination, branch)
+		if err != nil {
+			return gitmeta.Revision{}, err
+		}
+		g.trees[merged] = output.Tree
+	}
+	if err := g.PushDefaultBranch(ctx, repo.Path, destination); err != nil {
+		return gitmeta.Revision{}, err
+	}
+	return g.PublishedRevision(ctx, repo.Path, destination)
 }

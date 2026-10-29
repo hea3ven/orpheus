@@ -2,6 +2,9 @@
 package revieweval
 
 import (
+	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workstate"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -138,11 +141,16 @@ func TestEvaluatorChildPIDPreservesConcurrentFinding(t *testing.T) {
 	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	require.NoError(t, err)
 	store := taskstate.NewStore(paths)
-	attempt, err := store.StartReviewWithOptions("review-eval", "eval-1", taskstate.StartReviewOptions{Pipeline: "evaluation", Step: "ai-review"})
+	snapshot := testutil.ReviewableWork("review-eval", "eval-1", "/fixture/work", "task-branch")
+	if _, err := workstate.NewStore(paths).Save(snapshot, 0); err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := store.StartReviewWithOptions("review-eval", "eval-1", taskstate.StartReviewOptions{Pipeline: "evaluation", Step: "ai-review", Contract: work.ReviewContract{PipelineKey: "evaluation", Slots: []work.ReviewSlot{{Kind: work.ReviewAgent, ConfigKey: "ai-review"}}}, Scope: work.ReviewScope{Requirements: "Fixture task requirements", Destination: &work.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}, Output: work.OutputRef{Phase: 1}}})
 	require.NoError(t, err)
 	execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, Agent: "reviewer", StartedAt: attempt.StartedAt, SupervisorPID: 10}
-	_, err = store.RecordReviewStep("review-eval", "eval-1", attempt.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution})
+	startedReview, err := store.RecordReviewStep("review-eval", "eval-1", attempt.Attempt, taskstate.RecordReviewStepOptions{Address: attempt.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution})
 	require.NoError(t, err)
+	actor := startedReview.Steps[len(startedReview.Steps)-1].Address
 	setup := runSetup{paths: paths, taskID: "eval-1", attempt: attempt, store: store}
 
 	start := make(chan struct{})
@@ -152,13 +160,13 @@ func TestEvaluatorChildPIDPreservesConcurrentFinding(t *testing.T) {
 	go func() {
 		defer wait.Done()
 		<-start
-		errs <- recordEvaluatorChildPID(setup, "ai-review", 4242)
+		errs <- recordEvaluatorChildPID(setup, actor, 4242)
 	}()
 	go func() {
 		defer wait.Done()
 		<-start
 		errs <- retryEvaluatorMutationLock(paths, "test evaluator finding", func() error {
-			_, err := store.RecordReviewFinding("review-eval", "eval-1", attempt.Attempt, taskstate.ReviewFinding{Type: taskstate.FindingTypeAdvisory, Step: "ai-review", Title: "immediate", Description: "finding"})
+			_, err := store.RecordReviewFinding("review-eval", "eval-1", attempt.Attempt, taskstate.ReviewFinding{Actor: &actor, Type: taskstate.FindingTypeAdvisory, Step: "ai-review", Title: "immediate", Description: "finding"})
 			return err
 		})
 	}()

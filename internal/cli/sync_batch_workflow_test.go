@@ -13,6 +13,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/registry"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,6 +21,7 @@ import (
 func TestIntegrationWorkflowTaskSyncAllPollsPRBoundaryTasks(t *testing.T) {
 	f := newFeatureFinalizationFixture(t, "op-create", false)
 	f.backend.tasks["op-open"] = syncTask("op-open", f.pr.url)
+	seedPublishedPollingTask(t, f.workflowFixture, "alpha", "op-open", taskWorkflowRepoRoot, f.pr.url)
 	epic := syncTask("op-epic", "https://github.test/org/alpha/pull/88")
 	epic.IssueType = taskmodel.IssueTypeEpic
 	f.backend.tasks[epic.ID] = epic
@@ -62,6 +64,7 @@ func TestIntegrationWorkflowTaskSyncAllContinuesAfterGitAndConflictAgentFailures
 				f.resolvingAgent(cause)
 			}
 			f.backend.tasks["op-z-current"] = syncTask("op-z-current", "https://github.test/org/alpha/pull/99")
+			seedPublishedPollingTask(t, f.workflowFixture, "alpha", "op-z-current", taskWorkflowRepoRoot, "https://github.test/org/alpha/pull/99")
 			f.pr.statuses = map[string]pullrequest.State{"https://github.test/org/alpha/pull/99": pullrequest.StateOpen}
 			head := f.candidate.head
 			remote := f.publication.remote["orpheus/op-sync"]
@@ -83,17 +86,22 @@ func TestIntegrationWorkflowTaskSyncAllContinuesAfterGitAndConflictAgentFailures
 			assert.Nil(t, state.ActiveSyncConflict)
 			require.Len(t, f.syncGit.calls, 1)
 			assert.Equal(t, gitmeta.TaskBranchUpdateConflictsOnly, f.syncGit.calls[0].UpdatePolicy)
+			native := state.Work.Workflows[0].Phases[4].(*work.ExternalReviewPhase).BranchSyncs
+			require.Len(t, native, 1)
+			require.NotNil(t, native[0].Rollback, "a failed native begin or resolver can settle only by independently verified restoration")
+			assert.Contains(t, native[0].Rollback.Reason, cause.Error())
 			if failure == "conflict agent" {
 				assert.Equal(t, 1, f.syncGit.rollbacks)
 				assert.False(t, f.syncGit.mergeActive)
-				require.Len(t, state.Events, 3)
-				assert.Equal(t, taskstate.EventSyncConflictFailed, state.Events[1].Type)
-				assert.Contains(t, state.Events[1].Error, cause.Error())
-				assert.Equal(t, taskstate.EventSyncConflictRolledBack, state.Events[2].Type)
+				events := resolverEvents(state.Events)
+				require.Len(t, events, 2)
+				assert.Equal(t, taskstate.EventSyncConflictFailed, events[1].Type)
+				assert.Equal(t, taskstate.RunStatusFailed, events[1].Execution.Status)
 			} else {
-				assert.Empty(t, state.Events)
+				assert.Empty(t, resolverEvents(state.Events))
 				assert.Empty(t, f.agent.launches)
 			}
+
 		})
 	}
 }
@@ -134,6 +142,9 @@ func TestIntegrationWorkflowTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAf
 					return nil, errors.New("unknown repository")
 				}
 			}
+			seedPublishedPollingTask(t, f.workflowFixture, "alpha", "a-open", alpha.Path, openURL)
+			seedPublishedPollingTask(t, f.workflowFixture, "beta", "b-merged", beta.Path, mergedURL)
+			seedPublishedPollingTask(t, f.workflowFixture, "beta", "b-closed", beta.Path, closedURL)
 			failedBefore, err := betaTasks.Get(context.Background(), "b-closed")
 			require.NoError(t, err)
 			failedStateBefore, err := f.taskStore.Load("beta", "b-closed")
@@ -170,8 +181,7 @@ func TestIntegrationWorkflowTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAf
 			assert.Equal(t, failedStateBefore, failedStateAfter)
 			state, err := f.taskStore.Load("beta", "b-merged")
 			require.NoError(t, err)
-			require.Len(t, state.Events, 1)
-			assertMergedAudit(t, state.Events[0], mergedURL)
+			assertMergedAudit(t, state.Events[len(state.Events)-1], mergedURL)
 		})
 	}
 }

@@ -3,6 +3,8 @@ package agent_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	workmodel "github.com/hea3ven/orpheus/internal/work"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -60,7 +63,7 @@ func TestActiveContextResolverResolvesWorktreeTarget(t *testing.T) {
 			taskmodel.MetadataWorktree: worktree,
 		},
 	}
-	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent:    "recorder",
 		Branch:   "orpheus/op-1",
 		Worktree: worktree,
@@ -92,6 +95,27 @@ func TestActiveContextResolverResolvesWorktreeTarget(t *testing.T) {
 	is.Equal("orpheus/op-1", got.Target.Branch)
 	is.Equal(worktree, got.Target.Path)
 	is.Equal(cwd, got.Target.CurrentDirectory)
+	is.Equal(workmodel.AttemptRef{RepositoryID: "alpha", TaskID: "op-1", Phase: 1}, got.Run.Address)
+	before, err := fixture.store.Load("alpha", "op-1")
+	must.NoError(err)
+	for _, invalid := range []struct{ name, value string }{
+		{"ORPHEUS_WORKFLOW", ""}, {"ORPHEUS_WORKFLOW", "null"}, {"ORPHEUS_WORKFLOW", "-1"}, {"ORPHEUS_WORKFLOW", "1"},
+		{"ORPHEUS_PHASE", ""}, {"ORPHEUS_PHASE", "0"}, {"ORPHEUS_STEP_INDEX", "0"}, {"ORPHEUS_BRANCH_SYNC_INDEX", "0"},
+	} {
+		t.Run(invalid.name+"="+invalid.value, func(t *testing.T) {
+			stale := resolver
+			stale.Env = make(map[string]string, len(resolver.Env))
+			for name, value := range resolver.Env {
+				stale.Env[name] = value
+			}
+			stale.Env[invalid.name] = invalid.value
+			_, err := stale.Resolve(context.Background())
+			require.Error(t, err, "omission/null cannot become a real zero index, and wrong-kind children cannot attach")
+			after, err := fixture.store.Load("alpha", "op-1")
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+		})
+	}
 }
 
 func TestActiveContextResolverUsesGlobalPublicationPolicy(t *testing.T) {
@@ -106,7 +130,7 @@ func TestActiveContextResolverUsesGlobalPublicationPolicy(t *testing.T) {
 	}))
 	worktree := fixture.expectedWorktree(t, "op-global-policy")
 	must.NoError(testMkdirAll(worktree))
-	_, err := fixture.store.StartRun("alpha", "op-global-policy", taskstate.StartRunOptions{
+	_, err := fixture.store.StartRun("alpha", "op-global-policy", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-global-policy", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent:    "recorder",
 		Branch:   "orpheus/op-global-policy",
 		Worktree: worktree,
@@ -168,7 +192,7 @@ func TestActiveContextResolverResolvesRepoRootTargets(t *testing.T) {
 					taskmodel.MetadataWorktree: fixture.repoPath,
 				},
 			}
-			_, err := fixture.store.StartRun("alpha", tt.taskID, taskstate.StartRunOptions{
+			_, err := fixture.store.StartRun("alpha", tt.taskID, taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: fixture.repoPath, TaskBranch: tt.branch, CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 				Agent:    "recorder",
 				Branch:   tt.branch,
 				Worktree: fixture.repoPath,
@@ -193,46 +217,6 @@ func TestActiveContextResolverResolvesRepoRootTargets(t *testing.T) {
 	}
 }
 
-func TestActiveContextResolverResolvesConflictResolutionContext(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newActiveContextFixture(t, "op-1")
-	worktree := fixture.expectedWorktree(t, "op-1")
-	cwd := filepath.Join(worktree, "internal")
-	must.NoError(testMkdirAll(cwd))
-
-	taskItem := taskmodel.Task{
-		ID:          "op-1",
-		Title:       "Conflict task",
-		Description: "Original task.",
-		Status:      taskmodel.StatusInProgress,
-		Metadata: taskmodel.Metadata{
-			taskmodel.MetadataBranch:   "orpheus/op-1",
-			taskmodel.MetadataWorktree: worktree,
-			taskmodel.MetadataPRURL:    "https://github.test/org/repo/pull/42",
-		},
-	}
-	resolver := fixture.resolver(taskItem, map[string]string{
-		"ORPHEUS_REPO_ID":        "alpha",
-		"ORPHEUS_TASK_ID":        "op-1",
-		"ORPHEUS_WORKTREE":       worktree,
-		"ORPHEUS_BRANCH":         "orpheus/op-1",
-		"ORPHEUS_CONFLICT_FILES": "conflict.txt\npkg/service.go\n",
-	}, cwd)
-
-	got, err := resolver.ResolveConflictResolution(context.Background())
-
-	must.NoError(err)
-	is.Equal("alpha", got.Repository.ID)
-	is.Equal("op-1", got.Task.ID)
-	is.Equal(agent.ExecutionTargetWorktree, got.Target.Kind)
-	is.Equal("orpheus/op-1", got.Target.Branch)
-	is.Equal(worktree, got.Target.Path)
-	is.Equal(cwd, got.Target.CurrentDirectory)
-	is.Equal("https://github.test/org/repo/pull/42", got.PRURL)
-	is.Equal([]string{"conflict.txt", "pkg/service.go"}, got.ConflictFiles)
-}
-
 func TestActiveContextResolverRejectsMetadataTaskstateTargetMismatch(t *testing.T) {
 	is := assert.New(t)
 	must := require.New(t)
@@ -246,7 +230,7 @@ func TestActiveContextResolverRejectsMetadataTaskstateTargetMismatch(t *testing.
 			taskmodel.MetadataWorktree: fixture.repoPath,
 		},
 	}
-	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Branch:   "orpheus/op-1",
 		Worktree: worktree,
 	})
@@ -274,7 +258,7 @@ func TestActiveContextResolverRejectsNonCanonicalTaskstateTarget(t *testing.T) {
 	manualWorktree := filepath.Join(testutil.CanonicalTempDir(t), "manual-worktree")
 	must.NoError(testMkdirAll(manualWorktree))
 	taskItem := fixture.worktreeTask("op-1", expectedWorktree)
-	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: manualWorktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Branch:   "orpheus/op-1",
 		Worktree: manualWorktree,
 	})
@@ -300,12 +284,12 @@ func TestActiveContextResolverRejectsLatestRunThatIsNotRunning(t *testing.T) {
 	fixture := newActiveContextFixture(t, "op-1")
 	worktree := fixture.expectedWorktree(t, "op-1")
 	taskItem := fixture.worktreeTask("op-1", worktree)
-	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Branch:   "orpheus/op-1",
 		Worktree: worktree,
 	})
 	must.NoError(err)
-	_, err = fixture.store.FinishRun("alpha", "op-1", 1, taskstate.RunStatusSucceeded)
+	_, err = fixture.store.FinishObservedRun(workmodel.AttemptRef{RepositoryID: "alpha", TaskID: "op-1", Phase: 1}, &workmodel.ExitedProcess{Code: contextExit(0), At: time.Now().UTC()}, 0)
 	must.NoError(err)
 
 	resolver := fixture.resolver(taskItem, map[string]string{
@@ -318,8 +302,8 @@ func TestActiveContextResolverRejectsLatestRunThatIsNotRunning(t *testing.T) {
 	_, err = resolver.Resolve(context.Background())
 
 	must.Error(err)
-	is.Contains(err.Error(), "latest Orpheus run attempt 1")
-	is.Contains(err.Error(), `expected "running"`)
+	is.Contains(err.Error(), "attempt does not own the active last work")
+	is.Contains(err.Error(), "active last work")
 }
 
 func TestActiveContextResolverRejectsUnsafeOrInconsistentContext(t *testing.T) {
@@ -337,7 +321,7 @@ func TestActiveContextResolverRejectsUnsafeOrInconsistentContext(t *testing.T) {
 				"ORPHEUS_WORKTREE": worktree,
 				"ORPHEUS_BRANCH":   "orpheus/op-1",
 			}
-			_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+			_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 				Branch:   "orpheus/op-1",
 				Worktree: worktree,
 			})
@@ -447,7 +431,7 @@ func TestActiveContextResolverWrapsBackendErrors(t *testing.T) {
 	must := require.New(t)
 	fixture := newActiveContextFixture(t, "op-1")
 	worktree := fixture.expectedWorktree(t, "op-1")
-	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
+	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Branch:   "orpheus/op-1",
 		Worktree: worktree,
 	})
@@ -466,184 +450,6 @@ func TestActiveContextResolverWrapsBackendErrors(t *testing.T) {
 	must.Error(err)
 	is.Contains(err.Error(), "load task op-1 in repo alpha")
 	is.ErrorIs(err, cause)
-}
-
-func TestActiveContextResolverSeparatesRequiredAndAdvisoryFollowUpFindings(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newActiveContextFixture(t, "op-1")
-	worktree := fixture.expectedWorktree(t, "op-1")
-	must.NoError(testMkdirAll(worktree))
-	taskItem := fixture.worktreeTask("op-1", worktree)
-	recordCompletedContextRun(t, fixture, worktree, nil)
-
-	review, err := fixture.store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{Pipeline: "standard", Step: "inspect"})
-	must.NoError(err)
-	for _, finding := range []taskstate.ReviewFinding{
-		{Type: taskstate.FindingTypeBlocking, Title: "Required repair", Description: "Fix the regression.", SuggestedAction: "Add the guard."},
-		{Type: taskstate.FindingTypeAdvisory, Title: "Optional cleanup", Description: "Simplify the path.", SuggestedAction: "Extract a helper."},
-		{Type: taskstate.FindingTypeAdvisory, Title: "Downgraded opportunity", Description: "Still worth considering.", DowngradeReason: "Not required for this task."},
-	} {
-		_, err = fixture.store.RecordReviewFinding("alpha", "op-1", review.Attempt, finding)
-		must.NoError(err)
-	}
-	_, err = fixture.store.FinishReview("alpha", "op-1", review.Attempt, taskstate.ReviewStatusBlocked)
-	must.NoError(err)
-	followUp, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
-		Agent: "implementer", Branch: "orpheus/op-1", Worktree: worktree,
-		ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: review.Attempt, FindingIndexes: []int{0}, AdvisoryFindingIndexes: []int{1, 2}},
-	})
-	must.NoError(err)
-	_, err = fixture.store.TargetReviewFindings("alpha", "op-1", review.Attempt, []int{0}, followUp.Attempt)
-	must.NoError(err)
-
-	resolver := fixture.resolver(taskItem, map[string]string{
-		"ORPHEUS_REPO_ID": "alpha", "ORPHEUS_TASK_ID": "op-1", "ORPHEUS_WORKTREE": worktree, "ORPHEUS_BRANCH": "orpheus/op-1",
-	}, worktree)
-	resolved, err := resolver.Resolve(context.Background())
-	must.NoError(err)
-	must.NotNil(resolved.FollowUp)
-	is.Equal([]agent.ContextReviewFinding{{Index: 0, Title: "Required repair", Description: "Fix the regression.", SuggestedAction: "Add the guard."}}, resolved.FollowUp.RequiredFindings)
-	is.Equal([]agent.ContextReviewFinding{
-		{Index: 1, Title: "Optional cleanup", Description: "Simplify the path.", SuggestedAction: "Extract a helper."},
-		{Index: 2, Title: "Downgraded opportunity", Description: "Still worth considering."},
-	}, resolved.FollowUp.AdvisoryFindings)
-
-	rendered := agent.RenderActiveContext(resolved)
-	is.Contains(rendered, "Required blocking findings:")
-	is.Contains(rendered, "Advisory opportunities:")
-	is.Contains(rendered, "Optional cleanup")
-	is.Contains(rendered, "Consider advisory opportunities only when they remain applicable, task-scoped, and safe.")
-}
-
-func TestActiveContextResolverRejectsReviewContextWhenLatestRunHasNoCompletion(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newActiveContextFixture(t, "op-1")
-	worktree := fixture.expectedWorktree(t, "op-1")
-	must.NoError(testMkdirAll(worktree))
-	taskItem := fixture.worktreeTask("op-1", worktree)
-	recordCompletedContextRun(t, fixture, worktree, nil)
-	recordCompletedContextRun(t, fixture, worktree, &taskstate.ReviewFollowUp{
-		ReviewAttempt:  1,
-		FindingIndexes: []int{0},
-	})
-
-	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
-		Agent:    "implementer",
-		Branch:   "orpheus/op-1",
-		Worktree: worktree,
-		ReviewFollowUp: &taskstate.ReviewFollowUp{
-			ReviewAttempt:  2,
-			FindingIndexes: []int{0},
-		},
-	})
-	must.NoError(err)
-	review, err := fixture.store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{
-		Pipeline: "default",
-		Step:     "ai-review",
-	})
-	must.NoError(err)
-	_, err = fixture.store.RecordReviewStep("alpha", "op-1", review.Attempt, taskstate.RecordReviewStepOptions{
-		Kind: "agent_review",
-		Name: "ai-review",
-	})
-	must.NoError(err)
-
-	resolver := fixture.resolver(taskItem, map[string]string{
-		"ORPHEUS_REPO_ID":        "alpha",
-		"ORPHEUS_TASK_ID":        "op-1",
-		"ORPHEUS_WORKTREE":       worktree,
-		"ORPHEUS_BRANCH":         "orpheus/op-1",
-		"ORPHEUS_AGENT_PURPOSE":  "review",
-		"ORPHEUS_REVIEW_ATTEMPT": "1",
-		"ORPHEUS_REVIEW_STEP":    "ai-review",
-	}, worktree)
-
-	_, err = resolver.ResolveReview(context.Background())
-
-	must.Error(err)
-	is.Contains(err.Error(), "resolve review completion history")
-	is.Contains(err.Error(), "latest run attempt 3 completion is required")
-}
-
-func recordCompletedContextRun(
-	t *testing.T,
-	fixture *activeContextFixture,
-	worktree string,
-	followUp *taskstate.ReviewFollowUp,
-) {
-	t.Helper()
-	must := require.New(t)
-
-	run, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{
-		Agent:          "implementer",
-		Branch:         "orpheus/op-1",
-		Worktree:       worktree,
-		ReviewFollowUp: followUp,
-	})
-	must.NoError(err)
-	_, err = fixture.store.CompleteRun("alpha", "op-1", run.Attempt, taskstate.CompleteRunOptions{
-		Summary:              "Complete work",
-		Description:          "Implemented the requested work.",
-		DetailedDescription:  "Detailed PR body.",
-		TechnicalExplanation: "Technical explanation.",
-	})
-	must.NoError(err)
-	_, err = fixture.store.FinishRun("alpha", "op-1", run.Attempt, taskstate.RunStatusSucceeded)
-	must.NoError(err)
-}
-
-func TestActiveContextResolverProvidesEarlierAuthoritativeFindingsOnly(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newActiveContextFixture(t, "op-1")
-	worktree := fixture.expectedWorktree(t, "op-1")
-	must.NoError(testMkdirAll(worktree))
-	taskItem := fixture.worktreeTask("op-1", worktree)
-	recordCompletedContextRun(t, fixture, worktree, nil)
-
-	previous, err := fixture.store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review"})
-	must.NoError(err)
-	_, err = fixture.store.RecordReviewFinding("alpha", "op-1", previous.Attempt, taskstate.ReviewFinding{
-		Type: taskstate.FindingTypeBlocking, Step: "ai-review", Title: "Prior blocker", Description: "An earlier defect.", Waiver: "Accepted before the new review.",
-	})
-	must.NoError(err)
-	_, err = fixture.store.FinishReview("alpha", "op-1", previous.Attempt, taskstate.ReviewStatusBlocked)
-	must.NoError(err)
-
-	interrupted, err := fixture.store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review"})
-	must.NoError(err)
-	interruptedExecution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, StartedAt: time.Now()}
-	_, err = fixture.store.RecordReviewStep("alpha", "op-1", interrupted.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &interruptedExecution})
-	must.NoError(err)
-	_, err = fixture.store.RecordReviewFinding("alpha", "op-1", interrupted.Attempt, taskstate.ReviewFinding{
-		Type: taskstate.FindingTypeBlocking, Step: "ai-review", Title: "Interrupted audit finding", Description: "Not authoritative.",
-	})
-	must.NoError(err)
-	_, err = fixture.store.InterruptReviewExecution("alpha", "op-1", interrupted.Attempt, "ai-review", taskstate.InterruptReviewExecutionOptions{Reason: "supervisor disappeared", Trigger: "recovery"})
-	must.NoError(err)
-
-	active, err := fixture.store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review"})
-	must.NoError(err)
-	execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, StartedAt: time.Now()}
-	_, err = fixture.store.RecordReviewStep("alpha", "op-1", active.Attempt, taskstate.RecordReviewStepOptions{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution})
-	must.NoError(err)
-	_, err = fixture.store.RecordReviewFinding("alpha", "op-1", active.Attempt, taskstate.ReviewFinding{
-		Type: taskstate.FindingTypeBlocking, Step: "ai-review", Title: "Current review finding", Description: "Must not be injected.",
-	})
-	must.NoError(err)
-	resolver := fixture.resolver(taskItem, map[string]string{
-		"ORPHEUS_REPO_ID": "alpha", "ORPHEUS_TASK_ID": "op-1", "ORPHEUS_WORKTREE": worktree, "ORPHEUS_BRANCH": "orpheus/op-1",
-		"ORPHEUS_AGENT_PURPOSE": "review", "ORPHEUS_REVIEW_ATTEMPT": "3", "ORPHEUS_REVIEW_STEP": "ai-review",
-	}, worktree)
-	resolved, err := resolver.ResolveReview(context.Background())
-
-	must.NoError(err)
-	must.Len(resolved.Review.PriorFindings, 1)
-	is.Equal(agent.ContextPriorReviewFinding{Attempt: 1, Number: 1, Step: "ai-review", Type: taskstate.FindingTypeBlocking, Disposition: "waived", Title: "Prior blocker"}, resolved.Review.PriorFindings[0])
-	is.NotContains(agent.RenderReviewContext(resolved), "Interrupted audit finding")
-	is.NotContains(agent.RenderReviewContext(resolved), "Current review finding")
 }
 
 func TestRenderReviewContextRendersCompactPriorAuthoritativeFindings(t *testing.T) {
@@ -912,6 +718,7 @@ func (f *activeContextFixture) resolverWithBackend(
 	env map[string]string,
 	cwd string,
 ) agent.ActiveContextResolver {
+	seedContextOwnerEnvironment(f, env)
 	return agent.ActiveContextResolver{
 		Paths:          f.paths,
 		Registry:       registry.Registry{Repos: []registry.Repo{f.repo}},
@@ -923,6 +730,221 @@ func (f *activeContextFixture) resolverWithBackend(
 	}
 }
 
+func seedContextOwnerEnvironment(f *activeContextFixture, env map[string]string) {
+	// These fixtures describe an actual dispatch. Ownership-refusal cases can
+	// override or delete these entries after constructing the resolver.
+	snapshot, err := f.store.Load("alpha", env["ORPHEUS_TASK_ID"])
+	if err != nil || snapshot.Work == nil || len(snapshot.Work.Workflows) == 0 {
+		return
+	}
+	wi := len(snapshot.Work.Workflows) - 1
+	w := &snapshot.Work.Workflows[wi]
+	if _, supplied := env["ORPHEUS_WORKFLOW"]; !supplied {
+		env["ORPHEUS_WORKFLOW"] = fmt.Sprint(wi)
+	}
+	if _, supplied := env["ORPHEUS_PHASE"]; !supplied {
+		env["ORPHEUS_PHASE"] = fmt.Sprint(len(w.Phases) - 1)
+	}
+	if review, ok := w.LastPhase().(*workmodel.ReviewPhase); ok && len(review.Steps) > 0 {
+		if _, supplied := env["ORPHEUS_STEP_INDEX"]; !supplied {
+			env["ORPHEUS_STEP_INDEX"] = fmt.Sprint(len(review.Steps) - 1)
+		}
+	}
+	if external, ok := w.LastPhase().(*workmodel.ExternalReviewPhase); ok && len(external.BranchSyncs) > 0 {
+		env["ORPHEUS_BRANCH_SYNC_INDEX"] = fmt.Sprint(len(external.BranchSyncs) - 1)
+	}
+}
+
 func testMkdirAll(path string) error {
 	return os.MkdirAll(path, 0o755)
+}
+
+func contextExit(code int) *int { return &code }
+
+// Context tests seed explicit synthetic history; native Git/process evidence has
+// its own adapter owners. No application API infers success from a status here.
+func contextFixtureHistory(directory string) workmodel.State {
+	at := time.Now().UTC().Add(-time.Hour)
+	return workmodel.State{RepositoryID: "alpha", TaskID: "op-1", Workflows: []workmodel.Workflow{{Phases: []workmodel.Phase{
+		&workmodel.PreparationPhase{EstablishedAt: &at, Context: &workmodel.WorkContext{Directory: directory, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}},
+		&workmodel.ImplementationPhase{Execution: workmodel.AgentExecution{Profile: "implementer", Harness: "pi", Command: "fixture-agent", StartedAt: at.Add(time.Second), Process: &workmodel.ExitedProcess{Code: contextExit(0), At: at.Add(3 * time.Second)}}, Completion: &workmodel.Completion{Summary: "Complete work", Description: "Implemented the requested work.", DetailedDescription: "Detailed PR body.", CompletedAt: at.Add(2 * time.Second)}, Output: &workmodel.CodeOutput{CodeIdentity: workmodel.CodeIdentity{Commit: "R1", Tree: "T1"}, RetainedRef: "refs/orpheus/fixture-output"}},
+	}}}}
+}
+func saveContextHistory(t *testing.T, fixture *activeContextFixture, history workmodel.State) {
+	t.Helper()
+	_, err := workstate.NewStore(fixture.paths).Save(history, history.Version)
+	require.NoError(t, err)
+}
+func contextReviewScope() workmodel.ReviewScope {
+	return workmodel.ReviewScope{Requirements: "Implement the task safely", Output: workmodel.OutputRef{Phase: 1}, Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "D"}}
+}
+
+func TestActiveContextResolverResolvesConflictResolutionContext(t *testing.T) {
+	fixture := newActiveContextFixture(t, "op-1")
+	worktree := fixture.expectedWorktree(t, "op-1")
+	cwd := filepath.Join(worktree, "internal")
+	require.NoError(t, testMkdirAll(cwd))
+	history := contextFixtureHistory(worktree)
+	w := &history.Workflows[0]
+	at := w.Phases[1].(*workmodel.ImplementationPhase).Execution.StartedAt
+	w.ReviewContracts = []workmodel.ReviewContract{{PipelineKey: "review", Slots: []workmodel.ReviewSlot{{ConfigKey: "reviewer", Kind: workmodel.ReviewAgent}}}}
+	w.Phases = append(w.Phases, &workmodel.ReviewPhase{Contract: 0, Scope: contextReviewScope(), StartedAt: at.Add(4 * time.Second), Steps: []workmodel.ReviewStep{&workmodel.AgentReviewStep{Slot: 0, Execution: workmodel.AgentExecution{StartedAt: at.Add(5 * time.Second), Process: &workmodel.ExitedProcess{At: at.Add(6 * time.Second), Code: contextExit(0)}}}}}, &workmodel.PublicationPhase{Plan: workmodel.PublicationPlan{Review: workmodel.ReviewRef{Phase: 2}, Target: &workmodel.PullRequestTarget{}, Content: "Reviewed task\n\nPR body"}})
+	require.NoError(t, history.AuthorizePublication(0, workmodel.PublicationRef{Phase: 3}, at.Add(7*time.Second), "Explicit fixture grant"))
+	w.Phases[3].(*workmodel.PublicationPhase).Delivery = &workmodel.PullRequestDelivery{PullRequest: workmodel.PullRequestRef{URL: "https://github.test/org/repo/pull/42"}, PublicCommit: "R1", Head: "R1", Tree: "T1", ObservedAt: at.Add(8 * time.Second), Evidence: "Observed fixture PR and remote head"}
+	w.Phases = append(w.Phases, &workmodel.ExternalReviewPhase{Publication: workmodel.PublicationRef{Phase: 3}, BranchSyncs: []workmodel.BranchSync{{StartedAt: at.Add(9 * time.Second), Checkpoint: workmodel.BranchSyncCheckpoint{LocalHead: "R1", RemoteHead: "R1", MergeSource: "D2"}, ConflictResolution: &workmodel.ConflictResolution{Files: []string{"conflict.txt", "pkg/service.go"}, Execution: workmodel.AgentExecution{StartedAt: at.Add(10 * time.Second), Process: &workmodel.RunningProcess{}}}}}})
+	saveContextHistory(t, fixture, history)
+	taskItem := fixture.worktreeTask("op-1", worktree)
+	taskItem.Metadata[taskmodel.MetadataPRURL] = "https://github.test/org/repo/pull/42"
+	resolver := fixture.resolver(taskItem, map[string]string{"ORPHEUS_REPO_ID": "alpha", "ORPHEUS_TASK_ID": "op-1", "ORPHEUS_WORKTREE": worktree, "ORPHEUS_BRANCH": "orpheus/op-1", "ORPHEUS_CONFLICT_FILES": "conflict.txt\npkg/service.go\n"}, cwd)
+
+	got, err := resolver.ResolveConflictResolution(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, "alpha", got.Repository.ID)
+	assert.Equal(t, "op-1", got.Task.ID)
+	assert.Equal(t, agent.ExecutionTargetWorktree, got.Target.Kind)
+	assert.Equal(t, "orpheus/op-1", got.Target.Branch)
+	assert.Equal(t, worktree, got.Target.Path)
+	assert.Equal(t, cwd, got.Target.CurrentDirectory)
+	assert.Equal(t, "https://github.test/org/repo/pull/42", got.PRURL)
+	assert.Equal(t, []string{"conflict.txt", "pkg/service.go"}, got.ConflictFiles)
+	assert.Equal(t, workmodel.AttemptRef{RepositoryID: "alpha", TaskID: "op-1", Phase: 4, BranchSync: contextExit(0)}, got.Address)
+	resolver.Env["ORPHEUS_BRANCH_SYNC_INDEX"] = "1"
+	_, err = resolver.ResolveConflictResolution(context.Background())
+	require.Error(t, err, "a resolver cannot attach to a nonexistent newer sync")
+	resolver.Env["ORPHEUS_BRANCH_SYNC_INDEX"] = "0"
+	resolver.Env["ORPHEUS_PHASE"] = "3"
+	_, err = resolver.ResolveConflictResolution(context.Background())
+	require.Error(t, err, "publication is not a conflict-resolver execution")
+}
+
+func TestActiveContextResolverSeparatesRequiredAndAdvisoryFollowUpFindings(t *testing.T) {
+	fixture := newActiveContextFixture(t, "op-1")
+	directory := fixture.expectedWorktree(t, "op-1")
+	require.NoError(t, testMkdirAll(directory))
+	history := contextFixtureHistory(directory)
+	w := &history.Workflows[0]
+	at := w.Phases[1].(*workmodel.ImplementationPhase).Execution.StartedAt.Add(5 * time.Second)
+	w.ReviewContracts = []workmodel.ReviewContract{{PipelineKey: "standard", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewManual, ConfigKey: "inspect"}}}}
+	w.Phases = append(w.Phases, &workmodel.ReviewPhase{Contract: 0, Scope: contextReviewScope(), StartedAt: at, Steps: []workmodel.ReviewStep{&workmodel.ManualReviewStep{Slot: 0, Findings: []workmodel.Finding{
+		{Classification: workmodel.FindingBlocking, Title: "Required repair", Description: "Fix the regression.", SuggestedAction: "Add the guard."},
+		{Classification: workmodel.FindingAdvisory, Title: "Optional cleanup", Description: "Simplify the path.", SuggestedAction: "Extract a helper."},
+		{Classification: workmodel.FindingBlocking, Title: "Downgraded opportunity", Description: "Still worth considering.", Dispositions: []workmodel.FindingDisposition{&workmodel.DowngradedFinding{Waiver: workmodel.Waiver{At: at.Add(time.Second), Reason: "Not required for this task."}}}},
+	}, Decision: &workmodel.RequestedChanges{At: at.Add(2 * time.Second)}}}})
+	saveContextHistory(t, fixture, history)
+	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{0}, AdvisoryFindingIndexes: []int{1, 2}}})
+	require.NoError(t, err)
+	resolver := fixture.resolver(fixture.worktreeTask("op-1", directory), worktreeEnv("op-1", directory), directory)
+
+	resolved, err := resolver.Resolve(context.Background())
+
+	require.NoError(t, err)
+	require.NotNil(t, resolved.FollowUp)
+	assert.Equal(t, []agent.ContextReviewFinding{{Index: 0, Title: "Required repair", Description: "Fix the regression.", SuggestedAction: "Add the guard."}}, resolved.FollowUp.RequiredFindings)
+	assert.Equal(t, []agent.ContextReviewFinding{{Index: 1, Title: "Optional cleanup", Description: "Simplify the path.", SuggestedAction: "Extract a helper."}, {Index: 2, Title: "Downgraded opportunity", Description: "Still worth considering."}}, resolved.FollowUp.AdvisoryFindings)
+	rendered := agent.RenderActiveContext(resolved)
+	for _, text := range []string{"Required blocking findings:", "Advisory opportunities:", "Optional cleanup", "Consider advisory opportunities only when they remain applicable, task-scoped, and safe."} {
+		assert.Contains(t, rendered, text)
+	}
+}
+
+func TestActiveContextResolverRejectsReviewContextWhenLatestRunHasNoCompletion(t *testing.T) {
+	fixture := newActiveContextFixture(t, "op-1")
+	directory := fixture.expectedWorktree(t, "op-1")
+	require.NoError(t, testMkdirAll(directory))
+	history := contextFixtureHistory(directory)
+	history.Workflows[0].Phases = append(history.Workflows[0].Phases, &workmodel.ImplementationPhase{Input: &workmodel.OutputRef{Phase: 1}, Execution: workmodel.AgentExecution{StartedAt: time.Now().UTC(), Process: &workmodel.RunningProcess{}}})
+	saveContextHistory(t, fixture, history)
+	resolver := fixture.resolver(fixture.worktreeTask("op-1", directory), map[string]string{"ORPHEUS_REPO_ID": "alpha", "ORPHEUS_TASK_ID": "op-1", "ORPHEUS_WORKTREE": directory, "ORPHEUS_BRANCH": "orpheus/op-1", "ORPHEUS_AGENT_PURPOSE": "review", "ORPHEUS_REVIEW_ATTEMPT": "1", "ORPHEUS_REVIEW_STEP": "ai-review", "ORPHEUS_STEP_INDEX": "0"}, directory)
+	before, err := fixture.store.Load("alpha", "op-1")
+	require.NoError(t, err)
+
+	_, err = resolver.ResolveReview(context.Background())
+
+	require.ErrorContains(t, err, "current implementation completion is required")
+	after, err := fixture.store.Load("alpha", "op-1")
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "context refusal cannot fabricate an approval or borrow an older handoff")
+}
+
+func TestActiveContextResolverProvidesEarlierAuthoritativeFindingsOnly(t *testing.T) {
+	fixture := newActiveContextFixture(t, "op-1")
+	directory := fixture.expectedWorktree(t, "op-1")
+	require.NoError(t, testMkdirAll(directory))
+	history := contextFixtureHistory(directory)
+	w := &history.Workflows[0]
+	at := w.Phases[1].(*workmodel.ImplementationPhase).Execution.StartedAt.Add(5 * time.Second)
+	w.ReviewContracts = []workmodel.ReviewContract{{PipelineKey: "standard", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewAgent, ConfigKey: "ai-review"}}}}
+	titles := []string{"Prior blocker", "Interrupted audit finding", "Current review finding"}
+	for i, title := range titles {
+		start := at.Add(time.Duration(i*10) * time.Second)
+		var process workmodel.ProcessResult = &workmodel.RunningProcess{}
+		if i == 0 {
+			process = &workmodel.ExitedProcess{At: start.Add(time.Second), Code: contextExit(0)}
+		}
+		if i == 1 {
+			process = &workmodel.InterruptedProcess{At: start.Add(time.Second), Reason: "supervisor disappeared", Trigger: "recovery"}
+		}
+		finding := workmodel.Finding{Classification: workmodel.FindingBlocking, Title: title, Description: "Reported defect."}
+		if i == 0 {
+			finding.Dispositions = []workmodel.FindingDisposition{&workmodel.WaivedFinding{Waiver: workmodel.Waiver{At: start.Add(2 * time.Second), Reason: "Accepted before the new review."}}}
+		}
+		w.Phases = append(w.Phases, &workmodel.ReviewPhase{Contract: 0, Scope: contextReviewScope(), StartedAt: start, Steps: []workmodel.ReviewStep{&workmodel.AgentReviewStep{Slot: 0, Execution: workmodel.AgentExecution{StartedAt: start, Process: process}, Report: &workmodel.ReviewReport{Findings: []workmodel.Finding{finding}}}}})
+	}
+	saveContextHistory(t, fixture, history)
+	resolver := fixture.resolver(fixture.worktreeTask("op-1", directory), map[string]string{"ORPHEUS_REPO_ID": "alpha", "ORPHEUS_TASK_ID": "op-1", "ORPHEUS_WORKTREE": directory, "ORPHEUS_BRANCH": "orpheus/op-1", "ORPHEUS_AGENT_PURPOSE": "review", "ORPHEUS_REVIEW_ATTEMPT": "3", "ORPHEUS_REVIEW_STEP": "ai-review"}, directory)
+
+	resolved, err := resolver.ResolveReview(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, []agent.ContextPriorReviewFinding{{Attempt: 1, Number: 1, Step: "ai-review", Type: taskstate.FindingTypeBlocking, Disposition: "waived", Title: "Prior blocker"}}, resolved.Review.PriorFindings)
+	rendered := agent.RenderReviewContext(resolved)
+	assert.NotContains(t, rendered, "Interrupted audit finding")
+	assert.NotContains(t, rendered, "Current review finding")
+
+	t.Run("reset ordinals cannot borrow archived repair status", func(t *testing.T) {
+		fixture := newActiveContextFixture(t, "op-1")
+		directory := fixture.expectedWorktree(t, "op-1")
+		require.NoError(t, testMkdirAll(directory))
+		history := contextFixtureHistory(directory)
+		old := history.Workflows[0]
+		original := old.Phases[1].(*workmodel.ImplementationPhase)
+		failed := *original
+		failed.Output, failed.Completion = nil, nil
+		failed.Input = &workmodel.OutputRef{Phase: 1}
+		failed.Execution.StartedAt = original.Execution.StartedAt.Add(time.Minute)
+		failed.Execution.Process = &workmodel.ExitedProcess{At: failed.Execution.StartedAt.Add(time.Second), Code: contextExit(1)}
+		old.Phases = append(old.Phases, &failed)
+		current := contextFixtureHistory(directory).Workflows[0]
+		current.ReviewContracts = []workmodel.ReviewContract{{PipelineKey: "standard", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewAgent, ConfigKey: "ai-review"}}}}
+		start := current.Phases[1].(*workmodel.ImplementationPhase).Execution.StartedAt.Add(5 * time.Second)
+		prior := &workmodel.ReviewPhase{Contract: 0, Scope: contextReviewScope(), StartedAt: start, Steps: []workmodel.ReviewStep{
+			&workmodel.AgentReviewStep{Slot: 0, Execution: workmodel.AgentExecution{StartedAt: start, Process: &workmodel.ExitedProcess{At: start.Add(time.Second), Code: contextExit(0)}}, Report: &workmodel.ReviewReport{Findings: []workmodel.Finding{{Classification: workmodel.FindingBlocking, Title: "Current workflow blocker", Description: "Repair this defect."}}}},
+		}}
+		repair := *current.Phases[1].(*workmodel.ImplementationPhase)
+		completion := *repair.Completion
+		completion.Summary = "fix: current work"
+		completion.CompletedAt = start.Add(11 * time.Second)
+		repair.Completion = &completion
+		repair.Input = &workmodel.OutputRef{Phase: 1}
+		repair.TargetFindings = []workmodel.FindingRef{{Phase: 2, Step: 0, Finding: 0}}
+		repair.Execution.StartedAt = start.Add(10 * time.Second)
+		repair.Execution.Process = &workmodel.ExitedProcess{At: start.Add(12 * time.Second), Code: contextExit(0)}
+		repair.Output = &workmodel.CodeOutput{CodeIdentity: workmodel.CodeIdentity{Commit: "R2", Tree: "T2"}, RetainedRef: "refs/orpheus/current-repair"}
+		scope := contextReviewScope()
+		scope.Output, scope.DeltaFrom = workmodel.OutputRef{Phase: 3}, &workmodel.OutputRef{Phase: 1}
+		current.Phases = append(current.Phases, prior, &repair, &workmodel.ReviewPhase{Contract: 0, Scope: scope, StartedAt: start.Add(20 * time.Second), Steps: []workmodel.ReviewStep{&workmodel.AgentReviewStep{Slot: 0, Execution: workmodel.AgentExecution{StartedAt: start.Add(20 * time.Second), Process: &workmodel.RunningProcess{}}}}})
+		history.Workflows = []workmodel.Workflow{old, current}
+		saveContextHistory(t, fixture, history)
+		resolver := fixture.resolver(fixture.worktreeTask("op-1", directory), map[string]string{"ORPHEUS_REPO_ID": "alpha", "ORPHEUS_TASK_ID": "op-1", "ORPHEUS_WORKTREE": directory, "ORPHEUS_BRANCH": "orpheus/op-1", "ORPHEUS_AGENT_PURPOSE": "review", "ORPHEUS_REVIEW_ATTEMPT": "2", "ORPHEUS_REVIEW_STEP": "ai-review"}, directory)
+
+		resolved, err := resolver.ResolveReview(context.Background())
+
+		require.NoError(t, err)
+		assert.Equal(t, []agent.ContextPriorReviewFinding{{Attempt: 1, Number: 1, Step: "ai-review", Type: taskstate.FindingTypeBlocking, Disposition: "follow-up run 2 succeeded", Title: "Current workflow blocker"}}, resolved.Review.PriorFindings)
+		require.NotNil(t, resolved.Review.OriginalCompletion)
+		assert.Equal(t, "Complete work", resolved.Review.OriginalCompletion.Summary)
+		require.NotNil(t, resolved.Review.LatestFixCompletion)
+		assert.Equal(t, "fix: current work", resolved.Review.LatestFixCompletion.Summary)
+	})
 }

@@ -4,12 +4,14 @@ package cli_test
 
 import (
 	"fmt"
+	workmodel "github.com/hea3ven/orpheus/internal/work"
 	"testing"
 
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"time"
 )
 
 func TestIntegrationWorkflowAgentContextRendersValidatedWorktreeContext(t *testing.T) {
@@ -96,7 +98,7 @@ func TestIntegrationWorkflowAgentContextRendersNonInteractiveRunGuidanceAfterPro
 			is := assert.New(t)
 			_, _, worktree, _ := setupOwnershipAgentImplementation(t, fixture, false)
 			if omitted {
-				seedOwnershipLegacyRunningAttempt(t, fixture, "op-1", "orpheus/op-1", worktree)
+				seedOwnershipNoninteractiveAttempt(t, fixture, "op-1", "orpheus/op-1", worktree)
 			}
 			writeOwnershipAgentProfileConfig(t, fixture, "recorder", true)
 
@@ -162,27 +164,41 @@ func TestIntegrationWorkflowAgentContextRendersReviewFollowUpCompletionHistory(t
 	store := taskstate.NewStore(fixture.paths)
 	writeOwnershipAgentProfileConfig(t, fixture, "recorder", false)
 
-	_, err := store.FinishReview("alpha", taskID, review.Attempt, taskstate.ReviewStatusBlocked)
+	fixture.mustExecute("agent", "review", "add", "--type", "blocking", "--title", "Repair requirement", "--description", "The feature needs a repair.", "--suggested-action", "Implement the fix.")
+	loaded, err := store.Load("alpha", taskID)
 	require.NoError(t, err)
-	followUp, err := store.StartRun("alpha", taskID, taskstate.StartRunOptions{
+	actor := loaded.Reviews[0].Steps[0].Address
+	_, err = store.FinishReviewStepExecution("alpha", taskID, review.Attempt, "ai-review", taskstate.FinishReviewStepExecutionOptions{Address: actor, Process: &workmodel.ExitedProcess{Code: fixtureExitCode(0), At: time.Now().UTC()}})
+	require.NoError(t, err)
+	_, err = store.RecordFindingDecision(actor, *loaded.Reviews[0].Findings[0].Address, &workmodel.RepairRequired{})
+	require.NoError(t, err)
+
+	followUp, err := store.StartRun("alpha", taskID, taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: ownershipAuthoringRepo().Path, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent:  "recorder",
 		Branch: "main", Worktree: ownershipAuthoringRepo().Path,
 		ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: review.Attempt, FindingIndexes: []int{0}},
 	})
 	require.NoError(t, err)
-	_, err = store.CompleteRun("alpha", taskID, followUp.Attempt, taskstate.CompleteRunOptions{
+	_, err = seedFixtureHandoff(store, "alpha", taskID, followUp.Attempt, taskstate.CompleteRunOptions{
 		Summary:              "Follow-up summary",
 		Description:          "Follow-up description.",
 		DetailedDescription:  "Follow-up detailed PR body.",
 		TechnicalExplanation: "Follow-up technical explanation.",
 	})
 	require.NoError(t, err)
-	_, err = store.FinishRun("alpha", taskID, followUp.Attempt, taskstate.RunStatusSucceeded)
+	_, err = seedFixtureExit(store, "alpha", taskID, followUp.Attempt, 0)
 	require.NoError(t, err)
-	nextReview, err := store.StartReviewWithOptions("alpha", taskID, taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review"})
+	captured, err := store.Load("alpha", taskID)
 	require.NoError(t, err)
-	_, err = store.RecordReviewStep("alpha", taskID, nextReview.Attempt, taskstate.RecordReviewStepOptions{Kind: "agent_review", Name: "ai-review"})
+	captured.Work.Workflows[0].Phases[followUp.Address.Phase].(*workmodel.ImplementationPhase).Output = &workmodel.CodeOutput{CodeIdentity: workmodel.CodeIdentity{Commit: "followup-output", Tree: "followup-tree"}, RetainedRef: "refs/orpheus/fixture-followup"}
+	saveReaderHistory(t, fixture, *captured.Work)
+	nextReview, err := store.StartReviewWithOptions("alpha", taskID, taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review", Contract: captured.Work.Workflows[0].ReviewContracts[0], Scope: workmodel.ReviewScope{Requirements: "Follow-up task requirements", Output: workmodel.OutputRef{Phase: followUp.Address.Phase}, DeltaFrom: &workmodel.OutputRef{Phase: 1}, Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}})
 	require.NoError(t, err)
+	execution := taskstate.AgentExecution{Agent: "reviewer", Status: taskstate.RunStatusRunning, StartedAt: nextReview.StartedAt, SupervisorPID: 10}
+	_, err = store.RecordReviewStep("alpha", taskID, nextReview.Attempt, taskstate.RecordReviewStepOptions{Address: nextReview.Address, Kind: "agent_review", Name: "ai-review", Execution: &execution})
+	require.NoError(t, err)
+	setWorkflowEnvironment(t, fixture, "ORPHEUS_PHASE", fmt.Sprint(nextReview.Address.Phase))
+
 	setWorkflowEnvironment(t, fixture, "ORPHEUS_REVIEW_ATTEMPT", "2")
 
 	stdout, stderr := fixture.mustExecute("agent", "context")
@@ -201,6 +217,11 @@ func TestIntegrationWorkflowAgentContextRendersReviewFollowUpCompletionHistory(t
 		is.Contains(stdout, want)
 	}
 	is.NotContains(stdout, "Latest completion:")
+	is.Contains(stdout, "- Full-task baseline: initial-commit")
+	is.Contains(stdout, "- Reviewed output: followup-output")
+	is.Contains(stdout, "- Repair-delta input: fixture-output")
+	is.Contains(stdout, "- Repair-delta output: followup-output")
+	is.Contains(stdout, "- Captured task requirements: Follow-up task requirements")
 }
 
 func TestIntegrationWorkflowAgentReviewAddRecordsFindingTypesAndRejectsStaleAttempt(t *testing.T) {
@@ -254,8 +275,10 @@ func TestIntegrationWorkflowAgentReviewAddRecordsFindingTypesAndRejectsStaleAtte
 	is.Equal("Create a shared helper for validation.", latest.Findings[2].TaskProposal.Description)
 	is.Equal("Callers use the shared helper.", latest.Findings[2].TaskProposal.AcceptanceCriteria)
 
-	_, err = store.FinishReview("alpha", "op-review", review.Attempt, taskstate.ReviewStatusBlocked)
+	actor := latest.Steps[0].Address
+	_, err = store.FinishReviewStepExecution("alpha", "op-review", review.Attempt, "ai-review", taskstate.FinishReviewStepExecutionOptions{Address: actor, Process: &workmodel.ExitedProcess{Code: fixtureExitCode(0), At: time.Now().UTC()}})
 	require.NoError(t, err)
+
 	stdout, stderr, err = fixture.execute(
 		"agent", "review", "add",
 		"--type", "blocking",
@@ -267,7 +290,7 @@ func TestIntegrationWorkflowAgentReviewAddRecordsFindingTypesAndRejectsStaleAtte
 	require.Error(t, err)
 	is.Empty(stdout)
 	is.Empty(stderr)
-	is.ErrorContains(err, "expected \"running\"")
+	is.ErrorContains(err, "attempt does not own the active last work")
 	state, err = store.Load("alpha", "op-review")
 	require.NoError(t, err)
 	latest, ok = taskstate.LatestReview(state)
@@ -319,11 +342,13 @@ func TestIntegrationWorkflowAgentContextFailsBeforeRenderingWhenRunIsStale(t *te
 	})
 	setupOwnershipAuthoringWorkflow(t, fixture, repo, backend)
 	store := taskstate.NewStore(fixture.paths)
-	_, err = store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Branch: "orpheus/op-1", Worktree: worktree})
+	_, err = store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Branch: "orpheus/op-1", Worktree: worktree})
 	require.NoError(t, err)
-	_, err = store.FinishRun("alpha", "op-1", 1, taskstate.RunStatusSucceeded)
+	_, err = seedFixtureExit(store, "alpha", "op-1", 1, 0)
 	require.NoError(t, err)
 	fixture.options.AgentWorkingDirectory = worktree
+	setWorkflowEnvironment(t, fixture, "ORPHEUS_WORKFLOW", "0")
+	setWorkflowEnvironment(t, fixture, "ORPHEUS_PHASE", "1")
 	setWorkflowEnvironment(t, fixture, "ORPHEUS_REPO_ID", "alpha")
 	setWorkflowEnvironment(t, fixture, "ORPHEUS_TASK_ID", "op-1")
 	setWorkflowEnvironment(t, fixture, "ORPHEUS_WORKTREE", worktree)
@@ -335,6 +360,6 @@ func TestIntegrationWorkflowAgentContextFailsBeforeRenderingWhenRunIsStale(t *te
 	is.Empty(stdout)
 	is.Empty(stderr)
 	is.Contains(err.Error(), "agent context:")
-	is.Contains(err.Error(), "latest Orpheus run attempt 1")
+	is.Contains(err.Error(), "attempt does not own the active last work")
 	is.NotContains(err.Error(), "# Orpheus Agent Context")
 }

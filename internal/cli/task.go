@@ -33,7 +33,6 @@ import (
 )
 
 var (
-	taskDoneInputIsTerminal     = readerIsTerminal
 	taskReviewOutputIsTerminal  = writerIsTerminal
 	manualReviewColorIsDisabled = func() bool {
 		_, disabled := os.LookupEnv("NO_COLOR")
@@ -201,32 +200,13 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 }
 
 func newTaskDoneCommand(opts *rootOptions) *cobra.Command {
-	var summary string
-	var description string
-	cmd := &cobra.Command{
-		Use:   "done [<task-id>]",
-		Short: "Finalize a reviewed task",
-		Long: "Finalize a reviewed task.\n\n" +
-			"task done is a compatibility entry point. Normal workflow advancement uses task run, which starts review after implementation and retries finalization after approval. task done refuses publication until the latest local review attempt has passed.\n\n" +
-			"On the registered default branch, commits reviewed repo-root changes, pushes the " +
-			"default branch, and closes the backend task. On a repo-root task branch, publishes " +
-			"the feature branch as a pull request. Without a task id, the command infers one " +
-			"ready task only when the current directory is exactly a registered repo root or " +
-			"deterministic task worktree and the task owns the current branch.\n\n" +
-			"Use task done to retry publication or finalization after a review has passed " +
-			"and the previous publication attempt failed.",
-		Args: cobra.MaximumNArgs(1),
-		RunE: func(command *cobra.Command, args []string) error {
-			taskID := ""
-			if len(args) == 1 {
-				taskID = args[0]
-			}
-			return runTaskDone(command, opts, taskID, summary, description)
-		},
-	}
-	cmd.Flags().StringVar(&summary, "summary", "", "override the final commit summary")
-	cmd.Flags().StringVar(&description, "description", "", "override the final commit description")
-	return cmd
+	return &cobra.Command{Use: "done [<task-id>]", Short: "Deliver an explicitly authorized reviewed publication", Long: "Retry an existing, explicitly authorized publication plan. This command consumes retained reviewed commits; it neither creates an implementation revision nor grants publication consent. Publication authorization remains gated until its separate decision interface is available.", Args: cobra.MaximumNArgs(1), RunE: func(command *cobra.Command, args []string) error {
+		taskID := ""
+		if len(args) == 1 {
+			taskID = args[0]
+		}
+		return runTaskDone(command, opts, taskID)
+	}}
 }
 
 func newTaskSyncCommand(opts *rootOptions) *cobra.Command {
@@ -1068,7 +1048,7 @@ func executeTaskRunRoute(command *cobra.Command, opts *rootOptions, execution ta
 		}
 		logTaskRunLaunch(command, execution.logger, execution.repo.ID, resolved.TaskID, dispatch.start)
 		result := executeTaskRunAgent(command.Context(), command, execution.deps, execution.logger, dispatch.service, execution.repo.ID, resolved.TaskID, dispatch.start, dispatch.prompt)
-		if err := dispatch.service.RecordExecution(execution.repo.ID, resolved.TaskID, dispatch.start.Attempt.Attempt, result); err != nil {
+		if err := dispatch.service.RecordExecution(dispatch.start.Attempt.Address, result); err != nil {
 			return err
 		}
 		return reviewAfterTaskRun(command, opts, dispatch, execution.repo.ID, resolved.TaskID, execution.agentName, execution.pipelineName)
@@ -1079,10 +1059,9 @@ func executeTaskRunRoute(command *cobra.Command, opts *rootOptions, execution ta
 		if err != nil {
 			return err
 		}
-		finalized, err := finalizeTaskWithConfirmation(command, newTaskFinalizationService(execution.deps, taskCtx, execution.logger), workflow.FinalizeOptions{
-			TaskID:              resolved.TaskID,
-			RequirePassedReview: true,
-		}, execution.deps.terminal)
+		finalized, err := finalizeTask(command, newTaskFinalizationService(execution.deps, taskCtx, execution.logger), workflow.FinalizeOptions{
+			TaskID: resolved.TaskID,
+		})
 		if err != nil {
 			return err
 		}
@@ -1360,18 +1339,18 @@ func executeTaskRunAgent(
 		},
 		Launch: agentexec.LaunchOptions{
 			Dir: start.ExecutionDir,
-			Env: deps.invocationEnvironment(taskRunEnvironment(
+			Env: deps.invocationEnvironment(append(taskRunEnvironment(
 				repoID,
 				start.Task.ID,
 				start.Setup.WorktreePath,
 				start.Setup.Branch,
 				prompt,
-			)),
+			), agent.OwnerEnvironment(start.Attempt.Address)...)),
 			Stdin:  command.InOrStdin(),
 			Stdout: command.OutOrStdout(),
 			Stderr: command.ErrOrStderr(),
 			OnStart: func(pid int) error {
-				return service.RecordChildPID(repoID, taskID, start.Attempt.Attempt, pid)
+				return service.RecordChildPID(start.Attempt.Address, pid)
 			},
 		},
 		BeforeStart: func() error { return renderTaskRunAgentHeader(command.ErrOrStderr(), start.Attempt) },
@@ -1466,6 +1445,9 @@ func renderTaskReviewLifecycleOutcome(
 	outcome workflow.ReviewLifecycleOutcome,
 ) error {
 	switch outcome.Kind {
+	case workflow.ReviewLifecycleOutcomePublicationPending:
+		_, err := fmt.Fprintf(command.OutOrStdout(), "Review passed for %s. Committed output is retained; publication awaits explicit authorization (T8).\n", outcome.Context.TaskID())
+		return err
 	case workflow.ReviewLifecycleOutcomeExecutionRecovered:
 		return renderReviewRecoveryGuidance(command.ErrOrStderr(), outcome.Context.TaskID(), outcome.RecoveryInspection.Reason)
 	case workflow.ReviewLifecycleOutcomeExecutionLive:
@@ -1763,7 +1745,7 @@ func manualReviewCompletions(taskState taskstate.TaskState) (manualReviewComplet
 }
 
 func renderManualReviewCompletions(output io.Writer, style manualReviewStyle, ctx manualReviewCompletionContext) error {
-	if ctx.Latest.ReviewFollowUp == nil {
+	if ctx.Latest.Address.Equal(ctx.Original.Address) {
 		return renderManualReviewCompletion(output, style, style.green("● LATEST COMPLETION"), ctx.Latest.Completion)
 	}
 	if err := renderManualReviewCompletion(output, style, style.blue("○ ORIGINAL COMPLETION"), ctx.Original.Completion); err != nil {
@@ -2897,7 +2879,7 @@ func renderManualReviewHandoff(command *cobra.Command, taskID string, stepName s
 	}
 	return review.ErrManualInputUnavailable
 }
-func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summary string, description string) error {
+func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string) error {
 	logger := opts.log().With(
 		slog.String("component", "cli"),
 		slog.String("operation", "task_done"),
@@ -2914,13 +2896,10 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string, summa
 	}
 
 	service := newTaskFinalizationService(deps, taskCtx, logger)
-	finalized, err := finalizeTaskWithConfirmation(command, service, workflow.FinalizeOptions{
-		TaskID:              taskID,
-		CWD:                 deps.taskCWD,
-		Summary:             summary,
-		Description:         description,
-		RequirePassedReview: true,
-	}, deps.terminal)
+	finalized, err := finalizeTask(command, service, workflow.FinalizeOptions{
+		TaskID: taskID,
+		CWD:    deps.taskCWD,
+	})
 	if err != nil {
 		return err
 	}
@@ -2944,7 +2923,6 @@ func newTaskFinalizationService(deps *invocationDependencies, taskCtx taskContex
 		BackendFactory: func(source taskmodel.RepositorySource) (workflow.FinalizationBackend, error) {
 			return invocationTaskBackend[workflow.FinalizationBackend](deps, source)
 		},
-		RunStore:   deps.taskStateStore,
 		PRProvider: newInvocationGHProvider(deps, logger),
 		Logger:     logger,
 	}
@@ -2974,61 +2952,20 @@ func invocationTaskBackend[T any](deps *invocationDependencies, source taskmodel
 	return taskBackend, nil
 }
 
-func finalizeTaskWithConfirmation(
-	command *cobra.Command,
-	service workflow.FinalizationService,
-	finalizeOpts workflow.FinalizeOptions,
-	terminal TerminalCapabilities,
-) (workflow.FinalizationResult, error) {
-	finalized, err := service.Finalize(command.Context(), finalizeOpts)
-	if err == nil {
-		return finalized, nil
-	}
-
-	confirmation, ok := workflow.RunningCompletionConfirmationFromError(err)
-	if !ok {
-		return workflow.FinalizationResult{}, fmt.Errorf("task done: %w", err)
-	}
-	confirmed, confirmErr := confirmRunningCompletionFinalizationWithReader(command, confirmation, nil, terminal)
-	if confirmErr != nil {
-		return workflow.FinalizationResult{}, fmt.Errorf("task done: %w", confirmErr)
-	}
-	if !confirmed {
-		return workflow.FinalizationResult{}, fmt.Errorf("task done: %w", err)
-	}
-	finalizeOpts.AllowRunningCompleted = true
-	finalized, err = service.Finalize(command.Context(), finalizeOpts)
+func finalizeTask(command *cobra.Command, service workflow.FinalizationService, opts workflow.FinalizeOptions) (workflow.FinalizationResult, error) {
+	result, err := service.Finalize(command.Context(), opts)
 	if err != nil {
 		return workflow.FinalizationResult{}, fmt.Errorf("task done: %w", err)
 	}
-	return finalized, nil
+	return result, nil
 }
 
 func renderTaskDoneResult(command *cobra.Command, finalized workflow.FinalizationResult) error {
 	if finalized.PRURL != "" {
-		action := "created"
-		if finalized.PRRecovered {
-			action = "recovered existing"
-		}
-		_, err := fmt.Fprintf(
-			command.OutOrStdout(),
-			"Published %s: committed %s, pushed %s, and %s PR %s. Backend task remains open for PR review.\n",
-			finalized.Task.ID,
-			finalized.Finalization.Commit,
-			finalized.Branch,
-			action,
-			finalized.PRURL,
-		)
+		_, err := fmt.Fprintf(command.OutOrStdout(), "Published %s: delivered reviewed %s, pushed %s, and observed PR %s. Backend task remains open for PR review.\n", finalized.Task.ID, finalized.Finalization.Commit, finalized.Branch, finalized.PRURL)
 		return err
 	}
-	_, err := fmt.Fprintf(
-		command.OutOrStdout(),
-		"Finalized %s: committed %s, pushed %s, and closed the backend task.%s\n",
-		finalized.Task.ID,
-		finalized.Finalization.Commit,
-		finalized.Branch,
-		formatWorktreeCleanup(finalized.WorktreeCleanup),
-	)
+	_, err := fmt.Fprintf(command.OutOrStdout(), "Finalized %s: delivered reviewed %s, pushed %s, and closed the backend task.%s\n", finalized.Task.ID, finalized.Finalization.Commit, finalized.Finalization.DestinationBranch, formatWorktreeCleanup(finalized.WorktreeCleanup))
 	return err
 }
 
@@ -3040,59 +2977,6 @@ func renderTaskEditResult(output io.Writer, updated taskmodel.Task, repo registr
 		updated.Title,
 	)
 	return err
-}
-
-func confirmRunningCompletionFinalization(
-	command *cobra.Command,
-	confirmation workflow.RunningCompletionConfirmation,
-) (bool, error) {
-	return confirmRunningCompletionFinalizationWithReader(command, confirmation, nil, TerminalCapabilities{})
-}
-
-func confirmRunningCompletionFinalizationWithReader(
-	command *cobra.Command,
-	confirmation workflow.RunningCompletionConfirmation,
-	reader *bufio.Reader,
-	terminal TerminalCapabilities,
-) (bool, error) {
-	input := command.InOrStdin()
-	if !terminal.withDefaults().InputIsTerminal(input) {
-		return false, nil
-	}
-	if reader == nil {
-		reader = bufio.NewReader(input)
-	}
-
-	output := command.ErrOrStderr()
-	if _, err := fmt.Fprintf(
-		output,
-		"Warning: latest run attempt %d for task %s is still recorded as running, but it has a completion block.\n",
-		confirmation.Attempt,
-		confirmation.TaskID,
-	); err != nil {
-		return false, err
-	}
-	if confirmation.Summary != "" {
-		if _, err := fmt.Fprintf(output, "Recorded completion summary: %s\n", confirmation.Summary); err != nil {
-			return false, err
-		}
-	}
-	if _, err := fmt.Fprintln(
-		output,
-		"Continuing will finalize the reviewed main/solo work without changing the recorded run status.",
-	); err != nil {
-		return false, err
-	}
-	if _, err := fmt.Fprint(output, "Finalize anyway? [y/N]: "); err != nil {
-		return false, err
-	}
-
-	line, err := reader.ReadString('\n')
-	if err != nil && (!errors.Is(err, io.EOF) || line == "") {
-		return false, fmt.Errorf("read finalization confirmation: %w", err)
-	}
-	answer := strings.ToLower(strings.TrimSpace(line))
-	return answer == "y" || answer == "yes", nil
 }
 
 func runTaskSync(command *cobra.Command, opts *rootOptions, taskID string) error {
@@ -3453,7 +3337,7 @@ func (r syncConflictAgentResolver) PrepareSyncConflictResolution(
 						opts.Branch,
 						commandSnapshot.Prompt,
 						opts.ConflictFiles,
-					), stateEnvironmentEntries(r.paths)...),
+					), append(stateEnvironmentEntries(r.paths), agent.OwnerEnvironment(opts.Address)...)...),
 					Stdin:   strings.NewReader(""),
 					Stdout:  r.stdout,
 					Stderr:  r.stderr,
@@ -3933,13 +3817,9 @@ func renderTaskHistory(output interface{ Write([]byte) (int, error) }, state tas
 	}
 	history := make([]taskHistoryItem, 0, len(state.Events)+len(state.Reviews)*2)
 	for _, event := range state.Events {
-		if event.Type != taskstate.EventWorktreeReused {
-			history = append(history, taskHistoryItem{
-				at:      event.At,
-				display: taskHistoryEventDisplay(event, state.Runs),
-			})
-		}
+		history = append(history, taskHistoryItem{at: event.At, display: taskHistoryEventDisplay(event, state.Runs)})
 	}
+
 	history = append(history, reviewHistoryItems(state.Reviews)...)
 	if len(history) == 0 {
 		_, err := fmt.Fprintln(output, "  -")
@@ -3963,6 +3843,13 @@ func renderTaskHistory(output interface{ Write([]byte) (int, error) }, state tas
 }
 
 func taskHistoryEventDisplay(event taskstate.Event, runs []taskstate.RunAttempt) string {
+	switch event.Type {
+	case taskstate.EventBranchSyncStarted:
+		return event.DisplayName() + ": " + event.Message
+	case taskstate.EventBranchSyncCommitted, taskstate.EventBranchSyncPushed, taskstate.EventBranchSyncRolledBack:
+		return fmt.Sprintf("%s: %s at %s (workflow %d, phase %d, sync %d)", event.DisplayName(), event.Branch, event.Commit, event.Address.Workflow, event.Address.Phase, *event.Address.BranchSync)
+	}
+
 	if event.Type == taskstate.EventRunInterrupted {
 		return fmt.Sprintf("Run attempt %d interrupted (%s via %s)", event.Attempt, event.InterruptionReason, event.InterruptionTrigger)
 	}
@@ -3970,7 +3857,7 @@ func taskHistoryEventDisplay(event taskstate.Event, runs []taskstate.RunAttempt)
 		return event.DisplayName()
 	}
 	for _, run := range runs {
-		if run.Attempt != event.Attempt || run.Execution.Launch == nil {
+		if !run.Address.Equal(event.Address) || run.Attempt != event.Attempt || run.Execution.Launch == nil {
 			continue
 		}
 		launch := run.Execution.Launch

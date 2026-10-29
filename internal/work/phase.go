@@ -17,18 +17,24 @@ type PreparationPhase struct {
 type ImplementationPhase struct {
 	Input          *OutputRef
 	TargetFindings []FindingRef
-	Execution      AgentExecution
-	Completion     *Completion
-	Output         Output
+	// AdvisoryFindings are selected best-effort input, not repair claims.
+	AdvisoryFindings []FindingRef
+	Execution        AgentExecution
+	Completion       *Completion
+	Output           Output
 }
 
 // ReviewPhase owns the actual attempts of its referenced required-step contract.
 // Scope is inherited by findings; there is no second aggregate result to edit.
 type ReviewPhase struct {
-	Contract  int
-	Scope     ReviewScope
-	StartedAt time.Time
-	Steps     []ReviewStep
+	Abort             *AbortedReview
+	ExecutionFailure  *ReviewExecutionFailure
+	Contract          int
+	Scope             ReviewScope
+	StartedAt         time.Time
+	AdmissionFailure  *ReadOnlyFailure
+	RepairBudgetStops []RepairBudgetStop
+	Steps             []ReviewStep
 }
 
 // PublicationPhase owns immutable intent, explicit consent, and observed delivery.
@@ -67,9 +73,13 @@ type ReviewStep interface{ reviewStep() }
 
 // CheckStep retains its exit result even when explicitly waived.
 type CheckStep struct {
-	Slot   int
-	Result *CheckResult
-	Waiver *Waiver
+	Slot             int
+	Result           *CheckResult
+	StartFailure     *StartFailedProcess
+	Findings         []Finding
+	Waiver           *Waiver
+	ReadOnlyFailures []ReadOnlyFailure
+	DecisionPauses   []AutomatedDecisionPause
 }
 
 // CheckResult is the observed result of a configured check.
@@ -84,17 +94,25 @@ type Waiver struct {
 	At     time.Time
 }
 
-// AgentReviewStep owns a process and its report. Exit success is not approval.
+// AgentReviewStep owns a process and any reported findings. Successful exit
+// satisfies this slot only when its recorded findings do not require changes.
 type AgentReviewStep struct {
-	Slot      int
-	Execution AgentExecution
-	Report    *ReviewReport
+	ExecutionFailure *ReviewExecutionFailure
+	Slot             int
+	Execution        AgentExecution
+	Report           *ReviewReport
+	ReadOnlyFailures []ReadOnlyFailure
+	DecisionPauses   []AutomatedDecisionPause
 }
 
-// ManualReviewStep owns an operator's direct assessment, or nil while unanswered.
+// ManualReviewStep owns findings as they are reported, including while the
+// operator's assessment is unanswered. Deciding does not move their addresses.
 type ManualReviewStep struct {
-	Slot     int
-	Decision ManualAssessment
+	Slot             int
+	CommandResult    ProcessResult
+	Findings         []Finding
+	Decision         ManualAssessment
+	ReadOnlyFailures []ReadOnlyFailure
 }
 
 func (*CheckStep) reviewStep()        {}
@@ -104,16 +122,19 @@ func (*ManualReviewStep) reviewStep() {}
 // ManualAssessment separates approval from findings structurally.
 type ManualAssessment interface{ manualAssessment() }
 
-// ApprovedReview cannot carry a contradictory list of required changes.
+// ApprovedReview accepts its step's findings only when none still require work.
 type ApprovedReview struct {
+	// Publication retains only choices actually accepted at this manual approval.
+	// It is intent, never authorization to deliver.
+	Publication   *ReviewedPublication
 	At            time.Time
 	Verifications []FindingVerification
 }
 
-// RequestedChanges owns findings recorded by this manual assessment.
+// RequestedChanges requires the findings retained by its owning manual step.
 type RequestedChanges struct {
-	At       time.Time
-	Findings []Finding
+	At      time.Time
+	Targets []FindingRef
 }
 
 // AbortedReview records that the assessment was deliberately stopped.
@@ -125,3 +146,10 @@ type AbortedReview struct {
 func (*ApprovedReview) manualAssessment()   {}
 func (*RequestedChanges) manualAssessment() {}
 func (*AbortedReview) manualAssessment()    {}
+
+// ReviewedPublication is the final destination/flow selected during manual review.
+// Tentative choices on a blocked or aborted assessment are not persisted.
+type ReviewedPublication struct {
+	Destination Destination
+	Target      PublicationTarget
+}

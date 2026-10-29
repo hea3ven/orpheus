@@ -81,7 +81,7 @@ func TestIntegrationWorkflowTaskReviewUsageWriteErrorPreservesFollowUpOutcomeAnd
 
 			must.Error(err)
 			is.ErrorIs(err, usageWriteErr)
-			is.Contains(err.Error(), "record run usage")
+			is.Contains(err.Error(), "record implementation usage")
 			if test.runErr == nil {
 				is.Contains(stdout, "Recorded completion for op-usage-fault")
 			} else {
@@ -92,7 +92,7 @@ func TestIntegrationWorkflowTaskReviewUsageWriteErrorPreservesFollowUpOutcomeAnd
 					is.ErrorIs(err, terminalWriteErr)
 				}
 			}
-			is.NotContains(stdout, "Published op-usage-fault")
+			is.NotContains(stdout, "Review passed for op-usage-fault")
 			is.Contains(stderr, "Review blocked for op-usage-fault by check \"status\".")
 			is.Contains(stderr, "Autonomous review follow-up for op-usage-fault targets review attempt 1 finding(s) 1.")
 			must.True(failOnce, "usage write fault was not consumed")

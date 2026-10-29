@@ -25,7 +25,7 @@ func TestIntegrationWorkflowTaskReviewAgentReviewStepLaunchesReviewerAndPassesWi
 	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "agent_review", "name": "ai-review"}}})
 	stdout, _ := fixture.run("", "task", "run", "op-main")
 
-	is.Contains(stdout, "Published op-main")
+	is.Contains(stdout, "Review passed for op-main")
 	must.Len(fixture.agent.contexts, 1)
 	is.Contains(fixture.agent.contexts[0], "- Task baseline: initial-commit")
 	must.Len(fixture.agent.launches, 1)
@@ -55,7 +55,7 @@ func TestIntegrationWorkflowTaskReviewAgentReviewStepLaunchesReviewerAndPassesWi
 	is.Contains(latest.Steps[0].Execution.Args[0], "Reviewing op-main Ready for task done - ")
 	is.Contains(latest.Steps[0].Execution.Args[0], "You are an agent dispatched by Orpheus.")
 	is.Empty(latest.Findings)
-	is.NotEmpty(taskstate.FinalizationFacts(state).Commit)
+	assertUnconsentedPublication(t, state)
 }
 
 func TestIntegrationWorkflowTaskReviewAgentReviewBlockingFindingStopsPipeline(t *testing.T) {
@@ -72,13 +72,14 @@ func TestIntegrationWorkflowTaskReviewAgentReviewBlockingFindingStopsPipeline(t 
 	is.Contains(stderr, "== Review step: ai-review (agent_review) ==")
 	is.Contains(stderr, "Review blocked for op-main by agent_review \"ai-review\".")
 	is.NotContains(stderr, "Review action")
-	is.Equal(headBefore, fixture.candidate.head)
+	is.NotEqual(headBefore, fixture.candidate.head)
+	is.Equal("output-1", fixture.candidate.head)
 
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
 	latest, ok := taskstate.LatestReview(state)
 	must.True(ok)
-	is.Equal(taskstate.ReviewStatusBlocked, latest.Status)
+	is.Equal(taskstate.ReviewStatusWaitingForAutomatedDecision, latest.Status)
 	must.Len(latest.Findings, 1)
 	is.Equal(taskstate.FindingTypeBlocking, latest.Findings[0].Type)
 	is.Equal("ai-review", latest.Findings[0].Step)
@@ -204,7 +205,8 @@ func TestIntegrationWorkflowTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollo
 	is.Contains(stderr, "Review action [f=finish/block, b=block, p=review advisories, v=advisory, t=task, q=abort]")
 	is.NotContains(stderr, "Finding 3 · approval · advisory\nManual advisory")
 	is.Contains(stderr, "Review blocked for op-main.")
-	is.Equal(headBefore, fixture.candidate.head)
+	is.NotEqual(headBefore, fixture.candidate.head)
+	is.Equal("output-1", fixture.candidate.head)
 
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
@@ -315,10 +317,10 @@ func TestIntegrationWorkflowReviewMutationFailsBeforePublication(t *testing.T) {
 	assert.Equal(t, taskstate.ReviewStatusFailed, loaded.Reviews[0].Status)
 	require.Len(t, loaded.Reviews[0].Steps, 1)
 	require.NotNil(t, loaded.Reviews[0].Steps[0].Execution)
-	assert.Equal(t, taskstate.RunStatusFailed, loaded.Reviews[0].Steps[0].Execution.Status)
+	assert.Equal(t, taskstate.RunStatusSucceeded, loaded.Reviews[0].Steps[0].Execution.Status)
 	assert.Equal(t, 1, fixture.candidate.snapshots, "one snapshot owns the whole step")
 	assert.Equal(t, "reviewed\n", fixture.candidate.contents)
-	assert.Empty(t, fixture.candidate.commits)
+	assert.Len(t, fixture.candidate.commits, 1)
 	assert.Empty(t, fixture.candidate.pushes)
 	assertTaskNotPublished(t, loaded, task)
 }

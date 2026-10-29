@@ -1,59 +1,23 @@
 package doctor
 
 import (
-	"path/filepath"
-	"reflect"
-	"testing"
-
+	"context"
+	"errors"
+	"github.com/hea3ven/orpheus/internal/agent"
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workstate"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"path/filepath"
+	"testing"
+	"time"
 )
-
-func TestRunLeavesPersistedUnresolvedSyncConflictUntouched(t *testing.T) {
-	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	store := taskstate.NewStore(paths)
-	run, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Agent: "recorder", WorkDirectory: "/fixture/op-1", Branch: "orpheus/op-1", Worktree: "/fixture/op-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.FinishRun("alpha", "op-1", run.Attempt, taskstate.RunStatusSucceeded); err != nil {
-		t.Fatal(err)
-	}
-	_, err = store.BeginSyncConflictOperation("alpha", "op-1", taskstate.SyncConflictOperation{
-		ID: "sync-1", Branch: "orpheus/op-1", Worktree: "/fixture/op-1", DefaultBranch: "main", Phase: taskstate.SyncConflictPhaseUnresolved,
-		Checkpoint: taskstate.SyncConflictCheckpoint{LocalHead: "before", RemoteHead: "before", MergeSource: "main-head"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	before, err := store.Load("alpha", "op-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, fix := range []bool{false, true} {
-		result, err := Run(Options{Paths: paths, Registry: registry.Registry{Repos: []registry.Repo{{ID: "alpha", Path: "/fixture/alpha"}}}, Fix: fix})
-		if err != nil {
-			t.Fatalf("doctor fix=%v: %v", fix, err)
-		}
-		if len(result.SyncConflictRows) != 1 || result.SyncConflictRows[0].Outcome != "unresolved" || result.SyncConflictRows[0].Reason != "operation was previously marked unresolved" {
-			t.Fatalf("sync diagnosis = %#v", result.SyncConflictRows)
-		}
-		after, err := store.Load("alpha", "op-1")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(after, before) {
-			t.Fatalf("doctor fix=%v changed durable unresolved state: got %#v, want %#v", fix, after, before)
-		}
-	}
-}
 
 func TestClassifySyncConflictRecoveryRejectsOwnershipMismatch(t *testing.T) {
 	operation := taskstate.SyncConflictOperation{
@@ -67,44 +31,68 @@ func TestClassifySyncConflictRecoveryRejectsOwnershipMismatch(t *testing.T) {
 	}
 }
 
-func TestRepairSyncConflictRecoveryCompletesPushedState(t *testing.T) {
-	paths, err := state.NewPaths(
-		filepath.Join(testutil.CanonicalTempDir(t), "config"),
-		filepath.Join(testutil.CanonicalTempDir(t), "data"),
-	)
-	if err != nil {
-		t.Fatalf("new paths: %v", err)
+func doctorSyncFixture(t *testing.T, localCompleted bool) (state.Paths, taskstate.Store, taskstate.SyncConflictOperation) {
+	t.Helper()
+	root := testutil.CanonicalTempDir(t)
+	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
+	require.NoError(t, err)
+	history, err := testutil.DeliveredPRWork("alpha", "op-1", "/fixture/op-1", "orpheus/op-1", "https://github.test/org/repo/pull/1")
+	require.NoError(t, err)
+	started := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	sync := work.BranchSync{StartedAt: started, Checkpoint: work.BranchSyncCheckpoint{LocalHead: "before", RemoteHead: "before", MergeSource: "main-head"}}
+	if localCompleted {
+		sync.LocalCommit = &work.BranchSyncCommit{Head: "completed", ObservedAt: started.Add(time.Second)}
 	}
+	history.Workflows[0].Phases[4].(*work.ExternalReviewPhase).BranchSyncs = []work.BranchSync{sync}
+	_, err = workstate.NewStore(paths).Save(history, 0)
+	require.NoError(t, err)
 	store := taskstate.NewStore(paths)
-	operation, err := store.BeginSyncConflictOperation("alpha", "op-1", taskstate.SyncConflictOperation{
-		ID:            "sync-1",
-		Branch:        "orpheus/op-1",
-		Worktree:      "/fixture/op-1",
-		DefaultBranch: "main",
-		Checkpoint: taskstate.SyncConflictCheckpoint{
-			LocalHead: "before", RemoteHead: "before", MergeSource: "main-head",
-		},
-		Phase:     taskstate.SyncConflictPhasePushIntent,
-		LocalHead: "completed",
-	})
-	if err != nil {
-		t.Fatalf("begin sync conflict operation: %v", err)
-	}
+	view, err := store.Load("alpha", "op-1")
+	require.NoError(t, err)
+	require.NotNil(t, view.ActiveSyncConflict)
+	return paths, store, *view.ActiveSyncConflict
+}
 
-	diagnosis := repairSyncConflictRecovery(store, "alpha", "op-1", operation, syncConflictRecoveryDiagnosis{
-		outcome: "pushed", reason: "remote task branch matches the recorded local completion", remoteHead: operation.LocalHead,
-	}, workflow.LocalSyncGit{})
-	if diagnosis.outcome != "pushed" {
-		t.Fatalf("outcome = %q, want pushed", diagnosis.outcome)
+type unavailableDoctorSyncGit struct {
+	workflow.SyncConflictRecoveryGit
+}
+
+func (unavailableDoctorSyncGit) InspectRemoteTaskBranchHead(context.Context, gitmeta.TaskBranchSyncOptions) (string, error) {
+	return "", errors.New("fixture remote inspection unavailable")
+}
+
+func TestRunLeavesUnverifiableSyncHistoryUntouched(t *testing.T) {
+	paths, store, _ := doctorSyncFixture(t, false)
+	before, err := store.Load("alpha", "op-1")
+	require.NoError(t, err)
+	for _, fix := range []bool{false, true} {
+		result, err := Run(Options{Paths: paths, Registry: registry.Registry{Repos: []registry.Repo{{ID: "alpha", Path: "/fixture/alpha"}}}, Fix: fix, Effects: Effects{SyncGit: unavailableDoctorSyncGit{}, WorktreeExists: func(string) bool { return false }, CaptureUsage: func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions {
+			return taskstate.RecordRunUsageOptions{UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureUnknown, Reason: "No fixture usage supplied"}}
+		}}})
+		require.NoError(t, err)
+		require.Len(t, result.SyncConflictRows, 1)
+		assert.Equal(t, "unverifiable", result.SyncConflictRows[0].Outcome)
+		assert.Contains(t, result.SyncConflictRows[0].Reason, "fixture remote inspection unavailable")
+		after, err := store.Load("alpha", "op-1")
+		require.NoError(t, err)
+		assert.Equal(t, before, after, "unavailable native observations cannot authorize a rollback or erase the guard")
 	}
+}
+
+func TestRepairSyncConflictRecoveryCompletesObservedPushWithoutInventingResolverExecution(t *testing.T) {
+	_, store, operation := doctorSyncFixture(t, true)
+	diagnosis := repairSyncConflictRecovery(store, "alpha", "op-1", operation, syncConflictRecoveryDiagnosis{outcome: "pushed", reason: "remote task branch matches the recorded local completion", remoteHead: "completed"}, unavailableDoctorSyncGit{})
+	assert.Equal(t, "pushed", diagnosis.outcome, diagnosis.reason)
 	loaded, err := store.Load("alpha", "op-1")
-	if err != nil {
-		t.Fatalf("load repaired state: %v", err)
-	}
-	if loaded.ActiveSyncConflict != nil {
-		t.Fatalf("active operation = %#v, want nil", loaded.ActiveSyncConflict)
-	}
-	if len(loaded.Events) != 1 || loaded.Events[0].Type != taskstate.EventSyncConflictFinished || loaded.Events[0].Commit != operation.LocalHead {
-		t.Fatalf("events = %#v, want one finished event for %s", loaded.Events, operation.LocalHead)
+	require.NoError(t, err)
+	assert.Nil(t, loaded.ActiveSyncConflict)
+	syncs := loaded.Work.Workflows[0].Phases[4].(*work.ExternalReviewPhase).BranchSyncs
+	require.Len(t, syncs, 1)
+	assert.Equal(t, "completed", syncs[0].LocalCommit.Head)
+	require.NotNil(t, syncs[0].Push)
+	assert.Equal(t, "completed", syncs[0].Push.Head)
+	assert.Nil(t, syncs[0].ConflictResolution)
+	for _, event := range loaded.Events {
+		assert.NotEqual(t, taskstate.EventSyncConflictFinished, event.Type, "non-agent synchronization must not create an agent audit execution")
 	}
 }

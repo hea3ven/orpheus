@@ -48,7 +48,7 @@ func (f *syncWorkflowFixture) assertSyncUnchanged(before taskmodel.Task) {
 	f.t.Helper()
 	state, item := f.loadFinalTask(before.ID)
 	assert.Equal(f.t, before, item)
-	assert.Empty(f.t, state.Events)
+	assert.Equal(f.t, f.initial, state, "polling/refusal cannot alter the already recorded workflow")
 	assert.Nil(f.t, state.ActiveSyncConflict)
 	assert.Empty(f.t, f.tasks.closed)
 	assert.Empty(f.t, f.mutations.prURLs)
@@ -96,13 +96,21 @@ func TestIntegrationWorkflowTaskSyncRecordsConflictResolutionUsageTelemetry(t *t
 			state, item := f.loadFinalTask("op-sync")
 			assert.Equal(t, taskmodel.StatusInProgress, item.Status)
 			assert.Nil(t, state.ActiveSyncConflict)
-			require.Len(t, state.Events, 2)
-			started, finished := state.Events[0], state.Events[1]
+			events := resolverEvents(state.Events)
+			require.Len(t, events, 2)
+			started, finished := events[0], events[1]
 			assert.Equal(t, taskstate.EventSyncConflictStarted, started.Type)
 			require.NotNil(t, started.Execution)
 			assert.Equal(t, "sync-codex", started.Execution.Profile)
 			assert.Equal(t, taskstate.EventSyncConflictFinished, finished.Type)
-			assert.Equal(t, f.candidate.head, finished.Commit)
+			foundPush := false
+			for _, event := range state.Events {
+				if event.Type == taskstate.EventBranchSyncPushed {
+					foundPush = true
+					assert.Equal(t, f.candidate.head, event.Commit)
+				}
+			}
+			assert.True(t, foundPush, "resolver success and independently observed remote delivery must remain separate facts")
 			require.NotNil(t, finished.Execution)
 			assert.Equal(t, taskstate.AgentExecutionPurposeSyncConflictResolution, finished.Execution.Purpose)
 			assert.Equal(t, "sync-codex", finished.Execution.Profile)
@@ -164,8 +172,8 @@ func TestIntegrationWorkflowTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR
 	assert.Equal(t, 1, f.pr.statusReads)
 	state, item := f.loadFinalTask(item.ID)
 	assert.Equal(t, taskmodel.StatusClosed, item.Status)
-	require.Len(t, state.Events, 1)
-	assertMergedAudit(t, state.Events[0], f.pr.url)
+	require.Len(t, state.Events, len(f.initial.Events)+1)
+	assertMergedAudit(t, state.Events[len(state.Events)-1], f.pr.url)
 	retryOut, retryErr := f.run("", "task", "sync", item.ID)
 	assert.Empty(t, retryErr)
 	for _, want := range []string{"Skipped op-sync", "task is closed", "No backend changes were made"} {

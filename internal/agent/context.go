@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/pathutil"
@@ -15,6 +16,7 @@ import (
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/tasktarget"
+	"github.com/hea3ven/orpheus/internal/work"
 )
 
 const (
@@ -80,6 +82,7 @@ type ActiveContext struct {
 
 // ConflictResolutionContext is the agent-facing contract for sync conflict repair.
 type ConflictResolutionContext struct {
+	Address       work.AttemptRef
 	Repository    ContextRepository
 	Task          ContextTask
 	Target        ContextTarget
@@ -108,6 +111,7 @@ type ContextTask struct {
 
 // ContextRun describes the active Orpheus run attempt.
 type ContextRun struct {
+	Address    work.AttemptRef
 	Attempt    int
 	Agent      string
 	Execution  taskstate.AgentExecution
@@ -209,6 +213,12 @@ func (r ActiveContextResolver) ResolveConflictResolution(ctx context.Context) (C
 	if err != nil {
 		return ConflictResolutionContext{}, err
 	}
+	snapshot, ref, external, err := r.resolveConflictOwner(repo.ID, env.TaskID, taskItem.OrpheusMetadata().PRURL)
+	if err != nil {
+		return ConflictResolutionContext{}, err
+	}
+	w := &snapshot.Work.Workflows[ref.Workflow]
+
 	targets, candidate, err := r.resolveConflictResolutionTarget(source, taskItem, env.TaskID)
 	if err != nil {
 		return ConflictResolutionContext{}, err
@@ -222,8 +232,42 @@ func (r ActiveContextResolver) ResolveConflictResolution(ctx context.Context) (C
 		return ConflictResolutionContext{}, err
 	}
 
+	if candidate.Worktree != w.Context().Directory || candidate.Branch != w.Context().TaskBranch {
+		return ConflictResolutionContext{}, fmt.Errorf("resolver target differs from its prepared workflow")
+	}
 	conflictFiles := parseConflictFiles(r.envValue(envConflictFiles))
-	return newConflictResolutionContext(repo, targets, taskItem, candidate, cwd, conflictFiles), nil
+	recordedFiles := external.BranchSyncs[*ref.BranchSync].ConflictResolution.Files
+	if !slices.Equal(conflictFiles, recordedFiles) {
+		return ConflictResolutionContext{}, fmt.Errorf("resolver conflict files differ from its owning effort")
+	}
+	result := newConflictResolutionContext(repo, targets, taskItem, candidate, cwd, conflictFiles)
+	result.Address = ref
+	return result, nil
+}
+
+func (r ActiveContextResolver) resolveConflictOwner(repoID, taskID, prURL string) (taskstate.TaskState, work.AttemptRef, *work.ExternalReviewPhase, error) {
+	snapshot, err := r.RunStore.Load(repoID, taskID)
+	if err != nil {
+		return taskstate.TaskState{}, work.AttemptRef{}, nil, err
+	}
+	ref, err := r.ownerReference(repoID, taskID)
+	if err != nil {
+		return taskstate.TaskState{}, work.AttemptRef{}, nil, err
+	}
+	if ref.BranchSync == nil || ref.Step != nil || snapshot.Work == nil {
+		return taskstate.TaskState{}, work.AttemptRef{}, nil, fmt.Errorf("conflict resolution requires its workflow-owned branch-sync address")
+	}
+	if err := snapshot.Work.CheckActiveAttempt(ref); err != nil {
+		return taskstate.TaskState{}, work.AttemptRef{}, nil, err
+	}
+	w := &snapshot.Work.Workflows[ref.Workflow]
+	external := w.Phases[ref.Phase].(*work.ExternalReviewPhase)
+	publication := w.Phases[external.Publication.Phase].(*work.PublicationPhase)
+	delivery := publication.Delivery.(*work.PullRequestDelivery)
+	if delivery.PullRequest.URL != prURL {
+		return taskstate.TaskState{}, work.AttemptRef{}, nil, fmt.Errorf("task-source PR differs from resolver's owning publication")
+	}
+	return snapshot, ref, external, nil
 }
 
 func (r ActiveContextResolver) validateDependencies() error {
@@ -327,6 +371,16 @@ func (r ActiveContextResolver) resolveRunningRun(
 			taskID,
 			err,
 		)
+	}
+	ref, err := r.ownerReference(repoID, taskID)
+	if err != nil {
+		return taskstate.RunAttempt{}, taskstate.GitFacts{}, "", err
+	}
+	if ref.Step != nil || ref.BranchSync != nil || state.Work == nil {
+		return taskstate.RunAttempt{}, taskstate.GitFacts{}, "", fmt.Errorf("implementation context requires its workflow-owned address")
+	}
+	if err := state.Work.CheckActiveAttempt(ref); err != nil {
+		return taskstate.RunAttempt{}, taskstate.GitFacts{}, "", err
 	}
 	run, ok := taskstate.LatestRun(state)
 	if !ok {
@@ -543,6 +597,7 @@ func newActiveContext(
 			AcceptanceCriteria: taskItem.AcceptanceCriteria,
 		},
 		Run: ContextRun{
+			Address:    run.Address,
 			Attempt:    run.Attempt,
 			Agent:      run.Execution.Agent,
 			Execution:  run.Execution,

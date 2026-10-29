@@ -5,6 +5,7 @@ package cli_test
 import (
 	"context"
 	"errors"
+	workmodel "github.com/hea3ven/orpheus/internal/work"
 	"testing"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
@@ -28,8 +29,11 @@ func TestIntegrationWorkflowDoctorReportsPendingThenAttemptsCleanupAndPreservesR
 	for _, id := range []string{"op-doctor-worktree", "op-doctor-locked"} {
 		path, err := paths.DataPath("repos/alpha/worktrees/" + id)
 		require.NoError(t, err)
-		_, err = store.StartRun("alpha", id, taskstate.StartRunOptions{Agent: "implementer", WorkDirectory: path, Branch: "orpheus/" + id, Worktree: path})
-		require.NoError(t, err)
+		snapshot := readerDeliveredHistory(t, "alpha", id, path, "orpheus/"+id, workflowTime("2026-07-07T10:00:00Z"))
+		at := workflowTime("2026-07-07T10:30:00Z")
+		snapshot.Workflows[0].Phases = append(snapshot.Workflows[0].Phases, &workmodel.FinalizationPhase{Acceptance: &workmodel.PRAcceptance{ExternalReview: 4, ObservedAt: at, Evidence: "Synthetic independently observed merged PR"}, Closure: &workmodel.TaskClosure{At: at, Reason: taskstate.CloseReasonPRMerged, Evidence: "Synthetic task source confirmed closure"}})
+		saveReaderHistory(t, fixture, snapshot)
+
 		tasks = append(tasks, taskmodel.Task{ID: id, Title: id, Status: taskmodel.StatusClosed, IssueType: taskmodel.IssueTypeTask, Metadata: taskmodel.Metadata{taskmodel.MetadataBranch: "orpheus/" + id, taskmodel.MetadataWorktree: path}})
 		git.states[path] = gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeEligible, Worktree: path}
 	}

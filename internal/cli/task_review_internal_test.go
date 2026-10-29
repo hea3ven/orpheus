@@ -16,8 +16,12 @@ import (
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/tasktarget"
+	"github.com/hea3ven/orpheus/internal/testutil"
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/require"
+	"time"
 )
 
 type fakeManualReviewRecorder struct {
@@ -130,23 +134,29 @@ func TestRenderManualReviewContextUsesStructuredPlainAndInteractiveOutput(t *tes
 	})
 	manualReviewColorIsDisabled = func() bool { return false }
 
+	snapshot := testutil.ReviewableWork("alpha", "op-42", "/fixture/task", "orpheus/op-42")
+	original := snapshot.Workflows[0].Phases[1].(*work.ImplementationPhase)
+	original.Completion.Summary = "Original implementation summary"
+	original.Completion.Description = "Original implementation description"
+	original.Completion.TechnicalExplanation = "Original implementation technical explanation"
+	latest := *original
+	completion := *original.Completion
+	completion.Summary, completion.Description, completion.TechnicalExplanation = "Latest fix summary", "Latest fix description", "Latest fix technical explanation"
+	completion.CompletedAt = completion.CompletedAt.Add(time.Minute)
+	latest.Completion = &completion
+	latest.Execution.StartedAt = latest.Execution.StartedAt.Add(time.Minute)
+	zero := 0
+	latest.Execution.Process = &work.ExitedProcess{At: original.Execution.Process.(*work.ExitedProcess).At.Add(time.Minute), Code: &zero}
+	latest.Output = &work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: "fixture-fix", Tree: "fixture-fix-tree"}, RetainedRef: "refs/orpheus/fixture-fix"}
+	snapshot.Workflows[0].Phases = append(snapshot.Workflows[0].Phases, &latest)
+	view, err := taskstate.Project(snapshot)
+	require.NoError(t, err)
 	context := workflow.ReviewManualStepContext{
 		Task:   taskmodel.Task{ID: "op-42", Title: "Make review context readable"},
 		Step:   review.Step{Kind: review.KindManual, Name: "manual"},
 		Review: taskstate.ReviewAttempt{Attempt: 3},
 		TaskState: taskstate.TaskState{
-			Runs: []taskstate.RunAttempt{
-				{Attempt: 1, Completion: &taskstate.Completion{
-					Summary:              "Original implementation summary",
-					Description:          "Original implementation description",
-					TechnicalExplanation: "Original implementation technical explanation",
-				}},
-				{Attempt: 2, ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 2}, Completion: &taskstate.Completion{
-					Summary:              "Latest fix summary",
-					Description:          "Latest fix description",
-					TechnicalExplanation: "Latest fix technical explanation",
-				}},
-			},
+
 			Reviews: []taskstate.ReviewAttempt{{
 				Attempt: 3,
 				Findings: []taskstate.ReviewFinding{
@@ -158,6 +168,9 @@ func TestRenderManualReviewContextUsesStructuredPlainAndInteractiveOutput(t *tes
 		},
 		GitStatus: " M internal/cli/task.go\n?? notes.md\n",
 	}
+	context.TaskState.Work = view.Work
+	context.TaskState.Runs = view.Runs
+
 	ansi := regexp.MustCompile("\x1b\\[[0-9;]*m")
 
 	for _, mode := range []struct {

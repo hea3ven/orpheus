@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -25,8 +27,11 @@ type ExecutionOptions struct {
 // Started is true even if recording the child's PID failed after startup.
 type ExecutionResult struct {
 	Started bool
-	Err     error
-	Usage   taskstate.RecordRunUsageOptions
+	// Exit is present only when the launcher observed and reaped this child.
+	// A nil error or an agent completion cannot substitute for this evidence.
+	Exit  *agentexec.ProcessExit
+	Err   error
+	Usage taskstate.RecordRunUsageOptions
 }
 
 // Execute launches once and attempts usage capture after every started process,
@@ -49,19 +54,8 @@ func Execute(ctx context.Context, launcher agentexec.Launcher, opts ExecutionOpt
 		result.Err = errors.New("agent launcher is required")
 		return result
 	}
-	onStart := opts.Launch.OnStart
-	opts.Launch.OnStart = func(pid int) error {
-		result.Started = true
-		if onStart != nil {
-			return onStart(pid)
-		}
-		return nil
-	}
-	result.Err = launcher.Run(ctx, opts.Command, opts.Launch)
+	result.Started, result.Exit, result.Err = runObservedProcess(ctx, launcher, opts.Command, opts.Launch)
 	if !result.Started {
-		if result.Err == nil {
-			result.Err = errors.New("agent launcher returned without recording process startup")
-		}
 		return result
 	}
 
@@ -75,4 +69,50 @@ func Execute(ctx context.Context, launcher agentexec.Launcher, opts ExecutionOpt
 	opts.Usage.Context = context.WithoutCancel(ctx)
 	result.Usage = capture(opts.Usage)
 	return result
+}
+
+// runObservedProcess keeps direct-child evidence independent of telemetry and
+// refuses missing or contradictory launcher observations as successful exits.
+func runObservedProcess(ctx context.Context, launcher agentexec.Launcher, command agentexec.Command, launch agentexec.LaunchOptions) (started bool, exit *agentexec.ProcessExit, err error) {
+	onStart, onExit := launch.OnStart, launch.OnExit
+	var childPID, exits int
+	var startedAt time.Time
+	var observationErr error
+	launch.OnStart = func(pid int) error {
+		started = true
+		childPID, startedAt = pid, time.Now().UTC()
+		if onStart != nil {
+			return onStart(pid)
+		}
+		return nil
+	}
+	launch.OnExit = func(observed agentexec.ProcessExit) {
+		exits++
+		if exits != 1 || childPID <= 0 || observed.PID != childPID || observed.Code < -1 || observed.At.IsZero() || observed.At.Before(startedAt) {
+			observationErr = errors.New("agent launcher reported invalid or conflicting process exit evidence")
+			exit = nil
+			return
+		}
+		exit = &observed
+	}
+	err = launcher.Run(ctx, command, launch)
+	err = errors.Join(err, observationErr)
+	if !started {
+		if err == nil {
+			err = errors.New("agent launcher returned without recording process startup")
+		}
+		return started, exit, err
+	}
+	if exits == 0 {
+		err = errors.Join(err, errors.New("agent launcher returned without observing process exit"))
+	}
+	if exit != nil {
+		if exit.Code != 0 && err == nil {
+			err = fmt.Errorf("agent process exited with status %d", exit.Code)
+		}
+		if onExit != nil {
+			onExit(*exit)
+		}
+	}
+	return started, exit, err
 }

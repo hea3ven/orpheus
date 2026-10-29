@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/work"
 )
 
 // ReviewContext is the backend-neutral execution contract rendered for review agents.
@@ -20,6 +21,11 @@ type ReviewContext struct {
 
 // ContextReview describes the active review attempt and step.
 type ContextReview struct {
+	Scope               work.ReviewScope
+	Baseline            work.CodeIdentity
+	Output              work.CodeIdentity
+	RepairInput         *work.CodeIdentity
+	Address             work.AttemptRef
 	Attempt             int
 	Step                string
 	EnvStep             string
@@ -97,12 +103,30 @@ func (r ActiveContextResolver) ResolveReview(ctx context.Context) (ReviewContext
 
 	activeContext.Target.BaselineCommit = state.BaselineCommit
 	completion := reviewCompletionContext(completions)
+	w := &state.Work.Workflows[review.Address.Workflow]
+	phase := w.Phases[review.Address.Phase].(*work.ReviewPhase)
+	output, err := w.Output(phase.Scope.Output)
+	if err != nil {
+		return ReviewContext{}, err
+	}
+	var repairInput *work.CodeIdentity
+	if phase.Scope.DeltaFrom != nil {
+		prior, err := w.Output(*phase.Scope.DeltaFrom)
+		if err != nil {
+			return ReviewContext{}, err
+		}
+		identity := prior.CodeIdentity
+		repairInput = &identity
+	}
+
 	return ReviewContext{
 		Repository: activeContext.Repository,
 		Task:       activeContext.Task,
 		Run:        activeContext.Run,
 		Target:     activeContext.Target,
 		Review: ContextReview{
+			Scope: phase.Scope, Baseline: w.Context().Baseline, Output: output.CodeIdentity, RepairInput: repairInput,
+			Address:             latestReviewStep(review).Address,
 			Attempt:             review.Attempt,
 			Step:                latestReviewStep(review).Name,
 			EnvStep:             strings.TrimSpace(r.envValue(envReviewStep)),
@@ -117,12 +141,12 @@ func (r ActiveContextResolver) ResolveReview(ctx context.Context) (ReviewContext
 func priorReviewFindings(state taskstate.TaskState, activeAttempt int) []ContextPriorReviewFinding {
 	prior := make([]ContextPriorReviewFinding, 0)
 	for _, review := range state.Reviews {
-		if review.Attempt >= activeAttempt {
+		if review.Address.Workflow != state.CurrentWorkflow || review.Attempt >= activeAttempt {
 			continue
 		}
 		authoritativeNumber := 0
 		for _, finding := range review.Findings {
-			if taskstate.InterruptedReviewFinding(review, finding) {
+			if taskstate.AuditOnlyReviewFinding(review, finding) {
 				continue
 			}
 			authoritativeNumber++
@@ -170,7 +194,7 @@ func priorFindingDisposition(state taskstate.TaskState, finding taskstate.Review
 
 func followUpRunDisposition(state taskstate.TaskState, attempt int) string {
 	for _, run := range state.Runs {
-		if run.Attempt == attempt {
+		if run.Address.Workflow == state.CurrentWorkflow && run.Attempt == attempt {
 			return fmt.Sprintf("follow-up run %d %s", attempt, run.Status)
 		}
 	}
@@ -185,7 +209,7 @@ type reviewCompletionSelection struct {
 
 func reviewCompletionContext(history taskstate.CompletionRunHistory) reviewCompletionSelection {
 	latest := *history.Latest.Completion
-	if history.Latest.ReviewFollowUp == nil {
+	if history.Latest.Address.Equal(history.Original.Address) {
 		return reviewCompletionSelection{latest: latest}
 	}
 	original := *history.Original.Completion
@@ -247,11 +271,21 @@ func (r ActiveContextResolver) resolveRunningAgentReview(repoID string, taskID s
 	if err != nil {
 		return taskstate.ReviewAttempt{}, fmt.Errorf("load latest review attempt for task %s/%s: %w", repoID, taskID, err)
 	}
+	ref, err := r.ownerReference(repoID, taskID)
+	if err != nil {
+		return taskstate.ReviewAttempt{}, err
+	}
+	if state.Work == nil || ref.Step == nil || ref.BranchSync != nil {
+		return taskstate.ReviewAttempt{}, fmt.Errorf("review context requires its workflow-owned step address")
+	}
+	if err := state.Work.CheckActiveAttempt(ref); err != nil {
+		return taskstate.ReviewAttempt{}, err
+	}
 	review, ok := taskstate.LatestReview(state)
 	if !ok {
 		return taskstate.ReviewAttempt{}, fmt.Errorf("task %s/%s has no review attempts", repoID, taskID)
 	}
-	if review.Attempt != attempt {
+	if review.Address.Workflow != ref.Workflow || review.Address.Phase != ref.Phase || review.Attempt != attempt {
 		return taskstate.ReviewAttempt{}, fmt.Errorf(
 			"latest review attempt for task %s/%s is %d, expected %d from %s",
 			repoID,
@@ -272,7 +306,7 @@ func (r ActiveContextResolver) resolveRunningAgentReview(repoID string, taskID s
 		)
 	}
 	step := latestReviewStep(review)
-	if step.Kind != "agent_review" {
+	if step.Address.Step == nil || *step.Address.Step != *ref.Step || step.Name != strings.TrimSpace(r.envValue(envReviewStep)) || step.Kind != "agent_review" {
 		return taskstate.ReviewAttempt{}, fmt.Errorf(
 			"current_step.kind for review step %q on task %s/%s is %q, expected %q",
 			step.Name,

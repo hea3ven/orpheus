@@ -44,8 +44,8 @@ var reviewWorkflowHelpCases = []reviewWorkflowHelpCase{
 		name: "task done",
 		args: []string{"task", "done", "--help"},
 		want: []string{
-			"refuses publication until the latest local review attempt has passed",
-			"Use task done to retry publication or finalization",
+			"existing, explicitly authorized publication plan",
+			"nor grants publication consent",
 		},
 	},
 	{

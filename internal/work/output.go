@@ -55,10 +55,28 @@ const (
 // Reported content is immutable; Dispositions retains append-only decisions.
 // Repair targets and later verifications live on those later efforts, not here.
 type Finding struct {
-	Title          string
-	Classification FindingClassification
-	Description    string
-	Dispositions   []FindingDisposition
+	Title           string
+	Classification  FindingClassification
+	Description     string
+	SuggestedAction string
+	Proposal        *FollowUpProposal
+	CreatedTask     *CreatedFollowUp
+	Dispositions    []FindingDisposition
+}
+
+// FollowUpProposal is authored follow-up intent, not a task-source snapshot.
+// It remains attached to the original separate-task finding after creation.
+type FollowUpProposal struct {
+	Title              string
+	Description        string
+	AcceptanceCriteria string
+}
+
+// CreatedFollowUp records the observed native task identity, not its lifecycle.
+// Task sources alone own the created task's title, status and later changes.
+type CreatedFollowUp struct {
+	TaskID     string
+	ObservedAt time.Time
 }
 
 // Disposition derives the current decision without discarding earlier choices.
@@ -86,6 +104,10 @@ type FindingDisposition interface{ findingDisposition() }
 // At may be absent only for the initial reported choice, not a later reopening.
 type RepairRequired struct{ At time.Time }
 
+// PromotedFinding makes a reported advisory require repair without rewriting its
+// original classification. Later reasoned dispositions may waive that requirement.
+type PromotedFinding struct{ At time.Time }
+
 // WaivedFinding records an explicit, reasoned exception to a reported issue.
 type WaivedFinding struct{ Waiver }
 
@@ -99,6 +121,7 @@ type DowngradedFinding struct{ Waiver }
 type AddressedFinding struct{ Waiver }
 
 func (*RepairRequired) findingDisposition()    {}
+func (*PromotedFinding) findingDisposition()   {}
 func (*WaivedFinding) findingDisposition()     {}
 func (*DismissedFinding) findingDisposition()  {}
 func (*DowngradedFinding) findingDisposition() {}

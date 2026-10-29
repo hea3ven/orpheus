@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
@@ -22,6 +23,8 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
+	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -46,6 +49,7 @@ func TestIntegrationWorkflowEvalReviewContextReportsUnknownExecutionWhenEnvironm
 	var observed revieweval.Environment
 
 	effects := revieweval.Effects{
+		PrepareFixture:  prepareEvalWorkflowFixture,
 		InitializeBeads: func(string, string) error { return nil },
 		SeedRepo:        func(context.Context, string, string) error { return nil },
 		ProvisionTask:   func(context.Context, string, string) (string, error) { return "op-eval", nil },
@@ -90,6 +94,7 @@ func TestIntegrationWorkflowEvalReviewContextRunsPipelineWithSafeBoundaries(t *t
 	var operations []string
 
 	effects := revieweval.Effects{
+		PrepareFixture: prepareEvalWorkflowFixture,
 		InitializeBeads: func(repoPath string, prefix string) error {
 			is.Equal("op", prefix)
 			is.Contains(filepath.ToSlash(repoPath), "/codex-exhaustive-architecture-01/repo")
@@ -112,7 +117,7 @@ func TestIntegrationWorkflowEvalReviewContextRunsPipelineWithSafeBoundaries(t *t
 			return run()
 		},
 		ReviewEffects: review.Effects{
-			CaptureCandidate: func(context.Context, string, *slog.Logger, ...slog.Attr) (review.CandidateCheck, error) {
+			CaptureCandidate: func(context.Context, string, review.CommittedCandidate, *slog.Logger, ...slog.Attr) (review.CandidateCheck, error) {
 				return func() error { return nil }, nil
 			},
 			CaptureUsage: func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions {
@@ -242,8 +247,11 @@ func (l *recordingEvalLauncher) Run(ctx context.Context, command agentexec.Comma
 		}
 	}
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	l.recorded = append(l.recorded, evalLaunch{command: command, options: opts})
+	l.mu.Unlock()
+	if opts.OnExit != nil {
+		opts.OnExit(agentexec.ProcessExit{PID: 4343, Code: 0, At: time.Now().UTC()})
+	}
 	return nil
 }
 
@@ -261,4 +269,10 @@ func envValue(entries []string, key string) string {
 		}
 	}
 	return ""
+}
+
+func prepareEvalWorkflowFixture(_ context.Context, paths state.Paths, repoPath, taskID string) (work.ReviewScope, error) {
+	snapshot := testutil.ReviewableWork("review-eval", taskID, repoPath, "orpheus/"+taskID)
+	_, err := workstate.NewStore(paths).Save(snapshot, 0)
+	return work.ReviewScope{Requirements: "Explicit synthetic evaluator requirements", Output: work.OutputRef{Phase: 1}, Destination: &work.Destination{Remote: ".", Branch: "main", Commit: "initial-commit"}}, err
 }

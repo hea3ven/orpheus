@@ -5,6 +5,7 @@ package cli_test
 import (
 	"context"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
+	workmodel "github.com/hea3ven/orpheus/internal/work"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workstate"
 )
 
 func TestIntegrationWorkflowDoctorRecoversSyncConflictState(t *testing.T) {
@@ -29,21 +31,21 @@ func testDoctorCompletesPushedSyncConflict(t *testing.T) {
 
 	fixture := newDoctorSyncWorkflow(t, git)
 	store := taskstate.NewStore(fixture.paths)
-	startFinishedDoctorRun(t, store, "op-pushed", branch, "/fixture/repo")
+	saveReaderHistory(t, fixture, readerDeliveredHistory(t, "alpha", "op-pushed", "/fixture/repo", branch, workflowTime("2026-07-07T10:00:00Z")))
 	operation, err := store.BeginSyncConflictOperation("alpha", "op-pushed", taskstate.SyncConflictOperation{
-		ID:            "sync-pushed",
 		Branch:        branch,
 		Worktree:      "/fixture/repo",
 		DefaultBranch: "main",
 		Checkpoint: taskstate.SyncConflictCheckpoint{
 			LocalHead: "initial", RemoteHead: "initial", MergeSource: "initial",
 		},
-		Phase:     taskstate.SyncConflictPhasePushIntent,
 		LocalHead: completedHead,
 	})
 	if err != nil {
 		t.Fatalf("begin sync conflict operation: %v", err)
 	}
+	operation, err = store.UpdateSyncConflictOperation("alpha", "op-pushed", operation.ID, func(observed *taskstate.SyncConflictOperation) error { observed.LocalHead = completedHead; return nil })
+	require.NoError(t, err)
 	result, stderr := fixture.mustExecute("doctor")
 	assert.Empty(t, stderr)
 	assertDoctorSyncOutcome(t, result, "pushed")
@@ -52,7 +54,7 @@ func testDoctorCompletesPushedSyncConflict(t *testing.T) {
 		t.Fatalf("load dry-run state: %v", err)
 	}
 	if loaded.ActiveSyncConflict == nil || loaded.ActiveSyncConflict.Phase != operation.Phase || loaded.ActiveSyncConflict.ObservedRemoteHead != "" {
-		t.Fatalf("dry-run operation = %#v, want unchanged push intent", loaded.ActiveSyncConflict)
+		t.Fatalf("dry-run operation = %#v, want unchanged local completion", loaded.ActiveSyncConflict)
 	}
 
 	result, stderr = fixture.mustExecute("doctor", "--fix")
@@ -65,7 +67,12 @@ func testDoctorCompletesPushedSyncConflict(t *testing.T) {
 	if loaded.ActiveSyncConflict != nil {
 		t.Fatalf("active operation = %#v, want nil", loaded.ActiveSyncConflict)
 	}
-	assertDoctorSyncEvent(t, loaded.Events, taskstate.EventSyncConflictFinished, completedHead)
+	raw, err := workstate.NewStore(fixture.paths).Load("alpha", "op-pushed")
+	require.NoError(t, err)
+	synced := raw.Workflows[0].Phases[4].(*workmodel.ExternalReviewPhase).BranchSyncs[0]
+	require.NotNil(t, synced.Push)
+	assert.Equal(t, completedHead, synced.Push.Head)
+	assert.Nil(t, synced.ConflictResolution, "an ordinary synchronization cannot invent a resolver execution")
 }
 
 func testDoctorRollsBackSyncConflict(t *testing.T) {
@@ -77,16 +84,14 @@ func testDoctorRollsBackSyncConflict(t *testing.T) {
 
 	fixture := newDoctorSyncWorkflow(t, git)
 	store := taskstate.NewStore(fixture.paths)
-	startFinishedDoctorRun(t, store, "op-rollback", branch, "/fixture/repo")
+	saveReaderHistory(t, fixture, readerDeliveredHistory(t, "alpha", "op-rollback", "/fixture/repo", branch, workflowTime("2026-07-07T10:00:00Z")))
 	_, err := store.BeginSyncConflictOperation("alpha", "op-rollback", taskstate.SyncConflictOperation{
-		ID:            "sync-rollback",
 		Branch:        branch,
 		Worktree:      "/fixture/repo",
 		DefaultBranch: "main",
 		Checkpoint: taskstate.SyncConflictCheckpoint{
 			LocalHead: taskHead, RemoteHead: taskHead, MergeSource: mainHead,
 		},
-		Phase:         taskstate.SyncConflictPhaseConflicted,
 		ConflictFiles: []string{"conflict.txt"},
 	})
 	if err != nil {
@@ -121,7 +126,7 @@ func testDoctorRollsBackSyncConflict(t *testing.T) {
 	if loaded.ActiveSyncConflict != nil {
 		t.Fatalf("active operation = %#v, want nil", loaded.ActiveSyncConflict)
 	}
-	assertDoctorSyncEvent(t, loaded.Events, taskstate.EventSyncConflictRolledBack, "")
+	assertDoctorSyncEvent(t, loaded.Events, taskstate.EventBranchSyncRolledBack, taskHead)
 }
 
 func newDoctorSyncWorkflow(t *testing.T, git *doctorRecoveryGit) *workflowFixture {
@@ -133,24 +138,12 @@ func newDoctorSyncWorkflow(t *testing.T, git *doctorRecoveryGit) *workflowFixtur
 	return fixture
 }
 
-func startFinishedDoctorRun(t *testing.T, store taskstate.Store, taskID, branch, worktree string) {
-	t.Helper()
-	run, err := store.StartRun("alpha", taskID, taskstate.StartRunOptions{
-		Agent: "implementer", WorkDirectory: worktree, Branch: branch, Worktree: worktree,
-	})
-	if err != nil {
-		t.Fatalf("start run: %v", err)
-	}
-	if _, err := store.FinishRun("alpha", taskID, run.Attempt, taskstate.RunStatusSucceeded); err != nil {
-		t.Fatalf("finish run: %v", err)
-	}
-}
-
 func assertDoctorSyncOutcome(t *testing.T, output, want string) {
 	t.Helper()
 	assert.Contains(t, output, "Sync conflict recovery")
 	assert.Contains(t, output, want)
-	assert.Equal(t, 1, strings.Count(output, "op-pushed")+strings.Count(output, "op-rollback"), "one recovery operation must be reported")
+	recovery := strings.Split(strings.Split(output, "Sync conflict recovery")[1], "\n\n")[0]
+	assert.Equal(t, 1, strings.Count(recovery, "op-pushed")+strings.Count(recovery, "op-rollback"), "one actual recovery operation must be reported independently of implementation/reviewer telemetry")
 }
 
 func assertDoctorSyncEvent(t *testing.T, events []taskstate.Event, eventType taskstate.EventType, commit string) {

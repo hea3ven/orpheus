@@ -162,9 +162,9 @@ func activeEffort(phase Phase, step, branchSync *int) bool {
 		case *AgentReviewStep:
 			return attempt != nil && running(&attempt.Execution)
 		case *CheckStep:
-			return attempt != nil && attempt.Result == nil
+			return attempt != nil && attempt.Result == nil && attempt.StartFailure == nil
 		case *ManualReviewStep:
-			return attempt != nil && attempt.Decision == nil
+			return attempt != nil && attempt.Decision == nil && !manualCommandFailed(attempt.CommandResult)
 		}
 	case *ExternalReviewPhase:
 		if phase == nil || step != nil || branchSync == nil || *branchSync < 0 || *branchSync != len(phase.BranchSyncs)-1 {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	workmodel "github.com/hea3ven/orpheus/internal/work"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agent"
@@ -92,8 +93,8 @@ func TestIntegrationWorkflowTaskRunInterruptedRepoRootContinuesThroughCompletion
 	require.Len(t, final.Runs, 2)
 	assert.Equal(t, taskstate.RunStatusInterrupted, final.Runs[0].Status)
 	assert.Nil(t, final.Runs[0].Completion)
-	assert.Equal(t, taskstate.EventRunInterrupted, final.Events[1].Type)
-	assert.Equal(t, "supervisor_and_child_pids_absent", final.Events[1].InterruptionReason)
+	assert.Equal(t, taskstate.EventRunInterrupted, final.Events[2].Type)
+	assert.Equal(t, "supervisor_and_child_pids_absent", final.Events[2].InterruptionReason)
 	assert.Equal(t, taskstate.RunStatusSucceeded, final.Runs[1].Status)
 	assertCompletionRecorded(t, completion, final.Runs[1].Completion)
 	assertPersistedTaskTarget(t, final, item, "orpheus/op-continue", taskWorkflowRepoRoot)
@@ -156,7 +157,7 @@ func TestIntegrationWorkflowTaskRunRepoRootContinuationRejectsConflictingTargets
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newTaskWorkflowFixture(t, anInProgressTask("op-continue"))
 			fixture.seedRepoRootAttempt("op-continue")
-			_, err := fixture.taskStore.FinishRun("alpha", "op-continue", 1, taskstate.RunStatusFailed)
+			_, err := seedFixtureExit(fixture.taskStore, "alpha", "op-continue", 1, 1)
 			require.NoError(t, err)
 			fixture.configureImplementer("recorder", agent.Profile{Command: "unused-agent"})
 			fixture.git.repoRootDirty = true
@@ -229,12 +230,14 @@ func (f *taskWorkflowFixture) seedRepoRootAttempt(taskID string) {
 		RepoID: "alpha", RepoPath: taskWorkflowRepoRoot, DefaultBranch: "main", Branch: "orpheus/op-continue",
 	})
 	require.NoError(f.t, err)
-	_, err = f.taskStore.StartRun("alpha", taskID, taskstate.StartRunOptions{
+	_, err = f.git.PrepareBaseline(context.Background(), taskWorkflowRepoRoot, "orpheus/op-continue", "refs/orpheus/fixture-baseline", nil)
+	require.NoError(f.t, err)
+	_, err = f.taskStore.StartRun("alpha", taskID, taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: taskWorkflowRepoRoot, TaskBranch: "orpheus/op-continue", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: setup.StartingCommit, Tree: "initial-tree"}},
 		Agent: "recorder", Branch: "orpheus/op-continue", Worktree: taskWorkflowRepoRoot,
 		WorkDirectory: taskWorkflowRepoRoot, SupervisorPID: 100,
 		BaselineCommit: setup.StartingCommit,
 	})
 	require.NoError(f.t, err)
-	_, err = f.taskStore.RecordRunChildPID("alpha", taskID, 1, 101)
+	_, err = seedFixtureChildPID(f.taskStore, "alpha", taskID, 1, 101)
 	require.NoError(f.t, err)
 }

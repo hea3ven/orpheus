@@ -60,6 +60,7 @@ type Dependencies struct {
 	InitializeGig      func(string, string) error
 	AgentLauncher      agentexec.Launcher
 	DispatchGit        workflow.DispatchGit
+	OutputGit          workflow.OutputGit
 	AgentGit           agent.GitStateReader
 	ReviewCandidateGit workflow.ReviewCandidateGit
 	ReviewPipeline     func(review.PipelineRunOptions) (review.PipelineOutcome, error)
@@ -88,6 +89,7 @@ func (d Dependencies) applyTo(invocation *invocationDependencies) {
 	invocation.reviewEffects = d.ReviewEffects
 	invocation.reviewStatus = d.ReviewStatus
 	invocation.finalizationGit = d.FinalizationGit
+	invocation.outputGit = d.OutputGit
 	if d.CaptureUsage != nil {
 		invocation.captureUsage = d.CaptureUsage
 	}
@@ -136,7 +138,7 @@ type TerminalCapabilities struct {
 
 func (t TerminalCapabilities) withDefaults() TerminalCapabilities {
 	if t.InputIsTerminal == nil {
-		t.InputIsTerminal = taskDoneInputIsTerminal
+		t.InputIsTerminal = readerIsTerminal
 	}
 	if t.OutputIsTerminal == nil {
 		t.OutputIsTerminal = taskReviewOutputIsTerminal

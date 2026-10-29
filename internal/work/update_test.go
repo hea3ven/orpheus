@@ -374,7 +374,9 @@ func waivedFindingState(t *testing.T) work.State {
 func manualFindingState(t *testing.T) work.State {
 	t.Helper()
 	s := reviewingState(t)
-	s.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[2].(*work.ManualReviewStep).Decision = &work.RequestedChanges{At: at(24), Findings: []work.Finding{blocker("Manually reported blocker")}}
+	step := s.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[2].(*work.ManualReviewStep)
+	step.Findings = []work.Finding{blocker("Manually reported blocker")}
+	step.Decision = &work.RequestedChanges{At: at(24)}
 	return s
 }
 func completedReviewerState(t *testing.T) work.State {
