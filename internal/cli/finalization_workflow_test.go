@@ -123,7 +123,7 @@ func TestIntegrationWorkflowTaskDoneCannotBypassLiveHandoffOrPublicationConsent(
 
 	stdout, stderr, err := f.runError("yes\n", "task", "done", "op-main")
 
-	require.ErrorContains(t, err, "publication awaits explicit exact-plan authorization")
+	require.ErrorContains(t, err, "active local work prevents publication")
 	assert.Empty(t, stdout)
 	assert.Empty(t, stderr)
 	after, afterItem := f.loadFinalTask("op-main")

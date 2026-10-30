@@ -3,6 +3,7 @@
 package cli_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agent"
@@ -72,6 +73,8 @@ func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview
 				require.Len(t, paused.Reviews, 1)
 				assert.Equal(t, taskstate.ReviewStatusWaitingForAutomatedDecision, paused.Reviews[0].Status)
 				assertTaskNotPublished(t, paused, item)
+				// Native PR metadata is not an independent continuation authority.
+				require.NoError(t, fixture.tasks.SetPRURL(context.Background(), "op-fresh", "https://example.test/pr/existing"))
 				fixture.configureAgentProfiles(agent.AgentDefaults{Implementer: "other", Reviewer: "other"}, profiles)
 
 				stdout, stderr, err := fixture.runError("k\n", "task", "run", "op-fresh")
@@ -100,7 +103,9 @@ func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview
 					assert.Contains(t, stderr, "exited without completion")
 					require.Len(t, final.Reviews, 1)
 					assert.Nil(t, final.Runs[1].Completion)
-					assertTaskNotPublished(t, final, item)
+					assert.Equal(t, "https://example.test/pr/existing", item.OrpheusMetadata().PRURL)
+					assert.Nil(t, final.Finalization)
+					assert.Empty(t, fixture.candidate.pushes)
 					assert.Equal(t, wantChecks, fixture.checkCalls)
 					return
 				}
@@ -120,7 +125,8 @@ func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview
 					assert.Equal(t, "unused-reviewer", fixture.agent.launches[3].command.Command)
 				}
 				assertUnconsentedPublication(t, final)
-				assert.False(t, item.OrpheusMetadata().HasPRURL)
+				assert.Equal(t, "https://example.test/pr/existing", item.OrpheusMetadata().PRURL)
+				assert.Empty(t, fixture.candidate.pushes)
 				assert.False(t, fixture.candidate.hasStagedChanges, "implementation capture committed its completed index before review")
 				assert.Equal(t, append(wantChecks, wantChecks...), fixture.checkCalls)
 			})

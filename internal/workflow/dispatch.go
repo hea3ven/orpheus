@@ -132,6 +132,7 @@ type DispatchService struct {
 
 // DispatchStartOptions describes the task run to start.
 type DispatchStartOptions struct {
+	Expected               *TaskRunRoute
 	TaskID                 string
 	Source                 task.RepositorySource
 	Backend                DispatchBackend
@@ -444,6 +445,23 @@ func (s DispatchService) mutateBackendPhase(
 	setup gitmeta.TaskWorktreeSetupResult,
 ) error {
 	span := s.startPhase(ctx, "backend task mutation", opts.Source.Repository.ID, opts.TaskID)
+	// Reusing established work is not task activation. In particular, a repair
+	// must not call an activation API that rightly refuses already published work.
+	observed, err := opts.Backend.Get(ctx, opts.TaskID)
+	if err != nil {
+		return fmt.Errorf("verify task before implementation: %w", err)
+	}
+	if observed.ID != opts.TaskID {
+		return errors.New("task source returned a different task identity")
+	}
+	persisted, err := s.RunStore.Load(opts.Source.Repository.ID, opts.TaskID)
+	if err != nil {
+		return err
+	}
+	if observed.Status == task.StatusInProgress && dispatchMetadataMatches(observed.OrpheusMetadata(), setup) && persisted.Work != nil && persisted.Work.ActiveWorkflow() != nil && persisted.Work.ActiveWorkflow().Context() != nil {
+		span.Finish(ctx, logging.StatusSuccess)
+		return nil
+	}
 	if err := opts.Backend.MarkInProgress(ctx, opts.TaskID, setup.Branch, setup.WorktreePath); err != nil {
 		span.FinishError(ctx, err)
 		return fmt.Errorf("mark task in progress: %w", err)
@@ -609,6 +627,19 @@ func (s DispatchService) resolveDispatchStartTargetLock(
 	if err != nil {
 		return tasktarget.Target{}, false, fmt.Errorf("inspect task target state: %w", err)
 	}
+	if err := CheckExpectedRoute(opts.Expected, taskItem, state); err != nil {
+		return tasktarget.Target{}, false, err
+	}
+	if state.Work != nil && len(state.Work.Workflows) > 0 {
+		route, err := SelectTaskRunRoute(taskItem, state)
+		if err != nil {
+			return tasktarget.Target{}, false, err
+		}
+		if route.Action != TaskRunActionStartImplementation && route.Action != TaskRunActionTargetedRepair {
+			return tasktarget.Target{}, false, fmt.Errorf("current phase selects %s, not implementation", route.Action)
+		}
+	}
+
 	if len(state.Runs) > 0 && strings.TrimSpace(state.BaselineCommit) == "" {
 		return tasktarget.Target{}, false, fmt.Errorf("task %s has prior run history but no recorded task baseline; preserve the checkout and explicitly repair the baseline before retrying", opts.TaskID)
 	}
@@ -794,6 +825,11 @@ func (s DispatchService) resolveReviewFollowUpPlan(
 	latestReview, ok := taskstate.LatestReview(state)
 	if !ok {
 		return nil, nil
+	}
+	if state.Work != nil && state.Work.ActiveWorkflow() != nil {
+		if effort, ok := state.Work.ActiveWorkflow().LastPhase().(*work.ImplementationPhase); ok && len(effort.TargetFindings) == 0 {
+			return nil, nil
+		}
 	}
 
 	switch latestReview.Status {
@@ -1059,7 +1095,7 @@ func ensureDispatchEligible(
 	preserveCurrentTarget bool,
 ) error {
 	metadata := taskItem.OrpheusMetadata()
-	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
+	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" && !preserveCurrentTarget {
 		return fmt.Errorf("task %s is not eligible for dispatch: %s is already set", taskItem.ID, task.MetadataPRURL)
 	}
 

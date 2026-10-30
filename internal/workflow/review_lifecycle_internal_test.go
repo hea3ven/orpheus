@@ -46,7 +46,7 @@ func TestReviewStartupStopsAfterConcurrentReviewRecovery(t *testing.T) {
 		},
 	}
 
-	outcome, err := service.Run(context.Background(), ReviewLifecycleOptions{TaskID: "op-review"})
+	outcome, err := (Controller{ReviewLifecycleService: service}).runReview(context.Background(), ReviewLifecycleOptions{TaskID: "op-review"})
 
 	require.NoError(t, err)
 	assert.Equal(t, ReviewLifecycleOutcomeExecutionRecovered, outcome.Kind)

@@ -16,7 +16,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/tasktarget"
 	"github.com/hea3ven/orpheus/internal/work"
-	"github.com/hea3ven/orpheus/internal/workstate"
 	"path/filepath"
 )
 
@@ -70,8 +69,9 @@ type FinalizationService struct {
 }
 
 type FinalizeOptions struct {
-	TaskID string
-	CWD    string
+	Expected *TaskRunRoute
+	TaskID   string
+	CWD      string
 }
 
 type FinalizationResult struct {
@@ -82,40 +82,6 @@ type FinalizationResult struct {
 	PRURL           string
 	PRRecovered     bool
 	WorktreeCleanup *WorktreeCleanupResult
-}
-
-// Finalize delivers only an existing, explicitly authorized immutable plan.
-// There is no implicit review/capture/authorization path here.
-func (s FinalizationService) Finalize(ctx context.Context, opts FinalizeOptions) (FinalizationResult, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if s.BackendFactory == nil {
-		return FinalizationResult{}, errors.New("task finalization backend factory is required")
-	}
-
-	store := s.Store
-	if store == nil {
-		store = workstate.NewStore(s.Paths)
-	}
-	boundary := s.Git
-	if boundary == nil {
-		boundary = LocalFinalizationGit{}
-	}
-	var result FinalizationResult
-	err := state.WithGlobalMutationLockLogger(ctx, s.Paths, finalizationLockOperation, s.Logger, func() error {
-		source, item, backend, err := s.resolvePublicationTask(ctx, opts, store)
-		if err != nil {
-			return err
-		}
-		snapshot, err := store.Load(source.Repository.ID, item.ID)
-		if err != nil {
-			return err
-		}
-		result, err = s.publishCommitted(ctx, store, boundary, source, item, backend, &snapshot)
-		return err
-	})
-	return result, err
 }
 
 func (s FinalizationService) resolvePublicationTask(ctx context.Context, opts FinalizeOptions, store WorkStore) (task.RepositorySource, task.Task, FinalizationBackend, error) {
@@ -206,15 +172,9 @@ func selectCommittedPublication(snapshot *work.State, item task.Task) (committed
 	}
 	wi := len(snapshot.Workflows) - 1
 	w := &snapshot.Workflows[wi]
-	pi := -1
-	for i := len(w.Phases) - 1; i >= 0; i-- {
-		if _, ok := w.Phases[i].(*work.PublicationPhase); ok {
-			pi = i
-			break
-		}
-	}
-	if pi < 0 {
-		return committedPublication{}, ErrPublicationConsentRequired
+	pi, err := publicationOwner(w)
+	if err != nil {
+		return committedPublication{}, err
 	}
 	p := w.Phases[pi].(*work.PublicationPhase)
 	if p.Consent == nil {
@@ -224,11 +184,6 @@ func selectCommittedPublication(snapshot *work.State, item task.Task) (committed
 	latest, exists := w.LatestOutput()
 	if !exists || latest != review.Scope.Output {
 		return committedPublication{}, errors.New("newer local output requires its own review and publication authorization")
-	}
-	switch w.LastPhase().(type) {
-	case *work.PublicationPhase, *work.ExternalReviewPhase, *work.FinalizationPhase:
-	default:
-		return committedPublication{}, errors.New("active local work prevents publication")
 	}
 	prepared := w.Context()
 	metadata := item.OrpheusMetadata()
@@ -251,26 +206,6 @@ func selectCommittedPublication(snapshot *work.State, item task.Task) (committed
 	}
 
 	return committedPublication{workflowIndex: wi, phaseIndex: pi, workflow: w, publication: p, prepared: prepared, output: output, destination: destination}, nil
-}
-
-func (s FinalizationService) publishCommitted(ctx context.Context, store WorkStore, boundary FinalizationGit, source task.RepositorySource, item task.Task, backend FinalizationBackend, snapshot *work.State) (FinalizationResult, error) {
-	selected, err := selectCommittedPublication(snapshot, item)
-	if err != nil {
-		return FinalizationResult{}, err
-	}
-	result := FinalizationResult{Repository: source.Repository, Task: item, Branch: selected.prepared.TaskBranch}
-	if err := s.recordCommittedDelivery(ctx, store, boundary, source.Repository, item, snapshot, selected, &result); err != nil {
-		return result, err
-	}
-	if err := s.reconcileCommittedDelivery(ctx, store, source.Repository, item, backend, snapshot, selected, &result); err != nil {
-		return result, err
-	}
-	view, err := taskstate.Project(*snapshot)
-	if err != nil {
-		return result, err
-	}
-	result.Finalization = taskstate.FinalizationFacts(view)
-	return result, nil
 }
 
 func (s FinalizationService) recordCommittedDelivery(ctx context.Context, store WorkStore, boundary FinalizationGit, repo task.Repository, item task.Task, snapshot *work.State, selected committedPublication, result *FinalizationResult) error {
@@ -311,50 +246,6 @@ func (s FinalizationService) recordCommittedDelivery(ctx context.Context, store 
 		return fmt.Errorf("delivery observed but could not be recorded; retry unchanged intent: %w", err)
 	}
 	snapshot.Version = version
-	return nil
-}
-
-func (s FinalizationService) reconcileCommittedDelivery(ctx context.Context, store WorkStore, repo task.Repository, item task.Task, backend FinalizationBackend, snapshot *work.State, selected committedPublication, result *FinalizationResult) error {
-	p, w, prepared := selected.publication, selected.workflow, selected.prepared
-	metadata := item.OrpheusMetadata()
-	switch delivery := p.Delivery.(type) {
-	case *work.PullRequestDelivery:
-		result.PRURL = delivery.PullRequest.URL
-		if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" && metadata.PRURL != result.PRURL {
-			return errors.New("task source names a different PR; refusing to overwrite it")
-		}
-		if !metadata.HasPRURL || metadata.PRURL != result.PRURL {
-			if err := backend.SetPRURL(ctx, item.ID, result.PRURL); err != nil {
-				return err
-			}
-			observed, err := backend.Get(ctx, item.ID)
-			if err != nil {
-				return err
-			}
-			if observed.OrpheusMetadata().PRURL != result.PRURL {
-				return errors.New("task-source PR update was not independently observed")
-			}
-			result.Task = observed
-		}
-		if _, ok := w.LastPhase().(*work.PublicationPhase); ok {
-			w.Phases = append(w.Phases, &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: selected.phaseIndex}})
-			version, err := store.Save(*snapshot, snapshot.Version)
-			if err != nil {
-				return err
-			}
-			snapshot.Version = version
-		}
-	case *work.DirectDelivery:
-		if err := s.closeDeliveredTask(ctx, store, snapshot, w, selected.phaseIndex, backend, item); err != nil {
-			return err
-		}
-		observed, err := backend.Get(ctx, item.ID)
-		if err != nil {
-			return err
-		}
-		result.Task = observed
-		result.WorktreeCleanup = s.cleanupDeliveredWorktree(ctx, store, repo, observed, backend, prepared.Directory)
-	}
 	return nil
 }
 
@@ -411,16 +302,10 @@ func (s FinalizationService) deliverPullRequest(ctx context.Context, boundary Fi
 	return created.URL, false, nil
 }
 
-func (s FinalizationService) closeDeliveredTask(ctx context.Context, store WorkStore, snapshot *work.State, w *work.Workflow, pi int, backend FinalizationBackend, item task.Task) error {
+func (s FinalizationService) closeDeliveredTask(ctx context.Context, store WorkStore, snapshot *work.State, w *work.Workflow, backend FinalizationBackend, item task.Task) error {
 	final, ok := w.LastPhase().(*work.FinalizationPhase)
 	if !ok {
-		final = &work.FinalizationPhase{Acceptance: &work.DirectAcceptance{Publication: work.PublicationRef{Phase: pi}}}
-		w.Phases = append(w.Phases, final)
-		version, err := store.Save(*snapshot, snapshot.Version)
-		if err != nil {
-			return err
-		}
-		snapshot.Version = version
+		return errors.New("closure handler requires a controller-selected finalization phase")
 	}
 	if final.Closure != nil {
 		return nil
@@ -437,7 +322,7 @@ func (s FinalizationService) closeDeliveredTask(ctx context.Context, store WorkS
 	if observed.Status != task.StatusClosed {
 		return errors.New("task-source closure was not independently observed")
 	}
-	final.Closure = &work.TaskClosure{At: time.Now().UTC(), Reason: "Reviewed direct delivery completed", Evidence: "Task source independently reports closed after observed destination delivery"}
+	final.Closure = &work.TaskClosure{At: time.Now().UTC(), Reason: "Delivered work accepted", Evidence: "Task source independently reports closed after recorded delivery acceptance"}
 	version, err := store.Save(*snapshot, snapshot.Version)
 	if err != nil {
 		return err
@@ -482,4 +367,27 @@ func verifyPublishedOutput(ctx context.Context, boundary FinalizationGit, dir, b
 		return errors.New("origin branch changed while observing the reviewed publication")
 	}
 	return nil
+}
+
+// recordPublicationPR mirrors an observed delivery, not permission to start work.
+func (s FinalizationService) recordPublicationPR(ctx context.Context, backend FinalizationBackend, item task.Task, url string) (task.Task, error) {
+	metadata := item.OrpheusMetadata()
+	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" && metadata.PRURL != url {
+		return task.Task{}, errors.New("task source names a different PR; refusing to overwrite it")
+	}
+	if !metadata.HasPRURL || metadata.PRURL != url {
+		if err := backend.SetPRURL(ctx, item.ID, url); err != nil {
+			return task.Task{}, err
+		}
+		observed, err := backend.Get(ctx, item.ID)
+		if err != nil {
+			return task.Task{}, err
+		}
+		if observed.OrpheusMetadata().PRURL != url {
+			return task.Task{}, errors.New("task-source PR update was not independently observed")
+		}
+		return observed, nil
+	}
+
+	return item, nil
 }

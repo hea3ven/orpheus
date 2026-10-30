@@ -313,8 +313,10 @@ repairs, and publication, even if the checked-out branch changes. Rerunning
 `task run` advances the existing workflow rather than blindly launching another
 implementer. It can resume [review](reviews.md), dispatch targeted repairs, or
 prepare [publication](publication.md) after approval. Publication currently waits
-for the separate consent UX; approval does not authorize delivery. Once a PR
-exists, use sync for reconciliation.
+for the separate consent UX; approval does not authorize delivery. The last
+recorded phase selects continuation: a PR URL does not prevent an already selected
+implementation or repair. Use sync to reconcile external PR state. Verified direct
+delivery skips external review; closure retries do not repeat delivery.
 
 If a repo-root agent exits without recording completion, rerun
 `orpheus task run <task-id>` without `--repo-root`. Matching local run history and

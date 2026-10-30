@@ -722,10 +722,11 @@ type UsageCaptureCandidate struct {
 
 // StartReviewOptions describes the selected review pipeline.
 type StartReviewOptions struct {
-	Pipeline string
-	Step     string
-	Contract work.ReviewContract
-	Scope    work.ReviewScope
+	ExpectedVersion *work.StateVersion
+	Pipeline        string
+	Step            string
+	Contract        work.ReviewContract
+	Scope           work.ReviewScope
 }
 
 // RecordReviewStepOptions describes one executed review step.
@@ -1009,6 +1010,9 @@ func (s Store) InterruptRun(repoID, taskID string, attempt int, opts InterruptRu
 func (s Store) StartReviewWithOptions(repoID, taskID string, opts StartReviewOptions) (ReviewAttempt, error) {
 	var ref work.AttemptRef
 	view, err := s.updateWorkflow(repoID, taskID, func(snapshot *work.State) (bool, error) {
+		if opts.ExpectedVersion != nil && snapshot.Version != *opts.ExpectedVersion {
+			return false, errors.New("review reservation is stale; current work changed")
+		}
 		w := snapshot.ActiveWorkflow()
 		if w == nil || w.Context() == nil {
 			return false, errors.New("review requires an established workflow context")

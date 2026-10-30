@@ -188,13 +188,13 @@ func taskReviewStartFromWorkflow(ctx workflow.ReviewAttemptContext) taskReviewSt
 	}
 }
 
-func newTaskReviewLifecycleService(
+func newTaskWorkflowController(
 	command *cobra.Command,
 	deps *invocationDependencies,
 	taskCtx taskContext,
 	logger *slog.Logger,
 	reader *bufio.Reader,
-) workflow.ReviewLifecycleService {
+) workflow.Controller {
 	paths := deps.paths
 	store := deps.taskStateStore
 	effects := deps.reviewEffects
@@ -247,5 +247,5 @@ func newTaskReviewLifecycleService(
 		}
 		return workflow.NewDispatchCommand(commandSnapshot), prompt, nil
 	}
-	return service
+	return workflow.Controller{ReviewLifecycleService: service, Delivery: newTaskDeliveryService(deps, taskCtx, logger)}
 }

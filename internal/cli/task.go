@@ -939,7 +939,7 @@ func runTaskRun(
 	execution.agentName = agentName
 	execution.pipelineName = pipelineName
 	execution.repoRootMode = repoRootMode
-	return executeTaskRunRoute(command, opts, execution)
+	return executeTaskRunRoute(command, execution)
 }
 
 func resolveTaskRunTaskAndBackend(
@@ -1031,73 +1031,46 @@ type taskRunRouteExecution struct {
 	repoRootMode bool
 }
 
-func executeTaskRunRoute(command *cobra.Command, opts *rootOptions, execution taskRunRouteExecution) error {
+func executeTaskRunRoute(command *cobra.Command, execution taskRunRouteExecution) error {
 	resolved := execution.resolved
-	switch execution.route.Action {
-	case workflow.TaskRunActionStartImplementation:
-		taskBackend, ok := execution.backend.(workflow.DispatchBackend)
-		if !ok {
-			return fmt.Errorf("task run %s: backend for repo %s does not support dispatch mutations", resolved.TaskID, resolved.Source.Repository.ID)
-		}
-		if err := validateTaskRunExternalRef(resolved, execution.task); err != nil {
-			return err
-		}
-		dispatch, err := startTaskRunDispatch(command, execution.deps, execution.logger, resolved, taskBackend, execution.task, execution.agentName, false, execution.repoRootMode)
-		if err != nil {
-			return fmt.Errorf("task run %s: %w", resolved.TaskID, err)
-		}
-		logTaskRunLaunch(command, execution.logger, execution.repo.ID, resolved.TaskID, dispatch.start)
-		result := executeTaskRunAgent(command.Context(), command, execution.deps, execution.logger, dispatch.service, execution.repo.ID, resolved.TaskID, dispatch.start, dispatch.prompt)
-		if err := dispatch.service.RecordExecution(dispatch.start.Attempt.Address, result); err != nil {
-			return err
-		}
-		return reviewAfterTaskRun(command, opts, dispatch, execution.repo.ID, resolved.TaskID, execution.agentName, execution.pipelineName)
-	case workflow.TaskRunActionTargetedRepair, workflow.TaskRunActionStartReview, workflow.TaskRunActionResumeReview:
-		return runTaskRunReview(command, execution.deps, execution.logger, resolved.TaskID, execution.agentName, execution.pipelineName)
-	case workflow.TaskRunActionRetryFinalization:
-		taskCtx, err := loadTaskContextFromInvocation(execution.deps)
-		if err != nil {
-			return err
-		}
-		finalized, err := finalizeTask(command, newTaskFinalizationService(execution.deps, taskCtx, execution.logger), workflow.FinalizeOptions{
-			TaskID: resolved.TaskID,
-		})
-		if err != nil {
-			return err
-		}
-		return renderTaskDoneResult(command, finalized)
-	case workflow.TaskRunActionImplementationActive,
-		workflow.TaskRunActionReviewActive,
-		workflow.TaskRunActionOpenPR,
-		workflow.TaskRunActionCompleted:
-		return renderTaskRunRoute(command.OutOrStdout(), resolved.TaskID, execution.route)
-	default:
-		return fmt.Errorf("task run %s: unsupported workflow action %q", resolved.TaskID, execution.route.Action)
-	}
-}
-
-func runTaskRunReview(
-	command *cobra.Command,
-	deps *invocationDependencies,
-	logger *slog.Logger,
-	taskID string,
-	agentName string,
-	pipelineName string,
-) error {
-	taskCtx, err := loadTaskContextFromInvocation(deps)
+	taskCtx, err := loadTaskContextFromInvocation(execution.deps)
 	if err != nil {
 		return err
 	}
-	service := newTaskReviewLifecycleService(command, deps, taskCtx, logger, bufio.NewReader(command.InOrStdin()))
-	outcome, err := service.Run(command.Context(), workflow.ReviewLifecycleOptions{
-		TaskID:            taskID,
-		PipelineName:      pipelineName,
-		DispatchAgentName: agentName,
+	controller := newTaskWorkflowController(command, execution.deps, taskCtx, execution.logger, bufio.NewReader(command.InOrStdin()))
+	result, err := controller.Advance(command.Context(), workflow.AdvanceOptions{Task: execution.task, RepositoryID: execution.repo.ID, Expected: execution.route, AgentName: execution.agentName, PipelineName: execution.pipelineName}, workflow.PhaseHandlers{
+		Prepare: func(ctx context.Context, expected workflow.TaskRunRoute) (workflow.PreparedImplementation, error) {
+			backend, ok := execution.backend.(workflow.DispatchBackend)
+			if !ok {
+				return workflow.PreparedImplementation{}, fmt.Errorf("task run %s: backend for repo %s does not support dispatch mutations", resolved.TaskID, resolved.Source.Repository.ID)
+			}
+			if err := validateTaskRunExternalRef(resolved, execution.task); err != nil {
+				return workflow.PreparedImplementation{}, err
+			}
+			dispatch, err := startTaskRunDispatch(command, execution.deps, execution.logger, resolved, backend, execution.task, execution.agentName, false, execution.repoRootMode, &expected)
+			if err != nil {
+				return workflow.PreparedImplementation{}, fmt.Errorf("task run %s: %w", resolved.TaskID, err)
+			}
+			return workflow.PreparedImplementation{Dispatch: dispatch.service, Start: dispatch.start, Prompt: dispatch.prompt}, nil
+		},
+		Implement: func(ctx context.Context, prepared workflow.PreparedImplementation) agent.ExecutionResult {
+			logTaskRunLaunch(command, execution.logger, execution.repo.ID, resolved.TaskID, prepared.Start)
+			return executeTaskRunAgent(ctx, command, execution.deps, execution.logger, prepared.Dispatch, execution.repo.ID, resolved.TaskID, prepared.Start, prepared.Prompt)
+		},
 	})
 	if err != nil {
 		return err
 	}
-	return renderTaskReviewLifecycleOutcome(command, logger, outcome)
+	if result.Review != nil {
+		return renderTaskReviewLifecycleOutcome(command, execution.logger, *result.Review)
+	}
+	if result.Delivery != nil {
+		return renderTaskDoneResult(command, *result.Delivery)
+	}
+	if result.Route.Action == workflow.TaskRunActionStartImplementation {
+		return nil
+	}
+	return renderTaskRunRoute(command.OutOrStdout(), resolved.TaskID, result.Route)
 }
 
 func validateTaskRunRouteFlags(
@@ -1151,6 +1124,10 @@ func renderTaskRunRoute(output io.Writer, taskID string, route workflow.TaskRunR
 		message = fmt.Sprintf("Task %s: starting a fresh review.\n", taskID)
 	case workflow.TaskRunActionResumeReview:
 		message = fmt.Sprintf("Task %s: resuming review attempt %d at step %q.\n", taskID, route.Attempt, route.Step)
+	case workflow.TaskRunActionPreparePublication:
+		message = fmt.Sprintf("Task %s: preparing the publication decision.\n", taskID)
+	case workflow.TaskRunActionPublish:
+		message = fmt.Sprintf("Task %s: continuing publication.\n", taskID)
 	case workflow.TaskRunActionRetryFinalization:
 		message = fmt.Sprintf("Task %s: retrying finalization after passed review.\n", taskID)
 	case workflow.TaskRunActionImplementationActive:
@@ -1166,45 +1143,6 @@ func renderTaskRunRoute(output io.Writer, taskID string, route workflow.TaskRunR
 	}
 	_, err := fmt.Fprint(output, message)
 	return err
-}
-
-func reviewAfterTaskRun(
-	command *cobra.Command,
-	opts *rootOptions,
-	dispatch taskRunDispatch,
-	repoID string,
-	taskID string,
-	agentName string,
-	pipelineName string,
-) error {
-	deps, err := opts.invocation(command)
-	if err != nil {
-		return err
-	}
-	logger := opts.log().With(
-		slog.String("component", "cli"),
-		slog.String("operation", "task_run_review"),
-	)
-	taskCtx, err := loadTaskContextFromInvocation(deps)
-	if err != nil {
-		return err
-	}
-	service := newTaskReviewLifecycleService(command, deps, taskCtx, logger, bufio.NewReader(command.InOrStdin()))
-	outcome, reviewed, err := service.RunAfterCompletedRun(command.Context(), workflow.ReviewAfterRunCompletionOptions{
-		RepoID:                    repoID,
-		TaskID:                    taskID,
-		RunAttempt:                dispatch.start.Attempt.Attempt,
-		SelectedDispatchAgentName: dispatch.start.Command.AgentName,
-		FallbackDispatchAgentName: agentName,
-		PipelineName:              pipelineName,
-	})
-	if err != nil {
-		return err
-	}
-	if !reviewed {
-		return nil
-	}
-	return renderTaskReviewLifecycleOutcome(command, logger, outcome)
 }
 
 func validateTaskRunExternalRef(resolved taskmodel.ResolvedTaskSource, taskItem taskmodel.Task) error {
@@ -1246,6 +1184,7 @@ func startTaskRunDispatch(
 	agentName string,
 	mainMode bool,
 	repoRootMode bool,
+	expected *workflow.TaskRunRoute,
 ) (taskRunDispatch, error) {
 	taskCtx, err := loadTaskContextFromInvocation(deps)
 	if err != nil {
@@ -1264,10 +1203,11 @@ func startTaskRunDispatch(
 		},
 	}
 	start, err := dispatch.service.Start(command.Context(), workflow.DispatchStartOptions{
-		TaskID:  resolved.TaskID,
-		Source:  resolved.Source,
-		Backend: backend,
-		Task:    taskItem,
+		Expected: expected,
+		TaskID:   resolved.TaskID,
+		Source:   resolved.Source,
+		Backend:  backend,
+		Task:     taskItem,
 		ResolveCommand: func(commandContext workflow.DispatchCommandContext) (workflow.DispatchCommand, error) {
 			prompt, commandSnapshot, err := resolveTaskRunAgentCommand(deps.paths, agentName, commandContext.SessionName)
 			if err != nil {
@@ -2895,7 +2835,7 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string) error
 		return err
 	}
 
-	service := newTaskFinalizationService(deps, taskCtx, logger)
+	service := workflow.Controller{Delivery: newTaskDeliveryService(deps, taskCtx, logger)}
 	finalized, err := finalizeTask(command, service, workflow.FinalizeOptions{
 		TaskID: taskID,
 		CWD:    deps.taskCWD,
@@ -2914,7 +2854,7 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string) error
 	return renderTaskDoneResult(command, finalized)
 }
 
-func newTaskFinalizationService(deps *invocationDependencies, taskCtx taskContext, logger *slog.Logger) workflow.FinalizationService {
+func newTaskDeliveryService(deps *invocationDependencies, taskCtx taskContext, logger *slog.Logger) workflow.FinalizationService {
 	return workflow.FinalizationService{
 		Git:        deps.finalizationGit,
 		CleanupGit: deps.cleanupGit,
@@ -2952,7 +2892,7 @@ func invocationTaskBackend[T any](deps *invocationDependencies, source taskmodel
 	return taskBackend, nil
 }
 
-func finalizeTask(command *cobra.Command, service workflow.FinalizationService, opts workflow.FinalizeOptions) (workflow.FinalizationResult, error) {
+func finalizeTask(command *cobra.Command, service workflow.Controller, opts workflow.FinalizeOptions) (workflow.FinalizationResult, error) {
 	result, err := service.Finalize(command.Context(), opts)
 	if err != nil {
 		return workflow.FinalizationResult{}, fmt.Errorf("task done: %w", err)
@@ -2961,7 +2901,7 @@ func finalizeTask(command *cobra.Command, service workflow.FinalizationService, 
 }
 
 func renderTaskDoneResult(command *cobra.Command, finalized workflow.FinalizationResult) error {
-	if finalized.PRURL != "" {
+	if finalized.PRURL != "" && finalized.Finalization.ClosedAt == nil {
 		_, err := fmt.Fprintf(command.OutOrStdout(), "Published %s: delivered reviewed %s, pushed %s, and observed PR %s. Backend task remains open for PR review.\n", finalized.Task.ID, finalized.Finalization.Commit, finalized.Branch, finalized.PRURL)
 		return err
 	}
