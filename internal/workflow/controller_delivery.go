@@ -11,28 +11,42 @@ import (
 	"github.com/hea3ven/orpheus/internal/workstate"
 )
 
-// Finalize advances only a selected publication or finalization with exact-plan
-// consent. It cannot capture implementation output or authorize delivery.
-func (c Controller) Finalize(ctx context.Context, opts FinalizeOptions) (FinalizationResult, error) {
-	s := c.Delivery
+// Finalize is the delivery-only entry point for task done. It uses the same
+// phase handlers as Advance, but cannot start implementation or review work.
+func (s Controller) Finalize(ctx context.Context, opts FinalizeOptions) (FinalizationResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if s.BackendFactory == nil {
-		return FinalizationResult{}, errors.New("task finalization backend factory is required")
+	var expected *TaskRunRoute
+	for {
+		result, next, err := s.advanceDeliveryPhase(ctx, opts, expected)
+		if err != nil || next == nil {
+			return result, err
+		}
+		expected = next
 	}
+}
 
-	store := s.Store
-	if store == nil {
-		store = workstate.NewStore(s.Paths)
+// advanceDeliveryPhase performs one selected phase under mutation protection.
+// A publication handler observes delivery; the controller then appends External
+// review or Finalization. Closure is executed only on a subsequent iteration.
+func (s Controller) advanceDeliveryPhase(ctx context.Context, opts FinalizeOptions, expected *TaskRunRoute) (FinalizationResult, *TaskRunRoute, error) {
+	delivery := s.Delivery
+	if delivery.BackendFactory == nil {
+		return FinalizationResult{}, nil, errors.New("task finalization backend factory is required")
 	}
-	boundary := s.Git
+	store := delivery.Store
+	if store == nil {
+		store = workstate.NewStore(delivery.Paths)
+	}
+	boundary := delivery.Git
 	if boundary == nil {
 		boundary = LocalFinalizationGit{}
 	}
 	var result FinalizationResult
-	err := state.WithGlobalMutationLockLogger(ctx, s.Paths, finalizationLockOperation, s.Logger, func() error {
-		source, item, backend, err := s.resolvePublicationTask(ctx, opts, store)
+	var next *TaskRunRoute
+	err := state.WithGlobalMutationLockLogger(ctx, delivery.Paths, finalizationLockOperation, delivery.Logger, func() error {
+		source, item, backend, err := delivery.resolvePublicationTask(ctx, opts, store)
 		if err != nil {
 			return err
 		}
@@ -44,76 +58,41 @@ func (c Controller) Finalize(ctx context.Context, opts FinalizeOptions) (Finaliz
 		if err != nil {
 			return err
 		}
-		if err := CheckExpectedRoute(opts.Expected, item, view); err != nil {
+		if err := CheckExpectedRoute(expected, item, view); err != nil {
 			return err
 		}
-		result, err = c.publishCommitted(ctx, store, boundary, source, item, backend, &snapshot)
+		selected, err := selectCommittedPublication(&snapshot, item)
+		if err != nil {
+			return err
+		}
+		result, next, err = s.applyDeliveryPhase(ctx, store, boundary, source, item, backend, &snapshot, selected)
 		return err
 	})
-	return result, err
+	return result, next, err
 }
 
-func (c Controller) publishCommitted(ctx context.Context, store WorkStore, boundary FinalizationGit, source task.RepositorySource, item task.Task, backend FinalizationBackend, snapshot *work.State) (FinalizationResult, error) {
-	s := c.Delivery
-	selected, err := selectCommittedPublication(snapshot, item)
-	if err != nil {
-		return FinalizationResult{}, err
-	}
-	result := FinalizationResult{Repository: source.Repository, Task: item, Branch: selected.prepared.TaskBranch}
-	if err := s.recordCommittedDelivery(ctx, store, boundary, source.Repository, item, snapshot, selected, &result); err != nil {
-		return result, err
-	}
-	if err := c.reconcileCommittedDelivery(ctx, store, source.Repository, item, backend, snapshot, selected, &result); err != nil {
-		return result, err
-	}
-	view, err := taskstate.Project(*snapshot)
-	if err != nil {
-		return result, err
-	}
-	result.Finalization = taskstate.FinalizationFacts(view)
-	return result, nil
-}
-
-func (c Controller) reconcileCommittedDelivery(ctx context.Context, store WorkStore, repo task.Repository, item task.Task, backend FinalizationBackend, snapshot *work.State, selected committedPublication, result *FinalizationResult) error {
-	s := c.Delivery
-	p, w, prepared := selected.publication, selected.workflow, selected.prepared
-	switch delivery := p.Delivery.(type) {
+func (s Controller) enterDeliverySuccessor(ctx context.Context, store WorkStore, backend FinalizationBackend, snapshot *work.State, selected committedPublication, result *FinalizationResult) error {
+	var next work.Phase
+	switch delivered := selected.publication.Delivery.(type) {
 	case *work.PullRequestDelivery:
-		result.PRURL = delivery.PullRequest.URL
-		observed, err := s.recordPublicationPR(ctx, backend, item, result.PRURL)
+		result.PRURL = delivered.PullRequest.URL
+		observed, err := s.Delivery.recordPublicationPR(ctx, backend, result.Task, result.PRURL)
 		if err != nil {
 			return err
 		}
 		result.Task = observed
-		if _, ok := w.LastPhase().(*work.PublicationPhase); ok {
-			w.Phases = append(w.Phases, &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: selected.phaseIndex}})
-			version, err := store.Save(*snapshot, snapshot.Version)
-			if err != nil {
-				return err
-			}
-			snapshot.Version = version
-		}
+		next = &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: selected.phaseIndex}}
 	case *work.DirectDelivery:
-		if _, finalizing := w.LastPhase().(*work.FinalizationPhase); !finalizing {
-			w.Phases = append(w.Phases, &work.FinalizationPhase{Acceptance: &work.DirectAcceptance{Publication: work.PublicationRef{Phase: selected.phaseIndex}}})
-			version, err := store.Save(*snapshot, snapshot.Version)
-			if err != nil {
-				return err
-			}
-			snapshot.Version = version
-		}
+		next = &work.FinalizationPhase{Acceptance: &work.DirectAcceptance{Publication: work.PublicationRef{Phase: selected.phaseIndex}}}
+	default:
+		return errors.New("publication handler did not establish observed delivery")
 	}
-	if _, finalizing := w.LastPhase().(*work.FinalizationPhase); finalizing {
-		if err := s.closeDeliveredTask(ctx, store, snapshot, w, backend, item); err != nil {
-			return err
-		}
-		observed, err := backend.Get(ctx, item.ID)
-		if err != nil {
-			return err
-		}
-		result.Task = observed
-		result.WorktreeCleanup = s.cleanupDeliveredWorktree(ctx, store, repo, observed, backend, prepared.Directory)
+	selected.workflow.Phases = append(selected.workflow.Phases, next)
+	version, err := store.Save(*snapshot, snapshot.Version)
+	if err != nil {
+		return err
 	}
+	snapshot.Version = version
 	return nil
 }
 
@@ -134,4 +113,56 @@ func publicationOwner(w *work.Workflow) (int, error) {
 		}
 	}
 	return 0, errors.New("active local work prevents publication")
+}
+
+func (s Controller) applyDeliveryPhase(ctx context.Context, store WorkStore, boundary FinalizationGit, source task.RepositorySource, item task.Task, backend FinalizationBackend, snapshot *work.State, selected committedPublication) (FinalizationResult, *TaskRunRoute, error) {
+	delivery := s.Delivery
+	result := FinalizationResult{Repository: source.Repository, Task: item, Branch: selected.prepared.TaskBranch}
+	var next *TaskRunRoute
+	switch selected.workflow.LastPhase().(type) {
+	case *work.PublicationPhase:
+		if err := delivery.recordCommittedDelivery(ctx, store, boundary, source.Repository, item, snapshot, selected, &result); err != nil {
+			return result, nil, err
+		}
+		if err := s.enterDeliverySuccessor(ctx, store, backend, snapshot, selected, &result); err != nil {
+			return result, nil, err
+		}
+		if _, direct := selected.publication.Delivery.(*work.DirectDelivery); direct {
+			nextView, err := taskstate.Project(*snapshot)
+			if err != nil {
+				return result, nil, err
+			}
+			route, err := SelectTaskRunRoute(result.Task, nextView)
+			if err != nil {
+				return result, nil, err
+			}
+			next = &route
+		}
+	case *work.FinalizationPhase:
+		if err := delivery.closeDeliveredTask(ctx, store, snapshot, selected.workflow, backend, item); err != nil {
+			return result, nil, err
+		}
+		observed, err := backend.Get(ctx, item.ID)
+		if err != nil {
+			return result, nil, err
+		}
+		result.Task = observed
+		result.WorktreeCleanup = delivery.cleanupDeliveredWorktree(ctx, store, source.Repository, observed, backend, selected.prepared.Directory)
+	case *work.ExternalReviewPhase:
+		result.PRURL = selected.publication.Delivery.(*work.PullRequestDelivery).PullRequest.URL
+		observed, err := delivery.recordPublicationPR(ctx, backend, item, result.PRURL)
+		if err != nil {
+			return result, nil, err
+		}
+		result.Task = observed
+	}
+	if pr, ok := selected.publication.Delivery.(*work.PullRequestDelivery); ok {
+		result.PRURL = pr.PullRequest.URL
+	}
+	view, err := taskstate.Project(*snapshot)
+	if err != nil {
+		return result, nil, err
+	}
+	result.Finalization = taskstate.FinalizationFacts(view)
+	return result, next, nil
 }

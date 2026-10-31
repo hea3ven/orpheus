@@ -46,12 +46,12 @@ func TestReviewStartupStopsAfterConcurrentReviewRecovery(t *testing.T) {
 		},
 	}
 
-	outcome, err := (Controller{ReviewLifecycleService: service}).runReview(context.Background(), ReviewLifecycleOptions{TaskID: "op-review"})
+	outcome, err := (Controller{ReviewLifecycleService: service}).Advance(context.Background(), AdvanceOptions{TaskID: "op-review"})
 
 	require.NoError(t, err)
-	assert.Equal(t, ReviewLifecycleOutcomeExecutionRecovered, outcome.Kind)
-	assert.Equal(t, AttachedExecutionAlreadyRecovered, outcome.RecoveryInspection.Condition)
-	assert.Equal(t, "review_interrupted_by_concurrent_recovery", outcome.RecoveryInspection.Reason)
+	assert.Equal(t, ReviewLifecycleOutcomeExecutionRecovered, outcome.Review.Kind)
+	assert.Equal(t, AttachedExecutionAlreadyRecovered, outcome.Review.RecoveryInspection.Condition)
+	assert.Equal(t, "review_interrupted_by_concurrent_recovery", outcome.Review.RecoveryInspection.Reason)
 	assert.False(t, pipelineCalled)
 	final, err := store.Load("alpha", "op-review")
 	require.NoError(t, err)
@@ -78,14 +78,9 @@ func (recoveryLifecycleBackend) Get(context.Context, string) (task.Task, error) 
 	return task.Task{ID: "op-review", IssueType: task.IssueTypeTask, Status: task.StatusInProgress}, nil
 }
 
-func TestAutonomousReviewFollowUpRequiresRunnerBeforeAnyEffects(t *testing.T) {
-	// All other collaborators intentionally remain nil: none may be invoked when
-	// the service is missing its required runner.
-	service := ReviewLifecycleService{}
-	err := service.runAutonomousReviewFollowUp(context.Background(), ReviewAttemptContext{}, "implementer", 1, []int{0})
-	require.ErrorContains(t, err, "review lifecycle agent runner is required")
-	outcome := reviewLifecycleOperationalFailure(ReviewAttemptContext{Review: taskstate.ReviewAttempt{Status: taskstate.ReviewStatusBlocked}}, err)
-	assert.Equal(t, ReviewLifecycleOutcomeOperationalFail, outcome.Kind)
-	assert.ErrorIs(t, outcome.Err, err)
-	assert.Equal(t, taskstate.ReviewStatusBlocked, outcome.Context.Review.Status)
+func TestImplementationRequiresRunnerBeforeAnyEffects(t *testing.T) {
+	controller := Controller{}
+	stop, err := controller.advanceImplementation(context.Background(), &advanceInvocation{}, taskstate.TaskState{}, TaskRunRoute{Action: TaskRunActionTargetedRepair}, &AdvanceResult{})
+	require.ErrorContains(t, err, "implementation agent runner is required")
+	assert.True(t, stop)
 }

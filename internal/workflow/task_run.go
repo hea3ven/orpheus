@@ -13,7 +13,7 @@ import (
 )
 
 // TaskRunAction identifies the next workflow transition selected from persisted
-// task state. The CLI owns presentation and flag validation; this package owns
+// task state. The CLI owns presentation; the controller owns flag validation and
 // the state transition selection.
 type TaskRunAction string
 

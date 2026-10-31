@@ -303,7 +303,7 @@ func TestIntegrationWorkflowTaskRunHeldMutationLockPreventsSetup(t *testing.T) {
 	stdout, stderr, err := fixture.execute("task", "run", "op-locked")
 
 	assert.ErrorIs(t, err, os.ErrExist)
-	assert.ErrorContains(t, err, "failed to acquire lock for inspect workflow advancement:")
+	assert.ErrorContains(t, err, "failed to acquire lock for select workflow work:")
 	assert.Empty(t, stdout)
 	assert.Empty(t, stderr)
 	final, _ := fixture.loadFinalTask("op-locked")

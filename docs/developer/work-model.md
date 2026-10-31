@@ -7,8 +7,11 @@ projects transient service/operator views; its projections are never persisted.
 Task sources retain task definitions and lifecycle authority. Review-specific
 captured requirements belong to the immutable review scope. `workflow.Controller`
 owns built-in progression; specialized services execute agents, review pipelines,
-Git/PR effects, and source closure. CLI composes typed handlers and renders their
-results rather than choosing phase routes. There is no persisted cursor.
+Git/PR effects, and source closure. CLI supplies task identity and flag choices,
+composes collaborators, and renders semantic results. `Controller.Advance` owns
+recovery, workflow-dependent option validation, and a single phase loop: select
+current work, reserve it, execute its handler, and reload owned results before
+selecting again. Handlers do not invoke the next phase. There is no persisted cursor.
 
 ## Built-in progression
 
@@ -21,16 +24,20 @@ enters Finalization. Finalization consumes recorded delivery/acceptance and
 retries source closure without repeating publication.
 
 Required repairs append another Implementation in the same workflow, then a new
-Review from the first step of the currently resolved pipeline. Existing stopping,
+Review from the first step of the currently resolved pipeline. Resuming a manual
+assessment and requesting changes uses this same loop; quitting the prompt leaves
+that assessment unanswered rather than aborting it. Invocation budget accounting
+survives every phase transition. Existing stopping,
 finding-decision, and per-invocation repair-budget rules remain in force. A PR URL
 cannot override controller-selected implementation or repair. Configured slot
 keys/kinds remain in captured contracts; history addresses never become offsets
 in a live pipeline. Forward continuation across configuration edits is a separate
 boundary from resolving a fresh post-repair review.
 
-Inspection returns an invocation-local expected owner and persistence version.
-Reservation rechecks them under mutation protection; review reservation also
-checks the exact version inside its atomic mutation. Attached work runs without
+The controller derives expected owner/version preconditions internally; callers
+need not inspect or supply a route before advancement. Reservation rechecks those
+preconditions under mutation protection; review reservation also checks the exact
+version inside its atomic mutation. Attached work runs without
 the global lock, allowing child callbacks at the reserved parent/index address.
 Only that owner may record completion/results. Conflicting phase/step advancement
 is refused rather than attached to newer work. Interruption reconciliation and

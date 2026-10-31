@@ -69,9 +69,8 @@ type FinalizationService struct {
 }
 
 type FinalizeOptions struct {
-	Expected *TaskRunRoute
-	TaskID   string
-	CWD      string
+	TaskID string
+	CWD    string
 }
 
 type FinalizationResult struct {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -15,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestControllerRefusesStaleAdvancementBeforeCallingPhaseHandlers(t *testing.T) {
+func TestDispatchRefusesStaleControllerReservationBeforeEffects(t *testing.T) {
 	for _, change := range []string{"version", "workflow", "phase", "step", "action"} {
 		t.Run(change, func(t *testing.T) {
 			snapshot := testutil.ReviewableWork("alpha", "op-1", "/fixture/repo", "orpheus/op-1")
@@ -37,54 +36,13 @@ func TestControllerRefusesStaleAdvancementBeforeCallingPhaseHandlers(t *testing.
 			case "action":
 				expected.Action = TaskRunActionStartImplementation
 			}
-			calls := 0
-			controller := Controller{ReviewLifecycleService: ReviewLifecycleService{Paths: newDispatchTestPaths(t), RunStore: &controllerReadStore{view: view}}}
-			result, err := controller.Advance(context.Background(), AdvanceOptions{Task: item, RepositoryID: "alpha", Expected: expected}, PhaseHandlers{
-				Prepare: func(context.Context, TaskRunRoute) (PreparedImplementation, error) {
-					calls++
-					return PreparedImplementation{}, nil
-				},
-				Implement: func(context.Context, PreparedImplementation) agent.ExecutionResult {
-					calls++
-					return agent.ExecutionResult{}
-				},
-			})
+			boundary := &continuationDispatchGit{}
+			service := DispatchService{Paths: newDispatchTestPaths(t), RunStore: fakeDispatchRunStore{state: view}, Git: boundary}
+			_, err = service.Start(context.Background(), DispatchStartOptions{TaskID: item.ID, Task: item, Source: task.RepositorySource{Repository: task.Repository{ID: "alpha"}}, Backend: fakeDispatchBackend{taskItem: item}, Expected: &expected})
 			require.ErrorContains(t, err, "workflow advancement is stale")
-			assert.Zero(t, calls)
-			assert.Nil(t, result.Review)
-			assert.Nil(t, result.Delivery)
+			assert.Zero(t, boundary.setupCalls)
 			assert.Equal(t, snapshot, *view.Work)
 		})
-	}
-}
-
-func TestControllerRequiresPreparationToReserveItsOwnImplementation(t *testing.T) {
-	snapshot := testutil.ReviewableWork("alpha", "op-1", "/fixture/repo", "orpheus/op-1")
-	snapshot.Workflows[0].Phases = snapshot.Workflows[0].Phases[:1]
-	view, err := taskstate.Project(snapshot)
-	require.NoError(t, err)
-	item := task.Task{ID: "op-1", Status: task.StatusInProgress}
-	expected, err := SelectTaskRunRoute(item, view)
-	require.NoError(t, err)
-	for _, owner := range []work.AttemptRef{
-		{RepositoryID: "alpha", TaskID: "another-task", Phase: 1},
-		{RepositoryID: "alpha", TaskID: "op-1", Phase: 0},
-	} {
-		controller := Controller{ReviewLifecycleService: ReviewLifecycleService{Paths: newDispatchTestPaths(t), RunStore: &controllerReadStore{view: view}}}
-		launched := false
-		_, err := controller.Advance(context.Background(), AdvanceOptions{Task: item, RepositoryID: "alpha", Expected: expected}, PhaseHandlers{
-			Prepare: func(ctx context.Context, route TaskRunRoute) (PreparedImplementation, error) {
-				assert.Equal(t, TaskRunActionStartImplementation, route.Action)
-				return PreparedImplementation{Start: DispatchStartResult{Attempt: taskstate.RunAttempt{Address: owner}}}, nil
-			},
-			Implement: func(context.Context, PreparedImplementation) agent.ExecutionResult {
-				launched = true
-				return agent.ExecutionResult{}
-			},
-		})
-		require.Error(t, err)
-		assert.False(t, launched)
-		assert.Equal(t, snapshot, *view.Work)
 	}
 }
 
@@ -101,7 +59,7 @@ func TestControllerReviewReservationCannotAppendAfterConcurrentAdvancement(t *te
 		_, err := store.StartReviewWithOptions("alpha", "op-1", taskstate.StartReviewOptions{Pipeline: "other", Contract: work.ReviewContract{PipelineKey: "other", Slots: []work.ReviewSlot{{Kind: work.ReviewManual, ConfigKey: "operator"}}}, Scope: work.ReviewScope{Requirements: "Original task", Output: work.OutputRef{Phase: 1}, Destination: &work.Destination{Remote: "origin", Branch: "main", Commit: "destination"}}})
 		require.NoError(t, err)
 	}}}}
-	base := ReviewContext{paths: paths, store: store, Source: task.RepositorySource{Repository: task.Repository{ID: "alpha", DefaultBranch: "main"}}, Task: task.Task{ID: "op-1", Title: "Task intent"}, Workdir: "/fixture/repo"}
+	base := ReviewContext{owner: &work.AttemptRef{RepositoryID: "alpha", TaskID: "op-1", Workflow: 0, Phase: 1}, paths: paths, store: store, Source: task.RepositorySource{Repository: task.Repository{ID: "alpha", DefaultBranch: "main"}}, Task: task.Task{ID: "op-1", Title: "Task intent"}, Workdir: "/fixture/repo"}
 	_, err = controller.startFreshReview(base, review.BuiltinManualPipeline())
 	require.ErrorContains(t, err, "review reservation is stale")
 	final, err := store.Load("alpha", "op-1")
@@ -111,13 +69,6 @@ func TestControllerReviewReservationCannotAppendAfterConcurrentAdvancement(t *te
 	assert.Len(t, final.Work.Workflows[0].ReviewContracts, 1)
 	assert.Len(t, final.Work.Workflows[0].Phases, 3)
 }
-
-type controllerReadStore struct {
-	ReviewLifecycleStore
-	view taskstate.TaskState
-}
-
-func (s *controllerReadStore) Load(string, string) (taskstate.TaskState, error) { return s.view, nil }
 
 type reservationDestinationGit struct {
 	ReviewCandidateGit
