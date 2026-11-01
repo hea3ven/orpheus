@@ -69,7 +69,7 @@ func TestIntegrationWorkflowTaskReviewAgentReviewBlockingFindingStopsPipeline(t 
 	stdout, stderr := fixture.run("", "task", "run", "op-main")
 
 	is.Contains(stdout, "Recorded blocking review finding 1 for op-main.")
-	is.Contains(stderr, "== Review step: ai-review (agent_review) ==")
+	is.Contains(stderr, "-- STEP: ai-review (agent_review) --")
 	is.Contains(stderr, "Review blocked for op-main by agent_review \"ai-review\".")
 	is.NotContains(stderr, "Review action")
 	is.NotEqual(headBefore, fixture.candidate.head)
@@ -101,7 +101,7 @@ func TestIntegrationWorkflowTaskReviewAgentReviewMixedAutomatedBlockerDecisions(
 	is.Contains(stdout, "Recorded blocking review finding 3 for op-main.")
 	is.Contains(stderr, "Automated blocking findings from step \"ai-review\"")
 	is.Contains(stderr, "Review blocked for op-main by agent_review \"ai-review\".")
-	is.NotContains(stderr, "◆ REVIEW STEP · approval (manual)")
+	is.NotContains(stderr, "-- STEP: approval (manual)")
 
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
@@ -233,7 +233,7 @@ func TestIntegrationWorkflowTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollo
 	is.Contains(showStdout, "Type: blocking")
 	is.Contains(showStdout, "Title: Generated advisory")
 	is.Contains(showStdout, "Resolution: open")
-	is.Contains(showStdout, "Next step: autonomous review attempts are exhausted")
+	is.Contains(showStdout, "Workflow next action: targeted_repair")
 
 	fixture.budget(2)
 	fixture.repairExitsWithoutCompletion()

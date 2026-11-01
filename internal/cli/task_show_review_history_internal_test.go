@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/hea3ven/orpheus/internal/work"
@@ -38,7 +39,7 @@ func TestTaskShowReviewScopesHistoryAttemptAndFinding(t *testing.T) {
 	}
 
 	var history bytes.Buffer
-	if err := renderTaskShowReview(&history, "alpha", "op-history", state, reviewShowScope{}); err != nil {
+	if err := renderTaskShowReview(&history, "alpha", task.Task{ID: "op-history", Status: task.StatusInProgress}, state, reviewShowScope{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
@@ -59,7 +60,7 @@ func TestTaskShowReviewScopesHistoryAttemptAndFinding(t *testing.T) {
 	}
 
 	var attempt bytes.Buffer
-	if err := renderTaskShowReview(&attempt, "alpha", "op-history", state, reviewShowScope{reviewAttempt: 1}); err != nil {
+	if err := renderTaskShowReview(&attempt, "alpha", task.Task{ID: "op-history", Status: task.StatusInProgress}, state, reviewShowScope{reviewAttempt: 1}); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"Authoritative review attempt 1:", "Findings by step:", "Follow-up runs:", "Run attempt 1: succeeded (required blocking findings 2; advisory opportunities 3)", "Created follow-up tasks:", "op-42 (finding 4, step ai-review): Extract helper"} {
@@ -69,7 +70,7 @@ func TestTaskShowReviewScopesHistoryAttemptAndFinding(t *testing.T) {
 	}
 
 	var finding bytes.Buffer
-	if err := renderTaskShowReview(&finding, "alpha", "op-history", state, reviewShowScope{reviewAttempt: 1, findingNumber: 4}); err != nil {
+	if err := renderTaskShowReview(&finding, "alpha", task.Task{ID: "op-history", Status: task.StatusInProgress}, state, reviewShowScope{reviewAttempt: 1, findingNumber: 4}); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"Authoritative finding 1/4:", "Description: Track cleanup separately.", "Disposition: converted/created task op-42", "Proposed task title: Extract helper", "Proposed task description: Extract the duplicated helper.", "Proposed task acceptance criteria: The helper has focused tests.", "Created follow-up task: op-42", "Associated follow-up runs:\n  (none recorded)"} {
@@ -79,7 +80,7 @@ func TestTaskShowReviewScopesHistoryAttemptAndFinding(t *testing.T) {
 	}
 
 	finding.Reset()
-	if err := renderTaskShowReview(&finding, "alpha", "op-history", state, reviewShowScope{reviewAttempt: 1, findingNumber: 2}); err != nil {
+	if err := renderTaskShowReview(&finding, "alpha", task.Task{ID: "op-history", Status: task.StatusInProgress}, state, reviewShowScope{reviewAttempt: 1, findingNumber: 2}); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"Suggested action: Repair the race.", "Associated follow-up runs:", "Run attempt 1: succeeded (completion recorded)", "Run attempt 2: failed (no completion)"} {
@@ -89,7 +90,7 @@ func TestTaskShowReviewScopesHistoryAttemptAndFinding(t *testing.T) {
 	}
 
 	finding.Reset()
-	if err := renderTaskShowReview(&finding, "alpha", "op-history", state, reviewShowScope{reviewAttempt: 1, findingNumber: 3}); err != nil {
+	if err := renderTaskShowReview(&finding, "alpha", task.Task{ID: "op-history", Status: task.StatusInProgress}, state, reviewShowScope{reviewAttempt: 1, findingNumber: 3}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(finding.String(), "Run attempt 1: succeeded (completion recorded)") || !strings.Contains(finding.String(), "Run attempt 2: failed (no completion)") {
@@ -116,7 +117,7 @@ func TestTaskShowReviewScopesHistoryAttemptAndFinding(t *testing.T) {
 	// An adversarial old repair uses the same display ordinals.
 	current.Runs = append(current.Runs, taskstate.RunAttempt{Address: work.AttemptRef{Workflow: 0, Phase: 3}, Attempt: 99, Status: taskstate.RunStatusFailed, ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{0}}})
 	attempt.Reset()
-	require.NoError(t, renderTaskShowReview(&attempt, "alpha", "op-snapshot", current, reviewShowScope{reviewAttempt: 1}))
+	require.NoError(t, renderTaskShowReview(&attempt, "alpha", task.Task{ID: "op-snapshot", Status: task.StatusInProgress}, current, reviewShowScope{reviewAttempt: 1}))
 	assert.Contains(t, attempt.String(), "Committed scope (workflow 1, phase 2)")
 	assert.Contains(t, attempt.String(), "Full-task comparison: initial-commit -> fixture-output")
 	assert.Contains(t, attempt.String(), "Captured requirements: Workflow 1 requirements")
@@ -124,7 +125,7 @@ func TestTaskShowReviewScopesHistoryAttemptAndFinding(t *testing.T) {
 	assert.NotContains(t, attempt.String(), "old-followup")
 	assert.NotContains(t, attempt.String(), "Run attempt 99")
 	var allWorkflows bytes.Buffer
-	require.NoError(t, renderTaskShowReview(&allWorkflows, "alpha", "op-snapshot", current, reviewShowScope{}))
+	require.NoError(t, renderTaskShowReview(&allWorkflows, "alpha", task.Task{ID: "op-snapshot", Status: task.StatusInProgress}, current, reviewShowScope{}))
 	assert.Contains(t, allWorkflows.String(), "Workflow 0, phase 2")
 	assert.Contains(t, allWorkflows.String(), "Workflow 1, phase 2")
 	assert.Contains(t, allWorkflows.String(), "old task receipt")
@@ -175,7 +176,7 @@ func TestTaskShowReviewRejectsUnknownAttemptAndFinding(t *testing.T) {
 		if test.empty {
 			current = taskstate.TaskState{}
 		}
-		err := renderTaskShowReview(&output, "alpha", "op-1", current, test.scope)
+		err := renderTaskShowReview(&output, "alpha", task.Task{ID: "op-1", Status: task.StatusInProgress}, current, test.scope)
 		if strings.Contains(output.String(), "No review attempts recorded") {
 			t.Fatalf("scoped lookup must fail: %s", output.String())
 		}
@@ -197,7 +198,7 @@ func TestTaskReviewHistoryExcludesInterruptedReviewAuditFindings(t *testing.T) {
 	}}
 
 	var history bytes.Buffer
-	if err := renderTaskShowReview(&history, "alpha", "op-audit", state, reviewShowScope{}); err != nil {
+	if err := renderTaskShowReview(&history, "alpha", task.Task{ID: "op-audit", Status: task.StatusInProgress}, state, reviewShowScope{}); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(history.String(), "Interrupted audit finding") {
@@ -210,7 +211,7 @@ func TestTaskReviewHistoryExcludesInterruptedReviewAuditFindings(t *testing.T) {
 	}
 
 	var finding bytes.Buffer
-	if err := renderTaskShowReview(&finding, "alpha", "op-audit", state, reviewShowScope{reviewAttempt: 1, findingNumber: 1}); err != nil {
+	if err := renderTaskShowReview(&finding, "alpha", task.Task{ID: "op-audit", Status: task.StatusInProgress}, state, reviewShowScope{reviewAttempt: 1, findingNumber: 1}); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"Audit-only finding 1/1:", "Interrupted audit finding", "Disposition: audit-only (interrupted reviewer)", "Audit-only: interrupted reviewer"} {
@@ -228,7 +229,7 @@ func TestTaskReviewHistoryCollapsesMultilineFindingFields(t *testing.T) {
 		}},
 	}}}
 	var output bytes.Buffer
-	if err := renderTaskShowReview(&output, "alpha", "op-multiline", state, reviewShowScope{}); err != nil {
+	if err := renderTaskShowReview(&output, "alpha", task.Task{ID: "op-multiline", Status: task.StatusInProgress}, state, reviewShowScope{}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(output.String(), "1/1 · ai-review spoofed-step · blocking · waived · Multiline title - spoofed finding") {

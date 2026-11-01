@@ -41,7 +41,31 @@ version inside its atomic mutation. Attached work runs without
 the global lock, allowing child callbacks at the reserved parent/index address.
 Only that owner may record completion/results. Conflicting phase/step advancement
 is refused rather than attached to newer work. Interruption reconciliation and
-publication consent UX remain separate implementation boundaries.
+the interactive publication plan editor remain separate implementation boundaries.
+
+## Frontend contract
+
+`Controller.Inspect` (or `InspectTask` for an already loaded snapshot) returns
+copied semantic context, the selected next action, and pending typed interactions.
+`Advance` supplies synchronous `Progress` notifications. Inspection is read-only:
+it does not reconcile processes or reserve work. Phase/step attempts and revision,
+scope, execution, publication, PR, and closure facts remain workflow-owned.
+
+`Controller.Respond` binds a typed assessment, finding batch, or publication
+response to the inspected owner/kind/state version under mutation protection.
+Answers persist as the existing assessment, finding dispositions, or exact-plan
+consent; there is no second decision queue or state-format change. Finding batches
+save atomically. Pause and cancellation retain pending work; stale/mismatched
+responses cannot advance phases. Review decisions verify the exact retained
+checkout before saving. Attached review prompts use this same response boundary.
+Continuation after an externally answered step skips that completed step.
+
+CLI owns phase/step header repetition, labels, ANSI styling, display-width wrapping,
+manual-review body sections, and rolling output tails. Review execution reports
+step boundaries, stopping notices, and output dispositions, while its output port
+carries raw child streams separately. A failed header settles an unstarted check
+or reviewer; an unanswered assessment remains pending. Sync supplies observed PR
+lifecycle facts through the same progress renderer without becoming another phase.
 
 ## One ownership tree
 

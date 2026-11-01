@@ -1,10 +1,23 @@
 # Publication
 
 Publication requires both a passed [task review](reviews.md) and explicit consent
-for its exact publication plan. **The separate consent UX is not implemented yet:**
-`task run` retains committed reviewed output and stops with publication pending.
+for its exact publication plan. `task run` retains committed reviewed output and
+stops with publication pending. The interactive plan editor is not implemented;
+tooling can inspect the prepared plan and record an explicit typed response:
+
+```sh
+orpheus task show workflow op-123 --json
+orpheus task respond op-123 --interaction '<Pending.ID JSON>' \
+  --action authorize --evidence 'Operator accepts this exact displayed plan'
+orpheus task run op-123
+```
+
+Review the revision, passed review, content, flow, and destination in inspection
+before responding. `respond` records consent without publishing; continuation
+performs delivery. Pause, EOF, and cancellation never supply consent. A stale
+interaction is refused, and an unchanged authorized retry retains its grant.
 A review pass, `agent done`, or commit existence is not permission to push or close
-a task. There is no interim authorization flag or running-agent bypass.
+a task. There is no running-agent bypass.
 
 `orpheus task done <task-id>` is only a retry entry for an already authorized
 intent. It consumes committed input without creating another implementation

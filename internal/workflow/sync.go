@@ -135,6 +135,7 @@ type SyncConflictResolutionOptions struct {
 
 // SyncService reconciles backend task state from recorded pull request state.
 type SyncService struct {
+	Progress         func(Progress) error
 	Paths            state.Paths
 	Sources          []task.RepositorySource
 	BackendFactory   SyncBackendFactory
@@ -720,6 +721,9 @@ func (s SyncService) pollExistingPR(
 		PRURL:      observedURL,
 	}
 
+	if err := s.notify(target, status.State); err != nil {
+		return result, true, err
+	}
 	return s.handleExistingPRStatus(ctx, target, gitState, status, result, observedURL, updatePolicy)
 }
 
@@ -772,6 +776,11 @@ func (s SyncService) handleExistingPRStatus(
 			)
 		}
 		result.Task = observed
+		closedTarget := target
+		closedTarget.task = observed
+		if err := s.notify(closedTarget, status.State); err != nil {
+			return result, true, err
+		}
 		result.WorktreeCleanup = cleanClosedTaskWorktreeAfterClosure(ctx, s.Paths, target.source.Repository, target.task, target.backend, s.RunStore, s.CleanupGit)
 		return result, true, nil
 	case pullrequest.StateClosed:
@@ -1294,4 +1303,25 @@ func singleLine(value string) string {
 		return ""
 	}
 	return strings.Join(fields, " ")
+}
+
+func (s SyncService) notify(target syncTarget, prState pullrequest.State) error {
+	if s.Progress == nil {
+		return nil
+	}
+	snapshot, err := s.RunStore.Load(target.source.Repository.ID, target.task.ID)
+	if err != nil {
+		return err
+	}
+	view, err := InspectTask(target.task, snapshot)
+	if err != nil {
+		return err
+	}
+	if view.Publication != nil {
+		view.Publication.PRState = string(prState)
+		if prState == pullrequest.StateClosed {
+			view.Publication.PRState = "closed without merge"
+		}
+	}
+	return s.Progress(Progress{View: view, Resumed: view.Phase == PhaseExternalReview})
 }

@@ -27,7 +27,7 @@ func TestIntegrationWorkflowTaskReviewApproveFinalizesAndRecordsPassedAttempt(t 
 
 	stdout, stderr := fixture.run("x\na\n", "task", "run", "op-main")
 
-	is.Contains(stderr, "TASK  op-main — Ready for task done")
+	is.Contains(stderr, "op-main - Ready for task done")
 	is.Contains(stderr, "● LATEST COMPLETION\nReview approval")
 	is.Contains(stderr, "DESCRIPTION\nFinalize after approval.")
 	is.Contains(stderr, "TECHNICAL EXPLANATION\nTechnical explanation.")
@@ -36,7 +36,7 @@ func TestIntegrationWorkflowTaskReviewApproveFinalizesAndRecordsPassedAttempt(t 
 	is.Contains(stderr, "≡ GIT STATUS --SHORT")
 	is.Contains(stderr, "(clean)")
 	is.NotContains(stderr, "git diff --stat:")
-	is.Contains(stderr, "◆ REVIEW STEP · local-review (manual)")
+	is.Contains(stderr, "-- STEP: local-review (manual)")
 	is.Contains(stderr, "Review action [a=approve, b=block, v=advisory, t=task, q=pause]")
 	is.NotContains(stderr, "p=promote advisory")
 	is.Contains(stderr, "Choose approve, block, advisory, task, or pause.")
@@ -395,7 +395,7 @@ func TestIntegrationWorkflowTaskReviewCheckStartFailureMarksOperationalFailure(t
 
 	must.Error(err)
 	is.Empty(stdout)
-	is.Contains(stderr, "== Review step: missing (check) ==")
+	is.Contains(stderr, "-- STEP: missing (check) --")
 	is.ErrorContains(err, "start check step \"missing\"")
 
 	var state taskstate.TaskState
@@ -507,8 +507,8 @@ func TestIntegrationWorkflowTaskReviewInterruptedAutomatedBlockerRecoveryReusesR
 	is.Contains(recoveryStderr, "Resuming review attempt 1 at automated blocker decision for step \"strict\".")
 	is.Contains(recoveryStderr, "Finding 1:")
 	is.Contains(recoveryStderr, "Title: Check \"strict\" failed")
-	is.NotContains(recoveryStderr, "== Review step: strict (check) ==")
-	is.NotContains(recoveryStderr, "== Review step: default (check) ==")
+	is.Contains(recoveryStderr, "-- STEP: strict (check) --")
+	is.NotContains(recoveryStderr, "-- STEP: default (check) --")
 
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
@@ -557,7 +557,7 @@ func TestIntegrationWorkflowTaskReviewResumesManualWaitingAttempt(t *testing.T) 
 
 	is.Contains(stdout, "Review passed for op-main")
 	is.Contains(stderr, "Resuming review attempt 1 at manual step \"inspect\".")
-	is.Contains(stderr, "◆ REVIEW STEP · inspect (manual)")
+	is.Contains(stderr, "-- STEP: inspect (manual)")
 	is.NotContains(stdout, "check reran")
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
@@ -624,7 +624,7 @@ func TestIntegrationWorkflowTaskReviewPipelineOverridePrecedence(t *testing.T) {
 			is.Contains(stdout, "cli pipeline")
 			is.NotContains(stdout, "wrong pipeline")
 			is.Contains(stdout, "Review passed for op-main")
-			is.Contains(stderr, "== Review step: cli (check) ==")
+			is.Contains(stderr, "-- STEP: cli (check) --")
 
 			var state taskstate.TaskState
 			must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
@@ -734,7 +734,7 @@ func TestIntegrationWorkflowTaskReviewCheckDecisionsPersistDispositionAndContinu
 				assert.Contains(t, stdout, "Review passed for op-main")
 				assertUnconsentedPublication(t, state)
 				if test.manual {
-					assert.Contains(t, stderr, "◆ REVIEW STEP · approval (manual)")
+					assert.Contains(t, stderr, "-- STEP: approval (manual)")
 				}
 			}
 		})

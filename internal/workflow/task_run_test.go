@@ -112,7 +112,7 @@ func TestSelectTaskRunRoutePublicationAcceptanceAndClosureHaveSeparateOwners(t *
 				publication.Plan.Target = &work.DirectMergeTarget{}
 			}
 			item := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataPRURL: "https://example.test/pr/unrelated"}}
-			route := assertRoute(t, snapshot, item, TaskRunActionPublish)
+			route := assertRoute(t, snapshot, item, TaskRunActionAwaitDecision)
 			assert.Equal(t, 3, route.Owner.Phase)
 			require.NoError(t, snapshot.AuthorizePublication(0, work.PublicationRef{Phase: 3}, routeAt(10), "Operator consent for this exact plan"))
 			var accepted work.Acceptance

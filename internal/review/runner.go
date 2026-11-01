@@ -59,9 +59,11 @@ type PipelineRunOptions struct {
 	Stderr io.Writer
 	Stdin  io.Reader
 
-	InteractiveOutput bool
-	OutputWidth       int
-	OutputWidthFunc   func() (int, bool)
+	OpenOutput             func(rolling bool) StepOutput
+	StepStarted            func(Step) error
+	RecordManualResult     func(work.AttemptRef, ManualResult) error
+	RecordFindingDecisions func(work.AttemptRef, []AutomatedBlockerDecision) error
+	Report                 func(Notice, Step) error
 
 	AgentConfig     agent.Config
 	AgentLauncher   agentexec.Launcher
@@ -211,6 +213,9 @@ func executePipeline(opts PipelineRunOptions) (PipelineOutcome, error) {
 			return PipelineOutcome{}, err
 		}
 	}
+	if opts.Execution.kind == executionContinue {
+		startIndex++
+	}
 	resumeDecision := opts.Execution.ResumesAutomatedDecision()
 	for stepIndex := startIndex; stepIndex < len(opts.Pipeline.Steps); {
 		step := opts.Pipeline.Steps[stepIndex]
@@ -234,6 +239,9 @@ func executePipelineStep(opts PipelineRunOptions, step Step, resumeDecision bool
 	if resumeDecision {
 		// A paused decision resumes its existing findings before the step is rerun.
 		// Only an explicit restart executes the step again.
+		if err := notifyStepStarted(opts, step); err != nil {
+			return stepOutcome{}, err
+		}
 		return resumeAutomatedBlockerDecision(opts, step)
 	}
 	return runReadOnlyStep(opts, step)
@@ -344,11 +352,6 @@ func reviewStepAttrs(opts PipelineRunOptions, step Step) []slog.Attr {
 }
 
 func runStep(opts PipelineRunOptions, step Step, checkCandidate CandidateCheck) (stepOutcome, error) {
-	if step.Kind != KindManual {
-		if err := writeStepHeader(opts.Stderr, step); err != nil {
-			return stepOutcome{}, err
-		}
-	}
 	switch step.Kind {
 	case KindCheck:
 		env := stepEnvironment(opts, step.Name, agent.RenderBootstrapPrompt())
@@ -376,8 +379,11 @@ func runCheckStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome
 	if err != nil {
 		return stepOutcome{}, err
 	}
-	output := newStepOutput(opts, true)
-	exitCode, runErr := runStepCommandWithOutput(opts, step, env, output.stdout(), output.stderr())
+	if err := notifyReservedStep(opts, step, address); err != nil {
+		return stepOutcome{}, err
+	}
+	output := openStepOutput(opts, true)
+	exitCode, runErr := runStepCommandWithOutput(opts, step, env, output.Stdout, output.Stderr)
 	var exitErr interface{ ExitCode() int }
 	var findings []taskstate.ReviewFinding
 	if errors.As(runErr, &exitErr) {
@@ -385,14 +391,14 @@ func runCheckStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome
 	}
 	reviewAttempt, err := opts.Store.RecordCheckResult(address, exitCode, runErr, findings)
 	if err != nil {
-		output.finishExpanded()
+		output.finish(OutputExpanded)
 		return stepOutcome{}, err
 	}
 	if runErr == nil {
-		output.finishClear()
+		output.finish(OutputClear)
 		return stepOutcome{}, nil
 	}
-	output.finishExpanded()
+	output.finish(OutputExpanded)
 	if exitErr == nil {
 		return stepOutcome{}, fmt.Errorf("task run %s: start check step %q: %w", opts.TaskID, step.Name, runErr)
 	}
@@ -407,7 +413,7 @@ func runCheckStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome
 	if !blockerOutcome.blocked {
 		return stepOutcome{}, nil
 	}
-	_, writeErr := fmt.Fprintf(opts.Stderr, "Review blocked for %s by check %q.\n", opts.TaskID, step.Name)
+	writeErr := reportNotice(opts, NoticeBlocked, step)
 	return stepOutcome{status: taskstate.ReviewStatusBlocked, stop: true}, writeErr
 }
 
@@ -426,6 +432,9 @@ func runManualStep(opts PipelineRunOptions, step Step, env []string) (stepOutcom
 	owner := pending.Steps[len(pending.Steps)-1].Address
 	opts.Attempt = pending
 	opts.Attempt.Address = owner
+	if err := notifyStepStarted(opts, step); err != nil {
+		return stepOutcome{}, err
+	}
 	if opts.PauseBeforeManual {
 		return pauseManualStep(opts, step)
 	}
@@ -437,7 +446,7 @@ func runManualStep(opts PipelineRunOptions, step Step, env []string) (stepOutcom
 		))
 	}
 	if err := opts.RenderManualStep(step); err != nil {
-		return failManualStep(opts, step, fmt.Errorf("task run %s: %w", opts.TaskID, err))
+		return failManualStep(opts, step, fmt.Errorf("%w: task run %s: %w", ErrPresentationUnavailable, opts.TaskID, err))
 	}
 
 	prep, err := prepareManualStepPrompt(opts, step, env)
@@ -457,7 +466,10 @@ func runManualStep(opts PipelineRunOptions, step Step, env []string) (stepOutcom
 		HunkNotes: prep.hunkNotes,
 	})
 	if err != nil {
-		return failManualStep(opts, step, err)
+		if errors.Is(err, ErrManualInputUnavailable) || opts.Context.Err() != nil {
+			return manualWaitingStepOutcome()
+		}
+		return failManualStep(opts, step, fmt.Errorf("%w: %w", ErrPresentationUnavailable, err))
 	}
 	// Pausing leaves the existing assessment unanswered, retaining its findings
 	// and address. It is not an aborted or completed manual decision.
@@ -471,17 +483,8 @@ func runManualStep(opts PipelineRunOptions, step Step, env []string) (stepOutcom
 }
 
 func pauseManualStep(opts PipelineRunOptions, step Step) (stepOutcome, error) {
-	_, err := fmt.Fprintf(
-		opts.Stderr,
-		"Review for %s is waiting for manual step %q. Resume with `orpheus task run %s`.\n",
-		opts.TaskID,
-		step.Name,
-		opts.TaskID,
-	)
-	if err != nil {
-		return stepOutcome{}, err
-	}
-	return stepOutcome{status: taskstate.ReviewStatusWaitingForManual, stop: true}, nil
+	err := reportNotice(opts, NoticeManualPending, step)
+	return stepOutcome{status: taskstate.ReviewStatusWaitingForManual, stop: true}, err
 }
 
 type manualStepPreparation struct {
@@ -508,7 +511,7 @@ func prepareManualStepPrompt(
 }
 
 func failManualStep(opts PipelineRunOptions, step Step, err error) (stepOutcome, error) {
-	if errors.Is(err, ErrManualInputUnavailable) || opts.Context.Err() != nil {
+	if errors.Is(err, ErrManualInputUnavailable) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || opts.Context.Err() != nil {
 		return manualWaitingStepOutcome()
 	}
 	if resumeErr := resumeManualReviewStep(opts, step); resumeErr != nil {
@@ -538,7 +541,7 @@ func runConfirmedManualCommand(opts PipelineRunOptions, step Step, env []string)
 	}
 	confirmed, err := opts.ConfirmManualCommand(step)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("%w: %w", ErrPresentationUnavailable, err)
 	}
 	if !confirmed {
 		return nil, nil, nil
@@ -674,14 +677,6 @@ func captureHunkUserNotes(ctx context.Context, workdir string, logger *slog.Logg
 	return response.Comments, nil
 }
 
-func writeStepHeader(output io.Writer, step Step) error {
-	if output == nil {
-		return nil
-	}
-	_, err := fmt.Fprintf(output, "\n== Review step: %s (%s) ==\n", step.Name, step.Kind)
-	return err
-}
-
 func runAgentReviewStep(opts PipelineRunOptions, step Step, checkCandidate CandidateCheck) (stepOutcome, error) {
 	if opts.AgentLauncher == nil {
 		return stepOutcome{}, fmt.Errorf("task run %s: agent_review step %q requires an agent launcher", opts.TaskID, step.Name)
@@ -702,7 +697,10 @@ func runAgentReviewStep(opts PipelineRunOptions, step Step, checkCandidate Candi
 	if err != nil {
 		return stepOutcome{}, err
 	}
-	output := newStepOutput(opts, !profile.Interactive)
+	if err := notifyReservedStep(opts, step, execution.Address); err != nil {
+		return stepOutcome{}, err
+	}
+	output := openStepOutput(opts, !profile.Interactive)
 	result := launchAgentReview(opts, step, profile, command, execution, output)
 	runErr := result.Err
 	// Reject reviewer mutations before recording success or presenting blockers.
@@ -711,11 +709,11 @@ func runAgentReviewStep(opts PipelineRunOptions, step Step, checkCandidate Candi
 		runErr = errors.Join(runErr, mutationErr)
 	}
 	if err := finishAgentReviewExecution(opts, step, execution.Address, result, mutationErr); err != nil {
-		output.finishExpanded()
+		output.finish(OutputExpanded)
 		return stepOutcome{}, errors.Join(runErr, err)
 	}
 	if runErr != nil {
-		output.finishExpanded()
+		output.finish(OutputExpanded)
 		return stepOutcome{}, fmt.Errorf("task run %s: run agent_review step %q: %w", opts.TaskID, step.Name, runErr)
 	}
 	return finishAgentReviewStep(opts, step, output, initialFindingCount)
@@ -727,7 +725,7 @@ func launchAgentReview(
 	profile agent.Profile,
 	command agent.CommandSnapshot,
 	execution taskstate.AgentExecution,
-	output stepOutput,
+	output StepOutput,
 ) agent.ExecutionResult {
 	attrs := append(reviewCommandAttrs(opts, step),
 		slog.String("agent", command.AgentName),
@@ -738,7 +736,7 @@ func launchAgentReview(
 	if !profile.Interactive {
 		reviewerStdin = nil
 	}
-	launchOpts := agentexec.LaunchOptions{Dir: opts.Workdir, Env: stepEnvironment(opts, step.Name, command.Prompt), Stdin: reviewerStdin, Stdout: output.stdout(), Stderr: output.stderr()}
+	launchOpts := agentexec.LaunchOptions{Dir: opts.Workdir, Env: stepEnvironment(opts, step.Name, command.Prompt), Stdin: reviewerStdin, Stdout: output.Stdout, Stderr: output.Stderr}
 	launchOpts.Env = append(launchOpts.Env, ownerEnvironment(execution.Address)...)
 	launchOpts.OnStart = func(pid int) error {
 		if opts.RecordChildPID == nil {
@@ -864,17 +862,17 @@ func usageCaptureEnvironment(opts PipelineRunOptions) map[string]string {
 func finishAgentReviewStep(
 	opts PipelineRunOptions,
 	step Step,
-	output stepOutput,
+	output StepOutput,
 	initialFindingCount int,
 ) (stepOutcome, error) {
 	reviewAttempt, err := opts.Store.Load(opts.RepoID, opts.TaskID)
 	if err != nil {
-		output.finishExpanded()
+		output.finish(OutputExpanded)
 		return stepOutcome{}, fmt.Errorf("task run %s: load agent_review findings: %w", opts.TaskID, err)
 	}
 	latest, ok := taskstate.LatestReview(reviewAttempt)
 	if !ok || latest.Attempt != opts.Attempt.Attempt {
-		output.finishExpanded()
+		output.finish(OutputExpanded)
 		return stepOutcome{}, fmt.Errorf("task run %s: latest review attempt no longer matches attempt %d", opts.TaskID, opts.Attempt.Attempt)
 	}
 	blockers := automatedBlockersForStepSince(latest, step.Name, initialFindingCount)
@@ -886,7 +884,7 @@ func finishAgentReviewStep(
 		}
 	}
 	if len(blockers) > 0 {
-		output.finishExpanded()
+		output.finish(OutputExpanded)
 		blockerOutcome, err := reviewAutomatedBlockers(opts, step, blockers)
 		if err != nil {
 			return stepOutcome{}, err
@@ -895,15 +893,15 @@ func finishAgentReviewStep(
 			return blockerOutcome.stepOutcome(), nil
 		}
 		if blockerOutcome.blocked {
-			_, writeErr := fmt.Fprintf(opts.Stderr, "Review blocked for %s by agent_review %q.\n", opts.TaskID, step.Name)
+			writeErr := reportNotice(opts, NoticeBlocked, step)
 			return stepOutcome{status: taskstate.ReviewStatusBlocked, stop: true}, writeErr
 		}
 		return stepOutcome{}, nil
 	}
 	if hasStepFinding {
-		output.finishTail()
+		output.finish(OutputTail)
 	} else {
-		output.finishClear()
+		output.finish(OutputClear)
 	}
 	return stepOutcome{}, nil
 }
@@ -999,21 +997,26 @@ func reviewAutomatedBlockers(
 	if err != nil {
 		return automatedBlockerOutcome{}, err
 	}
+	if opts.Context.Err() != nil {
+		return automatedWaitingDecisionOutcome()
+	}
 	if opts.PromptAutomatedBlockers == nil {
 		blocked, err := interruptAutomatedBlockerDecision(opts, owner)
 		return automatedBlockerOutcome{blocked: blocked}, err
 	}
-	decisions := keepAutomatedBlockerDecisions(blockers)
 	prompted, err := opts.PromptAutomatedBlockers(AutomatedBlockerReview{
 		Step:     step,
 		Blockers: blockers,
 	})
 	if err != nil {
+		if opts.Context.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return automatedWaitingDecisionOutcome()
+		}
 		if errors.Is(err, ErrAutomatedBlockerInputUnavailable) {
 			blocked, interruptErr := interruptAutomatedBlockerDecision(opts, owner)
 			return automatedBlockerOutcome{blocked: blocked}, interruptErr
 		}
-		return automatedBlockerOutcome{}, fmt.Errorf("task run %s: review automated blockers: %w", opts.TaskID, err)
+		return automatedBlockerOutcome{}, fmt.Errorf("%w: task run %s: review automated blockers: %w", ErrPresentationUnavailable, opts.TaskID, err)
 	}
 	if action, ok, err := automatedBlockerControlAction(prompted); err != nil {
 		return automatedBlockerOutcome{}, fmt.Errorf("task run %s: review automated blockers: %w", opts.TaskID, err)
@@ -1029,14 +1032,13 @@ func reviewAutomatedBlockers(
 			if _, err := opts.Store.RecordAutomatedDecisionPause(owner, work.DecisionPaused); err != nil {
 				return automatedBlockerOutcome{}, fmt.Errorf("task run %s: pause automated blocker decision for step %q: %w", opts.TaskID, step.Name, err)
 			}
-			if _, err := fmt.Fprintf(opts.Stderr, "Automated blocker decisions for %s are paused; resume with `orpheus task run %s`.\n", opts.TaskID, opts.TaskID); err != nil {
+			if err := reportNotice(opts, NoticeDecisionPaused, step); err != nil {
 				return automatedBlockerOutcome{}, err
 			}
-			return automatedBlockerOutcome{pause: true}, nil
+			return automatedWaitingDecisionOutcome()
 		}
 	}
-	decisions = mergeAutomatedBlockerDecisions(decisions, prompted)
-	if err := applyAutomatedBlockerDecisions(opts, owner, decisions); err != nil {
+	if err := applyAutomatedBlockerDecisions(opts, owner, prompted); err != nil {
 		return automatedBlockerOutcome{}, err
 	}
 	blocked, err := currentReviewHasOpenBlockers(opts)
@@ -1061,40 +1063,14 @@ func interruptAutomatedBlockerDecision(opts PipelineRunOptions, address work.Att
 	if _, err := opts.Store.RecordAutomatedDecisionPause(address, work.DecisionInputUnavailable); err != nil {
 		return false, err
 	}
-	_, err := fmt.Fprintf(opts.Stderr, "Automated blocker decisions for %s were interrupted; run `orpheus task run %s` to continue.\n", opts.TaskID, opts.TaskID)
+	err := reportNotice(opts, NoticeDecisionInterrupted, Step{})
 	return true, err
 }
 
-func keepAutomatedBlockerDecisions(blockers []AutomatedBlocker) []AutomatedBlockerDecision {
-	decisions := make([]AutomatedBlockerDecision, 0, len(blockers))
-	for _, blocker := range blockers {
-		decisions = append(decisions, AutomatedBlockerDecision{
-			FindingIndex: blocker.Index,
-			Action:       AutomatedBlockerActionKeep,
-		})
-	}
-	return decisions
-}
-
-func mergeAutomatedBlockerDecisions(
-	defaults []AutomatedBlockerDecision,
-	overrides []AutomatedBlockerDecision,
-) []AutomatedBlockerDecision {
-	indexByFinding := make(map[int]int, len(defaults))
-	for index, decision := range defaults {
-		indexByFinding[decision.FindingIndex] = index
-	}
-	for _, override := range overrides {
-		index, ok := indexByFinding[override.FindingIndex]
-		if !ok {
-			continue
-		}
-		defaults[index] = override
-	}
-	return defaults
-}
-
 func applyAutomatedBlockerDecisions(opts PipelineRunOptions, actor work.AttemptRef, decisions []AutomatedBlockerDecision) error {
+	if opts.RecordFindingDecisions != nil {
+		return opts.RecordFindingDecisions(actor, decisions)
+	}
 	review, err := opts.Store.CurrentReviewAt(actor)
 	if err != nil {
 		return err
@@ -1313,10 +1289,17 @@ func currentStepAddress(opts PipelineRunOptions, name string) (work.AttemptRef, 
 }
 
 func recordManualDecision(opts PipelineRunOptions, owner work.AttemptRef, result ManualResult) error {
+	if opts.RecordManualResult != nil {
+		return opts.RecordManualResult(owner, result)
+	}
 	_, err := opts.Store.RecordManualDecision(owner, result.Status, result.Publication)
 	return err
 }
 
 func ownerEnvironment(ref work.AttemptRef) []string {
 	return agent.OwnerEnvironment(ref)
+}
+
+func automatedWaitingDecisionOutcome() (automatedBlockerOutcome, error) {
+	return automatedBlockerOutcome{pause: true}, nil
 }

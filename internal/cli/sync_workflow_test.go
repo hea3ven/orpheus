@@ -32,7 +32,7 @@ func TestIntegrationWorkflowTaskSyncPollsExistingPRURLWithoutPushOrMutation(t *t
 
 			stdout, stderr := f.run("", "task", "sync", item.ID)
 
-			assert.Empty(t, stderr)
+			assert.Contains(t, stderr, "EXTERNAL REVIEW")
 			assert.Contains(t, stdout, "Synced op-sync")
 			assert.Contains(t, stdout, "PR "+f.pr.url+" is still open for review")
 			assert.Equal(t, 1, f.pr.statusReads)
@@ -87,7 +87,7 @@ func TestIntegrationWorkflowTaskSyncRecordsConflictResolutionUsageTelemetry(t *t
 			}
 			stdout, stderr := f.run("", command...)
 
-			assert.Empty(t, stderr)
+			assert.Contains(t, stderr, "EXTERNAL REVIEW")
 			assert.Contains(t, stdout, "op-sync")
 			assert.Contains(t, stdout, "resolved merge conflicts with the configured agent")
 			assert.True(t, f.syncGit.resolved)
@@ -161,7 +161,7 @@ func TestIntegrationWorkflowTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR
 
 	stdout, stderr := f.run("", "task", "sync", item.ID)
 
-	assert.Empty(t, stderr)
+	assert.Contains(t, stderr, "EXTERNAL REVIEW")
 	assert.Contains(t, stdout, "Synced op-sync")
 	assert.Contains(t, stdout, "PR "+f.pr.url+" is merged")
 	assert.Contains(t, stdout, "Backend task was closed")
@@ -216,7 +216,11 @@ func TestIntegrationWorkflowTaskSyncExistingPRErrorsDoNotMutateBackendOrAudit(t 
 				assert.ErrorIs(t, err, f.pr.statusError)
 			}
 			assert.Empty(t, stdout)
-			assert.Empty(t, stderr)
+			if f.pr.statusError != nil {
+				assert.Empty(t, stderr)
+			} else {
+				assert.Contains(t, stderr, "EXTERNAL REVIEW")
+			}
 			assert.Equal(t, 1, f.pr.statusReads)
 			assert.Empty(t, f.syncGit.calls)
 			f.assertSyncUnchanged(before)

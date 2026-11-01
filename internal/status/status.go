@@ -86,6 +86,9 @@ const (
 	DetailReviewFailed                   DetailKind = "review_failed"
 	DetailReviewInterrupted              DetailKind = "review_interrupted"
 	DetailReviewPassed                   DetailKind = "review_passed"
+	DetailPublicationDecision            DetailKind = "publication_decision"
+	DetailPublicationAuthorized          DetailKind = "publication_authorized"
+	DetailFinalizationPending            DetailKind = "finalization_pending"
 	DetailReviewUnknownState             DetailKind = "review_unknown_state"
 	DetailNoRun                          DetailKind = "no_run"
 	DetailRunRunning                     DetailKind = "run_running"
@@ -146,6 +149,7 @@ type RunStateIndex map[string]taskstate.RunAttempt
 
 // LocalTaskState contains local Orpheus facts used by status projection.
 type LocalTaskState struct {
+	Workflow           *workflow.View
 	LatestRun          *taskstate.RunAttempt
 	Runs               []taskstate.RunAttempt
 	GitFacts           *taskstate.GitFacts
@@ -308,6 +312,12 @@ func classify(
 	}
 	if localState != nil && localState.ActiveSyncConflict != nil && localState.ActiveSyncConflict.Phase == taskstate.SyncConflictPhaseUnresolved {
 		return newPolicyResult(readinessAttention, "unresolved sync conflict recovery: "+localState.ActiveSyncConflict.Reason, Detail{Kind: DetailUnknownTaskStatus, State: "sync_conflict_recovery"})
+	}
+	if taskItem.Status == task.StatusOpen && latestRun != nil && (localState == nil || localState.Workflow == nil) {
+		return newPolicyResult(readinessAttention, openTaskRunHistoryDetail(*latestRun), runHistoryDetail(*latestRun))
+	}
+	if localState != nil && localState.Workflow != nil {
+		return classifyWorkflow(localState)
 	}
 	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
 		return newPolicyResult(
@@ -1031,5 +1041,40 @@ func (p *Projection) add(groupID GroupID, entry Entry) {
 			p.Groups[i].Entries = append(p.Groups[i].Entries, entry)
 			return
 		}
+	}
+}
+
+// classifyWorkflow uses controller-selected actions before task-wide metadata.
+// Retained historical PR URLs cannot hide a new local review or decision.
+func classifyWorkflow(local *LocalTaskState) policyResult {
+	view := local.Workflow
+	switch view.Next.Action {
+	case workflow.TaskRunActionNeedsAttention:
+		detail := Detail{Kind: DetailUnknownTaskStatus, State: "workflow"}
+		if local.LatestRun != nil {
+			detail = runHistoryDetail(*local.LatestRun)
+		}
+		return newPolicyResult(readinessAttention, view.Next.Advice, detail)
+	case workflow.TaskRunActionAwaitDecision:
+		return newPolicyResult(readinessReview, "publication decision pending; run task run", Detail{Kind: DetailPublicationDecision, State: string(view.Phase)})
+	case workflow.TaskRunActionPublish:
+		return newPolicyResult(readinessReview, "publication authorized; run task run", Detail{Kind: DetailPublicationAuthorized, State: string(view.Phase)})
+	case workflow.TaskRunActionRetryFinalization:
+		return newPolicyResult(readinessAttention, "delivery verified; retry task run for closure", Detail{Kind: DetailFinalizationPending})
+	case workflow.TaskRunActionOpenPR:
+		return newPolicyResult(readinessReview, view.Next.PRURL, Detail{Kind: DetailPullRequest, URL: view.Next.PRURL})
+	case workflow.TaskRunActionCompleted:
+		return newPolicyResult(readinessAttention, "finalization recorded but backend task is not closed", Detail{Kind: DetailFinalizedButOpen})
+	case workflow.TaskRunActionImplementationActive:
+		return classifyInProgress(local.LatestRun)
+	case workflow.TaskRunActionStartReview, workflow.TaskRunActionResumeReview, workflow.TaskRunActionReviewActive, workflow.TaskRunActionTargetedRepair:
+		if result, ok := classifyLatestReview(local.Runs, local.LatestReview); ok {
+			return result
+		}
+		return localReviewPolicyResult()
+	case workflow.TaskRunActionPreparePublication:
+		return classifyPassedReview()
+	default:
+		return classifyInProgress(local.LatestRun)
 	}
 }

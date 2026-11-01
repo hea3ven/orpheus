@@ -40,7 +40,7 @@ func TestIntegrationWorkflowTaskSyncAllClearsConflictThatDisappearsAfterPrefligh
 
 	stdout, stderr := f.run("", "task", "sync", "--all")
 
-	assert.Empty(t, stderr)
+	assert.Contains(t, stderr, "EXTERNAL REVIEW")
 	assert.Contains(t, stdout, "Open/in-review PRs (1):")
 	assert.Contains(t, stdout, "op-sync (alpha): PR "+f.pr.url+" is still open for review")
 	assert.Equal(t, 1, git.beginCalls)

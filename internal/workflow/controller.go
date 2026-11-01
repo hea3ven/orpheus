@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
 )
@@ -41,6 +42,7 @@ type AdvanceResult struct {
 	Delivery       *FinalizationResult
 	Implementation *ImplementationResult
 	Inspection     ImplementationRunInspection
+	View           View
 }
 
 // advanceInvocation carries invocation policy and presentation context, never an
@@ -71,7 +73,7 @@ func (s Controller) Advance(ctx context.Context, opts AdvanceOptions) (AdvanceRe
 	if err != nil {
 		return result, err
 	}
-	prepared, err := PrepareTaskRun(ctx, PrepareTaskRunOptions{Paths: s.Paths, Store: s.RunStore, RepoID: base.RepoID(), TaskID: base.TaskID(), Task: base.Task, Probe: s.ProcessProbe, Trigger: "task_run"})
+	prepared, err := s.prepareAdvance(ctx, base)
 	if err != nil {
 		return result, err
 	}
@@ -104,6 +106,11 @@ func (s Controller) Advance(ctx context.Context, opts AdvanceOptions) (AdvanceRe
 		}
 		stop, err := s.advancePhase(ctx, &invocation, view, route, &result)
 		if err != nil || stop {
+			current, viewErr := s.Inspect(ctx, opts.TaskID)
+			result.View = current
+			if err == nil {
+				err = viewErr
+			}
 			return result, err
 		}
 	}
@@ -144,13 +151,15 @@ func (s Controller) advancePhase(ctx context.Context, inv *advanceInvocation, vi
 		}
 		outcome := ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomePublicationPending, Context: current}
 		result.Review = &outcome
-		return true, nil
+		return true, s.notify(inv.base.RepoID(), inv.base.Task, false, nil)
 	case TaskRunActionPublish, TaskRunActionRetryFinalization:
 		delivered, next, err := s.advanceDeliveryPhase(ctx, FinalizeOptions{TaskID: inv.base.TaskID()}, &route)
 		result.Delivery = &delivered
 		return next == nil, err
-	case TaskRunActionImplementationActive, TaskRunActionReviewActive, TaskRunActionOpenPR, TaskRunActionCompleted:
-		return true, nil
+	case TaskRunActionNeedsAttention:
+		return true, errors.New(route.Advice)
+	case TaskRunActionAwaitDecision, TaskRunActionImplementationActive, TaskRunActionReviewActive, TaskRunActionOpenPR, TaskRunActionCompleted:
+		return true, s.notify(inv.base.RepoID(), inv.base.Task, true, nil)
 	default:
 		return true, fmt.Errorf("unsupported workflow action %q", route.Action)
 	}
@@ -173,4 +182,21 @@ func validateAdvanceOptions(taskID string, action TaskRunAction, opts AdvanceOpt
 		return fmt.Errorf("task run %s: --pipeline cannot affect the selected workflow path", taskID)
 	}
 	return nil
+}
+
+func (s Controller) prepareAdvance(ctx context.Context, base ReviewContext) (PreparedTaskRun, error) {
+	if base.Task.Status == task.StatusOpen {
+		snapshot, err := s.RunStore.Load(base.RepoID(), base.TaskID())
+		if err != nil {
+			return PreparedTaskRun{}, err
+		}
+		route, err := SelectTaskRunRoute(base.Task, snapshot)
+		if err != nil {
+			return PreparedTaskRun{}, err
+		}
+		if route.Action == TaskRunActionNeedsAttention {
+			return PreparedTaskRun{}, errors.New(route.Advice)
+		}
+	}
+	return PrepareTaskRun(ctx, PrepareTaskRunOptions{Paths: s.Paths, Store: s.RunStore, RepoID: base.RepoID(), TaskID: base.TaskID(), Task: base.Task, Probe: s.ProcessProbe, Trigger: "task_run"})
 }

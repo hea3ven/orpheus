@@ -10,6 +10,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/tasktarget"
+	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
 func TestProjectGroupsItemsByLocalM4Policy(t *testing.T) {
@@ -529,6 +530,45 @@ func TestProjectWithLocalTaskStatesClassifiesLatestReviewAttempts(t *testing.T) 
 			}
 			if tt.wantDetailPart != "" && !strings.Contains(entry.Detail, tt.wantDetailPart) {
 				t.Fatalf("detail = %q, want to contain %q", entry.Detail, tt.wantDetailPart)
+			}
+		})
+	}
+}
+
+func TestProjectUsesControllerActionsBeforeHistoricalPRAndReviewFacts(t *testing.T) {
+	for _, tc := range []struct {
+		action workflow.TaskRunAction
+		group  status.GroupID
+		detail status.DetailKind
+		text   string
+	}{
+		{workflow.TaskRunActionAwaitDecision, status.GroupInReview, status.DetailPublicationDecision, "publication decision pending"},
+		{workflow.TaskRunActionPublish, status.GroupInReview, status.DetailPublicationAuthorized, "publication authorized"},
+		{workflow.TaskRunActionRetryFinalization, status.GroupNeedsAttention, status.DetailFinalizationPending, "delivery verified"},
+		{workflow.TaskRunActionCompleted, status.GroupNeedsAttention, status.DetailFinalizedButOpen, "finalization recorded but backend task is not closed"},
+		{workflow.TaskRunActionOpenPR, status.GroupInReview, status.DetailPullRequest, "https://example.test/pr/current"},
+		{workflow.TaskRunActionImplementationActive, status.GroupWorking, status.DetailRunRunning, "run attempt 2 is running"},
+		{workflow.TaskRunActionNeedsAttention, status.GroupNeedsAttention, status.DetailOpenTaskRunHistory, "Workflow requires operator correction"},
+	} {
+		t.Run(string(tc.action), func(t *testing.T) {
+			item := task.Task{ID: "a-task", Status: task.StatusInProgress, IssueType: task.IssueTypeTask, Metadata: task.Metadata{task.MetadataPRURL: "https://example.test/pr/historical"}}
+			if tc.action == workflow.TaskRunActionNeedsAttention {
+				item.Status = task.StatusOpen
+			}
+			snapshot := task.SnapshotResult{Repositories: []task.RepositorySnapshot{{Repository: task.Repository{ID: "alpha"}, Tasks: []task.Task{item}}}}
+			run := taskstate.RunAttempt{Attempt: 2, Status: taskstate.RunStatusRunning}
+			historicalReview := reviewAttempt(1, taskstate.ReviewStatusWaitingForManual, nil)
+			locals := status.LocalTaskStateIndex{status.RunStateKey("alpha", item.ID): {LatestRun: &run, LatestReview: &historicalReview, Workflow: &workflow.View{Next: workflow.TaskRunRoute{Action: tc.action, PRURL: "https://example.test/pr/current", Advice: "Workflow requires operator correction"}}}}
+
+			projected := status.ProjectWithLocalTaskStates(snapshot, locals)
+
+			assertGroupTaskIDs(t, projected, tc.group, []string{item.ID})
+			entry := projectionEntryByTaskID(t, projected, item.ID)
+			if entry.SemanticDetail.Kind != tc.detail || !strings.Contains(entry.Detail, tc.text) {
+				t.Fatalf("entry = %+v, want %s with %q", entry, tc.detail, tc.text)
+			}
+			if strings.Contains(entry.Detail, "historical") {
+				t.Fatalf("controller action hidden by historical PR: %s", entry.Detail)
 			}
 		})
 	}

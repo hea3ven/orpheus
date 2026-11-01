@@ -126,8 +126,8 @@ func TestIntegrationWorkflowTaskReviewPassingCheckContinuesToManualStep(t *testi
 
 	is.Contains(stdout, "check stdout 1 unit")
 	is.Contains(stdout, "Review passed for op-main")
-	is.Contains(stderr, "== Review step: unit (check) ==")
-	is.Contains(stderr, "◆ REVIEW STEP · approval (manual)")
+	is.Contains(stderr, "-- STEP: unit (check) --")
+	is.Contains(stderr, "-- STEP: approval (manual)")
 	is.Contains(stderr, "check stderr review")
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
@@ -318,7 +318,7 @@ func TestIntegrationWorkflowTaskReviewNonZeroCheckRecordsBlockingFindingAndStops
 	stdout, stderr := fixture.run("", "task", "run", "--pipeline", "standard", "op-main")
 
 	is.Contains(stdout, "failing check output")
-	is.Contains(stderr, "== Review step: unit (check) ==")
+	is.Contains(stderr, "-- STEP: unit (check) --")
 	is.Contains(stderr, "Automated blocker decisions for op-main were interrupted")
 	is.Contains(stderr, "Review blocked for op-main by check \"unit\".")
 	is.NotContains(stderr, "Review action")

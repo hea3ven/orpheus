@@ -19,6 +19,7 @@ const (
 	executionFresh executionKind = iota + 1
 	executionResumeStep
 	executionResumeDecision
+	executionContinue
 )
 
 // ExecutionRequest selects exactly one execution alternative. Its zero value is
@@ -64,9 +65,23 @@ func ResumeExecution(pipeline Pipeline, paused taskstate.ReviewAttempt) (Executi
 	return request, nil
 }
 
+// ContinueExecution resumes after an externally answered step without rerunning
+// that assessment or manufacturing another attempt.
+func ContinueExecution(pipeline Pipeline, attempt taskstate.ReviewAttempt) (ExecutionRequest, error) {
+	if attempt.Status != taskstate.ReviewStatusRunning || len(attempt.Steps) == 0 {
+		return ExecutionRequest{}, fmt.Errorf("%w: no completed step to continue", ErrInvalidExecution)
+	}
+	last := attempt.Steps[len(attempt.Steps)-1]
+	request := ExecutionRequest{owner: last.Address, kind: executionContinue, attempt: attempt.Attempt, pipeline: attempt.Pipeline, step: last.Name}
+	if err := request.ValidateResume(pipeline, attempt); err != nil {
+		return ExecutionRequest{}, err
+	}
+	return request, nil
+}
+
 // Resumed reports whether the request continues a paused review.
 func (r ExecutionRequest) Resumed() bool {
-	return r.kind == executionResumeStep || r.kind == executionResumeDecision
+	return r.kind == executionResumeStep || r.kind == executionResumeDecision || r.kind == executionContinue
 }
 
 // ResumesAutomatedDecision reports whether to present existing automated findings.
@@ -80,6 +95,9 @@ func (r ExecutionRequest) ValidateResume(pipeline Pipeline, paused taskstate.Rev
 		return fmt.Errorf("%w: expected a resume request", ErrInvalidExecution)
 	}
 	want := taskstate.ReviewStatusWaitingForManual
+	if r.kind == executionContinue {
+		want = taskstate.ReviewStatusRunning
+	}
 	if r.ResumesAutomatedDecision() {
 		want = taskstate.ReviewStatusWaitingForAutomatedDecision
 	}
@@ -94,6 +112,9 @@ func (r ExecutionRequest) ValidateRunning(pipeline Pipeline, attempt taskstate.R
 	allowed := attempt.Status == taskstate.ReviewStatusRunning
 	if r.Resumed() {
 		waiting := taskstate.ReviewStatusWaitingForManual
+		if r.kind == executionContinue {
+			waiting = taskstate.ReviewStatusRunning
+		}
 		if r.ResumesAutomatedDecision() {
 			waiting = taskstate.ReviewStatusWaitingForAutomatedDecision
 		}
@@ -121,7 +142,7 @@ func (r ExecutionRequest) validateTarget(pipeline Pipeline, attempt taskstate.Re
 			return fmt.Errorf("%w: fresh execution requires a new attempt at step one", ErrInvalidExecution)
 		}
 		return nil
-	case executionResumeStep, executionResumeDecision:
+	case executionResumeStep, executionResumeDecision, executionContinue:
 		if len(attempt.Steps) == 0 || !r.owner.Equal(attempt.Steps[len(attempt.Steps)-1].Address) || r.owner.Step == nil || *r.owner.Step != len(attempt.Steps)-1 || r.owner.RepositoryID != attempt.Address.RepositoryID || r.owner.TaskID != attempt.Address.TaskID || r.owner.Workflow != attempt.Address.Workflow || r.owner.Phase != attempt.Address.Phase || r.owner.BranchSync != nil {
 			return fmt.Errorf("%w: resumed ownership address changed", ErrInvalidExecution)
 		}
@@ -136,6 +157,9 @@ func (r ExecutionRequest) validateTarget(pipeline Pipeline, attempt taskstate.Re
 		return fmt.Errorf("%w: %w", ErrInvalidExecution, err)
 	}
 	step := pipeline.Steps[index]
+	if r.kind == executionContinue {
+		return validateCompletedStep(attempt, step)
+	}
 	if r.kind == executionResumeStep {
 		if step.Kind != KindManual {
 			return fmt.Errorf("%w: pending step %q is not manual", ErrInvalidExecution, step.Name)
@@ -167,4 +191,18 @@ func validatePipelineExecution(opts PipelineRunOptions) error {
 		return fmt.Errorf("%w: latest review no longer matches attempt %d", ErrInvalidExecution, opts.Attempt.Attempt)
 	}
 	return opts.Execution.ValidateRunning(opts.Pipeline, latest)
+}
+
+func validateCompletedStep(attempt taskstate.ReviewAttempt, step Step) error {
+	last := attempt.Steps[len(attempt.Steps)-1]
+	if last.Kind != step.Kind {
+		return fmt.Errorf("%w: completed step kind changed", ErrInvalidExecution)
+	}
+	if last.Execution != nil && last.Execution.Status == taskstate.RunStatusRunning {
+		return fmt.Errorf("%w: reviewer is still active", ErrInvalidExecution)
+	}
+	if last.Kind == KindCheck && last.ExitCode == nil {
+		return fmt.Errorf("%w: check is still active", ErrInvalidExecution)
+	}
+	return nil
 }

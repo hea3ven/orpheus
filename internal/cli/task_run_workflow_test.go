@@ -3,6 +3,7 @@
 package cli_test
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -49,6 +50,9 @@ func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *t
 	is.Equal(taskstate.RunStatusSucceeded, run.Status)
 	is.NotNil(run.Execution.FinishedAt)
 	is.Contains(stdout, "Recorded completion for op-completion")
+	for _, fact := range []string{"PREPARATION", "WORKDIR", "orpheus/op-completion", "initial-commit", "IMPLEMENTATION", "implement (agent)", "REVIEW", "REVISION", "R1 | output-1", "Full task | initial-commit -> output-1", "local-review (manual)"} {
+		is.Contains(stderr, fact)
+	}
 	assertCompletionRecorded(t, completion, run.Completion)
 	is.Equal("output-1", run.Completion.Commit)
 	require.NotNil(t, finalState.Work)
@@ -101,6 +105,8 @@ func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *t
 	_, stderr, err = fixture.execute("task", "run", "op-completion")
 
 	require.NoError(t, err, "resume review; stderr: %s", stderr)
+	is.Contains(stderr, "REVIEW | resumed")
+	is.Contains(stderr, "Full task | initial-commit -> output-1")
 	resumed, resumedTask := fixture.loadFinalTask("op-completion")
 	require.Len(t, resumed.Reviews, 1, "resumption must retain the existing attempt")
 	is.Equal(finalState.Reviews[0].Attempt, resumed.Reviews[0].Attempt)
@@ -113,8 +119,18 @@ func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *t
 
 	// Model interruption after recording approval but before appending Publication.
 	// Continuation must consume that result, not repeat the review pipeline.
-	owner := resumed.Reviews[0].Steps[0].Address
-	_, err = fixture.taskStore.RecordManualDecision(owner, taskstate.ReviewStatusPassed, nil)
+	inspectJSON, _, err := fixture.execute("task", "show", "workflow", "op-completion", "--json")
+	require.NoError(t, err)
+	var view workflow.View
+	require.NoError(t, json.Unmarshal([]byte(inspectJSON), &view))
+	require.NotNil(t, view.Pending)
+	is.Equal(workflow.InteractionManualReview, view.Pending.ID.Kind)
+	is.Contains(view.Pending.Actions, workflow.DecisionApprove)
+	is.Equal(workflow.TaskRunActionResumeReview, view.Next.Action)
+	is.Equal(resumed.Reviews[0].Steps[0].Address, view.Pending.ID.Owner)
+	idJSON, err := json.Marshal(view.Pending.ID)
+	require.NoError(t, err)
+	_, _, err = fixture.execute("task", "respond", "op-completion", "--interaction", string(idJSON), "--action", "approve")
 	require.NoError(t, err)
 	stdout, stderr, err = fixture.execute("task", "run", "op-completion")
 	require.NoError(t, err, "publication continuation; stderr: %s", stderr)
@@ -123,16 +139,48 @@ func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *t
 	assertUnconsentedPublication(t, publication)
 	is.Len(publication.Work.Workflows[0].Phases, 4)
 	is.Len(publication.Reviews, 1)
+	inspectJSON, _, err = fixture.execute("task", "show", "workflow", "op-completion", "--json")
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal([]byte(inspectJSON), &view))
+	require.NotNil(t, view.Pending)
+	is.Equal(workflow.InteractionPublication, view.Pending.ID.Kind)
+	is.Equal(workflow.TaskRunActionAwaitDecision, view.Next.Action)
+	is.Equal("output-1", view.Revision.Code.Commit)
+	is.NotEmpty(view.Publication.Content)
+	is.False(view.Publication.Consented)
+	statusOutput, _, err = fixture.execute("status", "--no-truncate")
+	require.NoError(t, err)
+	is.Contains(statusOutput, "publication decision pending")
+	inspection, _, err = fixture.execute("task", "show", "op-completion")
+	require.NoError(t, err)
+	is.Contains(inspection, "Workflow next action: await_decision")
+	_, _, err = fixture.execute("task", "respond", "op-completion", "--interaction", string(idJSON), "--action", "approve")
+	require.ErrorIs(t, err, workflow.ErrStaleInteraction)
 	is.Equal(2, fixture.reviewPipelineRuns)
 	is.Len(fixture.git.captured, 1)
 	is.Equal(resumedTask, pendingTask)
 	_, _, err = fixture.execute("task", "run", "op-completion")
-	require.ErrorIs(t, err, workflow.ErrPublicationConsentRequired)
+	require.NoError(t, err)
 	unchanged, unchangedTask := fixture.loadFinalTask("op-completion")
 	is.Equal(publication, unchanged)
 	is.Equal(pendingTask, unchangedTask)
 	is.Equal(2, fixture.reviewPipelineRuns)
 	is.Len(fixture.git.captured, 1)
+	publicationID, err := json.Marshal(view.Pending.ID)
+	require.NoError(t, err)
+	responseOutput, _, err := fixture.execute("task", "respond", "op-completion", "--interaction", string(publicationID), "--action", "authorize", "--evidence", "Operator accepts this exact displayed plan")
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal([]byte(responseOutput), &view))
+	is.Nil(view.Pending)
+	is.Equal(workflow.TaskRunActionPublish, view.Next.Action)
+	statusOutput, _, err = fixture.execute("status", "--no-truncate")
+	require.NoError(t, err)
+	is.Contains(statusOutput, "publication authorized")
+	authorized, authorizedTask := fixture.loadFinalTask("op-completion")
+	is.Equal(pendingTask, authorizedTask, "consent alone cannot mutate the task source")
+	is.Len(authorized.Work.Workflows[0].Phases, 4)
+	is.Len(fixture.git.captured, 1)
+	is.Equal(2, fixture.reviewPipelineRuns)
 }
 
 func TestIntegrationWorkflowTaskRunAgentFailureRecordsFailedAttempt(t *testing.T) {
@@ -145,7 +193,7 @@ func TestIntegrationWorkflowTaskRunAgentFailureRecordsFailedAttempt(t *testing.T
 
 	is.ErrorIs(err, agentFailure)
 	is.Empty(stdout)
-	is.Contains(stderr, "== Agent run: implementation (run attempt 1) ==")
+	is.Contains(stderr, "-- STEP: implement (agent) --")
 	finalState, finalTask := fixture.loadFinalTask("op-failure")
 	require.Len(t, finalState.Runs, 1)
 	run := finalState.Runs[0]

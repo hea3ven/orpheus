@@ -24,11 +24,13 @@ const (
 	TaskRunActionResumeReview         TaskRunAction = "resume_review"
 	TaskRunActionPreparePublication   TaskRunAction = "prepare_publication"
 	TaskRunActionPublish              TaskRunAction = "publish"
+	TaskRunActionAwaitDecision        TaskRunAction = "await_decision"
 	TaskRunActionRetryFinalization    TaskRunAction = "retry_finalization"
 	TaskRunActionImplementationActive TaskRunAction = "implementation_active"
 	TaskRunActionReviewActive         TaskRunAction = "review_active"
 	TaskRunActionOpenPR               TaskRunAction = "open_pr"
 	TaskRunActionCompleted            TaskRunAction = "completed"
+	TaskRunActionNeedsAttention       TaskRunAction = "needs_attention"
 )
 
 // TaskRunRoute is the next action selected for task run.
@@ -37,6 +39,7 @@ type TaskRunRoute struct {
 	Attempt int
 	Step    string
 	PRURL   string
+	Advice  string
 	// Owner and Version are an invocation's expected state, not a persisted cursor.
 	Owner   *work.AttemptRef
 	Version work.StateVersion
@@ -150,6 +153,9 @@ func SelectTaskRunRoute(item task.Task, view taskstate.TaskState) (TaskRunRoute,
 }
 
 func phaseRoute(item task.Task, view taskstate.TaskState, w *work.Workflow) (TaskRunRoute, error) {
+	if advice := sourceWorkAdvice(item, view); advice != "" {
+		return TaskRunRoute{Action: TaskRunActionNeedsAttention, Advice: advice}, nil
+	}
 	switch p := w.LastPhase().(type) {
 	case nil, *work.PreparationPhase:
 		return TaskRunRoute{Action: TaskRunActionStartImplementation}, nil
@@ -177,6 +183,9 @@ func phaseRoute(item task.Task, view taskstate.TaskState, w *work.Workflow) (Tas
 		}
 		return selectReviewTaskRunRoute(view, latest, item.ID)
 	case *work.PublicationPhase:
+		if p.Consent == nil {
+			return TaskRunRoute{Action: TaskRunActionAwaitDecision}, nil
+		}
 		return TaskRunRoute{Action: TaskRunActionPublish}, nil
 	case *work.ExternalReviewPhase:
 		publication := w.Phases[p.Publication.Phase].(*work.PublicationPhase)
@@ -224,6 +233,13 @@ func selectReviewTaskRunRoute(
 		if taskstate.HasUnkeptAutomatedBlockingFindingsInState(state, latestReview) {
 			return TaskRunRoute{Action: TaskRunActionStartReview, Attempt: latestReview.Attempt}, nil
 		}
+		if len(latestReview.Steps) > 0 {
+			last := latestReview.Steps[len(latestReview.Steps)-1]
+			active := last.Execution != nil && last.Execution.Status == taskstate.RunStatusRunning || last.Kind == "check" && last.ExitCode == nil
+			if !active {
+				return TaskRunRoute{Action: TaskRunActionResumeReview, Attempt: latestReview.Attempt, Step: latestReview.Step}, nil
+			}
+		}
 		return TaskRunRoute{Action: TaskRunActionReviewActive, Attempt: latestReview.Attempt}, nil
 	case taskstate.ReviewStatusWaitingForManual:
 		return TaskRunRoute{
@@ -263,4 +279,19 @@ func selectReviewTaskRunRoute(
 
 func sameRouteOwner(expected, actual *work.AttemptRef) bool {
 	return expected == nil && actual == nil || expected != nil && actual != nil && expected.Equal(*actual)
+}
+
+func sourceWorkAdvice(item task.Task, view taskstate.TaskState) string {
+	if item.Status != task.StatusOpen {
+		return ""
+	}
+	run, ok := taskstate.LatestRun(view)
+	if !ok {
+		return ""
+	}
+	activity := string(run.Status)
+	if run.Status == taskstate.RunStatusRunning {
+		activity = "is running"
+	}
+	return fmt.Sprintf("backend status is open but local run attempt %d %s; inspect task state before continuing", run.Attempt, activity)
 }

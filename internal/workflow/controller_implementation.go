@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskbranch"
@@ -38,6 +39,9 @@ func (s Controller) advanceImplementation(ctx context.Context, inv *advanceInvoc
 	if err != nil {
 		return true, err
 	}
+	if err := s.notifyImplementation(inv.base); err != nil {
+		return true, prepared.dispatch.RecordExecution(prepared.start.Attempt.Address, agent.ExecutionResult{Err: err})
+	}
 	execution := s.AgentRunner.RunImplementation(ctx, ImplementationRun{RepoID: inv.base.RepoID(), TaskID: inv.base.TaskID(), Start: prepared.start, Prompt: prepared.prompt})
 	if err := prepared.dispatch.RecordExecution(prepared.start.Attempt.Address, execution); err != nil {
 		return true, err
@@ -57,6 +61,9 @@ func (s Controller) advanceImplementation(ctx context.Context, inv *advanceInvoc
 			result.Review = &outcome
 		}
 		return true, nil
+	}
+	if err := s.notify(inv.base.RepoID(), inv.base.Task, false, &StepView{Name: "record-revision", Kind: "system", Attempt: 1}); err != nil {
+		return true, err
 	}
 	_, err = s.outputService().Capture(ctx, prepared.start.Attempt.Address)
 	return false, err
@@ -176,4 +183,28 @@ func (s Controller) invocationReviewLimit(inv *advanceInvocation) (int, error) {
 		inv.reviewLimit = maximum
 	}
 	return inv.reviewLimit, nil
+}
+
+func (s Controller) notifyImplementation(base ReviewContext) error {
+	if s.Progress == nil {
+		return nil
+	}
+	snapshot, err := s.RunStore.Load(base.RepoID(), base.TaskID())
+	if err != nil {
+		return err
+	}
+	view, err := InspectTask(base.Task, snapshot)
+	if err != nil {
+		return err
+	}
+	if view.PhaseAttempt == 1 {
+		preparation := view
+		preparation.Phase = PhasePreparation
+		preparation.Owner = &work.AttemptRef{RepositoryID: base.RepoID(), TaskID: base.TaskID(), Workflow: view.Owner.Workflow, Phase: 0}
+		preparation.Step = &StepView{Name: "prepare-workdir", Kind: "system", Attempt: 1}
+		if err := s.Progress(Progress{View: preparation}); err != nil {
+			return fmt.Errorf("%w: %w", ErrProgressUnavailable, err)
+		}
+	}
+	return s.notify(base.RepoID(), base.Task, false, nil)
 }

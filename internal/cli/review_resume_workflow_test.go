@@ -3,9 +3,11 @@
 package cli_test
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -53,7 +55,23 @@ func TestIntegrationWorkflowTaskRunRepeatedAutomatedPausePreservesDecisionTarget
 				assert.Equal(t, paused, pausedAgain, "pausing the same decision must retain its execution and findings")
 				inputs := map[string]string{"keep": "k\n", "downgrade": "d\nNot blocking.\n", "waive": "w\nAccepted risk.\n", "restart": "r\n"}
 
-				fixture.run(inputs[action], "task", "run", "op-resume")
+				if action == "waive" {
+					inspection, _ := fixture.run("", "task", "show", "workflow", "op-resume", "--json")
+					var view workflow.View
+					require.NoError(t, json.Unmarshal([]byte(inspection), &view))
+					require.NotNil(t, view.Pending)
+					id, err := json.Marshal(view.Pending.ID)
+					require.NoError(t, err)
+					decisions, err := json.Marshal([]workflow.FindingDecision{{Ref: view.Pending.Findings[0].Ref, Action: workflow.DecisionWaive, Reason: "Accepted risk."}})
+					require.NoError(t, err)
+					checks, agents := len(fixture.checkCalls), len(fixture.agent.launches)
+					fixture.run("", "task", "respond", "op-resume", "--interaction", string(id), "--decisions", string(decisions))
+					assert.Len(t, fixture.checkCalls, checks, "responding records a decision without running later checks")
+					assert.Len(t, fixture.agent.launches, agents)
+					fixture.run("", "task", "run", "op-resume")
+				} else {
+					fixture.run(inputs[action], "task", "run", "op-resume")
+				}
 
 				latest := loadLatestReview(t, fixture, "op-resume")
 				assert.Equal(t, paused.Attempt, latest.Attempt)

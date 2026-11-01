@@ -166,6 +166,10 @@ func TestIntegrationWorkflowTaskRunRejectsOpenTaskWithLocalRunHistory(t *testing
 	assert.Len(t, fixture.git.setups, setups)
 	assert.Len(t, fixture.backend.markCalls, mutations)
 	assert.Len(t, fixture.agent.launches, 1)
+	inspection, _, err := fixture.execute("task", "show", "workflow", item.ID)
+	require.NoError(t, err)
+	assert.Contains(t, inspection, "Workflow next action: needs_attention")
+	assert.Contains(t, inspection, "backend status is open but local run attempt 1 succeeded")
 }
 
 func TestIntegrationWorkflowTaskRunRetriesAfterActivationIgnoreNewEligibilityProblems(t *testing.T) {

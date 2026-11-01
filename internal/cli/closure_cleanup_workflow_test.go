@@ -28,12 +28,12 @@ func TestIntegrationWorkflowClosureSucceedsWhenWorktreeRemovalFails(t *testing.T
 			f.publication.cleanupError = errors.New("fatal: contains modified or untracked files")
 
 			stdout, stderr := f.run("", "task", "done", taskID)
-			assert.Empty(t, stderr)
+			assert.Contains(t, stderr, "TASK")
 			if flow == publication.IntegrationFlowPullRequest {
 				assert.Empty(t, f.publication.cleanupAttempts, "open task cannot be cleaned up")
 				f.pr.state = pullrequest.StateMerged
 				stdout, stderr = f.run("", "task", "sync", taskID)
-				assert.Empty(t, stderr)
+				assert.Contains(t, stderr, "TASK")
 				assert.Contains(t, stdout, "Backend task was closed")
 			} else {
 				assert.Contains(t, stdout, "Finalized "+taskID)

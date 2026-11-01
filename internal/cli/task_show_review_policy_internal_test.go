@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
 
@@ -108,7 +109,7 @@ func assertReviewInspectionGuidance(t *testing.T, state taskstate.TaskState, sco
 	t.Helper()
 	var output bytes.Buffer
 
-	if err := renderTaskShowReview(&output, "alpha", "op-1", state, scope); err != nil {
+	if err := renderTaskShowReview(&output, "alpha", task.Task{ID: "op-1", Status: task.StatusInProgress}, state, scope); err != nil {
 		t.Fatal(err)
 	}
 

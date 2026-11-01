@@ -33,7 +33,7 @@ func TestIntegrationWorkflowTaskSyncAllPollsPRBoundaryTasks(t *testing.T) {
 
 	stdout, stderr := f.run("", "task", "sync", "--all")
 
-	assert.Empty(t, stderr)
+	assert.Contains(t, stderr, "EXTERNAL REVIEW")
 	assert.Contains(t, stdout, "Open/in-review PRs (1):")
 	assert.Contains(t, stdout, "op-open (alpha): PR "+f.pr.url+" is still open for review")
 	for _, omitted := range []string{"op-create", "op-epic", "op-closed"} {
@@ -72,7 +72,7 @@ func TestIntegrationWorkflowTaskSyncAllContinuesAfterGitAndConflictAgentFailures
 			stdout, stderr, err := f.runError("", "task", "sync", "--all")
 
 			require.ErrorContains(t, err, "task sync --all failed for 1 item")
-			assert.Empty(t, stderr)
+			assert.Contains(t, stderr, "EXTERNAL REVIEW")
 			assert.Contains(t, stdout, "repair unavailable")
 			assert.Contains(t, stdout, "op-z-current (alpha): PR")
 			assert.Contains(t, stdout, "Open/in-review PRs (1):")
@@ -154,7 +154,7 @@ func TestIntegrationWorkflowTaskSyncAllGroupsCrossRepoResultsAndReturnsNonZeroAf
 			stdout, stderr, err := f.runError("", "task", "sync", "--all")
 
 			require.ErrorContains(t, err, "task sync --all failed for 2 item")
-			assert.Empty(t, stderr)
+			assert.Contains(t, stderr, "EXTERNAL REVIEW")
 			for _, want := range []string{
 				"Open/in-review PRs (1):", "a-open (alpha): PR " + openURL + " is still open for review",
 				"Merged/closed tasks (1):", "b-merged (beta): PR " + mergedURL + " is merged; backend task was closed",

@@ -119,6 +119,10 @@ func (s Controller) applyDeliveryPhase(ctx context.Context, store WorkStore, bou
 	delivery := s.Delivery
 	result := FinalizationResult{Repository: source.Repository, Task: item, Branch: selected.prepared.TaskBranch}
 	var next *TaskRunRoute
+	var err error
+	if err := s.reportSnapshot(item, *snapshot, true); err != nil {
+		return result, nil, err
+	}
 	switch selected.workflow.LastPhase().(type) {
 	case *work.PublicationPhase:
 		if err := delivery.recordCommittedDelivery(ctx, store, boundary, source.Repository, item, snapshot, selected, &result); err != nil {
@@ -127,17 +131,16 @@ func (s Controller) applyDeliveryPhase(ctx context.Context, store WorkStore, bou
 		if err := s.enterDeliverySuccessor(ctx, store, backend, snapshot, selected, &result); err != nil {
 			return result, nil, err
 		}
-		if _, direct := selected.publication.Delivery.(*work.DirectDelivery); direct {
-			nextView, err := taskstate.Project(*snapshot)
-			if err != nil {
-				return result, nil, err
-			}
-			route, err := SelectTaskRunRoute(result.Task, nextView)
-			if err != nil {
-				return result, nil, err
-			}
-			next = &route
+		if err := s.reportSnapshot(item, *snapshot, false); err != nil {
+			return result, nil, err
 		}
+		if _, direct := selected.publication.Delivery.(*work.DirectDelivery); direct {
+			next, err = deliverySuccessorRoute(result.Task, *snapshot)
+			if err != nil {
+				return result, nil, err
+			}
+		}
+
 	case *work.FinalizationPhase:
 		if err := delivery.closeDeliveredTask(ctx, store, snapshot, selected.workflow, backend, item); err != nil {
 			return result, nil, err
@@ -165,4 +168,13 @@ func (s Controller) applyDeliveryPhase(ctx context.Context, store WorkStore, bou
 	}
 	result.Finalization = taskstate.FinalizationFacts(view)
 	return result, next, nil
+}
+
+func deliverySuccessorRoute(item task.Task, snapshot work.State) (*TaskRunRoute, error) {
+	view, err := taskstate.Project(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	route, err := SelectTaskRunRoute(item, view)
+	return &route, err
 }

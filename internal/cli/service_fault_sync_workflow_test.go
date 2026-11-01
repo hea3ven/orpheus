@@ -116,7 +116,7 @@ func TestIntegrationWorkflowTaskSyncConflictStopsExternalMutationsWhenObservatio
 
 			require.ErrorIs(t, err, errInjectedSyncReceiptWrite)
 			assert.Empty(t, stdout)
-			assert.Empty(t, stderr)
+			assert.Contains(t, stderr, "EXTERNAL REVIEW")
 			require.True(t, *consumed, "the intended actual observation must reach the atomic boundary")
 			assert.Equal(t, tc.begins, observed.begins)
 			assert.Len(t, f.agent.launches, tc.launches)
@@ -179,7 +179,7 @@ func TestIntegrationWorkflowTaskSyncConflictRecoversObservedPushWithoutRepeating
 
 	stdout, stderr := f.run("", "task", "sync", "op-sync")
 
-	assert.Empty(t, stderr)
+	assert.Contains(t, stderr, "EXTERNAL REVIEW")
 	assert.Contains(t, stdout, "is still open for review")
 	assert.Len(t, f.agent.launches, 1)
 	assert.Equal(t, 1, observed.commits)

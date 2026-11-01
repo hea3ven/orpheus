@@ -173,7 +173,7 @@ func TestIntegrationWorkflowTaskReviewFollowUpHeaderWriteFailureRecordsStartFail
 	command.SetArgs([]string{"task", "run", "op-followup-header"})
 	err = command.Execute()
 	must.Error(err)
-	is.ErrorContains(err, "render agent run header")
+	is.ErrorContains(err, "render workflow context")
 	is.ErrorContains(err, "agent header output unavailable")
 	is.Empty(fixture.agent.launches)
 	is.Zero(captures)
@@ -199,7 +199,7 @@ func TestIntegrationWorkflowTaskReviewFollowUpHeaderWriteFailureRecordsStartFail
 type failingReviewHeaderWriter struct{}
 
 func (failingReviewHeaderWriter) Write(p []byte) (int, error) {
-	if strings.Contains(string(p), "== Agent run:") {
+	if strings.Contains(string(p), "-- STEP: repair-findings (agent)") {
 		return 0, errors.New("agent header output unavailable")
 	}
 	return len(p), nil

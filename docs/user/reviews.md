@@ -3,8 +3,10 @@
 A task review is the approval boundary between implementation and
 [publication](publication.md). `orpheus task run <task-id>` advances the workflow:
 it runs the implementer, retains safely completed output, enters review, and handles
-repairs. A passed review prepares publication but does not authorize it. Publication
-remains gated pending the separate consent UX. Later invocations resume pending work.
+repairs. A passed review prepares publication but does not authorize it. Later
+invocations resume pending work. Separate phase and step headers show the task,
+retained revision, full-task scope, and configured step kind; a resumed invocation
+repeats this context without creating another attempt.
 
 ## Completion and approval
 
@@ -50,6 +52,36 @@ outside the candidate worktree.
 `task done` cannot bypass review, a live process, or missing publication consent.
 It only retries an existing explicitly authorized publication intent; it does not
 commit implementation changes or offer a temporary confirmation override.
+
+## Inspect and respond without a terminal
+
+```sh
+orpheus task show workflow op-123
+orpheus task show workflow op-123 --json
+```
+
+Inspection reports current facts, the controller's next action, and any pending
+interaction with its permitted actions. It never advances work or supplies consent.
+`status`, task inspection, and `task run` use the same continuation facts.
+
+For tooling, pass the exact `Pending.ID` JSON back to `task respond`:
+
+```sh
+orpheus task respond op-123 --interaction '<Pending.ID JSON>' --action approve
+```
+
+Use only an action listed for that interaction. Finding decisions use
+`--decisions '<JSON array>'` instead, with an explicit `Ref`, `Action`, and any
+required `Reason` for every pending finding. `Ref` contains explicit zero-based
+`Phase`, `Step`, and `Finding` indexes copied from inspection. `--action pause`
+leaves the decision unanswered. Responses record decisions only; run `task run`
+to continue afterward. An answered review step is not rerun.
+
+EOF, cancellation, and failed output preserve unanswered decisions. Stale IDs,
+wrong response kinds, missing indexes, and incomplete finding decisions are
+refused without applying unrelated decisions. Reinspect after changing findings
+or any other workflow state. Raw agent output is never parsed as operator consent.
+See [publication](publication.md) for exact-plan authorization.
 
 ## Configure a pipeline
 
