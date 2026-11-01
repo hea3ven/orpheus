@@ -424,6 +424,7 @@ func runManualStep(opts PipelineRunOptions, step Step, env []string) (stepOutcom
 		return stepOutcome{}, errors.New("manual entry has no owned step")
 	}
 	owner := pending.Steps[len(pending.Steps)-1].Address
+	opts.Attempt = pending
 	opts.Attempt.Address = owner
 	if opts.PauseBeforeManual {
 		return pauseManualStep(opts, step)
@@ -458,6 +459,11 @@ func runManualStep(opts PipelineRunOptions, step Step, env []string) (stepOutcom
 	if err != nil {
 		return failManualStep(opts, step, err)
 	}
+	// Pausing leaves the existing assessment unanswered, retaining its findings
+	// and address. It is not an aborted or completed manual decision.
+	if outcome.Status == taskstate.ReviewStatusWaitingForManual {
+		return stepOutcome{status: taskstate.ReviewStatusWaitingForManual, stop: true}, nil
+	}
 	if err := recordManualDecision(opts, owner, outcome); err != nil {
 		return stepOutcome{}, err
 	}
@@ -489,7 +495,7 @@ func prepareManualStepPrompt(
 	env []string,
 ) (manualStepPreparation, error) {
 	if step.Command == "" {
-		return manualStepPreparation{}, recordStep(opts, step, nil, nil)
+		return manualStepPreparation{}, nil
 	}
 	exitCode, hunkNotes, err := runConfirmedManualCommand(opts, step, env)
 	if err != nil {
@@ -539,8 +545,13 @@ func runConfirmedManualCommand(opts PipelineRunOptions, step Step, env []string)
 	}
 
 	exitCode, hunkNotes, err := runManualStepCommand(opts, step, env)
-	if recordErr := recordStep(opts, step, nil, exitCode); recordErr != nil {
-		return nil, nil, recordErr
+	// Reopening the inspection tool does not replace its pending assessment,
+	// findings, or original command observation. A failed rerun still fails the
+	// owning review below; a successful rerun is not new review evidence.
+	if opts.Attempt.Steps[len(opts.Attempt.Steps)-1].ExitCode == nil {
+		if recordErr := recordStep(opts, step, nil, exitCode); recordErr != nil {
+			return nil, nil, recordErr
+		}
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("task run %s: run manual step %q: %w", opts.TaskID, step.Name, err)

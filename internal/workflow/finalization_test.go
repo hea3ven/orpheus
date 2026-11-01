@@ -212,7 +212,7 @@ func (p *publicationPR) StatusByURL(_ context.Context, req pullrequest.StatusByU
 }
 
 type committedPublicationFixture struct {
-	service workflow.FinalizationService
+	service workflow.Controller
 	store   *publicationStore
 	backend *publicationBackend
 	git     *publicationGit
@@ -248,8 +248,8 @@ func newCommittedPublicationFixture(t *testing.T, authorized, direct, dedicated 
 	git := &publicationGit{source: gitmeta.Revision{Commit: "fixture-output", Tree: "fixture-tree", RetainedRef: "refs/orpheus/fixture-output"}, taskBranch: "orpheus/op-1", remote: make(map[string]gitmeta.Revision)}
 	pr := &publicationPR{url: "https://github.test/org/repo/pull/42"}
 	repo := task.Repository{ID: "alpha", Path: "/fixture/repo", DefaultBranch: "main", TaskIDPrefix: "op"}
-	service := workflow.FinalizationService{Paths: paths, Store: store, Git: git, PRProvider: pr, Sources: []task.RepositorySource{{Repository: repo}}, BackendFactory: func(task.RepositorySource) (workflow.FinalizationBackend, error) { return backend, nil }}
-	return &committedPublicationFixture{service: service, store: store, backend: backend, git: git, pr: pr}
+	delivery := workflow.FinalizationService{Paths: paths, Store: store, Git: git, PRProvider: pr, Sources: []task.RepositorySource{{Repository: repo}}, BackendFactory: func(task.RepositorySource) (workflow.FinalizationBackend, error) { return backend, nil }}
+	return &committedPublicationFixture{service: workflow.Controller{Delivery: delivery}, store: store, backend: backend, git: git, pr: pr}
 }
 func (f *committedPublicationFixture) snapshot(t *testing.T) work.State {
 	t.Helper()
@@ -286,7 +286,7 @@ func TestFinalizeRequiresExactPlanConsentAndSafeCommittedInputBeforeEffects(t *t
 			before := f.snapshot(t)
 			_, err = f.service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
 			require.Error(t, err)
-			if scenario == "no consent" || scenario == "live handoff" {
+			if scenario == "no consent" {
 				assert.ErrorIs(t, err, workflow.ErrPublicationConsentRequired)
 			}
 			assert.Equal(t, before, f.snapshot(t))
@@ -329,7 +329,7 @@ func TestFinalizeCommittedPRRecoversLostCreationAndPersistenceWithoutAnotherImpl
 			}
 			f.pr.statusErr = nil
 			f.backend.metadataErr = nil
-			f.service.Sources[0].Repository.DefaultBranch = "new-configured-default"
+			f.service.Delivery.Sources[0].Repository.DefaultBranch = "new-configured-default"
 
 			result, err := f.service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
 
@@ -422,6 +422,35 @@ func TestFinalizeDirectDeliveryKeepsLocalMergeRemoteDeliveryAndSourceClosureInde
 	}
 }
 
+func TestFinalizeRecordedPRAcceptanceRetriesClosureWithoutRepeatingPublication(t *testing.T) {
+	f := newCommittedPublicationFixture(t, true, false, false)
+	_, err := f.service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
+	require.NoError(t, err)
+	snapshot := f.snapshot(t)
+	w := &snapshot.Workflows[0]
+	require.IsType(t, &work.ExternalReviewPhase{}, w.LastPhase())
+	w.Phases = append(w.Phases, &work.FinalizationPhase{Acceptance: &work.PRAcceptance{ExternalReview: 4, ObservedAt: time.Now().UTC(), Evidence: "Provider independently observed merged"}})
+	_, err = f.store.Save(snapshot, snapshot.Version)
+	require.NoError(t, err)
+	f.backend.closureErr = errors.New("source unavailable")
+	_, err = f.service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
+	require.ErrorIs(t, err, f.backend.closureErr)
+	assert.Nil(t, sourceClosure(f.snapshot(t)))
+	assert.Len(t, f.git.pushes, 1)
+	assert.Len(t, f.pr.created, 1)
+
+	f.backend.closureErr = nil
+	result, err := f.service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
+	require.NoError(t, err)
+	assert.Equal(t, task.StatusClosed, result.Task.Status)
+	require.NotNil(t, result.Finalization.ClosedAt)
+	assert.Equal(t, []string{"op-1"}, f.backend.closed)
+	assert.Len(t, f.git.pushes, 1)
+	assert.Len(t, f.pr.created, 1)
+	assert.Zero(t, f.git.merges)
+	require.NotNil(t, sourceClosure(f.snapshot(t)))
+}
+
 func TestFinalizeInferenceUsesRecordedDirectoryAndRejectsAmbiguity(t *testing.T) {
 	f := newCommittedPublicationFixture(t, true, false, false)
 	// An irrelevant source item must not render a branch template or invent a
@@ -430,7 +459,7 @@ func TestFinalizeInferenceUsesRecordedDirectoryAndRejectsAmbiguity(t *testing.T)
 	// This semantic store owns only one document; use an explicit absence for the
 	// unrelated task instead of returning the other task's persisted authority.
 	boundary := publicationInferenceStore{WorkStore: f.store}
-	f.service.Store = boundary
+	f.service.Delivery.Store = boundary
 	result, err := f.service.Finalize(context.Background(), workflow.FinalizeOptions{CWD: "/fixture/repo/subdir"})
 	require.NoError(t, err)
 	assert.Equal(t, "op-1", result.Task.ID)

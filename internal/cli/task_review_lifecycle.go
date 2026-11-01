@@ -157,16 +157,17 @@ func (f taskReviewLifecycleFrontend) PromptFreshReviewBlockerDispositions(
 	return promptFreshReviewBlockerDispositions(f.command, f.reader, ctx.TaskID(), blockers)
 }
 
-type taskReviewLifecycleAgentRunner struct {
+type taskImplementationRunner struct {
 	command *cobra.Command
 	deps    *invocationDependencies
 	service workflow.DispatchService
 }
 
-func (r taskReviewLifecycleAgentRunner) RunReviewLifecycleAgent(
+func (r taskImplementationRunner) RunImplementation(
 	ctx context.Context,
-	run workflow.ReviewLifecycleAgentRun,
+	run workflow.ImplementationRun,
 ) agent.ExecutionResult {
+	logTaskRunLaunch(r.command, r.service.Logger, run.RepoID, run.TaskID, run.Start)
 	return executeTaskRunAgent(ctx, r.command, r.deps, r.service.Logger, r.service, run.RepoID, run.TaskID, run.Start, run.Prompt)
 }
 
@@ -187,31 +188,26 @@ func taskReviewStartFromWorkflow(ctx workflow.ReviewAttemptContext) taskReviewSt
 		},
 	}
 }
-
-func newTaskReviewLifecycleService(
+func newTaskWorkflowController(
 	command *cobra.Command,
 	deps *invocationDependencies,
 	taskCtx taskContext,
 	logger *slog.Logger,
 	reader *bufio.Reader,
-) workflow.ReviewLifecycleService {
-	paths := deps.paths
-	store := deps.taskStateStore
+) workflow.Controller {
 	effects := deps.reviewEffects
 	if effects.CaptureUsage == nil {
 		effects.CaptureUsage = deps.captureUsage
 	}
 	service := workflow.ReviewLifecycleService{
-		ReviewEffects:   effects,
-		ReviewStatus:    deps.reviewStatus,
-		FinalizationGit: deps.finalizationGit,
-		Paths:           paths,
-		Sources:         taskCtx.Sources,
-		RunStore:        store,
+		ReviewEffects: effects,
+		ReviewStatus:  deps.reviewStatus,
+		Paths:         deps.paths,
+		Sources:       taskCtx.Sources,
+		RunStore:      deps.taskStateStore,
 		BackendFactory: func(source taskmodel.RepositorySource) (workflow.ReviewLifecycleBackend, error) {
 			return invocationTaskBackend[workflow.ReviewLifecycleBackend](deps, source)
 		},
-		PRProvider:      newInvocationGHProvider(deps, logger),
 		CandidateGit:    deps.reviewCandidateGit,
 		DispatchGit:     deps.dispatchGit,
 		OutputGit:       deps.outputGit,
@@ -220,7 +216,10 @@ func newTaskReviewLifecycleService(
 		UsageCaptureEnv: deps.usageCaptureEnvironment(),
 		Logger:          logger,
 		ProcessProbe:    deps.processProbe,
-		PipelineRunner:  deps.reviewPipeline,
+		Parents: taskmodel.RelationshipReader{Sources: taskCtx.Sources, Factory: func(source taskmodel.RepositorySource) (taskmodel.Getter, error) {
+			return deps.taskBackendFactory(source)
+		}},
+		PipelineRunner: deps.reviewPipeline,
 		Frontend: &taskReviewLifecycleFrontend{
 			terminal: deps.terminal,
 			command:  command,
@@ -228,9 +227,10 @@ func newTaskReviewLifecycleService(
 			reader:   reader,
 		},
 	}
-	service.AgentRunner = taskReviewLifecycleAgentRunner{command: command, deps: deps, service: workflow.DispatchService{
-		Paths:           paths,
-		RunStore:        store,
+	service.AgentRunner = taskImplementationRunner{command: command, deps: deps, service: workflow.DispatchService{
+		Paths:           deps.paths,
+		RunStore:        deps.taskStateStore,
+		Logger:          logger,
 		UsageCaptureEnv: deps.usageCaptureEnvironment(),
 	}}
 	service.ResolveCommand = func(commandContext workflow.DispatchCommandContext, agentName string) (workflow.DispatchCommand, string, error) {
@@ -247,5 +247,5 @@ func newTaskReviewLifecycleService(
 		}
 		return workflow.NewDispatchCommand(commandSnapshot), prompt, nil
 	}
-	return service
+	return workflow.Controller{ReviewLifecycleService: service, Delivery: newTaskDeliveryService(deps, taskCtx, logger)}
 }

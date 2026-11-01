@@ -10,7 +10,7 @@ import (
 
 // Eligibility governs activation, not retries or review repairs. Keep policy in
 // the status projection so task run rejects the same problems shown in task views.
-func validateTaskRunInitialEligibility(command *cobra.Command, execution taskRunRouteExecution) error {
+func validateTaskRunInitialEligibility(command *cobra.Command, execution taskRunExecution) error {
 	if execution.task.Status != taskmodel.StatusOpen {
 		return nil
 	}

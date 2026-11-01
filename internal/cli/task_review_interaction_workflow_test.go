@@ -142,31 +142,48 @@ func TestIntegrationWorkflowTaskReviewPassingCheckContinuesToManualStep(t *testi
 	is.Empty(latest.Findings)
 }
 
-func TestIntegrationWorkflowTaskReviewConfirmedManualCommandRunsAndRecordsStep(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newReviewWorkflowFixture(t, "op-main", "Review manual command", "Confirm before command.")
-	paths := fixture.paths
-	manual := fixture.check("manual", checkResult{stdout: "manual command ran inspect\n"})
-	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "manual", "name": "inspect", "command": manual}}})
-
-	stdout, stderr := fixture.run("\na\n", "task", "run", "--pipeline", "standard", "op-main")
-
-	is.Contains(stdout, "manual command ran inspect")
-	is.Contains(stdout, "Review passed for op-main")
-	is.Contains(stderr, "◆ REVIEW STEP · inspect (manual)")
-	is.Contains(stderr, "Run manual command for step \"inspect\"")
-	is.Contains(stderr, "Review action")
-	var state taskstate.TaskState
-	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
-	latest, ok := taskstate.LatestReview(state)
-	must.True(ok)
-	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
-	must.Len(latest.Steps, 1)
-	is.Equal("manual", latest.Steps[0].Kind)
-	is.Equal("inspect", latest.Steps[0].Name)
-	must.NotNil(latest.Steps[0].ExitCode)
-	is.Equal(0, *latest.Steps[0].ExitCode)
+func TestIntegrationWorkflowTaskReviewConfirmedManualCommandRerunsAfterPauseWithoutReplacingAssessment(t *testing.T) {
+	for _, exitCode := range []int{0, 7} {
+		t.Run(fmt.Sprintf("rerun exit=%d", exitCode), func(t *testing.T) {
+			fixture := newReviewWorkflowFixture(t, "op-main", "Review manual command", "Confirm before command.")
+			manual := fixture.check("manual", checkResult{stdout: "manual command ran inspect\n"}, checkResult{code: exitCode, stdout: "manual command reopened inspect\n"})
+			fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "manual", "name": "inspect", "command": manual}}})
+			stdout, stderr := fixture.run("\nv\nNote\nRetain this observation.\nConsider later.\nq\n", "task", "run", "--pipeline", "standard", "op-main")
+			assert.Contains(t, stdout, "manual command ran inspect")
+			assert.Contains(t, stderr, "Run manual command for step \"inspect\"")
+			assert.Contains(t, stderr, "Review paused for op-main")
+			paused, _ := fixture.loadFinalTask("op-main")
+			require.Len(t, paused.Reviews[0].Steps, 1)
+			owner := paused.Reviews[0].Steps[0].Address
+			initial := paused.Work.Workflows[0].Phases[owner.Phase].(*work.ReviewPhase).Steps[0].(*work.ManualReviewStep)
+			require.NotNil(t, initial.CommandResult)
+			require.Len(t, initial.Findings, 1)
+			assert.Nil(t, initial.Decision)
+			stdout, stderr, err := fixture.runError("\na\n", "task", "run", "op-main")
+			assert.Contains(t, stdout, "manual command reopened inspect")
+			assert.Equal(t, []string{"manual", "manual"}, fixture.checkCalls)
+			final, item := fixture.loadFinalTask("op-main")
+			require.Len(t, final.Reviews, 1)
+			require.Len(t, final.Reviews[0].Steps, 1, "reopening a manual command is not a new assessment")
+			assert.True(t, owner.Equal(final.Reviews[0].Steps[0].Address))
+			current := final.Work.Workflows[0].Phases[owner.Phase].(*work.ReviewPhase).Steps[0].(*work.ManualReviewStep)
+			assert.Equal(t, initial.CommandResult, current.CommandResult, "the original observation is immutable")
+			assert.Equal(t, initial.Findings, current.Findings)
+			assert.Equal(t, 0, *final.Reviews[0].Steps[0].ExitCode)
+			if exitCode != 0 {
+				require.ErrorContains(t, err, "run manual step \"inspect\"")
+				assert.Equal(t, taskstate.ReviewStatusFailed, final.Reviews[0].Status)
+				assert.Nil(t, current.Decision)
+				assertTaskNotPublished(t, final, item)
+			} else {
+				require.NoError(t, err, "stderr: %s", stderr)
+				assert.Equal(t, taskstate.ReviewStatusPassed, final.Reviews[0].Status)
+				assertUnconsentedPublication(t, final)
+			}
+			assert.Empty(t, fixture.candidate.pushes)
+			assert.Empty(t, fixture.tasks.closed)
+		})
+	}
 }
 
 func TestIntegrationWorkflowTaskReviewImportsHunkNotesWithSelectedDisposition(t *testing.T) {

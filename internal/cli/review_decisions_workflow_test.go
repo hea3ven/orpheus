@@ -37,9 +37,9 @@ func TestIntegrationWorkflowTaskReviewApproveFinalizesAndRecordsPassedAttempt(t 
 	is.Contains(stderr, "(clean)")
 	is.NotContains(stderr, "git diff --stat:")
 	is.Contains(stderr, "◆ REVIEW STEP · local-review (manual)")
-	is.Contains(stderr, "Review action [a=approve, b=block, v=advisory, t=task, q=abort]")
+	is.Contains(stderr, "Review action [a=approve, b=block, v=advisory, t=task, q=pause]")
 	is.NotContains(stderr, "p=promote advisory")
-	is.Contains(stderr, "Choose approve, block, advisory, task, or abort.")
+	is.Contains(stderr, "Choose approve, block, advisory, task, or pause.")
 	is.Contains(stdout, "Review passed for op-main")
 
 	var state taskstate.TaskState
@@ -111,7 +111,7 @@ func TestIntegrationWorkflowTaskReviewBlockingFindingBlocksWithoutFinalizing(t *
 	stdout, stderr := fixture.run(input, "task", "run", "op-main")
 
 	is.Empty(stdout)
-	is.Contains(stderr, "Review action [f=finish/block, b=block, v=advisory, t=task, q=abort]")
+	is.Contains(stderr, "Review action [f=finish/block, b=block, v=advisory, t=task, q=pause]")
 	is.Contains(stderr, "Review blocked for op-main.")
 	is.NotEqual(headBefore, fixture.candidate.head)
 	is.Equal("output-1", fixture.candidate.head)
@@ -242,25 +242,44 @@ func TestIntegrationWorkflowTaskReviewCanAbortWhenSeparateTaskCreationFails(t *t
 	is.Empty(fixture.candidate.pushes)
 }
 
-func TestIntegrationWorkflowTaskReviewAbortDoesNotFinalize(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newReviewWorkflowFixture(t, "op-main", "Review abort", "Do not finalize.")
-	paths := fixture.paths
-	headBefore := fixture.candidate.head
+func TestIntegrationWorkflowTaskReviewQuitPausesAndResumeRepairsBeforePublication(t *testing.T) {
+	fixture := newReviewWorkflowFixture(t, "op-main", "Review pause", "Resume the same assessment and repair its findings.")
+	first := fixture.check("scope", checkResult{}, checkResult{})
+	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "check", "name": "scope", "command": first}, {"kind": "manual", "name": "approval"}}})
+	fixture.completingRepairs("recorder", 1, false)
+	stdout, stderr := fixture.run("b\nBug\nMust fix\nPatch it\nq\n", "task", "run", "op-main")
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, "Review paused for op-main")
+	paused, item := fixture.loadFinalTask("op-main")
+	require.Len(t, paused.Reviews, 1)
+	require.Equal(t, taskstate.ReviewStatusWaitingForManual, paused.Reviews[0].Status)
+	require.Len(t, paused.Reviews[0].Steps, 2)
+	require.Len(t, paused.Reviews[0].Findings, 1)
+	owner := paused.Reviews[0].Steps[1].Address
+	manual := paused.Work.Workflows[0].Phases[owner.Phase].(*work.ReviewPhase).Steps[*owner.Step].(*work.ManualReviewStep)
+	assert.Nil(t, manual.Decision)
+	assert.Empty(t, fixture.agent.launches)
+	assert.Equal(t, []string{"scope"}, fixture.checkCalls)
+	assertTaskNotPublished(t, paused, item)
 
-	stdout, stderr := fixture.run("q\n", "task", "run", "op-main")
-
-	is.Empty(stdout)
-	is.Contains(stderr, "Review aborted for op-main.")
-	is.NotEqual(headBefore, fixture.candidate.head)
-	is.Equal("output-1", fixture.candidate.head)
-	var state taskstate.TaskState
-	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
-	latest, ok := taskstate.LatestReview(state)
-	must.True(ok)
-	is.Equal(taskstate.ReviewStatusAborted, latest.Status)
-	is.Empty(taskstate.FinalizationFacts(state).Commit)
+	stdout, stderr = fixture.run("f\na\n", "task", "run", "op-main")
+	assert.Contains(t, stdout, "Review passed for op-main")
+	assert.Contains(t, stderr, "Resuming review attempt 1 at manual step \"approval\"")
+	assert.NotContains(t, stderr, "Existing blocking findings")
+	final, item := fixture.loadFinalTask("op-main")
+	require.Len(t, final.Runs, 2)
+	require.Len(t, final.Reviews, 2)
+	assert.Equal(t, paused.Reviews[0].StartedAt, final.Reviews[0].StartedAt)
+	assert.True(t, owner.Equal(final.Reviews[0].Steps[1].Address))
+	assert.IsType(t, &work.RequestedChanges{}, final.Work.Workflows[0].Phases[owner.Phase].(*work.ReviewPhase).Steps[*owner.Step].(*work.ManualReviewStep).Decision)
+	assert.Equal(t, []int{0}, final.Runs[1].ReviewFollowUp.FindingIndexes)
+	assert.Equal(t, 2, final.Reviews[0].Findings[0].TargetedByRunAttempt)
+	assert.Equal(t, []string{"scope", "scope"}, fixture.checkCalls, "resumption skips completed scope check; repair starts a fresh pipeline")
+	assert.Len(t, fixture.agent.launches, 1)
+	assert.Equal(t, taskmodel.StatusInProgress, item.Status)
+	assertUnconsentedPublication(t, final)
+	assert.Empty(t, fixture.candidate.pushes)
+	assert.Empty(t, fixture.tasks.closed)
 }
 
 func TestIntegrationWorkflowTaskReviewManualInputLossReplaysRecordedFindings(t *testing.T) {
@@ -302,7 +321,7 @@ func TestIntegrationWorkflowTaskReviewManualInputLossReplaysRecordedFindings(t *
 	is.Contains(stderr, "▲ RECORDED FINDINGS FOR THIS STEP")
 	is.Contains(stderr, "Finding 1 · local-review · advisory\nExisting note")
 	is.Contains(stderr, "Finding 2 · local-review · blocking\nExisting blocker")
-	is.Contains(stderr, "Review action [f=finish/block, b=block, v=advisory, t=task, q=abort]")
+	is.Contains(stderr, "Review action [f=finish/block, b=block, v=advisory, t=task, q=pause]")
 	is.Contains(stderr, "Review blocked for op-main.")
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))

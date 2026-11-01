@@ -10,6 +10,7 @@ import (
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -109,6 +110,29 @@ func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *t
 	is.Len(fixture.git.captured, 1, "review resumption must not create another implementation revision")
 	assertWaitingForManualReview(t, resumed)
 	assertTaskNotPublished(t, resumed, resumedTask)
+
+	// Model interruption after recording approval but before appending Publication.
+	// Continuation must consume that result, not repeat the review pipeline.
+	owner := resumed.Reviews[0].Steps[0].Address
+	_, err = fixture.taskStore.RecordManualDecision(owner, taskstate.ReviewStatusPassed, nil)
+	require.NoError(t, err)
+	stdout, stderr, err = fixture.execute("task", "run", "op-completion")
+	require.NoError(t, err, "publication continuation; stderr: %s", stderr)
+	is.Contains(stdout, "publication awaits explicit authorization")
+	publication, pendingTask := fixture.loadFinalTask("op-completion")
+	assertUnconsentedPublication(t, publication)
+	is.Len(publication.Work.Workflows[0].Phases, 4)
+	is.Len(publication.Reviews, 1)
+	is.Equal(2, fixture.reviewPipelineRuns)
+	is.Len(fixture.git.captured, 1)
+	is.Equal(resumedTask, pendingTask)
+	_, _, err = fixture.execute("task", "run", "op-completion")
+	require.ErrorIs(t, err, workflow.ErrPublicationConsentRequired)
+	unchanged, unchangedTask := fixture.loadFinalTask("op-completion")
+	is.Equal(publication, unchanged)
+	is.Equal(pendingTask, unchangedTask)
+	is.Equal(2, fixture.reviewPipelineRuns)
+	is.Len(fixture.git.captured, 1)
 }
 
 func TestIntegrationWorkflowTaskRunAgentFailureRecordsFailedAttempt(t *testing.T) {

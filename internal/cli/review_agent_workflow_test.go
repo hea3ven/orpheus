@@ -202,7 +202,7 @@ func TestIntegrationWorkflowTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollo
 	is.Contains(stderr, "Finding 2 · ai-review · blocking\nSecond generated advisory")
 	is.Contains(stderr, "DESCRIPTION\nThe review agent found an issue that needs attention.")
 	is.Contains(stderr, "SUGGESTED ACTION\nAddress it before publishing.")
-	is.Contains(stderr, "Review action [f=finish/block, b=block, p=review advisories, v=advisory, t=task, q=abort]")
+	is.Contains(stderr, "Review action [f=finish/block, b=block, p=review advisories, v=advisory, t=task, q=pause]")
 	is.NotContains(stderr, "Finding 3 · approval · advisory\nManual advisory")
 	is.Contains(stderr, "Review blocked for op-main.")
 	is.NotEqual(headBefore, fixture.candidate.head)

@@ -364,11 +364,6 @@ func unsafeContextCases() []struct {
 			wantError: "task op-1 is closed",
 		},
 		{
-			name:      "task already has pull request URL",
-			mutate:    mutateTaskWithPRURL,
-			wantError: "already has a pull request URL recorded",
-		},
-		{
 			name:      "metadata mismatch",
 			mutate:    mutateMetadataMismatch,
 			wantError: "inconsistent Orpheus metadata",
@@ -404,16 +399,6 @@ func mutateClosedTask(
 	_ *string,
 ) {
 	taskItem.Status = taskmodel.StatusClosed
-}
-
-func mutateTaskWithPRURL(
-	_ *activeContextFixture,
-	_ string,
-	taskItem *taskmodel.Task,
-	_ map[string]string,
-	_ *string,
-) {
-	taskItem.Metadata[taskmodel.MetadataPRURL] = "https://example.test/pr/1"
 }
 
 func mutateMetadataMismatch(
@@ -834,7 +819,9 @@ func TestActiveContextResolverSeparatesRequiredAndAdvisoryFollowUpFindings(t *te
 	saveContextHistory(t, fixture, history)
 	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{0}, AdvisoryFindingIndexes: []int{1, 2}}})
 	require.NoError(t, err)
-	resolver := fixture.resolver(fixture.worktreeTask("op-1", directory), worktreeEnv("op-1", directory), directory)
+	item := fixture.worktreeTask("op-1", directory)
+	item.Metadata[taskmodel.MetadataPRURL] = "https://example.test/pr/existing"
+	resolver := fixture.resolver(item, worktreeEnv("op-1", directory), directory)
 
 	resolved, err := resolver.Resolve(context.Background())
 

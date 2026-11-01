@@ -9,10 +9,11 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/work"
 )
 
 // TaskRunAction identifies the next workflow transition selected from persisted
-// task state. The CLI owns presentation and flag validation; this package owns
+// task state. The CLI owns presentation; the controller owns flag validation and
 // the state transition selection.
 type TaskRunAction string
 
@@ -21,6 +22,8 @@ const (
 	TaskRunActionTargetedRepair       TaskRunAction = "targeted_repair"
 	TaskRunActionStartReview          TaskRunAction = "start_review"
 	TaskRunActionResumeReview         TaskRunAction = "resume_review"
+	TaskRunActionPreparePublication   TaskRunAction = "prepare_publication"
+	TaskRunActionPublish              TaskRunAction = "publish"
 	TaskRunActionRetryFinalization    TaskRunAction = "retry_finalization"
 	TaskRunActionImplementationActive TaskRunAction = "implementation_active"
 	TaskRunActionReviewActive         TaskRunAction = "review_active"
@@ -34,6 +37,9 @@ type TaskRunRoute struct {
 	Attempt int
 	Step    string
 	PRURL   string
+	// Owner and Version are an invocation's expected state, not a persisted cursor.
+	Owner   *work.AttemptRef
+	Version work.StateVersion
 }
 
 // TaskRunRecoveryStore supplies both attached-process recovery transitions
@@ -103,62 +109,109 @@ func PrepareTaskRun(ctx context.Context, opts PrepareTaskRunOptions) (PreparedTa
 	return PreparedTaskRun{State: taskState, Inspection: inspection, ReviewInspection: reviewInspection, Route: route}, nil
 }
 
-// SelectTaskRunRoute maps the persisted implement-review-fix-finalize state to
-// exactly one safe next action. It deliberately does not perform any mutation.
-func SelectTaskRunRoute(taskItem task.Task, state taskstate.TaskState) (TaskRunRoute, error) {
-	if taskItem.Status == task.StatusClosed {
-		return TaskRunRoute{}, fmt.Errorf("task %s is closed", taskItem.ID)
+// SelectTaskRunRoute derives legal work from the last typed occurrence. Source
+// metadata can describe an unowned PR, but cannot override controller-owned work.
+func SelectTaskRunRoute(item task.Task, view taskstate.TaskState) (TaskRunRoute, error) {
+	if item.Status == task.StatusClosed {
+		return TaskRunRoute{}, fmt.Errorf("task %s is closed", item.ID)
 	}
-
-	finalization := taskstate.FinalizationFacts(state)
-	if finalization.ClosedAt != nil {
-		return TaskRunRoute{Action: TaskRunActionCompleted}, nil
-	}
-
-	metadata := taskItem.OrpheusMetadata()
-	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
-		return TaskRunRoute{Action: TaskRunActionOpenPR, PRURL: strings.TrimSpace(metadata.PRURL)}, nil
-	}
-
-	latestReview, hasReview := taskstate.LatestReview(state)
-	if active, ok := taskstate.ActiveRun(state); ok {
-		return TaskRunRoute{Action: TaskRunActionImplementationActive, Attempt: active.Attempt}, nil
-	}
-	latestRun, hasRun := taskstate.LatestRun(state)
-	if hasRun && hasReview && latestRun.Address.Workflow == latestReview.Address.Workflow && latestRun.Address.Phase > latestReview.Address.Phase {
-		if latestRun.Status == taskstate.RunStatusFailed || latestRun.Status == taskstate.RunStatusInterrupted || latestRun.Completion == nil {
-			action := TaskRunActionStartImplementation
-			if latestRun.ReviewFollowUp != nil {
-				action = TaskRunActionTargetedRepair
-			}
-			return TaskRunRoute{Action: action}, nil
+	if view.Work == nil || len(view.Work.Workflows) == 0 {
+		var version work.StateVersion
+		if view.Work != nil {
+			version = view.Work.Version
 		}
-		return TaskRunRoute{Action: TaskRunActionStartReview}, nil
+		metadata := item.OrpheusMetadata()
+		if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
+			return TaskRunRoute{Action: TaskRunActionOpenPR, PRURL: strings.TrimSpace(metadata.PRURL), Version: version}, nil
+		}
+		return TaskRunRoute{Action: TaskRunActionStartImplementation, Version: version}, nil
 	}
-	if hasReview && latestReview.Status == taskstate.ReviewStatusPassed {
-		return TaskRunRoute{Action: TaskRunActionRetryFinalization, Attempt: latestReview.Attempt}, nil
+	snapshot := view.Work
+	canonical, err := taskstate.Project(*snapshot)
+	if err != nil {
+		return TaskRunRoute{}, err
 	}
+	w := &snapshot.Workflows[len(snapshot.Workflows)-1]
+	route, err := phaseRoute(item, canonical, w)
+	route.Version = snapshot.Version
+	if len(w.Phases) > 0 {
+		owner := work.AttemptRef{RepositoryID: snapshot.RepositoryID, TaskID: snapshot.TaskID, Workflow: len(snapshot.Workflows) - 1, Phase: len(w.Phases) - 1}
+		if p, ok := w.LastPhase().(*work.ReviewPhase); ok && len(p.Steps) > 0 {
+			index := len(p.Steps) - 1
+			owner.Step = &index
+		}
+		if p, ok := w.LastPhase().(*work.ExternalReviewPhase); ok && len(p.BranchSyncs) > 0 {
+			index := len(p.BranchSyncs) - 1
+			owner.BranchSync = &index
+		}
+		route.Owner = &owner
+	}
+	return route, err
+}
 
-	if !hasRun {
+func phaseRoute(item task.Task, view taskstate.TaskState, w *work.Workflow) (TaskRunRoute, error) {
+	switch p := w.LastPhase().(type) {
+	case nil, *work.PreparationPhase:
 		return TaskRunRoute{Action: TaskRunActionStartImplementation}, nil
-	}
-	if latestRun.Status == taskstate.RunStatusFailed || latestRun.Status == taskstate.RunStatusInterrupted || latestRun.Completion == nil {
+	case *work.ImplementationPhase:
+		run, ok := taskstate.LatestRun(view)
+		if !ok {
+			return TaskRunRoute{}, errors.New("implementation projection is missing its phase owner")
+		}
+		if _, running := p.Execution.Process.(*work.RunningProcess); running {
+			return TaskRunRoute{Action: TaskRunActionImplementationActive, Attempt: run.Attempt}, nil
+		}
+		exit, observed := p.Execution.Process.(*work.ExitedProcess)
+		if observed && exit.Code != nil && *exit.Code == 0 && p.Completion != nil {
+			return TaskRunRoute{Action: TaskRunActionStartReview}, nil
+		}
 		action := TaskRunActionStartImplementation
-		if latestRun.ReviewFollowUp != nil {
+		if len(p.TargetFindings) > 0 {
 			action = TaskRunActionTargetedRepair
 		}
 		return TaskRunRoute{Action: action}, nil
+	case *work.ReviewPhase:
+		latest, ok := taskstate.LatestReview(view)
+		if !ok {
+			return TaskRunRoute{}, errors.New("review projection is missing its phase owner")
+		}
+		return selectReviewTaskRunRoute(view, latest, item.ID)
+	case *work.PublicationPhase:
+		return TaskRunRoute{Action: TaskRunActionPublish}, nil
+	case *work.ExternalReviewPhase:
+		publication := w.Phases[p.Publication.Phase].(*work.PublicationPhase)
+		delivery := publication.Delivery.(*work.PullRequestDelivery)
+		return TaskRunRoute{Action: TaskRunActionOpenPR, PRURL: delivery.PullRequest.URL}, nil
+	case *work.FinalizationPhase:
+		if p.Closure != nil {
+			return TaskRunRoute{Action: TaskRunActionCompleted}, nil
+		}
+		return TaskRunRoute{Action: TaskRunActionRetryFinalization}, nil
+	default:
+		return TaskRunRoute{}, errors.New("unsupported workflow phase")
 	}
+}
 
-	if !hasReview {
-		return TaskRunRoute{Action: TaskRunActionStartReview}, nil
+// CheckExpectedRoute refuses a stale invocation before reserving work. It is
+// called under mutation protection; attached child callbacks use their own exact
+// attempt addresses and do not need to retain this pre-reservation version.
+func CheckExpectedRoute(expected *TaskRunRoute, item task.Task, view taskstate.TaskState) error {
+	if expected == nil {
+		return nil
 	}
-	return selectReviewTaskRunRoute(state, latestRun, latestReview, taskItem.ID)
+	actual, err := SelectTaskRunRoute(item, view)
+	if err != nil {
+		return err
+	}
+	sameOwner := sameRouteOwner(expected.Owner, actual.Owner)
+	if !sameOwner || expected.Version != actual.Version || expected.Action != actual.Action {
+		return errors.New("workflow advancement is stale; inspect current work before retrying")
+	}
+	return nil
 }
 
 func selectReviewTaskRunRoute(
 	state taskstate.TaskState,
-	latestRun taskstate.RunAttempt,
 	latestReview taskstate.ReviewAttempt,
 	taskID string,
 ) (TaskRunRoute, error) {
@@ -185,12 +238,6 @@ func selectReviewTaskRunRoute(
 			Step:    latestReview.Step,
 		}, nil
 	case taskstate.ReviewStatusBlocked:
-		if latestRun.ReviewFollowUp != nil &&
-			latestRun.ReviewFollowUp.ReviewAttempt == latestReview.Attempt &&
-			completedHandoffStatus(latestRun.Status) &&
-			latestRun.Completion != nil {
-			return TaskRunRoute{Action: TaskRunActionStartReview, Attempt: latestReview.Attempt}, nil
-		}
 		if latestReview.AutomatedBlockerDecisionInterrupted ||
 			taskstate.HasUnkeptAutomatedBlockingFindingsInState(state, latestReview) {
 			return TaskRunRoute{Action: TaskRunActionStartReview, Attempt: latestReview.Attempt}, nil
@@ -203,7 +250,7 @@ func selectReviewTaskRunRoute(
 	case taskstate.ReviewStatusAborted, taskstate.ReviewStatusFailed:
 		return TaskRunRoute{Action: TaskRunActionStartReview, Attempt: latestReview.Attempt}, nil
 	case taskstate.ReviewStatusPassed:
-		return TaskRunRoute{Action: TaskRunActionRetryFinalization, Attempt: latestReview.Attempt}, nil
+		return TaskRunRoute{Action: TaskRunActionPreparePublication, Attempt: latestReview.Attempt}, nil
 	default:
 		return TaskRunRoute{}, fmt.Errorf(
 			"latest review attempt %d for task %s has unsupported status %q",
@@ -212,4 +259,8 @@ func selectReviewTaskRunRoute(
 			latestReview.Status,
 		)
 	}
+}
+
+func sameRouteOwner(expected, actual *work.AttemptRef) bool {
+	return expected == nil && actual == nil || expected != nil && actual != nil && expected.Equal(*actual)
 }

@@ -762,11 +762,6 @@ func validateRepositorySource(repo registry.Repo, source taskmodel.RepositorySou
 }
 
 func validateContextTaskStatus(taskItem taskmodel.Task) error {
-	metadata := taskItem.OrpheusMetadata()
-	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
-		return fmt.Errorf("task %s already has a pull request URL recorded", taskItem.ID)
-	}
-
 	switch taskItem.Status {
 	case taskmodel.StatusInProgress:
 		return nil

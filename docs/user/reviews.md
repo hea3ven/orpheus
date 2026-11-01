@@ -31,8 +31,15 @@ Review evaluates the retained commit, never a moving HEAD or dirty candidate;
 reviewer context includes the full-task baseline and repair-delta endpoints.
 
 Without configuration, Orpheus uses a single manual `local-review` step. The
-command stays attached for the operator to approve, record findings, or abort.
-Manual commands, when configured, run after confirmation. Review steps are
+command stays attached for the operator to approve, record findings, or pause.
+`q` pauses the current assessment, retaining its step and findings without making
+a decision. The next `task run` resumes that same assessment without rerunning
+completed checks. Finishing it with required changes dispatches repair in that
+invocation when the repair budget permits; no extra invocation is needed.
+Manual commands, when configured, run after confirmation and may run again when
+the assessment is resumed. Reopening the command keeps the same assessment and
+its recorded findings; a failed rerun stops review rather than granting approval.
+Review steps are
 read-only: changing HEAD or its branch attachment, index entries, tracked or
 untracked file contents, symlinks, or file modes is an operational failure.
 Orpheus restores and verifies the pre-step checkout and index where possible,
@@ -122,7 +129,7 @@ stops. A new `task run` grants a fresh budget. Restarting a step does not consum
 that budget or rerun earlier passed steps. Repairs and explicit step restarts
 use the same configured reviewer selection.
 
-Resume paused decisions, waiting manual steps, or aborted reviews with:
+Resume paused decisions or waiting manual steps with:
 
 ```sh
 orpheus task run op-123

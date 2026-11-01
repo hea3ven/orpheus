@@ -45,6 +45,15 @@ func (s ReviewLifecycleService) inspectReviewCandidate(ctx context.Context, revi
 	if err != nil {
 		return fmt.Errorf("load task state: %w", err)
 	}
+	if reviewCtx.owner != nil {
+		current, err := SelectTaskRunRoute(reviewCtx.Task, snapshot)
+		if err != nil {
+			return err
+		}
+		if !sameRouteOwner(reviewCtx.owner, current.Owner) {
+			return fmt.Errorf("review advancement is stale; current work changed")
+		}
+	}
 	run, ok := taskstate.LatestRun(snapshot)
 	if !ok || snapshot.Work == nil {
 		return fmt.Errorf("review requires a workflow-owned implementation")
