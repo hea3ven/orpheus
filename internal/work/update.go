@@ -269,6 +269,10 @@ func (g *changeGuard) step(before, after ReviewStep, active bool) {
 		g.report(before.Report, next.Report, active && running(&before.Execution))
 	case *ManualReviewStep:
 		next := after.(*ManualReviewStep)
+		g.prefix(before.CommandInterruptions, next.CommandInterruptions, "manual command interruptions")
+		if !active || before.Decision != nil {
+			g.same(len(before.CommandInterruptions), len(next.CommandInterruptions), "answered manual command interruptions")
+		}
 		g.findings(before.Findings, next.Findings)
 		if active && before.Decision == nil {
 			g.assigned(before.CommandResult, next.CommandResult, "manual command result")

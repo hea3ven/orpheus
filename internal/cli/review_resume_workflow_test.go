@@ -68,6 +68,13 @@ func TestIntegrationWorkflowTaskRunRepeatedAutomatedPausePreservesDecisionTarget
 					fixture.run("", "task", "respond", "op-resume", "--interaction", string(id), "--decisions", string(decisions))
 					assert.Len(t, fixture.checkCalls, checks, "responding records a decision without running later checks")
 					assert.Len(t, fixture.agent.launches, agents)
+					inspection, _ = fixture.run("", "task", "show", "workflow", "op-resume", "--json")
+					require.NoError(t, json.Unmarshal([]byte(inspection), &view))
+					assert.Nil(t, view.Pending)
+					assert.Equal(t, workflow.TaskRunActionResumeReview, view.Next.Action)
+					statusOutput, _ := fixture.run("", "status", "--no-truncate")
+					assert.Contains(t, statusOutput, "review continuation ready; run task run")
+					assert.NotContains(t, statusOutput, "review running")
 					fixture.run("", "task", "run", "op-resume")
 				} else {
 					fixture.run(inputs[action], "task", "run", "op-resume")

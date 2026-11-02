@@ -147,3 +147,25 @@ func TestLocalVerificationIsExplicitAndLaterAuthoritativeReversalWins(t *testing
 	require.NoError(t, history.Validate())
 	require.Equal(t, work.FindingUnresolved, owner.LatestLocalVerification(finding).Resolution, "a failed latest process cannot revive an older positive claim")
 }
+
+func TestManualCommandInterruptionsRequireObservedExitAndAssessmentOrdering(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*work.ManualReviewStep)
+		want   string
+	}{
+		{"missing native exit", func(step *work.ManualReviewStep) { step.CommandInterruptions[0].Code = nil }, "manual command requires explicit exit code"},
+		{"interruption before review", func(step *work.ManualReviewStep) { step.CommandInterruptions[0].At = at(19) }, "manual command interruption predates review entry"},
+		{"approval before interrupted exit", func(step *work.ManualReviewStep) { step.Decision = &work.ApprovedReview{At: at(23)} }, "manual assessment predates its command result"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshot := interruptedManualState(t)
+			require.NoError(t, snapshot.Validate())
+			step := snapshot.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[2].(*work.ManualReviewStep)
+
+			tc.change(step)
+
+			require.ErrorContains(t, snapshot.Validate(), tc.want)
+		})
+	}
+}

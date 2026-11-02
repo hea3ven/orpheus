@@ -54,5 +54,15 @@ func manualStepTime(step *ManualReviewStep) time.Time {
 			return decision.At
 		}
 	}
-	return manualCommandTime(step.CommandResult)
+	return manualCommandBoundary(step)
+}
+
+func manualCommandBoundary(step *ManualReviewStep) time.Time {
+	at := manualCommandTime(step.CommandResult)
+	for _, interruption := range step.CommandInterruptions {
+		if interruption.At.After(at) {
+			at = interruption.At
+		}
+	}
+	return at
 }

@@ -58,8 +58,7 @@ func (v *validator) review(p *ReviewPhase) {
 		at := stepTime(step)
 		v.check(at.IsZero() || !at.Before(p.StartedAt), "review attempt result predates review entry")
 		if manual, ok := step.(*ManualReviewStep); ok && manual != nil {
-			commandAt := manualCommandTime(manual.CommandResult)
-			v.check(commandAt.IsZero() || !commandAt.Before(p.StartedAt), "manual command result predates review entry")
+			v.manualCommandEntry(manual, p.StartedAt)
 		}
 		for _, verification := range stepVerifications(step) {
 			v.verification(p.Scope.Output, verification)
@@ -153,7 +152,10 @@ func (v *validator) manualStep(step *ManualReviewStep, tail bool) {
 	failedCommand := manualCommandFailed(step.CommandResult)
 	v.check(step.Decision != nil || failedCommand || tail, "unanswered manual assessment must belong to the last review attempt in the last phase")
 	v.manualCommand(step.CommandResult)
-	commandAt := manualCommandTime(step.CommandResult)
+	for i := range step.CommandInterruptions {
+		v.manualCommand(&step.CommandInterruptions[i])
+	}
+	commandAt := manualCommandBoundary(step)
 	v.check(commandAt.IsZero() || !stepTime(step).Before(commandAt), "manual assessment predates its command result")
 	for _, finding := range step.Findings {
 		v.finding(finding)
@@ -237,5 +239,13 @@ func (v *validator) manualTarget(ref FindingRef) {
 	v.check(err == nil, "manual requested-change target: %v", err)
 	if finding != nil {
 		v.finding(*finding)
+	}
+}
+
+func (v *validator) manualCommandEntry(step *ManualReviewStep, enteredAt time.Time) {
+	commandAt := manualCommandTime(step.CommandResult)
+	v.check(commandAt.IsZero() || !commandAt.Before(enteredAt), "manual command result predates review entry")
+	for _, interruption := range step.CommandInterruptions {
+		v.check(!interruption.At.Before(enteredAt), "manual command interruption predates review entry")
 	}
 }

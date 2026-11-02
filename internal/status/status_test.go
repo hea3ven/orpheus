@@ -542,6 +542,7 @@ func TestProjectUsesControllerActionsBeforeHistoricalPRAndReviewFacts(t *testing
 		detail status.DetailKind
 		text   string
 	}{
+		{workflow.TaskRunActionResumeReview, status.GroupInReview, status.DetailReviewContinuation, "review continuation ready; run task run"},
 		{workflow.TaskRunActionAwaitDecision, status.GroupInReview, status.DetailPublicationDecision, "publication decision pending"},
 		{workflow.TaskRunActionPublish, status.GroupInReview, status.DetailPublicationAuthorized, "publication authorized"},
 		{workflow.TaskRunActionRetryFinalization, status.GroupNeedsAttention, status.DetailFinalizationPending, "delivery verified"},

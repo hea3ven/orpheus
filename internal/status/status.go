@@ -75,6 +75,7 @@ const (
 	DetailPullRequest                    DetailKind = "pull_request"
 	DetailLocalReview                    DetailKind = "local_review"
 	DetailReviewRunning                  DetailKind = "review_running"
+	DetailReviewContinuation             DetailKind = "review_continuation"
 	DetailReviewManualStep               DetailKind = "review_manual_step"
 	DetailReviewDecisionLost             DetailKind = "review_decision_lost"
 	DetailReviewDecisionRequired         DetailKind = "review_decision_required"
@@ -1048,6 +1049,9 @@ func (p *Projection) add(groupID GroupID, entry Entry) {
 // Retained historical PR URLs cannot hide a new local review or decision.
 func classifyWorkflow(local *LocalTaskState) policyResult {
 	view := local.Workflow
+	if view.Next.Action == workflow.TaskRunActionResumeReview && view.Pending == nil {
+		return newPolicyResult(readinessReview, "review continuation ready; run task run", Detail{Kind: DetailReviewContinuation, Step: view.Next.Step})
+	}
 	switch view.Next.Action {
 	case workflow.TaskRunActionNeedsAttention:
 		detail := Detail{Kind: DetailUnknownTaskStatus, State: "workflow"}

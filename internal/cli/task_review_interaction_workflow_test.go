@@ -3,15 +3,19 @@
 package cli_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/agent"
+	"github.com/hea3ven/orpheus/internal/cli"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -303,6 +307,101 @@ func TestIntegrationWorkflowTaskReviewManualCommandEOFConfirmationHandlesUnavail
 			is.Equal("inspect", latest.Steps[0].Name)
 			is.Nil(latest.Steps[0].ExitCode, "a declined or unavailable command cannot invent a native process outcome")
 			is.Empty(taskstate.FinalizationFacts(state).Commit)
+		})
+	}
+	for _, test := range []struct {
+		name string
+		code int
+	}{{"canceled after command launch", -1}, {"failure races cancellation", 42}} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newReviewWorkflowFixture(t, "op-main", "Review cancellation", "Resume the interrupted assessment.")
+			prior := fixture.check("prior", checkResult{})
+			manual := fixture.check("manual")
+			fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "check", "name": "prior", "command": prior}, {"kind": "manual", "name": "inspect", "command": manual}}})
+			started := make(chan struct{})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			fixture.options.Dependencies.ReviewEffects.RunCommand = func(opts review.CommandOptions) (*int, error) {
+				if opts.Step.Name != "inspect" {
+					return fixture.runCheck(opts)
+				}
+				fixture.checkCalls = append(fixture.checkCalls, opts.Step.Command)
+				close(started)
+				<-opts.Context.Done()
+				code := test.code
+				if code >= 0 {
+					return &code, checkExit(code)
+				}
+				return &code, opts.Context.Err()
+			}
+			command := cli.NewRootCommandWithOptions(fixture.options)
+			command.SetIn(strings.NewReader("\n"))
+			var stdout, stderr bytes.Buffer
+			command.SetOut(&stdout)
+			command.SetErr(&stderr)
+			command.SetArgs([]string{"task", "run", "op-main"})
+			done := make(chan error, 1)
+			go func() { done <- command.ExecuteContext(ctx) }()
+			select {
+			case <-started:
+				cancel()
+			case <-time.After(5 * time.Second):
+				t.Fatal("manual command did not launch")
+			}
+			select {
+			case err := <-done:
+				if test.code >= 0 {
+					require.ErrorIs(t, err, checkExit(test.code))
+				} else {
+					require.NoError(t, err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("canceled manual command did not return")
+			}
+
+			paused := loadLatestReview(t, fixture, "op-main")
+			persisted, _ := fixture.loadFinalTask("op-main")
+			step := persisted.Work.Workflows[paused.Address.Workflow].Phases[paused.Address.Phase].(*work.ReviewPhase).Steps[1].(*work.ManualReviewStep)
+			if test.code >= 0 {
+				assert.Equal(t, taskstate.ReviewStatusFailed, paused.Status)
+				require.IsType(t, &work.ExitedProcess{}, step.CommandResult)
+				assert.Equal(t, 42, *step.CommandResult.(*work.ExitedProcess).Code)
+				assert.Empty(t, step.CommandInterruptions, "cancellation must not reclassify a genuine command failure")
+				return
+			}
+			assert.Nil(t, step.CommandResult, "an interruption is not a successful or failed assessment command result")
+			require.Len(t, step.CommandInterruptions, 1)
+			require.NotNil(t, step.CommandInterruptions[0].Code)
+			assert.Equal(t, -1, *step.CommandInterruptions[0].Code)
+			assert.False(t, step.CommandInterruptions[0].At.IsZero())
+			require.Equal(t, taskstate.ReviewStatusWaitingForManual, paused.Status)
+			require.Len(t, paused.Steps, 2)
+			inspection, _ := fixture.run("", "task", "show", "workflow", "op-main", "--json")
+			var view workflow.View
+			require.NoError(t, json.Unmarshal([]byte(inspection), &view))
+			require.NotNil(t, view.Pending)
+			assert.Equal(t, workflow.InteractionManualReview, view.Pending.ID.Kind)
+			assert.Equal(t, paused.Steps[1].Address, view.Pending.ID.Owner)
+			assert.Equal(t, workflow.TaskRunActionResumeReview, view.Next.Action)
+			assert.Empty(t, fixture.agent.launches)
+
+			fixture.options.Dependencies.ReviewEffects.RunCommand = fixture.runCheck
+			fixture.check("manual", checkResult{})
+			fixture.run("\na\n", "task", "run", "op-main")
+
+			resumed := loadLatestReview(t, fixture, "op-main")
+			assert.Equal(t, taskstate.ReviewStatusPassed, resumed.Status)
+			assert.Equal(t, paused.Attempt, resumed.Attempt)
+			assert.Equal(t, paused.StartedAt, resumed.StartedAt)
+			require.Len(t, resumed.Steps, 2)
+			assert.Equal(t, paused.Steps[0], resumed.Steps[0], "prior checks must not rerun")
+			assert.Equal(t, paused.Steps[1].Address, resumed.Steps[1].Address)
+			assert.Equal(t, []string{"prior", "manual", "manual"}, fixture.checkCalls)
+			retained, _ := fixture.loadFinalTask("op-main")
+			resumedStep := retained.Work.Workflows[paused.Address.Workflow].Phases[paused.Address.Phase].(*work.ReviewPhase).Steps[1].(*work.ManualReviewStep)
+			assert.Equal(t, step.CommandInterruptions, resumedStep.CommandInterruptions, "a successful reopen cannot erase the canceled process observation")
+			require.IsType(t, &work.ExitedProcess{}, resumedStep.CommandResult)
+			assert.Equal(t, 0, *resumedStep.CommandResult.(*work.ExitedProcess).Code)
 		})
 	}
 }

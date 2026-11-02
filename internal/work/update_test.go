@@ -66,6 +66,19 @@ func TestSuccessorSettlesOwnedWorkAndAppendsAttemptsWithoutRewritingHistory(t *t
 	require.Empty(t, oldReviewer.Report.Evidence)
 	require.IsType(t, &work.RunningProcess{}, oldReviewer.Execution.Process)
 	require.Equal(t, "Final reviewer narrative", newReviewer.Report.Evidence)
+	previous, next = interruptedManualState(t), interruptedManualState(t)
+	manual := next.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[2].(*work.ManualReviewStep)
+	manual.CommandInterruptions = append(manual.CommandInterruptions, work.ExitedProcess{At: at(25), Code: exitValue(-1)})
+	require.NoError(t, next.ValidateSuccessor(&previous))
+	manual.CommandResult = &work.ExitedProcess{At: at(26), Code: exitValue(0)}
+	manual.Decision = &work.ApprovedReview{At: at(27)}
+	require.NoError(t, next.ValidateSuccessor(&previous))
+	retained := previous.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[2].(*work.ManualReviewStep)
+	require.Len(t, retained.CommandInterruptions, 1)
+	require.Equal(t, -1, *retained.CommandInterruptions[0].Code)
+	require.Nil(t, retained.CommandResult)
+	require.Nil(t, retained.Decision)
+
 }
 
 func TestSuccessorPreservesAddressesAndRecordedFacts(t *testing.T) {
@@ -91,6 +104,13 @@ func TestSuccessorPreservesAddressesAndRecordedFacts(t *testing.T) {
 		{"rewritten manual decision", reviewingState, func(s *work.State) {
 			s.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[2].(*work.ManualReviewStep).Decision.(*work.ApprovedReview).At = at(29)
 		}, "manual assessment"},
+		{"rewritten interrupted command exit", interruptedManualState, func(s *work.State) {
+			*s.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[2].(*work.ManualReviewStep).CommandInterruptions[0].Code = -2
+		}, "manual command interruptions is append-only"},
+		{"new interruption after manual approval", answeredInterruptedManualState, func(s *work.State) {
+			step := s.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[2].(*work.ManualReviewStep)
+			step.CommandInterruptions = append(step.CommandInterruptions, work.ExitedProcess{At: at(25), Code: exitValue(-1)})
+		}, "answered manual command interruptions cannot be rewritten"},
 		{"reordered retry history", retryReviewState, func(s *work.State) {
 			p := s.Workflows[0].Phases[2].(*work.ReviewPhase)
 			p.Steps[1], p.Steps[2] = p.Steps[2], p.Steps[1]
@@ -405,5 +425,23 @@ func closedState(t *testing.T) work.State {
 	s.Workflows[0].Phases = append(s.Workflows[0].Phases,
 		&work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 9}},
 		&work.FinalizationPhase{Acceptance: &work.PRAcceptance{ExternalReview: 10, ObservedAt: at(110), Evidence: "Provider confirmed the PR merged"}, Closure: &work.TaskClosure{At: at(120), Reason: "pr_merged", Evidence: "Source closed"}, Cleanup: []work.CleanupObservation{&work.WorktreeRetained{Path: "/fixture/work", At: at(121), Reason: "Dirty worktree", Evidence: "Cleanup refused"}}})
+	return s
+}
+
+func interruptedManualState(t *testing.T) work.State {
+	t.Helper()
+	s := reviewingState(t)
+	step := s.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[2].(*work.ManualReviewStep)
+	step.Decision = nil
+	step.CommandInterruptions = []work.ExitedProcess{{At: at(24), Code: exitValue(-1)}}
+	return s
+}
+
+func answeredInterruptedManualState(t *testing.T) work.State {
+	t.Helper()
+	s := interruptedManualState(t)
+	step := s.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[2].(*work.ManualReviewStep)
+	step.CommandResult = &work.ExitedProcess{At: at(25), Code: exitValue(0)}
+	step.Decision = &work.ApprovedReview{At: at(26)}
 	return s
 }

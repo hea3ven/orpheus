@@ -27,6 +27,7 @@ type PipelineStore interface {
 	RecordReviewFinding(repoID, taskID string, attempt int, finding taskstate.ReviewFinding) (taskstate.ReviewAttempt, error)
 	PauseReviewForManualAt(work.AttemptRef, string) (taskstate.ReviewAttempt, error)
 	CurrentReviewAt(work.AttemptRef) (taskstate.ReviewAttempt, error)
+	RecordManualCommandInterruption(work.AttemptRef, int) (taskstate.ReviewAttempt, error)
 	RecordManualDecision(work.AttemptRef, taskstate.ReviewStatus, *work.ReviewedPublication) (taskstate.ReviewAttempt, error)
 	RecordCheckResult(work.AttemptRef, *int, error, []taskstate.ReviewFinding) (taskstate.ReviewAttempt, error)
 	FinishReviewStepExecution(repoID, taskID string, attempt int, stepName string, opts taskstate.FinishReviewStepExecutionOptions) (taskstate.ReviewAttempt, error)
@@ -512,6 +513,13 @@ func prepareManualStepPrompt(
 
 func failManualStep(opts PipelineRunOptions, step Step, err error) (stepOutcome, error) {
 	if errors.Is(err, ErrManualInputUnavailable) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || opts.Context.Err() != nil {
+		current, readErr := opts.Store.CurrentReviewAt(opts.Attempt.Address)
+		if readErr != nil {
+			return stepOutcome{}, readErr
+		}
+		if current.Status == taskstate.ReviewStatusFailed {
+			return stepOutcome{}, err
+		}
 		return manualWaitingStepOutcome()
 	}
 	if resumeErr := resumeManualReviewStep(opts, step); resumeErr != nil {
@@ -548,6 +556,14 @@ func runConfirmedManualCommand(opts PipelineRunOptions, step Step, env []string)
 	}
 
 	exitCode, hunkNotes, err := runManualStepCommand(opts, step, env)
+	if cancellation := manualCommandCancellation(opts.Context, exitCode, err); cancellation != nil {
+		if exitCode != nil {
+			if _, recordErr := opts.Store.RecordManualCommandInterruption(opts.Attempt.Address, *exitCode); recordErr != nil {
+				return nil, nil, recordErr
+			}
+		}
+		return nil, nil, cancellation
+	}
 	// Reopening the inspection tool does not replace its pending assessment,
 	// findings, or original command observation. A failed rerun still fails the
 	// owning review below; a successful rerun is not new review evidence.
@@ -559,7 +575,22 @@ func runConfirmedManualCommand(opts PipelineRunOptions, step Step, env []string)
 	if err != nil {
 		return nil, nil, fmt.Errorf("task run %s: run manual step %q: %w", opts.TaskID, step.Name, err)
 	}
+	if opts.Context.Err() != nil {
+		return nil, nil, opts.Context.Err()
+	}
 	return exitCode, hunkNotes, nil
+}
+
+func manualCommandCancellation(ctx context.Context, exitCode *int, err error) error {
+	// A real nonnegative exit is independent failure/success evidence, even
+	// when cancellation races with completion. A killed child has exit -1.
+	if exitCode != nil && *exitCode >= 0 {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return ctx.Err()
 }
 
 func runManualStepCommand(opts PipelineRunOptions, step Step, env []string) (*int, []HunkNote, error) {
