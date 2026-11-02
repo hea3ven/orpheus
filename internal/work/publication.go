@@ -24,6 +24,13 @@ type PublicationPlan struct {
 	Content string
 }
 
+// PublicationIntent retains selected content and delivery target while a changed
+// destination undergoes review. It is not an accepted publication plan.
+type PublicationIntent struct {
+	Target  PublicationTarget
+	Content string
+}
+
 // PublicationTarget distinguishes PR creation/update from destination delivery.
 type PublicationTarget interface{ publicationTarget() }
 

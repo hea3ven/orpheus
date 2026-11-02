@@ -14,7 +14,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/logging"
-	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
@@ -196,14 +195,12 @@ func (c ReviewManualStepContext) TaskID() string { return c.Task.ID }
 
 // ReviewManualStepPrompt contains frontend input facts for a manual review prompt.
 type ReviewManualStepPrompt struct {
-	Source            task.RepositorySource
-	Task              task.Task
-	Review            taskstate.ReviewAttempt
-	Step              review.Step
-	HunkNotes         []review.HunkNote
-	IntegrationFlow   publication.IntegrationFlow
-	DestinationBranch string
-	Recorder          ReviewManualStepRecorder
+	Source    task.RepositorySource
+	Task      task.Task
+	Review    taskstate.ReviewAttempt
+	Step      review.Step
+	HunkNotes []review.HunkNote
+	Recorder  ReviewManualStepRecorder
 }
 
 // TaskID returns the resolved backend task id.
@@ -212,8 +209,6 @@ func (p ReviewManualStepPrompt) TaskID() string { return p.Task.ID }
 // ReviewManualStepRecorder is the narrow workflow-owned persistence port for manual review input.
 type ReviewManualStepRecorder interface {
 	LatestReview() (taskstate.ReviewAttempt, error)
-	SetIntegrationFlow(publication.IntegrationFlow) (taskstate.Finalization, error)
-	SetIntegrationDestination(string) (taskstate.Finalization, error)
 	RecordFinding(taskstate.ReviewFinding) (taskstate.ReviewAttempt, error)
 	PromoteAdvisoryFinding(index int) (taskstate.ReviewAttempt, error)
 }
@@ -435,14 +430,6 @@ func (s ReviewLifecycleService) manualStepPrompt(
 		return nil
 	}
 	return func(step review.ManualStep) (review.ManualResult, error) {
-		flow, err := s.effectiveIntegrationFlow(ctx)
-		if err != nil {
-			return review.ManualResult{}, err
-		}
-		destination, err := s.effectiveIntegrationDestination(ctx)
-		if err != nil {
-			return review.ManualResult{}, err
-		}
 		current, err := ctx.store.CurrentReviewAt(ctx.Review.Address)
 		if err != nil {
 			return review.ManualResult{}, err
@@ -450,34 +437,15 @@ func (s ReviewLifecycleService) manualStepPrompt(
 		if len(current.Steps) == 0 || current.Steps[len(current.Steps)-1].Name != step.Step.Name || !current.Steps[len(current.Steps)-1].Address.Equal(step.Address) {
 			return review.ManualResult{}, errors.New("manual prompt no longer owns its pipeline step")
 		}
-		recorder := &reviewManualStepRecorder{owner: step.Address, store: ctx.store, repoID: ctx.RepoID(), taskID: ctx.TaskID(), attempt: ctx.Review.Attempt, step: step.Step.Name, flow: flow, destination: destination}
-		result, err := prompt(ReviewManualStepPrompt{
-			Source:            ctx.Source,
-			Task:              ctx.Task,
-			Review:            ctx.Review,
-			Step:              step.Step,
-			HunkNotes:         step.HunkNotes,
-			IntegrationFlow:   flow,
-			DestinationBranch: destination,
-			Recorder:          recorder,
+		recorder := &reviewManualStepRecorder{owner: step.Address, store: ctx.store, repoID: ctx.RepoID(), taskID: ctx.TaskID(), attempt: ctx.Review.Attempt, step: step.Step.Name}
+		return prompt(ReviewManualStepPrompt{
+			Source:    ctx.Source,
+			Task:      ctx.Task,
+			Review:    ctx.Review,
+			Step:      step.Step,
+			HunkNotes: step.HunkNotes,
+			Recorder:  recorder,
 		})
-		if err != nil || (result.Status != "" && result.Status != taskstate.ReviewStatusPassed) {
-			return result, err
-		}
-		boundary := s.CandidateGit
-		if boundary == nil {
-			boundary = LocalReviewCandidateGit{}
-		}
-		observed, err := boundary.ObserveDestination(context.Background(), ctx.Workdir, recorder.destination)
-		if err != nil {
-			return review.ManualResult{}, err
-		}
-		var target work.PublicationTarget = &work.PullRequestTarget{}
-		if recorder.flow == publication.IntegrationFlowDirectMerge {
-			target = &work.DirectMergeTarget{}
-		}
-		result.Publication = &work.ReviewedPublication{Destination: observed, Target: target}
-		return result, nil
 	}
 }
 
@@ -517,44 +485,12 @@ func (s ReviewLifecycleService) manualStepContext(
 }
 
 type reviewManualStepRecorder struct {
-	owner       work.AttemptRef
-	flow        publication.IntegrationFlow
-	destination string
-	store       ReviewLifecycleStore
-	repoID      string
-	taskID      string
-	attempt     int
-	step        string
-}
-
-func (s ReviewLifecycleService) effectiveIntegrationDestination(ctx ReviewAttemptContext) (string, error) {
-	state, err := s.RunStore.Load(ctx.RepoID(), ctx.TaskID())
-	if err != nil {
-		return "", fmt.Errorf("load task state for integration destination: %w", err)
-	}
-	if destination := strings.TrimSpace(taskstate.FinalizationFacts(state).DestinationBranch); destination != "" {
-		return destination, nil
-	}
-	destination := strings.TrimSpace(ctx.Source.Repository.DefaultBranch)
-	if destination == "" {
-		return "", fmt.Errorf("repository %s has no registered default branch", ctx.RepoID())
-	}
-	return destination, nil
-}
-
-func (s ReviewLifecycleService) effectiveIntegrationFlow(ctx ReviewAttemptContext) (publication.IntegrationFlow, error) {
-	state, err := s.RunStore.Load(ctx.RepoID(), ctx.TaskID())
-	if err != nil {
-		return "", fmt.Errorf("load task state for integration flow: %w", err)
-	}
-	if locked := taskstate.FinalizationFacts(state).IntegrationFlow; strings.TrimSpace(string(locked)) != "" {
-		return locked, nil
-	}
-	config, err := publication.LoadConfig(s.Paths)
-	if err != nil {
-		return "", err
-	}
-	return publication.ResolveIntegrationFlow("", publication.IntegrationFlow(ctx.Source.Repository.IntegrationFlow), config.IntegrationFlow), nil
+	owner   work.AttemptRef
+	store   ReviewLifecycleStore
+	repoID  string
+	taskID  string
+	attempt int
+	step    string
 }
 
 func (r reviewManualStepRecorder) LatestReview() (taskstate.ReviewAttempt, error) {
@@ -567,16 +503,6 @@ func (r reviewManualStepRecorder) LatestReview() (taskstate.ReviewAttempt, error
 		return taskstate.ReviewAttempt{}, fmt.Errorf("latest review attempt no longer matches attempt %d", r.attempt)
 	}
 	return latest, nil
-}
-
-func (r *reviewManualStepRecorder) SetIntegrationFlow(flow publication.IntegrationFlow) (taskstate.Finalization, error) {
-	r.flow = flow
-	return taskstate.Finalization{IntegrationFlow: flow, DestinationBranch: r.destination}, nil
-}
-
-func (r *reviewManualStepRecorder) SetIntegrationDestination(destination string) (taskstate.Finalization, error) {
-	r.destination = destination
-	return taskstate.Finalization{IntegrationFlow: r.flow, DestinationBranch: destination}, nil
 }
 
 func (r reviewManualStepRecorder) RecordFinding(finding taskstate.ReviewFinding) (taskstate.ReviewAttempt, error) {
@@ -833,9 +759,12 @@ func (s ReviewLifecycleService) resumeReview(base ReviewContext, paused taskstat
 	if err != nil {
 		return prepared, err
 	}
-	request, err := review.ResumeExecution(pipeline, paused)
-	if paused.Status == taskstate.ReviewStatusRunning {
-		request, err = review.ContinueExecution(pipeline, paused)
+	request := review.FreshExecution()
+	if len(paused.Steps) > 0 {
+		request, err = review.ResumeExecution(pipeline, paused)
+		if paused.Status == taskstate.ReviewStatusRunning {
+			request, err = review.ContinueExecution(pipeline, paused)
+		}
 	}
 	if err != nil {
 		return prepared, err
@@ -848,7 +777,7 @@ func (s ReviewLifecycleService) resumeReview(base ReviewContext, paused taskstat
 	if !ok {
 		return prepared, fmt.Errorf("%w: no paused review attempt", review.ErrInvalidExecution)
 	}
-	if err := request.ValidateResume(pipeline, latest); err != nil {
+	if err := request.ValidateRunning(pipeline, latest); err != nil {
 		return prepared, err
 	}
 	reviewAttempt, err := base.store.CurrentReviewAt(paused.Address)

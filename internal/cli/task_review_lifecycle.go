@@ -34,6 +34,9 @@ func (f *taskReviewLifecycleFrontend) PipelinePresentation(ctx workflow.ReviewAt
 
 func (f taskReviewLifecycleFrontend) ReviewResumed(ctx workflow.ReviewAttemptContext) error {
 	message := "Resuming review attempt %d after answered step %q.\n"
+	if len(ctx.Review.Steps) == 0 {
+		message = "Starting reserved review attempt %d at step %q.\n"
+	}
 	if ctx.Review.Status == taskstate.ReviewStatusWaitingForManual {
 		message = "Resuming review attempt %d at manual step %q.\n"
 	}

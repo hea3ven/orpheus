@@ -39,7 +39,7 @@ func (s ReviewLifecycleService) recordManualResponse(ctx context.Context, owner 
 	default:
 		return fmt.Errorf("%w: invalid manual response", review.ErrInvalidExecution)
 	}
-	_, err = (Controller{ReviewLifecycleService: s}).Respond(ctx, pending.ID, ManualResponse{Action: action, Publication: result.Publication})
+	_, err = (Controller{ReviewLifecycleService: s}).Respond(ctx, pending.ID, ManualResponse{Action: action})
 	if err != nil {
 		return errors.Join(review.ErrInvalidExecution, err)
 	}

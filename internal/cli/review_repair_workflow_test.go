@@ -11,6 +11,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -85,12 +86,12 @@ func TestIntegrationWorkflowTaskRunAttachedManualBlockerRepairsAndApprovalPrepar
 	must := require.New(t)
 	fixture := newReviewDispatchFixture(t, "op-manual")
 	paths := fixture.paths
-	scopeCheck := fixture.check("scope-check", checkResult{}, checkResult{})
+	scopeCheck := fixture.check("scope-check", checkResult{}, checkResult{}, checkResult{code: 7}, checkResult{})
 	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "check", "name": "scope-check", "command": scopeCheck}, {"kind": "manual", "name": "approval"}}})
 	fixture.candidate.destinationHeads = map[string]string{"main": "initial-commit", "release/final": "approved-destination-head"}
 	fixture.budget(4)
-	fixture.completingRepairs("repairer", 2, false)
-	stdout, stderr, err := fixture.runError("i\nd\nrelease/tentative\nb\nManual blocker\nRepair the implementation before approval.\nApply the fix.\nf\ni\nd\nrelease/final\na\n", "task", "run", "--repo-root", "op-manual")
+	fixture.completingRepairs("repairer", 3, true)
+	stdout, stderr, err := fixture.runError("b\nManual blocker\nRepair the implementation before approval.\nApply the fix.\nf\na\n", "task", "run", "--repo-root", "op-manual")
 
 	must.NoError(err)
 	is.Contains(stdout, "Recorded completion for op-manual")
@@ -122,13 +123,32 @@ func TestIntegrationWorkflowTaskRunAttachedManualBlockerRepairsAndApprovalPrepar
 	is.Equal("main", prior.Scope.Destination.Branch, "blocked tentative publication edits do not escape their prompt")
 	is.IsType(&work.RequestedChanges{}, prior.Steps[1].(*work.ManualReviewStep).Decision)
 	is.Equal(&work.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}, current.Scope.Destination, "approval cannot rewrite automated review scope")
-	approved := current.Steps[1].(*work.ManualReviewStep).Decision.(*work.ApprovedReview)
-	must.NotNil(approved.Publication)
-	is.Equal(work.Destination{Remote: "origin", Branch: "release/final", Commit: "approved-destination-head"}, approved.Publication.Destination)
-	is.IsType(&work.DirectMergeTarget{}, approved.Publication.Target)
-	is.IsType(&work.DirectMergeTarget{}, w.Phases[5].(*work.PublicationPhase).Plan.Target)
-	is.Equal([]string{"scope-check", "scope-check"}, fixture.checkCalls, "a final manual destination choice does not rerun completed automated slots")
-	is.Equal([]string{"main", "main", "release/final"}, fixture.candidate.observedDestinations, "only the approved destination is independently observed after its automated scope")
+	is.IsType(&work.ApprovedReview{}, current.Steps[1].(*work.ManualReviewStep).Decision)
+	is.IsType(&work.PullRequestTarget{}, w.Phases[5].(*work.PublicationPhase).Plan.Target)
+	is.Equal([]string{"scope-check", "scope-check"}, fixture.checkCalls)
+	is.Empty(fixture.candidate.pushes)
+
+	view := fixture.inspectWorkflow("op-manual")
+	proposal := workflow.PublicationPlanResponse{Flow: "direct-merge", DestinationBranch: "release/final", Content: view.Publication.Content}
+	view = fixture.revisePublication("op-manual", view, proposal)
+	is.Nil(view.Pending, "a changed destination needs review, not immediate consent")
+	is.Equal(workflow.PhaseReview, view.Phase)
+	is.Equal(workflow.TaskRunActionResumeReview, view.Next.Action)
+	_, _, err = fixture.runError("k\na\n", "task", "run", "op-manual")
+	must.NoError(err)
+	final, _ := fixture.loadFinalTask("op-manual")
+	must.Len(final.Reviews, 4)
+	must.Len(final.Runs, 3)
+	is.Equal([]string{"scope-check", "scope-check", "scope-check", "scope-check"}, fixture.checkCalls, "changed review scope reruns the complete current pipeline")
+	view = fixture.inspectWorkflow("op-manual")
+	must.NotNil(view.Pending)
+	is.Equal(workflow.InteractionPublication, view.Pending.ID.Kind)
+	is.Equal("direct-merge", view.Publication.Flow)
+	is.Equal(proposal.Content, view.Publication.Content)
+	is.Equal("output-3", view.Revision.Code.Commit, "repair output requires its own passed review before the new decision")
+	is.Equal("release/final", view.Publication.Destination.Branch)
+	is.Equal("approved-destination-head", view.Publication.Destination.Commit)
+	assertUnconsentedPublication(t, final)
 	is.Empty(fixture.candidate.pushes)
 
 }
@@ -186,7 +206,7 @@ func TestIntegrationWorkflowTaskRunPreservedManualBlockerExhaustsFreshBudget(t *
 		Type: taskstate.FindingTypeBlocking, Title: "Manual blocker", Description: "Repair before approval.", Step: "approval",
 	})
 	must.NoError(err)
-	_, err = runStore.RecordManualDecision(actor, taskstate.ReviewStatusBlocked, nil)
+	_, err = runStore.RecordManualDecision(actor, taskstate.ReviewStatusBlocked)
 	must.NoError(err)
 	stdout, stderr := fixture.run("", "task", "run", "op-manual-budget")
 

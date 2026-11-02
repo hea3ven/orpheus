@@ -21,6 +21,7 @@ func (v *validator) review(p *ReviewPhase) {
 		return
 	}
 	v.prepared()
+	v.publicationIntent(p.Publication)
 	v.sync = -1
 	contract, err := element(v.w.ReviewContracts, p.Contract)
 	v.check(err == nil, "review requires captured contract: %v", err)
@@ -63,6 +64,13 @@ func (v *validator) review(p *ReviewPhase) {
 		for _, verification := range stepVerifications(step) {
 			v.verification(p.Scope.Output, verification)
 		}
+	}
+}
+
+func (v *validator) publicationIntent(intent *PublicationIntent) {
+	if intent != nil {
+		v.target(intent.Target)
+		v.text(intent.Content, "proposed publication content")
 	}
 }
 
@@ -183,10 +191,6 @@ func (v *validator) manual(assessment ManualAssessment) {
 	case *ApprovedReview:
 		v.check(assessment != nil && !assessment.At.IsZero(), "manual approval requires observed time")
 		if assessment != nil {
-			if assessment.Publication != nil {
-				v.destination(&assessment.Publication.Destination)
-				v.target(assessment.Publication.Target)
-			}
 			for _, verification := range assessment.Verifications {
 				v.check(verification.Resolution == FindingResolved, "manual approval cannot claim an unresolved finding")
 			}

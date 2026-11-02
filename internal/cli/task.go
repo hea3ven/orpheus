@@ -17,7 +17,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/logging"
-	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/review"
@@ -200,7 +199,7 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 }
 
 func newTaskDoneCommand(opts *rootOptions) *cobra.Command {
-	return &cobra.Command{Use: "done [<task-id>]", Short: "Deliver an explicitly authorized reviewed publication", Long: "Retry an existing, explicitly authorized publication plan. This command consumes retained reviewed commits; it neither creates an implementation revision nor grants publication consent. Publication authorization remains gated until its separate decision interface is available.", Args: cobra.MaximumNArgs(1), RunE: func(command *cobra.Command, args []string) error {
+	return &cobra.Command{Use: "done [<task-id>]", Short: "Deliver an explicitly authorized reviewed publication", Long: "Retry an existing, explicitly authorized publication plan. This command consumes retained reviewed commits; it neither creates an implementation revision nor grants publication consent. Inspect the plan with task show workflow and record consent with task respond, or use the publication prompt in task run.", Args: cobra.MaximumNArgs(1), RunE: func(command *cobra.Command, args []string) error {
 		taskID := ""
 		if len(args) == 1 {
 			taskID = args[0]
@@ -987,7 +986,8 @@ func executeTaskRun(command *cobra.Command, execution taskRunExecution, opts wor
 	if err != nil {
 		return err
 	}
-	controller := newTaskWorkflowController(command, execution.deps, taskCtx, execution.logger, bufio.NewReader(command.InOrStdin()))
+	reader := bufio.NewReader(command.InOrStdin())
+	controller := newTaskWorkflowController(command, execution.deps, taskCtx, execution.logger, reader)
 	result, advanceErr := controller.Advance(command.Context(), opts)
 	if result.Inspection.Condition == workflow.ImplementationRunRecoverable {
 		if _, err := fmt.Fprintf(command.ErrOrStderr(), "Task %s: reconciled interrupted implementation attempt (%s).\n", opts.TaskID, result.Inspection.Reason); err != nil {
@@ -996,6 +996,14 @@ func executeTaskRun(command *cobra.Command, execution taskRunExecution, opts wor
 	}
 	if advanceErr != nil {
 		return advanceErr
+	}
+	if result.View.Pending != nil && result.View.Pending.ID.Kind == workflow.InteractionPublication {
+		if result.Review != nil {
+			if err := renderTaskReviewLifecycleOutcome(command, execution.logger, *result.Review); err != nil {
+				return err
+			}
+		}
+		return presentPublicationDecision(command, controller, reader, result.View, execution.deps.terminal)
 	}
 	if result.Review != nil {
 		return renderTaskReviewLifecycleOutcome(command, execution.logger, *result.Review)
@@ -1268,9 +1276,6 @@ func attachInteractiveReviewHooks(
 		return false, err
 	}
 	presentation.PromptManualStep = func(prompt workflow.ReviewManualStepPrompt) (review.ManualResult, error) {
-		if _, err := fmt.Fprintf(command.ErrOrStderr(), "Publication integration flow: %s; destination: %s (enter i at the review action to change either).\n", prompt.IntegrationFlow, prompt.DestinationBranch); err != nil {
-			return review.ManualResult{}, err
-		}
 		outcome, err := runManualReviewPrompt(
 			command,
 			reviewInput,
@@ -1278,8 +1283,6 @@ func attachInteractiveReviewHooks(
 			prompt.TaskID(),
 			prompt.Step.Name,
 			prompt.HunkNotes,
-			prompt.IntegrationFlow,
-			prompt.DestinationBranch,
 		)
 		if err != nil {
 			if errors.Is(err, review.ErrManualInputUnavailable) {
@@ -1520,16 +1523,12 @@ func runManualReviewPrompt(
 	taskID string,
 	stepName string,
 	hunkNotes []review.HunkNote,
-	integrationFlow publication.IntegrationFlow,
-	destinationBranch string,
 ) (manualReviewOutcome, error) {
 	session := manualReviewSession{
-		command:           command,
-		recorder:          recorder,
-		taskID:            taskID,
-		stepName:          stepName,
-		integrationFlow:   integrationFlow,
-		destinationBranch: destinationBranch,
+		command:  command,
+		recorder: recorder,
+		taskID:   taskID,
+		stepName: stepName,
 	}
 	if err := session.importHunkNotes(reader, hunkNotes); err != nil {
 		return manualReviewOutcome{}, err
@@ -1552,12 +1551,10 @@ func runManualReviewPrompt(
 }
 
 type manualReviewSession struct {
-	command           *cobra.Command
-	recorder          workflow.ReviewManualStepRecorder
-	taskID            string
-	stepName          string
-	integrationFlow   publication.IntegrationFlow
-	destinationBranch string
+	command  *cobra.Command
+	recorder workflow.ReviewManualStepRecorder
+	taskID   string
+	stepName string
 }
 
 func (s manualReviewSession) importHunkNotes(reader *bufio.Reader, notes []review.HunkNote) error {
@@ -1608,8 +1605,6 @@ func (s *manualReviewSession) handleManualReviewAction(
 		if actions.hasPromotableAdvisories {
 			return s.reviewPriorAdvisories(reader)
 		}
-	case "i", "integration", "integration-flow", "flow":
-		return s.selectIntegrationFlow(reader)
 	case "v", "advisory":
 		return s.recordFinding(reader, taskstate.FindingTypeAdvisory, "advisory")
 	case "t", "task":
@@ -1635,51 +1630,6 @@ func (s manualReviewSession) availableActions() (manualReviewActions, error) {
 type manualReviewActions struct {
 	hasOpenBlockers         bool
 	hasPromotableAdvisories bool
-}
-
-func (s *manualReviewSession) selectIntegrationFlow(reader *bufio.Reader) (manualReviewOutcome, bool, error) {
-	if _, err := fmt.Fprintf(s.command.ErrOrStderr(), "Effective publication integration flow: %s. Choose [p=pull-request, d=direct-merge, enter=keep]: ", s.integrationFlow); err != nil {
-		return manualReviewOutcome{}, true, err
-	}
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return manualReviewOutcome{}, true, manualInputReadError("read integration flow", err)
-	}
-	flow := s.integrationFlow
-	switch strings.ToLower(strings.TrimSpace(line)) {
-	case "", "keep":
-	case "p", "pull-request":
-		flow = publication.IntegrationFlowPullRequest
-	case "d", "direct-merge":
-		flow = publication.IntegrationFlowDirectMerge
-	default:
-		if _, err := fmt.Fprintln(s.command.ErrOrStderr(), "Choose pull-request, direct-merge, or keep."); err != nil {
-			return manualReviewOutcome{}, true, err
-		}
-		return manualReviewOutcome{}, false, nil
-	}
-	if _, err := s.recorder.SetIntegrationFlow(flow); err != nil {
-		return manualReviewOutcome{}, true, fmt.Errorf("task run %s: set integration flow: %w", s.taskID, err)
-	}
-	s.integrationFlow = flow
-	if _, err := fmt.Fprintf(s.command.ErrOrStderr(), "Effective publication destination: %s. Enter an existing named branch or press enter to keep: ", s.destinationBranch); err != nil {
-		return manualReviewOutcome{}, true, err
-	}
-	destination, err := reader.ReadString('\n')
-	if err != nil {
-		return manualReviewOutcome{}, true, manualInputReadError("read integration destination", err)
-	}
-	destination = strings.TrimSpace(destination)
-	if destination != "" {
-		if _, err := s.recorder.SetIntegrationDestination(destination); err != nil {
-			return manualReviewOutcome{}, true, fmt.Errorf("task run %s: set integration destination: %w", s.taskID, err)
-		}
-		s.destinationBranch = destination
-	}
-	if _, err := fmt.Fprintf(s.command.ErrOrStderr(), "Publication integration flow for %s: %s; destination: %s.\n", s.taskID, flow, s.destinationBranch); err != nil {
-		return manualReviewOutcome{}, true, err
-	}
-	return manualReviewOutcome{}, false, nil
 }
 
 func (s manualReviewSession) approve() (manualReviewOutcome, bool, error) {

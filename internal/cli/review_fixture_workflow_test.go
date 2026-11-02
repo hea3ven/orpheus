@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
@@ -545,4 +546,25 @@ func beginConfiguredFixtureReview(f *reviewWorkflowFixture, store taskstate.Stor
 	}
 	opts.Scope = work.ReviewScope{Requirements: "Explicit fixture task requirements", Output: work.OutputRef{Phase: run.Address.Phase}, Destination: &work.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}
 	return store.StartReviewWithOptions("alpha", taskID, opts)
+}
+
+func (f *reviewWorkflowFixture) inspectWorkflow(taskID string) workflow.View {
+	f.t.Helper()
+	output, _ := f.run("", "task", "show", "workflow", taskID, "--json")
+	var view workflow.View
+	require.NoError(f.t, json.Unmarshal([]byte(output), &view))
+	return view
+}
+
+func (f *reviewWorkflowFixture) revisePublication(taskID string, view workflow.View, proposal workflow.PublicationPlanResponse) workflow.View {
+	f.t.Helper()
+	require.NotNil(f.t, view.Pending)
+	id, err := json.Marshal(view.Pending.ID)
+	require.NoError(f.t, err)
+	plan, err := json.Marshal(proposal)
+	require.NoError(f.t, err)
+	output, _ := f.run("", "task", "respond", taskID, "--interaction", string(id), "--action", "revise", "--plan", string(plan))
+	var next workflow.View
+	require.NoError(f.t, json.Unmarshal([]byte(output), &next))
+	return next
 }

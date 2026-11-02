@@ -295,20 +295,11 @@ func passed(outcome ReviewOutcome) bool {
 	return outcome == ReviewPassed || outcome == ReviewPassedWithWaivers
 }
 
-// ReviewDestination retains the original automated scope while permitting the
-// last effective manual approval to establish the final integration context.
+// ReviewDestination returns the integration context evaluated by the review.
 func (w *Workflow) ReviewDestination(ref ReviewRef) (*Destination, error) {
 	phase, err := phaseAs[*ReviewPhase](w, ref.Phase)
 	if err != nil || phase == nil {
 		return nil, fmt.Errorf("review reference requires review")
 	}
-	destination := phase.Scope.Destination
-	for _, step := range effectiveSteps(phase.Steps, len(w.ReviewContracts[phase.Contract].Slots)) {
-		if manual, ok := step.(*ManualReviewStep); ok && manual != nil {
-			if approval, ok := manual.Decision.(*ApprovedReview); ok && approval != nil && approval.Publication != nil {
-				destination = &approval.Publication.Destination
-			}
-		}
-	}
-	return destination, nil
+	return phase.Scope.Destination, nil
 }

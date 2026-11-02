@@ -727,6 +727,7 @@ type StartReviewOptions struct {
 	Step            string
 	Contract        work.ReviewContract
 	Scope           work.ReviewScope
+	Publication     *work.PublicationIntent
 }
 
 // RecordReviewStepOptions describes one executed review step.
@@ -1023,7 +1024,7 @@ func (s Store) StartReviewWithOptions(repoID, taskID string, opts StartReviewOpt
 		ref = work.AttemptRef{RepositoryID: repoID, TaskID: taskID, Workflow: len(snapshot.Workflows) - 1, Phase: len(w.Phases)}
 		contract := len(w.ReviewContracts)
 		w.ReviewContracts = append(w.ReviewContracts, opts.Contract)
-		w.Phases = append(w.Phases, &work.ReviewPhase{Contract: contract, Scope: opts.Scope, StartedAt: s.nowUTC()})
+		w.Phases = append(w.Phases, &work.ReviewPhase{Contract: contract, Scope: opts.Scope, Publication: opts.Publication, StartedAt: s.nowUTC()})
 		return true, nil
 	})
 	if err != nil {

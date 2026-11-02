@@ -40,8 +40,8 @@ preconditions under mutation protection; review reservation also checks the exac
 version inside its atomic mutation. Attached work runs without
 the global lock, allowing child callbacks at the reserved parent/index address.
 Only that owner may record completion/results. Conflicting phase/step advancement
-is refused rather than attached to newer work. Interruption reconciliation and
-the interactive publication plan editor remain separate implementation boundaries.
+is refused rather than attached to newer work. Interruption reconciliation remains
+a separate implementation boundary.
 
 ## Frontend contract
 
@@ -54,10 +54,13 @@ scope, execution, publication, PR, and closure facts remain workflow-owned.
 `Controller.Respond` binds a typed assessment, finding batch, or publication
 response to the inspected owner/kind/state version under mutation protection.
 Answers persist as the existing assessment, finding dispositions, or exact-plan
-consent; there is no second decision queue or state-format change. Finding batches
+consent; there is no second decision queue. Finding batches
 save atomically. Pause and cancellation retain pending work; stale/mismatched
-responses cannot advance phases. Review decisions verify the exact retained
-checkout before saving. Attached review prompts use this same response boundary.
+responses cannot authorize different work. Plan replacement can reserve fresh
+review or append a new pending plan, but never executes review or delivery.
+Review and publication decisions verify the exact retained checkout before saving;
+publication consent also checks current task requirements and destination context.
+Attached review prompts use this same response boundary.
 Continuation after an externally answered step skips that completed step.
 
 CLI owns phase/step header repetition, labels, ANSI styling, display-width wrapping,
@@ -193,19 +196,26 @@ reverse an earlier positive statement.
 
 ## Publication consent
 
-A publication plan selects a review and inherits its output and captured requirements.
-An approved manual step may establish the final observed destination and flow
-without rerunning automated slots. Its `ApprovedReview.Publication` records that
-actual choice; the original automated scope/destination remains immutable. Blocked
-or aborted tentative edits are discarded. The plan inherits this effective
-approved destination, or the automated destination when there is no override. It owns the chosen PR/create-update or direct-merge target and
-authored text. Review success is not publication consent.
+A publication plan selects a passed review and inherits its output, requirements,
+and observed destination. Manual review records only an assessment; it cannot
+select flow/destination or authorize delivery. The plan owns the PR/create-update
+or direct-merge target and authored text. Views expose the exact plan/review
+references, outcome, revision, destination, content, operation and intended effects.
+
+`PublicationPlanResponse` edits only pending intent. Content/flow changes append
+an immutable publication occurrence without consent. Identical edits are no-ops.
+Changed destination context or requirements append a fresh review with the current
+pipeline contract. `ReviewPhase.Publication` retains the proposed content/target
+through that review and any required repair reviews; only a pass prepares the
+next publication decision. A reserved review with no executed steps continues
+from step one rather than being
+mistaken for a live reviewer. Replaced plans remain history.
 
 `AuthorizePublication` records the first explicit grant and evidence. Its computed
 `IntentDigest` binds repository/task, workflow/publication address, reviewed
 scope/output/contract, baseline, target, content, and grant. This is an intent
 seal, not a generated PlanID or proof of who supplied the operator evidence.
-It binds both the automated scope destination and any approved final destination.
+It binds the captured review destination; there is no manual-review override.
 Changed intent needs another occurrence and fresh consent; state-version changes
 alone do not invalidate it.
 
@@ -217,11 +227,12 @@ authorize earlier grants. Retained consent uses that historical view, while
 not rewrite the original grant or delivery. A retained receipt is not permission
 to ignore current blockers when performing new effects.
 
-The CLI intentionally stops at an unconsented prepared publication plan. A passed
-review or retained commit cannot authorize delivery. The separate publication
-consent UX belongs to T8; there is no interim consent flag or confirmation bypass.
-Backend delivery contracts can consume an explicitly authorized plan, but ordinary
-`task run` does not manufacture that grant.
+The CLI displays a separate publication decision after every review pass. Only
+terminal input/output enables its prompt; noninteractive use retains the pending
+interaction. `Respond` and the terminal prompt record consent without delivery.
+A later advancement consumes the accepted plan. Output failure after recording a
+grant cannot erase it or publish implicitly. Accepted unchanged retries use their
+recorded operation and consent without resolving earlier configuration again.
 
 Publication is an idempotent application action: find/verify a matching PR,
 import it when present, and create only when confirmed absent. Failed lookup is

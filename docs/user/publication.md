@@ -2,8 +2,9 @@
 
 Publication requires both a passed [task review](reviews.md) and explicit consent
 for its exact publication plan. `task run` retains committed reviewed output and
-stops with publication pending. The interactive plan editor is not implemented;
-tooling can inspect the prepared plan and record an explicit typed response:
+stops at a distinct publication decision, including after fully automated review.
+The terminal prompt displays the plan before accepting consent. Noninteractive
+invocations leave it pending; tooling can inspect and respond explicitly:
 
 ```sh
 orpheus task show workflow op-123 --json
@@ -14,8 +15,9 @@ orpheus task run op-123
 
 Review the revision, passed review, content, flow, and destination in inspection
 before responding. `respond` records consent without publishing; continuation
-performs delivery. Pause, EOF, and cancellation never supply consent. A stale
-interaction is refused, and an unchanged authorized retry retains its grant.
+performs delivery. The terminal prompt also records consent without delivering;
+run `task run` again to deliver. Pause, EOF, and cancellation never supply consent.
+A stale interaction is refused, and an unchanged authorized retry retains its grant.
 A review pass, `agent done`, or commit existence is not permission to push or close
 a task. There is no running-agent bypass.
 
@@ -46,21 +48,31 @@ orpheus repo config set my-repo integration-flow direct-merge
 orpheus repo config set my-repo integration-flow ''
 ```
 
-Only `pull-request` and `direct-merge` are valid non-empty values. Selection order
-is the task's manual-review choice, repository configuration, global
-configuration, then `pull-request`.
+Only `pull-request` and `direct-merge` are valid non-empty values. New plans use
+repository configuration, global configuration, then `pull-request`. The initial
+destination is the registered default branch, captured in the review scope.
 
-At the manual review prompt, enter `i` to keep or change the flow and destination.
-The destination defaults to the registered default branch. A named alternative
-must already exist on `origin`; Orpheus verifies it rather than creating it.
-Pipelines without a manual step use configured flow defaults and the registered
-default branch.
+Flow and destination choices belong to Publication, not manual review. At the
+publication prompt, `i` changes flow and `d` selects an existing branch on
+`origin`. Tooling can replace a pending plan, including its title/body:
 
-Manual flow/destination edits are tentative until actual approval; block/abort
-discards them. Approval establishes the final observed destination without
-rerunning automated steps, while retaining their original scope for inspection.
-The prepared plan freezes this choice and authored content. Retries keep them
-even if configuration changes; approval still does not authorize delivery.
+```sh
+orpheus task respond op-123 --interaction '<Pending.ID JSON>' --action revise \
+  --plan '{"Flow":"pull-request","DestinationBranch":"main","Content":"feat: publish work\n\nReviewed task description."}'
+```
+
+Inspect the resulting interaction before authorizing it. Content/flow edits retain
+the passed review but create a new plan without consent. A changed destination
+(including its observed head) or changed task requirements requires a fresh review
+from the first step under current configuration. The selected publication content
+and flow survive that review. Changed checkout output cannot be approved as the
+previous revision; restore the reviewed checkout or obtain appropriate new review.
+
+Plans freeze their content and choices. Configuration edits alone do not re-run
+completed review or replace an accepted plan. Unchanged interrupted delivery keeps
+its consent and reconciles observed effects. Once accepted, a plan cannot be
+edited through the pending-decision interface; reconcile delivery before changing
+intent. No confirmation bypass or automatic consent is inferred from a review pass.
 
 | Flow | What Orpheus does |
 | --- | --- |
@@ -158,3 +170,8 @@ Existing repository-root work recorded on the default branch is not automaticall
 moved to a task branch during publication. Preserve its checkout and inspect its
 recorded context before repairing it manually; do not clear task history or reset
 files to force a retry. No operator state is converted by this change.
+
+Persisted manual assessments no longer accept embedded publication choices.
+Existing local records containing those obsolete fields need an explicit,
+inspectable conversion before use; do not discard task history to bypass loading.
+This change does not convert or modify operator records.

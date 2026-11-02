@@ -39,7 +39,7 @@ func TestIntegrationWorkflowTaskRunReviewFollowUpAllowsDirtyTaskBranch(t *testin
 	actor := reviewAttempt.Steps[len(reviewAttempt.Steps)-1].Address
 	_, err = runStore.RecordReviewFinding("alpha", "op-followup", reviewAttempt.Attempt, taskstate.ReviewFinding{Actor: &actor, Type: taskstate.FindingTypeBlocking, Title: "Fix bug", Description: "The reviewed change still has a blocker.", SuggestedAction: "Patch the dirty candidate changes."})
 	must.NoError(err)
-	_, err = runStore.RecordManualDecision(actor, taskstate.ReviewStatusBlocked, nil)
+	_, err = runStore.RecordManualDecision(actor, taskstate.ReviewStatusBlocked)
 	must.NoError(err)
 	// New operator changes are valid repair input, not a read-only review target.
 	fixture.candidate.contents = "operator changes awaiting repair\n"

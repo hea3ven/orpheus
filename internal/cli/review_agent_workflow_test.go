@@ -23,7 +23,7 @@ func TestIntegrationWorkflowTaskReviewAgentReviewStepLaunchesReviewerAndPassesWi
 	paths := fixture.paths
 	fixture.reviewers(semanticAgentOutcome{captureContext: true})
 	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "agent_review", "name": "ai-review"}}})
-	stdout, _ := fixture.run("", "task", "run", "op-main")
+	stdout, stderr := fixture.run("authorize\n", "task", "run", "op-main")
 
 	is.Contains(stdout, "Review passed for op-main")
 	must.Len(fixture.agent.contexts, 1)
@@ -56,6 +56,14 @@ func TestIntegrationWorkflowTaskReviewAgentReviewStepLaunchesReviewerAndPassesWi
 	is.Contains(latest.Steps[0].Execution.Args[0], "You are an agent dispatched by Orpheus.")
 	is.Empty(latest.Findings)
 	assertUnconsentedPublication(t, state)
+	pending := fixture.inspectWorkflow("op-main")
+	must.NotNil(pending.Pending)
+	is.Equal("publication_consent", string(pending.Pending.ID.Kind))
+	for _, fact := range []string{"PUBLICATION", "PUBLICATION CONTENT", "Review agent", "FLOW", "DESTINATION", "EFFECTS"} {
+		is.Contains(stderr, fact)
+	}
+	is.Empty(fixture.candidate.pushes, "even piped authorization text cannot authorize an automated review pass")
+	is.Empty(fixture.tasks.closed)
 }
 
 func TestIntegrationWorkflowTaskReviewAgentReviewBlockingFindingStopsPipeline(t *testing.T) {

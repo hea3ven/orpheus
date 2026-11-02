@@ -38,6 +38,7 @@ func TestInteractionResponsesPreservePendingWorkUntilAnExactLegalDecision(t *tes
 				publication := snapshot.Workflows[0].Phases[3].(*work.PublicationPhase)
 				publication.Consent = nil
 				publication.Delivery = nil
+				snapshot.Workflows[0].Phases[2].(*work.ReviewPhase).Scope.Requirements = "Task intent\n\n\n\n"
 			}
 			closedView, err := interactionView(task.Task{ID: "op-review", Status: task.StatusClosed}, snapshot)
 			require.NoError(t, err)
@@ -79,7 +80,11 @@ func TestInteractionResponsesPreservePendingWorkUntilAnExactLegalDecision(t *tes
 			require.ErrorContains(t, err, "does not match")
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
-			_, err = controller.Respond(ctx, originalID, PauseResponse{})
+			var canceledResponse Response = PauseResponse{}
+			if kind == InteractionPublication {
+				canceledResponse = PublicationResponse{Action: DecisionAuthorize, Evidence: "Canceled grant"}
+			}
+			_, err = controller.Respond(ctx, originalID, canceledResponse)
 			require.ErrorIs(t, err, context.Canceled)
 			paused, err := controller.Respond(context.Background(), originalID, PauseResponse{})
 			require.NoError(t, err)
@@ -104,7 +109,8 @@ func TestInteractionResponsesPreservePendingWorkUntilAnExactLegalDecision(t *tes
 			if kind == InteractionPublication {
 				response = PublicationResponse{Action: DecisionAuthorize, Evidence: "Operator accepts this exact displayed plan"}
 				wantNext = TaskRunActionPublish
-			} else {
+			}
+			{
 				boundary.err = errors.New("revision changed during the decision")
 				_, err = controller.Respond(context.Background(), originalID, response)
 				require.ErrorIs(t, err, boundary.err)

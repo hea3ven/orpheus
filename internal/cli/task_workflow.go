@@ -42,7 +42,7 @@ func newTaskShowWorkflowCommand(opts *rootOptions) *cobra.Command {
 }
 
 func newTaskRespondCommand(opts *rootOptions) *cobra.Command {
-	var idJSON, action, evidence, decisionsJSON string
+	var idJSON, action, evidence, decisionsJSON, planJSON string
 	cmd := &cobra.Command{Use: "respond <task-id>", Short: "Record a typed workflow decision without advancing or publishing", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
 		var id workflow.InteractionID
 		if err := decodeWorkflowJSON(idJSON, &id); err != nil {
@@ -51,7 +51,7 @@ func newTaskRespondCommand(opts *rootOptions) *cobra.Command {
 		if id.Owner.TaskID != args[0] {
 			return fmt.Errorf("interaction belongs to another task")
 		}
-		response, err := parseWorkflowResponse(id.Kind, workflow.DecisionAction(action), evidence, decisionsJSON)
+		response, err := parseWorkflowResponse(id.Kind, workflow.DecisionAction(action), evidence, decisionsJSON, planJSON)
 		if err != nil {
 			return err
 		}
@@ -66,13 +66,24 @@ func newTaskRespondCommand(opts *rootOptions) *cobra.Command {
 		return json.NewEncoder(command.OutOrStdout()).Encode(view)
 	}}
 	cmd.Flags().StringVar(&idJSON, "interaction", "", "exact interaction ID JSON from task show workflow --json")
-	cmd.Flags().StringVar(&action, "action", "", "explicit permitted action; publication requires authorize")
+	cmd.Flags().StringVar(&action, "action", "", "explicit permitted action; publication accepts authorize, revise, or pause")
 	cmd.Flags().StringVar(&evidence, "evidence", "", "operator evidence for exact-plan publication consent")
+	cmd.Flags().StringVar(&planJSON, "plan", "", "complete replacement plan JSON: Flow, DestinationBranch, Content (with --action revise)")
 	cmd.Flags().StringVar(&decisionsJSON, "decisions", "", "JSON array of explicit finding dispositions")
 	return cmd
 }
 
-func parseWorkflowResponse(kind workflow.InteractionKind, action workflow.DecisionAction, evidence, decisionsJSON string) (workflow.Response, error) {
+func parseWorkflowResponse(kind workflow.InteractionKind, action workflow.DecisionAction, evidence, decisionsJSON, planJSON string) (workflow.Response, error) {
+	if planJSON != "" {
+		if kind != workflow.InteractionPublication || action != workflow.DecisionRevise || evidence != "" || decisionsJSON != "" {
+			return nil, fmt.Errorf("--plan requires only a publication revise response")
+		}
+		var proposal workflow.PublicationPlanResponse
+		if err := decodeWorkflowJSON(planJSON, &proposal); err != nil {
+			return nil, fmt.Errorf("decode --plan: %w", err)
+		}
+		return proposal, nil
+	}
 	switch kind {
 	case workflow.InteractionManualReview:
 		if decisionsJSON != "" || evidence != "" {

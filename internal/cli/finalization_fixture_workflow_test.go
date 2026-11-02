@@ -4,6 +4,7 @@ package cli_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	workmodel "github.com/hea3ven/orpheus/internal/work"
@@ -14,10 +15,9 @@ import (
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
-	"github.com/hea3ven/orpheus/internal/workstate"
+	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"time"
 )
 
 // Publication outcomes describe external effects, not workflow decisions. The
@@ -65,8 +65,7 @@ func (f *finalizationWorkflowFixture) completion(taskID, branch, dir, summary, d
 	require.NoError(f.t, err)
 }
 
-// Publication journeys start from an explicitly authorized fixture plan. The
-// application still records only review approval and never supplies this grant.
+// Publication journeys exercise the real typed decision before delivery.
 func (f *finalizationWorkflowFixture) passedReview(taskID string) {
 	f.t.Helper()
 	view, err := f.taskStore.Load("alpha", taskID)
@@ -74,16 +73,12 @@ func (f *finalizationWorkflowFixture) passedReview(taskID string) {
 	if _, ready := view.Work.ActiveWorkflow().LastPhase().(*workmodel.PublicationPhase); !ready {
 		f.run("a\n", "task", "run", taskID)
 	}
-	adapter := workstate.NewStore(f.paths)
-	snapshot, err := adapter.Load("alpha", taskID)
+	pending := f.inspectWorkflow(taskID)
+	require.NotNil(f.t, pending.Pending)
+	require.Equal(f.t, workflow.InteractionPublication, pending.Pending.ID.Kind)
+	id, err := json.Marshal(pending.Pending.ID)
 	require.NoError(f.t, err)
-	w := snapshot.ActiveWorkflow()
-	require.NotNil(f.t, w)
-	_, ready := w.LastPhase().(*workmodel.PublicationPhase)
-	require.True(f.t, ready, "fixture must complete the real review before granting publication consent")
-	require.NoError(f.t, snapshot.AuthorizePublication(len(snapshot.Workflows)-1, workmodel.PublicationRef{Phase: len(w.Phases) - 1}, time.Now().UTC(), "Explicit synthetic authorization for publication-boundary tests"))
-	_, err = adapter.Save(snapshot, snapshot.Version)
-	require.NoError(f.t, err)
+	f.run("", "task", "respond", taskID, "--interaction", string(id), "--action", "authorize", "--evidence", "Operator accepts the inspected publication plan")
 }
 
 func newMainFinalizationFixture(t *testing.T, taskID string) *finalizationWorkflowFixture {

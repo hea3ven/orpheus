@@ -28,7 +28,7 @@ type PipelineStore interface {
 	PauseReviewForManualAt(work.AttemptRef, string) (taskstate.ReviewAttempt, error)
 	CurrentReviewAt(work.AttemptRef) (taskstate.ReviewAttempt, error)
 	RecordManualCommandInterruption(work.AttemptRef, int) (taskstate.ReviewAttempt, error)
-	RecordManualDecision(work.AttemptRef, taskstate.ReviewStatus, *work.ReviewedPublication) (taskstate.ReviewAttempt, error)
+	RecordManualDecision(work.AttemptRef, taskstate.ReviewStatus) (taskstate.ReviewAttempt, error)
 	RecordCheckResult(work.AttemptRef, *int, error, []taskstate.ReviewFinding) (taskstate.ReviewAttempt, error)
 	FinishReviewStepExecution(repoID, taskID string, attempt int, stepName string, opts taskstate.FinishReviewStepExecutionOptions) (taskstate.ReviewAttempt, error)
 	RecordExecutionUsage(work.AttemptRef, taskstate.RecordRunUsageOptions) error
@@ -87,9 +87,8 @@ type PipelineOutcome struct {
 
 // ManualResult records the terminal status selected by an interactive manual step.
 type ManualResult struct {
-	Publication *work.ReviewedPublication
-	Status      taskstate.ReviewStatus
-	Stop        bool
+	Status taskstate.ReviewStatus
+	Stop   bool
 }
 
 // ManualStep carries operator-facing manual step context after any configured
@@ -1323,7 +1322,7 @@ func recordManualDecision(opts PipelineRunOptions, owner work.AttemptRef, result
 	if opts.RecordManualResult != nil {
 		return opts.RecordManualResult(owner, result)
 	}
-	_, err := opts.Store.RecordManualDecision(owner, result.Status, result.Publication)
+	_, err := opts.Store.RecordManualDecision(owner, result.Status)
 	return err
 }
 

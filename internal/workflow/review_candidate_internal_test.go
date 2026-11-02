@@ -76,8 +76,8 @@ func (g *candidateReadinessGit) VerifyRevision(_ context.Context, dir string, id
 	g.dir, g.identity, g.revision = dir, identity, revision
 	return g.err
 }
-func (*candidateReadinessGit) ObserveDestination(context.Context, string, string) (work.Destination, error) {
-	return work.Destination{}, errors.New("unexpected destination observation")
+func (*candidateReadinessGit) ObserveDestination(_ context.Context, _, branch string) (work.Destination, error) {
+	return work.Destination{Remote: "origin", Branch: branch, Commit: "initial-commit"}, nil
 }
 
 type candidateReadinessStore struct {

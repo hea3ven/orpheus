@@ -76,6 +76,12 @@ type PublishedView struct {
 
 // PublicationView describes selected intent and independent observed delivery.
 type PublicationView struct {
+	Plan               work.PublicationRef
+	Review             work.ReviewRef
+	ReviewOutcome      work.ReviewOutcome
+	Operation          string
+	ExpectedHead       string
+	Effects            []string
 	ReviewAttempt      int
 	Content            string
 	Flow               string
@@ -309,9 +315,20 @@ func reviewSlotIndex(step work.ReviewStep) int {
 func fillPublicationView(v *View, w *work.Workflow, p *work.PublicationPhase) {
 	review := w.Phases[p.Plan.Review.Phase].(*work.ReviewPhase)
 	v.Revision = revisionView(w, review.Scope.Output)
-	info := &PublicationView{Content: p.Plan.Content, Consented: p.Consent != nil, Flow: "pull-request", PRState: "awaiting observation"}
+	info := &PublicationView{Review: p.Plan.Review, Content: p.Plan.Content, Consented: p.Consent != nil, Flow: "pull-request", PRState: "awaiting observation"}
+	info.ReviewOutcome, _ = w.ReviewOutcome(p.Plan.Review)
+	for index, phase := range w.Phases {
+		if phase == p {
+			info.Plan = work.PublicationRef{Phase: index}
+			break
+		}
+	}
+	info.Operation = "create-pr"
+	info.Effects = []string{"Publish reviewed content on task branch", "Push task branch", "Create pull request", "Record pull request URL; keep task open"}
 	if _, direct := p.Plan.Target.(*work.DirectMergeTarget); direct {
 		info.Flow = "direct-merge"
+		info.Operation = "direct-merge"
+		info.Effects = []string{"Merge reviewed content into destination", "Push destination", "Close task after verified delivery", "Attempt safe worktree cleanup after closure"}
 	}
 	for i, phase := range w.Phases {
 		if i > p.Plan.Review.Phase {
@@ -326,6 +343,9 @@ func fillPublicationView(v *View, w *work.Workflow, p *work.PublicationPhase) {
 	}
 	if target, ok := p.Plan.Target.(*work.PullRequestTarget); ok && target.Existing != nil {
 		info.PRURL = target.Existing.URL
+		info.ExpectedHead = target.ExpectedHead
+		info.Operation = "update-pr"
+		info.Effects = []string{"Publish reviewed content after expected public head", "Push task branch", "Update selected pull request; keep task open"}
 	}
 	switch delivered := p.Delivery.(type) {
 	case *work.PullRequestDelivery:

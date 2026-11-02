@@ -163,13 +163,16 @@ func publicationHeaderFields(v workflow.View) []workflowHeaderField {
 	if p.Destination.Remote != "" {
 		destination = p.Destination.Remote + "/" + destination
 	}
+	if p.Destination.Commit != "" {
+		destination += " at " + p.Destination.Commit
+	}
 	switch v.Phase {
 	case workflow.PhasePublication:
 		consent := "Awaiting publication decision"
 		if p.Consented {
 			consent = "Recorded for this unchanged plan"
 		}
-		return []workflowHeaderField{{"REVISION", workflowRevisionLabel(v.Revision)}, {"REVIEW", fmt.Sprintf("Attempt %d passed", p.ReviewAttempt)}, {"FLOW", p.Flow}, {"DESTINATION", destination}, {"CONSENT", consent}}
+		return []workflowHeaderField{{"REVISION", workflowRevisionLabel(v.Revision)}, {"REVIEW", fmt.Sprintf("Attempt %d %s | phase %d", p.ReviewAttempt, p.ReviewOutcome, p.Review.Phase)}, {"PLAN", fmt.Sprintf("phase %d | %s", p.Plan.Phase, p.Operation)}, {"FLOW", p.Flow}, {"DESTINATION", destination}, {"PR", p.PRURL}, {"EXPECTED HEAD", p.ExpectedHead}, {"EFFECTS", strings.Join(p.Effects, "; ")}, {"CONSENT", consent}}
 	case workflow.PhaseExternalReview:
 		return []workflowHeaderField{{"PR", p.PRURL + " | " + p.PRState}, {"PUBLISHED", workflowRevisionLabel(v.Revision) + " | public commit " + p.PublicCommit}, {"DESTINATION", destination}}
 	case workflow.PhaseFinalization:

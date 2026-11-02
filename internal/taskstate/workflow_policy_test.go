@@ -106,7 +106,7 @@ func TestImplementationPolicyKeepsLiveHandoffSeparateFromObservedExitAndRefusesS
 	assert.Equal(t, before, after)
 }
 
-func TestReviewPolicyRetainsOwnedFindingsAndOnlyApprovedPublicationChoices(t *testing.T) {
+func TestReviewPolicyRetainsOwnedFindingsWithoutSelectingPublication(t *testing.T) {
 	history := projectionHistory(t)
 	history.Workflows[0].Phases = history.Workflows[0].Phases[:2]
 	history.Workflows[0].ReviewContracts = nil
@@ -130,8 +130,7 @@ func TestReviewPolicyRetainsOwnedFindingsAndOnlyApprovedPublicationChoices(t *te
 	manual := pending.Steps[1].Address
 	_, err = store.RecordFindingDecision(manual, target, &work.PromotedFinding{})
 	require.NoError(t, err)
-	tentative := &work.ReviewedPublication{Destination: work.Destination{Remote: "origin", Branch: "discard-me", Commit: "D2"}, Target: &work.DirectMergeTarget{}}
-	blocked, err := store.RecordManualDecision(manual, taskstate.ReviewStatusBlocked, tentative)
+	blocked, err := store.RecordManualDecision(manual, taskstate.ReviewStatusBlocked)
 	require.NoError(t, err)
 	assert.Equal(t, taskstate.ReviewStatusBlocked, blocked.Status)
 	assert.Equal(t, taskstate.FindingTypeAdvisory, blocked.Findings[0].ReportedType)
@@ -142,7 +141,7 @@ func TestReviewPolicyRetainsOwnedFindingsAndOnlyApprovedPublicationChoices(t *te
 	require.NoError(t, err)
 	phase := loaded.Work.Workflows[0].Phases[2].(*work.ReviewPhase)
 	assert.Equal(t, []work.FindingRef{target}, phase.Steps[1].(*work.ManualReviewStep).Decision.(*work.RequestedChanges).Targets)
-	assert.Equal(t, "main", phase.Scope.Destination.Branch, "blocked tentative destination is not stored")
+	assert.Equal(t, "main", phase.Scope.Destination.Branch, "review destination remains unchanged")
 	pending, err = store.PauseReviewForManualAt(review.Address, "approval")
 	require.NoError(t, err)
 	manual = pending.Steps[2].Address
@@ -157,8 +156,7 @@ func TestReviewPolicyRetainsOwnedFindingsAndOnlyApprovedPublicationChoices(t *te
 	after, err := store.Load("repo", "task")
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
-	selected := &work.ReviewedPublication{Destination: work.Destination{Remote: "origin", Branch: "release/next", Commit: "D3"}, Target: &work.DirectMergeTarget{}}
-	_, err = store.RecordManualDecision(manual, taskstate.ReviewStatusPassed, selected)
+	_, err = store.RecordManualDecision(manual, taskstate.ReviewStatusPassed)
 	require.NoError(t, err)
 	publication, err := store.PreparePublication(review.Address, &work.PullRequestTarget{}, "Original title\n\nOriginal PR content")
 	require.NoError(t, err)
@@ -166,14 +164,14 @@ func TestReviewPolicyRetainsOwnedFindingsAndOnlyApprovedPublicationChoices(t *te
 	require.NoError(t, err)
 	assert.Equal(t, 3, publication.Phase)
 	p := snapshot.Work.Workflows[0].Phases[3].(*work.PublicationPhase)
-	assert.IsType(t, &work.DirectMergeTarget{}, p.Plan.Target)
-	assert.Nil(t, p.Consent, "manual approval chooses intent, never delivery authorization")
+	assert.IsType(t, &work.PullRequestTarget{}, p.Plan.Target)
+	assert.Nil(t, p.Consent, "manual approval never selects or authorizes delivery")
 	assert.Nil(t, p.Delivery)
 	destination, err := snapshot.Work.Workflows[0].ReviewDestination(p.Plan.Review)
 	require.NoError(t, err)
-	assert.Equal(t, "release/next", destination.Branch)
-	assert.Equal(t, "D3", destination.Commit)
-	assert.Equal(t, "main", snapshot.Work.Workflows[0].Phases[2].(*work.ReviewPhase).Scope.Destination.Branch, "automated scope remains immutable and visible")
+	assert.Equal(t, "main", destination.Branch)
+	assert.Equal(t, "destination", destination.Commit)
+	assert.Equal(t, "main", snapshot.Work.Workflows[0].Phases[2].(*work.ReviewPhase).Scope.Destination.Branch, "review scope remains immutable and visible")
 	_, err = store.RecordReviewFinding("repo", "task", review.Attempt, taskstate.ReviewFinding{Actor: &actor, Type: taskstate.FindingTypeBlocking, Title: "Late child report", Description: "Wrong owner"})
 	require.Error(t, err)
 	refused, err := store.Load("repo", "task")

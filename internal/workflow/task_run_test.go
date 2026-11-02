@@ -41,7 +41,7 @@ func TestSelectTaskRunRouteUsesLastTypedPhase(t *testing.T) {
 			p.Output = nil
 			p.Completion = nil
 		}, want: TaskRunActionStartImplementation},
-		{name: "pending review is active", change: func(w *work.Workflow) { appendRouteReview(w, false) }, want: TaskRunActionReviewActive},
+		{name: "reserved unstarted review continues", change: func(w *work.Workflow) { appendRouteReview(w, false) }, want: TaskRunActionResumeReview},
 		{name: "manual assessment resumes", change: func(w *work.Workflow) {
 			p := appendRouteReview(w, true)
 			p.Steps = []work.ReviewStep{&work.ManualReviewStep{Slot: 0}}

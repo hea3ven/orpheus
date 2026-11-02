@@ -135,24 +135,29 @@ func (s Controller) preparePublication(ctx context.Context, current ReviewAttemp
 	if _, err := taskstate.CompletionRunsForReview(snapshot); err != nil {
 		return err
 	}
-	options, err := ResolvePublicationOptions(s.Paths, current.Source.Repository)
-	if err != nil {
-		return err
-	}
-	rendered, err := BuildPublicationPullRequestContentFromStateWithOptions(options, current.Task, snapshot)
-	if err != nil {
-		return err
-	}
-	var target work.PublicationTarget = &work.PullRequestTarget{}
-	flow, err := s.effectiveIntegrationFlow(current)
-	if err != nil {
-		return err
-	}
-	if flow == publication.IntegrationFlowDirectMerge {
-		target = &work.DirectMergeTarget{}
+	reviewPhase := snapshot.Work.Workflows[current.Review.Address.Workflow].Phases[current.Review.Address.Phase].(*work.ReviewPhase)
+	intent := reviewPhase.Publication
+	if intent == nil {
+		options, err := ResolvePublicationOptions(s.Paths, current.Source.Repository)
+		if err != nil {
+			return err
+		}
+		rendered, err := BuildPublicationPullRequestContentFromStateWithOptions(options, current.Task, snapshot)
+		if err != nil {
+			return err
+		}
+		var target work.PublicationTarget = &work.PullRequestTarget{}
+		flow, err := s.effectiveIntegrationFlow(current)
+		if err != nil {
+			return err
+		}
+		if flow == publication.IntegrationFlowDirectMerge {
+			target = &work.DirectMergeTarget{}
+		}
+		intent = &work.PublicationIntent{Target: target, Content: rendered.Title + "\n\n" + rendered.Body}
 	}
 	return state.WithGlobalMutationLockLogger(ctx, s.Paths, "reserve publication", s.Logger, func() error {
-		_, err := current.store.PreparePublication(current.Review.Address, target, rendered.Title+"\n\n"+rendered.Body)
+		_, err := current.store.PreparePublication(current.Review.Address, intent.Target, intent.Content)
 		return err
 	})
 }
@@ -211,15 +216,29 @@ func (s Controller) freshReviewOptions(base ReviewContext, pipeline review.Pipel
 	if boundary == nil {
 		boundary = LocalReviewCandidateGit{}
 	}
-	destination, err := boundary.ObserveDestination(context.Background(), base.Workdir, base.Source.Repository.DefaultBranch)
+	destinationBranch := base.Source.Repository.DefaultBranch
+	var intent *work.PublicationIntent
+	if latest, ok := taskstate.LatestReview(snapshot); ok && latest.Address.Workflow == len(snapshot.Work.Workflows)-1 {
+		prior := w.Phases[latest.Address.Phase].(*work.ReviewPhase)
+		if prior.Publication != nil {
+			intent = prior.Publication
+			destinationBranch = prior.Scope.Destination.Branch
+		}
+	}
+	destination, err := boundary.ObserveDestination(context.Background(), base.Workdir, destinationBranch)
 	if err != nil {
 		return taskstate.StartReviewOptions{}, err
 	}
+	contract := reviewContract(pipeline)
+	scope := work.ReviewScope{Requirements: reviewRequirements(base.Task), Output: output, DeltaFrom: effort.Input, Destination: &destination}
+
+	return taskstate.StartReviewOptions{Pipeline: pipeline.Name, Step: pipeline.Steps[0].Name, Contract: contract, Scope: scope, Publication: intent, ExpectedVersion: &snapshot.Work.Version}, nil
+}
+
+func reviewContract(pipeline review.Pipeline) work.ReviewContract {
 	contract := work.ReviewContract{PipelineKey: pipeline.Name}
 	for _, step := range pipeline.Steps {
 		contract.Slots = append(contract.Slots, work.ReviewSlot{Kind: work.ReviewStepKind(step.Kind), ConfigKey: step.Name})
 	}
-	scope := work.ReviewScope{Requirements: base.Task.Title + "\n\n" + base.Task.Description + "\n\n" + base.Task.AcceptanceCriteria, Output: output, DeltaFrom: effort.Input, Destination: &destination}
-
-	return taskstate.StartReviewOptions{Pipeline: pipeline.Name, Step: pipeline.Steps[0].Name, Contract: contract, Scope: scope, ExpectedVersion: &snapshot.Work.Version}, nil
+	return contract
 }
