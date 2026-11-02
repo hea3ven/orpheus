@@ -4,6 +4,7 @@ package cli_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -166,40 +167,92 @@ func TestIntegrationWorkflowTaskReviewAdvisoryAndSeparateTaskFindingsDoNotBlockA
 }
 
 func TestIntegrationWorkflowTaskReviewCreatesSelectedSeparateTaskFollowUp(t *testing.T) {
-	is := assert.New(t)
-	must := require.New(t)
-	fixture := newReviewWorkflowFixture(t, "op-main", "Review follow-up", "Create follow-up task.")
-	paths := fixture.paths
+	for _, answer := range []string{"attached", "manual response", "finding response"} {
+		t.Run(answer, func(t *testing.T) {
+			fixture := newReviewWorkflowFixture(t, "op-main", "Review follow-up", "Create follow-up task.")
+			prior := fixture.check("prior", checkResult{})
+			lastKind := "manual"
+			if answer == "finding response" {
+				lastKind = "agent_review"
+				fixture.reviewers(semanticAgentOutcome{findings: []taskstate.ReviewFinding{
+					{Type: taskstate.FindingTypeSeparateTask, Title: "Follow-up", Description: "Extract helper later", TaskProposal: taskstate.ReviewTaskProposal{Title: "Extract helper", Description: "Extract the helper later.", AcceptanceCriteria: "Helper extraction has tests."}},
+					aBlockingFinding(),
+				}})
+			}
+			fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "check", "name": "prior", "command": prior}, {"kind": lastKind, "name": "local-review"}}})
+			input := strings.Join([]string{"t", "Follow-up", "Extract helper later", "", "Extract helper", "Extract the helper later.", "Helper extraction has tests.", "a", "1", ""}, "\n")
+			var stdout, stderr string
+			if answer == "attached" {
+				stdout, stderr = fixture.run(input, "task", "run", "op-main")
+			} else {
+				input = strings.Join([]string{"t", "Follow-up", "Extract helper later", "", "Extract helper", "Extract the helper later.", "Helper extraction has tests.", "q", ""}, "\n")
+				if answer == "finding response" {
+					input = "p\n"
+				}
+				fixture.run(input, "task", "run", "op-main")
+				paused := loadLatestReview(t, fixture, "op-main")
+				require.Len(t, paused.Steps, 2)
+				inspection, _ := fixture.run("", "task", "show", "workflow", "op-main", "--json")
+				var view workflow.View
+				require.NoError(t, json.Unmarshal([]byte(inspection), &view))
+				require.NotNil(t, view.Pending)
+				id, err := json.Marshal(view.Pending.ID)
+				require.NoError(t, err)
+				responseArgs := []string{"task", "respond", "op-main", "--interaction", string(id)}
+				if answer == "finding response" {
+					require.Equal(t, workflow.InteractionFindings, view.Pending.ID.Kind)
+					require.Len(t, view.Pending.Findings, 1)
+					decisions, err := json.Marshal([]workflow.FindingDecision{{Ref: view.Pending.Findings[0].Ref, Action: workflow.DecisionWaive, Reason: "Accepted risk"}})
+					require.NoError(t, err)
+					responseArgs = append(responseArgs, "--decisions", string(decisions))
+				} else {
+					require.Equal(t, workflow.InteractionManualReview, view.Pending.ID.Kind)
+					responseArgs = append(responseArgs, "--action", "approve")
+				}
+				fixture.run("", responseArgs...)
+				assert.Empty(t, fixture.tasks.created, "Respond must not create proposal tasks")
+				answered, item := fixture.loadFinalTask("op-main")
+				require.Len(t, answered.Work.Workflows[0].Phases, 3, "Respond must not advance to Publication")
+				assert.Equal(t, taskstate.ReviewStatusPassed, answered.Reviews[0].Status)
+				assertTaskNotPublished(t, answered, item)
 
-	input := strings.Join([]string{
-		"t",
-		"Follow-up",
-		"Extract helper later",
-		"",
-		"Extract helper",
-		"Extract the helper later.",
-		"Helper extraction has tests.",
-		"a",
-		"1",
-		"",
-	}, "\n")
-	stdout, stderr := fixture.run(input, "task", "run", "op-main")
+				stdout, stderr = fixture.run("1\n", "task", "run", "op-main")
 
-	is.Contains(stdout, "Review passed for op-main")
-	is.Contains(stderr, "Created follow-up task op-41 for review finding 1.")
-	must.Len(fixture.tasks.created, 1)
-	is.Equal(taskmodel.CreateOptions{Title: "Extract helper", Description: "Extract the helper later.\n\nProvenance:\nDiscovered during review of op-main in repository alpha (review attempt 1, finding 1). Review step: local-review.", AcceptanceCriteria: "Helper extraction has tests.", IssueType: taskmodel.IssueTypeTask}, fixture.tasks.created[0])
-	created, err := fixture.tasks.Get(context.Background(), "op-41")
-	must.NoError(err)
-	is.Equal(taskmodel.StatusOpen, created.Status)
-	var state taskstate.TaskState
-	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
-	latest, ok := taskstate.LatestReview(state)
-	must.True(ok)
-	is.Equal(taskstate.ReviewStatusPassed, latest.Status)
-	must.Len(latest.Findings, 1)
-	is.Equal("op-41", latest.Findings[0].CreatedTaskID)
-	is.NotNil(latest.Findings[0].CreatedTaskAt)
+				current := loadLatestReview(t, fixture, "op-main")
+				assert.Equal(t, paused.StartedAt, current.StartedAt)
+				assert.Equal(t, paused.Steps, current.Steps, "proposal selection cannot replay completed review steps")
+			}
+			assert.Contains(t, stdout, "Review passed for op-main")
+			assert.Contains(t, stderr, "Create follow-up tasks [numbers, a=all, n=none]")
+			assert.Contains(t, stderr, "Created follow-up task op-41 for review finding 1.")
+			require.Len(t, fixture.tasks.created, 1)
+			assert.Equal(t, taskmodel.CreateOptions{Title: "Extract helper", Description: "Extract the helper later.\n\nProvenance:\nDiscovered during review of op-main in repository alpha (review attempt 1, finding 1). Review step: local-review.", AcceptanceCriteria: "Helper extraction has tests.", IssueType: taskmodel.IssueTypeTask}, fixture.tasks.created[0])
+			created, err := fixture.tasks.Get(context.Background(), "op-41")
+			require.NoError(t, err)
+			assert.Equal(t, taskmodel.StatusOpen, created.Status)
+			state, _ := fixture.loadFinalTask("op-main")
+			require.Len(t, state.Reviews, 1)
+			latest := state.Reviews[0]
+			assert.Equal(t, taskstate.ReviewStatusPassed, latest.Status)
+			wantFindings := 1
+			if answer == "finding response" {
+				wantFindings = 2
+			}
+			require.Len(t, latest.Findings, wantFindings)
+			assert.Equal(t, "op-41", latest.Findings[0].CreatedTaskID)
+			assert.NotNil(t, latest.Findings[0].CreatedTaskAt)
+			assert.Equal(t, []string{"prior"}, fixture.checkCalls)
+			wantAgents := 0
+			if answer == "finding response" {
+				wantAgents = 1
+			}
+			assert.Len(t, fixture.agent.launches, wantAgents)
+			assertUnconsentedPublication(t, state)
+			_, stderr = fixture.run("", "task", "run", "op-main")
+			assert.NotContains(t, stderr, "Create follow-up tasks")
+			assert.Len(t, fixture.tasks.created, 1, "publication continuation cannot duplicate the selected task")
+		})
+	}
 }
 
 func TestIntegrationWorkflowTaskReviewCanAbortWhenSeparateTaskCreationFails(t *testing.T) {

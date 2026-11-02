@@ -138,20 +138,7 @@ func (s Controller) advancePhase(ctx context.Context, inv *advanceInvocation, vi
 	case TaskRunActionStartReview, TaskRunActionResumeReview:
 		return s.advanceReview(ctx, inv, view, route, result)
 	case TaskRunActionPreparePublication:
-		current := inv.lastReview
-		if current.Review.Address.Workflow != route.Owner.Workflow || current.Review.Address.Phase != route.Owner.Phase || current.Review.Address.RepositoryID == "" {
-			completed, err := s.RunStore.CurrentReviewAt(*route.Owner)
-			if err != nil {
-				return true, err
-			}
-			current = ReviewAttemptContext{ReviewContext: inv.base, Review: completed}
-		}
-		if err := s.preparePublication(ctx, current); err != nil {
-			return true, err
-		}
-		outcome := ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomePublicationPending, Context: current}
-		result.Review = &outcome
-		return true, s.notify(inv.base.RepoID(), inv.base.Task, false, nil)
+		return s.advancePublication(ctx, inv, route, result)
 	case TaskRunActionPublish, TaskRunActionRetryFinalization:
 		delivered, next, err := s.advanceDeliveryPhase(ctx, FinalizeOptions{TaskID: inv.base.TaskID()}, &route)
 		result.Delivery = &delivered

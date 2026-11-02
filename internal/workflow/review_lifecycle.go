@@ -637,20 +637,6 @@ func (s ReviewLifecycleService) executeReviewAttempt(runCtx context.Context, ctx
 	if outcome.Status == taskstate.ReviewStatusWaitingForManual || outcome.Status == taskstate.ReviewStatusWaitingForAutomatedDecision {
 		return outcome.Status, nil
 	}
-	if outcome.Status == taskstate.ReviewStatusPassed {
-		shouldPublish, err := s.processSeparateTaskReviewCandidates(runCtx, ctx)
-		if err != nil {
-			_, _ = ctx.store.RecordReviewFailure(ctx.Review.Address, err)
-			return "", err
-		}
-		if !shouldPublish {
-			if _, err := ctx.store.RecordReviewAbort(ctx.Review.Address, "Operator declined continuation after follow-up creation failure"); err != nil {
-				_, _ = ctx.store.RecordReviewFailure(ctx.Review.Address, err)
-				return "", fmt.Errorf("task run %s: record aborted review: %w", ctx.TaskID(), err)
-			}
-			return taskstate.ReviewStatusAborted, nil
-		}
-	}
 	if _, err := validatedReviewOutcome(ctx.store, ctx.Review.Address, outcome.Status); err != nil {
 		_, _ = ctx.store.RecordReviewFailure(ctx.Review.Address, err)
 		return "", fmt.Errorf("task run %s: record %s review: %w", ctx.TaskID(), outcome.Status, err)
