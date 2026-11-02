@@ -9,8 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/spf13/cobra"
 )
 
@@ -115,7 +117,7 @@ func runTaskShowReview(command *cobra.Command, opts *rootOptions, args []string)
 	return renderTaskShowReview(
 		command.OutOrStdout(),
 		resolvedCtx.Resolved.Source.Repository.ID,
-		resolvedCtx.Resolved.TaskID,
+		resolvedCtx.Task,
 		taskState,
 		scope,
 	)
@@ -124,10 +126,11 @@ func runTaskShowReview(command *cobra.Command, opts *rootOptions, args []string)
 func renderTaskShowReview(
 	output io.Writer,
 	repoID string,
-	taskID string,
+	item task.Task,
 	taskState taskstate.TaskState,
 	scope reviewShowScope,
 ) error {
+	taskID := item.ID
 	if _, err := fmt.Fprintf(output, "Review state for %s (repo %s)\n", taskID, repoID); err != nil {
 		return err
 	}
@@ -152,7 +155,7 @@ func renderTaskShowReview(
 			_, err := fmt.Fprintf(output, "\nNo review is recorded in the current workflow; run `orpheus task run %s` to continue current work.\n", taskID)
 			return err
 		}
-		return renderReviewNextStep(output, taskID, taskState, latest)
+		return renderReviewNextStep(output, item, taskState, latest)
 	}
 
 	review, ok := reviewAttemptByNumber(taskState, scope.reviewAttempt)
@@ -164,7 +167,7 @@ func renderTaskShowReview(
 			return err
 		}
 		if review.Attempt == latest.Attempt {
-			return renderReviewNextStep(output, taskID, taskState, latest)
+			return renderReviewNextStep(output, item, taskState, latest)
 		}
 		return nil
 	}
@@ -736,7 +739,15 @@ func createdReviewFollowUps(taskState taskstate.TaskState) []createdReviewFollow
 	return followUps
 }
 
-func renderReviewNextStep(output io.Writer, taskID string, taskState taskstate.TaskState, review taskstate.ReviewAttempt) error {
+func renderReviewNextStep(output io.Writer, item task.Task, taskState taskstate.TaskState, review taskstate.ReviewAttempt) error {
+	taskID := item.ID
+	if taskState.Work != nil {
+		view, err := workflow.InspectTask(item, taskState)
+		if err != nil {
+			return err
+		}
+		return renderWorkflowNext(output, view)
+	}
 	switch review.Status {
 	case taskstate.ReviewStatusWaitingForAutomatedDecision:
 		return renderReviewNextStepMessage(output, pausedAutomatedDecisionNextStep(taskID, review))

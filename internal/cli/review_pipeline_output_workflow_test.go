@@ -125,7 +125,7 @@ func TestIntegrationWorkflowReviewPipelinePassingCheckClearsRollingTailThroughCL
 	is.NotContains(stdout.String(), "passing stdout")
 	is.Contains(stdout.String(), "Review passed for op-check-pass")
 	visible := stderr.Visible()
-	is.Contains(visible, "== Review step: unit (check) ==")
+	is.Contains(visible, "STEP · unit (check)")
 	is.NotContains(visible, "passing stdout")
 	is.NotContains(visible, "passing stderr")
 	is.Contains(stderr.Raw(), "\x1b[31mpassing stderr\x1b[0m")

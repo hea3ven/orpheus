@@ -210,7 +210,7 @@ func TestIntegrationWorkflowTaskRunRepoRootContinuationBlocksUnresolvedProcesses
 				stdout, stderr, err := fixture.execute("task", "run", "op-continue")
 
 				require.NoError(t, err)
-				assert.Empty(t, stderr)
+				assert.Contains(t, stderr, "IMPLEMENTATION")
 				assert.Contains(t, stdout, "implementation attempt 1 is active")
 				final, item := fixture.loadFinalTask("op-continue")
 				assert.Equal(t, before, final)

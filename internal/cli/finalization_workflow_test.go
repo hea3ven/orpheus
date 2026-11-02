@@ -36,7 +36,7 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 
 			require.ErrorIs(t, err, f.publication.pushError)
 			assert.Empty(t, stdout)
-			assert.Empty(t, stderr)
+			assert.Contains(t, stderr, "TASK")
 			pending, item := f.loadFinalTask("op-merge")
 			assert.Equal(t, before, pending, "a failed push cannot fabricate observed delivery")
 			assert.Equal(t, taskmodel.StatusInProgress, item.Status)
@@ -58,11 +58,16 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			assert.Nil(t, facts.ClosedAt)
 			assert.Equal(t, taskmodel.StatusInProgress, item.Status)
 			assert.Empty(t, f.publication.cleanupAttempts)
+			statusOutput, _ := f.run("", "status", "--no-truncate")
+			assert.Contains(t, statusOutput, "delivery verified; retry task run for closure")
+			inspection, _ := f.run("", "task", "show", "workflow", "op-merge")
+			assert.Contains(t, inspection, "Workflow next action: retry_finalization")
+			assert.Contains(t, inspection, "FINALIZATION")
 			f.mutations.closeError = nil
 
 			stdout, stderr = f.run("", "task", "done", "op-merge")
 
-			assert.Empty(t, stderr)
+			assert.Contains(t, stderr, "TASK")
 			assert.Contains(t, stdout, "Finalized op-merge")
 			assert.Contains(t, stdout, "reviewed output-1")
 			assert.Contains(t, stdout, "pushed main")
@@ -99,7 +104,7 @@ func TestIntegrationWorkflowTaskDoneInfersFeatureTaskAcrossWorkingDirectories(t 
 
 			stdout, stderr := f.run("", "task", "done")
 
-			assert.Empty(t, stderr)
+			assert.Contains(t, stderr, "TASK")
 			assert.Contains(t, stdout, "Published op-infer")
 			assert.Contains(t, stdout, "reviewed output-1")
 			assert.Contains(t, stdout, "observed PR "+f.pr.url)

@@ -35,6 +35,7 @@ func TestIntegrationWorkflowCompletionProtocolSuggestsContextAwareValues(t *test
 
 	assertCompletionChoices(t, fixture, []string{"task", "show", ""}, []string{
 		"review\tInspect persisted review history, an attempt, or an authoritative finding",
+		"workflow\tInspect workflow context, next action, and pending typed decisions",
 		"ar-closed\tClosed task (alpha)",
 		"ar-epic-open\tOpen epic (alpha)",
 		"ar-open\tOpen task (alpha)",

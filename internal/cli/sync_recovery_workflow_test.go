@@ -27,17 +27,17 @@ func TestIntegrationWorkflowTaskSyncUpdatesBranchAndRetriesPushWithoutAnotherMer
 
 	require.ErrorIs(t, err, f.publication.pushError)
 	assert.Empty(t, stdout)
-	assert.Empty(t, stderr)
+	assert.Contains(t, stderr, "EXTERNAL REVIEW")
 	head := f.candidate.head
 	assert.NotEqual(t, head, f.publication.remote["orpheus/op-sync"])
 	assert.Equal(t, 1, f.syncGit.commits)
 	f.publication.pushError = nil
 	stdout, stderr = f.run("", "task", "sync", "op-sync")
-	assert.Empty(t, stderr)
+	assert.Contains(t, stderr, "EXTERNAL REVIEW")
 	assert.Contains(t, stdout, "already includes main")
 	assert.Equal(t, head, f.publication.remote["orpheus/op-sync"])
 	currentOut, currentErr := f.run("", "task", "sync", "op-sync")
-	assert.Empty(t, currentErr)
+	assert.Contains(t, currentErr, "EXTERNAL REVIEW")
 	assert.Contains(t, currentOut, "already includes main")
 	assert.Equal(t, 1, f.syncGit.commits)
 	assert.Len(t, f.candidate.pushes, 1)
@@ -61,7 +61,7 @@ func TestIntegrationWorkflowTaskSyncAllLeavesConflictFreeBranchUnchanged(t *test
 
 	stdout, stderr := f.run("", "task", "sync", "--all")
 
-	assert.Empty(t, stderr)
+	assert.Contains(t, stderr, "EXTERNAL REVIEW")
 	assert.Contains(t, stdout, "conflict-only batch sync left it unchanged")
 	assert.Equal(t, head, f.candidate.head)
 	assert.Equal(t, head, f.publication.remote["orpheus/op-sync"])
@@ -112,7 +112,7 @@ func TestIntegrationWorkflowTaskSyncConflictFailureRollsBackAndRetries(t *testin
 				require.ErrorIs(t, err, cause)
 			}
 			assert.Empty(t, stdout)
-			assert.Empty(t, stderr)
+			assert.Contains(t, stderr, "EXTERNAL REVIEW")
 			assert.Equal(t, head, f.candidate.head)
 			assert.Equal(t, head, f.publication.remote["orpheus/op-sync"])
 			assert.False(t, f.syncGit.mergeActive)
@@ -154,7 +154,7 @@ func TestIntegrationWorkflowTaskSyncConflictFailureRollsBackAndRetries(t *testin
 
 			stdout, stderr = f.run("", "task", "sync", "op-sync")
 
-			assert.Empty(t, stderr)
+			assert.Contains(t, stderr, "EXTERNAL REVIEW")
 			assert.Contains(t, stdout, "resolved merge conflicts with the configured agent")
 			assert.NotEqual(t, head, f.candidate.head)
 			assert.Equal(t, f.candidate.head, f.publication.remote["orpheus/op-sync"])
@@ -201,7 +201,11 @@ func TestIntegrationWorkflowTaskSyncRecoversAmbiguousPushWithoutRepeatingRepair(
 
 			stdout, stderr, err := f.runError("", "task", "sync", "op-sync")
 
-			assert.Empty(t, stderr)
+			if moved {
+				assert.Empty(t, stderr)
+			} else {
+				assert.Contains(t, stderr, "EXTERNAL REVIEW")
+			}
 			state, _ = f.loadFinalTask("op-sync")
 			if moved {
 				require.ErrorContains(t, err, "remote task branch changed from the recorded checkpoint")

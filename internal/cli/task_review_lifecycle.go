@@ -10,6 +10,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/registry"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
+	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/spf13/cobra"
 )
@@ -32,7 +33,10 @@ func (f *taskReviewLifecycleFrontend) PipelinePresentation(ctx workflow.ReviewAt
 }
 
 func (f taskReviewLifecycleFrontend) ReviewResumed(ctx workflow.ReviewAttemptContext) error {
-	message := "Resuming review attempt %d at manual step %q.\n"
+	message := "Resuming review attempt %d after answered step %q.\n"
+	if ctx.Review.Status == taskstate.ReviewStatusWaitingForManual {
+		message = "Resuming review attempt %d at manual step %q.\n"
+	}
 	if ctx.ResumesAutomatedBlockerDecision() {
 		message = "Resuming review attempt %d at automated blocker decision for step %q.\n"
 	}
@@ -200,6 +204,7 @@ func newTaskWorkflowController(
 		effects.CaptureUsage = deps.captureUsage
 	}
 	service := workflow.ReviewLifecycleService{
+		Progress:      newWorkflowHeaders(command, deps.terminal).Render,
 		ReviewEffects: effects,
 		ReviewStatus:  deps.reviewStatus,
 		Paths:         deps.paths,

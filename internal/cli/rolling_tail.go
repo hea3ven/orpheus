@@ -1,4 +1,4 @@
-package review
+package cli
 
 import (
 	"fmt"
@@ -17,68 +17,6 @@ const (
 	stderrColor = "\x1b[31m"
 	resetColor  = "\x1b[0m"
 )
-
-type stepOutput struct {
-	stdoutDest io.Writer
-	stderrDest io.Writer
-	tail       *rollingTail
-	tailStdout *tailStreamWriter
-	tailStderr *tailStreamWriter
-}
-
-func newStepOutput(opts PipelineRunOptions, rolling bool) stepOutput {
-	if !rolling || !opts.InteractiveOutput {
-		return stepOutput{stdoutDest: opts.Stdout, stderrDest: opts.Stderr}
-	}
-
-	tail := newRollingTail(opts.Stderr, opts.OutputWidth, opts.OutputWidthFunc)
-	stdout := newTailStreamWriter(tail, tailStreamStdout)
-	stderr := newTailStreamWriter(tail, tailStreamStderr)
-	return stepOutput{
-		stdoutDest: stdout,
-		stderrDest: stderr,
-		tail:       tail,
-		tailStdout: stdout,
-		tailStderr: stderr,
-	}
-}
-
-func (o *stepOutput) finishClear() {
-	if o.tail == nil {
-		return
-	}
-	o.flush()
-	o.tail.finish(tailFinishClear)
-}
-
-func (o *stepOutput) finishTail() {
-	if o.tail == nil {
-		return
-	}
-	o.flush()
-	o.tail.finish(tailFinishLive)
-}
-
-func (o *stepOutput) finishExpanded() {
-	if o.tail == nil {
-		return
-	}
-	o.flush()
-	o.tail.finish(tailFinishExpanded)
-}
-
-func (o *stepOutput) flush() {
-	o.tailStdout.flush()
-	o.tailStderr.flush()
-}
-
-func (o stepOutput) stdout() io.Writer {
-	return o.stdoutDest
-}
-
-func (o stepOutput) stderr() io.Writer {
-	return o.stderrDest
-}
 
 type tailStream int
 

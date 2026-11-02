@@ -95,9 +95,9 @@ func TestIntegrationWorkflowTaskRunAttachedManualBlockerRepairsAndApprovalPrepar
 	must.NoError(err)
 	is.Contains(stdout, "Recorded completion for op-manual")
 	is.Contains(stdout, "Review passed for op-manual")
-	is.Contains(stderr, "== Agent run: implementation (run attempt 1) ==")
-	is.Contains(stderr, "== Agent run: review follow-up (run attempt 2; review attempt 1; required blocking findings 1; advisory opportunities -) ==")
-	is.Contains(stderr, "◆ REVIEW STEP · approval (manual)")
+	is.Contains(stderr, "-- STEP: implement (agent) --")
+	is.Contains(stderr, "-- STEP: repair-findings (agent) --")
+	is.Contains(stderr, "-- STEP: approval (manual)")
 	is.Contains(stderr, "Review blocked for op-manual.")
 	is.Contains(stderr, "Autonomous review follow-up for op-manual targets review attempt 1 finding(s) 1.")
 	is.NotContains(stdout, "starting a fresh review")
@@ -148,7 +148,7 @@ func TestIntegrationWorkflowTaskReviewManualBlockerExhaustsBudgetWithoutExtraLau
 
 	is.Contains(stdout, "Recorded completion for op-manual-loop")
 	is.Equal(2, strings.Count(stderr, "Review blocked for op-manual-loop."))
-	is.Contains(stderr, "== Agent run: review follow-up (run attempt 2; review attempt 1; required blocking findings 1; advisory opportunities -) ==")
+	is.Contains(stderr, "-- STEP: repair-findings (agent) --")
 	is.Contains(stderr, "Autonomous review attempt budget exhausted for op-manual-loop after 2 review attempt(s).")
 	is.NotContains(stderr, "run attempt 3")
 
@@ -235,7 +235,7 @@ func TestIntegrationWorkflowTaskRunAutonomousReviewLoopExhaustsPersistentCheckBl
 	showStdout, showStderr := fixture.run("", "task", "show", "review", "op-stubborn", "2")
 	is.Empty(showStderr)
 	is.Contains(showStdout, "Autonomous review: attempt budget exhausted")
-	is.Contains(showStdout, "Next step: autonomous review attempts are exhausted")
+	is.Contains(showStdout, "Workflow next action: targeted_repair")
 
 	taskStdout, taskStderr := fixture.run("", "task", "show", "op-stubborn")
 	is.Empty(taskStderr)

@@ -56,7 +56,7 @@ func TestIntegrationWorkflowConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 
 			stdout, stderr = f.run("", "task", "done", item.ID)
 
-			assert.Empty(t, stderr)
+			assert.Contains(t, stderr, "TASK")
 			assert.Contains(t, stdout, "observed PR "+f.pr.url)
 			assert.Equal(t, []string{"Replaced the config for abc\n\nReplaced the config used for publication validation."}, f.candidate.commits)
 			require.Len(t, f.pr.created, 1)
@@ -106,7 +106,7 @@ func TestIntegrationWorkflowMissingPublicationExternalReferenceBlocksDispatchAnd
 
 	require.NoError(t, err)
 	assert.Contains(t, stdout, "Published "+item.ID)
-	assert.Empty(t, stderr)
+	assert.Contains(t, stderr, "TASK")
 	assert.False(t, f.git.hasCandidateChanges)
 	f.assertPublishedPR(item.ID)
 	require.Len(t, f.pr.created, 1)

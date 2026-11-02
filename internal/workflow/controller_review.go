@@ -92,6 +92,41 @@ func (s Controller) prepareReview(ctx context.Context, inv *advanceInvocation, v
 	return s.startFreshReview(base, pipeline)
 }
 
+// advancePublication applies the post-review proposal policy for every passed
+// review, including answers recorded outside the attached pipeline. Respond
+// records decisions only; task creation happens here before entering Publication.
+func (s Controller) advancePublication(ctx context.Context, inv *advanceInvocation, route TaskRunRoute, result *AdvanceResult) (bool, error) {
+	current := inv.lastReview
+	if current.Review.Address.Workflow != route.Owner.Workflow || current.Review.Address.Phase != route.Owner.Phase || current.Review.Address.RepositoryID == "" {
+		completed, err := s.RunStore.CurrentReviewAt(*route.Owner)
+		if err != nil {
+			return true, err
+		}
+		current = ReviewAttemptContext{ReviewContext: inv.base, Review: completed}
+		if err := s.notify(current.RepoID(), current.Task, true, nil); err != nil {
+			return true, err
+		}
+	}
+	shouldPublish, err := s.processSeparateTaskReviewCandidates(ctx, current)
+	if err != nil {
+		_, _ = current.store.RecordReviewFailure(current.Review.Address, err)
+		return true, err
+	}
+	if !shouldPublish {
+		if _, err := current.store.RecordReviewAbort(current.Review.Address, "Operator declined continuation after follow-up creation failure"); err != nil {
+			_, _ = current.store.RecordReviewFailure(current.Review.Address, err)
+			return true, fmt.Errorf("task run %s: record aborted review: %w", current.TaskID(), err)
+		}
+		result.Review = &ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeAborted, Context: current}
+		return true, nil
+	}
+	if err := s.preparePublication(ctx, current); err != nil {
+		return true, err
+	}
+	result.Review = &ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomePublicationPending, Context: current}
+	return true, s.notify(current.RepoID(), current.Task, false, nil)
+}
+
 func (s Controller) preparePublication(ctx context.Context, current ReviewAttemptContext) error {
 	snapshot, err := current.store.Load(current.RepoID(), current.TaskID())
 	if err != nil {

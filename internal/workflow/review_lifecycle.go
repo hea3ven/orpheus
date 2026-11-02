@@ -70,9 +70,8 @@ type ReviewPipelinePresentation struct {
 	Stderr io.Writer
 	Stdin  io.Reader
 
-	InteractiveOutput bool
-	OutputWidth       int
-	OutputWidthFunc   func() (int, bool)
+	OpenOutput func(rolling bool) review.StepOutput
+	Report     func(review.Notice, review.Step) error
 
 	PauseBeforeManual       bool
 	RenderManualStep        func(ReviewManualStepContext) error
@@ -99,6 +98,7 @@ type ReviewLifecycleFrontend interface {
 // ReviewLifecycleService coordinates specialized review execution and its typed
 // records. Phase progression and repair-loop policy belong to Controller.
 type ReviewLifecycleService struct {
+	Progress               func(Progress) error
 	ReviewEffects          review.Effects
 	ReviewStatus           func(context.Context, string) (string, error)
 	Paths                  state.Paths
@@ -373,16 +373,6 @@ func (s ReviewLifecycleService) pipelineRunOptions(runCtx context.Context, ctx R
 	if err != nil {
 		return review.PipelineRunOptions{}, fmt.Errorf("task run %s: %w", ctx.TaskID(), err)
 	}
-	var renderManualStep func(review.Step) error
-	if presentation.RenderManualStep != nil {
-		renderManualStep = func(step review.Step) error {
-			manualCtx, err := s.manualStepContext(runCtx, ctx, step)
-			if err != nil {
-				return err
-			}
-			return presentation.RenderManualStep(manualCtx)
-		}
-	}
 	promptManualStep := s.manualStepPrompt(ctx, presentation.PromptManualStep)
 	snapshot, err := ctx.store.Load(ctx.RepoID(), ctx.TaskID())
 	if err != nil {
@@ -393,7 +383,13 @@ func (s ReviewLifecycleService) pipelineRunOptions(runCtx context.Context, ctx R
 		return review.PipelineRunOptions{}, err
 	}
 	return review.PipelineRunOptions{
-		Effects:                 s.ReviewEffects,
+		Effects: s.ReviewEffects,
+		RecordManualResult: func(owner work.AttemptRef, result review.ManualResult) error {
+			return s.recordManualResponse(runCtx, owner, result)
+		},
+		RecordFindingDecisions: func(owner work.AttemptRef, decisions []review.AutomatedBlockerDecision) error {
+			return s.recordFindingResponses(runCtx, owner, decisions)
+		},
 		Candidate:               candidate,
 		Context:                 runCtx,
 		Store:                   ctx.store,
@@ -408,9 +404,9 @@ func (s ReviewLifecycleService) pipelineRunOptions(runCtx context.Context, ctx R
 		Stdout:                  presentation.Stdout,
 		Stderr:                  presentation.Stderr,
 		Stdin:                   presentation.Stdin,
-		InteractiveOutput:       presentation.InteractiveOutput,
-		OutputWidth:             presentation.OutputWidth,
-		OutputWidthFunc:         presentation.OutputWidthFunc,
+		OpenOutput:              presentation.OpenOutput,
+		Report:                  presentation.Report,
+		StepStarted:             func(step review.Step) error { return s.notify(ctx.RepoID(), ctx.Task, ctx.Resumed(), nil) },
 		AgentConfig:             ctx.AgentConfig,
 		AgentLauncher:           s.AgentLauncher,
 		Environment:             s.Environment,
@@ -418,7 +414,7 @@ func (s ReviewLifecycleService) pipelineRunOptions(runCtx context.Context, ctx R
 		RecordChildPID:          s.RecordReviewChildPID,
 		Execution:               ctx.execution,
 		PauseBeforeManual:       presentation.PauseBeforeManual,
-		RenderManualStep:        renderManualStep,
+		RenderManualStep:        s.manualStepRenderer(runCtx, ctx, presentation.RenderManualStep),
 		ConfirmManualCommand:    presentation.ConfirmManualCommand,
 		PromptManualStep:        promptManualStep,
 		PromptAutomatedBlockers: presentation.PromptAutomatedBlockers,
@@ -614,7 +610,7 @@ func (s ReviewLifecycleService) executeReviewAttempt(runCtx context.Context, ctx
 	}
 	opts, err := s.pipelineRunOptions(runCtx, ctx)
 	if err != nil {
-		if !errors.Is(err, review.ErrInvalidExecution) {
+		if !preservesReviewDecision(err) {
 			_, _ = ctx.store.RecordReviewFailure(ctx.Review.Address, err)
 		}
 		return "", err
@@ -630,7 +626,7 @@ func (s ReviewLifecycleService) executeReviewAttempt(runCtx context.Context, ctx
 	outcome, err := runner(opts)
 	if err != nil {
 		span.FinishError(runCtx, err)
-		if !errors.Is(err, review.ErrInvalidExecution) {
+		if !preservesReviewDecision(err) {
 			if _, recordErr := ctx.store.RecordReviewFailure(ctx.Review.Address, err); recordErr != nil {
 				err = errors.Join(err, fmt.Errorf("task run %s: record failed review: %w", ctx.TaskID(), recordErr))
 			}
@@ -640,20 +636,6 @@ func (s ReviewLifecycleService) executeReviewAttempt(runCtx context.Context, ctx
 	span.Finish(runCtx, logging.StatusSuccess, slog.String("review_status", string(outcome.Status)))
 	if outcome.Status == taskstate.ReviewStatusWaitingForManual || outcome.Status == taskstate.ReviewStatusWaitingForAutomatedDecision {
 		return outcome.Status, nil
-	}
-	if outcome.Status == taskstate.ReviewStatusPassed {
-		shouldPublish, err := s.processSeparateTaskReviewCandidates(runCtx, ctx)
-		if err != nil {
-			_, _ = ctx.store.RecordReviewFailure(ctx.Review.Address, err)
-			return "", err
-		}
-		if !shouldPublish {
-			if _, err := ctx.store.RecordReviewAbort(ctx.Review.Address, "Operator declined continuation after follow-up creation failure"); err != nil {
-				_, _ = ctx.store.RecordReviewFailure(ctx.Review.Address, err)
-				return "", fmt.Errorf("task run %s: record aborted review: %w", ctx.TaskID(), err)
-			}
-			return taskstate.ReviewStatusAborted, nil
-		}
 	}
 	if _, err := validatedReviewOutcome(ctx.store, ctx.Review.Address, outcome.Status); err != nil {
 		_, _ = ctx.store.RecordReviewFailure(ctx.Review.Address, err)
@@ -852,6 +834,9 @@ func (s ReviewLifecycleService) resumeReview(base ReviewContext, paused taskstat
 		return prepared, err
 	}
 	request, err := review.ResumeExecution(pipeline, paused)
+	if paused.Status == taskstate.ReviewStatusRunning {
+		request, err = review.ContinueExecution(pipeline, paused)
+	}
 	if err != nil {
 		return prepared, err
 	}
@@ -1186,4 +1171,21 @@ func validatedReviewOutcome(store review.PipelineStore, ref work.AttemptRef, sta
 		return taskstate.ReviewAttempt{}, errors.New("passing pipeline outcome cannot replace missing or failed recorded requirements")
 	}
 	return current, nil
+}
+
+func (s ReviewLifecycleService) manualStepRenderer(runCtx context.Context, ctx ReviewAttemptContext, render func(ReviewManualStepContext) error) func(review.Step) error {
+	if render == nil {
+		return nil
+	}
+	return func(step review.Step) error {
+		manual, err := s.manualStepContext(runCtx, ctx, step)
+		if err != nil {
+			return err
+		}
+		return render(manual)
+	}
+}
+
+func preservesReviewDecision(err error) bool {
+	return errors.Is(err, review.ErrInvalidExecution) || errors.Is(err, ErrProgressUnavailable) || errors.Is(err, review.ErrPresentationUnavailable)
 }

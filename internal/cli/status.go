@@ -16,6 +16,7 @@ import (
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/tasktarget"
+	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/mattn/go-runewidth"
 	"github.com/spf13/cobra"
 )
@@ -240,7 +241,7 @@ func loadLocalTaskState(
 		return status.LocalTaskState{}, false, err
 	}
 	latest, hasLatestRun := taskstate.LatestRun(state)
-	if !hasLatestRun && state.ActiveSyncConflict == nil {
+	if !hasLatestRun && state.ActiveSyncConflict == nil && (state.Work == nil || len(state.Work.Workflows) == 0) {
 		return status.LocalTaskState{}, false, nil
 	}
 
@@ -248,6 +249,13 @@ func loadLocalTaskState(
 		Runs:               append([]taskstate.RunAttempt(nil), state.Runs...),
 		Finalization:       taskstate.FinalizationFacts(state),
 		ActiveSyncConflict: state.ActiveSyncConflict,
+	}
+	if taskItem.Status != taskmodel.StatusClosed && state.Work != nil && len(state.Work.Workflows) > 0 {
+		view, err := workflow.InspectTask(taskItem, state)
+		if err != nil {
+			return status.LocalTaskState{}, false, err
+		}
+		localState.Workflow = &view
 	}
 	if hasLatestRun {
 		latestCopy := latest
@@ -891,6 +899,12 @@ func compactStatusDetail(detail status.Detail, fallback string) string {
 		return "wrong PR target"
 	case status.DetailWrongLocalTarget:
 		return "wrong local target"
+	case status.DetailPublicationDecision:
+		return "publication decision"
+	case status.DetailPublicationAuthorized:
+		return "publication authorized"
+	case status.DetailFinalizationPending:
+		return "closure pending"
 	case status.DetailFinalizedButOpen:
 		return "finalized but open"
 	case status.DetailUnknownTaskStatus:
@@ -936,6 +950,8 @@ func compactReviewDetail(detail status.Detail) (string, bool) {
 	switch detail.Kind {
 	case status.DetailLocalReview:
 		return "local review", true
+	case status.DetailReviewContinuation:
+		return "continue review", true
 	case status.DetailReviewRunning:
 		return "running", true
 	case status.DetailReviewManualStep:

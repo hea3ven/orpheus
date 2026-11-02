@@ -323,7 +323,7 @@ func TestIntegrationWorkflowTaskRunReleasesMutationLockDuringAgentAndReacquiresF
 
 	assert.ErrorIs(t, err, os.ErrExist)
 	assert.ErrorContains(t, err, "task run finalization")
-	assert.Contains(t, stderr, "== Agent run: implementation (run attempt 1) ==")
+	assert.Contains(t, stderr, "-- STEP: implement (agent) --")
 	final, _ := fixture.loadFinalTask("op-lock")
 	require.Len(t, final.Runs, 1)
 	assert.Equal(t, taskstate.RunStatusRunning, final.Runs[0].Status)
@@ -347,7 +347,7 @@ func TestIntegrationWorkflowTaskRunAgentStartFailureRecordsFailedStartWithoutChi
 	assert.ErrorIs(t, err, startErr)
 	assert.Zero(t, captures)
 	assert.Empty(t, stdout)
-	assert.Contains(t, stderr, "== Agent run: implementation (run attempt 1) ==")
+	assert.Contains(t, stderr, "-- STEP: implement (agent) --")
 	final, _ := fixture.loadFinalTask("op-start")
 	require.Len(t, final.Runs, 1)
 	assert.Equal(t, taskstate.RunStatusFailed, final.Runs[0].Status)
@@ -373,7 +373,7 @@ func TestIntegrationWorkflowTaskRunHeaderFailurePreventsLaunchAndRecordsFailedSt
 
 	err := command.Execute()
 
-	assert.ErrorContains(t, err, "render agent run header")
+	assert.ErrorContains(t, err, "render workflow context")
 	assert.ErrorContains(t, err, "output unavailable")
 	assert.Zero(t, captures)
 	assert.Empty(t, fixture.agent.launches)

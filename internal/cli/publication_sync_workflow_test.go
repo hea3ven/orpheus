@@ -42,7 +42,7 @@ func TestIntegrationWorkflowWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing
 
 	stdout, stderr = f.run("", "task", "done", item.ID)
 
-	assert.Empty(t, stderr)
+	assert.Contains(t, stderr, "TASK")
 	assert.Contains(t, stdout, "Published "+item.ID)
 	assert.Contains(t, stdout, "pushed "+branch)
 	assert.Contains(t, stdout, "observed PR "+f.pr.url)
@@ -69,7 +69,7 @@ func TestIntegrationWorkflowWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing
 
 	stdout, stderr = f.run("", "task", "sync", item.ID)
 
-	assert.Empty(t, stderr)
+	assert.Contains(t, stderr, "TASK")
 	assert.Contains(t, stdout, "PR "+f.pr.url+" is still open for review")
 	assert.Equal(t, 2, f.pr.statusReads)
 	assert.Len(t, f.pr.created, 1)
@@ -78,7 +78,7 @@ func TestIntegrationWorkflowWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing
 
 	stdout, stderr = f.run("", "task", "sync", item.ID)
 
-	assert.Empty(t, stderr)
+	assert.Contains(t, stderr, "TASK")
 	assert.Contains(t, stdout, "PR "+f.pr.url+" is merged")
 	assert.Contains(t, stdout, "Backend task was closed")
 	assert.Contains(t, stdout, "Worktree "+dir+" was removed")
@@ -134,7 +134,7 @@ func TestIntegrationWorkflowRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing
 
 	stdout, stderr = f.run("", "task", "done", item.ID)
 
-	assert.Empty(t, stderr)
+	assert.Contains(t, stderr, "TASK")
 	branch := "orpheus/" + item.ID
 	for _, want := range []string{"Published " + item.ID, "pushed " + branch, "observed PR " + f.pr.url, "Backend task remains open for PR review"} {
 		assert.Contains(t, stdout, want)
@@ -144,14 +144,14 @@ func TestIntegrationWorkflowRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing
 	assert.Equal(t, branch, f.git.targets[taskWorkflowRepoRoot].branch)
 	f.pr.state = pullrequest.StateOpen
 	stdout, stderr = f.run("", "task", "sync", item.ID)
-	assert.Empty(t, stderr)
+	assert.Contains(t, stderr, "TASK")
 	assert.Contains(t, stdout, "PR "+f.pr.url+" is still open for review")
 	assert.Equal(t, 2, f.pr.statusReads)
 	f.pr.state = pullrequest.StateMerged
 
 	stdout, stderr = f.run("", "task", "sync", item.ID)
 
-	assert.Empty(t, stderr)
+	assert.Contains(t, stderr, "TASK")
 	assert.Contains(t, stdout, "PR "+f.pr.url+" is merged")
 	assert.Contains(t, stdout, "Backend task was closed")
 	state, item = f.loadFinalTask(item.ID)

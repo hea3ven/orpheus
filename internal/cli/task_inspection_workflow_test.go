@@ -579,8 +579,13 @@ func TestIntegrationWorkflowTaskShowReviewDisplaysCrossAttemptFindingHistory(t *
 			_ = store
 			stdout, stderr := fixture.mustExecute("task", "show", "review", "op-main")
 			is.Empty(stderr)
-			for _, want := range []string{"Review state for op-main (repo alpha)", "Authoritative review history:", "Attempt 1: passed (1 authoritative finding(s))", "1/1 · manual · separate_task · created task op-41 · Older cleanup", "Attempt 2: blocked (4 authoritative finding(s))", "2/1 · unit-tests · blocking · open · Tests fail", "2/2 · ai-review · blocking · follow-up run 2 running · Race condition", "2/3 · ai-review · blocking · waived · Known limitation", "2/4 · ai-review · separate_task · created task op-42 · Extract helper", "orpheus task show review <task-id> <review-attempt> <finding-number>", "Next step: run `orpheus task run op-main` to address open blocking findings"} {
+			for _, want := range []string{"Review state for op-main (repo alpha)", "Authoritative review history:", "Attempt 1: passed (1 authoritative finding(s))", "1/1 · manual · separate_task · created task op-41 · Older cleanup", "Attempt 2: blocked (4 authoritative finding(s))", "2/1 · unit-tests · blocking · open · Tests fail", "2/2 · ai-review · blocking · follow-up run 2 running · Race condition", "2/3 · ai-review · blocking · waived · Known limitation", "2/4 · ai-review · separate_task · created task op-42 · Extract helper", "orpheus task show review <task-id> <review-attempt> <finding-number>"} {
 				is.Contains(stdout, want)
+			}
+			if status == taskmodel.StatusClosed {
+				is.Contains(stdout, "Workflow next action: completed")
+			} else {
+				is.Contains(stdout, "Workflow next action: implementation_active")
 			}
 		})
 	}

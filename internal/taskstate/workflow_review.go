@@ -582,3 +582,30 @@ func validateFindingChoice(w *work.Workflow, finding *work.Finding, target work.
 	}
 	return nil
 }
+
+// RecordManualCommandInterruption retains a canceled command's observed exit at
+// its pending assessment. It is neither a successful command nor a failed review.
+func (s Store) RecordManualCommandInterruption(ref work.AttemptRef, exitCode int) (ReviewAttempt, error) {
+	view, err := s.updateWorkflow(ref.RepositoryID, ref.TaskID, func(snapshot *work.State) (bool, error) {
+		if err := snapshot.CheckActiveAttempt(ref); err != nil {
+			return false, err
+		}
+		_, phase, err := currentReview(snapshot, ref)
+		if err != nil {
+			return false, err
+		}
+		if ref.Step == nil {
+			return false, errors.New("manual command interruption requires its step address")
+		}
+		step, ok := phase.Steps[*ref.Step].(*work.ManualReviewStep)
+		if !ok {
+			return false, errors.New("interrupted command does not belong to a manual assessment")
+		}
+		step.CommandInterruptions = append(step.CommandInterruptions, work.ExitedProcess{At: s.nowUTC(), Code: &exitCode})
+		return true, nil
+	})
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+	return viewReviewAt(view, ref)
+}

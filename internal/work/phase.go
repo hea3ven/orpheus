@@ -108,11 +108,14 @@ type AgentReviewStep struct {
 // ManualReviewStep owns findings as they are reported, including while the
 // operator's assessment is unanswered. Deciding does not move their addresses.
 type ManualReviewStep struct {
-	Slot             int
-	CommandResult    ProcessResult
-	Findings         []Finding
-	Decision         ManualAssessment
-	ReadOnlyFailures []ReadOnlyFailure
+	Slot          int
+	CommandResult ProcessResult
+	// CommandInterruptions retain reaped inspection commands canceled by the
+	// operator without deciding or failing the unanswered assessment.
+	CommandInterruptions []ExitedProcess
+	Findings             []Finding
+	Decision             ManualAssessment
+	ReadOnlyFailures     []ReadOnlyFailure
 }
 
 func (*CheckStep) reviewStep()        {}

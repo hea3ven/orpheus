@@ -410,7 +410,15 @@ func (l *semanticAgentLauncher) recordFinding(opts agentexec.LaunchOptions, envi
 	command.SetIn(opts.Stdin)
 	command.SetOut(opts.Stdout)
 	command.SetErr(opts.Stderr)
-	command.SetArgs([]string{"agent", "review", "add", "--type", string(finding.Type), "--title", finding.Title, "--description", finding.Description, "--suggested-action", finding.SuggestedAction})
+	kind := string(finding.Type)
+	if finding.Type == taskstate.FindingTypeSeparateTask {
+		kind = "separate-task"
+	}
+	args := []string{"agent", "review", "add", "--type", kind, "--title", finding.Title, "--description", finding.Description, "--suggested-action", finding.SuggestedAction}
+	if !finding.TaskProposal.IsZero() {
+		args = append(args, "--task-title", finding.TaskProposal.Title, "--task-description", finding.TaskProposal.Description, "--task-acceptance-criteria", finding.TaskProposal.AcceptanceCriteria)
+	}
+	command.SetArgs(args)
 	return command.Execute()
 }
 

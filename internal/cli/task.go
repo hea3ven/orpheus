@@ -76,6 +76,7 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 		newTaskStatsCommand(opts),
 		newTaskDirCommand(opts),
 		newTaskRunCommand(opts),
+		newTaskRespondCommand(opts),
 		newTaskDoneCommand(opts),
 		newTaskSyncCommand(opts),
 		newTaskEditCommand(opts),
@@ -117,7 +118,7 @@ func newTaskShowCommand(opts *rootOptions) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "write task details as JSON")
-	cmd.AddCommand(newTaskShowReviewCommand(opts))
+	cmd.AddCommand(newTaskShowReviewCommand(opts), newTaskShowWorkflowCommand(opts))
 	return cmd
 }
 
@@ -1036,6 +1037,10 @@ func renderTaskRunRoute(output io.Writer, taskID string, route workflow.TaskRunR
 		message = fmt.Sprintf("Task %s: resuming review attempt %d at step %q.\n", taskID, route.Attempt, route.Step)
 	case workflow.TaskRunActionPreparePublication:
 		message = fmt.Sprintf("Task %s: preparing the publication decision.\n", taskID)
+	case workflow.TaskRunActionNeedsAttention:
+		message = fmt.Sprintf("Task %s: %s\n", taskID, route.Advice)
+	case workflow.TaskRunActionAwaitDecision:
+		message = fmt.Sprintf("Task %s: publication awaits explicit authorization; inspect the pending publication decision.\n", taskID)
 	case workflow.TaskRunActionPublish:
 		message = fmt.Sprintf("Task %s: continuing publication.\n", taskID)
 	case workflow.TaskRunActionRetryFinalization:
@@ -1114,7 +1119,6 @@ func executeTaskRunAgent(
 				return service.RecordChildPID(start.Attempt.Address, pid)
 			},
 		},
-		BeforeStart: func() error { return renderTaskRunAgentHeader(command.ErrOrStderr(), start.Attempt) },
 		Usage: agent.UsageCaptureOptions{
 			SessionName: start.Attempt.Execution.SessionName,
 			StartedAt:   start.Attempt.Execution.StartedAt,
@@ -1136,26 +1140,6 @@ func executeTaskRunAgent(
 		span.Finish(ctx, taskRunProcessStatus(ctx, result.Err), taskRunProcessOutcomeAttrs(ctx, result.Err)...)
 	}
 	return result
-}
-
-func renderTaskRunAgentHeader(output io.Writer, attempt taskstate.RunAttempt) error {
-	var err error
-	if attempt.ReviewFollowUp == nil {
-		_, err = fmt.Fprintf(output, "== Agent run: implementation (run attempt %d) ==\n", attempt.Attempt)
-	} else {
-		_, err = fmt.Fprintf(
-			output,
-			"== Agent run: review follow-up (run attempt %d; review attempt %d; required blocking findings %s; advisory opportunities %s) ==\n",
-			attempt.Attempt,
-			attempt.ReviewFollowUp.ReviewAttempt,
-			workflow.FormatReviewFindingIndexes(attempt.ReviewFollowUp.FindingIndexes),
-			workflow.FormatReviewFindingIndexes(attempt.ReviewFollowUp.AdvisoryFindingIndexes),
-		)
-	}
-	if err != nil {
-		return fmt.Errorf("render agent run header: %w", err)
-	}
-	return nil
 }
 
 func taskRunProcessAttrs(repoID string, taskID string, start workflow.DispatchStartResult) []slog.Attr {
@@ -1207,7 +1191,7 @@ func renderTaskReviewLifecycleOutcome(
 ) error {
 	switch outcome.Kind {
 	case workflow.ReviewLifecycleOutcomePublicationPending:
-		_, err := fmt.Fprintf(command.OutOrStdout(), "Review passed for %s. Committed output is retained; publication awaits explicit authorization (T8).\n", outcome.Context.TaskID())
+		_, err := fmt.Fprintf(command.OutOrStdout(), "Review passed for %s. Committed output is retained; publication awaits explicit authorization.\n", outcome.Context.TaskID())
 		return err
 	case workflow.ReviewLifecycleOutcomeExecutionRecovered:
 		return renderReviewRecoveryGuidance(command.ErrOrStderr(), outcome.Context.TaskID(), outcome.RecoveryInspection.Reason)
@@ -1250,9 +1234,8 @@ func taskReviewPipelinePresentation(command *cobra.Command,
 		Stdout:            outputMode.stdout,
 		Stderr:            outputMode.stderr,
 		Stdin:             command.InOrStdin(),
-		InteractiveOutput: outputMode.interactive,
-		OutputWidth:       outputMode.width,
-		OutputWidthFunc:   outputMode.widthFunc,
+		OpenOutput:        reviewOutputFactory(outputMode),
+		Report:            reviewNoticeRenderer(command, start.taskID()),
 		PauseBeforeManual: execOpts.pauseBeforeManual,
 	}
 	if !execOpts.interactiveManual {
@@ -1429,13 +1412,6 @@ func renderManualReviewContext(command *cobra.Command, ctx workflow.ReviewManual
 		return err
 	}
 
-	if _, err := fmt.Fprintf(output, "\n%s\n%s  %s\n\n",
-		style.blue("◆ REVIEW STEP · "+ctx.Step.Name+" ("+ctx.Step.Kind+")"),
-		style.blue("TASK"),
-		style.bold(ctx.Task.ID+" — "+ctx.Task.Title),
-	); err != nil {
-		return err
-	}
 	if err := renderManualReviewCompletions(output, style, completions); err != nil {
 		return err
 	}
@@ -2656,7 +2632,7 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string) error
 		return err
 	}
 
-	service := workflow.Controller{Delivery: newTaskDeliveryService(deps, taskCtx, logger)}
+	service := workflow.Controller{ReviewLifecycleService: workflow.ReviewLifecycleService{Progress: newWorkflowHeaders(command, deps.terminal).Render}, Delivery: newTaskDeliveryService(deps, taskCtx, logger)}
 	finalized, err := finalizeTask(command, service, workflow.FinalizeOptions{
 		TaskID: taskID,
 		CWD:    deps.taskCWD,
@@ -2757,6 +2733,7 @@ func runTaskSync(command *cobra.Command, opts *rootOptions, taskID string) error
 	}
 
 	service := workflow.SyncService{
+		Progress:   newWorkflowHeaders(command, deps.terminal).Render,
 		Git:        deps.syncGit,
 		CleanupGit: deps.cleanupGit,
 		Paths:      deps.paths,
@@ -2812,6 +2789,7 @@ func runTaskSyncAll(command *cobra.Command, opts *rootOptions) error {
 	}
 
 	service := workflow.SyncService{
+		Progress:   newWorkflowHeaders(command, deps.terminal).Render,
 		Git:        deps.syncGit,
 		CleanupGit: deps.cleanupGit,
 		Paths:      deps.paths,
@@ -3561,6 +3539,15 @@ func renderTaskDetails(
 	}
 	if state.BaselineCommit != "" {
 		if err := renderKeyValue(output, "Task baseline", state.BaselineCommit); err != nil {
+			return err
+		}
+	}
+	if row.Task.Status != taskmodel.StatusClosed && state.Work != nil && len(state.Work.Workflows) > 0 {
+		view, err := workflow.InspectTask(row.Task, state)
+		if err != nil {
+			return err
+		}
+		if err := renderWorkflowNext(output, view); err != nil {
 			return err
 		}
 	}

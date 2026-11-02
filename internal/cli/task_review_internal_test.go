@@ -107,7 +107,7 @@ func TestTaskReviewPipelinePresentationRequiresBothOutputStreamsTerminal(t *test
 		bufio.NewReader(bytes.NewReader(nil)),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
-	if presentation.InteractiveOutput {
+	if presentation.OpenOutput(true).Stdout != stdout {
 		t.Fatal("InteractiveOutput = true, want false when stdout is redirected")
 	}
 
@@ -120,7 +120,7 @@ func TestTaskReviewPipelinePresentationRequiresBothOutputStreamsTerminal(t *test
 		bufio.NewReader(bytes.NewReader(nil)),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
-	if !presentation.InteractiveOutput {
+	if presentation.OpenOutput(true).Stdout == stdout {
 		t.Fatal("InteractiveOutput = false, want true when stdout and stderr are terminals")
 	}
 }
@@ -208,7 +208,6 @@ func TestRenderManualReviewContextUsesStructuredPlainAndInteractiveOutput(t *tes
 			plain := ansi.ReplaceAllString(raw, "")
 			cursor := 0
 			for _, fact := range []string{
-				"REVIEW STEP", "manual (manual)", "op-42", "Make review context readable",
 				"ORIGINAL COMPLETION", "Original implementation summary", "Original implementation description", "Original implementation technical explanation",
 				"LATEST FIX COMPLETION", "Latest fix summary", "Latest fix description", "Latest fix technical explanation",
 				"GIT STATUS --SHORT", " M internal/cli/task.go", "?? notes.md",

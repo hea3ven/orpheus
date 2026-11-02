@@ -1,4 +1,4 @@
-package review
+package cli
 
 import (
 	"bytes"
