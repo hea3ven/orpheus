@@ -89,9 +89,12 @@ func (f taskReviewLifecycleFrontend) FollowUpRunIncomplete(ctx workflow.ReviewAt
 }
 
 func (f taskReviewLifecycleFrontend) SelectSeparateTaskCandidates(
-	_ workflow.ReviewAttemptContext,
+	ctx workflow.ReviewAttemptContext,
 	candidates []workflow.SeparateTaskCandidate,
 ) ([]workflow.SeparateTaskCandidate, error) {
+	if err := requireOperatorInput(f.command, f.terminal, ctx.TaskID()); err != nil {
+		return nil, err
+	}
 	output := f.command.ErrOrStderr()
 	if _, err := fmt.Fprintln(output, "\nSeparate-task review findings can be created as standalone tasks:"); err != nil {
 		return nil, err
@@ -111,8 +114,11 @@ func (f taskReviewLifecycleFrontend) SelectSeparateTaskCandidates(
 		return nil, err
 	}
 	line, err := f.reader.ReadString('\n')
-	if err != nil && line == "" {
-		return nil, fmt.Errorf("read follow-up task selection: %w", err)
+	if err != nil {
+		return nil, operatorInteractionError(ctx.TaskID(), err)
+	}
+	if answer := strings.ToLower(strings.TrimSpace(line)); answer == "q" || answer == "pause" {
+		return nil, operatorInteractionError(ctx.TaskID(), nil)
 	}
 	return workflow.SelectSeparateTaskCandidates(candidates, line)
 }
@@ -132,10 +138,13 @@ func (f taskReviewLifecycleFrontend) SeparateTaskCreated(
 }
 
 func (f taskReviewLifecycleFrontend) ContinueAfterFollowUpCreationFailure(
-	_ workflow.ReviewAttemptContext,
+	ctx workflow.ReviewAttemptContext,
 	candidate workflow.SeparateTaskCandidate,
 	cause error,
 ) (bool, error) {
+	if err := requireOperatorInput(f.command, f.terminal, ctx.TaskID()); err != nil {
+		return false, err
+	}
 	output := f.command.ErrOrStderr()
 	if _, err := fmt.Fprintf(
 		output,
@@ -150,10 +159,13 @@ func (f taskReviewLifecycleFrontend) ContinueAfterFollowUpCreationFailure(
 		return false, err
 	}
 	line, err := f.reader.ReadString('\n')
-	if err != nil && line == "" {
-		return false, fmt.Errorf("read follow-up task failure confirmation: %w", err)
+	if err != nil {
+		return false, operatorInteractionError(ctx.TaskID(), err)
 	}
 	answer := strings.ToLower(strings.TrimSpace(line))
+	if answer == "q" || answer == "pause" {
+		return false, operatorInteractionError(ctx.TaskID(), nil)
+	}
 	return answer == "y" || answer == "yes", nil
 }
 
@@ -161,6 +173,9 @@ func (f taskReviewLifecycleFrontend) PromptFreshReviewBlockerDispositions(
 	ctx workflow.ReviewContext,
 	blockers []workflow.FreshReviewBlocker,
 ) ([]workflow.FreshReviewBlockerDisposition, error) {
+	if err := requireOperatorInput(f.command, f.terminal, ctx.TaskID()); err != nil {
+		return nil, err
+	}
 	return promptFreshReviewBlockerDispositions(f.command, f.reader, ctx.TaskID(), blockers)
 }
 

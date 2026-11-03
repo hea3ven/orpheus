@@ -12,38 +12,32 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Publication prompting records decisions only. Delivery always requires a
-// subsequent advancement, even if rendering the recorded answer fails.
-func presentPublicationDecision(command *cobra.Command, controller workflow.Controller, reader *bufio.Reader, view workflow.View, terminal TerminalCapabilities) error {
-	terminal = terminal.withDefaults()
-	interactive := terminal.InputIsTerminal(command.InOrStdin()) && terminal.OutputIsTerminal(command.OutOrStdout()) && terminal.OutputIsTerminal(command.ErrOrStderr())
+// Publication prompting records decisions through the typed boundary. The caller
+// advances only after a successful answer, never on pause or unavailable input.
+func presentPublicationDecision(command *cobra.Command, controller workflow.Controller, reader *bufio.Reader, view workflow.View, terminal TerminalCapabilities) (workflow.View, error) {
 	for view.Pending != nil && view.Pending.ID.Kind == workflow.InteractionPublication {
 		if err := controller.Progress(workflow.Progress{View: view}); err != nil {
-			return err
+			return view, err
 		}
 		if _, err := fmt.Fprintln(command.ErrOrStderr(), "PUBLICATION CONTENT\n"+view.Publication.Content); err != nil {
-			return err
+			return view, err
 		}
-		if !interactive {
-			return renderWorkflowNext(command.OutOrStdout(), view)
+		if err := requireOperatorInput(command, terminal, view.TaskID); err != nil {
+			return view, err
 		}
 		response, err := promptPublicationResponse(command, reader, view)
 		if err != nil {
-			return err
+			return view, err
 		}
 		if _, paused := response.(workflow.PauseResponse); paused {
-			return nil
+			return view, nil
 		}
 		view, err = controller.Respond(command.Context(), view.Pending.ID, response)
 		if err != nil {
-			return err
+			return view, err
 		}
 	}
-	if view.Publication != nil && view.Publication.Consented {
-		_, err := fmt.Fprintln(command.OutOrStdout(), "Publication consent recorded for this plan. Run task run to continue delivery.")
-		return err
-	}
-	return renderWorkflowNext(command.OutOrStdout(), view)
+	return view, nil
 }
 
 func promptPublicationResponse(command *cobra.Command, reader *bufio.Reader, view workflow.View) (workflow.Response, error) {

@@ -129,12 +129,8 @@ func TestIntegrationWorkflowTaskRunAttachedManualBlockerRepairsAndApprovalPrepar
 	is.Empty(fixture.candidate.pushes)
 
 	view := fixture.inspectWorkflow("op-manual")
-	proposal := workflow.PublicationPlanResponse{Flow: "direct-merge", DestinationBranch: "release/final", Content: view.Publication.Content}
-	view = fixture.revisePublication("op-manual", view, proposal)
-	is.Nil(view.Pending, "a changed destination needs review, not immediate consent")
-	is.Equal(workflow.PhaseReview, view.Phase)
-	is.Equal(workflow.TaskRunActionResumeReview, view.Next.Action)
-	_, _, err = fixture.runError("k\na\n", "task", "run", "op-manual")
+	content := view.Publication.Content
+	_, _, err = fixture.runError("i\ndirect-merge\nd\nrelease/final\nk\na\n", "task", "run", "op-manual")
 	must.NoError(err)
 	final, _ := fixture.loadFinalTask("op-manual")
 	must.Len(final.Reviews, 4)
@@ -144,7 +140,7 @@ func TestIntegrationWorkflowTaskRunAttachedManualBlockerRepairsAndApprovalPrepar
 	must.NotNil(view.Pending)
 	is.Equal(workflow.InteractionPublication, view.Pending.ID.Kind)
 	is.Equal("direct-merge", view.Publication.Flow)
-	is.Equal(proposal.Content, view.Publication.Content)
+	is.Equal(content, view.Publication.Content)
 	is.Equal("output-3", view.Revision.Code.Commit, "repair output requires its own passed review before the new decision")
 	is.Equal("release/final", view.Publication.Destination.Branch)
 	is.Equal("approved-destination-head", view.Publication.Destination.Commit)

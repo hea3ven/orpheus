@@ -125,7 +125,7 @@ func (f *reviewWorkflowFixture) runWithWriters(input string, stdout, stderr io.W
 func (f *reviewWorkflowFixture) forceInteractiveReviewOutput(width int) {
 	f.t.Helper()
 	f.options.Dependencies.Terminal = cli.TerminalCapabilities{
-		InputIsTerminal:  func(io.Reader) bool { return false },
+		InputIsTerminal:  func(io.Reader) bool { return true },
 		OutputIsTerminal: func(io.Writer) bool { return true },
 		OutputWidth: func(io.Writer) (int, bool) {
 			return width, true
@@ -554,17 +554,4 @@ func (f *reviewWorkflowFixture) inspectWorkflow(taskID string) workflow.View {
 	var view workflow.View
 	require.NoError(f.t, json.Unmarshal([]byte(output), &view))
 	return view
-}
-
-func (f *reviewWorkflowFixture) revisePublication(taskID string, view workflow.View, proposal workflow.PublicationPlanResponse) workflow.View {
-	f.t.Helper()
-	require.NotNil(f.t, view.Pending)
-	id, err := json.Marshal(view.Pending.ID)
-	require.NoError(f.t, err)
-	plan, err := json.Marshal(proposal)
-	require.NoError(f.t, err)
-	output, _ := f.run("", "task", "respond", taskID, "--interaction", string(id), "--action", "revise", "--plan", string(plan))
-	var next workflow.View
-	require.NoError(f.t, json.Unmarshal([]byte(output), &next))
-	return next
 }

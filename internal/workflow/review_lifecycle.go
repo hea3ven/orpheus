@@ -992,7 +992,7 @@ func (s ReviewLifecycleService) processSeparateTaskReviewCandidates(runCtx conte
 	}
 	selected, err := s.Frontend.SelectSeparateTaskCandidates(ctx, candidates)
 	if err != nil {
-		return false, fmt.Errorf("task run %s: %w", ctx.TaskID(), err)
+		return false, fmt.Errorf("%w: task run %s: %w", review.ErrPresentationUnavailable, ctx.TaskID(), err)
 	}
 	if len(selected) == 0 {
 		return true, nil
@@ -1008,13 +1008,17 @@ func (s ReviewLifecycleService) createSelectedSeparateTaskCandidates(ctx context
 	for _, candidate := range selected {
 		created, err := backend.Create(ctx, candidate.CreateOptions(reviewCtx))
 		if err != nil {
-			return s.Frontend.ContinueAfterFollowUpCreationFailure(reviewCtx, candidate, err)
+			proceed, promptErr := s.Frontend.ContinueAfterFollowUpCreationFailure(reviewCtx, candidate, err)
+			if promptErr != nil {
+				return false, fmt.Errorf("%w: %w", review.ErrPresentationUnavailable, promptErr)
+			}
+			return proceed, nil
 		}
 		if _, err := reviewCtx.store.RecordFindingCreatedTask(reviewCtx.Review.Address, *candidate.Finding.Address, created.ID); err != nil {
 			return false, fmt.Errorf("task run %s: record created follow-up task %s: %w", reviewCtx.TaskID(), created.ID, err)
 		}
 		if err := s.Frontend.SeparateTaskCreated(reviewCtx, candidate, created); err != nil {
-			return false, err
+			return false, fmt.Errorf("%w: %w", review.ErrPresentationUnavailable, err)
 		}
 	}
 	return true, nil
@@ -1116,5 +1120,5 @@ func (s ReviewLifecycleService) manualStepRenderer(runCtx context.Context, ctx R
 }
 
 func preservesReviewDecision(err error) bool {
-	return errors.Is(err, review.ErrInvalidExecution) || errors.Is(err, ErrProgressUnavailable) || errors.Is(err, review.ErrPresentationUnavailable)
+	return errors.Is(err, review.ErrInteractionRequired) || errors.Is(err, review.ErrInvalidExecution) || errors.Is(err, ErrProgressUnavailable) || errors.Is(err, review.ErrPresentationUnavailable)
 }

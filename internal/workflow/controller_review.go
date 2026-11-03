@@ -109,7 +109,9 @@ func (s Controller) advancePublication(ctx context.Context, inv *advanceInvocati
 	}
 	shouldPublish, err := s.processSeparateTaskReviewCandidates(ctx, current)
 	if err != nil {
-		_, _ = current.store.RecordReviewFailure(current.Review.Address, err)
+		if !preservesReviewDecision(err) {
+			_, _ = current.store.RecordReviewFailure(current.Review.Address, err)
+		}
 		return true, err
 	}
 	if !shouldPublish {

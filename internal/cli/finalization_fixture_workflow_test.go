@@ -4,7 +4,6 @@ package cli_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	workmodel "github.com/hea3ven/orpheus/internal/work"
@@ -65,20 +64,37 @@ func (f *finalizationWorkflowFixture) completion(taskID, branch, dir, summary, d
 	require.NoError(f.t, err)
 }
 
-// Publication journeys exercise the real typed decision before delivery.
+// Delivery-boundary journeys authorize through the real operator flow, then
+// inject a refusal at the external adapter to arrange an unchanged retry.
 func (f *finalizationWorkflowFixture) passedReview(taskID string) {
 	f.t.Helper()
 	view, err := f.taskStore.Load("alpha", taskID)
 	require.NoError(f.t, err)
-	if _, ready := view.Work.ActiveWorkflow().LastPhase().(*workmodel.PublicationPhase); !ready {
-		f.run("a\n", "task", "run", taskID)
+	input := "a\na\n"
+	if _, ready := view.Work.ActiveWorkflow().LastPhase().(*workmodel.PublicationPhase); ready {
+		input = "a\n"
 	}
-	pending := f.inspectWorkflow(taskID)
-	require.NotNil(f.t, pending.Pending)
-	require.Equal(f.t, workflow.InteractionPublication, pending.Pending.ID.Kind)
-	id, err := json.Marshal(pending.Pending.ID)
-	require.NoError(f.t, err)
-	f.run("", "task", "respond", taskID, "--interaction", string(id), "--action", "authorize", "--evidence", "Operator accepts the inspected publication plan")
+	stopped := errors.New("fixture stops before delivery")
+	f.options.Dependencies.FinalizationGit = refusedPublicationGit{FinalizationGit: f.publication, err: stopped}
+	_, _, err = f.runError(input, "task", "run", taskID)
+	require.ErrorIs(f.t, err, stopped)
+	f.options.Dependencies.FinalizationGit = f.publication
+	accepted := f.inspectWorkflow(taskID)
+	require.Nil(f.t, accepted.Pending)
+	require.True(f.t, accepted.Publication.Consented)
+}
+
+type refusedPublicationGit struct {
+	workflow.FinalizationGit
+	err error
+}
+
+func (g refusedPublicationGit) VerifyRevision(context.Context, string, gitmeta.CheckoutIdentity, gitmeta.Revision) error {
+	return g.err
+}
+
+func (g refusedPublicationGit) DirectRevisionDelivery(context.Context, taskmodel.Repository, string, string, string, string, string, gitmeta.Revision) (gitmeta.Revision, error) {
+	return gitmeta.Revision{}, g.err
 }
 
 func newMainFinalizationFixture(t *testing.T, taskID string) *finalizationWorkflowFixture {

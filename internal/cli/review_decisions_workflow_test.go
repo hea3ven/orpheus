@@ -4,13 +4,13 @@ package cli_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/review"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
@@ -192,35 +192,16 @@ func TestIntegrationWorkflowTaskReviewCreatesSelectedSeparateTaskFollowUp(t *tes
 				fixture.run(input, "task", "run", "op-main")
 				paused := loadLatestReview(t, fixture, "op-main")
 				require.Len(t, paused.Steps, 2)
-				inspection, _ := fixture.run("", "task", "show", "workflow", "op-main", "--json")
-				var view workflow.View
-				require.NoError(t, json.Unmarshal([]byte(inspection), &view))
-				require.NotNil(t, view.Pending)
-				id, err := json.Marshal(view.Pending.ID)
-				require.NoError(t, err)
-				responseArgs := []string{"task", "respond", "op-main", "--interaction", string(id)}
+				assert.Empty(t, fixture.tasks.created)
+				input = "a\n1\n"
 				if answer == "finding response" {
-					require.Equal(t, workflow.InteractionFindings, view.Pending.ID.Kind)
-					require.Len(t, view.Pending.Findings, 1)
-					decisions, err := json.Marshal([]workflow.FindingDecision{{Ref: view.Pending.Findings[0].Ref, Action: workflow.DecisionWaive, Reason: "Accepted risk"}})
-					require.NoError(t, err)
-					responseArgs = append(responseArgs, "--decisions", string(decisions))
-				} else {
-					require.Equal(t, workflow.InteractionManualReview, view.Pending.ID.Kind)
-					responseArgs = append(responseArgs, "--action", "approve")
+					input = "w\nAccepted risk\n1\n"
 				}
-				fixture.run("", responseArgs...)
-				assert.Empty(t, fixture.tasks.created, "Respond must not create proposal tasks")
-				answered, item := fixture.loadFinalTask("op-main")
-				require.Len(t, answered.Work.Workflows[0].Phases, 3, "Respond must not advance to Publication")
-				assert.Equal(t, taskstate.ReviewStatusPassed, answered.Reviews[0].Status)
-				assertTaskNotPublished(t, answered, item)
-
-				stdout, stderr = fixture.run("1\n", "task", "run", "op-main")
+				stdout, stderr = fixture.run(input, "task", "run", "op-main")
 
 				current := loadLatestReview(t, fixture, "op-main")
 				assert.Equal(t, paused.StartedAt, current.StartedAt)
-				assert.Equal(t, paused.Steps, current.Steps, "proposal selection cannot replay completed review steps")
+				assert.Equal(t, paused.Steps[0], current.Steps[0], "continuation cannot replay completed review steps")
 			}
 			assert.Contains(t, stdout, "Review passed for op-main")
 			assert.Contains(t, stderr, "Create follow-up tasks [numbers, a=all, n=none]")
@@ -273,9 +254,15 @@ func TestIntegrationWorkflowTaskReviewCanAbortWhenSeparateTaskCreationFails(t *t
 		"Helper extraction has tests.",
 		"a",
 		"1",
-		"n",
+		"",
 	}, "\n")
-	stdout, stderr := fixture.run(input, "task", "run", "op-main")
+	_, _, err := fixture.runError(input, "task", "run", "op-main")
+	must.ErrorIs(err, review.ErrInteractionRequired, "EOF at the failure confirmation must retain the passed review")
+	pending, _ := fixture.loadFinalTask("op-main")
+	must.Len(pending.Reviews, 1)
+	is.Equal(taskstate.ReviewStatusPassed, pending.Reviews[0].Status)
+	is.Empty(fixture.tasks.created)
+	stdout, stderr := fixture.run("1\nn\n", "task", "run", "op-main")
 
 	is.Empty(stdout)
 	is.Contains(stderr, "Failed to create follow-up task for review finding 1")
@@ -414,7 +401,7 @@ func TestIntegrationWorkflowTaskReviewCheckBlockerReasonEOFRecordsInterrupted(t 
 			is.Empty(stdout)
 			is.Contains(stderr, test.label)
 			is.Contains(stderr, "Automated blocker decisions for op-main were interrupted")
-			is.Contains(stderr, "Review blocked for op-main by check \"unit\".")
+			is.NotContains(stderr, "Review blocked for op-main by check \"unit\".")
 
 			var state taskstate.TaskState
 			must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
@@ -741,13 +728,14 @@ func TestIntegrationWorkflowTaskReviewInvalidAgentConfigPreservesFreshAndWaiting
 func TestIntegrationWorkflowTaskReviewCheckDecisionsPersistDispositionAndContinuePipeline(t *testing.T) {
 	for _, test := range []struct {
 		name, input               string
-		manual, keep              bool
+		manual, keep, interrupted bool
 		wantType                  taskstate.FindingType
 		downgrade, waiver, prompt string
 	}{
-		{name: "keep EOF", input: "k", keep: true, wantType: taskstate.FindingTypeBlocking, prompt: "Decision for finding 1"},
-		{name: "downgrade EOF", input: "d\nFalse positive for this task.", wantType: taskstate.FindingTypeAdvisory, downgrade: "False positive for this task.", prompt: "Downgrade reason"},
-		{name: "waive EOF", input: "w\nKnown flaky check.", wantType: taskstate.FindingTypeBlocking, waiver: "Known flaky check.", prompt: "Waiver reason"},
+		{name: "keep EOF", input: "k", interrupted: true, wantType: taskstate.FindingTypeBlocking, prompt: "Decision for finding 1"},
+		{name: "keep", input: "k\n", keep: true, wantType: taskstate.FindingTypeBlocking, prompt: "Decision for finding 1"},
+		{name: "downgrade EOF", input: "d\nFalse positive for this task.", interrupted: true, wantType: taskstate.FindingTypeBlocking, prompt: "Downgrade reason"},
+		{name: "waive EOF", input: "w\nKnown flaky check.", interrupted: true, wantType: taskstate.FindingTypeBlocking, prompt: "Waiver reason"},
 		{name: "downgrade continues", input: "d\nFalse positive for this task.\na\n", manual: true, wantType: taskstate.FindingTypeAdvisory, downgrade: "False positive for this task.", prompt: "Downgrade reason"},
 		{name: "waiver alias continues", input: "c\nKnown flaky check.\na\n", manual: true, wantType: taskstate.FindingTypeBlocking, waiver: "Known flaky check.", prompt: "Waiver reason"},
 	} {
@@ -766,7 +754,9 @@ func TestIntegrationWorkflowTaskReviewCheckDecisionsPersistDispositionAndContinu
 			stdout, stderr := fixture.run(test.input, "task", "run", "--pipeline", "standard", "op-main")
 
 			assert.Contains(t, stderr, test.prompt)
-			assert.NotContains(t, stderr, "Automated blocker decisions for op-main were interrupted")
+			if !test.interrupted {
+				assert.NotContains(t, stderr, "Automated blocker decisions for op-main were interrupted")
+			}
 			state, _ := fixture.loadFinalTask("op-main")
 			latest, ok := taskstate.LatestReview(state)
 			require.True(t, ok)
@@ -774,8 +764,12 @@ func TestIntegrationWorkflowTaskReviewCheckDecisionsPersistDispositionAndContinu
 			assert.Equal(t, test.wantType, latest.Findings[0].Type)
 			assert.Equal(t, test.downgrade, latest.Findings[0].DowngradeReason)
 			assert.Equal(t, test.waiver, latest.Findings[0].Waiver)
-			assert.False(t, latest.AutomatedBlockerDecisionInterrupted)
-			if test.keep {
+			assert.Equal(t, test.interrupted, latest.AutomatedBlockerDecisionInterrupted)
+			if test.interrupted {
+				assert.Equal(t, taskstate.ReviewStatusWaitingForAutomatedDecision, latest.Status)
+				assert.False(t, latest.AutomatedBlockerDecisionKept)
+				assertTaskNotPublished(t, state, fixture.backend.tasks["op-main"])
+			} else if test.keep {
 				assert.Empty(t, stdout)
 				assert.Equal(t, taskstate.ReviewStatusBlocked, latest.Status)
 				assert.True(t, latest.AutomatedBlockerDecisionKept)

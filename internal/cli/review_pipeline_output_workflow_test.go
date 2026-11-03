@@ -153,7 +153,7 @@ func TestIntegrationWorkflowReviewPipelineBlockedCheckExpandsRollingTailThroughC
 	is.Contains(visible, "blocked stdout 06")
 	is.Contains(visible, "blocked stdout 35")
 	is.NotContains(visible, "blocked stdout 05")
-	is.Contains(visible, "Review blocked for op-check-blocked by check \"unit\".")
+	is.NotContains(visible, "Review blocked for op-check-blocked by check \"unit\".")
 	latest := loadLatestReview(t, fixture, "op-check-blocked")
 	is.Equal(taskstate.ReviewStatusWaitingForAutomatedDecision, latest.Status)
 	must.Len(latest.Findings, 1)

@@ -3,23 +3,24 @@
 Publication requires both a passed [task review](reviews.md) and explicit consent
 for its exact publication plan. `task run` retains committed reviewed output and
 stops at a distinct publication decision, including after fully automated review.
-The terminal prompt displays the plan before accepting consent. Noninteractive
-invocations leave it pending; tooling can inspect and respond explicitly:
+The prompt displays the retained revision, passed review, publication content,
+flow, destination, and intended effects before accepting consent. Use
+`orpheus task run <task-id>` from an interactive terminal to answer it. Explicit
+authorization is recorded and delivery continues in that same invocation, both
+after a fresh review pass and when resuming a pending publication decision.
+
+Noninteractive stdin returns a nonzero interaction-required error and leaves the
+decision pending. Piped answers cannot supply consent. Redirected stdout/stderr
+are supported when stdin remains interactive. Pause, EOF, and cancellation never
+grant consent. Read-only inspection remains available:
 
 ```sh
 orpheus task show workflow op-123 --json
-orpheus task respond op-123 --interaction '<Pending.ID JSON>' \
-  --action authorize --evidence 'Operator accepts this exact displayed plan'
-orpheus task run op-123
 ```
 
-Review the revision, passed review, content, flow, and destination in inspection
-before responding. `respond` records consent without publishing; continuation
-performs delivery. The terminal prompt also records consent without delivering;
-run `task run` again to deliver. Pause, EOF, and cancellation never supply consent.
-A stale interaction is refused, and an unchanged authorized retry retains its grant.
-A review pass, `agent done`, or commit existence is not permission to push or close
-a task. There is no running-agent bypass.
+Stale decisions are refused, and an unchanged authorized delivery retry retains
+its grant. A review pass, `agent done`, or commit existence is not permission to
+push or close a task. There is no running-agent bypass.
 
 `orpheus task done <task-id>` is only a retry entry for an already authorized
 intent. It consumes committed input without creating another implementation
@@ -54,19 +55,13 @@ destination is the registered default branch, captured in the review scope.
 
 Flow and destination choices belong to Publication, not manual review. At the
 publication prompt, `i` changes flow and `d` selects an existing branch on
-`origin`. Tooling can replace a pending plan, including its title/body:
-
-```sh
-orpheus task respond op-123 --interaction '<Pending.ID JSON>' --action revise \
-  --plan '{"Flow":"pull-request","DestinationBranch":"main","Content":"feat: publish work\n\nReviewed task description."}'
-```
-
-Inspect the resulting interaction before authorizing it. Content/flow edits retain
-the passed review but create a new plan without consent. A changed destination
-(including its observed head) or changed task requirements requires a fresh review
-from the first step under current configuration. The selected publication content
-and flow survive that review. Changed checkout output cannot be approved as the
-previous revision; restore the reviewed checkout or obtain appropriate new review.
+`origin`. Review the displayed replacement plan before authorizing it. Flow edits
+retain the passed review but create a new plan without consent. A changed
+destination (including its observed head) or changed task requirements requires
+a fresh review
+from the first step under current configuration, continuing through review before
+another publication decision. The selected publication content and flow survive
+that review. Changed checkout output cannot be approved as the previous revision; restore the reviewed checkout or obtain appropriate new review.
 
 Plans freeze their content and choices. Configuration edits alone do not re-run
 completed review or replace an accepted plan. Unchanged interrupted delivery keeps

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	workmodel "github.com/hea3ven/orpheus/internal/work"
+	"io"
 	"log/slog"
 	"path/filepath"
 	"testing"
@@ -58,6 +59,7 @@ func newTaskWorkflowFixture(t *testing.T, tasks ...taskmodel.Task) *taskWorkflow
 	}
 	launcher := &semanticAgentLauncher{options: &fixture.options, nextPID: 4242}
 	fixture.agent = launcher
+	fixture.options.Dependencies.Terminal.InputIsTerminal = func(io.Reader) bool { return true }
 	fixture.options.Dependencies.TaskBackendFactory = func(taskmodel.RepositorySource) (taskmodel.ReadBackend, error) { return backend, nil }
 	fixture.options.Dependencies.DispatchGit = git
 	fixture.options.Dependencies.OutputGit = git

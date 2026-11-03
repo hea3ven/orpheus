@@ -28,6 +28,8 @@ var reviewWorkflowHelpCases = []reviewWorkflowHelpCase{
 			"Configured pipelines may include check, manual, and agent_review steps.",
 			"Use `task show review` to inspect review findings",
 			"PR synchronization remains `task sync`",
+			"Operator decisions require interactive stdin",
+			"Publication authorization continues delivery in this invocation",
 		},
 	},
 	{
@@ -74,4 +76,8 @@ func TestIntegrationWorkflowReviewWorkflowCommandHelpExplainsResponsibilitiesAnd
 			}
 		})
 	}
+	fixture := newCommandWorkflow(t)
+	stdout, _, _ := fixture.execute("task", "--help")
+	assert.NotContains(t, stdout, "respond")
+
 }

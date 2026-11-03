@@ -60,8 +60,9 @@ responses cannot authorize different work. Plan replacement can reserve fresh
 review or append a new pending plan, but never executes review or delivery.
 Review and publication decisions verify the exact retained checkout before saving;
 publication consent also checks current task requirements and destination context.
-Attached review prompts use this same response boundary.
-Continuation after an externally answered step skips that completed step.
+Attached review and publication prompts use this internal response boundary.
+There is no public noninteractive decision command. Continuation after a recorded
+answer skips that completed step.
 
 CLI owns phase/step header repetition, labels, ANSI styling, display-width wrapping,
 manual-review body sections, and rolling output tails. Review execution reports
@@ -227,12 +228,20 @@ authorize earlier grants. Retained consent uses that historical view, while
 not rewrite the original grant or delivery. A retained receipt is not permission
 to ignore current blockers when performing new effects.
 
-The CLI displays a separate publication decision after every review pass. Only
-terminal input/output enables its prompt; noninteractive use retains the pending
-interaction. `Respond` and the terminal prompt record consent without delivery.
-A later advancement consumes the accepted plan. Output failure after recording a
-grant cannot erase it or publish implicitly. Accepted unchanged retries use their
-recorded operation and consent without resolving earlier configuration again.
+The CLI displays a separate publication decision after every review pass.
+Interactive stdin enables operator decisions independently of output redirection.
+Noninteractive input returns `review.ErrInteractionRequired` with resumption
+advice; executors propagate it without failing or rejecting the pending review.
+Manual-command confirmation, manual assessment, finding dispositions, fresh-review
+blocker dispositions, and post-review proposal prompts follow the same input gate.
+EOF and cancellation retain pending work; partial EOF answers are never applied.
+
+The internal `Respond` method records consent without effects. After interactive
+authorization succeeds, the same `task run` invocation advances delivery; a
+scope-changing edit instead follows fresh review. A pause or failed answer never
+advances publication. Output failure cannot erase a recorded grant or observed
+delivery. Accepted unchanged retries use their recorded operation and consent
+without resolving earlier configuration again.
 
 Publication is an idempotent application action: find/verify a matching PR,
 import it when present, and create only when confirmed absent. Failed lookup is
