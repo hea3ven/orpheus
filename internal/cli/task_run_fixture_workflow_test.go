@@ -63,6 +63,7 @@ func newTaskWorkflowFixture(t *testing.T, tasks ...taskmodel.Task) *taskWorkflow
 	fixture.options.Dependencies.TaskBackendFactory = func(taskmodel.RepositorySource) (taskmodel.ReadBackend, error) { return backend, nil }
 	fixture.options.Dependencies.DispatchGit = git
 	fixture.options.Dependencies.OutputGit = git
+	fixture.options.Dependencies.FinalizationGit = git
 	fixture.options.Dependencies.AgentGit = git
 	fixture.options.Dependencies.ReviewCandidateGit = git
 	fixture.options.Dependencies.AgentLauncher = launcher

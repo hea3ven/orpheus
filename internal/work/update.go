@@ -217,7 +217,6 @@ func (g *changeGuard) session(before, after *Session) {
 func (g *changeGuard) review(before, after *ReviewPhase) {
 	g.same(before.Contract, after.Contract, "review contract selection")
 	g.same(before.Scope, after.Scope, "review scope")
-	g.same(before.Publication, after.Publication, "proposed publication")
 	g.same(before.StartedAt, after.StartedAt, "review entry time")
 	g.assigned(before.AdmissionFailure, after.AdmissionFailure, "read-only admission failure")
 	g.assigned(before.ExecutionFailure, after.ExecutionFailure, "review execution failure")

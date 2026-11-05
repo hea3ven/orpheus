@@ -303,3 +303,14 @@ func (w *Workflow) ReviewDestination(ref ReviewRef) (*Destination, error) {
 	}
 	return phase.Scope.Destination, nil
 }
+
+// FixedDestination is the branch established on initial review entry. Later tips
+// may advance, but no subsequent review or publication may retarget this branch.
+func (w *Workflow) FixedDestination() *Destination {
+	for _, phase := range w.Phases {
+		if p, ok := phase.(*ReviewPhase); ok && p != nil && p.Scope.Destination != nil {
+			return p.Scope.Destination
+		}
+	}
+	return nil
+}

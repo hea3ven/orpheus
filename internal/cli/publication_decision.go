@@ -22,6 +22,11 @@ func presentPublicationDecision(command *cobra.Command, controller workflow.Cont
 		if _, err := fmt.Fprintln(command.ErrOrStderr(), "PUBLICATION CONTENT\n"+view.Publication.Content); err != nil {
 			return view, err
 		}
+		if view.Publication.Input.Provenance == "operator_selected" {
+			if _, err := fmt.Fprintf(command.ErrOrStderr(), "NOTICE: publication input differs from reviewed output; it has not passed that review.\nReviewed commit: %s\nActual input: %s (tree %s)\nRelationship: %s\nChanges from review:\n%s\nProceed explicitly accepts this review gap; abort leaves publication pending.\n", view.Revision.Code.Commit, view.Publication.Input.Code.Commit, view.Publication.Input.Code.Tree, view.Publication.Comparison.Relationship, view.Publication.Comparison.Changes); err != nil {
+				return view, err
+			}
+		}
 		if err := requireOperatorInput(command, terminal, view.TaskID); err != nil {
 			return view, err
 		}
@@ -42,7 +47,7 @@ func presentPublicationDecision(command *cobra.Command, controller workflow.Cont
 
 func promptPublicationResponse(command *cobra.Command, reader *bufio.Reader, view workflow.View) (workflow.Response, error) {
 	for {
-		if _, err := fmt.Fprint(command.ErrOrStderr(), "Publication decision [a=authorize this plan, i=flow, d=destination, q=pause]: "); err != nil {
+		if _, err := fmt.Fprint(command.ErrOrStderr(), "Publication decision [p=proceed with this exact input and plan, b=abort, i=flow, q=pause]: "); err != nil {
 			return nil, err
 		}
 		line, err := reader.ReadString('\n')
@@ -54,22 +59,19 @@ func promptPublicationResponse(command *cobra.Command, reader *bufio.Reader, vie
 		}
 		action := strings.ToLower(strings.TrimSpace(line))
 		switch action {
-		case "a", "authorize":
-			return workflow.PublicationResponse{Action: workflow.DecisionAuthorize, Evidence: "Operator authorized the displayed publication plan"}, nil
-		case "", "q", "pause":
+		case "p", "proceed", "a", "authorize":
+			return workflow.PublicationResponse{Action: workflow.DecisionAuthorize, Evidence: "Operator chose proceed for the displayed exact publication input and plan, including any disclosed review gap"}, nil
+		case "", "b", "abort", "q", "pause":
 			return workflow.PauseResponse{}, nil
-		case "i", "flow", "d", "destination":
-			return promptPublicationPlanChange(command, reader, view, action == "i" || action == "flow")
+		case "i", "flow":
+			return promptPublicationPlanChange(command, reader, view)
 		}
 	}
 }
 
-func promptPublicationPlanChange(command *cobra.Command, reader *bufio.Reader, view workflow.View, changeFlow bool) (workflow.Response, error) {
-	proposal := workflow.PublicationPlanResponse{Flow: publication.IntegrationFlow(view.Publication.Flow), DestinationBranch: view.Publication.Destination.Branch, Content: view.Publication.Content}
-	prompt := "Destination branch (requires fresh review when changed): "
-	if changeFlow {
-		prompt = "Flow [pull-request/direct-merge]: "
-	}
+func promptPublicationPlanChange(command *cobra.Command, reader *bufio.Reader, view workflow.View) (workflow.Response, error) {
+	proposal := workflow.PublicationPlanResponse{Flow: publication.IntegrationFlow(view.Publication.Flow), Content: view.Publication.Content}
+	prompt := "Flow [pull-request/direct-merge]: "
 	if _, err := fmt.Fprint(command.ErrOrStderr(), prompt); err != nil {
 		return nil, err
 	}
@@ -80,10 +82,6 @@ func promptPublicationPlanChange(command *cobra.Command, reader *bufio.Reader, v
 	if err != nil {
 		return nil, err
 	}
-	if changeFlow {
-		proposal.Flow = publication.IntegrationFlow(strings.TrimSpace(value))
-	} else {
-		proposal.DestinationBranch = strings.TrimSpace(value)
-	}
+	proposal.Flow = publication.IntegrationFlow(strings.TrimSpace(value))
 	return proposal, nil
 }

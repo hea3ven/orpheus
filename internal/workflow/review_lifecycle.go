@@ -43,7 +43,7 @@ type ReviewLifecycleStore interface {
 	RecordRepairBudgetStop(work.AttemptRef, int, int) (taskstate.ReviewAttempt, error)
 	RecordReviewFailure(work.AttemptRef, error) (taskstate.ReviewAttempt, error)
 	RecordReviewAbort(work.AttemptRef, string) (taskstate.ReviewAttempt, error)
-	PreparePublication(work.AttemptRef, work.PublicationTarget, string) (work.AttemptRef, error)
+	PreparePublication(work.AttemptRef, work.PublicationPlan) (work.AttemptRef, error)
 	RecordFindingCreatedTask(work.AttemptRef, work.FindingRef, string) (taskstate.ReviewAttempt, error)
 	InterruptReviewExecution(repoID, taskID string, attempt int, stepName string, opts taskstate.InterruptReviewExecutionOptions) (taskstate.ReviewAttempt, error)
 }

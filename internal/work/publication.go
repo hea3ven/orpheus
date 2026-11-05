@@ -16,19 +16,36 @@ func deliveryTime(delivery Delivery) time.Time {
 	return time.Time{}
 }
 
-// PublicationPlan inherits output and destination from its selected review.
-// Content and delivery target are immutable intent covered by its owned consent.
+// PublicationPlan binds actual retained input separately from historical review.
+// Input, destination context, content and target are immutable consent material.
 type PublicationPlan struct {
-	Review  ReviewRef
-	Target  PublicationTarget
-	Content string
+	Review      ReviewRef
+	Input       PublicationInput
+	Destination Destination
+	Comparison  PublicationComparison
+	Target      PublicationTarget
+	Content     string
 }
 
-// PublicationIntent retains selected content and delivery target while a changed
-// destination undergoes review. It is not an accepted publication plan.
-type PublicationIntent struct {
-	Target  PublicationTarget
-	Content string
+// PublicationInput retains the selected commit without inventing an agent effort.
+type PublicationInput struct {
+	Code       CodeOutput
+	Provenance PublicationProvenance
+}
+
+// PublicationProvenance distinguishes reviewed output from operator-selected code.
+type PublicationProvenance string
+
+const (
+	InputReviewed PublicationProvenance = "reviewed_output"
+	InputOperator PublicationProvenance = "operator_selected"
+)
+
+// PublicationComparison discloses the selected input's relationship and diff to
+// the reviewed commit. It never establishes review approval of operator changes.
+type PublicationComparison struct {
+	Relationship string
+	Changes      string
 }
 
 // PublicationTarget distinguishes PR creation/update from destination delivery.

@@ -65,7 +65,7 @@ func TestWorkflowHeadersPresentPhaseFactsAndWrapCompleteIdentitiesAtDisplayWidth
 		{workflow.PhaseReview, []string{"REVISION", "Full task | task-baseline -> retained-output", "PUBLISHED", "public-1", "PR", "https://example.test/pr/42"}},
 		{workflow.PhasePublication, []string{"REVIEW", "Attempt 2 passed", "FLOW", "direct-merge", "DESTINATION", "origin/main", "CONSENT", "Awaiting publication decision"}},
 		{workflow.PhaseExternalReview, []string{"PR", "https://example.test/pr/42 | merged", "PUBLISHED", "public-2", "DESTINATION", "origin/main"}},
-		{workflow.PhaseFinalization, []string{"REVISION", "retained-output", "DELIVERY", "PR merge verified", "CLOSURE", "Task source confirmed closed"}},
+		{workflow.PhaseFinalization, []string{"REVIEWED", "retained-output", "DELIVERY", "PR merge verified", "CLOSURE", "Task source confirmed closed"}},
 	} {
 		t.Run(string(tc.phase), func(t *testing.T) {
 			var output bytes.Buffer

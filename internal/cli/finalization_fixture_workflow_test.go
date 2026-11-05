@@ -150,7 +150,7 @@ func (f *finalizationWorkflowFixture) assertPublishedPR(taskID string) {
 	require.Len(f.t, state.Runs, 1)
 	assert.Equal(f.t, taskstate.RunStatusSucceeded, state.Runs[0].Status)
 	require.NotNil(f.t, state.Runs[0].Completion)
-	assert.Equal(f.t, facts.Commit, state.Runs[0].Completion.Commit)
+	assert.Equal(f.t, "output-1", state.Runs[0].Completion.Commit, "publication cannot rewrite the implementation revision")
 	assert.Equal(f.t, []string{f.pr.url}, f.mutations.prURLs)
 }
 
@@ -300,4 +300,33 @@ func (g *memoryPublicationGit) DirectRevisionDelivery(ctx context.Context, repo 
 		return gitmeta.Revision{}, err
 	}
 	return g.PublishedRevision(ctx, repo.Path, destination)
+}
+
+func (g *memoryPublicationGit) ObservePublicationInput(ctx context.Context, req gitmeta.PublicationInputRequest) (gitmeta.PublicationInputObservation, error) {
+	if g.mergeCommit != "" && req.Accepted != nil && g.heads[req.Directory] == req.Accepted.Commit {
+		relationship, changes := "reviewed", ""
+		if req.Accepted.Commit != req.Reviewed.Commit {
+			relationship, changes = g.publicationRelationship, "fixture committed changes"
+			if req.Accepted.Tree == req.Reviewed.Tree {
+				changes = "No tree differences; commit identity changed."
+			}
+		}
+		return gitmeta.PublicationInputObservation{Recovering: true, Revision: *req.Accepted, Relationship: relationship, Changes: changes}, nil
+	}
+	return g.memoryReviewCandidate.ObservePublicationInput(ctx, req)
+}
+
+func (g *memoryPublicationGit) PushPublicationInput(ctx context.Context, dir, branch string, input gitmeta.Revision) error {
+	if err := g.VerifyRevision(ctx, dir, gitmeta.CheckoutIdentity{Commit: input.Commit, Ref: "refs/heads/" + branch}, input); err != nil {
+		return err
+	}
+	if g.pushError != nil {
+		return g.pushError
+	}
+	if g.remote[branch] == input.Commit {
+		return nil
+	}
+	g.pushes = append(g.pushes, branch)
+	g.remote[branch] = input.Commit
+	return nil
 }

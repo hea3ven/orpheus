@@ -8,7 +8,7 @@ import (
 
 // PreparePublication retains passed-review intent without manufacturing consent.
 // Delivery choices belong to Publication, not a manual review assessment.
-func (s Store) PreparePublication(ref work.AttemptRef, target work.PublicationTarget, content string) (work.AttemptRef, error) {
+func (s Store) PreparePublication(ref work.AttemptRef, plan work.PublicationPlan) (work.AttemptRef, error) {
 	var owner work.AttemptRef
 	_, err := s.updateWorkflow(ref.RepositoryID, ref.TaskID, func(snapshot *work.State) (bool, error) {
 		w, _, err := currentReview(snapshot, ref)
@@ -22,8 +22,11 @@ func (s Store) PreparePublication(ref work.AttemptRef, target work.PublicationTa
 		if outcome != work.ReviewPassed && outcome != work.ReviewPassedWithWaivers {
 			return false, errors.New("publication requires the complete passed review")
 		}
+		if plan.Review.Phase != ref.Phase {
+			return false, errors.New("publication plan must identify its passed review")
+		}
 		owner = work.AttemptRef{RepositoryID: ref.RepositoryID, TaskID: ref.TaskID, Workflow: ref.Workflow, Phase: len(w.Phases)}
-		w.Phases = append(w.Phases, &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: ref.Phase}, Target: target, Content: content}})
+		w.Phases = append(w.Phases, &work.PublicationPhase{Plan: plan})
 		return true, nil
 	})
 	return owner, err

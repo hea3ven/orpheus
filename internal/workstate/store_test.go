@@ -351,6 +351,7 @@ func retainedHistory(t *testing.T) work.State {
 	pub := &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 4}, Target: &work.PullRequestTarget{}, Content: "Original feature description"}}
 	original := work.Workflow{ReviewContracts: []work.ReviewContract{contract}, Phases: []work.Phase{preparation(), effort("feat: original intent", "R1", 1), first, repair, second, pub}}
 	s := work.State{RepositoryID: "repo", TaskID: "task", Workflows: []work.Workflow{original}}
+	testutil.SeedPublicationInputs(&s)
 	require.NoError(t, s.AuthorizePublication(0, work.PublicationRef{Phase: 5}, when(40), "Operator explicitly authorizes PR publication"))
 	pub.Delivery = &work.PullRequestDelivery{PullRequest: work.PullRequestRef{URL: "https://example.test/pull/1"}, PublicCommit: "P2", Head: "P2", Tree: "tree-R2", ObservedAt: when(41), Evidence: "Verified provider and remote head"}
 	maintenance := &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 5}, BranchSyncs: []work.BranchSync{{StartedAt: when(42), Checkpoint: work.BranchSyncCheckpoint{LocalHead: "P2", RemoteHead: "P2", MergeSource: "D2"}, LocalCommit: &work.BranchSyncCommit{Head: "S1", ObservedAt: when(43)}, Push: &work.BranchSyncPush{Head: "S1", ObservedAt: when(44), Evidence: "Verified remote ref"}}}}
@@ -360,6 +361,7 @@ func retainedHistory(t *testing.T) work.State {
 	s.Workflows[0].Phases = append(s.Workflows[0].Phases, maintenance, unchanged)
 	direct := &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 2}, Target: &work.DirectMergeTarget{}, Content: "Second workflow publication"}}
 	s.Workflows = append(s.Workflows, work.Workflow{ReviewContracts: []work.ReviewContract{contract}, Phases: []work.Phase{preparation(), effort("feat: second workflow", "R3", 50), review(1, 53), direct}})
+	testutil.SeedPublicationInputs(&s)
 	require.NoError(t, s.AuthorizePublication(1, work.PublicationRef{Phase: 3}, when(60), "Operator explicitly authorizes direct delivery"))
 	direct.Delivery = &work.DirectDelivery{PublicCommit: "P3", Destination: work.CodeIdentity{Commit: "M3", Tree: "tree-R3"}, ObservedAt: when(61), Evidence: "Verified destination ref"}
 	s.Workflows[1].Phases = append(s.Workflows[1].Phases, &work.FinalizationPhase{Acceptance: &work.DirectAcceptance{Publication: work.PublicationRef{Phase: 3}}, Closure: &work.TaskClosure{At: when(62), Reason: "delivered", Evidence: "Source confirmed closure"}, Cleanup: []work.CleanupObservation{&work.WorktreeRetained{Path: "/fixture/work", At: when(63), Reason: "Dirty files", Evidence: "Cleanup refused"}, &work.WorktreeRemoved{Path: "/fixture/work", At: when(64), Evidence: "Removed"}}})

@@ -2,6 +2,7 @@ package work
 
 import (
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -26,11 +27,12 @@ func (v *validator) publication(p *PublicationPhase) {
 	outcome, err := v.w.reviewOutcome(p.Plan.Review, cutoff)
 	v.check(err == nil && passed(outcome), "publication requires passed exact review at authorization: %v", err)
 	v.text(p.Plan.Content, "publication content")
-	destination, err := v.w.ReviewDestination(p.Plan.Review)
-	v.check(err == nil, "publication review destination: %v", err)
-	v.destination(destination)
+	v.fixedDestination(&p.Plan.Destination)
 	code, err := v.w.Output(review.Scope.Output)
 	v.check(err == nil && code != nil, "Git publication requires retained code output")
+	v.publicationInput(p.Plan.Input, code)
+	v.text(p.Plan.Comparison.Relationship, "publication input relationship")
+	v.check((p.Plan.Comparison.Relationship == "reviewed") == (p.Plan.Input.Provenance == InputReviewed), "publication comparison cannot claim review approval for operator input")
 	v.target(p.Plan.Target)
 	if target, pr := p.Plan.Target.(*PullRequestTarget); pr && target != nil && target.Existing != nil {
 		v.unmergedPR(*target.Existing)
@@ -42,7 +44,7 @@ func (v *validator) publication(p *PublicationPhase) {
 	if p.Delivery != nil {
 		v.check(p.Consent != nil, "delivery requires explicit exact-plan consent")
 		if code != nil {
-			v.delivery(p.Plan.Target, p.Delivery, code.Tree)
+			v.delivery(p.Plan.Target, p.Delivery, p.Plan.Input.Code.Tree)
 		}
 		if p.Consent != nil {
 			v.check(!deliveryTime(p.Delivery).Before(p.Consent.GrantedAt), "delivery observation predates authorization")
@@ -98,7 +100,7 @@ func (v *validator) delivery(target PublicationTarget, delivery Delivery, tree s
 		planned, ok := target.(*PullRequestTarget)
 		v.check(ok && planned != nil, "PR delivery disagrees with planned flow")
 		v.pullRequest(delivery.PullRequest)
-		v.check(delivery.PublicCommit != "" && delivery.Head == delivery.PublicCommit && delivery.Tree == tree, "remote PR observation must preserve exact reviewed output")
+		v.check(delivery.PublicCommit != "" && delivery.Head == delivery.PublicCommit && delivery.Tree == tree, "remote PR observation must preserve exact authorized input")
 		v.check(!delivery.ObservedAt.IsZero(), "remote delivery requires observation time")
 		v.text(delivery.Evidence, "remote delivery evidence")
 		if ok && planned != nil {
@@ -112,10 +114,20 @@ func (v *validator) delivery(target PublicationTarget, delivery Delivery, tree s
 		}
 		planned, ok := target.(*DirectMergeTarget)
 		v.check(ok && planned != nil, "direct delivery disagrees with planned flow")
-		v.check(delivery.PublicCommit != "" && delivery.Destination.Commit != "" && delivery.Destination.Tree == tree, "direct delivery requires observed destination push preserving reviewed output")
+		v.check(delivery.PublicCommit != "" && delivery.Destination.Commit != "" && delivery.Destination.Tree == tree, "direct delivery requires observed destination push preserving authorized input")
 		v.check(!delivery.ObservedAt.IsZero(), "destination push requires observation time")
 		v.text(delivery.Evidence, "destination push evidence")
 	default:
 		v.check(false, "invalid delivery alternative")
+	}
+}
+
+func (v *validator) publicationInput(input PublicationInput, reviewed *CodeOutput) {
+	v.code(input.Code.CodeIdentity)
+	v.check(strings.HasPrefix(input.Code.RetainedRef, "refs/"), "publication input requires an owned retention ref")
+	v.check(input.Provenance == InputReviewed || input.Provenance == InputOperator, "publication input requires honest provenance")
+	if reviewed != nil {
+		matches := input.Code.CodeIdentity == reviewed.CodeIdentity
+		v.check(matches == (input.Provenance == InputReviewed), "operator-selected publication input cannot claim review approval")
 	}
 }

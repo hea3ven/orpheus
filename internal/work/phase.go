@@ -27,9 +27,6 @@ type ImplementationPhase struct {
 // ReviewPhase owns the actual attempts of its referenced required-step contract.
 // Scope is inherited by findings; there is no second aggregate result to edit.
 type ReviewPhase struct {
-	// Publication carries proposed delivery intent through a scope-changing review.
-	// It never grants consent; the passed review prepares a separate plan.
-	Publication       *PublicationIntent
 	Abort             *AbortedReview
 	ExecutionFailure  *ReviewExecutionFailure
 	Contract          int

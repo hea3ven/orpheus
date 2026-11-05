@@ -61,6 +61,21 @@ func (s Controller) advanceDeliveryPhase(ctx context.Context, opts FinalizeOptio
 		if err := CheckExpectedRoute(expected, item, view); err != nil {
 			return err
 		}
+		if w := snapshot.ActiveWorkflow(); w != nil {
+			if pending, ok := w.LastPhase().(*work.PublicationPhase); ok && pending.Consent == nil {
+				return ErrPublicationConsentRequired
+			}
+		}
+		changed, err := s.refreshPublicationSnapshot(ctx, source, item, backend, &snapshot)
+		if err != nil {
+			return err
+		}
+		if changed {
+			if _, err := store.Save(snapshot, snapshot.Version); err != nil {
+				return err
+			}
+			return ErrPublicationConsentRequired
+		}
 		selected, err := selectCommittedPublication(&snapshot, item)
 		if err != nil {
 			return err

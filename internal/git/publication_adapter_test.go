@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	orpheusgit "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/testguard"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -78,4 +80,32 @@ func TestIntegrationAdapterContractPublicationPushReportsUnavailableOriginWithou
 			assert.Equal(t, commit, strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD")))
 		})
 	}
+}
+
+func TestIntegrationAdapterContractAuthorizedPushPinsSourceDespiteLocalRefChange(t *testing.T) {
+	repo := newGitRepoWithLocalOrigin(t)
+	origin := strings.TrimSpace(runGit(t, repo, "remote", "get-url", "origin"))
+	branch := "orpheus/op-pin"
+	runGit(t, repo, "checkout", "-b", branch)
+	baseline := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+	commitFile(t, repo, "selected.txt", "authorized input\n", "selected publication input")
+	selected := orpheusgit.Revision{Commit: strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD")), Tree: strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD^{tree}")), RetainedRef: "refs/orpheus/selected-input"}
+	runGit(t, repo, "update-ref", selected.RetainedRef, selected.Commit)
+	commitFile(t, repo, "later.txt", "not authorized yet\n", "later operator input")
+	later := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+	runGit(t, repo, "reset", "--hard", selected.Commit)
+	hooks := testutil.CanonicalTempDir(t)
+	runGit(t, repo, "config", "core.hooksPath", hooks)
+	require.NoError(t, testguard.WriteExecutable(filepath.Join(hooks, "pre-push"), []byte("#!/bin/sh\ngit update-ref refs/heads/"+branch+" "+later+"\n")))
+
+	require.NoError(t, orpheusgit.PushPublicationInput(context.Background(), repo, branch, selected))
+	assert.Equal(t, selected.Commit, strings.TrimSpace(runGit(t, origin, "rev-parse", "refs/heads/"+branch)), "the hook must not substitute newer code for the authorized source")
+	assert.Equal(t, later, strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD")), "normal hooks ran without being bypassed")
+	assert.Equal(t, "origin/"+branch, strings.TrimSpace(runGit(t, repo, "rev-parse", "--abbrev-ref", "@{upstream}")))
+	runGit(t, repo, "reset", "--hard", baseline)
+	older := orpheusgit.Revision{Commit: baseline, Tree: strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD^{tree}")), RetainedRef: "refs/orpheus/older-input"}
+	runGit(t, repo, "update-ref", older.RetainedRef, older.Commit)
+	err := orpheusgit.PushPublicationInput(context.Background(), repo, branch, older)
+	require.ErrorContains(t, err, "origin")
+	assert.Equal(t, selected.Commit, strings.TrimSpace(runGit(t, origin, "rev-parse", "refs/heads/"+branch)), "proceed never authorizes force-pushing over unexpected remote history")
 }

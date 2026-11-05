@@ -240,6 +240,7 @@ func (b *memoryReviewTasks) Close(_ context.Context, id string) error {
 // The review fixture supports default-branch and PR publication after approval.
 // Direct merge and publication retry contracts live outside these scenarios.
 type memoryReviewCandidate struct {
+	publicationRelationship string
 	*memoryDispatchGit
 	head, contents       string
 	destinationHeads     map[string]string
@@ -554,4 +555,20 @@ func (f *reviewWorkflowFixture) inspectWorkflow(taskID string) workflow.View {
 	var view workflow.View
 	require.NoError(f.t, json.Unmarshal([]byte(output), &view))
 	return view
+}
+
+func (g *memoryReviewCandidate) ObservePublicationInput(ctx context.Context, req gitmeta.PublicationInputRequest) (gitmeta.PublicationInputObservation, error) {
+	observed, err := g.memoryDispatchGit.ObservePublicationInput(ctx, req)
+	if err != nil {
+		return observed, err
+	}
+	err = g.VerifyRevision(ctx, req.Directory, gitmeta.CheckoutIdentity{Commit: observed.Revision.Commit, Ref: "refs/heads/" + req.Branch}, observed.Revision)
+	if observed.Revision.Commit != req.Reviewed.Commit && g.publicationRelationship != "" {
+		observed.Relationship = g.publicationRelationship
+	}
+	return observed, err
+}
+
+func (g *memoryReviewCandidate) PushPublicationInput(context.Context, string, string, gitmeta.Revision) error {
+	return errors.New("unexpected publication before explicit authorization")
 }

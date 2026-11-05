@@ -69,7 +69,7 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 
 			assert.Contains(t, stderr, "TASK")
 			assert.Contains(t, stdout, "Finalized op-merge")
-			assert.Contains(t, stdout, "reviewed output-1")
+			assert.Contains(t, stdout, "authorized input output-1")
 			assert.Contains(t, stdout, "pushed main")
 			closed, item := f.loadFinalTask("op-merge")
 			assert.Equal(t, taskmodel.StatusClosed, item.Status)
@@ -106,7 +106,7 @@ func TestIntegrationWorkflowTaskDoneInfersFeatureTaskAcrossWorkingDirectories(t 
 
 			assert.Contains(t, stderr, "TASK")
 			assert.Contains(t, stdout, "Published op-infer")
-			assert.Contains(t, stdout, "reviewed output-1")
+			assert.Contains(t, stdout, "authorized input output-1")
 			assert.Contains(t, stdout, "observed PR "+f.pr.url)
 			f.assertPublishedPR("op-infer")
 			require.Len(t, f.pr.created, 1)

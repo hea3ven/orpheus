@@ -139,13 +139,27 @@ func (s Controller) advancePhase(ctx context.Context, inv *advanceInvocation, vi
 		return s.advanceReview(ctx, inv, view, route, result)
 	case TaskRunActionPreparePublication:
 		return s.advancePublication(ctx, inv, route, result)
-	case TaskRunActionPublish, TaskRunActionRetryFinalization:
+	case TaskRunActionPublish, TaskRunActionAwaitDecision:
+		changed, err := s.refreshPublication(ctx, inv.base, route)
+		if err != nil {
+			return true, err
+		}
+		if changed {
+			return false, nil
+		}
+		if route.Action == TaskRunActionAwaitDecision {
+			return true, s.notify(inv.base.RepoID(), inv.base.Task, true, nil)
+		}
+		delivered, next, err := s.advanceDeliveryPhase(ctx, FinalizeOptions{TaskID: inv.base.TaskID()}, &route)
+		result.Delivery = &delivered
+		return next == nil, err
+	case TaskRunActionRetryFinalization:
 		delivered, next, err := s.advanceDeliveryPhase(ctx, FinalizeOptions{TaskID: inv.base.TaskID()}, &route)
 		result.Delivery = &delivered
 		return next == nil, err
 	case TaskRunActionNeedsAttention:
 		return true, errors.New(route.Advice)
-	case TaskRunActionAwaitDecision, TaskRunActionImplementationActive, TaskRunActionReviewActive, TaskRunActionOpenPR, TaskRunActionCompleted:
+	case TaskRunActionImplementationActive, TaskRunActionReviewActive, TaskRunActionOpenPR, TaskRunActionCompleted:
 		return true, s.notify(inv.base.RepoID(), inv.base.Task, true, nil)
 	default:
 		return true, fmt.Errorf("unsupported workflow action %q", route.Action)

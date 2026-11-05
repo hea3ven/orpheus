@@ -1205,7 +1205,7 @@ func ensureTaskBranchUnowned(ctx context.Context, backend task.Lister, currentTa
 
 func ensureRepoRootDispatchAvailable(
 	ctx context.Context,
-	backend DispatchBackend,
+	backend task.Lister,
 	repo task.Repository,
 	currentTaskID string,
 	expected gitmeta.TaskWorktreeSetupResult,

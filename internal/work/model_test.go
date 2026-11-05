@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/stretchr/testify/require"
 )
@@ -333,6 +334,7 @@ func repairHistory(t *testing.T) work.State {
 		&work.WaivedFinding{Waiver: work.Waiver{Reason: "Accepted for the initial delivery", At: at(45)}})
 	second.Steps[1].(*work.AgentReviewStep).Report.Verifications = []work.FindingVerification{{Finding: localFindingRef(t), Resolution: work.FindingResolved, Evidence: "Local issue verified"}}
 	w.Phases = append(w.Phases, second, &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 4}, Target: &work.PullRequestTarget{}, Content: "Original feature publication narrative"}})
+	testutil.SeedPublicationInputs(&s)
 	require.NoError(t, s.AuthorizePublication(0, work.PublicationRef{Phase: 5}, at(50), "Operator authorizes this plan"))
 	w.Phases[5].(*work.PublicationPhase).Delivery = &work.PullRequestDelivery{PullRequest: nativePR(), PublicCommit: "P1", Head: "P1", Tree: "T2", ObservedAt: at(51), Evidence: "Verified PR delivery"}
 	w.Phases = append(w.Phases, &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 5}})
@@ -351,5 +353,6 @@ func repairHistory(t *testing.T) work.State {
 	third.Steps = []work.ReviewStep{third.Steps[0], failed, selected, &work.ManualReviewStep{Slot: 2, Decision: &work.ApprovedReview{At: at(86)}}}
 	pr := nativePR()
 	w.Phases = append(w.Phases, third, &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 8}, Target: &work.PullRequestTarget{Existing: &pr, ExpectedHead: "P1"}, Content: "Original feature narrative with repair context"}})
+	testutil.SeedPublicationInputs(&s)
 	return s
 }

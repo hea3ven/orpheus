@@ -31,6 +31,9 @@ configuration intact. A live handoff cannot trigger capture. No-change efforts
 may explicitly reuse their actual input while retaining their own handoff.
 Review evaluates the retained commit, never a moving HEAD or dirty candidate;
 reviewer context includes the full-task baseline and repair-delta endpoints.
+Publication separately permits explicitly accepted clean operator commits after
+review, without claiming they passed it; see [publication](publication.md). This
+does not relax review admission, read-only checks, or changed-requirements review.
 
 Without configuration, Orpheus uses a single manual `local-review` step. The
 command stays attached for the operator to approve, record findings, or pause.

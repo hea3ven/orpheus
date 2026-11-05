@@ -4,7 +4,9 @@ package cli_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -32,7 +34,7 @@ func TestIntegrationWorkflowPublicationPlanEditsAndInterruptedConsentNeverDelive
 	f.assertUnpublished("op-plan")
 
 	beforeEdits, _ := f.loadFinalTask("op-plan")
-	for _, input := range []string{"i\nother\n", "d\n" + branch + "\n"} {
+	for _, input := range []string{"i\nother\n"} {
 		_, _, err := f.runError(input, "task", "run", "op-plan")
 		require.Error(t, err)
 		preserved, _ := f.loadFinalTask("op-plan")
@@ -50,19 +52,16 @@ func TestIntegrationWorkflowPublicationPlanEditsAndInterruptedConsentNeverDelive
 	assert.Equal(t, edited.Pending.ID, f.inspectWorkflow("op-plan").Pending.ID, "unchanged intent does not create a new operation")
 
 	before, _ := f.loadFinalTask("op-plan")
-	item := f.backend.tasks["op-plan"]
-	changedTask := item.Clone()
-	changedTask.Title = "Changed requirements after review"
-	f.backend.tasks["op-plan"] = changedTask
-	_, _, err := f.runError("a\n", "task", "run", "op-plan")
-	require.ErrorContains(t, err, "requirements changed")
-	f.backend.tasks["op-plan"] = item
 	f.candidate.destinationHeads = map[string]string{"main": "advanced-destination"}
-	_, _, err = f.runError("a\n", "task", "run", "op-plan")
-	require.ErrorContains(t, err, "destination context changed")
-	f.candidate.destinationHeads = nil
+	_, notice := f.run("b\n", "task", "run", "op-plan")
+	assert.Contains(t, notice, "advanced-destination")
+	refreshed := f.inspectWorkflow("op-plan")
+	assert.Equal(t, "advanced-destination", refreshed.Publication.Destination.Commit)
+	assert.Equal(t, "initial-commit", refreshed.Publication.ReviewedDestination.Commit)
+	assert.Equal(t, original.Publication.Review, refreshed.Publication.Review, "same-branch advancement does not replay review")
+	before, _ = f.loadFinalTask("op-plan")
 	f.candidate.head = "different-clean-commit"
-	_, _, err = f.runError("a\n", "task", "run", "op-plan")
+	_, _, err := f.runError("a\n", "task", "run", "op-plan")
 	require.ErrorContains(t, err, "not at the reviewed commit")
 	refused, _ := f.loadFinalTask("op-plan")
 	assert.Equal(t, before, refused)
@@ -89,7 +88,7 @@ func TestIntegrationWorkflowPublicationPlanEditsAndInterruptedConsentNeverDelive
 	f.run("", "task", "run", "op-plan")
 	f.assertPublishedPR("op-plan")
 	final, _ := f.loadFinalTask("op-plan")
-	assert.Equal(t, grant, final.Work.Workflows[0].Phases[edited.Publication.Plan.Phase].(*work.PublicationPhase).Consent)
+	assert.Equal(t, grant, final.Work.Workflows[0].Phases[refreshed.Publication.Plan.Phase].(*work.PublicationPhase).Consent)
 	assert.Len(t, final.Reviews, 1, "configuration edits do not retrospectively invalidate reviewed evidence")
 	assert.Len(t, f.pr.created, 1, "retry observes the existing PR instead of creating another")
 	assert.Equal(t, "feat: reviewed intent", f.pr.created[0].Title)
@@ -201,4 +200,139 @@ type countedDecisionInput struct {
 func (r *countedDecisionInput) Read(p []byte) (int, error) {
 	r.reads++
 	return r.Reader.Read(p)
+}
+
+func selectOperatorCommit(f *finalizationWorkflowFixture, dir, commit, contents, relationship string) {
+	f.t.Helper()
+	f.candidate.contents = contents
+	f.candidate.head = commit
+	f.candidate.heads[dir] = commit
+	f.candidate.trees[commit] = fmt.Sprintf("tree-%x", sha256.Sum256([]byte(contents)))
+	f.candidate.hasCandidateChanges, f.candidate.hasStagedChanges = false, false
+	f.candidate.publicationRelationship = relationship
+}
+
+func TestIntegrationWorkflowPublicationOperatorInputIsDistinctFromReviewAndRequiresProceed(t *testing.T) {
+	for _, flow := range []string{"pull-request", "direct-merge"} {
+		for _, repoRoot := range []bool{false, true} {
+			for _, kind := range []string{"added", "amended", "rewritten"} {
+				t.Run(fmt.Sprintf("%s/root_%t/%s", flow, repoRoot, kind), func(t *testing.T) {
+					f := newFinalizationFixture(t, "op-operator")
+					f.setConfig("publication", map[string]any{"integration_flow": flow})
+					branch, dir := f.expectedTarget("op-operator")
+					if repoRoot {
+						dir = taskWorkflowRepoRoot
+					}
+					f.completion("op-operator", branch, dir, "feat: reviewed implementation", "Keep original review evidence.", taskstate.RunStatusSucceeded)
+					f.run("a\nb\n", "task", "run", "op-operator")
+					before, _ := f.loadFinalTask("op-operator")
+					require.Len(t, before.Reviews, 1)
+					reviewed := f.inspectWorkflow("op-operator")
+					assert.Equal(t, "output-1", reviewed.Revision.Code.Commit)
+					actual := "operator-" + kind
+					content := "operator " + kind + " output\n"
+					relation := "amended or rewritten history"
+					if kind == "added" {
+						relation = "additional commits after review"
+					}
+					if kind == "amended" {
+						content = f.candidate.contents
+					}
+					selectOperatorCommit(f, dir, actual, content, relation)
+					registered := f.loadFinalRegistry()
+					registered.Repos[0].DefaultBranch = "other-default"
+					require.NoError(t, f.registryStore.Save(registered))
+					_, notice := f.run("b\n", "task", "run", "op-operator")
+					for _, fact := range []string{"NOTICE", "output-1", actual, relation, "review gap"} {
+						assert.Contains(t, notice, fact)
+					}
+					assert.NotContains(t, notice, "d=destination")
+					pending := f.inspectWorkflow("op-operator")
+					require.NotNil(t, pending.Pending)
+					assert.Equal(t, work.InputOperator, pending.Publication.Input.Provenance)
+					assert.Equal(t, actual, pending.Publication.Input.Code.Commit)
+					assert.Equal(t, f.candidate.trees[actual], pending.Publication.Input.Code.Tree)
+					assert.Equal(t, "main", pending.Publication.Destination.Branch)
+					assert.Equal(t, reviewed.Publication.Review, pending.Publication.Review)
+					f.assertUnpublished("op-operator")
+					if flow == "direct-merge" && repoRoot && kind == "rewritten" {
+						f.publication.pushError = errors.New("destination disconnected")
+						_, _, err := f.runError("p\n", "task", "run", "op-operator")
+						require.ErrorIs(t, err, f.publication.pushError)
+						accepted, _ := f.loadFinalTask("op-operator")
+						grant := *accepted.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase).Consent
+						f.publication.pushError = nil
+						f.run("", "task", "run", "op-operator")
+						recovered, _ := f.loadFinalTask("op-operator")
+						assert.Equal(t, grant, *recovered.Work.Workflows[0].Phases[pending.Publication.Plan.Phase].(*work.PublicationPhase).Consent)
+					} else {
+						f.run("p\n", "task", "run", "op-operator")
+					}
+					final, item := f.loadFinalTask("op-operator")
+					assert.Equal(t, before.Reviews, final.Reviews, "operator input must not replay or fabricate review")
+					assert.Equal(t, before.Runs, final.Runs, "operator commits must not manufacture an agent effort or completion")
+					assert.Len(t, f.candidate.commits, 1, "only the original implementation was committed by Orpheus")
+					plan := final.Work.Workflows[0].Phases[pending.Publication.Plan.Phase].(*work.PublicationPhase)
+					require.NotNil(t, plan.Consent)
+					assert.Equal(t, actual, plan.Plan.Input.Code.Commit)
+					assert.Equal(t, "output-1", final.Runs[0].Completion.Commit)
+					assert.Equal(t, actual, taskstate.FinalizationFacts(final).Commit)
+					if flow == "pull-request" {
+						assert.Equal(t, taskmodel.StatusInProgress, item.Status)
+						assert.Equal(t, actual, f.publication.remote[branch])
+						assert.Equal(t, "main", f.pr.created[0].BaseBranch)
+						assert.Equal(t, f.candidate.trees[actual], plan.Delivery.(*work.PullRequestDelivery).Tree)
+					} else {
+						assert.Equal(t, taskmodel.StatusClosed, item.Status)
+						assert.Equal(t, "merge-commit", f.publication.remote["main"])
+						assert.Equal(t, f.candidate.trees[actual], plan.Delivery.(*work.DirectDelivery).Destination.Tree)
+						assert.Empty(t, f.pr.created)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestIntegrationWorkflowPublicationInputChangingBetweenConsentAndDeliveryNeedsNewDecision(t *testing.T) {
+	f := newFinalizationFixture(t, "op-race")
+	branch, dir := f.expectedTarget("op-race")
+	f.completion("op-race", branch, dir, "feat: review once", "Bind each consent to actual input.", taskstate.RunStatusSucceeded)
+	var diagnostics bytes.Buffer
+	writer := &publicationConsentMutation{Writer: &diagnostics, mutate: func() {
+		selectOperatorCommit(f, dir, "operator-race", "operator race output\n", "amended or rewritten history")
+	}}
+	err := f.runWithWriters("a\np\n", io.Discard, writer, "task", "run", "op-race")
+	require.ErrorContains(t, err, "not at the reviewed commit")
+	f.assertUnpublished("op-race")
+	accepted, _ := f.loadFinalTask("op-race")
+	old := accepted.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+	require.NotNil(t, old.Consent)
+	assert.Equal(t, "output-1", old.Plan.Input.Code.Commit)
+	f.run("b\n", "task", "run", "op-race")
+	pending := f.inspectWorkflow("op-race")
+	require.NotNil(t, pending.Pending)
+	assert.Equal(t, "operator-race", pending.Publication.Input.Code.Commit)
+	assert.False(t, pending.Publication.Consented)
+	retained, _ := f.loadFinalTask("op-race")
+	assert.Equal(t, old, retained.Work.Workflows[0].Phases[len(accepted.Work.Workflows[0].Phases)-1])
+	f.run("p\n", "task", "run", "op-race")
+	f.assertPublishedPR("op-race")
+	assert.Equal(t, "operator-race", f.publication.remote[branch])
+	final, _ := f.loadFinalTask("op-race")
+	assert.Len(t, final.Reviews, 1)
+	assert.Len(t, final.Runs, 1)
+}
+
+type publicationConsentMutation struct {
+	io.Writer
+	mutate func()
+}
+
+func (w *publicationConsentMutation) Write(p []byte) (int, error) {
+	if w.mutate != nil && strings.Contains(string(p), "Recorded for this unchanged plan") {
+		w.mutate()
+		w.mutate = nil
+	}
+	return w.Writer.Write(p)
 }

@@ -23,7 +23,7 @@ func TestPublicationPlanReplacementRequiresValidIntentAndPreservesReviewedEviden
 	require.NotNil(t, original.Pending)
 	before, err := store.Load("alpha", "op-review")
 	require.NoError(t, err)
-	proposal := PublicationPlanResponse{Flow: "direct-merge", DestinationBranch: "main", Content: "feat: operator-authored title\n\nExact publication content."}
+	proposal := PublicationPlanResponse{Flow: "direct-merge", Content: "feat: operator-authored title\n\nExact publication content."}
 	for _, invalid := range []struct {
 		name    string
 		change  func(*PublicationPlanResponse)
@@ -32,8 +32,6 @@ func TestPublicationPlanReplacementRequiresValidIntentAndPreservesReviewedEviden
 		{"unknown flow", func(p *PublicationPlanResponse) { p.Flow = "other" }, "integration_flow"},
 		{"missing flow", func(p *PublicationPlanResponse) { p.Flow = "" }, "explicit flow"},
 		{"missing content", func(p *PublicationPlanResponse) { p.Content = "Title only" }, "title and body"},
-		{"missing destination", func(p *PublicationPlanResponse) { p.DestinationBranch = "" }, "destination branch"},
-		{"self destination", func(p *PublicationPlanResponse) { p.DestinationBranch = "orpheus/op-review" }, "cannot be the task branch"},
 	} {
 		t.Run(invalid.name, func(t *testing.T) {
 			bad := proposal

@@ -9,6 +9,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -143,8 +144,8 @@ func interactionController(t *testing.T, snapshot work.State) (Controller, works
 	_, err := store.Save(snapshot, 0)
 	require.NoError(t, err)
 	boundary := &candidateReadinessGit{}
-	backend := interactionBackend{item: task.Task{ID: "op-review", Title: "Task intent", IssueType: task.IssueTypeTask, Status: task.StatusInProgress}}
-	controller := Controller{ReviewLifecycleService: ReviewLifecycleService{Paths: paths, RunStore: taskstate.NewStore(paths), CandidateGit: boundary, Sources: []task.RepositorySource{{Repository: task.Repository{ID: "alpha", TaskIDPrefix: "op"}}}, BackendFactory: func(task.RepositorySource) (ReviewLifecycleBackend, error) { return backend, nil }}}
+	backend := interactionBackend{item: task.Task{ID: "op-review", Title: "Task intent", Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-review", task.MetadataWorktree: "/fixture/task"}, IssueType: task.IssueTypeTask, Status: task.StatusInProgress}}
+	controller := Controller{Delivery: FinalizationService{Git: interactionPublicationGit{boundary: boundary}}, ReviewLifecycleService: ReviewLifecycleService{Paths: paths, RunStore: taskstate.NewStore(paths), CandidateGit: boundary, Sources: []task.RepositorySource{{Repository: task.Repository{ID: "alpha", TaskIDPrefix: "op"}}}, BackendFactory: func(task.RepositorySource) (ReviewLifecycleBackend, error) { return backend, nil }}}
 	return controller, store, boundary
 }
 
@@ -243,4 +244,22 @@ type interactionBackend struct {
 
 func (b interactionBackend) Get(context.Context, string) (task.Task, error) {
 	return b.item.Clone(), nil
+}
+
+type interactionPublicationGit struct {
+	FinalizationGit
+	boundary *candidateReadinessGit
+}
+
+func (g interactionPublicationGit) ObservePublicationInput(ctx context.Context, req gitmeta.PublicationInputRequest) (gitmeta.PublicationInputObservation, error) {
+	err := g.boundary.VerifyRevision(ctx, req.Directory, gitmeta.CheckoutIdentity{Commit: req.Reviewed.Commit, Ref: "refs/heads/" + req.Branch}, req.Reviewed)
+	return gitmeta.PublicationInputObservation{Revision: req.Reviewed, Relationship: "reviewed"}, err
+}
+
+func (b interactionBackend) List(context.Context) ([]task.Task, error) {
+	return []task.Task{b.item.Clone()}, nil
+}
+
+func (g interactionPublicationGit) ObserveDestination(ctx context.Context, dir, branch string) (work.Destination, error) {
+	return g.boundary.ObserveDestination(ctx, dir, branch)
 }

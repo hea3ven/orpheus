@@ -137,29 +137,31 @@ func (s Controller) preparePublication(ctx context.Context, current ReviewAttemp
 	if _, err := taskstate.CompletionRunsForReview(snapshot); err != nil {
 		return err
 	}
-	reviewPhase := snapshot.Work.Workflows[current.Review.Address.Workflow].Phases[current.Review.Address.Phase].(*work.ReviewPhase)
-	intent := reviewPhase.Publication
-	if intent == nil {
-		options, err := ResolvePublicationOptions(s.Paths, current.Source.Repository)
-		if err != nil {
-			return err
-		}
-		rendered, err := BuildPublicationPullRequestContentFromStateWithOptions(options, current.Task, snapshot)
-		if err != nil {
-			return err
-		}
-		var target work.PublicationTarget = &work.PullRequestTarget{}
-		flow, err := s.effectiveIntegrationFlow(current)
-		if err != nil {
-			return err
-		}
-		if flow == publication.IntegrationFlowDirectMerge {
-			target = &work.DirectMergeTarget{}
-		}
-		intent = &work.PublicationIntent{Target: target, Content: rendered.Title + "\n\n" + rendered.Body}
+	options, err := ResolvePublicationOptions(s.Paths, current.Source.Repository)
+	if err != nil {
+		return err
+	}
+	rendered, err := BuildPublicationPullRequestContentFromStateWithOptions(options, current.Task, snapshot)
+	if err != nil {
+		return err
+	}
+	var target work.PublicationTarget = &work.PullRequestTarget{}
+	flow, err := s.effectiveIntegrationFlow(current)
+	if err != nil {
+		return err
+	}
+	if flow == publication.IntegrationFlowDirectMerge {
+		target = &work.DirectMergeTarget{}
 	}
 	return state.WithGlobalMutationLockLogger(ctx, s.Paths, "reserve publication", s.Logger, func() error {
-		_, err := current.store.PreparePublication(current.Review.Address, intent.Target, intent.Content)
+		w := snapshot.Work.Workflows[current.Review.Address.Workflow]
+		plan := work.PublicationPlan{Review: work.ReviewRef{Phase: current.Review.Address.Phase}, Target: target, Content: rendered.Title + "\n\n" + rendered.Body}
+		owner := current.Review.Address
+		owner.Phase, owner.Step = len(w.Phases), nil
+		if err := s.observePublicationPlan(ctx, &w, owner, &plan, nil); err != nil {
+			return err
+		}
+		_, err := current.store.PreparePublication(current.Review.Address, plan)
 		return err
 	})
 }
@@ -219,13 +221,8 @@ func (s Controller) freshReviewOptions(base ReviewContext, pipeline review.Pipel
 		boundary = LocalReviewCandidateGit{}
 	}
 	destinationBranch := base.Source.Repository.DefaultBranch
-	var intent *work.PublicationIntent
-	if latest, ok := taskstate.LatestReview(snapshot); ok && latest.Address.Workflow == len(snapshot.Work.Workflows)-1 {
-		prior := w.Phases[latest.Address.Phase].(*work.ReviewPhase)
-		if prior.Publication != nil {
-			intent = prior.Publication
-			destinationBranch = prior.Scope.Destination.Branch
-		}
+	if fixed := w.FixedDestination(); fixed != nil {
+		destinationBranch = fixed.Branch
 	}
 	destination, err := boundary.ObserveDestination(context.Background(), base.Workdir, destinationBranch)
 	if err != nil {
@@ -234,7 +231,7 @@ func (s Controller) freshReviewOptions(base ReviewContext, pipeline review.Pipel
 	contract := reviewContract(pipeline)
 	scope := work.ReviewScope{Requirements: reviewRequirements(base.Task), Output: output, DeltaFrom: effort.Input, Destination: &destination}
 
-	return taskstate.StartReviewOptions{Pipeline: pipeline.Name, Step: pipeline.Steps[0].Name, Contract: contract, Scope: scope, Publication: intent, ExpectedVersion: &snapshot.Work.Version}, nil
+	return taskstate.StartReviewOptions{Pipeline: pipeline.Name, Step: pipeline.Steps[0].Name, Contract: contract, Scope: scope, ExpectedVersion: &snapshot.Work.Version}, nil
 }
 
 func reviewContract(pipeline review.Pipeline) work.ReviewContract {

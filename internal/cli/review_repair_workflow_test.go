@@ -120,7 +120,7 @@ func TestIntegrationWorkflowTaskRunAttachedManualBlockerRepairsAndApprovalPrepar
 	w := &state.Work.Workflows[0]
 	prior := w.Phases[2].(*work.ReviewPhase)
 	current := w.Phases[4].(*work.ReviewPhase)
-	is.Equal("main", prior.Scope.Destination.Branch, "blocked tentative publication edits do not escape their prompt")
+	is.Equal("main", prior.Scope.Destination.Branch, "review retains the workflow destination")
 	is.IsType(&work.RequestedChanges{}, prior.Steps[1].(*work.ManualReviewStep).Decision)
 	is.Equal(&work.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}, current.Scope.Destination, "approval cannot rewrite automated review scope")
 	is.IsType(&work.ApprovedReview{}, current.Steps[1].(*work.ManualReviewStep).Decision)
@@ -129,21 +129,28 @@ func TestIntegrationWorkflowTaskRunAttachedManualBlockerRepairsAndApprovalPrepar
 	is.Empty(fixture.candidate.pushes)
 
 	view := fixture.inspectWorkflow("op-manual")
-	content := view.Publication.Content
-	_, _, err = fixture.runError("i\ndirect-merge\nd\nrelease/final\nk\na\n", "task", "run", "op-manual")
+	priorReview := view.Publication.Review
+	item := fixture.backend.tasks["op-manual"]
+	item.Description += " New task requirements need verification."
+	fixture.backend.tasks["op-manual"] = item
+	registered := fixture.loadFinalRegistry()
+	registered.Repos[0].DefaultBranch = "release/final"
+	must.NoError(fixture.registryStore.Save(registered))
+	_, _, err = fixture.runError("k\na\nq\n", "task", "run", "op-manual")
 	must.NoError(err)
 	final, _ := fixture.loadFinalTask("op-manual")
 	must.Len(final.Reviews, 4)
 	must.Len(final.Runs, 3)
-	is.Equal([]string{"scope-check", "scope-check", "scope-check", "scope-check"}, fixture.checkCalls, "changed review scope reruns the complete current pipeline")
+	is.Equal([]string{"scope-check", "scope-check", "scope-check", "scope-check"}, fixture.checkCalls, "changed requirements rerun the complete current pipeline")
 	view = fixture.inspectWorkflow("op-manual")
 	must.NotNil(view.Pending)
 	is.Equal(workflow.InteractionPublication, view.Pending.ID.Kind)
-	is.Equal("direct-merge", view.Publication.Flow)
-	is.Equal(content, view.Publication.Content)
+	is.Equal("pull-request", view.Publication.Flow)
+	is.NotEqual(priorReview, view.Publication.Review)
+	is.Equal(work.InputReviewed, view.Publication.Input.Provenance)
 	is.Equal("output-3", view.Revision.Code.Commit, "repair output requires its own passed review before the new decision")
-	is.Equal("release/final", view.Publication.Destination.Branch)
-	is.Equal("approved-destination-head", view.Publication.Destination.Commit)
+	is.Equal("main", view.Publication.Destination.Branch)
+	is.Equal("initial-commit", view.Publication.Destination.Commit)
 	assertUnconsentedPublication(t, final)
 	is.Empty(fixture.candidate.pushes)
 

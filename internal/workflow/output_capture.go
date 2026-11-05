@@ -144,3 +144,9 @@ func outputRefNamespace(ref work.AttemptRef) string {
 	// identity. Positions remain the stable parent/index workflow addresses.
 	return fmt.Sprintf("refs/orpheus/revisions/%s/%s/%d/%d", hex.EncodeToString([]byte(ref.RepositoryID)), hex.EncodeToString([]byte(ref.TaskID)), ref.Workflow, ref.Phase)
 }
+
+func publicationInputNamespace(ref work.AttemptRef) string {
+	// Immutable commit-keyed refs are shared by publication plans in one workflow.
+	// Retention does not depend on which plan occurrence is awaiting a decision.
+	return fmt.Sprintf("refs/orpheus/publication-inputs/%s/%s/%d", hex.EncodeToString([]byte(ref.RepositoryID)), hex.EncodeToString([]byte(ref.TaskID)), ref.Workflow)
+}

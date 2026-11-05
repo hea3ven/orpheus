@@ -63,7 +63,7 @@ func DirectRevisionDelivery(ctx context.Context, repo task.Repository, dir, bran
 	if err := VerifyRevision(ctx, repo.Path, CheckoutIdentity{Commit: merge, Ref: "refs/heads/" + destination}, local); err != nil {
 		return Revision{}, err
 	}
-	pushErr := PushDefaultBranch(ctx, repo.Path, destination)
+	pushErr := pushExactCommit(ctx, repo.Path, destination, merge)
 	observed, err := PublishedRevision(ctx, repo.Path, destination)
 	if err != nil {
 		return Revision{}, errors.Join(pushErr, err)

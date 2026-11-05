@@ -200,10 +200,10 @@ func (s Controller) respondLocked(ctx context.Context, id InteractionID, respons
 	}
 	var changed bool
 	if proposal, ok := response.(PublicationPlanResponse); ok && id.Kind == InteractionPublication {
-		if err := s.verifyInteractionRevision(ctx, snapshot, id.Owner); err != nil {
+		if err := s.verifyPublicationPlan(ctx, base, snapshot, id.Owner); err != nil {
 			return View{}, err
 		}
-		changed, err = s.revisePublication(ctx, base, &snapshot, proposal, time.Now().UTC())
+		changed, err = revisePublication(&snapshot, proposal)
 	} else {
 		changed, err = applyResponse(&snapshot, *view.Pending, response, time.Now().UTC())
 	}
@@ -215,11 +215,11 @@ func (s Controller) respondLocked(ctx context.Context, id InteractionID, respons
 	}
 	if _, revising := response.(PublicationPlanResponse); !revising {
 		if id.Kind == InteractionPublication {
-			if err := s.verifyPublicationScope(ctx, base.Task, snapshot, id.Owner); err != nil {
-				return View{}, err
-			}
+			err = s.verifyPublicationPlan(ctx, base, snapshot, id.Owner)
+		} else {
+			err = s.verifyInteractionRevision(ctx, snapshot, id.Owner)
 		}
-		if err := s.verifyInteractionRevision(ctx, snapshot, id.Owner); err != nil {
+		if err != nil {
 			return View{}, err
 		}
 	}

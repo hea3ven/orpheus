@@ -21,7 +21,6 @@ func (v *validator) review(p *ReviewPhase) {
 		return
 	}
 	v.prepared()
-	v.publicationIntent(p.Publication)
 	v.sync = -1
 	contract, err := element(v.w.ReviewContracts, p.Contract)
 	v.check(err == nil, "review requires captured contract: %v", err)
@@ -67,20 +66,13 @@ func (v *validator) review(p *ReviewPhase) {
 	}
 }
 
-func (v *validator) publicationIntent(intent *PublicationIntent) {
-	if intent != nil {
-		v.target(intent.Target)
-		v.text(intent.Content, "proposed publication content")
-	}
-}
-
 func (v *validator) scope(scope ReviewScope, enteredAt time.Time) {
 	v.text(scope.Requirements, "review requirements")
 	v.reviewOutput(scope.Output, enteredAt, "review output")
 	if scope.DeltaFrom != nil {
 		v.reviewOutput(*scope.DeltaFrom, enteredAt, "review delta")
 	}
-	v.destination(scope.Destination)
+	v.fixedDestination(scope.Destination)
 }
 
 func (v *validator) reviewOutput(ref OutputRef, enteredAt time.Time, label string) {
@@ -251,5 +243,13 @@ func (v *validator) manualCommandEntry(step *ManualReviewStep, enteredAt time.Ti
 	v.check(commandAt.IsZero() || !commandAt.Before(enteredAt), "manual command result predates review entry")
 	for _, interruption := range step.CommandInterruptions {
 		v.check(!interruption.At.Before(enteredAt), "manual command interruption predates review entry")
+	}
+}
+
+func (v *validator) fixedDestination(destination *Destination) {
+	v.destination(destination)
+	fixed := v.w.FixedDestination()
+	if fixed != nil && destination != nil {
+		v.check(fixed.Remote == destination.Remote && fixed.Branch == destination.Branch, "workflow destination branch cannot be retargeted")
 	}
 }
