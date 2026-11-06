@@ -16,6 +16,8 @@ import (
 )
 
 func TestIntegrationAdapterContractPublicationRetainsCleanOperatorHistoryWithoutChangingCheckout(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	for _, linked := range []bool{false, true} {
 		t.Run(map[bool]string{false: "repo root", true: "worktree"}[linked], func(t *testing.T) {
 			repo := newGitRepo(t)

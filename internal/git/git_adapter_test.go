@@ -117,12 +117,10 @@ func newGitRepo(t *testing.T) string {
 	}
 	repoPath := testutil.CanonicalTempDir(t)
 	runGit(t, repoPath, "init")
+	runGit(t, repoPath, "config", "user.name", "Orpheus Test")
+	runGit(t, repoPath, "config", "user.email", "orpheus@example.com")
 	runGit(t, repoPath, "checkout", "-b", "main")
-	runGit(t, repoPath,
-		"-c", "user.name=Orpheus Test",
-		"-c", "user.email=orpheus@example.com",
-		"commit", "--allow-empty", "-m", "initial",
-	)
+	runGit(t, repoPath, "commit", "--allow-empty", "-m", "initial")
 	return repoPath
 }
 
