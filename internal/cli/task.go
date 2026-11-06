@@ -17,7 +17,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/logging"
-	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/review"
@@ -76,7 +75,6 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 		newTaskStatsCommand(opts),
 		newTaskDirCommand(opts),
 		newTaskRunCommand(opts),
-		newTaskRespondCommand(opts),
 		newTaskDoneCommand(opts),
 		newTaskSyncCommand(opts),
 		newTaskEditCommand(opts),
@@ -181,7 +179,8 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 			"By default, implementation runs use a deterministic task branch and worktree. " +
 			"Use --repo-root to run from the registered repository root. Both directory modes prepare a task-specific branch before implementation; the integration flow is independent of directory selection.\n\n" +
 			"Review pipeline selection uses --pipeline, then the repo registry review_pipeline, reviews.default_pipeline, and finally the built-in manual local-review step. --pipeline accepts configured global pipeline names and repo-local aliases. Configured pipelines may include check, manual, and agent_review steps. A pipeline override cannot replace the pipeline stored on a paused attempt. Approval records a passed review attempt and prepares publication without granting delivery consent.\n\n" +
-			"Automated blockers require an explicit keep, downgrade, or waive/cancel decision. They also offer restart and pause before targeted fixes: restart reruns only the blocked automated step, while pause resumes through task run. Kept blockers run bounded targeted fixes and restart the pipeline from step 1. Manual steps are persisted and resumed without rerunning completed review steps; q pauses the current assessment and retains its findings. If blocker-decision input disappears, the attempt is blocked and each preserved blocker needs an explicit disposition before a fresh review.\n\n" +
+			"Automated blockers require an explicit keep, downgrade, or waive/cancel decision. They also offer restart and pause before targeted fixes: restart reruns only the blocked automated step, while pause resumes through task run. Kept blockers run bounded targeted fixes and restart the pipeline from step 1. Manual steps are persisted and resumed without rerunning completed review steps; q pauses the current assessment and retains its findings. If decision input disappears, the unanswered decision is retained for resumption without replaying completed steps.\n\n" +
+			"Operator decisions require interactive stdin; redirected stdout/stderr remain supported. Noninteractive input returns an actionable error and preserves pending work. Publication authorization continues delivery in this invocation.\n\n" +
 			"Fix operational review failures, then rerun task run. Exhausted autonomous blockers remain blocked until the operator explicitly continues with task run. Use `task show review` to inspect review findings and created follow-up tasks. `task done` remains available for finalization retries, and PR synchronization remains `task sync`.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
@@ -200,7 +199,7 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 }
 
 func newTaskDoneCommand(opts *rootOptions) *cobra.Command {
-	return &cobra.Command{Use: "done [<task-id>]", Short: "Deliver an explicitly authorized reviewed publication", Long: "Retry an existing, explicitly authorized publication plan. This command consumes retained reviewed commits; it neither creates an implementation revision nor grants publication consent. Publication authorization remains gated until its separate decision interface is available.", Args: cobra.MaximumNArgs(1), RunE: func(command *cobra.Command, args []string) error {
+	return &cobra.Command{Use: "done [<task-id>]", Short: "Deliver an explicitly authorized reviewed publication", Long: "Retry an existing, explicitly authorized publication plan. This command consumes retained reviewed commits; it neither creates an implementation revision nor grants publication consent. Inspect the plan with task show workflow; authorize it at the publication prompt in task run.", Args: cobra.MaximumNArgs(1), RunE: func(command *cobra.Command, args []string) error {
 		taskID := ""
 		if len(args) == 1 {
 			taskID = args[0]
@@ -987,18 +986,42 @@ func executeTaskRun(command *cobra.Command, execution taskRunExecution, opts wor
 	if err != nil {
 		return err
 	}
-	controller := newTaskWorkflowController(command, execution.deps, taskCtx, execution.logger, bufio.NewReader(command.InOrStdin()))
-	result, advanceErr := controller.Advance(command.Context(), opts)
-	if result.Inspection.Condition == workflow.ImplementationRunRecoverable {
-		if _, err := fmt.Fprintf(command.ErrOrStderr(), "Task %s: reconciled interrupted implementation attempt (%s).\n", opts.TaskID, result.Inspection.Reason); err != nil {
-			return errors.Join(advanceErr, err)
+	reader := bufio.NewReader(command.InOrStdin())
+	controller := newTaskWorkflowController(command, execution.deps, taskCtx, execution.logger, reader)
+	for {
+		result, advanceErr := controller.Advance(command.Context(), opts)
+		if result.Inspection.Condition == workflow.ImplementationRunRecoverable {
+			if _, err := fmt.Fprintf(command.ErrOrStderr(), "Task %s: reconciled interrupted implementation attempt (%s).\n", opts.TaskID, result.Inspection.Reason); err != nil {
+				return errors.Join(advanceErr, err)
+			}
 		}
+		if advanceErr != nil {
+			return advanceErr
+		}
+		if result.View.Pending == nil || result.View.Pending.ID.Kind != workflow.InteractionPublication {
+			return renderTaskRunAdvanceResult(command, execution.logger, opts.TaskID, result)
+		}
+		if result.Review != nil {
+			if err := renderTaskReviewLifecycleOutcome(command, execution.logger, *result.Review); err != nil {
+				return err
+			}
+		}
+		view, err := presentPublicationDecision(command, controller, reader, result.View, execution.deps.terminal)
+		if err != nil {
+			return err
+		}
+		if view.Pending != nil {
+			return nil
+		}
+		// Consent continues delivery, while a scope edit follows fresh review.
+		// Initial CLI overrides must not be reapplied to these continuations.
+		opts = workflow.AdvanceOptions{TaskID: opts.TaskID}
 	}
-	if advanceErr != nil {
-		return advanceErr
-	}
+}
+
+func renderTaskRunAdvanceResult(command *cobra.Command, logger *slog.Logger, taskID string, result workflow.AdvanceResult) error {
 	if result.Review != nil {
-		return renderTaskReviewLifecycleOutcome(command, execution.logger, *result.Review)
+		return renderTaskReviewLifecycleOutcome(command, logger, *result.Review)
 	}
 	if result.Delivery != nil {
 		return renderTaskDoneResult(command, *result.Delivery)
@@ -1006,7 +1029,7 @@ func executeTaskRun(command *cobra.Command, execution taskRunExecution, opts wor
 	if result.Implementation != nil {
 		return nil
 	}
-	return renderTaskRunRoute(command.OutOrStdout(), opts.TaskID, result.Route)
+	return renderTaskRunRoute(command.OutOrStdout(), taskID, result.Route)
 }
 
 func renderReviewRecoveryGuidance(output io.Writer, taskID string, reason string) error {
@@ -1241,7 +1264,7 @@ func taskReviewPipelinePresentation(command *cobra.Command,
 	if !execOpts.interactiveManual {
 		return presentation
 	}
-	return attachInteractiveReviewHooks(command, start, reviewInput, presentation)
+	return attachInteractiveReviewHooks(command, start, reviewInput, presentation, execOpts.terminal)
 }
 
 func attachInteractiveReviewHooks(
@@ -1249,11 +1272,15 @@ func attachInteractiveReviewHooks(
 	start taskReviewStart,
 	reviewInput *bufio.Reader,
 	presentation workflow.ReviewPipelinePresentation,
+	terminal TerminalCapabilities,
 ) workflow.ReviewPipelinePresentation {
 	presentation.RenderManualStep = func(ctx workflow.ReviewManualStepContext) error {
 		return renderManualReviewContext(command, ctx)
 	}
 	presentation.ConfirmManualCommand = func(step review.Step) (bool, error) {
+		if err := requireOperatorInput(command, terminal, start.taskID()); err != nil {
+			return false, err
+		}
 		confirmed, err := promptManualCommandConfirmation(command, reviewInput, step)
 		if err != nil {
 			if errors.Is(err, review.ErrManualInputUnavailable) {
@@ -1268,7 +1295,7 @@ func attachInteractiveReviewHooks(
 		return false, err
 	}
 	presentation.PromptManualStep = func(prompt workflow.ReviewManualStepPrompt) (review.ManualResult, error) {
-		if _, err := fmt.Fprintf(command.ErrOrStderr(), "Publication integration flow: %s; destination: %s (enter i at the review action to change either).\n", prompt.IntegrationFlow, prompt.DestinationBranch); err != nil {
+		if err := requireOperatorInput(command, terminal, prompt.TaskID()); err != nil {
 			return review.ManualResult{}, err
 		}
 		outcome, err := runManualReviewPrompt(
@@ -1278,8 +1305,6 @@ func attachInteractiveReviewHooks(
 			prompt.TaskID(),
 			prompt.Step.Name,
 			prompt.HunkNotes,
-			prompt.IntegrationFlow,
-			prompt.DestinationBranch,
 		)
 		if err != nil {
 			if errors.Is(err, review.ErrManualInputUnavailable) {
@@ -1295,17 +1320,13 @@ func attachInteractiveReviewHooks(
 			Stop:   true,
 		}, nil
 	}
-	presentation.PromptAutomatedBlockers = taskReviewAutomatedBlockerPrompt(command, reviewInput)
-	return presentation
-}
-
-func taskReviewAutomatedBlockerPrompt(
-	command *cobra.Command,
-	reviewInput *bufio.Reader,
-) func(review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
-	return func(blockerReview review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
-		return promptAutomatedBlockerDecisions(command, reviewInput, blockerReview)
+	presentation.PromptAutomatedBlockers = func(blockers review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
+		if err := requireOperatorInput(command, terminal, start.taskID()); err != nil {
+			return nil, err
+		}
+		return promptAutomatedBlockerDecisions(command, reviewInput, blockers)
 	}
+	return presentation
 }
 
 type taskReviewOutputModeResult struct {
@@ -1520,16 +1541,12 @@ func runManualReviewPrompt(
 	taskID string,
 	stepName string,
 	hunkNotes []review.HunkNote,
-	integrationFlow publication.IntegrationFlow,
-	destinationBranch string,
 ) (manualReviewOutcome, error) {
 	session := manualReviewSession{
-		command:           command,
-		recorder:          recorder,
-		taskID:            taskID,
-		stepName:          stepName,
-		integrationFlow:   integrationFlow,
-		destinationBranch: destinationBranch,
+		command:  command,
+		recorder: recorder,
+		taskID:   taskID,
+		stepName: stepName,
 	}
 	if err := session.importHunkNotes(reader, hunkNotes); err != nil {
 		return manualReviewOutcome{}, err
@@ -1552,12 +1569,10 @@ func runManualReviewPrompt(
 }
 
 type manualReviewSession struct {
-	command           *cobra.Command
-	recorder          workflow.ReviewManualStepRecorder
-	taskID            string
-	stepName          string
-	integrationFlow   publication.IntegrationFlow
-	destinationBranch string
+	command  *cobra.Command
+	recorder workflow.ReviewManualStepRecorder
+	taskID   string
+	stepName string
 }
 
 func (s manualReviewSession) importHunkNotes(reader *bufio.Reader, notes []review.HunkNote) error {
@@ -1608,8 +1623,6 @@ func (s *manualReviewSession) handleManualReviewAction(
 		if actions.hasPromotableAdvisories {
 			return s.reviewPriorAdvisories(reader)
 		}
-	case "i", "integration", "integration-flow", "flow":
-		return s.selectIntegrationFlow(reader)
 	case "v", "advisory":
 		return s.recordFinding(reader, taskstate.FindingTypeAdvisory, "advisory")
 	case "t", "task":
@@ -1635,51 +1648,6 @@ func (s manualReviewSession) availableActions() (manualReviewActions, error) {
 type manualReviewActions struct {
 	hasOpenBlockers         bool
 	hasPromotableAdvisories bool
-}
-
-func (s *manualReviewSession) selectIntegrationFlow(reader *bufio.Reader) (manualReviewOutcome, bool, error) {
-	if _, err := fmt.Fprintf(s.command.ErrOrStderr(), "Effective publication integration flow: %s. Choose [p=pull-request, d=direct-merge, enter=keep]: ", s.integrationFlow); err != nil {
-		return manualReviewOutcome{}, true, err
-	}
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return manualReviewOutcome{}, true, manualInputReadError("read integration flow", err)
-	}
-	flow := s.integrationFlow
-	switch strings.ToLower(strings.TrimSpace(line)) {
-	case "", "keep":
-	case "p", "pull-request":
-		flow = publication.IntegrationFlowPullRequest
-	case "d", "direct-merge":
-		flow = publication.IntegrationFlowDirectMerge
-	default:
-		if _, err := fmt.Fprintln(s.command.ErrOrStderr(), "Choose pull-request, direct-merge, or keep."); err != nil {
-			return manualReviewOutcome{}, true, err
-		}
-		return manualReviewOutcome{}, false, nil
-	}
-	if _, err := s.recorder.SetIntegrationFlow(flow); err != nil {
-		return manualReviewOutcome{}, true, fmt.Errorf("task run %s: set integration flow: %w", s.taskID, err)
-	}
-	s.integrationFlow = flow
-	if _, err := fmt.Fprintf(s.command.ErrOrStderr(), "Effective publication destination: %s. Enter an existing named branch or press enter to keep: ", s.destinationBranch); err != nil {
-		return manualReviewOutcome{}, true, err
-	}
-	destination, err := reader.ReadString('\n')
-	if err != nil {
-		return manualReviewOutcome{}, true, manualInputReadError("read integration destination", err)
-	}
-	destination = strings.TrimSpace(destination)
-	if destination != "" {
-		if _, err := s.recorder.SetIntegrationDestination(destination); err != nil {
-			return manualReviewOutcome{}, true, fmt.Errorf("task run %s: set integration destination: %w", s.taskID, err)
-		}
-		s.destinationBranch = destination
-	}
-	if _, err := fmt.Fprintf(s.command.ErrOrStderr(), "Publication integration flow for %s: %s; destination: %s.\n", s.taskID, flow, s.destinationBranch); err != nil {
-		return manualReviewOutcome{}, true, err
-	}
-	return manualReviewOutcome{}, false, nil
 }
 
 func (s manualReviewSession) approve() (manualReviewOutcome, bool, error) {
@@ -2494,14 +2462,12 @@ func promptManualCommandConfirmation(
 	}
 	line, err := reader.ReadString('\n')
 	if err != nil {
-		if errors.Is(err, io.EOF) && line == "" {
-			return false, manualInputReadError("read manual command confirmation", err)
-		}
-		if !errors.Is(err, io.EOF) {
-			return false, manualInputReadError("read manual command confirmation", err)
-		}
+		return false, manualInputReadError("read manual command confirmation", err)
 	}
 	answer := strings.ToLower(strings.TrimSpace(line))
+	if answer == "q" || answer == "pause" {
+		return false, review.ErrManualInputUnavailable
+	}
 	if answer == "" {
 		return true, nil
 	}
@@ -2586,9 +2552,6 @@ func readReviewLineWithReadError(
 ) (string, error) {
 	line, err := reader.ReadString('\n')
 	if err != nil {
-		if errors.Is(err, io.EOF) && line != "" {
-			return strings.TrimSpace(line), nil
-		}
 		return "", readError(operation, err)
 	}
 	return strings.TrimSpace(line), nil
@@ -2632,7 +2595,7 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string) error
 		return err
 	}
 
-	service := workflow.Controller{ReviewLifecycleService: workflow.ReviewLifecycleService{Progress: newWorkflowHeaders(command, deps.terminal).Render}, Delivery: newTaskDeliveryService(deps, taskCtx, logger)}
+	service := workflow.Controller{ReviewLifecycleService: workflow.ReviewLifecycleService{Paths: deps.paths, CandidateGit: deps.reviewCandidateGit, Progress: newWorkflowHeaders(command, deps.terminal).Render}, Delivery: newTaskDeliveryService(deps, taskCtx, logger)}
 	finalized, err := finalizeTask(command, service, workflow.FinalizeOptions{
 		TaskID: taskID,
 		CWD:    deps.taskCWD,
@@ -2699,10 +2662,10 @@ func finalizeTask(command *cobra.Command, service workflow.Controller, opts work
 
 func renderTaskDoneResult(command *cobra.Command, finalized workflow.FinalizationResult) error {
 	if finalized.PRURL != "" && finalized.Finalization.ClosedAt == nil {
-		_, err := fmt.Fprintf(command.OutOrStdout(), "Published %s: delivered reviewed %s, pushed %s, and observed PR %s. Backend task remains open for PR review.\n", finalized.Task.ID, finalized.Finalization.Commit, finalized.Branch, finalized.PRURL)
+		_, err := fmt.Fprintf(command.OutOrStdout(), "Published %s: delivered authorized input %s, pushed %s, and observed PR %s. Backend task remains open for PR review.\n", finalized.Task.ID, finalized.Finalization.Commit, finalized.Branch, finalized.PRURL)
 		return err
 	}
-	_, err := fmt.Fprintf(command.OutOrStdout(), "Finalized %s: delivered reviewed %s, pushed %s, and closed the backend task.%s\n", finalized.Task.ID, finalized.Finalization.Commit, finalized.Finalization.DestinationBranch, formatWorktreeCleanup(finalized.WorktreeCleanup))
+	_, err := fmt.Fprintf(command.OutOrStdout(), "Finalized %s: delivered authorized input %s, pushed %s, and closed the backend task.%s\n", finalized.Task.ID, finalized.Finalization.Commit, finalized.Finalization.DestinationBranch, formatWorktreeCleanup(finalized.WorktreeCleanup))
 	return err
 }
 

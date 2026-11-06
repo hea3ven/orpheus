@@ -127,9 +127,6 @@ type ManualAssessment interface{ manualAssessment() }
 
 // ApprovedReview accepts its step's findings only when none still require work.
 type ApprovedReview struct {
-	// Publication retains only choices actually accepted at this manual approval.
-	// It is intent, never authorization to deliver.
-	Publication   *ReviewedPublication
 	At            time.Time
 	Verifications []FindingVerification
 }
@@ -149,10 +146,3 @@ type AbortedReview struct {
 func (*ApprovedReview) manualAssessment()   {}
 func (*RequestedChanges) manualAssessment() {}
 func (*AbortedReview) manualAssessment()    {}
-
-// ReviewedPublication is the final destination/flow selected during manual review.
-// Tentative choices on a blocked or aborted assessment are not persisted.
-type ReviewedPublication struct {
-	Destination Destination
-	Target      PublicationTarget
-}

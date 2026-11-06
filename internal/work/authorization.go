@@ -53,8 +53,10 @@ type authorizationMaterial struct {
 	Baseline                                        CodeIdentity
 	TaskBranch                                      string
 	Requirements                                    string
-	AutomatedDestination                            *Destination
 	Destination                                     *Destination
+	ReviewedDestination                             *Destination
+	Input                                           PublicationInput
+	Comparison                                      PublicationComparison
 	Code                                            *CodeOutput
 	Delta                                           *CodeOutput
 	Policy                                          ReviewContract
@@ -111,18 +113,14 @@ func (s *State) authorizationMaterial(wi, pi int, p *PublicationPhase, c *Public
 	if _, direct := p.Plan.Target.(*DirectMergeTarget); direct {
 		flow = "direct-merge"
 	}
-	destination, err := w.ReviewDestination(p.Plan.Review)
-	if err != nil {
-		return zero, err
-	}
 	return authorizationMaterial{
 		RepositoryID: s.RepositoryID, TaskID: s.TaskID,
 		Workflow: wi, Publication: pi, Review: p.Plan.Review.Phase,
 		Output: r.Scope.Output.Phase, Contract: r.Contract,
 		DeltaPhase: deltaPhase,
 		Baseline:   context.Baseline, TaskBranch: context.TaskBranch,
-		Requirements: r.Scope.Requirements, Destination: destination, AutomatedDestination: r.Scope.Destination,
-		Code: output, Delta: delta, Policy: *contract,
+		Requirements: r.Scope.Requirements, Destination: &p.Plan.Destination, ReviewedDestination: r.Scope.Destination,
+		Input: p.Plan.Input, Comparison: p.Plan.Comparison, Code: output, Delta: delta, Policy: *contract,
 		Flow: flow, Target: p.Plan.Target, Content: p.Plan.Content,
 		GrantedAt: c.GrantedAt.UTC(), Evidence: c.Evidence,
 	}, nil

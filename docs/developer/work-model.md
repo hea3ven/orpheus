@@ -40,8 +40,8 @@ preconditions under mutation protection; review reservation also checks the exac
 version inside its atomic mutation. Attached work runs without
 the global lock, allowing child callbacks at the reserved parent/index address.
 Only that owner may record completion/results. Conflicting phase/step advancement
-is refused rather than attached to newer work. Interruption reconciliation and
-the interactive publication plan editor remain separate implementation boundaries.
+is refused rather than attached to newer work. Interruption reconciliation remains
+a separate implementation boundary.
 
 ## Frontend contract
 
@@ -54,11 +54,15 @@ scope, execution, publication, PR, and closure facts remain workflow-owned.
 `Controller.Respond` binds a typed assessment, finding batch, or publication
 response to the inspected owner/kind/state version under mutation protection.
 Answers persist as the existing assessment, finding dispositions, or exact-plan
-consent; there is no second decision queue or state-format change. Finding batches
+consent; there is no second decision queue. Finding batches
 save atomically. Pause and cancellation retain pending work; stale/mismatched
-responses cannot advance phases. Review decisions verify the exact retained
-checkout before saving. Attached review prompts use this same response boundary.
-Continuation after an externally answered step skips that completed step.
+responses cannot authorize different work. Plan replacement can reserve fresh
+review or append a new pending plan, but never executes review or delivery.
+Review and publication decisions verify the exact retained checkout before saving;
+publication consent also checks current task requirements and destination context.
+Attached review and publication prompts use this internal response boundary.
+There is no public noninteractive decision command. Continuation after a recorded
+answer skips that completed step.
 
 CLI owns phase/step header repetition, labels, ANSI styling, display-width wrapping,
 manual-review body sections, and rolling output tails. Review execution reports
@@ -91,10 +95,11 @@ State.Workflows[]
 
 PR work follows publication, external review, then finalization. Direct merge
 follows publication straight to finalization. Implementation owns ordinary retained
-code commits. Publication consumes already committed reviewed output, pushing the
+code commits. Publication consumes explicitly authorized committed input, pushing the
 task branch or merging/pushing the integration destination. Finalization
-owns task-source closure and cleanup, not another publication. The destination
-can differ from the registered default branch.
+owns task-source closure and cleanup, not another publication. Initial review
+entry establishes the fixed destination branch from the registered default;
+subsequent default edits cannot retarget the workflow.
 
 Phase, review-step, process-result, output, and assessment alternatives are closed
 Go interfaces. There are no generic `Interaction`, `Operation`, `Facts`, or
@@ -193,21 +198,45 @@ reverse an earlier positive statement.
 
 ## Publication consent
 
-A publication plan selects a review and inherits its output and captured requirements.
-An approved manual step may establish the final observed destination and flow
-without rerunning automated slots. Its `ApprovedReview.Publication` records that
-actual choice; the original automated scope/destination remains immutable. Blocked
-or aborted tentative edits are discarded. The plan inherits this effective
-approved destination, or the automated destination when there is no override. It owns the chosen PR/create-update or direct-merge target and
-authored text. Review success is not publication consent.
+A publication plan references a passed review but owns its actual retained input,
+provenance, comparison, observed destination tip, authored text, and delivery target.
+`PublicationInput.Code` is not an implementation phase or output-producer reference.
+It records either exact reviewed output or an operator-selected commit/tree.
+Review owns only evaluated scope/evidence and findings; it carries no publication
+drafts. The branch established by the initial review's destination is invariant
+across later reviews and plans, although its observed commit may advance.
 
-`AuthorizePublication` records the first explicit grant and evidence. Its computed
-`IntentDigest` binds repository/task, workflow/publication address, reviewed
-scope/output/contract, baseline, target, content, and grant. This is an intent
-seal, not a generated PlanID or proof of who supplied the operator evidence.
-It binds both the automated scope destination and any approved final destination.
-Changed intent needs another occurrence and fresh consent; state-version changes
-alone do not invalidate it.
+`PublicationPlanResponse` edits pending content/flow, not destination or review.
+An edit appends an immutable unconsented occurrence; identical edits are no-ops.
+The publication controller observes clean committed task-branch HEAD and retains
+operator commits under commit-keyed, workflow-owned refs without changing files,
+the index, or HEAD. Added, amended, or rewritten input is disclosed with its
+relationship and patch to the reviewed commit. A mismatch alone does not start
+review. Proceed explicitly authorizes that gap; abort leaves the decision pending.
+
+Changed requirements still reserve fresh review of controller output under current
+configuration. Review admission is exact; the operator override is not used for
+controller repairs or sync. This requirements path does not copy publication
+content/targets into Review.
+
+`AuthorizePublication` records the first grant and evidence. `IntentDigest` binds
+repository/task and plan address, historical review scope/output/contract, baseline,
+actual retained input/provenance/comparison, publication destination context,
+content, target, and grant. Reviewed and publication destination tips are distinct
+facts. A new input/intent/context needs a new plan and decision; old grants remain
+immutable history. Configuration changes alone do not retrospectively alter them.
+
+Input is rechecked before recording consent and again on delivery continuation.
+Clean input changes renew the decision; dirt, wrong checkout, ownership conflicts,
+or unresolved Git operations refuse delivery without discarding anything. A direct
+merge with independently verified retained merge evidence reconciles the original
+checkpoint and consent. Without such effects, same-branch tip advancement can
+refresh publication context without replaying review. Native remote-write guards
+remain authoritative; proceed does not authorize force pushes or stale overwrites.
+Existing pushes pin their source to the authorized commit (or verified integration
+result), not a mutable local branch, so a late local ref change cannot substitute
+unconsented code. Normal hooks and upstream tracking still apply. This does not
+implement PR commit packaging or public-history rewriting.
 
 Authorization requires a passing review **at the grant time**. Required results,
 check waivers, owned finding decisions, and decisions reached through unresolved
@@ -217,16 +246,25 @@ authorize earlier grants. Retained consent uses that historical view, while
 not rewrite the original grant or delivery. A retained receipt is not permission
 to ignore current blockers when performing new effects.
 
-The CLI intentionally stops at an unconsented prepared publication plan. A passed
-review or retained commit cannot authorize delivery. The separate publication
-consent UX belongs to T8; there is no interim consent flag or confirmation bypass.
-Backend delivery contracts can consume an explicitly authorized plan, but ordinary
-`task run` does not manufacture that grant.
+The CLI displays a separate publication decision after every review pass.
+Interactive stdin enables operator decisions independently of output redirection.
+Noninteractive input returns `review.ErrInteractionRequired` with resumption
+advice; executors propagate it without failing or rejecting the pending review.
+Manual-command confirmation, manual assessment, finding dispositions, fresh-review
+blocker dispositions, and post-review proposal prompts follow the same input gate.
+EOF and cancellation retain pending work; partial EOF answers are never applied.
+
+The internal `Respond` method records consent without effects. After interactive
+authorization succeeds, the same `task run` invocation advances delivery. Changed
+requirements follow fresh review before another publication decision. A pause or failed answer never
+advances publication. Output failure cannot erase a recorded grant or observed
+delivery. Accepted unchanged retries use their recorded operation and consent
+without resolving earlier configuration again.
 
 Publication is an idempotent application action: find/verify a matching PR,
 import it when present, and create only when confirmed absent. Failed lookup is
 not absence. Unchanged retries establish delivery under the same intent/consent,
-without a command/API attempt journal. Initial PR delivery preserves the reviewed
+without a command/API attempt journal. Initial PR delivery preserves the authorized input
 tree and intended prior public head. Direct delivery requires observed destination
 push, not only a local merge.
 

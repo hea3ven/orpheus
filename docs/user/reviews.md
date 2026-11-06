@@ -31,6 +31,9 @@ configuration intact. A live handoff cannot trigger capture. No-change efforts
 may explicitly reuse their actual input while retaining their own handoff.
 Review evaluates the retained commit, never a moving HEAD or dirty candidate;
 reviewer context includes the full-task baseline and repair-delta endpoints.
+Publication separately permits explicitly accepted clean operator commits after
+review, without claiming they passed it; see [publication](publication.md). This
+does not relax review admission, read-only checks, or changed-requirements review.
 
 Without configuration, Orpheus uses a single manual `local-review` step. The
 command stays attached for the operator to approve, record findings, or pause.
@@ -53,35 +56,29 @@ outside the candidate worktree.
 It only retries an existing explicitly authorized publication intent; it does not
 commit implementation changes or offer a temporary confirmation override.
 
-## Inspect and respond without a terminal
+## Inspection and operator decisions
 
 ```sh
 orpheus task show workflow op-123
 orpheus task show workflow op-123 --json
 ```
 
-Inspection reports current facts, the controller's next action, and any pending
-interaction with its permitted actions. It never advances work or supplies consent.
-`status`, task inspection, and `task run` use the same continuation facts.
+Inspection reports current facts, the next action, and pending work. It never
+advances work or supplies consent. `status`, task inspection, and `task run` use
+the same continuation facts.
 
-For tooling, pass the exact `Pending.ID` JSON back to `task respond`:
+Operator decisions are made inside `orpheus task run <task-id>` with interactive
+stdin. Noninteractive stdin returns a nonzero interaction-required error at a
+decision boundary without reading piped answers. Rerun the same command from an
+interactive terminal to resume that decision; completed review steps and recorded
+findings are retained. Redirecting stdout or stderr does not prevent interactive
+input; output remains understandable without terminal formatting.
 
-```sh
-orpheus task respond op-123 --interaction '<Pending.ID JSON>' --action approve
-```
-
-Use only an action listed for that interaction. Finding decisions use
-`--decisions '<JSON array>'` instead, with an explicit `Ref`, `Action`, and any
-required `Reason` for every pending finding. `Ref` contains explicit zero-based
-`Phase`, `Step`, and `Finding` indexes copied from inspection. `--action pause`
-leaves the decision unanswered. Responses record decisions only; run `task run`
-to continue afterward. An answered review step is not rerun.
-
-EOF, cancellation, and failed output preserve unanswered decisions. Stale IDs,
-wrong response kinds, missing indexes, and incomplete finding decisions are
-refused without applying unrelated decisions. Reinspect after changing findings
-or any other workflow state. Raw agent output is never parsed as operator consent.
-See [publication](publication.md) for exact-plan authorization.
+EOF (including an unterminated answer), cancellation, explicit pause, and failed
+prompt output preserve unanswered decisions. A review pass never grants publication
+consent. A distinct publication prompt displays the exact plan, and its explicit
+authorization continues delivery in the same invocation. See
+[publication](publication.md) for that boundary and unchanged-delivery retries.
 
 ## Configure a pipeline
 

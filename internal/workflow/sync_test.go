@@ -625,6 +625,7 @@ func TestSyncServiceUpdatesOpenPRBranchFromRecordedDestination(t *testing.T) {
 	w.Phases = w.Phases[:4]
 	w.Phases[3].(*work.PublicationPhase).Delivery = nil
 	w.Phases[2].(*work.ReviewPhase).Scope.Destination.Branch = "release/next"
+	w.Phases[3].(*work.PublicationPhase).Plan.Destination.Branch = "release/next"
 	w.Phases[3].(*work.PublicationPhase).Consent = nil
 	grant := delivery.(*work.PullRequestDelivery).ObservedAt.Add(-time.Second)
 	require.NoError(t, snapshot.AuthorizePublication(0, work.PublicationRef{Phase: 3}, grant, "Explicit synthetic fixture grant for named destination"))

@@ -2,22 +2,40 @@
 
 Publication requires both a passed [task review](reviews.md) and explicit consent
 for its exact publication plan. `task run` retains committed reviewed output and
-stops with publication pending. The interactive plan editor is not implemented;
-tooling can inspect the prepared plan and record an explicit typed response:
+stops at a distinct publication decision, including after fully automated review.
+The prompt displays the reviewed revision/evidence separately from the actual
+publication commit/tree, authored content, flow, fixed destination, and intended
+effects. Use `orpheus task run <task-id>` with interactive stdin. Choosing
+`p=proceed` records consent and delivers in that same invocation, including when
+resuming a pending decision. `b=abort` or `q=pause` leaves publication pending.
+
+After review, you may add commits, amend a commit, or rewrite history on the owned
+task branch. If its clean committed HEAD differs from reviewed output, Orpheus
+shows both commits, their relationship, and a diff before asking proceed or abort.
+Proceed explicitly accepts that review gap; it does not claim that operator
+changes passed review. The actual selected input is retained with operator
+provenance, without creating an agent effort, completion, or review result.
+
+Uncommitted and untracked output is not included: commit or otherwise resolve it
+yourself before publication. Orpheus does not stage, capture, discard, or silently
+publish those files. Review admission and reviewer read-only checks remain strict.
+Changed task requirements still require fresh review, and controller-produced
+implementation, repair, and sync keep their normal review/safety contracts.
+
+Noninteractive stdin returns a nonzero interaction-required error without reading
+piped answers. The decision remains pending for an interactive `task run`.
+Redirecting stdout/stderr is supported. EOF and cancellation never grant consent.
+Read-only inspection remains available:
 
 ```sh
 orpheus task show workflow op-123 --json
-orpheus task respond op-123 --interaction '<Pending.ID JSON>' \
-  --action authorize --evidence 'Operator accepts this exact displayed plan'
-orpheus task run op-123
 ```
 
-Review the revision, passed review, content, flow, and destination in inspection
-before responding. `respond` records consent without publishing; continuation
-performs delivery. Pause, EOF, and cancellation never supply consent. A stale
-interaction is refused, and an unchanged authorized retry retains its grant.
-A review pass, `agent done`, or commit existence is not permission to push or close
-a task. There is no running-agent bypass.
+Consent covers only the displayed input and plan. A later input or plan change
+requires another decision, including a change after confirmation but before
+delivery. An unchanged interrupted operation keeps its valid grant and reconciles
+observed effects. A review pass, `agent done`, or commit existence alone never
+authorizes delivery or closure.
 
 `orpheus task done <task-id>` is only a retry entry for an already authorized
 intent. It consumes committed input without creating another implementation
@@ -46,26 +64,26 @@ orpheus repo config set my-repo integration-flow direct-merge
 orpheus repo config set my-repo integration-flow ''
 ```
 
-Only `pull-request` and `direct-merge` are valid non-empty values. Selection order
-is the task's manual-review choice, repository configuration, global
-configuration, then `pull-request`.
+Only `pull-request` and `direct-merge` are valid non-empty values. New plans use
+repository configuration, global configuration, then `pull-request`. At the
+publication prompt, `i` changes flow; manual review offers no delivery choices.
 
-At the manual review prompt, enter `i` to keep or change the flow and destination.
-The destination defaults to the registered default branch. A named alternative
-must already exist on `origin`; Orpheus verifies it rather than creating it.
-Pipelines without a manual step use configured flow defaults and the registered
-default branch.
+Initial review entry captures the registered default branch as the workflow's
+fixed destination. Later review, publication, sync, and default/configuration
+edits do not retarget it. There is no destination editor. Selecting another
+base/destination needs a future dedicated flow.
 
-Manual flow/destination edits are tentative until actual approval; block/abort
-discards them. Approval establishes the final observed destination without
-rerunning automated steps, while retaining their original scope for inspection.
-The prepared plan freezes this choice and authored content. Retries keep them
-even if configuration changes; approval still does not authorize delivery.
+The same destination branch advancing does not itself require re-review. Its
+current tip is refreshed/disclosed for consent; an interrupted direct merge
+reconciles its retained checkpoint rather than mistaking its own merge for a new
+plan. This never permits force-pushing over unexpected remote work, stale
+writes, bypassing active executions, discarding dirty files, or unresolved
+conflicts. Accepted operations needing reconciliation cannot be casually retargeted.
 
 | Flow | What Orpheus does |
 | --- | --- |
-| `pull-request` | Push the already committed reviewed task branch, create or recover a PR against the destination, and record its URL. The task stays open until merge reconciliation. |
-| `direct-merge` | Verify the reviewed task output and unchanged observed destination, create an ordinary no-fast-forward integration merge, push the destination, then close the task. It does not push the task branch or call `gh`. |
+| `pull-request` | Push the explicitly authorized committed task branch, create or recover a PR against the destination, and record its URL. The task stays open until merge reconciliation. |
+| `direct-merge` | Verify the authorized input and captured destination checkpoint, create an ordinary no-fast-forward integration merge, push the destination, then close the task. It does not push the task branch or call `gh`. |
 
 A direct-merge conflict is aborted without pushing the destination or closing the
 task. Resolve the conflict outside Orpheus before retrying. Recorded task commits,
@@ -158,3 +176,9 @@ Existing repository-root work recorded on the default branch is not automaticall
 moved to a task branch during publication. Preserve its checkout and inspect its
 recorded context before repairing it manually; do not clear task history or reset
 files to force a retry. No operator state is converted by this change.
+
+Publication plans now require explicit retained input, provenance, comparison,
+and destination context; review-owned publication drafts are no longer accepted.
+Existing records missing these fields or containing obsolete delivery choices need
+an explicit, inspectable conversion before use. Do not discard history to bypass
+loading. This change does not convert or modify operator records.

@@ -322,7 +322,7 @@ func projectFinding(w *work.Workflow, finding *work.Finding, ref work.FindingRef
 }
 
 func projectPublication(w *work.Workflow, p *work.PublicationPhase) *Finalization {
-	destination, _ := w.ReviewDestination(p.Plan.Review)
+	destination := &p.Plan.Destination
 	view := &Finalization{IntegrationFlow: publication.IntegrationFlowPullRequest, DestinationBranch: destination.Branch}
 	if _, direct := p.Plan.Target.(*work.DirectMergeTarget); direct {
 		view.IntegrationFlow = publication.IntegrationFlowDirectMerge
@@ -366,7 +366,7 @@ func projectBranchSync(view *TaskState, w *work.Workflow, sync *work.BranchSync,
 	prepared := w.Context()
 	external := w.Phases[address.Phase].(*work.ExternalReviewPhase)
 	publicationPhase := w.Phases[external.Publication.Phase].(*work.PublicationPhase)
-	destination, _ := w.ReviewDestination(publicationPhase.Plan.Review)
+	destination := &publicationPhase.Plan.Destination
 	operation := SyncConflictOperation{Address: address, ID: fmt.Sprintf("%d/%d/%d", address.Workflow, address.Phase, *address.BranchSync), Branch: prepared.TaskBranch, Worktree: prepared.Directory, DefaultBranch: destination.Branch, Checkpoint: SyncConflictCheckpoint(sync.Checkpoint), CreatedAt: sync.StartedAt, UpdatedAt: sync.StartedAt, Phase: SyncConflictPhasePrepared}
 	view.Events = append(view.Events, Event{Address: address, Type: EventBranchSyncStarted, At: sync.StartedAt, Branch: prepared.TaskBranch, DefaultBranch: destination.Branch, Worktree: prepared.Directory, Commit: sync.Checkpoint.LocalHead, Message: fmt.Sprintf("local %s; remote %s; merge source %s", sync.Checkpoint.LocalHead, sync.Checkpoint.RemoteHead, sync.Checkpoint.MergeSource)})
 	if sync.ConflictResolution != nil {
@@ -642,7 +642,7 @@ func projectProcessFinish(result work.ProcessResult) time.Time {
 }
 
 func projectPublicationEvents(view *TaskState, w *work.Workflow, p *work.PublicationPhase, address work.AttemptRef) {
-	destination, _ := w.ReviewDestination(p.Plan.Review)
+	destination := &p.Plan.Destination
 	switch delivered := p.Delivery.(type) {
 	case *work.PullRequestDelivery:
 		view.Events = append(view.Events, Event{Address: address, Type: EventChangesPushed, At: delivered.ObservedAt, Branch: w.Context().TaskBranch, PushTarget: w.Context().TaskBranch, Commit: delivered.PublicCommit}, Event{Address: address, Type: EventPRObserved, At: delivered.ObservedAt, PRURL: delivered.PullRequest.URL, Branch: w.Context().TaskBranch})

@@ -102,7 +102,7 @@ func appendObservedStep(w *work.Workflow, p *work.ReviewPhase, opts RecordReview
 
 // RecordManualDecision records the actual prompt response at its stable step.
 // Empty status is the existing ManualResult convention for explicit approval.
-func (s Store) RecordManualDecision(ref work.AttemptRef, status ReviewStatus, publication *work.ReviewedPublication) (ReviewAttempt, error) {
+func (s Store) RecordManualDecision(ref work.AttemptRef, status ReviewStatus) (ReviewAttempt, error) {
 	view, err := s.updateWorkflow(ref.RepositoryID, ref.TaskID, func(snapshot *work.State) (bool, error) {
 		if err := snapshot.CheckActiveAttempt(ref); err != nil {
 			return false, err
@@ -120,7 +120,7 @@ func (s Store) RecordManualDecision(ref work.AttemptRef, status ReviewStatus, pu
 		}
 		switch status {
 		case "", ReviewStatusPassed:
-			step.Decision = &work.ApprovedReview{At: s.nowUTC(), Publication: publication}
+			step.Decision = &work.ApprovedReview{At: s.nowUTC()}
 		case ReviewStatusBlocked:
 			decision := &work.RequestedChanges{At: s.nowUTC()}
 			projection, err := Project(*snapshot)

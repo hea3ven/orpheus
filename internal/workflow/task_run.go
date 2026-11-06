@@ -233,12 +233,13 @@ func selectReviewTaskRunRoute(
 		if taskstate.HasUnkeptAutomatedBlockingFindingsInState(state, latestReview) {
 			return TaskRunRoute{Action: TaskRunActionStartReview, Attempt: latestReview.Attempt}, nil
 		}
-		if len(latestReview.Steps) > 0 {
-			last := latestReview.Steps[len(latestReview.Steps)-1]
-			active := last.Execution != nil && last.Execution.Status == taskstate.RunStatusRunning || last.Kind == "check" && last.ExitCode == nil
-			if !active {
-				return TaskRunRoute{Action: TaskRunActionResumeReview, Attempt: latestReview.Attempt, Step: latestReview.Step}, nil
-			}
+		if len(latestReview.Steps) == 0 {
+			return TaskRunRoute{Action: TaskRunActionResumeReview, Attempt: latestReview.Attempt, Step: latestReview.Step}, nil
+		}
+		last := latestReview.Steps[len(latestReview.Steps)-1]
+		active := last.Execution != nil && last.Execution.Status == taskstate.RunStatusRunning || last.Kind == "check" && last.ExitCode == nil
+		if !active {
+			return TaskRunRoute{Action: TaskRunActionResumeReview, Attempt: latestReview.Attempt, Step: latestReview.Step}, nil
 		}
 		return TaskRunRoute{Action: TaskRunActionReviewActive, Attempt: latestReview.Attempt}, nil
 	case taskstate.ReviewStatusWaitingForManual:

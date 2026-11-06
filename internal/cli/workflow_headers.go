@@ -145,7 +145,8 @@ func workflowHeaderFields(v workflow.View) []workflowHeaderField {
 			add("AGENT", v.Execution.Profile+" (reviewer)")
 		}
 		if v.Published != nil {
-			add("PUBLISHED", workflowRevisionLabel(v.Published.Revision)+" | public commit "+v.Published.PublicCommit)
+			add("REVIEWED", workflowRevisionLabel(v.Published.Revision))
+			add("PUBLISHED", v.Published.Input.Commit+" | public commit "+v.Published.PublicCommit)
 			add("PR", v.Published.PRURL)
 		}
 	case workflow.PhasePublication, workflow.PhaseExternalReview, workflow.PhaseFinalization:
@@ -163,21 +164,24 @@ func publicationHeaderFields(v workflow.View) []workflowHeaderField {
 	if p.Destination.Remote != "" {
 		destination = p.Destination.Remote + "/" + destination
 	}
+	if p.Destination.Commit != "" {
+		destination += " at " + p.Destination.Commit
+	}
 	switch v.Phase {
 	case workflow.PhasePublication:
 		consent := "Awaiting publication decision"
 		if p.Consented {
 			consent = "Recorded for this unchanged plan"
 		}
-		return []workflowHeaderField{{"REVISION", workflowRevisionLabel(v.Revision)}, {"REVIEW", fmt.Sprintf("Attempt %d passed", p.ReviewAttempt)}, {"FLOW", p.Flow}, {"DESTINATION", destination}, {"CONSENT", consent}}
+		return []workflowHeaderField{{"REVIEWED", workflowRevisionLabel(v.Revision)}, {"REVIEW", fmt.Sprintf("Attempt %d %s | phase %d", p.ReviewAttempt, p.ReviewOutcome, p.Review.Phase)}, {"INPUT", fmt.Sprintf("%s | tree %s | %s", p.Input.Code.Commit, p.Input.Code.Tree, p.Input.Provenance)}, {"RELATIONSHIP", p.Comparison.Relationship}, {"REVIEW DEST", fmt.Sprintf("%s/%s at %s", p.ReviewedDestination.Remote, p.ReviewedDestination.Branch, p.ReviewedDestination.Commit)}, {"PLAN", fmt.Sprintf("phase %d | %s", p.Plan.Phase, p.Operation)}, {"FLOW", p.Flow}, {"DESTINATION", destination}, {"PR", p.PRURL}, {"EXPECTED HEAD", p.ExpectedHead}, {"EFFECTS", strings.Join(p.Effects, "; ")}, {"CONSENT", consent}}
 	case workflow.PhaseExternalReview:
-		return []workflowHeaderField{{"PR", p.PRURL + " | " + p.PRState}, {"PUBLISHED", workflowRevisionLabel(v.Revision) + " | public commit " + p.PublicCommit}, {"DESTINATION", destination}}
+		return []workflowHeaderField{{"PR", p.PRURL + " | " + p.PRState}, {"REVIEWED", workflowRevisionLabel(v.Revision)}, {"PUBLISHED", p.Input.Code.Commit + " | public commit " + p.PublicCommit}, {"DESTINATION", destination}}
 	case workflow.PhaseFinalization:
 		evidence := p.DeliveryEvidence
 		if p.AcceptanceEvidence != "" {
 			evidence = p.AcceptanceEvidence
 		}
-		fields := []workflowHeaderField{{"REVISION", workflowRevisionLabel(v.Revision)}, {"DELIVERY", evidence}}
+		fields := []workflowHeaderField{{"REVIEWED", workflowRevisionLabel(v.Revision)}, {"INPUT", p.Input.Code.Commit + " | tree " + p.Input.Code.Tree}, {"DELIVERY", evidence}}
 		if v.Closure != nil {
 			fields = append(fields, workflowHeaderField{"CLOSURE", v.Closure.Evidence})
 		}

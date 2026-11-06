@@ -20,6 +20,13 @@ func VerifyRevision(ctx context.Context, dir string, expected CheckoutIdentity, 
 	if err := verifyRevisionIdentity(ctx, dir, expected, revision); err != nil {
 		return err
 	}
+	if err := verifyCommittedCheckout(ctx, dir, expected.Commit, revision.Tree); err != nil {
+		return err
+	}
+	return verifyRevisionIdentity(ctx, dir, expected, revision)
+}
+
+func verifyCommittedCheckout(ctx context.Context, dir, commit, treeID string) error {
 	if err := requireNoGitOperation(ctx, dir); err != nil {
 		return err
 	}
@@ -30,7 +37,7 @@ func VerifyRevision(ctx context.Context, dir string, expected CheckoutIdentity, 
 	if err != nil {
 		return fmt.Errorf("inspect revision index: %w", err)
 	}
-	if strings.TrimSpace(tree) != revision.Tree {
+	if strings.TrimSpace(tree) != treeID {
 		return fmt.Errorf("review index does not match the recorded revision tree")
 	}
 	untracked, err := UntrackedFiles(ctx, dir)
@@ -40,10 +47,7 @@ func VerifyRevision(ctx context.Context, dir string, expected CheckoutIdentity, 
 	if len(untracked) != 0 {
 		return fmt.Errorf("review checkout contains untracked output: %q", untracked[0])
 	}
-	if err := verifyRevisionFiles(ctx, dir, expected.Commit); err != nil {
-		return err
-	}
-	return verifyRevisionIdentity(ctx, dir, expected, revision)
+	return verifyRevisionFiles(ctx, dir, commit)
 }
 
 func verifyRevisionIdentity(ctx context.Context, dir string, expected CheckoutIdentity, revision Revision) error {

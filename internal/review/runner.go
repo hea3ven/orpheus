@@ -28,7 +28,7 @@ type PipelineStore interface {
 	PauseReviewForManualAt(work.AttemptRef, string) (taskstate.ReviewAttempt, error)
 	CurrentReviewAt(work.AttemptRef) (taskstate.ReviewAttempt, error)
 	RecordManualCommandInterruption(work.AttemptRef, int) (taskstate.ReviewAttempt, error)
-	RecordManualDecision(work.AttemptRef, taskstate.ReviewStatus, *work.ReviewedPublication) (taskstate.ReviewAttempt, error)
+	RecordManualDecision(work.AttemptRef, taskstate.ReviewStatus) (taskstate.ReviewAttempt, error)
 	RecordCheckResult(work.AttemptRef, *int, error, []taskstate.ReviewFinding) (taskstate.ReviewAttempt, error)
 	FinishReviewStepExecution(repoID, taskID string, attempt int, stepName string, opts taskstate.FinishReviewStepExecutionOptions) (taskstate.ReviewAttempt, error)
 	RecordExecutionUsage(work.AttemptRef, taskstate.RecordRunUsageOptions) error
@@ -87,9 +87,8 @@ type PipelineOutcome struct {
 
 // ManualResult records the terminal status selected by an interactive manual step.
 type ManualResult struct {
-	Publication *work.ReviewedPublication
-	Status      taskstate.ReviewStatus
-	Stop        bool
+	Status taskstate.ReviewStatus
+	Stop   bool
 }
 
 // ManualStep carries operator-facing manual step context after any configured
@@ -160,9 +159,13 @@ var hunkNotePollInterval = 250 * time.Millisecond
 // paused for task run resumption instead of being marked failed.
 var ErrManualInputUnavailable = errors.New("manual review input unavailable")
 
+// ErrInteractionRequired means the frontend cannot obtain an interactive operator
+// decision. Executors must preserve pending work and propagate this error.
+var ErrInteractionRequired = errors.New("operator interaction required")
+
 // ErrAutomatedBlockerInputUnavailable reports that automated blocker
 // classification could not continue because operator input disappeared. The
-// review attempt should finish blocked without launching a targeted fix.
+// decision remains pending without launching a targeted fix.
 var ErrAutomatedBlockerInputUnavailable = errors.New("automated blocker decision input unavailable")
 
 // RunPipeline executes a configured review pipeline.
@@ -512,6 +515,9 @@ func prepareManualStepPrompt(
 }
 
 func failManualStep(opts PipelineRunOptions, step Step, err error) (stepOutcome, error) {
+	if errors.Is(err, ErrInteractionRequired) {
+		return stepOutcome{}, err
+	}
 	if errors.Is(err, ErrManualInputUnavailable) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || opts.Context.Err() != nil {
 		current, readErr := opts.Store.CurrentReviewAt(opts.Attempt.Address)
 		if readErr != nil {
@@ -1040,14 +1046,7 @@ func reviewAutomatedBlockers(
 		Blockers: blockers,
 	})
 	if err != nil {
-		if opts.Context.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return automatedWaitingDecisionOutcome()
-		}
-		if errors.Is(err, ErrAutomatedBlockerInputUnavailable) {
-			blocked, interruptErr := interruptAutomatedBlockerDecision(opts, owner)
-			return automatedBlockerOutcome{blocked: blocked}, interruptErr
-		}
-		return automatedBlockerOutcome{}, fmt.Errorf("%w: task run %s: review automated blockers: %w", ErrPresentationUnavailable, opts.TaskID, err)
+		return automatedBlockerPromptFailure(opts, owner, err)
 	}
 	if action, ok, err := automatedBlockerControlAction(prompted); err != nil {
 		return automatedBlockerOutcome{}, fmt.Errorf("task run %s: review automated blockers: %w", opts.TaskID, err)
@@ -1074,6 +1073,20 @@ func reviewAutomatedBlockers(
 	}
 	blocked, err := currentReviewHasOpenBlockers(opts)
 	return automatedBlockerOutcome{blocked: blocked}, err
+}
+
+func automatedBlockerPromptFailure(opts PipelineRunOptions, owner work.AttemptRef, err error) (automatedBlockerOutcome, error) {
+	if errors.Is(err, ErrInteractionRequired) {
+		return automatedBlockerOutcome{}, err
+	}
+	if opts.Context.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return automatedWaitingDecisionOutcome()
+	}
+	if errors.Is(err, ErrAutomatedBlockerInputUnavailable) {
+		_, interruptErr := interruptAutomatedBlockerDecision(opts, owner)
+		return automatedBlockerOutcome{pause: true}, interruptErr
+	}
+	return automatedBlockerOutcome{}, fmt.Errorf("%w: task run %s: review automated blockers: %w", ErrPresentationUnavailable, opts.TaskID, err)
 }
 
 func automatedBlockerControlAction(decisions []AutomatedBlockerDecision) (AutomatedBlockerAction, bool, error) {
@@ -1323,7 +1336,7 @@ func recordManualDecision(opts PipelineRunOptions, owner work.AttemptRef, result
 	if opts.RecordManualResult != nil {
 		return opts.RecordManualResult(owner, result)
 	}
-	_, err := opts.Store.RecordManualDecision(owner, result.Status, result.Publication)
+	_, err := opts.Store.RecordManualDecision(owner, result.Status)
 	return err
 }
 

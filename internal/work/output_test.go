@@ -3,6 +3,7 @@ package work_test
 import (
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/stretchr/testify/require"
 )
@@ -93,6 +94,7 @@ func TestReviewAndConsentCannotPredateSafeOutputCapture(t *testing.T) {
 			publication := &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: reviewIndex}, Target: &work.PullRequestTarget{}, Content: "Publish reviewed work"}}
 			publicationIndex := len(w.Phases)
 			w.Phases = append(w.Phases, publication)
+			testutil.SeedPublicationInputs(&s)
 
 			require.ErrorContains(t, s.Validate(), "safe capture boundary")
 			_, err := w.ReviewOutcome(work.ReviewRef{Phase: reviewIndex})

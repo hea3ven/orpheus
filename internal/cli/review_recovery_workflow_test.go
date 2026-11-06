@@ -158,7 +158,7 @@ func TestIntegrationWorkflowTaskReviewFollowUpHeaderWriteFailureRecordsStartFail
 		Type: taskstate.FindingTypeBlocking, Title: "Manual blocker", Description: "Repair before approval.", Step: "approval",
 	})
 	must.NoError(err)
-	_, err = runStore.RecordManualDecision(actor, taskstate.ReviewStatusBlocked, nil)
+	_, err = runStore.RecordManualDecision(actor, taskstate.ReviewStatusBlocked)
 	must.NoError(err)
 
 	captures := 0

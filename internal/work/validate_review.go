@@ -72,7 +72,7 @@ func (v *validator) scope(scope ReviewScope, enteredAt time.Time) {
 	if scope.DeltaFrom != nil {
 		v.reviewOutput(*scope.DeltaFrom, enteredAt, "review delta")
 	}
-	v.destination(scope.Destination)
+	v.fixedDestination(scope.Destination)
 }
 
 func (v *validator) reviewOutput(ref OutputRef, enteredAt time.Time, label string) {
@@ -183,10 +183,6 @@ func (v *validator) manual(assessment ManualAssessment) {
 	case *ApprovedReview:
 		v.check(assessment != nil && !assessment.At.IsZero(), "manual approval requires observed time")
 		if assessment != nil {
-			if assessment.Publication != nil {
-				v.destination(&assessment.Publication.Destination)
-				v.target(assessment.Publication.Target)
-			}
 			for _, verification := range assessment.Verifications {
 				v.check(verification.Resolution == FindingResolved, "manual approval cannot claim an unresolved finding")
 			}
@@ -247,5 +243,13 @@ func (v *validator) manualCommandEntry(step *ManualReviewStep, enteredAt time.Ti
 	v.check(commandAt.IsZero() || !commandAt.Before(enteredAt), "manual command result predates review entry")
 	for _, interruption := range step.CommandInterruptions {
 		v.check(!interruption.At.Before(enteredAt), "manual command interruption predates review entry")
+	}
+}
+
+func (v *validator) fixedDestination(destination *Destination) {
+	v.destination(destination)
+	fixed := v.w.FixedDestination()
+	if fixed != nil && destination != nil {
+		v.check(fixed.Remote == destination.Remote && fixed.Branch == destination.Branch, "workflow destination branch cannot be retargeted")
 	}
 }

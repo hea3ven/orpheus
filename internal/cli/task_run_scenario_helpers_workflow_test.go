@@ -260,6 +260,6 @@ func (f *taskWorkflowFixture) withCompletedRunAndPassedReview(taskID string) {
 	require.NoError(f.t, err)
 	review, err := beginFixtureManualReview(f.taskStore, "alpha", taskID)
 	require.NoError(f.t, err)
-	_, err = f.taskStore.RecordManualDecision(review.Steps[len(review.Steps)-1].Address, taskstate.ReviewStatusPassed, nil)
+	_, err = f.taskStore.RecordManualDecision(review.Steps[len(review.Steps)-1].Address, taskstate.ReviewStatusPassed)
 	require.NoError(f.t, err)
 }

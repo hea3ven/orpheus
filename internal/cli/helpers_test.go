@@ -374,6 +374,10 @@ func newTestRootCommand(t *testing.T, args []string, errOut io.Writer) *cobra.Co
 		logger = logging.New(errOut, logging.Config{Verbose: true})
 	}
 	deps := newInvocationDependenciesWithPaths(fixture.paths, logger, fixture.environment)
+	deps.terminal.InputIsTerminal = func(reader io.Reader) bool {
+		_, scripted := reader.(*scriptedInput)
+		return scripted
+	}
 	return newRootCommand(&rootOptions{logger: logger, invocationDeps: deps})
 }
 

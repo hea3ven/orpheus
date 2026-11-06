@@ -491,3 +491,32 @@ func (*memoryDispatchGit) ObserveDestination(_ context.Context, _ string, branch
 	}
 	return work.Destination{Remote: "origin", Branch: branch, Commit: "initial-commit"}, nil
 }
+
+func (g *memoryDispatchGit) ObservePublicationInput(ctx context.Context, req gitmeta.PublicationInputRequest) (gitmeta.PublicationInputObservation, error) {
+	commit := g.heads[req.Directory]
+	input := gitmeta.Revision{Commit: commit, Tree: g.trees[commit], RetainedRef: req.Ref + "/" + commit}
+	relation := "amended or rewritten history"
+	changes := "fixture committed changes"
+	if commit == req.Reviewed.Commit {
+		input.RetainedRef, relation, changes = req.Reviewed.RetainedRef, "reviewed", ""
+	} else if input.Tree == req.Reviewed.Tree {
+		changes = "No tree differences; commit identity changed."
+	}
+	g.retained[input.RetainedRef] = input
+	err := g.VerifyRevision(ctx, req.Directory, gitmeta.CheckoutIdentity{Commit: commit, Ref: "refs/heads/" + req.Branch}, input)
+	return gitmeta.PublicationInputObservation{Revision: input, Relationship: relation, Changes: changes}, err
+}
+
+func (*memoryDispatchGit) PushTaskBranch(context.Context, string, string) error {
+	return errors.New("unexpected delivery in review-only fixture")
+}
+func (*memoryDispatchGit) PublishedRevision(context.Context, string, string) (gitmeta.Revision, error) {
+	return gitmeta.Revision{}, errors.New("unexpected remote observation in review-only fixture")
+}
+func (*memoryDispatchGit) DirectRevisionDelivery(context.Context, taskmodel.Repository, string, string, string, string, string, gitmeta.Revision) (gitmeta.Revision, error) {
+	return gitmeta.Revision{}, errors.New("unexpected direct delivery in review-only fixture")
+}
+
+func (*memoryDispatchGit) PushPublicationInput(context.Context, string, string, gitmeta.Revision) error {
+	return errors.New("unexpected publication in review-only fixture")
+}

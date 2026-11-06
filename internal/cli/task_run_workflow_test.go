@@ -5,9 +5,11 @@ package cli_test
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"testing"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/review"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
@@ -23,6 +25,7 @@ import (
 func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *testing.T) {
 	is := assert.New(t)
 	fixture := newTaskWorkflowFixture(t, anOpenTask("op-completion"))
+	fixture.options.Dependencies.Terminal.InputIsTerminal = func(io.Reader) bool { return false }
 	completion := aCompletion()
 	fixture.withCompletingAgent(completion)
 	fixture.agent.afterCompletion = func() error {
@@ -40,7 +43,7 @@ func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *t
 	fixture.withRealReviewPipeline()
 
 	stdout, stderr, err := fixture.execute("task", "run", "op-completion")
-	require.NoError(t, err, "task run; stderr: %s", stderr)
+	require.ErrorIs(t, err, review.ErrInteractionRequired, "task run; stderr: %s", stderr)
 	statusOutput, statusStderr, statusErr := fixture.execute("status", "--no-truncate")
 	require.NoError(t, statusErr, "status; stderr: %s", statusStderr)
 
@@ -104,7 +107,7 @@ func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *t
 	fixture.git.hasStagedChanges = false
 	_, stderr, err = fixture.execute("task", "run", "op-completion")
 
-	require.NoError(t, err, "resume review; stderr: %s", stderr)
+	require.ErrorIs(t, err, review.ErrInteractionRequired, "resume review; stderr: %s", stderr)
 	is.Contains(stderr, "REVIEW | resumed")
 	is.Contains(stderr, "Full task | initial-commit -> output-1")
 	resumed, resumedTask := fixture.loadFinalTask("op-completion")
@@ -117,30 +120,17 @@ func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *t
 	assertWaitingForManualReview(t, resumed)
 	assertTaskNotPublished(t, resumed, resumedTask)
 
-	// Model interruption after recording approval but before appending Publication.
-	// Continuation must consume that result, not repeat the review pipeline.
-	inspectJSON, _, err := fixture.execute("task", "show", "workflow", "op-completion", "--json")
-	require.NoError(t, err)
-	var view workflow.View
-	require.NoError(t, json.Unmarshal([]byte(inspectJSON), &view))
-	require.NotNil(t, view.Pending)
-	is.Equal(workflow.InteractionManualReview, view.Pending.ID.Kind)
-	is.Contains(view.Pending.Actions, workflow.DecisionApprove)
-	is.Equal(workflow.TaskRunActionResumeReview, view.Next.Action)
-	is.Equal(resumed.Reviews[0].Steps[0].Address, view.Pending.ID.Owner)
-	idJSON, err := json.Marshal(view.Pending.ID)
-	require.NoError(t, err)
-	_, _, err = fixture.execute("task", "respond", "op-completion", "--interaction", string(idJSON), "--action", "approve")
-	require.NoError(t, err)
-	stdout, stderr, err = fixture.execute("task", "run", "op-completion")
-	require.NoError(t, err, "publication continuation; stderr: %s", stderr)
+	fixture.options.Dependencies.Terminal.InputIsTerminal = func(io.Reader) bool { return true }
+	stdout, stderr, err = fixture.executeWithInput("a\nq\n", "task", "run", "op-completion")
+	require.NoError(t, err, "interactive continuation; stderr: %s", stderr)
 	is.Contains(stdout, "publication awaits explicit authorization")
 	publication, pendingTask := fixture.loadFinalTask("op-completion")
 	assertUnconsentedPublication(t, publication)
 	is.Len(publication.Work.Workflows[0].Phases, 4)
 	is.Len(publication.Reviews, 1)
-	inspectJSON, _, err = fixture.execute("task", "show", "workflow", "op-completion", "--json")
+	inspectJSON, _, err := fixture.execute("task", "show", "workflow", "op-completion", "--json")
 	require.NoError(t, err)
+	var view workflow.View
 	require.NoError(t, json.Unmarshal([]byte(inspectJSON), &view))
 	require.NotNil(t, view.Pending)
 	is.Equal(workflow.InteractionPublication, view.Pending.ID.Kind)
@@ -154,33 +144,18 @@ func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *t
 	inspection, _, err = fixture.execute("task", "show", "op-completion")
 	require.NoError(t, err)
 	is.Contains(inspection, "Workflow next action: await_decision")
-	_, _, err = fixture.execute("task", "respond", "op-completion", "--interaction", string(idJSON), "--action", "approve")
-	require.ErrorIs(t, err, workflow.ErrStaleInteraction)
-	is.Equal(2, fixture.reviewPipelineRuns)
+	is.Equal(3, fixture.reviewPipelineRuns)
 	is.Len(fixture.git.captured, 1)
 	is.Equal(resumedTask, pendingTask)
-	_, _, err = fixture.execute("task", "run", "op-completion")
-	require.NoError(t, err)
+	fixture.options.Dependencies.Terminal.InputIsTerminal = func(io.Reader) bool { return false }
+	_, _, err = fixture.executeWithInput("a\n", "task", "run", "op-completion")
+	require.ErrorIs(t, err, review.ErrInteractionRequired)
 	unchanged, unchangedTask := fixture.loadFinalTask("op-completion")
 	is.Equal(publication, unchanged)
 	is.Equal(pendingTask, unchangedTask)
-	is.Equal(2, fixture.reviewPipelineRuns)
+	is.Equal(3, fixture.reviewPipelineRuns)
 	is.Len(fixture.git.captured, 1)
-	publicationID, err := json.Marshal(view.Pending.ID)
-	require.NoError(t, err)
-	responseOutput, _, err := fixture.execute("task", "respond", "op-completion", "--interaction", string(publicationID), "--action", "authorize", "--evidence", "Operator accepts this exact displayed plan")
-	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal([]byte(responseOutput), &view))
-	is.Nil(view.Pending)
-	is.Equal(workflow.TaskRunActionPublish, view.Next.Action)
-	statusOutput, _, err = fixture.execute("status", "--no-truncate")
-	require.NoError(t, err)
-	is.Contains(statusOutput, "publication authorized")
-	authorized, authorizedTask := fixture.loadFinalTask("op-completion")
-	is.Equal(pendingTask, authorizedTask, "consent alone cannot mutate the task source")
-	is.Len(authorized.Work.Workflows[0].Phases, 4)
-	is.Len(fixture.git.captured, 1)
-	is.Equal(2, fixture.reviewPipelineRuns)
+
 }
 
 func TestIntegrationWorkflowTaskRunAgentFailureRecordsFailedAttempt(t *testing.T) {

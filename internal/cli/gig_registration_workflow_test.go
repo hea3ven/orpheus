@@ -4,6 +4,7 @@ package cli_test
 
 import (
 	"errors"
+	"io"
 	"path/filepath"
 	"testing"
 
@@ -69,7 +70,9 @@ func TestIntegrationWorkflowGigRegistrationToCompletionAndSyncInMixedWorkspace(t
 	}
 	f.withCompletingAgent(aCompletion())
 
+	f.options.Dependencies.Terminal.InputIsTerminal = func(io.Reader) bool { return false }
 	f.run("", "repo", "add", repo.path)
+	f.options.Dependencies.Terminal.InputIsTerminal = func(io.Reader) bool { return true }
 	assert.Empty(t, discovery.beadsInspections)
 	stdout, _ := f.run("", "task", "list")
 	assert.Contains(t, stdout, id)

@@ -69,7 +69,11 @@ func TestIntegrationWorkflowReviewPipelineNoninteractiveReviewerFinalizesOutputT
 			var stdout bytes.Buffer
 			stderr := newCLIVisualTerminal(80)
 
-			err := fixture.runWithWriters("p\n", &stdout, stderr, "task", "run", "op-tail")
+			input := "q\n"
+			if tc.findingType == taskstate.FindingTypeBlocking {
+				input = "p\n"
+			}
+			err := fixture.runWithWriters(input, &stdout, stderr, "task", "run", "op-tail")
 
 			if tc.failure {
 				require.ErrorIs(t, err, outcome.err)
@@ -153,7 +157,7 @@ func TestIntegrationWorkflowReviewPipelineBlockedCheckExpandsRollingTailThroughC
 	is.Contains(visible, "blocked stdout 06")
 	is.Contains(visible, "blocked stdout 35")
 	is.NotContains(visible, "blocked stdout 05")
-	is.Contains(visible, "Review blocked for op-check-blocked by check \"unit\".")
+	is.NotContains(visible, "Review blocked for op-check-blocked by check \"unit\".")
 	latest := loadLatestReview(t, fixture, "op-check-blocked")
 	is.Equal(taskstate.ReviewStatusWaitingForAutomatedDecision, latest.Status)
 	must.Len(latest.Findings, 1)

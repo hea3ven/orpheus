@@ -3,6 +3,7 @@ package work_test
 import (
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/stretchr/testify/require"
 )
@@ -48,6 +49,7 @@ func TestPublicationAuthorizationIsBoundToExactIntentAndOwnerAcrossRetryAndReset
 			&work.WaivedFinding{Waiver: work.Waiver{Reason: "Earlier exception", At: at(30)}},
 			&work.RepairRequired{At: at(35)},
 			&work.WaivedFinding{Waiver: work.Waiver{Reason: "Operator accepts the unresolved issue", At: at(50)}})
+		testutil.SeedPublicationInputs(&state)
 		require.NoError(t, state.Validate())
 		outcome, err := w.ReviewOutcome(work.ReviewRef{Phase: 3})
 		require.NoError(t, err)
@@ -73,8 +75,18 @@ func TestPublicationRequiresConsentAndIndependentMatchingRemoteEvidence(t *testi
 	}{
 		{"no consent", func(_ *work.State, p *work.PublicationPhase) { p.Consent = nil }, "explicit exact-plan consent"},
 		{"unbound grant", func(_ *work.State, p *work.PublicationPhase) { p.Consent.IntentDigest = [32]byte{} }, "exact intent and owner"},
+		{"changed selected input under grant", func(_ *work.State, p *work.PublicationPhase) {
+			p.Plan.Input.Code.Commit = "operator-changed"
+			p.Plan.Input.Provenance = work.InputOperator
+			p.Plan.Comparison.Relationship = "amended or rewritten history"
+		}, "exact intent and owner"},
+		{"forged reviewed provenance", func(_ *work.State, p *work.PublicationPhase) { p.Plan.Input.Code.Commit = "operator-changed" }, "cannot claim review approval"},
+		{"retargeted publication branch", func(_ *work.State, p *work.PublicationPhase) { p.Plan.Destination.Branch = "other" }, "cannot be retargeted"},
 		{"changed reviewed scope", func(s *work.State, _ *work.PublicationPhase) {
 			s.Workflows[0].Phases[8].(*work.ReviewPhase).Scope.Requirements = "Changed requirements"
+		}, "exact intent and owner"},
+		{"changed reviewed destination context", func(s *work.State, _ *work.PublicationPhase) {
+			s.Workflows[0].Phases[8].(*work.ReviewPhase).Scope.Destination.Commit = "changed-review-context"
 		}, "exact intent and owner"},
 		{"changed inherited baseline", func(s *work.State, _ *work.PublicationPhase) {
 			s.Workflows[0].Phases[0].(*work.PreparationPhase).Context.Baseline.Commit = "different-baseline"
@@ -84,8 +96,8 @@ func TestPublicationRequiresConsentAndIndependentMatchingRemoteEvidence(t *testi
 		}, "passed exact review"},
 		{"packaging changed tree", func(_ *work.State, p *work.PublicationPhase) {
 			p.Delivery.(*work.PullRequestDelivery).Tree = "unreviewed-tree"
-		}, "exact reviewed output"},
-		{"wrong observed head", func(_ *work.State, p *work.PublicationPhase) { p.Delivery.(*work.PullRequestDelivery).Head = "P1" }, "exact reviewed output"},
+		}, "exact authorized input"},
+		{"wrong observed head", func(_ *work.State, p *work.PublicationPhase) { p.Delivery.(*work.PullRequestDelivery).Head = "P1" }, "exact authorized input"},
 		{"wrong previous head", func(_ *work.State, p *work.PublicationPhase) {
 			p.Delivery.(*work.PullRequestDelivery).PreviousHead = "foreign-head"
 		}, "expected previous public head"},
@@ -151,6 +163,7 @@ func TestDirectFinalizationNeedsObservedDestinationPushNotJustLocalMerge(t *test
 	s := reviewingState(t)
 	p := &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 2}, Target: &work.DirectMergeTarget{}, Content: "Direct destination delivery"}}
 	s.Workflows[0].Phases = append(s.Workflows[0].Phases, p)
+	testutil.SeedPublicationInputs(&s)
 	require.NoError(t, s.AuthorizePublication(0, work.PublicationRef{Phase: 3}, at(30), "Authorize destination delivery"))
 	s.Workflows[0].Phases = append(s.Workflows[0].Phases, &work.FinalizationPhase{Acceptance: &work.DirectAcceptance{Publication: work.PublicationRef{Phase: 3}}})
 	require.ErrorContains(t, s.Validate(), "observed destination push")
@@ -159,7 +172,7 @@ func TestDirectFinalizationNeedsObservedDestinationPushNotJustLocalMerge(t *test
 	s.Workflows[0].Phases[4].(*work.FinalizationPhase).Closure = &work.TaskClosure{At: at(40), Reason: "destination_published", Evidence: "Source closure"}
 	require.NoError(t, s.Validate())
 	p.Delivery.(*work.DirectDelivery).Destination.Tree = "different-tree"
-	require.ErrorContains(t, s.Validate(), "preserving reviewed output")
+	require.ErrorContains(t, s.Validate(), "preserving authorized input")
 }
 
 func updateDelivery() *work.PullRequestDelivery {

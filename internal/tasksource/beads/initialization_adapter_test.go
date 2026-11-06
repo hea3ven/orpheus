@@ -85,6 +85,8 @@ func isolatedBeadsRunner(t *testing.T, binary string) beads.CommandRunner {
 	home := testutil.CanonicalTempDir(t)
 	return beads.CommandRunner{Binary: binary, Environment: []string{
 		"PATH=" + os.Getenv("PATH"), "HOME=" + home, "XDG_CONFIG_HOME=" + home,
+		// Telemetry spawns detached uploaders that can outlive temporary-home cleanup.
+		"BD_DISABLE_METRICS=1",
 		"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_AUTHOR_NAME=Integration Test", "GIT_AUTHOR_EMAIL=test@example.test",
 		"GIT_COMMITTER_NAME=Integration Test", "GIT_COMMITTER_EMAIL=test@example.test",

@@ -55,7 +55,7 @@ func TestWorkflowHeadersSeparatePhaseAndStepsAndRefreshContextOnResume(t *testin
 
 func TestWorkflowHeadersPresentPhaseFactsAndWrapCompleteIdentitiesAtDisplayWidth(t *testing.T) {
 	revision := &workflow.RevisionView{Number: 2, Code: work.CodeIdentity{Commit: "retained-output"}}
-	view := workflow.View{TaskID: "op-42", Title: "Deliver output", Workflow: 2, WorkflowCount: 2, PhaseAttempt: 1, Context: &work.WorkContext{Directory: "/fixture/worktree", TaskBranch: "orpheus/op-42", Baseline: work.CodeIdentity{Commit: "task-baseline"}}, Execution: &workflow.ExecutionView{Profile: "repairer"}, Start: revision, Revision: revision, Scope: &workflow.ScopeView{Baseline: "task-baseline", Head: "retained-output"}, Findings: []work.FindingRef{{Phase: 2, Step: 0, Finding: 3}}, Published: &workflow.PublishedView{Revision: revision, PublicCommit: "public-1", PRURL: "https://example.test/pr/42"}, Publication: &workflow.PublicationView{ReviewAttempt: 2, Flow: "direct-merge", Destination: work.Destination{Remote: "origin", Branch: "main"}, PRURL: "https://example.test/pr/42", PRState: "merged", PublicCommit: "public-2", DeliveryEvidence: "Destination push verified", AcceptanceEvidence: "PR merge verified"}, Closure: &work.TaskClosure{Evidence: "Task source confirmed closed"}}
+	view := workflow.View{TaskID: "op-42", Title: "Deliver output", Workflow: 2, WorkflowCount: 2, PhaseAttempt: 1, Context: &work.WorkContext{Directory: "/fixture/worktree", TaskBranch: "orpheus/op-42", Baseline: work.CodeIdentity{Commit: "task-baseline"}}, Execution: &workflow.ExecutionView{Profile: "repairer"}, Start: revision, Revision: revision, Scope: &workflow.ScopeView{Baseline: "task-baseline", Head: "retained-output"}, Findings: []work.FindingRef{{Phase: 2, Step: 0, Finding: 3}}, Published: &workflow.PublishedView{Revision: revision, PublicCommit: "public-1", PRURL: "https://example.test/pr/42"}, Publication: &workflow.PublicationView{ReviewAttempt: 2, ReviewOutcome: work.ReviewPassed, Flow: "direct-merge", Destination: work.Destination{Remote: "origin", Branch: "main"}, PRURL: "https://example.test/pr/42", PRState: "merged", PublicCommit: "public-2", DeliveryEvidence: "Destination push verified", AcceptanceEvidence: "PR merge verified"}, Closure: &work.TaskClosure{Evidence: "Task source confirmed closed"}}
 	for _, tc := range []struct {
 		phase workflow.PhaseKind
 		facts []string
@@ -65,7 +65,7 @@ func TestWorkflowHeadersPresentPhaseFactsAndWrapCompleteIdentitiesAtDisplayWidth
 		{workflow.PhaseReview, []string{"REVISION", "Full task | task-baseline -> retained-output", "PUBLISHED", "public-1", "PR", "https://example.test/pr/42"}},
 		{workflow.PhasePublication, []string{"REVIEW", "Attempt 2 passed", "FLOW", "direct-merge", "DESTINATION", "origin/main", "CONSENT", "Awaiting publication decision"}},
 		{workflow.PhaseExternalReview, []string{"PR", "https://example.test/pr/42 | merged", "PUBLISHED", "public-2", "DESTINATION", "origin/main"}},
-		{workflow.PhaseFinalization, []string{"REVISION", "retained-output", "DELIVERY", "PR merge verified", "CLOSURE", "Task source confirmed closed"}},
+		{workflow.PhaseFinalization, []string{"REVIEWED", "retained-output", "DELIVERY", "PR merge verified", "CLOSURE", "Task source confirmed closed"}},
 	} {
 		t.Run(string(tc.phase), func(t *testing.T) {
 			var output bytes.Buffer

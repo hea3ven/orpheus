@@ -36,19 +36,27 @@ type FinalizationBackendFactory func(task.RepositorySource) (FinalizationBackend
 // FinalizationGit consumes committed input. There is deliberately no staging or
 // implementation-commit operation at the publication boundary.
 type FinalizationGit interface {
+	ObserveDestination(context.Context, string, string) (work.Destination, error)
+	ObservePublicationInput(context.Context, gitmeta.PublicationInputRequest) (gitmeta.PublicationInputObservation, error)
 	VerifyRevision(context.Context, string, gitmeta.CheckoutIdentity, gitmeta.Revision) error
-	PushTaskBranch(context.Context, string, string) error
+	PushPublicationInput(context.Context, string, string, gitmeta.Revision) error
 	PublishedRevision(context.Context, string, string) (gitmeta.Revision, error)
 	DirectRevisionDelivery(context.Context, task.Repository, string, string, string, string, string, gitmeta.Revision) (gitmeta.Revision, error)
 }
 
 type LocalFinalizationGit struct{}
 
+func (LocalFinalizationGit) ObserveDestination(ctx context.Context, dir, branch string) (work.Destination, error) {
+	return (LocalReviewCandidateGit{}).ObserveDestination(ctx, dir, branch)
+}
+func (LocalFinalizationGit) ObservePublicationInput(ctx context.Context, req gitmeta.PublicationInputRequest) (gitmeta.PublicationInputObservation, error) {
+	return gitmeta.ObservePublicationInput(ctx, req)
+}
 func (LocalFinalizationGit) VerifyRevision(ctx context.Context, dir string, identity gitmeta.CheckoutIdentity, revision gitmeta.Revision) error {
 	return gitmeta.VerifyRevision(ctx, dir, identity, revision)
 }
-func (LocalFinalizationGit) PushTaskBranch(ctx context.Context, dir, branch string) error {
-	return gitmeta.PushTaskBranch(ctx, dir, branch)
+func (LocalFinalizationGit) PushPublicationInput(ctx context.Context, dir, branch string, input gitmeta.Revision) error {
+	return gitmeta.PushPublicationInput(ctx, dir, branch, input)
 }
 func (LocalFinalizationGit) PublishedRevision(ctx context.Context, dir, branch string) (gitmeta.Revision, error) {
 	return gitmeta.PublishedRevision(ctx, dir, branch)
@@ -192,14 +200,8 @@ func selectCommittedPublication(snapshot *work.State, item task.Task) (committed
 	if item.Status != task.StatusInProgress && item.Status != task.StatusClosed {
 		return committedPublication{}, fmt.Errorf("task %s is %s, expected in_progress or an observed closure retry", item.ID, item.Status)
 	}
-	output, err := w.Output(review.Scope.Output)
-	if err != nil {
-		return committedPublication{}, err
-	}
-	destination, err := w.ReviewDestination(p.Plan.Review)
-	if err != nil {
-		return committedPublication{}, err
-	}
+	output := &p.Plan.Input.Code
+	destination := &p.Plan.Destination
 	if destination.Branch == prepared.TaskBranch {
 		return committedPublication{}, errors.New("publication destination cannot be the task branch")
 	}
@@ -226,7 +228,7 @@ func (s FinalizationService) recordCommittedDelivery(ctx context.Context, store 
 			return err
 		}
 		result.PRRecovered = recovered
-		p.Delivery = &work.PullRequestDelivery{PullRequest: work.PullRequestRef{URL: url}, PublicCommit: output.Commit, Head: output.Commit, Tree: output.Tree, ObservedAt: time.Now().UTC(), Evidence: "Origin branch independently verified at the reviewed commit and tree; native PR observed for the exact branch pair"}
+		p.Delivery = &work.PullRequestDelivery{PullRequest: work.PullRequestRef{URL: url}, PublicCommit: output.Commit, Head: output.Commit, Tree: output.Tree, ObservedAt: time.Now().UTC(), Evidence: "Origin branch independently verified at the authorized input commit and tree; native PR observed for the exact branch pair"}
 	case *work.DirectMergeTarget:
 		retention := outputRefNamespace(work.AttemptRef{RepositoryID: snapshot.RepositoryID, TaskID: snapshot.TaskID, Workflow: selected.workflowIndex, Phase: selected.phaseIndex}) + "/delivery"
 		delivered, err := boundary.DirectRevisionDelivery(ctx, repo, prepared.Directory, prepared.TaskBranch, destination.Branch, destination.Commit, retention, revision)
@@ -234,9 +236,9 @@ func (s FinalizationService) recordCommittedDelivery(ctx context.Context, store 
 			return err
 		}
 		if delivered.Commit == "" || delivered.Tree != output.Tree {
-			return errors.New("observed destination does not preserve reviewed code")
+			return errors.New("observed destination does not preserve authorized input")
 		}
-		p.Delivery = &work.DirectDelivery{PublicCommit: output.Commit, Destination: work.CodeIdentity{Commit: delivered.Commit, Tree: delivered.Tree}, ObservedAt: time.Now().UTC(), Evidence: "Independently observed exact destination push preserving the reviewed tree"}
+		p.Delivery = &work.DirectDelivery{PublicCommit: output.Commit, Destination: work.CodeIdentity{Commit: delivered.Commit, Tree: delivered.Tree}, ObservedAt: time.Now().UTC(), Evidence: "Independently observed exact destination push preserving the authorized input tree"}
 	default:
 		return errors.New("unsupported publication target")
 	}
@@ -255,13 +257,13 @@ func (s FinalizationService) deliverPullRequest(ctx context.Context, boundary Fi
 	if target.Existing != nil {
 		return "", false, errors.New("public update packaging is not implemented; existing PR intent cannot be treated as create consent")
 	}
-	pushErr := boundary.PushTaskBranch(ctx, prepared.Directory, prepared.TaskBranch)
+	pushErr := boundary.PushPublicationInput(ctx, prepared.Directory, prepared.TaskBranch, output)
 	observed, err := boundary.PublishedRevision(ctx, prepared.Directory, prepared.TaskBranch)
 	if err != nil {
 		return "", false, errors.Join(pushErr, err)
 	}
 	if observed.Commit != output.Commit || observed.Tree != output.Tree {
-		return "", false, errors.Join(pushErr, errors.New("origin branch differs from the reviewed output"))
+		return "", false, errors.Join(pushErr, errors.New("origin branch differs from the authorized input"))
 	}
 	diagnostics := pullrequest.DiagnosticContext{RepoID: repo.ID, TaskID: item.ID, Branch: prepared.TaskBranch}
 	found, exists, err := s.PRProvider.FindOpenByBranch(ctx, pullrequest.FindOpenByBranchRequest{RepositoryPath: repo.Path, HeadBranch: prepared.TaskBranch, BaseBranch: destination.Branch, Diagnostics: diagnostics})
@@ -363,7 +365,7 @@ func verifyPublishedOutput(ctx context.Context, boundary FinalizationGit, dir, b
 		return err
 	}
 	if actual.Commit != output.Commit || actual.Tree != output.Tree {
-		return errors.New("origin branch changed while observing the reviewed publication")
+		return errors.New("origin branch changed while observing the authorized input")
 	}
 	return nil
 }

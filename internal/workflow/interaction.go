@@ -58,6 +58,7 @@ const (
 	DecisionWaive          DecisionAction = "waive"
 	DecisionDowngrade      DecisionAction = "downgrade"
 	DecisionAuthorize      DecisionAction = "authorize"
+	DecisionRevise         DecisionAction = "revise"
 )
 
 // Response is a closed set of decisions. A wrong alternative is refused before
@@ -70,10 +71,7 @@ type PauseResponse struct{}
 func (PauseResponse) workflowResponse() {}
 
 // ManualResponse answers an assessment, never a publication decision.
-type ManualResponse struct {
-	Action      DecisionAction
-	Publication *work.ReviewedPublication
-}
+type ManualResponse struct{ Action DecisionAction }
 
 // FindingsResponse answers all selected blockers atomically.
 type FindingsResponse struct{ Decisions []FindingDecision }
@@ -109,7 +107,7 @@ func pendingInteraction(v View, snapshot taskstate.TaskState) *Interaction {
 			return nil
 		}
 		interaction.ID.Kind = InteractionPublication
-		interaction.Actions = []DecisionAction{DecisionAuthorize, DecisionPause}
+		interaction.Actions = []DecisionAction{DecisionAuthorize, DecisionRevise, DecisionPause}
 	case *work.ReviewPhase:
 		if !pendingReviewInteraction(interaction, phase, snapshot) {
 			return nil
@@ -155,7 +153,8 @@ func pendingReviewInteraction(interaction *Interaction, phase *work.ReviewPhase,
 }
 
 // Respond validates a complete response under mutation protection and saves it
-// once at the inspected version. It never advances phases or launches effects.
+// once at the inspected version. Plan edits can reserve fresh review or replace
+// intent, but never execute review or launch publication effects.
 // Pause and cancellation leave the exact pending decision intact.
 func (s Controller) Respond(ctx context.Context, id InteractionID, response Response) (View, error) {
 	if s.BackendFactory == nil {
@@ -199,15 +198,28 @@ func (s Controller) respondLocked(ctx context.Context, id InteractionID, respons
 	if view.Pending == nil || !view.Pending.ID.Owner.Equal(id.Owner) || view.Pending.ID.Kind != id.Kind || view.Pending.ID.Version != id.Version {
 		return View{}, ErrStaleInteraction
 	}
-	changed, err := applyResponse(&snapshot, *view.Pending, response, time.Now().UTC())
+	var changed bool
+	if proposal, ok := response.(PublicationPlanResponse); ok && id.Kind == InteractionPublication {
+		if err := s.verifyPublicationPlan(ctx, base, snapshot, id.Owner); err != nil {
+			return View{}, err
+		}
+		changed, err = revisePublication(&snapshot, proposal)
+	} else {
+		changed, err = applyResponse(&snapshot, *view.Pending, response, time.Now().UTC())
+	}
 	if err != nil {
 		return View{}, err
 	}
 	if !changed {
 		return view, nil
 	}
-	if id.Kind != InteractionPublication {
-		if err := s.verifyInteractionRevision(ctx, snapshot, id.Owner); err != nil {
+	if _, revising := response.(PublicationPlanResponse); !revising {
+		if id.Kind == InteractionPublication {
+			err = s.verifyPublicationPlan(ctx, base, snapshot, id.Owner)
+		} else {
+			err = s.verifyInteractionRevision(ctx, snapshot, id.Owner)
+		}
+		if err != nil {
 			return View{}, err
 		}
 	}
@@ -243,7 +255,7 @@ func applyResponse(snapshot *work.State, pending Interaction, response Response,
 			return applyFindingResponses(snapshot, pending, response, at)
 		}
 	case PublicationResponse:
-		if pending.ID.Kind == InteractionPublication && slices.Contains(pending.Actions, response.Action) {
+		if pending.ID.Kind == InteractionPublication && (response.Action == DecisionAuthorize || response.Action == DecisionPause) {
 			if response.Action == DecisionPause {
 				return false, nil
 			}
@@ -262,7 +274,7 @@ func applyManualResponse(snapshot *work.State, owner work.AttemptRef, response M
 	step := phase.Steps[*owner.Step].(*work.ManualReviewStep)
 	switch response.Action {
 	case DecisionApprove:
-		step.Decision = &work.ApprovedReview{At: at, Publication: response.Publication}
+		step.Decision = &work.ApprovedReview{At: at}
 	case DecisionAbort:
 		step.Decision = &work.AbortedReview{At: at, Reason: "Operator stopped manual review"}
 	case DecisionRequestChanges:
@@ -340,6 +352,10 @@ func manualCommandFailed(result work.ProcessResult) bool {
 }
 
 func (s Controller) verifyInteractionRevision(ctx context.Context, snapshot work.State, owner work.AttemptRef) error {
+	if phase, ok := snapshot.Workflows[owner.Workflow].Phases[owner.Phase].(*work.PublicationPhase); ok {
+		owner.Phase = phase.Plan.Review.Phase
+		owner.Step = nil
+	}
 	candidate, err := committedCandidate(taskstate.TaskState{Work: &snapshot}, owner)
 	if err != nil {
 		return err

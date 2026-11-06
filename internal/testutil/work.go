@@ -28,10 +28,36 @@ func DeliveredPRWork(repositoryID, taskID, directory, branch, url string) (work.
 	zero := 0
 	w.ReviewContracts = []work.ReviewContract{{PipelineKey: "fixture-review", Slots: []work.ReviewSlot{{Kind: work.ReviewAgent, ConfigKey: "reviewer"}}}}
 	w.Phases = append(w.Phases, &work.ReviewPhase{Contract: 0, Scope: work.ReviewScope{Requirements: "Synthetic task requirements", Output: work.OutputRef{Phase: 1}, Destination: &work.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}, StartedAt: at.Add(4 * time.Second), Steps: []work.ReviewStep{&work.AgentReviewStep{Slot: 0, Execution: work.AgentExecution{Profile: "fixture-reviewer", Harness: "pi", Command: "fixture-agent", StartedAt: at.Add(5 * time.Second), Process: &work.ExitedProcess{At: at.Add(6 * time.Second), Code: &zero}}}}}, &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 2}, Target: &work.PullRequestTarget{}, Content: "Fixture title\n\nFixture PR body"}})
+	SeedPublicationInputs(&snapshot)
 	if err := snapshot.AuthorizePublication(0, work.PublicationRef{Phase: 3}, at.Add(7*time.Second), "Explicit synthetic fixture grant"); err != nil {
 		return work.State{}, err
 	}
 	w.Phases[3].(*work.PublicationPhase).Delivery = &work.PullRequestDelivery{PullRequest: work.PullRequestRef{URL: url}, PublicCommit: "fixture-output", Head: "fixture-output", Tree: "fixture-tree", ObservedAt: at.Add(8 * time.Second), Evidence: "Synthetic independently observed PR and remote head"}
 	w.Phases = append(w.Phases, &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 3}})
 	return snapshot, snapshot.Validate()
+}
+
+// SeedPublicationInputs adds explicit reviewed input to synthetic reader/history
+// fixtures. It is test setup only, never an application default or conversion.
+func SeedPublicationInputs(snapshot *work.State) {
+	for wi := range snapshot.Workflows {
+		w := &snapshot.Workflows[wi]
+		for _, phase := range w.Phases {
+			p, ok := phase.(*work.PublicationPhase)
+			if !ok || p == nil || p.Plan.Input.Code.Commit != "" || p.Plan.Review.Phase < 0 || p.Plan.Review.Phase >= len(w.Phases) {
+				continue
+			}
+			r, ok := w.Phases[p.Plan.Review.Phase].(*work.ReviewPhase)
+			if !ok || r == nil || r.Scope.Destination == nil {
+				continue
+			}
+			output, err := w.Output(r.Scope.Output)
+			if err != nil {
+				continue
+			}
+			p.Plan.Input = work.PublicationInput{Code: *output, Provenance: work.InputReviewed}
+			p.Plan.Destination = *r.Scope.Destination
+			p.Plan.Comparison = work.PublicationComparison{Relationship: "reviewed"}
+		}
+	}
 }

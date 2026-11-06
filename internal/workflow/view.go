@@ -69,6 +69,7 @@ type ScopeView struct{ Baseline, Head string }
 
 // PublishedView keeps previously delivered output separate from current local work.
 type PublishedView struct {
+	Input        work.CodeIdentity
 	Revision     *RevisionView
 	PublicCommit string
 	PRURL        string
@@ -76,16 +77,25 @@ type PublishedView struct {
 
 // PublicationView describes selected intent and independent observed delivery.
 type PublicationView struct {
-	ReviewAttempt      int
-	Content            string
-	Flow               string
-	Destination        work.Destination
-	Consented          bool
-	PRURL              string
-	PRState            string
-	PublicCommit       string
-	DeliveryEvidence   string
-	AcceptanceEvidence string
+	Input               work.PublicationInput
+	Comparison          work.PublicationComparison
+	ReviewedDestination work.Destination
+	Plan                work.PublicationRef
+	Review              work.ReviewRef
+	ReviewOutcome       work.ReviewOutcome
+	Operation           string
+	ExpectedHead        string
+	Effects             []string
+	ReviewAttempt       int
+	Content             string
+	Flow                string
+	Destination         work.Destination
+	Consented           bool
+	PRURL               string
+	PRState             string
+	PublicCommit        string
+	DeliveryEvidence    string
+	AcceptanceEvidence  string
 }
 
 // Progress is a synchronous notification, separate from attached process stdio.
@@ -240,7 +250,7 @@ func fillReviewView(v *View, w *work.Workflow, p *work.ReviewPhase) {
 			continue
 		}
 		reviewed := w.Phases[publication.Plan.Review.Phase].(*work.ReviewPhase)
-		v.Published = &PublishedView{Revision: revisionView(w, reviewed.Scope.Output), PublicCommit: delivered.PublicCommit, PRURL: delivered.PullRequest.URL}
+		v.Published = &PublishedView{Input: publication.Plan.Input.Code.CodeIdentity, Revision: revisionView(w, reviewed.Scope.Output), PublicCommit: delivered.PublicCommit, PRURL: delivered.PullRequest.URL}
 	}
 }
 
@@ -309,9 +319,20 @@ func reviewSlotIndex(step work.ReviewStep) int {
 func fillPublicationView(v *View, w *work.Workflow, p *work.PublicationPhase) {
 	review := w.Phases[p.Plan.Review.Phase].(*work.ReviewPhase)
 	v.Revision = revisionView(w, review.Scope.Output)
-	info := &PublicationView{Content: p.Plan.Content, Consented: p.Consent != nil, Flow: "pull-request", PRState: "awaiting observation"}
+	info := &PublicationView{Input: p.Plan.Input, Comparison: p.Plan.Comparison, ReviewedDestination: *review.Scope.Destination, Destination: p.Plan.Destination, Review: p.Plan.Review, Content: p.Plan.Content, Consented: p.Consent != nil, Flow: "pull-request", PRState: "awaiting observation"}
+	info.ReviewOutcome, _ = w.ReviewOutcome(p.Plan.Review)
+	for index, phase := range w.Phases {
+		if phase == p {
+			info.Plan = work.PublicationRef{Phase: index}
+			break
+		}
+	}
+	info.Operation = "create-pr"
+	info.Effects = []string{"Publish authorized input on task branch", "Push task branch", "Create pull request", "Record pull request URL; keep task open"}
 	if _, direct := p.Plan.Target.(*work.DirectMergeTarget); direct {
 		info.Flow = "direct-merge"
+		info.Operation = "direct-merge"
+		info.Effects = []string{"Merge authorized input into destination", "Push destination", "Close task after verified delivery", "Attempt safe worktree cleanup after closure"}
 	}
 	for i, phase := range w.Phases {
 		if i > p.Plan.Review.Phase {
@@ -321,11 +342,11 @@ func fillPublicationView(v *View, w *work.Workflow, p *work.PublicationPhase) {
 			info.ReviewAttempt++
 		}
 	}
-	if destination, err := w.ReviewDestination(p.Plan.Review); err == nil && destination != nil {
-		info.Destination = *destination
-	}
 	if target, ok := p.Plan.Target.(*work.PullRequestTarget); ok && target.Existing != nil {
 		info.PRURL = target.Existing.URL
+		info.ExpectedHead = target.ExpectedHead
+		info.Operation = "update-pr"
+		info.Effects = []string{"Publish authorized input after expected public head", "Push task branch", "Update selected pull request; keep task open"}
 	}
 	switch delivered := p.Delivery.(type) {
 	case *work.PullRequestDelivery:

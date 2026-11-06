@@ -3,12 +3,14 @@
 package cli_test
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"context"
 	"github.com/hea3ven/orpheus/internal/agent"
+	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/hea3ven/orpheus/internal/work"
@@ -29,6 +31,14 @@ func TestIntegrationWorkflowTaskReviewFreshBlockerDispositionsStartFreshCLIPipel
 		"standard": {{"kind": "check", "name": "unit", "command": check}},
 	})
 	seedReviewBeforeCapturedContinuation(t, fixture)
+	before, _ := fixture.loadFinalTask("op-main")
+	fixture.options.Dependencies.Terminal.InputIsTerminal = func(io.Reader) bool { return false }
+	_, _, err := fixture.runError("a\nVerified\nw\nAccepted\n", "task", "run", "op-main")
+	must.ErrorIs(err, review.ErrInteractionRequired)
+	preserved, _ := fixture.loadFinalTask("op-main")
+	is.Equal(before, preserved)
+	is.Empty(fixture.checkCalls)
+	fixture.options.Dependencies.Terminal.InputIsTerminal = func(io.Reader) bool { return true }
 
 	stdout, stderr := fixture.run("a\nVerified direct repair.\nw\nAccepted compatibility risk.\n", "task", "run", "op-main")
 

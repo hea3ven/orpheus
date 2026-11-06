@@ -128,6 +128,19 @@ type publicationGit struct {
 	destinations                  []string
 }
 
+func (g *publicationGit) ObserveDestination(_ context.Context, _, branch string) (work.Destination, error) {
+	return work.Destination{Remote: "origin", Branch: branch, Commit: "destination"}, nil
+}
+func (g *publicationGit) ObservePublicationInput(_ context.Context, req gitmeta.PublicationInputRequest) (gitmeta.PublicationInputObservation, error) {
+	if g.verifyErr != nil {
+		return gitmeta.PublicationInputObservation{}, g.verifyErr
+	}
+	relation := "reviewed"
+	if g.source.Commit != req.Reviewed.Commit {
+		relation = "amended or rewritten history"
+	}
+	return gitmeta.PublicationInputObservation{Revision: g.source, Relationship: relation}, nil
+}
 func (g *publicationGit) VerifyRevision(_ context.Context, _ string, identity gitmeta.CheckoutIdentity, revision gitmeta.Revision) error {
 	if g.verifyErr != nil {
 		return g.verifyErr
@@ -137,12 +150,12 @@ func (g *publicationGit) VerifyRevision(_ context.Context, _ string, identity gi
 	}
 	return nil
 }
-func (g *publicationGit) PushTaskBranch(_ context.Context, _ string, branch string) error {
+func (g *publicationGit) PushPublicationInput(_ context.Context, _ string, branch string, input gitmeta.Revision) error {
 	if g.pushErr != nil {
 		return g.pushErr
 	}
 	g.pushes = append(g.pushes, branch)
-	g.remote[branch] = g.source
+	g.remote[branch] = input
 	if g.pushWrongTree {
 		g.remote[branch] = gitmeta.Revision{Commit: g.source.Commit, Tree: "foreign-tree"}
 	}
@@ -234,12 +247,13 @@ func newCommittedPublicationFixture(t *testing.T, authorized, direct, dedicated 
 	at := time.Date(2026, 1, 1, 0, 0, 4, 0, time.UTC)
 	zero := 0
 	w.ReviewContracts = []work.ReviewContract{{PipelineKey: "review", Slots: []work.ReviewSlot{{Kind: work.ReviewAgent, ConfigKey: "reviewer"}}}}
-	w.Phases = append(w.Phases, &work.ReviewPhase{Contract: 0, Scope: work.ReviewScope{Requirements: "Task requirements", Output: work.OutputRef{Phase: 1}, Destination: &work.Destination{Remote: "origin", Branch: "release/next", Commit: "destination"}}, StartedAt: at, Steps: []work.ReviewStep{&work.AgentReviewStep{Slot: 0, Execution: work.AgentExecution{StartedAt: at.Add(time.Second), Process: &work.ExitedProcess{At: at.Add(2 * time.Second), Code: &zero}}}}})
+	w.Phases = append(w.Phases, &work.ReviewPhase{Contract: 0, Scope: work.ReviewScope{Requirements: "Original task\n\n\n\n", Output: work.OutputRef{Phase: 1}, Destination: &work.Destination{Remote: "origin", Branch: "release/next", Commit: "destination"}}, StartedAt: at, Steps: []work.ReviewStep{&work.AgentReviewStep{Slot: 0, Execution: work.AgentExecution{StartedAt: at.Add(time.Second), Process: &work.ExitedProcess{At: at.Add(2 * time.Second), Code: &zero}}}}})
 	var target work.PublicationTarget = &work.PullRequestTarget{}
 	if direct {
 		target = &work.DirectMergeTarget{}
 	}
 	w.Phases = append(w.Phases, &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 2}, Target: target, Content: "feat: exact reviewed title\n\nReviewed publication body"}})
+	testutil.SeedPublicationInputs(&history)
 	if authorized {
 		require.NoError(t, history.AuthorizePublication(0, work.PublicationRef{Phase: 3}, at.Add(3*time.Second), "Explicit fixture grant, never inferred from review"))
 	}

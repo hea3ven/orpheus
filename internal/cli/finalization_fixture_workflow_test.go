@@ -14,10 +14,9 @@ import (
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
-	"github.com/hea3ven/orpheus/internal/workstate"
+	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"time"
 )
 
 // Publication outcomes describe external effects, not workflow decisions. The
@@ -65,25 +64,37 @@ func (f *finalizationWorkflowFixture) completion(taskID, branch, dir, summary, d
 	require.NoError(f.t, err)
 }
 
-// Publication journeys start from an explicitly authorized fixture plan. The
-// application still records only review approval and never supplies this grant.
+// Delivery-boundary journeys authorize through the real operator flow, then
+// inject a refusal at the external adapter to arrange an unchanged retry.
 func (f *finalizationWorkflowFixture) passedReview(taskID string) {
 	f.t.Helper()
 	view, err := f.taskStore.Load("alpha", taskID)
 	require.NoError(f.t, err)
-	if _, ready := view.Work.ActiveWorkflow().LastPhase().(*workmodel.PublicationPhase); !ready {
-		f.run("a\n", "task", "run", taskID)
+	input := "a\na\n"
+	if _, ready := view.Work.ActiveWorkflow().LastPhase().(*workmodel.PublicationPhase); ready {
+		input = "a\n"
 	}
-	adapter := workstate.NewStore(f.paths)
-	snapshot, err := adapter.Load("alpha", taskID)
-	require.NoError(f.t, err)
-	w := snapshot.ActiveWorkflow()
-	require.NotNil(f.t, w)
-	_, ready := w.LastPhase().(*workmodel.PublicationPhase)
-	require.True(f.t, ready, "fixture must complete the real review before granting publication consent")
-	require.NoError(f.t, snapshot.AuthorizePublication(len(snapshot.Workflows)-1, workmodel.PublicationRef{Phase: len(w.Phases) - 1}, time.Now().UTC(), "Explicit synthetic authorization for publication-boundary tests"))
-	_, err = adapter.Save(snapshot, snapshot.Version)
-	require.NoError(f.t, err)
+	stopped := errors.New("fixture stops before delivery")
+	f.options.Dependencies.FinalizationGit = refusedPublicationGit{FinalizationGit: f.publication, err: stopped}
+	_, _, err = f.runError(input, "task", "run", taskID)
+	require.ErrorIs(f.t, err, stopped)
+	f.options.Dependencies.FinalizationGit = f.publication
+	accepted := f.inspectWorkflow(taskID)
+	require.Nil(f.t, accepted.Pending)
+	require.True(f.t, accepted.Publication.Consented)
+}
+
+type refusedPublicationGit struct {
+	workflow.FinalizationGit
+	err error
+}
+
+func (g refusedPublicationGit) VerifyRevision(context.Context, string, gitmeta.CheckoutIdentity, gitmeta.Revision) error {
+	return g.err
+}
+
+func (g refusedPublicationGit) DirectRevisionDelivery(context.Context, taskmodel.Repository, string, string, string, string, string, gitmeta.Revision) (gitmeta.Revision, error) {
+	return gitmeta.Revision{}, g.err
 }
 
 func newMainFinalizationFixture(t *testing.T, taskID string) *finalizationWorkflowFixture {
@@ -139,7 +150,7 @@ func (f *finalizationWorkflowFixture) assertPublishedPR(taskID string) {
 	require.Len(f.t, state.Runs, 1)
 	assert.Equal(f.t, taskstate.RunStatusSucceeded, state.Runs[0].Status)
 	require.NotNil(f.t, state.Runs[0].Completion)
-	assert.Equal(f.t, facts.Commit, state.Runs[0].Completion.Commit)
+	assert.Equal(f.t, "output-1", state.Runs[0].Completion.Commit, "publication cannot rewrite the implementation revision")
 	assert.Equal(f.t, []string{f.pr.url}, f.mutations.prURLs)
 }
 
@@ -289,4 +300,33 @@ func (g *memoryPublicationGit) DirectRevisionDelivery(ctx context.Context, repo 
 		return gitmeta.Revision{}, err
 	}
 	return g.PublishedRevision(ctx, repo.Path, destination)
+}
+
+func (g *memoryPublicationGit) ObservePublicationInput(ctx context.Context, req gitmeta.PublicationInputRequest) (gitmeta.PublicationInputObservation, error) {
+	if g.mergeCommit != "" && req.Accepted != nil && g.heads[req.Directory] == req.Accepted.Commit {
+		relationship, changes := "reviewed", ""
+		if req.Accepted.Commit != req.Reviewed.Commit {
+			relationship, changes = g.publicationRelationship, "fixture committed changes"
+			if req.Accepted.Tree == req.Reviewed.Tree {
+				changes = "No tree differences; commit identity changed."
+			}
+		}
+		return gitmeta.PublicationInputObservation{Recovering: true, Revision: *req.Accepted, Relationship: relationship, Changes: changes}, nil
+	}
+	return g.memoryReviewCandidate.ObservePublicationInput(ctx, req)
+}
+
+func (g *memoryPublicationGit) PushPublicationInput(ctx context.Context, dir, branch string, input gitmeta.Revision) error {
+	if err := g.VerifyRevision(ctx, dir, gitmeta.CheckoutIdentity{Commit: input.Commit, Ref: "refs/heads/" + branch}, input); err != nil {
+		return err
+	}
+	if g.pushError != nil {
+		return g.pushError
+	}
+	if g.remote[branch] == input.Commit {
+		return nil
+	}
+	g.pushes = append(g.pushes, branch)
+	g.remote[branch] = input.Commit
+	return nil
 }

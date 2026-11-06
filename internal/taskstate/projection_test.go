@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -198,6 +199,7 @@ func projectionHistory(t *testing.T) work.State {
 		{PipelineKey: "review", Slots: []work.ReviewSlot{{Kind: work.ReviewAgent, ConfigKey: "reviewer"}}},
 	}, Phases: []work.Phase{projectionPreparation(), projectionImplementation("feat: feature intent", "R1", 1), firstReview, repair, secondReview, pub}}
 	snapshot := work.State{Version: 9, RepositoryID: "repo", TaskID: "task", Workflows: []work.Workflow{w}}
+	testutil.SeedPublicationInputs(&snapshot)
 	require.NoError(t, snapshot.AuthorizePublication(0, work.PublicationRef{Phase: 5}, projectionAt(40), "Explicit pre-existing operator grant in this fixture"))
 	pub.Delivery = &work.PullRequestDelivery{PullRequest: work.PullRequestRef{URL: "https://example.test/pull/1"}, PublicCommit: "P2", Head: "P2", Tree: "tree-R2", ObservedAt: projectionAt(41), Evidence: "Confirmed remote delivery"}
 	sync := work.BranchSync{StartedAt: projectionAt(42), Checkpoint: work.BranchSyncCheckpoint{LocalHead: "P2", RemoteHead: "P2", MergeSource: "D2"}, ConflictResolution: &work.ConflictResolution{Files: []string{"app.go"}, Execution: work.AgentExecution{Profile: "resolver", Harness: "pi", StartedAt: projectionAt(43), Process: &work.ExitedProcess{At: projectionAt(44), Code: &zero}, Usage: &work.Usage{TotalTokens: 700}, Cost: &work.UsageCost{Kind: "reported", Currency: "USD", AmountMicroUSD: 29}}}, LocalCommit: &work.BranchSyncCommit{Head: "S1", ObservedAt: projectionAt(45)}, Push: &work.BranchSyncPush{Head: "S1", ObservedAt: projectionAt(46), Evidence: "Confirmed remote sync head"}}

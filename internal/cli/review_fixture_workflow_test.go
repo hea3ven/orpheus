@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
@@ -124,7 +125,7 @@ func (f *reviewWorkflowFixture) runWithWriters(input string, stdout, stderr io.W
 func (f *reviewWorkflowFixture) forceInteractiveReviewOutput(width int) {
 	f.t.Helper()
 	f.options.Dependencies.Terminal = cli.TerminalCapabilities{
-		InputIsTerminal:  func(io.Reader) bool { return false },
+		InputIsTerminal:  func(io.Reader) bool { return true },
 		OutputIsTerminal: func(io.Writer) bool { return true },
 		OutputWidth: func(io.Writer) (int, bool) {
 			return width, true
@@ -239,6 +240,7 @@ func (b *memoryReviewTasks) Close(_ context.Context, id string) error {
 // The review fixture supports default-branch and PR publication after approval.
 // Direct merge and publication retry contracts live outside these scenarios.
 type memoryReviewCandidate struct {
+	publicationRelationship string
 	*memoryDispatchGit
 	head, contents       string
 	destinationHeads     map[string]string
@@ -545,4 +547,28 @@ func beginConfiguredFixtureReview(f *reviewWorkflowFixture, store taskstate.Stor
 	}
 	opts.Scope = work.ReviewScope{Requirements: "Explicit fixture task requirements", Output: work.OutputRef{Phase: run.Address.Phase}, Destination: &work.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}
 	return store.StartReviewWithOptions("alpha", taskID, opts)
+}
+
+func (f *reviewWorkflowFixture) inspectWorkflow(taskID string) workflow.View {
+	f.t.Helper()
+	output, _ := f.run("", "task", "show", "workflow", taskID, "--json")
+	var view workflow.View
+	require.NoError(f.t, json.Unmarshal([]byte(output), &view))
+	return view
+}
+
+func (g *memoryReviewCandidate) ObservePublicationInput(ctx context.Context, req gitmeta.PublicationInputRequest) (gitmeta.PublicationInputObservation, error) {
+	observed, err := g.memoryDispatchGit.ObservePublicationInput(ctx, req)
+	if err != nil {
+		return observed, err
+	}
+	err = g.VerifyRevision(ctx, req.Directory, gitmeta.CheckoutIdentity{Commit: observed.Revision.Commit, Ref: "refs/heads/" + req.Branch}, observed.Revision)
+	if observed.Revision.Commit != req.Reviewed.Commit && g.publicationRelationship != "" {
+		observed.Relationship = g.publicationRelationship
+	}
+	return observed, err
+}
+
+func (g *memoryReviewCandidate) PushPublicationInput(context.Context, string, string, gitmeta.Revision) error {
+	return errors.New("unexpected publication before explicit authorization")
 }

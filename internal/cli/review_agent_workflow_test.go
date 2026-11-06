@@ -5,12 +5,14 @@ package cli_test
 import (
 	"context"
 	"errors"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
+	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,7 +25,9 @@ func TestIntegrationWorkflowTaskReviewAgentReviewStepLaunchesReviewerAndPassesWi
 	paths := fixture.paths
 	fixture.reviewers(semanticAgentOutcome{captureContext: true})
 	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "agent_review", "name": "ai-review"}}})
-	stdout, _ := fixture.run("", "task", "run", "op-main")
+	fixture.options.Dependencies.Terminal.InputIsTerminal = func(io.Reader) bool { return false }
+	stdout, stderr, err := fixture.runError("authorize\n", "task", "run", "op-main")
+	must.ErrorIs(err, review.ErrInteractionRequired)
 
 	is.Contains(stdout, "Review passed for op-main")
 	must.Len(fixture.agent.contexts, 1)
@@ -56,6 +60,14 @@ func TestIntegrationWorkflowTaskReviewAgentReviewStepLaunchesReviewerAndPassesWi
 	is.Contains(latest.Steps[0].Execution.Args[0], "You are an agent dispatched by Orpheus.")
 	is.Empty(latest.Findings)
 	assertUnconsentedPublication(t, state)
+	pending := fixture.inspectWorkflow("op-main")
+	must.NotNil(pending.Pending)
+	is.Equal("publication_consent", string(pending.Pending.ID.Kind))
+	for _, fact := range []string{"PUBLICATION", "PUBLICATION CONTENT", "Review agent", "FLOW", "DESTINATION", "EFFECTS"} {
+		is.Contains(stderr, fact)
+	}
+	is.Empty(fixture.candidate.pushes, "even piped authorization text cannot authorize an automated review pass")
+	is.Empty(fixture.tasks.closed)
 }
 
 func TestIntegrationWorkflowTaskReviewAgentReviewBlockingFindingStopsPipeline(t *testing.T) {
@@ -70,7 +82,7 @@ func TestIntegrationWorkflowTaskReviewAgentReviewBlockingFindingStopsPipeline(t 
 
 	is.Contains(stdout, "Recorded blocking review finding 1 for op-main.")
 	is.Contains(stderr, "-- STEP: ai-review (agent_review) --")
-	is.Contains(stderr, "Review blocked for op-main by agent_review \"ai-review\".")
+	is.Contains(stderr, "Automated blocker decisions for op-main were interrupted")
 	is.NotContains(stderr, "Review action")
 	is.NotEqual(headBefore, fixture.candidate.head)
 	is.Equal("output-1", fixture.candidate.head)

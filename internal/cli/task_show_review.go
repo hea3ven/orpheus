@@ -836,23 +836,7 @@ func renderCommittedReviewScope(output io.Writer, view taskstate.TaskState, revi
 		lines = append(lines, fmt.Sprintf("  Repair-delta comparison: %s -> %s", input.Commit, code.Commit))
 	}
 	destination := phase.Scope.Destination
-	lines = append(lines, fmt.Sprintf("  Automated destination: %s/%s at %s", destination.Remote, destination.Branch, destination.Commit))
-	for _, step := range phase.Steps {
-		manual, ok := step.(*work.ManualReviewStep)
-		if !ok {
-			continue
-		}
-		approval, ok := manual.Decision.(*work.ApprovedReview)
-		if !ok || approval.Publication == nil {
-			continue
-		}
-		selected := approval.Publication
-		flow := "pull-request"
-		if _, direct := selected.Target.(*work.DirectMergeTarget); direct {
-			flow = "direct-merge"
-		}
-		lines = append(lines, fmt.Sprintf("  Approved publication choice: %s to %s/%s at %s", flow, selected.Destination.Remote, selected.Destination.Branch, selected.Destination.Commit))
-	}
+	lines = append(lines, fmt.Sprintf("  Reviewed destination: %s/%s at %s", destination.Remote, destination.Branch, destination.Commit))
 	_, err = fmt.Fprintln(output, strings.Join(lines, "\n"))
 	return err
 }

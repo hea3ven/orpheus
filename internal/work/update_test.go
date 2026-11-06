@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/stretchr/testify/require"
 )
@@ -305,6 +306,7 @@ func TestSuccessorRecordsWaiverAndNewIntentWithoutOverwritingTheirSources(t *tes
 	previous, next = repairHistory(t), repairHistory(t)
 	p := &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 8}, Target: &work.DirectMergeTarget{}, Content: "A new intended flow"}}
 	next.Workflows[0].Phases = append(next.Workflows[0].Phases, p)
+	testutil.SeedPublicationInputs(&next)
 	require.NoError(t, next.AuthorizePublication(0, work.PublicationRef{Phase: 10}, at(110), "Explicitly authorize new flow"))
 	require.NoError(t, next.ValidateSuccessor(&previous))
 	require.Nil(t, next.Workflows[0].Phases[9].(*work.PublicationPhase).Consent)
@@ -361,6 +363,7 @@ func publishedWaivedFindingState(t *testing.T) work.State {
 	finding.Dispositions = append(finding.Dispositions, &work.WaivedFinding{Waiver: work.Waiver{Reason: "Operator accepts the reported limitation", At: at(25)}})
 	publication := &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 2}, Target: &work.PullRequestTarget{}, Content: "Publish the reviewed feature"}}
 	s.Workflows[0].Phases = append(s.Workflows[0].Phases, publication)
+	testutil.SeedPublicationInputs(&s)
 	require.NoError(t, s.AuthorizePublication(0, work.PublicationRef{Phase: 3}, at(30), "Explicit publication grant"))
 	publication.Delivery = &work.PullRequestDelivery{PullRequest: nativePR(), PublicCommit: "P1", Head: "P1", Tree: "T1", ObservedAt: at(31), Evidence: "Observed exact reviewed delivery"}
 	require.NoError(t, s.Validate())

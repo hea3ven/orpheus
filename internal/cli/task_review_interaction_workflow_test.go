@@ -39,7 +39,7 @@ func TestIntegrationWorkflowTaskRunReviewFollowUpAllowsDirtyTaskBranch(t *testin
 	actor := reviewAttempt.Steps[len(reviewAttempt.Steps)-1].Address
 	_, err = runStore.RecordReviewFinding("alpha", "op-followup", reviewAttempt.Attempt, taskstate.ReviewFinding{Actor: &actor, Type: taskstate.FindingTypeBlocking, Title: "Fix bug", Description: "The reviewed change still has a blocker.", SuggestedAction: "Patch the dirty candidate changes."})
 	must.NoError(err)
-	_, err = runStore.RecordManualDecision(actor, taskstate.ReviewStatusBlocked, nil)
+	_, err = runStore.RecordManualDecision(actor, taskstate.ReviewStatusBlocked)
 	must.NoError(err)
 	// New operator changes are valid repair input, not a read-only review target.
 	fixture.candidate.contents = "operator changes awaiting repair\n"
@@ -279,7 +279,8 @@ func TestIntegrationWorkflowTaskReviewManualCommandEOFConfirmationHandlesUnavail
 	}{
 		{name: "empty EOF", input: "", wantMessage: "Review for op-main is waiting for manual step \"inspect\" because manual review input is unavailable.", wantStatus: taskstate.ReviewStatusWaitingForManual},
 		{name: "ordinary decline", input: "n\n", wantMessage: "Review aborted for op-main.", wantStatus: taskstate.ReviewStatusAborted},
-		{name: "decline without newline", input: "n", wantMessage: "Review aborted for op-main.", wantStatus: taskstate.ReviewStatusAborted},
+		{name: "decline without newline", input: "n", wantMessage: "Review for op-main is waiting for manual step", wantStatus: taskstate.ReviewStatusWaitingForManual},
+		{name: "explicit pause", input: "q\n", wantMessage: "Review for op-main is waiting for manual step", wantStatus: taskstate.ReviewStatusWaitingForManual},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -419,7 +420,7 @@ func TestIntegrationWorkflowTaskReviewNonZeroCheckRecordsBlockingFindingAndStops
 	is.Contains(stdout, "failing check output")
 	is.Contains(stderr, "-- STEP: unit (check) --")
 	is.Contains(stderr, "Automated blocker decisions for op-main were interrupted")
-	is.Contains(stderr, "Review blocked for op-main by check \"unit\".")
+	is.NotContains(stderr, "Review blocked for op-main by check \"unit\".")
 	is.NotContains(stderr, "Review action")
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
