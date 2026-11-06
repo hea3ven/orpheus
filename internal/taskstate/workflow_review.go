@@ -3,6 +3,7 @@ package taskstate
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -25,11 +26,9 @@ func currentReview(snapshot *work.State, ref work.AttemptRef) (*work.Workflow, *
 }
 
 func contractSlot(w *work.Workflow, p *work.ReviewPhase, name, kind string) (int, error) {
-	for slot, required := range w.ReviewContracts[p.Contract].Slots {
-		if required.ConfigKey == name {
-			if string(required.Kind) != kind {
-				return 0, errors.New("review step kind differs from its captured contract")
-			}
+	slots := w.ReviewContracts[p.Contract].Slots
+	for slot := len(slots) - 1; slot >= 0; slot-- {
+		if slots[slot].ConfigKey == name && string(slots[slot].Kind) == kind {
 			return slot, nil
 		}
 	}
@@ -602,6 +601,30 @@ func (s Store) RecordManualCommandInterruption(ref work.AttemptRef, exitCode int
 			return false, errors.New("interrupted command does not belong to a manual assessment")
 		}
 		step.CommandInterruptions = append(step.CommandInterruptions, work.ExitedProcess{At: s.nowUTC(), Code: &exitCode})
+		return true, nil
+	})
+	if err != nil {
+		return ReviewAttempt{}, err
+	}
+	return viewReviewAt(view, ref)
+}
+
+// ContinueReviewAt selects an appended forward contract without rewriting the
+// definitions or results of any started slot. The controller supplies live policy.
+func (s Store) ContinueReviewAt(ref work.AttemptRef, contract work.ReviewContract, expected work.StateVersion) (ReviewAttempt, error) {
+	view, err := s.updateWorkflow(ref.RepositoryID, ref.TaskID, func(snapshot *work.State) (bool, error) {
+		if snapshot.Version != expected {
+			return false, errors.New("review continuation is stale; inspect current work before retrying")
+		}
+		w, p, err := currentReview(snapshot, ref)
+		if err != nil {
+			return false, err
+		}
+		if reflect.DeepEqual(w.ReviewContracts[p.Contract], contract) {
+			return false, nil
+		}
+		p.Contract = len(w.ReviewContracts)
+		w.ReviewContracts = append(w.ReviewContracts, contract)
 		return true, nil
 	})
 	if err != nil {

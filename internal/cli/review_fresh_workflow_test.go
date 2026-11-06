@@ -76,6 +76,15 @@ func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview
 				// Native PR metadata is not an independent continuation authority.
 				require.NoError(t, fixture.tasks.SetPRURL(context.Background(), "op-fresh", "https://example.test/pr/existing"))
 				fixture.configureAgentProfiles(agent.AgentDefaults{Implementer: "other", Reviewer: "other"}, profiles)
+				inserted := "must-not-run-before-repair"
+				if repairCase.completed {
+					inserted = fixture.check("inserted-before", checkResult{})
+				}
+				fixture.pipelines("standard", map[string][]map[string]any{"standard": {
+					{"kind": "check", "name": "inserted-before", "command": inserted},
+					{"kind": "check", "name": "first", "command": first}, findingStep,
+				}})
+				fixture.budget(2)
 
 				stdout, stderr, err := fixture.runError("k\n", "task", "run", "op-fresh")
 				require.NoError(t, err, "stderr: %s", stderr)
@@ -115,9 +124,10 @@ func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview
 				fresh := final.Reviews[1]
 				assert.Equal(t, 2, fresh.Attempt)
 				assert.Equal(t, taskstate.ReviewStatusPassed, fresh.Status)
-				require.Len(t, fresh.Steps, 2)
-				assert.Equal(t, "first", fresh.Steps[0].Name)
-				assert.Equal(t, "correctness", fresh.Steps[1].Name)
+				require.Len(t, fresh.Steps, 3)
+				assert.Equal(t, "inserted-before", fresh.Steps[0].Name)
+				assert.Equal(t, "first", fresh.Steps[1].Name)
+				assert.Equal(t, "correctness", fresh.Steps[2].Name)
 				assert.Empty(t, fresh.Findings)
 				if kind == "agent_review" {
 					require.Len(t, fixture.agent.launches, 4, "implementation, reviewer, repair, configured reviewer")
@@ -128,7 +138,7 @@ func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview
 				assert.Equal(t, "https://example.test/pr/existing", item.OrpheusMetadata().PRURL)
 				assert.Empty(t, fixture.candidate.pushes)
 				assert.False(t, fixture.candidate.hasStagedChanges, "implementation capture committed its completed index before review")
-				assert.Equal(t, append(wantChecks, wantChecks...), fixture.checkCalls)
+				assert.Equal(t, append(append(wantChecks, "inserted-before"), wantChecks...), fixture.checkCalls)
 			})
 		}
 	}

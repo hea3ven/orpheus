@@ -14,14 +14,17 @@ const (
 	ReviewManual ReviewStepKind = "manual"
 )
 
-// ReviewSlot retains a real customizable configuration key once in the contract.
+// ReviewSlot retains a configured name/type at a stable historical address.
+// A forward continuation can encounter a formerly completed name again after
+// reordering; that is another required slot, not a rewrite of its earlier result.
 type ReviewSlot struct {
 	Kind      ReviewStepKind
 	ConfigKey string
 }
 
 // ReviewContract is the immutable captured set of requirements for an occurrence.
-// Appending another contract permits changed configuration without rewriting history.
+// Forward continuation appends a contract preserving started slots and replacing
+// only the unstarted suffix. A fresh review captures its entire current pipeline.
 type ReviewContract struct {
 	PipelineKey string
 	Slots       []ReviewSlot

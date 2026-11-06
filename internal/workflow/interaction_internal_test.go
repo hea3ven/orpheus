@@ -5,6 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
+
+	"github.com/hea3ven/orpheus/internal/state"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agent"
@@ -111,6 +115,20 @@ func TestInteractionResponsesPreservePendingWorkUntilAnExactLegalDecision(t *tes
 				response = PublicationResponse{Action: DecisionAuthorize, Evidence: "Operator accepts this exact displayed plan"}
 				wantNext = TaskRunActionPublish
 			}
+			if kind != InteractionPublication {
+				// The interaction version cannot detect operator configuration edits
+				// made while its prompt was attached. Keep state storage fixed while
+				// resolving an empty, isolated configuration at the response boundary.
+				originalPaths := controller.Paths
+				controller.Delivery.Store = store
+				controller.Paths = newDispatchTestPaths(t)
+				_, err = controller.Respond(context.Background(), originalID, response)
+				require.ErrorContains(t, err, "recorded pipeline \"quality\"")
+				preserved, err = store.Load("alpha", "op-review")
+				require.NoError(t, err)
+				assert.Equal(t, before, preserved)
+				controller.Paths = originalPaths
+			}
 			{
 				boundary.err = errors.New("revision changed during the decision")
 				_, err = controller.Respond(context.Background(), originalID, response)
@@ -139,9 +157,19 @@ func TestInteractionResponsesPreservePendingWorkUntilAnExactLegalDecision(t *tes
 
 func interactionController(t *testing.T, snapshot work.State) (Controller, workstate.Store, *candidateReadinessGit) {
 	t.Helper()
-	paths := newDispatchTestPaths(t)
+	root := testutil.CanonicalTempDir(t)
+	configDir := filepath.Join(root, "config")
+	paths, err := state.NewPaths(configDir, filepath.Join(root, "data"))
+	require.NoError(t, err)
+	if phase, ok := snapshot.Workflows[0].LastPhase().(*work.ReviewPhase); ok {
+		kind := snapshot.Workflows[0].ReviewContracts[phase.Contract].Slots[0].Kind
+		config, err := json.Marshal(map[string]any{"reviews": map[string]any{"pipelines": map[string]any{"quality": map[string]any{"steps": []map[string]any{{"name": "inspect", "kind": kind, "command": "unused-check"}}}}}})
+		require.NoError(t, err)
+		require.NoError(t, os.MkdirAll(configDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), config, 0o600))
+	}
 	store := workstate.NewStore(paths)
-	_, err := store.Save(snapshot, 0)
+	_, err = store.Save(snapshot, 0)
 	require.NoError(t, err)
 	boundary := &candidateReadinessGit{}
 	backend := interactionBackend{item: task.Task{ID: "op-review", Title: "Task intent", Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-review", task.MetadataWorktree: "/fixture/task"}, IssueType: task.IssueTypeTask, Status: task.StatusInProgress}}

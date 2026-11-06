@@ -82,6 +82,11 @@ func (g *changeGuard) workflow(before, after *Workflow, active bool) {
 			g.historicalPhase(phase, after.Phases[i])
 			continue
 		}
+		if review, ok := phase.(*ReviewPhase); ok {
+			if next, sameKind := after.Phases[i].(*ReviewPhase); sameKind {
+				g.reviewContract(before, after, review, next)
+			}
+		}
 		g.phase(phase, after.Phases[i])
 	}
 }
@@ -215,7 +220,6 @@ func (g *changeGuard) session(before, after *Session) {
 }
 
 func (g *changeGuard) review(before, after *ReviewPhase) {
-	g.same(before.Contract, after.Contract, "review contract selection")
 	g.same(before.Scope, after.Scope, "review scope")
 	g.same(before.StartedAt, after.StartedAt, "review entry time")
 	g.assigned(before.AdmissionFailure, after.AdmissionFailure, "read-only admission failure")
@@ -339,4 +343,26 @@ func (g *changeGuard) finalization(before, after *FinalizationPhase, mutable boo
 		g.same(before.Closure, after.Closure, "source closure")
 	}
 	g.prefix(before.Cleanup, after.Cleanup, "cleanup observations")
+}
+
+// Only the live review may adopt a new forward contract. Every started slot
+// keeps its address and definition; contracts already used by publication freeze.
+func (g *changeGuard) reviewContract(before, after *Workflow, old, next *ReviewPhase) {
+	if old.Contract == next.Contract {
+		return
+	}
+	if next.Contract < len(before.ReviewContracts) {
+		g.errors = append(g.errors, errors.New("review continuation requires an appended contract"))
+		return
+	}
+	prior, current := before.ReviewContracts[old.Contract], after.ReviewContracts[next.Contract]
+	g.same(prior.PipelineKey, current.PipelineKey, "review pipeline identity")
+	for _, step := range old.Steps {
+		slot, _ := reviewSlot(step)
+		if slot >= len(current.Slots) {
+			g.errors = append(g.errors, errors.New("started review slot cannot be removed"))
+			continue
+		}
+		g.same(prior.Slots[slot], current.Slots[slot], "started review slot definition")
+	}
 }

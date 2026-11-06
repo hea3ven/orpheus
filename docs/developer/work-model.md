@@ -31,8 +31,19 @@ survives every phase transition. Existing stopping,
 finding-decision, and per-invocation repair-budget rules remain in force. A PR URL
 cannot override controller-selected implementation or repair. Configured slot
 keys/kinds remain in captured contracts; history addresses never become offsets
-in a live pipeline. Forward continuation across configuration edits is a separate
-boundary from resolving a fresh post-repair review.
+in a live pipeline. Continuation resolves the recorded pipeline and current
+step's name/type against live configuration, then advances only after that
+position. Missing identities stop with configuration-repair advice. Fixed phase
+kinds identify built-in phases; there is no configurable phase graph.
+
+For an active review, the controller appends a forward contract preserving the
+started-slot prefix and replacing only unstarted requirements with the live
+suffix. Old contracts, step addresses, results, findings, and scope remain intact.
+A moved earlier name encountered later can have another required slot without
+relabeling its earlier attempt. Neither earlier steps nor their agent profiles
+are revalidated. Publication continuation never resolves earlier review
+configuration, so unchanged accepted plans remain valid. Fresh post-repair review
+still captures the full current pipeline and begins at step one.
 
 The controller derives expected owner/version preconditions internally; callers
 need not inspect or supply a route before advancement. Reservation rechecks those
@@ -173,8 +184,11 @@ Invalid evidence is an error, not approval.
 - Manual approval cannot override another failed requirement or accept its own
   unresolved required findings. Its step retains advisory/separate-task findings
   and later decisions without rewriting the original assessment.
-- Config edits append contracts for new work; they do not reinterpret historical
-  approvals or turn a successful prefix into a complete pipeline.
+- Config edits append contracts for forward continuation or fresh work; they do
+  not reinterpret historical approvals. A successful prefix cannot stand in for
+  pending forward requirements. Only a live review may select an appended
+  contract, and every started slot must keep its name/type and address. Once the
+  workflow leaves review, its contract selection is frozen.
 
 A handoff may arrive before process exit. Output capture, including explicit
 unchanged-input reuse, needs that effort's own valid completion and safe successful

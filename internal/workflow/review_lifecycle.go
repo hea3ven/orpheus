@@ -39,6 +39,7 @@ type ReviewLifecycleStore interface {
 	DispatchRunStore
 	review.PipelineStore
 	ReviewChildPIDStore
+	ContinueReviewAt(work.AttemptRef, work.ReviewContract, work.StateVersion) (taskstate.ReviewAttempt, error)
 	StartReviewWithOptions(repoID, taskID string, opts taskstate.StartReviewOptions) (taskstate.ReviewAttempt, error)
 	RecordRepairBudgetStop(work.AttemptRef, int, int) (taskstate.ReviewAttempt, error)
 	RecordReviewFailure(work.AttemptRef, error) (taskstate.ReviewAttempt, error)
@@ -751,14 +752,11 @@ func (s ReviewLifecycleService) resumeReview(base ReviewContext, paused taskstat
 	if base.owner != nil && !sameRouteOwner(base.owner, &observedOwner) {
 		return ReviewAttemptContext{}, fmt.Errorf("review resumption is stale; current work changed")
 	}
-	pipeline, err := ResolvePausedTaskReviewPipeline(base.paths, base.Source.Repository, paused, pipelineName)
-	if err != nil {
-		return ReviewAttemptContext{}, fmt.Errorf("task run %s: %w", base.TaskID(), err)
-	}
-	prepared, err := s.preparePipeline(base, pipeline)
+	prepared, err := s.prepareReviewContinuation(base, paused, pipelineName)
 	if err != nil {
 		return prepared, err
 	}
+	pipeline := prepared.Pipeline
 	request := review.FreshExecution()
 	if len(paused.Steps) > 0 {
 		request, err = review.ResumeExecution(pipeline, paused)
@@ -788,6 +786,31 @@ func (s ReviewLifecycleService) resumeReview(base ReviewContext, paused taskstat
 	prepared.execution = request
 	if err := s.Frontend.ReviewResumed(prepared); err != nil {
 		return prepared, err
+	}
+	return prepared, nil
+}
+
+func (s ReviewLifecycleService) prepareReviewContinuation(base ReviewContext, paused taskstate.ReviewAttempt, pipelineName string) (ReviewAttemptContext, error) {
+	pipeline, err := ResolvePausedTaskReviewPipeline(base.paths, base.Source.Repository, paused, pipelineName)
+	if err != nil {
+		return ReviewAttemptContext{}, fmt.Errorf("task run %s: %w", base.TaskID(), err)
+	}
+	start, err := reviewContinuationIndex(pipeline, paused)
+	if err != nil {
+		return ReviewAttemptContext{}, err
+	}
+	remaining := pipeline
+	remaining.Steps = pipeline.Steps[start:]
+	if paused.Status == taskstate.ReviewStatusRunning && len(paused.Steps) > 0 {
+		remaining.Steps = pipeline.Steps[start+1:]
+	}
+	prepared, err := s.preparePipeline(base, remaining)
+	prepared.Pipeline = pipeline
+	if err != nil {
+		return prepared, err
+	}
+	if len(paused.Steps) == 0 {
+		prepared.Pipeline = remaining
 	}
 	return prepared, nil
 }
@@ -868,7 +891,7 @@ func ResolveTaskReviewPipeline(paths state.Paths, repo task.Repository, pipeline
 	return review.ResolvePipeline(config, pipelineName, repo.ReviewPipeline)
 }
 
-// ResolvePausedTaskReviewPipeline prevents replacing a paused manual review pipeline.
+// ResolvePausedTaskReviewPipeline resolves the recorded configuration, not current defaults or aliases.
 func ResolvePausedTaskReviewPipeline(paths state.Paths, repo task.Repository, paused taskstate.ReviewAttempt, pipelineName string) (review.Pipeline, error) {
 	storedPipeline := strings.TrimSpace(paused.Pipeline)
 	if storedPipeline == "" {
@@ -876,7 +899,7 @@ func ResolvePausedTaskReviewPipeline(paths state.Paths, repo task.Repository, pa
 	}
 	pipeline, err := resolveStoredTaskReviewPipeline(paths, storedPipeline)
 	if err != nil {
-		return review.Pipeline{}, fmt.Errorf("resolve paused review pipeline %q: %w", storedPipeline, err)
+		return review.Pipeline{}, fmt.Errorf("%w: review attempt %d at step %q cannot resolve recorded pipeline %q: %w; restore reviews.pipelines.%s in config.yaml before continuing", review.ErrInvalidExecution, paused.Attempt, paused.Step, storedPipeline, err, storedPipeline)
 	}
 	if strings.TrimSpace(pipelineName) == "" {
 		return pipeline, nil

@@ -7,11 +7,9 @@ import (
 
 func (v *validator) contract(contract ReviewContract) {
 	v.check(strings.TrimSpace(contract.PipelineKey) != "" && len(contract.Slots) > 0, "review contract requires pipeline key and required slots")
-	seen := make(map[string]bool)
 	for _, slot := range contract.Slots {
 		v.check(slot.Kind == ReviewCheck || slot.Kind == ReviewAgent || slot.Kind == ReviewManual, "invalid required review kind")
-		v.check(strings.TrimSpace(slot.ConfigKey) != "" && !seen[slot.ConfigKey], "review configuration keys must be nonblank and unique")
-		seen[slot.ConfigKey] = true
+		v.check(strings.TrimSpace(slot.ConfigKey) != "", "review configuration key must be nonblank")
 	}
 }
 

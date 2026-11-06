@@ -129,6 +129,26 @@ step definitions. Orpheus records the resolved pipeline name. Clear a repository
 setting or alias by setting its value to `''`. A paused attempt keeps its stored
 pipeline; an override cannot replace it.
 
+### Continue after configuration edits
+
+Continuation resolves the recorded pipeline from current global configuration,
+not from the current default or an alias. It locates the current step by name
+and kind, finishes it, and proceeds forward. Inserting a required step before
+that position does not run it for this continuation; later insertions run
+normally. Earlier results and findings remain facts even if their configuration
+has changed or disappeared. Earlier reviewer profiles are not resolved again.
+
+If the recorded pipeline or current step is missing, or its kind changed,
+continuation stops before dependent effects. Restore the named entry and kind
+in `config.yaml`, then rerun `orpheus task run <task-id>`. Orpheus does not guess
+another position or repair the configuration automatically. The workflow's phase
+identities are built in; only review pipelines have configurable steps.
+
+Operators own the consequences of editing active configuration. Configuration
+edits alone do not invalidate an accepted publication plan or rerun earlier
+review requirements. A fresh review after implementation repair differs from
+continuation: it starts at the first step of the then-current pipeline.
+
 ## Findings and repairs
 
 - Blocking findings require a fix or an explicit disposition before approval.

@@ -52,6 +52,7 @@ func TestResumeExecutionRejectsInvalidWaitingState(t *testing.T) {
 		{"unknown step", func(_ *Pipeline, a *taskstate.ReviewAttempt) { a.Step = "removed" }},
 		{"nonmatching whitespace", func(_ *Pipeline, a *taskstate.ReviewAttempt) { a.Step = " pending " }},
 		{"manual wait at check", func(_ *Pipeline, a *taskstate.ReviewAttempt) { a.Status = taskstate.ReviewStatusWaitingForManual }},
+		{"check changed to reviewer", func(p *Pipeline, _ *taskstate.ReviewAttempt) { p.Steps[1].Kind = KindAgentReview }},
 		{"decision at manual step", func(p *Pipeline, _ *taskstate.ReviewAttempt) { p.Steps[1].Kind = KindManual }},
 		{"unsupported step kind", func(p *Pipeline, _ *taskstate.ReviewAttempt) { p.Steps[1].Kind = "unknown" }},
 		{"no findings", func(_ *Pipeline, a *taskstate.ReviewAttempt) { a.Findings = nil }},

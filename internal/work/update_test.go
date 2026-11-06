@@ -82,6 +82,55 @@ func TestSuccessorSettlesOwnedWorkAndAppendsAttemptsWithoutRewritingHistory(t *t
 
 }
 
+func TestSuccessorReviewContinuationPreservesStartedDefinitionsAndFreezesPublishedEvidence(t *testing.T) {
+	for _, change := range []string{"forward suffix", "started name", "pipeline identity", "old contract", "published review"} {
+		t.Run(change, func(t *testing.T) {
+			previous, next := reviewingState(t), reviewingState(t)
+			for _, snapshot := range []*work.State{&previous, &next} {
+				snapshot.Workflows[0].Phases[2].(*work.ReviewPhase).Steps = snapshot.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[:1]
+			}
+			w := &next.Workflows[0]
+			contract := work.ReviewContract{PipelineKey: w.ReviewContracts[0].PipelineKey, Slots: []work.ReviewSlot{
+				{Kind: work.ReviewCheck, ConfigKey: "tests"},
+				{Kind: work.ReviewManual, ConfigKey: "new-forward-assessment"},
+			}}
+			// Keep this expectation independent of the contract-copying code.
+			require.Equal(t, work.ReviewSlot{Kind: work.ReviewCheck, ConfigKey: "tests"}, w.ReviewContracts[0].Slots[0])
+			switch change {
+			case "started name":
+				contract.Slots[0].ConfigKey = "replacement-check"
+			case "pipeline identity":
+				contract.PipelineKey = "replacement-pipeline"
+			case "old contract":
+				previous.Workflows[0].ReviewContracts = append(previous.Workflows[0].ReviewContracts, contract)
+				w.ReviewContracts = append(w.ReviewContracts, contract)
+			case "published review":
+				previous, next = deliveredHistory(t), deliveredHistory(t)
+				w = &next.Workflows[0]
+				contract = w.ReviewContracts[0]
+			}
+			w.ReviewContracts = append(w.ReviewContracts, contract)
+			w.Phases[2].(*work.ReviewPhase).Contract = len(w.ReviewContracts) - 1
+			if change == "old contract" {
+				w.Phases[2].(*work.ReviewPhase).Contract--
+			}
+
+			err := next.ValidateSuccessor(&previous)
+
+			if change != "forward suffix" {
+				require.Error(t, err, "continuation must not relabel results, reuse old contracts or alter publication evidence")
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, previous.Workflows[0].ReviewContracts, 1)
+			require.Equal(t, previous.Workflows[0].Phases[2].(*work.ReviewPhase).Steps, w.Phases[2].(*work.ReviewPhase).Steps)
+			outcome, err := w.ReviewOutcome(work.ReviewRef{Phase: 2})
+			require.NoError(t, err)
+			require.Equal(t, work.ReviewPending, outcome, "an earlier check cannot stand in for the new forward requirement")
+		})
+	}
+}
+
 func TestSuccessorPreservesAddressesAndRecordedFacts(t *testing.T) {
 	cases := []struct {
 		name   string

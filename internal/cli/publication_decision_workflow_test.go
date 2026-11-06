@@ -90,6 +90,8 @@ func TestIntegrationWorkflowPublicationPlanEditsAndInterruptedConsentNeverDelive
 	final, _ := f.loadFinalTask("op-plan")
 	assert.Equal(t, grant, final.Work.Workflows[0].Phases[refreshed.Publication.Plan.Phase].(*work.PublicationPhase).Consent)
 	assert.Len(t, final.Reviews, 1, "configuration edits do not retrospectively invalidate reviewed evidence")
+	assert.Equal(t, authorized.Reviews, final.Reviews, "configuration edits preserve actual review results and findings")
+	assert.Equal(t, authorized.Work.Workflows[0].ReviewContracts, final.Work.Workflows[0].ReviewContracts, "delivery does not reconcile earlier review requirements")
 	assert.Len(t, f.pr.created, 1, "retry observes the existing PR instead of creating another")
 	assert.Equal(t, "feat: reviewed intent", f.pr.created[0].Title)
 }
