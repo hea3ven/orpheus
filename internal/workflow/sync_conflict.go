@@ -41,9 +41,11 @@ func (s SyncService) resolveOpenPRBranchConflict(
 	destination string,
 	prURL string,
 	updatePolicy SyncBranchUpdatePolicy,
+	publication *gitmeta.TaskBranchPublication,
 ) (SyncResult, error) {
 	repo := target.source.Repository
 	syncOpts := syncConflictOptions(repo, taskTarget, destination, updatePolicy)
+	syncOpts.Publication = publication
 	operation, err := s.prepareSyncConflictCheckpoint(ctx, target, gitState, syncOpts)
 	if err != nil {
 		return SyncResult{}, err
@@ -200,7 +202,7 @@ func settleUnchangedSync(ctx context.Context, target syncTarget, syncOpts gitmet
 		if err := operation.git.VerifyTaskBranchConflictRollback(ctx, syncOpts, checkpoint); err != nil {
 			return err
 		}
-		if err := operation.store.ResolveSyncConflictOperation(target.source.Repository.ID, target.task.ID, operation.operation.ID, "unchanged_checkpoint_verified", "Conflict-only synchronization left the native checkpoint unchanged"); err != nil {
+		if err := operation.store.ResolveSyncConflictOperation(target.source.Repository.ID, target.task.ID, operation.operation.ID, "unchanged_checkpoint_verified", "Synchronization left the local and public checkpoint unchanged"); err != nil {
 			return err
 		}
 	}
@@ -213,6 +215,13 @@ func nonConflictSyncNeedsPush(
 	branchSync gitmeta.TaskBranchSyncResult,
 	operation *durableSyncConflictOperation,
 ) (bool, error) {
+	if syncOpts.Publication != nil {
+		if branchSync.Status != gitmeta.TaskBranchSyncAlreadyCurrent || branchSync.Head != syncOpts.Publication.Input.Commit {
+			return false, errors.New("retained publication sync must leave local history unchanged")
+		}
+		return false, nil
+	}
+
 	if syncOpts.UpdatePolicy == gitmeta.TaskBranchUpdateConflictsOnly {
 		return false, nil
 	}

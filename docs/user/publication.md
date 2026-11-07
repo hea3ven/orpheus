@@ -108,8 +108,12 @@ use `task run` for a new proceed-or-abort decision. It is not silently treated a
 reviewed output.
 
 Commit, push, and PR effects have retained operation intent. Interrupted retries
-reconcile the same public commit and PR before repeating effects. Unexpected
-remote heads, changed PR branch pairs, and merged/closed PRs stop publication for
+reconcile the same public commit and PR before repeating effects. If you select
+new input after an interrupted push, Orpheus first records the earlier authorized
+delivery, then requests fresh consent for the new input against that verified
+public head. The earlier grant and input remain attached to their own operation.
+Unexpected remote heads, changed PR branch pairs, and merged/closed PRs stop
+publication for
 reconciliation rather than overwriting work or creating another PR. Exact-head
 leases protect append-only pushes against concurrent ref changes; they do not
 authorize history rewriting. PR text keeps the selected original feature intent
@@ -188,10 +192,13 @@ orpheus task sync --all
 ```
 
 Sync reconciles recorded PRs; it does not create new ones. It closes tasks whose
-PRs merged and records the outcome locally. For open PRs, an explicit task-ID sync
-incorporates the integration destination into the task branch. Batch sync leaves a
-branch unchanged when it would merge cleanly and updates it only when conflict
-repair is required.
+PRs merged and records the outcome locally. For open PRs, task-ID sync checks the
+integration destination against the published branch. When that public head
+already includes the destination, sync verifies the retained local/public mapping
+without fast-forwarding or pushing local revision history. Content-changing sync
+of these separate histories currently stops with reconciliation advice, preserving
+the checkout and remote refs. Batch sync uses the conflict-only update policy
+where branch histories support ordinary merging.
 
 Conflict repair uses `agents.defaults.sync_conflict_resolver`, falling back to
 `agents.defaults.implementer` when unset. See [agent profiles](agents.md).

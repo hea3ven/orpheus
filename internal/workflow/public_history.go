@@ -51,25 +51,79 @@ func (s FinalizationService) recordPublicDelivery(ctx context.Context, store Wor
 		}
 	}
 	pushErr := boundary.PushPublicCommit(ctx, req, public, target.ExpectedHead)
-	if err := verifyPublishedOutput(ctx, boundary, prepared.Directory, prepared.TaskBranch, public); err != nil {
+	delivered, recovered, err := s.observePublicDelivery(ctx, boundary, repo, prepared, p, public, diagnostics)
+	if err != nil {
 		return errors.Join(pushErr, err)
+	}
+	result.PRRecovered = recovered
+	p.Delivery = delivered
+	return nil
+}
+
+// observePublicDelivery reconciles only an already published commit. It never
+// pushes or requires the checkout to still name that operation's selected input.
+func (s FinalizationService) observePublicDelivery(ctx context.Context, boundary FinalizationGit, repo task.Repository, prepared *work.WorkContext, p *work.PublicationPhase, public gitmeta.Revision, diagnostics pullrequest.DiagnosticContext) (*work.PullRequestDelivery, bool, error) {
+	if s.PRProvider == nil {
+		return nil, false, errors.New("PR provider is required")
+	}
+
+	target := p.Plan.Target.(*work.PullRequestTarget)
+	if public.Tree != p.Plan.Input.Code.Tree {
+		return nil, false, errors.New("published operation does not preserve its authorized input tree")
+	}
+	if err := verifyPublishedOutput(ctx, boundary, prepared.Directory, prepared.TaskBranch, public); err != nil {
+		return nil, false, err
 	}
 	url, recovered, err := s.observeOrCreatePublicationPR(ctx, repo, prepared, p, target, public, diagnostics)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 	if err := s.ensurePublicationContent(ctx, repo.Path, p.Plan.Content, pullrequest.PullRequestStatus{URL: url, State: pullrequest.StateOpen, HeadBranch: prepared.TaskBranch, BaseBranch: p.Plan.Destination.Branch, HeadCommit: public.Commit}, diagnostics); err != nil {
-		return err
+		return nil, false, err
 	}
 	if err := s.verifyPublicationPR(ctx, url, prepared.TaskBranch, p.Plan.Destination.Branch, public.Commit, diagnostics); err != nil {
-		return err
+		return nil, false, err
 	}
 	if err := verifyPublishedOutput(ctx, boundary, prepared.Directory, prepared.TaskBranch, public); err != nil {
-		return err
+		return nil, false, err
 	}
-	result.PRRecovered = recovered
-	p.Delivery = &work.PullRequestDelivery{PullRequest: work.PullRequestRef{URL: url}, PublicCommit: public.Commit, Head: public.Commit, Tree: public.Tree, PreviousHead: target.ExpectedHead, ObservedAt: time.Now().UTC(), Evidence: "Origin and open PR head independently verified at the retained public commit, preserving authorized input; reviewed revision and selected input remain separate"}
-	return nil
+	return &work.PullRequestDelivery{PullRequest: work.PullRequestRef{URL: url}, PublicCommit: public.Commit, Head: public.Commit, Tree: public.Tree, PreviousHead: target.ExpectedHead, ObservedAt: time.Now().UTC(), Evidence: "Origin and open PR head independently verified at the retained public commit, preserving authorized input; reviewed revision and selected input remain separate"}, recovered, nil
+}
+
+// reconcilePublicOperation finishes observation of an authorized remote effect
+// before its phase becomes history. A newly selected checkout is not pushed or
+// substituted for the earlier operation's input, and cannot inherit its consent.
+func (s FinalizationService) reconcilePublicOperation(ctx context.Context, boundary FinalizationGit, repo task.Repository, item task.Task, w *work.Workflow, p *work.PublicationPhase) (bool, error) {
+	if p.Operation == nil || p.Operation.Public == nil || p.Delivery != nil {
+		return false, nil
+	}
+	if item.Status != task.StatusInProgress {
+		return false, errors.New("task source is not in progress; reconcile lifecycle before publication")
+	}
+
+	target, ok := p.Plan.Target.(*work.PullRequestTarget)
+	if !ok {
+		return false, nil
+	}
+	prepared := w.Context()
+	remote, err := boundary.ObservePublicHead(ctx, prepared.Directory, prepared.TaskBranch)
+	if err != nil {
+		return false, err
+	}
+	if remote == target.ExpectedHead {
+		return false, nil
+	}
+	public := p.Operation.Public
+	if remote != public.Commit {
+		return false, errors.New("unexpected public head; reconcile remote changes before replacing publication intent")
+	}
+	diagnostics := pullrequest.DiagnosticContext{RepoID: repo.ID, TaskID: item.ID, Branch: prepared.TaskBranch}
+	delivered, _, err := s.observePublicDelivery(ctx, boundary, repo, prepared, p, gitmeta.Revision{Commit: public.Commit, Tree: public.Tree, RetainedRef: public.RetainedRef}, diagnostics)
+	if err != nil {
+		return false, err
+	}
+	p.Delivery = delivered
+	return true, nil
 }
 
 func packagePublicOperation(ctx context.Context, store WorkStore, boundary FinalizationGit, snapshot *work.State, p *work.PublicationPhase, req gitmeta.PublicCommitRequest) (gitmeta.Revision, error) {

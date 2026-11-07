@@ -60,6 +60,24 @@ func TestIntegrationAdapterContractPublicHistorySquashesThenAppendsRewrittenInpu
 			require.NoError(t, err)
 			assert.Equal(t, public, repeated)
 
+			syncOptions := gitmeta.TaskBranchSyncOptions{RepoPath: repo, Worktree: dir, Branch: branch, DefaultBranch: "main", Publication: &gitmeta.TaskBranchPublication{Input: selected, Public: public}}
+			checkpoint, err := gitmeta.InspectTaskBranchConflictCheckpoint(ctx, syncOptions)
+			require.NoError(t, err)
+			assert.Equal(t, selected.Commit, checkpoint.LocalHead)
+			assert.Equal(t, public.Commit, checkpoint.RemoteHead)
+			assert.Equal(t, baseline, checkpoint.MergeSource)
+			synced, err := gitmeta.BeginTaskBranchConflictResolution(ctx, syncOptions)
+			require.NoError(t, err)
+			assert.Equal(t, gitmeta.TaskBranchSyncAlreadyCurrent, synced.Status)
+			assert.Equal(t, selected.Commit, synced.Head, "sync must report the actual unchanged local head")
+			assert.Equal(t, selected.Commit, strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD")))
+			assert.Empty(t, strings.TrimSpace(runGit(t, dir, "status", "--porcelain=v1")))
+			require.NoError(t, gitmeta.VerifyRetainedRevision(ctx, dir, first))
+			require.NoError(t, gitmeta.VerifyRetainedRevision(ctx, dir, selected))
+			remote, err = gitmeta.PublishedRevision(ctx, dir, branch)
+			require.NoError(t, err)
+			assert.Equal(t, public.Commit, remote.Commit, "no-change sync must not push the local revision over public history")
+
 			// Rewritten operator history need not descend from either reviewed output
 			// or the existing public commit. Only the delivered tree is selected.
 			runGit(t, dir, "reset", "--hard", baseline)
@@ -83,6 +101,24 @@ func TestIntegrationAdapterContractPublicHistorySquashesThenAppendsRewrittenInpu
 			require.NoError(t, gitmeta.VerifyRetainedRevision(ctx, dir, first))
 			require.NoError(t, gitmeta.VerifyRetainedRevision(ctx, dir, selected))
 
+			syncOptions.Publication = &gitmeta.TaskBranchPublication{Input: rewritten, Public: next}
+			synced, err = gitmeta.SyncTaskBranchWithDefault(ctx, syncOptions)
+			require.NoError(t, err)
+			assert.Equal(t, gitmeta.TaskBranchSyncAlreadyCurrent, synced.Status)
+			assert.Equal(t, rewritten.Commit, synced.Head)
+			assert.Equal(t, rewritten.Commit, strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD")))
+
+			// A newer destination must not fall through to a merge on the
+			// separately retained local branch; that needs explicit reconciliation.
+			runGit(t, dir, "push", "origin", selected.Commit+":refs/heads/main")
+			_, err = gitmeta.InspectTaskBranchConflictCheckpoint(ctx, syncOptions)
+			require.ErrorContains(t, err, "content-changing synchronization")
+			assert.Equal(t, rewritten.Commit, strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD")))
+			assert.Empty(t, strings.TrimSpace(runGit(t, dir, "status", "--porcelain=v1")))
+			remote, err = gitmeta.PublishedRevision(ctx, dir, branch)
+			require.NoError(t, err)
+			assert.Equal(t, next.Commit, remote.Commit)
+
 			// A concurrent rewind after observation must not be overwritten, even
 			// when that older head is an ancestor of the authorized public commit.
 			third := update
@@ -98,6 +134,12 @@ func TestIntegrationAdapterContractPublicHistorySquashesThenAppendsRewrittenInpu
 			require.Error(t, gitmeta.PushPublicCommit(ctx, third, pending, next.Commit))
 			assert.Equal(t, public.Commit, strings.TrimSpace(runGit(t, origin, "rev-parse", "refs/heads/task")))
 			assert.Equal(t, rewritten.Commit, strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD")))
+			_, err = gitmeta.InspectTaskBranchConflictCheckpoint(ctx, syncOptions)
+			require.ErrorContains(t, err, "differs from retained publication")
+			assert.Equal(t, rewritten.Commit, strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD")))
+			assert.Empty(t, strings.TrimSpace(runGit(t, dir, "status", "--porcelain=v1")))
+			assert.Equal(t, public.Commit, strings.TrimSpace(runGit(t, origin, "rev-parse", "refs/heads/task")), "unexpected remote state must remain untouched")
+
 		})
 	}
 }

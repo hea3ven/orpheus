@@ -173,7 +173,10 @@ func (g *memoryPublicationGit) SyncTaskBranchWithDefault(_ context.Context, opts
 	if g.targets[opts.Worktree].branch != opts.Branch || g.remote[opts.Branch] == "" {
 		return gitmeta.TaskBranchSyncResult{}, errors.New("sync requires published branch")
 	}
-	return gitmeta.TaskBranchSyncResult{Status: gitmeta.TaskBranchSyncAlreadyCurrent, Branch: opts.Branch, DefaultBranch: opts.DefaultBranch, Head: g.remote[opts.Branch]}, nil
+	if opts.Publication == nil || opts.Publication.Input.Commit != g.head || opts.Publication.Public.Commit != g.remote[opts.Branch] || opts.Publication.Input.Tree != opts.Publication.Public.Tree {
+		return gitmeta.TaskBranchSyncResult{}, errors.New("sync requires retained local/public mapping")
+	}
+	return gitmeta.TaskBranchSyncResult{Status: gitmeta.TaskBranchSyncAlreadyCurrent, Branch: opts.Branch, DefaultBranch: opts.DefaultBranch, Head: g.head}, nil
 }
 func (g *memoryPublicationGit) BeginTaskBranchConflictResolution(ctx context.Context, opts gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchSyncResult, error) {
 	return g.SyncTaskBranchWithDefault(ctx, opts)

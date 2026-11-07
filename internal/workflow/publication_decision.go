@@ -143,6 +143,13 @@ func (s Controller) refreshPublicationSnapshot(ctx context.Context, source task.
 	if reflect.DeepEqual(plan, p.Plan) {
 		return false, nil
 	}
+	reconciled, err := s.Delivery.reconcilePublicOperation(ctx, s.publicationBoundary(), source.Repository, item, w, p)
+	if err != nil {
+		return false, err
+	}
+	if reconciled {
+		plan.Target = priorPublicTarget(w)
+	}
 	w.Phases = append(w.Phases, &work.PublicationPhase{Plan: plan})
 	return true, nil
 }
@@ -180,6 +187,9 @@ func (s Controller) reviewChangedRequirements(ctx context.Context, source task.R
 		return false, err
 	}
 	scope.Destination = &destination
+	if _, err := s.Delivery.reconcilePublicOperation(ctx, s.publicationBoundary(), source.Repository, item, w, p); err != nil {
+		return false, err
+	}
 	w.ReviewContracts = append(w.ReviewContracts, reviewContract(pipeline))
 	w.Phases = append(w.Phases, &work.ReviewPhase{Contract: len(w.ReviewContracts) - 1, Scope: scope, StartedAt: time.Now().UTC()})
 	return true, nil
