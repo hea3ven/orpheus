@@ -140,7 +140,8 @@ func projectExecution(w *work.Workflow, e *work.AgentExecution, purpose AgentExe
 	case *work.FreshExecution:
 		view.Launch = &AgentLaunch{Mode: AgentLaunchFresh, FallbackReason: launch.FallbackReason}
 	case *work.ResumedExecution:
-		view.Launch = &AgentLaunch{Mode: AgentLaunchResumed, SourceRunAttempt: phaseNumber(w, launch.From.Phase, false), UsageBaseline: projectUsage(launch.UsageBaseline), CostBaseline: launch.CostBaselineMicroUSD}
+		sourceAddress := work.AttemptRef{RepositoryID: address.RepositoryID, TaskID: address.TaskID, Workflow: address.Workflow, Phase: launch.From.Phase, Step: cloneIntPointer(launch.From.Step), BranchSync: cloneIntPointer(launch.From.BranchSync)}
+		view.Launch = &AgentLaunch{SourceExecution: &sourceAddress, Mode: AgentLaunchResumed, SourceRunAttempt: phaseNumber(w, launch.From.Phase, false), UsageBaseline: projectUsage(launch.UsageBaseline), CostBaseline: launch.CostBaselineMicroUSD}
 		if source, err := w.Execution(launch.From); err == nil && source.Session != nil {
 			view.Launch.SourceSession = &AgentSession{ID: source.Session.ID, LogPath: source.Session.LogPath}
 		}

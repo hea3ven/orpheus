@@ -435,7 +435,7 @@ func testDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(
 	must.NoError(err)
 
 	secondLaunch := &taskstate.AgentLaunch{
-		Mode: taskstate.AgentLaunchResumed, SourceRunAttempt: first.Attempt, SourceSession: &session,
+		Mode: taskstate.AgentLaunchResumed, SourceRunAttempt: first.Attempt, SourceExecution: &first.Address, SourceSession: &session,
 		UsageBaseline: &firstUsage, CostBaseline: &firstCost,
 	}
 	secondOpts := doctorPiStartOptions(repoDir, sessionName)
@@ -454,7 +454,7 @@ func testDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(
 		ReasoningOutputTokens: 7, TotalTokens: 198,
 	}
 	thirdLaunch := &taskstate.AgentLaunch{
-		Mode: taskstate.AgentLaunchResumed, SourceRunAttempt: first.Attempt, SourceSession: &session,
+		Mode: taskstate.AgentLaunchResumed, SourceRunAttempt: first.Attempt, SourceExecution: &first.Address, SourceSession: &session,
 		UsageBaseline: &thirdBaseline, CostBaseline: costBaseline,
 	}
 	thirdOpts := doctorPiStartOptions(repoDir, sessionName)

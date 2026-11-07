@@ -79,9 +79,10 @@ func (s Controller) Advance(ctx context.Context, opts AdvanceOptions) (AdvanceRe
 	}
 	result.Inspection = prepared.Inspection
 	if reviewStartupStopsForInspection(prepared.ReviewInspection) {
-		outcome := reviewLifecycleOutcome(ReviewAttemptContext{ReviewContext: base}, prepared.ReviewInspection)
+		latest, _ := taskstate.LatestReview(prepared.State)
+		outcome := reviewLifecycleOutcome(ReviewAttemptContext{ReviewContext: base, Review: latest}, prepared.ReviewInspection)
 		result.Review = &outcome
-		return result, nil
+		return s.inspectAdvanceResult(ctx, opts.TaskID, result, nil)
 	}
 	invocation := advanceInvocation{options: opts, base: base, agentName: strings.TrimSpace(opts.AgentName), pipelineName: strings.TrimSpace(opts.PipelineName)}
 	first := true
@@ -105,14 +106,21 @@ func (s Controller) Advance(ctx context.Context, opts AdvanceOptions) (AdvanceRe
 		first = false
 		stop, err := s.advancePhase(ctx, &invocation, view, route, &result)
 		if err != nil || stop {
-			current, viewErr := s.Inspect(ctx, opts.TaskID)
-			result.View = current
-			if err == nil {
-				err = viewErr
-			}
-			return result, err
+			return s.inspectAdvanceResult(ctx, opts.TaskID, result, err)
 		}
 	}
+}
+
+func (s Controller) inspectAdvanceResult(ctx context.Context, taskID string, result AdvanceResult, advanceErr error) (AdvanceResult, error) {
+	view, inspectErr := s.Inspect(ctx, taskID)
+	result.View = view
+	if inspectErr == nil {
+		result.Route = view.Next
+	}
+	if advanceErr != nil {
+		return result, advanceErr
+	}
+	return result, inspectErr
 }
 
 func (s Controller) selectWork(ctx context.Context, base ReviewContext, choices *AdvanceOptions) (taskstate.TaskState, TaskRunRoute, error) {

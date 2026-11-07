@@ -444,6 +444,33 @@ orpheus doctor
 orpheus doctor --fix
 ```
 
+`orpheus task show workflow <task-id>` inspects execution recovery without
+reconciling state, launching an agent, or capturing output. Its JSON form includes
+`Next.Recovery.Condition` and `Reason`; text shows the reason and safe next action.
+
+- **Live** means the supervisor or child was observed running. Wait for it to
+  finish before continuing.
+- **Unverifiable** means process evidence is missing or the probe failed. This
+  is uncertainty, not proof of activity. Inspect `orpheus doctor` and verify the
+  supervisor and child have stopped before retrying. Replacement agents and
+  revision capture remain blocked while execution is uncertain.
+- **Recoverable** means the recorded process observations permit interruption
+  recovery. `task run` reconciles the attempt and uses the existing retry/repair
+  policy, preserving handoffs, findings, process history, and usage. For interrupted
+  review, inspect the checkout and audit findings before starting fresh review.
+
+A completion handoff does not establish process success. If that attempt's
+successful exit and handoff are both already persisted, `task run` captures or
+verifies its output and enters review without launching another implementer.
+Failed or interrupted attempts retain their handoff but still need continuation;
+repository-root retries preserve their existing files. Repairs may resume only an
+eligible session from the current workflow, retaining its exact source execution
+and cumulative usage baseline. Missing usage remains unknown, not zero.
+
+Recovery is conservative if Orpheus is killed before PID persistence or before
+an observed exit is saved: some work may repeat. Do not infer success from absent
+processes. Coordinate commands for one task; concurrent controllers are unsupported.
+
 Plain doctor diagnoses local state without changing it. `--fix` attempts safe
 repairs, including interrupted executions, recoverable usage, and closed-task
 worktree cleanup. Use `--verbose` for diagnostics on stderr.

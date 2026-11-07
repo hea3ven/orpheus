@@ -12,6 +12,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -83,16 +84,42 @@ func TestPrepareFollowUpResumeSelectsLatestUsableCompatibleRun(t *testing.T) {
 		failed, incomplete, reviewer, syncConflict,
 	)
 
-	_, launch := agent.PrepareFollowUpResume(agent.FollowUpResumeOptions{
-		Command:      resumeTestCommand("pi", false),
-		State:        state,
-		ExecutionDir: workdir,
-	})
-
-	require.NotNil(t, launch)
-	assert.Equal(t, taskstate.AgentLaunchResumed, launch.Mode)
-	assert.Equal(t, 3, launch.SourceRunAttempt)
-	assert.Equal(t, "latest", launch.SourceSession.ID)
+	state.CurrentWorkflow = 1
+	for i := range state.Runs {
+		state.Runs[i].Address = work.AttemptRef{RepositoryID: "repo", TaskID: "task", Workflow: 1, Phase: i*2 + 1}
+	}
+	// A task-wide reverse scan would choose this compatible historical session.
+	// Its display attempt also matches the correct source in the current workflow.
+	historical := resumeTestRun(3, "implementer", "pi", older)
+	historical.Address = work.AttemptRef{RepositoryID: "repo", TaskID: "task", Workflow: 0, Phase: 7}
+	state.Runs = append(state.Runs, historical)
+	for _, currentCompatible := range []bool{true, false} {
+		t.Run(map[bool]string{true: "current source", false: "historical source only"}[currentCompatible], func(t *testing.T) {
+			candidate := state
+			candidate.Runs = append([]taskstate.RunAttempt(nil), state.Runs...)
+			if !currentCompatible {
+				for i := range candidate.Runs {
+					if candidate.Runs[i].Address.Workflow == 1 {
+						candidate.Runs[i].Execution.Profile = "other-profile"
+					}
+				}
+			}
+			_, launch := agent.PrepareFollowUpResume(agent.FollowUpResumeOptions{
+				Command: resumeTestCommand("pi", false), State: candidate, ExecutionDir: workdir,
+			})
+			require.NotNil(t, launch)
+			if !currentCompatible {
+				assert.Equal(t, taskstate.AgentLaunchFresh, launch.Mode)
+				assert.Nil(t, launch.SourceExecution)
+				assert.Contains(t, launch.FallbackReason, "no successful completed implementation session")
+				return
+			}
+			assert.Equal(t, taskstate.AgentLaunchResumed, launch.Mode)
+			assert.Equal(t, 3, launch.SourceRunAttempt)
+			assert.Equal(t, &work.AttemptRef{RepositoryID: "repo", TaskID: "task", Workflow: 1, Phase: 5}, launch.SourceExecution)
+			assert.Equal(t, "latest", launch.SourceSession.ID)
+		})
+	}
 }
 
 func TestPrepareFollowUpResumeSelectsSuccessfulResumedRunAfterCaptureReadFailure(t *testing.T) {

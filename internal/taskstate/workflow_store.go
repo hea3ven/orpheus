@@ -240,16 +240,16 @@ func workExecutionLaunch(snapshot *work.State, launch *AgentLaunch) (work.Execut
 	if launch.Mode != AgentLaunchResumed {
 		return nil, errors.New("unknown execution launch mode")
 	}
-	view, err := Project(*snapshot)
-	if err != nil {
-		return nil, err
+
+	source := launch.SourceExecution
+	if source == nil || source.RepositoryID != snapshot.RepositoryID || source.TaskID != snapshot.TaskID || source.Workflow < 0 || source.Workflow != len(snapshot.Workflows)-1 || source.Step != nil || source.BranchSync != nil {
+		return nil, errors.New("resumed source execution does not belong to the owning workflow")
 	}
-	for _, source := range view.Runs {
-		if source.Address.Workflow == view.CurrentWorkflow && source.Attempt == launch.SourceRunAttempt {
-			return &work.ResumedExecution{From: work.ExecutionRef{Phase: source.Address.Phase}, UsageBaseline: workUsage(launch.UsageBaseline), CostBaselineMicroUSD: launch.CostBaseline}, nil
-		}
+	ref := work.ExecutionRef{Phase: source.Phase}
+	if _, err := snapshot.Workflows[source.Workflow].Execution(ref); err != nil {
+		return nil, fmt.Errorf("resumed source execution: %w", err)
 	}
-	return nil, errors.New("resumed source execution does not belong to the owning workflow")
+	return &work.ResumedExecution{From: ref, UsageBaseline: workUsage(launch.UsageBaseline), CostBaselineMicroUSD: launch.CostBaseline}, nil
 }
 
 // RecordRunUsageAt permits supplemental observations on an exact historical

@@ -4,6 +4,7 @@ package cli_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/cli"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -47,6 +49,23 @@ func TestIntegrationWorkflowReviewProcessRecoveryKeepsFindingsForAudit(t *testin
 			// Recovery must run even when replacement configuration is invalid.
 			fixture.setConfig("reviews", map[string]any{"max_autonomous_review_attempts": 0})
 
+			before, beforeTask := fixture.loadFinalTask("op-recovery")
+			inspection, _ := fixture.run("", "task", "show", "workflow", "op-recovery", "--json")
+			var view workflow.View
+			require.NoError(t, json.Unmarshal([]byte(inspection), &view))
+			require.NotNil(t, view.Next.Recovery)
+			condition := map[agentexec.ProcessLiveness]workflow.AttachedExecutionCondition{agentexec.ProcessAbsent: workflow.AttachedExecutionRecoverable, agentexec.ProcessLive: workflow.AttachedExecutionLive, agentexec.ProcessUnknown: workflow.AttachedExecutionUnverifiable}[test.liveness]
+			assert.Equal(t, condition, view.Next.Recovery.Condition)
+			assert.NotEmpty(t, view.Next.Recovery.Reason)
+			assert.Equal(t, workflow.TaskRunActionReviewActive, view.Next.Action)
+			if condition == workflow.AttachedExecutionUnverifiable {
+				assert.Contains(t, view.Next.Advice, "is unverifiable")
+				assert.Contains(t, view.Next.Advice, "orpheus doctor")
+				assert.NotContains(t, view.Next.Advice, "wait for it to finish")
+			}
+			preserved, preservedTask := fixture.loadFinalTask("op-recovery")
+			assert.Equal(t, before, preserved)
+			assert.Equal(t, beforeTask, preservedTask)
 			stdout, stderr := fixture.run("", "task", "run", "op-recovery")
 
 			assert.Contains(t, stdout+stderr, test.guidance)
