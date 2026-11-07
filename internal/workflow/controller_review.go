@@ -145,7 +145,7 @@ func (s Controller) preparePublication(ctx context.Context, current ReviewAttemp
 	if err != nil {
 		return err
 	}
-	var target work.PublicationTarget = &work.PullRequestTarget{}
+	var target work.PublicationTarget = priorPublicTarget(snapshot.Work.ActiveWorkflow())
 	flow, err := s.effectiveIntegrationFlow(current)
 	if err != nil {
 		return err
@@ -155,7 +155,7 @@ func (s Controller) preparePublication(ctx context.Context, current ReviewAttemp
 	}
 	return state.WithGlobalMutationLockLogger(ctx, s.Paths, "reserve publication", s.Logger, func() error {
 		w := snapshot.Work.Workflows[current.Review.Address.Workflow]
-		plan := work.PublicationPlan{Review: work.ReviewRef{Phase: current.Review.Address.Phase}, Target: target, Content: rendered.Title + "\n\n" + rendered.Body}
+		plan := work.PublicationPlan{FeatureCompletion: featureCompletionRef(&w), Review: work.ReviewRef{Phase: current.Review.Address.Phase}, Target: target, Content: rendered.Title + "\n\n" + rendered.Body}
 		owner := current.Review.Address
 		owner.Phase, owner.Step = len(w.Phases), nil
 		if err := s.observePublicationPlan(ctx, &w, owner, &plan, nil); err != nil {
@@ -240,4 +240,14 @@ func reviewContract(pipeline review.Pipeline) work.ReviewContract {
 		contract.Slots = append(contract.Slots, work.ReviewSlot{Kind: work.ReviewStepKind(step.Kind), ConfigKey: step.Name})
 	}
 	return contract
+}
+
+func featureCompletionRef(w *work.Workflow) *work.OutputRef {
+	feature := w.FeatureCompletion()
+	for i, phase := range w.Phases {
+		if p, ok := phase.(*work.ImplementationPhase); ok && feature != nil && p.Completion == feature {
+			return &work.OutputRef{Phase: i}
+		}
+	}
+	return nil
 }

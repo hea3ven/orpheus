@@ -132,7 +132,7 @@ func publicationOwner(w *work.Workflow) (int, error) {
 
 func (s Controller) applyDeliveryPhase(ctx context.Context, store WorkStore, boundary FinalizationGit, source task.RepositorySource, item task.Task, backend FinalizationBackend, snapshot *work.State, selected committedPublication) (FinalizationResult, *TaskRunRoute, error) {
 	delivery := s.Delivery
-	result := FinalizationResult{Repository: source.Repository, Task: item, Branch: selected.prepared.TaskBranch}
+	result := FinalizationResult{Repository: source.Repository, Task: item, Branch: selected.prepared.TaskBranch, InputCommit: selected.output.Commit}
 	var next *TaskRunRoute
 	var err error
 	if err := s.reportSnapshot(item, *snapshot, true); err != nil {

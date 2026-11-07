@@ -382,8 +382,8 @@ func (f *reviewWorkflowFixture) repairExitsWithoutCompletion() {
 
 type memoryReviewPR struct{ created *pullrequest.CreateRequest }
 
-func (p *memoryReviewPR) FindOpenByBranch(_ context.Context, req pullrequest.FindOpenByBranchRequest) (pullrequest.PullRequest, bool, error) {
-	if p.created != nil && p.created.RepositoryPath == req.RepositoryPath && p.created.HeadBranch == req.HeadBranch && p.created.BaseBranch == req.BaseBranch {
+func (p *memoryReviewPR) FindByBranch(_ context.Context, req pullrequest.FindByBranchRequest) (pullrequest.PullRequest, bool, error) {
+	if p.created != nil && p.created.RepositoryPath == req.RepositoryPath && p.created.HeadBranch == req.HeadBranch {
 		return pullrequest.PullRequest{URL: "https://github.test/org/alpha/pull/2"}, true, nil
 	}
 	return pullrequest.PullRequest{}, false, nil
@@ -569,6 +569,6 @@ func (g *memoryReviewCandidate) ObservePublicationInput(ctx context.Context, req
 	return observed, err
 }
 
-func (g *memoryReviewCandidate) PushPublicationInput(context.Context, string, string, gitmeta.Revision) error {
-	return errors.New("unexpected publication before explicit authorization")
+func (*memoryReviewPR) Update(context.Context, pullrequest.UpdateRequest) error {
+	return errors.New("unexpected PR update")
 }

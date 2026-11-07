@@ -94,18 +94,24 @@ func TestIntegrationAdapterContractAuthorizedPushPinsSourceDespiteLocalRefChange
 	commitFile(t, repo, "later.txt", "not authorized yet\n", "later operator input")
 	later := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
 	runGit(t, repo, "reset", "--hard", selected.Commit)
+	req := orpheusgit.PublicCommitRequest{Directory: repo, Branch: branch, Parent: baseline, Ref: "refs/orpheus/publication/pin", Message: "feat: pinned public output\n\nBody", Input: selected}
+	public, err := orpheusgit.PackagePublicCommit(context.Background(), req)
+	require.NoError(t, err)
 	hooks := testutil.CanonicalTempDir(t)
 	runGit(t, repo, "config", "core.hooksPath", hooks)
 	require.NoError(t, testguard.WriteExecutable(filepath.Join(hooks, "pre-push"), []byte("#!/bin/sh\ngit update-ref refs/heads/"+branch+" "+later+"\n")))
 
-	require.NoError(t, orpheusgit.PushPublicationInput(context.Background(), repo, branch, selected))
-	assert.Equal(t, selected.Commit, strings.TrimSpace(runGit(t, origin, "rev-parse", "refs/heads/"+branch)), "the hook must not substitute newer code for the authorized source")
+	require.NoError(t, orpheusgit.PushPublicCommit(context.Background(), req, public, ""))
+	assert.Equal(t, public.Commit, strings.TrimSpace(runGit(t, origin, "rev-parse", "refs/heads/"+branch)), "the hook must not substitute newer code for the authorized source")
 	assert.Equal(t, later, strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD")), "normal hooks ran without being bypassed")
-	assert.Equal(t, "origin/"+branch, strings.TrimSpace(runGit(t, repo, "rev-parse", "--abbrev-ref", "@{upstream}")))
 	runGit(t, repo, "reset", "--hard", baseline)
 	older := orpheusgit.Revision{Commit: baseline, Tree: strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD^{tree}")), RetainedRef: "refs/orpheus/older-input"}
 	runGit(t, repo, "update-ref", older.RetainedRef, older.Commit)
-	err := orpheusgit.PushPublicationInput(context.Background(), repo, branch, older)
-	require.ErrorContains(t, err, "origin")
-	assert.Equal(t, selected.Commit, strings.TrimSpace(runGit(t, origin, "rev-parse", "refs/heads/"+branch)), "proceed never authorizes force-pushing over unexpected remote history")
+	req.Input = older
+	req.Ref = "refs/orpheus/publication/older"
+	stale, err := orpheusgit.PackagePublicCommit(context.Background(), req)
+	require.NoError(t, err)
+	err = orpheusgit.PushPublicCommit(context.Background(), req, stale, "")
+	require.ErrorContains(t, err, "unexpected public head")
+	assert.Equal(t, public.Commit, strings.TrimSpace(runGit(t, origin, "rev-parse", "refs/heads/"+branch)), "proceed never authorizes force-pushing over unexpected remote history")
 }

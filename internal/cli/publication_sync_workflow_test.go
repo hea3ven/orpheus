@@ -58,20 +58,21 @@ func TestIntegrationWorkflowWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing
 	for _, unwanted := range []string{"Created by Orpheus.", "Ready for sync", item.ID + ":"} {
 		assert.NotContains(t, request.Body, unwanted)
 	}
+	observations := f.pr.statusReads
 	stdout, stderr = f.run("", "status")
 	assert.Empty(t, stderr)
 	for _, want := range []string{"Reviewing", item.ID, item.Title, f.pr.url} {
 		assert.Contains(t, stdout, want)
 	}
 	assert.NotContains(t, stdout, "needs PR")
-	assert.Equal(t, 1, f.pr.statusReads, "read-only status must not add another provider observation")
+	assert.Equal(t, observations, f.pr.statusReads, "read-only status must not add another provider observation")
 	f.pr.state = pullrequest.StateOpen
 
 	stdout, stderr = f.run("", "task", "sync", item.ID)
 
 	assert.Contains(t, stderr, "TASK")
 	assert.Contains(t, stdout, "PR "+f.pr.url+" is still open for review")
-	assert.Equal(t, 2, f.pr.statusReads)
+	assert.Equal(t, observations+1, f.pr.statusReads)
 	assert.Len(t, f.pr.created, 1)
 	f.assertPublishedPR(item.ID)
 	f.pr.state = pullrequest.StateMerged
@@ -143,10 +144,11 @@ func TestIntegrationWorkflowRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing
 	assert.False(t, f.git.hasCandidateChanges)
 	assert.Equal(t, branch, f.git.targets[taskWorkflowRepoRoot].branch)
 	f.pr.state = pullrequest.StateOpen
+	observations := f.pr.statusReads
 	stdout, stderr = f.run("", "task", "sync", item.ID)
 	assert.Contains(t, stderr, "TASK")
 	assert.Contains(t, stdout, "PR "+f.pr.url+" is still open for review")
-	assert.Equal(t, 2, f.pr.statusReads)
+	assert.Equal(t, observations+1, f.pr.statusReads)
 	f.pr.state = pullrequest.StateMerged
 
 	stdout, stderr = f.run("", "task", "sync", item.ID)
@@ -168,10 +170,10 @@ func TestIntegrationWorkflowRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing
 }
 
 func (g *memoryPublicationGit) SyncTaskBranchWithDefault(_ context.Context, opts gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchSyncResult, error) {
-	if g.targets[opts.Worktree].branch != opts.Branch || g.remote[opts.Branch] != g.head {
+	if g.targets[opts.Worktree].branch != opts.Branch || g.remote[opts.Branch] == "" {
 		return gitmeta.TaskBranchSyncResult{}, errors.New("sync requires published branch")
 	}
-	return gitmeta.TaskBranchSyncResult{Status: gitmeta.TaskBranchSyncAlreadyCurrent, Branch: opts.Branch, DefaultBranch: opts.DefaultBranch, Head: g.head}, nil
+	return gitmeta.TaskBranchSyncResult{Status: gitmeta.TaskBranchSyncAlreadyCurrent, Branch: opts.Branch, DefaultBranch: opts.DefaultBranch, Head: g.remote[opts.Branch]}, nil
 }
 func (g *memoryPublicationGit) BeginTaskBranchConflictResolution(ctx context.Context, opts gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchSyncResult, error) {
 	return g.SyncTaskBranchWithDefault(ctx, opts)
@@ -231,5 +233,5 @@ func (g *memoryPublicationGit) PushCommittedTaskBranchConflictResolution(ctx con
 	if err := g.PushTaskBranch(ctx, opts.Worktree, opts.Branch); err != nil {
 		return gitmeta.TaskBranchSyncResult{}, err
 	}
-	return gitmeta.TaskBranchSyncResult{Status: gitmeta.TaskBranchSyncUpdated, Branch: opts.Branch, DefaultBranch: opts.DefaultBranch, Head: g.head}, nil
+	return gitmeta.TaskBranchSyncResult{Status: gitmeta.TaskBranchSyncUpdated, Branch: opts.Branch, DefaultBranch: opts.DefaultBranch, Head: g.remote[opts.Branch]}, nil
 }

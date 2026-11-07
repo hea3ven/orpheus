@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/cli"
+	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/review"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -82,6 +83,18 @@ func TestIntegrationWorkflowPublicationPlanEditsAndInterruptedConsentNeverDelive
 	assert.Len(t, f.pr.created, 1)
 	assert.Empty(t, f.tasks.closed)
 	f.pr.statusError = nil
+	for _, lifecycle := range []pullrequest.State{pullrequest.StateClosed, pullrequest.StateMerged} {
+		f.pr.state = lifecycle
+		_, _, err = f.runError("", "task", "run", "op-plan")
+		require.ErrorContains(t, err, "reconcile lifecycle")
+		assert.Len(t, f.pr.created, 1, "a recovered closed/merged PR must not produce duplicate creation")
+	}
+	f.pr.state = pullrequest.StateOpen
+	f.pr.existing.BaseBranch = "retargeted"
+	_, _, err = f.runError("", "task", "run", "op-plan")
+	require.ErrorContains(t, err, "destination, branch or public head changed")
+	assert.Len(t, f.pr.created, 1, "retargeted PR is not absence")
+	f.pr.existing.BaseBranch = "main"
 	f.setConfig("publication", map[string]any{"integration_flow": "direct-merge", "title_template": "Changed {{summary}}"})
 	f.pipelines("new-policy", map[string][]map[string]any{"new-policy": {{"kind": "manual", "name": "new-earlier-requirement"}}})
 	f.options.Dependencies.Terminal.InputIsTerminal = func(io.Reader) bool { return false }
@@ -278,10 +291,14 @@ func TestIntegrationWorkflowPublicationOperatorInputIsDistinctFromReviewAndRequi
 					require.NotNil(t, plan.Consent)
 					assert.Equal(t, actual, plan.Plan.Input.Code.Commit)
 					assert.Equal(t, "output-1", final.Runs[0].Completion.Commit)
-					assert.Equal(t, actual, taskstate.FinalizationFacts(final).Commit)
+					if flow == "pull-request" {
+						assert.Equal(t, "public-"+actual, taskstate.FinalizationFacts(final).Commit)
+					} else {
+						assert.Equal(t, actual, taskstate.FinalizationFacts(final).Commit)
+					}
 					if flow == "pull-request" {
 						assert.Equal(t, taskmodel.StatusInProgress, item.Status)
-						assert.Equal(t, actual, f.publication.remote[branch])
+						assert.Equal(t, "public-"+actual, f.publication.remote[branch])
 						assert.Equal(t, "main", f.pr.created[0].BaseBranch)
 						assert.Equal(t, f.candidate.trees[actual], plan.Delivery.(*work.PullRequestDelivery).Tree)
 					} else {
@@ -320,7 +337,7 @@ func TestIntegrationWorkflowPublicationInputChangingBetweenConsentAndDeliveryNee
 	assert.Equal(t, old, retained.Work.Workflows[0].Phases[len(accepted.Work.Workflows[0].Phases)-1])
 	f.run("p\n", "task", "run", "op-race")
 	f.assertPublishedPR("op-race")
-	assert.Equal(t, "operator-race", f.publication.remote[branch])
+	assert.Equal(t, "public-operator-race", f.publication.remote[branch])
 	final, _ := f.loadFinalTask("op-race")
 	assert.Len(t, final.Reviews, 1)
 	assert.Len(t, final.Runs, 1)
@@ -337,4 +354,142 @@ func (w *publicationConsentMutation) Write(p []byte) (int, error) {
 		w.mutate = nil
 	}
 	return w.Writer.Write(p)
+}
+
+func TestIntegrationWorkflowReviewedPRUpdateRetainsPublicAndLocalRevisionMappings(t *testing.T) {
+	for _, inputKind := range []string{"reviewed", "amended", "rewritten"} {
+		t.Run(inputKind, func(t *testing.T) {
+			f := newFeatureFinalizationFixture(t, "op-update", false)
+			f.run("", "task", "done", "op-update")
+			initial, _ := f.loadFinalTask("op-update")
+			first := initial.Work.Workflows[0].Phases[3].(*work.PublicationPhase)
+			prior := *first.Delivery.(*work.PullRequestDelivery)
+			branch, dir := f.expectedTarget("op-update")
+			f.candidate.contents = "new reviewed output\n"
+			// Arrange a subsequent controller handoff; routing external findings into
+			// implementation is outside publication's scope. Real capture/review follows.
+			f.completion("op-update", branch, dir, "fix: narrower repair rationale", "Do not replace the feature narrative.", taskstate.RunStatusSucceeded)
+			f.run("a\nb\n", "task", "run", "op-update")
+			pending := f.inspectWorkflow("op-update")
+			assert.Equal(t, "update-pr", pending.Publication.Operation)
+			selectedPlan, _ := f.loadFinalTask("op-update")
+			assert.Equal(t, &work.OutputRef{Phase: 1}, selectedPlan.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase).Plan.FeatureCompletion)
+			assert.Equal(t, prior.Head, pending.Publication.ExpectedHead)
+			assert.Equal(t, prior.PublicCommit, pending.Published.PublicCommit)
+			assert.Contains(t, pending.Publication.Content, "Ready for PR")
+			assert.NotContains(t, strings.Split(pending.Publication.Content, "\n\n")[0], "narrower repair")
+			assert.Equal(t, "output-2", pending.Revision.Code.Commit)
+			before, _ := f.loadFinalTask("op-update")
+			assert.Empty(t, taskstate.FinalizationFacts(before).Commit, "older delivery does not mark newer output pushed")
+			if inputKind != "reviewed" {
+				content := "rewritten operator output\n"
+				if inputKind == "amended" {
+					content = f.candidate.contents
+				}
+				selectOperatorCommit(f, dir, "operator-"+inputKind, content, "amended or rewritten history")
+				f.run("b\n", "task", "run", "op-update")
+			}
+			selected := f.inspectWorkflow("op-update")
+			actual := selected.Publication.Input.Code
+			f.publication.losePush = true
+			_, _, err := f.runError("p\n", "task", "run", "op-update")
+			require.ErrorContains(t, err, "lost push observation")
+			interrupted, _ := f.loadFinalTask("op-update")
+			op := interrupted.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+			require.NotNil(t, op.Operation.Public)
+			assert.Nil(t, op.Delivery)
+			grant := *op.Consent
+			assert.Equal(t, prior.Head, op.Operation.Parent)
+			assert.Equal(t, "public-"+actual.Commit, f.publication.remote[branch])
+			assert.Len(t, f.pr.created, 1)
+			f.publication.losePush = false
+			f.publication.observeError = nil
+			f.candidate.destinationHeads = map[string]string{"main": "destination-advanced-after-push"}
+			f.run("", "task", "run", "op-update")
+			final, _ := f.loadFinalTask("op-update")
+			delivered := final.Work.Workflows[0].Phases[selected.Publication.Plan.Phase].(*work.PublicationPhase)
+			assert.Equal(t, grant, *delivered.Consent, "unchanged interrupted delivery retains consent despite destination advancement")
+			assert.Equal(t, first, final.Work.Workflows[0].Phases[3], "earlier publication remains inspectable")
+			update := delivered.Delivery.(*work.PullRequestDelivery)
+			assert.Equal(t, prior.PullRequest, update.PullRequest)
+			assert.Equal(t, prior.Head, update.PreviousHead)
+			assert.Equal(t, "public-"+actual.Commit, update.PublicCommit)
+			assert.Equal(t, actual.Tree, update.Tree)
+			assert.Equal(t, "output-2", final.Runs[1].Completion.Commit)
+			assert.Equal(t, before.Reviews, final.Reviews, "operator input is never reported as reviewed")
+			assert.Len(t, f.pr.created, 1)
+			assert.Equal(t, "Ready for PR", f.pr.existing.Title)
+			if inputKind != "reviewed" {
+				assert.Contains(t, f.pr.existing.Body, "Publication review gap")
+				assert.Contains(t, f.pr.existing.Body, actual.Commit)
+			}
+		})
+	}
+}
+
+func TestIntegrationWorkflowPRUpdateRefusesRemoteAndLifecycleChangesBeforePackaging(t *testing.T) {
+	for _, change := range []string{"remote head", "merged", "closed", "destination"} {
+		t.Run(change, func(t *testing.T) {
+			f := newFeatureFinalizationFixture(t, "op-safe", false)
+			f.run("", "task", "done", "op-safe")
+			branch, dir := f.expectedTarget("op-safe")
+			f.candidate.contents = "reviewed update\n"
+			f.completion("op-safe", branch, dir, "fix: update", "Update existing PR.", taskstate.RunStatusSucceeded)
+			f.run("a\nb\n", "task", "run", "op-safe")
+			prior := f.publication.remote[branch]
+			switch change {
+			case "remote head":
+				f.publication.remote[branch] = "unexpected-remote"
+			case "merged":
+				f.pr.state = "merged"
+			case "closed":
+				f.pr.state = "closed"
+			case "destination":
+				f.pr.existing.BaseBranch = "other"
+			}
+			_, _, err := f.runError("p\n", "task", "run", "op-safe")
+			require.ErrorContains(t, err, "reconcile")
+			saved, _ := f.loadFinalTask("op-safe")
+			p := saved.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+			assert.Nil(t, p.Delivery)
+			assert.Nil(t, p.Operation.Public, "provider and remote checks precede commit effects")
+			assert.Len(t, f.publication.packages, 1, "only the initial public commit exists")
+			assert.Len(t, f.pr.created, 1)
+			assert.Empty(t, f.tasks.closed)
+			if change == "remote head" {
+				assert.Equal(t, "unexpected-remote", f.publication.remote[branch])
+			} else {
+				assert.Equal(t, prior, f.publication.remote[branch])
+			}
+		})
+	}
+}
+
+func TestIntegrationWorkflowPackagingTreeChangesRequireActualInputAndRenewedConsent(t *testing.T) {
+	f := newFeatureFinalizationFixture(t, "op-hook", false)
+	f.publication.packageTree = "hook-tree"
+	_, _, err := f.runError("", "task", "done", "op-hook")
+	require.ErrorContains(t, err, "packaging changed authorized tree")
+	saved, _ := f.loadFinalTask("op-hook")
+	p := saved.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+	assert.Equal(t, "hook-tree", p.Operation.Public.Tree)
+	assert.Nil(t, p.Delivery)
+	assert.Empty(t, f.publication.remote)
+	assert.Empty(t, f.pr.created)
+	grant := *p.Consent
+	// The adapter retained the hook-produced commit. An operator can select it;
+	// no automatic checkout rewrite or fabricated review occurs.
+	_, dir := f.expectedTarget("op-hook")
+	selectOperatorCommit(f, dir, "hook-committed-input", "actual hook output\n", "amended or rewritten history")
+	f.publication.packageTree = ""
+	f.run("b\n", "task", "run", "op-hook")
+	pending := f.inspectWorkflow("op-hook")
+	require.NotNil(t, pending.Pending)
+	assert.Equal(t, "hook-committed-input", pending.Publication.Input.Code.Commit)
+	assert.Equal(t, work.InputOperator, pending.Publication.Input.Provenance)
+	f.run("p\n", "task", "run", "op-hook")
+	final, _ := f.loadFinalTask("op-hook")
+	assert.Equal(t, grant, *final.Work.Workflows[0].Phases[3].(*work.PublicationPhase).Consent)
+	assert.Len(t, final.Reviews, 1)
+	assert.Contains(t, f.pr.existing.Body, "not reported as reviewed")
 }

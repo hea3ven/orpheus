@@ -50,6 +50,7 @@ type authorizationMaterial struct {
 	RepositoryID, TaskID                            string
 	Workflow, Publication, Review, Output, Contract int
 	DeltaPhase                                      *int
+	FeatureCompletion                               *OutputRef
 	Baseline                                        CodeIdentity
 	TaskBranch                                      string
 	Requirements                                    string
@@ -117,8 +118,8 @@ func (s *State) authorizationMaterial(wi, pi int, p *PublicationPhase, c *Public
 		RepositoryID: s.RepositoryID, TaskID: s.TaskID,
 		Workflow: wi, Publication: pi, Review: p.Plan.Review.Phase,
 		Output: r.Scope.Output.Phase, Contract: r.Contract,
-		DeltaPhase: deltaPhase,
-		Baseline:   context.Baseline, TaskBranch: context.TaskBranch,
+		DeltaPhase: deltaPhase, FeatureCompletion: p.Plan.FeatureCompletion,
+		Baseline: context.Baseline, TaskBranch: context.TaskBranch,
 		Requirements: r.Scope.Requirements, Destination: &p.Plan.Destination, ReviewedDestination: r.Scope.Destination,
 		Input: p.Plan.Input, Comparison: p.Plan.Comparison, Code: output, Delta: delta, Policy: *contract,
 		Flow: flow, Target: p.Plan.Target, Content: p.Plan.Content,

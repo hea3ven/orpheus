@@ -147,6 +147,16 @@ func (g *changeGuard) phase(before, after Phase) {
 		g.same(before.Plan, next.Plan, "publication intent")
 		g.assigned(before.Consent, next.Consent, "publication authorization")
 		g.assigned(before.Delivery, next.Delivery, "observed delivery")
+		if before.Operation != nil {
+			if next.Operation == nil {
+				g.same(before.Operation, next.Operation, "publication operation")
+				break
+			}
+			old, current := *before.Operation, *next.Operation
+			old.Public, current.Public = nil, nil
+			g.same(old, current, "publication operation intent")
+			g.assigned(before.Operation.Public, next.Operation.Public, "packaged public commit")
+		}
 	case *ExternalReviewPhase:
 		g.externalReview(before, after.(*ExternalReviewPhase), true)
 	}

@@ -21,8 +21,8 @@ import (
 
 const finalizationLockOperation = "task finalization"
 
-// ErrPublicationConsentRequired is a deliberate boundary until explicit
-// publication authorization is available. Review approval is not consent.
+// ErrPublicationConsentRequired marks missing exact-plan authorization.
+// Review approval is not publication consent.
 var ErrPublicationConsentRequired = errors.New("publication awaits explicit exact-plan authorization; review approval and retained commits do not grant consent")
 
 type FinalizationBackend interface {
@@ -39,7 +39,9 @@ type FinalizationGit interface {
 	ObserveDestination(context.Context, string, string) (work.Destination, error)
 	ObservePublicationInput(context.Context, gitmeta.PublicationInputRequest) (gitmeta.PublicationInputObservation, error)
 	VerifyRevision(context.Context, string, gitmeta.CheckoutIdentity, gitmeta.Revision) error
-	PushPublicationInput(context.Context, string, string, gitmeta.Revision) error
+	ObservePublicHead(context.Context, string, string) (string, error)
+	PackagePublicCommit(context.Context, gitmeta.PublicCommitRequest) (gitmeta.Revision, error)
+	PushPublicCommit(context.Context, gitmeta.PublicCommitRequest, gitmeta.Revision, string) error
 	PublishedRevision(context.Context, string, string) (gitmeta.Revision, error)
 	DirectRevisionDelivery(context.Context, task.Repository, string, string, string, string, string, gitmeta.Revision) (gitmeta.Revision, error)
 }
@@ -55,8 +57,14 @@ func (LocalFinalizationGit) ObservePublicationInput(ctx context.Context, req git
 func (LocalFinalizationGit) VerifyRevision(ctx context.Context, dir string, identity gitmeta.CheckoutIdentity, revision gitmeta.Revision) error {
 	return gitmeta.VerifyRevision(ctx, dir, identity, revision)
 }
-func (LocalFinalizationGit) PushPublicationInput(ctx context.Context, dir, branch string, input gitmeta.Revision) error {
-	return gitmeta.PushPublicationInput(ctx, dir, branch, input)
+func (LocalFinalizationGit) ObservePublicHead(ctx context.Context, dir, branch string) (string, error) {
+	return gitmeta.ObservePublicHead(ctx, dir, branch)
+}
+func (LocalFinalizationGit) PackagePublicCommit(ctx context.Context, req gitmeta.PublicCommitRequest) (gitmeta.Revision, error) {
+	return gitmeta.PackagePublicCommit(ctx, req)
+}
+func (LocalFinalizationGit) PushPublicCommit(ctx context.Context, req gitmeta.PublicCommitRequest, public gitmeta.Revision, expected string) error {
+	return gitmeta.PushPublicCommit(ctx, req, public, expected)
 }
 func (LocalFinalizationGit) PublishedRevision(ctx context.Context, dir, branch string) (gitmeta.Revision, error) {
 	return gitmeta.PublishedRevision(ctx, dir, branch)
@@ -86,6 +94,7 @@ type FinalizationResult struct {
 	Task            task.Task
 	Finalization    taskstate.Finalization
 	Branch          string
+	InputCommit     string
 	PRURL           string
 	PRRecovered     bool
 	WorktreeCleanup *WorktreeCleanupResult
@@ -223,12 +232,10 @@ func (s FinalizationService) recordCommittedDelivery(ctx context.Context, store 
 		if err := boundary.VerifyRevision(ctx, prepared.Directory, gitmeta.CheckoutIdentity{Commit: output.Commit, Ref: "refs/heads/" + prepared.TaskBranch}, revision); err != nil {
 			return err
 		}
-		url, recovered, err := s.deliverPullRequest(ctx, boundary, repo, item, prepared, destination, target, p.Plan.Content, revision)
-		if err != nil {
+		if err := s.recordPublicDelivery(ctx, store, boundary, repo, item, snapshot, selected, target, revision, result); err != nil {
 			return err
 		}
-		result.PRRecovered = recovered
-		p.Delivery = &work.PullRequestDelivery{PullRequest: work.PullRequestRef{URL: url}, PublicCommit: output.Commit, Head: output.Commit, Tree: output.Tree, ObservedAt: time.Now().UTC(), Evidence: "Origin branch independently verified at the authorized input commit and tree; native PR observed for the exact branch pair"}
+
 	case *work.DirectMergeTarget:
 		retention := outputRefNamespace(work.AttemptRef{RepositoryID: snapshot.RepositoryID, TaskID: snapshot.TaskID, Workflow: selected.workflowIndex, Phase: selected.phaseIndex}) + "/delivery"
 		delivered, err := boundary.DirectRevisionDelivery(ctx, repo, prepared.Directory, prepared.TaskBranch, destination.Branch, destination.Commit, retention, revision)
@@ -248,59 +255,6 @@ func (s FinalizationService) recordCommittedDelivery(ctx context.Context, store 
 	}
 	snapshot.Version = version
 	return nil
-}
-
-func (s FinalizationService) deliverPullRequest(ctx context.Context, boundary FinalizationGit, repo task.Repository, item task.Task, prepared *work.WorkContext, destination *work.Destination, target *work.PullRequestTarget, content string, output gitmeta.Revision) (string, bool, error) {
-	if s.PRProvider == nil {
-		return "", false, errors.New("PR provider is required")
-	}
-	if target.Existing != nil {
-		return "", false, errors.New("public update packaging is not implemented; existing PR intent cannot be treated as create consent")
-	}
-	pushErr := boundary.PushPublicationInput(ctx, prepared.Directory, prepared.TaskBranch, output)
-	observed, err := boundary.PublishedRevision(ctx, prepared.Directory, prepared.TaskBranch)
-	if err != nil {
-		return "", false, errors.Join(pushErr, err)
-	}
-	if observed.Commit != output.Commit || observed.Tree != output.Tree {
-		return "", false, errors.Join(pushErr, errors.New("origin branch differs from the authorized input"))
-	}
-	diagnostics := pullrequest.DiagnosticContext{RepoID: repo.ID, TaskID: item.ID, Branch: prepared.TaskBranch}
-	found, exists, err := s.PRProvider.FindOpenByBranch(ctx, pullrequest.FindOpenByBranchRequest{RepositoryPath: repo.Path, HeadBranch: prepared.TaskBranch, BaseBranch: destination.Branch, Diagnostics: diagnostics})
-	if err != nil {
-		return "", false, err
-	}
-	if exists {
-		if strings.TrimSpace(found.URL) == "" {
-			return "", false, errors.New("PR provider reported a match without native identity")
-		}
-		if err := verifyPublishedOutput(ctx, boundary, prepared.Directory, prepared.TaskBranch, output); err != nil {
-			return "", false, err
-		}
-		return found.URL, true, nil
-	}
-	title, body, ok := strings.Cut(content, "\n\n")
-	if !ok || strings.TrimSpace(title) == "" || strings.TrimSpace(body) == "" {
-		return "", false, errors.New("publication plan lacks exact title and body")
-	}
-	created, err := s.PRProvider.Create(ctx, pullrequest.CreateRequest{RepositoryPath: repo.Path, HeadBranch: prepared.TaskBranch, BaseBranch: destination.Branch, Title: title, Body: body, Diagnostics: diagnostics})
-	if err != nil {
-		return "", false, err
-	}
-	if strings.TrimSpace(created.URL) == "" {
-		return "", false, errors.New("PR creation returned no native identity; retry find/import")
-	}
-	status, err := s.PRProvider.StatusByURL(ctx, pullrequest.StatusByURLRequest{URL: created.URL, Diagnostics: diagnostics})
-	if err != nil {
-		return "", false, err
-	}
-	if status.URL != created.URL || status.State != pullrequest.StateOpen {
-		return "", false, errors.New("created PR was not independently observed open")
-	}
-	if err := verifyPublishedOutput(ctx, boundary, prepared.Directory, prepared.TaskBranch, output); err != nil {
-		return "", false, err
-	}
-	return created.URL, false, nil
 }
 
 func (s FinalizationService) closeDeliveredTask(ctx context.Context, store WorkStore, snapshot *work.State, w *work.Workflow, backend FinalizationBackend, item task.Task) error {

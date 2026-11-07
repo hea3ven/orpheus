@@ -517,6 +517,12 @@ func (*memoryDispatchGit) DirectRevisionDelivery(context.Context, taskmodel.Repo
 	return gitmeta.Revision{}, errors.New("unexpected direct delivery in review-only fixture")
 }
 
-func (*memoryDispatchGit) PushPublicationInput(context.Context, string, string, gitmeta.Revision) error {
-	return errors.New("unexpected publication in review-only fixture")
+func (*memoryDispatchGit) ObservePublicHead(context.Context, string, string) (string, error) {
+	return "", errors.New("unexpected publication observation")
+}
+func (*memoryDispatchGit) PackagePublicCommit(context.Context, gitmeta.PublicCommitRequest) (gitmeta.Revision, error) {
+	return gitmeta.Revision{}, errors.New("unexpected public packaging")
+}
+func (*memoryDispatchGit) PushPublicCommit(context.Context, gitmeta.PublicCommitRequest, gitmeta.Revision, string) error {
+	return errors.New("unexpected publication push")
 }

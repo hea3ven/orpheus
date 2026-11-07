@@ -33,7 +33,7 @@ func newFinalizationFixture(t *testing.T, taskID string) *finalizationWorkflowFi
 	base := newReviewDispatchFixture(t, taskID)
 	f := &finalizationWorkflowFixture{reviewWorkflowFixture: base}
 	f.publication = &memoryPublicationGit{memoryReviewCandidate: base.candidate, remote: make(map[string]string)}
-	f.pr = &memoryPublicationPR{url: "https://github.test/org/alpha/pull/42", state: pullrequest.StateOpen}
+	f.pr = &memoryPublicationPR{git: f.publication, url: "https://github.test/org/alpha/pull/42", state: pullrequest.StateOpen}
 	f.mutations = &memoryPublicationTasks{memoryReviewTasks: base.tasks}
 	f.options.Dependencies.FinalizationGit = f.publication
 	f.options.Dependencies.SyncGit = f.publication
@@ -141,7 +141,7 @@ func (f *finalizationWorkflowFixture) assertPublishedPR(taskID string) {
 	assert.Equal(f.t, taskmodel.StatusInProgress, item.Status)
 	assert.Equal(f.t, f.pr.url, item.OrpheusMetadata().PRURL)
 	require.NotEmpty(f.t, facts.Commit)
-	assert.Equal(f.t, f.candidate.head, facts.Commit)
+	assert.Equal(f.t, "public-"+f.candidate.head, facts.Commit)
 	assert.Equal(f.t, facts.Commit, f.publication.remote[target.Branch])
 	assert.Nil(f.t, facts.CommittedAt, "publication does not fabricate a second implementation commit")
 	assert.NotNil(f.t, facts.PushedAt)
@@ -185,6 +185,10 @@ type memoryPublicationGit struct {
 	cleanupError    error
 	cleanupAttempts []string
 	merges          int
+	packages        map[string]gitmeta.PublicCommitRequest
+	packageTree     string
+	observeError    error
+	losePush        bool
 }
 
 func (g *memoryPublicationGit) PushDefaultBranch(_ context.Context, _ string, branch string) error {
@@ -225,6 +229,7 @@ func (g *memoryPublicationGit) ValidateRecordedDirectMerge(_ context.Context, _ 
 }
 
 type memoryPublicationPR struct {
+	git            *memoryPublicationGit
 	url            string
 	existing       *pullrequest.CreateRequest
 	created        []pullrequest.CreateRequest
@@ -238,12 +243,12 @@ type memoryPublicationPR struct {
 	statusRequests []pullrequest.StatusByURLRequest
 }
 
-func (p *memoryPublicationPR) FindOpenByBranch(_ context.Context, req pullrequest.FindOpenByBranchRequest) (pullrequest.PullRequest, bool, error) {
+func (p *memoryPublicationPR) FindByBranch(_ context.Context, req pullrequest.FindByBranchRequest) (pullrequest.PullRequest, bool, error) {
 	p.findReads++
 	if p.findError != nil {
 		return pullrequest.PullRequest{}, false, p.findError
 	}
-	if p.state != pullrequest.StateClosed && p.state != pullrequest.StateMerged && p.existing != nil && p.existing.RepositoryPath == req.RepositoryPath && p.existing.HeadBranch == req.HeadBranch && p.existing.BaseBranch == req.BaseBranch {
+	if p.existing != nil && p.existing.RepositoryPath == req.RepositoryPath && p.existing.HeadBranch == req.HeadBranch {
 		return pullrequest.PullRequest{URL: p.url}, true, nil
 	}
 	return pullrequest.PullRequest{}, false, nil
@@ -271,10 +276,19 @@ func (p *memoryPublicationPR) StatusByURL(_ context.Context, req pullrequest.Sta
 	if req.URL != p.url || p.state == "" {
 		return pullrequest.PullRequestStatus{}, errors.New("unexpected PR status lookup")
 	}
-	return pullrequest.PullRequestStatus{URL: p.url, State: p.state}, nil
+	status := pullrequest.PullRequestStatus{URL: p.url, State: p.state}
+	if p.existing != nil {
+		status.HeadBranch, status.BaseBranch = p.existing.HeadBranch, p.existing.BaseBranch
+		status.HeadCommit = p.git.remote[p.existing.HeadBranch]
+		status.Title, status.Body = p.existing.Title, p.existing.Body
+	}
+	return status, nil
 }
 
 func (g *memoryPublicationGit) PublishedRevision(_ context.Context, _ string, branch string) (gitmeta.Revision, error) {
+	if g.observeError != nil {
+		return gitmeta.Revision{}, g.observeError
+	}
 	commit, ok := g.remote[branch]
 	if !ok {
 		return gitmeta.Revision{}, errors.New("remote publication branch has not been observed")
@@ -316,17 +330,47 @@ func (g *memoryPublicationGit) ObservePublicationInput(ctx context.Context, req 
 	return g.memoryReviewCandidate.ObservePublicationInput(ctx, req)
 }
 
-func (g *memoryPublicationGit) PushPublicationInput(ctx context.Context, dir, branch string, input gitmeta.Revision) error {
-	if err := g.VerifyRevision(ctx, dir, gitmeta.CheckoutIdentity{Commit: input.Commit, Ref: "refs/heads/" + branch}, input); err != nil {
+func (g *memoryPublicationGit) ObservePublicHead(_ context.Context, _, branch string) (string, error) {
+	return g.remote[branch], nil
+}
+func (g *memoryPublicationGit) PackagePublicCommit(ctx context.Context, req gitmeta.PublicCommitRequest) (gitmeta.Revision, error) {
+	if err := g.VerifyRevision(ctx, req.Directory, gitmeta.CheckoutIdentity{Commit: req.Input.Commit, Ref: "refs/heads/" + req.Branch}, req.Input); err != nil {
+		return gitmeta.Revision{}, err
+	}
+	public := gitmeta.Revision{Commit: "public-" + req.Input.Commit, Tree: req.Input.Tree, RetainedRef: req.Ref + "/output"}
+	if g.packageTree != "" {
+		public.Tree = g.packageTree
+	}
+	if g.packages == nil {
+		g.packages = make(map[string]gitmeta.PublicCommitRequest)
+	}
+	g.packages[req.Ref] = req
+	g.trees[public.Commit] = public.Tree
+	return public, nil
+}
+func (g *memoryPublicationGit) PushPublicCommit(ctx context.Context, req gitmeta.PublicCommitRequest, public gitmeta.Revision, expected string) error {
+	if err := g.VerifyRevision(ctx, req.Directory, gitmeta.CheckoutIdentity{Commit: req.Input.Commit, Ref: "refs/heads/" + req.Branch}, req.Input); err != nil {
 		return err
 	}
 	if g.pushError != nil {
 		return g.pushError
 	}
-	if g.remote[branch] == input.Commit {
+	if g.remote[req.Branch] == public.Commit {
 		return nil
 	}
-	g.pushes = append(g.pushes, branch)
-	g.remote[branch] = input.Commit
+	if g.remote[req.Branch] != expected {
+		return errors.New("unexpected remote head")
+	}
+	g.pushes = append(g.pushes, req.Branch)
+	g.remote[req.Branch] = public.Commit
+	if g.losePush {
+		g.observeError = errors.New("lost push observation")
+		return g.observeError
+	}
+	return nil
+}
+
+func (p *memoryPublicationPR) Update(_ context.Context, req pullrequest.UpdateRequest) error {
+	p.existing.Title, p.existing.Body = req.Title, req.Body
 	return nil
 }

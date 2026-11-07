@@ -208,6 +208,17 @@ func TestSuccessorPreservesAddressesAndRecordedFacts(t *testing.T) {
 		{"changed publication intent", repairHistory, func(s *work.State) {
 			s.Workflows[0].Phases[9].(*work.PublicationPhase).Plan.Content = "Different authored publication"
 		}, "publication intent"},
+		{"removed public operation", packagedPublicationHistory, func(s *work.State) {
+			s.Workflows[0].Phases[9].(*work.PublicationPhase).Operation = nil
+		}, "publication operation"},
+		{"rewritten operation identity", packagedPublicationHistory, func(s *work.State) {
+			s.Workflows[0].Phases[9].(*work.PublicationPhase).Operation.Ref = "refs/orpheus/other-operation"
+			s.Workflows[0].Phases[9].(*work.PublicationPhase).Operation.Public.RetainedRef = "refs/orpheus/other-operation/output"
+		}, "publication operation intent"},
+		{"rewritten packaged commit", packagedPublicationHistory, func(s *work.State) {
+			s.Workflows[0].Phases[9].(*work.PublicationPhase).Operation.Public.Commit = "substituted-public-commit"
+		}, "packaged public commit"},
+
 		{"rewritten delivered observation", deliveredHistory, func(s *work.State) {
 			s.Workflows[0].Phases[9].(*work.PublicationPhase).Delivery.(*work.PullRequestDelivery).ObservedAt = at(102)
 		}, "observed delivery"},
@@ -495,5 +506,14 @@ func answeredInterruptedManualState(t *testing.T) work.State {
 	step := s.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[2].(*work.ManualReviewStep)
 	step.CommandResult = &work.ExitedProcess{At: at(25), Code: exitValue(0)}
 	step.Decision = &work.ApprovedReview{At: at(26)}
+	return s
+}
+
+func packagedPublicationHistory(t *testing.T) work.State {
+	t.Helper()
+	s := repairHistory(t)
+	require.NoError(t, s.AuthorizePublication(0, work.PublicationRef{Phase: 9}, at(100), "Explicit update grant"))
+	s.Workflows[0].Phases[9].(*work.PublicationPhase).Operation = &work.PublicationOperation{StartedAt: at(101), Ref: "refs/orpheus/publication/update", Parent: "P1", Public: &work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: "P2", Tree: "T3"}, RetainedRef: "refs/orpheus/publication/update/output"}}
+	require.NoError(t, s.Validate())
 	return s
 }

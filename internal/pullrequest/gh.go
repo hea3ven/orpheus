@@ -21,34 +21,37 @@ type GHProvider struct {
 	Environment []string
 }
 
-// FindOpenByBranch returns the first open PR matching head/base, when any exists.
-func (p GHProvider) FindOpenByBranch(ctx context.Context, req FindOpenByBranchRequest) (PullRequest, bool, error) {
+// FindByBranch reconciles any lifecycle outcome by head, including retargeted
+// PRs. Filtering by the expected base would mistake retargeting for absence.
+func (p GHProvider) FindByBranch(ctx context.Context, req FindByBranchRequest) (PullRequest, bool, error) {
 	if err := validateFindRequest(req); err != nil {
 		return PullRequest{}, false, err
 	}
-	output, err := runGH(ctx, p, req.RepositoryPath, "find_open_pr", "", diagnosticAttrs(req.Diagnostics), "pr", "list",
-		"--state", "open",
+	output, err := runGH(ctx, p, req.RepositoryPath, "find_pr", "", diagnosticAttrs(req.Diagnostics), "pr", "list",
+		"--state", "all",
 		"--head", req.HeadBranch,
-		"--base", req.BaseBranch,
 		"--json", "url",
-		"--limit", "1",
+		"--limit", "2",
 	)
 	if err != nil {
-		return PullRequest{}, false, fmt.Errorf("find open GitHub PR for %s -> %s: %w", req.HeadBranch, req.BaseBranch, err)
+		return PullRequest{}, false, fmt.Errorf("find GitHub PR for %s -> %s: %w", req.HeadBranch, req.BaseBranch, err)
 	}
 
 	var rows []struct {
 		URL string `json:"url"`
 	}
 	if err := json.Unmarshal([]byte(output), &rows); err != nil {
-		return PullRequest{}, false, fmt.Errorf("find open GitHub PR: provider output was not JSON: %w", err)
+		return PullRequest{}, false, fmt.Errorf("find GitHub PR: provider output was not JSON: %w", err)
 	}
 	if len(rows) == 0 {
 		return PullRequest{}, false, nil
 	}
+	if len(rows) != 1 {
+		return PullRequest{}, false, errors.New("multiple PRs match publication branch pair; reconcile before retry")
+	}
 	prURL := strings.TrimSpace(rows[0].URL)
 	if !isHTTPURL(prURL) {
-		return PullRequest{}, false, fmt.Errorf("find open GitHub PR: provider output did not include a valid PR URL")
+		return PullRequest{}, false, fmt.Errorf("find GitHub PR: provider output did not include a valid PR URL")
 	}
 	return PullRequest{URL: prURL}, true, nil
 }
@@ -59,7 +62,7 @@ func (p GHProvider) StatusByURL(ctx context.Context, req StatusByURLRequest) (Pu
 		return PullRequestStatus{}, err
 	}
 	prURL := strings.TrimSpace(req.URL)
-	output, err := runGH(ctx, p, "", "poll_pr", "", diagnosticAttrs(req.Diagnostics), "pr", "view", prURL, "--json", "url,state,mergedAt")
+	output, err := runGH(ctx, p, "", "poll_pr", "", diagnosticAttrs(req.Diagnostics), "pr", "view", prURL, "--json", "url,state,mergedAt,headRefName,baseRefName,headRefOid,title,body")
 	if err != nil {
 		return PullRequestStatus{}, fmt.Errorf("poll GitHub PR %s: %w", prURL, err)
 	}
@@ -91,6 +94,18 @@ func (p GHProvider) Create(ctx context.Context, req CreateRequest) (PullRequest,
 	return PullRequest{URL: prURL}, nil
 }
 
+// Update applies the exact consented narrative to an existing PR.
+func (p GHProvider) Update(ctx context.Context, req UpdateRequest) error {
+	if err := validateStatusByURLRequest(StatusByURLRequest{URL: req.URL}); err != nil {
+		return err
+	}
+	if strings.TrimSpace(req.RepositoryPath) == "" || strings.TrimSpace(req.Title) == "" || strings.TrimSpace(req.Body) == "" {
+		return errors.New("PR update requires repository, title and body")
+	}
+	_, err := runGH(ctx, p, req.RepositoryPath, "update_pr", req.Body, diagnosticAttrs(req.Diagnostics), "pr", "edit", req.URL, "--title", req.Title, "--body-file", "-")
+	return err
+}
+
 func validateStatusByURLRequest(req StatusByURLRequest) error {
 	prURL := strings.TrimSpace(req.URL)
 	if prURL == "" {
@@ -102,7 +117,7 @@ func validateStatusByURLRequest(req StatusByURLRequest) error {
 	return nil
 }
 
-func validateFindRequest(req FindOpenByBranchRequest) error {
+func validateFindRequest(req FindByBranchRequest) error {
 	if strings.TrimSpace(req.RepositoryPath) == "" {
 		return errors.New("pull request repository path is required")
 	}
@@ -113,7 +128,7 @@ func validateFindRequest(req FindOpenByBranchRequest) error {
 }
 
 func validateCreateRequest(req CreateRequest) error {
-	if err := validateFindRequest(FindOpenByBranchRequest{
+	if err := validateFindRequest(FindByBranchRequest{
 		RepositoryPath: req.RepositoryPath,
 		HeadBranch:     req.HeadBranch,
 		BaseBranch:     req.BaseBranch,
@@ -142,9 +157,14 @@ func validateBranchArg(label string, branch string) error {
 
 func decodeGHPRStatus(output string) (PullRequestStatus, error) {
 	var row struct {
-		URL      string `json:"url"`
-		State    string `json:"state"`
-		MergedAt string `json:"mergedAt"`
+		URL        string `json:"url"`
+		State      string `json:"state"`
+		MergedAt   string `json:"mergedAt"`
+		HeadBranch string `json:"headRefName"`
+		BaseBranch string `json:"baseRefName"`
+		HeadCommit string `json:"headRefOid"`
+		Title      string `json:"title"`
+		Body       string `json:"body"`
 	}
 	if err := json.Unmarshal([]byte(output), &row); err != nil {
 		return PullRequestStatus{}, fmt.Errorf("provider output was not JSON: %w", err)
@@ -153,17 +173,22 @@ func decodeGHPRStatus(output string) (PullRequestStatus, error) {
 	if !isHTTPURL(prURL) {
 		return PullRequestStatus{}, errors.New("provider output did not include a valid PR URL")
 	}
+	status := PullRequestStatus{URL: prURL, HeadBranch: row.HeadBranch, BaseBranch: row.BaseBranch, HeadCommit: row.HeadCommit, Title: row.Title, Body: row.Body}
 	if strings.TrimSpace(row.MergedAt) != "" {
-		return PullRequestStatus{URL: prURL, State: StateMerged}, nil
+		status.State = StateMerged
+		return status, nil
 	}
 
 	switch strings.ToUpper(strings.TrimSpace(row.State)) {
 	case "OPEN":
-		return PullRequestStatus{URL: prURL, State: StateOpen}, nil
+		status.State = StateOpen
+		return status, nil
 	case "MERGED":
-		return PullRequestStatus{URL: prURL, State: StateMerged}, nil
+		status.State = StateMerged
+		return status, nil
 	case "CLOSED":
-		return PullRequestStatus{URL: prURL, State: StateClosed}, nil
+		status.State = StateClosed
+		return status, nil
 	default:
 		return PullRequestStatus{}, fmt.Errorf("provider output included unsupported PR state %q", row.State)
 	}

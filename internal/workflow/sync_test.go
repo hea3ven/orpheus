@@ -142,7 +142,7 @@ func (s *fakeSyncRunStore) RecordTaskClosed(repoID, taskID string, opts taskstat
 }
 
 type fakePRProvider struct {
-	findRequests   []pullrequest.FindOpenByBranchRequest
+	findRequests   []pullrequest.FindByBranchRequest
 	createRequests []pullrequest.CreateRequest
 	statusRequests []pullrequest.StatusByURLRequest
 	found          pullrequest.PullRequest
@@ -155,7 +155,7 @@ type fakePRProvider struct {
 	statusErr      error
 }
 
-func (p *fakePRProvider) FindOpenByBranch(_ context.Context, req pullrequest.FindOpenByBranchRequest) (pullrequest.PullRequest, bool, error) {
+func (p *fakePRProvider) FindByBranch(_ context.Context, req pullrequest.FindByBranchRequest) (pullrequest.PullRequest, bool, error) {
 	p.findRequests = append(p.findRequests, req)
 	return p.found, p.foundOK, p.findErr
 }
@@ -489,6 +489,12 @@ func TestBuildPublicationPullRequestContentFromStateFormatsReviewProcess(t *test
 			},
 		},
 	}
+	history := testutil.ReviewableWork("alpha", "op-1", "/fixture/repo", "orpheus/op-1")
+	snapshot.Work = &history
+	snapshot.CurrentWorkflow = 0
+	snapshot.Runs[0].Address = work.AttemptRef{RepositoryID: "alpha", TaskID: "op-1", Workflow: 0, Phase: 1}
+	snapshot.Runs[1].Address = work.AttemptRef{RepositoryID: "alpha", TaskID: "op-1", Workflow: 0, Phase: 3}
+
 	for _, include := range []bool{true, false} {
 		t.Run(fmt.Sprintf("include review=%t", include), func(t *testing.T) {
 			content, err := workflow.BuildPublicationPullRequestContentFromStateWithOptions(workflow.PublicationOptions{IncludeReviewProcess: include}, task.Task{ID: "op-1"}, snapshot)
@@ -688,4 +694,8 @@ func deliveredSyncView(t *testing.T, dir, branch string) taskstate.TaskState {
 	view, err := taskstate.Project(snapshot)
 	require.NoError(t, err)
 	return view
+}
+
+func (*fakePRProvider) Update(context.Context, pullrequest.UpdateRequest) error {
+	return errors.New("unexpected PR update")
 }

@@ -20,18 +20,18 @@ func TestIntegrationAdapterContractGHProviderPublicationTranslatesIdentityAndBod
 	root := testutil.CanonicalTempDir(t)
 	binary, argsLog, bodyLog := filepath.Join(root, "gh"), filepath.Join(root, "args"), filepath.Join(root, "body")
 	// Each argument has its own line; the multiline body must travel on stdin.
-	script := "#!/bin/sh\n[ \"$GH_SCOPE\" = isolated ] || exit 17\npwd > " + shellQuote(argsLog) + "\nprintf '%s\\n' \"$@\" >> " + shellQuote(argsLog) + "\ncase \"$2\" in\nlist) printf '[{\"url\":\"https://github.test/org/repo/pull/7\"}]';;\ncreate) cat > " + shellQuote(bodyLog) + "; printf 'Created\\nhttps://github.test/org/repo/pull/8\\n';;\n*) exit 66;;\nesac\n"
+	script := "#!/bin/sh\n[ \"$GH_SCOPE\" = isolated ] || exit 17\npwd > " + shellQuote(argsLog) + "\nprintf '%s\\n' \"$@\" >> " + shellQuote(argsLog) + "\ncase \"$2\" in\nlist) printf '[{\"url\":\"https://github.test/org/repo/pull/7\"}]';;\ncreate|edit) cat > " + shellQuote(bodyLog) + "; printf 'Created\\nhttps://github.test/org/repo/pull/8\\n';;\n*) exit 66;;\nesac\n"
 	require.NoError(t, testguard.WriteExecutable(binary, []byte(script)))
 	provider := pullrequest.GHProvider{Binary: binary, Environment: []string{"GH_SCOPE=isolated"}}
 
-	found, ok, err := provider.FindOpenByBranch(context.Background(), pullrequest.FindOpenByBranchRequest{RepositoryPath: root, HeadBranch: "feature/task", BaseBranch: "release"})
+	found, ok, err := provider.FindByBranch(context.Background(), pullrequest.FindByBranchRequest{RepositoryPath: root, HeadBranch: "feature/task", BaseBranch: "release"})
 
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, "https://github.test/org/repo/pull/7", found.URL)
 	logged, err := os.ReadFile(argsLog)
 	require.NoError(t, err)
-	assert.Equal(t, root+"\npr\nlist\n--state\nopen\n--head\nfeature/task\n--base\nrelease\n--json\nurl\n--limit\n1\n", string(logged))
+	assert.Equal(t, root+"\npr\nlist\n--state\nall\n--head\nfeature/task\n--json\nurl\n--limit\n2\n", string(logged))
 	body := "## Details\n\nLiteral `code` and $HOME.\n"
 	created, err := provider.Create(context.Background(), pullrequest.CreateRequest{RepositoryPath: root, HeadBranch: "feature/task", BaseBranch: "release", Title: "Keep title intact", Body: body})
 	require.NoError(t, err)
@@ -42,6 +42,14 @@ func TestIntegrationAdapterContractGHProviderPublicationTranslatesIdentityAndBod
 	stdin, err := os.ReadFile(bodyLog)
 	require.NoError(t, err)
 	assert.Equal(t, body, string(stdin))
+	require.NoError(t, provider.Update(context.Background(), pullrequest.UpdateRequest{RepositoryPath: root, URL: created.URL, Title: "Updated title", Body: body}))
+	logged, err = os.ReadFile(argsLog)
+	require.NoError(t, err)
+	assert.Equal(t, root+"\npr\nedit\nhttps://github.test/org/repo/pull/8\n--title\nUpdated title\n--body-file\n-\n", string(logged))
+	stdin, err = os.ReadFile(bodyLog)
+	require.NoError(t, err)
+	assert.Equal(t, body, string(stdin))
+
 }
 
 func TestIntegrationAdapterContractGHProviderPublicationOutputAndFailures(t *testing.T) {
@@ -51,6 +59,7 @@ func TestIntegrationAdapterContractGHProviderPublicationOutputAndFailures(t *tes
 		create                  bool
 	}{
 		{name: "no existing PR", output: "[]"},
+		{name: "ambiguous matching PRs", output: `[{"url":"https://github.test/pull/1"},{"url":"https://github.test/pull/2"}]`, wantError: "multiple PRs"},
 		{name: "malformed list", output: "{", wantError: "not JSON"},
 		{name: "missing listed URL", output: "[{}]", wantError: "valid PR URL"},
 		{name: "malformed listed URL", output: `[{"url":"not-a-url"}]`, wantError: "valid PR URL"},
@@ -66,7 +75,7 @@ func TestIntegrationAdapterContractGHProviderPublicationOutputAndFailures(t *tes
 			if tc.create {
 				_, err = (pullrequest.GHProvider{}).Create(context.Background(), pullrequest.CreateRequest{RepositoryPath: root, HeadBranch: "feature", BaseBranch: "main", Title: "Title", Body: "Body"})
 			} else {
-				_, found, findErr := (pullrequest.GHProvider{}).FindOpenByBranch(context.Background(), pullrequest.FindOpenByBranchRequest{RepositoryPath: root, HeadBranch: "feature", BaseBranch: "main"})
+				_, found, findErr := (pullrequest.GHProvider{}).FindByBranch(context.Background(), pullrequest.FindByBranchRequest{RepositoryPath: root, HeadBranch: "feature", BaseBranch: "main"})
 				err = findErr
 				assert.False(t, found)
 			}
@@ -91,7 +100,7 @@ func TestIntegrationAdapterContractGHProviderStatusClassifiesRepositoryAndAuthen
 			require.ErrorContains(t, err, tc.want)
 			logged, err := os.ReadFile(log)
 			require.NoError(t, err)
-			assert.Equal(t, "pr view https://github.test/org/alpha/pull/42 --json url,state,mergedAt", strings.TrimSpace(string(logged)))
+			assert.Equal(t, "pr view https://github.test/org/alpha/pull/42 --json url,state,mergedAt,headRefName,baseRefName,headRefOid,title,body", strings.TrimSpace(string(logged)))
 		})
 	}
 }

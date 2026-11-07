@@ -27,6 +27,10 @@ func (v *validator) publication(p *PublicationPhase) {
 	outcome, err := v.w.reviewOutcome(p.Plan.Review, cutoff)
 	v.check(err == nil && passed(outcome), "publication requires passed exact review at authorization: %v", err)
 	v.text(p.Plan.Content, "publication content")
+	if ref := p.Plan.FeatureCompletion; ref != nil && v.prior(ref.Phase, "publication feature completion") {
+		effort, err := phaseAs[*ImplementationPhase](v.w, ref.Phase)
+		v.check(err == nil && effort != nil && effort.Completion == v.w.FeatureCompletion(), "publication narrative must select original feature completion")
+	}
 	v.fixedDestination(&p.Plan.Destination)
 	code, err := v.w.Output(review.Scope.Output)
 	v.check(err == nil && code != nil, "Git publication requires retained code output")
@@ -41,6 +45,7 @@ func (v *validator) publication(p *PublicationPhase) {
 		v.check(!p.Consent.GrantedAt.IsZero(), "publication consent requires observed grant time")
 		v.text(p.Consent.Evidence, "publication authorization evidence")
 	}
+	v.publicationOperation(p)
 	if p.Delivery != nil {
 		v.check(p.Consent != nil, "delivery requires explicit exact-plan consent")
 		if code != nil {
@@ -49,6 +54,36 @@ func (v *validator) publication(p *PublicationPhase) {
 		if p.Consent != nil {
 			v.check(!deliveryTime(p.Delivery).Before(p.Consent.GrantedAt), "delivery observation predates authorization")
 		}
+	}
+}
+
+func (v *validator) publicationOperation(p *PublicationPhase) {
+	op := p.Operation
+	if op == nil {
+		return
+	}
+	v.check(p.Consent != nil, "publication operation requires exact-plan consent")
+	v.check(!op.StartedAt.IsZero() && strings.HasPrefix(op.Ref, "refs/orpheus/") && op.Parent != "", "publication operation requires time, owned ref and parent")
+	if p.Consent != nil {
+		v.check(!op.StartedAt.Before(p.Consent.GrantedAt), "publication operation predates consent")
+	}
+	target, ok := p.Plan.Target.(*PullRequestTarget)
+	v.check(ok && target != nil, "public packaging requires PR target")
+	prepared := v.w.Context()
+	if prepared == nil {
+		return
+	}
+	parent := prepared.Baseline.Commit
+	if ok && target != nil && target.ExpectedHead != "" {
+		parent = target.ExpectedHead
+	}
+	v.check(op.Parent == parent, "public packaging must append to planned public head or initial baseline")
+	if op.Public != nil {
+		v.code(op.Public.CodeIdentity)
+		v.check(op.Public.RetainedRef == op.Ref+"/output", "packaged commit requires operation retention")
+	}
+	if d, ok := p.Delivery.(*PullRequestDelivery); ok && d != nil {
+		v.check(op.Public != nil && op.Public.Commit == d.PublicCommit && op.Public.Tree == d.Tree, "delivery must match packaged public commit")
 	}
 }
 

@@ -82,13 +82,38 @@ conflicts. Accepted operations needing reconciliation cannot be casually retarge
 
 | Flow | What Orpheus does |
 | --- | --- |
-| `pull-request` | Push the explicitly authorized committed task branch, create or recover a PR against the destination, and record its URL. The task stays open until merge reconciliation. |
+| `pull-request` | Package the authorized input tree into public history, push the exact public commit, create/recover or update the selected PR, and record verified delivery. The task stays open until merge reconciliation. |
 | `direct-merge` | Verify the authorized input and captured destination checkpoint, create an ordinary no-fast-forward integration merge, push the destination, then close the task. It does not push the task branch or call `gh`. |
 
 A direct-merge conflict is aborted without pushing the destination or closing the
 task. Resolve the conflict outside Orpheus before retrying. Recorded task commits,
 merge commits, pushes, and closure facts let retries continue after partial success.
 Do not try to switch flows to recover a partially published task.
+
+## Local revisions and public history
+
+Local implementation/review commits stay retained independently of public history.
+The first PR publication squashes the selected tree onto the task baseline. Later
+publications append a commit to the verified previous public head, including when
+you amended or rewrote local history. They do not rewrite the remote branch.
+Inspection distinguishes reviewed output, selected input/provenance, the public
+commit, and earlier delivery records. Publishing an older revision never marks
+newer local output as pushed.
+
+Packaging uses ordinary hooks and signing in an operation-owned Git worktree;
+it does not change your checkout. If packaging changes the authorized tree,
+Orpheus retains and reports the actual commit/tree without pushing. Select the
+reported committed input on the owned task branch if you want it delivered, then
+use `task run` for a new proceed-or-abort decision. It is not silently treated as
+reviewed output.
+
+Commit, push, and PR effects have retained operation intent. Interrupted retries
+reconcile the same public commit and PR before repeating effects. Unexpected
+remote heads, changed PR branch pairs, and merged/closed PRs stop publication for
+reconciliation rather than overwriting work or creating another PR. Exact-head
+leases protect append-only pushes against concurrent ref changes; they do not
+authorize history rewriting. PR text keeps the selected original feature intent
+and discloses operator-accepted review gaps, including on updates.
 
 ## Commit and PR titles
 
@@ -179,6 +204,7 @@ files to force a retry. No operator state is converted by this change.
 
 Publication plans now require explicit retained input, provenance, comparison,
 and destination context; review-owned publication drafts are no longer accepted.
-Existing records missing these fields or containing obsolete delivery choices need
-an explicit, inspectable conversion before use. Do not discard history to bypass
+Existing records missing these fields, containing obsolete delivery choices, or
+using earlier authorization digests need an explicit, inspectable conversion
+before use. New grants also bind the selected feature-completion reference. Do not discard history to bypass
 loading. This change does not convert or modify operator records.

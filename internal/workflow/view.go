@@ -168,6 +168,7 @@ func InspectTask(item task.Task, snapshot taskstate.TaskState) (View, error) {
 	}
 	v.PhaseAttempt--
 	v.Phase = phaseKind(w.LastPhase())
+	fillPublishedView(&v, w)
 	if err := fillPhaseView(&v, w); err != nil {
 		return View{}, err
 	}
@@ -240,6 +241,9 @@ func fillReviewView(v *View, w *work.Workflow, p *work.ReviewPhase) {
 			v.Execution = &ExecutionView{Profile: agent.Execution.Profile, Purpose: work.PurposeReview}
 		}
 	}
+}
+
+func fillPublishedView(v *View, w *work.Workflow) {
 	for _, phase := range w.Phases {
 		publication, ok := phase.(*work.PublicationPhase)
 		if !ok {

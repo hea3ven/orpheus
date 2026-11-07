@@ -97,6 +97,13 @@ func TestPublicationRequiresConsentAndIndependentMatchingRemoteEvidence(t *testi
 		{"packaging changed tree", func(_ *work.State, p *work.PublicationPhase) {
 			p.Delivery.(*work.PullRequestDelivery).Tree = "unreviewed-tree"
 		}, "exact authorized input"},
+		{"packaged different public parent", func(_ *work.State, p *work.PublicationPhase) {
+			p.Operation = &work.PublicationOperation{StartedAt: at(101), Ref: "refs/orpheus/public", Parent: "foreign-head"}
+		}, "planned public head"},
+		{"delivery differs from packaged commit", func(_ *work.State, p *work.PublicationPhase) {
+			p.Operation = &work.PublicationOperation{StartedAt: at(101), Ref: "refs/orpheus/public", Parent: "P1", Public: &work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: "different-packaged-commit", Tree: "T3"}, RetainedRef: "refs/orpheus/public/output"}}
+		}, "packaged public commit"},
+
 		{"wrong observed head", func(_ *work.State, p *work.PublicationPhase) { p.Delivery.(*work.PullRequestDelivery).Head = "P1" }, "exact authorized input"},
 		{"wrong previous head", func(_ *work.State, p *work.PublicationPhase) {
 			p.Delivery.(*work.PullRequestDelivery).PreviousHead = "foreign-head"
