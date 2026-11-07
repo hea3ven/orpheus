@@ -93,17 +93,16 @@ func (s Controller) Advance(ctx context.Context, opts AdvanceOptions) (AdvanceRe
 			}
 			invocation.base = invBase
 		}
-		view, route, err := s.selectWork(ctx, invocation.base)
+		var choices *AdvanceOptions
+		if first {
+			choices = &opts
+		}
+		view, route, err := s.selectWork(ctx, invocation.base, choices)
 		if err != nil {
 			return result, err
 		}
 		result.Route = route
-		if first {
-			if err := validateAdvanceOptions(base.TaskID(), route.Action, opts); err != nil {
-				return result, err
-			}
-			first = false
-		}
+		first = false
 		stop, err := s.advancePhase(ctx, &invocation, view, route, &result)
 		if err != nil || stop {
 			current, viewErr := s.Inspect(ctx, opts.TaskID)
@@ -116,12 +115,25 @@ func (s Controller) Advance(ctx context.Context, opts AdvanceOptions) (AdvanceRe
 	}
 }
 
-func (s Controller) selectWork(ctx context.Context, base ReviewContext) (taskstate.TaskState, TaskRunRoute, error) {
+func (s Controller) selectWork(ctx context.Context, base ReviewContext, choices *AdvanceOptions) (taskstate.TaskState, TaskRunRoute, error) {
 	var view taskstate.TaskState
 	var route TaskRunRoute
 	err := state.WithGlobalMutationLockLogger(ctx, s.Paths, "select workflow work", s.Logger, func() error {
 		var err error
 		view, err = s.RunStore.Load(base.RepoID(), base.TaskID())
+		if err != nil {
+			return err
+		}
+		route, err = SelectTaskRunRoute(base.Task, view)
+		if err != nil {
+			return err
+		}
+		if choices != nil {
+			if err := validateAdvanceOptions(base.TaskID(), route.Action, *choices); err != nil {
+				return err
+			}
+		}
+		view, err = s.continueReview(base, view, route)
 		if err != nil {
 			return err
 		}

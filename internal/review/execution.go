@@ -157,6 +157,10 @@ func (r ExecutionRequest) validateTarget(pipeline Pipeline, attempt taskstate.Re
 		return fmt.Errorf("%w: %w", ErrInvalidExecution, err)
 	}
 	step := pipeline.Steps[index]
+	last := attempt.Steps[len(attempt.Steps)-1]
+	if last.Name != step.Name || last.Kind != step.Kind {
+		return fmt.Errorf("%w: review pipeline %q no longer contains current step %q with type %q; restore that name and type in config.yaml", ErrInvalidExecution, pipeline.Name, last.Name, last.Kind)
+	}
 	if r.kind == executionContinue {
 		return validateCompletedStep(attempt, step)
 	}

@@ -195,8 +195,8 @@ func (s Controller) respondLocked(ctx context.Context, id InteractionID, respons
 	if err != nil {
 		return View{}, err
 	}
-	if view.Pending == nil || !view.Pending.ID.Owner.Equal(id.Owner) || view.Pending.ID.Kind != id.Kind || view.Pending.ID.Version != id.Version {
-		return View{}, ErrStaleInteraction
+	if err := s.validateResponseTarget(base, snapshot, view.Pending, id); err != nil {
+		return View{}, err
 	}
 	var changed bool
 	if proposal, ok := response.(PublicationPlanResponse); ok && id.Kind == InteractionPublication {

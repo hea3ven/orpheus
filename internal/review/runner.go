@@ -271,7 +271,7 @@ func pipelineStartIndex(pipeline Pipeline, stepName string) (int, error) {
 		}
 	}
 	return 0, fmt.Errorf(
-		"review pipeline %q does not contain pending step %q",
+		"review pipeline %q does not contain current step %q; restore that step in config.yaml",
 		pipeline.Name,
 		stepName,
 	)

@@ -693,7 +693,7 @@ func TestIntegrationWorkflowTaskReviewUnknownPipelineIncludesRepoAliases(t *test
 	is.ErrorContains(err, "configured pipelines: standard")
 	is.ErrorContains(err, "configured repo aliases: quick=standard")
 }
-func TestIntegrationWorkflowTaskReviewInvalidAgentConfigPreservesFreshAndWaitingState(t *testing.T) {
+func TestIntegrationWorkflowTaskReviewInvalidRemainingAgentConfigPreservesFreshAndWaitingState(t *testing.T) {
 	for _, waiting := range []bool{false, true} {
 		t.Run(fmt.Sprintf("waiting_%t", waiting), func(t *testing.T) {
 			fixture := newReviewWorkflowFixture(t, "op-main", "Review preflight", "Validate before persistence.")
@@ -703,6 +703,11 @@ func TestIntegrationWorkflowTaskReviewInvalidAgentConfigPreservesFreshAndWaiting
 			_, captureErr := capture.Capture(context.Background(), view.Runs[0].Address)
 			require.NoError(t, captureErr)
 			if waiting {
+				fixture.pipelines("standard", map[string][]map[string]any{"standard": {
+					{"kind": "agent_review", "name": "ai-review"},
+					{"kind": "manual", "name": "inspect"},
+					{"kind": "agent_review", "name": "later-reviewer"},
+				}})
 				attempt, err := beginConfiguredFixtureReview(fixture, fixture.taskStore, "op-main", taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review"})
 				require.NoError(t, err)
 				_, err = fixture.taskStore.RecordReviewStep("alpha", "op-main", attempt.Attempt, taskstate.RecordReviewStepOptions{Address: attempt.Address, Kind: "agent_review", Name: "ai-review", Execution: &taskstate.AgentExecution{Agent: "fixture-reviewer", Status: taskstate.RunStatusSucceeded, StartedAt: attempt.StartedAt, Process: &work.ExitedProcess{Code: fixtureExitCode(0), At: attempt.StartedAt}}})
