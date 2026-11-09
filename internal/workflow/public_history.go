@@ -38,10 +38,12 @@ func (s FinalizationService) recordPublicDelivery(ctx context.Context, store Wor
 	if err != nil {
 		return err
 	}
-	pushErr := boundary.PushPublicCommit(ctx, req, public)
+	if err := boundary.PushPublicCommit(ctx, req, public); err != nil {
+		return err
+	}
 	delivered, recovered, err := s.observePublicDelivery(ctx, store, snapshot, boundary, repo, prepared, p, public, diagnostics)
 	if err != nil {
-		return errors.Join(pushErr, err)
+		return err
 	}
 	result.PRRecovered = recovered
 	p.Delivery = delivered

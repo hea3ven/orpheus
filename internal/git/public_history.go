@@ -126,7 +126,7 @@ func PushPublicCommit(ctx context.Context, req PublicCommitRequest, public Revis
 		return err
 	}
 	if remote == public.Commit {
-		return nil
+		return configurePublicationUpstream(ctx, req.Directory, req.Branch, public.Commit)
 	}
 	if remote != "" {
 		return errors.New("unexpected public head; reconcile before publication")
@@ -134,6 +134,26 @@ func PushPublicCommit(ctx context.Context, req PublicCommitRequest, public Revis
 	output, err := runGitContext(ctx, req.Directory, "push", "--no-follow-tags", "--force-with-lease=refs/heads/"+req.Branch+":", "origin", public.Commit+":refs/heads/"+req.Branch)
 	if err != nil {
 		return fmt.Errorf("push initial public commit: %w%s", err, gitOutputSuffix(output))
+	}
+	remote, err = ObservePublicHead(ctx, req.Directory, req.Branch)
+	if err != nil {
+		return err
+	}
+	if remote != public.Commit {
+		return errors.New("public head changed before upstream setup; reconcile before publication")
+	}
+	return configurePublicationUpstream(ctx, req.Directory, req.Branch, public.Commit)
+}
+
+func configurePublicationUpstream(ctx context.Context, dir, branch, commit string) error {
+	// A disconnected push may have reached origin before its local tracking ref
+	// was written. Rebuild that cache from the independently verified remote head.
+	if _, err := runGitContext(ctx, dir, "update-ref", "--no-deref", "refs/remotes/origin/"+branch, commit); err != nil {
+		return fmt.Errorf("record verified publication tracking ref: %w", err)
+	}
+	output, err := runGitContext(ctx, dir, "branch", "--set-upstream-to=origin/"+branch, "--", branch)
+	if err != nil {
+		return fmt.Errorf("configure publication upstream: %w%s", err, gitOutputSuffix(output))
 	}
 	return nil
 }

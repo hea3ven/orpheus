@@ -122,6 +122,7 @@ type publicationGit struct {
 	remote                        map[string]gitmeta.Revision
 	taskBranch                    string
 	verifyErr, pushErr, directErr error
+	upstreamErr                   error
 	pushWrongTree                 bool
 	localMerge                    string
 	merges                        int
@@ -163,7 +164,7 @@ func (g *publicationGit) PushPublicCommit(_ context.Context, req gitmeta.PublicC
 		return g.pushErr
 	}
 	if g.remote[req.Branch].Commit == public.Commit {
-		return nil
+		return g.upstreamErr
 	}
 	if g.remote[req.Branch].Commit != "" {
 		return errors.New("unexpected remote head")
@@ -173,7 +174,7 @@ func (g *publicationGit) PushPublicCommit(_ context.Context, req gitmeta.PublicC
 	if g.pushWrongTree {
 		g.remote[req.Branch] = gitmeta.Revision{Commit: public.Commit, Tree: "foreign-tree"}
 	}
-	return nil
+	return g.upstreamErr
 }
 func (g *publicationGit) PublishedRevision(_ context.Context, _ string, branch string) (gitmeta.Revision, error) {
 	actual, ok := g.remote[branch]
@@ -382,27 +383,47 @@ func TestFinalizeCommittedPRRecoversLostCreationAndPersistenceWithoutAnotherImpl
 
 func TestFinalizeDoesNotTurnProviderOrRemoteUncertaintyIntoPublication(t *testing.T) {
 	lookupFailure := errors.New("provider lookup unavailable")
-	for _, scenario := range []string{"provider lookup error", "remote tree mismatch"} {
+	setupFailure := errors.New("publication upstream configuration unavailable")
+	for _, scenario := range []string{"provider lookup error", "remote tree mismatch", "upstream setup failure"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := newCommittedPublicationFixture(t, true, false, false)
-			if scenario == "provider lookup error" {
+			switch scenario {
+			case "provider lookup error":
 				f.pr.findErr = lookupFailure
-			} else {
+			case "remote tree mismatch":
 				f.git.pushWrongTree = true
+			case "upstream setup failure":
+				f.git.upstreamErr = setupFailure
 			}
 			before := f.snapshot(t)
 			_, err := f.service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
 			require.Error(t, err)
-			if scenario == "provider lookup error" {
+			switch scenario {
+			case "provider lookup error":
 				assert.ErrorIs(t, err, lookupFailure)
-			} else {
+			case "remote tree mismatch":
 				assert.Contains(t, err.Error(), "origin branch changed")
+			case "upstream setup failure":
+				assert.ErrorIs(t, err, setupFailure)
 			}
 			assert.Equal(t, before.Workflows[0].Phases[3].(*work.PublicationPhase).Plan, firstPublication(f.snapshot(t)).Plan)
 			assert.Nil(t, firstPublication(f.snapshot(t)).Delivery)
 			assert.Empty(t, f.pr.created, "lookup error is not confirmed absence")
 			assert.Empty(t, f.backend.urls)
 			assert.Empty(t, f.backend.closed)
+			if scenario == "upstream setup failure" {
+				pending := firstPublication(f.snapshot(t))
+				require.NotNil(t, pending.Operation.Public)
+				assert.Equal(t, "public-fixture-output", f.git.remote["orpheus/op-1"].Commit, "remote success alone cannot finish publication before local setup")
+				assert.Equal(t, firstPublication(before).Consent, pending.Consent)
+				f.git.upstreamErr = nil
+				result, err := f.service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
+				require.NoError(t, err)
+				assert.Equal(t, f.pr.url, result.PRURL)
+				assert.Len(t, f.git.pushes, 1, "retry must reuse the already published commit")
+				assert.Len(t, f.pr.created, 1)
+			}
+
 		})
 	}
 }

@@ -35,6 +35,8 @@ func TestIntegrationAdapterContractPublicHistorySquashesInPlaceThenReleasesOnlyO
 			} else {
 				runGit(t, repo, "checkout", "-b", branch)
 			}
+			runGit(t, dir, "config", "push.default", "simple")
+			runGit(t, dir, "config", "push.autoSetupRemote", "false")
 			baseline := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
 			const revisions = "refs/orpheus/revisions/616c706861/6f702d31/0/"
 			const inputs = "refs/orpheus/publication-inputs/616c706861/6f702d31/0/"
@@ -66,6 +68,13 @@ func TestIntegrationAdapterContractPublicHistorySquashesInPlaceThenReleasesOnlyO
 			assert.Empty(t, strings.TrimSpace(runGit(t, dir, "status", "--porcelain=v1")))
 			require.NoError(t, gitmeta.VerifyRetainedRevision(ctx, dir, input), "incomplete publication still retains private history")
 			require.NoError(t, gitmeta.PushPublicCommit(ctx, req, public))
+			assert.Equal(t, "origin/"+branch, strings.TrimSpace(runGit(t, dir, "rev-parse", "--abbrev-ref", "@{upstream}")), "initial publication must support ordinary manual pushes")
+			runGit(t, dir, "branch", "--unset-upstream", "--", branch)
+			runGit(t, dir, "update-ref", "-d", "refs/remotes/origin/"+branch, public.Commit)
+			require.NoError(t, gitmeta.PushPublicCommit(ctx, req, public), "already-published retry must complete missing local tracking setup")
+			assert.Equal(t, "origin/"+branch, strings.TrimSpace(runGit(t, dir, "rev-parse", "--abbrev-ref", "@{upstream}")))
+			assert.Equal(t, public.Commit, strings.TrimSpace(runGit(t, dir, "rev-parse", "@{upstream}")))
+
 			remote, err := gitmeta.PublishedRevision(ctx, dir, branch)
 			require.NoError(t, err)
 			assert.Equal(t, public.Commit, remote.Commit)
@@ -82,7 +91,7 @@ func TestIntegrationAdapterContractPublicHistorySquashesInPlaceThenReleasesOnlyO
 			commitFile(t, dir, "later.txt", "ordinary later fix\n", "fix: later public work")
 			later := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
 			assert.Equal(t, public.Commit, strings.TrimSpace(runGit(t, dir, "show", "-s", "--format=%P", later)))
-			require.NoError(t, gitmeta.PushTaskBranch(ctx, dir, branch))
+			runGit(t, dir, "push")
 			remote, err = gitmeta.PublishedRevision(ctx, dir, branch)
 			require.NoError(t, err)
 			assert.Equal(t, later, remote.Commit, "later work extends public history without initial squash machinery")
