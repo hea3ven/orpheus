@@ -350,14 +350,16 @@ const (
 // AgentLaunch records follow-up session provenance. When available, usage
 // baselines are the cumulative source-session values immediately before a
 // resumed process starts; a nil baseline records that incremental usage cannot
-// be measured safely.
+// be measured safely. SourceExecution is authoritative; SourceRunAttempt is a
+// display label derived from that exact source within its workflow.
 type AgentLaunch struct {
-	Mode             AgentLaunchMode `yaml:"mode"`
-	SourceRunAttempt int             `yaml:"source_run_attempt,omitempty"`
-	SourceSession    *AgentSession   `yaml:"source_session,omitempty"`
-	FallbackReason   string          `yaml:"fallback_reason,omitempty"`
-	UsageBaseline    *AgentUsage     `yaml:"usage_baseline,omitempty"`
-	CostBaseline     *int64          `yaml:"cost_baseline_micro_usd,omitempty"`
+	Mode             AgentLaunchMode  `yaml:"mode"`
+	SourceRunAttempt int              `yaml:"source_run_attempt,omitempty"`
+	SourceExecution  *work.AttemptRef `yaml:"-"`
+	SourceSession    *AgentSession    `yaml:"source_session,omitempty"`
+	FallbackReason   string           `yaml:"fallback_reason,omitempty"`
+	UsageBaseline    *AgentUsage      `yaml:"usage_baseline,omitempty"`
+	CostBaseline     *int64           `yaml:"cost_baseline_micro_usd,omitempty"`
 }
 
 // AgentSession records harness-specific session correlation facts.
@@ -1692,6 +1694,13 @@ func normalizeProcessPIDs(supervisorPID int, childPID int) (int, int) {
 
 func normalizeAgentLaunch(launch AgentLaunch) AgentLaunch {
 	launch.Mode = AgentLaunchMode(strings.TrimSpace(string(launch.Mode)))
+	if launch.SourceExecution != nil {
+		source := *launch.SourceExecution
+		source.Step = cloneIntPointer(source.Step)
+		source.BranchSync = cloneIntPointer(source.BranchSync)
+		launch.SourceExecution = &source
+	}
+
 	launch.FallbackReason = strings.TrimSpace(launch.FallbackReason)
 	if launch.SourceSession != nil {
 		session := normalizeAgentSession(*launch.SourceSession)

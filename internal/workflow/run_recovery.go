@@ -216,3 +216,49 @@ func inspectionAfterMissingReview(taskState taskstate.TaskState, expectedAttempt
 	}
 	return AttachedExecutionInspection{Condition: AttachedExecutionNotRunning}
 }
+
+// Advice explains the observation and a safe next action without inferring exit
+// success from liveness or a completion handoff.
+func (i AttachedExecutionInspection) Advice(taskID, purpose string, attempt int) string {
+	subject := fmt.Sprintf("Task %s: %s attempt %d", taskID, purpose, attempt)
+	inspectionCommand := "orpheus task show workflow " + taskID
+	if purpose == "review" {
+		inspectionCommand = "orpheus task show review " + taskID
+	}
+	switch i.Condition {
+	case AttachedExecutionLive:
+		return fmt.Sprintf("%s is still active (%s); wait for it to finish, then inspect `%s`.", subject, i.Reason, inspectionCommand)
+	case AttachedExecutionUnverifiable:
+		return fmt.Sprintf("%s is unverifiable (%s); cannot automatically recover it. Inspect `orpheus doctor` and `%s`, and verify that the supervisor and child have stopped before retrying `orpheus task run %s`. Do not start a replacement or capture a revision while execution is uncertain.", subject, i.Reason, inspectionCommand, taskID)
+	case AttachedExecutionRecoverable, AttachedExecutionAlreadyRecovered:
+		if purpose == "review" {
+			return fmt.Sprintf("%s stopped or is recoverable (%s). The candidate may contain reviewer mutations; inspect the worktree with `cd \"$(orpheus task dir %s)\" && git status --short && git diff`, then inspect audit history with `orpheus task show review %s` before running `orpheus task run %s` to reconcile the interruption. Recovery does not imply a successful exit.", subject, i.Reason, taskID, taskID, taskID)
+		}
+		return fmt.Sprintf("%s stopped and is recoverable (%s); run `orpheus task run %s` to reconcile the interruption and continue unfinished work from the existing files. Recovery does not imply a successful exit.", subject, i.Reason, taskID)
+	default:
+		return ""
+	}
+}
+
+func applyExecutionRecovery(route *TaskRunRoute, snapshot taskstate.TaskState, probe ProcessProbe) {
+	if route.Action == TaskRunActionCompleted || route.Action == TaskRunActionNeedsAttention {
+		return
+	}
+	var execution taskstate.AgentExecution
+	purpose := "implementation"
+	if run, ok := taskstate.ActiveRun(snapshot); ok {
+		execution = run.Execution
+		route.Action, route.Attempt = TaskRunActionImplementationActive, run.Attempt
+	} else if reviewer, ok := ActiveReviewExecution(snapshot); ok {
+		purpose, execution = "review", reviewer.Execution
+		route.Action, route.Attempt = TaskRunActionReviewActive, reviewer.Attempt
+	} else {
+		return
+	}
+	inspection := AttachedExecutionInspection{Condition: AttachedExecutionUnverifiable, Reason: "process_observation_unavailable"}
+	if probe != nil {
+		inspection = InspectAttachedExecution(execution, probe)
+	}
+	route.Recovery = &inspection
+	route.Advice = inspection.Advice(snapshot.TaskID, purpose, route.Attempt)
+}

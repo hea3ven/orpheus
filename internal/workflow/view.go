@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
@@ -121,12 +122,22 @@ func (s Controller) Inspect(ctx context.Context, taskID string) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
-	return InspectTask(base.Task, snapshot)
+	probe := s.ProcessProbe
+	if probe == nil {
+		probe = agentexec.ProbePID
+	}
+	return inspectTask(base.Task, snapshot, probe)
 }
 
 // InspectTask projects the same next action used by advancement. All exported
 // context is copied, so rendering cannot mutate the supplied storage snapshot.
+// Without process observations, running executions remain explicitly unverifiable;
+// Controller.Inspect supplies the configured process probe.
 func InspectTask(item task.Task, snapshot taskstate.TaskState) (View, error) {
+	return inspectTask(item, snapshot, nil)
+}
+
+func inspectTask(item task.Task, snapshot taskstate.TaskState, probe ProcessProbe) (View, error) {
 	if snapshot.Work != nil {
 		canonical, err := taskstate.Project(*snapshot.Work)
 		if err != nil {
@@ -147,6 +158,7 @@ func InspectTask(item task.Task, snapshot taskstate.TaskState) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
+	applyExecutionRecovery(&route, snapshot, probe)
 	v := View{TaskID: item.ID, Title: item.Title, Next: route, Owner: route.Owner, Phase: PhasePreparation, PhaseAttempt: 1, Step: &StepView{Name: "prepare-workdir", Kind: "system", Attempt: 1}}
 	if snapshot.Work == nil || len(snapshot.Work.Workflows) == 0 {
 		return v, nil

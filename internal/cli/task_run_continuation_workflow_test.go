@@ -4,6 +4,7 @@ package cli_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	workmodel "github.com/hea3ven/orpheus/internal/work"
@@ -14,6 +15,7 @@ import (
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,13 +25,20 @@ func TestIntegrationWorkflowTaskRunUnfinishedRepoRootContinuesThroughCompletion(
 		name    string
 		failure error
 		status  taskstate.RunStatus
+		handoff bool
 	}{
 		{name: "successful exit", status: taskstate.RunStatusSucceeded},
+		{name: "failed exit with handoff", handoff: true, failure: errors.New("agent failed"), status: taskstate.RunStatusFailed},
 		{name: "failed exit", failure: errors.New("agent failed"), status: taskstate.RunStatusFailed},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newTaskWorkflowFixture(t, anOpenTask("op-continue"))
 			fixture.withAgentExitingWithoutCompletion(1)
+			if test.handoff {
+				handoff := aCompletion()
+				fixture.agent.outcomes[0].completion = &handoff
+			}
+
 			fixture.agent.outcomes[0].err = test.failure
 			fixture.agent.outcomes[0].mutateCandidate = func() {
 				fixture.git.repoRootDirty = true
@@ -41,9 +50,16 @@ func TestIntegrationWorkflowTaskRunUnfinishedRepoRootContinuesThroughCompletion(
 			} else {
 				require.NoError(t, err, "stderr: %s", stderr)
 			}
+
 			before, _ := fixture.loadFinalTask("op-continue")
 			require.Len(t, before.Runs, 1)
 			assert.Equal(t, test.status, before.Runs[0].Status)
+			if test.handoff {
+				assertCompletionRecorded(t, aCompletion(), before.Runs[0].Completion)
+			} else {
+				assert.Nil(t, before.Runs[0].Completion)
+			}
+
 			completion := aCompletion()
 			fixture.withCompletingAgent(completion)
 			fixture.withRealReviewPipeline()
@@ -55,7 +71,6 @@ func TestIntegrationWorkflowTaskRunUnfinishedRepoRootContinuesThroughCompletion(
 			final, item := fixture.loadFinalTask("op-continue")
 			require.Len(t, final.Runs, 2)
 			assert.Equal(t, before.Runs[0], final.Runs[0])
-			assert.Nil(t, final.Runs[0].Completion)
 			assert.True(t, final.Runs[0].Execution.Interactive)
 			assert.True(t, final.Runs[1].Execution.Interactive)
 			assert.Equal(t, 2, final.Runs[1].Attempt)
@@ -76,11 +91,67 @@ func TestIntegrationWorkflowTaskRunUnfinishedRepoRootContinuesThroughCompletion(
 	}
 }
 
+func TestIntegrationWorkflowTaskRunContinuesPersistedSuccessfulHandoffWithoutAnotherImplementer(t *testing.T) {
+	for _, repoRoot := range []bool{false, true} {
+		t.Run(fmt.Sprintf("repo_root_%t", repoRoot), func(t *testing.T) {
+			fixture := newTaskWorkflowFixture(t, anInProgressTask("op-continue"))
+			if repoRoot {
+				fixture.seedRepoRootAttempt("op-continue")
+			} else {
+				fixture.seedRunningAttempt("op-continue", 100, 101)
+			}
+			completion := aCompletion()
+			_, err := seedFixtureHandoff(fixture.taskStore, "alpha", "op-continue", 1, taskstate.CompleteRunOptions{Summary: completion.Summary, Description: completion.Description, DetailedDescription: completion.DetailedDescription, TechnicalExplanation: completion.TechnicalExplanation})
+			require.NoError(t, err)
+			_, err = seedFixtureExit(fixture.taskStore, "alpha", "op-continue", 1, 0)
+			require.NoError(t, err)
+			_, err = seedFixtureUsage(fixture.taskStore, "alpha", "op-continue", 1, aCapturedPiUsage())
+			require.NoError(t, err)
+			before, _ := fixture.loadFinalTask("op-continue")
+			fixture.withRealReviewPipeline()
+			inspection, _, err := fixture.execute("task", "show", "workflow", "op-continue", "--json")
+			require.NoError(t, err)
+			var view workflow.View
+			require.NoError(t, json.Unmarshal([]byte(inspection), &view))
+			assert.Equal(t, workflow.TaskRunActionStartReview, view.Next.Action)
+			assert.Nil(t, view.Next.Recovery)
+			assert.Empty(t, fixture.git.captured)
+
+			_, stderr, err := fixture.execute("task", "run", "op-continue")
+
+			require.NoError(t, err, "stderr: %s", stderr)
+			final, item := fixture.loadFinalTask("op-continue")
+			require.Len(t, final.Runs, 1)
+			assert.Equal(t, before.Runs[0].Execution, final.Runs[0].Execution)
+			assertCompletionRecorded(t, completion, final.Runs[0].Completion)
+			assert.Equal(t, before.Runs[0].Completion.CompletedAt, final.Runs[0].Completion.CompletedAt)
+			assert.NotEmpty(t, final.Runs[0].Completion.Commit)
+			assert.Len(t, fixture.git.captured, 1)
+			assert.Empty(t, fixture.agent.launches)
+			assertWaitingForManualReview(t, final)
+			assertTaskNotPublished(t, final, item)
+		})
+	}
+}
+
 func TestIntegrationWorkflowTaskRunInterruptedRepoRootContinuesThroughCompletion(t *testing.T) {
 	fixture := newTaskWorkflowFixture(t, anInProgressTask("op-continue"))
 	fixture.seedRepoRootAttempt("op-continue")
 	fixture.git.repoRootDirty = true
 	fixture.withAbsentProcesses(100, 101)
+
+	_, err := seedFixtureHandoff(fixture.taskStore, "alpha", "op-continue", 1, taskstate.CompleteRunOptions{Summary: "feat: interrupted handoff", Description: "Retain rationale", DetailedDescription: "Still needs a successful process"})
+	require.NoError(t, err)
+	before, _ := fixture.loadFinalTask("op-continue")
+	inspection, _, err := fixture.execute("task", "show", "workflow", "op-continue", "--json")
+	require.NoError(t, err)
+	var view workflow.View
+	require.NoError(t, json.Unmarshal([]byte(inspection), &view))
+	require.NotNil(t, view.Next.Recovery)
+	assert.Equal(t, workflow.AttachedExecutionRecoverable, view.Next.Recovery.Condition)
+	assert.Contains(t, view.Next.Advice, "orpheus task run op-continue")
+	unchanged, _ := fixture.loadFinalTask("op-continue")
+	assert.Equal(t, before, unchanged)
 	completion := aCompletion()
 	fixture.withCompletingAgent(completion)
 	fixture.withRealReviewPipeline()
@@ -92,9 +163,17 @@ func TestIntegrationWorkflowTaskRunInterruptedRepoRootContinuesThroughCompletion
 	final, item := fixture.loadFinalTask("op-continue")
 	require.Len(t, final.Runs, 2)
 	assert.Equal(t, taskstate.RunStatusInterrupted, final.Runs[0].Status)
-	assert.Nil(t, final.Runs[0].Completion)
-	assert.Equal(t, taskstate.EventRunInterrupted, final.Events[2].Type)
-	assert.Equal(t, "supervisor_and_child_pids_absent", final.Events[2].InterruptionReason)
+	assert.Equal(t, before.Runs[0].Completion, final.Runs[0].Completion)
+	assert.Empty(t, final.Runs[0].Completion.Commit)
+	var interruption *taskstate.Event
+	for i := range final.Events {
+		if final.Events[i].Type == taskstate.EventRunInterrupted {
+			interruption = &final.Events[i]
+		}
+	}
+	require.NotNil(t, interruption)
+	assert.Equal(t, before.Runs[0].Address, interruption.Address)
+	assert.Equal(t, "supervisor_and_child_pids_absent", interruption.InterruptionReason)
 	assert.Equal(t, taskstate.RunStatusSucceeded, final.Runs[1].Status)
 	assertCompletionRecorded(t, completion, final.Runs[1].Completion)
 	assertPersistedTaskTarget(t, final, item, "orpheus/op-continue", taskWorkflowRepoRoot)
@@ -204,14 +283,43 @@ func TestIntegrationWorkflowTaskRunRepoRootContinuationBlocksUnresolvedProcesses
 					}
 					return test.child, nil
 				}
+
+				_, err := seedFixtureHandoff(fixture.taskStore, "alpha", "op-continue", 1, taskstate.CompleteRunOptions{Summary: "feat: handoff before exit", Description: "Preserve this handoff", DetailedDescription: "Not evidence of process success"})
+				require.NoError(t, err)
 				before, beforeTask := fixture.loadFinalTask("op-continue")
 				setups := len(fixture.git.setups)
+				inspection, _, err := fixture.execute("task", "show", "workflow", "op-continue", "--json")
+				require.NoError(t, err)
+				var view workflow.View
+				require.NoError(t, json.Unmarshal([]byte(inspection), &view))
+				require.NotNil(t, view.Next.Recovery)
+				expectedCondition := workflow.AttachedExecutionLive
+				if test.supervisor == agentexec.ProcessUnknown || test.child == agentexec.ProcessUnknown {
+					expectedCondition = workflow.AttachedExecutionUnverifiable
+				}
+				assert.Equal(t, expectedCondition, view.Next.Recovery.Condition)
+				assert.NotEmpty(t, view.Next.Recovery.Reason)
+				inspection, _, err = fixture.execute("task", "show", "workflow", "op-continue")
+				require.NoError(t, err)
+				afterInspect, afterTask := fixture.loadFinalTask("op-continue")
+				assert.Equal(t, before, afterInspect, "read-only inspection must not reconcile or capture")
+				assert.Equal(t, beforeTask, afterTask)
 
 				stdout, stderr, err := fixture.execute("task", "run", "op-continue")
 
 				require.NoError(t, err)
 				assert.Contains(t, stderr, "IMPLEMENTATION")
-				assert.Contains(t, stdout, "implementation attempt 1 is active")
+				if expectedCondition == workflow.AttachedExecutionLive {
+					assert.Contains(t, stdout, "implementation attempt 1 is still active")
+					assert.Contains(t, inspection, "wait for it to finish")
+				} else {
+					assert.Contains(t, stdout, "implementation attempt 1 is unverifiable")
+					assert.Contains(t, stdout, "orpheus doctor")
+					assert.Contains(t, inspection, "is unverifiable")
+					assert.NotContains(t, stdout+inspection, "wait for it to finish")
+					assert.NotContains(t, stdout+inspection, "is active")
+				}
+				assert.Empty(t, fixture.git.captured)
 				final, item := fixture.loadFinalTask("op-continue")
 				assert.Equal(t, before, final)
 				assert.Equal(t, beforeTask, item)

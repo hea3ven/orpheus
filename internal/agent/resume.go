@@ -33,6 +33,9 @@ func PrepareFollowUpResume(opts FollowUpResumeOptions) (CommandSnapshot, *taskst
 	latestFailure := ""
 	for index := len(opts.State.Runs) - 1; index >= 0; index-- {
 		run := opts.State.Runs[index]
+		if run.Address.Workflow != opts.State.CurrentWorkflow {
+			continue
+		}
 		if run.Status != taskstate.RunStatusSucceeded || run.Completion == nil ||
 			run.Execution.Purpose != taskstate.AgentExecutionPurposeImplementation {
 			continue
@@ -56,6 +59,7 @@ func PrepareFollowUpResume(opts FollowUpResumeOptions) (CommandSnapshot, *taskst
 		return resumed, &taskstate.AgentLaunch{
 			Mode:             taskstate.AgentLaunchResumed,
 			SourceRunAttempt: run.Attempt,
+			SourceExecution:  &run.Address,
 			SourceSession:    cloneAgentSession(&baseline.session),
 			UsageBaseline:    cloneAgentUsage(baseline.usage),
 			CostBaseline:     cloneInt64(baseline.costMicroUSD),

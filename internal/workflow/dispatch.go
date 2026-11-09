@@ -713,7 +713,7 @@ func (s DispatchService) continuingRepoRootRun(
 		return false, fmt.Errorf("inspect unfinished implementation: %w", err)
 	}
 	latest, ok := taskstate.LatestRun(state)
-	if !ok || latest.Completion != nil {
+	if !ok || latest.Status == taskstate.RunStatusSucceeded && latest.Completion != nil {
 		return false, nil
 	}
 	switch latest.Status {

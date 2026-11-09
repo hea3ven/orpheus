@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -35,11 +36,12 @@ const (
 
 // TaskRunRoute is the next action selected for task run.
 type TaskRunRoute struct {
-	Action  TaskRunAction
-	Attempt int
-	Step    string
-	PRURL   string
-	Advice  string
+	Action   TaskRunAction
+	Attempt  int
+	Step     string
+	PRURL    string
+	Advice   string
+	Recovery *AttachedExecutionInspection
 	// Owner and Version are an invocation's expected state, not a persisted cursor.
 	Owner   *work.AttemptRef
 	Version work.StateVersion
@@ -79,6 +81,9 @@ func PrepareTaskRun(ctx context.Context, opts PrepareTaskRunOptions) (PreparedTa
 	if opts.Store == nil {
 		return PreparedTaskRun{}, errors.New("task run preparation store is required")
 	}
+	if opts.Probe == nil {
+		opts.Probe = agentexec.ProbePID
+	}
 	taskState, err := opts.Store.Load(opts.RepoID, opts.TaskID)
 	if err != nil {
 		return PreparedTaskRun{}, err
@@ -109,6 +114,7 @@ func PrepareTaskRun(ctx context.Context, opts PrepareTaskRunOptions) (PreparedTa
 	if err != nil {
 		return PreparedTaskRun{}, err
 	}
+	applyExecutionRecovery(&route, taskState, opts.Probe)
 	return PreparedTaskRun{State: taskState, Inspection: inspection, ReviewInspection: reviewInspection, Route: route}, nil
 }
 

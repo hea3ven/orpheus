@@ -138,6 +138,7 @@ func TestIntegrationWorkflowTaskReviewAutonomousFollowUpResumesCompatiblePiSessi
 	must.NotNil(launch)
 	is.Equal(taskstate.AgentLaunchResumed, launch.Mode)
 	is.Equal(1, launch.SourceRunAttempt)
+	is.Equal(&state.Runs[0].Address, launch.SourceExecution)
 	must.NotNil(launch.SourceSession)
 	is.Equal("session-1", launch.SourceSession.ID)
 	must.NotNil(launch.UsageBaseline)

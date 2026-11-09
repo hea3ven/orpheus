@@ -1032,22 +1032,11 @@ func renderTaskRunAdvanceResult(command *cobra.Command, logger *slog.Logger, tas
 	return renderTaskRunRoute(command.OutOrStdout(), taskID, result.Route)
 }
 
-func renderReviewRecoveryGuidance(output io.Writer, taskID string, reason string) error {
-	_, err := fmt.Fprintf(output, "Task %s: recovered interrupted reviewer (%s). The candidate may contain reviewer mutations; inspect the worktree with `cd \"$(orpheus task dir %s)\" && git status --short && git diff`, then inspect audit history with `orpheus task show review %s`, before running a fresh `orpheus task run %s`.\n", taskID, reason, taskID, taskID, taskID)
-	return err
-}
-
-func renderReviewActiveGuidance(output io.Writer, taskID string, reason string) error {
-	_, err := fmt.Fprintf(output, "Task %s: reviewer is still active (%s); wait for it to finish, then inspect `orpheus task show review %s`.\n", taskID, reason, taskID)
-	return err
-}
-
-func renderReviewUnverifiableGuidance(output io.Writer, taskID string, reason string) error {
-	_, err := fmt.Fprintf(output, "Task %s: cannot automatically recover the reviewer (%s); inspect `orpheus doctor` and `orpheus task show review %s`.\n", taskID, reason, taskID)
-	return err
-}
-
 func renderTaskRunRoute(output io.Writer, taskID string, route workflow.TaskRunRoute) error {
+	if route.Advice != "" {
+		_, err := fmt.Fprintln(output, route.Advice)
+		return err
+	}
 	var message string
 	switch route.Action {
 	case workflow.TaskRunActionStartImplementation:
@@ -1216,12 +1205,13 @@ func renderTaskReviewLifecycleOutcome(
 	case workflow.ReviewLifecycleOutcomePublicationPending:
 		_, err := fmt.Fprintf(command.OutOrStdout(), "Review passed for %s. Committed output is retained; publication awaits explicit authorization.\n", outcome.Context.TaskID())
 		return err
-	case workflow.ReviewLifecycleOutcomeExecutionRecovered:
-		return renderReviewRecoveryGuidance(command.ErrOrStderr(), outcome.Context.TaskID(), outcome.RecoveryInspection.Reason)
-	case workflow.ReviewLifecycleOutcomeExecutionLive:
-		return renderReviewActiveGuidance(command.OutOrStdout(), outcome.Context.TaskID(), outcome.RecoveryInspection.Reason)
-	case workflow.ReviewLifecycleOutcomeExecutionUnknown:
-		return renderReviewUnverifiableGuidance(command.ErrOrStderr(), outcome.Context.TaskID(), outcome.RecoveryInspection.Reason)
+	case workflow.ReviewLifecycleOutcomeExecutionRecovered, workflow.ReviewLifecycleOutcomeExecutionLive, workflow.ReviewLifecycleOutcomeExecutionUnknown:
+		output := command.ErrOrStderr()
+		if outcome.Kind == workflow.ReviewLifecycleOutcomeExecutionLive {
+			output = command.OutOrStdout()
+		}
+		_, err := fmt.Fprintln(output, outcome.RecoveryInspection.Advice(outcome.Context.TaskID(), "review", outcome.Context.Review.Attempt))
+		return err
 	}
 	if outcome.Kind != workflow.ReviewLifecycleOutcomePassed {
 		return nil
@@ -4443,7 +4433,11 @@ func formatTaskStatsResumeSource(launch *taskstate.AgentLaunch) string {
 	if launch == nil || launch.Mode != taskstate.AgentLaunchResumed || launch.SourceSession == nil {
 		return "-"
 	}
-	return fmt.Sprintf("run %d / session %s", launch.SourceRunAttempt, formatTaskStatsField(launch.SourceSession.ID))
+	source := fmt.Sprintf("run %d / session %s", launch.SourceRunAttempt, formatTaskStatsField(launch.SourceSession.ID))
+	if launch.SourceExecution != nil {
+		source += fmt.Sprintf(" (workflow %d, phase %d)", launch.SourceExecution.Workflow+1, launch.SourceExecution.Phase+1)
+	}
+	return source
 }
 
 func formatTaskStatsResumeFallback(launch *taskstate.AgentLaunch) string {

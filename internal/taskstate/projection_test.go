@@ -32,6 +32,7 @@ func TestProjectFollowsWorkflowOwnershipWithoutReplacingFeatureIntentWithRepairO
 	require.NotNil(t, view.Runs[1].Execution.Launch)
 	assert.Equal(t, taskstate.AgentLaunchResumed, view.Runs[1].Execution.Launch.Mode)
 	assert.Equal(t, "native-feature", view.Runs[1].Execution.Launch.SourceSession.ID)
+	assert.Equal(t, &view.Runs[0].Address, view.Runs[1].Execution.Launch.SourceExecution)
 	assert.Equal(t, 500, view.Runs[1].Execution.Launch.UsageBaseline.TotalTokens)
 	assert.Equal(t, int64(17), *view.Runs[1].Execution.Launch.CostBaseline)
 	assert.Equal(t, "Incremental counters unavailable", view.Runs[1].Execution.UsageCapture.Reason)

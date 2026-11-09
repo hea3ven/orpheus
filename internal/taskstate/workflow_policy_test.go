@@ -106,6 +106,48 @@ func TestImplementationPolicyKeepsLiveHandoffSeparateFromObservedExitAndRefusesS
 	assert.Equal(t, before, after)
 }
 
+func TestImplementationResumptionKeepsExactSourceWithinCurrentWorkflow(t *testing.T) {
+	history := projectionHistory(t)
+	current := projectionHistory(t).Workflows[0]
+	current.Phases = current.Phases[:2]
+	current.ReviewContracts = nil
+	current.Phases[1].(*work.ImplementationPhase).Execution.Session = &work.Session{ID: "current-session", LogPath: "/fixture/current-session.jsonl"}
+	history.Workflows = append(history.Workflows, current)
+	store, _ := newPolicyStore(t, history)
+	before, err := store.Load("repo", "task")
+	require.NoError(t, err)
+	source := before.Runs[len(before.Runs)-1].Address
+	historical := before.Runs[0].Address
+	foreign := source
+	foreign.TaskID = "another-task"
+	for _, tc := range []struct {
+		name   string
+		source *work.AttemptRef
+	}{
+		{name: "missing exact source"},
+		{name: "older workflow with matching attempt", source: &historical},
+		{name: "another task", source: &foreign},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := store.StartRun("repo", "task", taskstate.StartRunOptions{Agent: "repairer", Harness: "pi", Launch: &taskstate.AgentLaunch{Mode: taskstate.AgentLaunchResumed, SourceRunAttempt: 1, SourceExecution: tc.source}})
+			require.ErrorContains(t, err, "owning workflow")
+			after, err := store.Load("repo", "task")
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+		})
+	}
+	baseline := &taskstate.AgentUsage{TotalTokens: 150}
+	run, err := store.StartRun("repo", "task", taskstate.StartRunOptions{Agent: "repairer", Harness: "pi", Launch: &taskstate.AgentLaunch{Mode: taskstate.AgentLaunchResumed, SourceRunAttempt: 999, SourceExecution: &source, UsageBaseline: baseline}})
+	require.NoError(t, err)
+	assert.Equal(t, &source, run.Execution.Launch.SourceExecution)
+	assert.Equal(t, 1, run.Execution.Launch.SourceRunAttempt, "display attempt is derived from exact provenance, never used to select it")
+	assert.Equal(t, "current-session", run.Execution.Launch.SourceSession.ID)
+	assert.Equal(t, baseline, run.Execution.Launch.UsageBaseline)
+	after, err := store.Load("repo", "task")
+	require.NoError(t, err)
+	assert.Equal(t, before.Runs, after.Runs[:len(before.Runs)], "resumption retains historical handoffs, process and usage facts")
+}
+
 func TestReviewPolicyRetainsOwnedFindingsWithoutSelectingPublication(t *testing.T) {
 	history := projectionHistory(t)
 	history.Workflows[0].Phases = history.Workflows[0].Phases[:2]
