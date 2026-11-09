@@ -38,11 +38,13 @@ type ReviewPhase struct {
 }
 
 // PublicationPhase owns immutable intent, explicit consent, and observed delivery.
-// Idempotent find/import/create retries establish Delivery in this same record.
+// Packaging and provider reconciliation establish Delivery in this same record.
 type PublicationPhase struct {
-	Plan     PublicationPlan
-	Consent  *PublicationConsent
-	Delivery Delivery
+	Plan                  PublicationPlan
+	Consent               *PublicationConsent
+	Operation             *PublicationOperation
+	Delivery              Delivery
+	PrivateRefsReleasedAt *time.Time
 }
 
 // ExternalReviewPhase owns post-publication PR branch maintenance, not PR feedback.

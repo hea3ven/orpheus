@@ -19,12 +19,15 @@ func deliveryTime(delivery Delivery) time.Time {
 // PublicationPlan binds actual retained input separately from historical review.
 // Input, destination context, content and target are immutable consent material.
 type PublicationPlan struct {
-	Review      ReviewRef
-	Input       PublicationInput
-	Destination Destination
-	Comparison  PublicationComparison
-	Target      PublicationTarget
-	Content     string
+	Review ReviewRef
+	// FeatureCompletion identifies the original intent used to generate Content.
+	// Nil denotes operator-authored content rather than an inferred agent handoff.
+	FeatureCompletion *OutputRef
+	Input             PublicationInput
+	Destination       Destination
+	Comparison        PublicationComparison
+	Target            PublicationTarget
+	Content           string
 }
 
 // PublicationInput retains the selected commit without inventing an agent effort.
@@ -48,15 +51,12 @@ type PublicationComparison struct {
 	Changes      string
 }
 
-// PublicationTarget distinguishes PR creation/update from destination delivery.
+// PublicationTarget distinguishes initial PR creation from destination delivery.
 type PublicationTarget interface{ publicationTarget() }
 
-// PullRequestTarget identifies an existing PR only for an update. Importing a PR
-// discovered after disconnected creation does not require inventing an operation.
-type PullRequestTarget struct {
-	Existing     *PullRequestRef
-	ExpectedHead string
-}
+// PullRequestTarget selects one initial PR delivery. Recovery identity belongs
+// to its operation rather than another PR-update publication target.
+type PullRequestTarget struct{}
 
 // DirectMergeTarget authorizes merge and verified destination push.
 type DirectMergeTarget struct{}
@@ -72,17 +72,26 @@ type PublicationConsent struct {
 	IntentDigest [32]byte
 }
 
+// PublicationOperation records intent before packaging, then its actual retained
+// public commit before any push or provider write. Its containing phase is its ID.
+type PublicationOperation struct {
+	StartedAt           time.Time
+	Ref                 string
+	Parent              string
+	Public              *CodeIdentity
+	PRCreationStartedAt *time.Time
+}
+
 // Delivery is an observed result, not a generic side-effect attempt or boolean flag.
 type Delivery interface{ delivery() }
 
 // PullRequestDelivery retains independent observed output and native PR identity.
-// PublicCommit can squash local history while Tree must preserve reviewed output.
+// PublicCommit can squash local history while Tree must preserve authorized input.
 type PullRequestDelivery struct {
 	PullRequest  PullRequestRef
 	PublicCommit string
 	Head         string
 	Tree         string
-	PreviousHead string
 	ObservedAt   time.Time
 	Evidence     string
 }

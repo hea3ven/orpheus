@@ -351,8 +351,7 @@ func repairHistory(t *testing.T) work.State {
 	selected.Execution = execution(84, 85, 0)
 	selected.Report.Verifications = []work.FindingVerification{{Finding: followupFindingRef(t), Resolution: work.FindingResolved, Evidence: "Retained local issue verified"}}
 	third.Steps = []work.ReviewStep{third.Steps[0], failed, selected, &work.ManualReviewStep{Slot: 2, Decision: &work.ApprovedReview{At: at(86)}}}
-	pr := nativePR()
-	w.Phases = append(w.Phases, third, &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 8}, Target: &work.PullRequestTarget{Existing: &pr, ExpectedHead: "P1"}, Content: "Original feature narrative with repair context"}})
+	w.Phases = append(w.Phases, third, &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 8}, Target: &work.PullRequestTarget{}, Content: "Original feature narrative with repair context"}})
 	testutil.SeedPublicationInputs(&s)
 	return s
 }

@@ -200,7 +200,7 @@ func settleUnchangedSync(ctx context.Context, target syncTarget, syncOpts gitmet
 		if err := operation.git.VerifyTaskBranchConflictRollback(ctx, syncOpts, checkpoint); err != nil {
 			return err
 		}
-		if err := operation.store.ResolveSyncConflictOperation(target.source.Repository.ID, target.task.ID, operation.operation.ID, "unchanged_checkpoint_verified", "Conflict-only synchronization left the native checkpoint unchanged"); err != nil {
+		if err := operation.store.ResolveSyncConflictOperation(target.source.Repository.ID, target.task.ID, operation.operation.ID, "unchanged_checkpoint_verified", "Synchronization left the local and public checkpoint unchanged"); err != nil {
 			return err
 		}
 	}

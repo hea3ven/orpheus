@@ -517,6 +517,28 @@ func (*memoryDispatchGit) DirectRevisionDelivery(context.Context, taskmodel.Repo
 	return gitmeta.Revision{}, errors.New("unexpected direct delivery in review-only fixture")
 }
 
-func (*memoryDispatchGit) PushPublicationInput(context.Context, string, string, gitmeta.Revision) error {
-	return errors.New("unexpected publication in review-only fixture")
+func (*memoryDispatchGit) ObservePublicHead(context.Context, string, string) (string, error) {
+	return "", errors.New("unexpected publication observation")
+}
+func (*memoryDispatchGit) PackagePublicCommit(context.Context, gitmeta.PublicCommitRequest) (gitmeta.Revision, error) {
+	return gitmeta.Revision{}, errors.New("unexpected public packaging")
+}
+func (*memoryDispatchGit) PushPublicCommit(context.Context, gitmeta.PublicCommitRequest, gitmeta.Revision) error {
+	return errors.New("unexpected publication push")
+}
+
+func (*memoryDispatchGit) RetainPublicationInput(context.Context, gitmeta.PublicCommitRequest) error {
+	return errors.New("unexpected publication retention")
+}
+func (*memoryDispatchGit) InspectPublicationCheckout(context.Context, string, string) (gitmeta.Revision, error) {
+	return gitmeta.Revision{}, errors.New("unexpected public checkout inspection")
+}
+func (*memoryDispatchGit) InspectPublicationRecovery(context.Context, gitmeta.PublicCommitRequest) (gitmeta.PublicationRecovery, error) {
+	return gitmeta.PublicationRecovery{}, errors.New("unexpected publication recovery")
+}
+func (*memoryDispatchGit) RestorePublicationInput(context.Context, gitmeta.PublicCommitRequest, gitmeta.PublicationRecovery) error {
+	return errors.New("unexpected publication restore")
+}
+func (*memoryDispatchGit) ReleasePrivatePublicationRefs(context.Context, string, []string) error {
+	return errors.New("unexpected private ref cleanup")
 }

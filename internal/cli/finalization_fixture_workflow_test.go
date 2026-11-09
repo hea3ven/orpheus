@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	workmodel "github.com/hea3ven/orpheus/internal/work"
+	"strings"
 	"testing"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
@@ -33,7 +34,7 @@ func newFinalizationFixture(t *testing.T, taskID string) *finalizationWorkflowFi
 	base := newReviewDispatchFixture(t, taskID)
 	f := &finalizationWorkflowFixture{reviewWorkflowFixture: base}
 	f.publication = &memoryPublicationGit{memoryReviewCandidate: base.candidate, remote: make(map[string]string)}
-	f.pr = &memoryPublicationPR{url: "https://github.test/org/alpha/pull/42", state: pullrequest.StateOpen}
+	f.pr = &memoryPublicationPR{git: f.publication, url: "https://github.test/org/alpha/pull/42", state: pullrequest.StateOpen}
 	f.mutations = &memoryPublicationTasks{memoryReviewTasks: base.tasks}
 	f.options.Dependencies.FinalizationGit = f.publication
 	f.options.Dependencies.SyncGit = f.publication
@@ -95,6 +96,10 @@ func (g refusedPublicationGit) VerifyRevision(context.Context, string, gitmeta.C
 
 func (g refusedPublicationGit) DirectRevisionDelivery(context.Context, taskmodel.Repository, string, string, string, string, string, gitmeta.Revision) (gitmeta.Revision, error) {
 	return gitmeta.Revision{}, g.err
+}
+
+func (g refusedPublicationGit) RetainPublicationInput(context.Context, gitmeta.PublicCommitRequest) error {
+	return g.err
 }
 
 func newMainFinalizationFixture(t *testing.T, taskID string) *finalizationWorkflowFixture {
@@ -185,6 +190,20 @@ type memoryPublicationGit struct {
 	cleanupError    error
 	cleanupAttempts []string
 	merges          int
+	packages        map[string]gitmeta.PublicCommitRequest
+	packageTree     string
+	packageContents string
+	observeError    error
+	losePush        bool
+	packageError    error
+	releaseError    error
+	restores        int
+	releases        int
+	savedContents   map[string]string
+	beforePackage   func(gitmeta.PublicCommitRequest)
+	beforePush      func(gitmeta.PublicCommitRequest)
+	beforeRelease   func()
+	packageCalls    int
 }
 
 func (g *memoryPublicationGit) PushDefaultBranch(_ context.Context, _ string, branch string) error {
@@ -225,30 +244,36 @@ func (g *memoryPublicationGit) ValidateRecordedDirectMerge(_ context.Context, _ 
 }
 
 type memoryPublicationPR struct {
-	url            string
-	existing       *pullrequest.CreateRequest
-	created        []pullrequest.CreateRequest
-	createError    error
-	state          pullrequest.State
-	statusReads    int
-	findReads      int
-	findError      error
-	statusError    error
-	statuses       map[string]pullrequest.State
-	statusRequests []pullrequest.StatusByURLRequest
+	crossRepository bool
+	beforeCreate    func()
+	git             *memoryPublicationGit
+	url             string
+	existing        *pullrequest.CreateRequest
+	created         []pullrequest.CreateRequest
+	createError     error
+	state           pullrequest.State
+	statusReads     int
+	findReads       int
+	findError       error
+	statusError     error
+	statuses        map[string]pullrequest.State
+	statusRequests  []pullrequest.StatusByURLRequest
 }
 
-func (p *memoryPublicationPR) FindOpenByBranch(_ context.Context, req pullrequest.FindOpenByBranchRequest) (pullrequest.PullRequest, bool, error) {
+func (p *memoryPublicationPR) FindByBranch(_ context.Context, req pullrequest.FindByBranchRequest) (pullrequest.PullRequest, bool, error) {
 	p.findReads++
 	if p.findError != nil {
 		return pullrequest.PullRequest{}, false, p.findError
 	}
-	if p.state != pullrequest.StateClosed && p.state != pullrequest.StateMerged && p.existing != nil && p.existing.RepositoryPath == req.RepositoryPath && p.existing.HeadBranch == req.HeadBranch && p.existing.BaseBranch == req.BaseBranch {
+	if p.existing != nil && p.existing.RepositoryPath == req.RepositoryPath && p.existing.HeadBranch == req.HeadBranch {
 		return pullrequest.PullRequest{URL: p.url}, true, nil
 	}
 	return pullrequest.PullRequest{}, false, nil
 }
 func (p *memoryPublicationPR) Create(_ context.Context, req pullrequest.CreateRequest) (pullrequest.PullRequest, error) {
+	if p.beforeCreate != nil {
+		p.beforeCreate()
+	}
 	if p.createError != nil {
 		return pullrequest.PullRequest{}, p.createError
 	}
@@ -271,10 +296,19 @@ func (p *memoryPublicationPR) StatusByURL(_ context.Context, req pullrequest.Sta
 	if req.URL != p.url || p.state == "" {
 		return pullrequest.PullRequestStatus{}, errors.New("unexpected PR status lookup")
 	}
-	return pullrequest.PullRequestStatus{URL: p.url, State: p.state}, nil
+	status := pullrequest.PullRequestStatus{URL: p.url, State: p.state, CrossRepository: p.crossRepository}
+	if p.existing != nil {
+		status.HeadBranch, status.BaseBranch = p.existing.HeadBranch, p.existing.BaseBranch
+		status.HeadCommit = p.git.remote[p.existing.HeadBranch]
+		status.Title, status.Body = p.existing.Title, p.existing.Body
+	}
+	return status, nil
 }
 
 func (g *memoryPublicationGit) PublishedRevision(_ context.Context, _ string, branch string) (gitmeta.Revision, error) {
+	if g.observeError != nil {
+		return gitmeta.Revision{}, g.observeError
+	}
 	commit, ok := g.remote[branch]
 	if !ok {
 		return gitmeta.Revision{}, errors.New("remote publication branch has not been observed")
@@ -316,17 +350,115 @@ func (g *memoryPublicationGit) ObservePublicationInput(ctx context.Context, req 
 	return g.memoryReviewCandidate.ObservePublicationInput(ctx, req)
 }
 
-func (g *memoryPublicationGit) PushPublicationInput(ctx context.Context, dir, branch string, input gitmeta.Revision) error {
-	if err := g.VerifyRevision(ctx, dir, gitmeta.CheckoutIdentity{Commit: input.Commit, Ref: "refs/heads/" + branch}, input); err != nil {
+func (g *memoryPublicationGit) ObservePublicHead(_ context.Context, _, branch string) (string, error) {
+	return g.remote[branch], nil
+}
+func (g *memoryPublicationGit) PackagePublicCommit(ctx context.Context, req gitmeta.PublicCommitRequest) (gitmeta.Revision, error) {
+	g.packageCalls++
+	if g.beforePackage != nil {
+		g.beforePackage(req)
+	}
+	if err := g.VerifyRevision(ctx, req.Directory, gitmeta.CheckoutIdentity{Commit: req.Input.Commit, Ref: "refs/heads/" + req.Branch}, req.Input); err != nil {
+		return gitmeta.Revision{}, err
+	}
+	g.head, g.heads[req.Directory] = req.Parent, req.Parent
+	g.hasStagedChanges = true
+	if g.packageError != nil {
+		return gitmeta.Revision{}, g.packageError
+	}
+	public := gitmeta.Revision{Commit: "public-" + req.Input.Commit, Tree: req.Input.Tree}
+	if g.packageTree != "" {
+		public.Tree = g.packageTree
+	}
+	if g.packageContents != "" {
+		g.contents = g.packageContents
+	}
+	if g.packages == nil {
+		g.packages = make(map[string]gitmeta.PublicCommitRequest)
+	}
+	g.packages[req.Ref] = req
+	g.trees[public.Commit] = public.Tree
+	g.head, g.heads[req.Directory] = public.Commit, public.Commit
+	g.hasStagedChanges = false
+	return public, nil
+}
+func (g *memoryPublicationGit) PushPublicCommit(ctx context.Context, req gitmeta.PublicCommitRequest, public gitmeta.Revision) error {
+	if g.beforePush != nil {
+		g.beforePush(req)
+	}
+	current, err := g.InspectPublicationCheckout(ctx, req.Directory, req.Branch)
+	if err != nil {
 		return err
+	}
+	if current.Commit != public.Commit || current.Tree != public.Tree {
+		return errors.New("public checkout changed")
 	}
 	if g.pushError != nil {
 		return g.pushError
 	}
-	if g.remote[branch] == input.Commit {
+	if g.remote[req.Branch] == public.Commit {
 		return nil
 	}
-	g.pushes = append(g.pushes, branch)
-	g.remote[branch] = input.Commit
+	if g.remote[req.Branch] != "" {
+		return errors.New("unexpected remote head")
+	}
+	g.pushes = append(g.pushes, req.Branch)
+	g.remote[req.Branch] = public.Commit
+	if g.losePush {
+		g.observeError = errors.New("lost push observation")
+		return g.observeError
+	}
+	return nil
+}
+
+func (p *memoryPublicationPR) Update(_ context.Context, req pullrequest.UpdateRequest) error {
+	p.existing.Title, p.existing.Body = req.Title, req.Body
+	return nil
+}
+
+func (g *memoryPublicationGit) RetainPublicationInput(ctx context.Context, req gitmeta.PublicCommitRequest) error {
+	if err := g.VerifyRevision(ctx, req.Directory, gitmeta.CheckoutIdentity{Commit: req.Input.Commit, Ref: "refs/heads/" + req.Branch}, req.Input); err != nil {
+		return err
+	}
+	if g.savedContents == nil {
+		g.savedContents = map[string]string{}
+	}
+	g.savedContents[req.Ref] = g.contents
+	retained := req.Input
+	retained.RetainedRef = req.Ref + "/input"
+	g.retained[retained.RetainedRef] = retained
+	return nil
+}
+func (g *memoryPublicationGit) InspectPublicationCheckout(_ context.Context, dir, branch string) (gitmeta.Revision, error) {
+	if g.targets[dir].branch != branch || g.hasCandidateChanges || g.hasStagedChanges {
+		return gitmeta.Revision{}, errors.New("public checkout is not clean on owned branch")
+	}
+	return gitmeta.Revision{Commit: g.head, Tree: g.trees[g.head]}, nil
+}
+func (g *memoryPublicationGit) InspectPublicationRecovery(_ context.Context, req gitmeta.PublicCommitRequest) (gitmeta.PublicationRecovery, error) {
+	return gitmeta.PublicationRecovery{Head: gitmeta.CheckoutIdentity{Commit: g.head, Ref: "refs/heads/" + req.Branch}, Changes: "Discard checkout and index changes at " + g.head + " and restore saved input " + req.Input.Commit + "\n" + g.contents}, nil
+}
+func (g *memoryPublicationGit) RestorePublicationInput(_ context.Context, req gitmeta.PublicCommitRequest, _ gitmeta.PublicationRecovery) error {
+	g.restores++
+	g.head, g.heads[req.Directory] = req.Input.Commit, req.Input.Commit
+	g.contents = g.savedContents[req.Ref]
+	g.hasCandidateChanges, g.hasStagedChanges = false, false
+	return nil
+}
+func (g *memoryPublicationGit) ReleasePrivatePublicationRefs(_ context.Context, _ string, namespaces []string) error {
+	if g.beforeRelease != nil {
+		g.beforeRelease()
+	}
+	if g.releaseError != nil {
+		return g.releaseError
+	}
+	g.releases++
+	for ref := range g.retained {
+		for _, prefix := range namespaces {
+			if strings.HasPrefix(ref, prefix) {
+				delete(g.retained, ref)
+			}
+		}
+	}
 	return nil
 }

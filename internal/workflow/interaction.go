@@ -20,9 +20,10 @@ import (
 type InteractionKind string
 
 const (
-	InteractionManualReview InteractionKind = "manual_review"
-	InteractionFindings     InteractionKind = "finding_dispositions"
-	InteractionPublication  InteractionKind = "publication_consent"
+	InteractionManualReview        InteractionKind = "manual_review"
+	InteractionFindings            InteractionKind = "finding_dispositions"
+	InteractionPublication         InteractionKind = "publication_consent"
+	InteractionPublicationRecovery InteractionKind = "publication_recovery"
 )
 
 // InteractionID binds a response to the exact observed owner and state version.
@@ -103,6 +104,11 @@ func pendingInteraction(v View, snapshot taskstate.TaskState) *Interaction {
 	interaction := &Interaction{ID: InteractionID{Owner: *v.Owner, Version: v.Next.Version}}
 	switch phase := snapshot.Work.ActiveWorkflow().LastPhase().(type) {
 	case *work.PublicationPhase:
+		if phase.Operation != nil && phase.Operation.Public == nil {
+			interaction.ID.Kind = InteractionPublicationRecovery
+			interaction.Actions = []DecisionAction{DecisionPause, DecisionAuthorize}
+			return interaction
+		}
 		if phase.Consent != nil {
 			return nil
 		}
@@ -198,7 +204,18 @@ func (s Controller) respondLocked(ctx context.Context, id InteractionID, respons
 	if err := s.validateResponseTarget(base, snapshot, view.Pending, id); err != nil {
 		return View{}, err
 	}
+	return s.respondToSnapshot(ctx, base, store, snapshot, view, id, response)
+}
+
+func (s Controller) respondToSnapshot(ctx context.Context, base ReviewContext, store WorkStore, snapshot work.State, view View, id InteractionID, response Response) (View, error) {
+	if recovery, ok := response.(PublicationRecoveryResponse); ok {
+		if id.Kind != InteractionPublicationRecovery {
+			return View{}, ErrStaleInteraction
+		}
+		return s.restorePublication(ctx, base, store, &snapshot, recovery)
+	}
 	var changed bool
+	var err error
 	if proposal, ok := response.(PublicationPlanResponse); ok && id.Kind == InteractionPublication {
 		if err := s.verifyPublicationPlan(ctx, base, snapshot, id.Owner); err != nil {
 			return View{}, err

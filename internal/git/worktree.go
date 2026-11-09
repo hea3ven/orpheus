@@ -142,6 +142,7 @@ func InspectTaskBranchConflictCheckpoint(ctx context.Context, opts TaskBranchSyn
 	if _, err := prepareDefaultBranchRef(ctx, plan.Worktree, plan.DefaultBranch); err != nil {
 		return TaskBranchConflictCheckpoint{}, err
 	}
+
 	local, err := HeadCommit(ctx, plan.Worktree)
 	if err != nil {
 		return TaskBranchConflictCheckpoint{}, err
@@ -733,6 +734,7 @@ func syncFetchedTaskBranchWithDefault(
 	plan taskBranchSyncPlan,
 	result TaskBranchSyncResult,
 ) (TaskBranchSyncResult, error) {
+
 	previousHead, err := HeadCommit(ctx, plan.Worktree)
 	if err != nil {
 		return TaskBranchSyncResult{}, err
@@ -801,6 +803,7 @@ func beginFetchedTaskBranchConflictResolution(
 	plan taskBranchSyncPlan,
 	result TaskBranchSyncResult,
 ) (TaskBranchSyncResult, error) {
+
 	previousHead, err := HeadCommit(ctx, plan.Worktree)
 	if err != nil {
 		return TaskBranchSyncResult{}, err

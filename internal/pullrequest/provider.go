@@ -24,8 +24,14 @@ const (
 
 // PullRequestStatus is the backend-neutral PR state observed from the provider.
 type PullRequestStatus struct {
-	URL   string
-	State State
+	URL             string
+	State           State
+	HeadBranch      string
+	BaseBranch      string
+	HeadCommit      string
+	CrossRepository bool
+	Title           string
+	Body            string
 }
 
 // DiagnosticContext carries safe workflow correlation for PR provider diagnostics.
@@ -36,8 +42,9 @@ type DiagnosticContext struct {
 	HasPR  bool
 }
 
-// FindOpenByBranchRequest identifies an open PR by repository and branch pair.
-type FindOpenByBranchRequest struct {
+// FindByBranchRequest searches by repository/head across all lifecycle states.
+// BaseBranch is the expected destination context, not a discovery filter.
+type FindByBranchRequest struct {
 	RepositoryPath string
 	HeadBranch     string
 	BaseBranch     string
@@ -54,15 +61,22 @@ type CreateRequest struct {
 	Diagnostics    DiagnosticContext
 }
 
+// UpdateRequest replaces only authored publication text, never the branch pair.
+type UpdateRequest struct {
+	RepositoryPath, URL, Title, Body string
+	Diagnostics                      DiagnosticContext
+}
+
 // StatusByURLRequest identifies a pull request by URL.
 type StatusByURLRequest struct {
 	URL         string
 	Diagnostics DiagnosticContext
 }
 
-// Provider creates and recovers pull requests for a repository.
+// Provider creates and reconciles pull requests for a repository.
 type Provider interface {
-	FindOpenByBranch(ctx context.Context, req FindOpenByBranchRequest) (PullRequest, bool, error)
+	FindByBranch(ctx context.Context, req FindByBranchRequest) (PullRequest, bool, error)
 	Create(ctx context.Context, req CreateRequest) (PullRequest, error)
+	Update(ctx context.Context, req UpdateRequest) error
 	StatusByURL(ctx context.Context, req StatusByURLRequest) (PullRequestStatus, error)
 }

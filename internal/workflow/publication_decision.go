@@ -90,12 +90,18 @@ func (s Controller) observePublicationPlan(ctx context.Context, w *work.Workflow
 	}
 	code := work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: observed.Revision.Commit, Tree: observed.Revision.Tree}, RetainedRef: observed.Revision.RetainedRef}
 	unchanged := code.CodeIdentity == plan.Input.Code.CodeIdentity
+	if unchanged {
+		code.RetainedRef = plan.Input.Code.RetainedRef
+	}
 	provenance := work.InputOperator
 	if code.CodeIdentity == reviewed.CodeIdentity {
 		provenance = work.InputReviewed
 	}
+	previousGap := publicationReviewGap(plan.Input, reviewed.Commit)
 	plan.Input = work.PublicationInput{Code: code, Provenance: provenance}
 	plan.Comparison = work.PublicationComparison{Relationship: observed.Relationship, Changes: observed.Changes}
+	plan.Content = strings.TrimSuffix(plan.Content, previousGap) + publicationReviewGap(plan.Input, reviewed.Commit)
+
 	// An accepted unchanged operation reconciles against its original destination
 	// checkpoint; observing its own remote merge must not replace its valid grant.
 	if consent != nil && unchanged && observed.Recovering {
@@ -123,6 +129,11 @@ func (s Controller) refreshPublicationSnapshot(ctx context.Context, source task.
 	if err := verifyPublicationOwnership(ctx, source, item, backend, w); err != nil {
 		return false, err
 	}
+
+	if unchanged, err := s.recordedPublicationUnchanged(ctx, w, p, item); err != nil || unchanged {
+		return false, err
+	}
+
 	owner := work.AttemptRef{RepositoryID: snapshot.RepositoryID, TaskID: snapshot.TaskID, Workflow: len(snapshot.Workflows) - 1, Phase: len(w.Phases) - 1}
 	if !publicationRequirements(w, p, item) {
 		return s.reviewChangedRequirements(ctx, source, item, snapshot, owner, p)
@@ -130,6 +141,9 @@ func (s Controller) refreshPublicationSnapshot(ctx context.Context, source task.
 	plan := p.Plan
 	if err := s.observePublicationPlan(ctx, w, owner, &plan, p.Consent); err != nil {
 		return false, err
+	}
+	if p.Operation != nil && plan.Input == p.Plan.Input {
+		plan.Destination = p.Plan.Destination
 	}
 	if reflect.DeepEqual(plan, p.Plan) {
 		return false, nil
@@ -171,6 +185,7 @@ func (s Controller) reviewChangedRequirements(ctx context.Context, source task.R
 		return false, err
 	}
 	scope.Destination = &destination
+
 	w.ReviewContracts = append(w.ReviewContracts, reviewContract(pipeline))
 	w.Phases = append(w.Phases, &work.ReviewPhase{Contract: len(w.ReviewContracts) - 1, Scope: scope, StartedAt: time.Now().UTC()})
 	return true, nil
@@ -244,4 +259,38 @@ func (s Controller) verifyPublicationPlan(ctx context.Context, base ReviewContex
 		return fmt.Errorf("%w: publication input or destination context changed; continue task run for a new decision", ErrStaleInteraction)
 	}
 	return nil
+}
+
+func publicationReviewGap(input work.PublicationInput, reviewed string) string {
+	if input.Provenance != work.InputOperator {
+		return ""
+	}
+	return fmt.Sprintf("\n\n## Publication review gap\n\nThe operator selected commit %s (tree %s) instead of reviewed commit %s. These differences were explicitly accepted for publication, not reported as reviewed.", input.Code.Commit, input.Code.Tree, reviewed)
+}
+
+func (s Controller) recordedPublicationUnchanged(ctx context.Context, w *work.Workflow, p *work.PublicationPhase, item task.Task) (bool, error) {
+	if p.Operation == nil {
+		return false, nil
+	}
+	if p.Operation.Public == nil {
+		return true, nil
+	}
+	current, err := s.publicationBoundary().InspectPublicationCheckout(ctx, w.Context().Directory, w.Context().TaskBranch)
+	if err != nil {
+		return false, err
+	}
+	if current.Commit == p.Operation.Public.Commit && current.Tree == p.Operation.Public.Tree && current.Tree == p.Plan.Input.Code.Tree {
+		if !publicationRequirements(w, p, item) {
+			return false, errors.New("task requirements changed; reconcile recorded publication before fresh review")
+		}
+		return true, nil
+	}
+	remote, err := s.publicationBoundary().ObservePublicHead(ctx, w.Context().Directory, w.Context().TaskBranch)
+	if err != nil {
+		return false, err
+	}
+	if remote != "" {
+		return false, errors.New("recorded publication checkout changed after remote delivery; reconcile public history without another initial squash")
+	}
+	return false, nil
 }

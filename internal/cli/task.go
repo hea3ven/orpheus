@@ -998,7 +998,7 @@ func executeTaskRun(command *cobra.Command, execution taskRunExecution, opts wor
 		if advanceErr != nil {
 			return advanceErr
 		}
-		if result.View.Pending == nil || result.View.Pending.ID.Kind != workflow.InteractionPublication {
+		if result.View.Pending == nil || (result.View.Pending.ID.Kind != workflow.InteractionPublication && result.View.Pending.ID.Kind != workflow.InteractionPublicationRecovery) {
 			return renderTaskRunAdvanceResult(command, execution.logger, opts.TaskID, result)
 		}
 		if result.Review != nil {
@@ -2652,10 +2652,10 @@ func finalizeTask(command *cobra.Command, service workflow.Controller, opts work
 
 func renderTaskDoneResult(command *cobra.Command, finalized workflow.FinalizationResult) error {
 	if finalized.PRURL != "" && finalized.Finalization.ClosedAt == nil {
-		_, err := fmt.Fprintf(command.OutOrStdout(), "Published %s: delivered authorized input %s, pushed %s, and observed PR %s. Backend task remains open for PR review.\n", finalized.Task.ID, finalized.Finalization.Commit, finalized.Branch, finalized.PRURL)
+		_, err := fmt.Fprintf(command.OutOrStdout(), "Published %s: delivered authorized input %s, pushed %s, and observed PR %s. Backend task remains open for PR review.\n", finalized.Task.ID, finalized.InputCommit, finalized.Branch, finalized.PRURL)
 		return err
 	}
-	_, err := fmt.Fprintf(command.OutOrStdout(), "Finalized %s: delivered authorized input %s, pushed %s, and closed the backend task.%s\n", finalized.Task.ID, finalized.Finalization.Commit, finalized.Finalization.DestinationBranch, formatWorktreeCleanup(finalized.WorktreeCleanup))
+	_, err := fmt.Fprintf(command.OutOrStdout(), "Finalized %s: delivered authorized input %s, pushed %s, and closed the backend task.%s\n", finalized.Task.ID, finalized.InputCommit, finalized.Finalization.DestinationBranch, formatWorktreeCleanup(finalized.WorktreeCleanup))
 	return err
 }
 

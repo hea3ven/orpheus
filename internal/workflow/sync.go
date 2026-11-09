@@ -1070,19 +1070,22 @@ func BuildPublicationPullRequestContentFromStateWithOptions(
 }
 
 func publicationRun(state taskstate.TaskState) (taskstate.RunAttempt, error) {
-	var selected taskstate.RunAttempt
-	for _, run := range state.Runs {
-		if run.Completion == nil || run.ReviewFollowUp != nil {
-			continue
-		}
-		if selected.Attempt == 0 || run.Attempt > selected.Attempt {
-			selected = run
-		}
-	}
-	if selected.Attempt == 0 {
+	if state.Work == nil || state.Work.ActiveWorkflow() == nil {
 		return taskstate.RunAttempt{}, errors.New("original implementation completion is required")
 	}
-	return selected, nil
+	w := state.Work.ActiveWorkflow()
+	feature := w.FeatureCompletion()
+	if feature == nil {
+		return taskstate.RunAttempt{}, errors.New("original implementation completion is required")
+	}
+	for _, run := range state.Runs {
+		if run.Address.Workflow == state.CurrentWorkflow && run.Completion != nil && run.Address.Phase >= 0 && run.Address.Phase < len(w.Phases) {
+			if effort, ok := w.Phases[run.Address.Phase].(*work.ImplementationPhase); ok && effort.Completion == feature {
+				return run, nil
+			}
+		}
+	}
+	return taskstate.RunAttempt{}, errors.New("selected original implementation completion is missing")
 }
 
 func appendReviewProcess(body string, state taskstate.TaskState) string {

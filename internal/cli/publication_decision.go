@@ -15,9 +15,13 @@ import (
 // Publication prompting records decisions through the typed boundary. The caller
 // advances only after a successful answer, never on pause or unavailable input.
 func presentPublicationDecision(command *cobra.Command, controller workflow.Controller, reader *bufio.Reader, view workflow.View, terminal TerminalCapabilities) (workflow.View, error) {
-	for view.Pending != nil && view.Pending.ID.Kind == workflow.InteractionPublication {
+	for view.Pending != nil && (view.Pending.ID.Kind == workflow.InteractionPublication || view.Pending.ID.Kind == workflow.InteractionPublicationRecovery) {
 		if err := controller.Progress(workflow.Progress{View: view}); err != nil {
 			return view, err
+		}
+		if view.Pending.ID.Kind == workflow.InteractionPublicationRecovery {
+			next, err := presentPublicationRecovery(command, controller, reader, view, terminal)
+			return next, err
 		}
 		if _, err := fmt.Fprintln(command.ErrOrStderr(), "PUBLICATION CONTENT\n"+view.Publication.Content); err != nil {
 			return view, err
@@ -84,4 +88,31 @@ func promptPublicationPlanChange(command *cobra.Command, reader *bufio.Reader, v
 	}
 	proposal.Flow = publication.IntegrationFlow(strings.TrimSpace(value))
 	return proposal, nil
+}
+
+func presentPublicationRecovery(command *cobra.Command, controller workflow.Controller, reader *bufio.Reader, view workflow.View, terminal TerminalCapabilities) (workflow.View, error) {
+	disclosure, err := controller.InspectPublicationRecovery(command.Context(), view.Pending.ID)
+	if err != nil {
+		return view, err
+	}
+	if _, err := fmt.Fprintf(command.ErrOrStderr(), "PUBLICATION RECOVERY\nSaved input: %s (tree %s)\n%s\n", view.Publication.Input.Code.Commit, view.Publication.Input.Code.Tree, disclosure.Changes); err != nil {
+		return view, err
+	}
+	if err := requireOperatorInput(command, terminal, view.TaskID); err != nil {
+		return view, err
+	}
+	if _, err := fmt.Fprint(command.ErrOrStderr(), "Recovery [r=restore saved input, discard displayed changes and retry, m=leave untouched for manual repair, q=pause]: "); err != nil {
+		return view, err
+	}
+	answer, err := reader.ReadString('\n')
+	if errors.Is(err, io.EOF) {
+		return view, nil
+	}
+	if err != nil {
+		return view, err
+	}
+	if strings.TrimSpace(strings.ToLower(answer)) != "r" {
+		return view, nil
+	}
+	return controller.Respond(command.Context(), view.Pending.ID, workflow.PublicationRecoveryResponse{Checkout: disclosure})
 }

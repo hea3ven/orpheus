@@ -118,9 +118,11 @@ func (b *publicationBackend) SetPRURL(_ context.Context, id, url string) error {
 
 type publicationGit struct {
 	source                        gitmeta.Revision
+	public                        gitmeta.Revision
 	remote                        map[string]gitmeta.Revision
 	taskBranch                    string
 	verifyErr, pushErr, directErr error
+	upstreamErr                   error
 	pushWrongTree                 bool
 	localMerge                    string
 	merges                        int
@@ -150,16 +152,29 @@ func (g *publicationGit) VerifyRevision(_ context.Context, _ string, identity gi
 	}
 	return nil
 }
-func (g *publicationGit) PushPublicationInput(_ context.Context, _ string, branch string, input gitmeta.Revision) error {
+func (g *publicationGit) ObservePublicHead(_ context.Context, _, branch string) (string, error) {
+	return g.remote[branch].Commit, nil
+}
+func (g *publicationGit) PackagePublicCommit(_ context.Context, req gitmeta.PublicCommitRequest) (gitmeta.Revision, error) {
+	g.public = gitmeta.Revision{Commit: "public-" + req.Input.Commit, Tree: req.Input.Tree}
+	return g.public, nil
+}
+func (g *publicationGit) PushPublicCommit(_ context.Context, req gitmeta.PublicCommitRequest, public gitmeta.Revision) error {
 	if g.pushErr != nil {
 		return g.pushErr
 	}
-	g.pushes = append(g.pushes, branch)
-	g.remote[branch] = input
-	if g.pushWrongTree {
-		g.remote[branch] = gitmeta.Revision{Commit: g.source.Commit, Tree: "foreign-tree"}
+	if g.remote[req.Branch].Commit == public.Commit {
+		return g.upstreamErr
 	}
-	return nil
+	if g.remote[req.Branch].Commit != "" {
+		return errors.New("unexpected remote head")
+	}
+	g.pushes = append(g.pushes, req.Branch)
+	g.remote[req.Branch] = public
+	if g.pushWrongTree {
+		g.remote[req.Branch] = gitmeta.Revision{Commit: public.Commit, Tree: "foreign-tree"}
+	}
+	return g.upstreamErr
 }
 func (g *publicationGit) PublishedRevision(_ context.Context, _ string, branch string) (gitmeta.Revision, error) {
 	actual, ok := g.remote[branch]
@@ -187,17 +202,18 @@ func (g *publicationGit) DirectRevisionDelivery(_ context.Context, _ task.Reposi
 
 type publicationPR struct {
 	open               *pullrequest.CreateRequest
+	git                *publicationGit
 	url                string
 	created            []pullrequest.CreateRequest
 	findErr, statusErr error
 	loseCreateResponse bool
 }
 
-func (p *publicationPR) FindOpenByBranch(_ context.Context, req pullrequest.FindOpenByBranchRequest) (pullrequest.PullRequest, bool, error) {
+func (p *publicationPR) FindByBranch(_ context.Context, req pullrequest.FindByBranchRequest) (pullrequest.PullRequest, bool, error) {
 	if p.findErr != nil {
 		return pullrequest.PullRequest{}, false, p.findErr
 	}
-	if p.open != nil && p.open.RepositoryPath == req.RepositoryPath && p.open.HeadBranch == req.HeadBranch && p.open.BaseBranch == req.BaseBranch {
+	if p.open != nil && p.open.RepositoryPath == req.RepositoryPath && p.open.HeadBranch == req.HeadBranch {
 		return pullrequest.PullRequest{URL: p.url}, true, nil
 	}
 	return pullrequest.PullRequest{}, false, nil
@@ -221,7 +237,7 @@ func (p *publicationPR) StatusByURL(_ context.Context, req pullrequest.StatusByU
 	if p.open == nil || req.URL != p.url {
 		return pullrequest.PullRequestStatus{}, errors.New("unknown native PR")
 	}
-	return pullrequest.PullRequestStatus{URL: p.url, State: pullrequest.StateOpen}, nil
+	return pullrequest.PullRequestStatus{URL: p.url, State: pullrequest.StateOpen, HeadBranch: p.open.HeadBranch, BaseBranch: p.open.BaseBranch, HeadCommit: p.git.remote[p.open.HeadBranch].Commit, Title: p.open.Title, Body: p.open.Body}, nil
 }
 
 type committedPublicationFixture struct {
@@ -260,7 +276,7 @@ func newCommittedPublicationFixture(t *testing.T, authorized, direct, dedicated 
 	store := &publicationStore{implementationRecordingStore: newImplementationRecordingStore(t, history)}
 	backend := &publicationBackend{items: []task.Task{{ID: "op-1", Title: "Original task", Status: task.StatusInProgress, IssueType: task.IssueTypeTask, Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-1", task.MetadataWorktree: directory}}}}
 	git := &publicationGit{source: gitmeta.Revision{Commit: "fixture-output", Tree: "fixture-tree", RetainedRef: "refs/orpheus/fixture-output"}, taskBranch: "orpheus/op-1", remote: make(map[string]gitmeta.Revision)}
-	pr := &publicationPR{url: "https://github.test/org/repo/pull/42"}
+	pr := &publicationPR{git: git, url: "https://github.test/org/repo/pull/42"}
 	repo := task.Repository{ID: "alpha", Path: "/fixture/repo", DefaultBranch: "main", TaskIDPrefix: "op"}
 	delivery := workflow.FinalizationService{Paths: paths, Store: store, Git: git, PRProvider: pr, Sources: []task.RepositorySource{{Repository: repo}}, BackendFactory: func(task.RepositorySource) (workflow.FinalizationBackend, error) { return backend, nil }}
 	return &committedPublicationFixture{service: workflow.Controller{Delivery: delivery}, store: store, backend: backend, git: git, pr: pr}
@@ -349,7 +365,7 @@ func TestFinalizeCommittedPRRecoversLostCreationAndPersistenceWithoutAnotherImpl
 
 			require.NoError(t, err)
 			assert.Equal(t, "https://github.test/org/repo/pull/42", result.PRURL)
-			assert.Equal(t, "fixture-output", result.Finalization.Commit)
+			assert.Equal(t, "public-fixture-output", result.Finalization.Commit)
 			assert.Equal(t, "release/next", result.Finalization.DestinationBranch, "retry must consume the plan, not current configuration")
 			assert.Equal(t, task.StatusInProgress, result.Task.Status)
 			assert.Len(t, f.pr.created, 1)
@@ -367,26 +383,47 @@ func TestFinalizeCommittedPRRecoversLostCreationAndPersistenceWithoutAnotherImpl
 
 func TestFinalizeDoesNotTurnProviderOrRemoteUncertaintyIntoPublication(t *testing.T) {
 	lookupFailure := errors.New("provider lookup unavailable")
-	for _, scenario := range []string{"provider lookup error", "remote tree mismatch"} {
+	setupFailure := errors.New("publication upstream configuration unavailable")
+	for _, scenario := range []string{"provider lookup error", "remote tree mismatch", "upstream setup failure"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := newCommittedPublicationFixture(t, true, false, false)
-			if scenario == "provider lookup error" {
+			switch scenario {
+			case "provider lookup error":
 				f.pr.findErr = lookupFailure
-			} else {
+			case "remote tree mismatch":
 				f.git.pushWrongTree = true
+			case "upstream setup failure":
+				f.git.upstreamErr = setupFailure
 			}
 			before := f.snapshot(t)
 			_, err := f.service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
 			require.Error(t, err)
-			if scenario == "provider lookup error" {
+			switch scenario {
+			case "provider lookup error":
 				assert.ErrorIs(t, err, lookupFailure)
-			} else {
-				assert.Contains(t, err.Error(), "origin branch differs")
+			case "remote tree mismatch":
+				assert.Contains(t, err.Error(), "origin branch changed")
+			case "upstream setup failure":
+				assert.ErrorIs(t, err, setupFailure)
 			}
-			assert.Equal(t, before, f.snapshot(t))
+			assert.Equal(t, before.Workflows[0].Phases[3].(*work.PublicationPhase).Plan, firstPublication(f.snapshot(t)).Plan)
+			assert.Nil(t, firstPublication(f.snapshot(t)).Delivery)
 			assert.Empty(t, f.pr.created, "lookup error is not confirmed absence")
 			assert.Empty(t, f.backend.urls)
 			assert.Empty(t, f.backend.closed)
+			if scenario == "upstream setup failure" {
+				pending := firstPublication(f.snapshot(t))
+				require.NotNil(t, pending.Operation.Public)
+				assert.Equal(t, "public-fixture-output", f.git.remote["orpheus/op-1"].Commit, "remote success alone cannot finish publication before local setup")
+				assert.Equal(t, firstPublication(before).Consent, pending.Consent)
+				f.git.upstreamErr = nil
+				result, err := f.service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
+				require.NoError(t, err)
+				assert.Equal(t, f.pr.url, result.PRURL)
+				assert.Len(t, f.git.pushes, 1, "retry must reuse the already published commit")
+				assert.Len(t, f.pr.created, 1)
+			}
+
 		})
 	}
 }
@@ -490,4 +527,28 @@ func (s publicationInferenceStore) Load(repoID, taskID string) (work.State, erro
 		return work.State{RepositoryID: repoID, TaskID: taskID}, nil
 	}
 	return s.WorkStore.Load(repoID, taskID)
+}
+
+func (p *publicationPR) Update(_ context.Context, req pullrequest.UpdateRequest) error {
+	p.open.Title, p.open.Body = req.Title, req.Body
+	return nil
+}
+
+func (g *publicationGit) RetainPublicationInput(ctx context.Context, req gitmeta.PublicCommitRequest) error {
+	return g.VerifyRevision(ctx, req.Directory, gitmeta.CheckoutIdentity{Commit: req.Input.Commit, Ref: "refs/heads/" + req.Branch}, req.Input)
+}
+func (g *publicationGit) InspectPublicationCheckout(context.Context, string, string) (gitmeta.Revision, error) {
+	if g.verifyErr != nil {
+		return gitmeta.Revision{}, g.verifyErr
+	}
+	return g.public, nil
+}
+func (*publicationGit) InspectPublicationRecovery(context.Context, gitmeta.PublicCommitRequest) (gitmeta.PublicationRecovery, error) {
+	return gitmeta.PublicationRecovery{}, errors.New("unexpected recovery inspection")
+}
+func (*publicationGit) RestorePublicationInput(context.Context, gitmeta.PublicCommitRequest, gitmeta.PublicationRecovery) error {
+	return errors.New("unexpected recovery reset")
+}
+func (*publicationGit) ReleasePrivatePublicationRefs(context.Context, string, []string) error {
+	return nil
 }

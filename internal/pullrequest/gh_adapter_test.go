@@ -25,7 +25,7 @@ type ghStatusByURLCase struct {
 var ghStatusByURLCases = []ghStatusByURLCase{
 	{
 		name:      "open",
-		output:    `{"url":"https://github.com/org/repo/pull/1","state":"OPEN","mergedAt":null}`,
+		output:    `{"url":"https://github.com/org/repo/pull/1","state":"OPEN","mergedAt":null,"headRefName":"task","baseRefName":"release","headRefOid":"public-sha","title":"Feature title","body":"Feature body","isCrossRepository":true}`,
 		wantState: pullrequest.StateOpen,
 	},
 	{
@@ -85,6 +85,12 @@ func TestIntegrationAdapterContractGHProviderStatusByURL(t *testing.T) {
 			if got.URL != "https://github.com/org/repo/pull/1" || got.State != tt.wantState {
 				t.Fatalf("status = %#v, want URL and state %q", got, tt.wantState)
 			}
+			if tt.name == "open" {
+				if got.HeadBranch != "task" || got.BaseBranch != "release" || got.HeadCommit != "public-sha" || got.Title != "Feature title" || got.Body != "Feature body" || !got.CrossRepository {
+					t.Fatalf("publication context = %#v", got)
+				}
+			}
+
 		})
 	}
 }

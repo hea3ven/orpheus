@@ -14,7 +14,8 @@ type Completion struct {
 // Output is captured Git code or explicit unchanged-input reuse.
 type Output interface{ output() }
 
-// CodeOutput retains native Git identity and a ref that keeps the object reachable.
+// CodeOutput records native identity and its retention ref. Private refs can be
+// released after PR delivery; historical strings do not promise reachability.
 type CodeOutput struct {
 	CodeIdentity
 	RetainedRef string

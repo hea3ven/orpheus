@@ -4,6 +4,7 @@ package cli_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -12,10 +13,15 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/cli"
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/review"
+	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -82,6 +88,23 @@ func TestIntegrationWorkflowPublicationPlanEditsAndInterruptedConsentNeverDelive
 	assert.Len(t, f.pr.created, 1)
 	assert.Empty(t, f.tasks.closed)
 	f.pr.statusError = nil
+	for _, lifecycle := range []pullrequest.State{pullrequest.StateClosed, pullrequest.StateMerged} {
+		f.pr.state = lifecycle
+		_, _, err = f.runError("", "task", "run", "op-plan")
+		require.ErrorContains(t, err, "reconcile lifecycle")
+		assert.Len(t, f.pr.created, 1, "a recovered closed/merged PR must not produce duplicate creation")
+	}
+	f.pr.state = pullrequest.StateOpen
+	f.pr.crossRepository = true
+	_, _, err = f.runError("", "task", "run", "op-plan")
+	require.ErrorContains(t, err, "repository, destination")
+	assert.Len(t, f.pr.created, 1, "a matching fork head is not this operation's owned PR")
+	f.pr.crossRepository = false
+	f.pr.existing.BaseBranch = "retargeted"
+	_, _, err = f.runError("", "task", "run", "op-plan")
+	require.ErrorContains(t, err, "destination, branch or public head changed")
+	assert.Len(t, f.pr.created, 1, "retargeted PR is not absence")
+	f.pr.existing.BaseBranch = "main"
 	f.setConfig("publication", map[string]any{"integration_flow": "direct-merge", "title_template": "Changed {{summary}}"})
 	f.pipelines("new-policy", map[string][]map[string]any{"new-policy": {{"kind": "manual", "name": "new-earlier-requirement"}}})
 	f.options.Dependencies.Terminal.InputIsTerminal = func(io.Reader) bool { return false }
@@ -278,10 +301,14 @@ func TestIntegrationWorkflowPublicationOperatorInputIsDistinctFromReviewAndRequi
 					require.NotNil(t, plan.Consent)
 					assert.Equal(t, actual, plan.Plan.Input.Code.Commit)
 					assert.Equal(t, "output-1", final.Runs[0].Completion.Commit)
-					assert.Equal(t, actual, taskstate.FinalizationFacts(final).Commit)
+					if flow == "pull-request" {
+						assert.Equal(t, "public-"+actual, taskstate.FinalizationFacts(final).Commit)
+					} else {
+						assert.Equal(t, actual, taskstate.FinalizationFacts(final).Commit)
+					}
 					if flow == "pull-request" {
 						assert.Equal(t, taskmodel.StatusInProgress, item.Status)
-						assert.Equal(t, actual, f.publication.remote[branch])
+						assert.Equal(t, "public-"+actual, f.publication.remote[branch])
 						assert.Equal(t, "main", f.pr.created[0].BaseBranch)
 						assert.Equal(t, f.candidate.trees[actual], plan.Delivery.(*work.PullRequestDelivery).Tree)
 					} else {
@@ -320,21 +347,264 @@ func TestIntegrationWorkflowPublicationInputChangingBetweenConsentAndDeliveryNee
 	assert.Equal(t, old, retained.Work.Workflows[0].Phases[len(accepted.Work.Workflows[0].Phases)-1])
 	f.run("p\n", "task", "run", "op-race")
 	f.assertPublishedPR("op-race")
-	assert.Equal(t, "operator-race", f.publication.remote[branch])
+	assert.Equal(t, "public-operator-race", f.publication.remote[branch])
 	final, _ := f.loadFinalTask("op-race")
 	assert.Len(t, final.Reviews, 1)
 	assert.Len(t, final.Runs, 1)
 }
 
 type publicationConsentMutation struct {
+	trigger string
 	io.Writer
 	mutate func()
 }
 
 func (w *publicationConsentMutation) Write(p []byte) (int, error) {
-	if w.mutate != nil && strings.Contains(string(p), "Recorded for this unchanged plan") {
+	trigger := w.trigger
+	if trigger == "" {
+		trigger = "Recorded for this unchanged plan"
+	}
+	if w.mutate != nil && strings.Contains(string(p), trigger) {
 		w.mutate()
 		w.mutate = nil
 	}
 	return w.Writer.Write(p)
+}
+
+func TestIntegrationWorkflowInitialPublicationRefusesUnrelatedRemoteHistory(t *testing.T) {
+	for _, remoteChange := range []string{"branch exists", "PR appears after push"} {
+		t.Run(remoteChange, func(t *testing.T) {
+			f := newFeatureFinalizationFixture(t, "op-safe", false)
+			branch, _ := f.expectedTarget("op-safe")
+			if remoteChange == "branch exists" {
+				f.publication.remote[branch] = "unexpected-remote"
+			} else {
+				f.publication.beforePush = func(gitmeta.PublicCommitRequest) {
+					f.pr.existing = &pullrequest.CreateRequest{RepositoryPath: taskWorkflowRepoRoot, HeadBranch: branch, BaseBranch: "main", Title: "Unrelated PR", Body: "Not created by this operation"}
+				}
+			}
+			_, _, err := f.runError("", "task", "done", "op-safe")
+			require.Error(t, err)
+			if remoteChange == "branch exists" {
+				require.ErrorContains(t, err, "unexpected public head")
+				assert.Equal(t, "unexpected-remote", f.publication.remote[branch])
+				assert.Empty(t, f.publication.packages)
+				assert.Equal(t, "output-1", f.candidate.head)
+			} else {
+				require.ErrorContains(t, err, "without this operation's creation intent")
+				saved, _ := f.loadFinalTask("op-safe")
+				p := saved.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+				assert.Nil(t, p.Operation.PRCreationStartedAt)
+				assert.Nil(t, p.Delivery)
+				_, _, err = f.runError("", "task", "done", "op-safe")
+				require.ErrorContains(t, err, "cannot import")
+				assert.Equal(t, "Unrelated PR", f.pr.existing.Title)
+			}
+			assert.Empty(t, f.pr.created)
+			assert.Empty(t, f.tasks.closed)
+		})
+	}
+}
+
+func TestIntegrationWorkflowPackagingTreeChangesRequireActualInputAndRenewedConsent(t *testing.T) {
+	f := newFeatureFinalizationFixture(t, "op-hook", false)
+	actualContents := "actual hook output\n"
+	f.publication.packageTree = fmt.Sprintf("tree-%x", sha256.Sum256([]byte(actualContents)))
+	f.publication.packageContents = actualContents
+	_, _, err := f.runError("", "task", "done", "op-hook")
+	require.ErrorContains(t, err, "packaging changed authorized tree")
+	saved, _ := f.loadFinalTask("op-hook")
+	p := saved.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+	assert.Equal(t, f.publication.packageTree, p.Operation.Public.Tree)
+	assert.Equal(t, p.Operation.Public.Commit, f.candidate.head, "actual hook commit stays in the task checkout")
+	assert.Nil(t, p.Delivery)
+	assert.Empty(t, f.publication.remote)
+	assert.Empty(t, f.pr.created)
+	grant := *p.Consent
+	f.publication.packageTree, f.publication.packageContents = "", ""
+	f.run("b\n", "task", "run", "op-hook")
+	pending := f.inspectWorkflow("op-hook")
+	require.NotNil(t, pending.Pending)
+	assert.Equal(t, "public-output-1", pending.Publication.Input.Code.Commit)
+	assert.Equal(t, work.InputOperator, pending.Publication.Input.Provenance)
+	f.run("p\n", "task", "run", "op-hook")
+	final, _ := f.loadFinalTask("op-hook")
+	assert.Equal(t, grant, *final.Work.Workflows[0].Phases[3].(*work.PublicationPhase).Consent)
+	assert.Len(t, final.Reviews, 1)
+	assert.Contains(t, f.pr.existing.Body, "not reported as reviewed")
+	assert.Equal(t, "public-public-output-1", f.candidate.head)
+}
+
+func TestIntegrationWorkflowInPlacePublicationOrdersPersistenceRecoveryAndPrivateRefRelease(t *testing.T) {
+	for _, failure := range []string{"intent save", "packaging", "public commit save", "delivery save", "private ref cleanup", "cleanup record save"} {
+		t.Run(failure, func(t *testing.T) {
+			f := newFeatureFinalizationFixture(t, "op-inplace", false)
+			branch, dir := f.expectedTarget("op-inplace")
+			initial, _ := f.loadFinalTask("op-inplace")
+			original := initial.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+			grant := *original.Consent
+			persistenceFailure := errors.New("injected publication persistence failure")
+			if failure == "packaging" {
+				f.publication.packageError = errors.New("ordinary commit failed")
+			}
+			if failure == "private ref cleanup" {
+				f.publication.releaseError = errors.New("private ref deletion unavailable")
+			}
+			require.NoError(t, state.SetMemoryDataWriteError(f.paths, func(rel string, data []byte) error {
+				if !strings.HasSuffix(rel, "/op-inplace.yaml") {
+					return nil
+				}
+				snapshot, err := workstate.Decode(data)
+				if err != nil {
+					return nil
+				}
+				p, ok := snapshot.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+				if !ok {
+					return nil
+				}
+				if failure == "intent save" && p.Operation != nil && p.Operation.Public == nil {
+					return persistenceFailure
+				}
+				if failure == "public commit save" && p.Operation != nil && p.Operation.Public != nil && p.Delivery == nil {
+					return persistenceFailure
+				}
+				if failure == "cleanup record save" && p.PrivateRefsReleasedAt != nil {
+					return persistenceFailure
+				}
+				if failure == "delivery save" && p.Delivery != nil {
+					return persistenceFailure
+				}
+				return nil
+			}))
+			f.publication.beforePackage = func(req gitmeta.PublicCommitRequest) {
+				persisted, _ := f.loadFinalTask("op-inplace")
+				p := persisted.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+				require.NotNil(t, p.Operation, "intent must be durable before branch rewriting")
+				assert.Nil(t, p.Operation.Public)
+				assert.Equal(t, req.Input.Commit, f.candidate.retained[req.Ref+"/input"].Commit)
+			}
+			f.publication.beforePush = func(req gitmeta.PublicCommitRequest) {
+				persisted, _ := f.loadFinalTask("op-inplace")
+				p := persisted.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+				require.NotNil(t, p.Operation.Public, "public commit must be durable before push")
+				assert.Equal(t, f.candidate.head, p.Operation.Public.Commit)
+				assert.Nil(t, p.Delivery)
+				assert.Nil(t, p.PrivateRefsReleasedAt)
+				assert.Contains(t, f.candidate.retained, req.Ref+"/input")
+			}
+			f.pr.beforeCreate = func() {
+				persisted, _ := f.loadFinalTask("op-inplace")
+				p := persisted.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+				require.NotNil(t, p.Operation.Public)
+				require.NotNil(t, p.Operation.PRCreationStartedAt, "creation intent must be durable before the provider write")
+			}
+			f.publication.beforeRelease = func() {
+				persisted, _ := f.loadFinalTask("op-inplace")
+				p := persisted.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+				require.NotNil(t, p.Delivery, "verified delivery must be durable before private ref deletion")
+				assert.Equal(t, grant, *p.Consent)
+			}
+			_, _, err := f.runError("", "task", "done", "op-inplace")
+			require.Error(t, err)
+			interrupted, _ := f.loadFinalTask("op-inplace")
+			p := interrupted.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+			assert.Equal(t, grant, *p.Consent)
+			assert.Nil(t, p.PrivateRefsReleasedAt)
+			if failure == "cleanup record save" {
+				assert.NotNil(t, p.Delivery)
+			} else {
+				assert.NotEmpty(t, f.candidate.retained, "incomplete delivery must not release private history")
+			}
+			if failure == "intent save" {
+				assert.Equal(t, "output-1", f.candidate.head)
+				assert.Zero(t, f.publication.packageCalls)
+			}
+			require.NoError(t, state.SetMemoryDataWriteError(f.paths, nil))
+			f.publication.packageError, f.publication.releaseError = nil, nil
+			requiresRecovery := failure == "packaging" || failure == "public commit save"
+			if requiresRecovery {
+				pending := f.inspectWorkflow("op-inplace")
+				require.NotNil(t, pending.Pending)
+				assert.Equal(t, workflow.InteractionPublicationRecovery, pending.Pending.ID.Kind)
+				beforeHead, beforeContents := f.candidate.head, f.candidate.contents
+				_, notice := f.run("m\n", "task", "run", "op-inplace")
+				assert.Contains(t, notice, "Saved input: output-1")
+				assert.Contains(t, notice, "Discard checkout and index changes")
+				assert.Zero(t, f.publication.restores)
+				assert.Equal(t, beforeHead, f.candidate.head)
+				assert.Equal(t, beforeContents, f.candidate.contents)
+				f.run("r", "task", "run", "op-inplace")
+				assert.Zero(t, f.publication.restores, "partial EOF is not reset consent")
+				f.options.Dependencies.Terminal.InputIsTerminal = func(io.Reader) bool { return false }
+				piped := &countedDecisionInput{Reader: strings.NewReader("r\n")}
+				command := cli.NewRootCommandWithOptions(f.options)
+				command.SetIn(piped)
+				command.SetOut(io.Discard)
+				command.SetErr(io.Discard)
+				command.SetArgs([]string{"task", "run", "op-inplace"})
+				err = command.Execute()
+				require.ErrorIs(t, err, review.ErrInteractionRequired)
+				assert.Zero(t, piped.reads)
+				assert.Zero(t, f.publication.restores)
+				preserved, _ := f.loadFinalTask("op-inplace")
+				assert.Equal(t, interrupted, preserved, "manual repair, EOF and noninteractive input preserve pending recovery")
+				f.options.Dependencies.Terminal.InputIsTerminal = func(io.Reader) bool { return true }
+				canceled, cancel := context.WithCancel(context.Background())
+				var canceledOutput bytes.Buffer
+				command = cli.NewRootCommandWithOptions(f.options)
+				command.SetContext(canceled)
+				command.SetIn(strings.NewReader("r\n"))
+				command.SetOut(io.Discard)
+				command.SetErr(&publicationConsentMutation{Writer: &canceledOutput, trigger: "Recovery [", mutate: cancel})
+				command.SetArgs([]string{"task", "run", "op-inplace"})
+				err = command.Execute()
+				cancel()
+				require.ErrorIs(t, err, context.Canceled)
+				assert.Zero(t, f.publication.restores, "cancellation cannot confirm a reset")
+				f.options.Dependencies.Terminal.InputIsTerminal = func(io.Reader) bool { return true }
+				f.run("r\n", "task", "run", "op-inplace")
+				assert.Equal(t, 1, f.publication.restores)
+			} else {
+				f.run("", "task", "done", "op-inplace")
+			}
+			final, _ := f.loadFinalTask("op-inplace")
+			delivered := final.Work.Workflows[0].Phases[3].(*work.PublicationPhase)
+			require.NotNil(t, delivered.Delivery)
+			require.NotNil(t, delivered.PrivateRefsReleasedAt)
+			assert.Equal(t, grant, *delivered.Consent)
+			assert.Equal(t, "output-1", delivered.Plan.Input.Code.Commit)
+			assert.Equal(t, "public-output-1", f.candidate.head)
+			assert.Equal(t, f.candidate.head, f.publication.remote[branch])
+			assert.Equal(t, initial.Runs, final.Runs)
+			assert.Equal(t, initial.Reviews, final.Reviews)
+			assert.Len(t, f.pr.created, 1)
+			assert.Len(t, f.candidate.pushes, 1)
+			expectedPackages := 1
+			if requiresRecovery {
+				expectedPackages = 2
+			}
+			assert.Equal(t, expectedPackages, f.publication.packageCalls)
+			expectedReleases := 1
+			if failure == "cleanup record save" {
+				expectedReleases = 2
+			}
+			assert.Equal(t, expectedReleases, f.publication.releases)
+			for ref := range f.candidate.retained {
+				assert.NotContains(t, ref, "refs/orpheus/revisions/616c706861/6f702d696e706c616365/0/")
+				assert.NotContains(t, ref, "refs/orpheus/publication-inputs/616c706861/6f702d696e706c616365/0/")
+			}
+			delete(f.candidate.trees, "output-1")
+			inspection, _ := f.run("", "task", "show", "workflow", "op-inplace")
+			assert.Contains(t, inspection, "output-1")
+			assert.Contains(t, inspection, "public-output-1")
+			f.run("", "task", "done", "op-inplace")
+			f.run("", "task", "sync", "op-inplace")
+			selectOperatorCommit(f, dir, "later-public-fix", "ordinary later public work\n", "additional commits after review")
+			f.run("", "task", "run", "op-inplace")
+			assert.Equal(t, "later-public-fix", f.candidate.head)
+			assert.Equal(t, "public-output-1", f.publication.remote[branch], "later local commits are not implicitly delivered")
+			assert.Equal(t, expectedPackages, f.publication.packageCalls, "recorded delivery and later public work must never re-squash")
+			assert.Len(t, f.pr.created, 1)
+		})
+	}
 }

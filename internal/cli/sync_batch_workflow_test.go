@@ -30,6 +30,7 @@ func TestIntegrationWorkflowTaskSyncAllPollsPRBoundaryTasks(t *testing.T) {
 	f.backend.tasks[closed.ID] = closed
 	f.pr.state = pullrequest.StateOpen
 	before, item := f.loadFinalTask("op-create")
+	beforeFindReads := f.pr.findReads
 
 	stdout, stderr := f.run("", "task", "sync", "--all")
 
@@ -42,7 +43,7 @@ func TestIntegrationWorkflowTaskSyncAllPollsPRBoundaryTasks(t *testing.T) {
 	require.Len(t, f.pr.statusRequests, 1)
 	assert.Equal(t, f.pr.url, f.pr.statusRequests[0].URL)
 	assert.Empty(t, f.pr.created)
-	assert.Zero(t, f.pr.findReads)
+	assert.Equal(t, beforeFindReads, f.pr.findReads, "sync must not discover or create another PR")
 	assert.Empty(t, f.tasks.closed)
 	assert.Empty(t, f.mutations.prURLs)
 	after, got := f.loadFinalTask(item.ID)

@@ -27,6 +27,10 @@ func (v *validator) publication(p *PublicationPhase) {
 	outcome, err := v.w.reviewOutcome(p.Plan.Review, cutoff)
 	v.check(err == nil && passed(outcome), "publication requires passed exact review at authorization: %v", err)
 	v.text(p.Plan.Content, "publication content")
+	if ref := p.Plan.FeatureCompletion; ref != nil && v.prior(ref.Phase, "publication feature completion") {
+		effort, err := phaseAs[*ImplementationPhase](v.w, ref.Phase)
+		v.check(err == nil && effort != nil && effort.Completion == v.w.FeatureCompletion(), "publication narrative must select original feature completion")
+	}
 	v.fixedDestination(&p.Plan.Destination)
 	code, err := v.w.Output(review.Scope.Output)
 	v.check(err == nil && code != nil, "Git publication requires retained code output")
@@ -34,13 +38,12 @@ func (v *validator) publication(p *PublicationPhase) {
 	v.text(p.Plan.Comparison.Relationship, "publication input relationship")
 	v.check((p.Plan.Comparison.Relationship == "reviewed") == (p.Plan.Input.Provenance == InputReviewed), "publication comparison cannot claim review approval for operator input")
 	v.target(p.Plan.Target)
-	if target, pr := p.Plan.Target.(*PullRequestTarget); pr && target != nil && target.Existing != nil {
-		v.unmergedPR(*target.Existing)
-	}
 	if p.Consent != nil {
 		v.check(!p.Consent.GrantedAt.IsZero(), "publication consent requires observed grant time")
 		v.text(p.Consent.Evidence, "publication authorization evidence")
 	}
+	v.publicationOperation(p)
+	v.privateHistoryRelease(p)
 	if p.Delivery != nil {
 		v.check(p.Consent != nil, "delivery requires explicit exact-plan consent")
 		if code != nil {
@@ -52,16 +55,52 @@ func (v *validator) publication(p *PublicationPhase) {
 	}
 }
 
+func (v *validator) privateHistoryRelease(p *PublicationPhase) {
+	if p.PrivateRefsReleasedAt != nil {
+		d, ok := p.Delivery.(*PullRequestDelivery)
+		v.check(ok && d != nil, "private history release requires observed PR delivery")
+		if ok && d != nil {
+			v.check(!p.PrivateRefsReleasedAt.Before(d.ObservedAt), "private history released before delivery")
+		}
+	}
+}
+
+func (v *validator) publicationOperation(p *PublicationPhase) {
+	op := p.Operation
+	if op == nil {
+		return
+	}
+	v.check(p.Consent != nil, "publication operation requires exact-plan consent")
+	v.check(!op.StartedAt.IsZero() && strings.HasPrefix(op.Ref, "refs/orpheus/") && op.Parent != "", "publication operation requires time, owned ref and parent")
+	if p.Consent != nil {
+		v.check(!op.StartedAt.Before(p.Consent.GrantedAt), "publication operation predates consent")
+	}
+	target, ok := p.Plan.Target.(*PullRequestTarget)
+	v.check(ok && target != nil, "public packaging requires PR target")
+	prepared := v.w.Context()
+	if prepared == nil {
+		return
+	}
+	v.check(op.Parent == prepared.Baseline.Commit, "public packaging must use the recorded task baseline")
+
+	if op.Public != nil {
+		v.code(*op.Public)
+		// The task branch retains public output; private refs may be released.
+	}
+	if op.PRCreationStartedAt != nil {
+		v.check(op.Public != nil && !op.PRCreationStartedAt.Before(op.StartedAt), "PR creation intent requires recorded public output and ordered time")
+	}
+	if d, ok := p.Delivery.(*PullRequestDelivery); ok && d != nil {
+		v.check(op.Public != nil && op.Public.Commit == d.PublicCommit && op.Public.Tree == d.Tree, "delivery must match packaged public commit")
+	}
+}
+
 func (v *validator) target(target PublicationTarget) {
 	switch target := target.(type) {
 	case *PullRequestTarget:
 		if target == nil {
 			v.check(false, "publication target is nil")
 			return
-		}
-		v.check((target.Existing == nil) == (target.ExpectedHead == ""), "PR update requires existing target and expected head together")
-		if target.Existing != nil {
-			v.pullRequest(*target.Existing)
 		}
 	case *DirectMergeTarget:
 		v.check(target != nil, "publication target is nil")
@@ -81,7 +120,7 @@ func (v *validator) unmergedPR(pr PullRequestRef) {
 			continue
 		}
 		delivery, err := v.w.externalDelivery(merged.ExternalReview)
-		v.check(err != nil || delivery.PullRequest != pr, "merged PR requires reconciliation, not an update retry")
+		v.check(err != nil || delivery.PullRequest != pr, "merged PR requires reconciliation before further external review")
 	}
 }
 
@@ -103,10 +142,6 @@ func (v *validator) delivery(target PublicationTarget, delivery Delivery, tree s
 		v.check(delivery.PublicCommit != "" && delivery.Head == delivery.PublicCommit && delivery.Tree == tree, "remote PR observation must preserve exact authorized input")
 		v.check(!delivery.ObservedAt.IsZero(), "remote delivery requires observation time")
 		v.text(delivery.Evidence, "remote delivery evidence")
-		if ok && planned != nil {
-			v.check(planned.Existing == nil || *planned.Existing == delivery.PullRequest, "delivered PR must match intended target")
-			v.check(planned.ExpectedHead == delivery.PreviousHead, "delivery must match expected previous public head")
-		}
 	case *DirectDelivery:
 		if delivery == nil {
 			v.check(false, "delivery is nil")
