@@ -47,7 +47,7 @@ func revisePublication(snapshot *work.State, response PublicationPlanResponse) (
 	plan.Content = response.Content
 	plan.Target = &work.DirectMergeTarget{}
 	if response.Flow == publication.IntegrationFlowPullRequest {
-		plan.Target = priorPublicTarget(w)
+		plan.Target = &work.PullRequestTarget{}
 		if old, ok := previous.Plan.Target.(*work.PullRequestTarget); ok {
 			plan.Target = old
 		}
@@ -129,6 +129,11 @@ func (s Controller) refreshPublicationSnapshot(ctx context.Context, source task.
 	if err := verifyPublicationOwnership(ctx, source, item, backend, w); err != nil {
 		return false, err
 	}
+
+	if unchanged, err := s.recordedPublicationUnchanged(ctx, w, p, item); err != nil || unchanged {
+		return false, err
+	}
+
 	owner := work.AttemptRef{RepositoryID: snapshot.RepositoryID, TaskID: snapshot.TaskID, Workflow: len(snapshot.Workflows) - 1, Phase: len(w.Phases) - 1}
 	if !publicationRequirements(w, p, item) {
 		return s.reviewChangedRequirements(ctx, source, item, snapshot, owner, p)
@@ -142,13 +147,6 @@ func (s Controller) refreshPublicationSnapshot(ctx context.Context, source task.
 	}
 	if reflect.DeepEqual(plan, p.Plan) {
 		return false, nil
-	}
-	reconciled, err := s.Delivery.reconcilePublicOperation(ctx, s.publicationBoundary(), source.Repository, item, w, p)
-	if err != nil {
-		return false, err
-	}
-	if reconciled {
-		plan.Target = priorPublicTarget(w)
 	}
 	w.Phases = append(w.Phases, &work.PublicationPhase{Plan: plan})
 	return true, nil
@@ -187,9 +185,7 @@ func (s Controller) reviewChangedRequirements(ctx context.Context, source task.R
 		return false, err
 	}
 	scope.Destination = &destination
-	if _, err := s.Delivery.reconcilePublicOperation(ctx, s.publicationBoundary(), source.Repository, item, w, p); err != nil {
-		return false, err
-	}
+
 	w.ReviewContracts = append(w.ReviewContracts, reviewContract(pipeline))
 	w.Phases = append(w.Phases, &work.ReviewPhase{Contract: len(w.ReviewContracts) - 1, Scope: scope, StartedAt: time.Now().UTC()})
 	return true, nil
@@ -270,4 +266,31 @@ func publicationReviewGap(input work.PublicationInput, reviewed string) string {
 		return ""
 	}
 	return fmt.Sprintf("\n\n## Publication review gap\n\nThe operator selected commit %s (tree %s) instead of reviewed commit %s. These differences were explicitly accepted for publication, not reported as reviewed.", input.Code.Commit, input.Code.Tree, reviewed)
+}
+
+func (s Controller) recordedPublicationUnchanged(ctx context.Context, w *work.Workflow, p *work.PublicationPhase, item task.Task) (bool, error) {
+	if p.Operation == nil {
+		return false, nil
+	}
+	if p.Operation.Public == nil {
+		return true, nil
+	}
+	current, err := s.publicationBoundary().InspectPublicationCheckout(ctx, w.Context().Directory, w.Context().TaskBranch)
+	if err != nil {
+		return false, err
+	}
+	if current.Commit == p.Operation.Public.Commit && current.Tree == p.Operation.Public.Tree && current.Tree == p.Plan.Input.Code.Tree {
+		if !publicationRequirements(w, p, item) {
+			return false, errors.New("task requirements changed; reconcile recorded publication before fresh review")
+		}
+		return true, nil
+	}
+	remote, err := s.publicationBoundary().ObservePublicHead(ctx, w.Context().Directory, w.Context().TaskBranch)
+	if err != nil {
+		return false, err
+	}
+	if remote != "" {
+		return false, errors.New("recorded publication checkout changed after remote delivery; reconcile public history without another initial squash")
+	}
+	return false, nil
 }

@@ -61,11 +61,10 @@ func (s Controller) advanceDeliveryPhase(ctx context.Context, opts FinalizeOptio
 		if err := CheckExpectedRoute(expected, item, view); err != nil {
 			return err
 		}
-		if w := snapshot.ActiveWorkflow(); w != nil {
-			if pending, ok := w.LastPhase().(*work.PublicationPhase); ok && pending.Consent == nil {
-				return ErrPublicationConsentRequired
-			}
+		if err := publicationDeliveryGate(snapshot.ActiveWorkflow()); err != nil {
+			return err
 		}
+
 		changed, err := s.refreshPublicationSnapshot(ctx, source, item, backend, &snapshot)
 		if err != nil {
 			return err
@@ -140,12 +139,10 @@ func (s Controller) applyDeliveryPhase(ctx context.Context, store WorkStore, bou
 	}
 	switch selected.workflow.LastPhase().(type) {
 	case *work.PublicationPhase:
-		if err := delivery.recordCommittedDelivery(ctx, store, boundary, source.Repository, item, snapshot, selected, &result); err != nil {
+		if err := s.finishPublication(ctx, store, boundary, source, item, backend, snapshot, selected, &result); err != nil {
 			return result, nil, err
 		}
-		if err := s.enterDeliverySuccessor(ctx, store, backend, snapshot, selected, &result); err != nil {
-			return result, nil, err
-		}
+
 		if err := s.reportSnapshot(item, *snapshot, false); err != nil {
 			return result, nil, err
 		}
@@ -192,4 +189,31 @@ func deliverySuccessorRoute(item task.Task, snapshot work.State) (*TaskRunRoute,
 	}
 	route, err := SelectTaskRunRoute(item, view)
 	return &route, err
+}
+
+func publicationDeliveryGate(w *work.Workflow) error {
+	if w == nil {
+		return nil
+	}
+	p, ok := w.LastPhase().(*work.PublicationPhase)
+	if !ok {
+		return nil
+	}
+	if p.Consent == nil {
+		return ErrPublicationConsentRequired
+	}
+	if p.Operation != nil && p.Operation.Public == nil {
+		return errors.New("publication packaging needs an interactive restore-or-manual-repair decision; continue task run")
+	}
+	return nil
+}
+
+func (s Controller) finishPublication(ctx context.Context, store WorkStore, boundary FinalizationGit, source task.RepositorySource, item task.Task, backend FinalizationBackend, snapshot *work.State, selected committedPublication, result *FinalizationResult) error {
+	if err := s.Delivery.recordCommittedDelivery(ctx, store, boundary, source.Repository, item, snapshot, selected, result); err != nil {
+		return err
+	}
+	if err := releasePublicationHistory(ctx, store, boundary, snapshot, selected); err != nil {
+		return err
+	}
+	return s.enterDeliverySuccessor(ctx, store, backend, snapshot, selected, result)
 }

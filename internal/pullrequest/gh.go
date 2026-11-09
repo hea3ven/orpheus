@@ -62,7 +62,7 @@ func (p GHProvider) StatusByURL(ctx context.Context, req StatusByURLRequest) (Pu
 		return PullRequestStatus{}, err
 	}
 	prURL := strings.TrimSpace(req.URL)
-	output, err := runGH(ctx, p, "", "poll_pr", "", diagnosticAttrs(req.Diagnostics), "pr", "view", prURL, "--json", "url,state,mergedAt,headRefName,baseRefName,headRefOid,title,body")
+	output, err := runGH(ctx, p, "", "poll_pr", "", diagnosticAttrs(req.Diagnostics), "pr", "view", prURL, "--json", "url,state,mergedAt,headRefName,baseRefName,headRefOid,title,body,isCrossRepository")
 	if err != nil {
 		return PullRequestStatus{}, fmt.Errorf("poll GitHub PR %s: %w", prURL, err)
 	}
@@ -157,14 +157,15 @@ func validateBranchArg(label string, branch string) error {
 
 func decodeGHPRStatus(output string) (PullRequestStatus, error) {
 	var row struct {
-		URL        string `json:"url"`
-		State      string `json:"state"`
-		MergedAt   string `json:"mergedAt"`
-		HeadBranch string `json:"headRefName"`
-		BaseBranch string `json:"baseRefName"`
-		HeadCommit string `json:"headRefOid"`
-		Title      string `json:"title"`
-		Body       string `json:"body"`
+		URL             string `json:"url"`
+		State           string `json:"state"`
+		MergedAt        string `json:"mergedAt"`
+		HeadBranch      string `json:"headRefName"`
+		BaseBranch      string `json:"baseRefName"`
+		HeadCommit      string `json:"headRefOid"`
+		CrossRepository bool   `json:"isCrossRepository"`
+		Title           string `json:"title"`
+		Body            string `json:"body"`
 	}
 	if err := json.Unmarshal([]byte(output), &row); err != nil {
 		return PullRequestStatus{}, fmt.Errorf("provider output was not JSON: %w", err)
@@ -173,7 +174,7 @@ func decodeGHPRStatus(output string) (PullRequestStatus, error) {
 	if !isHTTPURL(prURL) {
 		return PullRequestStatus{}, errors.New("provider output did not include a valid PR URL")
 	}
-	status := PullRequestStatus{URL: prURL, HeadBranch: row.HeadBranch, BaseBranch: row.BaseBranch, HeadCommit: row.HeadCommit, Title: row.Title, Body: row.Body}
+	status := PullRequestStatus{URL: prURL, HeadBranch: row.HeadBranch, BaseBranch: row.BaseBranch, HeadCommit: row.HeadCommit, CrossRepository: row.CrossRepository, Title: row.Title, Body: row.Body}
 	if strings.TrimSpace(row.MergedAt) != "" {
 		status.State = StateMerged
 		return status, nil

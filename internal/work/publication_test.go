@@ -99,28 +99,31 @@ func TestPublicationRequiresConsentAndIndependentMatchingRemoteEvidence(t *testi
 		}, "exact authorized input"},
 		{"packaged different public parent", func(_ *work.State, p *work.PublicationPhase) {
 			p.Operation = &work.PublicationOperation{StartedAt: at(101), Ref: "refs/orpheus/public", Parent: "foreign-head"}
-		}, "planned public head"},
+		}, "recorded task baseline"},
 		{"delivery differs from packaged commit", func(_ *work.State, p *work.PublicationPhase) {
-			p.Operation = &work.PublicationOperation{StartedAt: at(101), Ref: "refs/orpheus/public", Parent: "P1", Public: &work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: "different-packaged-commit", Tree: "T3"}, RetainedRef: "refs/orpheus/public/output"}}
+			p.Operation = &work.PublicationOperation{StartedAt: at(101), Ref: "refs/orpheus/public", Parent: "B", Public: &work.CodeIdentity{Commit: "different-packaged-commit", Tree: "T3"}}
 		}, "packaged public commit"},
 
 		{"wrong observed head", func(_ *work.State, p *work.PublicationPhase) { p.Delivery.(*work.PullRequestDelivery).Head = "P1" }, "exact authorized input"},
-		{"wrong previous head", func(_ *work.State, p *work.PublicationPhase) {
-			p.Delivery.(*work.PullRequestDelivery).PreviousHead = "foreign-head"
-		}, "expected previous public head"},
-		{"different native PR", func(_ *work.State, p *work.PublicationPhase) {
-			p.Delivery.(*work.PullRequestDelivery).PullRequest.URL = "https://github.example/owner/repo/pull/999"
-		}, "intended target"},
+		{"invalid native PR", func(_ *work.State, p *work.PublicationPhase) {
+			p.Delivery.(*work.PullRequestDelivery).PullRequest.URL = "invalid-native-url"
+		}, "native HTTP(S) URL"},
+		{"private ref release without delivery", func(_ *work.State, p *work.PublicationPhase) {
+			p.Delivery = nil
+			at := at(102)
+			p.PrivateRefsReleasedAt = &at
+		}, "release requires observed PR delivery"},
+		{"private ref release before delivery", func(_ *work.State, p *work.PublicationPhase) { at := at(100); p.PrivateRefsReleasedAt = &at }, "released before delivery"},
+
 		{"local result without observation", func(_ *work.State, p *work.PublicationPhase) { p.Delivery.(*work.PullRequestDelivery).Evidence = "" }, "remote delivery evidence"},
 		{"wrong delivery flow", func(_ *work.State, p *work.PublicationPhase) {
 			p.Delivery = &work.DirectDelivery{PublicCommit: "P2", Destination: work.CodeIdentity{Commit: "M2", Tree: "T3"}, ObservedAt: at(101), Evidence: "Destination"}
 		}, "planned flow"},
 		{"known merged PR", func(s *work.State, _ *work.PublicationPhase) {
-			pr := nativePR()
 			s.Workflows[0].Phases = append(s.Workflows[0].Phases,
 				&work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 9}},
 				&work.FinalizationPhase{Acceptance: &work.PRAcceptance{ExternalReview: 10, ObservedAt: at(110), Evidence: "Provider confirmed merge"}},
-				&work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 8}, Target: &work.PullRequestTarget{Existing: &pr, ExpectedHead: "P2"}, Content: "Cannot update a merged PR"}})
+				&work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 9}})
 		}, "requires reconciliation"},
 	}
 	for _, tc := range cases {
@@ -183,7 +186,7 @@ func TestDirectFinalizationNeedsObservedDestinationPushNotJustLocalMerge(t *test
 }
 
 func updateDelivery() *work.PullRequestDelivery {
-	return &work.PullRequestDelivery{PullRequest: nativePR(), PublicCommit: "P2", Head: "P2", PreviousHead: "P1", Tree: "T3", ObservedAt: at(101), Evidence: "Verified recovered PR update"}
+	return &work.PullRequestDelivery{PullRequest: nativePR(), PublicCommit: "P2", Head: "P2", Tree: "T3", ObservedAt: at(101), Evidence: "Verified public delivery"}
 }
 func deliveredHistory(t *testing.T) work.State {
 	t.Helper()

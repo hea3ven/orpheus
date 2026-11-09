@@ -99,13 +99,6 @@ const (
 	TaskBranchSyncConflictFree TaskBranchSyncStatus = "conflict_free"
 )
 
-// TaskBranchPublication binds retained local input to its separately retained
-// public commit. No-change sync verifies this mapping without moving either ref.
-type TaskBranchPublication struct {
-	Input  Revision
-	Public Revision
-}
-
 // TaskBranchSyncOptions describes a PR branch update from the registered default branch.
 type TaskBranchSyncOptions struct {
 	RepoPath      string
@@ -113,7 +106,6 @@ type TaskBranchSyncOptions struct {
 	Branch        string
 	Worktree      string
 	UpdatePolicy  TaskBranchUpdatePolicy
-	Publication   *TaskBranchPublication
 }
 
 // TaskBranchSyncResult reports the local branch state after sync.
@@ -148,9 +140,6 @@ func InspectTaskBranchConflictCheckpoint(ctx context.Context, opts TaskBranchSyn
 		return TaskBranchConflictCheckpoint{}, err
 	}
 	if _, err := prepareDefaultBranchRef(ctx, plan.Worktree, plan.DefaultBranch); err != nil {
-		return TaskBranchConflictCheckpoint{}, err
-	}
-	if err := verifyPublicSyncDestination(ctx, plan); err != nil {
 		return TaskBranchConflictCheckpoint{}, err
 	}
 
@@ -326,7 +315,6 @@ type taskBranchSyncPlan struct {
 	Branch        string
 	Worktree      string
 	UpdatePolicy  TaskBranchUpdatePolicy
-	Publication   *TaskBranchPublication
 }
 
 // ExpectedTaskWorktree returns the deterministic branch and worktree path for a task without mutating Git.
@@ -732,13 +720,6 @@ func prepareTaskBranchSync(ctx context.Context, plan taskBranchSyncPlan) error {
 	if err != nil {
 		return err
 	}
-	if plan.Publication != nil {
-		if !taskBranchFetched {
-			return errors.New("retained public branch is missing on origin; reconcile before sync")
-		}
-		return verifyTaskBranchPublication(ctx, plan)
-	}
-
 	if !taskBranchFetched {
 		return nil
 	}
@@ -753,9 +734,6 @@ func syncFetchedTaskBranchWithDefault(
 	plan taskBranchSyncPlan,
 	result TaskBranchSyncResult,
 ) (TaskBranchSyncResult, error) {
-	if plan.Publication != nil {
-		return unchangedPublicSync(ctx, plan, result)
-	}
 
 	previousHead, err := HeadCommit(ctx, plan.Worktree)
 	if err != nil {
@@ -825,9 +803,6 @@ func beginFetchedTaskBranchConflictResolution(
 	plan taskBranchSyncPlan,
 	result TaskBranchSyncResult,
 ) (TaskBranchSyncResult, error) {
-	if plan.Publication != nil {
-		return unchangedPublicSync(ctx, plan, result)
-	}
 
 	previousHead, err := HeadCommit(ctx, plan.Worktree)
 	if err != nil {
@@ -1234,7 +1209,6 @@ func newTaskBranchSyncPlan(opts TaskBranchSyncOptions) (taskBranchSyncPlan, erro
 		Branch:        strings.TrimSpace(opts.Branch),
 		Worktree:      worktree,
 		UpdatePolicy:  policy,
-		Publication:   opts.Publication,
 	}, nil
 }
 

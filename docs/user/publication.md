@@ -82,7 +82,7 @@ conflicts. Accepted operations needing reconciliation cannot be casually retarge
 
 | Flow | What Orpheus does |
 | --- | --- |
-| `pull-request` | Package the authorized input tree into public history, push the exact public commit, create/recover or update the selected PR, and record verified delivery. The task stays open until merge reconciliation. |
+| `pull-request` | Squash authorized input in the existing task checkout, push the recorded public commit, and create/recover the operation's PR, and record verified delivery. The task stays open until merge reconciliation. |
 | `direct-merge` | Verify the authorized input and captured destination checkpoint, create an ordinary no-fast-forward integration merge, push the destination, then close the task. It does not push the task branch or call `gh`. |
 
 A direct-merge conflict is aborted without pushing the destination or closing the
@@ -90,34 +90,45 @@ task. Resolve the conflict outside Orpheus before retrying. Recorded task commit
 merge commits, pushes, and closure facts let retries continue after partial success.
 Do not try to switch flows to recover a partially published task.
 
-## Local revisions and public history
+## In-place public history and recovery
 
-Local implementation/review commits stay retained independently of public history.
-The first PR publication squashes the selected tree onto the task baseline. Later
-publications append a commit to the verified previous public head, including when
-you amended or rewrote local history. They do not rewrite the remote branch.
-Inspection distinguishes reviewed output, selected input/provenance, the public
-commit, and earlier delivery records. Publishing an older revision never marks
-newer local output as pushed.
+PR publication performs one initial squash in the existing task work directory,
+for both repository-root and dedicated-worktree tasks. The task branch moves from
+the authorized input to one public commit on the recorded task baseline. It stays
+on public history afterward. No additional packaging worktree or private working
+branch is created. Later PR fixes and sync extend that public history; they do not
+enter another initial squash or PR-update packaging loop.
 
-Packaging uses ordinary hooks and signing in an operation-owned Git worktree;
-it does not change your checkout. If packaging changes the authorized tree,
-Orpheus retains and reports the actual commit/tree without pushing. Select the
-reported committed input on the owned task branch if you want it delivered, then
-use `task run` for a new proceed-or-abort decision. It is not silently treated as
-reviewed output.
+Before rewriting, Orpheus saves the exact committed input under a temporary
+recovery ref and records operation intent. It uses ordinary hooks and signing,
+then records the resulting public commit before any push or PR write. The public
+commit's new SHA is an expected packaging result, not an operator review gap.
+If hooks change the authorized tree, delivery stops, shows the actual committed
+input on the next `task run`, and requires fresh consent without inventing review.
 
-Commit, push, and PR effects have retained operation intent. Interrupted retries
-reconcile the same public commit and PR before repeating effects. If you select
-new input after an interrupted push, Orpheus first records the earlier authorized
-delivery, then requests fresh consent for the new input against that verified
-public head. The earlier grant and input remain attached to their own operation.
-Unexpected remote heads, changed PR branch pairs, and merged/closed PRs stop
-publication for
-reconciliation rather than overwriting work or creating another PR. Exact-head
-leases protect append-only pushes against concurrent ref changes; they do not
-authorize history rewriting. PR text keeps the selected original feature intent
-and discloses operator-accepted review gaps, including on updates.
+If packaging stops before its public commit is durably recorded, `task run`
+displays the saved reset target and the checkout/index changes and untracked
+paths that restoration would discard. Choose `r` to explicitly restore that input
+and retry, or `m` to leave everything untouched for manual repair and a later
+retry. Ignored files are kept. Pause, partial/complete EOF, cancellation, and
+noninteractive stdin never authorize restoration. Orpheus does not infer or
+reconstruct an unrecorded commit from intermediate trees or reflogs.
+
+Once a public commit is recorded, unchanged retries reuse it and reconcile push
+and PR outcomes without squashing again. PR creation intent is durable before the
+provider write; only that interrupted operation's PR can be recovered. Unrelated
+remote heads or PRs, retargeting, and merged/closed PRs require reconciliation,
+not overwrite or another PR. Changed input before delivery needs fresh consent;
+changing an already pushed public checkout requires reconciling public history,
+not another initial squash.
+
+Only after push/PR delivery is verified and durably recorded does Orpheus release
+the workflow's obsolete private revision/input refs, including the recovery ref.
+Cleanup can be retried with `task done` without repeating delivery. Descriptions,
+review evidence, provenance, and commit IDs remain inspectable in task state,
+but those historical Git objects need not remain available. Operator refs and
+other tasks' refs are preserved. Normal Git garbage collection handles eventual
+reclamation; Orpheus does not force-prune objects or expire shared reflogs.
 
 ## Commit and PR titles
 
@@ -192,13 +203,13 @@ orpheus task sync --all
 ```
 
 Sync reconciles recorded PRs; it does not create new ones. It closes tasks whose
-PRs merged and records the outcome locally. For open PRs, task-ID sync checks the
-integration destination against the published branch. When that public head
-already includes the destination, sync verifies the retained local/public mapping
-without fast-forwarding or pushing local revision history. Content-changing sync
-of these separate histories currently stops with reconciliation advice, preserving
-the checkout and remote refs. Batch sync uses the conflict-only update policy
-where branch histories support ordinary merging.
+PRs merged and records the outcome locally. For open PRs, an explicit task-ID sync
+incorporates the integration destination into the public task branch. It does not
+need discarded private revision objects or initial squash machinery. Batch sync
+leaves a branch unchanged when it would merge cleanly and updates it only when
+conflict repair is required. Content-changing sync review/authorization and
+post-publication repair routing retain their existing owners; this publication
+change does not add that automation.
 
 Conflict repair uses `agents.defaults.sync_conflict_resolver`, falling back to
 `agents.defaults.implementer` when unset. See [agent profiles](agents.md).
@@ -209,9 +220,13 @@ moved to a task branch during publication. Preserve its checkout and inspect its
 recorded context before repairing it manually; do not clear task history or reset
 files to force a retry. No operator state is converted by this change.
 
-Publication plans now require explicit retained input, provenance, comparison,
-and destination context; review-owned publication drafts are no longer accepted.
+Publication records now describe one in-place initial operation, its public commit,
+PR creation intent, and private-ref release. Obsolete PR-update target fields and
+parallel-history operation records are not supported. Plans require explicit
+input, provenance, comparison, and destination context; review-owned publication
+drafts are not accepted.
 Existing records missing these fields, containing obsolete delivery choices, or
 using earlier authorization digests need an explicit, inspectable conversion
-before use. New grants also bind the selected feature-completion reference. Do not discard history to bypass
-loading. This change does not convert or modify operator records.
+before use. New grants also bind the selected feature-completion reference.
+Do not discard history to bypass loading. This change does not convert or modify
+operator records.

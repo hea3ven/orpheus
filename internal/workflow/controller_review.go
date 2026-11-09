@@ -145,7 +145,14 @@ func (s Controller) preparePublication(ctx context.Context, current ReviewAttemp
 	if err != nil {
 		return err
 	}
-	var target work.PublicationTarget = priorPublicTarget(snapshot.Work.ActiveWorkflow())
+	for _, phase := range snapshot.Work.ActiveWorkflow().Phases {
+		if p, ok := phase.(*work.PublicationPhase); ok {
+			if _, delivered := p.Delivery.(*work.PullRequestDelivery); delivered {
+				return errors.New("initial PR publication is complete; later work must continue on public history")
+			}
+		}
+	}
+	var target work.PublicationTarget = &work.PullRequestTarget{}
 	flow, err := s.effectiveIntegrationFlow(current)
 	if err != nil {
 		return err

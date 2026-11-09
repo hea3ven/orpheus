@@ -95,13 +95,14 @@ func TestIntegrationAdapterContractAuthorizedPushPinsSourceDespiteLocalRefChange
 	later := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
 	runGit(t, repo, "reset", "--hard", selected.Commit)
 	req := orpheusgit.PublicCommitRequest{Directory: repo, Branch: branch, Parent: baseline, Ref: "refs/orpheus/publication/pin", Message: "feat: pinned public output\n\nBody", Input: selected}
+	require.NoError(t, orpheusgit.RetainPublicationInput(context.Background(), req))
 	public, err := orpheusgit.PackagePublicCommit(context.Background(), req)
 	require.NoError(t, err)
 	hooks := testutil.CanonicalTempDir(t)
 	runGit(t, repo, "config", "core.hooksPath", hooks)
 	require.NoError(t, testguard.WriteExecutable(filepath.Join(hooks, "pre-push"), []byte("#!/bin/sh\ngit update-ref refs/heads/"+branch+" "+later+"\n")))
 
-	require.NoError(t, orpheusgit.PushPublicCommit(context.Background(), req, public, ""))
+	require.NoError(t, orpheusgit.PushPublicCommit(context.Background(), req, public))
 	assert.Equal(t, public.Commit, strings.TrimSpace(runGit(t, origin, "rev-parse", "refs/heads/"+branch)), "the hook must not substitute newer code for the authorized source")
 	assert.Equal(t, later, strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD")), "normal hooks ran without being bypassed")
 	runGit(t, repo, "reset", "--hard", baseline)
@@ -109,9 +110,10 @@ func TestIntegrationAdapterContractAuthorizedPushPinsSourceDespiteLocalRefChange
 	runGit(t, repo, "update-ref", older.RetainedRef, older.Commit)
 	req.Input = older
 	req.Ref = "refs/orpheus/publication/older"
+	require.NoError(t, orpheusgit.RetainPublicationInput(context.Background(), req))
 	stale, err := orpheusgit.PackagePublicCommit(context.Background(), req)
 	require.NoError(t, err)
-	err = orpheusgit.PushPublicCommit(context.Background(), req, stale, "")
+	err = orpheusgit.PushPublicCommit(context.Background(), req, stale)
 	require.ErrorContains(t, err, "unexpected public head")
 	assert.Equal(t, public.Commit, strings.TrimSpace(runGit(t, origin, "rev-parse", "refs/heads/"+branch)), "proceed never authorizes force-pushing over unexpected remote history")
 }

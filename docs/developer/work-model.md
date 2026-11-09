@@ -68,7 +68,10 @@ Answers persist as the existing assessment, finding dispositions, or exact-plan
 consent; there is no second decision queue. Finding batches
 save atomically. Pause and cancellation retain pending work; stale/mismatched
 responses cannot authorize different work. Plan replacement can reserve fresh
-review or append a new pending plan, but never executes review or delivery.
+review or append a new pending plan, but never executes review. A separate typed
+publication-recovery response explicitly confirms restoration and retries
+packaging under the original operation; ordinary consent responses have no Git
+effects.
 Review and publication decisions verify the exact retained checkout before saving;
 publication consent also checks current task requirements and destination context.
 Attached review and publication prompts use this internal response boundary.
@@ -94,7 +97,9 @@ State.Workflows[]
         Execution / Completion / Output
       ReviewPhase                      captured contract and exact review scope
         Steps[]                        actual check/agent/manual attempts
-      PublicationPhase                 plan, direct consent, observed delivery
+      PublicationPhase                 plan, consent, initial operation and delivery
+        Operation                      recovery input ref, recorded public commit, PR creation intent
+        PrivateRefsReleasedAt?         retryable release after durable PR delivery
       ExternalReviewPhase              existing PR, waiting or maintaining its branch
         BranchSyncs[]                  append-only synchronization efforts
           Checkpoint                   local/remote heads and incoming merge source
@@ -106,8 +111,9 @@ State.Workflows[]
 
 PR work follows publication, external review, then finalization. Direct merge
 follows publication straight to finalization. Implementation owns ordinary retained
-code commits. Publication consumes explicitly authorized committed input, pushing the
-task branch or merging/pushing the integration destination. Finalization
+code commits. Publication consumes explicitly authorized committed input, performing one
+in-place public squash and initial PR delivery, or merging/pushing the integration
+destination. Finalization
 owns task-source closure and cleanup, not another publication. Initial review
 entry establishes the fixed destination branch from the registered default;
 subsequent default edits cannot retarget the workflow.
@@ -196,14 +202,18 @@ exit with an explicit code/time. Review entry must follow the safe boundary of
 both evaluated and delta output, including every effort in a reuse chain. Reuse
 must name the effort's exact earlier input, not borrow another effort's handoff.
 
-Code output retains native Git commit/tree identity and an owned retention ref.
+Code output records native Git commit/tree identity and an owned retention ref.
+Private objects remain retained through review and incomplete publication. After
+durable initial PR delivery, obsolete private refs are released; historical
+identity/ref strings remain data, not a permanent reachability promise.
 Completion details, requirements, finding text, publication text, and evidence
 are strings. Required text must be nonblank; optional narratives use empty strings
 for absence. There is no content-store interface or report/plan artifact output.
 
 `FeatureCompletion` selects the first safely captured implementation handoff;
 repairs keep their own rationale. `LatestOutput` selects captured implementation
-output independently of delivery: local R3 can coexist with PR R2. Branch sync
+output independently of delivery. After initial PR publication, later work starts
+on the public task branch rather than a discarded private revision. Branch sync
 commits are not feature completion or newly reviewed implementation output.
 `RepairPhases` derives reverse navigation from repair targets. Per-finding local
 verification requires an explicit authoritative statement, not an inferred flag
@@ -249,8 +259,8 @@ refresh publication context without replaying review. Native remote-write guards
 remain authoritative; proceed does not authorize force pushes or stale overwrites.
 Existing pushes pin their source to the authorized commit (or verified integration
 result), not a mutable local branch, so a late local ref change cannot substitute
-unconsented code. Normal hooks and upstream tracking still apply. This does not
-implement PR commit packaging or public-history rewriting.
+unconsented code. Normal hooks and signing apply. Initial PR packaging rewrites the task branch in
+place onto its recorded baseline; it never allocates another physical checkout.
 
 Authorization requires a passing review **at the grant time**. Required results,
 check waivers, owned finding decisions, and decisions reached through unresolved
@@ -268,19 +278,45 @@ Manual-command confirmation, manual assessment, finding dispositions, fresh-revi
 blocker dispositions, and post-review proposal prompts follow the same input gate.
 EOF and cancellation retain pending work; partial EOF answers are never applied.
 
-The internal `Respond` method records consent without effects. After interactive
+The internal `Respond` method records ordinary consent without effects. After interactive
 authorization succeeds, the same `task run` invocation advances delivery. Changed
 requirements follow fresh review before another publication decision. A pause or failed answer never
 advances publication. Output failure cannot erase a recorded grant or observed
 delivery. Accepted unchanged retries use their recorded operation and consent
 without resolving earlier configuration again.
 
-Publication is an idempotent application action: find/verify a matching PR,
-import it when present, and create only when confirmed absent. Failed lookup is
-not absence. Unchanged retries establish delivery under the same intent/consent,
-without a command/API attempt journal. Initial PR delivery preserves the authorized input
-tree and intended prior public head. Direct delivery requires observed destination
-push, not only a local merge.
+## Initial PR operation and private-history release
+
+The supported PR journey publishes once. Its operation retains input under an
+owned recovery ref, then saves intent before local rewriting. Ordinary `git
+reset --soft` and `git commit` package the authorized tree in the task checkout.
+The controller records the public commit/input mapping before push or PR writes.
+A durable PR creation intent distinguishes recovery of this operation from
+arbitrary PR import. Failed lookup is not absence; ambiguous provider outcomes
+are observed before retry. Direct merge keeps its separate existing contract.
+
+An operation without a recorded public commit requires a typed recovery decision.
+CLI discloses the saved target, current HEAD, checkout/index changes, and untracked
+paths covered by restoration. Explicit confirmation restores the saved input and
+retries packaging. Manual repair, pause, EOF, cancellation, or noninteractive stdin
+leaves checkout and state untouched. This is recovery of the same publication,
+not a workflow reset or an automatic reflog/tree-equivalence classifier.
+
+A recorded public commit is reused on unchanged retries. Its expected changed
+identity is not compared to the reviewed commit as if it were a new operator
+selection. Hook-produced tree changes instead create a fresh decision for the
+actual committed input before delivery. Once initial PR delivery is complete,
+later fixes and sync extend public history without another squash loop.
+
+After independently verified push/PR delivery is saved, cleanup removes the
+workflow's obsolete `refs/orpheus/revisions/<repository>/<task>/<workflow>/` and
+`publication-inputs` refs, including capture inputs, outputs, earlier plan inputs,
+and the temporary recovery ref. It preserves operator refs, unrelated workflows,
+and historical task-state data. The public branch retains its commit. Cleanup
+records `PrivateRefsReleasedAt` only after success and can retry without repeating
+delivery. It neither prunes objects nor expires shared reflogs. Loading history,
+inspection, delivery/finalization retries, and public-branch sync require no
+released private objects. No existing operator data is converted by this change.
 
 ## External review and branch sync
 
@@ -356,9 +392,10 @@ This lock can be held inside the application's progression lock.
 persistence version or choosing progression.
 
 Only the new workflow format is supported. There is no old-format reader,
-converter, import path, or historical exception to domain requirements. Before
-using it, the operator archives or discards old local task-state files and starts
-with empty workflow history; task definitions and lifecycle remain in Beads/Gig.
+converter, import path, or historical exception to domain requirements. Unsupported
+records require an explicit, inspectable conversion outside the application before
+use. Preserve their history; do not
+discard operator data to bypass loading. Task lifecycle remains in Beads/Gig.
 See [local workflow state](../user/tasks.md#local-workflow-state) for the storage
 boundary. The application never deletes or rewrites unsupported files.
 

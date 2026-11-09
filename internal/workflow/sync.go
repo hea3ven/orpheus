@@ -856,7 +856,7 @@ func (s SyncService) syncOpenPRBranch(
 		}, nil
 	}
 
-	return s.resolveOpenPRBranchConflict(ctx, target, gitState, taskTarget, destination, prURLFromTask(target.task), updatePolicy, retainedBranchPublication(w, external))
+	return s.resolveOpenPRBranchConflict(ctx, target, gitState, taskTarget, destination, prURLFromTask(target.task), updatePolicy)
 }
 
 func (s SyncService) integrationDestinationForSync(repo task.Repository, taskItem task.Task) (string, error) {
@@ -1327,19 +1327,4 @@ func (s SyncService) notify(target syncTarget, prState pullrequest.State) error 
 		}
 	}
 	return s.Progress(Progress{View: view, Resumed: view.Phase == PhaseExternalReview})
-}
-
-func retainedBranchPublication(w *work.Workflow, external *work.ExternalReviewPhase) *gitmeta.TaskBranchPublication {
-	p := w.Phases[external.Publication.Phase].(*work.PublicationPhase)
-	if p.Operation == nil || p.Operation.Public == nil {
-		return nil
-	}
-	delivery := p.Delivery.(*work.PullRequestDelivery)
-	for _, sync := range external.BranchSyncs {
-		if sync.Push != nil && sync.Push.Head != delivery.Head {
-			return nil
-		}
-	}
-	input, public := p.Plan.Input.Code, p.Operation.Public
-	return &gitmeta.TaskBranchPublication{Input: gitmeta.Revision{Commit: input.Commit, Tree: input.Tree, RetainedRef: input.RetainedRef}, Public: gitmeta.Revision{Commit: public.Commit, Tree: public.Tree, RetainedRef: public.RetainedRef}}
 }

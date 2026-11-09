@@ -118,6 +118,7 @@ func (b *publicationBackend) SetPRURL(_ context.Context, id, url string) error {
 
 type publicationGit struct {
 	source                        gitmeta.Revision
+	public                        gitmeta.Revision
 	remote                        map[string]gitmeta.Revision
 	taskBranch                    string
 	verifyErr, pushErr, directErr error
@@ -154,16 +155,17 @@ func (g *publicationGit) ObservePublicHead(_ context.Context, _, branch string) 
 	return g.remote[branch].Commit, nil
 }
 func (g *publicationGit) PackagePublicCommit(_ context.Context, req gitmeta.PublicCommitRequest) (gitmeta.Revision, error) {
-	return gitmeta.Revision{Commit: "public-" + req.Input.Commit, Tree: req.Input.Tree, RetainedRef: req.Ref + "/output"}, nil
+	g.public = gitmeta.Revision{Commit: "public-" + req.Input.Commit, Tree: req.Input.Tree}
+	return g.public, nil
 }
-func (g *publicationGit) PushPublicCommit(_ context.Context, req gitmeta.PublicCommitRequest, public gitmeta.Revision, expected string) error {
+func (g *publicationGit) PushPublicCommit(_ context.Context, req gitmeta.PublicCommitRequest, public gitmeta.Revision) error {
 	if g.pushErr != nil {
 		return g.pushErr
 	}
 	if g.remote[req.Branch].Commit == public.Commit {
 		return nil
 	}
-	if g.remote[req.Branch].Commit != expected {
+	if g.remote[req.Branch].Commit != "" {
 		return errors.New("unexpected remote head")
 	}
 	g.pushes = append(g.pushes, req.Branch)
@@ -508,5 +510,24 @@ func (s publicationInferenceStore) Load(repoID, taskID string) (work.State, erro
 
 func (p *publicationPR) Update(_ context.Context, req pullrequest.UpdateRequest) error {
 	p.open.Title, p.open.Body = req.Title, req.Body
+	return nil
+}
+
+func (g *publicationGit) RetainPublicationInput(ctx context.Context, req gitmeta.PublicCommitRequest) error {
+	return g.VerifyRevision(ctx, req.Directory, gitmeta.CheckoutIdentity{Commit: req.Input.Commit, Ref: "refs/heads/" + req.Branch}, req.Input)
+}
+func (g *publicationGit) InspectPublicationCheckout(context.Context, string, string) (gitmeta.Revision, error) {
+	if g.verifyErr != nil {
+		return gitmeta.Revision{}, g.verifyErr
+	}
+	return g.public, nil
+}
+func (*publicationGit) InspectPublicationRecovery(context.Context, gitmeta.PublicCommitRequest) (gitmeta.PublicationRecovery, error) {
+	return gitmeta.PublicationRecovery{}, errors.New("unexpected recovery inspection")
+}
+func (*publicationGit) RestorePublicationInput(context.Context, gitmeta.PublicCommitRequest, gitmeta.PublicationRecovery) error {
+	return errors.New("unexpected recovery reset")
+}
+func (*publicationGit) ReleasePrivatePublicationRefs(context.Context, string, []string) error {
 	return nil
 }

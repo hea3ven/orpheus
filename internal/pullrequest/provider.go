@@ -24,13 +24,14 @@ const (
 
 // PullRequestStatus is the backend-neutral PR state observed from the provider.
 type PullRequestStatus struct {
-	URL        string
-	State      State
-	HeadBranch string
-	BaseBranch string
-	HeadCommit string
-	Title      string
-	Body       string
+	URL             string
+	State           State
+	HeadBranch      string
+	BaseBranch      string
+	HeadCommit      string
+	CrossRepository bool
+	Title           string
+	Body            string
 }
 
 // DiagnosticContext carries safe workflow correlation for PR provider diagnostics.

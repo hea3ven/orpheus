@@ -84,7 +84,6 @@ type PublicationView struct {
 	Review              work.ReviewRef
 	ReviewOutcome       work.ReviewOutcome
 	Operation           string
-	ExpectedHead        string
 	Effects             []string
 	ReviewAttempt       int
 	Content             string
@@ -185,7 +184,9 @@ func fillPhaseView(v *View, w *work.Workflow) error {
 	case *work.PublicationPhase:
 		fillPublicationView(v, w, p)
 		v.Step = &StepView{Name: "deliver-plan", Kind: "system", Attempt: 1}
-		if p.Consent == nil {
+		if p.Operation != nil && p.Operation.Public == nil {
+			v.Step = &StepView{Name: "recover-publication", Kind: "manual", Attempt: 1}
+		} else if p.Consent == nil {
 			v.Step = &StepView{Name: "publication-decision", Kind: "manual", Attempt: 1}
 		}
 	case *work.ExternalReviewPhase:
@@ -332,7 +333,7 @@ func fillPublicationView(v *View, w *work.Workflow, p *work.PublicationPhase) {
 		}
 	}
 	info.Operation = "create-pr"
-	info.Effects = []string{"Publish authorized input on task branch", "Push task branch", "Create pull request", "Record pull request URL; keep task open"}
+	info.Effects = []string{"Squash authorized input in the existing task checkout", "Push task branch", "Create pull request", "Release obsolete private refs after durable delivery", "Record pull request URL; keep task open"}
 	if _, direct := p.Plan.Target.(*work.DirectMergeTarget); direct {
 		info.Flow = "direct-merge"
 		info.Operation = "direct-merge"
@@ -346,11 +347,8 @@ func fillPublicationView(v *View, w *work.Workflow, p *work.PublicationPhase) {
 			info.ReviewAttempt++
 		}
 	}
-	if target, ok := p.Plan.Target.(*work.PullRequestTarget); ok && target.Existing != nil {
-		info.PRURL = target.Existing.URL
-		info.ExpectedHead = target.ExpectedHead
-		info.Operation = "update-pr"
-		info.Effects = []string{"Publish authorized input after expected public head", "Push task branch", "Update selected pull request; keep task open"}
+	if p.Operation != nil && p.Operation.Public != nil {
+		info.PublicCommit = p.Operation.Public.Commit
 	}
 	switch delivered := p.Delivery.(type) {
 	case *work.PullRequestDelivery:

@@ -100,7 +100,7 @@ func TestIntegrationAdapterContractGHProviderStatusClassifiesRepositoryAndAuthen
 			require.ErrorContains(t, err, tc.want)
 			logged, err := os.ReadFile(log)
 			require.NoError(t, err)
-			assert.Equal(t, "pr view https://github.test/org/alpha/pull/42 --json url,state,mergedAt,headRefName,baseRefName,headRefOid,title,body", strings.TrimSpace(string(logged)))
+			assert.Equal(t, "pr view https://github.test/org/alpha/pull/42 --json url,state,mergedAt,headRefName,baseRefName,headRefOid,title,body,isCrossRepository", strings.TrimSpace(string(logged)))
 		})
 	}
 }

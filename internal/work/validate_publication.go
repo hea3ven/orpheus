@@ -38,14 +38,12 @@ func (v *validator) publication(p *PublicationPhase) {
 	v.text(p.Plan.Comparison.Relationship, "publication input relationship")
 	v.check((p.Plan.Comparison.Relationship == "reviewed") == (p.Plan.Input.Provenance == InputReviewed), "publication comparison cannot claim review approval for operator input")
 	v.target(p.Plan.Target)
-	if target, pr := p.Plan.Target.(*PullRequestTarget); pr && target != nil && target.Existing != nil {
-		v.unmergedPR(*target.Existing)
-	}
 	if p.Consent != nil {
 		v.check(!p.Consent.GrantedAt.IsZero(), "publication consent requires observed grant time")
 		v.text(p.Consent.Evidence, "publication authorization evidence")
 	}
 	v.publicationOperation(p)
+	v.privateHistoryRelease(p)
 	if p.Delivery != nil {
 		v.check(p.Consent != nil, "delivery requires explicit exact-plan consent")
 		if code != nil {
@@ -53,6 +51,16 @@ func (v *validator) publication(p *PublicationPhase) {
 		}
 		if p.Consent != nil {
 			v.check(!deliveryTime(p.Delivery).Before(p.Consent.GrantedAt), "delivery observation predates authorization")
+		}
+	}
+}
+
+func (v *validator) privateHistoryRelease(p *PublicationPhase) {
+	if p.PrivateRefsReleasedAt != nil {
+		d, ok := p.Delivery.(*PullRequestDelivery)
+		v.check(ok && d != nil, "private history release requires observed PR delivery")
+		if ok && d != nil {
+			v.check(!p.PrivateRefsReleasedAt.Before(d.ObservedAt), "private history released before delivery")
 		}
 	}
 }
@@ -73,14 +81,14 @@ func (v *validator) publicationOperation(p *PublicationPhase) {
 	if prepared == nil {
 		return
 	}
-	parent := prepared.Baseline.Commit
-	if ok && target != nil && target.ExpectedHead != "" {
-		parent = target.ExpectedHead
-	}
-	v.check(op.Parent == parent, "public packaging must append to planned public head or initial baseline")
+	v.check(op.Parent == prepared.Baseline.Commit, "public packaging must use the recorded task baseline")
+
 	if op.Public != nil {
-		v.code(op.Public.CodeIdentity)
-		v.check(op.Public.RetainedRef == op.Ref+"/output", "packaged commit requires operation retention")
+		v.code(*op.Public)
+		// The task branch retains public output; private refs may be released.
+	}
+	if op.PRCreationStartedAt != nil {
+		v.check(op.Public != nil && !op.PRCreationStartedAt.Before(op.StartedAt), "PR creation intent requires recorded public output and ordered time")
 	}
 	if d, ok := p.Delivery.(*PullRequestDelivery); ok && d != nil {
 		v.check(op.Public != nil && op.Public.Commit == d.PublicCommit && op.Public.Tree == d.Tree, "delivery must match packaged public commit")
@@ -93,10 +101,6 @@ func (v *validator) target(target PublicationTarget) {
 		if target == nil {
 			v.check(false, "publication target is nil")
 			return
-		}
-		v.check((target.Existing == nil) == (target.ExpectedHead == ""), "PR update requires existing target and expected head together")
-		if target.Existing != nil {
-			v.pullRequest(*target.Existing)
 		}
 	case *DirectMergeTarget:
 		v.check(target != nil, "publication target is nil")
@@ -116,7 +120,7 @@ func (v *validator) unmergedPR(pr PullRequestRef) {
 			continue
 		}
 		delivery, err := v.w.externalDelivery(merged.ExternalReview)
-		v.check(err != nil || delivery.PullRequest != pr, "merged PR requires reconciliation, not an update retry")
+		v.check(err != nil || delivery.PullRequest != pr, "merged PR requires reconciliation before further external review")
 	}
 }
 
@@ -138,10 +142,6 @@ func (v *validator) delivery(target PublicationTarget, delivery Delivery, tree s
 		v.check(delivery.PublicCommit != "" && delivery.Head == delivery.PublicCommit && delivery.Tree == tree, "remote PR observation must preserve exact authorized input")
 		v.check(!delivery.ObservedAt.IsZero(), "remote delivery requires observation time")
 		v.text(delivery.Evidence, "remote delivery evidence")
-		if ok && planned != nil {
-			v.check(planned.Existing == nil || *planned.Existing == delivery.PullRequest, "delivered PR must match intended target")
-			v.check(planned.ExpectedHead == delivery.PreviousHead, "delivery must match expected previous public head")
-		}
 	case *DirectDelivery:
 		if delivery == nil {
 			v.check(false, "delivery is nil")

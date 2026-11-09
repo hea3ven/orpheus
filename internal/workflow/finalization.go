@@ -40,8 +40,13 @@ type FinalizationGit interface {
 	ObservePublicationInput(context.Context, gitmeta.PublicationInputRequest) (gitmeta.PublicationInputObservation, error)
 	VerifyRevision(context.Context, string, gitmeta.CheckoutIdentity, gitmeta.Revision) error
 	ObservePublicHead(context.Context, string, string) (string, error)
+	RetainPublicationInput(context.Context, gitmeta.PublicCommitRequest) error
+	InspectPublicationCheckout(context.Context, string, string) (gitmeta.Revision, error)
+	InspectPublicationRecovery(context.Context, gitmeta.PublicCommitRequest) (gitmeta.PublicationRecovery, error)
+	RestorePublicationInput(context.Context, gitmeta.PublicCommitRequest, gitmeta.PublicationRecovery) error
+	ReleasePrivatePublicationRefs(context.Context, string, []string) error
 	PackagePublicCommit(context.Context, gitmeta.PublicCommitRequest) (gitmeta.Revision, error)
-	PushPublicCommit(context.Context, gitmeta.PublicCommitRequest, gitmeta.Revision, string) error
+	PushPublicCommit(context.Context, gitmeta.PublicCommitRequest, gitmeta.Revision) error
 	PublishedRevision(context.Context, string, string) (gitmeta.Revision, error)
 	DirectRevisionDelivery(context.Context, task.Repository, string, string, string, string, string, gitmeta.Revision) (gitmeta.Revision, error)
 }
@@ -60,11 +65,26 @@ func (LocalFinalizationGit) VerifyRevision(ctx context.Context, dir string, iden
 func (LocalFinalizationGit) ObservePublicHead(ctx context.Context, dir, branch string) (string, error) {
 	return gitmeta.ObservePublicHead(ctx, dir, branch)
 }
+func (LocalFinalizationGit) RetainPublicationInput(ctx context.Context, req gitmeta.PublicCommitRequest) error {
+	return gitmeta.RetainPublicationInput(ctx, req)
+}
+func (LocalFinalizationGit) InspectPublicationCheckout(ctx context.Context, dir, branch string) (gitmeta.Revision, error) {
+	return gitmeta.InspectPublicationCheckout(ctx, dir, branch)
+}
+func (LocalFinalizationGit) InspectPublicationRecovery(ctx context.Context, req gitmeta.PublicCommitRequest) (gitmeta.PublicationRecovery, error) {
+	return gitmeta.InspectPublicationRecovery(ctx, req)
+}
+func (LocalFinalizationGit) RestorePublicationInput(ctx context.Context, req gitmeta.PublicCommitRequest, view gitmeta.PublicationRecovery) error {
+	return gitmeta.RestorePublicationInput(ctx, req, view)
+}
+func (LocalFinalizationGit) ReleasePrivatePublicationRefs(ctx context.Context, dir string, refs []string) error {
+	return gitmeta.ReleasePrivatePublicationRefs(ctx, dir, refs)
+}
 func (LocalFinalizationGit) PackagePublicCommit(ctx context.Context, req gitmeta.PublicCommitRequest) (gitmeta.Revision, error) {
 	return gitmeta.PackagePublicCommit(ctx, req)
 }
-func (LocalFinalizationGit) PushPublicCommit(ctx context.Context, req gitmeta.PublicCommitRequest, public gitmeta.Revision, expected string) error {
-	return gitmeta.PushPublicCommit(ctx, req, public, expected)
+func (LocalFinalizationGit) PushPublicCommit(ctx context.Context, req gitmeta.PublicCommitRequest, public gitmeta.Revision) error {
+	return gitmeta.PushPublicCommit(ctx, req, public)
 }
 func (LocalFinalizationGit) PublishedRevision(ctx context.Context, dir, branch string) (gitmeta.Revision, error) {
 	return gitmeta.PublishedRevision(ctx, dir, branch)
@@ -227,12 +247,9 @@ func (s FinalizationService) recordCommittedDelivery(ctx context.Context, store 
 		return errors.New("task source is closed without recorded delivery; reconcile before publishing")
 	}
 	revision := gitmeta.Revision{Commit: output.Commit, Tree: output.Tree, RetainedRef: output.RetainedRef}
-	switch target := p.Plan.Target.(type) {
+	switch p.Plan.Target.(type) {
 	case *work.PullRequestTarget:
-		if err := boundary.VerifyRevision(ctx, prepared.Directory, gitmeta.CheckoutIdentity{Commit: output.Commit, Ref: "refs/heads/" + prepared.TaskBranch}, revision); err != nil {
-			return err
-		}
-		if err := s.recordPublicDelivery(ctx, store, boundary, repo, item, snapshot, selected, target, revision, result); err != nil {
+		if err := s.recordPublicDelivery(ctx, store, boundary, repo, item, snapshot, selected, result); err != nil {
 			return err
 		}
 

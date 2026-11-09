@@ -213,11 +213,15 @@ func TestSuccessorPreservesAddressesAndRecordedFacts(t *testing.T) {
 		}, "publication operation"},
 		{"rewritten operation identity", packagedPublicationHistory, func(s *work.State) {
 			s.Workflows[0].Phases[9].(*work.PublicationPhase).Operation.Ref = "refs/orpheus/other-operation"
-			s.Workflows[0].Phases[9].(*work.PublicationPhase).Operation.Public.RetainedRef = "refs/orpheus/other-operation/output"
 		}, "publication operation intent"},
 		{"rewritten packaged commit", packagedPublicationHistory, func(s *work.State) {
 			s.Workflows[0].Phases[9].(*work.PublicationPhase).Operation.Public.Commit = "substituted-public-commit"
 		}, "packaged public commit"},
+
+		{"rewritten private history release", releasedPublicationHistory, func(s *work.State) {
+			at := at(103)
+			s.Workflows[0].Phases[9].(*work.PublicationPhase).PrivateRefsReleasedAt = &at
+		}, "private history release"},
 
 		{"rewritten delivered observation", deliveredHistory, func(s *work.State) {
 			s.Workflows[0].Phases[9].(*work.PublicationPhase).Delivery.(*work.PullRequestDelivery).ObservedAt = at(102)
@@ -513,7 +517,16 @@ func packagedPublicationHistory(t *testing.T) work.State {
 	t.Helper()
 	s := repairHistory(t)
 	require.NoError(t, s.AuthorizePublication(0, work.PublicationRef{Phase: 9}, at(100), "Explicit update grant"))
-	s.Workflows[0].Phases[9].(*work.PublicationPhase).Operation = &work.PublicationOperation{StartedAt: at(101), Ref: "refs/orpheus/publication/update", Parent: "P1", Public: &work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: "P2", Tree: "T3"}, RetainedRef: "refs/orpheus/publication/update/output"}}
+	s.Workflows[0].Phases[9].(*work.PublicationPhase).Operation = &work.PublicationOperation{StartedAt: at(101), Ref: "refs/orpheus/publication/update", Parent: "B", Public: &work.CodeIdentity{Commit: "P2", Tree: "T3"}}
+	require.NoError(t, s.Validate())
+	return s
+}
+
+func releasedPublicationHistory(t *testing.T) work.State {
+	t.Helper()
+	s := deliveredHistory(t)
+	released := at(102)
+	s.Workflows[0].Phases[9].(*work.PublicationPhase).PrivateRefsReleasedAt = &released
 	require.NoError(t, s.Validate())
 	return s
 }

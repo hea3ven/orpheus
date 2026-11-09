@@ -998,7 +998,7 @@ func executeTaskRun(command *cobra.Command, execution taskRunExecution, opts wor
 		if advanceErr != nil {
 			return advanceErr
 		}
-		if result.View.Pending == nil || result.View.Pending.ID.Kind != workflow.InteractionPublication {
+		if result.View.Pending == nil || (result.View.Pending.ID.Kind != workflow.InteractionPublication && result.View.Pending.ID.Kind != workflow.InteractionPublicationRecovery) {
 			return renderTaskRunAdvanceResult(command, execution.logger, opts.TaskID, result)
 		}
 		if result.Review != nil {

@@ -51,15 +51,12 @@ type PublicationComparison struct {
 	Changes      string
 }
 
-// PublicationTarget distinguishes PR creation/update from destination delivery.
+// PublicationTarget distinguishes initial PR creation from destination delivery.
 type PublicationTarget interface{ publicationTarget() }
 
-// PullRequestTarget identifies an existing PR only for an update. Importing a PR
-// discovered after disconnected creation does not require inventing an operation.
-type PullRequestTarget struct {
-	Existing     *PullRequestRef
-	ExpectedHead string
-}
+// PullRequestTarget selects one initial PR delivery. Recovery identity belongs
+// to its operation rather than another PR-update publication target.
+type PullRequestTarget struct{}
 
 // DirectMergeTarget authorizes merge and verified destination push.
 type DirectMergeTarget struct{}
@@ -78,10 +75,11 @@ type PublicationConsent struct {
 // PublicationOperation records intent before packaging, then its actual retained
 // public commit before any push or provider write. Its containing phase is its ID.
 type PublicationOperation struct {
-	StartedAt time.Time
-	Ref       string
-	Parent    string
-	Public    *CodeOutput
+	StartedAt           time.Time
+	Ref                 string
+	Parent              string
+	Public              *CodeIdentity
+	PRCreationStartedAt *time.Time
 }
 
 // Delivery is an observed result, not a generic side-effect attempt or boolean flag.
@@ -94,7 +92,6 @@ type PullRequestDelivery struct {
 	PublicCommit string
 	Head         string
 	Tree         string
-	PreviousHead string
 	ObservedAt   time.Time
 	Evidence     string
 }

@@ -183,7 +183,7 @@ func phaseRoute(item task.Task, view taskstate.TaskState, w *work.Workflow) (Tas
 		}
 		return selectReviewTaskRunRoute(view, latest, item.ID)
 	case *work.PublicationPhase:
-		if p.Consent == nil {
+		if p.Consent == nil || (p.Operation != nil && p.Operation.Public == nil) {
 			return TaskRunRoute{Action: TaskRunActionAwaitDecision}, nil
 		}
 		return TaskRunRoute{Action: TaskRunActionPublish}, nil
