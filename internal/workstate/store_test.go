@@ -364,6 +364,7 @@ func retainedHistory(t *testing.T) work.State {
 	testutil.SeedPublicationInputs(&s)
 	require.NoError(t, s.AuthorizePublication(1, work.PublicationRef{Phase: 3}, when(60), "Operator explicitly authorizes direct delivery"))
 	direct.Delivery = &work.DirectDelivery{PublicCommit: "P3", Destination: work.CodeIdentity{Commit: "M3", Tree: "tree-R3"}, ObservedAt: when(61), Evidence: "Verified destination ref"}
+	testutil.SeedDirectCheckpoints(&s.Workflows[1], direct)
 	s.Workflows[1].Phases = append(s.Workflows[1].Phases, &work.FinalizationPhase{Acceptance: &work.DirectAcceptance{Publication: work.PublicationRef{Phase: 3}}, Closure: &work.TaskClosure{At: when(62), Reason: "delivered", Evidence: "Source confirmed closure"}, Cleanup: []work.CleanupObservation{&work.WorktreeRetained{Path: "/fixture/work", At: when(63), Reason: "Dirty files", Evidence: "Cleanup refused"}, &work.WorktreeRemoved{Path: "/fixture/work", At: when(64), Evidence: "Removed"}}})
 	s.Workflows = append(s.Workflows, work.Workflow{})
 	require.NoError(t, s.Validate())

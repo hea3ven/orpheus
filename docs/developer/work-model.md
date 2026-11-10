@@ -99,7 +99,10 @@ State.Workflows[]
         Steps[]                        actual check/agent/manual attempts
       PublicationPhase                 plan, consent, initial operation and delivery
         Operation                      recovery input ref, recorded public commit, PR creation intent
-        PrivateRefsReleasedAt?         retryable release after durable PR delivery
+        PreparedFrom? / SyncFrom?      direct continuation references, not copied efforts
+        DirectSync?                    local intent, actual public result, resolver facts
+        Integration?                   destination intent and actual result before push
+        PrivateRefsReleasedAt?         direct preparation / PR-delivery release boundary
       ExternalReviewPhase              existing PR, waiting or maintaining its branch
         BranchSyncs[]                  append-only synchronization efforts
           Checkpoint                   local/remote heads and incoming merge source
@@ -112,8 +115,9 @@ State.Workflows[]
 PR work follows publication, external review, then finalization. Direct merge
 follows publication straight to finalization. Implementation owns ordinary retained
 code commits. Publication consumes explicitly authorized committed input, performing one
-in-place public squash and initial PR delivery, or merging/pushing the integration
-destination. Finalization
+in-place public squash, then initial PR delivery or local destination sync and
+recorded destination integration. Direct sync does not rerun task review; changed
+output requires fresh consent and retains honest unreviewed provenance. Finalization
 owns task-source closure and cleanup, not another publication. Initial review
 entry establishes the fixed destination branch from the registered default;
 subsequent default edits cannot retarget the workflow.
@@ -203,8 +207,10 @@ both evaluated and delta output, including every effort in a reuse chain. Reuse
 must name the effort's exact earlier input, not borrow another effort's handoff.
 
 Code output records native Git commit/tree identity and an owned retention ref.
-Private objects remain retained through review and incomplete publication. After
-durable initial PR delivery, obsolete private refs are released; historical
+Private objects remain retained through review. Direct delivery releases obsolete
+private refs after durable public preparation, before local sync or remote writes;
+PR publication releases them after durable delivery. Public branches/checkpoints
+retain unfinished output; historical
 identity/ref strings remain data, not a permanent reachability promise.
 Completion details, requirements, finding text, publication text, and evidence
 are strings. Required text must be nonblank; optional narratives use empty strings
@@ -225,7 +231,8 @@ reverse an earlier positive statement.
 A publication plan references a passed review but owns its actual retained input,
 provenance, comparison, observed destination tip, authored text, and delivery target.
 `PublicationInput.Code` is not an implementation phase or output-producer reference.
-It records either exact reviewed output or an operator-selected commit/tree.
+It records reviewed, operator-selected, or explicitly unreviewed direct-sync
+output without inventing another implementation handoff.
 Review owns only evaluated scope/evidence and findings; it carries no publication
 drafts. The branch established by the initial review's destination is invariant
 across later reviews and plans, although its observed commit may advance.
@@ -293,13 +300,18 @@ reset --soft` and `git commit` package the authorized tree in the task checkout.
 The controller records the public commit/input mapping before push or PR writes.
 A durable PR creation intent distinguishes recovery of this operation from
 arbitrary PR import. Failed lookup is not absence; ambiguous provider outcomes
-are observed before retry. Direct merge keeps its separate existing contract.
+are observed before retry. Direct merge owns separate local-sync and integration
+checkpoints. It reuses Git preparation and merge operations, not PR-sync orchestration. Integration results
+are saved before destination push; closure consumes verified delivery only.
 
 An operation without a recorded public commit requires a typed recovery decision.
 CLI discloses the saved target, current HEAD, checkout/index changes, and untracked
 paths covered by restoration. Explicit confirmation restores the saved input and
 retries packaging. Manual repair, pause, EOF, cancellation, or noninteractive stdin
-leaves checkout and state untouched. This is recovery of the same publication,
+leaves checkout and state untouched. After manual repair, an explicit continuation
+selects the actual clean checkout for fresh consent. Direct recovery after public
+preparation uses recorded public/sync/destination checkpoints, not private objects.
+This is recovery of the same publication,
 not a workflow reset or an automatic reflog/tree-equivalence classifier.
 
 A recorded public commit is reused on unchanged retries. Its expected changed

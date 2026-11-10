@@ -55,7 +55,11 @@ func revisePublication(snapshot *work.State, response PublicationPlanResponse) (
 	if reflect.DeepEqual(plan, previous.Plan) {
 		return false, nil
 	}
-	w.Phases = append(w.Phases, &work.PublicationPhase{Plan: plan})
+	next := &work.PublicationPhase{Plan: plan}
+	if err := continueDirectPlan(w, previous, next); err != nil {
+		return false, err
+	}
+	w.Phases = append(w.Phases, next)
 	return true, nil
 }
 
@@ -130,6 +134,11 @@ func (s Controller) refreshPublicationSnapshot(ctx context.Context, source task.
 		return false, err
 	}
 
+	if _, direct := p.Plan.Target.(*work.DirectMergeTarget); direct {
+		if prepared := w.PublicPreparation(p); prepared != nil && prepared.Operation != nil && prepared.Operation.Public != nil {
+			return s.refreshDirectPublication(ctx, source.Repository, snapshot, w, p, item)
+		}
+	}
 	if unchanged, err := s.recordedPublicationUnchanged(ctx, w, p, item); err != nil || unchanged {
 		return false, err
 	}
@@ -161,8 +170,13 @@ func verifyPublicationOwnership(ctx context.Context, source task.RepositorySourc
 	if err := ensureTaskBranchUnowned(ctx, backend, item.ID, prepared.TaskBranch); err != nil {
 		return err
 	}
-	if prepared.Directory == source.Repository.Path {
-		return ensureRepoRootDispatchAvailable(ctx, backend, source.Repository, item.ID, gitmeta.TaskWorktreeSetupResult{Branch: prepared.TaskBranch, WorktreePath: prepared.Directory})
+	p, publishing := w.LastPhase().(*work.PublicationPhase)
+	direct := false
+	if publishing {
+		_, direct = p.Plan.Target.(*work.DirectMergeTarget)
+	}
+	if direct || prepared.Directory == source.Repository.Path {
+		return ensureRepoRootDispatchAvailable(ctx, backend, source.Repository, item.ID, gitmeta.TaskWorktreeSetupResult{Branch: prepared.TaskBranch, WorktreePath: source.Repository.Path})
 	}
 	return nil
 }
@@ -251,6 +265,20 @@ func (s Controller) verifyPublicationPlan(ctx context.Context, base ReviewContex
 	if !publicationRequirements(w, p, base.Task) {
 		return errors.New("task requirements changed; continue task run for fresh review")
 	}
+	if p.PreparedFrom != nil {
+		current, err := s.publicationBoundary().InspectPublicationCheckout(ctx, w.Context().Directory, w.Context().TaskBranch)
+		if err != nil {
+			return err
+		}
+		destination, err := s.publicationBoundary().ObserveDestination(ctx, w.Context().Directory, w.FixedDestination().Branch)
+		if err != nil {
+			return err
+		}
+		if current.Commit != p.Plan.Input.Code.Commit || current.Tree != p.Plan.Input.Code.Tree || destination != p.Plan.Destination {
+			return ErrStaleInteraction
+		}
+		return nil
+	}
 	observed := p.Plan
 	if err := s.observePublicationPlan(ctx, w, owner, &observed, nil); err != nil {
 		return err
@@ -262,7 +290,7 @@ func (s Controller) verifyPublicationPlan(ctx context.Context, base ReviewContex
 }
 
 func publicationReviewGap(input work.PublicationInput, reviewed string) string {
-	if input.Provenance != work.InputOperator {
+	if input.Provenance == work.InputReviewed {
 		return ""
 	}
 	return fmt.Sprintf("\n\n## Publication review gap\n\nThe operator selected commit %s (tree %s) instead of reviewed commit %s. These differences were explicitly accepted for publication, not reported as reviewed.", input.Code.Commit, input.Code.Tree, reviewed)
@@ -293,4 +321,23 @@ func (s Controller) recordedPublicationUnchanged(ctx context.Context, w *work.Wo
 		return false, errors.New("recorded publication checkout changed after remote delivery; reconcile public history without another initial squash")
 	}
 	return false, nil
+}
+
+func continueDirectPlan(w *work.Workflow, previous, next *work.PublicationPhase) error {
+	prepared := w.PublicPreparation(previous)
+	if prepared == nil || prepared.Operation == nil || prepared.Operation.Public == nil {
+		return nil
+	}
+	if _, direct := previous.Plan.Target.(*work.DirectMergeTarget); !direct {
+		return nil
+	}
+	if _, direct := next.Plan.Target.(*work.DirectMergeTarget); !direct {
+		return errors.New("prepared direct delivery cannot change integration flow")
+	}
+	next.PreparedFrom = previous.PreparedFrom
+	if next.PreparedFrom == nil {
+		next.PreparedFrom = &work.PublicationRef{Phase: len(w.Phases) - 1}
+	}
+	next.SyncFrom = previous.SyncFrom
+	return nil
 }

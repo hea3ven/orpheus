@@ -919,7 +919,7 @@ func (s Store) StartRun(repoID, taskID string, opts StartRunOptions) (RunAttempt
 			return false, err
 		}
 		selection := opts.agentSelection()
-		execution, err := observedExecution(startRunAgentExecution(opts, selection, startedAt))
+		execution, err := ObservedExecution(startRunAgentExecution(opts, selection, startedAt))
 		if err != nil {
 			return false, err
 		}
@@ -1131,7 +1131,7 @@ func (s Store) FinishReviewStepExecution(repoID, taskID string, attempt int, ste
 			step.Execution.Duration = exit.At.Sub(step.Execution.StartedAt)
 		}
 		step.ExecutionFailure = opts.ExecutionFailure
-		applyObservedUsage(&step.Execution, RecordRunUsageOptions{Session: opts.Session, Usage: opts.Usage, UsageCost: opts.UsageCost, UsageCapture: opts.UsageCapture, Model: opts.Model}, s.nowUTC())
+		ApplyObservedUsage(&step.Execution, RecordRunUsageOptions{Session: opts.Session, Usage: opts.Usage, UsageCost: opts.UsageCost, UsageCapture: opts.UsageCapture, Model: opts.Model}, s.nowUTC())
 		if opts.ReadOnlyFailure != nil {
 			step.ReadOnlyFailures = append(step.ReadOnlyFailures, *opts.ReadOnlyFailure)
 		}

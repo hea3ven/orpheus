@@ -3,11 +3,14 @@ package workflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/task"
+	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/hea3ven/orpheus/internal/workstate"
 )
@@ -17,6 +20,37 @@ import (
 type PublicationRecoveryResponse struct{ Checkout gitmeta.PublicationRecovery }
 
 func (PublicationRecoveryResponse) workflowResponse() {}
+
+// PublicationManualRepairResponse selects the actual repaired clean checkout.
+// It neither restores files nor infers an unrecorded local commit as completed.
+type PublicationManualRepairResponse struct{}
+
+func (PublicationManualRepairResponse) workflowResponse() {}
+
+func recoveryRequest(w *work.Workflow, p *work.PublicationPhase, repo task.Repository) gitmeta.PublicCommitRequest {
+	if p.Integration != nil {
+		return gitmeta.PublicCommitRequest{Directory: repo.Path, Branch: p.Integration.Destination.Branch, Input: gitmeta.Revision{Commit: p.Integration.Destination.Commit}}
+	}
+	if p.DirectSync != nil {
+		return gitmeta.PublicCommitRequest{Directory: w.Context().Directory, Branch: w.Context().TaskBranch, Input: gitmeta.Revision{Commit: p.DirectSync.Source.Commit}}
+	}
+	return publicationRequest(w, p)
+}
+
+func (s Controller) verifyDirectRecoveryExecution(p *work.PublicationPhase) error {
+	if p.DirectSync == nil || p.DirectSync.Execution == nil {
+		return nil
+	}
+	e := p.DirectSync.Execution
+	if _, running := e.Process.(*work.RunningProcess); !running {
+		return nil
+	}
+	inspection := InspectAttachedExecution(taskstate.AgentExecution{Status: taskstate.RunStatusRunning, SupervisorPID: e.SupervisorPID, ChildPID: e.ChildPID}, s.ProcessProbe)
+	if inspection.Condition != AttachedExecutionRecoverable {
+		return fmt.Errorf("direct resolver prevents recovery: %s", inspection.Reason)
+	}
+	return nil
+}
 
 func publicationRequest(w *work.Workflow, p *work.PublicationPhase) gitmeta.PublicCommitRequest {
 	input := p.Plan.Input.Code
@@ -58,7 +92,11 @@ func (s Controller) InspectPublicationRecovery(ctx context.Context, id Interacti
 		if err := verifyPublicationOwnership(ctx, base.Source, base.Task, backend, w); err != nil {
 			return err
 		}
-		result, err = s.publicationBoundary().InspectPublicationRecovery(ctx, publicationRequest(w, w.LastPhase().(*work.PublicationPhase)))
+		p := w.LastPhase().(*work.PublicationPhase)
+		if err := s.verifyDirectRecoveryExecution(p); err != nil {
+			return err
+		}
+		result, err = s.publicationBoundary().InspectPublicationRecovery(ctx, recoveryRequest(w, p, base.Source.Repository))
 		return err
 	})
 	return result, err
@@ -77,9 +115,15 @@ func (s Controller) restorePublication(ctx context.Context, base ReviewContext, 
 	if !publicationRequirements(w, p, base.Task) {
 		return View{}, errors.New("requirements changed; repair the interrupted checkout manually before fresh review")
 	}
-	req := publicationRequest(w, p)
+	if err := s.verifyDirectRecoveryExecution(p); err != nil {
+		return View{}, err
+	}
+	req := recoveryRequest(w, p, base.Source.Repository)
 	if err := s.publicationBoundary().RestorePublicationInput(ctx, req, response.Checkout); err != nil {
 		return View{}, err
+	}
+	if p.DirectSync != nil || p.Integration != nil {
+		return s.continueRepairedPublicHistory(ctx, base, store, snapshot)
 	}
 	// The old operation intent already precedes this confirmed reset and retry.
 	// Any failure before the public record leaves the same recovery decision pending.
@@ -91,7 +135,10 @@ func (s Controller) restorePublication(ctx context.Context, base ReviewContext, 
 
 func releasePublicationHistory(ctx context.Context, store WorkStore, boundary FinalizationGit, snapshot *work.State, selected committedPublication) error {
 	p := selected.publication
-	if _, ok := p.Delivery.(*work.PullRequestDelivery); !ok || p.PrivateRefsReleasedAt != nil {
+	if _, pr := p.Plan.Target.(*work.PullRequestTarget); pr && p.Delivery == nil {
+		return nil
+	}
+	if p.Operation == nil || p.Operation.Public == nil || p.PrivateRefsReleasedAt != nil {
 		return nil
 	}
 	owner := work.AttemptRef{RepositoryID: snapshot.RepositoryID, TaskID: snapshot.TaskID, Workflow: selected.workflowIndex, Phase: 0}
@@ -102,4 +149,73 @@ func releasePublicationHistory(ctx context.Context, store WorkStore, boundary Fi
 	at := time.Now().UTC()
 	p.PrivateRefsReleasedAt = &at
 	return savePublicationOperation(store, snapshot)
+}
+
+func (s Controller) continueRepairedPublication(ctx context.Context, base ReviewContext, store WorkStore, snapshot *work.State) (View, error) {
+	w := snapshot.ActiveWorkflow()
+	p := w.LastPhase().(*work.PublicationPhase)
+	backend, err := s.BackendFactory(base.Source)
+	if err != nil {
+		return View{}, err
+	}
+	if err := verifyPublicationOwnership(ctx, base.Source, base.Task, backend, w); err != nil {
+		return View{}, err
+	}
+	if err := s.verifyDirectRecoveryExecution(p); err != nil {
+		return View{}, err
+	}
+	if p.DirectSync != nil || p.Integration != nil {
+		return s.continueRepairedPublicHistory(ctx, base, store, snapshot)
+	}
+	// No public result was recorded. A repaired clean committed input receives a
+	// new exact decision, rather than requiring an eventual forced restoration.
+	plan := p.Plan
+	owner := work.AttemptRef{RepositoryID: snapshot.RepositoryID, TaskID: snapshot.TaskID, Workflow: len(snapshot.Workflows) - 1, Phase: len(w.Phases)}
+	if err := s.observePublicationPlan(ctx, w, owner, &plan, nil); err != nil {
+		return View{}, err
+	}
+	w.Phases = append(w.Phases, &work.PublicationPhase{Plan: plan})
+	if err := savePublicationOperation(store, snapshot); err != nil {
+		return View{}, err
+	}
+	return interactionView(base.Task, *snapshot)
+}
+
+func (s Controller) continueRepairedPublicHistory(ctx context.Context, base ReviewContext, store WorkStore, snapshot *work.State) (View, error) {
+	w := snapshot.ActiveWorkflow()
+	p := w.LastPhase().(*work.PublicationPhase)
+	if p.Integration != nil && w.Context().Directory == base.Source.Repository.Path {
+		if err := s.Delivery.directBoundary(s.publicationBoundary()).ResumeDirectTaskCheckout(ctx, w.Context().Directory, w.Context().TaskBranch); err != nil {
+			return View{}, err
+		}
+	}
+	current, err := s.publicationBoundary().InspectPublicationCheckout(ctx, w.Context().Directory, w.Context().TaskBranch)
+	if err != nil {
+		return View{}, err
+	}
+	destination, err := s.publicationBoundary().ObserveDestination(ctx, w.Context().Directory, w.FixedDestination().Branch)
+	if err != nil {
+		return View{}, err
+	}
+	if p.Integration != nil {
+		selected := committedPublication{publication: p, prepared: w.Context()}
+		checkpoints, err := s.Delivery.directBoundary(s.publicationBoundary()).InspectDirectIntegrationCheckpoints(ctx, directIntegrationRequest(base.Source.Repository, selected))
+		if err != nil {
+			return View{}, err
+		}
+		if checkpoints.Destination.Commit != p.Integration.Destination.Commit && checkpoints.Destination.Commit != destination.Commit {
+			return View{}, fmt.Errorf("local destination %s in %s still needs repair; restore recorded checkpoint %s or the observed destination %s before continuing the selected task input", p.Integration.Destination.Branch, base.Source.Repository.Path, p.Integration.Destination.Commit, destination.Commit)
+		}
+	}
+	if p.DirectSync != nil && p.DirectSync.Execution != nil {
+		if _, running := p.DirectSync.Execution.Process.(*work.RunningProcess); running {
+			p.DirectSync.Execution.Process = &work.InterruptedProcess{At: time.Now().UTC(), Reason: "Operator recovered abandoned direct-sync checkout", Trigger: "publication_recovery"}
+		}
+	}
+	selected := committedPublication{workflowIndex: len(snapshot.Workflows) - 1, phaseIndex: len(w.Phases) - 1, workflow: w, publication: p, prepared: w.Context()}
+	err = s.Delivery.renewDirectPublication(ctx, store, s.publicationBoundary(), snapshot, selected, work.CodeIdentity{Commit: current.Commit, Tree: current.Tree}, destination, "Operator restored or manually repaired public history; result was not separately task reviewed", false)
+	if err != nil && !errors.Is(err, ErrPublicationConsentRequired) {
+		return View{}, err
+	}
+	return interactionView(base.Task, *snapshot)
 }

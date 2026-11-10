@@ -40,8 +40,13 @@ type ReviewPhase struct {
 // PublicationPhase owns immutable intent, explicit consent, and observed delivery.
 // Packaging and provider reconciliation establish Delivery in this same record.
 type PublicationPhase struct {
-	Plan                  PublicationPlan
-	Consent               *PublicationConsent
+	Plan    PublicationPlan
+	Consent *PublicationConsent
+	// PreparedFrom continues recorded public history without another squash.
+	PreparedFrom          *PublicationRef
+	SyncFrom              *PublicationRef
+	DirectSync            *DirectPublicationSync
+	Integration           *DirectIntegration
 	Operation             *PublicationOperation
 	Delivery              Delivery
 	PrivateRefsReleasedAt *time.Time

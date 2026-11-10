@@ -125,6 +125,9 @@ func (w *Workflow) Execution(ref ExecutionRef) (*AgentExecution, error) {
 		return &sync.ConflictResolution.Execution, nil
 	}
 	if ref.Step == nil {
+		if p, err := phaseAs[*PublicationPhase](w, ref.Phase); err == nil && p != nil && p.DirectSync != nil && p.DirectSync.Execution != nil {
+			return p.DirectSync.Execution, nil
+		}
 		p, err := phaseAs[*ImplementationPhase](w, ref.Phase)
 		if err != nil || p == nil {
 			return nil, fmt.Errorf("execution reference requires implementation")

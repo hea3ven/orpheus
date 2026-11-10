@@ -73,7 +73,7 @@ func appendObservedStep(w *work.Workflow, p *work.ReviewPhase, opts RecordReview
 		if opts.Execution == nil {
 			return false, errors.New("review agent requires actual execution metadata")
 		}
-		execution, err := observedExecution(*opts.Execution)
+		execution, err := ObservedExecution(*opts.Execution)
 		if err != nil {
 			return false, err
 		}

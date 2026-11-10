@@ -44,6 +44,9 @@ func (w *Workflow) ExecutionPurpose(ref ExecutionRef) (ExecutionPurpose, error) 
 	if _, err := w.Execution(ref); err != nil {
 		return "", err
 	}
+	if _, direct := w.Phases[ref.Phase].(*PublicationPhase); direct {
+		return PurposeConflictResolution, nil
+	}
 	if ref.BranchSync != nil {
 		return PurposeConflictResolution, nil
 	}

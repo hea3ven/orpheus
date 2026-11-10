@@ -178,6 +178,8 @@ func TestDirectFinalizationNeedsObservedDestinationPushNotJustLocalMerge(t *test
 	s.Workflows[0].Phases = append(s.Workflows[0].Phases, &work.FinalizationPhase{Acceptance: &work.DirectAcceptance{Publication: work.PublicationRef{Phase: 3}}})
 	require.ErrorContains(t, s.Validate(), "observed destination push")
 	p.Delivery = &work.DirectDelivery{PublicCommit: "P3", Destination: work.CodeIdentity{Commit: "M3", Tree: "T1"}, ObservedAt: at(31), Evidence: "Verified destination ref after push"}
+	require.ErrorContains(t, s.Validate(), "recorded integration")
+	testutil.SeedDirectCheckpoints(&s.Workflows[0], p)
 	require.NoError(t, s.Validate(), "direct publication reaches finalization without an external-review phase")
 	s.Workflows[0].Phases[4].(*work.FinalizationPhase).Closure = &work.TaskClosure{At: at(40), Reason: "destination_published", Evidence: "Source closure"}
 	require.NoError(t, s.Validate())

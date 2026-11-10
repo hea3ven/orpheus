@@ -17,8 +17,15 @@ type PublicationRecovery struct {
 // InspectPublicationRecovery describes the saved target and current changes.
 func InspectPublicationRecovery(ctx context.Context, req PublicCommitRequest) (PublicationRecovery, error) {
 	saved := req.Input
-	saved.RetainedRef = req.Ref + "/input"
-	if err := VerifyRetainedRevision(ctx, req.Directory, saved); err != nil {
+	if !validObjectID(saved.Commit) {
+		return PublicationRecovery{}, errors.New("recovery requires recorded exact commit")
+	}
+	if saved.Tree != "" {
+		saved.RetainedRef = req.Ref + "/input"
+		if err := VerifyRetainedRevision(ctx, req.Directory, saved); err != nil {
+			return PublicationRecovery{}, err
+		}
+	} else if _, err := refCommit(ctx, req.Directory, saved.Commit+"^{commit}"); err != nil {
 		return PublicationRecovery{}, err
 	}
 	root, err := worktreeRoot(ctx, req.Directory)
@@ -32,9 +39,6 @@ func InspectPublicationRecovery(ctx context.Context, req PublicCommitRequest) (P
 	if err != nil {
 		return PublicationRecovery{}, err
 	}
-	if head.Ref != "refs/heads/"+req.Branch {
-		return PublicationRecovery{}, errors.New("recovery requires the owned task branch; repair the checkout manually")
-	}
 	status, err := runGitContext(ctx, req.Directory, "status", "--short", "--untracked-files=all")
 	if err != nil {
 		return PublicationRecovery{}, err
@@ -44,11 +48,14 @@ func InspectPublicationRecovery(ctx context.Context, req PublicCommitRequest) (P
 		return PublicationRecovery{}, err
 	}
 	staged, err := runGitContext(ctx, req.Directory, "diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-color", "--stat", "--patch", saved.Commit, "--")
-	return PublicationRecovery{Head: head, Changes: fmt.Sprintf("Reset HEAD %s to saved input %s. Tracked changes and these untracked paths will be discarded; ignored files are kept.\n%s\nCheckout differences:\n%s\nIndex differences:\n%s", head.Commit, saved.Commit, status, diff, staged)}, err
+	return PublicationRecovery{Head: head, Changes: fmt.Sprintf("Directory %s, target branch %s (current ref %s). Reset HEAD %s to saved input %s. Tracked changes and these untracked paths will be discarded; ignored files are kept.\n%s\nCheckout differences:\n%s\nIndex differences:\n%s", req.Directory, req.Branch, head.Ref, head.Commit, saved.Commit, status, diff, staged)}, err
 }
 
 // RestorePublicationInput runs only after explicit confirmation of this disclosure.
 func RestorePublicationInput(ctx context.Context, req PublicCommitRequest, expected PublicationRecovery) error {
+	if expected.Head.Ref != "refs/heads/"+req.Branch {
+		return errors.New("restoration requires the disclosed target branch to be checked out; repair manually and continue from the clean task checkout")
+	}
 	actual, err := InspectPublicationRecovery(ctx, req)
 	if err != nil {
 		return err

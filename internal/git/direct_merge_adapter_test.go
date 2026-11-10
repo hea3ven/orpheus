@@ -4,6 +4,7 @@ package git_test
 
 import (
 	"context"
+	"fmt"
 	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -80,44 +81,98 @@ func TestIntegrationAdapterContractMergeTaskBranchIntoNamedDestinationAndVerifyR
 	}
 }
 
-func TestIntegrationAdapterContractReviewedDirectDeliveryPreservesTreeAndRecoversVerifiedPush(t *testing.T) {
+func TestIntegrationAdapterContractPreparedDirectDeliverySyncsLocallyBeforeRecordedIntegrationPush(t *testing.T) {
 	for _, linked := range []bool{false, true} {
-		t.Run(map[bool]string{false: "repository root", true: "linked worktree"}[linked], func(t *testing.T) {
-			repo := newGitRepoWithLocalOrigin(t)
-			branch := "orpheus/reviewed"
-			dir := repo
-			if linked {
-				dir = filepath.Join(testutil.CanonicalTempDir(t), "task")
-				runGit(t, repo, "worktree", "add", "-b", branch, dir)
-			} else {
-				runGit(t, repo, "checkout", "-b", branch)
-			}
-			baseline := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
-			prepared, err := orpheusgit.PrepareBaseline(context.Background(), dir, branch, "refs/orpheus/baselines/0", nil)
-			require.NoError(t, err)
-			assert.Equal(t, baseline, prepared.Commit)
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "reviewed.txt"), []byte("reviewed output\n"), 0o644))
-			output, err := orpheusgit.CaptureRevision(context.Background(), orpheusgit.RevisionCapture{Directory: dir, Input: orpheusgit.CheckoutIdentity{Commit: baseline, Ref: "refs/heads/" + branch}, Ref: "refs/orpheus/revisions/0/1", Message: "feat: retained input"})
-			require.NoError(t, err)
-			repeatedBaseline, err := orpheusgit.PrepareBaseline(context.Background(), dir, branch, prepared.RetainedRef, &prepared)
-			require.NoError(t, err)
-			assert.Equal(t, prepared, repeatedBaseline, "preparation retries retain the original baseline after implementation advances HEAD")
-			repository := task.Repository{ID: "alpha", Path: repo, DefaultBranch: "main"}
-
-			delivered, err := orpheusgit.DirectRevisionDelivery(context.Background(), repository, dir, branch, "main", baseline, "refs/orpheus/delivery/0/3", output)
-
-			require.NoError(t, err)
-			assert.NotEqual(t, output.Commit, delivered.Commit, "the real integration merge is distinct from the implementation revision")
-			assert.Equal(t, output.Tree, delivered.Tree)
-			assert.Equal(t, delivered.Commit, strings.Fields(runGit(t, repo, "ls-remote", "origin", "refs/heads/main"))[0])
-			assert.Equal(t, output.Commit, strings.TrimSpace(runGit(t, repo, "rev-parse", "refs/heads/"+branch)), "publication must not create another implementation commit")
-			retry, err := orpheusgit.DirectRevisionDelivery(context.Background(), repository, dir, branch, "main", baseline, "refs/orpheus/delivery/0/3", output)
-			require.NoError(t, err)
-			assert.Equal(t, delivered, retry, "a push observed after disconnected persistence is recovered, not merged again")
-			observed, err := orpheusgit.PublishedRevision(context.Background(), repo, "main")
-			require.NoError(t, err)
-			assert.Equal(t, delivered, observed)
-		})
+		for _, conflict := range []bool{false, true} {
+			t.Run(fmt.Sprintf("linked_%t/conflict_%t", linked, conflict), func(t *testing.T) {
+				repo := newGitRepoWithLocalOrigin(t)
+				branch, dir := "orpheus/reviewed", repo
+				if linked {
+					dir = filepath.Join(testutil.CanonicalTempDir(t), "task")
+					runGit(t, repo, "worktree", "add", "-b", branch, dir)
+				} else {
+					runGit(t, repo, "checkout", "-b", branch)
+				}
+				baseline := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+				prepared, err := orpheusgit.PrepareBaseline(context.Background(), dir, branch, "refs/orpheus/baselines/0", nil)
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "reviewed.txt"), []byte("reviewed output\n"), 0o644))
+				output, err := orpheusgit.CaptureRevision(context.Background(), orpheusgit.RevisionCapture{Directory: dir, Input: orpheusgit.CheckoutIdentity{Commit: baseline, Ref: "refs/heads/" + branch}, Ref: "refs/orpheus/revisions/aa/bb/0/1", Message: "feat: retained input"})
+				require.NoError(t, err)
+				repeatedBaseline, err := orpheusgit.PrepareBaseline(context.Background(), dir, branch, prepared.RetainedRef, &prepared)
+				require.NoError(t, err)
+				assert.Equal(t, prepared, repeatedBaseline)
+				if !linked {
+					runGit(t, repo, "checkout", "main")
+				}
+				path := "destination.txt"
+				if conflict {
+					path = "reviewed.txt"
+				}
+				commitFile(t, repo, path, "destination output\n", "Destination advanced")
+				runGit(t, repo, "push", "origin", "main")
+				destination := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+				if !linked {
+					runGit(t, repo, "checkout", branch)
+				}
+				repository := task.Repository{ID: "alpha", Path: repo, DefaultBranch: "main"}
+				req := orpheusgit.PublicCommitRequest{Directory: dir, Branch: branch, Parent: baseline, Ref: "refs/orpheus/revisions/aa/bb/0/3/public", Message: "feat: publish prepared history", Input: output}
+				require.NoError(t, orpheusgit.RetainPublicationInput(context.Background(), req))
+				public, err := orpheusgit.PackagePublicCommit(context.Background(), req)
+				require.NoError(t, err)
+				require.NoError(t, orpheusgit.ReleasePrivatePublicationRefs(context.Background(), dir, []string{"refs/orpheus/revisions/aa/bb/0/"}))
+				// Make the discarded loose private commit unavailable without pruning shared
+				// objects or expiring reflogs. Public trees and checkpoints remain intact.
+				require.NoError(t, os.Remove(filepath.Join(repo, ".git", "objects", output.Commit[:2], output.Commit[2:])))
+				opts := orpheusgit.TaskBranchSyncOptions{RepoPath: repo, Worktree: dir, Branch: branch, DefaultBranch: "main"}
+				if linked {
+					require.NoError(t, os.WriteFile(filepath.Join(repo, "operator.txt"), []byte("keep operator work\n"), 0o644))
+					_, err = orpheusgit.BeginLocalTaskBranchSync(context.Background(), opts, destination)
+					require.ErrorContains(t, err, "uncommitted")
+					assert.Equal(t, public.Commit, strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD")))
+					require.NoError(t, os.Remove(filepath.Join(repo, "operator.txt")))
+				}
+				synced, err := orpheusgit.BeginLocalTaskBranchSync(context.Background(), opts, destination)
+				require.NoError(t, err)
+				if conflict {
+					assert.Equal(t, orpheusgit.TaskBranchSyncConflicted, synced.Status)
+					assert.Equal(t, []string{"reviewed.txt"}, synced.ConflictFiles)
+					require.NoError(t, os.WriteFile(filepath.Join(dir, "reviewed.txt"), []byte("resolved output\n"), 0o644))
+					runGit(t, dir, "add", "reviewed.txt")
+					synced, err = orpheusgit.CommitTaskBranchConflictResolution(context.Background(), opts, synced.ConflictFiles)
+					require.NoError(t, err)
+					assert.Equal(t, "resolved output\n", runGit(t, dir, "show", "HEAD:reviewed.txt"))
+				} else {
+					assert.Equal(t, "destination output\n", runGit(t, dir, "show", "HEAD:destination.txt"))
+				}
+				assert.Empty(t, strings.TrimSpace(runGit(t, dir, "status", "--porcelain")))
+				actual, err := orpheusgit.InspectPublicationCheckout(context.Background(), dir, branch)
+				require.NoError(t, err)
+				assert.Equal(t, synced.Head, actual.Commit)
+				assert.NotEqual(t, public.Commit, actual.Commit)
+				integration := orpheusgit.DirectIntegrationRequest{Repository: repository, Directory: dir, Branch: branch, Destination: "main", DestinationCommit: destination, Source: actual}
+				merged, err := orpheusgit.PrepareDirectIntegration(context.Background(), integration)
+				require.NoError(t, err)
+				assert.Equal(t, destination, strings.Fields(runGit(t, repo, "ls-remote", "origin", "refs/heads/main"))[0], "integration cannot push before its caller records the result")
+				assert.Equal(t, destination+" "+actual.Commit, strings.TrimSpace(runGit(t, repo, "show", "-s", "--format=%P", merged.Commit)))
+				checkpoints, err := orpheusgit.InspectDirectIntegrationCheckpoints(context.Background(), integration)
+				require.NoError(t, err)
+				assert.Equal(t, actual, checkpoints.Source)
+				assert.Equal(t, merged, checkpoints.Destination, "observation reads the branch, not merely the active task checkout")
+				delivered, err := orpheusgit.PushDirectIntegration(context.Background(), integration, merged)
+				require.NoError(t, err)
+				assert.Equal(t, actual.Tree, delivered.Tree)
+				assert.Equal(t, delivered.Commit, strings.Fields(runGit(t, repo, "ls-remote", "origin", "refs/heads/main"))[0])
+				assert.Equal(t, actual.Commit, strings.TrimSpace(runGit(t, repo, "rev-parse", "refs/heads/"+branch)))
+				assert.Empty(t, strings.TrimSpace(runGit(t, repo, "ls-remote", "--heads", "origin", "refs/heads/"+branch)), "direct delivery never pushes the source branch")
+				retry, err := orpheusgit.PushDirectIntegration(context.Background(), integration, merged)
+				require.NoError(t, err)
+				assert.Equal(t, delivered, retry)
+				observed, err := orpheusgit.PublishedRevision(context.Background(), repo, "main")
+				require.NoError(t, err)
+				assert.Equal(t, delivered, observed)
+			})
+		}
 	}
 	t.Run("destination changes reviewed tree", func(t *testing.T) {
 		repo := newGitRepoWithLocalOrigin(t)
@@ -131,9 +186,56 @@ func TestIntegrationAdapterContractReviewedDirectDeliveryPreservesTreeAndRecover
 		runGit(t, repo, "push", "origin", "main")
 		remote := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
 		runGit(t, repo, "checkout", "task")
-		_, err = orpheusgit.DirectRevisionDelivery(context.Background(), task.Repository{Path: repo, DefaultBranch: "main"}, repo, "task", "main", baseline, "refs/orpheus/delivery", output)
-		require.ErrorContains(t, err, "destination changed since review")
+		_, err = orpheusgit.PrepareDirectIntegration(context.Background(), orpheusgit.DirectIntegrationRequest{Repository: task.Repository{Path: repo, DefaultBranch: "main"}, Directory: repo, Branch: "task", Destination: "main", DestinationCommit: baseline, Source: output})
+		require.ErrorContains(t, err, "destination advanced after sync")
+		recovery := orpheusgit.PublicCommitRequest{Directory: repo, Branch: "main", Input: orpheusgit.Revision{Commit: baseline}}
+		disclosure, err := orpheusgit.InspectPublicationRecovery(context.Background(), recovery)
+		require.NoError(t, err, "an unchanged task checkout still permits disclosure and manual repair after a refused destination effect")
+		assert.Equal(t, "refs/heads/task", disclosure.Head.Ref)
+		assert.Contains(t, disclosure.Changes, "target branch main")
+		require.ErrorContains(t, orpheusgit.RestorePublicationInput(context.Background(), recovery, disclosure), "target branch to be checked out")
+
 		assert.Equal(t, output.Commit, strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD")))
 		assert.Equal(t, remote, strings.Fields(runGit(t, repo, "ls-remote", "origin", "refs/heads/main"))[0])
+
+		opts := orpheusgit.TaskBranchSyncOptions{RepoPath: repo, Worktree: repo, Branch: "task", DefaultBranch: "main"}
+		_, err = orpheusgit.BeginLocalTaskBranchSync(context.Background(), opts, remote)
+		require.NoError(t, err)
+		synced, err := orpheusgit.InspectPublicationCheckout(context.Background(), repo, "task")
+		require.NoError(t, err)
+		req := orpheusgit.DirectIntegrationRequest{Repository: task.Repository{Path: repo}, Directory: repo, Branch: "task", Destination: "main", DestinationCommit: remote, Source: synced}
+		merged, err := orpheusgit.PrepareDirectIntegration(context.Background(), req)
+		require.NoError(t, err)
+		runGit(t, repo, "checkout", "task")
+		commitFile(t, repo, "operator.txt", "amended task output\n", "Operator selected changed source")
+		amended, err := orpheusgit.InspectPublicationCheckout(context.Background(), repo, "task")
+		require.NoError(t, err)
+		checkpoints, err := orpheusgit.InspectDirectIntegrationCheckpoints(context.Background(), req)
+		require.NoError(t, err, "repo-root reconciliation may inspect the clean task branch without switching it")
+		assert.Equal(t, amended, checkpoints.Source)
+		assert.NotEqual(t, req.Source.Commit, checkpoints.Source.Commit)
+		assert.Equal(t, merged, checkpoints.Destination)
+		runGit(t, repo, "checkout", "main")
+		runGit(t, repo, "reset", "--hard", remote) // Explicit operator repair in this isolated adapter fixture.
+		checkpoints, err = orpheusgit.InspectDirectIntegrationCheckpoints(context.Background(), req)
+		require.NoError(t, err)
+		assert.Equal(t, remote, checkpoints.Destination.Commit)
+		assert.Equal(t, amended, checkpoints.Source, "destination repair does not discard the selected task input")
+		runGit(t, repo, "checkout", "task")
+		req.Source = amended
+		merged, err = orpheusgit.PrepareDirectIntegration(context.Background(), req)
+		require.NoError(t, err)
+		origin := strings.TrimSpace(runGit(t, repo, "remote", "get-url", "origin"))
+		other := filepath.Join(testutil.CanonicalTempDir(t), "other")
+		runGit(t, repo, "clone", "--branch", "main", origin, other)
+		runGit(t, other, "config", "user.name", "Other operator")
+		runGit(t, other, "config", "user.email", "other@example.test")
+		commitFile(t, other, "ahead.txt", "concurrent destination\n", "Destination moved again")
+		runGit(t, other, "push", "origin", "main")
+		advanced := strings.TrimSpace(runGit(t, other, "rev-parse", "HEAD"))
+		_, err = orpheusgit.PushDirectIntegration(context.Background(), req, merged)
+		require.ErrorContains(t, err, "destination advanced after synchronization")
+		assert.Equal(t, merged.Commit, strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD")), "a stale checkpoint cannot rewrite local output or silently remerge")
+		assert.Equal(t, advanced, strings.Fields(runGit(t, repo, "ls-remote", "origin", "refs/heads/main"))[0])
 	})
 }

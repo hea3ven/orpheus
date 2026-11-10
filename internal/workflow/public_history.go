@@ -88,6 +88,7 @@ func packagePublicOperation(ctx context.Context, store WorkStore, boundary Final
 		}
 		op.Public = &work.CodeIdentity{Commit: public.Commit, Tree: public.Tree}
 		if err := savePublicationOperation(store, snapshot); err != nil {
+			op.Public = nil
 			return gitmeta.Revision{}, fmt.Errorf("public commit could not be recorded; continue task run for restore-or-manual-repair recovery: %w", err)
 		}
 	}

@@ -270,5 +270,5 @@ func newTaskWorkflowController(
 		}
 		return workflow.NewDispatchCommand(commandSnapshot), prompt, nil
 	}
-	return workflow.Controller{ReviewLifecycleService: service, Delivery: newTaskDeliveryService(deps, taskCtx, logger)}
+	return workflow.Controller{ReviewLifecycleService: service, Delivery: newTaskDeliveryService(command, deps, taskCtx, logger)}
 }

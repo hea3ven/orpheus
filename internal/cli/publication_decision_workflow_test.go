@@ -231,6 +231,7 @@ func selectOperatorCommit(f *finalizationWorkflowFixture, dir, commit, contents,
 	f.t.Helper()
 	f.candidate.contents = contents
 	f.candidate.head = commit
+	f.publication.taskHead = commit
 	f.candidate.heads[dir] = commit
 	f.candidate.trees[commit] = fmt.Sprintf("tree-%x", sha256.Sum256([]byte(contents)))
 	f.candidate.hasCandidateChanges, f.candidate.hasStagedChanges = false, false
@@ -301,11 +302,7 @@ func TestIntegrationWorkflowPublicationOperatorInputIsDistinctFromReviewAndRequi
 					require.NotNil(t, plan.Consent)
 					assert.Equal(t, actual, plan.Plan.Input.Code.Commit)
 					assert.Equal(t, "output-1", final.Runs[0].Completion.Commit)
-					if flow == "pull-request" {
-						assert.Equal(t, "public-"+actual, taskstate.FinalizationFacts(final).Commit)
-					} else {
-						assert.Equal(t, actual, taskstate.FinalizationFacts(final).Commit)
-					}
+					assert.Equal(t, "public-"+actual, taskstate.FinalizationFacts(final).Commit)
 					if flow == "pull-request" {
 						assert.Equal(t, taskmodel.StatusInProgress, item.Status)
 						assert.Equal(t, "public-"+actual, f.publication.remote[branch])

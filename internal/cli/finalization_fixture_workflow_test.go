@@ -94,10 +94,6 @@ func (g refusedPublicationGit) VerifyRevision(context.Context, string, gitmeta.C
 	return g.err
 }
 
-func (g refusedPublicationGit) DirectRevisionDelivery(context.Context, taskmodel.Repository, string, string, string, string, string, gitmeta.Revision) (gitmeta.Revision, error) {
-	return gitmeta.Revision{}, g.err
-}
-
 func (g refusedPublicationGit) RetainPublicationInput(context.Context, gitmeta.PublicCommitRequest) error {
 	return g.err
 }
@@ -183,6 +179,13 @@ func (b *memoryPublicationTasks) SetPRURL(ctx context.Context, id, url string) e
 }
 
 type memoryPublicationGit struct {
+	destinationHead       string
+	taskHead              string
+	syncCalls             int
+	syncHead, syncTree    string
+	syncConflicts         bool
+	beforeSync            func()
+	beforeIntegrationPush func()
 	*memoryReviewCandidate
 	remote          map[string]string
 	pushError       error
@@ -232,6 +235,10 @@ func (g *memoryPublicationGit) MergeTaskBranchIntoDestination(_ context.Context,
 	}
 	g.merges++
 	g.mergeCommit = "merge-commit"
+	if g.merges > 1 {
+		g.mergeCommit = fmt.Sprintf("merge-commit-%d", g.merges)
+	}
+	g.destinationHead = g.mergeCommit
 	g.head = g.mergeCommit
 	g.targets[repo.Path] = memoryGitTarget{branch: destination}
 	return g.mergeCommit, nil
@@ -319,21 +326,59 @@ func (g *memoryPublicationGit) PublishedRevision(_ context.Context, _ string, br
 	}
 	return gitmeta.Revision{Commit: commit, Tree: tree}, nil
 }
-func (g *memoryPublicationGit) DirectRevisionDelivery(ctx context.Context, repo taskmodel.Repository, dir, branch, destination, commit, _ string, output gitmeta.Revision) (gitmeta.Revision, error) {
-	if commit != "initial-commit" || g.heads[dir] != output.Commit || g.trees[output.Commit] != output.Tree {
-		return gitmeta.Revision{}, errors.New("direct delivery differs from reviewed fixture input")
+func (g *memoryPublicationGit) BeginLocalTaskBranchSync(_ context.Context, opts gitmeta.TaskBranchSyncOptions, destination string) (gitmeta.TaskBranchSyncResult, error) {
+	g.syncCalls++
+	if g.beforeSync != nil {
+		g.beforeSync()
 	}
-	if g.mergeCommit == "" {
-		merged, err := g.MergeTaskBranchIntoDestination(ctx, repo, destination, branch)
-		if err != nil {
-			return gitmeta.Revision{}, err
-		}
-		g.trees[merged] = output.Tree
+	if destination != "initial-commit" {
+		return gitmeta.TaskBranchSyncResult{}, errors.New("destination advanced")
 	}
-	if err := g.PushDefaultBranch(ctx, repo.Path, destination); err != nil {
+	if g.syncConflicts {
+		return gitmeta.TaskBranchSyncResult{Status: gitmeta.TaskBranchSyncConflicted, ConflictFiles: []string{"feature.txt"}}, nil
+	}
+	if g.syncHead != "" {
+		g.head, g.heads[opts.Worktree] = g.syncHead, g.syncHead
+		g.taskHead = g.syncHead
+		g.trees[g.syncHead] = g.syncTree
+	}
+	return gitmeta.TaskBranchSyncResult{Status: gitmeta.TaskBranchSyncAlreadyCurrent, Head: g.head}, nil
+}
+func (g *memoryPublicationGit) CommitTaskBranchConflictResolution(_ context.Context, opts gitmeta.TaskBranchSyncOptions, _ []string) (gitmeta.TaskBranchSyncResult, error) {
+	g.syncConflicts = false
+	g.head, g.heads[opts.Worktree] = g.syncHead, g.syncHead
+	g.taskHead = g.syncHead
+	g.trees[g.syncHead] = g.syncTree
+	return gitmeta.TaskBranchSyncResult{Status: gitmeta.TaskBranchSyncUpdated, Head: g.head}, nil
+}
+func (g *memoryPublicationGit) ResumeDirectTaskCheckout(_ context.Context, dir, branch string) error {
+	g.targets[dir] = memoryGitTarget{branch: branch}
+	g.head, g.heads[dir] = g.taskHead, g.taskHead
+	return nil
+}
+func (g *memoryPublicationGit) PrepareDirectIntegration(ctx context.Context, req gitmeta.DirectIntegrationRequest) (gitmeta.Revision, error) {
+	merged, err := g.MergeTaskBranchIntoDestination(ctx, req.Repository, req.Destination, req.Branch)
+	if err != nil {
 		return gitmeta.Revision{}, err
 	}
-	return g.PublishedRevision(ctx, repo.Path, destination)
+	g.trees[merged] = req.Source.Tree
+	return gitmeta.Revision{Commit: merged, Tree: req.Source.Tree}, nil
+}
+func (g *memoryPublicationGit) PushDirectIntegration(ctx context.Context, req gitmeta.DirectIntegrationRequest, result gitmeta.Revision) (gitmeta.Revision, error) {
+	if g.beforeIntegrationPush != nil {
+		g.beforeIntegrationPush()
+	}
+	if g.remote[req.Destination] == result.Commit {
+		return g.PublishedRevision(ctx, req.Repository.Path, req.Destination)
+	}
+	if err := g.PushDefaultBranch(ctx, req.Repository.Path, req.Destination); err != nil {
+		return gitmeta.Revision{}, err
+	}
+	if g.losePush {
+		g.observeError = errors.New("lost destination push response")
+		return gitmeta.Revision{}, g.observeError
+	}
+	return g.PublishedRevision(ctx, req.Repository.Path, req.Destination)
 }
 
 func (g *memoryPublicationGit) ObservePublicationInput(ctx context.Context, req gitmeta.PublicationInputRequest) (gitmeta.PublicationInputObservation, error) {
@@ -379,6 +424,7 @@ func (g *memoryPublicationGit) PackagePublicCommit(ctx context.Context, req gitm
 	g.packages[req.Ref] = req
 	g.trees[public.Commit] = public.Tree
 	g.head, g.heads[req.Directory] = public.Commit, public.Commit
+	g.taskHead = public.Commit
 	g.hasStagedChanges = false
 	return public, nil
 }
@@ -436,10 +482,15 @@ func (g *memoryPublicationGit) InspectPublicationCheckout(_ context.Context, dir
 	return gitmeta.Revision{Commit: g.head, Tree: g.trees[g.head]}, nil
 }
 func (g *memoryPublicationGit) InspectPublicationRecovery(_ context.Context, req gitmeta.PublicCommitRequest) (gitmeta.PublicationRecovery, error) {
-	return gitmeta.PublicationRecovery{Head: gitmeta.CheckoutIdentity{Commit: g.head, Ref: "refs/heads/" + req.Branch}, Changes: "Discard checkout and index changes at " + g.head + " and restore saved input " + req.Input.Commit + "\n" + g.contents}, nil
+	return gitmeta.PublicationRecovery{Head: gitmeta.CheckoutIdentity{Commit: g.head, Ref: "refs/heads/" + req.Branch}, Changes: "Directory " + req.Directory + ", branch " + req.Branch + ". Discard checkout and index changes at " + g.head + " and restore saved input " + req.Input.Commit + "\n" + g.contents}, nil
 }
 func (g *memoryPublicationGit) RestorePublicationInput(_ context.Context, req gitmeta.PublicCommitRequest, _ gitmeta.PublicationRecovery) error {
 	g.restores++
+	if req.Branch != "main" {
+		g.taskHead = req.Input.Commit
+	} else {
+		g.destinationHead = req.Input.Commit
+	}
 	g.head, g.heads[req.Directory] = req.Input.Commit, req.Input.Commit
 	g.contents = g.savedContents[req.Ref]
 	g.hasCandidateChanges, g.hasStagedChanges = false, false
@@ -461,4 +512,15 @@ func (g *memoryPublicationGit) ReleasePrivatePublicationRefs(_ context.Context, 
 		}
 	}
 	return nil
+}
+
+func (*memoryPublicationGit) DescribePublicChanges(context.Context, string, string, string) (string, error) {
+	return "fixture actual public changes", nil
+}
+
+func (g *memoryPublicationGit) InspectDirectIntegrationCheckpoints(_ context.Context, req gitmeta.DirectIntegrationRequest) (gitmeta.DirectIntegrationCheckpoints, error) {
+	if g.hasCandidateChanges || g.hasStagedChanges {
+		return gitmeta.DirectIntegrationCheckpoints{}, errors.New("integration checkout is not clean")
+	}
+	return gitmeta.DirectIntegrationCheckpoints{Source: gitmeta.Revision{Commit: g.taskHead, Tree: g.trees[g.taskHead]}, Destination: gitmeta.Revision{Commit: g.destinationHead, Tree: g.trees[g.destinationHead]}}, nil
 }

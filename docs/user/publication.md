@@ -20,7 +20,8 @@ Uncommitted and untracked output is not included: commit or otherwise resolve it
 yourself before publication. Orpheus does not stage, capture, discard, or silently
 publish those files. Review admission and reviewer read-only checks remain strict.
 Changed task requirements still require fresh review, and controller-produced
-implementation, repair, and sync keep their normal review/safety contracts.
+implementation and repair keep their normal review/safety contracts. Local direct-delivery
+sync is the explicit no-task-review exception described below.
 
 Noninteractive stdin returns a nonzero interaction-required error without reading
 piped answers. The decision remains pending for an interactive `task run`.
@@ -83,16 +84,23 @@ conflicts. Accepted operations needing reconciliation cannot be casually retarge
 | Flow | What Orpheus does |
 | --- | --- |
 | `pull-request` | Squash authorized input in the existing task checkout, push the recorded public commit, and create/recover the operation's PR, and record verified delivery. The task stays open until merge reconciliation. |
-| `direct-merge` | Verify the authorized input and captured destination checkpoint, create an ordinary no-fast-forward integration merge, push the destination, then close the task. It does not push the task branch or call `gh`. |
+| `direct-merge` | Prepare public history once, locally sync the fixed destination, obtain fresh consent for changed output, record an ordinary no-fast-forward integration merge, push only the destination, then close the task after verified delivery. |
 
-A direct-merge conflict is aborted without pushing the destination or closing the
-task. Resolve the conflict outside Orpheus before retrying. Recorded task commits,
-merge commits, pushes, and closure facts let retries continue after partial success.
-Do not try to switch flows to recover a partially published task.
+Direct delivery synchronizes the destination into the public task branch locally.
+Conflicts use the configured sync-conflict resolver. Neither clean sync nor resolver
+edits run another task-review pipeline; the actual output and resolver execution
+are recorded as not separately reviewed. Changed input receives fresh proceed-or-abort
+consent. Direct delivery never queries/creates a PR or pushes the task branch.
+Destination advancement that invalidates a checkpoint stops for reconciliation,
+not overwrite, retargeting, or an automatic review/retry loop.
+
+The integration commit is saved before destination push. Lost responses reconcile
+that exact result; verified delivery permits separately retryable source closure.
+Closure retries do not squash, sync, merge, or push again.
 
 ## In-place public history and recovery
 
-PR publication performs one initial squash in the existing task work directory,
+Both publication flows perform one initial squash in the existing task work directory,
 for both repository-root and dedicated-worktree tasks. The task branch moves from
 the authorized input to one public commit on the recorded task baseline. It stays
 on public history afterward. No additional packaging worktree or private working
@@ -110,7 +118,8 @@ If packaging stops before its public commit is durably recorded, `task run`
 displays the saved reset target and the checkout/index changes and untracked
 paths that restoration would discard. Choose `r` to explicitly restore that input
 and retry, or `m` to leave everything untouched for manual repair and a later
-retry. Ignored files are kept. Pause, partial/complete EOF, cancellation, and
+retry. After repairing a clean committed checkout, choose `c` to continue with
+a fresh publication decision instead of forcing a later reset. Ignored files are kept. Pause, partial/complete EOF, cancellation, and
 noninteractive stdin never authorize restoration. Orpheus does not infer or
 reconstruct an unrecorded commit from intermediate trees or reflogs.
 
@@ -122,7 +131,21 @@ not overwrite or another PR. Changed input before delivery needs fresh consent;
 changing an already pushed public checkout requires reconciling public history,
 not another initial squash.
 
-Only after push/PR delivery is verified and durably recorded does Orpheus release
+Direct delivery releases obsolete private refs immediately after public preparation
+and its selected-input mapping are durable, before sync or delivery. Public
+checkpoints keep live output reachable. After preparation, recovery restores only
+recorded public/sync/destination checkpoints, never discarded private objects.
+The prompt identifies the directory, branch, reset target, and discarded changes;
+manual repair has the same explicit `c` continuation. Cleanup retries neither
+re-squash nor depend on successful remote delivery.
+
+Before verified delivery, changing the committed task input or local destination
+invalidates a recorded integration. `task run` offers explicit recovery and keeps
+the old result as history. For manual repair, restore the local destination to
+the disclosed checkpoint or observed destination, then choose `c` to select the
+clean task input for fresh consent. This does not squash again or rerun task review.
+
+For PR publication, only after push/PR delivery is verified and durably recorded does Orpheus release
 the workflow's obsolete private revision/input refs, including the recovery ref.
 Cleanup can be retried with `task done` without repeating delivery. Descriptions,
 review evidence, provenance, and commit IDs remain inspectable in task state,

@@ -2585,7 +2585,7 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string) error
 		return err
 	}
 
-	service := workflow.Controller{ReviewLifecycleService: workflow.ReviewLifecycleService{Paths: deps.paths, CandidateGit: deps.reviewCandidateGit, Progress: newWorkflowHeaders(command, deps.terminal).Render}, Delivery: newTaskDeliveryService(deps, taskCtx, logger)}
+	service := workflow.Controller{ReviewLifecycleService: workflow.ReviewLifecycleService{Paths: deps.paths, CandidateGit: deps.reviewCandidateGit, Progress: newWorkflowHeaders(command, deps.terminal).Render}, Delivery: newTaskDeliveryService(command, deps, taskCtx, logger)}
 	finalized, err := finalizeTask(command, service, workflow.FinalizeOptions{
 		TaskID: taskID,
 		CWD:    deps.taskCWD,
@@ -2604,12 +2604,13 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string) error
 	return renderTaskDoneResult(command, finalized)
 }
 
-func newTaskDeliveryService(deps *invocationDependencies, taskCtx taskContext, logger *slog.Logger) workflow.FinalizationService {
+func newTaskDeliveryService(command *cobra.Command, deps *invocationDependencies, taskCtx taskContext, logger *slog.Logger) workflow.FinalizationService {
 	return workflow.FinalizationService{
-		Git:        deps.finalizationGit,
-		CleanupGit: deps.cleanupGit,
-		Paths:      deps.paths,
-		Sources:    taskCtx.Sources,
+		ConflictResolver: syncConflictAgentResolver{paths: deps.paths, stdout: command.OutOrStdout(), stderr: command.ErrOrStderr(), launcher: deps.agentLauncher, usageEnvironment: deps.usageCaptureEnvironment(), captureUsage: deps.captureUsage},
+		Git:              deps.finalizationGit,
+		CleanupGit:       deps.cleanupGit,
+		Paths:            deps.paths,
+		Sources:          taskCtx.Sources,
 		BackendFactory: func(source taskmodel.RepositorySource) (workflow.FinalizationBackend, error) {
 			return invocationTaskBackend[workflow.FinalizationBackend](deps, source)
 		},
